@@ -970,6 +970,13 @@ def run(request):
             first, _, inode_a = measured(first_parent, first_name)
             second, _, inode_b = measured(container, second_name)
             return first == first_build and inode_a == first_inode and second == second_build and inode_b == second_inode
+        def quarantine_terminal():
+            quarantined = present(profile, "installed-updates-quarantine-" + op)
+            expected = journal["updatesInode"]
+            if (expected is None and quarantined is not None) or (expected is not None and (quarantined is None or not stat.S_ISDIR(quarantined.st_mode) or quarantined.st_uid != os.geteuid() or stat.S_IMODE(quarantined.st_mode) & 0o077 or [quarantined.st_dev, quarantined.st_ino] != expected)):
+                refuse("QUARANTINE_TERMINAL_UNCONFIRMED")
+        if action == "rollback":
+            quarantine_terminal()
         if action == "apply":
             if journal["phase"] == "staged":
                 if not pair(applications, APP_NAME, receipt["source"], journal["sourceInode"], "staged.app", receipt["target"], journal["targetInode"]):
@@ -1035,6 +1042,7 @@ def run(request):
                     refuse("ROLLBACK_QUIT_CHANGED")
                 if pair(applications, APP_NAME, receipt["target"], journal["targetInode"], "previous.app", receipt["source"], journal["sourceInode"]):
                     guard()
+                    quarantine_terminal()
                     swap(applications, APP_NAME, container, "previous.app")
                     hook(request, "rollback_swapped")
                 elif not pair(applications, APP_NAME, receipt["source"], journal["sourceInode"], "previous.app", receipt["target"], journal["targetInode"]):
@@ -1053,10 +1061,7 @@ def run(request):
                     hook(request, "rollback_receipt_published")
                     intent("rolled_back")
         guard()
-        quarantined = present(profile, "installed-updates-quarantine-" + op)
-        expected = journal["updatesInode"]
-        if (expected is None and quarantined is not None) or (expected is not None and (quarantined is None or not stat.S_ISDIR(quarantined.st_mode) or quarantined.st_uid != os.geteuid() or stat.S_IMODE(quarantined.st_mode) & 0o077 or [quarantined.st_dev, quarantined.st_ino] != expected)):
-            refuse("QUARANTINE_TERMINAL_UNCONFIRMED")
+        quarantine_terminal()
         if journal["phase"] not in ("installed", "rolled_back") or read_json(applications, REPAIR_RECEIPT) != receipt:
             refuse("TERMINAL_UNCONFIRMED")
         return receipt

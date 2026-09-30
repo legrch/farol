@@ -758,6 +758,11 @@ ${scenario === "missing" ? "" : `<key>CFBundleVersion</key><string>${scenario ==
     "missing-journal",
     "pending-journal",
     "different-journal-receipt",
+    "replaced-slot",
+    "replaced-predecessor",
+    "missing-quarantine",
+    "replaced-quarantine",
+    "unsafe-container",
   ])(
     "binds the explicit closed-repair installed baseline (%s)",
     async (scenario) => {
@@ -768,7 +773,10 @@ ${scenario === "missing" ? "" : `<key>CFBundleVersion</key><string>${scenario ==
         `.farol-repair-${operationId}`,
         "previous.app",
       );
-      await fs.mkdir(previous, { recursive: true, mode: 0o700 });
+      await fs.mkdir(path.dirname(previous), { mode: 0o700 });
+      await fs.mkdir(previous, { mode: 0o755 });
+      if (scenario === "unsafe-container")
+        await fs.chmod(path.dirname(previous), 0o755);
       const predecessor = {
         digest: "8".repeat(64),
         version: "0.0.9-owner.beta.1",
@@ -801,6 +809,14 @@ ${scenario === "missing" ? "" : `<key>CFBundleVersion</key><string>${scenario ==
       });
       if (scenario === "unsafe-receipt")
         await fs.chmod(slot + ".repair.json", 0o644);
+      await fs.mkdir(receipt.quarantine, { mode: 0o700 });
+      await fs.writeFile(
+        path.join(receipt.quarantine, "retained.bin"),
+        "unknown retained bytes",
+      );
+      const slotStat = await fs.lstat(slot);
+      const previousStat = await fs.lstat(previous);
+      const quarantineStat = await fs.lstat(receipt.quarantine);
       if (scenario !== "missing-journal")
         await fs.writeFile(
           path.join(root, "Applications", ".farol-closed-repair.json"),
@@ -812,12 +828,27 @@ ${scenario === "missing" ? "" : `<key>CFBundleVersion</key><string>${scenario ==
               scenario === "different-journal-receipt"
                 ? { ...receipt, quitDigest: "4".repeat(64) }
                 : receipt,
-            sourceInode: [1, 2],
-            targetInode: [1, 3],
-            updatesInode: [1, 4],
+            sourceInode: [previousStat.dev, previousStat.ino],
+            targetInode: [slotStat.dev, slotStat.ino],
+            updatesInode: [quarantineStat.dev, quarantineStat.ino],
           }),
           { mode: 0o600 },
         );
+      if (scenario === "replaced-slot" || scenario === "replaced-predecessor") {
+        const changed = scenario === "replaced-slot" ? slot : previous;
+        await fs.rename(changed, changed + ".saved");
+        await fs.cp(changed + ".saved", changed, { recursive: true });
+      }
+      if (
+        scenario === "missing-quarantine" ||
+        scenario === "replaced-quarantine"
+      ) {
+        await fs.rename(receipt.quarantine, receipt.quarantine + ".saved");
+        if (scenario === "replaced-quarantine")
+          await fs.cp(receipt.quarantine + ".saved", receipt.quarantine, {
+            recursive: true,
+          });
+      }
       // The old normal promotion receipt refers to the predecessor, not the repair target.
       const original = JSON.parse(
         await fs.readFile(slot + ".receipt.json", "utf8"),
@@ -846,8 +877,8 @@ ${scenario === "missing" ? "" : `<key>CFBundleVersion</key><string>${scenario ==
       await controller!.initialize();
       await controller!.check();
       if (scenario === "accepted") {
-        expect(mocks.discover).toHaveBeenCalledTimes(1);
         expect(controller!.snapshot().phase).toBe("ready");
+        expect(mocks.discover).toHaveBeenCalledTimes(1);
       } else {
         expect(controller!.snapshot().phase).toBe("failed");
         expect(mocks.discover).not.toHaveBeenCalled();

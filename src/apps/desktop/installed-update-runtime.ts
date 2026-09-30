@@ -200,6 +200,34 @@ async function canonicalOwnedDirectory(
   )
     throw new Error("UPDATE_PRIVATE_STATE_INVALID");
 }
+async function repairDirectoryIdentity(
+  directory: string,
+  expected: z.infer<typeof RepairInode>,
+  privateMode: boolean,
+): Promise<void> {
+  await canonicalOwnedDirectory(directory, privateMode);
+  const fd = await fs.open(
+    directory,
+    constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+  );
+  try {
+    const actual = await fd.stat({ bigint: true });
+    const named = await fs.lstat(directory, { bigint: true });
+    if (
+      !actual.isDirectory() ||
+      !named.isDirectory() ||
+      actual.dev !== BigInt(expected[0]) ||
+      actual.ino !== BigInt(expected[1]) ||
+      actual.dev !== named.dev ||
+      actual.ino !== named.ino ||
+      actual.uid !== BigInt(process.getuid!()) ||
+      (actual.mode & BigInt(privateMode ? 0o077 : 0o022)) !== 0n
+    )
+      throw new Error("UPDATE_REPAIR_PHYSICAL_PAIR_CHANGED");
+  } finally {
+    await fd.close();
+  }
+}
 async function privateDirectory(directory: string): Promise<void> {
   // Electron has already created its profile. Refuse redirected parents before
   // creating any updater state, rather than recursively traversing an alias.
@@ -527,6 +555,40 @@ export async function createInstalledUpdateRuntime(
         )
           throw new Error("UPDATE_REPAIR_IDENTITY_UNCONFIRMED");
         await canonicalOwnedDirectory(path.dirname(previous), true);
+        const checkRepairPair = async () => {
+          await repairDirectoryIdentity(
+            slot,
+            repair.phase === "installed"
+              ? journal.data.targetInode
+              : journal.data.sourceInode,
+            false,
+          );
+          await repairDirectoryIdentity(
+            previous,
+            repair.phase === "installed"
+              ? journal.data.sourceInode
+              : journal.data.targetInode,
+            false,
+          );
+          if (repair.quarantined !== (journal.data.updatesInode !== null))
+            throw new Error("UPDATE_REPAIR_QUARANTINE_CHANGED");
+          if (journal.data.updatesInode !== null) {
+            await repairDirectoryIdentity(
+              repair.quarantine,
+              journal.data.updatesInode,
+              true,
+            );
+          } else {
+            let absent = false;
+            try {
+              await fs.lstat(repair.quarantine);
+            } catch (error) {
+              absent = (error as NodeJS.ErrnoException).code === "ENOENT";
+            }
+            if (!absent) throw new Error("UPDATE_REPAIR_QUARANTINE_CHANGED");
+          }
+        };
+        await checkRepairPair();
         const companion = await readBuild(previous);
         if (
           !sameBuild(
@@ -546,6 +608,7 @@ export async function createInstalledUpdateRuntime(
           const measured = await readBuild(slot);
           if (!sameBuild(measured, repair.target))
             throw new Error("UPDATE_ACCEPTED_SOURCE_CHANGED");
+          await checkRepairPair();
           return measured;
         }
         // A cold rollback still needs the predecessor's genuine initial install anchor.

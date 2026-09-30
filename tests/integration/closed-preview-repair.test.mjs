@@ -933,6 +933,29 @@ finally:
     expect((await f.journal()).phase).toBe("copy_intent");
   });
 
+  it.each(["missing", "replaced"])(
+    "refuses rollback before any mutation when the quarantine is %s",
+    async (scenario) => {
+      const f = await fixture();
+      const installed = (await f.cli()).receipt;
+      await fs.rename(installed.quarantine, installed.quarantine + ".saved");
+      if (scenario === "replaced")
+        await fs.mkdir(installed.quarantine, { mode: 0o700 });
+      const installedBefore = await snapshot(f.destination);
+      const previousBefore = await snapshot(installed.previous);
+      const journalBefore = await f.journal();
+      const receiptBefore = await fs.readFile(f.destination + ".repair.json");
+      const result = await f.cli(["--rollback", installed.operationId]);
+      expect(result.status).toBe(1);
+      expect(await snapshot(f.destination)).toEqual(installedBefore);
+      expect(await snapshot(installed.previous)).toEqual(previousBefore);
+      expect(await f.journal()).toEqual(journalBefore);
+      expect(await fs.readFile(f.destination + ".repair.json")).toEqual(
+        receiptBefore,
+      );
+    },
+  );
+
   it("rollback reconciles its interrupted swap and refuses wrong IDs or changed companions", async () => {
     const f = await fixture();
     const installed = (await f.cli()).receipt;
