@@ -265,7 +265,9 @@ describe("installed updater composition (disposable filesystem and mocked native
     expect(
       await fs.readFile(path.join(staged, "verified-payload"), "utf8"),
     ).toBe("fixture");
-    for (const call of mocks.exec.mock.calls) {
+    for (const call of mocks.exec.mock.calls.filter(
+      (call) => call[0] !== "/bin/ps",
+    )) {
       expect(call[2].env).toMatchObject({
         ELECTRON_RUN_AS_NODE: "1",
         ELECTRON_NO_ASAR: "1",
@@ -281,7 +283,7 @@ describe("installed updater composition (disposable filesystem and mocked native
       expect(quit).not.toHaveBeenCalled();
       return {
         status: "ready",
-        operation: { completion: new Promise(() => undefined) },
+        operation: { pid: 123, completion: new Promise(() => undefined) },
       };
     });
     await controller.restart();
@@ -293,7 +295,7 @@ describe("installed updater composition (disposable filesystem and mocked native
     const controller = await prepared();
     mocks.helper.mockResolvedValue({
       status: "outcome_unknown",
-      operation: { completion: new Promise(() => undefined) },
+      operation: { pid: 123, completion: new Promise(() => undefined) },
     });
     await controller.restart();
     await controller.restart();
@@ -350,6 +352,28 @@ describe("installed updater composition (disposable filesystem and mocked native
               : current,
         ),
       }));
+      const measured = mocks.exec.getMockImplementation()!;
+      mocks.exec.mockImplementation((file: string, args: string[]) =>
+        file === "/bin/ps"
+          ? Promise.reject({ code: "EPERM", stdout: "", stderr: "" })
+          : measured(file, args),
+      );
+      const unconfirmed = await createInstalledUpdateRuntime({
+        ...options(),
+        build: { ...build, version: current.version, buildId: current.buildId },
+      });
+      await unconfirmed!.initialize();
+      await unconfirmed!.restore("recover");
+      expect(unconfirmed!.snapshot()).toMatchObject({
+        phase: "failed",
+        code: "UPDATE_HELPER_EXIT_UNCONFIRMED",
+      });
+      expect(mocks.helper).toHaveBeenCalledTimes(1);
+      mocks.exec.mockImplementation((file: string, args: string[]) =>
+        file === "/bin/ps"
+          ? Promise.reject({ code: 1, stdout: "", stderr: "" })
+          : measured(file, args),
+      );
       const next = await createInstalledUpdateRuntime({
         ...options(),
         build: { ...build, version: current.version, buildId: current.buildId },

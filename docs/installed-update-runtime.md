@@ -19,7 +19,9 @@ At startup the updater reads the same operation journal and measures the current
 slot and predecessor/staged/failed pair. It does not launch a helper while
 rendering or silently download a replacement. A settled target offers the measured
 predecessor through **Restart & Restore Previous Version**. A known interrupted
-pair offers **Restart & Finish Recovery**. Both actions acquire the existing work
+pair offers **Restart & Finish Recovery** only after the original helper PID/start
+time has been observed as ended; a permission error or malformed process readback
+keeps recovery blocked. Both actions acquire the existing work
 admission fences, record their exact dispatch intent, and use the helper's normal
 Quit protocol. The helper, not the renderer, owns atomic exchange and reconciliation.
 

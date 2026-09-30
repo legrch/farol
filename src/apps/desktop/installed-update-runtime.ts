@@ -48,6 +48,13 @@ const Retained = z.strictObject({
   handle: z.string().max(4096),
   manifest: z.unknown(),
   operation: Operation.nullable(),
+  helper: z
+    .strictObject({
+      pid: z.number().int().min(2),
+      processStart: z.string().min(1).max(128),
+    })
+    .nullable()
+    .optional(),
 });
 const Journal = Operation.extend({
   schema: z.literal("farol.installed-update-journal/1"),
@@ -301,6 +308,36 @@ export async function createInstalledUpdateRuntime(
     }
     return readBuild(file);
   };
+  const originalHelperEnded = async (record: z.infer<typeof Retained>) => {
+    if (!record.helper) return false;
+    try {
+      const { stdout, stderr } = await execute(
+        "/bin/ps",
+        ["-p", String(record.helper.pid), "-o", "lstart="],
+        {
+          timeout: 3000,
+          maxBuffer: 4096,
+          env: { PATH: "/usr/bin:/bin", LANG: "C" },
+        },
+      );
+      return (
+        !stderr &&
+        /^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2} \d{2}:\d{2}:\d{2} \d{4}$/u.test(
+          stdout.trim(),
+        ) &&
+        stdout.trim() !== record.helper.processStart
+      );
+    } catch (error) {
+      // ps exit 1 with no output is an absent PID. EPERM, timeout, or malformed
+      // observation cannot establish termination or permit a replacement helper.
+      const result = error as {
+        code?: unknown;
+        stdout?: unknown;
+        stderr?: unknown;
+      };
+      return result.code === 1 && result.stdout === "" && result.stderr === "";
+    }
+  };
   const drained = async () => {
     const report = z
       .strictObject({
@@ -404,8 +441,11 @@ export async function createInstalledUpdateRuntime(
             ? "rollback"
             : null
           : "recover";
-        if (!settled)
+        if (!settled) {
+          if (!(await originalHelperEnded(retained)))
+            return known("UPDATE_HELPER_EXIT_UNCONFIRMED");
           return { ok: true, update: null, recoveryVersion: current.version };
+        }
         await writeRecord(receiptFile, {
           ...retained,
           observedAt: new Date().toISOString(),
@@ -509,6 +549,8 @@ export async function createInstalledUpdateRuntime(
         (await readRecord(restoreFile)) !== null
       )
         return { status: "blocked", code: "UPDATE_RESTORE_NOT_READY" };
+      if (action === "recover" && !(await originalHelperEnded(restorable!)))
+        return { status: "blocked", code: "UPDATE_HELPER_EXIT_UNCONFIRMED" };
       const admission = await options.acquireAdmission();
       if (!admission.ok) return { status: "blocked", code: admission.code };
       let keepAdmission = false;
@@ -615,6 +657,16 @@ export async function createInstalledUpdateRuntime(
           },
         );
         operation = handoff.operation;
+        if (operation.pid !== null) {
+          retained = {
+            ...retained,
+            helper: {
+              pid: operation.pid,
+              processStart: await captureInstalledProcessStart(operation.pid),
+            },
+          };
+          await writeRecord(readyFile, retained);
+        }
         // Keep the same operation observable even on an uncertain ACK. No substitute helper.
         void operation.completion.then((result) => {
           if (handoff.status !== "ready")
