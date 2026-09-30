@@ -43,6 +43,7 @@ function fixture() {
         events.push("released");
       }
     },
+    desktopWorkSettled: vi.fn(async () => true),
     mutationsSettled: vi.fn(async () => true),
     taskKeys: vi.fn(async () => []),
     openTaskReader: vi.fn(async () => reader),
@@ -54,12 +55,37 @@ function fixture() {
   return { ports, reader, events };
 }
 describe("installed Computer drain (injected clients, no live provider)", () => {
+  it("preserves the connector when the durable Desktop report is not settled", async () => {
+    const f = fixture();
+    vi.mocked(f.ports.desktopWorkSettled).mockImplementation(async () => {
+      expect(f.events).toEqual(["fenced"]);
+      return false;
+    });
+    await expect(drainInstalledComputerWork(f.ports)).resolves.toEqual({
+      ok: false,
+      code: "UPDATE_WORK_PENDING",
+    });
+    expect(f.ports.mutationsSettled).not.toHaveBeenCalled();
+    expect(f.ports.openTaskReader).not.toHaveBeenCalled();
+    expect(f.ports.stopOwnedClients).not.toHaveBeenCalled();
+    expect(f.events).toEqual(["fenced", "released"]);
+  });
+  it("preserves the connector if the durable Desktop read throws", async () => {
+    const f = fixture();
+    vi.mocked(f.ports.desktopWorkSettled).mockRejectedValue(
+      new Error("fixture"),
+    );
+    expect((await drainInstalledComputerWork(f.ports)).ok).toBe(false);
+    expect(f.ports.stopOwnedClients).not.toHaveBeenCalled();
+    expect(f.events).toEqual(["fenced", "released"]);
+  });
   it("drains a configured idle connector without opening a proxy or changing its route", async () => {
     const f = fixture();
     await expect(drainInstalledComputerWork(f.ports)).resolves.toEqual({
       ok: true,
     });
     expect(f.events).toEqual(["fenced", "drained", "released"]);
+    expect(f.ports.desktopWorkSettled).toHaveBeenCalledOnce();
     expect(f.ports.openTaskReader).not.toHaveBeenCalled();
     expect(f.ports.routeConfigured).toBe(true);
   });

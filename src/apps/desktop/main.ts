@@ -702,7 +702,7 @@ async function initializeInstalledUpdater(): Promise<void> {
         }),
       publish: publishInstalledUpdate,
       quit: () => app.quit(),
-      acquireAdmission: async () => {
+      acquireAdmission: async (desktopWorkSettled) => {
         if (
           installedUpdateAdmission ||
           quitInProgress ||
@@ -761,6 +761,7 @@ async function initializeInstalledUpdater(): Promise<void> {
           const drained = await drainInstalledComputer({
             root: secureMcpLaunchRoot(),
             settings: snapshot.settings,
+            desktopWorkSettled,
             stillCurrent: () => {
               const current = configuration?.snapshot();
               return (

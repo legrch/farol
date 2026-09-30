@@ -16,6 +16,7 @@ export type ComputerUpdateDrainResult =
 export type ComputerUpdateDrainPorts = Readonly<{
   routeConfigured: boolean;
   exclusive<T>(work: () => Promise<T>): Promise<T>;
+  desktopWorkSettled(): Promise<boolean>;
   mutationsSettled(): Promise<boolean>;
   taskKeys(): Promise<readonly string[]>;
   openTaskReader(): Promise<
@@ -34,6 +35,8 @@ export async function drainInstalledComputerWork(
 ): Promise<ComputerUpdateDrainResult> {
   try {
     return await ports.exclusive(async () => {
+      if (!(await ports.desktopWorkSettled()))
+        return { ok: false, code: "UPDATE_WORK_PENDING" };
       if (!(await ports.mutationsSettled()))
         return { ok: false, code: "UPDATE_WORK_PENDING" };
       const keys = await ports.taskKeys();
@@ -76,6 +79,7 @@ export async function drainInstalledComputer(
   input: Readonly<{
     root: string;
     settings: ProductSettings;
+    desktopWorkSettled(): Promise<boolean>;
     stillCurrent(): boolean;
     stopOwnedClients(): Promise<void>;
   }>,
@@ -88,6 +92,7 @@ export async function drainInstalledComputer(
   return drainInstalledComputerWork({
     routeConfigured: input.settings.nativeHosts.taskRoute !== null,
     exclusive: (work) => fence.withUpdateDrain(work),
+    desktopWorkSettled: input.desktopWorkSettled,
     mutationsSettled: () => mutations.settledForUpdate(),
     taskKeys: () => journal.updateTaskKeys(),
     stillCurrent: input.stillCurrent,

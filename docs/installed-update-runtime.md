@@ -8,7 +8,10 @@ contract; no source checkout, credentials or local diagnostics are published.
 On explicit Restart, a configured idle connector is drained without deleting its
 saved route. Desktop first reserves configuration/task admission and the promotion
 lease. The Computer fence then exclusively excludes file/shell handlers and Codex
-dispatch. Pending or unknown mutation records, shell reservations, dispatch locks,
+dispatch. The existing durable Desktop obligation report runs under those
+reservations before any client is stopped; pending edit delivery and unreadable
+or changing Desktop journals leave the connector running. The runtime rechecks
+the same report after the drain. Pending or unknown mutation records, shell reservations, dispatch locks,
 unreadable journals and incomplete task intents block the update. Issued Codex
 handles use the existing exact-identity read-only status path; only terminal turns
 and an observed idle thread qualify. The selected route must still admit those

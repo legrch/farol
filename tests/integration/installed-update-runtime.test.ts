@@ -72,6 +72,7 @@ vi.mock(
   }),
 );
 import { createInstalledUpdateRuntime } from "../../src/apps/desktop/installed-update-runtime";
+import { drainInstalledComputerWork } from "../../src/apps/desktop/installed-computer-drain";
 
 const manifest: ReleaseManifest = {
   schema: "farol.github-release/1",
@@ -244,6 +245,101 @@ afterEach(async () => {
 });
 
 describe("installed updater composition (disposable filesystem and mocked native/GitHub ports)", () => {
+  it.each([
+    ["restart", "obligationCount"],
+    ["rollback", "unreadableCount"],
+    ["recover", "changedCount"],
+  ] as const)(
+    "checks durable Desktop %s obligations before stopping owned clients",
+    async (action, blocker) => {
+      let current = source;
+      if (action !== "restart") {
+        const first = await prepared();
+        await first.restart();
+        await first.close();
+        const { operation: op } = JSON.parse(await fs.readFile(ready, "utf8"));
+        const opRoot = path.join(userData, "installed-updates", op.operationId);
+        if (action === "rollback") {
+          current = target;
+          await fs.mkdir(path.join(opRoot, "previous.app"));
+        }
+        await fs.writeFile(
+          path.join(opRoot, "journal.json"),
+          JSON.stringify({
+            schema: "farol.installed-update-journal/1",
+            ...op,
+            phase: action === "rollback" ? "completed" : "prepared",
+          }),
+          { mode: 0o600 },
+        );
+      }
+      mocks.exec.mockImplementation(async (file: string, args: string[]) => {
+        if (file === "/bin/ps") throw { code: 1, stdout: "", stderr: "" };
+        return {
+          stdout: JSON.stringify(
+            args[0]!.endsWith("update-obligations.mjs")
+              ? {
+                  drained: false,
+                  obligationCount: 0,
+                  unreadableCount: 0,
+                  changedCount: 0,
+                  [blocker]: 1,
+                }
+              : args[1]!.endsWith("previous.app")
+                ? source
+                : args[1]!.endsWith("staged.app")
+                  ? target
+                  : current,
+          ),
+        };
+      });
+      const stopOwnedClients = vi.fn(async () => undefined);
+      const openTaskReader = vi.fn();
+      const controller = await createInstalledUpdateRuntime({
+        ...options(),
+        build: { ...build, version: current.version, buildId: current.buildId },
+        acquireAdmission: async (desktopWorkSettled) => {
+          const drained = await drainInstalledComputerWork({
+            routeConfigured: true,
+            exclusive: (work) => work(),
+            desktopWorkSettled,
+            mutationsSettled: async () => true,
+            taskKeys: async () => [],
+            openTaskReader,
+            stillCurrent: () => true,
+            stopOwnedClients,
+          });
+          if (!drained.ok) {
+            await release();
+            return drained;
+          }
+          return { ok: true as const, release };
+        },
+      });
+      await controller!.initialize();
+      if (action === "restart") await controller!.check();
+      mocks.helper.mockClear();
+      quit.mockClear();
+      release.mockClear();
+      if (action === "restart") await controller!.restart();
+      else await controller!.restore(action);
+      expect(stopOwnedClients).not.toHaveBeenCalled();
+      expect(controller!.snapshot()).toMatchObject({
+        phase:
+          action === "restart"
+            ? "ready"
+            : action === "recover"
+              ? "recovery"
+              : "idle",
+        blockedBy: "UPDATE_WORK_PENDING",
+      });
+      expect(openTaskReader).not.toHaveBeenCalled();
+      expect(mocks.helper).not.toHaveBeenCalled();
+      expect(quit).not.toHaveBeenCalled();
+      expect(release).toHaveBeenCalledOnce();
+      await controller!.close();
+    },
+  );
   it.each(["apply-unknown", "apply-ready", "rollback", "recover"] as const)(
     "keeps the real promotion lease through GC after %s returns and closes",
     async (scenario) => {

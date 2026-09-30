@@ -309,7 +309,11 @@ export type InstalledUpdateRuntimeOptions = Readonly<{
   build: BuildIdentity;
   // Electron must copy physical ASAR files, not its virtual archive filesystem.
   copyApp(source: string, destination: string): Promise<void>;
-  acquireAdmission(): Promise<InstalledUpdateAdmission>;
+  // Evaluate this existing durable report while admission is held, before
+  // stopping clients. The runtime also rechecks it after the drain.
+  acquireAdmission(
+    desktopWorkSettled: () => Promise<boolean>,
+  ): Promise<InstalledUpdateAdmission>;
   quit(): void;
   publish(view: InstalledUpdateView): void;
 }>;
@@ -1190,7 +1194,7 @@ export async function createInstalledUpdateRuntime(
         return { status: "blocked", code: "UPDATE_RESTORE_NOT_READY" };
       if (action === "recover" && !(await originalHelperEnded(restorable!)))
         return { status: "blocked", code: "UPDATE_HELPER_EXIT_UNCONFIRMED" };
-      const admission = await options.acquireAdmission();
+      const admission = await options.acquireAdmission(drained);
       if (!admission.ok) return { status: "blocked", code: admission.code };
       let keepAdmission = false;
       try {
@@ -1315,7 +1319,7 @@ export async function createInstalledUpdateRuntime(
         return { status: "unknown", code: "UPDATE_HANDOFF_UNRECONCILED" };
       if (!retained || retained.handle !== update.handle)
         return { status: "blocked", code: "UPDATE_PACKAGE_NOT_READY" };
-      const admission = await options.acquireAdmission();
+      const admission = await options.acquireAdmission(drained);
       if (!admission.ok) return { status: "blocked", code: admission.code };
       let keepAdmission = false;
       try {
