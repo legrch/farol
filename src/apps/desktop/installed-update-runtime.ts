@@ -49,6 +49,7 @@ const Retained = z.strictObject({
   handle: z.string().max(4096),
   manifest: z.unknown(),
   operation: Operation.nullable(),
+  archiveReleased: z.boolean().optional(),
   helper: z
     .strictObject({
       pid: z.number().int().min(2),
@@ -56,6 +57,11 @@ const Retained = z.strictObject({
     })
     .nullable()
     .optional(),
+});
+const DownloadIntent = z.strictObject({
+  schema: z.literal("farol.update-download-intent/1"),
+  buildId: Digest,
+  archiveSha256: Digest,
 });
 const Journal = Operation.extend({
   schema: z.literal("farol.installed-update-journal/1"),
@@ -289,9 +295,11 @@ export async function createInstalledUpdateRuntime(
   const pendingDownloadFile = path.join(root, "download-pending.json");
   let candidate: UpdateCandidate | null = null;
   let verified: VerifiedGithubUpdate | null = null;
+  let stagingUncertain = false;
   let retained: z.infer<typeof Retained> | null = null;
   let operation: InstalledUpdateOperation | null = null;
   const readyFile = path.join(root, "ready.json");
+  const cleanupFile = path.join(root, "package-cleanup-pending.json");
   const receiptFile = path.join(root, "last-update.json");
   const restoreFile = path.join(root, "restore-pending.json");
   let restorable: z.infer<typeof Retained> | null = null;
@@ -393,17 +401,36 @@ export async function createInstalledUpdateRuntime(
       );
     return report.drained;
   };
+  const discardVerifiedStage = async (handle: string) => {
+    verified = null;
+    try {
+      await verifier.discard(handle);
+      return true;
+    } catch {
+      stagingUncertain = true;
+      await writeRecord(cleanupFile, {
+        schema: "farol.update-package-cleanup/1",
+        handle,
+      });
+      return false;
+    }
+  };
   const controller = new InstalledUpdater({
     now: Date.now,
     publish: options.publish,
     recover: async () => {
-      if ((await readRecord(pendingDownloadFile)) !== null)
+      if ((await readRecord(cleanupFile)) !== null)
         return known("UPDATE_STAGING_OUTCOME_UNKNOWN");
+      const downloadRaw = await readRecord(pendingDownloadFile);
+      const downloadIntent =
+        downloadRaw === null ? null : DownloadIntent.parse(downloadRaw);
       const pendingRaw = await readRecord(restoreFile);
       const pending =
         pendingRaw === null ? null : RestoreIntent.parse(pendingRaw);
       const raw = await readRecord(readyFile);
       const fromReady = raw !== null;
+      if (downloadIntent && !fromReady)
+        return known("UPDATE_STAGING_OUTCOME_UNKNOWN");
       const previous = fromReady ? null : await readRecord(receiptFile);
       if (raw === null && previous === null)
         return pending
@@ -421,6 +448,13 @@ export async function createInstalledUpdateRuntime(
           );
       const parsed = parseGithubReleaseManifest(retained.manifest);
       if (!parsed.ok) return known("UPDATE_RETAINED_MANIFEST_INVALID");
+      if (
+        downloadIntent &&
+        (retained.operation !== null ||
+          downloadIntent.buildId !== parsed.value.buildId ||
+          downloadIntent.archiveSha256 !== parsed.value.archiveSha256)
+      )
+        return known("UPDATE_STAGING_OUTCOME_UNKNOWN");
       if (retained.operation) {
         const op = retained.operation;
         if (pending && !sameOperation(pending.operation, op))
@@ -485,6 +519,18 @@ export async function createInstalledUpdateRuntime(
             return known("UPDATE_HELPER_EXIT_UNCONFIRMED");
           return { ok: true, update: null, recoveryVersion: current.version };
         }
+        // The journal and installed/predecessor identities establish that this
+        // operation no longer needs its archive. Reconcile a prior truncation
+        // through the same private handle before acknowledging reclamation.
+        if (!retained.archiveReleased) {
+          const reclaimed = await transport.reclaimRetained(
+            retained.handle,
+            parsed.value,
+          );
+          if (!reclaimed.ok) return known("UPDATE_ARCHIVE_CLEANUP_UNCONFIRMED");
+          retained = { ...retained, archiveReleased: true };
+          restorable = retained;
+        }
         await writeRecord(receiptFile, {
           ...retained,
           observedAt: new Date().toISOString(),
@@ -512,11 +558,11 @@ export async function createInstalledUpdateRuntime(
         !packageMatchesRelease(check.value.identity, parsed.value)
       )
         return known("UPDATE_RETAINED_PACKAGE_INVALID");
-      verified = {
-        handle: retained.handle,
-        manifest: parsed.value,
-        ...check.value,
-      };
+      if (!(await discardVerifiedStage(retained.handle)))
+        return known("UPDATE_STAGING_OUTCOME_UNKNOWN");
+      // A matching durable ready record plus fresh physical verification proves
+      // retain completed even if its final intent unlink was interrupted.
+      if (downloadIntent) await fs.unlink(pendingDownloadFile);
       return {
         ok: true,
         update: { handle: retained.handle, manifest: parsed.value },
@@ -589,6 +635,10 @@ export async function createInstalledUpdateRuntime(
       };
     },
     retain: async (update: ReadyUpdate) => {
+      // Later retains the archive, not an extra expanded application. Restart
+      // re-verifies the same archive before copying it to the helper's stage.
+      if (!(await discardVerifiedStage(update.handle)))
+        throw new Error("UPDATE_STAGING_OUTCOME_UNKNOWN");
       retained = { schema: "farol.ready-update/1", ...update, operation: null };
       await writeRecord(readyFile, retained);
       await fs.unlink(pendingDownloadFile);
@@ -690,7 +740,7 @@ export async function createInstalledUpdateRuntime(
     restart: async (update) => {
       if (operation || retained?.operation)
         return { status: "unknown", code: "UPDATE_HANDOFF_UNRECONCILED" };
-      if (!verified || verified.handle !== update.handle || !retained)
+      if (!retained || retained.handle !== update.handle)
         return { status: "blocked", code: "UPDATE_PACKAGE_NOT_READY" };
       const admission = await options.acquireAdmission();
       if (!admission.ok) return { status: "blocked", code: admission.code };
@@ -704,6 +754,27 @@ export async function createInstalledUpdateRuntime(
           source.version !== options.build.version
         )
           return { status: "blocked", code: "UPDATE_SOURCE_IDENTITY_MISMATCH" };
+        const processStart = await captureInstalledProcessStart(process.pid);
+        const check = await transport.verifyPackage(
+          update.handle,
+          update.manifest,
+        );
+        if (
+          !check.ok ||
+          !packageMatchesRelease(check.value.identity, update.manifest)
+        )
+          return {
+            status:
+              !check.ok && "certainty" in check && check.certainty === "unknown"
+                ? "unknown"
+                : "blocked",
+            code: "UPDATE_RETAINED_PACKAGE_INVALID",
+          };
+        verified = {
+          handle: update.handle,
+          manifest: update.manifest,
+          ...check.value,
+        };
         const target = {
           digest: verified.identity.artifactSha256,
           version: verified.identity.version,
@@ -712,11 +783,32 @@ export async function createInstalledUpdateRuntime(
         const operationId = randomBytes(16).toString("hex");
         const operationRoot = path.join(root, operationId);
         await fs.mkdir(operationRoot, { mode: 0o700 });
-        await options.copyApp(
-          verified.stagedAppPath,
-          path.join(operationRoot, "staged.app"),
-        );
-        const processStart = await captureInstalledProcessStart(process.pid);
+        let copied = false;
+        try {
+          await options.copyApp(
+            verified.stagedAppPath,
+            path.join(operationRoot, "staged.app"),
+          );
+          copied = true;
+        } catch {
+          try {
+            await fs.rm(operationRoot, { recursive: true, force: true });
+          } catch {
+            await writeRecord(cleanupFile, {
+              schema: "farol.update-package-cleanup/1",
+              handle: update.handle,
+              operationRoot,
+            });
+            return {
+              status: "unknown",
+              code: "UPDATE_STAGING_OUTCOME_UNKNOWN",
+            };
+          }
+        }
+        if (!(await discardVerifiedStage(update.handle)))
+          return { status: "unknown", code: "UPDATE_STAGING_OUTCOME_UNKNOWN" };
+        if (!copied)
+          return { status: "blocked", code: "UPDATE_PREPARE_FAILED" };
         retained = { ...retained, operation: { operationId, source, target } };
         // Durable dispatch intent precedes launch. Uncertain launch is never replayed.
         await writeRecord(readyFile, retained);
@@ -788,6 +880,10 @@ export async function createInstalledUpdateRuntime(
         options.quit();
         return { status: "accepted" };
       } catch {
+        if (verified && !(await discardVerifiedStage(verified.handle)))
+          return { status: "unknown", code: "UPDATE_STAGING_OUTCOME_UNKNOWN" };
+        if (stagingUncertain)
+          return { status: "unknown", code: "UPDATE_STAGING_OUTCOME_UNKNOWN" };
         return {
           status: keepAdmission ? "unknown" : "blocked",
           code: keepAdmission

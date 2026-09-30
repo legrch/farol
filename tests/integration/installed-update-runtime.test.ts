@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   download: vi.fn(),
   archiveDownload: vi.fn(),
   discardArchive: vi.fn(),
+  reclaimArchive: vi.fn(),
   discardPackage: vi.fn(),
   verify: vi.fn(),
   helper: vi.fn(),
@@ -37,6 +38,7 @@ vi.mock(
       verifyPackage: mocks.verify,
       download: mocks.archiveDownload,
       discard: mocks.discardArchive,
+      reclaimRetained: mocks.reclaimArchive,
     }),
   }),
 );
@@ -143,6 +145,7 @@ beforeEach(async () => {
   mocks.discover.mockResolvedValue({ ok: true, value: { manifest } });
   mocks.discardPackage.mockResolvedValue(undefined);
   mocks.discardArchive.mockResolvedValue({ ok: true, value: undefined });
+  mocks.reclaimArchive.mockResolvedValue({ ok: true, value: undefined });
   mocks.archiveDownload.mockResolvedValue({
     ok: true,
     value: { handle: path.join(root, "downloaded.zip") },
@@ -204,6 +207,35 @@ afterEach(async () => {
 });
 
 describe("installed updater composition (disposable filesystem and mocked native/GitHub ports)", () => {
+  it("bounds abandoned extraction directories before invoking a verifier or opening an archive", async () => {
+    const { createUpdatePackageVerifier } = await vi.importActual<
+      typeof import("../../src/modules/release/infra/native/update-package-verifier")
+    >("../../src/modules/release/infra/native/update-package-verifier");
+    const directory = path.join(root, "bounded-extractions");
+    await fs.mkdir(directory, { mode: 0o700 });
+    for (const name of [
+      "farol-update-verify-abandoned1",
+      "farol-update-verify-abandoned2",
+    ])
+      await fs.mkdir(path.join(directory, name));
+    const lookup = vi.fn();
+    const verifier = createUpdatePackageVerifier({
+      stagingParent: directory,
+      extractorPath: "/unused",
+      verifierPath: "/unused",
+      archivePathForHandle: lookup,
+    });
+    await expect(
+      verifier.verifyPackage("opaque", manifest),
+    ).rejects.toMatchObject({ code: "stage_capacity" });
+    expect(lookup).not.toHaveBeenCalled();
+    expect(mocks.exec).not.toHaveBeenCalled();
+    expect((await fs.readdir(directory)).sort()).toEqual([
+      "farol-update-verify-abandoned1",
+      "farol-update-verify-abandoned2",
+    ]);
+  });
+
   it.each(["checksum_mismatch", "package_mismatch", "wrong_provenance"])(
     "discards the owned stage before clearing a known %s failure",
     async (code) => {
@@ -279,6 +311,137 @@ describe("installed updater composition (disposable filesystem and mocked native
     });
     expect(mocks.verify).toHaveBeenCalledTimes(1);
     expect(mocks.download).toHaveBeenCalledTimes(1);
+    expect(quit).not.toHaveBeenCalled();
+  });
+  it("reconciles an interrupted ready-record commit without downloading or sending again", async () => {
+    const unlink = fs.unlink.bind(fs);
+    const pending = path.join(
+      userData,
+      "installed-updates/download-pending.json",
+    );
+    vi.spyOn(fs, "unlink").mockImplementationOnce(async (file) => {
+      expect(file).toBe(pending);
+      throw Object.assign(new Error("fixture interrupted unlink"), {
+        code: "EIO",
+      });
+    });
+    const first = await createInstalledUpdateRuntime(options());
+    await first!.initialize();
+    await first!.check();
+    expect(first!.snapshot()).toMatchObject({
+      phase: "failed",
+      recoveryRequired: true,
+    });
+    await fs.access(ready);
+    await fs.access(pending);
+    vi.mocked(fs.unlink).mockImplementation(unlink);
+    first!.close();
+    const recovered = await createInstalledUpdateRuntime(options());
+    await recovered!.initialize();
+    expect(recovered!.snapshot()).toMatchObject({
+      phase: "ready",
+      deferred: true,
+    });
+    await expect(fs.lstat(pending)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(mocks.download).toHaveBeenCalledTimes(1);
+    expect(mocks.verify).toHaveBeenCalledTimes(1);
+    expect(mocks.helper).not.toHaveBeenCalled();
+    expect(quit).not.toHaveBeenCalled();
+  });
+  it.each(["buildId", "archiveSha256"])(
+    "does not reconcile a different pending %s",
+    async (field) => {
+      const first = await prepared();
+      first.close();
+      await fs.writeFile(
+        path.join(userData, "installed-updates/download-pending.json"),
+        JSON.stringify({
+          schema: "farol.update-download-intent/1",
+          buildId: manifest.buildId,
+          archiveSha256: manifest.archiveSha256,
+          [field]: "0".repeat(64),
+        }),
+        { mode: 0o600 },
+      );
+      const recovered = await createInstalledUpdateRuntime(options());
+      await recovered!.initialize();
+      expect(recovered!.snapshot()).toMatchObject({
+        phase: "failed",
+        recoveryRequired: true,
+        code: "UPDATE_STAGING_OUTCOME_UNKNOWN",
+      });
+      expect(mocks.verify).not.toHaveBeenCalled();
+      expect(mocks.download).toHaveBeenCalledTimes(1);
+    },
+  );
+  it("releases successful extraction stages on ready, restore and after copying", async () => {
+    const first = await prepared();
+    const handle = path.join(root, "archive.zip");
+    expect(mocks.discardPackage).toHaveBeenCalledExactlyOnceWith(handle);
+    first.close();
+    const second = await createInstalledUpdateRuntime(options());
+    await second!.initialize();
+    expect(mocks.discardPackage).toHaveBeenCalledTimes(2);
+    mocks.copyApp.mockImplementationOnce(async (from: string, to: string) => {
+      expect(mocks.discardPackage).toHaveBeenCalledTimes(2);
+      await fs.cp(from, to, { recursive: true });
+    });
+    mocks.helper.mockImplementationOnce(async () => {
+      expect(mocks.discardPackage).toHaveBeenCalledTimes(3);
+      return {
+        status: "ready",
+        operation: { pid: 123, completion: new Promise(() => undefined) },
+      };
+    });
+    await second!.restart();
+    expect(mocks.verify).toHaveBeenCalledTimes(2);
+    expect(mocks.discardPackage).toHaveBeenCalledTimes(3);
+    expect(quit).toHaveBeenCalledTimes(1);
+  });
+  it("preserves intent when successful extraction cleanup is uncertain", async () => {
+    mocks.discardPackage.mockRejectedValue(
+      new Error("fixture cleanup uncertainty"),
+    );
+    const first = await createInstalledUpdateRuntime(options());
+    await first!.initialize();
+    await first!.check();
+    expect(first!.snapshot()).toMatchObject({
+      phase: "failed",
+      recoveryRequired: true,
+    });
+    await fs.access(
+      path.join(userData, "installed-updates/download-pending.json"),
+    );
+    await expect(fs.lstat(ready)).rejects.toMatchObject({ code: "ENOENT" });
+    first!.close();
+    const recovered = await createInstalledUpdateRuntime(options());
+    await recovered!.initialize();
+    await recovered!.check(true);
+    expect(mocks.download).toHaveBeenCalledTimes(1);
+    expect(mocks.verify).not.toHaveBeenCalled();
+    expect(mocks.helper).not.toHaveBeenCalled();
+  });
+  it("does not dispatch or retry after uncertain cleanup of a copied stage", async () => {
+    const controller = await prepared();
+    mocks.discardPackage.mockRejectedValueOnce(
+      new Error("fixture cleanup uncertainty"),
+    );
+    await controller.restart();
+    expect(controller.snapshot()).toMatchObject({
+      phase: "failed",
+      recoveryRequired: true,
+      code: "UPDATE_STAGING_OUTCOME_UNKNOWN",
+    });
+    await controller.restart();
+    const recovered = await createInstalledUpdateRuntime(options());
+    await recovered!.initialize();
+    await recovered!.restart();
+    expect(recovered!.snapshot()).toMatchObject({
+      phase: "failed",
+      recoveryRequired: true,
+      code: "UPDATE_STAGING_OUTCOME_UNKNOWN",
+    });
+    expect(mocks.helper).not.toHaveBeenCalled();
     expect(quit).not.toHaveBeenCalled();
   });
   it("restores an intact retained update when physical reads return short chunks", async () => {
@@ -716,7 +879,7 @@ describe("installed updater composition (disposable filesystem and mocked native
         args[1]!.endsWith("previous.app") ? source : target,
       ),
     }));
-    const next = await createInstalledUpdateRuntime({
+    const updatedOptions = {
       ...options(),
       build: {
         ...build,
@@ -724,7 +887,23 @@ describe("installed updater composition (disposable filesystem and mocked native
         buildVersion: manifest.buildVersion,
         buildId: manifest.buildId,
       },
+    };
+    mocks.reclaimArchive.mockResolvedValueOnce({
+      ok: false,
+      certainty: "unknown",
+      kind: "interrupted",
+      reason: "stage_cleanup",
     });
+    const uncertain = await createInstalledUpdateRuntime(updatedOptions);
+    await uncertain!.initialize();
+    expect(uncertain!.snapshot()).toMatchObject({
+      phase: "failed",
+      recoveryRequired: true,
+      code: "UPDATE_ARCHIVE_CLEANUP_UNCONFIRMED",
+    });
+    await fs.access(ready);
+    expect(mocks.helper).toHaveBeenCalledTimes(1);
+    const next = await createInstalledUpdateRuntime(updatedOptions);
     await next!.initialize();
     expect(next!.snapshot()).toMatchObject({
       phase: "idle",
@@ -738,6 +917,12 @@ describe("installed updater composition (disposable filesystem and mocked native
       ),
     );
     expect(receipt.runningBuildId).toBe(manifest.buildId);
+    expect(receipt.archiveReleased).toBe(true);
+    expect(mocks.reclaimArchive).toHaveBeenCalledTimes(2);
+    expect(mocks.reclaimArchive).toHaveBeenLastCalledWith(
+      path.join(root, "archive.zip"),
+      manifest,
+    );
     expect(receipt.operation.source).toEqual(source);
     expect(mocks.helper).toHaveBeenCalledTimes(1);
     mocks.exec.mockImplementation(async (_file: unknown, args: string[]) => ({
@@ -786,6 +971,7 @@ describe("installed updater composition (disposable filesystem and mocked native
     await rolledBack!.check(true);
     expect(mocks.download).toHaveBeenCalledTimes(1);
     expect(mocks.helper).toHaveBeenCalledTimes(2);
+    expect(mocks.reclaimArchive).toHaveBeenCalledTimes(2);
     await expect(
       fs.stat(path.join(userData, "installed-updates/restore-pending.json")),
     ).rejects.toMatchObject({ code: "ENOENT" });

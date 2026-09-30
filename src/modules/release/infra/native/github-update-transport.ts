@@ -84,6 +84,10 @@ export type GithubUpdateTransport = GithubReleasePorts &
       manifest: ReleaseManifest,
     ): Promise<TransportResult<VerifiedPackage>>;
     discard(handle: string): Promise<TransportResult<void>>;
+    reclaimRetained(
+      handle: string,
+      manifest: ReleaseManifest,
+    ): Promise<TransportResult<void>>;
   }>;
 
 function fail(
@@ -548,6 +552,114 @@ export function createGithubUpdateTransport(
         if (file) await file.close().catch(() => undefined);
         return fail("interrupted", "stage_cleanup", "unknown");
       }
+    },
+    async reclaimRetained(handle, manifest) {
+      const directory = path.join(options.privateStateDirectory, STAGING_NAME);
+      if (
+        !path.isAbsolute(handle) ||
+        path.normalize(handle) !== handle ||
+        path.dirname(handle) !== directory ||
+        !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.zip$/u.test(
+          path.basename(handle),
+        ) ||
+        !validLimit(manifest.archiveSize, MAX_ARCHIVE_BYTES) ||
+        !/^[0-9a-f]{64}$/u.test(manifest.archiveSha256)
+      )
+        return fail("package_mismatch", "invalid_handle");
+      if (
+        !(await privateDirectory(options.privateStateDirectory)) ||
+        !(await privateDirectory(directory))
+      )
+        return fail("interrupted", "stage_cleanup", "unknown");
+
+      let before: BigIntStats;
+      try {
+        before = await lstat(handle, { bigint: true });
+      } catch (error) {
+        return (error as NodeJS.ErrnoException).code === "ENOENT"
+          ? fail("package_mismatch", "invalid_handle")
+          : fail("interrupted", "stage_cleanup", "unknown");
+      }
+      if (!sameOwnedFile(before, before))
+        return fail("package_mismatch", "invalid_handle");
+
+      let file: FileHandle;
+      try {
+        file = await open(
+          handle,
+          constants.O_RDWR | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+        );
+      } catch {
+        return fail("interrupted", "stage_cleanup", "unknown");
+      }
+      let result: TransportResult<void> = fail(
+        "interrupted",
+        "stage_cleanup",
+        "unknown",
+      );
+      let reusable: { handle: string; identity: BigIntStats } | null = null;
+      try {
+        const opened = await file.stat({ bigint: true });
+        const entry = await lstat(handle, { bigint: true });
+        if (!sameOwnedFile(opened, before) || !sameOwnedFile(entry, opened))
+          throw new Error("UPDATE_STAGE_CHANGED");
+
+        if (opened.size === 0n) {
+          const after = await file.stat({ bigint: true });
+          if (
+            !(await privateDirectory(directory)) ||
+            !sameOwnedFile(after, opened) ||
+            !sameOwnedFile(await lstat(handle, { bigint: true }), after)
+          )
+            throw new Error("UPDATE_STAGE_CHANGED");
+          reusable = { handle, identity: after };
+          result = { ok: true, value: undefined };
+        } else if (opened.size !== BigInt(manifest.archiveSize)) {
+          result = fail("package_mismatch", "verification");
+        } else {
+          const digest = createHash("sha256");
+          let position = 0;
+          while (position < manifest.archiveSize) {
+            const chunk = Buffer.allocUnsafe(
+              Math.min(64 * 1024, manifest.archiveSize - position),
+            );
+            const { bytesRead } = await file.read(
+              chunk,
+              0,
+              chunk.length,
+              position,
+            );
+            if (bytesRead < 1 || bytesRead > chunk.length)
+              throw new Error("UPDATE_STAGE_SHORT_READ");
+            digest.update(chunk.subarray(0, bytesRead));
+            position += bytesRead;
+          }
+          const after = await file.stat({ bigint: true });
+          if (
+            !(await privateDirectory(directory)) ||
+            !sameOwnedFile(after, opened) ||
+            !sameOwnedFile(await lstat(handle, { bigint: true }), after)
+          )
+            throw new Error("UPDATE_STAGE_CHANGED");
+          if (digest.digest("hex") !== manifest.archiveSha256)
+            result = fail("package_mismatch", "verification");
+          else {
+            reusable = await emptyOpenedArchive(file, handle);
+            result = { ok: true, value: undefined };
+          }
+        }
+      } catch {
+        result = fail("interrupted", "stage_cleanup", "unknown");
+      }
+      try {
+        await file.close();
+      } catch {
+        reusable = null;
+        result = fail("interrupted", "stage_cleanup", "unknown");
+      }
+      if (result.ok && reusable && (!emptySlot || emptySlot.handle === handle))
+        emptySlot = reusable;
+      return result;
     },
     async verifyPackage(handle, manifest) {
       const directory = await stageDirectory(options.privateStateDirectory);

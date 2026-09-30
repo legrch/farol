@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 const race = vi.hoisted(() => ({
   afterMetadata: null as null | ((file: unknown) => Promise<void>),
+  onRead: null as null | ((file: unknown) => Promise<"short" | void>),
+  onSync: null as null | ((file: unknown) => Promise<void>),
+  onClose: null as null | ((file: unknown) => Promise<void>),
+  ownerUid: null as number | null,
 }));
 vi.mock("node:fs/promises", async (original) => {
   const actual = await original<typeof import("node:fs/promises")>();
@@ -9,7 +13,13 @@ vi.mock("node:fs/promises", async (original) => {
     lstat: async (...args: Parameters<typeof actual.lstat>) => {
       const info = await actual.lstat(...args);
       await race.afterMetadata?.(args[0]);
-      return info;
+      return race.ownerUid === null ||
+        typeof args[0] !== "string" ||
+        !args[0].endsWith(".zip")
+        ? info
+        : Object.assign(Object.create(Object.getPrototypeOf(info)), info, {
+            uid: args[1]?.bigint ? BigInt(race.ownerUid) : race.ownerUid,
+          });
     },
     open: async (...args: Parameters<typeof actual.open>) => {
       const file = await actual.open(...args);
@@ -21,6 +31,27 @@ vi.mock("node:fs/promises", async (original) => {
               await race.afterMetadata?.(args[0]);
               return info;
             };
+          if (property === "read")
+            return async (
+              buffer: Buffer,
+              offset: number,
+              length: number,
+              position: number,
+            ) => {
+              if ((await race.onRead?.(args[0])) === "short")
+                return { bytesRead: 0, buffer };
+              return target.read(buffer, offset, length, position);
+            };
+          if (property === "sync")
+            return async () => {
+              await race.onSync?.(args[0]);
+              await target.sync();
+            };
+          if (property === "close")
+            return async () => {
+              await target.close();
+              await race.onClose?.(args[0]);
+            };
           const value: unknown = Reflect.get(target, property, target);
           return typeof value === "function" ? value.bind(target) : value;
         },
@@ -31,7 +62,9 @@ vi.mock("node:fs/promises", async (original) => {
 import { createHash } from "node:crypto";
 import {
   chmod,
+  link,
   lstat,
+  mkdir,
   mkdtemp,
   readFile,
   readdir,
@@ -67,6 +100,11 @@ const manifest = {
   version: "0.1.1",
 } as ReleaseManifest;
 const roots: string[] = [];
+const archiveManifest = (bytes: Buffer): ReleaseManifest => ({
+  ...manifest,
+  archiveSize: bytes.length,
+  archiveSha256: createHash("sha256").update(bytes).digest("hex"),
+});
 
 async function privateRoot(): Promise<string> {
   const root = await realpath(
@@ -83,6 +121,10 @@ async function expectEmptySlot(directory: string): Promise<void> {
 
 afterEach(async () => {
   race.afterMetadata = null;
+  race.onRead = null;
+  race.onSync = null;
+  race.onClose = null;
+  race.ownerUid = null;
   for (const root of roots.splice(0)) {
     await chmod(root, 0o700).catch(() => undefined);
     await chmod(path.join(root, "github-updates"), 0o700).catch(
@@ -149,6 +191,214 @@ function transport(root: string, openHttps: OpenHttps) {
 }
 
 describe("GitHub HTTPS transport", () => {
+  it("reclaims matching retained bytes in a cold transport and reuses the empty slot", async () => {
+    const root = await privateRoot();
+    const bytes = Buffer.from("retained archive");
+    const first = await transport(
+      root,
+      scripted(response(200, [bytes])),
+    ).instance.download(asset, bytes.length);
+    if (!first.ok) throw new Error("fixture download failed");
+    const network = scripted(response(200, [Buffer.from("NEW")]));
+    const cold = transport(root, network);
+    expect(
+      await cold.instance.reclaimRetained(
+        first.value.handle,
+        archiveManifest(bytes),
+      ),
+    ).toMatchObject({
+      ok: true,
+    });
+    expect(network).not.toHaveBeenCalled();
+    await expectEmptySlot(path.dirname(first.value.handle));
+    expect(cold.verifyPackage).not.toHaveBeenCalled();
+    expect(await cold.instance.download(asset, 3)).toMatchObject({
+      ok: true,
+      value: { handle: first.value.handle },
+    });
+  });
+
+  it("rejects absent, malformed, wrong hash, wrong size and oversized manifests without mutation", async () => {
+    const root = await privateRoot();
+    const bytes = Buffer.from("retained archive");
+    const first = await transport(
+      root,
+      scripted(response(200, [bytes])),
+    ).instance.download(asset, bytes.length);
+    if (!first.ok) throw new Error("fixture download failed");
+    const cold = transport(root, scripted()).instance;
+    const good = archiveManifest(bytes);
+    const stage = path.dirname(first.value.handle);
+    expect(
+      await cold.reclaimRetained(
+        path.join(stage, "00000000-0000-0000-0000-000000000000.zip"),
+        good,
+      ),
+    ).toMatchObject({ ok: false, certainty: "known" });
+    expect(
+      await cold.reclaimRetained(path.join(stage, "not-a-uuid.zip"), good),
+    ).toMatchObject({ ok: false, certainty: "known" });
+    expect(
+      await cold.reclaimRetained(first.value.handle, {
+        ...good,
+        archiveSha256: "0".repeat(64),
+      }),
+    ).toMatchObject({ ok: false, certainty: "known" });
+    expect(
+      await cold.reclaimRetained(first.value.handle, {
+        ...good,
+        archiveSize: bytes.length - 1,
+      }),
+    ).toMatchObject({ ok: false, certainty: "known" });
+    expect(
+      await cold.reclaimRetained(first.value.handle, {
+        ...good,
+        archiveSize: 2_147_483_649,
+      }),
+    ).toMatchObject({ ok: false, certainty: "known" });
+    expect(await readFile(first.value.handle)).toEqual(bytes);
+  });
+
+  it("rejects special, unowned, public and aliased retained handles", async () => {
+    const root = await privateRoot();
+    const bytes = Buffer.from("retained archive");
+    const first = await transport(
+      root,
+      scripted(response(200, [bytes])),
+    ).instance.download(asset, bytes.length);
+    if (!first.ok) throw new Error("fixture download failed");
+    const good = archiveManifest(bytes);
+    const cold = transport(root, scripted()).instance;
+    const outside = path.join(root, "outside.zip");
+    await writeFile(outside, bytes, { mode: 0o600 });
+    await rename(first.value.handle, first.value.handle + ".saved");
+    await symlink(outside, first.value.handle);
+    expect(await cold.reclaimRetained(first.value.handle, good)).toMatchObject({
+      ok: false,
+    });
+    await unlink(first.value.handle);
+    await mkdir(first.value.handle);
+    expect(await cold.reclaimRetained(first.value.handle, good)).toMatchObject({
+      ok: false,
+    });
+    await rm(first.value.handle, { recursive: true });
+    await link(first.value.handle + ".saved", first.value.handle);
+    expect(await cold.reclaimRetained(first.value.handle, good)).toMatchObject({
+      ok: false,
+    });
+    await unlink(first.value.handle + ".saved");
+    await chmod(first.value.handle, 0o644);
+    expect(await cold.reclaimRetained(first.value.handle, good)).toMatchObject({
+      ok: false,
+    });
+    await chmod(first.value.handle, 0o600);
+    race.ownerUid = process.getuid!() + 1;
+    expect(await cold.reclaimRetained(first.value.handle, good)).toMatchObject({
+      ok: false,
+    });
+    race.ownerUid = null;
+    expect(await readFile(first.value.handle)).toEqual(bytes);
+  });
+
+  it("treats an already empty owned handle as completed reclamation without writing", async () => {
+    const root = await privateRoot();
+    const bytes = Buffer.from("retained archive");
+    const firstTransport = transport(
+      root,
+      scripted(response(200, [bytes])),
+    ).instance;
+    const first = await firstTransport.download(asset, bytes.length);
+    if (!first.ok) throw new Error("fixture download failed");
+    expect(await firstTransport.discard(first.value.handle)).toMatchObject({
+      ok: true,
+    });
+    const cold = transport(root, scripted()).instance;
+    race.onRead = async () => {
+      throw new Error("unexpected read");
+    };
+    race.onSync = async () => {
+      throw new Error("unexpected sync");
+    };
+    expect(
+      await cold.reclaimRetained(first.value.handle, archiveManifest(bytes)),
+    ).toMatchObject({ ok: true });
+    await expectEmptySlot(path.dirname(first.value.handle));
+  });
+
+  it("preserves a replacement installed between metadata check and open", async () => {
+    const root = await privateRoot();
+    const bytes = Buffer.from("retained archive");
+    const first = await transport(
+      root,
+      scripted(response(200, [bytes])),
+    ).instance.download(asset, bytes.length);
+    if (!first.ok) throw new Error("fixture download failed");
+    race.afterMetadata = async (file) => {
+      if (file !== first.value.handle) return;
+      race.afterMetadata = null;
+      await rename(first.value.handle, first.value.handle + ".original");
+      await writeFile(first.value.handle, bytes, { mode: 0o600 });
+    };
+    expect(
+      await transport(root, scripted()).instance.reclaimRetained(
+        first.value.handle,
+        archiveManifest(bytes),
+      ),
+    ).toMatchObject({ ok: false, certainty: "unknown" });
+    expect(await readFile(first.value.handle)).toEqual(bytes);
+    expect(await readFile(first.value.handle + ".original")).toEqual(bytes);
+  });
+
+  it("reports unknown for a short read or a replacement during bounded reading", async () => {
+    const root = await privateRoot();
+    const bytes = Buffer.from("retained archive");
+    const first = await transport(
+      root,
+      scripted(response(200, [bytes])),
+    ).instance.download(asset, bytes.length);
+    if (!first.ok) throw new Error("fixture download failed");
+    const cold = transport(root, scripted()).instance;
+    race.onRead = async () => "short";
+    expect(
+      await cold.reclaimRetained(first.value.handle, archiveManifest(bytes)),
+    ).toMatchObject({ ok: false, certainty: "unknown" });
+    race.onRead = async (file) => {
+      if (file !== first.value.handle) return;
+      race.onRead = null;
+      await rename(first.value.handle, first.value.handle + ".original");
+      await writeFile(first.value.handle, bytes, { mode: 0o600 });
+    };
+    expect(
+      await cold.reclaimRetained(first.value.handle, archiveManifest(bytes)),
+    ).toMatchObject({ ok: false, certainty: "unknown" });
+    expect(await readFile(first.value.handle)).toEqual(bytes);
+    expect(await readFile(first.value.handle + ".original")).toEqual(bytes);
+  });
+
+  it("never reports successful reclamation after sync or close fails", async () => {
+    for (const failing of ["sync", "close"] as const) {
+      const root = await privateRoot();
+      const bytes = Buffer.from("retained archive");
+      const first = await transport(
+        root,
+        scripted(response(200, [bytes])),
+      ).instance.download(asset, bytes.length);
+      if (!first.ok) throw new Error("fixture download failed");
+      const cold = transport(root, scripted()).instance;
+      const fault = async (file: unknown) => {
+        if (file === first.value.handle) throw new Error("injected failure");
+      };
+      if (failing === "sync") race.onSync = fault;
+      else race.onClose = fault;
+      expect(
+        await cold.reclaimRetained(first.value.handle, archiveManifest(bytes)),
+      ).toMatchObject({ ok: false, certainty: "unknown" });
+      race.onSync = null;
+      race.onClose = null;
+      await expectEmptySlot(path.dirname(first.value.handle));
+    }
+  });
+
   it("never deletes a replacement installed after the cleanup metadata check", async () => {
     const root = await privateRoot();
     const { instance } = transport(

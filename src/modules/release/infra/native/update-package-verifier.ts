@@ -25,6 +25,7 @@ export class PackageVerificationError extends Error {
     readonly code:
       | "invalid_handle"
       | "invalid_stage"
+      | "stage_capacity"
       | "archive_refused"
       | "cleanup_unknown"
       | "package_mismatch",
@@ -178,6 +179,17 @@ export function createUpdatePackageVerifier(
       if (!handle || verified.has(handle))
         throw new PackageVerificationError("invalid_handle");
       await privateParent(options.stagingParent);
+      // Normal callers discard an extraction after use. A crash may leave its
+      // owned directory behind; bound those obligations without deleting a
+      // stage whose previous verification/cleanup outcome is not reconciled.
+      let stages = 0;
+      let entries = 0;
+      for await (const entry of await fs.opendir(options.stagingParent)) {
+        entries++;
+        if (entry.name.startsWith("farol-update-verify-")) stages++;
+        if (stages >= 2 || entries > 1024)
+          throw new PackageVerificationError("stage_capacity");
+      }
       const extractorBytes = await pinnedHelper(options.extractorPath);
       const archivePath = await options.archivePathForHandle(handle);
       if (!path.isAbsolute(archivePath))

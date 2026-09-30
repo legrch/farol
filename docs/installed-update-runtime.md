@@ -29,6 +29,25 @@ within the updater lifetime, preventing rejected checks from accumulating large
 archives. A substituted entry stays untouched. Unknown cleanup preserves the
 intent and blocks another download.
 
+A ready update keeps only its archive during Later. Successful verification
+extractions are released after retention, cold verification and copying into the
+helper's operation directory. Explicit Restart re-verifies that same archive.
+Unconfirmed extraction cleanup creates a durable obligation and blocks another
+verification or helper. At most two abandoned verification directories may be
+present before the verifier refuses another allocation; it never deletes an
+unreconciled stage simply to free capacity.
+
+An interrupted unlink of the download intent is reconciled only when its exact
+build/checksum matches a durable ready record and fresh package verification
+succeeds. A mismatched intent or missing ready record remains blocked. No network
+request, task or helper is repeated during that reconciliation.
+
+After the running package and predecessor are reconciled with a settled operation,
+the archive is reclaimed through its bounded, checksum-verified descriptor. A
+zero-length archive reconciles a completed truncation after interruption. Only
+then is archive release recorded in the durable receipt. The previous installed
+app remains available for rollback; no workspace or settings are reclaimed.
+
 At startup the updater reads the same operation journal and measures the current
 slot and predecessor/staged/failed pair. It does not launch a helper while
 rendering or silently download a replacement. A settled target offers the measured
