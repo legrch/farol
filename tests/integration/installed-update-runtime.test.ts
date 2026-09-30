@@ -8,6 +8,9 @@ import type { ReleaseManifest } from "../../src/modules/release/domain/github-re
 const mocks = vi.hoisted(() => ({
   discover: vi.fn(),
   download: vi.fn(),
+  archiveDownload: vi.fn(),
+  discardArchive: vi.fn(),
+  discardPackage: vi.fn(),
   verify: vi.fn(),
   helper: vi.fn(),
   exec: vi.fn(),
@@ -30,7 +33,17 @@ vi.mock("../../src/modules/release/app/github-release", async (original) => ({
 vi.mock(
   "../../src/modules/release/infra/native/github-update-transport",
   () => ({
-    createGithubUpdateTransport: () => ({ verifyPackage: mocks.verify }),
+    createGithubUpdateTransport: () => ({
+      verifyPackage: mocks.verify,
+      download: mocks.archiveDownload,
+      discard: mocks.discardArchive,
+    }),
+  }),
+);
+vi.mock(
+  "../../src/modules/release/infra/native/update-package-verifier",
+  () => ({
+    createUpdatePackageVerifier: () => ({ discard: mocks.discardPackage }),
   }),
 );
 vi.mock(
@@ -128,6 +141,12 @@ beforeEach(async () => {
   await fs.mkdir(staging, { recursive: true });
   await fs.writeFile(path.join(staging, "verified-payload"), "fixture");
   mocks.discover.mockResolvedValue({ ok: true, value: { manifest } });
+  mocks.discardPackage.mockResolvedValue(undefined);
+  mocks.discardArchive.mockResolvedValue({ ok: true, value: undefined });
+  mocks.archiveDownload.mockResolvedValue({
+    ok: true,
+    value: { handle: path.join(root, "downloaded.zip") },
+  });
   const identity = { ...manifest, updateChannel: "github-owner-beta" };
   mocks.download.mockResolvedValue({
     ok: true,
@@ -185,6 +204,57 @@ afterEach(async () => {
 });
 
 describe("installed updater composition (disposable filesystem and mocked native/GitHub ports)", () => {
+  it.each(["checksum_mismatch", "package_mismatch", "wrong_provenance"])(
+    "discards the owned stage before clearing a known %s failure",
+    async (code) => {
+      mocks.download.mockImplementation(async (_candidate, ports) => {
+        await ports.download("fixture", 100);
+        return { ok: false, code };
+      });
+      const controller = await createInstalledUpdateRuntime(options());
+      await controller!.initialize();
+      await controller!.check();
+      const handle = path.join(root, "downloaded.zip");
+      expect(mocks.discardPackage).toHaveBeenCalledExactlyOnceWith(handle);
+      expect(mocks.discardArchive).toHaveBeenCalledExactlyOnceWith(handle);
+      await expect(
+        fs.lstat(
+          path.join(userData, "installed-updates/download-pending.json"),
+        ),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+      expect(controller!.snapshot()).toMatchObject({
+        phase: "failed",
+        code: `UPDATE_${code.toUpperCase()}`,
+      });
+      controller!.close();
+    },
+  );
+  it("retains the intent and prevents redownload when rejection cleanup is unknown", async () => {
+    mocks.download.mockImplementation(async (_candidate, ports) => {
+      await ports.download("fixture", 100);
+      return { ok: false, code: "checksum_mismatch" };
+    });
+    mocks.discardArchive.mockResolvedValue({
+      ok: false,
+      kind: "interrupted",
+      certainty: "unknown",
+      reason: "stage_cleanup",
+    });
+    const controller = await createInstalledUpdateRuntime(options());
+    await controller!.initialize();
+    await controller!.check();
+    expect(controller!.snapshot()).toMatchObject({
+      phase: "failed",
+      recoveryRequired: true,
+      code: "UPDATE_STAGING_OUTCOME_UNKNOWN",
+    });
+    await fs.access(
+      path.join(userData, "installed-updates/download-pending.json"),
+    );
+    await controller!.check(true);
+    expect(mocks.archiveDownload).toHaveBeenCalledTimes(1);
+    controller!.close();
+  });
   it("never enables updates for a task-run copy or redirected installed slot", async () => {
     expect(
       await createInstalledUpdateRuntime({

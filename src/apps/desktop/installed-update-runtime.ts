@@ -266,10 +266,12 @@ export async function createInstalledUpdateRuntime(
       verifier.verifyPackage(handle, manifest),
   });
   let transportOutcomeUnknown = false;
+  let stagedDownloadHandle: string | null = null;
   const checkedTransport = {
     ...transport,
     download: async (url: string, maximum: number) => {
       const result = await transport.download(url, maximum);
+      if (result.ok) stagedDownloadHandle = result.value.handle;
       if (!result.ok && "certainty" in result && result.certainty === "unknown")
         transportOutcomeUnknown = true;
       return result;
@@ -563,6 +565,20 @@ export async function createInstalledUpdateRuntime(
           recoveryRequired: true,
         };
       if (!downloaded.ok) {
+        if (stagedDownloadHandle !== null) {
+          try {
+            await verifier.discard(stagedDownloadHandle);
+            const cleanup = await transport.discard(stagedDownloadHandle);
+            if (!cleanup.ok) throw new Error("UPDATE_STAGE_CLEANUP_UNKNOWN");
+            stagedDownloadHandle = null;
+          } catch {
+            return {
+              ok: false,
+              code: "UPDATE_STAGING_OUTCOME_UNKNOWN",
+              recoveryRequired: true,
+            };
+          }
+        }
         await fs.unlink(pendingDownloadFile);
         return known(`UPDATE_${downloaded.code.toUpperCase()}`);
       }

@@ -26,6 +26,7 @@ export class PackageVerificationError extends Error {
       | "invalid_handle"
       | "invalid_stage"
       | "archive_refused"
+      | "cleanup_unknown"
       | "package_mismatch",
     cause?: unknown,
   ) {
@@ -257,7 +258,11 @@ export function createUpdatePackageVerifier(
         verified.set(handle, result);
         return result;
       } catch (cause) {
-        await fs.rm(stagingRoot, { recursive: true, force: true });
+        try {
+          await fs.rm(stagingRoot, { recursive: true, force: true });
+        } catch (cleanupError) {
+          throw new PackageVerificationError("cleanup_unknown", cleanupError);
+        }
         if (cause instanceof PackageVerificationError) throw cause;
         throw new PackageVerificationError("archive_refused", cause);
       }
@@ -268,9 +273,9 @@ export function createUpdatePackageVerifier(
     },
     async discard(handle: string): Promise<void> {
       const result = verified.get(handle);
-      verified.delete(handle);
       if (result)
         await fs.rm(result.stagingRoot, { recursive: true, force: true });
+      verified.delete(handle);
     },
   };
 }

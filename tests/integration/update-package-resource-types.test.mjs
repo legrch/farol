@@ -97,6 +97,45 @@ catch (error) { process.stdout.write(JSON.stringify({ code: error.code ?? null, 
 `;
 
 describe("helper resource type and descriptor binding", () => {
+  it("classifies failed extraction cleanup as unknown and preserves the remaining stage", async () => {
+    await disposable(async ({ directory, stage }) => {
+      const archive = path.join(directory, "invalid.zip");
+      await fs.writeFile(archive, "not a ZIP");
+      const probe = `
+import fs from "node:fs/promises";
+import { pathToFileURL } from "node:url";
+const [modulePath, helperPath, stage, archive] = process.argv.slice(1);
+const { createUpdatePackageVerifier } = await import(pathToFileURL(modulePath).href);
+const originalRemove = fs.rm;
+const physicalStage = await fs.realpath(stage);
+fs.rm = async (file, options) => {
+  if (String(file).startsWith(physicalStage + "/farol-update-verify-")) throw Object.assign(new Error("fixture cleanup failure"), { code: "EPERM" });
+  return originalRemove(file, options);
+};
+const verifier = createUpdatePackageVerifier({ stagingParent: stage, extractorPath: helperPath, verifierPath: "/unused", archivePathForHandle: async () => archive });
+try { await verifier.verifyPackage("opaque", {}); throw new Error("UNEXPECTED_SUCCESS"); }
+catch (error) { process.stdout.write(JSON.stringify({ code: error.code ?? null, stages: (await fs.readdir(stage)).length })); }
+`;
+      const result = spawnSync(
+        process.execPath,
+        [
+          "--input-type=module",
+          "-e",
+          probe,
+          bundledVerifier,
+          helper,
+          stage,
+          archive,
+        ],
+        deadline,
+      );
+      assertExited(result);
+      expect(JSON.parse(result.stdout)).toEqual({
+        code: "cleanup_unknown",
+        stages: 1,
+      });
+    });
+  });
   it("rejects a FIFO without a writer before the subprocess deadline", async () => {
     await disposable(async ({ directory, stage }) => {
       const fifo = path.join(directory, "helper.py");

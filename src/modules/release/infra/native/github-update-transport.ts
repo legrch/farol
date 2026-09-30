@@ -1,9 +1,10 @@
 import { createHash, randomUUID } from "node:crypto";
-import { constants } from "node:fs";
+import { constants, type BigIntStats } from "node:fs";
 import { lstat, mkdir, open, realpath, unlink } from "node:fs/promises";
 import { get as httpsGet, type RequestOptions } from "node:https";
 import type { IncomingMessage } from "node:http";
 import path from "node:path";
+import { PackageVerificationError } from "./update-package-verifier";
 import {
   GITHUB_RELEASES_API,
   GITHUB_RELEASE_REPOSITORY,
@@ -76,6 +77,7 @@ export type GithubUpdateTransport = GithubReleasePorts &
       handle: string,
       manifest: ReleaseManifest,
     ): Promise<TransportResult<VerifiedPackage>>;
+    discard(handle: string): Promise<TransportResult<void>>;
   }>;
 
 function fail(
@@ -308,6 +310,7 @@ export function createGithubUpdateTransport(
   }>,
 ): GithubUpdateTransport {
   const client = options.openHttps ?? openNativeHttps;
+  const issuedArchives = new Map<string, BigIntStats>();
   return {
     async fetchJson(url, maxBytes) {
       const kind = initialKind(url);
@@ -404,6 +407,7 @@ export function createGithubUpdateTransport(
         return fail("interrupted", "private_state");
       }
       let bytes = 0;
+      let issuedIdentity: BigIntStats | null = null;
       const digest = createHash("sha256");
       let result: TransportResult<DownloadedArchive> | null = null;
       try {
@@ -438,6 +442,7 @@ export function createGithubUpdateTransport(
             result = fail("interrupted", "content_length");
           else {
             await file.sync();
+            issuedIdentity = await file.stat({ bigint: true });
             result = {
               ok: true,
               value: {
@@ -463,7 +468,50 @@ export function createGithubUpdateTransport(
       if (result.ok && !(await validStagedFile(directory, handle)))
         result = fail("interrupted", "private_state", "unknown");
       if (!result.ok) return (await cleanup(handle)) ?? result;
+      if (!issuedIdentity)
+        return fail("interrupted", "stage_cleanup", "unknown");
+      issuedArchives.set(handle, issuedIdentity);
       return result;
+    },
+    async discard(handle) {
+      const issued = issuedArchives.get(handle);
+      if (!issued) return fail("interrupted", "invalid_handle");
+      const directory = path.join(options.privateStateDirectory, STAGING_NAME);
+      if (!(await privateDirectory(directory)))
+        return fail("interrupted", "stage_cleanup", "unknown");
+      try {
+        const current = await lstat(handle, { bigint: true });
+        if (
+          !current.isFile() ||
+          current.isSymbolicLink() ||
+          !issued.isFile() ||
+          issued.isSymbolicLink() ||
+          current.nlink !== 1n ||
+          current.uid !== BigInt(process.getuid!()) ||
+          (current.mode & 0o077n) !== 0n ||
+          current.dev !== issued.dev ||
+          current.ino !== issued.ino ||
+          current.size !== issued.size ||
+          current.mode !== issued.mode ||
+          current.mtimeNs !== issued.mtimeNs ||
+          current.ctimeNs !== issued.ctimeNs
+        )
+          return fail("interrupted", "stage_cleanup", "unknown");
+        await unlink(handle);
+        const parent = await open(
+          directory,
+          constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_DIRECTORY,
+        );
+        try {
+          await parent.sync();
+        } finally {
+          await parent.close();
+        }
+        issuedArchives.delete(handle);
+        return { ok: true, value: undefined };
+      } catch {
+        return fail("interrupted", "stage_cleanup", "unknown");
+      }
     },
     async verifyPackage(handle, manifest) {
       const directory = await stageDirectory(options.privateStateDirectory);
@@ -474,7 +522,12 @@ export function createGithubUpdateTransport(
           ok: true,
           value: await options.verifyPackage(handle, manifest),
         };
-      } catch {
+      } catch (error) {
+        if (
+          error instanceof PackageVerificationError &&
+          error.code === "cleanup_unknown"
+        )
+          return fail("interrupted", "stage_cleanup", "unknown");
         return fail("package_mismatch", "verification");
       }
     },

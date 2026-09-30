@@ -13,6 +13,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import path from "node:path";
+import { PackageVerificationError } from "../../src/modules/release/infra/native/update-package-verifier";
 import { tmpdir } from "node:os";
 import {
   createGithubUpdateTransport,
@@ -112,6 +113,64 @@ function transport(root: string, openHttps: OpenHttps) {
 }
 
 describe("GitHub HTTPS transport", () => {
+  it("discards only an unchanged archive issued by this transport", async () => {
+    const root = await privateRoot();
+    const { instance } = transport(
+      root,
+      scripted(response(200, [Buffer.from("ZIP")])),
+    );
+    const result = await instance.download(asset, 3);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const foreign = path.join(root, "outside.zip");
+    await writeFile(foreign, "keep");
+    expect(await instance.discard(foreign)).toMatchObject({
+      ok: false,
+      reason: "invalid_handle",
+    });
+    expect(await readFile(foreign, "utf8")).toBe("keep");
+    expect(await instance.discard(result.value.handle)).toMatchObject({
+      ok: true,
+    });
+    expect(await readdir(path.dirname(result.value.handle))).toEqual([]);
+  });
+  it("preserves a replaced archive and reports unknown cleanup", async () => {
+    const root = await privateRoot();
+    const { instance } = transport(
+      root,
+      scripted(response(200, [Buffer.from("ZIP")])),
+    );
+    const result = await instance.download(asset, 3);
+    if (!result.ok) throw new Error("fixture download failed");
+    await unlink(result.value.handle);
+    await writeFile(result.value.handle, "replacement", { mode: 0o600 });
+    expect(await instance.discard(result.value.handle)).toMatchObject({
+      ok: false,
+      reason: "stage_cleanup",
+      certainty: "unknown",
+    });
+    expect(await readFile(result.value.handle, "utf8")).toBe("replacement");
+  });
+  it("does not downgrade a failed extraction cleanup to a retryable mismatch", async () => {
+    const root = await privateRoot();
+    const { instance, verifyPackage } = transport(
+      root,
+      scripted(response(200, [Buffer.from("ZIP")])),
+    );
+    const result = await instance.download(asset, 3);
+    if (!result.ok) throw new Error("fixture download failed");
+    verifyPackage.mockRejectedValue(
+      new PackageVerificationError("cleanup_unknown"),
+    );
+    expect(
+      await instance.verifyPackage(result.value.handle, manifest),
+    ).toMatchObject({
+      ok: false,
+      certainty: "unknown",
+      reason: "stage_cleanup",
+    });
+    expect(await readFile(result.value.handle, "utf8")).toBe("ZIP");
+  });
   it("fetches bounded pinned API JSON without credentials", async () => {
     const root = await privateRoot();
     const openHttps = scripted(
