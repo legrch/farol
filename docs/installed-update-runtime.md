@@ -10,6 +10,13 @@ port uses Electron's `original-fs`, and trusted verifier/readback subprocesses u
 `ELECTRON_RUN_AS_NODE=1` plus `ELECTRON_NO_ASAR=1`. The ordinary application keeps
 its normal filesystem semantics.
 
+Before discovery and again before update preparation, the measured installed tree
+must match durable accepted-package evidence. The first generation uses the normal
+installer's private promotion receipt; later generations use the reconciled update
+receipt and its exact source/target digest. Version and build labels alone cannot
+turn modified installed bytes into an accepted predecessor. Missing, redirected,
+malformed or mismatched evidence blocks preparation without launching a helper.
+
 A durable ready record binds the verified archive to an operation before helper
 dispatch. Only the helper's exact readiness acknowledgment permits normal Quit.
 Unknown acknowledgment or completion never permits another apply. The same child

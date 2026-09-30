@@ -39,6 +39,27 @@ const AcceptedBuild = z.strictObject({
   version: z.string().max(128),
   buildId: Digest,
 });
+const PromotionReceipt = z.strictObject({
+  schema: z.literal("farol.next.promotion-plan/1"),
+  operation: z.literal("applied"),
+  product: z.literal("Farol Next Preview"),
+  version: z.string().max(128),
+  sourceCommit: z.string().regex(/^[a-f0-9]{40}$/u),
+  sourceTreeDigest: Digest,
+  sourceDirty: z.literal(false),
+  artifactSha256: Digest,
+  source: z.string().max(4096),
+  destination: z.string().max(4096),
+  receipt: z.string().max(4096),
+  overwrite: z.literal(false),
+  legacyMutation: z.literal(false),
+  activation: z.strictObject({
+    userData: z.string().max(4096),
+    drained: z.literal(true),
+    obligations: z.array(z.never()).length(0),
+  }),
+  verifiedDestinationSha256: Digest,
+});
 const Operation = z.strictObject({
   operationId: z.string().regex(/^[a-f0-9]{32}$/u),
   source: AcceptedBuild,
@@ -400,6 +421,63 @@ export async function createInstalledUpdateRuntime(
     b: z.infer<typeof AcceptedBuild>,
   ) =>
     a.digest === b.digest && a.version === b.version && a.buildId === b.buildId;
+  const readAcceptedSource = async () => {
+    let expected: z.infer<typeof AcceptedBuild>;
+    const saved = await readRecord(receiptFile);
+    if (saved !== null) {
+      const receipt = SavedReceipt.parse(saved);
+      const op = receipt.operation;
+      const parsed = parseGithubReleaseManifest(receipt.manifest);
+      if (
+        !op ||
+        !parsed.ok ||
+        !sameBuild(op.target, {
+          digest: parsed.value.artifactSha256,
+          version: parsed.value.version,
+          buildId: parsed.value.buildId,
+        })
+      )
+        throw new Error("UPDATE_ACCEPTED_SOURCE_UNCONFIRMED");
+      if (TARGET_PHASES.includes(receipt.phase)) expected = op.target;
+      else if (
+        [...ROLLED_BACK_PHASES, ...CANCELLED_PHASES].includes(receipt.phase)
+      )
+        expected = op.source;
+      else throw new Error("UPDATE_ACCEPTED_SOURCE_UNCONFIRMED");
+      if (receipt.runningBuildId !== expected.buildId)
+        throw new Error("UPDATE_ACCEPTED_SOURCE_UNCONFIRMED");
+    } else {
+      // The first installed generation is anchored by the normal installer's
+      // private receipt. Never adopt a freshly measured tree as accepted bytes.
+      await canonicalOwnedDirectory(path.dirname(slot), false);
+      const file = slot + ".receipt.json";
+      const receipt = PromotionReceipt.parse(await readRecord(file));
+      if (
+        receipt.destination !== slot ||
+        receipt.receipt !== file ||
+        receipt.activation.userData !== options.userData ||
+        receipt.sourceCommit !== options.build.sourceCommit ||
+        receipt.sourceTreeDigest !== options.build.sourceTreeDigest ||
+        receipt.version !== options.build.version ||
+        receipt.artifactSha256 !== receipt.verifiedDestinationSha256
+      )
+        throw new Error("UPDATE_ACCEPTED_SOURCE_UNCONFIRMED");
+      expected = {
+        digest: receipt.verifiedDestinationSha256,
+        version: receipt.version,
+        buildId: options.build.buildId,
+      };
+    }
+    if (
+      expected.buildId !== options.build.buildId ||
+      expected.version !== options.build.version
+    )
+      throw new Error("UPDATE_ACCEPTED_SOURCE_UNCONFIRMED");
+    const measured = await readBuild(slot);
+    if (!sameBuild(measured, expected))
+      throw new Error("UPDATE_ACCEPTED_SOURCE_CHANGED");
+    return measured;
+  };
   const sameOperation = (
     a: z.infer<typeof Operation>,
     b: z.infer<typeof Operation>,
@@ -910,7 +988,7 @@ export async function createInstalledUpdateRuntime(
       try {
         // update-slot measures CFBundleVersion and binds it to this identity.
         // Do not query GitHub using an unconfirmed installed baseline.
-        current = await readBuild(slot);
+        current = await readAcceptedSource();
       } catch {
         return known("UPDATE_SOURCE_IDENTITY_UNCONFIRMED");
       }
@@ -1176,7 +1254,7 @@ export async function createInstalledUpdateRuntime(
       try {
         if (!(await drained()))
           return { status: "blocked", code: "UPDATE_WORK_PENDING" };
-        const source = await readBuild(slot);
+        const source = await readAcceptedSource();
         if (
           source.buildId !== options.build.buildId ||
           source.version !== options.build.version

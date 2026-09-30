@@ -147,6 +147,27 @@ beforeEach(async () => {
   await fs.mkdir(slot, { recursive: true });
   await fs.mkdir(userData, { recursive: true, mode: 0o700 });
   await fs.mkdir(staging, { recursive: true });
+  await fs.writeFile(
+    slot + ".receipt.json",
+    JSON.stringify({
+      schema: "farol.next.promotion-plan/1",
+      operation: "applied",
+      product: "Farol Next Preview",
+      version: build.version,
+      sourceCommit: build.sourceCommit,
+      sourceTreeDigest: build.sourceTreeDigest,
+      sourceDirty: false,
+      artifactSha256: source.digest,
+      source: path.join(root, "accepted-package/Farol Next Preview.app"),
+      destination: slot,
+      receipt: slot + ".receipt.json",
+      overwrite: false,
+      legacyMutation: false,
+      activation: { userData, drained: true, obligations: [] },
+      verifiedDestinationSha256: source.digest,
+    }),
+    { mode: 0o600 },
+  );
   await fs.writeFile(path.join(staging, "verified-payload"), "fixture");
   mocks.discover.mockResolvedValue({ ok: true, value: { manifest } });
   mocks.discardPackage.mockResolvedValue(undefined);
@@ -490,6 +511,62 @@ ${scenario === "missing" ? "" : `<key>CFBundleVersion</key><string>${scenario ==
       }
     },
   );
+
+  it.each([
+    "changed-bytes",
+    "missing-receipt",
+    "wrong-destination",
+    "writable-receipt",
+    "symlink-receipt",
+  ] as const)(
+    "requires accepted installed bytes before discovery (%s)",
+    async (scenario) => {
+      const receipt = slot + ".receipt.json";
+      if (scenario === "missing-receipt") await fs.unlink(receipt);
+      if (scenario === "wrong-destination") {
+        const data = JSON.parse(await fs.readFile(receipt, "utf8"));
+        await fs.writeFile(
+          receipt,
+          JSON.stringify({ ...data, destination: slot + ".other" }),
+        );
+      }
+      if (scenario === "writable-receipt") await fs.chmod(receipt, 0o644);
+      if (scenario === "symlink-receipt") {
+        await fs.rename(receipt, receipt + ".original");
+        await fs.symlink(receipt + ".original", receipt);
+      }
+      if (scenario === "changed-bytes")
+        mocks.exec.mockResolvedValue({
+          stdout: JSON.stringify({ ...source, digest: "0".repeat(64) }),
+        });
+      const controller = await createInstalledUpdateRuntime(options());
+      await controller!.initialize();
+      await controller!.check();
+      expect(controller!.snapshot()).toMatchObject({ phase: "failed" });
+      expect(mocks.discover).not.toHaveBeenCalled();
+      expect(mocks.download).not.toHaveBeenCalled();
+      expect(mocks.helper).not.toHaveBeenCalled();
+      await controller!.close();
+    },
+  );
+
+  it("rechecks the accepted source after download before copying or launching a helper", async () => {
+    const controller = await prepared();
+    const measured = mocks.exec.getMockImplementation()!;
+    mocks.exec.mockImplementation((file: unknown, args: string[]) =>
+      args[0]!.endsWith("update-slot.mjs") && args[1] === slot
+        ? Promise.resolve({
+            stdout: JSON.stringify({ ...source, digest: "0".repeat(64) }),
+          })
+        : measured(file, args),
+    );
+    await controller.restart();
+    expect(mocks.copyApp).not.toHaveBeenCalled();
+    expect(mocks.helper).not.toHaveBeenCalled();
+    expect(quit).not.toHaveBeenCalled();
+    expect(JSON.parse(await fs.readFile(ready, "utf8")).operation).toBeNull();
+    await controller.close();
+  });
 
   it.each(["unreadable", "changed-build"] as const)(
     "refuses %s installed identity before GitHub discovery or download",
@@ -2044,6 +2121,14 @@ ${scenario === "missing" ? "" : `<key>CFBundleVersion</key><string>${scenario ==
     );
     expect(receipt.operation.source).toEqual(source);
     expect(mocks.helper).toHaveBeenCalledTimes(1);
+    // N+1 uses the settled update receipt, not N's original promotion digest.
+    mocks.discover.mockResolvedValueOnce({ ok: true, value: null });
+    await next!.check(true);
+    expect(next!.snapshot()).toMatchObject({
+      phase: "idle",
+      rollbackVersion: source.version,
+    });
+    expect(mocks.discover).toHaveBeenCalledTimes(2);
     mocks.exec.mockImplementation(async (_file: unknown, args: string[]) => ({
       stdout: JSON.stringify(
         args[0]!.endsWith("update-obligations.mjs")
