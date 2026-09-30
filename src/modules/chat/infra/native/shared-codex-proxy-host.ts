@@ -351,6 +351,7 @@ export class SharedCodexProxyHost implements HandoffHost {
       .then(() =>
         this.send("initialize", {
           clientInfo: { name: "farol-shared-handoff", version: "1" },
+          capabilities: { experimentalApi: true },
         }),
       )
       .then(async (result) => {

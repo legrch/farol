@@ -17,6 +17,10 @@ const PROXY_FIXTURE =
   String.raw`
 let pending = "";
 let approvalBlockedRequest = null;
+let experimentalApi = false;
+let initializeParams = null;
+let initializeCount = 0;
+let initializedCount = 0;
 if (process.env.FIXTURE_MODE === "ignore-term") {
   process.on("SIGTERM", () => {});
   setInterval(() => {}, 1_000);
@@ -30,7 +34,13 @@ fixtureInput.on("data", (chunk) => {
     const line = pending.slice(0, end);
     pending = pending.slice(end + 1);
     const request = JSON.parse(line);
-    if (request.id === undefined) continue;
+    if (process.env.FIXTURE_MODE === "initialize-refused") {
+      process.stderr.write(JSON.stringify({method: request.method}) + "\n");
+    }
+    if (request.id === undefined) {
+      if (request.method === "initialized") initializedCount++;
+      continue;
+    }
     if (process.env.FIXTURE_MODE === "server-request" && request.id === 999) {
       if (request.error && request.error.code === -32601 && approvalBlockedRequest !== null) {
         fixtureOutput.write(JSON.stringify({
@@ -41,6 +51,15 @@ fixtureInput.on("data", (chunk) => {
       continue;
     }
     if (request.method === "initialize") {
+      if (process.env.FIXTURE_MODE === "initialize-refused") {
+        fixtureOutput.write(JSON.stringify({
+          id: request.id, error: {code: -32600, message: "Fixture initialization refused"},
+        }) + "\n");
+        continue;
+      }
+      initializeParams = request.params;
+      initializeCount++;
+      experimentalApi = request.params?.capabilities?.experimentalApi === true;
       fixtureOutput.write(JSON.stringify({
         id: request.id,
         result: {
@@ -54,6 +73,13 @@ fixtureInput.on("data", (chunk) => {
       if (process.env.FIXTURE_MODE === "close-stdin") {
         process.stdin.destroy();
       }
+    } else if (process.env.FIXTURE_MODE === "experimental-api" &&
+        ["project/list", "thread/turns/list", "thread/items/list"].includes(request.method) &&
+        (!experimentalApi || initializedCount !== 1)) {
+      fixtureOutput.write(JSON.stringify({
+        id: request.id,
+        error: {code: -32600, message: "Experimental API negotiation required"},
+      }) + "\n");
     } else if (process.env.FIXTURE_MODE === "drop") {
       process.exit(0);
     } else if (process.env.FIXTURE_MODE === "wrong-id") {
@@ -71,7 +97,13 @@ fixtureInput.on("data", (chunk) => {
       }) + "\n");
       fixtureOutput.write(JSON.stringify({
         id: request.id,
-        result: {method: request.method, params: request.params},
+        result: {
+          method: request.method,
+          params: request.params,
+          ...(process.env.FIXTURE_MODE === "experimental-api" ? {
+            initializeParams, initializeCount, initializedCount,
+          } : {}),
+        },
       }) + "\n");
     }
   }
@@ -98,6 +130,78 @@ function fixture(mode = "normal", timeoutMs = 1_000): SharedCodexProxyHost {
 }
 
 describe("shared Codex proxy transport fixture", () => {
+  it("negotiates experimental API before saved project and paged task reads", async () => {
+    // The selected handoff protocol uses experimental project and pagination
+    // methods. This pipe-only fixture reproduces the documented opt-in gate;
+    // it never contacts an installed Codex server or an owner profile.
+    const host = fixture("experimental-api");
+    try {
+      for (const method of [
+        "project/list",
+        "thread/turns/list",
+        "thread/items/list",
+      ]) {
+        const params =
+          method === "project/list"
+            ? { cursor: null }
+            : { threadId: "fixture-thread" };
+        expect(await host.request(method, params)).toEqual({
+          method,
+          params,
+          initializeParams: {
+            clientInfo: { name: "farol-shared-handoff", version: "1" },
+            capabilities: { experimentalApi: true },
+          },
+          initializeCount: 1,
+          initializedCount: 1,
+        });
+      }
+      await expect(host.request("thread/delete", {})).rejects.toThrow(
+        "CODEX_SHARED_METHOD_DENIED",
+      );
+    } finally {
+      expect(await host.closeAndWait()).toBe(true);
+    }
+  });
+
+  it("sends no task frame or replacement connection after initialization refusal", async () => {
+    let observed = "";
+    const launch = vi.fn(() => {
+      const child = spawn(process.execPath, ["-e", PROXY_FIXTURE], {
+        stdio: ["pipe", "pipe", "pipe"],
+        env: { FIXTURE_MODE: "initialize-refused" },
+      });
+      child.stderr.on("data", (chunk: Buffer) => {
+        observed += chunk.toString();
+      });
+      return child;
+    });
+    const host = new SharedCodexProxyHost(launch, EXPECTED_HOME);
+    hosts.push(host);
+    try {
+      await expect(host.request("thread/start", {})).rejects.toMatchObject({
+        diagnostic: {
+          phase: "initialize",
+          method: "initialize",
+          result: "rpc_error",
+          rpcCode: -32600,
+        },
+      });
+      await expect(host.request("thread/start", {})).rejects.toBeInstanceOf(
+        HandoffNotSubmittedError,
+      );
+      expect(launch).toHaveBeenCalledTimes(1);
+    } finally {
+      expect(await host.closeAndWait()).toBe(true);
+    }
+    expect(
+      observed
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line).method),
+    ).toEqual(["initialize"]);
+  });
+
   it("forwards scoped database-only task metadata without creating work", async () => {
     const host = fixture();
     const params = {

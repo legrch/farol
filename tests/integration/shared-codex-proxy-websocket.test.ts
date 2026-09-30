@@ -166,7 +166,10 @@ it("upgrades /rpc before masked JSON initialize on the same proxy pipes", async 
     {
       id: 1,
       method: "initialize",
-      params: { clientInfo: { name: "farol-shared-handoff", version: "1" } },
+      params: {
+        clientInfo: { name: "farol-shared-handoff", version: "1" },
+        capabilities: { experimentalApi: true },
+      },
     },
     { method: "initialized", params: {} },
     { id: 2, method: "project/list", params: {} },
