@@ -1,3 +1,7 @@
+import {
+  clientMessages,
+  websocketFixturePrelude,
+} from "../fixtures/proxy-websocket";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -13,11 +17,13 @@ import { HandoffNotSubmittedError } from "../../src/modules/chat/app/service/per
 import { ProductConfigurationResultSchema } from "../../src/pkg/product-settings/contract";
 
 // Disposable Node child only. No Codex binary, socket, account, or owner app.
-const SCRIPT = String.raw`
+const SCRIPT =
+  websocketFixturePrelude +
+  String.raw`
 let input = "";
 process.stderr.write("private stderr /Users/owner/account\n");
-process.stdin.setEncoding("utf8");
-process.stdin.on("data", (chunk) => {
+fixtureInput.setEncoding("utf8");
+fixtureInput.on("data", (chunk) => {
   input += chunk;
   for (;;) {
     const end = input.indexOf("\n");
@@ -29,21 +35,21 @@ process.stdin.on("data", (chunk) => {
       if (process.env.MODE === "timeout") continue;
       if (process.env.MODE === "exit") process.exit(7);
       if (process.env.MODE === "malformed") {
-        process.stdout.write("{private invalid frame\n");
+        fixtureOutput.write("{private invalid frame\n");
         continue;
       }
       if (process.env.MODE === "rpc-init") {
-        process.stdout.write(JSON.stringify({id: request.id, error: {
+        fixtureOutput.write(JSON.stringify({id: request.id, error: {
           code: -32601, message: "private /Users/owner/account"
         }}) + "\n");
         continue;
       }
-      process.stdout.write(JSON.stringify({id: request.id, result: {
+      fixtureOutput.write(JSON.stringify({id: request.id, result: {
         codexHome: process.env.MODE === "identity" ? "/private/home" : "/fixture/home",
         platformFamily: "unix", platformOs: "macos", userAgent: "fixture"
       }}) + "\n");
     } else if (request.id !== undefined && process.env.MODE === "rpc-request") {
-      process.stdout.write(JSON.stringify({id: request.id, error: {
+      fixtureOutput.write(JSON.stringify({id: request.id, error: {
         code: -32001, message: "private request payload"
       }}) + "\n");
     }
@@ -253,7 +259,9 @@ describe("shared proxy closed diagnostics", () => {
     await expect(f.host.request("turn/start", {})).rejects.toBeInstanceOf(
       HandoffNotSubmittedError,
     );
-    expect(writes).toHaveBeenCalledTimes(1);
+    expect(clientMessages(writes.mock.calls.map(([bytes]) => bytes))).toEqual([
+      { id: 2, method: "turn/start", params: {} },
+    ]);
     expect(f.launches()).toBe(1);
     expect(await f.host.closeAndWait()).toBe(true);
   });

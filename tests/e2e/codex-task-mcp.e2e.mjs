@@ -5,6 +5,8 @@ import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import { createServer } from "node:net";
+import { createServer as createHttpServer } from "node:http";
+import { WebSocketServer } from "ws";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -261,23 +263,45 @@ function hostResult(method, params) {
 }
 
 const fixtureFailure = fixtureFailureBoundary();
-const server = createServer((socket) => {
+const server = createHttpServer();
+const websocket = new WebSocketServer({
+  noServer: true,
+  perMessageDeflate: false,
+});
+server.on("connection", (socket) => {
   sockets.add(socket);
   socket.on("close", () => sockets.delete(socket));
-  socket.setEncoding("utf8");
-  socket.on(
-    "data",
-    fixtureSocketFrames(
-      socket,
-      (request) => {
-        if (request.id === undefined) return;
-        socket.write(
-          `${JSON.stringify({ id: request.id, result: hostResult(request.method, request.params) })}\n`,
-        );
-      },
-      fixtureFailure.capture,
-    ),
-  );
+});
+server.on("clientError", (error, socket) => {
+  fixtureFailure.capture(error);
+  socket.destroy();
+});
+server.on("upgrade", (request, socket, head) => {
+  try {
+    assert.equal(request.url, "/rpc");
+    websocket.handleUpgrade(request, socket, head, (peer) => {
+      peer.on("error", (error) => fixtureFailure.capture(error));
+      peer.on("message", (data, binary) => {
+        try {
+          assert.equal(binary, false);
+          const message = JSON.parse(data.toString());
+          if (message.id === undefined) return;
+          peer.send(
+            JSON.stringify({
+              id: message.id,
+              result: hostResult(message.method, message.params),
+            }),
+          );
+        } catch (error) {
+          fixtureFailure.capture(error);
+          peer.terminate();
+        }
+      });
+    });
+  } catch (error) {
+    fixtureFailure.capture(error);
+    socket.destroy();
+  }
 });
 
 // A local fake Browser endpoint proves built MCP routing only. It never
@@ -1152,6 +1176,8 @@ try {
   await client?.close().catch(() => undefined);
   await transport?.close().catch(() => undefined);
   for (const socket of sockets) socket.destroy();
+  for (const peer of websocket.clients) peer.terminate();
+  await new Promise((resolve) => websocket.close(() => resolve()));
   if (server.listening) {
     await new Promise((resolve) => server.close(() => resolve()));
   }

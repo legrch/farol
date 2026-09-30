@@ -1,3 +1,4 @@
+import { websocketFixturePrelude } from "../fixtures/proxy-websocket";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { afterEach, describe, expect, it } from "vitest";
 import { SharedCodexProxyHost } from "../../src/modules/chat/infra/native/shared-codex-proxy-host";
@@ -7,9 +8,9 @@ import { SharedCodexProxyHost } from "../../src/modules/chat/infra/native/shared
 // IPC transports the fixture server; stdin/stdout carry actual proxy frames.
 const CLIENT = String.raw`
 let input = "";
-process.on("message", frame => process.stdout.write(JSON.stringify(frame) + "\n"));
-process.stdin.setEncoding("utf8");
-process.stdin.on("data", chunk => {
+process.on("message", frame => fixtureOutput.write(JSON.stringify(frame) + "\n"));
+fixtureInput.setEncoding("utf8");
+fixtureInput.on("data", chunk => {
   input += chunk;
   for (;;) {
     const end = input.indexOf("\n");
@@ -17,7 +18,7 @@ process.stdin.on("data", chunk => {
     const frame = JSON.parse(input.slice(0, end));
     input = input.slice(end + 1);
     if (frame.method === "initialize") {
-      process.stdout.write(JSON.stringify({ id:frame.id, result:{codexHome:"/fixture/home",platformFamily:"unix",platformOs:"macos",userAgent:"fixture"}}) + "\n");
+      fixtureOutput.write(JSON.stringify({ id:frame.id, result:{codexHome:"/fixture/home",platformFamily:"unix",platformOs:"macos",userAgent:"fixture"}}) + "\n");
     } else process.send(frame);
   }
 });
@@ -79,11 +80,21 @@ afterEach(async () => {
   for (const result of cleanup)
     if (result.status === "rejected") throw result.reason;
 });
-function launch(): ChildProcessWithoutNullStreams {
-  const child = spawn(process.execPath, ["-e", CLIENT], {
-    stdio: ["pipe", "pipe", "pipe", "ipc"],
-    env: {},
-  });
+function launch(websocket = false): ChildProcessWithoutNullStreams {
+  const child = spawn(
+    process.execPath,
+    [
+      "-e",
+      (websocket
+        ? websocketFixturePrelude
+        : "const fixtureInput = process.stdin; const fixtureOutput = process.stdout;\n") +
+        CLIENT,
+    ],
+    {
+      stdio: ["pipe", "pipe", "pipe", "ipc"],
+      env: {},
+    },
+  );
   if (!child.stdin || !child.stdout || !child.stderr)
     throw Error("Owned fixture pipes missing");
   return child as ChildProcessWithoutNullStreams;
@@ -108,7 +119,7 @@ async function fixture(method: string, id: string | number) {
   let reads = 0;
   const host = new SharedCodexProxyHost(
     () => {
-      child = launch();
+      child = launch(true);
       child.on("message", (raw: unknown) => {
         const value = raw as {
           id?: string | number;

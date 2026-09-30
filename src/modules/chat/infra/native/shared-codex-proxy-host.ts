@@ -3,6 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { CodexProxyWebSocket } from "./codex-proxy-websocket";
 
 import {
   HandoffNotSubmittedError,
@@ -195,7 +196,8 @@ export class SharedCodexProxyHost implements HandoffHost {
   modelCatalogueScope(): string {
     return `${this.catalogueClientId}:${this.catalogueEpoch}:${this.lost ? "lost" : "connected"}`;
   }
-  private received = Buffer.alloc(0);
+  private transport: CodexProxyWebSocket | null = null;
+  private initializing = false;
   private ready: Promise<void> | null = null;
   private lost = false;
   private signalFailed = false;
@@ -315,6 +317,7 @@ export class SharedCodexProxyHost implements HandoffHost {
         this.terminal ?? { phase: "idle", method: "none", result: "closed" },
       );
     if (this.ready) return this.ready;
+    this.initializing = true;
     let child: ChildProcessWithoutNullStreams;
     try {
       child = this.launch();
@@ -327,16 +330,30 @@ export class SharedCodexProxyHost implements HandoffHost {
     child.stdin.on("error", () => this.fail("pipe_failed"));
     child.stdout.on("error", () => this.fail("pipe_failed"));
     child.stderr.on("error", () => this.fail("pipe_failed"));
-    child.stdout.on("data", (chunk: Buffer) => this.receive(chunk));
     child.stderr.on("data", () => {
       // Never forward daemon diagnostics or profile data to connector output.
     });
     child.once("error", () => this.fail("launch_failed"));
     child.once("exit", () => this.fail("exited"));
-    this.ready = this.send("initialize", {
-      clientInfo: { name: "farol-shared-handoff", version: "1" },
-    })
-      .then((result) => {
+    const timer = setTimeout(
+      () => this.fail("timeout", this.diagnostic("initialize", "timeout")),
+      this.requestTimeoutMs,
+    );
+    timer.unref?.();
+    this.transport = new CodexProxyWebSocket(
+      child,
+      MAX_FRAME_BYTES,
+      MAX_FRAME_BYTES * MAX_PENDING,
+      (message) => this.receive(message),
+      (failure) => this.fail(failure),
+    );
+    this.ready = this.transport.opened
+      .then(() =>
+        this.send("initialize", {
+          clientInfo: { name: "farol-shared-handoff", version: "1" },
+        }),
+      )
+      .then(async (result) => {
         const response = object(result);
         if (
           response?.codexHome !== this.expectedCodexHome ||
@@ -349,28 +366,22 @@ export class SharedCodexProxyHost implements HandoffHost {
           );
         }
         if (this.lost || !this.child?.stdin.writable) throw unavailable();
-        try {
-          this.child.stdin.write(
-            `${JSON.stringify({ method: "initialized", params: {} })}\n`,
-            (error) => {
-              if (error) this.fail("pipe_failed");
-            },
-          );
-        } catch {
-          throw new CodexProxyFailure(
-            this.diagnostic("initialize", "pipe_failed"),
-          );
-        }
+        await this.transport!.send(
+          JSON.stringify({ method: "initialized", params: {} }),
+        );
+        if (this.lost) throw new CodexProxyFailure(this.terminal!);
+        this.initializing = false;
       })
       .catch((error: unknown) => {
-        this.fail(
-          error instanceof CodexProxyFailure
-            ? error.diagnostic.result
-            : "closed",
-          error instanceof CodexProxyFailure ? error.diagnostic : undefined,
-        );
-        throw error;
-      });
+        const diagnostic =
+          this.terminal ??
+          (error instanceof CodexProxyFailure
+            ? error.diagnostic
+            : this.diagnostic("initialize", "invalid_protocol"));
+        this.fail(diagnostic.result, diagnostic);
+        throw new CodexProxyFailure(diagnostic);
+      })
+      .finally(() => clearTimeout(timer));
     return this.ready;
   }
 
@@ -450,13 +461,15 @@ export class SharedCodexProxyHost implements HandoffHost {
     const first = this.pending.values().next().value as Pending | undefined;
     this.terminal =
       diagnostic ??
-      (this.pending.size === 1 && first
-        ? this.diagnostic(first.method, result)
-        : Object.freeze({
-            phase: this.pending.size > 1 ? "request" : "idle",
-            method: this.pending.size > 1 ? "multiple" : "none",
-            result,
-          }));
+      (this.initializing
+        ? this.diagnostic("initialize", result)
+        : this.pending.size === 1 && first
+          ? this.diagnostic(first.method, result)
+          : Object.freeze({
+              phase: this.pending.size > 1 ? "request" : "idle",
+              method: this.pending.size > 1 ? "multiple" : "none",
+              result,
+            }));
     for (const request of this.pending.values()) {
       clearTimeout(request.timer);
       request.reject(
@@ -464,6 +477,7 @@ export class SharedCodexProxyHost implements HandoffHost {
       );
     }
     this.pending.clear();
+    this.transport?.close();
     this.child?.stdin.destroy();
     this.child?.stdout.destroy();
     this.child?.stderr.destroy();
@@ -497,7 +511,7 @@ export class SharedCodexProxyHost implements HandoffHost {
       return Promise.reject(unavailable());
     }
     const id = this.nextId++;
-    const frame = `${JSON.stringify({ id, method, params })}\n`;
+    const frame = JSON.stringify({ id, method, params });
     if (Buffer.byteLength(frame) > MAX_FRAME_BYTES) {
       return Promise.reject(new Error("CODEX_SHARED_REQUEST_TOO_LARGE"));
     }
@@ -508,124 +522,105 @@ export class SharedCodexProxyHost implements HandoffHost {
       );
       timer.unref?.();
       this.pending.set(id, { method, resolve, reject, timer });
-      try {
-        this.child!.stdin.write(frame, (error) => {
-          if (error) this.fail("pipe_failed");
-        });
-      } catch {
-        this.fail("pipe_failed");
-      }
+      void this.transport!.send(frame).catch(() => this.fail("pipe_failed"));
     });
   }
 
-  private receive(chunk: Buffer): void {
+  private receive(message: Buffer): void {
     if (this.lost) return;
-    this.received = Buffer.concat([this.received, chunk]);
-    if (this.received.length > MAX_FRAME_BYTES) {
+    if (message.length > MAX_FRAME_BYTES) {
       this.fail("invalid_protocol");
       return;
     }
-    for (;;) {
-      const end = this.received.indexOf(0x0a);
-      if (end < 0) return;
-      const line = this.received.subarray(0, end);
-      this.received = this.received.subarray(end + 1);
-      let value: Record<string, unknown> | null;
-      try {
-        value = object(
-          JSON.parse(
-            new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(
-              line,
-            ),
+    let value: Record<string, unknown> | null;
+    try {
+      value = object(
+        JSON.parse(
+          new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(
+            message,
           ),
-        );
-      } catch {
+        ),
+      );
+    } catch {
+      this.fail("invalid_protocol");
+      return;
+    }
+    if (!value) {
+      this.fail("invalid_protocol");
+      return;
+    }
+    if (Object.hasOwn(value, "id") && Object.hasOwn(value, "method")) {
+      if (
+        (typeof value.id !== "string" &&
+          !(typeof value.id === "number" && Number.isSafeInteger(value.id))) ||
+        typeof value.method !== "string" ||
+        Object.hasOwn(value, "result") ||
+        Object.hasOwn(value, "error")
+      ) {
         this.fail("invalid_protocol");
         return;
       }
-      if (!value) {
+      // This client has no request ownership or owner decision route. An
+      // error reply could settle another client's consent prompt. Leave
+      // these exact methods unanswered, without retaining/disclosing params.
+      if (UNQUALIFIED_CONSENT_METHODS.has(value.method)) return;
+      // Other requests are unsupported. Preserve the exact ID without
+      // coercion, admission, payload disclosure or implicit approval.
+      const frame = JSON.stringify({
+        id: value.id,
+        error: { code: -32601, message: "Method not available" },
+      });
+      if (Buffer.byteLength(frame) > MAX_FRAME_BYTES) {
         this.fail("invalid_protocol");
         return;
       }
-      if (Object.hasOwn(value, "id") && Object.hasOwn(value, "method")) {
-        if (
-          (typeof value.id !== "string" &&
-            !(
-              typeof value.id === "number" && Number.isSafeInteger(value.id)
-            )) ||
-          typeof value.method !== "string" ||
-          Object.hasOwn(value, "result") ||
-          Object.hasOwn(value, "error")
-        ) {
-          this.fail("invalid_protocol");
-          return;
-        }
-        // This client has no request ownership or owner decision route. An
-        // error reply could settle another client's consent prompt. Leave
-        // these exact methods unanswered, without retaining/disclosing params.
-        if (UNQUALIFIED_CONSENT_METHODS.has(value.method)) continue;
-        // Other requests are unsupported. Preserve the exact ID without
-        // coercion, admission, payload disclosure or implicit approval.
-        const frame = `${JSON.stringify({ id: value.id, error: { code: -32601, message: "Method not available" } })}\n`;
-        if (Buffer.byteLength(frame) > MAX_FRAME_BYTES) {
-          this.fail("invalid_protocol");
-          return;
-        }
-        try {
-          this.child?.stdin.write(frame, (error) => {
-            if (error) this.fail("pipe_failed");
-          });
-        } catch {
-          this.fail("pipe_failed");
-          return;
-        }
-        continue;
-      }
-      if (value.id === undefined) {
-        // A local cache epoch, not a claim that initialize identifies an account.
-        // No auth payload is retained. Reconnect constructs a new client ID.
-        if (
-          value.method === "account/updated" ||
-          value.method === "account/login/completed"
-        )
-          this.catalogueEpoch++;
-        continue;
-      }
-      if (typeof value.id !== "number" || !Number.isSafeInteger(value.id)) {
-        this.fail("invalid_protocol");
-        return;
-      }
-      const pending = this.pending.get(value.id);
-      if (!pending) {
-        this.fail("invalid_protocol");
-        return;
-      }
-      this.pending.delete(value.id);
-      clearTimeout(pending.timer);
-      if ("error" in value) {
-        const code = object(value.error)?.code;
-        if (typeof code !== "number" || !Number.isSafeInteger(code)) {
-          pending.reject(
-            new CodexProxyFailure(
-              this.diagnostic(pending.method, "invalid_protocol"),
-            ),
-          );
-          continue;
-        }
-        pending.reject(
-          new CodexProxyFailure(
-            this.diagnostic(pending.method, "rpc_error", code),
-          ),
-        );
-      } else if (!("result" in value)) {
+      void this.transport?.send(frame).catch(() => this.fail("pipe_failed"));
+      return;
+    }
+    if (value.id === undefined) {
+      // A local cache epoch, not a claim that initialize identifies an account.
+      // No auth payload is retained. Reconnect constructs a new client ID.
+      if (
+        value.method === "account/updated" ||
+        value.method === "account/login/completed"
+      )
+        this.catalogueEpoch++;
+      return;
+    }
+    if (typeof value.id !== "number" || !Number.isSafeInteger(value.id)) {
+      this.fail("invalid_protocol");
+      return;
+    }
+    const pending = this.pending.get(value.id);
+    if (!pending) {
+      this.fail("invalid_protocol");
+      return;
+    }
+    this.pending.delete(value.id);
+    clearTimeout(pending.timer);
+    if ("error" in value) {
+      const code = object(value.error)?.code;
+      if (typeof code !== "number" || !Number.isSafeInteger(code)) {
         pending.reject(
           new CodexProxyFailure(
             this.diagnostic(pending.method, "invalid_protocol"),
           ),
         );
-        continue;
-      } else pending.resolve(value.result);
-    }
+        return;
+      }
+      pending.reject(
+        new CodexProxyFailure(
+          this.diagnostic(pending.method, "rpc_error", code),
+        ),
+      );
+    } else if (!("result" in value)) {
+      pending.reject(
+        new CodexProxyFailure(
+          this.diagnostic(pending.method, "invalid_protocol"),
+        ),
+      );
+      return;
+    } else pending.resolve(value.result);
   }
 }
 

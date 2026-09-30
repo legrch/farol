@@ -1,7 +1,9 @@
+import { websocketFixturePrelude } from "../fixtures/proxy-websocket";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
-import { createServer } from "node:net";
+import { createServer } from "node:http";
+import { WebSocketServer } from "ws";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -10,15 +12,17 @@ import { SharedCodexProxyHost } from "../../src/modules/chat/infra/native/shared
 import { HandoffNotSubmittedError } from "../../src/modules/chat/app/service/persistent-codex-handoff";
 
 const EXPECTED_HOME = "/fixture/codex-home";
-const PROXY_FIXTURE = String.raw`
+const PROXY_FIXTURE =
+  websocketFixturePrelude +
+  String.raw`
 let pending = "";
 let approvalBlockedRequest = null;
 if (process.env.FIXTURE_MODE === "ignore-term") {
   process.on("SIGTERM", () => {});
   setInterval(() => {}, 1_000);
 }
-process.stdin.setEncoding("utf8");
-process.stdin.on("data", (chunk) => {
+fixtureInput.setEncoding("utf8");
+fixtureInput.on("data", (chunk) => {
   pending += chunk;
   for (;;) {
     const end = pending.indexOf("\n");
@@ -29,7 +33,7 @@ process.stdin.on("data", (chunk) => {
     if (request.id === undefined) continue;
     if (process.env.FIXTURE_MODE === "server-request" && request.id === 999) {
       if (request.error && request.error.code === -32601 && approvalBlockedRequest !== null) {
-        process.stdout.write(JSON.stringify({
+        fixtureOutput.write(JSON.stringify({
           id: approvalBlockedRequest,
           result: {approval: "refused"},
         }) + "\n");
@@ -37,7 +41,7 @@ process.stdin.on("data", (chunk) => {
       continue;
     }
     if (request.method === "initialize") {
-      process.stdout.write(JSON.stringify({
+      fixtureOutput.write(JSON.stringify({
         id: request.id,
         result: {
           codexHome: process.env.FIXTURE_MODE === "wrong-home"
@@ -53,19 +57,19 @@ process.stdin.on("data", (chunk) => {
     } else if (process.env.FIXTURE_MODE === "drop") {
       process.exit(0);
     } else if (process.env.FIXTURE_MODE === "wrong-id") {
-      process.stdout.write(JSON.stringify({id: request.id + 1, result: {}}) + "\n");
+      fixtureOutput.write(JSON.stringify({id: request.id + 1, result: {}}) + "\n");
     } else if (process.env.FIXTURE_MODE === "hang") {
       // Deliberately keep this request pending without a response.
     } else if (process.env.FIXTURE_MODE === "server-request") {
       approvalBlockedRequest = request.id;
-      process.stdout.write(JSON.stringify({
+      fixtureOutput.write(JSON.stringify({
         id: 999, method: "item/commandApproval/request", params: {},
       }) + "\n");
     } else {
-      process.stdout.write(JSON.stringify({
+      fixtureOutput.write(JSON.stringify({
         method: "thread/status/changed", params: {threadId: "fixture-thread"},
       }) + "\n");
-      process.stdout.write(JSON.stringify({
+      fixtureOutput.write(JSON.stringify({
         id: request.id,
         result: {method: request.method, params: request.params},
       }) + "\n");
@@ -165,23 +169,19 @@ describe("shared Codex proxy transport fixture", () => {
       );
       const canonicalRoot = await fs.realpath(root);
       const socketPath = path.join(canonicalRoot, "control.sock");
-      const server = createServer((socket) => {
-        let pending = "";
-        socket.setEncoding("utf8");
-        socket.on("data", (chunk: string) => {
-          pending += chunk;
-          for (;;) {
-            const end = pending.indexOf("\n");
-            if (end < 0) break;
-            const line = pending.slice(0, end);
-            pending = pending.slice(end + 1);
-            const message = JSON.parse(line) as {
+      const server = createServer();
+      const websocket = new WebSocketServer({ noServer: true });
+      server.on("upgrade", (request, socket, head) => {
+        expect(request.url).toBe("/rpc");
+        websocket.handleUpgrade(request, socket, head, (peer) => {
+          peer.on("message", (data) => {
+            const message = JSON.parse(data.toString()) as {
               id?: number;
               method?: string;
             };
-            if (message.id === undefined) continue;
-            socket.write(
-              `${JSON.stringify({
+            if (message.id === undefined) return;
+            peer.send(
+              JSON.stringify({
                 id: message.id,
                 result:
                   message.method === "initialize"
@@ -195,9 +195,9 @@ describe("shared Codex proxy transport fixture", () => {
                         data: [{ id: "saved-project", roots: [] }],
                         nextCursor: null,
                       },
-              })}\n`,
+              }),
             );
-          }
+          });
         });
       });
       try {
@@ -222,6 +222,8 @@ describe("shared Codex proxy transport fixture", () => {
         });
         expect(await host.closeAndWait()).toBe(true);
       } finally {
+        for (const peer of websocket.clients) peer.terminate();
+        await new Promise<void>((resolve) => websocket.close(() => resolve()));
         await new Promise<void>((resolve) => server.close(() => resolve()));
         await fs.rm(root, { recursive: true, force: true });
       }
