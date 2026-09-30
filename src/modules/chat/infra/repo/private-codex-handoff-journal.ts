@@ -674,8 +674,15 @@ export class PrivateCodexHandoffJournal implements HandoffJournal {
     const directory = this.directory(dispatchId);
     const intent = await readPrivate(
       path.join(directory, "message-intent.json"),
+      true,
     );
-    if (intent === null) return false;
+    if (intent === null) {
+      if (
+        (await readPrivate(path.join(directory, "message.json"), true)) !== null
+      )
+        throw new Error("HANDOFF_MESSAGE_ORPHAN_RECEIPT");
+      return false;
+    }
     if (!intent || typeof intent !== "object" || Array.isArray(intent))
       throw new Error("HANDOFF_MESSAGE_UNVERIFIED");
     const value = intent as Record<string, unknown>;

@@ -290,6 +290,26 @@ describe("physical update admission (disposable roots, no live endpoint)", () =>
       expect(await fs.readFile(file, "utf8")).toBe(value);
     },
   );
+  it.each(["turn", "different-turn"])(
+    "blocks an orphan message receipt for %s before provider reads or drain",
+    async (turn) => {
+      const directory = path.join(await root(), "journal");
+      const journal = new PrivateCodexHandoffJournal(directory);
+      await journal.reserve(key, reservation);
+      await journal.claimThread(key);
+      await journal.recordThread(key, "thread");
+      await journal.claimTurn(key);
+      await journal.recordTurn(key, "turn");
+      const file = path.join(directory, key, "message.json");
+      await fs.writeFile(file, JSON.stringify(turn), { mode: 0o600 });
+      const f = fixture();
+      const ports = { ...f.ports, taskKeys: () => journal.updateTaskKeys() };
+      expect((await drainInstalledComputerWork(ports)).ok).toBe(false);
+      expect(f.ports.openTaskReader).not.toHaveBeenCalled();
+      expect(f.ports.stopOwnedClients).not.toHaveBeenCalled();
+      expect(JSON.parse(await fs.readFile(file, "utf8"))).toBe(turn);
+    },
+  );
   it("refuses incomplete reservations, symlinked task directories and FIFO records within the test deadline", async () => {
     const directory = path.join(await root(), "journal");
     const journal = new PrivateCodexHandoffJournal(directory);
