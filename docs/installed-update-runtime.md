@@ -175,3 +175,35 @@ updates; this change does not retry or clear an existing uncertain cleanup.
 The updater package gate includes a disposable Electron ASAR cleanup regression.
 Its verifier response is synthetic, so it proves physical removal semantics and
 port composition, not an installed GitHub upgrade or package authenticity.
+
+## Closed Preview repair
+
+A first installed generation can have an unresolved cleanup record without the
+extraction-root identity needed for safe reclamation. That is not an update to
+retry. The explicit closed-Preview repair tool requires the real normal Quit,
+unchanged durable work obligations and the same kernel admission lease before
+installing a newly accepted candidate. It preserves the existing application,
+normal promotion receipt and configuration. The whole old updater directory is
+retained intact under the exact operation's quarantine; its unknown result is
+preserved rather than declared reconciled or deleted.
+
+Repair writes a separate `farol.next.closed-repair/1` receipt. The updater accepts
+that installed baseline only after checking the fixed slot, exact build/source,
+fixed private predecessor location and both physical package identities. The
+normal promotion receipt is never rewritten to claim a non-overwriting install,
+and no synthetic live-helper or GitHub update receipt is produced. A later real
+GitHub upgrade records its own ordinary update journal and installed receipt.
+
+Use the tool only from clean committed accepted candidate bytes, with NEW closed:
+
+```sh
+node tooling/closed-preview-repair.mjs --expected-predecessor <measured-accepted-digest> --apply
+```
+
+The resulting operation ID identifies the preserved predecessor and explicit
+closed-Preview rollback. Do not substitute an operation or expected digest after
+an unknown result, remove its quarantine or fake a normal Quit. A failed or
+interrupted repair remains a recovery obligation until its exact physical pair
+and journal can be reconciled by the tool. V0, account state and credentials are
+outside this operation. This establishes an installation baseline; it does not
+prove the required installed N-to-N+1 GitHub journey.

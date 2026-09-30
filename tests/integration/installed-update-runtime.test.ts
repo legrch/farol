@@ -750,6 +750,95 @@ ${scenario === "missing" ? "" : `<key>CFBundleVersion</key><string>${scenario ==
   );
 
   it.each([
+    "accepted",
+    "wrong-path",
+    "changed-predecessor",
+    "wrong-build",
+    "unsafe-receipt",
+  ])(
+    "binds the explicit closed-repair installed baseline (%s)",
+    async (scenario) => {
+      const operationId = "7".repeat(32);
+      const previous = path.join(
+        root,
+        "Applications",
+        `.farol-repair-${operationId}`,
+        "previous.app",
+      );
+      await fs.mkdir(previous, { recursive: true, mode: 0o700 });
+      const predecessor = {
+        digest: "8".repeat(64),
+        version: "0.0.9-owner.beta.1",
+        buildId: "6".repeat(64),
+      };
+      const receipt = {
+        schema: "farol.next.closed-repair/1",
+        operationId,
+        phase: "installed",
+        destination: slot,
+        userData,
+        source: predecessor,
+        target: source,
+        sourceCommit: build.sourceCommit,
+        sourceTreeDigest: build.sourceTreeDigest,
+        sourceDirty: false,
+        previous,
+        quarantine: path.join(
+          userData,
+          `installed-updates-quarantine-${operationId}`,
+        ),
+        quarantined: true,
+        quitDigest: "5".repeat(64),
+      };
+      if (scenario === "wrong-path")
+        receipt.previous = path.join(root, "other.app");
+      if (scenario === "wrong-build") receipt.sourceCommit = "0".repeat(40);
+      await fs.writeFile(slot + ".repair.json", JSON.stringify(receipt), {
+        mode: 0o600,
+      });
+      if (scenario === "unsafe-receipt")
+        await fs.chmod(slot + ".repair.json", 0o644);
+      // The old normal promotion receipt refers to the predecessor, not the repair target.
+      const original = JSON.parse(
+        await fs.readFile(slot + ".receipt.json", "utf8"),
+      );
+      await fs.writeFile(
+        slot + ".receipt.json",
+        JSON.stringify({
+          ...original,
+          artifactSha256: predecessor.digest,
+          verifiedDestinationSha256: predecessor.digest,
+        }),
+      );
+      const measured = mocks.exec.getMockImplementation()!;
+      mocks.exec.mockImplementation((file: unknown, args: string[]) =>
+        args[0]!.endsWith("update-slot.mjs") && args[1] === previous
+          ? Promise.resolve({
+              stdout: JSON.stringify(
+                scenario === "changed-predecessor"
+                  ? { ...predecessor, digest: "0".repeat(64) }
+                  : predecessor,
+              ),
+            })
+          : measured(file, args),
+      );
+      const controller = await createInstalledUpdateRuntime(options());
+      await controller!.initialize();
+      await controller!.check();
+      if (scenario === "accepted") {
+        expect(mocks.discover).toHaveBeenCalledTimes(1);
+        expect(controller!.snapshot().phase).toBe("ready");
+      } else {
+        expect(controller!.snapshot().phase).toBe("failed");
+        expect(mocks.discover).not.toHaveBeenCalled();
+        expect(mocks.download).not.toHaveBeenCalled();
+        expect(mocks.helper).not.toHaveBeenCalled();
+      }
+      await controller!.close();
+    },
+  );
+
+  it.each([
     "changed-bytes",
     "missing-receipt",
     "wrong-destination",

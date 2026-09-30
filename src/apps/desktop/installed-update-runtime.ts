@@ -60,6 +60,23 @@ const PromotionReceipt = z.strictObject({
   }),
   verifiedDestinationSha256: Digest,
 });
+// A cold repair is a distinct installer result, never a synthetic live-update receipt.
+const ClosedRepairReceipt = z.strictObject({
+  schema: z.literal("farol.next.closed-repair/1"),
+  operationId: z.string().regex(/^[a-f0-9]{32}$/u),
+  phase: z.enum(["installed", "rolled_back"]),
+  destination: z.string().max(4096),
+  userData: z.string().max(4096),
+  source: AcceptedBuild,
+  target: AcceptedBuild,
+  sourceCommit: z.string().regex(/^[a-f0-9]{40}$/u),
+  sourceTreeDigest: Digest,
+  sourceDirty: z.literal(false),
+  previous: z.string().max(4096),
+  quarantine: z.string().max(4096),
+  quarantined: z.boolean(),
+  quitDigest: Digest,
+});
 const Operation = z.strictObject({
   operationId: z.string().regex(/^[a-f0-9]{32}$/u),
   source: AcceptedBuild,
@@ -464,6 +481,55 @@ export async function createInstalledUpdateRuntime(
       // The first installed generation is anchored by the normal installer's
       // private receipt. Never adopt a freshly measured tree as accepted bytes.
       await canonicalOwnedDirectory(path.dirname(slot), false);
+      const repairRaw = await readRecord(slot + ".repair.json");
+      const repair =
+        repairRaw === null ? null : ClosedRepairReceipt.parse(repairRaw);
+      if (repair) {
+        const previous = path.join(
+          path.dirname(slot),
+          `.farol-repair-${repair.operationId}`,
+          "previous.app",
+        );
+        if (
+          repair.destination !== slot ||
+          repair.userData !== options.userData ||
+          repair.previous !== previous ||
+          repair.quarantine !==
+            path.join(
+              options.userData,
+              `installed-updates-quarantine-${repair.operationId}`,
+            )
+        )
+          throw new Error("UPDATE_REPAIR_IDENTITY_UNCONFIRMED");
+        await canonicalOwnedDirectory(path.dirname(previous), true);
+        const companion = await readBuild(previous);
+        if (
+          !sameBuild(
+            companion,
+            repair.phase === "installed" ? repair.source : repair.target,
+          )
+        )
+          throw new Error("UPDATE_REPAIR_PREDECESSOR_CHANGED");
+        if (repair.phase === "installed") {
+          if (
+            repair.sourceCommit !== options.build.sourceCommit ||
+            repair.sourceTreeDigest !== options.build.sourceTreeDigest ||
+            repair.target.buildId !== options.build.buildId ||
+            repair.target.version !== options.build.version
+          )
+            throw new Error("UPDATE_REPAIR_IDENTITY_UNCONFIRMED");
+          const measured = await readBuild(slot);
+          if (!sameBuild(measured, repair.target))
+            throw new Error("UPDATE_ACCEPTED_SOURCE_CHANGED");
+          return measured;
+        }
+        // A cold rollback still needs the predecessor's genuine initial install anchor.
+        if (
+          repair.source.buildId !== options.build.buildId ||
+          repair.source.version !== options.build.version
+        )
+          throw new Error("UPDATE_REPAIR_IDENTITY_UNCONFIRMED");
+      }
       const file = slot + ".receipt.json";
       const receipt = PromotionReceipt.parse(await readRecord(file));
       if (

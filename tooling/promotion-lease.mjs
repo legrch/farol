@@ -173,6 +173,13 @@ export async function acquirePromotionLease(userData, generation, role) {
   }
 }
 
+/** The trusted repair helper inherits this exact open kernel lock; it never reopens it. */
+export function promotionLeaseDescriptor(lease) {
+  const state = holds.get(lease);
+  if (!state || state.released) throw new Error("PROMOTION_LEASE_NOT_HELD");
+  return state.handle.fd;
+}
+
 /**
  * Releases a lease this process acquired. The file stays in place (the lock
  * lives on that one inode; unlinking it would let a later acquirer lock a
