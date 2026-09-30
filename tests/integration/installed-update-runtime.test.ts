@@ -211,6 +211,41 @@ describe("installed updater composition (disposable filesystem and mocked native
     expect(mocks.download).toHaveBeenCalledTimes(1);
     expect(quit).not.toHaveBeenCalled();
   });
+  it("restores an intact retained update when physical reads return short chunks", async () => {
+    const first = await prepared();
+    first.close();
+    const open = fs.open.bind(fs);
+    let reads = 0;
+    vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      const handle = await open(...args);
+      if (args[0] !== ready) return handle;
+      return new Proxy(handle, {
+        get(target, property) {
+          if (property === "read")
+            return (
+              buffer: Buffer,
+              offset: number,
+              length: number,
+              position: number,
+            ) => {
+              reads++;
+              return target.read(buffer, offset, Math.min(length, 7), position);
+            };
+          const value = Reflect.get(target, property, target) as unknown;
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+      });
+    });
+    const second = await createInstalledUpdateRuntime(options());
+    await second!.initialize();
+    expect(second!.snapshot()).toMatchObject({
+      phase: "ready",
+      deferred: true,
+    });
+    expect(reads).toBeGreaterThan(1);
+    expect(mocks.download).toHaveBeenCalledTimes(1);
+    expect(mocks.helper).not.toHaveBeenCalled();
+  });
   it("retains an uncertain download across restart and never compensates with another download", async () => {
     mocks.download.mockRejectedValue(new Error("lost stage cleanup receipt"));
     const first = await createInstalledUpdateRuntime(options());

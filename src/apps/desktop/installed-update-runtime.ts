@@ -140,7 +140,17 @@ async function readRecord(file: string): Promise<unknown | null> {
     )
       throw new Error("UPDATE_RECORD_CHANGED");
     const buffer = Buffer.alloc(MAX_RECORD_BYTES + 1);
-    const { bytesRead } = await fd.read(buffer, 0, buffer.length, 0);
+    let bytesRead = 0;
+    while (bytesRead < buffer.length) {
+      const chunk = await fd.read(
+        buffer,
+        bytesRead,
+        buffer.length - bytesRead,
+        bytesRead,
+      );
+      if (chunk.bytesRead === 0) break;
+      bytesRead += chunk.bytesRead;
+    }
     const after = await fd.stat();
     if (
       bytesRead !== before.size ||
