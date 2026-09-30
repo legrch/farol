@@ -7,6 +7,7 @@ import {
 import { selectedConnectorApp } from "../pkg/product-settings/connector-app-selection";
 import type {
   ProductConfigurationCommand,
+  ProductConfigurationSnapshot,
   ProductSettings,
 } from "../pkg/product-settings/contract";
 import {
@@ -361,7 +362,14 @@ export class GuidedOnboardingView {
     element("#onboarding-scroll").scrollTop = 0;
   }
 
-  render(enabled: boolean, feedback: string, feedbackError: boolean): void {
+  render(
+    enabled: boolean,
+    feedback: string,
+    feedbackError: boolean,
+    configurationError:
+      | Extract<ProductConfigurationSnapshot, { status: "error" }>["error"]
+      | null = null,
+  ): void {
     const active = enabled && this.port.isActive();
     document.documentElement.dataset.guidedOnboarding = String(active);
     element("#guided-onboarding").hidden = !enabled;
@@ -577,7 +585,9 @@ export class GuidedOnboardingView {
     back.hidden = this.step === 4;
     back.textContent = this.step === 0 ? "Overview" : "Back";
     const status = element("#onboarding-status");
-    const localError = this.feedbackStep === this.step && feedbackError;
+    const localError =
+      configurationError !== null ||
+      (this.feedbackStep === this.step && feedbackError);
     status.dataset.state =
       complete && !this.busy && !localError && !(changed && this.step === 2)
         ? "ready"
@@ -634,10 +644,15 @@ export class GuidedOnboardingView {
                             : "Not checked yet");
     const feedbackNode = element("#onboarding-feedback");
     feedbackNode.textContent =
-      active && this.feedbackStep === this.step && feedbackError
-        ? feedback
-        : "";
-    feedbackNode.classList.toggle("error", feedbackError);
+      active && configurationError !== null
+        ? `Settings unavailable · ${configurationError}. Review Settings → Diagnostics.`
+        : active && this.feedbackStep === this.step && feedbackError
+          ? feedback
+          : "";
+    feedbackNode.classList.toggle(
+      "error",
+      feedbackError || configurationError !== null,
+    );
     element("#computer-feedback").hidden = active;
     element("#review-setup").textContent = "Open setup overview";
     element("#onboarding-chat-copy").textContent = external

@@ -4798,7 +4798,8 @@ function renderModelSection(): void {
 
 function renderSetup(): void {
   const dialog = required<HTMLDialogElement>("#setup-dialog");
-  if (!setupJourney.open) {
+  if (guidedSetupSelected(bootstrap) || !setupJourney.open) {
+    setupJourney = { ...setupJourney, open: false };
     setupFocusKey = "";
     if (dialog.open) dialog.close();
     return;
@@ -5536,6 +5537,9 @@ function render(notify = true): void {
     guidedEnabled,
     settingsFeedback,
     settingsFeedbackError,
+    bootstrap.configuration.status === "error"
+      ? bootstrap.configuration.error
+      : null,
   );
   if (guidedEnabled) {
     // Settings and Setup each own the rail while open. Keep the product
@@ -6120,23 +6124,25 @@ async function start(): Promise<void> {
   applyProductIdentity();
   windowState = bootstrap.windowState;
   selectedTaskId = bootstrap.tasks[0]?.taskId ?? "";
-  if (bootstrap.configuration.status === "ready") {
-    const settings = bootstrap.configuration.settings;
-    const initialSetup = initialSetupPresentation({
-      environment: bootstrap.environment,
-      demoMode: bootstrap.demoMode,
-      legacySetupTestMode: bootstrap.legacySetupTestMode,
-      dismissed: settings.setup.journey.dismissed,
-      currentStep: settings.setup.journey.currentStep,
-      openAtLaunch: settings.general.openAtLaunch,
-    });
-    setupJourney = createSetupJourney({
-      open: initialSetup.setupOpen,
-      step: initialSetup.setupStep,
-    });
-    sidebarPreference = settings.general.sidebarDefault;
-    section = initialSetup.section;
-  }
+  const initialSettings =
+    bootstrap.configuration.status === "ready"
+      ? bootstrap.configuration.settings
+      : null;
+  const initialSetup = initialSetupPresentation({
+    environment: bootstrap.environment,
+    demoMode: bootstrap.demoMode,
+    legacySetupTestMode: bootstrap.legacySetupTestMode,
+    dismissed: initialSettings?.setup.journey.dismissed ?? false,
+    currentStep: initialSettings?.setup.journey.currentStep ?? "chatgpt",
+    openAtLaunch: initialSettings?.general.openAtLaunch ?? "browser",
+  });
+  setupJourney = createSetupJourney({
+    open: initialSetup.setupOpen,
+    step: initialSetup.setupStep,
+  });
+  if (initialSettings)
+    sidebarPreference = initialSettings.general.sidebarDefault;
+  section = initialSetup.section;
 
   guidedOnboarding = new GuidedOnboardingView({
     mode: "embedded",

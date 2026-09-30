@@ -48,8 +48,9 @@ renaming never authorizes another tunnel, broader access, or a message retry.
   task-scoped read capabilities and a separate main-process control capability;
 - an explicit `--demo` mode with two independent scripted local-provider sessions,
   two real `WebContentsView` surfaces and one bounded fixture Computer round-trip;
-- one mandatory five-step first-run Setup journey, available again from Settings,
-  with real ChatGPT, Computer, Codex-host, and bounded Agent verification actions;
+- sidebar Setup with Sign in, optional Folders, Connection, and Add to ChatGPT,
+  available again from Settings; configuration errors stay on this same surface
+  with classified diagnostics and never reopen the legacy modal journey;
 - the owner-selected Watch Rail shell with Iris selection/next-action accents,
   shape-and-text task signals, a 216 px sidebar / 72 px rail, and packaged Geist;
 - content-free Activity, a content-free support export, and explicit

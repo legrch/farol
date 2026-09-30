@@ -105,6 +105,16 @@ tasks:
     cmds:
       - /usr/bin/python3 -I ./scripts/assert-owner-untouched.py -- npm run test:e2e:guided-setup:package -- {{.CLI_ARGS}}
 
+  test:e2e:setup-config-error:
+    desc: Check classified configuration faults keep sidebar Setup in owned hidden profiles
+    cmds:
+      - /usr/bin/python3 -I ./scripts/assert-owner-untouched.py -- npm run test:e2e:setup-config-error -- {{.CLI_ARGS}}
+
+  test:e2e:setup-config-error:package:
+    desc: Check packaged configuration faults keep sidebar Setup in owned hidden profiles
+    cmds:
+      - /usr/bin/python3 -I ./scripts/assert-owner-untouched.py -- npm run test:e2e:setup-config-error:package -- {{.CLI_ARGS}}
+
   test:e2e:update:package:
     desc: Check real source and bundled package identities against the updater contract
     cmds:

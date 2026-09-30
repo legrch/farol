@@ -9095,19 +9095,19 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
   await initializeSavedChatBridge();
   await initializeRouteBRuntime();
   const configured = configuration.snapshot();
-  if (configured.status === "ready") {
-    const initialSetup = initialSetupPresentation({
-      environment: activeDesktopIdentity.environment,
-      demoMode,
-      legacySetupTestMode,
-      dismissed: configured.settings.setup.journey.dismissed,
-      currentStep: configured.settings.setup.journey.currentStep,
-      openAtLaunch: configured.settings.general.openAtLaunch,
-    });
-    section = initialSetup.section;
-    sidebarMode = configured.settings.general.sidebarDefault;
-    setupOpen = initialSetup.setupOpen;
-  }
+  const initialSettings =
+    configured.status === "ready" ? configured.settings : null;
+  const initialSetup = initialSetupPresentation({
+    environment: activeDesktopIdentity.environment,
+    demoMode,
+    legacySetupTestMode,
+    dismissed: initialSettings?.setup.journey.dismissed ?? false,
+    currentStep: initialSettings?.setup.journey.currentStep ?? "chatgpt",
+    openAtLaunch: initialSettings?.general.openAtLaunch ?? "browser",
+  });
+  section = initialSetup.section;
+  setupOpen = initialSetup.setupOpen;
+  if (initialSettings) sidebarMode = initialSettings.general.sidebarDefault;
   if (startupDelayMs > 0) {
     startupStage("before-delay");
     await delay(startupDelayMs);

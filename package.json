@@ -47,7 +47,9 @@
     "test:e2e:codex-task-fixture:package": "node tests/e2e/codex-task-mcp.e2e.mjs --packaged",
     "ci": "npm run check:toolchain && npm run typecheck && npm run lint && npm run format:check && npm run architecture && npm run test:coverage && npm run hunt:report",
     "test:e2e:guided-setup": "node tests/e2e/guided-setup-selection.e2e.mjs",
-    "test:e2e:guided-setup:package": "node tests/e2e/guided-setup-selection.e2e.mjs --packaged"
+    "test:e2e:guided-setup:package": "node tests/e2e/guided-setup-selection.e2e.mjs --packaged",
+    "test:e2e:setup-config-error": "node tests/e2e/setup-config-error.e2e.mjs",
+    "test:e2e:setup-config-error:package": "node tests/e2e/setup-config-error.e2e.mjs --packaged"
   },
   "dependencies": {
     "@modelcontextprotocol/server": "2.0.0",
