@@ -727,6 +727,19 @@ export async function createInstalledUpdateRuntime(
       };
     },
     discover: async () => {
+      let current: z.infer<typeof AcceptedBuild>;
+      try {
+        // update-slot measures CFBundleVersion and binds it to this identity.
+        // Do not query GitHub using an unconfirmed installed baseline.
+        current = await readBuild(slot);
+      } catch {
+        return known("UPDATE_SOURCE_IDENTITY_UNCONFIRMED");
+      }
+      if (
+        current.buildId !== options.build.buildId ||
+        current.version !== options.build.version
+      )
+        return known("UPDATE_SOURCE_IDENTITY_MISMATCH");
       const found = await discoverGithubUpdate(
         {
           version: options.build.version,

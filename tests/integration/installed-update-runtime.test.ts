@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import fs from "node:fs/promises";
+import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { BuildIdentitySchema } from "../../src/pkg/build-info/identity";
@@ -213,6 +214,62 @@ afterEach(async () => {
 });
 
 describe("installed updater composition (disposable filesystem and mocked native/GitHub ports)", () => {
+  it.each(["matching", "mismatched", "missing"] as const)(
+    "measures the installed plist before accepting a %s build baseline",
+    async (scenario) => {
+      const { createBuildIdentity } = await vi.importActual<{
+        createBuildIdentity: (input: unknown) => unknown;
+      }>("../../tooling/build-identity-contract.mjs");
+      const app = path.join(slot, "Contents/Resources/app");
+      await fs.mkdir(app, { recursive: true });
+      await fs.writeFile(
+        path.join(app, "build-identity.json"),
+        JSON.stringify(createBuildIdentity(build)),
+      );
+      await fs.writeFile(
+        path.join(slot, "Contents/Info.plist"),
+        `<?xml version="1.0"?><plist version="1.0"><dict>
+<key>CFBundleIdentifier</key><string>${build.bundleId}</string>
+<key>CFBundleShortVersionString</key><string>${build.version.split("-", 1)[0]}</string>
+${scenario === "missing" ? "" : `<key>CFBundleVersion</key><string>${scenario === "matching" ? build.buildVersion : "9"}</string>`}
+</dict></plist>`,
+      );
+      const result = spawnSync(
+        process.execPath,
+        [path.resolve("tooling/update-slot.mjs"), slot],
+        { encoding: "utf8", timeout: 5000, killSignal: "SIGKILL" },
+      );
+      expect(result.error).toBeUndefined();
+      expect(result.signal).toBeNull();
+      if (scenario === "matching") {
+        expect(result.status, result.stderr).toBe(0);
+        expect(JSON.parse(result.stdout)).toMatchObject({
+          version: build.version,
+        });
+      } else {
+        expect(result.status).not.toBe(0);
+        expect(result.stdout).toBe("");
+      }
+    },
+  );
+
+  it.each(["unreadable", "changed-build"] as const)(
+    "refuses %s installed identity before GitHub discovery or download",
+    async (scenario) => {
+      const controller = await createInstalledUpdateRuntime(options());
+      await controller!.initialize();
+      if (scenario === "unreadable")
+        mocks.exec.mockRejectedValue(new Error("UPDATE_SLOT_IDENTITY_INVALID"));
+      else mocks.exec.mockResolvedValue({ stdout: JSON.stringify(target) });
+      await controller!.check();
+      expect(controller!.snapshot()).toMatchObject({ phase: "failed" });
+      expect(mocks.discover).not.toHaveBeenCalled();
+      expect(mocks.download).not.toHaveBeenCalled();
+      expect(mocks.helper).not.toHaveBeenCalled();
+      controller!.close();
+    },
+  );
+
   it.each(["profile", "ancestor", "update-root"] as const)(
     "refuses a symlinked %s before creating or reading updater state",
     async (kind) => {

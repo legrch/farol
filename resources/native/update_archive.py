@@ -57,6 +57,15 @@ def type_of(info):
     return "file", (mode & 0o7777) or 0o644
 
 
+def admit_extra(extra):
+    while extra:
+        check(len(extra) >= 4, "ARCHIVE_EXTRA_INVALID")
+        tag, length = struct.unpack_from("<HH", extra)
+        check(len(extra) >= 4 + length, "ARCHIVE_EXTRA_INVALID")
+        check(tag != 0x0001, "ARCHIVE_ZIP64_UNSUPPORTED")
+        extra = extra[4 + length:]
+
+
 def admit_central_directory(fd, size):
     # ZipFile allocates its central-directory bytes and ZipInfo objects in its
     # constructor. Bound and count the actual records before giving it the fd.
@@ -83,10 +92,24 @@ def admit_central_directory(fd, size):
         check(len(header) == 46 and header[:4] == b"PK\x01\x02", "ARCHIVE_DIRECTORY_INVALID")
         name, extra, note = struct.unpack_from("<3H", header, 28)
         check(struct.unpack_from("<H", header, 34)[0] == 0, "ARCHIVE_MULTIDISK_UNSUPPORTED")
-        cursor += 46 + name + extra + note
+        next_cursor = cursor + 46 + name + extra + note
+        check(next_cursor <= end_offset, "ARCHIVE_DIRECTORY_INVALID")
+        compressed, expanded = struct.unpack_from("<II", header, 20)
+        local_offset = struct.unpack_from("<I", header, 42)[0]
+        check(0xFFFFFFFF not in (compressed, expanded, local_offset), "ARCHIVE_ZIP64_UNSUPPORTED")
+        admit_extra(os.pread(fd, extra, cursor + 46 + name))
+        # A forced ZIP64 member may use classic central fields and ZIP64 only
+        # in its local header. Admit both representations before ZipFile opens.
+        check(local_offset + 30 <= offset, "ARCHIVE_DIRECTORY_INVALID")
+        local = os.pread(fd, 30, local_offset)
+        check(len(local) == 30 and local[:4] == b"PK\x03\x04", "ARCHIVE_DIRECTORY_INVALID")
+        check(0xFFFFFFFF not in struct.unpack_from("<II", local, 18), "ARCHIVE_ZIP64_UNSUPPORTED")
+        local_name, local_extra = struct.unpack_from("<HH", local, 26)
+        check(local_offset + 30 + local_name + local_extra <= offset, "ARCHIVE_DIRECTORY_INVALID")
+        admit_extra(os.pread(fd, local_extra, local_offset + 30 + local_name))
+        cursor = next_cursor
         observed += 1
         check(observed <= MAX_ENTRIES, "ARCHIVE_ENTRY_COUNT_INVALID")
-        check(cursor <= end_offset, "ARCHIVE_DIRECTORY_INVALID")
     check(observed == count, "ARCHIVE_ENTRY_COUNT_INVALID")
 
 

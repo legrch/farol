@@ -227,6 +227,10 @@ describe("archive admission before ZIP object allocation", () => {
     ["directory-bytes", "ARCHIVE_CENTRAL_DIRECTORY_LIMIT"],
     ["zip64", "ARCHIVE_ZIP64_UNSUPPORTED"],
     ["zip64-locator", "ARCHIVE_ZIP64_UNSUPPORTED"],
+    ...["compressed", "expanded", "offset", "extra", "local"].map((field) => [
+      `zip64-member-${field}`,
+      "ARCHIVE_ZIP64_UNSUPPORTED",
+    ]),
   ]) {
     it(`refuses ${scenario} before constructing Python ZIP entries`, async () => {
       const parent = await fs.mkdtemp(
@@ -245,10 +249,21 @@ stage = root / "stage"
 stage.mkdir(mode=0o700)
 with zipfile.ZipFile(archive, "w") as z:
     for name in ["artifact.json", "Farol Next Preview.app/Contents/Info.plist", "Farol Next Preview.app/extra"]:
-        z.writestr(name, "")
+        if scenario == "zip64-member-local":
+            with z.open(name, "w", force_zip64=True) as member:
+                member.write(b"")
+        else:
+            info = zipfile.ZipInfo(name)
+            if scenario == "zip64-member-extra":
+                info.extra = struct.pack("<HHQQ", 1, 16, 0, 0)
+            z.writestr(info, "")
 data = bytearray(archive.read_bytes())
 end = len(data) - 22
-if scenario == "lying-count":
+if scenario in ("zip64-member-compressed", "zip64-member-expanded", "zip64-member-offset"):
+    central = data.index(b"PK\x01\x02")
+    field = {"compressed": 20, "expanded": 24, "offset": 42}[scenario.rsplit("-", 1)[1]]
+    struct.pack_into("<I", data, central + field, 0xFFFFFFFF)
+elif scenario == "lying-count":
     struct.pack_into("<HH", data, end + 8, 1, 1)
 elif scenario == "directory-bytes":
     struct.pack_into("<I", data, end + 12, 32 * 1024 * 1024)
@@ -266,7 +281,7 @@ elif scenario == "zip64-locator":
     struct.pack_into("<I", data, end + 12, old_length + len(records))
     data[end:end] = records
 archive.write_bytes(data)
-helper.MAX_ENTRIES = 3 if scenario == "zip64-locator" else 2
+helper.MAX_ENTRIES = 3 if scenario.startswith("zip64-") else 2
 def forbidden(*args, **kwargs):
     raise AssertionError("ZIP_OBJECT_ALLOCATED_BEFORE_ADMISSION")
 helper.zipfile.ZipFile = forbidden
