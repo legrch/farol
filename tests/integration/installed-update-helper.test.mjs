@@ -132,7 +132,7 @@ async function confirmQuit(f) {
   );
   await fs.unlink(path.join(f.state, "running.json"));
 }
-function observeHelper(child) {
+function observeHelper(child, expectTerminal = true) {
   children.push(child);
   let resolveReady;
   let rejectReady;
@@ -188,7 +188,11 @@ function observeHelper(child) {
         return;
       }
       try {
-        resolve({ exitCode, result: JSON.parse(stdout), stderr });
+        resolve({
+          exitCode,
+          result: expectTerminal ? JSON.parse(stdout) : null,
+          stderr,
+        });
       } catch (error) {
         reject(error);
       }
@@ -209,7 +213,64 @@ function invoke(request) {
   child.stdio[3].end(JSON.stringify(request));
   return result;
 }
-function invokeWithPostSwapCorruption(request) {
+function invokeCrashAtExchange(request, side) {
+  const program = `
+import importlib.util, os, sys
+spec = importlib.util.spec_from_file_location("update_helper", sys.argv[1])
+helper = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(helper)
+exchange = helper.exchange_checked
+def interrupt(*args, **kwargs):
+    if sys.argv[2] == "before":
+        os._exit(91)
+    exchange(*args, **kwargs)
+    os._exit(92)
+helper.exchange_checked = interrupt
+helper.main()
+`;
+  const child = spawn(
+    "/usr/bin/python3",
+    ["-I", "-S", "-B", "-c", program, helper, side],
+    {
+      cwd: "/",
+      env: { LANG: "C.UTF-8", PATH: "/usr/bin:/bin" },
+      stdio: ["ignore", "pipe", "pipe", "pipe", "pipe"],
+    },
+  );
+  const result = observeHelper(child, false);
+  child.stdio[3].end(JSON.stringify(request));
+  return result;
+}
+function invokeWithFakeOpen(request, log) {
+  const program = `
+import importlib.util, json, os, sys
+spec = importlib.util.spec_from_file_location("update_helper", sys.argv[1])
+helper = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(helper)
+original = helper.subprocess.run
+def run(command, *args, **kwargs):
+    if command[0] == "/usr/bin/open":
+        with open(sys.argv[2], "a", encoding="utf-8") as file:
+            file.write("open\\n")
+        return type("Result", (), {"returncode": 0})()
+    return original(command, *args, **kwargs)
+helper.subprocess.run = run
+helper.main()
+`;
+  const child = spawn(
+    "/usr/bin/python3",
+    ["-I", "-S", "-B", "-c", program, helper, log],
+    {
+      cwd: "/",
+      env: { LANG: "C.UTF-8", PATH: "/usr/bin:/bin" },
+      stdio: ["ignore", "pipe", "pipe", "pipe", "pipe"],
+    },
+  );
+  const result = observeHelper(child);
+  child.stdio[3].end(JSON.stringify(request));
+  return result;
+}
+function invokeWithPostSwapCorruption(request, crashSide = "none") {
   const program = `
 import importlib.util, json, os, sys
 spec = importlib.util.spec_from_file_location("update_helper", sys.argv[1])
@@ -222,6 +283,17 @@ def corrupt_after_move(parent, name, record):
         with open(sys.argv[2] + "/Applications/Farol Next Preview.app/Contents/payload", "wb") as file:
             file.write(b"corrupt")
 helper.write_record = corrupt_after_move
+exchange = helper.exchange_checked
+swaps = 0
+def interrupt_rollback(*args, **kwargs):
+    global swaps
+    swaps += 1
+    if swaps == 2 and sys.argv[3] == "before":
+        os._exit(91)
+    exchange(*args, **kwargs)
+    if swaps == 2 and sys.argv[3] == "after":
+        os._exit(92)
+helper.exchange_checked = interrupt_rollback
 try:
     helper.run(json.loads(sys.stdin.read()))
 except helper.Refusal as error:
@@ -230,10 +302,10 @@ except helper.Refusal as error:
 `;
   const child = spawn(
     "/usr/bin/python3",
-    ["-I", "-S", "-B", "-c", program, helper, request.home],
+    ["-I", "-S", "-B", "-c", program, helper, request.home, crashSide],
     { cwd: "/", stdio: ["pipe", "pipe", "pipe", "ignore", "pipe"] },
   );
-  const result = observeHelper(child);
+  const result = observeHelper(child, crashSide === "none");
   child.stdin.end(JSON.stringify(request));
   return result;
 }
@@ -252,6 +324,121 @@ async function phase(f, value) {
 }
 
 describe("installed update helper", () => {
+  for (const side of ["before", "after"]) {
+    it(`keeps the fixed slot present across an interrupted apply exchange (${side})`, async () => {
+      const f = await fixture();
+      const pending = invokeCrashAtExchange(f.request, side);
+      await pending.ready;
+      await confirmQuit(f);
+      f.child.kill("SIGTERM");
+      expect((await pending).exitCode).toBe(side === "before" ? 91 : 92);
+      expect((await fs.lstat(f.app)).isDirectory()).toBe(true);
+      const recovered = await invoke({ ...f.request, action: "recover" });
+      expect(recovered.result.phase).toBe(
+        side === "before" ? "cancelled" : "verified",
+      );
+      expect(
+        await fs.readFile(path.join(f.app, "Contents/payload"), "utf8"),
+      ).toBe(side === "before" ? "N" : "N+1");
+      if (side === "after") {
+        expect(
+          await fs.readFile(
+            path.join(f.op, "previous.app/Contents/payload"),
+            "utf8",
+          ),
+        ).toBe("N");
+        expect(
+          (await invoke({ ...f.request, action: "recover" })).result.phase,
+        ).toBe("verified");
+      }
+    });
+
+    it(`keeps the fixed slot present across an interrupted rollback exchange (${side})`, async () => {
+      const f = await fixture();
+      const applied = invoke(f.request);
+      await applied.ready;
+      await confirmQuit(f);
+      f.child.kill("SIGTERM");
+      expect((await applied).result.phase).toBe("verified");
+      const rollbackProcess = spawn("/bin/sleep", ["20"], { stdio: "ignore" });
+      children.push(rollbackProcess);
+      const started = execFileSync(
+        "/bin/ps",
+        ["-p", String(rollbackProcess.pid), "-o", "lstart="],
+        { encoding: "utf8" },
+      ).trim();
+      await setMarker(f.state, rollbackProcess.pid, started);
+      const rollback = invokeCrashAtExchange(
+        {
+          ...f.request,
+          action: "rollback",
+          pid: rollbackProcess.pid,
+          processStart: started,
+        },
+        side,
+      );
+      await rollback.ready;
+      await confirmQuit(f);
+      rollbackProcess.kill("SIGTERM");
+      expect((await rollback).exitCode).toBe(side === "before" ? 91 : 92);
+      expect((await fs.lstat(f.app)).isDirectory()).toBe(true);
+      expect(
+        (await invoke({ ...f.request, action: "recover" })).result.phase,
+      ).toBe("rolled_back");
+      expect(
+        await fs.readFile(path.join(f.app, "Contents/payload"), "utf8"),
+      ).toBe("N");
+      expect(
+        await fs.readFile(
+          path.join(f.op, "failed.app/Contents/payload"),
+          "utf8",
+        ),
+      ).toBe("N+1");
+      expect(
+        (await invoke({ ...f.request, action: "recover" })).result.phase,
+      ).toBe("rolled_back");
+    });
+  }
+  it("settles a live prepared recovery and never repeats its launch request", async () => {
+    const f = await fixture();
+    const interrupted = invokeCrashAtExchange(f.request, "before");
+    await interrupted.ready;
+    await confirmQuit(f);
+    f.child.kill("SIGTERM");
+    expect((await interrupted).exitCode).toBe(91);
+    const log = path.join(f.root, "open.log");
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const current = spawn("/bin/sleep", ["20"], { stdio: "ignore" });
+      children.push(current);
+      const started = execFileSync(
+        "/bin/ps",
+        ["-p", String(current.pid), "-o", "lstart="],
+        { encoding: "utf8" },
+      ).trim();
+      await setMarker(f.state, current.pid, started);
+      const recovery = invokeWithFakeOpen(
+        {
+          ...f.request,
+          action: "recover",
+          pid: current.pid,
+          processStart: started,
+          relaunch: true,
+        },
+        log,
+      );
+      await recovery.ready;
+      await confirmQuit(f);
+      current.kill("SIGTERM");
+      expect((await recovery).result.phase).toBe("cancel_completed");
+      expect(await fs.readFile(log, "utf8")).toBe("open\n");
+    }
+    expect(
+      await fs.readFile(path.join(f.app, "Contents/payload"), "utf8"),
+    ).toBe("N");
+    expect(
+      (await invoke({ ...f.request, action: "recover" })).result.phase,
+    ).toBe("cancel_completed");
+  });
   it("replaces fixed NEW slot only after exact PID exits, preserves N, and rolls back", async () => {
     const f = await fixture();
     const pending = invoke(f.request);
@@ -321,6 +508,37 @@ describe("installed update helper", () => {
       await fs.readFile(path.join(f.op, "failed.app/Contents/payload"), "utf8"),
     ).toBe("corrupt");
   });
+
+  for (const side of ["before", "after"]) {
+    it(`refuses to displace unbound rejected target after rollback crashes ${side} exchange`, async () => {
+      const f = await fixture();
+      const pending = invokeWithPostSwapCorruption(f.request, side);
+      await pending.ready;
+      await confirmQuit(f);
+      f.child.kill("SIGTERM");
+      expect((await pending).exitCode).toBe(side === "before" ? 91 : 92);
+      expect((await fs.lstat(f.app)).isDirectory()).toBe(true);
+      const recovery = await invoke({ ...f.request, action: "recover" });
+      expect(recovery.exitCode).not.toBe(0);
+      expect(recovery.result.error).toBe("digest");
+      expect(
+        JSON.parse(await fs.readFile(path.join(f.op, "journal.json"), "utf8"))
+          .phase,
+      ).toBe("rollback_started");
+      expect(
+        await fs.readFile(path.join(f.app, "Contents/payload"), "utf8"),
+      ).toBe(side === "before" ? "corrupt" : "N");
+      expect(
+        await fs.readFile(
+          path.join(f.op, "previous.app/Contents/payload"),
+          "utf8",
+        ),
+      ).toBe(side === "before" ? "N" : "corrupt");
+      await expect(
+        fs.lstat(path.join(f.op, "failed.app")),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+    });
+  }
 
   it("refuses bad digest, build identity and a foreign destination without moving N", async () => {
     for (const mutate of [
@@ -506,16 +724,13 @@ describe("installed update helper", () => {
     f.child.kill("SIGTERM");
     expect(
       (await invoke({ ...f.request, action: "recover" })).result.phase,
-    ).toBe("rollback_started");
+    ).toBe("rolled_back");
     expect(
-      await fs.readFile(
-        path.join(f.op, "previous.app/Contents/payload"),
-        "utf8",
-      ),
-    ).toBe("N");
+      await fs.readFile(path.join(f.op, "failed.app/Contents/payload"), "utf8"),
+    ).toBe("N+1");
     expect(
       await fs.readFile(path.join(f.app, "Contents/payload"), "utf8"),
-    ).toBe("N+1");
+    ).toBe("N");
   });
 
   it("refuses FIFO staging and existing rollback path without deleting either", async () => {

@@ -3,6 +3,8 @@
 Input is one JSON object on fd 3. Exit status is classified; stdout is one
 JSON phase record. No caller-supplied filesystem path is used for mutation.
 """
+import ctypes
+import errno
 import fcntl
 import datetime
 import hashlib
@@ -437,7 +439,8 @@ def read_phase(op, request):
         record = json.loads(read_file(op, "journal.json"))
     except (ValueError, UnicodeError):
         fail("journal_invalid")
-    if not isinstance(record, dict) or set(record) != set(record_for(request, "prepared")) or any(record.get(k) != record_for(request, "prepared")[k] for k in ("schema", "operationId", "source", "target")) or record.get("phase") not in ("prepared", "predecessor_saved", "new_installed", "verified", "rollback_started", "rolled_back", "launch_requested", "completed"):
+    phases = ("prepared", "predecessor_saved", "new_installed", "verified", "rollback_started", "rolled_back", "cancelled", "launch_requested", "completed", "cancel_launch_requested", "cancel_completed", "rollback_launch_requested", "rollback_completed")
+    if not isinstance(record, dict) or set(record) != set(record_for(request, "prepared")) or any(record.get(k) != record_for(request, "prepared")[k] for k in ("schema", "operationId", "source", "target")) or record.get("phase") not in phases:
         fail("journal_mismatch")
     return record["phase"]
 
@@ -471,42 +474,149 @@ def rename_checked(source_fd, source_name, target_fd, target_name, expected=None
     os.fsync(target_fd)
 
 
-def reconcile(apps, op, request):
+def exchange_checked(left_fd, left_name, right_fd, right_name, left_expected, right_expected):
+    """Swap two pinned directories in one Darwin namespace operation."""
+    left = entry(left_fd, left_name)
+    right = entry(right_fd, right_name)
+    if (left is None or right is None or not stat.S_ISDIR(left.st_mode)
+            or not stat.S_ISDIR(right.st_mode) or left.st_uid != os.geteuid()
+            or right.st_uid != os.geteuid() or identity(left) != left_expected
+            or identity(right) != right_expected):
+        fail("exchange_precondition")
+    if sys.platform != "darwin":
+        fail("exchange_unsupported")
+    renameatx = ctypes.CDLL(None, use_errno=True).renameatx_np
+    renameatx.argtypes = (ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint)
+    renameatx.restype = ctypes.c_int
+    # RENAME_SWAP from Darwin sys/stdio.h. Both entries must exist; no fixed-slot gap.
+    if renameatx(left_fd, os.fsencode(left_name), right_fd, os.fsencode(right_name), 0x00000002) != 0:
+        error = ctypes.get_errno()
+        if error in (errno.ENOSYS, errno.ENOTSUP, errno.EXDEV, errno.EINVAL):
+            fail("exchange_unsupported")
+        fail("exchange_uncertain")
+    moved_left = entry(left_fd, left_name)
+    moved_right = entry(right_fd, right_name)
+    if (moved_left is None or moved_right is None
+            or identity(moved_left) != right_expected
+            or identity(moved_right) != left_expected):
+        fail("exchange_uncertain")
+    os.fsync(left_fd)
+    os.fsync(right_fd)
+
+
+def matches_tree(parent, name, build):
+    try:
+        checked_tree(parent, name, build["digest"], build["version"], build["buildId"])
+        return True
+    except Refusal:
+        return False
+
+
+def inspect_recovery(apps, op, request):
+    """Read-only proof of an exact pair before a live-app Quit handoff."""
+    phase = read_phase(op, request)
+    app = entry(apps, APP)
+    staged = entry(op, "staged.app")
+    previous = entry(op, "previous.app")
+    failed = entry(op, "failed.app")
+    source = request["source"]
+    target = request["target"]
+    if app is None:
+        fail("recovery_pair", phase)
+    if phase in ("prepared", "cancelled", "cancel_launch_requested", "cancel_completed") and previous is None and failed is None and staged is not None:
+        if ((matches_tree(apps, APP, source) and matches_tree(op, "staged.app", target))
+                or (phase == "prepared" and matches_tree(apps, APP, target) and matches_tree(op, "staged.app", source))):
+            return
+    if phase in ("prepared", "predecessor_saved", "new_installed", "verified", "launch_requested", "completed", "rollback_started") and previous is not None and staged is None and failed is None:
+        if matches_tree(apps, APP, target) and matches_tree(op, "previous.app", source):
+            return
+        if phase == "rollback_started" and matches_tree(apps, APP, source) and matches_tree(op, "previous.app", target):
+            return
+    if phase in ("rollback_started", "rolled_back", "rollback_launch_requested", "rollback_completed") and previous is None and staged is None and failed is not None:
+        if matches_tree(apps, APP, source) and stat.S_ISDIR(failed.st_mode) and failed.st_uid == os.geteuid():
+            return
+    fail("recovery_pair", phase)
+
+
+def reconcile(apps, op, request, fence):
     source = request["source"]
     target = request["target"]
     phase = read_phase(op, request)
     app = entry(apps, APP)
     previous = entry(op, "previous.app")
     failed = entry(op, "failed.app")
-    if phase in ("rollback_started", "rolled_back"):
-        if previous is not None and app is not None and failed is None and phase == "rollback_started":
+    staged = entry(op, "staged.app")
+    if phase in ("rollback_started", "rolled_back", "rollback_launch_requested", "rollback_completed"):
+        if staged is not None:
+            fail("rollback_uncertain", phase)
+        if phase == "rollback_started" and app is not None and previous is not None and failed is None:
+            if matches_tree(apps, APP, target) and matches_tree(op, "previous.app", source):
+                # Exact pre-exchange pair: finish the journaled rollback once.
+                fence()
+                exchange_checked(apps, APP, op, "previous.app", identity(app), identity(previous))
+            # Post-exchange pair must also match both accepted digests. A crash
+            # with rejected target bytes has no durable inode binding to move.
+            checked_tree(apps, APP, source["digest"], source["version"], source["buildId"])
+            checked_tree(op, "previous.app", target["digest"], target["version"], target["buildId"])
+            fence()
+            rename_checked(op, "previous.app", op, "failed.app", identity(entry(op, "previous.app")))
+            write_record(op, "journal.json", record_for(request, "rolled_back"))
+            return "rolled_back"
+        if previous is not None and app is None and failed is not None and phase == "rollback_started":
+            # An older journal may have crashed in the former two-rename gap.
             checked_tree(op, "previous.app", source["digest"], source["version"], source["buildId"])
-            checked_tree(apps, APP, target["digest"], target["version"], target["buildId"])
-            return "rollback_started"
-        if previous is not None and app is None and failed is not None:
-            checked_tree(op, "previous.app", **{"expected": source["digest"], "version": source["version"], "build_id": source["buildId"]})
-            rename_checked(op, "previous.app", apps, APP)
+            fence()
+            rename_checked(op, "previous.app", apps, APP, identity(previous))
             write_record(op, "journal.json", record_for(request, "rolled_back"))
             return "rolled_back"
         if app is not None and previous is None and failed is not None:
             checked_tree(apps, APP, source["digest"], source["version"], source["buildId"])
-            return "rolled_back"
+            # Failed bytes may be the target rejected by post-swap verification.
+            if not stat.S_ISDIR(failed.st_mode) or failed.st_uid != os.geteuid():
+                fail("failed_type", phase)
+            if phase == "rollback_started":
+                fence()
+                write_record(op, "journal.json", record_for(request, "rolled_back"))
+                return "rolled_back"
+            return phase
         fail("rollback_uncertain", phase)
     if failed is not None:
         fail("failed_unexpected", phase)
+    if phase in ("prepared", "cancelled", "cancel_launch_requested", "cancel_completed") and previous is None:
+        if app is not None and staged is not None:
+            if matches_tree(apps, APP, source) and matches_tree(op, "staged.app", target):
+                # The exchange has not happened; do not start it in recovery.
+                if phase == "prepared":
+                    fence()
+                    write_record(op, "journal.json", record_for(request, "cancelled"))
+                    return "cancelled"
+                return phase
+            if phase == "prepared":
+                # The atomic exchange happened, but predecessor was not named yet.
+                checked_tree(apps, APP, target["digest"], target["version"], target["buildId"])
+                checked_tree(op, "staged.app", source["digest"], source["version"], source["buildId"])
+                fence()
+                rename_checked(op, "staged.app", op, "previous.app", identity(staged))
+                write_record(op, "journal.json", record_for(request, "verified"))
+                return "verified"
+        fail("predecessor_missing", phase)
     if previous is None:
-        if phase == "prepared" and app is not None:
-            checked_tree(apps, APP, source["digest"], source["version"], source["buildId"])
-            return "prepared"
         fail("predecessor_missing", phase)
     checked_tree(op, "previous.app", source["digest"], source["version"], source["buildId"])
     if app is None:
-        # The predecessor has been moved; restore it. Never guess whether the new app may launch.
-        rename_checked(op, "previous.app", apps, APP)
-        write_record(op, "journal.json", record_for(request, "rolled_back"))
-        return "rolled_back"
+        if phase in ("prepared", "predecessor_saved") and staged is not None:
+            # Repair only a pre-existing journal from the former two-rename protocol.
+            checked_tree(op, "staged.app", target["digest"], target["version"], target["buildId"])
+            fence()
+            rename_checked(op, "previous.app", apps, APP, identity(previous))
+            write_record(op, "journal.json", record_for(request, "rolled_back"))
+            return "rolled_back"
+        fail("app_missing", phase)
+    if staged is not None:
+        fail("staged_unexpected", phase)
     checked_tree(apps, APP, target["digest"], target["version"], target["buildId"])
     if phase in ("prepared", "predecessor_saved", "new_installed"):
+        fence()
         write_record(op, "journal.json", record_for(request, "verified"))
         return "verified"
     return phase
@@ -520,6 +630,11 @@ def run(request):
     lock_fd = None
     state = None
     lease_fd = None
+    def fence():
+        if lease_fd is None:
+            fail("owner_lease_lost")
+        verify_owner_lease(state, lease_fd)
+        assert_parent_path(request["home"], home, apps)
     try:
         apps = open_dir(home, "Applications")
         state = open_owner_state(home)
@@ -568,12 +683,10 @@ def run(request):
             write_record(op, "journal.json", record_for(request, "prepared"))
             verify_owner_lease(state, lease_fd)
             assert_parent_path(request["home"], home, apps)
-            rename_checked(apps, APP, op, "previous.app", predecessor_inode)
-            checked_tree(op, "previous.app", request["source"]["digest"], request["source"]["version"], request["source"]["buildId"])
-            write_record(op, "journal.json", record_for(request, "predecessor_saved"))
-            verify_owner_lease(state, lease_fd)
-            assert_parent_path(request["home"], home, apps)
-            rename_checked(op, "staged.app", apps, APP, staged_inode)
+            exchange_checked(apps, APP, op, "staged.app", predecessor_inode, staged_inode)
+            checked_tree(op, "staged.app", request["source"]["digest"], request["source"]["version"], request["source"]["buildId"])
+            fence()
+            rename_checked(op, "staged.app", op, "previous.app", predecessor_inode)
             write_record(op, "journal.json", record_for(request, "new_installed"))
             try:
                 checked_tree(apps, APP, request["target"]["digest"], request["target"]["version"], request["target"]["buildId"])
@@ -585,13 +698,15 @@ def run(request):
                 verify_owner_lease(state, lease_fd)
                 assert_parent_path(request["home"], home, apps)
                 write_record(op, "journal.json", record_for(request, "rollback_started"))
-                rename_checked(apps, APP, op, "failed.app", staged_inode)
-                rename_checked(op, "previous.app", apps, APP, predecessor_inode)
+                fence()
+                exchange_checked(apps, APP, op, "previous.app", staged_inode, predecessor_inode)
+                fence()
+                rename_checked(op, "previous.app", op, "failed.app", staged_inode)
                 write_record(op, "journal.json", record_for(request, "rolled_back"))
                 fail("target_verification", "rolled_back")
         elif request["action"] == "rollback":
             started_at = initial_marker(state, request)
-            if read_phase(op, request) not in ("verified", "completed", "launch_requested", "rollback_started"):
+            if read_phase(op, request) not in ("verified", "completed", "launch_requested"):
                 fail("rollback_phase")
             checked_tree(apps, APP, request["target"]["digest"], request["target"]["version"], request["target"]["buildId"])
             checked_tree(op, "previous.app", request["source"]["digest"], request["source"]["version"], request["source"]["buildId"])
@@ -604,34 +719,48 @@ def run(request):
             lease_fd = owner_lease(state)
             confirmed_quit(state, started_at)
             assert_parent_path(request["home"], home, apps)
-            phase = reconcile(apps, op, request)
-            if phase not in ("verified", "completed", "launch_requested", "rollback_started"):
+            phase = reconcile(apps, op, request, fence)
+            if phase not in ("verified", "completed", "launch_requested"):
                 fail("rollback_phase", phase)
             checked_tree(apps, APP, request["target"]["digest"], request["target"]["version"], request["target"]["buildId"])
             checked_tree(op, "previous.app", request["source"]["digest"], request["source"]["version"], request["source"]["buildId"])
             if entry(op, "failed.app") is not None:
                 fail("failed_exists")
-            if phase != "rollback_started":
-                write_record(op, "journal.json", record_for(request, "rollback_started"))
+            write_record(op, "journal.json", record_for(request, "rollback_started"))
             verify_owner_lease(state, lease_fd)
             assert_parent_path(request["home"], home, apps)
-            rename_checked(apps, APP, op, "failed.app")
+            exchange_checked(apps, APP, op, "previous.app", identity(entry(apps, APP)), identity(entry(op, "previous.app")))
+            fence()
+            rename_checked(op, "previous.app", op, "failed.app", identity(entry(op, "previous.app")))
+        elif request["action"] == "recover" and request["relaunch"]:
+            started_at = initial_marker(state, request)
+            assert_parent_path(request["home"], home, apps)
+            inspect_recovery(apps, op, request)
+            if process_start(request["pid"]) != request["processStart"]:
+                fail("process_identity")
+            emit_handoff(request, "waiting_for_exit")
+            wait_exit(request["pid"], request["processStart"], request["waitSeconds"], observed=True)
+            lease_fd = owner_lease(state)
+            confirmed_quit(state, started_at)
         if lease_fd is None:
             lease_fd = owner_lease(state)
             confirmed_quit(state)
         verify_owner_lease(state, lease_fd)
         assert_parent_path(request["home"], home, apps)
-        phase = reconcile(apps, op, request)
-        if request["action"] == "apply" and phase == "verified" and request["relaunch"]:
-            write_record(op, "journal.json", record_for(request, "launch_requested"))
+        phase = reconcile(apps, op, request, fence)
+        if request["relaunch"] and phase in ("verified", "cancelled", "rolled_back"):
+            launch_phases = {"verified": ("launch_requested", "completed"), "cancelled": ("cancel_launch_requested", "cancel_completed"), "rolled_back": ("rollback_launch_requested", "rollback_completed")}
+            launch_requested, completed = launch_phases[phase]
+            fence()
+            write_record(op, "journal.json", record_for(request, launch_requested))
             # One request only. A failed/unknown launch remains explicit for caller reconciliation.
             assert_parent_path(request["home"], home, apps)
             path = request["home"] + "/Applications/" + APP
             result = subprocess.run(("/usr/bin/open", "-a", path), timeout=10, check=False)
             if result.returncode != 0:
-                fail("launch_failed", "launch_requested")
-            write_record(op, "journal.json", record_for(request, "completed"))
-            phase = "completed"
+                fail("launch_failed", launch_requested)
+            write_record(op, "journal.json", record_for(request, completed))
+            phase = completed
         return phase
     finally:
         for fd in (op, lock_fd, lease_fd, state, update, apps, home):

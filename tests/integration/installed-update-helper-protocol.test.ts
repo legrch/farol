@@ -162,6 +162,30 @@ describe("installed helper bounded readiness protocol", () => {
     );
   });
 
+  it("requires a bound ACK before live recovery may Quit", async () => {
+    const input = { ...request, action: "recover" as const, relaunch: true };
+    const { child, pending } = await launch(1000, input);
+    child.ack.end(JSON.stringify({ ...event(), action: "recover" }));
+    const result = await pending;
+    expect(result.status).toBe("ready");
+    child.finish(0, "cancel_completed");
+    expect((await result.operation.completion).terminal?.phase).toBe(
+      "cancel_completed",
+    );
+  });
+
+  it("does not treat a live recovery exit without ACK as terminal readiness", async () => {
+    const input = { ...request, action: "recover" as const, relaunch: true };
+    const { child, pending } = await launch(1000, input);
+    child.ack.end();
+    await tick();
+    child.finish(0, "cancelled");
+    expect(await pending).toMatchObject({
+      status: "outcome_unknown",
+      reason: "helper_exited_before_readiness",
+    });
+  });
+
   it("classifies a helper exit before acknowledgment without granting Quit", async () => {
     const { child, pending } = await launch();
     child.ack.end();

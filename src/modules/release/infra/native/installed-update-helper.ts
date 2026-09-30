@@ -8,7 +8,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 
 const HELPER_SHA256 =
-  "11f9f8d270a6fb4340e67cfb1c7e5f6ae053c57f3311bc204e907bf1dc79344c";
+  "43dfcb9004e21fbe1eab4b5e5afe972f7ff24a679fb36a3f19018ad5c33e645b";
 const MAX_HELPER_BYTES = 64 * 1024;
 const APP_NAME = "Farol Next Preview.app";
 const execFileAsync = promisify(execFile);
@@ -61,8 +61,7 @@ function assertInput(input: InstalledUpdateRequest): void {
     !Number.isSafeInteger(input.waitSeconds) ||
     input.waitSeconds < 1 ||
     input.waitSeconds > 120 ||
-    typeof input.relaunch !== "boolean" ||
-    (input.action !== "apply" && input.relaunch)
+    typeof input.relaunch !== "boolean"
   ) {
     throw new Error("INSTALLED_UPDATE_INPUT_INVALID");
   }
@@ -226,7 +225,7 @@ function parseHandoff(
       return null;
     if (
       event["phase"] === "waiting_for_exit" &&
-      expected.action !== "recover" &&
+      (expected.action !== "recover" || expected.relaunch) &&
       Object.keys(event).length === 8
     ) {
       return { phase: "waiting_for_exit" };
@@ -274,9 +273,9 @@ function parseTerminal(
 }
 
 /**
- * Only `ready` authorizes normal Quit for apply/rollback. Every post-spawn
+ * Only `ready` authorizes normal Quit for apply/rollback or live recover. Every post-spawn
  * outcome retains the same child via its observation/completion handle.
- * `recover` has no live-app handoff and returns a terminal result instead.
+ * Offline `recover` has no live-app handoff and returns a terminal result instead.
  */
 export async function startInstalledUpdateHelper(
   helperPath: string,
@@ -425,6 +424,7 @@ export async function startInstalledUpdateHelper(
     resolveCompletion(exit);
     if (
       pinned.action === "recover" &&
+      !pinned.relaunch &&
       code === 0 &&
       !signal &&
       terminal &&
