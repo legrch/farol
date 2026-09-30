@@ -12,7 +12,7 @@ import type {
 const execFileAsync = promisify(execFile);
 // Update only after reviewing update_archive.py and its focused tests.
 export const UPDATE_ARCHIVE_HELPER_SHA256 =
-  "b1199a714cf4f6a250fb9358c8113cc62b625f6317557dca711dc557088ea0e6";
+  "903d6982b8972b4885cdafc9de24458af0901ed1a85cca5fcb6ae91a93cc3645";
 type MeasuredIdentity = PackageIdentity & Readonly<{ buildVersion: string }>;
 export type VerifiedStagedPackage = Readonly<{
   identity: MeasuredIdentity;

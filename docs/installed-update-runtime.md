@@ -30,15 +30,17 @@ and stay within the installer's limits.
 A pre-readiness refusal is retryable only after that same helper's classified
 terminal exit confirms it never crossed the mutation handoff. The app rechecks
 the unchanged slot/journal, preserves the refusal receipt, clears only that
-pre-mutation intent and releases admission. The redundant staged app is removed
-before that intent is cleared; the small refusal receipt remains. Unconfirmed
-cleanup persists an obligation and blocks another attempt across restarts.
+pre-mutation intent and releases admission. Before removing the redundant staged
+app it durably changes the dispatch intent into the existing preparation cleanup
+phase. The small refusal receipt remains outside the copy directory. Interrupted
+cleanup stays blocked in that lifetime; startup can reconcile this proven
+pre-mutation preparation without requiring already-removed target bytes.
 A missing, timed-out or conflicting
 terminal result remains unknown and never permits a substitute helper.
 
 A confirmed `not_started` launcher result is separate from an unknown no-PID
-outcome. Only the launcher's terminal native exec failure can establish that no
-helper existed. Apply rechecks the source and absent journal, records the refusal,
+outcome. Only the launcher's pre-spawn preflight result or confirmed terminal
+native exec failure can establish that no helper existed. Apply rechecks the source and absent journal, records the refusal,
 then durably transitions to preparation cleanup before reclaiming its copy. An
 interrupted cleanup is reconciled on startup without dispatch. Rollback/recovery
 records the same no-spawn proof in its exact restore intent and rechecks unchanged

@@ -171,7 +171,10 @@ export interface InstalledUpdateOperation {
 export type InstalledUpdateLaunch =
   | Readonly<{
       status: "not_started";
-      reason: "helper_spawn_failed";
+      reason:
+        | "helper_spawn_failed"
+        | "helper_preflight_failed"
+        | "owner_home_invalid";
       operation: InstalledUpdateOperation;
     }>
   | Readonly<{ status: "ready"; operation: InstalledUpdateOperation }>
@@ -309,14 +312,45 @@ export async function startInstalledUpdateHelper(
     waitSeconds: input.waitSeconds,
     relaunch: input.relaunch,
   };
-  const bytes = await helperBytes(helperPath);
-  const user = os.userInfo();
-  if (
-    user.uid !== process.geteuid?.() ||
-    !path.isAbsolute(user.homedir) ||
-    path.normalize(user.homedir) !== user.homedir
-  ) {
-    throw new Error("INSTALLED_UPDATE_HOME_INVALID");
+  const beforeSpawn = (
+    reason: "helper_preflight_failed" | "owner_home_invalid",
+  ): InstalledUpdateLaunch => {
+    // This receipt explicitly has no process and no process exit code. It is
+    // created only on the preflight side of the spawn boundary.
+    const result: InstalledUpdateCompletion = {
+      code: null,
+      signal: null,
+      terminal: null,
+      protocolError: reason,
+    };
+    return {
+      status: "not_started",
+      reason,
+      operation: {
+        operationId: pinned.operationId,
+        pid: null,
+        completion: Promise.resolve(result),
+        observe: () => ({ handoff: null, exit: result, protocolError: reason }),
+      },
+    };
+  };
+  let bytes: Buffer;
+  try {
+    bytes = await helperBytes(helperPath);
+  } catch {
+    return beforeSpawn("helper_preflight_failed");
+  }
+  let user: os.UserInfo<string>;
+  try {
+    user = os.userInfo();
+    if (
+      user.uid !== process.geteuid?.() ||
+      !path.isAbsolute(user.homedir) ||
+      path.normalize(user.homedir) !== user.homedir
+    )
+      return beforeSpawn("owner_home_invalid");
+  } catch {
+    return beforeSpawn("owner_home_invalid");
   }
   const request = {
     schema: "farol.installed-update/1",

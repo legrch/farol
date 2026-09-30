@@ -217,11 +217,12 @@ async function confirmedNoEffect(
       return (
         handoff.operation.pid === null &&
         terminal !== null &&
-        terminal.code !== null &&
-        terminal.code < 0 &&
+        (handoff.reason === "helper_spawn_failed"
+          ? terminal.code !== null && terminal.code < 0
+          : terminal.code === null) &&
         terminal.signal === null &&
         terminal.terminal === null &&
-        terminal.protocolError === "helper_spawn_failed"
+        terminal.protocolError === handoff.reason
       );
     return (
       terminal?.code === 70 &&
@@ -995,7 +996,7 @@ export async function createInstalledUpdateRuntime(
         );
         operation = handoff.operation;
         if (
-          handoff.status === "not_started" &&
+          (handoff.status === "not_started" || handoff.status === "refused") &&
           (await confirmedNoEffect(handoff))
         ) {
           if (
@@ -1004,17 +1005,15 @@ export async function createInstalledUpdateRuntime(
             !sameBuild(await readBuild(slot), source)
           )
             return { status: "unknown", code: "UPDATE_HANDOFF_UNKNOWN" };
-          await writeRecord(
-            path.join(root, `${operationId}-not-started.json`),
-            {
-              schema: "farol.update-refusal/1",
-              action: "apply",
-              operation: preparing,
-              code: handoff.reason,
-            },
-          );
-          // No helper process existed. Commit that proof as preparation before
-          // reclaiming the copy, so interruption cannot orphan an unknown dispatch.
+          await writeRecord(path.join(root, `${operationId}-refusal.json`), {
+            schema: "farol.update-refusal/1",
+            action: "apply",
+            operation: preparing,
+            code: handoff.reason,
+          });
+          // The same launch has a confirmed pre-mutation outcome. Commit that
+          // proof as preparation before reclaiming its copy, including after a
+          // helper refusal. Never leave a dispatch intent pointing at removed bytes.
           retained = {
             ...retained,
             operation: null,
@@ -1027,49 +1026,13 @@ export async function createInstalledUpdateRuntime(
           await writeRecord(readyFile, retained);
           operation = null;
           keepAdmission = false;
-          return { status: "blocked", code: "UPDATE_HELPER_NOT_STARTED" };
-        }
-        if (
-          handoff.status === "refused" &&
-          (await confirmedNoEffect(handoff))
-        ) {
-          if (
-            (await readRecord(path.join(operationRoot, "journal.json"))) !==
-              null ||
-            !sameBuild(await readBuild(slot), source)
-          )
-            return { status: "unknown", code: "UPDATE_HANDOFF_UNKNOWN" };
-          await writeRecord(path.join(operationRoot, "refusal.json"), {
-            schema: "farol.update-refusal/1",
-            action: "apply",
-            operation: retained.operation,
-            code: handoff.reason,
-          });
-          // The same helper exited before mutation; keep its small receipt,
-          // but release this redundant app copy before permitting another try.
-          try {
-            await fs.rm(path.join(operationRoot, "staged.app"), {
-              recursive: true,
-              force: true,
-            });
-          } catch {
-            stagingUncertain = true;
-            await writeRecord(cleanupFile, {
-              schema: "farol.update-package-cleanup/1",
-              handle: update.handle,
-              operationRoot,
-            });
-            return {
-              status: "unknown",
-              code: "UPDATE_STAGING_OUTCOME_UNKNOWN",
-            };
-          }
-          const cleared = { ...retained, operation: null, helper: null };
-          await writeRecord(readyFile, cleared);
-          retained = cleared;
-          operation = null;
-          keepAdmission = false;
-          return { status: "blocked", code: "UPDATE_HELPER_REFUSED" };
+          return {
+            status: "blocked",
+            code:
+              handoff.status === "refused"
+                ? "UPDATE_HELPER_REFUSED"
+                : "UPDATE_HELPER_NOT_STARTED",
+          };
         }
         // Keep the same operation observable even on an uncertain ACK. No substitute helper.
         void operation.completion.then((result) => {

@@ -226,6 +226,7 @@ describe("archive admission before ZIP object allocation", () => {
     ["lying-count", "ARCHIVE_ENTRY_COUNT_INVALID"],
     ["directory-bytes", "ARCHIVE_CENTRAL_DIRECTORY_LIMIT"],
     ["zip64", "ARCHIVE_ZIP64_UNSUPPORTED"],
+    ["zip64-locator", "ARCHIVE_ZIP64_UNSUPPORTED"],
   ]) {
     it(`refuses ${scenario} before constructing Python ZIP entries`, async () => {
       const parent = await fs.mkdtemp(
@@ -253,8 +254,19 @@ elif scenario == "directory-bytes":
     struct.pack_into("<I", data, end + 12, 32 * 1024 * 1024)
 elif scenario == "zip64":
     struct.pack_into("<HH", data, end + 8, 65535, 65535)
+elif scenario == "zip64-locator":
+    # Keep ordinary EOCD count/size non-sentinel and internally consistent.
+    # Hide ZIP64 end records in the last entry comment: ZipFile consults the
+    # locator immediately before EOCD even without classic sentinel fields.
+    old_length, old_offset = struct.unpack_from("<II", data, end + 12)
+    last = data.rfind(b"PK\x01\x02", 0, end)
+    records = struct.pack("<4sQ2H2I4Q", b"PK\x06\x06", 44, 45, 45, 0, 0, 3, 3, 32 * 1024 * 1024, old_offset)
+    records += struct.pack("<4sIQI", b"PK\x06\x07", 0, end, 1)
+    struct.pack_into("<H", data, last + 32, len(records))
+    struct.pack_into("<I", data, end + 12, old_length + len(records))
+    data[end:end] = records
 archive.write_bytes(data)
-helper.MAX_ENTRIES = 2
+helper.MAX_ENTRIES = 3 if scenario == "zip64-locator" else 2
 def forbidden(*args, **kwargs):
     raise AssertionError("ZIP_OBJECT_ALLOCATED_BEFORE_ADMISSION")
 helper.zipfile.ZipFile = forbidden

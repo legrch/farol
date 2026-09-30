@@ -825,7 +825,7 @@ describe("installed updater composition (disposable filesystem and mocked native
     expect(
       JSON.parse(
         await fs.readFile(
-          path.join(userData, "installed-updates", refusedId, "refusal.json"),
+          path.join(userData, "installed-updates", `${refusedId}-refusal.json`),
           "utf8",
         ),
       ),
@@ -845,7 +845,95 @@ describe("installed updater composition (disposable filesystem and mocked native
     expect(quit).toHaveBeenCalledTimes(1);
     expect(mocks.download).toHaveBeenCalledTimes(1);
   });
-  it("keeps failed refused-stage cleanup unknown across app lifetimes", async () => {
+  it("recovers confirmed refusal after the staged copy was removed but the final ready write failed", async () => {
+    const first = await prepared();
+    mocks.helper.mockResolvedValueOnce({
+      status: "refused",
+      reason: "process_identity",
+      operation: {
+        pid: 123,
+        completion: Promise.resolve({
+          code: 70,
+          signal: null,
+          protocolError: null,
+          terminal: { phase: "refused", error: "process_identity" },
+        }),
+      },
+    });
+    const rename = fs.rename.bind(fs);
+    vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+      if (to === ready && mocks.helper.mock.calls.length === 1) {
+        const next = JSON.parse(await fs.readFile(from, "utf8"));
+        if (next.operation === null && next.preparation === undefined)
+          throw new Error(
+            "fixture crash after reclamation before final ready commit",
+          );
+      }
+      return rename(from, to);
+    });
+    await first.restart();
+    expect(first.snapshot()).toMatchObject({
+      phase: "failed",
+      recoveryRequired: true,
+    });
+    const op = mocks.helper.mock.calls[0]![1];
+    await expect(
+      fs.stat(
+        path.join(userData, "installed-updates", op.operationId, "staged.app"),
+      ),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+    first.close();
+    vi.mocked(fs.rename).mockImplementation(rename);
+    const next = await createInstalledUpdateRuntime(options());
+    await next!.initialize();
+    expect(next!.snapshot()).toMatchObject({ phase: "ready", deferred: true });
+    expect(mocks.helper).toHaveBeenCalledTimes(1);
+    expect(quit).not.toHaveBeenCalled();
+    expect(mocks.download).toHaveBeenCalledTimes(1);
+    next!.close();
+  });
+
+  it.each(["helper", "home"])(
+    "keeps a real %s preflight failure known and recoverable without spawning",
+    async (failure) => {
+      const first = await prepared();
+      const actual = await vi.importActual<
+        typeof import("../../src/modules/release/infra/native/installed-update-helper")
+      >("../../src/modules/release/infra/native/installed-update-helper");
+      mocks.helper.mockImplementationOnce(async (_path, request) => {
+        if (failure === "home")
+          vi.mocked(os.userInfo).mockReturnValueOnce({
+            ...os.userInfo(),
+            uid: -1,
+          });
+        return actual.startInstalledUpdateHelper(
+          failure === "helper"
+            ? path.join(root, "missing-helper.py")
+            : path.join(process.cwd(), "resources/native/update_helper.py"),
+          request,
+        );
+      });
+      await first.restart();
+      expect(first.snapshot()).toMatchObject({
+        phase: "ready",
+        blockedBy: "UPDATE_HELPER_NOT_STARTED",
+      });
+      expect(release).toHaveBeenCalledTimes(1);
+      expect(quit).not.toHaveBeenCalled();
+      expect(JSON.parse(await fs.readFile(ready, "utf8")).operation).toBeNull();
+      first.close();
+      const next = await createInstalledUpdateRuntime(options());
+      await next!.initialize();
+      expect(next!.snapshot()).toMatchObject({
+        phase: "ready",
+        deferred: true,
+      });
+      expect(mocks.helper).toHaveBeenCalledTimes(1);
+      next!.close();
+    },
+  );
+
+  it("reconciles an interrupted confirmed-refusal cleanup before a later explicit attempt", async () => {
     const controller = await prepared();
     mocks.helper.mockResolvedValueOnce({
       status: "refused",
@@ -876,8 +964,8 @@ describe("installed updater composition (disposable filesystem and mocked native
       recoveryRequired: true,
     });
     expect(
-      JSON.parse(await fs.readFile(ready, "utf8")).operation,
-    ).not.toBeNull();
+      JSON.parse(await fs.readFile(ready, "utf8")).preparation,
+    ).toMatchObject({ source, target });
     expect(release).not.toHaveBeenCalled();
     expect(quit).not.toHaveBeenCalled();
     controller.close();
@@ -885,11 +973,9 @@ describe("installed updater composition (disposable filesystem and mocked native
     const next = await createInstalledUpdateRuntime(options());
     await next!.initialize();
     expect(next!.snapshot()).toMatchObject({
-      phase: "failed",
-      recoveryRequired: true,
-      code: "UPDATE_STAGING_OUTCOME_UNKNOWN",
+      phase: "ready",
+      deferred: true,
     });
-    await next!.restart();
     expect(mocks.helper).toHaveBeenCalledTimes(1);
     expect(mocks.download).toHaveBeenCalledTimes(1);
     next!.close();

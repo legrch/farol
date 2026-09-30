@@ -72,6 +72,9 @@ def admit_central_directory(fd, size):
     check(0 < length <= MAX_CENTRAL_DIRECTORY, "ARCHIVE_CENTRAL_DIRECTORY_LIMIT")
     check(0 < count <= MAX_ENTRIES, "ARCHIVE_ENTRY_COUNT_INVALID")
     end_offset = size - len(tail) + end
+    # ZipFile honors a locator immediately before EOCD even if the ordinary
+    # fields contain no ZIP64 sentinel. It can be hidden in a central comment.
+    check(end_offset < 20 or os.pread(fd, 4, end_offset - 20) != b"PK\x06\x07", "ARCHIVE_ZIP64_UNSUPPORTED")
     check(offset + length == end_offset, "ARCHIVE_DIRECTORY_INVALID")
     cursor = offset
     observed = 0

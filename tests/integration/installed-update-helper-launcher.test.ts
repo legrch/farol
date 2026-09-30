@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import fs, { type FileHandle } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -62,9 +62,13 @@ describe("installed update launcher", () => {
       helper,
     );
     await fs.appendFile(helper, "\n# changed\n");
-    await expect(startInstalledUpdateHelper(helper, accepted)).rejects.toThrow(
-      "INSTALLED_UPDATE_HELPER_INVALID",
-    );
+    const result = await startInstalledUpdateHelper(helper, accepted);
+    expect(result).toMatchObject({
+      status: "not_started",
+      reason: "helper_preflight_failed",
+    });
+    expect(result.operation.pid).toBeNull();
+    expect(spawn).not.toHaveBeenCalled();
   });
 
   it("requires matching accepted build identities and a bounded process wait", async () => {
@@ -125,9 +129,9 @@ async function fifoProbe(replaceAtOpen: boolean) {
     const { startInstalledUpdateHelper } = await import(moduleURL);
     process.stdout.write("attempt\n");
     try {
-      await startInstalledUpdateHelper(helper, JSON.parse(request));
-      process.stdout.write("unexpected_success\n");
-      process.exitCode = 1;
+      const result = await startInstalledUpdateHelper(helper, JSON.parse(request));
+      process.stdout.write(result.reason + "\n");
+      if (result.status !== "not_started" || result.operation.pid !== null) process.exitCode = 1;
     } catch (error) {
       process.stdout.write(error.message + "\n");
     }
@@ -200,7 +204,7 @@ describe("installed helper bounded descriptor read", () => {
         code: 0,
         signal: null,
         deadlineExpired: false,
-        output: "attempt\nINSTALLED_UPDATE_HELPER_INVALID\n",
+        output: "attempt\nhelper_preflight_failed\n",
         cleanup: "child_closed_and_fixture_removed",
       });
     },
@@ -214,9 +218,13 @@ describe("installed helper bounded descriptor read", () => {
       await fs.copyFile(helper + ".saved", helper);
       return open(file, flags, mode);
     });
-    await expect(startInstalledUpdateHelper(helper, accepted)).rejects.toThrow(
-      "INSTALLED_UPDATE_HELPER_INVALID",
-    );
+    const result = await startInstalledUpdateHelper(helper, accepted);
+    expect(result).toMatchObject({
+      status: "not_started",
+      reason: "helper_preflight_failed",
+    });
+    expect(result.operation.pid).toBeNull();
+    expect(spawn).not.toHaveBeenCalled();
   });
 
   it("bounds a growing file to its checked size plus one sentinel byte", async () => {
@@ -248,9 +256,13 @@ describe("installed helper bounded descriptor read", () => {
       readFile,
       close,
     } as unknown as FileHandle);
-    await expect(startInstalledUpdateHelper(helper, accepted)).rejects.toThrow(
-      "INSTALLED_UPDATE_HELPER_INVALID",
-    );
+    const result = await startInstalledUpdateHelper(helper, accepted);
+    expect(result).toMatchObject({
+      status: "not_started",
+      reason: "helper_preflight_failed",
+    });
+    expect(result.operation.pid).toBeNull();
+    expect(spawn).not.toHaveBeenCalled();
     expect(readFile).not.toHaveBeenCalled();
     expect(read).toHaveBeenCalledOnce();
     expect(allocated).toBe(size + 1);
