@@ -144,6 +144,7 @@ beforeEach(async () => {
   staging = path.join(root, "verified-stage/Farol Next Preview.app");
   ready = path.join(userData, "installed-updates/ready.json");
   await fs.mkdir(slot, { recursive: true });
+  await fs.mkdir(userData, { recursive: true, mode: 0o700 });
   await fs.mkdir(staging, { recursive: true });
   await fs.writeFile(path.join(staging, "verified-payload"), "fixture");
   mocks.discover.mockResolvedValue({ ok: true, value: { manifest } });
@@ -212,6 +213,41 @@ afterEach(async () => {
 });
 
 describe("installed updater composition (disposable filesystem and mocked native/GitHub ports)", () => {
+  it.each(["profile", "ancestor", "update-root"] as const)(
+    "refuses a symlinked %s before creating or reading updater state",
+    async (kind) => {
+      const outside = path.join(root, "unrelated-private-state");
+      await fs.mkdir(outside, { mode: 0o700 });
+      const sentinel = path.join(outside, "sentinel");
+      await fs.writeFile(sentinel, "unchanged", { mode: 0o600 });
+      const replaced =
+        kind === "profile"
+          ? userData
+          : kind === "ancestor"
+            ? path.dirname(userData)
+            : path.join(userData, "installed-updates");
+      if (kind !== "update-root")
+        await fs.rename(replaced, replaced + ".original");
+      if (kind === "ancestor") {
+        await fs.mkdir(path.join(outside, "Farol Next Preview"), {
+          mode: 0o700,
+        });
+      }
+      await fs.symlink(outside, replaced);
+      const before = await fs.readdir(outside, { recursive: true });
+      const read = vi.spyOn(fs, "open");
+      await expect(createInstalledUpdateRuntime(options())).rejects.toThrow(
+        "UPDATE_PRIVATE_STATE_INVALID",
+      );
+      expect(read).not.toHaveBeenCalled();
+      expect(await fs.readdir(outside, { recursive: true })).toEqual(before);
+      expect(await fs.readFile(sentinel, "utf8")).toBe("unchanged");
+      expect(mocks.discover).not.toHaveBeenCalled();
+      expect(mocks.download).not.toHaveBeenCalled();
+      expect(mocks.helper).not.toHaveBeenCalled();
+    },
+  );
+
   it.each(["completed", "cancelled"] as const)(
     "reconciles a %s download on normal Quit and recovers on the next launch",
     async (outcome) => {

@@ -107,16 +107,30 @@ const CANCELLED_PHASES = [
 const TARGET_PHASES = ["verified", "launch_requested", "completed"];
 const MAX_RECORD_BYTES = 65536;
 
-async function privateDirectory(directory: string): Promise<void> {
-  await fs.mkdir(directory, { recursive: true, mode: 0o700 });
+async function canonicalOwnedDirectory(
+  directory: string,
+  privateMode: boolean,
+): Promise<void> {
   const stat = await fs.lstat(directory);
   if (
     !stat.isDirectory() ||
     stat.isSymbolicLink() ||
     stat.uid !== process.getuid?.() ||
-    (stat.mode & 0o077) !== 0
+    (stat.mode & (privateMode ? 0o077 : 0o022)) !== 0 ||
+    (await fs.realpath(directory)) !== directory
   )
     throw new Error("UPDATE_PRIVATE_STATE_INVALID");
+}
+async function privateDirectory(directory: string): Promise<void> {
+  // Electron has already created its profile. Refuse redirected parents before
+  // creating any updater state, rather than recursively traversing an alias.
+  await canonicalOwnedDirectory(path.dirname(directory), false);
+  try {
+    await fs.mkdir(directory, { mode: 0o700 });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+  }
+  await canonicalOwnedDirectory(directory, true);
 }
 async function readRecord(file: string): Promise<unknown | null> {
   let before;

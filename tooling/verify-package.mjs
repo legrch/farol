@@ -6,6 +6,7 @@ import {
   candidatePaths,
 } from "./candidate-contract.mjs";
 import { verifyPackageContent } from "./verify-package-content.mjs";
+import { releaseBuildFields } from "./release-identity.mjs";
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const canonical = candidatePaths(root);
@@ -39,11 +40,7 @@ const packageDocument = JSON.parse(
   await fs.readFile(path.join(root, "package.json"), "utf8"),
 );
 const expectedChannel =
-  /^[0-9]+\.[0-9]+\.[0-9]+-owner\.beta\.[1-9][0-9]*$/u.test(
-    packageDocument.version,
-  )
-    ? "github-owner-beta"
-    : "local-preview-only";
+  releaseBuildFields(packageDocument).updateChannel ?? "local-preview-only";
 const sourceResourceManifest = JSON.parse(
   await fs.readFile(path.join(root, "resources.json"), "utf8"),
 );
