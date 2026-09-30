@@ -110,6 +110,8 @@ tasks:
     cmds:
       - /usr/bin/python3 -I ./scripts/assert-owner-untouched.py -- node tests/e2e/update-package-identity.e2e.mjs
       - /usr/bin/python3 -I ./scripts/assert-owner-untouched.py -- node tests/e2e/update-stage-cleanup.e2e.mjs
+      - /usr/bin/python3 -I ./scripts/assert-owner-untouched.py -- node tests/e2e/update-stage-cleanup.e2e.mjs --child-dispatch-fault
+      - /usr/bin/python3 -I ./scripts/assert-owner-untouched.py -- node tests/e2e/update-stage-cleanup.e2e.mjs --probe-timeout-fault
 
   ci:fast:
     desc: Complete deterministic standalone gate without native UI
