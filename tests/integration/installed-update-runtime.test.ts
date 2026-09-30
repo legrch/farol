@@ -755,6 +755,9 @@ ${scenario === "missing" ? "" : `<key>CFBundleVersion</key><string>${scenario ==
     "changed-predecessor",
     "wrong-build",
     "unsafe-receipt",
+    "missing-journal",
+    "pending-journal",
+    "different-journal-receipt",
   ])(
     "binds the explicit closed-repair installed baseline (%s)",
     async (scenario) => {
@@ -798,6 +801,23 @@ ${scenario === "missing" ? "" : `<key>CFBundleVersion</key><string>${scenario ==
       });
       if (scenario === "unsafe-receipt")
         await fs.chmod(slot + ".repair.json", 0o644);
+      if (scenario !== "missing-journal")
+        await fs.writeFile(
+          path.join(root, "Applications", ".farol-closed-repair.json"),
+          JSON.stringify({
+            schema: "farol.next.closed-repair-journal/1",
+            phase:
+              scenario === "pending-journal" ? "receipt_intent" : "installed",
+            receipt:
+              scenario === "different-journal-receipt"
+                ? { ...receipt, quitDigest: "4".repeat(64) }
+                : receipt,
+            sourceInode: [1, 2],
+            targetInode: [1, 3],
+            updatesInode: [1, 4],
+          }),
+          { mode: 0o600 },
+        );
       // The old normal promotion receipt refers to the predecessor, not the repair target.
       const original = JSON.parse(
         await fs.readFile(slot + ".receipt.json", "utf8"),

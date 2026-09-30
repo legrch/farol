@@ -77,6 +77,18 @@ const ClosedRepairReceipt = z.strictObject({
   quarantined: z.boolean(),
   quitDigest: Digest,
 });
+const RepairInode = z.tuple([
+  z.number().int().nonnegative(),
+  z.number().int().nonnegative(),
+]);
+const ClosedRepairJournal = z.strictObject({
+  schema: z.literal("farol.next.closed-repair-journal/1"),
+  phase: z.enum(["installed", "rolled_back"]),
+  receipt: ClosedRepairReceipt,
+  sourceInode: RepairInode,
+  targetInode: RepairInode,
+  updatesInode: RepairInode.nullable(),
+});
 const Operation = z.strictObject({
   operationId: z.string().regex(/^[a-f0-9]{32}$/u),
   source: AcceptedBuild,
@@ -485,6 +497,19 @@ export async function createInstalledUpdateRuntime(
       const repair =
         repairRaw === null ? null : ClosedRepairReceipt.parse(repairRaw);
       if (repair) {
+        // Receipt publication alone is not a terminal helper result. Keep
+        // ordinary updates fenced until the matching journal is reconciled.
+        const journal = ClosedRepairJournal.safeParse(
+          await readRecord(
+            path.join(path.dirname(slot), ".farol-closed-repair.json"),
+          ),
+        );
+        if (
+          !journal.success ||
+          journal.data.phase !== repair.phase ||
+          JSON.stringify(journal.data.receipt) !== JSON.stringify(repair)
+        )
+          throw new Error("UPDATE_REPAIR_RECOVERY_REQUIRED");
         const previous = path.join(
           path.dirname(slot),
           `.farol-repair-${repair.operationId}`,

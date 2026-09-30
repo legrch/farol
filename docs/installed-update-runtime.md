@@ -207,3 +207,11 @@ interrupted repair remains a recovery obligation until its exact physical pair
 and journal can be reconciled by the tool. V0, account state and credentials are
 outside this operation. This establishes an installation baseline; it does not
 prove the required installed N-to-N+1 GitHub journey.
+
+Cold-repair receipt publication is not sufficient for updater admission. The
+matching private repair journal must be terminal with the identical receipt.
+After interruption between receipt and journal publication, explicit recovery
+can reconcile the already-published terminal receipt after a later genuine
+normal Quit, only with the same measured installed/predecessor inode/build pair
+and quarantine. It performs no second copy or swap. Earlier unresolved phases
+retain their original Quit binding.

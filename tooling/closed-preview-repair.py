@@ -83,7 +83,7 @@ def read_request():
     shape(request, "schema home candidate action expectedPredecessor operationId target sourceCommit sourceTreeDigest quitDigest hook")
     if request["schema"] != SCHEMA or request["action"] not in ("apply", "rollback"):
         refuse(EXIT_INVALID)
-    if request["hook"] not in (None, "parent_opened", "copy_intent", "staged", "swap_intent", "swapped", "save_intent", "saved", "quarantine_intent", "quarantined", "receipt_intent", "rollback_intent", "rollback_swapped"):
+    if request["hook"] not in (None, "parent_opened", "copy_intent", "staged", "swap_intent", "swapped", "save_intent", "saved", "quarantine_intent", "quarantined", "receipt_intent", "receipt_published", "rollback_intent", "rollback_swapped", "rollback_receipt_published"):
         refuse(EXIT_INVALID)
     hex_value(request["quitDigest"], 64)
     if request["action"] == "apply":
@@ -877,17 +877,22 @@ def run(request):
                     refuse("JOURNAL_INVALID")
             if prior["sourceInode"] is None or prior["phase"] not in ("allocate_intent", "copy_intent", "staged", "swap_intent", "save_intent", "quarantine_intent", "receipt_intent", "installed", "rollback_intent", "rollback_receipt_intent", "rolled_back"):
                 refuse("JOURNAL_INVALID")
+        # A matching published terminal receipt is a measured metadata-only
+        # recovery point. A later genuine normal Quit may change its digest;
+        # the exact slot/predecessor pair and quarantine are still rechecked
+        # before the journal is completed, without another swap or copy.
+        published_terminal = prior is not None and prior["phase"] in ("receipt_intent", "rollback_receipt_intent") and read_json(applications, REPAIR_RECEIPT, optional=True) == prior["receipt"]
         resuming = prior is not None and prior["phase"] not in ("installed", "rolled_back")
         if action == "rollback":
             if prior is None or prior["receipt"]["operationId"] != request["operationId"] or prior["phase"] not in ("installed", "rollback_intent", "rollback_receipt_intent", "rolled_back"):
                 refuse("ROLLBACK_PAIR_UNCONFIRMED")
-            if prior["phase"] in ("rollback_intent", "rollback_receipt_intent") and prior["receipt"]["quitDigest"] != request["quitDigest"]:
+            if prior["phase"] in ("rollback_intent", "rollback_receipt_intent") and prior["receipt"]["quitDigest"] != request["quitDigest"] and not published_terminal:
                 refuse("ROLLBACK_QUIT_CHANGED")
             journal = prior
         elif resuming:
             if request["operationId"] != prior["receipt"]["operationId"]:
                 refuse("RECOVERY_REQUIRED:" + prior["receipt"]["operationId"])
-            if prior["phase"].startswith("rollback") or request["target"] != prior["receipt"]["target"] or request["expectedPredecessor"] != prior["receipt"]["source"]["digest"] or request["sourceCommit"] != prior["receipt"]["sourceCommit"] or request["sourceTreeDigest"] != prior["receipt"]["sourceTreeDigest"] or request["quitDigest"] != prior["receipt"]["quitDigest"]:
+            if prior["phase"].startswith("rollback") or request["target"] != prior["receipt"]["target"] or request["expectedPredecessor"] != prior["receipt"]["source"]["digest"] or request["sourceCommit"] != prior["receipt"]["sourceCommit"] or request["sourceTreeDigest"] != prior["receipt"]["sourceTreeDigest"] or (request["quitDigest"] != prior["receipt"]["quitDigest"] and not published_terminal):
                 refuse("RECOVERY_PAIR_CHANGED")
             journal = prior
         else:
@@ -1016,6 +1021,7 @@ def run(request):
                     if journal["updatesInode"] is not None and (quarantined is None or not stat.S_ISDIR(quarantined.st_mode) or [quarantined.st_dev, quarantined.st_ino] != journal["updatesInode"]):
                         refuse("QUARANTINE_TERMINAL_UNCONFIRMED")
                     publish(applications, REPAIR_RECEIPT, receipt)
+                    hook(request, "receipt_published")
                     intent("installed")
         else:
             if journal["phase"] == "installed":
@@ -1044,6 +1050,7 @@ def run(request):
                     if journal["updatesInode"] is not None and (quarantined is None or not stat.S_ISDIR(quarantined.st_mode) or [quarantined.st_dev, quarantined.st_ino] != journal["updatesInode"]):
                         refuse("QUARANTINE_TERMINAL_UNCONFIRMED")
                     publish(applications, REPAIR_RECEIPT, receipt)
+                    hook(request, "rollback_receipt_published")
                     intent("rolled_back")
         guard()
         quarantined = present(profile, "installed-updates-quarantine-" + op)

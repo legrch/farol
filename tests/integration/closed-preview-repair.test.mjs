@@ -663,6 +663,104 @@ suite("bounded closed preview repair", () => {
     },
   );
 
+  it.each(["receipt_published", "rollback_receipt_published"])(
+    "reconciles %s after a later normal Quit without repeating the swap",
+    async (phase) => {
+      const f = await fixture();
+      let args;
+      if (phase === "rollback_receipt_published") {
+        const installed = await f.cli();
+        expect(installed.status, installed.error).toBe(0);
+        args = ["--rollback", installed.receipt.operationId];
+      }
+      const interrupted = await f.cli(args, {
+        hook: phase,
+        atPhase: (child) => child.kill("SIGKILL"),
+      });
+      expect(interrupted.status).toBe(1);
+      const journal = await f.journal();
+      const published = JSON.parse(
+        await fs.readFile(f.destination + ".repair.json", "utf8"),
+      );
+      expect(published).toEqual(journal.receipt);
+      const slotInode = (await fs.lstat(f.destination)).ino;
+      const previousInode = (await fs.lstat(published.previous)).ino;
+      await write(path.join(f.state, "last-quit.json"), {
+        ...f.quit,
+        at: "2026-09-30T12:20:00.000Z",
+      });
+      const recovered = await f.cli(
+        phase === "receipt_published"
+          ? [
+              "--expected-predecessor",
+              f.old.digest,
+              "--recover",
+              published.operationId,
+              "--apply",
+            ]
+          : ["--rollback", published.operationId],
+      );
+      expect(recovered.status, recovered.error).toBe(0);
+      expect((await f.journal()).phase).toBe(published.phase);
+      expect(recovered.receipt).toEqual(published);
+      expect((await fs.lstat(f.destination)).ino).toBe(slotInode);
+      expect((await fs.lstat(published.previous)).ino).toBe(previousInode);
+    },
+  );
+
+  it.each([
+    "unpublished",
+    "changed-receipt",
+    "changed-slot",
+    "changed-quarantine",
+  ])(
+    "refuses a later Quit recovery when the published terminal evidence is %s",
+    async (scenario) => {
+      const f = await fixture();
+      const interrupted = await f.cli(undefined, {
+        hook:
+          scenario === "unpublished" ? "receipt_intent" : "receipt_published",
+        atPhase: (child) => child.kill("SIGKILL"),
+      });
+      expect(interrupted.status).toBe(1);
+      const journal = await f.journal();
+      if (scenario === "changed-receipt")
+        await write(f.destination + ".repair.json", {
+          ...journal.receipt,
+          quitDigest: "1".repeat(64),
+        });
+      if (scenario === "changed-slot")
+        await write(
+          path.join(f.destination, "Contents/Resources/app/payload"),
+          "changed target",
+        );
+      if (scenario === "changed-quarantine") {
+        await fs.rename(
+          journal.receipt.quarantine,
+          journal.receipt.quarantine + ".saved",
+        );
+        await fs.mkdir(journal.receipt.quarantine, { mode: 0o700 });
+      }
+      await write(path.join(f.state, "last-quit.json"), {
+        ...f.quit,
+        at: "2026-09-30T12:20:00.000Z",
+      });
+      const slotBefore = await snapshot(f.destination);
+      const previousBefore = await snapshot(journal.receipt.previous);
+      const result = await f.cli([
+        "--expected-predecessor",
+        f.old.digest,
+        "--recover",
+        journal.receipt.operationId,
+        "--apply",
+      ]);
+      expect(result.status).toBe(1);
+      expect(await f.journal()).toEqual(journal);
+      expect(await snapshot(f.destination)).toEqual(slotBefore);
+      expect(await snapshot(journal.receipt.previous)).toEqual(previousBefore);
+    },
+  );
+
   it("recovers an absent stage only with the unchanged original slot and empty operation container", async () => {
     const f = await fixture();
     expect(
