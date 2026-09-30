@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { constants } from "node:fs";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -60,6 +61,104 @@ async function bundle(directory, number) {
   await fs.chmod(directory, 0o755);
   return { identity, digest: await treeDigest(directory) };
 }
+async function snapshot(directory) {
+  const entries = [];
+  async function walk(current, relative) {
+    for (const name of (await fs.readdir(current)).sort()) {
+      const file = path.join(current, name);
+      const key = path.join(relative, name);
+      const info = await fs.lstat(file);
+      const node = { path: key, dev: info.dev, ino: info.ino, mode: info.mode };
+      if (info.isSymbolicLink()) node.link = await fs.readlink(file);
+      else if (info.isDirectory()) node.directory = true;
+      else node.bytes = (await fs.readFile(file)).toString("base64");
+      entries.push(node);
+      if (info.isDirectory()) await walk(file, key);
+    }
+  }
+  await walk(directory, "");
+  return entries;
+}
+
+async function retainedDownload(f, optional = {}) {
+  const id = "5891969cfcd0382a942bc2c87539eefc";
+  const directory = path.join(f.updateRoot, "download-" + id);
+  const handle = path.join(
+    directory,
+    "github-updates/12345678-1234-1234-1234-123456789abc.zip",
+  );
+  await write(handle, "unverified archive fixture bytes");
+  await write(
+    path.join(directory, "unknown-extraction/unknown.bytes"),
+    "uncertain extraction stays intact",
+  );
+  await fs.symlink(
+    "missing-but-retained",
+    path.join(directory, "unknown-extraction/unknown.link"),
+  );
+  const metadata = await fs.lstat(directory, { bigint: true });
+  const ended = spawnSync("/usr/bin/true", [], { stdio: "ignore" });
+  expect(ended.status).toBe(0);
+  const manifest = {
+    schema: "farol.github-release/1",
+    repository: "legrch/farol-releases",
+    channel: "owner-beta",
+    product: "Farol Next Preview",
+    bundleId: "local.farol.next.preview",
+    version: "0.1.2-owner.beta.1",
+    buildVersion: "4",
+    sourceCommit: "a".repeat(40),
+    sourceTreeDigest: "b".repeat(64),
+    buildId: "c".repeat(64),
+    artifactSha256: "d".repeat(64),
+    archiveSha256: "e".repeat(64),
+    archiveName: "Farol-0.1.2-owner.beta.1-darwin-arm64.zip",
+    archiveSize: 1000,
+    platform: "darwin",
+    arch: "arm64",
+    signing: "unsigned",
+    notarized: false,
+    sourceDirty: false,
+  };
+  const pending = {
+    schema: "farol.update-download-intent/1",
+    buildId: manifest.buildId,
+    archiveSha256: manifest.archiveSha256,
+    download: {
+      phase: "verifying",
+      id,
+      producer: {
+        pid: ended.pid,
+        processStart: "fixture producer observed terminal",
+      },
+      identity: {
+        dev: String(metadata.dev),
+        ino: String(metadata.ino),
+        birthtimeNs: String(metadata.birthtimeNs),
+      },
+    },
+  };
+  const ready = {
+    schema: "farol.ready-update/1",
+    handle,
+    manifest,
+    operation: null,
+    downloadId: id,
+    ...optional,
+  };
+  const cleanup = { schema: "farol.update-package-cleanup/1", handle };
+  const persist = async () => {
+    await write(path.join(f.updateRoot, "ready.json"), ready);
+    await write(path.join(f.updateRoot, "download-pending.json"), pending);
+    await write(
+      path.join(f.updateRoot, "package-cleanup-pending.json"),
+      cleanup,
+    );
+  };
+  await persist();
+  return { id, directory, handle, ready, pending, cleanup, persist };
+}
+
 async function fixture({ updates = true } = {}) {
   const root = await fs.mkdtemp(
     path.join(await fs.realpath(os.tmpdir()), "farol-cold-repair-"),
@@ -615,7 +714,167 @@ suite("bounded closed preview repair", () => {
     expect((await f.cli(["--rollback", installed.operationId])).status).toBe(1);
   });
 
-  it("accepts a prior repair receipt only when both measured trees match it", async () => {
+  it.each([true, false])(
+    "refuses a fresh repair chain before replacing its journal/receipt or allocating another container (journal present: %s)",
+    async (journalPresent) => {
+      const f = await fixture();
+      const installed = (await f.cli()).receipt;
+      const next = await bundle(f.candidate, 4);
+      await write(path.join(f.candidateRoot, "_output/package/artifact.json"), {
+        artifactPath: f.candidate,
+        version: next.identity.version,
+        buildId: next.identity.buildId,
+        artifactSha256: next.digest,
+        sourceCommit: next.identity.sourceCommit,
+        sourceTreeDigest: next.identity.sourceTreeDigest,
+        sourceDirty: false,
+      });
+      if (!journalPresent)
+        await fs.unlink(path.join(f.applications, ".farol-closed-repair.json"));
+      const applications = await snapshot(f.applications);
+      const profile = await snapshot(f.userData);
+      const result = await f.cli(
+        ["--expected-predecessor", f.target.digest, "--apply"],
+        {
+          sourceIdentity: () => ({
+            dirty: false,
+            commit: next.identity.sourceCommit,
+            treeDigest: next.identity.sourceTreeDigest,
+          }),
+        },
+      );
+      expect(result.status, result.error).toBe(1);
+      expect(result.error).toContain("CLOSED_REPAIR_CHAIN_UNSUPPORTED");
+      expect(await snapshot(f.applications)).toEqual(applications);
+      expect(await snapshot(f.userData)).toEqual(profile);
+      if (journalPresent)
+        expect((await f.journal()).receipt.operationId).toBe(
+          installed.operationId,
+        );
+    },
+  );
+
+  it.each([{}, { helper: null }, { preparation: null, helper: null }])(
+    "quarantines only the linked download-only ready tuple intact (%j)",
+    async (optional) => {
+      const f = await fixture({ updates: false });
+      await retainedDownload(f, optional);
+      const updates = await snapshot(f.updateRoot);
+      const config = await fs.readFile(path.join(f.state, "config.json"));
+      const result = await f.cli();
+      expect(result.status, result.error).toBe(0);
+      expect(result.receipt.quarantined).toBe(true);
+      expect(await snapshot(result.receipt.quarantine)).toEqual(updates);
+      expect(await fs.readFile(path.join(f.state, "config.json"))).toEqual(
+        config,
+      );
+      expect(await fs.readFile(path.join(f.userData, "Cookies"), "utf8")).toBe(
+        "credential-fixture-do-not-copy\n",
+      );
+    },
+  );
+
+  it.each([
+    "operation",
+    "preparation",
+    "helper",
+    "extra field",
+    "unknown schema",
+    "missing pending",
+    "missing cleanup",
+    "different id",
+    "different handle",
+    "different build",
+    "different archive",
+    "different inode",
+    "different birthtime",
+    "missing identity",
+    "malformed manifest",
+    "unknown manifest field",
+    "live producer",
+    "nested journal",
+  ])(
+    "refuses retained ready %s before repair journal and preserves all update bytes",
+    async (kind) => {
+      const f = await fixture({ updates: false });
+      const tuple = await retainedDownload(f);
+      if (kind === "operation")
+        tuple.ready.operation = {
+          operationId: "a".repeat(32),
+          source: {},
+          target: {},
+        };
+      if (kind === "preparation") tuple.ready.preparation = {};
+      if (kind === "helper")
+        tuple.ready.helper = { pid: process.pid, processStart: "live" };
+      if (kind === "extra field") tuple.ready.extra = true;
+      if (kind === "unknown schema")
+        tuple.ready.schema = "farol.ready-update/2";
+      if (kind === "different id") tuple.ready.downloadId = "f".repeat(32);
+      if (kind === "different handle") tuple.cleanup.handle += ".other";
+      if (kind === "different build")
+        tuple.ready.manifest.buildId = "f".repeat(64);
+      if (kind === "different archive")
+        tuple.ready.manifest.archiveSha256 = "f".repeat(64);
+      if (kind === "different inode") tuple.pending.download.identity.ino = "1";
+      if (kind === "different birthtime")
+        tuple.pending.download.identity.birthtimeNs = "1";
+      if (kind === "missing identity") delete tuple.pending.download.identity;
+      if (kind === "malformed manifest") tuple.ready.manifest = null;
+      if (kind === "unknown manifest field") tuple.ready.manifest.extra = true;
+      if (kind === "live producer")
+        tuple.pending.download.producer.pid = process.pid;
+      await tuple.persist();
+      if (kind === "missing pending")
+        await fs.unlink(path.join(f.updateRoot, "download-pending.json"));
+      if (kind === "missing cleanup")
+        await fs.unlink(
+          path.join(f.updateRoot, "package-cleanup-pending.json"),
+        );
+      if (kind === "nested journal")
+        await write(
+          path.join(tuple.directory, "unknown-extraction/journal.json"),
+          {},
+        );
+      const before = await snapshot(f.updateRoot);
+      const result = await f.cli();
+      expect(result.status, result.error).toBe(1);
+      expect(await snapshot(f.updateRoot)).toEqual(before);
+      expect(await treeDigest(f.destination)).toBe(f.old.digest);
+      await expect(
+        fs.lstat(path.join(f.applications, ".farol-closed-repair.json")),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+    },
+  );
+
+  it.each([true, false])(
+    "fresh apply after rollback requires the genuine original install anchor (%s)",
+    async (genuine) => {
+      const f = await fixture({ updates: false });
+      const installed = (await f.cli()).receipt;
+      expect((await f.cli(["--rollback", installed.operationId])).status).toBe(
+        0,
+      );
+      if (!genuine)
+        await write(f.destination + ".receipt.json", {
+          ...f.normal,
+          sourceCommit: "f".repeat(40),
+        });
+      const before = await snapshot(f.applications);
+      const result = await f.cli();
+      if (genuine) {
+        expect(result.status, result.error).toBe(0);
+        expect(result.receipt.operationId).not.toBe(installed.operationId);
+        expect(await treeDigest(f.destination)).toBe(f.target.digest);
+        expect(await treeDigest(installed.previous)).toBe(f.target.digest);
+      } else {
+        expect(result.error).toContain("PREDECESSOR_UNACCEPTED");
+        expect(await snapshot(f.applications)).toEqual(before);
+      }
+    },
+  );
+
+  it("refuses another fresh apply even when the prior installed repair companion changed", async () => {
     const f = await fixture({ updates: false });
     const repaired = (await f.cli()).receipt;
     await bundle(f.candidate, 4);

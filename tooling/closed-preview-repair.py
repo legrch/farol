@@ -545,6 +545,10 @@ def accepted_anchor(applications, home, user_data, actual, metadata):
         normal_anchor(applications, home, user_data, actual, metadata)
         return
     prior = repair_receipt(prior, home, user_data)
+    # This anchor is reached only by a fresh apply, never same-operation recovery.
+    # Runtime rollback requires the genuine original normal install anchor.
+    if prior["phase"] == "installed":
+        refuse("CLOSED_REPAIR_CHAIN_UNSUPPORTED")
     container = open_directory(applications, ".farol-repair-" + prior["operationId"])
     try:
         if stat.S_IMODE(os.fstat(container).st_mode) & 0o077:
@@ -614,6 +618,76 @@ def producers_ended(value):
     refuse("PRODUCER_LIVE_OR_REUSED")
 
 
+def birthtime_ns(descriptor):
+    # Python's st_birthtime is a float and cannot bind Node's nanosecond witness.
+    # Darwin fgetattrlist returns packed creation timespec from this exact fd.
+    attributes = ctypes.create_string_buffer(struct.pack("=HHIIIII", 5, 0, 0x200, 0, 0, 0, 0))
+    output = ctypes.create_string_buffer(32)
+    function = ctypes.CDLL("/usr/lib/libSystem.B.dylib", use_errno=True).fgetattrlist
+    function.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_ulong]
+    function.restype = ctypes.c_int
+    if function(descriptor, attributes, output, len(output), 1) != 0 or struct.unpack_from("=I", output.raw)[0] != 20:
+        refuse("DOWNLOAD_IDENTITY_UNCONFIRMED")
+    seconds, nanos = struct.unpack_from("=qq", output.raw, 4)
+    if seconds < 0 or not 0 <= nanos < 1_000_000_000:
+        refuse("DOWNLOAD_IDENTITY_UNCONFIRMED")
+    return str(seconds * 1_000_000_000 + nanos)
+
+
+def retained_download_only(updates, user_data, ready, pending, cleanup):
+    required = {"schema", "handle", "manifest", "operation", "downloadId"}
+    optional = {"preparation", "helper", "archiveReleased"}
+    if not isinstance(ready, dict) or not required <= set(ready) or not set(ready) <= required | optional or ready["schema"] != "farol.ready-update/1":
+        refuse("DOWNLOAD_READY_INVALID")
+    if ready["operation"] is not None or ready.get("preparation") is not None or ready.get("helper") is not None or ready.get("archiveReleased", False) is not False:
+        refuse("UPDATE_APPLY_OR_RESTORE_PENDING")
+    if pending is None or cleanup is None:
+        refuse("DOWNLOAD_LINKAGE_UNCONFIRMED")
+    hex_value(ready["downloadId"], 32)
+    download = pending["download"]
+    if ready["downloadId"] != download["id"] or "identity" not in download or ready["handle"] != cleanup["handle"]:
+        refuse("DOWNLOAD_LINKAGE_UNCONFIRMED")
+    components(ready["handle"])
+    expected_parent = user_data + "/installed-updates/download-" + download["id"] + "/github-updates"
+    archive_name = posixpath.basename(ready["handle"])
+    if len(ready["handle"]) > 4096 or posixpath.dirname(ready["handle"]) != expected_parent or not re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.zip", archive_name):
+        refuse("DOWNLOAD_LINKAGE_UNCONFIRMED")
+    # Validate metadata shape and linkage, not the archive or package outcome.
+    # No extractor/verifier is launched and unknown contents are never replayed.
+    manifest = ready["manifest"]
+    shape(manifest, "schema repository channel product bundleId version buildVersion sourceCommit sourceTreeDigest buildId artifactSha256 archiveSha256 archiveName archiveSize platform arch signing notarized sourceDirty")
+    if manifest["schema"] != "farol.github-release/1" or manifest["repository"] != "legrch/farol-releases" or manifest["product"] != "Farol Next Preview" or manifest["bundleId"] != "local.farol.next.preview" or manifest["channel"] not in ("stable", "owner-beta") or manifest["platform"] != "darwin" or manifest["arch"] != "arm64" or manifest["signing"] != "unsigned" or manifest["notarized"] is not False or manifest["sourceDirty"] is not False:
+        refuse("DOWNLOAD_READY_INVALID")
+    version = manifest["version"]
+    pattern = r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)" + (r"-owner\.beta\.(0|[1-9][0-9]*)" if manifest["channel"] == "owner-beta" else "")
+    if not isinstance(version, str) or len(version) > 128 or not re.fullmatch(pattern, version) or not isinstance(manifest["buildVersion"], str) or not re.fullmatch(r"[1-9][0-9]{0,8}", manifest["buildVersion"]):
+        refuse("DOWNLOAD_READY_INVALID")
+    for key, length in (("sourceCommit", 40), ("sourceTreeDigest", 64), ("buildId", 64), ("artifactSha256", 64), ("archiveSha256", 64)):
+        hex_value(manifest[key], length)
+    if manifest["buildId"] != pending["buildId"] or manifest["archiveSha256"] != pending["archiveSha256"] or manifest["archiveName"] != "Farol-" + version + "-darwin-arm64.zip" or type(manifest["archiveSize"]) is not int or not 1 <= manifest["archiveSize"] <= 2_147_483_648:
+        refuse("DOWNLOAD_LINKAGE_UNCONFIRMED")
+    directory = open_directory(updates, "download-" + download["id"])
+    staging = None
+    try:
+        info = os.fstat(directory)
+        require_safe_directory(info, final=True)
+        witness = download["identity"]
+        if stat.S_IMODE(info.st_mode) & 0o077 or witness != {"dev": str(info.st_dev), "ino": str(info.st_ino), "birthtimeNs": birthtime_ns(directory)}:
+            refuse("DOWNLOAD_IDENTITY_UNCONFIRMED")
+        staging = open_directory(directory, "github-updates")
+        require_safe_directory(os.fstat(staging), final=True)
+        if stat.S_IMODE(os.fstat(staging).st_mode) & 0o077:
+            refuse(EXIT_PATH)
+        archive = present(staging, archive_name)
+        if archive is None or not stat.S_ISREG(archive.st_mode) or archive.st_nlink != 1 or archive.st_uid != os.geteuid() or stat.S_IMODE(archive.st_mode) & 0o077:
+            refuse("DOWNLOAD_ARCHIVE_UNCONFIRMED")
+        producers_ended(download["producer"])
+    finally:
+        if staging is not None:
+            os.close(staging)
+        os.close(directory)
+
+
 def updates_check(user_data_fd, user_data):
     if present(user_data_fd, "installed-updates") is None:
         return None
@@ -623,8 +697,11 @@ def updates_check(user_data_fd, user_data):
         if stat.S_IMODE(os.fstat(updates).st_mode) & 0o077:
             refuse(EXIT_PATH)
         names = sorted_names(updates)
+        pending = None
+        cleanup = None
+        ready = None
         for name in names:
-            if name in ("restore-pending.json", "ready.json", "last-update.json", "journal.json") or re.fullmatch("[0-9a-f]{32}", name):
+            if name in ("restore-pending.json", "last-update.json", "journal.json") or re.fullmatch("[0-9a-f]{32}", name):
                 refuse("UPDATE_APPLY_OR_RESTORE_PENDING")
             listed = present(updates, name)
             if name == "download-pending.json":
@@ -643,14 +720,20 @@ def updates_check(user_data_fd, user_data):
                     if any(not isinstance(item, str) or not re.fullmatch("[0-9]{1,30}", item) for item in download["identity"].values()):
                         refuse(EXIT_INVALID)
                 producers_ended(download["producer"])
+                pending = value
+            elif name == "ready.json":
+                ready = read_json(updates, name)
             elif name == "package-cleanup-pending.json":
                 value = read_json(updates, name)
                 shape(value, "schema handle")
                 if value["schema"] != "farol.update-package-cleanup/1" or not isinstance(value["handle"], str) or not value["handle"].startswith(user_data + "/installed-updates/"):
                     refuse(EXIT_INVALID)
                 components(value["handle"])
+                cleanup = value
             elif not stat.S_ISDIR(listed.st_mode) or stat.S_ISLNK(listed.st_mode):
                 refuse("UPDATE_STATE_UNSUPPORTED")
+        if "ready.json" in names:
+            retained_download_only(updates, user_data, ready, pending, cleanup)
         # Only inspect names/metadata in unknown extraction trees. Never open,
         # execute, remove, or replay their contents, including linked nodes.
         state = {"entries": 0}
@@ -659,7 +742,7 @@ def updates_check(user_data_fd, user_data):
                 refuse(EXIT_PATH)
             for name in sorted_names(fd):
                 bump_entry(state)
-                if name in ("journal.json", "restore-pending.json", "ready.json"):
+                if name in ("journal.json", "restore-pending.json") or (name == "ready.json" and depth != 0):
                     refuse("UPDATE_APPLY_OR_RESTORE_PENDING")
                 info = present(fd, name)
                 if stat.S_ISDIR(info.st_mode) and not stat.S_ISLNK(info.st_mode):
