@@ -141,6 +141,8 @@ const RestoreIntent = z.strictObject({
   operation: Operation,
   priorPhase: Journal.shape.phase,
   notStartedAt: AcceptedBuild.optional(),
+  installedBefore: AcceptedBuild.optional(),
+  helper: Retained.shape.helper,
 });
 const ROLLED_BACK_PHASES = [
   "rolled_back",
@@ -876,6 +878,7 @@ export async function createInstalledUpdateRuntime(
           current.version !== options.build.version
         )
           return known("UPDATE_RECOVERY_IDENTITY_MISMATCH");
+        let restoreExitedUnchanged = false;
         if (
           pending &&
           !(pending.action === "rollback"
@@ -887,8 +890,19 @@ export async function createInstalledUpdateRuntime(
                 ...CANCELLED_PHASES,
                 ...ROLLED_BACK_PHASES,
               ].includes(journal.phase))
-        )
-          return known("UPDATE_RESTORE_OUTCOME_UNKNOWN");
+        ) {
+          // An unchanged journal alone cannot settle dispatch. Reconcile this
+          // restore's recorded helper separately from the original apply helper.
+          if (
+            !pending.helper ||
+            !pending.installedBefore ||
+            journal.phase !== pending.priorPhase ||
+            !sameBuild(current, pending.installedBefore) ||
+            !(await originalHelperEnded(pending))
+          )
+            return known("UPDATE_RESTORE_OUTCOME_UNKNOWN");
+          restoreExitedUnchanged = true;
+        }
         let settled = false;
         let rollbackVersion: string | undefined;
         if (sameBuild(current, op.target)) {
@@ -929,11 +943,28 @@ export async function createInstalledUpdateRuntime(
             ? "rollback"
             : null
           : "recover";
-        if (!settled) {
-          if (!(await originalHelperEnded(retained)))
-            return known("UPDATE_HELPER_EXIT_UNCONFIRMED");
-          return { ok: true, update: null, recoveryVersion: current.version };
+        if (!settled && !(await originalHelperEnded(retained)))
+          return known("UPDATE_HELPER_EXIT_UNCONFIRMED");
+        if (restoreExitedUnchanged) {
+          // Both accepted physical companions were checked above. Preserve the
+          // original outcome before clearing only its reconciled dispatch intent.
+          await writeRecord(
+            path.join(root, op.operationId, "restore-exit.json"),
+            {
+              schema: "farol.update-refusal/1",
+              action: pending!.action,
+              operation: op,
+              helper: pending!.helper,
+              priorPhase: pending!.priorPhase,
+              installedBefore: pending!.installedBefore,
+              code: "helper_exited_without_journal_change",
+            },
+          );
+          await clearRestoreIntent();
+          pending = null;
         }
+        if (!settled)
+          return { ok: true, update: null, recoveryVersion: current.version };
         // The journal and installed/predecessor identities establish that this
         // operation no longer needs its archive. Reconcile a prior truncation
         // through the same private handle before acknowledging reclamation.
@@ -1166,12 +1197,15 @@ export async function createInstalledUpdateRuntime(
         )
           return { status: "blocked", code: "UPDATE_SOURCE_IDENTITY_MISMATCH" };
         const processStart = await captureInstalledProcessStart(process.pid);
-        await writeRecord(restoreFile, {
+        let restoreIntent: z.infer<typeof RestoreIntent> = {
           schema: "farol.update-restore-intent/1",
           action,
           operation: op,
           priorPhase: journal.phase,
-        });
+          installedBefore: current,
+          helper: null,
+        };
+        await writeRecord(restoreFile, restoreIntent);
         keepAdmission = true;
         const handoff = await startInstalledUpdateHelper(
           path.join(options.directory, "update-helper.py"),
@@ -1187,6 +1221,26 @@ export async function createInstalledUpdateRuntime(
             processStart,
             waitSeconds: 120,
             relaunch: true,
+          },
+          {
+            recordSpawn: async (spawned) => {
+              operation = spawned;
+              if (spawned.pid === null)
+                throw new Error("UPDATE_HELPER_IDENTITY_UNKNOWN");
+              restoreIntent = {
+                ...restoreIntent,
+                helper: { pid: spawned.pid, processStart: null },
+              };
+              await writeRecord(restoreFile, restoreIntent);
+              restoreIntent = {
+                ...restoreIntent,
+                helper: {
+                  pid: spawned.pid,
+                  processStart: await captureInstalledProcessStart(spawned.pid),
+                },
+              };
+              await writeRecord(restoreFile, restoreIntent);
+            },
           },
         );
         operation = handoff.operation;

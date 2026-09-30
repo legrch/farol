@@ -113,6 +113,16 @@ keeps recovery blocked. Both actions acquire the existing work
 admission fences, record their exact dispatch intent, and use the helper's normal
 Quit protocol. The helper, not the renderer, owns atomic exchange and reconciliation.
 
+Restore dispatch records its own helper PID before request bytes and enriches it
+with the observed start time, using the same launch callback as apply. If that
+helper is confirmed ended, the journal is unchanged, and the installed build and
+accepted companion still match, startup records that interrupted outcome and
+clears only that restore intent. It offers the existing explicit rollback/recovery
+action without launching another helper. Missing legacy identity, a live or
+unobservable PID, changed journal/build/companion, or uncertain cleanup remains
+blocked. A null start time permits reconciliation only when the recorded PID is
+confirmed absent; it never proves a present process is a replacement.
+
 A restore intent whose result is still unknown stays blocked. A matching changed
 terminal journal plus measured running build reconciles it on the next launch.
 A rolled-back or cancelled build is not automatically offered again. All prior

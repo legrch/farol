@@ -1738,6 +1738,198 @@ ${scenario === "missing" ? "" : `<key>CFBundleVersion</key><string>${scenario ==
       expect(mocks.helper.mock.calls[2]![1].operationId).toBe(op.operationId);
     },
   );
+  for (const action of ["rollback", "recover"] as const) {
+    it.each([
+      "absent",
+      "capture-failed",
+      "present",
+      "unreadable",
+      "capture-failed-present",
+      "changed-journal",
+      "changed-companion",
+      "changed-installed",
+      "legacy",
+      "cleanup-interrupted",
+    ])(
+      `reconciles only an ended unchanged ${action} helper (%s)`,
+      async (scenario) => {
+        const first = await prepared();
+        await first.restart();
+        const { operation: op } = JSON.parse(await fs.readFile(ready, "utf8"));
+        const opRoot = path.join(userData, "installed-updates", op.operationId);
+        const journalFile = path.join(opRoot, "journal.json");
+        const intentFile = path.join(
+          userData,
+          "installed-updates/restore-pending.json",
+        );
+        const current = action === "rollback" ? target : source;
+        const companion = action === "rollback" ? "previous.app" : "staged.app";
+        const other = action === "rollback" ? source : target;
+        const journal = {
+          schema: "farol.installed-update-journal/1",
+          ...op,
+          phase: action === "rollback" ? "completed" : "prepared",
+        };
+        await fs.writeFile(journalFile, JSON.stringify(journal), {
+          mode: 0o600,
+        });
+        if (action === "rollback") await fs.mkdir(path.join(opRoot, companion));
+        let restoring = false;
+        let brokenCompanion = false;
+        const helperStart = "Wed Sep 30 04:00:00 2026";
+        mocks.exec.mockImplementation(async (file: string, args: string[]) => {
+          if (file === "/bin/ps") {
+            if (args[1] === "123" || !restoring)
+              throw { code: 1, stdout: "", stderr: "" };
+            if (scenario === "unreadable")
+              throw { code: "EPERM", stdout: "", stderr: "" };
+            if (scenario === "present" || scenario === "capture-failed-present")
+              return { stdout: helperStart, stderr: "" };
+            throw { code: 1, stdout: "", stderr: "" };
+          }
+          return {
+            stdout: JSON.stringify(
+              args[0]!.endsWith("update-obligations.mjs")
+                ? {
+                    drained: true,
+                    obligationCount: 0,
+                    unreadableCount: 0,
+                    changedCount: 0,
+                  }
+                : args[1]!.endsWith(companion)
+                  ? brokenCompanion
+                    ? { ...other, digest: "0".repeat(64) }
+                    : other
+                  : restoring && scenario === "changed-installed"
+                    ? { ...current, digest: "0".repeat(64) }
+                    : current,
+            ),
+          };
+        });
+        const currentOptions = {
+          ...options(),
+          build: {
+            ...build,
+            version: current.version,
+            buildId: current.buildId,
+          },
+        };
+        const second = await createInstalledUpdateRuntime(currentOptions);
+        await second!.initialize();
+        expect(second!.snapshot().phase).toBe(
+          action === "rollback" ? "idle" : "recovery",
+        );
+        mocks.helper.mockImplementationOnce(
+          async (_path, _input, launchOptions) => {
+            const operation = {
+              pid: 234,
+              operationId: op.operationId,
+              completion: new Promise(() => undefined),
+              observe: () => ({}),
+            };
+            await launchOptions?.recordSpawn?.(operation);
+            return {
+              status: "outcome_unknown",
+              reason: "fixture_interrupted_ack",
+              operation,
+            };
+          },
+        );
+        mocks.captureStart.mockImplementation(async (pid: number) => {
+          if (pid === 234 && scenario.startsWith("capture-failed"))
+            throw new Error("fixture readback failed");
+          return pid === 234 ? helperStart : "fixture-start";
+        });
+        quit.mockClear();
+        await second!.restore(action);
+        expect(second!.snapshot()).toMatchObject({
+          phase: "failed",
+          recoveryRequired: true,
+        });
+        expect(quit).not.toHaveBeenCalled();
+        await second!.close();
+        restoring = true;
+        if (scenario === "changed-journal")
+          await fs.writeFile(
+            journalFile,
+            JSON.stringify({ ...journal, phase: "rollback_started" }),
+          );
+        brokenCompanion = scenario === "changed-companion";
+        if (scenario === "legacy") {
+          const {
+            helper: _helper,
+            installedBefore: _before,
+            ...old
+          } = JSON.parse(await fs.readFile(intentFile, "utf8"));
+          await fs.writeFile(intentFile, JSON.stringify(old));
+        }
+        const unlink = fs.unlink.bind(fs);
+        if (scenario === "cleanup-interrupted")
+          vi.spyOn(fs, "unlink").mockImplementation(async (file) => {
+            if (file === intentFile)
+              throw new Error("fixture interrupted cleanup");
+            return unlink(file);
+          });
+        const next = await createInstalledUpdateRuntime(currentOptions);
+        await next!.initialize();
+        if (scenario === "absent" || scenario === "capture-failed") {
+          expect(next!.snapshot()).toMatchObject(
+            action === "rollback"
+              ? { phase: "idle", rollbackVersion: source.version }
+              : { phase: "recovery", version: source.version },
+          );
+          await expect(fs.stat(intentFile)).rejects.toMatchObject({
+            code: "ENOENT",
+          });
+          const receipt = JSON.parse(
+            await fs.readFile(path.join(opRoot, "restore-exit.json"), "utf8"),
+          );
+          expect(receipt).toMatchObject({
+            action,
+            operation: op,
+            code: "helper_exited_without_journal_change",
+            helper: {
+              pid: 234,
+              processStart: scenario === "capture-failed" ? null : helperStart,
+            },
+          });
+        } else {
+          expect(next!.snapshot()).toMatchObject({
+            phase: "failed",
+            recoveryRequired: true,
+          });
+          await fs.access(intentFile);
+          await next!.restore(action);
+        }
+        expect(mocks.helper).toHaveBeenCalledTimes(2);
+        expect(mocks.download).toHaveBeenCalledTimes(1);
+        expect(mocks.copyApp).toHaveBeenCalledTimes(1);
+        if (scenario === "absent" || scenario === "capture-failed") {
+          // Readback itself launches nothing; one explicit action may now use
+          // the reconciled operation, and another click cannot dispatch twice.
+          await next!.restore(action);
+          await next!.restore(action);
+          expect(mocks.helper).toHaveBeenCalledTimes(3);
+          expect(mocks.helper.mock.calls[2]![1].operationId).toBe(
+            op.operationId,
+          );
+        }
+        await next!.close();
+        if (scenario === "cleanup-interrupted") {
+          vi.mocked(fs.unlink).mockImplementation(unlink);
+          const retryReadback =
+            await createInstalledUpdateRuntime(currentOptions);
+          await retryReadback!.initialize();
+          expect(retryReadback!.snapshot().phase).toBe(
+            action === "rollback" ? "idle" : "recovery",
+          );
+          expect(mocks.helper).toHaveBeenCalledTimes(2);
+          await retryReadback!.close();
+        }
+      },
+    );
+  }
+
   it.each(["absent", "unreadable", "present"])(
     "keeps the original helper PID when start-time capture fails, then reconciles only %s",
     async (observation) => {
@@ -2040,6 +2232,13 @@ ${scenario === "missing" ? "" : `<key>CFBundleVersion</key><string>${scenario ==
         relaunch: true,
       });
       expect(mocks.copyApp).toHaveBeenCalledTimes(1);
+      // The second restore outcome is still unknown: do not give its PID an
+      // absent-process witness merely because the original apply helper ended.
+      mocks.exec.mockImplementation((file: string, args: string[]) =>
+        file === "/bin/ps"
+          ? Promise.reject({ code: "EPERM", stdout: "", stderr: "" })
+          : measured(file, args),
+      );
       const same = await createInstalledUpdateRuntime({
         ...options(),
         build: { ...build, version: current.version, buildId: current.buildId },
