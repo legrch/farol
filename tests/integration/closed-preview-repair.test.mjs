@@ -663,7 +663,147 @@ suite("bounded closed preview repair", () => {
     },
   );
 
-  it("an absent/partial copy remains fail closed and all bytes are preserved", async () => {
+  it("recovers an absent stage only with the unchanged original slot and empty operation container", async () => {
+    const f = await fixture();
+    expect(
+      (
+        await f.cli(undefined, {
+          hook: "copy_intent",
+          atPhase: (child) => child.kill("SIGKILL"),
+        })
+      ).status,
+    ).toBe(1);
+    const journal = await f.journal();
+    const container = path.join(
+      f.applications,
+      ".farol-repair-" + journal.receipt.operationId,
+    );
+    expect(await fs.readdir(container)).toEqual([]);
+    expect(await treeDigest(f.destination)).toBe(f.old.digest);
+    const result = await f.cli([
+      "--expected-predecessor",
+      f.old.digest,
+      "--recover",
+      journal.receipt.operationId,
+      "--apply",
+    ]);
+    expect(result.status, result.error).toBe(0);
+    expect(await treeDigest(result.receipt.previous)).toBe(f.old.digest);
+    expect(await treeDigest(f.destination)).toBe(f.target.digest);
+  });
+
+  it.each(["container", "source-bytes", "source-inode", "target"])(
+    "refuses absent-stage recovery after %s changes without preparing another copy",
+    async (kind) => {
+      const f = await fixture();
+      await f.cli(undefined, {
+        hook: "copy_intent",
+        atPhase: (child) => child.kill("SIGKILL"),
+      });
+      const journal = await f.journal();
+      const container = path.join(
+        f.applications,
+        ".farol-repair-" + journal.receipt.operationId,
+      );
+      if (kind === "container")
+        await write(path.join(container, "unknown.bytes"), "preserved");
+      if (kind === "source-bytes")
+        await write(
+          path.join(f.destination, "Contents/Resources/app/payload"),
+          "changed",
+        );
+      if (kind === "source-inode") {
+        await fs.rename(f.destination, f.destination + ".moved");
+        await fs.cp(f.destination + ".moved", f.destination, {
+          recursive: true,
+        });
+      }
+      if (kind === "target")
+        await write(
+          path.join(f.candidate, "Contents/Resources/app/payload"),
+          "changed",
+        );
+      const before = await snapshot(container);
+      const installed = await treeDigest(f.destination);
+      const result = await f.cli([
+        "--expected-predecessor",
+        f.old.digest,
+        "--recover",
+        journal.receipt.operationId,
+        "--apply",
+      ]);
+      expect(result.status).toBe(1);
+      expect(result.error).toContain(
+        kind === "container"
+          ? "COPY_CONTAINER_UNCONFIRMED"
+          : kind === "target"
+            ? "TARGET_IDENTITY_CHANGED"
+            : "COPY_SOURCE_CHANGED",
+      );
+      expect(await snapshot(container)).toEqual(before);
+      expect(await treeDigest(f.destination)).toBe(installed);
+      expect((await f.journal()).phase).toBe("copy_intent");
+    },
+  );
+
+  it.each(["native", "generator"])(
+    "bounds directory enumeration before materialization (%s)",
+    async (mode) => {
+      const f = await fixture({ updates: false });
+      const directory = path.join(f.root, "enumeration");
+      await fs.mkdir(directory);
+      for (let i = 0; i < 4; i += 1)
+        await write(path.join(directory, String(i)), "fixture");
+      const program = String.raw`
+import os,sys
+scope={"__name__":"bounded_enumeration_fixture"}
+with open(sys.argv[1],"rb") as source: exec(compile(source.read(),sys.argv[1],"exec"),scope)
+scope["MAX_ENTRIES"]=3
+seen=[0]
+class Entry:
+    def __init__(self,name): self.name=name
+class Cursor:
+    def __enter__(self): return self
+    def __exit__(self,*args): pass
+    def __iter__(self):
+        for n in range(4):
+            seen[0]+=1
+            yield Entry(str(n))
+        raise AssertionError("enumerated beyond the bounded prefix")
+if sys.argv[2]=="generator":
+    os.scandir=lambda _:Cursor()
+    os.listdir=lambda _:[entry.name for entry in Cursor()]
+    descriptor=0
+else: descriptor=os.open(sys.argv[3],os.O_RDONLY|os.O_DIRECTORY)
+try:
+    try: scope["sorted_names"](descriptor)
+    except scope["Refusal"] as error:
+        assert str(error)==scope["EXIT_COPY"]
+        if sys.argv[2]=="generator": assert seen[0]==4
+    else: raise AssertionError("oversized directory was admitted")
+finally:
+    if sys.argv[2]=="native":os.close(descriptor)
+`;
+      const result = spawnSync(
+        "/usr/bin/python3",
+        [
+          "-I",
+          "-S",
+          "-B",
+          "-c",
+          program,
+          new URL("../../tooling/closed-preview-repair.py", import.meta.url)
+            .pathname,
+          mode,
+          directory,
+        ],
+        { encoding: "utf8", timeout: 5000 },
+      );
+      expect(result.status, result.stderr).toBe(0);
+    },
+  );
+
+  it("a present partial copy remains fail closed and all bytes are preserved", async () => {
     const f = await fixture();
     expect(
       (

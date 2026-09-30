@@ -187,12 +187,17 @@ def checked_name(name):
     return name
 
 
-def sorted_names(descriptor):
+def sorted_names(descriptor, state=None):
+    budget = state if state is not None else {"entries": 0}
+    names = []
     try:
-        names = os.listdir(descriptor)
+        with os.scandir(descriptor) as entries:
+            for entry in entries:
+                bump_entry(budget)
+                names.append(checked_name(entry.name))
     except OSError:
         refuse(EXIT_COPY)
-    return sorted((checked_name(name) for name in names), key=lambda item: item.encode("utf-16-be", "surrogatepass"))
+    return sorted(names, key=lambda item: item.encode("utf-16-be", "surrogatepass"))
 
 
 def bump_entry(state):
@@ -248,8 +253,7 @@ def copy_file(source_fd, destination_fd, name, listed, state):
 def copy_tree(source_fd, destination_fd, state, depth=0):
     if depth > MAX_DEPTH:
         refuse(EXIT_COPY)
-    for name in sorted_names(source_fd):
-        bump_entry(state)
+    for name in sorted_names(source_fd, state):
         try:
             listed = os.stat(name, dir_fd=source_fd, follow_symlinks=False)
         except OSError:
@@ -335,8 +339,7 @@ def digest_tree(directory_fd):
     def walk(current_fd, prefix, depth):
         if depth > MAX_DEPTH:
             refuse(EXIT_DIGEST)
-        for name in sorted_names(current_fd):
-            bump_entry(state)
+        for name in sorted_names(current_fd, state):
             relative = name if not prefix else f"{prefix}/{name}"
             try:
                 listed = os.stat(name, dir_fd=current_fd, follow_symlinks=False)
@@ -740,8 +743,7 @@ def updates_check(user_data_fd, user_data):
         def walk(fd, depth):
             if depth > MAX_DEPTH:
                 refuse(EXIT_PATH)
-            for name in sorted_names(fd):
-                bump_entry(state)
+            for name in sorted_names(fd, state):
                 if name in ("journal.json", "restore-pending.json") or (name == "ready.json" and depth != 0):
                     refuse("UPDATE_APPLY_OR_RESTORE_PENDING")
                 info = present(fd, name)
@@ -929,6 +931,15 @@ def run(request):
             if sorted_names(container):
                 refuse("ALLOCATION_UNCONFIRMED")
             intent("copy_intent")
+        if journal["phase"] == "copy_intent" and present(container, "staged.app") is None:
+            # No stage exists in the exact empty operation container and the
+            # original installed inode/build is unchanged. Only this measured
+            # no-stage condition permits preparation; partial copies stay fenced.
+            if sorted_names(container):
+                refuse("COPY_CONTAINER_UNCONFIRMED")
+            original, _, original_inode = measured(applications, APP_NAME)
+            if original != receipt["source"] or original_inode != journal["sourceInode"]:
+                refuse("COPY_SOURCE_CHANGED")
             source = open_absolute_directory(request["candidate"])
             descriptors.append(source)
             actual, metadata = bundle(source)
@@ -943,8 +954,8 @@ def run(request):
             os.fsync(staged)
             os.fsync(container)
         if journal["phase"] == "copy_intent":
-            # A complete stage can be identified after interruption. Partial or
-            # absent copy is a terminal qualification gap; never recopy it.
+            # A complete stage can be identified after interruption. A present
+            # partial copy remains a qualification gap; never overwrite or recopy it.
             actual, metadata, inode = measured(container, "staged.app")
             if actual != receipt["target"] or metadata["sourceCommit"] != receipt["sourceCommit"] or metadata["sourceTreeDigest"] != receipt["sourceTreeDigest"]:
                 refuse("COPY_INTERRUPTED_UNCONFIRMED")

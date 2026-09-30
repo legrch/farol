@@ -19,7 +19,7 @@ const helperPath = fileURLToPath(
   new URL("./closed-preview-repair.py", import.meta.url),
 );
 const HELPER_SHA256 =
-  "95db8552d4439b9656d3b3816f9569d8c3105947854716b16d8dddb7e25af8be";
+  "9a8088c0a3d72ea2a28f8a75d2ff0a04e050583e339ee566901c955e8864e0b6";
 const schema = "farol.next.closed-repair/1";
 const sha = /^[0-9a-f]{64}$/u;
 const operation = /^[0-9a-f]{32}$/u;
