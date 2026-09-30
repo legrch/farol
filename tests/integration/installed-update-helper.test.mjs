@@ -279,7 +279,7 @@ spec.loader.exec_module(helper)
 original = helper.write_record
 def corrupt_after_move(parent, name, record):
     original(parent, name, record)
-    if record["phase"] == "new_installed":
+    if name == "journal.json" and record["phase"] == "new_installed":
         with open(sys.argv[2] + "/Applications/Farol Next Preview.app/Contents/payload", "wb") as file:
             file.write(b"corrupt")
 helper.write_record = corrupt_after_move
@@ -507,6 +507,22 @@ describe("installed update helper", () => {
     expect(
       await fs.readFile(path.join(f.op, "failed.app/Contents/payload"), "utf8"),
     ).toBe("corrupt");
+    const rejected = JSON.parse(
+      await fs.readFile(path.join(f.op, "rejected-target.json"), "utf8"),
+    );
+    const metadata = await fs.lstat(path.join(f.op, "failed.app"), {
+      bigint: true,
+    });
+    expect(rejected).toEqual({
+      schema: "farol.rejected-update-target/1",
+      operationId: f.request.operationId,
+      source: f.request.source,
+      target: f.request.target,
+      directoryIdentity: {
+        device: String(metadata.dev),
+        inode: String(metadata.ino),
+      },
+    });
   });
 
   for (const side of ["before", "after"]) {

@@ -44,6 +44,13 @@ const Operation = z.strictObject({
   source: AcceptedBuild,
   target: AcceptedBuild,
 });
+const RejectedTarget = Operation.extend({
+  schema: z.literal("farol.rejected-update-target/1"),
+  directoryIdentity: z.strictObject({
+    device: z.string().regex(/^[0-9]{1,30}$/u),
+    inode: z.string().regex(/^[0-9]{1,30}$/u),
+  }),
+});
 const Retained = z.strictObject({
   schema: z.literal("farol.ready-update/1"),
   handle: z.string().max(4096),
@@ -451,6 +458,58 @@ export async function createInstalledUpdateRuntime(
       return result.code === 1 && result.stdout === "" && result.stderr === "";
     }
   };
+  const confirmedRejectedTarget = async (
+    op: z.infer<typeof Operation>,
+    record: z.infer<typeof Retained>,
+  ) => {
+    const directory = path.join(root, op.operationId);
+    await canonicalOwnedDirectory(directory, true);
+    const raw = await readRecord(path.join(directory, "rejected-target.json"));
+    if (raw === null) return false;
+    const witness = RejectedTarget.parse(raw);
+    if (!sameOperation(witness, op) || !(await originalHelperEnded(record)))
+      throw new Error("UPDATE_REJECTED_TARGET_UNCONFIRMED");
+    // Only metadata is needed for rejected bytes; never execute their verifier
+    // or reinterpret their corrupt contents as an accepted application.
+    const rejected = path.join(directory, "failed.app");
+    await canonicalOwnedDirectory(rejected, false);
+    const fd = await fs.open(
+      rejected,
+      constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
+    );
+    try {
+      const metadata = await fd.stat({ bigint: true });
+      if (
+        !metadata.isDirectory() ||
+        metadata.uid !== BigInt(process.getuid?.() ?? -1) ||
+        (metadata.mode & 0o022n) !== 0n ||
+        String(metadata.dev) !== witness.directoryIdentity.device ||
+        String(metadata.ino) !== witness.directoryIdentity.inode
+      )
+        throw new Error("UPDATE_REJECTED_TARGET_CHANGED");
+      for (const name of ["previous.app", "staged.app"]) {
+        let present = false;
+        try {
+          await fs.lstat(path.join(directory, name));
+          present = true;
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        }
+        if (present)
+          throw new Error("UPDATE_REJECTED_TARGET_LAYOUT_UNCONFIRMED");
+      }
+      const current = await fs.lstat(rejected, { bigint: true });
+      if (
+        current.dev !== metadata.dev ||
+        current.ino !== metadata.ino ||
+        !current.isDirectory()
+      )
+        throw new Error("UPDATE_REJECTED_TARGET_CHANGED");
+    } finally {
+      await fd.close();
+    }
+    return true;
+  };
   const removeDownloadStage = async (
     download: z.infer<typeof DownloadStage>,
   ) => {
@@ -768,14 +827,19 @@ export async function createInstalledUpdateRuntime(
           if (settled) rollbackVersion = op.source.version;
         } else if (sameBuild(current, op.source)) {
           const rolledBack = ROLLED_BACK_PHASES.includes(journal.phase);
-          const other = rolledBack
-            ? await optionalBuild(op, "failed.app")
-            : journal.phase === "rollback_started"
-              ? ((await optionalBuild(op, "failed.app")) ??
-                (await optionalBuild(op, "previous.app")))
-              : await optionalBuild(op, "staged.app");
-          if (!other || !sameBuild(other, op.target))
-            return known("UPDATE_RECOVERY_IDENTITY_MISMATCH");
+          const rejected =
+            journal.phase === "rolled_back" &&
+            (await confirmedRejectedTarget(op, retained));
+          if (!rejected) {
+            const other = rolledBack
+              ? await optionalBuild(op, "failed.app")
+              : journal.phase === "rollback_started"
+                ? ((await optionalBuild(op, "failed.app")) ??
+                  (await optionalBuild(op, "previous.app")))
+                : await optionalBuild(op, "staged.app");
+            if (!other || !sameBuild(other, op.target))
+              return known("UPDATE_RECOVERY_IDENTITY_MISMATCH");
+          }
           settled = [...ROLLED_BACK_PHASES, ...CANCELLED_PHASES].includes(
             journal.phase,
           );

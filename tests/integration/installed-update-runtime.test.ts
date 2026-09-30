@@ -1789,6 +1789,99 @@ ${scenario === "missing" ? "" : `<key>CFBundleVersion</key><string>${scenario ==
     });
     expect(mocks.helper).toHaveBeenCalledTimes(1);
   });
+  it.each([
+    "corrupt",
+    "replaced",
+    "alive",
+    "missing-witness",
+    "interrupted",
+    "mismatched-witness",
+    "unexpected-predecessor",
+  ] as const)(
+    "reconciles a protective rollback only with its terminal rejected-directory witness (%s)",
+    async (scenario) => {
+      const first = await prepared();
+      await first.restart();
+      await first.close();
+      const { operation: op } = JSON.parse(await fs.readFile(ready, "utf8"));
+      const opRoot = path.join(userData, "installed-updates", op.operationId);
+      const rejected = path.join(opRoot, "failed.app");
+      await fs.rename(path.join(opRoot, "staged.app"), rejected);
+      await fs.writeFile(path.join(rejected, "verified-payload"), "corrupt");
+      const metadata = await fs.lstat(rejected, { bigint: true });
+      await fs.writeFile(
+        path.join(opRoot, "journal.json"),
+        JSON.stringify({
+          schema: "farol.installed-update-journal/1",
+          ...op,
+          phase:
+            scenario === "interrupted" ? "rollback_started" : "rolled_back",
+        }),
+        { mode: 0o600 },
+      );
+      if (scenario !== "missing-witness")
+        await fs.writeFile(
+          path.join(opRoot, "rejected-target.json"),
+          JSON.stringify({
+            schema: "farol.rejected-update-target/1",
+            ...op,
+            ...(scenario === "mismatched-witness"
+              ? { operationId: "b".repeat(32) }
+              : {}),
+            directoryIdentity: {
+              device: String(metadata.dev),
+              inode: String(metadata.ino),
+            },
+          }),
+          { mode: 0o600 },
+        );
+      if (scenario === "unexpected-predecessor")
+        await fs.mkdir(path.join(opRoot, "previous.app"));
+      if (scenario === "replaced") {
+        await fs.rename(rejected, rejected + ".original");
+        await fs.mkdir(rejected);
+        await fs.writeFile(
+          path.join(rejected, "verified-payload"),
+          "replacement",
+        );
+      }
+      const measured = mocks.exec.getMockImplementation()!;
+      mocks.exec.mockImplementation((file: string, args: string[]) => {
+        if (file === "/bin/ps") {
+          if (scenario === "alive")
+            return Promise.resolve({ stdout: "fixture-start", stderr: "" });
+          return Promise.reject({ code: 1, stdout: "", stderr: "" });
+        }
+        if (args[1] === rejected)
+          throw new Error("Rejected target is not an accepted build");
+        return measured(file, args);
+      });
+      const next = await createInstalledUpdateRuntime(options());
+      await next!.initialize();
+      if (scenario === "corrupt") {
+        expect(next!.snapshot()).toMatchObject({ phase: "idle" });
+        expect(
+          mocks.exec.mock.calls.some((call) => call[1]?.[1] === rejected),
+        ).toBe(false);
+      } else {
+        expect(next!.snapshot()).toMatchObject({
+          phase: "failed",
+          recoveryRequired: true,
+        });
+        await fs.access(ready);
+        expect(mocks.reclaimArchive).not.toHaveBeenCalled();
+      }
+      await next!.check(true);
+      await next!.restore("recover");
+      expect(mocks.download).toHaveBeenCalledTimes(1);
+      expect(mocks.helper).toHaveBeenCalledTimes(1);
+      expect(
+        await fs.readFile(path.join(rejected, "verified-payload"), "utf8"),
+      ).toBe(scenario === "replaced" ? "replacement" : "corrupt");
+      await next!.close();
+    },
+  );
+
   for (const crossedExchange of [false, true]) {
     it(`reconciles the interrupted exchange (${crossedExchange}) without replaying apply`, async () => {
       const first = await prepared();

@@ -8,7 +8,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 
 const HELPER_SHA256 =
-  "43dfcb9004e21fbe1eab4b5e5afe972f7ff24a679fb36a3f19018ad5c33e645b";
+  "105406bb8a1884a77b8fb089d9d55003cef994592792a8aae2f14cb4972c2654";
 const MAX_HELPER_BYTES = 64 * 1024;
 const APP_NAME = "Farol Next Preview.app";
 const execFileAsync = promisify(execFile);

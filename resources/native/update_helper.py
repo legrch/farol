@@ -702,6 +702,17 @@ def run(request):
                 exchange_checked(apps, APP, op, "previous.app", staged_inode, predecessor_inode)
                 fence()
                 rename_checked(op, "previous.app", op, "failed.app", staged_inode)
+                rejected = entry(op, "failed.app")
+                if rejected is None or identity(rejected) != staged_inode:
+                    fail("target_uncertain", "rollback_started")
+                # Rejected bytes cannot attest as the accepted target. Bind the
+                # quarantined directory before declaring this rollback terminal.
+                write_record(op, "rejected-target.json", {
+                    "schema": "farol.rejected-update-target/1",
+                    "operationId": request["operationId"],
+                    "source": request["source"], "target": request["target"],
+                    "directoryIdentity": {"device": str(rejected.st_dev), "inode": str(rejected.st_ino)},
+                })
                 write_record(op, "journal.json", record_for(request, "rolled_back"))
                 fail("target_verification", "rolled_back")
         elif request["action"] == "rollback":
