@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   discover: vi.fn(),
   download: vi.fn(),
   archiveDownload: vi.fn(),
+  cancelPending: vi.fn(),
   discardArchive: vi.fn(),
   reclaimArchive: vi.fn(),
   discardPackage: vi.fn(),
@@ -38,6 +39,7 @@ vi.mock(
     createGithubUpdateTransport: () => ({
       verifyPackage: mocks.verify,
       download: mocks.archiveDownload,
+      cancelPending: mocks.cancelPending,
       discard: mocks.discardArchive,
       reclaimRetained: mocks.reclaimArchive,
     }),
@@ -209,6 +211,47 @@ afterEach(async () => {
 });
 
 describe("installed updater composition (disposable filesystem and mocked native/GitHub ports)", () => {
+  it.each(["completed", "cancelled"] as const)(
+    "reconciles a %s download on normal Quit and recovers on the next launch",
+    async (outcome) => {
+      const downloaded = await mocks.download();
+      let finish!: (value: unknown) => void;
+      mocks.download.mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            finish = resolve;
+          }),
+      );
+      const controller = await createInstalledUpdateRuntime(options());
+      await controller!.initialize();
+      const checking = controller!.check();
+      const pending = path.join(
+        userData,
+        "installed-updates/download-pending.json",
+      );
+      await vi.waitFor(async () => {
+        expect(await fs.readFile(pending, "utf8")).toContain(manifest.buildId);
+        expect(finish).toBeTypeOf("function");
+      });
+      const closing = controller!.close();
+      finish(
+        outcome === "completed"
+          ? downloaded
+          : { ok: false, code: "archive_download_failed" },
+      );
+      await Promise.all([checking, closing]);
+      expect(mocks.cancelPending).toHaveBeenCalledTimes(1);
+      await expect(fs.stat(pending)).rejects.toMatchObject({ code: "ENOENT" });
+      const restarted = await createInstalledUpdateRuntime(options());
+      await restarted!.initialize();
+      expect(restarted!.snapshot().phase).toBe(
+        outcome === "completed" ? "ready" : "idle",
+      );
+      expect(mocks.helper).not.toHaveBeenCalled();
+      expect(quit).not.toHaveBeenCalled();
+    },
+  );
+
   it("bounds abandoned extraction directories before invoking a verifier or opening an archive", async () => {
     const { createUpdatePackageVerifier } = await vi.importActual<
       typeof import("../../src/modules/release/infra/native/update-package-verifier")

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { drainOwnedChildren } from "../../src/apps/desktop/quit-drain";
 import {
   InstalledUpdater,
   UPDATE_RECHECK_MS,
@@ -35,6 +36,7 @@ function fixture() {
   let now = 1_000;
   const ports = {
     now: () => now,
+    cancelPending: vi.fn(),
     recover: vi
       .fn<InstalledUpdaterPorts["recover"]>()
       .mockResolvedValue({ ok: true, update: null }),
@@ -61,6 +63,114 @@ function fixture() {
 }
 
 describe("installed update orchestration (port fixture, no native or GitHub acceptance)", () => {
+  it("drains and durably retains a completed download after Quit without publishing or restarting", async () => {
+    const { updater, ports } = fixture();
+    let finish!: (
+      value: Awaited<ReturnType<InstalledUpdaterPorts["download"]>>,
+    ) => void;
+    let saved!: () => void;
+    ports.download.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    ports.retain.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          saved = resolve;
+        }),
+    );
+    await updater.initialize();
+    const checking = updater.check();
+    await Promise.resolve();
+    ports.publish.mockClear();
+    let drained = false;
+    const closing = Promise.resolve(updater.close()).then(() => {
+      drained = true;
+    });
+    await Promise.resolve();
+    const drainedBeforeDownload = drained;
+    finish({ ok: true, update: staged });
+    await Promise.resolve();
+    const drainedBeforeRetain = drained;
+    saved?.();
+    await Promise.all([checking, closing]);
+    expect(drainedBeforeDownload).toBe(false);
+    expect(drainedBeforeRetain).toBe(false);
+    expect(ports.cancelPending).toHaveBeenCalledTimes(1);
+    expect(ports.retain).toHaveBeenCalledExactlyOnceWith(staged);
+    expect(ports.publish).not.toHaveBeenCalled();
+    expect(ports.restart).not.toHaveBeenCalled();
+    await updater.check(true);
+    expect(ports.download).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps an uncertain close-time retain failure fenced instead of retrying", async () => {
+    const { updater, ports } = fixture();
+    let finish!: (
+      value: Awaited<ReturnType<InstalledUpdaterPorts["download"]>>,
+    ) => void;
+    ports.download.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    ports.retain.mockRejectedValue(
+      new Error("fixture persistence uncertainty"),
+    );
+    await updater.initialize();
+    const checking = updater.check();
+    await Promise.resolve();
+    const closing = updater.close();
+    finish({ ok: true, update: staged });
+    await Promise.all([checking, closing]);
+    expect(updater.snapshot()).toMatchObject({
+      phase: "failed",
+      recoveryRequired: true,
+    });
+    await updater.check(true);
+    expect(ports.download).toHaveBeenCalledTimes(1);
+  });
+
+  it("records an unconfirmed updater when cancellation cannot drain by the existing quit deadline", async () => {
+    const { updater, ports } = fixture();
+    let finish!: (
+      value: Awaited<ReturnType<InstalledUpdaterPorts["download"]>>,
+    ) => void;
+    ports.download.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    await updater.initialize();
+    const checking = updater.check();
+    await Promise.resolve();
+    const receipt = await drainOwnedChildren(
+      [{ name: "installed-updater", close: () => updater.close() }],
+      10,
+    );
+    finish({
+      ok: false,
+      code: "UPDATE_STAGING_OUTCOME_UNKNOWN",
+      recoveryRequired: true,
+    });
+    await checking;
+    await updater.close();
+    expect(receipt).toEqual({
+      drained: false,
+      unconfirmed: ["installed-updater"],
+    });
+    expect(updater.snapshot()).toMatchObject({
+      phase: "failed",
+      recoveryRequired: true,
+    });
+    expect(ports.cancelPending).toHaveBeenCalledTimes(1);
+    expect(ports.retain).not.toHaveBeenCalled();
+  });
+
   it("offers explicit recovery after boot without replaying download or apply", async () => {
     const { updater, ports } = fixture();
     ports.recover.mockResolvedValue({

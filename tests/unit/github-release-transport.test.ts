@@ -191,6 +191,66 @@ function transport(root: string, openHttps: OpenHttps) {
 }
 
 describe("GitHub HTTPS transport", () => {
+  it.each(["opening", "streaming", "uncertain-cleanup"] as const)(
+    "cancels the owned %s request and confirms partial-byte cleanup before returning",
+    async (phase) => {
+      const root = await privateRoot();
+      let reached!: () => void;
+      const started = new Promise<void>((resolve) => {
+        reached = resolve;
+      });
+      let release!: () => void;
+      let seenSignal: AbortSignal | undefined;
+      const network: OpenHttps = vi.fn(
+        async (_url, _headers, _timeout, signal) => {
+          seenSignal = signal;
+          const stopped = new Promise<never>((_resolve, reject) => {
+            release = () => reject(new Error("fixture cancelled"));
+            signal?.addEventListener("abort", release, { once: true });
+          });
+          if (phase === "opening") {
+            reached();
+            return stopped;
+          }
+          return {
+            ...response(200),
+            body: {
+              async *[Symbol.asyncIterator]() {
+                yield Buffer.from("partial");
+                reached();
+                await stopped;
+              },
+            },
+            complete: () => false,
+          };
+        },
+      );
+      if (phase === "uncertain-cleanup")
+        race.onClose = async () => {
+          throw new Error("fixture close unknown");
+        };
+      const { instance } = transport(root, network);
+      const downloading = instance.download(asset, 100);
+      await started;
+      instance.cancelPending?.();
+      const cancelledByTransport = seenSignal?.aborted === true;
+      // Also settle the scripted response on RED; this test never leaves an open file.
+      release();
+      const result = await downloading;
+      expect(cancelledByTransport).toBe(true);
+      expect(result).toMatchObject({
+        ok: false,
+        certainty: phase === "uncertain-cleanup" ? "unknown" : "known",
+      });
+      if (phase !== "opening")
+        await expectEmptySlot(path.join(root, "github-updates"));
+      expect(await instance.fetchJson(GITHUB_RELEASES_API, 100)).toMatchObject({
+        ok: false,
+      });
+      expect(network).toHaveBeenCalledTimes(1);
+    },
+  );
+
   it("reclaims matching retained bytes in a cold transport and reuses the empty slot", async () => {
     const root = await privateRoot();
     const bytes = Buffer.from("retained archive");

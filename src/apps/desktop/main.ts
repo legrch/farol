@@ -660,6 +660,7 @@ let connectorStartInFlight: Promise<void> | null = null;
 // start with authority that a concurrent change is about to replace.
 const authorityTransitions = new AuthorityTransitionReservation();
 let installedUpdater: InstalledUpdater | null = null;
+let installedUpdaterInitialization: Promise<void> | null = null;
 let installedUpdateTimer: NodeJS.Timeout | null = null;
 let installedUpdateAdmission = false;
 let configurationRequests = 0;
@@ -773,13 +774,13 @@ async function initializeInstalledUpdater(): Promise<void> {
     });
     if (!installedUpdater) return;
     if (quitInProgress) {
-      installedUpdater.close();
+      await installedUpdater.close();
       return;
     }
     publishInstalledUpdate(installedUpdater.snapshot());
     await installedUpdater.initialize();
     if (quitInProgress) {
-      installedUpdater.close();
+      await installedUpdater.close();
       return;
     }
     void installedUpdater.check();
@@ -9120,7 +9121,18 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
     },
     quit: () => app.quit(),
     collect: () => {
-      const closers: OwnedCloser[] = [];
+      const closers: OwnedCloser[] = [
+        {
+          name: "installed-updater",
+          close: async () => {
+            await installedUpdater?.close();
+            // Creation can still be reading its private state when Quit starts.
+            // initializeInstalledUpdater closes that late lifetime without checking.
+            await installedUpdaterInitialization;
+            await installedUpdater?.close();
+          },
+        },
+      ];
       const attachmentTask = pendingChatGptAttachmentTask;
       pendingChatGptAttachmentTask = null;
       if (attachmentTask) {
@@ -9204,14 +9216,13 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
   app.on("before-quit", (event) => {
     quitInProgress = true;
     if (installedUpdateTimer) clearInterval(installedUpdateTimer);
-    installedUpdater?.close();
     quitDrain.onBeforeQuit(event);
   });
   app.on("window-all-closed", () => {
     if (windowAllClosedAction(process.platform) === "quit") app.quit();
   });
   quitSignals.ready();
-  void initializeInstalledUpdater();
+  installedUpdaterInitialization = initializeInstalledUpdater();
 }
 
 const primaryInstanceLock = app.requestSingleInstanceLock(instanceRequest);

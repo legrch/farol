@@ -471,6 +471,7 @@ export async function createInstalledUpdateRuntime(
     }
   };
   const controller = new InstalledUpdater({
+    cancelPending: () => transport.cancelPending(),
     now: Date.now,
     publish: options.publish,
     recover: async () => {

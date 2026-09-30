@@ -20,6 +20,8 @@ export type UpdateHandoff =
   | Readonly<{ status: "unknown"; code: string }>;
 export type InstalledUpdaterPorts = Readonly<{
   now(): number;
+  // Stop only this updater lifetime's network requests; filesystem cleanup still drains.
+  cancelPending(): void;
   // Recovery must reverify the retained archive/package and reconcile any helper receipt.
   recover(): Promise<
     | Readonly<{
@@ -53,6 +55,21 @@ export class InstalledUpdater {
   private lastCheck: number | null = null;
   private closed = false;
   private rollbackVersion: string | undefined;
+  private drained: Promise<void> = Promise.resolve();
+  private finishDrain: () => void = () => undefined;
+  private closing: Promise<void> | null = null;
+
+  private begin(): void {
+    this.busy = true;
+    this.drained = new Promise((resolve) => {
+      this.finishDrain = resolve;
+    });
+  }
+
+  private finish(): void {
+    this.busy = false;
+    this.finishDrain();
+  }
 
   constructor(private readonly ports: InstalledUpdaterPorts) {}
 
@@ -67,7 +84,7 @@ export class InstalledUpdater {
 
   async initialize(): Promise<void> {
     if (this.initialized || this.busy || this.closed) return;
-    this.busy = true;
+    this.begin();
     try {
       const restored = await this.ports.recover();
       if (!restored.ok) {
@@ -106,7 +123,7 @@ export class InstalledUpdater {
       });
     } finally {
       this.initialized = true;
-      this.busy = false;
+      this.finish();
     }
   }
 
@@ -141,7 +158,7 @@ export class InstalledUpdater {
     )
       return;
     this.lastCheck = now;
-    this.busy = true;
+    this.begin();
     this.publish({ phase: "checking" });
     let stagingStarted = false;
     try {
@@ -168,7 +185,8 @@ export class InstalledUpdater {
       this.publish({ phase: "downloading" });
       stagingStarted = true;
       const downloaded = await this.ports.download();
-      if (this.closed) return;
+      // Quit still settles the durable download intent. A completed, verified
+      // archive must be retained even if its UI lifetime has already closed.
       if (!downloaded.ok) {
         this.publish({
           phase: "failed",
@@ -195,7 +213,7 @@ export class InstalledUpdater {
         recoveryRequired: stagingStarted,
       });
     } finally {
-      this.busy = false;
+      this.finish();
     }
   }
 
@@ -207,7 +225,7 @@ export class InstalledUpdater {
   async restart(): Promise<void> {
     if (this.closed || this.busy || this.view.phase !== "ready" || !this.ready)
       return;
-    this.busy = true;
+    this.begin();
     const version = this.ready.manifest.version;
     this.publish({ phase: "applying", version });
     try {
@@ -234,7 +252,7 @@ export class InstalledUpdater {
         recoveryRequired: true,
       });
     } finally {
-      this.busy = false;
+      this.finish();
     }
   }
 
@@ -247,7 +265,7 @@ export class InstalledUpdater {
           ? previous.rollbackVersion
           : undefined;
     if (this.closed || this.busy || !version) return;
-    this.busy = true;
+    this.begin();
     this.publish({ phase: "applying", version });
     try {
       const outcome = await this.ports.restore(action);
@@ -268,11 +286,17 @@ export class InstalledUpdater {
         recoveryRequired: true,
       });
     } finally {
-      this.busy = false;
+      this.finish();
     }
   }
 
-  close(): void {
+  close(): Promise<void> {
+    if (this.closing) return this.closing;
     this.closed = true;
+    this.closing = (async () => {
+      this.ports.cancelPending();
+      await this.drained;
+    })();
+    return this.closing;
   }
 }

@@ -43,6 +43,7 @@ export type TransportFailure = PortFailure &
       | "redirect"
       | "http_status"
       | "network"
+      | "cancelled"
       | "invalid_json"
       | "content_length"
       | "content_encoding"
@@ -67,10 +68,12 @@ export type OpenHttps = (
   url: string,
   headers: Readonly<Record<string, string>>,
   timeoutMs: number,
+  signal: AbortSignal,
 ) => Promise<HttpsResponse>;
 
 export type GithubUpdateTransport = GithubReleasePorts &
   Readonly<{
+    cancelPending(): void;
     fetchJson(
       url: string,
       maxBytes: number,
@@ -163,6 +166,7 @@ async function openPinned(
   url: string,
   client: OpenHttps,
   timeoutMs: number,
+  signal: AbortSignal,
 ): Promise<
   TransportResult<{
     response: HttpsResponse;
@@ -170,13 +174,18 @@ async function openPinned(
     redirects: readonly string[];
   }>
 > {
+  if (signal.aborted) return fail("interrupted", "cancelled");
   const kind = initialKind(url);
   if (!kind) return fail("network_failure", "invalid_url");
   let response: HttpsResponse;
   try {
-    response = await client(url, HEADERS, timeoutMs);
+    response = await client(url, HEADERS, timeoutMs, signal);
   } catch {
     return fail("network_failure", "network");
+  }
+  if (signal.aborted) {
+    response.destroy();
+    return fail("interrupted", "cancelled");
   }
   if (redirected(response.statusCode)) {
     const location = header(response.headers.location);
@@ -184,9 +193,13 @@ async function openPinned(
     if (kind !== "asset" || location === null || !cdnUrl(location))
       return fail("network_failure", "redirect");
     try {
-      response = await client(location, HEADERS, timeoutMs);
+      response = await client(location, HEADERS, timeoutMs, signal);
     } catch {
       return fail("network_failure", "network");
+    }
+    if (signal.aborted) {
+      response.destroy();
+      return fail("interrupted", "cancelled");
     }
     if (response.statusCode !== 200) {
       const reason = redirected(response.statusCode)
@@ -218,13 +231,14 @@ function wrap(message: IncomingMessage): HttpsResponse {
 }
 
 // Node's HTTPS client does not follow redirects. TLS validation remains enabled.
-export const openNativeHttps: OpenHttps = (url, headers, timeoutMs) =>
+export const openNativeHttps: OpenHttps = (url, headers, timeoutMs, signal) =>
   new Promise((resolve, reject) => {
     const options: RequestOptions = {
       method: "GET",
       headers,
       rejectUnauthorized: true,
       agent: false,
+      signal,
     };
     const request = httpsGet(url, options, (response) => {
       response.once("close", () => clearTimeout(deadline));
@@ -325,6 +339,8 @@ export function createGithubUpdateTransport(
   }>,
 ): GithubUpdateTransport {
   const client = options.openHttps ?? openNativeHttps;
+  const cancellation = new AbortController();
+  const { signal } = cancellation;
   const issuedArchives = new Map<string, BigIntStats>();
   let emptySlot: { handle: string; identity: BigIntStats } | null = null;
   // Reclaim only bytes of the opened file. Unlinking a checked path would race
@@ -341,6 +357,7 @@ export function createGithubUpdateTransport(
     return { handle, identity };
   };
   return {
+    cancelPending: () => cancellation.abort(),
     async fetchJson(url, maxBytes) {
       const kind = initialKind(url);
       if (
@@ -351,7 +368,7 @@ export function createGithubUpdateTransport(
         )
       )
         return fail("network_failure", "invalid_url");
-      const opened = await openPinned(url, client, JSON_TIMEOUT_MS);
+      const opened = await openPinned(url, client, JSON_TIMEOUT_MS, signal);
       if (!opened.ok) return opened;
       const { response, finalUrl, redirects } = opened.value;
       const invalidLength = lengthFailure(response, maxBytes);
@@ -363,6 +380,7 @@ export function createGithubUpdateTransport(
       const chunks: Buffer[] = [];
       try {
         for await (const raw of response.body) {
+          signal.throwIfAborted();
           const chunk = Buffer.from(raw);
           measured += chunk.length;
           if (measured > maxBytes) {
@@ -371,6 +389,7 @@ export function createGithubUpdateTransport(
           }
           chunks.push(chunk);
         }
+        signal.throwIfAborted();
         if (!response.complete()) return fail("interrupted", "stream");
         const declared = header(response.headers["content-length"]);
         if (declared !== null && BigInt(declared) !== BigInt(measured))
@@ -404,7 +423,7 @@ export function createGithubUpdateTransport(
         !validLimit(maxBytes, MAX_ARCHIVE_BYTES)
       )
         return fail("network_failure", "invalid_url");
-      const opened = await openPinned(url, client, ARCHIVE_TIMEOUT_MS);
+      const opened = await openPinned(url, client, ARCHIVE_TIMEOUT_MS, signal);
       if (!opened.ok) return opened;
       const { response, finalUrl, redirects } = opened.value;
       const invalidLength = lengthFailure(response, maxBytes);
@@ -451,6 +470,7 @@ export function createGithubUpdateTransport(
       let result: TransportResult<DownloadedArchive> | null = null;
       try {
         for await (const raw of response.body) {
+          signal.throwIfAborted();
           const chunk = Buffer.from(raw);
           bytes += chunk.length;
           if (bytes > maxBytes) {
@@ -472,6 +492,7 @@ export function createGithubUpdateTransport(
           digest.update(chunk);
         }
         if (result === null) {
+          signal.throwIfAborted();
           if (!response.complete()) result = fail("interrupted", "stream");
           else if (
             header(response.headers["content-length"]) !== null &&
