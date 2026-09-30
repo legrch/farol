@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   discardPackage: vi.fn(),
   verify: vi.fn(),
   helper: vi.fn(),
+  captureStart: vi.fn(),
   exec: vi.fn(),
   copyApp: vi.fn(),
 }));
@@ -54,7 +55,7 @@ vi.mock(
     ...(await original<
       typeof import("../../src/modules/release/infra/native/installed-update-helper")
     >()),
-    captureInstalledProcessStart: async () => "fixture-start",
+    captureInstalledProcessStart: mocks.captureStart,
     startInstalledUpdateHelper: mocks.helper,
   }),
 );
@@ -132,6 +133,7 @@ async function prepared() {
 }
 beforeEach(async () => {
   vi.resetAllMocks();
+  mocks.captureStart.mockResolvedValue("fixture-start");
   root = await fs.mkdtemp(path.join(os.tmpdir(), "farol-update-composition-"));
   root = await fs.realpath(root);
   vi.spyOn(os, "userInfo").mockReturnValue({ ...os.userInfo(), homedir: root });
@@ -937,6 +939,111 @@ describe("installed updater composition (disposable filesystem and mocked native
     await restarted!.restore("rollback");
     expect(mocks.helper).toHaveBeenCalledTimes(3);
     expect(mocks.helper.mock.calls[2]![1].operationId).toBe(op.operationId);
+  });
+  it.each(["absent", "unreadable", "present"])(
+    "keeps the original helper PID when start-time capture fails, then reconciles only %s",
+    async (observation) => {
+      const first = await prepared();
+      mocks.captureStart
+        .mockResolvedValueOnce("fixture-start")
+        .mockRejectedValueOnce(new Error("fixture process readback failed"));
+      await first.restart();
+      expect(first.snapshot()).toMatchObject({
+        phase: "failed",
+        recoveryRequired: true,
+      });
+      expect(quit).not.toHaveBeenCalled();
+      const record = JSON.parse(await fs.readFile(ready, "utf8"));
+      expect(record.helper).toEqual({ pid: 123, processStart: null });
+      expect(mocks.helper).toHaveBeenCalledTimes(1);
+      first.close();
+      mocks.exec.mockImplementation(async (file: string, args: string[]) => {
+        if (file === "/bin/ps") {
+          if (observation === "absent")
+            throw { code: 1, stdout: "", stderr: "" };
+          if (observation === "unreadable")
+            throw { code: "EPERM", stdout: "", stderr: "" };
+          return { stdout: "Wed Sep 30 04:00:00 2026", stderr: "" };
+        }
+        return {
+          stdout: JSON.stringify(
+            args[1]!.endsWith("staged.app") ? target : source,
+          ),
+        };
+      });
+      const second = await createInstalledUpdateRuntime(options());
+      await second!.initialize();
+      if (observation === "absent") {
+        expect(second!.snapshot()).toMatchObject({
+          phase: "ready",
+          deferred: true,
+        });
+        expect(
+          JSON.parse(await fs.readFile(ready, "utf8")).operation,
+        ).toBeNull();
+        await expect(
+          fs.lstat(
+            path.join(
+              userData,
+              "installed-updates",
+              record.operation.operationId,
+              "staged.app",
+            ),
+          ),
+        ).rejects.toMatchObject({ code: "ENOENT" });
+      } else {
+        expect(second!.snapshot()).toMatchObject({
+          phase: "failed",
+          recoveryRequired: true,
+          code: "UPDATE_HELPER_EXIT_UNCONFIRMED",
+        });
+        await second!.restart();
+        expect(JSON.parse(await fs.readFile(ready, "utf8")).operation).toEqual(
+          record.operation,
+        );
+      }
+      expect(mocks.helper).toHaveBeenCalledTimes(1);
+      expect(mocks.download).toHaveBeenCalledTimes(1);
+      second!.close();
+    },
+  );
+  it("keeps a reconciled pre-mutation exit recoverable if its cleanup is interrupted", async () => {
+    const first = await prepared();
+    mocks.captureStart
+      .mockResolvedValueOnce("fixture-start")
+      .mockRejectedValueOnce(new Error("fixture readback failed"));
+    await first.restart();
+    first.close();
+    mocks.exec.mockImplementation(async (file: string, args: string[]) => {
+      if (file === "/bin/ps") throw { code: 1, stdout: "", stderr: "" };
+      return {
+        stdout: JSON.stringify(
+          args[1]!.endsWith("staged.app") ? target : source,
+        ),
+      };
+    });
+    const remove = fs.rm.bind(fs);
+    vi.spyOn(fs, "rm").mockRejectedValueOnce(
+      new Error("fixture interrupted cleanup"),
+    );
+    const second = await createInstalledUpdateRuntime(options());
+    await second!.initialize();
+    expect(second!.snapshot()).toMatchObject({
+      phase: "failed",
+      recoveryRequired: true,
+    });
+    expect(
+      JSON.parse(await fs.readFile(ready, "utf8")).preparation,
+    ).toMatchObject({ source, target });
+    second!.close();
+    vi.mocked(fs.rm).mockImplementation(remove);
+    const third = await createInstalledUpdateRuntime(options());
+    await third!.initialize();
+    expect(third!.snapshot()).toMatchObject({ phase: "ready", deferred: true });
+    expect(mocks.copyApp).toHaveBeenCalledTimes(1);
+    expect(mocks.helper).toHaveBeenCalledTimes(1);
+    expect(mocks.download).toHaveBeenCalledTimes(1);
+    third!.close();
   });
   it("does not Quit or dispatch twice after unknown handoff, including the next app lifetime", async () => {
     const controller = await prepared();

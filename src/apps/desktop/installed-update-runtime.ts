@@ -54,7 +54,7 @@ const Retained = z.strictObject({
   helper: z
     .strictObject({
       pid: z.number().int().min(2),
-      processStart: z.string().min(1).max(128),
+      processStart: z.string().min(1).max(128).nullable(),
     })
     .nullable()
     .optional(),
@@ -369,6 +369,7 @@ export async function createInstalledUpdateRuntime(
         },
       );
       return (
+        record.helper.processStart !== null &&
         !stderr &&
         /^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2} \d{2}:\d{2}:\d{2} \d{4}$/u.test(
           stdout.trim(),
@@ -505,6 +506,55 @@ export async function createInstalledUpdateRuntime(
           )) !== null
         )
           return known("UPDATE_PREPARATION_UNRECONCILED");
+        await removePreparedCopy(op);
+        retained = { ...retained, preparation: undefined };
+        await writeRecord(readyFile, retained);
+      }
+      if (
+        retained.operation &&
+        (await readRecord(
+          path.join(root, retained.operation.operationId, "journal.json"),
+        )) === null
+      ) {
+        const op = retained.operation;
+        // No journal alone never proves non-dispatch. First reconcile the exact
+        // dispatched PID, including when its start-time readback was unavailable.
+        if (pending || !(await originalHelperEnded(retained)))
+          return known("UPDATE_HELPER_EXIT_UNCONFIRMED");
+        const current = await readBuild(slot);
+        const staged = await optionalBuild(op, "staged.app");
+        if (
+          current.buildId !== options.build.buildId ||
+          current.version !== options.build.version ||
+          !sameBuild(current, op.source) ||
+          !staged ||
+          !sameBuild(staged, op.target) ||
+          (await optionalBuild(op, "previous.app")) !== null ||
+          (await optionalBuild(op, "failed.app")) !== null ||
+          (await readRecord(
+            path.join(root, op.operationId, "journal.json"),
+          )) !== null
+        )
+          return known("UPDATE_RECOVERY_IDENTITY_MISMATCH");
+        await writeRecord(
+          path.join(root, `${op.operationId}-pre-mutation-exit.json`),
+          {
+            schema: "farol.update-refusal/1",
+            action: "apply",
+            operation: op,
+            helper: retained.helper,
+            code: "helper_exited_before_mutation",
+          },
+        );
+        // Reuse the durable preparation cleanup phase. If reclamation itself
+        // is interrupted, the next lifetime still identifies this exact copy.
+        retained = {
+          ...retained,
+          operation: null,
+          helper: null,
+          preparation: op,
+        };
+        await writeRecord(readyFile, retained);
         await removePreparedCopy(op);
         retained = { ...retained, preparation: undefined };
         await writeRecord(readyFile, retained);
@@ -937,7 +987,21 @@ export async function createInstalledUpdateRuntime(
           keepAdmission = false;
           return { status: "blocked", code: "UPDATE_HELPER_REFUSED" };
         }
+        // Keep the same operation observable even on an uncertain ACK. No substitute helper.
+        void operation.completion.then((result) => {
+          process.stderr.write(
+            `farol-update-helper ${JSON.stringify({ operationId, code: result.code, phase: result.terminal?.phase ?? "unknown" })}\n`,
+          );
+        });
         if (operation.pid !== null) {
+          // Persist the actual PID before the fallible metadata observation.
+          // A null start time is explicitly unknown: only an absent PID can
+          // establish termination later; a present/reused PID remains blocked.
+          retained = {
+            ...retained,
+            helper: { pid: operation.pid, processStart: null },
+          };
+          await writeRecord(readyFile, retained);
           retained = {
             ...retained,
             helper: {
@@ -947,13 +1011,6 @@ export async function createInstalledUpdateRuntime(
           };
           await writeRecord(readyFile, retained);
         }
-        // Keep the same operation observable even on an uncertain ACK. No substitute helper.
-        void operation.completion.then((result) => {
-          if (handoff.status !== "ready")
-            process.stderr.write(
-              `farol-update-helper ${JSON.stringify({ operationId, code: result.code, phase: result.terminal?.phase ?? "unknown" })}\n`,
-            );
-        });
         if (handoff.status !== "ready")
           return {
             status: "unknown",

@@ -13,7 +13,13 @@ its normal filesystem semantics.
 A durable ready record binds the verified archive to an operation before helper
 dispatch. Only the helper's exact readiness acknowledgment permits normal Quit.
 Unknown acknowledgment or completion never permits another apply. The same child
-handle remains observable while the original app is alive.
+handle remains observable while the original app is alive, including after a
+process metadata readback failure. The actual helper PID is persisted before
+reading its start time. An unavailable start time remains null, never invented:
+a present PID or failed process observation cannot prove that helper exited.
+Only confirmed termination plus an absent journal, unchanged source and exact
+staged target (with no predecessor/failed copy) can reconcile a pre-mutation
+exit. That restores a deferred ready state without launching another helper.
 
 Before Python allocates ZIP entries, the extractor bounds central-directory
 metadata and counts its actual records. This channel accepts single-volume,
