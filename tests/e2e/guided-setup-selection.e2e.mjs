@@ -966,7 +966,40 @@ try {
       environment,
       ...embedded,
     });
+    let authReturnEventId = null;
+    const authReturnHandled = window
+      .waitForEvent("console", {
+        timeout: 15000,
+        predicate: (message) => {
+          const match = /^farol\.shell-(action|decision) (.+)$/u.exec(
+            message.text(),
+          );
+          if (!match) return false;
+          let event;
+          try {
+            event = JSON.parse(match[2]);
+          } catch {
+            return false;
+          }
+          if (match[1] === "action" && event.source === "auth-window-closed") {
+            authReturnEventId = event.eventId;
+            return false;
+          }
+          return (
+            match[1] === "decision" &&
+            typeof authReturnEventId === "string" &&
+            event.eventId === authReturnEventId &&
+            event.refreshReadiness === true
+          );
+        },
+      })
+      .then(
+        () => null,
+        (error) => error,
+      );
     await window.locator("#sign-in-return").click();
+    const authReturnError = await authReturnHandled;
+    if (authReturnError) throw authReturnError;
     await window.locator("#onboarding-nav").waitFor({ state: "visible" });
     const readinessDeadline = Date.now() + 15000;
     for (;;) {
@@ -981,8 +1014,8 @@ try {
         throw new Error("BROWSER_FIXTURE_READINESS_TIMEOUT");
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
-    // The layout can restore before the asynchronous auth outcome arrives.
-    // Readiness alone must not hide the restored Setup step afterward.
+    // The matching auth-close action and renderer decision were observed.
+    // Assert the settled step, not a transient layout before that action.
     assert.equal(
       await window.locator("html").getAttribute("data-section"),
       "computer",
