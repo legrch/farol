@@ -91,7 +91,7 @@ export class InstalledUpdater {
         this.publish({
           phase: "failed",
           code: restored.code,
-          recoveryRequired: true,
+          recoveryRequired: restored.recoveryRequired ?? true,
         });
       } else if (restored.recoveryVersion) {
         this.publish({

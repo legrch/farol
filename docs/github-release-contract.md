@@ -75,3 +75,12 @@ package attestation; remove the producer's absolute `artifactPath` from the
 published attestation. Private source, test logs, Brain material, user profiles
 and credentials never belong in the public release repository. Offline tests
 and source gates do not qualify a real installed GitHub upgrade.
+
+Interrupted downloads have an operation-owned staging directory and a durable
+producer PID/start witness before the first request. On a later launch, an intent
+without a ready record can be cancelled only after the original producer is
+observed ended and that exact staging directory is reconciled. Its interrupted
+result is recorded before the intent is cleared; previous accepted packages and
+rollback records are not removed. A live or unobservable producer, replaced
+staging directory, uncertain cleanup, legacy intent without a witness, or an
+unconfirmed native verification after the HTTP phase remains fenced. No download or helper is replayed by that reconciliation.

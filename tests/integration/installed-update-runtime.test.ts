@@ -214,6 +214,244 @@ afterEach(async () => {
 });
 
 describe("installed updater composition (disposable filesystem and mocked native/GitHub ports)", () => {
+  it("does not start a request when Quit races durable download allocation", async () => {
+    const controller = await createInstalledUpdateRuntime(options());
+    await controller!.initialize();
+    const rename = fs.rename.bind(fs);
+    let closing: Promise<void> | null = null;
+    vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+      await rename(from, to);
+      if (
+        to === path.join(userData, "installed-updates/download-pending.json") &&
+        !closing
+      )
+        closing = controller!.close();
+    });
+    await controller!.check();
+    await closing;
+    expect(mocks.download).not.toHaveBeenCalled();
+    expect(mocks.helper).not.toHaveBeenCalled();
+    await expect(
+      fs.stat(path.join(userData, "installed-updates/download-pending.json")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it.each(["complete", "cleanup-interrupted"] as const)(
+    "reconciles a crashed download as %s without another request",
+    async (scenario) => {
+      mocks.download.mockRejectedValue(new Error("fixture process crash"));
+      const first = await createInstalledUpdateRuntime(options());
+      await first!.initialize();
+      await first!.check();
+      await first!.close();
+      const pending = path.join(
+        userData,
+        "installed-updates/download-pending.json",
+      );
+      const intent = JSON.parse(await fs.readFile(pending, "utf8"));
+      const stage = intent.download
+        ? path.join(
+            userData,
+            "installed-updates",
+            `download-${intent.download.id}`,
+          )
+        : path.join(userData, "installed-updates", "untracked-old-stage");
+      await fs.mkdir(path.join(stage, "github-updates"), { recursive: true });
+      await fs.writeFile(
+        path.join(stage, "github-updates/partial.zip"),
+        "partial bytes",
+      );
+      const outside = path.join(root, "outside-stage");
+      await fs.mkdir(outside);
+      await fs.writeFile(path.join(outside, "sentinel"), "keep");
+      await fs.symlink(outside, path.join(stage, "outside-link"));
+      const predecessor = path.join(
+        userData,
+        "installed-updates",
+        "older-operation",
+      );
+      await fs.mkdir(predecessor);
+      await fs.writeFile(path.join(predecessor, "sentinel"), "rollback");
+      const native = mocks.exec.getMockImplementation()!;
+      mocks.exec.mockImplementation((file: string, args: string[]) => {
+        if (file === "/bin/ps") throw { code: 1, stdout: "", stderr: "" };
+        return native(file, args);
+      });
+      const unlink = fs.unlink.bind(fs);
+      if (scenario === "cleanup-interrupted") {
+        vi.spyOn(fs, "unlink").mockImplementationOnce(async (file) => {
+          expect(file).toBe(pending);
+          throw Object.assign(new Error("fixture interrupted acknowledgment"), {
+            code: "EIO",
+          });
+        });
+        const interrupted = await createInstalledUpdateRuntime(options());
+        await interrupted!.initialize();
+        expect(interrupted!.snapshot()).toMatchObject({
+          phase: "failed",
+          recoveryRequired: true,
+        });
+        await interrupted!.close();
+        vi.mocked(fs.unlink).mockImplementation(unlink);
+      }
+      const recovered = await createInstalledUpdateRuntime(options());
+      await recovered!.initialize();
+      expect(recovered!.snapshot()).toMatchObject({
+        phase: "failed",
+        code: "UPDATE_DOWNLOAD_INTERRUPTED",
+        recoveryRequired: false,
+      });
+      await expect(fs.lstat(stage)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.lstat(pending)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(mocks.download).toHaveBeenCalledTimes(1);
+      expect(mocks.helper).not.toHaveBeenCalled();
+      mocks.discover.mockClear();
+      mocks.discover.mockResolvedValue({ ok: true, value: null });
+      await recovered!.check(true);
+      expect(recovered!.snapshot()).toMatchObject({ phase: "idle" });
+      expect(mocks.discover).toHaveBeenCalledTimes(1);
+      expect(mocks.download).toHaveBeenCalledTimes(1);
+      expect(quit).not.toHaveBeenCalled();
+      expect(await fs.readFile(path.join(outside, "sentinel"), "utf8")).toBe(
+        "keep",
+      );
+      expect(
+        await fs.readFile(path.join(predecessor, "sentinel"), "utf8"),
+      ).toBe("rollback");
+      await recovered!.close();
+    },
+  );
+
+  it("keeps an unconfirmed native verification fenced after the producer exits", async () => {
+    mocks.download.mockImplementation(async (_candidate, ports) => {
+      await ports.verifyPackage(path.join(root, "archive.zip"), manifest);
+      throw new Error("fixture lost verifier result");
+    });
+    const first = await createInstalledUpdateRuntime(options());
+    await first!.initialize();
+    await first!.check();
+    await first!.close();
+    const pending = path.join(
+      userData,
+      "installed-updates/download-pending.json",
+    );
+    const intent = JSON.parse(await fs.readFile(pending, "utf8"));
+    expect(intent.download.phase).toBe("verifying");
+    mocks.exec.mockRejectedValue({ code: 1, stdout: "", stderr: "" });
+    const recovered = await createInstalledUpdateRuntime(options());
+    await recovered!.initialize();
+    await recovered!.check(true);
+    expect(recovered!.snapshot()).toMatchObject({
+      phase: "failed",
+      recoveryRequired: true,
+    });
+    await fs.access(
+      path.join(
+        userData,
+        "installed-updates",
+        `download-${intent.download.id}`,
+      ),
+    );
+    expect(mocks.download).toHaveBeenCalledTimes(1);
+    expect(mocks.helper).not.toHaveBeenCalled();
+    await recovered!.close();
+  });
+
+  it.each([false, true])(
+    "reconciles unbound allocation only when empty (contents=%s)",
+    async (hasContents) => {
+      mocks.download.mockRejectedValue(new Error("fixture crash"));
+      const first = await createInstalledUpdateRuntime(options());
+      await first!.initialize();
+      await first!.check();
+      await first!.close();
+      const pending = path.join(
+        userData,
+        "installed-updates/download-pending.json",
+      );
+      const intent = JSON.parse(await fs.readFile(pending, "utf8"));
+      const stage = path.join(
+        userData,
+        "installed-updates",
+        `download-${intent.download.id}`,
+      );
+      // Model the durable first record, before the directory witness committed.
+      delete intent.download.identity;
+      await fs.writeFile(pending, JSON.stringify(intent), { mode: 0o600 });
+      if (hasContents)
+        await fs.writeFile(path.join(stage, "unclaimed"), "keep");
+      mocks.exec.mockRejectedValue({ code: 1, stdout: "", stderr: "" });
+      const recovered = await createInstalledUpdateRuntime(options());
+      await recovered!.initialize();
+      expect(recovered!.snapshot()).toMatchObject({
+        phase: "failed",
+        recoveryRequired: hasContents,
+      });
+      if (hasContents)
+        expect(await fs.readFile(path.join(stage, "unclaimed"), "utf8")).toBe(
+          "keep",
+        );
+      else
+        await expect(fs.lstat(stage)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(mocks.download).toHaveBeenCalledTimes(1);
+      expect(mocks.helper).not.toHaveBeenCalled();
+      await recovered!.close();
+    },
+  );
+
+  it.each(["alive", "observation-unknown", "replaced-stage"] as const)(
+    "retains a crashed download when its producer or stage is %s",
+    async (scenario) => {
+      mocks.download.mockRejectedValue(new Error("fixture process crash"));
+      const first = await createInstalledUpdateRuntime(options());
+      await first!.initialize();
+      await first!.check();
+      await first!.close();
+      const pending = path.join(
+        userData,
+        "installed-updates/download-pending.json",
+      );
+      const intent = JSON.parse(await fs.readFile(pending, "utf8"));
+      expect(intent.download).toMatchObject({
+        producer: { pid: process.pid, processStart: "fixture-start" },
+      });
+      const stage = path.join(
+        userData,
+        "installed-updates",
+        `download-${intent.download.id}`,
+      );
+      if (scenario === "replaced-stage") {
+        await fs.rename(stage, stage + ".original");
+        await fs.mkdir(stage, { mode: 0o700 });
+      }
+      await fs.writeFile(path.join(stage, "sentinel"), "keep");
+      const native = mocks.exec.getMockImplementation()!;
+      mocks.exec.mockImplementation((file: string, args: string[]) => {
+        if (file === "/bin/ps") {
+          if (scenario === "replaced-stage")
+            throw { code: 1, stdout: "", stderr: "" };
+          if (scenario === "observation-unknown") throw { code: "EPERM" };
+          return { stdout: "fixture-start", stderr: "" };
+        }
+        return native(file, args);
+      });
+      const recovered = await createInstalledUpdateRuntime(options());
+      await recovered!.initialize();
+      await recovered!.check(true);
+      expect(recovered!.snapshot()).toMatchObject({
+        phase: "failed",
+        recoveryRequired: true,
+      });
+      expect(await fs.readFile(path.join(stage, "sentinel"), "utf8")).toBe(
+        "keep",
+      );
+      await fs.access(pending);
+      expect(mocks.download).toHaveBeenCalledTimes(1);
+      expect(mocks.helper).not.toHaveBeenCalled();
+      await recovered!.close();
+    },
+  );
+
   it.each(["matching", "mismatched", "missing"] as const)(
     "measures the installed plist before accepting a %s build baseline",
     async (scenario) => {

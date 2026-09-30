@@ -49,6 +49,10 @@ const Retained = z.strictObject({
   handle: z.string().max(4096),
   manifest: z.unknown(),
   operation: Operation.nullable(),
+  downloadId: z
+    .string()
+    .regex(/^[a-f0-9]{32}$/u)
+    .optional(),
   preparation: Operation.optional(),
   archiveReleased: z.boolean().optional(),
   helper: z
@@ -59,8 +63,24 @@ const Retained = z.strictObject({
     .nullable()
     .optional(),
 });
+const DownloadStage = z.strictObject({
+  phase: z.enum(["downloading", "verifying"]).optional(),
+  id: z.string().regex(/^[a-f0-9]{32}$/u),
+  producer: z.strictObject({
+    pid: z.number().int().min(2),
+    processStart: z.string().min(1).max(128),
+  }),
+  identity: z
+    .strictObject({
+      dev: z.string().regex(/^[0-9]{1,30}$/u),
+      ino: z.string().regex(/^[0-9]{1,30}$/u),
+      birthtimeNs: z.string().regex(/^[0-9]{1,30}$/u),
+    })
+    .optional(),
+});
 const DownloadIntent = z.strictObject({
   schema: z.literal("farol.update-download-intent/1"),
+  download: DownloadStage.optional(),
   buildId: Digest,
   archiveSha256: Digest,
 });
@@ -288,21 +308,36 @@ export async function createInstalledUpdateRuntime(
     return null;
   const root = path.join(options.userData, "installed-updates");
   await privateDirectory(root);
-  const verifier = createUpdatePackageVerifier({
-    archivePathForHandle: async (handle) => handle,
-    stagingParent: root,
-    extractorPath: path.join(options.directory, "update-archive.py"),
-    verifierPath: path.join(options.directory, "update-package.mjs"),
-  });
-  const transport = createGithubUpdateTransport({
-    privateStateDirectory: root,
-    verifyPackage: (handle, manifest) =>
-      verifier.verifyPackage(handle, manifest),
-  });
+  const context = (directory: string) => {
+    const verifier = createUpdatePackageVerifier({
+      archivePathForHandle: async (handle) => handle,
+      stagingParent: directory,
+      extractorPath: path.join(options.directory, "update-archive.py"),
+      verifierPath: path.join(options.directory, "update-package.mjs"),
+    });
+    const transport = createGithubUpdateTransport({
+      privateStateDirectory: directory,
+      verifyPackage: (handle, manifest) =>
+        verifier.verifyPackage(handle, manifest),
+    });
+    return { verifier, transport };
+  };
+  let { verifier, transport } = context(root);
+  let downloadId: string | undefined;
+  let downloadsCancelled = false;
+  const downloadDirectory = (id: string) => path.join(root, `download-${id}`);
+  const selectDownload = async (id?: string) => {
+    const directory = id === undefined ? root : downloadDirectory(id);
+    await canonicalOwnedDirectory(directory, true);
+    ({ verifier, transport } = context(directory));
+    if (downloadsCancelled) transport.cancelPending();
+    downloadId = id;
+  };
   let transportOutcomeUnknown = false;
   let stagedDownloadHandle: string | null = null;
   const checkedTransport = {
-    ...transport,
+    fetchJson: (url: string, maximum: number) =>
+      transport.fetchJson(url, maximum),
     download: async (url: string, maximum: number) => {
       const result = await transport.download(url, maximum);
       if (result.ok) stagedDownloadHandle = result.value.handle;
@@ -383,7 +418,9 @@ export async function createInstalledUpdateRuntime(
     }
     return readBuild(file);
   };
-  const originalHelperEnded = async (record: z.infer<typeof Retained>) => {
+  const originalHelperEnded = async (
+    record: Pick<z.infer<typeof Retained>, "helper">,
+  ) => {
     if (!record.helper) return false;
     try {
       const { stdout, stderr } = await execute(
@@ -412,6 +449,64 @@ export async function createInstalledUpdateRuntime(
         stderr?: unknown;
       };
       return result.code === 1 && result.stdout === "" && result.stderr === "";
+    }
+  };
+  const removeDownloadStage = async (
+    download: z.infer<typeof DownloadStage>,
+  ) => {
+    const directory = downloadDirectory(download.id);
+    let metadata;
+    try {
+      metadata = await fs.lstat(directory, { bigint: true });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    if (metadata) {
+      await canonicalOwnedDirectory(directory, true);
+      if (download.identity) {
+        if (
+          String(metadata.dev) !== download.identity.dev ||
+          String(metadata.ino) !== download.identity.ino ||
+          String(metadata.birthtimeNs) !== download.identity.birthtimeNs
+        )
+          throw new Error("UPDATE_DOWNLOAD_STAGE_CHANGED");
+        // The caller has reconciled the producer and every operation in this
+        // exclusive directory. Older retained packages and rollback stay outside.
+        await fs.rm(directory, { recursive: true, force: false });
+      } else {
+        // Interrupted allocation cannot have received bytes. rmdir refuses any
+        // contents rather than claiming an unrecorded directory is disposable.
+        await fs.rmdir(directory);
+      }
+    }
+  };
+  const reconcileInterruptedDownload = async (
+    intent: z.infer<typeof DownloadIntent>,
+  ) => {
+    const download = intent.download;
+    // Legacy intents have no producer/stage witness. Never guess their ownership.
+    if (
+      !download ||
+      download.phase !== "downloading" ||
+      !(await originalHelperEnded({ helper: download.producer }))
+    )
+      throw new Error("UPDATE_DOWNLOAD_PRODUCER_UNCONFIRMED");
+    await removeDownloadStage(download);
+    await writeRecord(path.join(root, "last-interrupted-download.json"), {
+      schema: "farol.interrupted-download/1",
+      intent,
+      outcome: "producer-ended-stage-removed",
+      observedAt: new Date().toISOString(),
+    });
+    await fs.unlink(pendingDownloadFile);
+    const parent = await fs.open(
+      root,
+      constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
+    );
+    try {
+      await parent.sync();
+    } finally {
+      await parent.close();
     }
   };
   const drained = async () => {
@@ -485,27 +580,45 @@ export async function createInstalledUpdateRuntime(
     }
   };
   const controller = new InstalledUpdater({
-    cancelPending: () => transport.cancelPending(),
+    cancelPending: () => {
+      downloadsCancelled = true;
+      transport.cancelPending();
+    },
     now: Date.now,
     publish: options.publish,
     recover: async () => {
       if ((await readRecord(cleanupFile)) !== null)
         return known("UPDATE_STAGING_OUTCOME_UNKNOWN");
       const downloadRaw = await readRecord(pendingDownloadFile);
-      const downloadIntent =
+      let downloadIntent =
         downloadRaw === null ? null : DownloadIntent.parse(downloadRaw);
       const pendingRaw = await readRecord(restoreFile);
       let pending =
         pendingRaw === null ? null : RestoreIntent.parse(pendingRaw);
       const raw = await readRecord(readyFile);
       const fromReady = raw !== null;
-      if (downloadIntent && !fromReady)
-        return known("UPDATE_STAGING_OUTCOME_UNKNOWN");
+      let interruptedDownload = false;
+      if (downloadIntent && !fromReady) {
+        if (pending) return known("UPDATE_RESTORE_OUTCOME_UNKNOWN");
+        try {
+          await reconcileInterruptedDownload(downloadIntent);
+        } catch {
+          return known("UPDATE_STAGING_OUTCOME_UNKNOWN");
+        }
+        downloadIntent = null;
+        interruptedDownload = true;
+      }
       const previous = fromReady ? null : await readRecord(receiptFile);
       if (raw === null && previous === null)
         return pending
           ? known("UPDATE_RESTORE_OUTCOME_UNKNOWN")
-          : { ok: true, update: null };
+          : interruptedDownload
+            ? {
+                ok: false,
+                code: "UPDATE_DOWNLOAD_INTERRUPTED",
+                recoveryRequired: false,
+              }
+            : { ok: true, update: null };
       retained = fromReady
         ? Retained.parse(raw)
         : Retained.parse(
@@ -516,13 +629,15 @@ export async function createInstalledUpdateRuntime(
               ...record
             }) => record)(SavedReceipt.parse(previous)),
           );
+      await selectDownload(retained.downloadId);
       const parsed = parseGithubReleaseManifest(retained.manifest);
       if (!parsed.ok) return known("UPDATE_RETAINED_MANIFEST_INVALID");
       if (
         downloadIntent &&
         (retained.operation !== null ||
           downloadIntent.buildId !== parsed.value.buildId ||
-          downloadIntent.archiveSha256 !== parsed.value.archiveSha256)
+          downloadIntent.archiveSha256 !== parsed.value.archiveSha256 ||
+          downloadIntent.download?.id !== retained.downloadId)
       )
         return known("UPDATE_STAGING_OUTCOME_UNKNOWN");
       if (pending?.notStartedAt) {
@@ -755,19 +870,56 @@ export async function createInstalledUpdateRuntime(
     },
     download: async () => {
       if (!candidate) return known("UPDATE_CANDIDATE_MISSING");
-      // Persist before writing archive bytes. A crash or lost cleanup receipt
-      // leaves a visible recovery obligation; a later launch never redownloads it.
-      await writeRecord(pendingDownloadFile, {
-        schema: "farol.update-download-intent/1",
+      let processStart: string;
+      try {
+        processStart = await captureInstalledProcessStart(process.pid);
+      } catch {
+        return known("UPDATE_PRODUCER_IDENTITY_UNCONFIRMED");
+      }
+      const download: z.infer<typeof DownloadStage> = {
+        phase: "downloading",
+        id: randomBytes(16).toString("hex"),
+        producer: { pid: process.pid, processStart },
+      };
+      const intent = {
+        schema: "farol.update-download-intent/1" as const,
         buildId: candidate.manifest.buildId,
         archiveSha256: candidate.manifest.archiveSha256,
-      });
+        download,
+      };
+      // Bind allocation and the original process before any request or extraction.
+      // A crash can reconcile this exact directory without touching older rollback.
+      await writeRecord(pendingDownloadFile, intent);
+      const directory = downloadDirectory(download.id);
+      await fs.mkdir(directory, { mode: 0o700 });
+      await canonicalOwnedDirectory(directory, true);
+      const metadata = await fs.lstat(directory, { bigint: true });
+      download.identity = {
+        dev: String(metadata.dev),
+        ino: String(metadata.ino),
+        birthtimeNs: String(metadata.birthtimeNs),
+      };
+      await writeRecord(pendingDownloadFile, intent);
+      await selectDownload(download.id);
+      if (downloadsCancelled) {
+        // No request or extraction has begun. Do not revive a cancelled lifetime
+        // by replacing its transport after Quit raced durable allocation.
+        await fs.rmdir(directory);
+        await fs.unlink(pendingDownloadFile);
+        return known("UPDATE_DOWNLOAD_CANCELLED");
+      }
       let downloaded: Awaited<ReturnType<typeof downloadAndVerifyGithubUpdate>>;
       try {
-        downloaded = await downloadAndVerifyGithubUpdate(
-          candidate,
-          checkedTransport,
-        );
+        downloaded = await downloadAndVerifyGithubUpdate(candidate, {
+          ...checkedTransport,
+          verifyPackage: async (handle, manifest) => {
+            // Native verification may have its own child lifetime. A lost
+            // result must not be treated as an interrupted HTTP-only stage.
+            download.phase = "verifying";
+            await writeRecord(pendingDownloadFile, intent);
+            return checkedTransport.verifyPackage(handle, manifest);
+          },
+        });
       } catch {
         return {
           ok: false,
@@ -796,6 +948,9 @@ export async function createInstalledUpdateRuntime(
             };
           }
         }
+        // A known failed request has drained all its native work. Reclaim this
+        // attempt before clearing its intent; uncertainty keeps recovery fenced.
+        await removeDownloadStage(download);
         await fs.unlink(pendingDownloadFile);
         return known(`UPDATE_${downloaded.code.toUpperCase()}`);
       }
@@ -808,7 +963,12 @@ export async function createInstalledUpdateRuntime(
     retain: async (update: ReadyUpdate) => {
       // Later retains the archive, not an extra expanded application. Restart
       // re-verifies the same archive before copying it to the helper's stage.
-      retained = { schema: "farol.ready-update/1", ...update, operation: null };
+      retained = {
+        schema: "farol.ready-update/1",
+        ...update,
+        operation: null,
+        ...(downloadId === undefined ? {} : { downloadId }),
+      };
       try {
         await writeRecord(readyFile, retained);
       } catch {
@@ -828,6 +988,7 @@ export async function createInstalledUpdateRuntime(
           throw new Error("UPDATE_STAGING_OUTCOME_UNKNOWN");
         const cleanup = await transport.discard(update.handle);
         if (!cleanup.ok) throw new Error("UPDATE_STAGING_OUTCOME_UNKNOWN");
+        if (pending.download) await removeDownloadStage(pending.download);
         await fs.unlink(pendingDownloadFile);
         stagedDownloadHandle = null;
         retained = null;
