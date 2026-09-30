@@ -28,6 +28,7 @@ import {
   installedFarolSlot,
   startInstalledUpdateHelper,
   type InstalledUpdateOperation,
+  type InstalledUpdateLaunch,
 } from "../../modules/release/infra/native/installed-update-helper";
 import type { BuildIdentity } from "../../pkg/build-info/identity";
 
@@ -176,6 +177,32 @@ async function writeRecord(file: string, value: unknown): Promise<void> {
     await parent.sync();
   } finally {
     await parent.close();
+  }
+}
+
+// A refusal acknowledgment alone is not a terminal process observation. Keep
+// every uncertain child bound; only its exact pre-mutation exit permits retry.
+async function confirmedRefusal(
+  handoff: InstalledUpdateLaunch,
+): Promise<boolean> {
+  if (handoff.status !== "refused") return false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const terminal = await Promise.race([
+      handoff.operation.completion,
+      new Promise<null>((resolve) => {
+        timer = setTimeout(() => resolve(null), 3000);
+      }),
+    ]);
+    return (
+      terminal?.code === 70 &&
+      terminal.signal === null &&
+      terminal.protocolError === null &&
+      terminal.terminal?.phase === "refused" &&
+      terminal.terminal.error === handoff.reason
+    );
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -589,6 +616,36 @@ export async function createInstalledUpdateRuntime(
           },
         );
         operation = handoff.operation;
+        if (handoff.status === "refused" && (await confirmedRefusal(handoff))) {
+          if (
+            (await readJournal(op)).phase !== journal.phase ||
+            !sameBuild(await readBuild(slot), current)
+          )
+            return {
+              status: "unknown",
+              code: "UPDATE_RESTORE_OUTCOME_UNKNOWN",
+            };
+          await writeRecord(path.join(root, op.operationId, "refusal.json"), {
+            schema: "farol.update-refusal/1",
+            action,
+            operation: op,
+            code: handoff.reason,
+            priorPhase: journal.phase,
+          });
+          await fs.unlink(restoreFile);
+          const parent = await fs.open(
+            root,
+            constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
+          );
+          try {
+            await parent.sync();
+          } finally {
+            await parent.close();
+          }
+          operation = null;
+          keepAdmission = false;
+          return { status: "blocked", code: "UPDATE_HELPER_REFUSED" };
+        }
         if (handoff.status !== "ready")
           return { status: "unknown", code: "UPDATE_RESTORE_OUTCOME_UNKNOWN" };
         options.quit();
@@ -657,6 +714,26 @@ export async function createInstalledUpdateRuntime(
           },
         );
         operation = handoff.operation;
+        if (handoff.status === "refused" && (await confirmedRefusal(handoff))) {
+          if (
+            (await readRecord(path.join(operationRoot, "journal.json"))) !==
+              null ||
+            !sameBuild(await readBuild(slot), source)
+          )
+            return { status: "unknown", code: "UPDATE_HANDOFF_UNKNOWN" };
+          await writeRecord(path.join(operationRoot, "refusal.json"), {
+            schema: "farol.update-refusal/1",
+            action: "apply",
+            operation: retained.operation,
+            code: handoff.reason,
+          });
+          const cleared = { ...retained, operation: null, helper: null };
+          await writeRecord(readyFile, cleared);
+          retained = cleared;
+          operation = null;
+          keepAdmission = false;
+          return { status: "blocked", code: "UPDATE_HELPER_REFUSED" };
+        }
         if (operation.pid !== null) {
           retained = {
             ...retained,

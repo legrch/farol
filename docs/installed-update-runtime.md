@@ -15,6 +15,12 @@ dispatch. Only the helper's exact readiness acknowledgment permits normal Quit.
 Unknown acknowledgment or completion never permits another apply. The same child
 handle remains observable while the original app is alive.
 
+A pre-readiness refusal is retryable only after that same helper's classified
+terminal exit confirms it never crossed the mutation handoff. The app rechecks
+the unchanged slot/journal, preserves the refusal receipt, clears only that
+pre-mutation intent and releases admission. A missing, timed-out or conflicting
+terminal result remains unknown and never permits a substitute helper.
+
 At startup the updater reads the same operation journal and measures the current
 slot and predecessor/staged/failed pair. It does not launch a helper while
 rendering or silently download a replacement. A settled target offers the measured

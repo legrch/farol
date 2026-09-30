@@ -291,6 +291,187 @@ describe("installed updater composition (disposable filesystem and mocked native
     expect(release).not.toHaveBeenCalled();
     expect(controller.snapshot().phase).toBe("applying");
   });
+  it("keeps a confirmed pre-readiness refusal retryable across app lifetimes", async () => {
+    const controller = await prepared();
+    mocks.helper.mockResolvedValueOnce({
+      status: "refused",
+      reason: "process_identity",
+      operation: {
+        pid: 123,
+        completion: Promise.resolve({
+          code: 70,
+          signal: null,
+          protocolError: null,
+          terminal: { phase: "refused", error: "process_identity" },
+        }),
+      },
+    });
+    await controller.restart();
+    expect(controller.snapshot()).toMatchObject({
+      phase: "ready",
+      blockedBy: "UPDATE_HELPER_REFUSED",
+    });
+    expect(release).toHaveBeenCalledTimes(1);
+    expect(quit).not.toHaveBeenCalled();
+    const refusedId = mocks.helper.mock.calls[0]![1].operationId;
+    expect(JSON.parse(await fs.readFile(ready, "utf8")).operation).toBeNull();
+    expect(
+      JSON.parse(
+        await fs.readFile(
+          path.join(userData, "installed-updates", refusedId, "refusal.json"),
+          "utf8",
+        ),
+      ),
+    ).toMatchObject({
+      action: "apply",
+      operation: { operationId: refusedId },
+      code: "process_identity",
+    });
+    controller.close();
+    const next = await createInstalledUpdateRuntime(options());
+    await next!.initialize();
+    expect(next!.snapshot()).toMatchObject({ phase: "ready" });
+    expect(mocks.helper).toHaveBeenCalledTimes(1);
+    await next!.restart();
+    expect(mocks.helper).toHaveBeenCalledTimes(2);
+    expect(mocks.helper.mock.calls[1]![1].operationId).not.toBe(refusedId);
+    expect(quit).toHaveBeenCalledTimes(1);
+    expect(mocks.download).toHaveBeenCalledTimes(1);
+  });
+  it("does not turn a refusal without terminal exit into a retry after the bounded wait", async () => {
+    const controller = await prepared();
+    mocks.helper.mockResolvedValue({
+      status: "refused",
+      reason: "process_identity",
+      operation: { pid: 123, completion: new Promise(() => undefined) },
+    });
+    await controller.restart();
+    expect(controller.snapshot()).toMatchObject({
+      phase: "failed",
+      recoveryRequired: true,
+    });
+    expect(release).not.toHaveBeenCalled();
+    expect(quit).not.toHaveBeenCalled();
+    expect(mocks.helper).toHaveBeenCalledTimes(1);
+  }, 6000);
+
+  for (const completion of [
+    {
+      code: 70,
+      signal: null,
+      protocolError: "terminal_output_invalid",
+      terminal: null,
+    },
+    {
+      code: null,
+      signal: "SIGTERM",
+      protocolError: null,
+      terminal: { phase: "refused", error: "process_identity" },
+    },
+    {
+      code: 70,
+      signal: null,
+      protocolError: null,
+      terminal: { phase: "prepared", error: "process_identity" },
+    },
+  ]) {
+    it(`retains refusal intent without an exact pre-mutation terminal result ${JSON.stringify(completion)}`, async () => {
+      const controller = await prepared();
+      mocks.helper.mockResolvedValue({
+        status: "refused",
+        reason: "process_identity",
+        operation: { pid: 123, completion: Promise.resolve(completion) },
+      });
+      await controller.restart();
+      await controller.restart();
+      expect(controller.snapshot()).toMatchObject({
+        phase: "failed",
+        recoveryRequired: true,
+      });
+      expect(release).not.toHaveBeenCalled();
+      expect(quit).not.toHaveBeenCalled();
+      expect(mocks.helper).toHaveBeenCalledTimes(1);
+      expect(
+        JSON.parse(await fs.readFile(ready, "utf8")).operation,
+      ).not.toBeNull();
+    });
+  }
+  it("clears only a confirmed refused restore intent and preserves its original journal", async () => {
+    const first = await prepared();
+    await first.restart();
+    const record = JSON.parse(await fs.readFile(ready, "utf8"));
+    const op = record.operation;
+    const opRoot = path.join(userData, "installed-updates", op.operationId);
+    const journal = {
+      schema: "farol.installed-update-journal/1",
+      ...op,
+      phase: "completed",
+    };
+    await fs.writeFile(
+      path.join(opRoot, "journal.json"),
+      JSON.stringify(journal),
+      { mode: 0o600 },
+    );
+    await fs.mkdir(path.join(opRoot, "previous.app"));
+    mocks.exec.mockImplementation(async (_file: unknown, args: string[]) => ({
+      stdout: JSON.stringify(
+        args[0]!.endsWith("update-obligations.mjs")
+          ? {
+              drained: true,
+              obligationCount: 0,
+              unreadableCount: 0,
+              changedCount: 0,
+            }
+          : args[1]!.endsWith("previous.app")
+            ? source
+            : target,
+      ),
+    }));
+    const updatedOptions = {
+      ...options(),
+      build: { ...build, version: target.version, buildId: target.buildId },
+    };
+    const next = await createInstalledUpdateRuntime(updatedOptions);
+    await next!.initialize();
+    mocks.helper.mockResolvedValueOnce({
+      status: "refused",
+      reason: "process_identity",
+      operation: {
+        pid: 234,
+        completion: Promise.resolve({
+          code: 70,
+          signal: null,
+          protocolError: null,
+          terminal: { phase: "refused", error: "process_identity" },
+        }),
+      },
+    });
+    quit.mockClear();
+    await next!.restore("rollback");
+    expect(next!.snapshot()).toMatchObject({
+      phase: "idle",
+      rollbackVersion: source.version,
+      blockedBy: "UPDATE_HELPER_REFUSED",
+    });
+    expect(release).toHaveBeenCalledTimes(1);
+    expect(quit).not.toHaveBeenCalled();
+    await expect(
+      fs.stat(path.join(userData, "installed-updates/restore-pending.json")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+    expect(
+      JSON.parse(await fs.readFile(path.join(opRoot, "journal.json"), "utf8")),
+    ).toEqual(journal);
+    const restarted = await createInstalledUpdateRuntime(updatedOptions);
+    await restarted!.initialize();
+    expect(restarted!.snapshot()).toMatchObject({
+      phase: "idle",
+      rollbackVersion: source.version,
+    });
+    expect(mocks.helper).toHaveBeenCalledTimes(2);
+    await restarted!.restore("rollback");
+    expect(mocks.helper).toHaveBeenCalledTimes(3);
+    expect(mocks.helper.mock.calls[2]![1].operationId).toBe(op.operationId);
+  });
   it("does not Quit or dispatch twice after unknown handoff, including the next app lifetime", async () => {
     const controller = await prepared();
     mocks.helper.mockResolvedValue({
