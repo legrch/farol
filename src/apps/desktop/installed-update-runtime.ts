@@ -782,10 +782,34 @@ export async function createInstalledUpdateRuntime(
       // Later retains the archive, not an extra expanded application. Restart
       // re-verifies the same archive before copying it to the helper's stage.
       retained = { schema: "farol.ready-update/1", ...update, operation: null };
-      await writeRecord(readyFile, retained);
+      try {
+        await writeRecord(readyFile, retained);
+      } catch {
+        // A lost acknowledgment may have committed ready.json. Keep that archive
+        // for startup reconciliation; do not reclaim it as a failed write.
+        if ((await readRecord(readyFile)) !== null)
+          throw new Error("UPDATE_READY_COMMIT_UNKNOWN");
+        const pending = DownloadIntent.parse(
+          await readRecord(pendingDownloadFile),
+        );
+        if (
+          pending.buildId !== update.manifest.buildId ||
+          pending.archiveSha256 !== update.manifest.archiveSha256
+        )
+          throw new Error("UPDATE_STAGING_OUTCOME_UNKNOWN");
+        if (!(await discardVerifiedStage(update.handle)))
+          throw new Error("UPDATE_STAGING_OUTCOME_UNKNOWN");
+        const cleanup = await transport.discard(update.handle);
+        if (!cleanup.ok) throw new Error("UPDATE_STAGING_OUTCOME_UNKNOWN");
+        await fs.unlink(pendingDownloadFile);
+        stagedDownloadHandle = null;
+        retained = null;
+        return known("UPDATE_READY_PERSIST_FAILED");
+      }
       if (!(await discardVerifiedStage(update.handle)))
         throw new Error("UPDATE_STAGING_OUTCOME_UNKNOWN");
       await fs.unlink(pendingDownloadFile);
+      return undefined;
     },
     restore: async (action) => {
       const op = restorable?.operation;
@@ -994,6 +1018,28 @@ export async function createInstalledUpdateRuntime(
             waitSeconds: 120,
             relaunch: true,
           },
+          {
+            recordSpawn: async (spawned) => {
+              operation = spawned;
+              if (spawned.pid === null)
+                throw new Error("UPDATE_HELPER_IDENTITY_UNKNOWN");
+              // Record before helper code or request bytes are sent, then enrich
+              // with start time. A failed observation preserves the actual PID.
+              retained = {
+                ...retained!,
+                helper: { pid: spawned.pid, processStart: null },
+              };
+              await writeRecord(readyFile, retained);
+              retained = {
+                ...retained,
+                helper: {
+                  pid: spawned.pid,
+                  processStart: await captureInstalledProcessStart(spawned.pid),
+                },
+              };
+              await writeRecord(readyFile, retained);
+            },
+          },
         );
         operation = handoff.operation;
         if (
@@ -1041,24 +1087,6 @@ export async function createInstalledUpdateRuntime(
             `farol-update-helper ${JSON.stringify({ operationId, code: result.code, phase: result.terminal?.phase ?? "unknown" })}\n`,
           );
         });
-        if (operation.pid !== null) {
-          // Persist the actual PID before the fallible metadata observation.
-          // A null start time is explicitly unknown: only an absent PID can
-          // establish termination later; a present/reused PID remains blocked.
-          retained = {
-            ...retained,
-            helper: { pid: operation.pid, processStart: null },
-          };
-          await writeRecord(readyFile, retained);
-          retained = {
-            ...retained,
-            helper: {
-              pid: operation.pid,
-              processStart: await captureInstalledProcessStart(operation.pid),
-            },
-          };
-          await writeRecord(readyFile, retained);
-        }
         if (handoff.status !== "ready")
           return {
             status: "unknown",

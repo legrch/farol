@@ -65,7 +65,13 @@ class Transport extends EventEmitter {
 }
 const tick = async (): Promise<void> =>
   await new Promise((resolve) => setImmediate(resolve));
-async function launch(readinessTimeoutMs = 1000, input = request) {
+async function launch(
+  readinessTimeoutMs = 1000,
+  input = request,
+  recordSpawn?: (
+    operation: import("../../src/modules/release/infra/native/installed-update-helper.js").InstalledUpdateOperation,
+  ) => Promise<void>,
+) {
   const child = new Transport();
   let seen!: () => void;
   const spawned = new Promise<void>((resolve) => {
@@ -80,12 +86,70 @@ async function launch(readinessTimeoutMs = 1000, input = request) {
   });
   const pending = startInstalledUpdateHelper(helperPath, input, {
     readinessTimeoutMs,
+    ...(recordSpawn ? { recordSpawn } : {}),
   });
   await spawned;
   return { child, pending };
 }
 
 describe("installed helper bounded readiness protocol", () => {
+  it("persists the spawned identity before sending program/request bytes or awaiting readiness", async () => {
+    let persist!: () => void;
+    const recordSpawn = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          persist = resolve;
+        }),
+    );
+    const { child, pending } = await launch(1000, request, recordSpawn);
+    const before = {
+      programEnded: child.stdin.writableEnded,
+      requestEnded: child.requestPipe.writableEnded,
+    };
+    const calls = recordSpawn.mock.calls.length;
+    persist?.();
+    await tick();
+    child.ack.end(`${JSON.stringify(event())}\n`);
+    const result = await pending;
+    child.finish(0);
+    await result.operation.completion;
+    expect(calls).toBe(1);
+    expect(before).toEqual({ programEnded: false, requestEnded: false });
+    expect(child.stdin.writableEnded).toBe(true);
+    expect(result.status).toBe("ready");
+  });
+
+  it.each(["failed", "timed-out"])(
+    "never sends after a %s spawned-identity record",
+    async (mode) => {
+      let release!: () => void;
+      const record =
+        mode === "failed"
+          ? async () => {
+              throw new Error("fixture record failure");
+            }
+          : () =>
+              new Promise<void>((resolve) => {
+                release = resolve;
+              });
+      const { child, pending } = await launch(10, request, record);
+      const result = await pending;
+      release?.();
+      await tick();
+      child.finish(0);
+      await result.operation.completion;
+      expect(result).toMatchObject({
+        status: "outcome_unknown",
+        reason: mode === "failed" ? "spawn_record_failed" : "readiness_timeout",
+      });
+      expect(child.stdin.destroyed).toBe(true);
+      expect(child.requestPipe.destroyed).toBe(true);
+      expect(child.stdin.writableEnded).toBe(false);
+      expect(child.requestPipe.writableEnded).toBe(false);
+      expect(spawn).toHaveBeenCalledTimes(1);
+    },
+  );
+
   it.each(["ENOENT", "EACCES", "EPERM"])(
     "reports a confirmed %s before spawn only after close, without writing the request",
     async (code) => {

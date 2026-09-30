@@ -195,14 +195,15 @@ beforeEach(async () => {
         preserveTimestamps: true,
       }),
   );
-  mocks.helper.mockResolvedValue({
-    status: "ready",
-    operation: {
+  mocks.helper.mockImplementation(async (_path, _input, launchOptions) => {
+    const operation = {
       completion: new Promise(() => undefined),
       observe: () => ({}),
       pid: 123,
       operationId: "fixture",
-    },
+    };
+    await launchOptions?.recordSpawn?.(operation);
+    return { status: "ready", operation };
   });
 });
 afterEach(async () => {
@@ -251,6 +252,106 @@ describe("installed updater composition (disposable filesystem and mocked native
       expect(quit).not.toHaveBeenCalled();
     },
   );
+
+  it.each(["before-commit", "after-commit", "cleanup-unknown"] as const)(
+    "reconciles retention write failure %s without losing or replaying the archive",
+    async (fault) => {
+      const rename = fs.rename.bind(fs);
+      vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+        if (to === ready) {
+          if (fault === "after-commit") await rename(from, to);
+          throw new Error("fixture ready commit failure");
+        }
+        return rename(from, to);
+      });
+      if (fault === "cleanup-unknown")
+        mocks.discardArchive.mockResolvedValue({
+          ok: false,
+          certainty: "unknown",
+        });
+      const first = await createInstalledUpdateRuntime(options());
+      await first!.initialize();
+      await first!.check();
+      const state = first!.snapshot();
+      vi.mocked(fs.rename).mockImplementation(rename);
+      await first!.close();
+      const second = await createInstalledUpdateRuntime(options());
+      await second!.initialize();
+      if (fault === "before-commit") {
+        expect(state).toMatchObject({
+          phase: "failed",
+          code: "UPDATE_READY_PERSIST_FAILED",
+          recoveryRequired: false,
+        });
+        expect(second!.snapshot().phase).toBe("idle");
+        expect(mocks.discardArchive).toHaveBeenCalledExactlyOnceWith(
+          path.join(root, "archive.zip"),
+        );
+        await expect(
+          fs.stat(
+            path.join(userData, "installed-updates/download-pending.json"),
+          ),
+        ).rejects.toMatchObject({ code: "ENOENT" });
+      } else {
+        expect(state).toMatchObject({
+          phase: "failed",
+          recoveryRequired: true,
+        });
+        expect(second!.snapshot().phase).toBe(
+          fault === "after-commit" ? "ready" : "failed",
+        );
+        if (fault === "after-commit")
+          expect(mocks.discardArchive).not.toHaveBeenCalled();
+      }
+      expect(mocks.download).toHaveBeenCalledTimes(1);
+      expect(mocks.helper).not.toHaveBeenCalled();
+      await second!.close();
+    },
+  );
+
+  it("recovers the recorded helper after interruption before readiness returns", async () => {
+    const first = await prepared();
+    let observed!: () => void;
+    const atSpawn = new Promise<void>((resolve) => {
+      observed = resolve;
+    });
+    mocks.helper.mockImplementation(async (_path, _input, launchOptions) => {
+      await launchOptions?.recordSpawn?.({
+        pid: 123,
+        completion: new Promise(() => undefined),
+        observe: () => ({}),
+      });
+      observed();
+      // The crashed lifetime never resumes. This mock owns no live child or I/O.
+      return new Promise(() => undefined);
+    });
+    void first.restart();
+    await atSpawn;
+    const dispatched = JSON.parse(await fs.readFile(ready, "utf8"));
+    expect(dispatched.helper).toEqual({
+      pid: 123,
+      processStart: "fixture-start",
+    });
+    mocks.exec.mockImplementation(async (file: string, args: string[]) => {
+      if (file === "/bin/ps") throw { code: 1, stdout: "", stderr: "" };
+      return {
+        stdout: JSON.stringify(
+          args[1]!.endsWith("staged.app") ? target : source,
+        ),
+      };
+    });
+    const second = await createInstalledUpdateRuntime(options());
+    await second!.initialize();
+    expect(second!.snapshot()).toMatchObject({
+      phase: "ready",
+      deferred: true,
+    });
+    expect(JSON.parse(await fs.readFile(ready, "utf8")).operation).toBeNull();
+    expect(mocks.helper).toHaveBeenCalledTimes(1);
+    expect(mocks.download).toHaveBeenCalledTimes(1);
+    expect(quit).not.toHaveBeenCalled();
+    await second!.close();
+  });
 
   it("bounds abandoned extraction directories before invoking a verifier or opening an archive", async () => {
     const { createUpdatePackageVerifier } = await vi.importActual<

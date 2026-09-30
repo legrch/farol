@@ -38,7 +38,7 @@ export type InstalledUpdaterPorts = Readonly<{
   download(): Promise<
     Readonly<{ ok: true; update: ReadyUpdate }> | KnownFailure
   >;
-  retain(update: ReadyUpdate): Promise<void>;
+  retain(update: ReadyUpdate): Promise<void | KnownFailure>;
   // The composition holds existing admission fences, checks real obligations,
   // and hands off to the helper before it requests the application's normal quit.
   restart(update: ReadyUpdate): Promise<UpdateHandoff>;
@@ -196,7 +196,15 @@ export class InstalledUpdater {
         return;
       }
       // A visible ready state always has a durable, verifiable restart record.
-      await this.ports.retain(downloaded.update);
+      const retention = await this.ports.retain(downloaded.update);
+      if (retention) {
+        this.publish({
+          phase: "failed",
+          code: retention.code,
+          recoveryRequired: retention.recoveryRequired ?? false,
+        });
+        return;
+      }
       stagingStarted = false;
       if (this.closed) return;
       this.ready = downloaded.update;

@@ -288,7 +288,12 @@ function parseTerminal(
 export async function startInstalledUpdateHelper(
   helperPath: string,
   input: InstalledUpdateRequest,
-  options: Readonly<{ readinessTimeoutMs?: number }> = {},
+  options: Readonly<{
+    readinessTimeoutMs?: number;
+    // The application records this actual handle before any helper program or
+    // operation bytes are sent. Failure remains an observed, unknown launch.
+    recordSpawn?(operation: InstalledUpdateOperation): Promise<void>;
+  }> = {},
 ): Promise<InstalledUpdateLaunch> {
   assertInput(input);
   const readinessTimeoutMs = options.readinessTimeoutMs ?? 180_000;
@@ -385,6 +390,7 @@ export async function startInstalledUpdateHelper(
   let settled = false;
   let spawned = false;
   let spawnFailed = false;
+  let requestSent = false;
   const detach = (): void => {
     child.unref();
     for (const pipe of child.stdio)
@@ -393,6 +399,12 @@ export async function startInstalledUpdateHelper(
   const finish = (result: InstalledUpdateLaunch): void => {
     if (settled) return;
     settled = true;
+    if (!requestSent) {
+      // Python has received no program. Closing only our pipes lets it exit
+      // without executing an install; retain its handle for terminal readback.
+      child.stdin?.destroy();
+      (child.stdio[3] as Writable | null)?.destroy();
+    }
     clearTimeout(timer);
     detach();
     resolveLaunch(result);
@@ -529,10 +541,26 @@ export async function startInstalledUpdateHelper(
     stream.once("error", () => unknown("request_channel_error"));
     stream.end(data);
   };
-  child.once("spawn", () => {
-    spawned = true;
+  const sendRequest = () => {
+    if (settled) return;
+    requestSent = true;
     write(child.stdin, bytes);
     write(child.stdio[3] as Writable | null, JSON.stringify(request));
+  };
+  child.once("spawn", () => {
+    spawned = true;
+    if (!options.recordSpawn) {
+      sendRequest();
+      return;
+    }
+    void (async () => {
+      try {
+        await options.recordSpawn!(operation);
+        sendRequest();
+      } catch {
+        unknown("spawn_record_failed");
+      }
+    })();
   });
   if (!ack || !child.stdout) unknown("readiness_channel_missing");
   return launched;

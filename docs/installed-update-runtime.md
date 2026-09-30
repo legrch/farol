@@ -14,8 +14,12 @@ A durable ready record binds the verified archive to an operation before helper
 dispatch. Only the helper's exact readiness acknowledgment permits normal Quit.
 Unknown acknowledgment or completion never permits another apply. The same child
 handle remains observable while the original app is alive, including after a
-process metadata readback failure. The actual helper PID is persisted before
-reading its start time. An unavailable start time remains null, never invented:
+process metadata readback failure. The actual helper PID is persisted on the spawn
+event, before sending helper program/request bytes or waiting for readiness, then
+enriched with its start time.
+Failure or timeout while recording closes only the unsent pipes; it never sends
+a late request or changes an unknown result into permission to relaunch. An
+unavailable start time remains null, never invented:
 a present PID or failed process observation cannot prove that helper exited.
 Only confirmed termination plus an absent journal, unchanged source and exact
 staged target (with no predecessor/failed copy) can reconcile a pre-mutation
@@ -46,6 +50,16 @@ interrupted cleanup is reconciled on startup without dispatch. Rollback/recovery
 records the same no-spawn proof in its exact restore intent and rechecks unchanged
 journal and installed identity before clearing it. A lost proof or unknown close
 remains blocked; no-PID alone never permits another attempt.
+
+Normal Quit cancels this updater lifetime's HTTPS requests and waits through the
+existing bounded quit drain for download cleanup or durable retention. A completed
+verified archive is retained even after its UI closes. A missed drain deadline
+records the updater as unconfirmed; it never claims cleanup succeeded.
+
+If the ready-record write fails, an observed absent ready record plus the exact
+download intent permits reclaiming the already-owned extraction/archive before
+clearing the intent. Only confirmed cleanup reports a retryable persistence failure.
+A possibly committed ready record or uncertain cleanup retains the recovery fence.
 
 A rejected download releases its extracted stage and archive bytes before the
 download intent is cleared. Archive cleanup opens the issued file without
