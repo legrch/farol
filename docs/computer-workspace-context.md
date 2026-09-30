@@ -1,8 +1,21 @@
 # Approved Computer workspace context
 
-The model-visible Computer MCP includes `computer_workspace_bootstrap`,
+The model-visible Computer MCP includes `computer_workspace_catalogue`,
+`computer_workspace_bootstrap`,
 `computer_guidance_search` and `computer_guidance_fetch`. These read-only routes
 do not enable Model or Product Agent and do not depend on a browser login.
+
+Call `computer_workspace_catalogue` without arguments before selecting a folder.
+It returns exact workspace IDs and task scope roots from the selected participant's
+materialized grant, including delegated narrowing. Owner-approved folders outside
+that task are not candidates. Every candidate passes the existing authority-bound
+native context operation, then all contexts are checked again before disclosure.
+A refusal, expiry, revocation or changed root discards the entire collected catalogue.
+The catalogue never reads file contents, lists filenames in its response, grants
+permissions or invents aliases. Exact-file-only scopes cannot browse a directory and
+are omitted. This is a bounded twice-checked observation of at most 32 roots, not an
+atomic filesystem snapshot. A previously attached client may need its normal tool
+metadata refresh to discover this additive tool.
 
 Bootstrap accepts a selected `workspaceId` and canonical `relativeDirectory`
 (`.` for the task scope root). It verifies that directory through the existing

@@ -157,6 +157,43 @@ afterEach(async () => {
 });
 
 describe("read-only Computer launch contract", () => {
+  it("takes catalogue candidates from the final delegate, omitting other approvals and exact-file scopes", () => {
+    const launch = launchContract();
+    launch.approval.workspaces.push({
+      workspaceId: "foreign",
+      root: "/private/other",
+      access: "read",
+      rootIdentity: { device: "1", inode: "9" },
+    });
+    launch.admission.workspaces.push({
+      workspaceId: "foreign",
+      root: "/private/other",
+      mode: "subtree",
+      access: "read",
+    });
+    launch.delegationChain[2]!.narrowing = {
+      workspaces: [launch.admission.workspaces[0]!],
+      capabilities: launch.admission.capabilities,
+      network: "none",
+      commands: "none",
+    };
+    expect(
+      materializeReadonlyComputerLaunch(launch, 1000).workspaceCatalogueIds,
+    ).toEqual(["workspace-a"]);
+    launch.delegationChain[2]!.narrowing!.workspaces = [
+      {
+        workspaceId: "workspace-a",
+        root: workspaceRoot,
+        mode: "exact",
+        paths: [workspaceRoot + "/README.md"],
+        access: "read",
+      },
+    ];
+    expect(
+      materializeReadonlyComputerLaunch(launch, 1000).workspaceCatalogueIds,
+    ).toEqual([]);
+  });
+
   it("uses explicit schema v2 to carry applicable write authority through Critic", () => {
     const launch = mutableLaunchContract();
     expect(

@@ -237,6 +237,7 @@ try {
   assert.deepEqual(
     tools.tools.map((tool) => tool.name),
     [
+      "computer_workspace_catalogue",
       "computer_workspace_bootstrap",
       "computer_guidance_search",
       "computer_guidance_fetch",
@@ -269,9 +270,27 @@ try {
     },
   );
 
+  const catalogue = await client.callTool({
+    name: "computer_workspace_catalogue",
+    arguments: {},
+  });
+  assert.equal(catalogue.isError, undefined);
+  assert.equal(catalogue.structuredContent?.ok, true);
+  assert.deepEqual(
+    catalogue.structuredContent?.workspaces.map((item) => ({
+      workspaceId: item.workspaceId,
+      root: item.root,
+    })),
+    [{ workspaceId: "fixture", root: workspaceRoot }],
+  );
+  const discoveredWorkspaceId =
+    catalogue.structuredContent.workspaces[0].workspaceId;
   const bootstrap = await client.callTool({
     name: "computer_workspace_bootstrap",
-    arguments: { workspaceId: "fixture", relativeDirectory: "notes" },
+    arguments: {
+      workspaceId: discoveredWorkspaceId,
+      relativeDirectory: "notes",
+    },
   });
   assert.equal(bootstrap.isError, undefined, JSON.stringify(bootstrap));
   assert.equal(bootstrap.structuredContent?.root, workspaceRoot);

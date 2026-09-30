@@ -226,6 +226,7 @@ async function main(): Promise<void> {
         lifecycle,
         savedChat,
         claudeTasks,
+        launch.workspaceCatalogueIds,
       ),
     {
       legacy: "serve",

@@ -6,7 +6,7 @@
       "title": "Start with an approved workspace",
       "summary": "Discover applicable instructions before local work.",
       "keywords": ["workspace", "instructions", "AGENTS", "bootstrap", "Brain"],
-      "text": "Use computer_workspace_bootstrap with the selected workspace ID and relative working directory before changing files. It returns the task scope root, the approved physical root identity and root-to-directory AGENTS.md instructions. Apply root rules before nested rules. Unavailable instructions make completeness false; do not interpret missing authority as permission. The chain excludes ancestors outside the approved task scope. Brain is an ordinary approved workspace. File and shell operations do not require Model, Product Agent or a ChatGPT browser login.",
+      "text": "First call computer_workspace_catalogue without arguments to find the current task-accessible folders and their exact workspace IDs. Never guess a workspace ID from a folder name or path, or reuse an ID from another task. Then use computer_workspace_bootstrap with the selected workspace ID and relative working directory before changing files. It returns the task scope root, the approved physical root identity and root-to-directory AGENTS.md instructions. Apply root rules before nested rules. Unavailable instructions make completeness false; do not interpret missing authority as permission. The chain excludes ancestors outside the approved task scope. Brain is an ordinary approved workspace. File and shell operations do not require Model, Product Agent or a ChatGPT browser login.",
       "references": ["computer-files", "computer-shell", "computer-outcomes"]
     },
     {

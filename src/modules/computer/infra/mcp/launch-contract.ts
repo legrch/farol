@@ -539,6 +539,7 @@ export async function loadReadonlyComputerLaunchContract(
 export type MaterializedReadonlyComputerLaunch = Readonly<{
   approval: ComputerApproval;
   participants: readonly ParticipantAuthority[];
+  workspaceCatalogueIds: readonly string[];
   binding: ReadonlyComputerMcpBinding;
   mutationEnabled: boolean;
   connectorVerification: Readonly<{ challengeSha256: string }> | null;
@@ -599,6 +600,9 @@ export function materializeReadonlyComputerLaunch(
   return {
     approval,
     participants,
+    workspaceCatalogueIds: parent.grant.workspaces
+      .filter((scope) => scope.mode === "subtree")
+      .map((scope) => scope.workspaceId),
     mutationEnabled:
       launch.schema === 2 &&
       approval.capabilities.includes("workspace.write") &&

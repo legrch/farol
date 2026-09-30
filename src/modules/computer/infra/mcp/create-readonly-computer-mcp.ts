@@ -42,6 +42,7 @@ import {
   type CodexTaskRoutePeer,
 } from "../peer/codex-task-route-peer";
 import { bootstrapWorkspace } from "./workspace-bootstrap";
+import { discoverWorkspaces } from "./workspace-catalogue";
 import { PublishedGuidance } from "./published-guidance";
 import type {
   SavedChatBridgeOperation,
@@ -762,6 +763,7 @@ export function createReadonlyComputerMcpServer(
     ): Promise<SavedChatBridgeResponse>;
   }>,
   claudeTasks?: ClaudeTaskRoutePeer,
+  workspaceCatalogueIds?: readonly string[],
 ): McpServer {
   const server = new McpServer({
     name: "farol-next-computer",
@@ -1491,6 +1493,31 @@ export function createReadonlyComputerMcpServer(
     );
   }
 
+  if (workspaceCatalogueIds !== undefined) {
+    const workspaceIds = [...workspaceCatalogueIds];
+    server.registerTool(
+      "computer_workspace_catalogue",
+      {
+        title: "Find available workspaces",
+        description:
+          "Find current task-accessible folder roots and exact workspace IDs before using file tools. Call without arguments; do not guess IDs from folder names or paths. Uses existing authority and physical-root checks. Does not read file contents or grant permissions.",
+        inputSchema: z.strictObject({}),
+        annotations: READONLY_ANNOTATIONS,
+      },
+      guarded(async (_arguments, context) =>
+        discoverWorkspaces(workspaceIds, (workspaceId, operation) =>
+          execute(
+            contract,
+            binding,
+            String(context.mcpReq.id),
+            workspaceId,
+            operation,
+            context.mcpReq.signal,
+          ),
+        ),
+      ),
+    );
+  }
   server.registerTool(
     "computer_workspace_bootstrap",
     {
