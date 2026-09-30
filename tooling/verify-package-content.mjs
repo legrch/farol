@@ -399,6 +399,7 @@ export async function verifyPackageContent({
     version: artifact.version,
     buildVersion: measuredBuildVersion,
     buildId: buildIdentity.buildId,
+    updateChannel: buildIdentity.updateChannel,
     sourceCommit: embedded.sourceCommit,
     sourceTreeDigest: embedded.sourceTreeDigest,
     artifactSha256: actualDigest,
