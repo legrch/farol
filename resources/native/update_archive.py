@@ -6,13 +6,17 @@ import json
 import os
 import pathlib
 import stat
+import struct
 import sys
 import unicodedata
 import zipfile
 
 MAX_ARCHIVE = 2_147_483_648
-MAX_EXPANDED = 4_294_967_296
+# No accepted extraction may exceed the installer's one-GiB tree budget.
+MAX_EXPANDED = 1_073_741_824
 MAX_ENTRIES = 100_000
+MAX_CENTRAL_DIRECTORY = 16 * 1024 * 1024
+MAX_PATH_PARTS = 128
 MAX_LINK = 4096
 CHUNK = 1024 * 1024
 
@@ -53,12 +57,43 @@ def type_of(info):
     return "file", (mode & 0o7777) or 0o644
 
 
+def admit_central_directory(fd, size):
+    # ZipFile allocates its central-directory bytes and ZipInfo objects in its
+    # constructor. Bound and count the actual records before giving it the fd.
+    tail = os.pread(fd, min(size, 65535 + 22), max(0, size - 65535 - 22))
+    end = tail.rfind(b"PK\x05\x06")
+    check(end >= 0 and len(tail) - end >= 22, "ARCHIVE_DIRECTORY_INVALID")
+    _, disk, cd_disk, disk_count, count, length, offset, comment = struct.unpack_from("<4s4H2IH", tail, end)
+    check(end + 22 + comment == len(tail), "ARCHIVE_DIRECTORY_INVALID")
+    check(disk == 0 and cd_disk == 0 and disk_count == count, "ARCHIVE_MULTIDISK_UNSUPPORTED")
+    # Accepted Farol packages fit below ZIP64's size/count thresholds. Refuse
+    # that separate metadata format instead of parsing it through an unbounded reader.
+    check(count != 65535 and length != 0xFFFFFFFF and offset != 0xFFFFFFFF, "ARCHIVE_ZIP64_UNSUPPORTED")
+    check(0 < length <= MAX_CENTRAL_DIRECTORY, "ARCHIVE_CENTRAL_DIRECTORY_LIMIT")
+    check(0 < count <= MAX_ENTRIES, "ARCHIVE_ENTRY_COUNT_INVALID")
+    end_offset = size - len(tail) + end
+    check(offset + length == end_offset, "ARCHIVE_DIRECTORY_INVALID")
+    cursor = offset
+    observed = 0
+    while cursor < end_offset:
+        header = os.pread(fd, 46, cursor)
+        check(len(header) == 46 and header[:4] == b"PK\x01\x02", "ARCHIVE_DIRECTORY_INVALID")
+        name, extra, note = struct.unpack_from("<3H", header, 28)
+        check(struct.unpack_from("<H", header, 34)[0] == 0, "ARCHIVE_MULTIDISK_UNSUPPORTED")
+        cursor += 46 + name + extra + note
+        observed += 1
+        check(observed <= MAX_ENTRIES, "ARCHIVE_ENTRY_COUNT_INVALID")
+        check(cursor <= end_offset, "ARCHIVE_DIRECTORY_INVALID")
+    check(observed == count, "ARCHIVE_ENTRY_COUNT_INVALID")
+
+
 def preflight(archive):
     infos = archive.infolist()
     check(0 < len(infos) <= MAX_ENTRIES, "ARCHIVE_ENTRY_COUNT_INVALID")
     seen = {}
     expanded = 0
     entries = []
+    tree_paths = set()
     for info in infos:
         check(info.flag_bits & 1 == 0, "ARCHIVE_ENCRYPTED")
         check(info.compress_type in (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED), "ARCHIVE_COMPRESSION_INVALID")
@@ -73,6 +108,11 @@ def preflight(archive):
             check(len(extra) >= 4 + length and tag not in (0x000D, 0x756E), "ARCHIVE_HARDLINK_INVALID")
             extra = extra[4 + length:]
         parts = member_parts(info.filename)
+        check(len(parts) <= MAX_PATH_PARTS, "ARCHIVE_PATH_DEPTH_LIMIT")
+        if parts[0] == "Farol Next Preview.app":
+            for index in range(2, len(parts) + 1):
+                tree_paths.add(normalized(parts[:index]))
+                check(len(tree_paths) <= MAX_ENTRIES, "ARCHIVE_ENTRY_COUNT_INVALID")
         kind, mode = type_of(info)
         check(kind != "directory" or info.file_size == 0, "ARCHIVE_DIRECTORY_DATA")
         check(kind != "directory" or mode == 0 or (mode & 0o700) == 0o700, "ARCHIVE_DIRECTORY_MODE")
@@ -195,6 +235,8 @@ def main():
         check(total == expected_size, "ARCHIVE_SIZE_MISMATCH")
         unchanged_archive(archive_path, fd, before)
         check(digest.hexdigest() == expected_sha, "ARCHIVE_DIGEST_MISMATCH")
+        admit_central_directory(fd, expected_size)
+        unchanged_archive(archive_path, fd, before)
         with os.fdopen(os.dup(fd), "rb") as stream, zipfile.ZipFile(stream) as archive:
             entries = preflight(archive)
             extract(archive, root, entries)

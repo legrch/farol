@@ -219,3 +219,122 @@ describe("private handle verification", () => {
     });
   });
 });
+
+describe("archive admission before ZIP object allocation", () => {
+  for (const [scenario, expected] of [
+    ["count", "ARCHIVE_ENTRY_COUNT_INVALID"],
+    ["lying-count", "ARCHIVE_ENTRY_COUNT_INVALID"],
+    ["directory-bytes", "ARCHIVE_CENTRAL_DIRECTORY_LIMIT"],
+    ["zip64", "ARCHIVE_ZIP64_UNSUPPORTED"],
+  ]) {
+    it(`refuses ${scenario} before constructing Python ZIP entries`, async () => {
+      const parent = await fs.mkdtemp(
+        path.join(os.tmpdir(), "farol-zip-budget-"),
+      );
+      try {
+        const probe = `
+import hashlib, importlib.util, os, pathlib, struct, sys, zipfile
+helper_path, root_path, scenario = sys.argv[1:]
+spec = importlib.util.spec_from_file_location("archive_helper", helper_path)
+helper = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(helper)
+root = pathlib.Path(root_path)
+archive = root / "archive.zip"
+stage = root / "stage"
+stage.mkdir(mode=0o700)
+with zipfile.ZipFile(archive, "w") as z:
+    for name in ["artifact.json", "Farol Next Preview.app/Contents/Info.plist", "Farol Next Preview.app/extra"]:
+        z.writestr(name, "")
+data = bytearray(archive.read_bytes())
+end = len(data) - 22
+if scenario == "lying-count":
+    struct.pack_into("<HH", data, end + 8, 1, 1)
+elif scenario == "directory-bytes":
+    struct.pack_into("<I", data, end + 12, 32 * 1024 * 1024)
+elif scenario == "zip64":
+    struct.pack_into("<HH", data, end + 8, 65535, 65535)
+archive.write_bytes(data)
+helper.MAX_ENTRIES = 2
+def forbidden(*args, **kwargs):
+    raise AssertionError("ZIP_OBJECT_ALLOCATED_BEFORE_ADMISSION")
+helper.zipfile.ZipFile = forbidden
+sys.argv = [helper_path, str(archive), str(stage), str(len(data)), hashlib.sha256(data).hexdigest()]
+try:
+    helper.main()
+    print("UNEXPECTED_SUCCESS")
+except (helper.Refusal, AssertionError) as error:
+    print(str(error))
+assert list(stage.iterdir()) == []
+`;
+        const result = spawnSync(
+          "/usr/bin/python3",
+          ["-I", "-S", "-B", "-c", probe, helper, parent, scenario],
+          {
+            encoding: "utf8",
+            timeout: 3000,
+            killSignal: "SIGKILL",
+          },
+        );
+        expect(result.error).toBeUndefined();
+        expect(result.signal).toBeNull();
+        expect(result.status, result.stderr).toBe(0);
+        expect(result.stdout.trim()).toBe(expected);
+      } finally {
+        await fs.rm(parent, { recursive: true, force: true });
+        await expect(fs.lstat(parent)).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+      }
+    });
+  }
+  it("refuses expanded bytes above the installer limit before extraction", () => {
+    const probe = `
+import importlib.util, sys, zipfile
+archive_path, installer_path = sys.argv[1:]
+def module(name, file):
+    spec = importlib.util.spec_from_file_location(name, file)
+    value = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(value)
+    return value
+archive = module("archive", archive_path)
+installer = module("installer", installer_path)
+a = zipfile.ZipInfo("artifact.json")
+a.file_size = 2
+a.compress_size = 2
+b = zipfile.ZipInfo("Farol Next Preview.app/Contents/large")
+b.file_size = installer.MAX_BYTES + 1
+b.compress_size = b.file_size
+class Entries:
+    def infolist(self): return [a, b]
+try:
+    archive.preflight(Entries())
+    print("UNEXPECTED_SUCCESS")
+except archive.Refusal as error:
+    print(str(error))
+`;
+    const result = spawnSync(
+      "/usr/bin/python3",
+      [
+        "-I",
+        "-S",
+        "-B",
+        "-c",
+        probe,
+        helper,
+        path.resolve(
+          import.meta.dirname,
+          "../../resources/native/update_helper.py",
+        ),
+      ],
+      {
+        encoding: "utf8",
+        timeout: 3000,
+        killSignal: "SIGKILL",
+      },
+    );
+    expect(result.error).toBeUndefined();
+    expect(result.signal).toBeNull();
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout.trim()).toBe("ARCHIVE_EXPANDED_LIMIT");
+  });
+});

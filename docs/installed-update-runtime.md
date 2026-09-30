@@ -15,10 +15,19 @@ dispatch. Only the helper's exact readiness acknowledgment permits normal Quit.
 Unknown acknowledgment or completion never permits another apply. The same child
 handle remains observable while the original app is alive.
 
+Before Python allocates ZIP entries, the extractor bounds central-directory
+metadata and counts its actual records. This channel accepts single-volume,
+non-ZIP64 archives with at most 16 MiB of central-directory metadata and 1 GiB
+of expanded content. The app tree's entry/depth bounds also precede extraction
+and stay within the installer's limits.
+
 A pre-readiness refusal is retryable only after that same helper's classified
 terminal exit confirms it never crossed the mutation handoff. The app rechecks
 the unchanged slot/journal, preserves the refusal receipt, clears only that
-pre-mutation intent and releases admission. A missing, timed-out or conflicting
+pre-mutation intent and releases admission. The redundant staged app is removed
+before that intent is cleared; the small refusal receipt remains. Unconfirmed
+cleanup persists an obligation and blocks another attempt across restarts.
+A missing, timed-out or conflicting
 terminal result remains unknown and never permits a substitute helper.
 
 A rejected download releases its extracted stage and archive bytes before the

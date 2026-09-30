@@ -582,6 +582,11 @@ describe("installed updater composition (disposable filesystem and mocked native
     expect(release).toHaveBeenCalledTimes(1);
     expect(quit).not.toHaveBeenCalled();
     const refusedId = mocks.helper.mock.calls[0]![1].operationId;
+    await expect(
+      fs.lstat(
+        path.join(userData, "installed-updates", refusedId, "staged.app"),
+      ),
+    ).rejects.toMatchObject({ code: "ENOENT" });
     expect(JSON.parse(await fs.readFile(ready, "utf8")).operation).toBeNull();
     expect(
       JSON.parse(
@@ -605,6 +610,55 @@ describe("installed updater composition (disposable filesystem and mocked native
     expect(mocks.helper.mock.calls[1]![1].operationId).not.toBe(refusedId);
     expect(quit).toHaveBeenCalledTimes(1);
     expect(mocks.download).toHaveBeenCalledTimes(1);
+  });
+  it("keeps failed refused-stage cleanup unknown across app lifetimes", async () => {
+    const controller = await prepared();
+    mocks.helper.mockResolvedValueOnce({
+      status: "refused",
+      reason: "process_identity",
+      operation: {
+        pid: 123,
+        completion: Promise.resolve({
+          code: 70,
+          signal: null,
+          protocolError: null,
+          terminal: { phase: "refused", error: "process_identity" },
+        }),
+      },
+    });
+    const remove = fs.rm.bind(fs);
+    const removal = vi
+      .spyOn(fs, "rm")
+      .mockImplementation(async (file, options) => {
+        if (String(file).endsWith("/staged.app"))
+          throw Object.assign(new Error("fixture cleanup denied"), {
+            code: "EPERM",
+          });
+        return remove(file, options);
+      });
+    await controller.restart();
+    expect(controller.snapshot()).toMatchObject({
+      phase: "failed",
+      recoveryRequired: true,
+    });
+    expect(
+      JSON.parse(await fs.readFile(ready, "utf8")).operation,
+    ).not.toBeNull();
+    expect(release).not.toHaveBeenCalled();
+    expect(quit).not.toHaveBeenCalled();
+    controller.close();
+    removal.mockRestore();
+    const next = await createInstalledUpdateRuntime(options());
+    await next!.initialize();
+    expect(next!.snapshot()).toMatchObject({
+      phase: "failed",
+      recoveryRequired: true,
+      code: "UPDATE_STAGING_OUTCOME_UNKNOWN",
+    });
+    await next!.restart();
+    expect(mocks.helper).toHaveBeenCalledTimes(1);
+    expect(mocks.download).toHaveBeenCalledTimes(1);
+    next!.close();
   });
   it("does not turn a refusal without terminal exit into a retry after the bounded wait", async () => {
     const controller = await prepared();

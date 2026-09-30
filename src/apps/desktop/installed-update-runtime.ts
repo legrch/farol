@@ -845,6 +845,25 @@ export async function createInstalledUpdateRuntime(
             operation: retained.operation,
             code: handoff.reason,
           });
+          // The same helper exited before mutation; keep its small receipt,
+          // but release this redundant app copy before permitting another try.
+          try {
+            await fs.rm(path.join(operationRoot, "staged.app"), {
+              recursive: true,
+              force: true,
+            });
+          } catch {
+            stagingUncertain = true;
+            await writeRecord(cleanupFile, {
+              schema: "farol.update-package-cleanup/1",
+              handle: update.handle,
+              operationRoot,
+            });
+            return {
+              status: "unknown",
+              code: "UPDATE_STAGING_OUTCOME_UNKNOWN",
+            };
+          }
           const cleared = { ...retained, operation: null, helper: null };
           await writeRecord(readyFile, cleared);
           retained = cleared;
