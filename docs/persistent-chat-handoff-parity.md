@@ -79,11 +79,14 @@ creation is not qualified by this read-only slice; existing task-create ambiguit
 rules are unchanged.
 
 Public MCP and packaged disposable-socket fixtures qualify this source route.
-They do not qualify the serving native Desktop identity or experimental protocol
-negotiation. The separately prepared initialize/experimentalApi patch remains
-behind its recorded platform-blocked commit operation; this slice neither moves
-that patch nor bypasses the refusal. No real model/provider task is used merely
-to resolve a project.
+The shared proxy now sends `capabilities: { experimentalApi: true }` during
+`initialize`, followed by one `initialized` notification before project and paged
+thread reads. Pipe and WebSocket fixtures verify the source negotiation and retain
+method, identity and no-replay guards. They do not qualify the serving native
+Desktop identity or a live handshake. The recorded live `project/list` RPC
+`-32600` boundary remains open, and the original platform-refused handshake
+operation has not been replayed. No real model/provider task is used merely to
+resolve a project.
 
 Observer metadata maps the supported optional nullable host Thread.name field to
 the public title field. It does not fall back to an unrelated title-shaped host
@@ -97,9 +100,10 @@ does not itself qualify title mutation or prove the serving native host's field 
 Computer MCP only when the serving host's explicit title control capability is
 selected. Ordinary production construction leaves it off. Local schema evidence
 for `thread/name/set` is optional and separate from ordinary create/status
-qualification; it cannot enable serving control. The proxy allowlist adds only
-this method and leaves the separately refused initialize/experimentalApi change
-untouched.
+qualification; it cannot enable serving control. The title capability adds only
+`thread/name/set` to the proxy method allowlist. The shared proxy's separate
+experimental-API opt-in does not qualify title control or authorize replay of the
+recorded refused live handshake.
 
 The caller supplies the issued dispatch handle, exact workspace/project IDs,
 one UUID key, expected nullable name and a nonblank new name of at most 1,000
