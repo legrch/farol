@@ -717,6 +717,8 @@ try {
       await window
         .locator("#onboarding-verification-method")
         .selectOption("embedded");
+    }
+    {
       await window
         .locator('.nav-utility .nav-item[data-section="settings"]')
         .click();
@@ -731,24 +733,32 @@ try {
       if (!(await connection.evaluate((details) => details.open)))
         await connection.locator("summary").click();
     }
-    if (environment === "preview")
-      await window.locator("#review-setup").click();
+    await window.locator("#review-setup").click();
     await window.locator("#onboarding-return").click();
     await window.locator('[data-panel="browser"].active').waitFor();
     // The application menu must reach Settings in both normal environments;
     // the disposable, non-installed profile cannot check the live update channel.
-    await app.evaluate(({ Menu }) => {
+    await application.evaluate(({ Menu }) => {
       const item = Menu.getApplicationMenu()?.getMenuItemById("app.updates");
       if (!item?.click) throw new Error("UPDATE_MENU_ITEM_MISSING");
       item.click();
     });
     await window.locator('[data-panel="settings"].active').waitFor();
     assert.equal(await window.locator("#onboarding-nav").isVisible(), false);
+    assert.equal(
+      await window.locator(".installed-update-preferences").isVisible(),
+      true,
+      "UPDATE_MENU_RESULT_HIDDEN",
+    );
+    assert.equal(
+      await window
+        .locator('#settings-nav [data-settings-category="preferences"]')
+        .getAttribute("aria-current"),
+      "page",
+    );
     observations.push({ kind: "update-menu-opens-settings", environment });
+    // Settings already owns the rail; the former utility item is hidden.
     // Review Setup must remain reachable in an empty profile.
-    await window
-      .locator('.nav-utility .nav-item[data-section="settings"]')
-      .click();
     {
       await window
         .locator('#settings-nav [data-settings-category="diagnostics"]')

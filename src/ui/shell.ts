@@ -6036,6 +6036,7 @@ async function start(): Promise<void> {
         taskMenuReturnOffered = false;
         if (parsed.data.action === "open-settings") {
           setupJourney = { ...setupJourney, open: false };
+          settingsCategory = "preferences";
           selectSection("settings");
         }
       } else if (decision.offerReturn) {
