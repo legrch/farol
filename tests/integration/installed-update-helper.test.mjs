@@ -1,5 +1,7 @@
 import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs/promises";
+import { readFileSync } from "node:fs";
+import { once } from "node:events";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -14,7 +16,11 @@ const roots = [];
 const children = [];
 afterEach(async () => {
   for (const child of children.splice(0)) {
-    if (child.exitCode === null) child.kill("SIGTERM");
+    if (child.exitCode === null && child.signalCode === null) {
+      const closed = once(child, "close");
+      child.kill("SIGKILL");
+      await closed;
+    }
   }
   for (const root of roots.splice(0))
     await fs.rm(root, { recursive: true, force: true });
@@ -57,7 +63,7 @@ async function fixture() {
     "2".repeat(64),
     "N+1",
   );
-  const child = spawn("/bin/sleep", ["2"], { stdio: "ignore" });
+  const child = spawn("/bin/sleep", ["20"], { stdio: "ignore" });
   children.push(child);
   const started = await new Promise((resolve, reject) => {
     const poll = async () => {
@@ -126,32 +132,84 @@ async function confirmQuit(f) {
   );
   await fs.unlink(path.join(f.state, "running.json"));
 }
-async function invoke(request) {
-  const code = await fs.readFile(helper);
-  return await new Promise((resolve, reject) => {
-    const child = spawn("/usr/bin/python3", ["-I", "-S", "-B", "-"], {
-      cwd: "/",
-      env: { LANG: "C.UTF-8", PATH: "/usr/bin:/bin" },
-      stdio: ["pipe", "pipe", "pipe", "pipe", "pipe"],
-    });
+function observeHelper(child) {
+  children.push(child);
+  let resolveReady;
+  let rejectReady;
+  const ready = new Promise((resolve, reject) => {
+    resolveReady = resolve;
+    rejectReady = reject;
+  });
+  // Refusal tests consume only the terminal result.
+  void ready.catch(() => {});
+  const result = new Promise((resolve, reject) => {
     let stdout = "";
     let stderr = "";
+    let handoff = "";
+    let failure;
+    const stop = (error) => {
+      failure ??= error;
+      child.kill("SIGKILL");
+    };
+    const deadline = setTimeout(
+      () => stop(new Error("helper test deadline")),
+      10_000,
+    );
     child.stdout.on("data", (data) => {
       stdout += data;
+      if (stdout.length > 32_768) stop(new Error("helper output limit"));
     });
     child.stderr.on("data", (data) => {
       stderr += data;
+      if (stderr.length > 32_768) stop(new Error("helper error output limit"));
     });
-    child.on("error", reject);
-    child.on("close", (exitCode) =>
-      resolve({ exitCode, result: JSON.parse(stdout), stderr }),
-    );
-    child.stdio[4].resume();
-    child.stdin.end(code);
-    child.stdio[3].end(JSON.stringify(request));
+    child.stdio[4].on("data", (data) => {
+      handoff += data;
+      if (handoff.length > 8192) stop(new Error("helper handoff limit"));
+    });
+    child.stdio[4].on("end", () => {
+      try {
+        const event = JSON.parse(handoff);
+        if (event.phase !== "waiting_for_exit")
+          throw new Error("helper refused readiness");
+        resolveReady(event);
+      } catch (error) {
+        rejectReady(error);
+      }
+    });
+    child.on("error", (error) => {
+      failure ??= error;
+    });
+    child.on("close", (exitCode) => {
+      clearTimeout(deadline);
+      rejectReady(failure ?? new Error("helper exited before readiness"));
+      if (failure) {
+        reject(failure);
+        return;
+      }
+      try {
+        resolve({ exitCode, result: JSON.parse(stdout), stderr });
+      } catch (error) {
+        reject(error);
+      }
+    });
   });
+  result.ready = ready;
+  return result;
 }
-async function invokeWithPostSwapCorruption(request) {
+function invoke(request) {
+  const code = readFileSync(helper);
+  const child = spawn("/usr/bin/python3", ["-I", "-S", "-B", "-"], {
+    cwd: "/",
+    env: { LANG: "C.UTF-8", PATH: "/usr/bin:/bin" },
+    stdio: ["pipe", "pipe", "pipe", "pipe", "pipe"],
+  });
+  const result = observeHelper(child);
+  child.stdin.end(code);
+  child.stdio[3].end(JSON.stringify(request));
+  return result;
+}
+function invokeWithPostSwapCorruption(request) {
   const program = `
 import importlib.util, json, os, sys
 spec = importlib.util.spec_from_file_location("update_helper", sys.argv[1])
@@ -170,24 +228,16 @@ except helper.Refusal as error:
     print(json.dumps({"phase": error.phase, "error": error.code}))
     raise SystemExit(70)
 `;
-  return await new Promise((resolve, reject) => {
-    const child = spawn(
-      "/usr/bin/python3",
-      ["-I", "-S", "-B", "-c", program, helper, request.home],
-      { cwd: "/", stdio: ["pipe", "pipe", "pipe", "ignore", "pipe"] },
-    );
-    let stdout = "";
-    child.stdout.on("data", (data) => {
-      stdout += data;
-    });
-    child.on("error", reject);
-    child.on("close", (exitCode) =>
-      resolve({ exitCode, result: JSON.parse(stdout) }),
-    );
-    child.stdio[4].resume();
-    child.stdin.end(JSON.stringify(request));
-  });
+  const child = spawn(
+    "/usr/bin/python3",
+    ["-I", "-S", "-B", "-c", program, helper, request.home],
+    { cwd: "/", stdio: ["pipe", "pipe", "pipe", "ignore", "pipe"] },
+  );
+  const result = observeHelper(child);
+  child.stdin.end(JSON.stringify(request));
+  return result;
 }
+
 async function phase(f, value) {
   await fs.writeFile(
     path.join(f.op, "journal.json"),
@@ -205,7 +255,7 @@ describe("installed update helper", () => {
   it("replaces fixed NEW slot only after exact PID exits, preserves N, and rolls back", async () => {
     const f = await fixture();
     const pending = invoke(f.request);
-    await new Promise((resolve) => setTimeout(resolve, 150));
+    await pending.ready;
     expect(
       await fs.readFile(path.join(f.app, "Contents/payload"), "utf8"),
     ).toBe("N");
@@ -221,7 +271,7 @@ describe("installed update helper", () => {
         "utf8",
       ),
     ).toBe("N");
-    const rollbackProcess = spawn("/bin/sleep", ["2"], { stdio: "ignore" });
+    const rollbackProcess = spawn("/bin/sleep", ["20"], { stdio: "ignore" });
     children.push(rollbackProcess);
     const ps = spawn("/bin/ps", [
       "-p",
@@ -241,7 +291,7 @@ describe("installed update helper", () => {
       pid: rollbackProcess.pid,
       processStart: rollbackStart.trim(),
     });
-    await new Promise((resolve) => setTimeout(resolve, 150));
+    await rollback.ready;
     await confirmQuit(f);
     rollbackProcess.kill("SIGTERM");
     expect((await rollback).result.phase).toBe("rolled_back");
@@ -256,11 +306,11 @@ describe("installed update helper", () => {
   it("restores N if final N+1 bytes fail verification after the swap", async () => {
     const f = await fixture();
     const pending = invokeWithPostSwapCorruption(f.request);
-    await new Promise((resolve) => setTimeout(resolve, 150));
+    await pending.ready;
     await confirmQuit(f);
     f.child.kill("SIGTERM");
     const outcome = await pending;
-    expect(outcome).toEqual({
+    expect(outcome).toMatchObject({
       exitCode: 70,
       result: { phase: "rolled_back", error: "target_verification" },
     });
@@ -362,7 +412,7 @@ describe("installed update helper", () => {
     });
     expect(injected.result.error).toBe("input");
     const pending = invoke(f.request);
-    await new Promise((resolve) => setTimeout(resolve, 150));
+    await pending.ready;
     await fs.writeFile(
       path.join(f.state, "last-quit.json"),
       JSON.stringify({
@@ -384,7 +434,7 @@ describe("installed update helper", () => {
   it("refuses a crash without the owner's confirmed quit receipt", async () => {
     const f = await fixture();
     const pending = invoke(f.request);
-    await new Promise((resolve) => setTimeout(resolve, 150));
+    await pending.ready;
     f.child.kill("SIGTERM");
     expect((await pending).result.error).toBe("run_marker_present");
     expect(
@@ -402,7 +452,7 @@ describe("installed update helper", () => {
     expect(lease).not.toBeNull();
     try {
       const pending = invoke(f.request);
-      await new Promise((resolve) => setTimeout(resolve, 150));
+      await pending.ready;
       await confirmQuit(f);
       f.child.kill("SIGTERM");
       expect((await pending).result.error).toBe("owner_lease_held");
@@ -429,7 +479,7 @@ describe("installed update helper", () => {
   it("does not install into an Applications directory displaced during PID wait", async () => {
     const f = await fixture();
     const pending = invoke(f.request);
-    await new Promise((resolve) => setTimeout(resolve, 150));
+    await pending.ready;
     const pinned = f.applications + ".pinned";
     const foreign = path.join(f.root, "foreign");
     await fs.mkdir(foreign);

@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 //
 // What the predicate does when it runs is covered by the eight cases in
 // `tests/unit/ipc-sender.test.ts`, which call `isTrustedIpcSender` directly.
-// What no runtime test can cover is the handler nobody wrote yet: the seven
+// What no runtime test can cover is the handler nobody wrote yet: the
 // registrations live inside `installIpc` in `main.ts`, which exports nothing
 // and which no test loads, so there is no way to enumerate them by calling
 // anything. The regression this file exists for is another privileged
@@ -21,7 +21,7 @@ import { describe, expect, it } from "vitest";
 // matches text rather than understanding it. It catches the one mistake that
 // is actually likely, which is forgetting.
 //
-// Note on scope: only these seven channels are renderer-to-main. The others
+// Note on scope: only these registered channels are renderer-to-main. The others
 // are main-to-renderer sends and correctly have no sender check, which is why
 // this counts registrations rather than
 // iterating the channel list — a test built on the channel list would demand
@@ -61,6 +61,7 @@ describe("privileged IPC registration contract", () => {
     // If this list changes, the change is the point: a new privileged
     // channel must be added here deliberately, with its check.
     expect(found.map((entry) => entry.channel)).toEqual([
+      "installedUpdate",
       "bootstrap",
       "snapshot",
       "configuration",
