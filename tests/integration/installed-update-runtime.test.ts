@@ -763,6 +763,9 @@ ${scenario === "missing" ? "" : `<key>CFBundleVersion</key><string>${scenario ==
     "missing-quarantine",
     "replaced-quarantine",
     "unsafe-container",
+    "journal-only-allocate",
+    "journal-only-copy",
+    "journal-only-installed",
   ])(
     "binds the explicit closed-repair installed baseline (%s)",
     async (scenario) => {
@@ -823,17 +826,32 @@ ${scenario === "missing" ? "" : `<key>CFBundleVersion</key><string>${scenario ==
           JSON.stringify({
             schema: "farol.next.closed-repair-journal/1",
             phase:
-              scenario === "pending-journal" ? "receipt_intent" : "installed",
+              scenario === "pending-journal"
+                ? "receipt_intent"
+                : scenario === "journal-only-allocate"
+                  ? "allocate_intent"
+                  : scenario === "journal-only-copy"
+                    ? "copy_intent"
+                    : "installed",
             receipt:
               scenario === "different-journal-receipt"
                 ? { ...receipt, quitDigest: "4".repeat(64) }
                 : receipt,
             sourceInode: [previousStat.dev, previousStat.ino],
-            targetInode: [slotStat.dev, slotStat.ino],
+            targetInode:
+              scenario === "journal-only-allocate" ||
+              scenario === "journal-only-copy"
+                ? null
+                : [slotStat.dev, slotStat.ino],
             updatesInode: [quarantineStat.dev, quarantineStat.ino],
           }),
           { mode: 0o600 },
         );
+      if (scenario.startsWith("journal-only-")) {
+        await fs.unlink(slot + ".repair.json");
+        // Before repair swaps the slot, the genuine normal receipt still
+        // matches the running predecessor. An unresolved journal must fence it.
+      }
       if (scenario === "replaced-slot" || scenario === "replaced-predecessor") {
         const changed = scenario === "replaced-slot" ? slot : previous;
         await fs.rename(changed, changed + ".saved");
@@ -857,8 +875,12 @@ ${scenario === "missing" ? "" : `<key>CFBundleVersion</key><string>${scenario ==
         slot + ".receipt.json",
         JSON.stringify({
           ...original,
-          artifactSha256: predecessor.digest,
-          verifiedDestinationSha256: predecessor.digest,
+          artifactSha256: scenario.startsWith("journal-only-")
+            ? source.digest
+            : predecessor.digest,
+          verifiedDestinationSha256: scenario.startsWith("journal-only-")
+            ? source.digest
+            : predecessor.digest,
         }),
       );
       const measured = mocks.exec.getMockImplementation()!;

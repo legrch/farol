@@ -196,6 +196,12 @@ GitHub upgrade records its own ordinary update journal and installed receipt.
 
 Use the tool only from clean committed accepted candidate bytes, with NEW closed:
 
+Keep NEW closed from its confirmed normal Quit until the repair command has a
+terminal result and that result has been read back. The same exclusive owner
+window is required for closed rollback. The work-admission lease and repeated
+marker checks do not fence concurrent application startup; this one-shot manual
+repair does not qualify concurrent launch, including launch of an older bundle.
+
 ```sh
 node tooling/closed-preview-repair.mjs --expected-predecessor <measured-accepted-digest> --apply
 ```
@@ -208,6 +214,8 @@ and journal can be reconciled by the tool. V0, account state and credentials are
 outside this operation. This establishes an installation baseline; it does not
 prove the required installed N-to-N+1 GitHub journey.
 
+An unresolved cold-repair journal fences updater admission even when no repair
+receipt has been published and the normal installed receipt still matches.
 Cold-repair receipt publication is not sufficient for updater admission. The
 matching private repair journal must be terminal with the identical receipt.
 After interruption between receipt and journal publication, explicit recovery

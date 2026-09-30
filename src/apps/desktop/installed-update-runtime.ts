@@ -493,6 +493,24 @@ export async function createInstalledUpdateRuntime(
   ) =>
     a.digest === b.digest && a.version === b.version && a.buildId === b.buildId;
   const readAcceptedSource = async () => {
+    await canonicalOwnedDirectory(path.dirname(slot), false);
+    const repairRaw = await readRecord(slot + ".repair.json");
+    const repair =
+      repairRaw === null ? null : ClosedRepairReceipt.parse(repairRaw);
+    const journalRaw = await readRecord(
+      path.join(path.dirname(slot), ".farol-closed-repair.json"),
+    );
+    const journal = ClosedRepairJournal.safeParse(journalRaw);
+    // The journal precedes receipt publication. Even a still-valid ordinary
+    // baseline cannot admit updates while this repair outcome is unresolved.
+    if (
+      (repairRaw !== null || journalRaw !== null) &&
+      (!repair ||
+        !journal.success ||
+        journal.data.phase !== repair.phase ||
+        JSON.stringify(journal.data.receipt) !== JSON.stringify(repair))
+    )
+      throw new Error("UPDATE_REPAIR_RECOVERY_REQUIRED");
     let expected: z.infer<typeof AcceptedBuild>;
     const saved = await readRecord(receiptFile);
     if (saved !== null) {
@@ -520,23 +538,8 @@ export async function createInstalledUpdateRuntime(
     } else {
       // The first installed generation is anchored by the normal installer's
       // private receipt. Never adopt a freshly measured tree as accepted bytes.
-      await canonicalOwnedDirectory(path.dirname(slot), false);
-      const repairRaw = await readRecord(slot + ".repair.json");
-      const repair =
-        repairRaw === null ? null : ClosedRepairReceipt.parse(repairRaw);
       if (repair) {
-        // Receipt publication alone is not a terminal helper result. Keep
-        // ordinary updates fenced until the matching journal is reconciled.
-        const journal = ClosedRepairJournal.safeParse(
-          await readRecord(
-            path.join(path.dirname(slot), ".farol-closed-repair.json"),
-          ),
-        );
-        if (
-          !journal.success ||
-          journal.data.phase !== repair.phase ||
-          JSON.stringify(journal.data.receipt) !== JSON.stringify(repair)
-        )
+        if (!journal.success)
           throw new Error("UPDATE_REPAIR_RECOVERY_REQUIRED");
         const previous = path.join(
           path.dirname(slot),
