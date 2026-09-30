@@ -38,6 +38,14 @@ within the updater lifetime, preventing rejected checks from accumulating large
 archives. A substituted entry stays untouched. Unknown cleanup preserves the
 intent and blocks another download.
 
+The ready record is committed before retention disposes the extraction, so a
+crash at that boundary still identifies the exact archive. Before copying an
+app for Restart, the same record durably names a preparation operation. Startup
+can reclaim that unfinished copy only while the installed source still matches,
+no helper/journal exists, and the private operation directory contains only
+staged.app. It then physically re-verifies the retained archive. Dispatch is a
+separate durable transition; an uncertain dispatch is never treated as preparation.
+
 A ready update keeps only its archive during Later. Successful verification
 extractions are released after retention, cold verification and copying into the
 helper's operation directory. Explicit Restart re-verifies that same archive.

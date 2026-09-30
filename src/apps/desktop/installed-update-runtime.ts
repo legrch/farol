@@ -49,6 +49,7 @@ const Retained = z.strictObject({
   handle: z.string().max(4096),
   manifest: z.unknown(),
   operation: Operation.nullable(),
+  preparation: Operation.optional(),
   archiveReleased: z.boolean().optional(),
   helper: z
     .strictObject({
@@ -415,6 +416,34 @@ export async function createInstalledUpdateRuntime(
       return false;
     }
   };
+  const removePreparedCopy = async (op: z.infer<typeof Operation>) => {
+    const directory = path.join(root, op.operationId);
+    let metadata;
+    try {
+      metadata = await fs.lstat(directory);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+      throw error;
+    }
+    if (
+      !metadata.isDirectory() ||
+      metadata.isSymbolicLink() ||
+      metadata.uid !== process.getuid?.() ||
+      (metadata.mode & 0o077) !== 0
+    )
+      throw new Error("UPDATE_PREPARATION_UNRECONCILED");
+    // A pre-dispatch directory can contain only its unfinished copy. Never
+    // reclaim a journal, predecessor or unexpected entry as preparation debris.
+    for await (const entry of await fs.opendir(directory)) {
+      if (entry.name !== "staged.app")
+        throw new Error("UPDATE_PREPARATION_UNRECONCILED");
+    }
+    await fs.rm(path.join(directory, "staged.app"), {
+      recursive: true,
+      force: true,
+    });
+    await fs.rmdir(directory);
+  };
   const controller = new InstalledUpdater({
     now: Date.now,
     publish: options.publish,
@@ -455,6 +484,31 @@ export async function createInstalledUpdateRuntime(
           downloadIntent.archiveSha256 !== parsed.value.archiveSha256)
       )
         return known("UPDATE_STAGING_OUTCOME_UNKNOWN");
+      if (retained.preparation) {
+        const op = retained.preparation;
+        const current = await readBuild(slot);
+        if (
+          !fromReady ||
+          pending ||
+          retained.operation ||
+          retained.helper ||
+          current.buildId !== options.build.buildId ||
+          current.version !== options.build.version ||
+          !sameBuild(current, op.source) ||
+          !sameBuild(op.target, {
+            digest: parsed.value.artifactSha256,
+            version: parsed.value.version,
+            buildId: parsed.value.buildId,
+          }) ||
+          (await readRecord(
+            path.join(root, op.operationId, "journal.json"),
+          )) !== null
+        )
+          return known("UPDATE_PREPARATION_UNRECONCILED");
+        await removePreparedCopy(op);
+        retained = { ...retained, preparation: undefined };
+        await writeRecord(readyFile, retained);
+      }
       if (retained.operation) {
         const op = retained.operation;
         if (pending && !sameOperation(pending.operation, op))
@@ -637,10 +691,10 @@ export async function createInstalledUpdateRuntime(
     retain: async (update: ReadyUpdate) => {
       // Later retains the archive, not an extra expanded application. Restart
       // re-verifies the same archive before copying it to the helper's stage.
-      if (!(await discardVerifiedStage(update.handle)))
-        throw new Error("UPDATE_STAGING_OUTCOME_UNKNOWN");
       retained = { schema: "farol.ready-update/1", ...update, operation: null };
       await writeRecord(readyFile, retained);
+      if (!(await discardVerifiedStage(update.handle)))
+        throw new Error("UPDATE_STAGING_OUTCOME_UNKNOWN");
       await fs.unlink(pendingDownloadFile);
     },
     restore: async (action) => {
@@ -738,7 +792,7 @@ export async function createInstalledUpdateRuntime(
       }
     },
     restart: async (update) => {
-      if (operation || retained?.operation)
+      if (operation || retained?.operation || retained?.preparation)
         return { status: "unknown", code: "UPDATE_HANDOFF_UNRECONCILED" };
       if (!retained || retained.handle !== update.handle)
         return { status: "blocked", code: "UPDATE_PACKAGE_NOT_READY" };
@@ -782,6 +836,11 @@ export async function createInstalledUpdateRuntime(
         };
         const operationId = randomBytes(16).toString("hex");
         const operationRoot = path.join(root, operationId);
+        const preparing = { operationId, source, target };
+        // Record allocation before copying. This phase proves no helper was
+        // dispatched; startup may reconcile only this exact unfinished copy.
+        retained = { ...retained, preparation: preparing };
+        await writeRecord(readyFile, retained);
         await fs.mkdir(operationRoot, { mode: 0o700 });
         let copied = false;
         try {
@@ -792,7 +851,9 @@ export async function createInstalledUpdateRuntime(
           copied = true;
         } catch {
           try {
-            await fs.rm(operationRoot, { recursive: true, force: true });
+            await removePreparedCopy(preparing);
+            retained = { ...retained, preparation: undefined };
+            await writeRecord(readyFile, retained);
           } catch {
             await writeRecord(cleanupFile, {
               schema: "farol.update-package-cleanup/1",
@@ -809,10 +870,15 @@ export async function createInstalledUpdateRuntime(
           return { status: "unknown", code: "UPDATE_STAGING_OUTCOME_UNKNOWN" };
         if (!copied)
           return { status: "blocked", code: "UPDATE_PREPARE_FAILED" };
-        retained = { ...retained, operation: { operationId, source, target } };
-        // Durable dispatch intent precedes launch. Uncertain launch is never replayed.
-        await writeRecord(readyFile, retained);
+        retained = {
+          ...retained,
+          preparation: undefined,
+          operation: preparing,
+        };
+        // Durable dispatch intent precedes launch. A failed commit may already
+        // have persisted dispatch, so keep admission even when its sync fails.
         keepAdmission = true;
+        await writeRecord(readyFile, retained);
         const handoff = await startInstalledUpdateHelper(
           path.join(options.directory, "update-helper.py"),
           {
@@ -901,7 +967,7 @@ export async function createInstalledUpdateRuntime(
       } catch {
         if (verified && !(await discardVerifiedStage(verified.handle)))
           return { status: "unknown", code: "UPDATE_STAGING_OUTCOME_UNKNOWN" };
-        if (stagingUncertain)
+        if (stagingUncertain || retained?.preparation)
           return { status: "unknown", code: "UPDATE_STAGING_OUTCOME_UNKNOWN" };
         return {
           status: keepAdmission ? "unknown" : "blocked",

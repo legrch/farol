@@ -313,6 +313,117 @@ describe("installed updater composition (disposable filesystem and mocked native
     expect(mocks.download).toHaveBeenCalledTimes(1);
     expect(quit).not.toHaveBeenCalled();
   });
+  it("recovers the same archive if the app exits during retention cleanup", async () => {
+    let entered!: () => void;
+    const atCleanup = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    mocks.discardPackage.mockImplementationOnce(async () => {
+      entered();
+      // Freeze this lifetime at the crash boundary. It never resumes effects.
+      await new Promise(() => undefined);
+    });
+    const first = await createInstalledUpdateRuntime(options());
+    await first!.initialize();
+    void first!.check();
+    await atCleanup;
+    first!.close();
+    const recovered = await createInstalledUpdateRuntime(options());
+    await recovered!.initialize();
+    expect(recovered!.snapshot()).toMatchObject({
+      phase: "ready",
+      deferred: true,
+    });
+    expect(mocks.download).toHaveBeenCalledTimes(1);
+    expect(mocks.verify).toHaveBeenCalledExactlyOnceWith(
+      path.join(root, "archive.zip"),
+      manifest,
+    );
+    expect(mocks.helper).not.toHaveBeenCalled();
+    recovered!.close();
+  });
+  it.each(["before-copy", "after-copy"])(
+    "reconciles an interrupted %s preparation before permitting another helper",
+    async (boundary) => {
+      const first = await prepared();
+      let entered!: () => void;
+      let destination = "";
+      const atCopy = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      mocks.copyApp.mockImplementationOnce(async (from: string, to: string) => {
+        destination = to;
+        if (boundary === "after-copy")
+          await fs.cp(from, to, { recursive: true });
+        entered();
+        await new Promise(() => undefined);
+      });
+      void first.restart();
+      await atCopy;
+      first.close();
+      const recorded = JSON.parse(await fs.readFile(ready, "utf8"));
+      expect(recorded.preparation).toMatchObject({ source, target });
+      expect(recorded.operation).toBeNull();
+      const recovered = await createInstalledUpdateRuntime(options());
+      await recovered!.initialize();
+      expect(recovered!.snapshot()).toMatchObject({
+        phase: "ready",
+        deferred: true,
+      });
+      await expect(fs.lstat(path.dirname(destination))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      expect(
+        JSON.parse(await fs.readFile(ready, "utf8")).preparation,
+      ).toBeUndefined();
+      expect(mocks.download).toHaveBeenCalledTimes(1);
+      expect(mocks.copyApp).toHaveBeenCalledTimes(1);
+      expect(mocks.helper).not.toHaveBeenCalled();
+      expect(quit).not.toHaveBeenCalled();
+      recovered!.close();
+    },
+  );
+  it.each(["journal", "source"])(
+    "does not reclaim preparation when %s contradicts its pre-dispatch identity",
+    async (conflict) => {
+      const first = await prepared();
+      first.close();
+      const operationId = "7".repeat(32);
+      const opRoot = path.join(userData, "installed-updates", operationId);
+      await fs.mkdir(path.join(opRoot, "staged.app"), {
+        recursive: true,
+        mode: 0o700,
+      });
+      await fs.chmod(opRoot, 0o700);
+      await fs.writeFile(path.join(opRoot, "staged.app/payload"), "keep");
+      const record = JSON.parse(await fs.readFile(ready, "utf8"));
+      await fs.writeFile(
+        ready,
+        JSON.stringify({
+          ...record,
+          preparation: { operationId, source, target },
+        }),
+      );
+      if (conflict === "journal")
+        await fs.writeFile(path.join(opRoot, "journal.json"), "{}", {
+          mode: 0o600,
+        });
+      else mocks.exec.mockResolvedValue({ stdout: JSON.stringify(target) });
+      const recovered = await createInstalledUpdateRuntime(options());
+      await recovered!.initialize();
+      expect(recovered!.snapshot()).toMatchObject({
+        phase: "failed",
+        recoveryRequired: true,
+        code: "UPDATE_PREPARATION_UNRECONCILED",
+      });
+      expect(
+        await fs.readFile(path.join(opRoot, "staged.app/payload"), "utf8"),
+      ).toBe("keep");
+      expect(mocks.verify).not.toHaveBeenCalled();
+      expect(mocks.helper).not.toHaveBeenCalled();
+      recovered!.close();
+    },
+  );
   it("reconciles an interrupted ready-record commit without downloading or sending again", async () => {
     const unlink = fs.unlink.bind(fs);
     const pending = path.join(
@@ -412,7 +523,7 @@ describe("installed updater composition (disposable filesystem and mocked native
     await fs.access(
       path.join(userData, "installed-updates/download-pending.json"),
     );
-    await expect(fs.lstat(ready)).rejects.toMatchObject({ code: "ENOENT" });
+    await fs.access(ready);
     first!.close();
     const recovered = await createInstalledUpdateRuntime(options());
     await recovered!.initialize();
@@ -541,6 +652,39 @@ describe("installed updater composition (disposable filesystem and mocked native
         ELECTRON_NO_ASAR: "1",
       });
     }
+  });
+  it("retains admission when the dispatch record commits but its acknowledgment is lost", async () => {
+    const first = await prepared();
+    const rename = fs.rename.bind(fs);
+    vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+      await rename(from, to);
+      if (
+        to === ready &&
+        JSON.parse(await fs.readFile(ready, "utf8")).operation
+      )
+        throw new Error("fixture lost dispatch commit acknowledgment");
+    });
+    await first.restart();
+    expect(first.snapshot()).toMatchObject({
+      phase: "failed",
+      recoveryRequired: true,
+      code: "UPDATE_HANDOFF_UNKNOWN",
+    });
+    expect(release).not.toHaveBeenCalled();
+    expect(mocks.helper).not.toHaveBeenCalled();
+    await first.restart();
+    expect(mocks.copyApp).toHaveBeenCalledTimes(1);
+    first.close();
+    const second = await createInstalledUpdateRuntime(options());
+    await second!.initialize();
+    await second!.restart();
+    expect(second!.snapshot()).toMatchObject({
+      phase: "failed",
+      recoveryRequired: true,
+    });
+    expect(mocks.helper).not.toHaveBeenCalled();
+    expect(mocks.copyApp).toHaveBeenCalledTimes(1);
+    second!.close();
   });
   it("durably records intent before helper dispatch and quits only after exact readiness", async () => {
     const controller = await prepared();
