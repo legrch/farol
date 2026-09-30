@@ -391,6 +391,11 @@ export async function createInstalledUpdateRuntime(
   let stagingUncertain = false;
   let retained: z.infer<typeof Retained> | null = null;
   let operation: InstalledUpdateOperation | null = null;
+  // The admission closure owns the kernel lease. Keep it reachable after the
+  // request returns, including unknown outcomes and the normal Quit drain.
+  // close() only drains updater work; process exit releases this final fence.
+  let heldAdmission: Extract<InstalledUpdateAdmission, { ok: true }> | null =
+    null;
   const readyFile = path.join(root, "ready.json");
   const cleanupFile = path.join(root, "package-cleanup-pending.json");
   const receiptFile = path.join(root, "last-update.json");
@@ -1173,6 +1178,8 @@ export async function createInstalledUpdateRuntime(
       return undefined;
     },
     restore: async (action) => {
+      if (heldAdmission)
+        return { status: "unknown", code: "UPDATE_RESTORE_OUTCOME_UNKNOWN" };
       const op = restorable?.operation;
       if (
         !op ||
@@ -1294,11 +1301,17 @@ export async function createInstalledUpdateRuntime(
             : "UPDATE_RESTORE_PREPARE_FAILED",
         };
       } finally {
-        if (!keepAdmission) await admission.release();
+        if (keepAdmission) heldAdmission = admission;
+        else await admission.release();
       }
     },
     restart: async (update) => {
-      if (operation || retained?.operation || retained?.preparation)
+      if (
+        heldAdmission ||
+        operation ||
+        retained?.operation ||
+        retained?.preparation
+      )
         return { status: "unknown", code: "UPDATE_HANDOFF_UNRECONCILED" };
       if (!retained || retained.handle !== update.handle)
         return { status: "blocked", code: "UPDATE_PACKAGE_NOT_READY" };
@@ -1493,7 +1506,8 @@ export async function createInstalledUpdateRuntime(
             : "UPDATE_PREPARE_FAILED",
         };
       } finally {
-        if (!keepAdmission) await admission.release();
+        if (keepAdmission) heldAdmission = admission;
+        else await admission.release();
       }
     },
   });

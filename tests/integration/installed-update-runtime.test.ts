@@ -3,6 +3,15 @@ import fs from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
+import { setFlagsFromString } from "node:v8";
+import { runInNewContext } from "node:vm";
+import { setImmediate as nextTurn } from "node:timers/promises";
+import { fileURLToPath } from "node:url";
+import {
+  acquirePromotionLease,
+  releasePromotionLease,
+  type PromotionLeaseHandle,
+} from "../../src/apps/desktop/promotion-lease";
 import { BuildIdentitySchema } from "../../src/pkg/build-info/identity";
 import type { ReleaseManifest } from "../../src/modules/release/domain/github-release-contract";
 
@@ -235,6 +244,136 @@ afterEach(async () => {
 });
 
 describe("installed updater composition (disposable filesystem and mocked native/GitHub ports)", () => {
+  it.each(["apply-unknown", "apply-ready", "rollback", "recover"] as const)(
+    "keeps the real promotion lease through GC after %s returns and closes",
+    async (scenario) => {
+      let current = source;
+      if (scenario === "rollback" || scenario === "recover") {
+        const first = await prepared();
+        await first.restart();
+        await first.close();
+        const { operation: op } = JSON.parse(await fs.readFile(ready, "utf8"));
+        const opRoot = path.join(userData, "installed-updates", op.operationId);
+        const companion =
+          scenario === "rollback" ? "previous.app" : "staged.app";
+        current = scenario === "rollback" ? target : source;
+        if (scenario === "rollback")
+          await fs.mkdir(path.join(opRoot, companion));
+        await fs.writeFile(
+          path.join(opRoot, "journal.json"),
+          JSON.stringify({
+            schema: "farol.installed-update-journal/1",
+            ...op,
+            phase: scenario === "rollback" ? "completed" : "prepared",
+          }),
+          { mode: 0o600 },
+        );
+        mocks.exec.mockImplementation(async (file: string, args: string[]) => {
+          if (file === "/bin/ps") throw { code: 1, stdout: "", stderr: "" };
+          return {
+            stdout: JSON.stringify(
+              args[0]!.endsWith("update-obligations.mjs")
+                ? {
+                    drained: true,
+                    obligationCount: 0,
+                    unreadableCount: 0,
+                    changedCount: 0,
+                  }
+                : args[1]!.endsWith(companion)
+                  ? scenario === "rollback"
+                    ? source
+                    : target
+                  : current,
+            ),
+          };
+        });
+        mocks.helper.mockResolvedValueOnce({
+          status: "outcome_unknown",
+          operation: { pid: 234, completion: new Promise(() => undefined) },
+        });
+      }
+      let leaseWitness: WeakRef<PromotionLeaseHandle> | undefined;
+      const controller = await createInstalledUpdateRuntime({
+        ...options(),
+        build: { ...build, version: current.version, buildId: current.buildId },
+        acquireAdmission: async () => {
+          const lease = await acquirePromotionLease(
+            userData,
+            current.buildId,
+            "promotion",
+          );
+          if (!lease) return { ok: false as const, code: "FIXTURE_LEASE_HELD" };
+          // No strong test reference may keep the production lease alive.
+          leaseWitness = new WeakRef(lease);
+          return {
+            ok: true as const,
+            release: () => releasePromotionLease(lease),
+          };
+        },
+      });
+      await controller!.initialize();
+      if (scenario.startsWith("apply")) await controller!.check();
+      if (scenario === "apply-unknown") {
+        const rename = fs.rename.bind(fs);
+        vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+          await rename(from, to);
+          if (
+            to === ready &&
+            JSON.parse(await fs.readFile(ready, "utf8")).operation
+          )
+            throw new Error("fixture lost dispatch commit acknowledgment");
+        });
+      }
+      setFlagsFromString("--expose_gc");
+      const collect = runInNewContext("gc") as () => void;
+      const probe = () =>
+        spawnSync(
+          process.execPath,
+          [
+            fileURLToPath(
+              new URL("./fixtures/promotion-lease-child.mjs", import.meta.url),
+            ),
+            userData,
+            "probe",
+            "competing-promotion",
+          ],
+          { encoding: "utf8", timeout: 5000, maxBuffer: 65536 },
+        );
+      try {
+        if (scenario === "rollback" || scenario === "recover")
+          await controller!.restore(scenario);
+        else await controller!.restart();
+        expect(controller!.snapshot()).toMatchObject(
+          scenario === "apply-ready"
+            ? { phase: "applying" }
+            : { phase: "failed", recoveryRequired: true },
+        );
+        for (const closing of [false, true]) {
+          if (closing) await controller!.close();
+          for (let cycle = 0; cycle < 5; cycle += 1) {
+            await nextTurn();
+            collect();
+            await nextTurn();
+          }
+          const competitor = probe();
+          expect(competitor.error).toBeUndefined();
+          expect(competitor.signal).toBeNull();
+          expect(competitor.status).toBe(1);
+          expect(competitor.stdout).toBe("REFUSED\n");
+        }
+      } finally {
+        await controller!.close();
+        const lease = leaseWitness?.deref();
+        if (lease) await releasePromotionLease(lease);
+        const afterCleanup = probe();
+        expect(afterCleanup.error).toBeUndefined();
+        expect(afterCleanup.signal).toBeNull();
+        expect(afterCleanup.status).toBe(0);
+        expect(afterCleanup.stdout).toBe("ACQUIRED\nRELEASED\n");
+      }
+    },
+  );
+
   it("does not start a request when Quit races durable download allocation", async () => {
     const controller = await createInstalledUpdateRuntime(options());
     await controller!.initialize();

@@ -113,6 +113,13 @@ keeps recovery blocked. Both actions acquire the existing work
 admission fences, record their exact dispatch intent, and use the helper's normal
 Quit protocol. The helper, not the renderer, owns atomic exchange and reconciliation.
 
+Once dispatch intent requires admission to remain held, the runtime retains the
+admission handle itself, including its kernel lease, until the process exits.
+Returning an unknown result or closing the updater during Quit does not release
+that fence. Confirmed pre-mutation refusals still explicitly release admission.
+Disposable host tests force garbage collection and verify that a separate process
+cannot acquire the real lease after apply, rollback or recovery returns or closes.
+
 Restore dispatch records its own helper PID before request bytes and enriches it
 with the observed start time, using the same launch callback as apply. If that
 helper is confirmed ended, the journal is unchanged, and the installed build and
