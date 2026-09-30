@@ -1,5 +1,7 @@
 import { EventEmitter } from "node:events";
-import { PassThrough } from "node:stream";
+import { createServer } from "node:http";
+import { Duplex, PassThrough } from "node:stream";
+import { WebSocketServer } from "ws";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -21,27 +23,35 @@ function fixture(kill: (signal?: NodeJS.Signals | number) => boolean) {
   const readSent = new Promise<void>((resolve) => {
     markReadSent = resolve;
   });
-  child.stdin.on("data", (chunk: Buffer) => {
-    const request = JSON.parse(chunk.toString()) as {
-      id?: number;
-      method?: string;
-    };
-    writes.push(request);
-    if (request.method === "thread/read") markReadSent();
-    if (request.method === "initialize") {
-      child.stdout.write(
-        `${JSON.stringify({
-          id: request.id,
-          result: {
-            codexHome: "/fixture/codex-home",
-            platformFamily: "unix",
-            platformOs: "macos",
-            userAgent: "fixture",
-          },
-        })}\n`,
-      );
-    }
-  });
+  const socket = Duplex.from({ readable: child.stdin, writable: child.stdout });
+  const http = createServer();
+  const server = new WebSocketServer({ noServer: true });
+  http.on("upgrade", (request, peer, head) =>
+    server.handleUpgrade(request, peer, head, (ws) => {
+      ws.on("message", (chunk) => {
+        const request = JSON.parse(chunk.toString()) as {
+          id?: number;
+          method?: string;
+        };
+        writes.push(request);
+        if (request.method === "thread/read") markReadSent();
+        if (request.method === "initialize") {
+          ws.send(
+            JSON.stringify({
+              id: request.id,
+              result: {
+                codexHome: "/fixture/codex-home",
+                platformFamily: "unix",
+                platformOs: "macos",
+                userAgent: "fixture",
+              },
+            }),
+          );
+        }
+      });
+    }),
+  );
+  http.emit("connection", socket);
   const launch = vi.fn(
     () => child as unknown as ChildProcessWithoutNullStreams,
   );

@@ -1,10 +1,16 @@
+import {
+  clientMessages,
+  websocketFixturePrelude,
+} from "../fixtures/proxy-websocket";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SharedCodexProxyHost } from "../../src/modules/chat/infra/native/shared-codex-proxy-host";
 import { HandoffNotSubmittedError } from "../../src/modules/chat/app/service/persistent-codex-handoff";
 
 // Owned Node protocol fixture only: no daemon, model, socket, profile or grants.
-const SCRIPT = String.raw`
+const SCRIPT =
+  websocketFixturePrelude +
+  String.raw`
 const spec = JSON.parse(process.env.FRAME_SPEC);
 let input = "";
 let selected = null;
@@ -12,13 +18,13 @@ let refusals = 0;
 let heldChunk = null;
 process.on("message", value => {
   if (value === "flush" && heldChunk !== null) {
-    process.stdout.write(heldChunk);
+    fixtureTransport.peer.send(heldChunk, {binary:false,fin:true});
     heldChunk = null;
   }
 });
-process.stdin.setEncoding("utf8");
-const reply = value => process.stdout.write(JSON.stringify(value) + "\n");
-process.stdin.on("data", chunk => {
+fixtureInput.setEncoding("utf8");
+const reply = value => fixtureOutput.write(JSON.stringify(value) + "\n");
+fixtureInput.on("data", chunk => {
   input += chunk;
   for (;;) {
     const end = input.indexOf("\n");
@@ -45,15 +51,15 @@ process.stdin.on("data", chunk => {
             : {id:value.id,result:{value:"BAD_BYTE"}};
         const bytes=Buffer.from(JSON.stringify(text)+"\n");
         const marker=bytes.indexOf(Buffer.from("BAD_BYTE"));
-        process.stdout.write(Buffer.concat([bytes.subarray(0,marker),Buffer.from([255]),bytes.subarray(marker+8)]));
+        fixtureOutput.write(Buffer.concat([bytes.subarray(0,marker),Buffer.from([255]),bytes.subarray(marker+8)]));
         if (spec.envelope !== "response") reply({id:value.id,result:{mustNotBeAccepted:true}});
       } else if (spec.kind === "bom") {
-        process.stdout.write(Buffer.from([0xef,0xbb,0xbf]));
+        fixtureOutput.write(Buffer.from([0xef,0xbb,0xbf]));
         reply({id:value.id,result:{mustNotBeAccepted:true}});
       } else if (spec.kind === "split-utf8") {
-        const bytes=Buffer.from(JSON.stringify({id:value.id,result:{value:"Р🌒"}})+"\n");
+        const bytes=Buffer.from(JSON.stringify({id:value.id,result:{value:"Р🌒"}}));
         const split=bytes.indexOf(Buffer.from("🌒"))+2;
-        process.stdout.write(bytes.subarray(0,split));
+        fixtureTransport.peer.send(bytes.subarray(0,split), {binary:false,fin:false});
         heldChunk = bytes.subarray(split);
       }
     } else if (Object.hasOwn(value,"error")) {
@@ -166,9 +172,7 @@ describe("shared proxy inbound framing, no approval capability", () => {
       true,
     );
     expect(
-      chunks.some((chunk) =>
-        chunk.subarray(0, 2).equals(Buffer.from([0x8c, 0x92])),
-      ),
+      chunks.some((chunk) => chunk.includes(Buffer.from([0x8c, 0x92]))),
     ).toBe(true);
   });
   it("does not write a refusal that exceeds the bounded frame budget", async () => {
@@ -181,7 +185,9 @@ describe("shared proxy inbound framing, no approval capability", () => {
       await expect(host.request("thread/read", {})).rejects.toThrow(
         "CODEX_SHARED_HOST_UNAVAILABLE",
       );
-      expect(writes).toHaveBeenCalledTimes(1);
+      expect(clientMessages(writes.mock.calls.map(([bytes]) => bytes))).toEqual(
+        [{ id: 2, method: "thread/read", params: {} }],
+      );
     } finally {
       writes.mockRestore();
     }

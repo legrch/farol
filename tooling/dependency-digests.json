@@ -13,9 +13,17 @@
       "version": "2.0.0",
       "treeSha256": "1f84beffbb126d7d9cd2a9c7a8e7d7031b5d9b170706ed8b5fd706373229b8e2"
     },
+    "node_modules/@types/ws": {
+      "version": "8.18.2",
+      "treeSha256": "28e0bcede82d345d791f1c7cdc3036ed33eb46e2548f8944a944e0d06154de9d"
+    },
     "node_modules/esbuild": {
       "version": "0.28.2",
       "treeSha256": "847ae18bbca4df210fdeab533cf0eaa85b5efe773ee3caeb032b893f2c1bcc03"
+    },
+    "node_modules/ws": {
+      "version": "8.22.0",
+      "treeSha256": "2f9d67ea9bd7b0538f1f0241c79d7bfd8ea903f5ec9136ccc9b83d153eea5e8e"
     },
     "node_modules/zod": {
       "version": "4.6.5",
