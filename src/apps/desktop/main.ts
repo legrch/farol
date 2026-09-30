@@ -1,3 +1,12 @@
+import { createInstalledUpdateRuntime } from "./installed-update-runtime";
+import {
+  InstalledUpdateCommandSchema,
+  type InstalledUpdateView,
+} from "../../modules/release/contract/installed-update";
+import {
+  UPDATE_RECHECK_MS,
+  type InstalledUpdater,
+} from "../../modules/release/app/installed-updater";
 import { selectedConnectorApp } from "../../pkg/product-settings/connector-app-selection";
 import { resolveOwnerTaskModel } from "./owner-config";
 import { describeTaskModels } from "../../pkg/owner-config/contract";
@@ -646,6 +655,132 @@ let connectorStartInFlight: Promise<void> | null = null;
 // admission hold it from reading the settings until they run, so neither can
 // start with authority that a concurrent change is about to replace.
 const authorityTransitions = new AuthorityTransitionReservation();
+let installedUpdater: InstalledUpdater | null = null;
+let installedUpdateTimer: NodeJS.Timeout | null = null;
+let installedUpdateAdmission = false;
+let configurationRequests = 0;
+let installedUpdateView: InstalledUpdateView = {
+  phase: "unavailable",
+  code: "UPDATE_NOT_INSTALLED",
+};
+
+function publishInstalledUpdate(view: InstalledUpdateView): void {
+  installedUpdateView = view;
+  window?.webContents.send(channels.installedUpdateState, view);
+}
+async function installedUpdateCommand(
+  value: unknown,
+): Promise<InstalledUpdateView> {
+  const command = InstalledUpdateCommandSchema.safeParse(value);
+  if (!command.success || !installedUpdater) return installedUpdateView;
+  if (command.data.kind === "check") await installedUpdater.check(true);
+  else if (command.data.kind === "later") installedUpdater.later();
+  else if (command.data.kind === "restart") await installedUpdater.restart();
+  return installedUpdateView;
+}
+async function initializeInstalledUpdater(): Promise<void> {
+  try {
+    installedUpdater = await createInstalledUpdateRuntime({
+      directory,
+      userData: app.getPath("userData"),
+      build: buildIdentity,
+      publish: publishInstalledUpdate,
+      quit: () => app.quit(),
+      acquireAdmission: async () => {
+        if (
+          installedUpdateAdmission ||
+          quitInProgress ||
+          configurationRequests > 0 ||
+          chatGptTaskAdmission ||
+          pendingChatGptReadonlyTask ||
+          pendingChatGptAttachmentTask ||
+          pendingWorkspaceEdit ||
+          workspaceMutationAdmission ||
+          pendingComputer.size > 0 ||
+          codexHostTaskAdmission ||
+          codexAgentOperationActive() ||
+          hostCheckClients.size > 0
+        )
+          return { ok: false, code: "UPDATE_WORK_PENDING" };
+        if (
+          connectorTaskAdmission ||
+          connectorStartInFlight ||
+          secureMcpConnectorRuntime?.isRunning()
+        )
+          return { ok: false, code: "UPDATE_CONNECTOR_ACTIVE" };
+        if (
+          chatGptRoute?.hasOpenUpdateSurface() ||
+          [...managedChatGptRoutes].some((route) =>
+            route.hasOpenUpdateSurface(),
+          )
+        )
+          return { ok: false, code: "UPDATE_BROWSER_OPEN" };
+        const snapshot = configuration?.snapshot();
+        if (!snapshot || snapshot.status !== "ready")
+          return { ok: false, code: "UPDATE_STATE_UNREADABLE" };
+        // A configured shared host can own turns outside the local browser registry.
+        // Until its exact journal is reconciled, it is never assumed idle.
+        if (snapshot.settings.nativeHosts.taskRoute)
+          return { ok: false, code: "UPDATE_TASK_ROUTE_NEEDS_DRAIN" };
+        const transition = authorityTransitions.tryReserve("authority-change");
+        if (!transition) return { ok: false, code: "UPDATE_WORK_PENDING" };
+        const taskClaim = taskMutations.tryEnter();
+        if (!taskClaim) {
+          transition.release();
+          return { ok: false, code: "UPDATE_WORK_PENDING" };
+        }
+        installedUpdateAdmission = true;
+        let lease: Awaited<ReturnType<typeof acquirePromotionLease>> = null;
+        let releasing: Promise<void> | null = null;
+        const release = (): Promise<void> =>
+          (releasing ??= (async () => {
+            if (lease) await releasePromotionLease(lease);
+            taskClaim.release();
+            transition.release();
+            installedUpdateAdmission = false;
+          })());
+        try {
+          lease = await acquirePromotionLease(
+            app.getPath("userData"),
+            buildIdentity.buildId,
+            "promotion",
+          );
+          if (!lease || !(await verifyPromotionLease(lease))) {
+            await release();
+            return { ok: false, code: "UPDATE_WORK_PENDING" };
+          }
+          await liveTaskPersistence;
+          return { ok: true, release };
+        } catch {
+          await release();
+          return { ok: false, code: "UPDATE_STATE_UNREADABLE" };
+        }
+      },
+    });
+    if (!installedUpdater) return;
+    if (quitInProgress) {
+      installedUpdater.close();
+      return;
+    }
+    publishInstalledUpdate(installedUpdater.snapshot());
+    await installedUpdater.initialize();
+    if (quitInProgress) {
+      installedUpdater.close();
+      return;
+    }
+    void installedUpdater.check();
+    installedUpdateTimer = setInterval(() => {
+      void installedUpdater?.check();
+    }, UPDATE_RECHECK_MS);
+    installedUpdateTimer.unref();
+  } catch {
+    publishInstalledUpdate({
+      phase: "failed",
+      code: "UPDATE_INITIALIZATION_FAILED",
+      recoveryRequired: true,
+    });
+  }
+}
 let activeAuthorityChangeKind: ProductConfigurationCommand["kind"] | null =
   null;
 
@@ -3643,7 +3778,8 @@ async function recordConnectorRuntime(
 async function startSecureMcpConnector(
   repair: boolean,
 ): Promise<ProductConfigurationResult> {
-  if (quitInProgress) return configurationFailure("CONNECTOR_START_FAILED");
+  if (quitInProgress || installedUpdateAdmission)
+    return configurationFailure("CONNECTOR_START_FAILED");
   if (
     !configuration ||
     !connectorCredentialStore ||
@@ -3811,7 +3947,8 @@ async function startSecureMcpConnector(
     let started;
     // Quit closes new admission first. If it arrived while configure or
     // doctor was pending, do not launch a tunnel after its drain began.
-    if (quitInProgress) return configurationFailure("CONNECTOR_START_FAILED");
+    if (quitInProgress || installedUpdateAdmission)
+      return configurationFailure("CONNECTOR_START_FAILED");
     try {
       started = await secureMcpConnectorRuntime.start({
         executablePath: connector.tunnelClient.executablePath,
@@ -4682,6 +4819,19 @@ function workspaceMutationFailure(code: string): ProductConfigurationResult {
 }
 
 async function configureProduct(
+  value: unknown,
+): Promise<ProductConfigurationResult> {
+  if (installedUpdateAdmission)
+    return configurationFailure("AUTHORITY_CHANGE_IN_PROGRESS");
+  configurationRequests += 1;
+  try {
+    return await configureUnfencedProduct(value);
+  } finally {
+    configurationRequests -= 1;
+  }
+}
+
+async function configureUnfencedProduct(
   value: unknown,
 ): Promise<ProductConfigurationResult> {
   if (!configuration) return configurationFailure("SETTINGS_UNAVAILABLE");
@@ -7609,6 +7759,14 @@ function installApplicationMenu(): void {
             label: displayProductName,
             submenu: [
               { role: "about" },
+              {
+                id: "app.updates",
+                label: "Check for Updates…",
+                click: () => {
+                  requestSettings();
+                  void installedUpdateCommand({ kind: "check" });
+                },
+              },
               { type: "separator" },
               {
                 id: "app.settings",
@@ -8330,6 +8488,11 @@ async function runContextFixtureControl(
 }
 
 function installIpc(): void {
+  ipcMain.handle(channels.installedUpdate, (event, value: unknown) =>
+    isTrustedIpcSender(event, window)
+      ? installedUpdateCommand(value)
+      : { error: "IPC_SENDER_DENIED" },
+  );
   ipcMain.handle(channels.bootstrap, (event) =>
     isTrustedIpcSender(event, window)
       ? bootstrap()
@@ -8359,6 +8522,7 @@ function installIpc(): void {
     return { ok: true };
   });
   ipcMain.handle(channels.control, async (event, value: unknown) => {
+    if (installedUpdateAdmission) return { error: "UPDATE_IN_PROGRESS" };
     if (!isTrustedIpcSender(event, window))
       return { error: "IPC_SENDER_DENIED" };
     const parsed = controlSchema.safeParse(value);
@@ -8404,7 +8568,7 @@ function installIpc(): void {
     );
   });
   ipcMain.on(channels.layout, (event, value: unknown) => {
-    if (!isTrustedIpcSender(event, window)) return;
+    if (installedUpdateAdmission || !isTrustedIpcSender(event, window)) return;
     const parsed = ShellLayoutSchema.safeParse(value);
     if (!parsed.success) return;
     const tasks = productTasksState().tasks;
@@ -9022,12 +9186,15 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
   });
   app.on("before-quit", (event) => {
     quitInProgress = true;
+    if (installedUpdateTimer) clearInterval(installedUpdateTimer);
+    installedUpdater?.close();
     quitDrain.onBeforeQuit(event);
   });
   app.on("window-all-closed", () => {
     if (windowAllClosedAction(process.platform) === "quit") app.quit();
   });
   quitSignals.ready();
+  void initializeInstalledUpdater();
 }
 
 const primaryInstanceLock = app.requestSingleInstanceLock(instanceRequest);

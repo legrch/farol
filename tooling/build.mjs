@@ -206,6 +206,26 @@ await Promise.all([
   }),
 ]);
 await Promise.all([
+  ...[
+    ["tooling/verify-package-standalone.mjs", "update-package.mjs"],
+    ["tooling/update-slot.mjs", "update-slot.mjs"],
+    ["tooling/update-obligations.mjs", "update-obligations.mjs"],
+  ].map(([entry, outputName]) =>
+    build({
+      ...common,
+      entryPoints: [entry],
+      outfile: path.join(output, outputName),
+      platform: "node",
+      format: "esm",
+    }),
+  ),
+  ...[
+    ["resources/native/update_archive.py", "update-archive.py"],
+    ["resources/native/update_helper.py", "update-helper.py"],
+  ].map(async ([source, name]) => {
+    const bytes = await readBuildInput(source);
+    await fs.writeFile(path.join(output, name), bytes, { mode: 0o600 });
+  }),
   readBuildInput("src/ui/shell.html").then((bytes) =>
     fs.writeFile("_output/build/app/shell.html", bytes),
   ),

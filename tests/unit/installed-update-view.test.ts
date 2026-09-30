@@ -195,6 +195,20 @@ describe("installed update view", () => {
     expect(f.onCommand.mock.calls).toEqual([["check"]]);
   });
 
+  it("offers an explicit recheck after a known work blocker without enabling Restart", () => {
+    const f = fixture();
+    f.view.render({
+      ...ready,
+      deferred: true,
+      blockedBy: "UPDATE_WORK_PENDING",
+    });
+    expect(f.node("restart").disabled).toBe(true);
+    expect(f.node("check").disabled).toBe(false);
+    expect(f.node("check").textContent).toBe("Check again");
+    f.node("check").click();
+    expect(f.onCommand.mock.calls).toEqual([["check"]]);
+  });
+
   it("disables every control while applying", () => {
     const f = fixture();
     f.view.render({ phase: "applying", version: "0.1.0-owner.beta.2" });

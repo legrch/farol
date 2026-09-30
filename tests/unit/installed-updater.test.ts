@@ -130,6 +130,25 @@ describe("installed update orchestration (port fixture, no native or GitHub acce
     });
   });
 
+  it("allows an explicit admission recheck after a known work blocker without redownload", async () => {
+    const { updater, ports } = fixture();
+    ports.restart.mockResolvedValue({
+      status: "blocked",
+      code: "UPDATE_WORK_PENDING",
+    });
+    await updater.initialize();
+    await updater.check();
+    await updater.restart();
+    await updater.check(true);
+    expect(updater.snapshot()).toMatchObject({
+      phase: "ready",
+      blockedBy: null,
+      deferred: true,
+    });
+    expect(ports.restart).toHaveBeenCalledTimes(1);
+    expect(ports.download).toHaveBeenCalledTimes(1);
+  });
+
   it.each(["accepted", "unknown", "throw"])(
     "never repeats a helper handoff after %s",
     async (mode) => {
@@ -155,6 +174,22 @@ describe("installed update orchestration (port fixture, no native or GitHub acce
       );
     },
   );
+
+  it("locks automatic retries if the archive exists but its ready record cannot be confirmed", async () => {
+    const { updater, ports, advance } = fixture();
+    ports.retain.mockRejectedValue(new Error("uncertain fsync"));
+    await updater.initialize();
+    await updater.check();
+    expect(updater.snapshot()).toMatchObject({
+      phase: "failed",
+      recoveryRequired: true,
+    });
+    advance(UPDATE_RECHECK_MS);
+    await updater.check();
+    await updater.check(true);
+    expect(ports.download).toHaveBeenCalledTimes(1);
+    expect(ports.restart).not.toHaveBeenCalled();
+  });
 
   it("does not call a retained archive ready until recovery verifies it", async () => {
     const { updater, ports } = fixture();

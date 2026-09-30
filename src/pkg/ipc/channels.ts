@@ -1,4 +1,6 @@
 export const channels = Object.freeze({
+  installedUpdate: "farol-next:installed-update",
+  installedUpdateState: "farol-next:installed-update-state",
   bootstrap: "farol-next:bootstrap",
   snapshot: "farol-next:snapshot",
   configuration: "farol-next:configuration",

@@ -19,7 +19,7 @@ Publish an accepted release under `v<version>`, with a single `farol-release.jso
 | `platform`, `arch`                            | `darwin`, `arm64`                                                                       |
 | `signing`, `notarized`, `sourceDirty`         | `unsigned`, `false`, `false` for this Phase-1 contract                                  |
 
-The current package manifest and build identity are still preview-only. The producer must create this release manifest only from a clean, accepted package and prove the copied source/build/package fields against its package attestation. This packet does not change package/build tooling. The `local.farol.next.preview` bundle identifier and `~/Applications/Farol Next Preview.app` installed slot are the allowed new-generation identities for now; they do not authorize a V0 migration or collision with a V0 install slot. The release manifest's package product is the verifier's current identity, independent of future owner-facing display-name polish.
+Owner-beta packages use `github-owner-beta` and a monotonic macOS build version. The producer creates this release manifest only from a clean, accepted package and proves the copied source/build/package fields against its package attestation. The `local.farol.next.preview` bundle identifier and `~/Applications/Farol Next Preview.app` installed slot are the allowed new-generation identities for now; they do not authorize a V0 migration or collision with a V0 install slot. The release manifest's package product is the verifier's current identity, independent of future owner-facing display-name polish.
 
 Stable checks accept only non-draft, non-prerelease SemVer releases. Owner beta checks accept only GitHub prereleases with a version of the form `<major>.<minor>.<patch>-owner.beta.<number>`. The version must be strictly newer than the installed version. Build metadata is deliberately excluded to prevent multiple byte identities under one precedence version. No update is a terminal, quiet result, not an error.
 
@@ -42,3 +42,36 @@ The transport only issues direct HTTPS GETs to the pinned releases API or exact 
 The caller owns scheduling, update status, active-operation admission, Later/Restart & Update UI, fixed install slot, helper handoff, rollback, and post-restart reconciliation. It must use existing task/operation state as the authority for safe restart. Existing `tooling/promote-preview.mjs`, `promotion-apply.{mjs,py}`, `promotion-destination.mjs`, `promotion-obligations.mjs`, and `promotion-lease.mjs` are the placement and active-work integration seam; this packet adds no parallel installer. It does not introduce a task truth store, Apple signing prerequisite, or Electron `autoUpdater`.
 
 These tests use mocks and GitHub-shaped fixtures only. They prove parsing, selection and verification policy, assuming honest port implementations. They do not prove a live GitHub release, package verification, installed N-to-N+1 update, helper behavior, or Gatekeeper acceptance.
+
+## Installed composition
+
+Only the canonical `~/Applications/Farol Next Preview.app` slot with its existing
+NEW user-data identity enables update checks. A temporary `task run` copy cannot
+replace that slot. Startup checks and six-hour rechecks use the public GitHub API
+without credentials; manual Check for Updates uses the same path. A current
+version stays quiet. A downloaded package becomes Ready only after checksum,
+package identity and durable staging checks. Later keeps the package and does
+not interrupt work.
+
+Restart & Update claims the existing authority, task-mutation and kernel
+promotion gates and reads the existing promotion obligations. The initial
+composition refuses while a connector is active, a ChatGPT document is open,
+work is pending, or a configured shared task route still needs reconciliation.
+These are explicit limitations, not assumptions that those surfaces are idle.
+A known pre-dispatch refusal offers Check again. An uncertain download, ready
+record, or helper handoff stays blocked across restart and never dispatches a
+replacement operation automatically.
+
+The fixed-slot helper acknowledges its exact operation before normal Quit. It
+waits for that process and its confirmed drain, verifies the predecessor and
+new package, preserves `previous.app`, switches the bundle, and relaunches. The
+new process measures its installed tree and predecessor against the same journal
+before recording success. Configuration is kept in the existing NEW user-data
+root. Neither this protocol nor unsigned distribution disables Gatekeeper.
+
+Publication must use an immutable new tag and a draft release until all assets
+are uploaded. The archive contains only the accepted application and its public
+package attestation; remove the producer's absolute `artifactPath` from the
+published attestation. Private source, test logs, Brain material, user profiles
+and credentials never belong in the public release repository. Offline tests
+and source gates do not qualify a real installed GitHub upgrade.

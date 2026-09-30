@@ -2,6 +2,15 @@ import { contextBridge, ipcRenderer } from "electron";
 import { channels } from "../../pkg/ipc/channels";
 
 contextBridge.exposeInMainWorld("farolNext", {
+  installedUpdate: (command: unknown) =>
+    ipcRenderer.invoke(channels.installedUpdate, command) as Promise<unknown>,
+  onInstalledUpdateState: (listener: (state: unknown) => void) => {
+    const wrapped = (_event: Electron.IpcRendererEvent, value: unknown) =>
+      listener(value);
+    ipcRenderer.on(channels.installedUpdateState, wrapped);
+    return () =>
+      ipcRenderer.removeListener(channels.installedUpdateState, wrapped);
+  },
   bootstrap: () => ipcRenderer.invoke(channels.bootstrap) as Promise<unknown>,
   snapshot: () => ipcRenderer.invoke(channels.snapshot) as Promise<unknown>,
   configure: (command: unknown) =>

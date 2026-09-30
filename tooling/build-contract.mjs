@@ -17,6 +17,11 @@ export const BUILD_ENTRIES = Object.freeze([
   "shell.css",
   "shell.html",
   "shell.js",
+  "update-archive.py",
+  "update-helper.py",
+  "update-obligations.mjs",
+  "update-package.mjs",
+  "update-slot.mjs",
 ]);
 
 const CAPABILITY_BOUNDARY_ENTRIES = Object.freeze([

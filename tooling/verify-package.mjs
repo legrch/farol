@@ -51,6 +51,7 @@ const identity = await verifyPackageContent({
   artifact,
   appPath,
   expectedVersion: packageDocument.version,
+  expectedBuildVersion: packageDocument.farolRelease?.buildVersion,
   expectedChannel,
   sourceResourceManifest,
   assertArtifactPath: () => assertCanonicalArtifactPath(root, artifact),

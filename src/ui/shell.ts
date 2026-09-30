@@ -1,3 +1,5 @@
+import { createInstalledUpdateView } from "./installed-update-view";
+import { InstalledUpdateViewSchema } from "../modules/release/contract/installed-update";
 import { z } from "zod";
 import { chatGptPreSubmitRemedy } from "./chatgpt-pre-submit-remedy";
 import {
@@ -354,6 +356,8 @@ const activityLabels: Readonly<Record<string, string>> = {
 declare global {
   interface Window {
     farolNext: Readonly<{
+      installedUpdate(command: unknown): Promise<unknown>;
+      onInstalledUpdateState(listener: (state: unknown) => void): () => void;
       bootstrap(): Promise<unknown>;
       snapshot(): Promise<unknown>;
       configure(command: unknown): Promise<unknown>;
@@ -5920,6 +5924,22 @@ function applyHostLayout(layout: z.infer<typeof ShellLayoutSchema>): void {
 }
 
 async function start(): Promise<void> {
+  const updaterView = createInstalledUpdateView(document, (kind) => {
+    void window.farolNext.installedUpdate({ kind }).then(renderUpdate, () => {
+      updaterView.render({
+        phase: "failed",
+        code: "UPDATE_STATUS_UNKNOWN",
+        recoveryRequired: true,
+      });
+    });
+  });
+  const renderUpdate = (value: unknown): void => {
+    const parsed = InstalledUpdateViewSchema.safeParse(value);
+    if (parsed.success) updaterView.render(parsed.data);
+  };
+  updaterView.render({ phase: "unavailable", code: "UPDATE_NOT_INSTALLED" });
+  window.farolNext.onInstalledUpdateState(renderUpdate);
+  void window.farolNext.installedUpdate({ kind: "status" }).then(renderUpdate);
   window.farolNext.onLayout((value) => {
     const parsed = ShellLayoutSchema.safeParse(value);
     if (!parsed.success) return;

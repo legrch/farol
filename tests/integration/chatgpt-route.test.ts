@@ -763,6 +763,33 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+describe("installed-update browser admission", () => {
+  it("treats an open idle browser as work until its surface is closed", () => {
+    const candidate = route();
+    expect(candidate.hasOpenUpdateSurface()).toBe(false);
+    const surface = embeddedSurface();
+    Reflect.set(candidate, "routeWindow", surface);
+    expect(candidate.hasOpenUpdateSurface()).toBe(true);
+    surface.isDestroyed.mockReturnValue(true);
+    expect(candidate.hasOpenUpdateSurface()).toBe(false);
+  });
+  it("also refuses an opening surface, in-flight task or live popup", () => {
+    const candidate = route();
+    Reflect.set(candidate, "opening", new Promise(() => undefined));
+    expect(candidate.hasOpenUpdateSurface()).toBe(true);
+    Reflect.set(candidate, "opening", null);
+    Reflect.set(candidate, "taskInFlight", true);
+    expect(candidate.hasOpenUpdateSurface()).toBe(true);
+    Reflect.set(candidate, "taskInFlight", false);
+    Reflect.set(
+      candidate,
+      "popupWindows",
+      new Set([{ isDestroyed: () => false }]),
+    );
+    expect(candidate.hasOpenUpdateSurface()).toBe(true);
+  });
+});
+
 describe("ChatGPT test-window presentation", () => {
   it("preserves ordinary foreground behavior outside an explicit test mode", () => {
     expect(

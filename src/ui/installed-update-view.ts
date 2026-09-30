@@ -7,6 +7,8 @@ const blockedMessages: Readonly<Record<string, string>> = {
     "Disconnect the active connector in Connections before restarting.",
   UPDATE_TASK_ROUTE_NEEDS_DRAIN:
     "Wait for the current task to finish before restarting.",
+  UPDATE_BROWSER_OPEN:
+    "Close open ChatGPT tabs before restarting so no browser work is interrupted.",
   UPDATE_WORK_PENDING: "Finish or cancel active work before restarting.",
   UPDATE_STATE_UNREADABLE: "Farol couldn’t read its update status.",
 };
@@ -122,6 +124,7 @@ export function createInstalledUpdateView(
       const recovery = view.phase === "failed" && view.recoveryRequired;
       const canCheck =
         view.phase === "idle" ||
+        (ready && view.blockedBy !== null) ||
         (view.phase === "failed" && !view.recoveryRequired);
       text(summary, message);
       text(railCopy, message);
@@ -146,7 +149,9 @@ export function createInstalledUpdateView(
               ? "Checking…"
               : view.phase === "downloading"
                 ? "Downloading…"
-                : "Check for Updates…",
+                : ready && view.blockedBy !== null
+                  ? "Check again"
+                  : "Check for Updates…",
           );
         } else {
           node.hidden = !ready && !applying;

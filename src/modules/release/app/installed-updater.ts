@@ -6,10 +6,14 @@ export type ReadyUpdate = Readonly<{
   handle: string;
   manifest: ReleaseManifest;
 }>;
-export type { InstalledUpdateView as UpdateView } from "../contract/installed-update";
-import type { InstalledUpdateView as UpdateView } from "../contract/installed-update";
+export type { InstalledUpdateView as UpdateView } from "../domain/installed-update";
+import type { InstalledUpdateView as UpdateView } from "../domain/installed-update";
 
-type KnownFailure = Readonly<{ ok: false; code: string }>;
+type KnownFailure = Readonly<{
+  ok: false;
+  code: string;
+  recoveryRequired?: boolean;
+}>;
 export type InstalledUpdaterPorts = Readonly<{
   now(): number;
   // Recovery must reverify the retained archive/package and reconcile any helper receipt.
@@ -88,6 +92,18 @@ export class InstalledUpdater {
   }
 
   async check(manual = false): Promise<void> {
+    // A known admission refusal launched no helper. Let an explicit check
+    // restore the restart action; restart must still acquire every live fence.
+    if (
+      manual &&
+      !this.closed &&
+      !this.busy &&
+      this.view.phase === "ready" &&
+      this.view.blockedBy !== null
+    ) {
+      this.publish({ ...this.view, blockedBy: null });
+      return;
+    }
     if (
       !this.initialized ||
       this.busy ||
@@ -107,6 +123,7 @@ export class InstalledUpdater {
     this.lastCheck = now;
     this.busy = true;
     this.publish({ phase: "checking" });
+    let stagingStarted = false;
     try {
       const found = await this.ports.discover();
       if (this.closed) return;
@@ -114,7 +131,7 @@ export class InstalledUpdater {
         this.publish({
           phase: "failed",
           code: found.code,
-          recoveryRequired: false,
+          recoveryRequired: found.recoveryRequired ?? false,
         });
         return;
       }
@@ -123,18 +140,20 @@ export class InstalledUpdater {
         return;
       }
       this.publish({ phase: "downloading" });
+      stagingStarted = true;
       const downloaded = await this.ports.download();
       if (this.closed) return;
       if (!downloaded.ok) {
         this.publish({
           phase: "failed",
           code: downloaded.code,
-          recoveryRequired: false,
+          recoveryRequired: downloaded.recoveryRequired ?? false,
         });
         return;
       }
       // A visible ready state always has a durable, verifiable restart record.
       await this.ports.retain(downloaded.update);
+      stagingStarted = false;
       if (this.closed) return;
       this.ready = downloaded.update;
       this.publish({
@@ -147,7 +166,7 @@ export class InstalledUpdater {
       this.publish({
         phase: "failed",
         code: "UPDATE_CHECK_FAILED",
-        recoveryRequired: false,
+        recoveryRequired: stagingStarted,
       });
     } finally {
       this.busy = false;

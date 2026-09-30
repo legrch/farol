@@ -1472,6 +1472,16 @@ export class ChatGptRoute {
     }
   }
 
+  /** Open browser documents may contain work outside Farol's task journal. */
+  hasOpenUpdateSurface(): boolean {
+    return (
+      this.opening !== null ||
+      this.taskInFlight ||
+      (this.routeWindow !== null && !this.routeWindow.isDestroyed()) ||
+      [...this.popupWindows].some((popup) => !popup.isDestroyed())
+    );
+  }
+
   async toggleSidebar(): Promise<boolean> {
     const candidate = this.routeWindow;
     if (
