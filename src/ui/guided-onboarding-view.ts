@@ -694,7 +694,8 @@ export class GuidedOnboardingView {
     element("#onboarding-app-tunnel").textContent = facts.tunnelId
       ? `Tunnel to select: ${facts.tunnelId}`
       : "Save your tunnel on the Connection step first.";
-    element<HTMLButtonElement>("#onboarding-open-chatgpt").disabled = this.busy;
+    element<HTMLButtonElement>("#onboarding-open-chatgpt").disabled =
+      this.busy || !facts.available;
     const recheck = element<HTMLButtonElement>("#onboarding-recheck");
     recheck.hidden =
       this.step === 4 ||
@@ -712,7 +713,8 @@ export class GuidedOnboardingView {
             : "Check previous result";
     element<HTMLButtonElement>("#onboarding-open-account").hidden =
       this.step !== 0;
-    element<HTMLButtonElement>("#onboarding-open-account").disabled = this.busy;
+    element<HTMLButtonElement>("#onboarding-open-account").disabled =
+      this.busy || !facts.available;
     element<HTMLButtonElement>("#onboarding-reconnect").hidden =
       this.step !== 2 ||
       editing ||
@@ -739,7 +741,7 @@ export class GuidedOnboardingView {
     document
       .querySelectorAll<HTMLButtonElement>("[data-onboarding-help]")
       .forEach((button) => {
-        button.disabled = this.busy;
+        button.disabled = this.busy || !facts.available;
       });
     element("#onboarding-finish-list").replaceChildren(
       ...onboardingSteps.slice(0, 4).map((item, index) => {

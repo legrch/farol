@@ -159,6 +159,24 @@ for (const environment of packaged
         await window.locator("#onboarding-primary").isDisabled(),
         true,
       );
+      for (const selector of [
+        "#onboarding-open-chatgpt",
+        "#onboarding-open-account",
+      ]) {
+        assert.equal(
+          await window.locator(selector).isDisabled(),
+          true,
+          `CONFIGURATION_ACTION_STILL_ENABLED:${selector}`,
+        );
+      }
+      const helpDisabled = await window
+        .locator("[data-onboarding-help]")
+        .evaluateAll((buttons) => buttons.map((button) => button.disabled));
+      assert.ok(helpDisabled.length > 0);
+      assert.ok(
+        helpDisabled.every(Boolean),
+        "CONFIGURATION_HELP_ACTION_STILL_ENABLED",
+      );
       assert.equal(
         await fs.readFile(file, "utf8"),
         bytes,
