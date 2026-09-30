@@ -92,6 +92,7 @@ const RestoreIntent = z.strictObject({
   action: z.enum(["recover", "rollback"]),
   operation: Operation,
   priorPhase: Journal.shape.phase,
+  notStartedAt: AcceptedBuild.optional(),
 });
 const ROLLED_BACK_PHASES = [
   "rolled_back",
@@ -199,10 +200,11 @@ async function writeRecord(file: string, value: unknown): Promise<void> {
 
 // A refusal acknowledgment alone is not a terminal process observation. Keep
 // every uncertain child bound; only its exact pre-mutation exit permits retry.
-async function confirmedRefusal(
+async function confirmedNoEffect(
   handoff: InstalledUpdateLaunch,
 ): Promise<boolean> {
-  if (handoff.status !== "refused") return false;
+  if (handoff.status !== "refused" && handoff.status !== "not_started")
+    return false;
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     const terminal = await Promise.race([
@@ -211,6 +213,16 @@ async function confirmedRefusal(
         timer = setTimeout(() => resolve(null), 3000);
       }),
     ]);
+    if (handoff.status === "not_started")
+      return (
+        handoff.operation.pid === null &&
+        terminal !== null &&
+        terminal.code !== null &&
+        terminal.code < 0 &&
+        terminal.signal === null &&
+        terminal.terminal === null &&
+        terminal.protocolError === "helper_spawn_failed"
+      );
     return (
       terminal?.code === 70 &&
       terminal.signal === null &&
@@ -445,6 +457,18 @@ export async function createInstalledUpdateRuntime(
     });
     await fs.rmdir(directory);
   };
+  const clearRestoreIntent = async (): Promise<void> => {
+    await fs.unlink(restoreFile);
+    const parent = await fs.open(
+      root,
+      constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
+    );
+    try {
+      await parent.sync();
+    } finally {
+      await parent.close();
+    }
+  };
   const controller = new InstalledUpdater({
     now: Date.now,
     publish: options.publish,
@@ -455,7 +479,7 @@ export async function createInstalledUpdateRuntime(
       const downloadIntent =
         downloadRaw === null ? null : DownloadIntent.parse(downloadRaw);
       const pendingRaw = await readRecord(restoreFile);
-      const pending =
+      let pending =
         pendingRaw === null ? null : RestoreIntent.parse(pendingRaw);
       const raw = await readRecord(readyFile);
       const fromReady = raw !== null;
@@ -485,6 +509,20 @@ export async function createInstalledUpdateRuntime(
           downloadIntent.archiveSha256 !== parsed.value.archiveSha256)
       )
         return known("UPDATE_STAGING_OUTCOME_UNKNOWN");
+      if (pending?.notStartedAt) {
+        const current = await readBuild(slot);
+        if (
+          !retained.operation ||
+          !sameOperation(pending.operation, retained.operation) ||
+          current.buildId !== options.build.buildId ||
+          current.version !== options.build.version ||
+          !sameBuild(current, pending.notStartedAt) ||
+          (await readJournal(pending.operation)).phase !== pending.priorPhase
+        )
+          return known("UPDATE_RECOVERY_IDENTITY_MISMATCH");
+        await clearRestoreIntent();
+        pending = null;
+      }
       if (retained.preparation) {
         const op = retained.preparation;
         const current = await readBuild(slot);
@@ -796,7 +834,10 @@ export async function createInstalledUpdateRuntime(
           },
         );
         operation = handoff.operation;
-        if (handoff.status === "refused" && (await confirmedRefusal(handoff))) {
+        if (
+          (handoff.status === "refused" || handoff.status === "not_started") &&
+          (await confirmedNoEffect(handoff))
+        ) {
           if (
             (await readJournal(op)).phase !== journal.phase ||
             !sameBuild(await readBuild(slot), current)
@@ -805,6 +846,14 @@ export async function createInstalledUpdateRuntime(
               status: "unknown",
               code: "UPDATE_RESTORE_OUTCOME_UNKNOWN",
             };
+          if (handoff.status === "not_started")
+            await writeRecord(restoreFile, {
+              schema: "farol.update-restore-intent/1",
+              action,
+              operation: op,
+              priorPhase: journal.phase,
+              notStartedAt: current,
+            });
           await writeRecord(path.join(root, op.operationId, "refusal.json"), {
             schema: "farol.update-refusal/1",
             action,
@@ -812,19 +861,16 @@ export async function createInstalledUpdateRuntime(
             code: handoff.reason,
             priorPhase: journal.phase,
           });
-          await fs.unlink(restoreFile);
-          const parent = await fs.open(
-            root,
-            constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
-          );
-          try {
-            await parent.sync();
-          } finally {
-            await parent.close();
-          }
+          await clearRestoreIntent();
           operation = null;
           keepAdmission = false;
-          return { status: "blocked", code: "UPDATE_HELPER_REFUSED" };
+          return {
+            status: "blocked",
+            code:
+              handoff.status === "not_started"
+                ? "UPDATE_HELPER_NOT_STARTED"
+                : "UPDATE_HELPER_REFUSED",
+          };
         }
         if (handoff.status !== "ready")
           return { status: "unknown", code: "UPDATE_RESTORE_OUTCOME_UNKNOWN" };
@@ -948,7 +994,45 @@ export async function createInstalledUpdateRuntime(
           },
         );
         operation = handoff.operation;
-        if (handoff.status === "refused" && (await confirmedRefusal(handoff))) {
+        if (
+          handoff.status === "not_started" &&
+          (await confirmedNoEffect(handoff))
+        ) {
+          if (
+            (await readRecord(path.join(operationRoot, "journal.json"))) !==
+              null ||
+            !sameBuild(await readBuild(slot), source)
+          )
+            return { status: "unknown", code: "UPDATE_HANDOFF_UNKNOWN" };
+          await writeRecord(
+            path.join(root, `${operationId}-not-started.json`),
+            {
+              schema: "farol.update-refusal/1",
+              action: "apply",
+              operation: preparing,
+              code: handoff.reason,
+            },
+          );
+          // No helper process existed. Commit that proof as preparation before
+          // reclaiming the copy, so interruption cannot orphan an unknown dispatch.
+          retained = {
+            ...retained,
+            operation: null,
+            helper: null,
+            preparation: preparing,
+          };
+          await writeRecord(readyFile, retained);
+          await removePreparedCopy(preparing);
+          retained = { ...retained, preparation: undefined };
+          await writeRecord(readyFile, retained);
+          operation = null;
+          keepAdmission = false;
+          return { status: "blocked", code: "UPDATE_HELPER_NOT_STARTED" };
+        }
+        if (
+          handoff.status === "refused" &&
+          (await confirmedNoEffect(handoff))
+        ) {
           if (
             (await readRecord(path.join(operationRoot, "journal.json"))) !==
               null ||

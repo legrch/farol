@@ -169,6 +169,11 @@ export interface InstalledUpdateOperation {
 }
 
 export type InstalledUpdateLaunch =
+  | Readonly<{
+      status: "not_started";
+      reason: "helper_spawn_failed";
+      operation: InstalledUpdateOperation;
+    }>
   | Readonly<{ status: "ready"; operation: InstalledUpdateOperation }>
   | Readonly<{
       status: "refused";
@@ -344,6 +349,8 @@ export async function startInstalledUpdateHelper(
     resolveLaunch = resolve;
   });
   let settled = false;
+  let spawned = false;
+  let spawnFailed = false;
   const detach = (): void => {
     child.unref();
     for (const pipe of child.stdio)
@@ -406,10 +413,56 @@ export async function startInstalledUpdateHelper(
     else finish({ status: "ready", operation });
   });
   ack?.on("close", () => {
-    if (!ackEnded) unknown("readiness_channel_closed");
+    if (!ackEnded && !spawnFailed) unknown("readiness_channel_closed");
   });
-  child.once("error", () => unknown("helper_process_error"));
+  child.once("error", (error: NodeJS.ErrnoException) => {
+    if (
+      !spawned &&
+      child.pid === undefined &&
+      error.syscall === "spawn /usr/bin/python3" &&
+      [
+        "ENOENT",
+        "EACCES",
+        "EPERM",
+        "ENOEXEC",
+        "ENOMEM",
+        "EAGAIN",
+        "EMFILE",
+        "ENFILE",
+      ].includes(error.code ?? "")
+    ) {
+      // Node emitted an exec failure before the spawn event. No program or
+      // request bytes have been written. Still require terminal channel closure.
+      spawnFailed = true;
+    } else unknown("helper_process_error");
+  });
   child.once("close", (code, signal) => {
+    if (
+      spawnFailed &&
+      !spawned &&
+      child.pid === undefined &&
+      code !== null &&
+      code < 0 &&
+      signal === null &&
+      ackBytes === 0 &&
+      outputBytes === 0 &&
+      !handoff &&
+      !protocolError
+    ) {
+      exit = {
+        code,
+        signal,
+        terminal: null,
+        protocolError: "helper_spawn_failed",
+      };
+      resolveCompletion(exit);
+      finish({
+        status: "not_started",
+        reason: "helper_spawn_failed",
+        operation,
+      });
+      return;
+    }
     const terminal =
       outputBytes <= MAX_CHANNEL_BYTES
         ? parseTerminal(Buffer.concat(outputChunks), pinned.operationId)
@@ -443,6 +496,7 @@ export async function startInstalledUpdateHelper(
     stream.end(data);
   };
   child.once("spawn", () => {
+    spawned = true;
     write(child.stdin, bytes);
     write(child.stdio[3] as Writable | null, JSON.stringify(request));
   });

@@ -251,6 +251,10 @@ export async function discoverGithubUpdate(
     return failure("wrong_provenance");
   if (!Array.isArray(fetched.value.value) || fetched.value.value.length > 100)
     return failure("invalid_release_metadata");
+  // A full page does not establish that the fixed bounded catalogue is complete.
+  // Never report "up to date" or choose a partial maximum from truncated metadata.
+  if (fetched.value.value.length === 100)
+    return failure("release_catalogue_incomplete");
   let chosen: Release | null = null;
   for (const raw of fetched.value.value) {
     const parsed = parseRelease(raw);

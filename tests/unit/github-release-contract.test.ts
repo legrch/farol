@@ -157,6 +157,21 @@ describe("GitHub update discovery", () => {
     });
   });
 
+  it.each([false, true])(
+    "does not claim a complete catalogue from a full GitHub page (eligible=%s)",
+    async (eligible) => {
+      const page = Array.from({ length: 100 }, () => release({ draft: true }));
+      if (eligible) page[0] = release();
+      const source = ports(page);
+      expect(await discoverGithubUpdate("0.1.0", "stable", source)).toEqual({
+        ok: false,
+        code: "release_catalogue_incomplete",
+      });
+      expect(source.fetchJson).toHaveBeenCalledTimes(1);
+      expect(source.download).not.toHaveBeenCalled();
+    },
+  );
+
   it("rejects non-increasing build numbers and invalid installed identity", async () => {
     expect(await discoverGithubUpdate("0.1.0", "stable", ports(), "2")).toEqual(
       {

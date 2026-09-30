@@ -36,6 +36,15 @@ cleanup persists an obligation and blocks another attempt across restarts.
 A missing, timed-out or conflicting
 terminal result remains unknown and never permits a substitute helper.
 
+A confirmed `not_started` launcher result is separate from an unknown no-PID
+outcome. Only the launcher's terminal native exec failure can establish that no
+helper existed. Apply rechecks the source and absent journal, records the refusal,
+then durably transitions to preparation cleanup before reclaiming its copy. An
+interrupted cleanup is reconciled on startup without dispatch. Rollback/recovery
+records the same no-spawn proof in its exact restore intent and rechecks unchanged
+journal and installed identity before clearing it. A lost proof or unknown close
+remains blocked; no-PID alone never permits another attempt.
+
 A rejected download releases its extracted stage and archive bytes before the
 download intent is cleared. Archive cleanup opens the issued file without
 following links, checks its descriptor identity, and truncates that descriptor;

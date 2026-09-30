@@ -86,6 +86,109 @@ async function launch(readinessTimeoutMs = 1000, input = request) {
 }
 
 describe("installed helper bounded readiness protocol", () => {
+  it.each(["ENOENT", "EACCES", "EPERM"])(
+    "reports a confirmed %s before spawn only after close, without writing the request",
+    async (code) => {
+      const child = new Transport();
+      Object.defineProperty(child, "pid", { value: undefined });
+      const requestWrite = vi.spyOn(child.requestPipe, "end");
+      const programWrite = vi.spyOn(child.stdin, "end");
+      let seen!: () => void;
+      const observed = new Promise<void>((resolve) => {
+        seen = resolve;
+      });
+      vi.mocked(spawn).mockImplementationOnce(() => {
+        queueMicrotask(() => {
+          child.emit(
+            "error",
+            Object.assign(new Error("fixture spawn failure"), {
+              code,
+              syscall: "spawn /usr/bin/python3",
+            }),
+          );
+          seen();
+        });
+        return child as unknown as ChildProcess;
+      });
+      const pending = startInstalledUpdateHelper(helperPath, request, {
+        readinessTimeoutMs: 1000,
+      });
+      let settled = false;
+      void pending.then(() => {
+        settled = true;
+      });
+      await observed;
+      await tick();
+      const settledBeforeClose = settled;
+      child.ack.destroy();
+      child.stdout.destroy();
+      await tick();
+      child.emit("close", -2, null);
+      const result = await pending;
+      expect(settledBeforeClose).toBe(false);
+      expect(result).toMatchObject({
+        status: "not_started",
+        reason: "helper_spawn_failed",
+      });
+      expect(await result.operation.completion).toMatchObject({
+        code: -2,
+        signal: null,
+        terminal: null,
+        protocolError: "helper_spawn_failed",
+      });
+      expect(result.operation.pid).toBeNull();
+      expect(programWrite).not.toHaveBeenCalled();
+      expect(requestWrite).not.toHaveBeenCalled();
+      expect(spawn).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("does not reinterpret a missing close or late close as a new launch decision", async () => {
+    const child = new Transport();
+    Object.defineProperty(child, "pid", { value: undefined });
+    vi.mocked(spawn).mockImplementationOnce(() => {
+      queueMicrotask(() =>
+        child.emit(
+          "error",
+          Object.assign(new Error("fixture"), {
+            code: "ENOENT",
+            syscall: "spawn /usr/bin/python3",
+          }),
+        ),
+      );
+      return child as unknown as ChildProcess;
+    });
+    const result = await startInstalledUpdateHelper(helperPath, request, {
+      readinessTimeoutMs: 10,
+    });
+    expect(result).toMatchObject({
+      status: "outcome_unknown",
+      reason: "readiness_timeout",
+    });
+    child.ack.destroy();
+    child.stdout.destroy();
+    child.emit("close", -2, null);
+    await result.operation.completion;
+    expect(result.status).toBe("outcome_unknown");
+    expect(spawn).toHaveBeenCalledTimes(1);
+  });
+
+  it("retains uncertainty for a process error after spawn", async () => {
+    const { child, pending } = await launch();
+    child.emit(
+      "error",
+      Object.assign(new Error("fixture"), {
+        code: "EPERM",
+        syscall: "spawn /usr/bin/python3",
+      }),
+    );
+    child.finish(79, "unknown");
+    expect(await pending).toMatchObject({
+      status: "outcome_unknown",
+      reason: "helper_process_error",
+    });
+  });
+
   it("waits for the entire single frame and EOF, then unrefs the retained operation", async () => {
     const { child, pending } = await launch();
     let settled = false;

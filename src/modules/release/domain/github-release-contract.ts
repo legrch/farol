@@ -12,6 +12,7 @@ export const FAROL_BUNDLE_ID = "local.farol.next.preview";
 export type GithubReleaseErrorCode =
   | "invalid_installed_version"
   | "invalid_release_metadata"
+  | "release_catalogue_incomplete"
   | "invalid_manifest"
   | "release_mismatch"
   | "wrong_provenance"
