@@ -60,8 +60,35 @@ const Journal = Operation.extend({
     "rolled_back",
     "launch_requested",
     "completed",
+    "cancelled",
+    "cancel_launch_requested",
+    "cancel_completed",
+    "rollback_launch_requested",
+    "rollback_completed",
   ]),
 });
+const SavedReceipt = Retained.extend({
+  observedAt: z.string().max(64),
+  phase: Journal.shape.phase,
+  runningBuildId: Digest,
+});
+const RestoreIntent = z.strictObject({
+  schema: z.literal("farol.update-restore-intent/1"),
+  action: z.enum(["recover", "rollback"]),
+  operation: Operation,
+  priorPhase: Journal.shape.phase,
+});
+const ROLLED_BACK_PHASES = [
+  "rolled_back",
+  "rollback_launch_requested",
+  "rollback_completed",
+];
+const CANCELLED_PHASES = [
+  "cancelled",
+  "cancel_launch_requested",
+  "cancel_completed",
+];
+const TARGET_PHASES = ["verified", "launch_requested", "completed"];
 const MAX_RECORD_BYTES = 65536;
 
 async function privateDirectory(directory: string): Promise<void> {
@@ -219,6 +246,11 @@ export async function createInstalledUpdateRuntime(
   let retained: z.infer<typeof Retained> | null = null;
   let operation: InstalledUpdateOperation | null = null;
   const readyFile = path.join(root, "ready.json");
+  const receiptFile = path.join(root, "last-update.json");
+  const restoreFile = path.join(root, "restore-pending.json");
+  let restorable: z.infer<typeof Retained> | null = null;
+  let restoreKind: "recover" | "rollback" | null = null;
+  let declinedBuildId: string | null = null;
   const runTrusted = async (entry: string, args: string[]) => {
     const { stdout } = await execute(
       process.execPath,
@@ -239,52 +271,157 @@ export async function createInstalledUpdateRuntime(
   const readBuild = async (file: string) =>
     AcceptedBuild.parse(await runTrusted("update-slot.mjs", [file]));
   const known = (code: string) => ({ ok: false as const, code });
+  const sameBuild = (
+    a: z.infer<typeof AcceptedBuild>,
+    b: z.infer<typeof AcceptedBuild>,
+  ) =>
+    a.digest === b.digest && a.version === b.version && a.buildId === b.buildId;
+  const sameOperation = (
+    a: z.infer<typeof Operation>,
+    b: z.infer<typeof Operation>,
+  ) =>
+    a.operationId === b.operationId &&
+    sameBuild(a.source, b.source) &&
+    sameBuild(a.target, b.target);
+  const readJournal = async (op: z.infer<typeof Operation>) => {
+    const journal = Journal.parse(
+      await readRecord(path.join(root, op.operationId, "journal.json")),
+    );
+    if (!sameOperation(journal, op))
+      throw new Error("UPDATE_OPERATION_IDENTITY_MISMATCH");
+    return journal;
+  };
+  const optionalBuild = async (op: z.infer<typeof Operation>, name: string) => {
+    const file = path.join(root, op.operationId, name);
+    try {
+      await fs.lstat(file);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw error;
+    }
+    return readBuild(file);
+  };
+  const drained = async () => {
+    const report = z
+      .strictObject({
+        drained: z.boolean(),
+        obligationCount: z.number(),
+        unreadableCount: z.number(),
+        changedCount: z.number(),
+      })
+      .parse(
+        await runTrusted("update-obligations.mjs", [
+          options.userData,
+          String(process.pid),
+        ]),
+      );
+    return report.drained;
+  };
   const controller = new InstalledUpdater({
     now: Date.now,
     publish: options.publish,
     recover: async () => {
       if ((await readRecord(pendingDownloadFile)) !== null)
         return known("UPDATE_STAGING_OUTCOME_UNKNOWN");
+      const pendingRaw = await readRecord(restoreFile);
+      const pending =
+        pendingRaw === null ? null : RestoreIntent.parse(pendingRaw);
       const raw = await readRecord(readyFile);
-      if (raw === null) return { ok: true, update: null };
-      retained = Retained.parse(raw);
+      const fromReady = raw !== null;
+      const previous = fromReady ? null : await readRecord(receiptFile);
+      if (raw === null && previous === null)
+        return pending
+          ? known("UPDATE_RESTORE_OUTCOME_UNKNOWN")
+          : { ok: true, update: null };
+      retained = fromReady
+        ? Retained.parse(raw)
+        : Retained.parse(
+            (({
+              observedAt: _at,
+              phase: _phase,
+              runningBuildId: _id,
+              ...record
+            }) => record)(SavedReceipt.parse(previous)),
+          );
       const parsed = parseGithubReleaseManifest(retained.manifest);
       if (!parsed.ok) return known("UPDATE_RETAINED_MANIFEST_INVALID");
       if (retained.operation) {
         const op = retained.operation;
-        const journal = Journal.parse(
-          await readRecord(path.join(root, op.operationId, "journal.json")),
-        );
-        if (
-          journal.operationId !== op.operationId ||
-          JSON.stringify(journal.source) !== JSON.stringify(op.source) ||
-          JSON.stringify(journal.target) !== JSON.stringify(op.target)
-        )
+        if (pending && !sameOperation(pending.operation, op))
           return known("UPDATE_OPERATION_IDENTITY_MISMATCH");
-        if (
-          !["verified", "launch_requested", "completed"].includes(journal.phase)
-        )
-          return known("UPDATE_RECOVERY_REQUIRED");
+        const journal = await readJournal(op);
         const current = await readBuild(slot);
-        const predecessor = await readBuild(
-          path.join(root, op.operationId, "previous.app"),
-        );
         if (
-          JSON.stringify(current) !== JSON.stringify(op.target) ||
-          JSON.stringify(predecessor) !== JSON.stringify(op.source) ||
-          current.buildId !== options.build.buildId
+          current.buildId !== options.build.buildId ||
+          current.version !== options.build.version
         )
           return known("UPDATE_RECOVERY_IDENTITY_MISMATCH");
-        await writeRecord(path.join(root, "last-update.json"), {
+        if (
+          pending &&
+          !(pending.action === "rollback"
+            ? ROLLED_BACK_PHASES.includes(journal.phase) &&
+              sameBuild(current, op.source)
+            : journal.phase !== pending.priorPhase &&
+              [
+                ...TARGET_PHASES,
+                ...CANCELLED_PHASES,
+                ...ROLLED_BACK_PHASES,
+              ].includes(journal.phase))
+        )
+          return known("UPDATE_RESTORE_OUTCOME_UNKNOWN");
+        let settled = false;
+        let rollbackVersion: string | undefined;
+        if (sameBuild(current, op.target)) {
+          const predecessorName =
+            (await optionalBuild(op, "previous.app")) !== null
+              ? "previous.app"
+              : "staged.app";
+          const predecessor = await optionalBuild(op, predecessorName);
+          if (!predecessor || !sameBuild(predecessor, op.source))
+            return known("UPDATE_RECOVERY_IDENTITY_MISMATCH");
+          settled =
+            predecessorName === "previous.app" &&
+            TARGET_PHASES.includes(journal.phase);
+          if (settled) rollbackVersion = op.source.version;
+        } else if (sameBuild(current, op.source)) {
+          const rolledBack = ROLLED_BACK_PHASES.includes(journal.phase);
+          const other = rolledBack
+            ? await optionalBuild(op, "failed.app")
+            : journal.phase === "rollback_started"
+              ? ((await optionalBuild(op, "failed.app")) ??
+                (await optionalBuild(op, "previous.app")))
+              : await optionalBuild(op, "staged.app");
+          if (!other || !sameBuild(other, op.target))
+            return known("UPDATE_RECOVERY_IDENTITY_MISMATCH");
+          settled = [...ROLLED_BACK_PHASES, ...CANCELLED_PHASES].includes(
+            journal.phase,
+          );
+          if (settled) declinedBuildId = op.target.buildId;
+        } else return known("UPDATE_RECOVERY_IDENTITY_MISMATCH");
+        restorable = retained;
+        restoreKind = settled
+          ? rollbackVersion
+            ? "rollback"
+            : null
+          : "recover";
+        if (!settled)
+          return { ok: true, update: null, recoveryVersion: current.version };
+        await writeRecord(receiptFile, {
           ...retained,
           observedAt: new Date().toISOString(),
           phase: journal.phase,
           runningBuildId: options.build.buildId,
         });
-        await fs.unlink(readyFile);
+        if (fromReady) await fs.unlink(readyFile);
+        if (pending) await fs.unlink(restoreFile);
         retained = null;
-        return { ok: true, update: null };
+        return {
+          ok: true,
+          update: null,
+          ...(rollbackVersion ? { rollbackVersion } : {}),
+        };
       }
+      if (pending) return known("UPDATE_RESTORE_OUTCOME_UNKNOWN");
       if (parsed.value.version === options.build.version)
         return known("UPDATE_RETAINED_VERSION_MISMATCH");
       const check = await transport.verifyPackage(
@@ -316,7 +453,8 @@ export async function createInstalledUpdateRuntime(
         transport,
       );
       if (!found.ok) return known(`UPDATE_${found.code.toUpperCase()}`);
-      candidate = found.value;
+      candidate =
+        found.value?.manifest.buildId === declinedBuildId ? null : found.value;
       return { ok: true, available: candidate !== null };
     },
     download: async () => {
@@ -362,6 +500,68 @@ export async function createInstalledUpdateRuntime(
       await writeRecord(readyFile, retained);
       await fs.unlink(pendingDownloadFile);
     },
+    restore: async (action) => {
+      const op = restorable?.operation;
+      if (
+        !op ||
+        restoreKind !== action ||
+        operation ||
+        (await readRecord(restoreFile)) !== null
+      )
+        return { status: "blocked", code: "UPDATE_RESTORE_NOT_READY" };
+      const admission = await options.acquireAdmission();
+      if (!admission.ok) return { status: "blocked", code: admission.code };
+      let keepAdmission = false;
+      try {
+        if (!(await drained()))
+          return { status: "blocked", code: "UPDATE_WORK_PENDING" };
+        const journal = await readJournal(op);
+        const current = await readBuild(slot);
+        if (
+          current.buildId !== options.build.buildId ||
+          (!sameBuild(current, op.source) && !sameBuild(current, op.target))
+        )
+          return { status: "blocked", code: "UPDATE_SOURCE_IDENTITY_MISMATCH" };
+        const processStart = await captureInstalledProcessStart(process.pid);
+        await writeRecord(restoreFile, {
+          schema: "farol.update-restore-intent/1",
+          action,
+          operation: op,
+          priorPhase: journal.phase,
+        });
+        keepAdmission = true;
+        const handoff = await startInstalledUpdateHelper(
+          path.join(options.directory, "update-helper.py"),
+          {
+            action,
+            ...op,
+            drain: {
+              status: "reconciled",
+              acceptedSource: op.source.buildId,
+              acceptedTarget: op.target.buildId,
+            },
+            pid: process.pid,
+            processStart,
+            waitSeconds: 120,
+            relaunch: true,
+          },
+        );
+        operation = handoff.operation;
+        if (handoff.status !== "ready")
+          return { status: "unknown", code: "UPDATE_RESTORE_OUTCOME_UNKNOWN" };
+        options.quit();
+        return { status: "accepted" };
+      } catch {
+        return {
+          status: keepAdmission ? "unknown" : "blocked",
+          code: keepAdmission
+            ? "UPDATE_RESTORE_OUTCOME_UNKNOWN"
+            : "UPDATE_RESTORE_PREPARE_FAILED",
+        };
+      } finally {
+        if (!keepAdmission) await admission.release();
+      }
+    },
     restart: async (update) => {
       if (operation || retained?.operation)
         return { status: "unknown", code: "UPDATE_HANDOFF_UNRECONCILED" };
@@ -371,20 +571,7 @@ export async function createInstalledUpdateRuntime(
       if (!admission.ok) return { status: "blocked", code: admission.code };
       let keepAdmission = false;
       try {
-        const report = z
-          .strictObject({
-            drained: z.boolean(),
-            obligationCount: z.number(),
-            unreadableCount: z.number(),
-            changedCount: z.number(),
-          })
-          .parse(
-            await runTrusted("update-obligations.mjs", [
-              options.userData,
-              String(process.pid),
-            ]),
-          );
-        if (!report.drained)
+        if (!(await drained()))
           return { status: "blocked", code: "UPDATE_WORK_PENDING" };
         const source = await readBuild(slot);
         if (

@@ -14,11 +14,21 @@ type KnownFailure = Readonly<{
   code: string;
   recoveryRequired?: boolean;
 }>;
+export type UpdateHandoff =
+  | Readonly<{ status: "accepted" }>
+  | Readonly<{ status: "blocked"; code: string }>
+  | Readonly<{ status: "unknown"; code: string }>;
 export type InstalledUpdaterPorts = Readonly<{
   now(): number;
   // Recovery must reverify the retained archive/package and reconcile any helper receipt.
   recover(): Promise<
-    Readonly<{ ok: true; update: ReadyUpdate | null }> | KnownFailure
+    | Readonly<{
+        ok: true;
+        update: ReadyUpdate | null;
+        rollbackVersion?: string;
+        recoveryVersion?: string;
+      }>
+    | KnownFailure
   >;
   discover(): Promise<
     Readonly<{ ok: true; available: boolean }> | KnownFailure
@@ -29,13 +39,8 @@ export type InstalledUpdaterPorts = Readonly<{
   retain(update: ReadyUpdate): Promise<void>;
   // The composition holds existing admission fences, checks real obligations,
   // and hands off to the helper before it requests the application's normal quit.
-  restart(
-    update: ReadyUpdate,
-  ): Promise<
-    | Readonly<{ status: "accepted" }>
-    | Readonly<{ status: "blocked"; code: string }>
-    | Readonly<{ status: "unknown"; code: string }>
-  >;
+  restart(update: ReadyUpdate): Promise<UpdateHandoff>;
+  restore(action: "recover" | "rollback"): Promise<UpdateHandoff>;
   publish(view: UpdateView): void;
 }>;
 
@@ -47,6 +52,7 @@ export class InstalledUpdater {
   private busy = false;
   private lastCheck: number | null = null;
   private closed = false;
+  private rollbackVersion: string | undefined;
 
   constructor(private readonly ports: InstalledUpdaterPorts) {}
 
@@ -70,6 +76,12 @@ export class InstalledUpdater {
           code: restored.code,
           recoveryRequired: true,
         });
+      } else if (restored.recoveryVersion) {
+        this.publish({
+          phase: "recovery",
+          version: restored.recoveryVersion,
+          blockedBy: null,
+        });
       } else if (restored.update) {
         this.ready = restored.update;
         this.publish({
@@ -77,6 +89,13 @@ export class InstalledUpdater {
           version: restored.update.manifest.version,
           deferred: true,
           blockedBy: null,
+        });
+      } else if (restored.rollbackVersion) {
+        this.rollbackVersion = restored.rollbackVersion;
+        this.publish({
+          phase: "idle",
+          checkedAt: null,
+          rollbackVersion: this.rollbackVersion,
         });
       }
     } catch {
@@ -110,6 +129,7 @@ export class InstalledUpdater {
       this.closed ||
       this.ready ||
       this.view.phase === "applying" ||
+      this.view.phase === "recovery" ||
       (this.view.phase === "failed" && this.view.recoveryRequired)
     )
       return;
@@ -136,7 +156,13 @@ export class InstalledUpdater {
         return;
       }
       if (!found.available) {
-        this.publish({ phase: "idle", checkedAt: now });
+        this.publish({
+          phase: "idle",
+          checkedAt: now,
+          ...(this.rollbackVersion
+            ? { rollbackVersion: this.rollbackVersion }
+            : {}),
+        });
         return;
       }
       this.publish({ phase: "downloading" });
@@ -202,6 +228,40 @@ export class InstalledUpdater {
       }
     } catch {
       // The helper may already have accepted its handoff. Never launch another.
+      this.publish({
+        phase: "failed",
+        code: "UPDATE_HANDOFF_UNKNOWN",
+        recoveryRequired: true,
+      });
+    } finally {
+      this.busy = false;
+    }
+  }
+
+  async restore(action: "recover" | "rollback"): Promise<void> {
+    const previous = this.view;
+    const version =
+      action === "recover" && previous.phase === "recovery"
+        ? previous.version
+        : action === "rollback" && previous.phase === "idle"
+          ? previous.rollbackVersion
+          : undefined;
+    if (this.closed || this.busy || !version) return;
+    this.busy = true;
+    this.publish({ phase: "applying", version });
+    try {
+      const outcome = await this.ports.restore(action);
+      if (outcome.status === "blocked") {
+        if (previous.phase === "recovery" || previous.phase === "idle")
+          this.publish({ ...previous, blockedBy: outcome.code });
+      } else if (outcome.status === "unknown") {
+        this.publish({
+          phase: "failed",
+          code: outcome.code,
+          recoveryRequired: true,
+        });
+      }
+    } catch {
       this.publish({
         phase: "failed",
         code: "UPDATE_HANDOFF_UNKNOWN",

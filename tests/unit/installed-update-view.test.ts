@@ -69,9 +69,33 @@ const allControls = [
   "later",
   "notice-restart",
   "notice-later",
+  "recover",
+  "rollback",
 ] as const;
 
 describe("installed update view", () => {
+  it("exposes only measured recovery or rollback and never dispatches while rendering", () => {
+    const f = fixture();
+    f.view.render({
+      phase: "recovery",
+      version: "0.1.1-owner.beta.1",
+      blockedBy: null,
+    });
+    expect(f.node("recover").hidden).toBe(false);
+    expect(f.node("rollback").hidden).toBe(true);
+    expect(f.onCommand).not.toHaveBeenCalled();
+    f.node("recover").click();
+    f.node("recover").click();
+    expect(f.onCommand.mock.calls).toEqual([["recover"]]);
+    f.view.render({
+      phase: "idle",
+      checkedAt: null,
+      rollbackVersion: "0.1.0-owner.beta.1",
+    });
+    f.node("rollback").click();
+    f.node("rollback").click();
+    expect(f.onCommand.mock.calls).toEqual([["recover"], ["rollback"]]);
+  });
   it("starts passive and keeps idle checks in Preferences without a rail notice", () => {
     const f = fixture();
     for (const name of allControls) f.node(name).click();

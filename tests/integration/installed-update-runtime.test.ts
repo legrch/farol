@@ -312,6 +312,78 @@ describe("installed updater composition (disposable filesystem and mocked native
     });
     expect(mocks.helper).toHaveBeenCalledTimes(1);
   });
+  for (const crossedExchange of [false, true]) {
+    it(`reconciles the interrupted exchange (${crossedExchange}) without replaying apply`, async () => {
+      const first = await prepared();
+      await first.restart();
+      const record = JSON.parse(await fs.readFile(ready, "utf8"));
+      const op = record.operation;
+      const journal = path.join(
+        userData,
+        "installed-updates",
+        op.operationId,
+        "journal.json",
+      );
+      await fs.writeFile(
+        journal,
+        JSON.stringify({
+          schema: "farol.installed-update-journal/1",
+          ...op,
+          phase: "prepared",
+        }),
+        { mode: 0o600 },
+      );
+      const current = crossedExchange ? target : source;
+      mocks.exec.mockImplementation(async (_file: unknown, args: string[]) => ({
+        stdout: JSON.stringify(
+          args[0]!.endsWith("update-obligations.mjs")
+            ? {
+                drained: true,
+                obligationCount: 0,
+                unreadableCount: 0,
+                changedCount: 0,
+              }
+            : args[1]!.endsWith("staged.app")
+              ? crossedExchange
+                ? source
+                : target
+              : current,
+        ),
+      }));
+      const next = await createInstalledUpdateRuntime({
+        ...options(),
+        build: { ...build, version: current.version, buildId: current.buildId },
+      });
+      await next!.initialize();
+      expect(next!.snapshot()).toMatchObject({
+        phase: "recovery",
+        version: current.version,
+      });
+      expect(mocks.helper).toHaveBeenCalledTimes(1);
+      await next!.restore("recover");
+      await next!.restore("recover");
+      expect(mocks.helper).toHaveBeenCalledTimes(2);
+      expect(mocks.helper.mock.calls[1]![1]).toMatchObject({
+        action: "recover",
+        operationId: op.operationId,
+        source,
+        target,
+        relaunch: true,
+      });
+      expect(mocks.copyApp).toHaveBeenCalledTimes(1);
+      const same = await createInstalledUpdateRuntime({
+        ...options(),
+        build: { ...build, version: current.version, buildId: current.buildId },
+      });
+      await same!.initialize();
+      await same!.restore("recover");
+      expect(same!.snapshot()).toMatchObject({
+        phase: "failed",
+        code: "UPDATE_RESTORE_OUTCOME_UNKNOWN",
+      });
+      expect(mocks.helper).toHaveBeenCalledTimes(2);
+    });
+  }
   it("reconciles the new running build and retained predecessor against the same operation journal", async () => {
     const controller = await prepared();
     await controller.restart();
@@ -325,6 +397,9 @@ describe("installed updater composition (disposable filesystem and mocked native
         phase: "completed",
       }),
       { mode: 0o600 },
+    );
+    await fs.mkdir(
+      path.join(userData, "installed-updates", op.operationId, "previous.app"),
     );
     mocks.exec.mockImplementation(async (_file: unknown, args: string[]) => ({
       stdout: JSON.stringify(
@@ -341,7 +416,10 @@ describe("installed updater composition (disposable filesystem and mocked native
       },
     });
     await next!.initialize();
-    expect(next!.snapshot().phase).toBe("idle");
+    expect(next!.snapshot()).toMatchObject({
+      phase: "idle",
+      rollbackVersion: source.version,
+    });
     await expect(fs.stat(ready)).rejects.toMatchObject({ code: "ENOENT" });
     const receipt = JSON.parse(
       await fs.readFile(
@@ -352,5 +430,54 @@ describe("installed updater composition (disposable filesystem and mocked native
     expect(receipt.runningBuildId).toBe(manifest.buildId);
     expect(receipt.operation.source).toEqual(source);
     expect(mocks.helper).toHaveBeenCalledTimes(1);
+    mocks.exec.mockImplementation(async (_file: unknown, args: string[]) => ({
+      stdout: JSON.stringify(
+        args[0]!.endsWith("update-obligations.mjs")
+          ? {
+              drained: true,
+              obligationCount: 0,
+              unreadableCount: 0,
+              changedCount: 0,
+            }
+          : args[1]!.endsWith("previous.app")
+            ? source
+            : target,
+      ),
+    }));
+    await next!.restore("rollback");
+    expect(mocks.helper).toHaveBeenCalledTimes(2);
+    expect(mocks.helper.mock.calls[1]![1]).toMatchObject({
+      action: "rollback",
+      operationId: op.operationId,
+      source,
+      target,
+      relaunch: true,
+    });
+    await next!.restore("rollback");
+    expect(mocks.helper).toHaveBeenCalledTimes(2);
+    const opRoot = path.join(userData, "installed-updates", op.operationId);
+    await fs.mkdir(path.join(opRoot, "failed.app"));
+    await fs.writeFile(
+      path.join(opRoot, "journal.json"),
+      JSON.stringify({
+        schema: "farol.installed-update-journal/1",
+        ...op,
+        phase: "rollback_completed",
+      }),
+      { mode: 0o600 },
+    );
+    mocks.exec.mockImplementation(async (_file: unknown, args: string[]) => ({
+      stdout: JSON.stringify(args[1]!.endsWith("failed.app") ? target : source),
+    }));
+    const rolledBack = await createInstalledUpdateRuntime(options());
+    await rolledBack!.initialize();
+    expect(rolledBack!.snapshot()).toMatchObject({ phase: "idle" });
+    expect(rolledBack!.snapshot()).not.toHaveProperty("rollbackVersion");
+    await rolledBack!.check(true);
+    expect(mocks.download).toHaveBeenCalledTimes(1);
+    expect(mocks.helper).toHaveBeenCalledTimes(2);
+    await expect(
+      fs.stat(path.join(userData, "installed-updates/restore-pending.json")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
   });
 });

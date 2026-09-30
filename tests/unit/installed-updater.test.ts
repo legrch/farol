@@ -48,6 +48,7 @@ function fixture() {
     restart: vi
       .fn<InstalledUpdaterPorts["restart"]>()
       .mockResolvedValue({ status: "accepted" }),
+    restore: vi.fn().mockResolvedValue({ status: "accepted" }),
     publish: vi.fn<InstalledUpdaterPorts["publish"]>(),
   } satisfies InstalledUpdaterPorts;
   return {
@@ -60,6 +61,51 @@ function fixture() {
 }
 
 describe("installed update orchestration (port fixture, no native or GitHub acceptance)", () => {
+  it("offers explicit recovery after boot without replaying download or apply", async () => {
+    const { updater, ports } = fixture();
+    ports.recover.mockResolvedValue({
+      ok: true,
+      update: null,
+      recoveryVersion: "0.1.1-owner.beta.1",
+    });
+    await updater.initialize();
+    await updater.check(true);
+    expect(updater.snapshot()).toMatchObject({
+      phase: "recovery",
+      version: "0.1.1-owner.beta.1",
+    });
+    expect(ports.restore).not.toHaveBeenCalled();
+    expect(ports.discover).not.toHaveBeenCalled();
+    await updater.restore("recover");
+    await updater.restore("recover");
+    expect(ports.restore).toHaveBeenCalledExactlyOnceWith("recover");
+    expect(ports.restart).not.toHaveBeenCalled();
+  });
+  it("offers measured predecessor rollback and fences an unknown rollback outcome", async () => {
+    const { updater, ports } = fixture();
+    ports.recover.mockResolvedValue({
+      ok: true,
+      update: null,
+      rollbackVersion: "0.1.0-owner.beta.1",
+    });
+    ports.restore.mockResolvedValue({
+      status: "unknown",
+      code: "UPDATE_HANDOFF_UNKNOWN",
+    });
+    await updater.initialize();
+    expect(updater.snapshot()).toMatchObject({
+      phase: "idle",
+      rollbackVersion: "0.1.0-owner.beta.1",
+    });
+    await updater.restore("rollback");
+    await updater.restore("rollback");
+    await updater.check(true);
+    expect(ports.restore).toHaveBeenCalledExactlyOnceWith("rollback");
+    expect(updater.snapshot()).toMatchObject({
+      phase: "failed",
+      recoveryRequired: true,
+    });
+  });
   it("downloads and persists once; Later keeps working and never restarts", async () => {
     const { updater, ports } = fixture();
     await updater.initialize();

@@ -1,6 +1,7 @@
 import type { InstalledUpdateView } from "../modules/release/contract/installed-update";
 
-export type InstalledUpdateViewCommand = "check" | "later" | "restart";
+export type InstalledUpdateViewCommand =
+  "check" | "later" | "restart" | "recover" | "rollback";
 
 const blockedMessages: Readonly<Record<string, string>> = {
   UPDATE_CONNECTOR_ACTIVE:
@@ -23,7 +24,16 @@ function description(view: InstalledUpdateView): string {
   switch (view.phase) {
     case "unavailable":
       return "Update checks are available in the installed Farol owner beta. Install and open the owner beta to use updates.";
+    case "recovery":
+      return `An interrupted update was found. Restart to finish recovery of ${updateName(view.version)}. No update will be downloaded or applied again.${view.blockedBy ? " Finish active work before restarting." : ""}`;
     case "idle":
+      if (view.blockedBy)
+        return (
+          blockedMessages[view.blockedBy] ??
+          "Farol can’t restart safely yet. Review active work before restoring the previous version."
+        );
+      if (view.rollbackVersion)
+        return `The previous accepted version, ${updateName(view.rollbackVersion)}, is available to restore. Your settings and folders are kept.`;
       return view.checkedAt === null
         ? "Check for a newer version of Farol when you’re ready."
         : "You’re up to date.";
@@ -75,6 +85,16 @@ export function createInstalledUpdateView(
   }
   const controls = [
     {
+      node: required<HTMLButtonElement>("installed-update-recover"),
+      kind: "recover",
+      inRail: false,
+    },
+    {
+      node: required<HTMLButtonElement>("installed-update-rollback"),
+      kind: "rollback",
+      inRail: false,
+    },
+    {
       node: required<HTMLButtonElement>("installed-update-check"),
       kind: "check",
       inRail: false,
@@ -121,7 +141,9 @@ export function createInstalledUpdateView(
       const message = description(view);
       const ready = view.phase === "ready";
       const applying = view.phase === "applying";
-      const recovery = view.phase === "failed" && view.recoveryRequired;
+      const recovery =
+        view.phase === "recovery" ||
+        (view.phase === "failed" && view.recoveryRequired);
       const canCheck =
         view.phase === "idle" ||
         (ready && view.blockedBy !== null) ||
@@ -141,7 +163,15 @@ export function createInstalledUpdateView(
       rail.hidden = !(ready && !view.deferred) && !applying && !recovery;
       rail.dataset.updateState = view.phase;
       for (const { node, kind } of controls) {
-        if (kind === "check") {
+        if (kind === "recover" || kind === "rollback") {
+          const available =
+            kind === "recover"
+              ? view.phase === "recovery"
+              : view.phase === "idle" && !!view.rollbackVersion;
+          node.hidden = !available;
+          node.disabled = !available;
+          node.title = message;
+        } else if (kind === "check") {
           node.disabled = !canCheck;
           text(
             node,

@@ -6,6 +6,13 @@ export const InstalledUpdateViewSchema = z.discriminatedUnion("phase", [
   z.strictObject({
     phase: z.literal("idle"),
     checkedAt: z.number().nonnegative().nullable(),
+    rollbackVersion: z.string().max(128).optional(),
+    blockedBy: Code.optional(),
+  }),
+  z.strictObject({
+    phase: z.literal("recovery"),
+    version: z.string().max(128),
+    blockedBy: Code.nullable(),
   }),
   z.strictObject({ phase: z.literal("checking") }),
   z.strictObject({ phase: z.literal("downloading") }),
@@ -27,5 +34,5 @@ export const InstalledUpdateViewSchema = z.discriminatedUnion("phase", [
 ]);
 export type InstalledUpdateView = z.infer<typeof InstalledUpdateViewSchema>;
 export const InstalledUpdateCommandSchema = z.strictObject({
-  kind: z.enum(["status", "check", "later", "restart"]),
+  kind: z.enum(["status", "check", "later", "restart", "recover", "rollback"]),
 });
