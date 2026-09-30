@@ -76,7 +76,9 @@ function fixture(mode: string) {
       return child;
     },
     "/fixture/home",
-    200,
+    // Only the explicit timeout scenario needs a short deadline. Other cases
+    // must allow the disposable process to start under full-CI contention.
+    mode === "timeout" ? 200 : 2000,
   );
   hosts.push(host);
   return { host, child: () => child, launches: () => launches };
