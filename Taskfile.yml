@@ -109,6 +109,7 @@ tasks:
     desc: Check real source and bundled package identities against the updater contract
     cmds:
       - /usr/bin/python3 -I ./scripts/assert-owner-untouched.py -- node tests/e2e/update-package-identity.e2e.mjs
+      - /usr/bin/python3 -I ./scripts/assert-owner-untouched.py -- node tests/e2e/update-stage-cleanup.e2e.mjs
 
   ci:fast:
     desc: Complete deterministic standalone gate without native UI

@@ -700,6 +700,8 @@ async function initializeInstalledUpdater(): Promise<void> {
           verbatimSymlinks: true,
           preserveTimestamps: true,
         }),
+      removeDirectory: (directory, force) =>
+        rawFs.rm(directory, { recursive: true, force }),
       publish: publishInstalledUpdate,
       quit: () => app.quit(),
       acquireAdmission: async (desktopWorkSettled) => {

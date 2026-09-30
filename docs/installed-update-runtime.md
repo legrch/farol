@@ -162,3 +162,16 @@ These source tests exercise ports and disposable filesystem state. They are not
 proof of a public GitHub download, installed N-to-N+1 upgrade, native relaunch,
 configuration preservation or rollback on the owner's live installation. Those
 require separate release/update receipts from the accepted packaged candidate.
+
+## Physical staging cleanup
+
+Electron treats ASAR archives as virtual directories through its patched Node
+filesystem. Main supplies the same physical `original-fs` boundary for package
+removal as for copying. The verifier removes only its own bound extraction root;
+prepared-copy and reconciled-download cleanup retain their existing ownership
+checks. A cleanup failure still writes the unknown-outcome obligation and fences
+updates; this change does not retry or clear an existing uncertain cleanup.
+
+The updater package gate includes a disposable Electron ASAR cleanup regression.
+Its verifier response is synthetic, so it proves physical removal semantics and
+port composition, not an installed GitHub upgrade or package authenticity.

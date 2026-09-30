@@ -6036,8 +6036,7 @@ async function start(): Promise<void> {
         taskMenuReturnOffered = false;
         if (parsed.data.action === "open-settings") {
           setupJourney = { ...setupJourney, open: false };
-          if (guidedSetupSelected(bootstrap)) selectSection("computer");
-          else selectSection("settings");
+          selectSection("settings");
         }
       } else if (decision.offerReturn) {
         // Readiness still changes; the editor does not move.

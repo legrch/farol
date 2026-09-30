@@ -309,6 +309,8 @@ export type InstalledUpdateRuntimeOptions = Readonly<{
   build: BuildIdentity;
   // Electron must copy physical ASAR files, not its virtual archive filesystem.
   copyApp(source: string, destination: string): Promise<void>;
+  // Removal has the same physical ASAR boundary as copying a package.
+  removeDirectory(directory: string, force: boolean): Promise<void>;
   // Evaluate this existing durable report while admission is held, before
   // stopping clients. The runtime also rechecks it after the drain.
   acquireAdmission(
@@ -348,6 +350,7 @@ export async function createInstalledUpdateRuntime(
       stagingParent: directory,
       extractorPath: path.join(options.directory, "update-archive.py"),
       verifierPath: path.join(options.directory, "update-package.mjs"),
+      removeDirectory: options.removeDirectory,
     });
     const transport = createGithubUpdateTransport({
       privateStateDirectory: directory,
@@ -620,7 +623,7 @@ export async function createInstalledUpdateRuntime(
           throw new Error("UPDATE_DOWNLOAD_STAGE_CHANGED");
         // The caller has reconciled the producer and every operation in this
         // exclusive directory. Older retained packages and rollback stay outside.
-        await fs.rm(directory, { recursive: true, force: false });
+        await options.removeDirectory(directory, false);
       } else {
         // Interrupted allocation cannot have received bytes. rmdir refuses any
         // contents rather than claiming an unrecorded directory is disposable.
@@ -709,10 +712,7 @@ export async function createInstalledUpdateRuntime(
       if (entry.name !== "staged.app")
         throw new Error("UPDATE_PREPARATION_UNRECONCILED");
     }
-    await fs.rm(path.join(directory, "staged.app"), {
-      recursive: true,
-      force: true,
-    });
+    await options.removeDirectory(path.join(directory, "staged.app"), true);
     await fs.rmdir(directory);
   };
   const clearRestoreIntent = async (): Promise<void> => {

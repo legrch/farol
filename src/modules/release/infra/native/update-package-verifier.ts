@@ -168,8 +168,14 @@ export function createUpdatePackageVerifier(
     extractorPath: string;
     verifierPath: string;
     nodeExecutable?: string;
+    // Electron callers supply physical removal; ASAR files are not directories.
+    removeDirectory?(directory: string, force: boolean): Promise<void>;
   }>,
 ) {
+  const removeDirectory =
+    options.removeDirectory ??
+    ((directory: string, force: boolean) =>
+      fs.rm(directory, { recursive: true, force }));
   const verified = new Map<string, VerifiedStagedPackage>();
   return {
     async verifyPackage(
@@ -271,7 +277,7 @@ export function createUpdatePackageVerifier(
         return result;
       } catch (cause) {
         try {
-          await fs.rm(stagingRoot, { recursive: true, force: true });
+          await removeDirectory(stagingRoot, true);
         } catch (cleanupError) {
           throw new PackageVerificationError("cleanup_unknown", cleanupError);
         }
@@ -285,8 +291,7 @@ export function createUpdatePackageVerifier(
     },
     async discard(handle: string): Promise<void> {
       const result = verified.get(handle);
-      if (result)
-        await fs.rm(result.stagingRoot, { recursive: true, force: true });
+      if (result) await removeDirectory(result.stagingRoot, true);
       verified.delete(handle);
     },
   };

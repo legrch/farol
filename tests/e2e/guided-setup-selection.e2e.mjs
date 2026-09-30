@@ -735,6 +735,16 @@ try {
       await window.locator("#review-setup").click();
     await window.locator("#onboarding-return").click();
     await window.locator('[data-panel="browser"].active').waitFor();
+    // The application menu must reach Settings in both normal environments;
+    // the disposable, non-installed profile cannot check the live update channel.
+    await app.evaluate(({ Menu }) => {
+      const item = Menu.getApplicationMenu()?.getMenuItemById("app.updates");
+      if (!item?.click) throw new Error("UPDATE_MENU_ITEM_MISSING");
+      item.click();
+    });
+    await window.locator('[data-panel="settings"].active').waitFor();
+    assert.equal(await window.locator("#onboarding-nav").isVisible(), false);
+    observations.push({ kind: "update-menu-opens-settings", environment });
     // Review Setup must remain reachable in an empty profile.
     await window
       .locator('.nav-utility .nav-item[data-section="settings"]')

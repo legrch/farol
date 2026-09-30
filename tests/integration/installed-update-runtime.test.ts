@@ -131,6 +131,8 @@ function options() {
     userData,
     build,
     copyApp: mocks.copyApp,
+    removeDirectory: (directory: string, force: boolean) =>
+      fs.rm(directory, { recursive: true, force }),
     acquireAdmission: async () => ({ ok: true as const, release }),
     quit,
     publish: vi.fn(),
