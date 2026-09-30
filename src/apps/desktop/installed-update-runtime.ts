@@ -152,6 +152,8 @@ export type InstalledUpdateRuntimeOptions = Readonly<{
   directory: string;
   userData: string;
   build: BuildIdentity;
+  // Electron must copy physical ASAR files, not its virtual archive filesystem.
+  copyApp(source: string, destination: string): Promise<void>;
   acquireAdmission(): Promise<InstalledUpdateAdmission>;
   quit(): void;
   publish(view: InstalledUpdateView): void;
@@ -222,7 +224,11 @@ export async function createInstalledUpdateRuntime(
       process.execPath,
       [path.join(options.directory, entry), ...args],
       {
-        env: { PATH: "/usr/bin:/bin", ELECTRON_RUN_AS_NODE: "1" },
+        env: {
+          PATH: "/usr/bin:/bin",
+          ELECTRON_RUN_AS_NODE: "1",
+          ELECTRON_NO_ASAR: "1",
+        },
         encoding: "utf8",
         maxBuffer: 65536,
         timeout: 180000,
@@ -394,16 +400,9 @@ export async function createInstalledUpdateRuntime(
         const operationId = randomBytes(16).toString("hex");
         const operationRoot = path.join(root, operationId);
         await fs.mkdir(operationRoot, { mode: 0o700 });
-        await fs.cp(
+        await options.copyApp(
           verified.stagedAppPath,
           path.join(operationRoot, "staged.app"),
-          {
-            recursive: true,
-            force: false,
-            errorOnExist: true,
-            verbatimSymlinks: true,
-            preserveTimestamps: true,
-          },
         );
         const processStart = await captureInstalledProcessStart(process.pid);
         retained = { ...retained, operation: { operationId, source, target } };

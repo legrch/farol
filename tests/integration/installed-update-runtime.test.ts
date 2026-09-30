@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   verify: vi.fn(),
   helper: vi.fn(),
   exec: vi.fn(),
+  copyApp: vi.fn(),
 }));
 vi.mock("node:child_process", async (original) => ({
   ...(await original<typeof import("node:child_process")>()),
@@ -100,6 +101,7 @@ function options() {
     directory: path.join(slot, "Contents/Resources/app"),
     userData,
     build,
+    copyApp: mocks.copyApp,
     acquireAdmission: async () => ({ ok: true as const, release }),
     quit,
     publish: vi.fn(),
@@ -157,6 +159,16 @@ beforeEach(async () => {
         : source,
     ),
   }));
+  mocks.copyApp.mockImplementation(
+    async (source: string, destination: string) =>
+      fs.cp(source, destination, {
+        recursive: true,
+        force: false,
+        errorOnExist: true,
+        verbatimSymlinks: true,
+        preserveTimestamps: true,
+      }),
+  );
   mocks.helper.mockResolvedValue({
     status: "ready",
     operation: {
@@ -238,6 +250,27 @@ describe("installed updater composition (disposable filesystem and mocked native
     expect(release).toHaveBeenCalledTimes(1);
     expect(mocks.helper).not.toHaveBeenCalled();
     expect(quit).not.toHaveBeenCalled();
+  });
+  it("reads and stages physical app bytes through raw filesystem boundaries", async () => {
+    const controller = await prepared();
+    await controller.restart();
+    const record = JSON.parse(await fs.readFile(ready, "utf8"));
+    const staged = path.join(
+      userData,
+      "installed-updates",
+      record.operation.operationId,
+      "staged.app",
+    );
+    expect(mocks.copyApp).toHaveBeenCalledExactlyOnceWith(staging, staged);
+    expect(
+      await fs.readFile(path.join(staged, "verified-payload"), "utf8"),
+    ).toBe("fixture");
+    for (const call of mocks.exec.mock.calls) {
+      expect(call[2].env).toMatchObject({
+        ELECTRON_RUN_AS_NODE: "1",
+        ELECTRON_NO_ASAR: "1",
+      });
+    }
   });
   it("durably records intent before helper dispatch and quits only after exact readiness", async () => {
     const controller = await prepared();

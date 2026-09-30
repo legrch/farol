@@ -1,3 +1,4 @@
+import { promises as rawFs } from "original-fs";
 import { createInstalledUpdateRuntime } from "./installed-update-runtime";
 import {
   InstalledUpdateCommandSchema,
@@ -687,6 +688,14 @@ async function initializeInstalledUpdater(): Promise<void> {
       directory,
       userData: app.getPath("userData"),
       build: buildIdentity,
+      copyApp: (source, destination) =>
+        rawFs.cp(source, destination, {
+          recursive: true,
+          force: false,
+          errorOnExist: true,
+          verbatimSymlinks: true,
+          preserveTimestamps: true,
+        }),
       publish: publishInstalledUpdate,
       quit: () => app.quit(),
       acquireAdmission: async () => {

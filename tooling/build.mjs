@@ -173,7 +173,7 @@ await Promise.all([
     outfile: "_output/build/app/main.cjs",
     platform: "node",
     format: "cjs",
-    external: ["electron"],
+    external: ["electron", "original-fs"],
   }),
   build({
     ...common,

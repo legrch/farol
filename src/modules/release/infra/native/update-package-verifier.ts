@@ -240,7 +240,11 @@ export function createUpdatePackageVerifier(
               encoding: "utf8",
               maxBuffer: 8192,
               timeout: 600_000,
-              env: { PATH: "/usr/bin:/bin", ELECTRON_RUN_AS_NODE: "1" },
+              env: {
+                PATH: "/usr/bin:/bin",
+                ELECTRON_RUN_AS_NODE: "1",
+                ELECTRON_NO_ASAR: "1",
+              },
             },
           );
           identity = JSON.parse(verifiedJson) as MeasuredIdentity;
