@@ -48,6 +48,46 @@ describe("desktop startup failure boundary", () => {
     expect(exit).toHaveBeenCalledExactlyOnceWith(1);
   });
 
+  for (const environment of ["dev", "preview"] as const) {
+    for (const code of [
+      "BUILT_IN_DISPLAY_UNAVAILABLE",
+      "SECONDARY_DISPLAY_UNAVAILABLE",
+      "WINDOW_DISPLAY_UNAVAILABLE",
+      "WINDOW_PRIMARY_DISPLAY_MISSING",
+      "WINDOW_DISPLAY_GEOMETRY_INVALID",
+      "VISIBLE_TEST_VIEWPORT_UNAVAILABLE",
+    ]) {
+      it(`classifies ${code} in ${environment} without suggesting a rebuild`, () => {
+        const write = vi.fn<(message: string) => void>();
+        const exit = vi.fn<(code: number) => void>();
+        terminateDesktopStartup(new Error(code), environment, { write, exit });
+        const report = write.mock.calls[0]?.[0];
+        expect(report).toContain("display");
+        expect(report).not.toContain("Rebuild");
+        expect(report).not.toContain("local build or configuration issue");
+        expect(report).toContain(`${DESKTOP_STARTUP_FAILURE_PREFIX}${code}`);
+        expect(report).toContain(
+          `${DESKTOP_LAUNCH_RESULT_PREFIX}startup-failed`,
+        );
+        expect(exit).toHaveBeenCalledExactlyOnceWith(1);
+      });
+    }
+  }
+
+  it("retains the exact-candidate remedy for an unrelated build identity failure", () => {
+    const write = vi.fn<(message: string) => void>();
+    terminateDesktopStartup(
+      new Error("INSTANCE_BUILD_IDENTITY_INVALID"),
+      "preview",
+      {
+        write,
+        exit: () => undefined,
+      },
+    );
+    expect(write.mock.calls[0]?.[0]).toContain("Rebuild the exact candidate");
+    expect(write.mock.calls[0]?.[0]).not.toContain("visible-test display");
+  });
+
   it("does not copy an arbitrary exception or private path into the report", () => {
     const privateMessage =
       "failed while reading /Users/owner/private/auth-state.json";
