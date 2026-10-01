@@ -550,6 +550,146 @@ describe("installed Codex saved-project handoff schema", () => {
     });
   });
 
+  // Offline generated-schema shapes only; no serving host or model call.
+  async function linkedItemsCursor(
+    root: string,
+    mutate?: (schema: Record<string, any>) => void,
+  ): Promise<void> {
+    await changeSchema(root, "v2/ThreadItemsListParams.json", (schema) => {
+      schema.properties.cursor = nullableRef("ThreadItemsListCursor");
+      schema.definitions = {
+        ThreadItemsListCursor: {
+          anyOf: [typed("string"), ref("ThreadItemsListAnchor")],
+          description: "Starting position for an item-history page.",
+        },
+        ThreadItemsListAnchor: {
+          oneOf: [
+            {
+              type: "object",
+              required: ["type", "itemId"],
+              properties: {
+                type: { type: "string", enum: ["item"] },
+                itemId: typed("string"),
+              },
+            },
+          ],
+        },
+      };
+      mutate?.(schema);
+    });
+    const { definitions, ...params } = JSON.parse(
+      await fs.readFile(
+        path.join(root, "v2/ThreadItemsListParams.json"),
+        "utf8",
+      ),
+    ) as Record<string, any>;
+    await changeSchema(root, "ClientRequest.json", (schema) => {
+      schema.definitions.ThreadItemsListParams = params;
+      Object.assign(schema.definitions, definitions);
+    });
+  }
+
+  it("accepts the generated string-or-anchor request cursor while retaining string response cursors", async () => {
+    const root = await schemaRoot();
+    await linkedItemsCursor(root);
+    await expect(
+      inspectCodexHandoffHostContract(root, "codex-cli 0.159.2"),
+    ).resolves.toMatchObject({ projectBoundCreateStatus: true });
+    await expect(
+      inspectCodexProjectTasksHostContract(root, "codex-cli 0.159.2"),
+    ).resolves.toMatchObject({ projectTaskMetadata: true });
+  });
+
+  it.each([
+    [
+      "anchor-only",
+      (schema: Record<string, any>) => {
+        schema.definitions.ThreadItemsListCursor.anyOf = [
+          ref("ThreadItemsListAnchor"),
+        ];
+      },
+    ],
+    [
+      "integer instead of string",
+      (schema: Record<string, any>) => {
+        schema.definitions.ThreadItemsListCursor.anyOf[0] = typed("integer");
+      },
+    ],
+    [
+      "missing null",
+      (schema: Record<string, any>) => {
+        schema.properties.cursor.anyOf = [ref("ThreadItemsListCursor")];
+      },
+    ],
+    [
+      "missing cursor definition",
+      (schema: Record<string, any>) => {
+        delete schema.definitions.ThreadItemsListCursor;
+      },
+    ],
+    [
+      "unsupported reference",
+      (schema: Record<string, any>) => {
+        schema.properties.cursor = nullableRef("ThreadItemsListAnchor");
+      },
+    ],
+    [
+      "restricted string",
+      (schema: Record<string, any>) => {
+        schema.definitions.ThreadItemsListCursor.anyOf[0] = {
+          type: "string",
+          enum: ["one-cursor"],
+        };
+      },
+    ],
+    [
+      "outer cursor constraint",
+      (schema: Record<string, any>) => {
+        schema.properties.cursor.not = typed("string");
+      },
+    ],
+    [
+      "definition constraint",
+      (schema: Record<string, any>) => {
+        schema.definitions.ThreadItemsListCursor.not = typed("string");
+      },
+    ],
+  ] as const)(
+    "refuses unusable generated item cursors: %s",
+    async (_name, mutate) => {
+      const root = await schemaRoot();
+      await linkedItemsCursor(root, mutate);
+      await expect(
+        inspectCodexHandoffHostContract(root, "codex-cli 0.159.2"),
+      ).rejects.toThrow("CODEX_HOST_HANDOFF_UNAVAILABLE");
+      await expect(
+        inspectCodexProjectTasksHostContract(root, "codex-cli 0.159.2"),
+      ).rejects.toThrow("CODEX_HOST_HANDOFF_UNAVAILABLE");
+    },
+  );
+
+  it("refuses divergent embedded item cursor definitions", async () => {
+    const root = await schemaRoot();
+    await linkedItemsCursor(root);
+    await changeSchema(root, "ClientRequest.json", (schema) => {
+      schema.definitions.ThreadItemsListCursor.anyOf[0] = typed("integer");
+    });
+    await expect(
+      inspectCodexHandoffHostContract(root, "codex-cli 0.159.2"),
+    ).rejects.toThrow("CODEX_HOST_HANDOFF_UNAVAILABLE");
+  });
+
+  it("retains the strict string-or-null item response cursor contract", async () => {
+    const root = await schemaRoot();
+    await linkedItemsCursor(root);
+    await changeSchema(root, "v2/ThreadItemsListResponse.json", (schema) => {
+      schema.properties.nextCursor = nullableRef("ThreadItemsListCursor");
+    });
+    await expect(
+      inspectCodexHandoffHostContract(root, "codex-cli 0.159.2"),
+    ).rejects.toThrow("CODEX_HOST_HANDOFF_UNAVAILABLE");
+  });
+
   it("binds the ClientRequest capability check to its hashed bytes", async () => {
     const root = await schemaRoot();
     const before = await inspectCodexHandoffHostContract(

@@ -184,6 +184,42 @@ function hasFieldShapes(
   );
 }
 
+function supportsThreadItemsCursor(schema: unknown): boolean {
+  const cursor = child(schema, "properties", "cursor");
+  if (hasShape(cursor, "string|null")) return true;
+
+  // The consumer sends only null and opaque response strings. Newer hosts
+  // also accept item anchors; that alternative must not restrict the strings.
+  const annotations = ["description", "title", "default", "$comment"];
+  const onlyKeywords = (value: unknown, keywords: readonly string[]) =>
+    record(value) &&
+    Object.keys(value).every(
+      (key) => keywords.includes(key) || annotations.includes(key),
+    );
+  if (!onlyKeywords(cursor, ["anyOf"])) return false;
+  const alternatives = array(child(cursor, "anyOf"));
+  if (
+    alternatives.length !== 2 ||
+    !alternatives.some(
+      (part) =>
+        onlyKeywords(part, ["$ref"]) &&
+        child(part, "$ref") === "#/definitions/ThreadItemsListCursor",
+    ) ||
+    !alternatives.some(
+      (part) => onlyKeywords(part, ["type"]) && child(part, "type") === "null",
+    )
+  )
+    return false;
+  const definition = child(schema, "definitions", "ThreadItemsListCursor");
+  return (
+    onlyKeywords(definition, ["anyOf"]) &&
+    array(child(definition, "anyOf")).some(
+      (part) =>
+        onlyKeywords(part, ["type"]) && child(part, "type") === "string",
+    )
+  );
+}
+
 const HANDOFF_FIELDS: readonly SchemaField[] = (
   [
     ["ProjectListParams", "cursor", "string|null"],
@@ -226,7 +262,6 @@ const HANDOFF_FIELDS: readonly SchemaField[] = (
     ["ThreadTurnsListResponse", "nextCursor", "string|null"],
     ["ThreadItemsListParams", "threadId", "string"],
     ["ThreadItemsListParams", "turnId", "string|null"],
-    ["ThreadItemsListParams", "cursor", "string|null"],
     ["ThreadItemsListParams", "limit", "integer|null"],
     ["ThreadItemsListResponse", "data", "array:ThreadItemEntry"],
     ["ThreadItemsListResponse", "nextCursor", "string|null"],
@@ -663,6 +698,7 @@ export async function inspectCodexHandoffHostContract(
       ),
     ) ||
     !hasFieldShapes(schemas, HANDOFF_FIELDS) ||
+    !supportsThreadItemsCursor(schemas.get("v2/ThreadItemsListParams.json")) ||
     !hasFieldShapes(schemas, HANDOFF_DEFINITION_FIELDS) ||
     !hasRequiredFields(schemas) ||
     !supportsHandoffValues(
