@@ -3819,6 +3819,7 @@ async function recordConnectorRuntime(
 
 async function startSecureMcpConnector(
   repair: boolean,
+  resumeAfterQuit = false,
 ): Promise<ProductConfigurationResult> {
   if (quitInProgress || installedUpdateAdmission)
     return configurationFailure("CONNECTOR_START_FAILED");
@@ -3856,6 +3857,11 @@ async function startSecureMcpConnector(
       } catch {
         return configurationFailure("CONNECTOR_STOP_UNCONFIRMED");
       }
+    }
+    if (repair || resumeAfterQuit) {
+      // The previous process has exited. Withdraw its live proof under this
+      // start reservation before any new launch can succeed or be refused.
+      // Historical completion remains available, but is never live readiness.
       const stopped = await configuration.recordSecureMcpStopped();
       if (!stopped.ok) return ProductConfigurationResultSchema.parse(stopped);
     }
@@ -3875,12 +3881,16 @@ async function startSecureMcpConnector(
     try {
       await verifySelectedTunnelClient(connector.tunnelClient);
     } catch (error) {
-      return configurationFailure(
+      const refusal =
         error instanceof Error &&
-          error.message === "TUNNEL_CLIENT_DISCOVERY_CANDIDATE_STALE"
+        error.message === "TUNNEL_CLIENT_DISCOVERY_CANDIDATE_STALE"
           ? "TUNNEL_CLIENT_DISCOVERY_CANDIDATE_STALE"
-          : "TUNNEL_CLIENT_EXECUTABLE_UNSAFE",
-      );
+          : "TUNNEL_CLIENT_EXECUTABLE_UNSAFE";
+      if (resumeAfterQuit) {
+        const stopped = await configuration.recordSecureMcpStopped(refusal);
+        if (!stopped.ok) return ProductConfigurationResultSchema.parse(stopped);
+      }
+      return configurationFailure(refusal);
     }
     let credentialReference: string;
     try {
@@ -9281,7 +9291,7 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
   ) {
     // One new owned connector lifetime, using the normal fenced start. No
     // repair loop, no verification Send, and no implicit Codex admission.
-    void startSecureMcpConnector(false).then(
+    void startSecureMcpConnector(false, true).then(
       (result) => {
         startupStage(
           result.ok ? "connector-resumed" : "connector-resume-refused",

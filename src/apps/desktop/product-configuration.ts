@@ -1032,13 +1032,18 @@ export class ProductConfigurationService {
     });
   }
 
-  async recordSecureMcpStopped(): Promise<MutationResult> {
+  async recordSecureMcpStopped(
+    resumeRefusal?:
+      | "TUNNEL_CLIENT_DISCOVERY_CANDIDATE_STALE"
+      | "TUNNEL_CLIENT_EXECUTABLE_UNSAFE",
+  ): Promise<MutationResult> {
     return this.mutate((settings) => {
       const connector = settings.connectors.secureMcp;
       if (
         connector.runtime === null &&
         connector.challenge === null &&
-        connector.attachment === null
+        connector.attachment === null &&
+        resumeRefusal === undefined
       ) {
         return settings;
       }
@@ -1054,7 +1059,16 @@ export class ProductConfigurationService {
         connectors: { ...settings.connectors, secureMcp: next },
         setup: {
           ...settings.setup,
-          connect: pendingConnectorReadiness(settings.setup.connect, next),
+          connect: {
+            ...pendingConnectorReadiness(
+              settings.setup.connect,
+              next,
+              resumeRefusal === undefined
+                ? undefined
+                : "Choose the tunnel-client executable again before reconnecting.",
+            ),
+            unavailable: resumeRefusal ?? null,
+          },
         },
       };
     });

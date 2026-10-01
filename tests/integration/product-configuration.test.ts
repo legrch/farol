@@ -899,90 +899,123 @@ describe("Farol Next product configuration", () => {
     });
   });
 
-  it("clears runtime proof after an explicit connector stop", async () => {
-    const root = await stateRoot();
-    const service = new ProductConfigurationService(
-      new ProductSettingsStore({ root }),
-      dependencies(),
-    );
-    await service.initialize();
-    const approved = await service.addReadonlyWorkspace({
-      root: "/Users/example/project",
-      label: "Project",
-    });
-    if (!approved.ok || approved.snapshot.status !== "ready") {
-      throw new Error("workspace approval failed");
-    }
-    const workspaceId =
-      approved.snapshot.settings.computer.workspaces[0]?.workspaceId;
-    if (!workspaceId) throw new Error("workspace missing");
-    const computerGeneration = approved.snapshot.settings.computer.generation;
-    await service.recordSecureMcpTunnelClient({
-      executablePath: "/opt/homebrew/bin/tunnel-client",
-      executableSha256: "a".repeat(64),
-      version: "0.0.14+0f870e50a973fa820d4c409000059e181e8d242b",
-      protocol: "openai-tunnel-client/v1",
-    });
-    await service.configureSecureMcpTunnel({ tunnelId: "tunnel_farol_next" });
-    await service.recordSecureMcpCredential("stored");
-    await service.recordSecureMcpRuntime({
-      state: "ready",
-      runtimeGeneration: "b".repeat(64),
-      computerGeneration,
-      buildId: "c".repeat(64),
-    });
-    const stopChallenge = "00000000-0000-4000-8000-000000000097";
-    const stopChallengeSha256 = createHash("sha256")
-      .update(stopChallenge)
-      .digest("hex");
-    await service.recordSecureMcpChallenge({
-      challenge: stopChallenge,
-      runtimeGeneration: "b".repeat(64),
-      computerGeneration,
-      buildId: "c".repeat(64),
-    });
-    await service.recordSecureMcpAttachment({
-      workspaceId,
-      runtimeGeneration: "b".repeat(64),
-      computerGeneration,
-      buildId: "c".repeat(64),
-      challengeSha256: stopChallengeSha256,
-      receiptSha256: "e".repeat(64),
-    });
+  it.each([
+    undefined,
+    "TUNNEL_CLIENT_DISCOVERY_CANDIDATE_STALE",
+    "TUNNEL_CLIENT_EXECUTABLE_UNSAFE",
+  ] as const)(
+    "clears runtime proof after stop or resume refusal %s",
+    async (refusal) => {
+      const root = await stateRoot();
+      const service = new ProductConfigurationService(
+        new ProductSettingsStore({ root }),
+        dependencies(),
+      );
+      await service.initialize();
+      const approved = await service.addReadonlyWorkspace({
+        root: "/Users/example/project",
+        label: "Project",
+      });
+      if (!approved.ok || approved.snapshot.status !== "ready") {
+        throw new Error("workspace approval failed");
+      }
+      const workspaceId =
+        approved.snapshot.settings.computer.workspaces[0]?.workspaceId;
+      if (!workspaceId) throw new Error("workspace missing");
+      const computerGeneration = approved.snapshot.settings.computer.generation;
+      await service.recordSecureMcpTunnelClient({
+        executablePath: "/opt/homebrew/bin/tunnel-client",
+        executableSha256: "a".repeat(64),
+        version: "0.0.14+0f870e50a973fa820d4c409000059e181e8d242b",
+        protocol: "openai-tunnel-client/v1",
+      });
+      await service.configureSecureMcpTunnel({ tunnelId: "tunnel_farol_next" });
+      await service.recordSecureMcpCredential("stored");
+      await service.recordSecureMcpRuntime({
+        state: "ready",
+        runtimeGeneration: "b".repeat(64),
+        computerGeneration,
+        buildId: "c".repeat(64),
+      });
+      const stopChallenge = "00000000-0000-4000-8000-000000000097";
+      const stopChallengeSha256 = createHash("sha256")
+        .update(stopChallenge)
+        .digest("hex");
+      await service.recordSecureMcpChallenge({
+        challenge: stopChallenge,
+        runtimeGeneration: "b".repeat(64),
+        computerGeneration,
+        buildId: "c".repeat(64),
+      });
+      await service.recordSecureMcpAttachment({
+        workspaceId,
+        runtimeGeneration: "b".repeat(64),
+        computerGeneration,
+        buildId: "c".repeat(64),
+        challengeSha256: stopChallengeSha256,
+        receiptSha256: "e".repeat(64),
+      });
 
-    const stopped = await service.recordSecureMcpStopped();
+      const stopped = await service.recordSecureMcpStopped(refusal);
 
-    expect(stopped).toMatchObject({
-      ok: true,
-      snapshot: {
-        status: "ready",
-        settings: {
-          connectors: {
-            secureMcp: {
-              runtime: null,
-              challenge: null,
-              attachment: null,
-              lastVerifiedAttachment: {
-                workspaceId,
-                runtimeGeneration: "b".repeat(64),
-                computerGeneration,
-                buildId: "c".repeat(64),
+      if (refusal !== undefined) {
+        const repeated = await service.recordSecureMcpStopped(refusal);
+        expect(repeated).toMatchObject({ ok: true });
+        const reloaded = new ProductConfigurationService(
+          new ProductSettingsStore({ root }),
+          dependencies(),
+        );
+        await reloaded.initialize();
+        expect(reloaded.snapshot()).toMatchObject({
+          status: "ready",
+          settings: {
+            connectors: {
+              secureMcp: {
+                runtime: null,
+                attachment: null,
+                lastVerifiedAttachment: { workspaceId },
+              },
+            },
+            setup: { connect: { unavailable: refusal } },
+          },
+        });
+      }
+      expect(stopped).toMatchObject({
+        ok: true,
+        snapshot: {
+          status: "ready",
+          settings: {
+            connectors: {
+              secureMcp: {
+                runtime: null,
+                challenge: null,
+                attachment: null,
+                lastVerifiedAttachment: {
+                  workspaceId,
+                  runtimeGeneration: "b".repeat(64),
+                  computerGeneration,
+                  buildId: "c".repeat(64),
+                },
+              },
+            },
+            setup: {
+              connect: {
+                configured: true,
+                reachable: "unknown",
+                verified: null,
+                needsAction:
+                  refusal === undefined
+                    ? "Start the connector and check readiness."
+                    : "Choose the tunnel-client executable again before reconnecting.",
+                unavailable: refusal ?? null,
+                outcomeUnknown: false,
               },
             },
           },
-          setup: {
-            connect: {
-              configured: true,
-              reachable: "unknown",
-              verified: null,
-              needsAction: "Start the connector and check readiness.",
-              outcomeUnknown: false,
-            },
-          },
         },
-      },
-    });
-  });
+      });
+    },
+  );
 
   it("keeps the last verified state when an atomic save fails", async () => {
     const root = await stateRoot();

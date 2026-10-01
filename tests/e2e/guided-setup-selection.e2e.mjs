@@ -18,10 +18,13 @@ import {
 const packaged = process.argv.includes("--packaged");
 const devOnly = process.argv.includes("--dev-only");
 const behavior = process.argv.includes("--behavior");
+const resumeRefusal = process.argv.includes("--resume-refusal");
 assert.deepEqual(process.argv.slice(2), [
   ...(packaged ? ["--packaged"] : devOnly ? ["--dev-only"] : []),
   ...(behavior ? ["--behavior"] : []),
+  ...(resumeRefusal ? ["--resume-refusal"] : []),
 ]);
+assert.ok(!resumeRefusal || (packaged && behavior));
 assert.ok(!(behavior && devOnly));
 const root = process.cwd();
 const appRoot = path.join(root, "_output/package/Farol Next Preview.app");
@@ -1091,6 +1094,81 @@ try {
       const previousWorkspaces =
         state.configuration.settings.computer.workspaces;
       await closeOwned();
+      if (resumeRefusal) {
+        // Change only this disposable executable after the old owned process
+        // has exited. If any command executes the changed bytes, the sentinel
+        // proves it. No live executable or provider endpoint is involved.
+        const executed = path.join(temporaryRoot, "changed-client-executed");
+        const fixtureBytes = await fs.readFile(tunnelFixture, "utf8");
+        await fs.writeFile(
+          tunnelFixture,
+          fixtureBytes.replace(
+            "\n",
+            `\nrequire("node:fs").writeFileSync(${JSON.stringify(executed)}, "executed");\n`,
+          ),
+        );
+        const returning = await launch(environment, "normal", environment);
+        const stagePath = path.join(
+          activeFixtureProfile.home,
+          ".farol-next-connector-resume-stage",
+        );
+        const deadline = Date.now() + 15000;
+        for (;;) {
+          const stage = await fs.readFile(stagePath, "utf8").catch(() => "");
+          if (stage.trim() === "connector-resume-refused") break;
+          if (Date.now() >= deadline)
+            throw new Error("CHANGED_EXECUTABLE_RESUME_NOT_REFUSED");
+          await new Promise((resolve) => setTimeout(resolve, 50));
+        }
+        const refused = await returning.evaluate(() =>
+          window.farolNext.bootstrap(),
+        );
+        const connector = refused.configuration.settings.connectors.secureMcp;
+        assert.equal(
+          connector.runtime,
+          null,
+          "REFUSED_RESUME_RETAINED_PREVIOUS_LIVE_RUNTIME",
+        );
+        assert.equal(connector.challenge, null);
+        assert.equal(connector.attachment, null);
+        assert.deepEqual(
+          connector.lastVerifiedAttachment,
+          state.configuration.settings.connectors.secureMcp
+            .lastVerifiedAttachment,
+        );
+        assert.equal(
+          refused.configuration.settings.setup.connect.verified,
+          null,
+        );
+        assert.equal(
+          refused.configuration.settings.setup.connect.unavailable,
+          "TUNNEL_CLIENT_DISCOVERY_CANDIDATE_STALE",
+        );
+        assert.deepEqual(
+          refused.configuration.settings.computer.workspaces,
+          previousWorkspaces,
+        );
+        await returning.locator('[data-onboarding-step="tunnel"]').click();
+        assert.doesNotMatch(
+          await returning.locator("#onboarding-tunnel-note").innerText(),
+          /The tunnel is ready/,
+        );
+        assert.match(
+          await returning.locator("#onboarding-tunnel-note").innerText(),
+          /The saved tunnel-client could not be verified/,
+        );
+        await assert.rejects(fs.stat(executed), { code: "ENOENT" });
+        assert.equal(nonReadRequests, 1, "REFUSED_RESUME_SENT_A_PROMPT");
+        observations.push({
+          kind: "changed-executable-resume-refused-live-proof-withdrawn",
+          refusal: refused.configuration.settings.setup.connect.unavailable,
+          historicalCompletionPreserved: true,
+          changedExecutableExecuted: false,
+          sends: nonReadRequests,
+        });
+        await closeOwned();
+        break;
+      }
       let returning = await launch(environment, "normal", environment);
       // A confirmed Quit permits this configured Computer-only connector to
       // establish a new runtime. It never sends or reuses the old attachment.
@@ -1532,15 +1610,17 @@ try {
   const destination = path.join(
     root,
     "_output/evidence/guided-setup-selection",
-    behavior
-      ? packaged
-        ? "behavior-package.json"
-        : "behavior-development.json"
-      : packaged
-        ? "package.json"
-        : devOnly
-          ? "dev-only.json"
-          : "development.json",
+    resumeRefusal
+      ? "resume-refusal-package.json"
+      : behavior
+        ? packaged
+          ? "behavior-package.json"
+          : "behavior-development.json"
+        : packaged
+          ? "package.json"
+          : devOnly
+            ? "dev-only.json"
+            : "development.json",
   );
   await fs.mkdir(path.dirname(destination), { recursive: true, mode: 0o700 });
   await fs.writeFile(
@@ -1551,6 +1631,7 @@ try {
         packaged,
         devOnly,
         behavior,
+        resumeRefusal,
         observations,
         primaryFailure: primaryFailure ? String(primaryFailure) : null,
         cleanupFailures: cleanupFailures.map(String),

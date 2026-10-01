@@ -686,9 +686,14 @@ export class GuidedOnboardingView {
         ? "Saving a replacement pauses this connection. Activate it again after saving; cancellation changes nothing."
         : facts.runtimeCurrent
           ? "The tunnel is ready. Check connection probes it without restarting or sending a ChatGPT message."
-          : saved
-            ? "Your credentials are stored. The connection still needs to be activated or checked."
-            : "Use a separate tunnel for this Farol, not the one running another Farol installation.";
+          : settings?.setup.connect.unavailable ===
+                "TUNNEL_CLIENT_DISCOVERY_CANDIDATE_STALE" ||
+              settings?.setup.connect.unavailable ===
+                "TUNNEL_CLIENT_EXECUTABLE_UNSAFE"
+            ? "The saved tunnel-client could not be verified. Choose it again in Settings before reconnecting."
+            : saved
+              ? "Your credentials are stored. The connection still needs to be activated or checked."
+              : "Use a separate tunnel for this Farol, not the one running another Farol installation.";
     element<HTMLButtonElement>("#onboarding-copy-tunnel").disabled =
       this.busy || !saved;
     element("#onboarding-app-tunnel").textContent = facts.tunnelId
