@@ -362,6 +362,10 @@ export class GuidedOnboardingView {
     element("#onboarding-scroll").scrollTop = 0;
   }
 
+  pageLabel(): string {
+    return onboardingSteps[this.step]!.label;
+  }
+
   render(
     enabled: boolean,
     feedback: string,

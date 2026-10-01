@@ -40,14 +40,46 @@ describe("Watch Rail product contract", () => {
     expect(css).toContain('html:not([data-section="browser"]) .surface');
   });
 
-  it("keeps New task available and hit-testable in normal compact Browser chrome", async () => {
-    const css = await source("src/ui/shell.css");
-
-    expect(css).not.toMatch(
-      /html\[data-compact-browser="true"\]\[data-section="browser"\]\[data-browser-chrome="true"\](?:\[data-has-tasks="true"\])?\s+\.new-task,/u,
+  it("leaves only chat selection in the normal header and inspection in Activity", async () => {
+    const [html, shell] = await Promise.all([
+      source("src/ui/shell.html"),
+      source("src/ui/shell.ts"),
+    ]);
+    for (const id of [
+      "new-task",
+      "browser-task-menu",
+      "browser-sidebar-toggle",
+      "task-menu-button",
+    ]) {
+      expect(html).toMatch(
+        new RegExp(`<button[^>]*id="${id}"[^>]*\\bhidden\\b[^>]*>`, "u"),
+      );
+    }
+    const tabs = shell.slice(
+      shell.indexOf("function renderTabs()"),
+      shell.indexOf("function renderBrowserStatus()"),
     );
-    expect(css).toMatch(
-      /html\[data-compact-browser="true"\]\[data-section="browser"\]\[data-browser-chrome="true"\]\s+\.new-task\s*\{\s*-webkit-app-region:\s*no-drag;/u,
+    expect(tabs).not.toContain("task-tab-close");
+    expect(tabs).not.toContain('kind: "task.close"');
+    expect(html).toContain('id="activity-chats"');
+    expect(shell).toContain('inspect.textContent = "Inspect"');
+    expect(shell).toContain("inspect.dataset.taskId = task.taskId");
+  });
+
+  it("uses the current location instead of repeating the product in the window bar", async () => {
+    const [html, shell] = await Promise.all([
+      source("src/ui/shell.html"),
+      source("src/ui/shell.ts"),
+    ]);
+    const header = html.slice(
+      html.indexOf('<header class="window-bar'),
+      html.indexOf('<header class="task-bar'),
+    );
+    expect(header).toContain('id="window-location"');
+    expect(header).not.toContain("Developer Preview");
+    expect(header).not.toContain("window-product-name");
+    expect(shell).toContain(
+      'required("#window-location").textContent = location',
     );
   });
 

@@ -1557,6 +1557,47 @@ html[data-browser-chrome="false"][data-section="browser"]
   border-top: 1px solid var(--line);
 }
 
+.activity-chats {
+  max-width: 980px;
+  margin-bottom: 28px;
+}
+
+.activity-chats h2 {
+  font-size: 14px;
+  font-weight: 560;
+}
+
+.activity-chats ul {
+  padding: 0;
+  list-style: none;
+}
+
+.activity-chats li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 16px;
+  min-height: 48px;
+  border-bottom: 1px solid var(--line-soft);
+  font-size: 12px;
+}
+
+.activity-chats strong {
+  overflow-wrap: anywhere;
+}
+
+.activity-chats span {
+  color: var(--text-soft);
+}
+
+.activity-chats button {
+  min-height: 34px;
+  padding: 6px 12px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-control);
+}
+
 .activity-list li {
   min-height: 54px;
   display: grid;

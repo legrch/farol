@@ -277,11 +277,8 @@
 
     <header class="window-bar shell-region" aria-label="Farol window bar">
       <div class="window-identity">
-        <strong id="window-product-name">Farol</strong>
-        <span class="preview-badge" id="window-product-edition"
-          >Developer Preview</span
-        >
-        <span id="window-mode">Local preview</span>
+        <strong id="window-location">ChatGPT</strong>
+        <span id="window-mode"></span>
       </div>
       <button
         class="command-button"
@@ -320,6 +317,7 @@
         type="button"
         aria-label="Selected task options"
         title="Selected task options"
+        hidden
       >
         •••
       </button>
@@ -329,6 +327,7 @@
         type="button"
         disabled
         title="Unavailable until a task route is configured"
+        hidden
       >
         <span aria-hidden="true">＋</span><b>New task</b
         ><small>Unavailable</small>
@@ -379,6 +378,7 @@
         type="button"
         aria-label="Task menu"
         title="Task menu"
+        hidden
       >
         •••
       </button>
@@ -876,6 +876,14 @@
           Setup checks and their results appear here without prompts or replies.
           The verification conversation stays in ChatGPT.
         </p>
+        <section
+          class="activity-chats"
+          aria-labelledby="activity-chats-title"
+          hidden
+        >
+          <h2 id="activity-chats-title">Chats</h2>
+          <ul id="activity-chats"></ul>
+        </section>
         <ol class="activity-list" id="activity-list"></ol>
       </section>
 
@@ -1188,11 +1196,11 @@
 
     <dialog class="task-menu" id="task-menu" aria-labelledby="task-menu-title">
       <header>
-        <strong id="task-menu-title">Task menu</strong
+        <strong id="task-menu-title">Chat details</strong
         ><button
           id="task-menu-close"
           type="button"
-          aria-label="Close task menu"
+          aria-label="Close chat details"
         >
           ×
         </button>

@@ -4038,6 +4038,51 @@ async function finishSetupByDoubleClick(instance) {
   return shown;
 }
 
+// Fixture setup uses the preserved task API; production no longer exposes a
+// manual New task toolbar. This creates only this test's owned local surfaces.
+async function createFixtureChat(page) {
+  await returnToChat(page);
+  const result = await page.evaluate(() =>
+    window.farolNext.task({ kind: "task.create-chatgpt" }),
+  );
+  assert.equal(result.ok, true);
+  assert.ok(result.selectedTaskId);
+  await page
+    .locator(`#task-tabs [data-task-id="${result.selectedTaskId}"]`)
+    .click();
+  return result;
+}
+
+// Real chats are inspected from Activity. Explicit demo mode retains its
+// synthetic dossier control; this helper never clicks a hidden toolbar.
+async function inspectSelectedChat(page) {
+  if (await page.locator("#task-menu-button").isVisible()) {
+    await page.locator("#task-menu-button").click();
+    return;
+  }
+  const taskId = await page
+    .locator('#task-tabs [aria-selected="true"]')
+    .getAttribute("data-task-id");
+  assert.ok(taskId);
+  await page.locator('.nav-item[data-section="activity"]').click();
+  await page.locator(`#activity-chats [data-task-id="${taskId}"]`).click();
+}
+
+async function returnToChat(page) {
+  const section = await page.evaluate(
+    () => document.documentElement.dataset.section,
+  );
+  if (section === "activity") {
+    await page.locator('.nav-item[data-section="browser"]').click();
+  }
+}
+
+async function dismissChatDetails(page) {
+  await page.locator("#task-menu-close").click();
+  await page.locator("#task-menu").waitFor({ state: "hidden" });
+  await returnToChat(page);
+}
+
 // A wait for the task menu's sentence that says which silence it hit.
 //
 // The note is written by one renderer path; a command can settle without
@@ -5042,10 +5087,11 @@ async function lifecycleBatch(instance, count, timings, overlayKind = null) {
         .waitFor({ state: "hidden" });
     } else {
       assert.equal(overlayKind, "task-menu");
-      await instance.window.locator("#task-menu-button").click();
+      await inspectSelectedChat(instance.window);
       await instance.window.locator("#task-menu").waitFor({ state: "visible" });
       await instance.window.keyboard.press("Escape");
       await instance.window.locator("#task-menu").waitFor({ state: "hidden" });
+      await returnToChat(instance.window);
     }
     if (timings) timings.overlayMs.push(performance.now() - startedAt);
   }
@@ -6056,13 +6102,13 @@ liveTasksSegment: try {
   if (!segmentSelected("live-tasks")) break liveTasksSegment;
   await completeSetup(ordinaryLiveTasks, false, true, true, true, "ordinary");
   const newTask = ordinaryLiveTasks.window.locator("#new-task");
-  await newTask.waitFor({ state: "visible" });
+  await newTask.waitFor({ state: "hidden" });
   assert.equal(await newTask.isEnabled(), true);
   assert.equal(await newTask.locator("small").innerText(), "0 / 5");
 
   const taskSurfaceIds = new Map();
   for (let index = 1; index <= 5; index += 1) {
-    await newTask.click();
+    await createFixtureChat(ordinaryLiveTasks.window);
     await ordinaryLiveTasks.window.waitForFunction(
       (count) =>
         document.querySelectorAll("#task-tabs .task-tab").length === count,
@@ -6275,9 +6321,9 @@ liveTasksSegment: try {
     };
     const title = document.querySelector("#dossier-title");
     const titleStyle = title ? getComputedStyle(title) : null;
-    const primary = document.querySelector("#new-task");
+    const primary = document.querySelector("#command-button");
     const sidebar = document.querySelector("#sidebar");
-    const controls = ["#new-task", "#command-button", "#build-identity"]
+    const controls = ["#command-button", "#build-identity"]
       .map((selector) => document.querySelector(selector))
       .filter((element) => element && element.offsetParent !== null);
     return {
@@ -6369,8 +6415,7 @@ liveTasksSegment: try {
             .slice(0, 40),
           width: Math.round(rect.width),
           height: Math.round(rect.height),
-          primary:
-            element.matches("#new-task, #command-button, .nav-item") === true,
+          primary: element.matches("#command-button, .nav-item") === true,
         };
       }),
   );
@@ -6594,7 +6639,7 @@ liveTasksSegment: try {
   assert.ok(
     pinnedTask && agentCancellationTask && cancellableTask && closingTask,
   );
-  await ordinaryLiveTasks.window.locator("#task-menu-button").click();
+  await inspectSelectedChat(ordinaryLiveTasks.window);
   await ordinaryLiveTasks.window
     .locator("#task-menu")
     .waitFor({ state: "visible" });
@@ -6642,7 +6687,7 @@ liveTasksSegment: try {
   });
   // The same nine durable mutations the pin above counts.
   assert.equal(idleCancel.state.revision, 9);
-  await ordinaryLiveTasks.window.locator("#task-menu-close").click();
+  await dismissChatDetails(ordinaryLiveTasks.window);
   await waitForLiveChatGptSurface(
     ordinaryLiveTasks,
     pinnedTask.taskId,
@@ -6705,7 +6750,7 @@ liveTasksSegment: try {
       )?.lifecycle === "running",
     cancellableTask.taskId,
   );
-  await ordinaryLiveTasks.window.locator("#task-menu-button").click();
+  await inspectSelectedChat(ordinaryLiveTasks.window);
   await ordinaryLiveTasks.window
     .locator("#task-menu")
     .waitFor({ state: "visible" });
@@ -6739,12 +6784,12 @@ liveTasksSegment: try {
     ).contentsId,
     taskSurfaceIds.get(cancellableTask.taskId),
   );
-  await ordinaryLiveTasks.window.locator("#task-menu-close").click();
+  await dismissChatDetails(ordinaryLiveTasks.window);
 
   await ordinaryLiveTasks.window
     .locator(`#task-tabs .task-tab[data-task-id="${closingTask.taskId}"]`)
     .click();
-  await ordinaryLiveTasks.window.locator("#task-menu-button").click();
+  await inspectSelectedChat(ordinaryLiveTasks.window);
   await ordinaryLiveTasks.window
     .locator("#task-menu")
     .waitFor({ state: "visible" });
@@ -6757,6 +6802,7 @@ liveTasksSegment: try {
   await ordinaryLiveTasks.window
     .locator("#task-menu")
     .waitFor({ state: "hidden" });
+  await returnToChat(ordinaryLiveTasks.window);
   await waitForWindowCount(ordinaryLiveTasks.application, 1);
   assert.equal(await newTask.isEnabled(), true);
   assert.equal(await newTask.locator("small").innerText(), "4 / 5");
@@ -6787,7 +6833,7 @@ liveTasksSegment: try {
     await ordinaryLiveTasks.window
       .locator(`#task-tabs .task-tab[data-task-id="${pinnedTask.taskId}"]`)
       .click();
-    await ordinaryLiveTasks.window.locator("#task-menu-button").click();
+    await inspectSelectedChat(ordinaryLiveTasks.window);
     await ordinaryLiveTasks.window
       .locator("#task-menu")
       .waitFor({ state: "visible" });
@@ -6870,14 +6916,14 @@ liveTasksSegment: try {
     await ordinaryLiveTasks.window.screenshot({
       path: path.join(evidenceRoot, "live-task-native-agent-delivered.png"),
     });
-    await ordinaryLiveTasks.window.locator("#task-menu-close").click();
+    await dismissChatDetails(ordinaryLiveTasks.window);
 
     await ordinaryLiveTasks.window
       .locator(
         `#task-tabs .task-tab[data-task-id="${agentCancellationTask.taskId}"]`,
       )
       .click();
-    await ordinaryLiveTasks.window.locator("#task-menu-button").click();
+    await inspectSelectedChat(ordinaryLiveTasks.window);
     await ordinaryLiveTasks.window
       .locator("#task-menu")
       .waitFor({ state: "visible" });
@@ -6935,7 +6981,7 @@ liveTasksSegment: try {
     await ordinaryLiveTasks.window.screenshot({
       path: path.join(evidenceRoot, "live-task-native-agent-cancelled.png"),
     });
-    await ordinaryLiveTasks.window.locator("#task-menu-close").click();
+    await dismissChatDetails(ordinaryLiveTasks.window);
     await ordinaryLiveTasks.window
       .locator(`#task-tabs .task-tab[data-task-id="${pinnedTask.taskId}"]`)
       .click();
@@ -7267,7 +7313,7 @@ liveTasksSegment: try {
     await ordinaryLiveTasks.window.locator("#dossier-state b").innerText(),
     "INSTALLING CONTEXT",
   );
-  await ordinaryLiveTasks.window.locator("#task-menu-button").click();
+  await inspectSelectedChat(ordinaryLiveTasks.window);
   await ordinaryLiveTasks.window
     .locator("#task-menu")
     .waitFor({ state: "visible" });
@@ -7288,7 +7334,7 @@ liveTasksSegment: try {
   await ordinaryLiveTasks.window.screenshot({
     path: path.join(evidenceRoot, "live-task-context-handoff.png"),
   });
-  await ordinaryLiveTasks.window.locator("#task-menu-close").click();
+  await dismissChatDetails(ordinaryLiveTasks.window);
 
   const handoffLiveTaskText = await fs.readFile(liveTaskPath, "utf8");
   const handoffLiveTaskRecord = JSON.parse(handoffLiveTaskText);
@@ -7333,7 +7379,7 @@ liveTasksSegment: try {
         `#task-tabs .task-tab[data-task-id="${agentCancellationTask.taskId}"]`,
       )
       .click();
-    await ordinaryLiveTasks.window.locator("#task-menu-button").click();
+    await inspectSelectedChat(ordinaryLiveTasks.window);
     await ordinaryLiveTasks.window
       .locator("#task-menu")
       .waitFor({ state: "visible" });
@@ -7355,7 +7401,7 @@ liveTasksSegment: try {
       expiringAgentTask.agent.assignmentBindingSha256,
       /^[a-f0-9]{64}$/u,
     );
-    await ordinaryLiveTasks.window.locator("#task-menu-close").click();
+    await dismissChatDetails(ordinaryLiveTasks.window);
     const expiringInputEnvelope = JSON.parse(
       await fs.readFile(cancelledProductAgentInput.target, "utf8"),
     );
@@ -7554,7 +7600,7 @@ liveTasksSegment: try {
     "retired context source opens a fresh provider page",
   );
   cases.push(
-    "ordinary-new-task-opens-actual-chatgpt-surface",
+    "ordinary-task-api-opens-owned-chatgpt-surface",
     "ordinary-live-task-embedded-in-watch-rail",
     "five-live-chatgpt-task-capacity",
     "sixth-live-task-refused-without-replacement",
@@ -7772,7 +7818,7 @@ devNewTaskAffordanceSegment: {
         document.documentElement.dataset.browserChrome === "true",
     );
     const newTask = devNewTask.window.locator("#new-task");
-    await newTask.waitFor({ state: "visible" });
+    await newTask.waitFor({ state: "hidden" });
 
     const initial = await devNewTask.window.evaluate(() =>
       window.farolNext.bootstrap(),
@@ -7802,12 +7848,12 @@ devNewTaskAffordanceSegment: {
     assert.equal(emptyState.section, "browser");
     assert.equal(emptyState.browserChrome, "true");
     assert.equal(emptyState.hasTasks, "false");
-    assert.notEqual(emptyState.display, "none");
+    assert.equal(emptyState.display, "none");
     assert.equal(emptyState.appRegion, "no-drag");
-    cases.push("dev-new-task-first-is-reachable");
+    cases.push("dev-task-api-first-admission-with-hidden-toolbar");
 
     for (let index = 1; index <= 5; index += 1) {
-      await newTask.click();
+      await createFixtureChat(devNewTask.window);
       await waitForPageState(
         devNewTask.window,
         async (count) => {
@@ -7832,7 +7878,7 @@ devNewTaskAffordanceSegment: {
       assert.equal(state.nativeAgent, false);
       assert.equal(state.configuration.settings.nativeHosts.codex, null);
       assert.equal(state.configuration.settings.setup.hosts.verified, null);
-      assert.equal(await newTask.isVisible(), true);
+      assert.equal(await newTask.isVisible(), false);
       assert.equal(await newTask.isDisabled(), index === 5);
       assert.equal(await newTask.locator("small").innerText(), index + " / 5");
       const activeState = await readNewTaskState();
@@ -7840,7 +7886,7 @@ devNewTaskAffordanceSegment: {
       assert.equal(activeState.section, "browser");
       assert.equal(activeState.browserChrome, "true");
       assert.equal(activeState.hasTasks, "true");
-      assert.notEqual(activeState.display, "none");
+      assert.equal(activeState.display, "none");
       assert.equal(activeState.appRegion, "no-drag");
 
       const task = state.tasks[index - 1];
@@ -7862,9 +7908,10 @@ devNewTaskAffordanceSegment: {
       assert.equal(providerSurface.state.composerVisible, true);
       assert.equal(providerSurface.state.userText, "");
       assert.equal(providerSurface.state.submitCount, 0);
-      if (index === 2) cases.push("dev-new-task-next-is-reachable");
+      if (index === 2)
+        cases.push("dev-task-api-next-admission-with-hidden-toolbar");
     }
-    cases.push("dev-new-task-disabled-at-capacity");
+    cases.push("dev-task-api-capacity-is-enforced");
     segmentMark("dev-new-task-affordance", "pass");
   } finally {
     await close(devNewTask);
@@ -8213,7 +8260,7 @@ demoMainSegment: try {
   );
   assert.deepEqual(await shellGeometry(normal.window), wideBrowserGeometry);
 
-  await normal.window.locator("#task-menu-button").click();
+  await inspectSelectedChat(normal.window);
   await normal.window.locator("#task-menu").waitFor({ state: "visible" });
   await waitForTaskSurface(
     normal.application,
@@ -11910,7 +11957,7 @@ n12AgentDraftSegment: {
           document.querySelector("#task-agent-objective")?.value ?? null,
       }));
     const newDraftTask = async (expected) => {
-      await draft.window.locator("#new-task").click({ timeout: 20_000 });
+      await createFixtureChat(draft.window);
       await draft.window.waitForFunction(
         (count) =>
           document.querySelectorAll("#task-tabs .task-tab").length === count,
@@ -11922,9 +11969,7 @@ n12AgentDraftSegment: {
       return state.tasks.at(-1).taskId;
     };
     const openDraftMenu = async () => {
-      await draft.window
-        .locator("#task-menu-button")
-        .click({ timeout: 20_000 });
+      await inspectSelectedChat(draft.window);
       await draft.window
         .locator("#task-menu")
         .waitFor({ state: "visible", timeout: 20_000 });
@@ -12438,7 +12483,7 @@ n11AgentScopeSegment: {
     // the second journey gets its own task rather than inheriting whatever
     // the first left behind.
     const newScopeTask = async (expected) => {
-      await agentScope.window.locator("#new-task").click({ timeout: 20_000 });
+      await createFixtureChat(agentScope.window);
       await agentScope.window.waitForFunction(
         (count) =>
           document.querySelectorAll("#task-tabs .task-tab").length === count,
@@ -12455,9 +12500,7 @@ n11AgentScopeSegment: {
     let lastMenuOpen = null;
     const openScopeMenu = async () => {
       lastMenuOpen = { at: new Date().toISOString(), opened: false };
-      await agentScope.window
-        .locator("#task-menu-button")
-        .click({ timeout: 20_000 });
+      await inspectSelectedChat(agentScope.window);
       await agentScope.window
         .locator("#task-menu")
         .waitFor({ state: "visible", timeout: 20_000 });

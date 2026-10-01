@@ -46,9 +46,9 @@ describe("evidence case contract", () => {
     const development = EVIDENCE_LANES["development-build"].cases;
     const sealed = EVIDENCE_LANES["sealed-package"].cases;
     for (const name of [
-      "dev-new-task-first-is-reachable",
-      "dev-new-task-next-is-reachable",
-      "dev-new-task-disabled-at-capacity",
+      "dev-task-api-first-admission-with-hidden-toolbar",
+      "dev-task-api-next-admission-with-hidden-toolbar",
+      "dev-task-api-capacity-is-enforced",
     ]) {
       expect(development).toContain(name);
       expect(sealed).not.toContain(name);

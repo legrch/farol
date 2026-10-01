@@ -570,7 +570,16 @@ async function browserGeometry(window, environment, width) {
   assert.equal(chrome.surface.height, 683);
   assert.ok(chrome.firstTab.x >= chrome.toggle.right);
   assert.equal(chrome.firstTabHittable, true);
-  assert.equal(chrome.menuHittable, true);
+  assert.equal(chrome.menuHittable, false);
+  for (const selector of [
+    "#browser-task-menu",
+    "#browser-sidebar-toggle",
+    "#new-task",
+    "#task-menu-button",
+  ]) {
+    assert.equal(await window.locator(selector).isVisible(), false);
+  }
+  assert.equal(await window.locator(".task-tab-close").count(), 0);
   assert.equal(native.visible, true);
   assert.equal(native.focused, false);
   assert.equal(native.windowVisible, false);
@@ -868,11 +877,15 @@ try {
     await window.locator("#setup-dialog").waitFor({ state: "hidden" });
     await window.locator("#onboarding-return").click();
     await window.locator('[data-panel="browser"].active').waitFor();
-    await window.locator("#browser-task-menu").click();
-    await window.locator("#task-menu-setup").click();
+    assert.equal(await window.locator("#browser-task-menu").isVisible(), false);
+    await window.locator('.nav-item[data-section="computer"]').click();
     await window.locator("#onboarding-nav").waitFor({ state: "visible" });
     await window.locator("#setup-dialog").waitFor({ state: "hidden" });
-    observations.push({ kind: "task-menu-setup", environment });
+    assert.equal(
+      await window.locator("#window-location").innerText(),
+      "Overview",
+    );
+    observations.push({ kind: "sidebar-setup-location", environment });
 
     if (behavior) {
       // Real configuration IPC and owned tunnel health, with no embedded login
@@ -1486,104 +1499,27 @@ try {
       .locator('#task-tabs [role="tab"]')
       .nth(3)
       .waitFor({ state: "visible" });
-    // The shell control must operate the visible selected page, not the
-    // retained (hidden) home/sign-in route. The fixture has no Send control.
-    await window
-      .locator("#browser-sidebar-toggle")
-      .waitFor({ state: "visible" });
-    const sidebarSnapshot = () =>
-      application.evaluate(
-        async ({ BrowserWindow, WebContentsView }, fixtureUrl) => {
-          const shell = BrowserWindow.getAllWindows().find((window) =>
-            window.webContents.getURL().endsWith("/shell.html"),
-          );
-          const fixture = new URL(fixtureUrl);
-          const pages = shell.contentView.children.filter((child) => {
-            if (!(child instanceof WebContentsView)) return false;
-            const page = new URL(child.webContents.getURL());
-            return (
-              page.origin === fixture.origin &&
-              page.pathname === fixture.pathname
-            );
-          });
-          return Promise.all(
-            pages.map(async (page) => ({
-              id: page.webContents.id,
-              visible: page.getVisible(),
-              url: page.webContents.getURL(),
-              clicks: await page.webContents.executeJavaScript(
-                "Number(document.body.dataset.sidebarClicks || 0)",
-              ),
-              sidebar: await page.webContents.executeJavaScript(
-                "document.querySelector('button[aria-label]')?.getAttribute('aria-label')",
-              ),
-            })),
-          );
-        },
-        fixtureUrl,
-      );
-    // Model the provider control changing state after automatic collapse.
-    // Wait for every owned page's initial collapse before measuring the owner
-    // toggle; asynchronous initialization is not a manual route effect.
-    let sidebarBefore;
-    const collapseDeadline = Date.now() + 5000;
-    for (;;) {
-      sidebarBefore = await bounded(
-        sidebarSnapshot(),
-        "SIDEBAR_BASELINE_TIMEOUT",
-      );
-      if (sidebarBefore.every((page) => page.sidebar === "Open sidebar")) break;
-      if (Date.now() >= collapseDeadline)
-        throw new Error("INITIAL_PAGE_SIDEBAR_NOT_COLLAPSED");
-      await new Promise((resolve) => setTimeout(resolve, 25));
-    }
-    assert.equal(sidebarBefore.filter((page) => page.visible).length, 1);
+    // Only the provider's own sidebar UI remains. Farol no longer adds a
+    // competing toolbar toggle or any task creation/close affordance.
     assert.equal(
-      await window
-        .locator("#browser-sidebar-toggle")
-        .evaluate((button) =>
-          getComputedStyle(button).getPropertyValue("-webkit-app-region"),
-        ),
-      "no-drag",
-      "BROWSER_SIDEBAR_TOGGLE_IS_DRAGGABLE",
+      await window.locator("#browser-sidebar-toggle").isVisible(),
+      false,
     );
-    await window.locator("#browser-sidebar-toggle").click();
-    let sidebarPages;
-    const sidebarDeadline = Date.now() + 5000;
-    for (;;) {
-      sidebarPages = await bounded(
-        sidebarSnapshot(),
-        "SIDEBAR_READBACK_TIMEOUT",
-        5000,
-      );
-      if (
-        sidebarPages.some(
-          (page) =>
-            page.visible &&
-            page.clicks ===
-              sidebarBefore.find((before) => before.id === page.id).clicks + 1,
-        )
-      )
-        break;
-      if (Date.now() >= sidebarDeadline)
-        throw new Error("SELECTED_PAGE_SIDEBAR_UNCHANGED");
-      await new Promise((resolve) => setTimeout(resolve, 25));
-    }
-    // Observe beyond the next hydration retry ticks: the owner's opening
-    // must remain in place, not be undone after an initially successful click.
-    await new Promise((resolve) => setTimeout(resolve, 1000));
-    sidebarPages = await bounded(sidebarSnapshot(), "SIDEBAR_SETTLED_TIMEOUT");
-    for (const page of sidebarPages) {
-      const before = sidebarBefore.find(
-        (candidate) => candidate.id === page.id,
-      );
-      assert.ok(before);
-      assert.equal(page.clicks - before.clicks, page.visible ? 1 : 0);
-    }
+    assert.equal(await window.locator("#new-task").isVisible(), false);
+    assert.equal(await window.locator("#task-tabs .task-tab-close").count(), 0);
+    const viewNames = await window
+      .locator("#task-tabs .task-tab > span")
+      .allTextContents();
+    assert.deepEqual(viewNames, [
+      "ChatGPT 1",
+      "ChatGPT 2",
+      "ChatGPT 3",
+      "ChatGPT 4",
+    ]);
     observations.push({
-      kind: "selected-page-sidebar",
+      kind: "compact-chat-selector",
       environment,
-      pages: sidebarPages,
+      viewNames,
     });
     await browserGeometry(window, environment, 1180);
     await browserGeometry(window, environment, 940);
@@ -1602,7 +1538,24 @@ try {
       await window.locator('#task-tabs [aria-selected="true"]').count(),
       1,
     );
-    await window.locator("#task-tabs .task-tab-close").last().click();
+    await window.locator('.nav-item[data-section="activity"]').click();
+    assert.equal(
+      await window.locator("#window-location").innerText(),
+      "Activity",
+    );
+    await window.locator("#activity-chats button").last().click();
+    await window.locator("#task-menu").waitFor({ state: "visible" });
+    assert.equal(
+      await window.locator("#task-menu-title").innerText(),
+      "Chat details",
+    );
+    assert.equal(await window.locator("#task-menu-cancel").isEnabled(), false);
+    assert.equal(
+      await window.locator("#task-menu-close-task").isEnabled(),
+      true,
+    );
+    await window.locator("#task-menu-close-task").click();
+    await window.locator("#task-menu").waitFor({ state: "hidden" });
     await window.waitForFunction(
       () => document.querySelectorAll('#task-tabs [role="tab"]').length === 3,
     );

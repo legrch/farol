@@ -12,6 +12,19 @@ async function shell() {
   return fs.readFile(path.join(root, "src/ui/shell.ts"), "utf8");
 }
 
+function admissionHandler(source) {
+  const start = source.indexOf(
+    'required<HTMLButtonElement>("#new-task").addEventListener',
+  );
+  const end = source.indexOf(
+    'required<HTMLButtonElement>("#task-menu-button").addEventListener',
+    start,
+  );
+  expect(start).toBeGreaterThan(-1);
+  expect(end).toBeGreaterThan(start);
+  return source.slice(start, end);
+}
+
 function functionBody(source, signature) {
   const start = source.indexOf(signature);
   expect(start, `${signature} is present`).toBeGreaterThan(-1);
@@ -368,23 +381,13 @@ describe("an awaited task admission cannot take the editor", () => {
     // await resolved 1.7 s later and closed whatever overlay was open,
     // because it was written as if the surface could not have changed.
     const source = await shell();
-    const handler = source.slice(
-      source.indexOf(
-        'required<HTMLButtonElement>("#new-task").addEventListener',
-      ),
-      source.indexOf('required<HTMLButtonElement>("#task-menu-button")'),
-    );
+    const handler = admissionHandler(source);
     expect(handler).toContain("const overlayAtDispatch = shellOverlay;");
   });
 
   it("navigates only when the surface has not moved since", async () => {
     const source = await shell();
-    const handler = source.slice(
-      source.indexOf(
-        'required<HTMLButtonElement>("#new-task").addEventListener',
-      ),
-      source.indexOf('required<HTMLButtonElement>("#task-menu-button")'),
-    );
+    const handler = admissionHandler(source);
     expect(handler).toContain(
       "completionMayNavigate(overlayAtDispatch, shellOverlay)",
     );
@@ -398,12 +401,7 @@ describe("an awaited task admission cannot take the editor", () => {
     // Not navigating is not the same as losing the task: it is admitted,
     // the tabs show it, and the owner is told rather than left guessing.
     const source = await shell();
-    const handler = source.slice(
-      source.indexOf(
-        'required<HTMLButtonElement>("#new-task").addEventListener',
-      ),
-      source.indexOf('required<HTMLButtonElement>("#task-menu-button")'),
-    );
+    const handler = admissionHandler(source);
     expect(handler).toContain("applyTasksState(parsed.data.state)");
     expect(handler).toContain("waiting in the task tabs");
   });

@@ -884,7 +884,13 @@ try {
   await window.mouse.click(1120, 500);
   await window.locator("#command-dialog").waitFor({ state: "hidden" });
   await window.screenshot({ path: path.join(output, "14-compact-task.png") });
-  await window.locator("#task-tabs .task-tab-close").click();
+  assert.equal(await window.locator("#task-tabs .task-tab-close").count(), 0);
+  await window.locator('.nav-item[data-section="activity"]').click();
+  await window.locator("#activity-chats button").click();
+  await window.locator("#task-menu").waitFor({ state: "visible" });
+  await window.locator("#task-menu-close-task").click();
+  await window.locator("#task-menu").waitFor({ state: "hidden" });
+  await window.locator('.nav-item[data-section="browser"]').click();
   await window.waitForFunction(
     () =>
       document.querySelector('#task-tabs [role="tab"]')?.textContent ===

@@ -1,4 +1,5 @@
 import { createInstalledUpdateView } from "./installed-update-view";
+import { chatViewLabel, navigationTitle } from "./navigation-presentation";
 import { InstalledUpdateViewSchema } from "../modules/release/contract/installed-update";
 import { z } from "zod";
 import { chatGptPreSubmitRemedy } from "./chatgpt-pre-submit-remedy";
@@ -129,7 +130,6 @@ import {
   setupConnectPrimary,
   setupStepStale,
   waitsForAgentRejoin,
-  windowModeLabel,
   workspaceAccessLabel,
   type RouteReadinessState,
 } from "./setup-presentation";
@@ -210,8 +210,7 @@ function sharedCodexSocketRefusalMessage(error: string): string | null {
 // `bootstrap.productName` carries the release identity the main process
 // validates elsewhere ("Farol Next Preview"); the diagnostics row below
 // only names the app to the owner, so it reads "Farol" with its
-// "Developer Preview" edition mark, matching the window title and the
-// brand mark in shell.html.
+// edition mark in the persistent sidebar. The window bar shows navigation.
 let displayProductName = "Farol";
 let displayEdition = "Developer Preview";
 
@@ -430,8 +429,6 @@ function applyProductIdentity(): void {
   );
   required("#brand-name").textContent = displayProductName;
   required("#brand-edition").textContent = displayEdition;
-  required("#window-product-name").textContent = displayProductName;
-  required("#window-product-edition").textContent = displayEdition;
   required("#setup-product-name").textContent = displayProductName;
   required("#setup-product-edition").textContent = displayEdition;
 }
@@ -750,7 +747,7 @@ let pendingLayout: z.infer<typeof ShellLayoutSchema> | null = null;
 const taskSurfaceStatuses = new Map<string, TaskSurfaceStatus>();
 
 function taskLabel(task: PreviewTask | undefined): string {
-  return task?.label.replace(/^Demo · /u, "") ?? "Unknown task";
+  return task ? chatViewLabel(task.label) : "Unknown task";
 }
 
 function renderCapability(
@@ -1148,50 +1145,9 @@ function renderTabs(): void {
       button.append(label, lamp, status);
       button.addEventListener("click", () => selectTask(task.taskId));
       item.append(button);
-      if (compactBrowserSelected(bootstrap) && task.provider === "chatgpt") {
-        const close = document.createElement("button");
-        close.type = "button";
-        close.className = "task-tab-close";
-        close.textContent = "×";
-        close.setAttribute("aria-label", `Close ${taskLabel(task)}`);
-        close.title = `Close ${taskLabel(task)}`;
-        close.addEventListener("click", () => void closeTaskTab(task.taskId));
-        item.append(close);
-      }
       return item;
     }),
   );
-}
-
-async function closeTaskTab(taskId: string): Promise<void> {
-  let response: unknown;
-  try {
-    response = await window.farolNext.task({ kind: "task.close", taskId });
-  } catch {
-    selectedTaskId = taskId;
-    openTaskMenu();
-    taskMenuFeedback =
-      "The task close result was not confirmed. Check this task before trying again.";
-    taskMenuFeedbackError = true;
-    render();
-    return;
-  }
-  const parsed = ProductTaskCommandResultSchema.safeParse(response);
-  if (parsed.success) applyTasksState(parsed.data.state);
-  if (!parsed.success || !parsed.data.ok) {
-    selectedTaskId = taskId;
-    openTaskMenu();
-    taskMenuFeedback = !parsed.success
-      ? "The task route returned an invalid result."
-      : !parsed.data.ok
-        ? taskMenuErrorMessage(parsed.data.error)
-        : "The task could not be closed.";
-    taskMenuFeedbackError = true;
-    render();
-    return;
-  }
-  selectedTaskId = parsed.data.selectedTaskId ?? "";
-  render();
 }
 
 function renderBrowserStatus(): void {
@@ -1903,6 +1859,33 @@ function renderComputer(): void {
 function renderActivity(): void {
   required<HTMLElement>("#activity-setup-note").hidden =
     bootstrap.environment !== "dev";
+  const chats = required<HTMLUListElement>("#activity-chats");
+  const liveChats = bootstrap.tasks.filter(
+    (task) => task.provider === "chatgpt",
+  );
+  chats.parentElement!.hidden = liveChats.length === 0;
+  chats.replaceChildren(
+    ...liveChats.map((task) => {
+      const item = document.createElement("li");
+      const label = document.createElement("strong");
+      label.textContent = taskLabel(task);
+      const state = document.createElement("span");
+      state.textContent = taskState(task.taskId).label;
+      const inspect = document.createElement("button");
+      inspect.type = "button";
+      inspect.dataset.taskId = task.taskId;
+      inspect.textContent = "Inspect";
+      inspect.setAttribute("aria-label", `Inspect ${taskLabel(task)}`);
+      inspect.disabled = taskMenuBusy;
+      inspect.addEventListener("click", () => {
+        if (taskMenuBusy || !taskById(task.taskId)) return;
+        selectedTaskId = task.taskId;
+        openTaskMenu();
+      });
+      item.append(label, state, inspect);
+      return item;
+    }),
+  );
   const list = required<HTMLOListElement>("#activity-list");
   const technical =
     bootstrap.configuration.status === "ready" &&
@@ -5468,34 +5451,14 @@ function render(notify = true): void {
       (bootstrap.tasks.length > 0 && !chatGptSignInOpened) ||
       (compactBrowser && section === "browser" && !setupJourney.open),
   );
-  required<HTMLButtonElement>("#browser-sidebar-toggle").hidden = !(
-    embeddedBrowserSelected(bootstrap) &&
-    section === "browser" &&
-    !setupJourney.open &&
-    (chatGptSignInOpened || bootstrap.tasks.length === 0
-      ? browserHomeStatus === "ready"
-      : taskById(selectedTaskId)?.provider === "chatgpt" &&
-        taskSurfaceStatuses.get(selectedTaskId)?.state === "ready")
-  );
+  required<HTMLButtonElement>("#browser-sidebar-toggle").hidden = true;
   const browserMenu = required<HTMLButtonElement>("#browser-task-menu");
-  const browserMenuLabel =
-    bootstrap.tasks.length > 0 ? "Selected task options" : "Browser options";
-  browserMenu.setAttribute("aria-label", browserMenuLabel);
-  browserMenu.title = browserMenuLabel;
+  browserMenu.hidden = true;
+  required<HTMLButtonElement>("#task-menu-button").hidden = !bootstrap.demoMode;
   const newTask = required<HTMLButtonElement>("#new-task");
+  newTask.hidden = true;
   const chatGptReady = chatGptRouteState() === "ready";
-  required("#window-mode").textContent = windowModeLabel({
-    demoMode: bootstrap.demoMode,
-    taskCount: bootstrap.tasks.length,
-    chatGptReady,
-  });
-  if (
-    embeddedBrowserSelected(bootstrap) &&
-    section === "browser" &&
-    bootstrap.tasks.length === 0
-  ) {
-    required("#window-mode").textContent = "ChatGPT inside Farol";
-  }
+  required("#window-mode").textContent = "";
   const taskCapacityAvailable = bootstrap.tasks.length < 5;
   newTask.disabled =
     bootstrap.demoMode || !chatGptReady || !taskCapacityAvailable;
@@ -5562,6 +5525,15 @@ function render(notify = true): void {
       "Setup";
   }
   renderSetup();
+  const location = navigationTitle({
+    section,
+    setupPage: guidedEnabled
+      ? (guidedOnboarding?.pageLabel() ?? "Overview")
+      : null,
+    settingsPage: guidedEnabled ? settingsCategory : null,
+  });
+  required("#window-location").textContent = location;
+  document.title = `${location} · ${displayProductName}`;
   renderOverlayState();
   if (notify) notifyHost();
   document.documentElement.dataset.ready = "true";
@@ -5659,6 +5631,7 @@ function toggleSidebar(): void {
 
 function openTaskMenu(): void {
   const task = taskById(selectedTaskId);
+  if (task?.provider !== "chatgpt" && !bootstrap.demoMode) return;
   taskMenuFeedback = "";
   taskMenuFeedbackError = false;
   if (task?.provider === "chatgpt") {
