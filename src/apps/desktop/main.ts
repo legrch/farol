@@ -408,7 +408,7 @@ import {
   writeDevMcpProofPreparation,
 } from "../../modules/computer/infra/mcp/dev-mcp-proof";
 import {
-  codexChildHomePath,
+  desktopCodexChildHomes,
   desktopAppDataPath,
   desktopEnvironment,
   desktopIdentity,
@@ -3215,7 +3215,7 @@ async function farolModelCodexHostPresence(): Promise<
   // DEV never inspects or asks the owner to restart a personal Codex. Its
   // model route is consumed only by app-owned children with private HOME and
   // CODEX_HOME directories.
-  if (runtimeEnvironment === "dev") return "not_running";
+  if (buildEnvironment === "dev") return "not_running";
   const snapshot = configuration ? configuration.snapshot() : null;
   const executablePath =
     snapshot && snapshot.status === "ready"
@@ -3335,23 +3335,25 @@ async function codexHostHomePath(): Promise<string> {
 async function codexHostHomeOption(): Promise<
   Readonly<{ codexHomePath?: string }>
 > {
-  const selected = codexChildHomePath(
-    runtimeEnvironment,
-    activeDesktopIdentity.codexHome,
+  const { codexHomePath: selected } = desktopCodexChildHomes(
+    buildEnvironment,
+    activeDesktopIdentity,
+    app.getPath("home"),
     process.env.CODEX_HOME,
   );
   if (selected === undefined) return {};
-  if (runtimeEnvironment === "dev") await codexHostHomePath();
+  if (buildEnvironment === "dev") await codexHostHomePath();
   return { codexHomePath: selected };
 }
 
 async function codexHostProcessHomePath(): Promise<string> {
-  if (runtimeEnvironment !== "dev") return app.getPath("home");
-  const root = path.join(
-    activeDesktopIdentity.userData,
-    "farol-next-private",
-    "process-home",
+  const { processHomePath: root } = desktopCodexChildHomes(
+    buildEnvironment,
+    activeDesktopIdentity,
+    app.getPath("home"),
+    process.env.CODEX_HOME,
   );
+  if (buildEnvironment !== "dev") return root;
   await mkdir(root, { recursive: true, mode: 0o700 });
   const info = await lstat(root);
   const effectiveUser = process.geteuid?.();

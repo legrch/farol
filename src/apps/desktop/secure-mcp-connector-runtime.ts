@@ -146,18 +146,72 @@ const runCommand: ConnectorCommandRunner = async (command) =>
     );
   });
 
-export function observedConnectorChild(child: ChildProcess): ConnectorChild {
-  // A failed signal can emit `error` without `exit`. Keep a listener for the
-  // entire process lifetime, but never classify that event as confirmed exit.
+export function observedConnectorChild(
+  child: ChildProcess,
+  ownsProcessGroup = false,
+): ConnectorChild {
+  // A failed signal can emit `error` without `exit`. Never treat it as exit.
   child.on("error", () => undefined);
+  const groupPid = ownsProcessGroup ? child.pid : undefined;
+  let groupGone = false;
+  let signalRefused = false;
+  const directExitCode = () =>
+    child.exitCode ?? (child.signalCode === null ? null : -1);
+  const groupExitConfirmed = () => {
+    if (!ownsProcessGroup) return true;
+    if (signalRefused || groupPid === undefined) return false;
+    if (groupGone) return true;
+    try {
+      process.kill(-groupPid, 0);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ESRCH") {
+        // Cache absence: never probe or signal a subsequently reused group.
+        groupGone = true;
+      } else {
+        signalRefused = true;
+      }
+    }
+    return groupGone;
+  };
   return {
     pid: child.pid,
     get exitCode() {
-      return child.exitCode ?? (child.signalCode === null ? null : -1);
+      const code = directExitCode();
+      return code !== null && groupExitConfirmed() ? code : null;
     },
-    kill: (signal) => child.kill(signal),
+    kill: (signal) => {
+      if (!ownsProcessGroup) return child.kill(signal);
+      // Only the exact detached spawn owns this group. Once its leader exited,
+      // ownership cannot be re-established from a numeric PID; do not escalate
+      // against descendants or a reused group. Retain unconfirmed cleanup.
+      if (
+        groupPid === undefined ||
+        signalRefused ||
+        groupGone ||
+        directExitCode() !== null
+      )
+        return false;
+      try {
+        process.kill(-groupPid, signal);
+        return true;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ESRCH") groupGone = true;
+        else signalRefused = true;
+        return false;
+      }
+    },
     waitForExit: async (timeoutMs) => {
-      if (child.exitCode !== null || child.signalCode !== null) return true;
+      if (ownsProcessGroup) {
+        const deadline = Date.now() + timeoutMs;
+        for (;;) {
+          if (signalRefused) return false;
+          if (directExitCode() !== null && groupExitConfirmed()) return true;
+          const remaining = deadline - Date.now();
+          if (remaining <= 0) return false;
+          await wait(Math.min(50, remaining));
+        }
+      }
+      if (directExitCode() !== null) return true;
       return new Promise<boolean>((resolve) => {
         let settled = false;
         const finish = (value: boolean) => {
@@ -188,7 +242,7 @@ const startProcess: ConnectorProcessStarter = async (command) => {
     // Keep the exact ChildProcess tracked; this is not an unreferenced daemon.
     detached: true,
   });
-  const observed = observedConnectorChild(child);
+  const observed = observedConnectorChild(child, true);
   await new Promise<void>((resolve, reject) => {
     const spawned = () => {
       child.off("error", failed);

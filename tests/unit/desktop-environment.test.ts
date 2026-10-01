@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
   codexChildHomePath,
+  desktopCodexChildHomes,
   desktopAppDataPath,
   desktopEnvironment,
   desktopIdentity,
@@ -84,6 +85,27 @@ describe("desktop environment identity", () => {
         override: undefined,
       }),
     ).toBe(appData);
+  });
+
+  it("keeps both Codex child homes private in shared NEW development", () => {
+    const build = desktopEnvironment("dev");
+    const profile = desktopProfileEnvironment(build, "shared-new", undefined);
+    const identity = desktopIdentity(profile, appData);
+    const selected = desktopCodexChildHomes(
+      build,
+      identity,
+      "/Users/owner",
+      "/Users/owner/.codex",
+    );
+    expect(selected.codexHomePath).toBe(identity.codexHome);
+    expect(selected.processHomePath).toBe(
+      path.join(identity.userData, "farol-next-private", "process-home"),
+    );
+    expect(selected.processHomePath).not.toBe("/Users/owner");
+    expect(selected.codexHomePath).not.toBe("/Users/owner/.codex");
+    expect(
+      desktopCodexChildHomes("preview", identity, "/Users/owner", undefined),
+    ).toEqual({ codexHomePath: undefined, processHomePath: "/Users/owner" });
   });
 
   it("preserves explicit acceptance and ordinary packaged profile selection", () => {

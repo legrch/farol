@@ -242,3 +242,22 @@ export function codexChildHomePath(
     ? configuredCodexHome
     : undefined;
 }
+
+export function desktopCodexChildHomes(
+  buildEnvironment: DesktopEnvironment,
+  identity: DesktopIdentity,
+  nativeHome: string,
+  configuredCodexHome: string | undefined,
+): Readonly<{ codexHomePath: string | undefined; processHomePath: string }> {
+  return {
+    codexHomePath: codexChildHomePath(
+      buildEnvironment,
+      identity.codexHome,
+      configuredCodexHome,
+    ),
+    processHomePath:
+      buildEnvironment === "dev"
+        ? path.join(identity.userData, "farol-next-private", "process-home")
+        : nativeHome,
+  };
+}

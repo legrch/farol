@@ -91,6 +91,87 @@ describe("secure MCP connector runtime", () => {
     expect(observed.exitCode).toBeNull();
   });
 
+  it("retains a group whose leader exited and never signals it by a stale PID", async () => {
+    const events = new EventEmitter();
+    const child = Object.assign(events, {
+      pid: 4326,
+      exitCode: 0,
+      signalCode: null,
+      kill: vi.fn(),
+    }) as unknown as ChildProcess;
+    const signal = vi.spyOn(process, "kill").mockImplementation(() => true);
+    try {
+      const observed = observedConnectorChild(child, true);
+      expect(observed.exitCode).toBeNull();
+      expect(await observed.waitForExit(0)).toBe(false);
+      expect(observed.kill("SIGKILL")).toBe(false);
+      expect(child.kill).not.toHaveBeenCalled();
+      expect(signal.mock.calls).toEqual([
+        [-4326, 0],
+        [-4326, 0],
+      ]);
+      signal.mockImplementation(() => {
+        throw Object.assign(new Error("absent"), { code: "ESRCH" });
+      });
+      expect(observed.exitCode).toBe(0);
+      signal.mockClear();
+      expect(observed.kill("SIGKILL")).toBe(false);
+      expect(await observed.waitForExit(0)).toBe(true);
+      expect(observed.exitCode).toBe(0);
+      expect(signal).not.toHaveBeenCalled();
+    } finally {
+      signal.mockRestore();
+    }
+  });
+
+  it("does not retry a group signal or probe after permission refusal", async () => {
+    const events = new EventEmitter();
+    const child = Object.assign(events, {
+      pid: 4327,
+      exitCode: null,
+      signalCode: null,
+      kill: vi.fn(),
+    }) as unknown as ChildProcess;
+    const signal = vi.spyOn(process, "kill").mockImplementation(() => {
+      throw Object.assign(new Error("denied"), { code: "EPERM" });
+    });
+    try {
+      const observed = observedConnectorChild(child, true);
+      expect(observed.kill("SIGTERM")).toBe(false);
+      expect(await observed.waitForExit(0)).toBe(false);
+      expect(observed.kill("SIGKILL")).toBe(false);
+      Object.assign(child, { exitCode: 0 });
+      expect(observed.exitCode).toBeNull();
+      expect(await observed.waitForExit(0)).toBe(false);
+      expect(signal.mock.calls).toEqual([[-4327, "SIGTERM"]]);
+      expect(child.kill).not.toHaveBeenCalled();
+    } finally {
+      signal.mockRestore();
+    }
+  });
+
+  it("requires absence of the whole group and fails closed after a refused probe", async () => {
+    const events = new EventEmitter();
+    const child = Object.assign(events, {
+      pid: 4328,
+      exitCode: 0,
+      signalCode: null,
+      kill: vi.fn(),
+    }) as unknown as ChildProcess;
+    const signal = vi.spyOn(process, "kill").mockImplementation(() => {
+      throw Object.assign(new Error("denied"), { code: "EACCES" });
+    });
+    try {
+      const observed = observedConnectorChild(child, true);
+      expect(observed.exitCode).toBeNull();
+      expect(await observed.waitForExit(0)).toBe(false);
+      expect(observed.kill("SIGKILL")).toBe(false);
+      expect(signal.mock.calls).toEqual([[-4328, 0]]);
+    } finally {
+      signal.mockRestore();
+    }
+  });
+
   it("classifies asynchronous spawn failure without crashing desktop", async () => {
     const selected = await fixture();
     const runtime = new SecureMcpConnectorRuntime({
