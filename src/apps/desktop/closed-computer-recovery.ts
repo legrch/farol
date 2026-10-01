@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -35,6 +35,14 @@ const Reservation = z.strictObject({
   fingerprint: Digest,
 });
 const FLAGS = constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK;
+const RETAINED_FILES = new Set([
+  "prepared.json",
+  "running.json",
+  "last-quit.json",
+  "completed.json",
+]);
+const RETAINED_TEMPORARY =
+  /^\.(?:prepared|running|last-quit|completed)\.json\.[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}\.tmp$/u;
 const digest = (bytes: Buffer) =>
   createHash("sha256").update(bytes).digest("hex");
 
@@ -104,10 +112,16 @@ async function retain(file: string, bytes: Buffer): Promise<void> {
   if (previous !== null) {
     if (!previous.equals(bytes))
       throw new Error("CLOSED_COMPUTER_RECOVERY_STATE_CHANGED");
+    await sync(path.dirname(file));
     return;
   }
+  // Keep incomplete bytes separate from authoritative retained evidence.
+  const temporary = path.join(
+    path.dirname(file),
+    `.${path.basename(file)}.${randomUUID()}.tmp`,
+  );
   const handle = await fs.open(
-    file,
+    temporary,
     constants.O_WRONLY |
       constants.O_CREAT |
       constants.O_EXCL |
@@ -120,6 +134,17 @@ async function retain(file: string, bytes: Buffer): Promise<void> {
   } finally {
     await handle.close();
   }
+  const staged = await privateBytes(temporary, 16384);
+  if (staged === null || !staged.equals(bytes))
+    throw new Error("CLOSED_COMPUTER_RECOVERY_STATE_CHANGED");
+  const concurrent = await privateBytes(file, 16384);
+  if (concurrent !== null) {
+    if (!concurrent.equals(bytes))
+      throw new Error("CLOSED_COMPUTER_RECOVERY_STATE_CHANGED");
+    await sync(path.dirname(file));
+    return;
+  }
+  await fs.rename(temporary, file);
   await sync(path.dirname(file));
 }
 
@@ -324,6 +349,17 @@ export async function recoverClosedComputer(
             if (error.code !== "EEXIST") throw error;
           });
         await privateDirectory(archive);
+        await sync(state);
+        const names = await fs.readdir(archive);
+        if (names.length > 4096)
+          throw new Error("CLOSED_COMPUTER_RECOVERY_STATE_CHANGED");
+        for (const name of names) {
+          if (RETAINED_TEMPORARY.test(name)) {
+            await privateBytes(path.join(archive, name), 16384);
+          } else if (!RETAINED_FILES.has(name)) {
+            throw new Error("CLOSED_COMPUTER_RECOVERY_STATE_CHANGED");
+          }
+        }
         const metadata = {
           schema: "farol.closed-computer-recovery/1",
           ...request,

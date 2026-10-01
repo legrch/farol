@@ -114,6 +114,110 @@ afterEach(async () => {
 describe.skipIf(process.platform !== "darwin")(
   "explicit closed Computer reconciliation (disposable state, no provider)",
   () => {
+    it.each([
+      "prepared.json",
+      "running.json",
+      "last-quit.json",
+      "completed.json",
+    ])(
+      "resumes a partial retained %s publication with original failure evidence unchanged",
+      async (name) => {
+        const f = await fixture();
+        const archive = path.join(
+          f.state,
+          `closed-recovery-${f.input.operationId}`,
+        );
+        const open = fs.open.bind(fs);
+        let interrupted = false;
+        const fault = vi
+          .spyOn(fs, "open")
+          .mockImplementation(async (...args) => {
+            const handle = await open(...args);
+            if (
+              !interrupted &&
+              path.dirname(String(args[0])) === archive &&
+              String(args[0]).includes(name) &&
+              typeof args[1] === "number" &&
+              args[1] & 1
+            ) {
+              interrupted = true;
+              const write = handle.writeFile.bind(handle);
+              vi.spyOn(handle, "writeFile").mockImplementationOnce(async () => {
+                await write('{"schema":');
+                throw new Error("JOURNAL_WRITE_INTERRUPTED");
+              });
+            }
+            return handle;
+          });
+        await expect(recoverClosedComputer(f.input, f.probes)).rejects.toThrow(
+          "JOURNAL_WRITE_INTERRUPTED",
+        );
+        fault.mockRestore();
+        await expect(fs.lstat(path.join(archive, name))).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+        expect(
+          await fs.readFile(path.join(f.state, "running.json"), "utf8"),
+        ).toBe(f.run);
+        expect(
+          await fs.readFile(path.join(f.state, "last-quit.json"), "utf8"),
+        ).toBe(f.quit);
+        const remnants = (await fs.readdir(archive)).filter((entry) =>
+          entry.startsWith(`.${name}.`),
+        );
+        expect(remnants).toHaveLength(1);
+        const staged = path.join(archive, remnants[0]!);
+        const inode = (await fs.lstat(staged)).ino;
+        await expect(
+          recoverClosedComputer(f.input, f.probes),
+        ).resolves.toMatchObject({ phase: "retired_unconfirmed" });
+        expect(await fs.readFile(staged, "utf8")).toBe('{"schema":');
+        expect((await fs.lstat(staged)).ino).toBe(inode);
+        expect(
+          await fs.readFile(path.join(archive, "running.json"), "utf8"),
+        ).toBe(f.run);
+        expect(
+          await fs.readFile(path.join(archive, "last-quit.json"), "utf8"),
+        ).toBe(f.quit);
+      },
+    );
+
+    it.each(["public", "hardlink", "symlink", "oversize"])(
+      "refuses a %s retained remnant before retiring the failed evidence",
+      async (kind) => {
+        const f = await fixture();
+        const archive = path.join(
+          f.state,
+          `closed-recovery-${f.input.operationId}`,
+        );
+        await fs.mkdir(archive, { mode: 0o700 });
+        const temporary = path.join(
+          archive,
+          ".prepared.json.88888888-8888-4888-8888-888888888888.tmp",
+        );
+        const sentinel = path.join(f.state, "sentinel");
+        await fs.writeFile(sentinel, "unchanged", { mode: 0o600 });
+        if (kind === "symlink") await fs.symlink(sentinel, temporary);
+        else if (kind === "hardlink") await fs.link(sentinel, temporary);
+        else
+          await fs.writeFile(
+            temporary,
+            kind === "oversize" ? Buffer.alloc(16385) : "partial",
+            { mode: kind === "public" ? 0o644 : 0o600 },
+          );
+        await expect(
+          recoverClosedComputer(f.input, f.probes),
+        ).rejects.toThrow();
+        expect(
+          await fs.readFile(path.join(f.state, "running.json"), "utf8"),
+        ).toBe(f.run);
+        expect(
+          await fs.readFile(path.join(f.state, "last-quit.json"), "utf8"),
+        ).toBe(f.quit);
+        expect(await fs.readFile(sentinel, "utf8")).toBe("unchanged");
+      },
+    );
+
     it("uses the desktop authority root and leaves the separate credential tree untouched", async () => {
       const f = await fixture();
       const sibling = path.join(

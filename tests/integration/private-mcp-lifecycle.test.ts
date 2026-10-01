@@ -327,6 +327,113 @@ describe.skipIf(process.platform !== "darwin")(
       await lifecycle.prepare(newDigest);
     });
 
+    it.each(["prepared.json", "completed.json"])(
+      "resumes an interrupted %s publication without accepting partial journal bytes",
+      async (name) => {
+        const { root, lifecycle } = await fixture();
+        await lifecycle.prepare(oldDigest);
+        await lifecycle.beginStop();
+        const directory = path.join(root, "mcp-lifecycle");
+        const instance = "active-55555555-5555-4555-8555-555555555555";
+        await fs.writeFile(path.join(directory, instance), "1\n", {
+          mode: 0o600,
+        });
+        const input = {
+          operationId: "66666666-6666-4666-8666-666666666666",
+          failedQuitSha256: "f".repeat(64),
+          proveIdle: async () => undefined,
+        };
+        const open = fs.open.bind(fs);
+        let interrupted = false;
+        const fault = vi
+          .spyOn(fs, "open")
+          .mockImplementation(async (...args) => {
+            const handle = await open(...args);
+            if (
+              !interrupted &&
+              String(args[0]).includes(name) &&
+              typeof args[1] === "number" &&
+              args[1] & 1
+            ) {
+              interrupted = true;
+              const write = handle.writeFile.bind(handle);
+              vi.spyOn(handle, "writeFile").mockImplementationOnce(async () => {
+                await write('{"schema":');
+                throw new Error("JOURNAL_WRITE_INTERRUPTED");
+              });
+            }
+            return handle;
+          });
+        await expect(lifecycle.reconcileInactive(input)).rejects.toThrow(
+          "JOURNAL_WRITE_INTERRUPTED",
+        );
+        fault.mockRestore();
+        const archive = path.join(directory, `retired-${input.operationId}`);
+        await expect(fs.lstat(path.join(archive, name))).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+        const remnants = (await fs.readdir(archive)).filter((entry) =>
+          entry.startsWith(`.${name}.`),
+        );
+        expect(remnants).toHaveLength(1);
+        const staged = path.join(archive, remnants[0]!);
+        const inode = (await fs.lstat(staged)).ino;
+        await expect(lifecycle.prepare(newDigest)).rejects.toThrow(
+          "COMPUTER_MCP_RECONCILIATION_PENDING",
+        );
+        await lifecycle.reconcileInactive(input);
+        expect(await fs.readFile(staged, "utf8")).toBe('{"schema":');
+        expect((await fs.lstat(staged)).ino).toBe(inode);
+        expect(await fs.readFile(path.join(archive, instance), "utf8")).toBe(
+          "1\n",
+        );
+        await lifecycle.prepare(newDigest);
+      },
+    );
+
+    it.each(["public", "hardlink", "symlink", "oversize"])(
+      "refuses a %s journal remnant without retiring an instance",
+      async (kind) => {
+        const { root, lifecycle } = await fixture();
+        await lifecycle.prepare(oldDigest);
+        await lifecycle.beginStop();
+        const directory = path.join(root, "mcp-lifecycle");
+        const instance = path.join(
+          directory,
+          "active-55555555-5555-4555-8555-555555555555",
+        );
+        await fs.writeFile(instance, "1\n", { mode: 0o600 });
+        const inode = (await fs.lstat(instance)).ino;
+        const operationId = "66666666-6666-4666-8666-666666666666";
+        const archive = path.join(directory, `retired-${operationId}`);
+        await fs.mkdir(archive, { mode: 0o700 });
+        const temporary = path.join(
+          archive,
+          ".prepared.json.88888888-8888-4888-8888-888888888888.tmp",
+        );
+        const sentinel = path.join(root, "sentinel");
+        await fs.writeFile(sentinel, "unchanged", { mode: 0o600 });
+        if (kind === "symlink") await fs.symlink(sentinel, temporary);
+        else if (kind === "hardlink") await fs.link(sentinel, temporary);
+        else
+          await fs.writeFile(
+            temporary,
+            kind === "oversize" ? Buffer.alloc(8193) : "partial",
+            { mode: kind === "public" ? 0o644 : 0o600 },
+          );
+        await expect(
+          lifecycle.reconcileInactive({
+            operationId,
+            failedQuitSha256: "f".repeat(64),
+            proveIdle: async () => undefined,
+          }),
+        ).rejects.toThrow();
+        expect((await fs.lstat(instance)).ino).toBe(inode);
+        expect(await fs.readFile(instance, "utf8")).toBe("1\n");
+        expect(await fs.readFile(sentinel, "utf8")).toBe("unchanged");
+      },
+    );
+
     it("keeps handler admission open until every admitted handler settles", async () => {
       const { lifecycle } = await fixture();
       await lifecycle.prepare(oldDigest);

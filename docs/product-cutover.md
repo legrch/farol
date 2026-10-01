@@ -24,6 +24,11 @@ It is not evidence of a successful automatic update or full V0 replacement.
    lifetime locks, owning journal checks and process absence. `retired_unconfirmed`
    is a maintenance result, never a fabricated successful Quit. A pending task,
    mutation, shell group, unknown process or unsafe file still refuses it.
+   Keep every NEW application closed throughout recovery, retirement and
+   promotion, until their terminal result and exact readback. This selected
+   manual mode does not serialize a concurrent application's startup with final
+   marker retirement. The deferred startup-fence risk remains open; neither
+   repeated checks nor journal reconciliation make that race safe.
 3. Qualify the candidate under unchanged test/owner-guard modes. Save the native
    continuation and exact rollback plan before stopping V0. The owner-selected
    downtime step must stop only identified V0 components and preserve its exact

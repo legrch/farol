@@ -13,6 +13,8 @@ const CLOSE_ON_EXEC =
 const DIGEST = /^[a-f0-9]{64}$/u;
 const PREPARED = /^prepared-([a-f0-9]{64})$/u;
 const INSTANCE = /^active-[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/u;
+const JOURNAL_TEMPORARY =
+  /^\.(?:prepared|completed)\.json\.[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}\.tmp$/u;
 const Reconciliation = z.strictObject({
   schema: z.literal(1),
   operationId: z.string().uuid(),
@@ -400,7 +402,12 @@ export class PrivateMcpLifecycle {
           if (error.code !== "EEXIST") throw error;
         });
       await this.safeRecoveryDirectory(archive);
+      await this.sync();
       for (const name of await fs.readdir(archive)) {
+        if (JOURNAL_TEMPORARY.test(name)) {
+          await this.privateRecoveryBytes(path.join(archive, name));
+          continue;
+        }
         if (
           !plan.instances.includes(name) &&
           name !== "prepared.json" &&
@@ -510,10 +517,17 @@ export class PrivateMcpLifecycle {
     if (previous !== null) {
       if (previous !== bytes)
         throw new Error("COMPUTER_MCP_RECONCILIATION_CHANGED");
+      await this.syncDirectory(path.dirname(file));
       return;
     }
+    // A crash must leave an uncommitted private remnant, never a partial
+    // authoritative record. The same operation retains these bytes on resume.
+    const temporary = path.join(
+      path.dirname(file),
+      `.${path.basename(file)}.${randomUUID()}.tmp`,
+    );
     const handle = await fs.open(
-      file,
+      temporary,
       fsConstants.O_WRONLY |
         fsConstants.O_CREAT |
         fsConstants.O_EXCL |
@@ -527,6 +541,16 @@ export class PrivateMcpLifecycle {
     } finally {
       await handle.close();
     }
+    if ((await this.privateRecoveryBytes(temporary)) !== bytes)
+      throw new Error("COMPUTER_MCP_RECONCILIATION_CHANGED");
+    const concurrent = await this.privateRecoveryBytes(file);
+    if (concurrent !== null) {
+      if (concurrent !== bytes)
+        throw new Error("COMPUTER_MCP_RECONCILIATION_CHANGED");
+      await this.syncDirectory(path.dirname(file));
+      return;
+    }
+    await fs.rename(temporary, file);
     await this.syncDirectory(path.dirname(file));
   }
 
