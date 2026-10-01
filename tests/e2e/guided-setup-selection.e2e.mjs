@@ -326,7 +326,10 @@ async function launch(environment, mode = "normal", profile = mode) {
   // The existing startup receipt contract requires a direct OS-temp test HOME.
   const home = profileRoot;
   const appData = path.join(profileRoot, "app-data");
-  const userData = path.join(profileRoot, "user-data");
+  const normalPackagedProfile = packaged && mode === "normal-profile";
+  const userData = normalPackagedProfile
+    ? path.join(appData, "Farol Next Preview")
+    : path.join(profileRoot, "user-data");
   await fs.mkdir(home, { recursive: true, mode: 0o700 });
   await fs.mkdir(appData, { recursive: true, mode: 0o700 });
   await fs.mkdir(userData, { recursive: true, mode: 0o700 });
@@ -336,10 +339,11 @@ async function launch(environment, mode = "normal", profile = mode) {
     force: true,
   });
   const launchOptions = {
-    executablePath: executable,
+    executablePath: normalPackagedProfile
+      ? path.join(appRoot, "Contents/MacOS/Farol Next Preview")
+      : executable,
     args: [
-      entry,
-      `--user-data-dir=${userData}`,
+      ...(normalPackagedProfile ? [] : [entry, `--user-data-dir=${userData}`]),
       "--preview-window-mode=hidden",
       ...(mode === "demo" ? ["--demo"] : []),
     ],
@@ -389,8 +393,8 @@ async function launch(environment, mode = "normal", profile = mode) {
     return value;
   });
   application = await bounded(pendingLaunch, "GUIDED_SETUP_LAUNCH_TIMEOUT");
-  // Preview intentionally ignores the Dev appData override. Prove native
-  // paths before touching UI; HOME alone does not select Electron's profile.
+  // Prove selected native paths before touching UI. HOME alone does not
+  // select Electron's profile; both environments require the private proof.
   const nativePaths = await application.evaluate(({ app }) => ({
     userData: app.getPath("userData"),
     sessionData: app.getPath("sessionData"),
@@ -650,6 +654,27 @@ async function checkBackgroundSecondary() {
 }
 
 try {
+  if (packaged) {
+    await launch("preview", "normal-profile");
+    const identity = await application.evaluate(({ app }) => ({
+      name: app.getName(),
+      isPackaged: app.isPackaged,
+      userData: app.getPath("userData"),
+      sessionData: app.getPath("sessionData"),
+      userDataOverride: app.commandLine.hasSwitch("user-data-dir"),
+    }));
+    assert.equal(identity.name, "Farol");
+    assert.equal(identity.isPackaged, true);
+    assert.equal(identity.userDataOverride, false);
+    assert.equal(identity.userData, activeFixtureProfile.userData);
+    assert.equal(identity.sessionData, identity.userData);
+    assert.equal(path.basename(identity.userData), "Farol Next Preview");
+    observations.push({
+      kind: "packaged-normal-profile-without-user-data-override",
+      ...identity,
+    });
+    await closeOwned();
+  }
   for (const environment of behavior
     ? ["preview"]
     : packaged

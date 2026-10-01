@@ -33,6 +33,7 @@ import { sourceIdentity } from "../../tooling/source-identity.mjs";
 import { parseQuitReceipt } from "../../src/apps/desktop/quit-receipt.ts";
 import { runBoundedProcess } from "./bounded-process.mjs";
 import { predecessorPackagePaths } from "./predecessor-package-path.mjs";
+import { packageLayout } from "../../tooling/package-layout.mjs";
 
 const root = process.cwd();
 const development = process.argv.includes("--development");
@@ -576,7 +577,10 @@ if (development) {
     );
     cases.push("malformed-artifact-rejected");
 
-    const tamperedApp = path.join(corruptRoot, "Farol Next Preview.app");
+    const tamperedApp = path.join(
+      corruptRoot,
+      packageLayout(artifact.schema).appName,
+    );
     const cloned = spawnSync("/bin/cp", ["-cR", appPath, tamperedApp], {
       encoding: "utf8",
     });
@@ -592,7 +596,7 @@ if (development) {
     await fs.mkdir(rewrittenIdentityRoot);
     const rewrittenIdentityApp = path.join(
       rewrittenIdentityRoot,
-      "Farol Next Preview.app",
+      packageLayout(artifact.schema).appName,
     );
     const identityClone = spawnSync(
       "/bin/cp",
@@ -690,7 +694,7 @@ if (development) {
     await fs.mkdir(extraResourceRoot);
     const extraResourceApp = path.join(
       extraResourceRoot,
-      "Farol Next Preview.app",
+      packageLayout(artifact.schema).appName,
     );
     const resourceClone = spawnSync(
       "/bin/cp",
@@ -733,7 +737,10 @@ if (development) {
 
     const wrongHelperRoot = path.join(corruptRoot, "wrong-helper");
     await fs.mkdir(wrongHelperRoot);
-    const wrongHelperApp = path.join(wrongHelperRoot, "Farol Next Preview.app");
+    const wrongHelperApp = path.join(
+      wrongHelperRoot,
+      packageLayout(artifact.schema).appName,
+    );
     const helperClone = spawnSync("/bin/cp", ["-cR", appPath, wrongHelperApp], {
       encoding: "utf8",
     });
@@ -783,7 +790,7 @@ if (development) {
     await fs.mkdir(wrongLauncherRoot);
     const wrongLauncherApp = path.join(
       wrongLauncherRoot,
-      "Farol Next Preview.app",
+      packageLayout(artifact.schema).appName,
     );
     const launcherClone = spawnSync(
       "/bin/cp",
@@ -825,7 +832,7 @@ if (development) {
     await fs.mkdir(wrongRuntimeRoot);
     const wrongRuntimeApp = path.join(
       wrongRuntimeRoot,
-      "Farol Next Preview.app",
+      packageLayout(artifact.schema).appName,
     );
     const runtimeClone = spawnSync(
       "/bin/cp",
@@ -1346,6 +1353,26 @@ async function stopChatGptFixture(fixture) {
   });
 }
 
+async function isolatedProfileEnvironment(isolatedHome) {
+  const isolatedAppData = path.join(isolatedHome, "farol-e2e-app-data");
+  await fs.mkdir(isolatedAppData, { recursive: true, mode: 0o700 });
+  const e2eRootProof = randomUUID();
+  await fs.writeFile(
+    path.join(isolatedHome, ".farol-next-e2e-root"),
+    e2eRootProof,
+    { mode: 0o600 },
+  );
+  return {
+    isolatedAppData,
+    environment: {
+      FAROL_NEXT_E2E: "1",
+      FAROL_NEXT_E2E_APP_DATA: isolatedAppData,
+      FAROL_NEXT_E2E_TEST_ROOT: isolatedHome,
+      FAROL_NEXT_E2E_TEST_PROOF: e2eRootProof,
+    },
+  };
+}
+
 async function launch(
   extraArgs = [],
   windowMode = "hidden",
@@ -1355,14 +1382,8 @@ async function launch(
   const isolatedHome = await fs.mkdtemp(
     path.join(os.tmpdir(), "farol-next-e2e-home-"),
   );
-  const isolatedAppData = path.join(isolatedHome, "farol-e2e-app-data");
-  await fs.mkdir(isolatedAppData, { recursive: true, mode: 0o700 });
-  const e2eRootProof = randomUUID();
-  await fs.writeFile(
-    path.join(isolatedHome, ".farol-next-e2e-root"),
-    e2eRootProof,
-    { mode: 0o600 },
-  );
+  const profile = await isolatedProfileEnvironment(isolatedHome);
+  const isolatedAppData = profile.isolatedAppData;
   const userData = path.join(isolatedHome, "Farol Next Preview user-data");
   let seededChatGptOperationId = null;
   if (options.seedChatGptDispatchIntent === true) {
@@ -1812,14 +1833,7 @@ if (args[0] === "app-server" && args[1] === "--stdio") {
   ];
   const launchEnvironment = {
     ...(options.environment ?? {}),
-    ...(options.environment?.FAROL_NEXT_ENVIRONMENT === "dev"
-      ? {
-          FAROL_NEXT_E2E_APP_DATA: isolatedAppData,
-          FAROL_NEXT_E2E_TEST_ROOT: isolatedHome,
-          FAROL_NEXT_E2E_TEST_PROOF: e2eRootProof,
-        }
-      : {}),
-    FAROL_NEXT_E2E: "1",
+    ...profile.environment,
     // This lane intentionally tests the retained five-stage qualification
     // journey. Normal packaged sidebar Setup has a separate native regression.
     ...(options.environment?.FAROL_NEXT_ENVIRONMENT === "dev"
@@ -1958,6 +1972,7 @@ async function proveSecondLaunchDuringStartup() {
   const isolatedHome = await fs.mkdtemp(
     path.join(os.tmpdir(), "farol-next-e2e-home-"),
   );
+  const profile = await isolatedProfileEnvironment(isolatedHome);
   const userData = path.join(isolatedHome, "Farol Next Preview user-data");
   const windowMode = "hidden";
   const launchArgs = [
@@ -1968,7 +1983,7 @@ async function proveSecondLaunchDuringStartup() {
     "--preview-startup-delay-ms=5000",
   ];
   const launchEnvironment = {
-    FAROL_NEXT_E2E: "1",
+    ...profile.environment,
     HOME: isolatedHome,
     LANG: "en_US.UTF-8",
     PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
@@ -2176,6 +2191,7 @@ async function proveSecondLaunchRejectsFailedStartup() {
   const isolatedHome = await fs.mkdtemp(
     path.join(os.tmpdir(), "farol-next-e2e-home-"),
   );
+  const profile = await isolatedProfileEnvironment(isolatedHome);
   const userData = path.join(isolatedHome, "Farol Next Preview user-data");
   const launchArgs = [
     ...launchPrefix,
@@ -2186,7 +2202,7 @@ async function proveSecondLaunchRejectsFailedStartup() {
     "--preview-runtime-start-failure",
   ];
   const launchEnvironment = {
-    FAROL_NEXT_E2E: "1",
+    ...profile.environment,
     HOME: isolatedHome,
     LANG: "en_US.UTF-8",
     PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
@@ -2301,7 +2317,10 @@ async function rejectMismatchedBuildLaunch(instance) {
       ];
       manifestPath = path.join(copiedBuild, "build-manifest.json");
     } else {
-      const copiedApp = path.join(temporary, "Farol Next Preview.app");
+      const copiedApp = path.join(
+        temporary,
+        packageLayout(artifact.schema).appName,
+      );
       const copied = spawnSync("/bin/cp", ["-cR", appPath, copiedApp], {
         encoding: "utf8",
       });
@@ -3172,6 +3191,7 @@ async function proveStartupRuntimeDeath(stage) {
   const isolatedHome = await fs.mkdtemp(
     path.join(os.tmpdir(), "farol-next-e2e-home-"),
   );
+  const profile = await isolatedProfileEnvironment(isolatedHome);
   const userData = path.join(isolatedHome, "Farol Next Preview user-data");
   const application = await electron.launch({
     executablePath: executable,
@@ -3182,6 +3202,7 @@ async function proveStartupRuntimeDeath(stage) {
       "--preview-window-mode=hidden",
     ],
     env: {
+      ...profile.environment,
       HOME: isolatedHome,
       LANG: "en_US.UTF-8",
       PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
@@ -7922,8 +7943,8 @@ demoMainSegment: try {
       executable: process.execPath,
     }));
     assert.deepEqual(launchIdentity, {
-      name: "Farol Next Preview",
-      version: "0.1.0-preview.0",
+      name: packageLayout(artifact.schema).displayName,
+      version: buildIdentity.version,
       isPackaged: true,
       appPath: path.join(appPath, "Contents/Resources/app"),
       executable: path.join(

@@ -412,6 +412,7 @@ import {
   desktopCodexChildHomes,
   desktopCodexConfigPath,
   desktopAppDataPath,
+  desktopUserDataPath,
   desktopEnvironment,
   desktopIdentity,
   desktopProfileEnvironment,
@@ -467,15 +468,27 @@ const declaredDesktopIdentity = desktopIdentity(
     ? resolveDevDataDirectoryName(desktopAppData)
     : undefined,
 );
-if (buildEnvironment === "dev") {
-  // Select the declared shared NEW or isolated acceptance profile before
-  // the instance lock or any browser session. No profile is copied.
-  app.setPath("userData", declaredDesktopIdentity.userData);
-  app.setPath("sessionData", declaredDesktopIdentity.sessionData);
-}
+const selectedDesktopUserData = (() => {
+  try {
+    return desktopUserDataPath(declaredDesktopIdentity, {
+      enabled: process.env.FAROL_NEXT_E2E === "1",
+      override: app.commandLine.getSwitchValue("user-data-dir"),
+    });
+  } catch (error) {
+    terminateDesktopStartup(error, runtimeEnvironment, {
+      write: (message) => process.stderr.write(message),
+      exit: (code) => process.exit(code),
+    });
+    throw error;
+  }
+})();
+// Visible product names must not select storage. Pin both paths before any
+// profile read, instance lock or browser session; E2E keeps its proven root.
+app.setPath("userData", selectedDesktopUserData);
+app.setPath("sessionData", selectedDesktopUserData);
 const activeDesktopIdentity = {
   ...declaredDesktopIdentity,
-  // Sharing NEW storage does not change development build admission or edition.
+  // Storage selection does not change development build admission or edition.
   displayEdition:
     buildEnvironment === "dev"
       ? "Development"

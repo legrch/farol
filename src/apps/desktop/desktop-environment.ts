@@ -62,7 +62,7 @@ const E2E_APP_DATA_NAMES = new Set([
 ]);
 const E2E_HOME_NAMES = new Set(["home", "failed-home"]);
 
-function isolatedDevE2EAppData(
+function isolatedE2EAppData(
   override: string | undefined,
   testRoot: string | undefined,
   testHome: string | undefined,
@@ -171,15 +171,54 @@ export function desktopAppDataPath(
     // the ordinary DEV directory. The launcher owns the marker.
     return path.join(nativeAppData, "Farol Dev Acceptance");
   }
-  if (environment !== "dev" || !options.enabled) return nativeAppData;
+  if (!options.enabled) return nativeAppData;
   // Validate before Electron selects userData/sessionData or opens a lock. A
-  // missing override must never fall back to the ordinary owner's DEV profile.
-  return isolatedDevE2EAppData(
+  // missing override must never fall back to either ordinary owner profile.
+  return isolatedE2EAppData(
     options.override,
     options.testRoot,
     options.testHome,
     options.testProof,
   );
+}
+
+/** The app-data root has already passed desktopAppDataPath's E2E proof. */
+export function desktopUserDataPath(
+  identity: DesktopIdentity,
+  options: Readonly<{ enabled: boolean; override: string | undefined }>,
+): string {
+  if (
+    !options.enabled ||
+    identity.environment === "dev" ||
+    options.override === undefined ||
+    options.override === ""
+  ) {
+    return identity.userData;
+  }
+  const override = options.override;
+  const root = path.dirname(path.dirname(identity.userData));
+  if (
+    override !== identity.userData &&
+    !["user-data", "Farol Next Preview user-data"].some(
+      (name) => override === path.join(root, name),
+    )
+  ) {
+    throw new Error("DESKTOP_E2E_USER_DATA_INVALID");
+  }
+  try {
+    const info = fs.lstatSync(override);
+    if (
+      !info.isDirectory() ||
+      info.isSymbolicLink() ||
+      fs.realpathSync(override) !==
+        path.join(fs.realpathSync(root), path.relative(root, override))
+    ) {
+      throw new Error("DESKTOP_E2E_USER_DATA_INVALID");
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  return override;
 }
 
 export function desktopIdentity(

@@ -2,6 +2,8 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { runInNewContext } from "node:vm";
+import { transformSync } from "esbuild";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
@@ -9,6 +11,7 @@ import {
   desktopCodexChildHomes,
   desktopCodexConfigPath,
   desktopAppDataPath,
+  desktopUserDataPath,
   desktopEnvironment,
   desktopIdentity,
   desktopProfileEnvironment,
@@ -16,6 +19,51 @@ import {
 } from "../../src/apps/desktop/desktop-environment";
 
 const isolatedHomes: string[] = [];
+function ordinaryBootProfile() {
+  const source = fs.readFileSync(
+    new URL("../../src/apps/desktop/main.ts", import.meta.url),
+    "utf8",
+  );
+  const begin = source.indexOf("const buildEnvironment =");
+  const end = source.indexOf("// `buildIdentity.product`", begin);
+  expect(begin).toBeGreaterThan(0);
+  expect(end).toBeGreaterThan(begin);
+  const calls: string[] = [];
+  // Model Electron's new productName default, then execute only the actual
+  // profile-selection boot statements. No Electron or owner state is loaded.
+  const paths: Record<string, string> = {
+    appData: "/Users/example/Library/Application Support",
+    userData: "/Users/example/Library/Application Support/Farol",
+    sessionData: "/Users/example/Library/Application Support/Farol",
+  };
+  const result = runInNewContext(
+    transformSync(`${source.slice(begin, end)}\nactiveDesktopIdentity;`, {
+      loader: "ts",
+    }).code,
+    {
+      process: { env: {} },
+      path,
+      desktopEnvironment,
+      desktopProfileEnvironment,
+      desktopAppDataPath,
+      desktopUserDataPath,
+      desktopIdentity,
+      app: {
+        commandLine: { getSwitchValue: () => "" },
+        getPath(name: string) {
+          calls.push(`get:${name}`);
+          return paths[name];
+        },
+        setPath(name: string, value: string) {
+          calls.push(`set:${name}`);
+          paths[name] = value;
+        },
+      },
+    },
+    { timeout: 1000 },
+  );
+  return { result, calls };
+}
 function isolatedAppData() {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "farol-next-e2e-home-"));
   const appData = path.join(home, "farol-e2e-app-data");
@@ -35,6 +83,21 @@ afterEach(() => {
 
 describe("desktop environment identity", () => {
   const appData = "/Users/example/Library/Application Support";
+
+  it("pins normal production boot to preserved NEW storage before its first read", () => {
+    const { result, calls } = ordinaryBootProfile();
+    expect(result.userData).toBe(path.join(appData, "Farol Next Preview"));
+    expect(result.sessionData).toBe(result.userData);
+    expect(result.codexHome).toBe(
+      path.join(result.userData, "farol-next-private", "codex-home"),
+    );
+    for (const name of ["userData", "sessionData"]) {
+      expect(calls.indexOf(`set:${name}`)).toBeGreaterThan(-1);
+      expect(calls.indexOf(`set:${name}`)).toBeLessThan(
+        calls.indexOf(`get:${name}`),
+      );
+    }
+  });
 
   it("keeps explicitly isolated DEV identity separate from Preview and Legacy", () => {
     const dev = desktopIdentity("dev", appData);
@@ -205,7 +268,7 @@ describe("desktop environment identity", () => {
     );
   });
 
-  it("allows only the exact fresh DEV E2E app-data root", () => {
+  it("allows only the exact fresh E2E app-data root for Dev and production", () => {
     const isolated = isolatedAppData();
     expect(
       desktopAppDataPath("dev", appData, {
@@ -226,40 +289,83 @@ describe("desktop environment identity", () => {
       desktopAppDataPath("preview", appData, {
         enabled: true,
         override: isolated.appData,
+        testHome: isolated.home,
+        testRoot: isolated.home,
+        testProof: isolated.proof,
       }),
-    ).toBe(appData);
+    ).toBe(isolated.appData);
   });
 
-  it("rejects missing, outside-root, and symlinked DEV E2E paths before startup", () => {
+  it("retains the proven preview fixture override without allowing owner paths", () => {
     const isolated = isolatedAppData();
-    const outside = isolatedAppData();
-    const options = {
-      enabled: true,
-      testHome: isolated.home,
-      testRoot: isolated.home,
-      testProof: isolated.proof,
-    };
-    for (const override of [undefined, "relative/e2e-state", outside.appData]) {
+    const identity = desktopIdentity("preview", isolated.appData);
+    const override = path.join(isolated.home, "user-data");
+    expect(desktopUserDataPath(identity, { enabled: true, override })).toBe(
+      override,
+    );
+    expect(desktopUserDataPath(identity, { enabled: true, override: "" })).toBe(
+      identity.userData,
+    );
+    expect(desktopUserDataPath(identity, { enabled: false, override })).toBe(
+      identity.userData,
+    );
+    const dev = desktopIdentity("dev", isolated.appData);
+    expect(desktopUserDataPath(dev, { enabled: true, override })).toBe(
+      dev.userData,
+    );
+    for (const selected of [
+      path.join(appData, "Farol"),
+      path.join(isolated.home, "other"),
+      `${override}/..`,
+    ]) {
       expect(() =>
-        desktopAppDataPath("dev", appData, { ...options, override }),
-      ).toThrow("DESKTOP_E2E_APP_DATA_INVALID");
+        desktopUserDataPath(identity, { enabled: true, override: selected }),
+      ).toThrow("DESKTOP_E2E_USER_DATA_INVALID");
     }
+    const elsewhere = isolatedAppData();
+    fs.symlinkSync(elsewhere.appData, override);
     expect(() =>
-      desktopAppDataPath("dev", appData, {
-        ...options,
-        override: isolated.appData,
-        testProof: outside.proof,
-      }),
-    ).toThrow("DESKTOP_E2E_APP_DATA_INVALID");
-    fs.rmSync(isolated.appData, { recursive: true });
-    fs.symlinkSync(outside.appData, isolated.appData);
-    expect(() =>
-      desktopAppDataPath("dev", appData, {
-        ...options,
-        override: isolated.appData,
-      }),
-    ).toThrow("DESKTOP_E2E_APP_DATA_INVALID");
+      desktopUserDataPath(identity, { enabled: true, override }),
+    ).toThrow("DESKTOP_E2E_USER_DATA_INVALID");
   });
+
+  it.each(["dev", "preview"] as const)(
+    "rejects missing, outside-root, and symlinked %s E2E paths before startup",
+    (environment) => {
+      const isolated = isolatedAppData();
+      const outside = isolatedAppData();
+      const options = {
+        enabled: true,
+        testHome: isolated.home,
+        testRoot: isolated.home,
+        testProof: isolated.proof,
+      };
+      for (const override of [
+        undefined,
+        "relative/e2e-state",
+        outside.appData,
+      ]) {
+        expect(() =>
+          desktopAppDataPath(environment, appData, { ...options, override }),
+        ).toThrow("DESKTOP_E2E_APP_DATA_INVALID");
+      }
+      expect(() =>
+        desktopAppDataPath(environment, appData, {
+          ...options,
+          override: isolated.appData,
+          testProof: outside.proof,
+        }),
+      ).toThrow("DESKTOP_E2E_APP_DATA_INVALID");
+      fs.rmSync(isolated.appData, { recursive: true });
+      fs.symlinkSync(outside.appData, isolated.appData);
+      expect(() =>
+        desktopAppDataPath(environment, appData, {
+          ...options,
+          override: isolated.appData,
+        }),
+      ).toThrow("DESKTOP_E2E_APP_DATA_INVALID");
+    },
+  );
 
   it("selects a stable real acceptance profile without changing the ordinary DEV path", () => {
     const acceptance = path.join(appData, "Farol Dev Acceptance");
