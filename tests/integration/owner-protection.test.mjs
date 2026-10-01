@@ -254,13 +254,20 @@ describe("standalone owner protection", () => {
     expect(result.status).toBe(1);
   });
   it.each([
-    ["Dev", "tooling/dev.mjs", [], "Farol Dev", "Farol Next Preview", {}],
+    [
+      "shared NEW Dev",
+      "tooling/dev.mjs",
+      [],
+      "Farol Next Preview",
+      "Farol Dev",
+      {},
+    ],
     [
       "Dev acceptance",
       "tooling/dev.mjs",
       ["--acceptance-profile"],
       "Farol Dev Acceptance/Farol Dev",
-      "Farol Dev",
+      "Farol Next Preview",
       {},
     ],
     [
@@ -308,27 +315,45 @@ describe("standalone owner protection", () => {
   );
   it("still catches replacement of the selected owner-launch profile", async () => {
     const home = fixture();
-    const profile = path.join(home, "Library/Application Support/Farol Dev");
+    const profile = path.join(
+      home,
+      "Library/Application Support/Farol Next Preview",
+    );
     fs.mkdirSync(profile, { recursive: true });
     const result = await runOwnerLaunch(
       home,
       "tooling/dev.mjs",
       [],
-      "from pathlib import Path; p=Path.home()/'Library/Application Support/Farol Dev'; p.rename(p.with_name('old')); p.mkdir()",
+      "from pathlib import Path; p=Path.home()/'Library/Application Support/Farol Next Preview'; p.rename(p.with_name('old')); p.mkdir()",
     );
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain("Farol Dev");
+    expect(result.stderr).toContain("Farol Next Preview");
   });
-  it("keeps the full guard for check-only Dev commands that never launch", async () => {
-    const home = fixture();
+  it.each(["Farol Dev", "Farol Next Preview"])(
+    "keeps the full guard for check-only Dev touching %s",
+    async (profile) => {
+      const home = fixture();
+      const result = await runOwnerLaunch(
+        home,
+        "tooling/dev.mjs",
+        ["--check"],
+        `from pathlib import Path; p=Path.home()/'Library/Application Support/${profile}/farol-next-state/running.json'; p.parent.mkdir(parents=True); p.write_text('synthetic marker')`,
+      );
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain(
+        `${profile}/farol-next-state/running.json`,
+      );
+    },
+  );
+  it("ordinary shared NEW launch still rejects a synthetic V0 settings mutation", async () => {
     const result = await runOwnerLaunch(
-      home,
+      fixture(),
       "tooling/dev.mjs",
-      ["--check"],
-      "from pathlib import Path; p=Path.home()/'Library/Application Support/Farol Dev/farol-next-state/running.json'; p.parent.mkdir(parents=True); p.write_text('synthetic marker')",
+      [],
+      "from pathlib import Path; p=Path.home()/'.farol/state/settings.json'; p.parent.mkdir(parents=True); p.write_text('synthetic change')",
     );
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain("Farol Dev/farol-next-state/running.json");
+    expect(result.stderr).toContain(".farol/state/settings.json");
   });
   it("preserves a failing child exit code", async () => {
     expect((await run(fixture(), "raise SystemExit(17)")).status).toBe(17);

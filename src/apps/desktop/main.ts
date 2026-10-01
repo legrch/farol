@@ -412,6 +412,7 @@ import {
   desktopAppDataPath,
   desktopEnvironment,
   desktopIdentity,
+  desktopProfileEnvironment,
 } from "./desktop-environment";
 import { terminateDesktopStartup } from "./desktop-startup-failure";
 import { resolveDevDataDirectoryName } from "./dev-profile-directory";
@@ -420,12 +421,25 @@ const directory = __dirname;
 const buildIdentity = readRuntimeBuildIdentity(directory);
 const productName = buildIdentity.product;
 const bundleId = buildIdentity.bundleId;
-const runtimeEnvironment = desktopEnvironment(
-  process.env.FAROL_NEXT_ENVIRONMENT,
-);
+const buildEnvironment = desktopEnvironment(process.env.FAROL_NEXT_ENVIRONMENT);
+const runtimeEnvironment = (() => {
+  try {
+    return desktopProfileEnvironment(
+      buildEnvironment,
+      process.env.FAROL_NEXT_PROFILE_MODE,
+      process.env.FAROL_NEXT_ACCEPTANCE_PROFILE,
+    );
+  } catch (error) {
+    terminateDesktopStartup(error, buildEnvironment, {
+      write: (message) => process.stderr.write(message),
+      exit: (code) => process.exit(code),
+    });
+    throw error;
+  }
+})();
 const desktopAppData = (() => {
   try {
-    return desktopAppDataPath(runtimeEnvironment, app.getPath("appData"), {
+    return desktopAppDataPath(buildEnvironment, app.getPath("appData"), {
       enabled: process.env.FAROL_NEXT_E2E === "1",
       override: process.env.FAROL_NEXT_E2E_APP_DATA,
       acceptanceProfile: process.env.FAROL_NEXT_ACCEPTANCE_PROFILE,
@@ -450,15 +464,19 @@ const declaredDesktopIdentity = desktopIdentity(
     ? resolveDevDataDirectoryName(desktopAppData)
     : undefined,
 );
-if (runtimeEnvironment === "dev") {
-  // These paths must be selected before the single-instance lock or any
-  // browser session is opened. Ordinary DEV rebuilds therefore retain the
-  // same private state, while packaged Preview keeps its existing defaults.
+if (buildEnvironment === "dev") {
+  // Select the declared shared NEW or isolated acceptance profile before
+  // the instance lock or any browser session. No profile is copied.
   app.setPath("userData", declaredDesktopIdentity.userData);
   app.setPath("sessionData", declaredDesktopIdentity.sessionData);
 }
 const activeDesktopIdentity = {
   ...declaredDesktopIdentity,
+  // Sharing NEW storage does not change development build admission or edition.
+  displayEdition:
+    buildEnvironment === "dev"
+      ? "Development"
+      : declaredDesktopIdentity.displayEdition,
   userData: app.getPath("userData"),
   sessionData: app.getPath("sessionData"),
   codexHome: path.join(
@@ -482,7 +500,7 @@ const displayWindowTitle = `${displayProductName} · ${displayEdition}`;
 const SIGN_IN_WINDOW_TITLE = `Sign in to ChatGPT — ${displayProductName}`;
 const launchIdentity = readBuildLaunchIdentity(
   directory,
-  runtimeEnvironment,
+  buildEnvironment,
   buildIdentity,
 );
 const nativeWorkspace = new NativeReadonlyWorkspace({
@@ -9248,6 +9266,9 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
             try {
               await stopAndConfirmComputerMcp(connector, inFlightStart);
             } finally {
+              // Even an unconfirmed MCP drain must close account admission.
+              // close() waits for already admitted work; it does not cancel Send
+              // or turn the rejected connector close into a confirmed drain.
               const savedChat = savedChatBridgeRuntime;
               if (savedChat) {
                 await savedChat.close();

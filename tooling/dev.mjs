@@ -453,10 +453,12 @@ export function devLaunchEnvironment(
   return {
     ...owned,
     PATH: `${nodeBinDirectory}:${owned.PATH}`,
-    // This value is app-owned, not inherited. It selects the persistent DEV
-    // identity before Electron takes its instance lock or opens any state.
+    // Development build admission remains explicit. Ordinary development
+    // opens the existing NEW profile; acceptance keeps isolated DEV state.
     [DESKTOP_ENVIRONMENT_ENV]: "dev",
-    ...(acceptanceProfile ? { FAROL_NEXT_ACCEPTANCE_PROFILE: "1" } : {}),
+    ...(acceptanceProfile
+      ? { FAROL_NEXT_ACCEPTANCE_PROFILE: "1" }
+      : { FAROL_NEXT_PROFILE_MODE: "shared-new" }),
   };
 }
 

@@ -9,6 +9,7 @@ import {
   desktopAppDataPath,
   desktopEnvironment,
   desktopIdentity,
+  desktopProfileEnvironment,
 } from "../../src/apps/desktop/desktop-environment";
 
 const isolatedHomes: string[] = [];
@@ -32,7 +33,7 @@ afterEach(() => {
 describe("desktop environment identity", () => {
   const appData = "/Users/example/Library/Application Support";
 
-  it("gives task dev a persistent identity separate from packaged Preview and Legacy", () => {
+  it("keeps explicitly isolated DEV identity separate from Preview and Legacy", () => {
     const dev = desktopIdentity("dev", appData);
     const preview = desktopIdentity("preview", appData);
 
@@ -63,6 +64,51 @@ describe("desktop environment identity", () => {
     expect(dev.userData).not.toContain(".farol");
     expect(dev.chatGptPartition).not.toBe("persist:farol-chatgpt");
     expect(dev.chatGptPartition).not.toBe("persist:codex-chatgpt-web");
+  });
+
+  it("shares the complete NEW identity while retaining development build admission", () => {
+    const buildEnvironment = desktopEnvironment("dev");
+    const profile = desktopProfileEnvironment(
+      buildEnvironment,
+      "shared-new",
+      undefined,
+    );
+    expect(buildEnvironment).toBe("dev");
+    expect(profile).toBe("preview");
+    expect(desktopIdentity(profile, appData)).toEqual(
+      desktopIdentity("preview", appData),
+    );
+    expect(
+      desktopAppDataPath(buildEnvironment, appData, {
+        enabled: false,
+        override: undefined,
+      }),
+    ).toBe(appData);
+  });
+
+  it("preserves explicit acceptance and ordinary packaged profile selection", () => {
+    expect(desktopProfileEnvironment("dev", undefined, "1")).toBe("dev");
+    expect(desktopProfileEnvironment("dev", undefined, undefined)).toBe("dev");
+    expect(desktopProfileEnvironment("preview", undefined, undefined)).toBe(
+      "preview",
+    );
+  });
+
+  it("rejects an unsupported marker or conflicting shared selection before state access", () => {
+    for (const marker of ["", "dev", "preview", "/profile", "Shared-New"]) {
+      expect(() => desktopProfileEnvironment("dev", marker, undefined)).toThrow(
+        "DESKTOP_PROFILE_SELECTION_INVALID",
+      );
+    }
+    expect(() =>
+      desktopProfileEnvironment("preview", "shared-new", undefined),
+    ).toThrow("DESKTOP_PROFILE_SELECTION_INVALID");
+    expect(() => desktopProfileEnvironment("dev", "shared-new", "1")).toThrow(
+      "DESKTOP_PROFILE_SELECTION_INVALID",
+    );
+    expect(() =>
+      desktopProfileEnvironment("dev", "shared-new", "unexpected"),
+    ).toThrow("DESKTOP_PROFILE_SELECTION_INVALID");
   });
 
   it("keeps the existing packaged Preview identity unchanged", () => {

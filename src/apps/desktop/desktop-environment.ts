@@ -38,6 +38,24 @@ export function desktopEnvironment(
   throw new Error("DESKTOP_ENVIRONMENT_INVALID");
 }
 
+// Build admission and profile identity are independent. Sharing NEW state
+// does not make a development build an exact packaged candidate.
+export function desktopProfileEnvironment(
+  buildEnvironment: DesktopEnvironment,
+  marker: string | undefined,
+  acceptanceProfile: string | undefined,
+): DesktopEnvironment {
+  if (marker === undefined) return buildEnvironment;
+  if (
+    marker !== "shared-new" ||
+    buildEnvironment !== "dev" ||
+    acceptanceProfile !== undefined
+  ) {
+    throw new Error("DESKTOP_PROFILE_SELECTION_INVALID");
+  }
+  return "preview";
+}
+
 const E2E_ROOT_MARKER = ".farol-next-e2e-root";
 const E2E_ROOT_NAME =
   /^(?:farol-next-e2e-home|farol-dev-onboarding-startup|onboarding-visual)-[A-Za-z0-9]{6,}$/u;

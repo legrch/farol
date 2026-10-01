@@ -72,6 +72,8 @@ describe("development launcher environment", () => {
         TMPDIR: "/private/tmp/owner/",
         PATH: "/tmp/poisoned-bin",
         FAROL_NEXT_E2E: "1",
+        FAROL_NEXT_PROFILE_MODE: "arbitrary-profile",
+        FAROL_NEXT_ACCEPTANCE_PROFILE: "1",
         FAROL_NEXT_E2E_APP_DATA: "/private/tmp/inherited-app-data",
         FAROL_NEXT_E2E_WORKSPACE_ROOT: "/private/tmp/inherited-root",
         FAROL_NEXT_E2E_CHATGPT_URL: "http://127.0.0.1:43123/chatgpt",
@@ -94,6 +96,7 @@ describe("development launcher environment", () => {
       // packaged launcher pins. Never the caller's own PATH.
       PATH: "/declared/node/bin:/usr/bin:/bin:/usr/sbin:/sbin",
       FAROL_NEXT_ENVIRONMENT: "dev",
+      FAROL_NEXT_PROFILE_MODE: "shared-new",
     });
   });
 
@@ -102,12 +105,14 @@ describe("development launcher environment", () => {
       {
         HOME: "/Users/owner",
         FAROL_NEXT_ACCEPTANCE_PROFILE: "1",
+        FAROL_NEXT_PROFILE_MODE: "shared-new",
         FAROL_NEXT_E2E: "1",
       },
       "/declared/node/bin",
       true,
     );
     expect(environment.FAROL_NEXT_ACCEPTANCE_PROFILE).toBe("1");
+    expect(environment.FAROL_NEXT_PROFILE_MODE).toBeUndefined();
     expect(environment.FAROL_NEXT_E2E).toBeUndefined();
   });
 
@@ -127,6 +132,7 @@ describe("development launcher environment", () => {
 
     expect(await farolKeysVisibleTo({ env: devLaunchEnvironment() })).toEqual([
       "FAROL_NEXT_ENVIRONMENT",
+      "FAROL_NEXT_PROFILE_MODE",
     ]);
   });
 
@@ -159,6 +165,7 @@ describe("development launcher environment", () => {
     ).toBeTypeOf("object");
     expect(Object.keys(received.options.env).sort()).toEqual([
       "FAROL_NEXT_ENVIRONMENT",
+      "FAROL_NEXT_PROFILE_MODE",
       "HOME",
       "LANG",
       "LC_ALL",
@@ -191,10 +198,11 @@ describe("development launcher environment", () => {
       "--preview-window-mode=secondary-visible",
     ]);
     expect(received.options.env.FAROL_NEXT_ACCEPTANCE_PROFILE).toBe("1");
+    expect(received.options.env.FAROL_NEXT_PROFILE_MODE).toBeUndefined();
     expect(received.options.env.FAROL_NEXT_E2E).toBeUndefined();
   });
 
-  it("places the ordinary Dev profile on a secondary display without switching profiles", async () => {
+  it("places ordinary shared NEW development on a secondary display", async () => {
     let received;
     const stop = new Error("SPAWN_INTERCEPTED");
     await expect(
@@ -213,6 +221,7 @@ describe("development launcher environment", () => {
       "--preview-window-mode=secondary-visible",
     ]);
     expect(received.options.env.FAROL_NEXT_ENVIRONMENT).toBe("dev");
+    expect(received.options.env.FAROL_NEXT_PROFILE_MODE).toBe("shared-new");
     expect(received.options.env.FAROL_NEXT_ACCEPTANCE_PROFILE).toBeUndefined();
   });
 });

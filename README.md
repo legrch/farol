@@ -11,12 +11,14 @@ See [Computer workspace context](docs/computer-workspace-context.md) for bounds,
 ordinary shell filename discovery and the distinction between local/package
 fixtures and a refreshed live connector.
 
-The source has two explicit local identities. `task dev` from the repository root
-launches **Farol Dev** (`local.farol.dev`) with persistent private state, dedicated
-browser/runtime partitions and an app-owned `CODEX_HOME`; rebuilding does not clear
-its sign-in or Settings. `task package` and `task run` keep the existing
-**Farol Next Preview** identity (`local.farol.next.preview`). Neither lane copies
-cookies, keys, profiles or personal Codex configuration from another identity.
+Ordinary `task dev` from the repository root uses the existing NEW
+**Farol Next Preview** profile (`local.farol.next.preview`), including its workspace
+configuration and browser/runtime partitions. It remains a **Development** build,
+including when source is dirty, and is never accepted as a packaged candidate.
+`task package` and `task run` retain exact clean candidate admission. Only explicit
+`task dev -- --acceptance-profile` uses isolated **Farol Dev** state. Check-only
+development and all acceptance gates retain the full owner fingerprints. No lane
+copies cookies, keys, profiles or personal Codex configuration.
 
 The permanent model protocol is independent of these development identities:
 `model_provider = "farol"`, `model = "chatgpt"`. `farol/chatgpt` is display
@@ -25,18 +27,19 @@ migration boundaries are defined in [Model routing](docs/model-routing.md).
 
 ### Dev names and profile compatibility
 
-The visible app and ChatGPT app name is **Farol Dev**. The marker `dev`, app ID
+The isolated acceptance app and ChatGPT app name is **Farol Dev**. The marker `dev`, app ID
 `local.farol.dev`, runtime `farol-dev-runtime`, and `persist:farol-dev-*` partitions
 are stable machine identifiers; they are not derived from the display label.
 
-New profiles use `Application Support/Farol Dev`. A legacy-only `Farol DEV`
+Isolated acceptance profiles use `Application Support/Farol Dev Acceptance/Farol Dev`.
+Existing separate DEV profiles retain their compatibility names. A legacy-only `Farol DEV`
 directory on a case-sensitive volume remains in place and is reused. When both
 spellings resolve to the same device/inode, the preferred spelling addresses that
 same directory without moving or copying it. Two distinct profiles fail closed
 with `DEV_PROFILE_DIRECTORY_AMBIGUOUS` instead of being merged or reset. Profile
 selection reads directory metadata only; it does not migrate cookies or credentials.
 
-The browser requires the actual exact `Farol Dev` app selection. An existing
+The browser requires the configured exact app selection. An existing
 external app still named `Farol DEV` is not silently treated as the new label;
 rename and verify the intended external app separately, then reselect it. Display
 renaming never authorizes another tunnel, broader access, or a message retry.
