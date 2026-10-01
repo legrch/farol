@@ -25,6 +25,43 @@ afterEach(async () => {
 describe.skipIf(process.platform !== "darwin")(
   "private Computer MCP lifetime",
   () => {
+    it("waits for the exact MCP lease and marker before stopping its tunnel parent", async () => {
+      const { root, lifecycle } = await fixture();
+      await lifecycle.prepare(oldDigest);
+      const live = await lifecycle.join(oldDigest);
+      await lifecycle.beginStop();
+      try {
+        await expect(lifecycle.waitForStop(0)).rejects.toThrow(
+          "COMPUTER_MCP_LIFECYCLE_UNVERIFIED",
+        );
+      } finally {
+        await live.release();
+      }
+      await lifecycle.waitForStop();
+      // Graceful drain alone is not final revocation or a clean Quit receipt.
+      await expect(
+        fs.lstat(path.join(root, "mcp-lifecycle", `revoked-${oldDigest}`)),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(lifecycle.join(oldDigest)).rejects.toThrow(
+        "COMPUTER_MCP_LIFECYCLE_REVOKED",
+      );
+      await lifecycle.confirmStop();
+      expect(
+        await fs.readFile(
+          path.join(root, "mcp-lifecycle", `revoked-${oldDigest}`),
+          "utf8",
+        ),
+      ).toBe("1\n");
+    });
+
+    it("requires stop admission even when no MCP lease is held", async () => {
+      const { lifecycle } = await fixture();
+      await lifecycle.prepare(oldDigest);
+      await expect(lifecycle.waitForStop()).rejects.toThrow(
+        "COMPUTER_MCP_LIFECYCLE_STOP_UNVERIFIED",
+      );
+    });
+
     it("denies a new join after stop and requires the exact live MCP lease to leave", async () => {
       const { lifecycle } = await fixture();
       await lifecycle.prepare(oldDigest);
@@ -63,6 +100,9 @@ describe.skipIf(process.platform !== "darwin")(
       const marker = path.join(markerRoot, `shell-${"c".repeat(64)}.json`);
       await fs.writeFile(marker, "{}", { mode: 0o600 });
       await lifecycle.beginStop();
+      await expect(lifecycle.waitForStop(0)).rejects.toThrow(
+        "COMPUTER_MCP_SHELL_CLEANUP_UNVERIFIED",
+      );
       await expect(lifecycle.confirmStop(0)).rejects.toThrow(
         "COMPUTER_MCP_SHELL_CLEANUP_UNVERIFIED",
       );
@@ -89,6 +129,9 @@ describe.skipIf(process.platform !== "darwin")(
         { mode: 0o600 },
       );
       await lifecycle.beginStop();
+      await expect(lifecycle.waitForStop(0)).rejects.toThrow(
+        "COMPUTER_MCP_INSTANCE_CLEANUP_UNVERIFIED",
+      );
       await expect(lifecycle.confirmStop(0)).rejects.toThrow(
         "COMPUTER_MCP_INSTANCE_CLEANUP_UNVERIFIED",
       );

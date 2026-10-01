@@ -267,6 +267,19 @@ export class PrivateMcpLifecycle {
   }
 
   /** No MCP lifetime lease or unresolved shell group may remain. */
+  async waitForStop(timeoutMs = 5_000): Promise<void> {
+    const lease = await this.lock(true, timeoutMs);
+    try {
+      if (!(await this.existingMarker("stopping")))
+        throw new Error("COMPUTER_MCP_LIFECYCLE_STOP_UNVERIFIED");
+      await this.instancesGone();
+      await this.shellGroupsGone();
+    } finally {
+      await lease.close();
+    }
+  }
+
+  /** Final confirmation after the tunnel parent has stopped; revoke its launch. */
   async confirmStop(timeoutMs = 5_000): Promise<void> {
     const lease = await this.lock(true, timeoutMs);
     try {

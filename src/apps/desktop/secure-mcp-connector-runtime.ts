@@ -184,6 +184,9 @@ const startProcess: ConnectorProcessStarter = async (command) => {
     env: { ...command.environment },
     stdio: "ignore",
     windowsHide: true,
+    // Terminal signals must not kill MCP children before their lifetime drain.
+    // Keep the exact ChildProcess tracked; this is not an unreferenced daemon.
+    detached: true,
   });
   const observed = observedConnectorChild(child);
   await new Promise<void>((resolve, reject) => {

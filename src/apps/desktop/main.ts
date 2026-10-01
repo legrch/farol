@@ -253,6 +253,7 @@ import {
   type GracefulQuitSignals,
 } from "./quit-signal";
 import { writeQuitReceipt } from "./quit-receipt-store";
+import { drainComputerConnector } from "./computer-connector-drain";
 import { isTrustedIpcSender } from "./ipc-sender";
 import {
   currentBootTimeMs,
@@ -3228,17 +3229,21 @@ async function stopAndConfirmComputerMcp(
 ): Promise<void> {
   if (!connector) throw new Error("CONNECTOR_STOP_UNCONFIRMED");
   const lifecycle = computerMcpLifecycle();
-  await lifecycle.beginStop();
-  await inFlightStart;
-  await connector.stop();
-  // A stopped connector must not leave an admitted account operation or a
-  // still-reachable Browser endpoint behind. `close` waits for admitted work.
-  const savedChat = savedChatBridgeRuntime;
-  if (savedChat) {
-    await savedChat.close();
-    if (savedChatBridgeRuntime === savedChat) savedChatBridgeRuntime = null;
-  }
-  await lifecycle.confirmStop();
+  await drainComputerConnector({
+    beginStop: () => lifecycle.beginStop(),
+    startInFlight: inFlightStart,
+    waitForMcpStop: () => lifecycle.waitForStop(),
+    stopConnector: () => connector.stop(),
+    closeSavedChat: async () => {
+      // Wait for admitted account work before closing its Browser endpoint.
+      const savedChat = savedChatBridgeRuntime;
+      if (savedChat) {
+        await savedChat.close();
+        if (savedChatBridgeRuntime === savedChat) savedChatBridgeRuntime = null;
+      }
+    },
+    confirmStop: () => lifecycle.confirmStop(),
+  });
 }
 
 function devMcpProofRoot(): string {
