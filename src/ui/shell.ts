@@ -1046,15 +1046,13 @@ function renderBrowser(): void {
     title.textContent = taskAdmissionFeedback
       ? "Task not created"
       : "No tasks yet";
-    // Agrees with the same `chatGptRouteState()` the header, New task
-    // control, and sidebar use: when the route is actually ready, this
-    // empty state must say so instead of unconditionally asking to
-    // "Complete Setup" (UX34-03/04).
+    // Use the same route readiness as Setup and task admission. The empty
+    // state must not ask for completed Setup or a hidden creation control.
     detail.textContent =
       taskAdmissionFeedback ||
       (chatGptRouteState() === "ready"
-        ? "Ready for a new task — use the + New task control above."
-        : "Complete Setup and connect a supported route to create the first real task.");
+        ? "ChatGPT is ready."
+        : "Complete Setup to connect ChatGPT.");
   } else if (surfaceFailed || task?.lifecycle === "failed") {
     loading.dataset.state = "failed";
     mark.className = "state-lamp failed";

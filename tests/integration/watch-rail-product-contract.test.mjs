@@ -64,6 +64,7 @@ describe("Watch Rail product contract", () => {
     expect(html).toContain('id="activity-chats"');
     expect(shell).toContain('inspect.textContent = "Inspect"');
     expect(shell).toContain("inspect.dataset.taskId = task.taskId");
+    expect(shell.includes("use the + New task control above")).toBe(false);
   });
 
   it("uses the current location instead of repeating the product in the window bar", async () => {
