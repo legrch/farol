@@ -499,19 +499,22 @@ These flags do not identify that active turn, a server request, its permissions
 or an approval decision. Exact terminal results remain bound to the issued turn.
 The snapshot does not make an owner-created task controllable. Interactive
 approval request correlation/decisions, event subscription and shared native
-Desktop identity still require separate qualification. The original blocked
-experimental initialize change is not included. Tests use deterministic host
-data and a packaged disposable socket; no live provider or account proof is
-claimed. The selected saved CLI schema is supplemental contract evidence,
+Desktop identity still require separate qualification. These thread-runtime
+fixtures did not exercise experimental initialization. The current shared proxy
+includes the source opt-in described above; the original refused live handshake
+remains unqualified. Tests use deterministic host data and a packaged disposable
+socket; no live provider or account proof is claimed. The selected saved CLI schema is supplemental contract evidence,
 not an attestation of the serving runtime.
 
 ## Fresh-project ensure contract checkpoint
 
 `ensureCodexProject` is a pure application/port contract with in-memory policy tests
 and an **unwired private filesystem journal adapter**. Neither is wired into
-Computer MCP, Desktop admission or a native project mutation method. The refused experimental handshake
-and existing shared proxy remain unchanged; no new native capability is enabled.
-This is the independent Morning D2 foundation, not a serving ensure API or parity PASS.
+Computer MCP, Desktop admission or a native project mutation method. This ensure
+foundation adds no handshake or native capability. The current shared proxy's
+experimental-API source opt-in is independent; it does not qualify the original
+refused live handshake or project creation. This is the independent Morning D2
+foundation, not a serving ensure API or parity PASS.
 
 A complete bounded catalogue resolves only the approved physical canonical project,
 separately from the current writer cwd. Missing, ambiguous and stale explicit
