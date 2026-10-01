@@ -27,8 +27,15 @@ only for boundaries that do not require native visibility or focus. The packaged
 development reports include the actual display class, display count, work area,
 bounds, and initial focus observation.
 
-Ordinary `npm run preview` launches do not carry a test window mode and
-retain foreground product behavior. The two accepted test-only arguments are
+Ordinary `npm run preview` and `task run` launches retain foreground product
+behavior. The explicit `task run -- --hidden` owner option maps only to hidden
+presentation through the same committed-candidate/snapshot/NEW-profile admission.
+It does not enable E2E overrides, debug access, another profile or primary-display
+permission. A hidden owner run still requires normal Quit and cannot prove visible
+interaction. It refuses a second-instance reopen; ordinary owner reopen stays
+unchanged, and older primaries reject the extra request field without revealing a window.
+
+The two accepted presentation arguments used by the E2E harness are
 `--preview-window-mode=hidden` and
 `--preview-window-mode=secondary-visible`; unknown or repeated values fail closed.
 The E2E harness also sets `FAROL_NEXT_E2E=1` for one bounded startup-delay argument;

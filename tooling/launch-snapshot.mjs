@@ -11,6 +11,25 @@ function textValue(value, fallback) {
     : fallback;
 }
 
+export function ownerLaunchArguments(arguments_) {
+  const allowed = new Set(["--demo", "--hidden"]);
+  if (
+    !Array.isArray(arguments_) ||
+    arguments_.length > 2 ||
+    new Set(arguments_).size !== arguments_.length ||
+    !arguments_.every((argument) => allowed.has(argument))
+  ) {
+    throw new Error(
+      "task run accepts only '--demo' and '--hidden', each at most once",
+    );
+  }
+  return arguments_.flatMap((argument) =>
+    argument === "--hidden"
+      ? ["--preview-window-mode=hidden", "--owner-background-only"]
+      : [argument],
+  );
+}
+
 export function ownerLaunchEnvironment(environment = process.env) {
   const launchEnvironment = {
     HOME: textValue(environment.HOME, os.homedir()),

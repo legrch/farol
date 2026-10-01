@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { BuildIdentity } from "../../src/pkg/build-info/identity";
 import {
+  createInstanceRequest,
   decideSecondInstance,
   readBuildLaunchIdentity,
   sameLaunchIdentity,
@@ -87,6 +88,35 @@ async function writeBuildFixture(
 }
 
 describe("Farol Next single-instance identity", () => {
+  it("refuses a background-only second launch without reopening", () => {
+    const candidate = createInstanceRequest(primary, true);
+    expect(candidate).toHaveProperty("backgroundOnly", true);
+    expect(decideSecondInstance(primary, candidate)).toEqual({
+      nonce: candidate.nonce,
+      status: "reopen-failed",
+    });
+    expect(
+      decideSecondInstance(primary, {
+        ...candidate,
+        sourceCommit: "d".repeat(40),
+      }),
+    ).toEqual({
+      nonce: candidate.nonce,
+      status: "identity-mismatch",
+    });
+  });
+
+  it("keeps ordinary reopen requests compatible and refuses malformed background intent", () => {
+    const ordinary = createInstanceRequest(primary);
+    expect(ordinary).not.toHaveProperty("backgroundOnly");
+    expect(decideSecondInstance(primary, ordinary)?.status).toBe("reopened");
+    for (const backgroundOnly of [false, "true", null, 1]) {
+      expect(
+        decideSecondInstance(primary, { ...ordinary, backgroundOnly }),
+      ).toBeNull();
+    }
+  });
+
   it("reopens only the exact running build", () => {
     expect(decideSecondInstance(primary, request(primary))).toEqual({
       nonce: "c".repeat(32),

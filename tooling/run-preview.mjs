@@ -10,6 +10,7 @@ import {
 import {
   createLaunchSnapshot,
   ownerLaunchEnvironment,
+  ownerLaunchArguments,
   removeLaunchSnapshot,
 } from "./launch-snapshot.mjs";
 import { createOwnerLaunchResultCollector } from "./owner-launch-result.mjs";
@@ -43,13 +44,7 @@ async function main() {
   if (process.env.FAROL_NEXT_OWNER_LAUNCH !== "1") {
     throw new Error("use the canonical owner command 'task run'");
   }
-  const launchArguments = process.argv.slice(2);
-  if (
-    launchArguments.length > 1 ||
-    (launchArguments.length === 1 && launchArguments[0] !== "--demo")
-  ) {
-    throw new Error("task run accepts only the explicit '--demo' launch flag");
-  }
+  const launchArguments = ownerLaunchArguments(process.argv.slice(2));
 
   let artifact;
   let artifactBytes;

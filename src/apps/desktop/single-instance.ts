@@ -28,7 +28,7 @@ const buildIdentitySchema = z.object({
   inputLedgerSha256: sha256,
 });
 
-const instanceRequestSchema = z.strictObject({
+const instanceIdentitySchema = z.strictObject({
   schema: z.literal("farol.next.single-instance/2"),
   nonce,
   environment: z.enum(["preview", "dev"]),
@@ -37,7 +37,11 @@ const instanceRequestSchema = z.strictObject({
   inputLedgerSha256: sha256,
 });
 
-const instanceAcknowledgementSchema = instanceRequestSchema.extend({
+const instanceRequestSchema = instanceIdentitySchema.extend({
+  backgroundOnly: z.literal(true).optional(),
+});
+
+const instanceAcknowledgementSchema = instanceIdentitySchema.extend({
   status: z.enum(["reopened", "identity-mismatch", "reopen-failed"]),
 });
 
@@ -110,11 +114,13 @@ export function sameLaunchIdentity(
 
 export function createInstanceRequest(
   identity: LaunchIdentity,
+  backgroundOnly = false,
 ): InstanceRequest {
   return {
     schema: "farol.next.single-instance/2",
     nonce: randomBytes(16).toString("hex"),
     ...identity,
+    ...(backgroundOnly ? { backgroundOnly: true as const } : {}),
   };
 }
 
@@ -126,9 +132,11 @@ export function decideSecondInstance(
   if (!request) return null;
   return {
     nonce: request.nonce,
-    status: sameLaunchIdentity(primary, request)
-      ? "reopened"
-      : "identity-mismatch",
+    status: !sameLaunchIdentity(primary, request)
+      ? "identity-mismatch"
+      : request.backgroundOnly
+        ? "reopen-failed"
+        : "reopened",
   };
 }
 

@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   createLaunchSnapshot,
   ownerLaunchEnvironment,
+  ownerLaunchArguments,
   removeLaunchSnapshot,
 } from "../../tooling/launch-snapshot.mjs";
 
@@ -105,4 +106,43 @@ describe("isolated owner launch snapshot", () => {
       await fs.rm(unrelated, { recursive: true, force: true });
     }
   });
+});
+
+describe("owner launch presentation arguments", () => {
+  it.each([
+    [[], []],
+    [["--demo"], ["--demo"]],
+    [["--hidden"], ["--preview-window-mode=hidden", "--owner-background-only"]],
+    [
+      ["--demo", "--hidden"],
+      ["--demo", "--preview-window-mode=hidden", "--owner-background-only"],
+    ],
+    [
+      ["--hidden", "--demo"],
+      ["--preview-window-mode=hidden", "--owner-background-only", "--demo"],
+    ],
+  ])("maps only the explicit presentation flags %j", (input, expected) => {
+    expect(ownerLaunchArguments(input)).toEqual(expected);
+  });
+
+  it.each([
+    ["--hidden", "--hidden"],
+    ["--demo", "--demo"],
+    ["--demo", "--hidden", "--demo"],
+    ["--preview-window-mode=hidden"],
+    ["--preview-window-mode=secondary-visible"],
+    ["--allow-primary-display"],
+    ["--owner-background-only"],
+    ["--user-data-dir=/tmp/other-profile"],
+    ["--remote-debugging-port=9222"],
+    ["--hidden", "--user-data-dir=/tmp/other-profile"],
+    ["--hidden\0--demo"],
+  ])(
+    "refuses extra, repeated and profile-changing arguments %j",
+    (...input) => {
+      expect(() => ownerLaunchArguments(input)).toThrow(
+        "task run accepts only '--demo' and '--hidden', each at most once",
+      );
+    },
+  );
 });

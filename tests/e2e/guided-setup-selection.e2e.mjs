@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { Client } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import { randomUUID } from "node:crypto";
+import { spawn } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
@@ -53,6 +54,8 @@ const observations = [];
 let nonReadRequests = 0;
 let fixtureMode = "receipt";
 let activeFixtureProfile;
+let activeFixtureLaunch;
+const backgroundChildren = [];
 const mcpChildren = [];
 const fixtureApp = "NEW fixture";
 const tunnelFixture = path.join(temporaryRoot, "tunnel-client.cjs");
@@ -330,7 +333,7 @@ async function launch(environment, mode = "normal", profile = mode) {
   await fs.rm(path.join(home, ".farol-next-connector-resume-stage"), {
     force: true,
   });
-  const pending = electron.launch({
+  const launchOptions = {
     executablePath: executable,
     args: [
       entry,
@@ -354,7 +357,8 @@ async function launch(environment, mode = "normal", profile = mode) {
       ...(mode === "legacy" ? { FAROL_NEXT_E2E_LEGACY_SETUP: "1" } : {}),
     },
     timeout: 15000,
-  });
+  };
+  const pending = electron.launch(launchOptions);
   // A late launch stays owned and is closed; never start another on top of it.
   closingLateLaunch = false;
   pendingLaunch = pending.then(async (value) => {
@@ -402,6 +406,7 @@ async function launch(environment, mode = "normal", profile = mode) {
       await fs.realpath(userData),
     );
   profileIsolationConfirmed = true;
+  activeFixtureLaunch = launchOptions;
   activeFixtureProfile = { home, userData: nativePaths.userData };
   observations.push({
     kind: "native-profile-isolation",
@@ -586,6 +591,68 @@ async function browserGeometry(window, environment, width) {
   });
 }
 
+async function checkBackgroundSecondary() {
+  assert.ok(application && profileIsolationConfirmed && activeFixtureLaunch);
+  const primaryPid = application.process().pid;
+  const child = spawn(
+    activeFixtureLaunch.executablePath,
+    [...activeFixtureLaunch.args, "--owner-background-only"],
+    {
+      cwd: root,
+      env: activeFixtureLaunch.env,
+      stdio: ["ignore", "pipe", "pipe"],
+    },
+  );
+  let stderr = "";
+  child.stderr.on("data", (chunk) => {
+    stderr = (stderr + chunk.toString("utf8")).slice(-32768);
+  });
+  child.stdout.resume();
+  const owned = { child, observed: false };
+  backgroundChildren.push(owned);
+  const terminal = once(child, "close").then((result) => {
+    owned.observed = true;
+    observations.push({
+      kind: "background-secondary-terminal",
+      pid: child.pid,
+      exit: result[0],
+      signal: result[1],
+    });
+    return result;
+  });
+  let result;
+  try {
+    result = await bounded(
+      terminal,
+      "BACKGROUND_SECONDARY_EXIT_UNKNOWN",
+      20000,
+    );
+  } catch (error) {
+    cleanupUnknown = true;
+    throw error;
+  }
+  assert.equal(result[0], 0);
+  assert.equal(result[1], null);
+  assert.match(stderr, /FAROL_NEXT_SECOND_INSTANCE_RESULT:reopen-failed/u);
+  assert.doesNotMatch(stderr, /FAROL_NEXT_SECOND_INSTANCE_RESULT:reopened/u);
+  assert.equal(application.process().pid, primaryPid);
+  const windows = await application.evaluate(({ BrowserWindow }) =>
+    BrowserWindow.getAllWindows().map((window) => ({
+      visible: window.isVisible(),
+      focused: window.isFocused(),
+    })),
+  );
+  assert.ok(windows.length > 0);
+  assert.ok(windows.every((window) => !window.visible && !window.focused));
+  observations.push({
+    kind: "background-second-launch-refused-without-reopen",
+    primaryPid,
+    secondaryPid: child.pid,
+    hidden: true,
+    focused: false,
+  });
+}
+
 try {
   for (const environment of behavior
     ? ["preview"]
@@ -595,6 +662,7 @@ try {
         ? ["dev"]
         : ["preview", "dev"]) {
     const window = await launch(environment, "normal", environment);
+    if (packaged && behavior) await checkBackgroundSecondary();
     await window.locator("#onboarding-nav").waitFor({ state: "visible" });
     await window.locator("#setup-dialog").waitFor({ state: "hidden" });
     await window.locator("#guided-onboarding").waitFor({ state: "visible" });
@@ -1635,6 +1703,24 @@ try {
       cleanupUnknown = true;
       observations.push({
         kind: "owned-mcp-cleanup-unknown-final-readback",
+        pid: owned.child.pid,
+      });
+    }
+  }
+  for (const owned of backgroundChildren) {
+    if (owned.observed) continue;
+    if (owned.child.exitCode !== null || owned.child.signalCode !== null) {
+      owned.observed = true;
+      observations.push({
+        kind: "background-secondary-terminal-final-readback",
+        pid: owned.child.pid,
+        exit: owned.child.exitCode,
+        signal: owned.child.signalCode,
+      });
+    } else {
+      cleanupUnknown = true;
+      observations.push({
+        kind: "background-secondary-cleanup-unknown",
         pid: owned.child.pid,
       });
     }

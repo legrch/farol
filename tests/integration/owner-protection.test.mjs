@@ -271,6 +271,14 @@ describe("standalone owner protection", () => {
       "Farol Dev",
       { FAROL_NEXT_OWNER_LAUNCH: "1" },
     ],
+    [
+      "hidden packaged preview",
+      "tooling/run-preview.mjs",
+      ["--hidden"],
+      "Farol Next Preview",
+      "Farol Dev",
+      { FAROL_NEXT_OWNER_LAUNCH: "1" },
+    ],
   ])(
     "allows %s startup markers but still catches another profile",
     async (_label, script, args, allowed, denied, environment) => {

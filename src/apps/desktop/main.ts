@@ -487,7 +487,14 @@ const nativeWorkspace = new NativeReadonlyWorkspace({
   helperPath: path.join(directory, "computer-safe-open.py"),
   helper: NEXT_SAFE_OPEN_HELPER,
 });
-const instanceRequest = createInstanceRequest(launchIdentity);
+const ownerBackgroundOnly = process.argv.includes("--owner-background-only");
+if (ownerBackgroundOnly && parsePreviewWindowMode(process.argv) !== "hidden") {
+  throw new Error("OWNER_BACKGROUND_PRESENTATION_INVALID");
+}
+const instanceRequest = createInstanceRequest(
+  launchIdentity,
+  ownerBackgroundOnly,
+);
 const secondInstanceResultPrefix = "FAROL_NEXT_SECOND_INSTANCE_RESULT:";
 const secondInstanceAcknowledgementPrefix =
   "FAROL_NEXT_SECOND_INSTANCE_ACK_FAILED:";
