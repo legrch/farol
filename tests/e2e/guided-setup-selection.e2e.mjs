@@ -831,6 +831,38 @@ try {
         state.configuration.settings.connectors.secureMcp.attachment,
         null,
       );
+      // Explicit Reconnect must replace even a current, challenge-ready runtime.
+      // These are disposable tunnel and MCP fixtures; no live provider is used.
+      const readyConnector = state.configuration.settings.connectors.secureMcp;
+      assert.equal(
+        readyConnector.challenge.runtimeGeneration,
+        readyConnector.runtime.runtimeGeneration,
+      );
+      const readyWorkspaces = state.configuration.settings.computer.workspaces;
+      await window.locator("#onboarding-reconnect").click();
+      await window
+        .locator('#onboarding-form[aria-busy="false"]')
+        .waitFor({ state: "attached", timeout: 30000 });
+      state = await window.evaluate(() => window.farolNext.bootstrap());
+      assert.equal(
+        state.configuration.settings.connectors.secureMcp.runtime.state,
+        "ready",
+      );
+      assert.notEqual(
+        state.configuration.settings.connectors.secureMcp.runtime
+          .runtimeGeneration,
+        readyConnector.runtime.runtimeGeneration,
+        "EXPLICIT_RECONNECT_RETAINED_CURRENT_RUNTIME",
+      );
+      assert.deepEqual(
+        state.configuration.settings.computer.workspaces,
+        readyWorkspaces,
+      );
+      assert.equal(nonReadRequests, 0);
+      observations.push({
+        kind: "explicit-current-runtime-reconnect-without-send",
+        environment,
+      });
       const priorRuntime =
         state.configuration.settings.connectors.secureMcp.runtime
           .runtimeGeneration;

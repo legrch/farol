@@ -1300,6 +1300,7 @@ export class GuidedOnboardingView {
         const challenge = connector?.challenge;
         const runtime = connector?.runtime;
         if (
+          !reconnect &&
           facts.runtimeCurrent &&
           facts.runtime === "ready" &&
           !facts.outcomeUnknown &&
