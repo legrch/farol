@@ -1,4 +1,4 @@
-# Farol Next owner preview
+# Farol owner beta
 
 ## Open it
 
@@ -38,8 +38,8 @@ Invoking `tooling/run-preview.mjs` directly is unsupported and refused. The priv
 Taskfile marker that distinguishes the owner entrypoint is an interface guard, not an
 authentication or same-owner security boundary.
 
-`task preview` is the separate development command. It may rebuild `_output/build/app` and
-is not evidence about the packaged candidate.
+`task dev` is the separate Farol Dev command. It may rebuild `_output/build/app`,
+uses its own profile and connector, and is not evidence about the packaged candidate.
 
 ## Setup inside the app
 
@@ -176,9 +176,9 @@ and read back separately.
   either way.
 - The sign-in window was left open, or a closed task still reports
   `TASK_CONTEXT_RESIDUE`: quitting and reopening this preview sweeps both.
-- Every case above touches only this preview's own state under the app-data root named
-  `Farol Next Preview`. Legacy `Farol.app`, `~/.farol`, and any installed
-  `codex-chatgpt-web` profile are never read or written by it.
+- Every case above touches only this product's NEW state under the app-data root named
+  `Farol Next Preview`. The separate V0 installation and its `~/.farol` state, and
+  any installed `codex-chatgpt-web` profile, are never read or written by it.
 
 ## Product boundary
 
@@ -188,9 +188,11 @@ app-data root named `Farol Next Preview`. Runtime HTTP/SSE uses an OS-assigned l
 port and per-launch in-memory bearers. The complete implemented/absent ownership table
 is [`../resources.json`](../resources.json).
 
-Legacy `Farol.app`, `~/.farol`, its launchers, tunnel, provider route, browser
-partition, updater, and installed `codex-chatgpt-web` profile are outside this
-preview's ownership.
+The separate V0 installation, `~/.farol`, its launchers, tunnel, provider route,
+browser partition, updater, and installed `codex-chatgpt-web` profile are outside
+this product's ownership. The current installed NEW basename is `Farol.app`;
+an occupied slot, including V0, must be preserved by the explicit authorized
+[closed product cutover](product-cutover.md) before normal promotion.
 
 ## Optional local promotion — owner action only
 
@@ -204,7 +206,7 @@ If the destination and receipt are absent and you choose to make the local previ
 durable outside the checkout, run this owner action:
 
 ```bash
-task promote -- --destination "$HOME/Applications/Farol Next Preview.app" --apply
+task promote -- --destination "$HOME/Applications/Farol.app" --apply
 ```
 
 The operation derives the owner's home from the operating-system account identity,
@@ -215,14 +217,17 @@ component and performs every mutation relative to the retained directory descrip
 so replacing its pathname cannot redirect the copy or cleanup into a Legacy root. It
 refuses any existing destination, copies into a newly claimed Next-only path, verifies
 the destination bytes against the source artifact digest, and writes
-`$HOME/Applications/Farol Next Preview.app.receipt.json`. It never overwrites an
+`$HOME/Applications/Farol.app.receipt.json`. It never overwrites an
 application and never writes inside Legacy roots. This unsigned local Preview is not
 a signed, notarized, published, or independent-recipient release.
 
-If the copy is interrupted before the receipt exists, the exact Preview destination
-may be partial and remains fail-closed. After confirming the sibling receipt is absent,
-the owner may move only `Farol Next Preview.app` to Trash and run the same command
-again; the tool never removes an existing destination on a later invocation.
+If the copy is interrupted before the receipt exists, the exact destination may
+be partial and remains fail-closed. Preserve its bytes and the original attempt;
+an absent receipt alone does not authorize deletion or another install attempt.
+Reconcile the known outcome before selecting a bounded recovery. The tool never
+removes an existing destination on a later invocation. Historical schema 5
+packages and installs used `Farol Next Preview.app`; do not rename them to bypass
+the supported cutover or reinterpret manual migration as an automatic update.
 
 ## Setup access transitions and receipt timing
 

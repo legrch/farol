@@ -7,8 +7,12 @@ GitHub owner beta policy; historical preview versions retain their original
 policy. Installed verification instead takes exact version,
 build version, and channel from the accepted GitHub release manifest. The
 artifact's recorded path is ignored there because extraction has a new private
-root. The extracted `artifact.json` must sit beside
-`Farol Next Preview.app` in the ZIP.
+root. For the current schema 6 package, the extracted `artifact.json` must sit
+beside `Farol.app` in the ZIP. Historical schema 5 packages used
+`Farol Next Preview.app`; the branded installed updater refuses that older
+layout. The old installed updater cannot consume the schema 6 layout. Use the
+explicit [closed product cutover](product-cutover.md) to establish the branded
+baseline instead of renaming or replacing an old release archive.
 
 The producer must bundle `tooling/verify-package-standalone.mjs` and its
 imports into one trusted installed resource. The native adapter supplies that

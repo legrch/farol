@@ -46,8 +46,11 @@ Packaging starts with an empty environment and isolated Python guard. Its fixed
 system/Homebrew PATH must resolve a declared Node version. It accepts only exact
 committed inputs, authenticated compiler/dependencies, the reviewed Electron
 runtime, and matching resource/receipt contracts. The artifact is a local
-unsigned `_output/package/Farol Next Preview.app`; creating it does not install or
-activate anything. `task run` is a separate owner action.
+unsigned schema 6 `_output/package/Farol.app`; creating it does not install or
+activate anything. Historical schema 5 packages used `Farol Next Preview.app`.
+The hidden NEW bundle/profile identities remain compatibility boundaries;
+moving an existing preview install to the current basename requires the explicit
+[closed product cutover](product-cutover.md). `task run` is a separate owner action.
 
 The owner guard preserves the frozen V0 installation boundary using standalone
 path declarations. Tests use disposable homes. Its synthetic mutation tests
