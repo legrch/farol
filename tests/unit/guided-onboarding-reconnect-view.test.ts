@@ -21,8 +21,17 @@ function harness(stop: "confirmed" | "refused" | "unknown" = "confirmed") {
     return {
       value: "",
       disabled: false,
+      hidden: false,
+      textContent: "",
       scrollTop: 0,
       dataset: { onboardingStep: onboardingSteps[2]!.id },
+      classList: { toggle: vi.fn() },
+      setAttribute: vi.fn(),
+      removeAttribute: vi.fn(),
+      append: vi.fn(),
+      replaceChildren: vi.fn(),
+      parentElement: { append: vi.fn() },
+      querySelector: () => ({ textContent: "" }),
       addEventListener: (event: string, callback: () => void) =>
         listeners.set(event, callback),
       click: () => listeners.get("click")?.(),
@@ -37,6 +46,9 @@ function harness(stop: "confirmed" | "refused" | "unknown" = "confirmed") {
     return current;
   };
   vi.stubGlobal("document", {
+    documentElement: { dataset: {} },
+    activeElement: null,
+    createElement: node,
     querySelector: get,
     querySelectorAll: (selector: string) =>
       selector === "[data-onboarding-step]" ? [get("connection-nav")] : [],
@@ -82,17 +94,49 @@ function harness(stop: "confirmed" | "refused" | "unknown" = "confirmed") {
     openChat: vi.fn(),
     returnToChat: vi.fn(),
   };
-  new GuidedOnboardingView(port);
+  const view = new GuidedOnboardingView(port);
   get("connection-nav").click();
   vi.mocked(port.render).mockClear();
   const click = async (selector: string) => {
     get(selector).click();
     await vi.waitFor(() => expect(port.render).toHaveBeenCalledTimes(2));
   };
-  return { click, configure, settings };
+  return {
+    click,
+    configure,
+    settings,
+    get,
+    render: () => view.render(true, "", false),
+  };
 }
 
 describe("guided Connection registered actions", () => {
+  it("offers explicit activation after a completed connection was stopped", async () => {
+    const ui = harness();
+    ui.settings.connectors.secureMcp.lastVerifiedAttachment =
+      ui.settings.connectors.secureMcp.attachment;
+    ui.settings.connectors.secureMcp.runtime = null;
+    ui.settings.connectors.secureMcp.challenge = null;
+    ui.settings.connectors.secureMcp.attachment = null;
+    ui.render();
+    expect(ui.get("#onboarding-primary").textContent).toBe("Continue");
+    const activate = ui.get("#onboarding-reconnect");
+    expect(activate.hidden).toBe(false);
+    expect(activate.disabled).toBe(false);
+    expect(activate.textContent).toBe("Activate and check");
+    await ui.click("#onboarding-reconnect");
+    expect(ui.configure.mock.calls.map(([command]) => command.kind)).toEqual([
+      "connector.start",
+    ]);
+  });
+  it("does not offer activation for an unknown stopped connection outcome", () => {
+    const ui = harness();
+    ui.settings.connectors.secureMcp.runtime = null;
+    ui.settings.setup.connect.outcomeUnknown = true;
+    ui.render();
+    expect(ui.get("#onboarding-reconnect").hidden).toBe(true);
+    expect(ui.configure).not.toHaveBeenCalled();
+  });
   it("reconnects an already-current connection on the explicit Reconnect click", async () => {
     const ui = harness();
     await ui.click("#onboarding-reconnect");

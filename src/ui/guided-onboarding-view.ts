@@ -720,14 +720,11 @@ export class GuidedOnboardingView {
       this.step !== 0;
     element<HTMLButtonElement>("#onboarding-open-account").disabled =
       this.busy || !facts.available;
-    element<HTMLButtonElement>("#onboarding-reconnect").hidden =
-      this.step !== 2 ||
-      editing ||
-      !saved ||
-      facts.runtime === "stopped" ||
-      unknown;
-    element<HTMLButtonElement>("#onboarding-reconnect").disabled =
-      this.busy || prerequisite !== null;
+    const reconnect = element<HTMLButtonElement>("#onboarding-reconnect");
+    reconnect.hidden = this.step !== 2 || editing || !saved || unknown;
+    reconnect.textContent =
+      facts.runtime === "stopped" ? "Activate and check" : "Reconnect";
+    reconnect.disabled = this.busy || prerequisite !== null;
     element<HTMLButtonElement>("#onboarding-verify-again").hidden =
       external || !progress[3] || unknown;
     element<HTMLButtonElement>("#onboarding-verify-again").disabled = this.busy;
