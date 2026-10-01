@@ -11,6 +11,7 @@ let command = null;
 let deadline = null;
 let escalation = null;
 let stopped = false;
+let outputStopped = false;
 let stopReason = null;
 let signalRefused = false;
 let killSent = false;
@@ -38,6 +39,11 @@ function signalGroup(signal) {
   }
 }
 function stop(reason) {
+  if (["backpressure", "output-limit", "disconnect", "ipc-error"].includes(reason)) {
+    outputStopped = true;
+    if (stopped && (reason === "backpressure" || reason === "output-limit"))
+      stopReason = reason;
+  }
   if (stopped) return;
   stopped = true;
   stopReason = reason;
@@ -53,7 +59,8 @@ function stop(reason) {
   escalation = setTimeout(() => signalGroup("SIGKILL"), 1000);
 }
 function output(stream, chunk) {
-  if (stopped) return;
+  // Cancellation still drains final diagnostics, within the original byte ceiling.
+  if (outputStopped) return;
   outputBytes[stream] += chunk.length;
   if (outputBytes.stdout + outputBytes.stderr > 4 * 1024 * 1024) {
     report({ type: "output-limit" });

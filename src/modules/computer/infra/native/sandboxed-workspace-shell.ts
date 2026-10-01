@@ -868,14 +868,14 @@ export class SandboxedWorkspaceShell {
         }
       }
     });
-    child.once("error", () => {
-      signal?.removeEventListener("abort", onAbort);
-      record.state = "exited";
+    child.on("error", () => {
+      // An IPC error does not prove controller exit. Keep cancellation and the
+      // terminal lease active until close has drained the owned controller.
       record.groupCleanup = "unverified";
       this.groupCleanupUnverified = true;
-      record.exitSignal = null;
-      record.errorCode = "SHELL_SPAWN_FAILED";
-      record.settleTerminal("unverified");
+      record.errorCode ??= child.pid
+        ? "SHELL_WATCHDOG_LOST"
+        : "SHELL_SPAWN_FAILED";
     });
     child.once("close", (code) => {
       signal?.removeEventListener("abort", onAbort);
@@ -888,7 +888,7 @@ export class SandboxedWorkspaceShell {
             child.once("disconnect", resolve),
           );
         if (!record.rootExitReported && record.state === "running") {
-          if (!record.signalRefused) {
+          if (child.pid && !record.signalRefused) {
             try {
               process.kill(-child.pid!, "SIGKILL");
             } catch (error) {

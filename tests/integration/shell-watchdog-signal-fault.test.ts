@@ -35,7 +35,7 @@ function watchdogFixture(refuse: (signal: string) => boolean = () => false) {
     connected: true,
     exitCode: 0,
     exit: vi.fn(),
-    send(value: unknown, callback?: () => void) {
+    send(value: unknown, callback?: () => void): boolean {
       messages.push(value);
       callback?.();
       return true;
@@ -99,6 +99,79 @@ function watchdogFixture(refuse: (signal: string) => boolean = () => false) {
 }
 
 describe("watchdog signal refusal without native effects", () => {
+  it.each(["cancel", "deadline"])(
+    "drains bounded final diagnostics after %s without another stop signal",
+    (reason) => {
+      const f = watchdogFixture();
+      f.start();
+      f.child.stdout.emit("data", Buffer.from("A"));
+      if (reason === "cancel")
+        f.processFixture.emit("message", { type: "stop" });
+      else f.tick(100_000);
+      f.child.stdout.emit("data", Buffer.from("B"));
+      f.child.stderr.emit("data", Buffer.from("E"));
+      f.child.emit("close", 7, null);
+      const bytes = (stream: string) =>
+        f.messages
+          .filter((message) => (message as { type: string }).type === stream)
+          .map((message) =>
+            Buffer.from((message as { data: string }).data, "base64"),
+          );
+      expect(Buffer.concat(bytes("stdout")).toString()).toBe("AB");
+      expect(Buffer.concat(bytes("stderr")).toString()).toBe("E");
+      expect(f.messages).not.toContainEqual({ type: "output-limit" });
+      expect(f.signals).toEqual(["SIGTERM", "SIGKILL"]);
+    },
+  );
+
+  it("enforces the output ceiling while draining after cancellation", () => {
+    const f = watchdogFixture();
+    f.start();
+    f.child.stdout.emit("data", Buffer.alloc(4 * 1024 * 1024));
+    f.processFixture.emit("message", { type: "stop" });
+    f.child.stderr.emit("data", Buffer.from("overflow"));
+    f.child.stderr.emit("data", Buffer.from("more overflow"));
+    f.child.emit("close", 7, null);
+    expect(
+      f.messages.filter(
+        (message) => (message as { type: string }).type === "output-limit",
+      ),
+    ).toHaveLength(1);
+    expect(f.messages).toContainEqual({
+      type: "close",
+      code: 7,
+      signal: null,
+      reason: "output-limit",
+    });
+    expect(f.signals).toEqual(["SIGTERM", "SIGKILL"]);
+  });
+
+  it("stops forwarding tail output when cancellation encounters IPC backpressure", () => {
+    const f = watchdogFixture();
+    f.start();
+    f.processFixture.emit("message", { type: "stop" });
+    const send = f.processFixture.send.bind(f.processFixture);
+    f.processFixture.send = (value, callback) => {
+      send(value, callback);
+      return false;
+    };
+    f.child.stdout.emit("data", Buffer.from("last forwarded"));
+    f.child.stderr.emit("data", Buffer.from("must not forward"));
+    f.child.emit("close", 7, null);
+    expect(
+      f.messages.filter(
+        (message) => (message as { type: string }).type === "stderr",
+      ),
+    ).toEqual([]);
+    expect(f.messages).toContainEqual({
+      type: "close",
+      code: 7,
+      signal: null,
+      reason: "backpressure",
+    });
+    expect(f.signals).toEqual(["SIGTERM", "SIGKILL"]);
+  });
+
   it("does not escalate or resend after a refused TERM", () => {
     const f = watchdogFixture(() => true);
     f.start();
@@ -357,6 +430,90 @@ async function shellFixture() {
 }
 
 describe("actual shell service preserves watchdog signal refusal", () => {
+  it("keeps IPC failure nonterminal and cancellation active until controller close", async () => {
+    const f = await shellFixture();
+    let terminal = false;
+    void f.terminal.then(() => {
+      terminal = true;
+    });
+    try {
+      f.child.emit("message", { type: "ready", pid: 4243 });
+      f.child.emit(
+        "error",
+        Object.assign(Error("synthetic IPC failure"), { code: "EPIPE" }),
+      );
+      await Promise.resolve();
+      expect(terminal).toBe(false);
+      expect(
+        f.shell.read({ handle: f.handle, stdoutOffset: 0, stderrOffset: 0 }),
+      ).toMatchObject({
+        ok: true,
+        value: {
+          state: "running",
+          groupCleanup: "unverified",
+          errorCode: "SHELL_WATCHDOG_LOST",
+        },
+      });
+      expect(() =>
+        f.child.emit(
+          "error",
+          Object.assign(Error("second synthetic IPC failure"), {
+            code: "EPIPE",
+          }),
+        ),
+      ).not.toThrow();
+      f.child.send.mockClear();
+      expect(f.shell.cancel(f.handle)).toMatchObject({
+        ok: true,
+        value: { state: "running", cancelRequested: true },
+      });
+      expect(f.child.send).toHaveBeenCalledExactlyOnceWith({ type: "stop" });
+      expect(f.signals).not.toHaveBeenCalled();
+      f.child.emit("message", { type: "signal-refused" });
+    } finally {
+      f.exitController(84);
+      expect(await f.terminal).toBe("unverified");
+    }
+  });
+
+  it("retains spawn failure until close without signalling an absent controller PID", async () => {
+    const f = await shellFixture();
+    let terminal = false;
+    void f.terminal.then(() => {
+      terminal = true;
+    });
+    Reflect.deleteProperty(f.child, "pid");
+    f.child.emit(
+      "error",
+      Object.assign(Error("synthetic spawn failure"), { code: "ENOENT" }),
+    );
+    await Promise.resolve();
+    expect(terminal).toBe(false);
+    expect(
+      f.shell.read({ handle: f.handle, stdoutOffset: 0, stderrOffset: 0 }),
+    ).toMatchObject({
+      ok: true,
+      value: {
+        state: "running",
+        groupCleanup: "unverified",
+        errorCode: "SHELL_SPAWN_FAILED",
+      },
+    });
+    f.exitController(null);
+    expect(await f.terminal).toBe("unverified");
+    expect(f.signals).not.toHaveBeenCalled();
+    expect(
+      f.shell.read({ handle: f.handle, stdoutOffset: 0, stderrOffset: 0 }),
+    ).toMatchObject({
+      ok: true,
+      value: {
+        state: "exited",
+        groupCleanup: "unverified",
+        errorCode: "SHELL_SPAWN_FAILED",
+      },
+    });
+  });
+
   it.each(["event", "exit-code"])(
     "keeps %s refusal unverified without backup signal or group probe",
     async (proof) => {
