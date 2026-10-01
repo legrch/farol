@@ -4,6 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { expect, it, vi } from "vitest";
+import { drainComputerConnector } from "../../src/apps/desktop/computer-connector-drain";
+import {
+  createQuitDrain,
+  type QuitDrainReceipt,
+} from "../../src/apps/desktop/quit-drain";
+import { PrivateMcpLifecycle } from "../../src/modules/computer/infra/mcp/private-mcp-lifecycle";
 import { SecureMcpConnectorRuntime } from "../../src/apps/desktop/secure-mcp-connector-runtime";
 
 // Record only the actual native handle; the production spawn still executes.
@@ -15,7 +21,7 @@ vi.mock("node:child_process", async (importOriginal) => {
 const execute = promisify(execFile);
 
 it.skipIf(process.platform !== "darwin")(
-  "keeps one owned connector outside the terminal foreground process group",
+  "drains the owned connector and idle MCP within the real Quit deadline",
   async () => {
     // Local signal/file fixture only: no sockets, accounts or live tunnel client.
     const root = await fs.realpath(
@@ -40,6 +46,7 @@ it.skipIf(process.platform !== "darwin")(
     );
     let stopAttempted = false;
     let stopped = false;
+    let draining: Promise<void> | undefined;
     try {
       const result = await runtime.start({
         executablePath: executable,
@@ -71,12 +78,58 @@ it.skipIf(process.platform !== "darwin")(
         ),
       );
       expect(await group(pid)).not.toBe(await group(process.pid));
-      // Stop is tracked through the owned anchor and whole-group terminal observation.
-      stopAttempted = true;
-      await runtime.stop();
-      stopped = true;
+      // Compose real native process ownership, native MCP locks and Desktop's
+      // absolute Quit deadline. The health request alone is a local stub.
+      const lifecycle = new PrivateMcpLifecycle(root);
+      const digest = "d".repeat(64);
+      await lifecycle.prepare(digest);
+      const receipts: QuitDrainReceipt[] = [];
+      let finishQuit!: () => void;
+      const quitCompleted = new Promise<void>((resolve) => {
+        finishQuit = resolve;
+      });
+      const quit = createQuitDrain({
+        deadlineMs: 5_000,
+        collect: () => [
+          {
+            name: "connector",
+            close: () => {
+              draining = drainComputerConnector({
+                beginStop: () => lifecycle.beginStop(),
+                startInFlight: null,
+                waitForMcpStop: () => lifecycle.waitForStop(),
+                stopConnector: async () => {
+                  stopAttempted = true;
+                  await runtime.stop();
+                  stopped = true;
+                },
+                closeSavedChat: async () => {},
+                confirmStop: () => lifecycle.confirmStop(),
+              });
+              return draining;
+            },
+          },
+        ],
+        record: async (receipt) => {
+          receipts.push(receipt);
+        },
+        quit: finishQuit,
+      });
+      quit.onBeforeQuit({ preventDefault: () => {} });
+      await quitCompleted;
+      expect(receipts).toEqual([{ drained: true, unconfirmed: [] }]);
+      expect(quit.state()).toBe("done");
       expect(runtime.isRunning()).toBe(false);
+      expect(
+        await fs.readFile(
+          path.join(root, "mcp-lifecycle", `revoked-${digest}`),
+          "utf8",
+        ),
+      ).toBe("1\n");
     } finally {
+      // A deadline does not cancel the admitted drain. Await its original
+      // result for fixture cleanup; never repeat an unconfirmed stop.
+      await draining?.catch(() => undefined);
       if (!stopAttempted) {
         stopAttempted = true;
         await runtime.stop();

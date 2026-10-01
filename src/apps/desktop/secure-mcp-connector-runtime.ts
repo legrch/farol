@@ -528,7 +528,9 @@ export class SecureMcpConnectorRuntime {
     if (!child) return;
     if (child.exitCode === null) {
       child.kill("SIGTERM");
-      if (!(await child.waitForExit(5_000))) {
+      // The anchor retains group ownership after TERM. Leave time inside the
+      // Desktop's absolute Quit budget for terminal confirmation and MCP cleanup.
+      if (!(await child.waitForExit(500))) {
         child.kill("SIGKILL");
         if (!(await child.waitForExit(1_000))) {
           throw new Error("CONNECTOR_STOP_UNCONFIRMED");
