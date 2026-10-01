@@ -12,6 +12,7 @@ import {
 import {
   codexTaskRouteFailureCode,
   codexTaskRouteFailureRecord,
+  codexTaskRouteRefusalRecord,
 } from "../../src/apps/desktop/codex-task-route-error";
 import { HandoffNotSubmittedError } from "../../src/modules/chat/app/service/persistent-codex-handoff";
 import { ProductConfigurationResultSchema } from "../../src/pkg/product-settings/contract";
@@ -85,6 +86,22 @@ function fixture(mode: string) {
 }
 
 describe("shared proxy closed diagnostics", () => {
+  it.each([
+    "model_policy",
+    "workspace_identity",
+    "project_root",
+    "git_identity",
+    "project_catalogue",
+  ] as const)(
+    "records the refused %s predicate without owner data",
+    (phase) => {
+      expect(JSON.parse(codexTaskRouteRefusalRecord(phase))).toEqual({
+        code: "CODEX_TASK_ROUTE_REFUSED",
+        phase,
+        result: "refused",
+      });
+    },
+  );
   it("records the phase and numeric RPC code without private exception details", () => {
     expect(
       JSON.parse(

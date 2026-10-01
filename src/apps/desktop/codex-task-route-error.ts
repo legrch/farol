@@ -5,6 +5,22 @@ import {
 } from "../../modules/chat/infra/native/shared-codex-proxy-host";
 import type { ProductConfigurationResult } from "../../pkg/product-settings/contract";
 
+/** Fixed admission predicates only; no owner identifiers or response payload. */
+export function codexTaskRouteRefusalRecord(
+  phase:
+    | "model_policy"
+    | "workspace_identity"
+    | "project_root"
+    | "git_identity"
+    | "project_catalogue",
+): string {
+  return JSON.stringify({
+    code: "CODEX_TASK_ROUTE_REFUSED",
+    phase,
+    result: "refused",
+  });
+}
+
 /** Only closed socket and proxy lifecycle codes cross the desktop IPC boundary. */
 export function codexTaskRouteFailureCode(
   error: unknown,

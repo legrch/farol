@@ -65,6 +65,7 @@ import { SharedCodexProxyHost } from "../../modules/chat/infra/native/shared-cod
 import {
   codexTaskRouteFailureCode,
   codexTaskRouteFailureRecord,
+  codexTaskRouteRefusalRecord,
 } from "./codex-task-route-error";
 import { PersistentChatGptHandoff } from "../../modules/chat/app/service/persistent-chatgpt-handoff";
 import { PrivateSavedChatJournal } from "../../modules/chat/infra/repo/private-saved-chat-journal";
@@ -5410,6 +5411,14 @@ async function configureAdmittedProduct(
       });
     }
     case "host.configure-codex-tasks": {
+      const refuseRoute = (
+        phase: Parameters<typeof codexTaskRouteRefusalRecord>[0],
+      ) => {
+        process.stderr.write(
+          `farol-codex-task-route ${codexTaskRouteRefusalRecord(phase)}\n`,
+        );
+        return configurationFailure("CODEX_TASK_ROUTE_REFUSED");
+      };
       if (codexHostTaskAdmission || codexAgentOperationActive()) {
         return configurationFailure("CODEX_HOST_TASK_IN_PROGRESS");
       }
@@ -5422,7 +5431,7 @@ async function configureAdmittedProduct(
         harness: "codex",
       });
       if (resolvedModel.status !== "ready") {
-        return configurationFailure("CODEX_TASK_ROUTE_REFUSED");
+        return refuseRoute("model_policy");
       }
       const selected = settings.nativeHosts.codex;
       const workspace = settings.computer.workspaces.find(
@@ -5439,7 +5448,7 @@ async function configureAdmittedProduct(
           settings.computer.generation ||
         (command.sandbox === "workspace-write" && workspace.access !== "write")
       ) {
-        return configurationFailure("CODEX_TASK_ROUTE_REFUSED");
+        return refuseRoute("workspace_identity");
       }
       codexHostTaskAdmission = true;
       let proxy: SharedCodexProxyHost | null = null;
@@ -5451,7 +5460,7 @@ async function configureAdmittedProduct(
           projectStat.isSymbolicLink() ||
           (await realpath(command.projectRoot)) !== command.projectRoot
         ) {
-          return configurationFailure("CODEX_TASK_ROUTE_REFUSED");
+          return refuseRoute("project_root");
         }
         const authority = new PhysicalCodexHandoffAuthority({
           workspaceId: command.workspaceId,
@@ -5469,7 +5478,7 @@ async function configureAdmittedProduct(
           },
         });
         if (!(await authority.resolve(command.workspaceId))) {
-          return configurationFailure("CODEX_TASK_ROUTE_REFUSED");
+          return refuseRoute("git_identity");
         }
         scratch = await realpath(
           await mkdtemp(path.join(os.tmpdir(), "farol-codex-task-selection-")),
@@ -5485,7 +5494,7 @@ async function configureAdmittedProduct(
         if (
           !(await exactProject(proxy, command.projectId, command.projectRoot))
         ) {
-          return configurationFailure("CODEX_TASK_ROUTE_REFUSED");
+          return refuseRoute("project_catalogue");
         }
         if (command.observeThreadId) {
           const response = await proxy.request("thread/read", {

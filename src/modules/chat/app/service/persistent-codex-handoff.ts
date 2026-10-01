@@ -416,7 +416,7 @@ export async function exactProject(
         matched.push(project.id);
       }
     }
-    if (response.nextCursor === null) {
+    if (response.nextCursor === null || response.nextCursor === undefined) {
       return matched.length === 1 && matched[0] === projectId;
     }
     if (
