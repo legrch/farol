@@ -409,6 +409,7 @@ import {
 } from "../../modules/computer/infra/mcp/dev-mcp-proof";
 import {
   desktopCodexChildHomes,
+  desktopCodexConfigPath,
   desktopAppDataPath,
   desktopEnvironment,
   desktopIdentity,
@@ -3100,10 +3101,11 @@ function farolModelCodexConfigPath(): string {
   if (override && path.isAbsolute(override) && !override.includes("\0")) {
     return override;
   }
-  if (activeDesktopIdentity.environment === "dev") {
-    return path.join(activeDesktopIdentity.codexHome, "config.toml");
-  }
-  return path.join(os.homedir(), ".codex", "config.toml");
+  return desktopCodexConfigPath(
+    buildEnvironment,
+    activeDesktopIdentity,
+    os.homedir(),
+  );
 }
 
 function modelStatusEvidencePayload(

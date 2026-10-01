@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   codexChildHomePath,
   desktopCodexChildHomes,
+  desktopCodexConfigPath,
   desktopAppDataPath,
   desktopEnvironment,
   desktopIdentity,
@@ -107,6 +108,28 @@ describe("desktop environment identity", () => {
     expect(
       desktopCodexChildHomes("preview", identity, "/Users/owner", undefined),
     ).toEqual({ codexHomePath: undefined, processHomePath: "/Users/owner" });
+  });
+
+  it("keeps model configuration inside the shared NEW development profile", () => {
+    const build = desktopEnvironment("dev");
+    const identity = desktopIdentity(
+      desktopProfileEnvironment(build, "shared-new", undefined),
+      appData,
+    );
+    const target = desktopCodexConfigPath(build, identity, "/Users/owner");
+    expect(target).toBe(path.join(identity.codexHome, "config.toml"));
+    expect(target).not.toBe("/Users/owner/.codex/config.toml");
+  });
+
+  it("retains isolated Dev and packaged Preview model configuration targets", () => {
+    const dev = desktopIdentity("dev", appData);
+    const preview = desktopIdentity("preview", appData);
+    expect(desktopCodexConfigPath("dev", dev, "/Users/owner")).toBe(
+      path.join(dev.codexHome, "config.toml"),
+    );
+    expect(desktopCodexConfigPath("preview", preview, "/Users/owner")).toBe(
+      "/Users/owner/.codex/config.toml",
+    );
   });
 
   it("keeps fixture proof mutations outside shared NEW development state", () => {

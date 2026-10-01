@@ -243,6 +243,20 @@ export function codexChildHomePath(
     : undefined;
 }
 
+// Model configuration follows build authority, independently of shared profile identity.
+export function desktopCodexConfigPath(
+  buildEnvironment: DesktopEnvironment,
+  identity: DesktopIdentity,
+  nativeHome: string,
+): string {
+  return path.join(
+    buildEnvironment === "dev"
+      ? identity.codexHome
+      : path.join(nativeHome, ".codex"),
+    "config.toml",
+  );
+}
+
 export function desktopCodexChildHomes(
   buildEnvironment: DesktopEnvironment,
   identity: DesktopIdentity,
