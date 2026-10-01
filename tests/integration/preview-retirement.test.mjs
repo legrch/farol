@@ -465,4 +465,73 @@ suite("explicit preview installation retirement", () => {
       ).toBe(0);
     },
   );
+
+  it.each(["prepared.json", "phase.json"])(
+    "resumes an interrupted %s publication and retains uncommitted bytes",
+    async (name) => {
+      const f = await fixture();
+      if (name === "phase.json") {
+        expect(
+          (
+            await f.cli({
+              hook: "journal_moved",
+              atPhase: () => {
+                throw new Error("TEST_INTERRUPTION");
+              },
+            })
+          ).status,
+        ).toBe(1);
+      } else {
+        await fs.mkdir(f.history, { mode: 0o700 });
+      }
+      // A killed journal publisher can leave partial bytes before rename.
+      // The exact private temporary convention comes from the pinned library.
+      const temporary = path.join(f.history, `.${name}.${"a".repeat(32)}.tmp`);
+      await fs.writeFile(temporary, '{"schema":', { mode: 0o600 });
+      const staged = await fs.lstat(temporary);
+      const resumed = await f.cli();
+      expect(resumed.status, resumed.stderr).toBe(0);
+      expect(resumed.receipt.phase).toBe("retired");
+      expect((await fs.lstat(temporary)).ino).toBe(staged.ino);
+      expect(await fs.readFile(temporary, "utf8")).toBe('{"schema":');
+      expect(
+        (await f.cli({}, ["--restore", op, "--expected-preview", f.old.digest]))
+          .status,
+      ).toBe(0);
+      expect(await treeDigest(f.preview)).toBe(f.old.digest);
+      expect((await fs.lstat(temporary)).ino).toBe(staged.ino);
+    },
+  );
+
+  it.each(["symlink", "hardlink", "public", "oversize", "wrong name"])(
+    "refuses an unsafe %s publication remnant before any installation move",
+    async (kind) => {
+      const f = await fixture();
+      await fs.mkdir(f.history, { mode: 0o700 });
+      const name = `.prepared.json.${"a".repeat(32)}.tmp`;
+      const temporary = path.join(
+        f.history,
+        kind === "wrong name" ? name + ".foreign" : name,
+      );
+      const sentinel = path.join(f.root, "sentinel");
+      await fs.writeFile(sentinel, "unchanged", { mode: 0o600 });
+      if (kind === "symlink") await fs.symlink(sentinel, temporary);
+      else if (kind === "hardlink") await fs.link(sentinel, temporary);
+      else
+        await fs.writeFile(
+          temporary,
+          kind === "oversize" ? Buffer.alloc(65_537) : "partial",
+          { mode: kind === "public" ? 0o644 : 0o600 },
+        );
+      const updates = await fs.lstat(f.updates);
+      const result = await f.cli();
+      expect(result.status, result.stderr).toBe(1);
+      expect(await treeDigest(f.preview)).toBe(f.old.digest);
+      expect((await fs.lstat(f.updates)).ino).toBe(updates.ino);
+      expect(await fs.readFile(sentinel, "utf8")).toBe("unchanged");
+      await expect(
+        fs.lstat(path.join(f.history, "prepared.json")),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+    },
+  );
 });

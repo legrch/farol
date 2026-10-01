@@ -671,7 +671,11 @@ const controlSchema = z.strictObject({
 
 type RuntimeReady = z.infer<typeof readySchema>;
 app.setName(activeDesktopIdentity.applicationName);
-process.title = activeDesktopIdentity.applicationName;
+// The visible production name must not change the observed process identity.
+process.title =
+  buildEnvironment === "dev"
+    ? activeDesktopIdentity.applicationName
+    : productName;
 if (process.platform === "win32")
   app.setAppUserModelId(activeDesktopIdentity.applicationId);
 if (process.platform === "darwin") {

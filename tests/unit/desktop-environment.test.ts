@@ -99,6 +99,28 @@ describe("desktop environment identity", () => {
     }
   });
 
+  it.each(["preview", "dev"] as const)(
+    "keeps the %s internal process name stable independently of the display name",
+    (buildEnvironment) => {
+      const source = fs.readFileSync(
+        new URL("../../src/apps/desktop/main.ts", import.meta.url),
+        "utf8",
+      );
+      const assignment = /process\.title\s*=[^;]+;/u.exec(source)?.[0];
+      expect(assignment).toBeDefined();
+      const process = { title: "Electron" };
+      runInNewContext(assignment!, {
+        process,
+        buildEnvironment,
+        activeDesktopIdentity: desktopIdentity(buildEnvironment, appData),
+        productName: "Farol Next Preview",
+      });
+      expect(process.title).toBe(
+        buildEnvironment === "dev" ? "Farol Dev" : "Farol Next Preview",
+      );
+    },
+  );
+
   it("keeps explicitly isolated DEV identity separate from Preview and Legacy", () => {
     const dev = desktopIdentity("dev", appData);
     const preview = desktopIdentity("preview", appData);

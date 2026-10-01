@@ -245,10 +245,23 @@ def run(request):
 
         anchor()
         old_updates()
+        # A publisher interrupted before its atomic rename leaves private
+        # temporary bytes. Retain them; only committed records are authority.
+        # Their exact names, descriptors and operation directory remain bound.
+        uncommitted = set()
+        for name in b.sorted_names(history):
+            if re.fullmatch(r"\.(?:prepared|phase)\.json\.[0-9a-f]{32}\.tmp", name):
+                b.read_private(history, name)
+                uncommitted.add(name)
         prepared = b.read_json(history, "prepared.json", optional=True)
         if prepared is None:
-            if b.sorted_names(history):
+            if set(b.sorted_names(history)) - uncommitted:
                 b.refuse("RETIREMENT_HISTORY_UNCONFIRMED")
+            # No move is admitted until prepared.json has been published.
+            for entry in entries:
+                fd, name, _ = select(entry)
+                if (fd, name) != entry[:2]:
+                    b.refuse("RETIREMENT_HISTORY_UNCONFIRMED")
             prepared = {"schema": SCHEMA, "operationId": op, "previewDigest": request["expectedPreview"], "targetBuildId": request["targetBuildId"], "entries": []}
             for entry in entries:
                 fd, name, info = select(entry)
@@ -260,7 +273,7 @@ def run(request):
         b.shape(prepared, "schema operationId previewDigest targetBuildId entries")
         if prepared["schema"] != SCHEMA or prepared["operationId"] != op or prepared["previewDigest"] != request["expectedPreview"] or prepared["targetBuildId"] != request["targetBuildId"] or len(prepared["entries"]) != len(entries):
             b.refuse("RETIREMENT_HISTORY_CHANGED")
-        allowed = {"prepared.json", "phase.json", *(e[1] for e in entries[1:])}
+        allowed = {"prepared.json", "phase.json", *uncommitted, *(e[1] for e in entries[1:])}
         if not set(b.sorted_names(history)) <= allowed:
             b.refuse("RETIREMENT_HISTORY_UNCONFIRMED")
         phase = b.read_json(history, "phase.json", optional=True)
