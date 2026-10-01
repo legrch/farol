@@ -453,12 +453,10 @@ export function devLaunchEnvironment(
   return {
     ...owned,
     PATH: `${nodeBinDirectory}:${owned.PATH}`,
-    // Development build admission remains explicit. Ordinary development
-    // opens the existing NEW profile; acceptance keeps isolated DEV state.
+    // Ordinary Dev owns its separate profile. Acceptance uses another isolated
+    // profile, while both remain development builds rather than candidates.
     [DESKTOP_ENVIRONMENT_ENV]: "dev",
-    ...(acceptanceProfile
-      ? { FAROL_NEXT_ACCEPTANCE_PROFILE: "1" }
-      : { FAROL_NEXT_PROFILE_MODE: "shared-new" }),
+    ...(acceptanceProfile ? { FAROL_NEXT_ACCEPTANCE_PROFILE: "1" } : {}),
   };
 }
 

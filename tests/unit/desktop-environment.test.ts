@@ -69,16 +69,16 @@ describe("desktop environment identity", () => {
     expect(dev.chatGptPartition).not.toBe("persist:codex-chatgpt-web");
   });
 
-  it("shares the complete NEW identity while retaining development build admission", () => {
+  it("keeps ordinary Dev identity independent while retaining development admission", () => {
     const buildEnvironment = desktopEnvironment("dev");
     const profile = desktopProfileEnvironment(
       buildEnvironment,
-      "shared-new",
+      undefined,
       undefined,
     );
     expect(buildEnvironment).toBe("dev");
-    expect(profile).toBe("preview");
-    expect(desktopIdentity(profile, appData)).toEqual(
+    expect(profile).toBe("dev");
+    expect(desktopIdentity(profile, appData)).not.toEqual(
       desktopIdentity("preview", appData),
     );
     expect(
@@ -89,9 +89,9 @@ describe("desktop environment identity", () => {
     ).toBe(appData);
   });
 
-  it("keeps both Codex child homes private in shared NEW development", () => {
+  it("keeps both Codex child homes private in ordinary Dev", () => {
     const build = desktopEnvironment("dev");
-    const profile = desktopProfileEnvironment(build, "shared-new", undefined);
+    const profile = desktopProfileEnvironment(build, undefined, undefined);
     const identity = desktopIdentity(profile, appData);
     const selected = desktopCodexChildHomes(
       build,
@@ -110,10 +110,10 @@ describe("desktop environment identity", () => {
     ).toEqual({ codexHomePath: undefined, processHomePath: "/Users/owner" });
   });
 
-  it("keeps model configuration inside the shared NEW development profile", () => {
+  it("keeps model configuration inside the ordinary Dev profile", () => {
     const build = desktopEnvironment("dev");
     const identity = desktopIdentity(
-      desktopProfileEnvironment(build, "shared-new", undefined),
+      desktopProfileEnvironment(build, undefined, undefined),
       appData,
     );
     const target = desktopCodexConfigPath(build, identity, "/Users/owner");
@@ -132,11 +132,15 @@ describe("desktop environment identity", () => {
     );
   });
 
-  it("keeps fixture proof mutations outside shared NEW development state", () => {
+  it("keeps fixture proof mutations outside production state", () => {
     const build = desktopEnvironment("dev");
-    const shared = desktopProfileEnvironment(build, "shared-new", undefined);
+    const production = desktopProfileEnvironment(
+      "preview",
+      undefined,
+      undefined,
+    );
     const isolated = desktopProfileEnvironment(build, undefined, "1");
-    expect(isolatedDevMcpProofAllowed(build, shared)).toBe(false);
+    expect(isolatedDevMcpProofAllowed(build, production)).toBe(false);
     expect(isolatedDevMcpProofAllowed(build, isolated)).toBe(true);
     expect(isolatedDevMcpProofAllowed("preview", "preview")).toBe(false);
     expect(isolatedDevMcpProofAllowed("preview", "dev")).toBe(false);
@@ -151,7 +155,14 @@ describe("desktop environment identity", () => {
   });
 
   it("rejects an unsupported marker or conflicting shared selection before state access", () => {
-    for (const marker of ["", "dev", "preview", "/profile", "Shared-New"]) {
+    for (const marker of [
+      "",
+      "dev",
+      "preview",
+      "/profile",
+      "Shared-New",
+      "shared-new",
+    ]) {
       expect(() => desktopProfileEnvironment("dev", marker, undefined)).toThrow(
         "DESKTOP_PROFILE_SELECTION_INVALID",
       );

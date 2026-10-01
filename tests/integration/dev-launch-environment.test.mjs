@@ -96,7 +96,6 @@ describe("development launcher environment", () => {
       // packaged launcher pins. Never the caller's own PATH.
       PATH: "/declared/node/bin:/usr/bin:/bin:/usr/sbin:/sbin",
       FAROL_NEXT_ENVIRONMENT: "dev",
-      FAROL_NEXT_PROFILE_MODE: "shared-new",
     });
   });
 
@@ -132,7 +131,6 @@ describe("development launcher environment", () => {
 
     expect(await farolKeysVisibleTo({ env: devLaunchEnvironment() })).toEqual([
       "FAROL_NEXT_ENVIRONMENT",
-      "FAROL_NEXT_PROFILE_MODE",
     ]);
   });
 
@@ -165,7 +163,6 @@ describe("development launcher environment", () => {
     ).toBeTypeOf("object");
     expect(Object.keys(received.options.env).sort()).toEqual([
       "FAROL_NEXT_ENVIRONMENT",
-      "FAROL_NEXT_PROFILE_MODE",
       "HOME",
       "LANG",
       "LC_ALL",
@@ -202,7 +199,7 @@ describe("development launcher environment", () => {
     expect(received.options.env.FAROL_NEXT_E2E).toBeUndefined();
   });
 
-  it("places ordinary shared NEW development on a secondary display", async () => {
+  it("places ordinary Farol Dev on a secondary display", async () => {
     let received;
     const stop = new Error("SPAWN_INTERCEPTED");
     await expect(
@@ -221,7 +218,7 @@ describe("development launcher environment", () => {
       "--preview-window-mode=secondary-visible",
     ]);
     expect(received.options.env.FAROL_NEXT_ENVIRONMENT).toBe("dev");
-    expect(received.options.env.FAROL_NEXT_PROFILE_MODE).toBe("shared-new");
+    expect(received.options.env.FAROL_NEXT_PROFILE_MODE).toBeUndefined();
     expect(received.options.env.FAROL_NEXT_ACCEPTANCE_PROFILE).toBeUndefined();
   });
 });

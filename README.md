@@ -11,17 +11,16 @@ See [Computer workspace context](docs/computer-workspace-context.md) for bounds,
 ordinary shell filename discovery and the distinction between local/package
 fixtures and a refreshed live connector.
 
-Ordinary `task dev` from the repository root uses the existing NEW
-**Farol Next Preview** profile (`local.farol.next.preview`), including its workspace
-configuration and browser/runtime partitions. It remains a **Development** build,
-including when source is dirty, and is never accepted as a packaged candidate.
-`task package` and `task run` retain exact clean candidate admission. Only explicit
-`task dev -- --acceptance-profile` uses isolated **Farol Dev** state. Check-only
-development and all acceptance gates retain the full owner fingerprints. No lane
-copies cookies, keys, profiles or personal Codex configuration. Development-only
-fixture proof operations require an isolated DEV profile because they add/remove
-fixture workspaces and store verification preparation. Ordinary shared NEW
-development uses the normal Computer workflow, without injecting these fixtures.
+Ordinary `task dev` runs **Farol Dev** (`local.farol.dev`) with its own workspace
+configuration, browser partitions, connector and instance state. It may run beside
+the installed Farol. Production uses the existing NEW product state; development
+never borrows it or copies cookies, keys or personal Codex configuration.
+Development stays a **Development** build, including dirty source, and is never
+accepted as a packaged candidate. `task package` and `task run` retain exact clean
+candidate admission. `task dev -- --acceptance-profile` uses a further isolated
+acceptance profile; check-only development and acceptance gates retain the full
+owner fingerprints. The retired `shared-new` profile marker fails before state
+access. Fixture proof operations remain restricted to isolated Dev state.
 
 The permanent model protocol is independent of these development identities:
 `model_provider = "farol"`, `model = "chatgpt"`. `farol/chatgpt` is display
@@ -30,7 +29,7 @@ migration boundaries are defined in [Model routing](docs/model-routing.md).
 
 ### Dev names and profile compatibility
 
-The isolated acceptance app and ChatGPT app name is **Farol Dev**. The marker `dev`, app ID
+The ordinary development app and ChatGPT app name is **Farol Dev**. The marker `dev`, app ID
 `local.farol.dev`, runtime `farol-dev-runtime`, and `persist:farol-dev-*` partitions
 are stable machine identifiers; they are not derived from the display label.
 

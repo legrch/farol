@@ -56,7 +56,7 @@ def _owner_launch_profiles(command: list[str]) -> frozenset[str]:
             if "--acceptance-profile" in command[2:]:
                 parent = "Library/Application Support/Farol Dev Acceptance"
                 return frozenset((parent, selected_dev_profile(parent)))
-            return frozenset(("Library/Application Support/Farol Next Preview",))
+            return frozenset((selected_dev_profile("Library/Application Support"),))
         if command[1] == "tooling/run-preview.mjs" and os.environ.get("FAROL_NEXT_OWNER_LAUNCH") == "1":
             return frozenset(("Library/Application Support/Farol Next Preview",))
     if command == ["npm", "run", "preview"]:

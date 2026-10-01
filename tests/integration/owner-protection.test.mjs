@@ -255,11 +255,11 @@ describe("standalone owner protection", () => {
   });
   it.each([
     [
-      "shared NEW Dev",
+      "isolated ordinary Dev",
       "tooling/dev.mjs",
       [],
-      "Farol Next Preview",
       "Farol Dev",
+      "Farol Next Preview",
       {},
     ],
     [

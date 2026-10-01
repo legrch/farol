@@ -38,22 +38,17 @@ export function desktopEnvironment(
   throw new Error("DESKTOP_ENVIRONMENT_INVALID");
 }
 
-// Build admission and profile identity are independent. Sharing NEW state
-// does not make a development build an exact packaged candidate.
+// Production and ordinary Dev own separate state. The retired shared marker
+// fails before profile access; build admission remains independently enforced.
 export function desktopProfileEnvironment(
   buildEnvironment: DesktopEnvironment,
   marker: string | undefined,
-  acceptanceProfile: string | undefined,
+  _acceptanceProfile: string | undefined,
 ): DesktopEnvironment {
-  if (marker === undefined) return buildEnvironment;
-  if (
-    marker !== "shared-new" ||
-    buildEnvironment !== "dev" ||
-    acceptanceProfile !== undefined
-  ) {
+  if (marker !== undefined) {
     throw new Error("DESKTOP_PROFILE_SELECTION_INVALID");
   }
-  return "preview";
+  return buildEnvironment;
 }
 
 const E2E_ROOT_MARKER = ".farol-next-e2e-root";
@@ -243,7 +238,7 @@ export function codexChildHomePath(
     : undefined;
 }
 
-// Model configuration follows build authority, independently of shared profile identity.
+// Model configuration follows build authority and stays private in Dev.
 export function desktopCodexConfigPath(
   buildEnvironment: DesktopEnvironment,
   identity: DesktopIdentity,
