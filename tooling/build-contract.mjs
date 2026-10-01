@@ -1,8 +1,9 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { BRAND_RESOURCES } from "./brand-contract.mjs";
 
-export const BUILD_ENTRIES = Object.freeze([
+export const LEGACY_BUILD_ENTRIES = Object.freeze([
   "Geist-OFL.txt",
   "Geist-Variable.woff2",
   "GeistMono-Variable.woff2",
@@ -23,6 +24,13 @@ export const BUILD_ENTRIES = Object.freeze([
   "update-package.mjs",
   "update-slot.mjs",
 ]);
+
+export const BUILD_ENTRIES = Object.freeze(
+  [
+    ...LEGACY_BUILD_ENTRIES,
+    ...BRAND_RESOURCES.map((resource) => resource.output),
+  ].sort(),
+);
 
 const CAPABILITY_BOUNDARY_ENTRIES = Object.freeze([
   "computer-mcp.cjs",
@@ -61,7 +69,11 @@ export async function snapshotBuildEntries(root) {
   );
 }
 
-export async function verifyBuildEntries(root, expected) {
+export async function verifyBuildEntries(
+  root,
+  expected,
+  entries = BUILD_ENTRIES,
+) {
   if (
     expected === null ||
     typeof expected !== "object" ||
@@ -71,12 +83,12 @@ export async function verifyBuildEntries(root, expected) {
   }
   const keys = Object.keys(expected).sort();
   if (
-    keys.length !== BUILD_ENTRIES.length ||
-    !keys.every((entry, index) => entry === [...BUILD_ENTRIES].sort()[index])
+    keys.length !== entries.length ||
+    !keys.every((entry, index) => entry === [...entries].sort()[index])
   ) {
     throw new Error("BUILD_ENTRY_SET_INVALID");
   }
-  for (const entry of BUILD_ENTRIES) {
+  for (const entry of entries) {
     const claimed = expected[entry];
     if (!/^[a-f0-9]{64}$/u.test(claimed ?? "")) {
       throw new Error(`BUILD_ENTRY_DIGEST_INVALID:${entry}`);

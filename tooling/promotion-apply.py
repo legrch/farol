@@ -17,8 +17,8 @@ import struct
 import sys
 
 
-APP_NAME = "Farol Next Preview.app"
-RECEIPT_NAME = "Farol Next Preview.app.receipt.json"
+APP_NAME = "Farol.app"
+RECEIPT_NAME = "Farol.app.receipt.json"
 MAGIC = b"FAROL_PROMOTION_OK\n"
 MAX_REQUEST_BYTES = 128 * 1024
 MAX_RECEIPT_BYTES = 64 * 1024

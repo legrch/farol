@@ -27,7 +27,7 @@ const reconnectFailure = new assert.AssertionError({
 });
 const transports = [];
 let connections = 0;
-const app = path.resolve("_output/package/Farol Next Preview.app");
+const app = path.resolve("_output/package/Farol.app");
 const entry = packaged
   ? path.join(app, "Contents/Resources/app/computer-mcp.cjs")
   : path.resolve("_output/build/app/computer-mcp.cjs");

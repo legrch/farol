@@ -64,6 +64,9 @@ describe("desktop environment identity", () => {
     expect(dev.runtimePartition).not.toBe(preview.runtimePartition);
     expect(dev.chatGptPartition).not.toBe(preview.chatGptPartition);
     expect(dev.applicationId).not.toBe(preview.applicationId);
+    expect(preview.applicationName).toBe("Farol");
+    expect(preview.userData).toBe(path.join(appData, "Farol Next Preview"));
+    expect(preview.applicationId).toBe("local.farol.next.preview");
     expect(dev.userData).not.toContain(".farol");
     expect(dev.chatGptPartition).not.toBe("persist:farol-chatgpt");
     expect(dev.chatGptPartition).not.toBe("persist:codex-chatgpt-web");
@@ -178,10 +181,10 @@ describe("desktop environment identity", () => {
     ).toThrow("DESKTOP_PROFILE_SELECTION_INVALID");
   });
 
-  it("keeps the existing packaged Preview identity unchanged", () => {
+  it("keeps production state identity while using the Farol application name", () => {
     expect(desktopIdentity("preview", appData)).toMatchObject({
       applicationId: "local.farol.next.preview",
-      applicationName: "Farol Next Preview",
+      applicationName: "Farol",
       userData: path.join(appData, "Farol Next Preview"),
       sessionData: path.join(appData, "Farol Next Preview"),
       runtimePartition: "persist:farol-next-preview",

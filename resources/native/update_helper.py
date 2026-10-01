@@ -18,7 +18,7 @@ import subprocess
 import sys
 import time
 
-APP = "Farol Next Preview.app"
+APP = "Farol.app"
 BUNDLE = "local.farol.next.preview"
 ROOT_PARTS = ("Library", "Application Support", "Farol Next Preview", "installed-updates")
 DIGEST_VERSION = "farol.next.tree-digest/v2"

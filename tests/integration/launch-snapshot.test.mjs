@@ -25,7 +25,7 @@ describe("isolated owner launch snapshot", () => {
       path.join(os.tmpdir(), "farol-next-launch-source-"),
     );
     try {
-      const sourceApp = path.join(sourceRoot, "Farol Next Preview.app");
+      const sourceApp = path.join(sourceRoot, "Farol.app");
       await fs.mkdir(path.join(sourceApp, "Contents"), { recursive: true });
       const sourceFile = path.join(sourceApp, "Contents", "payload.txt");
       await fs.writeFile(sourceFile, "verified bytes\n");
@@ -40,7 +40,7 @@ describe("isolated owner launch snapshot", () => {
       await fs.writeFile(sourceFile, "replacement bytes\n");
 
       expect(snapshot.appPath).not.toBe(sourceApp);
-      expect(path.basename(snapshot.appPath)).toBe("Farol Next Preview.app");
+      expect(path.basename(snapshot.appPath)).toBe("Farol.app");
       expect(await fs.readFile(snapshot.artifactFile)).toEqual(artifactBytes);
       expect(
         await fs.readFile(
@@ -93,7 +93,7 @@ describe("isolated owner launch snapshot", () => {
     try {
       await expect(
         removeLaunchSnapshot({
-          appPath: path.join(unrelated, "Farol Next Preview.app"),
+          appPath: path.join(unrelated, "Farol.app"),
           artifactFile: path.join(unrelated, "artifact.json"),
           artifactSha256: "b".repeat(64),
           prefix: `farol-next-launch-${"b".repeat(12)}-`,

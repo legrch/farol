@@ -23,6 +23,7 @@ import {
   verifyNativeHelper,
 } from "./native-helper-contract.mjs";
 import { sourceSnapshot } from "./source-identity.mjs";
+import { BRAND_RESOURCES, verifyBrandAssets } from "./brand-contract.mjs";
 import {
   compilerProblems,
   dependencyDrift,
@@ -255,7 +256,13 @@ await Promise.all([
       fs.writeFile(path.join(output, resource.output), bytes),
     ),
   ),
+  ...BRAND_RESOURCES.map((resource) =>
+    readBuildInput(`resources/brand/${resource.output}`).then((bytes) =>
+      fs.writeFile(path.join(output, resource.output), bytes),
+    ),
+  ),
 ]);
+await verifyBrandAssets(output);
 await verifyGeistBuild(output);
 await verifyNativeHelper(path.join(output, NATIVE_SAFE_OPEN_HELPER.output));
 await verifyAbsentIntegrations(output);

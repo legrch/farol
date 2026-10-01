@@ -1,10 +1,11 @@
 import path from "node:path";
+import { PRODUCT_APP_NAME, packageLayout } from "./package-layout.mjs";
 
 export function candidatePaths(root) {
   const resolvedRoot = path.resolve(root);
   return {
     artifactFile: path.join(resolvedRoot, "_output/package/artifact.json"),
-    appPath: path.join(resolvedRoot, "_output/package/Farol Next Preview.app"),
+    appPath: path.join(resolvedRoot, "_output/package", PRODUCT_APP_NAME),
   };
 }
 
@@ -17,7 +18,12 @@ export function assertCanonicalArtifactPath(
   if (
     typeof claimed !== "string" ||
     !path.isAbsolute(claimed) ||
-    path.resolve(claimed) !== candidatePaths(root).appPath
+    path.resolve(claimed) !==
+      path.join(
+        path.resolve(root),
+        "_output/package",
+        packageLayout(artifact?.schema).appName,
+      )
   ) {
     throw new Error(code);
   }

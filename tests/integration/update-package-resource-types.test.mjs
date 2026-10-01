@@ -288,6 +288,7 @@ describe("extracted artifact descriptor and bounded read", () => {
           notarized: false,
         };
         const artifact = {
+          schema: 5,
           ...manifest,
           sourceDirty: false,
           updateChannel: "github-owner-beta",

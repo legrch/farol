@@ -40,11 +40,8 @@ describe("Farol Next promotion destination", () => {
       expect(() =>
         assertPromotionDestination({
           home: trusted,
-          source: "/checkout/_output/package/Farol Next Preview.app",
-          destination: path.join(
-            legacyHome,
-            "Applications/Farol Next Preview.app",
-          ),
+          source: "/checkout/_output/package/Farol.app",
+          destination: path.join(legacyHome, "Applications/Farol.app"),
         }),
       ).toThrow("PROMOTION_DESTINATION_OUTSIDE_OWNER_APPLICATIONS");
     } finally {
@@ -55,32 +52,32 @@ describe("Farol Next promotion destination", () => {
 
   it("admits only the fixed app directly below the owner's Applications", () => {
     const home = "/Users/owner";
-    const source = "/checkout/_output/package/Farol Next Preview.app";
+    const source = "/checkout/_output/package/Farol.app";
     expect(
       assertPromotionDestination({
         home,
         source,
-        destination: "/Users/owner/Applications/Farol Next Preview.app",
+        destination: "/Users/owner/Applications/Farol.app",
       }),
     ).toEqual({
-      destination: "/Users/owner/Applications/Farol Next Preview.app",
+      destination: "/Users/owner/Applications/Farol.app",
       parent: "/Users/owner/Applications",
-      receipt: "/Users/owner/Applications/Farol Next Preview.app.receipt.json",
+      receipt: "/Users/owner/Applications/Farol.app.receipt.json",
     });
   });
 
   it.each([
-    "/Users/owner/.farol/Farol Next Preview.app",
-    "/Users/owner/Applications/Legacy.app/Contents/Farol Next Preview.app",
-    "/Users/owner/Applications/nested/Farol Next Preview.app",
-    "/tmp/Farol Next Preview.app",
+    "/Users/owner/.farol/Farol.app",
+    "/Users/owner/Applications/Legacy.app/Contents/Farol.app",
+    "/Users/owner/Applications/nested/Farol.app",
+    "/tmp/Farol.app",
   ])(
     "rejects a destination outside the direct Next-only slot: %s",
     (destination) => {
       expect(() =>
         assertPromotionDestination({
           home: "/Users/owner",
-          source: "/checkout/_output/package/Farol Next Preview.app",
+          source: "/checkout/_output/package/Farol.app",
           destination,
         }),
       ).toThrow("PROMOTION_DESTINATION_OUTSIDE_OWNER_APPLICATIONS");

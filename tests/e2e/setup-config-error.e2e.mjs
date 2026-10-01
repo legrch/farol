@@ -16,7 +16,7 @@ assert.deepEqual(
   packaged ? ["--packaged"] : devOnly ? ["--dev-only"] : [],
 );
 const root = process.cwd();
-const appRoot = path.join(root, "_output/package/Farol Next Preview.app");
+const appRoot = path.join(root, "_output/package/Farol.app");
 const executable = packaged
   ? path.join(
       appRoot,

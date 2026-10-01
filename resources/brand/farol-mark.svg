@@ -1,0 +1,43 @@
+<?xml version='1.0' encoding='utf-8'?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024"><defs>
+    <clipPath id="tile-edge">
+      <rect x="100" y="100" width="824" height="824" rx="185.4" />
+    </clipPath>
+
+    
+    <linearGradient id="water" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1d2a47" />
+      <stop offset="1" stop-color="#0b1020" />
+    </linearGradient>
+
+    
+    <radialGradient id="bloom" gradientUnits="userSpaceOnUse" cx="512" cy="413.12" r="360">
+      <stop offset="0" stop-color="#ffe0ad" stop-opacity="0.5" />
+      <stop offset="0.64" stop-color="#ffcd82" stop-opacity="0.28" />
+      <stop offset="0.82" stop-color="#ffbb54" stop-opacity="0.1" />
+      <stop offset="1" stop-color="#ffbb54" stop-opacity="0" />
+    </radialGradient>
+
+    
+    <radialGradient id="bloom-small" gradientUnits="userSpaceOnUse" cx="512" cy="413.12" r="330">
+      <stop offset="0" stop-color="#ffe0ad" stop-opacity="0.55" />
+      <stop offset="0.74" stop-color="#ffcd82" stop-opacity="0.34" />
+      <stop offset="1" stop-color="#ffbb54" stop-opacity="0" />
+    </radialGradient>
+
+    
+    <g id="lamp">
+      <circle cx="9" cy="9" r="4" />
+      <path d="M13.398,1.961 A8.30,8.30 0 0 1 13.398,16.039                L12.074,13.919 A5.80,5.80 0 0 0 12.074,4.081 Z" />
+      <path d="M4.602,16.039 A8.30,8.30 0 0 1 4.602,1.961                L5.926,4.081 A5.80,5.80 0 0 0 5.926,13.919 Z" />
+    </g>
+  </defs>
+
+  
+  <g clip-path="url(#tile-edge)">
+      <rect x="100" y="100" width="824" height="824" fill="url(#water)" />
+      <circle cx="512" cy="413.12" r="360" fill="url(#bloom)" />
+      <circle cx="512" cy="413.12" r="229.71" fill="#ffbb54" />
+      <circle cx="512" cy="413.12" r="118.14" fill="#ffe0ad" />
+    </g>
+  </svg>

@@ -20,7 +20,7 @@ async function fixture() {
   const temporary = await fs.realpath(os.tmpdir());
   const root = await fs.mkdtemp(path.join(temporary, "farol-promotion-apply-"));
   roots.push(root);
-  const source = path.join(root, "source", "Farol Next Preview.app");
+  const source = path.join(root, "source", "Farol.app");
   const home = path.join(root, "home");
   const applications = path.join(home, "Applications");
   await fs.mkdir(path.join(source, "Contents"), { recursive: true });
@@ -104,24 +104,21 @@ describe("descriptor-bound promotion apply", () => {
 
     await expect(
       fs.readFile(
-        path.join(pinned, "Farol Next Preview.app", "Contents", "payload"),
+        path.join(pinned, "Farol.app", "Contents", "payload"),
         "utf8",
       ),
     ).resolves.toBe("exact\n");
     await expect(
-      fs.readFile(
-        path.join(pinned, "Farol Next Preview.app.receipt.json"),
-        "utf8",
-      ),
+      fs.readFile(path.join(pinned, "Farol.app.receipt.json"), "utf8"),
     ).resolves.toBe('{"operation":"applied"}\n');
     await expect(
-      fs.lstat(path.join(legacy, "Farol Next Preview.app")),
+      fs.lstat(path.join(legacy, "Farol.app")),
     ).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("refuses an existing destination without changing it", async () => {
     const { source, home, applications } = await fixture();
-    const destination = path.join(applications, "Farol Next Preview.app");
+    const destination = path.join(applications, "Farol.app");
     await fs.mkdir(destination);
     await fs.writeFile(path.join(destination, "sentinel"), "keep");
     await expect(
@@ -145,7 +142,7 @@ describe("descriptor-bound promotion apply", () => {
   // and that is what this proves against real bytes on disk.
   it("refuses a second placement into the destination a first placement made, leaving its bytes and receipt intact", async () => {
     const { root, source, home, applications } = await fixture();
-    const destination = path.join(applications, "Farol Next Preview.app");
+    const destination = path.join(applications, "Farol.app");
     const receipt = `${destination}.receipt.json`;
     const firstReceipt = '{"operation":"applied","generation":"A"}\n';
 
@@ -162,7 +159,7 @@ describe("descriptor-bound promotion apply", () => {
 
     // A second, different generation, correctly digested: still refused,
     // because the destination is already there.
-    const second = path.join(root, "second", "Farol Next Preview.app");
+    const second = path.join(root, "second", "Farol.app");
     await fs.mkdir(path.join(second, "Contents"), { recursive: true });
     await fs.writeFile(path.join(second, "Contents", "payload"), "second\n", {
       mode: 0o600,
@@ -186,7 +183,7 @@ describe("descriptor-bound promotion apply", () => {
 
   it("removes its destination after a post-copy digest refusal", async () => {
     const { source, home, applications } = await fixture();
-    const destination = path.join(applications, "Farol Next Preview.app");
+    const destination = path.join(applications, "Farol.app");
     const receipt = `${destination}.receipt.json`;
 
     await expect(
@@ -205,7 +202,7 @@ describe("descriptor-bound promotion apply", () => {
 
   it("removes its destination after receipt publication fails", async () => {
     const { source, home, applications } = await fixture();
-    const destination = path.join(applications, "Farol Next Preview.app");
+    const destination = path.join(applications, "Farol.app");
     const receipt = `${destination}.receipt.json`;
     const outcome = await runWithReceiptFailure({
       home,
@@ -238,7 +235,7 @@ describe("descriptor-bound promotion apply", () => {
       }),
     ).rejects.toThrow("PROMOTION_HELPER_INVALID");
     await expect(
-      fs.lstat(path.join(applications, "Farol Next Preview.app")),
+      fs.lstat(path.join(applications, "Farol.app")),
     ).rejects.toMatchObject({ code: "ENOENT" });
   });
 

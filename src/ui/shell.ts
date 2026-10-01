@@ -420,6 +420,9 @@ function applyProductIdentity(): void {
   displayProductName = bootstrap.displayName;
   displayEdition = bootstrap.displayEdition;
   document.documentElement.dataset.environment = bootstrap.environment;
+  required<HTMLImageElement>("#brand-image").src = dev
+    ? "farol-dev-mark.svg"
+    : "farol-mark.svg";
   document.title = `${displayProductName} · ${displayEdition}`;
   required("#product-brand").setAttribute(
     "aria-label",

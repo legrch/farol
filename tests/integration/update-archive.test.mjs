@@ -70,6 +70,28 @@ async function fixture(entries, run) {
 }
 
 describe("disposable release archive extraction", () => {
+  it("accepts the branded app alone and rejects mixed generations before extraction", async () => {
+    await fixture(
+      base.map((entry) => ({
+        ...entry,
+        name: entry.name.replace(app, "Farol.app"),
+      })),
+      async ({ result, stage }) => {
+        expect(result.status, result.stderr).toBe(0);
+        expect(JSON.parse(result.stdout).appPath).toBe(
+          path.join(await fs.realpath(stage), "Farol.app"),
+        );
+      },
+    );
+    await fixture(
+      [...base, { name: "Farol.app/Contents/Info.plist", data: "other" }],
+      async ({ result, stage }) => {
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain("ARCHIVE_APP_SET_INVALID");
+        expect(await fs.readdir(stage)).toEqual([]);
+      },
+    );
+  });
   it("allows a contained vendor-style symlink and extracts plain files", async () => {
     await fixture(
       [

@@ -50,7 +50,7 @@ async function generationFixture(name, contents) {
     path.join(await realTemporaryRoot(), `farol-next-flow-${name}-`),
   );
   roots.push(app);
-  const bundle = path.join(app, "Farol Next Preview.app");
+  const bundle = path.join(app, "Farol.app");
   await fs.mkdir(path.join(bundle, "Contents"), { recursive: true });
   await fs.writeFile(path.join(bundle, "Contents", "payload"), contents, {
     mode: 0o600,
@@ -85,7 +85,7 @@ async function promote(homeRoot, source, generation) {
     const { destination, receipt } = assertPromotionDestination({
       home: homeRoot,
       source,
-      destination: path.join(homeRoot, "Applications/Farol Next Preview.app"),
+      destination: path.join(homeRoot, "Applications/Farol.app"),
     });
     const artifactSha256 = await treeDigest(source);
     const receiptText = `${JSON.stringify({

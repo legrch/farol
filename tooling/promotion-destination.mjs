@@ -1,7 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { PRODUCT_APP_NAME } from "./package-layout.mjs";
 
-const APP_NAME = "Farol Next Preview.app";
+const APP_NAME = PRODUCT_APP_NAME;
 
 export function trustedOwnerHome(userInfo, effectiveUid) {
   if (

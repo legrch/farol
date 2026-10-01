@@ -225,6 +225,8 @@ html[data-full-screen="true"] .sidebar-toggle {
 .brand-mark {
   width: 31px;
   height: 31px;
+  background: none;
+  box-shadow: none;
 }
 
 .brand-copy {

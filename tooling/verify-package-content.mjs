@@ -4,6 +4,7 @@ import path from "node:path";
 import { TREE_DIGEST_VERSION, treeDigest } from "./artifact-digest.mjs";
 import {
   BUILD_ENTRIES,
+  LEGACY_BUILD_ENTRIES,
   verifyBuildEntries,
   verifyInputManifest,
 } from "./build-contract.mjs";
@@ -14,6 +15,8 @@ import {
   verifyNativeHelper,
 } from "./native-helper-contract.mjs";
 import { assertResourceManifest } from "./resource-contract.mjs";
+import { packageLayout } from "./package-layout.mjs";
+import { verifyBrandAssets } from "./brand-contract.mjs";
 import {
   ELECTRON_RUNTIME,
   assertEmbeddedRuntime,
@@ -72,7 +75,8 @@ export async function verifyPackageContent({
   // Schema 4 manifests carry a version 1 tree digest, whose framing is
   // ambiguous.  Recognize them explicitly instead of reporting a mismatch.
   requireValue(artifact.schema !== 4, "PACKAGE_TREE_DIGEST_LEGACY");
-  requireValue(artifact.schema === 5, "PACKAGE_MANIFEST_SCHEMA_INVALID");
+  const layout = packageLayout(artifact.schema);
+  const entries = layout.branded ? BUILD_ENTRIES : LEGACY_BUILD_ENTRIES;
   requireValue(
     artifact.treeDigestVersion === TREE_DIGEST_VERSION,
     "PACKAGE_TREE_DIGEST_VERSION_INVALID",
@@ -133,7 +137,7 @@ export async function verifyPackageContent({
   );
   assertRuntimeClosure(artifact.runtime, ELECTRON_RUNTIME, runtimeRelativePath);
   requireValue(
-    path.basename(appPath) === "Farol Next Preview.app",
+    path.basename(appPath) === layout.appName,
     "PACKAGE_PATH_INVALID",
   );
   const actualDigest = await treeDigest(appPath);
@@ -159,13 +163,14 @@ export async function verifyPackageContent({
     "PACKAGE_FRAMEWORK_SET_INVALID",
   );
   requireValue(
-    (await fs.readdir(path.join(contents, "Resources"))).join("\0") === "app",
+    (await fs.readdir(path.join(contents, "Resources"))).sort().join("\0") ===
+      (layout.branded ? ["app", "farol.icns"] : ["app"]).join("\0"),
     "PACKAGE_OUTER_RESOURCE_SET_INVALID",
   );
 
   const resources = path.join(appPath, "Contents/Resources/app");
   const expectedResourceEntries = [
-    ...BUILD_ENTRIES,
+    ...entries,
     "THIRD_PARTY_NOTICES.txt",
     "build-manifest.json",
     "package.json",
@@ -214,11 +219,20 @@ export async function verifyPackageContent({
   );
   requireValue(
     Array.isArray(embedded.entries) &&
-      embedded.entries.length === BUILD_ENTRIES.length &&
-      embedded.entries.every((entry, index) => entry === BUILD_ENTRIES[index]),
+      embedded.entries.length === entries.length &&
+      embedded.entries.every((entry, index) => entry === entries[index]),
     "PACKAGE_EMBEDDED_ENTRY_SET_INVALID",
   );
-  await verifyBuildEntries(resources, embedded.entrySha256);
+  await verifyBuildEntries(resources, embedded.entrySha256, entries);
+  if (layout.branded) {
+    await verifyBrandAssets(resources);
+    requireValue(
+      (await fs.readFile(path.join(contents, "Resources/farol.icns"))).equals(
+        await fs.readFile(path.join(resources, "farol.icns")),
+      ),
+      "PACKAGE_OUTER_ICON_MISMATCH",
+    );
+  }
   const buildIdentity = assertBuildIdentity(
     JSON.parse(
       await fs.readFile(path.join(resources, "build-identity.json"), "utf8"),
@@ -252,7 +266,7 @@ export async function verifyPackageContent({
   );
   requireValue(
     embeddedPackage.name === "farol-next-preview-app" &&
-      embeddedPackage.productName === artifact.product &&
+      embeddedPackage.productName === layout.displayName &&
       embeddedPackage.version === artifact.version &&
       embeddedPackage.main === "main.cjs",
     "PACKAGE_EMBEDDED_APP_IDENTITY_INVALID",
@@ -275,6 +289,16 @@ export async function verifyPackageContent({
   );
 
   const mainPlist = path.join(appPath, "Contents/Info.plist");
+  requireValue(
+    plistValue(mainPlist, "CFBundleDisplayName") === layout.displayName &&
+      plistValue(mainPlist, "CFBundleName") === layout.displayName,
+    "PACKAGE_PLIST_DISPLAY_NAME_MISMATCH",
+  );
+  if (layout.branded)
+    requireValue(
+      plistValue(mainPlist, "CFBundleIconFile") === "farol.icns",
+      "PACKAGE_PLIST_ICON_MISMATCH",
+    );
   requireValue(
     plistValue(mainPlist, "CFBundleIdentifier") === artifact.bundleId,
     "PACKAGE_PLIST_BUNDLE_MISMATCH",

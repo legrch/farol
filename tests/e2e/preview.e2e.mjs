@@ -137,10 +137,7 @@ const evidenceLaneRoot = path.join(
           : "_output/evidence/e2e",
 );
 const metadataPath = path.join(root, "_output/package/artifact.json");
-const canonicalPackagePath = path.join(
-  root,
-  "_output/package/Farol Next Preview.app",
-);
+const canonicalPackagePath = path.join(root, "_output/package/Farol.app");
 const vendorElectron = path.join(
   root,
   "node_modules/electron/dist/Electron.app/Contents/MacOS/Electron",

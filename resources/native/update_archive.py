@@ -19,6 +19,7 @@ MAX_CENTRAL_DIRECTORY = 16 * 1024 * 1024
 MAX_PATH_PARTS = 128
 MAX_LINK = 4096
 CHUNK = 1024 * 1024
+APP_NAMES = ("Farol Next Preview.app", "Farol.app")
 
 
 class Refusal(Exception):
@@ -36,7 +37,7 @@ def member_parts(name):
     body = name[:-1] if name.endswith("/") else name
     parts = body.split("/")
     check(all(part not in ("", ".", "..") for part in parts), "ARCHIVE_PATH_INVALID")
-    check(parts[0] in ("Farol Next Preview.app", "artifact.json"), "ARCHIVE_LAYOUT_INVALID")
+    check(parts[0] in (*APP_NAMES, "artifact.json"), "ARCHIVE_LAYOUT_INVALID")
     check(parts[0] != "artifact.json" or len(parts) == 1, "ARCHIVE_LAYOUT_INVALID")
     return parts
 
@@ -135,7 +136,7 @@ def preflight(archive):
             extra = extra[4 + length:]
         parts = member_parts(info.filename)
         check(len(parts) <= MAX_PATH_PARTS, "ARCHIVE_PATH_DEPTH_LIMIT")
-        if parts[0] == "Farol Next Preview.app":
+        if parts[0] in APP_NAMES:
             for index in range(2, len(parts) + 1):
                 tree_paths.add(normalized(parts[:index]))
                 check(len(tree_paths) <= MAX_ENTRIES, "ARCHIVE_ENTRY_COUNT_INVALID")
@@ -154,7 +155,8 @@ def preflight(archive):
         for i in range(1, len(parts)):
             check(seen.get(normalized(parts[:i])) in (None, "directory"), "ARCHIVE_PARENT_TYPE_INVALID")
     check(seen.get(normalized(["artifact.json"])) == "file", "ARCHIVE_ARTIFACT_MISSING")
-    check(any(parts[0] == "Farol Next Preview.app" and len(parts) > 1 for _, parts, _, _ in entries), "ARCHIVE_APP_MISSING")
+    apps = {parts[0] for _, parts, _, _ in entries if parts[0] in APP_NAMES and len(parts) > 1}
+    check(len(apps) == 1, "ARCHIVE_APP_SET_INVALID")
     return entries
 
 
@@ -267,7 +269,8 @@ def main():
             entries = preflight(archive)
             extract(archive, root, entries)
         unchanged_archive(archive_path, fd, before)
-        print(json.dumps({"appPath": str(root / "Farol Next Preview.app"), "artifactPath": str(root / "artifact.json")}))
+        app_name = next(parts[0] for _, parts, _, _ in entries if parts[0] in APP_NAMES and len(parts) > 1)
+        print(json.dumps({"appPath": str(root / app_name), "artifactPath": str(root / "artifact.json")}))
     finally:
         os.close(fd)
 

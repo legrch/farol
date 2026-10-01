@@ -30,7 +30,7 @@ assert.deepEqual(process.argv.slice(2), [
 assert.ok(!resumeRefusal || (packaged && behavior));
 assert.ok(!(behavior && devOnly));
 const root = process.cwd();
-const appRoot = path.join(root, "_output/package/Farol Next Preview.app");
+const appRoot = path.join(root, "_output/package/Farol.app");
 const executable = packaged
   ? path.join(
       appRoot,

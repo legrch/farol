@@ -207,7 +207,7 @@ export function desktopIdentity(
     displayName: dev ? DEV_DISPLAY_NAME : "Farol",
     displayEdition: dev ? "Development" : "Developer Preview",
     applicationId: dev ? "local.farol.dev" : "local.farol.next.preview",
-    applicationName: dev ? DEV_DISPLAY_NAME : "Farol Next Preview",
+    applicationName: dev ? DEV_DISPLAY_NAME : "Farol",
     userData,
     sessionData: userData,
     runtimePartition: dev

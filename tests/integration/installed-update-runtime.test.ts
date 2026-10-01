@@ -152,9 +152,9 @@ beforeEach(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), "farol-update-composition-"));
   root = await fs.realpath(root);
   vi.spyOn(os, "userInfo").mockReturnValue({ ...os.userInfo(), homedir: root });
-  slot = path.join(root, "Applications/Farol Next Preview.app");
+  slot = path.join(root, "Applications/Farol.app");
   userData = path.join(root, "Library/Application Support/Farol Next Preview");
-  staging = path.join(root, "verified-stage/Farol Next Preview.app");
+  staging = path.join(root, "verified-stage/Farol.app");
   ready = path.join(userData, "installed-updates/ready.json");
   await fs.mkdir(slot, { recursive: true });
   await fs.mkdir(userData, { recursive: true, mode: 0o700 });
@@ -170,7 +170,7 @@ beforeEach(async () => {
       sourceTreeDigest: build.sourceTreeDigest,
       sourceDirty: false,
       artifactSha256: source.digest,
-      source: path.join(root, "accepted-package/Farol Next Preview.app"),
+      source: path.join(root, "accepted-package/Farol.app"),
       destination: slot,
       receipt: slot + ".receipt.json",
       overwrite: false,

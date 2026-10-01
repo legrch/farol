@@ -1,0 +1,218 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Farol's mark. One drawing, three artboards, and every raster this repository
+  ships comes out of it through ./scripts/make-icons.py.
+
+  A farol is a lighthouse, and this does not draw one. It draws the light: a
+  warm lamp with a lighter core, blooming on deep navy water. That is the mark
+  already burning inside the application window - `.brand-mark` in
+  app/renderer/styles.css, the same shape again as `.placeholder-mark` behind a
+  parked page - and it is the source of truth here. The application icon is
+  that CSS measured out in user space, so the icon on the Dock and the mark in
+  the sidebar are one drawing rather than two that resemble each other.
+
+  The measuring: `.brand-mark` paints
+
+    radial-gradient(circle at 50% 38%,
+      amber-300 0 18%, amber-500 19% 34%, transparent 35%)
+
+  and CSS sizes an unqualified radial gradient to the farthest corner, which
+  from 50%/38% of an 824 square is 656.31 away. So the lamp ends at 35% of
+  that - 229.71 - and its lighter core at 18%, 118.14. Those two radii are the
+  circles below. They are flat fills rather than one gradient with the stops
+  the stylesheet uses, because `sips` dithers a gradient stop and the disc came
+  back with a visibly ragged rim; the stylesheet's own step is a third of a
+  pixel wide at the 22 points it is seen at, so nothing is lost by cutting it
+  clean.
+
+  Artboards are nested <svg> elements. Each declares its own grid in its
+  viewBox, so the status item is drawn on the 18-point grid it is actually used
+  at rather than as a shrunken copy of a 1024-point icon. The sheet lays them
+  out side by side so the whole family opens in one window; the build extracts
+  them one at a time by id and never renders the sheet itself.
+
+    artboard-app          1024 grid, the Dock, Finder and the app switcher
+    artboard-app-small    1024 grid, the same lamp with the bloom pulled in
+                          tight, because a wide one turns to a flat wash there
+    artboard-menubar      18 x 18 grid, black on nothing, the status-item
+                          template
+    artboard-menubar-fault    the same 18 x 18 lamp in red
+    artboard-menubar-unknown  the same 18 x 18 lamp in amber
+
+  Two rules this file has to keep, because the rasteriser is macOS's own `sips`
+  and it is quiet about both:
+
+  - No SVG filters. `feDropShadow` and friends are ignored silently, so a blur
+    added here would simply not exist in the .icns. The one soft edge below,
+    the halo, is a gradient instead, which does work.
+  - Nothing may rely on being clipped by the canvas edge. The bloom is clipped
+    deliberately, with a clipPath, which does work.
+
+  Colours are the application's own tokens (app/renderer/tokens.css): navy-700
+  and navy-900 for the water, amber-500 for the light and amber-300 for its
+  core.
+
+  WHAT THE MENU BAR GETS, AND WHY IT IS NOT THIS.
+
+  A status item is a template image: alpha only, no colour, painted black by
+  macOS on the light bar and white on the dark one. A glowing amber disc has no
+  monochrome form. Flattened it is a filled circle, and a filled circle in a
+  menu bar is a status dot belonging to some other application.
+
+  So the bar gets the lamp and the one thing about it that can survive with a
+  single alpha channel: the light leaves sideways. The core stays a disc. The
+  bloom, which cannot be a gradient here, becomes two arcs of it - left and
+  right, the way a lighthouse throws light and not the way a lamp on a table
+  does. The gaps at the top and bottom are the whole design: an unbroken ring
+  around a dot is a bullseye, and a bullseye reads as a record button.
+
+  Nine other shapes were drawn and looked at first, at 18 and 36 pixels, on
+  both bars, beside the templates ChatGPT, Claude and Notion actually ship. A
+  plain disc was a status dot. A plain ring was an empty circle. Concentric
+  bands were a target. A lamp with a cone was a megaphone, a lamp with two
+  wedges was a bow tie, and every Fresnel band under about 1.5 points was grey
+  mud at 18 pixels - which is the size rule this drawing obeys everywhere: no
+  feature thinner than 1.5 points, because @1x has no room for one.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" width="5520" height="1024" viewBox="0 0 5520 1024">
+  <defs>
+    <clipPath id="tile-edge">
+      <rect x="100" y="100" width="824" height="824" rx="185.4"/>
+    </clipPath>
+
+    <!-- The window's own `linear-gradient(180deg, navy-700, navy-900)`. An XML
+         comment cannot hold two hyphens in a row, so the tokens below are named
+         without the `var()` the stylesheet wraps them in. -->
+    <linearGradient id="water" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1d2a47"/>
+      <stop offset="1" stop-color="#0b1020"/>
+    </linearGradient>
+
+    <!-- The halo. In the window it is a box-shadow, which spreads outward from
+         the tile; an icon has nothing outside the tile to spread into, so it is
+         drawn inward instead, as light falling off with distance from the lamp.
+         Everything inside the lamp's own 229.71 is covered by the lamp itself,
+         so only the outer half of this is ever seen. -->
+    <radialGradient id="bloom" gradientUnits="userSpaceOnUse" cx="512" cy="413.12" r="360">
+      <stop offset="0" stop-color="#ffe0ad" stop-opacity="0.5"/>
+      <stop offset="0.64" stop-color="#ffcd82" stop-opacity="0.28"/>
+      <stop offset="0.82" stop-color="#ffbb54" stop-opacity="0.1"/>
+      <stop offset="1" stop-color="#ffbb54" stop-opacity="0"/>
+    </radialGradient>
+
+    <!-- The same halo pulled in tight, for 16 and 32 points. -->
+    <radialGradient id="bloom-small" gradientUnits="userSpaceOnUse" cx="512" cy="413.12" r="330">
+      <stop offset="0" stop-color="#ffe0ad" stop-opacity="0.55"/>
+      <stop offset="0.74" stop-color="#ffcd82" stop-opacity="0.34"/>
+      <stop offset="1" stop-color="#ffbb54" stop-opacity="0"/>
+    </radialGradient>
+
+    <!-- The status item, drawn once. Three artboards below <use> it and change
+         nothing but the fill, because a fault is the same lamp in a different
+         condition and not a second logo. Drawn on the 18-point grid it is used
+         at: the core is 8 points across and each arc 2.5 thick, so nothing
+         here is thinner than the 1.5 points a non-retina bar can hold.
+
+         No fill of its own. A <use> passes its own down, which `sips` honours,
+         and a shape that carried one here would ignore the artboard asking for
+         red. -->
+    <g id="lamp">
+      <circle cx="9" cy="9" r="4"/>
+      <path d="M13.398,1.961 A8.30,8.30 0 0 1 13.398,16.039
+               L12.074,13.919 A5.80,5.80 0 0 0 12.074,4.081 Z"/>
+      <path d="M4.602,16.039 A8.30,8.30 0 0 1 4.602,1.961
+               L5.926,4.081 A5.80,5.80 0 0 0 5.926,13.919 Z"/>
+    </g>
+  </defs>
+
+  <!-- The Dock icon. The rounded square is 824 on a 1024 canvas, which is the
+       macOS grid: an icon drawn edge to edge stands taller than every neighbour
+       on the shelf. The lamp sits at 38% of its height, not at half, because
+       that is where the window's own mark puts it and because a light belongs
+       above the middle of the thing it stands on. -->
+  <svg id="artboard-app" x="0" y="0" width="1024" height="1024" viewBox="0 0 1024 1024">
+    <g clip-path="url(#tile-edge)">
+      <rect x="100" y="100" width="824" height="824" fill="url(#water)"/>
+      <circle cx="512" cy="413.12" r="360" fill="url(#bloom)"/>
+      <circle cx="512" cy="413.12" r="229.71" fill="#ffbb54"/>
+      <circle cx="512" cy="413.12" r="118.14" fill="#ffe0ad"/>
+    </g>
+  </svg>
+
+  <!-- 16 and 32 points. Nothing is removed, because there is nothing to
+       remove - which is what the abstraction bought over the tower that was
+       here before, where the doorway and the beams had to go. What changes is
+       the halo: at 16 points a bloom 360 units wide is a third of the tile
+       lifted by a few percent of amber, which reads as a milky tile rather than
+       as light. Pulled in to 330 and started brighter, it stays a halo. The
+       lamp itself is 7% larger, keeping the core at the same 51.4% of it, so
+       that two tones still survive in the nine pixels a 16-point icon gives
+       them. -->
+  <svg id="artboard-app-small" x="1124" y="0" width="1024" height="1024" viewBox="0 0 1024 1024">
+    <g clip-path="url(#tile-edge)">
+      <rect x="100" y="100" width="824" height="824" fill="url(#water)"/>
+      <circle cx="512" cy="413.12" r="330" fill="url(#bloom-small)"/>
+      <circle cx="512" cy="413.12" r="245" fill="#ffbb54"/>
+      <circle cx="512" cy="413.12" r="126" fill="#ffe0ad"/>
+    </g>
+  </svg>
+
+  <!-- The status item: the lamp, and two arcs of the light it throws.
+
+       Black on nothing. macOS tints a template image itself for the light bar,
+       the dark bar and the pressed state, so a colour here would only be thrown
+       away, and the navy tile with it - the bar is the tile now.
+
+       The canvas is square, unlike the tower this replaced, because the lamp is
+       round: the ink runs 16.6 points wide inside an 18-point box, which is the
+       margin ChatGPT.app leaves around its own status item, and no wider a
+       canvas than the drawing needs - a status item is exactly as wide as the
+       image it is handed, and dead air either side would push its neighbours
+       away for nothing. -->
+  <svg id="artboard-menubar" x="2248" y="0" width="1024" height="1024" viewBox="0 0 18 18">
+    <use href="#lamp" fill="#000000"/>
+  </svg>
+
+  <!-- THE TWO THE BAR GOES TO WHEN SOMETHING IS WRONG.
+
+       A template image is alpha and nothing else, so red cannot be a variant of
+       the one above: macOS would throw the colour away and paint the same black
+       lamp. These are ordinary images, `setTemplateImage(false)` in
+       app/electron/brand.cjs, and the price of that is that macOS no longer
+       adapts them - one ink has to read on the light bar AND on the dark one,
+       and that is this file's problem to solve, not the system's.
+
+       So the ink is chosen by contrast rather than by taste. Measured against
+       the two bars, #f6f6f6 and #1e1e1e:
+
+         #e5342b  fault    4.00 on the light bar, 3.86 on the dark
+         #b87400  unknown  3.51 on the light bar, 4.40 on the dark
+
+       Both clear 3:1, which is what a graphical object needs to be seen, on
+       both, worst case - the light bar is translucent over the wallpaper and is
+       never brighter than #f6f6f6, and the dark bar never lighter than #1e1e1e,
+       so those two numbers are floors.
+
+       The amber is NOT amber-500 (#ffbb54), the token the lamp burns in
+       everywhere else. That colour is 1.56 against the light bar: on a white
+       menu bar it is close to invisible, which is the one thing a warning may
+       not be. #b87400 is the same hue - 37 degrees against amber-500's 36 -
+       taken down to a luminance a white bar can hold.
+
+       Colour is the whole difference; the drawing does not change. That is
+       deliberate. The owner asked for the lamp without an alarm badge when
+       things are fine and a small indicator when they are not, and at 16 points
+       the mark IS small - a second glyph stuck to the corner of this one would
+       be three pixels of meaning. What it costs is that red and amber are
+       nearer each other for a colour-blind eye than either is to the plain
+       mark. Both still differ from the plain mark by being coloured at all,
+       which is the question the bar is there to answer, and which of the two it
+       is is the first line of the menu. -->
+  <svg id="artboard-menubar-fault" x="3372" y="0" width="1024" height="1024" viewBox="0 0 18 18">
+    <use href="#lamp" fill="#e5342b"/>
+  </svg>
+
+  <svg id="artboard-menubar-unknown" x="4496" y="0" width="1024" height="1024" viewBox="0 0 18 18">
+    <use href="#lamp" fill="#b87400"/>
+  </svg>
+</svg>

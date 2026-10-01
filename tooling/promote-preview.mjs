@@ -232,9 +232,7 @@ async function promote(arguments_, dependencies, stdout) {
   const { destination, receipt } = assertPromotionDestination({
     home,
     source,
-    destination:
-      destinationOption ??
-      path.join(home, "Applications/Farol Next Preview.app"),
+    destination: destinationOption ?? path.join(home, "Applications/Farol.app"),
   });
 
   // F3-4: a promotion and the app's own work admission share one lease, so

@@ -1,8 +1,9 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { PRODUCT_APP_NAME } from "./package-layout.mjs";
 
-const APP_NAME = "Farol Next Preview.app";
+const APP_NAME = PRODUCT_APP_NAME;
 const SAFE_PATH = "/usr/bin:/bin:/usr/sbin:/sbin";
 
 function textValue(value, fallback) {

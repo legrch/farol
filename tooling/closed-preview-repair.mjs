@@ -270,7 +270,7 @@ export async function runClosedRepairCli(args, dependencies = {}) {
       dependencies.sourceIdentity ?? (() => sourceIdentity(root, "."));
     const candidateRoot = dependencies.candidateRoot ?? root;
     if (options.action === "apply") {
-      const { artifactFile, appPath } = candidatePaths(candidateRoot);
+      const { artifactFile } = candidatePaths(candidateRoot);
       artifact = JSON.parse(
         (await safeBytes(artifactFile, 65536)).toString("utf8"),
       );
@@ -284,7 +284,9 @@ export async function runClosedRepairCli(args, dependencies = {}) {
         artifact,
         "CLOSED_REPAIR_SOURCE_NOT_EXACT",
       );
-      request.candidate = appPath;
+      // The historical repair can consume either known package layout. The
+      // manifest path is safe only after its schema-specific canonical check.
+      request.candidate = artifact.artifactPath;
       request.target = {
         digest: artifact.artifactSha256,
         version: artifact.version,

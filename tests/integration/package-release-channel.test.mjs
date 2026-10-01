@@ -17,6 +17,7 @@ async function runVerifier(document, expectedChannel) {
     for (const name of [
       "verify-package.mjs",
       "candidate-contract.mjs",
+      "package-layout.mjs",
       "release-identity.mjs",
     ])
       await fs.copyFile(
@@ -31,7 +32,8 @@ async function runVerifier(document, expectedChannel) {
     await fs.writeFile(
       path.join(root, "_output/package/artifact.json"),
       JSON.stringify({
-        artifactPath: path.join(root, "_output/package/Farol Next Preview.app"),
+        schema: 6,
+        artifactPath: path.join(root, "_output/package/Farol.app"),
         sourceDirty: false,
       }),
     );

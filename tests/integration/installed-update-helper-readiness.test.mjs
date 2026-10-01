@@ -64,7 +64,7 @@ async function fixture() {
   );
   roots.push(root);
   const home = path.join(root, "home");
-  const appPath = path.join(home, "Applications/Farol Next Preview.app");
+  const appPath = path.join(home, "Applications/Farol.app");
   const userData = path.join(
     home,
     "Library/Application Support/Farol Next Preview",

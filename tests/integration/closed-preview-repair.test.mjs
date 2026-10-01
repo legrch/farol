@@ -178,6 +178,7 @@ async function fixture({ updates = true } = {}) {
   const candidate = path.join(candidateRoot, "_output/package", appName);
   const target = await bundle(candidate, 3);
   const artifact = {
+    schema: 5,
     product: "Farol Next Preview",
     version: target.identity.version,
     buildId: target.identity.buildId,
@@ -982,6 +983,7 @@ finally:
       const installed = (await f.cli()).receipt;
       const next = await bundle(f.candidate, 4);
       await write(path.join(f.candidateRoot, "_output/package/artifact.json"), {
+        schema: 5,
         artifactPath: f.candidate,
         version: next.identity.version,
         buildId: next.identity.buildId,
@@ -1146,6 +1148,7 @@ finally:
       ),
     );
     await write(path.join(f.candidateRoot, "_output/package/artifact.json"), {
+      schema: 5,
       artifactPath: f.candidate,
       version: target.version,
       buildId: target.buildId,

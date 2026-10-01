@@ -20,6 +20,7 @@ import {
   dialog,
   ipcMain,
   Menu,
+  nativeImage,
   screen,
   session,
   shell,
@@ -8960,6 +8961,18 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
   startupStage("before-ready");
   await app.whenReady();
   startupStage("ready");
+  if (process.platform === "darwin") {
+    const icon = nativeImage.createFromPath(
+      path.join(
+        directory,
+        activeDesktopIdentity.environment === "dev"
+          ? "farol-dev-mark.png"
+          : "farol-mark.png",
+      ),
+    );
+    if (icon.isEmpty()) throw new Error("DESKTOP_BRAND_IMAGE_INVALID");
+    app.dock?.setIcon(icon);
+  }
   // N03/D2: the run marker is the first thing this generation writes and the
   // last thing it removes — only after a quit whose drain was confirmed (see
   // the quit drain's `record` below and `run-marker.ts`). A promotion that

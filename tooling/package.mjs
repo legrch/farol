@@ -13,11 +13,12 @@ import {
   runtimeClosure,
 } from "./runtime-contract.mjs";
 import { sourceIdentity } from "./source-identity.mjs";
+import { PACKAGE_SCHEMA, PRODUCT_APP_NAME } from "./package-layout.mjs";
 
 const root = process.cwd();
 const builtRoot = path.join(root, "_output/build/app");
 const packageRoot = path.join(root, "_output/package");
-const appPath = path.join(packageRoot, "Farol Next Preview.app");
+const appPath = path.join(packageRoot, PRODUCT_APP_NAME);
 const electronApp = path.join(root, "node_modules/electron/dist/Electron.app");
 const runtimeRelativePath = "Contents/Frameworks/Electron Runtime.app";
 const runtimeApp = path.join(appPath, runtimeRelativePath);
@@ -52,7 +53,9 @@ const infoPlist = `<?xml version="1.0" encoding="UTF-8"?>
   <key>CFBundleDevelopmentRegion</key>
   <string>en</string>
   <key>CFBundleDisplayName</key>
-  <string>Farol Next Preview</string>
+  <string>Farol</string>
+  <key>CFBundleIconFile</key>
+  <string>farol.icns</string>
   <key>CFBundleExecutable</key>
   <string>Farol Next Preview</string>
   <key>CFBundleIdentifier</key>
@@ -60,7 +63,7 @@ const infoPlist = `<?xml version="1.0" encoding="UTF-8"?>
   <key>CFBundleInfoDictionaryVersion</key>
   <string>6.0</string>
   <key>CFBundleName</key>
-  <string>Farol Next Preview</string>
+  <string>Farol</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
@@ -155,6 +158,10 @@ await fs.chmod(launcherPath, 0o755);
 
 const resources = path.join(appPath, "Contents/Resources");
 const appResources = path.join(resources, "app");
+await fs.copyFile(
+  path.join(builtRoot, "farol.icns"),
+  path.join(resources, "farol.icns"),
+);
 for (const entry of BUILD_ENTRIES) {
   await fs.copyFile(
     path.join(builtRoot, entry),
@@ -172,7 +179,7 @@ await fs.writeFile(
       name: "farol-next-preview-app",
       version: previewVersion,
       private: true,
-      productName: "Farol Next Preview",
+      productName: "Farol",
       type: "module",
       main: "main.cjs",
     },
@@ -213,7 +220,7 @@ if ((await treeDigest(runtimeApp)) !== electronSourceSha256) {
 execFileSync("/usr/bin/plutil", ["-lint", mainPlist], { stdio: "inherit" });
 
 const artifact = {
-  schema: 5,
+  schema: PACKAGE_SCHEMA,
   treeDigestVersion: TREE_DIGEST_VERSION,
   product: "Farol Next Preview",
   version: previewVersion,

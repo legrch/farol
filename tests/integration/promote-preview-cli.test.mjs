@@ -102,7 +102,7 @@ async function fixture() {
   await fs.chmod(home, 0o700);
   const candidateRoot = path.join(root, "candidate");
   const packageRoot = path.join(candidateRoot, "_output", "package");
-  const app = path.join(packageRoot, "Farol Next Preview.app");
+  const app = path.join(packageRoot, "Farol.app");
   await fs.mkdir(path.join(app, "Contents"), { recursive: true });
   await fs.writeFile(
     path.join(app, "Contents", "payload"),
@@ -110,7 +110,7 @@ async function fixture() {
     { mode: 0o600 },
   );
   const artifact = {
-    schema: 5,
+    schema: 6,
     product: "Farol Next Preview",
     version: "0.1.0-preview.0",
     bundleId: "local.farol.next.preview",
@@ -145,7 +145,7 @@ async function fixture() {
     }),
     { mode: 0o600 },
   );
-  const destination = path.join(home, "Applications", "Farol Next Preview.app");
+  const destination = path.join(home, "Applications", "Farol.app");
   return {
     root,
     home,

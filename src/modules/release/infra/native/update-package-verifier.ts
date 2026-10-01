@@ -12,7 +12,7 @@ import type {
 const execFileAsync = promisify(execFile);
 // Update only after reviewing update_archive.py and its focused tests.
 export const UPDATE_ARCHIVE_HELPER_SHA256 =
-  "e668278fdf8e1a13f2fd21e1d7662c6017ac56fa98f58387f14d5aeb29e58734";
+  "73c6f98114fb9033e533cadccb2b630ae336fc682a056a0f96553707c8c20c7b";
 type MeasuredIdentity = PackageIdentity & Readonly<{ buildVersion: string }>;
 export type VerifiedStagedPackage = Readonly<{
   identity: MeasuredIdentity;
@@ -256,15 +256,26 @@ export function createUpdatePackageVerifier(
           appPath?: unknown;
           artifactPath?: unknown;
         };
-        const stagedAppPath = path.join(stagingRoot, "Farol Next Preview.app");
+        const artifact = await readArtifact(
+          path.join(stagingRoot, "artifact.json"),
+        );
+        const schema =
+          artifact !== null &&
+          typeof artifact === "object" &&
+          !Array.isArray(artifact)
+            ? (artifact as Record<string, unknown>)["schema"]
+            : null;
+        if (schema !== 5 && schema !== 6)
+          throw new PackageVerificationError("package_mismatch");
+        const stagedAppPath = path.join(
+          stagingRoot,
+          schema === 6 ? "Farol.app" : "Farol Next Preview.app",
+        );
         if (
           extracted.appPath !== stagedAppPath ||
           extracted.artifactPath !== path.join(stagingRoot, "artifact.json")
         )
           throw new PackageVerificationError("archive_refused");
-        const artifact = await readArtifact(
-          path.join(stagingRoot, "artifact.json"),
-        );
         if (!claimsMatch(artifact, expected))
           throw new PackageVerificationError("package_mismatch");
         let identity: MeasuredIdentity;

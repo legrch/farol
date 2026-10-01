@@ -27,10 +27,10 @@ describe("Farol Dev naming contract", () => {
     );
   });
 
-  it("does not rename or reuse the packaged Preview identity", () => {
+  it("keeps production's persistent identity separate from Dev", () => {
     expect(desktopIdentity("preview", appData)).toMatchObject({
       displayName: "Farol",
-      applicationName: "Farol Next Preview",
+      applicationName: "Farol",
       applicationId: "local.farol.next.preview",
       userData: path.join(appData, "Farol Next Preview"),
       runtimeIdentity: "farol-next-preview-runtime",

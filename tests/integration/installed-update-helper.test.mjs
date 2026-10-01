@@ -46,7 +46,7 @@ async function fixture() {
   roots.push(root);
   const home = path.join(root, "home");
   const applications = path.join(home, "Applications");
-  const app = path.join(applications, "Farol Next Preview.app");
+  const app = path.join(applications, "Farol.app");
   const operationId = "a".repeat(32);
   const op = path.join(
     home,
@@ -67,7 +67,13 @@ async function fixture() {
   children.push(child);
   const started = await new Promise((resolve, reject) => {
     const poll = async () => {
-      const ps = spawn("/bin/ps", ["-p", String(child.pid), "-o", "lstart="]);
+      let ps;
+      try {
+        ps = spawn("/bin/ps", ["-p", String(child.pid), "-o", "lstart="]);
+      } catch (error) {
+        reject(error);
+        return;
+      }
       let output = "";
       ps.stdout.on("data", (data) => {
         output += data;
@@ -280,7 +286,7 @@ original = helper.write_record
 def corrupt_after_move(parent, name, record):
     original(parent, name, record)
     if name == "journal.json" and record["phase"] == "new_installed":
-        with open(sys.argv[2] + "/Applications/Farol Next Preview.app/Contents/payload", "wb") as file:
+        with open(sys.argv[2] + "/Applications/Farol.app/Contents/payload", "wb") as file:
             file.write(b"corrupt")
 helper.write_record = corrupt_after_move
 exchange = helper.exchange_checked
@@ -600,7 +606,7 @@ describe("installed update helper", () => {
     expect((await invoke(f.request)).exitCode).not.toBe(0);
     expect(
       await fs.readFile(
-        path.join(pinned, "Farol Next Preview.app/Contents/payload"),
+        path.join(pinned, "Farol.app/Contents/payload"),
         "utf8",
       ),
     ).toBe("N");
@@ -724,7 +730,7 @@ describe("installed update helper", () => {
     expect((await pending).result.error).toBe("path_type");
     expect(
       await fs.readFile(
-        path.join(pinned, "Farol Next Preview.app/Contents/payload"),
+        path.join(pinned, "Farol.app/Contents/payload"),
         "utf8",
       ),
     ).toBe("N");
