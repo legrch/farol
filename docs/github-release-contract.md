@@ -19,7 +19,7 @@ Publish an accepted release under `v<version>`, with a single `farol-release.jso
 | `platform`, `arch`                            | `darwin`, `arm64`                                                                       |
 | `signing`, `notarized`, `sourceDirty`         | `unsigned`, `false`, `false` for this Phase-1 contract                                  |
 
-Owner-beta packages use `github-owner-beta` and a monotonic macOS build version. The producer creates this release manifest only from a clean, accepted package and proves the copied source/build/package fields against its package attestation. The `local.farol.next.preview` bundle identifier and `~/Applications/Farol Next Preview.app` installed slot are the allowed new-generation identities for now; they do not authorize a V0 migration or collision with a V0 install slot. The release manifest's package product is the verifier's current identity, independent of future owner-facing display-name polish.
+Owner-beta packages use `github-owner-beta` and a monotonic macOS build version. The producer creates this release manifest only from a clean, accepted package and proves the copied source/build/package fields against its package attestation. Current schema-6 packages contain `Farol.app` and use the fixed `~/Applications/Farol.app` slot after the explicit [closed product cutover](product-cutover.md). The hidden `local.farol.next.preview` bundle identifier and NEW profile remain unchanged. Historical schema-5 releases keep their original `Farol Next Preview.app` layout and immutable bytes. The old installed consumer cannot consume schema 6; the historical closed-repair apply route accepts only schema 5. Neither an archive rename nor a rewritten receipt establishes a new baseline. The release manifest's package product remains the verifier's hidden compatibility identity, distinct from its visible Farol name.
 
 Stable checks accept only non-draft, non-prerelease SemVer releases. Owner beta checks accept only GitHub prereleases with a version of the form `<major>.<minor>.<patch>-owner.beta.<number>`. The version must be strictly newer than the installed version. Build metadata is deliberately excluded to prevent multiple byte identities under one precedence version. No update is a terminal, quiet result, not an error.
 
@@ -45,7 +45,7 @@ These tests use mocks and GitHub-shaped fixtures only. They prove parsing, selec
 
 ## Installed composition
 
-Only the canonical `~/Applications/Farol Next Preview.app` slot with its existing
+Only the canonical `~/Applications/Farol.app` slot with its existing
 NEW user-data identity enables update checks. A temporary `task run` copy cannot
 replace that slot. Startup checks and six-hour rechecks use the public GitHub API
 without credentials; manual Check for Updates uses the same path. A current

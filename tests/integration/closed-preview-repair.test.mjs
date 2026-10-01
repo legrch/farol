@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { constants } from "node:fs";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
@@ -301,6 +301,40 @@ async function fixture({ updates = true } = {}) {
 }
 
 suite("bounded closed preview repair", () => {
+  it.each([6, 7])(
+    "refuses package schema %s before acquiring a lease or dispatching the historical helper",
+    async (schema) => {
+      const f = await fixture();
+      const file = path.join(f.candidateRoot, "_output/package/artifact.json");
+      const artifact = JSON.parse(await fs.readFile(file, "utf8"));
+      const branded = path.join(path.dirname(f.candidate), "Farol.app");
+      await fs.rename(f.candidate, branded);
+      await write(file, { ...artifact, schema, artifactPath: branded });
+      const before = await snapshot(f.home);
+      const acquire = vi.fn(async () => null);
+      const descriptor = vi.fn();
+      const verify = vi.fn();
+      const activation = vi.fn();
+      const result = await f.cli(undefined, {
+        leases: {
+          acquirePromotionLease: acquire,
+          promotionLeaseDescriptor: descriptor,
+        },
+        verify,
+        activationObligations: activation,
+      });
+      expect(result.status).toBe(1);
+      expect(result.error).toContain(
+        "CLOSED_REPAIR_PACKAGE_LAYOUT_UNSUPPORTED",
+      );
+      expect(acquire).not.toHaveBeenCalled();
+      expect(descriptor).not.toHaveBeenCalled();
+      expect(verify).not.toHaveBeenCalled();
+      expect(activation).not.toHaveBeenCalled();
+      expect(await snapshot(f.home)).toEqual(before);
+    },
+  );
+
   it("repairs, quarantines whole uncertain staging, then swaps the same exact pair back without copying state", async () => {
     const f = await fixture();
     const originalReceipt = await fs.readFile(f.destination + ".receipt.json");

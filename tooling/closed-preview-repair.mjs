@@ -274,6 +274,10 @@ export async function runClosedRepairCli(args, dependencies = {}) {
       artifact = JSON.parse(
         (await safeBytes(artifactFile, 65536)).toString("utf8"),
       );
+      // This pinned historical helper owns only the schema-5 preview slot.
+      // Branded packages require explicit retirement and normal promotion.
+      if (artifact?.schema !== 5)
+        throw new Error("CLOSED_REPAIR_PACKAGE_LAYOUT_UNSUPPORTED");
       assertCanonicalArtifactPath(
         candidateRoot,
         artifact,
@@ -284,8 +288,7 @@ export async function runClosedRepairCli(args, dependencies = {}) {
         artifact,
         "CLOSED_REPAIR_SOURCE_NOT_EXACT",
       );
-      // The historical repair can consume either known package layout. The
-      // manifest path is safe only after its schema-specific canonical check.
+      // The legacy manifest path is safe only after its canonical check.
       request.candidate = artifact.artifactPath;
       request.target = {
         digest: artifact.artifactSha256,

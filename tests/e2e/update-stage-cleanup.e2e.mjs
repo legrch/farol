@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { buildSync } from "esbuild";
 import { candidatePaths } from "../../tooling/candidate-contract.mjs";
+import { packageLayout } from "../../tooling/package-layout.mjs";
 
 // Real Electron ASAR cleanup of a disposable synthetic package. Extraction and
 // verification replies are in-process fixtures; the probe owns no descendants.
@@ -20,6 +21,7 @@ const probeTimeoutFault = options[0] === "--probe-timeout-fault";
 const root = path.resolve(import.meta.dirname, "../..");
 const { artifactFile, appPath } = candidatePaths(root);
 const artifact = JSON.parse(await fs.readFile(artifactFile, "utf8"));
+const layout = packageLayout(artifact.schema);
 const runtime = path.join(appPath, "Contents/Frameworks/Electron Runtime.app");
 const executable = path.join(runtime, "Contents/MacOS/Electron");
 const expected = { ...artifact, channel: "owner-beta", signing: "unsigned" };
@@ -31,7 +33,7 @@ try {
   await fs.mkdir(stage, { mode: 0o700 });
   const publicArtifact = {
     ...artifact,
-    artifactPath: "Farol Next Preview.app",
+    artifactPath: layout.appName,
   };
   const vendorAsar = path.join(runtime, "Contents/Resources/default_app.asar");
   await fs.writeFile(
@@ -82,7 +84,7 @@ cp.execFile[promisify.custom] = async (command, args) => {
     assert.equal(args[4], ${JSON.stringify(archive)});
     const stagingRoot = args[5];
     assert.equal(path.dirname(stagingRoot), await raw.realpath(${JSON.stringify(stage)}));
-    const appPath = path.join(stagingRoot, "Farol Next Preview.app");
+    const appPath = path.join(stagingRoot, ${JSON.stringify(layout.appName)});
     const resources = path.join(appPath, "Contents/Resources");
     await raw.mkdir(resources, { recursive: true });
     await raw.copyFile(${JSON.stringify(vendorAsar)}, path.join(resources, "default_app.asar"));
