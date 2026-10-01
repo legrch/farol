@@ -109,18 +109,44 @@ async function privateParent(directory: string): Promise<void> {
     throw new PackageVerificationError("invalid_stage");
 }
 async function readArtifact(file: string): Promise<unknown> {
-  const handle = await fs.open(file, constants.O_RDONLY | constants.O_NOFOLLOW);
   try {
-    const stat = await handle.stat();
-    if (!stat.isFile() || stat.size < 2 || stat.size > 65536)
+    const before = await fs.lstat(file, { bigint: true });
+    if (!before.isFile() || before.size < 2n || before.size > 65536n)
       throw new PackageVerificationError("package_mismatch");
+    const handle = await fs.open(
+      file,
+      constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW,
+    );
     try {
-      return JSON.parse(await handle.readFile("utf8")) as unknown;
-    } catch (cause) {
-      throw new PackageVerificationError("package_mismatch", cause);
+      const opened = await handle.stat({ bigint: true });
+      if (!sameRegularFile(before, opened))
+        throw new PackageVerificationError("package_mismatch");
+      // The checked size plus one sentinel bounds allocation and detects growth.
+      const buffer = Buffer.alloc(Number(opened.size) + 1);
+      let total = 0;
+      while (total < buffer.length) {
+        const { bytesRead } = await handle.read(
+          buffer,
+          total,
+          buffer.length - total,
+          total,
+        );
+        if (bytesRead === 0) break;
+        total += bytesRead;
+      }
+      if (
+        total !== Number(opened.size) ||
+        !sameRegularFile(opened, await handle.stat({ bigint: true })) ||
+        !sameRegularFile(opened, await fs.lstat(file, { bigint: true }))
+      )
+        throw new PackageVerificationError("package_mismatch");
+      return JSON.parse(buffer.subarray(0, total).toString("utf8")) as unknown;
+    } finally {
+      await handle.close();
     }
-  } finally {
-    await handle.close();
+  } catch (cause) {
+    if (cause instanceof PackageVerificationError) throw cause;
+    throw new PackageVerificationError("package_mismatch", cause);
   }
 }
 function claimsMatch(value: unknown, expected: ReleaseManifest): boolean {

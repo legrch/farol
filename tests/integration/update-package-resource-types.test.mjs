@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -193,6 +194,170 @@ catch (error) { process.stdout.write(JSON.stringify({ code: error.code ?? null, 
         });
       },
     );
+  }
+});
+
+// The real extractor accepts an ordinary ZIP. The faults below replace or
+// change its artifact only after extraction, inside an owned disposable stage.
+// A fixture verifier records dispatch; it does not attest a real application.
+const artifactProbe = `
+import fs from "node:fs/promises";
+import path from "node:path";
+import { execFileSync } from "node:child_process";
+import { pathToFileURL } from "node:url";
+const [modulePath, helperPath, stage, archive, verifierPath, manifestJson, scenario] = process.argv.slice(1);
+const { createUpdatePackageVerifier } = await import(pathToFileURL(modulePath).href);
+const originalOpen = fs.open.bind(fs);
+let unboundedReads = 0;
+let maximumReadLength = 0;
+let checkedSize = 0;
+fs.open = async (file, flags, ...rest) => {
+  if (path.basename(String(file)) !== "artifact.json") return originalOpen(file, flags, ...rest);
+  if (["fifo", "regular", "symlink", "directory"].includes(scenario)) {
+    await fs.rename(file, file + ".previous");
+    if (scenario === "fifo") execFileSync("/usr/bin/mkfifo", [file]);
+    if (scenario === "regular") await fs.copyFile(file + ".previous", file);
+    if (scenario === "symlink") await fs.symlink(file + ".previous", file);
+    if (scenario === "directory") await fs.mkdir(file);
+  }
+  const descriptor = await originalOpen(file, flags, ...rest);
+  checkedSize = Number((await descriptor.stat()).size);
+  const originalRead = descriptor.read.bind(descriptor);
+  const originalReadFile = descriptor.readFile.bind(descriptor);
+  let changed = false;
+  const change = async () => {
+    if (changed) return;
+    changed = true;
+    if (scenario === "growth") await fs.appendFile(file, Buffer.alloc(300000));
+    if (scenario === "metadata") await fs.chmod(file, 0o400);
+    if (scenario === "read-replacement") {
+      await fs.rename(file, file + ".previous");
+      await fs.copyFile(file + ".previous", file);
+    }
+  };
+  descriptor.read = async (...args) => {
+    maximumReadLength = Math.max(maximumReadLength, args[2]);
+    await change();
+    return originalRead(...args);
+  };
+  descriptor.readFile = async (...args) => {
+    unboundedReads += 1;
+    await change();
+    return originalReadFile(...args);
+  };
+  return descriptor;
+};
+const verifier = createUpdatePackageVerifier({
+  stagingParent: stage, extractorPath: helperPath, verifierPath,
+  archivePathForHandle: async () => archive,
+});
+let code = null;
+let accepted = false;
+try { await verifier.verifyPackage("opaque", JSON.parse(manifestJson)); accepted = true; await verifier.discard("opaque"); }
+catch (error) { code = error.code ?? null; }
+let measured = false;
+try { await fs.stat(verifierPath + ".called"); measured = true; } catch {}
+process.stdout.write(JSON.stringify({ code, accepted, measured, unboundedReads, maximumReadLength, checkedSize, stages: (await fs.readdir(stage)).length }));
+`;
+
+describe("extracted artifact descriptor and bounded read", () => {
+  for (const scenario of [
+    "ordinary",
+    "fifo",
+    "regular",
+    "symlink",
+    "directory",
+    "growth",
+    "metadata",
+    "read-replacement",
+  ]) {
+    it(`handles ${scenario} without an unbounded read or premature measurement`, async () => {
+      await disposable(async ({ directory, stage }) => {
+        const archive = path.join(directory, "archive.zip");
+        const manifest = {
+          product: "Farol Next Preview",
+          bundleId: "local.farol.next.preview",
+          version: "0.1.0-owner.beta.1",
+          buildVersion: "2",
+          channel: "owner-beta",
+          sourceCommit: "a".repeat(40),
+          sourceTreeDigest: "b".repeat(64),
+          buildId: "c".repeat(64),
+          artifactSha256: "d".repeat(64),
+          signing: "unsigned",
+          notarized: false,
+        };
+        const artifact = {
+          ...manifest,
+          sourceDirty: false,
+          updateChannel: "github-owner-beta",
+          signing: { kind: "unsigned" },
+        };
+        const made = spawnSync(
+          "/usr/bin/python3",
+          [
+            "-I",
+            "-S",
+            "-B",
+            "-c",
+            `
+import json, stat, sys, zipfile
+with zipfile.ZipFile(sys.argv[1], "w", compression=zipfile.ZIP_DEFLATED) as archive:
+    for name, data in [("artifact.json", sys.argv[2]), ("Farol Next Preview.app/Contents/Info.plist", "fixture")]:
+        info = zipfile.ZipInfo(name)
+        info.create_system = 3
+        info.external_attr = (stat.S_IFREG | 0o644) << 16
+        archive.writestr(info, data)
+`,
+            archive,
+            JSON.stringify(artifact),
+          ],
+          deadline,
+        );
+        assertExited(made);
+        const bytes = await fs.readFile(archive);
+        const expected = {
+          ...manifest,
+          archiveSize: bytes.length,
+          archiveSha256: createHash("sha256").update(bytes).digest("hex"),
+        };
+        const verifierPath = path.join(directory, "measure.mjs");
+        const identity = { ...manifest, updateChannel: "github-owner-beta" };
+        await fs.writeFile(
+          verifierPath,
+          `import fs from "node:fs"; fs.writeFileSync(${JSON.stringify(verifierPath + ".called")}, "called"); process.stdout.write(${JSON.stringify(JSON.stringify(identity))});`,
+        );
+        const result = spawnSync(
+          process.execPath,
+          [
+            "--input-type=module",
+            "-e",
+            artifactProbe,
+            bundledVerifier,
+            helper,
+            stage,
+            archive,
+            verifierPath,
+            JSON.stringify(expected),
+            scenario,
+          ],
+          deadline,
+        );
+        assertExited(result);
+        const outcome = JSON.parse(result.stdout);
+        expect(outcome).toMatchObject({
+          code: scenario === "ordinary" ? null : "package_mismatch",
+          accepted: scenario === "ordinary",
+          measured: scenario === "ordinary",
+          unboundedReads: 0,
+          stages: 0,
+        });
+        expect(outcome.maximumReadLength).toBeLessThanOrEqual(
+          outcome.checkedSize + 1,
+        );
+        expect(await fs.readdir(stage)).toEqual([]);
+      });
+    });
   }
 });
 

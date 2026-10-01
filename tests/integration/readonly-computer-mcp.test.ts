@@ -302,6 +302,39 @@ describe("read-only Computer MCP adapter", () => {
       });
       expect(spoofed.isError).toBe(true);
 
+      // The native helper bounds excerpts in Unicode code points, including
+      // astral characters; the public MCP response must preserve that bound.
+      for (const count of [251, 500, 501]) {
+        await fs.writeFile(
+          path.join(root, "src", "emoji.txt"),
+          "😀".repeat(count),
+        );
+        const unicode = await client.callTool({
+          name: "computer_workspace_search",
+          arguments: {
+            workspaceId: "farol",
+            relativePath: "src/emoji.txt",
+            pattern: "😀",
+          },
+        });
+        expect(unicode.isError).not.toBe(true);
+        expect(unicode.structuredContent).toMatchObject({
+          output: {
+            kind: "workspace.matches",
+            matches: [
+              {
+                path: "src/emoji.txt",
+                line: 1,
+                text: "😀".repeat(Math.min(count, 500)),
+                truncated: count > 500,
+              },
+            ],
+            resultLimited: false,
+            scanLimited: false,
+          },
+        });
+      }
+
       // C05-06: a file over the whole-read ceiling is read in windows.
       await fs.writeFile(
         path.join(root, "src", "large.log"),
