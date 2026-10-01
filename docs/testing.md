@@ -32,8 +32,13 @@ behavior. The explicit `task run -- --hidden` owner option maps only to hidden
 presentation through the same committed-candidate/snapshot/NEW-profile admission.
 It does not enable E2E overrides, debug access, another profile or primary-display
 permission. A hidden owner run still requires normal Quit and cannot prove visible
-interaction. It refuses a second-instance reopen; ordinary owner reopen stays
-unchanged, and older primaries reject the extra request field without revealing a window.
+interaction. It refuses a second-instance reopen. Ordinary owner requests and
+acknowledgements remain version 2; background-only requests use the distinct version 3
+with required true intent. Older strict version-2 primaries reject that request and
+publish no acknowledgement. The secondary waits at most the existing 10-second deadline,
+then reports `unverified` with guidance to Quit before a hidden launch. That timeout is
+not an explicit refusal acknowledgement, and it never triggers an ordinary reopen,
+protocol fallback or replacement launch.
 
 The two accepted presentation arguments used by the E2E harness are
 `--preview-window-mode=hidden` and

@@ -37,9 +37,15 @@ const instanceIdentitySchema = z.strictObject({
   inputLedgerSha256: sha256,
 });
 
-const instanceRequestSchema = instanceIdentitySchema.extend({
-  backgroundOnly: z.literal(true).optional(),
+const backgroundInstanceRequestSchema = instanceIdentitySchema.extend({
+  schema: z.literal("farol.next.single-instance/3"),
+  backgroundOnly: z.literal(true),
 });
+
+const instanceRequestSchema = z.discriminatedUnion("schema", [
+  instanceIdentitySchema,
+  backgroundInstanceRequestSchema,
+]);
 
 const instanceAcknowledgementSchema = instanceIdentitySchema.extend({
   status: z.enum(["reopened", "identity-mismatch", "reopen-failed"]),
@@ -52,7 +58,9 @@ export type LaunchIdentity = Readonly<{
   inputLedgerSha256: string;
 }>;
 
-export type InstanceRequest = z.infer<typeof instanceRequestSchema>;
+export type InstanceRequest =
+  | (z.infer<typeof instanceIdentitySchema> & { backgroundOnly?: never })
+  | z.infer<typeof backgroundInstanceRequestSchema>;
 export type InstanceAcknowledgement = z.infer<
   typeof instanceAcknowledgementSchema
 >;
@@ -116,18 +124,26 @@ export function createInstanceRequest(
   identity: LaunchIdentity,
   backgroundOnly = false,
 ): InstanceRequest {
-  return {
-    schema: "farol.next.single-instance/2",
+  const request = {
     nonce: randomBytes(16).toString("hex"),
     ...identity,
-    ...(backgroundOnly ? { backgroundOnly: true as const } : {}),
   };
+  return backgroundOnly
+    ? {
+        schema: "farol.next.single-instance/3",
+        ...request,
+        backgroundOnly: true,
+      }
+    : { schema: "farol.next.single-instance/2", ...request };
 }
 
 export function secondInstanceRefusalMessage(
   request: InstanceRequest,
   acknowledgement: InstanceAcknowledgement | null,
 ): string {
+  if (request.backgroundOnly && acknowledgement === null) {
+    return "Farol Next could not confirm background-only admission with the running instance. Quit it before starting a hidden instance.";
+  }
   if (
     request.backgroundOnly &&
     acknowledgement?.status === "reopen-failed" &&
@@ -261,7 +277,7 @@ export async function writeInstanceAcknowledgement(
   await ensureAcknowledgementDirectory(userData);
   const identity = primary ?? request;
   const acknowledgement: InstanceAcknowledgement = {
-    schema: request.schema,
+    schema: "farol.next.single-instance/2",
     nonce: request.nonce,
     environment: identity.environment,
     sourceCommit: identity.sourceCommit,

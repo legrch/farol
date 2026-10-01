@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { z } from "zod";
 import type { BuildIdentity } from "../../src/pkg/build-info/identity";
 import {
   createInstanceRequest,
@@ -37,7 +38,9 @@ afterEach(async () => {
   );
 });
 
-function request(identity: LaunchIdentity): InstanceRequest {
+function request(
+  identity: LaunchIdentity,
+): Extract<InstanceRequest, { schema: "farol.next.single-instance/2" }> {
   return {
     schema: "farol.next.single-instance/2",
     nonce: "c".repeat(32),
@@ -102,7 +105,7 @@ describe("Farol Next single-instance identity", () => {
     const verificationFailure =
       "Farol Next refused the second launch because the running build could not be verified as this exact candidate.";
     expect(secondInstanceRefusalMessage(hidden, null)).toBe(
-      verificationFailure,
+      "Farol Next could not confirm background-only admission with the running instance. Quit it before starting a hidden instance.",
     );
     expect(
       secondInstanceRefusalMessage(hidden, {
@@ -116,6 +119,61 @@ describe("Farol Next single-instance identity", () => {
         acknowledgement,
       ),
     ).toBe(verificationFailure);
+  });
+
+  it("uses a distinct background request version while ordinary requests stay on version 2", () => {
+    const ordinary = createInstanceRequest(primary);
+    const hidden = createInstanceRequest(primary, true);
+    expect(ordinary.schema).toBe("farol.next.single-instance/2");
+    expect(hidden.schema).toBe("farol.next.single-instance/3");
+    // Frozen older-consumer contract: its strict v2 request never accepted
+    // unknown intent fields. This is protocol evidence, not a live old primary.
+    const olderRequest = z.strictObject({
+      schema: z.literal("farol.next.single-instance/2"),
+      nonce: z.string(),
+      environment: z.enum(["preview", "dev"]),
+      sourceCommit: z.string(),
+      sourceTreeDigest: z.string(),
+      inputLedgerSha256: z.string(),
+    });
+    expect(olderRequest.safeParse(ordinary).success).toBe(true);
+    expect(olderRequest.safeParse(hidden).success).toBe(false);
+    expect(
+      decideSecondInstance(primary, { ...hidden, schema: ordinary.schema }),
+    ).toBeNull();
+  });
+
+  it("keeps the acknowledgement format at version 2 for background requests", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "farol-instance-v3-"));
+    roots.push(root);
+    const hidden = createInstanceRequest(primary, true);
+    await writeInstanceAcknowledgement(root, hidden, "reopen-failed", primary);
+    const acknowledgement = await waitForInstanceAcknowledgement(root, hidden, {
+      timeoutMs: 50,
+      pollMs: 1,
+    });
+    expect(acknowledgement).toMatchObject({
+      schema: "farol.next.single-instance/2",
+      nonce: hidden.nonce,
+      status: "reopen-failed",
+    });
+    expect(acknowledgement).not.toHaveProperty("backgroundOnly");
+  });
+
+  it("reports unconfirmed background admission when an older primary publishes no acknowledgement", async () => {
+    const root = await fs.mkdtemp(
+      path.join(os.tmpdir(), "farol-instance-old-v2-"),
+    );
+    roots.push(root);
+    const hidden = createInstanceRequest(primary, true);
+    const acknowledgement = await waitForInstanceAcknowledgement(root, hidden, {
+      timeoutMs: 20,
+      pollMs: 1,
+    });
+    expect(acknowledgement).toBeNull();
+    expect(secondInstanceRefusalMessage(hidden, acknowledgement)).toBe(
+      "Farol Next could not confirm background-only admission with the running instance. Quit it before starting a hidden instance.",
+    );
   });
 
   it("refuses a background-only second launch without reopening", () => {
@@ -143,6 +201,15 @@ describe("Farol Next single-instance identity", () => {
     for (const backgroundOnly of [false, "true", null, 1]) {
       expect(
         decideSecondInstance(primary, { ...ordinary, backgroundOnly }),
+      ).toBeNull();
+    }
+    for (const backgroundOnly of [false, "true", null, 1, undefined]) {
+      expect(
+        decideSecondInstance(primary, {
+          ...ordinary,
+          schema: "farol.next.single-instance/3",
+          backgroundOnly,
+        }),
       ).toBeNull();
     }
   });

@@ -137,7 +137,9 @@ qualification, use `task run -- --hidden`. This uses the same verified candidate
 NEW profile and instance admission, and keeps all product windows hidden. It does
 not install a package, expose a debug port, select another profile or prove visible
 UI behavior. Normal Quit/drain requirements still apply. A background-only launch refuses to
-reopen an already running instance, so it cannot reveal that instance's window.
+reopen an already running instance. Older primaries do not acknowledge the version-3
+background request; the secondary reports `unverified` after the bounded 10-second
+wait and requires Quit. It never substitutes an ordinary reopen request.
 
 The exact Farol Dev onboarding command is:
 
