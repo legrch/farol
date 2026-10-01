@@ -14,7 +14,7 @@ const DIGEST = /^[a-f0-9]{64}$/u;
 const PREPARED = /^prepared-([a-f0-9]{64})$/u;
 const INSTANCE = /^active-[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/u;
 const JOURNAL_TEMPORARY =
-  /^\.(?:prepared|completed)\.json\.[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}\.tmp$/u;
+  /^\.(?:(?:prepared|completed)\.json|revoked-[a-f0-9]{64})\.[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}\.tmp$/u;
 const Reconciliation = z.strictObject({
   schema: z.literal(1),
   operationId: z.string().uuid(),
@@ -210,12 +210,22 @@ export class PrivateMcpLifecycle {
       throw new Error("COMPUTER_MCP_RECONCILIATION_PENDING");
   }
 
-  private async revokePrepared(): Promise<void> {
+  private async revokePrepared(recoveryArchive?: string): Promise<void> {
     for (const entry of await fs.readdir(this.directory)) {
       const match = PREPARED.exec(entry);
       if (match) {
         await this.existingMarker(entry);
-        await this.marker(`revoked-${match[1]}`);
+        const name = `revoked-${match[1]}`;
+        if (recoveryArchive) {
+          // Closed reconciliation must resume after a process death without
+          // leaving partial authoritative revocations. Retain uncommitted
+          // bytes inside this exact operation's validated private archive.
+          await this.writeRecoveryBytes(
+            path.join(this.directory, name),
+            "1\n",
+            recoveryArchive,
+          );
+        } else await this.marker(name);
       } else if (entry.startsWith("prepared-"))
         throw new Error("COMPUTER_MCP_LIFECYCLE_MARKER_UNSAFE");
     }
@@ -438,7 +448,7 @@ export class PrivateMcpLifecycle {
           throw new Error("COMPUTER_MCP_RECONCILIATION_UNSAFE");
       }
       await this.writeReconciliation(planFile, plan);
-      await this.revokePrepared();
+      await this.revokePrepared(archive);
       for (const name of plan.instances) {
         const source = path.join(this.directory, name);
         const target = path.join(archive, name);
@@ -543,7 +553,14 @@ export class PrivateMcpLifecycle {
     file: string,
     value: unknown,
   ): Promise<void> {
-    const bytes = `${JSON.stringify(value)}\n`;
+    await this.writeRecoveryBytes(file, `${JSON.stringify(value)}\n`);
+  }
+
+  private async writeRecoveryBytes(
+    file: string,
+    bytes: string,
+    stagingDirectory = path.dirname(file),
+  ): Promise<void> {
     const previous = await this.privateRecoveryBytes(file);
     if (previous !== null) {
       if (previous !== bytes)
@@ -554,7 +571,7 @@ export class PrivateMcpLifecycle {
     // A crash must leave an uncommitted private remnant, never a partial
     // authoritative record. The same operation retains these bytes on resume.
     const temporary = path.join(
-      path.dirname(file),
+      stagingDirectory,
       `.${path.basename(file)}.${randomUUID()}.tmp`,
     );
     const handle = await fs.open(
@@ -583,6 +600,8 @@ export class PrivateMcpLifecycle {
     }
     await fs.rename(temporary, file);
     await this.syncDirectory(path.dirname(file));
+    if (stagingDirectory !== path.dirname(file))
+      await this.syncDirectory(stagingDirectory);
   }
 
   private async syncDirectory(directory: string): Promise<void> {

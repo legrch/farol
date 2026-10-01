@@ -499,9 +499,47 @@ describe.skipIf(process.platform !== "darwin")(
       },
     );
 
-    it.each(["public", "hardlink", "symlink", "oversize"])(
-      "refuses a %s journal remnant without retiring an instance",
-      async (kind) => {
+    it.each(["", "1"])(
+      "refuses an already partial final revocation %s without repairing it",
+      async (bytes) => {
+        const { root, lifecycle } = await fixture();
+        await lifecycle.prepare(oldDigest);
+        await lifecycle.beginStop();
+        const directory = path.join(root, "mcp-lifecycle");
+        const instance = path.join(
+          directory,
+          "active-55555555-5555-4555-8555-555555555555",
+        );
+        const revoked = path.join(directory, `revoked-${oldDigest}`);
+        await fs.writeFile(instance, "1\n", { mode: 0o600 });
+        await fs.writeFile(revoked, bytes, { mode: 0o600 });
+        const inode = (await fs.lstat(revoked)).ino;
+        await expect(
+          lifecycle.reconcileInactive({
+            operationId: "66666666-6666-4666-8666-666666666666",
+            failedQuitSha256: "f".repeat(64),
+            proveIdle: async () => undefined,
+          }),
+        ).rejects.toThrow("COMPUTER_MCP_RECONCILIATION_CHANGED");
+        expect(await fs.readFile(revoked, "utf8")).toBe(bytes);
+        expect((await fs.lstat(revoked)).ino).toBe(inode);
+        expect(await fs.readFile(instance, "utf8")).toBe("1\n");
+        await expect(lifecycle.prepare(newDigest)).rejects.toThrow(
+          "COMPUTER_MCP_RECONCILIATION_PENDING",
+        );
+      },
+    );
+
+    it.each(
+      ["prepared.json", `revoked-${oldDigest}`].flatMap((name) =>
+        ["public", "hardlink", "symlink", "oversize"].map((kind) => ({
+          name,
+          kind,
+        })),
+      ),
+    )(
+      "refuses a $kind $name remnant without retiring an instance",
+      async ({ kind, name }) => {
         const { root, lifecycle } = await fixture();
         await lifecycle.prepare(oldDigest);
         await lifecycle.beginStop();
@@ -517,7 +555,7 @@ describe.skipIf(process.platform !== "darwin")(
         await fs.mkdir(archive, { mode: 0o700 });
         const temporary = path.join(
           archive,
-          ".prepared.json.88888888-8888-4888-8888-888888888888.tmp",
+          `.${name}.88888888-8888-4888-8888-888888888888.tmp`,
         );
         const sentinel = path.join(root, "sentinel");
         await fs.writeFile(sentinel, "unchanged", { mode: 0o600 });
