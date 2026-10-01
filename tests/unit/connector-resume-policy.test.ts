@@ -94,6 +94,7 @@ function check(
 ) {
   return shouldResumeComputerConnector({
     environment,
+    buildEnvironment: environment,
     previousRunClean,
     snapshot: { status: "ready", settings },
   });
@@ -109,10 +110,20 @@ describe("configured Computer connector resume", () => {
     expect(check(configured(), false)).toBe(false);
     expect(check(configured(), true, "dev")).toBe(false);
   });
+  it("does not automatically resume a development build using the NEW profile", () => {
+    const input = {
+      environment: "preview" as const,
+      buildEnvironment: "dev" as const,
+      previousRunClean: true,
+      snapshot: { status: "ready" as const, settings: configured() },
+    };
+    expect(shouldResumeComputerConnector(input)).toBe(false);
+  });
   it("does not turn a configuration error into an automatic repair", () => {
     expect(
       shouldResumeComputerConnector({
         environment: "preview",
+        buildEnvironment: "preview",
         previousRunClean: true,
         snapshot: { status: "error", error: "CONFIG_RENAME_REQUIRED" },
       }),

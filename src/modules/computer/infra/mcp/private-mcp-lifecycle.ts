@@ -17,6 +17,7 @@ export class PrivateMcpLifecycle {
   private readonly directory: string;
   private activeHandlers = 0;
   private handlerAdmissionClosed = false;
+  private stopRevision = 0;
 
   constructor(private readonly root: string) {
     if (!path.isAbsolute(root) || root.includes("\0"))
@@ -183,8 +184,13 @@ export class PrivateMcpLifecycle {
   async prepare(digest: string): Promise<void> {
     if (!DIGEST.test(digest))
       throw new Error("COMPUTER_MCP_LIFECYCLE_DIGEST_INVALID");
+    // Desktop retains one lifecycle for its launch root. Capture before lock
+    // acquisition: a concurrent Stop must not be cleared by this preparation.
+    const admittedStopRevision = this.stopRevision;
     const lease = await this.lock(true, 5_000);
     try {
+      if (admittedStopRevision !== this.stopRevision)
+        throw new Error("COMPUTER_MCP_PREPARATION_STOPPED");
       await this.instancesGone();
       await this.shellGroupsGone();
       await this.revokePrepared();
@@ -198,7 +204,17 @@ export class PrivateMcpLifecycle {
         });
       await this.sync();
     } finally {
-      await lease.close();
+      try {
+        if (admittedStopRevision !== this.stopRevision) {
+          // Keep the exclusive lifetime lease until stop admission and all
+          // prepared digests are revoked, including one published above.
+          await this.marker("stopping");
+          await this.revokePrepared();
+          throw new Error("COMPUTER_MCP_PREPARATION_STOPPED");
+        }
+      } finally {
+        await lease.close();
+      }
     }
   }
 
@@ -234,6 +250,8 @@ export class PrivateMcpLifecycle {
 
   /** Install before stopping the tunnel; new MCP joins then refuse. */
   async beginStop(): Promise<void> {
+    // Synchronous admission also covers a preparation suspended in filesystem IO.
+    this.stopRevision += 1;
     await this.ensure();
     await this.marker("stopping");
   }

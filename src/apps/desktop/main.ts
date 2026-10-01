@@ -3238,8 +3238,13 @@ function secureMcpLaunchRoot(): string {
   return path.join(secureMcpConnectorRoot(), "computer-authority");
 }
 
+let desktopComputerMcpLifecycle: PrivateMcpLifecycle | null = null;
 function computerMcpLifecycle(): PrivateMcpLifecycle {
-  return new PrivateMcpLifecycle(secureMcpLaunchRoot());
+  // Boot owns one lifecycle so concurrent Start/Stop share stop admission.
+  desktopComputerMcpLifecycle ??= new PrivateMcpLifecycle(
+    secureMcpLaunchRoot(),
+  );
+  return desktopComputerMcpLifecycle;
 }
 
 async function stopAndConfirmComputerMcp(
@@ -3986,6 +3991,10 @@ async function startSecureMcpConnector(
       launchContractSha256 = createHash("sha256")
         .update(await readFile(launchFile))
         .digest("hex");
+      // An earlier Quit/update may have stopped admission while the contract
+      // was being written. Do not clear its stop marker with a later prepare.
+      if (quitInProgress || installedUpdateAdmission)
+        return configurationFailure("CONNECTOR_START_FAILED");
       await computerMcpLifecycle().prepare(launchContractSha256);
     } catch (error) {
       const code = error instanceof Error ? error.message : "";
@@ -9322,6 +9331,7 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
   if (
     shouldResumeComputerConnector({
       environment: runtimeEnvironment,
+      buildEnvironment,
       previousRunClean,
       snapshot: configuration.snapshot(),
     })

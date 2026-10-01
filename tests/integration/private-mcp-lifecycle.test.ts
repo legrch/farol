@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { PrivateMcpLifecycle } from "../../src/modules/computer/infra/mcp/private-mcp-lifecycle";
 
@@ -18,6 +18,7 @@ async function fixture() {
 }
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   for (const root of roots.splice(0))
     await fs.rm(root, { recursive: true, force: true });
 });
@@ -52,6 +53,75 @@ describe.skipIf(process.platform !== "darwin")(
           "utf8",
         ),
       ).toBe("1\n");
+    });
+
+    it("preserves a newer stop when preparation is already clearing the old marker", async () => {
+      const { root, lifecycle } = await fixture();
+      await lifecycle.prepare(oldDigest);
+      await lifecycle.beginStop();
+      await lifecycle.confirmStop();
+      const stopping = path.join(root, "mcp-lifecycle", "stopping");
+      const unlink = fs.unlink.bind(fs);
+      let arrived!: () => void;
+      const atUnlink = new Promise<void>((resolve) => {
+        arrived = resolve;
+      });
+      let resume!: () => void;
+      const resumeUnlink = new Promise<void>((resolve) => {
+        resume = resolve;
+      });
+      vi.spyOn(fs, "unlink").mockImplementation(async (target) => {
+        if (target === stopping) {
+          arrived();
+          await resumeUnlink;
+        }
+        await unlink(target);
+      });
+      const preparing = lifecycle.prepare(newDigest);
+      // Observe rejection immediately so the real-file interleaving has no unhandled promise.
+      const outcome = preparing.then(
+        () => null,
+        (error: unknown) => error,
+      );
+      await atUnlink;
+      try {
+        await lifecycle.beginStop();
+      } finally {
+        resume();
+      }
+      expect(await outcome).toMatchObject({
+        message: "COMPUTER_MCP_PREPARATION_STOPPED",
+      });
+      expect(await lifecycle.isStopping()).toBe(true);
+      await lifecycle.waitForStop();
+      await expect(lifecycle.join(newDigest)).rejects.toThrow(
+        "COMPUTER_MCP_LIFECYCLE_REVOKED",
+      );
+    });
+
+    it("rejects a preparation queued behind a lifetime lease when Stop wins admission", async () => {
+      const { lifecycle } = await fixture();
+      await lifecycle.prepare(oldDigest);
+      const live = await lifecycle.join(oldDigest);
+      const preparing = lifecycle.prepare(newDigest);
+      const outcome = preparing.then(
+        () => null,
+        (error: unknown) => error,
+      );
+      try {
+        await lifecycle.beginStop();
+      } finally {
+        await live.release();
+      }
+      expect(await outcome).toMatchObject({
+        message: "COMPUTER_MCP_PREPARATION_STOPPED",
+      });
+      expect(await lifecycle.isStopping()).toBe(true);
+      await lifecycle.confirmStop();
+      // A deliberate later start still works after a confirmed stop.
+      await lifecycle.prepare("c".repeat(64));
+      const next = await lifecycle.join("c".repeat(64));
+      await next.release();
     });
 
     it("requires stop admission even when no MCP lease is held", async () => {

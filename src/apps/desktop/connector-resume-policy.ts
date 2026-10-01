@@ -7,12 +7,14 @@ import { identityBoundWorkspaces } from "./identity-bound-workspaces";
 export function shouldResumeComputerConnector(
   input: Readonly<{
     environment: "dev" | "preview";
+    buildEnvironment: "dev" | "preview";
     previousRunClean: boolean;
     snapshot: ProductConfigurationSnapshot;
   }>,
 ): boolean {
   if (
     input.environment !== "preview" ||
+    input.buildEnvironment !== "preview" ||
     !input.previousRunClean ||
     input.snapshot.status !== "ready"
   )
