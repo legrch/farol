@@ -11,6 +11,7 @@ import {
   desktopEnvironment,
   desktopIdentity,
   desktopProfileEnvironment,
+  isolatedDevMcpProofAllowed,
 } from "../../src/apps/desktop/desktop-environment";
 
 const isolatedHomes: string[] = [];
@@ -106,6 +107,16 @@ describe("desktop environment identity", () => {
     expect(
       desktopCodexChildHomes("preview", identity, "/Users/owner", undefined),
     ).toEqual({ codexHomePath: undefined, processHomePath: "/Users/owner" });
+  });
+
+  it("keeps fixture proof mutations outside shared NEW development state", () => {
+    const build = desktopEnvironment("dev");
+    const shared = desktopProfileEnvironment(build, "shared-new", undefined);
+    const isolated = desktopProfileEnvironment(build, undefined, "1");
+    expect(isolatedDevMcpProofAllowed(build, shared)).toBe(false);
+    expect(isolatedDevMcpProofAllowed(build, isolated)).toBe(true);
+    expect(isolatedDevMcpProofAllowed("preview", "preview")).toBe(false);
+    expect(isolatedDevMcpProofAllowed("preview", "dev")).toBe(false);
   });
 
   it("preserves explicit acceptance and ordinary packaged profile selection", () => {

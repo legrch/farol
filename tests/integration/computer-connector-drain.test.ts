@@ -126,10 +126,15 @@ describe("Computer connector drain", () => {
     });
 
     await expect(drainComputerConnector(f.ports)).rejects.toBe(error);
-    expect(f.events).toEqual(["beginStop", "waitForMcpStop", "stopConnector"]);
+    expect(f.events).toEqual([
+      "beginStop",
+      "waitForMcpStop",
+      "stopConnector",
+      "closeSavedChat",
+    ]);
     expect(f.ports.waitForMcpStop).toHaveBeenCalledOnce();
     expect(f.ports.stopConnector).toHaveBeenCalledOnce();
-    expect(f.ports.closeSavedChat).not.toHaveBeenCalled();
+    expect(f.ports.closeSavedChat).toHaveBeenCalledOnce();
     expect(f.ports.confirmStop).not.toHaveBeenCalled();
   });
 
@@ -142,10 +147,10 @@ describe("Computer connector drain", () => {
     });
 
     await expect(drainComputerConnector(f.ports)).rejects.toBe(error);
-    expect(f.events).toEqual(["beginStop"]);
+    expect(f.events).toEqual(["beginStop", "closeSavedChat"]);
     expect(f.ports.waitForMcpStop).not.toHaveBeenCalled();
     expect(f.ports.stopConnector).not.toHaveBeenCalled();
-    expect(f.ports.closeSavedChat).not.toHaveBeenCalled();
+    expect(f.ports.closeSavedChat).toHaveBeenCalledOnce();
     expect(f.ports.confirmStop).not.toHaveBeenCalled();
   });
 
@@ -158,10 +163,10 @@ describe("Computer connector drain", () => {
     });
 
     await expect(drainComputerConnector(f.ports)).rejects.toBe(error);
-    expect(f.events).toEqual(["beginStop"]);
+    expect(f.events).toEqual(["beginStop", "closeSavedChat"]);
     expect(f.ports.waitForMcpStop).not.toHaveBeenCalled();
     expect(f.ports.stopConnector).not.toHaveBeenCalled();
-    expect(f.ports.closeSavedChat).not.toHaveBeenCalled();
+    expect(f.ports.closeSavedChat).toHaveBeenCalledOnce();
     expect(f.ports.confirmStop).not.toHaveBeenCalled();
   });
 
@@ -174,9 +179,14 @@ describe("Computer connector drain", () => {
     });
 
     await expect(drainComputerConnector(f.ports)).rejects.toBe(error);
-    expect(f.events).toEqual(["beginStop", "waitForMcpStop", "stopConnector"]);
+    expect(f.events).toEqual([
+      "beginStop",
+      "waitForMcpStop",
+      "stopConnector",
+      "closeSavedChat",
+    ]);
     expect(f.ports.stopConnector).toHaveBeenCalledOnce();
-    expect(f.ports.closeSavedChat).not.toHaveBeenCalled();
+    expect(f.ports.closeSavedChat).toHaveBeenCalledOnce();
     expect(f.ports.confirmStop).not.toHaveBeenCalled();
   });
 

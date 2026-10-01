@@ -413,6 +413,7 @@ import {
   desktopEnvironment,
   desktopIdentity,
   desktopProfileEnvironment,
+  isolatedDevMcpProofAllowed,
 } from "./desktop-environment";
 import { terminateDesktopStartup } from "./desktop-startup-failure";
 import { resolveDevDataDirectoryName } from "./dev-profile-directory";
@@ -4515,7 +4516,7 @@ async function verifySecureMcpApp(): Promise<ProductConfigurationResult> {
 }
 
 async function prepareDevMcpProof(): Promise<ProductConfigurationResult> {
-  if (runtimeEnvironment !== "dev") {
+  if (!isolatedDevMcpProofAllowed(buildEnvironment, runtimeEnvironment)) {
     return configurationFailure("DEV_MCP_PROOF_DEV_ONLY");
   }
   if (!configuration) {
@@ -4635,7 +4636,7 @@ async function prepareDevMcpProof(): Promise<ProductConfigurationResult> {
 }
 
 async function runDevMcpProof(): Promise<ProductConfigurationResult> {
-  if (runtimeEnvironment !== "dev") {
+  if (!isolatedDevMcpProofAllowed(buildEnvironment, runtimeEnvironment)) {
     return configurationFailure("DEV_MCP_PROOF_DEV_ONLY");
   }
   if (!configuration || !chatGptRoute || !secureMcpConnectorRuntime) {

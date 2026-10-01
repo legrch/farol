@@ -18,7 +18,10 @@ including when source is dirty, and is never accepted as a packaged candidate.
 `task package` and `task run` retain exact clean candidate admission. Only explicit
 `task dev -- --acceptance-profile` uses isolated **Farol Dev** state. Check-only
 development and all acceptance gates retain the full owner fingerprints. No lane
-copies cookies, keys, profiles or personal Codex configuration.
+copies cookies, keys, profiles or personal Codex configuration. Development-only
+fixture proof operations require an isolated DEV profile because they add/remove
+fixture workspaces and store verification preparation. Ordinary shared NEW
+development uses the normal Computer workflow, without injecting these fixtures.
 
 The permanent model protocol is independent of these development identities:
 `model_provider = "farol"`, `model = "chatgpt"`. `farol/chatgpt` is display

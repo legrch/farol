@@ -232,16 +232,48 @@ export function observedConnectorChild(
   };
 }
 
+// The anchor stays alive even when the tunnel leader exits, so SIGKILL can
+// still address an owned group instead of a potentially reused numeric PID.
+// Desktop owns its open stdin pipe. Parent loss closes that pipe and the
+// anchor atomically kills its own group; no unreferenced helper survives.
+const CONNECTOR_GROUP_ANCHOR = `
+const { spawn } = require("node:child_process");
+process.on("SIGTERM", () => {});
+process.on("SIGINT", () => {});
+const environment = { ...process.env };
+delete environment.ELECTRON_RUN_AS_NODE;
+const child = spawn(process.argv[1], process.argv.slice(2), {
+  env: environment, stdio: "ignore", windowsHide: true
+});
+const terminate = () => process.kill(-process.pid, "SIGKILL");
+child.once("error", terminate);
+process.stdin.once("end", terminate);
+process.stdin.resume();
+`;
+
 const startProcess: ConnectorProcessStarter = async (command) => {
-  const child = spawn(command.executablePath, [...command.arguments], {
-    cwd: command.cwd,
-    env: { ...command.environment },
-    stdio: "ignore",
-    windowsHide: true,
-    // Terminal signals must not kill MCP children before their lifetime drain.
-    // Keep the exact ChildProcess tracked; this is not an unreferenced daemon.
-    detached: true,
-  });
+  if (process.platform !== "darwin")
+    runtimeError("CONNECTOR_PROCESS_GROUP_UNSUPPORTED");
+  await fs.access(command.executablePath, fs.constants.X_OK);
+  const child = spawn(
+    process.execPath,
+    [
+      "-e",
+      CONNECTOR_GROUP_ANCHOR,
+      "--",
+      command.executablePath,
+      ...command.arguments,
+    ],
+    {
+      cwd: command.cwd,
+      env: { ...command.environment, ELECTRON_RUN_AS_NODE: "1" },
+      stdio: ["pipe", "ignore", "ignore"],
+      windowsHide: true,
+      detached: true,
+    },
+  );
+  // A broken pipe is not a terminal observation for the owned process group.
+  child.stdin?.on("error", () => undefined);
   const observed = observedConnectorChild(child, true);
   await new Promise<void>((resolve, reject) => {
     const spawned = () => {

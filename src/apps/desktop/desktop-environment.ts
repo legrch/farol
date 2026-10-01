@@ -261,3 +261,10 @@ export function desktopCodexChildHomes(
         : nativeHome,
   };
 }
+
+export function isolatedDevMcpProofAllowed(
+  buildEnvironment: DesktopEnvironment,
+  profileEnvironment: DesktopEnvironment,
+): boolean {
+  return buildEnvironment === "dev" && profileEnvironment === "dev";
+}

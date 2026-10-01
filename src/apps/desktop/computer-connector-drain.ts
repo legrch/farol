@@ -10,13 +10,18 @@ export type ComputerConnectorDrainPorts = Readonly<{
 export async function drainComputerConnector(
   ports: ComputerConnectorDrainPorts,
 ): Promise<void> {
-  await ports.beginStop();
-  await ports.startInFlight;
   try {
-    await ports.waitForMcpStop();
+    await ports.beginStop();
+    await ports.startInFlight;
+    try {
+      await ports.waitForMcpStop();
+    } finally {
+      await ports.stopConnector();
+    }
   } finally {
-    await ports.stopConnector();
+    // Withdraw account admission on every stop outcome, while waiting for
+    // already admitted work. A failed MCP/connector drain remains a failure.
+    await ports.closeSavedChat();
   }
-  await ports.closeSavedChat();
   await ports.confirmStop();
 }
