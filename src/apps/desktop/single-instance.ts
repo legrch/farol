@@ -124,6 +124,20 @@ export function createInstanceRequest(
   };
 }
 
+export function secondInstanceRefusalMessage(
+  request: InstanceRequest,
+  acknowledgement: InstanceAcknowledgement | null,
+): string {
+  if (
+    request.backgroundOnly &&
+    acknowledgement?.status === "reopen-failed" &&
+    sameLaunchIdentity(request, acknowledgement)
+  ) {
+    return "Farol Next refused the background launch because this exact candidate is already running. Quit it before starting a hidden instance.";
+  }
+  return "Farol Next refused the second launch because the running build could not be verified as this exact candidate.";
+}
+
 export function decideSecondInstance(
   primary: LaunchIdentity,
   candidate: unknown,

@@ -9,6 +9,7 @@ import {
   decideSecondInstance,
   readBuildLaunchIdentity,
   sameLaunchIdentity,
+  secondInstanceRefusalMessage,
   waitForInstanceAcknowledgement,
   writeInstanceAcknowledgement,
   type InstanceRequest,
@@ -88,6 +89,35 @@ async function writeBuildFixture(
 }
 
 describe("Farol Next single-instance identity", () => {
+  it("explains a verified background-only refusal without claiming an identity failure", () => {
+    const hidden = createInstanceRequest(primary, true);
+    const acknowledgement = {
+      ...request(primary),
+      nonce: hidden.nonce,
+      status: "reopen-failed" as const,
+    };
+    expect(secondInstanceRefusalMessage(hidden, acknowledgement)).toBe(
+      "Farol Next refused the background launch because this exact candidate is already running. Quit it before starting a hidden instance.",
+    );
+    const verificationFailure =
+      "Farol Next refused the second launch because the running build could not be verified as this exact candidate.";
+    expect(secondInstanceRefusalMessage(hidden, null)).toBe(
+      verificationFailure,
+    );
+    expect(
+      secondInstanceRefusalMessage(hidden, {
+        ...acknowledgement,
+        sourceCommit: "d".repeat(40),
+      }),
+    ).toBe(verificationFailure);
+    expect(
+      secondInstanceRefusalMessage(
+        createInstanceRequest(primary),
+        acknowledgement,
+      ),
+    ).toBe(verificationFailure);
+  });
+
   it("refuses a background-only second launch without reopening", () => {
     const candidate = createInstanceRequest(primary, true);
     expect(candidate).toHaveProperty("backgroundOnly", true);

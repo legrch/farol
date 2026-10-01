@@ -152,6 +152,7 @@ import {
   acknowledgementFailureCode,
   createInstanceRequest,
   decideSecondInstance,
+  secondInstanceRefusalMessage,
   foreignAcknowledgementCount,
   readBuildLaunchIdentity,
   sameLaunchIdentity,
@@ -9328,7 +9329,7 @@ if (!primaryInstanceLock) {
             ? acknowledgement.status
             : "unverified";
         process.stderr.write(
-          "Farol Next refused the second launch because the running build could not be verified as this exact candidate.\n",
+          `${secondInstanceRefusalMessage(instanceRequest, acknowledgement)}\n`,
         );
         process.stderr.write(`${secondInstanceResultPrefix}${outcome}\n`);
         if (acknowledgement === null) {

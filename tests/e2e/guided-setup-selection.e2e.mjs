@@ -16,6 +16,8 @@ import {
   readOwnedStartupMarker,
 } from "./native-preview-admission.mjs";
 
+import { waitForOwnedSecondary } from "./owned-background-secondary.mjs";
+
 const packaged = process.argv.includes("--packaged");
 const devOnly = process.argv.includes("--dev-only");
 const behavior = process.argv.includes("--behavior");
@@ -610,29 +612,23 @@ async function checkBackgroundSecondary() {
   child.stdout.resume();
   const owned = { child, observed: false };
   backgroundChildren.push(owned);
-  const terminal = once(child, "close").then((result) => {
-    owned.observed = true;
-    observations.push({
-      kind: "background-secondary-terminal",
-      pid: child.pid,
-      exit: result[0],
-      signal: result[1],
-    });
-    return result;
+  const result = await waitForOwnedSecondary(child, {
+    onObservation: (observation) => {
+      if (observation.kind === "background-secondary-terminal")
+        owned.observed = true;
+      observations.push(observation);
+    },
   });
-  let result;
-  try {
-    result = await bounded(
-      terminal,
-      "BACKGROUND_SECONDARY_EXIT_UNKNOWN",
-      20000,
-    );
-  } catch (error) {
-    cleanupUnknown = true;
-    throw error;
-  }
-  assert.equal(result[0], 0);
-  assert.equal(result[1], null);
+  if (!result.terminal) cleanupUnknown = true;
+  if (result.stopError) cleanupFailures.push(new Error(result.stopError));
+  assert.equal(result.terminal, true, "BACKGROUND_SECONDARY_CLEANUP_UNKNOWN");
+  assert.equal(result.timedOut, false, "BACKGROUND_SECONDARY_EXIT_TIMEOUT");
+  assert.equal(result.exit, 0);
+  assert.equal(result.signal, null);
+  assert.match(
+    stderr,
+    /refused the background launch because this exact candidate is already running/u,
+  );
   assert.match(stderr, /FAROL_NEXT_SECOND_INSTANCE_RESULT:reopen-failed/u);
   assert.doesNotMatch(stderr, /FAROL_NEXT_SECOND_INSTANCE_RESULT:reopened/u);
   assert.equal(application.process().pid, primaryPid);
