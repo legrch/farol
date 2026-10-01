@@ -327,6 +327,114 @@ describe.skipIf(process.platform !== "darwin")(
       await lifecycle.prepare(newDigest);
     });
 
+    it("resumes only the same operation after pending-marker creation is interrupted", async () => {
+      const { root, lifecycle } = await fixture();
+      await lifecycle.prepare(oldDigest);
+      await lifecycle.beginStop();
+      const directory = path.join(root, "mcp-lifecycle");
+      const instance = "active-55555555-5555-4555-8555-555555555555";
+      await fs.writeFile(path.join(directory, instance), "1\n", {
+        mode: 0o600,
+      });
+      const input = {
+        operationId: "66666666-6666-4666-8666-666666666666",
+        failedQuitSha256: "f".repeat(64),
+        proveIdle: async () => undefined,
+      };
+      const pending = path.join(directory, `reconciling-${input.operationId}`);
+      const open = fs.open.bind(fs);
+      const mkdir = fs.mkdir.bind(fs);
+      let interrupted = false;
+      const openFault = vi
+        .spyOn(fs, "open")
+        .mockImplementation(async (...args) => {
+          const handle = await open(...args);
+          if (
+            !interrupted &&
+            String(args[0]) === pending &&
+            typeof args[1] === "number" &&
+            args[1] & 1
+          ) {
+            interrupted = true;
+            vi.spyOn(handle, "writeFile").mockImplementationOnce(async () => {
+              throw new Error("PENDING_PUBLICATION_INTERRUPTED");
+            });
+          }
+          return handle;
+        });
+      const mkdirFault = vi
+        .spyOn(fs, "mkdir")
+        .mockImplementation(async (...args) => {
+          const result = await mkdir(...args);
+          if (!interrupted && String(args[0]) === pending) {
+            interrupted = true;
+            throw new Error("PENDING_PUBLICATION_INTERRUPTED");
+          }
+          return result;
+        });
+      await expect(lifecycle.reconcileInactive(input)).rejects.toThrow(
+        "PENDING_PUBLICATION_INTERRUPTED",
+      );
+      openFault.mockRestore();
+      mkdirFault.mockRestore();
+      const pendingInode = (await fs.lstat(pending)).ino;
+      await expect(lifecycle.prepare(newDigest)).rejects.toThrow(
+        "COMPUTER_MCP_RECONCILIATION_PENDING",
+      );
+      await expect(
+        lifecycle.reconcileInactive({
+          ...input,
+          operationId: "77777777-7777-4777-8777-777777777777",
+        }),
+      ).rejects.toThrow("COMPUTER_MCP_RECONCILIATION_PENDING");
+      expect((await fs.lstat(pending)).ino).toBe(pendingInode);
+      await lifecycle.reconcileInactive(input);
+      expect(
+        await fs.readFile(
+          path.join(directory, `retired-${input.operationId}`, instance),
+          "utf8",
+        ),
+      ).toBe("1\n");
+      await expect(fs.lstat(pending)).rejects.toMatchObject({ code: "ENOENT" });
+      await lifecycle.prepare(newDigest);
+    });
+
+    it.each(["public", "symlink", "nonempty", "legacy-partial"])(
+      "refuses an unsafe %s pending marker without moving an instance",
+      async (kind) => {
+        const { root, lifecycle } = await fixture();
+        await lifecycle.prepare(oldDigest);
+        await lifecycle.beginStop();
+        const directory = path.join(root, "mcp-lifecycle");
+        const instance = path.join(
+          directory,
+          "active-55555555-5555-4555-8555-555555555555",
+        );
+        await fs.writeFile(instance, "1\n", { mode: 0o600 });
+        const operationId = "66666666-6666-4666-8666-666666666666";
+        const pending = path.join(directory, `reconciling-${operationId}`);
+        if (kind === "symlink") await fs.symlink(directory, pending);
+        else if (kind === "legacy-partial")
+          await fs.writeFile(pending, "", { mode: 0o600 });
+        else {
+          await fs.mkdir(pending, { mode: kind === "public" ? 0o755 : 0o700 });
+          if (kind === "nonempty")
+            await fs.writeFile(path.join(pending, "foreign"), "retain", {
+              mode: 0o600,
+            });
+        }
+        await expect(
+          lifecycle.reconcileInactive({
+            operationId,
+            failedQuitSha256: "f".repeat(64),
+            proveIdle: async () => undefined,
+          }),
+        ).rejects.toThrow();
+        expect(await fs.readFile(instance, "utf8")).toBe("1\n");
+        expect((await fs.lstat(pending)).ino).toBeGreaterThan(0);
+      },
+    );
+
     it.each(["prepared.json", "completed.json"])(
       "resumes an interrupted %s publication without accepting partial journal bytes",
       async (name) => {

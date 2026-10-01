@@ -236,7 +236,7 @@ export async function recoverClosedComputer(
   );
   if (!lease) throw new Error("CLOSED_COMPUTER_RECOVERY_APP_ACTIVE");
   try {
-    return await new PrivateExecutionFence({ root }).withUpdateDrain(
+    return await new PrivateExecutionFence({ root }).withClosedRecoveryDrain(
       async () => {
         const archive = path.join(
           state,

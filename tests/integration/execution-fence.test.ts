@@ -22,6 +22,69 @@ afterEach(async () => {
 });
 
 describe("private execution fence", () => {
+  it("holds closed recovery admission without leaving a crash-sticky mutation directory", async () => {
+    root = await makeRoot();
+    const recovery = new PrivateExecutionFence({ root });
+    const connector = new PrivateExecutionFence({ root });
+    await expect(
+      recovery.withClosedRecoveryDrain(async () => {
+        expect((await connector.acquireAdmission()).admitted).toBe(false);
+        await expect(
+          connector.withClosedRecoveryDrain(async () => undefined),
+        ).rejects.toThrow("EXECUTION_FENCE_ACTIVE_COMPUTER_WORK");
+        throw new Error("RECOVERY_INTERRUPTED");
+      }),
+    ).rejects.toThrow("RECOVERY_INTERRUPTED");
+    await expect(
+      fs.lstat(path.join(root, "execution-fence-mutation.lock")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+    const after = await connector.acquireAdmission();
+    expect(after.admitted).toBe(true);
+    if (after.admitted) await after.release();
+  });
+
+  it("never clears a pre-existing unknown mutation exclusion for closed recovery", async () => {
+    root = await makeRoot();
+    const lock = path.join(root, "execution-fence-mutation.lock");
+    await fs.mkdir(lock, { mode: 0o700 });
+    const inode = (await fs.lstat(lock)).ino;
+    const recovery = new PrivateExecutionFence({ root });
+    let entered = false;
+    await expect(
+      recovery.withClosedRecoveryDrain(async () => {
+        entered = true;
+      }),
+    ).rejects.toThrow("EXECUTION_FENCE_UNVERIFIED_MUTATION");
+    expect(entered).toBe(false);
+    expect((await fs.lstat(lock)).ino).toBe(inode);
+  });
+
+  it.each(["read", "shell", "summary"])(
+    "refuses closed recovery while %s work is unresolved",
+    async (kind) => {
+      root = await makeRoot();
+      const owner = new PrivateExecutionFence({ root });
+      const recovery = new PrivateExecutionFence({ root });
+      const admitted = await owner.acquireAdmission();
+      if (!admitted.admitted) throw new Error(admitted.code);
+      if (kind === "shell") await owner.reserveShell("unknown-shell");
+      if (kind !== "read") await admitted.release();
+      if (kind === "summary")
+        await owner.raise({ operationId: "summary", taskId: "task" });
+      let entered = false;
+      try {
+        await expect(
+          recovery.withClosedRecoveryDrain(async () => {
+            entered = true;
+          }),
+        ).rejects.toThrow();
+        expect(entered).toBe(false);
+      } finally {
+        if (kind === "read") await admitted.release();
+      }
+    },
+  );
+
   it("serializes an admitted effect with summary raise across independent instances", async () => {
     root = await makeRoot();
     const connector = new PrivateExecutionFence({ root });

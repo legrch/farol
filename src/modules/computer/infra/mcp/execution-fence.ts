@@ -170,6 +170,39 @@ export class PrivateExecutionFence implements ExecutionFenceReader {
     );
   }
 
+  /** Closed-app recovery only: its caller owns the promotion lease and proves
+   * NEW-owned dispatchers absent before effects. The kernel releases admission
+   * on process death; the caller's exact journal controls same-operation resume.
+   * Existing mutation exclusions remain unknown and are never stolen/removed.
+   * Ordinary running-app update drain keeps its original mutation lock. */
+  async withClosedRecoveryDrain<T>(work: () => Promise<T>): Promise<T> {
+    const root = path.dirname(this.mutationLock);
+    const info = await fs.lstat(root);
+    if (
+      !info.isDirectory() ||
+      info.isSymbolicLink() ||
+      (info.mode & 0o077) !== 0 ||
+      (process.geteuid?.() !== undefined && info.uid !== process.geteuid()) ||
+      (await fs.realpath(root)) !== root
+    )
+      throw new Error("COMPUTER_EXECUTION_FENCE_ROOT_UNSAFE");
+    const lease = await this.lock(true);
+    if (!lease) throw new Error("EXECUTION_FENCE_ACTIVE_COMPUTER_WORK");
+    try {
+      try {
+        await fs.lstat(this.mutationLock);
+        throw new Error("EXECUTION_FENCE_UNVERIFIED_MUTATION");
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+      const admission = await this.admits();
+      if (!admission.admitted) throw new Error(admission.code);
+      return await work();
+    } finally {
+      await lease.close();
+    }
+  }
+
   private async lock(exclusive: boolean): Promise<fs.FileHandle | null> {
     if (process.platform !== "darwin") {
       throw new Error("EXECUTION_FENCE_LOCK_UNSUPPORTED");

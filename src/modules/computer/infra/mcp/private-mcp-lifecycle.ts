@@ -143,6 +143,28 @@ export class PrivateMcpLifecycle {
     return true;
   }
 
+  private async reconciliationMarker(name: string) {
+    const target = path.join(this.directory, name);
+    // Atomic directory creation has no partially written authoritative bytes.
+    // Preserve compatibility with an already complete old file marker; partial
+    // or foreign old markers still refuse rather than being repaired by guess.
+    await fs
+      .mkdir(target, { mode: 0o700 })
+      .catch((error: NodeJS.ErrnoException) => {
+        if (error.code !== "EEXIST") throw error;
+      });
+    const info = await fs.lstat(target);
+    if (info.isDirectory()) {
+      await this.safeRecoveryDirectory(target);
+      if ((await fs.readdir(target)).length !== 0)
+        throw new Error("COMPUTER_MCP_RECONCILIATION_UNSAFE");
+    } else if (!(await this.existingMarker(name))) {
+      throw new Error("COMPUTER_MCP_LIFECYCLE_MARKER_UNSAFE");
+    }
+    await this.sync();
+    return { device: info.dev, inode: info.ino, directory: info.isDirectory() };
+  }
+
   private async sync(): Promise<void> {
     const directory = await fs.open(
       this.directory,
@@ -395,7 +417,7 @@ export class PrivateMcpLifecycle {
         instances.some((name) => !plan.instances.includes(name))
       )
         throw new Error("COMPUTER_MCP_RECONCILIATION_CHANGED");
-      await this.marker(pending);
+      const pendingIdentity = await this.reconciliationMarker(pending);
       await fs
         .mkdir(archive, { mode: 0o700 })
         .catch((error: NodeJS.ErrnoException) => {
@@ -432,7 +454,16 @@ export class PrivateMcpLifecycle {
         ...plan,
         phase: "retired_unconfirmed",
       });
-      await fs.unlink(path.join(this.directory, pending));
+      const pendingPath = path.join(this.directory, pending);
+      const pendingNow = await fs.lstat(pendingPath);
+      if (
+        pendingNow.dev !== pendingIdentity.device ||
+        pendingNow.ino !== pendingIdentity.inode ||
+        pendingNow.isDirectory() !== pendingIdentity.directory
+      )
+        throw new Error("COMPUTER_MCP_RECONCILIATION_CHANGED");
+      if (pendingIdentity.directory) await fs.rmdir(pendingPath);
+      else await fs.unlink(pendingPath);
       await this.sync();
     } finally {
       await lease.close();

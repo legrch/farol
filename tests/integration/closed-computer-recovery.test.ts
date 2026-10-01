@@ -1,9 +1,11 @@
 import { createHash } from "node:crypto";
+import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { runInNewContext } from "node:vm";
 import { parse } from "@babel/parser";
+import { build } from "esbuild";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { recoverClosedComputer } from "../../src/apps/desktop/closed-computer-recovery";
 import { PrivateMcpLifecycle } from "../../src/modules/computer/infra/mcp/private-mcp-lifecycle";
@@ -114,6 +116,113 @@ afterEach(async () => {
 describe.skipIf(process.platform !== "darwin")(
   "explicit closed Computer reconciliation (disposable state, no provider)",
   () => {
+    it("resumes the same recovery after its owned process is killed during journal publication", async () => {
+      const f = await fixture();
+      const archive = path.join(
+        f.state,
+        `closed-recovery-${f.input.operationId}`,
+      );
+      const entry = path.join(f.input.userData, "recovery-child.ts");
+      const output = path.join(f.input.userData, "recovery-child.cjs");
+      await fs.writeFile(
+        entry,
+        `
+        import fs from 'node:fs/promises';
+        import path from 'node:path';
+        import { recoverClosedComputer } from ${JSON.stringify(path.resolve(import.meta.dirname, "../../src/apps/desktop/closed-computer-recovery.ts"))};
+        const input = JSON.parse(process.argv[2]);
+        const open = fs.open.bind(fs);
+        let suspended = false;
+        fs.open = async (...args) => {
+          const handle = await open(...args);
+          if (!suspended && path.dirname(String(args[0])) === ${JSON.stringify(archive)} &&
+              String(args[0]).includes('prepared.json') && typeof args[1] === 'number' && (args[1] & 1)) {
+            suspended = true;
+            handle.writeFile = async () => {
+              await handle.write('{"schema":');
+              await handle.sync();
+              process.stdout.write('interrupted\\n');
+              setInterval(() => {}, 1000);
+              await new Promise(() => {});
+            };
+          }
+          return handle;
+        };
+        recoverClosedComputer({...input, desktopState: async () => ({
+          obligations: ['QUIT_UNCONFIRMED:connector', 'QUIT_UNCONFIRMED:crash'],
+          unreadable: [], changed: []
+        })}, {run: {bootTime: 100000, isAlive: () => false, processStart: () => null},
+          processesAbsent: () => undefined}).catch(() => process.exit(2));
+      `,
+        { mode: 0o600 },
+      );
+      await build({
+        entryPoints: [entry],
+        outfile: output,
+        bundle: true,
+        platform: "node",
+        format: "cjs",
+        target: "node24",
+        logLevel: "silent",
+      });
+      const child = spawn(
+        process.execPath,
+        [output, JSON.stringify({ ...f.input, desktopState: undefined })],
+        { stdio: ["ignore", "pipe", "pipe"] },
+      );
+      const exited = new Promise<{
+        code: number | null;
+        signal: NodeJS.Signals | null;
+      }>((resolve) =>
+        child.once("close", (code, signal) => resolve({ code, signal })),
+      );
+      try {
+        await new Promise<void>((resolve, reject) => {
+          const timer = setTimeout(
+            () => reject(new Error("RECOVERY_CHILD_NOT_READY")),
+            10000,
+          );
+          child.stdout.once("data", (bytes) => {
+            clearTimeout(timer);
+            String(bytes).includes("interrupted")
+              ? resolve()
+              : reject(new Error("RECOVERY_CHILD_OUTPUT_INVALID"));
+          });
+          child.once("error", (error) => {
+            clearTimeout(timer);
+            reject(error);
+          });
+          child.once("exit", () => {
+            clearTimeout(timer);
+            reject(new Error("RECOVERY_CHILD_EXITED_EARLY"));
+          });
+        });
+        child.kill("SIGKILL");
+        expect(await exited).toEqual({ code: null, signal: "SIGKILL" });
+        expect(
+          await fs.readFile(path.join(f.state, "running.json"), "utf8"),
+        ).toBe(f.run);
+        expect(
+          await fs.readFile(path.join(f.state, "last-quit.json"), "utf8"),
+        ).toBe(f.quit);
+        const remnants = (await fs.readdir(archive)).filter((name) =>
+          name.startsWith(".prepared.json."),
+        );
+        expect(remnants).toHaveLength(1);
+        const staged = path.join(archive, remnants[0]!);
+        const inode = (await fs.lstat(staged)).ino;
+        await expect(
+          recoverClosedComputer(f.input, f.probes),
+        ).resolves.toMatchObject({ phase: "retired_unconfirmed" });
+        expect(await fs.readFile(staged, "utf8")).toBe('{"schema":');
+        expect((await fs.lstat(staged)).ino).toBe(inode);
+      } finally {
+        if (child.exitCode === null && child.signalCode === null)
+          child.kill("SIGKILL");
+        await exited;
+      }
+    }, 20000);
+
     it.each([
       "prepared.json",
       "running.json",
