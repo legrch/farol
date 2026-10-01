@@ -116,6 +116,40 @@ afterEach(async () => {
 describe.skipIf(process.platform !== "darwin")(
   "explicit closed Computer reconciliation (disposable state, no provider)",
   () => {
+    it("retains a connector-only failed Quit after MCP shutdown removed every instance", async () => {
+      const f = await fixture();
+      await fs.unlink(path.join(f.root, "mcp-lifecycle", f.instance));
+      await f.lifecycle.waitForStop();
+      await f.lifecycle.confirmStop();
+      await expect(
+        recoverClosedComputer(f.input, f.probes),
+      ).resolves.toMatchObject({ phase: "retired_unconfirmed" });
+      const retained = path.join(
+        f.state,
+        `closed-recovery-${f.input.operationId}`,
+      );
+      expect(
+        await fs.readFile(path.join(retained, "last-quit.json"), "utf8"),
+      ).toBe(f.quit);
+      expect(
+        JSON.parse(
+          await fs.readFile(
+            path.join(
+              f.root,
+              "mcp-lifecycle",
+              `retired-${f.input.operationId}`,
+              "completed.json",
+            ),
+            "utf8",
+          ),
+        ),
+      ).toMatchObject({ instances: [], phase: "retired_unconfirmed" });
+      expect(f.probes.processesAbsent).toHaveBeenCalled();
+      await expect(
+        fs.lstat(path.join(f.state, "running.json")),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+    });
+
     it("resumes the same recovery after its owned process is killed during journal publication", async () => {
       const f = await fixture();
       const archive = path.join(

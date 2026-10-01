@@ -228,6 +228,47 @@ async function fixture() {
 }
 
 suite("explicit preview installation retirement", () => {
+  it("retains and restores an empty inactive updates directory without inventing a download", async () => {
+    const f = await fixture();
+    await fs.unlink(path.join(f.updates, "ready.json"));
+    await fs.rm(path.join(f.updates, `download-${f.ready.downloadId}`), {
+      recursive: true,
+    });
+    const original = await fs.lstat(f.updates);
+    const retired = await f.cli();
+    expect(retired.status, retired.stderr).toBe(0);
+    expect((await fs.lstat(f.retiredUpdates)).ino).toBe(original.ino);
+    expect(await fs.readdir(f.retiredUpdates)).toEqual([]);
+    expect(await fs.readFile(path.join(f.state, "config.json"), "utf8")).toBe(
+      "retained settings\n",
+    );
+    const restored = await f.cli({}, [
+      "--restore",
+      op,
+      "--expected-preview",
+      f.old.digest,
+    ]);
+    expect(restored.status, restored.stderr).toBe(0);
+    expect((await fs.lstat(f.updates)).ino).toBe(original.ino);
+    expect(await fs.readdir(f.updates)).toEqual([]);
+    expect(await treeDigest(f.preview)).toBe(f.old.digest);
+  });
+  it("refuses unknown update content when no ready record exists", async () => {
+    const f = await fixture();
+    await fs.unlink(path.join(f.updates, "ready.json"));
+    await fs.rm(path.join(f.updates, `download-${f.ready.downloadId}`), {
+      recursive: true,
+    });
+    await write(path.join(f.updates, "restore-pending.json"), "unknown");
+    const updates = await fs.lstat(f.updates);
+    const preview = await fs.lstat(f.preview);
+    expect((await f.cli()).status).not.toBe(0);
+    expect((await fs.lstat(f.updates)).ino).toBe(updates.ino);
+    expect((await fs.lstat(f.preview)).ino).toBe(preview.ino);
+    expect(
+      await fs.readFile(path.join(f.updates, "restore-pending.json"), "utf8"),
+    ).toBe("unknown");
+  });
   it.each([
     ["--apply"],
     [

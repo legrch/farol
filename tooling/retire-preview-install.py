@@ -224,6 +224,11 @@ def run(request):
             updates = private_directory(source, name)
             try:
                 names = b.sorted_names(updates)
+                # Normal startup creates this directory before any download.
+                # An empty tree has no update operation or archive to replay;
+                # retain its bound inode through the same move/restore plan.
+                if not names:
+                    return
                 ready = b.read_json(updates, "ready.json")
                 required = {"schema", "handle", "manifest", "operation", "downloadId"}
                 optional = {"preparation", "helper", "archiveReleased"}

@@ -19,7 +19,7 @@ const Reconciliation = z.strictObject({
   schema: z.literal(1),
   operationId: z.string().uuid(),
   failedQuitSha256: z.string().regex(DIGEST),
-  instances: z.array(z.string().regex(INSTANCE)).min(1).max(64),
+  instances: z.array(z.string().regex(INSTANCE)).max(64),
 });
 
 /** One launch root, shared by Desktop and every Computer MCP it authorizes. */

@@ -23,7 +23,7 @@ import { sourceIdentity } from "./source-identity.mjs";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const schema = "farol.preview-retirement/1";
 const HELPER_SHA256 =
-  "eccccb962316a8c825a52134814458b1ed0ae1aec102a8eb250271ffd125b4fb";
+  "461accbf164f7b20ee570db83b470379889ace0bcb823d25873805be9499e484";
 const LIBRARY_SHA256 =
   "49486432c2af8ec1ec7dbe95504d2daa5baf61128ba05db6970e459656265b03";
 
