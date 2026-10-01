@@ -1170,12 +1170,9 @@ try {
         kind: "explicit-stop-preserved-after-reopen",
         sends: nonReadRequests,
       });
-      // Restore only through the same explicit configuration command. This is
-      // the disposable local tunnel fixture, never a real connector or daemon.
-      const restarted = await returning.evaluate(() =>
-        window.farolNext.configure({ kind: "connector.start" }),
-      );
-      assert.equal(restarted.ok, true);
+      // The later explicit fresh-check action restores the stopped local
+      // fixture through normal UI recovery. Direct IPC would leave the
+      // renderer stale and cause a duplicate start before that check.
       await returning.locator('[data-onboarding-step="app"]').click();
       assert.equal(
         await returning.locator("#onboarding-app-name").inputValue(),
