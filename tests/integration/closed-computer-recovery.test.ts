@@ -2,6 +2,8 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { runInNewContext } from "node:vm";
+import { parse } from "@babel/parser";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { recoverClosedComputer } from "../../src/apps/desktop/closed-computer-recovery";
 import { PrivateMcpLifecycle } from "../../src/modules/computer/infra/mcp/private-mcp-lifecycle";
@@ -9,13 +11,59 @@ import { PrivateExecutionFence } from "../../src/modules/computer/infra/mcp/exec
 
 const roots: string[] = [];
 const sha = (bytes: string) => createHash("sha256").update(bytes).digest("hex");
+async function desktopRoots(userData: string) {
+  const source = await fs.readFile(
+    path.resolve(import.meta.dirname, "../../src/apps/desktop/main.ts"),
+    "utf8",
+  );
+  const ast = parse(source, { sourceType: "module", plugins: ["typescript"] });
+  // Run only these pure path builders from the actual boot source, never main.
+  // A separately hard-coded fixture root would miss a production root change.
+  const builders = [
+    "secureMcpConnectorRoot",
+    "secureMcpCredentialRoot",
+    "secureMcpLaunchRoot",
+  ].map((name) => {
+    const node = ast.program.body.find(
+      (entry) =>
+        entry.type === "FunctionDeclaration" && entry.id?.name === name,
+    );
+    if (node?.type !== "FunctionDeclaration" || node.params.length !== 0)
+      throw new Error(`Desktop root builder unavailable: ${name}`);
+    return `function ${name}() ${source.slice(node.body.start!, node.body.end!)}`;
+  });
+  const lifecycle = ast.program.body.find(
+    (entry) =>
+      entry.type === "FunctionDeclaration" &&
+      entry.id?.name === "computerMcpLifecycle",
+  );
+  if (lifecycle?.type !== "FunctionDeclaration")
+    throw new Error("Desktop lifecycle construction unavailable");
+  expect(source.slice(lifecycle.start!, lifecycle.end!)).toMatch(
+    /new PrivateMcpLifecycle\(\s*secureMcpLaunchRoot\(\)/u,
+  );
+  return runInNewContext(
+    `${builders.join("\n")}\n({root: secureMcpLaunchRoot(), credentials: secureMcpCredentialRoot()})`,
+    {
+      path,
+      app: {
+        getPath(name: string) {
+          expect(name).toBe("userData");
+          return userData;
+        },
+      },
+    },
+    { timeout: 1_000 },
+  ) as { root: string; credentials: string };
+}
 async function fixture() {
   const userData = await fs.realpath(
     await fs.mkdtemp(path.join(os.tmpdir(), "farol-closed-recovery-")),
   );
   roots.push(userData);
   const state = path.join(userData, "farol-next-state");
-  const root = path.join(state, "secure-mcp-connector/computer-authority");
+  await fs.mkdir(state, { mode: 0o700 });
+  const { root, credentials } = await desktopRoots(userData);
   await fs.mkdir(root, { mode: 0o700, recursive: true });
   const run = `${JSON.stringify({ schema: 1, pid: 1111111, startedAt: "2026-10-01T00:00:00.000Z", bootTime: 100000, processStart: "old-process" })}\n`;
   const quit = `${JSON.stringify({ schema: 1, at: "2026-10-01T00:01:00.000Z", drained: false, unconfirmed: ["connector"] })}\n`;
@@ -45,7 +93,17 @@ async function fixture() {
     run: { bootTime: 100000, isAlive: () => false, processStart: () => null },
     processesAbsent,
   };
-  return { input, probes, root, state, lifecycle, instance, run, quit };
+  return {
+    input,
+    probes,
+    root,
+    credentials,
+    state,
+    lifecycle,
+    instance,
+    run,
+    quit,
+  };
 }
 afterEach(async () => {
   vi.restoreAllMocks();
@@ -56,6 +114,25 @@ afterEach(async () => {
 describe.skipIf(process.platform !== "darwin")(
   "explicit closed Computer reconciliation (disposable state, no provider)",
   () => {
+    it("uses the desktop authority root and leaves the separate credential tree untouched", async () => {
+      const f = await fixture();
+      const sibling = path.join(
+        f.credentials,
+        "computer-authority",
+        "mutations",
+      );
+      await fs.mkdir(sibling, { mode: 0o700, recursive: true });
+      const marker = path.join(sibling, "untouched.json");
+      await fs.writeFile(marker, "not an authority journal", { mode: 0o600 });
+      expect(f.root.startsWith(`${f.credentials}${path.sep}`)).toBe(false);
+      await expect(
+        recoverClosedComputer(f.input, f.probes),
+      ).resolves.toMatchObject({ phase: "retired_unconfirmed" });
+      expect(await fs.readFile(marker, "utf8")).toBe(
+        "not an authority journal",
+      );
+    });
+
     it("retains exact failed evidence and shell no-replay identities, retires only the inactive markers", async () => {
       const f = await fixture();
       const shell = path.join(f.root, "shell-v2", "b".repeat(64));
