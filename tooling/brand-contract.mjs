@@ -5,11 +5,11 @@ import path from "node:path";
 export const BRAND_RESOURCES = Object.freeze([
   {
     output: "farol-mark.svg",
-    sha256: "fc0daa315c24ed389a4755f2af115a2a79d514d3db6ae87a71ebfbc23a035be3",
+    sha256: "847406dda7c5311f3368767cd99666bcd22d2ed5a0a2451d41956339dd3aa533",
   },
   {
     output: "farol-dev-mark.svg",
-    sha256: "6982704b2df988af9ce023463c1a4ecf9680789e59c237b65e5ccea8e4801df1",
+    sha256: "9cf355aee04f7a171501f7891a56b086e6a214a403d4c2f7e4b468062a0af667",
   },
   {
     output: "farol-mark.png",

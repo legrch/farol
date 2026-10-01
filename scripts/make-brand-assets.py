@@ -38,7 +38,8 @@ def drawing(board: str, pixels: int, dev: bool) -> bytes:
             "font-family": "Helvetica, Arial, sans-serif", "font-weight": "bold", "font-size": "166",
         })
         label.text = "DEV"
-    return ET.tostring(document, encoding="utf-8", xml_declaration=True)
+    rendered = ET.tostring(document, encoding="utf-8", xml_declaration=True)
+    return b"\n".join(line.rstrip() for line in rendered.split(b"\n"))
 
 
 def png(svg: Path, output: Path) -> None:
