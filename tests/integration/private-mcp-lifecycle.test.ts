@@ -210,6 +210,123 @@ describe.skipIf(process.platform !== "darwin")(
       );
     });
 
+    it("retires an inactive instance only through explicit, fenced reconciliation, without confirming its old stop", async () => {
+      const { root, lifecycle } = await fixture();
+      await lifecycle.prepare(oldDigest);
+      const instance = "active-11111111-1111-4111-8111-111111111111";
+      const directory = path.join(root, "mcp-lifecycle");
+      await fs.writeFile(path.join(directory, instance), "1\n", {
+        mode: 0o600,
+      });
+      await lifecycle.beginStop();
+      const proveIdle = vi.fn(async () => undefined);
+      const operationId = "22222222-2222-4222-8222-222222222222";
+      await lifecycle.reconcileInactive({
+        operationId,
+        failedQuitSha256: "d".repeat(64),
+        proveIdle,
+      });
+      expect(proveIdle).toHaveBeenCalledOnce();
+      const archive = path.join(directory, `retired-${operationId}`);
+      expect(await fs.readFile(path.join(archive, instance), "utf8")).toBe(
+        "1\n",
+      );
+      const receipt = JSON.parse(
+        await fs.readFile(path.join(archive, "completed.json"), "utf8"),
+      );
+      expect(receipt).toMatchObject({
+        phase: "retired_unconfirmed",
+        failedQuitSha256: "d".repeat(64),
+        instances: [instance],
+      });
+      expect(receipt).not.toHaveProperty("drained");
+      expect(await lifecycle.isStopping()).toBe(true);
+      await expect(lifecycle.join(oldDigest)).rejects.toThrow(
+        "COMPUTER_MCP_LIFECYCLE_REVOKED",
+      );
+      await lifecycle.prepare(newDigest);
+      const next = await lifecycle.join(newDigest);
+      await next.release();
+    });
+
+    it("does not reconcile a live lease, outstanding work, or an unsafe instance", async () => {
+      const { root, lifecycle } = await fixture();
+      await lifecycle.prepare(oldDigest);
+      const live = await lifecycle.join(oldDigest);
+      await lifecycle.beginStop();
+      const proveIdle = vi.fn(async () => {
+        throw new Error("WORK_PENDING");
+      });
+      const input = {
+        operationId: "33333333-3333-4333-8333-333333333333",
+        failedQuitSha256: "e".repeat(64),
+        proveIdle,
+      };
+      try {
+        await expect(lifecycle.reconcileInactive(input)).rejects.toThrow(
+          "COMPUTER_MCP_LIFECYCLE_UNVERIFIED",
+        );
+        expect(proveIdle).not.toHaveBeenCalled();
+      } finally {
+        await live.release();
+      }
+      const marker = path.join(
+        root,
+        "mcp-lifecycle",
+        "active-44444444-4444-4444-8444-444444444444",
+      );
+      await fs.writeFile(marker, "1\n", { mode: 0o600 });
+      await expect(lifecycle.reconcileInactive(input)).rejects.toThrow(
+        "WORK_PENDING",
+      );
+      expect(await fs.readFile(marker, "utf8")).toBe("1\n");
+      await fs.writeFile(marker, "corrupt");
+      await expect(
+        lifecycle.reconcileInactive({
+          ...input,
+          proveIdle: async () => undefined,
+        }),
+      ).rejects.toThrow("COMPUTER_MCP_LIFECYCLE_MARKER_UNSAFE");
+    });
+
+    it("keeps normal start fenced after a partial reconciliation and resumes only that exact operation", async () => {
+      const { root, lifecycle } = await fixture();
+      await lifecycle.prepare(oldDigest);
+      await lifecycle.beginStop();
+      const directory = path.join(root, "mcp-lifecycle");
+      const instance = "active-55555555-5555-4555-8555-555555555555";
+      await fs.writeFile(path.join(directory, instance), "1\n", {
+        mode: 0o600,
+      });
+      const input = {
+        operationId: "66666666-6666-4666-8666-666666666666",
+        failedQuitSha256: "f".repeat(64),
+        proveIdle: async () => undefined,
+      };
+      const rename = fs.rename.bind(fs);
+      const fault = vi
+        .spyOn(fs, "rename")
+        .mockRejectedValueOnce(new Error("RENAME_FAULT"));
+      await expect(lifecycle.reconcileInactive(input)).rejects.toThrow(
+        "RENAME_FAULT",
+      );
+      fault.mockImplementation(rename);
+      await expect(lifecycle.prepare(newDigest)).rejects.toThrow(
+        "COMPUTER_MCP_RECONCILIATION_PENDING",
+      );
+      await expect(lifecycle.confirmStop()).rejects.toThrow(
+        "COMPUTER_MCP_RECONCILIATION_PENDING",
+      );
+      await expect(
+        lifecycle.reconcileInactive({
+          ...input,
+          operationId: "77777777-7777-4777-8777-777777777777",
+        }),
+      ).rejects.toThrow("COMPUTER_MCP_RECONCILIATION_PENDING");
+      await lifecycle.reconcileInactive(input);
+      await lifecycle.prepare(newDigest);
+    });
+
     it("keeps handler admission open until every admitted handler settles", async () => {
       const { lifecycle } = await fixture();
       await lifecycle.prepare(oldDigest);

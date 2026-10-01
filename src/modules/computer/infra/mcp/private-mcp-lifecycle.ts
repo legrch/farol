@@ -3,6 +3,7 @@ import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
+import { z } from "zod";
 
 const SHARED_LOCK = 0x10;
 const EXCLUSIVE_LOCK = 0x20;
@@ -11,6 +12,13 @@ const CLOSE_ON_EXEC =
   (fsConstants as typeof fsConstants & { O_CLOEXEC?: number }).O_CLOEXEC ?? 0;
 const DIGEST = /^[a-f0-9]{64}$/u;
 const PREPARED = /^prepared-([a-f0-9]{64})$/u;
+const INSTANCE = /^active-[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/u;
+const Reconciliation = z.strictObject({
+  schema: z.literal(1),
+  operationId: z.string().uuid(),
+  failedQuitSha256: z.string().regex(DIGEST),
+  instances: z.array(z.string().regex(INSTANCE)).min(1).max(64),
+});
 
 /** One launch root, shared by Desktop and every Computer MCP it authorizes. */
 export class PrivateMcpLifecycle {
@@ -169,6 +177,15 @@ export class PrivateMcpLifecycle {
       throw new Error("COMPUTER_MCP_INSTANCE_CLEANUP_UNVERIFIED");
   }
 
+  private async reconciliationComplete(): Promise<void> {
+    if (
+      (await fs.readdir(this.directory)).some((name) =>
+        name.startsWith("reconciling-"),
+      )
+    )
+      throw new Error("COMPUTER_MCP_RECONCILIATION_PENDING");
+  }
+
   private async revokePrepared(): Promise<void> {
     for (const entry of await fs.readdir(this.directory)) {
       const match = PREPARED.exec(entry);
@@ -191,6 +208,7 @@ export class PrivateMcpLifecycle {
     try {
       if (admittedStopRevision !== this.stopRevision)
         throw new Error("COMPUTER_MCP_PREPARATION_STOPPED");
+      await this.reconciliationComplete();
       await this.instancesGone();
       await this.shellGroupsGone();
       await this.revokePrepared();
@@ -288,6 +306,7 @@ export class PrivateMcpLifecycle {
   async waitForStop(timeoutMs = 5_000): Promise<void> {
     const lease = await this.lock(true, timeoutMs);
     try {
+      await this.reconciliationComplete();
       if (!(await this.existingMarker("stopping")))
         throw new Error("COMPUTER_MCP_LIFECYCLE_STOP_UNVERIFIED");
       await this.instancesGone();
@@ -301,6 +320,7 @@ export class PrivateMcpLifecycle {
   async confirmStop(timeoutMs = 5_000): Promise<void> {
     const lease = await this.lock(true, timeoutMs);
     try {
+      await this.reconciliationComplete();
       if (!(await this.existingMarker("stopping")))
         throw new Error("COMPUTER_MCP_LIFECYCLE_STOP_UNVERIFIED");
       await this.revokePrepared();
@@ -308,6 +328,220 @@ export class PrivateMcpLifecycle {
       await this.shellGroupsGone();
     } finally {
       await lease.close();
+    }
+  }
+
+  /** Explicit closed-app maintenance only. The caller must hold the Desktop
+   * promotion lease and exclusive Computer fence, and prove all durable work
+   * settled. A free lifetime lease alone never calls this path. Old instances
+   * and the failed Quit identity are retained; this is NOT a stop acknowledgement.
+   */
+  async reconcileInactive(
+    input: Readonly<{
+      operationId: string;
+      failedQuitSha256: string;
+      proveIdle(): Promise<void>;
+    }>,
+  ): Promise<void> {
+    if (
+      !z.string().uuid().safeParse(input.operationId).success ||
+      !DIGEST.test(input.failedQuitSha256)
+    )
+      throw new Error("COMPUTER_MCP_RECONCILIATION_INVALID");
+    const lease = await this.lock(true, 0);
+    try {
+      if (!(await this.existingMarker("stopping")))
+        throw new Error("COMPUTER_MCP_LIFECYCLE_STOP_UNVERIFIED");
+      const pending = `reconciling-${input.operationId}`;
+      const entries = await fs.readdir(this.directory);
+      if (
+        entries.length > 4096 ||
+        entries.some(
+          (name) => name.startsWith("reconciling-") && name !== pending,
+        )
+      )
+        throw new Error("COMPUTER_MCP_RECONCILIATION_PENDING");
+      const instances = entries
+        .filter((name) => name.startsWith("active-"))
+        .sort();
+      if (instances.some((name) => !INSTANCE.test(name)))
+        throw new Error("COMPUTER_MCP_LIFECYCLE_MARKER_UNSAFE");
+      for (const name of instances) await this.existingMarker(name);
+      await this.shellGroupsGone();
+      // All effect/state checks run while no MCP can join. No process, proxy,
+      // status probe or effect is launched by this lifecycle primitive.
+      await input.proveIdle();
+      const archive = path.join(this.directory, `retired-${input.operationId}`);
+      try {
+        await this.safeRecoveryDirectory(archive);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+      const planFile = path.join(archive, "prepared.json");
+      const previous = await this.readReconciliation(planFile);
+      const plan =
+        previous ??
+        Reconciliation.parse({
+          schema: 1,
+          operationId: input.operationId,
+          failedQuitSha256: input.failedQuitSha256,
+          instances,
+        });
+      if (
+        plan.operationId !== input.operationId ||
+        plan.failedQuitSha256 !== input.failedQuitSha256 ||
+        instances.some((name) => !plan.instances.includes(name))
+      )
+        throw new Error("COMPUTER_MCP_RECONCILIATION_CHANGED");
+      await this.marker(pending);
+      await fs
+        .mkdir(archive, { mode: 0o700 })
+        .catch((error: NodeJS.ErrnoException) => {
+          if (error.code !== "EEXIST") throw error;
+        });
+      await this.safeRecoveryDirectory(archive);
+      for (const name of await fs.readdir(archive)) {
+        if (
+          !plan.instances.includes(name) &&
+          name !== "prepared.json" &&
+          name !== "completed.json"
+        )
+          throw new Error("COMPUTER_MCP_RECONCILIATION_UNSAFE");
+      }
+      await this.writeReconciliation(planFile, plan);
+      await this.revokePrepared();
+      for (const name of plan.instances) {
+        const source = path.join(this.directory, name);
+        const target = path.join(archive, name);
+        const sourcePresent = await this.existingMarker(name);
+        const targetPresent = await this.archivedMarker(target);
+        if (sourcePresent === targetPresent)
+          throw new Error("COMPUTER_MCP_RECONCILIATION_CHANGED");
+        if (sourcePresent) await fs.rename(source, target);
+        await this.syncDirectory(archive);
+        await this.sync();
+      }
+      await this.writeReconciliation(path.join(archive, "completed.json"), {
+        ...plan,
+        phase: "retired_unconfirmed",
+      });
+      await fs.unlink(path.join(this.directory, pending));
+      await this.sync();
+    } finally {
+      await lease.close();
+    }
+  }
+
+  private async readReconciliation(
+    file: string,
+  ): Promise<z.infer<typeof Reconciliation> | null> {
+    const text = await this.privateRecoveryBytes(file);
+    return text === null ? null : Reconciliation.parse(JSON.parse(text));
+  }
+
+  private async archivedMarker(file: string): Promise<boolean> {
+    const bytes = await this.privateRecoveryBytes(file);
+    if (bytes !== null && bytes !== "1\n")
+      throw new Error("COMPUTER_MCP_LIFECYCLE_MARKER_UNSAFE");
+    return bytes !== null;
+  }
+
+  private async safeRecoveryDirectory(directory: string): Promise<void> {
+    const info = await fs.lstat(directory);
+    if (
+      !info.isDirectory() ||
+      info.isSymbolicLink() ||
+      (info.mode & 0o077) !== 0 ||
+      info.uid !== process.geteuid?.() ||
+      (await fs.realpath(directory)) !== directory
+    )
+      throw new Error("COMPUTER_MCP_RECONCILIATION_UNSAFE");
+  }
+
+  private async privateRecoveryBytes(file: string): Promise<string | null> {
+    let handle;
+    try {
+      handle = await fs.open(
+        file,
+        fsConstants.O_RDONLY |
+          fsConstants.O_NONBLOCK |
+          NO_FOLLOW |
+          CLOSE_ON_EXEC,
+      );
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw error;
+    }
+    try {
+      const before = await handle.stat();
+      if (
+        !before.isFile() ||
+        before.nlink !== 1 ||
+        before.size > 8192 ||
+        (before.mode & 0o077) !== 0 ||
+        before.uid !== process.geteuid?.()
+      )
+        throw new Error("COMPUTER_MCP_RECONCILIATION_UNSAFE");
+      const buffer = Buffer.alloc(8193);
+      const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+      const after = await handle.stat();
+      const current = await fs.lstat(file);
+      if (
+        bytesRead !== before.size ||
+        before.size !== after.size ||
+        before.mtimeMs !== after.mtimeMs ||
+        before.ctimeMs !== after.ctimeMs ||
+        current.dev !== before.dev ||
+        current.ino !== before.ino
+      )
+        throw new Error("COMPUTER_MCP_RECONCILIATION_CHANGED");
+      return buffer.subarray(0, bytesRead).toString("utf8");
+    } finally {
+      await handle.close();
+    }
+  }
+
+  private async writeReconciliation(
+    file: string,
+    value: unknown,
+  ): Promise<void> {
+    const bytes = `${JSON.stringify(value)}\n`;
+    const previous = await this.privateRecoveryBytes(file);
+    if (previous !== null) {
+      if (previous !== bytes)
+        throw new Error("COMPUTER_MCP_RECONCILIATION_CHANGED");
+      return;
+    }
+    const handle = await fs.open(
+      file,
+      fsConstants.O_WRONLY |
+        fsConstants.O_CREAT |
+        fsConstants.O_EXCL |
+        NO_FOLLOW |
+        CLOSE_ON_EXEC,
+      0o600,
+    );
+    try {
+      await handle.writeFile(bytes);
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+    await this.syncDirectory(path.dirname(file));
+  }
+
+  private async syncDirectory(directory: string): Promise<void> {
+    const handle = await fs.open(
+      directory,
+      fsConstants.O_RDONLY |
+        (fsConstants.O_DIRECTORY ?? 0) |
+        NO_FOLLOW |
+        CLOSE_ON_EXEC,
+    );
+    try {
+      await handle.sync();
+    } finally {
+      await handle.close();
     }
   }
 }

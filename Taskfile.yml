@@ -70,6 +70,32 @@ tasks:
     cmds:
       - /usr/bin/python3 -I ./scripts/assert-owner-untouched.py -- node tooling/promote-preview.mjs {{.CLI_ARGS}}
 
+  recover:closed-computer:
+    desc: Explicit NEW-only closed-app reconciliation; exact failed evidence retained, never a clean Quit receipt
+    # Maintenance intentionally changes NEW lifecycle records. It is not a
+    # test/guard exception: all CI/native/Dev guard modes stay unchanged.
+    cmds:
+      - |
+        clean_path=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
+        node_path="$(PATH="$clean_path" command -v node)"
+        /usr/bin/env -i \
+          HOME="${HOME:?closed recovery requires HOME}" \
+          LANG="en_US.UTF-8" PATH="$clean_path" TMPDIR="${TMPDIR:-/tmp}" \
+          "$node_path" tooling/recover-closed-computer.mjs {{.CLI_ARGS}}
+
+  retire:preview-install:
+    desc: Explicit closed NEW slot migration; preserve old receipts/download, never replay an update
+    # Owner maintenance, not a CI or native-test guard exemption. V0 and the
+    # destination Farol.app must be preserved separately before this command.
+    cmds:
+      - |
+        clean_path=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
+        node_path="$(PATH="$clean_path" command -v node)"
+        /usr/bin/env -i \
+          HOME="${HOME:?preview retirement requires HOME}" \
+          LANG="en_US.UTF-8" PATH="$clean_path" TMPDIR="${TMPDIR:-/tmp}" \
+          "$node_path" tooling/retire-preview-install.mjs {{.CLI_ARGS}}
+
   test:e2e:dev:
     desc: Exercise exact clean development bytes; explicit test display, fault runs hidden
     cmds:

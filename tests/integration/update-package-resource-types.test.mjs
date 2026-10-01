@@ -263,6 +263,7 @@ process.stdout.write(JSON.stringify({ code, accepted, measured, unboundedReads, 
 describe("extracted artifact descriptor and bounded read", () => {
   for (const scenario of [
     "ordinary",
+    "legacy-layout",
     "fifo",
     "regular",
     "symlink",
@@ -288,7 +289,7 @@ describe("extracted artifact descriptor and bounded read", () => {
           notarized: false,
         };
         const artifact = {
-          schema: 5,
+          schema: scenario === "legacy-layout" ? 5 : 6,
           ...manifest,
           sourceDirty: false,
           updateChannel: "github-owner-beta",
@@ -304,7 +305,7 @@ describe("extracted artifact descriptor and bounded read", () => {
             `
 import json, stat, sys, zipfile
 with zipfile.ZipFile(sys.argv[1], "w", compression=zipfile.ZIP_DEFLATED) as archive:
-    for name, data in [("artifact.json", sys.argv[2]), ("Farol Next Preview.app/Contents/Info.plist", "fixture")]:
+    for name, data in [("artifact.json", sys.argv[2]), (sys.argv[3] + "/Contents/Info.plist", "fixture")]:
         info = zipfile.ZipInfo(name)
         info.create_system = 3
         info.external_attr = (stat.S_IFREG | 0o644) << 16
@@ -312,6 +313,9 @@ with zipfile.ZipFile(sys.argv[1], "w", compression=zipfile.ZIP_DEFLATED) as arch
 `,
             archive,
             JSON.stringify(artifact),
+            scenario === "legacy-layout"
+              ? "Farol Next Preview.app"
+              : "Farol.app",
           ],
           deadline,
         );

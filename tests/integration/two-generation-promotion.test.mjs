@@ -5,6 +5,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import { treeDigest } from "../../tooling/artifact-digest.mjs";
 import { runPromotionApply } from "../../tooling/promotion-apply.mjs";
 import { assertPromotionDestination } from "../../tooling/promotion-destination.mjs";
+import {
+  PRODUCT_APP_NAME,
+  packageLayout,
+} from "../../tooling/package-layout.mjs";
 import { latestPredecessorDirectory } from "../e2e/predecessor-package-path.mjs";
 
 // Q-07/Q-08 with two really identified local builds: the sealed predecessor
@@ -36,7 +40,7 @@ async function generation(directory) {
     await fs.readFile(path.join(directory, "artifact.json"), "utf8"),
   );
   return {
-    app: path.join(directory, "Farol Next Preview.app"),
+    app: path.join(directory, packageLayout(artifact.schema).appName),
     artifactSha256: artifact.artifactSha256,
     buildId: artifact.buildId,
     sourceCommit: artifact.sourceCommit,
@@ -74,7 +78,7 @@ describe("Q-07/Q-08 two identified generations", () => {
       const { destination, receipt } = assertPromotionDestination({
         home,
         source: a.app,
-        destination: path.join(home, "Applications/Farol Next Preview.app"),
+        destination: path.join(home, "Applications", PRODUCT_APP_NAME),
       });
       const promote = (generation_) =>
         runPromotionApply({

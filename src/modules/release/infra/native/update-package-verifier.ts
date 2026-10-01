@@ -265,12 +265,13 @@ export function createUpdatePackageVerifier(
           !Array.isArray(artifact)
             ? (artifact as Record<string, unknown>)["schema"]
             : null;
-        if (schema !== 5 && schema !== 6)
+        // Historical schema-5 packages remain available to the standalone
+        // archive verifier. Installing one into Farol.app would strand its
+        // embedded updater at the retired fixed slot, so this route admits
+        // only the branded generation.
+        if (schema !== 6)
           throw new PackageVerificationError("package_mismatch");
-        const stagedAppPath = path.join(
-          stagingRoot,
-          schema === 6 ? "Farol.app" : "Farol Next Preview.app",
-        );
+        const stagedAppPath = path.join(stagingRoot, "Farol.app");
         if (
           extracted.appPath !== stagedAppPath ||
           extracted.artifactPath !== path.join(stagingRoot, "artifact.json")
