@@ -375,7 +375,11 @@ import {
   FAROL_MODEL_ENABLED,
   farolBackedProductAgentRoute,
 } from "./foundation-feature-gates";
-import { probeTunnelClient } from "./tunnel-client-probe";
+import {
+  probeTunnelClient,
+  verifySelectedTunnelClient,
+} from "./tunnel-client-probe";
+import { shouldResumeComputerConnector } from "./connector-resume-policy";
 import { identityBoundWorkspaces } from "./identity-bound-workspaces";
 import { AuthorityTransitionReservation } from "./authority-transition";
 import {
@@ -514,7 +518,10 @@ const startupStage = (stage: StartupStage) => {
         ? ".farol-next-secondary-lock-stage"
         : stage === "delay-complete"
           ? ".farol-next-delay-complete-stage"
-          : ".farol-next-startup-stage";
+          : stage.startsWith("connector-resume") ||
+              stage === "connector-resumed"
+            ? ".farol-next-connector-resume-stage"
+            : ".farol-next-startup-stage";
     const target = path.join(home, marker);
     const temporary = `${target}.${process.pid}.${randomUUID()}.tmp`;
     const file = openSync(
@@ -3862,6 +3869,18 @@ async function startSecureMcpConnector(
     const connector = snapshot.settings.connectors.secureMcp;
     if (!connector.tunnelClient || !connector.tunnelId) {
       return configurationFailure("CONNECTOR_CONFIGURE_FAILED");
+    }
+    // Settings pin canonical bytes, not just a command pathname. Recheck
+    // before configure/doctor/start can execute the saved selection.
+    try {
+      await verifySelectedTunnelClient(connector.tunnelClient);
+    } catch (error) {
+      return configurationFailure(
+        error instanceof Error &&
+          error.message === "TUNNEL_CLIENT_DISCOVERY_CANDIDATE_STALE"
+          ? "TUNNEL_CLIENT_DISCOVERY_CANDIDATE_STALE"
+          : "TUNNEL_CLIENT_EXECUTABLE_UNSAFE",
+      );
     }
     let credentialReference: string;
     try {
@@ -8895,7 +8914,17 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
   // marker that cannot be written fails startup like any other state-root
   // failure would: an unmarked generation is one whose crash would go
   // unnoticed.
-  await writeRunMarker(path.join(app.getPath("userData"), "farol-next-state"), {
+  const stateRoot = path.join(app.getPath("userData"), "farol-next-state");
+  // Inspect only presence before this generation writes its marker. A marker
+  // left by a crash/unconfirmed Quit requires deliberate recovery; never
+  // read or repair it here, and never interpret an access error as absence.
+  const previousRunClean = await lstat(
+    path.join(stateRoot, "running.json"),
+  ).then(
+    () => false,
+    (error: unknown) => (error as NodeJS.ErrnoException).code === "ENOENT",
+  );
+  await writeRunMarker(stateRoot, {
     pid: process.pid,
     now: Date.now(),
     bootTime: currentBootTimeMs(),
@@ -9243,6 +9272,28 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
   });
   quitSignals.ready();
   installedUpdaterInitialization = initializeInstalledUpdater();
+  if (
+    shouldResumeComputerConnector({
+      environment: runtimeEnvironment,
+      previousRunClean,
+      snapshot: configuration.snapshot(),
+    })
+  ) {
+    // One new owned connector lifetime, using the normal fenced start. No
+    // repair loop, no verification Send, and no implicit Codex admission.
+    void startSecureMcpConnector(false).then(
+      (result) => {
+        startupStage(
+          result.ok ? "connector-resumed" : "connector-resume-refused",
+        );
+        if (!quitInProgress && window && !window.isDestroyed())
+          window.webContents.send(channels.configurationChanged);
+      },
+      () => startupStage("connector-resume-failed"),
+    );
+  } else {
+    startupStage("connector-resume-skipped");
+  }
 }
 
 const primaryInstanceLock = app.requestSingleInstanceLock(instanceRequest);

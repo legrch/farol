@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { constants as fsConstants } from "node:fs";
+import { constants as fsConstants, type Stats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 
@@ -50,6 +50,30 @@ function permittedOwner(uid: number): boolean {
   return effectiveUser === undefined || uid === effectiveUser || uid === 0;
 }
 
+function sameExecutableIdentity(before: Stats, after: Stats): boolean {
+  return (
+    before.dev === after.dev &&
+    before.ino === after.ino &&
+    before.size === after.size &&
+    before.mode === after.mode &&
+    before.uid === after.uid &&
+    before.gid === after.gid &&
+    before.mtimeMs === after.mtimeMs &&
+    before.ctimeMs === after.ctimeMs
+  );
+}
+
+function safeExecutable(info: Stats): boolean {
+  return (
+    info.isFile() &&
+    info.size >= 1 &&
+    info.size <= MAX_EXECUTABLE_BYTES &&
+    permittedOwner(info.uid) &&
+    (info.mode & 0o111) !== 0 &&
+    (info.mode & 0o022) === 0
+  );
+}
+
 async function pinExecutable(executablePath: string): Promise<{
   canonicalPath: string;
   sha256: string;
@@ -59,15 +83,18 @@ async function pinExecutable(executablePath: string): Promise<{
   }
   let selectedInfo;
   let canonicalPath;
+  let canonicalInfo;
   try {
     selectedInfo = await fs.lstat(executablePath);
     canonicalPath = await fs.realpath(executablePath);
+    canonicalInfo = await fs.lstat(canonicalPath);
   } catch {
     probeError("TUNNEL_CLIENT_EXECUTABLE_UNSAFE");
   }
   if (
     (!selectedInfo.isFile() && !selectedInfo.isSymbolicLink()) ||
-    !permittedOwner(selectedInfo.uid)
+    !permittedOwner(selectedInfo.uid) ||
+    !safeExecutable(canonicalInfo)
   ) {
     probeError("TUNNEL_CLIENT_EXECUTABLE_UNSAFE");
   }
@@ -76,40 +103,61 @@ async function pinExecutable(executablePath: string): Promise<{
   try {
     handle = await fs.open(
       canonicalPath,
-      fsConstants.O_RDONLY | NO_FOLLOW | CLOSE_ON_EXEC,
+      fsConstants.O_RDONLY | NO_FOLLOW | CLOSE_ON_EXEC | fsConstants.O_NONBLOCK,
     );
   } catch {
     probeError("TUNNEL_CLIENT_EXECUTABLE_UNSAFE");
   }
   try {
     const info = await handle.stat();
-    if (
-      !info.isFile() ||
-      info.size < 1 ||
-      info.size > MAX_EXECUTABLE_BYTES ||
-      !permittedOwner(info.uid) ||
-      (info.mode & 0o111) === 0 ||
-      (info.mode & 0o022) !== 0
-    ) {
+    if (!safeExecutable(info) || !sameExecutableIdentity(canonicalInfo, info)) {
       probeError("TUNNEL_CLIENT_EXECUTABLE_UNSAFE");
     }
     const digest = createHash("sha256");
     const buffer = Buffer.allocUnsafe(64 * 1_024);
     let position = 0;
-    for (;;) {
-      const { bytesRead } = await handle.read(
-        buffer,
-        0,
-        buffer.length,
-        position,
-      );
-      if (bytesRead === 0) break;
+    // Read only the inspected size: a growing file must never extend the loop.
+    while (position < info.size) {
+      const length = Math.min(buffer.length, info.size - position);
+      const { bytesRead } = await handle.read(buffer, 0, length, position);
+      if (bytesRead <= 0 || bytesRead > length) {
+        probeError("TUNNEL_CLIENT_EXECUTABLE_UNSAFE");
+      }
       digest.update(buffer.subarray(0, bytesRead));
       position += bytesRead;
     }
+    if (
+      !sameExecutableIdentity(info, await handle.stat()) ||
+      !sameExecutableIdentity(info, await fs.lstat(canonicalPath)) ||
+      !sameExecutableIdentity(selectedInfo, await fs.lstat(executablePath)) ||
+      (await fs.realpath(executablePath)) !== canonicalPath
+    ) {
+      probeError("TUNNEL_CLIENT_EXECUTABLE_UNSAFE");
+    }
     return { canonicalPath, sha256: digest.digest("hex") };
+  } catch {
+    probeError("TUNNEL_CLIENT_EXECUTABLE_UNSAFE");
   } finally {
-    await handle.close();
+    await handle
+      .close()
+      .catch(() => probeError("TUNNEL_CLIENT_EXECUTABLE_UNSAFE"));
+  }
+}
+
+// Verification only: the caller owns any later connector launch.
+export async function verifySelectedTunnelClient(input: {
+  executablePath: string;
+  executableSha256: string;
+}): Promise<void> {
+  if (!/^[a-f0-9]{64}$/u.test(input.executableSha256)) {
+    probeError("TUNNEL_CLIENT_SELECTION_INVALID");
+  }
+  const pinned = await pinExecutable(input.executablePath);
+  if (
+    input.executablePath !== pinned.canonicalPath ||
+    input.executableSha256 !== pinned.sha256
+  ) {
+    probeError("TUNNEL_CLIENT_DISCOVERY_CANDIDATE_STALE");
   }
 }
 

@@ -26,7 +26,11 @@ export type StartupStage =
   | "run-marker"
   | "before-delay"
   | "delay-complete"
-  | "startup-complete";
+  | "startup-complete"
+  | "connector-resumed"
+  | "connector-resume-refused"
+  | "connector-resume-failed"
+  | "connector-resume-skipped";
 
 // E2E-only, fixed tokens. No profile path, command line or browser content is
 // ever included in this diagnostic stream.

@@ -372,6 +372,7 @@ declare global {
     farolNext: Readonly<{
       installedUpdate(command: unknown): Promise<unknown>;
       onInstalledUpdateState(listener: (state: unknown) => void): () => void;
+      onConfigurationChanged(listener: () => void): () => void;
       bootstrap(): Promise<unknown>;
       snapshot(): Promise<unknown>;
       configure(command: unknown): Promise<unknown>;
@@ -436,6 +437,7 @@ const narrowSidebar = window.matchMedia("(max-width: 979px)");
 
 let bootstrap: Bootstrap;
 let bootstrapReady = false;
+let configurationRefreshPending = false;
 let section: SurfaceSection = "browser";
 let selectedTaskId = "";
 let connectionCheckFeedback: string | null = null;
@@ -6057,6 +6059,13 @@ async function start(): Promise<void> {
     windowState = parsed.data;
     if (bootstrapReady) renderWindowState();
   });
+  window.farolNext.onConfigurationChanged(() => {
+    if (!bootstrapReady) {
+      configurationRefreshPending = true;
+      return;
+    }
+    void refreshSettingsAfterReturn();
+  });
   window.farolNext.onRuntimeEvent((value) => {
     const parsed = ClientEventSchema.safeParse(value);
     if (!parsed.success) return;
@@ -6921,6 +6930,10 @@ async function start(): Promise<void> {
   });
 
   bootstrapReady = true;
+  if (configurationRefreshPending) {
+    configurationRefreshPending = false;
+    void refreshSettingsAfterReturn();
+  }
   if (pendingRuntimeStatus) applyRuntimeStatus(pendingRuntimeStatus);
   if (pendingTasksState) {
     const state = pendingTasksState;

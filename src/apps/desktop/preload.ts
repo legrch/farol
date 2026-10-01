@@ -11,6 +11,14 @@ contextBridge.exposeInMainWorld("farolNext", {
     return () =>
       ipcRenderer.removeListener(channels.installedUpdateState, wrapped);
   },
+  onConfigurationChanged: (listener: () => void) => {
+    // A notification only: the renderer reads the existing validated bootstrap
+    // instead of accepting settings or mutation authority in this event.
+    const wrapped = () => listener();
+    ipcRenderer.on(channels.configurationChanged, wrapped);
+    return () =>
+      ipcRenderer.removeListener(channels.configurationChanged, wrapped);
+  },
   bootstrap: () => ipcRenderer.invoke(channels.bootstrap) as Promise<unknown>,
   snapshot: () => ipcRenderer.invoke(channels.snapshot) as Promise<unknown>,
   configure: (command: unknown) =>

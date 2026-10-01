@@ -324,6 +324,9 @@ async function launch(environment, mode = "normal", profile = mode) {
   await fs.mkdir(userData, { recursive: true, mode: 0o700 });
   const startupMarker = path.join(home, ".farol-next-startup-stage");
   await fs.rm(startupMarker, { force: true });
+  await fs.rm(path.join(home, ".farol-next-connector-resume-stage"), {
+    force: true,
+  });
   const pending = electron.launch({
     executablePath: executable,
     args: [
@@ -1083,8 +1086,96 @@ try {
       });
       // Preserve a completed profile, then re-open it. Runtime shutdown makes
       // live attachment stale; no implicit Send may restore it.
+      const previousRuntime =
+        state.configuration.settings.connectors.secureMcp.runtime;
+      const previousWorkspaces =
+        state.configuration.settings.computer.workspaces;
       await closeOwned();
-      const returning = await launch(environment, "normal", environment);
+      let returning = await launch(environment, "normal", environment);
+      // A confirmed Quit permits this configured Computer-only connector to
+      // establish a new runtime. It never sends or reuses the old attachment.
+      let resumed;
+      const resumeDeadline = Date.now() + 15000;
+      for (;;) {
+        resumed = await bounded(
+          returning.evaluate(() => window.farolNext.bootstrap()),
+          "FIXTURE_CONNECTOR_RESUME_READ_TIMEOUT",
+          5000,
+        );
+        const runtime =
+          resumed.configuration.settings.connectors.secureMcp.runtime;
+        if (
+          runtime?.state === "ready" &&
+          runtime.runtimeGeneration !== previousRuntime.runtimeGeneration
+        )
+          break;
+        if (Date.now() >= resumeDeadline)
+          throw new Error("CONFIGURED_COMPUTER_CONNECTOR_NOT_RESUMED");
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      assert.equal(nonReadRequests, 1, "CONNECTOR_RESUME_SENT_A_PROMPT");
+      assert.equal(
+        resumed.configuration.settings.connectors.secureMcp.attachment,
+        null,
+      );
+      assert.equal(resumed.configuration.settings.setup.connect.verified, null);
+      assert.equal(
+        resumed.configuration.settings.connectors.secureMcp.runtime.buildId,
+        resumed.build.buildId,
+      );
+      assert.deepEqual(
+        resumed.configuration.settings.computer.workspaces,
+        previousWorkspaces,
+      );
+      observations.push({
+        kind: "configured-computer-connector-resumed-without-send",
+        previousRuntime: previousRuntime.runtimeGeneration,
+        currentRuntime:
+          resumed.configuration.settings.connectors.secureMcp.runtime
+            .runtimeGeneration,
+        sends: nonReadRequests,
+      });
+      await returning.locator('[data-onboarding-step="tunnel"]').click();
+      await returning
+        .locator("#onboarding-recheck")
+        .waitFor({ state: "visible" });
+      // Stop is an explicit owner decision, not a reason to auto-reconnect.
+      const stopped = await returning.evaluate(() =>
+        window.farolNext.configure({ kind: "connector.stop" }),
+      );
+      assert.equal(stopped.ok, true);
+      await closeOwned();
+      returning = await launch(environment, "normal", environment);
+      const stoppedState = await returning.evaluate(() =>
+        window.farolNext.bootstrap(),
+      );
+      assert.equal(
+        stoppedState.configuration.settings.connectors.secureMcp.runtime,
+        null,
+      );
+      assert.equal(
+        (
+          await fs.readFile(
+            path.join(
+              activeFixtureProfile.home,
+              ".farol-next-connector-resume-stage",
+            ),
+            "utf8",
+          )
+        ).trim(),
+        "connector-resume-skipped",
+      );
+      assert.equal(nonReadRequests, 1);
+      observations.push({
+        kind: "explicit-stop-preserved-after-reopen",
+        sends: nonReadRequests,
+      });
+      // Restore only through the same explicit configuration command. This is
+      // the disposable local tunnel fixture, never a real connector or daemon.
+      const restarted = await returning.evaluate(() =>
+        window.farolNext.configure({ kind: "connector.start" }),
+      );
+      assert.equal(restarted.ok, true);
       await returning.locator('[data-onboarding-step="app"]').click();
       assert.equal(
         await returning.locator("#onboarding-app-name").inputValue(),
@@ -1146,6 +1237,40 @@ try {
         sends: nonReadRequests,
         noReplay: noReplay.error,
         noRetarget: noRetarget.error,
+      });
+      const unknownGeneration =
+        state.configuration.settings.connectors.secureMcp.runtime
+          .runtimeGeneration;
+      await closeOwned();
+      returning = await launch(environment, "normal", environment);
+      const unknownState = await returning.evaluate(() =>
+        window.farolNext.bootstrap(),
+      );
+      assert.equal(
+        unknownState.configuration.settings.setup.connect.outcomeUnknown,
+        true,
+      );
+      assert.equal(
+        unknownState.configuration.settings.connectors.secureMcp.runtime
+          .runtimeGeneration,
+        unknownGeneration,
+      );
+      assert.equal(
+        (
+          await fs.readFile(
+            path.join(
+              activeFixtureProfile.home,
+              ".farol-next-connector-resume-stage",
+            ),
+            "utf8",
+          )
+        ).trim(),
+        "connector-resume-skipped",
+      );
+      assert.equal(nonReadRequests, 2);
+      observations.push({
+        kind: "unknown-check-not-resumed-after-reopen",
+        sends: nonReadRequests,
       });
       await closeOwned();
       break;
