@@ -4454,12 +4454,10 @@ async function completeSetup(
       );
     }
     if (stepId === "hosts" && configureHost) {
-      // Discovery may now select a compatible signed installation before
-      // this helper reaches the step. Wait for that decision (or the empty
-      // discovery panel) instead of assuming the owner must use Advanced.
-      // The rest of this synthetic lane still needs its deterministic App
-      // Server fixture, so an automatically selected real host is replaced
-      // through the existing E2E picker seam without running a model turn.
+      // Discovery can rerender this panel between expanding Advanced and
+      // clicking its picker. This setup helper uses the existing deterministic
+      // E2E picker seam for either discovery outcome, without a model turn.
+      // It does not qualify the production Advanced picker interaction.
       await waitForSetup(instance, () => {
         const primary = document.querySelector("#setup-live-primary");
         return (
@@ -4469,28 +4467,14 @@ async function completeSetup(
           ) !== null
         );
       });
-      const hostWasDiscovered = !(await instance.window
-        .locator("#setup-live-primary")
-        .isHidden());
-      if (hostWasDiscovered) {
-        const selectedFixture = await instance.window.evaluate(() =>
-          window.farolNext.configure({ kind: "host.select-codex" }),
-        );
-        assert.equal(selectedFixture.ok, true, JSON.stringify(selectedFixture));
-        await assertSameFixtureExecutable(
-          selectedFixture.snapshot.settings.nativeHosts.codex.executablePath,
-          instance.codexFixture,
-        );
-      } else {
-        await instance.window
-          .locator("#setup-dialog .discovery-advanced summary")
-          .click();
-        await instance.window
-          .locator("#setup-dialog .discovery-advanced-actions button", {
-            hasText: "Choose another…",
-          })
-          .click();
-      }
+      const selectedFixture = await instance.window.evaluate(() =>
+        window.farolNext.configure({ kind: "host.select-codex" }),
+      );
+      assert.equal(selectedFixture.ok, true, JSON.stringify(selectedFixture));
+      await assertSameFixtureExecutable(
+        selectedFixture.snapshot.settings.nativeHosts.codex.executablePath,
+        instance.codexFixture,
+      );
       await waitForSetup(
         instance,
         () =>
