@@ -1,0 +1,270 @@
+[
+  {
+    "name": "no journal no PID is unknown",
+    "phase": "absent",
+    "slot": "source",
+    "staged": "target",
+    "previous": "absent",
+    "failed": "absent",
+    "want": "unresolved",
+    "archiveVerified": true
+  },
+  {
+    "name": "no journal known exit enables only cleanup",
+    "phase": "absent",
+    "slot": "source",
+    "staged": "target",
+    "previous": "absent",
+    "failed": "absent",
+    "want": "reconcile_preparation",
+    "helperEnded": true,
+    "archiveVerified": true
+  },
+  {
+    "name": "no journal archive not reverified",
+    "phase": "absent",
+    "slot": "source",
+    "staged": "target",
+    "previous": "absent",
+    "failed": "absent",
+    "want": "unresolved",
+    "helperEnded": true
+  },
+  {
+    "name": "no journal companion collision",
+    "phase": "absent",
+    "slot": "source",
+    "staged": "target",
+    "previous": "source",
+    "failed": "absent",
+    "want": "unresolved",
+    "helperEnded": true,
+    "archiveVerified": true
+  },
+  {
+    "name": "prepared before exchange cancels by explicit recovery",
+    "phase": "prepared",
+    "slot": "source",
+    "staged": "target",
+    "previous": "absent",
+    "failed": "absent",
+    "want": "explicit_recovery",
+    "helperEnded": true
+  },
+  {
+    "name": "prepared after exchange never reapplies",
+    "phase": "prepared",
+    "slot": "target",
+    "staged": "source",
+    "previous": "absent",
+    "failed": "absent",
+    "want": "explicit_recovery",
+    "helperEnded": true
+  },
+  {
+    "name": "prepared after predecessor rename",
+    "phase": "prepared",
+    "slot": "target",
+    "staged": "absent",
+    "previous": "source",
+    "failed": "absent",
+    "want": "explicit_recovery",
+    "helperEnded": true
+  },
+  {
+    "name": "prepared helper unknown stays blocked",
+    "phase": "prepared",
+    "slot": "target",
+    "staged": "source",
+    "previous": "absent",
+    "failed": "absent",
+    "want": "unresolved"
+  },
+  {
+    "name": "old empty slot requires exact preserved pair",
+    "phase": "predecessor_saved",
+    "slot": "absent",
+    "staged": "target",
+    "previous": "source",
+    "failed": "absent",
+    "want": "explicit_recovery",
+    "helperEnded": true
+  },
+  {
+    "name": "new installed needs explicit recovery",
+    "phase": "new_installed",
+    "slot": "target",
+    "staged": "absent",
+    "previous": "source",
+    "failed": "absent",
+    "want": "explicit_recovery",
+    "helperEnded": true
+  },
+  {
+    "name": "rollback not yet exchanged",
+    "phase": "rollback_started",
+    "slot": "target",
+    "staged": "absent",
+    "previous": "source",
+    "failed": "absent",
+    "want": "explicit_recovery",
+    "helperEnded": true
+  },
+  {
+    "name": "rollback exchanged not named failed",
+    "phase": "rollback_started",
+    "slot": "source",
+    "staged": "absent",
+    "previous": "target",
+    "failed": "absent",
+    "want": "explicit_recovery",
+    "helperEnded": true
+  },
+  {
+    "name": "rollback already named failed",
+    "phase": "rollback_started",
+    "slot": "source",
+    "staged": "absent",
+    "previous": "absent",
+    "failed": "target",
+    "want": "explicit_recovery",
+    "helperEnded": true
+  },
+  {
+    "name": "target verified",
+    "phase": "verified",
+    "slot": "target",
+    "staged": "absent",
+    "previous": "source",
+    "failed": "absent",
+    "want": "rollback_available",
+    "launch": ""
+  },
+  {
+    "name": "target launch_requested",
+    "phase": "launch_requested",
+    "slot": "target",
+    "staged": "absent",
+    "previous": "source",
+    "failed": "absent",
+    "want": "rollback_available",
+    "launch": "unknown"
+  },
+  {
+    "name": "target completed",
+    "phase": "completed",
+    "slot": "target",
+    "staged": "absent",
+    "previous": "source",
+    "failed": "absent",
+    "want": "rollback_available",
+    "launch": "returned"
+  },
+  {
+    "name": "cancel cancelled",
+    "phase": "cancelled",
+    "slot": "source",
+    "staged": "target",
+    "previous": "absent",
+    "failed": "absent",
+    "want": "settled_source",
+    "launch": ""
+  },
+  {
+    "name": "cancel cancel_launch_requested",
+    "phase": "cancel_launch_requested",
+    "slot": "source",
+    "staged": "target",
+    "previous": "absent",
+    "failed": "absent",
+    "want": "settled_source",
+    "launch": "unknown"
+  },
+  {
+    "name": "cancel cancel_completed",
+    "phase": "cancel_completed",
+    "slot": "source",
+    "staged": "target",
+    "previous": "absent",
+    "failed": "absent",
+    "want": "settled_source",
+    "launch": "returned"
+  },
+  {
+    "name": "source rolled_back",
+    "phase": "rolled_back",
+    "slot": "source",
+    "staged": "absent",
+    "previous": "absent",
+    "failed": "target",
+    "want": "settled_source",
+    "launch": ""
+  },
+  {
+    "name": "source rollback_launch_requested",
+    "phase": "rollback_launch_requested",
+    "slot": "source",
+    "staged": "absent",
+    "previous": "absent",
+    "failed": "target",
+    "want": "settled_source",
+    "launch": "unknown"
+  },
+  {
+    "name": "source rollback_completed",
+    "phase": "rollback_completed",
+    "slot": "source",
+    "staged": "absent",
+    "previous": "absent",
+    "failed": "target",
+    "want": "settled_source",
+    "launch": "returned"
+  },
+  {
+    "name": "settled label but missing predecessor",
+    "phase": "completed",
+    "slot": "target",
+    "staged": "absent",
+    "previous": "absent",
+    "failed": "absent",
+    "want": "unresolved"
+  },
+  {
+    "name": "rejected bytes are not an accepted target",
+    "phase": "rolled_back",
+    "slot": "source",
+    "staged": "absent",
+    "previous": "absent",
+    "failed": "other",
+    "want": "unresolved"
+  },
+  {
+    "name": "unknown phase fails closed",
+    "phase": "future_phase",
+    "slot": "target",
+    "staged": "absent",
+    "previous": "source",
+    "failed": "absent",
+    "want": "unresolved"
+  },
+  {
+    "name": "permission failure is not an absent path",
+    "phase": "verified",
+    "slot": "target",
+    "staged": "absent",
+    "previous": "source",
+    "failed": "absent",
+    "want": "unresolved",
+    "incomplete": true
+  },
+  {
+    "name": "restore intent needs separate reconciliation",
+    "phase": "verified",
+    "slot": "target",
+    "staged": "absent",
+    "previous": "source",
+    "failed": "absent",
+    "want": "unresolved",
+    "restorePending": true
+  }
+]
