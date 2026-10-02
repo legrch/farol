@@ -30,6 +30,13 @@ result when no document was bound. Local Cancel, a generic terminal result, abse
 confirmation, stale generations or delivery ACK alone cannot release a reservation.
 Acknowledging an unknown result leaves the slot occupied, even with cleanup evidence.
 
+Computer call IDs are unique within a turn. Resolved IDs remain in a fixed,
+content-free deduplication array; they cannot be requested again. A late resolution
+for an earlier call cannot unblock the current call, output or completion. The
+preparation cap is 128 unique Computer calls per turn, refusing further requests
+instead of evicting old correlation evidence. Turn value copies share no mutable
+call history. Post-K0 application budget policy must agree this conservative cap.
+
 Ordinal 1 through 5 is presentation only. Owner/session/task/turn/operation and
 turn generation are durable identity. Backend incarnation and slot generation
 are leases. Desktop view ID, view generation, document generation and expected
@@ -126,6 +133,8 @@ agreement with Desktop/Core; no generic invoke/eval route may fill that gap.
 | `codex-chatgpt-provider.test.ts`, `farol-model-streaming-transport.test.ts`, `chatgpt-visible-output.test.ts` | Source behavior vectors documented above; no Responses parity claim                                                                       | FIFO semantic/tool rounds, exact continuations, final-output validation, body/framing/UTF-16 bounds and same-upstream drain |
 
 The queue deliberately adds waiting where the current registry returns capacity.
+The Go Turn also rejects previously used Computer call IDs, strengthening the
+legacy domain primitive's correlation fence without changing its TypeScript callers.
 The synthetic lifecycle fixture declares provider outcomes; it performs no browser,
 HTTP, native host or filesystem durability observation. It is not live acceptance.
 

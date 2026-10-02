@@ -146,6 +146,9 @@ type Snapshot struct {
 	LifecycleSettled     bool
 }
 
+// MaxComputerCalls bounds deduplication state without evicting used call IDs.
+const MaxComputerCalls = 128
+
 type Turn struct {
 	identity     Identity
 	digest       string
@@ -164,6 +167,8 @@ type Turn struct {
 	settled      bool
 	resume       Phase
 	callID       string
+	usedCallIDs  [MaxComputerCalls]string
+	callCount    int
 }
 
 func New(identity Identity, digest string) (Turn, error) {
@@ -287,6 +292,16 @@ func (t Turn) RequestComputer(b Binding, callID string) (Turn, error) {
 	if !id(callID) {
 		return t, Invalid
 	}
+	for _, used := range t.usedCallIDs[:t.callCount] {
+		if used == callID {
+			return t, Conflict
+		}
+	}
+	if t.callCount >= MaxComputerCalls {
+		return t, Capacity
+	}
+	// The fixed array is copied with Turn. No old state shares a mutable map.
+	t.usedCallIDs[t.callCount], t.callCount = callID, t.callCount+1
 	t.callID = callID
 	return t, nil
 }

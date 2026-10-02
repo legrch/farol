@@ -454,3 +454,56 @@ func TestReservedCancellationNeedsPositiveCleanupEvidence(t *testing.T) {
 		})
 	}
 }
+
+func TestReusedComputerIDAndStaleResolutionKeepNewCallFenced(t *testing.T) {
+	q := queue(t)
+	i := add(t, q, "a")
+	b := bind(t, q)
+	if _, err := q.Dispatch(b); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := q.Accept(b); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := q.RequestComputer(b, "call-a"); err != nil {
+		t.Fatal(err)
+	}
+	before, err := q.ResolveComputer(b, "call-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := q.RequestComputer(b, "call-a"); !errors.Is(err, Conflict) {
+		t.Fatal("resolved call ID was reused", err)
+	}
+	after, err := q.Snapshot(i)
+	if err != nil || after != before {
+		t.Fatal("reused request changed state", err)
+	}
+	before, err = q.RequestComputer(b, "call-b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := q.ResolveComputer(b, "call-a"); !errors.Is(err, Correlation) {
+		t.Fatal("stale resolution cleared new call", err)
+	}
+	after, err = q.Snapshot(i)
+	if err != nil || after != before || after.OutstandingCallID != "call-b" {
+		t.Fatal("stale resolution changed current call fence", err)
+	}
+	if _, err := q.Delta(b, 1); !errors.Is(err, Transition) {
+		t.Fatal("stale resolution resumed output", err)
+	}
+	result := Result{ID: "result-a", Outcome: Completed, Code: "COMPLETED"}
+	if _, err := q.Finish(b, result); !errors.Is(err, Transition) {
+		t.Fatal("stale resolution permitted completion", err)
+	}
+	if _, err := q.ResolveComputer(b, "call-b"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := q.Delta(b, 1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := q.Finish(b, result); err != nil {
+		t.Fatal(err)
+	}
+}

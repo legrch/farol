@@ -3,6 +3,7 @@ package turn
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -336,5 +337,35 @@ func TestQuiescenceMustFollowLatestOutputAndNameExactResult(t *testing.T) {
 	settled, err := turn.Settle(QuiescenceEvidence{Binding: b, ResultID: "result-a", Sequence: 10, Confirmed: true})
 	if err != nil || !settled.settled || settled.Reusable() {
 		t.Fatal("quiescence was not independent of delivery ACK", err)
+	}
+}
+
+func TestComputerHistoryIsBoundedWithoutEvictingOldIDs(t *testing.T) {
+	turn, b := running(t)
+	for n := 0; n < MaxComputerCalls; n++ {
+		callID := fmt.Sprintf("call-%d", n)
+		requested, err := turn.RequestComputer(b, callID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if turn.callID != "" || turn.callCount != n || turn.usedCallIDs[n] != "" {
+			t.Fatal("accepted request mutated its previous Turn value")
+		}
+		turn, err = requested.ResolveComputer(b, callID)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	unchanged, err := turn.RequestComputer(b, "one-more-call")
+	if !errors.Is(err, Capacity) || unchanged != turn {
+		t.Fatal("deduplication capacity was exceeded", err)
+	}
+	unchanged, err = turn.RequestComputer(b, "call-0")
+	if !errors.Is(err, Conflict) || unchanged != turn {
+		t.Fatal("old call ID was evicted at capacity", err)
+	}
+	unchanged, err = turn.ResolveComputer(b, "call-0")
+	if !errors.Is(err, Correlation) || unchanged != turn {
+		t.Fatal("resolved call ACK became live again", err)
 	}
 }
