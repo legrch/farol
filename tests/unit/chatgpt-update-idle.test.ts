@@ -85,11 +85,13 @@ function matches(node: ElementFixture, selectors: string): boolean {
     if (id) return node.getAttribute("id") === id[1];
     const tag = selector.match(/^([a-z]+)/u)?.[1];
     if (tag && node.tag !== tag) return false;
-    return [...selector.matchAll(/\[([a-z-]+)(\*?=)"([^"]+)"\]/gu)].every(
+    return [...selector.matchAll(/\[([a-z-]+)([~*]?=)"([^"]+)"\]/gu)].every(
       ([, name, operator, value]) =>
         operator === "*="
           ? node.getAttribute(name!)?.includes(value!) === true
-          : node.getAttribute(name!) === value,
+          : operator === "~="
+            ? node.getAttribute(name!)?.split(/\s+/u).includes(value!) === true
+            : node.getAttribute(name!) === value,
     );
   });
 }
@@ -127,6 +129,26 @@ function fixture() {
 }
 
 describe("update idle observation on synthetic public DOM", () => {
+  it.each(["div", "span"])(
+    "refuses a custom %s button even when it claims to be disabled",
+    (tag) => {
+      const f = fixture();
+      const control = new ElementFixture(tag, {
+        role: "button",
+        "aria-label": "Send",
+      });
+      f.form.children.push(control);
+      expect(f.run()).toEqual({ state: "unknown" });
+      control.attributes.role = "unknown button";
+      expect(f.run()).toEqual({ state: "unknown" });
+      control.attributes["aria-disabled"] = "true";
+      expect(f.run()).toEqual({ state: "unknown" });
+      control.disabled = true;
+      expect(f.run()).toEqual({ state: "unknown" });
+      control.visible = false;
+      expect(f.run()).toEqual({ state: "idle" });
+    },
+  );
   it("requires a voice entry that is not disabled by an ancestor fieldset", () => {
     const f = fixture();
     f.voice.disabledByFieldset = true;

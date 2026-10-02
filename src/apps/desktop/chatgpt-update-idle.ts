@@ -40,6 +40,11 @@ export const chatGptUpdateIdleProbe = `(() => {
   if (text.length > 0 || controls('input[type="file"]').some(e => e.files && e.files.length) ||
       [...form.querySelectorAll('[data-testid="attachment-preview"],[data-testid="composer-attachment"],[data-testid*="file-chip"],[data-testid*="attachment-chip"]')].some(visible))
     return { state: "draft" };
+  // Custom button handlers can submit the form without native submit semantics.
+  // ARIA disabledness or an own disabled property cannot disable such handlers.
+  if ([...form.querySelectorAll('[role~="button"]')].filter(visible)
+      .some(e => !(e instanceof HTMLButtonElement)))
+    return { state: "unknown" };
   const sends = controls('[data-testid="send-button"],button[aria-label="Send prompt"],button[aria-label="Send message"]').filter(visible);
   // A renamed or implicit submit control must not disappear from admission
   // because its label is no longer recognized. Native button.type also covers
