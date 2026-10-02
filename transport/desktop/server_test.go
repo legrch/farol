@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"testing"
 	"time"
 
@@ -239,3 +240,37 @@ func TestServeHardAttemptBudgetIncludesInvalidRequests(t *testing.T) {
 type bufferWriter struct{ bytes.Buffer }
 
 func (*bufferWriter) Close() error { return nil }
+
+func TestServeBoundsOwnerOutputBeforeEncoding(t *testing.T) {
+	for _, data := range []json.RawMessage{json.RawMessage(`"` + strings.Repeat("a", ipc.MaxFrameBytes) + `"`), json.RawMessage(`"` + strings.Repeat("<", 262144) + `"`)} {
+		var frames bytes.Buffer
+		_ = ipc.WriteFrame(&frames, request("hello", "core.handshake", `{"protocolMajor":1,"protocolMinor":0,"buildId":"build","profileId":"test"}`, nil))
+		_ = ipc.WriteFrame(&frames, request("read", "computer.workspace.read", `{}`, &wire.Context{ProfileId: "test", BackendGeneration: "generation"}))
+		_ = ipc.WriteFrame(&frames, request("status", "core.status", `{}`, &wire.Context{ProfileId: "test", BackendGeneration: "generation"}))
+		s, err := New(Config{BuildID: "build", ProfileID: "test", Generation: "generation", Methods: map[string]Method{"computer.workspace.read": {Handle: func(context.Context, Request) (*Outcome, error) { return &Outcome{Status: "ok", Data: data}, nil }}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		out := &bufferWriter{}
+		if err := s.Serve(context.Background(), io.NopCloser(&frames), out); err != nil {
+			t.Fatal(err)
+		}
+		for i := 0; i < 3; i++ {
+			raw, err := ipc.ReadFrame(out)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var response wire.Response
+			if err := json.Unmarshal(raw, &response); err != nil {
+				t.Fatal(err)
+			}
+			if i == 1 {
+				if response.Result == nil || response.Result.Status != "unknown" || response.Result.Data != nil || response.Result.Code == nil || *response.Result.Code != "owner_output_bound" {
+					t.Fatalf("bounded owner: %+v", response)
+				}
+			} else if response.Result == nil || response.Result.Status != "ok" {
+				t.Fatalf("unrelated response: %+v", response)
+			}
+		}
+	}
+}

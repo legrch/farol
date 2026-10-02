@@ -1,6 +1,7 @@
 package desktop
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -93,12 +94,15 @@ func (s *Server) Serve(ctx context.Context, in io.ReadCloser, out io.WriteCloser
 		if err != nil {
 			return fmt.Errorf("protocol frame: %w", err)
 		}
-		response := s.dispatch(ctx, data)
+		response := boundResponse(s.dispatch(ctx, data))
 		encoded, err := json.Marshal(response)
 		if err != nil {
 			return err
 		}
-		if err := validate("Response", response); err != nil {
+		if err := ipc.ValidateJSON(encoded); err != nil {
+			return err
+		}
+		if err := wire.Validate("Response", encoded); err != nil {
 			return err
 		}
 		if err := ipc.WriteFrame(out, encoded); err != nil {
@@ -215,4 +219,42 @@ func validate(name string, value interface{}) error {
 		return err
 	}
 	return wire.Validate(name, data)
+}
+
+// Bound owner output before serialization/validation. Raw JSON expansion is
+// conservatively counted without building a second, potentially huge response.
+func boundResponse(response wire.Response) wire.Response {
+	result := response.Result
+	if result == nil {
+		return response
+	}
+	unknown := func() wire.Response {
+		result.Status = "unknown"
+		result.Data = nil
+		result.Code = optional("owner_output_bound")
+		return response
+	}
+	if len(result.Status) > 256 || (result.Code != nil && len(*result.Code) > 256) || len(result.Data) > ipc.MaxFrameBytes {
+		return unknown()
+	}
+	if len(result.Data) == 0 {
+		return response
+	}
+	header := response
+	metadata := *result
+	metadata.Data = nil
+	header.Result = &metadata
+	encoded, err := json.Marshal(header)
+	if err != nil {
+		return unknown()
+	}
+	bound := len(encoded) + 8 + len(result.Data)
+	for _, character := range []byte{'<', '>', '&'} {
+		bound += 5 * bytes.Count(result.Data, []byte{character})
+	}
+	bound += 3 * (bytes.Count(result.Data, []byte{0xe2, 0x80, 0xa8}) + bytes.Count(result.Data, []byte{0xe2, 0x80, 0xa9}))
+	if bound > ipc.MaxFrameBytes {
+		return unknown()
+	}
+	return response
 }
