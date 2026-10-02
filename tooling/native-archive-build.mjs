@@ -19,7 +19,7 @@ const GO_SDK_SHA256 =
 // Measured from the pinned compiler and source after native parity tests.
 // The candidate still requires its separate source review and package gates.
 export const NATIVE_ARCHIVE_SHA256 =
-  "4ed053b3dbcbadf6677e6fc3bb2e3c27dd56698cd73ba59361854a70b041c017";
+  "0f60969f4acbaf57d2c628c69412f4f81f227a94e1d27c60d36356fe8ed9d4c7";
 export const NATIVE_ARCHIVE_MAX_BYTES = 8 * 1024 * 1024;
 export const NATIVE_ARCHIVE_OUTPUT = "update-archive.py";
 const MAX_SDK_BYTES = 512 * 1024 * 1024;

@@ -141,6 +141,9 @@ func copyEntry(f *zip.File, target io.Writer, buffer []byte) error {
 	// header copy; bounded output and actual CRC remain checked below.
 	header := *f
 	header.Flags &^= 8
+	// archive/zip skips directory streams. Strip the marker only in this reader
+	// copy so decompression, size and CRC checks run without changing paths.
+	header.Name = strings.TrimSuffix(header.Name, "/")
 	source, err := header.Open()
 	if err != nil {
 		return refuse("ARCHIVE_READ_INVALID")
@@ -285,9 +288,15 @@ func preflight(archive *zip.Reader, stage *stage) (*plan, error) {
 			}
 		}
 	}
-	// Symlink data and graph errors are preflight failures, never partial extraction.
+	// Directory streams and symlink graphs must pass before any extraction writes.
 	buffer := make([]byte, maxLink+1)
 	for _, e := range p.entries {
+		if e.kind == directory {
+			if err := copyEntry(e.file, io.Discard, buffer); err != nil {
+				return nil, err
+			}
+			continue
+		}
 		if e.kind != symlink {
 			continue
 		}

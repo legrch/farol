@@ -1,6 +1,7 @@
 package releasearchive
 
 import (
+	"archive/zip"
 	"bytes"
 	"hash/crc32"
 	"os"
@@ -15,6 +16,74 @@ func positions(data []byte) (central, end, local int) {
 	central = int(u32(data[end:], 16))
 	local = int(u32(data[central:], 42))
 	return
+}
+
+func TestDirectoryStreamsBeforeExtraction(t *testing.T) {
+	for _, tt := range []struct {
+		name, code string
+		entry      fixtureEntry
+		mutate     func([]byte)
+	}{
+		{"stored empty", "", fixtureEntry{}, nil},
+		{"deflated empty", "", fixtureEntry{method: 8}, nil},
+		{"signed descriptor", "", fixtureEntry{method: 8, flags: 8}, nil},
+		{"unsigned descriptor", "", fixtureEntry{method: 8, flags: 8, unsignedDescriptor: true}, nil},
+		{"empty CRC mismatch", "ARCHIVE_CRC_INVALID", fixtureEntry{}, func(b []byte) {
+			c, _, l := positions(b)
+			put32(b, c+16, 1)
+			put32(b, l+14, 1)
+		}},
+		{"malformed deflate", "ARCHIVE_READ_INVALID", fixtureEntry{method: 8}, func(b []byte) {
+			_, _, l := positions(b)
+			b[l+30+len(previewApp+"/dir/")] = 7 // Reserved DEFLATE block type.
+		}},
+		{"stored data declared empty", "ARCHIVE_READ_INVALID", fixtureEntry{data: []byte("x")}, func(b []byte) {
+			c, _, l := positions(b)
+			put32(b, c+24, 0)
+			put32(b, l+22, 0)
+		}},
+		{"deflated data declared empty", "ARCHIVE_READ_INVALID", fixtureEntry{data: []byte("x"), method: 8}, func(b []byte) {
+			c, _, l := positions(b)
+			put32(b, c+24, 0)
+			put32(b, l+22, 0)
+		}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			entry := tt.entry
+			entry.name, entry.mode = previewApp+"/dir/", 0040700
+			data := makeArchive(t, append([]fixtureEntry{entry}, baseEntries()...))
+			if tt.mutate != nil {
+				tt.mutate(data)
+			}
+			if _, err := admitDirectory(bytes.NewReader(data), int64(len(data))); err != nil {
+				t.Fatalf("fixture metadata must pass admission: %v", err)
+			}
+			f := newFixture(t, data)
+			archive, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			stage, err := openStage(f.stage)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = preflight(archive, stage)
+			stage.close()
+			if tt.code != "" {
+				requireRefusal(t, err, tt.code)
+			} else if err != nil {
+				t.Fatalf("valid empty directory refused: %v", err)
+			}
+			requireEmpty(t, f.stage)
+			_, err = Run(f.args)
+			if tt.code != "" {
+				requireRefusal(t, err, tt.code)
+				requireEmpty(t, f.stage)
+			} else if err != nil {
+				t.Fatalf("valid empty directory extraction failed: %v", err)
+			}
+		})
+	}
 }
 
 func TestDataDescriptorForms(t *testing.T) {
