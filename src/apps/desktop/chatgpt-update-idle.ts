@@ -80,5 +80,5 @@ export type BrowserUpdateAdmission =
   | Readonly<{
       ok: true;
       recheck(): Promise<BrowserUpdateCheck>;
-      release(): void;
+      release(): Promise<void>;
     }>;

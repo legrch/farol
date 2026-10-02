@@ -36,7 +36,16 @@ also leaves admission unknown. Active
 responses, voice sessions, drafts, attachments, popups, pending navigation and
 unrecognized controls refuse admission. The observation returns a classification,
 never composer or conversation text. Desktop hides the browser views and holds
-their native keyboard/mouse input fence while update admission is reserved. The
+their native keyboard/mouse input fence while update admission is reserved.
+After initial idle proof, the route acquires its own acknowledged debugger pause
+and repeats the content-free DOM inspection through `Runtime.evaluate`. The pause
+holds ordinary page scripts and their queued timers through asynchronous package
+preparation, record writes and helper handoff. An existing debugger or DevTools,
+unconfirmed pause, unexpected resume or detach is uncertainty, never idle. No
+other debugger session is detached or adopted. Confirmed refusal resumes the
+page once before releasing admission; unconfirmed resume keeps admission fenced
+until explicit recovery or Quit. Ordinary activity probes are not queued into the
+paused renderer. The
 same document generation and URL are rechecked after package verification and
 again after copying, before durable helper dispatch. A failed observation or
 late state change releases admission without launching the helper. Standalone

@@ -819,7 +819,7 @@ async function initializeInstalledUpdater(): Promise<void> {
             if (lease) await releasePromotionLease(lease);
             taskClaim.release();
             transition.release();
-            for (const browser of browserAdmissions) browser.release();
+            for (const browser of browserAdmissions) await browser.release();
             installedUpdateAdmission = false;
             applyLayout();
           },

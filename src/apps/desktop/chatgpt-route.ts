@@ -1507,7 +1507,7 @@ export class ChatGptRoute {
           !released && this.updateAdmission && !this.hasOpenUpdateSurface()
             ? { ok: true }
             : { ok: false, code: "UPDATE_BROWSER_STATE_UNKNOWN" },
-        release: () => {
+        release: async () => {
           if (released) return;
           released = true;
           this.updateAdmission = false;
@@ -1532,13 +1532,74 @@ export class ChatGptRoute {
       event.preventDefault();
     contents.on("before-input-event", blockInput);
     contents.on("before-mouse-event", blockInput);
+    const debuggerClient = contents.debugger;
+    let attached = false;
+    let paused = false;
+    let pauseRequired = false;
+    let confirmPause: (() => void) | undefined;
+    let confirmResume: (() => void) | undefined;
+    const message = (_event: unknown, method: string): void => {
+      if (method === "Debugger.paused") {
+        paused = true;
+        confirmPause?.();
+      } else if (method === "Debugger.resumed") {
+        paused = false;
+        confirmResume?.();
+      }
+    };
+    const detached = (): void => {
+      attached = false;
+      paused = false;
+    };
+    const bounded = async <T>(operation: Promise<T>): Promise<T> => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        return await Promise.race([
+          operation,
+          new Promise<never>((_resolve, reject) => {
+            timer = setTimeout(
+              () => reject(new Error("UPDATE_BROWSER_STATE_UNKNOWN")),
+              ACTIVITY_PROBE_DEADLINE_MS,
+            );
+          }),
+        ]);
+      } finally {
+        if (timer !== undefined) clearTimeout(timer);
+      }
+    };
     let released = false;
-    const release = (): void => {
-      if (released) return;
+    let releasePromise: Promise<void> | null = null;
+    const release = (): Promise<void> => {
+      if (releasePromise) return releasePromise;
       released = true;
-      contents.removeListener("before-input-event", blockInput);
-      contents.removeListener("before-mouse-event", blockInput);
-      this.updateAdmission = false;
+      releasePromise = (async () => {
+        // A failed/unconfirmed resume retains admission. Never repeat that
+        // native command or expose the page as usable on uncertain state.
+        if (!contents.isDestroyed() && attached) {
+          if (paused) {
+            const resumed = new Promise<void>((resolve) => {
+              confirmResume = resolve;
+            });
+            try {
+              await bounded(
+                Promise.all([
+                  debuggerClient.sendCommand("Debugger.resume"),
+                  resumed,
+                ]),
+              );
+            } catch {
+              throw new Error("UPDATE_BROWSER_STATE_UNKNOWN");
+            }
+          }
+          if (attached) debuggerClient.detach();
+        }
+        debuggerClient.removeListener("message", message);
+        debuggerClient.removeListener("detach", detached);
+        contents.removeListener("before-input-event", blockInput);
+        contents.removeListener("before-mouse-event", blockInput);
+        this.updateAdmission = false;
+      })();
+      return releasePromise;
     };
     const recheck = async (): Promise<BrowserUpdateCheck> => {
       const current = (): boolean =>
@@ -1553,17 +1614,39 @@ export class ChatGptRoute {
         !this.taskInFlight &&
         !this.opening &&
         !this.signInMode &&
+        (!pauseRequired ||
+          (attached && paused && debuggerClient.isAttached())) &&
         ![...this.popupWindows].some((popup) => !popup.isDestroyed());
       if (!current())
         return { ok: false, code: "UPDATE_BROWSER_STATE_UNKNOWN" };
-      let timer: ReturnType<typeof setTimeout> | undefined;
       try {
-        const raw = await Promise.race([
-          contents.executeJavaScript(chatGptUpdateIdleProbe, true),
-          new Promise<null>((resolve) => {
-            timer = setTimeout(() => resolve(null), ACTIVITY_PROBE_DEADLINE_MS);
-          }),
-        ]);
+        let raw: unknown;
+        if (pauseRequired) {
+          // Inspector evaluation remains available while ordinary page scripts
+          // are paused. Only this content-free DOM classification is evaluated.
+          const reply: unknown = await bounded(
+            debuggerClient.sendCommand("Runtime.evaluate", {
+              expression: chatGptUpdateIdleProbe,
+              returnByValue: true,
+            }),
+          );
+          const evaluated = z
+            .object({
+              result: z.object({
+                type: z.literal("object"),
+                value: ChatGptUpdateIdleSchema,
+              }),
+              exceptionDetails: z.never().optional(),
+            })
+            .safeParse(reply);
+          if (!evaluated.success)
+            return { ok: false, code: "UPDATE_BROWSER_STATE_UNKNOWN" };
+          raw = evaluated.data.result.value;
+        } else {
+          raw = await bounded(
+            contents.executeJavaScript(chatGptUpdateIdleProbe, true),
+          );
+        }
         const parsed = ChatGptUpdateIdleSchema.safeParse(raw);
         if (!current() || !parsed.success || parsed.data.state === "unknown")
           return { ok: false, code: "UPDATE_BROWSER_STATE_UNKNOWN" };
@@ -1574,14 +1657,44 @@ export class ChatGptRoute {
         return { ok: true };
       } catch {
         return { ok: false, code: "UPDATE_BROWSER_STATE_UNKNOWN" };
-      } finally {
-        if (timer !== undefined) clearTimeout(timer);
       }
     };
     const result = await recheck();
     if (!result.ok) {
-      release();
+      await release();
       return result;
+    }
+    try {
+      // Input fences do not stop a page timer from invoking its own handlers.
+      // Pause only after initial idle proof, then inspect again under the held
+      // pause. Never take over an existing debugger or use a lifecycle fallback.
+      if (debuggerClient.isAttached() || contents.isDevToolsOpened()) {
+        await release();
+        return { ok: false, code: "UPDATE_BROWSER_STATE_UNKNOWN" };
+      }
+      debuggerClient.on("message", message);
+      debuggerClient.on("detach", detached);
+      debuggerClient.attach("1.3");
+      attached = true;
+      await bounded(debuggerClient.sendCommand("Debugger.enable"));
+      const stopped = new Promise<void>((resolve) => {
+        confirmPause = resolve;
+      });
+      await bounded(
+        Promise.all([debuggerClient.sendCommand("Debugger.pause"), stopped]),
+      );
+      pauseRequired = true;
+    } catch {
+      // Detach only this owned session when pause acquisition was unconfirmed.
+      // Closing the inspector session also cancels its pending pause request.
+      if (attached) debuggerClient.detach();
+      await release();
+      return { ok: false, code: "UPDATE_BROWSER_STATE_UNKNOWN" };
+    }
+    const held = await recheck();
+    if (!held.ok) {
+      await release();
+      return held;
     }
     return { ok: true, recheck, release };
   }
@@ -4105,6 +4218,7 @@ export class ChatGptRoute {
     generation: number,
   ): Promise<void> {
     if (
+      this.updateAdmission ||
       generation !== this.activityGeneration ||
       this.activityPollInFlight ||
       contents.isDestroyed() ||
@@ -4119,7 +4233,8 @@ export class ChatGptRoute {
     // When it finally settles, the next poll measures afresh.
     let late = false;
     const deadline = setTimeout(() => {
-      if (generation !== this.activityGeneration) return;
+      if (generation !== this.activityGeneration || this.updateAdmission)
+        return;
       late = true;
       if (!this.activityProbeStale) {
         this.activityProbeStale = true;
@@ -4134,6 +4249,7 @@ export class ChatGptRoute {
       );
       if (
         !late &&
+        !this.updateAdmission &&
         generation === this.activityGeneration &&
         !contents.isDestroyed() &&
         this.load === "loaded" &&

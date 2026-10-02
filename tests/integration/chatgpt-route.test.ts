@@ -788,8 +788,8 @@ describe("installed-update browser admission", () => {
         ok: false,
         code: "UPDATE_BROWSER_BUSY",
       });
-      admission.release();
-      admission.release();
+      await admission.release();
+      await admission.release();
       expect(await admission.recheck()).toEqual({
         ok: false,
         code: "UPDATE_BROWSER_STATE_UNKNOWN",
@@ -802,12 +802,195 @@ describe("installed-update browser admission", () => {
     const candidate = route();
     const surface = embeddedSurface();
     const execute = vi.fn(async () => ({ state }));
-    Object.assign(surface.webContents, { executeJavaScript: execute });
+    let attached = false;
+    const debuggerClient = Object.assign(new EventEmitter(), {
+      isAttached: () => attached,
+      attach: vi.fn(() => {
+        attached = true;
+      }),
+      detach: vi.fn(() => {
+        attached = false;
+        debuggerClient.emit("detach", {}, "target_closed");
+      }),
+      sendCommand: vi.fn(async (method: string): Promise<unknown> => {
+        if (method === "Debugger.pause" || method === "Debugger.resume")
+          debuggerClient.emit(
+            "message",
+            {},
+            method === "Debugger.pause"
+              ? "Debugger.paused"
+              : "Debugger.resumed",
+          );
+        return method === "Runtime.evaluate"
+          ? { result: { type: "object", value: await execute() } }
+          : {};
+      }),
+    });
+    Object.assign(surface.webContents, {
+      executeJavaScript: execute,
+      debugger: debuggerClient,
+      isDevToolsOpened: () => false,
+    });
     void surface.loadURL("https://chatgpt.com/");
     Reflect.set(candidate, "routeWindow", surface);
     Reflect.set(candidate, "load", "loaded");
-    return { candidate, surface, execute };
+    return { candidate, surface, execute, debuggerClient };
   }
+  it("holds an acknowledged page-script pause through update admission and resumes once", async () => {
+    const { candidate, surface, debuggerClient } = updatePage();
+    const admission = await candidate.acquireUpdateIdle();
+    if (!admission.ok) throw new Error(admission.code);
+    expect(debuggerClient.sendCommand).toHaveBeenCalledWith("Debugger.pause");
+    expect(debuggerClient.isAttached()).toBe(true);
+    expect(await admission.recheck()).toEqual({ ok: true });
+    const first = admission.release();
+    const second = admission.release();
+    expect(second).toBe(first);
+    await first;
+    expect(
+      debuggerClient.sendCommand.mock.calls.filter(
+        ([m]) => m === "Debugger.resume",
+      ),
+    ).toHaveLength(1);
+    expect(debuggerClient.detach).toHaveBeenCalledOnce();
+    expect(surface.webContents.listenerCount("before-input-event")).toBe(0);
+    expect(await candidate.open()).toEqual({ status: "opened" });
+  });
+  it.each(["Debugger.resumed", "detach"])(
+    "rejects loss of page-script pause via %s",
+    async (event) => {
+      const { candidate, debuggerClient } = updatePage();
+      const admission = await candidate.acquireUpdateIdle();
+      if (!admission.ok) throw new Error(admission.code);
+      if (event === "detach") debuggerClient.detach();
+      else debuggerClient.emit("message", {}, event);
+      expect(await admission.recheck()).toEqual({
+        ok: false,
+        code: "UPDATE_BROWSER_STATE_UNKNOWN",
+      });
+      await admission.release();
+    },
+  );
+  it("does not take over an already attached page debugger", async () => {
+    const { candidate, debuggerClient } = updatePage();
+    debuggerClient.attach();
+    debuggerClient.attach.mockClear();
+    expect(await candidate.acquireUpdateIdle()).toEqual({
+      ok: false,
+      code: "UPDATE_BROWSER_STATE_UNKNOWN",
+    });
+    expect(debuggerClient.attach).not.toHaveBeenCalled();
+    expect(debuggerClient.detach).not.toHaveBeenCalled();
+    expect(debuggerClient.sendCommand).not.toHaveBeenCalled();
+  });
+  it("refuses an open DevTools session without attaching or detaching", async () => {
+    const { candidate, debuggerClient, surface } = updatePage();
+    Object.assign(surface.webContents, { isDevToolsOpened: () => true });
+    expect(await candidate.acquireUpdateIdle()).toEqual({
+      ok: false,
+      code: "UPDATE_BROWSER_STATE_UNKNOWN",
+    });
+    expect(debuggerClient.attach).not.toHaveBeenCalled();
+    expect(debuggerClient.detach).not.toHaveBeenCalled();
+    expect(debuggerClient.sendCommand).not.toHaveBeenCalled();
+  });
+  it.each(["missing-event", "hung-command"])(
+    "refuses an unacknowledged pause (%s) and disconnects only its owned session",
+    async (failure) => {
+      vi.useFakeTimers();
+      try {
+        const { candidate, debuggerClient, surface } = updatePage();
+        const original = debuggerClient.sendCommand.getMockImplementation()!;
+        debuggerClient.sendCommand.mockImplementation(async (method) => {
+          if (method === "Debugger.pause")
+            return failure === "hung-command"
+              ? new Promise(() => undefined)
+              : {};
+          return original(method);
+        });
+        const pending = candidate.acquireUpdateIdle();
+        await vi.advanceTimersByTimeAsync(2_001);
+        expect(await pending).toEqual({
+          ok: false,
+          code: "UPDATE_BROWSER_STATE_UNKNOWN",
+        });
+        expect(debuggerClient.detach).toHaveBeenCalledOnce();
+        expect(debuggerClient.sendCommand).not.toHaveBeenCalledWith(
+          "Debugger.resume",
+        );
+        expect(surface.webContents.listenerCount("before-input-event")).toBe(0);
+        expect(debuggerClient.listenerCount("message")).toBe(0);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+  it.each([
+    {
+      result: { type: "object", value: { state: "idle" } },
+      exceptionDetails: {},
+    },
+    { result: { type: "string", value: "idle" } },
+    { result: { type: "object", value: { state: "unexpected" } } },
+  ])(
+    "rejects malformed inspector idle evidence %# and resumes the page",
+    async (reply) => {
+      const { candidate, debuggerClient } = updatePage();
+      const original = debuggerClient.sendCommand.getMockImplementation()!;
+      debuggerClient.sendCommand.mockImplementation(async (method) =>
+        method === "Runtime.evaluate" ? reply : original(method),
+      );
+      expect(await candidate.acquireUpdateIdle()).toEqual({
+        ok: false,
+        code: "UPDATE_BROWSER_STATE_UNKNOWN",
+      });
+      expect(debuggerClient.sendCommand).toHaveBeenCalledWith(
+        "Debugger.resume",
+      );
+      expect(debuggerClient.detach).toHaveBeenCalledOnce();
+    },
+  );
+  it("retains admission after an unconfirmed resume and never sends another resume", async () => {
+    const { candidate, debuggerClient, surface } = updatePage();
+    const admission = await candidate.acquireUpdateIdle();
+    if (!admission.ok) throw new Error(admission.code);
+    const original = debuggerClient.sendCommand.getMockImplementation()!;
+    debuggerClient.sendCommand.mockImplementation(async (method) => {
+      if (method === "Debugger.resume")
+        throw new Error("fixture unconfirmed resume");
+      return original(method);
+    });
+    await expect(admission.release()).rejects.toThrow(
+      "UPDATE_BROWSER_STATE_UNKNOWN",
+    );
+    await expect(admission.release()).rejects.toThrow(
+      "UPDATE_BROWSER_STATE_UNKNOWN",
+    );
+    expect(await candidate.open()).toEqual({ status: "unreachable" });
+    expect(
+      debuggerClient.sendCommand.mock.calls.filter(
+        ([m]) => m === "Debugger.resume",
+      ),
+    ).toHaveLength(1);
+    expect(surface.webContents.listenerCount("before-input-event")).toBe(1);
+  });
+  it("does not queue ordinary activity probes into the paused renderer", async () => {
+    const { candidate, surface, execute } = updatePage();
+    const admission = await candidate.acquireUpdateIdle();
+    if (!admission.ok) throw new Error(admission.code);
+    execute.mockClear();
+    const poll = Reflect.get(candidate, "pollTaskActivity") as (
+      contents: unknown,
+      generation: number,
+    ) => Promise<void>;
+    await poll.call(
+      candidate,
+      surface.webContents,
+      Reflect.get(candidate, "activityGeneration") as number,
+    );
+    expect(execute).not.toHaveBeenCalled();
+    await admission.release();
+  });
   it.each([
     [false, "ordinary"],
     [false, "attachment"],
@@ -849,7 +1032,7 @@ describe("installed-update browser admission", () => {
       expect(open).not.toHaveBeenCalled();
       expect(attachmentMock.upload).not.toHaveBeenCalled();
       expect(await admission.recheck()).toEqual({ ok: true });
-      admission.release();
+      await admission.release();
       open.mockResolvedValue({ status: "unreachable" });
       expect(await candidate.runReadonlyTask("after release")).toMatchObject({
         state: "failed_before_submit",
@@ -878,7 +1061,7 @@ describe("installed-update browser admission", () => {
         turnAssistantId: "assistant-fixture",
       });
       expect(open).not.toHaveBeenCalled();
-      admission.release();
+      await admission.release();
     },
   );
   it("admits an open browser only after fresh idle proof and holds input until release", async () => {
@@ -890,13 +1073,13 @@ describe("installed-update browser admission", () => {
     surface.webContents.emit("before-input-event", event);
     surface.webContents.emit("before-mouse-event", event);
     expect(event.preventDefault).toHaveBeenCalledTimes(2);
-    expect(execute).toHaveBeenCalledOnce();
+    expect(execute).toHaveBeenCalledTimes(2);
     execute.mockResolvedValue({ state: "draft" });
     expect(await admission.recheck()).toEqual({
       ok: false,
       code: "UPDATE_BROWSER_DRAFT",
     });
-    admission.release();
+    await admission.release();
     surface.webContents.emit("before-input-event", event);
     expect(event.preventDefault).toHaveBeenCalledTimes(2);
   });
