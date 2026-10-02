@@ -98,3 +98,19 @@ Disposable tests cover identities, interruption, refusal, receipt/download custo
 and restore. They do not prove native UI, installed operation, provider results,
 V0 independence or the GitHub update journey. The owner-selected closed window
 retains the deferred stale-build launch guard P1; this procedure is not its PASS.
+
+## Ordinary Dev closed recovery
+
+The same exact-evidence maintenance command accepts `--development` to select
+the existing ordinary Farol Dev profile under the genuine owner home. It uses
+Task Dev's metadata-only spelling resolver (`Farol Dev` / `Farol DEV`), rejects
+distinct or unsafe profiles, and never selects an acceptance profile or production
+state. The default remains production. Arbitrary home/profile/helper overrides
+are still refused.
+
+Close both NEW applications normally and resolve a legacy configuration filename
+in place before recovery. Supply the exact Dev running/failed-Quit hashes and one
+operation UUID. Package/source admission, owning desktop obligations, process
+absence, promotion/admission/MCP locks, no-replay journals and retained historical
+failure remain the same as production recovery. `retired_unconfirmed` is not a
+clean Quit, and the command neither launches Dev nor installs or updates anything.

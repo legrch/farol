@@ -16,17 +16,19 @@ import {
 } from "./promotion-obligations.mjs";
 import { readArtifactManifest } from "./promote-preview.mjs";
 import { sourceIdentity } from "./source-identity.mjs";
+import { resolveDevDataDirectoryName } from "../src/apps/desktop/dev-profile-directory.ts";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 export function parseClosedRecoveryOptions(args) {
   const values = {};
   const names = new Set(["--operation", "--expected-run", "--expected-quit"]);
+  const flags = new Set(["--apply", "--development"]);
   for (let index = 0; index < args.length; index += 1) {
     const name = args[index];
-    if ((name !== "--apply" && !names.has(name)) || Object.hasOwn(values, name))
+    if ((!flags.has(name) && !names.has(name)) || Object.hasOwn(values, name))
       throw new Error("CLOSED_COMPUTER_RECOVERY_OPTIONS_INVALID");
-    values[name] = name === "--apply" ? true : args[++index];
+    values[name] = flags.has(name) ? true : args[++index];
   }
   if (
     values["--apply"] !== true ||
@@ -41,11 +43,25 @@ export function parseClosedRecoveryOptions(args) {
     operationId: values["--operation"],
     expectedRunSha256: values["--expected-run"],
     expectedQuitSha256: values["--expected-quit"],
+    ...(values["--development"] === true ? { development: true } : {}),
   };
 }
 
+// The trusted owner home remains the only base. This is the same metadata-only
+// Dev spelling resolver used by ordinary Task Dev, never a caller profile path.
+export function closedRecoveryUserData(home, development = false, inspect) {
+  if (typeof development !== "boolean")
+    throw new Error("CLOSED_COMPUTER_RECOVERY_OPTIONS_INVALID");
+  const production = promotionUserData(home);
+  if (!development) return production;
+  const appData = path.dirname(production);
+  return path.join(appData, resolveDevDataDirectoryName(appData, inspect));
+}
+
 async function run() {
-  const options = parseClosedRecoveryOptions(process.argv.slice(2));
+  const { development = false, ...options } = parseClosedRecoveryOptions(
+    process.argv.slice(2),
+  );
   if (
     process.env.NODE_OPTIONS ||
     process.env.NODE_PATH ||
@@ -67,7 +83,7 @@ async function run() {
   if (verify.error || verify.status !== 0)
     throw new Error("CLOSED_COMPUTER_RECOVERY_PACKAGE_INVALID");
   const home = trustedOwnerHome(os.userInfo(), process.geteuid());
-  const userData = promotionUserData(home);
+  const userData = closedRecoveryUserData(home, development);
   // No HOME/profile/helper override, no process start/stop or provider call.
   // Compile only authenticated, clean, exact candidate source for maintenance.
   const scratch = await fs.mkdtemp(
@@ -95,7 +111,7 @@ async function run() {
       desktopState: () => activationObligations(userData),
     });
     process.stdout.write(
-      `${JSON.stringify({ ...result, ...options, sourceCommit: artifact.sourceCommit, buildId: artifact.buildId })}\n`,
+      `${JSON.stringify({ ...result, ...options, environment: development ? "dev" : "preview", sourceCommit: artifact.sourceCommit, buildId: artifact.buildId })}\n`,
     );
   } finally {
     await fs.rm(scratch, { recursive: true, force: true });
