@@ -59,14 +59,54 @@ unknown boundary response, reject stale/gap events, require durable intent befor
 Send and retained result before delivery, and classify IO errors without retry.
 No hidden-window, transport disconnect or missing reply is quiescence evidence.
 
+## SSE delivery preparation
+
+`domain/stream` holds only bounded transient payload needed for client delivery:
+128 frames, 64 KiB per frame and 256 KiB per scoped buffer at most. It writes no
+journal or Activity text. Every ingress/egress payload is copied. Per-turn scope
+includes profile, verified backend incarnation, owner, session, task, turn and
+turn generation. Sequence counters never wrap. Core's wire mapping must encode
+64-bit counters losslessly; these types do not redefine the Desktop envelope.
+
+Retention preserves full replay of retained frames, including acknowledged frames.
+Only acknowledged frames may be evicted; saturation is sticky and preserves
+unacknowledged content. An explicit `After` gap requires the future authoritative
+observation/snapshot path. Neither replay nor reconnect dispatches a provider.
+Terminal is the last append, while its retained frame remains available for
+redelivery. Reading, writing and client acknowledgement are different facts.
+
+Each client has its own cursor. A blocked live write cannot be overtaken. Drain
+has one supplied monotonic deadline, capped at the current task SSE's 250 ms;
+a repeated write cannot reset it. Timeout/disconnect closes only that cursor and
+retains the result for another client. A fast subscriber progresses independently.
+The tests subscribe successfully before simulating blocked live publish, then
+exercise drain, timeout, disconnect, retention, gap and stale incarnation paths.
+These are pure writer-outcome fixtures, not socket/drain or live-provider evidence.
+
+The existing Responses model server is a separate adapter still awaiting K0:
+message/commentary/answer and reasoning status items share FIFO with tool calls;
+a tool-call response terminates a round, not its conversation. Continuation must
+validate the complete issued call and canonical previous outputs. Semantic-source
+sequence is contiguous, unlike the older Turn's merely increasing delta sequence.
+Source observer failures, cancellation and inconsistent final answer are sticky.
+The relay must drain the original upstream after downstream disconnect without
+retrying it. UTF-16 prompt limits cannot be replaced by Go byte/rune lengths.
+
+This slice does not implement Responses HTTP framing, semantic-source validation,
+model authentication, tool continuation, SSE socket cancellation or journal restore.
+The browser port proposal also needs explicit Computer-call/semantic-block payload
+agreement with Desktop/Core; no generic invoke/eval route may fill that gap.
+
 ## Parity map
 
-| Existing source/test family                                  | Go preparation evidence                                                                                                                   | Remaining cutover evidence                                                                  |
-| ------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| `src/modules/chat/domain/turn.ts`, `tests/unit/turn.test.ts` | Separate Send/acceptance; increasing deltas; completion needs a delta; exact generation/call; cancellation and lost tool ACK stay unknown | Application Computer execution and same-call result delivery                                |
-| `run-turn.ts`, `chat-failures.test.ts`, `chat-turn.test.ts`  | Same logical turn cannot get another operation dispatch; repeated/foreign/late events rejected; refusal differs from unknown              | Atomic admission/journal failure windows; real provider prepare/dispatch; Computer delivery |
-| `live-task-registry.ts`, `route-b-task-lifecycle.test.ts`    | Five leases; sixth waits; same task cannot own two views; release needs settled lifecycle and exact delivery ACK                          | Real WebContentsView creation, navigation, document observation and close/drain             |
-| `chatgpt-task-journal.ts`, `chatgpt-task-journal.test.ts`    | Known result metadata survives undelivered observation; unknown is non-retryable and not reusable                                         | Existing journal format, private-file bounds, atomic writes and restart reconciliation      |
+| Existing source/test family                                                                                   | Go preparation evidence                                                                                                                   | Remaining cutover evidence                                                                                                  |
+| ------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `src/modules/chat/domain/turn.ts`, `tests/unit/turn.test.ts`                                                  | Separate Send/acceptance; increasing deltas; completion needs a delta; exact generation/call; cancellation and lost tool ACK stay unknown | Application Computer execution and same-call result delivery                                                                |
+| `run-turn.ts`, `chat-failures.test.ts`, `chat-turn.test.ts`                                                   | Same logical turn cannot get another operation dispatch; repeated/foreign/late events rejected; refusal differs from unknown              | Atomic admission/journal failure windows; real provider prepare/dispatch; Computer delivery                                 |
+| `live-task-registry.ts`, `route-b-task-lifecycle.test.ts`                                                     | Five leases; sixth waits; same task cannot own two views; release needs settled lifecycle and exact delivery ACK                          | Real WebContentsView creation, navigation, document observation and close/drain                                             |
+| `chatgpt-task-journal.ts`, `chatgpt-task-journal.test.ts`                                                     | Known result metadata survives undelivered observation; unknown is non-retryable and not reusable                                         | Existing journal format, private-file bounds, atomic writes and restart reconciliation                                      |
+| `event-stream.ts`, `mechanisms.test.ts`, `runtime-sse.test.ts`                                                | Bounded retention; exact/duplicate ACK; retained replay; terminal-last; independent cursor drain/timeout/disconnect                       | Real socket backpressure and Core gap/snapshot mapping                                                                      |
+| `codex-chatgpt-provider.test.ts`, `farol-model-streaming-transport.test.ts`, `chatgpt-visible-output.test.ts` | Source behavior vectors documented above; no Responses parity claim                                                                       | FIFO semantic/tool rounds, exact continuations, final-output validation, body/framing/UTF-16 bounds and same-upstream drain |
 
 The queue deliberately adds waiting where the current registry returns capacity.
 The synthetic lifecycle fixture declares provider outcomes; it performs no browser,
