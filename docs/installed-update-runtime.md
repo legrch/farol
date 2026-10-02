@@ -20,12 +20,29 @@ thread snapshots, not a global lock over independent native clients.
 
 After those checks the normal NEW connector/MCP/proxy shutdown must confirm its
 owned processes and handlers ended. The external Codex daemon is never stopped.
-Only runtime/attachment state is recorded as stopped; workspace grants, task
-selection, route, credentials and selected ChatGPT app remain saved. A failed
-drain does not launch the updater helper. Later does not enter this drain at all.
-Open browser documents still require explicit closure because they can contain
-owner work outside Farol's journals. Reconnect after relaunch remains a separate
-qualification step; no automatic Send or verification challenge is performed.
+Workspace grants, task selection, route, credentials and the selected ChatGPT
+app remain saved. A failed drain does not launch the updater helper. Later does
+not enter this drain at all.
+
+An open embedded ChatGPT document is admitted only after a fresh public-DOM
+observation of an empty usable composer with positive idle controls. Active
+responses, voice sessions, drafts, attachments, popups, pending navigation and
+unrecognized controls refuse admission. The observation returns a classification,
+never composer or conversation text. Desktop hides the browser views and holds
+their native keyboard/mouse input fence while update admission is reserved. The
+same document generation and URL are rechecked after package verification and
+again after copying, before durable helper dispatch. A failed observation or
+late state change releases admission without launching the helper. Standalone
+browser windows remain unqualified by this embedded-only path.
+
+A confirmed update drain preserves a previously ready, generation-bound
+Computer-only runtime as unreachable with `CONNECTOR_UPDATE_DRAINED`. It removes
+live attachment proof. After a confirmed clean shutdown, the production app may
+use the existing startup admission to verify the saved executable and start one
+new connector generation. Explicit Stop, crash or unknown shutdown, pending
+edits, changed grants, unknown connection outcomes and selected Codex routes
+continue to exclude automatic resume. Historical completion is not live proof;
+fresh readiness must be established. No Send or verification challenge is replayed.
 
 Electron's ASAR filesystem must not reinterpret release bytes. The desktop copy
 port uses Electron's `original-fs`, and trusted verifier/readback subprocesses use
@@ -54,11 +71,17 @@ Only confirmed termination plus an absent journal, unchanged source and exact
 staged target (with no predecessor/failed copy) can reconcile a pre-mutation
 exit. That restores a deferred ready state without launching another helper.
 
-Before Python allocates ZIP entries, the extractor bounds central-directory
+Before the bundled Go helper allocates ZIP entries, the extractor bounds central-directory
 metadata and counts its actual records. This channel accepts single-volume,
 non-ZIP64 archives with at most 16 MiB of central-directory metadata and 1 GiB
 of expanded content. The app tree's entry/depth bounds also precede extraction
 and stay within the installer's limits.
+
+The archive helper is an attested, offline-built native executable. Its resource
+filename remains `update-archive.py` for package compatibility; it is executed
+directly, not through Python. The package includes its Go and Unicode dependency
+notices. The Computer filesystem and install/swap helpers still use their
+existing reviewed Python boundary; this slice does not remove those dependencies.
 
 A pre-readiness refusal is retryable only after that same helper's classified
 terminal exit confirms it never crossed the mutation handoff. The app rechecks

@@ -1,4 +1,48 @@
-# Farol Preview
+# Farol
+
+Farol connects ChatGPT to folders you choose on your Mac. It keeps the installed
+app and **Farol Dev** separate, so development can run beside everyday work.
+
+## Download and install the beta
+
+The current public build is for **macOS on Apple silicon**. Download the ZIP,
+release manifest and checksum file from [Farol releases](https://github.com/legrch/farol-releases/releases).
+The release page identifies the exact version; a source checkout is not needed
+to run the downloaded app.
+
+1. Expand the ZIP. Put **Farol.app** in the **Applications folder inside your
+   home folder** (`~/Applications`), which is the supported update location.
+   Keep an existing installation until its update or replacement is confirmed.
+2. Open Farol. This beta is unsigned and not notarized. If macOS blocks opening,
+   review the app and use Apple's per-app approval instructions in
+   [Safely open apps on your Mac](https://support.apple.com/en-us/102445).
+3. On first launch, use **Setup**: sign in to ChatGPT, choose optional folders,
+   configure your tunnel connection, and select the matching app in ChatGPT.
+   Tunnel access and credentials belong to your account; Farol does not provide
+   them or import another app's login. Grant only the folders and access you need.
+4. Run the end-to-end connection check. It lists one approved workspace without
+   reading file contents. A successful check confirms that connection, rather
+   than every Computer command or Codex workflow.
+5. Use ChatGPT for everyday work. After completed Setup, the default launch
+   destination is **ChatGPT**; a saved launch preference still takes precedence.
+   Return to Setup whenever you want to review or change the connection.
+
+Updates are checked in the installed app without a GitHub token. A verified
+download appears above Settings, including when saved for later. Use
+**Restart & Update** when work is idle. The updater preserves settings and the
+previous accepted app for recovery; it does not replay an uncertain operation.
+See [Installed update lifecycle](docs/installed-update-runtime.md).
+
+This is an owner beta with measured installation and update evidence on one
+Mac, not a completed fresh-user or all-platform qualification. Computer access
+and the update helper currently require Apple's Python 3 from Xcode or Command
+Line Tools (Python 3.9 or later). A Go archive helper removes one Python step in
+this source; other native helpers are still being migrated. The downloaded app
+includes Electron and Node and does not require npm or Go to run. Shared Codex
+workflow qualification remains incomplete. Read the release notes for the
+limits of the particular build you download.
+
+## Development
 
 Farol is a standalone TypeScript/Electron product. All source, tooling, tests,
 and resources live at the repository root. It does not install, activate, register, update, or replace the legacy

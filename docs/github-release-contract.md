@@ -55,9 +55,10 @@ not interrupt work.
 
 Restart & Update claims the existing authority, task-mutation and kernel
 promotion gates and reads the existing promotion obligations. The initial
-composition refuses while a connector is active, a ChatGPT document is open,
-work is pending, or a configured shared task route still needs reconciliation.
-These are explicit limitations, not assumptions that those surfaces are idle.
+composition reserves local work, drains a configured idle connector and observes
+open embedded ChatGPT documents through the fresh idle admission described in
+[Installed updater lifecycle](installed-update-runtime.md). Active or uncertain
+browser work and unreconciled shared task routes still refuse restart.
 A known pre-dispatch refusal offers Check again. An uncertain download, ready
 record, or helper handoff stays blocked across restart and never dispatches a
 replacement operation automatically.
