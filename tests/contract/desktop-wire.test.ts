@@ -1,6 +1,12 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { execFileSync, spawn } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { performance } from "node:perf_hooks";
@@ -8,6 +14,8 @@ import { Client, spawnCore } from "../../apps/desktop/bridge/client.ts";
 import { Decoder, frame, parseJSON } from "../../apps/desktop/bridge/frame.ts";
 import {
   maxFrameBytes,
+  knownMethod,
+  requiresOperationID,
   schemaSHA256,
   validate,
   type Status,
@@ -530,4 +538,48 @@ it("does not return a connected client after a coalesced invalid event", async (
     await client.close();
   }
   expect(client.cleanupState).toBe("confirmed");
+});
+
+it("generates one immutable method effect authority for both peers", () => {
+  for (const method of ["task.create", "chat.turn"]) {
+    expect(knownMethod(method)).toBe(true);
+    expect(requiresOperationID(method)).toBe(true);
+  }
+  for (const method of [
+    "core.handshake",
+    "core.status",
+    "core.operation.status",
+    "computer.workspace.read",
+    "release.status",
+  ]) {
+    expect(knownMethod(method)).toBe(true);
+    expect(requiresOperationID(method)).toBe(false);
+  }
+  expect(knownMethod("unknown.eval")).toBe(false);
+});
+
+it("rejects missing or unknown method kinds before generating peers", () => {
+  const root = join(directory, "invalid-method-schema");
+  mkdirSync(join(root, "tooling"), { recursive: true });
+  mkdirSync(join(root, "api/desktop/v1"), { recursive: true });
+  writeFileSync(
+    join(root, "tooling/generate-desktop-wire.mjs"),
+    readFileSync(resolve("tooling/generate-desktop-wire.mjs")),
+  );
+  for (const spec of [{ owner: "task" }, { owner: "task", kind: "unknown" }]) {
+    writeFileSync(
+      join(root, "api/desktop/v1/schema.json"),
+      JSON.stringify({
+        generator: "farol-wire/1",
+        methods: { "task.create": spec },
+      }),
+    );
+    expect(() =>
+      execFileSync(
+        process.execPath,
+        [join(root, "tooling/generate-desktop-wire.mjs")],
+        { stdio: "pipe" },
+      ),
+    ).toThrow("invalid method classification");
+  }
 });

@@ -305,3 +305,50 @@ func TestServeHeaderOnlyTruncation(t *testing.T) {
 		t.Fatal("owned output retained after truncation")
 	}
 }
+
+func TestCanonicalMethodOperationIdentity(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		effect bool
+	}{{"task.create", true}, {"chat.turn", true}, {"computer.workspace.read", false}, {"release.status", false}} {
+		for _, hasOperation := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/operation=%t", test.name, hasOperation), func(t *testing.T) {
+				calls := 0
+				s, err := New(Config{BuildID: "build", ProfileID: "test", Generation: "generation", Methods: map[string]Method{test.name: {Handle: func(_ context.Context, r Request) (*Outcome, error) {
+					calls++
+					if r.RequestID != "probe" {
+						t.Fatal(r)
+					}
+					if hasOperation && r.OperationID != "exact-operation-1" {
+						t.Fatal(r)
+					}
+					return &Outcome{Status: "ok"}, nil
+				}}}})
+				if err != nil {
+					t.Fatal(err)
+				}
+				handshake(s)
+				bound := s.context()
+				call := wire.Call{Context: &bound, Body: json.RawMessage(`{}`)}
+				if hasOperation {
+					id := "exact-operation-1"
+					call.OperationId = &id
+				}
+				raw, _ := json.Marshal(wire.Request{Jsonrpc: "2.0", Id: "probe", Method: test.name, Params: call})
+				response := s.dispatch(context.Background(), raw)
+				if test.effect != hasOperation {
+					if response.Error == nil || response.Error.Code != -32602 || calls != 0 {
+						t.Fatalf("missing/extra identity dispatched: %+v calls=%d", response, calls)
+					}
+				} else {
+					if response.Result == nil || response.Result.Status != "ok" || response.Result.RequestId != "probe" || calls != 1 {
+						t.Fatalf("valid identity: %+v calls=%d", response, calls)
+					}
+					if hasOperation && (response.Result.OperationId == nil || *response.Result.OperationId != "exact-operation-1") {
+						t.Fatal("operation identity lost")
+					}
+				}
+			})
+		}
+	}
+}

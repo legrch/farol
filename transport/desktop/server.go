@@ -28,8 +28,7 @@ type Outcome struct {
 	Data   json.RawMessage
 }
 type Method struct {
-	Mutation bool
-	Handle   func(context.Context, Request) (*Outcome, error)
+	Handle func(context.Context, Request) (*Outcome, error)
 }
 type Config struct {
 	BuildID    string
@@ -51,7 +50,7 @@ func New(config Config) (*Server, error) {
 	}
 	methods := make(map[string]Method, len(config.Methods))
 	for name, method := range config.Methods {
-		if _, ok := wire.Methods[name]; !ok || name == "core.handshake" || name == "core.status" || name == "core.operation.status" || method.Handle == nil {
+		if !wire.KnownMethod(name) || name == "core.handshake" || name == "core.status" || name == "core.operation.status" || method.Handle == nil {
 			return nil, errors.New("invalid method registration")
 		}
 		methods[name] = method
@@ -143,7 +142,7 @@ func (s *Server) dispatch(ctx context.Context, data []byte) wire.Response {
 	if req.Params.Context == nil || *req.Params.Context != expected {
 		return fault(req.Id, -32002, "stale backend context")
 	}
-	if _, known := wire.Methods[req.Method]; !known {
+	if !wire.KnownMethod(req.Method) {
 		return fault(req.Id, -32601, "unknown method")
 	}
 	if req.Method == "core.status" {
@@ -160,7 +159,7 @@ func (s *Server) dispatch(ctx context.Context, data []byte) wire.Response {
 	if !exists {
 		return s.result(req, &Outcome{Status: "unavailable", Code: "capability_unavailable"})
 	}
-	if method.Mutation != (req.Params.OperationId != nil) {
+	if wire.RequiresOperationID(req.Method) != (req.Params.OperationId != nil) {
 		return fault(req.Id, -32602, "invalid operation identity")
 	}
 	operationID := ""
@@ -191,7 +190,7 @@ func (s *Server) handshake(req wire.Request) wire.Response {
 	}
 	caps := []string{"core.status"}
 	// Stable capability order is part of deterministic handshake generation.
-	for _, name := range wire.MethodNames {
+	for _, name := range wire.MethodNames() {
 		if _, ok := s.config.Methods[name]; ok {
 			caps = append(caps, name)
 		}
