@@ -21,6 +21,7 @@ async function ownedRun(executable, args, options, deadlineMs = 5000) {
   let stderr = "";
   let error;
   let signalSent = false;
+  const shutdownSignals = [];
   const collect = (current, chunk) =>
     (current + chunk.toString("utf8")).slice(-1048576);
   child.stdout.on("data", (chunk) => {
@@ -36,11 +37,30 @@ async function ownedRun(executable, args, options, deadlineMs = 5000) {
       if (!child.pid || !activeGroups.has(child.pid)) return;
       signalSent = true;
       try {
-        process.kill(-child.pid, "SIGKILL");
+        // Let the guard forward cancellation and reap its own child first.
+        // Killing both immediately can strand an orphaned process-group witness
+        // on macOS; EPERM from the absence probe must never count as cleanup.
+        shutdownSignals.push("SIGTERM");
+        process.kill(child.pid, "SIGTERM");
       } catch (failure) {
         if (failure.code !== "ESRCH") error = failure;
       }
     }, deadlineMs);
+    const escalation = setTimeout(() => {
+      if (
+        !child.pid ||
+        !activeGroups.has(child.pid) ||
+        child.exitCode !== null ||
+        child.signalCode !== null
+      )
+        return;
+      try {
+        shutdownSignals.push("SIGKILL");
+        process.kill(-child.pid, "SIGKILL");
+      } catch (failure) {
+        if (failure.code !== "ESRCH") error = failure;
+      }
+    }, deadlineMs + 750);
     const pipeDeadline = setTimeout(() => {
       child.stdout.destroy();
       child.stderr.destroy();
@@ -51,6 +71,7 @@ async function ownedRun(executable, args, options, deadlineMs = 5000) {
     });
     child.once("close", (status, signal) => {
       clearTimeout(deadline);
+      clearTimeout(escalation);
       clearTimeout(pipeDeadline);
       resolve({ status, signal });
     });
@@ -79,7 +100,15 @@ async function ownedRun(executable, args, options, deadlineMs = 5000) {
     }
     activeGroups.delete(child.pid);
   }
-  return { ...result, error, stdout, stderr, groupCleanup: true, signalSent };
+  return {
+    ...result,
+    error,
+    stdout,
+    stderr,
+    groupCleanup: true,
+    signalSent,
+    shutdownSignals,
+  };
 }
 function fixture() {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "farol-owner-guard-"));
@@ -673,6 +702,7 @@ assert guard._CHILD is None
     expect(result.stdout).toContain("child-running");
     expect(result.error?.message).toContain("deadline exceeded");
     expect(result.groupCleanup).toBe(true);
+    expect(result.shutdownSignals).toEqual(["SIGTERM"]);
     expect(activeGroups.size).toBe(0);
     expect(performance.now() - started).toBeLessThan(5000);
   });
