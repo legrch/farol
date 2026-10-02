@@ -3281,7 +3281,7 @@ async function proveStartupRuntimeDeath(stage) {
     await startupWindow
       .locator("#runtime-pill")
       .getByText("failed", { exact: true })
-      .waitFor({ timeout: 5_000 });
+      .waitFor({ state: "attached", timeout: 5_000 });
     assert.equal(startupWindow.isClosed(), false);
     assert.equal(
       await instance.application.evaluate(({ app, BrowserWindow }) => {
