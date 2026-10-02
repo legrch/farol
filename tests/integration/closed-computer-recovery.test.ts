@@ -116,6 +116,78 @@ afterEach(async () => {
 describe.skipIf(process.platform !== "darwin")(
   "explicit closed Computer reconciliation (disposable state, no provider)",
   () => {
+    it.each(["missing-stop", "missing-lifecycle"])(
+      "establishes current stop admission for a closed legacy profile with %s",
+      async (kind) => {
+        const f = await fixture();
+        const directory = path.join(f.root, "mcp-lifecycle");
+        await fs.unlink(path.join(directory, f.instance));
+        if (kind === "missing-lifecycle")
+          await fs.rm(directory, { recursive: true });
+        else await fs.unlink(path.join(directory, "stopping"));
+        const result = await recoverClosedComputer(f.input, f.probes);
+        expect(result.phase).toBe("retired_unconfirmed");
+        expect(
+          await fs.readFile(path.join(directory, "stopping"), "utf8"),
+        ).toBe("1\n");
+        expect(
+          await fs.readFile(
+            path.join(result.archive, "last-quit.json"),
+            "utf8",
+          ),
+        ).toBe(f.quit);
+        expect(
+          await fs.readFile(path.join(result.archive, "running.json"), "utf8"),
+        ).toBe(f.run);
+        await expect(
+          fs.lstat(path.join(f.state, "running.json")),
+        ).rejects.toMatchObject({ code: "ENOENT" });
+      },
+    );
+
+    it("preserves failed evidence when a legacy MCP lifetime is still leased", async () => {
+      const f = await fixture();
+      const directory = path.join(f.root, "mcp-lifecycle");
+      await fs.unlink(path.join(directory, "stopping"));
+      const active = await f.lifecycle.join("a".repeat(64));
+      try {
+        await expect(recoverClosedComputer(f.input, f.probes)).rejects.toThrow(
+          "COMPUTER_MCP_LIFECYCLE_UNVERIFIED",
+        );
+        expect(
+          await fs.readFile(path.join(f.state, "running.json"), "utf8"),
+        ).toBe(f.run);
+        expect(
+          await fs.readFile(path.join(f.state, "last-quit.json"), "utf8"),
+        ).toBe(f.quit);
+        expect(
+          await fs.readFile(path.join(directory, f.instance), "utf8"),
+        ).toBe("1\n");
+      } finally {
+        await active.release();
+      }
+    });
+
+    it("does not create legacy stop admission for unresolved desktop work", async () => {
+      const f = await fixture();
+      const stopping = path.join(f.root, "mcp-lifecycle", "stopping");
+      await fs.unlink(stopping);
+      f.input.desktopState.mockResolvedValue({
+        obligations: ["TASK_OUTCOME_UNKNOWN:1"],
+        unreadable: [],
+        changed: [],
+      });
+      await expect(recoverClosedComputer(f.input, f.probes)).rejects.toThrow(
+        "CLOSED_COMPUTER_RECOVERY_WORK_PENDING",
+      );
+      await expect(fs.lstat(stopping)).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      expect(
+        await fs.readFile(path.join(f.state, "last-quit.json"), "utf8"),
+      ).toBe(f.quit);
+    });
+
     it("retains a connector-only failed Quit after MCP shutdown removed every instance", async () => {
       const f = await fixture();
       await fs.unlink(path.join(f.root, "mcp-lifecycle", f.instance));

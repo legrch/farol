@@ -123,3 +123,9 @@ operation UUID. Package/source admission, owning desktop obligations, process
 absence, promotion/admission/MCP locks, no-replay journals and retained historical
 failure remain the same as production recovery. `retired_unconfirmed` is not a
 clean Quit, and the command neither launches Dev nor installs or updates anything.
+
+For a legacy failed Quit without MCP stop admission, recovery first retains the
+exact failure and repeats its idle proof, then establishes a current maintenance
+stop intent through the normal lifecycle. The exclusive lifetime lease and all
+reconciliation guards still apply; an active or unknown child refuses recovery.
+The new intent is not a historical stop acknowledgement or a clean Quit receipt.

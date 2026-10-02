@@ -370,7 +370,13 @@ export async function recoverClosedComputer(
         );
         await retain(path.join(archive, "running.json"), run);
         await retain(path.join(archive, "last-quit.json"), quit);
-        await new PrivateMcpLifecycle(root).reconcileInactive({
+        await proof();
+        const lifecycle = new PrivateMcpLifecycle(root);
+        // A legacy failed Quit may predate stop admission. Establish the
+        // maintenance intent now, after retaining its exact failed evidence;
+        // this is never an acknowledgement that the previous run stopped.
+        await lifecycle.beginStop();
+        await lifecycle.reconcileInactive({
           operationId: request.operationId,
           failedQuitSha256: request.expectedQuitSha256,
           proveIdle: proof,
