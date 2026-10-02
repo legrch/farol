@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { buildSync } from "esbuild";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { nativeArchiveFixture } from "../support/native-archive-fixture.mjs";
 import { assertPackageResourceManifest } from "../../tooling/verify-package-content.mjs";
 import {
   assertResourceManifest,
@@ -12,12 +13,16 @@ import {
 } from "../../tooling/resource-contract.mjs";
 
 const root = path.resolve(import.meta.dirname, "../..");
-const helper = path.join(root, "resources/native/update_archive.py");
+const pythonOracle = path.join(root, "resources/native/update_archive.py");
+let native;
+let helper;
 const deadline = { encoding: "utf8", timeout: 2000, killSignal: "SIGKILL" };
 let harnessRoot;
 let bundledVerifier;
 
 beforeAll(async () => {
+  native = await nativeArchiveFixture(root);
+  helper = native.executable;
   harnessRoot = await fs.mkdtemp(
     path.join(os.tmpdir(), "farol-file-type-harness-"),
   );
@@ -34,8 +39,9 @@ beforeAll(async () => {
     platform: "node",
     format: "esm",
   });
-});
+}, 180_000);
 afterAll(async () => {
+  await native?.dispose();
   if (harnessRoot) await fs.rm(harnessRoot, { recursive: true, force: true });
 });
 
@@ -411,7 +417,7 @@ else:
     raise AssertionError("UNEXPECTED_SUCCESS")
 `;
 
-describe("archive resource type and bounded hashing", () => {
+describe("Python reference archive resource type and bounded hashing", () => {
   for (const scenario of [
     "fifo",
     "replace-fifo",
@@ -436,7 +442,7 @@ describe("archive resource type and bounded hashing", () => {
             "-B",
             "-c",
             archiveProbe,
-            helper,
+            pythonOracle,
             archive,
             stage,
             scenario,

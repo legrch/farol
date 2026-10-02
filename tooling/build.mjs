@@ -25,6 +25,11 @@ import {
 import { sourceSnapshot } from "./source-identity.mjs";
 import { BRAND_RESOURCES, verifyBrandAssets } from "./brand-contract.mjs";
 import {
+  assertNativeArchiveBytes,
+  compileNativeArchive,
+  NATIVE_ARCHIVE_OUTPUT,
+} from "./native-archive-build.mjs";
+import {
   compilerProblems,
   dependencyDrift,
   packageRootOf,
@@ -226,13 +231,12 @@ await Promise.all([
       format: "esm",
     }),
   ),
-  ...[
-    ["resources/native/update_archive.py", "update-archive.py"],
-    ["resources/native/update_helper.py", "update-helper.py"],
-  ].map(async ([source, name]) => {
-    const bytes = await readBuildInput(source);
-    await fs.writeFile(path.join(output, name), bytes, { mode: 0o600 });
-  }),
+  ...[["resources/native/update_helper.py", "update-helper.py"]].map(
+    async ([source, name]) => {
+      const bytes = await readBuildInput(source);
+      await fs.writeFile(path.join(output, name), bytes, { mode: 0o600 });
+    },
+  ),
   readBuildInput("src/ui/shell.html").then((bytes) =>
     fs.writeFile("_output/build/app/shell.html", bytes),
   ),
@@ -262,6 +266,21 @@ await Promise.all([
     ),
   ),
 ]);
+const nativeArchive = await compileNativeArchive({
+  root,
+  readSource: readBuildInput,
+});
+assertNativeArchiveBytes(nativeArchive.bytes);
+await fs.writeFile(
+  path.join(output, NATIVE_ARCHIVE_OUTPUT),
+  nativeArchive.bytes,
+  {
+    mode: 0o700,
+  },
+);
+await fs.chmod(path.join(output, NATIVE_ARCHIVE_OUTPUT), 0o700);
+for (const record of nativeArchive.dependencies)
+  inputRecords.set(`dependency:${record.path}`, record);
 await verifyBrandAssets(output);
 await verifyGeistBuild(output);
 await verifyNativeHelper(path.join(output, NATIVE_SAFE_OPEN_HELPER.output));
@@ -284,7 +303,9 @@ const drift = dependencyDrift(
   root,
   [
     ...toolchainPackageRoots(),
-    ...dependencyInputs.map((entry) => packageRootOf(entry.path)),
+    ...dependencyInputs
+      .filter((entry) => entry.path.startsWith("node_modules/"))
+      .map((entry) => packageRootOf(entry.path)),
   ],
   readDependencyDigests(root),
 );

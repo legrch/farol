@@ -3,17 +3,32 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { nativeArchiveFixture } from "../support/native-archive-fixture.mjs";
+import { NATIVE_ARCHIVE_SHA256 } from "../../tooling/native-archive-build.mjs";
 import { verifyPackageContent } from "../../tooling/verify-package-content.mjs";
 import {
   createUpdatePackageVerifier,
   PackageVerificationError,
+  UPDATE_ARCHIVE_HELPER_SHA256,
 } from "../../src/modules/release/infra/native/update-package-verifier";
 
-const helper = path.resolve(
+const pythonOracle = path.resolve(
   import.meta.dirname,
   "../../resources/native/update_archive.py",
 );
+let native;
+let helper;
+beforeAll(async () => {
+  native = await nativeArchiveFixture(
+    path.resolve(import.meta.dirname, "../.."),
+    true,
+  );
+  helper = native.executable;
+}, 180_000);
+afterAll(async () => {
+  await native?.dispose();
+});
 const makeZip = `
 import json, stat, sys, zipfile
 entries = json.loads(sys.argv[2])
@@ -50,12 +65,8 @@ async function fixture(entries, run) {
     expect(made.status, made.stderr).toBe(0);
     const bytes = await fs.readFile(archive);
     const result = spawnSync(
-      "/usr/bin/python3",
+      helper,
       [
-        "-I",
-        "-S",
-        "-B",
-        helper,
         archive,
         stage,
         String(bytes.length),
@@ -70,6 +81,16 @@ async function fixture(entries, run) {
 }
 
 describe("disposable release archive extraction", () => {
+  it("uses the same bounded executable pin in the build and runtime", async () => {
+    expect(UPDATE_ARCHIVE_HELPER_SHA256).toBe(NATIVE_ARCHIVE_SHA256);
+    const bytes = await fs.readFile(helper);
+    expect(createHash("sha256").update(bytes).digest("hex")).toBe(
+      NATIVE_ARCHIVE_SHA256,
+    );
+    // 64-bit Mach-O, arm64; runtime extraction does not require an interpreter.
+    expect(bytes.readUInt32LE(0)).toBe(0xfeedfacf);
+    expect(bytes.readUInt32LE(4)).toBe(0x0100000c);
+  });
   it("accepts the branded app alone and rejects mixed generations before extraction", async () => {
     await fixture(
       base.map((entry) => ({
@@ -156,12 +177,8 @@ describe("disposable release archive extraction", () => {
       const secondStage = path.join(path.dirname(archive), "second-stage");
       await fs.mkdir(secondStage, { mode: 0o700 });
       const denied = spawnSync(
-        "/usr/bin/python3",
+        helper,
         [
-          "-I",
-          "-S",
-          "-B",
-          helper,
           link,
           secondStage,
           String(bytes.length),
@@ -242,7 +259,9 @@ describe("private handle verification", () => {
   });
 });
 
-describe("archive admission before ZIP object allocation", () => {
+// Historical Python oracle regressions remain separate. Go's co-located tests
+// exercise its admission-before-parser and descriptor-race boundaries.
+describe("Python reference archive admission before ZIP object allocation", () => {
   for (const [scenario, expected] of [
     ["count", "ARCHIVE_ENTRY_COUNT_INVALID"],
     ["lying-count", "ARCHIVE_ENTRY_COUNT_INVALID"],
@@ -317,7 +336,7 @@ assert list(stage.iterdir()) == []
 `;
         const result = spawnSync(
           "/usr/bin/python3",
-          ["-I", "-S", "-B", "-c", probe, helper, parent, scenario],
+          ["-I", "-S", "-B", "-c", probe, pythonOracle, parent, scenario],
           {
             encoding: "utf8",
             timeout: 3000,
@@ -369,7 +388,7 @@ except archive.Refusal as error:
         "-B",
         "-c",
         probe,
-        helper,
+        pythonOracle,
         path.resolve(
           import.meta.dirname,
           "../../resources/native/update_helper.py",

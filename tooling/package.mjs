@@ -168,6 +168,9 @@ for (const entry of BUILD_ENTRIES) {
     path.join(appResources, entry),
   );
 }
+// Schema-6 retains this transport name for older embedded verifiers. The
+// payload is the pinned Go executable and is never passed to Python.
+await fs.chmod(path.join(appResources, "update-archive.py"), 0o700);
 await fs.copyFile(
   path.join(builtRoot, "build-manifest.json"),
   path.join(appResources, "build-manifest.json"),
@@ -210,9 +213,13 @@ const geistLicense = await fs.readFile(
 const geistHashes = GEIST_RESOURCES.map(
   (resource) => `${resource.output} SHA-256 ${resource.sha256}`,
 ).join("\n");
+const nativeNotices = await fs.readFile(
+  path.join(root, "resources/native/go/THIRD_PARTY_NOTICES.txt"),
+  "utf8",
+);
 await fs.writeFile(
   path.join(appResources, "THIRD_PARTY_NOTICES.txt"),
-  `Farol Next Preview direct runtime notice\n\nGeist ${GEIST_VERSION} (SIL Open Font License 1.1)\n${geistHashes}\n\n${geistLicense}\n\n@modelcontextprotocol/server 2.0.0 (MIT)\n${mcpServerLicense}\n\n@modelcontextprotocol/core 2.0.0 (MIT)\n${mcpCoreLicense}\n\nZod 4.6.5 (MIT)\n${zodLicense}\n\nws 8.22.0 (MIT)\n${wsLicense}\n\nElectron's own license and Chromium notices are retained in Contents/Resources.\n`,
+  `Farol Next Preview direct runtime notice\n\nGeist ${GEIST_VERSION} (SIL Open Font License 1.1)\n${geistHashes}\n\n${geistLicense}\n\n@modelcontextprotocol/server 2.0.0 (MIT)\n${mcpServerLicense}\n\n@modelcontextprotocol/core 2.0.0 (MIT)\n${mcpCoreLicense}\n\nZod 4.6.5 (MIT)\n${zodLicense}\n\nws 8.22.0 (MIT)\n${wsLicense}\n\n${nativeNotices}\n\nElectron's own license and Chromium notices are retained in Contents/Resources.\n`,
 );
 if ((await treeDigest(runtimeApp)) !== electronSourceSha256) {
   throw new Error("PACKAGE_RUNTIME_COPY_MISMATCH");

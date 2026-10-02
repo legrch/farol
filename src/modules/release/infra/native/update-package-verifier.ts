@@ -10,9 +10,10 @@ import type {
 } from "../../domain/github-release-contract";
 
 const execFileAsync = promisify(execFile);
-// Update only after reviewing update_archive.py and its focused tests.
+// Reviewed Go extractor; the legacy filename is a schema-6 transport boundary.
 export const UPDATE_ARCHIVE_HELPER_SHA256 =
-  "73c6f98114fb9033e533cadccb2b630ae336fc682a056a0f96553707c8c20c7b";
+  "e4651c3fa2b0d4d85779d71402530b4af3d5b5af3221725589095204c63136c1";
+const UPDATE_ARCHIVE_MAX_BYTES = 8 * 1024 * 1024;
 type MeasuredIdentity = PackageIdentity & Readonly<{ buildVersion: string }>;
 export type VerifiedStagedPackage = Readonly<{
   identity: MeasuredIdentity;
@@ -53,7 +54,13 @@ function sameRegularFile(before: BigIntStats, after: BigIntStats): boolean {
 async function pinnedHelper(file: string): Promise<Buffer> {
   try {
     const before = await fs.lstat(file, { bigint: true });
-    if (!before.isFile() || before.size < 1n || before.size > 262144n)
+    if (
+      !before.isFile() ||
+      before.nlink !== 1n ||
+      before.size < 1n ||
+      before.size > BigInt(UPDATE_ARCHIVE_MAX_BYTES) ||
+      (before.mode & 0o022n) !== 0n
+    )
       throw new PackageVerificationError("invalid_stage");
     const handle = await fs.open(
       file,
@@ -236,21 +243,22 @@ export function createUpdatePackageVerifier(
         const extractorCopy = path.join(stagingRoot, ".update_archive.py");
         await fs.writeFile(extractorCopy, extractorBytes, {
           flag: "wx",
-          mode: 0o600,
+          mode: 0o700,
         });
         const { stdout } = await execFileAsync(
-          "/usr/bin/python3",
+          extractorCopy,
           [
-            "-I",
-            "-S",
-            "-B",
-            extractorCopy,
             archivePath,
             stagingRoot,
             String(expected.archiveSize),
             expected.archiveSha256,
           ],
-          { encoding: "utf8", maxBuffer: 8192, timeout: 600_000 },
+          {
+            encoding: "utf8",
+            maxBuffer: 8192,
+            timeout: 600_000,
+            env: { PATH: "/usr/bin:/bin" },
+          },
         );
         const extracted = JSON.parse(stdout) as {
           appPath?: unknown;

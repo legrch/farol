@@ -23,6 +23,10 @@ const { artifactFile, appPath } = candidatePaths(root);
 const artifact = JSON.parse(await fs.readFile(artifactFile, "utf8"));
 const layout = packageLayout(artifact.schema);
 const runtime = path.join(appPath, "Contents/Frameworks/Electron Runtime.app");
+const extractor = path.join(
+  appPath,
+  "Contents/Resources/app/update-archive.py",
+);
 const executable = path.join(runtime, "Contents/MacOS/Electron");
 const expected = { ...artifact, channel: "owner-beta", signing: "unsigned" };
 const scratch = await fs.mkdtemp(path.join(os.tmpdir(), "farol-asar-cleanup-"));
@@ -80,9 +84,11 @@ cp.execFile = () => noChild();
 cp.execFile[promisify.custom] = async (command, args) => {
   fixtureCalls++;
   if (fixtureCalls === 1) {
-    assert.equal(command, "/usr/bin/python3");
-    assert.equal(args[4], ${JSON.stringify(archive)});
-    const stagingRoot = args[5];
+    assert.equal(path.basename(command), ".update_archive.py");
+    assert.equal(args[0], ${JSON.stringify(archive)});
+    const stagingRoot = args[1];
+    assert.equal(command, path.join(stagingRoot, ".update_archive.py"));
+    assert.equal((await raw.stat(command)).mode & 0o777, 0o700);
     assert.equal(path.dirname(stagingRoot), await raw.realpath(${JSON.stringify(stage)}));
     const appPath = path.join(stagingRoot, ${JSON.stringify(layout.appName)});
     const resources = path.join(appPath, "Contents/Resources");
@@ -104,7 +110,7 @@ const { createUpdatePackageVerifier } = require(${JSON.stringify(verifier)});
   const verifier = createUpdatePackageVerifier({
     archivePathForHandle: async () => ${JSON.stringify(archive)},
     stagingParent: ${JSON.stringify(stage)},
-    extractorPath: ${JSON.stringify(path.join(root, "resources/native/update_archive.py"))},
+    extractorPath: ${JSON.stringify(extractor)},
     verifierPath: ${JSON.stringify(fixtureReply)},
     removeDirectory: async (directory, force) => {
       removals++;
