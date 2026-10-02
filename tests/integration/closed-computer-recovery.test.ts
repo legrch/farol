@@ -128,8 +128,10 @@ describe.skipIf(process.platform !== "darwin")(
         const result = await recoverClosedComputer(f.input, f.probes);
         expect(result.phase).toBe("retired_unconfirmed");
         expect(
-          await fs.readFile(path.join(directory, "stopping"), "utf8"),
-        ).toBe("1\n");
+          (await fs.lstat(path.join(directory, "stopping"))).isDirectory(),
+        ).toBe(true);
+        expect(await fs.readdir(path.join(directory, "stopping"))).toEqual([]);
+        expect(await f.lifecycle.isStopping()).toBe(true);
         expect(
           await fs.readFile(
             path.join(result.archive, "last-quit.json"),
@@ -142,6 +144,10 @@ describe.skipIf(process.platform !== "darwin")(
         await expect(
           fs.lstat(path.join(f.state, "running.json")),
         ).rejects.toMatchObject({ code: "ENOENT" });
+        await f.lifecycle.prepare("b".repeat(64));
+        expect(await f.lifecycle.isStopping()).toBe(false);
+        const next = await f.lifecycle.join("b".repeat(64));
+        await next.release();
       },
     );
 
@@ -183,6 +189,120 @@ describe.skipIf(process.platform !== "darwin")(
       await expect(fs.lstat(stopping)).rejects.toMatchObject({
         code: "ENOENT",
       });
+      expect(
+        await fs.readFile(path.join(f.state, "last-quit.json"), "utf8"),
+      ).toBe(f.quit);
+    });
+
+    it("resumes without repairing an authoritative partial stop file", async () => {
+      const f = await fixture();
+      const stopping = path.join(f.root, "mcp-lifecycle", "stopping");
+      await fs.unlink(stopping);
+      const open = fs.open.bind(fs);
+      let authoritativeWrites = 0;
+      const fault = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+        const handle = await open(...args);
+        if (
+          String(args[0]) === stopping &&
+          typeof args[1] === "number" &&
+          args[1] & 1
+        ) {
+          authoritativeWrites += 1;
+          vi.spyOn(handle, "writeFile").mockRejectedValueOnce(
+            new Error("STOP_PUBLICATION_INTERRUPTED"),
+          );
+        }
+        return handle;
+      });
+      await recoverClosedComputer(f.input, f.probes).catch((error: unknown) => {
+        expect(error).toMatchObject({
+          message: "STOP_PUBLICATION_INTERRUPTED",
+        });
+      });
+      fault.mockRestore();
+      await expect(
+        recoverClosedComputer(f.input, f.probes),
+      ).resolves.toMatchObject({
+        phase: "retired_unconfirmed",
+      });
+      expect(authoritativeWrites).toBe(0);
+    });
+
+    it("resumes the exact operation after interruption following atomic stop publication", async () => {
+      const f = await fixture();
+      const stopping = path.join(f.root, "mcp-lifecycle", "stopping");
+      await fs.unlink(stopping);
+      const mkdir = fs.mkdir.bind(fs);
+      const fault = vi
+        .spyOn(fs, "mkdir")
+        .mockImplementation(async (...args) => {
+          const result = await mkdir(...args);
+          if (String(args[0]) === stopping)
+            throw new Error("STOP_DIRECTORY_PUBLICATION_INTERRUPTED");
+          return result;
+        });
+      await expect(recoverClosedComputer(f.input, f.probes)).rejects.toThrow(
+        "STOP_DIRECTORY_PUBLICATION_INTERRUPTED",
+      );
+      fault.mockRestore();
+      const before = await fs.lstat(stopping);
+      expect(before.isDirectory()).toBe(true);
+      expect(
+        await fs.readFile(path.join(f.state, "running.json"), "utf8"),
+      ).toBe(f.run);
+      expect(
+        await fs.readFile(path.join(f.state, "last-quit.json"), "utf8"),
+      ).toBe(f.quit);
+      const result = await recoverClosedComputer(f.input, f.probes);
+      expect(result.phase).toBe("retired_unconfirmed");
+      const after = await fs.lstat(stopping);
+      expect({ device: after.dev, inode: after.ino }).toEqual({
+        device: before.dev,
+        inode: before.ino,
+      });
+      expect(
+        await fs.readFile(path.join(result.archive, "last-quit.json"), "utf8"),
+      ).toBe(f.quit);
+      expect(
+        await fs.readFile(path.join(result.archive, "running.json"), "utf8"),
+      ).toBe(f.run);
+    });
+
+    it.each([
+      "empty-file",
+      "partial-file",
+      "public-directory",
+      "nonempty-directory",
+      "symlink",
+    ])("refuses a foreign malformed stop marker: %s", async (kind) => {
+      const f = await fixture();
+      const stopping = path.join(f.root, "mcp-lifecycle", "stopping");
+      await fs.unlink(stopping);
+      if (kind === "empty-file" || kind === "partial-file")
+        await fs.writeFile(stopping, kind === "empty-file" ? "" : "1", {
+          mode: 0o600,
+        });
+      else if (kind === "symlink")
+        await fs.symlink(path.join(f.state, "last-quit.json"), stopping);
+      else {
+        await fs.mkdir(stopping, { mode: 0o700 });
+        if (kind === "public-directory") await fs.chmod(stopping, 0o755);
+        else
+          await fs.writeFile(path.join(stopping, "foreign"), "1\n", {
+            mode: 0o600,
+          });
+      }
+      const before = await fs.lstat(stopping);
+      await expect(recoverClosedComputer(f.input, f.probes)).rejects.toThrow(
+        "COMPUTER_MCP_LIFECYCLE_MARKER_UNSAFE",
+      );
+      const after = await fs.lstat(stopping);
+      expect({ device: after.dev, inode: after.ino, mode: after.mode }).toEqual(
+        { device: before.dev, inode: before.ino, mode: before.mode },
+      );
+      expect(
+        await fs.readFile(path.join(f.state, "running.json"), "utf8"),
+      ).toBe(f.run);
       expect(
         await fs.readFile(path.join(f.state, "last-quit.json"), "utf8"),
       ).toBe(f.quit);

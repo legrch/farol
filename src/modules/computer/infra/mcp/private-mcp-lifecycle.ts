@@ -131,6 +131,16 @@ export class PrivateMcpLifecycle {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
       throw error;
     }
+    if (name === "stopping" && info.isDirectory()) {
+      if (
+        (info.mode & 0o077) !== 0 ||
+        info.uid !== process.geteuid?.() ||
+        (await fs.realpath(target)) !== target ||
+        (await fs.readdir(target)).length !== 0
+      )
+        throw new Error("COMPUTER_MCP_LIFECYCLE_MARKER_UNSAFE");
+      return true;
+    }
     if (
       !info.isFile() ||
       info.isSymbolicLink() ||
@@ -154,7 +164,9 @@ export class PrivateMcpLifecycle {
         if (error.code !== "EEXIST") throw error;
       });
     const info = await fs.lstat(target);
-    if (info.isDirectory()) {
+    if (name === "stopping") {
+      await this.existingMarker(name);
+    } else if (info.isDirectory()) {
       await this.safeRecoveryDirectory(target);
       if ((await fs.readdir(target)).length !== 0)
         throw new Error("COMPUTER_MCP_RECONCILIATION_UNSAFE");
@@ -249,11 +261,12 @@ export class PrivateMcpLifecycle {
       await this.marker(`prepared-${digest}`);
       if (await this.existingMarker(`revoked-${digest}`))
         throw new Error("COMPUTER_MCP_LIFECYCLE_DIGEST_REUSED");
-      await fs
-        .unlink(path.join(this.directory, "stopping"))
-        .catch((error: NodeJS.ErrnoException) => {
-          if (error.code !== "ENOENT") throw error;
-        });
+      if (await this.existingMarker("stopping")) {
+        const stopping = path.join(this.directory, "stopping");
+        const info = await fs.lstat(stopping);
+        if (info.isDirectory()) await fs.rmdir(stopping);
+        else await fs.unlink(stopping);
+      }
       await this.sync();
     } finally {
       try {
@@ -306,6 +319,13 @@ export class PrivateMcpLifecycle {
     this.stopRevision += 1;
     await this.ensure();
     await this.marker("stopping");
+  }
+
+  /** Closed maintenance only, after the caller retains evidence and proves idle. */
+  async beginClosedRecoveryStop(): Promise<void> {
+    this.stopRevision += 1;
+    await this.ensure();
+    await this.reconciliationMarker("stopping");
   }
 
   async isStopping(): Promise<boolean> {

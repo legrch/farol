@@ -375,7 +375,7 @@ export async function recoverClosedComputer(
         // A legacy failed Quit may predate stop admission. Establish the
         // maintenance intent now, after retaining its exact failed evidence;
         // this is never an acknowledgement that the previous run stopped.
-        await lifecycle.beginStop();
+        await lifecycle.beginClosedRecoveryStop();
         await lifecycle.reconcileInactive({
           operationId: request.operationId,
           failedQuitSha256: request.expectedQuitSha256,
