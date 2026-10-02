@@ -11,6 +11,8 @@ type Archive struct {
 	SHA256  string
 }
 
+// Restored is an observed presentation state, not admission to dispatch. A
+// measured rollback version can coexist with a live original apply helper.
 type Restored struct {
 	Archive         *Archive
 	RollbackVersion string
@@ -62,7 +64,9 @@ type Runtime interface {
 	// cancellation. Its original native cleanup budget must remain bounded; it
 	// returns only after the ready record and extraction cleanup settle.
 	Retain(Archive) error
-	// Apply/Restore hold real admission through durable intent and helper ACK.
+	// Apply/Restore must acquire fresh native admission even when Reconcile
+	// offered a measured rollback version. They hold it through durable intent
+	// and helper ACK; a still-held original-helper lease cannot be bypassed.
 	// Blocked means proven no dispatch with confirmed admission release;
 	// Accepted means exact helper readiness, never installed acceptance. Runtime
 	// retains the same child and admission through app exit/reconciliation,

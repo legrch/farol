@@ -18,6 +18,17 @@ preparation-cleanup transition, confirmed cleanup and archive reverification
 before Ready. A launch-requested phase stays outcome unknown; a completed phase
 only records the launch command returning, not GUI acceptance.
 
+A settled target with its measured predecessor yields `RollbackAvailable` even
+when original-helper exit is unconfirmed, preserving the accepted runtime's
+startup observation. An interrupted pair requires confirmed helper exit before
+`ExplicitRecovery`. Neither assessment authorizes dispatch. Explicit restoration
+must acquire the real native admission lease, reverify the retained operation and
+record its own durable intent; a lease held by the original helper stays held.
+See `src/apps/desktop/installed-update-runtime.ts` (settled startup classification
+and `restore`) and `docs/installed-update-runtime.md`. The paired domain regression
+and service admission-refusal test keep observation separate from effect authority;
+they do not qualify a native adapter.
+
 ## Preserved lifecycle behavior
 
 - Recovery observes retained state; it never downloads or dispatches a helper.

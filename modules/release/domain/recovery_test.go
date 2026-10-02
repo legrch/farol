@@ -129,3 +129,25 @@ func TestRecoveryRefusesBindingAndLabelOnlyMatches(t *testing.T) {
 		t.Fatal("accepted malformed operation")
 	}
 }
+
+// This compares the accepted settled/interrupted distinction using the same
+// measured pair and live helper. It provides policy evidence, not a kernel lease.
+func TestSettledObservationDoesNotProveHelperExit(t *testing.T) {
+	source := Build{Digest: strings.Repeat("a", 64), Version: "1", BuildID: strings.Repeat("b", 64)}
+	target := Build{Digest: strings.Repeat("c", 64), Version: "2", BuildID: strings.Repeat("d", 64)}
+	op := Operation{ID: strings.Repeat("e", 32), Source: source, Target: target}
+	helper := &Helper{PID: 42, ProcessStart: "same child"}
+	ended := HelperEnded(helper, ProcessObservation{PID: 42, State: ProcessPresent, ProcessStart: helper.ProcessStart})
+	if ended {
+		t.Fatal("live original helper was reported ended")
+	}
+	journal := Journal{Operation: op, Phase: "launch_requested"}
+	o := Observation{Operation: op, Journal: &journal, Complete: true, Slot: &target, Previous: &source, HelperExited: ended}
+	if got := Assess(o); got.Kind != RollbackAvailable || got.Launch != LaunchUnknown {
+		t.Fatalf("settled observation lost measured predecessor or launch uncertainty: %+v", got)
+	}
+	journal.Phase = "new_installed"
+	if got := Assess(o); got.Kind != Unresolved || got.Code != "UPDATE_HELPER_EXIT_UNCONFIRMED" {
+		t.Fatalf("interrupted pair bypassed live helper: %+v", got)
+	}
+}

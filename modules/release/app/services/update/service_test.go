@@ -483,3 +483,29 @@ func TestUnclassifiedFailureTextDoesNotEscape(t *testing.T) {
 		t.Fatalf("view %+v", v)
 	}
 }
+
+func TestObservedRollbackStillNeedsRuntimeAdmission(t *testing.T) {
+	s, r, _ := fixture()
+	r.reconcile = func(context.Context) (*port.Restored, error) {
+		return &port.Restored{RollbackVersion: "0.1.8-owner.beta.1"}, nil
+	}
+	initialize(t, s)
+	// This double supplies an explicit pre-dispatch admission refusal. It does
+	// not supply physical helper or native lease evidence.
+	r.restore = func(_ context.Context, action port.Action) (*port.Handoff, error) {
+		if action != port.Rollback {
+			t.Fatalf("wrong restoration action: %v", action)
+		}
+		return &port.Handoff{Decision: port.Blocked, Code: "UPDATE_WORK_PENDING"}, nil
+	}
+	s.Restore(context.Background(), RestoreRequest{Action: Rollback})
+	if v := snapshot(t, s); v.Phase == "applying" || v.BlockedBy != "UPDATE_WORK_PENDING" || v.RollbackVersion == "" {
+		t.Fatalf("observed rollback bypassed native refusal: %+v", v)
+	}
+	snapshot(t, s)
+	s.Later(LaterRequest{})
+	check(t, s, true)
+	if r.count("rollback") != 1 || r.count("apply") != 0 {
+		t.Fatalf("presentation/check retried refused restoration: %v", r.trace())
+	}
+}

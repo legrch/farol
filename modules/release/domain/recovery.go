@@ -57,6 +57,8 @@ const (
 	Unresolved RecoveryKind = iota
 	ReconcilePreparation
 	ExplicitRecovery
+	// RollbackAvailable observes a settled target and measured predecessor.
+	// It does not prove helper exit or authorize restoration dispatch.
 	RollbackAvailable
 	SettledSource
 )
@@ -69,6 +71,8 @@ const (
 	LaunchReturned
 )
 
+// Assessment describes retained state only. Every explicit restoration still
+// requires the native runtime to acquire admission and verify its durable intent.
 type Assessment struct {
 	Kind   RecoveryKind
 	Code   string
@@ -154,6 +158,9 @@ func Assess(o Observation) Assessment {
 	sourceFailed := same(o.Slot, op.Source) && o.Staged == nil && o.Previous == nil && same(o.Failed, op.Target)
 	switch phase {
 	case "verified", "launch_requested", "completed":
+		// Preserve the accepted runtime's settled-pair observation independently
+		// of original-helper exit. Interrupted pairs below require exit proof.
+		// Neither assessment bypasses native restoration admission.
 		if targetPrevious {
 			return result(RollbackAvailable)
 		}
