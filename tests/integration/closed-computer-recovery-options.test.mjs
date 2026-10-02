@@ -125,7 +125,10 @@ describe("closed Computer maintenance profile selection (synthetic metadata)", (
       const before = await fs.lstat(legacy);
       const selected = closedRecoveryUserData(home, true);
       const after = await fs.lstat(selected);
-      expect(realpathSync(selected)).toBe(selected);
+      // Recovery uses fs.promises.realpath. On a case-insensitive volume the
+      // JavaScript sync resolver can preserve an alias spelling that the
+      // native asynchronous resolver correctly rejects as non-canonical.
+      expect(await fs.realpath(selected)).toBe(selected);
       expect(after.dev).toBe(before.dev);
       expect(after.ino).toBe(before.ino);
       expect(await fs.readdir(appData)).toEqual(["Farol DEV"]);

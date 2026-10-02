@@ -58,7 +58,7 @@ export function closedRecoveryUserData(
   home,
   development = false,
   inspect,
-  canonicalize = realpathSync,
+  canonicalize = realpathSync.native,
 ) {
   if (typeof development !== "boolean")
     throw new Error("CLOSED_COMPUTER_RECOVERY_OPTIONS_INVALID");
