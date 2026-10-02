@@ -47,13 +47,9 @@ async function ownedRun(executable, args, options, deadlineMs = 5000) {
       }
     }, deadlineMs);
     const escalation = setTimeout(() => {
-      if (
-        !child.pid ||
-        !activeGroups.has(child.pid) ||
-        child.exitCode !== null ||
-        child.signalCode !== null
-      )
-        return;
+      // A wrapper can exit while its descendants still hold the pipes. Its
+      // exit status does not prove the supervised group has gone away.
+      if (!child.pid || !activeGroups.has(child.pid)) return;
       try {
         shutdownSignals.push("SIGKILL");
         process.kill(-child.pid, "SIGKILL");
