@@ -9,6 +9,16 @@ import {
 // minimization, not current ChatGPT selectors, native input or live idle state.
 class ElementFixture {
   visible = true;
+  cssVisible = true;
+  styles = { display: "block", visibility: "visible", opacity: "1" };
+  rectangle = {
+    width: 200,
+    height: 40,
+    left: 0,
+    top: 0,
+    right: 200,
+    bottom: 40,
+  };
   disabled = false;
   textContent = "";
   value = "";
@@ -23,7 +33,15 @@ class ElementFixture {
     return this.attributes[name] ?? null;
   }
   getBoundingClientRect() {
-    return this.visible ? { width: 200, height: 40 } : { width: 0, height: 0 };
+    return this.visible
+      ? this.rectangle
+      : { ...this.rectangle, width: 0, height: 0 };
+  }
+  checkVisibility() {
+    return this.cssVisible;
+  }
+  contains(node: unknown): boolean {
+    return node === this || this.children.some((child) => child.contains(node));
   }
   closest(selector: string) {
     return selector === "form" ? this.form : null;
@@ -68,20 +86,24 @@ function fixture() {
   });
   form.children = [composer, send, voice];
   const nodes = [form, composer, send, voice];
+  const paint = { hit: voice as ElementFixture | null };
   const run = () =>
     ChatGptUpdateIdleSchema.parse(
       runInNewContext(chatGptUpdateIdleProbe, {
         HTMLElement: ElementFixture,
         HTMLTextAreaElement: TextAreaFixture,
         HTMLButtonElement: ButtonFixture,
-        getComputedStyle: () => ({ display: "block", visibility: "visible" }),
+        getComputedStyle: (node: ElementFixture) => node.styles,
+        innerWidth: 1000,
+        innerHeight: 700,
         document: {
           querySelectorAll: (selector: string) =>
             nodes.filter((node) => matches(node, selector)),
+          elementFromPoint: () => paint.hit,
         },
       }),
     );
-  return { run, form, composer, send, voice, nodes };
+  return { run, form, composer, send, voice, nodes, paint };
 }
 
 describe("update idle observation on synthetic public DOM", () => {
@@ -112,6 +134,29 @@ describe("update idle observation on synthetic public DOM", () => {
   it("does not borrow voice readiness from outside the composer form", () => {
     const f = fixture();
     f.form.children = [f.composer, f.send];
+    expect(f.run()).toEqual({ state: "unknown" });
+  });
+  it.each([
+    "transparent",
+    "concealed-ancestor",
+    "off-viewport",
+    "clipped",
+    "covered",
+  ])("refuses a %s voice entry despite its positive layout box", (state) => {
+    const f = fixture();
+    if (state === "transparent") f.voice.styles.opacity = "0";
+    if (state === "concealed-ancestor") f.voice.cssVisible = false;
+    if (state === "off-viewport") {
+      f.voice.rectangle = { ...f.voice.rectangle, left: 1500, right: 1700 };
+    }
+    if (state === "clipped") f.paint.hit = null;
+    if (state === "covered") f.paint.hit = f.form;
+    expect(f.voice.getBoundingClientRect().width).toBeGreaterThan(0);
+    expect(f.run()).toEqual({ state: "unknown" });
+  });
+  it("refuses voice readiness when native CSS visibility is unavailable", () => {
+    const f = fixture();
+    Object.defineProperty(f.voice, "checkVisibility", { value: undefined });
     expect(f.run()).toEqual({ state: "unknown" });
   });
   it("recognizes an empty voice-ready composer, not a disabled or ambiguous voice control", () => {

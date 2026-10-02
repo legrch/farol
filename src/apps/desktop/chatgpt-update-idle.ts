@@ -10,7 +10,14 @@ export const chatGptUpdateIdleProbe = `(() => {
   const visible = (e) => {
     if (!(e instanceof HTMLElement)) return false;
     const s = getComputedStyle(e), r = e.getBoundingClientRect();
-    return s.display !== "none" && s.visibility !== "hidden" && r.width > 0 && r.height > 0;
+    if (s.display === "none" || s.visibility === "hidden" || s.visibility === "collapse" ||
+        !(Number(s.opacity) > 0) || typeof e.checkVisibility !== "function" ||
+        e.checkVisibility({ opacityProperty: true, visibilityProperty: true, contentVisibilityAuto: true }) !== true)
+      return false;
+    const width = globalThis.innerWidth, height = globalThis.innerHeight;
+    return [r.width, r.height, r.left, r.top, r.right, r.bottom, width, height].every(Number.isFinite) &&
+      r.width > 0 && r.height > 0 && width > 0 && height > 0 &&
+      r.right > 0 && r.bottom > 0 && r.left < width && r.top < height;
   };
   const any = (s) => [...document.querySelectorAll(s)].some(visible);
   if (any('[data-testid="stop-button"],button[aria-label="Stop generating"],button[aria-label="Stop"],button[aria-label="Stop recording"],button[aria-label="Stop dictation"],button[aria-label="End voice chat"],button[aria-label="End conversation"],[aria-busy="true"],[data-is-streaming="true"]'))
@@ -35,9 +42,14 @@ export const chatGptUpdateIdleProbe = `(() => {
     !voice[0].disabled && voice[0].getAttribute('aria-disabled') !== 'true';
   const sendInactive = sends.length === 0 ||
     (sends.length === 1 && sends[0] instanceof HTMLButtonElement && sends[0].disabled);
-  if (voiceReady && sendInactive)
-    return { state: "idle" };
-  return { state: "unknown" };
+  if (!voiceReady || !sendInactive || typeof document.elementFromPoint !== "function")
+    return { state: "unknown" };
+  // Native CSS visibility does not establish clipping or occlusion. The positive
+  // entry control must own a hit within its current viewport intersection.
+  const box = voice[0].getBoundingClientRect();
+  const x = (Math.max(0, box.left) + Math.min(globalThis.innerWidth, box.right)) / 2;
+  const y = (Math.max(0, box.top) + Math.min(globalThis.innerHeight, box.bottom)) / 2;
+  return { state: voice[0].contains(document.elementFromPoint(x, y)) ? "idle" : "unknown" };
 })()`;
 
 export type BrowserUpdateCheck =

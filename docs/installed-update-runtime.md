@@ -28,7 +28,11 @@ An open embedded ChatGPT document is admitted only after a fresh public-DOM
 observation of an empty usable composer, a visible enabled Start voice mode
 control, and no enabled Send control. Disabled Send alone does not establish
 voice readiness; an absent, renamed, disabled or ambiguous voice entry control
-leaves admission unknown. Active
+leaves admission unknown. Native CSS visibility includes opacity and ancestor
+visibility. The entry control must intersect the current viewport and own a
+hit at the center of that intersection; clipped or covered controls cannot
+supply the positive idle signal. Missing native visibility or hit-test support
+also leaves admission unknown. Active
 responses, voice sessions, drafts, attachments, popups, pending navigation and
 unrecognized controls refuse admission. The observation returns a classification,
 never composer or conversation text. Desktop hides the browser views and holds
