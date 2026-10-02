@@ -144,6 +144,7 @@ var definitions = func() map[string]definition {
 	return schema.Definitions
 }()
 var idPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$`)
+var utcPattern = regexp.MustCompile(`^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]{1,9})?Z$`)
 var decimalPattern = regexp.MustCompile(`^(0|[1-9][0-9]{0,19})$`)
 
 // Validate applies the one canonical closed schema. Framing also rejects duplicates.
@@ -184,6 +185,9 @@ func valid(kind string, value interface{}, depth int) bool {
 			_, err := strconv.ParseUint(s, 10, 64)
 			return err == nil
 		case "utc":
+			if !utcPattern.MatchString(s) {
+				return false
+			}
 			t, err := time.Parse(time.RFC3339Nano, s)
 			return err == nil && strings.HasSuffix(s, "Z") && t.Year() >= 1 && t.Year() <= 9999
 		default:

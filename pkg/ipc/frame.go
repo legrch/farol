@@ -22,7 +22,13 @@ func ReadFrame(r io.Reader) ([]byte, error) {
 	}
 	data := make([]byte, int(n))
 	_, err := io.ReadFull(r, data)
-	return data, err
+	if err == io.EOF {
+		return nil, io.ErrUnexpectedEOF
+	}
+	if err != nil {
+		return nil, err
+	}
+	return data, nil
 }
 
 func WriteFrame(w io.Writer, data []byte) error {

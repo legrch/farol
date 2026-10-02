@@ -29,6 +29,7 @@ type Pending = {
   reject: (error: BridgeError) => void;
   timer: ReturnType<typeof setTimeout>;
   operationId?: string;
+  handshake?: Handshake;
 };
 
 // Trusted Electron host only. No renderer IPC, endpoint discovery or automatic restart.
@@ -39,6 +40,7 @@ export class Client {
   private stopped = false;
   private context: Context | undefined;
   private identity: Identity | undefined;
+  private connecting = false;
   private sequences = new Map<string, bigint>();
   private stale = new Set<string>();
   private listeners = new Set<(event: EventData, stale: boolean) => void>();
@@ -61,6 +63,7 @@ export class Client {
     child.stdout.on("end", () => {
       try {
         this.decoder.finish();
+        this.fail("transport_ended");
       } catch {
         this.fail("truncated_frame");
       }
@@ -85,32 +88,29 @@ export class Client {
     });
   }
   async handshake(expected: Handshake, timeoutMs: number): Promise<Identity> {
-    if (this.context || this.identity)
+    if (this.context || this.identity || this.connecting)
       throw new BridgeError("refused", "already_connected");
     if (!validate("Handshake", expected))
       throw new BridgeError("refused", "invalid_handshake");
-    const result = await this.send(
-      "core.handshake",
-      expected as unknown as Json,
-      randomUUID(),
-      timeoutMs,
-    );
-    if (result.status !== "ok" || !validate("Identity", result.data))
-      throw new BridgeError("refused", "invalid_backend_identity");
-    const identity = result.data as unknown as Identity;
-    if (
-      identity.protocolMajor !== expected.protocolMajor ||
-      identity.protocolMinor < expected.protocolMinor ||
-      identity.buildId !== expected.buildId ||
-      identity.profileId !== expected.profileId ||
-      result.context.backendGeneration !== identity.backendGeneration ||
-      result.context.profileId !== identity.profileId
-    )
-      throw new BridgeError("refused", "wrong_backend_identity");
-    this.identity = Object.freeze(identity);
-    this.context = Object.freeze({ ...result.context });
-    return this.identity;
+    const hello = Object.freeze({ ...expected });
+    this.connecting = true;
+    try {
+      await this.send(
+        "core.handshake",
+        hello as unknown as Json,
+        randomUUID(),
+        timeoutMs,
+        undefined,
+        hello,
+      );
+      if (this.stopped || !this.identity)
+        throw new BridgeError("unknown", "backend_unavailable");
+      return this.identity;
+    } finally {
+      this.connecting = false;
+    }
   }
+
   request(
     method: string,
     body: Json,
@@ -148,6 +148,7 @@ export class Client {
     id: string,
     timeoutMs: number,
     operationId?: string,
+    handshake?: Handshake,
   ): Promise<Outcome> {
     if (this.stopped)
       return Promise.reject(
@@ -185,6 +186,7 @@ export class Client {
         reject,
         timer,
         ...(operationId !== undefined ? { operationId } : {}),
+        ...(handshake ? { handshake } : {}),
       });
       try {
         if (!this.child.stdin.write(bytes)) {
@@ -257,6 +259,36 @@ export class Client {
         this.fail("crossed_response_context");
         return;
       }
+      if (pending.handshake) {
+        const expected = pending.handshake;
+        let code: string | undefined;
+        if (result.status !== "ok" || !validate("Identity", result.data)) {
+          code = "invalid_backend_identity";
+        } else {
+          const identity = result.data as unknown as Identity;
+          if (
+            identity.protocolMajor !== expected.protocolMajor ||
+            identity.protocolMinor < expected.protocolMinor ||
+            identity.buildId !== expected.buildId ||
+            identity.profileId !== expected.profileId ||
+            result.context.backendGeneration !== identity.backendGeneration ||
+            result.context.profileId !== identity.profileId
+          ) {
+            code = "wrong_backend_identity";
+          } else {
+            // Adopt verified identity before the decoder handles the next frame.
+            this.identity = Object.freeze(identity);
+            this.context = Object.freeze({ ...result.context });
+          }
+        }
+        if (code) {
+          clearTimeout(pending.timer);
+          this.pending.delete(response.id);
+          pending.reject(new BridgeError("refused", code));
+          this.fail(code);
+          return;
+        }
+      }
       clearTimeout(pending.timer);
       this.pending.delete(response.id);
       pending.resolve(result);
@@ -269,6 +301,7 @@ export class Client {
           response.error?.message ?? "protocol_refused",
         ),
       );
+      if (pending.handshake) this.fail("handshake_refused");
     }
   }
   private fail(

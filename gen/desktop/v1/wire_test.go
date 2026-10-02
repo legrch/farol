@@ -31,3 +31,18 @@ func TestIntegerJSONValueSpellings(t *testing.T) {
 		}
 	}
 }
+
+func TestTimestampGrammar(t *testing.T) {
+	for _, value := range []string{"0001-01-01T00:00:00Z", "2024-02-29T12:00:00Z", "2026-10-02T12:00:00.1Z", "2026-10-02T12:00:00.123456789Z"} {
+		raw, _ := json.Marshal(value)
+		if err := Validate("utc", raw); err != nil {
+			t.Fatalf("valid %q: %v", value, err)
+		}
+	}
+	for _, value := range []string{"0000-01-01T00:00:00Z", "2023-02-29T12:00:00Z", "2026-10-02T12:00:00.1234567890Z", "2026-10-02T12:00:00,1Z", "2026-10-02T12:00:00.Z", "2026-10-02T12:00:00+00:00", "2026-10-02T12:00:00Z\n"} {
+		raw, _ := json.Marshal(value)
+		if Validate("utc", raw) == nil {
+			t.Fatalf("invalid %q admitted", value)
+		}
+	}
+}

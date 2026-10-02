@@ -17,7 +17,7 @@ func TestFrameAdmission(t *testing.T) {
 			t.Fatalf("length %d: %v", n, err)
 		}
 	}
-	for _, data := range [][]byte{{0}, {0, 0, 0, 3, 'x'}} {
+	for _, data := range [][]byte{{0}, {0, 0, 0, 3}, {0, 0, 0, 3, 'x'}} {
 		if _, err := ReadFrame(bytes.NewReader(data)); err != io.ErrUnexpectedEOF {
 			t.Fatalf("truncated: %v", err)
 		}

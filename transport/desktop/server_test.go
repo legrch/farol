@@ -294,3 +294,14 @@ func TestServeNormalEOFClosesOwnedOutput(t *testing.T) {
 		t.Fatal("owned output retained after EOF")
 	}
 }
+
+func TestServeHeaderOnlyTruncation(t *testing.T) {
+	output := &closedWriter{}
+	err := server(t).Serve(context.Background(), io.NopCloser(bytes.NewReader([]byte{0, 0, 0, 3})), output)
+	if !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Fatalf("header-only truncation: %v", err)
+	}
+	if !output.closed {
+		t.Fatal("owned output retained after truncation")
+	}
+}

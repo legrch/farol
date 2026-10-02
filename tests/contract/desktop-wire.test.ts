@@ -393,3 +393,141 @@ it("keeps authoritative snapshots unsupported until their owner contract exists"
     }),
   ).toBe(false);
 });
+
+function terminalFixture(
+  mode: "coalesced" | "coalesced-invalid" | "eof",
+): string {
+  return `
+const context={profileId:'test',backendGeneration:'verified'};
+function encode(value){const body=Buffer.from(JSON.stringify(value));const h=Buffer.alloc(4);h.writeUInt32BE(body.length);return Buffer.concat([h,body]);}
+let input=Buffer.alloc(0);
+process.stdin.on('data',chunk=>{input=Buffer.concat([input,chunk]);while(input.length>=4){const n=input.readUInt32BE();if(input.length<4+n)return;const req=JSON.parse(input.subarray(4,4+n));input=input.subarray(4+n);
+if(req.method==='core.handshake'){
+ const hello=encode({jsonrpc:'2.0',id:req.id,result:{status:'ok',requestId:req.id,context,data:{protocolMajor:1,protocolMinor:0,buildId:'k0-test',profileId:'test',backendGeneration:'verified',capabilities:['core.status'],maxFrameBytes:1048576}}});
+ const event=encode({jsonrpc:'2.0',method:'core.event',params:{context:${mode === "coalesced-invalid" ? "{...context,backendGeneration:'stale'}" : "context"},stream:'status',sequence:'1',kind:'changed',data:{}}});
+ process.stdout.write(${mode.startsWith("coalesced") ? "Buffer.concat([hello,event])" : "hello"});
+}else{${mode === "eof" ? "process.stdout.end();" : "process.stdout.write(encode({jsonrpc:'2.0',id:req.id,result:{status:'ok',requestId:req.id,context,data:{}}}));"}}
+}});
+${mode === "eof" ? "setInterval(()=>{},1000);" : "process.stdin.on('end',()=>process.exit(0));"}
+`;
+}
+it("adopts a verified handshake before a coalesced valid event", async () => {
+  const { client } = await fixture(terminalFixture("coalesced"));
+  const seen: string[] = [];
+  client.subscribe((event) => seen.push(event.sequence));
+  try {
+    await client.handshake(
+      {
+        protocolMajor: 1,
+        protocolMinor: 0,
+        buildId: "k0-test",
+        profileId: "test",
+      },
+      2000,
+    );
+    expect(seen).toEqual(["1"]);
+    await expect(
+      client.request("core.status", {}, { id: "after-handshake-event" }),
+    ).resolves.toMatchObject({
+      status: "ok",
+      requestId: "after-handshake-event",
+    });
+  } finally {
+    await client.close();
+  }
+});
+it("closes admission and settles dispatched work on clean stdout EOF", async () => {
+  const { client, child } = await fixture(terminalFixture("eof"));
+  let settled: unknown;
+  let pending: Promise<void> | undefined;
+  try {
+    await client.handshake(
+      {
+        protocolMajor: 1,
+        protocolMinor: 0,
+        buildId: "k0-test",
+        profileId: "test",
+      },
+      2000,
+    );
+    const ended = new Promise<void>((resolve) =>
+      child.stdout!.once("end", resolve),
+    );
+    pending = client
+      .request("core.status", {}, { id: "lost-at-eof", timeoutMs: 30000 })
+      .then(
+        () => {
+          settled = { state: "ok" };
+        },
+        (error) => {
+          settled = error;
+        },
+      );
+    await ended;
+    await Promise.resolve();
+    expect(settled).toMatchObject({
+      state: "unknown",
+      code: "transport_ended",
+    });
+    await expect(
+      client.request("core.status", {}, { id: "after-eof" }),
+    ).rejects.toMatchObject({
+      state: "unavailable",
+      code: "backend_unavailable",
+    });
+  } finally {
+    await client.close();
+    await pending;
+  }
+  expect(client.cleanupState).toBe("confirmed");
+});
+it("rejects EOF after a complete nonzero frame header", () => {
+  const header = Buffer.alloc(4);
+  header.writeUInt32BE(3);
+  const decoder = new Decoder();
+  decoder.push(header, () => {});
+  expect(() => decoder.finish()).toThrow();
+});
+it("uses the same bounded UTC timestamp grammar as Go", () => {
+  for (const value of [
+    "0001-01-01T00:00:00Z",
+    "2024-02-29T12:00:00Z",
+    "2026-10-02T12:00:00.1Z",
+    "2026-10-02T12:00:00.123456789Z",
+  ])
+    expect(validate("utc", value), value).toBe(true);
+  for (const value of [
+    "0000-01-01T00:00:00Z",
+    "2023-02-29T12:00:00Z",
+    "2026-10-02T12:00:00.1234567890Z",
+    "2026-10-02T12:00:00,1Z",
+    "2026-10-02T12:00:00.Z",
+    "2026-10-02T12:00:00+00:00",
+    "2026-10-02T12:00:00Z\n",
+  ])
+    expect(validate("utc", value), value).toBe(false);
+});
+
+it("does not return a connected client after a coalesced invalid event", async () => {
+  const { client } = await fixture(terminalFixture("coalesced-invalid"));
+  try {
+    await expect(
+      client.handshake(
+        {
+          protocolMajor: 1,
+          protocolMinor: 0,
+          buildId: "k0-test",
+          profileId: "test",
+        },
+        2000,
+      ),
+    ).rejects.toMatchObject({ state: "unknown", code: "backend_unavailable" });
+    await expect(client.request("core.status", {})).rejects.toMatchObject({
+      state: "unavailable",
+      code: "backend_unavailable",
+    });
+  } finally {
+    await client.close();
+  }
+  expect(client.cleanupState).toBe("confirmed");
+});
