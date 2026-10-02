@@ -153,11 +153,11 @@ func (q *Queue) Finish(b Binding, result Result) (Snapshot, error) {
 func (q *Queue) Acknowledge(identity Identity, resultID string) (Snapshot, error) {
 	return q.change(identity, func(t Turn) (Turn, error) { return t.Acknowledge(identity, resultID) })
 }
-func (q *Queue) Settle(b Binding) (Snapshot, error) {
-	return q.change(b.Reservation.Identity, func(t Turn) (Turn, error) { return t.Settle(b) })
+func (q *Queue) Settle(evidence QuiescenceEvidence) (Snapshot, error) {
+	return q.change(evidence.Binding.Reservation.Identity, func(t Turn) (Turn, error) { return t.Settle(evidence) })
 }
-func (q *Queue) SettlePrepared(r Reservation) (Snapshot, error) {
-	return q.change(r.Identity, func(t Turn) (Turn, error) { return t.SettlePrepared(r) })
+func (q *Queue) SettlePrepared(evidence DisposalEvidence) (Snapshot, error) {
+	return q.change(evidence.Reservation.Identity, func(t Turn) (Turn, error) { return t.SettlePrepared(evidence) })
 }
 
 func (q *Queue) Cancel(identity Identity, resultID string) (Snapshot, error) {

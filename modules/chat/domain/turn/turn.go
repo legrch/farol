@@ -89,6 +89,24 @@ type Binding struct {
 	Document    Document
 }
 
+// QuiescenceEvidence is mapped only from a validated Desktop Quiescent event.
+// The application correlates that event to the exact retained result; a result,
+// hidden view, disconnect or cancellation intent alone is not this evidence.
+type QuiescenceEvidence struct {
+	Binding   Binding
+	ResultID  string
+	Sequence  uint64
+	Confirmed bool
+}
+
+// DisposalEvidence is mapped only from a confirmed Dispose response for the
+// exact reservation. It covers cleanup when Prepare never bound a document.
+type DisposalEvidence struct {
+	Reservation Reservation
+	ResultID    string
+	Confirmed   bool
+}
+
 // Result is metadata only. Answer bytes belong to the bounded delivery owner.
 // Code is a classified identifier; raw errors, prompts and answers are excluded.
 type Result struct {
@@ -364,24 +382,40 @@ func (t Turn) Acknowledge(identity Identity, resultID string) (Turn, error) {
 	return t, nil
 }
 
-// Settle is supplied only after Desktop confirms the exact lifecycle is quiescent.
-func (t Turn) Settle(b Binding) (Turn, error) {
-	if !t.matches(b) {
+// Settle requires affirmative, correlated quiescence after the latest delta.
+// Unknown outcomes cannot be reconciled by ordinary cleanup observations.
+func (t Turn) Settle(evidence QuiescenceEvidence) (Turn, error) {
+	if !t.matches(evidence.Binding) {
 		return t, Correlation
 	}
 	if !t.hasResult || t.result.Outcome == UnknownOutcome {
 		return t, Unsettled
 	}
+	if evidence.ResultID != t.result.ID {
+		return t, Correlation
+	}
+	if !evidence.Confirmed {
+		return t, Unsettled
+	}
+	if evidence.Sequence <= t.lastSequence {
+		return t, Sequence
+	}
 	t.settled = true
 	return t, nil
 }
 
-// SettlePrepared covers disposal before a document was successfully bound.
-func (t Turn) SettlePrepared(r Reservation) (Turn, error) {
-	if !t.reserved || t.reservation != r {
+// SettlePrepared requires confirmed disposal before a document was bound.
+func (t Turn) SettlePrepared(evidence DisposalEvidence) (Turn, error) {
+	if !t.reserved || t.reservation != evidence.Reservation {
 		return t, Correlation
 	}
 	if t.bound || t.sendIntent || !t.hasResult || t.result.Outcome != CancelledOutcome {
+		return t, Unsettled
+	}
+	if evidence.ResultID != t.result.ID {
+		return t, Correlation
+	}
+	if !evidence.Confirmed {
 		return t, Unsettled
 	}
 	t.settled = true

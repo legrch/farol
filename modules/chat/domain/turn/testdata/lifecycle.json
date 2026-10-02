@@ -17,7 +17,7 @@
   },
   {
     "Name": "settled-and-delivered",
-    "Events": ["send", "accepted", "delta", "complete", "settle", "ack"],
+    "Events": ["send", "accepted", "delta", "complete", "quiescent", "ack"],
     "Phase": "delivered",
     "Outcome": "completed",
     "Acknowledged": true,
@@ -40,8 +40,16 @@
     "Reusable": false
   },
   {
+    "Name": "cancel-before-send-without-cleanup",
+    "Events": ["cancel", "ack"],
+    "Phase": "cancelled",
+    "Outcome": "cancelled",
+    "Acknowledged": true,
+    "Reusable": false
+  },
+  {
     "Name": "cancel-before-send",
-    "Events": ["cancel", "settle", "ack"],
+    "Events": ["cancel", "quiescent", "ack"],
     "Phase": "cancelled",
     "Outcome": "cancelled",
     "Acknowledged": true,
@@ -49,7 +57,7 @@
   },
   {
     "Name": "preflight-refused",
-    "Events": ["refused", "settle", "ack"],
+    "Events": ["refused", "quiescent", "ack"],
     "Phase": "delivered",
     "Outcome": "refused",
     "Acknowledged": true,

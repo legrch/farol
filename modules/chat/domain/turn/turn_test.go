@@ -93,8 +93,8 @@ func TestFixtures(t *testing.T) {
 					turn, err = turn.Cancel("result-a")
 				case "ack":
 					turn, err = turn.Acknowledge(turn.identity, "result-a")
-				case "settle":
-					turn, err = turn.Settle(b)
+				case "quiescent":
+					turn, err = turn.Settle(QuiescenceEvidence{Binding: b, ResultID: "result-a", Sequence: turn.lastSequence + 1, Confirmed: true})
 				default:
 					t.Fatalf("unknown fixture event %q", event)
 				}
@@ -224,7 +224,7 @@ func TestKnownResultSurvivesLostDeliveryAndUnknownIsSticky(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := unknown.Settle(b); !errors.Is(err, Unsettled) {
+	if _, err := unknown.Settle(QuiescenceEvidence{Binding: b, ResultID: "unknown-a", Sequence: 1, Confirmed: true}); !errors.Is(err, Unsettled) {
 		t.Fatal(err)
 	}
 	if _, err := unknown.Finish(b, result); !errors.Is(err, Conflict) {
@@ -306,5 +306,35 @@ func TestComputerResultBindsExactCallAndLostAckNeverResumes(t *testing.T) {
 	}
 	if _, err := unknown.Dispatch(b); !errors.Is(err, Transition) {
 		t.Fatal(err)
+	}
+}
+
+func TestQuiescenceMustFollowLatestOutputAndNameExactResult(t *testing.T) {
+	turn, b := running(t)
+	turn, err := turn.Delta(b, 9)
+	if err != nil {
+		t.Fatal(err)
+	}
+	turn, err = turn.Finish(b, Result{ID: "result-a", Outcome: Completed, Code: "COMPLETED"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, sequence := range []uint64{0, 8, 9} {
+		changed, err := turn.Settle(QuiescenceEvidence{Binding: b, ResultID: "result-a", Sequence: sequence, Confirmed: true})
+		if !errors.Is(err, Sequence) || changed != turn {
+			t.Fatal("stale quiescence changed result lifecycle", err)
+		}
+	}
+	changed, err := turn.Settle(QuiescenceEvidence{Binding: b, ResultID: "foreign-result", Sequence: 10, Confirmed: true})
+	if !errors.Is(err, Correlation) || changed != turn {
+		t.Fatal("foreign result settled lifecycle", err)
+	}
+	changed, err = turn.Settle(QuiescenceEvidence{Binding: b, ResultID: "result-a", Sequence: 10})
+	if !errors.Is(err, Unsettled) || changed != turn {
+		t.Fatal("unconfirmed observation settled lifecycle", err)
+	}
+	settled, err := turn.Settle(QuiescenceEvidence{Binding: b, ResultID: "result-a", Sequence: 10, Confirmed: true})
+	if err != nil || !settled.settled || settled.Reusable() {
+		t.Fatal("quiescence was not independent of delivery ACK", err)
 	}
 }

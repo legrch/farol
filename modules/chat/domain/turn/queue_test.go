@@ -80,7 +80,7 @@ func TestFiveSlotsSixthWaitsAndReusesOnlyAfterSettlementAndAck(t *testing.T) {
 	if err := q.Release(b.Reservation); !errors.Is(err, Unsettled) {
 		t.Fatal(err)
 	}
-	if _, err := q.Settle(b); err != nil {
+	if _, err := q.Settle(QuiescenceEvidence{Binding: b, ResultID: "result-" + b.Reservation.Identity.TaskID, Sequence: 2, Confirmed: true}); err != nil {
 		t.Fatal(err)
 	}
 	if err := q.Release(b.Reservation); !errors.Is(err, Unsettled) {
@@ -199,7 +199,7 @@ func TestQueuedCancelAndPreparedDisposal(t *testing.T) {
 	if err := q.Release(r); !errors.Is(err, Unsettled) {
 		t.Fatal(err)
 	}
-	if _, err := q.SettlePrepared(r); err != nil {
+	if _, err := q.SettlePrepared(DisposalEvidence{Reservation: r, ResultID: "cancel-b", Confirmed: true}); err != nil {
 		t.Fatal(err)
 	}
 	if err := q.Release(r); err != nil {
@@ -227,7 +227,7 @@ func TestOneTaskCannotOwnTwoViews(t *testing.T) {
 		t.Fatal("second turn occupied another view")
 	}
 	complete(t, q, first)
-	if _, err := q.Settle(first); err != nil {
+	if _, err := q.Settle(QuiescenceEvidence{Binding: first, ResultID: "result-" + i.TaskID, Sequence: 2, Confirmed: true}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := q.Acknowledge(i, "result-"+i.TaskID); err != nil {
@@ -334,7 +334,7 @@ func TestGenericCancelledResultCannotReleasePreparedOrSentSlot(t *testing.T) {
 			if after != before {
 				t.Fatal("rejected cancellation changed state")
 			}
-			if _, err := q.Settle(b); !errors.Is(err, Unsettled) {
+			if _, err := q.Settle(QuiescenceEvidence{Binding: b, ResultID: "unproven-cancel", Sequence: 1, Confirmed: true}); !errors.Is(err, Unsettled) {
 				t.Fatal(err)
 			}
 			if _, err := q.Acknowledge(i, "unproven-cancel"); !errors.Is(err, Correlation) {
@@ -349,6 +349,107 @@ func TestGenericCancelledResultCannotReleasePreparedOrSentSlot(t *testing.T) {
 			}
 			if sent && s.Phase != Unknown {
 				t.Fatal("sent cancellation lost unknown state")
+			}
+		})
+	}
+}
+
+func TestReservedCancellationNeedsPositiveCleanupEvidence(t *testing.T) {
+	for _, bound := range []bool{false, true} {
+		t.Run(fmt.Sprint(bound), func(t *testing.T) {
+			q := queue(t)
+			i := add(t, q, "a")
+			r, err := q.Reserve()
+			if err != nil {
+				t.Fatal(err)
+			}
+			b := Binding{Reservation: r, Document: Document{ViewID: "view-a", ViewGeneration: 2, DocumentGeneration: 3, ConversationID: "conversation-a"}}
+			if bound {
+				if _, err := q.Bind(r, b.Document); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := q.Cancel(i, "cancel-a"); err != nil {
+				t.Fatal(err)
+			}
+			before, err := q.Acknowledge(i, "cancel-a")
+			if err != nil || before.LifecycleSettled {
+				t.Fatal("ACK settled a reserved cancellation", err)
+			}
+			unchanged := func(err, want error) {
+				t.Helper()
+				if !errors.Is(err, want) {
+					t.Fatalf("cleanup error %v, want %v", err, want)
+				}
+				after, err := q.Snapshot(i)
+				if err != nil || after != before {
+					t.Fatal("rejected cleanup changed state", err)
+				}
+				if err := q.Release(r); !errors.Is(err, Unsettled) {
+					t.Fatal("unproven cleanup released slot", err)
+				}
+			}
+			if bound {
+				good := QuiescenceEvidence{Binding: b, ResultID: "cancel-a", Sequence: 1, Confirmed: true}
+				invalid := []struct {
+					evidence QuiescenceEvidence
+					code     Code
+				}{
+					{func() QuiescenceEvidence { e := good; e.Confirmed = false; return e }(), Unsettled},
+					{func() QuiescenceEvidence { e := good; e.Sequence = 0; return e }(), Sequence},
+					{func() QuiescenceEvidence { e := good; e.ResultID = "foreign-result"; return e }(), Correlation},
+					{func() QuiescenceEvidence { e := good; e.Binding.Reservation.Generation++; return e }(), Correlation},
+					{func() QuiescenceEvidence {
+						e := good
+						e.Binding.Reservation.BackendGeneration = "old-backend"
+						return e
+					}(), Correlation},
+					{func() QuiescenceEvidence { e := good; e.Binding.Document.ViewGeneration++; return e }(), Correlation},
+					{func() QuiescenceEvidence { e := good; e.Binding.Document.DocumentGeneration++; return e }(), Correlation},
+					{func() QuiescenceEvidence {
+						e := good
+						e.Binding.Document.ConversationID = "foreign-conversation"
+						return e
+					}(), Correlation},
+				}
+				for _, test := range invalid {
+					_, err := q.Settle(test.evidence)
+					unchanged(err, test.code)
+				}
+				_, err := q.SettlePrepared(DisposalEvidence{Reservation: r, ResultID: "cancel-a", Confirmed: true})
+				unchanged(err, Unsettled)
+				if _, err := q.Settle(good); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				good := DisposalEvidence{Reservation: r, ResultID: "cancel-a", Confirmed: true}
+				invalid := []struct {
+					evidence DisposalEvidence
+					code     Code
+				}{
+					{func() DisposalEvidence { e := good; e.Confirmed = false; return e }(), Unsettled},
+					{func() DisposalEvidence { e := good; e.ResultID = "foreign-result"; return e }(), Correlation},
+					{func() DisposalEvidence { e := good; e.Reservation.Generation++; return e }(), Correlation},
+					{func() DisposalEvidence { e := good; e.Reservation.BackendGeneration = "old-backend"; return e }(), Correlation},
+					{func() DisposalEvidence { e := good; e.Reservation.Ordinal++; return e }(), Correlation},
+				}
+				for _, test := range invalid {
+					_, err := q.SettlePrepared(test.evidence)
+					unchanged(err, test.code)
+				}
+				_, err := q.Settle(QuiescenceEvidence{Binding: b, ResultID: "cancel-a", Sequence: 1, Confirmed: true})
+				unchanged(err, Correlation)
+				if _, err := q.SettlePrepared(good); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := q.Release(r); err != nil {
+				t.Fatal(err)
+			}
+			add(t, q, "next")
+			next, err := q.Reserve()
+			if err != nil || next.Ordinal != r.Ordinal || next.Generation != r.Generation+1 {
+				t.Fatal("confirmed cleanup did not advance slot generation", err)
 			}
 		})
 	}

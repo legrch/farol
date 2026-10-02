@@ -23,7 +23,12 @@ outcome. `result-ready` means known result metadata is available, not that answe
 bytes have been durably saved. The future application must publish this state only
 after its accepted result owner has retained the actual result. Acknowledgement
 of the exact result and lifecycle settlement are separate requirements for reuse.
-Acknowledging an unknown result leaves the slot occupied.
+`Settle` requires affirmative `QuiescenceEvidence` for the exact binding and retained
+result, with an observation sequence after the latest delta. `SettlePrepared`
+requires affirmative `DisposalEvidence` for the exact reservation and cancellation
+result when no document was bound. Local Cancel, a generic terminal result, absent
+confirmation, stale generations or delivery ACK alone cannot release a reservation.
+Acknowledging an unknown result leaves the slot occupied, even with cleanup evidence.
 
 Ordinal 1 through 5 is presentation only. Owner/session/task/turn/operation and
 turn generation are durable identity. Backend incarnation and slot generation
@@ -64,6 +69,9 @@ requested, confirmed terminal, already terminal and unknown are distinct.
 After K0, the application owner must freeze mappings with Desktop, validate every
 unknown boundary response, reject stale/gap events, require durable intent before
 Send and retained result before delivery, and classify IO errors without retry.
+It must explicitly map a validated Quiescent event to `QuiescenceEvidence`, or a
+confirmed prepared Dispose response to `DisposalEvidence`; the domain imports no
+browser DTOs. Tests supply synthetic positive and negative confirmations only.
 No hidden-window, transport disconnect or missing reply is quiescence evidence.
 
 ## SSE delivery preparation
