@@ -9261,6 +9261,37 @@ demoMainSegment: try {
     normal.application,
     "before establishing the inactive reopen baseline",
   );
+  // The bounded focus assertions above can leave this empty application
+  // active. Deactivate only this owned process, with no new visible window
+  // or activation of another app. Electron's macOS show() unhides without
+  // focusing; the native isActive() reading below still decides the proof.
+  if (
+    activeBeforeReopen === true &&
+    process.platform === "darwin" &&
+    nativeFocusProofCompleted &&
+    macHostLockState !== "locked"
+  ) {
+    const deactivated = await normal.application.evaluate(
+      async ({ app, BrowserWindow }) => {
+        if (BrowserWindow.getAllWindows().length !== 0)
+          throw new Error("E2E_INACTIVE_BASELINE_REQUIRES_NO_WINDOWS");
+        app.hide();
+        try {
+          const deadline = Date.now() + 2_000;
+          while (app.isActive() && Date.now() < deadline)
+            await new Promise((resolve) => setTimeout(resolve, 25));
+          return { active: app.isActive(), hidden: app.isHidden() };
+        } finally {
+          app.show();
+        }
+      },
+    );
+    phases.note("reopen.ownedInactiveBaseline", JSON.stringify(deactivated));
+    activeBeforeReopen = await markActivation(
+      normal.application,
+      "after unhiding the windowless owned application without focus",
+    );
+  }
   let focusFixture = null;
   let fixtureReason = null;
   // The fixture deliberately takes native focus. It may run only in the
