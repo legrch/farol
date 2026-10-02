@@ -30,15 +30,21 @@ export const chatGptUpdateIdleProbe = `(() => {
   if (!form || c.getAttribute('aria-disabled') === 'true' || c.disabled === true ||
       (!(c instanceof HTMLTextAreaElement) && c.getAttribute('contenteditable') !== 'true'))
     return { state: "unknown" };
+  // Native form ownership can associate controls outside the form subtree.
+  // Keep descendant controls conservative and include each external owner once.
+  const controls = (selector) => [...new Set([
+    ...form.querySelectorAll(selector),
+    ...[...document.querySelectorAll(selector)].filter(e => e.form === form)
+  ])];
   const text = c instanceof HTMLTextAreaElement ? c.value : c.textContent || '';
-  if (text.length > 0 || [...form.querySelectorAll('input[type="file"]')].some(e => e.files && e.files.length) ||
+  if (text.length > 0 || controls('input[type="file"]').some(e => e.files && e.files.length) ||
       [...form.querySelectorAll('[data-testid="attachment-preview"],[data-testid="composer-attachment"],[data-testid*="file-chip"],[data-testid*="attachment-chip"]')].some(visible))
     return { state: "draft" };
-  const sends = [...form.querySelectorAll('[data-testid="send-button"],button[aria-label="Send prompt"],button[aria-label="Send message"]')].filter(visible);
+  const sends = controls('[data-testid="send-button"],button[aria-label="Send prompt"],button[aria-label="Send message"]').filter(visible);
   // A renamed or implicit submit control must not disappear from admission
   // because its label is no longer recognized. Native button.type also covers
   // missing or invalid type attributes, whose effective type is submit.
-  const submits = [...form.querySelectorAll('button,input[type="submit"],input[type="image"]')]
+  const submits = controls('button,input[type="submit"],input[type="image"]')
     .filter(visible).filter(e => !(e instanceof HTMLButtonElement) || e.type === "submit");
   if (submits.some(e => !sends.includes(e) && e.disabled !== true))
     return { state: "unknown" };

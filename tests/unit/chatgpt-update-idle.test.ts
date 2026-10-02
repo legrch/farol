@@ -165,6 +165,45 @@ describe("update idle observation on synthetic public DOM", () => {
       expect(f.run()).toEqual({ state: "idle" });
     },
   );
+  it.each(["button", "submit", "image", "recognized-send"])(
+    "refuses an external enabled %s control owned by the composer form",
+    (kind) => {
+      const f = fixture();
+      f.send.visible = false;
+      const control =
+        kind === "submit" || kind === "image"
+          ? new ElementFixture("input", { type: kind })
+          : new ButtonFixture({
+              type: "submit",
+              ...(kind === "recognized-send"
+                ? { "data-testid": "send-button" }
+                : { "aria-label": "Continue" }),
+            });
+      control.form = f.form;
+      f.nodes.push(control);
+      expect(f.form.contains(control)).toBe(false);
+      expect(f.run()).toEqual({ state: "unknown" });
+      control.disabled = true;
+      expect(f.run()).toEqual({ state: "idle" });
+      control.disabled = false;
+      control.form = new ElementFixture("form");
+      expect(f.run()).toEqual({ state: "idle" });
+    },
+  );
+  it("preserves a file selected in an external input owned by the composer form", () => {
+    const f = fixture();
+    const input = new ElementFixture("input", { type: "file" });
+    input.form = f.form;
+    input.files = ["opaque fixture file"];
+    f.nodes.push(input);
+    expect(f.form.contains(input)).toBe(false);
+    expect(f.run()).toEqual({ state: "draft" });
+    input.files = [];
+    expect(f.run()).toEqual({ state: "idle" });
+    input.files = ["opaque fixture file"];
+    input.form = new ElementFixture("form");
+    expect(f.run()).toEqual({ state: "idle" });
+  });
   it.each(["absent", "hidden", "disabled", "aria-disabled", "renamed"])(
     "does not treat disabled Send as idle when voice readiness is %s",
     (state) => {
