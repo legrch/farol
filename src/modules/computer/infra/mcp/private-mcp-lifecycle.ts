@@ -323,9 +323,16 @@ export class PrivateMcpLifecycle {
 
   /** Closed maintenance only, after the caller retains evidence and proves idle. */
   async beginClosedRecoveryStop(): Promise<void> {
-    this.stopRevision += 1;
-    await this.ensure();
-    await this.reconciliationMarker("stopping");
+    // Exclude prepare and join before publishing any stop intent. A leased MCP
+    // must refuse maintenance without receiving a shutdown signal from us.
+    const lease = await this.lock(true, 0);
+    try {
+      await this.shellGroupsGone();
+      this.stopRevision += 1;
+      await this.reconciliationMarker("stopping");
+    } finally {
+      await lease.close();
+    }
   }
 
   async isStopping(): Promise<boolean> {

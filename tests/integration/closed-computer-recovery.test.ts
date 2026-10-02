@@ -160,6 +160,9 @@ describe.skipIf(process.platform !== "darwin")(
         await expect(recoverClosedComputer(f.input, f.probes)).rejects.toThrow(
           "COMPUTER_MCP_LIFECYCLE_UNVERIFIED",
         );
+        await expect(
+          fs.lstat(path.join(directory, "stopping")),
+        ).rejects.toMatchObject({ code: "ENOENT" });
         expect(
           await fs.readFile(path.join(f.state, "running.json"), "utf8"),
         ).toBe(f.run);
@@ -171,6 +174,42 @@ describe.skipIf(process.platform !== "darwin")(
         ).toBe("1\n");
       } finally {
         await active.release();
+      }
+    });
+
+    it("excludes a new MCP join between idle proof and stop publication", async () => {
+      const f = await fixture();
+      const stopping = path.join(f.root, "mcp-lifecycle", "stopping");
+      await fs.unlink(stopping);
+      const mkdir = fs.mkdir.bind(fs);
+      let active: Awaited<ReturnType<PrivateMcpLifecycle["join"]>> | undefined;
+      let joinError: unknown;
+      let attempted = false;
+      const fault = vi
+        .spyOn(fs, "mkdir")
+        .mockImplementation(async (...args) => {
+          if (String(args[0]) === stopping && !attempted) {
+            attempted = true;
+            try {
+              active = await f.lifecycle.join("a".repeat(64));
+            } catch (error) {
+              joinError = error;
+            }
+          }
+          return mkdir(...args);
+        });
+      try {
+        await expect(
+          recoverClosedComputer(f.input, f.probes),
+        ).resolves.toMatchObject({ phase: "retired_unconfirmed" });
+        expect(attempted).toBe(true);
+        expect(active).toBeUndefined();
+        expect(joinError).toMatchObject({
+          message: "COMPUTER_MCP_LIFECYCLE_UNVERIFIED",
+        });
+      } finally {
+        fault.mockRestore();
+        await active?.release();
       }
     });
 
