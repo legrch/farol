@@ -566,7 +566,11 @@ it("rejects missing or unknown method kinds before generating peers", () => {
     join(root, "tooling/generate-desktop-wire.mjs"),
     readFileSync(resolve("tooling/generate-desktop-wire.mjs")),
   );
-  for (const spec of [{ owner: "task" }, { owner: "task", kind: "unknown" }]) {
+  for (const spec of [
+    undefined,
+    "unknown",
+    { owner: "task", kind: "effect" },
+  ]) {
     writeFileSync(
       join(root, "api/desktop/v1/schema.json"),
       JSON.stringify({

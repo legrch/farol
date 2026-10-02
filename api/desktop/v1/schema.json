@@ -6,34 +6,13 @@
   "maxDepth": 32,
   "maxRequests": 4096,
   "methods": {
-    "core.handshake": {
-      "owner": "core",
-      "kind": "read"
-    },
-    "core.status": {
-      "owner": "core",
-      "kind": "read"
-    },
-    "core.operation.status": {
-      "owner": "operation",
-      "kind": "read"
-    },
-    "computer.workspace.read": {
-      "owner": "computer",
-      "kind": "read"
-    },
-    "task.create": {
-      "owner": "task",
-      "kind": "effect"
-    },
-    "chat.turn": {
-      "owner": "chat",
-      "kind": "effect"
-    },
-    "release.status": {
-      "owner": "release",
-      "kind": "read"
-    }
+    "core.handshake": "read",
+    "core.status": "read",
+    "core.operation.status": "read",
+    "computer.workspace.read": "read",
+    "task.create": "effect",
+    "chat.turn": "effect",
+    "release.status": "read"
   },
   "definitions": {
     "Context": {

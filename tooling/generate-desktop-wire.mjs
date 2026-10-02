@@ -14,14 +14,9 @@ if (
   Object.keys(schema.methods).length === 0 ||
   Object.keys(schema.methods).length > 64 ||
   Object.entries(schema.methods).some(
-    ([name, spec]) =>
+    ([name, kind]) =>
       !/^[a-z]+(?:\.[a-z]+)+$/u.test(name) ||
-      !spec ||
-      typeof spec !== "object" ||
-      Object.keys(spec).sort().join(",") !== "kind,owner" ||
-      !["read", "effect"].includes(spec.kind) ||
-      typeof spec.owner !== "string" ||
-      !/^[a-z]+$/u.test(spec.owner),
+      !["read", "effect"].includes(kind),
   )
 )
   throw Error("invalid method classification");
@@ -53,11 +48,11 @@ let go = `// ${title}\npackage desktop\nimport ("encoding/json"; "errors"; "math
 go += `const ProtocolMajor uint32 = ${schema.protocolMajor}\nconst ProtocolMinor uint32 = ${schema.protocolMinor}\nconst SchemaSHA256 = "${digest}"\nconst Schema = ${JSON.stringify(bytes.toString("utf8"))}\n`;
 const methodNames = Object.keys(schema.methods).sort();
 const effectNames = methodNames.filter(
-  (name) => schema.methods[name].kind === "effect",
+  (name) => schema.methods[name] === "effect",
 );
 go += `func MethodNames() []string { return []string{${methodNames.map(JSON.stringify).join(",")}} }\nfunc KnownMethod(name string) bool { switch name { case ${methodNames.map(JSON.stringify).join(",")}:return true };return false }\nfunc RequiresOperationID(name string) bool { ${effectNames.length ? `switch name { case ${effectNames.map(JSON.stringify).join(",")}:return true };` : ""}return false }\n`;
 let ts = `// ${title}\nexport const protocolMajor = ${schema.protocolMajor};\nexport const protocolMinor = ${schema.protocolMinor};\nexport const maxFrameBytes = ${schema.maxFrameBytes};\nexport const schemaSHA256 = "${digest}";\nexport type Json = null | boolean | number | string | readonly Json[] | { readonly [key: string]: Json };\n`;
-ts += `export const methodKinds = Object.freeze(${JSON.stringify(Object.fromEntries(methodNames.map((name) => [name, schema.methods[name].kind])))} as const);\nexport function knownMethod(name: string): boolean { return Object.hasOwn(methodKinds,name); }\nexport function requiresOperationID(name: string): boolean { return knownMethod(name) && methodKinds[name as keyof typeof methodKinds] === "effect"; }\n`;
+ts += `export const methodKinds = Object.freeze(${JSON.stringify(Object.fromEntries(methodNames.map((name) => [name, schema.methods[name]])))} as const);\nexport function knownMethod(name: string): boolean { return Object.hasOwn(methodKinds,name); }\nexport function requiresOperationID(name: string): boolean { return knownMethod(name) && methodKinds[name as keyof typeof methodKinds] === "effect"; }\n`;
 for (const [name, def] of Object.entries(schema.definitions)) {
   go += `type ${name} struct {\n`;
   ts += `export interface ${name} {\n`;
