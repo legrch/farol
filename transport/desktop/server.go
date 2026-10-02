@@ -79,7 +79,7 @@ func (s *Server) Serve(ctx context.Context, in io.ReadCloser, out io.WriteCloser
 		}()
 		defer func() { close(stop); <-terminal }()
 	}
-	for {
+	for attempt := 0; attempt < 4096; attempt++ {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -105,6 +105,7 @@ func (s *Server) Serve(ctx context.Context, in io.ReadCloser, out io.WriteCloser
 			return fmt.Errorf("response delivery unknown: %w", err)
 		}
 	}
+	return errors.New("request attempt budget exhausted")
 }
 
 func (s *Server) dispatch(ctx context.Context, data []byte) wire.Response {

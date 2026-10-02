@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"testing"
 	"time"
@@ -196,3 +197,45 @@ func TestHandshakeEquivalentIntegerSpellings(t *testing.T) {
 		}
 	}
 }
+
+func TestServeHardAttemptBudgetIncludesInvalidRequests(t *testing.T) {
+	for _, invalid := range []bool{false, true} {
+		var frames bytes.Buffer
+		for i := 0; i < 4097; i++ {
+			body := []byte(`{}`)
+			if !invalid {
+				if i == 0 {
+					body = request("hello", "core.handshake", `{"protocolMajor":1,"protocolMinor":0,"buildId":"build","profileId":"test"}`, nil)
+				} else {
+					body = request(fmt.Sprintf("status-%d", i), "core.status", `{}`, &wire.Context{ProfileId: "test", BackendGeneration: "generation"})
+				}
+			}
+			if err := ipc.WriteFrame(&frames, body); err != nil {
+				t.Fatal(err)
+			}
+		}
+		input := bytes.NewReader(frames.Bytes())
+		out := &bufferWriter{}
+		err := server(t).Serve(context.Background(), io.NopCloser(input), out)
+		if err == nil || err.Error() != "request attempt budget exhausted" {
+			t.Fatalf("budget: %v", err)
+		}
+		if input.Len() == 0 {
+			t.Fatal("admitted frame after attempt limit")
+		}
+		count := 0
+		for out.Len() > 0 {
+			if _, err := ipc.ReadFrame(out); err != nil {
+				t.Fatal(err)
+			}
+			count++
+		}
+		if count != 4096 {
+			t.Fatalf("responses: %d", count)
+		}
+	}
+}
+
+type bufferWriter struct{ bytes.Buffer }
+
+func (*bufferWriter) Close() error { return nil }
