@@ -1916,6 +1916,33 @@ if (args[0] === "app-server" && args[1] === "--stdio") {
     () =>
       waitForWindowPresentation(application, windowMode, expectedTaskViewCount),
   );
+  // A hidden renderer and its runtime can be ready before createWindow's
+  // remaining startup work installs the Quit drain. A normal owner window
+  // is revealed at the end of that work; hidden presentation alone is not
+  // the same startup boundary. Require this exact disposable generation's
+  // final startup token before returning an application that callers may Quit.
+  await phases.step(
+    `${label}.startupComplete`,
+    LAUNCH_PHASE_BUDGET_MS,
+    async () => {
+      const deadline = Date.now() + LAUNCH_PHASE_BUDGET_MS - 1_000;
+      let lastStage = "absent";
+      while (Date.now() < deadline) {
+        lastStage = await fs
+          .readFile(
+            path.join(isolatedHome, ".farol-next-startup-stage"),
+            "utf8",
+          )
+          .then((value) => value.trim())
+          .catch((error) =>
+            error?.code === "ENOENT" ? "absent" : "unreadable",
+          );
+        if (lastStage === "startup-complete") return;
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      throw new Error(`E2E_PRIMARY_STARTUP_INCOMPLETE:${lastStage}`);
+    },
+  );
   return {
     application,
     ownedProcessGroup: captureOwnedProcessGroup(application.process().pid),
