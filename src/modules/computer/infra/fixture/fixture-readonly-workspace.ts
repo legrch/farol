@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { DeferredGate } from "../../../../pkg/async/deferred-gate";
 import type {
   ReadonlyWorkspace,
@@ -73,6 +74,7 @@ export class FixtureReadonlyWorkspace implements ReadonlyWorkspace {
         kind: "workspace.text" as const,
         text: STATUS_TEXT,
         bytes: Buffer.byteLength(STATUS_TEXT),
+        sha256: createHash("sha256").update(STATUS_TEXT, "utf8").digest("hex"),
       },
     };
   }

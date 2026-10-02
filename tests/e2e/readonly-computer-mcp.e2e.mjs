@@ -367,6 +367,30 @@ try {
     kind: "workspace.text",
     text: "delegated critic reached the native workspace\n",
     bytes: 46,
+    sha256: createHash("sha256")
+      .update("delegated critic reached the native workspace\n")
+      .digest("hex"),
+  });
+
+  assert.deepEqual(
+    JSON.parse(read.content[0].text),
+    read.structuredContent.output,
+  );
+  const window = await client.callTool({
+    name: "computer_workspace_read",
+    arguments: {
+      workspaceId: "fixture",
+      relativePath: "notes/review.txt",
+      offset: 0,
+      length: 64,
+    },
+  });
+  assert.equal(window.isError, undefined);
+  assert.equal(Object.hasOwn(window.structuredContent.output, "sha256"), false);
+  assert.deepEqual(window.structuredContent.output.page, {
+    offset: 0,
+    size: 46,
+    nextOffset: null,
   });
 
   // N02: Git runs for real now, over a private point-in-time clone of the

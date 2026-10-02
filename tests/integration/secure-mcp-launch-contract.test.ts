@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -551,17 +552,20 @@ describe("secure MCP Computer launch contract", () => {
     expect((await fs.stat(file)).mode & 0o777).toBe(0o600);
 
     const workspace: ReadonlyWorkspace = {
-      execute: async (request) => ({
-        ok: true,
-        value: {
-          kind: "workspace.text",
-          text: await fs.readFile(
-            path.join(request.workspace.root, request.operation.relativePath),
-            "utf8",
-          ),
-          bytes: (await fs.stat(file)).size,
-        },
-      }),
+      execute: async (request) => {
+        const raw = await fs.readFile(
+          path.join(request.workspace.root, request.operation.relativePath),
+        );
+        return {
+          ok: true,
+          value: {
+            kind: "workspace.text",
+            text: raw.toString("utf8"),
+            bytes: raw.length,
+            sha256: createHash("sha256").update(raw).digest("hex"),
+          },
+        };
+      },
     };
     await expect(
       loadReadonlyComputerLaunchContract(file, workspace),
@@ -615,17 +619,20 @@ describe("secure MCP Computer launch contract", () => {
       root: launchRoot,
     }).write(launch);
     const workspace: ReadonlyWorkspace = {
-      execute: async (request) => ({
-        ok: true,
-        value: {
-          kind: "workspace.text",
-          text: await fs.readFile(
-            path.join(request.workspace.root, request.operation.relativePath),
-            "utf8",
-          ),
-          bytes: (await fs.stat(file)).size,
-        },
-      }),
+      execute: async (request) => {
+        const raw = await fs.readFile(
+          path.join(request.workspace.root, request.operation.relativePath),
+        );
+        return {
+          ok: true,
+          value: {
+            kind: "workspace.text",
+            text: raw.toString("utf8"),
+            bytes: raw.length,
+            sha256: createHash("sha256").update(raw).digest("hex"),
+          },
+        };
+      },
     };
     await expect(
       loadReadonlyComputerLaunchContract(file, workspace),

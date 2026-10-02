@@ -214,13 +214,29 @@ try {
     assert.equal(redelivered.isError, undefined);
     assert.equal(redelivered.structuredContent?.redelivered, true);
 
+    await fs.writeFile(
+      path.join(workspaceRoot, "status.txt"),
+      Buffer.from("\uFEFFafter\r\n"),
+      { mode: 0o600 },
+    );
+    const read = await restarted.client.callTool({
+      name: "computer_workspace_read",
+      arguments: { workspaceId: "fixture", relativePath: "status.txt" },
+    });
+    assert.equal(read.isError, undefined);
+    const expectedSha256 = read.structuredContent?.output?.sha256;
+    assert.equal(expectedSha256, digest(Buffer.from("\uFEFFafter\r\n")));
+    assert.deepEqual(
+      JSON.parse(read.content[0].text),
+      read.structuredContent.output,
+    );
     const edited = await restarted.client.callTool({
       name: "computer_workspace_edit",
       arguments: {
         operationId: "edit-e2e-a",
         workspaceId: "fixture",
         relativePath: "status.txt",
-        expectedSha256: digest("after\n"),
+        expectedSha256,
         edits: [{ oldText: "after", newText: "finished" }],
       },
     });
@@ -234,7 +250,7 @@ try {
 
   assert.equal(
     await fs.readFile(path.join(workspaceRoot, "status.txt"), "utf8"),
-    "finished\n",
+    "\uFEFFfinished\r\n",
   );
   const receipts = await fs.readdir(path.join(launchRoot, "mutations"));
   assert.equal(receipts.length, 2);

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { DeferredGate } from "../../src/pkg/async/deferred-gate";
 import { ScriptedProvider } from "../../src/modules/chat/infra/client/scripted-provider";
@@ -28,6 +29,9 @@ function output(ownerId: string = request.ownerId) {
       kind: "workspace.text" as const,
       text: "Fixture workspace is ready.\n",
       bytes: 28,
+      sha256: createHash("sha256")
+        .update("Fixture workspace is ready.\n")
+        .digest("hex"),
     },
   };
 }

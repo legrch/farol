@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 
 import type { AgentComputerRequest } from "../../src/modules/agent/app/port/computer";
@@ -204,6 +205,9 @@ describe("Codex Agent Computer authority", () => {
           kind: "workspace.text",
           text: "delegated continuity marker",
           bytes: 27,
+          sha256: createHash("sha256")
+            .update("delegated continuity marker")
+            .digest("hex"),
         },
       };
     });
@@ -242,6 +246,9 @@ describe("Codex Agent Computer authority", () => {
         kind: "workspace.text",
         text: "delegated continuity marker",
         bytes: 27,
+        sha256: createHash("sha256")
+          .update("delegated continuity marker")
+          .digest("hex"),
       },
     });
     expect(execute).toHaveBeenNthCalledWith(1, {

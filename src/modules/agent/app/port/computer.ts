@@ -24,7 +24,15 @@ export type AgentComputerOutput =
       kind: "workspace.text";
       text: string;
       bytes: number;
-      page?: Readonly<{
+      sha256: string;
+      page?: never;
+    }>
+  | Readonly<{
+      kind: "workspace.text";
+      text: string;
+      bytes: number;
+      sha256?: never;
+      page: Readonly<{
         offset: number;
         size: number;
         nextOffset: number | null;

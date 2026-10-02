@@ -1602,7 +1602,7 @@ export function createReadonlyComputerMcpServer(
     {
       title: "Read an approved workspace file",
       description:
-        "Read one approved workspace file without granting write, command, or network authority. A file over 256 KiB is refused as WORKSPACE_FILE_TOO_LARGE when read whole; read it in windows instead by passing offset (a byte offset, starting at 0) and optionally length (bytes, default 65536, at most 262144). A windowed result carries page.nextOffset: pass it as the next offset, and stop when it is null.",
+        "Read one approved workspace file without granting write, command, or network authority. A full read returns text, bytes, and sha256 over all original raw bytes (including BOM and line endings); use sha256 as the expectedSha256 precondition for a guarded edit. Windows return required page metadata and never a whole-file sha256. A file over 256 KiB is refused as WORKSPACE_FILE_TOO_LARGE when read whole; read it in windows instead by passing offset (a byte offset, starting at 0) and optionally length (bytes, default 65536, at most 262144). A windowed result carries page.nextOffset: pass it as the next offset, and stop when it is null.",
       inputSchema: ReadInputSchema,
       annotations: READONLY_ANNOTATIONS,
     },

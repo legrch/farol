@@ -68,6 +68,7 @@ function operationsMatch(
   return (
     left.kind === right.kind &&
     left.relativePath === right.relativePath &&
+    (left.kind !== "workspace.read" || left.range === undefined) &&
     (left.kind !== "workspace.search" ||
       (right.kind === "workspace.search" && left.pattern === right.pattern)) &&
     (left.kind !== "verification.run" ||
@@ -81,9 +82,15 @@ function outputMatchesOperation(
     ReadonlyComputerCallResponse,
     { ok: true }
   >["value"]["output"],
-): boolean {
+): output is Exclude<
+  Extract<ReadonlyComputerCallResponse, { ok: true }>["value"]["output"],
+  { kind: "workspace.context" } | { page: unknown }
+> {
   return (
-    (operation.kind === "workspace.read" && output.kind === "workspace.text") ||
+    (operation.kind === "workspace.read" &&
+      output.kind === "workspace.text" &&
+      output.page === undefined &&
+      output.sha256 !== undefined) ||
     (operation.kind === "workspace.list" &&
       output.kind === "workspace.entries") ||
     (operation.kind === "workspace.search" &&

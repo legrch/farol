@@ -96,7 +96,9 @@ export const ReadonlyComputerCallRequestSchema = z.strictObject({
   operation: OperationSchema,
 });
 
-const WorkspaceOutputSchema = z.discriminatedUnion("kind", [
+// Full and window text share a kind, so use strict union alternatives. Their
+// never members are type-only; the opposite variant's key stays forbidden.
+const WorkspaceOutputSchema = z.union([
   z
     .strictObject({
       kind: z.literal("workspace.context"),
@@ -115,18 +117,26 @@ const WorkspaceOutputSchema = z.discriminatedUnion("kind", [
           value.approvedRoot.path === "/" ? "/" : `${value.approvedRoot.path}/`,
         ),
     ),
-  z.strictObject({
-    kind: z.literal("workspace.text"),
-    text: z.string(),
-    bytes: z.number().int().nonnegative().max(MAX_READ_BYTES),
-    page: z
-      .strictObject({
+  z
+    .strictObject({
+      kind: z.literal("workspace.text"),
+      text: z.string(),
+      bytes: z.number().int().nonnegative().max(MAX_READ_BYTES),
+      sha256: z.string().regex(/^[0-9a-f]{64}$/u),
+    })
+    .transform((value): typeof value & { page?: never } => value),
+  z
+    .strictObject({
+      kind: z.literal("workspace.text"),
+      text: z.string(),
+      bytes: z.number().int().nonnegative().max(MAX_READ_BYTES),
+      page: z.strictObject({
         offset: z.number().int().nonnegative(),
         size: z.number().int().nonnegative(),
         nextOffset: z.number().int().positive().nullable(),
-      })
-      .optional(),
-  }),
+      }),
+    })
+    .transform((value): typeof value & { sha256?: never } => value),
   z.strictObject({
     kind: z.literal("workspace.entries"),
     entries: z.array(z.string().min(1).max(256)).max(500),
@@ -245,12 +255,20 @@ const FailureSourceSchema = z.enum([
 ]);
 
 export const ReadonlyComputerCallResponseSchema = z.discriminatedUnion("ok", [
-  z.strictObject({
-    ok: z.literal(true),
-    value: ReadonlyComputerCallCorrelationSchema.extend({
-      output: WorkspaceOutputSchema,
-    }),
-  }),
+  z
+    .strictObject({
+      ok: z.literal(true),
+      value: ReadonlyComputerCallCorrelationSchema.extend({
+        output: WorkspaceOutputSchema,
+      }),
+    })
+    .refine(
+      ({ value }) =>
+        value.operation.kind !== "workspace.read" ||
+        value.output.kind !== "workspace.text" ||
+        (value.operation.range === undefined) ===
+          (value.output.page === undefined),
+    ),
   z.strictObject({
     ok: z.literal(false),
     correlation: ReadonlyComputerCallCorrelationSchema.nullable(),

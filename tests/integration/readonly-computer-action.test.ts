@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -685,7 +686,12 @@ describe("real read-only Computer action", () => {
     if (!participant.ok) throw new Error(participant.error.code);
     const execute = vi.fn<ReadonlyWorkspace["execute"]>(async () => ({
       ok: true,
-      value: { kind: "workspace.text", text: "must not run", bytes: 12 },
+      value: {
+        kind: "workspace.text",
+        text: "must not run",
+        bytes: 12,
+        sha256: createHash("sha256").update("must not run").digest("hex"),
+      },
     }));
     const computer = contract([participant.value], currentApproval, {
       execute,
@@ -905,6 +911,9 @@ describe("real read-only Computer action", () => {
             kind: "workspace.text" as const,
             text: "must not disclose",
             bytes: 17,
+            sha256: createHash("sha256")
+              .update("must not disclose")
+              .digest("hex"),
           },
         };
       });
@@ -1008,6 +1017,9 @@ describe("real read-only Computer action", () => {
               kind: "workspace.text",
               text: "must not disclose",
               bytes: 17,
+              sha256: createHash("sha256")
+                .update("must not disclose")
+                .digest("hex"),
             },
           };
         },
@@ -1037,7 +1049,12 @@ describe("real read-only Computer action", () => {
       async execute() {
         return {
           ok: true,
-          value: { kind: "workspace.text", text: "ok", bytes: 2 },
+          value: {
+            kind: "workspace.text",
+            text: "ok",
+            bytes: 2,
+            sha256: createHash("sha256").update("ok").digest("hex"),
+          },
         };
       },
     };

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -108,6 +109,9 @@ describe("native readonly Computer workspace", () => {
         kind: "workspace.text",
         text: "Farol native workspace\nsecond line\n",
         bytes: 35,
+        sha256: createHash("sha256")
+          .update("Farol native workspace\nsecond line\n")
+          .digest("hex"),
       },
     });
     await expect(
@@ -385,6 +389,9 @@ describe("native readonly Computer workspace", () => {
           kind: "workspace.text",
           text: "descriptor-bound\n",
           bytes: 17,
+          sha256: createHash("sha256")
+            .update("descriptor-bound\n")
+            .digest("hex"),
         },
       });
       expect(JSON.stringify(result)).not.toContain("attacker-controlled");

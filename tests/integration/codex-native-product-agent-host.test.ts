@@ -568,6 +568,9 @@ describe("native Codex product Agent host", () => {
                 kind: "workspace.text" as const,
                 text: "delegated continuity marker",
                 bytes: 27,
+                sha256: createHash("sha256")
+                  .update("delegated continuity marker")
+                  .digest("hex"),
               },
             },
       ),
@@ -686,6 +689,7 @@ describe("native Codex product Agent host", () => {
                 kind: "workspace.text" as const,
                 text: "marker",
                 bytes: 6,
+                sha256: createHash("sha256").update("marker").digest("hex"),
               },
             },
       ),
@@ -1099,6 +1103,7 @@ describe("native Codex product Agent host", () => {
                 kind: "workspace.text" as const,
                 text: "marker",
                 bytes: 6,
+                sha256: createHash("sha256").update("marker").digest("hex"),
               },
             },
       ),
@@ -1175,6 +1180,9 @@ describe("native Codex product Agent host", () => {
                 kind: "workspace.text" as const,
                 text: "continuity marker\n",
                 bytes: 18,
+                sha256: createHash("sha256")
+                  .update("continuity marker\n")
+                  .digest("hex"),
               },
             },
       ),
@@ -1264,6 +1272,9 @@ describe("native Codex product Agent host", () => {
                 kind: "workspace.text" as const,
                 text: "continuity marker\n",
                 bytes: 18,
+                sha256: createHash("sha256")
+                  .update("continuity marker\n")
+                  .digest("hex"),
               },
             },
       ),

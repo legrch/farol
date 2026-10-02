@@ -1,6 +1,10 @@
+import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 
-import type { ReadonlyComputerContract } from "../../src/modules/computer/contract/readonly-computer-contract";
+import {
+  ReadonlyComputerCallRequestSchema,
+  type ReadonlyComputerContract,
+} from "../../src/modules/computer/contract/readonly-computer-contract";
 import { ReadonlyComputerPeer } from "../../src/modules/chat/infra/peer/readonly-computer-peer";
 
 const request = {
@@ -41,6 +45,7 @@ describe("read-only Computer chat peer", () => {
               kind: "workspace.text",
               text: "ready\n",
               bytes: 6,
+              sha256: createHash("sha256").update("ready\n").digest("hex"),
             },
           },
         };
@@ -55,7 +60,11 @@ describe("read-only Computer chat peer", () => {
       ok: true,
       value: {
         participantId: "critic-a",
-        output: { kind: "workspace.text", text: "ready\n" },
+        output: {
+          kind: "workspace.text",
+          text: "ready\n",
+          sha256: createHash("sha256").update("ready\n").digest("hex"),
+        },
       },
     });
     expect(received).toEqual({
@@ -86,6 +95,7 @@ describe("read-only Computer chat peer", () => {
               kind: "workspace.text",
               text: "wrong\n",
               bytes: 6,
+              sha256: createHash("sha256").update("wrong\n").digest("hex"),
             },
           },
         };
@@ -323,6 +333,110 @@ describe("read-only Computer chat peer", () => {
       error: {
         code: "COMPUTER_CONTRACT_UNAVAILABLE",
         source: "contract-transport",
+        classification: "outcome_unknown",
+        retry: "never",
+      },
+    });
+  });
+
+  it.each([
+    ["missing SHA", "COMPUTER_CONTRACT_INVALID"],
+    ["malformed SHA", "COMPUTER_CONTRACT_INVALID"],
+    ["page without range", "COMPUTER_CONTRACT_INVALID"],
+    ["full response with range", "COMPUTER_CONTRACT_INVALID"],
+    ["ranged page", "COMPUTER_CONTRACT_CORRELATION"],
+    ["foreign call", "COMPUTER_CONTRACT_CORRELATION"],
+  ])("refuses %s instead of submitting it to chat", async (mode, code) => {
+    const contract: ReadonlyComputerContract = {
+      async execute() {
+        const value = {
+          ...request,
+          taskEpoch: 3,
+          participantId: "critic-a",
+          relativePath: request.operation.relativePath,
+          operation: { ...request.operation },
+          output: {
+            kind: "workspace.text" as const,
+            text: "ready\n",
+            bytes: 6,
+            sha256: createHash("sha256").update("ready\n").digest("hex"),
+          },
+        };
+        if (mode === "missing SHA")
+          Reflect.deleteProperty(value.output, "sha256");
+        if (mode === "malformed SHA")
+          Reflect.set(value.output, "sha256", "invalid");
+        if (mode === "page without range" || mode === "ranged page") {
+          Reflect.deleteProperty(value.output, "sha256");
+          Reflect.set(value.output, "page", {
+            offset: 0,
+            size: 6,
+            nextOffset: null,
+          });
+        }
+        if (mode === "full response with range" || mode === "ranged page") {
+          Reflect.set(value.operation, "range", { offset: 0, length: 64 });
+        }
+        if (mode === "foreign call") value.callId = "other-call";
+        return { ok: true, value };
+      },
+    };
+    const peer = new ReadonlyComputerPeer(contract, {
+      taskEpoch: 3,
+      participantId: "critic-a",
+    });
+    expect(await peer.execute(request)).toEqual({
+      ok: false,
+      error: {
+        code,
+        source: "contract",
+        classification: "outcome_unknown",
+        retry: "never",
+      },
+    });
+  });
+
+  it("refuses a different verification command even with matching correlation", async () => {
+    const peer = new ReadonlyComputerPeer(
+      {
+        async execute(raw) {
+          const value = ReadonlyComputerCallRequestSchema.parse(raw);
+          return {
+            ok: true,
+            value: {
+              ...value,
+              relativePath: ".",
+              output: {
+                kind: "workspace.command",
+                command: "git.head",
+                relativePath: ".",
+                exitCode: 0,
+                stdout: "commit\n",
+                stderr: "",
+                outputBytes: 7,
+                network: "none",
+                coverage: "head-commit",
+                layout: "primary",
+              },
+            },
+          };
+        },
+      },
+      { taskEpoch: 3, participantId: "critic-a" },
+    );
+    expect(
+      await peer.execute({
+        ...request,
+        operation: {
+          kind: "verification.run",
+          command: "git.status",
+          relativePath: ".",
+        },
+      }),
+    ).toMatchObject({
+      ok: false,
+      error: {
+        code: "COMPUTER_CONTRACT_CORRELATION",
         classification: "outcome_unknown",
         retry: "never",
       },

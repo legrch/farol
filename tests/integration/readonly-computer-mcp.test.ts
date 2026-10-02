@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { Client } from "@modelcontextprotocol/client";
 import { InMemoryTransport } from "@modelcontextprotocol/server";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -10,6 +11,7 @@ import { promisify } from "node:util";
 import { RunReadonlyComputerAction } from "../../src/modules/computer/app/service/run-readonly-computer-action";
 import {
   ReadonlyComputerCallRequestSchema,
+  ReadonlyComputerCallResponseSchema,
   type ReadonlyComputerContract,
 } from "../../src/modules/computer/contract/readonly-computer-contract";
 import {
@@ -225,8 +227,20 @@ describe("read-only Computer MCP adapter", () => {
         output: {
           kind: "workspace.text",
           text: "export const protocol = 'mcp-boundary';\n",
+          sha256: createHash("sha256")
+            .update("export const protocol = 'mcp-boundary';\n")
+            .digest("hex"),
         },
       });
+      const content = read.content[0];
+      expect(content?.type).toBe("text");
+      if (content?.type !== "text") throw new Error("missing text content");
+      const envelope = ReadonlyComputerCallResponseSchema.parse({
+        ok: true,
+        value: read.structuredContent,
+      });
+      if (!envelope.ok) throw new Error("missing read response");
+      expect(JSON.parse(content.text)).toEqual(envelope.value.output);
       expect((read.structuredContent as { callId?: unknown }).callId).toEqual(
         expect.any(String),
       );
@@ -667,7 +681,7 @@ describe("read-only Computer MCP adapter", () => {
             : request.operation;
         const page =
           name === "unwindowed.txt" || range === undefined
-            ? {}
+            ? { sha256: createHash("sha256").update("abcd").digest("hex") }
             : {
                 page: {
                   offset: range.offset,
@@ -750,7 +764,87 @@ describe("read-only Computer MCP adapter", () => {
           arguments: { workspaceId: "farol", relativePath, ...extra },
         });
         expect(answer.isError).toBe(true);
-        expect(answer.structuredContent).toEqual(correlationFailure);
+        expect(answer.structuredContent).toEqual(
+          relativePath === "shifted.txt"
+            ? correlationFailure
+            : {
+                ok: false,
+                error: {
+                  code: "COMPUTER_CONTRACT_INVALID",
+                  source: "contract",
+                  retry: "never",
+                },
+              },
+        );
+      }
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
+  it("refuses malformed or mismatched public read outputs at the MCP boundary", async () => {
+    const contract: ReadonlyComputerContract = {
+      async execute(raw) {
+        const request = ReadonlyComputerCallRequestSchema.parse(raw);
+        const output = {
+          kind: "workspace.text" as const,
+          text: "abcd",
+          bytes: 4,
+          sha256: createHash("sha256").update("abcd").digest("hex"),
+        };
+        const name = request.operation.relativePath;
+        if (name === "missing.txt") Reflect.deleteProperty(output, "sha256");
+        if (name === "malformed.txt")
+          Reflect.set(output, "sha256", "A".repeat(64));
+        if (name === "unknown.txt") Reflect.set(output, "extra", true);
+        if (name === "sha-on-page.txt" || name === "page-for-full.txt") {
+          Reflect.set(output, "page", { offset: 0, size: 4, nextOffset: null });
+          if (name === "page-for-full.txt")
+            Reflect.deleteProperty(output, "sha256");
+        }
+        return { ok: true, value: { ...request, relativePath: name, output } };
+      },
+    };
+    const server = createReadonlyComputerMcpServer(contract, {
+      ownerId: "owner-preview",
+      sessionId: "session-a",
+      taskId: "task-a",
+      taskEpoch: 3,
+      participantId: "critic-a",
+      turnId: "turn-a",
+      generation: 2,
+    });
+    const client = new Client({ name: "farol-next-test", version: "1.0.0" });
+    const [clientTransport, serverTransport] =
+      InMemoryTransport.createLinkedPair();
+    await Promise.all([
+      client.connect(clientTransport),
+      server.connect(serverTransport),
+    ]);
+    try {
+      for (const [relativePath, extra] of [
+        ["missing.txt", {}],
+        ["malformed.txt", {}],
+        ["unknown.txt", {}],
+        ["sha-on-page.txt", { offset: 0 }],
+        ["page-for-full.txt", {}],
+        ["full-for-range.txt", { offset: 0 }],
+      ] as const) {
+        const result = await client.callTool({
+          name: "computer_workspace_read",
+          arguments: { workspaceId: "farol", relativePath, ...extra },
+        });
+        expect(result.isError).toBe(true);
+        expect(result.structuredContent).toEqual({
+          ok: false,
+          error: {
+            code: "COMPUTER_CONTRACT_INVALID",
+            source: "contract",
+            retry: "never",
+          },
+        });
+        expect(JSON.stringify(result.content)).not.toContain("abcd");
       }
     } finally {
       await client.close();

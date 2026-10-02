@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { CallToolResult } from "@modelcontextprotocol/server";
 import { describe, expect, it } from "vitest";
 import type { ReadonlyComputerCallRequest } from "../../src/modules/computer/contract/readonly-computer-contract";
@@ -92,6 +93,7 @@ describe("instruction bootstrap contract/lifecycle boundaries", () => {
           kind: "workspace.text",
           text: "private rules",
           bytes: 13,
+          sha256: createHash("sha256").update("private rules").digest("hex"),
         });
       return failed(operation, code);
     });
@@ -155,6 +157,7 @@ describe("instruction bootstrap contract/lifecycle boundaries", () => {
             kind: "workspace.text",
             text: "private rules",
             bytes: 13,
+            sha256: createHash("sha256").update("private rules").digest("hex"),
           });
         if (++contexts === 1) return response(operation, context);
         return mode === "refused"
@@ -181,4 +184,36 @@ describe("instruction bootstrap contract/lifecycle boundaries", () => {
       );
     },
   );
+
+  it("projects validated full-read guidance to text and bytes only", async () => {
+    const result = await bootstrapWorkspace(".", async (operation) =>
+      response(
+        operation,
+        operation.kind === "workspace.context"
+          ? context
+          : {
+              kind: "workspace.text",
+              text: "rules\n",
+              bytes: 6,
+              sha256: createHash("sha256").update("rules\n").digest("hex"),
+            },
+      ),
+    );
+    expect(result.isError).not.toBe(true);
+    expect(result.structuredContent).toMatchObject({
+      ok: true,
+      instructions: [
+        {
+          relativePath: "AGENTS.md",
+          status: "read",
+          text: "rules\n",
+          bytes: 6,
+        },
+      ],
+    });
+    expect(result.structuredContent).not.toHaveProperty(
+      "instructions.0.sha256",
+    );
+    expect(result.structuredContent).not.toHaveProperty("instructions.0.page");
+  });
 });

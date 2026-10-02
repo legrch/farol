@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { afterEach, describe, expect, it } from "vitest";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -392,6 +393,7 @@ describe("read-only Computer launch contract", () => {
             kind: "workspace.text",
             text: serialized,
             bytes: Buffer.byteLength(serialized),
+            sha256: createHash("sha256").update(serialized).digest("hex"),
           },
         };
       },

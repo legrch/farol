@@ -26,6 +26,7 @@ import type {
   WorkspaceApprovedRoot,
   WorkspaceEditSnapshotResult,
   WorkspaceMatch,
+  WorkspaceText,
   WorkspaceReadRange,
 } from "../../app/port/readonly-workspace";
 import { credentialStorePolicy } from "./home-secret-stores";
@@ -1253,14 +1254,30 @@ function parseMatches(raw: Buffer): ReadonlyWorkspaceResult {
   });
 }
 
-function parseText(raw: Buffer): ReadonlyWorkspaceResult {
-  if (raw.includes(0)) return failure("WORKSPACE_NOT_TEXT");
+function parseText(
+  raw: Buffer,
+):
+  | Readonly<{ ok: true; value: Extract<WorkspaceText, { sha256: string }> }>
+  | Extract<ReadonlyWorkspaceResult, { ok: false }> {
+  if (raw.includes(0))
+    return { ok: false, error: { code: "WORKSPACE_NOT_TEXT", retry: "never" } };
+  let text: string;
   try {
-    const text = new TextDecoder("utf-8", { fatal: true }).decode(raw);
-    return success({ kind: "workspace.text", text, bytes: raw.length });
+    text = new TextDecoder("utf-8", { fatal: true }).decode(raw);
   } catch {
-    return failure("WORKSPACE_NOT_TEXT");
+    return { ok: false, error: { code: "WORKSPACE_NOT_TEXT", retry: "never" } };
   }
+  // Hash the same descriptor-bound buffer only after text validation. Decoding
+  // drops a BOM; the edit precondition must identify the original bytes.
+  return {
+    ok: true,
+    value: {
+      kind: "workspace.text",
+      text,
+      bytes: raw.length,
+      sha256: createHash("sha256").update(raw).digest("hex"),
+    },
+  };
 }
 
 function continuationByte(byte: number | undefined): boolean {
@@ -1373,8 +1390,8 @@ function parseEditSnapshot(raw: Buffer): WorkspaceEditSnapshotResult {
     ok: true,
     value: {
       kind: "workspace.edit-snapshot",
-      bytes: raw.length,
-      sha256: createHash("sha256").update(raw).digest("hex"),
+      bytes: text.value.bytes,
+      sha256: text.value.sha256,
     },
   };
 }

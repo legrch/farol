@@ -63,12 +63,22 @@ export type WorkspaceTextPage = Readonly<{
   nextOffset: number | null;
 }>;
 
-export type WorkspaceText = Readonly<{
-  kind: "workspace.text";
-  text: string;
-  bytes: number;
-  page?: WorkspaceTextPage;
-}>;
+// A full read identifies every original raw byte; a window never does.
+export type WorkspaceText =
+  | Readonly<{
+      kind: "workspace.text";
+      text: string;
+      bytes: number;
+      sha256: string;
+      page?: never;
+    }>
+  | Readonly<{
+      kind: "workspace.text";
+      text: string;
+      bytes: number;
+      page: WorkspaceTextPage;
+      sha256?: never;
+    }>;
 
 export type WorkspaceEntries = Readonly<{
   kind: "workspace.entries";

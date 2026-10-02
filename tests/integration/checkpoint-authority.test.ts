@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { Client } from "@modelcontextprotocol/client";
 import { InMemoryTransport } from "@modelcontextprotocol/server";
 import fs from "node:fs/promises";
@@ -104,6 +105,7 @@ async function connector(workspaces: readonly string[]) {
           kind: "workspace.text" as const,
           text: "contents\n",
           bytes: 9,
+          sha256: createHash("sha256").update("contents\n").digest("hex"),
         },
       };
     },

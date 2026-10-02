@@ -28,6 +28,7 @@ export type ChatComputerOutputValue =
       kind: "workspace.text";
       text: string;
       bytes: number;
+      sha256: string;
     }>
   | Readonly<{
       kind: "workspace.entries";

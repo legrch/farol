@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import { success } from "../../src/pkg/kernel/domain/result";
 import type { ChatComputerResult } from "../../src/modules/chat/app/port/computer-capability";
@@ -47,6 +48,9 @@ const exactComputerResult: ChatComputerResult = success({
     kind: "workspace.text" as const,
     text: "Fixture workspace is ready.\n",
     bytes: 28,
+    sha256: createHash("sha256")
+      .update("Fixture workspace is ready.\n")
+      .digest("hex"),
   },
 });
 
