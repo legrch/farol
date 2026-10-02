@@ -36,6 +36,8 @@ import { predecessorPackagePaths } from "./predecessor-package-path.mjs";
 import { packageLayout } from "../../tooling/package-layout.mjs";
 
 const root = process.cwd();
+// Profile admission and cleanup must use the same physical temporary root.
+const temporaryRoot = await fs.realpath(os.tmpdir());
 const development = process.argv.includes("--development");
 const lifecycleSoak = process.argv.includes("--lifecycle-soak");
 const persistenceFault = process.argv.includes("--persistence-fault");
@@ -561,7 +563,7 @@ if (development) {
   cases.push("development-build-identity");
 } else {
   const corruptRoot = await fs.mkdtemp(
-    path.join(os.tmpdir(), "farol-next-corruption-"),
+    path.join(temporaryRoot, "farol-next-corruption-"),
   );
   try {
     const malformedMetadata = path.join(corruptRoot, "malformed-artifact.json");
@@ -872,9 +874,7 @@ if (development) {
   } finally {
     const real = path.resolve(corruptRoot);
     assert.ok(
-      real.startsWith(
-        `${path.resolve(os.tmpdir())}${path.sep}farol-next-corruption-`,
-      ),
+      real.startsWith(`${temporaryRoot}${path.sep}farol-next-corruption-`),
     );
     await fs.rm(real, { recursive: true, force: true });
   }
@@ -1374,7 +1374,7 @@ async function launch(
   options = {},
 ) {
   const isolatedHome = await fs.realpath(
-    await fs.mkdtemp(path.join(os.tmpdir(), "farol-next-e2e-home-")),
+    await fs.mkdtemp(path.join(temporaryRoot, "farol-next-e2e-home-")),
   );
   const profile = await isolatedProfileEnvironment(isolatedHome);
   const isolatedAppData = profile.isolatedAppData;
@@ -1845,7 +1845,7 @@ if (args[0] === "app-server" && args[1] === "--stdio") {
     HOME: isolatedHome,
     LANG: "en_US.UTF-8",
     PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
-    TMPDIR: os.tmpdir(),
+    TMPDIR: temporaryRoot,
   };
   // Each awaited boundary of this instance's start, named with the instance
   // it belongs to. A stall inside any of them now rejects with its own name
@@ -1964,7 +1964,7 @@ async function waitForChatGptJournalPhase(userData, phase) {
 
 async function proveSecondLaunchDuringStartup() {
   const isolatedHome = await fs.realpath(
-    await fs.mkdtemp(path.join(os.tmpdir(), "farol-next-e2e-home-")),
+    await fs.mkdtemp(path.join(temporaryRoot, "farol-next-e2e-home-")),
   );
   const profile = await isolatedProfileEnvironment(isolatedHome);
   const userData = path.join(isolatedHome, "Farol Next Preview user-data");
@@ -1981,7 +1981,7 @@ async function proveSecondLaunchDuringStartup() {
     HOME: isolatedHome,
     LANG: "en_US.UTF-8",
     PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
-    TMPDIR: os.tmpdir(),
+    TMPDIR: temporaryRoot,
   };
   const application = await electron.launch({
     executablePath: executable,
@@ -2183,7 +2183,7 @@ async function proveSecondLaunchDuringStartup() {
 
 async function proveSecondLaunchRejectsFailedStartup() {
   const isolatedHome = await fs.realpath(
-    await fs.mkdtemp(path.join(os.tmpdir(), "farol-next-e2e-home-")),
+    await fs.mkdtemp(path.join(temporaryRoot, "farol-next-e2e-home-")),
   );
   const profile = await isolatedProfileEnvironment(isolatedHome);
   const userData = path.join(isolatedHome, "Farol Next Preview user-data");
@@ -2200,7 +2200,7 @@ async function proveSecondLaunchRejectsFailedStartup() {
     HOME: isolatedHome,
     LANG: "en_US.UTF-8",
     PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
-    TMPDIR: os.tmpdir(),
+    TMPDIR: temporaryRoot,
   };
   const application = await electron.launch({
     executablePath: executable,
@@ -2292,7 +2292,7 @@ async function repeatLaunch(instance) {
 
 async function rejectMismatchedBuildLaunch(instance) {
   const temporary = await fs.mkdtemp(
-    path.join(os.tmpdir(), "farol-next-mismatched-build-"),
+    path.join(temporaryRoot, "farol-next-mismatched-build-"),
   );
   try {
     let mismatchedExecutable;
@@ -2396,7 +2396,7 @@ async function closeOwnedFocusFixture(fixture) {
 
 async function establishOwnedInactiveBaseline(targetApplication) {
   const home = await fs.mkdtemp(
-    path.join(os.tmpdir(), "farol-inactive-reopen-focus-"),
+    path.join(temporaryRoot, "farol-inactive-reopen-focus-"),
   );
   const userData = path.join(home, "user-data");
   await fs.mkdir(userData, { recursive: true, mode: 0o700 });
@@ -2413,7 +2413,7 @@ async function establishOwnedInactiveBaseline(targetApplication) {
         HOME: home,
         LANG: "en_US.UTF-8",
         PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
-        TMPDIR: os.tmpdir(),
+        TMPDIR: temporaryRoot,
       },
       timeout: 15_000,
     });
@@ -2530,7 +2530,7 @@ async function runtimeProcessId(application) {
 
 async function startLegacyAppFixture() {
   const isolatedHome = await fs.mkdtemp(
-    path.join(os.tmpdir(), "farol-legacy-lifecycle-fixture-"),
+    path.join(temporaryRoot, "farol-legacy-lifecycle-fixture-"),
   );
   const child = spawn(
     vendorElectron,
@@ -2543,7 +2543,7 @@ async function startLegacyAppFixture() {
         HOME: isolatedHome,
         LANG: "en_US.UTF-8",
         PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
-        TMPDIR: os.tmpdir(),
+        TMPDIR: temporaryRoot,
       },
       stdio: ["ignore", "pipe", "pipe", "ipc"],
     },
@@ -2584,7 +2584,7 @@ async function closeLegacyAppFixture(fixture) {
   const real = path.resolve(fixture.isolatedHome);
   assert.ok(
     real.startsWith(
-      `${path.resolve(os.tmpdir())}${path.sep}farol-legacy-lifecycle-fixture-`,
+      `${temporaryRoot}${path.sep}farol-legacy-lifecycle-fixture-`,
     ),
   );
   await fs.rm(real, { recursive: true, force: true });
@@ -2687,7 +2687,7 @@ async function stopProfileBoundHelpers(instance, label) {
     typeof profile !== "string" ||
     !path
       .resolve(profile)
-      .startsWith(`${path.resolve(os.tmpdir())}${path.sep}farol-next-e2e-home-`)
+      .startsWith(`${temporaryRoot}${path.sep}farol-next-e2e-home-`)
   ) {
     throw new Error(`E2E_HELPER_PROFILE_UNVERIFIED:${label}`);
   }
@@ -3126,9 +3126,7 @@ async function close(instance, options = {}) {
     if (provedQuit) {
       const real = path.resolve(instance.isolatedHome);
       assert.ok(
-        real.startsWith(
-          `${path.resolve(os.tmpdir())}${path.sep}farol-next-e2e-home-`,
-        ),
+        real.startsWith(`${temporaryRoot}${path.sep}farol-next-e2e-home-`),
       );
       await fs.rm(real, { recursive: true, force: true });
     }
@@ -3183,7 +3181,7 @@ async function restart(instance) {
 
 async function proveStartupRuntimeDeath(stage) {
   const isolatedHome = await fs.realpath(
-    await fs.mkdtemp(path.join(os.tmpdir(), "farol-next-e2e-home-")),
+    await fs.mkdtemp(path.join(temporaryRoot, "farol-next-e2e-home-")),
   );
   const profile = await isolatedProfileEnvironment(isolatedHome);
   const userData = path.join(isolatedHome, "Farol Next Preview user-data");
@@ -3200,7 +3198,7 @@ async function proveStartupRuntimeDeath(stage) {
       HOME: isolatedHome,
       LANG: "en_US.UTF-8",
       PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
-      TMPDIR: os.tmpdir(),
+      TMPDIR: temporaryRoot,
     },
     timeout: 15_000,
   });
@@ -5506,11 +5504,7 @@ async function discardInstance(instance) {
   await stopChatGptFixture(instance.chatGptFixture);
   instance.chatGptFixture = null;
   const real = path.resolve(instance.isolatedHome);
-  assert.ok(
-    real.startsWith(
-      `${path.resolve(os.tmpdir())}${path.sep}farol-next-e2e-home-`,
-    ),
-  );
+  assert.ok(real.startsWith(`${temporaryRoot}${path.sep}farol-next-e2e-home-`));
   await fs.rm(real, { recursive: true, force: true });
 }
 
@@ -10892,7 +10886,7 @@ n04bModelSegment: {
 // top of `tunnel-client.fixture.cjs`.
 async function startTunnelClientFixture() {
   const fixtureRoot = await fs.mkdtemp(
-    path.join(os.tmpdir(), "farol-next-e2e-tunnel-"),
+    path.join(temporaryRoot, "farol-next-e2e-tunnel-"),
   );
   const source = await fs.readFile(
     path.join(root, "tests/e2e/tunnel-client.fixture.cjs"),
