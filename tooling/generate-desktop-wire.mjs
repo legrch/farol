@@ -53,6 +53,12 @@ for (const [name, def] of Object.entries(schema.definitions)) {
   }
   go += "}\n";
   ts += "}\n";
+  const numeric = Object.entries(def.fields)
+    .filter(([, spec]) => ["uint32", "int32"].includes(spec.type))
+    .map(([field]) => field);
+  if (numeric.length) {
+    go += `func (value *${name}) UnmarshalJSON(raw []byte) error { type plain ${name}; var decoded plain; if err := decodeIntegers("${name}",raw,&decoded,[]string{${numeric.map(JSON.stringify).join(",")}}); err != nil { return err }; *value = ${name}(decoded); return nil }\n`;
+  }
 }
 go += fs.readFileSync(
   path.join(root, "tooling/desktop-validator.go.txt"),

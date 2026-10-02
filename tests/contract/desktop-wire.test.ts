@@ -320,3 +320,34 @@ const frames=req.method==='core.handshake'?[encode(response)]:[encode({jsonrpc:'
     await client.close();
   }
 });
+
+it("accepts equivalent bounded integer JSON values and rejects fractions and overflow", () => {
+  for (const number of ["1", "1.0", "1e0", "10e-1"]) {
+    expect(
+      validate(
+        "Handshake",
+        parseJSON(
+          `{"protocolMajor":${number},"protocolMinor":0.0,"buildId":"build","profileId":"test"}`,
+        ),
+      ),
+    ).toBe(true);
+  }
+  for (const number of ["1.5", "-1", "4294967296", "1e1000"]) {
+    expect(
+      validate(
+        "Handshake",
+        parseJSON(
+          `{"protocolMajor":${number},"protocolMinor":0,"buildId":"build","profileId":"test"}`,
+        ),
+      ),
+    ).toBe(false);
+  }
+  for (const number of ["-32600", "-32600.0", "-3.26e4"]) {
+    expect(
+      validate(
+        "Fault",
+        parseJSON(`{"code":${number},"message":"invalid request"}`),
+      ),
+    ).toBe(true);
+  }
+});

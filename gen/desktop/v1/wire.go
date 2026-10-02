@@ -29,6 +29,17 @@ type Handshake struct {
 	BuildId       string `json:"buildId"`
 	ProfileId     string `json:"profileId"`
 }
+
+func (value *Handshake) UnmarshalJSON(raw []byte) error {
+	type plain Handshake
+	var decoded plain
+	if err := decodeIntegers("Handshake", raw, &decoded, []string{"protocolMajor", "protocolMinor"}); err != nil {
+		return err
+	}
+	*value = Handshake(decoded)
+	return nil
+}
+
 type Identity struct {
 	ProtocolMajor     uint32   `json:"protocolMajor"`
 	ProtocolMinor     uint32   `json:"protocolMinor"`
@@ -38,6 +49,17 @@ type Identity struct {
 	Capabilities      []string `json:"capabilities"`
 	MaxFrameBytes     uint32   `json:"maxFrameBytes"`
 }
+
+func (value *Identity) UnmarshalJSON(raw []byte) error {
+	type plain Identity
+	var decoded plain
+	if err := decodeIntegers("Identity", raw, &decoded, []string{"protocolMajor", "protocolMinor", "maxFrameBytes"}); err != nil {
+		return err
+	}
+	*value = Identity(decoded)
+	return nil
+}
+
 type Call struct {
 	Context     *Context        `json:"context,omitempty"`
 	OperationId *string         `json:"operationId,omitempty"`
@@ -62,6 +84,17 @@ type Fault struct {
 	Message string          `json:"message"`
 	Data    json.RawMessage `json:"data,omitempty"`
 }
+
+func (value *Fault) UnmarshalJSON(raw []byte) error {
+	type plain Fault
+	var decoded plain
+	if err := decodeIntegers("Fault", raw, &decoded, []string{"code"}); err != nil {
+		return err
+	}
+	*value = Fault(decoded)
+	return nil
+}
+
 type Response struct {
 	Jsonrpc string   `json:"jsonrpc"`
 	Id      *string  `json:"id"`
@@ -160,8 +193,8 @@ func valid(kind string, value interface{}, depth int) bool {
 		if !ok {
 			return false
 		}
-		i, err := strconv.ParseInt(string(n), 10, 64)
-		if err != nil {
+		i, err := strconv.ParseFloat(string(n), 64)
+		if err != nil || math.IsInf(i, 0) || math.IsNaN(i) || math.Trunc(i) != i {
 			return false
 		}
 		if kind == "uint32" {
@@ -253,4 +286,32 @@ func valid(kind string, value interface{}, depth int) bool {
 		}
 	}
 	return true
+}
+
+// Typed decoding keeps integer JSON values interoperable with TypeScript,
+// including equivalent decimal/exponent spellings, without changing opaque data.
+func decodeIntegers(name string, raw []byte, target interface{}, fields []string) error {
+	if err := Validate(name, raw); err != nil {
+		return err
+	}
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &object); err != nil {
+		return err
+	}
+	for _, field := range fields {
+		number, present := object[field]
+		if !present {
+			continue
+		}
+		value, err := strconv.ParseFloat(string(number), 64)
+		if err != nil {
+			return err
+		}
+		object[field] = json.RawMessage(strconv.FormatInt(int64(value), 10))
+	}
+	normalized, err := json.Marshal(object)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(normalized, target)
 }

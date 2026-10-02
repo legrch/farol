@@ -31,7 +31,7 @@ func valid(kind string,value interface{},depth int) bool {
   default:return len(s)>0 && len(s)<=256 && !strings.ContainsAny(s,"\x00\r\n")
   }
  case "uint32","int32":
-  n,ok:=value.(json.Number);if !ok{return false};i,err:=strconv.ParseInt(string(n),10,64);if err!=nil{return false};if kind=="uint32"{return i>=0 && i<=math.MaxUint32};return i>=math.MinInt32 && i<=math.MaxInt32
+  n,ok:=value.(json.Number);if !ok{return false};i,err:=strconv.ParseFloat(string(n),64);if err!=nil || math.IsInf(i,0) || math.IsNaN(i) || math.Trunc(i)!=i{return false};if kind=="uint32"{return i>=0 && i<=math.MaxUint32};return i>=math.MinInt32 && i<=math.MaxInt32
  case "text[]":a,ok:=value.([]interface{});if !ok || len(a)>64{return false};for _,item:=range a{if !valid("text",item,depth+1){return false}};return true
  case "json":
   switch v:=value.(type){
@@ -51,4 +51,19 @@ func valid(kind string,value interface{},depth int) bool {
  }
  if kind=="Response"{_,result:=object["result"];_,fault:=object["error"];if result==fault{return false};if result{if _,hasID:=object["id"];!hasID{return false}}}
  return true
+}
+
+// Typed decoding keeps integer JSON values interoperable with TypeScript,
+// including equivalent decimal/exponent spellings, without changing opaque data.
+func decodeIntegers(name string, raw []byte, target interface{}, fields []string) error {
+ if err:=Validate(name,raw);err!=nil{return err}
+ var object map[string]json.RawMessage
+ if err:=json.Unmarshal(raw,&object);err!=nil{return err}
+ for _,field:=range fields {
+  number,present:=object[field];if !present{continue}
+  value,err:=strconv.ParseFloat(string(number),64);if err!=nil{return err}
+  object[field]=json.RawMessage(strconv.FormatInt(int64(value),10))
+ }
+ normalized,err:=json.Marshal(object);if err!=nil{return err}
+ return json.Unmarshal(normalized,target)
 }

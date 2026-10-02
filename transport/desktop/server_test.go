@@ -187,3 +187,12 @@ type observedReader struct {
 }
 
 func (r *observedReader) Read(p []byte) (int, error) { close(r.started); return r.ReadCloser.Read(p) }
+
+func TestHandshakeEquivalentIntegerSpellings(t *testing.T) {
+	for _, number := range []string{"1", "1.0", "1e0", "10e-1"} {
+		response := server(t).dispatch(context.Background(), request("hello", "core.handshake", `{"protocolMajor":`+number+`,"protocolMinor":0.0,"buildId":"build","profileId":"test"}`, nil))
+		if response.Result == nil || response.Result.Status != "ok" {
+			t.Fatalf("%s: %+v", number, response)
+		}
+	}
+}
