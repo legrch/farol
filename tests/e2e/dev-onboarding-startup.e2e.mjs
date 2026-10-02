@@ -17,8 +17,8 @@ const executable = path.join(
   root,
   "node_modules/electron/dist/Electron.app/Contents/MacOS/Electron",
 );
-const temporaryRoot = await fs.mkdtemp(
-  path.join(os.tmpdir(), "farol-dev-onboarding-startup-"),
+const temporaryRoot = await fs.realpath(
+  await fs.mkdtemp(path.join(os.tmpdir(), "farol-dev-onboarding-startup-")),
 );
 const isolatedHome = path.join(temporaryRoot, "home");
 const isolatedAppData = path.join(temporaryRoot, "app-data");
@@ -267,7 +267,6 @@ try {
   // input. Reopening must keep the same storage object and saved folder grant.
   const legacyAppData = path.join(temporaryRoot, "legacy-app-data");
   const legacyDirectory = path.join(legacyAppData, "Farol DEV");
-  const preferredDirectory = path.join(legacyAppData, "Farol Dev");
   const workspaceRoot = path.join(temporaryRoot, "approved-folder");
   await fs.mkdir(legacyDirectory, { recursive: true, mode: 0o700 });
   await fs.mkdir(workspaceRoot, { recursive: true, mode: 0o700 });
@@ -276,13 +275,7 @@ try {
     mode: 0o600,
   });
   const legacyIdentity = await fs.stat(legacyDirectory);
-  const preferredIdentity = await fs.stat(preferredDirectory).catch(() => null);
-  const expectedLegacyPath =
-    preferredIdentity &&
-    preferredIdentity.dev === legacyIdentity.dev &&
-    preferredIdentity.ino === legacyIdentity.ino
-      ? preferredDirectory
-      : legacyDirectory;
+  const expectedLegacyPath = await fs.realpath(legacyDirectory);
   const legacyEnvironment = {
     ...environment,
     FAROL_NEXT_E2E_APP_DATA: legacyAppData,
