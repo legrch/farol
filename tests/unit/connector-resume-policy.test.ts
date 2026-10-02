@@ -1,5 +1,8 @@
-import { describe, expect, it } from "vitest";
-import { shouldResumeComputerConnector } from "../../src/apps/desktop/connector-resume-policy";
+import { describe, expect, it, vi } from "vitest";
+import {
+  createUpdateAbortConnectorRecovery,
+  shouldResumeComputerConnector,
+} from "../../src/apps/desktop/connector-resume-policy";
 import {
   ProductSettingsSchema,
   type ProductSettings,
@@ -259,5 +262,79 @@ describe("configured Computer connector resume", () => {
       ProductSettings["nativeHosts"]["taskRoute"]
     >;
     expect(check(settings)).toBe(false);
+  });
+});
+
+describe("confirmed same-session update abort recovery (injected connector, no live start)", () => {
+  function recoveryFixture(wasRunning = true) {
+    const before = configured();
+    const stopped = structuredClone(before);
+    stopped.revision++;
+    stopped.connectors.secureMcp.runtime!.state = "unreachable";
+    stopped.setup.connect.unavailable = "CONNECTOR_UPDATE_DRAINED";
+    const events: string[] = [];
+    const resume = vi.fn(async () => {
+      events.push("resumed");
+    });
+    const recovery = createUpdateAbortConnectorRecovery({
+      before: { status: "ready", settings: before },
+      wasRunning,
+      current: () => ({ status: "ready", settings: stopped }),
+      releaseAdmission: async () => {
+        events.push("released");
+      },
+      resumeConnector: resume,
+    });
+    return { before, stopped, events, resume, recovery };
+  }
+
+  it("restores a confirmed running connector once, after releasing all update admission", async () => {
+    const f = recoveryFixture();
+    f.recovery.recordDrained({ status: "ready", settings: f.stopped });
+    const first = f.recovery.release();
+    const second = f.recovery.release();
+    expect(first).toBe(second);
+    await first;
+    expect(f.events).toEqual(["released", "resumed"]);
+    expect(f.resume).toHaveBeenCalledOnce();
+    expect(f.stopped.connectors.secureMcp.runtime!.state).toBe("unreachable");
+  });
+  it("does not start a previously idle process or an unconfirmed drain", async () => {
+    const idle = recoveryFixture(false);
+    idle.recovery.recordDrained({ status: "ready", settings: idle.stopped });
+    await idle.recovery.release();
+    expect(idle.resume).not.toHaveBeenCalled();
+    const unconfirmed = recoveryFixture();
+    await unconfirmed.recovery.release();
+    expect(unconfirmed.resume).not.toHaveBeenCalled();
+  });
+  it.each(["revision", "runtime", "explicit-stop", "unknown"])(
+    "preserves %s state instead of repairing it implicitly",
+    async (change) => {
+      const f = recoveryFixture();
+      f.recovery.recordDrained({
+        status: "ready",
+        settings: structuredClone(f.stopped),
+      });
+      if (change === "revision") f.stopped.revision++;
+      else if (change === "runtime")
+        f.stopped.connectors.secureMcp.runtime!.runtimeGeneration = "d".repeat(
+          64,
+        );
+      else if (change === "explicit-stop")
+        f.stopped.connectors.secureMcp.runtime = null;
+      else f.stopped.setup.connect.outcomeUnknown = true;
+      await f.recovery.release();
+      expect(f.events).toEqual(["released"]);
+      expect(f.resume).not.toHaveBeenCalled();
+    },
+  );
+  it("does not retry a refused recovery start", async () => {
+    const f = recoveryFixture();
+    f.recovery.recordDrained({ status: "ready", settings: f.stopped });
+    f.resume.mockRejectedValueOnce(new Error("fixture start refused"));
+    await expect(f.recovery.release()).rejects.toThrow("fixture start refused");
+    await expect(f.recovery.release()).rejects.toThrow("fixture start refused");
+    expect(f.resume).toHaveBeenCalledOnce();
   });
 });

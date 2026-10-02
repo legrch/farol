@@ -30,6 +30,9 @@ export type StartupStage =
   | "connector-resumed"
   | "connector-resume-refused"
   | "connector-resume-failed"
+  | "update-abort-connector-resumed"
+  | "update-abort-connector-resume-refused"
+  | "update-abort-connector-resume-failed"
   | "connector-resume-skipped";
 
 // E2E-only, fixed tokens. No profile path, command line or browser content is

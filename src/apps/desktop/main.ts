@@ -383,7 +383,10 @@ import {
   probeTunnelClient,
   verifySelectedTunnelClient,
 } from "./tunnel-client-probe";
-import { shouldResumeComputerConnector } from "./connector-resume-policy";
+import {
+  createUpdateAbortConnectorRecovery,
+  shouldResumeComputerConnector,
+} from "./connector-resume-policy";
 import { identityBoundWorkspaces } from "./identity-bound-workspaces";
 import { AuthorityTransitionReservation } from "./authority-transition";
 import {
@@ -808,16 +811,35 @@ async function initializeInstalledUpdater(): Promise<void> {
           return { ok: true as const };
         };
         let lease: Awaited<ReturnType<typeof acquirePromotionLease>> = null;
-        let releasing: Promise<void> | null = null;
-        const release = (): Promise<void> =>
-          (releasing ??= (async () => {
+        const recovery = createUpdateAbortConnectorRecovery({
+          before: snapshot,
+          wasRunning: secureMcpConnectorRuntime?.isRunning() ?? false,
+          current: () => configuration?.snapshot() ?? null,
+          releaseAdmission: async () => {
             if (lease) await releasePromotionLease(lease);
             taskClaim.release();
             transition.release();
             for (const browser of browserAdmissions) browser.release();
             installedUpdateAdmission = false;
             applyLayout();
-          })());
+          },
+          resumeConnector: async () => {
+            if (quitInProgress) return;
+            try {
+              const result = await startSecureMcpConnector(false, true);
+              startupStage(
+                result.ok
+                  ? "update-abort-connector-resumed"
+                  : "update-abort-connector-resume-refused",
+              );
+            } catch {
+              startupStage("update-abort-connector-resume-failed");
+            }
+            if (!quitInProgress && window && !window.isDestroyed())
+              window.webContents.send(channels.configurationChanged);
+          },
+        });
+        const release = recovery.release;
         try {
           const routes = new Set([
             ...managedChatGptRoutes,
@@ -861,6 +883,7 @@ async function initializeInstalledUpdater(): Promise<void> {
                 await configuration?.recordSecureMcpDrainedForUpdate();
               if (!recorded?.ok)
                 throw new Error("UPDATE_CONNECTOR_DRAIN_UNCONFIRMED");
+              recovery.recordDrained(recorded.snapshot);
             },
           });
           if (!drained.ok) {

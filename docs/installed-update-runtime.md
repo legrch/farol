@@ -35,6 +35,14 @@ again after copying, before durable helper dispatch. A failed observation or
 late state change releases admission without launching the helper. Standalone
 browser windows remain unqualified by this embedded-only path.
 
+If preparation is refused after a confirmed connector drain, Desktop restores
+that previously running connector once, after releasing update admission. The
+drain revision and runtime binding must still match; changed settings, unknown
+stops and previously idle connectors are never repaired implicitly. This uses
+the normal connector start, which rechecks executable identity and current
+grants, without replaying a task or verification Send. A dispatched or unknown
+helper handoff retains admission and does not enter this abort recovery.
+
 A confirmed update drain preserves a previously ready, generation-bound
 Computer-only runtime as unreachable with `CONNECTOR_UPDATE_DRAINED`. It removes
 live attachment proof. After a confirmed clean shutdown, the production app may
