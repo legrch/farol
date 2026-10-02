@@ -66,6 +66,12 @@ class ButtonFixture extends ElementFixture {
   constructor(attributes: Record<string, string>) {
     super("button", attributes);
   }
+  get type() {
+    const value = this.getAttribute("type");
+    return ["button", "reset", "submit"].includes(value ?? "")
+      ? value
+      : "submit";
+  }
 }
 function matches(node: ElementFixture, selectors: string): boolean {
   return selectors.split(",").some((selector) => {
@@ -88,6 +94,7 @@ function fixture() {
   const send = new ButtonFixture({ "data-testid": "send-button" });
   send.disabled = true;
   const voice = new ButtonFixture({
+    type: "button",
     "data-testid": "voice-mode-button",
     "aria-label": "Start voice mode",
   });
@@ -135,6 +142,29 @@ describe("update idle observation on synthetic public DOM", () => {
     f.send.visible = false;
     expect(f.run()).toEqual({ state: "idle" });
   });
+  it.each(["explicit", "implicit", "invalid", "input", "image"])(
+    "refuses an unrecognized enabled %s submit control",
+    (kind) => {
+      const f = fixture();
+      f.voice.attributes["aria-label"] = "Start Voice";
+      f.send.visible = false;
+      const control =
+        kind === "input" || kind === "image"
+          ? new ElementFixture("input", {
+              type: kind === "image" ? "image" : "submit",
+            })
+          : new ButtonFixture({
+              "aria-label": "Unrecognized action",
+              ...(kind === "implicit"
+                ? {}
+                : { type: kind === "invalid" ? "unrecognized" : "submit" }),
+            });
+      f.form.children.push(control);
+      expect(f.run()).toEqual({ state: "unknown" });
+      control.disabled = true;
+      expect(f.run()).toEqual({ state: "idle" });
+    },
+  );
   it.each(["absent", "hidden", "disabled", "aria-disabled", "renamed"])(
     "does not treat disabled Send as idle when voice readiness is %s",
     (state) => {

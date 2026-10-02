@@ -35,6 +35,13 @@ export const chatGptUpdateIdleProbe = `(() => {
       [...form.querySelectorAll('[data-testid="attachment-preview"],[data-testid="composer-attachment"],[data-testid*="file-chip"],[data-testid*="attachment-chip"]')].some(visible))
     return { state: "draft" };
   const sends = [...form.querySelectorAll('[data-testid="send-button"],button[aria-label="Send prompt"],button[aria-label="Send message"]')].filter(visible);
+  // A renamed or implicit submit control must not disappear from admission
+  // because its label is no longer recognized. Native button.type also covers
+  // missing or invalid type attributes, whose effective type is submit.
+  const submits = [...form.querySelectorAll('button,input[type="submit"],input[type="image"]')]
+    .filter(visible).filter(e => !(e instanceof HTMLButtonElement) || e.type === "submit");
+  if (submits.some(e => !sends.includes(e) && e.disabled !== true))
+    return { state: "unknown" };
   // Disabled Send alone does not prove that a voice session has ended. Require
   // a positive entry control; a generic voice toggle may also exist while active.
   const voice = [...form.querySelectorAll('button[aria-label="Start Voice"],button[aria-label="Start voice mode"],button[aria-label="Start Voice Mode"]')].filter(visible);
