@@ -1,0 +1,88 @@
+[
+  {
+    "Name": "completed-undelivered",
+    "Events": ["send", "accepted", "delta", "complete"],
+    "Phase": "result-ready",
+    "Outcome": "completed",
+    "Acknowledged": false,
+    "Reusable": false
+  },
+  {
+    "Name": "ack-is-not-lifecycle",
+    "Events": ["send", "accepted", "delta", "complete", "ack"],
+    "Phase": "delivered",
+    "Outcome": "completed",
+    "Acknowledged": true,
+    "Reusable": false
+  },
+  {
+    "Name": "settled-and-delivered",
+    "Events": ["send", "accepted", "delta", "complete", "settle", "ack"],
+    "Phase": "delivered",
+    "Outcome": "completed",
+    "Acknowledged": true,
+    "Reusable": true
+  },
+  {
+    "Name": "lost-send-reply",
+    "Events": ["send", "lost-reply", "ack"],
+    "Phase": "unknown",
+    "Outcome": "unknown",
+    "Acknowledged": true,
+    "Reusable": false
+  },
+  {
+    "Name": "cancel-after-send",
+    "Events": ["send", "cancel", "ack"],
+    "Phase": "unknown",
+    "Outcome": "unknown",
+    "Acknowledged": true,
+    "Reusable": false
+  },
+  {
+    "Name": "cancel-before-send",
+    "Events": ["cancel", "settle", "ack"],
+    "Phase": "cancelled",
+    "Outcome": "cancelled",
+    "Acknowledged": true,
+    "Reusable": true
+  },
+  {
+    "Name": "preflight-refused",
+    "Events": ["refused", "settle", "ack"],
+    "Phase": "delivered",
+    "Outcome": "refused",
+    "Acknowledged": true,
+    "Reusable": true
+  },
+  {
+    "Name": "owner-wait-before-send",
+    "Events": [
+      "await-owner",
+      "resume",
+      "send",
+      "accepted",
+      "delta",
+      "complete"
+    ],
+    "Phase": "result-ready",
+    "Outcome": "completed",
+    "Acknowledged": false,
+    "Reusable": false
+  },
+  {
+    "Name": "owner-wait-after-send",
+    "Events": [
+      "send",
+      "accepted",
+      "await-owner",
+      "resume",
+      "delta",
+      "complete"
+    ],
+    "Phase": "result-ready",
+    "Outcome": "completed",
+    "Acknowledged": false,
+    "Reusable": false
+  }
+]
