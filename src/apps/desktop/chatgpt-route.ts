@@ -1499,13 +1499,19 @@ export class ChatGptRoute {
     )
       return { ok: false, code: "UPDATE_BROWSER_BUSY" };
     if (!this.hasOpenUpdateSurface()) {
+      this.updateAdmission = true;
+      let released = false;
       return {
         ok: true,
         recheck: async () =>
-          this.hasOpenUpdateSurface()
-            ? { ok: false, code: "UPDATE_BROWSER_STATE_UNKNOWN" }
-            : { ok: true },
-        release: () => undefined,
+          !released && this.updateAdmission && !this.hasOpenUpdateSurface()
+            ? { ok: true }
+            : { ok: false, code: "UPDATE_BROWSER_STATE_UNKNOWN" },
+        release: () => {
+          if (released) return;
+          released = true;
+          this.updateAdmission = false;
+        },
       };
     }
     const surface = this.routeWindow;
@@ -1601,6 +1607,7 @@ export class ChatGptRoute {
   }
 
   async open(): Promise<ChatGptOpenResult> {
+    if (this.updateAdmission) return { status: "unreachable" };
     if (this.opening) return this.opening;
     const retained = this.routeWindow;
     if (retained && !retained.isDestroyed()) {
@@ -1645,7 +1652,12 @@ export class ChatGptRoute {
   // refuses. An explicit owner retry may discard only that failed surface;
   // it never repeats a model submission or resets a successful conversation.
   async retryFailedOpen(): Promise<ChatGptOpenResult> {
-    if (this.taskInFlight || this.signInMode || this.opening) {
+    if (
+      this.updateAdmission ||
+      this.taskInFlight ||
+      this.signInMode ||
+      this.opening
+    ) {
       return { status: "unreachable" };
     }
     if (this.load === "failed" && this.routeWindow) {
@@ -1671,6 +1683,7 @@ export class ChatGptRoute {
   // state, and only the owner's own close (native or "Return to Farol")
   // ends the sign-in surface.
   async openForSignIn(title: string): Promise<ChatGptOpenResult> {
+    if (this.updateAdmission) return { status: "unreachable" };
     this.setTitle(title);
     this.signInMode = true;
     this.signInReported = false;

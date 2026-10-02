@@ -764,6 +764,40 @@ afterEach(() => {
 });
 
 describe("installed-update browser admission", () => {
+  it.each(["open", "retry", "sign-in"])(
+    "reserves an unopened route against %s until update admission releases",
+    async (entry) => {
+      const candidate = route();
+      const createSurface = vi.fn(async () => ({ status: "opened" as const }));
+      Reflect.set(candidate, "openRouteWindow", createSurface);
+      const admission = await candidate.acquireUpdateIdle();
+      expect(admission.ok).toBe(true);
+      if (!admission.ok) throw new Error(admission.code);
+      expect(await admission.recheck()).toEqual({ ok: true });
+      // Simulate the durable dispatch write yielding after its final recheck.
+      await Promise.resolve();
+      const open = () =>
+        entry === "retry"
+          ? candidate.retryFailedOpen()
+          : entry === "sign-in"
+            ? candidate.openForSignIn("Sign in")
+            : candidate.open();
+      expect(await open()).toEqual({ status: "unreachable" });
+      expect(createSurface).not.toHaveBeenCalled();
+      expect(await candidate.acquireUpdateIdle()).toEqual({
+        ok: false,
+        code: "UPDATE_BROWSER_BUSY",
+      });
+      admission.release();
+      admission.release();
+      expect(await admission.recheck()).toEqual({
+        ok: false,
+        code: "UPDATE_BROWSER_STATE_UNKNOWN",
+      });
+      expect(await candidate.open()).toEqual({ status: "opened" });
+      expect(createSurface).toHaveBeenCalledOnce();
+    },
+  );
   function updatePage(state = "idle") {
     const candidate = route();
     const surface = embeddedSurface();

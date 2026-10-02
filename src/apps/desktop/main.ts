@@ -2030,6 +2030,7 @@ async function initializeLiveTaskState(): Promise<void> {
 }
 
 async function openLiveTaskSurface(taskId: string): Promise<boolean> {
+  if (installedUpdateAdmission) return false;
   const route = liveTaskRoutes.get(taskId);
   if (!route) return false;
   try {
