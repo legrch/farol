@@ -2163,6 +2163,7 @@ function buildDiscoveryPanel(
   advanced.className = "discovery-advanced";
   advanced.open = discoveryAdvancedOpen[advancedKey];
   advanced.addEventListener("toggle", () => {
+    if (!advanced.isConnected) return;
     discoveryAdvancedOpen = {
       ...discoveryAdvancedOpen,
       [advancedKey]: advanced.open,
@@ -2170,6 +2171,14 @@ function buildDiscoveryPanel(
   });
   const summary = document.createElement("summary");
   summary.textContent = "Advanced";
+  summary.addEventListener("click", (event) => {
+    event.preventDefault();
+    // Keep the choice before an async discovery snapshot replaces this node.
+    // The native toggle event is queued and can arrive after that replacement.
+    const open = !advanced.open;
+    discoveryAdvancedOpen = { ...discoveryAdvancedOpen, [advancedKey]: open };
+    advanced.open = open;
+  });
   advanced.append(summary);
 
   if (offered.length > 0) {

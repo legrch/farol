@@ -4454,10 +4454,9 @@ async function completeSetup(
       );
     }
     if (stepId === "hosts" && configureHost) {
-      // Discovery can rerender this panel between expanding Advanced and
-      // clicking its picker. This setup helper uses the existing deterministic
-      // E2E picker seam for either discovery outcome, without a model turn.
-      // It does not qualify the production Advanced picker interaction.
+      // Discovery may select a compatible signed installation before this
+      // helper reaches the step. The synthetic lane still selects its exact
+      // fixture, through Advanced when discovery leaves the picker visible.
       await waitForSetup(instance, () => {
         const primary = document.querySelector("#setup-live-primary");
         return (
@@ -4467,14 +4466,28 @@ async function completeSetup(
           ) !== null
         );
       });
-      const selectedFixture = await instance.window.evaluate(() =>
-        window.farolNext.configure({ kind: "host.select-codex" }),
-      );
-      assert.equal(selectedFixture.ok, true, JSON.stringify(selectedFixture));
-      await assertSameFixtureExecutable(
-        selectedFixture.snapshot.settings.nativeHosts.codex.executablePath,
-        instance.codexFixture,
-      );
+      const hostWasDiscovered = !(await instance.window
+        .locator("#setup-live-primary")
+        .isHidden());
+      if (hostWasDiscovered) {
+        const selectedFixture = await instance.window.evaluate(() =>
+          window.farolNext.configure({ kind: "host.select-codex" }),
+        );
+        assert.equal(selectedFixture.ok, true, JSON.stringify(selectedFixture));
+        await assertSameFixtureExecutable(
+          selectedFixture.snapshot.settings.nativeHosts.codex.executablePath,
+          instance.codexFixture,
+        );
+      } else {
+        await instance.window
+          .locator("#setup-dialog .discovery-advanced summary")
+          .click();
+        await instance.window
+          .locator("#setup-dialog .discovery-advanced-actions button", {
+            hasText: "Choose another…",
+          })
+          .click();
+      }
       await waitForSetup(
         instance,
         () =>
