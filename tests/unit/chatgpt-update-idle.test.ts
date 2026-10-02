@@ -114,6 +114,19 @@ function fixture() {
 }
 
 describe("update idle observation on synthetic public DOM", () => {
+  it("recognizes the current Start Voice entry without weakening activity checks", () => {
+    const f = fixture();
+    f.voice.attributes["aria-label"] = "Start Voice";
+    expect(f.run()).toEqual({ state: "idle" });
+    f.voice.disabled = true;
+    expect(f.run()).toEqual({ state: "unknown" });
+    f.voice.disabled = false;
+    f.composer.value = "unsent fixture draft";
+    expect(f.run()).toEqual({ state: "draft" });
+    f.composer.value = "";
+    f.nodes.push(new ButtonFixture({ "aria-label": "Stop generating" }));
+    expect(f.run()).toEqual({ state: "running" });
+  });
   it("requires an empty usable composer, voice readiness and no enabled Send control", () => {
     const f = fixture();
     expect(f.run()).toEqual({ state: "idle" });
@@ -172,19 +185,20 @@ describe("update idle observation on synthetic public DOM", () => {
     Object.defineProperty(f.voice, "checkVisibility", { value: undefined });
     expect(f.run()).toEqual({ state: "unknown" });
   });
-  it("recognizes an empty voice-ready composer, not a disabled or ambiguous voice control", () => {
-    const f = fixture();
-    f.send.visible = false;
-    const voice = f.voice;
-    expect(f.run()).toEqual({ state: "idle" });
-    voice.disabled = true;
-    expect(f.run()).toEqual({ state: "unknown" });
-    voice.disabled = false;
-    f.form.children.push(
-      new ButtonFixture({ "aria-label": "Start voice mode" }),
-    );
-    expect(f.run()).toEqual({ state: "unknown" });
-  });
+  it.each(["Start voice mode", "Start Voice"])(
+    "rejects disabled or ambiguous voice readiness with a second %s control",
+    (label) => {
+      const f = fixture();
+      f.send.visible = false;
+      const voice = f.voice;
+      expect(f.run()).toEqual({ state: "idle" });
+      voice.disabled = true;
+      expect(f.run()).toEqual({ state: "unknown" });
+      voice.disabled = false;
+      f.form.children.push(new ButtonFixture({ "aria-label": label }));
+      expect(f.run()).toEqual({ state: "unknown" });
+    },
+  );
   it.each([
     "Stop generating",
     "Stop recording",

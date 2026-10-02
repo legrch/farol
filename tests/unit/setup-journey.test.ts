@@ -88,6 +88,30 @@ describe("setup journey", () => {
       section: "settings",
     });
   });
+
+  it.each(["preview", "dev"] as const)(
+    "keeps a previously completed %s setup out of the launch path after an update",
+    (environment) => {
+      expect(
+        initialSetupPresentation({
+          environment,
+          dismissed: false,
+          completedPreviously: true,
+          currentStep: "verify",
+          openAtLaunch: "browser",
+        }),
+      ).toEqual({ setupOpen: false, setupStep: 4, section: "browser" });
+      expect(
+        initialSetupPresentation({
+          environment,
+          dismissed: false,
+          completedPreviously: true,
+          currentStep: "connect",
+          openAtLaunch: "activity",
+        }),
+      ).toEqual({ setupOpen: false, setupStep: 2, section: "activity" });
+    },
+  );
 });
 
 describe("guided Setup selection", () => {

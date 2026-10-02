@@ -6124,6 +6124,8 @@ async function start(): Promise<void> {
     demoMode: bootstrap.demoMode,
     legacySetupTestMode: bootstrap.legacySetupTestMode,
     dismissed: initialSettings?.setup.journey.dismissed ?? false,
+    completedPreviously:
+      initialSettings?.connectors.secureMcp.lastVerifiedAttachment != null,
     currentStep: initialSettings?.setup.journey.currentStep ?? "chatgpt",
     openAtLaunch: initialSettings?.general.openAtLaunch ?? "browser",
   });

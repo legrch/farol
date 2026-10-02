@@ -296,6 +296,27 @@ async function closeOwned() {
   assert.equal(child.exitCode, 0);
 }
 
+async function assertReturningChat(window, openSetup = true) {
+  await window.waitForFunction(
+    () => document.documentElement.dataset.section === "browser",
+  );
+  assert.equal(await window.locator("#onboarding-nav").isVisible(), false);
+  const state = await window.evaluate(() => window.farolNext.bootstrap());
+  assert.equal(state.configuration.settings.general.openAtLaunch, "browser");
+  assert.ok(
+    state.configuration.settings.connectors.secureMcp.lastVerifiedAttachment,
+  );
+  observations.push({
+    kind: "saved-setup-opens-chatgpt-after-restart",
+    section: "browser",
+    sends: nonReadRequests,
+  });
+  if (openSetup) {
+    await window.locator('.nav-item[data-section="computer"]').click();
+    await window.locator("#onboarding-nav").waitFor({ state: "visible" });
+  }
+}
+
 async function launch(environment, mode = "normal", profile = mode) {
   assert.equal(
     cleanupUnknown,
@@ -1242,6 +1263,7 @@ try {
           ),
         );
         const returning = await launch(environment, "normal", environment);
+        await assertReturningChat(returning);
         const stagePath = path.join(
           activeFixtureProfile.home,
           ".farol-next-connector-resume-stage",
@@ -1304,6 +1326,7 @@ try {
         break;
       }
       let returning = await launch(environment, "normal", environment);
+      await assertReturningChat(returning);
       // A confirmed Quit permits this configured Computer-only connector to
       // establish a new runtime. It never sends or reuses the old attachment.
       let resumed;
@@ -1361,6 +1384,7 @@ try {
       const stoppedState = await returning.evaluate(() =>
         window.farolNext.bootstrap(),
       );
+      await assertReturningChat(returning);
       assert.equal(
         stoppedState.configuration.settings.connectors.secureMcp.runtime,
         null,
@@ -1455,6 +1479,7 @@ try {
       const unknownState = await returning.evaluate(() =>
         window.farolNext.bootstrap(),
       );
+      await assertReturningChat(returning, false);
       assert.equal(
         unknownState.configuration.settings.setup.connect.outcomeUnknown,
         true,
