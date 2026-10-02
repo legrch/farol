@@ -2,7 +2,7 @@
 
 K0 is an additive backend foundation. The installed Electron application still uses its existing backend. Only the trusted host imports `apps/desktop/bridge/client.ts`; React and remote pages do not receive this client or its pipe.
 
-Run `go build ./cmd/farol`, then `farol serve --profile <id>`. The build owns `boot.BuildID`, set with `-ldflags "-X github.com/legrch/farol/boot.BuildID=<accepted-build-id>"`; development defaults to `development`. The host launches the exact accepted executable with inherited stdin/stdout pipes. Each process generates a fresh 128-bit random incarnation. K0 does not implement an endpoint discovery service, global per-profile lock, app installation, automatic restart, or MCP socket attachment.
+Run `go build ./cmd/farol`, then `farol serve --profile <id>`. The build owns `boot.BuildID`, set with `-ldflags "-X github.com/legrch/farol/boot.BuildID=<accepted-build-id>"`; development defaults to `development`. The host launches the exact accepted executable with inherited stdin/stdout pipes. Each process generates a fresh 128-bit random incarnation. The Go serve API owns closable input/output pipes; context cancellation closes those exact endpoints to interrupt idle reads and blocked writes, and passes the same context to the module handler. Module journals still decide OS/provider cancellation outcomes. The CLI lifetime follows its inherited pipes. K0 does not implement an endpoint discovery service, global per-profile lock, app installation, automatic restart, or MCP socket attachment.
 
 ## Wire and generation
 

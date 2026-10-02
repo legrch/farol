@@ -14,7 +14,7 @@ import (
 // BuildID is set by the build via -ldflags; it cannot be overridden by a client.
 var BuildID = "development"
 
-func Serve(ctx context.Context, profileID string, in io.Reader, out io.Writer) error {
+func Serve(ctx context.Context, profileID string, in io.ReadCloser, out io.WriteCloser) error {
 	var bytes [16]byte
 	if _, err := rand.Read(bytes[:]); err != nil {
 		return err
@@ -27,7 +27,7 @@ func Serve(ctx context.Context, profileID string, in io.Reader, out io.Writer) e
 }
 
 // Run parses only currently implemented command modes; diagnostics never use stdout.
-func Run(args []string, in io.Reader, out, diagnostics io.Writer) int {
+func Run(args []string, in io.ReadCloser, out io.WriteCloser, diagnostics io.Writer) int {
 	if len(args) < 1 || args[0] != "serve" {
 		fmt.Fprintln(diagnostics, "usage: farol serve --profile <id>")
 		return 2

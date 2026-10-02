@@ -58,10 +58,35 @@ func New(config Config) (*Server, error) {
 	return &Server{config: config, started: time.Now(), seen: make(map[string]bool)}, nil
 }
 
-// Serve uses exactly one admitted inherited pipe. It never starts a listener or retries.
-func (s *Server) Serve(ctx context.Context, in io.Reader, out io.Writer) error {
+// Serve owns the supplied pipe endpoints for its lifetime. Cancellation closes
+// those exact endpoints to interrupt blocked IO and propagates to the handler;
+// it does not establish cancellation of module-owned OS/provider work.
+func (s *Server) Serve(ctx context.Context, in io.ReadCloser, out io.WriteCloser) error {
+	if ctx.Done() != nil {
+		stop := make(chan struct{})
+		terminal := make(chan struct{})
+		go func() {
+			defer close(terminal)
+			select {
+			case <-ctx.Done():
+			case <-stop:
+				if ctx.Err() == nil {
+					return
+				}
+			}
+			_ = in.Close()
+			_ = out.Close()
+		}()
+		defer func() { close(stop); <-terminal }()
+	}
 	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		data, err := ipc.ReadFrame(in)
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		if err == io.EOF {
 			return nil
 		}

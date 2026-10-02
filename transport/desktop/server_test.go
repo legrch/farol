@@ -5,7 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"testing"
+	"time"
 
 	wire "github.com/legrch/farol/gen/desktop/v1"
 	"github.com/legrch/farol/pkg/ipc"
@@ -79,7 +81,7 @@ func TestMalformedAndResponseLoss(t *testing.T) {
 	}
 	var in bytes.Buffer
 	ipc.WriteFrame(&in, request("hello", "core.handshake", `{"protocolMajor":1,"protocolMinor":0,"buildId":"build","profileId":"test"}`, nil))
-	if err := server(t).Serve(context.Background(), &in, failedWriter{}); err == nil {
+	if err := server(t).Serve(context.Background(), io.NopCloser(&in), failedWriter{}); err == nil {
 		t.Fatal("lost response marked success")
 	}
 }
@@ -87,6 +89,7 @@ func TestMalformedAndResponseLoss(t *testing.T) {
 type failedWriter struct{}
 
 func (failedWriter) Write([]byte) (int, error) { return 0, errors.New("lost") }
+func (failedWriter) Close() error              { return nil }
 func TestRegisteredReadAndOperationIdentity(t *testing.T) {
 	count := 0
 	s, err := New(Config{BuildID: "build", ProfileID: "test", Generation: "generation", Methods: map[string]Method{"computer.workspace.read": {Handle: func(_ context.Context, r Request) (*Outcome, error) {
@@ -109,3 +112,78 @@ func TestRegisteredReadAndOperationIdentity(t *testing.T) {
 		t.Fatal("duplicate dispatch")
 	}
 }
+
+func TestServeCancellationInterruptsIdleInput(t *testing.T) {
+	in, producer := io.Pipe()
+	defer producer.Close()
+	out := &closedWriter{}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	terminal := make(chan error, 1)
+	started := make(chan struct{})
+	go func() {
+		terminal <- serverForCancellation().Serve(ctx, &observedReader{ReadCloser: in, started: started}, out)
+	}()
+	<-started
+	cancel()
+	select {
+	case err := <-terminal:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("cancellation: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("idle read retained after cancellation")
+	}
+	if !out.closed {
+		t.Fatal("owned output not closed")
+	}
+}
+
+func TestServeCancellationInterruptsBlockedOutput(t *testing.T) {
+	var input bytes.Buffer
+	if err := ipc.WriteFrame(&input, request("hello", "core.handshake", `{"protocolMajor":1,"protocolMinor":0,"buildId":"build","profileId":"test"}`, nil)); err != nil {
+		t.Fatal(err)
+	}
+	consumer, out := io.Pipe()
+	defer consumer.Close()
+	started := make(chan struct{})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	terminal := make(chan error, 1)
+	go func() {
+		terminal <- serverForCancellation().Serve(ctx, io.NopCloser(&input), &observedWriter{PipeWriter: out, started: started})
+	}()
+	<-started
+	cancel()
+	select {
+	case err := <-terminal:
+		if err == nil {
+			t.Fatal("undelivered response reported success")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("blocked write retained after cancellation")
+	}
+}
+func serverForCancellation() *Server {
+	s, _ := New(Config{BuildID: "build", ProfileID: "test", Generation: "generation"})
+	return s
+}
+
+type closedWriter struct{ closed bool }
+
+func (*closedWriter) Write(p []byte) (int, error) { return len(p), nil }
+func (w *closedWriter) Close() error              { w.closed = true; return nil }
+
+type observedWriter struct {
+	*io.PipeWriter
+	started chan struct{}
+}
+
+func (w *observedWriter) Write(p []byte) (int, error) { close(w.started); return w.PipeWriter.Write(p) }
+
+type observedReader struct {
+	io.ReadCloser
+	started chan struct{}
+}
+
+func (r *observedReader) Read(p []byte) (int, error) { close(r.started); return r.ReadCloser.Read(p) }
