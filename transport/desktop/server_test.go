@@ -274,3 +274,23 @@ func TestServeBoundsOwnerOutputBeforeEncoding(t *testing.T) {
 		}
 	}
 }
+
+func TestServeNormalEOFClosesOwnedOutput(t *testing.T) {
+	in, producer := io.Pipe()
+	_ = producer.Close()
+	consumer, out := io.Pipe()
+	defer consumer.Close()
+	eof := make(chan error, 1)
+	go func() { _, err := io.ReadAll(consumer); eof <- err }()
+	if err := server(t).Serve(context.Background(), in, out); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-eof:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("owned output retained after EOF")
+	}
+}

@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"strconv"
+	"sync"
 	"time"
 
 	wire "github.com/legrch/farol/gen/desktop/v1"
@@ -63,6 +64,9 @@ func New(config Config) (*Server, error) {
 // those exact endpoints to interrupt blocked IO and propagates to the handler;
 // it does not establish cancellation of module-owned OS/provider work.
 func (s *Server) Serve(ctx context.Context, in io.ReadCloser, out io.WriteCloser) error {
+	var closed sync.Once
+	closePipes := func() { closed.Do(func() { _ = in.Close(); _ = out.Close() }) }
+	defer closePipes()
 	if ctx.Done() != nil {
 		stop := make(chan struct{})
 		terminal := make(chan struct{})
@@ -75,8 +79,7 @@ func (s *Server) Serve(ctx context.Context, in io.ReadCloser, out io.WriteCloser
 					return
 				}
 			}
-			_ = in.Close()
-			_ = out.Close()
+			closePipes()
 		}()
 		defer func() { close(stop); <-terminal }()
 	}
