@@ -1,7 +1,8 @@
 import type { ProductConfigurationSnapshot } from "../../pkg/product-settings/contract";
 import { identityBoundWorkspaces } from "./identity-bound-workspaces";
 
-// Resume only a previously ready Computer-only route after confirmed shutdown.
+// Resume only a previously ready Computer-only route after confirmed shutdown,
+// including a generation-bound update drain that withdrew its live proof.
 // An explicit Stop clears the saved runtime. Unknown recovery and selected
 // Codex routes require their own deliberate admission, never a startup replay.
 export function shouldResumeComputerConnector(
@@ -28,7 +29,9 @@ export function shouldResumeComputerConnector(
     connector.credential === "stored" &&
     connector.tunnelId !== null &&
     connector.tunnelClient !== null &&
-    connector.runtime?.state === "ready" &&
+    (connector.runtime?.state === "ready" ||
+      (connector.runtime?.state === "unreachable" &&
+        settings.setup.connect.unavailable === "CONNECTOR_UPDATE_DRAINED")) &&
     connector.runtime.connectorGeneration === connector.generation &&
     connector.runtime.computerGeneration === settings.computer.generation &&
     !settings.setup.connect.outcomeUnknown &&

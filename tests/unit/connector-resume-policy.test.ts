@@ -106,6 +106,17 @@ describe("configured Computer connector resume", () => {
     expect(check(settings)).toBe(true);
     expect(settings).toEqual(before);
   });
+  it("resumes a confirmed update drain without accepting the stopped runtime as live", () => {
+    const settings = configured();
+    settings.connectors.secureMcp.runtime!.state = "unreachable";
+    settings.setup.connect.unavailable = "CONNECTOR_UPDATE_DRAINED";
+    expect(check(settings)).toBe(true);
+    expect(settings.connectors.secureMcp.runtime!.state).toBe("unreachable");
+    expect(check(settings, false)).toBe(false);
+    expect(check(settings, true, "dev")).toBe(false);
+    settings.connectors.secureMcp.runtime = null;
+    expect(check(settings)).toBe(false);
+  });
   it("does not resume Dev or an unconfirmed prior run", () => {
     expect(check(configured(), false)).toBe(false);
     expect(check(configured(), true, "dev")).toBe(false);

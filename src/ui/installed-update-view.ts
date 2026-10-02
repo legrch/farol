@@ -10,6 +10,12 @@ const blockedMessages: Readonly<Record<string, string>> = {
     "Wait for the current task to finish before restarting.",
   UPDATE_BROWSER_OPEN:
     "Close open ChatGPT tabs before restarting so no browser work is interrupted.",
+  UPDATE_BROWSER_BUSY:
+    "Wait for the active ChatGPT response, check or voice session to finish before restarting.",
+  UPDATE_BROWSER_DRAFT:
+    "Send or clear the unsent ChatGPT draft and attachments before restarting.",
+  UPDATE_BROWSER_STATE_UNKNOWN:
+    "Farol could not confirm that ChatGPT is idle. Inspect its window, then check again before restarting.",
   UPDATE_WORK_PENDING: "Finish or cancel active work before restarting.",
   UPDATE_WORK_DRAIN_UNCONFIRMED:
     "Farol could not confirm that local work has finished. Review its current result before restarting.",
@@ -130,7 +136,6 @@ export function createInstalledUpdateView(
     node.addEventListener("click", () => {
       if (node.disabled || node.hidden || (inRail && rail.hidden)) return;
       if (kind === "later") {
-        rail.hidden = true;
         for (const control of controls)
           if (control.kind === "later") control.node.disabled = true;
       } else {
@@ -160,11 +165,13 @@ export function createInstalledUpdateView(
           ? "Update needs attention"
           : applying
             ? "Updating Farol"
-            : "Update ready",
+            : ready && view.deferred
+              ? "Update saved for later"
+              : "Update ready",
       );
       text(railMark, recovery ? "!" : "↑");
       rail.title = message;
-      rail.hidden = !(ready && !view.deferred) && !applying && !recovery;
+      rail.hidden = !ready && !applying && !recovery;
       rail.dataset.updateState = view.phase;
       for (const { node, kind } of controls) {
         if (kind === "recover" || kind === "rollback") {

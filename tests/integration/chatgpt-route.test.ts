@@ -764,7 +764,79 @@ afterEach(() => {
 });
 
 describe("installed-update browser admission", () => {
-  it("treats an open idle browser as work until its surface is closed", () => {
+  function updatePage(state = "idle") {
+    const candidate = route();
+    const surface = embeddedSurface();
+    const execute = vi.fn(async () => ({ state }));
+    Object.assign(surface.webContents, { executeJavaScript: execute });
+    void surface.loadURL("https://chatgpt.com/");
+    Reflect.set(candidate, "routeWindow", surface);
+    Reflect.set(candidate, "load", "loaded");
+    return { candidate, surface, execute };
+  }
+  it("admits an open browser only after fresh idle proof and holds input until release", async () => {
+    const { candidate, surface, execute } = updatePage();
+    const admission = await candidate.acquireUpdateIdle();
+    expect(admission.ok).toBe(true);
+    if (!admission.ok) throw new Error(admission.code);
+    const event = { preventDefault: vi.fn() };
+    surface.webContents.emit("before-input-event", event);
+    surface.webContents.emit("before-mouse-event", event);
+    expect(event.preventDefault).toHaveBeenCalledTimes(2);
+    expect(execute).toHaveBeenCalledOnce();
+    execute.mockResolvedValue({ state: "draft" });
+    expect(await admission.recheck()).toEqual({
+      ok: false,
+      code: "UPDATE_BROWSER_DRAFT",
+    });
+    admission.release();
+    surface.webContents.emit("before-input-event", event);
+    expect(event.preventDefault).toHaveBeenCalledTimes(2);
+  });
+  it.each(["running", "draft", "unknown"])(
+    "refuses %s and releases its input fence",
+    async (state) => {
+      const { candidate, surface } = updatePage(state);
+      expect((await candidate.acquireUpdateIdle()).ok).toBe(false);
+      expect(surface.webContents.listenerCount("before-input-event")).toBe(0);
+    },
+  );
+  it("rejects a navigation during the fresh observation", async () => {
+    const { candidate, execute } = updatePage();
+    execute.mockImplementation(async () => {
+      Reflect.set(candidate, "routeDocumentGeneration", 1);
+      return { state: "idle" };
+    });
+    expect(await candidate.acquireUpdateIdle()).toEqual({
+      ok: false,
+      code: "UPDATE_BROWSER_STATE_UNKNOWN",
+    });
+  });
+  it("bounds a hung observation and never accepts its late idle reply", async () => {
+    vi.useFakeTimers();
+    try {
+      const { candidate, surface, execute } = updatePage();
+      let finish!: (value: { state: string }) => void;
+      execute.mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            finish = resolve;
+          }),
+      );
+      const pending = candidate.acquireUpdateIdle();
+      await vi.advanceTimersByTimeAsync(2_001);
+      expect(await pending).toEqual({
+        ok: false,
+        code: "UPDATE_BROWSER_STATE_UNKNOWN",
+      });
+      finish({ state: "idle" });
+      await Promise.resolve();
+      expect(surface.webContents.listenerCount("before-input-event")).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it("reports an open browser surface separately from its fresh idle admission", () => {
     const candidate = route();
     expect(candidate.hasOpenUpdateSurface()).toBe(false);
     const surface = embeddedSurface();

@@ -244,7 +244,7 @@ export function desktopIdentity(
   return {
     environment,
     displayName: dev ? DEV_DISPLAY_NAME : "Farol",
-    displayEdition: dev ? "Development" : "Developer Preview",
+    displayEdition: dev ? "Development" : "",
     applicationId: dev ? "local.farol.dev" : "local.farol.next.preview",
     applicationName: dev ? DEV_DISPLAY_NAME : "Farol",
     userData,

@@ -1032,10 +1032,15 @@ export class ProductConfigurationService {
     });
   }
 
+  async recordSecureMcpDrainedForUpdate(): Promise<MutationResult> {
+    return this.recordSecureMcpStopped(undefined, "update");
+  }
+
   async recordSecureMcpStopped(
     resumeRefusal?:
       | "TUNNEL_CLIENT_DISCOVERY_CANDIDATE_STALE"
       | "TUNNEL_CLIENT_EXECUTABLE_UNSAFE",
+    purpose: "stop" | "update" = "stop",
   ): Promise<MutationResult> {
     return this.mutate((settings) => {
       const connector = settings.connectors.secureMcp;
@@ -1049,7 +1054,22 @@ export class ProductConfigurationService {
       }
       const next = {
         ...connector,
-        runtime: null,
+        // Keep only a stopped, generation-bound resume intent after a known
+        // update drain. This is never live readiness and contains no new proof.
+        runtime:
+          purpose === "update" &&
+          resumeRefusal === undefined &&
+          connector.runtime?.state === "ready" &&
+          connector.runtime.connectorGeneration === connector.generation &&
+          connector.runtime.computerGeneration ===
+            settings.computer.generation &&
+          !settings.setup.connect.outcomeUnknown
+            ? {
+                ...connector.runtime,
+                state: "unreachable" as const,
+                observedAt: this.now(),
+              }
+            : null,
         challenge: null,
         attachment: null,
       };
@@ -1067,7 +1087,10 @@ export class ProductConfigurationService {
                 ? undefined
                 : "Choose the tunnel-client executable again before reconnecting.",
             ),
-            unavailable: resumeRefusal ?? null,
+            unavailable:
+              next.runtime !== null
+                ? "CONNECTOR_UPDATE_DRAINED"
+                : (resumeRefusal ?? null),
           },
         },
       };

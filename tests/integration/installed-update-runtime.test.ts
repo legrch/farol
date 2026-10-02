@@ -247,6 +247,74 @@ afterEach(async () => {
 });
 
 describe("installed updater composition (disposable filesystem and mocked native/GitHub ports)", () => {
+  it.each(["before-copy", "after-copy", "observation-error"] as const)(
+    "rechecks browser admission %s and never dispatches after a late refusal",
+    async (boundary) => {
+      const recheck = vi
+        .fn()
+        .mockResolvedValueOnce(
+          boundary === "before-copy"
+            ? { ok: false, code: "UPDATE_BROWSER_BUSY" }
+            : { ok: true },
+        )
+        .mockImplementationOnce(async () => {
+          if (boundary === "observation-error")
+            throw new Error("fixture observation failed");
+          return { ok: false, code: "UPDATE_BROWSER_DRAFT" };
+        });
+      const controller = await createInstalledUpdateRuntime({
+        ...options(),
+        acquireAdmission: async () => ({ ok: true, release, recheck }),
+      });
+      await controller!.initialize();
+      await controller!.check();
+      await controller!.restart();
+      const code =
+        boundary === "before-copy"
+          ? "UPDATE_BROWSER_BUSY"
+          : boundary === "after-copy"
+            ? "UPDATE_BROWSER_DRAFT"
+            : "UPDATE_BROWSER_STATE_UNKNOWN";
+      expect(controller!.snapshot()).toMatchObject({
+        phase: "ready",
+        blockedBy: code,
+      });
+      const retained = JSON.parse(await fs.readFile(ready, "utf8"));
+      expect(retained.operation).toBeNull();
+      expect(retained.preparation).toBeUndefined();
+      expect(mocks.helper).not.toHaveBeenCalled();
+      expect(quit).not.toHaveBeenCalled();
+      expect(release).toHaveBeenCalledOnce();
+      const stateFiles = await fs.readdir(
+        path.join(userData, "installed-updates"),
+      );
+      expect(stateFiles.some((name) => /^[a-f0-9]{32}$/u.test(name))).toBe(
+        false,
+      );
+      if (boundary === "before-copy")
+        expect(mocks.copyApp).not.toHaveBeenCalled();
+      else expect(mocks.copyApp).toHaveBeenCalledOnce();
+      await controller!.close();
+    },
+  );
+  it("holds admission through helper handoff after two fresh idle observations", async () => {
+    const recheck = vi.fn(async () => ({ ok: true as const }));
+    const controller = await createInstalledUpdateRuntime({
+      ...options(),
+      acquireAdmission: async () => ({ ok: true, release, recheck }),
+    });
+    await controller!.initialize();
+    await controller!.check();
+    await controller!.restart();
+    expect(recheck).toHaveBeenCalledTimes(2);
+    expect(mocks.helper).toHaveBeenCalledOnce();
+    expect(quit).toHaveBeenCalledOnce();
+    expect(release).not.toHaveBeenCalled();
+    expect(
+      JSON.parse(await fs.readFile(ready, "utf8")).operation,
+    ).not.toBeNull();
+    await controller!.close();
+  });
   it.each([
     ["restart", "obligationCount"],
     ["rollback", "unreadableCount"],

@@ -18,6 +18,12 @@ import { uploadChatGptAttachments } from "./chatgpt-attachment-upload";
 import type { VisibleOutputItem } from "./chatgpt-visible-output";
 import { publicMarkdownBlock } from "./chatgpt-public-markdown";
 import {
+  ChatGptUpdateIdleSchema,
+  chatGptUpdateIdleProbe,
+  type BrowserUpdateAdmission,
+  type BrowserUpdateCheck,
+} from "./chatgpt-update-idle";
+import {
   ChatGptPublicTurn,
   PublicTurnFrameSchema,
   readPublicAssistantMessages,
@@ -1440,6 +1446,7 @@ export class ChatGptRoute {
   private activityProbeStale = false;
   private activityGeneration = 0;
   private observedTaskRunning: boolean | null = null;
+  private updateAdmission = false;
   private signInMode = false;
   private signInReported = false;
   private pendingSignInObservation: Promise<SignInObservation> | null = null;
@@ -1480,6 +1487,97 @@ export class ChatGptRoute {
       (this.routeWindow !== null && !this.routeWindow.isDestroyed()) ||
       [...this.popupWindows].some((popup) => !popup.isDestroyed())
     );
+  }
+
+  async acquireUpdateIdle(): Promise<BrowserUpdateAdmission> {
+    if (
+      this.updateAdmission ||
+      this.opening ||
+      this.taskInFlight ||
+      this.signInMode ||
+      [...this.popupWindows].some((popup) => !popup.isDestroyed())
+    )
+      return { ok: false, code: "UPDATE_BROWSER_BUSY" };
+    if (!this.hasOpenUpdateSurface()) {
+      return {
+        ok: true,
+        recheck: async () =>
+          this.hasOpenUpdateSurface()
+            ? { ok: false, code: "UPDATE_BROWSER_STATE_UNKNOWN" }
+            : { ok: true },
+        release: () => undefined,
+      };
+    }
+    const surface = this.routeWindow;
+    if (
+      !surface ||
+      surface.kind !== "embedded" ||
+      surface.isDestroyed() ||
+      this.load !== "loaded"
+    )
+      return { ok: false, code: "UPDATE_BROWSER_STATE_UNKNOWN" };
+    const contents = surface.webContents;
+    const generation = this.routeDocumentGeneration;
+    const url = contents.getURL();
+    if (!isChatGptPage(url, this.options.homeUrl))
+      return { ok: false, code: "UPDATE_BROWSER_STATE_UNKNOWN" };
+    this.updateAdmission = true;
+    const blockInput = (event: { preventDefault(): void }): void =>
+      event.preventDefault();
+    contents.on("before-input-event", blockInput);
+    contents.on("before-mouse-event", blockInput);
+    let released = false;
+    const release = (): void => {
+      if (released) return;
+      released = true;
+      contents.removeListener("before-input-event", blockInput);
+      contents.removeListener("before-mouse-event", blockInput);
+      this.updateAdmission = false;
+    };
+    const recheck = async (): Promise<BrowserUpdateCheck> => {
+      const current = (): boolean =>
+        !released &&
+        this.updateAdmission &&
+        this.routeWindow === surface &&
+        !surface.isDestroyed() &&
+        !contents.isDestroyed() &&
+        this.load === "loaded" &&
+        this.routeDocumentGeneration === generation &&
+        contents.getURL() === url &&
+        !this.taskInFlight &&
+        !this.opening &&
+        !this.signInMode &&
+        ![...this.popupWindows].some((popup) => !popup.isDestroyed());
+      if (!current())
+        return { ok: false, code: "UPDATE_BROWSER_STATE_UNKNOWN" };
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        const raw = await Promise.race([
+          contents.executeJavaScript(chatGptUpdateIdleProbe, true),
+          new Promise<null>((resolve) => {
+            timer = setTimeout(() => resolve(null), ACTIVITY_PROBE_DEADLINE_MS);
+          }),
+        ]);
+        const parsed = ChatGptUpdateIdleSchema.safeParse(raw);
+        if (!current() || !parsed.success || parsed.data.state === "unknown")
+          return { ok: false, code: "UPDATE_BROWSER_STATE_UNKNOWN" };
+        if (parsed.data.state === "running")
+          return { ok: false, code: "UPDATE_BROWSER_BUSY" };
+        if (parsed.data.state === "draft")
+          return { ok: false, code: "UPDATE_BROWSER_DRAFT" };
+        return { ok: true };
+      } catch {
+        return { ok: false, code: "UPDATE_BROWSER_STATE_UNKNOWN" };
+      } finally {
+        if (timer !== undefined) clearTimeout(timer);
+      }
+    };
+    const result = await recheck();
+    if (!result.ok) {
+      release();
+      return result;
+    }
+    return { ok: true, recheck, release };
   }
 
   async toggleSidebar(): Promise<boolean> {

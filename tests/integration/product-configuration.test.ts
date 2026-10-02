@@ -956,6 +956,47 @@ describe("Farol Next product configuration", () => {
         receiptSha256: "e".repeat(64),
       });
 
+      if (refusal === undefined) {
+        const updateDrain = await service.recordSecureMcpDrainedForUpdate();
+        expect(updateDrain).toMatchObject({
+          ok: true,
+          snapshot: {
+            status: "ready",
+            settings: {
+              connectors: {
+                secureMcp: {
+                  runtime: {
+                    state: "unreachable",
+                    runtimeGeneration: "b".repeat(64),
+                  },
+                  challenge: null,
+                  attachment: null,
+                },
+              },
+              setup: {
+                connect: {
+                  verified: null,
+                  reachable: "unknown",
+                  unavailable: "CONNECTOR_UPDATE_DRAINED",
+                  outcomeUnknown: false,
+                },
+              },
+            },
+          },
+        });
+        const reload = new ProductConfigurationService(
+          new ProductSettingsStore({ root }),
+          dependencies(),
+        );
+        await reload.initialize();
+        expect(reload.snapshot()).toMatchObject({
+          status: "ready",
+          settings: {
+            connectors: { secureMcp: { runtime: { state: "unreachable" } } },
+            setup: { connect: { unavailable: "CONNECTOR_UPDATE_DRAINED" } },
+          },
+        });
+      }
       const stopped = await service.recordSecureMcpStopped(refusal);
 
       if (refusal !== undefined) {

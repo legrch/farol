@@ -8,6 +8,7 @@ describe("Farol Dev naming contract", () => {
   it("uses title case for human names without changing machine identities", () => {
     expect(desktopIdentity("dev", appData)).toMatchObject({
       displayName: "Farol Dev",
+      displayEdition: "Development",
       applicationName: "Farol Dev",
       runtimeServiceName: "Farol Dev Runtime",
       environment: "dev",
@@ -30,6 +31,7 @@ describe("Farol Dev naming contract", () => {
   it("keeps production's persistent identity separate from Dev", () => {
     expect(desktopIdentity("preview", appData)).toMatchObject({
       displayName: "Farol",
+      displayEdition: "",
       applicationName: "Farol",
       applicationId: "local.farol.next.preview",
       userData: path.join(appData, "Farol Next Preview"),

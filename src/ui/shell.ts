@@ -207,12 +207,11 @@ function sharedCodexSocketRefusalMessage(error: string): string | null {
   }
 }
 
-// `bootstrap.productName` carries the release identity the main process
-// validates elsewhere ("Farol Next Preview"); the diagnostics row below
-// only names the app to the owner, so it reads "Farol" with its
-// edition mark in the persistent sidebar. The window bar shows navigation.
+// `bootstrap.productName` carries the unchanged release identity
+// ("Farol Next Preview"). Visible production branding is "Farol";
+// only Dev shows an edition mark. The window bar shows navigation.
 let displayProductName = "Farol";
-let displayEdition = "Developer Preview";
+let displayEdition = "";
 
 // Independently declared, not imported: `ui` never imports from
 // `apps/desktop` (architecture.config enforces it), so this mirrors
@@ -278,7 +277,7 @@ const bootstrapSchema = z.strictObject({
   bundleId: z.literal("local.farol.next.preview"),
   environment: z.enum(["preview", "dev"]),
   displayName: z.enum(["Farol", "Farol Dev"]),
-  displayEdition: z.enum(["Developer Preview", "Development"]),
+  displayEdition: z.enum(["", "Development"]),
   applicationId: z.enum(["local.farol.next.preview", "local.farol.dev"]),
   build: BuildIdentitySchema,
   demoMode: z.boolean(),
@@ -410,7 +409,7 @@ function applyProductIdentity(): void {
   const dev = bootstrap.environment === "dev";
   if (
     bootstrap.displayName !== (dev ? "Farol Dev" : "Farol") ||
-    bootstrap.displayEdition !== (dev ? "Development" : "Developer Preview") ||
+    bootstrap.displayEdition !== (dev ? "Development" : "") ||
     bootstrap.applicationId !==
       (dev ? "local.farol.dev" : "local.farol.next.preview")
   ) {
@@ -422,15 +421,20 @@ function applyProductIdentity(): void {
   required<HTMLImageElement>("#brand-image").src = dev
     ? "farol-dev-mark.svg"
     : "farol-mark.svg";
-  document.title = `${displayProductName} · ${displayEdition}`;
+  document.title = [displayProductName, displayEdition]
+    .filter(Boolean)
+    .join(" · ");
   required("#product-brand").setAttribute(
     "aria-label",
-    `${displayProductName}, ${displayEdition}`,
+    [displayProductName, displayEdition].filter(Boolean).join(", "),
   );
   required("#brand-name").textContent = displayProductName;
-  required("#brand-edition").textContent = displayEdition;
   required("#setup-product-name").textContent = displayProductName;
-  required("#setup-product-edition").textContent = displayEdition;
+  for (const selector of ["#brand-edition", "#setup-product-edition"]) {
+    const edition = required<HTMLElement>(selector);
+    edition.textContent = displayEdition;
+    edition.hidden = displayEdition === "";
+  }
 }
 
 const narrowSidebar = window.matchMedia("(max-width: 979px)");
@@ -943,6 +947,8 @@ function renderWindowState(): void {
 
 function renderRuntime(): void {
   const pill = required<HTMLDivElement>("#runtime-pill");
+  // Runtime identity and connection details are available in Diagnostics.
+  pill.hidden = true;
   const lamp = required<HTMLElement>("#runtime-pill .state-lamp");
   const label = required<HTMLElement>("#runtime-pill b");
   const detail = required<HTMLElement>("#runtime-pill small");
@@ -3773,7 +3779,9 @@ function renderSettings(): void {
     ],
     [
       "Application",
-      `${displayProductName} · ${displayEdition} · ${bootstrap.applicationId}`,
+      [displayProductName, displayEdition, bootstrap.applicationId]
+        .filter(Boolean)
+        .join(" · "),
     ],
     [
       "Build",

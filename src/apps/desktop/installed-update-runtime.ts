@@ -359,7 +359,25 @@ async function confirmedNoEffect(
 
 export type InstalledUpdateAdmission =
   | Readonly<{ ok: false; code: string }>
-  | Readonly<{ ok: true; release(): Promise<void> }>;
+  | Readonly<{
+      ok: true;
+      release(): Promise<void>;
+      recheck?(): Promise<
+        Readonly<{ ok: true }> | Readonly<{ ok: false; code: string }>
+      >;
+    }>;
+
+async function recheckAdmission(
+  admission: Extract<InstalledUpdateAdmission, { ok: true }>,
+): Promise<Readonly<{ ok: true }> | Readonly<{ ok: false; code: string }>> {
+  try {
+    return (await admission.recheck?.()) ?? { ok: true };
+  } catch {
+    // An observation failure proves no idle state. No helper has been dispatched
+    // at these boundaries; preparation cleanup still owns its existing proof.
+    return { ok: false, code: "UPDATE_BROWSER_STATE_UNKNOWN" };
+  }
+}
 export type InstalledUpdateRuntimeOptions = Readonly<{
   directory: string;
   userData: string;
@@ -1373,6 +1391,9 @@ export async function createInstalledUpdateRuntime(
           installedBefore: current,
           helper: null,
         };
+        const currentAdmission = await recheckAdmission(admission);
+        if (!currentAdmission.ok)
+          return { status: "blocked", code: currentAdmission.code };
         await writeRecord(restoreFile, restoreIntent);
         keepAdmission = true;
         const handoff = await startInstalledUpdateHelper(
@@ -1514,6 +1535,9 @@ export async function createInstalledUpdateRuntime(
           version: verified.identity.version,
           buildId: verified.identity.buildId,
         };
+        const firstRecheck = await recheckAdmission(admission);
+        if (!firstRecheck.ok)
+          return { status: "blocked", code: firstRecheck.code };
         const operationId = randomBytes(16).toString("hex");
         const operationRoot = path.join(root, operationId);
         const preparing = { operationId, source, target };
@@ -1555,6 +1579,17 @@ export async function createInstalledUpdateRuntime(
           preparation: undefined,
           operation: preparing,
         };
+        // Copying and physical verification can take time. Re-read fenced
+        // browser state immediately before durable dispatch, not just at click.
+        const finalRecheck = await recheckAdmission(admission);
+        if (!finalRecheck.ok) {
+          retained = { ...retained, operation: null, preparation: preparing };
+          await writeRecord(readyFile, retained);
+          await removePreparedCopy(preparing);
+          retained = { ...retained, preparation: undefined };
+          await writeRecord(readyFile, retained);
+          return { status: "blocked", code: finalRecheck.code };
+        }
         // Durable dispatch intent precedes launch. A failed commit may already
         // have persisted dispatch, so keep admission even when its sync fails.
         keepAdmission = true;

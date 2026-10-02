@@ -507,11 +507,12 @@ const activeDesktopIdentity = {
 // build digest, and stays exactly that everywhere those checks read it.
 // Everywhere the app is only naming itself to the owner (the window title,
 // the macOS app menu, the About panel), it reads "Farol" with a
-// "Developer Preview" edition mark instead — the same pair the renderer's
-// own chrome already shows (see shell.html).
+// development edition only for Task Dev. Release identity remains unchanged.
 const displayProductName = activeDesktopIdentity.displayName;
 const displayEdition = activeDesktopIdentity.displayEdition;
-const displayWindowTitle = `${displayProductName} · ${displayEdition}`;
+const displayWindowTitle = [displayProductName, displayEdition]
+  .filter(Boolean)
+  .join(" · ");
 // UX34-08: a dedicated, clearly-Farol-owned sign-in surface. DEV embeds it in
 // the main window; Preview keeps its existing window presentation.
 const SIGN_IN_WINDOW_TITLE = `Sign in to ChatGPT — ${displayProductName}`;
@@ -685,7 +686,9 @@ if (process.platform === "darwin") {
   // identity, the bundle ID, or app.setName's own OS-level registration.
   app.setAboutPanelOptions({
     applicationName: displayProductName,
-    applicationVersion: `${buildIdentity.version} (${displayEdition})`,
+    applicationVersion: displayEdition
+      ? `${buildIdentity.version} (${displayEdition})`
+      : buildIdentity.version,
     version: buildIdentity.sourceCommit.slice(0, 12),
   });
 }
@@ -777,13 +780,6 @@ async function initializeInstalledUpdater(): Promise<void> {
           return { ok: false, code: "UPDATE_WORK_PENDING" };
         if (connectorTaskAdmission || connectorStartInFlight)
           return { ok: false, code: "UPDATE_CONNECTOR_ACTIVE" };
-        if (
-          chatGptRoute?.hasOpenUpdateSurface() ||
-          [...managedChatGptRoutes].some((route) =>
-            route.hasOpenUpdateSurface(),
-          )
-        )
-          return { ok: false, code: "UPDATE_BROWSER_OPEN" };
         const snapshot = configuration?.snapshot();
         if (!snapshot || snapshot.status !== "ready")
           return { ok: false, code: "UPDATE_STATE_UNREADABLE" };
@@ -795,6 +791,22 @@ async function initializeInstalledUpdater(): Promise<void> {
           return { ok: false, code: "UPDATE_WORK_PENDING" };
         }
         installedUpdateAdmission = true;
+        // Hide embedded input before any asynchronous probe; IPC and configuration
+        // admission above stay reserved through the final helper handoff.
+        applyLayout();
+        const browserAdmissions: Array<
+          Extract<
+            Awaited<ReturnType<ChatGptRoute["acquireUpdateIdle"]>>,
+            { ok: true }
+          >
+        > = [];
+        const recheck = async () => {
+          for (const browser of browserAdmissions) {
+            const result = await browser.recheck();
+            if (!result.ok) return result;
+          }
+          return { ok: true as const };
+        };
         let lease: Awaited<ReturnType<typeof acquirePromotionLease>> = null;
         let releasing: Promise<void> | null = null;
         const release = (): Promise<void> =>
@@ -802,9 +814,23 @@ async function initializeInstalledUpdater(): Promise<void> {
             if (lease) await releasePromotionLease(lease);
             taskClaim.release();
             transition.release();
+            for (const browser of browserAdmissions) browser.release();
             installedUpdateAdmission = false;
+            applyLayout();
           })());
         try {
+          const routes = new Set([
+            ...managedChatGptRoutes,
+            ...(chatGptRoute ? [chatGptRoute] : []),
+          ]);
+          for (const route of routes) {
+            const browser = await route.acquireUpdateIdle();
+            if (!browser.ok) {
+              await release();
+              return browser;
+            }
+            browserAdmissions.push(browser);
+          }
           lease = await acquirePromotionLease(
             app.getPath("userData"),
             buildIdentity.buildId,
@@ -831,7 +857,8 @@ async function initializeInstalledUpdater(): Promise<void> {
               await stopAndConfirmComputerMcp();
               // Preserve route, grants, selected app and credentials. Only the
               // runtime attachment becomes stopped after a verified drain.
-              const recorded = await configuration?.recordSecureMcpStopped();
+              const recorded =
+                await configuration?.recordSecureMcpDrainedForUpdate();
               if (!recorded?.ok)
                 throw new Error("UPDATE_CONNECTOR_DRAIN_UNCONFIRMED");
             },
@@ -840,7 +867,7 @@ async function initializeInstalledUpdater(): Promise<void> {
             await release();
             return drained;
           }
-          return { ok: true, release };
+          return { ok: true, release, recheck };
         } catch {
           await release();
           return { ok: false, code: "UPDATE_STATE_UNREADABLE" };
@@ -8358,6 +8385,7 @@ function applyLayout(): void {
   });
   for (const [taskId, view] of taskViews) {
     const visible =
+      !installedUpdateAdmission &&
       layout.pageVisible &&
       taskId === (showBrowserHome ? SIGN_IN_SURFACE_ID : selectedTaskId);
     view.setVisible(visible);

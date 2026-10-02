@@ -77,6 +77,22 @@ const allControls = [
 ] as const;
 
 describe("installed update view", () => {
+  it.each([
+    ["UPDATE_BROWSER_BUSY", "active ChatGPT response"],
+    ["UPDATE_BROWSER_DRAFT", "unsent ChatGPT draft"],
+    ["UPDATE_BROWSER_STATE_UNKNOWN", "could not confirm that ChatGPT is idle"],
+  ])(
+    "explains fresh browser refusal %s without dispatching or hiding the offer",
+    (code, reason) => {
+      const f = fixture();
+      f.view.render({ ...ready, blockedBy: code });
+      expect(f.node("summary").textContent).toContain(reason);
+      expect(f.node("notice").hidden).toBe(false);
+      expect(f.node("notice-restart").disabled).toBe(true);
+      expect(f.node("check").disabled).toBe(false);
+      expect(f.onCommand).not.toHaveBeenCalled();
+    },
+  );
   it("exposes only measured recovery or rollback and never dispatches while rendering", () => {
     const f = fixture();
     f.view.render({
@@ -182,19 +198,19 @@ describe("installed update view", () => {
       expect(f.onCommand.mock.calls).toEqual([["restart"]]);
     });
 
-    it(`dismisses Later from ${prefix || "Preferences "}and retains Settings controls`, () => {
+    it(`defers Later from ${prefix || "Preferences "}and keeps the update discoverable`, () => {
       const f = fixture();
       f.view.render(ready);
       f.node(`${prefix}later`).click();
       expect(f.onCommand.mock.calls).toEqual([["later"]]);
-      expect(f.node("notice").hidden).toBe(true);
+      expect(f.node("notice").hidden).toBe(false);
       expect(f.node("restart").hidden).toBe(false);
       expect(f.node("restart").disabled).toBe(false);
       f.view.render({ ...ready, deferred: true });
-      expect(f.node("notice").hidden).toBe(true);
+      expect(f.node("notice").hidden).toBe(false);
       expect(f.node("restart").disabled).toBe(false);
       f.node("notice-restart").click();
-      expect(f.onCommand.mock.calls).toEqual([["later"]]);
+      expect(f.onCommand.mock.calls).toEqual([["later"], ["restart"]]);
       f.node("restart").click();
       expect(f.onCommand.mock.calls).toEqual([["later"], ["restart"]]);
     });
@@ -299,6 +315,17 @@ describe("installed update view", () => {
     expect(f.node("summary").textContent).not.toContain(unsafe);
     f.view.render({ phase: "failed", code: unsafe, recoveryRequired: true });
     expect(f.node("summary").textContent).not.toContain(unsafe);
+  });
+
+  it("keeps a recovered deferred update visible in the sidebar without taking focus", () => {
+    const f = fixture();
+    f.view.render({ ...ready, deferred: true });
+    expect(f.node("notice").hidden).toBe(false);
+    expect(f.node("notice-copy").textContent).toContain("Saved for later");
+    expect(f.node("notice-restart").disabled).toBe(false);
+    expect(f.node("notice-later").disabled).toBe(true);
+    expect(f.document.activeElement).toBe(f.browserFocus);
+    expect(f.onCommand).not.toHaveBeenCalled();
   });
 
   it("preserves focus and navigation across every render", () => {
