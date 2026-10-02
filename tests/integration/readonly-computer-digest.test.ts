@@ -176,6 +176,29 @@ describe("closed full/window public read response", () => {
     page: { offset: 10, size: 100, nextOffset: 11 },
   };
 
+  it("refuses a file size beyond the exact integer boundary", () => {
+    const requested = { offset: 0, length: 4 };
+    const output = {
+      ...window,
+      page: { offset: 0, size: Number.MAX_SAFE_INTEGER, nextOffset: 1 },
+    };
+    expect(
+      ReadonlyComputerCallResponseSchema.safeParse(response(output, requested))
+        .success,
+    ).toBe(true);
+    expect(
+      ReadonlyComputerCallResponseSchema.safeParse(
+        response(
+          {
+            ...output,
+            page: { ...output.page, size: Number.MAX_SAFE_INTEGER + 1 },
+          },
+          requested,
+        ),
+      ).success,
+    ).toBe(false);
+  });
+
   it.each([
     [
       "full Unicode byte undercount",
