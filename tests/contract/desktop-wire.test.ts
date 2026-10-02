@@ -280,3 +280,43 @@ it("cleans up its exact owned child after fatal timeout without an explicit clos
     state: "unavailable",
   });
 });
+
+it("isolates a throwing observer from a response in the same frame buffer", async () => {
+  const { client, child } = await fixture(`
+const context={profileId:'test',backendGeneration:'verified'};
+function encode(value){const body=Buffer.from(JSON.stringify(value));const h=Buffer.alloc(4);h.writeUInt32BE(body.length);return Buffer.concat([h,body]);}
+let input=Buffer.alloc(0),sequence=0;
+process.stdin.on('data',chunk=>{input=Buffer.concat([input,chunk]);while(input.length>=4){const n=input.readUInt32BE();if(input.length<4+n)return;const req=JSON.parse(input.subarray(4,4+n));input=input.subarray(4+n);const response={jsonrpc:'2.0',id:req.id,result:{status:'ok',requestId:req.id,context,data:req.method==='core.handshake'?{protocolMajor:1,protocolMinor:0,buildId:'k0-test',profileId:'test',backendGeneration:'verified',capabilities:['core.status'],maxFrameBytes:1048576}:{}}};
+const frames=req.method==='core.handshake'?[encode(response)]:[encode({jsonrpc:'2.0',method:'core.event',params:{context,stream:'status',sequence:String(++sequence),kind:'changed',data:{}}}),encode(response)];process.stdout.write(Buffer.concat(frames));
+}});`);
+  try {
+    await client.handshake(
+      {
+        protocolMajor: 1,
+        protocolMinor: 0,
+        buildId: "k0-test",
+        profileId: "test",
+      },
+      2000,
+    );
+    let failedCalls = 0;
+    const sequences: string[] = [];
+    client.subscribe(() => {
+      failedCalls++;
+      throw new Error("local observer failure");
+    });
+    client.subscribe((event) => sequences.push(event.sequence));
+    for (const id of ["observer-response-1", "observer-response-2"]) {
+      await expect(
+        client.request("core.status", {}, { id }),
+      ).resolves.toMatchObject({ status: "ok", requestId: id });
+    }
+    expect(failedCalls).toBe(1);
+    expect(sequences).toEqual(["1", "2"]);
+    expect(client.cleanupState).toBe("none");
+    expect(child.exitCode).toBeNull();
+    expect(child.signalCode).toBeNull();
+  } finally {
+    await client.close();
+  }
+});

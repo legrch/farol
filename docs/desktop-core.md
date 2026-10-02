@@ -16,7 +16,7 @@ Every response echoes request and operation IDs. Outcomes are `ok`, `unavailable
 
 PID, uint64 counters and sequences use canonical decimal strings (0..18446744073709551615). Safe bounded integer fields use JSON numbers. Timestamps are UTC RFC3339 with up to nine fractional digits. File ranges are UTF-8 byte offsets, never JS UTF-16 indexes. Transport does not add raw filesystem byte-name support. Module adapters own their independent app/contract DTO conversion.
 
-Events bind context, stream and decimal sequence. The client rejects old incarnations/regressions and marks gaps stale; an event cannot change its trusted incarnation. No event-producing business service is enabled in K0. Authoritative resnapshot/retention, cancellation, durable operation binding and delivery acknowledgement remain module-owned integration work.
+Events bind context, stream and decimal sequence. The client rejects old incarnations/regressions and marks gaps stale; an event cannot change its trusted incarnation. A throwing event observer is unsubscribed; remaining observers and frame parsing continue without changing transport or pending outcomes. No event-producing business service is enabled in K0. Authoritative resnapshot/retention, cancellation, durable operation binding and delivery acknowledgement remain module-owned integration work.
 
 ## Composition and next read slice
 

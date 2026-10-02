@@ -223,8 +223,14 @@ export class Client {
       if (sequence !== previous + 1n || event.kind === "gap")
         this.stale.add(event.stream);
       this.sequences.set(event.stream, sequence);
-      for (const listener of this.listeners)
-        listener(event, this.stale.has(event.stream));
+      for (const listener of this.listeners) {
+        try {
+          listener(event, this.stale.has(event.stream));
+        } catch {
+          // A local observer failure cannot invalidate wire data or pending work.
+          this.listeners.delete(listener);
+        }
+      }
       return;
     }
     if (!validate("Response", value)) {
