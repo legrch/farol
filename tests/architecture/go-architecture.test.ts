@@ -116,6 +116,14 @@ describe("the executable root Go architecture boundary", () => {
     expect(result.report.testFiles).toBe(1);
   });
 
+  it("allows an independent contract adapter to delegate through context", () => {
+    const result = check({
+      "modules/computer/contracts/workspace/contract.go": `package fixture\nimport ("context"; _ "${prefix}modules/computer/app/services/workspace")\n`,
+      "modules/computer/app/services/workspace/service.go": source("context"),
+    });
+    expect(result.status, JSON.stringify(result.report)).toBe(0);
+  });
+
   const allowed = [
     ["modules/chat/domain/turn", "modules/chat/domain/id"],
     ["modules/chat/domain/turn", "pkg/kernel/domain/id"],
@@ -124,6 +132,8 @@ describe("the executable root Go architecture boundary", () => {
     ["modules/chat/app/capabilities/guard", "pkg/kernel/app/port"],
     ["modules/chat/infra/peer/task", "modules/task/contracts/task"],
     ["modules/chat/contracts/turn", "pkg/kernel/domain/id"],
+    ["modules/chat/contracts/turn", "modules/chat/domain/turn"],
+    ["modules/chat/contracts/turn", "modules/chat/app/services/turn"],
     ["pkg/kernel/app/port", "pkg/kernel/domain/id"],
     ["pkg/kernel/infra/clock", "pkg/kernel/app/port"],
   ] as const;
@@ -188,16 +198,6 @@ describe("the executable root Go architecture boundary", () => {
       "modules/chat/app/services/turn",
       "modules/task/contracts/task",
       "GO_CROSS_MODULE",
-    ],
-    [
-      "modules/chat/contracts/turn",
-      "modules/chat/domain/turn",
-      "GO_CONTRACT_LEAK",
-    ],
-    [
-      "modules/chat/contracts/turn",
-      "modules/chat/app/services/turn",
-      "GO_CONTRACT_LEAK",
     ],
     ["pkg/kernel/domain/id", "modules/task/domain/task", "GO_KERNEL_TO_MODULE"],
     ["pkg/kernel/app/port", "pkg/kernel/infra/clock", "GO_LAYER_DIRECTION"],

@@ -1,0 +1,233 @@
+{
+  "generator": "farol-wire/1",
+  "protocolMajor": 1,
+  "protocolMinor": 0,
+  "maxFrameBytes": 1048576,
+  "maxDepth": 32,
+  "maxRequests": 4096,
+  "methods": {
+    "core.handshake": "core",
+    "core.status": "core",
+    "core.operation.status": "operation",
+    "computer.workspace.read": "computer",
+    "task.create": "task",
+    "chat.turn": "chat",
+    "release.status": "release"
+  },
+  "definitions": {
+    "Context": {
+      "type": "object",
+      "fields": {
+        "profileId": {
+          "type": "id"
+        },
+        "backendGeneration": {
+          "type": "id"
+        }
+      }
+    },
+    "Handshake": {
+      "type": "object",
+      "fields": {
+        "protocolMajor": {
+          "type": "uint32"
+        },
+        "protocolMinor": {
+          "type": "uint32"
+        },
+        "buildId": {
+          "type": "text"
+        },
+        "profileId": {
+          "type": "id"
+        }
+      }
+    },
+    "Identity": {
+      "type": "object",
+      "fields": {
+        "protocolMajor": {
+          "type": "uint32"
+        },
+        "protocolMinor": {
+          "type": "uint32"
+        },
+        "buildId": {
+          "type": "text"
+        },
+        "profileId": {
+          "type": "id"
+        },
+        "backendGeneration": {
+          "type": "id"
+        },
+        "capabilities": {
+          "type": "text[]"
+        },
+        "maxFrameBytes": {
+          "type": "uint32"
+        }
+      }
+    },
+    "Call": {
+      "type": "object",
+      "fields": {
+        "context": {
+          "type": "Context",
+          "optional": true
+        },
+        "operationId": {
+          "type": "id",
+          "optional": true
+        },
+        "body": {
+          "type": "json"
+        }
+      }
+    },
+    "Request": {
+      "type": "object",
+      "fields": {
+        "jsonrpc": {
+          "type": "text",
+          "values": ["2.0"]
+        },
+        "id": {
+          "type": "id"
+        },
+        "method": {
+          "type": "text"
+        },
+        "params": {
+          "type": "Call"
+        }
+      }
+    },
+    "Outcome": {
+      "type": "object",
+      "fields": {
+        "status": {
+          "type": "text",
+          "values": ["ok", "unavailable", "unsupported", "refused", "unknown"]
+        },
+        "requestId": {
+          "type": "id"
+        },
+        "context": {
+          "type": "Context"
+        },
+        "operationId": {
+          "type": "id",
+          "optional": true
+        },
+        "data": {
+          "type": "json",
+          "optional": true
+        },
+        "code": {
+          "type": "text",
+          "optional": true
+        }
+      }
+    },
+    "Fault": {
+      "type": "object",
+      "fields": {
+        "code": {
+          "type": "int32"
+        },
+        "message": {
+          "type": "text"
+        },
+        "data": {
+          "type": "json",
+          "optional": true
+        }
+      }
+    },
+    "Response": {
+      "type": "object",
+      "fields": {
+        "jsonrpc": {
+          "type": "text",
+          "values": ["2.0"]
+        },
+        "id": {
+          "type": "nullableId"
+        },
+        "result": {
+          "type": "Outcome",
+          "optional": true
+        },
+        "error": {
+          "type": "Fault",
+          "optional": true
+        }
+      }
+    },
+    "Event": {
+      "type": "object",
+      "fields": {
+        "jsonrpc": {
+          "type": "text",
+          "values": ["2.0"]
+        },
+        "method": {
+          "type": "text",
+          "values": ["core.event"]
+        },
+        "params": {
+          "type": "EventData"
+        }
+      }
+    },
+    "EventData": {
+      "type": "object",
+      "fields": {
+        "context": {
+          "type": "Context"
+        },
+        "stream": {
+          "type": "id"
+        },
+        "sequence": {
+          "type": "decimal"
+        },
+        "kind": {
+          "type": "text",
+          "values": ["snapshot", "changed", "gap"]
+        },
+        "data": {
+          "type": "json"
+        }
+      }
+    },
+    "Status": {
+      "type": "object",
+      "fields": {
+        "pid": {
+          "type": "decimal"
+        },
+        "startedAt": {
+          "type": "utc"
+        },
+        "uptimeNanoseconds": {
+          "type": "decimal"
+        },
+        "buildId": {
+          "type": "text"
+        },
+        "profileId": {
+          "type": "id"
+        },
+        "backendGeneration": {
+          "type": "id"
+        }
+      }
+    },
+    "Empty": {
+      "type": "object",
+      "fields": {}
+    }
+  }
+}

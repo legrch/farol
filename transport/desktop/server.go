@@ -1,0 +1,192 @@
+package desktop
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"strconv"
+	"time"
+
+	wire "github.com/legrch/farol/gen/desktop/v1"
+	"github.com/legrch/farol/pkg/ipc"
+)
+
+// Request belongs to this adapter. Module adapters map it to independent contracts.
+type Request struct {
+	RequestID   string
+	OperationID string
+	Body        json.RawMessage
+}
+type Outcome struct {
+	Status string
+	Code   string
+	Data   json.RawMessage
+}
+type Method struct {
+	Mutation bool
+	Handle   func(context.Context, Request) (*Outcome, error)
+}
+type Config struct {
+	BuildID    string
+	ProfileID  string
+	Generation string
+	Methods    map[string]Method
+}
+type Server struct {
+	config    Config
+	started   time.Time
+	connected bool
+	seen      map[string]bool
+}
+
+func New(config Config) (*Server, error) {
+	identity := wire.Identity{ProtocolMajor: wire.ProtocolMajor, ProtocolMinor: wire.ProtocolMinor, BuildId: config.BuildID, ProfileId: config.ProfileID, BackendGeneration: config.Generation, Capabilities: []string{"core.status"}, MaxFrameBytes: ipc.MaxFrameBytes}
+	if err := validate("Identity", identity); err != nil {
+		return nil, err
+	}
+	methods := make(map[string]Method, len(config.Methods))
+	for name, method := range config.Methods {
+		if _, ok := wire.Methods[name]; !ok || name == "core.handshake" || name == "core.status" || name == "core.operation.status" || method.Handle == nil {
+			return nil, errors.New("invalid method registration")
+		}
+		methods[name] = method
+	}
+	config.Methods = methods
+	return &Server{config: config, started: time.Now(), seen: make(map[string]bool)}, nil
+}
+
+// Serve uses exactly one admitted inherited pipe. It never starts a listener or retries.
+func (s *Server) Serve(ctx context.Context, in io.Reader, out io.Writer) error {
+	for {
+		data, err := ipc.ReadFrame(in)
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("protocol frame: %w", err)
+		}
+		response := s.dispatch(ctx, data)
+		encoded, err := json.Marshal(response)
+		if err != nil {
+			return err
+		}
+		if err := validate("Response", response); err != nil {
+			return err
+		}
+		if err := ipc.WriteFrame(out, encoded); err != nil {
+			return fmt.Errorf("response delivery unknown: %w", err)
+		}
+	}
+}
+
+func (s *Server) dispatch(ctx context.Context, data []byte) wire.Response {
+	if err := ipc.ValidateJSON(data); err != nil {
+		return fault("", -32700, "invalid JSON")
+	}
+	if err := wire.Validate("Request", data); err != nil {
+		return fault("", -32600, "invalid request")
+	}
+	var req wire.Request
+	if err := json.Unmarshal(data, &req); err != nil {
+		return fault("", -32600, "invalid request")
+	}
+	if s.seen[req.Id] {
+		return fault(req.Id, -32600, "duplicate request ID")
+	}
+	if len(s.seen) >= 4096 {
+		return fault(req.Id, -32000, "request budget exhausted")
+	}
+	s.seen[req.Id] = true
+	if req.Method == "core.handshake" {
+		return s.handshake(req)
+	}
+	if !s.connected {
+		return fault(req.Id, -32001, "handshake required")
+	}
+	expected := s.context()
+	if req.Params.Context == nil || *req.Params.Context != expected {
+		return fault(req.Id, -32002, "stale backend context")
+	}
+	if _, known := wire.Methods[req.Method]; !known {
+		return fault(req.Id, -32601, "unknown method")
+	}
+	if req.Method == "core.status" {
+		if req.Params.OperationId != nil || wire.Validate("Empty", req.Params.Body) != nil {
+			return fault(req.Id, -32602, "invalid status parameters")
+		}
+		data, _ := json.Marshal(wire.Status{Pid: strconv.Itoa(os.Getpid()), StartedAt: s.started.UTC().Format(time.RFC3339Nano), UptimeNanoseconds: strconv.FormatInt(time.Since(s.started).Nanoseconds(), 10), BuildId: s.config.BuildID, ProfileId: s.config.ProfileID, BackendGeneration: s.config.Generation})
+		return s.result(req, &Outcome{Status: "ok", Data: data})
+	}
+	if req.Method == "core.operation.status" {
+		return s.result(req, &Outcome{Status: "unsupported", Code: "operation_owner_unavailable"})
+	}
+	method, exists := s.config.Methods[req.Method]
+	if !exists {
+		return s.result(req, &Outcome{Status: "unavailable", Code: "capability_unavailable"})
+	}
+	if method.Mutation != (req.Params.OperationId != nil) {
+		return fault(req.Id, -32602, "invalid operation identity")
+	}
+	operationID := ""
+	if req.Params.OperationId != nil {
+		operationID = *req.Params.OperationId
+	}
+	outcome, err := method.Handle(ctx, Request{RequestID: req.Id, OperationID: operationID, Body: req.Params.Body})
+	// Only the owner can establish the effect result. A handler failure is unknown.
+	if err != nil || outcome == nil {
+		return s.result(req, &Outcome{Status: "unknown", Code: "owner_outcome_unknown"})
+	}
+	return s.result(req, outcome)
+}
+
+func (s *Server) handshake(req wire.Request) wire.Response {
+	if s.connected || req.Params.Context != nil || req.Params.OperationId != nil {
+		return fault(req.Id, -32001, "invalid handshake lifecycle")
+	}
+	if err := wire.Validate("Handshake", req.Params.Body); err != nil {
+		return fault(req.Id, -32602, "invalid handshake")
+	}
+	var hello wire.Handshake
+	if err := json.Unmarshal(req.Params.Body, &hello); err != nil {
+		return fault(req.Id, -32602, "invalid handshake")
+	}
+	if hello.ProtocolMajor != wire.ProtocolMajor || hello.ProtocolMinor > wire.ProtocolMinor || hello.BuildId != s.config.BuildID || hello.ProfileId != s.config.ProfileID {
+		return fault(req.Id, -32003, "incompatible backend identity")
+	}
+	caps := []string{"core.status"}
+	// Stable capability order is part of deterministic handshake generation.
+	for _, name := range wire.MethodNames {
+		if _, ok := s.config.Methods[name]; ok {
+			caps = append(caps, name)
+		}
+	}
+	identity := wire.Identity{ProtocolMajor: wire.ProtocolMajor, ProtocolMinor: wire.ProtocolMinor, BuildId: s.config.BuildID, ProfileId: s.config.ProfileID, BackendGeneration: s.config.Generation, Capabilities: caps, MaxFrameBytes: ipc.MaxFrameBytes}
+	data, _ := json.Marshal(identity)
+	s.connected = true
+	return s.result(req, &Outcome{Status: "ok", Data: data})
+}
+func (s *Server) context() wire.Context {
+	return wire.Context{ProfileId: s.config.ProfileID, BackendGeneration: s.config.Generation}
+}
+func (s *Server) result(req wire.Request, outcome *Outcome) wire.Response {
+	return wire.Response{Jsonrpc: "2.0", Id: &req.Id, Result: &wire.Outcome{Status: outcome.Status, RequestId: req.Id, Context: s.context(), OperationId: req.Params.OperationId, Data: outcome.Data, Code: optional(outcome.Code)}}
+}
+func fault(id string, code int32, message string) wire.Response {
+	return wire.Response{Jsonrpc: "2.0", Id: optional(id), Error: &wire.Fault{Code: code, Message: message}}
+}
+func optional(value string) *string {
+	if value == "" {
+		return nil
+	}
+	return &value
+}
+func validate(name string, value interface{}) error {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+	return wire.Validate(name, data)
+}

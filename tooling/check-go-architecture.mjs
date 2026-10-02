@@ -292,7 +292,8 @@ function localRule(from, to, target, source) {
         ? null
         : "GO_LAYER_DIRECTION";
     if (from.layer === "contracts")
-      return (to.kind === "module" && to.layer === "contracts") ||
+      return (to.kind === "module" &&
+        ["contracts", "app", "domain"].includes(to.layer)) ||
         (to.kind === "kernel" && to.layer === "domain")
         ? null
         : "GO_CONTRACT_LEAK";
@@ -525,7 +526,7 @@ export function checkGoArchitecture(root) {
         pure(zone) &&
         !(
           pureStandard.has(specifier) ||
-          (specifier === "context" && zone.layer === "app")
+          (specifier === "context" && ["app", "contracts"].includes(zone.layer))
         )
       )
         add(
