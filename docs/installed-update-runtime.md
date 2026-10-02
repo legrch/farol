@@ -38,17 +38,24 @@ unrecognized controls refuse admission. The observation returns a classification
 never composer or conversation text. Desktop hides the browser views and holds
 their native keyboard/mouse input fence while update admission is reserved.
 After initial idle proof, the route acquires its own acknowledged debugger pause
-and repeats the content-free DOM inspection through `Runtime.evaluate`. The pause
+and repeats the content-free DOM inspection through `Runtime.evaluate`. A quiet
+document receives one inspector `void 0` evaluation so the pending pause has a
+statement to stop on; its command reply alone never proves a paused page. The pause
 holds ordinary page scripts and their queued timers through asynchronous package
 preparation, record writes and helper handoff. An existing debugger or DevTools,
 unconfirmed pause, unexpected resume or detach is uncertainty, never idle. No
 other debugger session is detached or adopted. Confirmed refusal resumes the
 page once before releasing admission; unconfirmed resume keeps admission fenced
-until explicit recovery or Quit. Ordinary activity probes are not queued into the
+until normal Quit and reopen. This returns `UPDATE_BROWSER_RELEASE_UNCONFIRMED`
+when no helper is outstanding, not an unknown helper handoff or an offered
+recovery operation. Admission and connector restart remain fenced in that
+lifetime, with no repeated resume or detach command. An independently unknown
+preparation outcome retains its original uncertainty. Ordinary activity probes are not queued into the
 paused renderer. The
 same document generation and URL are rechecked after package verification and
 again after copying, before durable helper dispatch. A failed observation or
-late state change releases admission without launching the helper. Standalone
+late state change attempts to release admission without launching the helper.
+Only confirmed release restores normal admission. Standalone
 browser windows remain unqualified by this embedded-only path.
 
 If preparation is refused after a confirmed connector drain, Desktop restores

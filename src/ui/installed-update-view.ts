@@ -16,6 +16,8 @@ const blockedMessages: Readonly<Record<string, string>> = {
     "Send or clear the unsent ChatGPT draft and attachments before restarting.",
   UPDATE_BROWSER_STATE_UNKNOWN:
     "Farol could not confirm that ChatGPT is idle. Inspect its window, then check again before restarting.",
+  UPDATE_BROWSER_RELEASE_UNCONFIRMED:
+    "Farol could not confirm that ChatGPT resumed. Quit Farol and reopen it before updating.",
   UPDATE_WORK_PENDING: "Finish or cancel active work before restarting.",
   UPDATE_WORK_DRAIN_UNCONFIRMED:
     "Farol could not confirm that local work has finished. Review its current result before restarting.",
@@ -33,7 +35,7 @@ function description(view: InstalledUpdateView): string {
     case "unavailable":
       return "Update checks are available in the installed Farol owner beta. Install and open the owner beta to use updates.";
     case "recovery":
-      return `An interrupted update was found. Restart to finish recovery of ${updateName(view.version)}. No update will be downloaded or applied again.${view.blockedBy ? " Finish active work before restarting." : ""}`;
+      return `An interrupted update was found. Restart to finish recovery of ${updateName(view.version)}. No update will be downloaded or applied again.${view.blockedBy ? ` ${blockedMessages[view.blockedBy] ?? "Finish active work before restarting."}` : ""}`;
     case "idle":
       if (view.blockedBy)
         return (

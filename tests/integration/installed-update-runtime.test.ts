@@ -316,12 +316,15 @@ describe("installed updater composition (disposable filesystem and mocked native
     await controller!.close();
   });
   it.each([
-    ["restart", "obligationCount"],
-    ["rollback", "unreadableCount"],
-    ["recover", "changedCount"],
+    ["restart", "obligationCount", false],
+    ["rollback", "unreadableCount", false],
+    ["recover", "changedCount", false],
+    ["restart", "obligationCount", true],
+    ["rollback", "unreadableCount", true],
+    ["recover", "changedCount", true],
   ] as const)(
-    "checks durable Desktop %s obligations before stopping owned clients",
-    async (action, blocker) => {
+    "checks durable Desktop %s obligations, release failure=%s",
+    async (action, blocker, releaseUnconfirmed) => {
       let current = source;
       if (action !== "restart") {
         const first = await prepared();
@@ -369,6 +372,9 @@ describe("installed updater composition (disposable filesystem and mocked native
         ...options(),
         build: { ...build, version: current.version, buildId: current.buildId },
         acquireAdmission: async (desktopWorkSettled) => {
+          // The runtime must settle even an injected successful admission when
+          // its independent durable-work check refuses the operation.
+          if (releaseUnconfirmed) return { ok: true as const, release };
           const drained = await drainInstalledComputerWork({
             routeConfigured: true,
             exclusive: (work) => work(),
@@ -391,6 +397,10 @@ describe("installed updater composition (disposable filesystem and mocked native
       mocks.helper.mockClear();
       quit.mockClear();
       release.mockClear();
+      if (releaseUnconfirmed)
+        release.mockRejectedValue(
+          new Error("fixture browser resume unconfirmed"),
+        );
       if (action === "restart") await controller!.restart();
       else await controller!.restore(action);
       expect(stopOwnedClients).not.toHaveBeenCalled();
@@ -401,12 +411,20 @@ describe("installed updater composition (disposable filesystem and mocked native
             : action === "recover"
               ? "recovery"
               : "idle",
-        blockedBy: "UPDATE_WORK_PENDING",
+        blockedBy: releaseUnconfirmed
+          ? "UPDATE_BROWSER_RELEASE_UNCONFIRMED"
+          : "UPDATE_WORK_PENDING",
       });
       expect(openTaskReader).not.toHaveBeenCalled();
       expect(mocks.helper).not.toHaveBeenCalled();
       expect(quit).not.toHaveBeenCalled();
       expect(release).toHaveBeenCalledOnce();
+      if (releaseUnconfirmed) {
+        if (action === "restart") await controller!.restart();
+        else await controller!.restore(action);
+        expect(release).toHaveBeenCalledOnce();
+        expect(mocks.helper).not.toHaveBeenCalled();
+      }
       await controller!.close();
     },
   );
@@ -1648,6 +1666,99 @@ ${scenario === "missing" ? "" : `<key>CFBundleVersion</key><string>${scenario ==
       blockedBy: "UPDATE_WORK_PENDING",
     });
     expect(release).toHaveBeenCalledTimes(1);
+    expect(mocks.helper).not.toHaveBeenCalled();
+    expect(quit).not.toHaveBeenCalled();
+  });
+  it("reports a fenced release failure without inventing a helper handoff or retrying release", async () => {
+    const controller = await prepared();
+    mocks.exec.mockResolvedValue({
+      stdout: JSON.stringify({
+        drained: false,
+        obligationCount: 1,
+        unreadableCount: 0,
+        changedCount: 0,
+      }),
+    });
+    release.mockRejectedValue(new Error("fixture browser resume unconfirmed"));
+    await controller.restart();
+    expect(controller.snapshot()).toMatchObject({
+      phase: "ready",
+      blockedBy: "UPDATE_BROWSER_RELEASE_UNCONFIRMED",
+    });
+    expect(JSON.parse(await fs.readFile(ready, "utf8")).operation).toBeNull();
+    await controller.restart();
+    expect(controller.snapshot()).toMatchObject({
+      phase: "ready",
+      blockedBy: "UPDATE_BROWSER_RELEASE_UNCONFIRMED",
+    });
+    expect(release).toHaveBeenCalledOnce();
+    expect(mocks.helper).not.toHaveBeenCalled();
+    expect(quit).not.toHaveBeenCalled();
+  });
+  it("keeps unknown preparation effects unknown when browser release also fails", async () => {
+    const controller = await prepared();
+    mocks.copyApp.mockRejectedValue(new Error("fixture copy interrupted"));
+    vi.spyOn(fs, "rm").mockRejectedValue(
+      new Error("fixture cleanup unconfirmed"),
+    );
+    release.mockRejectedValue(new Error("fixture browser resume unconfirmed"));
+    await controller.restart();
+    expect(controller.snapshot()).toMatchObject({
+      phase: "failed",
+      code: "UPDATE_STAGING_OUTCOME_UNKNOWN",
+      recoveryRequired: true,
+    });
+    expect(mocks.helper).not.toHaveBeenCalled();
+    expect(release).toHaveBeenCalledOnce();
+    expect(quit).not.toHaveBeenCalled();
+  });
+  it("classifies an admission exception before helper dispatch and retains the refusal", async () => {
+    const acquireAdmission = vi.fn(async () => {
+      throw new Error("fixture admission release unconfirmed");
+    });
+    const controller = await createInstalledUpdateRuntime({
+      ...options(),
+      acquireAdmission,
+    });
+    await controller!.initialize();
+    await controller!.check();
+    await controller!.restart();
+    expect(controller!.snapshot()).toMatchObject({
+      phase: "ready",
+      blockedBy: "UPDATE_BROWSER_RELEASE_UNCONFIRMED",
+    });
+    await controller!.restart();
+    expect(acquireAdmission).toHaveBeenCalledOnce();
+    expect(mocks.helper).not.toHaveBeenCalled();
+  });
+  it("settles admission when native cleanup and its durable failure record both reject", async () => {
+    const controller = await prepared();
+    const mkdir = fs.mkdir.bind(fs);
+    vi.spyOn(fs, "mkdir").mockImplementation(async (directory, options) => {
+      const value = String(directory);
+      if (
+        path.dirname(value) === path.join(userData, "installed-updates") &&
+        /^[a-f0-9]{32}$/u.test(path.basename(value))
+      )
+        throw new Error("fixture operation directory failed");
+      return mkdir(directory, options);
+    });
+    mocks.discardPackage.mockRejectedValue(
+      new Error("fixture native cleanup failed"),
+    );
+    const rename = fs.rename.bind(fs);
+    vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+      if (String(to).endsWith("package-cleanup-pending.json"))
+        throw new Error("fixture cleanup record failed");
+      return rename(from, to);
+    });
+    await controller.restart();
+    expect(controller.snapshot()).toMatchObject({
+      phase: "failed",
+      code: "UPDATE_STAGING_OUTCOME_UNKNOWN",
+      recoveryRequired: true,
+    });
+    expect(release).toHaveBeenCalledOnce();
     expect(mocks.helper).not.toHaveBeenCalled();
     expect(quit).not.toHaveBeenCalled();
   });

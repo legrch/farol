@@ -1588,10 +1588,18 @@ export class ChatGptRoute {
                 ]),
               );
             } catch {
-              throw new Error("UPDATE_BROWSER_STATE_UNKNOWN");
+              throw new Error("UPDATE_BROWSER_RELEASE_UNCONFIRMED");
             }
           }
-          if (attached) debuggerClient.detach();
+          if (attached) {
+            try {
+              debuggerClient.detach();
+            } catch {
+              throw new Error("UPDATE_BROWSER_RELEASE_UNCONFIRMED");
+            }
+            attached = false;
+            paused = false;
+          }
         }
         debuggerClient.removeListener("message", message);
         debuggerClient.removeListener("detach", detached);
@@ -1681,19 +1689,50 @@ export class ChatGptRoute {
         confirmPause = resolve;
       });
       await bounded(
-        Promise.all([debuggerClient.sendCommand("Debugger.pause"), stopped]),
+        (async () => {
+          await debuggerClient.sendCommand("Debugger.pause");
+          if (!paused) {
+            // A quiet hidden document has no next statement to acknowledge pause.
+            // This no-op supplies one without touching DOM, credentials or tasks.
+            // Its reply may wait for resume; only the actual paused event admits.
+            void debuggerClient
+              .sendCommand("Runtime.evaluate", {
+                expression: "void 0",
+                returnByValue: true,
+              })
+              .catch(() => undefined);
+          }
+          await stopped;
+        })(),
       );
       pauseRequired = true;
     } catch {
       // Detach only this owned session when pause acquisition was unconfirmed.
       // Closing the inspector session also cancels its pending pause request.
-      if (attached) debuggerClient.detach();
-      await release();
+      if (attached) {
+        try {
+          debuggerClient.detach();
+        } catch {
+          return { ok: false, code: "UPDATE_BROWSER_RELEASE_UNCONFIRMED" };
+        }
+        // Native detach success is sufficient; its event may arrive later.
+        attached = false;
+        paused = false;
+      }
+      try {
+        await release();
+      } catch {
+        return { ok: false, code: "UPDATE_BROWSER_RELEASE_UNCONFIRMED" };
+      }
       return { ok: false, code: "UPDATE_BROWSER_STATE_UNKNOWN" };
     }
     const held = await recheck();
     if (!held.ok) {
-      await release();
+      try {
+        await release();
+      } catch {
+        return { ok: false, code: "UPDATE_BROWSER_RELEASE_UNCONFIRMED" };
+      }
       return held;
     }
     return { ok: true, recheck, release };

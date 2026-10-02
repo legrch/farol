@@ -812,19 +812,24 @@ describe("installed-update browser admission", () => {
         attached = false;
         debuggerClient.emit("detach", {}, "target_closed");
       }),
-      sendCommand: vi.fn(async (method: string): Promise<unknown> => {
-        if (method === "Debugger.pause" || method === "Debugger.resume")
-          debuggerClient.emit(
-            "message",
-            {},
-            method === "Debugger.pause"
-              ? "Debugger.paused"
-              : "Debugger.resumed",
-          );
-        return method === "Runtime.evaluate"
-          ? { result: { type: "object", value: await execute() } }
-          : {};
-      }),
+      sendCommand: vi.fn(
+        async (
+          method: string,
+          _parameters?: Readonly<{ expression?: string }>,
+        ): Promise<unknown> => {
+          if (method === "Debugger.pause" || method === "Debugger.resume")
+            debuggerClient.emit(
+              "message",
+              {},
+              method === "Debugger.pause"
+                ? "Debugger.paused"
+                : "Debugger.resumed",
+            );
+          return method === "Runtime.evaluate"
+            ? { result: { type: "object", value: await execute() } }
+            : {};
+        },
+      ),
     });
     Object.assign(surface.webContents, {
       executeJavaScript: execute,
@@ -855,6 +860,149 @@ describe("installed-update browser admission", () => {
     expect(debuggerClient.detach).toHaveBeenCalledOnce();
     expect(surface.webContents.listenerCount("before-input-event")).toBe(0);
     expect(await candidate.open()).toEqual({ status: "opened" });
+  });
+  it("triggers a quiet page and waits for the actual delayed pause, not a command acknowledgment", async () => {
+    vi.useFakeTimers();
+    try {
+      const { candidate, debuggerClient } = updatePage();
+      const original = debuggerClient.sendCommand.getMockImplementation()!;
+      let finishTrigger: (() => void) | undefined;
+      debuggerClient.sendCommand.mockImplementation(
+        async (method, parameters) => {
+          if (method === "Debugger.pause") return {};
+          if (
+            method === "Runtime.evaluate" &&
+            parameters?.expression === "void 0"
+          ) {
+            setTimeout(
+              () => debuggerClient.emit("message", {}, "Debugger.paused"),
+              1_500,
+            );
+            return new Promise((resolve) => {
+              finishTrigger = () => resolve({});
+            });
+          }
+          if (method === "Debugger.resume") finishTrigger?.();
+          return original(method, parameters);
+        },
+      );
+      let settled = false;
+      const pending = candidate.acquireUpdateIdle().then((result) => {
+        settled = true;
+        return result;
+      });
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(settled).toBe(false);
+      expect(debuggerClient.sendCommand).toHaveBeenCalledWith(
+        "Runtime.evaluate",
+        {
+          expression: "void 0",
+          returnByValue: true,
+        },
+      );
+      await vi.advanceTimersByTimeAsync(500);
+      const admission = await pending;
+      if (!admission.ok) throw new Error(admission.code);
+      expect(await admission.recheck()).toEqual({ ok: true });
+      await admission.release();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it("keeps input fenced until a delayed resume event confirms release", async () => {
+    vi.useFakeTimers();
+    try {
+      const { candidate, debuggerClient, surface } = updatePage();
+      const admission = await candidate.acquireUpdateIdle();
+      if (!admission.ok) throw new Error(admission.code);
+      const original = debuggerClient.sendCommand.getMockImplementation()!;
+      debuggerClient.sendCommand.mockImplementation(
+        async (method, parameters) => {
+          if (method === "Debugger.resume") {
+            setTimeout(
+              () => debuggerClient.emit("message", {}, "Debugger.resumed"),
+              1_500,
+            );
+            return {};
+          }
+          return original(method, parameters);
+        },
+      );
+      const released = admission.release();
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(await candidate.open()).toEqual({ status: "unreachable" });
+      expect(surface.webContents.listenerCount("before-input-event")).toBe(1);
+      expect(debuggerClient.detach).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(500);
+      await released;
+      expect(await candidate.open()).toEqual({ status: "opened" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it("does not detach twice while its successful detach event is still pending", async () => {
+    const { candidate, debuggerClient, surface } = updatePage();
+    const original = debuggerClient.sendCommand.getMockImplementation()!;
+    debuggerClient.sendCommand.mockImplementation(
+      async (method, parameters) => {
+        if (method === "Debugger.pause")
+          throw new Error("fixture pause failed");
+        return original(method, parameters);
+      },
+    );
+    debuggerClient.detach.mockImplementation(() => {
+      queueMicrotask(() => debuggerClient.emit("detach", {}, "target_closed"));
+    });
+    expect(await candidate.acquireUpdateIdle()).toEqual({
+      ok: false,
+      code: "UPDATE_BROWSER_STATE_UNKNOWN",
+    });
+    expect(debuggerClient.detach).toHaveBeenCalledOnce();
+    expect(surface.webContents.listenerCount("before-input-event")).toBe(0);
+  });
+  it("classifies failed owned detach and preserves its fence without replay", async () => {
+    const { candidate, debuggerClient, surface } = updatePage();
+    const original = debuggerClient.sendCommand.getMockImplementation()!;
+    debuggerClient.sendCommand.mockImplementation(
+      async (method, parameters) => {
+        if (method === "Debugger.pause")
+          throw new Error("fixture pause failed");
+        return original(method, parameters);
+      },
+    );
+    debuggerClient.detach.mockImplementation(() => {
+      throw new Error("fixture detach unconfirmed");
+    });
+    expect(await candidate.acquireUpdateIdle()).toEqual({
+      ok: false,
+      code: "UPDATE_BROWSER_RELEASE_UNCONFIRMED",
+    });
+    expect(await candidate.open()).toEqual({ status: "unreachable" });
+    await candidate.acquireUpdateIdle();
+    expect(debuggerClient.detach).toHaveBeenCalledOnce();
+    expect(surface.webContents.listenerCount("before-input-event")).toBe(1);
+  });
+  it("disconnects its owned session if pause executes before its command rejects", async () => {
+    const { candidate, debuggerClient, surface } = updatePage();
+    const original = debuggerClient.sendCommand.getMockImplementation()!;
+    debuggerClient.sendCommand.mockImplementation(
+      async (method, parameters) => {
+        if (method === "Debugger.pause") {
+          debuggerClient.emit("message", {}, "Debugger.paused");
+          throw new Error("fixture late pause command failure");
+        }
+        return original(method, parameters);
+      },
+    );
+    expect(await candidate.acquireUpdateIdle()).toEqual({
+      ok: false,
+      code: "UPDATE_BROWSER_STATE_UNKNOWN",
+    });
+    expect(debuggerClient.detach).toHaveBeenCalledOnce();
+    expect(debuggerClient.sendCommand).not.toHaveBeenCalledWith(
+      "Debugger.resume",
+    );
+    expect(surface.webContents.listenerCount("before-input-event")).toBe(0);
   });
   it.each(["Debugger.resumed", "detach"])(
     "rejects loss of page-script pause via %s",
@@ -961,10 +1109,10 @@ describe("installed-update browser admission", () => {
       return original(method);
     });
     await expect(admission.release()).rejects.toThrow(
-      "UPDATE_BROWSER_STATE_UNKNOWN",
+      "UPDATE_BROWSER_RELEASE_UNCONFIRMED",
     );
     await expect(admission.release()).rejects.toThrow(
-      "UPDATE_BROWSER_STATE_UNKNOWN",
+      "UPDATE_BROWSER_RELEASE_UNCONFIRMED",
     );
     expect(await candidate.open()).toEqual({ status: "unreachable" });
     expect(

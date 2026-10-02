@@ -9,6 +9,7 @@ import { z } from "zod";
 import {
   InstalledUpdater,
   type ReadyUpdate,
+  type UpdateHandoff,
 } from "../../modules/release/app/installed-updater";
 import {
   discoverGithubUpdate,
@@ -478,6 +479,57 @@ export async function createInstalledUpdateRuntime(
   // close() only drains updater work; process exit releases this final fence.
   let heldAdmission: Extract<InstalledUpdateAdmission, { ok: true }> | null =
     null;
+  let admissionReleaseUnconfirmed = false;
+  const acquireAdmission = async (): Promise<InstalledUpdateAdmission> => {
+    if (admissionReleaseUnconfirmed)
+      return { ok: false, code: "UPDATE_BROWSER_RELEASE_UNCONFIRMED" };
+    try {
+      const admission = await options.acquireAdmission(drained);
+      if (
+        !admission.ok &&
+        admission.code === "UPDATE_BROWSER_RELEASE_UNCONFIRMED"
+      )
+        admissionReleaseUnconfirmed = true;
+      return admission;
+    } catch {
+      // Admission precedes every dispatch. An exception here cannot prove a
+      // released desktop, but it is not an unknown helper launch.
+      admissionReleaseUnconfirmed = true;
+      return { ok: false, code: "UPDATE_BROWSER_RELEASE_UNCONFIRMED" };
+    }
+  };
+  const settleAdmission = async (
+    admission: Extract<InstalledUpdateAdmission, { ok: true }>,
+    keep: () => boolean,
+    attempt: () => Promise<UpdateHandoff>,
+    unexpectedCode: () => string,
+  ): Promise<UpdateHandoff> => {
+    let outcome: UpdateHandoff;
+    try {
+      outcome = await attempt();
+    } catch {
+      // Cleanup's own durable error must still settle the original admission.
+      outcome = { status: "unknown", code: unexpectedCode() };
+    }
+    if (keep()) {
+      heldAdmission = admission;
+      return outcome;
+    }
+    try {
+      await admission.release();
+    } catch {
+      heldAdmission = admission;
+      admissionReleaseUnconfirmed = true;
+      // A throwing finally must not replace a classified unknown copy/cleanup
+      // outcome, or invent helper uncertainty on a confirmed blocked attempt.
+      if (outcome.status !== "unknown")
+        return {
+          status: "blocked",
+          code: "UPDATE_BROWSER_RELEASE_UNCONFIRMED",
+        };
+    }
+    return outcome;
+  };
   const readyFile = path.join(root, "ready.json");
   const cleanupFile = path.join(root, "package-cleanup-pending.json");
   const receiptFile = path.join(root, "last-update.json");
@@ -1357,6 +1409,11 @@ export async function createInstalledUpdateRuntime(
       return undefined;
     },
     restore: async (action) => {
+      if (admissionReleaseUnconfirmed)
+        return {
+          status: "blocked",
+          code: "UPDATE_BROWSER_RELEASE_UNCONFIRMED",
+        };
       if (heldAdmission)
         return { status: "unknown", code: "UPDATE_RESTORE_OUTCOME_UNKNOWN" };
       const op = restorable?.operation;
@@ -1369,125 +1426,144 @@ export async function createInstalledUpdateRuntime(
         return { status: "blocked", code: "UPDATE_RESTORE_NOT_READY" };
       if (action === "recover" && !(await originalHelperEnded(restorable!)))
         return { status: "blocked", code: "UPDATE_HELPER_EXIT_UNCONFIRMED" };
-      const admission = await options.acquireAdmission(drained);
+      const admission = await acquireAdmission();
       if (!admission.ok) return { status: "blocked", code: admission.code };
       let keepAdmission = false;
-      try {
-        if (!(await drained()))
-          return { status: "blocked", code: "UPDATE_WORK_PENDING" };
-        const journal = await readJournal(op);
-        const current = await readBuild(slot);
-        if (
-          current.buildId !== options.build.buildId ||
-          (!sameBuild(current, op.source) && !sameBuild(current, op.target))
-        )
-          return { status: "blocked", code: "UPDATE_SOURCE_IDENTITY_MISMATCH" };
-        const processStart = await captureInstalledProcessStart(process.pid);
-        let restoreIntent: z.infer<typeof RestoreIntent> = {
-          schema: "farol.update-restore-intent/1",
-          action,
-          operation: op,
-          priorPhase: journal.phase,
-          installedBefore: current,
-          helper: null,
-        };
-        const currentAdmission = await recheckAdmission(admission);
-        if (!currentAdmission.ok)
-          return { status: "blocked", code: currentAdmission.code };
-        await writeRecord(restoreFile, restoreIntent);
-        keepAdmission = true;
-        const handoff = await startInstalledUpdateHelper(
-          path.join(options.directory, "update-helper.py"),
-          {
-            action,
-            ...op,
-            drain: {
-              status: "reconciled",
-              acceptedSource: op.source.buildId,
-              acceptedTarget: op.target.buildId,
-            },
-            pid: process.pid,
-            processStart,
-            waitSeconds: 120,
-            relaunch: true,
-          },
-          {
-            recordSpawn: async (spawned) => {
-              operation = spawned;
-              if (spawned.pid === null)
-                throw new Error("UPDATE_HELPER_IDENTITY_UNKNOWN");
-              restoreIntent = {
-                ...restoreIntent,
-                helper: { pid: spawned.pid, processStart: null },
-              };
-              await writeRecord(restoreFile, restoreIntent);
-              restoreIntent = {
-                ...restoreIntent,
-                helper: {
-                  pid: spawned.pid,
-                  processStart: await captureInstalledProcessStart(spawned.pid),
-                },
-              };
-              await writeRecord(restoreFile, restoreIntent);
-            },
-          },
-        );
-        operation = handoff.operation;
-        if (
-          (handoff.status === "refused" || handoff.status === "not_started") &&
-          (await confirmedNoEffect(handoff))
-        ) {
+      const attempt = async (): Promise<UpdateHandoff> => {
+        try {
+          if (!(await drained()))
+            return { status: "blocked", code: "UPDATE_WORK_PENDING" };
+          const journal = await readJournal(op);
+          const current = await readBuild(slot);
           if (
-            (await readJournal(op)).phase !== journal.phase ||
-            !sameBuild(await readBuild(slot), current)
+            current.buildId !== options.build.buildId ||
+            (!sameBuild(current, op.source) && !sameBuild(current, op.target))
           )
+            return {
+              status: "blocked",
+              code: "UPDATE_SOURCE_IDENTITY_MISMATCH",
+            };
+          const processStart = await captureInstalledProcessStart(process.pid);
+          let restoreIntent: z.infer<typeof RestoreIntent> = {
+            schema: "farol.update-restore-intent/1",
+            action,
+            operation: op,
+            priorPhase: journal.phase,
+            installedBefore: current,
+            helper: null,
+          };
+          const currentAdmission = await recheckAdmission(admission);
+          if (!currentAdmission.ok)
+            return { status: "blocked", code: currentAdmission.code };
+          await writeRecord(restoreFile, restoreIntent);
+          keepAdmission = true;
+          const handoff = await startInstalledUpdateHelper(
+            path.join(options.directory, "update-helper.py"),
+            {
+              action,
+              ...op,
+              drain: {
+                status: "reconciled",
+                acceptedSource: op.source.buildId,
+                acceptedTarget: op.target.buildId,
+              },
+              pid: process.pid,
+              processStart,
+              waitSeconds: 120,
+              relaunch: true,
+            },
+            {
+              recordSpawn: async (spawned) => {
+                operation = spawned;
+                if (spawned.pid === null)
+                  throw new Error("UPDATE_HELPER_IDENTITY_UNKNOWN");
+                restoreIntent = {
+                  ...restoreIntent,
+                  helper: { pid: spawned.pid, processStart: null },
+                };
+                await writeRecord(restoreFile, restoreIntent);
+                restoreIntent = {
+                  ...restoreIntent,
+                  helper: {
+                    pid: spawned.pid,
+                    processStart: await captureInstalledProcessStart(
+                      spawned.pid,
+                    ),
+                  },
+                };
+                await writeRecord(restoreFile, restoreIntent);
+              },
+            },
+          );
+          operation = handoff.operation;
+          if (
+            (handoff.status === "refused" ||
+              handoff.status === "not_started") &&
+            (await confirmedNoEffect(handoff))
+          ) {
+            if (
+              (await readJournal(op)).phase !== journal.phase ||
+              !sameBuild(await readBuild(slot), current)
+            )
+              return {
+                status: "unknown",
+                code: "UPDATE_RESTORE_OUTCOME_UNKNOWN",
+              };
+            if (handoff.status === "not_started")
+              await writeRecord(restoreFile, {
+                schema: "farol.update-restore-intent/1",
+                action,
+                operation: op,
+                priorPhase: journal.phase,
+                notStartedAt: current,
+              });
+            await writeRecord(path.join(root, op.operationId, "refusal.json"), {
+              schema: "farol.update-refusal/1",
+              action,
+              operation: op,
+              code: handoff.reason,
+              priorPhase: journal.phase,
+            });
+            await clearRestoreIntent();
+            operation = null;
+            keepAdmission = false;
+            return {
+              status: "blocked",
+              code:
+                handoff.status === "not_started"
+                  ? "UPDATE_HELPER_NOT_STARTED"
+                  : "UPDATE_HELPER_REFUSED",
+            };
+          }
+          if (handoff.status !== "ready")
             return {
               status: "unknown",
               code: "UPDATE_RESTORE_OUTCOME_UNKNOWN",
             };
-          if (handoff.status === "not_started")
-            await writeRecord(restoreFile, {
-              schema: "farol.update-restore-intent/1",
-              action,
-              operation: op,
-              priorPhase: journal.phase,
-              notStartedAt: current,
-            });
-          await writeRecord(path.join(root, op.operationId, "refusal.json"), {
-            schema: "farol.update-refusal/1",
-            action,
-            operation: op,
-            code: handoff.reason,
-            priorPhase: journal.phase,
-          });
-          await clearRestoreIntent();
-          operation = null;
-          keepAdmission = false;
+          options.quit();
+          return { status: "accepted" };
+        } catch {
           return {
-            status: "blocked",
-            code:
-              handoff.status === "not_started"
-                ? "UPDATE_HELPER_NOT_STARTED"
-                : "UPDATE_HELPER_REFUSED",
+            status: keepAdmission ? "unknown" : "blocked",
+            code: keepAdmission
+              ? "UPDATE_RESTORE_OUTCOME_UNKNOWN"
+              : "UPDATE_RESTORE_PREPARE_FAILED",
           };
         }
-        if (handoff.status !== "ready")
-          return { status: "unknown", code: "UPDATE_RESTORE_OUTCOME_UNKNOWN" };
-        options.quit();
-        return { status: "accepted" };
-      } catch {
-        return {
-          status: keepAdmission ? "unknown" : "blocked",
-          code: keepAdmission
-            ? "UPDATE_RESTORE_OUTCOME_UNKNOWN"
-            : "UPDATE_RESTORE_PREPARE_FAILED",
-        };
-      } finally {
-        if (keepAdmission) heldAdmission = admission;
-        else await admission.release();
-      }
+      };
+      return settleAdmission(
+        admission,
+        () => keepAdmission,
+        attempt,
+        () => "UPDATE_RESTORE_OUTCOME_UNKNOWN",
+      );
     },
     restart: async (update) => {
+      if (admissionReleaseUnconfirmed)
+        return {
+          status: "blocked",
+          code: "UPDATE_BROWSER_RELEASE_UNCONFIRMED",
+        };
       if (
         heldAdmission ||
         operation ||
@@ -1497,214 +1573,241 @@ export async function createInstalledUpdateRuntime(
         return { status: "unknown", code: "UPDATE_HANDOFF_UNRECONCILED" };
       if (!retained || retained.handle !== update.handle)
         return { status: "blocked", code: "UPDATE_PACKAGE_NOT_READY" };
-      const admission = await options.acquireAdmission(drained);
+      const admission = await acquireAdmission();
       if (!admission.ok) return { status: "blocked", code: admission.code };
       let keepAdmission = false;
-      try {
-        if (!(await drained()))
-          return { status: "blocked", code: "UPDATE_WORK_PENDING" };
-        const source = await readAcceptedSource();
-        if (
-          source.buildId !== options.build.buildId ||
-          source.version !== options.build.version
-        )
-          return { status: "blocked", code: "UPDATE_SOURCE_IDENTITY_MISMATCH" };
-        const processStart = await captureInstalledProcessStart(process.pid);
-        const check = await transport.verifyPackage(
-          update.handle,
-          update.manifest,
-        );
-        if (
-          !check.ok ||
-          !packageMatchesRelease(check.value.identity, update.manifest)
-        )
-          return {
-            status:
-              !check.ok && "certainty" in check && check.certainty === "unknown"
-                ? "unknown"
-                : "blocked",
-            code: "UPDATE_RETAINED_PACKAGE_INVALID",
-          };
-        verified = {
-          handle: update.handle,
-          manifest: update.manifest,
-          ...check.value,
-        };
-        const target = {
-          digest: verified.identity.artifactSha256,
-          version: verified.identity.version,
-          buildId: verified.identity.buildId,
-        };
-        const firstRecheck = await recheckAdmission(admission);
-        if (!firstRecheck.ok)
-          return { status: "blocked", code: firstRecheck.code };
-        const operationId = randomBytes(16).toString("hex");
-        const operationRoot = path.join(root, operationId);
-        const preparing = { operationId, source, target };
-        // Record allocation before copying. This phase proves no helper was
-        // dispatched; startup may reconcile only this exact unfinished copy.
-        retained = { ...retained, preparation: preparing };
-        await writeRecord(readyFile, retained);
-        await fs.mkdir(operationRoot, { mode: 0o700 });
-        let copied = false;
+      const attempt = async (): Promise<UpdateHandoff> => {
+        if (!retained || retained.handle !== update.handle)
+          return { status: "blocked", code: "UPDATE_PACKAGE_NOT_READY" };
         try {
-          await options.copyApp(
-            verified.stagedAppPath,
-            path.join(operationRoot, "staged.app"),
+          if (!(await drained()))
+            return { status: "blocked", code: "UPDATE_WORK_PENDING" };
+          const source = await readAcceptedSource();
+          if (
+            source.buildId !== options.build.buildId ||
+            source.version !== options.build.version
+          )
+            return {
+              status: "blocked",
+              code: "UPDATE_SOURCE_IDENTITY_MISMATCH",
+            };
+          const processStart = await captureInstalledProcessStart(process.pid);
+          const check = await transport.verifyPackage(
+            update.handle,
+            update.manifest,
           );
-          copied = true;
-        } catch {
+          if (
+            !check.ok ||
+            !packageMatchesRelease(check.value.identity, update.manifest)
+          )
+            return {
+              status:
+                !check.ok &&
+                "certainty" in check &&
+                check.certainty === "unknown"
+                  ? "unknown"
+                  : "blocked",
+              code: "UPDATE_RETAINED_PACKAGE_INVALID",
+            };
+          verified = {
+            handle: update.handle,
+            manifest: update.manifest,
+            ...check.value,
+          };
+          const target = {
+            digest: verified.identity.artifactSha256,
+            version: verified.identity.version,
+            buildId: verified.identity.buildId,
+          };
+          const firstRecheck = await recheckAdmission(admission);
+          if (!firstRecheck.ok)
+            return { status: "blocked", code: firstRecheck.code };
+          const operationId = randomBytes(16).toString("hex");
+          const operationRoot = path.join(root, operationId);
+          const preparing = { operationId, source, target };
+          // Record allocation before copying. This phase proves no helper was
+          // dispatched; startup may reconcile only this exact unfinished copy.
+          retained = { ...retained, preparation: preparing };
+          await writeRecord(readyFile, retained);
+          await fs.mkdir(operationRoot, { mode: 0o700 });
+          let copied = false;
           try {
-            await removePreparedCopy(preparing);
-            retained = { ...retained, preparation: undefined };
-            await writeRecord(readyFile, retained);
+            await options.copyApp(
+              verified.stagedAppPath,
+              path.join(operationRoot, "staged.app"),
+            );
+            copied = true;
           } catch {
-            await writeRecord(cleanupFile, {
-              schema: "farol.update-package-cleanup/1",
-              handle: update.handle,
-              operationRoot,
-            });
+            try {
+              await removePreparedCopy(preparing);
+              retained = { ...retained, preparation: undefined };
+              await writeRecord(readyFile, retained);
+            } catch {
+              await writeRecord(cleanupFile, {
+                schema: "farol.update-package-cleanup/1",
+                handle: update.handle,
+                operationRoot,
+              });
+              return {
+                status: "unknown",
+                code: "UPDATE_STAGING_OUTCOME_UNKNOWN",
+              };
+            }
+          }
+          if (!(await discardVerifiedStage(update.handle)))
             return {
               status: "unknown",
               code: "UPDATE_STAGING_OUTCOME_UNKNOWN",
             };
-          }
-        }
-        if (!(await discardVerifiedStage(update.handle)))
-          return { status: "unknown", code: "UPDATE_STAGING_OUTCOME_UNKNOWN" };
-        if (!copied)
-          return { status: "blocked", code: "UPDATE_PREPARE_FAILED" };
-        retained = {
-          ...retained,
-          preparation: undefined,
-          operation: preparing,
-        };
-        // Copying and physical verification can take time. Re-read fenced
-        // browser state immediately before durable dispatch, not just at click.
-        const finalRecheck = await recheckAdmission(admission);
-        if (!finalRecheck.ok) {
-          retained = { ...retained, operation: null, preparation: preparing };
-          await writeRecord(readyFile, retained);
-          await removePreparedCopy(preparing);
-          retained = { ...retained, preparation: undefined };
-          await writeRecord(readyFile, retained);
-          return { status: "blocked", code: finalRecheck.code };
-        }
-        // Durable dispatch intent precedes launch. A failed commit may already
-        // have persisted dispatch, so keep admission even when its sync fails.
-        keepAdmission = true;
-        await writeRecord(readyFile, retained);
-        const handoff = await startInstalledUpdateHelper(
-          path.join(options.directory, "update-helper.py"),
-          {
-            action: "apply",
-            operationId,
-            source,
-            target,
-            drain: {
-              status: "reconciled",
-              acceptedSource: source.buildId,
-              acceptedTarget: target.buildId,
-            },
-            pid: process.pid,
-            processStart,
-            waitSeconds: 120,
-            relaunch: true,
-          },
-          {
-            recordSpawn: async (spawned) => {
-              operation = spawned;
-              if (spawned.pid === null)
-                throw new Error("UPDATE_HELPER_IDENTITY_UNKNOWN");
-              // Record before helper code or request bytes are sent, then enrich
-              // with start time. A failed observation preserves the actual PID.
-              retained = {
-                ...retained!,
-                helper: { pid: spawned.pid, processStart: null },
-              };
-              await writeRecord(readyFile, retained);
-              retained = {
-                ...retained,
-                helper: {
-                  pid: spawned.pid,
-                  processStart: await captureInstalledProcessStart(spawned.pid),
-                },
-              };
-              await writeRecord(readyFile, retained);
-            },
-          },
-        );
-        operation = handoff.operation;
-        if (
-          (handoff.status === "not_started" || handoff.status === "refused") &&
-          (await confirmedNoEffect(handoff))
-        ) {
-          if (
-            (await readRecord(path.join(operationRoot, "journal.json"))) !==
-              null ||
-            !sameBuild(await readBuild(slot), source)
-          )
-            return { status: "unknown", code: "UPDATE_HANDOFF_UNKNOWN" };
-          await writeRecord(path.join(root, `${operationId}-refusal.json`), {
-            schema: "farol.update-refusal/1",
-            action: "apply",
-            operation: preparing,
-            code: handoff.reason,
-          });
-          // The same launch has a confirmed pre-mutation outcome. Commit that
-          // proof as preparation before reclaiming its copy, including after a
-          // helper refusal. Never leave a dispatch intent pointing at removed bytes.
+          if (!copied)
+            return { status: "blocked", code: "UPDATE_PREPARE_FAILED" };
           retained = {
             ...retained,
-            operation: null,
-            helper: null,
-            preparation: preparing,
+            preparation: undefined,
+            operation: preparing,
           };
+          // Copying and physical verification can take time. Re-read fenced
+          // browser state immediately before durable dispatch, not just at click.
+          const finalRecheck = await recheckAdmission(admission);
+          if (!finalRecheck.ok) {
+            retained = { ...retained, operation: null, preparation: preparing };
+            await writeRecord(readyFile, retained);
+            await removePreparedCopy(preparing);
+            retained = { ...retained, preparation: undefined };
+            await writeRecord(readyFile, retained);
+            return { status: "blocked", code: finalRecheck.code };
+          }
+          // Durable dispatch intent precedes launch. A failed commit may already
+          // have persisted dispatch, so keep admission even when its sync fails.
+          keepAdmission = true;
           await writeRecord(readyFile, retained);
-          await removePreparedCopy(preparing);
-          retained = { ...retained, preparation: undefined };
-          await writeRecord(readyFile, retained);
-          operation = null;
-          keepAdmission = false;
+          const handoff = await startInstalledUpdateHelper(
+            path.join(options.directory, "update-helper.py"),
+            {
+              action: "apply",
+              operationId,
+              source,
+              target,
+              drain: {
+                status: "reconciled",
+                acceptedSource: source.buildId,
+                acceptedTarget: target.buildId,
+              },
+              pid: process.pid,
+              processStart,
+              waitSeconds: 120,
+              relaunch: true,
+            },
+            {
+              recordSpawn: async (spawned) => {
+                operation = spawned;
+                if (spawned.pid === null)
+                  throw new Error("UPDATE_HELPER_IDENTITY_UNKNOWN");
+                // Record before helper code or request bytes are sent, then enrich
+                // with start time. A failed observation preserves the actual PID.
+                retained = {
+                  ...retained!,
+                  helper: { pid: spawned.pid, processStart: null },
+                };
+                await writeRecord(readyFile, retained);
+                retained = {
+                  ...retained,
+                  helper: {
+                    pid: spawned.pid,
+                    processStart: await captureInstalledProcessStart(
+                      spawned.pid,
+                    ),
+                  },
+                };
+                await writeRecord(readyFile, retained);
+              },
+            },
+          );
+          operation = handoff.operation;
+          if (
+            (handoff.status === "not_started" ||
+              handoff.status === "refused") &&
+            (await confirmedNoEffect(handoff))
+          ) {
+            if (
+              (await readRecord(path.join(operationRoot, "journal.json"))) !==
+                null ||
+              !sameBuild(await readBuild(slot), source)
+            )
+              return { status: "unknown", code: "UPDATE_HANDOFF_UNKNOWN" };
+            await writeRecord(path.join(root, `${operationId}-refusal.json`), {
+              schema: "farol.update-refusal/1",
+              action: "apply",
+              operation: preparing,
+              code: handoff.reason,
+            });
+            // The same launch has a confirmed pre-mutation outcome. Commit that
+            // proof as preparation before reclaiming its copy, including after a
+            // helper refusal. Never leave a dispatch intent pointing at removed bytes.
+            retained = {
+              ...retained,
+              operation: null,
+              helper: null,
+              preparation: preparing,
+            };
+            await writeRecord(readyFile, retained);
+            await removePreparedCopy(preparing);
+            retained = { ...retained, preparation: undefined };
+            await writeRecord(readyFile, retained);
+            operation = null;
+            keepAdmission = false;
+            return {
+              status: "blocked",
+              code:
+                handoff.status === "refused"
+                  ? "UPDATE_HELPER_REFUSED"
+                  : "UPDATE_HELPER_NOT_STARTED",
+            };
+          }
+          // Keep the same operation observable even on an uncertain ACK. No substitute helper.
+          void operation.completion.then((result) => {
+            process.stderr.write(
+              `farol-update-helper ${JSON.stringify({ operationId, code: result.code, phase: result.terminal?.phase ?? "unknown" })}\n`,
+            );
+          });
+          if (handoff.status !== "ready")
+            return {
+              status: "unknown",
+              code:
+                handoff.status === "refused"
+                  ? "UPDATE_HELPER_REFUSED"
+                  : "UPDATE_HANDOFF_UNKNOWN",
+            };
+          options.quit();
+          return { status: "accepted" };
+        } catch {
+          if (verified && !(await discardVerifiedStage(verified.handle)))
+            return {
+              status: "unknown",
+              code: "UPDATE_STAGING_OUTCOME_UNKNOWN",
+            };
+          if (stagingUncertain || retained?.preparation)
+            return {
+              status: "unknown",
+              code: "UPDATE_STAGING_OUTCOME_UNKNOWN",
+            };
           return {
-            status: "blocked",
-            code:
-              handoff.status === "refused"
-                ? "UPDATE_HELPER_REFUSED"
-                : "UPDATE_HELPER_NOT_STARTED",
+            status: keepAdmission ? "unknown" : "blocked",
+            code: keepAdmission
+              ? "UPDATE_HANDOFF_UNKNOWN"
+              : "UPDATE_PREPARE_FAILED",
           };
         }
-        // Keep the same operation observable even on an uncertain ACK. No substitute helper.
-        void operation.completion.then((result) => {
-          process.stderr.write(
-            `farol-update-helper ${JSON.stringify({ operationId, code: result.code, phase: result.terminal?.phase ?? "unknown" })}\n`,
-          );
-        });
-        if (handoff.status !== "ready")
-          return {
-            status: "unknown",
-            code:
-              handoff.status === "refused"
-                ? "UPDATE_HELPER_REFUSED"
-                : "UPDATE_HANDOFF_UNKNOWN",
-          };
-        options.quit();
-        return { status: "accepted" };
-      } catch {
-        if (verified && !(await discardVerifiedStage(verified.handle)))
-          return { status: "unknown", code: "UPDATE_STAGING_OUTCOME_UNKNOWN" };
-        if (stagingUncertain || retained?.preparation)
-          return { status: "unknown", code: "UPDATE_STAGING_OUTCOME_UNKNOWN" };
-        return {
-          status: keepAdmission ? "unknown" : "blocked",
-          code: keepAdmission
+      };
+      return settleAdmission(
+        admission,
+        () => keepAdmission,
+        attempt,
+        () =>
+          keepAdmission
             ? "UPDATE_HANDOFF_UNKNOWN"
-            : "UPDATE_PREPARE_FAILED",
-        };
-      } finally {
-        if (keepAdmission) heldAdmission = admission;
-        else await admission.release();
-      }
+            : "UPDATE_STAGING_OUTCOME_UNKNOWN",
+      );
     },
   });
   return controller;

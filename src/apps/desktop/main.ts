@@ -811,15 +811,18 @@ async function initializeInstalledUpdater(): Promise<void> {
           return { ok: true as const };
         };
         let lease: Awaited<ReturnType<typeof acquirePromotionLease>> = null;
+        let browserReleaseUnconfirmed = false;
         const recovery = createUpdateAbortConnectorRecovery({
           before: snapshot,
           wasRunning: secureMcpConnectorRuntime?.isRunning() ?? false,
           current: () => configuration?.snapshot() ?? null,
           releaseAdmission: async () => {
+            for (const browser of browserAdmissions) await browser.release();
+            if (browserReleaseUnconfirmed)
+              throw new Error("UPDATE_BROWSER_RELEASE_UNCONFIRMED");
             if (lease) await releasePromotionLease(lease);
             taskClaim.release();
             transition.release();
-            for (const browser of browserAdmissions) await browser.release();
             installedUpdateAdmission = false;
             applyLayout();
           },
@@ -840,6 +843,17 @@ async function initializeInstalledUpdater(): Promise<void> {
           },
         });
         const release = recovery.release;
+        const abort = async (code: string) => {
+          try {
+            await release();
+            return { ok: false as const, code };
+          } catch {
+            return {
+              ok: false as const,
+              code: "UPDATE_BROWSER_RELEASE_UNCONFIRMED",
+            };
+          }
+        };
         try {
           const routes = new Set([
             ...managedChatGptRoutes,
@@ -848,8 +862,9 @@ async function initializeInstalledUpdater(): Promise<void> {
           for (const route of routes) {
             const browser = await route.acquireUpdateIdle();
             if (!browser.ok) {
-              await release();
-              return browser;
+              browserReleaseUnconfirmed =
+                browser.code === "UPDATE_BROWSER_RELEASE_UNCONFIRMED";
+              return abort(browser.code);
             }
             browserAdmissions.push(browser);
           }
@@ -859,8 +874,7 @@ async function initializeInstalledUpdater(): Promise<void> {
             "promotion",
           );
           if (!lease || !(await verifyPromotionLease(lease))) {
-            await release();
-            return { ok: false, code: "UPDATE_WORK_PENDING" };
+            return abort("UPDATE_WORK_PENDING");
           }
           await liveTaskPersistence;
           const drained = await drainInstalledComputer({
@@ -887,13 +901,11 @@ async function initializeInstalledUpdater(): Promise<void> {
             },
           });
           if (!drained.ok) {
-            await release();
-            return drained;
+            return abort(drained.code);
           }
           return { ok: true, release, recheck };
         } catch {
-          await release();
-          return { ok: false, code: "UPDATE_STATE_UNREADABLE" };
+          return abort("UPDATE_STATE_UNREADABLE");
         }
       },
     });

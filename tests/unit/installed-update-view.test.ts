@@ -81,6 +81,7 @@ describe("installed update view", () => {
     ["UPDATE_BROWSER_BUSY", "active ChatGPT response"],
     ["UPDATE_BROWSER_DRAFT", "unsent ChatGPT draft"],
     ["UPDATE_BROWSER_STATE_UNKNOWN", "could not confirm that ChatGPT is idle"],
+    ["UPDATE_BROWSER_RELEASE_UNCONFIRMED", "Quit Farol and reopen it"],
   ])(
     "explains fresh browser refusal %s without dispatching or hiding the offer",
     (code, reason) => {

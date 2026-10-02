@@ -337,4 +337,31 @@ describe("confirmed same-session update abort recovery (injected connector, no l
     await expect(f.recovery.release()).rejects.toThrow("fixture start refused");
     expect(f.resume).toHaveBeenCalledOnce();
   });
+  it("never resumes a drained connector or retries release after a browser fence fails to release", async () => {
+    const before = configured();
+    const stopped = structuredClone(before);
+    stopped.revision++;
+    stopped.connectors.secureMcp.runtime!.state = "unreachable";
+    stopped.setup.connect.unavailable = "CONNECTOR_UPDATE_DRAINED";
+    const releaseAdmission = vi.fn(async () => {
+      throw new Error("UPDATE_BROWSER_RELEASE_UNCONFIRMED");
+    });
+    const resumeConnector = vi.fn();
+    const recovery = createUpdateAbortConnectorRecovery({
+      before: { status: "ready", settings: before },
+      wasRunning: true,
+      current: () => ({ status: "ready", settings: stopped }),
+      releaseAdmission,
+      resumeConnector,
+    });
+    recovery.recordDrained({ status: "ready", settings: stopped });
+    await expect(recovery.release()).rejects.toThrow(
+      "UPDATE_BROWSER_RELEASE_UNCONFIRMED",
+    );
+    await expect(recovery.release()).rejects.toThrow(
+      "UPDATE_BROWSER_RELEASE_UNCONFIRMED",
+    );
+    expect(releaseAdmission).toHaveBeenCalledOnce();
+    expect(resumeConnector).not.toHaveBeenCalled();
+  });
 });
