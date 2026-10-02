@@ -194,14 +194,23 @@ describe("update idle observation on synthetic public DOM", () => {
     "reset",
     "input",
     "image",
+    "input-button",
+    "input-reset",
   ])("refuses an unrecognized enabled %s action control", (kind) => {
     const f = fixture();
     f.voice.attributes["aria-label"] = "Start Voice";
     f.send.visible = false;
     const control =
-      kind === "input" || kind === "image"
+      kind === "input" ||
+      kind === "image" ||
+      kind === "input-button" ||
+      kind === "input-reset"
         ? new ElementFixture("input", {
-            type: kind === "image" ? "image" : "submit",
+            type: kind.startsWith("input-")
+              ? kind.slice(6)
+              : kind === "image"
+                ? "image"
+                : "submit",
           })
         : new ButtonFixture({
             "aria-label": "Unrecognized action",
@@ -227,6 +236,8 @@ describe("update idle observation on synthetic public DOM", () => {
     "reset",
     "submit",
     "image",
+    "input-button",
+    "input-reset",
     "recognized-send",
   ])(
     "refuses an external enabled %s control owned by the composer form",
@@ -234,8 +245,10 @@ describe("update idle observation on synthetic public DOM", () => {
       const f = fixture();
       f.send.visible = false;
       const control =
-        kind === "submit" || kind === "image"
-          ? new ElementFixture("input", { type: kind })
+        kind === "submit" || kind === "image" || kind.startsWith("input-")
+          ? new ElementFixture("input", {
+              type: kind.startsWith("input-") ? kind.slice(6) : kind,
+            })
           : new ButtonFixture({
               type:
                 kind === "custom-button"

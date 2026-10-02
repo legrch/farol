@@ -47,10 +47,10 @@ export const chatGptUpdateIdleProbe = `(() => {
     return { state: "unknown" };
   const sends = controls('[data-testid="send-button"],button[aria-label="Send prompt"],button[aria-label="Send message"]').filter(visible);
   const voice = [...form.querySelectorAll('button[aria-label="Start Voice"],button[aria-label="Start voice mode"],button[aria-label="Start Voice Mode"]')].filter(visible);
-  // Any unknown enabled button can submit through an application handler,
-  // including type=button/reset and controls associated outside the form.
+  // Any unknown enabled native button or action input can submit through an
+  // application handler, including controls associated outside the form.
   // Only the known non-submit voice entry is excluded from that uncertainty.
-  const actions = controls('button,input[type="submit"],input[type="image"]').filter(visible);
+  const actions = controls('button,input[type="button"],input[type="reset"],input[type="submit"],input[type="image"]').filter(visible);
   if (actions.some(e => !sends.includes(e) && e.disabled !== true &&
       !(voice.includes(e) && e instanceof HTMLButtonElement && e.type === "button")))
     return { state: "unknown" };
