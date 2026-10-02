@@ -332,7 +332,7 @@ function localRule(from, to, target, source) {
   if (from.kind === "cmd") return to.kind === "boot" ? null : "GO_CMD_NOT_THIN";
   if (from.kind === "transport")
     return ["module", "kernel", "ipc", "generated"].includes(to.kind) &&
-      !(to.kind === "module" && to.layer === "infra") &&
+      !(to.kind === "module" && to.layer !== "contracts") &&
       !(to.kind === "kernel" && to.layer === "infra")
       ? null
       : "GO_TRANSPORT_DEPENDENCY";

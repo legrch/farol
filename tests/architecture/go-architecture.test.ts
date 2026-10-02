@@ -90,6 +90,9 @@ describe("the executable root Go architecture boundary", () => {
       "cmd/farol/main.go": source(prefix + "boot"),
       "boot/main.go": source(prefix + "transport/desktop"),
       "transport/desktop/server.go": source(
+        prefix + "modules/task/contracts/task",
+      ),
+      "modules/task/contracts/task/contract.go": source(
         prefix + "modules/task/app/services/task",
       ),
       "modules/task/app/services/task/create.go": source(
@@ -112,7 +115,7 @@ describe("the executable root Go architecture boundary", () => {
       "modules/task/domain/task/task_test.go": source("os"),
     });
     expect(result.status, JSON.stringify(result.report)).toBe(0);
-    expect(result.report.productionFiles).toBe(14);
+    expect(result.report.productionFiles).toBe(15);
     expect(result.report.testFiles).toBe(1);
   });
 
@@ -530,4 +533,14 @@ var timestamp = time.Parse
       }),
       "GO_PURE_IMPORT",
     ));
+  it.each(["app/services/task", "domain/task", "infra/peer/computer"])(
+    "rejects transport bypass of module contracts: %s",
+    (layer) => {
+      const result = check({
+        "transport/desktop/server.go": source(prefix + "modules/task/" + layer),
+        ["modules/task/" + layer + "/target.go"]: source(),
+      });
+      denied(result, "GO_TRANSPORT_DEPENDENCY");
+    },
+  );
 });
