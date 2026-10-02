@@ -60,6 +60,8 @@ private temporary copy behind.
 
 ## Enforced dependency direction
 
+The existing TypeScript modules under `src/` use this dependency direction:
+
 ```text
 domain -> kernel/domain
 app -> own domain + consumer-owned app ports + kernel domain/app
@@ -80,6 +82,21 @@ parses static imports, re-exports, aliases, literal dynamic imports and CommonJS
 cycles and unclassified production files, and runs both positive and deliberately
 invalid fixtures. It also rejects host/vendor imports from composition-only `boot`,
 all inner-layer imports of executable `apps`, and module imports of UI.
+
+
+The accepted Go layout uses `modules/<module>/contracts/<feature>` as a thin
+published in-process facade. It may import its own application/domain to delegate
+to the owner, and deliberately shared pure kernel vocabulary. Its request/response
+DTOs remain independent: no aliases to app/domain/transport types, no exposed
+implementation types, and explicit conversions at the boundary. This Go facade
+rule does not change the TypeScript DTO-only contract rule above.
+
+Go neighbors still cross module boundaries only through `infra/peer` to the
+owning module's published contracts. Contracts cannot import infrastructure,
+boot, executable hosts, or neighbor internals. The Go import gate enforces these
+edges and rejects DTO aliases; source review verifies delegation and independent
+DTO signatures. The common Desktop transport may depend only on published module
+contracts, never app/domain/infra. `boot` owns concrete composition and lifetimes.
 
 ## Shared infrastructure decision
 
