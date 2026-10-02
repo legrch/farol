@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
+import { realpathSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createRequire } from "node:module";
@@ -16,7 +17,11 @@ import {
 } from "./promotion-obligations.mjs";
 import { readArtifactManifest } from "./promote-preview.mjs";
 import { sourceIdentity } from "./source-identity.mjs";
-import { resolveDevDataDirectoryName } from "../src/apps/desktop/dev-profile-directory.ts";
+import {
+  DEV_DATA_DIRECTORY_NAME,
+  LEGACY_DEV_DATA_DIRECTORY_NAME,
+  resolveDevDataDirectoryName,
+} from "../src/apps/desktop/dev-profile-directory.ts";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -49,13 +54,72 @@ export function parseClosedRecoveryOptions(args) {
 
 // The trusted owner home remains the only base. This is the same metadata-only
 // Dev spelling resolver used by ordinary Task Dev, never a caller profile path.
-export function closedRecoveryUserData(home, development = false, inspect) {
+export function closedRecoveryUserData(
+  home,
+  development = false,
+  inspect,
+  canonicalize = realpathSync,
+) {
   if (typeof development !== "boolean")
     throw new Error("CLOSED_COMPUTER_RECOVERY_OPTIONS_INVALID");
   const production = promotionUserData(home);
   if (!development) return production;
   const appData = path.dirname(production);
-  return path.join(appData, resolveDevDataDirectoryName(appData, inspect));
+  const selected = path.join(
+    appData,
+    resolveDevDataDirectoryName(appData, inspect),
+  );
+  let physical;
+  try {
+    physical = canonicalize(selected);
+  } catch {
+    throw new Error("DEV_PROFILE_DIRECTORY_UNREADABLE");
+  }
+  // A case-insensitive filesystem may resolve the preferred same-inode alias
+  // to the legacy spelling. Preserve the core's exact canonical-path check:
+  // only either fixed Dev entry under this exact parent may be selected.
+  if (
+    physical !== path.join(appData, DEV_DATA_DIRECTORY_NAME) &&
+    physical !== path.join(appData, LEGACY_DEV_DATA_DIRECTORY_NAME)
+  )
+    throw new Error("DEV_PROFILE_DIRECTORY_UNSAFE");
+  return physical;
+}
+
+export function assertClosedRecoveryProcesses(
+  connectorRoot,
+  development,
+  inspect,
+) {
+  if (typeof development !== "boolean")
+    throw new Error("CLOSED_COMPUTER_RECOVERY_OPTIONS_INVALID");
+  const roots = [connectorRoot];
+  if (development) {
+    const profile = path.dirname(path.dirname(connectorRoot));
+    const name = path.basename(profile);
+    if (
+      (name !== DEV_DATA_DIRECTORY_NAME &&
+        name !== LEGACY_DEV_DATA_DIRECTORY_NAME) ||
+      connectorRoot !==
+        path.join(profile, "farol-next-state", "secure-mcp-connector")
+    )
+      throw new Error("DEV_PROFILE_DIRECTORY_UNSAFE");
+    const alternate =
+      name === DEV_DATA_DIRECTORY_NAME
+        ? LEGACY_DEV_DATA_DIRECTORY_NAME
+        : DEV_DATA_DIRECTORY_NAME;
+    roots.push(
+      path.join(
+        path.dirname(profile),
+        alternate,
+        "farol-next-state",
+        "secure-mcp-connector",
+      ),
+    );
+  }
+  // A child launched before maintenance may have recorded the other spelling.
+  // A failed probe is terminal; never use the second alias as a fallback.
+  for (const root of roots) inspect(root);
 }
 
 async function run() {
@@ -104,12 +168,23 @@ async function run() {
       logLevel: "silent",
     });
     assertExactSourceIdentity(sourceIdentity(root), artifact);
-    const { recoverClosedComputer } = createRequire(import.meta.url)(output);
-    const result = await recoverClosedComputer({
-      userData,
-      ...options,
-      desktopState: () => activationObligations(userData),
-    });
+    const { recoverClosedComputer, assertClosedConnectorProcesses } =
+      createRequire(import.meta.url)(output);
+    const result = await recoverClosedComputer(
+      {
+        userData,
+        ...options,
+        desktopState: () => activationObligations(userData),
+      },
+      {
+        processesAbsent: (root) =>
+          assertClosedRecoveryProcesses(
+            root,
+            development,
+            assertClosedConnectorProcesses,
+          ),
+      },
+    );
     process.stdout.write(
       `${JSON.stringify({ ...result, ...options, environment: development ? "dev" : "preview", sourceCommit: artifact.sourceCommit, buildId: artifact.buildId })}\n`,
     );

@@ -108,6 +108,15 @@ distinct or unsafe profiles, and never selects an acceptance profile or producti
 state. The default remains production. Arbitrary home/profile/helper overrides
 are still refused.
 
+For a same-inode case alias, maintenance selects the physical entry spelling
+returned by the filesystem. That path must still be exactly one of the two fixed
+Dev entries under the genuine owner app-data parent. The recovery core's strict
+canonical-path, owner and private-mode checks remain unchanged; no directory is
+renamed or merged.
+The process-absence check includes both fixed Dev spellings, because an older
+child may have recorded the other alias in its command. An unconfirmed check
+refuses immediately; the other spelling is not a fallback.
+
 Close both NEW applications normally and resolve a legacy configuration filename
 in place before recovery. Supply the exact Dev running/failed-Quit hashes and one
 operation UUID. Package/source admission, owning desktop obligations, process

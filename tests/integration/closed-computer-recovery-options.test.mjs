@@ -1,6 +1,11 @@
+import fs from "node:fs/promises";
+import { realpathSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   closedRecoveryUserData,
+  assertClosedRecoveryProcesses,
   parseClosedRecoveryOptions,
 } from "../../tooling/recover-closed-computer.mjs";
 
@@ -63,6 +68,7 @@ describe("closed Computer maintenance profile selection (synthetic metadata)", (
     directory: true,
     symbolicLink: false,
   };
+  const samePath = (candidate) => candidate;
   const inspect = (legacy, preferred) => (candidate) => {
     if (candidate === `${appData}/Farol DEV`) return legacy;
     expect(candidate).toBe(`${appData}/Farol Dev`);
@@ -76,15 +82,81 @@ describe("closed Computer maintenance profile selection (synthetic metadata)", (
     ).toBe(`${appData}/Farol Next Preview`);
   });
   it("keeps ordinary Dev separate from production and acceptance profiles", () => {
-    expect(closedRecoveryUserData(home, true, inspect(null, directory))).toBe(
-      `${appData}/Farol Dev`,
-    );
-    expect(closedRecoveryUserData(home, true, inspect(directory, null))).toBe(
-      `${appData}/Farol DEV`,
-    );
     expect(
-      closedRecoveryUserData(home, true, inspect(directory, directory)),
+      closedRecoveryUserData(home, true, inspect(null, directory), samePath),
     ).toBe(`${appData}/Farol Dev`);
+    expect(
+      closedRecoveryUserData(home, true, inspect(directory, null), samePath),
+    ).toBe(`${appData}/Farol DEV`);
+    expect(
+      closedRecoveryUserData(
+        home,
+        true,
+        inspect(directory, directory),
+        samePath,
+      ),
+    ).toBe(`${appData}/Farol Dev`);
+  });
+  it("uses the physical legacy spelling for same-inode case aliases", () => {
+    const selected = `${appData}/Farol Dev`;
+    const physical = `${appData}/Farol DEV`;
+    const canonicalize = (candidate) => {
+      expect(candidate).toBe(selected);
+      return physical;
+    };
+    expect(
+      closedRecoveryUserData(
+        home,
+        true,
+        inspect(directory, directory),
+        canonicalize,
+      ),
+    ).toBe(physical);
+  });
+  it("retains a disposable legacy directory and supplies an exact physical path", async () => {
+    const temporary = await fs.mkdtemp(
+      path.join(os.tmpdir(), "farol-dev-recovery-name-"),
+    );
+    const home = realpathSync(temporary);
+    try {
+      const appData = path.join(home, "Library", "Application Support");
+      const legacy = path.join(appData, "Farol DEV");
+      await fs.mkdir(legacy, { recursive: true, mode: 0o700 });
+      const before = await fs.lstat(legacy);
+      const selected = closedRecoveryUserData(home, true);
+      const after = await fs.lstat(selected);
+      expect(realpathSync(selected)).toBe(selected);
+      expect(after.dev).toBe(before.dev);
+      expect(after.ino).toBe(before.ino);
+      expect(await fs.readdir(appData)).toEqual(["Farol DEV"]);
+    } finally {
+      await fs.rm(home, { recursive: true, force: true });
+    }
+  });
+  it.each([
+    `${appData}/unrelated`,
+    `${home}/other/Farol Dev`,
+    `${appData}/Farol Next Preview`,
+    `${appData}/Farol Dev/child`,
+  ])(
+    "refuses canonicalization outside both fixed Dev entries (%s)",
+    (physical) => {
+      expect(() =>
+        closedRecoveryUserData(
+          home,
+          true,
+          inspect(null, directory),
+          () => physical,
+        ),
+      ).toThrow("DEV_PROFILE_DIRECTORY_UNSAFE");
+    },
+  );
+  it("refuses an unreadable canonical path before maintenance", () => {
+    expect(() =>
+      closedRecoveryUserData(home, true, inspect(null, directory), () => {
+        throw new Error("synthetic unreadable metadata");
+      }),
+    ).toThrow("DEV_PROFILE_DIRECTORY_UNREADABLE");
   });
   it("refuses distinct or unsafe profiles before any maintenance action", () => {
     expect(() =>
@@ -106,5 +178,69 @@ describe("closed Computer maintenance profile selection (synthetic metadata)", (
     expect(() => closedRecoveryUserData(home, "dev")).toThrow(
       "CLOSED_COMPUTER_RECOVERY_OPTIONS_INVALID",
     );
+  });
+});
+
+describe("closed recovery process checks across physical Dev spellings", () => {
+  const appData = "/private/tmp/synthetic-owner/Library/Application Support";
+  const suffix = "/farol-next-state/secure-mcp-connector";
+  it("checks both fixed Dev aliases so canonicalization cannot miss a child", () => {
+    const observed = [];
+    assertClosedRecoveryProcesses(
+      `${appData}/Farol DEV${suffix}`,
+      true,
+      (root) => {
+        observed.push(root);
+      },
+    );
+    expect(observed).toEqual([
+      `${appData}/Farol DEV${suffix}`,
+      `${appData}/Farol Dev${suffix}`,
+    ]);
+  });
+  it("propagates a failed process check without trying another spelling", () => {
+    const observed = [];
+    expect(() =>
+      assertClosedRecoveryProcesses(
+        `${appData}/Farol Dev${suffix}`,
+        true,
+        (root) => {
+          observed.push(root);
+          throw new Error("CLOSED_COMPUTER_RECOVERY_PROCESS_UNVERIFIED");
+        },
+      ),
+    ).toThrow("CLOSED_COMPUTER_RECOVERY_PROCESS_UNVERIFIED");
+    expect(observed).toEqual([`${appData}/Farol Dev${suffix}`]);
+  });
+  it("does not inspect Dev for default production maintenance", () => {
+    const observed = [];
+    const production = `${appData}/Farol Next Preview${suffix}`;
+    assertClosedRecoveryProcesses(production, false, (root) =>
+      observed.push(root),
+    );
+    expect(observed).toEqual([production]);
+  });
+  it("refuses a retained child using the non-canonical Dev spelling", () => {
+    expect(() =>
+      assertClosedRecoveryProcesses(
+        `${appData}/Farol DEV${suffix}`,
+        true,
+        (root) => {
+          if (root === `${appData}/Farol Dev${suffix}`)
+            throw new Error("CLOSED_COMPUTER_RECOVERY_PROCESS_UNVERIFIED");
+        },
+      ),
+    ).toThrow("CLOSED_COMPUTER_RECOVERY_PROCESS_UNVERIFIED");
+  });
+  it("refuses a non-Dev process root before any probe", () => {
+    expect(() =>
+      assertClosedRecoveryProcesses(
+        `${appData}/Farol Next Preview${suffix}`,
+        true,
+        () => {
+          throw new Error("MUST_NOT_PROBE");
+        },
+      ),
+    ).toThrow("DEV_PROFILE_DIRECTORY_UNSAFE");
   });
 });
