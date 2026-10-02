@@ -32,7 +32,7 @@ const tsTypes = {
   json: "Json",
   "text[]": "readonly string[]",
 };
-let go = `// ${title}\npackage desktop\nimport ("encoding/json"; "errors"; "math"; "regexp"; "strconv"; "strings"; "time")\n`;
+let go = `// ${title}\npackage desktop\nimport ("encoding/json"; "errors"; "math"; "regexp"; "strconv"; "strings"; "time"; "unicode/utf8")\n`;
 go += `const ProtocolMajor uint32 = ${schema.protocolMajor}\nconst ProtocolMinor uint32 = ${schema.protocolMinor}\nconst SchemaSHA256 = "${digest}"\nconst Schema = ${JSON.stringify(bytes.toString("utf8"))}\n`;
 go += `var MethodNames = []string{${Object.keys(schema.methods).sort().map(JSON.stringify).join(",")}}\nvar Methods = map[string]string{${Object.entries(
   schema.methods,

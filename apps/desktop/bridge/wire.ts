@@ -212,12 +212,16 @@ type Spec = {
 type Definition = { readonly fields: Readonly<Record<string, Spec>> };
 const definitions: Readonly<Record<string, Definition>> = schema.definitions;
 
+export function validUnicode(value: string): boolean {
+  return !/[\uD800-\uDFFF]/u.test(value);
+}
+
 export function validate(name: string, value: unknown, depth = 0): boolean {
   if (depth > schema.maxDepth) return false;
   if (name === "nullableId")
     return value === null || validate("id", value, depth + 1);
   if (["text", "id", "decimal", "utc"].includes(name)) {
-    if (typeof value !== "string") return false;
+    if (typeof value !== "string" || !validUnicode(value)) return false;
     if (name === "id")
       return /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/u.test(value);
     if (name === "decimal")
@@ -254,12 +258,8 @@ export function validate(name: string, value: unknown, depth = 0): boolean {
       value.every((item) => validate("text", item, depth + 1))
     );
   if (name === "json") {
-    if (
-      value === null ||
-      typeof value === "boolean" ||
-      typeof value === "string"
-    )
-      return true;
+    if (value === null || typeof value === "boolean") return true;
+    if (typeof value === "string") return validUnicode(value);
     if (typeof value === "number")
       return (
         Number.isFinite(value) && Math.abs(value) <= Number.MAX_SAFE_INTEGER
@@ -268,6 +268,7 @@ export function validate(name: string, value: unknown, depth = 0): boolean {
       return value.every((item) => validate("json", item, depth + 1));
     return (
       typeof value === "object" &&
+      Object.keys(value).every(validUnicode) &&
       Object.values(value).every((item) => validate("json", item, depth + 1))
     );
   }

@@ -358,3 +358,22 @@ it("validates decoded binary64 integer values consistently across number spellin
     ).toBe(true);
   }
 });
+
+it("rejects lone surrogates before path decoding while preserving valid pairs and literal escapes", () => {
+  for (const raw of [
+    String.raw`{"path":"\ud800.md"}`,
+    String.raw`{"path":"\udc00.md"}`,
+    String.raw`{"path":"\ud800x\udc00"}`,
+    String.raw`{"\ud800":"value"}`,
+  ])
+    expect(() => parseJSON(raw)).toThrow("invalid Unicode");
+  for (const raw of [
+    String.raw`{"path":"\ud83c\udf0a.md"}`,
+    String.raw`{"path":"\ufffd.md"}`,
+    String.raw`{"path":"\\ud800.md"}`,
+  ])
+    expect(() => parseJSON(raw)).not.toThrow();
+  expect(validate("json", { path: "\ud800.md" })).toBe(false);
+  expect(validate("json", { "\ud800": "value" })).toBe(false);
+  expect(validate("json", { path: "🌊.md" })).toBe(true);
+});

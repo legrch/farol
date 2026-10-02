@@ -3,11 +3,13 @@ type Spec = { readonly type: string; readonly optional?: boolean; readonly value
 type Definition = { readonly fields: Readonly<Record<string, Spec>> };
 const definitions: Readonly<Record<string, Definition>> = schema.definitions;
 
+export function validUnicode(value: string): boolean { return !/[\uD800-\uDFFF]/u.test(value); }
+
 export function validate(name: string, value: unknown, depth = 0): boolean {
  if (depth > schema.maxDepth) return false;
  if (name === "nullableId") return value === null || validate("id",value,depth+1);
  if (["text", "id", "decimal", "utc"].includes(name)) {
-  if (typeof value !== "string") return false;
+  if (typeof value !== "string" || !validUnicode(value)) return false;
   if (name === "id") return /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/u.test(value);
   if (name === "decimal") return /^(0|[1-9][0-9]{0,19})$/u.test(value) && BigInt(value) <= 18446744073709551615n;
   if (name === "utc") return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,9})?Z$/u.test(value) && Number.isFinite(Date.parse(value)) && value.slice(0,4) !== "0000" && new Date(Date.parse(value)).toISOString().slice(0,19) === value.slice(0,19);
@@ -16,10 +18,11 @@ export function validate(name: string, value: unknown, depth = 0): boolean {
  if (name === "uint32" || name === "int32") return typeof value === "number" && Number.isInteger(value) && (name === "uint32" ? value >= 0 && value <= 4294967295 : value >= -2147483648 && value <= 2147483647);
  if (name === "text[]") return Array.isArray(value) && value.length <= 64 && value.every(item => validate("text",item,depth+1));
  if (name === "json") {
-  if (value === null || typeof value === "boolean" || typeof value === "string") return true;
+  if (value === null || typeof value === "boolean") return true;
+  if (typeof value === "string") return validUnicode(value);
   if (typeof value === "number") return Number.isFinite(value) && Math.abs(value) <= Number.MAX_SAFE_INTEGER;
   if (Array.isArray(value)) return value.every(item => validate("json",item,depth+1));
-  return typeof value === "object" && Object.values(value).every(item => validate("json",item,depth+1));
+  return typeof value === "object" && Object.keys(value).every(validUnicode) && Object.values(value).every(item => validate("json",item,depth+1));
  }
  const def = definitions[name];
  if (!def || value === null || typeof value !== "object" || Array.isArray(value)) return false;

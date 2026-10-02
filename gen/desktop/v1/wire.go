@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 const ProtocolMajor uint32 = 1
@@ -147,7 +148,7 @@ var decimalPattern = regexp.MustCompile(`^(0|[1-9][0-9]{0,19})$`)
 
 // Validate applies the one canonical closed schema. Framing also rejects duplicates.
 func Validate(name string, raw []byte) error {
-	if !json.Valid(raw) {
+	if !ValidUnicodeJSON(raw) {
 		return errors.New("invalid JSON")
 	}
 	var value interface{}
@@ -314,4 +315,43 @@ func decodeIntegers(name string, raw []byte, target interface{}, fields []string
 		return err
 	}
 	return json.Unmarshal(normalized, target)
+}
+
+// ValidUnicodeJSON rejects escaped lone surrogates before Go's JSON decoder can
+// replace them with U+FFFD. This is shared by schema and framing validation.
+func ValidUnicodeJSON(raw []byte) bool {
+	if !utf8.Valid(raw) || !json.Valid(raw) {
+		return false
+	}
+	quoted := false
+	for i := 0; i < len(raw); i++ {
+		if raw[i] == '"' {
+			quoted = !quoted
+			continue
+		}
+		if !quoted || raw[i] != '\\' {
+			continue
+		}
+		if raw[i+1] != 'u' {
+			i++
+			continue
+		}
+		unit, _ := strconv.ParseUint(string(raw[i+2:i+6]), 16, 16)
+		if unit >= 0xdc00 && unit <= 0xdfff {
+			return false
+		}
+		if unit >= 0xd800 && unit <= 0xdbff {
+			if i+12 > len(raw) || raw[i+6] != '\\' || raw[i+7] != 'u' {
+				return false
+			}
+			low, err := strconv.ParseUint(string(raw[i+8:i+12]), 16, 16)
+			if err != nil || low < 0xdc00 || low > 0xdfff {
+				return false
+			}
+			i += 11
+		} else {
+			i += 5
+		}
+	}
+	return true
 }

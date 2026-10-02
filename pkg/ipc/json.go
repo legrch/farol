@@ -4,15 +4,15 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	wire "github.com/legrch/farol/gen/desktop/v1"
 	"io"
-	"unicode/utf8"
 )
 
 var ErrJSON = errors.New("invalid protocol JSON")
 
 // ValidateJSON rejects duplicates, invalid UTF-8, depth overflow and trailing data.
 func ValidateJSON(data []byte) error {
-	if !utf8.Valid(data) {
+	if !wire.ValidUnicodeJSON(data) {
 		return ErrJSON
 	}
 	d := json.NewDecoder(bytes.NewReader(data))

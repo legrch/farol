@@ -1,4 +1,4 @@
-import { maxFrameBytes } from "./wire.ts";
+import { maxFrameBytes, validUnicode } from "./wire.ts";
 
 export function frame(value: unknown): Buffer {
   const body = Buffer.from(JSON.stringify(value), "utf8");
@@ -63,8 +63,11 @@ export function parseJSON(text: string): unknown {
     let escaped = false;
     while (pos < text.length) {
       const char = text[pos++];
-      if (!escaped && char === '"')
-        return JSON.parse(text.slice(start, pos)) as string;
+      if (!escaped && char === '"') {
+        const value = JSON.parse(text.slice(start, pos)) as string;
+        if (!validUnicode(value)) throw Error("invalid Unicode string");
+        return value;
+      }
       if (!escaped && char === "\\") escaped = true;
       else escaped = false;
     }
