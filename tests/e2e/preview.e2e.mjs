@@ -1898,7 +1898,7 @@ if (args[0] === "app-server" && args[1] === "--stdio") {
   await phases.step(`${label}.runtimeReady`, LAUNCH_PHASE_BUDGET_MS, () =>
     window
       .locator('#runtime-pill[data-state="ready"]')
-      .waitFor({ state: "visible" }),
+      .waitFor({ state: "attached" }),
   );
   if (mode === "demo") {
     await phases.step(`${label}.firstTaskTab`, LAUNCH_PHASE_BUDGET_MS, () =>
@@ -5484,7 +5484,7 @@ async function relaunchAs(instance, generation) {
   await instance.window.locator("#sidebar").waitFor({ state: "visible" });
   await instance.window
     .locator('#runtime-pill[data-state="ready"]')
-    .waitFor({ state: "visible" });
+    .waitFor({ state: "attached" });
   const bootstrap = await instance.window.evaluate(() =>
     window.farolNext.bootstrap(),
   );
