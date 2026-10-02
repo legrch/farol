@@ -169,7 +169,13 @@ func admitDirectory(r io.ReaderAt, size int64) (int, error) {
 			if err != nil {
 				return 0, err
 			}
-			if u32(descriptor, 0) == 0x08074b50 {
+			matches := func(value []byte) bool {
+				return u32(value, 0) == u32(central, 16) && u32(value, 4) == compressed && u32(value, 8) == expanded
+			}
+			// The optional signature can also be a legitimate CRC. Prefer a
+			// complete unsigned layout matching central metadata before trying
+			// the signed layout; magic alone cannot distinguish the two.
+			if !matches(descriptor) && u32(descriptor, 0) == 0x08074b50 {
 				if dataEnd+16 > offset {
 					return 0, refuse("ARCHIVE_DIRECTORY_INVALID")
 				}
@@ -179,7 +185,7 @@ func admitDirectory(r io.ReaderAt, size int64) (int, error) {
 				}
 				dataEnd += 4
 			}
-			if u32(descriptor, 0) != u32(central, 16) || u32(descriptor, 4) != compressed || u32(descriptor, 8) != expanded {
+			if !matches(descriptor) {
 				return 0, refuse("ARCHIVE_HEADER_INVALID")
 			}
 			dataEnd += 12

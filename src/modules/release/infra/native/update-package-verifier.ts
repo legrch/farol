@@ -12,7 +12,7 @@ import type {
 const execFileAsync = promisify(execFile);
 // Reviewed Go extractor; the legacy filename is a schema-6 transport boundary.
 export const UPDATE_ARCHIVE_HELPER_SHA256 =
-  "e4651c3fa2b0d4d85779d71402530b4af3d5b5af3221725589095204c63136c1";
+  "4ed053b3dbcbadf6677e6fc3bb2e3c27dd56698cd73ba59361854a70b041c017";
 const UPDATE_ARCHIVE_MAX_BYTES = 8 * 1024 * 1024;
 type MeasuredIdentity = PackageIdentity & Readonly<{ buildVersion: string }>;
 export type VerifiedStagedPackage = Readonly<{

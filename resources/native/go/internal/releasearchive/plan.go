@@ -135,7 +135,13 @@ func entryType(f *zip.File) (kind, uint32, error) {
 // copyEntry always checks CRC, including an expected zero CRC (archive/zip does
 // not check zero CRC without a descriptor). Reads are limited to declared size+1.
 func copyEntry(f *zip.File, target io.Writer, buffer []byte) error {
-	source, err := f.Open()
+	// admitDirectory already verified the descriptor against central CRC and
+	// sizes. archive/zip otherwise mistakes an unsigned marker-valued CRC for
+	// a signature. Suppress only that duplicate descriptor read in a local
+	// header copy; bounded output and actual CRC remain checked below.
+	header := *f
+	header.Flags &^= 8
+	source, err := header.Open()
 	if err != nil {
 		return refuse("ARCHIVE_READ_INVALID")
 	}

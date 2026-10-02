@@ -2,6 +2,7 @@ package releasearchive
 
 import (
 	"bytes"
+	"hash/crc32"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -14,6 +15,71 @@ func positions(data []byte) (central, end, local int) {
 	central = int(u32(data[end:], 16))
 	local = int(u32(data[central:], 42))
 	return
+}
+
+func TestDataDescriptorForms(t *testing.T) {
+	// This real payload's CRC equals the optional descriptor signature. Its
+	// unsigned descriptor must be interpreted using central metadata, not magic.
+	markerPayload := []byte{0xac, 0x0a, 0x7a, 0xd5}
+	if crc32.ChecksumIEEE(markerPayload) != 0x08074b50 {
+		t.Fatal("marker CRC fixture changed")
+	}
+	for _, unsigned := range []bool{false, true} {
+		for _, payload := range [][]byte{[]byte("ordinary payload"), markerPayload} {
+			label := strconv.FormatBool(unsigned) + "/" + strconv.FormatUint(uint64(crc32.ChecksumIEEE(payload)), 16)
+			t.Run(label, func(t *testing.T) {
+				entry := fixtureEntry{name: previewApp + "/descriptor", data: payload, flags: 8, unsignedDescriptor: unsigned}
+				data := makeArchive(t, withEntry(entry))
+				if _, err := admitDirectory(bytes.NewReader(data), int64(len(data))); err != nil {
+					t.Fatalf("valid descriptor refused: %v", err)
+				}
+				f := newFixture(t, data)
+				if _, err := Run(f.args); err != nil {
+					t.Fatalf("valid payload refused after admission: %v", err)
+				}
+				got, err := os.ReadFile(filepath.Join(f.stage, previewApp, "descriptor"))
+				if err != nil || !bytes.Equal(got, payload) {
+					t.Fatalf("extracted payload changed: %x %v", got, err)
+				}
+				for _, field := range []int{0, 4, 8} {
+					t.Run("mismatch-"+strconv.Itoa(field), func(t *testing.T) {
+						bad := append([]byte(nil), data...)
+						central, _, _ := positions(bad)
+						descriptorStart := central - 16
+						if unsigned {
+							descriptorStart = central - 12
+						} else {
+							descriptorStart += 4
+						}
+						bad[descriptorStart+field] ^= 1
+						f := newFixture(t, bad)
+						_, err := Run(f.args)
+						code := "ARCHIVE_HEADER_INVALID"
+						// This malformed unsigned layout also resembles a signed
+						// descriptor truncated at the central-directory boundary.
+						if unsigned && crc32.ChecksumIEEE(payload) == 0x08074b50 && field != 0 {
+							code = "ARCHIVE_DIRECTORY_INVALID"
+						}
+						requireRefusal(t, err, code)
+						requireEmpty(t, f.stage)
+					})
+				}
+				t.Run("bad-payload", func(t *testing.T) {
+					bad := append([]byte(nil), data...)
+					central, _, _ := positions(bad)
+					dataEnd := central - 16
+					if unsigned {
+						dataEnd = central - 12
+					}
+					bad[dataEnd-len(payload)] ^= 1
+					f := newFixture(t, bad)
+					_, err := Run(f.args)
+					requireRefusal(t, err, "ARCHIVE_CRC_INVALID")
+					requireEmpty(t, f.stage)
+				})
+			})
+		}
+	}
 }
 
 func TestMaliciousHeadersBeforeExtraction(t *testing.T) {

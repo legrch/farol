@@ -17,12 +17,13 @@ import (
 // These fixtures exercise real native filesystem operations and ZIP bytes.
 // They do not represent installed-app, provider, signing, or package acceptance.
 type fixtureEntry struct {
-	name              string
-	data              []byte
-	mode              uint32
-	method            uint16
-	flags             uint16
-	extra, localExtra []byte
+	name               string
+	data               []byte
+	mode               uint32
+	method             uint16
+	flags              uint16
+	extra, localExtra  []byte
+	unsignedDescriptor bool
 }
 
 func baseEntries() []fixtureEntry {
@@ -94,7 +95,11 @@ func makeArchive(t *testing.T, entries []fixtureEntry) []byte {
 			put32(descriptor, 4, crc)
 			put32(descriptor, 8, uint32(len(payload)))
 			put32(descriptor, 12, uint32(len(e.data)))
-			body.Write(descriptor)
+			if e.unsignedDescriptor {
+				body.Write(descriptor[4:])
+			} else {
+				body.Write(descriptor)
+			}
 		}
 		central.Write(cd)
 		central.WriteString(e.name)

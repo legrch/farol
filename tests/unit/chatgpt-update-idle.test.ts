@@ -10,6 +10,7 @@ import {
 class ElementFixture {
   visible = true;
   cssVisible = true;
+  ancestorOpacity = "1";
   styles = { display: "block", visibility: "visible", opacity: "1" };
   rectangle = {
     width: 200,
@@ -37,8 +38,14 @@ class ElementFixture {
       ? this.rectangle
       : { ...this.rectangle, width: 0, height: 0 };
   }
-  checkVisibility() {
-    return this.cssVisible;
+  checkVisibility(options: { opacityProperty?: boolean } = {}) {
+    // Native CSSOM checkVisibility defaults to layout visibility. Opting into
+    // opacity also checks ancestors, whose opacity is not inherited by a child.
+    return (
+      this.cssVisible &&
+      (!options.opacityProperty ||
+        (this.styles.opacity !== "0" && this.ancestorOpacity !== "0"))
+    );
   }
   contains(node: unknown): boolean {
     return node === this || this.children.some((child) => child.contains(node));
@@ -145,7 +152,13 @@ describe("update idle observation on synthetic public DOM", () => {
   ])("refuses a %s voice entry despite its positive layout box", (state) => {
     const f = fixture();
     if (state === "transparent") f.voice.styles.opacity = "0";
-    if (state === "concealed-ancestor") f.voice.cssVisible = false;
+    if (state === "concealed-ancestor") {
+      f.voice.ancestorOpacity = "0";
+      expect(f.voice.styles.opacity).toBe("1");
+      expect(f.voice.checkVisibility()).toBe(true);
+      expect(f.voice.checkVisibility({ opacityProperty: true })).toBe(false);
+      expect(f.paint.hit).toBe(f.voice);
+    }
     if (state === "off-viewport") {
       f.voice.rectangle = { ...f.voice.rectangle, left: 1500, right: 1700 };
     }
