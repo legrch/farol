@@ -2346,7 +2346,9 @@ export class ChatGptRoute {
         outputText: "",
       };
     }
-    if (this.taskInFlight) {
+    // Refuse before changing task/sign-in state, including when no browser is
+    // open. An update's final idle proof remains reserved until its release.
+    if (this.updateAdmission || this.taskInFlight) {
       return {
         state: "failed_before_submit",
         code: "CHATGPT_TASK_IN_PROGRESS",
@@ -3212,12 +3214,18 @@ export class ChatGptRoute {
     }>,
     observer: ChatGptTaskObserver = {},
   ): Promise<ChatGptReadonlyTaskResult> {
-    if (this.taskInFlight || !input.turnUserId || !input.prompt) {
+    if (
+      this.updateAdmission ||
+      this.taskInFlight ||
+      !input.turnUserId ||
+      !input.prompt
+    ) {
       return {
         state: "outcome_unknown",
-        code: this.taskInFlight
-          ? "CHATGPT_TASK_IN_PROGRESS"
-          : "CHATGPT_TASK_OUTPUT_CHANGED",
+        code:
+          this.updateAdmission || this.taskInFlight
+            ? "CHATGPT_TASK_IN_PROGRESS"
+            : "CHATGPT_TASK_OUTPUT_CHANGED",
         deltaCount: 0,
         observedCharacters: 0,
         outputText: "",

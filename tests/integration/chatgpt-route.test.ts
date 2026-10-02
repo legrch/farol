@@ -808,6 +808,79 @@ describe("installed-update browser admission", () => {
     Reflect.set(candidate, "load", "loaded");
     return { candidate, surface, execute };
   }
+  it.each([
+    [false, "ordinary"],
+    [false, "attachment"],
+    [false, "connector"],
+    [true, "ordinary"],
+    [true, "attachment"],
+    [true, "connector"],
+  ] as const)(
+    "refuses an internal %s/%s submission without disturbing update admission",
+    async (opened, task) => {
+      const page = updatePage();
+      const candidate = opened ? page.candidate : route();
+      const open = vi.spyOn(candidate, "open");
+      const admission = await candidate.acquireUpdateIdle();
+      if (!admission.ok) throw new Error(admission.code);
+      expect(await admission.recheck()).toEqual({ ok: true });
+      // Dispatch persistence can yield after the final browser observation.
+      await Promise.resolve();
+      const pending =
+        task === "connector"
+          ? candidate.runReadonlyTask(
+              "fixture check only",
+              [],
+              { readConnectorReceipt: vi.fn(async () => true) },
+              "temporary-instant",
+              { name: "Farol" },
+            )
+          : candidate.runReadonlyTask(
+              "fixture task only",
+              task === "attachment" ? [attachment] : [],
+            );
+      expect(await admission.recheck()).toEqual({ ok: true });
+      expect(await pending).toMatchObject({
+        state: "failed_before_submit",
+        code: "CHATGPT_TASK_IN_PROGRESS",
+        deltaCount: 0,
+        observedCharacters: 0,
+      });
+      expect(open).not.toHaveBeenCalled();
+      expect(attachmentMock.upload).not.toHaveBeenCalled();
+      expect(await admission.recheck()).toEqual({ ok: true });
+      admission.release();
+      open.mockResolvedValue({ status: "unreachable" });
+      expect(await candidate.runReadonlyTask("after release")).toMatchObject({
+        state: "failed_before_submit",
+        code: "CHATGPT_PAGE_UNREACHABLE",
+      });
+      expect(open).toHaveBeenCalledOnce();
+    },
+  );
+  it.each([false, true])(
+    "keeps an existing turn unknown without starting observation during update admission (opened=%s)",
+    async (opened) => {
+      const candidate = opened ? updatePage().candidate : route();
+      const open = vi.spyOn(candidate, "open");
+      const admission = await candidate.acquireUpdateIdle();
+      if (!admission.ok) throw new Error(admission.code);
+      const pending = candidate.observeReadonlyTask({
+        prompt: "fixture existing turn",
+        turnUserId: "user-fixture",
+        turnAssistantId: "assistant-fixture",
+      });
+      expect(await admission.recheck()).toEqual({ ok: true });
+      expect(await pending).toMatchObject({
+        state: "outcome_unknown",
+        code: "CHATGPT_TASK_IN_PROGRESS",
+        turnUserId: "user-fixture",
+        turnAssistantId: "assistant-fixture",
+      });
+      expect(open).not.toHaveBeenCalled();
+      admission.release();
+    },
+  );
   it("admits an open browser only after fresh idle proof and holds input until release", async () => {
     const { candidate, surface, execute } = updatePage();
     const admission = await candidate.acquireUpdateIdle();
