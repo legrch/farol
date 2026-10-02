@@ -808,6 +808,17 @@ describe("read-only Computer MCP adapter", () => {
           Reflect.deleteProperty(output, "sha256");
           Reflect.set(output, "page", { offset: 0, size: 100, nextOffset: 4 });
         }
+        if (name === "text-full.txt" || name === "text-window.txt") {
+          Reflect.set(output, "bytes", 1);
+          if (name === "text-window.txt") {
+            Reflect.deleteProperty(output, "sha256");
+            Reflect.set(output, "page", {
+              offset: 0,
+              size: 100,
+              nextOffset: 1,
+            });
+          }
+        }
         return { ok: true, value: { ...request, relativePath: name, output } };
       },
     };
@@ -836,6 +847,8 @@ describe("read-only Computer MCP adapter", () => {
         ["page-for-full.txt", {}],
         ["full-for-range.txt", { offset: 0 }],
         ["contradictory-page.txt", { offset: 10, length: 64 }],
+        ["text-full.txt", {}],
+        ["text-window.txt", { offset: 0, length: 4 }],
       ] as const) {
         const result = await client.callTool({
           name: "computer_workspace_read",

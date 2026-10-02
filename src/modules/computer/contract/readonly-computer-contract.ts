@@ -40,6 +40,24 @@ const AbsolutePathSchema = z
 
 const MAX_READ_BYTES = 256 * 1_024;
 
+function exactTextByteCount(
+  text: string,
+  bytes: number,
+  atFileStart: boolean,
+): boolean {
+  let encodedBytes = 0;
+  for (const character of text) {
+    const code = character.codePointAt(0);
+    if (code === undefined || (code >= 0xd800 && code <= 0xdfff)) return false;
+    encodedBytes +=
+      code <= 0x7f ? 1 : code <= 0x7ff ? 2 : code <= 0xffff ? 3 : 4;
+    if (encodedBytes > bytes) return false;
+  }
+  // The native decoder omits one initial UTF-8 BOM. Its three raw bytes
+  // still belong to the file digest and the window's continuation offset.
+  return bytes === encodedBytes || (atFileStart && bytes === encodedBytes + 3);
+}
+
 // A window of a file too large to read whole. It spans at least one whole
 // UTF-8 character, so every window makes progress, and its offset is any exact
 // integer, so every reported `nextOffset` is a valid next request.
@@ -120,15 +138,16 @@ const WorkspaceOutputSchema = z.union([
   z
     .strictObject({
       kind: z.literal("workspace.text"),
-      text: z.string(),
+      text: z.string().max(MAX_READ_BYTES),
       bytes: z.number().int().nonnegative().max(MAX_READ_BYTES),
       sha256: z.string().regex(/^[0-9a-f]{64}$/u),
     })
+    .refine((value) => exactTextByteCount(value.text, value.bytes, true))
     .transform((value): typeof value & { page?: never } => value),
   z
     .strictObject({
       kind: z.literal("workspace.text"),
-      text: z.string(),
+      text: z.string().max(MAX_READ_BYTES),
       bytes: z.number().int().nonnegative().max(MAX_READ_BYTES),
       page: z.strictObject({
         offset: z.number().int().nonnegative(),
@@ -136,6 +155,9 @@ const WorkspaceOutputSchema = z.union([
         nextOffset: z.number().int().positive().nullable(),
       }),
     })
+    .refine((value) =>
+      exactTextByteCount(value.text, value.bytes, value.page.offset === 0),
+    )
     .transform((value): typeof value & { sha256?: never } => value),
   z.strictObject({
     kind: z.literal("workspace.entries"),

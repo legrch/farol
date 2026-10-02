@@ -177,6 +177,87 @@ describe("closed full/window public read response", () => {
   };
 
   it.each([
+    [
+      "full Unicode byte undercount",
+      { ...full, text: "😀", bytes: 1 },
+      undefined,
+    ],
+    ["full byte overcount", { ...full, text: "x", bytes: 10 }, undefined],
+    [
+      "oversized full text",
+      { ...full, text: "x".repeat(256 * 1024 + 1), bytes: 1 },
+      undefined,
+    ],
+    [
+      "invalid Unicode scalar",
+      { ...full, text: "\ud800", bytes: 3 },
+      undefined,
+    ],
+    [
+      "window Unicode byte undercount",
+      { ...window, text: "😀", page: { offset: 0, size: 5, nextOffset: 1 } },
+      { offset: 0, length: 4 },
+    ],
+    [
+      "window byte overcount",
+      { ...window, bytes: 10, page: { offset: 10, size: 100, nextOffset: 20 } },
+      range,
+    ],
+    [
+      "BOM allowance outside file start",
+      { ...window, bytes: 4, page: { offset: 10, size: 100, nextOffset: 14 } },
+      range,
+    ],
+  ])("refuses text with %s", (_name, output, requested) => {
+    expect(
+      ReadonlyComputerCallResponseSchema.safeParse(response(output, requested))
+        .success,
+    ).toBe(false);
+  });
+
+  it("preserves raw BOM bytes, Unicode and the exact text bound", () => {
+    for (const [text, bytes] of [
+      ["", 0],
+      ["", 3],
+      ["AЖ€😀\r\n", 12],
+      ["\ufeffx", 7],
+      ["x".repeat(256 * 1024), 256 * 1024],
+    ] as const) {
+      expect(
+        ReadonlyComputerCallResponseSchema.safeParse(
+          response({ ...full, text, bytes }),
+        ).success,
+      ).toBe(true);
+      expect(
+        ReadonlyComputerCallResponseSchema.safeParse(
+          response(
+            {
+              ...page,
+              text,
+              bytes,
+              page: { offset: 0, size: bytes, nextOffset: null },
+            },
+            { offset: 0, length: 256 * 1024 },
+          ),
+        ).success,
+      ).toBe(true);
+    }
+    expect(
+      ReadonlyComputerCallResponseSchema.safeParse(
+        response(
+          {
+            ...window,
+            text: "\ufeffx",
+            bytes: 4,
+            page: { offset: 10, size: 100, nextOffset: 14 },
+          },
+          range,
+        ),
+      ).success,
+    ).toBe(true);
+  });
+
+  it.each([
     ["offset before the request", { offset: 0, size: 100, nextOffset: 1 }],
     ["skip beyond a UTF-8 prefix", { offset: 14, size: 100, nextOffset: 15 }],
     ["backward continuation", { offset: 10, size: 100, nextOffset: 10 }],
