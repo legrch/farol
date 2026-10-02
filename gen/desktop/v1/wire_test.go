@@ -6,7 +6,7 @@ import (
 )
 
 func TestIntegerJSONValueSpellings(t *testing.T) {
-	for _, number := range []string{"1", "1.0", "1e0", "10e-1"} {
+	for _, number := range []string{"1", "1.0", "1e0", "10e-1", "1.00000000000000001", "0.99999999999999999"} {
 		raw := []byte(`{"protocolMajor":` + number + `,"protocolMinor":0.0,"buildId":"build","profileId":"test"}`)
 		if err := Validate("Handshake", raw); err != nil {
 			t.Fatalf("%s: %v", number, err)

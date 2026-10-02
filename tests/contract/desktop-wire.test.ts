@@ -321,8 +321,15 @@ const frames=req.method==='core.handshake'?[encode(response)]:[encode({jsonrpc:'
   }
 });
 
-it("accepts equivalent bounded integer JSON values and rejects fractions and overflow", () => {
-  for (const number of ["1", "1.0", "1e0", "10e-1"]) {
+it("validates decoded binary64 integer values consistently across number spellings", () => {
+  for (const number of [
+    "1",
+    "1.0",
+    "1e0",
+    "10e-1",
+    "1.00000000000000001",
+    "0.99999999999999999",
+  ]) {
     expect(
       validate(
         "Handshake",
