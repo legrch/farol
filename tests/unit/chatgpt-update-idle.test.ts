@@ -186,30 +186,49 @@ describe("update idle observation on synthetic public DOM", () => {
     f.send.visible = false;
     expect(f.run()).toEqual({ state: "idle" });
   });
-  it.each(["explicit", "implicit", "invalid", "input", "image"])(
-    "refuses an unrecognized enabled %s submit control",
-    (kind) => {
-      const f = fixture();
-      f.voice.attributes["aria-label"] = "Start Voice";
-      f.send.visible = false;
-      const control =
-        kind === "input" || kind === "image"
-          ? new ElementFixture("input", {
-              type: kind === "image" ? "image" : "submit",
-            })
-          : new ButtonFixture({
-              "aria-label": "Unrecognized action",
-              ...(kind === "implicit"
-                ? {}
-                : { type: kind === "invalid" ? "unrecognized" : "submit" }),
-            });
-      f.form.children.push(control);
-      expect(f.run()).toEqual({ state: "unknown" });
-      control.disabled = true;
-      expect(f.run()).toEqual({ state: "idle" });
-    },
-  );
-  it.each(["button", "submit", "image", "recognized-send"])(
+  it.each([
+    "explicit",
+    "implicit",
+    "invalid",
+    "button",
+    "reset",
+    "input",
+    "image",
+  ])("refuses an unrecognized enabled %s action control", (kind) => {
+    const f = fixture();
+    f.voice.attributes["aria-label"] = "Start Voice";
+    f.send.visible = false;
+    const control =
+      kind === "input" || kind === "image"
+        ? new ElementFixture("input", {
+            type: kind === "image" ? "image" : "submit",
+          })
+        : new ButtonFixture({
+            "aria-label": "Unrecognized action",
+            ...(kind === "implicit"
+              ? {}
+              : {
+                  type:
+                    kind === "invalid"
+                      ? "unrecognized"
+                      : kind === "button" || kind === "reset"
+                        ? kind
+                        : "submit",
+                }),
+          });
+    f.form.children.push(control);
+    expect(f.run()).toEqual({ state: "unknown" });
+    control.disabled = true;
+    expect(f.run()).toEqual({ state: "idle" });
+  });
+  it.each([
+    "button",
+    "custom-button",
+    "reset",
+    "submit",
+    "image",
+    "recognized-send",
+  ])(
     "refuses an external enabled %s control owned by the composer form",
     (kind) => {
       const f = fixture();
@@ -218,7 +237,12 @@ describe("update idle observation on synthetic public DOM", () => {
         kind === "submit" || kind === "image"
           ? new ElementFixture("input", { type: kind })
           : new ButtonFixture({
-              type: "submit",
+              type:
+                kind === "custom-button"
+                  ? "button"
+                  : kind === "reset"
+                    ? "reset"
+                    : "submit",
               ...(kind === "recognized-send"
                 ? { "data-testid": "send-button" }
                 : { "aria-label": "Continue" }),

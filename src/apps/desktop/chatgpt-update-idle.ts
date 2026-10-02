@@ -46,16 +46,16 @@ export const chatGptUpdateIdleProbe = `(() => {
       .some(e => !(e instanceof HTMLButtonElement)))
     return { state: "unknown" };
   const sends = controls('[data-testid="send-button"],button[aria-label="Send prompt"],button[aria-label="Send message"]').filter(visible);
-  // A renamed or implicit submit control must not disappear from admission
-  // because its label is no longer recognized. Native button.type also covers
-  // missing or invalid type attributes, whose effective type is submit.
-  const submits = controls('button,input[type="submit"],input[type="image"]')
-    .filter(visible).filter(e => !(e instanceof HTMLButtonElement) || e.type === "submit");
-  if (submits.some(e => !sends.includes(e) && e.disabled !== true))
+  const voice = [...form.querySelectorAll('button[aria-label="Start Voice"],button[aria-label="Start voice mode"],button[aria-label="Start Voice Mode"]')].filter(visible);
+  // Any unknown enabled button can submit through an application handler,
+  // including type=button/reset and controls associated outside the form.
+  // Only the known non-submit voice entry is excluded from that uncertainty.
+  const actions = controls('button,input[type="submit"],input[type="image"]').filter(visible);
+  if (actions.some(e => !sends.includes(e) && e.disabled !== true &&
+      !(voice.includes(e) && e instanceof HTMLButtonElement && e.type === "button")))
     return { state: "unknown" };
   // Disabled Send alone does not prove that a voice session has ended. Require
   // a positive entry control; a generic voice toggle may also exist while active.
-  const voice = [...form.querySelectorAll('button[aria-label="Start Voice"],button[aria-label="Start voice mode"],button[aria-label="Start Voice Mode"]')].filter(visible);
   // Native disabledness also includes a disabled ancestor fieldset, except
   // controls in its first legend. The control's own property misses that state.
   const voiceReady = voice.length === 1 && voice[0] instanceof HTMLButtonElement &&

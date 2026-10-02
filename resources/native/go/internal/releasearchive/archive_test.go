@@ -180,6 +180,10 @@ func TestExtractModesBootstrapAndVendorSymlinks(t *testing.T) {
 			if result.AppPath != filepath.Join(canonical, app) || result.ArtifactPath != filepath.Join(canonical, "artifact.json") {
 				t.Fatal(result)
 			}
+			artifact, err := os.ReadFile(result.ArtifactPath)
+			if err != nil || string(artifact) != "{}" {
+				t.Fatalf("canonical artifact: %q %v", artifact, err)
+			}
 			got, err := os.ReadFile(filepath.Join(result.AppPath, "Contents/Frameworks/Alias"))
 			if err != nil || string(got) != "binary" {
 				t.Fatalf("resolved link: %q %v", got, err)
@@ -233,6 +237,21 @@ func TestPolicyRefusalsBeforeExtraction(t *testing.T) {
 			requireRefusal(t, err, tt.code)
 			requireEmpty(t, f.stage)
 		})
+	}
+}
+
+func TestArtifactNameRequiresExactCanonicalSpelling(t *testing.T) {
+	for _, name := range []string{"ARTIFACT.JSON", "Artifact.json", "artifact.JSON"} {
+		for _, flags := range []uint16{0, 0x800} {
+			t.Run(name+"/flags="+strconv.Itoa(int(flags)), func(t *testing.T) {
+				entries := baseEntries()
+				entries[0].name, entries[0].flags = name, flags
+				f := newFixture(t, makeArchive(t, entries))
+				_, err := Run(f.args)
+				requireRefusal(t, err, "ARCHIVE_LAYOUT_INVALID")
+				requireEmpty(t, f.stage)
+			})
+		}
 	}
 }
 
