@@ -2,6 +2,8 @@
 
 K0 is an additive backend foundation. The installed Electron application still uses its existing backend. Only the trusted host imports `apps/desktop/bridge/client.ts`; React and remote pages do not receive this client or its pipe.
 
+The accepted Go migration layout places the Core-owned host client, framed decoder and generated TypeScript wire under `apps/desktop/bridge`. This is the explicit migration exception to the legacy `src/` source layout. `tooling/tsconfig.desktop-core.json` makes these modules direct strict compiler roots, independently of test imports. Desktop owns the trusted Electron host integration point and its frontend directory move; K0 supplies the importable client and disposable process witness. Lead owns reconciliation of repository-wide layout instructions during integration.
+
 Run `go build ./cmd/farol`, then `farol serve --profile <id>`. The build owns `boot.BuildID`, set with `-ldflags "-X github.com/legrch/farol/boot.BuildID=<accepted-build-id>"`; development defaults to `development`. The host launches the exact accepted executable with inherited stdin/stdout pipes. Each process generates a fresh 128-bit random incarnation. The Go serve API owns closable input/output pipes and closes both exactly once on every terminal return; context cancellation closes those exact endpoints to interrupt idle reads and blocked writes, and passes the same context to the module handler. Module journals still decide OS/provider cancellation outcomes. The CLI lifetime follows its inherited pipes. K0 does not implement an endpoint discovery service, global per-profile lock, app installation, automatic restart, or MCP socket attachment.
 
 ## Wire and generation

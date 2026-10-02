@@ -20,4 +20,10 @@ run(process.execPath, [
   "tests/contract/desktop-wire.test.ts",
   "tests/architecture/go-architecture.test.ts",
 ]);
+run(process.execPath, [
+  "node_modules/typescript/bin/tsc",
+  "--noEmit",
+  "--project",
+  "tooling/tsconfig.desktop-core.json",
+]);
 run(process.execPath, ["node_modules/typescript/bin/tsc", "--noEmit"]);

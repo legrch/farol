@@ -1,0 +1,5 @@
+{
+  "extends": "../tsconfig.json",
+  "include": ["../apps/desktop/bridge/**/*.ts"],
+  "exclude": ["../node_modules"]
+}
