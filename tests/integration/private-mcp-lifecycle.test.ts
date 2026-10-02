@@ -55,49 +55,63 @@ describe.skipIf(process.platform !== "darwin")(
       ).toBe("1\n");
     });
 
-    it("preserves a newer stop when preparation is already clearing the old marker", async () => {
-      const { root, lifecycle } = await fixture();
-      await lifecycle.prepare(oldDigest);
-      await lifecycle.beginStop();
-      await lifecycle.confirmStop();
-      const stopping = path.join(root, "mcp-lifecycle", "stopping");
-      const unlink = fs.unlink.bind(fs);
-      let arrived!: () => void;
-      const atUnlink = new Promise<void>((resolve) => {
-        arrived = resolve;
-      });
-      let resume!: () => void;
-      const resumeUnlink = new Promise<void>((resolve) => {
-        resume = resolve;
-      });
-      vi.spyOn(fs, "unlink").mockImplementation(async (target) => {
-        if (target === stopping) {
-          arrived();
-          await resumeUnlink;
+    it.each(["file", "directory"])(
+      "preserves a newer stop while preparation clears an old %s marker",
+      async (kind) => {
+        const { root, lifecycle } = await fixture();
+        await lifecycle.prepare(oldDigest);
+        if (kind === "directory") await lifecycle.beginClosedRecoveryStop();
+        else await lifecycle.beginStop();
+        await lifecycle.confirmStop();
+        const stopping = path.join(root, "mcp-lifecycle", "stopping");
+        const unlink = fs.unlink.bind(fs);
+        const rmdir = fs.rmdir.bind(fs);
+        let arrived!: () => void;
+        const atUnlink = new Promise<void>((resolve) => {
+          arrived = resolve;
+        });
+        let resume!: () => void;
+        const resumeUnlink = new Promise<void>((resolve) => {
+          resume = resolve;
+        });
+        const beforeRemove = async (
+          target: Parameters<typeof fs.unlink>[0],
+        ) => {
+          if (target === stopping) {
+            arrived();
+            await resumeUnlink;
+          }
+        };
+        vi.spyOn(fs, "unlink").mockImplementation(async (target) => {
+          await beforeRemove(target);
+          await unlink(target);
+        });
+        vi.spyOn(fs, "rmdir").mockImplementation(async (...args) => {
+          await beforeRemove(args[0]);
+          await rmdir(...args);
+        });
+        const preparing = lifecycle.prepare(newDigest);
+        // Observe rejection immediately so the real-file interleaving has no unhandled promise.
+        const outcome = preparing.then(
+          () => null,
+          (error: unknown) => error,
+        );
+        await atUnlink;
+        try {
+          await lifecycle.beginStop();
+        } finally {
+          resume();
         }
-        await unlink(target);
-      });
-      const preparing = lifecycle.prepare(newDigest);
-      // Observe rejection immediately so the real-file interleaving has no unhandled promise.
-      const outcome = preparing.then(
-        () => null,
-        (error: unknown) => error,
-      );
-      await atUnlink;
-      try {
-        await lifecycle.beginStop();
-      } finally {
-        resume();
-      }
-      expect(await outcome).toMatchObject({
-        message: "COMPUTER_MCP_PREPARATION_STOPPED",
-      });
-      expect(await lifecycle.isStopping()).toBe(true);
-      await lifecycle.waitForStop();
-      await expect(lifecycle.join(newDigest)).rejects.toThrow(
-        "COMPUTER_MCP_LIFECYCLE_REVOKED",
-      );
-    });
+        expect(await outcome).toMatchObject({
+          message: "COMPUTER_MCP_PREPARATION_STOPPED",
+        });
+        expect(await lifecycle.isStopping()).toBe(true);
+        await lifecycle.waitForStop();
+        await expect(lifecycle.join(newDigest)).rejects.toThrow(
+          "COMPUTER_MCP_LIFECYCLE_REVOKED",
+        );
+      },
+    );
 
     it("rejects a preparation queued behind a lifetime lease when Stop wins admission", async () => {
       const { lifecycle } = await fixture();
