@@ -9706,7 +9706,7 @@ processDeathSegment: try {
   await processDeath.window
     .locator("#runtime-pill")
     .getByText("failed", { exact: true })
-    .waitFor({ timeout: 5_000 });
+    .waitFor({ state: "attached", timeout: 5_000 });
   await processDeath.window
     .locator("#browser-loading")
     .getByText("local runtime stopped", { exact: false })
