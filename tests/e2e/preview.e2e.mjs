@@ -9442,7 +9442,20 @@ demoMainSegment: try {
       exact: true,
     })
     .waitFor();
+  const restartedSignInReturned = normal.window.waitForEvent("console", {
+    predicate: (message) => {
+      const match = /^farol\.shell-action\s+(\{.*\})$/u.exec(message.text());
+      if (!match) return false;
+      const action = JSON.parse(match[1]);
+      return (
+        action.action === "sign-in-returned" &&
+        action.source === "auth-window-closed"
+      );
+    },
+    timeout: 15_000,
+  });
   await restartedChatGptPage.close();
+  await restartedSignInReturned;
   await waitForWindowCount(normal.application, 1);
   await waitForShellVisibility(
     normal.application,
