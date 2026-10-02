@@ -78,6 +78,8 @@ func (j *fakeJournal) Progress(_ context.Context, id string, ref task.Reference)
 		return task.ErrIdentity
 	}
 	j.lineage[id] = ref
+	op.Lineage = ref
+	j.ops[id] = op
 	return nil
 }
 func (j *fakeJournal) Finish(_ context.Context, id string, r task.Receipt, next task.Task) error {
@@ -653,5 +655,27 @@ func TestClaudeCancelNeedsExplicitCapabilityAndSameInvocation(t *testing.T) {
 	r, err := s.Control(ctx, MutationRequest{"cancel", "task-1", "", task.Cancel})
 	if err != nil || r.Receipt.State != task.Known || r.Receipt.Reference.InvocationID != "create-1" {
 		t.Fatal(r, err)
+	}
+}
+
+func TestRejectionAfterLineageCannotReleaseFence(t *testing.T) {
+	s, j, _, f, _ := setup(task.Codex)
+	f.progress = []task.Reference{{ThreadID: "thread"}}
+	f.receipt = task.Receipt{State: task.Rejected, Code: "TASK_PROVIDER_REFUSED"}
+	r, err := s.Create(ctx, request(task.Codex))
+	if err != nil || r.Receipt.State != task.Uncertain {
+		t.Fatalf("contradictory receipt: %+v %v", r, err)
+	}
+	snapshot, _ := j.Read(ctx, "task-1")
+	if snapshot.Pending != "create-1" || j.lineage["create-1"].ThreadID != "thread" {
+		t.Fatal("lost uncertain lineage", snapshot)
+	}
+	query, err := s.Operation(ctx, OperationRequest{"create-1"})
+	if err != nil || query.Lineage.ThreadID != "thread" || query.Receipt.State != task.Uncertain {
+		t.Fatal("lost query lineage", query, err)
+	}
+	_, _ = s.Create(ctx, request(task.Codex))
+	if f.calls != 1 {
+		t.Fatal("replayed uncertain effect")
 	}
 }

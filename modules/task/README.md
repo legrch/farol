@@ -25,7 +25,9 @@ atomically serialize task revisions and global operation IDs. Prompt content is
 not stored in the intention. Unknown admission/effect/publication keeps a fence;
 reconnect reads the existing operation through a separate `Operation` query. A new key cannot create the same task or
 bypass an unresolved control/delivery. Partial lineage is retained independently
-of a final effect acknowledgement and never means completion.
+of a final effect acknowledgement and is readable through the operation query;
+it never means completion. A refused receipt after recorded progress is
+contradictory and keeps the operation fenced as unknown.
 
 Codex continuation requires the same thread and a distinct turn. Active steering
 requires the exact issued turn. Cancellation acknowledgement means requested;

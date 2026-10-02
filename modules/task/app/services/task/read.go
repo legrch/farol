@@ -73,6 +73,7 @@ type OperationRequest struct{ OperationID string }
 type OperationResponse struct {
 	OperationID, TaskID string
 	Action              task.Action
+	Lineage             task.Reference
 	Receipt             task.Receipt
 }
 
@@ -100,5 +101,5 @@ func (s *Service) Operation(ctx context.Context, req OperationRequest) (*Operati
 	if !op.Settled {
 		receipt = task.Receipt{State: task.Uncertain}
 	}
-	return &OperationResponse{op.Intent.OperationID, op.Intent.TaskID, op.Intent.Action, receipt}, nil
+	return &OperationResponse{op.Intent.OperationID, op.Intent.TaskID, op.Intent.Action, op.Lineage, receipt}, nil
 }

@@ -162,7 +162,9 @@ func (s *Service) execute(ctx context.Context, req MutationRequest, intent task.
 		return progressErr
 	})
 	progressMu.Lock()
-	invalidProgress := progressErr != nil || (receipt.State == task.Known && !lineage.Extend(receipt.Reference, intent.Binding.Provider))
+	invalidProgress := progressErr != nil ||
+		(receipt.State == task.Known && !lineage.Extend(receipt.Reference, intent.Binding.Provider)) ||
+		(receipt.State == task.Rejected && lineage != (task.Reference{}))
 	progressMu.Unlock()
 	if err != nil || receipt.State == task.Uncertain || invalidProgress {
 		return unknown, nil

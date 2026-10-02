@@ -27,6 +27,7 @@ type Snapshot struct {
 }
 type Operation struct {
 	Intent  task.Intent
+	Lineage task.Reference
 	Receipt task.Receipt
 	Settled bool
 }
