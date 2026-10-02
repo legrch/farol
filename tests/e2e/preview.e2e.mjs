@@ -12006,6 +12006,14 @@ n12AgentDraftSegment: {
     const sequenceBeforeClose = await draft.window.evaluate(
       () => globalThis.__farolE2ESeq ?? 0,
     );
+    const sectionBeforeClose = await draft.window.evaluate(
+      () => document.documentElement.dataset.section ?? null,
+    );
+    assert.equal(
+      sectionBeforeClose,
+      "activity",
+      "the real chat's draft is inspected from Activity",
+    );
     await clickInDraft("#task-agent-subtree");
     await draft.window.keyboard.type("no");
     // A layout is recorded as evidence rather than required: whether one is
@@ -12036,9 +12044,9 @@ n12AgentDraftSegment: {
     //
     // "Show/Hide Sidebar" in the View menu is a production path that does
     // cause one: it reaches `requestSidebarToggle`, and on a window wider
-    // than 979px that writes section "browser", overlay "none" and a new
-    // sidebar preference. Section unchanged, overlay "none" — the exact
-    // shape the layout recorder above was installed for, and the one shape
+    // than 979px that retains the current Activity section, writes overlay
+    // "none" and a new sidebar preference. Section unchanged, overlay "none" —
+    // the exact shape the layout recorder above was installed for, and the one shape
     // that can take the editor away without any shell action in the trace.
     const toggledSidebar = await draft.application.evaluate(({ Menu }) => {
       const item = Menu.getApplicationMenu()?.getMenuItemById(
@@ -12070,7 +12078,7 @@ n12AgentDraftSegment: {
     );
     assert.equal(
       arrivedLayout.section,
-      "browser",
+      sectionBeforeClose,
       `the caused push leaves the section alone · ${JSON.stringify(arrivedLayout)}`,
     );
     assert.equal(
