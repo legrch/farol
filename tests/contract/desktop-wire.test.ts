@@ -14,6 +14,7 @@ import { Client, spawnCore } from "../../apps/desktop/bridge/client.ts";
 import { Decoder, frame, parseJSON } from "../../apps/desktop/bridge/frame.ts";
 import {
   maxFrameBytes,
+  validUnicode,
   knownMethod,
   requiresOperationID,
   schemaSHA256,
@@ -600,4 +601,16 @@ it("rejects missing or unknown method kinds before generating peers", () => {
       ),
     ).toThrow("invalid method classification");
   }
+});
+
+it("admits UTF-16 pairs as scalars and refuses isolated units", () => {
+  for (const value of ["🌊", "A🌊éZ", String.fromCharCode(0xd83c, 0xdf0a)])
+    expect(validUnicode(value)).toBe(true);
+  for (const value of [
+    String.fromCharCode(0xd800),
+    String.fromCharCode(0xdc00),
+    String.fromCharCode(0xd800, 65),
+    String.fromCharCode(0xd800, 0xd800),
+  ])
+    expect(validUnicode(value)).toBe(false);
 });

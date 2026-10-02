@@ -231,7 +231,14 @@ type Definition = { readonly fields: Readonly<Record<string, Spec>> };
 const definitions: Readonly<Record<string, Definition>> = schema.definitions;
 
 export function validUnicode(value: string): boolean {
-  return !/[\uD800-\uDFFF]/u.test(value);
+  for (let i = 0; i < value.length; i++) {
+    const unit = value.charCodeAt(i);
+    if (unit < 0xd800 || unit > 0xdfff) continue;
+    if (unit >= 0xdc00 || i + 1 >= value.length) return false;
+    const low = value.charCodeAt(++i);
+    if (low < 0xdc00 || low > 0xdfff) return false;
+  }
+  return true;
 }
 
 export function validate(name: string, value: unknown, depth = 0): boolean {

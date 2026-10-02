@@ -97,14 +97,16 @@ func (s *Server) Serve(ctx context.Context, in io.ReadCloser, out io.WriteCloser
 			return fmt.Errorf("protocol frame: %w", err)
 		}
 		response := boundResponse(s.dispatch(ctx, data))
-		encoded, err := json.Marshal(response)
+		encoded, err := responseJSON(response)
+		if err != nil && response.Result != nil {
+			// The owner may have acted. Preserve identity, contain invalid output,
+			// and never invoke the owner again to manufacture a usable result.
+			response.Result.Status = "unknown"
+			response.Result.Code = optional("owner_output_invalid")
+			response.Result.Data = nil
+			encoded, err = responseJSON(response)
+		}
 		if err != nil {
-			return err
-		}
-		if err := ipc.ValidateJSON(encoded); err != nil {
-			return err
-		}
-		if err := wire.Validate("Response", encoded); err != nil {
 			return err
 		}
 		if err := ipc.WriteFrame(out, encoded); err != nil {
@@ -145,6 +147,9 @@ func (s *Server) dispatch(ctx context.Context, data []byte) wire.Response {
 	if !wire.KnownMethod(req.Method) {
 		return fault(req.Id, -32601, "unknown method")
 	}
+	if wire.RequiresOperationID(req.Method) != (req.Params.OperationId != nil) {
+		return fault(req.Id, -32602, "invalid operation identity")
+	}
 	if req.Method == "core.status" {
 		if req.Params.OperationId != nil || wire.Validate("Empty", req.Params.Body) != nil {
 			return fault(req.Id, -32602, "invalid status parameters")
@@ -159,9 +164,7 @@ func (s *Server) dispatch(ctx context.Context, data []byte) wire.Response {
 	if !exists {
 		return s.result(req, &Outcome{Status: "unavailable", Code: "capability_unavailable"})
 	}
-	if wire.RequiresOperationID(req.Method) != (req.Params.OperationId != nil) {
-		return fault(req.Id, -32602, "invalid operation identity")
-	}
+
 	operationID := ""
 	if req.Params.OperationId != nil {
 		operationID = *req.Params.OperationId
@@ -259,4 +262,18 @@ func boundResponse(response wire.Response) wire.Response {
 		return unknown()
 	}
 	return response
+}
+
+func responseJSON(response wire.Response) ([]byte, error) {
+	encoded, err := json.Marshal(response)
+	if err != nil {
+		return nil, err
+	}
+	if err := ipc.ValidateJSON(encoded); err != nil {
+		return nil, err
+	}
+	if err := wire.Validate("Response", encoded); err != nil {
+		return nil, err
+	}
+	return encoded, nil
 }

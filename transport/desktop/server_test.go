@@ -49,7 +49,14 @@ func TestIdentityAndAvailability(t *testing.T) {
 	handshake(s)
 	ctx := s.context()
 	for _, method := range []string{"computer.workspace.read", "task.create", "chat.turn", "release.status"} {
-		r := s.dispatch(context.Background(), request(method, method, `{}`, &ctx))
+		raw := request(method, method, `{}`, &ctx)
+		if method == "task.create" || method == "chat.turn" {
+			var call wire.Request
+			json.Unmarshal(raw, &call)
+			call.Params.OperationId = optional("exact-op")
+			raw, _ = json.Marshal(call)
+		}
+		r := s.dispatch(context.Background(), raw)
 		if r.Result == nil || r.Result.Status != "unavailable" || r.Result.RequestId != method {
 			t.Fatalf("%+v", r)
 		}
@@ -349,6 +356,64 @@ func TestCanonicalMethodOperationIdentity(t *testing.T) {
 					}
 				}
 			})
+		}
+	}
+}
+
+func TestOperationIdentityBeforeAvailability(t *testing.T) {
+	for _, test := range []struct {
+		method    string
+		operation *string
+	}{{"computer.workspace.read", optional("op")}, {"core.operation.status", optional("op")}, {"task.create", nil}, {"chat.turn", nil}} {
+		s := server(t)
+		handshake(s)
+		bound := s.context()
+		raw, _ := json.Marshal(wire.Request{Jsonrpc: "2.0", Id: "invalid", Method: test.method, Params: wire.Call{Context: &bound, OperationId: test.operation, Body: json.RawMessage(`{}`)}})
+		if response := s.dispatch(context.Background(), raw); response.Error == nil || response.Error.Code != -32602 {
+			t.Fatalf("%s: malformed identity admitted %+v", test.method, response)
+		}
+	}
+}
+
+type captureWriter struct{ bytes.Buffer }
+
+func (*captureWriter) Close() error { return nil }
+func TestMalformedOwnerOutputIsContained(t *testing.T) {
+	for _, bad := range []Outcome{{Status: "invalid"}, {Status: "ok", Data: json.RawMessage(`{`)}, {Status: "ok", Code: "bad\ncode"}, {Status: "ok", Data: json.RawMessage(`"\ud800"`)}, {Status: "ok", Data: json.RawMessage(`{"x":1,"x":2}`)}} {
+		calls := 0
+		s, err := New(Config{BuildID: "build", ProfileID: "test", Generation: "generation", Methods: map[string]Method{"task.create": {Handle: func(context.Context, Request) (*Outcome, error) { calls++; return &bad, nil }}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var input bytes.Buffer
+		ipc.WriteFrame(&input, request("hello", "core.handshake", `{"protocolMajor":1,"protocolMinor":0,"buildId":"build","profileId":"test"}`, nil))
+		bound := s.context()
+		effect, _ := json.Marshal(wire.Request{Jsonrpc: "2.0", Id: "effect", Method: "task.create", Params: wire.Call{Context: &bound, OperationId: optional("exact-op"), Body: json.RawMessage(`{}`)}})
+		ipc.WriteFrame(&input, effect)
+		ipc.WriteFrame(&input, request("after", "core.status", `{}`, &bound))
+		output := &captureWriter{}
+		if err := s.Serve(context.Background(), io.NopCloser(&input), output); err != nil {
+			t.Fatalf("optional owner closed pipe: %v", err)
+		}
+		for index := 0; index < 3; index++ {
+			raw, err := ipc.ReadFrame(&output.Buffer)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var result wire.Response
+			if err := json.Unmarshal(raw, &result); err != nil {
+				t.Fatal(err)
+			}
+			if index == 1 {
+				if result.Result == nil || result.Result.Status != "unknown" || result.Result.Code == nil || *result.Result.Code != "owner_output_invalid" || result.Result.RequestId != "effect" || result.Result.Context != bound || result.Id == nil || *result.Id != "effect" || result.Result.OperationId == nil || *result.Result.OperationId != "exact-op" || len(result.Result.Data) != 0 {
+					t.Fatalf("uncorrelated invalid owner: %+v", result)
+				}
+			} else if result.Result == nil || result.Result.Status != "ok" {
+				t.Fatalf("unrelated reply lost: %+v", result)
+			}
+		}
+		if calls != 1 {
+			t.Fatalf("owner replayed %d times", calls)
 		}
 	}
 }
