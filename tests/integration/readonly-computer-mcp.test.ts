@@ -679,14 +679,15 @@ describe("read-only Computer MCP adapter", () => {
           name === "shifted.txt" && range
             ? { ...request.operation, range: { ...range, offset: 1 } }
             : request.operation;
+        const echoedRange = echoed.range;
         const page =
           name === "unwindowed.txt" || range === undefined
             ? { sha256: createHash("sha256").update("abcd").digest("hex") }
             : {
                 page: {
-                  offset: range.offset,
+                  offset: echoedRange?.offset ?? range.offset,
                   size: 100_000,
-                  nextOffset: range.offset + 4,
+                  nextOffset: (echoedRange?.offset ?? range.offset) + 4,
                 },
               };
         return {
@@ -803,6 +804,10 @@ describe("read-only Computer MCP adapter", () => {
           if (name === "page-for-full.txt")
             Reflect.deleteProperty(output, "sha256");
         }
+        if (name === "contradictory-page.txt") {
+          Reflect.deleteProperty(output, "sha256");
+          Reflect.set(output, "page", { offset: 0, size: 100, nextOffset: 4 });
+        }
         return { ok: true, value: { ...request, relativePath: name, output } };
       },
     };
@@ -830,6 +835,7 @@ describe("read-only Computer MCP adapter", () => {
         ["sha-on-page.txt", { offset: 0 }],
         ["page-for-full.txt", {}],
         ["full-for-range.txt", { offset: 0 }],
+        ["contradictory-page.txt", { offset: 10, length: 64 }],
       ] as const) {
         const result = await client.callTool({
           name: "computer_workspace_read",

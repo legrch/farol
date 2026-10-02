@@ -262,13 +262,35 @@ export const ReadonlyComputerCallResponseSchema = z.discriminatedUnion("ok", [
         output: WorkspaceOutputSchema,
       }),
     })
-    .refine(
-      ({ value }) =>
+    .refine(({ value }) => {
+      if (
         value.operation.kind !== "workspace.read" ||
-        value.output.kind !== "workspace.text" ||
-        (value.operation.range === undefined) ===
-          (value.output.page === undefined),
-    ),
+        value.output.kind !== "workspace.text"
+      )
+        return true;
+      const range = value.operation.range;
+      const { page, bytes, text } = value.output;
+      if (range === undefined) return page === undefined;
+      if (page === undefined) return false;
+      // A window can skip at most three UTF-8 continuation bytes at its
+      // beginning. Its continuation still identifies exactly the byte end.
+      const skipped = page.offset - range.offset;
+      const end = page.offset + bytes;
+      if (
+        skipped < 0 ||
+        skipped > (range.offset === 0 ? 0 : 3) ||
+        bytes > range.length - skipped ||
+        !Number.isSafeInteger(end) ||
+        (bytes === 0 && text !== "")
+      )
+        return false;
+      if (range.offset >= page.size)
+        return skipped === 0 && bytes === 0 && page.nextOffset === null;
+      if (end > page.size) return false;
+      return end === page.size
+        ? page.nextOffset === null
+        : end > range.offset && page.nextOffset === end;
+    }),
   z.strictObject({
     ok: z.literal(false),
     correlation: ReadonlyComputerCallCorrelationSchema.nullable(),

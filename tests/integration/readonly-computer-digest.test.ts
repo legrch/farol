@@ -168,6 +168,72 @@ function response(output: unknown, range?: { offset: number; length: number }) {
   };
 }
 describe("closed full/window public read response", () => {
+  const range = { offset: 10, length: 64 };
+  const window = {
+    kind: "workspace.text",
+    text: "x",
+    bytes: 1,
+    page: { offset: 10, size: 100, nextOffset: 11 },
+  };
+
+  it.each([
+    ["offset before the request", { offset: 0, size: 100, nextOffset: 1 }],
+    ["skip beyond a UTF-8 prefix", { offset: 14, size: 100, nextOffset: 15 }],
+    ["backward continuation", { offset: 10, size: 100, nextOffset: 10 }],
+    ["jumping continuation", { offset: 10, size: 100, nextOffset: 12 }],
+    ["false end of file", { offset: 10, size: 100, nextOffset: null }],
+    ["continuation after EOF", { offset: 10, size: 11, nextOffset: 11 }],
+    ["bytes beyond the file", { offset: 10, size: 10, nextOffset: null }],
+  ])("refuses window metadata with %s", (_name, page) => {
+    expect(
+      ReadonlyComputerCallResponseSchema.safeParse(
+        response({ ...window, page }, range),
+      ).success,
+    ).toBe(false);
+  });
+
+  it("refuses bytes beyond the requested window", () => {
+    expect(
+      ReadonlyComputerCallResponseSchema.safeParse(
+        response(
+          { ...window, bytes: 65, page: { ...window.page, nextOffset: 75 } },
+          range,
+        ),
+      ).success,
+    ).toBe(false);
+  });
+
+  it("preserves UTF-8 alignment progress and reads beyond EOF", () => {
+    for (const [output, requested] of [
+      [window, range],
+      [{ ...window, page: { offset: 13, size: 100, nextOffset: 14 } }, range],
+      [
+        {
+          ...window,
+          text: "",
+          bytes: 0,
+          page: { offset: 13, size: 100, nextOffset: 13 },
+        },
+        { offset: 10, length: 4 },
+      ],
+      [
+        {
+          ...window,
+          text: "",
+          bytes: 0,
+          page: { offset: 200, size: 100, nextOffset: null },
+        },
+        { offset: 200, length: 64 },
+      ],
+    ] as const) {
+      expect(
+        ReadonlyComputerCallResponseSchema.safeParse(
+          response(output, requested),
+        ).success,
+      ).toBe(true);
+    }
+  });
+
   it("accepts exact full and window alternatives", () => {
     expect(
       ReadonlyComputerCallResponseSchema.safeParse(response(full)).success,
