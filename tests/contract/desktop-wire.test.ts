@@ -254,3 +254,29 @@ send({jsonrpc:'2.0',id:req.id,result:{status:'ok',requestId:req.id,context,data:
     }
   }
 });
+
+it("cleans up its exact owned child after fatal timeout without an explicit close", async () => {
+  const { client, child } = await fixture(
+    "process.stdin.resume();setInterval(()=>{},1000);",
+  );
+  const terminal = new Promise<void>((resolve) =>
+    child.once("close", () => resolve()),
+  );
+  await expect(
+    client.handshake(
+      {
+        protocolMajor: 1,
+        protocolMinor: 0,
+        buildId: "k0-test",
+        profileId: "test",
+      },
+      200,
+    ),
+  ).rejects.toMatchObject({ state: "unknown", code: "response_timeout" });
+  await terminal;
+  expect(client.cleanupState).toBe("confirmed");
+  expect(child.signalCode).toBe("SIGKILL");
+  await expect(client.request("core.status", {})).rejects.toMatchObject({
+    state: "unavailable",
+  });
+});

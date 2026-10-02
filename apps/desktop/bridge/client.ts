@@ -44,6 +44,9 @@ export class Client {
   private listeners = new Set<(event: EventData, stale: boolean) => void>();
   private diagnosticBytes = 0;
   private writerBusy = false;
+  private childClosed = false;
+  private cleanupPromise: Promise<void> | undefined;
+  private cleanup: "none" | "pending" | "confirmed" | "unknown" = "none";
   constructor(
     private child: ChildProcessWithoutNullStreams,
     private owned = false,
@@ -76,7 +79,10 @@ export class Client {
         child.pid === undefined ? "unavailable" : "unknown",
       ),
     );
-    child.once("close", () => this.fail("backend_unavailable"));
+    child.once("close", () => {
+      this.childClosed = true;
+      this.fail("backend_unavailable");
+    });
   }
   async handshake(expected: Handshake, timeoutMs: number): Promise<Identity> {
     if (this.context || this.identity)
@@ -129,6 +135,9 @@ export class Client {
     return () => {
       this.listeners.delete(listener);
     };
+  }
+  get cleanupState(): "none" | "pending" | "confirmed" | "unknown" {
+    return this.cleanup;
   }
   get diagnosticByteCount(): number {
     return this.diagnosticBytes;
@@ -267,22 +276,50 @@ export class Client {
       pending.reject(new BridgeError(state, code));
     }
     this.pending.clear();
+    // Admission cannot recover this pipe. Cleanup never resubmits work or proves
+    // cancellation of a module-owned OS/provider operation.
+    void this.terminateOwned().catch(() => {
+      /* close() exposes unconfirmed cleanup. */
+    });
   }
-  async close(): Promise<void> {
-    this.fail("client_closed");
-    this.listeners.clear();
-    if (!this.owned) return;
-    if (this.child.exitCode !== null || this.child.signalCode !== null) return;
-    await new Promise<void>((resolve) => {
-      const timer = setTimeout(() => {
+  private terminateOwned(): Promise<void> {
+    if (!this.owned) return Promise.resolve();
+    if (this.cleanupPromise) return this.cleanupPromise;
+    if (
+      this.childClosed ||
+      this.child.exitCode !== null ||
+      this.child.signalCode !== null
+    ) {
+      this.cleanup = "confirmed";
+      this.child.stdin.destroy();
+      this.child.stdout.destroy();
+      this.child.stderr.destroy();
+      return Promise.resolve();
+    }
+    this.cleanup = "pending";
+    this.cleanupPromise = new Promise<void>((resolve, reject) => {
+      const kill = setTimeout(() => {
         this.child.kill("SIGKILL");
       }, 1000);
+      const deadline = setTimeout(() => {
+        clearTimeout(kill);
+        this.cleanup = "unknown";
+        reject(new BridgeError("unknown", "backend_cleanup_unconfirmed"));
+      }, 2000);
       this.child.once("close", () => {
-        clearTimeout(timer);
+        clearTimeout(kill);
+        clearTimeout(deadline);
+        this.cleanup = "confirmed";
         resolve();
       });
       this.child.stdin.end();
     });
+    return this.cleanupPromise;
+  }
+  async close(): Promise<void> {
+    this.fail("client_closed");
+    this.listeners.clear();
+    await this.terminateOwned();
   }
 }
 
