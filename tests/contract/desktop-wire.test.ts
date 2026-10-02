@@ -377,3 +377,19 @@ it("rejects lone surrogates before path decoding while preserving valid pairs an
   expect(validate("json", { "\ud800": "value" })).toBe(false);
   expect(validate("json", { path: "🌊.md" })).toBe(true);
 });
+
+it("keeps authoritative snapshots unsupported until their owner contract exists", () => {
+  expect(
+    validate("Event", {
+      jsonrpc: "2.0",
+      method: "core.event",
+      params: {
+        context: { profileId: "test", backendGeneration: "verified" },
+        stream: "status",
+        sequence: "1",
+        kind: "snapshot",
+        data: {},
+      },
+    }),
+  ).toBe(false);
+});

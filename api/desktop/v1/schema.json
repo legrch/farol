@@ -195,7 +195,7 @@
         },
         "kind": {
           "type": "text",
-          "values": ["snapshot", "changed", "gap"]
+          "values": ["changed", "gap"]
         },
         "data": {
           "type": "json"
