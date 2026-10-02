@@ -62,8 +62,12 @@ function fixture() {
   composer.form = form;
   const send = new ButtonFixture({ "data-testid": "send-button" });
   send.disabled = true;
-  form.children = [composer, send];
-  const nodes = [form, composer, send];
+  const voice = new ButtonFixture({
+    "data-testid": "voice-mode-button",
+    "aria-label": "Start voice mode",
+  });
+  form.children = [composer, send, voice];
+  const nodes = [form, composer, send, voice];
   const run = () =>
     ChatGptUpdateIdleSchema.parse(
       runInNewContext(chatGptUpdateIdleProbe, {
@@ -77,24 +81,43 @@ function fixture() {
         },
       }),
     );
-  return { run, form, composer, send, nodes };
+  return { run, form, composer, send, voice, nodes };
 }
 
 describe("update idle observation on synthetic public DOM", () => {
-  it("requires an empty usable composer with a disabled Send control", () => {
+  it("requires an empty usable composer, voice readiness and no enabled Send control", () => {
     const f = fixture();
     expect(f.run()).toEqual({ state: "idle" });
     f.send.disabled = false;
     expect(f.run()).toEqual({ state: "unknown" });
     f.send.visible = false;
+    expect(f.run()).toEqual({ state: "idle" });
+  });
+  it.each(["absent", "hidden", "disabled", "aria-disabled", "renamed"])(
+    "does not treat disabled Send as idle when voice readiness is %s",
+    (state) => {
+      const f = fixture();
+      if (state === "absent") f.form.children = [f.composer, f.send];
+      if (state === "hidden") f.voice.visible = false;
+      if (state === "disabled") f.voice.disabled = true;
+      if (state === "aria-disabled") {
+        f.voice.attributes["aria-disabled"] = "true";
+      }
+      if (state === "renamed") {
+        f.voice.attributes["aria-label"] = "Finish speaking";
+      }
+      expect(f.run()).toEqual({ state: "unknown" });
+    },
+  );
+  it("does not borrow voice readiness from outside the composer form", () => {
+    const f = fixture();
+    f.form.children = [f.composer, f.send];
     expect(f.run()).toEqual({ state: "unknown" });
   });
   it("recognizes an empty voice-ready composer, not a disabled or ambiguous voice control", () => {
     const f = fixture();
     f.send.visible = false;
-    const voice = new ButtonFixture({ "data-testid": "voice-mode-button" });
-    f.form.children.push(voice);
-    f.nodes.push(voice);
+    const voice = f.voice;
     expect(f.run()).toEqual({ state: "idle" });
     voice.disabled = true;
     expect(f.run()).toEqual({ state: "unknown" });

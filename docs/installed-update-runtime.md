@@ -25,7 +25,10 @@ app remain saved. A failed drain does not launch the updater helper. Later does
 not enter this drain at all.
 
 An open embedded ChatGPT document is admitted only after a fresh public-DOM
-observation of an empty usable composer with positive idle controls. Active
+observation of an empty usable composer, a visible enabled Start voice mode
+control, and no enabled Send control. Disabled Send alone does not establish
+voice readiness; an absent, renamed, disabled or ambiguous voice entry control
+leaves admission unknown. Active
 responses, voice sessions, drafts, attachments, popups, pending navigation and
 unrecognized controls refuse admission. The observation returns a classification,
 never composer or conversation text. Desktop hides the browser views and holds

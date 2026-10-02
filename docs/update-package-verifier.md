@@ -15,12 +15,19 @@ explicit [closed product cutover](product-cutover.md) to establish the branded
 baseline instead of renaming or replacing an old release archive.
 
 The producer must bundle `tooling/verify-package-standalone.mjs` and its
-imports into one trusted installed resource. The native adapter supplies that
-resource as `verifierPath`, the pinned `resources/native/update_archive.py`
-as `extractorPath`, an owner-private staging parent, and a resolver from its
-opaque download handle to its private archive path. The installed Electron
-executable runs the trusted verifier entry in Node mode. The extracted app is
-never executed for verification.
+imports into one trusted installed resource. It also builds and attests the
+native Go extractor from `resources/native/go/cmd/update-archive`, including
+its compiler, source and dependency identities. The packaged executable keeps
+the resource filename `update-archive.py` for update compatibility; the native
+adapter supplies that pinned executable as `extractorPath` and executes it
+directly, without Python. `resources/native/update_archive.py` remains a
+historical parity-test oracle, not the installed extractor.
+
+The adapter supplies the bundled verifier as `verifierPath`, an owner-private
+staging parent, and a resolver from its opaque download handle to its private
+archive path. The installed Electron executable runs the trusted verifier entry
+in Node mode. The extracted app is never executed for verification. The other
+Computer and install/swap helpers retain their documented Python requirement.
 
 `createUpdatePackageVerifier().verifyPackage(handle, manifest)` rehashes
 the actual regular archive through an `O_NOFOLLOW` descriptor, checks its

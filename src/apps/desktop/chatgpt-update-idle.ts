@@ -28,9 +28,14 @@ export const chatGptUpdateIdleProbe = `(() => {
       [...form.querySelectorAll('[data-testid="attachment-preview"],[data-testid="composer-attachment"],[data-testid*="file-chip"],[data-testid*="attachment-chip"]')].some(visible))
     return { state: "draft" };
   const sends = [...form.querySelectorAll('[data-testid="send-button"],button[aria-label="Send prompt"],button[aria-label="Send message"]')].filter(visible);
-  const voice = [...form.querySelectorAll('[data-testid="voice-mode-button"],button[aria-label="Start voice mode"],button[aria-label="Start Voice Mode"]')].filter(visible);
-  if ((sends.length === 1 && sends[0] instanceof HTMLButtonElement && sends[0].disabled) ||
-      (sends.length === 0 && voice.length === 1 && voice[0] instanceof HTMLButtonElement && !voice[0].disabled))
+  // Disabled Send alone does not prove that a voice session has ended. Require
+  // a positive entry control; a generic voice toggle may also exist while active.
+  const voice = [...form.querySelectorAll('button[aria-label="Start voice mode"],button[aria-label="Start Voice Mode"]')].filter(visible);
+  const voiceReady = voice.length === 1 && voice[0] instanceof HTMLButtonElement &&
+    !voice[0].disabled && voice[0].getAttribute('aria-disabled') !== 'true';
+  const sendInactive = sends.length === 0 ||
+    (sends.length === 1 && sends[0] instanceof HTMLButtonElement && sends[0].disabled);
+  if (voiceReady && sendInactive)
     return { state: "idle" };
   return { state: "unknown" };
 })()`;
