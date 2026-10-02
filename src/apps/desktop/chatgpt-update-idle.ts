@@ -27,7 +27,7 @@ export const chatGptUpdateIdleProbe = `(() => {
   ])].filter(visible);
   if (composers.length !== 1) return { state: "unknown" };
   const c = composers[0], form = c.closest('form');
-  if (!form || c.getAttribute('aria-disabled') === 'true' || c.disabled === true ||
+  if (!form || c.getAttribute('aria-disabled') === 'true' || c.disabled === true || c.matches(':disabled') ||
       (!(c instanceof HTMLTextAreaElement) && c.getAttribute('contenteditable') !== 'true'))
     return { state: "unknown" };
   // Native form ownership can associate controls outside the form subtree.
@@ -51,8 +51,10 @@ export const chatGptUpdateIdleProbe = `(() => {
   // Disabled Send alone does not prove that a voice session has ended. Require
   // a positive entry control; a generic voice toggle may also exist while active.
   const voice = [...form.querySelectorAll('button[aria-label="Start Voice"],button[aria-label="Start voice mode"],button[aria-label="Start Voice Mode"]')].filter(visible);
+  // Native disabledness also includes a disabled ancestor fieldset, except
+  // controls in its first legend. The control's own property misses that state.
   const voiceReady = voice.length === 1 && voice[0] instanceof HTMLButtonElement &&
-    !voice[0].disabled && voice[0].getAttribute('aria-disabled') !== 'true';
+    !voice[0].disabled && !voice[0].matches(':disabled') && voice[0].getAttribute('aria-disabled') !== 'true';
   const sendInactive = sends.length === 0 ||
     (sends.length === 1 && sends[0] instanceof HTMLButtonElement && sends[0].disabled);
   if (!voiceReady || !sendInactive || typeof document.elementFromPoint !== "function")

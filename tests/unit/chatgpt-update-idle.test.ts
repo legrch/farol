@@ -21,6 +21,7 @@ class ElementFixture {
     bottom: 40,
   };
   disabled = false;
+  disabledByFieldset = false;
   textContent = "";
   value = "";
   files: unknown[] = [];
@@ -32,6 +33,11 @@ class ElementFixture {
   ) {}
   getAttribute(name: string): string | null {
     return this.attributes[name] ?? null;
+  }
+  matches(selector: string): boolean {
+    if (selector !== ":disabled")
+      throw new Error("Unsupported fixture selector");
+    return this.disabled || this.disabledByFieldset;
   }
   getBoundingClientRect() {
     return this.visible
@@ -121,6 +127,22 @@ function fixture() {
 }
 
 describe("update idle observation on synthetic public DOM", () => {
+  it("requires a voice entry that is not disabled by an ancestor fieldset", () => {
+    const f = fixture();
+    f.voice.disabledByFieldset = true;
+    expect(f.voice.disabled).toBe(false);
+    expect(f.run()).toEqual({ state: "unknown" });
+    f.voice.disabledByFieldset = false;
+    expect(f.run()).toEqual({ state: "idle" });
+  });
+  it("refuses a composer disabled by an ancestor fieldset", () => {
+    const f = fixture();
+    f.composer.disabledByFieldset = true;
+    expect(f.composer.disabled).toBe(false);
+    expect(f.run()).toEqual({ state: "unknown" });
+    f.composer.disabledByFieldset = false;
+    expect(f.run()).toEqual({ state: "idle" });
+  });
   it("recognizes the current Start Voice entry without weakening activity checks", () => {
     const f = fixture();
     f.voice.attributes["aria-label"] = "Start Voice";
