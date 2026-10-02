@@ -11278,7 +11278,7 @@ n09ConnectorAttachmentSegment: {
         pattern.source,
       );
     await row
-      .getByRole("button", { name: "Detect client", exact: true })
+      .getByRole("button", { name: /^(?:Re-detect|Detect) client$/u })
       .click();
     await feedback(/^tunnel-client \S+ verified/u);
     await attaching.window
