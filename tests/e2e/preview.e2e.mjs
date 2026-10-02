@@ -9449,9 +9449,10 @@ demoMainSegment: try {
     normal.windowMode === "secondary-visible",
     normal.expectedTaskViewCount,
   );
-  // Closing the owner-opened sign-in window deliberately returns to
-  // Settings. Re-enter Connections through its canonical Settings action
-  // before operating on the retained conversation binding.
+  // Connections receives the sign-in outcome without leaving its section.
+  // Explicitly open Settings before using its canonical Connections action.
+  await normal.window.locator('[data-panel="computer"].active').waitFor();
+  await invokeApplicationMenu(normal.application, "app.settings");
   await normal.window.locator('[data-panel="settings"].active').waitFor();
   await normal.window.locator("#open-connections").click();
   await normal.window.locator('[data-panel="computer"].active').waitFor();
