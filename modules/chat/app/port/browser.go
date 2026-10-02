@@ -2,6 +2,8 @@
 // These are application values, not independently authored Desktop wire schemas.
 package port
 
+import "unicode/utf8"
+
 // RequestIdentity is explicitly mapped to domain identity by the Chat service.
 // No alias to a transport DTO, UI type or domain entity is used.
 type RequestIdentity struct {
@@ -72,9 +74,28 @@ type SendResponse struct {
 	Code    string
 }
 
+// Limits apply to semantic UTF-8 text bytes, not JSON's escaped wire size.
+// Core separately enforces encoded frame bounds before decoding any response.
+const MaxObserveEvents = 128
+const MaxObserveTextBytes = 64 * 1024
+const MaxObservePageBytes = 256 * 1024
+
+type ObserveCode string
+
+func (c ObserveCode) Error() string { return string(c) }
+
+const (
+	ObserveInvalid     ObserveCode = "CHAT_OBSERVE_INVALID"
+	ObserveCorrelation ObserveCode = "CHAT_OBSERVE_CORRELATION"
+	ObserveSequence    ObserveCode = "CHAT_OBSERVE_SEQUENCE"
+	ObserveGap         ObserveCode = "CHAT_OBSERVE_GAP"
+)
+
 type ObserveRequest struct {
-	Binding        BrowserBinding
-	AfterSequence  uint64
+	Binding       BrowserBinding
+	AfterSequence uint64
+	// Limit zero selects MaxObserveEvents; a page can never exceed that cap.
+	Limit          int
 	DeadlineMillis uint64
 }
 
@@ -149,4 +170,46 @@ type Browser interface {
 	Observe(ObserveRequest) (*ObserveResponse, error)
 	Cancel(CancelRequest) (*CancelResponse, error)
 	Dispose(DisposeRequest) (*DisposeResponse, error)
+}
+
+// ValidateObserveResponse runs after bounded wire decoding, before any event is
+// applied. It is observation-only and cannot dispatch/resume Send on failure.
+// Pages start after the exact requested sequence and carry the exact binding.
+// This is port conformance, not a replacement for domain lifecycle validation.
+func ValidateObserveResponse(request ObserveRequest, response *ObserveResponse) error {
+	limit := request.Limit
+	if limit == 0 {
+		limit = MaxObserveEvents
+	}
+	if limit < 1 || limit > MaxObserveEvents || response == nil || len(response.Events) > limit {
+		return ObserveInvalid
+	}
+	if response.Gap {
+		return ObserveGap
+	}
+	sequence := request.AfterSequence
+	bytes := 0
+	for _, event := range response.Events {
+		if event.Binding != request.Binding {
+			return ObserveCorrelation
+		}
+		if sequence == ^uint64(0) || event.Sequence != sequence+1 {
+			return ObserveSequence
+		}
+		switch event.Kind {
+		case Accepted, AnswerDelta, Commentary, Status, AwaitingOwner, Completed, Refused, OutcomeUnknown, Quiescent:
+		default:
+			return ObserveInvalid
+		}
+		if !utf8.ValidString(event.Text) || len(event.Text) > MaxObserveTextBytes || len(event.Code) > 120 {
+			return ObserveInvalid
+		}
+		// The page bound includes selected text and classified-code bytes.
+		bytes += len(event.Text) + len(event.Code)
+		if bytes > MaxObservePageBytes {
+			return ObserveInvalid
+		}
+		sequence = event.Sequence
+	}
+	return nil
 }

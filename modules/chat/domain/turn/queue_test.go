@@ -308,3 +308,48 @@ func TestSlotGenerationNeverWraps(t *testing.T) {
 		t.Fatal("wrapped slot lease")
 	}
 }
+
+func TestGenericCancelledResultCannotReleasePreparedOrSentSlot(t *testing.T) {
+	for _, sent := range []bool{false, true} {
+		t.Run(fmt.Sprint(sent), func(t *testing.T) {
+			q := queue(t)
+			i := add(t, q, "a")
+			b := bind(t, q)
+			if sent {
+				if _, err := q.Dispatch(b); err != nil {
+					t.Fatal(err)
+				}
+			}
+			before, err := q.Snapshot(i)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := q.Finish(b, Result{ID: "unproven-cancel", Outcome: CancelledOutcome, Code: "CANCELLED"}); !errors.Is(err, Transition) {
+				t.Fatal("unproven cancellation accepted", err)
+			}
+			after, err := q.Snapshot(i)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if after != before {
+				t.Fatal("rejected cancellation changed state")
+			}
+			if _, err := q.Settle(b); !errors.Is(err, Unsettled) {
+				t.Fatal(err)
+			}
+			if _, err := q.Acknowledge(i, "unproven-cancel"); !errors.Is(err, Correlation) {
+				t.Fatal(err)
+			}
+			if err := q.Release(b.Reservation); !errors.Is(err, Unsettled) {
+				t.Fatal(err)
+			}
+			s, err := q.Cancel(i, "local-cancel")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if sent && s.Phase != Unknown {
+				t.Fatal("sent cancellation lost unknown state")
+			}
+		})
+	}
+}

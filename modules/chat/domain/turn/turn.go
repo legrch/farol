@@ -312,7 +312,10 @@ func (t Turn) Finish(b Binding, result Result) (Turn, error) {
 			return t, Transition
 		}
 	case CancelledOutcome:
-		// This entrypoint requires an exact confirmed terminal browser observation.
+		// Generic provider results cannot prove cancellation/disposal. The current
+		// Cancel path preserves the legacy unknown-after-Send policy; a future
+		// confirmed cancellation path requires its own correlated evidence API.
+		return t, Transition
 	case Refused, Failed:
 	default:
 		return t, Invalid
@@ -321,9 +324,6 @@ func (t Turn) Finish(b Binding, result Result) (Turn, error) {
 	t.phase = ResultReady
 	if result.Outcome == UnknownOutcome {
 		t.phase = Unknown
-	}
-	if result.Outcome == CancelledOutcome {
-		t.phase = Cancelled
 	}
 	return t, nil
 }

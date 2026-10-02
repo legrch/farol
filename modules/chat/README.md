@@ -11,6 +11,9 @@ persist each accepted change before the corresponding native effect. `Dispatch`
 records one Send intent; it does not itself send, persist or prove acceptance.
 `Accept` is separate evidence. A lost native reply, cancellation after Send, or
 unresolved lifecycle never permits another dispatch. Unknown results are sticky.
+Generic `Finish(cancelled)` is refused; only the conservative `Cancel` path may
+classify local cancellation. A confirmed post-Send cancellation needs a separately
+correlated evidence API after Desktop/Core agreement.
 Only an independently designed reconciliation path could settle them; ordinary
 late callbacks cannot rewrite them.
 
@@ -51,7 +54,11 @@ React components consume Desktop's narrower window facade.
 Capabilities are Prepare, Send, bounded Observe, exact Cancel and prepared Dispose.
 They bind the exact lease/document/conversation and carry the same absolute deadline
 budget. Send has transient prompt input and a digest, no arbitrary script or URL.
-Observe exposes selected semantic events, no cookie or storage dump. Cancellation
+Observe exposes selected semantic events, no cookie or storage dump. A page has at
+most 128 events, 64 KiB UTF-8 text per event, and 256 KiB combined text/code bytes.
+An optional smaller request limit caps cardinality. `ValidateObserveResponse`
+rejects oversized pages, invalid UTF-8/kinds, wrong binding, non-contiguous sequence
+and gaps before application; Core independently bounds the encoded wire frame. Cancellation
 requested, confirmed terminal, already terminal and unknown are distinct.
 
 After K0, the application owner must freeze mappings with Desktop, validate every
