@@ -7,6 +7,7 @@ import {
   DEV_DATA_DIRECTORY_NAME,
   LEGACY_DEV_DATA_DIRECTORY_NAME,
   resolveDevDataDirectoryName,
+  resolvePhysicalDevDataDirectoryName,
   type ProfileDirectoryIdentity,
 } from "../../src/apps/desktop/dev-profile-directory";
 
@@ -154,5 +155,120 @@ describe("DEV profile spelling compatibility", () => {
       "DEV_PROFILE_DIRECTORY_UNSAFE",
     );
     expect(await fs.readdir(target)).toEqual([]);
+  });
+
+  it("supplies the physical profile path before Desktop locks and MCP admission", async () => {
+    const temporary = await fs.mkdtemp(
+      path.join(os.tmpdir(), "farol-dev-physical-profile-"),
+    );
+    const root = await fs.realpath(temporary);
+    roots.push(root);
+    const legacy = path.join(root, LEGACY_DEV_DATA_DIRECTORY_NAME);
+    await fs.mkdir(legacy, { mode: 0o700 });
+    const before = await fs.lstat(legacy);
+    const identity = desktopIdentity(
+      "dev",
+      root,
+      resolvePhysicalDevDataDirectoryName(root),
+    );
+    expect(await fs.realpath(identity.userData)).toBe(identity.userData);
+    expect(identity.sessionData).toBe(identity.userData);
+    const after = await fs.lstat(identity.userData);
+    expect([after.dev, after.ino]).toEqual([before.dev, before.ino]);
+    expect(await fs.readdir(root)).toEqual([LEGACY_DEV_DATA_DIRECTORY_NAME]);
+  });
+
+  it("keeps a genuinely new profile fixed without canonicalizing an absent entry", () => {
+    expect(
+      resolvePhysicalDevDataDirectoryName(
+        appData,
+        () => null,
+        () => {
+          throw new Error("MUST_NOT_CANONICALIZE_MISSING_PROFILE");
+        },
+      ),
+    ).toBe(DEV_DATA_DIRECTORY_NAME);
+  });
+
+  it.each([DEV_DATA_DIRECTORY_NAME, LEGACY_DEV_DATA_DIRECTORY_NAME])(
+    "selects the physical same-inode alias %s without changing edition or partitions",
+    (physicalName) => {
+      const name = resolvePhysicalDevDataDirectoryName(
+        appData,
+        () => ({ ...directory }),
+        () => path.join(appData, physicalName),
+      );
+      const identity = desktopIdentity("dev", appData, name);
+      expect(identity.userData).toBe(path.join(appData, physicalName));
+      expect(identity.applicationId).toBe("local.farol.dev");
+      expect(identity.chatGptPartition).toBe("persist:farol-dev-chatgpt");
+      expect(identity.displayEdition).toBe("Development");
+    },
+  );
+
+  it.each([
+    path.join(appData, "Farol Next Preview"),
+    path.join(appData, "Farol Dev Acceptance", DEV_DATA_DIRECTORY_NAME),
+    path.join(appData, DEV_DATA_DIRECTORY_NAME, "child"),
+    path.join(path.dirname(appData), DEV_DATA_DIRECTORY_NAME),
+  ])(
+    "refuses a canonical path outside the two fixed Dev entries (%s)",
+    (physical) => {
+      expect(() =>
+        resolvePhysicalDevDataDirectoryName(
+          appData,
+          () => directory,
+          () => physical,
+        ),
+      ).toThrow("DEV_PROFILE_DIRECTORY_UNSAFE");
+    },
+  );
+
+  it("refuses a profile replaced between directory inspection and canonicalization", () => {
+    let inspections = 0;
+    expect(() =>
+      resolvePhysicalDevDataDirectoryName(
+        appData,
+        () => (++inspections > 2 ? { ...directory, inode: "202" } : directory),
+        (selected) => selected,
+      ),
+    ).toThrow("DEV_PROFILE_DIRECTORY_UNSAFE");
+  });
+
+  it("retains an unreadable canonical path as a refusal", () => {
+    expect(() =>
+      resolvePhysicalDevDataDirectoryName(
+        appData,
+        () => directory,
+        () => {
+          throw Object.assign(new Error("synthetic denied metadata"), {
+            code: "EPERM",
+          });
+        },
+      ),
+    ).toThrow("DEV_PROFILE_DIRECTORY_UNREADABLE");
+  });
+
+  it("keeps distinct and unsafe profiles refused before canonicalization", () => {
+    const canonicalize = () => {
+      throw new Error("MUST_NOT_CANONICALIZE_UNSAFE_PROFILE");
+    };
+    expect(() =>
+      resolvePhysicalDevDataDirectoryName(
+        appData,
+        (candidate) =>
+          candidate.endsWith("Farol DEV")
+            ? directory
+            : { ...directory, inode: "202" },
+        canonicalize,
+      ),
+    ).toThrow("DEV_PROFILE_DIRECTORY_AMBIGUOUS");
+    expect(() =>
+      resolvePhysicalDevDataDirectoryName(
+        appData,
+        () => ({ ...directory, symbolicLink: true }),
+        canonicalize,
+      ),
+    ).toThrow("DEV_PROFILE_DIRECTORY_UNSAFE");
   });
 });

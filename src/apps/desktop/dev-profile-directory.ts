@@ -1,4 +1,4 @@
-import { lstatSync } from "node:fs";
+import { lstatSync, realpathSync } from "node:fs";
 import path from "node:path";
 
 // Storage identifiers are explicit compatibility values, not display-name
@@ -65,6 +65,51 @@ export function resolveDevDataDirectoryName(
     throw new Error("DEV_PROFILE_DIRECTORY_AMBIGUOUS");
   }
   return preferred === null && legacy !== null
+    ? LEGACY_DEV_DATA_DIRECTORY_NAME
+    : DEV_DATA_DIRECTORY_NAME;
+}
+
+/** Use the existing entry's physical spelling before profile locks or MCP.
+ * Only fixed Dev entries are admissible; no contents or migrations are involved.
+ */
+export function resolvePhysicalDevDataDirectoryName(
+  appData: string,
+  inspect: InspectDirectory = inspectDirectory,
+  canonicalize: (absolutePath: string) => string = realpathSync.native,
+): DevDataDirectoryName {
+  const observed = new Map<string, ProfileDirectoryIdentity | null>();
+  const selected = resolveDevDataDirectoryName(appData, (candidate) => {
+    const entry = inspect(candidate);
+    observed.set(candidate, entry);
+    return entry;
+  });
+  const selectedPath = path.join(appData, selected);
+  const selectedEntry = observed.get(selectedPath);
+  // A genuinely new profile has no physical entry yet. Electron may create
+  // the preferred fixed entry; an existing but unreadable entry never gets here.
+  if (selectedEntry === null) return selected;
+  if (selectedEntry === undefined)
+    throw new Error("DEV_PROFILE_DIRECTORY_UNREADABLE");
+  let physical: string;
+  try {
+    physical = canonicalize(selectedPath);
+  } catch {
+    throw new Error("DEV_PROFILE_DIRECTORY_UNREADABLE");
+  }
+  const legacyPath = path.join(appData, LEGACY_DEV_DATA_DIRECTORY_NAME);
+  const preferredPath = path.join(appData, DEV_DATA_DIRECTORY_NAME);
+  if (physical !== legacyPath && physical !== preferredPath)
+    throw new Error("DEV_PROFILE_DIRECTORY_UNSAFE");
+  const current = inspect(physical);
+  if (
+    current === null ||
+    !current.directory ||
+    current.symbolicLink ||
+    current.device !== selectedEntry.device ||
+    current.inode !== selectedEntry.inode
+  )
+    throw new Error("DEV_PROFILE_DIRECTORY_UNSAFE");
+  return physical === legacyPath
     ? LEGACY_DEV_DATA_DIRECTORY_NAME
     : DEV_DATA_DIRECTORY_NAME;
 }

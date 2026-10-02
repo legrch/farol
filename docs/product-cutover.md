@@ -108,6 +108,11 @@ distinct or unsafe profiles, and never selects an acceptance profile or producti
 state. The default remains production. Arbitrary home/profile/helper overrides
 are still refused.
 
+Ordinary Task Dev also selects the existing fixed entry's physical spelling
+before profile locks, browser partitions and MCP lifecycle paths are created.
+The measured device/inode must remain the same; foreign canonical paths refuse
+startup. A new profile still uses `Farol Dev`. No profile is renamed or copied.
+
 For a same-inode case alias, maintenance selects the physical entry spelling
 returned by the filesystem. That path must still be exactly one of the two fixed
 Dev entries under the genuine owner app-data parent. The recovery core's strict

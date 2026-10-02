@@ -420,7 +420,7 @@ import {
   isolatedDevMcpProofAllowed,
 } from "./desktop-environment";
 import { terminateDesktopStartup } from "./desktop-startup-failure";
-import { resolveDevDataDirectoryName } from "./dev-profile-directory";
+import { resolvePhysicalDevDataDirectoryName } from "./dev-profile-directory";
 
 const directory = __dirname;
 const buildIdentity = readRuntimeBuildIdentity(directory);
@@ -466,7 +466,7 @@ const declaredDesktopIdentity = desktopIdentity(
   runtimeEnvironment,
   desktopAppData,
   runtimeEnvironment === "dev"
-    ? resolveDevDataDirectoryName(desktopAppData)
+    ? resolvePhysicalDevDataDirectoryName(desktopAppData)
     : undefined,
 );
 const selectedDesktopUserData = (() => {
