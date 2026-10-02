@@ -1,5 +1,5 @@
 {
-  "generator": "farol-wire/1",
+  "generator": "farol-wire/2",
   "protocolMajor": 1,
   "protocolMinor": 0,
   "maxFrameBytes": 1048576,

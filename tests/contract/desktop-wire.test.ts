@@ -566,6 +566,20 @@ it("rejects missing or unknown method kinds before generating peers", () => {
     join(root, "tooling/generate-desktop-wire.mjs"),
     readFileSync(resolve("tooling/generate-desktop-wire.mjs")),
   );
+  writeFileSync(
+    join(root, "api/desktop/v1/schema.json"),
+    JSON.stringify({
+      generator: "farol-wire/1",
+      methods: { "task.create": "effect" },
+    }),
+  );
+  expect(() =>
+    execFileSync(
+      process.execPath,
+      [join(root, "tooling/generate-desktop-wire.mjs")],
+      { stdio: "pipe" },
+    ),
+  ).toThrow("unsupported generator");
   for (const spec of [
     undefined,
     "unknown",
@@ -574,7 +588,7 @@ it("rejects missing or unknown method kinds before generating peers", () => {
     writeFileSync(
       join(root, "api/desktop/v1/schema.json"),
       JSON.stringify({
-        generator: "farol-wire/1",
+        generator: "farol-wire/2",
         methods: { "task.create": spec },
       }),
     );
