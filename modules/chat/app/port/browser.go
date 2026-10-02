@@ -119,7 +119,8 @@ type BrowserObservation struct {
 	ObservedAtMillis uint64
 	Kind             ObservationKind
 	Text             string
-	Code             string
+	// Code is optional; a nonempty value is an ASCII classified identifier.
+	Code string
 }
 
 type ObserveResponse struct {
@@ -201,7 +202,7 @@ func ValidateObserveResponse(request ObserveRequest, response *ObserveResponse) 
 		default:
 			return ObserveInvalid
 		}
-		if !utf8.ValidString(event.Text) || len(event.Text) > MaxObserveTextBytes || len(event.Code) > 120 {
+		if !utf8.ValidString(event.Text) || len(event.Text) > MaxObserveTextBytes || !classifiedObserveCode(event.Code) {
 			return ObserveInvalid
 		}
 		// The page bound includes selected text and classified-code bytes.
@@ -212,4 +213,22 @@ func ValidateObserveResponse(request ObserveRequest, response *ObserveResponse) 
 		sequence = event.Sequence
 	}
 	return nil
+}
+
+// Empty is valid for content-only observations. Nonempty codes use the same
+// classified ASCII form as result metadata, excluding raw errors and bad UTF-8.
+func classifiedObserveCode(value string) bool {
+	if len(value) > 120 {
+		return false
+	}
+	for n, ch := range value {
+		if ch >= 'A' && ch <= 'Z' {
+			continue
+		}
+		if n > 0 && ((ch >= '0' && ch <= '9') || ch == '_') {
+			continue
+		}
+		return false
+	}
+	return true
 }

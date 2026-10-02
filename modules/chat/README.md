@@ -61,7 +61,9 @@ They bind the exact lease/document/conversation and carry the same absolute dead
 budget. Send has transient prompt input and a digest, no arbitrary script or URL.
 Observe exposes selected semantic events, no cookie or storage dump. A page has at
 most 128 events, 64 KiB UTF-8 text per event, and 256 KiB combined text/code bytes.
-An optional smaller request limit caps cardinality. `ValidateObserveResponse`
+An optional smaller request limit caps cardinality. Optional classification codes
+must use `[A-Z][A-Z0-9_]*` and at most 120 ASCII bytes; raw exceptions, control
+characters and malformed UTF-8 are refused. `ValidateObserveResponse`
 rejects oversized pages, invalid UTF-8/kinds, wrong binding, non-contiguous sequence
 and gaps before application; Core independently bounds the encoded wire frame. Cancellation
 requested, confirmed terminal, already terminal and unknown are distinct.

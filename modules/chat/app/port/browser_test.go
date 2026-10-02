@@ -78,3 +78,20 @@ func TestObservationCorrelationAndGap(t *testing.T) {
 		t.Fatal("sequence wrapped", err)
 	}
 }
+
+func TestObservationCodesAreClassifiedMetadata(t *testing.T) {
+	for _, code := range []string{"", "A", "COMPLETED", "TOOL_2", strings.Repeat("A", 120)} {
+		res := response(1, "synthetic")
+		res.Events[0].Code = code
+		if err := ValidateObserveResponse(request(), res); err != nil {
+			t.Fatalf("classified code %q: %v", code, err)
+		}
+	}
+	for _, code := range []string{string([]byte{255}), "\x00", "RAW\nEXCEPTION", "RAW\tEXCEPTION", "raw provider exception", "_CLASSIFIED", "2FA", "failed", "STATUS🙂", strings.Repeat("A", 121)} {
+		res := response(1, "synthetic")
+		res.Events[0].Code = code
+		if err := ValidateObserveResponse(request(), res); !errors.Is(err, ObserveInvalid) {
+			t.Fatalf("unclassified code %q accepted: %v", code, err)
+		}
+	}
+}
