@@ -346,7 +346,9 @@ export function checkGoArchitecture(root) {
   const files = [];
   const excludedModules = [];
   const add = (code, file, detail) => violations.push({ code, file, detail });
-  const skip = new Set([".git", "node_modules", "_output"]);
+  // Go packages under tests are test-only fixtures/harnesses, even when their
+  // filenames do not end in _test.go. They are not production architecture.
+  const skip = new Set([".git", "node_modules", "_output", "tests"]);
   function walk(directory, relative = "") {
     for (const entry of fs
       .readdirSync(directory, { withFileTypes: true })

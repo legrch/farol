@@ -71,6 +71,20 @@ function denied(result: ReturnType<typeof check>, code: string, file?: string) {
 }
 
 describe("the executable root Go architecture boundary", () => {
+  it("checks production Go in the real checkout during the existing test gate", () => {
+    const result = spawnSync(
+      process.execPath,
+      [checker, "--root", root, "--json"],
+      {
+        cwd: root,
+        encoding: "utf8",
+      },
+    );
+    expect(result.error).toBeUndefined();
+    expect(result.stderr).toBe("");
+    expect(result.status, result.stdout).toBe(0);
+    expect((JSON.parse(result.stdout) as Report).violations).toEqual([]);
+  });
   it("checks a representative K0 root without needing Go installed", () => {
     const result = check({
       "cmd/farol/main.go": source(prefix + "boot"),
@@ -478,6 +492,14 @@ var timestamp = time.Parse
         "node_modules/sdk/escape.go": source(),
       }).status,
     ).toBe(0);
+  });
+  it("does not classify test-only Go packages as production", () => {
+    const result = check({
+      "tests/protocol/server.go": source("net/http"),
+      "tests/native/main.go": source("os"),
+    });
+    expect(result.status).toBe(0);
+    expect(result.report.productionFiles).toBe(0);
   });
   it("requires a root module once root production Go exists", () =>
     denied(check({ "boot/main.go": source() }, false), "GO_MODULE_MISSING"));
