@@ -1,27 +1,125 @@
-# Installed Farol update helper
+# Installed update helper
 
-This is the narrow N → N+1 replacement mechanism for the **NEW** `local.farol.next.preview` app. It is not the release feed, package verifier, promotion authority, active-work drain, or acceptance ledger. Initial installation still uses the existing promotion flow. No Git checkout, V0 path, privileged install, Gatekeeper setting, or quarantine change is used.
+**State:** narrow native replacement/recovery mechanism used by the current installed
+updater. It does not discover releases, authenticate a package, decide work is idle,
+or perform first installation. Those owners are
+[release discovery](github-release-contract.md), [package verifier](update-package-verifier.md),
+[updater admission](installed-update-runtime.md), and [promotion](installation.md).
 
-## Caller contract
+## Caller sequence
 
-The release/boot owner must first authenticate and verify the downloaded release asset and extracted app, reconcile every active Computer/task/provider/connector operation, hold the existing promotion lease, reconcile its obligations, and bind the exact accepted N and N+1 build IDs, versions, and tree digests. The `drain` record in this API is a required assertion of that completed work, not a second truth store. The caller must hold the existing promotion lease through normal Quit; the helper acquires that same kernel lease after the process exits and holds it through every mutation. The caller captures the actual installed app PID and `/bin/ps -o lstart=` value **while it is alive**, dispatches the attested helper, awaits its bound `waiting_for_exit` acknowledgment (`status: ready`), then performs a normal coherent Quit. A spawn or pipe write alone never authorizes Quit. An absent or mismatched PID at initial observation is refused. The helper verifies the owning `running.json` marker matches that PID and start time, then requires its removal and a fresh `last-quit.json` with `drained: true` and no unconfirmed children. A stale receipt, held/replaced lease inode, or present marker is a refusal. The helper never kills the app or another process.
+1. Verify downloaded release/archive/app identity, accepted source/target pair, and
+   all work obligations. Hold existing admission/promotion gates through normal Quit.
+2. Capture the **live** app PID and actual `/bin/ps -o lstart=` value, matching the
+   owning run marker.
+3. Start the digest-attested packaged helper and persist its exact PID before sending
+   program/request bytes.
+4. Await its identity-bound `waiting_for_exit` readiness acknowledgment.
+5. Only on `ready`, perform normal coherent Quit. The helper observes that PID ended,
+   the run marker disappeared, and a fresh drained Quit receipt has no unconfirmed child.
+6. The helper acquires the same kernel promotion lease, rechecks both bundles and
+   directories, then performs its journaled operation.
 
-`startInstalledUpdateHelper(helperPath, request)` in `src/modules/release/infra/native/installed-update-helper.ts` attests the helper's exact SHA-256 and starts `/usr/bin/python3 -I -S -B -` detached. The `helperPath` must be the packaged `resources/native/update_helper.py` location supplied by the packager, never a checkout or workspace path. The launcher returns a discriminated result: `ready` permits normal Quit for `apply`, `rollback`, or live `recover` (`relaunch: true`); `not_started` is either a helper-byte/home preflight failure before calling spawn (no process and no exit code), or a classified native exec failure before any spawn event or PID, confirmed by negative terminal close with no request/program writes or response bytes; `refused` and `outcome_unknown` keep the app running; `terminal` reports a finished offline `recover` (`relaunch: false`), which has no Quit handoff. Every result after spawning includes an `operation` handle with `operationId`, `pid`, `observe()`, and `completion`. A timeout, malformed message, closed channel, process error, or exit before readiness retains that same child and handle, never implicitly launches another helper, and never upgrades the initial decision because a late ACK arrives. Invalid caller input throws before a child exists; operational helper-byte/home preflight failures return `not_started` without exposing arbitrary exception text. The durable operation journal remains the update result after the caller has exited. The Lead must include and attest the Python bytes in the package, wire that path, and read back the journal on next startup.
+The helper never kills the app. A spawn, write, absent PID, stale Quit receipt, or
+held/replaced lease is not readiness. Uncertainty keeps the app running and retains
+the same child/operation, without a substitute launch.
 
-Readiness uses the inherited private descriptor 4; the request remains on descriptor 3. The helper emits exactly one JSON event with schema `farol.installed-update-handoff/1`, phase `waiting_for_exit` (or a pre-readiness `refused` plus `error`), `operationId`, `action`, full `source` and `target`, `pid`, and `processStart`. Only after both accepted bundles, the owner's run marker, and the live process start are verified does it send readiness and wait for exit. The launcher accepts one identity-matching frame only after EOF, with a 4096-byte cap. The optional third argument `{ readinessTimeoutMs }` defaults to 180000 and must be 1–300000; it covers the spawned helper's preparation and handoff. Terminal stdout is independently capped at 4096 bytes. After a launch result, the child and observation pipes are unrefed but retained, so the exact caller can exit naturally. A vanished stdout observer cannot interrupt the helper's journaled work. `completion` is an exit/terminal observation while the caller remains alive, not installed acceptance; a subsequent app startup reads the journal as before.
+## Launch API and result
 
-Request schema: `farol.installed-update/1`. Actions are `apply`, `recover`, and `rollback`. Required fields are `operationId` (32 lowercase hex characters), `source` and `target` (`digest`, `version`, `buildId`), `drain` (`status: reconciled`, accepted source/target build IDs), `pid`, `processStart`, `waitSeconds` (1–120), and `relaunch`. `relaunch: true` requests one launch of the reconciled current slot for any action. For live `recover`, it also selects the same PID-bound ACK/normal-Quit protocol as apply and rollback. Offline `recover` uses `relaunch: false` and requires an already confirmed Quit. The TypeScript launcher derives the current owner's home; the Python helper derives all mutable paths from that home and operation ID. The current fixed app slot is `~/Applications/Farol.app`. Historical schema 5 helpers used `~/Applications/Farol Next Preview.app`; they are not the branded update route. An existing preview install must first complete the explicit [closed product cutover](product-cutover.md), then use the normal promotion baseline. Never redirect an old helper by renaming its archive or install slot. Operation data is under `~/Library/Application Support/Farol Next Preview/installed-updates/<operationId>/`: the accepted staged bundle is `staged.app`, predecessor is `previous.app`, a rolled-back target is `failed.app`, and `journal.json` records phases. The lock is in the parent update directory. Existing predecessor/failed bundles are never deleted or overwritten. Product config/workspace state is outside these locations.
+[startInstalledUpdateHelper](../src/modules/release/infra/native/installed-update-helper.ts)
+attests the packaged `resources/native/update_helper.py` bytes and runs reviewed
+`/usr/bin/python3 -I -S -B -` detached. The caller supplies the packaged path, not
+checkout/workspace code.
 
-The helper verifies the source and staged target using the same `farol.next.tree-digest/v2` record encoding as `tooling/artifact-digest.mjs`, plus main bundle ID/version and embedded build ID. It rechecks source and target after the old PID exits. It pins home, Applications, update, and operation directories with no-follow descriptors, refuses foreign path types and hardlinked files, and bounds entries, depth, bytes, input, journal, and process wait. It takes the existing `farol-next-state/promotion.lease` exclusive lock after exit and fences its inode before mutations. It fsyncs the phase journal and parent directories around renames. It does not copy or alter bundle metadata during replacement. Existing release/package attestation remains the caller's responsibility.
+| Result            | Meaning                                                                                          |
+| ----------------- | ------------------------------------------------------------------------------------------------ |
+| `ready`           | Exact live apply/rollback/recover acknowledgment; permits normal Quit                            |
+| `not_started`     | Classified pre-spawn refusal or proven native exec failure before any request/program submission |
+| `refused`         | Classified handoff refusal; no Quit permission                                                   |
+| `outcome_unknown` | Spawn/response/process uncertainty; retain operation and observe the same child                  |
+| `terminal`        | Finished offline recover (`relaunch: false`), without live Quit handoff                          |
 
-## Phases and recovery
+Every spawned result retains `operationId`, PID, `observe()`, and `completion`.
+A late ACK cannot upgrade an unknown initial decision. Child terminal observation is
+not installed startup acceptance. Durable journals survive the caller's exit.
 
-`prepared` is durable before the single Darwin `renameatx_np(..., RENAME_SWAP)` between the fixed app slot and `staged.app`. The syscall leaves the slot occupied on either side; an unsupported filesystem refuses without a two-rename fallback. The helper verifies both exact bundles and directory identities before exchange, fsyncs both parents afterward, then renames the displaced N from `staged.app` to `previous.app`. `new_installed` precedes final target verification; `verified` means both current N+1 and previous N passed exact digest and embedded identity checks. `predecessor_saved` remains readable only for recovery of a journal written by the former helper.
+Request is inherited on descriptor 3; readiness uses private descriptor 4. One frame
+must match operation/action/source/target/PID/start, within 4096 bytes and complete
+EOF. Terminal stdout is independently bounded. Readiness timeout defaults to
+180,000 ms and is configurable within 1–300,000 ms. After handoff, observation pipes
+are unrefed so the caller can exit naturally without interrupting journaled work.
 
-An explicit `recover` uses the **same operation ID and accepted source/target**. It never repeats apply. With `prepared` and the original pair (slot=N, staged=N+1), it records `cancelled`, keeps both bundles, and may relaunch N. With `prepared` and the exchanged pair (slot=N+1, staged=N), it verifies both, names N `previous.app`, and records `verified`; the same result follows if that rename happened before the crash. `rollback_started` describes a rollback already journaled: exact slot=N+1 and previous=N proves the exchange has not occurred, so `recover` performs it once; exact slot=N and previous=N+1 proves it occurred, so `recover` only names the latter `failed.app`. Both end as `rolled_back`. If rejected target bytes no longer match N+1 after a crash during verification rollback, recovery refuses without moving either directory; the previous same-invocation inode check cannot be reconstructed from the journal. Live recovery admits only an exact pair before Quit ACK. `recover` also accepts a settled pair without changing it. A pre-existing empty slot from the older two-rename protocol is repaired only after verifying its preserved N and staged N+1; the new protocol never creates that gap. `rollback` starts only from a verified target pair, requires the exact _current_ PID/start time and normal drain, then atomically exchanges N+1 with previous N and preserves N+1 as `failed.app`. A second `rollback` on `rollback_started` is refused; use explicit `recover` after readback. Unknown or mismatched bytes, identities, paths, process state, or journal state are refusals requiring operator reconciliation. No path is deleted or overwritten.
+## Request and fixed locations
 
-Live `recover` (`relaunch: true`) checks the exact physical pair and owner run marker before ACK, waits for the bound PID to exit, requires a fresh confirmed Quit receipt, then acquires the same kernel promotion lease and reconciles. Offline `recover` (`relaunch: false`) requires the existing receipt and lease without a running-app handoff. The helper's update lock also excludes a second active helper. A timeout, an unknown original outcome, or a lease still held does not authorize another helper launch; the caller must first establish that the original child has ended and the same journal/physical pair is eligible. Startup readback is observational. The explicit Finish action is the only call that mutates an interrupted operation.
+The request schema is `farol.installed-update/1`:
 
-Before one `/usr/bin/open -a` request, the helper writes `launch_requested` for a verified target, `cancel_launch_requested` for cancelled N, or `rollback_launch_requested` for restored N. Successful return records `completed`, `cancel_completed`, or `rollback_completed` respectively. A later recovery recognizes these phases and **never repeats** the launch; a requested phase is outcome-unknown until owner readback. Completion means only that `open` returned success, not that GUI startup or activation passed. The current slot and preserved companion must still be verified independently before claiming installed acceptance. A failed post-exchange target check in the same helper run atomically restores N and retains the rejected target in `failed.app`; those rejected bytes are not an accepted digest. The existing promotion lease and accepted-release records remain authoritative; journal phases do not supersede them.
+| Field                 | Contract                                                                |
+| --------------------- | ----------------------------------------------------------------------- |
+| `action`              | `apply`, `recover`, or `rollback`                                       |
+| `operationId`         | 32 lowercase hexadecimal characters                                     |
+| `source`, `target`    | Exact digest/version/build ID                                           |
+| `drain`               | Reconciled source/target assertion from existing work owners            |
+| `pid`, `processStart` | Bound live caller identity for the live handoff                         |
+| `waitSeconds`         | 1–120                                                                   |
+| `relaunch`            | One launch request after reconciliation; false selects offline recovery |
 
-The tests use only disposable private temp homes and test-owned processes, including a Node caller that exits naturally immediately after readiness. Transport fixtures cover malformed/binding failures, premature exit, timeout, late acknowledgment, bounded output, and retention of the same operation; those fixtures are not native process evidence. They prove helper mechanics and refusals, not an installed app, GitHub feed, LaunchServices activation, or live provider behavior. The Lead owns combined package/CI/native/U1–U3 acceptance.
+The OS account owns the derived home and fixed `$HOME/Applications/Farol.app` slot.
+Operation data is beneath the existing `Farol Next Preview/installed-updates/`
+product profile: `staged.app`, preserved `previous.app`, optional `failed.app`, and
+`journal.json`. Caller-supplied arbitrary homes/slots are not admitted.
+
+Historical schema 5 helpers owned `Farol Next Preview.app`. They cannot be redirected
+by archive/slot renaming; [closed cutover](product-cutover.md) precedes the new baseline.
+
+## Atomic apply
+
+The helper pins no-follow directory identities, bounds input/tree/journal/wait, checks
+both app tree digests and embedded identities, and fsyncs journal/parents around moves.
+
+`prepared` is durable before a single Darwin `RENAME_SWAP` between the occupied fixed
+slot and `staged.app`. An unsupported filesystem refuses without a two-rename fallback.
+The displaced source is verified and named `previous.app`. `new_installed` precedes
+final verification; `verified` means exact current target and preserved source both
+matched. No existing predecessor/failed copy is overwritten or deleted.
+
+A failed target check in that same invocation atomically restores the source and
+preserves rejected target bytes as `failed.app`; those bytes are not an accepted target.
+
+## Exact-operation recovery and rollback
+
+Recover uses the **same operation ID and accepted pair**, never another apply:
+
+| Observed journal/pair                                    | Reconciliation                                              |
+| -------------------------------------------------------- | ----------------------------------------------------------- |
+| Prepared, slot=source / stage=target                     | Cancel without exchange; preserve both                      |
+| Prepared, slot=target / stage=source                     | Verify completed exchange, preserve source, record verified |
+| Rollback started, target/source not exchanged            | Perform the one journaled rollback exchange                 |
+| Rollback started, already exchanged                      | Preserve target as failed copy and record rolled back       |
+| Settled exact pair                                       | Observe/reconcile without repeating replacement             |
+| Changed/unknown bytes, paths, identity, or process state | Refuse and preserve the obligation                          |
+
+Legacy empty-slot two-rename journals have a narrow exact-pair repair path; this helper
+does not create that gap. Rejected target bytes cannot be re-attested after a crash
+using a prior invocation's inode observation. A second rollback intent is refused;
+inspect and recover the existing one instead.
+
+Live recover requires the same PID-bound ACK/Quit sequence. Offline recover requires
+an already-confirmed Quit and eligible lease/pair. A timeout or old unknown outcome
+never proves the original helper ended.
+
+Before one `/usr/bin/open -a` call, the helper journals its launch intent. Recovery
+recognizes that intent and never repeats launch. A successful `open` return records
+request completion, not GUI startup/activation. The installed app must independently
+measure its journal and accepted companion before claiming acceptance.
+
+## Verification boundary
+
+[Helper source](../resources/native/update_helper.py) and disposable process/filesystem
+fixtures exercise pair reconciliation, ready/terminal frames, timeouts, refusals, and
+same-child retention. Transport fakes are not native process proof. None alone proves
+a live GitHub upgrade, actual LaunchServices activation, settings preservation,
+provider reconnect, Gatekeeper acceptance, or full release readiness.
+
+---
+
+[Documentation index](README.md) · [Project overview](../README.md)

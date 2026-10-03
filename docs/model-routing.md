@@ -1,257 +1,106 @@
-# Farol provider and model identity
+# Provider and model identity
 
-Status: accepted naming and extension contract. The implementation currently serves
-one ChatGPT route. Default-resolution policy below is a requirement for the pending
-public model-selection/Send integration, not a claim that live selection is complete.
+**State:** accepted naming/extension contract. The desktop's Farol model-provider
+route and Farol-backed Product Agent remain disabled in
+[feature gates](../src/apps/desktop/foundation-feature-gates.ts). This reference is
+not an instruction to enable them. Ordinary Computer is independent of these gates.
 
-## Wire identity, not development generation
+## Permanent wire identity
 
-Codex configuration has independent provider and model fields:
+The intended Codex configuration has separate provider/model fields:
 
 ```toml
 model_provider = "farol"
 model = "chatgpt"
 ```
 
-App Server uses the equivalent `modelProvider: "farol"` and `model: "chatgpt"`.
-The provider table is `model_providers.farol`. Farol receives the provider-local
-`model` in a Responses request; that request body does not need another provider
-selector. The endpoint and authenticated connection already select Farol.
+App Server equivalents are `modelProvider: "farol"` and `model: "chatgpt"`.
+The provider table is `model_providers.farol`. The selected endpoint/connection owns
+the transport; a Responses request carries the provider-local model name.
 
-`farol/chatgpt` is a derived display name (`provider/model`), never the wire model.
-A slash is not interpreted as an instruction to switch providers. Supplying
-`model: "farol/chatgpt"`, the former `farol-next/chatgpt`, or an unregistered model
-to the current production route is a refusal before a model operation, not an alias
-rewrite. Whitespace, case and punctuation are not silently normalized.
+`farol/chatgpt` is display notation only. A slash-qualified `model`, obsolete
+`farol-next/chatgpt`, unknown entry, or altered spelling is refused, without implicit
+provider selection or normalization.
 
-The canonical constants, provider-local name schema and exact current catalogue
-live in `src/pkg/model-route/contract.ts`. The ordinary generated Codex config,
-app-owned host launch, route evidence, parent/child checks and endpoint use the same
-identity. A model catalogue label is not proof of the upstream execution model.
+[Canonical constants and catalogue](../src/pkg/model-route/contract.ts) register only
+`chatgpt`. Naming support does not qualify an upstream model, account entitlement,
+effort, or enabled product endpoint.
 
-Only `chatgpt` is advertised by the production route today. No DeepSeek, Kimi,
-version pin or additional effort is enabled merely by adding syntax for a name.
-The low-level continuity test composition still accepts its two exact historical
-Mind/Drive fixture IDs as distinct configured fixtures; neither is offered by the
-production catalogue, nor treated as a spelling of `chatgpt`.
+## Default alias and future pins
 
-## Default aliases and explicit pins
+`chatgpt` is an accepted floating-default alias: the latest qualified ChatGPT default
+available to that account for the required capabilities. It is not a GPT version.
+Effective public browser selection and persistent resolution remain pending
+integration requirements, not guarantees supplied by the catalogue.
 
-`chatgpt` is a **floating default alias**, not a fixed version pin. It requests the
-latest qualified default supported by the ChatGPT adapter and available to the
-current account for the requested capabilities. "Latest" must not be computed by
-lexically sorting labels, guessed from an API catalogue, or inferred from whatever
-happens to be selected in an unrelated browser conversation.
+A future explicit pin such as `chatgpt-<explicit-target>` must be independently
+registered with stable semantics. An unavailable pin refuses rather than substituting
+the default. Other upstream names are extension examples until their complete
+transport/tool/context/stream/cancellation capabilities are qualified.
 
-A future explicit pin has an independently registered provider-local name, such as
-`chatgpt-gpt-5.5`. This is a naming example, not an availability assertion. A pin's
-meaning does not drift when a newer model ships. If its required selection is no
-longer available, return a specific unavailable result; do not substitute the
-default or another provider. Adding a pin must not rename or change the semantics
-of the existing `chatgpt` alias.
-
-The same rule can be used by a future upstream: `deepseek` for its qualified default
-and `deepseek-<explicit-target>` for a pin. These are extension examples, not
-implemented integrations. Register each complete ID explicitly. Never select an
-adapter by splitting the ID at the first hyphen or using `startsWith("chatgpt")`:
-that would silently turn a misspelled pin into the default route.
-
-Provider-local IDs use lowercase ASCII letters/digits with dot or hyphen separators,
-start with a letter and are bounded to 128 characters. A syntactically valid name
-is not necessarily available. The exact catalogue, not the name grammar, decides
-availability. An adapter must separately prove its transport, tool, context,
-streaming and cancellation capabilities before its entries can be offered.
+Names use bounded lowercase ASCII letters/digits with dot/hyphen separators and
+start with a letter. Syntax alone cannot select an adapter. Never dispatch by prefix
+or by splitting an ID: that could turn a misspelled pin into another route.
 
 ## Resolution lifetime
 
-Resolve a floating alias for a new logical task, not on every network round trip.
-Record requested alias, resolution policy/revision, the independently observed
-upstream model and supported effort, account/profile identity without credentials,
-and the task/conversation/build binding. Unknown observations stay unknown.
+The accepted target resolves a floating alias once for a new logical task, then
+retains requested alias, resolution policy, observed upstream model/effort, profile,
+and task/conversation/build binding. Unknown observations remain unknown.
 
-Before Send, the supported public controls must prove that the requested selection
-is effective in the same document. The existing pure model-observation validator
-is not itself that browser proof. Navigation, same-URL reload or a changed selection
-invalidates old observations. Capture/validation and the actual send require the
-existing atomic submission boundary; a previous successful check is not a reusable
-permission to send after another asynchronous operation.
+Supported public controls must prove the effective selection in the same document
+immediately at the submission boundary. Navigation, reload, selection change, or a
+newer pending readiness observation invalidates earlier proof. A pure observation
+validator is not browser selection evidence.
 
-A continuing task keeps its resolved selection through tool rounds, recovery and
-compaction. Upgrading the default alias affects new tasks. Changing an active task's
-upstream model is an explicit transition, not an incidental effect of a catalogue
-refresh. A provider retiring the bound model may make continuation unavailable; do
-not pretend a stable ID can guarantee upstream availability.
+A continuing task keeps its binding across tool rounds, restart, and compaction.
+Default upgrades affect new tasks. A child inherits both virtual route and resolved
+selection; alias inheritance alone cannot prove two browser conversations selected
+the same upstream model. Model selection never enlarges authority.
 
-A default child inherits the parent's virtual route **and resolved selection**.
-Codex's inheritance of the provider-local alias alone does not prove that two
-separate ChatGPT conversations selected the same upstream model. Farol must carry
-and verify the resolved binding when it creates the child's conversation. It may
-narrow the child's permissions, but naming or model selection never widens them.
+## Keep identities separate
 
-This naming migration implements the permanent wire identity and exact alias
-catalogue. Persistent resolution at this lifetime and public-control selection are
-still part of model/Send integration; do not enable a green live-model badge from
-this document or the catalogue's `latest-qualified` descriptor.
+| Identity  | Describes                                                                   |
+| --------- | --------------------------------------------------------------------------- |
+| Transport | `farol` / `chatgpt`, the requested virtual route                            |
+| Execution | Independently observed upstream model and effort in the owning conversation |
+| Summary   | Provenance of a validated continuity checkpoint's summarizer                |
 
-## Three separate identities
+A transport name is not GPT-version telemetry. A host effort is not effective
+ChatGPT UI effort. A summarizer does not change the task's execution model.
+Current low-effort host checks are bounded transport checks; they do not qualify all
+Instant/Pro/effort combinations.
 
-**Transport:** `provider=farol`, `model=chatgpt` identify the host transport and
-requested virtual route.
+## Native children and compatibility
 
-**Execution:** observed upstream model/effort identify what the owning ChatGPT
-conversation actually selected.
+The qualified synthetic host path starts the parent with explicit route and provider
+fallback disabled. A default native child omits built-in model/effort overrides and
+uses its bounded prompt with `fork_context=false`. Exact parent/child linkage,
+retained provider/model, request observations, TaskGrant enforcement, cancellation,
+and delivery each need their own proof. A synthetic child does not enable Product Agent.
 
-**Summary:** checkpoint summarizer provenance identifies the engine that produced
-a validated continuity summary.
+Old `farol_next` / `farol-next/chatgpt` checkpoints and receipts keep their original
+binding/provenance. Reading them does not rewrite or promote them into current-route
+acceptance. A new build refuses silent continuation under a different route; preserve
+inspectable old work and use a separately verified explicit context transition.
 
-A `chatgpt` route is not an observed GPT version. A selected host effort is not proof
-of the browser's effective effort. A Luna-generated summary does not switch the
-execution route to Luna and must not claim to be a current-ChatGPT summary.
+Managed config changes require their existing explicit selection/apply workflow.
+Foreign provider entries remain conflicts, and unrelated personal config is preserved.
+The naming contract does not restart a host or authorize a config edit by itself.
+App/profile/partition/process/receipt compatibility names remain a separate concern.
 
-Keep effort separate from the model ID. Expose only qualified combinations in the
-catalogue. Current `low` is the bounded host transport-check capability; it is not a
-claim that all ChatGPT effort modes are wired. Names such as Instant or Pro are not
-automatically interchangeable with the host's reasoning-effort enum. Capability
-mapping belongs to the adapter and requires actual supported selection evidence.
+## Adapter and task-model references
 
-## Native child routing
+[Browser adapter](browser-adapter.md) covers public DOM parsing, readiness ordering,
+and fixture transport evidence. [Task configuration](config-model-discovery.md)
+covers model discovery from a separately selected native Codex host; that is a
+different route from Farol's ChatGPT virtual provider.
 
-The parent starts with the explicit Farol provider-local route and with provider
-fallback disabled. For the qualified installed-host path, native child creation
-omits `model` and `reasoning_effort` overrides and sets `fork_context=false` with
-the exact bounded child prompt. Overrides use a separate built-in model catalogue;
-they must not be used to force a custom route by guessing a built-in replacement.
+The local source/tests own Farol's policy. Host schema compatibility must be checked
+against the selected installed executable; a newer external API reference cannot
+qualify an older serving runtime. See [Desktop/Core](desktop-core.md) for the separate
+Go transport and [status](status.md) for enabled capability boundaries.
 
-Verify actual parent/child linkage, retained provider/model and each observed
-provider request. Child-result delivery, TaskGrant enforcement, cancellation and
-same-child recovery remain independent checks. A successful synthetic child is not
-full Product Agent or live ChatGPT acceptance. Advertised `skills.list/read` are
-not granted solely because the catalogue contains them.
+---
 
-## Compatibility and isolation
-
-The former public pair was `farol_next` / `farol-next/chatgpt`. New tasks use only
-`farol` / `chatgpt`. Stored checkpoints and historical receipts keep their original
-binding and provenance. Reading old data must not rewrite it or make it count as
-proof for the new route. Tests cover both explicit checkpoint replay and markerless
-recovery after restart, including the old neutral route with the same `chatgpt`
-mode suffix.
-
-A new build cannot silently resume a saved old-route task under the new identity.
-The host continuation adapter reads only retained route metadata before
-`turn/start`, requires the exact provider/model/thread, and still checks retained
-results after completion. This is a configured-route check, not upstream telemetry.
-Keep the old task inspectable; finish it with compatible owned bytes, or perform a
-separately verified explicit context transition. Never repeat an unknown operation
-or replace a child to get past an identity mismatch.
-
-Generated managed config uses separate canonical fields. Existing managed blocks
-can be previewed and explicitly applied through the existing consented config
-workflow; this migration does not edit a personal Codex config or restart the
-owner's host. Foreign `model_providers.farol` entries remain conflicts, not targets
-for overwrite. Preserve unrelated bytes, backups, independent selection consent
-and rollback. Existing shared marker/version formats are not reinterpreted.
-
-Development coexistence is a different concern. The standalone source, Preview/Dev application
-IDs, browser partitions, state directories, temporary process names and private
-`FAROL_NEXT_*` environment variables remain isolated from Legacy. Existing MCP
-tool names and opaque call/receipt prefixes are not model IDs; their compatibility
-is unchanged by this provider migration. A tested product cutover owns their later
-migration. The final product brand and all new protocol names are Farol.
-
-## Verification boundary
-
-The naming change must preserve same-turn incremental status/commentary/answer
-output, tool-result continuation, checkpoint ownership, exact provider/model
-refusals and inherited child routing. Run canonical-name real-host synthetic
-fixtures as well as deterministic tests. Preserve evidence class and exact source
-identity: neither a syntax test nor a synthetic provider qualifies live browser
-selection or proves a newer upstream default is available.
-
-The host contract is described in the primary documentation:
-
-- [Codex configuration reference](https://developers.openai.com/codex/config-reference)
-- [Codex App Server](https://developers.openai.com/codex/app-server)
-
-These references describe the host fields, not Farol's floating-alias policy or a
-promise that every host version supports the same native child overrides.
-
-## Qualified public code wrapper regression
-
-The candidate message-anchor parser now recognizes only the explicit public
-`DIV[data-markdown-copy="code-block"]` shape as a code block. One visible CODE
-is projected into the existing fenced-code serialization, preserving newlines,
-indentation and fence/language escaping. DIV/SPAN/PRE content containers must
-contain no outside prose. A toolbar is a DIV/SPAN containing a direct visible
-button, text/SPAN-only labels and no CODE. PRE or generic DIV content cannot be
-removed as a label; button evidence stays local to its container. Transient
-localized label text never identifies or fingerprints answer content. Hidden/control descendants are not traversed. Unknown elements,
-multiple or nested CODE nodes, nested qualified wrappers and visible outside prose
-are refused. A not-yet-mounted CODE buffers as pending; an empty CODE is preserved
-as an empty fenced block. Shared traversal, depth and character limits still apply.
-
-Synthetic source/reducer fixtures cover toolbar removal after content is committed,
-real code mutation refusal, two equal code blocks, two horizontal rules and exact
-message IDs through prefix virtualization. Serialized production functions are
-exercised in those fixtures. They do not prove native layout, current live ChatGPT
-selectors or Model availability. The prepared exact-source hidden Electron fixture
-is built with the pinned Node runtime by:
-
-```sh
-node tests/e2e/chatgpt-public-source.e2e.mjs --build-only
-```
-
-Its `--run-native` lane requires the already established native authority boundary;
-build-only never counts as a native PASS. Model and Product Agent remain disabled.
-No account/profile/Send operation or imported upstream bridge is part of this fix.
-
-## Readiness ordering regression
-
-Public readiness is scoped to the exact route surface, URL and document generation.
-After an asynchronous public page read, replacement/disposal/navigation invalidates
-that answer. An older read cannot replace a newer settled observation or authorize
-work while a newer read is pending. A same-document unrecognized probe retains an
-already observed sign-in requirement; only a current positive probe clears it.
-Navigation does not reuse that sign-in latch. Profile preparation re-observes
-the new document; missing or differently scoped readiness is never permission. A cached positive result is usable
-only if it belongs to the latest started read, including three-read interleavings;
-an intermediate settled success cannot override a newer pending probe. A visible sign-in barrier takes
-precedence over a guest composer. These are ephemeral page observations, not
-credential/account verification or persistent authentication authority.
-
-Local surface fixtures prove ordered recovery, stale same-URL document refusal and
-zero composer/Send effects when an older task readiness read loses to a new sign-in
-requirement. Existing admission points also recheck this current public evidence
-after asynchronous preparation/intent/app verification: a new negative or pending
-read refuses before upload/Send with the proper no-submit classification. This
-never rewrites an acknowledgement or makes an unknown submission retryable. The existing closing diagnostics remain a separate pre-close snapshot;
-they are not reusable public readiness or Send permission. No automatic retry or
-replay is introduced after an unknown submission. Native/account/replacement proof
-and Model enablement remain separate and unqualified.
-
-## Assembled source transport fixture
-
-route-b-provider-assembly.test.ts composes the real ChatGptRoute text-profile
-admission/poll path, chatGptTaskConversation adapter, Responses/SSE provider and
-caller relay on disposable local transports with controlled page answers.
-A tool round preserves the committed prefix and appends the exact tool result
-in the next response, with one route run and one mock Send. Wire assertions
-require the exact ordered deltas, matching message/response identity and one
-terminal frame per response. Foreign and repeated
-continuations refuse. A second synthetic turn proves the public server-side
-ServerResponse.destroyed state before advancing page output after client loss;
-the route settles outcome-unknown and an initial-request replay cannot send again.
-
-The fixture executes no command, browser Send, account operation or model request.
-Page probe answers are synthetic; there is no native DOM or installed/live parity.
-It covers the text profile, not the candidate rich visible-output profile.
-It proves fail-closed loss behavior, not automatic recovery of a lost initial
-stream. Runtime loss/recovery for a real provider remains NOT_QUALIFIED.
-Model and Product Agent remain disabled. Fixture cleanup retains an original
-assertion while attempting every owned transport/root cleanup, including setup
-failures after relay creation. An injected provider-start rejection verifies the
-original error, completion of the real relay close and removal of the already-
-created socket/root. A second fault fixture aborts before tool continuation and
-requires the original assertion with awaited cleanup and no unhandled rejection;
-its pending invoke has an immediate handler without replacing the promise used
-by positive assertions.
+[Documentation index](README.md) · [Project overview](../README.md)

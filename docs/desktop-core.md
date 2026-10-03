@@ -1,57 +1,139 @@
-# Desktop/Core checkpoint K0
+# Desktop/Core protocol
 
-K0 is an additive backend foundation. The installed Electron application still uses its existing backend. Only the trusted host imports `apps/desktop/bridge/client.ts`; React and remote pages do not receive this client or its pipe.
+**State:** additive Go source foundation. The published desktop still uses its
+TypeScript backend. Production `farol serve` leaves Computer unavailable;
+[test startup](../tests/native/core/read.go) injects a disposable Computer owner.
+See [status](status.md) and [architecture](architecture.md).
 
-The accepted Go migration layout places the Core-owned host client, framed decoder and generated TypeScript wire under `apps/desktop/bridge`. This is the explicit migration exception to the legacy `src/` source layout. `tooling/tsconfig.desktop-core.json` makes these modules direct strict compiler roots, independently of test imports. Desktop owns the trusted Electron host integration point and its frontend directory move; K0 supplies the importable client and disposable process witness. Lead owns reconciliation of repository-wide layout instructions during integration.
+## Source map
 
-Run `go build ./cmd/farol`, then `farol serve --profile <id>`. The build owns `boot.BuildID`, set with `-ldflags "-X github.com/legrch/farol/boot.BuildID=<accepted-build-id>"`; development defaults to `development`. The host launches the exact accepted executable with inherited stdin/stdout pipes. Each process generates a fresh 128-bit random incarnation. The Go serve API owns closable input/output pipes and closes both exactly once on every terminal return; context cancellation closes those exact endpoints to interrupt idle reads and blocked writes, and passes the same context to the module handler. Module journals still decide OS/provider cancellation outcomes. The CLI lifetime follows its inherited pipes. K0 does not implement an endpoint discovery service, global per-profile lock, app installation, automatic restart, or MCP socket attachment.
+| Path                                                        | Owner                                                          |
+| ----------------------------------------------------------- | -------------------------------------------------------------- |
+| [api/desktop/v1/schema.json](../api/desktop/v1/schema.json) | Canonical method metadata and independent wire DTOs            |
+| [apps/desktop/bridge/](../apps/desktop/bridge/)             | Trusted host client, framed decoder, generated TypeScript wire |
+| [gen/desktop/v1/](../gen/desktop/v1/)                       | Generated Go wire                                              |
+| [transport/desktop/](../transport/desktop/)                 | Go server and published-contract adapters                      |
+| [boot/](../boot/) and [cmd/farol/](../cmd/farol/)           | Backend composition and executable                             |
 
-## Wire and generation
+Only the trusted desktop host uses the pipe client. React/UI and remote browser
+pages do not receive that client or direct pipe access. Root boot owns executable
+selection, build provenance, composition, and lifetimes; Core supplies no alternate
+filesystem policy.
 
-`api/desktop/v1/schema.json` is the single schema authority. `farol-wire/2` is a deliberately small local generator, not a general schema framework. Run `node tooling/generate-desktop-wire.mjs`; `--check` fails on drift. It uses the locked repository Prettier and Go formatter. Generated Go and TS contain the schema SHA-256; changing the schema requires regenerating both files. Validator templates are generator implementation, not independently authored DTOs. The source format is version 2: method metadata contains read/effect strings, and version-1 metadata is refused by the generator. Wire request/result/event envelopes retain protocol 1.0; the source-format version is not an on-wire protocol revision. Accepted host/backend build provenance and generated schema digests bind the corresponding artifacts.
+## Generate and verify
 
-Frames have a four-byte unsigned big-endian length and 1..1,048,576 UTF-8 JSON bytes. Admit size before allocation. Duplicate keys, invalid UTF-8, depth above 32, unknown envelope fields, numeric request IDs, batches and trailing JSON are refused. A truncated or invalid frame ends the connection; stdout is protocol only, stderr is diagnostics. The TS client counts at most 64 KiB diagnostic bytes and retains no diagnostic contents.
+```sh
+node tooling/generate-desktop-wire.mjs --check
+task test:core
+npm test -- tests/contract/computer-core.test.ts
+```
 
-JSON-RPC 2.0 request IDs are opaque ASCII strings, 1..128 characters with letters, digits, `.`, `_`, `:`, `/` and `-`. They are never coerced to numbers. Faults without a recoverable request ID use JSON-RPC `id: null`. Requests use `params: { context?, operationId?, body }`. The handshake body carries major/minor, exact expected build and profile. Major must match and the requested minor must be supported. Adopt context only from that verified handshake result. All subsequent requests bind the exact profile and backend generation. The host remains responsible for accepted executable provenance and IPC sender checks; a handshake alone is not product workspace authority.
+The generator uses the repository's locked Prettier and Go formatter. After an
+intentional schema change, run it without `--check` and commit both generated peers.
+Each embeds the schema SHA-256. `farol-wire/2` is the source generator format;
+the current on-wire protocol is **1.0**. These versions have separate meanings.
 
-Every response echoes request and operation IDs. Outcomes are `ok`, `unavailable`, `unsupported`, `refused` or `unknown`. Unknown methods produce a JSON-RPC fault. Known but unregistered module capabilities return unavailable. Owner data and its worst-case JSON escape expansion are bounded before response serialization; oversized owner output returns `unknown`/`owner_output_bound` without content or replay, preserving request/operation identity. This does not prove a module-owned effect was cancelled. Operation status is explicitly unsupported until its authoritative module owner supplies retained state. It must never dispatch a mutation to answer an observation. Request IDs cannot repeat on one connection. The server returns after at most 4,096 complete frame attempts, including malformed/duplicate requests, without reading another frame; the client limits in-flight requests to 32 and stops admitting while its writer is backpressured. A timeout or loss after dispatch is unknown, closes admission and never resends, restarts or switches executors. Fatal failure ends an owned child's input, waits one second, then stops that exact child; cleanup is confirmed only by a terminal child observation, with a two-second observation budget. Unconfirmed cleanup stays unknown and `close()` reports it. Borrowed children are never stopped. Backend cleanup does not prove cancellation of an OS child/provider operation; module journals still own those unknown outcomes.
+`task test:core` checks generation/import drift, Go race tests/vet, the real
+Desktop wire process contract, and strict TypeScript bridge compilation. It also
+checks a transitional nested Go module when present. The focused Computer contract
+command runs the Darwin disposable native-read route. These checks do not prove an
+installed desktop executor or live provider.
 
-PID, uint64 counters and sequences use canonical decimal strings (0..18446744073709551615). JSON numbers use IEEE-754 binary64 value semantics in both peers. Bounded integer fields validate the decoded integer value and its range; `1`, `1.0` and `1e0` decode identically. JSON number token precision is not retained: a sub-ULP fraction such as `1.00000000000000001` also decodes to `1`. Decoded non-integers and out-of-range values are refused. Exact uint64 values use decimal strings, independent of JSON number rounding. Timestamps are UTC RFC3339 with up to nine fractional digits. File ranges are UTF-8 byte offsets, never JS UTF-16 indexes. Transport does not add raw filesystem byte-name support. Module adapters own their independent app/contract DTO conversion.
+For a development executable:
 
-K0 events admit only `changed` and `gap`, binding context, stream and decimal sequence. Authoritative snapshot events are unsupported until the owning module defines the complete snapshot/acknowledgement contract; a generic payload cannot clear staleness. The client rejects old incarnations/regressions and marks gaps stale; an event cannot change its trusted incarnation. A throwing event observer is unsubscribed; remaining observers and frame parsing continue without changing transport or pending outcomes. No event-producing business service is enabled in K0. Authoritative resnapshot/retention, cancellation, durable operation binding and delivery acknowledgement remain module-owned integration work.
+```sh
+mkdir -p _output/tmp
+go build -o _output/tmp/farol ./cmd/farol
+```
 
-## Composition and next read slice
+Its command mode is `serve --profile <id>`, with inherited stdin/stdout pipes.
+Stdout is framed protocol, not a human CLI. `boot.BuildID` defaults to `development`
+and is linker-bound for an accepted build. A client cannot override it.
 
-`cmd/farol` is thin; `boot/container` wires concrete adapters. `transport/desktop.New` accepts only explicitly named methods from the canonical schema. A module-owned adapter maps `desktop.Request` to independent module contracts and supplies `desktop.Outcome`. Module ownership follows the approved package dependencies and explicitly wired owning contracts. The method registry carries read/effect admission only and makes no runtime owner claim. The canonical schema classifies each method as read or effect; generated immutable lookup functions enforce operation identity, and registrations supply only a handler. Effect methods require an operation ID and read methods reject one, but Core supplies no generic durable operation journal: module owners must bind intent durably before effects and reconcile uncertainty. K0 registers no effects.
+## Handshake and lifetime
 
-Computer owns `computer.workspace.read` and all filesystem authority. K1 adds its typed read body/result only after the Computer contract is agreed, then injects disposable trusted repositories through composition. Core supplies the common boundary and never recreates filesystem policy. The existing desktop host chooses the integrated executable; this file does not claim that production uses Go.
+```mermaid
+sequenceDiagram
+  participant Host as Trusted desktop host
+  participant Core as Go Core child
+  participant Owner as Module owner
+  Host->>Core: Spawn exact executable with private pipes
+  Host->>Core: core.handshake (protocol, build, profile)
+  Core-->>Host: Verified identity and fresh incarnation
+  Host->>Core: Request bound to profile and backend generation
+  Core->>Owner: Adapt to published contract, when registered
+  Owner-->>Core: Correlated result
+  Core-->>Host: Bounded response with request / operation identity
+  Note over Host,Core: Loss after dispatch is unknown. No replay or replacement
+```
 
-## Verification
+Each process generates a fresh 128-bit incarnation. The handshake verifies expected
+build/profile and compatible protocol, then supplies the context for later requests.
+It proves backend identity, not Computer workspace authority.
 
-`node tooling/check-core.mjs` runs generation drift, architecture, root Go race tests/vet, the focused real child-process TS contract tests and strict TypeScript compilation. The repository still requires `task ci:fast` before acceptance. A nested `resources/native/go` module is tested separately whenever it exists; the accepted K0 base predates that release-owned range, so root success cannot qualify it. Go race evidence here is Darwin/arm64 only.
+The server owns closable pipe endpoints, closes them once on terminal return, and
+passes its context to handlers. Cancellation closes the same endpoints to interrupt
+idle reads or blocked writes. Module journals still decide whether an OS/provider
+effect ended.
 
-The process/status test compiles the actual executable with `k0-test`, launches a disposable child, verifies its PID/build/profile/incarnation and records round-trip duration. Fixtures qualify hostile wire behavior, not installed application, browser, provider, workspace or update behavior. All processes and test state are owned and disposable; no visible UI is launched.
+Owned-client fatal cleanup closes admission and the child's input, observes its
+terminal state, and bounds stopping that exact child. Borrowed-client close only
+detaches that wrapper's listeners and rejects its requests; it does not stop or alter
+the owner's child. Signal submission alone is not termination evidence.
 
-JSON strings and keys must contain Unicode scalar values. Escaped unpaired UTF-16 surrogates are rejected before Go can substitute U+FFFD; valid pairs, literal backslash escapes and an explicitly named U+FFFD remain distinct valid values. Generated schema validation and the framed decoder share this rule, so a malformed spelling cannot select another path.
+There is no endpoint-discovery service, global profile lock, automatic restart, app
+installer, or MCP socket attachment supplied by this checkpoint.
 
-The accepted Go in-process contract is a thin owning facade with independent DTOs and explicit mappings; it may delegate to its own application/domain. Neighbors can reach only published contracts through peer adapters. The legacy TypeScript DTO-only contract direction does not replace this Go facade rule. The import guard prevents infrastructure/neighbor leakage. Source review verifies facade delegation, independent DTOs, absence of implementation aliases and explicit mappings.
+## Wire admission
 
-Malformed owner output is contained as `unknown`/`owner_output_invalid` with exact request/operation/context correlation and no data or replay. Normal bounded replies encode once; invalid output uses one small correlated fallback, preserving the shared pipe for subsequent requests. Canonical operation identity is checked before unavailable/unsupported returns, so missing effect IDs and extra read IDs are refused even when the capability is absent.
+| Property                  | Current bound                                                                   |
+| ------------------------- | ------------------------------------------------------------------------------- |
+| Frame                     | Four-byte unsigned big-endian length, then 1–1,048,576 UTF-8 JSON bytes         |
+| JSON depth                | At most 32                                                                      |
+| Connection attempts       | At most 4,096 complete frames, including malformed/duplicate requests           |
+| Client in-flight requests | At most 32, with writer backpressure admission                                  |
+| Request ID                | Opaque ASCII string, 1–128 characters: letters, digits, `.`, `_`, `:`, `/`, `-` |
 
-`farol-wire/2` admits only the implemented protocol 1.0 limits: 1 MiB frames, depth 32 and 4096 request attempts. The generator refuses missing, coerced or different limit metadata before producing either peer. A limit change needs an explicit coordinated implementation/version change; regenerating types alone cannot change framing or admission.
+Duplicate keys, invalid UTF-8, unpaired escaped UTF-16 surrogates, trailing JSON,
+batches, unknown envelope fields, and numeric request IDs are rejected. Valid Unicode
+pairs, literal escapes, and an explicitly named U+FFFD stay distinct. An invalid or
+truncated frame ends the connection; diagnostics use stderr and are byte-bounded.
 
-Closing or fatally failing a borrowed Client detaches only that wrapper's stream, child and drain handlers, clears its observers and rejects its pending requests. It leaves the owner's child, streams and foreign listeners intact. Owned-child terminal observation and cleanup remain separate.
+Responses preserve exact request/operation/context correlation with `ok`,
+`unavailable`, `unsupported`, `refused`, or `unknown`. Unknown methods are JSON-RPC
+faults. Known unregistered capabilities are unavailable. Operation status is
+unsupported until its module owner supplies authoritative retained state.
 
-## K1 disposable Computer read checkpoint
+Method metadata classifies read versus effect. Effects require an operation ID;
+reads reject one. Core registers no effects and owns no generic journal. Unknown
+or oversized owner output is contained without replay. Limits require a coordinated
+implementation/version change; regeneration alone cannot widen them.
 
-`ComputerReadRequest`, `ComputerReadResponse`, `ComputerReadRefusal`, range and page types are authored only in the canonical schema and generated in both languages. The adapter in `transport/desktop/read.go` explicitly converts to Computer's final independent workspace contract and checks exact result correlation. Owner/session/task/participant/turn/call/workspace/path values are preserved; task epoch, request generation, byte counts and all page offsets/sizes use uint64 decimal strings. Range length is a bounded JSON integer, 4..262144. The native contract still refuses offsets above its existing safe bound; lossless wire encoding does not broaden filesystem admission.
+## Disposable Computer read checkpoint
 
-A refusal preserves Computer's classified code and source with `retry: never`; malformed typed bodies use `invalid_read_request`/`transport`. A valid refusal includes the exact request correlation. Neither requests nor methods carry roots, grants, trusted home or revocation commands. Core adds no Computer policy, filesystem implementation, command execution or journal.
+The typed `computer.workspace.read` adapter maps generated wire DTOs to Computer's
+independent published contract and validates exact correlation. Identity includes
+owner/session/task/participant/turn/call/workspace/path. Task epoch, generation,
+byte counts, and page offsets/sizes are uint64 decimal strings, avoiding JavaScript
+precision loss. Range length is a bounded integer, 4–262,144.
 
-`ReadMethod` receives the trusted context of its owning server. After native disclosure, it measures the complete encoded response with that exact context before the server writes a frame. HTML/control escaping can expand a 256 KiB native result beyond the unchanged 1 MiB frame ceiling. That case returns typed `refused`/`output_bound` from `transport`, with no content, widening or retry; the pipe remains usable.
+Trusted startup supplies roots, repositories, clock, and approval. Requests carry no
+root, grant, trusted home, or revocation command. Computer retains authority checks,
+descriptor-relative containment, UTF-8 windows, and disclosure policy. Its existing
+safe offset limit is not widened by a lossless wire number.
 
-`tests/native/core/read.go` is a Darwin-only test executable. Its trusted startup composes `accessrepo.New`, privileged Put methods, `filesystem.New(trustedHome)`, `service.New(access, native, clock)` and `contract.New(service)` for a disposable physical root. Test-only startup flags revoke the participant after native IO and drop a read response after handshake. These seams are absent from production modes and the wire. Production `farol serve` continues to leave Computer unavailable. The TS tests run the actual Client through this executable, verify full/ranged UTF-8 bytes and correlations beyond JS precision, root escape, post-read revocation, output expansion, malformed input, stale backend generation, absent backend and response loss without replay.
+A classified refusal preserves its code/source and `retry: never`. Complete JSON
+escape expansion is measured before framing: a native result exceeding the pipe
+budget becomes `refused` / `output_bound`, without content or a second read.
 
-Focused generation/import fixtures, Go race/vet, real disposable reads and strict TS compilation are preparation evidence. K1 is not installed desktop acceptance, production authority persistence, provider/command parity or Computer R4 acceptance. Prerequisite Computer preparation remains feature-only; aggregate gates and required independent review remain integration work.
+The [Computer route tests](../tests/contract/computer-core.test.ts) run an actual Go
+child and temporary physical workspace through the actual TypeScript Client. They
+cover full/ranged UTF-8, values beyond JavaScript precision, root escape, post-read
+revocation, malformed Unicode, output expansion, stale generation, production
+unavailability, and lost response without replay. A synthetic native-race refusal
+checks code/source mapping; Computer's own filesystem tests own real changed-file
+proof. No production permission persistence or installed Go cutover is claimed.
 
-K1's Unicode regression supplies a malformed path while an explicitly named U+FFFD file exists in the disposable tree and proves refusal before native IO. Its `--race-refusal` fixture injects Computer's classified native error to qualify route code/source/retry preservation only. The actual changed-file regression belongs to Computer's filesystem tests; this synthetic route vector is not native race proof.
+---
+
+[Documentation index](README.md) · [Project overview](../README.md)

@@ -1,91 +1,76 @@
-# Farol Next preview design
+# Desktop design
+
+**State:** the published TypeScript/Electron desktop uses the Watch Rail direction.
+The React migration is an [accepted target](architecture.md#accepted-migration-target).
+Design-lab images and fixtures do not certify the installed app's interactions.
 
 ## Product intent
 
-The preview is a focused desktop bridge for one owner supervising a small number of
-task-bound conversations. Its primary surface is Browser, not a project dashboard.
-Computer explains the exact capability waiting for consent, Activity shows a quiet
-sanitized evidence trail, and Settings reports isolation and unavailable live
-integrations without pretending they are configured.
+Browser is the primary conversation surface. Computer explains the local capability
+and approval it needs. Activity is a quiet content-free lifecycle trail. Settings
+shows the separate connection and host readiness checks, including unavailable states.
 
-The first normal launch opens Guided Setup in the app sidebar in both Dev and
-packaged Preview. Folder sharing and embedded ChatGPT sign-in are optional;
-ordinary Computer access requires an approved folder and current connector
-receipts, not Model or Agent. Preview checks attachment from an ordinary ChatGPT
-conversation without automatic Send. The retained five-step qualification modal
-belongs to explicit demo/legacy fixture mode, not normal first-run Setup.
+First-run Setup lives in the sidebar for both product and Dev. Embedded sign-in and
+folder sharing are optional; each actual capability has its own admission. The old
+qualification modal and dossier are retained only for explicit demo/legacy fixtures.
+[Getting started](getting-started.md) owns the ordinary setup instructions.
 
-## Owner-selected visual direction: Watch Rail
+## Watch Rail
 
-The five reversible design-lab directions and their 49 reference screenshots remain
-unchanged under `design-lab/`. The owner selected Watch Rail with the Iris accent and
-Geist typeface. Production uses the same graphite hierarchy:
+The current shell uses a graphite hierarchy, Iris accents, and packaged Geist:
 
-- a 216 px full-height sidebar that collapses to a 72 px watching rail;
-- automatic rail mode below 980 px, with the full sidebar available as an overlay;
-- compact task tabs in the 52 px window toolbar and a 25 px bottom status strip;
-- the original dossier row remains only in explicit demo/legacy fixture mode;
-- shape-and-text lifecycle lamps for running, Computer wait, complete, failed,
-  outcome unknown, and unavailable states;
-- Iris only for selection, keyboard focus, and the next action. Iris never encodes a
-  lifecycle state.
+- A 216 px sidebar collapses to a 72 px watching rail.
+- Below 980 px, the full sidebar opens as an overlay.
+- A 52 px toolbar holds compact conversation tabs; a 25 px bottom strip holds status.
+- Lifecycle signals use shape and text as well as color.
+- Iris marks selection, keyboard focus, and the next action. It does not encode a
+  lifecycle result.
 
-Geist 1.7.2 and Geist Mono are shipped from the design-lab's pinned SIL OFL sources.
-Their SHA-256 values stay in `design-lab/fonts/PROVENANCE.md`, the OFL text is a
-digest-bound packaged resource, and the packaged third-party notice names the version,
-license, and hashes. Coverage outside the verified Latin set falls back to SF Pro or
-the system sans-serif; no broader script coverage is claimed.
+Geist/Geist Mono 1.7.2 resources, hashes, and SIL OFL text are retained in
+[font provenance](../design-lab/fonts/PROVENANCE.md). Coverage outside the verified
+Latin set falls back to system fonts; broader script coverage is not claimed.
 
-### Native Browser overlay decision
+Current implementation: [shell CSS](../src/ui/shell.css),
+[shell renderer](../src/ui/shell.ts), and
+[main-owned surface layout](../src/apps/desktop/surface-layout.ts).
 
-The task page is a native `WebContentsView`, which is composited above renderer HTML.
-Farol therefore hides the selected native page while a shell-owned overlay is open:
-compact sidebar, task menu, quick switcher, or Setup. The page is shown again only
-after the overlay closes and focus is explicitly returned. This keeps the Browser
-viewport full width in ordinary use, avoids an additional transparent native view,
-and makes click/Escape routing deterministic. Main derives all bounds from closed
-layout enums; renderer-supplied pixels are never trusted.
+## Native Browser overlays
+
+A Browser task uses native `WebContentsView`, composited above renderer HTML.
+Main hides that selected view while Setup or a shell overlay is open: compact
+sidebar, task menu, or quick switcher. It restores the page after the overlay closes
+and explicitly returns focus.
+
+This preserves the full normal Browser viewport while keeping clicks, Escape, and
+keyboard controls reachable. Main derives bounds from closed layout states; the
+renderer cannot supply arbitrary native-view pixels. No extra transparent native
+view or weaker navigation/preload/permission boundary is introduced.
 
 ## Interaction contract
 
-- `Command+1…4` selects Browser, Computer, Activity, or Settings.
-- `Control+Command+S`, the View menu item, and the button beside the macOS traffic
-  lights show or hide the sidebar. At compact widths the same control opens the full
-  sidebar over the rail.
-- `Command+K` opens the quick switcher from either shell HTML or the native task page.
-- `Control+Tab` and `Control+Shift+Tab` move between task tabs without cancelling the
-  hidden task. Keyboard focus moves to the newly visible task surface.
-- Visible controls have a two-pixel Iris focus ring and an appropriate Mac target.
-- Switching views does not recreate WebContentsView instances. The selected browser
-  view alone is visible; hidden views keep running with background throttling off.
-- Reduced-motion preference removes transforms and transition duration.
-- Status changes update text and color together; color is never the only signal.
-- Test-only window presentation is closed and explicit: hidden for ordinary fault and
-  recovery evidence, or inactive on a non-primary display for the one visual/focus
-  run. Normal owner launches retain the product's ordinary foreground behavior.
-- Demo Computer approval names its synthetic operation and target. Ordinary Computer
-  controls name the selected workspace and operation, show read evidence only on
-  demand, and require an explicit access change plus review before a guarded edit.
-- The terminal demo action is labelled `Finish demo response`; it cannot be mistaken
-  for publishing, installing, or completing a product release.
-- Activity is an allowlisted projection: task label, phase, event kind, synthetic
-  capability name, monotonic sequence, and timestamps only. Prompt text, answer
-  text, tool arguments/results, bearer values, paths, cookies, and provider payloads
-  never enter it.
+[Getting started](getting-started.md#navigate-the-app) lists shortcuts. Both shell
+and native page support quick switching. Switching tabs hides the inactive page
+without recreating its view or cancelling its task; hidden views keep running with
+background throttling disabled.
 
-## Review checklist
+Visible controls have Iris focus indicators. Reduced-motion preference removes
+transforms and transition duration. Status changes include readable text, and
+failure, unavailable, and unknown states retain distinct meanings.
 
-The direction was checked against the programme before UI code: Browser remains the
-home surface; tabs and status are calm; the active beacon is specific to Farol; the
-layout avoids generic dashboard patterns; compact behavior, focus, reduced motion,
-failure/offline states, and honest unavailable capabilities are part of acceptance.
-The owner choice is recorded by the design-lab report. Production acceptance still
-requires built-app interaction, focus, inactive-window, fullscreen, compact overlay,
-and visual evidence rather than inheriting proof from synthetic lab screenshots.
+Activity is an allowlisted projection of labels, phases, event kinds, sequences,
+and timestamps. Prompts, answers, tool payloads, paths, cookies, and bearer values
+do not enter it. Support export has its own similarly bounded projection.
 
-Normal Preview and Dev use the same Browser presentation predicate in main and
-renderer. CSS reserves the same native-page bounds beside the full sidebar or
-compact rail. The task menu remains reachable from the toolbar, including an empty
-profile; closing a ChatGPT tab uses the existing task lifecycle. This presentation
-selection does not enable Dev private homes, automatic Send, embedded browser-home
-commands, Codex diagnostics or host permissions in Preview.
+## Verification
+
+Visual direction, font provenance, and pure geometry can be checked without native
+focus. Built-app acceptance separately covers compact overlays, fullscreen,
+inactive windows, focus transfer, and actual native views.
+
+[Test policy](testing.md) requires hidden runs where equivalent and explicit display
+and focus authority for native-visible cases. Each test-owned window follows that
+policy. A synthetic lab screenshot cannot replace those checks.
+
+---
+
+[Documentation index](README.md) · [Project overview](../README.md)

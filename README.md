@@ -1,259 +1,100 @@
-# Farol Preview
+# Farol
 
-Farol is a standalone TypeScript/Electron product. All source, tooling, tests,
-and resources live at the repository root. It does not install, activate, register, update, or replace the legacy
-Farol product. It also does not use the installed `codex-chatgpt-web` profile.
+A macOS desktop companion for ChatGPT and the local workspaces you choose to share.
 
-Computer exposes approved workspace instruction bootstrap and published read-only
-guidance through MCP. Root/nested `AGENTS.md` are read within the selected task
-scope, with explicit missing/unavailable results and current authority checks.
-See [Computer workspace context](docs/computer-workspace-context.md) for bounds,
-ordinary shell filename discovery and the distinction between local/package
-fixtures and a refreshed live connector.
+Farol connects ChatGPT to approved folders on your Mac through a Computer MCP
+bridge. Read and search files, explicitly approve edits or sandboxed commands, and
+manage the connection from a desktop app with Browser, Computer, Activity, and
+Settings views.
 
-Ordinary `task dev` runs **Farol Dev** (`local.farol.dev`) with its own workspace
-configuration, browser partitions, connector and instance state. It may run beside
-the installed Farol. Production uses the existing NEW product state; development
-never borrows it or copies cookies, keys or personal Codex configuration.
-Development stays a **Development** build, including dirty source, and is never
-accepted as a packaged candidate. `task package` and `task run` retain exact clean
-candidate admission. `task dev -- --acceptance-profile` uses a further isolated
-acceptance profile; check-only development and acceptance gates retain the full
-owner fingerprints. The retired `shared-new` profile marker fails before state
-access. Fixture proof operations remain restricted to isolated Dev state.
+**[Get Farol](docs/installation.md)** · **[First connection](docs/getting-started.md)** ·
+**[Developer guide](docs/standalone-build.md)** · **[Documentation](docs/README.md)**
 
-The permanent model protocol is independent of these development identities:
-`model_provider = "farol"`, `model = "chatgpt"`. `farol/chatgpt` is display
-notation only. The default alias, future version pins, resolution lifetime and
-migration boundaries are defined in [Model routing](docs/model-routing.md).
+> [!IMPORTANT]
+> Farol is an **owner beta for macOS Apple Silicon**. The published package is
+> unsigned and not notarized. Live workflow qualification is incomplete. The Go
+> backend and React UI are an incremental migration; the published beta still uses
+> the TypeScript/Electron implementation. See [current status](docs/status.md).
 
-### Dev names and profile compatibility
+## What you can use
 
-The ordinary development app and ChatGPT app name is **Farol Dev**. The marker `dev`, app ID
-`local.farol.dev`, runtime `farol-dev-runtime`, and `persist:farol-dev-*` partitions
-are stable machine identifiers; they are not derived from the display label.
+- **ChatGPT and your folders.** Connect a separately configured ChatGPT app to
+  Farol, select folders, and verify the connection. Embedded ChatGPT sign-in is
+  optional for Computer access.
+- **Controlled local work.** Start with read-only files and instructions. Enable
+  guarded edits, fixed Git verification, or a sandboxed workspace shell explicitly.
+  Shell networking is denied; full Git and user settings need separate approval.
+- **A desktop workspace.** Keep conversations in tabs, review Computer access, and
+  inspect content-free Activity and support diagnostics.
+- **Explicit recovery.** Saved configuration and operation receipts distinguish a
+  completed action, a refusal, and an unknown outcome. An uncertain send or command
+  is never blindly repeated.
 
-Isolated acceptance profiles use `Application Support/Farol Dev Acceptance/Farol Dev`.
-Existing separate DEV profiles retain their compatibility names. A legacy-only `Farol DEV`
-directory on a case-sensitive volume remains in place and is reused. When both
-spellings resolve to the same device/inode, the preferred spelling addresses that
-same directory without moving or copying it. Two distinct profiles fail closed
-with `DEV_PROFILE_DIRECTORY_AMBIGUOUS` instead of being merged or reset. Profile
-selection reads directory metadata only; it does not migrate cookies or credentials.
+Native Codex task integration has additional host and workspace requirements.
+Saved-chat automation and Claude handoff have experimental or fixture-only
+boundaries. **The Farol model-provider route and Product Agent are disabled.**
+These are described in the [capability status](docs/status.md), rather than offered
+as ordinary setup steps.
 
-The browser requires the configured exact app selection. An existing
-external app still named `Farol DEV` is not silently treated as the new label;
-rename and verify the intended external app separately, then reselect it. Display
-renaming never authorizes another tunnel, broader access, or a message retry.
+## Get Farol
 
-## What runs
+The documented release snapshot is
+[0.1.8-owner.beta.1](https://github.com/legrch/farol-releases/releases/tag/v0.1.8-owner.beta.1),
+published on 2 October 2026. Binary downloads live in the separate
+[Farol releases repository](https://github.com/legrch/farol-releases/releases).
 
-- one Electron shell that starts with no tasks on an ordinary launch;
-- one Electron utility process with an OS-allocated loopback HTTP/SSE endpoint,
-  task-scoped read capabilities and a separate main-process control capability;
-- an explicit `--demo` mode with two independent scripted local-provider sessions,
-  two real `WebContentsView` surfaces and one bounded fixture Computer round-trip;
-- sidebar Setup with Sign in, optional Folders, Connection, and Add to ChatGPT,
-  available again from Settings; configuration errors stay on this same surface
-  with classified diagnostics and never reopen the legacy modal journey;
-- the owner-selected Watch Rail shell with Iris selection/next-action accents,
-  shape-and-text task signals, a 216 px sidebar / 72 px rail, and packaged Geist;
-- content-free Activity, a content-free support export, and explicit
-  provider/runtime failure states.
+The [installation guide](docs/installation.md) covers downloads, checksums, the
+current helper requirements, local installation receipts, and updates. Keep your
+previous accepted version while evaluating the beta.
 
-Ordinary Setup and Settings can open the isolated Next ChatGPT partition, observe and
-verify its readiness, select real folders with the native picker, persist Computer
-approval and exclusions privately, and exercise descriptor-relative list/read/search
-through the product. An explicit access change enables guarded conflict-aware edits
-with durable content-free receipts. An independently persisted, off-by-default
-`Verified commands` setting enables only fixed no-network Apple Git status and exact
-HEAD verification at a freshly verified workspace root; no arbitrary command,
-argument, environment, or working path is accepted, command cancellation kills the
-detached process group, and command output is not retained. The Browser flow
-previews selected text, image, or document context before one submission, retains
-conversation and delivery state, and recovers a completed or outcome-unknown task
-after restart without blind resubmission.
-The deterministic E2E site remains a fixture; its green report does not claim that the
-owner's authenticated ChatGPT account completed a live call.
+## Run from source
 
-The source includes Codex executable attestation and a bounded native-Agent
-lineage-check seam. Product Agent remains default-off: start and rejoin refuse
-with `AGENT_NOT_READY` before creating input, assignment or host work. Local
-fixtures exercise child lineage, read/verify TaskGrant propagation, same-child
-rejoin and result retention; they do not qualify a live Product Agent. Enabling
-that route and its positive qualification require a separate owner decision.
+On macOS Apple Silicon, install [Go Task](https://taskfile.dev/), then provide Node
+**24.20.0 or 26.7.0** with npm **11.19.0**. From a clone:
 
-Context continuity keeps the same retained conversation when available, uses a
-summary-only provider turn with no tools, stores a private bounded checkpoint before
-handoff, waits for exact host completion, advances one epoch and resumes after
-restart. Three ordinary compaction cycles and the exact installed host protocol have
-separate evidence. The model summary never renews authority or proves side effects.
-The model-visible ChatGPT-to-native caller route, arbitrary commands, network
-authority, authenticated attachment delivery, and release readiness remain separate
-acceptance rows. See [`docs/computer-parity.md`](docs/computer-parity.md) for the
-complete Legacy disposition and evidence boundary.
-
-The N2 authority core derives a task-bound `TaskGrant`, preserves it through
-main -> Agent -> Critic delegation, retains explicit owner narrowing including
-do-not-inspect paths, and intersects every Computer action with current Computer
-policy. Results retain exact request and operation correlation; only a validated,
-correlated refusal is reported as known, while malformed or rebound responses are
-outcome-unknown. The Agent app seam persists assignment correlation in a private
-atomic store with exclusive first publication and monotonic updates,
-rejoins an already-known running child without another spawn, distinguishes a durable
-result from a memory-only result, and records exact parent delivery. Cancellation
-publishes one private, no-replace intent before the host interruption. A crash,
-lost acknowledgement or failed terminal save never permits another cancellation
-request. Terminal receipts and parent-delivery acknowledgements use separate
-no-replace publications, so a stale process cannot overwrite a completed result
-after an earlier state check. A later durable terminal receipt can be read; without one, replay stays
-outcome-unknown and does not overwrite the in-flight owner's record. Repositories
-without this intent capability refuse cancellation. These recovery checks use
-disposable stores and synthetic hosts, including an exclusive claim from two
-independent Node processes; the default-off product is unchanged.
-
-## Reproduce
-
-Development requires one declared lane: Node `24.20.0` or `26.7.0`, with npm
-`11.19.0`. The packaged app uses Electron's bundled runtime and requires none of
-those tools from its launcher.
-
-From the repository root:
-
-```bash
-npm ci
-task dev
-task ci
-task test:e2e:dev
-npm run test:e2e:computer
-task package
-task test:e2e
-npm run test:e2e:computer:package
-```
-
-The canonical owner command is:
-
-```bash
-task run
-```
-
-That command opens the packaged Preview. For an explicitly selected background
-qualification, use `task run -- --hidden`. This uses the same verified candidate,
-NEW profile and instance admission, and keeps all product windows hidden. It does
-not install a package, expose a debug port, select another profile or prove visible
-UI behavior. Normal Quit/drain requirements still apply. A background-only launch refuses to
-reopen an already running instance. Older primaries do not acknowledge the version-3
-background request; the secondary reports `unverified` after the bounded 10-second
-wait and requires Quit. It never substitutes an ordinary reopen request.
-
-The exact Farol Dev onboarding command is:
-
-```bash
+```sh
+git clone https://github.com/legrch/farol.git
+cd farol
 task dev
 ```
 
-It opens the ordinary product shell with zero synthetic tasks. The retained fixture
-journey is explicit:
+`task dev` selects a supported toolchain, prepares locked dependencies, builds the
+working tree, and opens **Farol Dev**. It has its own profile and connector; it can
+run alongside an installed Farol. Dirty source is allowed and labelled Development.
+Stop the processes it started with `Control+C`.
 
-```bash
-task run -- --demo
-```
+For deterministic checks, also provide Go **1.26.2**, Gitleaks, and the reviewed
+Apple developer tools. Follow the [developer guide](docs/standalone-build.md) for
+setup and `task ci:fast`. A clean packaged candidate uses `task package` followed
+by `task run`; the [candidate guide](docs/owner-preview.md) explains that workflow.
 
-The verified packaged candidate workflow copies the existing package into a private
-isolated launch snapshot, verifies that final launch path, and launches only those
-verified bytes. It never builds, installs, updates, or activates either product, and
-it refuses a missing, dirty, stale, or digest-invalid package with the exact rebuild
-action. A second owner launch reopens the running app only after a nonce-bound
-acknowledgement proves that its source commit and tree digest match the exact
-candidate; a different or unverifiable running build is rejected. The packaged
-process emits one mandatory bounded launch result only after either the primary
-startup is complete or the existing primary has answered. The owner launcher waits
-for closed output streams and fails on a missing, malformed, or duplicate result even
-when the child exits with status zero.
-`task preview` is the separate development lane; it builds development bytes and
-is not artifact evidence. See [`docs/owner-preview.md`](docs/owner-preview.md) for
-controls and lifecycle.
+## Architecture
 
-The deterministic gate includes strict typecheck, architecture fixtures, policy and
-integration coverage, Hunt selftest/proof/model, and a build-bound sanitized replay.
-The development E2E lane runs those exact clean built files through Electron's
-bundled runtime without modifying its signed vendor bundle; it writes evidence to
-`_output/evidence/e2e-dev/`. The separately sealed package lane remains the artifact gate.
-Packaging verifies the app identity, embedded source manifest, runtime closure,
-the immutable nested Electron runtime and helper identities, contained symlinks,
-type-bound tree digest, plist, fixed launcher and explicit unsigned status. The
-tree digest is `farol.next.tree-digest/v2` (self-delimiting records, shared with
-the promotion helper); a schema 4 manifest carries the ambiguous version 1 digest
-and is refused as `PACKAGE_TREE_DIGEST_LEGACY` until the candidate is repackaged. E2E
-launches those packaged bytes under a throwaway home and explicit user-data root,
-checks the real UI and task views, rejects malformed and tampered artifacts, proves
-default-deny task egress, makes a second launch wait across an intentionally delayed
-primary startup, and exercises actual utility-process death.
+The running desktop uses Electron, a sandboxed TypeScript UI, native browser
+views, and an Electron utility process. Computer and update helpers currently
+include Python. The accepted target is **React + TypeScript for Farol UI,
+TypeScript for desktop/browser adapters, and Go for the backend**.
 
-Both E2E lanes follow the non-interference contract in `docs/testing.md`. One
-native-visible interaction run is positioned before first show and shown without
-taking focus. Fault and recovery runs stay hidden while their renderers continue
-to paint for DOM and screenshot evidence. The default selector requires a
-non-primary display. An explicitly authorized owner-away run may use
-`--built-in-display-only --allow-primary-display` to keep every test-owned
-window on the MacBook display, even when an external monitor is connected.
-The required viewport never shrinks. Native focus is exercised only under a
-separate current grant, and owned windows close immediately after their proof.
-If native focus is not authorized for the current run, append
-`-- --skip-native-focus`; the other evidence still runs, while the report remains
-`BLOCKED` and names the mandatory focus rows as owner-authorized work rather than
-silently skipping or passing them.
+| Source                                     | Responsibility                                                                  |
+| ------------------------------------------ | ------------------------------------------------------------------------------- |
+| `src/`                                     | Active TypeScript UI, desktop/runtime adapters, and transitional modules        |
+| `apps/desktop/bridge/`                     | Additive TypeScript client for the Go Core pipe protocol                        |
+| `modules/computer/`, `boot/`, `cmd/farol/` | Go Computer foundation and backend composition; not the active desktop executor |
+| `api/desktop/v1/`, `transport/desktop/`    | Canonical wire schema and Go transport                                          |
+| `resources/`, `tooling/`, `tests/`         | Packaged resources, reproducible builds, and verification                       |
 
-Launch the exact built development preview through the pinned Electron runtime:
+See [architecture](docs/architecture.md) for the current runtime, module boundaries,
+and migration target, and [Desktop/Core](docs/desktop-core.md) for the Go checkpoint.
 
-```bash
-npm run preview
-```
+## Find your next step
 
-Pass `-- --demo` only when deliberately exercising the development fixture.
+| I want to…                              | Start here                                                             |
+| --------------------------------------- | ---------------------------------------------------------------------- |
+| Install the beta and understand updates | [Installation and updates](docs/installation.md)                       |
+| Connect ChatGPT and approve a folder    | [Getting started](docs/getting-started.md)                             |
+| Understand file, shell, and Git access  | [Computer reference](docs/computer-parity.md)                          |
+| Build, test, or contribute              | [Development](docs/standalone-build.md) and [testing](docs/testing.md) |
+| Understand current and planned behavior | [Status](docs/status.md) and [architecture](docs/architecture.md)      |
 
-After `task package`, use only the canonical command above. Running the executable
-inside `_output/package` directly bypasses source, manifest, resource, and digest
-verification and is unsupported.
-
-The outer `.app` and its fixed launcher are explicitly unsigned. The launcher uses
-an unmodified, digest-bound copy of the pinned vendor Electron bundle, so creating
-this local artifact does not remove or add a code signature. This is local preview
-evidence only: it is not notarized, published, installed-product,
-independent-recipient, update/rollback, live-provider or release-readiness evidence.
-
-## Evidence
-
-- `_output/package/artifact.json` — exact source and packaged-tree identity;
-- packaged `Contents/Resources/app/resource-manifest.json` — app, process, state,
-  transport, receipt, and intentionally absent integration ownership;
-- `_output/evidence/e2e-dev/` — exact development-build interaction evidence;
-- `_output/evidence/e2e/` with its recorded PNG set — packaged interaction evidence;
-- `_output/evidence/hunt/` — `path.json` with the semantic path, model/command-table
-  version, controlled schedule, mutation proof and exact build identity, next to
-  the raw Vitest report it summarizes.
-
-Every lane keeps each run in its own immutable `attempts/<attemptId>/` directory:
-`started.json` before any work, the run's own `report.json`/`path.json` and
-screenshots, and `terminal.json` with the outcome, first failure, raw and
-normalized cases and the SHA-256 of every byproduct. A later run records a dead
-owner's unfinished attempt as `interrupted.json` and never deletes or rewrites an
-earlier run. `latest.json` in the lane root is only a pointer to the newest
-attempt.
-
-The E2E reports also record the visible run's selected-display class, work area,
-window bounds, initial focus state, and the scenarios proved while hidden. Native
-Agent rows identify lineage, TaskGrant workspace enforcement, bounded same-child
-rejoin, durable result delivery, and content-free persisted evidence separately.
-
-These directories are ignored because they are reproducible local evidence, not
-source inputs.
-
-`sourceTreeDigest` is the SHA-256 of the canonical recursive Git tree listing for
-the complete committed repository tree. Packaging also requires every project build input
-to match its HEAD blob, rejects special index flags and tracked symlinks, records a
-dependency-input ledger, and binds every built entry by SHA-256. The separate
-`sourceDirty` flag reports tracked or untracked non-ignored worktree changes.
-The portable `AGENTS.md` is tracked and contributes to this identity. `.DS_Store`,
-build output, coverage and other explicitly ignored host noise do not change the
-identity of the same clean commit.
+All documentation stays in this repository. The [documentation index](docs/README.md)
+links the detailed guides and contracts.

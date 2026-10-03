@@ -1,100 +1,144 @@
-# Standalone build and verification
+# Development and standalone builds
 
-The repository is self-contained. It does not require a sibling V0 checkout,
-private Brain files, an installed Farol, a signed-in browser, or a live provider
-to run its deterministic checks. The supported package target remains macOS
-ARM64; the source split does not introduce a new runtime or state identity.
+The repository contains source, resources, tooling, and tests. Deterministic checks
+do not require another Farol checkout, an installed app, browser login, or a live
+provider. The current package target is macOS Apple Silicon.
 
-All repository-generated output lives under `_output/`: `build/app` holds the
-development bundle, `package` holds the sealed candidate, `coverage` holds
-Vitest reports, `evidence/<lane>` holds immutable attempts, `logs` is for
-non-receipt logs, and `tmp` is for repository scratch. Evidence-bound phase
-logs stay with their attempts. Isolated homes and browser profiles remain in
-OS temporary storage. `_output/` is ignored by Git; old `dist/`, `coverage/`,
-and `artifacts/` directories remain ignored solely to preserve historical
-local bytes. Current tooling never writes new output there.
+Read [AGENTS.md](../AGENTS.md) before changing source. Develop in an isolated writer
+when the primary checkout is occupied, preserve unrelated changes, and commit only
+the paths you own.
 
-Use Node 24.20.0 or 26.7.0 with npm 11.19.0. The Node installation must contain its
-matching npm CLI under `lib/node_modules/npm/bin/npm-cli.js`; the dependency
-provenance test refuses an incomplete toolchain installation. Select that
-installation on PATH before installing or checking dependencies.
+## Toolchain
+
+| Tool                  | Required version or role                                        |
+| --------------------- | --------------------------------------------------------------- |
+| Node                  | `24.20.0` or `26.7.0`                                           |
+| npm                   | `11.19.0`                                                       |
+| Go                    | `1.26.2`, as declared in [go.mod](../go.mod), for the Core gate |
+| Go Task               | Runs [Taskfile.yml](../Taskfile.yml) entrypoints                |
+| Gitleaks              | Source/history secret scan                                      |
+| Apple developer tools | Reviewed Python/Git shims and native attestation inputs         |
+
+Select the matching Node/npm installation on `PATH`. It must include its npm CLI
+under `lib/node_modules/npm/bin/npm-cli.js`; an incomplete installation fails
+provenance checks. Native helper tests depend on the reviewed Command Line Tools
+chain. Do not rewrite digest contracts to admit another executable.
+
+## Prepare a fresh clone or worktree
 
 ```sh
 npm ci --ignore-scripts --no-audit --no-fund
 node node_modules/esbuild/install.js
 node node_modules/electron/install.js
 npm run check:toolchain
-task ci:fast
 ```
 
-The two explicit setup scripts belong to the locked compiler and Electron
-packages. Compiler and embedded-runtime digests remain enforced. Do not replace
-the reviewed digest files to make a mismatched local install pass.
+The two explicit setup scripts belong to locked dependencies. Runtime/compiler
+hash checks remain enforced. Use worktree-local dependencies rather than borrowing a
+mutable installation from another writer.
 
-`task ci:fast` runs typecheck, lint, formatting, architecture, the complete
-coverage suite, Hunt and source/history secret scanning. Hunt builds the product
-and requires a clean committed tree. During implementation, run the targeted
-tests and coverage first, inspect the complete diff, and make a coherent checkpoint
-commit before the final clean-tree gate. A checkpoint is not final acceptance.
+## Develop
+
+```sh
+task dev
+```
+
+This is the normal development entrypoint. It selects a supported toolchain,
+checks/prepares locked dependencies, builds current files, and opens **Farol Dev**
+in this terminal. Dirty changes are allowed and labelled Development. `Control+C`
+stops only the processes it started. Dev has separate profile, browser partitions,
+connector, and instance state from the installed product.
+
+`task dev -- --acceptance-profile` selects a further isolated acceptance profile.
+It is not an installed-product proof. Do not copy credentials or browser profiles
+between environments.
+
+For a lower-level development launch, first build, then launch:
+
+```sh
+npm run build
+npm run preview
+```
+
+`task preview` currently delegates to `npm run preview`; it **does not rebuild**.
+Use `task dev` for the ordinary build-and-run workflow. Explicit `--demo` creates
+scripted fixture tasks and is not a live provider session.
+
+## Verify changes
+
+Run focused tests and formatting while editing. The complete source gate is:
+
+```sh
+task ci:fast
+git diff --check
+```
+
+`ci:fast` includes toolchain checks, strict TypeScript compilation, lint, formatting,
+architecture fixtures, full coverage, build-bound Hunt evidence, the Go Core gate,
+output-layout checks, and source/history secret scanning. [Testing](testing.md)
+describes the evidence boundaries and native lanes.
+
+Hunt builds exact committed inputs and requires a clean tree. During development,
+verify the coherent change with focused checks, inspect/stage its owned diff, and
+commit a checkpoint before the final clean-tree gate. A checkpoint does not claim
+that the complete gate passed. Required failures remain visible in the handoff.
+
+`task test:core` checks generated-wire drift, Go imports, root Go race tests/vet,
+any transitional nested Go module present, real process protocol tests, and strict
+compilation of the desktop bridge. It is also included in `task ci`.
+
+## Build and launch a candidate
+
+From clean committed bytes:
 
 ```sh
 task package
 npm run verify:package
+task run
 ```
 
-Packaging starts with an empty environment and isolated Python guard. Its fixed
-system/Homebrew PATH must resolve a declared Node version. It accepts only exact
-committed inputs, authenticated compiler/dependencies, the reviewed Electron
-runtime, and matching resource/receipt contracts. The artifact is a local
-unsigned schema 6 `_output/package/Farol.app`; creating it does not install or
-activate anything. Historical schema 5 packages used `Farol Next Preview.app`.
-The hidden NEW bundle/profile identities remain compatibility boundaries;
-moving an existing preview install to the current basename requires the explicit
-[closed product cutover](product-cutover.md). `task run` is a separate owner action.
+`task package` is the only candidate-producing entrypoint. It starts from an empty
+environment through the isolated owner guard, binds exact source/build/dependency
+inputs, embeds the pinned Electron runtime, and verifies the final package.
+`npm run package` deliberately refuses direct packaging.
 
-The owner guard preserves the frozen V0 installation boundary using standalone
-path declarations. Tests use disposable homes. Its synthetic mutation tests
-prove detection and declared-churn exceptions; the guard is not a write sandbox.
-The tunnel-client version and digests required by tests are frozen separately in
-`tooling/external-dependencies.json`, without importing the V0 runtime registry.
+`task run` verifies that candidate, copies it into a private launch snapshot, verifies
+the final path, and launches only those bytes. It does not build or install.
+See [candidate launch](owner-preview.md) and [installation](installation.md) for
+promotion, fixed-slot receipts, and updates.
 
-Native packaged checks remain separate:
+## Output layout
 
-```sh
-task test:e2e -- --skip-native-focus
-npm run test:e2e:computer:package
-```
+| Path                       | Contents                                                        |
+| -------------------------- | --------------------------------------------------------------- |
+| `_output/build/app/`       | Development bundles and build identity                          |
+| `_output/package/`         | `Farol.app` and package attestation                             |
+| `_output/coverage/`        | Vitest coverage                                                 |
+| `_output/evidence/<lane>/` | Immutable attempts, reports, screenshots, and terminal receipts |
+| `_output/logs/`            | Non-receipt logs                                                |
+| `_output/tmp/`             | Repository scratch                                              |
 
-The first command requires an eligible secondary display. For an explicitly
-authorized unattended run on the built-in display, use
-`task test:e2e -- --built-in-display-only --allow-primary-display --skip-native-focus`.
-The built-in-only flag excludes external monitors even when they are connected.
-Omit `--skip-native-focus` only when the current owner grant explicitly permits
-native focus of isolated test-owned windows. The inactive-reopen focus fixture
-runs only with that grant and the explicit built-in-display flags. Skipped
-focus rows are not native focus acceptance. Native fixtures are not
-live-provider or daily-driver acceptance. Keep each run's report and cleanup
-result, including failures and blocked rows.
+`_output/` is ignored. Isolated test homes/profiles use OS temporary storage.
+Historical `dist/`, `coverage/`, and `artifacts/` paths remain ignored for old local
+bytes; current tooling writes new output under `_output/`.
 
-For the intentionally default-off build, each complete lane records Product
-Agent positive cases separately as `NOT_QUALIFIED`. The lane still requires
-its active feature cases and proves `AGENT_NOT_READY` for start/rejoin without
-host or child effects. A selected run never substitutes for either complete
-lane, and a default-off lane result never qualifies Product Agent.
+## CI and local hooks
 
-The GitHub workflow is manual-only, has `contents: read`, retains complete history,
-and does not persist checkout credentials or publish artifacts. It uses the
-[documented macOS ARM64 runner](https://docs.github.com/en/actions/reference/runners/github-hosted-runners).
-The workflow runs only on explicit manual dispatch; its result belongs to the
-exact dispatched SHA. Enabling automatic CI or releases is a separate decision.
+The [GitHub source workflow](../.github/workflows/standalone-ci.yml) is manual-only,
+uses read-only repository permissions, and runs the exact dispatched SHA. It does
+not publish a package or release. A workflow file is not evidence that a run passed.
 
-Enable the local push gate in each new clone with:
+Enable the existing local push gate in a new clone:
 
 ```sh
 git config core.hooksPath .githooks
 ```
 
-The gate scans all local Git history and all tracked/nonignored source files,
-including untracked additions. Ignored generated dependency/cache/output trees
-are not source. Public visibility still requires separate image, history,
-privacy, and license review; a clean secret scan is not that clearance.
+The scan covers local Git history and tracked/nonignored source, including new
+files. Ignored dependencies and generated output are not source inputs. Packaging,
+installation, live provider qualification, and release publication remain separate
+steps.
+
+---
+
+[Documentation index](README.md) · [Project overview](../README.md)

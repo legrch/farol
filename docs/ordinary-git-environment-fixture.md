@@ -1,7 +1,8 @@
 # Ordinary Git environment fixture
 
-This is a reusable acceptance input and reference self-test, not a new Git API
-or live owner-connector proof.
+This reusable test input establishes ordinary Git configuration and hook behavior
+on disposable state. [Computer capabilities](computer-parity.md) owns product
+admission; fixture results do not qualify a live connector or user configuration.
 
 Run the dependency-free reference checks:
 
@@ -57,5 +58,11 @@ successful `git status`/HEAD alone misses global identity, includes and hooks.
 The new MCP assertions are local sandbox/package evidence only; actual owner
 Git configuration and the live new connector remain unqualified.
 
-Protocol reference for normal Git configuration and include semantics:
-https://git-scm.com/docs/git-config
+The [fixture source](../tests/fixtures/ordinary-git-environment.mjs) and
+[self-tests](../tests/fixtures/ordinary-git-environment.selftest.mjs) own its exact
+inputs and assertions. See [Git configuration](https://git-scm.com/docs/git-config)
+for normal include semantics.
+
+---
+
+[Documentation index](README.md) · [Project overview](../README.md)

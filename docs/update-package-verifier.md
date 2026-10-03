@@ -1,36 +1,65 @@
-# Installed release package verification
+# Update package verification
 
-The producer CLI and the installed updater share `tooling/verify-package-content.mjs`.
-The CLI retains its checkout version, source resource manifest, and canonical
-candidate path checks. An exact `-owner.beta.N` package version selects the
-GitHub owner beta policy; historical preview versions retain their original
-policy. Installed verification instead takes exact version,
-build version, and channel from the accepted GitHub release manifest. The
-artifact's recorded path is ignored there because extraction has a new private
-root. For the current schema 6 package, the extracted `artifact.json` must sit
-beside `Farol.app` in the ZIP. Historical schema 5 packages used
-`Farol Next Preview.app`; the branded installed updater refuses that older
-layout. The old installed updater cannot consume the schema 6 layout. Use the
-explicit [closed product cutover](product-cutover.md) to establish the branded
-baseline instead of renaming or replacing an old release archive.
+**State:** producer/installed shared content verification in the current source.
+[Release policy](github-release-contract.md) selects a candidate;
+[installed lifecycle](installed-update-runtime.md) owns safe application of it.
 
-The producer must bundle `tooling/verify-package-standalone.mjs` and its
-imports into one trusted installed resource. The native adapter supplies that
-resource as `verifierPath`, the pinned `resources/native/update_archive.py`
-as `extractorPath`, an owner-private staging parent, and a resolver from its
-opaque download handle to its private archive path. The installed Electron
-executable runs the trusted verifier entry in Node mode. The extracted app is
-never executed for verification.
+## Shared verifier, different admission
 
-`createUpdatePackageVerifier().verifyPackage(handle, manifest)` rehashes
-the actual regular archive through an `O_NOFOLLOW` descriptor, checks its
-exact size, extracts into a disposable directory, and verifies the whole app
-tree digest plus embedded source, build, bundle, version, signing, and pinned
-runtime identity. It returns measured `PackageIdentity` including
-`buildVersion`, and an in-memory binding from handle to the validated app
-path for the install helper. On rejection, the disposable extraction is
-removed. The caller discards a successful extraction after use; after a
-restart it must reverify the private handle rather than trust a saved path.
+The producer CLI and installed adapter share
+[verify-package-content.mjs](../tooling/verify-package-content.mjs). Producer admission
+also binds checkout version/source resources and the canonical candidate path.
+Installed admission takes exact version/build/channel from the accepted release
+manifest and measures bytes beneath its private extraction root.
 
-The focused tests use synthetic ZIPs and mock package claims. They do not
-prove a real package, installed N-to-N+1 update, or Gatekeeper behavior.
+The published attestation's original producer path cannot be trusted as an extracted
+location. For schema 6, `artifact.json` sits beside `Farol.app`. Historical schema 5
+uses `Farol Next Preview.app` and cannot be redirected into the branded installed
+updater by renaming. [Closed cutover](product-cutover.md) owns that transition.
+
+## Trusted executable and inputs
+
+The packager bundles the standalone verifier and imports into one trusted resource.
+The native adapter receives that `verifierPath`, the pinned
+[archive extractor](../resources/native/update_archive.py), an owner-private staging
+parent, and the opaque-handle-to-archive resolver. It runs the trusted installed
+Electron executable in Node mode; it never executes the extracted candidate for
+verification.
+
+`createUpdatePackageVerifier().verifyPackage(handle, manifest)` performs:
+
+1. Open the issued regular archive through `O_NOFOLLOW`; rehash actual bytes and
+   verify exact length.
+2. Bound archive metadata/entries/depth/expanded bytes before extraction and reject
+   unsafe paths, unsupported ZIP layouts, and escaping symlinks.
+3. Extract beneath a new disposable private root.
+4. Measure the complete tree digest, embedded source/build identity, bundle/version,
+   build version, channel, signing state, and pinned runtime.
+5. Return measured `PackageIdentity`, accepted app path, and staging root only after
+   all checks pass.
+
+The current archive boundary accepts single-volume non-ZIP64 input, at most 16 MiB
+central-directory metadata and 1 GiB expanded content, within package tree bounds.
+These limits are input admission, not a reason to truncate an accepted package.
+
+## Lifetime and physical files
+
+The adapter retains an in-memory handle binding. On restart it must reverify the
+private handle; a saved extracted path is not package authority. Rejected extraction
+is removed; the caller owns disposal of an accepted extraction after use.
+
+Electron's patched ASAR filesystem cannot reinterpret update bytes. Trusted verifier
+subprocesses use Node mode with ASAR disabled, while main copy/removal ports use
+`original-fs`. Cleanup uncertainty retains an update obligation and fence.
+
+## Verification limits
+
+[Native adapter](../src/modules/release/infra/native/update-package-verifier.ts),
+synthetic ZIP tests, and package staging/ASAR regressions establish their selected
+contracts. Synthetic claims do not authenticate a real release. Run real package
+identity checks and separately record the installed upgrade, relaunch, reconnect,
+and rollback journey before claiming that workflow passed.
+
+---
+
+[Documentation index](README.md) · [Project overview](../README.md)

@@ -1,8 +1,12 @@
-# Owner guard startup recovery
+# Owner guard and protected-path verification
 
-The owner guard fingerprints protected installation paths before and after a
-wrapped command. It is an integrity check, not a sandbox. Existing protected
-roots, profile allowances and narrow runtime churn exclusions remain in force.
+The [owner guard](../scripts/assert-owner-untouched.py) fingerprints protected
+installation paths before and after a wrapped command. This verifies detected
+changes; it cannot prevent a write. Existing protected roots, profile allowances,
+and narrow runtime-churn exclusions remain in force.
+
+Build/test commands in [Taskfile.yml](../Taskfile.yml) use the guard.
+[Development](standalone-build.md) and [testing](testing.md) describe those entrypoints.
 
 ## Filesystem objects
 
@@ -64,3 +68,7 @@ processes separately. Any guard source change requires a new committed exact
 candidate through `task package`; do not patch the frozen package or invoke its
 binary to bypass `task run`. Required gates and earlier platform refusals remain
 separate requirements.
+
+---
+
+[Documentation index](README.md) · [Project overview](../README.md)

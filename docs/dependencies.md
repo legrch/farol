@@ -1,26 +1,59 @@
-# Dependency inventory
+# Dependencies
 
-All direct versions are exact and resolved by `package-lock.json`. Provenance is the
-public npm registry recorded in `.npmrc`.
+[package.json](../package.json) declares exact direct versions;
+[package-lock.json](../package-lock.json) owns the resolved npm graph. The public
+npm registry is selected in [.npmrc](../.npmrc). [go.mod](../go.mod) and
+[go.sum](../go.sum) own the additive Go dependency graph.
 
-| Package               | Class           | Version | License    | Purpose / decision                                                                           |
-| --------------------- | --------------- | ------: | ---------- | -------------------------------------------------------------------------------------------- |
-| Electron              | runtime closure |  44.4.2 | MIT        | Desktop shell, WebContentsView, sandboxed renderer and bundled utility-process runtime; kept |
-| Zod                   | runtime         |   4.6.5 | MIT        | Parse untrusted IPC/HTTP boundary payloads; kept                                             |
-| TypeScript            | build           |   7.0.2 | Apache-2.0 | Strict static checks; kept                                                                   |
-| Vitest / coverage-v8  | test            |   5.0.0 | MIT        | One unit/component/property runner and measured V8 coverage; kept                            |
-| fast-check            | test            |   4.9.0 | MIT        | State/property generation for ownership and lifecycle policies; kept                         |
-| Playwright Core       | test            |  1.63.0 | Apache-2.0 | Drive the exact packaged Electron bytes without downloading another browser; kept            |
-| esbuild               | build           |  0.28.2 | MIT        | Deterministic entrypoint bundles for Electron, utility process and renderer; kept            |
-| Prettier              | build           |   3.9.6 | MIT        | Single formatting gate; kept                                                                 |
-| Node type definitions | build           | 24.12.1 | MIT        | Types for the supported embedded/development Node API floor; kept                            |
+## Current npm dependencies
 
-The Electron row is enforced by `tooling/runtime-contract.mjs`, which pins the verified
-darwin/arm64 distribution digest and the digest of the bundle that archive extracts to;
-packaging and verification compare the installed and embedded runtime with that contract,
-never only with whatever `node_modules` currently holds.
+| Group                 | Packages                                                                                     | Purpose                                                                 |
+| --------------------- | -------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| Desktop runtime       | Electron `44.4.2`                                                                            | Main, sandboxed renderer, native views, bundled utility-process runtime |
+| Boundaries            | Zod `4.6.5`, `@modelcontextprotocol/server` `2.0.0`                                          | Runtime validation and Computer MCP serving                             |
+| Socket transport      | `ws` `8.22.0`                                                                                | Selected native-host proxy transport                                    |
+| Build                 | TypeScript `7.0.2`, esbuild `0.28.2`, Prettier `3.9.6`                                       | Strict compilation, bundles, single format gate                         |
+| Testing               | Vitest/coverage-v8 `5.0.0`, fast-check `4.9.0`, Playwright Core `1.63.0`, MCP client `2.0.0` | Policy/property coverage and real built-byte protocol/app fixtures      |
+| Source analysis/types | Babel parser and Node/WebSocket type packages                                                | Architecture checks and supported host types                            |
 
-React, a second validator/test runner, Stryker, Bun, native addons, and an HTTP
-framework are dropped from this preview. The UI is small enough for DOM TypeScript;
-planted defects provide focused mutation proof; Node's HTTP server and Web streams
-cover the loopback fixture; and Electron already carries the production runtime.
+The manifest is the authority for omitted type/parser versions; this page describes
+why dependencies exist instead of duplicating the complete lockfile.
+
+## Runtime and compiler provenance
+
+[The runtime contract](../tooling/runtime-contract.mjs) pins Electron's Darwin ARM64
+archive and extracted bundle digest. Packaging verifies the installed and embedded
+runtime against those reviewed bytes. The outer Farol app embeds the unchanged
+vendor Electron bundle; it does not strip or add its code signature.
+
+Locked dependency inputs and compiler identity are checked separately. An installation
+whose own generated hashes agree can still fail the independent reviewed contract.
+Use [development setup](standalone-build.md#prepare-a-fresh-clone-or-worktree) for the
+explicit esbuild/Electron install scripts; do not change digest files to accept a
+mismatched dependency.
+
+## Go and native helpers
+
+The root Go module currently uses `golang.org/x/sys` and `golang.org/x/text` for the
+Go Computer/Core foundation. The active desktop still uses reviewed Python native
+helpers for Computer and updates. Adding Go source has not replaced that runtime
+dependency; see [Desktop/Core](desktop-core.md).
+
+The selected tunnel client and native host are external prerequisites, with their
+own executable/contract verification. No native provider account, private cache,
+credential, or browser profile is a build dependency.
+
+## Migration boundary
+
+React is the accepted UI target and is not present in the current npm dependencies.
+The running shell remains DOM TypeScript until its slice switches. The migration
+contract lives in [AGENTS.md](../AGENTS.md) and the
+[accepted architecture](architecture.md).
+
+The current runtime does not depend on Bun, a separate HTTP framework, or a second
+policy test runner. These are current implementation facts, not restrictions on an
+unrelated future design decision.
+
+---
+
+[Documentation index](README.md) · [Project overview](../README.md)

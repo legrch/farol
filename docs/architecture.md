@@ -1,200 +1,161 @@
-# Farol Next architecture
+# Architecture
 
-Status: accepted for the isolated local preview.
+Farol is being migrated incrementally. This page separates the **running
+TypeScript/Electron system** from the **accepted Go/React target**. See
+[current status](status.md) for the exact release and source snapshot.
 
-## Decision
+## Running desktop
 
-Farol Next is a strict-TypeScript modular monolith with four product modules:
-`computer`, `chat`, `agent`, and `release`. Electron owns the desktop/browser
-surface. One utility process owns the local runtime and loopback SSE endpoint.
-Source modules communicate in process through consumer-owned ports and published
-contracts; HTTP is not an internal module boundary.
+The published beta and current desktop composition use an Electron main process,
+a sandboxed TypeScript shell renderer, native `WebContentsView` browser surfaces,
+and one Electron utility process. The utility owns Chat application state and a
+loopback HTTP/SSE endpoint; main owns desktop/browser lifetimes and composition.
+Computer MCP is a separately launched, sealed app-owned process reached through the
+selected tunnel. Native file, shell, and update helpers still include Python.
 
-`src/apps/desktop` owns the Electron main/preload host adapters and
-`src/apps/runtime` owns the utility-process entrypoint. The Chat-owned preview
-server adapter lives under `modules/chat/infra/server`; it receives Computer and
-UI capabilities at composition rather than importing their implementations.
-`src/boot/runtime-server.ts` only wires those concrete dependencies.
-
-The production utility process is launched with Electron's `utilityProcess.fork`.
-This deliberately uses the runtime shipped inside the exact Electron artifact, so a
-tester does not need Homebrew, Python, Node, npm, or Bun. Bun FFI is not used as a
-security boundary. The Electron main process owns child lifetime. On macOS, closing
-the last window disposes its views and streams but keeps the application and utility
-runtime alive; a Dock activation or second launch recreates one window against the
-same runtime. Explicit Quit requests bounded runtime shutdown. An unexpected
-utility-process exit becomes an explicit failed state while keeping an open shell
-available. Startup coverage
-kills that exact utility after runtime readiness, during the first task-view load,
-and during the second task-view load; every case removes the partial task surfaces
-without terminating the shell.
-
-The local package is an unsigned outer Farol Next bundle with a fixed, argument-safe
-launcher. It embeds the pinned vendor `Electron.app` byte-for-byte under its own
-Frameworks directory and passes the embedded application directory explicitly. The
-outer bundle owns the Farol Next product and launch identity; the nested Electron
-bundle remains a verified runtime dependency rather than rewritten, stripped, or
-newly signed executable code.
-
-## Native surface composition
-
-The Browser task page is a native `WebContentsView`; the Watch Rail, task tabs,
-dossier, Computer, Activity, Settings, and modal UI belong to the sandboxed shell
-renderer. Electron always composites a child view above renderer HTML. Main therefore
-owns a closed `SurfaceSection` / `SidebarMode` / `ShellOverlay` layout contract and
-hides the selected task view whenever Setup or a shell overlay is active. It never
-accepts renderer-provided bounds. This hide-while-overlay strategy preserves the full
-Browser viewport during normal work and guarantees that sidebar, task-menu, quick
-switcher, Escape, and focus handling are reachable without weakening preload, IPC,
-navigation, permission, partition, or network fences.
-
-The canonical owner launcher copies that package into a private per-invocation
-snapshot and verifies the snapshot before execution. Product-controlled package
-replacement therefore cannot change the bytes between verification and launch or
-while the application is running. The Taskfile starts the guard and verifier from an
-allowlisted environment, and the child receives a minimal explicit environment;
-arbitrary same-owner mutation of the private snapshot is outside this unsigned local
-preview's threat boundary. A snapshot is never reused; the launcher removes it after
-an observed application exit, while an ungraceful launcher or host death can leave a
-private temporary copy behind.
-
-## Enforced dependency direction
-
-The existing TypeScript modules under `src/` use this dependency direction:
-
-```text
-domain -> kernel/domain
-app -> own domain + consumer-owned app ports + kernel domain/app
-contract -> boundary DTO/schema only
-infra/peer -> own app port + neighbour contract
-infra -> own layers + generic mechanisms
-kernel/infra -> kernel ports + generic mechanisms, never product modules
-boot -> all concrete composition
-apps -> executable host adapters and entrypoints
+```mermaid
+flowchart LR
+  Shell["Sandboxed shell UI"] -->|"Validated preload / IPC"| Main["Electron main"]
+  Main -->|"Owns views"| Browser["Native ChatGPT views"]
+  Main -->|"utilityProcess.fork"| Runtime["TypeScript utility runtime"]
+  Shell -->|"Task-scoped loopback HTTP / SSE"| Runtime
+  ChatGPT["External ChatGPT app"] -->|"Selected MCP tunnel"| MCP["Packaged Computer MCP"]
+  Main -->|"Sealed launch and lifecycle"| MCP
+  MCP --> Helpers["Native helpers"]
+  Helpers --> Workspace["Approved task workspace"]
 ```
 
-Only `infra/peer` may cross a module boundary, and only to the neighbour's
-`contract`. Contract code cannot import domain aggregates or implementations.
-`domain`, `app`, contracts, and the pure kernel cannot import Electron, Node host
-modules, DOM, filesystem, network, or ambient timer modules. The architecture gate
-parses static imports, re-exports, aliases, literal dynamic imports and CommonJS
-`require`, rejects dynamic loaders and non-allowlisted pure-layer packages, rejects
-cycles and unclassified production files, and runs both positive and deliberately
-invalid fixtures. It also rejects host/vendor imports from composition-only `boot`,
-all inner-layer imports of executable `apps`, and module imports of UI.
+The product launches the bundled Electron runtime, rather than an ambient Node
+executable. Main owns exact child shutdown. Closing the last window disposes its
+views but keeps the app/utility alive; reopening restores one window. Normal Quit
+performs bounded drain. Unexpected utility death produces an explicit failed state
+while retaining the shell for diagnosis.
 
-The accepted Go layout uses `modules/<module>/contracts/<feature>` as a thin
-published in-process facade. It may import its own application/domain to delegate
-to the owner, and deliberately shared pure kernel vocabulary. Its request/response
-DTOs remain independent: no aliases to app/domain/transport types, no exposed
-implementation types, and explicit conversions at the boundary. This Go facade
-rule does not change the TypeScript DTO-only contract rule above.
+The SSE stream is bounded and delivery-aware. Capacity pressure can discard only
+acknowledged events. Exhausting an unacknowledged task window fails that task with
+`EVENT_STREAM_CAPACITY_EXCEEDED`; it does not terminate unrelated tasks.
 
-Go neighbors still cross module boundaries only through `infra/peer` to the
-owning module's published contracts. Contracts cannot import infrastructure,
-boot, executable hosts, or neighbor internals. The Go import gate enforces these
-edges; source review verifies delegation, independent DTO signatures, absence
-of implementation aliases and explicit mappings. The common Desktop transport may depend only on published module
-contracts, never app/domain/infra. `boot` owns concrete composition and lifetimes.
+## Accepted migration target
 
-## Shared infrastructure decision
+- **React + TypeScript:** Farol-owned UI.
+- **Plain TypeScript:** Electron, preload, Browser, Responses/SSE, IPC, and MCP
+  adapters.
+- **Go:** backend policy, application state, orchestration, and native execution.
 
-`pkg/kernel/infra/system-clock.ts` is shared because the Chat turn service and
-Computer authorization service both consume the same `Clock` semantics. Each receives a
-separate object through its own composition; there is no shared mutable singleton.
-Module failures and cancellation remain separately owned. Generic SSE framing lives
-under `pkg/sse`, because it is a transport mechanism rather than kernel policy.
+```mermaid
+flowchart TB
+  UI["React / TypeScript UI"] --> Desktop["TypeScript desktop adapters"]
+  Desktop -->|"Generated, framed pipe protocol"| Core["Go Core transport"]
+  Core --> Computer["Computer"]
+  Core --> Chat["Chat"]
+  Core --> Task["Task"]
+  Core --> Release["Release"]
+  Boot["Go boot composition"] -.-> Core
+  Boot -.-> Computer
+  Boot -.-> Chat
+  Boot -.-> Task
+  Boot -.-> Release
+```
 
-## Isolation and evidence boundary
+This diagram is the target. The accepted source currently adds the Go Core bridge
+and Computer read/list foundation. Production `farol serve` registers no Computer
+implementation. Disposable test startup injects Computer for native-read protocol
+coverage. The desktop does not yet select this Go executor; React and the other Go
+modules are not made active by their planned layout.
 
-The preview identity is `local.farol.next.preview`, its product name is
-`Farol Next Preview`, and its state lives only under its distinct Electron
-`userData` root. Browser views use `persist:farol-next-preview` in an ordinary launch
-and E2E runs the same bytes under a throwaway `HOME` plus an explicit
-`--user-data-dir`, so that partition resolves only inside the test root. Runtime ports
-are allocated by the OS on loopback and protected with per-run bearer values. No
-tunnel, provider slot, global MCP registration, launch agent, legacy state path, or
-installed browser profile is used.
+Switch one capability at a time and remove its active TypeScript/Python duplicate
+only after accepted routed parity. A green foundation test cannot qualify an
+installed route. The [Desktop/Core reference](desktop-core.md) documents the current
+pipe checkpoint.
 
-The explicit demo provider and Computer remain controlled fixtures. Ordinary product
-composition is separate: `ChatGptRoute` owns the isolated Next partition and bounded
-submission lifecycle, while `NativeReadonlyWorkspace` supplies descriptor-relative
-list/read/search, guarded edit operations, and explicitly enabled fixed `git status`
-and exact `git head` verifiers under persisted Computer approval. Generic file tools deny
-`.git`. The verifier rechecks `verification.run` plus `commands=verification`
-against both the task grant and current Computer approval, attests the owner-safe
-workspace and signed Apple Git chain, then executes an exact argument vector inside
-an Apple Seatbelt profile with network denied, optional locks and repository
-file-system monitors disabled, fixed environment, timeout, cancellation, and output
-limits. Timeout, output overflow or caller cancellation kills the detached process
-group. The caller cannot select an executable, argument, environment, working
-subpath, or network policy. Enabling or disabling command authority advances the
-Computer generation, invalidates stale verification and native-Agent proof, and
-requires a fresh workspace verification. A regular repository and an exact linked
-worktree are supported; only the resolved worktree/common metadata roots are
-admitted. Arbitrary, symlinked or writable external metadata is refused, and metadata
-access never grants the parent directory to generic file tools. The
-development and sealed-package E2E routes use a synthetic provider site and temporary
-Mac workspace trees, so they prove product composition and containment without
-claiming the owner's authenticated provider account was exercised.
+## Product module ownership
 
-A guarded edit is published at one atomic exchange of names (`renameatx_np` with
-`RENAME_SWAP`) between a candidate staged in a private `.farol-stage-…` directory
-beside the target and the target itself; a create is one `link` that fails if the
-name exists. Only the candidate is ever published. The exchange counts only when the
-object it displaced is the checked original, verified through a descriptor
-afterwards; any other displaced version is exchanged back, unless a newer save has
-already replaced the candidate, which then stays at the target. Until an undo the
-candidate is visible at the target, so it is deleted after an undo only if it came
-back byte for byte unchanged. Success means that publication, nothing kept, and a
-final observation, made after the helper's last filesystem operation on the
-workspace, that the target still names the published file; a later save wins and is
-never touched. Files are deleted only inside the staging directory and only when
-their inode was verified immediately before; anything else is kept there for the
-owner and the edit reports a conflict or an unknown outcome that is never retried.
-The directory itself is removed only with `rmdir`, which never removes one that holds
-anything, and a helper that is killed leaves it behind. Disclosed residuals: a writer
-that keeps the original, or the briefly published candidate, open and writes through
-that descriptor after it was checked; a save landing between the last check before an
-undo and the undo, which puts the older version back at the target and keeps the
-newer one in staging; and a process that deliberately writes inside the staging
-directory, which can substitute what is published or deleted. No isolation from
-same-user or root processes is claimed.
+| Go target | Owns                                                                        | Transitional source                                 |
+| --------- | --------------------------------------------------------------------------- | --------------------------------------------------- |
+| Computer  | Workspace authority, files, commands, native processes, and effect receipts | `src/modules/computer/` and native helpers          |
+| Chat      | Turn, conversation/stream state, browser ports, and continuity              | `src/modules/chat/`                                 |
+| Task      | Coding-task delegation and native task lifecycle                            | Coding-task behavior currently in Chat/Agent slices |
+| Release   | Package/update policy, installation, and recovery                           | `src/modules/release/`                              |
 
-The N2 authority core is implemented as a runtime-derived task-applicable `TaskGrant`
-/ `ExecutionAuthority`. Permitted delegation from a main Turn through Agent and
-Critic preserves that authority for ordinary relevant discovery inside its approved
-workspace, without treating the assignment packet's initial filenames as the
-security boundary. Explicit owner narrowing, including do-not-inspect paths, is
-carried into the native read-only deny list. A delegate still cannot exceed the
-TaskGrant, underlying Computer approval, native host-task authority, or an explicit
-narrower owner instruction. Prompt text is never authority. A selected and attested
-Codex App Server can run both the setup lineage assignment and one owner-written
-Product Agent objective for an admitted live task. The root spawns one correlated
-child, the child uses only inherited typed Computer read/search or fixed verification
-operations, the root waits and reports exact authority evidence, and the product
-rejoins the same child before durable result acknowledgement. The setup probe
-exercises an allowed focus plus denied foreign scope and configured exclusions; it
-returns no workspace names or contents to the child. Product Agent remains without
-mutation ownership or network authority.
-The read-only Computer response contract binds the full operation semantics, not
-only task/call/path identity; malformed or rebound responses remain terminal
-outcome-unknown rather than being mislabeled as a known refusal. The Agent app seam
-persists assignment/child correlation in a private atomic store with exclusive first
-publication and process-serialized monotonic updates, rejoins only the same known
-running child after restart, and records result retention separately from an exact
-parent-delivery acknowledgement. The in-memory host remains for exhaustive negative
-tests, and the product runtime selects the seam through both the bounded native Codex
-lineage check and task-menu Product Agent. Neither grants arbitrary commands, network
-access, generic handoff, nor proof of authenticated provider work.
+`Turn` belongs to Chat. Browser, Responses/SSE, IPC, and MCP are adapters, not
+additional product modules. Core owns the shared schema/transport boundary and
+composition contracts, not filesystem permission policy or module effect journals.
 
-The SSE stream is bounded and delivery-aware. Capacity pressure may discard only
-events already acknowledged by the receiving client. If the unacknowledged window
-is full, that task fails closed with `EVENT_STREAM_CAPACITY_EXCEEDED`; its stream is
-closed and late subscribers receive a conflict response. No other task or the
-runtime process is stopped by that local failure.
+New desktop source belongs under `apps/desktop/`. Existing TypeScript stays under
+`src/` until its slice switches. Root `boot/` composes Go; `src/boot/` composes the
+remaining TypeScript runtime. The separate compiler roots cover both desktop trees.
 
-The tracked machine-readable ownership table is `resources.json` and the build copies
-it to `Contents/Resources/app/resource-manifest.json`. Tunnel, global MCP/provider
-registration, native Computer/Agent ownership, updater, and login-item identities
-remain explicitly absent rather than reserving global resources.
+## Dependency rules
+
+Pure domain/application layers depend on values and consumer-owned ports. They do
+not perform filesystem/network operations, import host APIs, read ambient clocks,
+or locate services globally. Infrastructure implements the ports; boot injects
+concrete implementations and owns lifetimes.
+
+| Boundary           | TypeScript under `src/`                                                     | Go target                                                                                                      |
+| ------------------ | --------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| Published surface  | `contract`: boundary DTOs/schemas without app/domain implementation imports | `contracts/<feature>`: thin owning facade that delegates to its app with independent DTOs and explicit mapping |
+| Neighbor access    | Consumer `infra/peer` to neighbor `contract`                                | Consumer `infra/peer` to neighbor `contracts`                                                                  |
+| Forbidden crossing | Neighbor domain/app/infra and executable hosts                              | Neighbor internals, infrastructure leakage, boot/host imports into contracts                                   |
+| Composition        | `src/boot/`                                                                 | Root `boot/`                                                                                                   |
+
+The Go facade rule does not change the legacy TypeScript DTO-only contract rule.
+Import gates enforce dependency edges. Review still verifies facade delegation,
+independent DTO signatures, no implementation aliases, and explicit conversion;
+an import check alone does not prove those properties.
+
+Kernel infrastructure requires at least two real consumers with identical
+semantics. Shared implementations own no mutable cross-consumer singleton. No Go
+module imports kernel infrastructure; boot injects its ports. The existing
+TypeScript clock is shared by Chat and Computer through separate injected instances.
+Generic SSE framing is transport code under `src/pkg/sse/`, not kernel policy.
+
+## Authority and unknown outcomes
+
+Computer approval and a task-derived `TaskGrant` are both required. Delegation may
+preserve or narrow the task grant; prompt text never enlarges it. Current policy,
+physical roots, exclusions, expiry, and exact request correlation are checked at
+boundaries and again before disclosure.
+
+Each module owns durable intent before its effects and exact-key recovery. Core
+has no generic operation journal. An acknowledgment loss, malformed response, or
+unconfirmed cleanup remains unknown, without automatic resubmission, replacement
+child, fallback provider, or executor switch.
+
+Model and Product Agent are explicitly disabled in the running desktop. Source
+seams and synthetic child tests are separate from enabling a product route.
+[Model identity](model-routing.md), [Computer](computer-parity.md), and
+[persistent task reference](persistent-chat-handoff-parity.md) define those limits.
+
+## Browser overlays and isolation
+
+Electron composites a native child view above renderer HTML. Main therefore hides
+the selected browser view while Setup or a shell overlay is open, then restores it
+on close. Main derives bounds from closed layout states; renderer-provided pixels
+are not accepted. [Desktop design](design.md) owns the interaction rationale.
+
+The visible app name is Farol, while existing `local.farol.next.preview`, state roots,
+partitions, process names, and receipt schemas remain compatibility boundaries.
+Farol Dev has its own profile/connector. Neither environment borrows the older
+product's browser state or installed `codex-chatgpt-web` identity.
+
+[resources.json](../resources.json) records current resource ownership. It includes
+the explicitly selected Computer tunnel and GitHub updater; native Agent and login
+item ownership remain absent. A previous statement that all integrations were
+absent no longer describes this source.
+
+## Enforcement and evidence
+
+[TypeScript architecture tooling](../tooling/check-architecture.mjs) rejects invalid
+imports, dynamic loaders, cycles, unclassified source, and forbidden UI/host edges.
+[Go tooling](../tooling/check-go-architecture.mjs) enforces the accepted Go imports.
+`task test:core` includes generation, race/vet, protocol, and bridge compilation;
+`task ci:fast` adds the complete deterministic source gate.
+
+Source tests, native temporary-workspace tests, app fixtures, packaged acceptance,
+and live provider/installed behavior are different claims. [Testing](testing.md)
+explains how reports keep those boundaries visible.
+
+---
+
+[Documentation index](README.md) · [Project overview](../README.md)
