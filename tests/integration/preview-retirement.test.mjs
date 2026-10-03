@@ -499,7 +499,11 @@ suite("explicit preview installation retirement", () => {
       const resumed = await f.cli();
       expect(resumed.status, resumed.stderr).toBe(0);
       expect((await fs.lstat(f.retiredUpdates)).ino).toBe(partial.ino);
-      expect((await f.cli()).receipt.phase).toBe("retired");
+      const repeated = await f.cli();
+      expect(repeated.status, repeated.stderr).toBe(0);
+      expect(repeated.receipt, repeated.stderr).toMatchObject({
+        phase: "retired",
+      });
       expect(
         (await f.cli({}, ["--restore", op, "--expected-preview", f.old.digest]))
           .status,
