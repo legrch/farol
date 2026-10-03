@@ -2,8 +2,9 @@
 
 This additive module is preparation from accepted base
 `1eb30bd23df22c9581d277280f8e0699612786b5`. It does not change the active updater,
-installed application, package identity or resource path. Archive ownership and
-shared Core K0/build integration are still required before runtime cutover.
+installed application, package identity or resource path. The next source-only archive transfer is explicitly leased from frozen
+`a47c9ccea1a00eb210f675f71a0690fc3be6c857`. Shared Core K0/build
+integration and fresh source acceptance are still required before runtime cutover.
 
 `domain/update.go` owns the pure updater policy. `app/services/update` serializes
 one lifetime through consumer-owned ports. Domain, application and port DTOs are
@@ -53,6 +54,29 @@ they do not qualify a native adapter.
 filesystem/process, package, GitHub, provider or installed acceptance evidence.
 Restore-intent clearing, rejected-target inode receipts, journal encoding and
 current-alpha physical state migration remain native parity work after handoff.
+
+## Leased source additions
+
+`infra/archive` retains the frozen bounded Go extractor and all its regression
+vectors after declared mechanical edits. Its [provenance](infra/archive/provenance.md)
+records source hashes and the unchanged dependency baseline. The old active
+resource/consumer route stays with Core/Lead until integrated parity and retirement.
+
+`infra/repos/records` decodes existing current-alpha update journal, retained,
+receipt, restore, download and rejected-target records; only the existing helper
+journal has an encoder. All 77 independent record vectors agree with the frozen
+TS closed schemas plus exact operation binding. Parsing/encoding does not read a
+live profile, verify a package, acquire a lease, persist an intent or settle a child.
+Malformed UTF-8/unpaired UTF-16 escapes are refused rather than silently replacing
+identity bytes. The existing TS schemas' optional/null and UTF-16 string bounds
+remain explicit. Promotion/closed-repair receipts and physical file access are
+still later parity work.
+
+The consuming [migration port](app/port/migration.go) supplies a read-only durable
+projection and an externally held authoritative admission guard to the leased
+Identity adapter. Release owns its serializer/intent/dispatch/recovery. See the
+[native boundary](native.md) and [first-install/adoption contract](adoption.md).
+These additions have no production caller or new Desktop wire schema.
 
 ## Current parity seams
 

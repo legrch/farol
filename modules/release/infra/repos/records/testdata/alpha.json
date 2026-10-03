@@ -1,0 +1,1529 @@
+[
+  {
+    "name": "minimal journal",
+    "kind": "journal",
+    "value": {
+      "schema": "farol.installed-update-journal/1",
+      "operationId": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "source": {
+        "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "version": "0.1.8-owner.beta.1",
+        "buildId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "target": {
+        "digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "version": "0.1.9-owner.beta.1",
+        "buildId": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      },
+      "phase": "prepared"
+    },
+    "valid": true
+  },
+  {
+    "name": "unknown field journal",
+    "kind": "journal",
+    "value": {
+      "schema": "farol.installed-update-journal/1",
+      "operationId": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "source": {
+        "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "version": "0.1.8-owner.beta.1",
+        "buildId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "target": {
+        "digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "version": "0.1.9-owner.beta.1",
+        "buildId": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      },
+      "phase": "prepared",
+      "extra": "private fixture text"
+    },
+    "valid": false
+  },
+  {
+    "name": "missing schema journal",
+    "kind": "journal",
+    "value": {
+      "operationId": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "source": {
+        "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "version": "0.1.8-owner.beta.1",
+        "buildId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "target": {
+        "digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "version": "0.1.9-owner.beta.1",
+        "buildId": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      },
+      "phase": "prepared"
+    },
+    "valid": false
+  },
+  {
+    "name": "wrong schema journal",
+    "kind": "journal",
+    "value": {
+      "schema": "farol.other/1",
+      "operationId": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "source": {
+        "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "version": "0.1.8-owner.beta.1",
+        "buildId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "target": {
+        "digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "version": "0.1.9-owner.beta.1",
+        "buildId": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      },
+      "phase": "prepared"
+    },
+    "valid": false
+  },
+  {
+    "name": "minimal restore",
+    "kind": "restore",
+    "value": {
+      "schema": "farol.update-restore-intent/1",
+      "action": "recover",
+      "operation": {
+        "operationId": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "source": {
+          "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "version": "0.1.8-owner.beta.1",
+          "buildId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        },
+        "target": {
+          "digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "version": "0.1.9-owner.beta.1",
+          "buildId": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+        }
+      },
+      "priorPhase": "prepared"
+    },
+    "valid": true
+  },
+  {
+    "name": "unknown field restore",
+    "kind": "restore",
+    "value": {
+      "schema": "farol.update-restore-intent/1",
+      "action": "recover",
+      "operation": {
+        "operationId": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "source": {
+          "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "version": "0.1.8-owner.beta.1",
+          "buildId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        },
+        "target": {
+          "digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "version": "0.1.9-owner.beta.1",
+          "buildId": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+        }
+      },
+      "priorPhase": "prepared",
+      "extra": "private fixture text"
+    },
+    "valid": false
+  },
+  {
+    "name": "missing schema restore",
+    "kind": "restore",
+    "value": {
+      "action": "recover",
+      "operation": {
+        "operationId": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "source": {
+          "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "version": "0.1.8-owner.beta.1",
+          "buildId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        },
+        "target": {
+          "digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "version": "0.1.9-owner.beta.1",
+          "buildId": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+        }
+      },
+      "priorPhase": "prepared"
+    },
+    "valid": false
+  },
+  {
+    "name": "wrong schema restore",
+    "kind": "restore",
+    "value": {
+      "schema": "farol.other/1",
+      "action": "recover",
+      "operation": {
+        "operationId": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "source": {
+          "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "version": "0.1.8-owner.beta.1",
+          "buildId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        },
+        "target": {
+          "digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "version": "0.1.9-owner.beta.1",
+          "buildId": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+        }
+      },
+      "priorPhase": "prepared"
+    },
+    "valid": false
+  },
+  {
+    "name": "minimal retained",
+    "kind": "retained",
+    "value": {
+      "schema": "farol.ready-update/1",
+      "handle": "fixture-opaque-handle",
+      "manifest": {
+        "fixture": "unverified-public-manifest"
+      },
+      "operation": null
+    },
+    "valid": true
+  },
+  {
+    "name": "unknown field retained",
+    "kind": "retained",
+    "value": {
+      "schema": "farol.ready-update/1",
+      "handle": "fixture-opaque-handle",
+      "manifest": {
+        "fixture": "unverified-public-manifest"
+      },
+      "operation": null,
+      "extra": "private fixture text"
+    },
+    "valid": false
+  },
+  {
+    "name": "missing schema retained",
+    "kind": "retained",
+    "value": {
+      "handle": "fixture-opaque-handle",
+      "manifest": {
+        "fixture": "unverified-public-manifest"
+      },
+      "operation": null
+    },
+    "valid": false
+  },
+  {
+    "name": "wrong schema retained",
+    "kind": "retained",
+    "value": {
+      "schema": "farol.other/1",
+      "handle": "fixture-opaque-handle",
+      "manifest": {
+        "fixture": "unverified-public-manifest"
+      },
+      "operation": null
+    },
+    "valid": false
+  },
+  {
+    "name": "minimal receipt",
+    "kind": "receipt",
+    "value": {
+      "schema": "farol.ready-update/1",
+      "handle": "fixture-opaque-handle",
+      "manifest": {
+        "fixture": "unverified-public-manifest"
+      },
+      "operation": null,
+      "observedAt": "2026-10-03T00:00:00Z",
+      "phase": "launch_requested",
+      "runningBuildId": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+    },
+    "valid": true
+  },
+  {
+    "name": "unknown field receipt",
+    "kind": "receipt",
+    "value": {
+      "schema": "farol.ready-update/1",
+      "handle": "fixture-opaque-handle",
+      "manifest": {
+        "fixture": "unverified-public-manifest"
+      },
+      "operation": null,
+      "observedAt": "2026-10-03T00:00:00Z",
+      "phase": "launch_requested",
+      "runningBuildId": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "extra": "private fixture text"
+    },
+    "valid": false
+  },
+  {
+    "name": "missing schema receipt",
+    "kind": "receipt",
+    "value": {
+      "handle": "fixture-opaque-handle",
+      "manifest": {
+        "fixture": "unverified-public-manifest"
+      },
+      "operation": null,
+      "observedAt": "2026-10-03T00:00:00Z",
+      "phase": "launch_requested",
+      "runningBuildId": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+    },
+    "valid": false
+  },
+  {
+    "name": "wrong schema receipt",
+    "kind": "receipt",
+    "value": {
+      "schema": "farol.other/1",
+      "handle": "fixture-opaque-handle",
+      "manifest": {
+        "fixture": "unverified-public-manifest"
+      },
+      "operation": null,
+      "observedAt": "2026-10-03T00:00:00Z",
+      "phase": "launch_requested",
+      "runningBuildId": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+    },
+    "valid": false
+  },
+  {
+    "name": "minimal download",
+    "kind": "download",
+    "value": {
+      "schema": "farol.update-download-intent/1",
+      "buildId": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "archiveSha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+    },
+    "valid": true
+  },
+  {
+    "name": "unknown field download",
+    "kind": "download",
+    "value": {
+      "schema": "farol.update-download-intent/1",
+      "buildId": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "archiveSha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "extra": "private fixture text"
+    },
+    "valid": false
+  },
+  {
+    "name": "missing schema download",
+    "kind": "download",
+    "value": {
+      "buildId": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "archiveSha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+    },
+    "valid": false
+  },
+  {
+    "name": "wrong schema download",
+    "kind": "download",
+    "value": {
+      "schema": "farol.other/1",
+      "buildId": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "archiveSha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+    },
+    "valid": false
+  },
+  {
+    "name": "minimal rejected",
+    "kind": "rejected",
+    "value": {
+      "schema": "farol.rejected-update-target/1",
+      "operationId": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "source": {
+        "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "version": "0.1.8-owner.beta.1",
+        "buildId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "target": {
+        "digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "version": "0.1.9-owner.beta.1",
+        "buildId": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      },
+      "directoryIdentity": {
+        "device": "18446744073709551615",
+        "inode": "123456789012345678901234567890"
+      }
+    },
+    "valid": true
+  },
+  {
+    "name": "unknown field rejected",
+    "kind": "rejected",
+    "value": {
+      "schema": "farol.rejected-update-target/1",
+      "operationId": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "source": {
+        "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "version": "0.1.8-owner.beta.1",
+        "buildId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "target": {
+        "digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "version": "0.1.9-owner.beta.1",
+        "buildId": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      },
+      "directoryIdentity": {
+        "device": "18446744073709551615",
+        "inode": "123456789012345678901234567890"
+      },
+      "extra": "private fixture text"
+    },
+    "valid": false
+  },
+  {
+    "name": "missing schema rejected",
+    "kind": "rejected",
+    "value": {
+      "operationId": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "source": {
+        "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "version": "0.1.8-owner.beta.1",
+        "buildId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "target": {
+        "digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "version": "0.1.9-owner.beta.1",
+        "buildId": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      },
+      "directoryIdentity": {
+        "device": "18446744073709551615",
+        "inode": "123456789012345678901234567890"
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "wrong schema rejected",
+    "kind": "rejected",
+    "value": {
+      "schema": "farol.other/1",
+      "operationId": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "source": {
+        "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "version": "0.1.8-owner.beta.1",
+        "buildId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "target": {
+        "digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "version": "0.1.9-owner.beta.1",
+        "buildId": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      },
+      "directoryIdentity": {
+        "device": "18446744073709551615",
+        "inode": "123456789012345678901234567890"
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "journal phase prepared",
+    "kind": "journal",
+    "value": {
+      "schema": "farol.installed-update-journal/1",
+      "operationId": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "source": {
+        "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "version": "0.1.8-owner.beta.1",
+        "buildId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "target": {
+        "digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "version": "0.1.9-owner.beta.1",
+        "buildId": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      },
+      "phase": "prepared"
+    },
+    "valid": true
+  },
+  {
+    "name": "journal phase predecessor_saved",
+    "kind": "journal",
+    "value": {
+      "schema": "farol.installed-update-journal/1",
+      "operationId": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "source": {
+        "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "version": "0.1.8-owner.beta.1",
+        "buildId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "target": {
+        "digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "version": "0.1.9-owner.beta.1",
+        "buildId": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      },
+      "phase": "predecessor_saved"
+    },
+    "valid": true
+  },
+  {
+    "name": "journal phase new_installed",
+    "kind": "journal",
+    "value": {
+      "schema": "farol.installed-update-journal/1",
+      "operationId": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "source": {
+        "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "version": "0.1.8-owner.beta.1",
+        "buildId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "target": {
+        "digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "version": "0.1.9-owner.beta.1",
+        "buildId": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      },
+      "phase": "new_installed"
+    },
+    "valid": true
+  },
+  {
+    "name": "journal phase verified",
+    "kind": "journal",
+    "value": {
+      "schema": "farol.installed-update-journal/1",
+      "operationId": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "source": {
+        "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "version": "0.1.8-owner.beta.1",
+        "buildId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "target": {
+        "digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "version": "0.1.9-owner.beta.1",
+        "buildId": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      },
+      "phase": "verified"
+    },
+    "valid": true
+  },
+  {
+    "name": "journal phase rollback_started",
+    "kind": "journal",
+    "value": {
+      "schema": "farol.installed-update-journal/1",
+      "operationId": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "source": {
+        "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "version": "0.1.8-owner.beta.1",
+        "buildId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "target": {
+        "digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "version": "0.1.9-owner.beta.1",
+        "buildId": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      },
+      "phase": "rollback_started"
+    },
+    "valid": true
+  },
+  {
+    "name": "journal phase rolled_back",
+    "kind": "journal",
+    "value": {
+      "schema": "farol.installed-update-journal/1",
+      "operationId": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "source": {
+        "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "version": "0.1.8-owner.beta.1",
+        "buildId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "target": {
+        "digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "version": "0.1.9-owner.beta.1",
+        "buildId": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      },
+      "phase": "rolled_back"
+    },
+    "valid": true
+  },
+  {
+    "name": "journal phase launch_requested",
+    "kind": "journal",
+    "value": {
+      "schema": "farol.installed-update-journal/1",
+      "operationId": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "source": {
+        "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "version": "0.1.8-owner.beta.1",
+        "buildId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "target": {
+        "digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "version": "0.1.9-owner.beta.1",
+        "buildId": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      },
+      "phase": "launch_requested"
+    },
+    "valid": true
+  },
+  {
+    "name": "journal phase completed",
+    "kind": "journal",
+    "value": {
+      "schema": "farol.installed-update-journal/1",
+      "operationId": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "source": {
+        "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "version": "0.1.8-owner.beta.1",
+        "buildId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "target": {
+        "digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "version": "0.1.9-owner.beta.1",
+        "buildId": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      },
+      "phase": "completed"
+    },
+    "valid": true
+  },
+  {
+    "name": "journal phase cancelled",
+    "kind": "journal",
+    "value": {
+      "schema": "farol.installed-update-journal/1",
+      "operationId": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "source": {
+        "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "version": "0.1.8-owner.beta.1",
+        "buildId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "target": {
+        "digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "version": "0.1.9-owner.beta.1",
+        "buildId": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      },
+      "phase": "cancelled"
+    },
+    "valid": true
+  },
+  {
+    "name": "journal phase cancel_launch_requested",
+    "kind": "journal",
+    "value": {
+      "schema": "farol.installed-update-journal/1",
+      "operationId": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "source": {
+        "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "version": "0.1.8-owner.beta.1",
+        "buildId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "target": {
+        "digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "version": "0.1.9-owner.beta.1",
+        "buildId": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      },
+      "phase": "cancel_launch_requested"
+    },
+    "valid": true
+  },
+  {
+    "name": "journal phase cancel_completed",
+    "kind": "journal",
+    "value": {
+      "schema": "farol.installed-update-journal/1",
+      "operationId": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "source": {
+        "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "version": "0.1.8-owner.beta.1",
+        "buildId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "target": {
+        "digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "version": "0.1.9-owner.beta.1",
+        "buildId": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      },
+      "phase": "cancel_completed"
+    },
+    "valid": true
+  },
+  {
+    "name": "journal phase rollback_launch_requested",
+    "kind": "journal",
+    "value": {
+      "schema": "farol.installed-update-journal/1",
+      "operationId": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "source": {
+        "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "version": "0.1.8-owner.beta.1",
+        "buildId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "target": {
+        "digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "version": "0.1.9-owner.beta.1",
+        "buildId": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      },
+      "phase": "rollback_launch_requested"
+    },
+    "valid": true
+  },
+  {
+    "name": "journal phase rollback_completed",
+    "kind": "journal",
+    "value": {
+      "schema": "farol.installed-update-journal/1",
+      "operationId": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "source": {
+        "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "version": "0.1.8-owner.beta.1",
+        "buildId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "target": {
+        "digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "version": "0.1.9-owner.beta.1",
+        "buildId": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      },
+      "phase": "rollback_completed"
+    },
+    "valid": true
+  },
+  {
+    "name": "unknown phase",
+    "kind": "journal",
+    "value": {
+      "schema": "farol.installed-update-journal/1",
+      "operationId": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "source": {
+        "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "version": "0.1.8-owner.beta.1",
+        "buildId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "target": {
+        "digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "version": "0.1.9-owner.beta.1",
+        "buildId": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      },
+      "phase": "finished"
+    },
+    "valid": false
+  },
+  {
+    "name": "crossed operation",
+    "kind": "journal",
+    "value": {
+      "schema": "farol.installed-update-journal/1",
+      "operationId": "ffffffffffffffffffffffffffffffff",
+      "source": {
+        "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "version": "0.1.8-owner.beta.1",
+        "buildId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "target": {
+        "digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "version": "0.1.9-owner.beta.1",
+        "buildId": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      },
+      "phase": "prepared"
+    },
+    "valid": false
+  },
+  {
+    "name": "same labels changed tree",
+    "kind": "journal",
+    "value": {
+      "schema": "farol.installed-update-journal/1",
+      "operationId": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "source": {
+        "digest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "version": "0.1.8-owner.beta.1",
+        "buildId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "target": {
+        "digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "version": "0.1.9-owner.beta.1",
+        "buildId": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      },
+      "phase": "prepared"
+    },
+    "valid": false
+  },
+  {
+    "name": "uppercase digest",
+    "kind": "journal",
+    "value": {
+      "schema": "farol.installed-update-journal/1",
+      "operationId": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "source": {
+        "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "version": "0.1.8-owner.beta.1",
+        "buildId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "target": {
+        "digest": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "version": "0.1.9-owner.beta.1",
+        "buildId": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      },
+      "phase": "prepared"
+    },
+    "valid": false
+  },
+  {
+    "name": "unknown build field",
+    "kind": "journal",
+    "value": {
+      "schema": "farol.installed-update-journal/1",
+      "operationId": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "source": {
+        "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "version": "0.1.8-owner.beta.1",
+        "buildId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "path": "fixture-private-root"
+      },
+      "target": {
+        "digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "version": "0.1.9-owner.beta.1",
+        "buildId": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      },
+      "phase": "prepared"
+    },
+    "valid": false
+  },
+  {
+    "name": "persisted empty version parses only",
+    "kind": "journal",
+    "value": {
+      "schema": "farol.installed-update-journal/1",
+      "operationId": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "source": {
+        "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "version": "",
+        "buildId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "target": {
+        "digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "version": "0.1.9-owner.beta.1",
+        "buildId": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      },
+      "phase": "prepared"
+    },
+    "valid": false
+  },
+  {
+    "name": "wrong build field type",
+    "kind": "journal",
+    "value": {
+      "schema": "farol.installed-update-journal/1",
+      "operationId": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "source": {
+        "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "version": "0.1.8-owner.beta.1",
+        "buildId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "target": {
+        "digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "version": "0.1.9-owner.beta.1",
+        "buildId": 42
+      },
+      "phase": "prepared"
+    },
+    "valid": false
+  },
+  {
+    "name": "restore missing helper",
+    "kind": "restore",
+    "value": {
+      "schema": "farol.update-restore-intent/1",
+      "action": "recover",
+      "operation": {
+        "operationId": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "source": {
+          "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "version": "0.1.8-owner.beta.1",
+          "buildId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        },
+        "target": {
+          "digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "version": "0.1.9-owner.beta.1",
+          "buildId": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+        }
+      },
+      "priorPhase": "prepared"
+    },
+    "valid": true
+  },
+  {
+    "name": "restore null helper",
+    "kind": "restore",
+    "value": {
+      "schema": "farol.update-restore-intent/1",
+      "action": "recover",
+      "operation": {
+        "operationId": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "source": {
+          "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "version": "0.1.8-owner.beta.1",
+          "buildId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        },
+        "target": {
+          "digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "version": "0.1.9-owner.beta.1",
+          "buildId": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+        }
+      },
+      "priorPhase": "prepared",
+      "helper": null
+    },
+    "valid": true
+  },
+  {
+    "name": "restore null process start",
+    "kind": "restore",
+    "value": {
+      "schema": "farol.update-restore-intent/1",
+      "action": "recover",
+      "operation": {
+        "operationId": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "source": {
+          "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "version": "0.1.8-owner.beta.1",
+          "buildId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        },
+        "target": {
+          "digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "version": "0.1.9-owner.beta.1",
+          "buildId": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+        }
+      },
+      "priorPhase": "prepared",
+      "helper": {
+        "pid": 42,
+        "processStart": null
+      }
+    },
+    "valid": true
+  },
+  {
+    "name": "restore known start",
+    "kind": "restore",
+    "value": {
+      "schema": "farol.update-restore-intent/1",
+      "action": "recover",
+      "operation": {
+        "operationId": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "source": {
+          "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "version": "0.1.8-owner.beta.1",
+          "buildId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        },
+        "target": {
+          "digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "version": "0.1.9-owner.beta.1",
+          "buildId": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+        }
+      },
+      "priorPhase": "prepared",
+      "helper": {
+        "pid": 42,
+        "processStart": "fixture process start"
+      }
+    },
+    "valid": true
+  },
+  {
+    "name": "restore decimal pid spelling",
+    "kind": "restore",
+    "value": {
+      "schema": "farol.update-restore-intent/1",
+      "action": "recover",
+      "operation": {
+        "operationId": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "source": {
+          "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "version": "0.1.8-owner.beta.1",
+          "buildId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        },
+        "target": {
+          "digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "version": "0.1.9-owner.beta.1",
+          "buildId": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+        }
+      },
+      "priorPhase": "prepared",
+      "helper": {
+        "pid": 42.0,
+        "processStart": "fixture process start"
+      }
+    },
+    "valid": true
+  },
+  {
+    "name": "restore unsafe integer",
+    "kind": "restore",
+    "value": {
+      "schema": "farol.update-restore-intent/1",
+      "action": "recover",
+      "operation": {
+        "operationId": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "source": {
+          "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "version": "0.1.8-owner.beta.1",
+          "buildId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        },
+        "target": {
+          "digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "version": "0.1.9-owner.beta.1",
+          "buildId": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+        }
+      },
+      "priorPhase": "prepared",
+      "helper": {
+        "pid": 9007199254740992,
+        "processStart": null
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "restore pid bool",
+    "kind": "restore",
+    "value": {
+      "schema": "farol.update-restore-intent/1",
+      "action": "recover",
+      "operation": {
+        "operationId": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "source": {
+          "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "version": "0.1.8-owner.beta.1",
+          "buildId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        },
+        "target": {
+          "digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "version": "0.1.9-owner.beta.1",
+          "buildId": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+        }
+      },
+      "priorPhase": "prepared",
+      "helper": {
+        "pid": true,
+        "processStart": null
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "restore pid one",
+    "kind": "restore",
+    "value": {
+      "schema": "farol.update-restore-intent/1",
+      "action": "recover",
+      "operation": {
+        "operationId": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "source": {
+          "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "version": "0.1.8-owner.beta.1",
+          "buildId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        },
+        "target": {
+          "digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "version": "0.1.9-owner.beta.1",
+          "buildId": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+        }
+      },
+      "priorPhase": "prepared",
+      "helper": {
+        "pid": 1,
+        "processStart": null
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "restore empty start",
+    "kind": "restore",
+    "value": {
+      "schema": "farol.update-restore-intent/1",
+      "action": "recover",
+      "operation": {
+        "operationId": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "source": {
+          "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "version": "0.1.8-owner.beta.1",
+          "buildId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        },
+        "target": {
+          "digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "version": "0.1.9-owner.beta.1",
+          "buildId": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+        }
+      },
+      "priorPhase": "prepared",
+      "helper": {
+        "pid": 42,
+        "processStart": ""
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "restore installed binding",
+    "kind": "restore",
+    "value": {
+      "schema": "farol.update-restore-intent/1",
+      "action": "recover",
+      "operation": {
+        "operationId": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "source": {
+          "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "version": "0.1.8-owner.beta.1",
+          "buildId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        },
+        "target": {
+          "digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "version": "0.1.9-owner.beta.1",
+          "buildId": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+        }
+      },
+      "priorPhase": "prepared",
+      "installedBefore": {
+        "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "version": "0.1.8-owner.beta.1",
+        "buildId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      }
+    },
+    "valid": true
+  },
+  {
+    "name": "restore pre-start binding",
+    "kind": "restore",
+    "value": {
+      "schema": "farol.update-restore-intent/1",
+      "action": "recover",
+      "operation": {
+        "operationId": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "source": {
+          "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "version": "0.1.8-owner.beta.1",
+          "buildId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        },
+        "target": {
+          "digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "version": "0.1.9-owner.beta.1",
+          "buildId": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+        }
+      },
+      "priorPhase": "prepared",
+      "notStartedAt": {
+        "digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "version": "0.1.9-owner.beta.1",
+        "buildId": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      }
+    },
+    "valid": true
+  },
+  {
+    "name": "restore unknown action",
+    "kind": "restore",
+    "value": {
+      "schema": "farol.update-restore-intent/1",
+      "action": "apply",
+      "operation": {
+        "operationId": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "source": {
+          "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "version": "0.1.8-owner.beta.1",
+          "buildId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        },
+        "target": {
+          "digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "version": "0.1.9-owner.beta.1",
+          "buildId": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+        }
+      },
+      "priorPhase": "prepared"
+    },
+    "valid": false
+  },
+  {
+    "name": "restore changed target",
+    "kind": "restore",
+    "value": {
+      "schema": "farol.update-restore-intent/1",
+      "action": "recover",
+      "operation": {
+        "operationId": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "source": {
+          "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "version": "0.1.8-owner.beta.1",
+          "buildId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        },
+        "target": {
+          "digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "version": "0.1.9-owner.beta.1",
+          "buildId": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+        }
+      },
+      "priorPhase": "prepared"
+    },
+    "valid": false
+  },
+  {
+    "name": "ready opaque null manifest",
+    "kind": "retained",
+    "value": {
+      "schema": "farol.ready-update/1",
+      "handle": "fixture-opaque-handle",
+      "manifest": null,
+      "operation": null
+    },
+    "valid": true
+  },
+  {
+    "name": "ready full binding",
+    "kind": "retained",
+    "value": {
+      "schema": "farol.ready-update/1",
+      "handle": "fixture-opaque-handle",
+      "manifest": {
+        "fixture": "unverified-public-manifest"
+      },
+      "operation": {
+        "operationId": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "source": {
+          "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "version": "0.1.8-owner.beta.1",
+          "buildId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        },
+        "target": {
+          "digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "version": "0.1.9-owner.beta.1",
+          "buildId": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+        }
+      }
+    },
+    "valid": true
+  },
+  {
+    "name": "ready preparation",
+    "kind": "retained",
+    "value": {
+      "schema": "farol.ready-update/1",
+      "handle": "fixture-opaque-handle",
+      "manifest": {
+        "fixture": "unverified-public-manifest"
+      },
+      "operation": null,
+      "preparation": {
+        "operationId": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "source": {
+          "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "version": "0.1.8-owner.beta.1",
+          "buildId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        },
+        "target": {
+          "digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "version": "0.1.9-owner.beta.1",
+          "buildId": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+        }
+      }
+    },
+    "valid": true
+  },
+  {
+    "name": "ready archive released",
+    "kind": "retained",
+    "value": {
+      "schema": "farol.ready-update/1",
+      "handle": "fixture-opaque-handle",
+      "manifest": {
+        "fixture": "unverified-public-manifest"
+      },
+      "operation": null,
+      "archiveReleased": true
+    },
+    "valid": true
+  },
+  {
+    "name": "ready archive state string",
+    "kind": "retained",
+    "value": {
+      "schema": "farol.ready-update/1",
+      "handle": "fixture-opaque-handle",
+      "manifest": {
+        "fixture": "unverified-public-manifest"
+      },
+      "operation": null,
+      "archiveReleased": "true"
+    },
+    "valid": false
+  },
+  {
+    "name": "ready unknown helper",
+    "kind": "retained",
+    "value": {
+      "schema": "farol.ready-update/1",
+      "handle": "fixture-opaque-handle",
+      "manifest": {
+        "fixture": "unverified-public-manifest"
+      },
+      "operation": null,
+      "helper": {
+        "pid": 42,
+        "processStart": null
+      }
+    },
+    "valid": true
+  },
+  {
+    "name": "ready null preparation",
+    "kind": "retained",
+    "value": {
+      "schema": "farol.ready-update/1",
+      "handle": "fixture-opaque-handle",
+      "manifest": {
+        "fixture": "unverified-public-manifest"
+      },
+      "operation": null,
+      "preparation": null
+    },
+    "valid": false
+  },
+  {
+    "name": "retained missing operation",
+    "kind": "retained",
+    "value": {
+      "schema": "farol.ready-update/1",
+      "handle": "fixture-opaque-handle",
+      "manifest": {
+        "fixture": "unverified-public-manifest"
+      },
+      "operation": false
+    },
+    "valid": false
+  },
+  {
+    "name": "unknown receipt phase",
+    "kind": "receipt",
+    "value": {
+      "schema": "farol.ready-update/1",
+      "handle": "fixture-opaque-handle",
+      "manifest": {
+        "fixture": "unverified-public-manifest"
+      },
+      "operation": null,
+      "observedAt": "2026-10-03T00:00:00Z",
+      "phase": "unknown",
+      "runningBuildId": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+    },
+    "valid": false
+  },
+  {
+    "name": "download stage downloading",
+    "kind": "download",
+    "value": {
+      "schema": "farol.update-download-intent/1",
+      "buildId": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "archiveSha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "download": {
+        "id": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "producer": {
+          "pid": 42,
+          "processStart": "fixture process start"
+        },
+        "phase": "downloading"
+      }
+    },
+    "valid": true
+  },
+  {
+    "name": "download measured stage downloading",
+    "kind": "download",
+    "value": {
+      "schema": "farol.update-download-intent/1",
+      "buildId": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "archiveSha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "download": {
+        "id": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "producer": {
+          "pid": 42,
+          "processStart": "fixture process start"
+        },
+        "phase": "downloading",
+        "identity": {
+          "dev": "1",
+          "ino": "12345678901234567890",
+          "birthtimeNs": "123456789012345678901234567890"
+        }
+      }
+    },
+    "valid": true
+  },
+  {
+    "name": "download stage verifying",
+    "kind": "download",
+    "value": {
+      "schema": "farol.update-download-intent/1",
+      "buildId": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "archiveSha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "download": {
+        "id": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "producer": {
+          "pid": 42,
+          "processStart": "fixture process start"
+        },
+        "phase": "verifying"
+      }
+    },
+    "valid": true
+  },
+  {
+    "name": "download measured stage verifying",
+    "kind": "download",
+    "value": {
+      "schema": "farol.update-download-intent/1",
+      "buildId": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "archiveSha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "download": {
+        "id": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "producer": {
+          "pid": 42,
+          "processStart": "fixture process start"
+        },
+        "phase": "verifying",
+        "identity": {
+          "dev": "1",
+          "ino": "12345678901234567890",
+          "birthtimeNs": "123456789012345678901234567890"
+        }
+      }
+    },
+    "valid": true
+  },
+  {
+    "name": "download stage legacy absent phase",
+    "kind": "download",
+    "value": {
+      "schema": "farol.update-download-intent/1",
+      "buildId": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "archiveSha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "download": {
+        "id": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "producer": {
+          "pid": 42,
+          "processStart": "fixture process start"
+        }
+      }
+    },
+    "valid": true
+  },
+  {
+    "name": "download measured stage legacy absent phase",
+    "kind": "download",
+    "value": {
+      "schema": "farol.update-download-intent/1",
+      "buildId": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "archiveSha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "download": {
+        "id": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "producer": {
+          "pid": 42,
+          "processStart": "fixture process start"
+        },
+        "identity": {
+          "dev": "1",
+          "ino": "12345678901234567890",
+          "birthtimeNs": "123456789012345678901234567890"
+        }
+      }
+    },
+    "valid": true
+  },
+  {
+    "name": "download missing producer birth",
+    "kind": "download",
+    "value": {
+      "schema": "farol.update-download-intent/1",
+      "buildId": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "archiveSha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "download": {
+        "id": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "producer": {
+          "pid": 42,
+          "processStart": null
+        }
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "download null stage",
+    "kind": "download",
+    "value": {
+      "schema": "farol.update-download-intent/1",
+      "buildId": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "archiveSha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "download": null
+    },
+    "valid": false
+  },
+  {
+    "name": "rejected numeric inode",
+    "kind": "rejected",
+    "value": {
+      "schema": "farol.rejected-update-target/1",
+      "operationId": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "source": {
+        "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "version": "0.1.8-owner.beta.1",
+        "buildId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "target": {
+        "digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "version": "0.1.9-owner.beta.1",
+        "buildId": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      },
+      "directoryIdentity": {
+        "device": "18446744073709551615",
+        "inode": 123
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "rejected excessive inode",
+    "kind": "rejected",
+    "value": {
+      "schema": "farol.rejected-update-target/1",
+      "operationId": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "source": {
+        "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "version": "0.1.8-owner.beta.1",
+        "buildId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "target": {
+        "digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "version": "0.1.9-owner.beta.1",
+        "buildId": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      },
+      "directoryIdentity": {
+        "device": "18446744073709551615",
+        "inode": "1111111111111111111111111111111"
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "rejected crossed binding",
+    "kind": "rejected",
+    "value": {
+      "schema": "farol.rejected-update-target/1",
+      "operationId": "ffffffffffffffffffffffffffffffff",
+      "source": {
+        "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "version": "0.1.8-owner.beta.1",
+        "buildId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "target": {
+        "digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "version": "0.1.9-owner.beta.1",
+        "buildId": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      },
+      "directoryIdentity": {
+        "device": "18446744073709551615",
+        "inode": "123456789012345678901234567890"
+      }
+    },
+    "valid": false
+  }
+]
