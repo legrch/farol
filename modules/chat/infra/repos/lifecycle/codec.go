@@ -14,9 +14,12 @@ import (
 // These storage records are private to the adapter, never root wire DTOs or
 // startup admission proof. No prompt/answer/raw error field exists.
 type record struct {
-	Version int                 `json:"version"`
-	Scope   port.JournalScope   `json:"scope"`
-	Writes  []port.JournalWrite `json:"writes"`
+	Root         port.JournalRoot      `json:"root"`
+	Incarnations []string              `json:"incarnations"`
+	Retirement   *port.RetirementWrite `json:"retirement"`
+	Version      int                   `json:"version"`
+	Scope        port.JournalScope     `json:"scope"`
+	Writes       []port.JournalWrite   `json:"writes"`
 }
 
 func encode(value record, limits Limits) ([]byte, error) {
@@ -51,7 +54,7 @@ func decode(raw []byte, limits Limits) (record, error) {
 // Replay is ONLY validation of stored queue transitions. Its queue/registry never
 // escapes this function, creates a Handle or supplies current admission.
 func validate(value record, limits Limits) error {
-	if !validLimits(limits) || value.Version != 1 || value.Writes == nil || len(value.Writes) > limits.Records {
+	if !validLimits(limits) || value.Version != 2 || value.Root.Device == 0 || value.Root.Inode == 0 || !validIncarnations(value.Incarnations, value.Scope, limits) || value.Writes == nil || len(value.Writes) > limits.Records {
 		return Invalid
 	}
 	q, err := turn.NewQueue(value.Scope.ProfileID, value.Scope.BackendGeneration)
@@ -60,12 +63,17 @@ func validate(value record, limits Limits) error {
 	}
 	bindings := make(map[string]port.TurnBinding)
 	pending := port.JournalEntry{}
+	proofs := make(map[string]port.RetirementTurn)
+	unresolvedCalls := make(map[string]string)
 	for n, w := range value.Writes {
 		if w.Scope != value.Scope || w.PreviousRevision != uint64(n) || w.Revision != uint64(n)+1 {
 			return Invalid
 		}
 		e := w.Entry
 		if !validBinding(e.Binding, value.Scope) {
+			return Invalid
+		}
+		if (e.Kind != "settle" && e.Quiescence != (turn.QuiescenceEvidence{})) || (e.Kind != "settle-prepared" && e.Disposal != (turn.DisposalEvidence{})) {
 			return Invalid
 		}
 		i := identity(e.Binding)
@@ -78,6 +86,7 @@ func validate(value record, limits Limits) error {
 				return Invalid
 			}
 			bindings[i.OperationID] = e.Binding
+			proofs[i.OperationID] = port.RetirementTurn{Binding: e.Binding, Snapshot: after}
 			continue
 		}
 		if bindings[i.OperationID] != e.Binding || e.IntentDigest != "" {
@@ -107,13 +116,36 @@ func validate(value record, limits Limits) error {
 		if e.Effect != expectedEffect {
 			return Invalid
 		}
+		proof := proofs[i.OperationID]
+		proof.Snapshot = after
+		switch e.Kind {
+		case "request-computer":
+			unresolvedCalls[i.OperationID] = e.CallID
+		case "resolve-computer":
+			delete(unresolvedCalls, i.OperationID)
+		case "acknowledge":
+			if proof.AcknowledgedRevision == 0 {
+				proof.AcknowledgedRevision = w.Revision
+			}
+		case "settle":
+			if proof.SettledRevision == 0 {
+				proof.Quiescence, proof.SettledRevision = e.Quiescence, w.Revision
+			}
+		case "settle-prepared":
+			if proof.SettledRevision == 0 {
+				proof.Disposal, proof.SettledRevision = e.Disposal, w.Revision
+			}
+		case "release":
+			proof.ReleasedRevision = w.Revision
+		}
+		proofs[i.OperationID] = proof
 		if expectedEffect != "" {
 			pending = e
 		} else {
 			pending = port.JournalEntry{}
 		}
 	}
-	return nil
+	return validateRetirement(value, limits, proofs, pending.Effect != "" || len(unresolvedCalls) != 0)
 }
 
 func transition(q *turn.Queue, e port.JournalEntry, before turn.Snapshot, pending port.JournalEntry) (turn.Snapshot, error) {
@@ -172,15 +204,9 @@ func transition(q *turn.Queue, e port.JournalEntry, before turn.Snapshot, pendin
 	case "acknowledge":
 		return q.Acknowledge(i, e.After.Result.ID)
 	case "settle":
-		// Current port stores no independent quiescence sequence. The canonical
-		// minimal witness is sufficient to validate the resulting metadata; actual
-		// evidence origin still belongs to the application/Desktop boundary.
-		if before.LastSequence == ^uint64(0) {
-			return turn.Snapshot{}, Invalid
-		}
-		return q.Settle(turn.QuiescenceEvidence{Binding: b, ResultID: before.Result.ID, Sequence: before.LastSequence + 1, Confirmed: true})
+		return q.Settle(e.Quiescence)
 	case "settle-prepared":
-		return q.SettlePrepared(turn.DisposalEvidence{Reservation: before.Reservation, ResultID: before.Result.ID, Confirmed: true})
+		return q.SettlePrepared(e.Disposal)
 	case "release":
 		if err := q.Release(before.Reservation); err != nil {
 			return turn.Snapshot{}, err

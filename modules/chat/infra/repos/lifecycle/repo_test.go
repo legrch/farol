@@ -2,6 +2,7 @@ package lifecycle
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -18,6 +19,7 @@ import (
 // atomic rename, cross-process locking, power-loss, race or boot qualification.
 type physicalFixture struct {
 	claim                                 bool
+	leased                                bool
 	raw                                   []byte
 	creates, replaces, reads, closes      int
 	createFault, replaceFault, closeFault bool
@@ -30,8 +32,8 @@ func claimFixture(t *testing.T, p *physicalFixture) (*Repository, error) {
 	if p.claim {
 		return nil, failure(Refused, false)
 	}
-	p.claim = true
-	return newOwner("profile", Limits{Bytes: 1024 * 1024, Records: 256}, &fixtureStorage{root: p}), nil
+	p.claim, p.leased = true, true
+	return newOwner("profile", Limits{Bytes: 1024 * 1024, Records: 256}, &fixtureStorage{root: p}, fixtureRoot), nil
 }
 func (f *fixtureStorage) read(max int) ([]byte, error) {
 	f.root.reads++
@@ -52,8 +54,11 @@ func (f *fixtureStorage) create(_ context.Context, raw []byte) error {
 	}
 	return nil
 }
-func (f *fixtureStorage) replace(_ context.Context, raw []byte, _ [32]byte) error {
+func (f *fixtureStorage) replace(_ context.Context, raw []byte, expected [32]byte, readLimit int) error {
 	p := f.root
+	if len(p.raw) > readLimit || sha256.Sum256(p.raw) != expected {
+		return failure(Refused, false)
+	}
 	p.replaces++
 	p.raw = append([]byte(nil), raw...)
 	if p.hook != nil {
@@ -69,8 +74,11 @@ func (f *fixtureStorage) close() error {
 	if f.root.closeFault {
 		return errors.New("fixture close unknown")
 	}
+	f.root.leased = false
 	return nil
 }
+
+var fixtureRoot = port.JournalRoot{Device: 11, Inode: 23, OwnerUID: 501}
 
 var scope = port.JournalScope{ProfileID: "profile", BackendGeneration: "backend"}
 
@@ -268,7 +276,7 @@ func TestRealOwnerPublishesHandleOnlyAfterAdapterKnownCommit(t *testing.T) {
 }
 func TestCodecCanonicalClosedMetadataAndNoBodyFields(t *testing.T) {
 	limits := Limits{Bytes: 1024 * 1024, Records: 256}
-	value := record{Version: 1, Scope: scope, Writes: []port.JournalWrite{admissionWrite(t)}}
+	value := record{Version: 2, Root: fixtureRoot, Scope: scope, Incarnations: []string{scope.BackendGeneration}, Writes: []port.JournalWrite{admissionWrite(t)}}
 	raw, err := encode(value, limits)
 	if err != nil {
 		t.Fatal(err)
@@ -276,7 +284,7 @@ func TestCodecCanonicalClosedMetadataAndNoBodyFields(t *testing.T) {
 	if _, err := decode(raw, limits); err != nil {
 		t.Fatal(err)
 	}
-	for _, bad := range [][]byte{append(append([]byte(nil), raw...), []byte(" {}")...), append(append([]byte(nil), raw...), byte(' ')), []byte(strings.Replace(string(raw), "\"version\":1", "\"version\":1,\"version\":1", 1)), []byte(strings.Replace(string(raw), "\"version\":1", "\"version\":1,\"answer\":\"private answer\"", 1))} {
+	for _, bad := range [][]byte{append(append([]byte(nil), raw...), []byte(" {}")...), append(append([]byte(nil), raw...), byte(' ')), []byte(strings.Replace(string(raw), "\"version\":2", "\"version\":2,\"version\":2", 1)), []byte(strings.Replace(string(raw), "\"version\":2", "\"version\":2,\"answer\":\"private answer\"", 1))} {
 		if _, err := decode(bad, limits); err == nil {
 			t.Fatal("ambiguous/unknown content accepted")
 		}
@@ -374,7 +382,7 @@ func TestActualLifecycleTransactionsValidateThroughSlotRelease(t *testing.T) {
 		t.Fatal("private body persisted")
 	}
 	// Validation reads can NEVER make an old journal fresh, even when all known
-	// results have been acknowledged and slots released. Retirement is unowned.
+	// results have been acknowledged and slots released. Reopen requires qualified retirement.
 	if _, err = r.OpenFresh(context.Background(), port.JournalScope{ProfileID: "profile", BackendGeneration: "next"}); !errors.Is(err, Refused) {
 		t.Fatal("implicit recovery invented", err)
 	}

@@ -53,6 +53,9 @@ type Repository struct{ owner *owner }
 type owner struct {
 	mu                       sync.Mutex
 	profile                  string
+	root                     port.JournalRoot
+	predecessor              *record
+	expectedScope            port.JournalScope
 	limits                   Limits
 	disk                     storage
 	current                  record
@@ -70,7 +73,7 @@ var _ port.Journal = (*Repository)(nil)
 type storage interface {
 	read(int) ([]byte, error)
 	create(context.Context, []byte) error
-	replace(context.Context, []byte, [32]byte) error
+	replace(context.Context, []byte, [32]byte, int) error
 	close() error
 }
 
@@ -85,10 +88,10 @@ func New(ctx context.Context, root Root, limits Limits) (*Repository, error) {
 	if err != nil {
 		return nil, err
 	}
-	return newOwner(root.ProfileID, limits, d), nil
+	return newOwner(root.ProfileID, limits, d, root.identity()), nil
 }
-func newOwner(profile string, limits Limits, d storage) *Repository {
-	return &Repository{owner: &owner{profile: profile, limits: limits, disk: d}}
+func newOwner(profile string, limits Limits, d storage, root port.JournalRoot) *Repository {
+	return &Repository{owner: &owner{profile: profile, limits: limits, disk: d, root: root}}
 }
 func validLimits(l Limits) bool { return l.Bytes > 0 && l.Bytes < math.MaxInt && l.Records > 0 }
 
@@ -105,12 +108,24 @@ func (r *Repository) OpenFresh(ctx context.Context, scope port.JournalScope) (*p
 	if s.opened || !validID(scope.ProfileID) || !validID(scope.BackendGeneration) || scope.ProfileID != s.profile {
 		return nil, s.reject(Refused, false)
 	}
-	initial := record{Version: 1, Scope: scope, Writes: []port.JournalWrite{}}
+	incarnations := []string{scope.BackendGeneration}
+	if s.predecessor != nil {
+		if scope != s.expectedScope {
+			return nil, s.reject(Refused, false)
+		}
+		incarnations = append(append([]string{}, s.predecessor.Incarnations...), scope.BackendGeneration)
+	}
+	initial := record{Version: 2, Root: s.root, Scope: scope, Incarnations: incarnations, Writes: []port.JournalWrite{}}
 	raw, err := encode(initial, s.limits)
 	if err != nil {
 		return nil, s.reject(Invalid, false)
 	}
-	if err = s.disk.create(ctx, raw); err != nil {
+	if s.predecessor == nil {
+		err = s.disk.create(ctx, raw)
+	} else {
+		err = s.disk.replace(ctx, raw, s.digest, s.limits.Bytes)
+	}
+	if err != nil {
 		return nil, s.storageFailure(err)
 	}
 	visible, err := s.disk.read(s.limits.Bytes)
@@ -121,7 +136,8 @@ func (r *Repository) OpenFresh(ctx context.Context, scope port.JournalScope) (*p
 		return nil, s.reject(Unknown, true)
 	}
 	s.current, s.digest, s.opened = initial, sha256.Sum256(raw), true
-	return &port.JournalHead{Scope: scope}, nil
+	s.predecessor = nil
+	return &port.JournalHead{Scope: scope, Root: s.root}, nil
 }
 
 // Commit never replays a known or uncertain write. Scope, revision, canonical
@@ -155,7 +171,7 @@ func (r *Repository) Commit(ctx context.Context, w port.JournalWrite) (*port.Jou
 	if ctx.Err() != nil {
 		return nil, s.reject(Cancelled, false)
 	}
-	if err = s.disk.replace(ctx, raw, s.digest); err != nil {
+	if err = s.disk.replace(ctx, raw, s.digest, s.limits.Bytes); err != nil {
 		return nil, s.storageFailure(err)
 	}
 	visible, err = s.disk.read(s.limits.Bytes)

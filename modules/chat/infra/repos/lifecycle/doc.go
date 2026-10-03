@@ -1,25 +1,28 @@
 // Package lifecycle supplies the ordinary Chat lifecycle Journal adapter.
 //
-// Boot supplies one qualified, stable private physical root PER PROFILE, not a
-// new directory per backend incarnation or request. New verifies its exact
-// device/inode/UID and creates an exclusive permanent claim before exposing a
-// repository. No directory is created, chmodded, normalized or selected here.
-// Claim and snapshot names do not depend on BackendGeneration. A retained claim
-// refuses every new owner, including a different backend generation, even after
-// Close or a crash. No PID/time lock stealing, history restore or replay exists.
+// Boot supplies one stable, qualified private physical root per profile. New
+// verifies its exact device/inode/UID and creates an exclusive permanent claim.
+// No directory is created, chmodded, normalized or selected here. Generic New
+// refuses every retained claim after Close or crash; a new generation/root does
+// not discharge an unknown outcome. No PID/time lock stealing or recovery exists.
 //
-// The current port cannot express safe retirement/reconciliation of an earlier
-// incarnation. Boot must not bypass that limitation by supplying another empty
-// root. Future reopen needs explicit owner-qualified unresolved-publication and
-// lifecycle/delivery settlement evidence; this adapter adds no recovery API.
+// The actual live Chat owner freezes admission and retains original committed
+// quiescence/disposal witnesses, explicit delivery ACK and release revisions.
+// Retire atomically publishes that exact known-clean evidence, verifies it and
+// closes owned descriptors before returning a receipt. A failure retains the
+// permanent claim and supplies no qualified proof, even if retired bytes exist.
 //
-// Quiescence/disposal origin is not reconstructed from journal booleans. The
-// current port stores settled projections without the exact cleanup witness;
-// recovery would require that original evidence before any retirement decision.
-// Context is observed between synchronous local filesystem syscalls. A kernel
-// syscall cannot be interrupted here; qualified storage latency/cancellation and
-// filesystem power-loss guarantees remain native acceptance requirements.
+// NewAfterRetirement requires a CleanRetirement port from the actual live owner
+// or trusted boot's retained known-clean origin. It locks the same existing
+// claim, verifies the exact physical publication and admits only a fresh EMPTY
+// scope. Prior incarnation tombstones remain bounded and are never evicted. Codec
+// replay validates storage format; it never restores current handles. Root/host
+// owns cross-process receipt retention, exact backend-child terminal observation
+// and durable initiating-client ACK. Neither journal booleans nor process absence
+// alone implements the proof port. Legacy version-1 bytes are not reopened.
 //
-// Native filesystem/durability qualification is separate from the injected
-// storage and codec tests. A compiled adapter is not installed admission proof.
+// Context is observed between synchronous native filesystem syscalls; syscall
+// latency, power-loss durability, locking and quit/reopen need separate native
+// qualification. CPU storage/codec fixtures and compiled source do not prove
+// installed admission, live browser cleanup or boot integration.
 package lifecycle

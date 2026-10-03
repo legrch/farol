@@ -42,7 +42,15 @@ func stat(fd int) (unix.Stat_t, error) {
 	return value, err
 }
 
-func openDisk(ctx context.Context, root Root) (*disk, error) {
+func openDisk(ctx context.Context, root Root) (*disk, error) { return openClaim(ctx, root, false) }
+
+// Only the origin-qualified retirement constructor selects this path. It takes
+// the existing claim lock without creating/replacing a claim or stealing a lock.
+func openRetiredDisk(ctx context.Context, root Root) (*disk, error) {
+	return openClaim(ctx, root, true)
+}
+
+func openClaim(ctx context.Context, root Root, retired bool) (*disk, error) {
 	if ctx.Err() != nil {
 		return nil, failure(Cancelled, false)
 	}
@@ -71,14 +79,25 @@ func openDisk(ctx context.Context, root Root) (*disk, error) {
 	if ctx.Err() != nil {
 		return fail(Cancelled, false)
 	}
-	// Existing claim (empty, malformed, known or unknown) is NEVER repaired,
-	// replaced, read as authority or bypassed by a new BackendGeneration.
-	d.claim, err = unix.Openat(fd, claimName, unix.O_RDWR|unix.O_CREAT|unix.O_EXCL|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0600)
+	flags := unix.O_RDWR | unix.O_NOFOLLOW | unix.O_CLOEXEC | unix.O_NONBLOCK
+	if !retired {
+		flags |= unix.O_CREAT | unix.O_EXCL
+	}
+	d.claim, err = unix.Openat(fd, claimName, flags, 0600)
 	if err != nil {
 		return fail(Refused, false)
 	}
 	d.claimIdentity, err = stat(d.claim)
-	if err != nil || !physical(d.claimIdentity, unix.S_IFREG, 0600, root.OwnerUID) || unix.Flock(d.claim, unix.LOCK_EX|unix.LOCK_NB) != nil {
+	if err != nil || !physical(d.claimIdentity, unix.S_IFREG, 0600, root.OwnerUID) {
+		if retired {
+			return fail(Refused, false)
+		}
+		return fail(Unknown, true)
+	}
+	if unix.Flock(d.claim, unix.LOCK_EX|unix.LOCK_NB) != nil {
+		if retired {
+			return fail(Refused, false)
+		}
 		return fail(Unknown, true)
 	}
 	// An empty permanent claim is already an unresolved fence. Sync both its
@@ -156,7 +175,7 @@ func (d *disk) create(ctx context.Context, raw []byte) error {
 	}
 	return nil
 }
-func (d *disk) replace(ctx context.Context, raw []byte, expected [32]byte) error {
+func (d *disk) replace(ctx context.Context, raw []byte, expected [32]byte, readLimit int) error {
 	if ctx.Err() != nil {
 		return failure(Cancelled, false)
 	}
@@ -185,7 +204,7 @@ func (d *disk) replace(ctx context.Context, raw []byte, expected [32]byte) error
 	if !synced || closed != nil || d.check() != nil {
 		return failure(Unknown, true)
 	}
-	current, err := d.read(len(raw))
+	current, err := d.read(readLimit)
 	if err != nil {
 		return err
 	}

@@ -22,6 +22,7 @@ const (
 	Busy        Code = "CHAT_LIFECYCLE_BUSY"
 	Unsettled   Code = "CHAT_LIFECYCLE_UNSETTLED"
 	Cancelled   Code = "CHAT_LIFECYCLE_CANCELLED"
+	Frozen      Code = "CHAT_LIFECYCLE_FROZEN"
 )
 
 type Dependencies struct {
@@ -37,23 +38,30 @@ type Dependencies struct {
 }
 
 type Service struct {
-	scope           port.JournalScope
-	deps            Dependencies
-	queue           *turn.Queue
-	handles         map[string]*Handle
-	revision, fence uint64
-	pending         *mutation
-	unknown         bool
+	scope            port.JournalScope
+	root             port.JournalRoot
+	frozen, retiring bool
+	retired          *retirementProof
+	deps             Dependencies
+	queue            *turn.Queue
+	handles          map[string]*Handle
+	revision, fence  uint64
+	pending          *mutation
+	unknown          bool
 }
 
 // Handle is minted only by this owner's actual successful admission. Its fields
 // are private; historical DTOs, body IDs and an unrelated owner cannot forge it.
 // The same handle is captured by contracts/admission for every subsequent phase.
 type Handle struct {
-	owner  *Service
-	fixed  port.TurnBinding
-	digest string
-	closed bool // protected by owner's gate; monotonic membership withdrawal
+	owner                                          *Service
+	fixed                                          port.TurnBinding
+	digest                                         string
+	quiescence                                     turn.QuiescenceEvidence
+	disposal                                       turn.DisposalEvidence
+	unresolvedCallID                               string
+	ackRevision, settledRevision, releasedRevision uint64
+	closed                                         bool // protected by owner's gate; monotonic membership withdrawal
 }
 
 var _ port.BoundTurn = (*Handle)(nil)
@@ -82,7 +90,7 @@ func New(ctx context.Context, scope port.JournalScope, deps Dependencies) (*Serv
 	if ctx.Err() != nil {
 		return nil, Cancelled
 	}
-	return &Service{scope: scope, deps: deps, queue: queue, handles: make(map[string]*Handle)}, nil
+	return &Service{scope: scope, root: head.Root, deps: deps, queue: queue, handles: make(map[string]*Handle)}, nil
 }
 
 func (h *Handle) Binding() port.TurnBinding {
@@ -117,7 +125,7 @@ func (h *Handle) WithCurrent(ctx context.Context, inspect func(*port.CurrentTurn
 	persistence := port.Committed
 	if s.unknown || s.revision == math.MaxUint64 || s.fence == math.MaxUint64 {
 		persistence = port.UnknownCommit
-	} else if s.pending != nil {
+	} else if s.pending != nil || s.retiring {
 		persistence = port.PendingCommit
 	}
 	var current *port.CurrentTurn
@@ -201,7 +209,7 @@ type Change struct {
 func (s *Service) Apply(ctx context.Context, h *Handle, change Change) (*turn.Snapshot, error) {
 	m, err := s.stage(ctx, h, false, func(q *turn.Queue, before turn.Snapshot) (port.JournalEntry, error) {
 		after, err := apply(q, h.fixed, change)
-		return port.JournalEntry{Binding: h.fixed, Kind: string(change.Action), Before: before, After: after, CallID: change.CallID, Closed: h.closed}, err
+		return port.JournalEntry{Binding: h.fixed, Kind: string(change.Action), Before: before, After: after, CallID: change.CallID, Quiescence: change.Quiescence, Disposal: change.Disposal, Closed: h.closed}, err
 	})
 	if err != nil {
 		return nil, err
@@ -295,7 +303,7 @@ func (s *Service) stage(ctx context.Context, h *Handle, closing bool, derive fun
 		// counter saturation. No late success may publish it or re-open the route.
 		return nil, Unsettled
 	}
-	if err := s.available(ctx); err != nil {
+	if err := s.settlementAvailable(ctx); err != nil {
 		return nil, err
 	}
 	before, err := s.queue.Snapshot(identity(h.fixed))
@@ -306,6 +314,13 @@ func (s *Service) stage(ctx context.Context, h *Handle, closing bool, derive fun
 	entry, err := derive(candidate, before)
 	if err != nil {
 		return nil, err
+	}
+	if s.frozen {
+		switch entry.Kind {
+		case "cancel", "finish", "accept", "delta", "await-owner", "acknowledge", "settle", "settle-prepared", "release", "resolve-computer":
+		default:
+			return nil, Frozen
+		}
 	}
 	if closing {
 		h.closed = true
@@ -321,6 +336,16 @@ func (s *Service) begin(q *turn.Queue, h *Handle, entry port.JournalEntry) *muta
 }
 
 func (s *Service) available(ctx context.Context) error {
+	if err := s.settlementAvailable(ctx); err != nil {
+		return err
+	}
+	if s.frozen {
+		return Frozen
+	}
+	return nil
+}
+
+func (s *Service) settlementAvailable(ctx context.Context) error {
 	if ctx.Err() != nil {
 		return Cancelled
 	}
@@ -328,8 +353,11 @@ func (s *Service) available(ctx context.Context) error {
 		s.unknown = true
 		return Unsettled
 	}
-	if s.pending != nil {
+	if s.pending != nil || s.retiring {
 		return Busy
+	}
+	if s.retired != nil {
+		return Frozen
 	}
 	return nil
 }
@@ -362,6 +390,26 @@ func (s *Service) commit(ctx context.Context, m *mutation, publish bool) error {
 		return Unsettled
 	}
 	if publish {
+		switch m.entry.Kind {
+		case "request-computer":
+			m.handle.unresolvedCallID = m.entry.CallID
+		case "resolve-computer":
+			m.handle.unresolvedCallID = ""
+		case "acknowledge":
+			if m.handle.ackRevision == 0 {
+				m.handle.ackRevision = write.Revision
+			}
+		case "settle":
+			if m.handle.settledRevision == 0 {
+				m.handle.quiescence, m.handle.settledRevision = m.entry.Quiescence, write.Revision
+			}
+		case "settle-prepared":
+			if m.handle.settledRevision == 0 {
+				m.handle.disposal, m.handle.settledRevision = m.entry.Disposal, write.Revision
+			}
+		case "release":
+			m.handle.releasedRevision = write.Revision
+		}
 		if s.handles[m.handle.fixed.OperationID] == nil {
 			s.handles[m.handle.fixed.OperationID] = m.handle
 		}

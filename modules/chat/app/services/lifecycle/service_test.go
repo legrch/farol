@@ -36,7 +36,7 @@ func (j *journalFixture) OpenFresh(_ context.Context, s port.JournalScope) (*por
 		return nil, errors.New("fixture already owned")
 	}
 	j.opened, j.scope = true, s
-	head := &port.JournalHead{Scope: s}
+	head := &port.JournalHead{Scope: s, Root: port.JournalRoot{Device: 11, Inode: 23, OwnerUID: 501}}
 	switch j.openFault {
 	case "error":
 		return nil, errors.New("private fresh journal failure")
