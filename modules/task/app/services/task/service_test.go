@@ -10,16 +10,18 @@ import (
 
 	"github.com/legrch/farol/modules/task/app/port"
 	"github.com/legrch/farol/modules/task/domain"
+	providerclient "github.com/legrch/farol/modules/task/infra/clients/provider"
+	"github.com/legrch/farol/modules/task/infra/intent"
 )
 
 var ctx = context.Background()
 
 type fakeJournal struct {
-	mu                                 sync.Mutex
-	tasks                              map[string]port.Snapshot
-	ops                                map[string]port.Operation
-	lineage                            map[string]task.Reference
-	failAdmit, failFinish, failObserve bool
+	mu                                               sync.Mutex
+	tasks                                            map[string]port.Snapshot
+	ops                                              map[string]port.Operation
+	lineage                                          map[string]task.Reference
+	failAdmit, failFinish, failObserve, failProgress bool
 }
 
 func journal() *fakeJournal {
@@ -80,6 +82,9 @@ func (j *fakeJournal) Progress(_ context.Context, id string, ref task.Reference)
 	j.lineage[id] = ref
 	op.Lineage = ref
 	j.ops[id] = op
+	if j.failProgress {
+		return errors.New("lost progress acknowledgement")
+	}
 	return nil
 }
 func (j *fakeJournal) Finish(_ context.Context, id string, r task.Receipt, next task.Task) error {
@@ -155,6 +160,7 @@ type fakeProvider struct {
 	observation         port.Observation
 	progress            []task.Reference
 	ignoreProgressError bool
+	dispatch            func(func(task.Reference) error)
 }
 
 func (p *fakeProvider) Supports(context.Context, task.Binding) (task.Capabilities, error) {
@@ -162,6 +168,9 @@ func (p *fakeProvider) Supports(context.Context, task.Binding) (task.Capabilitie
 }
 func (p *fakeProvider) Dispatch(_ context.Context, _ port.Dispatch, progress func(task.Reference) error) (task.Receipt, error) {
 	p.calls++
+	if p.dispatch != nil {
+		p.dispatch(progress)
+	}
 	for _, r := range p.progress {
 		if err := progress(r); err != nil && !p.ignoreProgressError {
 			return task.Receipt{}, err
@@ -192,7 +201,7 @@ func setup(p task.Provider) (*Service, *fakeJournal, *fakeAuthority, *fakeProvid
 	j := journal()
 	a := &fakeAuthority{binding: binding(p)}
 	d := &fakeDelivery{receipt: task.Receipt{State: task.Known, Reference: ref}}
-	return New(j, a, map[task.Provider]port.Provider{p: provider}, d), j, a, provider, d
+	return newService(j, a, map[task.Provider]port.Provider{p: provider}, d), j, a, provider, d
 }
 func reference(p task.Provider, turn string) task.Reference {
 	if p == task.Codex {
@@ -257,7 +266,7 @@ func TestLostAcknowledgementsNeverDispatchAgain(t *testing.T) {
 			}
 			_, _ = s.Create(ctx, request(task.Codex))
 			calls := f.calls
-			reconnect := New(j, a, map[task.Provider]port.Provider{task.Codex: f}, nil)
+			reconnect := newService(j, a, map[task.Provider]port.Provider{task.Codex: f}, nil)
 			r, err := reconnect.Create(ctx, request(task.Codex))
 			if err != nil {
 				t.Fatal(err)
@@ -430,7 +439,7 @@ func TestTerminalResultPersistsAcrossServiceReconnect(t *testing.T) {
 	s, j, a, f, _ := setup(task.Claude)
 	create(t, s, task.Claude)
 	complete(t, s)
-	reconnect := New(j, a, nil, nil)
+	reconnect := newService(j, a, nil, nil)
 	r, err := reconnect.Result(ctx, ResultRequest{"task-1"})
 	if err != nil || !r.Retained || f.reads != 1 {
 		t.Fatal(r, err, f.reads)
@@ -457,7 +466,7 @@ func TestDeliveryIsSeparateFromCompletionAndLostAckCannotResend(t *testing.T) {
 	if err != nil || r.Receipt.State != task.Uncertain {
 		t.Fatal(r, err)
 	}
-	reconnect := New(j, a, map[task.Provider]port.Provider{task.Codex: f}, d)
+	reconnect := newService(j, a, map[task.Provider]port.Provider{task.Codex: f}, d)
 	r, err = reconnect.Deliver(ctx, DeliverRequest{"delivery", "task-1"})
 	if err != nil || r.Receipt.State != task.Uncertain || d.calls != 1 {
 		t.Fatal(r, err, d.calls)
@@ -612,7 +621,7 @@ func TestReconnectQueriesOperationWithoutSubmittingMutation(t *testing.T) {
 			}
 			_, _ = s.Create(ctx, request(task.Codex))
 			calls := f.calls
-			reconnect := New(j, a, nil, nil)
+			reconnect := newService(j, a, nil, nil)
 			r, err := reconnect.Operation(ctx, OperationRequest{"create-1"})
 			if err != nil || r.Action != task.Create || f.calls != calls {
 				t.Fatal(r, err, f.calls)
@@ -677,5 +686,82 @@ func TestRejectionAfterLineageCannotReleaseFence(t *testing.T) {
 	_, _ = s.Create(ctx, request(task.Codex))
 	if f.calls != 1 {
 		t.Fatal("replayed uncertain effect")
+	}
+}
+
+func newService(j port.Journal, a port.Authority, providers map[task.Provider]port.Provider, d port.Delivery) *Service {
+	s, err := New(j, a, providers, d, intent.Fingerprint, providerclient.NewProgress)
+	if err != nil {
+		panic(err)
+	}
+	return s
+}
+
+func TestConcurrentProviderCallbacksUseOwningInfraGate(t *testing.T) {
+	s, j, _, f, _ := setup(task.Codex)
+	f.dispatch = func(progress func(task.Reference) error) {
+		var jobs sync.WaitGroup
+		for range 32 {
+			jobs.Go(func() {
+				if err := progress(reference(task.Codex, "turn-1")); err != nil {
+					t.Errorf("progress: %v", err)
+				}
+			})
+		}
+		jobs.Wait()
+	}
+	create(t, s, task.Codex)
+	op, _ := j.Lookup(ctx, "create-1")
+	if !op.Settled || op.Lineage != reference(task.Codex, "turn-1") {
+		t.Fatalf("lineage: %+v", op)
+	}
+}
+
+func TestProgressPublicationLossCannotBeSettledByProviderReceipt(t *testing.T) {
+	s, j, _, f, _ := setup(task.Codex)
+	j.failProgress = true
+	f.progress = []task.Reference{reference(task.Codex, "turn-1")}
+	f.ignoreProgressError = true
+	out, err := s.Create(ctx, request(task.Codex))
+	if err != nil || out.Receipt.State != task.Uncertain {
+		t.Fatalf("create: %+v %v", out, err)
+	}
+	op, _ := j.Lookup(ctx, "create-1")
+	snapshot, _ := j.Read(ctx, "task-1")
+	if op.Settled || op.Lineage != reference(task.Codex, "turn-1") || snapshot.Pending != "create-1" {
+		t.Fatalf("lost progress fence: %+v %+v", op, snapshot)
+	}
+	replay, err := s.Create(ctx, request(task.Codex))
+	if err != nil || replay.Receipt.State != task.Uncertain || f.calls != 1 {
+		t.Fatalf("replay: %+v %v calls=%d", replay, err, f.calls)
+	}
+}
+
+func TestCompletedDispatchRejectsLateProgress(t *testing.T) {
+	s, j, _, f, _ := setup(task.Codex)
+	var late func(task.Reference) error
+	f.dispatch = func(progress func(task.Reference) error) { late = progress }
+	create(t, s, task.Codex)
+	if err := late(task.Reference{ThreadID: "foreign"}); !errors.Is(err, task.ErrUnknown) {
+		t.Fatalf("late callback: %v", err)
+	}
+	op, _ := j.Lookup(ctx, "create-1")
+	if !op.Settled || op.Lineage != (task.Reference{}) {
+		t.Fatalf("late progress mutated journal: %+v", op)
+	}
+}
+
+func TestConstructorRequiresProgressAndFingerprintOwners(t *testing.T) {
+	_, j, a, _, _ := setup(task.Codex)
+	for _, deps := range []struct {
+		hash     port.Fingerprint
+		progress port.ProgressFactory
+	}{
+		{nil, providerclient.NewProgress}, {intent.Fingerprint, nil},
+	} {
+		s, err := New(j, a, nil, nil, deps.hash, deps.progress)
+		if s != nil || !errors.Is(err, task.ErrUnavailable) {
+			t.Fatalf("constructor: %+v %v", s, err)
+		}
 	}
 }

@@ -1,13 +1,17 @@
 # Persistent coding tasks
 
-This is a pre-K0 application-policy slice. It is not wired into the shipping
+This is a root-compatible application-policy foundation based on accepted
+K0/K1 `acb131d9e7d483296d4edac262cf881cddfb91bb`. It is not wired into the shipping
 backend or MCP catalogue. No production filesystem journal, native provider
 transport, authority issuer or parent messenger is implemented by this slice.
 
 `domain` owns coding-task identity and lifecycle. `app/services/task` owns
 resolve, create, observation/result retention, supported control and parent
-delivery. Consumer-owned ports are in `app/port`. Chat model turns and browser
-slots remain outside this module. No nested Go module or private transport is
+delivery. Consumer-owned ports are in `app/port`. `infra/clients/provider` owns one
+serialization gate per dispatch; `infra/intent` supplies the unchanged SHA-256
+intention fingerprint. Trusted composition must inject both. These adapters
+perform no provider calls and own no cross-operation singleton state. Chat
+model turns and browser slots remain outside this module. No nested Go module or private transport is
 introduced.
 
 ## Identity and effects
@@ -44,6 +48,46 @@ again before delivery; an arbitrary caller-selected chat ID grants no access. A 
 parent acknowledgement keeps uncertainty without resending. A successful or
 refused parent delivery cannot be repeated under a different operation ID for
 the same dispatch.
+
+## Selected current-task admission
+
+`contracts/admission` publishes a narrow synchronous inspection surface for an
+already admitted coding task. It delegates through `app/capabilities/admission`
+to the selected existing lifecycle owner. There is no Task grant engine,
+positive admission cache, native execution route or production owner in this
+checkpoint. The owner port is an explicit integration prerequisite.
+
+Trusted composition selects the owner and exact immutable owner/session/task/
+epoch/participant/turn binding before native execution. `SessionID` here is the
+Farol authority session; Codex thread/turn and Claude session/invocation lineage
+are distinct facts. Caller request IDs, backend generation and call IDs provide
+correlation only. New turns need a fresh trusted selection after the existing
+owner settles its lifecycle transition; a request cannot remint admission.
+
+The Computer consumer must adapt this published DTO from `infra/peer`; Task
+imports no Computer internals. Ordinary Chat turns require the Chat owner's
+contract and route selection, not this delegated coding-task contract. Computer
+must never select an ambient latest task or use provider progress as permission.
+The callback API is an internal owner inspection, not another wire schema.
+
+Lock order is Computer's qualified `AccessRepository.WithSnapshot`, then this
+owner's `WithCurrent`. WithCurrent entry and callback perform no IO, journal or
+provider reads, polling, native measurements, mutation or reentrancy. Task-held
+paths cannot acquire Computer. Completion/revoke invalidates admission under the
+existing owner gate and releases it before a separate Computer update. An
+unsettled durable transition must fence positive admission before possible
+effects and throughout restart reconciliation; memory fixtures do not prove that
+production obligation. Missing/revoked (`nil`) and unavailable (error) differ.
+The contract copies values and sanitizes owner errors; consumer callback refusals
+are preserved. No durable Journal adapter or boot registration is added here.
+
+Provider progress uses a separate gate where lineage persistence is expected.
+Record callbacks are serialized, their first failure is sticky, and completion
+joins the gate and seals it before app policy reads lineage. Late callbacks cannot
+write lineage. Providers still must join every callback before Dispatch returns;
+the gate is not evidence that a provider/process has terminated. A persistence
+acknowledgement loss or a refused receipt after lineage keeps the durable unknown
+fence, even when a provider ignores its callback error.
 
 ## Existing source and catalogue inventory
 
@@ -93,23 +137,36 @@ and [CLI reference](https://code.claude.com/docs/en/cli-reference).
 
 ## Verification and integration
 
-Before K0, run `sh modules/task/verify.sh`. It copies only this module into a
-fresh disposable compile fixture with the recommended module path and runs
-`go test -race` and `go vet` offline. It creates no repository module/protocol.
-After K0 accepts the actual root module/toolchain, use the root Go suite and
-retire this temporary scaffold. The existing nested native Go suite remains
-separately required during migration.
+The pre-K0 disposable module scaffold is retired. The existing
+`sh modules/task/verify.sh` entrypoint now verifies Task packages against the
+accepted root module without copying source or creating another module. Keeping
+the tracked entrypoint also lets the current precommit source-identity gate
+inspect the still-uncommitted retirement. Root checks are:
+
+```sh
+go test -race ./modules/task/...
+go test -race ./...
+go vet ./...
+node tooling/check-go-architecture.mjs
+```
+
+`task test:core` and the full CI lane remain integration gates. Run the nested
+`resources/native/go` suite separately if that transitional module exists in the
+accepted integration tree; it is absent at this checkpoint's base. Full CI/native
+GUI/package runs require the canonical Lead slot. Targeted Go checks do not
+qualify provider CLI/process behavior or replace full CI.
 
 | Evidence                              | Cases / limit                                                                                                                                                                                            |
 | ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Pure domain                           | Provider distinction, exact lineage extension, terminal/approval-blocked/unknown control policy                                                                                                          |
 | Fake provider + atomic memory journal | Bound create/replay, settings drift, concurrent claim, admission/provider/finish ACK loss, exact follow-up, unsupported control, cancellation requested vs terminal, revocation, result persistence loss |
+| Progress infra + admission contract   | Concurrent callback serialization, sticky publication failure, completion sealing, exact selected binding, absent vs unavailable, owner-gated revocation; no durable/native admission proof              |
 | Parent delivery                       | Completion alone does not send; exact parent, lost ACK, reconnect, different-key duplicate refusal                                                                                                       |
 | Real journal/native provider          | Not run; memory fixtures do not prove fsync, private file constraints, process cleanup, native session persistence or host capabilities                                                                  |
 | Packaged/installed workflow           | Not run; no catalogue restoration or live acceptance is claimed                                                                                                                                          |
 
-Required K0/Lead seams: accepted root module and per-module constructor shape;
-Computer authority/recheck and process ownership contracts; one durable task
+Remaining Lead seams: concrete admitted Task lifecycle owner and the Computer
+peer/route composition; Computer authority/recheck and process ownership contracts; one durable task
 journal adapter with typed partial/corrupt state and result retention; supported
 Codex connection to the selected existing server; exact persistent Claude
 process adapter; Task-only generated/MCP DTO mapping and production registration;
@@ -120,3 +177,14 @@ Final acceptance is one bounded Codex task and one bounded Claude task, each
 with a real Farol follow-up, plus independent parent delivery and lost-ACK
 reconnect checks. Those are pending an integrated accepted backend and its
 production owner; fake PASS cannot replace them.
+
+### Review coverage
+
+The two preparation commits are carried without other historical release work:
+`53a5c1b` -> `e383837`, `e0addf2` -> `6b700b4`. The original P2 correction retains
+uncertainty after recorded lineage. Its prior R3 delta review returned
+`INSUFFICIENT_EVIDENCE`; the original finding was assessed resolved, but durable
+Journal/downstream coverage remained insufficient. This checkpoint changes
+constructor/serialization and publishes a new contract; that old result does not
+approve these bytes. New independent provider/Critic runs are fenced pending
+the Lead's accepted review/resource decision. Self-review is not panel acceptance.

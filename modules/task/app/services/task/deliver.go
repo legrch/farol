@@ -62,7 +62,7 @@ func (s *Service) Deliver(ctx context.Context, req DeliverRequest) (*DeliverResp
 		return nil, err
 	}
 	intent := task.Intent{OperationID: req.OperationID, TaskID: req.TaskID, Action: task.Deliver, Binding: current.Binding, Parent: current.Parent, Expected: current.Reference}
-	intent.Digest = digest(intent, current.Result)
+	intent.Digest = s.digest(intent, current.Result)
 	admitted, err := s.journal.Admit(ctx, intent, before.Revision, current)
 	if err != nil {
 		return nil, task.ErrUnknown

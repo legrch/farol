@@ -2,29 +2,31 @@ package task
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"sync"
 
 	"github.com/legrch/farol/modules/task/app/port"
 	"github.com/legrch/farol/modules/task/domain"
 )
 
 type Service struct {
-	journal   port.Journal
-	authority port.Authority
-	providers map[task.Provider]port.Provider
-	delivery  port.Delivery
+	journal     port.Journal
+	authority   port.Authority
+	providers   map[task.Provider]port.Provider
+	delivery    port.Delivery
+	fingerprint port.Fingerprint
+	progress    port.ProgressFactory
 }
 
-func New(j port.Journal, a port.Authority, providers map[task.Provider]port.Provider, d port.Delivery) *Service {
+func New(j port.Journal, a port.Authority, providers map[task.Provider]port.Provider, d port.Delivery, fingerprint port.Fingerprint, progress port.ProgressFactory) (*Service, error) {
+	if j == nil || a == nil || fingerprint == nil || progress == nil {
+		return nil, task.ErrUnavailable
+	}
 	copy := make(map[task.Provider]port.Provider, len(providers))
 	for k, v := range providers {
 		copy[k] = v
 	}
-	return &Service{j, a, copy, d}
+	return &Service{j, a, copy, d, fingerprint, progress}, nil
 }
 
 type ResolveRequest struct{ Selection port.Selection }
@@ -67,14 +69,13 @@ type MutationResponse struct {
 func response(op task.Intent, receipt task.Receipt) *MutationResponse {
 	return &MutationResponse{op.OperationID, op.TaskID, receipt}
 }
-func digest(intent task.Intent, message string) string {
+func (s *Service) digest(intent task.Intent, message string) string {
 	// Fixed structs, no maps: deterministic and content-free persistent intention.
 	bytes, _ := json.Marshal(struct {
 		Intent  task.Intent
 		Message string
 	}{intent, message})
-	sum := sha256.Sum256(bytes)
-	return hex.EncodeToString(sum[:])
+	return s.fingerprint(bytes)
 }
 func validRequest(req MutationRequest) bool {
 	return task.ID(req.OperationID) && task.ID(req.TaskID) && ((req.Action == task.Cancel && req.Message == "") || (req.Action != task.Cancel && task.Text(req.Message, 32768)))
@@ -90,7 +91,7 @@ func (s *Service) replay(ctx context.Context, req MutationRequest, binding *task
 	intent := op.Intent
 	original := intent.Digest
 	intent.Digest = ""
-	if intent.TaskID != req.TaskID || intent.Action != req.Action || digest(intent, req.Message) != original || (binding != nil && intent.Binding != *binding) || (parent != nil && intent.Parent != *parent) {
+	if intent.TaskID != req.TaskID || intent.Action != req.Action || s.digest(intent, req.Message) != original || (binding != nil && intent.Binding != *binding) || (parent != nil && intent.Parent != *parent) {
 		return nil, true, task.ErrConflict
 	}
 	if err := s.recheck(ctx, op.Intent.Binding); err != nil {
@@ -106,7 +107,7 @@ func (s *Service) execute(ctx context.Context, req MutationRequest, intent task.
 	if err := s.recheck(ctx, intent.Binding); err != nil {
 		return nil, err
 	}
-	intent.Digest = digest(intent, req.Message)
+	intent.Digest = s.digest(intent, req.Message)
 	admitted, err := s.journal.Admit(ctx, intent, before.Revision, before.Task)
 	if err != nil {
 		return nil, task.ErrUnknown
@@ -138,35 +139,37 @@ func (s *Service) execute(ctx context.Context, req MutationRequest, intent task.
 		return response(intent, receipt), nil
 	}
 	provider := s.providers[intent.Binding.Provider]
-	var progressMu sync.Mutex
 	var lineage task.Reference
-	var progressErr error
-	receipt, err := provider.Dispatch(ctx, port.Dispatch{Intent: intent, Message: req.Message}, func(ref task.Reference) error {
-		progressMu.Lock()
-		defer progressMu.Unlock()
-		if progressErr != nil {
-			return progressErr
-		}
+	progress := s.progress(func(ctx context.Context, ref task.Reference) error {
 		if !lineage.Extend(ref, intent.Binding.Provider) ||
 			(intent.Binding.Provider == task.Claude && (req.Action == task.Create || req.Action == task.Resume) && ref.InvocationID != "" && ref.InvocationID != intent.OperationID) ||
 			(req.Action != task.Create && !intent.Expected.SameSession(ref, intent.Binding.Provider)) ||
 			((req.Action == task.Message || req.Action == task.Cancel) && ref != intent.Expected) ||
 			((req.Action == task.Continue || req.Action == task.Resume) && ref == intent.Expected) {
-			progressErr = task.ErrIdentity
-			return progressErr
+			return task.ErrIdentity
 		}
-		progressErr = s.journal.Progress(ctx, intent.OperationID, ref)
-		if progressErr == nil {
-			lineage = ref
+		if err := s.journal.Progress(ctx, intent.OperationID, ref); err != nil {
+			return err
 		}
-		return progressErr
+		lineage = ref
+		return nil
 	})
-	progressMu.Lock()
-	invalidProgress := progressErr != nil ||
-		(receipt.State == task.Known && !lineage.Extend(receipt.Reference, intent.Binding.Provider)) ||
-		(receipt.State == task.Rejected && lineage != (task.Reference{}))
-	progressMu.Unlock()
-	if err != nil || receipt.State == task.Uncertain || invalidProgress {
+	if progress == nil {
+		return unknown, nil
+	}
+	receipt, err := provider.Dispatch(ctx, port.Dispatch{Intent: intent, Message: req.Message}, func(ref task.Reference) error {
+		return progress.Record(ctx, ref)
+	})
+	// Join in-flight callbacks and seal the operation before reading lineage.
+	// A callback failure remains binding even if the provider ignores it.
+	progressErr := progress.Close(func() error {
+		if (receipt.State == task.Known && !lineage.Extend(receipt.Reference, intent.Binding.Provider)) ||
+			(receipt.State == task.Rejected && lineage != (task.Reference{})) {
+			return task.ErrIdentity
+		}
+		return nil
+	})
+	if err != nil || receipt.State == task.Uncertain || progressErr != nil {
 		return unknown, nil
 	}
 	next, err := apply(before.Task, intent, receipt)
