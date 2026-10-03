@@ -1,8 +1,12 @@
-# Chat preparation
+# Chat source foundation
 
-This module is a pre-K0 preparation slice. It is not connected to the production
-model route, Electron host, React facade, HTTP server or durable journal. The active
-TypeScript implementation remains authoritative until its vertical cutover.
+The pre-K0 Turn/stream/browser-port preparation now builds under Core's accepted
+root Go module. The first post-K0 admission seam publishes pure current-owner
+policy for ordinary Chat; see [ADMISSION.md](ADMISSION.md) for its implemented
+contract, required live-owner semantics and persistence proposal. This module is
+not connected to the production model route, Electron host, React facade, HTTP
+server or durable journal. The active TypeScript implementation remains
+authoritative until its vertical cutover.
 
 ## Turn and five-slot scheduling
 
@@ -107,7 +111,8 @@ The tests subscribe successfully before simulating blocked live publish, then
 exercise drain, timeout, disconnect, retention, gap and stale incarnation paths.
 These are pure writer-outcome fixtures, not socket/drain or live-provider evidence.
 
-The existing Responses model server is a separate adapter still awaiting K0:
+The existing Responses model server is a separate adapter awaiting its owned
+post-K0 cutover:
 message/commentary/answer and reasoning status items share FIFO with tool calls;
 a tool-call response terminates a round, not its conversation. Continuation must
 validate the complete issued call and canonical previous outputs. Semantic-source
@@ -138,18 +143,23 @@ legacy domain primitive's correlation fence without changing its TypeScript call
 The synthetic lifecycle fixture declares provider outcomes; it performs no browser,
 HTTP, native host or filesystem durability observation. It is not live acceptance.
 
-## Checks before the root Go checkpoint
+## Source checks under the accepted root Go module
 
-Use the installed Go toolchain without inventing a second module:
+Use Core's root module and the installed toolchain; do not create a nested module:
 
 ```sh
-GO111MODULE=off go test -race -cover ./modules/chat/...
-GO111MODULE=off go vet ./modules/chat/...
+GOTOOLCHAIN=local GOPROXY=off go test -race -cover ./modules/chat/...
+GOTOOLCHAIN=local GOPROXY=off go vet ./modules/chat/...
+node tooling/check-go-architecture.mjs
 ```
 
-Go domain packages use only pure standard-library dependencies and have no IO,
-clock, Electron, transport or other module imports. Once Core's root module is
-integrated, run these packages through that module and its dependency checker.
-Continue testing the existing nested native Go module during the transition.
-The current `task ci:fast` also remains required; it does not discover Go tests
-or prove that Go is part of the shipped artifact.
+Chat production domain/app/contracts use approved pure standard-library and
+module-owned dependencies only. Injected tests label their synthetic owner,
+persistence and serialization evidence. They prove no installed or provider route.
+
+The required broader gate is one canonical `task ci:fast` run reserved through
+Lead. On this accepted base it includes `task test:core` (root Go race/vet,
+generated bridge and import checks, transitional nested Go checks, protocol and
+strict desktop bridge checks). Targeted tests or prior pre-K0 gate evidence do
+not replace that exact new-range gate or its independent review. A source build
+still does not prove that Go owns production admission or the shipped model route.
