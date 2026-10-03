@@ -30,6 +30,14 @@ import {
   publicContentVisible,
 } from "./chatgpt-public-turn";
 import {
+  SavedChatFollowUpActionSchema,
+  SavedChatPhysicalBindingSchema,
+  SavedChatFollowUpRequestSchema,
+  SavedChatFollowUpResultSchema,
+  savedChatFollowUpScript,
+  type SavedChatPhysicalBinding,
+  type SavedChatFollowUpResult,
+  type SavedChatFollowUpCode,
   savedChatInsertScript,
   savedChatProofScript,
   savedChatReadinessScript,
@@ -3687,6 +3695,190 @@ export class ChatGptRoute {
     this.options.onConversationChanged?.(null);
   }
 
+  // Physical generations only. No queue, turn state, journal or retry decision.
+  private savedChatPhysicalView: ChatGptRouteSurface | null = null;
+  private savedChatViewGeneration = 0;
+  private savedChatMutationInFlight = false;
+  private savedChatSubmitFuse: Readonly<{
+    operationId: string;
+    previousUserId: string;
+  }> | null = null;
+
+  savedChatFollowUpBinding(): SavedChatPhysicalBinding | null {
+    const candidate = this.routeWindow;
+    if (
+      !candidate ||
+      candidate.isDestroyed() ||
+      this.load !== "loaded" ||
+      !this.routeSession ||
+      candidate.webContents.session !== this.routeSession ||
+      !Number.isSafeInteger(candidate.webContents.id) ||
+      candidate.webContents.id <= 0
+    )
+      return null;
+    const conversationUrl = this.currentSavedChatUrl();
+    if (!conversationUrl || candidate.webContents.getURL() !== conversationUrl)
+      return null;
+    if (this.savedChatPhysicalView !== candidate) {
+      this.savedChatPhysicalView = candidate;
+      this.savedChatViewGeneration += 1;
+    }
+    const parsed = SavedChatPhysicalBindingSchema.safeParse({
+      conversationId: new URL(conversationUrl).pathname.split("/").at(-1),
+      conversationUrl,
+      viewId: String(candidate.webContents.id),
+      viewGeneration: this.savedChatViewGeneration,
+      documentGeneration: this.routeDocumentGeneration,
+      partition: this.options.partition ?? CHATGPT_PARTITION,
+    });
+    return parsed.success ? parsed.data : null;
+  }
+
+  /**
+   * Internal adapter seam, never a wire grant. The trusted Chat caller must
+   * recheck its original operation, Go lease/profile/partition and authority.
+   * Literal selection values and physical DTOs supply evidence only.
+   */
+  async savedChatFollowUp(
+    candidate: unknown,
+    action: "prepare" | "submit" | "observe",
+    stillBound: (binding: SavedChatPhysicalBinding) => boolean,
+  ): Promise<SavedChatFollowUpResult> {
+    const parsed = SavedChatFollowUpRequestSchema.safeParse(candidate);
+    const refused = (code: SavedChatFollowUpCode): SavedChatFollowUpResult => ({
+      state: action === "observe" ? "awaiting-owner" : "not-sent",
+      code,
+    });
+    if (
+      !parsed.success ||
+      !SavedChatFollowUpActionSchema.safeParse(action).success
+    )
+      return refused("SAVED_CHAT_INVALID");
+    if (this.options.publicOutputProfile !== "message-anchors-v1")
+      return {
+        state: "awaiting-owner",
+        code: "SAVED_CHAT_BINDING_UNQUALIFIED",
+      };
+    const input = parsed.data;
+    const binding = this.savedChatFollowUpBinding();
+    const authorized = () => {
+      try {
+        return (
+          typeof stillBound === "function" &&
+          stillBound(Object.freeze({ ...input.binding })) === true
+        );
+      } catch {
+        return false;
+      }
+    };
+    if (!binding || JSON.stringify(binding) !== JSON.stringify(input.binding))
+      return refused("SAVED_CHAT_BINDING_STALE");
+    if (!authorized())
+      return {
+        state: "awaiting-owner",
+        code: "SAVED_CHAT_BINDING_UNQUALIFIED",
+      };
+    if (
+      this.options.requiredAppName &&
+      this.options.requiredAppName !== input.selection.connector.label
+    )
+      return refused("SAVED_CHAT_SELECTION_MISMATCH");
+    if (this.savedChatMutationInFlight && action !== "observe")
+      return refused("SAVED_CHAT_OPERATION_UNSETTLED");
+    if (action !== "observe" && input.operation.state !== "not-sent")
+      return refused("SAVED_CHAT_OPERATION_UNSETTLED");
+    if (
+      action === "submit" &&
+      this.savedChatSubmitFuse !== null &&
+      (this.savedChatSubmitFuse.operationId === input.operation.id ||
+        this.savedChatSubmitFuse.previousUserId === input.previous.userId)
+    )
+      return refused("SAVED_CHAT_OPERATION_UNSETTLED");
+    const surface = this.routeWindow!;
+    if (action !== "observe") this.savedChatMutationInFlight = true;
+    const lost = () =>
+      this.routeWindow !== surface ||
+      JSON.stringify(this.savedChatFollowUpBinding()) !==
+        JSON.stringify(binding) ||
+      !authorized();
+    // One in-memory physical dispatch fuse survives transport loss. The Go caller
+    // still owns durable settlement; a new route/process cannot recover it here.
+    if (action === "submit")
+      this.savedChatSubmitFuse = {
+        operationId: input.operation.id,
+        previousUserId: input.previous.userId,
+      };
+    try {
+      const result: unknown = await surface.webContents.executeJavaScript(
+        savedChatFollowUpScript(input, action),
+        true,
+      );
+      if (lost())
+        return action === "submit"
+          ? { state: "unknown", code: "SAVED_CHAT_SEND_UNKNOWN" }
+          : refused("SAVED_CHAT_BINDING_STALE");
+      const response = SavedChatFollowUpResultSchema.safeParse(result);
+      if (!response.success)
+        return action === "submit"
+          ? { state: "unknown", code: "SAVED_CHAT_SEND_UNKNOWN" }
+          : { state: "awaiting-owner", code: "SAVED_CHAT_SOURCE_UNSUPPORTED" };
+      const responseState = response.data.state;
+      const expectedState =
+        action === "prepare"
+          ? "prepared"
+          : action === "submit"
+            ? "submitted"
+            : "observed";
+      if (
+        ["prepared", "submitted", "observed"].includes(responseState) &&
+        responseState !== expectedState
+      )
+        return action === "submit"
+          ? { state: "unknown", code: "SAVED_CHAT_SEND_UNKNOWN" }
+          : { state: "awaiting-owner", code: "SAVED_CHAT_SOURCE_UNSUPPORTED" };
+      if (
+        (response.data.state === "prepared" ||
+          response.data.state === "submitted") &&
+        JSON.stringify(response.data.selection) !==
+          JSON.stringify(input.selection)
+      )
+        return action === "submit"
+          ? { state: "unknown", code: "SAVED_CHAT_SEND_UNKNOWN" }
+          : { state: "awaiting-owner", code: "SAVED_CHAT_SOURCE_UNSUPPORTED" };
+      if (
+        response.data.state === "submitted" &&
+        response.data.evidenceId !== input.evidenceId
+      )
+        return { state: "unknown", code: "SAVED_CHAT_SEND_UNKNOWN" };
+      if (
+        response.data.state === "observed" &&
+        (response.data.frame.userId !== response.data.userId ||
+          response.data.userId === input.previous.userId ||
+          response.data.assistantId === input.previous.assistantId ||
+          response.data.frame.messages.some(
+            (message) => message.id === input.previous.assistantId,
+          ) ||
+          (input.correlation !== null &&
+            (input.correlation.userId !== response.data.userId ||
+              (input.correlation.assistantId !== null &&
+                input.correlation.assistantId !== response.data.assistantId))))
+      )
+        return {
+          state: "awaiting-owner",
+          code: "SAVED_CHAT_CORRELATION_UNAVAILABLE",
+        };
+      if (action === "submit" && response.data.state === "not-sent")
+        this.savedChatSubmitFuse = null;
+      return response.data;
+    } catch {
+      return action === "submit"
+        ? { state: "unknown", code: "SAVED_CHAT_SEND_UNKNOWN" }
+        : { state: "awaiting-owner", code: "SAVED_CHAT_SOURCE_UNSUPPORTED" };
+    } finally {
+      if (action !== "observe") this.savedChatMutationInFlight = false;
+    }
+  }
+
   /** Restricted saved-chat probes on this route's own isolated page only. */
   async savedChatReady(homeUrl: string): Promise<unknown> {
     return this.savedChatScript(savedChatReadinessScript(homeUrl), homeUrl);
@@ -3763,6 +3955,7 @@ export class ChatGptRoute {
     allowNavigation = false,
   ): Promise<unknown> {
     const candidate = this.routeWindow;
+    const documentGeneration = this.routeDocumentGeneration;
     if (
       !candidate ||
       candidate.isDestroyed() ||
@@ -3777,7 +3970,12 @@ export class ChatGptRoute {
       );
       if (this.routeWindow !== candidate || candidate.isDestroyed())
         return null;
-      if (!allowNavigation && candidate.webContents.getURL() !== expectedUrl)
+      if (
+        !allowNavigation &&
+        (candidate.webContents.getURL() !== expectedUrl ||
+          this.routeDocumentGeneration !== documentGeneration ||
+          this.load !== "loaded")
+      )
         return null;
       return result;
     } catch {

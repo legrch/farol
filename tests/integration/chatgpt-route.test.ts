@@ -5988,3 +5988,278 @@ describe("connector receipt completion before provider output", () => {
     expect(readConnectorReceipt).not.toHaveBeenCalled();
   });
 });
+
+describe("saved conversation physical binding (mock Electron only)", () => {
+  const conversationUrl =
+    "https://chatgpt.com/c/12345678-1234-4123-8123-123456789abc";
+  function savedRoute(qualified = true) {
+    const candidate = new ChatGptRoute({
+      homeUrl: "https://chatgpt.com/",
+      initialUrl: conversationUrl,
+      e2eOrigin: null,
+      parent: () => null,
+      requiredAppName: "Farol DEV",
+      ...(qualified
+        ? { publicOutputProfile: "message-anchors-v1" as const }
+        : {}),
+    });
+    const session = {};
+    const execute = vi.fn(async (): Promise<unknown> => ({
+      state: "prepared",
+      evidenceId: "fixture-evidence",
+      selection: {
+        model: "Test model",
+        effort: "Light",
+        connector: { id: "plugin_asdk_app_TEST", label: "Farol DEV" },
+      },
+    }));
+    const surface = {
+      isDestroyed: () => false,
+      webContents: {
+        id: 42,
+        session,
+        getURL: () => conversationUrl,
+        executeJavaScript: execute,
+      },
+    };
+    Reflect.set(candidate, "routeWindow", surface);
+    Reflect.set(candidate, "routeSession", session);
+    Reflect.set(candidate, "load", "loaded");
+    Reflect.set(candidate, "routeDocumentGeneration", 7);
+    const binding = candidate.savedChatFollowUpBinding()!;
+    const request = {
+      binding,
+      selection: {
+        model: "Test model",
+        effort: "Light",
+        connector: {
+          id: "plugin_asdk_app_TEST",
+          label: "Farol DEV",
+        },
+      },
+      previous: { userId: "u1", assistantId: "a1" },
+      operation: { id: "op2", state: "not-sent" as const },
+      message: "Next",
+      digest:
+        "1ff57a29d7c42928a559a31e2e4bce3ee6ac34c2fdf30f7f063188b81822f6a7",
+      evidenceId: "fixture-evidence",
+      correlation: null,
+    };
+    return { candidate, surface, execute, request };
+  }
+
+  it("exposes physical evidence, requires a trusted binding callback and qualification before any script", async () => {
+    const { candidate, request, execute } = savedRoute();
+    expect(request.binding).toMatchObject({
+      viewId: "42",
+      viewGeneration: 1,
+      documentGeneration: 7,
+      conversationUrl,
+      partition: "persist:farol-next-chatgpt",
+    });
+    expect(
+      await candidate.savedChatFollowUp(request, "prepare", () => false),
+    ).toMatchObject({ state: "awaiting-owner" });
+    expect(execute).not.toHaveBeenCalled();
+    const unqualified = savedRoute(false);
+    expect(
+      await unqualified.candidate.savedChatFollowUp(
+        unqualified.request,
+        "submit",
+        () => true,
+      ),
+    ).toEqual({
+      state: "awaiting-owner",
+      code: "SAVED_CHAT_BINDING_UNQUALIFIED",
+    });
+    expect(unqualified.execute).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    "viewId",
+    "viewGeneration",
+    "documentGeneration",
+    "conversationId",
+    "partition",
+  ] as const)(
+    "refuses stale %s before touching the composer",
+    async (field) => {
+      const { candidate, request, execute } = savedRoute();
+      const binding = {
+        ...request.binding,
+        [field]: typeof request.binding[field] === "number" ? 99 : "other",
+      };
+      expect(
+        (
+          await candidate.savedChatFollowUp(
+            { ...request, binding },
+            "submit",
+            () => true,
+          )
+        ).state,
+      ).not.toBe("submitted");
+      expect(execute).not.toHaveBeenCalled();
+    },
+  );
+
+  it("refuses a session mismatch and advances physical generation for a replaced view", () => {
+    const { candidate, surface, request } = savedRoute();
+    surface.webContents.session = {};
+    expect(candidate.savedChatFollowUpBinding()).toBeNull();
+    const replacement = {
+      ...surface,
+      webContents: {
+        ...surface.webContents,
+        session: Reflect.get(candidate, "routeSession"),
+        id: 43,
+      },
+    };
+    Reflect.set(candidate, "routeWindow", replacement);
+    expect(candidate.savedChatFollowUpBinding()).toMatchObject({
+      viewId: "43",
+      viewGeneration: request.binding.viewGeneration + 1,
+    });
+  });
+
+  it.each(["document", "view", "lease", "load"])(
+    "keeps a lost %s after possible Send unknown, without replay",
+    async (change) => {
+      const { candidate, surface, request, execute } = savedRoute();
+      let admitted = true;
+      execute.mockImplementation(async () => {
+        if (change === "document")
+          Reflect.set(candidate, "routeDocumentGeneration", 8);
+        if (change === "view")
+          Reflect.set(candidate, "routeWindow", { ...surface });
+        if (change === "lease") admitted = false;
+        if (change === "load") Reflect.set(candidate, "load", "failed");
+        return {
+          state: "submitted",
+          evidenceId: request.evidenceId,
+          selection: request.selection,
+        };
+      });
+      expect(
+        await candidate.savedChatFollowUp(request, "submit", () => admitted),
+      ).toEqual({ state: "unknown", code: "SAVED_CHAT_SEND_UNKNOWN" });
+      expect(execute).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("blocks concurrent mutation and classifies a malformed or lost Send acknowledgement as unknown", async () => {
+    const { candidate, request, execute } = savedRoute();
+    let finish!: (value: unknown) => void;
+    execute.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const pending = candidate.savedChatFollowUp(request, "submit", () => true);
+    expect(
+      await candidate.savedChatFollowUp(request, "submit", () => true),
+    ).toEqual({ state: "not-sent", code: "SAVED_CHAT_OPERATION_UNSETTLED" });
+    expect(execute).toHaveBeenCalledTimes(1);
+    finish({ state: "submitted", selection: { model: "unknown" } });
+    expect(await pending).toEqual({
+      state: "unknown",
+      code: "SAVED_CHAT_SEND_UNKNOWN",
+    });
+  });
+
+  it("rejects stale same-URL legacy saved-chat reads, preserving first Send navigation support", async () => {
+    const { candidate, execute } = savedRoute();
+    execute.mockImplementation(async () => {
+      Reflect.set(candidate, "routeDocumentGeneration", 8);
+      return { verified: true, titleVerified: true };
+    });
+    expect(
+      await candidate.savedChatProof(conversationUrl, "digest", "title", true),
+    ).toBeNull();
+    execute.mockImplementation(async () => ({ clicked: true }));
+    expect(await candidate.savedChatSubmit(conversationUrl, "digest")).toEqual({
+      clicked: true,
+    });
+  });
+  it("rejects original unknown/submitted operations before any page execution", async () => {
+    const { candidate, request, execute } = savedRoute();
+    for (const state of ["unknown", "submitted"] as const) {
+      expect(
+        await candidate.savedChatFollowUp(
+          { ...request, operation: { id: "op2", state } },
+          "submit",
+          () => true,
+        ),
+      ).toEqual({ state: "not-sent", code: "SAVED_CHAT_OPERATION_UNSETTLED" });
+    }
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("never re-executes a submit after a rejected transport, including under a replacement operation", async () => {
+    const { candidate, request, execute } = savedRoute();
+    execute.mockRejectedValue(new Error("Synthetic transport loss"));
+    expect(
+      await candidate.savedChatFollowUp(request, "submit", () => true),
+    ).toEqual({ state: "unknown", code: "SAVED_CHAT_SEND_UNKNOWN" });
+    expect(
+      (await candidate.savedChatFollowUp(request, "submit", () => true)).state,
+    ).not.toBe("submitted");
+    expect(
+      (
+        await candidate.savedChatFollowUp(
+          { ...request, operation: { id: "replacement", state: "not-sent" } },
+          "submit",
+          () => true,
+        )
+      ).state,
+    ).not.toBe("submitted");
+    expect(execute).toHaveBeenCalledTimes(1);
+  });
+
+  it("checks success response selection and observed IDs instead of trusting a typed success envelope", async () => {
+    const { candidate, request, execute } = savedRoute();
+    execute.mockResolvedValue({
+      state: "prepared",
+      evidenceId: "fixture-evidence",
+      selection: { ...request.selection, effort: "Other" },
+    });
+    expect(
+      await candidate.savedChatFollowUp(request, "prepare", () => true),
+    ).toEqual({
+      state: "awaiting-owner",
+      code: "SAVED_CHAT_SOURCE_UNSUPPORTED",
+    });
+    execute.mockResolvedValue({
+      state: "observed",
+      userId: "u2",
+      assistantId: "a2",
+      frame: { userId: "foreign", messages: [], terminal: false },
+    });
+    expect(
+      await candidate.savedChatFollowUp(request, "observe", () => true),
+    ).toEqual({
+      state: "awaiting-owner",
+      code: "SAVED_CHAT_CORRELATION_UNAVAILABLE",
+    });
+  });
+
+  it("clears its physical dispatch fuse only for an exact not-sent response", async () => {
+    const { candidate, request, execute } = savedRoute();
+    execute.mockResolvedValue({
+      state: "not-sent",
+      code: "SAVED_CHAT_SELECTION_UNSUPPORTED",
+    });
+    expect(
+      (await candidate.savedChatFollowUp(request, "submit", () => true)).state,
+    ).toBe("not-sent");
+    execute.mockResolvedValue({
+      state: "submitted",
+      evidenceId: request.evidenceId,
+      selection: request.selection,
+    });
+    expect(
+      (await candidate.savedChatFollowUp(request, "submit", () => true)).state,
+    ).toBe("submitted");
+    expect(execute).toHaveBeenCalledTimes(2);
+  });
+});
