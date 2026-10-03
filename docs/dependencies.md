@@ -7,14 +7,20 @@ npm registry is selected in [.npmrc](../.npmrc). [go.mod](../go.mod) and
 
 ## Current npm dependencies
 
-| Group                 | Packages                                                                                     | Purpose                                                                 |
-| --------------------- | -------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
-| Desktop runtime       | Electron `44.4.2`                                                                            | Main, sandboxed renderer, native views, bundled utility-process runtime |
-| Boundaries            | Zod `4.6.5`, `@modelcontextprotocol/server` `2.0.0`                                          | Runtime validation and Computer MCP serving                             |
-| Socket transport      | `ws` `8.22.0`                                                                                | Selected native-host proxy transport                                    |
-| Build                 | TypeScript `7.0.2`, esbuild `0.28.2`, Prettier `3.9.6`                                       | Strict compilation, bundles, single format gate                         |
-| Testing               | Vitest/coverage-v8 `5.0.0`, fast-check `4.9.0`, Playwright Core `1.63.0`, MCP client `2.0.0` | Policy/property coverage and real built-byte protocol/app fixtures      |
-| Source analysis/types | Babel parser and Node/WebSocket type packages                                                | Architecture checks and supported host types                            |
+| Dependency | Role            | Version |
+| ---------- | --------------- | ------- |
+| Electron   | runtime closure | 44.4.2  |
+
+Electron provides the main process, sandboxed renderer, native views, and bundled
+utility-process runtime. Other direct dependencies are grouped by their purpose:
+
+| Group                 | Packages                                                                                     | Purpose                                                            |
+| --------------------- | -------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| Boundaries            | Zod `4.6.5`, `@modelcontextprotocol/server` `2.0.0`                                          | Runtime validation and Computer MCP serving                        |
+| Socket transport      | `ws` `8.22.0`                                                                                | Selected native-host proxy transport                               |
+| Build                 | TypeScript `7.0.2`, esbuild `0.28.2`, Prettier `3.9.6`                                       | Strict compilation, bundles, single format gate                    |
+| Testing               | Vitest/coverage-v8 `5.0.0`, fast-check `4.9.0`, Playwright Core `1.63.0`, MCP client `2.0.0` | Policy/property coverage and real built-byte protocol/app fixtures |
+| Source analysis/types | Babel parser and Node/WebSocket type packages                                                | Architecture checks and supported host types                       |
 
 The manifest is the authority for omitted type/parser versions; this page describes
 why dependencies exist instead of duplicating the complete lockfile.

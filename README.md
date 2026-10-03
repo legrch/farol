@@ -65,8 +65,9 @@ Stop the processes it started with `Control+C`.
 
 For deterministic checks, also provide Go **1.26.2**, Gitleaks, and the reviewed
 Apple developer tools. Follow the [developer guide](docs/standalone-build.md) for
-setup and `task ci:fast`. A clean packaged candidate uses `task package` followed
-by `task run`; the [candidate guide](docs/owner-preview.md) explains that workflow.
+setup and `task ci:fast`. Build a verified packaged candidate with `task package`,
+then use `task run` to open it from an isolated launch snapshot. The
+[candidate guide](docs/owner-preview.md) explains that workflow.
 
 ## Architecture
 
