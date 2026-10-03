@@ -1,5 +1,5 @@
-// Package mutation publishes an independent in-process request-check contract.
-// This is not the mutable wire Execute endpoint or a positive admission proof.
+// Package mutation publishes independent in-process mutation contracts.
+// Core owns wire parsing; root composition selects the admitted execution lease.
 package mutation
 
 import (
@@ -60,6 +60,22 @@ func cloneHash(v *string) *string {
 	return &copy
 }
 func (c *Contract) Check(ctx context.Context, r CheckRequest) (*CheckResponse, error) {
+	if c == nil || c.service == nil {
+		return nil, &Failure{Code: "COMPUTER_INVALID_REQUEST", Source: "contract", Retry: "never"}
+	}
+	app := toApp(r)
+	out, err := c.service.Check(ctx, app)
+	if err != nil || out == nil {
+		var f *authority.Failure
+		if errors.As(err, &f) && f.Code == "COMPUTER_INVALID_REQUEST" && f.Source == "contract" {
+			return nil, &Failure{Code: f.Code, Source: f.Source, Retry: "never"}
+		}
+		return nil, &Failure{Code: "COMPUTER_INVALID_REQUEST", Source: "contract", Retry: "never"}
+	}
+	return &CheckResponse{OperationID: out.OperationID, OwnerID: out.OwnerID, SessionID: out.SessionID, TaskID: out.TaskID, TaskEpoch: out.TaskEpoch, ParticipantID: out.ParticipantID, TurnID: out.TurnID, Generation: out.Generation, CallID: out.CallID, WorkspaceID: out.WorkspaceID, RelativePath: out.RelativePath, Operation: Summary{Kind: out.Operation.Kind, RelativePath: out.Operation.RelativePath, ExpectedSHA256: cloneHash(out.Operation.ExpectedSHA256)}}, nil
+}
+
+func toApp(r CheckRequest) mutationsvc.CheckRequest {
 	app := mutationsvc.CheckRequest{OperationID: r.OperationID, OwnerID: r.OwnerID, SessionID: r.SessionID, TaskID: r.TaskID, TaskEpoch: r.TaskEpoch, ParticipantID: r.ParticipantID, TurnID: r.TurnID, Generation: r.Generation, CallID: r.CallID, WorkspaceID: r.WorkspaceID}
 	switch v := r.Operation.(type) {
 	case Write:
@@ -71,13 +87,6 @@ func (c *Contract) Check(ctx context.Context, r CheckRequest) (*CheckResponse, e
 		}
 		app.Operation = mutationsvc.Edit{RelativePath: v.RelativePath, Edits: edits, ExpectedSHA256: v.ExpectedSHA256}
 	}
-	out, err := c.service.Check(ctx, app)
-	if err != nil || out == nil {
-		var f *authority.Failure
-		if errors.As(err, &f) && f.Code == "COMPUTER_INVALID_REQUEST" && f.Source == "contract" {
-			return nil, &Failure{Code: f.Code, Source: f.Source, Retry: "never"}
-		}
-		return nil, &Failure{Code: "COMPUTER_INVALID_REQUEST", Source: "contract", Retry: "never"}
-	}
-	return &CheckResponse{OperationID: out.OperationID, OwnerID: out.OwnerID, SessionID: out.SessionID, TaskID: out.TaskID, TaskEpoch: out.TaskEpoch, ParticipantID: out.ParticipantID, TurnID: out.TurnID, Generation: out.Generation, CallID: out.CallID, WorkspaceID: out.WorkspaceID, RelativePath: out.RelativePath, Operation: Summary{Kind: out.Operation.Kind, RelativePath: out.Operation.RelativePath, ExpectedSHA256: cloneHash(out.Operation.ExpectedSHA256)}}, nil
+
+	return app
 }

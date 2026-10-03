@@ -9,7 +9,7 @@ func NativeCode(code string) bool {
 }
 func authorityCode(code string) bool {
 	switch code {
-	case "AUTHORITY_OWNER_MISMATCH", "AUTHORITY_TASK_MISMATCH", "AUTHORITY_COMPUTER_MISMATCH", "AUTHORITY_EXPIRED", "AUTHORITY_INFLATION_DENIED", "AUTHORITY_CAPABILITY_DENIED", "AUTHORITY_PATH_DENIED", "AUTHORITY_NETWORK_DENIED", "AUTHORITY_COMMAND_DENIED", "AUTHORITY_MUTATION_OWNERSHIP_DENIED":
+	case "COMPUTER_AUTHORITY_STORE_UNAVAILABLE", "COMPUTER_PARTICIPANT_NOT_FOUND", "COMPUTER_APPROVAL_NOT_FOUND", "AUTHORITY_OWNER_MISMATCH", "AUTHORITY_TASK_MISMATCH", "AUTHORITY_COMPUTER_MISMATCH", "AUTHORITY_EXPIRED", "AUTHORITY_INFLATION_DENIED", "AUTHORITY_CAPABILITY_DENIED", "AUTHORITY_PATH_DENIED", "AUTHORITY_NETWORK_DENIED", "AUTHORITY_COMMAND_DENIED", "AUTHORITY_MUTATION_OWNERSHIP_DENIED":
 		return true
 	}
 	return false
@@ -22,7 +22,7 @@ func validFailure(f Failure, unknown bool) bool {
 		return false
 	}
 	switch f.Source {
-	case "native-workspace", "operation-store", "computer-approval", "task-admission", "task-grant", "owner-restriction", "role", "computer-policy", "native-host":
+	case "native-workspace", "operation-store", "computer-approval", "task-admission", "task-grant", "owner-restriction", "role", "computer-policy", "native-host", "authority-store":
 		return true
 	}
 	return false

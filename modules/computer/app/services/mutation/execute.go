@@ -1,0 +1,185 @@
+package mutation
+
+import (
+	"context"
+	"errors"
+
+	"github.com/legrch/farol/modules/computer/app/port"
+	"github.com/legrch/farol/modules/computer/domain/authority"
+	state "github.com/legrch/farol/modules/computer/domain/mutation"
+)
+
+type ExecuteRequest = CheckRequest
+type Receipt struct {
+	Operation, RelativePath string
+	Bytes                   uint64
+	Replacements            uint32
+	BeforeSHA256            *string
+	AfterSHA256             string
+}
+type ExecuteResponse struct {
+	OperationID, WorkspaceID, CallID, TurnID string
+	Generation                               uint64
+	Phase, Publication                       string
+	Receipt                                  *Receipt
+	Failure                                  *Failure
+}
+type Failure struct{ Code, Source string }
+
+func (s *Service) Execute(ctx context.Context, r ExecuteRequest) (*ExecuteResponse, error) {
+	if !s.matches(r) {
+		return nil, invalid()
+	}
+	if _, err := s.Check(ctx, r); err != nil {
+		return nil, err
+	}
+	op := convert(r.Operation)
+	digest, err := s.digester.Digest(port.MutationDigestInput{WorkspaceID: r.WorkspaceID, Operation: op.Clone()})
+	if err != nil || !state.SHA256(digest) {
+		return nil, authority.Fail("COMPUTER_MUTATION_FINGERPRINT_FAILED", "operation-store")
+	}
+	binding := state.Binding{Identity: identity(r), WorkspaceID: r.WorkspaceID, RequestDigest: digest}
+	s.gate.Lock()
+	if s.binding != nil && *s.binding != binding {
+		s.gate.Unlock()
+		return nil, authority.Fail("COMPUTER_MUTATION_OPERATION_CONFLICT", "operation-store")
+	}
+	if s.pending {
+		s.gate.Unlock()
+		return nil, authority.Fail("COMPUTER_MUTATION_IN_PROGRESS", "operation-store")
+	}
+	if s.terminal != nil {
+		record, publication := s.terminal.Clone(), s.publication
+		s.gate.Unlock()
+		return s.disclose(ctx, r, op.Path(), &record, publication)
+	}
+	if s.blocked != nil {
+		err := s.blocked
+		s.gate.Unlock()
+		return nil, err
+	}
+	s.binding = &binding
+	s.pending = true
+	s.gate.Unlock()
+	finish := func(record *state.State, publication string, err error) (*ExecuteResponse, error) {
+		s.gate.Lock()
+		s.pending = false
+		if record != nil {
+			copy := record.Clone()
+			s.terminal = &copy
+			s.publication = publication
+		} else {
+			s.blocked = err
+		}
+		s.gate.Unlock()
+		if err != nil {
+			return nil, err
+		}
+		return s.disclose(ctx, r, op.Path(), record, publication)
+	}
+	descriptor, err := s.current(ctx, r.WorkspaceID, op.Path(), nil, nil)
+	if err != nil {
+		return finish(nil, "", err)
+	}
+	prepared, err := state.NewPrepared(binding)
+	if err != nil {
+		return finish(nil, "", invalid())
+	}
+	admitted, err := s.repository.Admit(ctx, prepared)
+	if err != nil || admitted.Record == nil {
+		return finish(nil, "", unknown("operation-store"))
+	}
+	if admitted.Record.Binding() != binding {
+		if admitted.Status == port.MutationExisting && admitted.Record.Binding().Identity == binding.Identity {
+			return finish(nil, "", authority.Fail("COMPUTER_MUTATION_OPERATION_CONFLICT", "operation-store"))
+		}
+		return finish(nil, "", unknown("operation-store"))
+	}
+	record := admitted.Record.Clone()
+	if admitted.Status == port.MutationExisting {
+		if _, err := record.Recover(binding); err != nil {
+			return finish(nil, "", storeUnavailable())
+		}
+		// Prepared may still belong to an active peer. Observe unknown without
+		// rewriting/tombstoning it or dispatching another execution.
+		return finish(&record, "durable", nil)
+	}
+	if admitted.Status != port.MutationAdmitted || record.Phase() != state.Prepared {
+		return finish(nil, "", unknown("operation-store"))
+	}
+	var native *port.MutationReceipt
+	errGuard := func(ctx context.Context) error {
+		_, err := s.current(ctx, r.WorkspaceID, op.Path(), &descriptor, nil)
+		return err
+	}
+	if err = errGuard(ctx); err == nil {
+		native, err = s.native.Mutate(ctx, port.MutationRequest{Workspace: descriptor, Operation: op.Clone(), BeforePublish: errGuard})
+	}
+	var terminal *state.State
+	if err == nil && native != nil {
+		receipt := state.Receipt{Operation: state.Kind(native.Operation), RelativePath: native.RelativePath, Bytes: native.Bytes, Replacements: native.Replacements, BeforeSHA256: cloneHash(native.BeforeSHA256), AfterSHA256: native.AfterSHA256}
+		if state.ValidNativeReceipt(receipt, op) && preimageMatches(op, receipt.BeforeSHA256) {
+			terminal, err = record.Complete(receipt)
+		} else {
+			err = unknown("native-workspace")
+		}
+	} else if err == nil {
+		err = unknown("native-workspace")
+	}
+	if terminal == nil {
+		var f *authority.Failure
+		failure := state.NativeFailure("")
+		if errors.As(err, &f) {
+			if f.Source == "native-workspace" {
+				failure = state.NativeFailure(f.Code)
+			} else {
+				failure = state.Failure{Code: f.Code, Source: f.Source}
+			}
+		}
+		terminal, err = record.Refuse(failure)
+		if err != nil {
+			terminal, _ = record.Refuse(state.Failure{Code: "WORKSPACE_MUTATION_OUTCOME_UNKNOWN", Source: "native-workspace"})
+		}
+	}
+	if terminal == nil {
+		return finish(nil, "", unknown("operation-store"))
+	}
+	publication := "durable"
+	// One terminal publication attempt. Memory retains the known result even
+	// when persistence acknowledgement is lost; restart never executes Prepared.
+	copy := terminal.Clone()
+	if err := s.repository.Save(ctx, &copy); err != nil {
+		publication = "memory_only"
+	}
+	return finish(terminal, publication, nil)
+}
+func preimageMatches(op state.Operation, observed *string) bool {
+	switch v := op.(type) {
+	case state.Write:
+		return v.ExpectedSHA256 == nil && observed == nil || v.ExpectedSHA256 != nil && observed != nil && *v.ExpectedSHA256 == *observed
+	case state.Edit:
+		return observed != nil && v.ExpectedSHA256 == *observed
+	}
+	return false
+}
+func (s *Service) disclose(ctx context.Context, r CheckRequest, path string, record *state.State, publication string) (*ExecuteResponse, error) {
+	var response *ExecuteResponse
+	_, err := s.current(ctx, r.WorkspaceID, path, nil, func() error {
+		response = &ExecuteResponse{OperationID: r.OperationID, WorkspaceID: r.WorkspaceID, CallID: r.CallID, TurnID: r.TurnID, Generation: r.Generation, Phase: string(record.Phase()), Publication: publication}
+		if receipt := record.Receipt(); receipt != nil {
+			response.Receipt = &Receipt{Operation: string(receipt.Operation), RelativePath: receipt.RelativePath, Bytes: receipt.Bytes, Replacements: receipt.Replacements, BeforeSHA256: cloneHash(receipt.BeforeSHA256), AfterSHA256: receipt.AfterSHA256}
+		}
+		if failure := record.Failure(); failure != nil {
+			response.Failure = &Failure{Code: failure.Code, Source: failure.Source}
+		}
+		if record.Phase() == state.Prepared {
+			response.Phase = string(state.OutcomeUnknown)
+			response.Failure = &Failure{Code: "WORKSPACE_MUTATION_OUTCOME_UNKNOWN", Source: "operation-store"}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return response, nil
+}

@@ -26,6 +26,8 @@ type MutationAdmission struct {
 type MutationRepository interface {
 	Admit(context.Context, *mutation.State) (MutationAdmission, error)
 	Load(context.Context, mutation.Identity) (*mutation.State, error)
+	// Nil confirms exact durable terminal publication; an error is uncertain.
+	// Result retention and client acknowledgement belong to the root journal.
 	Save(context.Context, *mutation.State) error
 }
 
@@ -48,6 +50,9 @@ type MutationDescriptor struct {
 type MutationRequest struct {
 	Workspace MutationDescriptor
 	Operation mutation.Operation
+	// Rechecks the SAME selected execution lease, outside owner callbacks.
+	// Required before the first directory effect and target publication.
+	BeforePublish func(context.Context) error
 }
 type MutationReceipt struct {
 	Operation, RelativePath string
@@ -57,12 +62,12 @@ type MutationReceipt struct {
 	AfterSHA256             string
 }
 
-// Native mutation is a single attempt with classified deterministic or unknown
-// outcome. Cancellation before helper start has no effect; after start/lost
-// acknowledgement is unknown. This port is NOT an authority/admission proof.
-// Real implementation and the exact owner-bound effect handoff are prerequisites;
-// none is supplied or activated by this pure slice. Native IO must never run
-// inside the Computer/Task inspect callbacks. No fallback or retry is permitted.
+// Native mutation is one admitted attempt. Cancellation before possible effects
+// is a refusal; lost publication acknowledgement or uncertainty after parent
+// creation/publication is unknown. One guarded internal undo may settle a swap
+// preimage mismatch before reporting; no retry/fallback after unknown/refusal.
+// This port is not authority/admission proof. Native IO never runs inside owner
+// callbacks. Confinement/linearization must be qualified before activation.
 type MutableWorkspace interface {
 	Mutate(context.Context, MutationRequest) (*MutationReceipt, error)
 }

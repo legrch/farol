@@ -1,95 +1,125 @@
-# Go Computer hash-bound mutation foundation
+# Go Computer write/edit source
 
-Status: pure source foundation only. Source dependencies through `bac075e` remain
-UNACCEPTED and required R4 review is pending. There is no Go mutable Execute,
-native mutation implementation, durable Go mutation journal, live qualification,
-root/schema/generated change or active TS/Python retirement in this slice.
+Status: source-only implementation in the `computer-write` writer based on full
+`829bb0fb368734daa14566b4cc3b1f25019a9036` (unaccepted dependency). No root
+registration, common schema/generated change, durable journal implementation,
+TS/Python executor retirement, package, installation or live qualification is
+included. Lead owns canonical native/race/aggregate checks, cumulative review,
+commit and integration. Existing refused/unknown operations remain frozen.
 
-## Current operation and policy
+## Selected execution and durable intent
 
-The active TS contract accepts `workspace.write` with a required nullable expected
-SHA256, and `workspace.edit` with a required expected SHA256 and 1..256 ordered
-old/new pairs. A null write precondition is create-only; it never means overwrite
-without comparison. A nonnull precondition is a lowercase 64-hex digest of the
-entire original bytes, including BOM. Missing edit files are not_found; unequal
-observations are mutation_conflict. Pure CheckPrecondition consumes an already
-qualified observation; it neither opens a file nor proves that observation.
+`New()` preserves pure Check. `NewForExecution` captures one trusted operation ID,
+consumer-owned Execution lease, injected clock/gate, journal, digester and native
+producer. Body owner/session/task/epoch/participant/turn must equal the selected
+binding. Turn Generation and CallID are correlation, not Computer generation or
+permission. The same immutable ordinary deadline is captured once; construction
+rejects a lease beyond 15 seconds. No outer TaskGrant renewal or admission owner
+is added. Root composition must supply the existing current-owner serialized lease
+for every phase, including revoke/generation/restart fences.
 
-Canonical file-relative paths exclude the root dot, absolute/traversal/empty
-segments, backslash and control characters, with 4096 UTF-16 units. Public request
-owner IDs have an 80-unit bound; other mutation IDs have 160, distinct from the
-readonly 120. Epoch/generation reflect the existing TS safe nonnegative integer
-bounds. Core owns eventual wire encoding/parsing, including any protocol migration.
+Execute validates/clones the operation and fingerprints its exact payload. Its
+journal identity is operation/owner/session/task/epoch/participant; workspace and
+digest bind that identity. Atomic Admit must publish the exact Prepared record
+**durably before effects**. A malformed/lost admission ACK is unknown and the
+service never admits/dispatches again. Same-key payload/workspace changes conflict.
+An Existing record grants no execution, including Prepared. A Prepared observer
+reports unknown without saving a guessed interrupt over a still-active peer; Read
+can later observe that SAME key's terminal result. Root journal owns cross-service
+coalescing/incarnation tracking, result retention and client ACK; the module adds
+no acknowledgement/deletion owner.
 
-Request text has the TS 8 MiB UTF-16-unit bound and excludes NUL. Native request
-preflight has a separate 8 MiB UTF-8-byte ceiling, including the aggregate old/new
-edit bytes. These checks retain distinct contract-invalid versus native-invalid
-classifications. Python's subsequent normalized edit validation/matching is not
-implemented here. It normalizes CRLF for matching, requires one unique nonoverlapping
-match per edit, preserves untouched bytes/BOM/local endings, and bounds resulting
-bytes. Those exact rules remain prerequisites for the native slice.
+Current authorization is rechecked after Admit, at the native pre-effect boundary,
+and during final disclosure. Both grant and current approval exclusions narrow
+the native descriptor. No journal/native IO runs inside an owner callback. Local
+pending calls report in_progress; they cannot become another Mutate. Only one
+native Mutate attempt is admitted, and only one terminal Save is attempted. Lost
+terminal publication acknowledgement retains the known completed/failed/unknown
+fact in the same service as `memory_only`, without another Save. Restart sees the
+durable record (possibly Prepared/unknown), never execution permission. Known
+completion survives denied disclosure; a fresh selected reader may re-deliver it
+under current owners. Read never Admit/Save/Mutate and exposes no ACK method.
 
-The injected digester must match SHA256 of the exact TS JSON.stringify canonical
-array: workspace, wire operation kind, path, nullable expected hash, content or
-ordered edit pairs. Identity and Turn/Generation/CallID are excluded. No plain Go
-JSON encoder, approximate fingerprint or new digest implementation is supplied.
-A fingerprint failure precedes journal admission; no effect can run after it.
+Root/Core must map these independent in-process DTOs into the accepted wire
+contract, including local pending/not_found states. They are not advertised public
+methods. Source checks cannot prove production activation fencing or atomicity
+between the synchronous current-owner callback and the following native syscall.
+The trusted root must qualify that handoff and confinement before activation.
 
-## Journal state and recovery
+## Operation and fingerprint parity
 
-The key is operationId/owner/session/task/epoch/participant. Workspace and request
-digest bind that key; changing either is operation_conflict. The existing private
-journal owner ID bound is 160 even though public requests use 80. Records retain
-only fingerprints and receipts, never content or edit text. Prepared has no outcome;
-completed has a receipt; failed has a known deterministic/authority code and source;
-outcome_unknown permits only the unknown code with native-workspace/operation-store
-source. Restore validates this closed shape without creating authority.
+Write's nullable expected SHA256 is create-only when null; a string must match the
+entire original bytes. Edit requires a lowercase expected hash and 1..256 ordered
+old/new pairs. Missing edit is not_found, stale/different preimage is conflict.
+Requests retain the existing 8 MiB UTF-16-unit limit and native 8 MiB UTF-8/aggregate
+ceiling; paths and hashes retain the pure domain bounds. Native component parsing
+also retains the existing filesystem byte/component limits.
 
-Only prepared may transition to a terminal state. Identical terminal saves are
-idempotent; terminal change/reopening/rebinding is refused. Recovery returns an
-existing completed receipt or original failed/unknown fact; interrupted prepared
-becomes an operation-store unknown tombstone. There is no recovery execution state.
-All exposed receipt/hash/operation/edit values are independent copies. Stored
-receipt schema is intentionally distinct from stricter native receipt correlation:
-the active private schema accepts a bounded receipt path; this is metadata, never
-permission to use that path. Native parsing requires matching kind/path, write's
-zero replacements or edit's positive replacements, and bounded bytes/digests. It
-does not independently compare/recompute the receipt's before/after hash; only the
-native implementation can attest the actual operation. Lost/malformed receipt,
-interruption and unclassified native failure map to outcome_unknown. None implies
-retry permission or allows a new key.
+`filesystem.Digester` emits the exact JS JSON.stringify array for valid UTF-8
+values: workspace, `workspace.write/edit`, path, nullable expected hash, content or
+ordered edit pairs. It excludes outer identity/turn/generation/call. It preserves
+raw HTML, Unicode, U+2028/U+2029 and JS control escaping. Go domain cannot represent
+unpaired UTF-16 surrogates: the future wire parser must refuse them before lossy
+replacement rather than claim legacy fingerprint parity for such strings.
 
-## Ports and missing execution seam
+Native edits match simultaneously in the original LF-normalized view; each old
+text must be unique, including overlapping occurrences, and original spans must
+not overlap. CRLF matching, untouched bytes, BOM and replacement-local line endings
+are preserved. Result bytes are bounded. The app validates receipt kind/path,
+preimage hash, replacement bounds and SHA shapes; the native producer computes the
+actual pre/post digest and final observation.
 
-Consumer-owned MutationRepository owns atomic same-key admission and immutable
-terminal storage. Admit may report admitted only after durable publication; a
-failed/uncertain publication is an error, never absence or permission to mutate.
-The memory double tests only same-process state/coherence; it supplies no durable,
-restart, native filesystem, Task/Computer or effect serialization proof.
-MutationDigester and MutableWorkspace are injected ports without concrete adapters.
-Native IO cannot run inside either existing Computer/Task inspect callback.
+## Native publication and ownership limits
 
-The published in-process Check delegates to pure app checking and returns an
-independent content-free correlation summary. It does not read owners or grant
-permission, admit a journal record, emit a receipt or call an executor. It is not
-the public mutable wire Execute endpoint. Syntactically valid body IDs cannot
-select the current task. No shared method/schema/registration is added.
+The Darwin producer uses descriptor-relative no-follow traversal and approved
+ancestor device/inode verification. It pins the root/parent chain and rechecks
+physical name bindings, modes and owners before effects. Root must have current
+UID and no group/other write bits. Symlinks, hardlinks, FIFO/nonregular files,
+credential exclusions, Git metadata and write-denied paths are refused. There is
+no non-Darwin implementation or plain-rename fallback.
 
-Actual Execute still needs: the real Task/Chat owner-bound fixed lease; coherent
-current authority at initial admission and effect handoff (Computer -> Task lock
-order); one owner-controlled in-flight coalescing lifetime across operation-scoped
-services; and native effect serialization/cancellation with an explicit
-linearization point. The TS no-await authorize -> native call sequence must not be
-approximated by a Go callback-to-IO race or by holding Task's callback over native
-IO. A matching existing receipt must never re-execute, and a revoked/expired owner
-must not be bypassed by new body correlation. Durable admission delay, terminal
-save failure (completed result memory_only), prepared recovery and receipt
-redelivery/rebinding require the full executor orchestration in a later slice.
-Lead and Task/Chat/Core owners must settle this narrow handoff/observation seam
-before activation; this foundation invents no second authority or task engine.
+Writes may create absent parents. Each mkdir follows the same current guard;
+a successful parent creation is already a possible effect, so any later failure
+or cancellation is unknown. Private sibling staging is mode 0700; its candidate is
+exclusive/no-follow, written, chmod'd and fsync'd. Existing target mode is preserved.
+Create publishes with one Linkat that cannot overwrite. Replace publishes with
+one Darwin RenameatxNp(RENAME_SWAP), then verifies the displaced original inode
+and expected digest through a descriptor.
 
-Pure vectors cover create-only/hash/not_found, header/path/text/native aggregate
-bounds, copy isolation, strict state restore, terminal immutability, same-key
-conflict, interrupted-prepared unknown, original terminal recovery, receipt shape,
-and native error mapping. Tests do not mutate native files or exercise a provider.
-Existing live operation/refusal/unknown and reviewer quota fences remain intact.
+**One effect means one admitted native Mutate attempt.** A displaced-preimage
+mismatch permits at most one guarded internal undo while the target still holds
+the owned candidate, before reporting any outcome. A newer target prevents undo.
+A failed/lost undo ACK, a changed recovered candidate or a newer object moved to
+staging is unknown: retain stage/displaced objects, no additional undo/cleanup
+attempt and no executor retry. Unsupported swap refuses without weak rename.
+
+Cleanup deletes only an immediately verified owned staging candidate or checked
+original, removes only the same empty stage directory by rmdir, and never recurses.
+Uncertain cleanup retains the stage and reports unknown. After the last workspace
+mutation, parent fsync and final descriptor readback require the candidate's inode,
+single link, mode/owner, size, modification time and exact digest. Failure/cancel
+then is unknown. A later writer after the final observation is a separate write.
+
+This is the existing bounded swap/verify/guarded-undo algorithm, **not adversarial
+same-user isolation or atomic hash CAS**. Residuals include an already-open original
+written after its digest check, an already-open candidate changed after undo
+verification, a save between the pre-undo identity check and swap (retained in
+staging), deliberately replaced/written staging entries, and revocation/parent
+rename in the check-to-syscall interval. Descriptor pinning detects substitutions
+at observations but cannot prevent every intervening same-user/root action. No
+stronger confinement/ownership claim follows from the injected tests.
+
+## Verification boundary
+
+App/contracts tests inject owners, clock, journal, native receipts and gate. New
+filesystem tests inject a private in-memory inode/FD/syscall model; digest/edit
+vectors use synthetic text. They cover expiry/revoke after durable admission,
+one attempt, uncertain admission/save, restart Prepared, pending peer observation,
+retained disclosure, create-only/hash/conflict, safe undo/newer saves, uncertain
+cleanup/cancel, parent identity, BOM/mixed endings and exact fingerprints.
+
+These tests never execute the native filesystem producer on real files and do not
+prove durable persistence, Darwin syscall/filesystem behavior, fixed-lease native
+cancellation/confinement, race safety, common route export, installed same-chat
+Brain/code renewal, shell/Git, native providers or production acceptance. Native,
+race, full CI, review, commit and activation remain in Lead's canonical lane.
