@@ -1,11 +1,13 @@
 # Chat source foundation
 
 The pre-K0 Turn/stream/browser-port preparation now builds under Core's accepted
-root Go module. The first post-K0 admission seam publishes pure current-owner
-policy for ordinary Chat; see [ADMISSION.md](ADMISSION.md) for its implemented
-contract, required live-owner semantics and persistence proposal. This module is
-not connected to the production model route, Electron host, React facade, HTTP
-server or durable journal. The active TypeScript implementation remains
+root Go module. The post-K0 admission seam publishes current-owner policy for
+ordinary Chat. `app/services/lifecycle.Service` now owns the live queue, fresh
+journal claim, private admitted handles and one-shot browser intent/settlement.
+See [ADMISSION.md](ADMISSION.md) for the published guard and
+[LIFECYCLE.md](LIFECYCLE.md) for actual owner semantics and constructor requirements.
+The durable adapter, production model route, Electron host, React facade and HTTP
+server composition remain pending. The active TypeScript implementation remains
 authoritative until its vertical cutover.
 
 ## Turn and five-slot scheduling
@@ -23,9 +25,10 @@ late callbacks cannot rewrite them.
 
 A request has admitted, pending, running, awaiting-owner, result-ready, delivered,
 cancelled or unknown state. Known refusal/failure remains a distinct result
-outcome. `result-ready` means known result metadata is available, not that answer
-bytes have been durably saved. The future application must publish this state only
-after its accepted result owner has retained the actual result. Acknowledgement
+outcome. The pure `result-ready` state describes known result metadata. The
+application owner publishes it only after an exact known receipt from the accepted
+result retention port. That port's injected source fixture does not prove durable
+answer storage or client delivery. Acknowledgement
 of the exact result and lifecycle settlement are separate requirements for reuse.
 `Settle` requires affirmative `QuiescenceEvidence` for the exact binding and retained
 result, with an observation sequence after the latest delta. `SettlePrepared`

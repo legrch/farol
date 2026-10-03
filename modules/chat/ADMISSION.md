@@ -1,10 +1,13 @@
-# Ordinary Chat admission ownership proposal
+# Ordinary Chat admission ownership
 
-Status: first post-K0 source checkpoint. The published callback and application
-projection are implemented; a concrete live owner, durable repository, Computer
-peer adapter and boot wiring are subsequent slices. Tests use labelled injected
-owners over the pure Chat queue. They do not qualify production admission,
-native execution, journal durability or cross-module locking.
+Status: source checkpoint. The published callback, projection and actual
+`app/services/lifecycle.Service` owner are implemented. The owner mints private
+handles only after its own queue admission and exact known journal commit. See
+[LIFECYCLE.md](LIFECYCLE.md) for constructor and Desktop requirements.
+A durable repository implementation, accepted Computer peer composition and
+ordinary boot wiring still need qualification. Tests exercise the actual owner
+and concrete Mutex gate with labelled injected journal/browser/retention ports;
+they do not prove disk durability, production admission or native lock order.
 
 ## One owner and one lifecycle
 
@@ -67,12 +70,15 @@ and positive lifecycle settlement evidence.
 
 ## Required owner and persistence sequencing
 
-The concrete application owner will be the only writer of its live admission
-registry and queue. Serialization implementation belongs in infrastructure and
-is injected; pure app/domain/contracts cannot import locks, filesystem or native
-adapters. Repository ports describe atomic Chat metadata persistence, separate
-from bounded transient prompt/answer delivery. This checkpoint adds no journal
-format, retention policy, root registration or capacity change.
+The concrete application owner is the only writer of its live admission registry
+and queue. `infra/gate.Mutex` supplies dedicated injected serialization; pure
+app/domain/contracts import no locks, filesystem or native adapters. The
+consumer-owned `port.Journal` describes a fresh exclusive journal claim and
+atomic CAS append of content-free transitions. `port.ResultRetention` keeps
+actual delivery bytes separate, with an explicitly supplied accepted byte budget.
+This source checkpoint defines no disk format, boot registration or new capacity
+policy. The initial owner permits one transaction in flight, withdrawing all
+positive views until persistence and any coordinated effect settle.
 
 Admission and each lifecycle change must use this sequence:
 
@@ -104,14 +110,18 @@ no automatic replay, compensating Send or executor reroute.
 
 ## Acceptance still required
 
-Production assembly must supply a real owning handle with these semantics and
-qualify its entry/lock order. Follow-up evidence must cover atomic journal failure
-windows, completion/revoke during pending writes, late commit fencing, startup
-reconciliation and final disclosure through the same fixed Computer lease. Those
-are required before boot can use this seam as current admission proof.
+Production assembly must obtain the handle from `lifecycle.Service.Admit`, then
+capture the published current contract once for the operation. It must qualify
+the actual entry/lock order and durable journal adapter. Source tests now cover
+pending/unknown writes, completion/revoke during IO, exact late commit fencing,
+retention before result publication and intent before one-shot Prepare/Send.
+Native crash windows, explicit startup reconciliation and final disclosure through
+the same fixed Computer lease remain required before boot can use the seam as
+production admission proof.
 
-The present race/conformance fixtures exercise identity, lifecycle filtering,
-callback serialization, known absence, classified failures and independent value
-mapping only. They do not enforce no-IO/reentrancy against a concrete owner or
-prove Computer's native qualification. No browser/provider/network/native probe
-is introduced here, and no active TypeScript route has been removed yet.
+The present race/conformance tests also exercise the concrete owner's gate and
+port sequencing. `WithCurrent` has no journal/browser/retention entry call; its
+consumer callback still must obey the pure, non-reentrant contract. Tests do not
+prove Computer's native qualification or actual Desktop generation enforcement.
+No browser/provider/network/native probe is introduced here, and the active
+TypeScript route remains until its accepted vertical cutover.

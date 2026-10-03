@@ -53,8 +53,8 @@ type CurrentTurn struct {
 // Computer update. Pending/unknown persistence/effects must hide positive binding.
 // Journal IO, native IO and a Task/Chat-held path reacquiring Computer are forbidden
 // under this gate. A historical journal/cache is never an implementation of it.
-// The production owner and durable repository are a subsequent owned checkpoint;
-// fixtures implementing this interface are not runtime admission qualification.
+// lifecycle.Service implements this owner using its actual queue/journal gate.
+// Durable adapter and boot qualification remain separate from source fixtures.
 type BoundTurn interface {
 	Binding() TurnBinding
 	WithCurrent(context.Context, func(*CurrentTurn) error) error
