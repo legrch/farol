@@ -464,3 +464,145 @@ describe("complete serialized semantic probe (synthetic layout)", () => {
     expect(result.completed).toBe(true);
   });
 });
+
+describe("explicit synthetic settled-segment DOM profile", () => {
+  const segmented = (
+    settled = true,
+    profile = "farol-controlled-settled-segments-v1",
+  ) => {
+    const assistant = message(
+      [
+        el(
+          "p",
+          {
+            "data-segment-id": "s1",
+            "data-segment-state": settled ? "settled" : "pending",
+          },
+          ["Useful prefix"],
+        ),
+        el("p", { "data-segment-id": "s2", "data-segment-state": "pending" }, [
+          "Growing tail",
+        ]),
+      ],
+      false,
+      { "data-is-streaming": "true" },
+    );
+    assistant.querySelector(".markdown")!.attributes[
+      "data-farol-source-profile"
+    ] = profile;
+    return assistant;
+  };
+  const decode = (assistant: ElementFixture, enabled = true) =>
+    vm.runInNewContext(
+      `(${readPublicAssistantMessages.toString()})(assistants, visible, ${publicMarkdownBlock.toString()}, visible, enabled)`,
+      { assistants: [assistant], visible, enabled },
+    );
+  it("reads only explicitly settled blocks while whole-reply completion stays false", () => {
+    const messages = decode(segmented());
+    expect(messages[0]).toMatchObject({
+      id: "a",
+      complete: false,
+      segments: [
+        { id: "s1", text: "Useful prefix", complete: true },
+        { id: "s2", text: "Growing tail", complete: false },
+      ],
+    });
+    const turn = new ChatGptPublicTurn("u", "a", 0);
+    expect(
+      turn.observe({ userId: "u", messages, terminal: false }, 0),
+    ).toMatchObject({
+      answer: "Useful prefix",
+      completed: false,
+      items: [{ id: "s1" }],
+    });
+  });
+  it("does not enable segmentation for ordinary or unselected source profiles", () => {
+    const assistant = segmented();
+    expect(decode(assistant, false)[0]).not.toHaveProperty("segments");
+    delete assistant.querySelector(".markdown")!.attributes[
+      "data-farol-source-profile"
+    ];
+    const turn = new ChatGptPublicTurn("u", "a", 0);
+    const messages = decode(assistant);
+    expect(messages[0]).not.toHaveProperty("segments");
+    expect(
+      turn.observe({ userId: "u", messages, terminal: false }, 100_000).items,
+    ).toEqual([]);
+  });
+  it("refuses unknown profiles, duplicate/nested IDs and unanchored public content", () => {
+    expect(() => decode(segmented(true, "unknown-profile"))).toThrow(
+      "CHATGPT_PUBLIC_SEGMENTS_UNQUALIFIED",
+    );
+    for (const variant of [
+      "duplicate",
+      "nested",
+      "unanchored",
+      "unknown-state",
+    ]) {
+      const assistant = segmented();
+      const markdown = assistant.querySelector(".markdown")!;
+      const second = markdown.querySelectorAll("p")[1]!;
+      if (variant === "duplicate") second.attributes["data-segment-id"] = "s1";
+      if (variant === "nested")
+        second.childNodes.push(el("span", { "data-segment-id": "nested" }));
+      if (variant === "unanchored") delete second.attributes["data-segment-id"];
+      if (variant === "unknown-state")
+        second.attributes["data-segment-state"] = "stable-for-500ms";
+      expect(() => decode(assistant)).toThrow(
+        "CHATGPT_PUBLIC_SEGMENTS_UNQUALIFIED",
+      );
+    }
+  });
+  it("never upgrades a pending segment because the turn copy control is present", () => {
+    const assistant = segmented(false);
+    assistant.attributes["data-is-streaming"] = "false";
+    assistant
+      .closest("article")!
+      .childNodes.push(
+        el("button", { "data-testid": "copy-turn-action-button" }),
+      );
+    expect(decode(assistant)[0].complete).toBe(false);
+  });
+});
+
+it("validates later committed DOM text even when an earlier Markdown root disappears", () => {
+  const segmented = (id: string, segmentId: string, text: string) => {
+    const assistant = message(
+      [
+        el(
+          "p",
+          { "data-segment-id": segmentId, "data-segment-state": "settled" },
+          [text],
+        ),
+      ],
+      true,
+      { "data-message-id": id },
+    );
+    assistant.querySelector(".markdown")!.attributes[
+      "data-farol-source-profile"
+    ] = "farol-controlled-settled-segments-v1";
+    return assistant;
+  };
+  const decode = (assistants: ElementFixture[]) =>
+    vm.runInNewContext(
+      `(${readPublicAssistantMessages.toString()})(assistants, visible, ${publicMarkdownBlock.toString()}, visible, true)`,
+      { assistants, visible },
+    );
+  const turn = new ChatGptPublicTurn("u", "a", 0);
+  const original = decode([
+    segmented("a", "s1", "one"),
+    segmented("b", "s2", "two"),
+  ]);
+  expect(
+    turn.observe({ userId: "u", messages: original, terminal: false }, 0).items,
+  ).toHaveLength(2);
+  const missing = message([], false);
+  missing.childNodes.splice(0);
+  const changed = decode([missing, segmented("b", "s2", "MUTATED")]);
+  expect(() =>
+    turn.observe({ userId: "u", messages: changed, terminal: false }, 1),
+  ).toThrow("CHATGPT_VISIBLE_OUTPUT_COMMITTED_CHANGED");
+  expect(() =>
+    turn.observe({ userId: "u", messages: original, terminal: false }, 2),
+  ).toThrow("CHATGPT_VISIBLE_OUTPUT_COMMITTED_CHANGED");
+});

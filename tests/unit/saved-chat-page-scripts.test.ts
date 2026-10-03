@@ -925,3 +925,48 @@ describe("Chat consumer mapping witness and next identities", () => {
     expect((await fixture.run("submit", third)).state).toBe("submitted");
   });
 });
+
+it("observes settled segments without permitting terminal or another Send", async () => {
+  const fixture = followUpPage();
+  const assistant = fixture.root.querySelector('[data-message-id="a1"]')!;
+  assistant.attributes["data-is-streaming"] = "true";
+  const markdown = assistant.querySelector(".markdown")!;
+  markdown.attributes["data-farol-source-profile"] =
+    "farol-controlled-settled-segments-v1";
+  markdown.children[0]!.attributes["data-segment-id"] = "s1";
+  markdown.children[0]!.attributes["data-segment-state"] = "settled";
+  expect(await fixture.run("prepare")).toEqual({
+    state: "not-sent",
+    code: "SAVED_CHAT_TURN_UNSETTLED",
+  });
+  expect(fixture.clicks()).toBe(0);
+
+  fixture.addMessage("u2", "user", "Next");
+  const current = fixture.addMessage("a2", "assistant", "Useful prefix", "u2");
+  current.attributes["data-is-streaming"] = "true";
+  const root = current.querySelector(".markdown")!;
+  root.attributes["data-farol-source-profile"] =
+    "farol-controlled-settled-segments-v1";
+  root.children[0]!.attributes["data-segment-id"] = "s2";
+  root.children[0]!.attributes["data-segment-state"] = "settled";
+  const result = await fixture.run("observe", {
+    ...fixture.request,
+    operation: { id: "op2", state: "submitted" },
+    correlation: { userId: "u2", assistantId: "a2" },
+  });
+  expect(result).toMatchObject({
+    state: "observed",
+    assistantId: "a2",
+    frame: {
+      terminal: false,
+      messages: [
+        { id: "a2", complete: false, segments: [{ id: "s2", complete: true }] },
+      ],
+    },
+  });
+  if (result.state !== "observed") throw new Error("Expected observation");
+  expect(
+    new ChatGptPublicTurn("u2", "a2", 0).observe(result.frame, 0).answer,
+  ).toBe("Useful prefix");
+  expect(fixture.clicks()).toBe(0);
+});

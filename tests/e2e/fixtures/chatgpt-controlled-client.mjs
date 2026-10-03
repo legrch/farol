@@ -69,9 +69,14 @@ const render = (next) => {
     assistant.dataset.isStreaming = String(!turn.renderedTerminal);
     const markdown = document.createElement("div");
     markdown.className = "markdown";
+    // Synthetic profile: each published segment is immutable. Actual ChatGPT
+    // DOM is not qualified by this fixture marker.
+    markdown.dataset.farolSourceProfile =
+      "farol-controlled-settled-segments-v1";
     for (const segment of turn.segments) {
       const paragraph = document.createElement("p");
       paragraph.dataset.segmentId = segment.id;
+      paragraph.dataset.segmentState = "settled";
       paragraph.textContent = segment.text;
       markdown.append(paragraph);
     }

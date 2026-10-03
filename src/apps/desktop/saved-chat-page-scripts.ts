@@ -344,6 +344,7 @@ async function savedChatFollowUpPage(
       contentVisible,
       markdown,
       visible,
+      action === "observe",
     );
     return {
       userId,
