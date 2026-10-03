@@ -24,6 +24,19 @@ func NewQueue(profile, backend string) (*Queue, error) {
 	return &Queue{profile: profile, backend: backend, entries: make(map[string]Turn)}, nil
 }
 
+// Clone is a private candidate for journal-before-publication application writes.
+// Turn values (including fixed call history), slots and generations are copied;
+// map and waiting-slice storage are independent of the committed queue.
+func (q *Queue) Clone() *Queue {
+	copy := *q
+	copy.entries = make(map[string]Turn, len(q.entries))
+	for key, value := range q.entries {
+		copy.entries[key] = value
+	}
+	copy.waiting = append([]string(nil), q.waiting...)
+	return &copy
+}
+
 func (q *Queue) Admit(identity Identity, digest string) (Snapshot, error) {
 	t, err := New(identity, digest)
 	if err != nil {

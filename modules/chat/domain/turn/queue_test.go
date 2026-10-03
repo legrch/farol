@@ -507,3 +507,56 @@ func TestReusedComputerIDAndStaleResolutionKeepNewCallFenced(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestCandidateCloneDoesNotMutateCommittedQueue(t *testing.T) {
+	q := queue(t)
+	first := add(t, q, "clone-first")
+	second := add(t, q, "clone-second")
+	candidate := q.Clone()
+	b := bind(t, candidate)
+	if b.Reservation.Identity != first {
+		t.Fatal("candidate changed FIFO")
+	}
+	if _, err := candidate.Dispatch(b); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := candidate.Accept(b); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := candidate.RequestComputer(b, "candidate-call"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := candidate.ResolveComputer(b, "candidate-call"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := candidate.Cancel(second, "candidate-cancel"); err != nil {
+		t.Fatal(err)
+	}
+	original, err := q.Snapshot(first)
+	if err != nil || original.Reserved || original.SendIntent || original.Phase != Pending {
+		t.Fatalf("original mutated: %+v %v", original, err)
+	}
+	originalSecond, _ := q.Snapshot(second)
+	if originalSecond.HasResult || originalSecond.Phase != Pending {
+		t.Fatal("candidate cancellation changed original")
+	}
+	originalBinding := bind(t, q)
+	if originalBinding.Reservation != b.Reservation {
+		t.Fatal("candidate consumed original generation/FIFO")
+	}
+	if _, err := q.Dispatch(originalBinding); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := q.Accept(originalBinding); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := q.RequestComputer(originalBinding, "candidate-call"); err != nil {
+		t.Fatal("candidate call history leaked", err)
+	}
+	if _, err := candidate.RequestComputer(b, "candidate-call"); !errors.Is(err, Conflict) {
+		t.Fatal("candidate lost call tombstone", err)
+	}
+	if next, err := q.Reserve(); err != nil || next.Identity != second {
+		t.Fatal("candidate changed waiting storage", next, err)
+	}
+}
