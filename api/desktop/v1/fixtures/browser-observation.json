@@ -1,0 +1,35 @@
+{
+  "events": [
+    {
+      "binding": {
+        "lease": {
+          "identity": {
+            "profileId": "profile",
+            "ownerId": "owner",
+            "sessionId": "session",
+            "taskId": "task",
+            "turnId": "turn",
+            "operationId": "operation",
+            "turnGeneration": "18446744073709551615"
+          },
+          "backendGeneration": "backend",
+          "slotOrdinal": 4,
+          "slotGeneration": "9007199254740993"
+        },
+        "viewId": "view",
+        "viewGeneration": "2",
+        "documentGeneration": "3",
+        "conversationId": "conversation"
+      },
+      "sequence": "9007199254740993",
+      "observedAtMillis": "1791053000000",
+      "kind": "answer-delta",
+      "text": "Useful text 🪔",
+      "code": "",
+      "userTurnId": "user-2",
+      "replyId": "reply-2",
+      "segmentId": "segment-1"
+    }
+  ],
+  "gap": false
+}

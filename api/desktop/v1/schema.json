@@ -16,7 +16,19 @@
     "computer.workspace.catalogue": "read",
     "computer.workspace.bootstrap": "read",
     "computer.authority.deactivate": "effect",
-    "computer.authority.publish": "effect"
+    "computer.authority.publish": "effect",
+    "chat.browser.next": "read",
+    "chat.browser.reply": "effect",
+    "chat.conversation.create": "effect",
+    "chat.conversation.prepare": "effect",
+    "chat.conversation.send": "effect",
+    "chat.conversation.observe": "effect",
+    "chat.conversation.result.ack": "effect",
+    "chat.conversation.frame.ack": "effect",
+    "chat.conversation.cancel": "effect",
+    "chat.conversation.resume": "effect",
+    "chat.conversation.result": "read",
+    "chat.conversation.events": "read"
   },
   "definitions": {
     "Context": {
@@ -831,6 +843,777 @@
         },
         "storeRevision": {
           "type": "decimal"
+        }
+      }
+    },
+    "BrowserIdentity": {
+      "type": "object",
+      "fields": {
+        "profileId": {
+          "type": "id"
+        },
+        "ownerId": {
+          "type": "id"
+        },
+        "sessionId": {
+          "type": "id"
+        },
+        "taskId": {
+          "type": "id"
+        },
+        "turnId": {
+          "type": "id"
+        },
+        "operationId": {
+          "type": "id"
+        },
+        "turnGeneration": {
+          "type": "decimal"
+        }
+      }
+    },
+    "BrowserLease": {
+      "type": "object",
+      "fields": {
+        "identity": {
+          "type": "BrowserIdentity"
+        },
+        "backendGeneration": {
+          "type": "id"
+        },
+        "slotOrdinal": {
+          "type": "uint32",
+          "maximum": 5,
+          "minimum": 1
+        },
+        "slotGeneration": {
+          "type": "decimal"
+        }
+      }
+    },
+    "BrowserBinding": {
+      "type": "object",
+      "fields": {
+        "lease": {
+          "type": "BrowserLease"
+        },
+        "viewId": {
+          "type": "id"
+        },
+        "viewGeneration": {
+          "type": "decimal"
+        },
+        "documentGeneration": {
+          "type": "decimal"
+        },
+        "conversationId": {
+          "type": "id"
+        }
+      }
+    },
+    "BrowserSelection": {
+      "type": "object",
+      "fields": {
+        "provider": {
+          "type": "string",
+          "maxBytes": 128
+        },
+        "alias": {
+          "type": "string",
+          "maxBytes": 128
+        },
+        "accountId": {
+          "type": "string",
+          "maxBytes": 128
+        },
+        "modelId": {
+          "type": "string",
+          "maxBytes": 128
+        },
+        "effort": {
+          "type": "string",
+          "maxBytes": 128
+        },
+        "mode": {
+          "type": "string",
+          "maxBytes": 128
+        },
+        "connectorId": {
+          "type": "string",
+          "maxBytes": 128
+        },
+        "connectorGrantId": {
+          "type": "string",
+          "maxBytes": 128
+        },
+        "toolsEnabled": {
+          "type": "boolean"
+        }
+      }
+    },
+    "BrowserResolution": {
+      "type": "object",
+      "fields": {
+        "requestedAlias": {
+          "type": "string",
+          "maxBytes": 256
+        },
+        "requestedExecutor": {
+          "type": "string",
+          "maxBytes": 256
+        },
+        "requestedEffort": {
+          "type": "string",
+          "maxBytes": 256
+        },
+        "requestedMode": {
+          "type": "string",
+          "maxBytes": 256
+        },
+        "configSHA256": {
+          "type": "string",
+          "maxBytes": 256
+        },
+        "translationId": {
+          "type": "string",
+          "maxBytes": 256
+        },
+        "resolved": {
+          "type": "BrowserSelection"
+        }
+      }
+    },
+    "BrowserTarget": {
+      "type": "object",
+      "fields": {
+        "mode": {
+          "type": "text",
+          "values": ["new-saved", "owned-saved"]
+        },
+        "conversationId": {
+          "type": "string",
+          "maxBytes": 128,
+          "pattern": "^([A-Za-z0-9][A-Za-z0-9._:/-]{0,127})?$"
+        },
+        "previousUserTurnId": {
+          "type": "string",
+          "maxBytes": 128,
+          "pattern": "^([A-Za-z0-9][A-Za-z0-9._:/-]{0,127})?$"
+        },
+        "previousReplyId": {
+          "type": "string",
+          "maxBytes": 128,
+          "pattern": "^([A-Za-z0-9][A-Za-z0-9._:/-]{0,127})?$"
+        },
+        "selection": {
+          "type": "BrowserSelection"
+        },
+        "resolution": {
+          "type": "BrowserResolution"
+        }
+      }
+    },
+    "BrowserVerification": {
+      "type": "object",
+      "fields": {
+        "binding": {
+          "type": "BrowserBinding"
+        },
+        "observed": {
+          "type": "BrowserSelection"
+        },
+        "previousUserTurnId": {
+          "type": "string",
+          "maxBytes": 128,
+          "pattern": "^([A-Za-z0-9][A-Za-z0-9._:/-]{0,127})?$"
+        },
+        "previousReplyId": {
+          "type": "string",
+          "maxBytes": 128,
+          "pattern": "^([A-Za-z0-9][A-Za-z0-9._:/-]{0,127})?$"
+        },
+        "intentDigest": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "evidenceId": {
+          "type": "id"
+        }
+      }
+    },
+    "BrowserPrepare": {
+      "type": "object",
+      "fields": {
+        "target": {
+          "type": "BrowserTarget"
+        },
+        "lease": {
+          "type": "BrowserLease"
+        },
+        "deadlineMillis": {
+          "type": "decimal"
+        }
+      }
+    },
+    "BrowserPrepared": {
+      "type": "object",
+      "fields": {
+        "saved": {
+          "type": "boolean"
+        },
+        "readiness": {
+          "type": "text",
+          "values": [
+            "ready",
+            "sign-in-required",
+            "awaiting-owner",
+            "unavailable"
+          ]
+        },
+        "binding": {
+          "type": "BrowserBinding"
+        },
+        "code": {
+          "type": "string",
+          "maxBytes": 120
+        }
+      }
+    },
+    "BrowserVerifySend": {
+      "type": "object",
+      "fields": {
+        "binding": {
+          "type": "BrowserBinding"
+        },
+        "requested": {
+          "type": "BrowserSelection"
+        },
+        "previousUserTurnId": {
+          "type": "string",
+          "maxBytes": 128,
+          "pattern": "^([A-Za-z0-9][A-Za-z0-9._:/-]{0,127})?$"
+        },
+        "previousReplyId": {
+          "type": "string",
+          "maxBytes": 128,
+          "pattern": "^([A-Za-z0-9][A-Za-z0-9._:/-]{0,127})?$"
+        },
+        "intentDigest": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "deadlineMillis": {
+          "type": "decimal"
+        }
+      }
+    },
+    "BrowserVerified": {
+      "type": "object",
+      "fields": {
+        "verification": {
+          "type": "BrowserVerification"
+        }
+      }
+    },
+    "BrowserSend": {
+      "type": "object",
+      "fields": {
+        "binding": {
+          "type": "BrowserBinding"
+        },
+        "verification": {
+          "type": "BrowserVerification"
+        },
+        "intentDigest": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "prompt": {
+          "type": "string",
+          "minBytes": 1,
+          "maxBytes": 8192
+        },
+        "deadlineMillis": {
+          "type": "decimal"
+        }
+      }
+    },
+    "BrowserSent": {
+      "type": "object",
+      "fields": {
+        "binding": {
+          "type": "BrowserBinding"
+        },
+        "verificationId": {
+          "type": "id"
+        },
+        "status": {
+          "type": "text",
+          "values": ["submitted", "not-sent", "unknown"]
+        },
+        "code": {
+          "type": "string",
+          "maxBytes": 120
+        }
+      }
+    },
+    "BrowserObserve": {
+      "type": "object",
+      "fields": {
+        "binding": {
+          "type": "BrowserBinding"
+        },
+        "afterSequence": {
+          "type": "decimal"
+        },
+        "limit": {
+          "type": "uint32",
+          "minimum": 1,
+          "maximum": 128
+        },
+        "deadlineMillis": {
+          "type": "decimal"
+        }
+      }
+    },
+    "BrowserObservation": {
+      "type": "object",
+      "fields": {
+        "binding": {
+          "type": "BrowserBinding"
+        },
+        "sequence": {
+          "type": "decimal"
+        },
+        "observedAtMillis": {
+          "type": "decimal"
+        },
+        "kind": {
+          "type": "text",
+          "values": [
+            "accepted",
+            "answer-delta",
+            "commentary",
+            "status",
+            "awaiting-owner",
+            "completed",
+            "refused",
+            "unknown",
+            "quiescent"
+          ]
+        },
+        "text": {
+          "type": "string",
+          "maxBytes": 65536
+        },
+        "code": {
+          "type": "string",
+          "maxBytes": 120
+        },
+        "userTurnId": {
+          "type": "string",
+          "maxBytes": 128,
+          "pattern": "^([A-Za-z0-9][A-Za-z0-9._:/-]{0,127})?$"
+        },
+        "replyId": {
+          "type": "string",
+          "maxBytes": 128,
+          "pattern": "^([A-Za-z0-9][A-Za-z0-9._:/-]{0,127})?$"
+        },
+        "segmentId": {
+          "type": "string",
+          "maxBytes": 128,
+          "pattern": "^([A-Za-z0-9][A-Za-z0-9._:/-]{0,127})?$"
+        }
+      }
+    },
+    "BrowserObserved": {
+      "type": "object",
+      "fields": {
+        "events": {
+          "type": "BrowserObservation[]"
+        },
+        "gap": {
+          "type": "boolean"
+        }
+      }
+    },
+    "BrowserCancel": {
+      "type": "object",
+      "fields": {
+        "binding": {
+          "type": "BrowserBinding"
+        },
+        "deadlineMillis": {
+          "type": "decimal"
+        }
+      }
+    },
+    "BrowserCancelled": {
+      "type": "object",
+      "fields": {
+        "binding": {
+          "type": "BrowserBinding"
+        },
+        "status": {
+          "type": "text",
+          "values": [
+            "requested",
+            "confirmed-terminal",
+            "already-terminal",
+            "unknown"
+          ]
+        },
+        "code": {
+          "type": "string",
+          "maxBytes": 120
+        }
+      }
+    },
+    "BrowserDispose": {
+      "type": "object",
+      "fields": {
+        "lease": {
+          "type": "BrowserLease"
+        },
+        "deadlineMillis": {
+          "type": "decimal"
+        }
+      }
+    },
+    "BrowserDisposed": {
+      "type": "object",
+      "fields": {
+        "lease": {
+          "type": "BrowserLease"
+        },
+        "confirmed": {
+          "type": "boolean"
+        },
+        "code": {
+          "type": "string",
+          "maxBytes": 120
+        }
+      }
+    },
+    "BrowserNext": {
+      "type": "object",
+      "fields": {
+        "deadlineMillis": {
+          "type": "decimal"
+        }
+      }
+    },
+    "BrowserCommand": {
+      "type": "object",
+      "fields": {
+        "commandId": {
+          "type": "id"
+        },
+        "kind": {
+          "type": "text",
+          "values": [
+            "prepare",
+            "verify-send",
+            "send",
+            "observe",
+            "cancel",
+            "dispose"
+          ]
+        },
+        "body": {
+          "type": "json"
+        }
+      }
+    },
+    "BrowserReply": {
+      "type": "object",
+      "fields": {
+        "commandId": {
+          "type": "id"
+        },
+        "kind": {
+          "type": "text",
+          "values": [
+            "prepare",
+            "verify-send",
+            "send",
+            "observe",
+            "cancel",
+            "dispose"
+          ]
+        },
+        "body": {
+          "type": "json"
+        }
+      }
+    },
+    "BrowserNextResult": {
+      "type": "object",
+      "fields": {
+        "command": {
+          "type": "BrowserCommand",
+          "optional": true
+        }
+      }
+    },
+    "ChatTurnBinding": {
+      "type": "object",
+      "fields": {
+        "profileId": {
+          "type": "id"
+        },
+        "backendGeneration": {
+          "type": "id"
+        },
+        "ownerId": {
+          "type": "id"
+        },
+        "sessionId": {
+          "type": "id"
+        },
+        "taskId": {
+          "type": "id"
+        },
+        "taskEpoch": {
+          "type": "decimal"
+        },
+        "participantId": {
+          "type": "id"
+        },
+        "turnId": {
+          "type": "id"
+        },
+        "operationId": {
+          "type": "id"
+        },
+        "turnGeneration": {
+          "type": "decimal"
+        }
+      }
+    },
+    "ChatCreate": {
+      "type": "object",
+      "fields": {
+        "sessionId": {
+          "type": "id"
+        },
+        "selection": {
+          "type": "BrowserSelection"
+        },
+        "resolution": {
+          "type": "BrowserResolution"
+        },
+        "prompt": {
+          "type": "string",
+          "minBytes": 1,
+          "maxBytes": 8192
+        },
+        "previousHandle": {
+          "type": "id",
+          "optional": true
+        }
+      }
+    },
+    "ChatHandle": {
+      "type": "object",
+      "fields": {
+        "handleId": {
+          "type": "id"
+        },
+        "binding": {
+          "type": "ChatTurnBinding"
+        }
+      }
+    },
+    "ChatDeadline": {
+      "type": "object",
+      "fields": {
+        "deadlineMillis": {
+          "type": "decimal"
+        }
+      }
+    },
+    "ChatPrepared": {
+      "type": "object",
+      "fields": {
+        "handle": {
+          "type": "ChatHandle"
+        },
+        "slotOrdinal": {
+          "type": "uint32",
+          "minimum": 1,
+          "maximum": 5
+        },
+        "slotGeneration": {
+          "type": "decimal"
+        },
+        "viewId": {
+          "type": "id"
+        },
+        "viewGeneration": {
+          "type": "decimal"
+        },
+        "documentGeneration": {
+          "type": "decimal"
+        },
+        "conversationId": {
+          "type": "id"
+        }
+      }
+    },
+    "ChatHandleRequest": {
+      "type": "object",
+      "fields": {
+        "handleId": {
+          "type": "id"
+        }
+      }
+    },
+    "ChatAction": {
+      "type": "object",
+      "fields": {
+        "handleId": {
+          "type": "id"
+        },
+        "deadlineMillis": {
+          "type": "decimal"
+        }
+      }
+    },
+    "ChatEventsRequest": {
+      "type": "object",
+      "fields": {
+        "handleId": {
+          "type": "id"
+        },
+        "afterSequence": {
+          "type": "decimal"
+        }
+      }
+    },
+    "ChatFrameAck": {
+      "type": "object",
+      "fields": {
+        "handleId": {
+          "type": "id"
+        },
+        "sequence": {
+          "type": "decimal"
+        }
+      }
+    },
+    "ChatResultAck": {
+      "type": "object",
+      "fields": {
+        "handleId": {
+          "type": "id"
+        },
+        "resultId": {
+          "type": "id"
+        }
+      }
+    },
+    "ChatFrameAckResult": {
+      "type": "object",
+      "fields": {
+        "status": {
+          "type": "text"
+        }
+      }
+    },
+    "ChatFrame": {
+      "type": "object",
+      "fields": {
+        "sequence": {
+          "type": "decimal"
+        },
+        "kind": {
+          "type": "text"
+        },
+        "data": {
+          "type": "json"
+        }
+      }
+    },
+    "ChatFrames": {
+      "type": "object",
+      "fields": {
+        "frames": {
+          "type": "ChatFrame[]"
+        }
+      }
+    },
+    "ChatSelectionEvidence": {
+      "type": "object",
+      "fields": {
+        "requested": {
+          "type": "BrowserSelection"
+        },
+        "resolution": {
+          "type": "BrowserResolution"
+        },
+        "resolutionSource": {
+          "type": "text"
+        },
+        "admitted": {
+          "type": "BrowserSelection",
+          "optional": true
+        },
+        "admissionSource": {
+          "type": "text"
+        },
+        "observed": {
+          "type": "BrowserSelection",
+          "optional": true
+        },
+        "observationSource": {
+          "type": "text"
+        },
+        "evidenceId": {
+          "type": "text"
+        }
+      }
+    },
+    "ChatResult": {
+      "type": "object",
+      "fields": {
+        "handle": {
+          "type": "ChatHandle"
+        },
+        "conversationId": {
+          "type": "text"
+        },
+        "userTurnId": {
+          "type": "text"
+        },
+        "replyId": {
+          "type": "text"
+        },
+        "resultId": {
+          "type": "id"
+        },
+        "evidence": {
+          "type": "ChatSelectionEvidence"
+        },
+        "phase": {
+          "type": "text"
+        },
+        "outcome": {
+          "type": "text"
+        },
+        "code": {
+          "type": "text"
+        },
+        "text": {
+          "type": "string",
+          "maxBytes": 8192
+        },
+        "complete": {
+          "type": "boolean"
+        },
+        "acknowledged": {
+          "type": "boolean"
         }
       }
     }

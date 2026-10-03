@@ -21,7 +21,9 @@ func Validate(name string, raw []byte) error {
 }
 func valid(kind string,value interface{},depth int) bool {
  if depth>32 { return false }
+ if strings.HasSuffix(kind,"[]") && kind!="text[]" {a,ok:=value.([]interface{});if !ok || len(a)>128{return false};for _,item:=range a{if !valid(strings.TrimSuffix(kind,"[]"),item,depth+1){return false}};return true}
  switch kind {
+ case "boolean": _,ok:=value.(bool);return ok
  case "nullableId": return value==nil || valid("id",value,depth+1)
  case "string": _,ok:=value.(string);return ok
  case "text","id","decimal","utc":

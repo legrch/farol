@@ -16,6 +16,8 @@ export function validUnicode(value: string): boolean {
 
 export function validate(name: string, value: unknown, depth = 0): boolean {
  if (depth > schema.maxDepth) return false;
+ if (name === "boolean") return typeof value === "boolean";
+ if (name.endsWith("[]") && name !== "text[]") return Array.isArray(value) && value.length <= 128 && value.every(item => validate(name.slice(0,-2),item,depth+1));
  if (name === "string") return typeof value === "string" && validUnicode(value);
  if (name === "nullableId") return value === null || validate("id",value,depth+1);
  if (["text", "id", "decimal", "utc"].includes(name)) {
