@@ -150,13 +150,12 @@ Proposed shared changes remain with their owners:
   task epoch, Computer approval generation, and read-body correlation. Trusted
   current-turn binding must come from its existing owner before activation.
 
-The accepted-base Go read still uses its original grant expiry behavior. This
-slice does not port the separately frozen TS TaskGrant reissue/execution-lease
-hotfix or claim same-chat renewal. That parity and its concurrent-operation
-limits remain an explicit prerequisite before production activation. Current
-settings/launch migration, public trusted-ingress registration, packaging,
-installed state and same-chat Brain/code qualification are also not completed.
-No active TS/Python executor is removed.
+The accepted-base Go read still uses its original grant expiry behavior. The
+separate [reissue and execution-lease slice](leases.md) can supply an explicit
+operation-owned repository under trusted current task admission; it does not
+activate that route or claim same-chat renewal. Current settings/launch migration,
+public trusted-ingress registration, packaging, installed state and same-chat
+Brain/code qualification remain incomplete. No active TS/Python executor is removed.
 
 ## Evidence
 
