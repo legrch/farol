@@ -140,6 +140,14 @@ func (s *Service) withCurrent(ctx context.Context, disclose func() error) error 
 			inspected = authority.Fail("AUTHORITY_COMPUTER_MISMATCH", "computer-policy")
 			return inspected
 		}
+		s.gate.Lock()
+		preparedPolicy, hasPreparedPolicy := s.prepared.(PolicyBound)
+		preparerPolicy, hasPreparerPolicy := s.preparer.(PolicyBound)
+		s.gate.Unlock()
+		if (hasPreparedPolicy && !preparedPolicy.MatchesPolicy(snapshot)) || (hasPreparerPolicy && !preparerPolicy.MatchesPolicy(snapshot)) {
+			inspected = authority.Fail("AUTHORITY_COMPUTER_MISMATCH", "computer-policy")
+			return inspected
+		}
 		if ctx.Err() != nil {
 			inspected = fail("PROCESS_CANCELLED", false)
 			return inspected

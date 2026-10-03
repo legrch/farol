@@ -163,3 +163,11 @@ type InvocationPreparer interface {
 	Scope() Scope
 	Prepare(context.Context, Invocation) (Selected, error)
 }
+
+// PolicyBound is a pure comparison with the SAME current coherent authority
+// snapshot. It runs under WithSnapshot and must perform no IO, evidence lookup,
+// admission or renewal. A prepared restrictive profile cannot use another
+// participant's broader policy just because cwd is still permitted.
+type PolicyBound interface {
+	MatchesPolicy(port.AccessSnapshot) bool
+}

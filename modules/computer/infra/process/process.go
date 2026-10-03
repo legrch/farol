@@ -30,13 +30,17 @@ type Command struct {
 	Args, Environment                                    []string
 	Input                                                []byte
 	Write                                                bool
-	Binding                                              *InvocationBinding `json:",omitempty"`
+	Binding                                              *InvocationBinding  `json:",omitempty"`
+	Confinement                                          *ConfinementBinding `json:",omitempty"`
 }
 
 // Qualification is the native policy producer selected by trusted boot. It must
 // attest effective confinement of THIS immutable command (including credentials,
 // network, filesystem and Git policy); a boolean/cache/request claim is not an
-// implementation. No permissive default, legacy executor or fake supervisor exists.
+// implementation. Qualify is read-only current mechanism/plan evidence inspection;
+// it must not dispatch this command, run a probe or reissue an uncertain operation.
+// There is no default evidence producer. Native Start additionally requires the
+// sealed Seatbelt producer and applies that policy at the one start attempt.
 type Qualification interface {
 	Qualify(context.Context, Command) error
 }
@@ -74,6 +78,16 @@ func New(command Command, qualification Qualification, clock port.Clock) (*Prepa
 	if qualification == nil {
 		return nil, &processsvc.NativeFailure{}
 	}
+	if selected, ok := qualification.(*Seatbelt); ok {
+		if selected == nil {
+			return nil, &processsvc.NativeFailure{}
+		}
+		var err error
+		command, err = selected.bind(command)
+		if err != nil {
+			return nil, err
+		}
+	}
 	return newPrepared(command, nativeBoundary{qualification}, clock, func(d time.Duration, f func()) timer { return time.AfterFunc(d, f) })
 }
 func copyCommand(c Command) Command {
@@ -83,6 +97,10 @@ func copyCommand(c Command) Command {
 	if c.Binding != nil {
 		binding := *c.Binding
 		c.Binding = &binding
+	}
+	if c.Confinement != nil {
+		binding := *c.Confinement
+		c.Confinement = &binding
 	}
 	return c
 }

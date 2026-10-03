@@ -20,14 +20,20 @@ seal must still match current Computer permission. The selected workspace must
 have current shell verification. A new turn or reconnect cannot replace the
 captured execution lease or widen the prepared command.
 
-`infra/process.New` captures and copies a trusted `Command`. It requires a native
-`Qualification` producer that attests effective confinement of exactly that
-command, including approved filesystem, credential, network and Git policy.
-There is no permissive implementation or default qualification in this slice.
-Native preflight measures root identity, canonical cwd and selected executable
-bytes. Those path measurements alone do not prove descriptor continuity through
-spawn or kernel confinement. The effective native policy producer and its native
-qualification remain activation prerequisites owned by normal composition.
+`infra/process.New` captures and copies a trusted `Command`. Native Start requires
+its sealed `Seatbelt` producer; a bare nil-returning `Qualification` callback
+cannot reach the old direct executable path. The compiler and its binding execute
+nothing. It requires an independently implemented native `Qualification` for the
+exact wrapped launch. That port is read-only current evidence inspection, never a
+probe, provider call, command dispatch or operation reissue. No implementation of
+that native evidence port is supplied by this checkpoint.
+
+Native preflight measures the approved root, canonical cwd, an operation-private
+0700 scratch directory with exact owner/device/inode, and every selected
+executable plus `/usr/bin/sandbox-exec`. Measured executable descriptors stay open
+through the single start attempt. These measurements do not prove continuous
+kernel/pathname identity or effective policy enforcement. The qualified mechanism
+and native witnesses remain activation prerequisites owned by normal composition.
 
 Environment is explicit, including the empty-environment case. Parent environment
 is never copied. Command input and environment remain transient private process
@@ -193,3 +199,71 @@ than promoting it to Terminal. Native qualification/disposable tests and a bound
 cheap selected CLI journey are Lead's lane. No provider or OS process was started
 for this constructor's tests, and all prior refused/unknown operations remain
 frozen. Full CI/race/native/review/commit/integration are still canonical-lane work.
+
+## Restrictive Seatbelt construction checkpoint
+
+Root composes `NewSeatbelt(selection, nativeQualification)` from the SAME selected
+lease's coherent `port.AccessSnapshot`, exact runtime ID, selected executable/hash
+pins, owner home, and one operation-private scratch path/identity. This bounded
+implementation accepts scratch only directly below `/private/tmp` with a `farol-`
+basename. Root owns creation, lifecycle and cleanup; this module creates no scratch
+factory, journal, helper executable, scheduler or authority record. Snapshot copying
+runs without IO. Approval/Grant remain the existing authority owners; the compiler
+neither issues permission nor changes their lifetime. Current guards and the original
+15-second execution lease remain unchanged.
+
+Use `Seatbelt.Environment(write)` for the trusted template, then pass Seatbelt as
+the existing Qualification to `NewPreparer`. Selected arguments/stdin/model/session/
+admission continue through the published Prepare DTO unchanged. The optional
+`Command.Confinement` binds profile/parameter/pin/scratch-identity content and exact
+mechanism hash into the original reservation digest. Replacing policy after that
+seal refuses. Legacy absent bindings retain their encoding, but native start
+requires a runtime-bound selected invocation and the new confined launch.
+
+The producer constructs `(deny default)`, exact selected subtree reads, workspace
+writes only for the captured write mode with existing ownership, operation-private
+scratch, literal pinned executable rules and read-only OS loader paths. Ancestors
+receive literal metadata access only. Owner and Grant exclusions deny both read and
+write; mandatory credential stores are denied under selected root and owner home,
+with a nested ASCII-name pattern. Paths are passed as `-D` parameters, never
+interpolated into SBPL. Newline/control/invalid paths, unknown modes, exact-only
+shell scopes, changed generation/root/runtime/hash, denied cwd and injected env
+refuse before native evidence or spawn. The native boundary constructs only the
+`/usr/bin/sandbox-exec -D ... -p <profile> -- <selected executable> <args>` route.
+Kernel application/start failure is never followed by an unsandboxed fallback.
+
+Network defaults to unconditional deny, including undeclared loopback/IPv6 and
+child networking. Network-allow selection is currently refused before effects;
+no approved endpoint/IPC mechanism is invented. This does not yet qualify a real
+networked provider CLI. External Git global/system config and prompts are disabled
+through the exact environment; owner HOME and injected tokens/loader/config vars
+are not inherited. Workspace Git is supported by the policy compiler only for
+explicitly history-approved metadata/common-directory equal to the selected
+subtree's `.git`. Linked worktrees/external metadata are refused. Repository-local
+config/hooks remain subject to the same filesystem, literal executable and network
+policy; arbitrary hooks/external owner config are not claimed as qualified parity.
+
+Required native evidence still includes actual SBPL parsing and enforcement,
+process-tree inheritance, undeclared local/external egress denial, symlink/hardlink
+and case/Unicode/diacritic aliases, runtime/pin/descriptor continuity and hostile
+repository config/hooks. Source regex/parameter tests cannot establish those OS
+properties. Where this mechanism cannot enforce the existing authority semantics,
+its native Qualification must refuse; passing a few happy-path probes cannot fill
+that gap. This checkpoint supplies no positive implementation of Qualification.
+
+The anchored supervisor, parent-death control and complete cohort settlement remain
+separate root-entry prerequisites. Direct root Wait/pipe drain still leaves group
+and descendant cleanup unverified. No native process, runtime probe, real endpoint
+or provider was executed for the compiler/launch tests. A labelled qualification
+double tests only exact command mapping and refusal propagation. Independent review,
+native/race/full CI, package, normal route activation and installed/live acceptance
+remain Lead's serialized work.
+
+`app/services/process.PolicyBound` is a pure consumer port on the existing preparer
+and prepared launch. Current guards compare participant/task/admission identity
+and recompile profile values from the SAME coherent current snapshot. The digest
+must still match before preparation, reservation, native check and disclosure.
+This prevents a broader parent/other participant profile, or a new exclusion below
+cwd, from passing a cwd-only check. Comparison performs no IO or native evidence
+lookup under owner/app gates. Permission and expiry stay with the existing domain
+and execution lease. Whole-launch argv limits are checked before sealing/reservation.
