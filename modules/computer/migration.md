@@ -53,7 +53,10 @@ changed snapshot and bounded listing. Application vectors cover revoked grants
 and approvals before disclosure. One coherent snapshot callback serializes
 validation and response construction with grant/approval mutations; two separate
 repository lookups are not a valid substitute. The in-memory access repository
-is a disposable K1 owner, not installed persistence migration. These vectors do not establish the incident's
+is a disposable K1 owner, not installed persistence migration. The native
+[authority state owner](access.md) now supplies a protected, coherent durable view
+and trusted composition ingress; its source/native checks are separate from
+production activation and settings migration. These vectors do not establish the incident's
 cause, installed profile identity, provider acceptance or product routing.
 
 Full and ranged workspace reads require stable file identity, mode, size, mtime

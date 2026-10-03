@@ -1,5 +1,5 @@
-// Package access owns one in-memory authority view for disposable K1 composition.
-// It does not load or replace installed approval/participant persistence.
+// Package access supplies coherent Computer authority views. New is the
+// disposable K1 in-memory fixture; Create/Open provide the native state owner.
 package access
 
 import (
