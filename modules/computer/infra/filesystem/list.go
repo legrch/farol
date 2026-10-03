@@ -29,7 +29,7 @@ func (w *Workspace) List(ctx context.Context, request port.ListRequest) (*port.L
 	if p.denies(parts) || p.exact != nil {
 		return nil, refusal("WORKSPACE_PATH_REFUSED")
 	}
-	root, err := openRoot(request.Workspace)
+	root, binding, err := openedRoot(request.Workspace)
 	if err != nil {
 		return nil, err
 	}
@@ -63,7 +63,11 @@ func (w *Workspace) List(ctx context.Context, request port.ListRequest) (*port.L
 		}
 		return a < b
 	})
-	result := &port.ListResponse{Entries: make([]string, 0), Truncated: overflow}
+	binding.RelativePath = "."
+	if len(parts) != 0 {
+		binding.RelativePath = strings.Join(parts, "/")
+	}
+	result := &port.ListResponse{Entries: make([]string, 0), Truncated: overflow, Binding: binding}
 	for _, name := range names {
 		if _, err := components(name, false, false); err != nil || strings.Contains(name, "/") {
 			continue

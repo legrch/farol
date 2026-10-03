@@ -159,69 +159,79 @@ func directory(parent int, name string) (int, error) {
 func stat(fd int) (unix.Stat_t, error) { var s unix.Stat_t; err := unix.Fstat(fd, &s); return s, err }
 
 func openRoot(d port.Descriptor) (int, error) {
+	fd, _, err := openedRoot(d)
+	return fd, err
+}
+
+// openedRoot observes the approved ancestor while opening the no-follow chain.
+// The binding is usable only after the caller completes its final root recheck.
+func openedRoot(d port.Descriptor) (int, *port.DirectoryBinding, error) {
 	parts, err := components(d.Root, true, false)
 	if err != nil {
-		return -1, err
+		return -1, nil, err
 	}
 	approved, err := components(d.ApprovedRoot.Path, true, false)
 	if err != nil {
-		return -1, err
+		return -1, nil, err
 	}
 	if len(approved) > len(parts) {
-		return -1, refusal("WORKSPACE_INVALID_REQUEST")
+		return -1, nil, refusal("WORKSPACE_INVALID_REQUEST")
 	}
 	for i, part := range approved {
 		if parts[i] != part {
-			return -1, refusal("WORKSPACE_INVALID_REQUEST")
+			return -1, nil, refusal("WORKSPACE_INVALID_REQUEST")
 		}
 	}
 	for _, raw := range []string{d.ApprovedRoot.Device, d.ApprovedRoot.Inode} {
 		if len(raw) == 0 || len(raw) > 20 {
-			return -1, refusal("WORKSPACE_INVALID_REQUEST")
+			return -1, nil, refusal("WORKSPACE_INVALID_REQUEST")
 		}
 		for _, r := range raw {
 			if r < '0' || r > '9' {
-				return -1, refusal("WORKSPACE_INVALID_REQUEST")
+				return -1, nil, refusal("WORKSPACE_INVALID_REQUEST")
 			}
 		}
 	}
 	dev, err := strconv.ParseUint(d.ApprovedRoot.Device, 10, 64)
 	if err != nil || len(d.ApprovedRoot.Device) > 20 {
-		return -1, refusal("WORKSPACE_INVALID_REQUEST")
+		return -1, nil, refusal("WORKSPACE_INVALID_REQUEST")
 	}
 	ino, err := strconv.ParseUint(d.ApprovedRoot.Inode, 10, 64)
 	if err != nil || len(d.ApprovedRoot.Inode) > 20 {
-		return -1, refusal("WORKSPACE_INVALID_REQUEST")
+		return -1, nil, refusal("WORKSPACE_INVALID_REQUEST")
 	}
 	fd, err := unix.Open("/", unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
 	if err != nil {
-		return -1, openError(err)
+		return -1, nil, openError(err)
 	}
 	for i, part := range parts {
 		child, err := directory(fd, part)
 		unix.Close(fd)
 		if err != nil {
-			return -1, err
+			return -1, nil, err
 		}
 		fd = child
 		if i == len(approved)-1 {
 			s, err := stat(fd)
 			if err != nil {
 				unix.Close(fd)
-				return -1, refusal("WORKSPACE_PATH_REFUSED")
+				return -1, nil, refusal("WORKSPACE_PATH_REFUSED")
 			}
 			if uint64(s.Dev) != dev || uint64(s.Ino) != ino {
 				unix.Close(fd)
-				return -1, refusal("WORKSPACE_ROOT_CHANGED")
+				return -1, nil, refusal("WORKSPACE_ROOT_CHANGED")
 			}
 		}
 	}
 	s, err := stat(fd)
 	if err != nil || s.Uid != uint32(os.Getuid()) || s.Mode&0022 != 0 {
 		unix.Close(fd)
-		return -1, refusal("WORKSPACE_PATH_REFUSED")
+		return -1, nil, refusal("WORKSPACE_PATH_REFUSED")
 	}
-	return fd, nil
+	return fd, &port.DirectoryBinding{
+		Root:         "/" + strings.Join(parts, "/"),
+		ApprovedRoot: port.Root{Path: "/" + strings.Join(approved, "/"), Device: d.ApprovedRoot.Device, Inode: d.ApprovedRoot.Inode},
+	}, nil
 }
 
 func walk(root int, parts []string) (int, error) {

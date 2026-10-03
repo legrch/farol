@@ -35,7 +35,17 @@ type ListRequest struct {
 	Workspace    Descriptor
 	RelativePath string
 }
+
+// DirectoryBinding is returned only after the native directory/root checks.
+// It is not a policy-only context or proof that a bounded listing is complete.
+type DirectoryBinding struct {
+	RelativePath string
+	Root         string
+	ApprovedRoot Root
+}
+
 type ListResponse struct {
+	Binding   *DirectoryBinding
 	Entries   []string
 	Truncated bool
 }
