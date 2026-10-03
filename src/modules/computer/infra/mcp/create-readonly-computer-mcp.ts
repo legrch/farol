@@ -1907,7 +1907,7 @@ export function createReadonlyComputerMcpServer(
         inputSchema: ShellReadInputSchema,
         annotations: READONLY_ANNOTATIONS,
       },
-      guarded(async (input) => shellResult(shell.read(input))),
+      guarded(async (input) => shellResult(await shell.readAdmitted(input))),
     );
     server.registerTool(
       "computer_shell_cancel",

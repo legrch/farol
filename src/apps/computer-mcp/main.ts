@@ -19,12 +19,19 @@ import {
 import { Sha256WorkspaceMutationDigester } from "../../modules/computer/infra/native/sha256-workspace-mutation-digester";
 import { ReadonlyComputerContractHandler } from "../../modules/computer/infra/readonly-contract-handler";
 import { InMemoryAuthorityRepository } from "../../modules/computer/infra/repo/in-memory-authorities";
+import { CurrentOwnerComputerApprovals } from "../../modules/computer/infra/repo/current-owner-computer-approvals";
+import { RenewableComputerAuthority } from "../../modules/computer/infra/mcp/renewable-computer-authority";
+import {
+  renewingReadonlyComputerContract,
+  renewingMutableComputerContract,
+} from "../../modules/computer/infra/mcp/renewing-computer-contracts";
 import { InMemoryComputerApprovalRepository } from "../../modules/computer/infra/repo/in-memory-computer-approvals";
 import { PrivateWorkspaceMutationStore } from "../../modules/computer/infra/repo/private-workspace-mutation-store";
 import {
   loadReadonlyComputerLaunchContract,
   materializeReadonlyComputerLaunch,
   serializeReadonlyComputerLaunchContract,
+  ReadonlyComputerLaunchContractSchema,
 } from "../../modules/computer/infra/mcp/launch-contract";
 import { PrivateConnectorVerificationRecorder } from "../../modules/computer/infra/mcp/connector-verification-receipt";
 import { PrivateExecutionFence } from "../../modules/computer/infra/mcp/execution-fence";
@@ -65,21 +72,44 @@ async function main(): Promise<void> {
     launchFile,
     workspace,
   );
-  const launch = materializeReadonlyComputerLaunch(loaded, Date.now());
   const launchDigest = createHash("sha256")
     .update(serializeReadonlyComputerLaunchContract(loaded))
     .digest("hex");
   const lifecycle = new PrivateMcpLifecycle(path.dirname(launchFile));
   // Registration precedes every optional host process and stdio serving.
+  const source = loaded.schema === 2 ? loaded.approvalSource : undefined;
+  const approvals = source
+    ? new CurrentOwnerComputerApprovals(source, Date.now)
+    : new InMemoryComputerApprovalRepository([loaded.approval]);
+  const renewable = source
+    ? new RenewableComputerAuthority(loaded, approvals, Date.now)
+    : undefined;
+  // Reconnect may reuse an expired launch ceiling. Only a fresh read of the
+  // current owner policy permits materialization; its lifecycle digest and
+  // operation journals remain unchanged.
+  const initial = await renewable?.admitExecution(15_000);
+  const launch = materializeReadonlyComputerLaunch(
+    initial
+      ? ReadonlyComputerLaunchContractSchema.parse({
+          ...loaded,
+          approval: initial.approval,
+          admission: {
+            ...loaded.admission,
+            expiresAt: initial.approval.expiresAt,
+          },
+        })
+      : loaded,
+    Date.now(),
+  );
   const lifecycleLease = await lifecycle.join(launchDigest);
-  const authorities = new InMemoryAuthorityRepository(launch.participants);
-  const approvals = new InMemoryComputerApprovalRepository([launch.approval]);
-  const contract = new ReadonlyComputerContractHandler(
+  const authorities =
+    renewable ?? new InMemoryAuthorityRepository(launch.participants);
+  const readonlyHandler = new ReadonlyComputerContractHandler(
     new RunReadonlyComputerAction(authorities, approvals, workspace, {
       now: () => Date.now(),
     }),
   );
-  const mutableContract = launch.mutationEnabled
+  const mutableHandler = launch.mutationEnabled
     ? new MutableComputerContractHandler(
         new RunMutableComputerAction(
           authorities,
@@ -91,6 +121,13 @@ async function main(): Promise<void> {
         ),
       )
     : undefined;
+  const contract = renewable
+    ? renewingReadonlyComputerContract(readonlyHandler, renewable)
+    : readonlyHandler;
+  const mutableContract =
+    renewable && mutableHandler
+      ? renewingMutableComputerContract(mutableHandler, renewable)
+      : mutableHandler;
   const connectorVerification = launch.connectorVerification
     ? new PrivateConnectorVerificationRecorder({
         root: path.dirname(launchFile),
@@ -164,6 +201,7 @@ async function main(): Promise<void> {
           path.dirname(launchFile),
           undefined,
           launch.gitSettingsHome ?? undefined,
+          renewable,
         )
       : undefined;
   const claudeLaunch = launch.claudeTasks;

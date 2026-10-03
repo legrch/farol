@@ -267,8 +267,25 @@ export class RunReadonlyComputerAction {
     }
     if (!currentApproval)
       return failure("COMPUTER_APPROVAL_NOT_FOUND", "computer-policy");
+    if (
+      currentParticipant.grant.computerId !== participant.grant.computerId ||
+      currentParticipant.grant.computerGeneration !==
+        participant.grant.computerGeneration ||
+      currentParticipant.grant.authorityId !== participant.grant.authorityId
+    ) {
+      return failure("AUTHORITY_COMPUTER_MISMATCH", "computer-policy");
+    }
     const currentDecision = authorizeComputerAction(
-      currentParticipant,
+      {
+        ...currentParticipant,
+        grant: {
+          ...currentParticipant.grant,
+          expiresAt: Math.min(
+            participant.grant.expiresAt,
+            currentParticipant.grant.expiresAt,
+          ),
+        },
+      },
       currentApproval,
       {
         ...request,

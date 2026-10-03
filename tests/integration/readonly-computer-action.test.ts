@@ -892,6 +892,8 @@ describe("real read-only Computer action", () => {
     ["scope-changed", "WORKSPACE_ROOT_CHANGED"],
     ["capability-revoked", "AUTHORITY_CAPABILITY_DENIED"],
     ["identity-changed", "AUTHORITY_TASK_MISMATCH"],
+    ["both-generations-changed", "AUTHORITY_COMPUTER_MISMATCH"],
+    ["ttl-renewed-after-expiry", "AUTHORITY_EXPIRED"],
     ["expired", "AUTHORITY_EXPIRED"],
     ["cancelled", "WORKSPACE_REQUEST_CANCELLED"],
   ])(
@@ -927,6 +929,16 @@ describe("real read-only Computer action", () => {
               return {
                 ...participant,
                 grant: { ...participant.grant, taskId: "foreign-task" },
+              };
+            if (afterRead && mode === "both-generations-changed")
+              return {
+                ...participant,
+                grant: { ...participant.grant, computerGeneration: 8 },
+              };
+            if (afterRead && mode === "ttl-renewed-after-expiry")
+              return {
+                ...participant,
+                grant: { ...participant.grant, expiresAt: 30_000 },
               };
             if (afterRead && mode === "scope-changed")
               return {
@@ -966,11 +978,20 @@ describe("real read-only Computer action", () => {
                   rootIdentity: { ...workspace.rootIdentity, inode: "0" },
                 })),
               };
+            if (afterRead && mode === "both-generations-changed")
+              return { ...approved, generation: 8 };
             return approved;
           },
         },
         { execute },
-        { now: () => (afterRead && mode === "expired" ? 30000 : 1000) },
+        {
+          now: () =>
+            afterRead && mode === "expired"
+              ? 30000
+              : afterRead && mode === "ttl-renewed-after-expiry"
+                ? 10001
+                : 1000,
+        },
       );
       const result = await action.execute(
         request({ kind: "workspace.read", relativePath: "README.md" }),

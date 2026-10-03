@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { spawn, type ChildProcess } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
@@ -248,7 +249,15 @@ function window(bytes: readonly Buffer[], offset: number): Buffer {
   return Buffer.concat(bytes).subarray(offset, offset + OUTPUT_WINDOW_BYTES);
 }
 
+type ShellExecutionAuthority = Readonly<{
+  approval: ComputerApproval;
+  participant: ParticipantAuthority;
+  deadlineAt: number;
+  current(): Promise<boolean>;
+}>;
+
 export class SandboxedWorkspaceShell {
+  private readonly execution = new AsyncLocalStorage<ShellExecutionAuthority>();
   private readonly byOperation = new Map<string, RunningCommand>();
   private readonly byHandle = new Map<string, RunningCommand>();
   private readonly pendingOperations = new Set<string>();
@@ -260,13 +269,28 @@ export class SandboxedWorkspaceShell {
   private terminalCleanupUnverified = false;
 
   constructor(
-    private readonly approval: ComputerApproval,
-    private readonly participant: ParticipantAuthority,
+    private readonly launchApproval: ComputerApproval,
+    private readonly launchParticipant: ParticipantAuthority,
     private readonly binding: Binding,
     private readonly privateRoot: string,
     private readonly now: () => number = () => Date.now(),
     private readonly homeDirectory: string = os.homedir(),
+    private readonly authority?: Readonly<{
+      admitExecution(lifetimeMs: number): Promise<ShellExecutionAuthority>;
+    }>,
   ) {}
+
+  private get approval(): ComputerApproval {
+    return this.execution.getStore()?.approval ?? this.launchApproval;
+  }
+  private get participant(): ParticipantAuthority {
+    return this.execution.getStore()?.participant ?? this.launchParticipant;
+  }
+
+  private async currentExecution(): Promise<boolean> {
+    const execution = this.execution.getStore();
+    return execution ? execution.current().catch(() => false) : true;
+  }
 
   private authorize(
     workspaceId: string,
@@ -523,6 +547,41 @@ export class SandboxedWorkspaceShell {
     reserveBeforeDispatch?: () => Promise<void>,
     absoluteDeadlineAt?: number,
   ): Promise<ShellResponse> {
+    if (!this.authority)
+      return this.startAdmitted(
+        input,
+        signal,
+        dispatchAllowed,
+        admissionFd,
+        reserveBeforeDispatch,
+        absoluteDeadlineAt,
+      );
+    let execution;
+    try {
+      execution = await this.authority.admitExecution(600_000);
+    } catch {
+      return refusal("SHELL_AUTHORITY_REVOKED");
+    }
+    return this.execution.run(execution, () =>
+      this.startAdmitted(
+        input,
+        signal,
+        dispatchAllowed,
+        admissionFd,
+        reserveBeforeDispatch,
+        absoluteDeadlineAt,
+      ),
+    );
+  }
+
+  private async startAdmitted(
+    input: ShellStart,
+    signal?: AbortSignal,
+    dispatchAllowed?: () => Promise<boolean>,
+    admissionFd?: number,
+    reserveBeforeDispatch?: () => Promise<void>,
+    absoluteDeadlineAt?: number,
+  ): Promise<ShellResponse> {
     if (this.closing) return refusal("SHELL_CLOSED");
     if (signal?.aborted) return refusal("SHELL_CALL_ABORTED");
     if (
@@ -592,6 +651,10 @@ export class SandboxedWorkspaceShell {
     ) {
       this.pendingOperations.delete(input.operationId);
       return refusal("SHELL_NETWORK_POLICY_UNSUPPORTED");
+    }
+    if (!(await this.currentExecution())) {
+      this.pendingOperations.delete(input.operationId);
+      return refusal("SHELL_AUTHORITY_REVOKED");
     }
     const renewed = this.authorize(
       input.workspaceId,
@@ -745,6 +808,8 @@ export class SandboxedWorkspaceShell {
     if (this.closing || signal?.aborted) {
       return abandonReserved("SHELL_OUTCOME_UNKNOWN");
     }
+    if (!(await this.currentExecution()))
+      return abandonReserved("SHELL_AUTHORITY_REVOKED");
     const finalAuthority = this.authorize(
       input.workspaceId,
       verified.cwd,
@@ -938,6 +1003,28 @@ export class SandboxedWorkspaceShell {
         record.settleTerminal(record.groupCleanup);
       })();
     });
+    const execution = this.execution.getStore();
+    if (execution) {
+      let checking = false;
+      const policyPoll = setInterval(() => {
+        if (checking || record.state !== "running") return;
+        checking = true;
+        void execution
+          .current()
+          .catch(() => false)
+          .then((current) => {
+            if (!current && record.state === "running") {
+              record.authorityExpired = true;
+              stopWatchdog(child);
+            }
+          })
+          .finally(() => {
+            checking = false;
+          });
+      }, 100);
+      policyPoll.unref();
+      child.once("close", () => clearInterval(policyPoll));
+    }
     // The watchdog checks absolute host deadlines before spawning the command.
     const authorityDeadlineAt = Math.min(
       this.approval.expiresAt,
@@ -973,6 +1060,19 @@ export class SandboxedWorkspaceShell {
         stderrOffset: 0,
       }),
     };
+  }
+
+  async readAdmitted(input: ShellRead): Promise<ShellResponse> {
+    if (this.authority) {
+      try {
+        const execution = await this.authority.admitExecution(1_000);
+        if (!(await execution.current()))
+          return refusal("SHELL_AUTHORITY_REVOKED");
+      } catch {
+        return refusal("SHELL_AUTHORITY_REVOKED");
+      }
+    }
+    return this.read(input);
   }
 
   read(input: ShellRead): ShellResponse {

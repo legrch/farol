@@ -546,6 +546,84 @@ describe("authorized mutable Computer action", () => {
     expect(calls).toBe(1);
   });
 
+  it.each([
+    ["approval-unreadable", "COMPUTER_APPROVAL_STORE_UNAVAILABLE"],
+    ["approval-missing", "AUTHORITY_COMPUTER_MISMATCH"],
+    ["participant-missing", "AUTHORITY_COMPUTER_MISMATCH"],
+    ["participant-generation", "AUTHORITY_COMPUTER_MISMATCH"],
+    ["approval-generation", "AUTHORITY_COMPUTER_MISMATCH"],
+    ["root-replaced", "WORKSPACE_ROOT_CHANGED"],
+    ["write-revoked", "AUTHORITY_CAPABILITY_DENIED"],
+  ])(
+    "refuses %s after durable admission without replaying the intent",
+    async (change, code) => {
+      const native = successfulWorkspace();
+      const stored = new InMemoryWorkspaceMutationRepository();
+      const admitted = participants().at(-1)!;
+      const approved = approval();
+      let afterAdmission = false;
+      const runner = new RunMutableComputerAction(
+        {
+          async get() {
+            if (afterAdmission && change === "participant-missing") return null;
+            if (afterAdmission && change === "participant-generation")
+              return {
+                ...admitted,
+                grant: { ...admitted.grant, computerGeneration: 8 },
+              };
+            return admitted;
+          },
+          async admit() {
+            throw new Error("unused");
+          },
+        },
+        {
+          async get() {
+            if (afterAdmission && change === "approval-unreadable")
+              throw new Error("unavailable");
+            if (afterAdmission && change === "approval-missing") return null;
+            if (afterAdmission && change === "approval-generation")
+              return { ...approved, generation: 8 };
+            if (afterAdmission && change === "root-replaced")
+              return {
+                ...approved,
+                workspaces: [
+                  {
+                    ...approved.workspaces[0]!,
+                    rootIdentity: { device: "1", inode: "2" },
+                  },
+                ],
+              };
+            if (afterAdmission && change === "write-revoked")
+              return { ...approved, capabilities: ["workspace.read"] };
+            return approved;
+          },
+        },
+        {
+          load: (identity) => stored.load(identity),
+          save: (record) => stored.save(record),
+          async admit(record) {
+            const result = await stored.admit(record);
+            afterAdmission = true;
+            return result;
+          },
+        },
+        new Sha256WorkspaceMutationDigester(),
+        native.workspace,
+        clock,
+      );
+      expect(await runner.execute(request())).toMatchObject({
+        ok: false,
+        error: { code, retry: "never" },
+      });
+      expect(await runner.execute(request())).toMatchObject({
+        ok: false,
+        error: { code, retry: "never" },
+      });
+      expect(native.calls()).toBe(0);
+    },
+  );
+
   it("refuses a mutation when authority expires during durable admission", async () => {
     let now = 9_999;
     const native = successfulWorkspace();

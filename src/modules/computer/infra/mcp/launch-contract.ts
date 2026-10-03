@@ -213,6 +213,11 @@ const MutableParticipantSchema = z.strictObject({
   mutationOwnership: z.enum(["none", "task"]),
   narrowing: MutableAuthorityNarrowingSchema.optional(),
 });
+const ApprovalSourceSchema = z.strictObject({
+  kind: z.literal("owner-settings/v1"),
+  root: AbsolutePathSchema,
+  connectorGeneration: z.number().int().nonnegative(),
+});
 const BindingSchema = z.strictObject({
   participantId: IdentifierSchema,
   turnId: IdentifierSchema,
@@ -392,6 +397,7 @@ const ReadonlyLaunchContractSchema = z
 const MutableLaunchContractSchema = z
   .strictObject({
     schema: z.literal(2),
+    approvalSource: ApprovalSourceSchema.optional(),
     // Desktop records the OS account home in the sealed launch contract.
     // The connector's own HOME may be a private process-home in Dev.
     gitSettingsHome: AbsolutePathSchema.optional(),

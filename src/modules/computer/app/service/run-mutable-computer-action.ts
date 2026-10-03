@@ -351,14 +351,57 @@ export class RunMutableComputerAction {
       return this.recoverExisting(request, admission.record, requestDigest);
     }
 
-    // Durable admission is intentionally awaitable. Revalidate the same
-    // authority snapshot at the execution handoff so time spent committing
-    // the operation record cannot carry an expired grant into the native
-    // mutation boundary. There is no await between this decision and calling
-    // mutate; that call is the documented execution linearization point.
+    // Durable admission can yield across owner revocation. Recheck current
+    // policy at handoff, while keeping the admitted participant's fixed lease.
+    // The durable intent is retained on refusal; renewal never resets it.
+    let currentApproval;
+    let currentParticipant;
+    try {
+      currentApproval = await this.approvals.get(participant.grant.computerId);
+      currentParticipant = await this.authorities.get(request.participantId);
+    } catch {
+      const terminal: StoredWorkspaceMutation = {
+        ...prepared,
+        phase: "failed",
+        outcome: {
+          code: "COMPUTER_APPROVAL_STORE_UNAVAILABLE",
+          source: "authority-store",
+        },
+      };
+      await this.trySave(terminal);
+      return failure("COMPUTER_APPROVAL_STORE_UNAVAILABLE", "authority-store");
+    }
+    if (
+      !currentApproval ||
+      !currentParticipant ||
+      currentParticipant.grant.computerGeneration !==
+        participant.grant.computerGeneration ||
+      currentParticipant.grant.computerId !== participant.grant.computerId ||
+      currentParticipant.grant.authorityId !== participant.grant.authorityId
+    ) {
+      const terminal: StoredWorkspaceMutation = {
+        ...prepared,
+        phase: "failed",
+        outcome: {
+          code: "AUTHORITY_COMPUTER_MISMATCH",
+          source: "computer-policy",
+        },
+      };
+      await this.trySave(terminal);
+      return failure("AUTHORITY_COMPUTER_MISMATCH", "computer-policy");
+    }
     const executionHandoff = authorizeComputerAction(
-      participant,
-      approval,
+      {
+        ...currentParticipant,
+        grant: {
+          ...currentParticipant.grant,
+          expiresAt: Math.min(
+            participant.grant.expiresAt,
+            currentParticipant.grant.expiresAt,
+          ),
+        },
+      },
+      currentApproval,
       {
         ownerId: request.ownerId,
         sessionId: request.sessionId,
@@ -386,6 +429,24 @@ export class RunMutableComputerAction {
     }
 
     const binding = approvedWorkspaceBinding(approval, request.workspaceId);
+    const currentBinding = approvedWorkspaceBinding(
+      currentApproval,
+      request.workspaceId,
+    );
+    if (
+      !binding ||
+      !currentBinding ||
+      binding.approvedRoot.path !== currentBinding.approvedRoot.path ||
+      binding.approvedRoot.device !== currentBinding.approvedRoot.device ||
+      binding.approvedRoot.inode !== currentBinding.approvedRoot.inode
+    ) {
+      await this.trySave({
+        ...prepared,
+        phase: "failed",
+        outcome: { code: "WORKSPACE_ROOT_CHANGED", source: "native-workspace" },
+      });
+      return failure("WORKSPACE_ROOT_CHANGED", "native-workspace");
+    }
     if (!binding) return failure("AUTHORITY_PATH_DENIED", "computer-approval");
     const { approvedRoot } = binding;
     let result: Awaited<ReturnType<MutableWorkspace["mutate"]>>;

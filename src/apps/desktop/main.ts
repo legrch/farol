@@ -3992,6 +3992,10 @@ async function startSecureMcpConnector(
       await clearConnectorVerificationReceipt(secureMcpLaunchRoot());
       const contract = createSecureMcpLaunchContract(snapshot.settings, {
         now: Date.now(),
+        ownerSettingsRoot: path.join(
+          app.getPath("userData"),
+          "farol-next-state",
+        ),
         runtimeId,
         challengeSha256: verificationChallengeSha256,
         // This is the OS account home, not the connector's isolated Dev HOME.

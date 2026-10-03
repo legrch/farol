@@ -97,10 +97,11 @@ const storedMutationSchema = z.discriminatedUnion("phase", [
     outcome: z.strictObject({
       code: z.union([
         mutationErrorCodeSchema.exclude(["WORKSPACE_MUTATION_OUTCOME_UNKNOWN"]),
+        z.literal("COMPUTER_APPROVAL_STORE_UNAVAILABLE"),
         authorityErrorCodeSchema,
       ]),
       source: z.union([
-        z.enum(["native-workspace", "operation-store"]),
+        z.enum(["native-workspace", "operation-store", "authority-store"]),
         authorityFailureSourceSchema,
       ]),
     }),

@@ -14,13 +14,17 @@ import type { ProductSettings } from "../../pkg/product-settings/contract";
 import type { CodexCallerRelayEndpoint } from "../../pkg/caller-relay/protocol";
 import type { SavedChatBridgeEndpoint } from "../../pkg/saved-chat-bridge/protocol";
 import { identityBoundWorkspaces } from "./identity-bound-workspaces";
+import {
+  ownerSettingsComputerApproval,
+  COMPUTER_TASK_GRANT_LIFETIME_MS,
+} from "../../modules/computer/infra/repo/owner-settings-computer-approval";
 import { resolveOwnerTaskModel } from "./owner-config";
 import type { DevMcpProofPreparation } from "../../modules/computer/infra/mcp/dev-mcp-proof";
 
 const NO_FOLLOW = fsConstants.O_NOFOLLOW ?? 0;
 const CLOSE_ON_EXEC =
   (fsConstants as typeof fsConstants & { O_CLOEXEC?: number }).O_CLOEXEC ?? 0;
-const AUTHORITY_LIFETIME_MS = 12 * 60 * 60 * 1_000;
+const AUTHORITY_LIFETIME_MS = COMPUTER_TASK_GRANT_LIFETIME_MS;
 
 function launchError(code: string): never {
   throw new Error(code);
@@ -91,6 +95,7 @@ export function createSecureMcpLaunchContract(
   settings: ProductSettings,
   input: Readonly<{
     now: number;
+    ownerSettingsRoot?: string;
     runtimeId: string;
     challengeSha256: string;
     gitSettingsHome?: string;
@@ -137,44 +142,18 @@ export function createSecureMcpLaunchContract(
     }
   }
 
-  const writeEnabled = workspaces.some(
-    (workspace) => workspace.access === "write",
-  );
-  const computerVerification = settings.setup.computer.verified;
-  const freshShellWorkspace = (workspace: (typeof workspaces)[number]) =>
-    settings.computer.commands === "workspace" &&
-    settings.setup.computer.reachable === "reachable" &&
-    !settings.setup.computer.outcomeUnknown &&
-    computerVerification?.configRevision === settings.computer.generation &&
-    workspace.accessCheck?.computerGeneration ===
-      settings.computer.generation &&
-    workspace.accessCheck.buildId === computerVerification.buildId &&
-    workspace.accessCheck.rootIdentity.device ===
-      workspace.rootIdentity.device &&
-    workspace.accessCheck.rootIdentity.inode === workspace.rootIdentity.inode;
-  const shellEnabled = workspaces.some(freshShellWorkspace);
+  const approval = ownerSettingsComputerApproval(settings, input.now);
+  const {
+    capabilities,
+    excludedPaths,
+    expiresAt,
+    commands: effectiveCommands,
+  } = approval;
+  const writeEnabled = capabilities.includes("workspace.write");
+  const shellEnabled = capabilities.includes("workspace.shell");
   if (shellEnabled && !input.gitSettingsHome) {
     launchError("SECURE_MCP_OWNER_HOME_REQUIRED");
   }
-  const effectiveCommands =
-    settings.computer.commands === "workspace" && !shellEnabled
-      ? "verification"
-      : settings.computer.commands;
-  const capabilities = [
-    "workspace.list" as const,
-    "workspace.read" as const,
-    "workspace.search" as const,
-    ...(effectiveCommands !== "none" ? (["verification.run"] as const) : []),
-    ...(shellEnabled ? (["workspace.shell"] as const) : []),
-    ...(writeEnabled ? (["workspace.write"] as const) : []),
-  ];
-  const excludedPaths = workspaces.flatMap((workspace) =>
-    workspace.excludedPaths.map((excluded) => ({
-      workspaceId: workspace.workspaceId,
-      path: excluded,
-    })),
-  );
-  const expiresAt = input.now + AUTHORITY_LIFETIME_MS;
   const codexTasks =
     input.codexTasks ?? selectedCodexTaskRouteLaunch(settings, input.now);
   const participantId = `secure-mcp-main-${input.runtimeId}`;
@@ -187,30 +166,17 @@ export function createSecureMcpLaunchContract(
 
   return ReadonlyComputerLaunchContractSchema.parse({
     schema: 2,
+    ...(input.ownerSettingsRoot === undefined
+      ? {}
+      : {
+          approvalSource: {
+            kind: "owner-settings/v1",
+            root: input.ownerSettingsRoot,
+            connectorGeneration: settings.connectors.secureMcp.generation,
+          },
+        }),
     ...(shellEnabled ? { gitSettingsHome: input.gitSettingsHome } : {}),
-    approval: {
-      ownerId: "owner-desktop",
-      computerId: settings.computer.computerId,
-      generation: settings.computer.generation,
-      workspaces: workspaces.map((workspace) => ({
-        workspaceId: workspace.workspaceId,
-        root: workspace.root,
-        access: workspace.access,
-        rootIdentity: workspace.rootIdentity,
-        ...(workspace.gitHistoryApproved !== undefined
-          ? { gitHistoryApproved: workspace.gitHistoryApproved }
-          : {}),
-        shellVerified: freshShellWorkspace(workspace),
-        ...(workspace.gitMetadata
-          ? { gitMetadata: workspace.gitMetadata }
-          : {}),
-      })),
-      excludedPaths,
-      capabilities,
-      network: "none",
-      commands: effectiveCommands,
-      expiresAt,
-    },
+    approval,
     admission: {
       authorityId: `secure-mcp-authority-${input.runtimeId}`,
       ownerId: "owner-desktop",

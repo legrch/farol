@@ -63,3 +63,45 @@ proves the sealed new Computer entry and embedded guidance. Neither establishes
 that an already-attached ChatGPT connector has refreshed its schema or that the
 owner's live workspace/task/account was exercised. Old receipts remain bound to
 their original artifacts.
+
+## TaskGrant renewal and execution leases
+
+Production desktop launch contracts seal an `owner-settings/v1` approval source.
+The Computer MCP reads the existing private `config.json` from that exact source
+for new admission, using the same approval producer as desktop launch. Persistent
+owner folder/capability consent is not a temporary TaskGrant. A new tool request,
+including a later ChatGPT turn or connector reconnect, derives a bounded grant
+against current owner policy through the existing `deriveTaskGrant` rules. An
+expired startup template is a scope ceiling, not evidence of current consent.
+Legacy fixture contracts without this source retain their original expiry.
+
+Renewal preserves the startup task identity, generation, roles, exclusions, roots,
+capabilities and physical root identities. Changed Computer/connector generations,
+revocation, replaced roots, changed policy or an unavailable/untrusted settings
+source refuse admission. Additional owner permissions do not widen an existing
+runtime ceiling. A genuinely temporary approval's own expiry still limits and
+can refuse reissue. Separately sealed Codex/Claude task admissions are not renewed.
+
+Each admitted Computer execution receives a fixed lease in its own async context:
+15 seconds for native file operations and at most 10 minutes for shell authority,
+with the shell command's own timeout and any explicit caller deadline also binding.
+Outer grant renewal cannot extend or replace this snapshot. Reads recheck current
+owner policy before disclosure; mutation handoff rechecks it after durable admission.
+Running shell watchdogs retain their original deadlines, check current policy and
+stop on revocation. Cancel and confirmed cleanup remain available after revocation.
+
+Reissue never redispatches an effect. Mutation records, shell intent tombstones,
+operation IDs, lifecycle digests and cleanup fences remain intact across renewal
+and reconnect. Unknown outcomes remain unknown; a fresh grant is no proof that an
+old mutation or process did not execute.
+
+Clock-controlled regressions use disposable owner settings and real in-memory MCP
+framing; workspace ports in those tests are fixtures. The native shell regressions
+use disposable process groups. After `task ci:fast`, run
+`node tests/e2e/computer-task-grant-renewal.e2e.mjs` against built bytes for the
+expired-launch, native-read, same-connection, reconnect and generation-revocation
+witness. That runner changes no host clock, owner approval or installed runtime.
+These checks do not establish live ChatGPT acceptance. Live qualification must
+record the candidate identity and Brain/code successes in the same ChatGPT chat
+before and after normal turn renewal and reconnect; installation/restart remains
+Lead-owned and requires supported reconciliation of existing unknown updater work.

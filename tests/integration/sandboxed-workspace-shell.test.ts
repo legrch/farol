@@ -214,6 +214,136 @@ async function runningMarker(shell: SandboxedWorkspaceShell, handle: string) {
 }
 
 describe("workspace shell authority", () => {
+  it("admits a new shell lease after outer expiry without extending an existing handle", async () => {
+    const { root, approval, participant } = await fixture();
+    let clockNow = Date.now();
+    let nextDeadline = Date.now() + 1_200;
+    const deadlines: number[] = [];
+    const renewed = new SandboxedWorkspaceShell(
+      { ...approval, expiresAt: clockNow - 1 },
+      {
+        ...participant,
+        grant: { ...participant.grant, expiresAt: clockNow - 1 },
+      },
+      binding,
+      path.join(root, "renewal-private"),
+      () => clockNow,
+      path.join(root, "account-home"),
+      {
+        async admitExecution() {
+          const deadlineAt = nextDeadline;
+          deadlines.push(deadlineAt);
+          return {
+            approval,
+            participant: {
+              ...participant,
+              grant: { ...participant.grant, expiresAt: deadlineAt },
+            },
+            deadlineAt,
+            async current() {
+              return true;
+            },
+          };
+        },
+      },
+    );
+    shells.push(renewed);
+    const first = await renewed.start({
+      operationId: "renewal-shell-first",
+      workspaceId: "fixture",
+      relativeCwd: ".",
+      command: "printf deadline-ready; while true; do sleep 0.05; done",
+      timeoutMs: 5_000,
+      write: false,
+    });
+    expect(first).toMatchObject({ ok: true });
+    if (!first.ok) throw new Error(first.error.code);
+    await runningMarker(renewed, first.value.handle);
+    clockNow += 100;
+    nextDeadline += 5_000;
+    const second = await renewed.start({
+      operationId: "renewal-shell-second",
+      workspaceId: "fixture",
+      relativeCwd: ".",
+      command: "printf deadline-ready; while true; do sleep 0.05; done",
+      timeoutMs: 5_000,
+      write: false,
+    });
+    expect(second).toMatchObject({ ok: true });
+    if (!second.ok) throw new Error(second.error.code);
+    await runningMarker(renewed, second.value.handle);
+    const terminal = await complete(renewed, first.value.handle);
+    expect(terminal).toMatchObject({
+      authorityExpired: true,
+      groupCleanup: "confirmed",
+    });
+    expect(
+      renewed.read({
+        handle: second.value.handle,
+        stdoutOffset: 0,
+        stderrOffset: 0,
+      }),
+    ).toMatchObject({
+      ok: true,
+      value: { state: "running", authorityExpired: false },
+    });
+    expect(deadlines).toHaveLength(2);
+    expect(deadlines[1]).toBeGreaterThan(deadlines[0]!);
+  });
+
+  it("stops an admitted shell on current owner revocation while retaining cleanup proof", async () => {
+    const { root, approval, participant } = await fixture();
+    let current = true;
+    const renewed = new SandboxedWorkspaceShell(
+      approval,
+      participant,
+      binding,
+      path.join(root, "revocation-private"),
+      Date.now,
+      path.join(root, "account-home"),
+      {
+        async admitExecution() {
+          if (!current) throw new Error("revoked");
+          return {
+            approval,
+            participant,
+            deadlineAt: approval.expiresAt,
+            async current() {
+              return current;
+            },
+          };
+        },
+      },
+    );
+    shells.push(renewed);
+    const started = await renewed.start({
+      operationId: "revoked-shell",
+      workspaceId: "fixture",
+      relativeCwd: ".",
+      command: "printf deadline-ready; while true; do sleep 0.05; done",
+      timeoutMs: 5_000,
+      write: false,
+    });
+    expect(started).toMatchObject({ ok: true });
+    if (!started.ok) throw new Error(started.error.code);
+    await runningMarker(renewed, started.value.handle);
+    current = false;
+    expect(
+      await renewed.readAdmitted({
+        handle: started.value.handle,
+        stdoutOffset: 0,
+        stderrOffset: 0,
+      }),
+    ).toMatchObject({
+      ok: false,
+      error: { code: "SHELL_AUTHORITY_REVOKED", retry: "never" },
+    });
+    expect(await complete(renewed, started.value.handle)).toMatchObject({
+      authorityExpired: true,
+      groupCleanup: "confirmed",
+    });
+  });
+
   it("rejects a cancelled call before reserving or starting an operation", async () => {
     const { shell, workspace } = await fixture();
     const controller = new AbortController();
