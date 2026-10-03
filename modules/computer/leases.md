@@ -86,8 +86,9 @@ releases it before any separate Computer revoke/update. While persistence or
 both coordinated effects are unsettled, it must never expose stale positive
 admission or claim successful coordinated revocation. The real Task/Chat owners
 must validate their lifecycle, persistence and unknown semantics. Computer owns
-none of those effects. A published authoritative no-IO admission projection is
-still missing; a provider/journal `Status` call, independently copied startup
+none of those effects. Published Chat/Task callback contracts and the Computer
+[peer adapters](admission.md) now supply the source mapping. Their concrete real
+owners and persistence are still missing; a provider/journal `Status` call, independently copied startup
 state or cache is insufficient.
 
 A root/contract assembler can admit a lease for the parsed owning operation and
@@ -100,8 +101,8 @@ The real operation owner selects the matching fixed budget. Native timeouts and
 cancellation remain separate enforcement; this slice adds no timer/process
 executor or claim that a timed-out child was stopped.
 
-For future cross-module wiring, the adapter belongs in `infra/peer` and consumes
-only the existing owner's published contract. Core owns shared transport/schema;
+The implemented cross-module mapping belongs in infra/peer/admission and
+consumes only the existing owner's published contract. Core owns shared transport/schema;
 Task/Chat owns the actual admitted turn binding; root composition owns lifetimes.
 The proposed port is not a license to import another module's app/domain or add
 common commands here. Lead owns the shared contract/lock-order decision.
