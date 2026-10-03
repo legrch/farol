@@ -27,12 +27,14 @@ type Selection struct {
 	ConnectorID, ConnectorGrantID               string
 }
 type Input struct {
+	Required   RequiredControls
 	Binding    Binding
 	Selection  Selection
 	Resolution ModelResolution
 	Prompt     string
 }
 type Prepared struct {
+	ProviderState                      string
 	Binding                            Binding
 	SlotOrdinal                        uint8
 	SlotGeneration                     uint64
@@ -51,7 +53,8 @@ type State struct {
 type Result struct {
 	Binding                                       Binding
 	ConversationID, UserTurnID, ReplyID, ResultID string
-	Requested, Observed                           Selection
+	Requested                                     Selection
+	Observed                                      SelectionFacts
 	Evidence                                      SelectionEvidence
 	Phase, Outcome, Code                          string
 	Text                                          string
@@ -131,7 +134,7 @@ func (f *Facade) PrepareNext(ctx context.Context, deadline uint64) (*Prepared, e
 	if err != nil {
 		return nil, failure(err)
 	}
-	return &Prepared{Binding: fromBinding(fixed), SlotOrdinal: b.Lease.SlotOrdinal, SlotGeneration: b.Lease.SlotGeneration, ViewID: b.ViewID, ViewGeneration: b.ViewGeneration, DocumentGeneration: b.DocumentGeneration, ConversationID: b.ConversationID}, nil
+	return &Prepared{ProviderState: string(b.ProviderState), Binding: fromBinding(fixed), SlotOrdinal: b.Lease.SlotOrdinal, SlotGeneration: b.Lease.SlotGeneration, ViewID: b.ViewID, ViewGeneration: b.ViewGeneration, DocumentGeneration: b.DocumentGeneration, ConversationID: b.ConversationID}, nil
 }
 func (h *Handle) Send(ctx context.Context, deadline uint64) error {
 	if h == nil || h.current == nil {
@@ -153,7 +156,7 @@ func (h *Handle) Result(ctx context.Context) (*Result, error) {
 	if err != nil {
 		return nil, failure(err)
 	}
-	return &Result{Binding: fromBinding(r.Binding), ConversationID: r.ProviderConversationID, UserTurnID: r.ProviderUserTurnID, ReplyID: r.ProviderReplyID, ResultID: r.ResultID, Requested: fromSelection(r.Requested), Observed: fromSelection(r.Observed), Text: r.Text, Evidence: fromEvidence(r.Evidence), Phase: r.Phase, Outcome: r.Outcome, Code: r.Code, Complete: r.Complete, Acknowledged: r.Acknowledged}, nil
+	return &Result{Binding: fromBinding(r.Binding), ConversationID: r.ProviderConversationID, UserTurnID: r.ProviderUserTurnID, ReplyID: r.ProviderReplyID, ResultID: r.ResultID, Requested: fromSelection(r.Requested), Observed: fromFacts(r.Observed), Text: r.Text, Evidence: fromEvidence(r.Evidence), Phase: r.Phase, Outcome: r.Outcome, Code: r.Code, Complete: r.Complete, Acknowledged: r.Acknowledged}, nil
 }
 func (h *Handle) WithState(ctx context.Context, inspect func(State) error) error {
 	if h == nil || h.current == nil || inspect == nil {
@@ -203,7 +206,7 @@ func (h *Handle) AcknowledgeFrame(ctx context.Context, sequence uint64) (string,
 	return string(status), failure(err)
 }
 func toInput(i Input) port.ConversationInput {
-	return port.ConversationInput{Binding: toBinding(i.Binding), Selection: toSelection(i.Selection), Resolution: toResolution(i.Resolution), Prompt: i.Prompt}
+	return port.ConversationInput{Required: toRequired(i.Required), Binding: toBinding(i.Binding), Selection: toSelection(i.Selection), Resolution: toResolution(i.Resolution), Prompt: i.Prompt}
 }
 func toBinding(b Binding) port.TurnBinding {
 	return port.TurnBinding{ProfileID: b.ProfileID, BackendGeneration: b.BackendGeneration, OwnerID: b.OwnerID, SessionID: b.SessionID, TaskID: b.TaskID, TaskEpoch: b.TaskEpoch, ParticipantID: b.ParticipantID, TurnID: b.TurnID, OperationID: b.OperationID, TurnGeneration: b.TurnGeneration}
@@ -243,7 +246,8 @@ type SelectionEvidence struct {
 	ResolutionSource  string
 	Admitted          Selection
 	AdmissionSource   string
-	Observed          Selection
+	Observed          SelectionFacts
+	PinnedSource      string
 	ObservationSource string
 	EvidenceID        string
 }
@@ -253,5 +257,22 @@ func toResolution(r ModelResolution) port.ModelResolution {
 }
 func fromEvidence(e port.SelectionEvidence) SelectionEvidence {
 	r := e.Resolution
-	return SelectionEvidence{Requested: fromSelection(e.Requested), Resolution: ModelResolution{RequestedAlias: r.RequestedAlias, RequestedExecutor: r.RequestedExecutor, RequestedEffort: r.RequestedEffort, RequestedMode: r.RequestedMode, Resolved: fromSelection(r.Resolved), ConfigSHA256: r.ConfigSHA256, TranslationID: r.TranslationID}, ResolutionSource: e.ResolutionSource, Admitted: fromSelection(e.Admitted), AdmissionSource: e.AdmissionSource, Observed: fromSelection(e.Observed), ObservationSource: e.ObservationSource, EvidenceID: e.EvidenceID}
+	return SelectionEvidence{Requested: fromSelection(e.Requested), Resolution: ModelResolution{RequestedAlias: r.RequestedAlias, RequestedExecutor: r.RequestedExecutor, RequestedEffort: r.RequestedEffort, RequestedMode: r.RequestedMode, Resolved: fromSelection(r.Resolved), ConfigSHA256: r.ConfigSHA256, TranslationID: r.TranslationID}, ResolutionSource: e.ResolutionSource, Admitted: fromSelection(e.Admitted), AdmissionSource: e.AdmissionSource, PinnedSource: e.PinnedSource, Observed: fromFacts(e.Observed), ObservationSource: e.ObservationSource, EvidenceID: e.EvidenceID}
+}
+
+type RequiredControls struct{ Model, Effort, Mode, Connector bool }
+type ControlFact struct{ Value, Literal, Source string }
+type SelectionFacts struct {
+	Model, Effort, Mode, Connector ControlFact
+	ObservedAtMillis               uint64
+}
+
+func toRequired(v RequiredControls) port.RequiredControls {
+	return port.RequiredControls{Model: v.Model, Effort: v.Effort, Mode: v.Mode, Connector: v.Connector}
+}
+func fromFact(v port.ControlFact) ControlFact {
+	return ControlFact{Value: v.Value, Literal: v.Literal, Source: string(v.Source)}
+}
+func fromFacts(v port.SelectionFacts) SelectionFacts {
+	return SelectionFacts{Model: fromFact(v.Model), Effort: fromFact(v.Effort), Mode: fromFact(v.Mode), Connector: fromFact(v.Connector), ObservedAtMillis: v.ObservedAtMillis}
 }

@@ -104,7 +104,11 @@ func (c *Conversation) Observe(ctx context.Context, deadline uint64) error {
 	switch event.Kind {
 	case port.Accepted:
 		if !duplicate {
-			view, err = s.Apply(internal, h, Change{Action: Accept, Binding: before.Binding})
+			if before.Binding.Document.EffectiveProviderState() == turn.ProviderHome {
+				view, err = s.acceptProvider(internal, h, before.Binding, event.ProviderConversationID)
+			} else {
+				view, err = s.Apply(internal, h, Change{Action: Accept, Binding: before.Binding})
+			}
 		}
 	case port.AnswerDelta:
 		if !duplicate {

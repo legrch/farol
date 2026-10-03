@@ -19,6 +19,7 @@ import (
 // CPU fixtures around the real lifecycle service. No browser, filesystem journal,
 // provider account, connector, host operation or client compatibility is claimed.
 type conversationBrowser struct {
+	verifyHook func(*port.SendVerification)
 	browserFixture
 	prepares                    []port.PrepareRequest
 	verifies                    []port.VerifySendRequest
@@ -42,24 +43,30 @@ func (b *conversationBrowser) Prepare(r port.PrepareRequest) (*port.PrepareRespo
 	if b.prepareOther {
 		cid = "other-conversation"
 	}
-	return &port.PrepareResponse{Saved: true, Readiness: port.Ready, Binding: port.BrowserBinding{Lease: r.Lease, ViewID: fmt.Sprintf("view-%d", r.Lease.SlotOrdinal), ViewGeneration: r.Lease.SlotGeneration, DocumentGeneration: r.Lease.SlotGeneration, ConversationID: cid}}, nil
+	state, saved := port.ProviderHome, false
+	if r.Target.Mode == port.NewSaved {
+		cid = ""
+	} else {
+		state, saved = port.ProviderBound, true
+	}
+	return &port.PrepareResponse{Saved: saved, Readiness: port.Ready, Binding: port.BrowserBinding{ProviderState: state, Lease: r.Lease, ViewID: fmt.Sprintf("view-%d", r.Lease.SlotOrdinal), ViewGeneration: r.Lease.SlotGeneration, DocumentGeneration: r.Lease.SlotGeneration, ConversationID: cid}}, nil
 }
 func (b *conversationBrowser) VerifySend(r port.VerifySendRequest) (*port.SendVerification, error) {
 	b.verifies = append(b.verifies, r)
-	v := &port.SendVerification{Binding: r.Binding, Observed: r.Requested, PreviousUserTurnID: r.PreviousUserTurnID, PreviousReplyID: r.PreviousReplyID, IntentDigest: r.IntentDigest, EvidenceID: fmt.Sprintf("verify-%d", len(b.verifies))}
+	v := &port.SendVerification{Binding: r.Binding, Pinned: r.Requested, Required: r.Required, Observed: fixtureFacts(r.Requested), PreviousUserTurnID: r.PreviousUserTurnID, PreviousReplyID: r.PreviousReplyID, IntentDigest: r.IntentDigest, EvidenceID: fmt.Sprintf("verify-%d", len(b.verifies))}
 	switch b.verifyFault {
 	case "account":
-		v.Observed.AccountID = "other"
+		v.Pinned.AccountID = "other"
 	case "model":
-		v.Observed.ModelID = "other"
+		v.Observed.Model.Value = "other"
 	case "effort":
-		v.Observed.Effort = "high"
+		v.Observed.Effort.Value = "high"
 	case "connector":
-		v.Observed.ConnectorID = "other"
+		v.Observed.Connector.Value = "other"
 	case "mode":
-		v.Observed.Mode = "pro"
+		v.Observed.Mode.Value = "pro"
 	case "grant":
-		v.Observed.ConnectorGrantID = "other"
+		v.Pinned.ConnectorGrantID = "other"
 	case "digest":
 		v.IntentDigest = strings.Repeat("f", 64)
 	case "view":
@@ -78,6 +85,9 @@ func (b *conversationBrowser) VerifySend(r port.VerifySendRequest) (*port.SendVe
 		return nil, nil
 	case "error":
 		return nil, errors.New("private verification diagnostic")
+	}
+	if b.verifyHook != nil {
+		b.verifyHook(v)
 	}
 	return v, nil
 }
@@ -105,6 +115,12 @@ func (b *conversationBrowser) Observe(r port.ObserveRequest) (*port.ObserveRespo
 	}
 	event := b.events[r.AfterSequence]
 	event.Binding = r.Binding
+	if event.Kind == port.Accepted && r.Binding.ProviderState == port.ProviderHome {
+		event.ProviderConversationID = "fixture-conversation"
+		if r.Binding.Lease.Identity.TaskID != "task-1" {
+			event.ProviderConversationID += "-" + r.Binding.Lease.Identity.TaskID
+		}
+	}
 	event.Sequence = r.AfterSequence + 1
 	switch b.observeFault {
 	case "binding":
@@ -135,7 +151,7 @@ func conversationOwner(t *testing.T) (*Service, *conversationBrowser, *journalFi
 	return s, b, j, r
 }
 func input(n string) port.ConversationInput {
-	return port.ConversationInput{Binding: route(n), Selection: selected(), Prompt: "fixture prompt " + n}
+	return port.ConversationInput{Required: port.RequiredControls{Model: true, Effort: true, Connector: true}, Binding: route(n), Selection: selected(), Prompt: "fixture prompt " + n}
 }
 func createPrepared(t *testing.T, s *Service) (*Conversation, *port.BrowserBinding) {
 	t.Helper()
@@ -238,7 +254,7 @@ func TestConversationCanonicalFollowupAndIncrementalResult(t *testing.T) {
 	}
 	observeOK(t, c)
 	result, err := c.Result(ctx)
-	if err != nil || !result.Complete || result.Text != "pear" || result.Acknowledged || result.Observed != vector.Selection {
+	if err != nil || !result.Complete || result.Text != "pear" || result.Acknowledged || result.Observed != fixtureFacts(vector.Selection).Projection() {
 		t.Fatalf("result=%+v %v", result, err)
 	}
 	for n := 0; n < 2; n++ {
@@ -276,7 +292,7 @@ func TestConversationCanonicalFollowupAndIncrementalResult(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if nextBinding.ConversationID != vector.Conversation || nextBinding.ConversationID != binding.ConversationID || nextBinding.Lease.SlotOrdinal != binding.Lease.SlotOrdinal || nextBinding.Lease.SlotGeneration != binding.Lease.SlotGeneration+1 {
+	if nextBinding.ConversationID != vector.Conversation || binding.ConversationID != "" || binding.ProviderState != port.ProviderHome || nextBinding.ProviderState != port.ProviderBound || nextBinding.Lease.SlotOrdinal != binding.Lease.SlotOrdinal || nextBinding.Lease.SlotGeneration != binding.Lease.SlotGeneration+1 {
 		t.Fatalf("follow binding=%+v", nextBinding)
 	}
 	b.events = observations(vector.Turns[1].User, vector.Turns[1].Reply, vector.Turns[1].Segments[0].Text)
@@ -641,8 +657,8 @@ func TestPrivateBytesAndSelectionConflictBeforeEffects(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, changed := range []port.ConversationInput{
-		{Binding: i.Binding, Selection: i.Selection, Prompt: "different"},
-		{Binding: i.Binding, Selection: port.Selection{Provider: "farol", Alias: "chatgpt", AccountID: "other", ModelID: "fixture-cheap", Effort: "low"}, Prompt: i.Prompt},
+		{Required: i.Required, Binding: i.Binding, Selection: i.Selection, Prompt: "different"},
+		{Required: port.RequiredControls{Model: true, Effort: true}, Binding: i.Binding, Selection: port.Selection{Provider: "farol", Alias: "chatgpt", AccountID: "other", ModelID: "fixture-cheap", Effort: "low"}, Prompt: i.Prompt},
 	} {
 		if _, err := s.CreateConversation(ctx, changed); err != turn.Conflict {
 			t.Fatalf("conflict=%v", err)
@@ -676,7 +692,7 @@ func TestInvocationSelectionEvidenceRemainsImmutableWhileQueued(t *testing.T) {
 	}
 	if err := c.WithConversation(ctx, func(state port.ConversationState) error {
 		check(state.Evidence)
-		if state.Evidence.AdmissionSource != "unknown" || state.Evidence.ObservationSource != "unknown" || state.Evidence.Observed != (port.Selection{}) {
+		if state.Evidence.AdmissionSource != "unknown" || state.Evidence.ObservationSource != "unknown" || state.Evidence.Observed != (port.SelectionFacts{}).Projection() {
 			t.Fatal("ready echoed input as admission/observation")
 		}
 		return nil
@@ -697,7 +713,7 @@ func TestInvocationSelectionEvidenceRemainsImmutableWhileQueued(t *testing.T) {
 	}
 	if err := c.WithConversation(ctx, func(state port.ConversationState) error {
 		check(state.Evidence)
-		if state.Evidence.AdmissionSource != "chat-policy" || state.Evidence.ObservationSource != "pre-send-browser-verified" || state.Evidence.Observed != original {
+		if state.Evidence.AdmissionSource != "chat-policy" || state.Evidence.ObservationSource != "field-facts" || state.Evidence.Observed != fixtureFacts(original).Projection() {
 			t.Fatal("selection proof strength missing")
 		}
 		return nil
@@ -771,4 +787,14 @@ func TestRefusalAfterDeltaRetainsIncompleteMessage(t *testing.T) {
 	if len(b.sent) != 1 {
 		t.Fatal("refusal resent")
 	}
+}
+
+func fixtureFacts(s port.Selection) port.SelectionFacts {
+	known := func(v string) port.ControlFact {
+		if v == "" {
+			return port.ControlFact{}
+		}
+		return port.ControlFact{Value: v, Literal: "visible-" + v, Source: port.FactPublicControl}
+	}
+	return port.SelectionFacts{Model: known(s.ModelID), Effort: known(s.Effort), Mode: known(s.Mode), Connector: known(s.ConnectorID), ObservedAtMillis: 9}
 }

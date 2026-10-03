@@ -10,6 +10,8 @@ import { Client } from "../../apps/desktop/bridge/client.ts";
 import { Decoder, frame } from "../../apps/desktop/bridge/frame.ts";
 import type {
   BrowserCommand,
+  BrowserControlFact,
+  BrowserVerification,
   BrowserBinding,
   BrowserSend,
   BrowserSelection,
@@ -21,6 +23,7 @@ import type {
 // driver only. This is not an Electron, Go process or provider journey.
 const context = { profileId: "profile", backendGeneration: "backend" };
 const binding: BrowserBinding = {
+  providerState: "bound",
   lease: {
     identity: {
       profileId: "profile",
@@ -51,9 +54,23 @@ const selection: BrowserSelection = {
   connectorGrantId: "",
   toolsEnabled: false,
 };
-const verification = {
+const required = { model: true, effort: true, mode: false, connector: false };
+const fact = (value: string): BrowserControlFact => ({
+  source: "public-control",
+  value,
+  literal: value,
+});
+const verification: BrowserVerification = {
+  pinned: selection,
+  required,
   binding,
-  observed: selection,
+  observed: {
+    model: fact("model"),
+    effort: fact("high"),
+    mode: fact("normal"),
+    connector: { source: "unknown", value: "", literal: "" },
+    observedAtMillis: "1791053000000",
+  },
   previousUserTurnId: "user",
   previousReplyId: "reply",
   intentDigest: "a".repeat(64),
@@ -64,6 +81,7 @@ function command(kind: BrowserCommand["kind"], id = kind): BrowserCommand {
   const bodies = {
     prepare: {
       target: {
+        required,
         mode: "owned-saved",
         conversationId: "conversation",
         previousUserTurnId: "user",
@@ -85,6 +103,7 @@ function command(kind: BrowserCommand["kind"], id = kind): BrowserCommand {
     "verify-send": {
       binding,
       requested: selection,
+      required,
       previousUserTurnId: "user",
       previousReplyId: "reply",
       intentDigest: verification.intentDigest,

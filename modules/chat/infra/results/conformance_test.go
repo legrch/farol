@@ -19,7 +19,7 @@ import (
 // provider, durable-filesystem or process-restart evidence.
 type clockFixture struct{}
 
-func (clockFixture) NowMillis() uint64 { return 1 }
+func (clockFixture) NowMillis() uint64 { return 10 }
 
 type exchangeFixture struct{ calls []browser.Command }
 
@@ -31,9 +31,15 @@ func (e *exchangeFixture) Exchange(_ context.Context, c browser.Command) (browse
 		if r.Target.Mode == "owned-saved" {
 			cid = r.Target.ConversationID
 		}
-		return browser.PreparedReply{Saved: true, Readiness: "ready", Binding: browser.Binding{Lease: r.Lease, ViewID: "view", ViewGeneration: r.Lease.SlotGeneration, DocumentGeneration: r.Lease.SlotGeneration, ConversationID: cid}}, nil
+		state, saved := "home", false
+		if r.Target.Mode == "new-saved" {
+			cid = ""
+		} else {
+			state, saved = "bound", true
+		}
+		return browser.PreparedReply{Saved: saved, Readiness: "ready", Binding: browser.Binding{ProviderState: state, Lease: r.Lease, ViewID: "view", ViewGeneration: r.Lease.SlotGeneration, DocumentGeneration: r.Lease.SlotGeneration, ConversationID: cid}}, nil
 	case browser.VerifySendCommand:
-		return browser.VerifiedReply{Verification: browser.Verification{Binding: r.Binding, Observed: r.Requested, PreviousUserTurnID: r.PreviousUserTurnID, PreviousReplyID: r.PreviousReplyID, IntentDigest: r.IntentDigest, EvidenceID: "proof-" + r.Binding.Lease.Identity.OperationID}}, nil
+		return browser.VerifiedReply{Verification: browser.Verification{Binding: r.Binding, Pinned: r.Requested, Required: r.Required, Observed: fixtureFacts(r.Requested), PreviousUserTurnID: r.PreviousUserTurnID, PreviousReplyID: r.PreviousReplyID, IntentDigest: r.IntentDigest, EvidenceID: "proof-" + r.Binding.Lease.Identity.OperationID}}, nil
 	case browser.SendCommand:
 		return browser.SentReply{Binding: r.Binding, VerificationID: r.Verification.EvidenceID, Status: "submitted"}, nil
 	case browser.ObserveCommand:
@@ -42,6 +48,9 @@ func (e *exchangeFixture) Exchange(_ context.Context, c browser.Command) (browse
 		switch r.AfterSequence {
 		case 0:
 			event.Kind = "accepted"
+			if r.Binding.ProviderState == "home" {
+				event.ProviderConversationID = "saved-conversation"
+			}
 		case 1:
 			event.Kind = "answer-delta"
 			event.SegmentID = "segment-" + suffix
@@ -94,7 +103,7 @@ func serviceFixture(t *testing.T, limits Limits) (*lifecycle.Service, *Memory, *
 	if err != nil {
 		t.Fatal(err)
 	}
-	input := port.ConversationInput{Binding: bindingFixture(), Selection: port.Selection{Provider: "farol", Alias: "chatgpt", AccountID: "account", ModelID: "cheap", Effort: "low", Mode: "standard"}, Prompt: "private fixture prompt"}
+	input := port.ConversationInput{Required: port.RequiredControls{Model: true, Effort: true, Mode: true}, Binding: bindingFixture(), Selection: port.Selection{Provider: "farol", Alias: "chatgpt", AccountID: "account", ModelID: "cheap", Effort: "low", Mode: "standard"}, Prompt: "private fixture prompt"}
 	return service, memory, exchange, journal, input
 }
 func finishFixture(t *testing.T, c *lifecycle.Conversation) {
@@ -162,7 +171,7 @@ func TestRealLifecycleDeliveryACKAndFollowupKeepStoredBytesOutsideActivity(t *te
 		t.Fatal(err)
 	}
 	nextBinding, err := service.PrepareNext(ctx, deadline)
-	if err != nil || nextBinding.ConversationID != firstBinding.ConversationID || nextBinding.Lease.SlotGeneration != firstBinding.Lease.SlotGeneration+1 {
+	if err != nil || nextBinding.ConversationID != "saved-conversation" || firstBinding.ConversationID != "" || nextBinding.Lease.SlotGeneration != firstBinding.Lease.SlotGeneration+1 {
 		t.Fatal("follow-up binding/reuse differs", err)
 	}
 	finishFixture(t, next)
@@ -239,4 +248,14 @@ func TestRetentionCapacityDoesNotPublishFalseCompletedResultOrResend(t *testing.
 	if len(exchange.calls) != before || len(memory.entries) != 1 || string(memory.entries[old.Binding.OperationID].payload) != string(old.Payload) {
 		t.Fatal("failed result retried or evicted old bytes")
 	}
+}
+
+func fixtureFacts(s browser.Selection) browser.SelectionFacts {
+	known := func(v string) browser.ControlFact {
+		if v == "" {
+			return browser.ControlFact{}
+		}
+		return browser.ControlFact{Value: v, Literal: "visible-" + v, Source: "public-control"}
+	}
+	return browser.SelectionFacts{Model: known(s.ModelID), Effort: known(s.Effort), Mode: known(s.Mode), Connector: known(s.ConnectorID), ObservedAtMillis: 9}
 }

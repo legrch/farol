@@ -23,7 +23,15 @@ type BrowserLease struct {
 	SlotGeneration    uint64
 }
 
+type ProviderState string
+
+const (
+	ProviderHome  ProviderState = "home"
+	ProviderBound ProviderState = "bound"
+)
+
 type BrowserBinding struct {
+	ProviderState      ProviderState
 	Lease              BrowserLease
 	ViewID             string
 	ViewGeneration     uint64
@@ -118,6 +126,7 @@ const (
 )
 
 type BrowserObservation struct {
+	ProviderConversationID         string
 	UserTurnID, ReplyID, SegmentID string
 	Binding                        BrowserBinding
 	Sequence                       uint64
@@ -207,11 +216,22 @@ func ValidateObserveResponse(request ObserveRequest, response *ObserveResponse) 
 		default:
 			return ObserveInvalid
 		}
+		if !optionalObservationID(event.ProviderConversationID) || (event.Kind != Accepted && event.ProviderConversationID != "") {
+			return ObserveInvalid
+		}
+		if event.Kind == Accepted {
+			if request.Binding.ProviderState == ProviderHome && (!conversationID(event.ProviderConversationID) || !conversationID(event.UserTurnID)) {
+				return ObserveCorrelation
+			}
+			if request.Binding.ProviderState == ProviderBound && event.ProviderConversationID != "" && event.ProviderConversationID != request.Binding.ConversationID {
+				return ObserveCorrelation
+			}
+		}
 		if !utf8.ValidString(event.Text) || len(event.Text) > MaxObserveTextBytes || !classifiedObserveCode(event.Code) || !optionalObservationID(event.UserTurnID) || !optionalObservationID(event.ReplyID) || !optionalObservationID(event.SegmentID) {
 			return ObserveInvalid
 		}
 		// The page bound includes selected text and classified-code bytes.
-		bytes += len(event.Text) + len(event.Code) + len(event.UserTurnID) + len(event.ReplyID) + len(event.SegmentID)
+		bytes += len(event.ProviderConversationID) + len(event.Text) + len(event.Code) + len(event.UserTurnID) + len(event.ReplyID) + len(event.SegmentID)
 		if bytes > MaxObservePageBytes {
 			return ObserveInvalid
 		}

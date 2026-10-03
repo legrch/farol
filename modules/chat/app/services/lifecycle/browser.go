@@ -61,17 +61,17 @@ func (s *Service) PrepareNext(ctx context.Context, deadlineMillis uint64) (*port
 		return nil, s.fail(m)
 	}
 	binding := reply.Binding
-	if h.target.Mode != "" && (!reply.Saved || (h.target.Mode == port.OwnedSaved && binding.ConversationID != h.target.ConversationID)) {
+	if (h.target.Mode == port.NewSaved && (reply.Saved || binding.ProviderState != port.ProviderHome || binding.ConversationID != "")) || (h.target.Mode == port.OwnedSaved && (!reply.Saved || binding.ProviderState != port.ProviderBound || binding.ConversationID != h.target.ConversationID)) {
 		return nil, s.fail(m)
 	}
 	err = s.settle(ctx, m, func(q *turn.Queue, before turn.Snapshot) (port.JournalEntry, error) {
-		if h.target.Mode != "" {
+		if h.target.Mode == port.OwnedSaved {
 			owned, exists := s.providerOwners[binding.ConversationID]
-			if (h.target.Mode == port.NewSaved && exists) || (h.target.Mode == port.OwnedSaved && (!exists || !sameConversationOwner(owned, h.fixed))) {
+			if !exists || !sameConversationOwner(owned, h.fixed) {
 				return port.JournalEntry{}, Mismatch
 			}
 		}
-		after, err := q.Bind(reservation, turn.Document{ViewID: binding.ViewID, ViewGeneration: binding.ViewGeneration, DocumentGeneration: binding.DocumentGeneration, ConversationID: binding.ConversationID})
+		after, err := q.Bind(reservation, turn.Document{ProviderState: turn.ProviderState(binding.ProviderState), ViewID: binding.ViewID, ViewGeneration: binding.ViewGeneration, DocumentGeneration: binding.DocumentGeneration, ConversationID: binding.ConversationID})
 		if err == nil && reply.Readiness == port.OwnerRequired {
 			after, err = q.AwaitOwner(after.Binding)
 		}
@@ -130,7 +130,7 @@ func (s *Service) Send(ctx context.Context, h *Handle, prompt string, deadlineMi
 		if !ok {
 			return nil, s.fail(m)
 		}
-		request := port.VerifySendRequest{Binding: binding, Requested: h.target.Selection, IntentDigest: h.digest, PreviousUserTurnID: h.target.PreviousUserTurnID, PreviousReplyID: h.target.PreviousReplyID, DeadlineMillis: deadlineMillis}
+		request := port.VerifySendRequest{Binding: binding, Required: h.target.Required, Requested: h.target.Selection, IntentDigest: h.digest, PreviousUserTurnID: h.target.PreviousUserTurnID, PreviousReplyID: h.target.PreviousReplyID, DeadlineMillis: deadlineMillis}
 		proof, err := verified.VerifySend(request)
 		if err != nil || !port.ValidVerification(request, proof) {
 			return nil, s.fail(m)
@@ -228,7 +228,7 @@ func browserLease(r turn.Reservation) port.BrowserLease {
 }
 func browserBinding(b turn.Binding) port.BrowserBinding {
 	d := b.Document
-	return port.BrowserBinding{Lease: browserLease(b.Reservation), ViewID: d.ViewID, ViewGeneration: d.ViewGeneration, DocumentGeneration: d.DocumentGeneration, ConversationID: d.ConversationID}
+	return port.BrowserBinding{ProviderState: port.ProviderState(d.ProviderState), Lease: browserLease(b.Reservation), ViewID: d.ViewID, ViewGeneration: d.ViewGeneration, DocumentGeneration: d.DocumentGeneration, ConversationID: d.ConversationID}
 }
 
 func sameConversationOwner(a, b port.TurnBinding) bool {

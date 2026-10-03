@@ -435,10 +435,12 @@ func (s *Service) commit(ctx context.Context, m *mutation, publish bool) error {
 			if c := m.handle.conversation; c != nil {
 				c.root.latest = c
 			}
-		case "prepared":
+		case "prepared", "accept":
 			if c := m.handle.conversation; c != nil {
-				c.providerID = m.entry.After.Binding.Document.ConversationID
-				s.providerOwners[c.providerID] = m.handle.fixed
+				if cid := m.entry.After.Binding.Document.ConversationID; cid != "" {
+					c.providerID = cid
+					s.providerOwners[cid] = m.handle.fixed
+				}
 			}
 		case "request-computer":
 			m.handle.unresolvedCallID = m.entry.CallID

@@ -32,7 +32,7 @@ var _ port.ConversationOwner = (*Conversation)(nil)
 type observationKey struct{}
 
 func (s *Service) CreateConversation(ctx context.Context, input port.ConversationInput) (*Conversation, error) {
-	return s.createConversation(ctx, input, port.ConversationTarget{Mode: port.NewSaved, Selection: input.Selection, Resolution: input.Resolution}, nil)
+	return s.createConversation(ctx, input, port.ConversationTarget{Mode: port.NewSaved, Required: input.Required, Selection: input.Selection, Resolution: input.Resolution}, nil)
 }
 func (s *Service) FollowConversation(ctx context.Context, previous *Conversation, input port.ConversationInput) (*Conversation, error) {
 	if s == nil || ctx == nil || previous == nil || previous.owner != s || previous.handle == nil {
@@ -51,11 +51,11 @@ func (s *Service) FollowConversation(ctx context.Context, previous *Conversation
 	}
 	old := h.fixed
 	b := input.Binding
-	if old.ProfileID != b.ProfileID || old.BackendGeneration != b.BackendGeneration || old.OwnerID != b.OwnerID || old.SessionID != b.SessionID || old.TaskID != b.TaskID || old.TaskEpoch != b.TaskEpoch || old.ParticipantID != b.ParticipantID || input.Selection != h.target.Selection || b.OperationID == old.OperationID || b.TurnID == old.TurnID || b.TurnGeneration <= old.TurnGeneration {
+	if old.ProfileID != b.ProfileID || old.BackendGeneration != b.BackendGeneration || old.OwnerID != b.OwnerID || old.SessionID != b.SessionID || old.TaskID != b.TaskID || old.TaskEpoch != b.TaskEpoch || old.ParticipantID != b.ParticipantID || input.Selection != h.target.Selection || input.Required != h.target.Required || b.OperationID == old.OperationID || b.TurnID == old.TurnID || b.TurnGeneration <= old.TurnGeneration {
 		s.deps.Gate.Unlock()
 		return nil, Mismatch
 	}
-	target := port.ConversationTarget{Mode: port.OwnedSaved, ConversationID: previous.providerID, Selection: input.Selection, PreviousUserTurnID: h.output.UserID, PreviousReplyID: h.output.ReplyID, Resolution: input.Resolution}
+	target := port.ConversationTarget{Mode: port.OwnedSaved, Required: input.Required, ConversationID: previous.providerID, Selection: input.Selection, PreviousUserTurnID: h.output.UserID, PreviousReplyID: h.output.ReplyID, Resolution: input.Resolution}
 	s.deps.Gate.Unlock()
 	return s.createConversation(ctx, input, target, previous)
 }
@@ -215,7 +215,7 @@ func (c *Conversation) Result(ctx context.Context) (*port.ConversationResult, er
 	if !view.HasResult {
 		return nil, Unsettled
 	}
-	return &port.ConversationResult{Binding: h.fixed, ProviderConversationID: c.providerID, ProviderUserTurnID: h.output.UserID, ProviderReplyID: h.output.ReplyID, ResultID: view.Result.ID, Requested: h.target.Selection, Observed: h.verification.Observed, Text: h.output.Text(), Evidence: selectionEvidence(h), Phase: string(view.Phase), Outcome: string(view.Result.Outcome), Code: view.Result.Code, Complete: view.Result.Outcome == turn.Completed && h.output.Complete, Acknowledged: view.DeliveryAcknowledged}, nil
+	return &port.ConversationResult{Binding: h.fixed, ProviderConversationID: c.providerID, ProviderUserTurnID: h.output.UserID, ProviderReplyID: h.output.ReplyID, ResultID: view.Result.ID, Requested: h.target.Selection, Observed: h.verification.Observed.Projection(), Text: h.output.Text(), Evidence: selectionEvidence(h), Phase: string(view.Phase), Outcome: string(view.Result.Outcome), Code: view.Result.Code, Complete: view.Result.Outcome == turn.Completed && h.output.Complete, Acknowledged: view.DeliveryAcknowledged}, nil
 }
 func (c *Conversation) Acknowledge(ctx context.Context, resultID string) error {
 	if c == nil || c.owner == nil || c.handle == nil {
@@ -297,15 +297,15 @@ func (c *Conversation) Resume(ctx context.Context) error {
 }
 
 func selectionEvidence(h *Handle) port.SelectionEvidence {
-	e := port.SelectionEvidence{Requested: h.target.Selection, Resolution: h.target.Resolution, ResolutionSource: "unknown", AdmissionSource: "unknown", ObservationSource: "unknown"}
+	e := port.SelectionEvidence{Requested: h.target.Selection, Resolution: h.target.Resolution, ResolutionSource: "unknown", AdmissionSource: "unknown", ObservationSource: "unknown", PinnedSource: "configured-pinned-scope", Observed: (port.SelectionFacts{}).Projection()}
 	if h.target.Resolution != (port.ModelResolution{}) {
 		e.ResolutionSource = "configured"
 	}
 	if h.verification.EvidenceID != "" {
 		e.Admitted = h.target.Selection
 		e.AdmissionSource = "chat-policy"
-		e.Observed = h.verification.Observed
-		e.ObservationSource = "pre-send-browser-verified"
+		e.Observed = h.verification.Observed.Projection()
+		e.ObservationSource = "field-facts"
 		e.EvidenceID = h.verification.EvidenceID
 	}
 	return e

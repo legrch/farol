@@ -73,15 +73,39 @@ type Reservation struct {
 
 // Document names the exact Desktop-owned surface and navigation observation.
 // ConversationID is a validated opaque provider handle, never a caller URL.
+type ProviderState string
+
+const (
+	ProviderHome  ProviderState = "home"
+	ProviderBound ProviderState = "bound"
+)
+
 type Document struct {
+	ProviderState      ProviderState
 	ViewID             string
 	ViewGeneration     uint64
 	DocumentGeneration uint64
 	ConversationID     string
 }
 
+// EffectiveProviderState preserves only legacy already-bound values. Home is never inferred.
+func (d Document) EffectiveProviderState() ProviderState {
+	if d.ProviderState == "" && id(d.ConversationID) {
+		return ProviderBound
+	}
+	return d.ProviderState
+}
 func (d Document) valid() bool {
-	return id(d.ViewID) && d.ViewGeneration > 0 && d.DocumentGeneration > 0 && id(d.ConversationID)
+	if !id(d.ViewID) || d.ViewGeneration == 0 || d.DocumentGeneration == 0 {
+		return false
+	}
+	switch d.EffectiveProviderState() {
+	case ProviderHome:
+		return d.ConversationID == ""
+	case ProviderBound:
+		return id(d.ConversationID)
+	}
+	return false
 }
 
 type Binding struct {
@@ -233,7 +257,23 @@ func (t Turn) Dispatch(b Binding) (Turn, error) {
 	return t, nil
 }
 
+// AcceptConversation adopts the first real provider ID only on exact accepted Home evidence.
+func (t Turn) AcceptConversation(b Binding, cid string) (Turn, error) {
+	if !t.matches(b) || t.binding.Document.EffectiveProviderState() != ProviderHome || !id(cid) {
+		return t, Correlation
+	}
+	if t.phase != Running || !t.sendIntent || t.accepted {
+		return t, Transition
+	}
+	t.binding.Document.ProviderState, t.binding.Document.ConversationID = ProviderBound, cid
+	t.accepted = true
+	return t, nil
+}
+
 func (t Turn) Accept(b Binding) (Turn, error) {
+	if b.Document.EffectiveProviderState() != ProviderBound {
+		return t, Correlation
+	}
 	if !t.matches(b) {
 		return t, Correlation
 	}

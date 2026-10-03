@@ -49,11 +49,11 @@ func (b *browser) Prepare(r port.PrepareRequest) (*port.PrepareResponse, error) 
 	if b.ownerRequired {
 		readiness = port.OwnerRequired
 	}
-	return &port.PrepareResponse{Saved: true, Readiness: readiness, Binding: port.BrowserBinding{Lease: r.Lease, ViewID: "view", ViewGeneration: 1, DocumentGeneration: 1, ConversationID: "conversation"}}, nil
+	return &port.PrepareResponse{Saved: false, Readiness: readiness, Binding: port.BrowserBinding{ProviderState: port.ProviderHome, Lease: r.Lease, ViewID: "view", ViewGeneration: 1, DocumentGeneration: 1, ConversationID: ""}}, nil
 }
 func (b *browser) VerifySend(r port.VerifySendRequest) (*port.SendVerification, error) {
 	b.verifies++
-	return &port.SendVerification{Binding: r.Binding, Observed: r.Requested, IntentDigest: r.IntentDigest, EvidenceID: "witness"}, nil
+	return &port.SendVerification{Binding: r.Binding, Pinned: r.Requested, Required: r.Required, Observed: fixtureFacts(r.Requested), IntentDigest: r.IntentDigest, EvidenceID: "witness"}, nil
 }
 func (b *browser) Send(r port.SendRequest) (*port.SendResponse, error) {
 	b.sends++
@@ -68,6 +68,7 @@ func (b *browser) Observe(r port.ObserveRequest) (*port.ObserveResponse, error) 
 	switch r.AfterSequence {
 	case 0:
 		event.Kind = port.Accepted
+		event.ProviderConversationID = "conversation"
 	case 1:
 		event.Kind = port.AnswerDelta
 		event.SegmentID = "block"
@@ -90,7 +91,7 @@ func fixture(t *testing.T) (*conversation.Facade, *browser, conversation.Input) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	i := conversation.Input{Binding: conversation.Binding{ProfileID: "profile", BackendGeneration: "backend", OwnerID: "owner", SessionID: "session", TaskID: "task", TaskEpoch: 31, ParticipantID: "participant", TurnID: "turn", OperationID: "operation", TurnGeneration: 2}, Selection: conversation.Selection{Provider: "farol", Alias: "chatgpt", AccountID: "account", ModelID: "cheap", Effort: "low"}, Prompt: "fixture input"}
+	i := conversation.Input{Required: conversation.RequiredControls{Model: true, Effort: true}, Binding: conversation.Binding{ProfileID: "profile", BackendGeneration: "backend", OwnerID: "owner", SessionID: "session", TaskID: "task", TaskEpoch: 31, ParticipantID: "participant", TurnID: "turn", OperationID: "operation", TurnGeneration: 2}, Selection: conversation.Selection{Provider: "farol", Alias: "chatgpt", AccountID: "account", ModelID: "cheap", Effort: "low"}, Prompt: "fixture input"}
 	return conversation.New(s), b, i
 }
 func TestFacadeServesIncrementalFramesAndExactOwnerBinding(t *testing.T) {
@@ -131,7 +132,7 @@ func TestFacadeServesIncrementalFramesAndExactOwnerBinding(t *testing.T) {
 		t.Fatal(err)
 	}
 	r, err := h.Result(ctx)
-	if err != nil || !r.Complete || r.Phase != "result-ready" || r.Requested != i.Selection || r.Observed != i.Selection || r.Binding != i.Binding || r.Acknowledged {
+	if err != nil || !r.Complete || r.Phase != "result-ready" || r.Requested != i.Selection || r.Observed.Model.Value != i.Selection.ModelID || r.Observed.Model.Source != "public-control" || r.Binding != i.Binding || r.Acknowledged {
 		t.Fatalf("result=%+v %v", r, err)
 	}
 	frames, err := h.Events(ctx, 0)
@@ -259,4 +260,14 @@ func TestUsefulModelConsumerDeltaBeforeBarrierReleasesTerminal(t *testing.T) {
 	if err != nil || !result.Complete || result.Acknowledged || b.sends != 1 {
 		t.Fatalf("released result=%+v %v", result, err)
 	}
+}
+
+func fixtureFacts(s port.Selection) port.SelectionFacts {
+	known := func(v string) port.ControlFact {
+		if v == "" {
+			return port.ControlFact{}
+		}
+		return port.ControlFact{Value: v, Literal: "visible-" + v, Source: port.FactPublicControl}
+	}
+	return port.SelectionFacts{Model: known(s.ModelID), Effort: known(s.Effort), Mode: known(s.Mode), Connector: known(s.ConnectorID), ObservedAtMillis: 9}
 }

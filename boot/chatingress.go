@@ -70,7 +70,7 @@ func (s *ChatIngress) create(ctx context.Context, operation string, input wire.C
 		binding.TurnGeneration++
 		previous = old.handle
 	}
-	in := conversation.Input{Binding: binding, Selection: chatSelection(input.Selection), Resolution: chatResolution(input.Resolution), Prompt: input.Prompt}
+	in := conversation.Input{Required: conversation.RequiredControls{Model: input.Required.Model, Effort: input.Required.Effort, Mode: input.Required.Mode, Connector: input.Required.Connector}, Binding: binding, Selection: chatSelection(input.Selection), Resolution: chatResolution(input.Resolution), Prompt: input.Prompt}
 	var handle *conversation.Handle
 	if previous == nil {
 		handle, err = s.facade.Create(ctx, in)
@@ -116,13 +116,13 @@ func chatWireHandle(h chatHandle) wire.ChatHandle {
 }
 func chatWireEvidence(e conversation.SelectionEvidence) wire.ChatSelectionEvidence {
 	r := e.Resolution
-	out := wire.ChatSelectionEvidence{Requested: chatWireSelection(e.Requested), Resolution: wire.BrowserResolution{RequestedAlias: r.RequestedAlias, RequestedExecutor: r.RequestedExecutor, RequestedEffort: r.RequestedEffort, RequestedMode: r.RequestedMode, Resolved: chatWireSelection(r.Resolved), ConfigSHA256: r.ConfigSHA256, TranslationId: r.TranslationID}, ResolutionSource: e.ResolutionSource, AdmissionSource: e.AdmissionSource, ObservationSource: e.ObservationSource, EvidenceId: e.EvidenceID}
+	out := wire.ChatSelectionEvidence{PinnedSource: e.PinnedSource, Requested: chatWireSelection(e.Requested), Resolution: wire.BrowserResolution{RequestedAlias: r.RequestedAlias, RequestedExecutor: r.RequestedExecutor, RequestedEffort: r.RequestedEffort, RequestedMode: r.RequestedMode, Resolved: chatWireSelection(r.Resolved), ConfigSHA256: r.ConfigSHA256, TranslationId: r.TranslationID}, ResolutionSource: e.ResolutionSource, AdmissionSource: e.AdmissionSource, ObservationSource: e.ObservationSource, EvidenceId: e.EvidenceID}
 	if e.AdmissionSource != "unknown" {
 		v := chatWireSelection(e.Admitted)
 		out.Admitted = &v
 	}
 	if e.ObservationSource != "unknown" {
-		v := chatWireSelection(e.Observed)
+		v := chatWireFacts(e.Observed)
 		out.Observed = &v
 	}
 	return out
@@ -180,7 +180,7 @@ func (s *ChatIngress) Methods() map[string]desktop.Method {
 		if h.handle == nil {
 			return nil, errors.New("chat_prepared_owner_unknown")
 		}
-		return chatOutcome("ChatPrepared", wire.ChatPrepared{Handle: chatWireHandle(h), SlotOrdinal: uint32(p.SlotOrdinal), SlotGeneration: decimal(p.SlotGeneration), ViewId: p.ViewID, ViewGeneration: decimal(p.ViewGeneration), DocumentGeneration: decimal(p.DocumentGeneration), ConversationId: p.ConversationID}, nil)
+		return chatOutcome("ChatPrepared", wire.ChatPrepared{ProviderState: p.ProviderState, Handle: chatWireHandle(h), SlotOrdinal: uint32(p.SlotOrdinal), SlotGeneration: decimal(p.SlotGeneration), ViewId: p.ViewID, ViewGeneration: decimal(p.ViewGeneration), DocumentGeneration: decimal(p.DocumentGeneration), ConversationId: p.ConversationID}, nil)
 	}}
 	for _, name := range []string{"send", "observe"} {
 		methods["chat.conversation."+name] = desktop.Method{Concurrent: true, Handle: func(ctx context.Context, r desktop.Request) (*desktop.Outcome, error) {
@@ -282,4 +282,14 @@ func (s *ChatIngress) Methods() map[string]desktop.Method {
 		}}
 	}
 	return methods
+}
+
+func chatWireFacts(v conversation.SelectionFacts) wire.BrowserSelectionFacts {
+	fact := func(v conversation.ControlFact) wire.BrowserControlFact {
+		if v.Source == "" {
+			v.Source = "unknown"
+		}
+		return wire.BrowserControlFact{Source: v.Source, Value: v.Value, Literal: v.Literal}
+	}
+	return wire.BrowserSelectionFacts{Model: fact(v.Model), Effort: fact(v.Effort), Mode: fact(v.Mode), Connector: fact(v.Connector), ObservedAtMillis: decimal(v.ObservedAtMillis)}
 }

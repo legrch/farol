@@ -907,7 +907,13 @@
           "type": "decimal"
         },
         "conversationId": {
-          "type": "id"
+          "type": "string",
+          "maxBytes": 128,
+          "pattern": "^([A-Za-z0-9][A-Za-z0-9._:/-]{0,127})?$"
+        },
+        "providerState": {
+          "type": "text",
+          "values": ["home", "bound"]
         }
       }
     },
@@ -1010,6 +1016,9 @@
         },
         "resolution": {
           "type": "BrowserResolution"
+        },
+        "required": {
+          "type": "BrowserRequiredControls"
         }
       }
     },
@@ -1020,7 +1029,7 @@
           "type": "BrowserBinding"
         },
         "observed": {
-          "type": "BrowserSelection"
+          "type": "BrowserSelectionFacts"
         },
         "previousUserTurnId": {
           "type": "string",
@@ -1038,6 +1047,12 @@
         },
         "evidenceId": {
           "type": "id"
+        },
+        "required": {
+          "type": "BrowserRequiredControls"
+        },
+        "pinned": {
+          "type": "BrowserSelection"
         }
       }
     },
@@ -1104,6 +1119,9 @@
         },
         "deadlineMillis": {
           "type": "decimal"
+        },
+        "required": {
+          "type": "BrowserRequiredControls"
         }
       }
     },
@@ -1221,6 +1239,11 @@
           "pattern": "^([A-Za-z0-9][A-Za-z0-9._:/-]{0,127})?$"
         },
         "segmentId": {
+          "type": "string",
+          "maxBytes": 128,
+          "pattern": "^([A-Za-z0-9][A-Za-z0-9._:/-]{0,127})?$"
+        },
+        "providerConversationId": {
           "type": "string",
           "maxBytes": 128,
           "pattern": "^([A-Za-z0-9][A-Za-z0-9._:/-]{0,127})?$"
@@ -1412,6 +1435,9 @@
         "previousHandle": {
           "type": "id",
           "optional": true
+        },
+        "required": {
+          "type": "BrowserRequiredControls"
         }
       }
     },
@@ -1458,7 +1484,13 @@
           "type": "decimal"
         },
         "conversationId": {
-          "type": "id"
+          "type": "string",
+          "maxBytes": 128,
+          "pattern": "^([A-Za-z0-9][A-Za-z0-9._:/-]{0,127})?$"
+        },
+        "providerState": {
+          "type": "text",
+          "values": ["home", "bound"]
         }
       }
     },
@@ -1564,13 +1596,16 @@
           "type": "text"
         },
         "observed": {
-          "type": "BrowserSelection",
+          "type": "BrowserSelectionFacts",
           "optional": true
         },
         "observationSource": {
           "type": "text"
         },
         "evidenceId": {
+          "type": "text"
+        },
+        "pinnedSource": {
           "type": "text"
         }
       }
@@ -1613,6 +1648,60 @@
           "type": "boolean"
         },
         "acknowledged": {
+          "type": "boolean"
+        }
+      }
+    },
+    "BrowserControlFact": {
+      "type": "object",
+      "fields": {
+        "source": {
+          "type": "text",
+          "values": ["unknown", "public-control"]
+        },
+        "value": {
+          "type": "string",
+          "maxBytes": 256
+        },
+        "literal": {
+          "type": "string",
+          "maxBytes": 256
+        }
+      }
+    },
+    "BrowserSelectionFacts": {
+      "type": "object",
+      "fields": {
+        "model": {
+          "type": "BrowserControlFact"
+        },
+        "effort": {
+          "type": "BrowserControlFact"
+        },
+        "mode": {
+          "type": "BrowserControlFact"
+        },
+        "connector": {
+          "type": "BrowserControlFact"
+        },
+        "observedAtMillis": {
+          "type": "decimal"
+        }
+      }
+    },
+    "BrowserRequiredControls": {
+      "type": "object",
+      "fields": {
+        "model": {
+          "type": "boolean"
+        },
+        "effort": {
+          "type": "boolean"
+        },
+        "mode": {
+          "type": "boolean"
+        },
+        "connector": {
           "type": "boolean"
         }
       }

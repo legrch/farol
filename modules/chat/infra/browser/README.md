@@ -40,3 +40,12 @@ model execution; an in-memory smoke store, if selected, proves only that lifetim
 
 Source checks use strict CPU exchanges. They do not qualify the pipe/mailbox,
 Electron/browser, physical accepted sends, filesystem result durability or providers.
+
+The provider-binding refinement adds Binding.ProviderState (home/bound),
+Observation.ProviderConversationID for a correlated Accepted event, Target.Required
+and VerifySendCommand.Required, and independent ControlFact/SelectionFacts DTOs.
+Verification.Pinned is configured correlation; Observed holds only field facts and
+Required echoes the pinned control policy. Home has no CID, Bound has a real CID.
+NewSaved must not be returned as already Saved. Map these fields explicitly in the
+canonical Root DTOs. Desktop owns independent public-control capture, catalogue
+mapping and atomic witness revalidation/consumption; an echo is not DOM evidence.

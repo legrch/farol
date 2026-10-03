@@ -19,16 +19,18 @@
         "viewId": "view",
         "viewGeneration": "2",
         "documentGeneration": "3",
-        "conversationId": "conversation"
+        "conversationId": "conversation",
+        "providerState": "bound"
       },
       "sequence": "9007199254740993",
       "observedAtMillis": "1791053000000",
       "kind": "answer-delta",
-      "text": "Useful text 🪔",
+      "text": "Useful text \ud83e\ude94",
       "code": "",
       "userTurnId": "user-2",
       "replyId": "reply-2",
-      "segmentId": "segment-1"
+      "segmentId": "segment-1",
+      "providerConversationId": ""
     }
   ],
   "gap": false

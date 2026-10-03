@@ -142,6 +142,9 @@ func (q *Queue) Bind(r Reservation, d Document) (Snapshot, error) {
 func (q *Queue) Dispatch(b Binding) (Snapshot, error) {
 	return q.change(b.Reservation.Identity, func(t Turn) (Turn, error) { return t.Dispatch(b) })
 }
+func (q *Queue) AcceptConversation(b Binding, cid string) (Snapshot, error) {
+	return q.change(b.Reservation.Identity, func(t Turn) (Turn, error) { return t.AcceptConversation(b, cid) })
+}
 func (q *Queue) Accept(b Binding) (Snapshot, error) {
 	return q.change(b.Reservation.Identity, func(t Turn) (Turn, error) { return t.Accept(b) })
 }

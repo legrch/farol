@@ -20,7 +20,7 @@ import (
 
 // The ordinary CLI parser/registry, actual native stores, Chat service, browser
 // adapter and canonical pipe exchange run here. The peer is a controlled browser
-// double with a preallocated saved conversation, not a real page/new-chat proof.
+// double with a controlled saved conversation, not a real page/new-chat proof.
 // No Electron, child executable, provider, package, restart or containment claim.
 type chatNativePeer struct {
 	t       *testing.T
@@ -192,7 +192,7 @@ func decodeChat[T any](t *testing.T, raw json.RawMessage) T {
 }
 func nativeChatInput() wire.ChatCreate {
 	selection := wire.BrowserSelection{Provider: "farol", Alias: "chatgpt", AccountId: "controlled-account", ModelId: "controlled-model", Effort: "low", Mode: "standard"}
-	return wire.ChatCreate{SessionId: "session", Prompt: "Synthetic controlled input", Selection: selection, Resolution: wire.BrowserResolution{RequestedAlias: "chatgpt", RequestedExecutor: "browser", RequestedEffort: "low", RequestedMode: "standard", ConfigSHA256: strings.Repeat("a", 64), TranslationId: "configured", Resolved: selection}}
+	return wire.ChatCreate{Required: wire.BrowserRequiredControls{Model: true, Effort: true, Mode: true}, SessionId: "session", Prompt: "Synthetic controlled input", Selection: selection, Resolution: wire.BrowserResolution{RequestedAlias: "chatgpt", RequestedExecutor: "browser", RequestedEffort: "low", RequestedMode: "standard", ConfigSHA256: strings.Repeat("a", 64), TranslationId: "configured", Resolved: selection}}
 }
 func (p *chatNativePeer) exchange(reply func(wire.BrowserCommand) any) {
 	p.t.Helper()
@@ -215,11 +215,16 @@ func (p *chatNativePeer) prepare() wire.ChatPrepared {
 			p.t.Fatal(c.Kind)
 		}
 		r := decodeChat[wire.BrowserPrepare](p.t, c.Body)
-		cid := "preallocated-controlled-conversation"
+		cid := "controlled-provider-conversation"
 		if r.Target.Mode == "owned-saved" && r.Target.ConversationId != cid {
 			p.t.Fatal("follow-up changed conversation")
 		}
-		return wire.BrowserPrepared{Saved: true, Readiness: "ready", Binding: wire.BrowserBinding{Lease: r.Lease, ViewId: "controlled-view", ViewGeneration: r.Lease.SlotGeneration, DocumentGeneration: r.Lease.SlotGeneration, ConversationId: cid}}
+		state := "bound"
+		if r.Target.Mode == "new-saved" {
+			state = "home"
+			cid = ""
+		}
+		return wire.BrowserPrepared{Saved: state == "bound", Readiness: "ready", Binding: wire.BrowserBinding{ProviderState: state, Lease: r.Lease, ViewId: "controlled-view", ViewGeneration: r.Lease.SlotGeneration, DocumentGeneration: r.Lease.SlotGeneration, ConversationId: cid}}
 	})
 	out := p.await(id)
 	if out.Status != "ok" {
@@ -235,7 +240,7 @@ func (p *chatNativePeer) send(handle string, lostACK bool, attempted, accepted *
 			p.t.Fatal(c.Kind)
 		}
 		r := decodeChat[wire.BrowserVerifySend](p.t, c.Body)
-		return wire.BrowserVerified{Verification: wire.BrowserVerification{Binding: r.Binding, Observed: r.Requested, PreviousUserTurnId: r.PreviousUserTurnId, PreviousReplyId: r.PreviousReplyId, IntentDigest: r.IntentDigest, EvidenceId: "proof-" + r.Binding.Lease.Identity.OperationId}}
+		return wire.BrowserVerified{Verification: wire.BrowserVerification{Binding: r.Binding, Pinned: r.Requested, Required: r.Required, Observed: controlledWireFacts(r.Requested), PreviousUserTurnId: r.PreviousUserTurnId, PreviousReplyId: r.PreviousReplyId, IntentDigest: r.IntentDigest, EvidenceId: "proof-" + r.Binding.Lease.Identity.OperationId}}
 	})
 	p.exchange(func(c wire.BrowserCommand) any {
 		if c.Kind != "send" {
@@ -258,6 +263,9 @@ func (p *chatNativePeer) observe(handle, kind string) {
 	p.exchange(func(c wire.BrowserCommand) any {
 		r := decodeChat[wire.BrowserObserve](p.t, c.Body)
 		e := wire.BrowserObservation{Binding: r.Binding, Sequence: decimal(wireUint(r.AfterSequence) + 1), ObservedAtMillis: decimal(uint64(time.Now().UnixMilli())), Kind: kind, UserTurnId: "user-" + r.Binding.Lease.Identity.TurnId, ReplyId: "reply-" + r.Binding.Lease.Identity.TurnId}
+		if kind == "accepted" && r.Binding.ProviderState == "home" {
+			e.ProviderConversationId = "controlled-provider-conversation"
+		}
 		if kind == "answer-delta" {
 			e.Text = "Useful incremental controlled text"
 			e.SegmentId = "segment-1"
@@ -306,7 +314,7 @@ func TestNativeCLIChatStreamsBeforeCompletionAndFollowsSameConversation(t *testi
 	if !result.Complete || result.Acknowledged || result.Text != "Useful incremental controlled text" {
 		t.Fatalf("result: %+v", result)
 	}
-	if result.Evidence.ObservationSource != "pre-send-browser-verified" || result.Evidence.Observed == nil {
+	if result.Evidence.ObservationSource != "field-facts" || result.Evidence.Observed == nil {
 		t.Fatal("missing observed evidence")
 	}
 	p.ok("chat.conversation.result.ack", wire.ChatResultAck{HandleId: first.HandleId, ResultId: result.ResultId}, true)
@@ -318,7 +326,7 @@ func TestNativeCLIChatStreamsBeforeCompletionAndFollowsSameConversation(t *testi
 		t.Fatal("follow-up identity changed")
 	}
 	again := p.prepare()
-	if again.ConversationId != prepared.ConversationId {
+	if prepared.ProviderState != "home" || prepared.ConversationId != "" || again.ProviderState != "bound" || again.ConversationId != result.ConversationId || result.ConversationId != "controlled-provider-conversation" {
 		t.Fatal("conversation changed")
 	}
 	if out := p.send(second.HandleId, false, &attempted, &accepted); out.Status != "ok" {
@@ -351,4 +359,15 @@ func TestNativeCLIChatUnknownAcceptanceCannotSendAgain(t *testing.T) {
 		t.Fatal("unknown Send queued physical retry")
 	}
 	t.Logf("Controlled lost-ACK ledger attempted=%d accepted=%d; second Send caused no physical command", attempted, accepted)
+}
+
+// These facts are the explicit controlled peer oracle, not real DOM evidence.
+func controlledWireFacts(s wire.BrowserSelection) wire.BrowserSelectionFacts {
+	fact := func(v string) wire.BrowserControlFact {
+		if v == "" {
+			return wire.BrowserControlFact{Source: "unknown"}
+		}
+		return wire.BrowserControlFact{Source: "public-control", Value: v, Literal: v}
+	}
+	return wire.BrowserSelectionFacts{Model: fact(s.ModelId), Effort: fact(s.Effort), Mode: fact(s.Mode), Connector: fact(s.ConnectorId), ObservedAtMillis: decimal(uint64(time.Now().UnixMilli()))}
 }

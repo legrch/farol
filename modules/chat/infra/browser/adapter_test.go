@@ -40,9 +40,15 @@ func (e *exchangeFixture) Exchange(ctx context.Context, c Command) (Reply, error
 		if r.Target.Mode == "owned-saved" {
 			cid = r.Target.ConversationID
 		}
-		return PreparedReply{Saved: true, Readiness: "ready", Binding: Binding{Lease: r.Lease, ViewID: "view", ViewGeneration: r.Lease.SlotGeneration, DocumentGeneration: r.Lease.SlotGeneration, ConversationID: cid}}, nil
+		state, saved := "home", false
+		if r.Target.Mode == "new-saved" {
+			cid = ""
+		} else {
+			state, saved = "bound", true
+		}
+		return PreparedReply{Saved: saved, Readiness: "ready", Binding: Binding{ProviderState: state, Lease: r.Lease, ViewID: "view", ViewGeneration: r.Lease.SlotGeneration, DocumentGeneration: r.Lease.SlotGeneration, ConversationID: cid}}, nil
 	case VerifySendCommand:
-		return VerifiedReply{Verification: Verification{Binding: r.Binding, Observed: r.Requested, PreviousUserTurnID: r.PreviousUserTurnID, PreviousReplyID: r.PreviousReplyID, IntentDigest: r.IntentDigest, EvidenceID: "proof-" + r.Binding.Lease.Identity.OperationID}}, nil
+		return VerifiedReply{Verification: Verification{Binding: r.Binding, Pinned: r.Requested, Required: r.Required, Observed: exchangeFacts(r.Requested), PreviousUserTurnID: r.PreviousUserTurnID, PreviousReplyID: r.PreviousReplyID, IntentDigest: r.IntentDigest, EvidenceID: "proof-" + r.Binding.Lease.Identity.OperationID}}, nil
 	case SendCommand:
 		if e.lostSend {
 			return nil, errors.New("private exchange send diagnostic")
@@ -54,6 +60,9 @@ func (e *exchangeFixture) Exchange(ctx context.Context, c Command) (Reply, error
 		switch r.AfterSequence {
 		case 0:
 			event.Kind = "accepted"
+			if r.Binding.ProviderState == "home" {
+				event.ProviderConversationID = "conversation"
+			}
 		case 1:
 			event.Kind = "answer-delta"
 			event.SegmentID = "segment-" + suffix
@@ -77,7 +86,7 @@ func leaseFixture() port.BrowserLease {
 	return port.BrowserLease{Identity: port.RequestIdentity{ProfileID: "profile", OwnerID: "owner", SessionID: "session", TaskID: "task", TurnID: "turn", OperationID: "operation", TurnGeneration: 9007199254740993}, BackendGeneration: "backend", SlotOrdinal: 3, SlotGeneration: 9007199254740995}
 }
 func bindingFixture() port.BrowserBinding {
-	return port.BrowserBinding{Lease: leaseFixture(), ViewID: "view", ViewGeneration: 9007199254740997, DocumentGeneration: 9007199254740999, ConversationID: "conversation"}
+	return port.BrowserBinding{ProviderState: port.ProviderBound, Lease: leaseFixture(), ViewID: "view", ViewGeneration: 9007199254740997, DocumentGeneration: 9007199254740999, ConversationID: "conversation"}
 }
 func selectionFixture() port.Selection {
 	return port.Selection{Provider: "farol", Alias: "chatgpt", AccountID: "account", ModelID: "cheap", Effort: "low", Mode: "standard", ToolsEnabled: true, ConnectorID: "connector", ConnectorGrantID: "grant"}
@@ -96,16 +105,16 @@ const deadline = 1000000
 const digest = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
 func verifyFixture() port.VerifySendRequest {
-	return port.VerifySendRequest{Binding: bindingFixture(), Requested: selectionFixture(), PreviousUserTurnID: "previous-user", PreviousReplyID: "previous-reply", IntentDigest: digest, DeadlineMillis: deadline}
+	return port.VerifySendRequest{Required: port.RequiredControls{Model: true, Effort: true, Mode: true, Connector: true}, Binding: bindingFixture(), Requested: selectionFixture(), PreviousUserTurnID: "previous-user", PreviousReplyID: "previous-reply", IntentDigest: digest, DeadlineMillis: deadline}
 }
 func sendFixture() port.SendRequest {
 	r := verifyFixture()
-	return port.SendRequest{Binding: r.Binding, IntentDigest: digest, Prompt: "fixture\ninput", DeadlineMillis: deadline, Verification: port.SendVerification{Binding: r.Binding, Observed: r.Requested, PreviousUserTurnID: r.PreviousUserTurnID, PreviousReplyID: r.PreviousReplyID, IntentDigest: digest, EvidenceID: "proof-operation"}}
+	return port.SendRequest{Binding: r.Binding, IntentDigest: digest, Prompt: "fixture\ninput", DeadlineMillis: deadline, Verification: port.SendVerification{Binding: r.Binding, Pinned: r.Requested, Required: r.Required, Observed: portFacts(r.Requested), PreviousUserTurnID: r.PreviousUserTurnID, PreviousReplyID: r.PreviousReplyID, IntentDigest: digest, EvidenceID: "proof-operation"}}
 }
 func TestSixIndependentValueMappingsPreserveExactGenerationAndIntent(t *testing.T) {
 	a, e, _ := adapterFixture(t)
 	selection := selectionFixture()
-	prepare := port.PrepareRequest{Lease: leaseFixture(), Target: port.ConversationTarget{Mode: port.OwnedSaved, ConversationID: "conversation", PreviousUserTurnID: "previous-user", PreviousReplyID: "previous-reply", Selection: selection, Resolution: port.ModelResolution{RequestedAlias: "configured", RequestedExecutor: "farol", RequestedEffort: "", RequestedMode: "standard", Resolved: selection, ConfigSHA256: digest, TranslationID: "default-to-low"}}, DeadlineMillis: deadline}
+	prepare := port.PrepareRequest{Lease: leaseFixture(), Target: port.ConversationTarget{Required: port.RequiredControls{Model: true, Effort: true, Mode: true, Connector: true}, Mode: port.OwnedSaved, ConversationID: "conversation", PreviousUserTurnID: "previous-user", PreviousReplyID: "previous-reply", Selection: selection, Resolution: port.ModelResolution{RequestedAlias: "configured", RequestedExecutor: "farol", RequestedEffort: "", RequestedMode: "standard", Resolved: selection, ConfigSHA256: digest, TranslationID: "default-to-low"}}, DeadlineMillis: deadline}
 	reply, err := a.Prepare(prepare)
 	if err != nil || reply.Binding.Lease != prepare.Lease || !reply.Saved {
 		t.Fatalf("prepare=%+v %v", reply, err)
@@ -115,7 +124,7 @@ func TestSixIndependentValueMappingsPreserveExactGenerationAndIntent(t *testing.
 		t.Fatal("prepare values lost or coerced")
 	}
 	proof, err := a.VerifySend(verifyFixture())
-	if err != nil || proof.Binding != bindingFixture() || proof.Observed != selection {
+	if err != nil || proof.Binding != bindingFixture() || proof.Observed != portFacts(selection) {
 		t.Fatalf("proof=%+v %v", proof, err)
 	}
 	sent, err := a.Send(sendFixture())
@@ -282,18 +291,18 @@ func TestVerificationAndPreparationRejectCrossedEvidence(t *testing.T) {
 			a, e, _ := adapterFixture(t)
 			e.hook = func(_ context.Context, cmd Command) (Reply, error) {
 				r := cmd.(VerifySendCommand)
-				v := Verification{Binding: r.Binding, Observed: r.Requested, PreviousUserTurnID: r.PreviousUserTurnID, PreviousReplyID: r.PreviousReplyID, IntentDigest: r.IntentDigest, EvidenceID: "proof"}
+				v := Verification{Binding: r.Binding, Pinned: r.Requested, Required: r.Required, Observed: exchangeFacts(r.Requested), PreviousUserTurnID: r.PreviousUserTurnID, PreviousReplyID: r.PreviousReplyID, IntentDigest: r.IntentDigest, EvidenceID: "proof"}
 				switch fault {
 				case "account":
-					v.Observed.AccountID = "other"
+					v.Pinned.AccountID = "other"
 				case "effort":
-					v.Observed.Effort = "high"
+					v.Observed.Effort.Value = "high"
 				case "mode":
-					v.Observed.Mode = "pro"
+					v.Observed.Mode.Value = "pro"
 				case "connector":
-					v.Observed.ConnectorID = "other"
+					v.Observed.Connector.Value = "other"
 				case "grant":
-					v.Observed.ConnectorGrantID = "other"
+					v.Pinned.ConnectorGrantID = "other"
 				case "digest":
 					v.IntentDigest = strings.Repeat("b", 64)
 				case "user":
@@ -334,7 +343,7 @@ func TestVerificationAndPreparationRejectCrossedEvidence(t *testing.T) {
 				}
 				return reply, nil
 			}
-			r := port.PrepareRequest{Lease: leaseFixture(), Target: port.ConversationTarget{Mode: port.OwnedSaved, ConversationID: "conversation", PreviousUserTurnID: "u", PreviousReplyID: "r", Selection: selectionFixture()}, DeadlineMillis: deadline}
+			r := port.PrepareRequest{Lease: leaseFixture(), Target: port.ConversationTarget{Required: port.RequiredControls{Model: true, Effort: true, Mode: true, Connector: true}, Mode: port.OwnedSaved, ConversationID: "conversation", PreviousUserTurnID: "u", PreviousReplyID: "r", Selection: selectionFixture()}, DeadlineMillis: deadline}
 			if result, err := a.Prepare(r); result != nil || err != Unsettled {
 				t.Fatal("crossed preparation accepted")
 			}
@@ -427,7 +436,7 @@ func serviceFixture(t *testing.T) (*lifecycle.Service, *exchangeFixture, *result
 	if err != nil {
 		t.Fatal(err)
 	}
-	i := port.ConversationInput{Binding: port.TurnBinding{ProfileID: "profile", BackendGeneration: "backend", OwnerID: "owner", SessionID: "session", TaskID: "task", TaskEpoch: 17, ParticipantID: "participant", TurnID: "turn-1", OperationID: "operation-1", TurnGeneration: 1}, Selection: selectionFixture(), Prompt: "fixture input"}
+	i := port.ConversationInput{Required: port.RequiredControls{Model: true, Effort: true, Mode: true, Connector: true}, Binding: port.TurnBinding{ProfileID: "profile", BackendGeneration: "backend", OwnerID: "owner", SessionID: "session", TaskID: "task", TaskEpoch: 17, ParticipantID: "participant", TurnID: "turn-1", OperationID: "operation-1", TurnGeneration: 1}, Selection: selectionFixture(), Prompt: "fixture input"}
 	return s, e, retained, i
 }
 func TestActualLifecycleUsesAdapterForSameConversationAndNoLostSendRetry(t *testing.T) {
@@ -484,7 +493,7 @@ func TestActualLifecycleUsesAdapterForSameConversationAndNoLostSendRetry(t *test
 				t.Fatal(err)
 			}
 			nextBinding, err := s.PrepareNext(ctx, deadline)
-			if err != nil || nextBinding.ConversationID != binding.ConversationID || nextBinding.Lease.SlotGeneration != binding.Lease.SlotGeneration+1 {
+			if err != nil || nextBinding.ConversationID != "conversation" || binding.ConversationID != "" || nextBinding.Lease.SlotGeneration != binding.Lease.SlotGeneration+1 {
 				t.Fatalf("next=%+v %v", nextBinding, err)
 			}
 			if err := next.Send(ctx, deadline); err != nil {
@@ -585,4 +594,24 @@ func TestCancelDisposePreserveUnknownAndNeverFabricateCleanup(t *testing.T) {
 			})
 		}
 	}
+}
+
+func exchangeFacts(s Selection) SelectionFacts {
+	known := func(v string) ControlFact {
+		if v == "" {
+			return ControlFact{}
+		}
+		return ControlFact{Value: v, Literal: "visible-" + v, Source: "public-control"}
+	}
+	return SelectionFacts{Model: known(s.ModelID), Effort: known(s.Effort), Mode: known(s.Mode), Connector: known(s.ConnectorID), ObservedAtMillis: 9}
+}
+
+func portFacts(s port.Selection) port.SelectionFacts {
+	known := func(v string) port.ControlFact {
+		if v == "" {
+			return port.ControlFact{}
+		}
+		return port.ControlFact{Value: v, Literal: "visible-" + v, Source: port.FactPublicControl}
+	}
+	return port.SelectionFacts{Model: known(s.ModelID), Effort: known(s.Effort), Mode: known(s.Mode), Connector: known(s.ConnectorID), ObservedAtMillis: 9}
 }

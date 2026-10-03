@@ -32,6 +32,7 @@ type Lease struct {
 	SlotGeneration    uint64
 }
 type Binding struct {
+	ProviderState                      string
 	Lease                              Lease
 	ViewID                             string
 	ViewGeneration, DocumentGeneration uint64
@@ -48,14 +49,23 @@ type Resolution struct {
 	ConfigSHA256, TranslationID                                       string
 }
 type Target struct {
+	Required                                            RequiredControls
 	Mode                                                string
 	ConversationID, PreviousUserTurnID, PreviousReplyID string
 	Selection                                           Selection
 	Resolution                                          Resolution
 }
+type ControlFact struct{ Value, Literal, Source string }
+type SelectionFacts struct {
+	Model, Effort, Mode, Connector ControlFact
+	ObservedAtMillis               uint64
+}
+type RequiredControls struct{ Model, Effort, Mode, Connector bool }
 type Verification struct {
+	Pinned                              Selection
+	Required                            RequiredControls
 	Binding                             Binding
-	Observed                            Selection
+	Observed                            SelectionFacts
 	PreviousUserTurnID, PreviousReplyID string
 	IntentDigest, EvidenceID            string
 }
@@ -72,6 +82,7 @@ type PreparedReply struct {
 	Code      string
 }
 type VerifySendCommand struct {
+	Required                                          RequiredControls
 	Binding                                           Binding
 	Requested                                         Selection
 	PreviousUserTurnID, PreviousReplyID, IntentDigest string
@@ -95,6 +106,7 @@ type ObserveCommand struct {
 	DeadlineMillis uint64
 }
 type Observation struct {
+	ProviderConversationID         string
 	Binding                        Binding
 	Sequence, ObservedAtMillis     uint64
 	Kind, Text, Code               string

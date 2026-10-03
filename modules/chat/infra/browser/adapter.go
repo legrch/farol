@@ -81,7 +81,7 @@ func (a *Adapter) validLease(lease port.BrowserLease) bool {
 	return i.ProfileID == a.scope.ProfileID && lease.BackendGeneration == a.scope.BackendGeneration && i.TurnGeneration > 0 && lease.SlotOrdinal >= 1 && lease.SlotOrdinal <= 5 && lease.SlotGeneration > 0
 }
 func (a *Adapter) validBinding(b port.BrowserBinding) bool {
-	return a.validLease(b.Lease) && validID(b.ViewID) && b.ViewGeneration > 0 && b.DocumentGeneration > 0 && validID(b.ConversationID)
+	return a.validLease(b.Lease) && validID(b.ViewID) && b.ViewGeneration > 0 && b.DocumentGeneration > 0 && ((b.ProviderState == port.ProviderHome && b.ConversationID == "") || (b.ProviderState == port.ProviderBound && validID(b.ConversationID)))
 }
 func validID(s string) bool {
 	if len(s) < 1 || len(s) > 120 || !utf8.ValidString(s) {
@@ -137,19 +137,22 @@ func (a *Adapter) Prepare(r port.PrepareRequest) (*port.PrepareResponse, error) 
 	default:
 		return nil, Unsettled
 	}
-	if (reply.Readiness == string(port.Ready) || reply.Readiness == string(port.OwnerRequired)) && !reply.Saved {
+	if r.Target.Mode == port.NewSaved && (reply.Saved || b.ProviderState != port.ProviderHome) {
 		return nil, Unsettled
 	}
-	if r.Target.Mode == port.OwnedSaved && b.ConversationID != r.Target.ConversationID {
+	if (reply.Readiness == string(port.Ready) || reply.Readiness == string(port.OwnerRequired)) && r.Target.Mode == port.OwnedSaved && !reply.Saved {
+		return nil, Unsettled
+	}
+	if r.Target.Mode == port.OwnedSaved && (b.ProviderState != port.ProviderBound || b.ConversationID != r.Target.ConversationID) {
 		return nil, Unsettled
 	}
 	return &port.PrepareResponse{Saved: reply.Saved, Readiness: port.Readiness(reply.Readiness), Binding: b, Code: reply.Code}, nil
 }
 func (a *Adapter) VerifySend(r port.VerifySendRequest) (*port.SendVerification, error) {
-	if !a.validBinding(r.Binding) || !r.Requested.Valid() || !validDigest(r.IntentDigest) || !validPrevious(r.PreviousUserTurnID, r.PreviousReplyID) {
+	if !a.validBinding(r.Binding) || !r.Requested.Valid() || !r.Required.Valid(r.Requested) || !validDigest(r.IntentDigest) || !validPrevious(r.PreviousUserTurnID, r.PreviousReplyID) {
 		return nil, Invalid
 	}
-	raw, err := a.call(VerifySendCommand{Binding: bindingFromPort(r.Binding), Requested: selectionFromPort(r.Requested), PreviousUserTurnID: r.PreviousUserTurnID, PreviousReplyID: r.PreviousReplyID, IntentDigest: r.IntentDigest, DeadlineMillis: r.DeadlineMillis}, r.DeadlineMillis)
+	raw, err := a.call(VerifySendCommand{Required: requiredFromPort(r.Required), Binding: bindingFromPort(r.Binding), Requested: selectionFromPort(r.Requested), PreviousUserTurnID: r.PreviousUserTurnID, PreviousReplyID: r.PreviousReplyID, IntentDigest: r.IntentDigest, DeadlineMillis: r.DeadlineMillis}, r.DeadlineMillis)
 	if err != nil {
 		return nil, err
 	}
@@ -158,15 +161,15 @@ func (a *Adapter) VerifySend(r port.VerifySendRequest) (*port.SendVerification, 
 		return nil, Unsettled
 	}
 	proof := verificationToPort(reply.Verification)
-	if !port.ValidVerification(r, &proof) {
+	if !port.ValidVerification(r, &proof) || proof.Observed.ObservedAtMillis > a.clock.NowMillis() {
 		return nil, Unsettled
 	}
 	return &proof, nil
 }
 func (a *Adapter) Send(r port.SendRequest) (*port.SendResponse, error) {
 	v := r.Verification
-	expected := port.VerifySendRequest{Binding: r.Binding, Requested: v.Observed, PreviousUserTurnID: v.PreviousUserTurnID, PreviousReplyID: v.PreviousReplyID, IntentDigest: r.IntentDigest}
-	if !a.validBinding(r.Binding) || !validDigest(r.IntentDigest) || len(r.Prompt) < 1 || len(r.Prompt) > MaxPromptBytes || !utf8.ValidString(r.Prompt) || !validPrevious(v.PreviousUserTurnID, v.PreviousReplyID) || !port.ValidVerification(expected, &v) {
+	expected := port.VerifySendRequest{Binding: r.Binding, Requested: v.Pinned, Required: v.Required, PreviousUserTurnID: v.PreviousUserTurnID, PreviousReplyID: v.PreviousReplyID, IntentDigest: r.IntentDigest}
+	if !a.validBinding(r.Binding) || !validDigest(r.IntentDigest) || len(r.Prompt) < 1 || len(r.Prompt) > MaxPromptBytes || !utf8.ValidString(r.Prompt) || !validPrevious(v.PreviousUserTurnID, v.PreviousReplyID) || !port.ValidVerification(expected, &v) || v.Observed.ObservedAtMillis > a.clock.NowMillis() {
 		return nil, Invalid
 	}
 	raw, err := a.call(SendCommand{Binding: bindingFromPort(r.Binding), Verification: verificationFromPort(v), IntentDigest: r.IntentDigest, Prompt: r.Prompt, DeadlineMillis: r.DeadlineMillis}, r.DeadlineMillis)
@@ -203,17 +206,17 @@ func (a *Adapter) Observe(r port.ObserveRequest) (*port.ObserveResponse, error) 
 	// Validate semantic byte/ID bounds BEFORE allocating the port event slice.
 	bytes := 0
 	for _, e := range reply.Events {
-		if len(e.Text) > port.MaxObserveTextBytes || !utf8.ValidString(e.Text) || !validCode(e.Code) || (e.UserTurnID != "" && !validID(e.UserTurnID)) || (e.ReplyID != "" && !validID(e.ReplyID)) || (e.SegmentID != "" && !validID(e.SegmentID)) {
+		if len(e.Text) > port.MaxObserveTextBytes || !utf8.ValidString(e.Text) || !validCode(e.Code) || (e.ProviderConversationID != "" && !validID(e.ProviderConversationID)) || (e.UserTurnID != "" && !validID(e.UserTurnID)) || (e.ReplyID != "" && !validID(e.ReplyID)) || (e.SegmentID != "" && !validID(e.SegmentID)) {
 			return nil, Unsettled
 		}
-		bytes += len(e.Text) + len(e.Code) + len(e.UserTurnID) + len(e.ReplyID) + len(e.SegmentID)
+		bytes += len(e.ProviderConversationID) + len(e.Text) + len(e.Code) + len(e.UserTurnID) + len(e.ReplyID) + len(e.SegmentID)
 		if bytes > port.MaxObservePageBytes {
 			return nil, Unsettled
 		}
 	}
 	events := make([]port.BrowserObservation, 0, len(reply.Events))
 	for _, e := range reply.Events {
-		events = append(events, port.BrowserObservation{Binding: bindingToPort(e.Binding), Sequence: e.Sequence, ObservedAtMillis: e.ObservedAtMillis, Kind: port.ObservationKind(e.Kind), Text: e.Text, Code: e.Code, UserTurnID: e.UserTurnID, ReplyID: e.ReplyID, SegmentID: e.SegmentID})
+		events = append(events, port.BrowserObservation{ProviderConversationID: e.ProviderConversationID, Binding: bindingToPort(e.Binding), Sequence: e.Sequence, ObservedAtMillis: e.ObservedAtMillis, Kind: port.ObservationKind(e.Kind), Text: e.Text, Code: e.Code, UserTurnID: e.UserTurnID, ReplyID: e.ReplyID, SegmentID: e.SegmentID})
 	}
 	result := &port.ObserveResponse{Events: events, Gap: reply.Gap}
 	if err := port.ValidateObserveResponse(r, result); err != nil {

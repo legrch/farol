@@ -8,7 +8,7 @@ import (
 
 // Selection is pinned by authorized composition/caller before admission. IDs
 // are opaque non-secret references, never cookies/authentication or entitlement.
-// The stable public route is farol/chatgpt; ModelID names the exact UI selection.
+// The stable public route is farol/chatgpt; ModelID names the canonical mapped control; literal UI text stays in facts.
 type Selection struct {
 	Provider, Alias, AccountID, ModelID, Effort string
 	Mode                                        string
@@ -46,6 +46,7 @@ const (
 // Target is selected only by Chat from a live owned conversation. A URL is not
 // accepted. OwnedSaved must never create a replacement provider conversation.
 type ConversationTarget struct {
+	Required                            RequiredControls
 	Mode                                ConversationMode
 	ConversationID                      string
 	PreviousUserTurnID, PreviousReplyID string
@@ -54,7 +55,7 @@ type ConversationTarget struct {
 }
 
 func (t ConversationTarget) Valid() bool {
-	if !t.Selection.Valid() || !t.Resolution.Valid(t.Selection) {
+	if !t.Required.Valid(t.Selection) || !t.Selection.Valid() || !t.Resolution.Valid(t.Selection) {
 		return false
 	}
 	switch t.Mode {
@@ -69,8 +70,10 @@ func (t ConversationTarget) Valid() bool {
 // Verification is a fresh one-Send witness for the exact lease/document and
 // immutable intent. Desktop rechecks it atomically with composer insertion/Send;
 // a changed model/account/attachment must produce NotSent, never a fallback.
-// Observed is revalidated each turn, not inherited from the first conversation.
+// Pinned is configured scope correlation. Observed contains only independent
+// public controls, revalidated each turn; neither grants account/connector authority.
 type VerifySendRequest struct {
+	Required                            RequiredControls
 	Binding                             BrowserBinding
 	Requested                           Selection
 	PreviousUserTurnID, PreviousReplyID string
@@ -78,8 +81,10 @@ type VerifySendRequest struct {
 	DeadlineMillis                      uint64
 }
 type SendVerification struct {
+	Pinned                              Selection
+	Required                            RequiredControls
 	Binding                             BrowserBinding
-	Observed                            Selection
+	Observed                            SelectionFacts
 	PreviousUserTurnID, PreviousReplyID string
 	IntentDigest, EvidenceID            string
 }
@@ -89,7 +94,7 @@ type VerifiedBrowser interface {
 }
 
 func ValidVerification(request VerifySendRequest, proof *SendVerification) bool {
-	return proof != nil && proof.Binding == request.Binding && proof.Observed == request.Requested && proof.Observed.Valid() && proof.PreviousUserTurnID == request.PreviousUserTurnID && proof.PreviousReplyID == request.PreviousReplyID && proof.IntentDigest == request.IntentDigest && conversationID(proof.EvidenceID)
+	return proof != nil && request.Requested.Valid() && proof.Binding == request.Binding && proof.Pinned == request.Requested && proof.Required == request.Required && proof.Observed.Matches(request.Requested, request.Required) && proof.PreviousUserTurnID == request.PreviousUserTurnID && proof.PreviousReplyID == request.PreviousReplyID && proof.IntentDigest == request.IntentDigest && conversationID(proof.EvidenceID)
 }
 
 // IntentDigester returns lowercase SHA-256 of the complete canonical input.
@@ -98,6 +103,7 @@ func ValidVerification(request VerifySendRequest, proof *SendVerification) bool 
 type IntentDigester interface{ Digest([]byte) (string, error) }
 
 type ConversationInput struct {
+	Required   RequiredControls
 	Binding    TurnBinding
 	Selection  Selection
 	Resolution ModelResolution
@@ -110,7 +116,8 @@ type ConversationInput struct {
 type ConversationResult struct {
 	Binding                                                               TurnBinding
 	ProviderConversationID, ProviderUserTurnID, ProviderReplyID, ResultID string
-	Requested, Observed                                                   Selection
+	Requested                                                             Selection
+	Observed                                                              SelectionFacts
 	Text                                                                  string
 	Phase, Outcome, Code                                                  string
 	Evidence                                                              SelectionEvidence
@@ -172,7 +179,8 @@ type SelectionEvidence struct {
 	ResolutionSource  string
 	Admitted          Selection
 	AdmissionSource   string
-	Observed          Selection
+	Observed          SelectionFacts
+	PinnedSource      string
 	ObservationSource string
 	EvidenceID        string
 }

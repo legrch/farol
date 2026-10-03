@@ -183,6 +183,9 @@ func transition(q *turn.Queue, e port.JournalEntry, before turn.Snapshot, pendin
 		}
 		return before, nil
 	case "accept":
+		if b.Document.ProviderState == turn.ProviderHome {
+			return q.AcceptConversation(b, e.After.Binding.Document.ConversationID)
+		}
 		return q.Accept(b)
 	case "await-owner":
 		return q.AwaitOwner(b)

@@ -51,6 +51,7 @@ func fromBrowserLease(v wire.BrowserLease) browser.Lease {
 }
 func toBrowserBinding(v browser.Binding) wire.BrowserBinding {
 	return wire.BrowserBinding{
+		ProviderState:      v.ProviderState,
 		Lease:              toBrowserLease(v.Lease),
 		ViewId:             v.ViewID,
 		ViewGeneration:     strconv.FormatUint(v.ViewGeneration, 10),
@@ -60,6 +61,7 @@ func toBrowserBinding(v browser.Binding) wire.BrowserBinding {
 }
 func fromBrowserBinding(v wire.BrowserBinding) browser.Binding {
 	return browser.Binding{
+		ProviderState:      v.ProviderState,
 		Lease:              fromBrowserLease(v.Lease),
 		ViewID:             v.ViewId,
 		ViewGeneration:     wireUint(v.ViewGeneration),
@@ -117,6 +119,7 @@ func fromBrowserResolution(v wire.BrowserResolution) browser.Resolution {
 }
 func toBrowserTarget(v browser.Target) wire.BrowserTarget {
 	return wire.BrowserTarget{
+		Required:           toBrowserRequired(v.Required),
 		Mode:               v.Mode,
 		ConversationId:     v.ConversationID,
 		PreviousUserTurnId: v.PreviousUserTurnID,
@@ -127,6 +130,7 @@ func toBrowserTarget(v browser.Target) wire.BrowserTarget {
 }
 func fromBrowserTarget(v wire.BrowserTarget) browser.Target {
 	return browser.Target{
+		Required:           fromBrowserRequired(v.Required),
 		Mode:               v.Mode,
 		ConversationID:     v.ConversationId,
 		PreviousUserTurnID: v.PreviousUserTurnId,
@@ -137,8 +141,9 @@ func fromBrowserTarget(v wire.BrowserTarget) browser.Target {
 }
 func toBrowserVerification(v browser.Verification) wire.BrowserVerification {
 	return wire.BrowserVerification{
+		Pinned: toBrowserSelection(v.Pinned), Required: toBrowserRequired(v.Required),
 		Binding:            toBrowserBinding(v.Binding),
-		Observed:           toBrowserSelection(v.Observed),
+		Observed:           toBrowserFacts(v.Observed),
 		PreviousUserTurnId: v.PreviousUserTurnID,
 		PreviousReplyId:    v.PreviousReplyID,
 		IntentDigest:       v.IntentDigest,
@@ -147,8 +152,9 @@ func toBrowserVerification(v browser.Verification) wire.BrowserVerification {
 }
 func fromBrowserVerification(v wire.BrowserVerification) browser.Verification {
 	return browser.Verification{
+		Pinned: fromBrowserSelection(v.Pinned), Required: fromBrowserRequired(v.Required),
 		Binding:            fromBrowserBinding(v.Binding),
-		Observed:           fromBrowserSelection(v.Observed),
+		Observed:           fromBrowserFacts(v.Observed),
 		PreviousUserTurnID: v.PreviousUserTurnId,
 		PreviousReplyID:    v.PreviousReplyId,
 		IntentDigest:       v.IntentDigest,
@@ -157,28 +163,30 @@ func fromBrowserVerification(v wire.BrowserVerification) browser.Verification {
 }
 func toBrowserObservation(v browser.Observation) wire.BrowserObservation {
 	return wire.BrowserObservation{
-		Binding:          toBrowserBinding(v.Binding),
-		Sequence:         strconv.FormatUint(v.Sequence, 10),
-		ObservedAtMillis: strconv.FormatUint(v.ObservedAtMillis, 10),
-		Kind:             v.Kind,
-		Text:             v.Text,
-		Code:             v.Code,
-		UserTurnId:       v.UserTurnID,
-		ReplyId:          v.ReplyID,
-		SegmentId:        v.SegmentID,
+		ProviderConversationId: v.ProviderConversationID,
+		Binding:                toBrowserBinding(v.Binding),
+		Sequence:               strconv.FormatUint(v.Sequence, 10),
+		ObservedAtMillis:       strconv.FormatUint(v.ObservedAtMillis, 10),
+		Kind:                   v.Kind,
+		Text:                   v.Text,
+		Code:                   v.Code,
+		UserTurnId:             v.UserTurnID,
+		ReplyId:                v.ReplyID,
+		SegmentId:              v.SegmentID,
 	}
 }
 func fromBrowserObservation(v wire.BrowserObservation) browser.Observation {
 	return browser.Observation{
-		Binding:          fromBrowserBinding(v.Binding),
-		Sequence:         wireUint(v.Sequence),
-		ObservedAtMillis: wireUint(v.ObservedAtMillis),
-		Kind:             v.Kind,
-		Text:             v.Text,
-		Code:             v.Code,
-		UserTurnID:       v.UserTurnId,
-		ReplyID:          v.ReplyId,
-		SegmentID:        v.SegmentId,
+		ProviderConversationID: v.ProviderConversationId,
+		Binding:                fromBrowserBinding(v.Binding),
+		Sequence:               wireUint(v.Sequence),
+		ObservedAtMillis:       wireUint(v.ObservedAtMillis),
+		Kind:                   v.Kind,
+		Text:                   v.Text,
+		Code:                   v.Code,
+		UserTurnID:             v.UserTurnId,
+		ReplyID:                v.ReplyId,
+		SegmentID:              v.SegmentId,
 	}
 }
 
@@ -194,7 +202,7 @@ func encodeBrowserCommand(command browser.Command) (string, json.RawMessage, uin
 		value = wire.BrowserPrepare{Target: toBrowserTarget(c.Target), Lease: toBrowserLease(c.Lease), DeadlineMillis: strconv.FormatUint(deadline, 10)}
 	case browser.VerifySendCommand:
 		kind, name, deadline = "verify-send", "BrowserVerifySend", c.DeadlineMillis
-		value = wire.BrowserVerifySend{Binding: toBrowserBinding(c.Binding), Requested: toBrowserSelection(c.Requested), PreviousUserTurnId: c.PreviousUserTurnID, PreviousReplyId: c.PreviousReplyID, IntentDigest: c.IntentDigest, DeadlineMillis: strconv.FormatUint(deadline, 10)}
+		value = wire.BrowserVerifySend{Required: toBrowserRequired(c.Required), Binding: toBrowserBinding(c.Binding), Requested: toBrowserSelection(c.Requested), PreviousUserTurnId: c.PreviousUserTurnID, PreviousReplyId: c.PreviousReplyID, IntentDigest: c.IntentDigest, DeadlineMillis: strconv.FormatUint(deadline, 10)}
 	case browser.SendCommand:
 		kind, name, deadline = "send", "BrowserSend", c.DeadlineMillis
 		value = wire.BrowserSend{Binding: toBrowserBinding(c.Binding), Verification: toBrowserVerification(c.Verification), IntentDigest: c.IntentDigest, Prompt: c.Prompt, DeadlineMillis: strconv.FormatUint(deadline, 10)}
@@ -278,4 +286,26 @@ func decodeBrowserReply(kind string, raw json.RawMessage) (browser.Reply, error)
 		return browser.DisposedReply{Lease: fromBrowserLease(v.Lease), Confirmed: v.Confirmed, Code: v.Code}, nil
 	}
 	return nil, errors.New("browser_reply_invalid")
+}
+
+func toBrowserRequired(v browser.RequiredControls) wire.BrowserRequiredControls {
+	return wire.BrowserRequiredControls{Model: v.Model, Effort: v.Effort, Mode: v.Mode, Connector: v.Connector}
+}
+func fromBrowserRequired(v wire.BrowserRequiredControls) browser.RequiredControls {
+	return browser.RequiredControls{Model: v.Model, Effort: v.Effort, Mode: v.Mode, Connector: v.Connector}
+}
+func toBrowserFact(v browser.ControlFact) wire.BrowserControlFact {
+	if v.Source == "" {
+		v.Source = "unknown"
+	}
+	return wire.BrowserControlFact{Source: v.Source, Value: v.Value, Literal: v.Literal}
+}
+func fromBrowserFact(v wire.BrowserControlFact) browser.ControlFact {
+	return browser.ControlFact{Source: v.Source, Value: v.Value, Literal: v.Literal}
+}
+func toBrowserFacts(v browser.SelectionFacts) wire.BrowserSelectionFacts {
+	return wire.BrowserSelectionFacts{Model: toBrowserFact(v.Model), Effort: toBrowserFact(v.Effort), Mode: toBrowserFact(v.Mode), Connector: toBrowserFact(v.Connector), ObservedAtMillis: decimal(v.ObservedAtMillis)}
+}
+func fromBrowserFacts(v wire.BrowserSelectionFacts) browser.SelectionFacts {
+	return browser.SelectionFacts{Model: fromBrowserFact(v.Model), Effort: fromBrowserFact(v.Effort), Mode: fromBrowserFact(v.Mode), Connector: fromBrowserFact(v.Connector), ObservedAtMillis: wireUint(v.ObservedAtMillis)}
 }

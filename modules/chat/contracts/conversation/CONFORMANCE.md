@@ -103,3 +103,21 @@ rendering, physical accepted-send ledger, durable filesystem restart and real so
 Go-Electron bridge witnesses remain separate Desktop/Lead/native work. Lost Send
 reply, model mismatch, same-chat follow-up, five-plus-one, exact generation and
 conservative ACK reuse already have CPU tests; they are not live qualification.
+
+## Provider binding refinement
+
+NewSaved prepares an explicit Home physical binding with no provider CID. Accepted
+echoes that exact binding and carries ProviderConversationID/UserTurnID independently.
+The existing owner journals Home -> Bound once and only then publishes provider
+ownership. Follow requires that bound CID and the existing real ACK/quiescence.
+Legacy already-bound source/journal values remain readable; new Exchange bindings
+are explicit home/bound and do not infer a Home page from an empty ID.
+
+Input.Required is trusted route capability policy, pinned in the canonical intent.
+Model is mandatory; a selected mode and enabled connector are mandatory controls.
+Effort requirements follow the declared route, without lowering them for tests.
+Observed is field-level SelectionFacts with canonical Value, literal public control
+text, Source and capture time. Missing optional facts project unknown; missing
+required facts refuse Send. Alias/account/grant values remain configured pinned
+scope. Root/Desktop qualify catalogue mapping, capture freshness and atomic final
+Send revalidation; source doubles do not attest the provider or native browser.
