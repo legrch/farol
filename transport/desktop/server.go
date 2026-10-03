@@ -28,7 +28,10 @@ type Outcome struct {
 	Data   json.RawMessage
 }
 type Method struct {
-	Handle func(context.Context, Request) (*Outcome, error)
+	// Trusted boot opts in only for handlers that await a reciprocal desktop
+	// capability. All existing owners remain serialized by default.
+	Concurrent bool
+	Handle     func(context.Context, Request) (*Outcome, error)
 }
 type Config struct {
 	BuildID    string
@@ -62,25 +65,56 @@ func New(config Config) (*Server, error) {
 // Serve owns the supplied pipe endpoints for its lifetime. Cancellation closes
 // those exact endpoints to interrupt blocked IO and propagates to the handler;
 // it does not establish cancellation of module-owned OS/provider work.
-func (s *Server) Serve(ctx context.Context, in io.ReadCloser, out io.WriteCloser) error {
+func (s *Server) Serve(parent context.Context, in io.ReadCloser, out io.WriteCloser) (result error) {
+	ctx, cancel := context.WithCancel(parent)
 	var closed sync.Once
 	closePipes := func() { closed.Do(func() { _ = in.Close(); _ = out.Close() }) }
-	defer closePipes()
-	if ctx.Done() != nil {
-		stop := make(chan struct{})
-		terminal := make(chan struct{})
-		go func() {
-			defer close(terminal)
-			select {
-			case <-ctx.Done():
-			case <-stop:
-				if ctx.Err() == nil {
-					return
-				}
-			}
+	var workers sync.WaitGroup
+	var output sync.Mutex
+	var outputErr error
+	// Bound outstanding reciprocal calls without blocking the reader that must
+	// accept their completion. Saturation refuses before invoking any owner.
+	pending := make(chan struct{}, 32)
+	stop := make(chan struct{})
+	terminal := make(chan struct{})
+	go func() {
+		defer close(terminal)
+		select {
+		case <-ctx.Done():
 			closePipes()
-		}()
-		defer func() { close(stop); <-terminal }()
+		case <-stop:
+		}
+	}()
+	defer func() {
+		cancel()
+		closePipes()
+		workers.Wait()
+		close(stop)
+		<-terminal
+		result = errors.Join(result, outputErr)
+	}()
+	write := func(response wire.Response) error {
+		output.Lock()
+		defer output.Unlock()
+		if outputErr != nil {
+			return outputErr
+		}
+		response = boundResponse(response)
+		encoded, err := responseJSON(response)
+		if err != nil && response.Result != nil {
+			response.Result.Status = "unknown"
+			response.Result.Code = optional("owner_output_invalid")
+			response.Result.Data = nil
+			encoded, err = responseJSON(response)
+		}
+		if err == nil {
+			err = ipc.WriteFrame(out, encoded)
+		}
+		if err != nil {
+			outputErr = fmt.Errorf("response delivery unknown: %w", err)
+			cancel()
+		}
+		return outputErr
 	}
 	for attempt := 0; attempt < 4096; attempt++ {
 		if err := ctx.Err(); err != nil {
@@ -96,80 +130,104 @@ func (s *Server) Serve(ctx context.Context, in io.ReadCloser, out io.WriteCloser
 		if err != nil {
 			return fmt.Errorf("protocol frame: %w", err)
 		}
-		response := boundResponse(s.dispatch(ctx, data))
-		encoded, err := responseJSON(response)
-		if err != nil && response.Result != nil {
-			// The owner may have acted. Preserve identity, contain invalid output,
-			// and never invoke the owner again to manufacture a usable result.
-			response.Result.Status = "unknown"
-			response.Result.Code = optional("owner_output_invalid")
-			response.Result.Data = nil
-			encoded, err = responseJSON(response)
+		response, call := s.prepareDispatch(data)
+		if call != nil && call.method.Concurrent {
+			select {
+			case pending <- struct{}{}:
+				workers.Add(1)
+				go func() {
+					defer workers.Done()
+					defer func() { <-pending }()
+					_ = write(s.invoke(ctx, call))
+				}()
+				continue
+			default:
+				response = s.result(call.request, &Outcome{Status: "unavailable", Code: "handler_backpressure"})
+			}
+		} else if call != nil {
+			response = s.invoke(ctx, call)
 		}
-		if err != nil {
+		if err := write(response); err != nil {
 			return err
-		}
-		if err := ipc.WriteFrame(out, encoded); err != nil {
-			return fmt.Errorf("response delivery unknown: %w", err)
 		}
 	}
 	return errors.New("request attempt budget exhausted")
 }
 
+type invocation struct {
+	request wire.Request
+	method  Method
+}
+
 func (s *Server) dispatch(ctx context.Context, data []byte) wire.Response {
+	response, call := s.prepareDispatch(data)
+	if call != nil {
+		return s.invoke(ctx, call)
+	}
+	return response
+}
+
+// Called only by the pipe reader. Handshake, request deduplication and all
+// boundary validation finish before a handler may run concurrently.
+func (s *Server) prepareDispatch(data []byte) (wire.Response, *invocation) {
 	if err := ipc.ValidateJSON(data); err != nil {
-		return fault("", -32700, "invalid JSON")
+		return fault("", -32700, "invalid JSON"), nil
 	}
 	if err := wire.Validate("Request", data); err != nil {
-		return fault("", -32600, "invalid request")
+		return fault("", -32600, "invalid request"), nil
 	}
 	var req wire.Request
 	if err := json.Unmarshal(data, &req); err != nil {
-		return fault("", -32600, "invalid request")
+		return fault("", -32600, "invalid request"), nil
 	}
 	if s.seen[req.Id] {
-		return fault(req.Id, -32600, "duplicate request ID")
+		return fault(req.Id, -32600, "duplicate request ID"), nil
 	}
 	if len(s.seen) >= 4096 {
-		return fault(req.Id, -32000, "request budget exhausted")
+		return fault(req.Id, -32000, "request budget exhausted"), nil
 	}
 	s.seen[req.Id] = true
 	if req.Method == "core.handshake" {
-		return s.handshake(req)
+		return s.handshake(req), nil
 	}
 	if !s.connected {
-		return fault(req.Id, -32001, "handshake required")
+		return fault(req.Id, -32001, "handshake required"), nil
 	}
 	expected := s.context()
 	if req.Params.Context == nil || *req.Params.Context != expected {
-		return fault(req.Id, -32002, "stale backend context")
+		return fault(req.Id, -32002, "stale backend context"), nil
 	}
 	if !wire.KnownMethod(req.Method) {
-		return fault(req.Id, -32601, "unknown method")
+		return fault(req.Id, -32601, "unknown method"), nil
 	}
 	if wire.RequiresOperationID(req.Method) != (req.Params.OperationId != nil) {
-		return fault(req.Id, -32602, "invalid operation identity")
+		return fault(req.Id, -32602, "invalid operation identity"), nil
 	}
 	if req.Method == "core.status" {
 		if req.Params.OperationId != nil || wire.Validate("Empty", req.Params.Body) != nil {
-			return fault(req.Id, -32602, "invalid status parameters")
+			return fault(req.Id, -32602, "invalid status parameters"), nil
 		}
 		data, _ := json.Marshal(wire.Status{Pid: strconv.Itoa(os.Getpid()), StartedAt: s.started.UTC().Format(time.RFC3339Nano), UptimeNanoseconds: strconv.FormatInt(time.Since(s.started).Nanoseconds(), 10), BuildId: s.config.BuildID, ProfileId: s.config.ProfileID, BackendGeneration: s.config.Generation})
-		return s.result(req, &Outcome{Status: "ok", Data: data})
+		return s.result(req, &Outcome{Status: "ok", Data: data}), nil
 	}
 	if req.Method == "core.operation.status" {
-		return s.result(req, &Outcome{Status: "unsupported", Code: "operation_owner_unavailable"})
+		return s.result(req, &Outcome{Status: "unsupported", Code: "operation_owner_unavailable"}), nil
 	}
 	method, exists := s.config.Methods[req.Method]
 	if !exists {
-		return s.result(req, &Outcome{Status: "unavailable", Code: "capability_unavailable"})
+		return s.result(req, &Outcome{Status: "unavailable", Code: "capability_unavailable"}), nil
 	}
+	return wire.Response{}, &invocation{request: req, method: method}
+}
+
+func (s *Server) invoke(ctx context.Context, call *invocation) wire.Response {
+	req := call.request
 
 	operationID := ""
 	if req.Params.OperationId != nil {
 		operationID = *req.Params.OperationId
 	}
-	outcome, err := method.Handle(ctx, Request{RequestID: req.Id, OperationID: operationID, Body: req.Params.Body})
+	outcome, err := call.method.Handle(ctx, Request{RequestID: req.Id, OperationID: operationID, Body: req.Params.Body})
 	// Only the owner can establish the effect result. A handler failure is unknown.
 	if err != nil || outcome == nil {
 		return s.result(req, &Outcome{Status: "unknown", Code: "owner_outcome_unknown"})
