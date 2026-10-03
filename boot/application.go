@@ -36,7 +36,10 @@ func serve(ctx context.Context, profileID string, launch *NativeLaunch, in io.Re
 			return err
 		}
 		defer func() { result = errors.Join(result, native.Close()) }()
-		methods = native.ingress.Methods()
+		methods, err = native.Methods()
+		if err != nil {
+			return err
+		}
 	}
 	server, err := container.New(BuildID, profileID, generation, methods)
 	if err != nil {

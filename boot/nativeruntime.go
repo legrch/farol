@@ -3,6 +3,12 @@ package boot
 import (
 	"context"
 	"errors"
+	conversation "github.com/legrch/farol/modules/chat/contracts/conversation"
+	browser "github.com/legrch/farol/modules/chat/infra/browser"
+	"github.com/legrch/farol/modules/chat/infra/intent"
+	"github.com/legrch/farol/modules/chat/infra/results"
+	"github.com/legrch/farol/transport/desktop"
+	"time"
 
 	wire "github.com/legrch/farol/gen/desktop/v1"
 	chatport "github.com/legrch/farol/modules/chat/app/port"
@@ -23,13 +29,17 @@ type NativeLaunch struct {
 	StoreMode                 string
 }
 type NativeRuntime struct {
-	profile  *QualifiedProfile
-	store    *accessrepo.Store
-	journal  *chatrepo.Repository
-	chat     *chatlifecycle.Service
-	ingress  *ComputerIngress
-	closed   bool
-	closeErr error
+	cancel        context.CancelFunc
+	browser       *BrowserExchange
+	conversations *ChatIngress
+	results       *results.Memory
+	profile       *QualifiedProfile
+	store         *accessrepo.Store
+	journal       *chatrepo.Repository
+	chat          *chatlifecycle.Service
+	ingress       *ComputerIngress
+	closed        bool
+	closeErr      error
 }
 
 func NewNativeRuntime(ctx context.Context, launch NativeLaunch, generation string) (*NativeRuntime, error) {
@@ -40,7 +50,8 @@ func NewNativeRuntime(ctx context.Context, launch NativeLaunch, generation strin
 	if err != nil {
 		return nil, err
 	}
-	runtime := &NativeRuntime{profile: qualified}
+	lifetime, cancel := context.WithCancel(ctx)
+	runtime := &NativeRuntime{profile: qualified, cancel: cancel}
 	fail := func(err error) (*NativeRuntime, error) { return nil, errors.Join(err, runtime.Close()) }
 	computer, chat, err := qualified.Roots()
 	if err != nil {
@@ -62,7 +73,25 @@ func NewNativeRuntime(ctx context.Context, launch NativeLaunch, generation strin
 	if _, _, err := qualified.Roots(); err != nil {
 		return fail(err)
 	}
-	runtime.chat, err = chatlifecycle.New(ctx, chatport.JournalScope{ProfileID: launch.Profile.ProfileID, BackendGeneration: generation}, chatlifecycle.Dependencies{Gate: gate.New(), Journal: runtime.journal})
+	scope := chatport.JournalScope{ProfileID: launch.Profile.ProfileID, BackendGeneration: generation}
+	peer := wire.Context{ProfileId: launch.Profile.ProfileID, BackendGeneration: generation}
+	runtime.browser, err = NewBrowserExchange(lifetime, peer)
+	if err != nil {
+		return fail(err)
+	}
+	physical, err := browser.New(lifetime, browser.Scope{ProfileID: scope.ProfileID, BackendGeneration: scope.BackendGeneration}, runtime.browser, browserClock{})
+	if err != nil {
+		return fail(err)
+	}
+	runtime.results, err = results.NewMemory(lifetime, scope, results.TextLimits())
+	if err != nil {
+		return fail(err)
+	}
+	runtime.chat, err = chatlifecycle.New(ctx, scope, chatlifecycle.Dependencies{Gate: gate.New(), Journal: runtime.journal, Browser: physical, Results: runtime.results, ResultBytesLimit: chatlifecycle.OutputBytesLimit, IntentDigests: intent.SHA256{}})
+	if err != nil {
+		return fail(err)
+	}
+	runtime.conversations, err = NewChatIngress(conversation.New(runtime.chat), peer, launch.OwnerID)
 	if err != nil {
 		return fail(err)
 	}
@@ -86,6 +115,9 @@ func (r *NativeRuntime) Close() error {
 		return r.closeErr
 	}
 	r.closed = true
+	if r.cancel != nil {
+		r.cancel()
+	}
 	var failures []error
 	if r.ingress != nil {
 		_, err := r.ingress.guard.deactivate()
@@ -93,6 +125,9 @@ func (r *NativeRuntime) Close() error {
 	}
 	if r.chat != nil {
 		failures = append(failures, r.chat.FreezeAdmissions(context.Background()))
+	}
+	if r.results != nil {
+		failures = append(failures, r.results.Close())
 	}
 	if r.journal != nil {
 		failures = append(failures, r.journal.Close())
@@ -105,4 +140,24 @@ func (r *NativeRuntime) Close() error {
 	}
 	r.closeErr = errors.Join(failures...)
 	return r.closeErr
+}
+
+// Real time is read only in composition; the Chat application receives a port.
+type browserClock struct{}
+
+func (browserClock) NowMillis() uint64 { return uint64(time.Now().UnixMilli()) }
+func (r *NativeRuntime) Methods() (map[string]desktop.Method, error) {
+	if r == nil || r.closed || r.ingress == nil || r.browser == nil || r.conversations == nil {
+		return nil, errors.New("native_runtime_unavailable")
+	}
+	merged := make(map[string]desktop.Method)
+	for _, source := range []map[string]desktop.Method{r.ingress.Methods(), r.browser.Methods(), r.conversations.Methods()} {
+		for name, method := range source {
+			if _, exists := merged[name]; exists {
+				return nil, errors.New("native_method_conflict")
+			}
+			merged[name] = method
+		}
+	}
+	return merged, nil
 }
