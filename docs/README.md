@@ -1,79 +1,64 @@
 # Farol documentation
 
-Start with the [project overview](../README.md), then choose a guide below.
-[Current status](status.md) separates the published owner beta, the accepted source
-snapshot, and migration work. A source or fixture test does not certify a live
-ChatGPT account, native task host, or installed update.
+Connect ChatGPT to an approved local workspace, develop Farol, or understand its
+boundaries. Choose the path that matches what you want to do.
 
-## Using Farol
+| Your goal                                 | Start here                             | Finish with                                        |
+| ----------------------------------------- | -------------------------------------- | -------------------------------------------------- |
+| Try Farol for the first time              | [Start](start/README.md)               | Read a file from a folder you approved             |
+| Change access, update, or solve a problem | [Practical guides](guides/README.md)   | Complete one specific task                         |
+| Build Farol or contribute a change        | [Development](development/README.md)   | A checked change or verified local candidate       |
+| Understand the design                     | [Architecture](architecture/README.md) | Understand the running system and migration target |
+| Look up an exact contract or setting      | [Reference](reference/README.md)       | Find the authoritative detail                      |
+| Maintain an older preview installation    | [Maintenance](maintenance/README.md)   | Follow the applicable closed-app procedure         |
 
-- [Getting started](getting-started.md) — first connection, approved folders,
-  everyday controls, and operation states.
-- [Installation and updates](installation.md) — beta downloads, checksums,
-  requirements, installation baseline, and update controls.
-- [Candidate launch and troubleshooting](owner-preview.md) — `task run`, hidden
-  launches, Dev isolation, and common remedies.
-- [Setup links](setup-links.md) — external tunnel and ChatGPT setup pages.
+> [!IMPORTANT]
+> The documented release is an unsigned macOS Apple Silicon owner beta. The
+> [status matrix](reference/status.md) names its source snapshot and separates
+> shipped implementation, gated routes, test compositions, and migration work.
 
-## Development
+## Start with a complete path
 
-- [Build and verification](standalone-build.md) — toolchain, dependencies, Dev,
-  deterministic gates, packaging, and output layout.
-- [Testing](testing.md) — evidence classes, native test commands, display/focus
-  policy, selected journeys, and retained reports.
-- [Dependencies](dependencies.md) — current dependency owners and migration limits.
-- [Ordinary Git fixture](ordinary-git-environment-fixture.md) — isolated reference
-  configuration and Computer shell acceptance.
+**Use Farol:** [Install](start/installation.md) →
+[connect ChatGPT](start/first-connection.md) →
+[read your first workspace](start/first-workspace.md).
 
-## Architecture and decisions
+**Develop Farol:** [Set up a worktree](development/setup.md) →
+[make a scoped change](development/contributing.md) →
+[run checks](development/testing.md) →
+[build a candidate when needed](development/packaging.md).
 
-- [Architecture](architecture.md) — running TypeScript/Electron system, accepted
-  Go/React target, module ownership, and enforced dependencies.
-- [Desktop/Core protocol](desktop-core.md) — Go backend checkpoint, generated wire,
-  process lifetime, and disposable Computer reads.
-- [Browser adapter](browser-adapter.md) — public DOM parsing, readiness ordering,
-  submission, and continuity evidence.
-- [Desktop design](design.md) — Watch Rail, native browser overlays, keyboard
-  behavior, and visual evidence.
-- [Provider and model identity](model-routing.md) — `farol` / `chatgpt`, alias
-  semantics, continuity, and disabled integration boundaries.
+**Understand Farol:** [Running desktop](architecture/runtime.md) →
+[permissions and unknown outcomes](architecture/authority.md) →
+[module boundaries](architecture/boundaries.md) →
+[Go/React migration](architecture/migration.md).
 
-## Computer and task reference
+## The documentation tree
 
-- [Computer capabilities](computer-parity.md) — file operations, command modes,
-  Git approval, effect receipts, and process-cleanup limits.
-- [Workspace context](computer-workspace-context.md) — workspace IDs, `AGENTS.md`
-  bootstrap, published guidance, and search coverage.
-- [Configuration and model discovery](config-model-discovery.md) — `config.json`,
-  task model policy, exact runtime selection, and continuation binding.
-- [Persistent chats and native tasks](persistent-chat-handoff-parity.md) — route
-  status, saved projects, create/status/result, observation, and gated control.
-- [Claude handoff](claude-handoff-candidate.md) — fixture-only route and its
-  qualification requirements.
+```text
+docs/
+├── start/          First installation, connection, and workspace
+├── guides/         Access changes, updates, and troubleshooting
+├── development/    Setup, contribution, tests, dependencies, and candidates
+├── architecture/   Runtime, authority, boundaries, migration, and decisions
+├── reference/      Status, configuration, shortcuts, and technical contracts
+│   ├── computer/
+│   ├── tasks/
+│   ├── protocols/
+│   └── updates/
+├── maintenance/    Closed preview migration and recovery
+└── tools/          Documentation integrity checks
+```
 
-## Updates and maintenance reference
+Each section has its own README. Detailed facts have one canonical page; guides
+link to those facts instead of repeating the complete contract. Original flat page
+addresses remain short compatibility pointers, including their section links.
 
-These pages explain implementation contracts and controlled recovery. Use the
-[installation guide](installation.md) for the ordinary user path.
+## Frequent lookups
 
-- [GitHub release contract](github-release-contract.md) — assets, channels, strict
-  manifests, bounded discovery, and transport.
-- [Package verifier](update-package-verifier.md) — archive and extracted-package
-  verification.
-- [Installed updater](installed-update-runtime.md) — drain, staging, durable
-  admission, restart, recovery, and rollback.
-- [Installed update helper](installed-update-helper.md) — readiness acknowledgment,
-  atomic replacement, and exact-operation reconciliation.
-- [Historical preview cutover](product-cutover.md) — closed migration from the older
-  preview layout; separate from an ordinary update.
-- [Owner guard](owner-guard-startup-recovery.md) — protected-path fingerprints,
-  cancellation, and verification limits.
+[Current status](reference/status.md) · [Keyboard shortcuts](reference/shortcuts.md) ·
+[Profiles](reference/profiles.md) · [Configuration](reference/configuration.md) ·
+[Computer access](reference/computer/capabilities.md) · [Glossary](reference/glossary.md)
 
-## Reading conventions
-
-**Released** means named published bytes. **Current source** means an implementation
-in the reviewed source snapshot. **Accepted target** describes a decided architecture
-that may still need migration. **Fixture-only** means a test composition, not an
-ordinary enabled product route. Keep those meanings when extending these pages.
-
-Existing reference filenames remain stable so source and review links keep working.
+For documentation changes, follow the [writing and maintenance guide](development/documentation.md).
+For the product introduction, return to the [project README](../README.md).

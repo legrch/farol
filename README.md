@@ -1,56 +1,53 @@
 # Farol
 
-A macOS desktop companion for ChatGPT and the local workspaces you choose to share.
+Give ChatGPT a controlled connection to local projects on your Mac.
 
-Farol connects ChatGPT to approved folders on your Mac through a Computer MCP
-bridge. Read and search files, explicitly approve edits or sandboxed commands, and
-manage the connection from a desktop app with Browser, Computer, Activity, and
-Settings views.
+Farol is a macOS desktop companion that connects ChatGPT to folders you approve
+through a Computer MCP bridge. Read and search files, explicitly approve edits or
+sandboxed commands, and manage the connection from Browser, Computer, Activity,
+and Settings views.
 
-**[Get Farol](docs/installation.md)** · **[First connection](docs/getting-started.md)** ·
-**[Developer guide](docs/standalone-build.md)** · **[Documentation](docs/README.md)**
+**[Get started](docs/start/README.md)** · **[Download](docs/start/installation.md)** ·
+**[Develop Farol](docs/development/README.md)** · **[Documentation](docs/README.md)**
 
 > [!IMPORTANT]
-> Farol is an **owner beta for macOS Apple Silicon**. The published package is
-> unsigned and not notarized. Live workflow qualification is incomplete. The Go
-> backend and React UI are an incremental migration; the published beta still uses
-> the TypeScript/Electron implementation. See [current status](docs/status.md).
+> Farol is an **unsigned, unnotarized owner beta for macOS Apple Silicon**. The
+> published app still uses TypeScript/Electron. Go and React are an incremental
+> migration, and full live workflow qualification remains incomplete. Read
+> [current status](docs/reference/status.md) before choosing an experimental route.
 
-## What you can use
+## Work with the folders you choose
 
-- **ChatGPT and your folders.** Connect a separately configured ChatGPT app to
-  Farol, select folders, and verify the connection. Embedded ChatGPT sign-in is
-  optional for Computer access.
-- **Controlled local work.** Start with read-only files and instructions. Enable
-  guarded edits, fixed Git verification, or a sandboxed workspace shell explicitly.
-  Shell networking is denied; full Git and user settings need separate approval.
-- **A desktop workspace.** Keep conversations in tabs, review Computer access, and
-  inspect content-free Activity and support diagnostics.
-- **Explicit recovery.** Saved configuration and operation receipts distinguish a
-  completed action, a refusal, and an unknown outcome. An uncertain send or command
-  is never blindly repeated.
+- **Connect your ChatGPT workspace.** Configure its tunnel/app and verify the exact
+  connection. Embedded Browser sign-in is optional for Computer access.
+- **Start read-only.** Read files, search text, and load applicable workspace
+  instructions within your approved scope.
+- **Approve broader work explicitly.** Guarded file edits, fixed Git checks,
+  sandboxed shell commands, and full Git access have separate requirements.
+- **Keep uncertainty visible.** Activity and operation evidence distinguish
+  completion, refusal, and unknown outcomes. Unknown work is not blindly repeated.
 
-Native Codex task integration has additional host and workspace requirements.
-Saved-chat automation and Claude handoff have experimental or fixture-only
-boundaries. **The Farol model-provider route and Product Agent are disabled.**
-These are described in the [capability status](docs/status.md), rather than offered
-as ordinary setup steps.
+Model and Product Agent are disabled. Native Codex tasks, automated saved chats,
+and Claude handoff have additional gated or fixture-only boundaries described in
+[the capability matrix](docs/reference/status.md#capability-boundaries).
 
-## Get Farol
+## Your first session
 
-The documented release snapshot is
+1. [Download and open the beta](docs/start/installation.md).
+2. [Connect ChatGPT and check the attachment](docs/start/first-connection.md).
+3. [Read a known file in your first workspace](docs/start/first-workspace.md).
+
+The documented release is
 [0.1.8-owner.beta.1](https://github.com/legrch/farol-releases/releases/tag/v0.1.8-owner.beta.1),
-published on 2 October 2026. Binary downloads live in the separate
+published on 2 October 2026. Downloads and update assets live in the separate
 [Farol releases repository](https://github.com/legrch/farol-releases/releases).
-
-The [installation guide](docs/installation.md) covers downloads, checksums, the
-current helper requirements, local installation receipts, and updates. Keep your
-previous accepted version while evaluating the beta.
+The installation guide explains checksums, helper requirements, and the current
+updater-baseline limitation.
 
 ## Run from source
 
-On macOS Apple Silicon, install [Go Task](https://taskfile.dev/), then provide Node
-**24.20.0 or 26.7.0** with npm **11.19.0**. From a clone:
+On macOS Apple Silicon, provide Go Task, Node **24.20.0 or 26.7.0**, and npm
+**11.19.0**, then:
 
 ```sh
 git clone https://github.com/legrch/farol.git
@@ -58,44 +55,32 @@ cd farol
 task dev
 ```
 
-`task dev` selects a supported toolchain, prepares locked dependencies, builds the
-working tree, and opens **Farol Dev**. It has its own profile and connector; it can
-run alongside an installed Farol. Dirty source is allowed and labelled Development.
-Stop the processes it started with `Control+C`.
+`task dev` selects the supported toolchain, prepares locked dependencies, builds
+the working tree, and opens **Farol Dev** with its own profile and connector.
+Dirty source is labelled Development. `Control+C` stops the processes it started.
 
-For deterministic checks, also provide Go **1.26.2**, Gitleaks, and the reviewed
-Apple developer tools. Follow the [developer guide](docs/standalone-build.md) for
-setup and `task ci:fast`. Build a verified packaged candidate with `task package`,
-then use `task run` to open it from an isolated launch snapshot. The
-[candidate guide](docs/owner-preview.md) explains that workflow.
+Follow [development setup](docs/development/setup.md) and
+[testing](docs/development/testing.md) for the additional Go/native tools and full
+source gate. Build a verified packaged candidate with `task package`, then open it
+with `task run` from an isolated launch snapshot. See
+[packaging](docs/development/packaging.md) for that exact-byte workflow.
 
-## Architecture
+## Explore the documentation
 
-The running desktop uses Electron, a sandboxed TypeScript UI, native browser
-views, and an Electron utility process. Computer and update helpers currently
-include Python. The accepted target is **React + TypeScript for Farol UI,
-TypeScript for desktop/browser adapters, and Go for the backend**.
+| I want to…                                           | Start here                                  |
+| ---------------------------------------------------- | ------------------------------------------- |
+| Learn Farol through one complete session             | [Start](docs/start/README.md)               |
+| Change access, update, or resolve a problem          | [Practical guides](docs/guides/README.md)   |
+| Build, test, or contribute                           | [Development](docs/development/README.md)   |
+| Understand processes, permissions, and migration     | [Architecture](docs/architecture/README.md) |
+| Look up a setting, shortcut, capability, or contract | [Reference](docs/reference/README.md)       |
+| Maintain an older preview installation               | [Maintenance](docs/maintenance/README.md)   |
 
-| Source                                     | Responsibility                                                                  |
-| ------------------------------------------ | ------------------------------------------------------------------------------- |
-| `src/`                                     | Active TypeScript UI, desktop/runtime adapters, and transitional modules        |
-| `apps/desktop/bridge/`                     | Additive TypeScript client for the Go Core pipe protocol                        |
-| `modules/computer/`, `boot/`, `cmd/farol/` | Go Computer foundation and backend composition; not the active desktop executor |
-| `api/desktop/v1/`, `transport/desktop/`    | Canonical wire schema and Go transport                                          |
-| `resources/`, `tooling/`, `tests/`         | Packaged resources, reproducible builds, and verification                       |
+The running desktop has a TypeScript UI, native browser views, an Electron utility
+runtime, and Python helpers. The accepted target is React/TypeScript UI,
+TypeScript desktop/browser adapters, and Go backend modules. The
+[architecture path](docs/architecture/README.md) explains both without treating a
+planned component as an enabled route.
 
-See [architecture](docs/architecture.md) for the current runtime, module boundaries,
-and migration target, and [Desktop/Core](docs/desktop-core.md) for the Go checkpoint.
-
-## Find your next step
-
-| I want to…                              | Start here                                                             |
-| --------------------------------------- | ---------------------------------------------------------------------- |
-| Install the beta and understand updates | [Installation and updates](docs/installation.md)                       |
-| Connect ChatGPT and approve a folder    | [Getting started](docs/getting-started.md)                             |
-| Understand file, shell, and Git access  | [Computer reference](docs/computer-parity.md)                          |
-| Build, test, or contribute              | [Development](docs/standalone-build.md) and [testing](docs/testing.md) |
-| Understand current and planned behavior | [Status](docs/status.md) and [architecture](docs/architecture.md)      |
-
-All documentation stays in this repository. The [documentation index](docs/README.md)
-links the detailed guides and contracts.
+The [documentation index](docs/README.md) shows the complete repository structure
+and reader paths. Every section is ordinary GitHub Markdown with its own README.
