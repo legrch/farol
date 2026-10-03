@@ -3,9 +3,10 @@
 This bounded slice ships an immutable argument/stdin builder and strict bounded
 NDJSON parser. It includes the concrete Task peer in `infra/peer/process` against
 the published Computer Prepare/Start/Read/Cancel contract. Constructors execute
-nothing; this package does not implement or advertise a qualified ClaudeHost or
-register a production provider. The selected root binding and native
-confinement/cohort qualification remain separate activation prerequisites.
+nothing. The concrete per-invocation `Host` composes those selected bytes/parser
+and the existing Computer peer; it does not register or qualify a production
+provider. Root binding and native confinement/cohort qualification remain
+separate activation prerequisites.
 
 ## Selection and evidence
 
@@ -79,7 +80,8 @@ barrier, fresh revocation before effect, and retained unknown without another
 resolve/send. This is the C01/M02/M03/M09 lower-layer trace, not a browser queue
 acceptance test. Invocation cases cover M01/M06/M11/M12 selection/provenance
 mechanics. The byte/parser matrix covers the C06/M07/M08 lower-layer obligations;
-actual external consumer/process streaming remains a separate higher witness.
+strict Host process-port consumer streaming is now a CPU aggregate witness;
+actual native process streaming remains a separate higher witness.
 Resume flag construction is fixture-declared, not M05 live support. M04 browser
 selector and M10 compaction/composer qualification are outside this Task slice.
 
@@ -92,5 +94,52 @@ does not accept, copy or integrate another owner's implementation.
 
 No shared Taskfile/schema/main/boot, new journal/event database, executor/daemon,
 model module or private wire protocol is added. Full CI/race/native/live and
-commit remain held. Production catalogue, actual ClaudeHost dispatch/observation
-assembly, root binding and runtime qualification are not claimed complete.
+commit remain held. Production catalogue, root binding and runtime qualification
+remain pending.
+The concrete Host dispatch/observation assembly is source-tested only.
+
+## Concrete per-invocation Host
+
+`NewHost(HostOptions)` is lazy and accepts one actual `process.Client`, exact
+operation/Selection, selected Root clock and mandatory `Recheck` consumer gate.
+The peer's pure `Selection` accessor verifies exact correlation before any effect;
+that accessor is not qualification. `Recheck` must freshly qualify the SAME native
+route, physical/current admission authority, CLI/model/effort/create/exact-resume
+capabilities, confinement and cohort ownership. Missing real qualification stays
+unavailable. A selected boolean/Prepare echo or Task authority alone cannot fill
+this gate; CPU test closures are not a production native grant.
+
+Host implements existing ClaudeHost, Provider and ObservedProvider. It uses the
+same selected immutable builder, prepares/starts once and publishes actual matching
+provider init lineage before metadata/useful output. Startup observes the SAME
+known-start handle for at most two seconds, shortened by caller deadline/cancel,
+and 128 reads. Known empty-running ranges pause for a cancellable 25ms timer;
+available progressing ranges drain without idle spinning. Unknown/refused/error,
+exited root or changed authority/identity stops immediately. No Prepare/Start is
+repeated and no background worker or lease renewal is added. The original Computer
+lease remains independently binding. This is source-only behavior, not native
+qualification or live startup acceptance.
+
+Each Observe reads only the same retained handle with monotonic exact offsets.
+Output deltas are optional transient callback data, never journal/transcript or
+hidden reasoning. Compact started/qualified-terminal events use the existing Task
+metadata sink. Provider result alone remains running; terminal requires complete
+matching NDJSON plus SAME root Wait, fully consumed drained bytes and confirmed
+group/descendant cleanup. Unknown/overflow/revocation/timeout or contradictory
+success/exit facts remain sticky unknown. Callback failures and lost Start ACK
+never authorize a new child. Missing init cannot become synthetic provider identity.
+
+Resume uses a newly admitted per-operation Host/Computer peer for the exact SAME
+provider session. Root retains/routes previous owning handles and existing Task
+journal results; Host adds no persistent registry or recovery journal. Continue,
+Message and Cancel stay unsupported in this bounded slice, even when a broad
+injected host declaration claims them. Signal ACK is never fabricated as terminal.
+Parent delivery remains a separate boundary from result/event retention.
+
+CPU tests script only existing process/storage/authority ports around the shipping
+Host, builder/parser, Task Service and Owner. They cover useful fragmented output,
+same-session resume, exact historical retained result, unknown and refused boundaries,
+callback publication failures, concurrent replay, and lost Start/journal ACK
+reconnect without another Prepare/Start. Public New uses a real concrete peer for
+lazy/unavailable/identity tests only; no test activates an unqualified native route.
+Full CI/race/native/model calls, commit and activation remain held for Lead.
