@@ -237,3 +237,17 @@ func identifier(value string) bool {
 	}
 	return true
 }
+
+// Clone supports an application-owned candidate: journal settlement and a
+// complete event group can succeed before any delivery frame is published.
+func (b *Buffer) Clone() *Buffer {
+	if b == nil {
+		return nil
+	}
+	out := *b
+	out.frames = make([]retained, len(b.frames))
+	for n, item := range b.frames {
+		out.frames[n] = retained{frame: clone(item.frame), acknowledged: item.acknowledged}
+	}
+	return &out
+}

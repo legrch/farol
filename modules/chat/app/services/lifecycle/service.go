@@ -8,6 +8,8 @@ import (
 	"unicode/utf8"
 
 	"github.com/legrch/farol/modules/chat/app/port"
+	"github.com/legrch/farol/modules/chat/domain/output"
+	"github.com/legrch/farol/modules/chat/domain/stream"
 	"github.com/legrch/farol/modules/chat/domain/turn"
 )
 
@@ -35,19 +37,22 @@ type Dependencies struct {
 	Results port.ResultRetention
 	// Trusted composition pins the accepted retention byte budget before admission.
 	ResultBytesLimit int
+	IntentDigests    port.IntentDigester
 }
 
 type Service struct {
-	scope            port.JournalScope
-	root             port.JournalRoot
-	frozen, retiring bool
-	retired          *retirementProof
-	deps             Dependencies
-	queue            *turn.Queue
-	handles          map[string]*Handle
-	revision, fence  uint64
-	pending          *mutation
-	unknown          bool
+	scope             port.JournalScope
+	root              port.JournalRoot
+	frozen, retiring  bool
+	retired           *retirementProof
+	deps              Dependencies
+	queue             *turn.Queue
+	handles           map[string]*Handle
+	revision, fence   uint64
+	pending           *mutation
+	unknown           bool
+	usedVerifications map[string]bool
+	providerOwners    map[string]port.TurnBinding
 }
 
 // Handle is minted only by this owner's actual successful admission. Its fields
@@ -61,6 +66,14 @@ type Handle struct {
 	disposal                                       turn.DisposalEvidence
 	unresolvedCallID                               string
 	ackRevision, settledRevision, releasedRevision uint64
+	target                                         port.ConversationTarget
+	conversation                                   *Conversation
+	verification                                   port.SendVerification
+	prompt                                         string
+	output                                         output.State
+	frames                                         *stream.Buffer
+	observing                                      bool
+	sourceSequence                                 uint64
 	closed                                         bool // protected by owner's gate; monotonic membership withdrawal
 }
 
@@ -90,7 +103,7 @@ func New(ctx context.Context, scope port.JournalScope, deps Dependencies) (*Serv
 	if ctx.Err() != nil {
 		return nil, Cancelled
 	}
-	return &Service{scope: scope, root: head.Root, deps: deps, queue: queue, handles: make(map[string]*Handle)}, nil
+	return &Service{scope: scope, root: head.Root, deps: deps, queue: queue, handles: make(map[string]*Handle), usedVerifications: make(map[string]bool), providerOwners: make(map[string]port.TurnBinding)}, nil
 }
 
 func (h *Handle) Binding() port.TurnBinding {
@@ -143,6 +156,10 @@ func (h *Handle) WithCurrent(ctx context.Context, inspect func(*port.CurrentTurn
 }
 
 func (s *Service) Admit(ctx context.Context, binding port.TurnBinding, digest string) (*Handle, error) {
+	return s.admit(ctx, binding, digest, nil)
+}
+
+func (s *Service) admit(ctx context.Context, binding port.TurnBinding, digest string, conversation *Conversation) (*Handle, error) {
 	if s == nil || ctx == nil {
 		return nil, Invalid
 	}
@@ -155,12 +172,16 @@ func (s *Service) Admit(ctx context.Context, binding port.TurnBinding, digest st
 		return nil, err
 	}
 	if existing := s.handles[binding.OperationID]; existing != nil {
-		if existing.fixed != binding || existing.digest != digest || existing.closed {
+		if existing.fixed != binding || existing.digest != digest || existing.closed || (conversation != nil && existing.conversation != conversation) {
 			s.deps.Gate.Unlock()
 			return nil, turn.Conflict
 		}
 		s.deps.Gate.Unlock()
 		return existing, nil
+	}
+	if conversation != nil && conversation.previous != nil && conversation.root.latest != conversation.previous {
+		s.deps.Gate.Unlock()
+		return nil, turn.Conflict
 	}
 	candidate := s.queue.Clone()
 	after, err := candidate.Admit(identity(binding), digest)
@@ -169,6 +190,17 @@ func (s *Service) Admit(ctx context.Context, binding port.TurnBinding, digest st
 		return nil, err
 	}
 	h := &Handle{owner: s, fixed: binding, digest: digest}
+	if conversation != nil {
+		h.conversation, h.target, h.prompt = conversation, conversation.target, conversation.input.Prompt
+		conversation.input.Prompt = ""
+		conversation.handle = h
+		h.output = output.New(OutputBytesLimit, conversation.target.PreviousUserTurnID, conversation.target.PreviousReplyID)
+		h.frames, err = stream.New(streamScope(binding), stream.DefaultLimits())
+		if err != nil {
+			s.deps.Gate.Unlock()
+			return nil, err
+		}
+	}
 	m := s.begin(candidate, h, port.JournalEntry{Binding: binding, Kind: "admit", After: after, IntentDigest: digest})
 	s.deps.Gate.Unlock()
 	if err := s.commit(ctx, m, true); err != nil {
@@ -296,6 +328,14 @@ func (s *Service) stage(ctx context.Context, h *Handle, closing bool, derive fun
 	if s.handles[h.fixed.OperationID] != h {
 		return nil, Mismatch
 	}
+	if h.observing && ctx.Value(observationKey{}) != h {
+		if closing {
+			h.closed = true
+			s.unknown = true
+			return nil, Unsettled
+		}
+		return nil, Busy
+	}
 	if closing && s.pending != nil {
 		h.closed = true
 		s.unknown = true
@@ -391,6 +431,15 @@ func (s *Service) commit(ctx context.Context, m *mutation, publish bool) error {
 	}
 	if publish {
 		switch m.entry.Kind {
+		case "admit":
+			if c := m.handle.conversation; c != nil {
+				c.root.latest = c
+			}
+		case "prepared":
+			if c := m.handle.conversation; c != nil {
+				c.providerID = m.entry.After.Binding.Document.ConversationID
+				s.providerOwners[c.providerID] = m.handle.fixed
+			}
 		case "request-computer":
 			m.handle.unresolvedCallID = m.entry.CallID
 		case "resolve-computer":

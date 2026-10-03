@@ -32,6 +32,7 @@ type BrowserBinding struct {
 }
 
 type PrepareRequest struct {
+	Target         ConversationTarget
 	Lease          BrowserLease
 	DeadlineMillis uint64
 }
@@ -46,6 +47,7 @@ const (
 )
 
 type PrepareResponse struct {
+	Saved     bool
 	Readiness Readiness
 	Binding   BrowserBinding
 	Code      string
@@ -54,6 +56,7 @@ type PrepareResponse struct {
 // Prompt is transient Send input, never an Activity or journal field.
 // Desktop checks the exact binding and inserted bytes before its one Send.
 type SendRequest struct {
+	Verification   SendVerification
 	Binding        BrowserBinding
 	IntentDigest   string
 	Prompt         string
@@ -69,9 +72,10 @@ const (
 )
 
 type SendResponse struct {
-	Binding BrowserBinding
-	Status  SendStatus
-	Code    string
+	VerificationID string
+	Binding        BrowserBinding
+	Status         SendStatus
+	Code           string
 }
 
 // Limits apply to semantic UTF-8 text bytes, not JSON's escaped wire size.
@@ -114,11 +118,12 @@ const (
 )
 
 type BrowserObservation struct {
-	Binding          BrowserBinding
-	Sequence         uint64
-	ObservedAtMillis uint64
-	Kind             ObservationKind
-	Text             string
+	UserTurnID, ReplyID, SegmentID string
+	Binding                        BrowserBinding
+	Sequence                       uint64
+	ObservedAtMillis               uint64
+	Kind                           ObservationKind
+	Text                           string
 	// Code is optional; a nonempty value is an ASCII classified identifier.
 	Code string
 }
@@ -202,11 +207,11 @@ func ValidateObserveResponse(request ObserveRequest, response *ObserveResponse) 
 		default:
 			return ObserveInvalid
 		}
-		if !utf8.ValidString(event.Text) || len(event.Text) > MaxObserveTextBytes || !classifiedObserveCode(event.Code) {
+		if !utf8.ValidString(event.Text) || len(event.Text) > MaxObserveTextBytes || !classifiedObserveCode(event.Code) || !optionalObservationID(event.UserTurnID) || !optionalObservationID(event.ReplyID) || !optionalObservationID(event.SegmentID) {
 			return ObserveInvalid
 		}
 		// The page bound includes selected text and classified-code bytes.
-		bytes += len(event.Text) + len(event.Code)
+		bytes += len(event.Text) + len(event.Code) + len(event.UserTurnID) + len(event.ReplyID) + len(event.SegmentID)
 		if bytes > MaxObservePageBytes {
 			return ObserveInvalid
 		}
@@ -232,3 +237,5 @@ func classifiedObserveCode(value string) bool {
 	}
 	return true
 }
+
+func optionalObservationID(value string) bool { return value == "" || conversationID(value) }

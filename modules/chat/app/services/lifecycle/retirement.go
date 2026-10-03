@@ -94,6 +94,9 @@ func (s *Service) retirementTurns() ([]port.RetirementTurn, error) {
 	out := make([]port.RetirementTurn, 0, len(ids))
 	for _, id := range ids {
 		h := s.handles[id]
+		if h.observing {
+			return nil, Busy
+		}
 		view, err := s.queue.Snapshot(identity(h.fixed))
 		if err != nil || !h.closed || !view.HasResult || view.Phase == turn.Unknown || view.Result.Outcome == turn.UnknownOutcome || !view.DeliveryAcknowledged || !view.LifecycleSettled || view.OutstandingCallID != "" || h.unresolvedCallID != "" || h.ackRevision == 0 {
 			return nil, Unsettled

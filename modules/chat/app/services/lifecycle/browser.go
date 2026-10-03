@@ -53,7 +53,7 @@ func (s *Service) PrepareNext(ctx context.Context, deadlineMillis uint64) (*port
 		return nil, err
 	}
 	lease := browserLease(reservation)
-	reply, err := s.deps.Browser.Prepare(port.PrepareRequest{Lease: lease, DeadlineMillis: deadlineMillis})
+	reply, err := s.deps.Browser.Prepare(port.PrepareRequest{Target: h.target, Lease: lease, DeadlineMillis: deadlineMillis})
 	if err != nil || reply == nil || reply.Binding.Lease != lease {
 		return nil, s.fail(m)
 	}
@@ -61,7 +61,16 @@ func (s *Service) PrepareNext(ctx context.Context, deadlineMillis uint64) (*port
 		return nil, s.fail(m)
 	}
 	binding := reply.Binding
+	if h.target.Mode != "" && (!reply.Saved || (h.target.Mode == port.OwnedSaved && binding.ConversationID != h.target.ConversationID)) {
+		return nil, s.fail(m)
+	}
 	err = s.settle(ctx, m, func(q *turn.Queue, before turn.Snapshot) (port.JournalEntry, error) {
+		if h.target.Mode != "" {
+			owned, exists := s.providerOwners[binding.ConversationID]
+			if (h.target.Mode == port.NewSaved && exists) || (h.target.Mode == port.OwnedSaved && (!exists || !sameConversationOwner(owned, h.fixed))) {
+				return port.JournalEntry{}, Mismatch
+			}
+		}
 		after, err := q.Bind(reservation, turn.Document{ViewID: binding.ViewID, ViewGeneration: binding.ViewGeneration, DocumentGeneration: binding.DocumentGeneration, ConversationID: binding.ConversationID})
 		if err == nil && reply.Readiness == port.OwnerRequired {
 			after, err = q.AwaitOwner(after.Binding)
@@ -85,6 +94,15 @@ func (s *Service) Send(ctx context.Context, h *Handle, prompt string, deadlineMi
 	if s.deps.Browser == nil {
 		return nil, Unavailable
 	}
+	if h == nil || h.owner != s {
+		return nil, Invalid
+	}
+	if h.target.Mode != "" {
+		digest, err := s.intentDigest(h.fixed, h.target, prompt)
+		if err != nil || digest != h.digest {
+			return nil, Mismatch
+		}
+	}
 	m, err := s.stage(ctx, h, false, func(q *turn.Queue, before turn.Snapshot) (port.JournalEntry, error) {
 		binding, err := q.ActiveBinding(identity(h.fixed))
 		if err != nil {
@@ -103,10 +121,41 @@ func (s *Service) Send(ctx context.Context, h *Handle, prompt string, deadlineMi
 		return nil, err
 	}
 	binding := browserBinding(m.entry.After.Binding)
-	reply, browserErr := s.deps.Browser.Send(port.SendRequest{Binding: binding, IntentDigest: h.digest, Prompt: prompt, DeadlineMillis: deadlineMillis})
+	s.deps.Gate.Lock()
+	h.prompt = ""
+	s.deps.Gate.Unlock()
+	var verification port.SendVerification
+	if h.target.Mode != "" {
+		verified, ok := s.deps.Browser.(port.VerifiedBrowser)
+		if !ok {
+			return nil, s.fail(m)
+		}
+		request := port.VerifySendRequest{Binding: binding, Requested: h.target.Selection, IntentDigest: h.digest, PreviousUserTurnID: h.target.PreviousUserTurnID, PreviousReplyID: h.target.PreviousReplyID, DeadlineMillis: deadlineMillis}
+		proof, err := verified.VerifySend(request)
+		if err != nil || !port.ValidVerification(request, proof) {
+			return nil, s.fail(m)
+		}
+		s.deps.Gate.Lock()
+		err = s.current(ctx, m)
+		if err == nil && s.usedVerifications[proof.EvidenceID] {
+			err = Unsettled
+			s.unknown = true
+		}
+		if err == nil {
+			verification = *proof
+			s.usedVerifications[proof.EvidenceID] = true
+			h.verification = verification
+			h.prompt = ""
+		}
+		s.deps.Gate.Unlock()
+		if err != nil {
+			return nil, err
+		}
+	}
+	reply, browserErr := s.deps.Browser.Send(port.SendRequest{Verification: verification, Binding: binding, IntentDigest: h.digest, Prompt: prompt, DeadlineMillis: deadlineMillis})
 	outcome := turn.UnknownOutcome
 	code := "SEND_OUTCOME_UNKNOWN"
-	if browserErr == nil && reply != nil && reply.Binding == binding {
+	if browserErr == nil && reply != nil && reply.Binding == binding && (h.target.Mode == "" || reply.VerificationID == verification.EvidenceID) {
 		switch reply.Status {
 		case port.Submitted:
 			outcome = ""
@@ -180,4 +229,30 @@ func browserLease(r turn.Reservation) port.BrowserLease {
 func browserBinding(b turn.Binding) port.BrowserBinding {
 	d := b.Document
 	return port.BrowserBinding{Lease: browserLease(b.Reservation), ViewID: d.ViewID, ViewGeneration: d.ViewGeneration, DocumentGeneration: d.DocumentGeneration, ConversationID: d.ConversationID}
+}
+
+func sameConversationOwner(a, b port.TurnBinding) bool {
+	return a.ProfileID == b.ProfileID && a.BackendGeneration == b.BackendGeneration && a.OwnerID == b.OwnerID && a.SessionID == b.SessionID && a.TaskID == b.TaskID && a.TaskEpoch == b.TaskEpoch && a.ParticipantID == b.ParticipantID
+}
+
+// PreparedOwner returns only the exact current reservation's fixed caller
+// binding. The browser's DOM identity can never mint TaskEpoch/ParticipantID.
+func (s *Service) PreparedOwner(ctx context.Context, binding port.BrowserBinding) (port.TurnBinding, error) {
+	if s == nil || ctx == nil {
+		return port.TurnBinding{}, Invalid
+	}
+	s.deps.Gate.Lock()
+	defer s.deps.Gate.Unlock()
+	if err := s.settlementAvailable(ctx); err != nil {
+		return port.TurnBinding{}, err
+	}
+	h := s.handles[binding.Lease.Identity.OperationID]
+	if h == nil {
+		return port.TurnBinding{}, Mismatch
+	}
+	view, err := s.queue.Snapshot(identity(h.fixed))
+	if err != nil || h.closed || !view.Bound || browserBinding(view.Binding) != binding {
+		return port.TurnBinding{}, Mismatch
+	}
+	return h.fixed, nil
 }

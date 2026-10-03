@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "scope": {
+    "ProfileID": "fixture-profile",
+    "BackendGeneration": "fixture-backend"
+  },
+  "selection": {
+    "Provider": "farol",
+    "Alias": "chatgpt",
+    "AccountID": "fixture-account",
+    "ModelID": "fixture-cheap",
+    "Effort": "low",
+    "ToolsEnabled": true,
+    "ConnectorID": "fixture-connector",
+    "ConnectorGrantID": "fixture-grant"
+  },
+  "provider_conversation": "fixture-conversation",
+  "turns": [
+    {
+      "operation": "operation-1",
+      "turn": "turn-1",
+      "prompt": "Remember fixture nonce pear.",
+      "user_turn": "user-1",
+      "reply": "reply-1",
+      "segments": [
+        {
+          "id": "segment-1",
+          "text": "pear"
+        }
+      ]
+    },
+    {
+      "operation": "operation-2",
+      "turn": "turn-2",
+      "prompt": "Return the fixture nonce.",
+      "user_turn": "user-2",
+      "reply": "reply-2",
+      "segments": [
+        {
+          "id": "segment-2",
+          "text": "pear"
+        }
+      ]
+    }
+  ],
+  "assertions": [
+    "two provider Sends",
+    "same provider conversation",
+    "fresh verification each Send",
+    "second current slot generation",
+    "early delta before completion",
+    "retained replay performs zero Sends",
+    "ACK and Quiescent precede release"
+  ]
+}
