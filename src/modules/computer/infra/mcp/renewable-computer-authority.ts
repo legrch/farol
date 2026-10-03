@@ -25,7 +25,21 @@ export type AdmittedComputerExecution = Readonly<{
 }>;
 
 function policy(approval: ComputerApproval): string {
-  return JSON.stringify({ ...approval, expiresAt: 0 });
+  // Schema parsing may reorder object keys (notably Git metadata). Compare
+  // policy values canonically; expiry alone is renewed, never permission.
+  return JSON.stringify(
+    { ...approval, expiresAt: 0 },
+    (_key, value: unknown) => {
+      if (value === null || typeof value !== "object" || Array.isArray(value))
+        return value;
+      const record = value as Record<string, unknown>;
+      return Object.fromEntries(
+        Object.keys(record)
+          .sort()
+          .map((key) => [key, record[key]]),
+      );
+    },
+  );
 }
 
 // One current-policy issuer, using the existing TaskGrant derivation. Each

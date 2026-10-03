@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -32,6 +33,21 @@ function canonical(value) {
 }
 for (const directory of [launchRoot, settingsRoot, workspaceRoot])
   await fs.mkdir(directory, { mode: 0o700 });
+const templates = path.join(root, "git-templates");
+await fs.mkdir(templates, { mode: 0o700 });
+execFileSync("/usr/bin/git", ["init", "--quiet", workspaceRoot], {
+  env: {
+    HOME: root,
+    PATH: "/usr/bin:/bin",
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_CONFIG_GLOBAL: "/dev/null",
+    GIT_TEMPLATE_DIR: templates,
+  },
+});
+const gitMetadata = {
+  gitDirectory: path.join(workspaceRoot, ".git"),
+  commonDirectory: path.join(workspaceRoot, ".git"),
+};
 const info = await fs.lstat(workspaceRoot, { bigint: true });
 const identity = { device: String(info.dev), inode: String(info.ino) };
 await fs.writeFile(path.join(workspaceRoot, "README.md"), "renewal fixture\n", {
@@ -68,6 +84,8 @@ const settings = {
         access: "read",
         excludedPaths: [],
         rootIdentity: identity,
+        gitMetadata,
+        gitHistoryApproved: true,
       },
     ],
   },
@@ -91,6 +109,8 @@ const approval = {
       root: workspaceRoot,
       access: "read",
       rootIdentity: identity,
+      gitMetadata,
+      gitHistoryApproved: true,
       shellVerified: false,
     },
   ],

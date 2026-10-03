@@ -231,6 +231,41 @@ describe("production Computer TaskGrant reissue", () => {
     expect(restarted.execute).toHaveBeenCalledTimes(1);
   });
 
+  it.each([false, true])(
+    "reissues identical Git workspace policy with history approval=%s regardless of object key order",
+    async (gitHistoryApproved) => {
+      const workspace = settings.computer.workspaces[0]!;
+      workspace.gitMetadata = {
+        gitDirectory: "/Users/example/brain/.git",
+        commonDirectory: "/Users/example/brain/.git",
+      };
+      workspace.gitHistoryApproved = gitHistoryApproved;
+      await save();
+      const ceiling = launch();
+      const current = readonly(issuer(ceiling));
+      now = ceiling.admission.expiresAt + 1;
+      expect(
+        (
+          await current.contract.execute(
+            request(materializeReadonlyComputerLaunch(ceiling, 1_000).binding),
+          )
+        ).ok,
+      ).toBe(true);
+      expect(current.execute).toHaveBeenCalledTimes(1);
+      workspace.gitMetadata.commonDirectory = "/Users/example/foreign/.git";
+      await save();
+      expect(
+        await current.contract.execute(
+          request(materializeReadonlyComputerLaunch(ceiling, 1_000).binding),
+        ),
+      ).toMatchObject({
+        ok: false,
+        error: { code: "AUTHORITY_COMPUTER_MISMATCH", retry: "never" },
+      });
+      expect(current.execute).toHaveBeenCalledTimes(1);
+    },
+  );
+
   it.each([
     "generation",
     "connector-generation",
