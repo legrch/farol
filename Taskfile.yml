@@ -5,6 +5,12 @@ tasks:
     desc: Farol Next deterministic architecture, policy, coverage, Hunt, and _output build gate
     cmds:
       - /usr/bin/python3 -I ./scripts/assert-owner-untouched.py -- npm run ci
+      - task: test:core
+
+  test:core:
+    desc: Verify Go modules, generated desktop bridge, protocol, and import boundaries
+    cmds:
+      - /usr/bin/python3 -I ./scripts/assert-owner-untouched.py -- node tooling/check-core.mjs
 
   dev:
     # The owner's one development command: pick the declared toolchain, make

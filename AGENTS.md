@@ -8,17 +8,30 @@ The permanent model route is `provider = farol`, `model = chatgpt`.
 Existing preview bundle IDs, state roots, partitions, process names, and receipt
 schemas are compatibility boundaries. Do not rename them as a source-layout fix.
 
-- Keep production TypeScript under `src/` and enable strict compiler checks.
-- The product modules are `computer`, `chat`, `agent`, and `release`. `Turn` belongs
-  to `chat`; Browser, Responses/SSE, IPC, and MCP are adapters or mechanisms.
-- Pure `domain` and `app` code must not import Electron, browser APIs, Node built-ins,
-  networking, filesystem, ambient timers, or infrastructure. Define consumer-owned
-  ports and inject concrete adapters in `src/boot/`.
-- Cross-module access is allowed only from `infra/peer` to the owning module's
-  published `contract`. Do not import another module's domain, app, or infra.
-- `src/pkg/kernel/infra` may implement a kernel port only when at least two real
-  module consumers use it. Shared implementations own no cross-consumer mutable
-  singleton state. `boot` owns lifetimes.
+- The accepted target is React + TypeScript for Farol-owned UI, plain TypeScript
+  for Electron/preload/browser adapters, and Go for backend policy, application,
+  state, orchestration, and native execution. New desktop source belongs under
+  `apps/desktop/`; existing TypeScript remains under `src/` until its owned slice
+  switches. Strict checks cover both trees. Do not move backend code into desktop
+  adapters to evade the cutover.
+- The Go modules are `modules/{computer,task,chat,release}`. Existing TypeScript
+  `agent` behavior moves to `task` only where it represents coding-task delegation.
+  `Turn` belongs to `chat`; Browser, Responses/SSE, IPC, and MCP are adapters.
+- Pure `domain` and `app` depend on values and consumer-owned ports, without host
+  APIs, networking, filesystem, ambient clocks, or concrete infrastructure. Root
+  `boot/` composes Go; `src/boot/` composes the remaining TypeScript slices.
+- A neighbor is visible only through its published Go `contracts` or TypeScript
+  `contract`, adapted by the consumer's `infra/peer`. Never import neighbor
+  domain/app/infra. Go contracts delegate to their own app with independent DTOs
+  and explicit mapping; TypeScript contracts retain their documented DTO surface.
+- Kernel infrastructure requires at least two real consumers with identical
+  semantics. No Go module imports kernel infrastructure; boot injects its ports.
+  Shared implementations own no mutable cross-consumer singleton state.
+- Run `task test:core` for generated bindings, Go import enforcement, root Go
+  race/vet, transitional nested Go race/vet, protocol tests, and strict desktop
+  bridge compilation. `task ci` includes this gate. Reviewed source foundation
+  does not prove a packaged or installed Go route; cut over one capability at a
+  time and remove its active TypeScript/Python duplicate after acceptance.
 - Parse unknown boundary data at runtime. Use closed discriminated states and
   classified errors; never reinterpret an outcome-unknown operation as retryable.
 - Co-locate cheap policy tests with the behavior they protect. Run E2E against built
