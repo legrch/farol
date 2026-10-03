@@ -2,6 +2,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { isAbsolute } from "node:path";
 import { Decoder, frame } from "./frame.ts";
+import type { QualifiedProfileLaunch } from "./profile.ts";
 import {
   protocolMajor,
   protocolMinor,
@@ -52,10 +53,13 @@ export class Client {
     this.writerBusy = false;
   };
   private cleanupPromise: Promise<void> | undefined;
+  private resourceReleased = false;
+  private resourceError: BridgeError | undefined;
   private cleanup: "none" | "pending" | "confirmed" | "unknown" = "none";
   constructor(
     private child: ChildProcessWithoutNullStreams,
     private owned = false,
+    private releaseResource?: () => void,
   ) {
     const onData = (data: Buffer): void => {
       try {
@@ -355,7 +359,7 @@ export class Client {
     }
     // Admission cannot recover this pipe. Cleanup never resubmits work or proves
     // cancellation of a module-owned OS/provider operation.
-    void this.terminateOwned().catch(() => {
+    void this.cleanupOwned().catch(() => {
       /* close() exposes unconfirmed cleanup. */
     });
   }
@@ -393,11 +397,37 @@ export class Client {
     });
     return this.cleanupPromise;
   }
+  private async cleanupOwned(): Promise<void> {
+    await this.terminateOwned();
+    // Retain the profile if exact child termination is unknown. Closing these
+    // descriptors is not a clean-retirement or successor-admission proof.
+    if (this.owned && this.cleanup === "confirmed" && !this.resourceReleased) {
+      this.resourceReleased = true;
+      try {
+        this.releaseResource?.();
+      } catch {
+        this.resourceError = new BridgeError(
+          "unknown",
+          "profile_cleanup_unconfirmed",
+        );
+      }
+    }
+    if (this.resourceError) throw this.resourceError;
+  }
   async close(): Promise<void> {
     this.fail("client_closed");
     this.listeners.clear();
-    await this.terminateOwned();
+    await this.cleanupOwned();
   }
+}
+
+// Trusted host selection only. The profile qualifier is held for the exact
+// backend lifetime; this object never comes from renderer IPC or an RPC body.
+export interface NativeCoreLaunch {
+  readonly profile: QualifiedProfileLaunch;
+  readonly ownerId: string;
+  readonly computerId: string;
+  readonly storeMode: "create" | "open";
 }
 
 export async function spawnCore(
@@ -405,13 +435,75 @@ export async function spawnCore(
   profileId: string,
   buildId: string,
   timeoutMs = 2000,
+  native?: NativeCoreLaunch,
 ): Promise<Client> {
-  if (!isAbsolute(executable))
-    throw new BridgeError("refused", "executable_path_required");
-  const child = spawn(executable, ["serve", "--profile", profileId], {
-    stdio: ["pipe", "pipe", "pipe"],
-  });
-  const client = new Client(child, true);
+  const profileOwner = native?.profile;
+  let released = false;
+  const release = (): void => {
+    if (!profileOwner || released) return;
+    released = true;
+    const result = profileOwner.close();
+    if (result.state !== "closed")
+      throw new BridgeError(result.state, result.code);
+  };
+  let child: ChildProcessWithoutNullStreams;
+  try {
+    if (!isAbsolute(executable))
+      throw new BridgeError("refused", "executable_path_required");
+    if (
+      !validate("Handshake", {
+        protocolMajor,
+        protocolMinor,
+        buildId,
+        profileId,
+      })
+    )
+      throw new BridgeError("refused", "invalid_handshake");
+    if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || timeoutMs > 30000)
+      throw new BridgeError("refused", "invalid_deadline");
+    const args = ["serve", "--profile", profileId];
+    if (native) {
+      const id = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/u;
+      if (
+        typeof native.ownerId !== "string" ||
+        typeof native.computerId !== "string" ||
+        !id.test(native.ownerId) ||
+        !id.test(native.computerId) ||
+        (native.storeMode !== "create" && native.storeMode !== "open")
+      )
+        throw new BridgeError("refused", "invalid_native_launch");
+      if (!profileOwner)
+        throw new BridgeError("refused", "invalid_native_launch");
+      const selected = profileOwner.beforeSpawn();
+      if (selected.state !== "qualified")
+        throw new BridgeError(selected.state, selected.code);
+      const binding = selected.binding;
+      if (binding.profileId !== profileId)
+        throw new BridgeError("refused", "profile_binding_mismatch");
+      args.push(
+        "--profile-root",
+        binding.root,
+        "--profile-device",
+        binding.device,
+        "--profile-inode",
+        binding.inode,
+        "--owner",
+        native.ownerId,
+        "--computer",
+        native.computerId,
+        "--home",
+        binding.home,
+        "--store-mode",
+        native.storeMode,
+      );
+    }
+    child = spawn(executable, args, { stdio: ["pipe", "pipe", "pipe"] });
+  } catch (error) {
+    // No child was returned: release only this launch's qualified descriptors.
+    release();
+    throw error;
+  }
+  const client = new Client(child, true, release);
   try {
     await client.handshake(
       { protocolMajor, protocolMinor, buildId, profileId },

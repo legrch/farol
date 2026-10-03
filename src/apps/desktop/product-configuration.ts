@@ -77,7 +77,14 @@ export type WorkspaceEditLeaseGuard = Readonly<{
   acquireForAdmission(): Promise<WorkspaceEditLeaseHold | null>;
 }>;
 
+// Trusted host bridge only. Withdrawal precedes settings persistence; publication
+// consumes only the exact successful readback. Neither hook admits a task.
+export type ComputerSettingsPublication = Readonly<{
+  publish(settings: ProductSettings): Promise<void>;
+}>;
+
 export type ProductConfigurationDependencies = Readonly<{
+  withdrawComputerAuthority?: () => Promise<ComputerSettingsPublication>;
   now?: () => string;
   id?: () => string;
   // The owner's home, whose credential stores can never be approved as a
@@ -674,6 +681,7 @@ export class ProductConfigurationService {
   private readonly turn = new AsyncLocalStorage<true>();
   private tail: Promise<unknown> = Promise.resolve();
   private readonly promotionLease: WorkspaceEditLeaseGuard | undefined;
+  private readonly withdrawComputerAuthority: ProductConfigurationDependencies["withdrawComputerAuthority"];
   // Holds the exact lease a guarded edit's `recordPendingEdit` acquired,
   // keyed by its operation ID, from the moment the edit became durable until
   // `releaseWorkspaceEditLease` is called once its outcome is recorded (see
@@ -695,6 +703,7 @@ export class ProductConfigurationService {
     this.id = dependencies.id ?? randomUUID;
     this.homeDirectory = dependencies.homeDirectory ?? os.homedir();
     this.promotionLease = dependencies.promotionLease;
+    this.withdrawComputerAuthority = dependencies.withdrawComputerAuthority;
   }
 
   async initialize(): Promise<void> {
@@ -2473,6 +2482,15 @@ export class ProductConfigurationService {
       return this.failure("SETTINGS_INPUT_INVALID");
     }
     try {
+      // Compare every final policy projection, including indirect verification
+      // invalidation. Command-name lists cannot cover all authority changes.
+      const changed =
+        JSON.stringify(ownerSettingsComputerApproval(before, 0)) !==
+        JSON.stringify(ownerSettingsComputerApproval(candidate, 0));
+      const publication =
+        changed && this.withdrawComputerAuthority
+          ? await this.withdrawComputerAuthority()
+          : undefined;
       await this.store.save(candidate, fence);
       const readBack = await this.store.load();
       if (
@@ -2481,6 +2499,7 @@ export class ProductConfigurationService {
       ) {
         throw new Error("SETTINGS_READ_BACK_FAILED");
       }
+      if (publication) await publication.publish(structuredClone(readBack));
       this.current = readBack;
       this.currentError = null;
       return { ok: true, snapshot: this.snapshot() };

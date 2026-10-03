@@ -14,7 +14,9 @@
     "chat.turn": "effect",
     "release.status": "read",
     "computer.workspace.catalogue": "read",
-    "computer.workspace.bootstrap": "read"
+    "computer.workspace.bootstrap": "read",
+    "computer.authority.deactivate": "effect",
+    "computer.authority.publish": "effect"
   },
   "definitions": {
     "Context": {
@@ -721,6 +723,114 @@
         "retry": {
           "type": "text",
           "values": ["never"]
+        }
+      }
+    },
+    "ComputerAuthorityDeactivateRequest": {
+      "type": "object",
+      "fields": {}
+    },
+    "ComputerAuthorityDeactivateResponse": {
+      "type": "object",
+      "fields": {
+        "fence": {
+          "type": "decimal"
+        },
+        "storeRevision": {
+          "type": "decimal"
+        }
+      }
+    },
+    "ComputerAuthorityPublishRequest": {
+      "type": "object",
+      "fields": {
+        "fence": {
+          "type": "decimal"
+        },
+        "expectedStoreRevision": {
+          "type": "decimal"
+        },
+        "settingsRevision": {
+          "type": "decimal"
+        },
+        "approval": {
+          "type": "json"
+        }
+      }
+    },
+    "ComputerAuthorityPublication": {
+      "type": "object",
+      "fields": {
+        "fence": {
+          "type": "decimal"
+        },
+        "storeRevision": {
+          "type": "decimal"
+        },
+        "settingsRevision": {
+          "type": "decimal"
+        },
+        "generation": {
+          "type": "decimal"
+        },
+        "approvalDigest": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "publishOperationId": {
+          "type": "id"
+        }
+      }
+    },
+    "ChatComputerAdmissionRequest": {
+      "type": "object",
+      "fields": {
+        "publication": {
+          "type": "ComputerAuthorityPublication"
+        },
+        "sessionId": {
+          "type": "id"
+        },
+        "taskId": {
+          "type": "id"
+        },
+        "turnId": {
+          "type": "id"
+        },
+        "workspaceIds": {
+          "type": "text[]"
+        }
+      }
+    },
+    "ChatComputerAdmissionResponse": {
+      "type": "object",
+      "fields": {
+        "ownerId": {
+          "type": "id"
+        },
+        "sessionId": {
+          "type": "id"
+        },
+        "taskId": {
+          "type": "id"
+        },
+        "taskEpoch": {
+          "type": "decimal"
+        },
+        "participantId": {
+          "type": "id"
+        },
+        "turnId": {
+          "type": "id"
+        },
+        "generation": {
+          "type": "decimal"
+        },
+        "admissionOperationId": {
+          "type": "id"
+        },
+        "storeRevision": {
+          "type": "decimal"
         }
       }
     }

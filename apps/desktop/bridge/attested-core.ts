@@ -1,7 +1,12 @@
 import { createHash } from "node:crypto";
 import fs, { type BigIntStats } from "node:fs";
 import { isAbsolute, join, parse, resolve, sep } from "node:path";
-import { BridgeError, spawnCore, type Client } from "./client.ts";
+import {
+  BridgeError,
+  spawnCore,
+  type Client,
+  type NativeCoreLaunch,
+} from "./client.ts";
 import { protocolMajor, protocolMinor, validate } from "./wire.ts";
 
 export interface CoreBuildBinding {
@@ -334,7 +339,8 @@ export class AttestedCore {
     private readonly artifact: unknown,
     private readonly expected: TrustedCoreExpectation,
   ) {}
-  start(timeoutMs = 2000): Promise<Client> {
+  // Caller retains a native selection when artifact validation refuses before spawnCore.
+  start(timeoutMs = 2000, native?: NativeCoreLaunch): Promise<Client> {
     if (this.consumed)
       return Promise.reject(new BridgeError("refused", "core_start_consumed"));
     this.consumed = true;
@@ -352,6 +358,7 @@ export class AttestedCore {
         expected.profileId,
         expected.build.buildId,
         timeoutMs,
+        ...(native ? ([native] as const) : []),
       );
     } catch (error) {
       return Promise.reject(error);
