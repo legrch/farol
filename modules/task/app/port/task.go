@@ -26,6 +26,7 @@ type Snapshot struct {
 	Pending  string
 }
 type Operation struct {
+	Events  task.EventLog `json:",omitzero"`
 	Intent  task.Intent
 	Lineage task.Reference
 	Receipt task.Receipt

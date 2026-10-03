@@ -14,6 +14,8 @@ import (
 )
 
 type Client struct {
+	eventMu    sync.Mutex
+	events     *eventRoute
 	selection  Selection
 	followup   FollowupQualification
 	boundary   Boundary
@@ -100,6 +102,7 @@ func (c *Client) ensure(ctx context.Context) error {
 		return task.ErrUnavailable
 	}
 	conn := newProxy(p)
+	conn.notification = c.notification
 	c.mu.Lock()
 	c.connection = conn
 	closed := c.closed.Load()

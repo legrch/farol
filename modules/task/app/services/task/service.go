@@ -167,9 +167,18 @@ func (s *Service) execute(ctx context.Context, req MutationRequest, intent task.
 		s.fence()
 		return unknown, nil
 	}
-	receipt, err := provider.Dispatch(ctx, port.Dispatch{Intent: intent, Message: req.Message}, func(ref task.Reference) error {
-		return progress.Record(ctx, ref)
-	})
+	recordLineage := func(ref task.Reference) error { return progress.Record(ctx, ref) }
+	var receipt task.Receipt
+	var dispatchErr error
+	if observed, ok := provider.(port.ObservedProvider); ok {
+		if _, enabled := s.journal.(port.EventJournal); enabled {
+			receipt, dispatchErr = observed.DispatchObserved(ctx, port.Dispatch{Intent: intent, Message: req.Message}, recordLineage, s.RecordExecution)
+		} else {
+			receipt, dispatchErr = provider.Dispatch(ctx, port.Dispatch{Intent: intent, Message: req.Message}, recordLineage)
+		}
+	} else {
+		receipt, dispatchErr = provider.Dispatch(ctx, port.Dispatch{Intent: intent, Message: req.Message}, recordLineage)
+	}
 	// Join in-flight callbacks and seal the operation before reading lineage.
 	// A callback failure remains binding even if the provider ignores it.
 	progressErr := progress.Close(func() error {
@@ -179,7 +188,7 @@ func (s *Service) execute(ctx context.Context, req MutationRequest, intent task.
 		}
 		return nil
 	})
-	if err != nil || receipt.State == task.Uncertain || progressErr != nil {
+	if dispatchErr != nil || receipt.State == task.Uncertain || progressErr != nil {
 		s.fence()
 		return unknown, nil
 	}

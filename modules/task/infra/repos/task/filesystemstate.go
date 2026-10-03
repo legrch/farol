@@ -181,6 +181,13 @@ func filesystemImageValid(image *filesystemImage) bool {
 			}
 			deliveries[i.TaskID][i.Expected] = true
 		}
+		ref := op.Lineage
+		if op.Settled && op.Receipt.State == task.Known {
+			ref = op.Receipt.Reference
+		}
+		if !op.Events.Valid(i.TaskID, i.OperationID, i.Binding.Provider, ref) {
+			return false
+		}
 		if op.Lineage != (task.Reference{}) && !filesystemProgress(i, op.Lineage) {
 			return false
 		}

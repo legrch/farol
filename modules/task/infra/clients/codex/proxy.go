@@ -15,16 +15,17 @@ type reply struct {
 	err   error
 }
 type proxy struct {
-	process   Process
-	ws        *websocket
-	once      sync.Once
-	lost      atomic.Bool
-	epoch     atomic.Uint64
-	done      chan struct{}
-	mu        sync.Mutex
-	nextID    uint64
-	pendingID uint64
-	pending   chan reply
+	notification func(map[string]json.RawMessage) error
+	process      Process
+	ws           *websocket
+	once         sync.Once
+	lost         atomic.Bool
+	epoch        atomic.Uint64
+	done         chan struct{}
+	mu           sync.Mutex
+	nextID       uint64
+	pendingID    uint64
+	pending      chan reply
 }
 
 func newProxy(p Process) *proxy {
@@ -184,6 +185,9 @@ func (p *proxy) receive() {
 			}
 			if method == "account/updated" || method == "account/login/completed" {
 				p.epoch.Add(1)
+			} else if p.notification != nil && p.notification(m) != nil {
+				p.fail()
+				return
 			}
 			continue
 		}
