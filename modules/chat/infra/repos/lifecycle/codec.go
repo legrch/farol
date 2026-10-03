@@ -1,0 +1,212 @@
+package lifecycle
+
+import (
+	"bytes"
+	"encoding/json"
+	"io"
+	"strings"
+	"unicode/utf8"
+
+	"github.com/legrch/farol/modules/chat/app/port"
+	"github.com/legrch/farol/modules/chat/domain/turn"
+)
+
+// These storage records are private to the adapter, never root wire DTOs or
+// startup admission proof. No prompt/answer/raw error field exists.
+type record struct {
+	Version int                 `json:"version"`
+	Scope   port.JournalScope   `json:"scope"`
+	Writes  []port.JournalWrite `json:"writes"`
+}
+
+func encode(value record, limits Limits) ([]byte, error) {
+	if err := validate(value, limits); err != nil {
+		return nil, err
+	}
+	raw, err := json.Marshal(value)
+	if err != nil || len(raw) > limits.Bytes {
+		return nil, Invalid
+	}
+	return raw, nil
+}
+func decode(raw []byte, limits Limits) (record, error) {
+	if !validLimits(limits) || len(raw) == 0 || len(raw) > limits.Bytes || !utf8.Valid(raw) {
+		return record{}, Invalid
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	var value record
+	if decoder.Decode(&value) != nil || decoder.Decode(new(any)) != io.EOF {
+		return record{}, Invalid
+	}
+	canonical, err := encode(value, limits)
+	// Exact canonical bytes reject duplicate keys, alternate number encodings,
+	// ambiguous null/omitted fields, malformed Unicode and trailing JSON.
+	if err != nil || !bytes.Equal(raw, canonical) {
+		return record{}, Invalid
+	}
+	return value, nil
+}
+
+// Replay is ONLY validation of stored queue transitions. Its queue/registry never
+// escapes this function, creates a Handle or supplies current admission.
+func validate(value record, limits Limits) error {
+	if !validLimits(limits) || value.Version != 1 || value.Writes == nil || len(value.Writes) > limits.Records {
+		return Invalid
+	}
+	q, err := turn.NewQueue(value.Scope.ProfileID, value.Scope.BackendGeneration)
+	if err != nil {
+		return Invalid
+	}
+	bindings := make(map[string]port.TurnBinding)
+	pending := port.JournalEntry{}
+	for n, w := range value.Writes {
+		if w.Scope != value.Scope || w.PreviousRevision != uint64(n) || w.Revision != uint64(n)+1 {
+			return Invalid
+		}
+		e := w.Entry
+		if !validBinding(e.Binding, value.Scope) {
+			return Invalid
+		}
+		i := identity(e.Binding)
+		if e.Kind == "admit" {
+			if _, exists := bindings[i.OperationID]; exists || e.Before != (turn.Snapshot{}) || e.CallID != "" || e.Effect != "" || e.Closed || pending.Effect != "" {
+				return Invalid
+			}
+			after, err := q.Admit(i, e.IntentDigest)
+			if err != nil || after != e.After {
+				return Invalid
+			}
+			bindings[i.OperationID] = e.Binding
+			continue
+		}
+		if bindings[i.OperationID] != e.Binding || e.IntentDigest != "" {
+			return Invalid
+		}
+		before, err := q.Snapshot(i)
+		if err != nil || before != e.Before {
+			return Invalid
+		}
+		if pending.Effect != "" && (pending.Binding != e.Binding || (pending.Effect == "prepare" && e.Kind != "prepared") || (pending.Effect == "send" && e.Kind != "send-settled")) {
+			return Invalid
+		}
+		if e.Kind != "request-computer" && e.Kind != "resolve-computer" && e.CallID != "" {
+			return Invalid
+		}
+		after, err := transition(q, e, before, pending)
+		if err != nil || after != e.After || e.Closed != after.HasResult {
+			return Invalid
+		}
+		expectedEffect := ""
+		if e.Kind == "reserve" {
+			expectedEffect = "prepare"
+		}
+		if e.Kind == "dispatch" {
+			expectedEffect = "send"
+		}
+		if e.Effect != expectedEffect {
+			return Invalid
+		}
+		if expectedEffect != "" {
+			pending = e
+		} else {
+			pending = port.JournalEntry{}
+		}
+	}
+	return nil
+}
+
+func transition(q *turn.Queue, e port.JournalEntry, before turn.Snapshot, pending port.JournalEntry) (turn.Snapshot, error) {
+	i, b := before.Identity, before.Binding
+	switch e.Kind {
+	case "enqueue":
+		return q.Enqueue(i)
+	case "reserve":
+		r, err := q.Reserve()
+		if err != nil || r != e.After.Reservation {
+			return turn.Snapshot{}, Invalid
+		}
+		return q.Snapshot(i)
+	case "prepared":
+		if pending.Effect != "prepare" {
+			return turn.Snapshot{}, Invalid
+		}
+		after, err := q.Bind(before.Reservation, e.After.Binding.Document)
+		if err == nil && e.After.Phase == turn.AwaitingOwner {
+			return q.AwaitOwner(after.Binding)
+		}
+		return after, err
+	case "dispatch":
+		return q.Dispatch(b)
+	case "send-settled":
+		if pending.Effect != "send" {
+			return turn.Snapshot{}, Invalid
+		}
+		if e.After.HasResult {
+			r := e.After.Result
+			if (r.Outcome != turn.Failed || r.Code != "SEND_NOT_SENT") && (r.Outcome != turn.UnknownOutcome || r.Code != "SEND_OUTCOME_UNKNOWN") {
+				return turn.Snapshot{}, Invalid
+			}
+			return q.Finish(b, r)
+		}
+		return before, nil
+	case "accept":
+		return q.Accept(b)
+	case "await-owner":
+		return q.AwaitOwner(b)
+	case "resume":
+		return q.Resume(b)
+	case "delta":
+		return q.Delta(b, e.After.LastSequence)
+	case "request-computer":
+		return q.RequestComputer(b, e.CallID)
+	case "resolve-computer":
+		return q.ResolveComputer(b, e.CallID)
+	case "finish":
+		if before.HasResult {
+			return turn.Snapshot{}, Invalid
+		}
+		return q.Finish(b, e.After.Result)
+	case "cancel":
+		return q.Cancel(i, e.After.Result.ID)
+	case "acknowledge":
+		return q.Acknowledge(i, e.After.Result.ID)
+	case "settle":
+		// Current port stores no independent quiescence sequence. The canonical
+		// minimal witness is sufficient to validate the resulting metadata; actual
+		// evidence origin still belongs to the application/Desktop boundary.
+		if before.LastSequence == ^uint64(0) {
+			return turn.Snapshot{}, Invalid
+		}
+		return q.Settle(turn.QuiescenceEvidence{Binding: b, ResultID: before.Result.ID, Sequence: before.LastSequence + 1, Confirmed: true})
+	case "settle-prepared":
+		return q.SettlePrepared(turn.DisposalEvidence{Reservation: before.Reservation, ResultID: before.Result.ID, Confirmed: true})
+	case "release":
+		if err := q.Release(before.Reservation); err != nil {
+			return turn.Snapshot{}, err
+		}
+		return q.Snapshot(i)
+	}
+	return turn.Snapshot{}, Invalid
+}
+
+func identity(b port.TurnBinding) turn.Identity {
+	return turn.Identity{ProfileID: b.ProfileID, OwnerID: b.OwnerID, SessionID: b.SessionID, TaskID: b.TaskID, TurnID: b.TurnID, OperationID: b.OperationID, Generation: b.TurnGeneration}
+}
+func validBinding(b port.TurnBinding, s port.JournalScope) bool {
+	if b.ProfileID != s.ProfileID || b.BackendGeneration != s.BackendGeneration || b.TurnGeneration == 0 {
+		return false
+	}
+	for _, v := range []string{b.OwnerID, b.SessionID, b.TaskID, b.ParticipantID, b.TurnID, b.OperationID} {
+		if !validID(v) {
+			return false
+		}
+	}
+	return true
+}
+func validID(value string) bool {
+	if len(value) < 1 || len(value) > 120 || !utf8.ValidString(value) {
+		return false
+	}
+	return strings.IndexFunc(value, func(ch rune) bool { return ch <= 32 || ch == 127 }) < 0
+}
