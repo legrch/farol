@@ -66,12 +66,12 @@ func TestStrictJSON(t *testing.T) {
 }
 
 func TestEscapedUnicodeScalars(t *testing.T) {
-	for _, raw := range []string{`{"path":"\ud800.md"}`, `{"path":"\udc00.md"}`, `{"path":"\ud800x\udc00"}`, `{"\ud800":"value"}`} {
+	for _, raw := range []string{`{"path":"\ud800.md"}`, `{"path":"\udc00.md"}`, `{"path":"\ud800x\udc00"}`, `{"\ud800":"value"}`, `{"x":"\"\ud800"}`, `{"x":"\"\udc00"}`, `{"\"\ud800":"value"}`} {
 		if ValidateJSON([]byte(raw)) == nil {
 			t.Fatalf("accepted %s", raw)
 		}
 	}
-	for _, raw := range []string{`{"path":"\ud83c\udf0a.md"}`, `{"path":"\ufffd.md"}`, `{"path":"\\ud800.md"}`} {
+	for _, raw := range []string{`{"path":"\ud83c\udf0a.md"}`, `{"path":"\ufffd.md"}`, `{"path":"\\ud800.md"}`, `{"x":"\"\ud83c\udf0a"}`, `{"x":"\\\"\ufffd"}`, `{"\"key":"value"}`} {
 		if err := ValidateJSON([]byte(raw)); err != nil {
 			t.Fatalf("refused %s: %v", raw, err)
 		}
