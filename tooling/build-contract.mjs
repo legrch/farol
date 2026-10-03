@@ -58,10 +58,10 @@ async function digestFile(file) {
     .digest("hex");
 }
 
-export async function snapshotBuildEntries(root) {
+export async function snapshotBuildEntries(root, entries = BUILD_ENTRIES) {
   return Object.fromEntries(
     await Promise.all(
-      BUILD_ENTRIES.map(async (entry) => [
+      entries.map(async (entry) => [
         entry,
         await digestFile(path.join(root, entry)),
       ]),

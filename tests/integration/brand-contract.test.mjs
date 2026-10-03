@@ -57,7 +57,13 @@ describe("owned product branding and immutable legacy packages", () => {
       displayName: "Farol",
       branded: true,
     });
-    for (const schema of [undefined, 4, 7, "6", true])
+    expect(packageLayout(7)).toEqual({
+      appName: "Farol.app",
+      displayName: "Farol",
+      branded: true,
+      core: true,
+    });
+    for (const schema of [undefined, 4, 8, "6", "7", true])
       expect(() => packageLayout(schema)).toThrow(
         "PACKAGE_MANIFEST_SCHEMA_INVALID",
       );

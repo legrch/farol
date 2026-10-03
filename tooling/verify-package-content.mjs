@@ -1,3 +1,4 @@
+import { GO_CORE_ENTRIES, verifyGoCoreArtifact } from "./go-core-artifact.mjs";
 import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -76,7 +77,11 @@ export async function verifyPackageContent({
   // ambiguous.  Recognize them explicitly instead of reporting a mismatch.
   requireValue(artifact.schema !== 4, "PACKAGE_TREE_DIGEST_LEGACY");
   const layout = packageLayout(artifact.schema);
-  const entries = layout.branded ? BUILD_ENTRIES : LEGACY_BUILD_ENTRIES;
+  const entries = layout.core
+    ? [...BUILD_ENTRIES, ...GO_CORE_ENTRIES].sort()
+    : layout.branded
+      ? BUILD_ENTRIES
+      : LEGACY_BUILD_ENTRIES;
   requireValue(
     artifact.treeDigestVersion === TREE_DIGEST_VERSION,
     "PACKAGE_TREE_DIGEST_VERSION_INVALID",
@@ -183,7 +188,10 @@ export async function verifyPackageContent({
   const embedded = JSON.parse(
     await fs.readFile(path.join(resources, "build-manifest.json"), "utf8"),
   );
-  requireValue(embedded.schema === 3, "PACKAGE_EMBEDDED_MANIFEST_INVALID");
+  requireValue(
+    embedded.schema === (layout.core ? 4 : 3),
+    "PACKAGE_EMBEDDED_MANIFEST_INVALID",
+  );
   requireValue(
     embedded.sourceMode === "head-exact" &&
       embedded.inputExact === true &&
@@ -224,6 +232,8 @@ export async function verifyPackageContent({
     "PACKAGE_EMBEDDED_ENTRY_SET_INVALID",
   );
   await verifyBuildEntries(resources, embedded.entrySha256, entries);
+  if (!layout.core && Object.hasOwn(embedded, "core"))
+    throw new Error("PACKAGE_CORE_SCHEMA_MISMATCH");
   if (layout.branded) {
     await verifyBrandAssets(resources);
     requireValue(
@@ -238,6 +248,8 @@ export async function verifyPackageContent({
       await fs.readFile(path.join(resources, "build-identity.json"), "utf8"),
     ),
   );
+  if (layout.core)
+    await verifyGoCoreArtifact(resources, embedded.core, buildIdentity);
   requireValue(
     buildIdentity.product === artifact.product &&
       buildIdentity.version === artifact.version &&

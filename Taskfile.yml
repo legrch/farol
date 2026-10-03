@@ -43,7 +43,7 @@ tasks:
           PATH="$clean_path" \
           TMPDIR="${TMPDIR:-/tmp}" \
           /usr/bin/python3 -I ./scripts/assert-owner-untouched.py -- \
-          /bin/sh -c '"$0" tooling/build.mjs && "$0" tooling/package.mjs "$@"' \
+          /bin/sh -c '"$0" tooling/build.mjs "$@" && "$0" tooling/package.mjs "$@"' \
           "$node_path" {{.CLI_ARGS}}
 
   run:

@@ -1,3 +1,4 @@
+import { GO_CORE_ENTRIES, verifyGoCoreArtifact } from "./go-core-artifact.mjs";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -13,7 +14,11 @@ import {
   runtimeClosure,
 } from "./runtime-contract.mjs";
 import { sourceIdentity } from "./source-identity.mjs";
-import { PACKAGE_SCHEMA, PRODUCT_APP_NAME } from "./package-layout.mjs";
+import {
+  PACKAGE_SCHEMA,
+  GO_PACKAGE_SCHEMA,
+  PRODUCT_APP_NAME,
+} from "./package-layout.mjs";
 
 const root = process.cwd();
 const builtRoot = path.join(root, "_output/build/app");
@@ -84,21 +89,27 @@ const manifest = JSON.parse(
   await fs.readFile(path.join(builtRoot, "build-manifest.json"), "utf8"),
 );
 if (
-  manifest.schema !== 3 ||
+  ![3, 4].includes(manifest.schema) ||
   manifest.sourceMode !== "head-exact" ||
   manifest.inputExact !== true ||
   !/^[a-f0-9]{64}$/u.test(manifest.inputLedgerSha256 ?? "")
 ) {
   throw new Error("BUILD_SOURCE_ATTESTATION_INVALID");
 }
+const entries =
+  manifest.schema === 4
+    ? [...BUILD_ENTRIES, ...GO_CORE_ENTRIES].sort()
+    : BUILD_ENTRIES;
+if (manifest.schema === 3 && Object.hasOwn(manifest, "core"))
+  throw new Error("BUILD_CORE_SCHEMA_MISMATCH");
 if (
   !Array.isArray(manifest.entries) ||
-  manifest.entries.length !== BUILD_ENTRIES.length ||
-  !manifest.entries.every((entry, index) => entry === BUILD_ENTRIES[index])
+  manifest.entries.length !== entries.length ||
+  !manifest.entries.every((entry, index) => entry === entries[index])
 ) {
   throw new Error("BUILD_ENTRY_SET_INVALID");
 }
-await verifyBuildEntries(builtRoot, manifest.entrySha256);
+await verifyBuildEntries(builtRoot, manifest.entrySha256, entries);
 const buildIdentity = assertBuildIdentity(
   JSON.parse(
     await fs.readFile(path.join(builtRoot, "build-identity.json"), "utf8"),
@@ -116,6 +127,8 @@ if (
 ) {
   throw new Error("BUILD_IDENTITY_MISMATCH");
 }
+if (manifest.schema === 4)
+  await verifyGoCoreArtifact(builtRoot, manifest.core, buildIdentity);
 const currentSource = sourceIdentity(repositoryRoot, scope);
 if (
   manifest.dirty ||
@@ -162,12 +175,14 @@ await fs.copyFile(
   path.join(builtRoot, "farol.icns"),
   path.join(resources, "farol.icns"),
 );
-for (const entry of BUILD_ENTRIES) {
+for (const entry of entries) {
   await fs.copyFile(
     path.join(builtRoot, entry),
     path.join(appResources, entry),
   );
 }
+if (manifest.schema === 4)
+  await fs.chmod(path.join(appResources, "farol-backend"), 0o500);
 // Schema-6 retains this transport name for older embedded verifiers. The
 // payload is the pinned Go executable and is never passed to Python.
 await fs.chmod(path.join(appResources, "update-archive.py"), 0o700);
@@ -227,7 +242,7 @@ if ((await treeDigest(runtimeApp)) !== electronSourceSha256) {
 execFileSync("/usr/bin/plutil", ["-lint", mainPlist], { stdio: "inherit" });
 
 const artifact = {
-  schema: PACKAGE_SCHEMA,
+  schema: manifest.schema === 4 ? GO_PACKAGE_SCHEMA : PACKAGE_SCHEMA,
   treeDigestVersion: TREE_DIGEST_VERSION,
   product: "Farol Next Preview",
   version: previewVersion,

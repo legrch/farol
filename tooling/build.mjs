@@ -1,3 +1,6 @@
+import { buildGoBackend } from "./go-backend-build.mjs";
+import { readGoBuildInputs } from "./go-build-inputs.mjs";
+import { embedBuiltCore, GO_CORE_ENTRIES } from "./go-core-artifact.mjs";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -37,6 +40,7 @@ import {
   toolchainPackageRoots,
 } from "./dependency-digests.mjs";
 
+const goInputs = await readGoBuildInputs(process.argv.slice(2));
 const root = process.cwd();
 const repositoryRoot = root;
 const output = path.join(root, "_output/build/app");
@@ -176,6 +180,7 @@ await Promise.all([
   build({
     ...common,
     entryPoints: ["src/apps/desktop/desktop-entry.ts"],
+    define: { __FAROL_GO_CORE__: "null" },
     outfile: "_output/build/app/main.cjs",
     platform: "node",
     format: "cjs",
@@ -354,8 +359,67 @@ assertBuildIdentity(
     await fs.readFile(path.join(output, "build-identity.json"), "utf8"),
   ),
 );
+let core;
+if (goInputs) {
+  if (!inputExact || buildIdentity.sourceDirty)
+    throw new Error("GO_BUILD_REQUIRES_EXACT_SOURCE");
+  const built = await buildGoBackend({
+    repositoryRoot,
+    buildIdentity,
+    toolchain: goInputs.toolchain,
+    platform: {
+      goos: goInputs.toolchain.goos,
+      goarch: goInputs.toolchain.goarch,
+    },
+    moduleInputs: goInputs.moduleInputs,
+  });
+  core = await embedBuiltCore(output, built, buildIdentity);
+  // Compile the independent producer declaration into the host. Runtime must
+  // not invent its expected backend digest by measuring the file it will spawn.
+  // This is the same source/identity/compiler, not another candidate producer.
+  if (compilerProblems(root).length !== 0)
+    throw new Error("GO_HOST_COMPILER_CHANGED");
+  await build({
+    ...common,
+    entryPoints: ["src/apps/desktop/desktop-entry.ts"],
+    define: { __FAROL_GO_CORE__: JSON.stringify(core) },
+    outfile: "_output/build/app/main.cjs",
+    platform: "node",
+    format: "cjs",
+    external: ["electron", "original-fs"],
+  });
+  const afterHostLedger = [...inputRecords.values()].sort((left, right) =>
+    left.path < right.path ? -1 : left.path > right.path ? 1 : 0,
+  );
+  if (JSON.stringify(afterHostLedger) !== inputLedgerBytes)
+    throw new Error("GO_HOST_INPUTS_CHANGED");
+  if (
+    dependencyDrift(
+      root,
+      [
+        ...toolchainPackageRoots(),
+        ...dependencyInputs
+          .filter((entry) => entry.path.startsWith("node_modules/"))
+          .map((entry) => packageRootOf(entry.path)),
+      ],
+      readDependencyDigests(root),
+    ).length !== 0
+  )
+    throw new Error("GO_HOST_DEPENDENCIES_CHANGED");
+  const afterCore = sourceSnapshot(repositoryRoot, scope);
+  if (
+    afterCore.commit !== initial.commit ||
+    afterCore.treeDigest !== initial.treeDigest ||
+    afterCore.dirty
+  )
+    throw new Error("GO_BUILD_SOURCE_CHANGED");
+}
+const entries = core
+  ? [...BUILD_ENTRIES, ...GO_CORE_ENTRIES].sort()
+  : BUILD_ENTRIES;
 const manifest = {
-  schema: 3,
+  schema: core ? 4 : 3,
+  ...(core ? { core } : {}),
   product: "Farol Next Preview",
   bundleId: "local.farol.next.preview",
   version: buildIdentity.version,
@@ -369,8 +433,8 @@ const manifest = {
   inputLedgerSha256: sha256(inputLedgerBytes),
   sourceInputCount: sourceInputs.length,
   dependencyInputCount: dependencyInputs.length,
-  entries: BUILD_ENTRIES,
-  entrySha256: await snapshotBuildEntries(output),
+  entries,
+  entrySha256: await snapshotBuildEntries(output, entries),
 };
 await fs.writeFile(
   "_output/build/app/build-manifest.json",
