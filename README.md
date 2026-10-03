@@ -48,8 +48,10 @@ The documented owner workflow is:
 
 1. Prepare [source development](#develop-from-source). From accepted clean
    committed source, build a verified packaged candidate with `task package`.
-+   Then `task run` verifies it again and opens an isolated launch snapshot without
-+   installing it.
+
+   Then `task run` verifies it again and opens an isolated launch snapshot without
+   installing it.
+
 2. Follow [local promotion](docs/owner-preview.md#optional-local-promotion--owner-action-only):
    inspect `task promote`, then explicitly choose its documented apply action only
    when the destination and receipt are absent. This creates
