@@ -399,3 +399,60 @@ func TestSeatbeltCurrentPolicyCannotUseForeignOrBroaderParticipant(t *testing.T)
 		t.Fatal("foreign grant selected for native profile")
 	}
 }
+
+// Pure trusted-snapshot construction only. No credential store is read and no
+// native qualification, reservation, process or endpoint is invoked.
+func TestSeatbeltRefusesHomeCoveringAndPrivateStoreScopesBeforeNative(t *testing.T) {
+	for _, root := range []string{
+		"/owner/home", "/owner", "/OWNER/HOME", "/owner/hóme",
+		"/owner/home/Library", "/owner/home/Library/Keychains/child",
+		"/owner/home/.config", "/owner/home/.config/gh",
+		"/owner/home/.config/gh/hosts.yml", "/owner/home/.CONFIG/GH/HOSTS.YML/child",
+	} {
+		t.Run(root, func(t *testing.T) {
+			_, selection, command, evidence := confinementFixture(t)
+			selection.Snapshot.Approval.Workspaces[0].Root = root
+			selection.Snapshot.Participant.Grant.Policy.Workspaces[0].Root = root
+			command.Root, command.Cwd = root, root+"/project"
+			selected, err := NewSeatbelt(selection, evidence)
+			if err == nil {
+				_, err = New(command, selected, &testClock{})
+			}
+			var failure *processsvc.NativeFailure
+			if !errors.As(err, &failure) || failure.Unknown || evidence.calls != 0 {
+				t.Fatal("private scope accepted or reached native boundary", err)
+			}
+		})
+	}
+}
+
+func TestSeatbeltRetainsExactCodeSubtreeInsideHomeApproval(t *testing.T) {
+	for _, sibling := range []bool{false, true} {
+		_, selection, command, evidence := confinementFixture(t)
+		home, approvalRoot := selection.Home, selection.Home
+		if sibling {
+			approvalRoot += "grown"
+		}
+		scope := approvalRoot + "/code/project"
+		// The approval may be HOME while this captured grant is only code/project.
+		// Rejecting the approval ancestor would erase the legitimate narrow grant.
+		selection.Snapshot.Approval.Workspaces[0].Root = approvalRoot
+		selection.Snapshot.Participant.Grant.Policy.Workspaces[0].Root = scope
+		command.Root, command.Cwd = approvalRoot, scope
+		selected, err := NewSeatbelt(selection, evidence)
+		if err != nil {
+			t.Fatal(err)
+		}
+		prepared, err := New(command, selected, &testClock{})
+		if err != nil || prepared == nil || prepared.attempted || evidence.calls != 0 {
+			t.Fatal("exact code subtree refused or executed", err)
+		}
+		plan, err := compileSeatbelt(selected.selection, command)
+		if err != nil || !hasParameterRule(plan, "allow file-read*", "subpath", scope) || hasParameterRule(plan, "allow file-read*", "subpath", home) {
+			t.Fatal("positive grant broadened to HOME", err)
+		}
+		if !hasParameterRule(plan, "deny file-read* file-write*", "subpath", home+"/.config/gh/hosts.yml") {
+			t.Fatal("known private store denial omitted")
+		}
+	}
+}

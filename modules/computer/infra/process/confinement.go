@@ -159,7 +159,7 @@ func comparableOverlap(a, b string) bool {
 	return authority.ComparableWithin(a, b) || authority.ComparableWithin(b, a)
 }
 
-var credentialStores = []string{".env", ".ssh", ".aws", ".gnupg", ".codex", ".claude", ".git-credentials", ".netrc", ".npmrc", ".pypirc", ".docker/config.json", ".kube/config", "Library/Keychains"}
+var credentialStores = []string{".env", ".ssh", ".aws", ".gnupg", ".codex", ".claude", ".git-credentials", ".netrc", ".npmrc", ".pypirc", ".config/gh/hosts.yml", ".docker/config.json", ".kube/config", "Library/Keychains"}
 
 func protectedPath(path, home string) bool {
 	for _, store := range credentialStores {
@@ -175,6 +175,21 @@ func protectedPath(path, home string) bool {
 			}
 		}
 		if strings.HasPrefix(strings.ToLower(parts[i]), ".env.") {
+			return true
+		}
+	}
+	return false
+}
+
+// A finite deny list cannot qualify broad owner HOME access. Refuse a scope
+// covering HOME, or overlapping an exact known private store, before sealing.
+// ComparableWithin is denial-only; ordinary HOME/code/project grants stay exact.
+func protectedScope(root, home string) bool {
+	if authority.ComparableWithin(root, home) || protectedPath(root, home) {
+		return true
+	}
+	for _, store := range credentialStores {
+		if comparableOverlap(root, filepath.Join(home, store)) {
 			return true
 		}
 	}
@@ -213,7 +228,7 @@ func compileSeatbelt(s SeatbeltSelection, command Command) (*seatbeltPlan, error
 	scope, scoped := authority.FindScope(p.Grant, s.WorkspaceID)
 	if !found || !scoped || !absolutePolicyPath(workspace.Root) || !workspace.ShellVerified || (scope.Access != authority.ReadAccess && scope.Access != authority.WriteAccess) || (workspace.Access != authority.ReadAccess && workspace.Access != authority.WriteAccess) || scope.Mode != authority.Subtree || len(scope.Paths) != 0 || !absolutePolicyPath(scope.Root) ||
 		workspace.Root != command.Root || workspace.RootIdentity != command.RootIdentity || !insidePolicy(workspace.Root, scope.Root) || !insidePolicy(scope.Root, command.Cwd) ||
-		protectedPath(scope.Root, s.Home) || comparableOverlap(scope.Root, s.Scratch) ||
+		protectedScope(scope.Root, s.Home) || comparableOverlap(scope.Root, s.Scratch) ||
 		p.Grant.ComputerID != a.ComputerID || p.Grant.ComputerGeneration != a.Generation || p.Grant.OwnerID != a.OwnerID ||
 		p.Grant.Commands != authority.WorkspaceCommands || a.Commands != authority.WorkspaceCommands || !slices.Contains(p.Grant.Capabilities, authority.Shell) || !slices.Contains(a.Capabilities, authority.Shell) ||
 		(command.Write && (scope.Access != authority.WriteAccess || workspace.Access != authority.WriteAccess || p.MutationOwnership != authority.TaskOwnership)) {
