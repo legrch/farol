@@ -1,3 +1,9 @@
+import {
+  startDesktopGoCore,
+  type DesktopGoCore,
+} from "../../../apps/desktop/go-core-host";
+import type { ChatComputerAdmissionResponse } from "../../../apps/desktop/bridge/wire";
+declare const __FAROL_GO_CORE__: unknown;
 import { promises as rawFs } from "original-fs";
 import { createInstalledUpdateRuntime } from "./installed-update-runtime";
 import { drainInstalledComputer } from "./installed-computer-drain";
@@ -426,6 +432,11 @@ import { terminateDesktopStartup } from "./desktop-startup-failure";
 import { resolvePhysicalDevDataDirectoryName } from "./dev-profile-directory";
 
 const directory = __dirname;
+// A legacy build has no Go declaration; a Go build never falls back after a
+// failed launch, publication or operation. The builder supplies this constant.
+const compiledGoCore =
+  typeof __FAROL_GO_CORE__ === "undefined" ? null : __FAROL_GO_CORE__;
+let desktopGoCore: DesktopGoCore | null = null;
 const buildIdentity = readRuntimeBuildIdentity(directory);
 const productName = buildIdentity.product;
 const bundleId = buildIdentity.bundleId;
@@ -1048,6 +1059,7 @@ type ChatGptVerification = NonNullable<
   ProductSettings["setup"]["chatgpt"]["verified"]
 >;
 type PendingChatGptReadonlyTask = Readonly<{
+  goAdmission?: ChatComputerAdmissionResponse;
   operationId: string;
   workspaceId: string;
   workspaceLabel: string;
@@ -6787,22 +6799,51 @@ async function configureAdmittedProduct(
         if (relativePath === "invalid") {
           return configurationFailure("WORKSPACE_FILE_SELECTION_INVALID");
         }
-        const workspaceResult = await nativeWorkspace.execute({
-          workspace: workspaceDescriptor(workspace, workspaceIdentity),
-          operation: { kind: "workspace.read", relativePath },
-        });
-        if (!workspaceResult.ok) {
-          return workspaceReadFailure(workspaceResult.error.code);
-        }
-        if (workspaceResult.value.kind !== "workspace.text") {
-          return configurationFailure("WORKSPACE_VERIFICATION_FAILED");
+        // The user selected this file for this new pending operation. Bind its
+        // identity before the read; demo IDs and settings do not admit a turn.
+        const operationId = randomUUID();
+        let text: string;
+        let bytes: number;
+        let goAdmission: ChatComputerAdmissionResponse | undefined;
+        if (compiledGoCore !== null) {
+          if (!desktopGoCore)
+            return configurationFailure("WORKSPACE_READ_FAILED");
+          try {
+            const observed = await desktopGoCore.readForIntent(
+              operationId,
+              workspace.workspaceId,
+              relativePath,
+            );
+            goAdmission = observed.admission;
+            if (observed.result.status !== "ok")
+              return workspaceReadFailure(
+                observed.result.code ?? "WORKSPACE_READ_FAILED",
+              );
+            text = observed.result.data.text;
+            bytes = Number(observed.result.data.bytes);
+          } catch {
+            // No TS/Python fallback or fresh key after a possibly effective
+            // Go admission. The exact Go owner remains fenced for inspection.
+            return configurationFailure("CHATGPT_TASK_REQUIRES_REVIEW");
+          }
+        } else {
+          // Explicit legacy build only. This branch is never an error fallback.
+          const workspaceResult = await nativeWorkspace.execute({
+            workspace: workspaceDescriptor(workspace, workspaceIdentity),
+            operation: { kind: "workspace.read", relativePath },
+          });
+          if (!workspaceResult.ok)
+            return workspaceReadFailure(workspaceResult.error.code);
+          if (workspaceResult.value.kind !== "workspace.text")
+            return configurationFailure("WORKSPACE_VERIFICATION_FAILED");
+          text = workspaceResult.value.text;
+          bytes = workspaceResult.value.bytes;
         }
         const prompt = buildChatGptReadonlyTaskPrompt({
           workspaceLabel: workspace.label,
           relativePath,
-          text: workspaceResult.value.text,
+          text,
         });
-        const operationId = randomUUID();
         const expiresAt = Date.now() + 10 * 60_000;
         const excludedPaths = workspaceDeniedPaths(workspace);
         if (!chatGptTaskJournal) {
@@ -6829,7 +6870,8 @@ async function configureAdmittedProduct(
           workspaceLabel: workspace.label,
           computerGeneration: snapshot.settings.computer.generation,
           relativePath,
-          bytes: workspaceResult.value.bytes,
+          bytes,
+          ...(goAdmission ? { goAdmission } : {}),
           contextCharacters: prompt.contextCharacters,
           contextTruncated: prompt.contextTruncated,
           excludedPaths,
@@ -9126,6 +9168,22 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
     },
   );
   await configuration.initialize();
+  if (compiledGoCore !== null) {
+    const currentSettings = () => {
+      const snapshot = configuration!.snapshot();
+      if (snapshot.status !== "ready") throw new Error("SETTINGS_UNAVAILABLE");
+      return snapshot.settings;
+    };
+    desktopGoCore = await startDesktopGoCore({
+      compiledArtifact: compiledGoCore,
+      build: buildIdentity,
+      artifactRoot: directory,
+      stateRoot,
+      home: app.getPath("home"),
+      settings: currentSettings,
+    });
+    configuration.attachComputerAuthority(() => desktopGoCore!.withdraw());
+  }
   productAgentStore = new PrivateProductAgentStore({
     root: productAgentInputRoot(),
   });
@@ -9335,6 +9393,9 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
     quit: () => app.quit(),
     collect: () => {
       const closers: OwnedCloser[] = [
+        ...(desktopGoCore
+          ? [{ name: "go-core", close: () => desktopGoCore!.close() }]
+          : []),
         {
           name: "installed-updater",
           close: async () => {
@@ -9525,7 +9586,12 @@ if (!primaryInstanceLock) {
         `${secondInstanceResultPrefix}${isPrimaryReady() ? "primary-started" : "reopen-failed"}\n`,
       );
     })
-    .catch((error: unknown) => {
+    .catch(async (error: unknown) => {
+      try {
+        await desktopGoCore?.close();
+      } catch {
+        error = new Error("GO_CORE_STARTUP_CLEANUP_UNCONFIRMED");
+      }
       terminateDesktopStartup(error, runtimeEnvironment, {
         write: (message) => process.stderr.write(message),
         exit: (code) => app.exit(code),

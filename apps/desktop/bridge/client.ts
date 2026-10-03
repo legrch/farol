@@ -150,6 +150,16 @@ export class Client {
     }
   }
 
+  // Trusted host composition consumes the already validated handshake context.
+  // This never issues another handshake or derives identity from caller input.
+  get verifiedContext(): Readonly<Context> {
+    if (this.stopped)
+      throw new BridgeError("unavailable", "backend_unavailable");
+    if (!this.context)
+      throw new BridgeError("unavailable", "handshake_required");
+    return this.context;
+  }
+
   request(
     method: string,
     body: Json,

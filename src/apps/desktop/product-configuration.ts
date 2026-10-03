@@ -681,7 +681,7 @@ export class ProductConfigurationService {
   private readonly turn = new AsyncLocalStorage<true>();
   private tail: Promise<unknown> = Promise.resolve();
   private readonly promotionLease: WorkspaceEditLeaseGuard | undefined;
-  private readonly withdrawComputerAuthority: ProductConfigurationDependencies["withdrawComputerAuthority"];
+  private withdrawComputerAuthority: ProductConfigurationDependencies["withdrawComputerAuthority"];
   // Holds the exact lease a guarded edit's `recordPendingEdit` acquired,
   // keyed by its operation ID, from the moment the edit became durable until
   // `releaseWorkspaceEditLease` is called once its outcome is recorded (see
@@ -704,6 +704,18 @@ export class ProductConfigurationService {
     this.homeDirectory = dependencies.homeDirectory ?? os.homedir();
     this.promotionLease = dependencies.promotionLease;
     this.withdrawComputerAuthority = dependencies.withdrawComputerAuthority;
+  }
+
+  // Trusted boot composition only, after initial settings readback and before
+  // IPC admission. Existing configured callbacks can never be replaced.
+  attachComputerAuthority(
+    withdraw: NonNullable<
+      ProductConfigurationDependencies["withdrawComputerAuthority"]
+    >,
+  ): void {
+    if (this.withdrawComputerAuthority || typeof withdraw !== "function")
+      throw new Error("COMPUTER_AUTHORITY_ALREADY_BOUND");
+    this.withdrawComputerAuthority = withdraw;
   }
 
   async initialize(): Promise<void> {

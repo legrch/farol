@@ -85,6 +85,16 @@ describe("settings to Go publication ordering", () => {
     expect(f.withdraw).not.toHaveBeenCalled();
     expect(f.publish).not.toHaveBeenCalled();
   });
+  it("does not replace a bound Computer publication owner", async () => {
+    const f = await fixture();
+    expect(() =>
+      f.service.attachComputerAuthority(async () => ({
+        publish: async () => {},
+      })),
+    ).toThrow("COMPUTER_AUTHORITY_ALREADY_BOUND");
+    expect((await f.service.addReadonlyWorkspace(workspace)).ok).toBe(true);
+    expect(f.withdraw).toHaveBeenCalledTimes(1);
+  });
   it("does not call the bridge for invalid settings", async () => {
     const f = await fixture();
     expect(
