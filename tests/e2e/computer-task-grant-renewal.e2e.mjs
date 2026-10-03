@@ -158,7 +158,7 @@ const ceiling = {
     generation: 7,
   },
 };
-await fs.writeFile(launchFile, canonical(ceiling), { mode: 0o600 });
+await fs.writeFile(launchFile, `${canonical(ceiling)}\n`, { mode: 0o600 });
 await prepareMcpLifecycle(launchFile);
 const owned = [];
 let clean = true;
@@ -189,6 +189,9 @@ async function connect() {
     args: [entry, "--launch-contract", launchFile],
     env: { PATH: "/usr/bin:/bin", HOME: root, TMPDIR: root },
     stderr: "pipe",
+  });
+  transport.stderr?.on("data", (chunk) => {
+    process.stderr.write(chunk);
   });
   await client.connect(transport);
   return client;
@@ -260,12 +263,16 @@ try {
       await record.transport.close().catch(() => {
         clean = false;
       });
-      const exit = await Promise.race([
-        record.exit,
-        new Promise((resolve) => setTimeout(() => resolve(null), 3_000)),
-      ]);
-      if (!exit || exit.code !== 0 || exit.signal !== null) clean = false;
     }
+    let timer;
+    const exit = await Promise.race([
+      record.exit,
+      new Promise((resolve) => {
+        timer = setTimeout(() => resolve(null), 3_000);
+      }),
+    ]);
+    clearTimeout(timer);
+    if (!exit || exit.code !== 0 || exit.signal !== null) clean = false;
   }
   if (clean) await fs.rm(root, { recursive: true, force: true });
   else

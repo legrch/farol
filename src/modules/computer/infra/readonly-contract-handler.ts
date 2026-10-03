@@ -2,9 +2,28 @@ import type { RunReadonlyComputerAction } from "../app/service/run-readonly-comp
 import {
   ReadonlyComputerCallRequestSchema,
   type ReadonlyComputerCallResponse,
+  type ReadonlyComputerCallRequest,
   type ReadonlyComputerContract,
   type ReadonlyComputerExecutionContext,
 } from "../contract/readonly-computer-contract";
+
+export function readonlyComputerCallCorrelation(
+  request: ReadonlyComputerCallRequest,
+) {
+  return {
+    ownerId: request.ownerId,
+    sessionId: request.sessionId,
+    taskId: request.taskId,
+    taskEpoch: request.taskEpoch,
+    participantId: request.participantId,
+    turnId: request.turnId,
+    generation: request.generation,
+    callId: request.callId,
+    workspaceId: request.workspaceId,
+    relativePath: request.operation.relativePath,
+    operation: request.operation,
+  };
+}
 
 export class ReadonlyComputerContractHandler implements ReadonlyComputerContract {
   constructor(private readonly service: RunReadonlyComputerAction) {}
@@ -29,19 +48,7 @@ export class ReadonlyComputerContractHandler implements ReadonlyComputerContract
     if (!result.ok) {
       return {
         ok: false,
-        correlation: {
-          ownerId: parsed.data.ownerId,
-          sessionId: parsed.data.sessionId,
-          taskId: parsed.data.taskId,
-          taskEpoch: parsed.data.taskEpoch,
-          participantId: parsed.data.participantId,
-          turnId: parsed.data.turnId,
-          generation: parsed.data.generation,
-          callId: parsed.data.callId,
-          workspaceId: parsed.data.workspaceId,
-          relativePath: parsed.data.operation.relativePath,
-          operation: parsed.data.operation,
-        },
+        correlation: readonlyComputerCallCorrelation(parsed.data),
         error: result.error,
       };
     }

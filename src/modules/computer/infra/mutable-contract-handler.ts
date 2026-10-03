@@ -8,7 +8,9 @@ import {
   type MutableComputerExecutionContext,
 } from "../contract/mutable-computer-contract";
 
-function summary(request: MutableComputerCallRequest) {
+export function mutableComputerCallCorrelation(
+  request: MutableComputerCallRequest,
+) {
   const operation = request.operation;
   const operationSummary =
     operation.kind === "workspace.write"
@@ -57,7 +59,7 @@ export class MutableComputerContractHandler implements MutableComputerContract {
         },
       };
     }
-    const correlation = summary(parsed.data);
+    const correlation = mutableComputerCallCorrelation(parsed.data);
     const result = await this.service.execute(parsed.data, context);
     if (!result.ok) {
       return MutableComputerCallResponseSchema.parse({

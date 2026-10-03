@@ -231,6 +231,89 @@ describe("production Computer TaskGrant reissue", () => {
     expect(restarted.execute).toHaveBeenCalledTimes(1);
   });
 
+  it("preserves the generation refusal correlation through actual MCP framing", async () => {
+    const ceiling = launch();
+    const initial = materializeReadonlyComputerLaunch(ceiling, now);
+    const current = readonly(issuer(ceiling));
+    const server = createReadonlyComputerMcpServer(
+      current.contract,
+      initial.binding,
+    );
+    const client = new Client({
+      name: "revocation-correlation-fixture",
+      version: "1.0.0",
+    });
+    const [clientTransport, serverTransport] =
+      InMemoryTransport.createLinkedPair();
+    await Promise.all([
+      client.connect(clientTransport),
+      server.connect(serverTransport),
+    ]);
+    try {
+      settings.computer.generation++;
+      await save();
+      const result = await client.callTool({
+        name: "computer_workspace_read",
+        arguments: { workspaceId, relativePath: "README.md" },
+      });
+      expect(result).toMatchObject({
+        isError: true,
+        structuredContent: {
+          ok: false,
+          correlation: {
+            workspaceId,
+            relativePath: "README.md",
+            taskId: initial.binding.taskId,
+          },
+          error: {
+            code: "AUTHORITY_COMPUTER_MISMATCH",
+            source: "computer-policy",
+            retry: "never",
+          },
+        },
+      });
+      expect(current.execute).not.toHaveBeenCalled();
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
+  it("rejects malformed calls before reading owner policy and retains typed expiry and missing-policy errors", async () => {
+    const ceiling = launch();
+    const binding = materializeReadonlyComputerLaunch(ceiling, now).binding;
+    const authority = issuer(ceiling);
+    const admission = vi.spyOn(authority, "admitExecution");
+    const current = readonly(authority);
+    expect(await current.contract.execute({})).toMatchObject({
+      ok: false,
+      correlation: null,
+      error: { code: "COMPUTER_INVALID_REQUEST" },
+    });
+    expect(admission).not.toHaveBeenCalled();
+    admission.mockRejectedValueOnce(new Error("AUTHORITY_EXPIRED"));
+    expect(await current.contract.execute(request(binding))).toMatchObject({
+      ok: false,
+      correlation: { callId: "call-1" },
+      error: { code: "AUTHORITY_EXPIRED", source: "task-admission" },
+    });
+    admission.mockRejectedValueOnce(new Error("COMPUTER_APPROVAL_NOT_FOUND"));
+    expect(await current.contract.execute(request(binding))).toMatchObject({
+      ok: false,
+      correlation: { callId: "call-1" },
+      error: { code: "COMPUTER_APPROVAL_NOT_FOUND", source: "computer-policy" },
+    });
+    admission.mockRejectedValueOnce("untrusted failure");
+    expect(await current.contract.execute(request(binding))).toMatchObject({
+      ok: false,
+      correlation: { callId: "call-1" },
+      error: {
+        code: "COMPUTER_APPROVAL_STORE_UNAVAILABLE",
+        source: "authority-store",
+      },
+    });
+  });
+
   it.each([false, true])(
     "reissues identical Git workspace policy with history approval=%s regardless of object key order",
     async (gitHistoryApproved) => {
@@ -441,6 +524,65 @@ describe("production Computer TaskGrant reissue", () => {
       await save();
     }
     await expect(authority.admitExecution(15_000)).rejects.toThrow();
+  });
+
+  it("correlates mutation admission refusal without echoing write content or dispatching an effect", async () => {
+    const ceiling = launch();
+    const binding = materializeReadonlyComputerLaunch(ceiling, now).binding;
+    const authority = issuer(ceiling);
+    const mutate = vi.fn<MutableWorkspace["mutate"]>(async () => ({
+      ok: false,
+      error: { code: "WORKSPACE_MUTATION_OUTCOME_UNKNOWN", retry: "never" },
+    }));
+    const contract = renewingMutableComputerContract(
+      new MutableComputerContractHandler(
+        new RunMutableComputerAction(
+          authority,
+          authority.approvals,
+          new PrivateWorkspaceMutationStore({
+            root: path.join(root, "journal"),
+          }),
+          new Sha256WorkspaceMutationDigester(),
+          { mutate },
+          clock,
+        ),
+      ),
+      authority,
+    );
+    expect(await contract.execute({})).toMatchObject({
+      ok: false,
+      correlation: null,
+      error: { code: "COMPUTER_INVALID_REQUEST" },
+    });
+    settings.computer.generation++;
+    await save();
+    const result = await contract.execute({
+      ...binding,
+      callId: "mutation-refused",
+      operationId: "effect-not-admitted",
+      workspaceId,
+      operation: {
+        kind: "workspace.write",
+        relativePath: "README.md",
+        content: "must not echo this content",
+        expectedSha256: digest("before"),
+      },
+    });
+    expect(result).toMatchObject({
+      ok: false,
+      correlation: {
+        callId: "mutation-refused",
+        operationId: "effect-not-admitted",
+        operation: { kind: "workspace.write", relativePath: "README.md" },
+      },
+      error: {
+        code: "AUTHORITY_COMPUTER_MISMATCH",
+        source: "computer-policy",
+        retry: "never",
+      },
+    });
+    expect(JSON.stringify(result)).not.toContain("must not echo this content");
+    expect(mutate).not.toHaveBeenCalled();
   });
 
   it("retains a possible mutation effect across expiry, renewal and process restart", async () => {
