@@ -1,0 +1,21 @@
+{
+  "product": "Farol Next Preview",
+  "bundleId": "local.farol.next.preview",
+  "version": "0.1.8-owner.beta.1",
+  "buildVersion": "10",
+  "sourceCommit": "1eb30bd23df22c9581d277280f8e0699612786b5",
+  "sourceTreeDigest": "b9cc650a66a720aaac18fc232ef2d7b5188cbfa814ea7ce565cc19fea1540cdb",
+  "buildId": "36b5eb23e288023ce787ef3fc996000c6a2250458df99b97ea5e0e31ff086b01",
+  "artifactSha256": "c872194547d19691da7252572f63dd36074624115e6eaa5004dfab4545335ea6",
+  "sourceDirty": false,
+  "schema": "farol.github-release/1",
+  "repository": "legrch/farol-releases",
+  "channel": "owner-beta",
+  "archiveSha256": "f3c19f858c9678fa4f1be4d7ce14252150a6c9fb11fc96e526eb8e99e95fee6b",
+  "archiveName": "Farol-0.1.8-owner.beta.1-darwin-arm64.zip",
+  "archiveSize": 131253883,
+  "platform": "darwin",
+  "arch": "arm64",
+  "signing": "unsigned",
+  "notarized": false
+}

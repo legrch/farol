@@ -1,0 +1,29 @@
+{
+  "tag_name": "v0.1.8-owner.beta.1",
+  "published_at": "2026-10-02T06:49:46Z",
+  "html_url": "https://github.com/legrch/farol-releases/releases/tag/v0.1.8-owner.beta.1",
+  "body": "Owner beta 0.1.8\n\nSimplify the chat tabs and navigation headings. Keep saved connection activation available. Full workspace reads now return an exact raw-file source digest for guarded edits. Improve development-profile path selection and confirmed shutdown/recovery while preserving production isolation.\n\nThis unsigned, non-notarized macOS arm64 beta retains the existing Farol configuration and update channel. Local source, native fixture, and package checks do not establish live shared-Codex task acceptance. Python-backed helper dependency and unsigned distribution remain beta limitations.\n",
+  "assets": [
+    {
+      "id": 605004679,
+      "name": "Farol-0.1.8-owner.beta.1-darwin-arm64.zip",
+      "size": 131253883,
+      "digest": "sha256:f3c19f858c9678fa4f1be4d7ce14252150a6c9fb11fc96e526eb8e99e95fee6b",
+      "browser_download_url": "https://github.com/legrch/farol-releases/releases/download/v0.1.8-owner.beta.1/Farol-0.1.8-owner.beta.1-darwin-arm64.zip"
+    },
+    {
+      "id": 605004680,
+      "name": "farol-release.json",
+      "size": 857,
+      "digest": "sha256:c6b2d92486230026d54c831a7f2b52eb77cff7db3d422108dd66caecfb5cbaad",
+      "browser_download_url": "https://github.com/legrch/farol-releases/releases/download/v0.1.8-owner.beta.1/farol-release.json"
+    },
+    {
+      "id": 605004682,
+      "name": "SHA256SUMS.txt",
+      "size": 193,
+      "digest": "sha256:fd08dd6ea2ed6933705b863a20ab4932fa86da33b4e7dd6bd406a754040c7592",
+      "browser_download_url": "https://github.com/legrch/farol-releases/releases/download/v0.1.8-owner.beta.1/SHA256SUMS.txt"
+    }
+  ]
+}

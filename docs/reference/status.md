@@ -17,6 +17,9 @@ The release manifest, checksums, and archive are published in
 The source repository's Releases tab is not the update feed. Its package version
 alone does not prove that newer source changes are included in a released binary.
 
+The [published metadata snapshot](updates/evidence/README.md) preserves the
+manifest, checksums, publication fields, and their verification limits.
+
 ## Capability boundaries
 
 | Capability                                                                                 | State in this snapshot                                                                                                                                       | Read more                                                               |

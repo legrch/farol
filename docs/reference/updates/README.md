@@ -17,6 +17,9 @@ Older slot retirement and recovery belong to
 publication, source checks, installed acceptance, and account reconnection remain
 separate evidence in [current status](../status.md).
 
+For the named beta metadata and its verification limits, see
+[published release evidence](evidence/README.md).
+
 ---
 
 [Reference](../README.md) · [Documentation](../../README.md)
