@@ -6,6 +6,7 @@ import {
   MutableComputerCallRequestSchema,
   type MutableComputerContract,
 } from "../../contract/mutable-computer-contract";
+import { readonlyComputerExecutionLeaseMs } from "../../app/service/run-readonly-computer-action";
 import { readonlyComputerCallCorrelation } from "../readonly-contract-handler";
 import { mutableComputerCallCorrelation } from "../mutable-contract-handler";
 import type { RenewableComputerAuthority } from "./renewable-computer-authority";
@@ -59,7 +60,9 @@ export function renewingReadonlyComputerContract(
       if (!parsed.success) return invalidRequest();
       let execution;
       try {
-        execution = await authority.admitExecution(15_000);
+        execution = await authority.admitExecution(
+          readonlyComputerExecutionLeaseMs(parsed.data.operation),
+        );
       } catch (error) {
         return {
           ok: false as const,

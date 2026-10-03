@@ -487,6 +487,114 @@ describe("production Computer TaskGrant reissue", () => {
     },
   );
 
+  it.each(["git.status", "git.head"] as const)(
+    "keeps a multi-step %s verification lease past one native file timeout",
+    async (command) => {
+      settings.computer.commands = "verification";
+      await save();
+      const ceiling = launch();
+      const binding = materializeReadonlyComputerLaunch(ceiling, now).binding;
+      const authority = issuer(ceiling, 100);
+      const native: ReadonlyWorkspace = {
+        async execute() {
+          // Composite verification can outlive a 15 s snapshot step while
+          // every native sub-step stays within its own timeout. This is a
+          // clock-controlled port fixture, not native Git timing evidence.
+          now += 16_000;
+          return {
+            ok: true,
+            value: {
+              kind: "workspace.command",
+              command,
+              relativePath: ".",
+              exitCode: 0,
+              stdout: "",
+              stderr: "",
+              outputBytes: 0,
+              network: "none",
+              coverage:
+                command === "git.status" ? "tracked-files-only" : "head-commit",
+              layout: "primary",
+            },
+          };
+        },
+      };
+      const contract = renewingReadonlyComputerContract(
+        new ReadonlyComputerContractHandler(
+          new RunReadonlyComputerAction(
+            authority,
+            authority.approvals,
+            native,
+            clock,
+          ),
+        ),
+        authority,
+      );
+      expect(
+        await contract.execute({
+          ...request(binding),
+          operation: { kind: "verification.run", command, relativePath: "." },
+        }),
+      ).toMatchObject({ ok: true });
+    },
+  );
+
+  it.each(["lease-expired", "revoked"] as const)(
+    "still refuses a composite verification result after %s",
+    async (change) => {
+      settings.computer.commands = "verification";
+      await save();
+      const ceiling = launch();
+      const binding = materializeReadonlyComputerLaunch(ceiling, now).binding;
+      const authority = issuer(ceiling);
+      const native: ReadonlyWorkspace = {
+        async execute() {
+          now += change === "lease-expired" ? 120_001 : 16_000;
+          if (change === "revoked") {
+            settings.computer.generation++;
+            await save();
+          }
+          return {
+            ok: true,
+            value: {
+              kind: "workspace.command",
+              command: "git.status",
+              relativePath: ".",
+              exitCode: 0,
+              stdout: "",
+              stderr: "",
+              outputBytes: 0,
+              network: "none",
+              coverage: "tracked-files-only",
+              layout: "primary",
+            },
+          };
+        },
+      };
+      const contract = renewingReadonlyComputerContract(
+        new ReadonlyComputerContractHandler(
+          new RunReadonlyComputerAction(
+            authority,
+            authority.approvals,
+            native,
+            clock,
+          ),
+        ),
+        authority,
+      );
+      expect(
+        await contract.execute({
+          ...request(binding),
+          operation: {
+            kind: "verification.run",
+            command: "git.status",
+            relativePath: ".",
+          },
+        }),
+      ).toMatchObject({ ok: false, error: { retry: "never" } });
+    },
+  );
+
   it("keeps already admitted read leases independent of outer TTL and other renewal", async () => {
     const ceiling = launch();
     const authority = issuer(ceiling, 100);

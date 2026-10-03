@@ -23,6 +23,15 @@ export type ReadonlyComputerOperation =
   | ReadonlyWorkspaceOperation
   | Readonly<{ kind: "workspace.context"; relativePath: string }>;
 
+// Verification is a composite operation: four 10 s attestation commands,
+// two 15 s snapshots and two 10 s Git commands can consume 90 s before cleanup.
+// Reserve 30 s for preparation/cleanup, still with one fixed admitted deadline.
+export function readonlyComputerExecutionLeaseMs(
+  operation: ReadonlyComputerOperation,
+): number {
+  return operation.kind === "verification.run" ? 120_000 : 15_000;
+}
+
 export type WorkspaceContext = Readonly<{
   kind: "workspace.context";
   root: string;
