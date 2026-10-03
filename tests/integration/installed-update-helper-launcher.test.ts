@@ -100,6 +100,100 @@ async function helperFixture(): Promise<{ root: string; helper: string }> {
   return { root, helper };
 }
 
+type FifoDeadlinePhase = "startup" | "preflight" | "teardown";
+function fifoWatchdog(expired: (phase: FifoDeadlinePhase) => void) {
+  let phase: FifoDeadlinePhase | "expired" | "closed" = "startup";
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const arm = (next: FifoDeadlinePhase, milliseconds: number) => {
+    clearTimeout(timer);
+    phase = next;
+    timer = setTimeout(() => {
+      phase = "expired";
+      expired(next);
+    }, milliseconds);
+  };
+  // Each lifecycle phase is bounded separately. 10 s + 1.5 s + 10 s leaves
+  // fixture work inside the existing 30 s suite budget; the open budget is unchanged.
+  arm("startup", 10_000);
+  return {
+    attempted() {
+      if (phase !== "startup") return false;
+      arm("preflight", 1500);
+      return true;
+    },
+    returned() {
+      if (phase === "preflight") arm("teardown", 10_000);
+    },
+    stop() {
+      clearTimeout(timer);
+      phase = "closed";
+    },
+  };
+}
+
+function withFifoClock(
+  check: (
+    watch: ReturnType<typeof fifoWatchdog>,
+    expired: FifoDeadlinePhase[],
+  ) => void,
+) {
+  vi.useFakeTimers();
+  const expired: FifoDeadlinePhase[] = [];
+  const watch = fifoWatchdog((phase) => expired.push(phase));
+  try {
+    check(watch, expired);
+  } finally {
+    watch.stop();
+    vi.useRealTimers();
+  }
+}
+
+// CPU-only clock/control evidence. These cases create no filesystem or child.
+describe("FIFO probe watchdog phases", () => {
+  it("excludes startup and natural child close from the descriptor budget", () => {
+    withFifoClock((watch, expired) => {
+      vi.advanceTimersByTime(9999);
+      expect(watch.attempted()).toBe(true);
+      vi.advanceTimersByTime(1499);
+      watch.returned();
+      vi.advanceTimersByTime(9999);
+      expect(expired).toEqual([]);
+      watch.stop();
+      vi.advanceTimersByTime(30_000);
+      expect(expired).toEqual([]);
+    });
+  });
+  it("still expires a blocked preflight at exactly 1500 ms without rearming it", () => {
+    withFifoClock((watch, expired) => {
+      expect(watch.attempted()).toBe(true);
+      vi.advanceTimersByTime(1499);
+      expect(expired).toEqual([]);
+      vi.advanceTimersByTime(1);
+      expect(expired).toEqual(["preflight"]);
+      expect(watch.attempted()).toBe(false);
+      watch.returned();
+      vi.advanceTimersByTime(30_000);
+      expect(expired).toEqual(["preflight"]);
+    });
+  });
+  it.each(["startup", "teardown"] as const)(
+    "bounds %s independently",
+    (phase) => {
+      withFifoClock((watch, expired) => {
+        if (phase === "teardown") {
+          expect(watch.attempted()).toBe(true);
+          watch.returned();
+        }
+        vi.advanceTimersByTime(9999);
+        expect(expired).toEqual([]);
+        vi.advanceTimersByTime(1);
+        expect(expired).toEqual([phase]);
+        expect(watch.attempted()).toBe(false);
+      });
+    },
+  );
+});
+
 // Run the blocking-open regression outside the test runner. No process opens the
 // FIFO for writing; only this harness may terminate its exact owned child.
 async function fifoProbe(replaceAtOpen: boolean) {
@@ -113,6 +207,17 @@ async function fifoProbe(replaceAtOpen: boolean) {
     import childProcess from "node:child_process";
     import { syncBuiltinESMExports } from "node:module";
     const [moduleURL, helper, request, replaceAtOpen] = process.argv.slice(1);
+    let continued = false;
+    async function beginProbe() {
+      process.stdout.write("attempt\n");
+      let command = "";
+      for await (const chunk of process.stdin) {
+        command += chunk.toString();
+        if (command.length > 16) throw new Error("PROBE_CONTINUATION_INVALID");
+      }
+      if (command !== "continue\n") throw new Error("PROBE_CONTINUATION_INVALID");
+      continued = true;
+    }
     // This probe is only allowed to reach helper preflight, never spawn Python.
     childProcess.spawn = () => { throw new Error("UNEXPECTED_HELPER_SPAWN"); };
     syncBuiltinESMExports();
@@ -122,16 +227,18 @@ async function fifoProbe(replaceAtOpen: boolean) {
         if (args[0] === helper) {
           await fs.rename(helper, helper + ".saved");
           childProcess.execFileSync("/usr/bin/mkfifo", [helper]);
+          // The parent arms the unchanged open deadline only after FIFO setup.
+          await beginProbe();
         }
         return open(...args);
       };
     }
     const { startInstalledUpdateHelper } = await import(moduleURL);
-    process.stdout.write("attempt\n");
+    if (replaceAtOpen !== "true") await beginProbe();
     try {
       const result = await startInstalledUpdateHelper(helper, JSON.parse(request));
       process.stdout.write(result.reason + "\n");
-      if (result.status !== "not_started" || result.operation.pid !== null) process.exitCode = 1;
+      if (result.status !== "not_started" || result.operation.pid !== null || !continued) process.exitCode = 1;
     } catch (error) {
       process.stdout.write(error.message + "\n");
     }
@@ -156,13 +263,25 @@ async function fifoProbe(replaceAtOpen: boolean) {
       JSON.stringify(accepted),
       String(replaceAtOpen),
     ],
-    { stdio: ["ignore", "pipe", "pipe"] },
+    { stdio: ["pipe", "pipe", "pipe"] },
   );
   let output = "";
   let stderr = "";
   let deadlineExpired = false;
+  let deadlinePhase: FifoDeadlinePhase | null = null;
+  const watchdog = fifoWatchdog((phase) => {
+    deadlineExpired = true;
+    deadlinePhase = phase;
+    child.kill("SIGKILL");
+  });
+  child.stdin.on("error", (error: Error) => {
+    stderr += error.message + "\n";
+  });
   child.stdout.on("data", (chunk: Buffer) => {
     output += chunk.toString();
+    if (output.startsWith("attempt\n") && watchdog.attempted())
+      child.stdin.end("continue\n");
+    if (output === "attempt\nhelper_preflight_failed\n") watchdog.returned();
   });
   child.stderr.on("data", (chunk: Buffer) => {
     stderr += chunk.toString();
@@ -171,13 +290,12 @@ async function fifoProbe(replaceAtOpen: boolean) {
     code: number | null;
     signal: NodeJS.Signals | null;
   }>((resolve, reject) => {
-    child.once("close", (code, signal) => resolve({ code, signal }));
+    child.once("close", (code, signal) => {
+      watchdog.stop();
+      resolve({ code, signal });
+    });
     child.once("error", reject);
   });
-  const deadline = setTimeout(() => {
-    deadlineExpired = true;
-    child.kill("SIGKILL");
-  }, 1500);
   try {
     const exit = await closed;
     // Confirm both process close and fixture removal before asserting GREEN/RED.
@@ -186,12 +304,13 @@ async function fifoProbe(replaceAtOpen: boolean) {
     return {
       ...exit,
       deadlineExpired,
+      deadlinePhase,
       output,
       stderr,
       cleanup: "child_closed_and_fixture_removed",
     };
   } finally {
-    clearTimeout(deadline);
+    watchdog.stop();
   }
 }
 
@@ -204,6 +323,7 @@ describe("installed helper bounded descriptor read", () => {
         code: 0,
         signal: null,
         deadlineExpired: false,
+        deadlinePhase: null,
         output: "attempt\nhelper_preflight_failed\n",
         cleanup: "child_closed_and_fixture_removed",
       });
