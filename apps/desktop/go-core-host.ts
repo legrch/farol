@@ -7,11 +7,21 @@ import {
 } from "./bridge/attested-core.ts";
 import { BridgeError, type Client } from "./bridge/client.ts";
 import { ComputerBridge } from "./bridge/computer.ts";
+import { BrowserPump, type BrowserDriver } from "./bridge/browser.ts";
+import { ChatBridge } from "./bridge/chat.ts";
+import type { Context } from "./bridge/wire.ts";
 import { qualifyProfileLaunch } from "./bridge/profile.ts";
 import { openNativeProfileStorage } from "./bridge/profile-storage.ts";
 import { GoComputerAuthority } from "./go-computer-authority.ts";
 import type { BuildIdentity } from "../../src/pkg/build-info/identity";
 import type { ProductSettings } from "../../src/pkg/product-settings/contract";
+
+export type DesktopBrowserConnection = Readonly<{
+  driver: BrowserDriver;
+  // Synchronously revoke the exact host assignments before closing the pipe.
+  // Revocation does not claim provider cancellation or clean module retirement.
+  withdraw: () => void;
+}>;
 
 export type DesktopCoreSelection = Readonly<{
   // Compiled into this host by the exact production builder, not environment,
@@ -22,6 +32,7 @@ export type DesktopCoreSelection = Readonly<{
   stateRoot: string;
   home: string;
   settings: () => ProductSettings;
+  browser: (context: Readonly<Context>) => DesktopBrowserConnection;
 }>;
 function readDeclaration(root: string): unknown {
   const fd = fs.openSync(
@@ -55,12 +66,29 @@ export class DesktopGoCore {
   private readonly authority: GoComputerAuthority;
   private readonly computer: ComputerBridge;
   private readonly sessionId = randomUUID();
+  private browser: DesktopBrowserConnection | undefined;
+  private pump: BrowserPump | undefined;
+  private chatBridge: ChatBridge | undefined;
+  private closeResult: Promise<void> | undefined;
   constructor(
     private readonly client: Client,
     private readonly settings: () => ProductSettings,
   ) {
     this.authority = new GoComputerAuthority(client, client.verifiedContext);
     this.computer = new ComputerBridge(client);
+  }
+  connectBrowser(connection: DesktopBrowserConnection): void {
+    if (this.browser || this.closeResult)
+      throw new BridgeError("refused", "host_browser_already_selected");
+    this.browser = connection;
+    this.pump = new BrowserPump(this.client, connection.driver);
+    this.chatBridge = new ChatBridge(this.client);
+    this.pump.start();
+  }
+  get chat(): ChatBridge {
+    if (!this.chatBridge || this.closeResult || this.pump?.state !== "running")
+      throw new BridgeError("unavailable", "host_chat_unavailable");
+    return this.chatBridge;
   }
   withdraw() {
     return this.authority.withdraw();
@@ -102,7 +130,26 @@ export class DesktopGoCore {
   }
   // Exact child closure remains distinct from module/journal clean retirement.
   close(): Promise<void> {
-    return this.client.close();
+    if (!this.closeResult) this.closeResult = this.closeOnce();
+    return this.closeResult;
+  }
+  private async closeOnce(): Promise<void> {
+    let withdrawalError: unknown;
+    try {
+      this.browser?.withdraw();
+    } catch (error) {
+      withdrawalError = error;
+    }
+    // Closing the same Client releases the outstanding bounded browser poll.
+    // Do not wait up to its deadline before starting exact child cleanup.
+    const results = await Promise.allSettled([
+      this.pump?.stop(),
+      this.client.close(),
+    ]);
+    for (const result of results) {
+      if (result.status === "rejected") throw result.reason;
+    }
+    if (withdrawalError !== undefined) throw withdrawalError;
   }
 }
 
@@ -175,6 +222,7 @@ export async function startDesktopGoCore(
   const host = new DesktopGoCore(client, selection.settings);
   try {
     await host.publishCurrent();
+    host.connectBrowser(selection.browser(client.verifiedContext));
     return host;
   } catch (error) {
     await host.close();

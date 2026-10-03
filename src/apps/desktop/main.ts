@@ -3,6 +3,9 @@ import {
   type DesktopGoCore,
 } from "../../../apps/desktop/go-core-host";
 import type { ChatComputerAdmissionResponse } from "../../../apps/desktop/bridge/wire";
+import { createDesktopChatBrowser } from "../../../apps/desktop/go-chat-host";
+import { GoChatBrowserDriver } from "../../../apps/desktop/go-chat-browser";
+import { BridgeError } from "../../../apps/desktop/bridge/client";
 declare const __FAROL_GO_CORE__: unknown;
 import { promises as rawFs } from "original-fs";
 import { createInstalledUpdateRuntime } from "./installed-update-runtime";
@@ -9181,6 +9184,41 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
       stateRoot,
       home: app.getPath("home"),
       settings: currentSettings,
+      browser: (context) =>
+        createDesktopChatBrowser({
+          context,
+          partition: activeDesktopIdentity.chatGptPartition,
+          // Public control profiles still require native qualification before a
+          // production model may be admitted. The normal host owns this adapter;
+          // a missing profile cannot select the legacy browser executor instead.
+          driver: (lookup) =>
+            new GoChatBrowserDriver({ lookup, translations: [] }),
+          create: async (input) => {
+            let initialUrl = chatGptHomeUrl;
+            if (input.target.mode === "owned-saved") {
+              const selected = new URL(chatGptHomeUrl);
+              selected.pathname = `/c/${encodeURIComponent(input.target.conversationId)}`;
+              selected.search = "";
+              selected.hash = "";
+              initialUrl = selected.href;
+            }
+            const route = createManagedChatGptRoute({
+              homeUrl: chatGptHomeUrl,
+              initialUrl,
+              e2eOrigin: chatGptE2eOrigin,
+              parent: () => null,
+              windowPresentation: { mode: "hidden" },
+              title: `ChatGPT · ${displayProductName}`,
+            });
+            const opened = await route.open();
+            if (opened.status !== "opened")
+              throw new BridgeError(
+                "unknown",
+                "host_chat_browser_open_unconfirmed",
+              );
+            return route.chatPhysical();
+          },
+        }),
     });
     configuration.attachComputerAuthority(() => desktopGoCore!.withdraw());
   }

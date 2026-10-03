@@ -16,6 +16,7 @@ import {
   AttestedCore,
   type CoreArtifactDeclaration,
 } from "../../apps/desktop/bridge/attested-core.ts";
+import type { BrowserDriver } from "../../apps/desktop/bridge/browser.ts";
 import { BridgeError, type Client } from "../../apps/desktop/bridge/client.ts";
 import type { Json, Outcome } from "../../apps/desktop/bridge/wire.ts";
 import {
@@ -131,12 +132,18 @@ async function ownerSettings(): Promise<ProductSettings> {
 function transport(fault?: Fault) {
   const events: string[] = [];
   const replies: Outcome[] = [];
+  let closePoll: (() => void) | undefined;
   const request = vi.fn<Client["request"]>(
     async (method, body, options = {}) => {
       events.push(method);
       const input = body as Record<string, Json>;
       let data: Json;
       switch (method) {
+        case "chat.browser.next":
+          return new Promise<Outcome>((_resolve, reject) => {
+            closePoll = () =>
+              reject(new BridgeError("unavailable", "client_closed"));
+          });
         case "computer.authority.deactivate":
           data = { fence: "9", storeRevision: "40" };
           break;
@@ -188,6 +195,7 @@ function transport(fault?: Fault) {
   );
   const close = vi.fn(async () => {
     events.push("client.close");
+    closePoll?.();
   });
   // Deliberately only the host-facing Client port; no constructor/child pipes.
   const client = {
@@ -234,6 +242,19 @@ beforeEach(async () => {
     stateRoot: "/synthetic/state",
     home: "/synthetic/home",
     settings: vi.fn(() => settings),
+    browser: vi.fn(() => ({
+      driver: Object.fromEntries(
+        ["prepare", "verifySend", "send", "observe", "cancel", "dispose"].map(
+          (method) => [
+            method,
+            vi.fn(async () => {
+              throw new Error(`Unexpected physical operation: ${method}`);
+            }),
+          ],
+        ),
+      ) as unknown as BrowserDriver,
+      withdraw: vi.fn(),
+    })),
   };
   ports.declaration = JSON.stringify(artifact);
   ports.provision.mockReturnValue({
@@ -354,7 +375,13 @@ describe("normal Go host startup", () => {
       return f.client;
     });
     const host = await startDesktopGoCore(selection);
-    expect(f.events).toEqual(["start", ...methods.slice(0, 2)]);
+    expect(f.events).toEqual([
+      "start",
+      ...methods.slice(0, 2),
+      "chat.browser.next",
+    ]);
+    expect(selection.browser).toHaveBeenCalledExactlyOnceWith(context);
+    expect(host.chat).toBeDefined();
     expect(ports.provision).toHaveBeenCalledExactlyOnceWith(
       selection.stateRoot,
       settings.computer.computerId,
@@ -375,6 +402,42 @@ describe("normal Go host startup", () => {
     expect(profileClose).not.toHaveBeenCalled();
     await host.close();
     expect(f.close).toHaveBeenCalledTimes(1);
+    await host.close();
+    expect(f.close).toHaveBeenCalledTimes(1);
+    expect(() => host.chat).toThrow("host_chat_unavailable");
+  });
+
+  it("withdraws physical assignments before pipe closure and preserves unknown cleanup", async () => {
+    const f = transport();
+    start.mockResolvedValue(f.client);
+    const connection = selection.browser(context);
+    const withdraw = vi.fn(() => f.events.push("browser.withdraw"));
+    selection = { ...selection, browser: () => ({ ...connection, withdraw }) };
+    const host = await startDesktopGoCore(selection);
+    const close = f.close.getMockImplementation()!;
+    const failure = new BridgeError("unknown", "backend_cleanup_unconfirmed");
+    f.close.mockImplementation(async () => {
+      await close();
+      throw failure;
+    });
+    await expect(host.close()).rejects.toBe(failure);
+    expect(f.events.slice(-2)).toEqual(["browser.withdraw", "client.close"]);
+    await expect(host.close()).rejects.toBe(failure);
+    expect(withdraw).toHaveBeenCalledTimes(1);
+    expect(f.close).toHaveBeenCalledTimes(1);
+    expect(() => host.chat).toThrow("host_chat_unavailable");
+  });
+
+  it("does not construct a browser after refused Go publication", async () => {
+    const failure = new BridgeError("refused", "publication_refused");
+    const f = transport((method, outcome) => {
+      if (method === "computer.authority.publish") throw failure;
+      return outcome;
+    });
+    start.mockResolvedValue(f.client);
+    await expect(startDesktopGoCore(selection)).rejects.toBe(failure);
+    expect(selection.browser).not.toHaveBeenCalled();
+    expect(f.events).not.toContain("chat.browser.next");
   });
 
   it("retains profile ownership with the client after an unknown launch handoff", async () => {
