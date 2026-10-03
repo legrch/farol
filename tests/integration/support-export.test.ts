@@ -51,8 +51,7 @@ describe("content-free support export", () => {
     if (added.snapshot.status !== "ready") throw new Error("settings missing");
     const workspace = added.snapshot.settings.computer.workspaces[0];
     if (!workspace) throw new Error("workspace missing");
-    const computerGeneration = added.snapshot.settings.computer.generation;
-    await configuration.recordComputerVerification(
+    const verifiedComputer = await configuration.recordComputerVerification(
       workspace.workspaceId,
       {
         profile: "computer.local.readonly/1",
@@ -62,6 +61,13 @@ describe("content-free support export", () => {
       },
       { rootIdentity: SYNTHETIC_ROOT_IDENTITY },
     );
+    if (verifiedComputer.snapshot.status !== "ready")
+      throw new Error("verified settings missing");
+    // Identity binding changes the effective approval policy. Native-agent
+    // evidence must qualify the resulting current generation, not the earlier
+    // unbound-folder generation.
+    const computerGeneration =
+      verifiedComputer.snapshot.settings.computer.generation;
     await configuration.recordCodexHost({
       executablePath: "/Users/private/CODEX-CANARY",
       executableSha256: "d".repeat(64),

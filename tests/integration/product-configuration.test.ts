@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   ProductConfigurationService,
   ProductSettingsStore,
@@ -10,7 +10,9 @@ import {
 import {
   ProductConfigurationCommandSchema,
   ProductConfigurationEvidenceSchema,
+  type ProductConfigurationSnapshot,
 } from "../../src/pkg/product-settings/contract";
+import { ownerSettingsComputerApproval } from "../../src/modules/computer/infra/repo/owner-settings-computer-approval";
 import { SYNTHETIC_ROOT_IDENTITY } from "../fixtures/root-identity";
 
 import { taskPolicy } from "../fixtures/task-policy";
@@ -39,6 +41,281 @@ function dependencies() {
     id: () => `00000000-0000-4000-8000-${String(++sequence).padStart(12, "0")}`,
   };
 }
+
+function approval(snapshot: ProductConfigurationSnapshot, now = 0) {
+  if (snapshot.status !== "ready") throw new Error("settings missing");
+  return ownerSettingsComputerApproval(snapshot.settings, now);
+}
+
+async function computerEvidenceFixture(
+  commands: "none" | "verification" | "workspace" = "workspace",
+) {
+  // Disposable settings with synthetic observations; no native/provider proof.
+  const root = await stateRoot();
+  const store = new ProductSettingsStore({ root });
+  let now = "2026-09-16T10:00:00.000Z";
+  const service = new ProductConfigurationService(store, {
+    ...dependencies(),
+    now: () => now,
+  });
+  await service.initialize();
+  const rootIdentity = { device: "1", inode: "2" };
+  const added = await service.addReadonlyWorkspace({
+    root: "/Users/example/project",
+    label: "Project",
+    rootIdentity,
+  });
+  const workspaceId = approval(added.snapshot).workspaces[0]!.workspaceId;
+  await service.updateComputerCommands(commands);
+  const verification = {
+    profile: "computer.local.read/1",
+    runtimeGeneration: "runtime-1",
+    buildId: "c".repeat(64),
+    protocol: "readonly-workspace/1",
+  };
+  return {
+    root,
+    store,
+    service,
+    workspaceId,
+    rootIdentity,
+    verification,
+    advanceTime: () => {
+      now = "2026-09-16T11:00:00.000Z";
+    },
+  };
+}
+
+describe("Computer evidence approval generations", () => {
+  it.each(["none", "verification", "workspace"] as const)(
+    "advances %s verification only when the projected policy changes",
+    async (commands) => {
+      const fixture = await computerEvidenceFixture(commands);
+      const { service, workspaceId, rootIdentity, verification } = fixture;
+      const before = approval(service.snapshot());
+      const sealed = structuredClone(before);
+      expect(before.capabilities).not.toContain("workspace.shell");
+      const verified = await service.recordComputerVerification(
+        workspaceId,
+        verification,
+        { rootIdentity },
+      );
+      expect(verified.ok).toBe(true);
+      const after = approval(verified.snapshot);
+      expect(after.generation).toBe(
+        before.generation + (commands === "workspace" ? 1 : 0),
+      );
+      expect(after.commands).toBe(commands);
+      expect(after.capabilities).toEqual([
+        "workspace.list",
+        "workspace.read",
+        "workspace.search",
+        ...(commands !== "none" ? ["verification.run"] : []),
+        ...(commands === "workspace" ? ["workspace.shell"] : []),
+      ]);
+      expect(after.workspaces[0]?.shellVerified).toBe(commands === "workspace");
+      expect(verified.snapshot).toMatchObject({
+        settings: {
+          computer: {
+            workspaces: [
+              { accessCheck: { computerGeneration: after.generation } },
+            ],
+          },
+          setup: {
+            computer: { verified: { configRevision: after.generation } },
+          },
+        },
+      });
+      fixture.advanceTime();
+      const renewed = await service.recordComputerVerification(
+        workspaceId,
+        { ...verification, runtimeGeneration: "runtime-2" },
+        { rootIdentity },
+      );
+      expect(renewed.ok).toBe(true);
+      expect(approval(renewed.snapshot)).toEqual(after);
+      expect(approval(renewed.snapshot, 1_000).expiresAt).toBe(
+        after.expiresAt + 1_000,
+      );
+      expect(renewed.snapshot).toMatchObject({
+        settings: {
+          setup: {
+            computer: { verified: { verifiedAt: "2026-09-16T11:00:00.000Z" } },
+          },
+        },
+      });
+      expect(before).toEqual(sealed);
+      const restarted = new ProductConfigurationService(
+        new ProductSettingsStore({ root: fixture.root }),
+        dependencies(),
+      );
+      await restarted.initialize();
+      expect(restarted.snapshot()).toEqual(renewed.snapshot);
+    },
+  );
+
+  it("seals folder policy changes without invalidating another fresh folder or bumping a no-op", async () => {
+    const { service, workspaceId, rootIdentity, verification } =
+      await computerEvidenceFixture();
+    const secondIdentity = { device: "1", inode: "3" };
+    const added = await service.addReadonlyWorkspace({
+      root: "/Users/example/second",
+      label: "Second",
+      rootIdentity: secondIdentity,
+    });
+    const secondId = approval(added.snapshot).workspaces[1]!.workspaceId;
+    await service.recordComputerVerification(workspaceId, verification, {
+      rootIdentity,
+    });
+    const before = approval(service.snapshot());
+    const sealed = structuredClone(before);
+    expect(
+      before.workspaces.map((workspace) => workspace.shellVerified),
+    ).toEqual([true, false]);
+    const checked = await service.recordFolderAccessCheck(
+      secondId,
+      before.generation,
+      verification.buildId,
+      secondIdentity,
+      true,
+    );
+    expect(checked.ok).toBe(true);
+    const both = approval(checked.snapshot);
+    expect(both.generation).toBe(before.generation + 1);
+    expect(both.workspaces.map((workspace) => workspace.shellVerified)).toEqual(
+      [true, true],
+    );
+    expect(both.capabilities).toContain("workspace.shell");
+    const repeated = await service.recordFolderAccessCheck(
+      secondId,
+      both.generation,
+      verification.buildId,
+      secondIdentity,
+      true,
+    );
+    expect(repeated.ok).toBe(true);
+    expect(approval(repeated.snapshot)).toEqual(both);
+    const refused = await service.recordFolderAccessCheck(
+      secondId,
+      before.generation,
+      verification.buildId,
+      secondIdentity,
+      false,
+    );
+    expect(refused).toMatchObject({
+      ok: false,
+      error: "WORKSPACE_ROOT_CHANGED",
+    });
+    expect(approval(refused.snapshot)).toEqual(both);
+    const withdrawn = await service.recordFolderAccessCheck(
+      secondId,
+      both.generation,
+      verification.buildId,
+      secondIdentity,
+      false,
+    );
+    expect(withdrawn.ok).toBe(true);
+    const one = approval(withdrawn.snapshot);
+    expect(one.generation).toBe(both.generation + 1);
+    expect(one.workspaces.map((workspace) => workspace.shellVerified)).toEqual([
+      true,
+      false,
+    ]);
+    const stopped = await service.recordFolderAccessCheck(
+      workspaceId,
+      one.generation,
+      verification.buildId,
+      rootIdentity,
+      false,
+    );
+    expect(stopped.ok).toBe(true);
+    const none = approval(stopped.snapshot);
+    expect(none.generation).toBe(one.generation + 1);
+    expect(none.commands).toBe("verification");
+    expect(none.capabilities).not.toContain("workspace.shell");
+    const repeatedWithdrawal = await service.recordFolderAccessCheck(
+      workspaceId,
+      none.generation,
+      verification.buildId,
+      rootIdentity,
+      false,
+    );
+    expect(repeatedWithdrawal.ok).toBe(true);
+    expect(approval(repeatedWithdrawal.snapshot)).toEqual(none);
+    expect(before).toEqual(sealed);
+  });
+
+  it("keeps stale sibling checks stale when verification advances policy", async () => {
+    const { service, workspaceId, rootIdentity, verification } =
+      await computerEvidenceFixture();
+    const secondIdentity = { device: "1", inode: "3" };
+    const added = await service.addReadonlyWorkspace({
+      root: "/Users/example/second",
+      label: "Second",
+      rootIdentity: secondIdentity,
+    });
+    const secondId = approval(added.snapshot).workspaces[1]!.workspaceId;
+    await service.recordComputerVerification(secondId, verification, {
+      rootIdentity: secondIdentity,
+    });
+    await service.updateComputerCommands("verification");
+    await service.updateComputerCommands("workspace");
+    const before = approval(service.snapshot());
+    const verified = await service.recordComputerVerification(
+      workspaceId,
+      verification,
+      { rootIdentity },
+    );
+    expect(verified.ok).toBe(true);
+    const after = approval(verified.snapshot);
+    expect(after.generation).toBe(before.generation + 1);
+    expect(
+      after.workspaces.map((workspace) => workspace.shellVerified),
+    ).toEqual([true, false]);
+  });
+
+  it.each(["save", "readback"] as const)(
+    "retains durable authority truth after a %s failure",
+    async (fault) => {
+      const { service, store, root, workspaceId, rootIdentity, verification } =
+        await computerEvidenceFixture();
+      const before = service.snapshot();
+      const beforeApproval = approval(before);
+      const spy =
+        fault === "save"
+          ? vi
+              .spyOn(store, "save")
+              .mockRejectedValueOnce(new Error("save failed"))
+          : vi
+              .spyOn(store, "load")
+              .mockRejectedValueOnce(new Error("readback failed"));
+      const failed = await service.recordComputerVerification(
+        workspaceId,
+        verification,
+        { rootIdentity },
+      );
+      spy.mockRestore();
+      expect(failed).toMatchObject({
+        ok: false,
+        error: "SETTINGS_WRITE_FAILED",
+      });
+      if (fault === "save") expect(failed.snapshot).toEqual(before);
+      else {
+        const saved = approval(failed.snapshot);
+        expect(saved.generation).toBe(beforeApproval.generation + 1);
+        expect(saved.commands).toBe("workspace");
+        expect(saved.capabilities).toContain("workspace.shell");
+      }
+      const restarted = new ProductConfigurationService(
+        new ProductSettingsStore({ root }),
+        dependencies(),
+      );
+      await restarted.initialize();
+      expect(restarted.snapshot()).toEqual(failed.snapshot);
+      expect(approval(before)).toEqual(beforeApproval);
+    },
+  );
+});
 
 describe("Farol Next product configuration", () => {
   it("keeps Codex task admission separate, revocable and generation-bound", async () => {
@@ -329,7 +606,7 @@ describe("Farol Next product configuration", () => {
       snapshot: {
         settings: {
           computer: {
-            generation: added.snapshot.settings.computer.generation,
+            generation: added.snapshot.settings.computer.generation + 1,
             workspaces: [{ rootIdentity: { device: "1", inode: "2" } }],
           },
         },
@@ -388,6 +665,7 @@ describe("Farol Next product configuration", () => {
       await service.updateWorkspaceGitHistory(workspaceId, true),
     ).toMatchObject({ ok: true });
 
+    const beforeLinked = approval(service.snapshot());
     const linked = await service.recordComputerVerification(
       workspaceId,
       verification,
@@ -404,6 +682,13 @@ describe("Farol Next product configuration", () => {
           },
         },
       },
+    });
+    const linkedApproval = approval(linked.snapshot);
+    expect(linkedApproval.generation).toBe(beforeLinked.generation + 1);
+    expect(linkedApproval.workspaces[0]).toMatchObject({
+      gitMetadata,
+      gitHistoryApproved: false,
+      shellVerified: true,
     });
     const restarted = new ProductConfigurationService(
       new ProductSettingsStore({ root }),
@@ -422,6 +707,39 @@ describe("Farol Next product configuration", () => {
     expect(service.snapshot()).toMatchObject({
       settings: { computer: { workspaces: [{ gitHistoryApproved: true }] } },
     });
+    const sameMetadata = approval(service.snapshot());
+    const renewed = await service.recordComputerVerification(
+      workspaceId,
+      verification,
+      {
+        rootIdentity: { device: "1", inode: "2" },
+        gitMetadata,
+      },
+    );
+    expect(renewed.ok).toBe(true);
+    expect(approval(renewed.snapshot)).toEqual(sameMetadata);
+
+    const replacementMetadata = {
+      gitDirectory: "/Users/example/other/.git/worktrees/checkout",
+      commonDirectory: "/Users/example/other/.git",
+    };
+    const replaced = await service.recordComputerVerification(
+      workspaceId,
+      verification,
+      {
+        rootIdentity: { device: "1", inode: "2" },
+        gitMetadata: replacementMetadata,
+      },
+    );
+    expect(replaced.ok).toBe(true);
+    const replacedApproval = approval(replaced.snapshot);
+    expect(replacedApproval.generation).toBe(sameMetadata.generation + 1);
+    expect(replacedApproval.workspaces[0]).toMatchObject({
+      gitMetadata: replacementMetadata,
+      gitHistoryApproved: false,
+      shellVerified: true,
+    });
+    expect(sameMetadata.workspaces[0]?.gitMetadata).toEqual(gitMetadata);
 
     // The owner verified a layout whose metadata now lives inside the root.
     const primary = await service.recordComputerVerification(
@@ -438,6 +756,10 @@ describe("Farol Next product configuration", () => {
     expect(
       primary.snapshot.settings.computer.workspaces[0]?.gitHistoryApproved,
     ).toBe(false);
+    expect(approval(primary.snapshot).generation).toBe(
+      replacedApproval.generation + 1,
+    );
+    expect(linkedApproval.workspaces[0]?.gitMetadata).toEqual(gitMetadata);
   });
 
   it("persists working preferences and workspace approval across restart", async () => {
@@ -1319,8 +1641,7 @@ describe("Farol Next product configuration", () => {
     const workspaceId =
       added.snapshot.settings.computer.workspaces[0]?.workspaceId;
     if (!workspaceId) throw new Error("workspace missing");
-    const computerGeneration = added.snapshot.settings.computer.generation;
-    await service.recordComputerVerification(
+    const computerVerified = await service.recordComputerVerification(
       workspaceId,
       {
         profile: "computer.local.readonly/1",
@@ -1330,6 +1651,8 @@ describe("Farol Next product configuration", () => {
       },
       { rootIdentity: SYNTHETIC_ROOT_IDENTITY },
     );
+    expect(computerVerified.ok).toBe(true);
+    const computerGeneration = approval(computerVerified.snapshot).generation;
     await service.recordCodexHost({
       executablePath: "/Users/example/bin/codex",
       executableSha256: "a".repeat(64),
@@ -1477,8 +1800,7 @@ describe("Farol Next product configuration", () => {
     if (editable.snapshot.status !== "ready") {
       throw new Error("settings missing");
     }
-    const computerGeneration = editable.snapshot.settings.computer.generation;
-    await service.recordComputerVerification(
+    const computerVerified = await service.recordComputerVerification(
       workspaceId,
       {
         profile: "computer.local.write/1",
@@ -1488,6 +1810,8 @@ describe("Farol Next product configuration", () => {
       },
       { rootIdentity: SYNTHETIC_ROOT_IDENTITY },
     );
+    expect(computerVerified.ok).toBe(true);
+    const computerGeneration = approval(computerVerified.snapshot).generation;
     await service.recordCodexHost({
       executablePath: "/Users/example/bin/codex",
       executableSha256: "a".repeat(64),

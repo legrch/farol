@@ -24,6 +24,7 @@ import {
   type WorkspaceRootIdentity,
 } from "../../pkg/product-settings/contract";
 import { credentialStorePolicy } from "../../modules/computer/infra/native/home-secret-stores";
+import { ownerSettingsComputerApproval } from "../../modules/computer/infra/repo/owner-settings-computer-approval";
 
 import { resolveOwnerTaskModel } from "./owner-config";
 
@@ -284,6 +285,53 @@ function invalidateUnboundComputerVerification(
         needsAction: workspace
           ? `Verify ${workspace.label} again so Farol binds it to the folder you approved.`
           : "Verify a folder.",
+      },
+    },
+  };
+}
+
+function advanceComputerApprovalGeneration(
+  previous: ProductSettings,
+  candidate: ProductSettings,
+): ProductSettings {
+  // Compare the actual owner policy with a fixed expiry, so evidence renewal
+  // alone does not invalidate existing approvals.
+  if (
+    JSON.stringify(ownerSettingsComputerApproval(previous, 0)) ===
+    JSON.stringify(ownerSettingsComputerApproval(candidate, 0))
+  )
+    return candidate;
+
+  const previousGeneration = previous.computer.generation;
+  const generation = previousGeneration + 1;
+  const verification = candidate.setup.computer.verified;
+  return {
+    ...candidate,
+    computer: {
+      ...candidate.computer,
+      generation,
+      // Preserve the candidate's effective policy when advancing its seal.
+      // Evidence already stale in the previous generation stays stale.
+      workspaces: candidate.computer.workspaces.map((workspace) =>
+        workspace.accessCheck?.computerGeneration === previousGeneration
+          ? {
+              ...workspace,
+              accessCheck: {
+                ...workspace.accessCheck,
+                computerGeneration: generation,
+              },
+            }
+          : workspace,
+      ),
+    },
+    setup: {
+      ...candidate.setup,
+      computer: {
+        ...candidate.setup.computer,
+        verified:
+          verification?.configRevision === previousGeneration
+            ? { ...verification, configRevision: generation }
+            : verification,
       },
     },
   };
@@ -1484,8 +1532,8 @@ export class ProductConfigurationService {
     });
   }
 
-  // Refresh only content-free setup evidence for an already bound folder.
-  // This does not select a workspace, broaden a grant, or change generation.
+  // Refresh content-free evidence for an already bound folder. A changed
+  // effective approval policy gets a new generation without selecting a root.
   async recordFolderAccessCheck(
     workspaceId: string,
     expectedGeneration: number,
@@ -1510,7 +1558,7 @@ export class ProductConfigurationService {
         workspace.rootIdentity?.inode !== rootIdentity.inode
       )
         return this.failure("WORKSPACE_ROOT_CHANGED");
-      return this.commit((settings) => ({
+      return this.commitComputerEvidence((settings) => ({
         ...settings,
         revision: settings.revision + 1,
         computer: {
@@ -1606,7 +1654,7 @@ export class ProductConfigurationService {
           ...(gitMetadata.data ? { gitMetadata: gitMetadata.data } : {}),
         };
       };
-      return this.commit((settings) => ({
+      return this.commitComputerEvidence((settings) => ({
         ...settings,
         revision: settings.revision + 1,
         computer: {
@@ -2392,6 +2440,14 @@ export class ProductConfigurationService {
     fence: StoreWriteFence = {},
   ): Promise<MutationResult> {
     return this.exclusive(() => this.commit(transform, fence));
+  }
+
+  private commitComputerEvidence(
+    transform: (settings: ProductSettings) => ProductSettings,
+  ): Promise<MutationResult> {
+    return this.commit((settings) =>
+      advanceComputerApprovalGeneration(settings, transform(settings)),
+    );
   }
 
   private async commit(

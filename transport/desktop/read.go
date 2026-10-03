@@ -15,6 +15,25 @@ import (
 // peer must be the same trusted incarnation used to construct the Server.
 // It carries correlation only; no root, grant or home is admitted on this wire.
 func ReadMethod(contract *workspacect.Contract, peer wire.Context) Method {
+	return ReadMethodForOperation(func(context.Context, ReadOperation) (*workspacect.Contract, error) {
+		return contract, nil
+	}, peer)
+}
+
+// ReadOperation contains validated correlation, never admitted authority. The
+// factory must select its existing trusted Task/Chat owners independently and
+// acquire one immutable Computer lease for this operation, not the connection.
+type ReadOperation struct {
+	RequestID string
+	Input     workspacect.ReadRequest
+}
+
+type ReadFactory func(context.Context, ReadOperation) (*workspacect.Contract, error)
+
+// ReadMethodForOperation resolves once after canonical body parsing, then uses
+// the same selected contract for the whole read. It never caches a contract,
+// reissues a lease after failure, or constructs a positive owner from input IDs.
+func ReadMethodForOperation(resolve ReadFactory, peer wire.Context) Method {
 	return Method{Handle: func(ctx context.Context, request Request) (*Outcome, error) {
 		if ipc.ValidateJSON(request.Body) != nil || wire.Validate("ComputerReadRequest", request.Body) != nil {
 			return readRefusal(nil, "invalid_read_request", "transport"), nil
@@ -23,9 +42,6 @@ func ReadMethod(contract *workspacect.Contract, peer wire.Context) Method {
 		if err := json.Unmarshal(request.Body, &body); err != nil {
 			return nil, err
 		}
-		if contract == nil {
-			return &Outcome{Status: "unavailable", Code: "capability_unavailable"}, nil
-		}
 		// Parsing cannot fail after canonical uint64 schema validation.
 		epoch, _ := strconv.ParseUint(body.TaskEpoch, 10, 64)
 		generation, _ := strconv.ParseUint(body.Generation, 10, 64)
@@ -33,6 +49,33 @@ func ReadMethod(contract *workspacect.Contract, peer wire.Context) Method {
 		if body.Range != nil {
 			offset, _ := strconv.ParseUint(body.Range.Offset, 10, 64)
 			input.Range = &workspacect.Range{Offset: offset, Length: body.Range.Length}
+		}
+		if ctx.Err() != nil {
+			return readRefusal(&body, "WORKSPACE_REQUEST_CANCELLED", "native-workspace"), nil
+		}
+		if resolve == nil {
+			return &Outcome{Status: "unavailable", Code: "capability_unavailable"}, nil
+		}
+		operation := ReadOperation{RequestID: request.RequestID, Input: input}
+		if input.Range != nil {
+			copied := *input.Range
+			operation.Input.Range = &copied
+		}
+		contract, err := resolve(ctx, operation)
+		if err != nil {
+			var failure *workspacect.Failure
+			if errors.As(err, &failure) && failure.Retry == "never" {
+				refused := readRefusal(&body, failure.Code, failure.Source)
+				if wire.Validate("ComputerReadRefusal", refused.Data) == nil {
+					return refused, nil
+				}
+			}
+			// No factory result establishes whether its owning admission acted.
+			// The server preserves unknown; this operation is never resolved twice.
+			return nil, err
+		}
+		if contract == nil {
+			return &Outcome{Status: "unavailable", Code: "capability_unavailable"}, nil
 		}
 		output, err := contract.Read(ctx, input)
 		if err != nil {

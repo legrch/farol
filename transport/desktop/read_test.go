@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"math"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -40,6 +42,12 @@ func (w *readWorkspace) List(context.Context, port.ListRequest) (*port.ListRespo
 
 func readFixture(t *testing.T) (Method, *readWorkspace, *accessrepo.Repository, wire.ComputerReadRequest) {
 	t.Helper()
+	contract, native, access, body := readContractFixture(t)
+	return ReadMethod(contract, wire.Context{ProfileId: "test", BackendGeneration: "generation"}), native, access, body
+}
+
+func readContractFixture(t *testing.T) (*workspacect.Contract, *readWorkspace, *accessrepo.Repository, wire.ComputerReadRequest) {
+	t.Helper()
 	now := time.Date(2026, 10, 2, 20, 0, 0, 0, time.UTC)
 	approval := authority.Approval{OwnerID: "owner", ComputerID: "computer", Generation: 17, Workspaces: []authority.ApprovedWorkspace{{WorkspaceID: "workspace", Root: "/disposable", Access: authority.ReadAccess, RootIdentity: authority.RootIdentity{Device: "1", Inode: "2"}}}, Capabilities: []authority.Capability{authority.Read}, Network: authority.NoNetwork, Commands: authority.NoCommands, ExpiresAt: now.Add(time.Hour)}
 	grant, err := authority.Derive(approval, authority.Admission{AuthorityID: "authority", Identity: authority.Identity{OwnerID: "owner", SessionID: "session", TaskID: "task", TaskEpoch: 9007199254740993}, ComputerID: "computer", ComputerGeneration: 17, Policy: authority.Policy{Workspaces: []authority.Scope{{WorkspaceID: "workspace", Root: "/disposable", Mode: authority.Subtree, Access: authority.ReadAccess}}, Capabilities: []authority.Capability{authority.Read}, Network: authority.NoNetwork, Commands: authority.NoCommands, ExpiresAt: now.Add(time.Hour)}}, now)
@@ -55,9 +63,8 @@ func readFixture(t *testing.T) (Method, *readWorkspace, *accessrepo.Repository, 
 	access.PutParticipant(*participant)
 	native := &readWorkspace{result: port.ReadResponse{Text: "🌊", Bytes: 4, SHA256: strings.Repeat("a", 64)}}
 	contract := workspacect.New(workspacesvc.New(access, native, readClock{at: now}))
-	peer := wire.Context{ProfileId: "test", BackendGeneration: "generation"}
 	body := wire.ComputerReadRequest{OwnerId: "owner", SessionId: "session", TaskId: "task", TaskEpoch: "9007199254740993", ParticipantId: "participant", TurnId: "turn", Generation: "18446744073709551615", CallId: "call", WorkspaceId: "workspace", RelativePath: "note.md"}
-	return ReadMethod(contract, peer), native, access, body
+	return contract, native, access, body
 }
 func invokeRead(t *testing.T, method Method, body any) *Outcome {
 	t.Helper()
@@ -214,5 +221,122 @@ func TestReadRangeIntegerSpellings(t *testing.T) {
 		if wire.Validate("ComputerReadRange", raw) == nil || json.Unmarshal(raw, &decoded) == nil {
 			t.Fatalf("admitted %s", number)
 		}
+	}
+}
+
+// Source-only adapter composition tests: fake workspace/clock/authority owners.
+// These do not establish a production lease, native filesystem or provider path.
+func TestOperationReadResolvesEachParsedRequestExactlyOnce(t *testing.T) {
+	first, nativeFirst, _, body := readContractFixture(t)
+	second, nativeSecond, _, _ := readContractFixture(t)
+	body.Range = &wire.ComputerReadRange{Offset: "0", Length: 4}
+	calls := 0
+	method := ReadMethodForOperation(func(_ context.Context, operation ReadOperation) (*workspacect.Contract, error) {
+		calls++
+		if operation.RequestID != strconv.Itoa(calls) || operation.Input.TaskEpoch != 9007199254740993 || operation.Input.Generation != math.MaxUint64 || operation.Input.CallID != body.CallId {
+			t.Fatalf("lost parsed correlation: %+v", operation)
+		}
+		if operation.Input.Range == nil || operation.Input.Range.Offset != 0 || operation.Input.Range.Length != 4 {
+			t.Fatal("lost range")
+		}
+		// A resolver owns an independent DTO; mutation cannot rewrite the input
+		// later dispatched to its selected contract or disclosed to the caller.
+		operation.Input.OwnerID = "other"
+		operation.Input.Range.Offset = 99
+		if calls == 1 {
+			return first, nil
+		}
+		return second, nil
+	}, wire.Context{ProfileId: "test", BackendGeneration: "generation"})
+	for i := 1; i <= 2; i++ {
+		data, _ := json.Marshal(body)
+		out, err := method.Handle(context.Background(), Request{RequestID: strconv.Itoa(i), Body: data})
+		if err != nil || out == nil || out.Status != "ok" {
+			t.Fatalf("read %d: %+v %v", i, out, err)
+		}
+	}
+	if calls != 2 || nativeFirst.calls != 1 || nativeSecond.calls != 1 || nativeFirst.request.Range.Offset != 0 || nativeSecond.request.Range.Offset != 0 {
+		t.Fatalf("connection-cached contract or rewritten request: %d %d %d", calls, nativeFirst.calls, nativeSecond.calls)
+	}
+}
+
+func TestOperationReadMalformedOrCancelledNeverResolves(t *testing.T) {
+	_, _, _, body := readContractFixture(t)
+	calls := 0
+	method := ReadMethodForOperation(func(context.Context, ReadOperation) (*workspacect.Contract, error) {
+		calls++
+		return nil, nil
+	}, wire.Context{ProfileId: "test", BackendGeneration: "generation"})
+	for _, raw := range []string{`{}`, `{"ownerId":"owner","root":"/private"}`, `{"ownerId":"owner","ownerId":"other"}`} {
+		out, err := method.Handle(context.Background(), Request{RequestID: "r", Body: json.RawMessage(raw)})
+		if err != nil || out == nil || out.Code != "invalid_read_request" {
+			t.Fatalf("malformed: %+v %v", out, err)
+		}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	data, _ := json.Marshal(body)
+	out, err := method.Handle(ctx, Request{RequestID: "cancelled", Body: data})
+	if err != nil || out == nil || out.Status != "refused" || out.Code != "WORKSPACE_REQUEST_CANCELLED" || calls != 0 {
+		t.Fatalf("cancelled or malformed request reached resolver: %+v %v calls=%d", out, err, calls)
+	}
+}
+
+func TestOperationReadUnavailableAndResolverRefusalDoNotDispatch(t *testing.T) {
+	_, native, _, body := readContractFixture(t)
+	peer := wire.Context{ProfileId: "test", BackendGeneration: "generation"}
+	for _, mode := range []string{"missing", "unavailable", "refused", "unknown"} {
+		t.Run(mode, func(t *testing.T) {
+			calls := 0
+			original := errors.New("admission outcome unknown")
+			var resolve ReadFactory
+			if mode != "missing" {
+				resolve = func(context.Context, ReadOperation) (*workspacect.Contract, error) {
+					calls++
+					if mode == "refused" {
+						return nil, &workspacect.Failure{Code: "AUTHORITY_TASK_MISMATCH", Source: "task-grant", Retry: "never"}
+					}
+					if mode == "unknown" {
+						return nil, original
+					}
+					return nil, nil
+				}
+			}
+			data, _ := json.Marshal(body)
+			out, err := ReadMethodForOperation(resolve, peer).Handle(context.Background(), Request{RequestID: "r", Body: data})
+			if mode == "unknown" {
+				if out != nil || !errors.Is(err, original) {
+					t.Fatalf("unknown replaced: %+v %v", out, err)
+				}
+			} else if mode == "refused" {
+				var refused wire.ComputerReadRefusal
+				if err != nil || out == nil || json.Unmarshal(out.Data, &refused) != nil || refused.Request == nil || *refused.Request != body || refused.Code != "AUTHORITY_TASK_MISMATCH" || refused.Retry != "never" || out.Status != "refused" {
+					t.Fatalf("refusal rewritten: %+v %v", out, err)
+				}
+			} else if err != nil || out == nil || out.Status != "unavailable" || out.Code != "capability_unavailable" {
+				t.Fatalf("unavailable: %+v %v", out, err)
+			}
+			want := 1
+			if mode == "missing" {
+				want = 0
+			}
+			if calls != want || native.calls != 0 {
+				t.Fatalf("resolver retried/dispatched: %d %d", calls, native.calls)
+			}
+		})
+	}
+}
+
+func TestOperationReadSelectedOwnerRefusalNeverReissuesContract(t *testing.T) {
+	contract, native, access, body := readContractFixture(t)
+	access.RevokeParticipant("participant")
+	calls := 0
+	method := ReadMethodForOperation(func(context.Context, ReadOperation) (*workspacect.Contract, error) {
+		calls++
+		return contract, nil
+	}, wire.Context{ProfileId: "test", BackendGeneration: "generation"})
+	out := invokeRead(t, method, body)
+	if out.Status != "refused" || out.Code != "COMPUTER_PARTICIPANT_NOT_FOUND" || calls != 1 || native.calls != 0 {
+		t.Fatalf("refusal reminted lease or dispatched: %+v %d %d", out, calls, native.calls)
 	}
 }

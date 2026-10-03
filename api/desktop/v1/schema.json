@@ -12,7 +12,9 @@
     "computer.workspace.read": "read",
     "task.create": "effect",
     "chat.turn": "effect",
-    "release.status": "read"
+    "release.status": "read",
+    "computer.workspace.catalogue": "read",
+    "computer.workspace.bootstrap": "read"
   },
   "definitions": {
     "Context": {
@@ -355,6 +357,345 @@
       "fields": {
         "request": {
           "type": "ComputerReadRequest",
+          "optional": true
+        },
+        "code": {
+          "type": "text"
+        },
+        "source": {
+          "type": "text",
+          "values": [
+            "computer-approval",
+            "task-admission",
+            "task-grant",
+            "owner-restriction",
+            "unverified-provenance",
+            "role",
+            "computer-policy",
+            "native-host",
+            "authority-store",
+            "native-workspace",
+            "contract",
+            "transport"
+          ]
+        },
+        "retry": {
+          "type": "text",
+          "values": ["never"]
+        }
+      }
+    },
+    "ComputerCatalogueRequest": {
+      "type": "object",
+      "fields": {
+        "ownerId": {
+          "type": "id"
+        },
+        "sessionId": {
+          "type": "id"
+        },
+        "taskId": {
+          "type": "id"
+        },
+        "taskEpoch": {
+          "type": "decimal"
+        },
+        "participantId": {
+          "type": "id"
+        },
+        "turnId": {
+          "type": "id"
+        },
+        "generation": {
+          "type": "decimal"
+        },
+        "callId": {
+          "type": "id"
+        }
+      }
+    },
+    "ComputerApprovedRoot": {
+      "type": "object",
+      "fields": {
+        "path": {
+          "type": "string",
+          "minBytes": 1,
+          "maxBytes": 4096
+        },
+        "device": {
+          "type": "decimal"
+        },
+        "inode": {
+          "type": "decimal"
+        }
+      }
+    },
+    "ComputerCatalogueEntry": {
+      "type": "object",
+      "fields": {
+        "workspaceId": {
+          "type": "id"
+        },
+        "root": {
+          "type": "string",
+          "minBytes": 1,
+          "maxBytes": 4096
+        },
+        "approvedRoot": {
+          "type": "ComputerApprovedRoot"
+        }
+      }
+    },
+    "ComputerCatalogueResponse": {
+      "type": "object",
+      "fields": {
+        "ownerId": {
+          "type": "id"
+        },
+        "sessionId": {
+          "type": "id"
+        },
+        "taskId": {
+          "type": "id"
+        },
+        "taskEpoch": {
+          "type": "decimal"
+        },
+        "participantId": {
+          "type": "id"
+        },
+        "turnId": {
+          "type": "id"
+        },
+        "generation": {
+          "type": "decimal"
+        },
+        "callId": {
+          "type": "id"
+        },
+        "workspaces": {
+          "type": "json",
+          "description": "Array of ComputerCatalogueEntry, at most 32; explicitly validated by the adapter."
+        },
+        "consistency": {
+          "type": "string",
+          "minBytes": 1,
+          "maxBytes": 4096
+        },
+        "next": {
+          "type": "string",
+          "minBytes": 1,
+          "maxBytes": 4096
+        }
+      }
+    },
+    "ComputerBootstrapRequest": {
+      "type": "object",
+      "fields": {
+        "ownerId": {
+          "type": "id"
+        },
+        "sessionId": {
+          "type": "id"
+        },
+        "taskId": {
+          "type": "id"
+        },
+        "taskEpoch": {
+          "type": "decimal"
+        },
+        "participantId": {
+          "type": "id"
+        },
+        "turnId": {
+          "type": "id"
+        },
+        "generation": {
+          "type": "decimal"
+        },
+        "callId": {
+          "type": "id"
+        },
+        "workspaceId": {
+          "type": "id"
+        },
+        "relativeDirectory": {
+          "type": "string",
+          "minBytes": 1,
+          "maxBytes": 4096
+        }
+      }
+    },
+    "ComputerInstructionRead": {
+      "type": "object",
+      "fields": {
+        "status": {
+          "type": "text",
+          "values": ["read"]
+        },
+        "relativePath": {
+          "type": "string",
+          "minBytes": 1,
+          "maxBytes": 4096
+        },
+        "text": {
+          "type": "string",
+          "maxBytes": 65536
+        },
+        "bytes": {
+          "type": "decimal"
+        }
+      }
+    },
+    "ComputerInstructionMissing": {
+      "type": "object",
+      "fields": {
+        "status": {
+          "type": "text",
+          "values": ["not_found"]
+        },
+        "relativePath": {
+          "type": "string",
+          "minBytes": 1,
+          "maxBytes": 4096
+        }
+      }
+    },
+    "ComputerInstructionUnavailable": {
+      "type": "object",
+      "fields": {
+        "status": {
+          "type": "text",
+          "values": ["unavailable"]
+        },
+        "relativePath": {
+          "type": "string",
+          "minBytes": 1,
+          "maxBytes": 4096
+        },
+        "code": {
+          "type": "text",
+          "values": [
+            "AUTHORITY_PATH_DENIED",
+            "WORKSPACE_PATH_REFUSED",
+            "WORKSPACE_FILE_TOO_LARGE",
+            "WORKSPACE_NOT_A_FILE",
+            "WORKSPACE_NOT_TEXT",
+            "COMPUTER_INSTRUCTION_BYTE_LIMIT"
+          ]
+        }
+      }
+    },
+    "ComputerBootstrapResponse": {
+      "type": "object",
+      "fields": {
+        "ownerId": {
+          "type": "id"
+        },
+        "sessionId": {
+          "type": "id"
+        },
+        "taskId": {
+          "type": "id"
+        },
+        "taskEpoch": {
+          "type": "decimal"
+        },
+        "participantId": {
+          "type": "id"
+        },
+        "turnId": {
+          "type": "id"
+        },
+        "generation": {
+          "type": "decimal"
+        },
+        "callId": {
+          "type": "id"
+        },
+        "workspaceId": {
+          "type": "id"
+        },
+        "relativeDirectory": {
+          "type": "string",
+          "minBytes": 1,
+          "maxBytes": 4096
+        },
+        "root": {
+          "type": "string",
+          "minBytes": 1,
+          "maxBytes": 4096
+        },
+        "approvedRoot": {
+          "type": "ComputerApprovedRoot"
+        },
+        "scope": {
+          "type": "text",
+          "values": ["subtree"]
+        },
+        "complete": {
+          "type": "json",
+          "description": "Boolean emitted from the owning contract; farol-wire/2 has no boolean primitive."
+        },
+        "instructions": {
+          "type": "json",
+          "description": "Ordered array of closed ComputerInstructionRead/Missing/Unavailable variants, at most 33; explicitly validated by the adapter."
+        },
+        "coverage": {
+          "type": "string",
+          "minBytes": 1,
+          "maxBytes": 4096
+        },
+        "consistency": {
+          "type": "string",
+          "minBytes": 1,
+          "maxBytes": 4096
+        },
+        "precedence": {
+          "type": "string",
+          "minBytes": 1,
+          "maxBytes": 4096
+        }
+      }
+    },
+    "ComputerCatalogueRefusal": {
+      "type": "object",
+      "fields": {
+        "request": {
+          "type": "ComputerCatalogueRequest",
+          "optional": true
+        },
+        "code": {
+          "type": "text"
+        },
+        "source": {
+          "type": "text",
+          "values": [
+            "computer-approval",
+            "task-admission",
+            "task-grant",
+            "owner-restriction",
+            "unverified-provenance",
+            "role",
+            "computer-policy",
+            "native-host",
+            "authority-store",
+            "native-workspace",
+            "contract",
+            "transport"
+          ]
+        },
+        "retry": {
+          "type": "text",
+          "values": ["never"]
+        }
+      }
+    },
+    "ComputerBootstrapRefusal": {
+      "type": "object",
+      "fields": {
+        "request": {
+          "type": "ComputerBootstrapRequest",
           "optional": true
         },
         "code": {
