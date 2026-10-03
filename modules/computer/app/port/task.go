@@ -30,3 +30,11 @@ type TaskBinding struct {
 type CurrentTaskAdmission interface {
 	WithCurrent(context.Context, func(*TaskBinding) error) error
 }
+
+// ExecutionAccessRepository is one already admitted operation's immutable access
+// lease. Binding is an independent correlation value; WithSnapshot remains the
+// sole current-owner gate. Composition must reuse this same lease for every phase.
+type ExecutionAccessRepository interface {
+	AccessRepository
+	Binding() TaskBinding
+}

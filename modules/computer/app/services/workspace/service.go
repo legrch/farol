@@ -17,6 +17,7 @@ type Service struct {
 	access    port.AccessRepository
 	workspace port.Workspace
 	clock     port.Clock
+	selected  *port.TaskBinding
 }
 
 func New(access port.AccessRepository, workspace port.Workspace, clock port.Clock) *Service {
@@ -257,4 +258,102 @@ func cloneDescriptor(d port.Descriptor) port.Descriptor {
 	d.DeniedPaths = slices.Clone(d.DeniedPaths)
 	d.ExactFilePaths = slices.Clone(d.ExactFilePaths)
 	return d
+}
+
+// NewForExecution binds composite discovery to an existing operation lease. It
+// neither admits nor renews authority; no request IDs select a current task.
+func NewForExecution(access port.ExecutionAccessRepository, workspace port.Workspace, clock port.Clock) (*Service, error) {
+	if access == nil || workspace == nil || clock == nil {
+		return nil, authority.Fail("COMPUTER_AUTHORITY_STORE_UNAVAILABLE", "authority-store")
+	}
+	binding := access.Binding()
+	if !validIdentifier(binding.OwnerID, 80) || !validIdentifier(binding.SessionID, 120) || !validIdentifier(binding.TaskID, 120) || !validIdentifier(binding.TurnID, 120) || !validIdentifier(binding.ParticipantID, 120) {
+		return nil, authority.Fail("AUTHORITY_TASK_MISMATCH", "task-grant")
+	}
+	return &Service{access: access, workspace: workspace, clock: clock, selected: &binding}, nil
+}
+
+type correlation struct {
+	port.TaskBinding
+	generation uint64
+	callID     string
+}
+type discoverySeal struct {
+	participant authority.Participant
+	approval    authority.Approval
+}
+
+func (s *Service) withDiscovery(ctx context.Context, binding correlation, inspect func(*authority.Participant, *authority.Approval) error) error {
+	if s.selected == nil {
+		return authority.Fail("COMPUTER_AUTHORITY_STORE_UNAVAILABLE", "authority-store")
+	}
+	if binding.OwnerID != s.selected.OwnerID {
+		return authority.Fail("AUTHORITY_OWNER_MISMATCH", "task-grant")
+	}
+	if binding.TaskBinding != *s.selected {
+		return authority.Fail("AUTHORITY_TASK_MISMATCH", "task-grant")
+	}
+	return s.withAuthority(ctx, caller{identity: binding.Identity, participantID: binding.ParticipantID}, func(p *authority.Participant, a *authority.Approval) error {
+		now := s.clock.Now()
+		if now.After(p.Grant.ExpiresAt) {
+			return authority.Fail("AUTHORITY_EXPIRED", "task-grant")
+		}
+		if a.OwnerID != p.Grant.OwnerID {
+			return authority.Fail("AUTHORITY_OWNER_MISMATCH", "computer-policy")
+		}
+		if a.ComputerID != p.Grant.ComputerID || a.Generation != p.Grant.ComputerGeneration {
+			return authority.Fail("AUTHORITY_COMPUTER_MISMATCH", "computer-policy")
+		}
+		if now.After(a.ExpiresAt) {
+			return authority.Fail("AUTHORITY_EXPIRED", "computer-policy")
+		}
+		return inspect(p, a)
+	})
+}
+func (s *Service) captureDiscovery(ctx context.Context, binding correlation) (discoverySeal, error) {
+	var seal discoverySeal
+	err := s.withDiscovery(ctx, binding, func(p *authority.Participant, a *authority.Approval) error {
+		seal = discoverySeal{participant: p.Clone(), approval: a.Clone()}
+		return nil
+	})
+	return seal, err
+}
+func (s *Service) discloseDiscovery(ctx context.Context, binding correlation, seal discoverySeal, publish func()) error {
+	return s.withDiscovery(ctx, binding, func(p *authority.Participant, a *authority.Approval) error {
+		if !authority.SameParticipantCeiling(*p, seal.participant) {
+			return authority.Fail("AUTHORITY_TASK_MISMATCH", "task-grant")
+		}
+		if !authority.SameApprovalPolicy(*a, seal.approval) {
+			return authority.Fail("AUTHORITY_COMPUTER_MISMATCH", "computer-policy")
+		}
+		if err := cancelled(ctx); err != nil {
+			return err
+		}
+		publish()
+		return nil
+	})
+}
+func (b correlation) contextRequest(workspaceID, relativePath string) ContextRequest {
+	return ContextRequest{OwnerID: b.OwnerID, SessionID: b.SessionID, TaskID: b.TaskID, TaskEpoch: b.TaskEpoch, ParticipantID: b.ParticipantID, TurnID: b.TurnID, Generation: b.generation, CallID: b.callID, WorkspaceID: workspaceID, RelativePath: relativePath}
+}
+func (b correlation) validContext(out *ContextResponse, workspaceID, relativePath string) bool {
+	return out != nil && out.OwnerID == b.OwnerID && out.SessionID == b.SessionID && out.TaskID == b.TaskID && out.TaskEpoch == b.TaskEpoch && out.ParticipantID == b.ParticipantID && out.TurnID == b.TurnID && out.Generation == b.generation && out.CallID == b.callID && out.WorkspaceID == workspaceID && out.RelativePath == relativePath && out.Scope == "subtree" && validContextBinding(port.DirectoryBinding{RelativePath: out.RelativePath, Root: out.Root, ApprovedRoot: port.Root{Path: out.ApprovedRoot.Path, Device: out.ApprovedRoot.Device, Inode: out.ApprovedRoot.Inode}})
+}
+func contractInvalid(code string) error { return authority.Fail(code, "contract") }
+
+func validIdentifier(value string, limit int) bool {
+	if value == "" || !utf8.ValidString(value) {
+		return false
+	}
+	units := 0
+	for _, r := range value {
+		units++
+		if r > 0xffff {
+			units++
+		}
+		if units > limit {
+			return false
+		}
+	}
+	return true
 }
