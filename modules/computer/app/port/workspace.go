@@ -1,0 +1,45 @@
+// Package port defines consumer-owned Computer application dependencies.
+package port
+
+import "context"
+
+type Root struct{ Path, Device, Inode string }
+type Descriptor struct {
+	WorkspaceID, Root           string
+	ApprovedRoot                Root
+	DeniedPaths, ExactFilePaths []string
+}
+
+// A nil ExactFilePaths grants a subtree; a nonnil empty slice grants no files.
+// The native boundary must verify ApprovedRoot and all physical path facts.
+type Range struct {
+	Offset uint64
+	Length uint32
+}
+type Page struct {
+	Offset, Size uint64
+	NextOffset   *uint64
+}
+type ReadRequest struct {
+	Workspace    Descriptor
+	RelativePath string
+	Range        *Range
+}
+type ReadResponse struct {
+	Text   string
+	Bytes  uint64
+	SHA256 string
+	Page   *Page
+}
+type ListRequest struct {
+	Workspace    Descriptor
+	RelativePath string
+}
+type ListResponse struct {
+	Entries   []string
+	Truncated bool
+}
+type Workspace interface {
+	Read(context.Context, ReadRequest) (*ReadResponse, error)
+	List(context.Context, ListRequest) (*ListResponse, error)
+}

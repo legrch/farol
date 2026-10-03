@@ -9,6 +9,11 @@ const modules = new Set(["computer", "task", "chat", "release"]);
 // package paths here only with a deliberate ownership decision.
 const kernelPeerContracts = new Set([]);
 const pureStandard = new Set([
+  // Exact pure Unicode APIs used by Computer; no x/text namespace wildcard.
+  "golang.org/x/text/cases",
+  "golang.org/x/text/collate",
+  "golang.org/x/text/language",
+  "golang.org/x/text/unicode/norm",
   "bytes",
   "cmp",
   "encoding/base32",

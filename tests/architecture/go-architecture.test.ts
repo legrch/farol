@@ -259,6 +259,44 @@ describe("the executable root Go architecture boundary", () => {
         ));
   }
 
+  for (const dependency of [
+    "golang.org/x/text/cases",
+    "golang.org/x/text/collate",
+    "golang.org/x/text/language",
+    "golang.org/x/text/unicode/norm",
+  ]) {
+    for (const layer of ["domain", "app/services"] as const)
+      it(`accepts exact approved Unicode import ${dependency} in ${layer}`, () => {
+        const result = check({
+          [`modules/computer/${layer}/workspace/policy.go`]: source(dependency),
+        });
+        expect(result.status, JSON.stringify(result.report)).toBe(0);
+      });
+  }
+  for (const dependency of [
+    "golang.org/x/text",
+    "golang.org/x/text/encoding",
+    "golang.org/x/text/transform",
+    "golang.org/x/text/message",
+    "golang.org/x/text/unicode/bidi",
+    "golang.org/x/text/unicode",
+    "golang.org/x/text/internal/language",
+    "golang.org/x/text/cases/extra",
+    "golang.org/x/text/unicode/norm/extra",
+    "golang.org/x/text/cases-extra",
+    "golang.org/x/sys/unix",
+  ]) {
+    for (const layer of ["domain", "app/services"] as const)
+      it(`rejects unapproved Unicode/native import ${dependency} in ${layer}`, () =>
+        denied(
+          check({
+            [`modules/computer/${layer}/workspace/policy.go`]:
+              source(dependency),
+          }),
+          "GO_PURE_IMPORT",
+        ));
+  }
+
   const escapeFixtures = [
     ["unsafe", source("unsafe"), "GO_PURE_ESCAPE"],
     [

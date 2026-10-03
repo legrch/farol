@@ -228,6 +228,160 @@
     "Empty": {
       "type": "object",
       "fields": {}
+    },
+    "ComputerReadRange": {
+      "type": "object",
+      "fields": {
+        "offset": {
+          "type": "decimal"
+        },
+        "length": {
+          "type": "uint32",
+          "minimum": 4,
+          "maximum": 262144
+        }
+      }
+    },
+    "ComputerReadPage": {
+      "type": "object",
+      "fields": {
+        "offset": {
+          "type": "decimal"
+        },
+        "size": {
+          "type": "decimal"
+        },
+        "nextOffset": {
+          "type": "decimal",
+          "optional": true
+        }
+      }
+    },
+    "ComputerReadRequest": {
+      "type": "object",
+      "fields": {
+        "ownerId": {
+          "type": "id"
+        },
+        "sessionId": {
+          "type": "id"
+        },
+        "taskId": {
+          "type": "id"
+        },
+        "taskEpoch": {
+          "type": "decimal"
+        },
+        "participantId": {
+          "type": "id"
+        },
+        "turnId": {
+          "type": "id"
+        },
+        "generation": {
+          "type": "decimal"
+        },
+        "callId": {
+          "type": "id"
+        },
+        "workspaceId": {
+          "type": "id"
+        },
+        "relativePath": {
+          "type": "string",
+          "minBytes": 1,
+          "maxBytes": 4096
+        },
+        "range": {
+          "type": "ComputerReadRange",
+          "optional": true
+        }
+      }
+    },
+    "ComputerReadResponse": {
+      "type": "object",
+      "fields": {
+        "ownerId": {
+          "type": "id"
+        },
+        "sessionId": {
+          "type": "id"
+        },
+        "taskId": {
+          "type": "id"
+        },
+        "taskEpoch": {
+          "type": "decimal"
+        },
+        "participantId": {
+          "type": "id"
+        },
+        "turnId": {
+          "type": "id"
+        },
+        "generation": {
+          "type": "decimal"
+        },
+        "callId": {
+          "type": "id"
+        },
+        "workspaceId": {
+          "type": "id"
+        },
+        "relativePath": {
+          "type": "string",
+          "minBytes": 1,
+          "maxBytes": 4096
+        },
+        "text": {
+          "type": "string",
+          "maxBytes": 262144
+        },
+        "bytes": {
+          "type": "decimal"
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^(|[0-9a-f]{64})$"
+        },
+        "page": {
+          "type": "ComputerReadPage",
+          "optional": true
+        }
+      }
+    },
+    "ComputerReadRefusal": {
+      "type": "object",
+      "fields": {
+        "request": {
+          "type": "ComputerReadRequest",
+          "optional": true
+        },
+        "code": {
+          "type": "text"
+        },
+        "source": {
+          "type": "text",
+          "values": [
+            "computer-approval",
+            "task-admission",
+            "task-grant",
+            "owner-restriction",
+            "unverified-provenance",
+            "role",
+            "computer-policy",
+            "native-host",
+            "authority-store",
+            "native-workspace",
+            "contract",
+            "transport"
+          ]
+        },
+        "retry": {
+          "type": "text",
+          "values": ["never"]
+        }
+      }
     }
   }
 }
