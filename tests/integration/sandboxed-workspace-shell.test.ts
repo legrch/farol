@@ -675,6 +675,86 @@ describe("workspace shell authority", () => {
     ).rejects.toMatchObject({ code: "ENOENT" });
   });
 
+  it.each(["abort", "close"] as const)(
+    "rechecks %s after the final current-policy await before spawning",
+    async (change) => {
+      const { root, workspace, approval, participant } = await fixture();
+      const privateRoot = path.join(root, `policy-${change}-private`);
+      let reachedPolicy!: () => void;
+      let releasePolicy!: () => void;
+      const reached = new Promise<void>((resolve) => {
+        reachedPolicy = resolve;
+      });
+      const gate = new Promise<void>((resolve) => {
+        releasePolicy = resolve;
+      });
+      let policyChecks = 0;
+      const guarded = new SandboxedWorkspaceShell(
+        approval,
+        participant,
+        binding,
+        privateRoot,
+        Date.now,
+        path.join(root, "account-home"),
+        {
+          async admitExecution() {
+            return {
+              approval,
+              participant,
+              deadlineAt: approval.expiresAt,
+              async current() {
+                policyChecks++;
+                if (policyChecks === 2) {
+                  reachedPolicy();
+                  await gate;
+                }
+                return true;
+              },
+            };
+          },
+        },
+      );
+      shells.push(guarded);
+      const controller = new AbortController();
+      const input = {
+        operationId: `policy-${change}`,
+        workspaceId: "fixture",
+        relativeCwd: ".",
+        command: `printf forbidden > policy-${change}.txt`,
+        timeoutMs: 5_000,
+        write: true,
+      };
+      const starting = guarded.start(input, controller.signal);
+      await reached;
+      if (change === "abort") controller.abort();
+      else guarded.close();
+      releasePolicy();
+      expect(await starting).toMatchObject({
+        ok: false,
+        error: { code: "SHELL_OUTCOME_UNKNOWN", retry: "never" },
+      });
+      expect(policyChecks).toBe(2);
+      expect(await guarded.closeAndWait()).toBe("confirmed");
+      await expect(
+        fs.stat(path.join(workspace, `policy-${change}.txt`)),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+      const reopened = new SandboxedWorkspaceShell(
+        approval,
+        participant,
+        binding,
+        privateRoot,
+      );
+      shells.push(reopened);
+      expect(await reopened.start(input)).toMatchObject({
+        ok: false,
+        error: { code: "SHELL_OUTCOME_UNKNOWN", retry: "never" },
+      });
+      await expect(
+        fs.stat(path.join(workspace, `policy-${change}.txt`)),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+    },
+  );
+
   it.each(["abort", "close", "expire"] as const)(
     "rechecks %s after asynchronous dispatch reservation before spawning",
     async (change) => {

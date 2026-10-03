@@ -803,13 +803,14 @@ export class SandboxedWorkspaceShell {
         return abandonReserved("SHELL_DISPATCH_FENCED");
       }
     }
-    // The reservation can wait while the caller aborts, the connector closes,
-    // or authority expires. No await may separate this final check and spawn.
+    if (!(await this.currentExecution()))
+      return abandonReserved("SHELL_AUTHORITY_REVOKED");
+    // Reservation and policy reads can wait while the caller aborts, the
+    // connector closes or authority expires. No await may separate this check
+    // from spawn.
     if (this.closing || signal?.aborted) {
       return abandonReserved("SHELL_OUTCOME_UNKNOWN");
     }
-    if (!(await this.currentExecution()))
-      return abandonReserved("SHELL_AUTHORITY_REVOKED");
     const finalAuthority = this.authorize(
       input.workspaceId,
       verified.cwd,
