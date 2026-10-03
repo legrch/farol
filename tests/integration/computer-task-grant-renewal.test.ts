@@ -1,10 +1,12 @@
 import { createHash } from "node:crypto";
+import { constants } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { Client } from "@modelcontextprotocol/client";
 import { InMemoryTransport } from "@modelcontextprotocol/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ProductSettingsStore } from "../../src/apps/desktop/product-configuration";
 import { createSecureMcpLaunchContract } from "../../src/apps/desktop/secure-mcp-launch-contract";
 import {
   ProductSettingsSchema,
@@ -90,6 +92,7 @@ beforeEach(async () => {
   await save();
 });
 afterEach(async () => {
+  vi.restoreAllMocks();
   await fs.rm(root, { recursive: true, force: true });
 });
 async function save() {
@@ -155,6 +158,94 @@ function request(
 }
 
 describe("production Computer TaskGrant reissue", () => {
+  function raceOwnerSave(
+    phase: "before-stat" | "after-read",
+    replacements: number,
+    change = () => {},
+  ) {
+    const open = fs.open.bind(fs);
+    const store = new ProductSettingsStore({ root });
+    let saves = 0;
+    const replace = async () => {
+      if (saves >= replacements) return;
+      saves++;
+      change();
+      await store.save(settings);
+    };
+    vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      const handle = await open(...args);
+      if (
+        args[0] === path.join(root, "config.json") &&
+        args[1] === (constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0))
+      ) {
+        if (phase === "before-stat") await replace();
+        else {
+          const read = handle.readFile.bind(handle);
+          vi.spyOn(handle, "readFile").mockImplementationOnce(
+            async (options) => {
+              const text = await read(options);
+              await replace();
+              return text;
+            },
+          );
+        }
+      }
+      return handle;
+    });
+    return () => saves;
+  }
+
+  it.each(["before-stat", "after-read"] as const)(
+    "accepts a stable current approval after an atomic owner save at %s without redispatch",
+    async (phase) => {
+      const ceiling = launch();
+      const binding = materializeReadonlyComputerLaunch(ceiling, now).binding;
+      const current = readonly(issuer(ceiling));
+      const saves = raceOwnerSave(phase, 1, () => settings.revision++);
+      expect((await current.contract.execute(request(binding))).ok).toBe(true);
+      expect(saves()).toBe(1);
+      expect(current.execute).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each(["generation", "revoked", "additional-root"])(
+    "uses the latest %s policy when atomic replacement races a snapshot read",
+    async (change) => {
+      const ceiling = launch();
+      const binding = materializeReadonlyComputerLaunch(ceiling, now).binding;
+      const current = readonly(issuer(ceiling));
+      const saves = raceOwnerSave("after-read", 1, () => {
+        if (change === "generation") settings.computer.generation++;
+        if (change === "revoked") settings.computer.workspaces = [];
+        if (change === "additional-root")
+          settings.computer.workspaces.push({
+            ...settings.computer.workspaces[0]!,
+            workspaceId: "00000000-0000-4000-8000-000000000003",
+            root: "/Users/example/code",
+          });
+      });
+      expect(await current.contract.execute(request(binding))).toMatchObject({
+        ok: false,
+        error: { code: "AUTHORITY_COMPUTER_MISMATCH", retry: "never" },
+      });
+      expect(saves()).toBe(1);
+      expect(current.execute).not.toHaveBeenCalled();
+    },
+  );
+
+  it("bounds snapshot reads and fails closed on continuous atomic replacement", async () => {
+    const ceiling = launch();
+    const binding = materializeReadonlyComputerLaunch(ceiling, now).binding;
+    const current = readonly(issuer(ceiling));
+    const saves = raceOwnerSave("after-read", 10, () => settings.revision++);
+    expect(await current.contract.execute(request(binding))).toMatchObject({
+      ok: false,
+      error: { code: "COMPUTER_APPROVAL_STORE_UNAVAILABLE", retry: "never" },
+    });
+    expect(saves()).toBe(3);
+    expect(current.execute).not.toHaveBeenCalled();
+  });
+
   it("reproduces the startup snapshot expiry and reissues on the same MCP connection and after reconnect", async () => {
     const ceiling = launch();
     const old = materializeReadonlyComputerLaunch(ceiling, now);

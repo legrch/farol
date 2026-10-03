@@ -78,7 +78,10 @@ Legacy fixture contracts without this source retain their original expiry.
 Renewal preserves the startup task identity, generation, roles, exclusions, roots,
 capabilities and physical root identities. Changed Computer/connector generations,
 revocation, replaced roots, changed policy or an unavailable/untrusted settings
-source refuse admission. Additional owner permissions do not widen an existing
+source refuse admission. A desktop atomic settings save that replaces the opened
+inode discards that snapshot and reads current policy again, at most three times.
+Trust checks run for every snapshot; sustained instability still refuses, and no
+operation is dispatched again. Additional owner permissions do not widen an existing
 runtime ceiling. A genuinely temporary approval's own expiry still limits and
 can refuse reissue. Separately sealed Codex/Claude task admissions are not renewed.
 

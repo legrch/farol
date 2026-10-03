@@ -19,6 +19,25 @@ export class CurrentOwnerComputerApprovals implements ComputerApprovalRepository
   ) {}
 
   async get(computerId: string) {
+    // Desktop saves replace config.json atomically. A replaced open inode is
+    // not revocation: discard it and reread current policy, at most three times.
+    // This retries only the snapshot read, never admission or an operation.
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        return await this.snapshot(computerId);
+      } catch (error) {
+        if (
+          !(error instanceof Error) ||
+          error.message !== "COMPUTER_APPROVAL_SOURCE_CHANGED" ||
+          attempt === 2
+        )
+          throw error;
+      }
+    }
+    throw new Error("COMPUTER_APPROVAL_SOURCE_CHANGED");
+  }
+
+  private async snapshot(computerId: string) {
     const root = await fs.lstat(this.source.root);
     if (
       !root.isDirectory() ||
@@ -39,30 +58,45 @@ export class CurrentOwnerComputerApprovals implements ComputerApprovalRepository
       if (
         !before.isFile() ||
         before.uid !== root.uid ||
-        before.nlink !== 1 ||
         (before.mode & 0o777) !== 0o600 ||
         before.size <= 0 ||
         before.size > 256 * 1024
       ) {
         throw new Error("COMPUTER_APPROVAL_SOURCE_UNTRUSTED");
       }
+      // An atomic save may unlink this otherwise trusted inode before stat.
+      // Never derive an approval from it; start a new bounded snapshot instead.
+      if (before.nlink === 0)
+        throw new Error("COMPUTER_APPROVAL_SOURCE_CHANGED");
+      if (before.nlink !== 1)
+        throw new Error("COMPUTER_APPROVAL_SOURCE_UNTRUSTED");
       const settings = ProductSettingsSchema.parse(
         JSON.parse(await handle.readFile("utf8")),
       );
       const after = await fs.lstat(file);
       const directory = await fs.lstat(this.source.root);
       if (
+        !directory.isDirectory() ||
+        directory.isSymbolicLink() ||
+        directory.uid !== root.uid ||
+        root.dev !== directory.dev ||
+        root.ino !== directory.ino ||
+        root.mode !== directory.mode ||
+        !after.isFile() ||
         after.isSymbolicLink() ||
+        after.uid !== root.uid ||
+        (after.mode & 0o777) !== 0o600 ||
+        after.nlink !== 1
+      ) {
+        throw new Error("COMPUTER_APPROVAL_SOURCE_UNTRUSTED");
+      }
+      if (
         before.dev !== after.dev ||
         before.ino !== after.ino ||
         before.size !== after.size ||
         before.mtimeMs !== after.mtimeMs ||
         before.ctimeMs !== after.ctimeMs ||
-        before.mode !== after.mode ||
-        after.nlink !== 1 ||
-        root.dev !== directory.dev ||
-        root.ino !== directory.ino ||
-        root.mode !== directory.mode
+        before.mode !== after.mode
       ) {
         throw new Error("COMPUTER_APPROVAL_SOURCE_CHANGED");
       }

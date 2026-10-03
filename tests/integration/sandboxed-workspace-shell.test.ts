@@ -6,7 +6,7 @@ import fs from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   createParticipantAuthority,
@@ -19,6 +19,12 @@ import {
 import { SandboxedWorkspaceShell } from "../../src/modules/computer/infra/native/sandboxed-workspace-shell";
 import { SHELL_WATCHDOG_SOURCE } from "../../src/modules/computer/infra/native/shell-watchdog-source";
 import { createReadonlyComputerMcpServer } from "../../src/modules/computer/infra/mcp/create-readonly-computer-mcp";
+import { createSecureMcpLaunchContract } from "../../src/apps/desktop/secure-mcp-launch-contract";
+import { ProductSettingsStore } from "../../src/apps/desktop/product-configuration";
+import { ProductSettingsSchema } from "../../src/pkg/product-settings/contract";
+import { CurrentOwnerComputerApprovals } from "../../src/modules/computer/infra/repo/current-owner-computer-approvals";
+import { RenewableComputerAuthority } from "../../src/modules/computer/infra/mcp/renewable-computer-authority";
+import { materializeReadonlyComputerLaunch } from "../../src/modules/computer/infra/mcp/launch-contract";
 import { PrivateExecutionFence } from "../../src/modules/computer/infra/mcp/execution-fence";
 
 const binding = {
@@ -33,6 +39,7 @@ const shells: SandboxedWorkspaceShell[] = [];
 const rootsWithUnconfirmedChildren = new Set<string>();
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   const settled = await Promise.all(
     shells
       .splice(0)
@@ -214,6 +221,171 @@ async function runningMarker(shell: SandboxedWorkspaceShell, handle: string) {
 }
 
 describe("workspace shell authority", () => {
+  it("keeps a shell running across an atomic owner save but stops it on the next revocation", async () => {
+    const { root, workspace } = await fixture();
+    const ownerRoot = path.join(root, "owner-state");
+    const identity = await fs.lstat(workspace, { bigint: true });
+    const rootIdentity = {
+      device: String(identity.dev),
+      inode: String(identity.ino),
+    };
+    const buildId = "f".repeat(64);
+    const verifiedAt = new Date().toISOString();
+    const step = {
+      visited: false,
+      skipped: false,
+      configured: false,
+      reachable: "unknown",
+      verified: null,
+      needsAction: "Pending.",
+      unavailable: null,
+      outcomeUnknown: false,
+    };
+    const settings = ProductSettingsSchema.parse({
+      schema: 1,
+      revision: 1,
+      general: {
+        openAtLaunch: "browser",
+        sidebarDefault: "full",
+        activityDetail: "summary",
+      },
+      computer: {
+        computerId: "00000000-0000-4000-8000-000000000001",
+        generation: 1,
+        name: "Fixture",
+        commands: "workspace",
+        workspaces: [
+          {
+            workspaceId: "00000000-0000-4000-8000-000000000002",
+            root: workspace,
+            label: "Fixture",
+            access: "write",
+            excludedPaths: [],
+            rootIdentity,
+            accessCheck: {
+              buildId,
+              computerGeneration: 1,
+              verifiedAt,
+              rootIdentity,
+            },
+          },
+        ],
+      },
+      setup: {
+        chatgpt: step,
+        connect: step,
+        hosts: step,
+        verify: step,
+        computer: {
+          ...step,
+          reachable: "reachable",
+          verified: {
+            profile: "computer.local.read/1",
+            configRevision: 1,
+            workspaceId: "00000000-0000-4000-8000-000000000002",
+            runtimeGeneration: "fixture",
+            buildId,
+            protocol: "readonly-workspace/1",
+            verifiedAt,
+          },
+        },
+      },
+    });
+    const store = new ProductSettingsStore({ root: ownerRoot });
+    await store.save(settings);
+    const ceiling = createSecureMcpLaunchContract(settings, {
+      now: Date.now(),
+      runtimeId: "atomic-save-shell",
+      challengeSha256: "a".repeat(64),
+      ownerSettingsRoot: ownerRoot,
+      gitSettingsHome: path.join(root, "account-home"),
+    });
+    if (ceiling.schema !== 2 || !ceiling.approvalSource)
+      throw new Error("Fixture source missing");
+    const initial = materializeReadonlyComputerLaunch(ceiling, Date.now());
+    const authority = new RenewableComputerAuthority(
+      ceiling,
+      new CurrentOwnerComputerApprovals(ceiling.approvalSource, Date.now),
+      Date.now,
+    );
+    const shell = new SandboxedWorkspaceShell(
+      initial.approval,
+      initial.participants.at(-1)!,
+      initial.binding,
+      path.join(root, "atomic-save-private"),
+      Date.now,
+      path.join(root, "account-home"),
+      authority,
+    );
+    shells.push(shell);
+    const started = await shell.start({
+      operationId: "atomic-save-shell",
+      workspaceId: "00000000-0000-4000-8000-000000000002",
+      relativeCwd: ".",
+      command: "printf deadline-ready; while true; do sleep 0.05; done",
+      timeoutMs: 5_000,
+      write: false,
+    });
+    expect(started).toMatchObject({ ok: true });
+    if (!started.ok) throw new Error(started.error.code);
+    await runningMarker(shell, started.value.handle);
+
+    // Force the desktop's real rename path between the policy poll's fd read
+    // and pathname stat. Only snapshot IO is controlled; the shell is native.
+    const open = fs.open.bind(fs);
+    let replacements = 0;
+    vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      const handle = await open(...args);
+      if (
+        args[0] === path.join(ownerRoot, "config.json") &&
+        args[1] === (fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0))
+      ) {
+        const read = handle.readFile.bind(handle);
+        vi.spyOn(handle, "readFile").mockImplementationOnce(async (options) => {
+          const text = await read(options);
+          if (replacements === 0) {
+            replacements++;
+            settings.revision++;
+            await store.save(settings);
+          }
+          return text;
+        });
+      }
+      return handle;
+    });
+    await vi.waitFor(() => expect(replacements).toBe(1), {
+      timeout: 2_000,
+      interval: 20,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    expect(
+      shell.read({
+        handle: started.value.handle,
+        stdoutOffset: 0,
+        stderrOffset: 0,
+      }),
+    ).toMatchObject({
+      ok: true,
+      value: { state: "running", authorityExpired: false },
+    });
+    settings.computer.generation++;
+    await store.save(settings);
+    expect(
+      await shell.readAdmitted({
+        handle: started.value.handle,
+        stdoutOffset: 0,
+        stderrOffset: 0,
+      }),
+    ).toMatchObject({
+      ok: false,
+      error: { code: "SHELL_AUTHORITY_REVOKED", retry: "never" },
+    });
+    expect(await complete(shell, started.value.handle)).toMatchObject({
+      authorityExpired: true,
+      groupCleanup: "confirmed",
+    });
+  });
+
   it("admits a new shell lease after outer expiry without extending an existing handle", async () => {
     const { root, approval, participant } = await fixture();
     let clockNow = Date.now();
