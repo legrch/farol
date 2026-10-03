@@ -1,3 +1,5 @@
+<a name="setup-links"></a>
+
 # External setup links
 
 This page has moved to [External setup links](reference/setup-links.md).

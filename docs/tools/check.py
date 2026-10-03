@@ -64,6 +64,8 @@ def check(root):
     routes = json.loads((docs / "tools/redirects.json").read_text())
     if routes.get("schema") != 1 or not isinstance(routes.get("pages"), dict):
         raise ValueError("Unsupported documentation compatibility manifest")
+    if not re.fullmatch(r"[a-f0-9]{40}", routes.get("compatibility_base", "")):
+        raise ValueError("Missing original documentation compatibility base")
     aliases = {docs / name for name in routes["pages"]}
     tasks = set(re.findall(r"^  ([\w:-]+):\s*$", (root / "Taskfile.yml").read_text(), re.M))
 
@@ -131,12 +133,32 @@ def check(root):
         if file.is_relative_to(docs) and file not in aliases and file not in reached:
             issue(file, "canonical page is unreachable from docs/README.md")
 
+    def original_anchors(file, record):
+        required = record["baseline_anchors"]
+        if not isinstance(required, list) or not all(isinstance(anchor, str) for anchor in required):
+            raise ValueError("Invalid original documentation anchor inventory")
+        actual = anchors(parts[file][0])
+        for anchor in required:
+            if anchor not in actual:
+                issue(file, f"missing original anchor: {anchor}")
+        return required
+
+    landing = routes["landing"]
+    original_anchors(root / "README.md", landing)
+    for old, current in landing["sections"].items():
+        actual = anchors(parts[root / "README.md"][0])
+        if old not in actual or current not in actual:
+            issue(root / "README.md", f"missing landing compatibility route: {old}")
+
     for name, record in routes["pages"].items():
         file = docs / name
         if file.parent != docs or not file.is_file():
             errors.append(f"docs/{name}: compatibility address is missing or invalid")
             continue
         prose = parts[file][0]
+        for anchor in original_anchors(file, record):
+            if anchor not in record["sections"]:
+                issue(file, f"missing original section mapping: {anchor}")
         targets = {m[1] for m in LINK.finditer(prose)}
         if record["target"] not in targets or "This page has moved to" not in prose:
             issue(file, "compatibility page does not identify its canonical page")

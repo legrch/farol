@@ -1,3 +1,5 @@
+<a name="approved-computer-workspace-context"></a>
+
 # Workspace instructions and guidance
 
 This page has moved to [Workspace instructions and guidance](reference/computer/workspace-context.md).

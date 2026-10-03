@@ -1,3 +1,5 @@
+<a name="farol-preview"></a>
+
 # Farol
 
 Give ChatGPT a controlled connection to local projects on your Mac.
@@ -44,6 +46,10 @@ published on 2 October 2026. Downloads and update assets live in the separate
 The installation guide explains checksums, helper requirements, and the current
 updater-baseline limitation.
 
+<a name="dev-names-and-profile-compatibility"></a>
+
+<a name="reproduce"></a>
+
 ## Run from source
 
 On macOS Apple Silicon, provide Go Task, Node **24.20.0 or 26.7.0**, and npm
@@ -64,6 +70,10 @@ Follow [development setup](docs/development/setup.md) and
 source gate. Build a verified packaged candidate with `task package`, then open it
 with `task run` from an isolated launch snapshot. See
 [packaging](docs/development/packaging.md) for that exact-byte workflow.
+
+<a name="what-runs"></a>
+
+<a name="evidence"></a>
 
 ## Explore the documentation
 

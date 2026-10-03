@@ -1,5 +1,22 @@
 {
   "schema": 1,
+  "compatibility_base": "acb131d9e7d483296d4edac262cf881cddfb91bb",
+  "landing": {
+    "baseline_anchors": [
+      "dev-names-and-profile-compatibility",
+      "evidence",
+      "farol-preview",
+      "reproduce",
+      "what-runs"
+    ],
+    "sections": {
+      "farol-preview": "farol",
+      "dev-names-and-profile-compatibility": "run-from-source",
+      "what-runs": "explore-the-documentation",
+      "reproduce": "run-from-source",
+      "evidence": "explore-the-documentation"
+    }
+  },
   "pages": {
     "architecture.md": {
       "target": "architecture/README.md",
@@ -10,8 +27,22 @@
         "dependency-rules": "architecture/boundaries.md#dependency-rules",
         "authority-and-unknown-outcomes": "architecture/authority.md#authority-and-unknown-outcomes",
         "browser-overlays-and-isolation": "architecture/runtime.md#browser-overlays-and-isolation",
-        "enforcement-and-evidence": "architecture/boundaries.md#enforcement-and-evidence"
-      }
+        "enforcement-and-evidence": "architecture/boundaries.md#enforcement-and-evidence",
+        "decision": "architecture/runtime.md#running-desktop",
+        "enforced-dependency-direction": "architecture/boundaries.md#dependency-rules",
+        "farol-next-architecture": "architecture/README.md",
+        "isolation-and-evidence-boundary": "architecture/authority.md#authority-and-unknown-outcomes",
+        "native-surface-composition": "architecture/runtime.md#browser-overlays-and-isolation",
+        "shared-infrastructure-decision": "architecture/boundaries.md#dependency-rules"
+      },
+      "baseline_anchors": [
+        "decision",
+        "enforced-dependency-direction",
+        "farol-next-architecture",
+        "isolation-and-evidence-boundary",
+        "native-surface-composition",
+        "shared-infrastructure-decision"
+      ]
     },
     "browser-adapter.md": {
       "target": "reference/protocols/browser-adapter.md",
@@ -21,7 +52,8 @@
         "one-submission-and-recovery": "reference/protocols/browser-adapter.md#one-submission-and-recovery",
         "continuity": "reference/protocols/browser-adapter.md#continuity",
         "focused-verification": "reference/protocols/browser-adapter.md#focused-verification"
-      }
+      },
+      "baseline_anchors": []
     },
     "claude-handoff-candidate.md": {
       "target": "reference/tasks/claude-handoff.md",
@@ -30,8 +62,20 @@
         "one-shot-dispatch-and-result": "reference/tasks/claude-handoff.md#one-shot-dispatch-and-result",
         "stream-compatibility": "reference/tasks/claude-handoff.md#stream-compatibility",
         "verify-the-fixture": "reference/tasks/claude-handoff.md#verify-the-fixture",
-        "remaining-qualification": "reference/tasks/claude-handoff.md#remaining-qualification"
-      }
+        "remaining-qualification": "reference/tasks/claude-handoff.md#remaining-qualification",
+        "claude-handoff-candidate": "reference/tasks/claude-handoff.md",
+        "evidence-and-limitations": "reference/tasks/claude-handoff.md#remaining-qualification",
+        "route-and-authority": "reference/tasks/claude-handoff.md#admission",
+        "startup-stream-compatibility": "reference/tasks/claude-handoff.md#stream-compatibility",
+        "verification": "reference/tasks/claude-handoff.md#verify-the-fixture"
+      },
+      "baseline_anchors": [
+        "claude-handoff-candidate",
+        "evidence-and-limitations",
+        "route-and-authority",
+        "startup-stream-compatibility",
+        "verification"
+      ]
     },
     "computer-parity.md": {
       "target": "reference/computer/capabilities.md",
@@ -42,8 +86,24 @@
         "fixed-git-verification": "reference/computer/capabilities.md#fixed-git-verification",
         "workspace-shell-and-git-settings": "reference/computer/capabilities.md#workspace-shell-and-git-settings",
         "shell-lifecycle": "reference/computer/capabilities.md#shell-lifecycle",
-        "selected-context-and-qualification": "reference/computer/capabilities.md#selected-context-and-qualification"
-      }
+        "selected-context-and-qualification": "reference/computer/capabilities.md#selected-context-and-qualification",
+        "attachments-and-selected-context": "reference/computer/capabilities.md#selected-context-and-qualification",
+        "computer-parity-and-content-lifecycle": "reference/computer/capabilities.md",
+        "daily-driver-computer-command-mode": "reference/computer/capabilities.md#workspace-shell-and-git-settings",
+        "fixed-command-contract": "reference/computer/capabilities.md#fixed-git-verification",
+        "legacy-to-next-disposition": "reference/computer/capabilities.md#capability-map",
+        "native-deadline-scenario-evidence": "reference/computer/capabilities.md#shell-lifecycle",
+        "owned-watchdog-signal-refusal-checkpoint": "reference/computer/capabilities.md#shell-lifecycle"
+      },
+      "baseline_anchors": [
+        "attachments-and-selected-context",
+        "computer-parity-and-content-lifecycle",
+        "daily-driver-computer-command-mode",
+        "fixed-command-contract",
+        "legacy-to-next-disposition",
+        "native-deadline-scenario-evidence",
+        "owned-watchdog-signal-refusal-checkpoint"
+      ]
     },
     "computer-workspace-context.md": {
       "target": "reference/computer/workspace-context.md",
@@ -52,8 +112,10 @@
         "read-applicable-instructions": "reference/computer/workspace-context.md#read-applicable-instructions",
         "published-product-guidance": "reference/computer/workspace-context.md#published-product-guidance",
         "search-coverage": "reference/computer/workspace-context.md#search-coverage",
-        "verification-boundary": "reference/computer/workspace-context.md#verification-boundary"
-      }
+        "verification-boundary": "reference/computer/workspace-context.md#verification-boundary",
+        "approved-computer-workspace-context": "reference/computer/workspace-context.md"
+      },
+      "baseline_anchors": ["approved-computer-workspace-context"]
     },
     "config-model-discovery.md": {
       "target": "reference/configuration.md",
@@ -63,8 +125,22 @@
         "read-the-selected-runtime-catalogue": "reference/configuration.md#read-the-selected-runtime-catalogue",
         "dispatch-and-durable-binding": "reference/configuration.md#dispatch-and-durable-binding",
         "ui-and-mcp": "reference/configuration.md#ui-and-mcp",
-        "source-and-verification": "reference/configuration.md#source-and-verification"
-      }
+        "source-and-verification": "reference/configuration.md#source-and-verification",
+        "configuration-and-runtime-model-discovery": "reference/configuration.md",
+        "dispatch-effort-and-durable-binding": "reference/configuration.md#dispatch-and-durable-binding",
+        "one-configuration-file": "reference/configuration.md#one-product-configuration",
+        "read-only-views": "reference/configuration.md#ui-and-mcp",
+        "runtime-catalogue": "reference/configuration.md#read-the-selected-runtime-catalogue",
+        "tests-and-integration-boundary": "reference/configuration.md#source-and-verification"
+      },
+      "baseline_anchors": [
+        "configuration-and-runtime-model-discovery",
+        "dispatch-effort-and-durable-binding",
+        "one-configuration-file",
+        "read-only-views",
+        "runtime-catalogue",
+        "tests-and-integration-boundary"
+      ]
     },
     "dependencies.md": {
       "target": "development/dependencies.md",
@@ -72,8 +148,10 @@
         "current-npm-dependencies": "development/dependencies.md#current-npm-dependencies",
         "runtime-and-compiler-provenance": "development/dependencies.md#runtime-and-compiler-provenance",
         "go-and-native-helpers": "development/dependencies.md#go-and-native-helpers",
-        "migration-boundary": "development/dependencies.md#migration-boundary"
-      }
+        "migration-boundary": "development/dependencies.md#migration-boundary",
+        "dependency-inventory": "development/dependencies.md"
+      },
+      "baseline_anchors": ["dependency-inventory"]
     },
     "design.md": {
       "target": "architecture/desktop-design.md",
@@ -82,8 +160,20 @@
         "watch-rail": "architecture/desktop-design.md#watch-rail",
         "native-browser-overlays": "architecture/desktop-design.md#native-browser-overlays",
         "interaction-contract": "architecture/desktop-design.md#interaction-contract",
-        "verification": "architecture/desktop-design.md#verification"
-      }
+        "verification": "architecture/desktop-design.md#verification",
+        "farol-next-preview-design": "architecture/desktop-design.md",
+        "native-browser-overlay-decision": "architecture/desktop-design.md#native-browser-overlays",
+        "owner-selected-visual-direction-watch-rail": "architecture/desktop-design.md#watch-rail",
+        "review-checklist": "architecture/desktop-design.md#verification"
+      },
+      "baseline_anchors": [
+        "farol-next-preview-design",
+        "interaction-contract",
+        "native-browser-overlay-decision",
+        "owner-selected-visual-direction-watch-rail",
+        "product-intent",
+        "review-checklist"
+      ]
     },
     "desktop-core.md": {
       "target": "reference/protocols/desktop-core.md",
@@ -92,8 +182,20 @@
         "generate-and-verify": "reference/protocols/desktop-core.md#generate-and-verify",
         "handshake-and-lifetime": "reference/protocols/desktop-core.md#handshake-and-lifetime",
         "wire-admission": "reference/protocols/desktop-core.md#wire-admission",
-        "disposable-computer-read-checkpoint": "reference/protocols/desktop-core.md#disposable-computer-read-checkpoint"
-      }
+        "disposable-computer-read-checkpoint": "reference/protocols/desktop-core.md#disposable-computer-read-checkpoint",
+        "composition-and-next-read-slice": "reference/protocols/desktop-core.md#disposable-computer-read-checkpoint",
+        "desktopcore-checkpoint-k0": "reference/protocols/desktop-core.md",
+        "k1-disposable-computer-read-checkpoint": "reference/protocols/desktop-core.md#disposable-computer-read-checkpoint",
+        "verification": "reference/protocols/desktop-core.md#generate-and-verify",
+        "wire-and-generation": "reference/protocols/desktop-core.md#wire-admission"
+      },
+      "baseline_anchors": [
+        "composition-and-next-read-slice",
+        "desktopcore-checkpoint-k0",
+        "k1-disposable-computer-read-checkpoint",
+        "verification",
+        "wire-and-generation"
+      ]
     },
     "getting-started.md": {
       "target": "start/first-connection.md",
@@ -103,7 +205,8 @@
         "enable-only-the-access-you-need": "guides/folder-access.md#choose-an-access-level",
         "navigate-the-app": "reference/shortcuts.md",
         "understand-the-result": "guides/troubleshooting.md#an-operation-has-an-unknown-outcome"
-      }
+      },
+      "baseline_anchors": []
     },
     "github-release-contract.md": {
       "target": "reference/updates/release.md",
@@ -112,8 +215,18 @@
         "channel-selection": "reference/updates/release.md#channel-selection",
         "pure-application-functions": "reference/updates/release.md#pure-application-functions",
         "https-and-staging-adapter": "reference/updates/release.md#https-and-staging-adapter",
-        "qualification": "reference/updates/release.md#qualification"
-      }
+        "qualification": "reference/updates/release.md#qualification",
+        "consumer-api-and-adapter-duties": "reference/updates/release.md#https-and-staging-adapter",
+        "github-release-discovery-contract": "reference/updates/release.md",
+        "installed-composition": "reference/updates/release.md#qualification",
+        "producer-contract": "reference/updates/release.md#producer-assets-and-identity"
+      },
+      "baseline_anchors": [
+        "consumer-api-and-adapter-duties",
+        "github-release-discovery-contract",
+        "installed-composition",
+        "producer-contract"
+      ]
     },
     "installation.md": {
       "target": "start/installation.md",
@@ -123,7 +236,8 @@
         "establish-an-updater-managed-installation": "development/packaging.md#establish-an-installed-baseline",
         "update-an-existing-accepted-installation": "guides/updates.md#apply-an-update",
         "recovery-and-rollback": "guides/updates.md#recover-or-restore"
-      }
+      },
+      "baseline_anchors": []
     },
     "installed-update-helper.md": {
       "target": "reference/updates/helper.md",
@@ -133,8 +247,16 @@
         "request-and-fixed-locations": "reference/updates/helper.md#request-and-fixed-locations",
         "atomic-apply": "reference/updates/helper.md#atomic-apply",
         "exact-operation-recovery-and-rollback": "reference/updates/helper.md#exact-operation-recovery-and-rollback",
-        "verification-boundary": "reference/updates/helper.md#verification-boundary"
-      }
+        "verification-boundary": "reference/updates/helper.md#verification-boundary",
+        "caller-contract": "reference/updates/helper.md#caller-sequence",
+        "installed-farol-update-helper": "reference/updates/helper.md",
+        "phases-and-recovery": "reference/updates/helper.md#exact-operation-recovery-and-rollback"
+      },
+      "baseline_anchors": [
+        "caller-contract",
+        "installed-farol-update-helper",
+        "phases-and-recovery"
+      ]
     },
     "installed-update-runtime.md": {
       "target": "reference/updates/runtime.md",
@@ -145,8 +267,16 @@
         "helper-handoff-and-uncertainty": "reference/updates/runtime.md#helper-handoff-and-uncertainty",
         "recovery-and-rollback": "reference/updates/runtime.md#recovery-and-rollback",
         "historical-closed-repair": "reference/updates/runtime.md#historical-closed-repair",
-        "source-and-evidence": "reference/updates/runtime.md#source-and-evidence"
-      }
+        "source-and-evidence": "reference/updates/runtime.md#source-and-evidence",
+        "closed-preview-repair": "reference/updates/runtime.md#historical-closed-repair",
+        "installed-updater-lifecycle": "reference/updates/runtime.md",
+        "physical-staging-cleanup": "reference/updates/runtime.md#download-preparation-and-cleanup"
+      },
+      "baseline_anchors": [
+        "closed-preview-repair",
+        "installed-updater-lifecycle",
+        "physical-staging-cleanup"
+      ]
     },
     "model-routing.md": {
       "target": "reference/protocols/model-identity.md",
@@ -156,22 +286,57 @@
         "resolution-lifetime": "reference/protocols/model-identity.md#resolution-lifetime",
         "keep-identities-separate": "reference/protocols/model-identity.md#keep-identities-separate",
         "native-children-and-compatibility": "reference/protocols/model-identity.md#native-children-and-compatibility",
-        "adapter-and-task-model-references": "reference/protocols/model-identity.md#adapter-and-task-model-references"
-      }
+        "adapter-and-task-model-references": "reference/protocols/model-identity.md#adapter-and-task-model-references",
+        "assembled-source-transport-fixture": "reference/protocols/model-identity.md#adapter-and-task-model-references",
+        "compatibility-and-isolation": "reference/protocols/model-identity.md#native-children-and-compatibility",
+        "default-aliases-and-explicit-pins": "reference/protocols/model-identity.md#default-alias-and-future-pins",
+        "farol-provider-and-model-identity": "reference/protocols/model-identity.md",
+        "native-child-routing": "reference/protocols/model-identity.md#native-children-and-compatibility",
+        "qualified-public-code-wrapper-regression": "reference/protocols/model-identity.md#adapter-and-task-model-references",
+        "readiness-ordering-regression": "reference/protocols/model-identity.md#adapter-and-task-model-references",
+        "three-separate-identities": "reference/protocols/model-identity.md#keep-identities-separate",
+        "verification-boundary": "reference/protocols/model-identity.md#adapter-and-task-model-references",
+        "wire-identity-not-development-generation": "reference/protocols/model-identity.md#permanent-wire-identity"
+      },
+      "baseline_anchors": [
+        "assembled-source-transport-fixture",
+        "compatibility-and-isolation",
+        "default-aliases-and-explicit-pins",
+        "farol-provider-and-model-identity",
+        "native-child-routing",
+        "qualified-public-code-wrapper-regression",
+        "readiness-ordering-regression",
+        "resolution-lifetime",
+        "three-separate-identities",
+        "verification-boundary",
+        "wire-identity-not-development-generation"
+      ]
     },
     "ordinary-git-environment-fixture.md": {
       "target": "development/git-fixture.md",
       "sections": {
-        "incorporation-into-computer-acceptance": "development/git-fixture.md#incorporation-into-computer-acceptance"
-      }
+        "incorporation-into-computer-acceptance": "development/git-fixture.md#incorporation-into-computer-acceptance",
+        "ordinary-git-environment-fixture": "development/git-fixture.md"
+      },
+      "baseline_anchors": [
+        "incorporation-into-computer-acceptance",
+        "ordinary-git-environment-fixture"
+      ]
     },
     "owner-guard-startup-recovery.md": {
       "target": "reference/owner-guard.md",
       "sections": {
         "filesystem-objects": "reference/owner-guard.md#filesystem-objects",
         "cancellation": "reference/owner-guard.md#cancellation",
-        "verification-and-candidate-boundaries": "reference/owner-guard.md#verification-and-candidate-boundaries"
-      }
+        "verification-and-candidate-boundaries": "reference/owner-guard.md#verification-and-candidate-boundaries",
+        "owner-guard-startup-recovery": "reference/owner-guard.md"
+      },
+      "baseline_anchors": [
+        "cancellation",
+        "filesystem-objects",
+        "owner-guard-startup-recovery",
+        "verification-and-candidate-boundaries"
+      ]
     },
     "owner-preview.md": {
       "target": "development/packaging.md",
@@ -181,8 +346,25 @@
         "product-and-dev-identities": "reference/profiles.md#product-and-dev-identities",
         "if-something-goes-wrong": "guides/troubleshooting.md#find-the-problem",
         "quit-and-state-retention": "reference/profiles.md#quit-and-state-retention",
-        "local-promotion": "development/packaging.md#establish-an-installed-baseline"
-      }
+        "local-promotion": "development/packaging.md#establish-an-installed-baseline",
+        "farol-owner-beta": "development/packaging.md",
+        "open-it": "development/packaging.md#launch-a-candidate",
+        "optional-local-promotion--owner-action-only": "development/packaging.md#establish-an-installed-baseline",
+        "product-boundary": "reference/status.md#capability-boundaries",
+        "setup-access-transitions-and-receipt-timing": "guides/folder-access.md#narrow-or-revoke-access",
+        "setup-inside-the-app": "start/first-connection.md#connect-chatgpt",
+        "what-the-controls-do": "reference/shortcuts.md"
+      },
+      "baseline_anchors": [
+        "farol-owner-beta",
+        "if-something-goes-wrong",
+        "open-it",
+        "optional-local-promotion--owner-action-only",
+        "product-boundary",
+        "setup-access-transitions-and-receipt-timing",
+        "setup-inside-the-app",
+        "what-the-controls-do"
+      ]
     },
     "persistent-chat-handoff-parity.md": {
       "target": "reference/tasks/native-tasks.md",
@@ -195,8 +377,46 @@
         "separately-gated-controls": "reference/tasks/native-tasks.md#separately-gated-controls",
         "shared-host-requests-and-cleanup": "reference/tasks/native-tasks.md#shared-host-requests-and-cleanup",
         "experimental-saved-chatgpt-conversation": "reference/tasks/native-tasks.md#experimental-saved-chatgpt-conversation",
-        "focused-fixture-checks": "reference/tasks/native-tasks.md#focused-fixture-checks"
-      }
+        "focused-fixture-checks": "reference/tasks/native-tasks.md#focused-fixture-checks",
+        "canonical-checkout-plus-selected-writer-opt-in": "reference/tasks/native-tasks.md#project-selection-and-preferences",
+        "first-codex-saved-project-task-slice": "reference/tasks/native-tasks.md#codex-host-and-physical-project",
+        "fresh-project-ensure-contract-checkpoint": "reference/tasks/native-tasks.md#project-selection-and-preferences",
+        "immutable-saved-project-preference-handles": "reference/tasks/native-tasks.md#project-selection-and-preferences",
+        "owned-proxy-cleanup-refusal-checkpoint": "reference/tasks/native-tasks.md#shared-host-requests-and-cleanup",
+        "persistent-handoff-parity": "reference/tasks/native-tasks.md",
+        "private-ensure-journal-boundary": "reference/tasks/native-tasks.md#codex-host-and-physical-project",
+        "qualified-one-shot-task-name-update": "reference/tasks/native-tasks.md#separately-gated-controls",
+        "read-admission-lifetime-checkpoint": "reference/tasks/native-tasks.md#selected-thread-observation-and-adoption",
+        "read-only-target-bound-project-resolution": "reference/tasks/native-tasks.md#project-selection-and-preferences",
+        "saved-chat-local-frame-and-cleanup-boundaries": "reference/tasks/native-tasks.md#experimental-saved-chatgpt-conversation",
+        "saved-chatgpt-route-qualification-backlog": "reference/tasks/native-tasks.md#experimental-saved-chatgpt-conversation",
+        "separately-granted-stored-task-metadata-discovery": "reference/tasks/native-tasks.md#separately-gated-controls",
+        "shared-proxy-inbound-framing": "reference/tasks/native-tasks.md#shared-host-requests-and-cleanup",
+        "stored-history-readtail-for-an-exact-selected-turn": "reference/tasks/native-tasks.md#selected-thread-observation-and-adoption",
+        "thread-wide-waiting-state": "reference/tasks/native-tasks.md#selected-thread-observation-and-adoption",
+        "two-different-destinations": "reference/tasks/native-tasks.md#route-status",
+        "unqualified-shared-observer-and-consent-prompts": "reference/tasks/native-tasks.md#shared-host-requests-and-cleanup"
+      },
+      "baseline_anchors": [
+        "canonical-checkout-plus-selected-writer-opt-in",
+        "first-codex-saved-project-task-slice",
+        "fresh-project-ensure-contract-checkpoint",
+        "immutable-saved-project-preference-handles",
+        "owned-proxy-cleanup-refusal-checkpoint",
+        "persistent-handoff-parity",
+        "private-ensure-journal-boundary",
+        "qualified-one-shot-task-name-update",
+        "read-admission-lifetime-checkpoint",
+        "read-only-target-bound-project-resolution",
+        "saved-chat-local-frame-and-cleanup-boundaries",
+        "saved-chatgpt-route-qualification-backlog",
+        "separately-granted-stored-task-metadata-discovery",
+        "shared-proxy-inbound-framing",
+        "stored-history-readtail-for-an-exact-selected-turn",
+        "thread-wide-waiting-state",
+        "two-different-destinations",
+        "unqualified-shared-observer-and-consent-prompts"
+      ]
     },
     "product-cutover.md": {
       "target": "maintenance/preview-cutover.md",
@@ -207,12 +427,27 @@
         "retirement-contract": "maintenance/preview-cutover.md#retirement-contract",
         "restore": "maintenance/preview-cutover.md#restore",
         "closed-computer-reconciliation": "maintenance/preview-cutover.md#closed-computer-reconciliation",
-        "source-and-evidence": "maintenance/preview-cutover.md#source-and-evidence"
-      }
+        "source-and-evidence": "maintenance/preview-cutover.md#source-and-evidence",
+        "closed-farol-product-cutover": "maintenance/preview-cutover.md",
+        "ordinary-dev-closed-recovery": "maintenance/preview-cutover.md#closed-computer-reconciliation",
+        "preconditions-and-order": "maintenance/preview-cutover.md#required-maintenance-window",
+        "rollback": "maintenance/preview-cutover.md#restore",
+        "what-preview-retirement-preserves": "maintenance/preview-cutover.md#retirement-contract"
+      },
+      "baseline_anchors": [
+        "closed-farol-product-cutover",
+        "ordinary-dev-closed-recovery",
+        "preconditions-and-order",
+        "rollback",
+        "what-preview-retirement-preserves"
+      ]
     },
     "setup-links.md": {
       "target": "reference/setup-links.md",
-      "sections": {}
+      "sections": {
+        "setup-links": "reference/setup-links.md"
+      },
+      "baseline_anchors": ["setup-links"]
     },
     "standalone-build.md": {
       "target": "development/setup.md",
@@ -223,8 +458,10 @@
         "verify-changes": "development/testing.md#source-gate",
         "build-and-launch-a-candidate": "development/packaging.md#build-a-candidate",
         "output-layout": "development/setup.md#output-layout",
-        "ci-and-local-hooks": "development/contributing.md#checks-and-review"
-      }
+        "ci-and-local-hooks": "development/contributing.md#checks-and-review",
+        "standalone-build-and-verification": "development/setup.md"
+      },
+      "baseline_anchors": ["standalone-build-and-verification"]
     },
     "status.md": {
       "target": "reference/status.md",
@@ -232,7 +469,8 @@
         "capability-boundaries": "reference/status.md#capability-boundaries",
         "what-verification-means": "reference/status.md#what-verification-means",
         "source-anchors": "reference/status.md#source-anchors"
-      }
+      },
+      "baseline_anchors": []
     },
     "testing.md": {
       "target": "development/testing.md",
@@ -242,8 +480,26 @@
         "native-lanes": "development/testing.md#native-lanes",
         "display-and-focus-policy": "development/testing.md#display-and-focus-policy",
         "disabled-routes-and-selected-journeys": "development/testing.md#disabled-routes-and-selected-journeys",
-        "reports-and-completeness": "development/testing.md#reports-and-completeness"
-      }
+        "reports-and-completeness": "development/testing.md#reports-and-completeness",
+        "a-new-case-is-declared-in-the-same-commit-that-records-it": "development/testing.md#reports-and-completeness",
+        "default-off-product-agent-acceptance": "development/testing.md#disabled-routes-and-selected-journeys",
+        "evidence-hierarchy": "development/testing.md#evidence-classes",
+        "farol-next-gui-test-policy": "development/testing.md",
+        "running-one-journey-instead-of-the-whole-lane": "development/testing.md#disabled-routes-and-selected-journeys",
+        "tests-that-need-the-bash-sandbox-disabled": "development/testing.md#native-lanes",
+        "when-a-late-harness-failure-is-not-a-product-failure": "development/testing.md#reports-and-completeness",
+        "why-hidden-evidence-is-still-valid": "development/testing.md#display-and-focus-policy"
+      },
+      "baseline_anchors": [
+        "a-new-case-is-declared-in-the-same-commit-that-records-it",
+        "default-off-product-agent-acceptance",
+        "evidence-hierarchy",
+        "farol-next-gui-test-policy",
+        "running-one-journey-instead-of-the-whole-lane",
+        "tests-that-need-the-bash-sandbox-disabled",
+        "when-a-late-harness-failure-is-not-a-product-failure",
+        "why-hidden-evidence-is-still-valid"
+      ]
     },
     "update-package-verifier.md": {
       "target": "reference/updates/verifier.md",
@@ -251,8 +507,10 @@
         "shared-verifier-different-admission": "reference/updates/verifier.md#shared-verifier-different-admission",
         "trusted-executable-and-inputs": "reference/updates/verifier.md#trusted-executable-and-inputs",
         "lifetime-and-physical-files": "reference/updates/verifier.md#lifetime-and-physical-files",
-        "verification-limits": "reference/updates/verifier.md#verification-limits"
-      }
+        "verification-limits": "reference/updates/verifier.md#verification-limits",
+        "installed-release-package-verification": "reference/updates/verifier.md"
+      },
+      "baseline_anchors": ["installed-release-package-verification"]
     }
   }
 }

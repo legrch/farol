@@ -1,6 +1,10 @@
+<a name="installed-farol-update-helper"></a>
+
 # Installed update helper
 
 This page has moved to [Installed update helper](reference/updates/helper.md).
+
+<a name="caller-contract"></a>
 
 ## Caller sequence
 
@@ -17,6 +21,8 @@ Read [Request and fixed locations](reference/updates/helper.md#request-and-fixed
 ## Atomic apply
 
 Read [Atomic apply](reference/updates/helper.md#atomic-apply).
+
+<a name="phases-and-recovery"></a>
 
 ## Exact-operation recovery and rollback
 

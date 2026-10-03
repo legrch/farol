@@ -12,8 +12,11 @@ compatibility routes, selected mirrored source facts, and literal command names.
 It makes no network requests and edits no files.
 
 [redirects.json](redirects.json) records the original flat page addresses and their
-canonical page/section destinations. Those Markdown compatibility pages remain
-clickable on GitHub; they are not server-side redirects.
+canonical page/section destinations. Its frozen `baseline_anchors` inventory
+comes from the named `compatibility_base` and also covers the original root README.
+Removing both an old anchor and its route still fails against that inventory.
+Those Markdown compatibility pages remain clickable on GitHub; they are not
+server-side redirects.
 
 The checker cannot certify external account access, live UI, diagram rendering,
 or semantic correctness. Follow the complete

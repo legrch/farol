@@ -1,3 +1,5 @@
+<a name="standalone-build-and-verification"></a>
+
 # Development and standalone builds
 
 This page has moved to [Development and standalone builds](development/setup.md).

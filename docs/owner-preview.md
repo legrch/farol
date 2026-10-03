@@ -1,6 +1,10 @@
+<a name="farol-owner-beta"></a>
+
 # Candidate launch and troubleshooting
 
 This page has moved to [Candidate launch and troubleshooting](development/packaging.md).
+
+<a name="open-it"></a>
 
 ## Open a packaged candidate
 
@@ -22,9 +26,27 @@ Read [If something goes wrong](guides/troubleshooting.md#find-the-problem).
 
 Read [Quit and state retention](reference/profiles.md#quit-and-state-retention).
 
+<a name="optional-local-promotion--owner-action-only"></a>
+
 ## Local promotion
 
 Read [Local promotion](development/packaging.md#establish-an-installed-baseline).
+
+## Product boundary
+
+Read [Product boundary](reference/status.md#capability-boundaries).
+
+## Setup access transitions and receipt timing
+
+Read [Setup access transitions and receipt timing](guides/folder-access.md#narrow-or-revoke-access).
+
+## Setup inside the app
+
+Read [Setup inside the app](start/first-connection.md#connect-chatgpt).
+
+## What the controls do
+
+Read [What the controls do](reference/shortcuts.md).
 
 ---
 

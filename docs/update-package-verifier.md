@@ -1,3 +1,5 @@
+<a name="installed-release-package-verification"></a>
+
 # Update package verification
 
 This page has moved to [Update package verification](reference/updates/verifier.md).

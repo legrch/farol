@@ -1,6 +1,10 @@
+<a name="farol-next-architecture"></a>
+
 # Architecture
 
 This page has moved to [Architecture](architecture/README.md).
+
+<a name="decision"></a>
 
 ## Running desktop
 
@@ -14,13 +18,21 @@ Read [Accepted migration target](architecture/migration.md#accepted-migration-ta
 
 Read [Product module ownership](architecture/migration.md#product-module-ownership).
 
+<a name="enforced-dependency-direction"></a>
+
+<a name="shared-infrastructure-decision"></a>
+
 ## Dependency rules
 
 Read [Dependency rules](architecture/boundaries.md#dependency-rules).
 
+<a name="isolation-and-evidence-boundary"></a>
+
 ## Authority and unknown outcomes
 
 Read [Authority and unknown outcomes](architecture/authority.md#authority-and-unknown-outcomes).
+
+<a name="native-surface-composition"></a>
 
 ## Browser overlays and isolation
 

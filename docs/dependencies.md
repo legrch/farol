@@ -1,3 +1,5 @@
+<a name="dependency-inventory"></a>
+
 # Dependencies
 
 This page has moved to [Dependencies](development/dependencies.md).

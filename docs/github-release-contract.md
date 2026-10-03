@@ -1,6 +1,10 @@
+<a name="github-release-discovery-contract"></a>
+
 # GitHub release contract
 
 This page has moved to [GitHub release contract](reference/updates/release.md).
+
+<a name="producer-contract"></a>
 
 ## Producer assets and identity
 
@@ -14,9 +18,13 @@ Read [Channel selection](reference/updates/release.md#channel-selection).
 
 Read [Pure application functions](reference/updates/release.md#pure-application-functions).
 
+<a name="consumer-api-and-adapter-duties"></a>
+
 ## HTTPS and staging adapter
 
 Read [HTTPS and staging adapter](reference/updates/release.md#https-and-staging-adapter).
+
+<a name="installed-composition"></a>
 
 ## Qualification
 

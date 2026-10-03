@@ -1,3 +1,5 @@
+<a name="owner-guard-startup-recovery"></a>
+
 # Owner guard and protected-path verification
 
 This page has moved to [Owner guard and protected-path verification](reference/owner-guard.md).

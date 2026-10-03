@@ -1,3 +1,5 @@
+<a name="farol-next-preview-design"></a>
+
 # Desktop design
 
 This page has moved to [Desktop design](architecture/desktop-design.md).
@@ -6,9 +8,13 @@ This page has moved to [Desktop design](architecture/desktop-design.md).
 
 Read [Product intent](architecture/desktop-design.md#product-intent).
 
+<a name="owner-selected-visual-direction-watch-rail"></a>
+
 ## Watch Rail
 
 Read [Watch Rail](architecture/desktop-design.md#watch-rail).
+
+<a name="native-browser-overlay-decision"></a>
 
 ## Native Browser overlays
 
@@ -17,6 +23,8 @@ Read [Native Browser overlays](architecture/desktop-design.md#native-browser-ove
 ## Interaction contract
 
 Read [Interaction contract](architecture/desktop-design.md#interaction-contract).
+
+<a name="review-checklist"></a>
 
 ## Verification
 

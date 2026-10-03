@@ -10,6 +10,8 @@ Read [Normal update](reference/updates/runtime.md#normal-update).
 
 Read [Accepted baseline and admission](reference/updates/runtime.md#accepted-baseline-and-admission).
 
+<a name="physical-staging-cleanup"></a>
+
 ## Download, preparation, and cleanup
 
 Read [Download, preparation, and cleanup](reference/updates/runtime.md#download-preparation-and-cleanup).
@@ -21,6 +23,8 @@ Read [Helper handoff and uncertainty](reference/updates/runtime.md#helper-handof
 ## Recovery and rollback
 
 Read [Recovery and rollback](reference/updates/runtime.md#recovery-and-rollback).
+
+<a name="closed-preview-repair"></a>
 
 ## Historical closed repair
 
