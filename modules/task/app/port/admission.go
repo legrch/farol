@@ -26,8 +26,34 @@ type CurrentBinding struct {
 // effect and cannot restore it from a cached snapshot or after restart.
 //
 // This is a required owner port, not a new grant issuer or lifecycle engine.
-// The current foundation has no production implementation; ordinary Chat turns
-// require the Chat owner's separate contract instead of this Task projection.
+// infra/repos/task owns the concrete lifecycle projection. Production still
+// requires a qualified durable AdmissionJournal and exclusive composition.
+// Ordinary Chat turns require the Chat owner's separate contract.
 type CurrentTaskAdmission interface {
 	WithCurrent(context.Context, func(*CurrentBinding) error) error
+}
+
+// AdmissionJournal extends the existing Task journal with an atomic revoke CAS.
+// Invalidate compares the complete task revision and admission binding, changes
+// only admission state to revoked, retains Pending/provider evidence/operations,
+// and increments revision. A failure may follow publication and never allows a
+// retry or positive admission. No method may acquire Computer or call providers.
+type AdmissionJournal interface {
+	Journal
+	Invalidate(context.Context, Snapshot) error
+}
+
+// SelectedJournal is one immutable trusted route on the task's owning journal.
+// Production NewOwned uses this SAME object for Task state and current admission;
+// boot must not substitute a cache, request-selected owner or another journal.
+type SelectedJournal interface {
+	Journal
+	CurrentTaskAdmission
+	Selection() CurrentBinding
+	// Fence closes this route in memory synchronously, without IO, after an
+	// unknown effect or persistence result. It cannot reopen through reads.
+	Fence()
+	// Revoke invalidates before durable IO; callers perform any separate
+	// Computer update only after this method releases the owner gate.
+	Revoke(context.Context) error
 }

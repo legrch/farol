@@ -1,7 +1,9 @@
 # Persistent coding tasks
 
 This is a root-compatible application-policy foundation based on accepted
-K0/K1 `acb131d9e7d483296d4edac262cf881cddfb91bb`. It is not wired into the shipping
+K0/K1 `acb131d9e7d483296d4edac262cf881cddfb91bb`. The selected lifecycle owner
+was prepared on source-only dependency `94c2beb1e81a08f7f36656d88fb4a59885ea5992`,
+which is not an accepted main/runtime checkpoint. This module is not wired into the shipping
 backend or MCP catalogue. No production filesystem journal, native provider
 transport, authority issuer or parent messenger is implemented by this slice.
 
@@ -51,35 +53,86 @@ the same dispatch.
 
 ## Selected current-task admission
 
-`contracts/admission` publishes a narrow synchronous inspection surface for an
-already admitted coding task. It delegates through `app/capabilities/admission`
-to the selected existing lifecycle owner. There is no Task grant engine,
-positive admission cache, native execution route or production owner in this
-checkpoint. The owner port is an explicit integration prerequisite.
+`infra/repos/task.Owner` is the concrete lifecycle/persistence publisher for one
+selected coding task. It wraps the existing Task journal port and adds atomic
+admission revoke through `port.AdmissionJournal.Invalidate`. The same selected
+`Route` is injected into `app/services/task.NewOwned` and the published
+`contracts/admission` controller. There is one owner per TaskID and backend/profile
+lifetime; all writes for that task must pass through it. This is an owner of Task
+state, with no Computer grant issuer or provider/process engine.
 
-Trusted composition selects the owner and exact immutable owner/session/task/
-epoch/participant/turn binding before native execution. `SessionID` here is the
-Farol authority session; Codex thread/turn and Claude session/invocation lineage
-are distinct facts. Caller request IDs, backend generation and call IDs provide
-correlation only. New turns need a fresh trusted selection after the existing
-owner settles its lifecycle transition; a request cannot remint admission.
+The trusted route binds owner/session/task/epoch/participant/Farol turn before
+the create or follow-up intention. `SessionID` here is the Farol authority
+session; Codex thread/turn and Claude session/invocation lineage are separate
+facts. IDs in a caller request, backend generations and call IDs never issue
+this selection. A follow-up requires a distinct trusted Farol turn and strictly
+newer existing admission epoch in the same owner/session/participant scope.
+This module validates that upstream identity; it does not generate an epoch or
+grant. Cross-session migration is not implemented.
 
-The Computer consumer must adapt this published DTO from `infra/peer`; Task
-imports no Computer internals. Ordinary Chat turns require the Chat owner's
-contract and route selection, not this delegated coding-task contract. Computer
-must never select an ambient latest task or use provider progress as permission.
-The callback API is an internal owner inspection, not another wire schema.
+The owning service prepares `Task.Admission` in the existing aggregate. Journal
+Admit atomically persists it with the complete intention and global operation
+binding. A positive projection is published only after that new launch intention
+has a known successful persistence acknowledgement. The provider effect has not
+necessarily settled at this point: native execution during the provider turn
+uses this admission, while the pending operation independently fences task
+redispatch. Reads, replay, lookup, status and provider progress never issue a
+positive projection. Old result identity remains retained during follow-up.
+Terminal/needs-input/refused state closes admission; a cancellation request
+revokes it without claiming provider termination. Unknown effect or persistence
+acknowledgement closes the owner before returning uncertainty.
 
-Lock order is Computer's qualified `AccessRepository.WithSnapshot`, then this
-owner's `WithCurrent`. WithCurrent entry and callback perform no IO, journal or
-provider reads, polling, native measurements, mutation or reentrancy. Task-held
-paths cannot acquire Computer. Completion/revoke invalidates admission under the
-existing owner gate and releases it before a separate Computer update. An
-unsettled durable transition must fence positive admission before possible
-effects and throughout restart reconciliation; memory fixtures do not prove that
-production obligation. Missing/revoked (`nil`) and unavailable (error) differ.
-The contract copies values and sanitizes owner errors; consumer callback refusals
-are preserved. No durable Journal adapter or boot registration is added here.
+All journal writes fence inspection before IO. The state gate is released during
+persistence; an unsettled write exposes unavailable. Completion and revoke
+invalidate the publication token, so a later successful callback cannot restore
+the previous positive binding. Revoke fences before waiting for an in-flight
+writer and then atomically changes only the admission field, preserving pending
+operation and provider/result evidence. A late Finish retains already durable
+revoke. Old routes cannot revoke or publish a newer turn. A failed revoke
+acknowledgement stays fenced and is not retried by this owner.
+
+Construction/restart begins with no positive admission even when durable state
+says active. Reconnect may read retained receipts/results but cannot restore
+native authority or active steering. A known terminal observation can close
+that retained state; a later properly selected follow-up can acquire admission
+through a fresh settled intention. Active-task restart reconciliation requires
+an accepted upstream authority/lifecycle decision and is not implemented here.
+The existing unowned `New` constructor remains policy/retained-observation only
+and cannot produce admission through the concrete selected journal. Zero
+admission fields remain omitted from legacy intention fingerprints.
+
+The callback path performs no journal/provider reads, native IO, polling or
+Computer calls. Its value is copied under the owner gate and inspected once
+synchronously. Missing/closed/revoked (`nil`) and unavailable (error) differ.
+The contract copies DTOs and sanitizes owner failures; callback refusals are
+preserved. Computer maps this published DTO in its consumer-owned `infra/peer`.
+Ordinary Chat turns use the separate Chat owner contract. Lock order remains
+Computer's qualified `AccessRepository.WithSnapshot` then Task `WithCurrent`.
+Neither callback may reenter/mutate an owner. Task releases its gate before a
+caller performs any separate Computer update; no Task-held path acquires
+Computer.
+
+`ExampleNewOwned` in `app/services/task/owner_test.go` is an executable composition
+path: selected owner route -> Task service plus admission controller -> published
+contract, false before launch / true during running / false after result. The
+memory journal/provider in that example prove source policy only. Production
+composition requires these explicit inputs from Core/Lead:
+
+1. One exclusive qualified durable `AdmissionJournal` for the approved profile
+   state. It must parse partial/corrupt data, enforce global operation binding and
+   revision/reference CAS, preserve terminal results by dispatch, and atomically
+   persist admission with intentions/receipts or revoke. Publication errors may
+   follow durable writes and must remain unknown. Memory fixtures prove none of
+   the filesystem ownership, mode, fsync, locking or crash-window obligations.
+2. One owner per TaskID with trusted selections from the existing authority
+   lifecycle; the same selected route for `NewOwned` and the admission contract.
+   No alternate/raw journal writers, cache, latest-task lookup or request owner
+   selection. Unknown/restart state needs explicit reconciliation before native
+   authority is accepted. `Authority.Recheck` must qualify the same saved
+   project/writer, physical roots, host/model binding and current upstream grant.
+3. Computer's published-contract peer mapping and exact route/lease composition,
+   with Computer calls only after Task gates are released. No production boot,
+   shared schema or catalogue registration is added by this Task slice.
 
 Provider progress uses a separate gate where lineage persistence is expected.
 Record callbacks are serialized, their first failure is sticky, and completion
@@ -88,6 +141,29 @@ write lineage. Providers still must join every callback before Dispatch returns;
 the gate is not evidence that a provider/process has terminated. A persistence
 acknowledgement loss or a refused receipt after lineage keeps the durable unknown
 fence, even when a provider ignores its callback error.
+
+## Provider adapter ownership
+
+`app/port.CodexClient` fixes the selected existing server seam for Create,
+Continue, Message, Cancel and Observe. `app/port.ClaudeHost` fixes Create,
+exact-session Resume, supported Cancel and Observe through the accepted owning
+native-process seam. Both receive the retained provider/project/writer/model/
+effort/config binding and stable operation ID in the existing Task dispatch DTO.
+Partial lineage and exact known/refused/unknown receipts use existing types.
+All progress callbacks must join before return; callbacks are not process exit
+or cleanup evidence. Supports reports qualified selected-host capabilities,
+including false for unsupported controls; versions/help are insufficient.
+
+Bounded adapter writers may own `infra/clients/codex/**` and
+`infra/clients/claude/**` separately after this shared port checkpoint is accepted.
+They implement `port.Provider` against their injected client/host and do not
+modify the common service, journal, intent, admission owner or shared schema.
+The Codex seam requires the selected already-running server, saved-project/model
+catalogue, approval handling and exact thread/turn correlation. The Claude seam
+requires accepted exact-session/invocation process ownership, startup/init/final
+and terminal exit/cleanup evidence; resume remains distinct from steering.
+Providing these ports does not qualify either host or authorize a second daemon,
+live inference, background session copy, alternate auth/HOME/model or retry.
 
 ## Existing source and catalogue inventory
 
@@ -156,17 +232,18 @@ accepted integration tree; it is absent at this checkpoint's base. Full CI/nativ
 GUI/package runs require the canonical Lead slot. Targeted Go checks do not
 qualify provider CLI/process behavior or replace full CI.
 
-| Evidence                              | Cases / limit                                                                                                                                                                                            |
-| ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Pure domain                           | Provider distinction, exact lineage extension, terminal/approval-blocked/unknown control policy                                                                                                          |
-| Fake provider + atomic memory journal | Bound create/replay, settings drift, concurrent claim, admission/provider/finish ACK loss, exact follow-up, unsupported control, cancellation requested vs terminal, revocation, result persistence loss |
-| Progress infra + admission contract   | Concurrent callback serialization, sticky publication failure, completion sealing, exact selected binding, absent vs unavailable, owner-gated revocation; no durable/native admission proof              |
-| Parent delivery                       | Completion alone does not send; exact parent, lost ACK, reconnect, different-key duplicate refusal                                                                                                       |
-| Real journal/native provider          | Not run; memory fixtures do not prove fsync, private file constraints, process cleanup, native session persistence or host capabilities                                                                  |
-| Packaged/installed workflow           | Not run; no catalogue restoration or live acceptance is claimed                                                                                                                                          |
+| Evidence                                  | Cases / limit                                                                                                                                                                                                  |
+| ----------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Pure domain                               | Provider distinction, exact lineage extension, terminal/approval-blocked/unknown control policy                                                                                                                |
+| Fake provider + atomic memory journal     | Bound create/replay, settings drift, concurrent claim, admission/provider/finish ACK loss, exact follow-up, unsupported control, cancellation requested vs terminal, revocation, result persistence loss       |
+| Progress infra + admission owner/contract | Callback serialization/sealing, settled launch publication, no-IO gate, blocked write/revoke, stale finish, exact follow-up selection, authority/ACK loss, restart/reconnect nonactivation; memory-only policy |
+| Parent delivery                           | Completion alone does not send; exact parent, lost ACK, reconnect, different-key duplicate refusal                                                                                                             |
+| Real journal/native provider              | Not run; memory fixtures do not prove fsync, private file constraints, process cleanup, native session persistence or host capabilities                                                                        |
+| Packaged/installed workflow               | Not run; no catalogue restoration or live acceptance is claimed                                                                                                                                                |
 
-Remaining Lead seams: concrete admitted Task lifecycle owner and the Computer
-peer/route composition; Computer authority/recheck and process ownership contracts; one durable task
+Remaining Lead seams: production durable backing/boot for the concrete Task
+lifecycle owner and Computer peer/route composition; Computer authority/recheck
+and process ownership contracts; one durable task
 journal adapter with typed partial/corrupt state and result retention; supported
 Codex connection to the selected existing server; exact persistent Claude
 process adapter; Task-only generated/MCP DTO mapping and production registration;
@@ -185,6 +262,7 @@ The two preparation commits are carried without other historical release work:
 uncertainty after recorded lineage. Its prior R3 delta review returned
 `INSUFFICIENT_EVIDENCE`; the original finding was assessed resolved, but durable
 Journal/downstream coverage remained insufficient. This checkpoint changes
-constructor/serialization and publishes a new contract; that old result does not
+constructor/serialization and publishes a new contract; the subsequent owner
+checkpoint changes admission persistence and revocation; that old result does not
 approve these bytes. New independent provider/Critic runs are fenced pending
 the Lead's accepted review/resource decision. Self-review is not panel acceptance.

@@ -41,7 +41,11 @@ type Admission struct {
 // follow publication. None authorize dispatch/replay. No timestamps/PID lock stealing.
 // Admit compares revision, rejects a pending intention, binds global operation ID
 // to the full intent digest, and serializes changes to one task. On Create it also
-// reserves TaskID. An existing identical operation is returned without claiming.
+// reserves TaskID. Admit also persists the prepared Task.Admission atomically
+// with the intention; for a continuation it preserves the old provider result.
+// An existing identical operation is returned without claiming. Finish persists
+// the final admission state with its receipt. Observe may close, never activate
+// admission; revoked state cannot be overwritten by late completion.
 // Progress extends only the pending operation's same-session lineage. For a new
 // continuation its new turn does not overwrite old retained result identity.
 // Finish stores the receipt and snapshot together and clears Pending only for a

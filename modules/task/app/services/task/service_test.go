@@ -61,6 +61,7 @@ func (j *fakeJournal) Admit(_ context.Context, i task.Intent, revision uint64, i
 	if !exists {
 		snapshot.Task = initial
 	}
+	snapshot.Task.Admission = initial.Admission
 	snapshot.Pending = i.OperationID
 	snapshot.Revision++
 	op := port.Operation{Intent: i, Receipt: task.Receipt{State: task.Uncertain}}
@@ -764,4 +765,20 @@ func TestConstructorRequiresProgressAndFingerprintOwners(t *testing.T) {
 			t.Fatalf("constructor: %+v %v", s, err)
 		}
 	}
+}
+
+func (j *fakeJournal) Invalidate(_ context.Context, before port.Snapshot) error {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	current, ok := j.tasks[before.Task.ID]
+	if !ok || current.Revision != before.Revision || current.Task.Admission.Binding != before.Task.Admission.Binding {
+		return task.ErrConflict
+	}
+	current.Task.Admission.State = task.AdmissionRevoked
+	current.Revision++
+	j.tasks[before.Task.ID] = current
+	if j.failFinish {
+		return errors.New("lost revoke acknowledgement")
+	}
+	return nil
 }

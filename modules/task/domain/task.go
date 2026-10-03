@@ -113,6 +113,7 @@ func (c Capabilities) Supports(a Action) bool {
 }
 
 type Task struct {
+	Admission ExecutionAdmission
 	ID        string
 	Binding   Binding
 	Parent    Parent
@@ -141,6 +142,8 @@ func (t Task) Allows(a Action, c Capabilities) bool {
 }
 
 type Intent struct {
+	// Omit zero to preserve fingerprints of the existing unowned preparation.
+	Admission                   AdmissionBinding `json:",omitzero"`
 	OperationID, TaskID, Digest string
 	Action                      Action
 	Binding                     Binding

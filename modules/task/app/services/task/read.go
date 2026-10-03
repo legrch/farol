@@ -48,6 +48,7 @@ func (s *Service) Status(ctx context.Context, req StatusRequest) (*StatusRespons
 			return nil, task.ErrIdentity
 		}
 		current.Lifecycle, current.Result = observation.Lifecycle, observation.Result
+		closeAdmission(&current)
 		if s.journal.Observe(ctx, *snapshot, current) != nil {
 			return nil, task.ErrUnknown
 		}

@@ -16,6 +16,8 @@ type Service struct {
 	delivery    port.Delivery
 	fingerprint port.Fingerprint
 	progress    port.ProgressFactory
+	owned       port.SelectedJournal
+	selected    task.AdmissionBinding
 }
 
 func New(j port.Journal, a port.Authority, providers map[task.Provider]port.Provider, d port.Delivery, fingerprint port.Fingerprint, progress port.ProgressFactory) (*Service, error) {
@@ -26,7 +28,7 @@ func New(j port.Journal, a port.Authority, providers map[task.Provider]port.Prov
 	for k, v := range providers {
 		copy[k] = v
 	}
-	return &Service{j, a, copy, d, fingerprint, progress}, nil
+	return &Service{journal: j, authority: a, providers: copy, delivery: d, fingerprint: fingerprint, progress: progress}, nil
 }
 
 type ResolveRequest struct{ Selection port.Selection }
@@ -107,8 +109,12 @@ func (s *Service) execute(ctx context.Context, req MutationRequest, intent task.
 	if err := s.recheck(ctx, intent.Binding); err != nil {
 		return nil, err
 	}
+	prepared, err := s.prepareAdmission(before.Task, &intent)
+	if err != nil {
+		return nil, err
+	}
 	intent.Digest = s.digest(intent, req.Message)
-	admitted, err := s.journal.Admit(ctx, intent, before.Revision, before.Task)
+	admitted, err := s.journal.Admit(ctx, intent, before.Revision, prepared)
 	if err != nil {
 		return nil, task.ErrUnknown
 	}
@@ -129,10 +135,11 @@ func (s *Service) execute(ctx context.Context, req MutationRequest, intent task.
 	// Recheck after durable admission and directly before the one effect call.
 	if err := s.recheck(ctx, intent.Binding); err != nil {
 		receipt := task.Receipt{State: task.Rejected, Code: "TASK_AUTHORITY_REFUSED"}
-		next := before.Task
+		next := prepared
 		if req.Action == task.Create {
 			next.Lifecycle = task.Refused
 		}
+		closeAdmission(&next)
 		if s.journal.Finish(ctx, intent.OperationID, receipt, next) != nil {
 			return unknown, nil
 		}
@@ -146,15 +153,18 @@ func (s *Service) execute(ctx context.Context, req MutationRequest, intent task.
 			(req.Action != task.Create && !intent.Expected.SameSession(ref, intent.Binding.Provider)) ||
 			((req.Action == task.Message || req.Action == task.Cancel) && ref != intent.Expected) ||
 			((req.Action == task.Continue || req.Action == task.Resume) && ref == intent.Expected) {
+			s.fence()
 			return task.ErrIdentity
 		}
 		if err := s.journal.Progress(ctx, intent.OperationID, ref); err != nil {
+			s.fence()
 			return err
 		}
 		lineage = ref
 		return nil
 	})
 	if progress == nil {
+		s.fence()
 		return unknown, nil
 	}
 	receipt, err := provider.Dispatch(ctx, port.Dispatch{Intent: intent, Message: req.Message}, func(ref task.Reference) error {
@@ -170,12 +180,15 @@ func (s *Service) execute(ctx context.Context, req MutationRequest, intent task.
 		return nil
 	})
 	if err != nil || receipt.State == task.Uncertain || progressErr != nil {
+		s.fence()
 		return unknown, nil
 	}
-	next, err := apply(before.Task, intent, receipt)
+	next, err := apply(prepared, intent, receipt)
 	if err != nil {
+		s.fence()
 		return unknown, nil
 	}
+	closeAdmission(&next)
 	if s.journal.Finish(ctx, intent.OperationID, receipt, next) != nil {
 		return unknown, nil
 	}
@@ -233,7 +246,12 @@ func classifiedRead(err error) error {
 
 func (s *Service) recheck(ctx context.Context, binding task.Binding) error {
 	if err := ctx.Err(); err != nil {
+		s.fence()
 		return err
 	}
-	return s.authority.Recheck(ctx, binding)
+	err := s.authority.Recheck(ctx, binding)
+	if err != nil {
+		s.fence()
+	}
+	return err
 }
