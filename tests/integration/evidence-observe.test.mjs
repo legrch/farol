@@ -245,12 +245,15 @@ describe("EV-03/EV-08 effect observer", () => {
       { stdio: "ignore" },
     );
     children.push(child);
+    // Subscribe before any await: under load this short-lived child can exit
+    // while the observer samples or the byproduct write is still pending.
+    const childClosed = new Promise((resolve) => child.once("close", resolve));
     await new Promise((resolve) => setTimeout(resolve, 400));
     await fs.writeFile(
       path.join(attempt.directory, "report.json"),
       JSON.stringify({ status: "PASS" }),
     );
-    await new Promise((resolve) => child.once("exit", resolve));
+    await childClosed;
     await attempt.finish("PASS", {
       cases: [...EVIDENCE_LANES["sealed-package"].cases],
     });
