@@ -843,3 +843,76 @@ export async function inspectCodexProjectTasksHostContract(
     schemaSha256: digest.digest("hex"),
   };
 }
+
+export type CodexFollowupSchemaWitness = Readonly<{
+  kind: "codex-followup-schema/v1";
+  protocol: "codex-app-server/v2";
+  baseSchemaSha256: string;
+  schemaSha256: string;
+}>;
+
+/** Independent source evidence for completed-parent follow-up; no serving grant. */
+export async function inspectCodexFollowupHostContract(
+  root: string,
+  versionOutput: string,
+): Promise<CodexFollowupSchemaWitness> {
+  const base = await inspectCodexHandoffHostContract(root, versionOutput);
+  const names = [
+    "ClientRequest.json",
+    "v2/ThreadTurnsListParams.json",
+    "v2/ThreadTurnsListResponse.json",
+    "v2/TurnStartParams.json",
+    "v2/TurnStartResponse.json",
+  ] as const;
+  const entries = await Promise.all(
+    names.map(async (name) => ({
+      name,
+      ...(await readSchemaFile(root, name)),
+    })),
+  );
+  const schemas = new Map(entries.map((entry) => [entry.name, entry.value]));
+  const client = schemas.get("ClientRequest.json");
+  const turns = schemas.get("v2/ThreadTurnsListParams.json");
+  if (
+    !hasRequestMethod(
+      client,
+      "thread/turns/list",
+      "ThreadTurnsListParams",
+      turns,
+    ) ||
+    !hasRequestMethod(
+      client,
+      "turn/start",
+      "TurnStartParams",
+      schemas.get("v2/TurnStartParams.json"),
+    ) ||
+    !hasShape(
+      child(turns, "properties", "sortDirection"),
+      "nullable-ref:SortDirection",
+    ) ||
+    !hasEnumValues(child(turns, "definitions", "SortDirection"), "desc")
+  )
+    contractError("CODEX_HOST_FOLLOWUP_UNAVAILABLE");
+  // Refuse mixed snapshots. This does not certify a running provider or account.
+  const after = await inspectCodexHandoffHostContract(root, versionOutput);
+  if (after.schemaSha256 !== base.schemaSha256)
+    contractError("CODEX_HOST_FOLLOWUP_UNAVAILABLE");
+  const kind = "codex-followup-schema/v1" as const;
+  const digest = createHash("sha256");
+  digest.update(kind);
+  digest.update("\0");
+  digest.update(base.schemaSha256);
+  digest.update("\0");
+  for (const entry of entries) {
+    digest.update(entry.name);
+    digest.update("\0");
+    digest.update(entry.bytes);
+    digest.update("\0");
+  }
+  return {
+    kind,
+    protocol: base.protocol,
+    baseSchemaSha256: base.schemaSha256,
+    schemaSha256: digest.digest("hex"),
+  };
+}

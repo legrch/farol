@@ -15,7 +15,7 @@ import (
 
 // Selection is supplied by the trusted composition from the current selected
 // route and qualified host schema. Paths are never discovered by this adapter.
-// Schema evidence does not identify an account or qualify control capabilities.
+// Its baseline schema digest does not identify an account or qualify follow-up.
 type Selection struct {
 	Binding                                                                      task.Binding
 	ExecutablePath, ExecutableSHA256, SocketPath, ExpectedCodexHome, ScratchRoot string
@@ -39,10 +39,34 @@ type Process interface {
 	Wait(context.Context) error
 }
 
+// FollowupSchemaKind names the independent source witness emitted by
+// inspectCodexFollowupHostContract. The baseline create/status digest is not it.
+const FollowupSchemaKind = "codex-followup-schema/v1"
+
+type FollowupSchemaWitness struct {
+	Kind, Protocol, BaseSchemaSHA256, SchemaSHA256 string
+}
+
+// FollowupQualification is supplied only by trusted composition. It binds the
+// separate schema witness to the whole immutable selection and grant lifetime.
+// It neither issues admission nor attests live account/permission support.
+type FollowupQualification struct {
+	Selection Selection
+	Witness   FollowupSchemaWitness
+}
+
+func (q FollowupQualification) valid(s Selection) bool {
+	w := q.Witness
+	return q.Selection == s && w.Kind == FollowupSchemaKind && w.Protocol == s.Protocol &&
+		w.BaseSchemaSHA256 == s.SchemaSHA256 && digest(w.SchemaSHA256) && w.SchemaSHA256 != s.SchemaSHA256
+}
+
 type Options struct {
 	Selection Selection
-	Boundary  Boundary
-	Now       func() time.Time
+	// Zero leaves Continue unsupported. A nonzero value must match Selection.
+	Followup FollowupQualification
+	Boundary Boundary
+	Now      func() time.Time
 	// Recheck must use the owning current grant and selected route/config/host
 	// generations, not only Selection.ExpiresAt or the model policy digest.
 	Recheck func(context.Context, task.Binding) error

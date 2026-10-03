@@ -15,6 +15,7 @@ import (
 
 type Client struct {
 	selection  Selection
+	followup   FollowupQualification
 	boundary   Boundary
 	now        func() time.Time
 	recheck    func(context.Context, task.Binding) error
@@ -33,11 +34,11 @@ type Client struct {
 // explicitly invoked. Use NativeBoundary for production and an injected pipe
 // boundary for hermetic source tests. The current grant checker is mandatory.
 func New(o Options) (*Client, error) {
-	if !o.Selection.valid() || o.Boundary == nil || o.Now == nil || o.Recheck == nil {
+	if !o.Selection.valid() || o.Boundary == nil || o.Now == nil || o.Recheck == nil || (o.Followup != (FollowupQualification{}) && !o.Followup.valid(o.Selection)) {
 		return nil, task.ErrInvalid
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	return &Client{selection: o.Selection, boundary: o.Boundary, now: o.Now, recheck: o.Recheck, gate: make(chan struct{}, 1), used: make(map[string][32]byte), lifetime: ctx, cancel: cancel}, nil
+	return &Client{selection: o.Selection, followup: o.Followup, boundary: o.Boundary, now: o.Now, recheck: o.Recheck, gate: make(chan struct{}, 1), used: make(map[string][32]byte), lifetime: ctx, cancel: cancel}, nil
 }
 
 func (c *Client) enter(parent context.Context) (context.Context, func(), error) {
@@ -170,7 +171,7 @@ func (c *Client) Supports(parent context.Context, b task.Binding) (task.Capabili
 	if _, err := c.qualify(ctx); err != nil {
 		return task.Capabilities{}, err
 	}
-	return task.Capabilities{Create: true}, nil
+	return task.Capabilities{Create: true, Continue: c.followup.valid(c.selection)}, nil
 }
 
 func refused(code string) task.Receipt {
@@ -417,9 +418,6 @@ func (c *Client) readFinal(ctx context.Context, ref task.Reference) (string, err
 	return "", protocolError()
 }
 
-func (*Client) Continue(context.Context, port.Dispatch, func(task.Reference) error) (task.Receipt, error) {
-	return refused("TASK_CONTROL_NOT_QUALIFIED"), task.ErrUnsupported
-}
 func (*Client) Message(context.Context, port.Dispatch, func(task.Reference) error) (task.Receipt, error) {
 	return refused("TASK_CONTROL_NOT_QUALIFIED"), task.ErrUnsupported
 }
@@ -428,7 +426,7 @@ func (*Client) Cancel(context.Context, port.Dispatch, func(task.Reference) error
 }
 
 // The same producer can be injected into the Task Provider port without a
-// second dispatch/journal owner. Controls keep their explicit unsupported state.
+// second dispatch/journal owner. Active controls remain explicitly unsupported.
 func (c *Client) Dispatch(ctx context.Context, d port.Dispatch, progress func(task.Reference) error) (task.Receipt, error) {
 	switch d.Intent.Action {
 	case task.Create:

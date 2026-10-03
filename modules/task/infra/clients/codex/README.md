@@ -14,8 +14,9 @@ Schema evidence and initialize home/platform checks do not identify an account
 or prove Codex Desktop visibility. No live installed capability is claimed here.
 
 `Supports` performs fresh project/model catalogue checks on one connection and
-advertises only create. An effort-capable model requires the resolved binding's
-explicit effort; the client never rewrites the binding with a guessed default.
+advertises create. Continue additionally requires the independent bound witness
+described below; an ordinary create/status selection leaves it unsupported.
+An effort-capable model requires the resolved binding's explicit effort; the client never rewrites the binding with a guessed default.
 Create reserves its bounded local operation fence before qualification, sends
 one `thread/start`, publishes its verified lineage, then sends one `turn/start`
 and publishes the full reference. The owning Task journal must persist intent
@@ -36,7 +37,37 @@ malformed data, cursor cycles, partial results and changed grant/connection epoc
 are unknown. Observation never settles a pending mutation or issues admission.
 Provider terminal evidence and parent delivery acknowledgement remain separate.
 
-Message, continue and cancel explicitly return unsupported. No turn interrupt,
+Completed-parent follow-up uses `Task.Continue`, never `Message`. Trusted boot
+must supply `Options.Followup` with a `codex-followup-schema/v1` witness from
+`inspectCodexFollowupHostContract`. Its independent digest covers the descending
+`thread/turns/list` sort direction as well as the baseline handoff snapshot. The
+baseline create/status digest alone cannot qualify follow-up. Qualification is
+bound to the whole immutable selection, including executable, schema, host,
+profile, saved project, physical writer, model/effort, policies and grant times.
+This value is trusted composition evidence, not live permission or account proof.
+
+The owning Task service must persist a new durable intent, select a strictly
+higher Task epoch and a different Farol turn through existing trusted admission.
+The producer requires valid task-bound admission, but cannot prove advancement
+from a dispatch alone; use the owning service/journal, not a direct MCP shortcut.
+It does not alter selection, issue a grant, revive old admission or settle pending
+work. If the current grant's recheck is tied to an old closed Farol turn, boot must
+explicitly select a fresh client/grant lifetime for the known terminal task and
+new admission. That is a concrete composition requirement, not automatic client
+replacement. Never replace a client to replay a pending/unknown operation, recover
+a refused launch, reconnect a lost transport, or bypass a denial.
+
+Continue verifies the same project/writer/model-bound thread and the exact latest
+completed parent using descending history. It sends exactly one `turn/start` on
+that thread, with pinned model/effort and policy, publishes the new exact pair,
+and requires the history prefix to be `[new turn, completed parent]` before a known
+ACK. Failed or interrupted parents remain unsupported by this first slice even
+though the neutral Task model allows them. The vendor method has no parent CAS;
+a concurrent mutation or contradictory post-effect history becomes sticky unknown.
+Partial/lost ACKs, persistence callback failure and post-effect grant/epoch changes
+retain available lineage and fence all later mutations. No reconnect is attempted.
+
+Message and cancel explicitly return unsupported. No turn interrupt,
 active steering or consent ownership is qualified by this slice. Consent requests
 on the shared connection are left unanswered, without retaining their payload.
 Other server requests receive only the existing unsupported-method response.
@@ -57,3 +88,7 @@ production client and WebSocket/RPC implementation but prove no actual host,
 socket, subscription, installed catalogue, process cleanup or provider operation.
 Boot/MCP registration, accepted integration, schema/host qualification, native
 tests and bounded live create/follow-up acceptance remain with Lead.
+
+The follow-up slice is source-only and unaccepted on its delegated base. Its
+hermetic tests do not qualify installed schema, real parent delivery, lost-ACK
+recovery or a production tool catalogue. Those gates and integration remain Lead-owned.

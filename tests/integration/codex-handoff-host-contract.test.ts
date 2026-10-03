@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
   inspectCodexHandoffHostContract,
+  inspectCodexFollowupHostContract,
   inspectCodexTaskTitleHostContract,
   inspectCodexProjectTasksHostContract,
 } from "../../src/apps/desktop/codex-host-contract";
@@ -978,5 +979,114 @@ describe("installed Codex saved-project handoff schema", () => {
     await expect(
       inspectCodexHandoffHostContract(root, "codex-cli 0.153.4"),
     ).rejects.toThrow("CODEX_HOST_SCHEMA_UNSAFE");
+  });
+});
+
+async function followupSchemaRoot(): Promise<string> {
+  const root = await schemaRoot();
+  await changeSchema(root, "v2/ThreadTurnsListParams.json", (schema) => {
+    schema.properties.sortDirection = nullableRef("SortDirection");
+    schema.definitions.SortDirection = {
+      type: "string",
+      enum: ["asc", "desc"],
+    };
+  });
+  await changeSchema(root, "ClientRequest.json", (schema) => {
+    schema.definitions.ThreadTurnsListParams.properties.sortDirection =
+      nullableRef("SortDirection");
+  });
+  return root;
+}
+
+describe("independent completed-parent follow-up schema witness", () => {
+  it("leaves baseline create/status valid without qualifying descending follow-up", async () => {
+    const root = await schemaRoot();
+    await expect(
+      inspectCodexHandoffHostContract(root, "codex-cli 0.200.0"),
+    ).resolves.toMatchObject({ projectBoundCreateStatus: true });
+    await expect(
+      inspectCodexFollowupHostContract(root, "codex-cli 0.200.0"),
+    ).rejects.toThrow("CODEX_HOST_FOLLOWUP_UNAVAILABLE");
+  });
+
+  it("names a separate stable digest bound to the baseline snapshot", async () => {
+    const root = await followupSchemaRoot();
+    const base = await inspectCodexHandoffHostContract(
+      root,
+      "codex-cli 0.200.0",
+    );
+    const witness = await inspectCodexFollowupHostContract(
+      root,
+      "codex-cli 0.200.0",
+    );
+    expect(witness).toEqual({
+      kind: "codex-followup-schema/v1",
+      protocol: "codex-app-server/v2",
+      baseSchemaSha256: base.schemaSha256,
+      schemaSha256: expect.stringMatching(/^[0-9a-f]{64}$/u),
+    });
+    expect(witness.schemaSha256).not.toBe(base.schemaSha256);
+    expect(
+      await inspectCodexFollowupHostContract(root, "codex-cli 0.200.0"),
+    ).toEqual(witness);
+  });
+
+  it.each([
+    "missing",
+    "wrong-shape",
+    "no-desc",
+    "wrong-enum-type",
+    "missing-definition",
+    "client-mismatch",
+  ])("refuses %s sort direction evidence", async (mode) => {
+    const root = await followupSchemaRoot();
+    const mutate = (schema: Record<string, any>) => {
+      if (mode === "missing") delete schema.properties.sortDirection;
+      if (mode === "wrong-shape")
+        schema.properties.sortDirection = typed("string");
+      if (mode === "no-desc") schema.definitions.SortDirection.enum = ["asc"];
+      if (mode === "wrong-enum-type")
+        schema.definitions.SortDirection.type = "integer";
+      if (mode === "missing-definition")
+        delete schema.definitions.SortDirection;
+    };
+    await changeSchema(root, "v2/ThreadTurnsListParams.json", mutate);
+    await changeSchema(root, "ClientRequest.json", (schema) => {
+      if (mode === "client-mismatch") {
+        delete schema.definitions.ThreadTurnsListParams.properties
+          .sortDirection;
+        return;
+      }
+      const standalone = {
+        ...schema.definitions.ThreadTurnsListParams,
+        definitions: schema.definitions,
+      };
+      mutate(standalone);
+    });
+    await expect(
+      inspectCodexFollowupHostContract(root, "codex-cli 0.200.0"),
+    ).rejects.toThrow(/CODEX_HOST_(HANDOFF|FOLLOWUP)_UNAVAILABLE/u);
+  });
+
+  it("changes its digest when response bytes or the baseline change", async () => {
+    const root = await followupSchemaRoot();
+    const before = await inspectCodexFollowupHostContract(
+      root,
+      "codex-cli 0.200.0",
+    );
+    await changeSchema(root, "v2/TurnStartResponse.json", (schema) => {
+      schema.description = "source fixture revision";
+    });
+    const after = await inspectCodexFollowupHostContract(
+      root,
+      "codex-cli 0.200.0",
+    );
+    expect(after.baseSchemaSha256).not.toBe(before.baseSchemaSha256);
+    expect(after.schemaSha256).not.toBe(before.schemaSha256);
+    const version = await inspectCodexFollowupHostContract(
+      root,
+      "codex-cli 0.200.1",
+    );
+    expect(version.schemaSha256).not.toBe(after.schemaSha256);
   });
 });
