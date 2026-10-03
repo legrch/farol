@@ -1,0 +1,352 @@
+package archive
+
+import (
+	"archive/zip"
+	"bytes"
+	"hash/crc32"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"testing"
+)
+
+func positions(data []byte) (central, end, local int) {
+	end = len(data) - 22
+	central = int(u32(data[end:], 16))
+	local = int(u32(data[central:], 42))
+	return
+}
+
+func TestDirectoryStreamsBeforeExtraction(t *testing.T) {
+	for _, tt := range []struct {
+		name, code string
+		entry      fixtureEntry
+		mutate     func([]byte)
+	}{
+		{"stored empty", "", fixtureEntry{}, nil},
+		{"deflated empty", "", fixtureEntry{method: 8}, nil},
+		{"signed descriptor", "", fixtureEntry{method: 8, flags: 8}, nil},
+		{"unsigned descriptor", "", fixtureEntry{method: 8, flags: 8, unsignedDescriptor: true}, nil},
+		{"empty CRC mismatch", "ARCHIVE_CRC_INVALID", fixtureEntry{}, func(b []byte) {
+			c, _, l := positions(b)
+			put32(b, c+16, 1)
+			put32(b, l+14, 1)
+		}},
+		{"malformed deflate", "ARCHIVE_READ_INVALID", fixtureEntry{method: 8}, func(b []byte) {
+			_, _, l := positions(b)
+			b[l+30+len(previewApp+"/dir/")] = 7 // Reserved DEFLATE block type.
+		}},
+		{"stored data declared empty", "ARCHIVE_READ_INVALID", fixtureEntry{data: []byte("x")}, func(b []byte) {
+			c, _, l := positions(b)
+			put32(b, c+24, 0)
+			put32(b, l+22, 0)
+		}},
+		{"deflated data declared empty", "ARCHIVE_READ_INVALID", fixtureEntry{data: []byte("x"), method: 8}, func(b []byte) {
+			c, _, l := positions(b)
+			put32(b, c+24, 0)
+			put32(b, l+22, 0)
+		}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			entry := tt.entry
+			entry.name, entry.mode = previewApp+"/dir/", 0040700
+			data := makeArchive(t, append([]fixtureEntry{entry}, baseEntries()...))
+			if tt.mutate != nil {
+				tt.mutate(data)
+			}
+			if _, err := admitDirectory(bytes.NewReader(data), int64(len(data))); err != nil {
+				t.Fatalf("fixture metadata must pass admission: %v", err)
+			}
+			f := newFixture(t, data)
+			archive, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			stage, err := openStage(f.stage)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = preflight(archive, stage)
+			stage.close()
+			if tt.code != "" {
+				requireRefusal(t, err, tt.code)
+			} else if err != nil {
+				t.Fatalf("valid empty directory refused: %v", err)
+			}
+			requireEmpty(t, f.stage)
+			_, err = Run(f.args)
+			if tt.code != "" {
+				requireRefusal(t, err, tt.code)
+				requireEmpty(t, f.stage)
+			} else if err != nil {
+				t.Fatalf("valid empty directory extraction failed: %v", err)
+			}
+		})
+	}
+}
+
+func TestDataDescriptorForms(t *testing.T) {
+	// This real payload's CRC equals the optional descriptor signature. Its
+	// unsigned descriptor must be interpreted using central metadata, not magic.
+	markerPayload := []byte{0xac, 0x0a, 0x7a, 0xd5}
+	if crc32.ChecksumIEEE(markerPayload) != 0x08074b50 {
+		t.Fatal("marker CRC fixture changed")
+	}
+	for _, unsigned := range []bool{false, true} {
+		for _, payload := range [][]byte{[]byte("ordinary payload"), markerPayload} {
+			label := strconv.FormatBool(unsigned) + "/" + strconv.FormatUint(uint64(crc32.ChecksumIEEE(payload)), 16)
+			t.Run(label, func(t *testing.T) {
+				entry := fixtureEntry{name: previewApp + "/descriptor", data: payload, flags: 8, unsignedDescriptor: unsigned}
+				data := makeArchive(t, withEntry(entry))
+				if _, err := admitDirectory(bytes.NewReader(data), int64(len(data))); err != nil {
+					t.Fatalf("valid descriptor refused: %v", err)
+				}
+				f := newFixture(t, data)
+				if _, err := Run(f.args); err != nil {
+					t.Fatalf("valid payload refused after admission: %v", err)
+				}
+				got, err := os.ReadFile(filepath.Join(f.stage, previewApp, "descriptor"))
+				if err != nil || !bytes.Equal(got, payload) {
+					t.Fatalf("extracted payload changed: %x %v", got, err)
+				}
+				for _, field := range []int{0, 4, 8} {
+					t.Run("mismatch-"+strconv.Itoa(field), func(t *testing.T) {
+						bad := append([]byte(nil), data...)
+						central, _, _ := positions(bad)
+						descriptorStart := central - 16
+						if unsigned {
+							descriptorStart = central - 12
+						} else {
+							descriptorStart += 4
+						}
+						bad[descriptorStart+field] ^= 1
+						f := newFixture(t, bad)
+						_, err := Run(f.args)
+						code := "ARCHIVE_HEADER_INVALID"
+						// This malformed unsigned layout also resembles a signed
+						// descriptor truncated at the central-directory boundary.
+						if unsigned && crc32.ChecksumIEEE(payload) == 0x08074b50 && field != 0 {
+							code = "ARCHIVE_DIRECTORY_INVALID"
+						}
+						requireRefusal(t, err, code)
+						requireEmpty(t, f.stage)
+					})
+				}
+				t.Run("bad-payload", func(t *testing.T) {
+					bad := append([]byte(nil), data...)
+					central, _, _ := positions(bad)
+					dataEnd := central - 16
+					if unsigned {
+						dataEnd = central - 12
+					}
+					bad[dataEnd-len(payload)] ^= 1
+					f := newFixture(t, bad)
+					_, err := Run(f.args)
+					requireRefusal(t, err, "ARCHIVE_CRC_INVALID")
+					requireEmpty(t, f.stage)
+				})
+			})
+		}
+	}
+}
+
+func TestMaliciousHeadersBeforeExtraction(t *testing.T) {
+	tests := []struct {
+		name, code string
+		mutate     func([]byte) []byte
+	}{
+		{"lying count", "ARCHIVE_ENTRY_COUNT_INVALID", func(b []byte) []byte { _, e, _ := positions(b); put16(b, e+8, 1); put16(b, e+10, 1); return b }},
+		{"zero count", "ARCHIVE_ENTRY_COUNT_INVALID", func(b []byte) []byte { _, e, _ := positions(b); put16(b, e+8, 0); put16(b, e+10, 0); return b }},
+		{"central byte budget", "ARCHIVE_CENTRAL_DIRECTORY_LIMIT", func(b []byte) []byte { _, e, _ := positions(b); put32(b, e+12, 32*1024*1024); return b }},
+		{"zero central length", "ARCHIVE_CENTRAL_DIRECTORY_LIMIT", func(b []byte) []byte { _, e, _ := positions(b); put32(b, e+12, 0); return b }},
+		{"end count sentinel", "ARCHIVE_ZIP64_UNSUPPORTED", func(b []byte) []byte { _, e, _ := positions(b); put16(b, e+8, 65535); put16(b, e+10, 65535); return b }},
+		{"end length sentinel", "ARCHIVE_ZIP64_UNSUPPORTED", func(b []byte) []byte { _, e, _ := positions(b); put32(b, e+12, 0xffffffff); return b }},
+		{"end offset sentinel", "ARCHIVE_ZIP64_UNSUPPORTED", func(b []byte) []byte { _, e, _ := positions(b); put32(b, e+16, 0xffffffff); return b }},
+		{"multidisk", "ARCHIVE_MULTIDISK_UNSUPPORTED", func(b []byte) []byte { _, e, _ := positions(b); put16(b, e+4, 1); return b }},
+		{"multidisk central", "ARCHIVE_MULTIDISK_UNSUPPORTED", func(b []byte) []byte { c, _, _ := positions(b); put16(b, c+34, 1); return b }},
+		{"central compressed sentinel", "ARCHIVE_ZIP64_UNSUPPORTED", func(b []byte) []byte { c, _, _ := positions(b); put32(b, c+20, 0xffffffff); return b }},
+		{"central expanded sentinel", "ARCHIVE_ZIP64_UNSUPPORTED", func(b []byte) []byte { c, _, _ := positions(b); put32(b, c+24, 0xffffffff); return b }},
+		{"central offset sentinel", "ARCHIVE_ZIP64_UNSUPPORTED", func(b []byte) []byte { c, _, _ := positions(b); put32(b, c+42, 0xffffffff); return b }},
+		{"local compressed sentinel", "ARCHIVE_ZIP64_UNSUPPORTED", func(b []byte) []byte { _, _, l := positions(b); put32(b, l+18, 0xffffffff); return b }},
+		{"local expanded sentinel", "ARCHIVE_ZIP64_UNSUPPORTED", func(b []byte) []byte { _, _, l := positions(b); put32(b, l+22, 0xffffffff); return b }},
+		{"bad central signature", "ARCHIVE_DIRECTORY_INVALID", func(b []byte) []byte { c, _, _ := positions(b); b[c] = 0; return b }},
+		{"bad local signature", "ARCHIVE_DIRECTORY_INVALID", func(b []byte) []byte { _, _, l := positions(b); b[l] = 0; return b }},
+		{"local filename mismatch", "ARCHIVE_HEADER_INVALID", func(b []byte) []byte { _, _, l := positions(b); b[l+30] = 'x'; return b }},
+		{"local compression mismatch", "ARCHIVE_HEADER_INVALID", func(b []byte) []byte { _, _, l := positions(b); put16(b, l+8, 8); return b }},
+		{"local encryption", "ARCHIVE_ENCRYPTED", func(b []byte) []byte { _, _, l := positions(b); put16(b, l+6, 1); return b }},
+		{"local CRC mismatch", "ARCHIVE_HEADER_INVALID", func(b []byte) []byte { _, _, l := positions(b); put32(b, l+14, 0); return b }},
+		{"local size mismatch", "ARCHIVE_HEADER_INVALID", func(b []byte) []byte { _, _, l := positions(b); put32(b, l+22, 100); return b }},
+		{"local pointer into central", "ARCHIVE_DIRECTORY_INVALID", func(b []byte) []byte { c, _, _ := positions(b); put32(b, c+42, uint32(c)); return b }},
+		{"central variable field overflow", "ARCHIVE_DIRECTORY_INVALID", func(b []byte) []byte { c, _, _ := positions(b); put16(b, c+32, 65535); return b }},
+		{"end comment mismatch", "ARCHIVE_DIRECTORY_INVALID", func(b []byte) []byte { _, e, _ := positions(b); put16(b, e+20, 1); return b }},
+		{"trailing bytes", "ARCHIVE_DIRECTORY_INVALID", func(b []byte) []byte { return append(b, 0) }},
+		{"expanded byte budget", "ARCHIVE_EXPANDED_LIMIT", func(b []byte) []byte {
+			c, _, l := positions(b)
+			put32(b, c+24, maxExpanded+1)
+			put32(b, l+22, maxExpanded+1)
+			return b
+		}},
+		{"hidden locator in central comment", "ARCHIVE_ZIP64_UNSUPPORTED", func(b []byte) []byte {
+			c, e, _ := positions(b)
+			last := bytes.LastIndex(b[:e], []byte{'P', 'K', 1, 2})
+			records := make([]byte, 76)
+			put32(records, 0, 0x06064b50)
+			put32(records, 56, 0x07064b50)
+			put16(b, last+32, uint16(len(records)))
+			put32(b, e+12, uint32(e-c+len(records)))
+			out := append([]byte(nil), b[:e]...)
+			out = append(out, records...)
+			return append(out, b[e:]...)
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			data := tt.mutate(makeArchive(t, baseEntries()))
+			// The admission API itself must refuse; no zip.Reader or extraction is involved.
+			_, err := admitDirectory(bytes.NewReader(data), int64(len(data)))
+			if tt.code != "ARCHIVE_EXPANDED_LIMIT" {
+				requireRefusal(t, err, tt.code)
+			}
+			f := newFixture(t, data)
+			_, err = Run(f.args)
+			requireRefusal(t, err, tt.code)
+			requireEmpty(t, f.stage)
+		})
+	}
+}
+
+func TestExtraFieldsCentralAndLocal(t *testing.T) {
+	for _, where := range []string{"central", "local"} {
+		for _, tt := range []struct {
+			name string
+			data []byte
+			code string
+		}{
+			{"zip64", extra(1, make([]byte, 16)), "ARCHIVE_ZIP64_UNSUPPORTED"},
+			{"PKWARE Unix", extra(0xd, make([]byte, 12)), "ARCHIVE_HARDLINK_INVALID"},
+			{"ASi Unix", extra(0x756e, make([]byte, 14)), "ARCHIVE_HARDLINK_INVALID"},
+			{"short header", []byte{2, 0, 1}, "ARCHIVE_EXTRA_INVALID"},
+			{"short value", []byte{2, 0, 2, 0, 0}, "ARCHIVE_EXTRA_INVALID"},
+		} {
+			t.Run(where+"/"+tt.name, func(t *testing.T) {
+				e := fixtureEntry{name: previewApp + "/extra"}
+				if where == "central" {
+					e.extra = tt.data
+				} else {
+					e.localExtra = tt.data
+				}
+				data := makeArchive(t, withEntry(e))
+				_, err := admitDirectory(bytes.NewReader(data), int64(len(data)))
+				requireRefusal(t, err, tt.code)
+				f := newFixture(t, data)
+				_, err = Run(f.args)
+				requireRefusal(t, err, tt.code)
+				requireEmpty(t, f.stage)
+			})
+		}
+	}
+}
+
+func TestActualCentralAndTreeBudgets(t *testing.T) {
+	t.Run("actual central count beyond advertised", func(t *testing.T) {
+		entries := []fixtureEntry{}
+		for i := 0; i < maxEntries+1; i++ {
+			entries = append(entries, fixtureEntry{name: "x"})
+		}
+		data := makeArchive(t, entries)
+		_, err := admitDirectory(bytes.NewReader(data), int64(len(data)))
+		requireRefusal(t, err, "ARCHIVE_ENTRY_COUNT_INVALID")
+		f := newFixture(t, data)
+		_, err = Run(f.args)
+		requireRefusal(t, err, "ARCHIVE_ENTRY_COUNT_INVALID")
+		requireEmpty(t, f.stage)
+	})
+	t.Run("implicit tree paths", func(t *testing.T) {
+		entries := baseEntries()
+		for i := 0; i < 790; i++ {
+			entries = append(entries, fixtureEntry{name: previewApp + "/tree" + strconv.Itoa(i) + strings.Repeat("/a", 126)})
+		}
+		f := newFixture(t, makeArchive(t, entries))
+		_, err := Run(f.args)
+		requireRefusal(t, err, "ARCHIVE_ENTRY_COUNT_INVALID")
+		requireEmpty(t, f.stage)
+	})
+}
+
+func TestCRCReadLimitsAndRollback(t *testing.T) {
+	for _, tt := range []struct {
+		name, code string
+		mutate     func([]byte) []byte
+	}{
+		{"bad CRC", "ARCHIVE_CRC_INVALID", func(b []byte) []byte { _, _, l := positions(b); b[l+30+len("artifact.json")] = 'x'; return b }},
+		{"zero expected CRC", "ARCHIVE_CRC_INVALID", func(b []byte) []byte { c, _, l := positions(b); put32(b, c+16, 0); put32(b, l+14, 0); return b }},
+		{"read exceeds declared expanded size", "ARCHIVE_READ_INVALID", func(b []byte) []byte { c, _, l := positions(b); put32(b, c+24, 1); put32(b, l+22, 1); return b }},
+		{"invalid deflate", "ARCHIVE_READ_INVALID", func(b []byte) []byte { c, _, l := positions(b); put16(b, c+10, 8); put16(b, l+8, 8); return b }},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			data := tt.mutate(makeArchive(t, baseEntries()))
+			f := newFixture(t, data)
+			bootstrap := filepath.Join(f.stage, ".update_archive.py")
+			if err := os.WriteFile(bootstrap, []byte("trusted executable"), 0700); err != nil {
+				t.Fatal(err)
+			}
+			_, err := Run(f.args)
+			requireRefusal(t, err, tt.code)
+			items, err := os.ReadDir(f.stage)
+			if err != nil || len(items) != 1 || items[0].Name() != ".update_archive.py" {
+				t.Fatalf("rollback: %v %v", items, err)
+			}
+			got, err := os.ReadFile(bootstrap)
+			if err != nil || string(got) != "trusted executable" {
+				t.Fatalf("bootstrap: %q %v", got, err)
+			}
+		})
+	}
+	t.Run("failure after first successful file", func(t *testing.T) {
+		data := makeArchive(t, baseEntries())
+		c, _, _ := positions(data)
+		second := c + 46 + len("artifact.json")
+		local := int(u32(data[second:], 42))
+		data[local+30+len(previewApp+"/Contents/Info.plist")] = 'x'
+		f := newFixture(t, data)
+		existing := filepath.Join(f.stage, previewApp)
+		if err := os.Mkdir(existing, 0700); err != nil {
+			t.Fatal(err)
+		}
+		_, err := Run(f.args)
+		requireRefusal(t, err, "ARCHIVE_CRC_INVALID")
+		requireEmpty(t, existing)
+		info, err := os.Stat(existing)
+		if err != nil || info.Mode().Perm() != 0700 {
+			t.Fatalf("existing directory changed: %v %v", info, err)
+		}
+		items, err := os.ReadDir(f.stage)
+		if err != nil || len(items) != 1 {
+			t.Fatalf("partial tree: %v %v", items, err)
+		}
+	})
+}
+
+func TestArgumentsAndMeasuredDigest(t *testing.T) {
+	f := newFixture(t, makeArchive(t, baseEntries()))
+	for _, tt := range []struct {
+		name, code string
+		args       []string
+	}{
+		{"count", "ARCHIVE_ARGUMENTS_INVALID", nil},
+		{"negative", "ARCHIVE_SIZE_INVALID", []string{f.archive, f.stage, "-1", f.args[3]}},
+		{"nondecimal numeric", "ARCHIVE_SIZE_INVALID", []string{f.archive, f.stage, "²", f.args[3]}},
+		{"overflow", "ARCHIVE_SIZE_INVALID", []string{f.archive, f.stage, "999999999999999999999999", f.args[3]}},
+		{"zero", "ARCHIVE_SIZE_INVALID", []string{f.archive, f.stage, "0", f.args[3]}},
+		{"archive budget", "ARCHIVE_SIZE_INVALID", []string{f.archive, f.stage, "2147483649", f.args[3]}},
+		{"uppercase digest", "ARCHIVE_DIGEST_INVALID", []string{f.archive, f.stage, f.args[2], strings.ToUpper(f.args[3])}},
+		{"wrong digest", "ARCHIVE_DIGEST_MISMATCH", []string{f.archive, f.stage, f.args[2], strings.Repeat("0", 64)}},
+		{"size mismatch", "ARCHIVE_SIZE_MISMATCH", []string{f.archive, f.stage, "1", f.args[3]}},
+	} {
+		t.Run(tt.name, func(t *testing.T) { _, err := Run(tt.args); requireRefusal(t, err, tt.code); requireEmpty(t, f.stage) })
+	}
+	if Code(os.ErrNotExist) != "ARCHIVE_IO_FAILED" {
+		t.Fatal("unclassified error leaks text")
+	}
+}

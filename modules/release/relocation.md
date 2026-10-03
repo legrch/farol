@@ -1,10 +1,12 @@
 # Archive relocation plan
 
 This map was inspected against active archive-owner commit
-`a47c9ccea1a00eb210f675f71a0690fc3be6c857`. That observed commit is not an
-ownership transfer or an accepted source base. Before execution, Lead must name
-the accepted archive range, remaining findings/unknown operations and exact
-transferred source paths. Core K0 must supply the root module/entry contract.
+`a47c9ccea1a00eb210f675f71a0690fc3be6c857`. The integration owner subsequently leased only the nine archive Go files into
+`modules/release/infra/archive/**`, preserving the old whole-range acceptance
+limits. The source-only transfer is now staged; [provenance](infra/archive/provenance.md)
+records its declared mechanical edits and original byte hashes. This does not
+accept the old whole release range or transfer root/resource/tooling ownership.
+Core K0 must still supply the root module/entry contract before active routing.
 
 ## Owned destination
 
@@ -16,9 +18,12 @@ transferred source paths. Core K0 must supply the root module/entry contract.
 | `internal/releasearchive/identity_linux.go`                  | `modules/release/infra/archive/linux.go`, explicit `//go:build linux`   |
 | `THIRD_PARTY_NOTICES.txt`                                    | `modules/release/infra/archive/THIRD_PARTY_NOTICES.txt`                 |
 
-The development Python oracle moves from `resources/native/update_archive.py` to
-`modules/release/infra/archive/testdata/update_archive.py`. Go parity changes only
-its lookup to that path. JS oracle regressions retain the same cases. The oracle
+The eventual development Python oracle destination is
+`modules/release/infra/archive/testdata/update_archive.py`. Its source transfer is
+not included in the current nine-file lease. During this source-only checkpoint,
+Go parity points to the existing `resources/native/update_archive.py`; its Git blob
+is identical at the writer base and frozen archive source. Lead leases its eventual
+relocation and updates the lookup as one coherent shared patch. JS oracle regressions retain the same cases. The oracle
 must actually run in the parity gate; the current optional-oracle `t.Skip` is not
 evidence of Python/Go parity.
 
