@@ -18,9 +18,13 @@ type TaskBinding struct {
 // current admitted task/turn. WithCurrent calls inspect exactly once with an
 // independent value, synchronously serialized against admission/revoke/binding
 // changes. nil means no current admission; errors mean unavailable, not absent.
-// Proposed lock order is AccessRepository.WithSnapshot -> this callback.
+// Selected lock order is AccessRepository.WithSnapshot -> this callback.
 // WithCurrent itself, including entry before inspect, must perform no native IO.
-// Neither callback may reenter or mutate these owners. The owning adapter
+// Neither callback may reenter or mutate these owners. Task completion/revoke
+// invalidates admission under its own gate, releases it, then makes any separate
+// Computer update. It must not expose stale positive admission while persistence
+// or coordinated revocation is unsettled; those outcomes belong to its owner.
+// No Task-held path may acquire Computer. The owning adapter
 // must bind the route to the trusted admission before calling Computer; it cannot
 // manufacture proof from a request body or an ambient "latest task" lookup.
 type CurrentTaskAdmission interface {

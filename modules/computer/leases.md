@@ -61,7 +61,8 @@ owner and task admission; decoding a launch document alone is insufficient.
 
 ## Lock order and operation ownership
 
-The source uses the following proposed order, pending Lead activation agreement:
+Lead selected this source order; the real owner adapter and activation remain
+unqualified:
 
 ```text
 Computer AccessRepository.WithSnapshot callback
@@ -75,12 +76,19 @@ must perform no native IO anywhere in `WithCurrent`, including before its callba
 Both callbacks forbid reentrancy, owner mutation, unrelated waits and native IO.
 The owning Task/Chat adapter must never acquire Computer while holding its task
 gate. Native workspace IO runs after initial callbacks return and before final
-callbacks. The original task-before-access proposal conflicted with native Store
-qualification; adopting this single replacement order remains a shared Lead
-seam decision before activation.
+callbacks. Native Store qualification must never run under a Task-held gate.
 A revocation completed before disclosure wins; one completed after disclosure
 does not retract admitted bytes. The adapter must honor this order for every
 cross-owner operation; a reverse acquisition is not supported.
+
+Task completion/revoke first invalidates admission under its own gate and
+releases it before any separate Computer revoke/update. While persistence or
+both coordinated effects are unsettled, it must never expose stale positive
+admission or claim successful coordinated revocation. The real Task/Chat owners
+must validate their lifecycle, persistence and unknown semantics. Computer owns
+none of those effects. A published authoritative no-IO admission projection is
+still missing; a provider/journal `Status` call, independently copied startup
+state or cache is insufficient.
 
 A root/contract assembler can admit a lease for the parsed owning operation and
 inject that exact lease into existing app services. For a read, the proposed
