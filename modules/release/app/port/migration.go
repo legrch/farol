@@ -47,7 +47,7 @@ type MigrationJournal interface {
 	ReadMigration(context.Context, MigrationBinding) (*MigrationRecord, error)
 }
 
-type MigrationAdmission interface {
+type MigrationGuard interface {
 	// ReverifyMigration proves the already-held exclusion domain is current,
 	// all root/profile-owning writers and helpers are confirmed stopped, and
 	// accepted alpha byte/profile provenance matches the bound physical source
@@ -55,6 +55,20 @@ type MigrationAdmission interface {
 	// window closure or caller-supplied digest is insufficient. This capability
 	// remains owned by Release beyond filesystem-handle Close or an unknown move.
 	ReverifyMigration(context.Context, MigrationBinding, MigrationRoots) error
+}
+
+// MigrationAdmission is the single Release-owned capability for this bound
+// operation. Every filesystem instance borrows the same authoritative owner;
+// adapters must never construct a fresh wrapper, lock, claim ledger or owner.
+type MigrationAdmission interface {
+	MigrationGuard
+	// ClaimMigration atomically consumes one operation-wide arm after exact
+	// Prepared/readback/guard verification. It is retained through descriptor
+	// Close, caller loss, refused/unknown move and across all consumers. A
+	// failed/lost claim acknowledgment never permits a fresh claim or owner.
+	// Dispatched/Relocated acquisition observes only and must not claim.
+	// A claim is not durable Dispatched or permission to start a profile.
+	ClaimMigration(context.Context, MigrationBinding) error
 }
 
 type MigrationMovement string
@@ -74,8 +88,10 @@ type MigrationMove struct {
 type MigrationFileSystem interface {
 	// Acquire pins both fixed, accepted roots with no-follow descriptors. Paths
 	// come from the leased identity adapter's composition, not this request.
-	// It consumes one already-held authoritative guard; it creates no lock or
-	// journal engine. Only an exact Prepared projection can arm this handle.
+	// It consumes the single already-held Release admission owner; it creates
+	// no lock, claim ledger or journal engine. After exact Prepared projection,
+	// physical readback and guard verification, it must ClaimMigration once
+	// before arming; failure ends acquisition. A claim is never released here.
 	// A Dispatched/Relocated projection at acquisition permits observation only.
 	Acquire(context.Context, MigrationBinding, MigrationJournal, MigrationAdmission) (MigrationLease, error)
 }
@@ -85,7 +101,8 @@ type MigrationLease interface {
 	// MoveOnce revalidates the same binding, fixed paths, physical source and
 	// admission, then requires Release's confirmed durable Dispatched record.
 	// Release persists that intent BEFORE invoking this method. The handle must
-	// have been armed at Prepared, and cannot make a second rename attempt.
+	// have been armed at Prepared using the operation-wide claim, and cannot
+	// make a second rename attempt.
 	// Moved requires one same-volume no-replace rename, both parent fsyncs and
 	// exact source-absent/destination-object readback. Any uncertainty remains
 	// Unknown. No fallback copy, overwrite, recovery, launch or journal write.
@@ -93,6 +110,7 @@ type MigrationLease interface {
 	// proven refusal before a possible rename effect, never mere missing evidence.
 	MoveOnce(context.Context) (*MigrationMove, error)
 	// Close releases only this adapter's descriptors. It does not release the
-	// admission capability, settle a durable intent or authorize profile startup.
+	// admission capability or its consumed claim, settle a durable intent or
+	// authorize profile startup.
 	Close() error
 }

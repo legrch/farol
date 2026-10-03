@@ -2,9 +2,11 @@
 
 This additive module is preparation from accepted base
 `1eb30bd23df22c9581d277280f8e0699612786b5`. It does not change the active updater,
-installed application, package identity or resource path. The next source-only archive transfer is explicitly leased from frozen
-`a47c9ccea1a00eb210f675f71a0690fc3be6c857`. Shared Core K0/build
-integration and fresh source acceptance are still required before runtime cutover.
+installed application, package identity or resource path. The source-only archive transfer is explicitly leased from frozen
+`a47c9ccea1a00eb210f675f71a0690fc3be6c857`. The next stage is based on accepted K1
+`acb131d9e7d483296d4edac262cf881cddfb91bb`, including the root module and
+unchanged archive dependency. Runtime wiring/build closure and fresh source
+acceptance are still required before cutover.
 
 `domain/update.go` owns the pure updater policy. `app/services/update` serializes
 one lifetime through consumer-owned ports. Domain, application and port DTOs are
@@ -52,8 +54,8 @@ they do not qualify a native adapter.
 `domain/testdata/recovery.json` contains symbolic, independent crash vectors;
 `app/services/update/service_test.go` uses policy doubles. Neither supplies native
 filesystem/process, package, GitHub, provider or installed acceptance evidence.
-Restore-intent clearing, rejected-target inode receipts, journal encoding and
-current-alpha physical state migration remain native parity work after handoff.
+Restore-intent clearing, rejected-target inode receipts, durable journal publication
+and current-alpha physical state migration remain native parity work after handoff.
 
 ## Leased source additions
 
@@ -76,7 +78,10 @@ The consuming [migration port](app/port/migration.go) supplies a read-only durab
 projection and an externally held authoritative admission guard to the leased
 Identity adapter. Release owns its serializer/intent/dispatch/recovery. See the
 [native boundary](native.md) and [first-install/adoption contract](adoption.md).
-These additions have no production caller or new Desktop wire schema.
+The corrected [migration admission lifetime](migration.md) owns one atomic claim
+across all consumers of a bound operation. The older per-handle-only port is not
+accepted for physical composition. These additions have no production caller or
+new Desktop wire schema.
 
 ## Current parity seams
 
@@ -96,8 +101,7 @@ parity: restore-intent clearing and rejected-target inode evidence remain gated.
 ## Transitional checks
 
 Core owns the single root `github.com/legrch/farol` module. No private Release
-`go.mod`, CLI, protocol or process implementation is introduced. Before K0, tests
-can run against these files through a disposable GOPATH checkout link:
+`go.mod`, CLI, protocol or process implementation is introduced. Before K0, preparation tests ran through a disposable GOPATH checkout link:
 
 ```sh
 release_gopath="$(mktemp -d "${TMPDIR:-/tmp}/farol-release-tests.XXXXXX")"
@@ -108,10 +112,11 @@ GO111MODULE=off GOPATH="$release_gopath" GOCACHE="$release_gopath/cache" \
   github.com/legrch/farol/modules/release/app/services/update
 ```
 
-This is temporary compiler/unit evidence, not the final root-module gate. After
-K0 integration, use the root Go suite and keep `resources/native/go` explicitly
-covered until its archive transfer completes. The existing `task ci:fast` remains
-required; it does not discover these new Go packages in the pre-K0 base.
+The accepted K1 stage now uses `go test -race ./modules/release/...`,
+`go vet ./modules/release/...` and `task test:core`. Both root and
+`resources/native/go` suites remain explicit until old archive resource retirement.
+The existing `task ci:fast` remains required; its pre-K0 execution did not discover
+these new Go packages.
 
 ## Integration boundaries
 

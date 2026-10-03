@@ -22,8 +22,11 @@ admission capability must prove accepted byte/profile provenance, the existing
 exclusion domain and all stopped profile-owning writers/helpers. The native
 adapter rechecks that capability and exact directory identities before mutation.
 
-Only a handle acquired against exact `prepared` can arm a move. Release confirms
-its durable `dispatched` record before invoking `MoveOnce`. Acquisition against
+Only a handle acquired against exact `prepared` can arm a move, after consuming
+one atomic Release-owned claim for that full operation across every consumer.
+See the [admission lifetime](migration.md). A descriptor Close or Unknown never
+releases that claim; Dispatched/Relocated acquisition observes without claiming.
+Release confirms its durable `dispatched` record before invoking `MoveOnce`. Acquisition against
 `dispatched` or `relocated` permits observation only. One handle makes at most one
 same-volume no-replace rename attempt; there is no overwrite, copy or retry path.
 Moved requires source absence, exact destination object and confirmed durability
