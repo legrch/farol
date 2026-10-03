@@ -21,7 +21,17 @@ describe("the executable architecture boundary", () => {
     expect(result.status, result.stderr || result.stdout).toBe(0);
   });
 
+  it("checks both desktop source trees as one application", () => {
+    const result = check(path.join(fixtures, "desktop-cross-tree"));
+    expect(result.status, result.stderr || result.stdout).toBe(0);
+    expect(JSON.parse(result.stdout).files).toBe(3);
+  });
+
   const denied = [
+    ["module-to-new-desktop", "ARCH_INNER_TO_APP"],
+    ["new-desktop-to-runtime", "ARCH_APP_CROSS_ENTRY"],
+    ["new-desktop-source-escape", "ARCH_SOURCE_ESCAPE"],
+    ["new-desktop-dynamic", "ARCH_DYNAMIC_IMPORT"],
     ["domain-to-infra", "ARCH_LAYER_DIRECTION"],
     ["cross-module-backdoor", "ARCH_CROSS_MODULE"],
     ["contract-domain-leak", "ARCH_CONTRACT_LEAK"],

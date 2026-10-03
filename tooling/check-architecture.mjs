@@ -28,6 +28,7 @@ function argument(name, fallback) {
 
 const projectRoot = path.resolve(argument("--root", process.cwd()));
 const sourceRoot = path.join(projectRoot, "src");
+const sourceRoots = [sourceRoot, path.join(projectRoot, "apps", "desktop")];
 const json = process.argv.includes("--json");
 
 function walk(directory) {
@@ -50,6 +51,8 @@ function relative(file) {
 
 function classify(file) {
   const parts = relative(file).split("/");
+  if (parts[0] === "apps" && parts[1] === "desktop" && parts.length > 2)
+    return { kind: "application", application: "desktop" };
   if (parts[0] !== "src") return { kind: "outside" };
   if (parts[1] === "apps" && parts.length > 3) {
     return { kind: "application", application: parts[2] };
@@ -349,7 +352,7 @@ function violationFor(source, target) {
   return null;
 }
 
-const files = walk(sourceRoot);
+const files = sourceRoots.flatMap(walk).sort();
 const violations = [];
 const graph = new Map(files.map((file) => [file, []]));
 const importers = new Map();
@@ -417,7 +420,9 @@ for (const file of files) {
       });
       continue;
     }
-    if (!resolved.startsWith(`${sourceRoot}${path.sep}`)) {
+    if (
+      !sourceRoots.some((root) => resolved.startsWith(`${root}${path.sep}`))
+    ) {
       violations.push({
         code: "ARCH_SOURCE_ESCAPE",
         file: relative(file),
