@@ -44,6 +44,21 @@ import {
   savedChatSubmitScript,
 } from "./saved-chat-page-scripts";
 
+import { ChatGptPhysical } from "../../../apps/desktop/chatgpt-physical";
+import type {
+  ChatGptPhysicalApi,
+  PhysicalBinding,
+} from "../../../apps/desktop/chatgpt-physical-api";
+import type { PhysicalSurface } from "../../../apps/desktop/chatgpt-physical-host-port";
+import {
+  physicalPrepareProbeScript,
+  physicalVerifySendScript,
+  physicalSendScript,
+  physicalObserveScript,
+  physicalCancelScript,
+  type PhysicalPageContentProfile,
+} from "./chatgpt-physical-page-scripts";
+
 const probeSchema = z.strictObject({
   composerVisible: z.boolean(),
   signInVisible: z.boolean(),
@@ -1260,6 +1275,8 @@ export type ChatGptRouteOptions = Readonly<{
   // Candidate source profile. Production composition must opt in only after
   // native DOM qualification; callbacks alone never enable unproved selectors.
   publicOutputProfile?: "message-anchors-v1";
+  // Synthetic settled units require a separately selected loopback fixture.
+  physicalContentProfile?: PhysicalPageContentProfile;
   taskTimeoutMs?: number;
   taskPollMs?: number;
   // Reported exactly once per `openForSignIn` call, when its window closes
@@ -3704,6 +3721,152 @@ export class ChatGptRoute {
     previousUserId: string;
   }> | null = null;
 
+  private chatPhysicalApi: ChatGptPhysicalApi | null = null;
+  // A same-document provider CID adoption is not document replacement. Legacy
+  // task counters retain their semantics; this physical epoch tracks documents.
+  private chatPhysicalDocumentGeneration = 0;
+
+  private chatPhysicalSnapshot(): PhysicalSurface | null {
+    const candidate = this.routeWindow;
+    if (
+      !candidate ||
+      candidate.isDestroyed() ||
+      candidate.webContents.isDestroyed() ||
+      this.load !== "loaded" ||
+      !this.routeSession ||
+      candidate.webContents.session !== this.routeSession ||
+      !Number.isSafeInteger(candidate.webContents.id) ||
+      candidate.webContents.id <= 0
+    )
+      return null;
+    const url = candidate.webContents.getURL();
+    const saved = canonicalChatGptConversationUrl(url, this.options.e2eOrigin);
+    try {
+      if (new URL(url).origin !== new URL(this.options.homeUrl).origin)
+        return null;
+    } catch {
+      return null;
+    }
+    if (url !== this.options.homeUrl && (!saved || url !== saved)) return null;
+    if (this.savedChatPhysicalView !== candidate) {
+      this.savedChatPhysicalView = candidate;
+      this.savedChatViewGeneration += 1;
+    }
+    const common = {
+      viewId: String(candidate.webContents.id),
+      viewGeneration: this.savedChatViewGeneration,
+      documentGeneration: this.chatPhysicalDocumentGeneration,
+      partition: this.options.partition ?? CHATGPT_PARTITION,
+    };
+    const binding: PhysicalBinding = saved
+      ? {
+          ...common,
+          phase: "conversation",
+          url: saved,
+          conversationId: new URL(saved).pathname.split("/").at(-1)!,
+        }
+      : { ...common, phase: "home", url, conversationId: null };
+    return {
+      handle: candidate,
+      binding,
+      isDestroyed: () => candidate.webContents.isDestroyed(),
+    };
+  }
+
+  // Internal native adapter seam. Go's caller supplies a full original lease
+  // guard on every call; this API never allocates, focuses or runs a Task.
+  chatPhysical(): ChatGptPhysicalApi {
+    if (this.chatPhysicalApi) return this.chatPhysicalApi;
+    const owned = (surface: PhysicalSurface): ChatGptRouteSurface => {
+      const candidate = this.routeWindow;
+      if (
+        !candidate ||
+        candidate !== surface.handle ||
+        candidate.isDestroyed() ||
+        candidate.webContents.isDestroyed()
+      )
+        throw new Error("PHYSICAL_BINDING_LOST");
+      return candidate;
+    };
+    const pagePolicy = { e2eOrigin: this.options.e2eOrigin };
+    const contentProfile =
+      this.options.physicalContentProfile ?? "message-anchors-v1";
+    this.chatPhysicalApi = new ChatGptPhysical({
+      qualified: () =>
+        this.options.publicOutputProfile === "message-anchors-v1" &&
+        (contentProfile === "message-anchors-v1" ||
+          (this.options.e2eOrigin !== null &&
+            this.options.partition === "persist:farol-dev-chatgpt")),
+      snapshot: () => this.chatPhysicalSnapshot(),
+      homeUrl: this.options.homeUrl,
+      conversationUrl: (cid) => {
+        if (!/^[A-Za-z0-9_-]{1,256}$/.test(cid)) return null;
+        const page = new URL(this.options.homeUrl);
+        page.pathname = `${page.pathname.replace(/\/$/, "")}/c/${cid}`;
+        page.search = "";
+        page.hash = "";
+        return canonicalChatGptConversationUrl(
+          page.href,
+          this.options.e2eOrigin,
+        );
+      },
+      load: async (surface, url) => {
+        await owned(surface).loadURL(url);
+      },
+      prepareProbe: (surface, binding) =>
+        owned(surface).webContents.executeJavaScript(
+          physicalPrepareProbeScript(binding, pagePolicy),
+          false,
+        ),
+      verifySend: (surface, input) =>
+        owned(surface).webContents.executeJavaScript(
+          physicalVerifySendScript(input, pagePolicy),
+          false,
+        ),
+      send: (surface, input) =>
+        owned(surface).webContents.executeJavaScript(
+          physicalSendScript(input, pagePolicy),
+          true,
+        ),
+      observe: (surface, input) =>
+        owned(surface).webContents.executeJavaScript(
+          physicalObserveScript(input, contentProfile, pagePolicy),
+          false,
+        ),
+      cancel: (surface, input) =>
+        owned(surface).webContents.executeJavaScript(
+          physicalCancelScript(input, contentProfile, pagePolicy),
+          true,
+        ),
+      destroy: async (surface, deadline) => {
+        const candidate = owned(surface);
+        const contents = candidate.webContents;
+        // Install the exact native receipt listener before the one disposal.
+        await new Promise<void>((resolve, reject) => {
+          const finished = () => {
+            clearTimeout(timer);
+            contents.removeListener("destroyed", finished);
+            resolve();
+          };
+          const timer = setTimeout(
+            finished,
+            Math.max(1, Math.min(15_000, deadline - Date.now())),
+          );
+          contents.once("destroyed", finished);
+          try {
+            this.dispose();
+            if (contents.isDestroyed()) finished();
+          } catch (error) {
+            clearTimeout(timer);
+            contents.removeListener("destroyed", finished);
+            reject(error);
+          }
+        });
+      },
+    });
+    return this.chatPhysicalApi;
+  }
+
   savedChatFollowUpBinding(): SavedChatPhysicalBinding | null {
     const candidate = this.routeWindow;
     if (
@@ -4077,6 +4240,7 @@ export class ChatGptRoute {
           // did-fail-load.
           if (!allowed(url)) return;
           this.routeDocumentGeneration += 1;
+          if (!inPlace) this.chatPhysicalDocumentGeneration += 1;
           if (!inPlace) this.routeDocumentLoadFailed = false;
           if (!inPlace && this.options.requiredAppName !== undefined) {
             this.routeWindow?.hide();
@@ -4170,6 +4334,7 @@ export class ChatGptRoute {
           this.options.onTaskActivityChanged?.("outcome_unknown");
         }
         this.stopTaskActivityWatch();
+        this.chatPhysicalDocumentGeneration += 1;
         this.routeDocumentGeneration += 1;
         this.load = "failed";
         this.options.onLoadStateChanged?.("failed");
