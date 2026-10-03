@@ -134,3 +134,6 @@ outcome unknown. Observe by the same operation ID; do not repeat or implement a
 second copy/swap/verify backend. Manual drag-install is not an accepted baseline
 until Release measures and durably binds the installed package. These are contract
 requirements, not a currently available command.
+
+Current-alpha native journal persistence and its evidence limits are described in
+[journal.md](journal.md). Its borrowed admission is not wired to the active runtime.
