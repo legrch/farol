@@ -115,10 +115,14 @@ async function privateParent(directory: string): Promise<void> {
   )
     throw new PackageVerificationError("invalid_stage");
 }
-async function readArtifact(file: string): Promise<unknown> {
+async function readArtifact(
+  file: string,
+  maxBytes = 65536,
+  expectedSha256?: string,
+): Promise<unknown> {
   try {
     const before = await fs.lstat(file, { bigint: true });
-    if (!before.isFile() || before.size < 2n || before.size > 65536n)
+    if (!before.isFile() || before.size < 2n || before.size > BigInt(maxBytes))
       throw new PackageVerificationError("package_mismatch");
     const handle = await fs.open(
       file,
@@ -147,7 +151,13 @@ async function readArtifact(file: string): Promise<unknown> {
         !sameRegularFile(opened, await fs.lstat(file, { bigint: true }))
       )
         throw new PackageVerificationError("package_mismatch");
-      return JSON.parse(buffer.subarray(0, total).toString("utf8")) as unknown;
+      const bytes = buffer.subarray(0, total);
+      if (
+        expectedSha256 !== undefined &&
+        createHash("sha256").update(bytes).digest("hex") !== expectedSha256
+      )
+        throw new PackageVerificationError("package_mismatch");
+      return JSON.parse(bytes.toString("utf8")) as unknown;
     } finally {
       await handle.close();
     }
@@ -176,6 +186,86 @@ function claimsMatch(value: unknown, expected: ReleaseManifest): boolean {
         ? "github-owner-beta"
         : "github-stable") &&
     (a.signing as Record<string, unknown> | null)?.kind === expected.signing
+  );
+}
+function record(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+function exactKeys(
+  value: Record<string, unknown>,
+  keys: readonly string[],
+): boolean {
+  return (
+    Object.keys(value).length === keys.length &&
+    keys.every((key) => Object.hasOwn(value, key))
+  );
+}
+// This consumer projection binds schema 7 to the expected release before the
+// trusted content verifier measures its files, Mach-O header and complete tree.
+// It does not promote the core declaration's own hash to trusted provenance.
+function goClaimsMatch(
+  embedded: unknown,
+  core: unknown,
+  expected: ReleaseManifest,
+): boolean {
+  const manifest = record(embedded);
+  const declaration = record(core);
+  const build = record(declaration?.build);
+  const platform = record(build?.platform);
+  const binary = record(declaration?.binary);
+  const hashes = record(manifest?.entrySha256);
+  return (
+    manifest !== null &&
+    declaration !== null &&
+    build !== null &&
+    platform !== null &&
+    binary !== null &&
+    hashes !== null &&
+    manifest.schema === 4 &&
+    manifest.sourceMode === "head-exact" &&
+    manifest.inputExact === true &&
+    manifest.dirty === false &&
+    typeof manifest.inputLedgerSha256 === "string" &&
+    /^[a-f0-9]{64}$/u.test(manifest.inputLedgerSha256) &&
+    manifest.product === expected.product &&
+    manifest.bundleId === expected.bundleId &&
+    manifest.version === expected.version &&
+    manifest.buildId === expected.buildId &&
+    manifest.sourceCommit === expected.sourceCommit &&
+    manifest.sourceTreeDigest === expected.sourceTreeDigest &&
+    Array.isArray(manifest.entries) &&
+    manifest.entries.filter((entry) => entry === "core-artifact.json")
+      .length === 1 &&
+    manifest.entries.filter((entry) => entry === "farol-backend").length ===
+      1 &&
+    JSON.stringify(manifest.core) === JSON.stringify(core) &&
+    exactKeys(declaration, ["schema", "build", "binary"]) &&
+    declaration.schema === "farol-core-artifact/1" &&
+    exactKeys(build, [
+      "buildId",
+      "sourceSHA",
+      "sourceTreeDigest",
+      "platform",
+    ]) &&
+    build.buildId === expected.buildId &&
+    build.sourceSHA === expected.sourceCommit &&
+    build.sourceTreeDigest === expected.sourceTreeDigest &&
+    exactKeys(platform, ["goos", "goarch"]) &&
+    platform.goos === expected.platform &&
+    platform.goarch === expected.arch &&
+    exactKeys(binary, ["path", "size", "sha256"]) &&
+    binary.path === "farol-backend" &&
+    typeof binary.size === "number" &&
+    Number.isSafeInteger(binary.size) &&
+    binary.size >= 64 &&
+    binary.size <= 128 * 1024 * 1024 &&
+    typeof binary.sha256 === "string" &&
+    /^[a-f0-9]{64}$/u.test(binary.sha256) &&
+    hashes["farol-backend"] === binary.sha256 &&
+    typeof hashes["core-artifact.json"] === "string" &&
+    /^[a-f0-9]{64}$/u.test(hashes["core-artifact.json"])
   );
 }
 function measuredMatches(a: MeasuredIdentity, e: ReleaseManifest): boolean {
@@ -276,8 +366,8 @@ export function createUpdatePackageVerifier(
         // Historical schema-5 packages remain available to the standalone
         // archive verifier. Installing one into Farol.app would strand its
         // embedded updater at the retired fixed slot, so this route admits
-        // only the branded generation.
-        if (schema !== 6)
+        // only the two explicit branded generations.
+        if (schema !== 6 && schema !== 7)
           throw new PackageVerificationError("package_mismatch");
         const stagedAppPath = path.join(stagingRoot, "Farol.app");
         if (
@@ -287,6 +377,24 @@ export function createUpdatePackageVerifier(
           throw new PackageVerificationError("archive_refused");
         if (!claimsMatch(artifact, expected))
           throw new PackageVerificationError("package_mismatch");
+        if (schema === 7) {
+          const resources = path.join(stagedAppPath, "Contents/Resources/app");
+          const embedded = await readArtifact(
+            path.join(resources, "build-manifest.json"),
+          );
+          const coreHash = record(record(embedded)?.entrySha256)?.[
+            "core-artifact.json"
+          ];
+          if (typeof coreHash !== "string" || !/^[a-f0-9]{64}$/u.test(coreHash))
+            throw new PackageVerificationError("package_mismatch");
+          const core = await readArtifact(
+            path.join(resources, "core-artifact.json"),
+            8192,
+            coreHash,
+          );
+          if (!goClaimsMatch(embedded, core, expected))
+            throw new PackageVerificationError("package_mismatch");
+        }
         let identity: MeasuredIdentity;
         try {
           const { stdout: verifiedJson } = await execFileAsync(
