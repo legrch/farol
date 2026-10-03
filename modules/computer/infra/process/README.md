@@ -12,9 +12,10 @@ launch, a durable reservation owner, a dedicated no-IO gate and a clock to
 independent DTOs to that service. Consumers reach Computer through this contract;
 Task and Chat private implementations are never imported here.
 
-Requests contain only operation/handle correlation and bounded output offsets.
-They cannot supply executable, arguments, environment, root approval, task/turn
-identity, a deadline or another lease. The captured task binding and physical-root
+Start/Read/Cancel requests contain only operation/handle correlation and bounded
+output offsets. The added Prepare contract accepts exact arguments/stdin and
+runtime/session/model/admission correlation, but cannot supply executable,
+environment, root approval, task/turn identity, a deadline or another lease. The captured task binding and physical-root
 seal must still match current Computer permission. The selected workspace must
 have current shell verification. A new turn or reconnect cannot replace the
 captured execution lease or widen the prepared command.
@@ -109,3 +110,86 @@ application parser double; the real direct producer never emits that proof.
 Race/full CI, native tests, independent risk review, package, installed route and
 live provider qualification are outside this bounded source result. Completed
 source checks cannot be promoted to those evidence levels.
+
+## Selected invocation construction
+
+The source-only constructor increment adds independent published
+`contracts/process.Invocation`, `PrepareRequest`, `PrepareResponse` and
+`Contract.Prepare`. The consumer first calls Prepare on its selected operation's
+contract, then existing Start/Read/Cancel on that SAME contract. Observe/reconnect
+never builds another CLI invocation or guesses a latest session. Prepare receipt
+is correlation only: it is not durable reservation, native launch, capability
+qualification, provider input acceptance or final result.
+
+Trusted root composition creates `infra/process.NewPreparer(runtimeID, template,
+qualification, clock)`, then `app/services/process.NewForInvocation(operationID,
+lease, preparer, reservation, gate, clock)` and publishes `contracts/process.New`.
+The existing New constructors remain compatible. Template owns executable/hash,
+workspace/root/cwd/physical identity, write mode and explicit environment. Template
+args/stdin/binding must be empty so it cannot silently prepend/replace the selected
+input. The required Qualification has no permissive default; NewPreparer itself
+executes nothing and never calls Qualify.
+
+The consumer supplies one exact runtime/session/model/admission plus bounded
+arguments (at most 256 / 64 KiB) and stdin (at most 1 MiB). The configured runtime
+ID must match. AdmissionID is checked against the SAME selected lease's
+Grant.AuthorityID under current owners; a body ID is never lookup/admission proof.
+Preparation retains independent copies and permanently rejects payload rebind.
+Root supplies the exact admitted Grant.AuthorityID as the selected consumer
+correlation; Tasks need not import Computer app/domain to obtain it. It is not
+a token that grants permission. Session/model remain opaque correlation. Tasks
+owns provider CLI flag construction,
+provider capability/entitlement and observed session/model verification; Computer
+neither interprets provider transcripts nor invents a CLI/task engine. A header is
+not proof that the CLI actually used that session/model: selected args and runtime
+observations must agree in Task's provider adapter.
+
+The actual native mapping puts arguments/stdin into the existing Command and
+runtime/session/model/admission into its optional Binding. Its digest covers all
+these values plus trusted executable, environment and physical scope. Absent
+Binding is omitted from JSON so legacy command fingerprints stay unchanged.
+Command/input stays transient; root reservation stores only existing intent,
+correlation, digest and original deadline. No journal/result/ACK owner is added.
+
+Prepare validates current authority before and after the producer construction,
+then discloses the bounded metadata under the same owners. No preparation IO runs
+inside either owner or application gate. Start refuses unprepared/pending state,
+checks immutable seal/invocation drift and uses the existing durable Reserve ->
+current guard -> one Spawn path. Refused/unknown preparation/start cannot be
+reconstructed, moved to another executor or reset by a new turn/reconnect.
+Known preparation survives denied disclosure and can be observed without building
+again. The original ordinary deadline is never reset or widened beyond 15 seconds.
+
+### Concrete remaining dependency before real Claude
+
+The selected constructor is usable source; it does not qualify O4. Root must bind
+one published contract per admitted invocation, inject actual durable reservation
+and retained result/reconnect ownership, an explicit approved CLI/hash/environment
+and an effective Qualification for that exact command. Qualification must enforce
+filesystem/credential/network/Git restrictions and reject permission bypass,
+`--bare`, alternate authentication HOME and model/session mismatches as applicable
+to the selected provider policy. Tasks must map its exact session/model/admission
+and supported flags/input format through this contract and interpret correlated
+structured provider observations. No Task source is changed in this increment. Stdin is one initial immutable byte
+payload, not a persistent input/steer channel. Exact-session continuation needs a
+new legitimately admitted invocation after the prior invocation's qualified
+settlement, keeping the SAME provider session and supported resume flags. An
+unknown prior invocation cannot be replaced to obtain continuation.
+
+The direct Darwin producer still measures paths/executable before spawn rather
+than proving descriptor continuity through exec, and still retains only the root
+os.Process. Root must compose an anchored supervisor/cohort producer through the
+existing Go executable, with exact incarnation/operation ownership, qualified
+parent-death cleanup and group/descendant settlement. It must retain authoritative
+receipt/evidence across root exit, cancellation, timeout, observer loss and crash.
+No numeric PID/PGID lookup or new helper/watchdog/authority/journal is supplied.
+
+A real Claude terminal claim requires SAME admitted invocation, actual provider
+result/session evidence, exact root Wait, bounded pipe drain AND qualified group
+and descendant cleanup. Root Wait (even exit 0), Setpgid, Kill acknowledgement,
+path/hash preflight and fake-port PASS are insufficient. Current direct producer
+always reports cohort cleanup unverified; Computer therefore keeps Unknown rather
+than promoting it to Terminal. Native qualification/disposable tests and a bounded
+cheap selected CLI journey are Lead's lane. No provider or OS process was started
+for this constructor's tests, and all prior refused/unknown operations remain
+frozen. Full CI/race/native/review/commit/integration are still canonical-lane work.

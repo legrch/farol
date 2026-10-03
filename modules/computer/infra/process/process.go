@@ -30,6 +30,7 @@ type Command struct {
 	Args, Environment                                    []string
 	Input                                                []byte
 	Write                                                bool
+	Binding                                              *InvocationBinding `json:",omitempty"`
 }
 
 // Qualification is the native policy producer selected by trusted boot. It must
@@ -79,6 +80,10 @@ func copyCommand(c Command) Command {
 	c.Args = append([]string(nil), c.Args...)
 	c.Environment = append([]string{}, c.Environment...)
 	c.Input = append([]byte(nil), c.Input...)
+	if c.Binding != nil {
+		binding := *c.Binding
+		c.Binding = &binding
+	}
 	return c
 }
 func newPrepared(command Command, native boundary, clock port.Clock, scheduler schedule) (*Prepared, error) {
@@ -99,6 +104,9 @@ func validCommand(c Command) bool {
 		return filepath.IsAbs(v) && filepath.Clean(v) == v && len(v) <= 4096 && !strings.ContainsRune(v, 0)
 	}
 	if c.WorkspaceID == "" || !plain(c.Root) || !plain(c.Cwd) || !plain(c.Executable) || !(c.Cwd == c.Root || strings.HasPrefix(c.Cwd, strings.TrimSuffix(c.Root, "/")+"/")) || c.RootIdentity.Device == "" || c.RootIdentity.Inode == "" || len(c.Args) > 256 || len(c.Environment) > 64 || len(c.Input) > 1024*1024 {
+		return false
+	}
+	if c.Binding != nil && (!bindingID(c.Binding.RuntimeID) || !bindingID(c.Binding.SessionID) || !bindingID(c.Binding.ModelID) || !bindingID(c.Binding.AdmissionID)) {
 		return false
 	}
 	raw, err := hex.DecodeString(c.ExecutableSHA256)

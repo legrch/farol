@@ -32,6 +32,9 @@ const (
 type Service struct {
 	lease                                                  Execution
 	prepared                                               Prepared
+	preparer                                               InvocationPreparer
+	scope                                                  Scope
+	invocation                                             *Invocation
 	reservations                                           Reservation
 	gate                                                   Gate
 	clock                                                  port.Clock
@@ -115,6 +118,10 @@ func (s *Service) withCurrent(ctx context.Context, disclose func() error) error 
 		}
 		p, a := *snapshot.Participant, *snapshot.Approval
 		if p.ParticipantID != s.intent.Binding.ParticipantID {
+			inspected = authority.Fail("AUTHORITY_TASK_MISMATCH", "task-grant")
+			return inspected
+		}
+		if s.invocation != nil && p.Grant.AuthorityID != s.invocation.AdmissionID {
 			inspected = authority.Fail("AUTHORITY_TASK_MISMATCH", "task-grant")
 			return inspected
 		}

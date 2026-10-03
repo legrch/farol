@@ -19,6 +19,19 @@ func (s *Service) Start(ctx context.Context, request StartRequest) (*StartRespon
 		s.gate.Unlock()
 		return nil, fail("PROCESS_START_PENDING", false)
 	}
+	if s.prepared == nil {
+		s.gate.Unlock()
+		return nil, fail("PROCESS_NOT_PREPARED", false)
+	}
+	if s.preparer != nil {
+		selected, ok := s.prepared.(Selected)
+		if !ok || s.invocation == nil || selected.Seal() != s.intent.Seal || !scopeMatchesSeal(s.scope, selected.Seal()) || !sameInvocation(*s.invocation, selected.Invocation()) {
+			s.refusal = fail("PROCESS_PREPARATION_UNKNOWN", true)
+			err := s.refusal
+			s.gate.Unlock()
+			return nil, err
+		}
+	}
 	if s.started {
 		child, handle, uncertain := s.child, s.handle, s.uncertain
 		s.gate.Unlock()

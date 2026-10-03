@@ -123,3 +123,43 @@ type Child interface {
 type NativeFailure struct{ Unknown bool }
 
 func (e *NativeFailure) Error() string { return "PROCESS_NATIVE_UNAVAILABLE" }
+
+// Scope comes from the trusted selected runtime producer, never a request. It
+// is correlation/policy context, not admission or native qualification proof.
+type Scope struct {
+	RuntimeID, WorkspaceID, Root, Cwd string
+	RootIdentity                      authority.RootIdentity
+	Write                             bool
+}
+
+// Invocation is the exact consumer-selected CLI input. AdmissionID must match
+// the selected lease's existing Grant.AuthorityID. Session/model are exact opaque
+// provider correlation, not entitlement, permission or latest-session lookup.
+type Invocation struct {
+	RuntimeID, SessionID, ModelID, AdmissionID string
+	Arguments                                  []string
+	Input                                      []byte
+}
+
+func (v Invocation) Clone() Invocation {
+	v.Arguments = append([]string(nil), v.Arguments...)
+	v.Input = append([]byte(nil), v.Input...)
+	return v
+}
+
+// Selected binds the prepared seal to an independent exact invocation copy.
+// Seal/Invocation/Scope are pure immutable value observations, never native IO.
+// Its digest covers runtime/session/model/admission, args/stdin and trusted
+// executable/environment/root policy. It never persists command text itself.
+type Selected interface {
+	Prepared
+	Invocation() Invocation
+}
+
+// InvocationPreparer constructs one immutable launch without process/provider
+// effects, journal publication or authority renewal. IO (if needed for read-only
+// preparation) runs outside owner callbacks. No unapproved executor fallback.
+type InvocationPreparer interface {
+	Scope() Scope
+	Prepare(context.Context, Invocation) (Selected, error)
+}
