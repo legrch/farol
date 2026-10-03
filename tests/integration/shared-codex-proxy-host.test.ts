@@ -1,6 +1,6 @@
 import { websocketFixturePrelude } from "../fixtures/proxy-websocket";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import { WebSocketServer } from "ws";
@@ -21,6 +21,28 @@ let experimentalApi = false;
 let initializeParams = null;
 let initializeCount = 0;
 let initializedCount = 0;
+let closeInputRequested = false;
+function closeInputWhenReady() {
+  if (!closeInputRequested || initializedCount !== 1) return;
+  process.stdin.once("close", () => process.send({
+    kind: "input-closed", token: process.env.FIXTURE_TOKEN,
+  }));
+  process.stdin.destroy();
+}
+if (process.env.FIXTURE_MODE === "close-stdin") {
+  process.once("message", (message) => {
+    if (message?.kind !== "close-input" ||
+        message.token !== process.env.FIXTURE_TOKEN) {
+      throw new Error("FIXTURE_CONTROL_INVALID");
+    }
+    closeInputRequested = true;
+    // Keep this owned child alive after its one-shot IPC listener is removed.
+    // The test exercises a closed input pipe, not process exit; exact host
+    // cleanup below remains responsible for terminal observation.
+    process.channel.ref();
+    closeInputWhenReady();
+  });
+}
 if (process.env.FIXTURE_MODE === "ignore-term") {
   process.on("SIGTERM", () => {});
   setInterval(() => {}, 1_000);
@@ -38,7 +60,10 @@ fixtureInput.on("data", (chunk) => {
       process.stderr.write(JSON.stringify({method: request.method}) + "\n");
     }
     if (request.id === undefined) {
-      if (request.method === "initialized") initializedCount++;
+      if (request.method === "initialized") {
+        initializedCount++;
+        closeInputWhenReady();
+      }
       continue;
     }
     if (process.env.FIXTURE_MODE === "server-request" && request.id === 999) {
@@ -70,9 +95,6 @@ fixtureInput.on("data", (chunk) => {
           userAgent: "fixture",
         },
       }) + "\n");
-      if (process.env.FIXTURE_MODE === "close-stdin") {
-        process.stdin.destroy();
-      }
     } else if (process.env.FIXTURE_MODE === "experimental-api" &&
         ["project/list", "thread/turns/list", "thread/items/list"].includes(request.method) &&
         (!experimentalApi || initializedCount !== 1)) {
@@ -109,6 +131,52 @@ fixtureInput.on("data", (chunk) => {
   }
 });
 `;
+
+// This control channel is separate from the transport under test. Receipt is
+// emitted only after this child's stdin closes, not after sending the command.
+function closeFixtureInput(
+  child: ChildProcessWithoutNullStreams,
+  token: string,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const finish = (error?: Error) => {
+      clearTimeout(timer);
+      child.off("message", onMessage);
+      child.off("error", onError);
+      child.off("exit", onExit);
+      if (error) reject(error);
+      else resolve();
+    };
+    const onMessage = (message: unknown) => {
+      if (
+        typeof message !== "object" ||
+        message === null ||
+        !("kind" in message) ||
+        message.kind !== "input-closed" ||
+        !("token" in message) ||
+        message.token !== token
+      )
+        finish(new Error("FIXTURE_INPUT_CLOSE_RECEIPT_INVALID"));
+      else finish();
+    };
+    const onError = () => finish(new Error("FIXTURE_CONTROL_FAILED"));
+    const onExit = () => finish(new Error("FIXTURE_EXITED_BEFORE_INPUT_CLOSE"));
+    const timer = setTimeout(
+      () => finish(new Error("FIXTURE_INPUT_CLOSE_UNCONFIRMED")),
+      1_000,
+    );
+    child.on("message", onMessage);
+    child.once("error", onError);
+    child.once("exit", onExit);
+    try {
+      child.send({ kind: "close-input", token }, (error) => {
+        if (error) onError();
+      });
+    } catch {
+      onError();
+    }
+  });
+}
 
 const hosts: SharedCodexProxyHost[] = [];
 afterEach(() => {
@@ -428,14 +496,43 @@ describe("shared Codex proxy transport fixture", () => {
   });
 
   it("fails closed when the proxy closes its input pipe", async () => {
-    const host = fixture("close-stdin", 200);
-    await host.connect();
-    await expect(host.request("project/list", {})).rejects.toThrow(
-      "CODEX_SHARED_HOST_UNAVAILABLE",
-    );
-    await expect(host.request("project/list", {})).rejects.toThrow(
-      "CODEX_SHARED_HOST_UNAVAILABLE",
-    );
+    const token = randomUUID();
+    let child: ChildProcessWithoutNullStreams | undefined;
+    const launch = vi.fn(() => {
+      // The first three descriptors are pipes; the fourth is fixture-only IPC.
+      child = spawn(process.execPath, ["-e", PROXY_FIXTURE], {
+        stdio: ["pipe", "pipe", "pipe", "ipc"],
+        env: { FIXTURE_MODE: "close-stdin", FIXTURE_TOKEN: token },
+      }) as ChildProcessWithoutNullStreams;
+      return child;
+    });
+    const host = new SharedCodexProxyHost(launch, EXPECTED_HOME);
+    hosts.push(host);
+    try {
+      await host.connect();
+      if (!child) throw new Error("Owned fixture process missing");
+      await closeFixtureInput(child, token);
+      const failure = await host
+        .request("project/list", {})
+        .catch((error: unknown) => error);
+      expect(failure).toMatchObject({
+        message: "CODEX_SHARED_HOST_UNAVAILABLE",
+        diagnostic: { phase: "request", method: "project/list" },
+      });
+      // Closing the peer's Node input stream does not promise an immediate
+      // kernel EPIPE. Buffered writes may instead reach the bounded response
+      // timeout. Neither observation proves that the request was not submitted.
+      expect(failure).not.toBeInstanceOf(HandoffNotSubmittedError);
+      expect(["pipe_failed", "timeout"]).toContain(
+        (failure as { diagnostic: { result: string } }).diagnostic.result,
+      );
+      await expect(host.request("project/list", {})).rejects.toThrow(
+        "CODEX_SHARED_HOST_UNAVAILABLE",
+      );
+      expect(launch).toHaveBeenCalledTimes(1);
+    } finally {
+      expect(await host.closeAndWait()).toBe(true);
+    }
   });
 
   it("treats an uncorrelated response as a lost transport", async () => {

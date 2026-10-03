@@ -3,81 +3,52 @@
 package computer
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"os/exec"
-	"strconv"
-	"strings"
 	"syscall"
 	"testing"
 	"time"
 )
 
-// These witnesses exercise disposable Darwin processes only. They specify facts
-// a Go supervisor must reconcile; they do not call the product shell/Git route.
-// Descendants self-terminate, so cleanup never retries a refused OS signal.
+// These disposable Darwin witnesses exercise a closed, two-process fixture,
+// not the product shell/Git route. The descendant stays behind an owned pipe
+// barrier. Register its kernel exit listener while both processes are still
+// held; never look up a PID/PGID after the execution root has been reaped.
 func TestRootExitDoesNotProveGroupCleanup(t *testing.T) {
-	cmd := exec.Command("/bin/sh", "-c", "sleep 0.8 >/dev/null 2>&1 & printf '%s' $!; exit 0")
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	var output bytes.Buffer
-	cmd.Stdout = &output
-	if err := cmd.Run(); err != nil {
-		t.Fatal(err)
+	fixture := newCommandWitness(t)
+	fixture.send(t, fixture.rootControl, "exit-root")
+	if err := fixture.waitRoot(); err != nil {
+		t.Fatalf("root did not exit successfully: %v", err)
 	}
-	descendant, err := strconv.Atoi(strings.TrimSpace(output.String()))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cmd.ProcessState.ExitCode() != 0 {
-		t.Fatal("root did not exit")
-	}
-	if err := syscall.Kill(descendant, 0); err != nil {
-		t.Fatalf("missing live descendant witness: %v", err)
-	}
-	if err := syscall.Kill(-cmd.Process.Pid, 0); err != nil {
-		t.Fatalf("root exited but owned group should still exist: %v", err)
-	}
-	observeGroupExit(t, cmd.Process.Pid)
+	fixture.requireSurvivingDescendant(t)
+	// Cleanup releases the descendant's owned barrier and requires NOTE_EXIT
+	// from the listener installed before root release. Root Wait alone never
+	// satisfies that obligation.
 }
 
 func TestRootTimeoutDoesNotConfirmDescendantCancellation(t *testing.T) {
-	// CommandContext owns only the root. Its timeout must not be reported as
-	// confirmed cancellation of the process group.
+	fixture := newCommandWitness(t)
+	// Start the deadline after readiness and exit-listener installation. The
+	// root's only cancellation is one Kill on its retained os.Process; timeout
+	// is not a cancellation receipt for its descendant.
 	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "/bin/sh", "-c", "sleep 0.8 >/dev/null 2>&1 & printf '%s' $!; wait")
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	var output bytes.Buffer
-	cmd.Stdout = &output
-	if err := cmd.Run(); err == nil {
-		t.Fatal("root unexpectedly completed before timeout")
-	}
+	<-ctx.Done()
 	if !errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		t.Fatalf("wrong deadline: %v", ctx.Err())
 	}
-	descendant, err := strconv.Atoi(strings.TrimSpace(output.String()))
-	if err != nil {
-		t.Fatal(err)
+	if err := fixture.root.Process.Kill(); err != nil {
+		t.Fatalf("owned root cancellation unavailable; no retry: %v", err)
 	}
-	if err := syscall.Kill(descendant, 0); err != nil {
-		t.Fatalf("missing surviving descendant: %v", err)
+	err := fixture.waitRoot()
+	var exited *exec.ExitError
+	if !errors.As(err, &exited) {
+		t.Fatalf("missing root cancellation terminal receipt: %v", err)
 	}
-	observeGroupExit(t, cmd.Process.Pid)
-}
-
-func observeGroupExit(t *testing.T, group int) {
-	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		err := syscall.Kill(-group, 0)
-		if errors.Is(err, syscall.ESRCH) {
-			return
-		}
-		if err != nil {
-			t.Fatalf("cleanup observation unavailable: %v", err)
-		}
-		time.Sleep(10 * time.Millisecond)
+	status, ok := exited.Sys().(syscall.WaitStatus)
+	if !ok || !status.Signaled() || status.Signal() != syscall.SIGKILL {
+		t.Fatalf("wrong root cancellation receipt: %v", err)
 	}
-	t.Fatal("owned self-terminating group did not become observably absent")
+	fixture.requireSurvivingDescendant(t)
 }

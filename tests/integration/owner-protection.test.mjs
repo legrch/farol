@@ -1,4 +1,5 @@
 import { spawn, spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -22,6 +23,7 @@ async function ownedRun(executable, args, options, deadlineMs = 5000) {
   let error;
   let signalSent = false;
   const shutdownSignals = [];
+  let deadlineStartedAt = performance.now();
   const collect = (current, chunk) =>
     (current + chunk.toString("utf8")).slice(-1048576);
   child.stdout.on("data", (chunk) => {
@@ -32,43 +34,76 @@ async function ownedRun(executable, args, options, deadlineMs = 5000) {
   });
   child.on("spawn", () => activeGroups.add(child.pid));
   const result = await new Promise((resolve) => {
-    const deadline = setTimeout(() => {
-      error = new Error("owned fixture deadline exceeded");
-      if (!child.pid || !activeGroups.has(child.pid)) return;
-      signalSent = true;
-      try {
-        // Let the guard forward cancellation and reap its own child first.
-        // Killing both immediately can strand an orphaned process-group witness
-        // on macOS; EPERM from the absence probe must never count as cleanup.
-        shutdownSignals.push("SIGTERM");
-        process.kill(child.pid, "SIGTERM");
-      } catch (failure) {
-        if (failure.code !== "ESRCH") error = failure;
-      }
-    }, deadlineMs);
-    const escalation = setTimeout(() => {
-      // A wrapper can exit while its descendants still hold the pipes. Its
-      // exit status does not prove the supervised group has gone away.
-      if (!child.pid || !activeGroups.has(child.pid)) return;
-      try {
-        shutdownSignals.push("SIGKILL");
-        process.kill(-child.pid, "SIGKILL");
-      } catch (failure) {
-        if (failure.code !== "ESRCH") error = failure;
-      }
-    }, deadlineMs + 750);
-    const pipeDeadline = setTimeout(() => {
-      child.stdout.destroy();
-      child.stderr.destroy();
-      resolve({ status: child.exitCode, signal: child.signalCode });
-    }, deadlineMs + 2000);
+    let deadline;
+    let escalation;
+    let pipeDeadline;
+    let awaitingReady = options.readyToken !== undefined;
+    const clearDeadlines = () => {
+      clearTimeout(deadline);
+      clearTimeout(escalation);
+      clearTimeout(pipeDeadline);
+    };
+    const arm = (timeoutMs) => {
+      deadlineStartedAt = performance.now();
+      deadline = setTimeout(() => {
+        error = new Error(
+          awaitingReady
+            ? "owned fixture readiness deadline exceeded"
+            : "owned fixture deadline exceeded",
+        );
+        awaitingReady = false;
+        if (!child.pid || !activeGroups.has(child.pid)) return;
+        signalSent = true;
+        try {
+          // Let the guard forward cancellation and reap its own child first.
+          // Killing both immediately can strand an orphaned process-group witness
+          // on macOS; EPERM from the absence probe must never count as cleanup.
+          shutdownSignals.push("SIGTERM");
+          process.kill(child.pid, "SIGTERM");
+        } catch (failure) {
+          if (failure.code !== "ESRCH") error = failure;
+        }
+      }, timeoutMs);
+      escalation = setTimeout(() => {
+        // A wrapper can exit while its descendants still hold the pipes. Its
+        // exit status does not prove the supervised group has gone away.
+        if (!child.pid || !activeGroups.has(child.pid)) return;
+        try {
+          shutdownSignals.push("SIGKILL");
+          process.kill(-child.pid, "SIGKILL");
+        } catch (failure) {
+          if (failure.code !== "ESRCH") error = failure;
+        }
+      }, timeoutMs + 750);
+      pipeDeadline = setTimeout(() => {
+        child.stdout.destroy();
+        child.stderr.destroy();
+        resolve({ status: child.exitCode, signal: child.signalCode });
+      }, timeoutMs + 2000);
+    };
+    // Setup has its own failure bound. The exercised timeout starts only once
+    // this exact guard's child is running with inherited stdout/stderr open.
+    const onReady = () => {
+      if (
+        !awaitingReady ||
+        !stdout
+          .split("\n")
+          .slice(0, -1)
+          .includes(`child-running:${options.readyToken}:${child.pid}`)
+      )
+        return;
+      awaitingReady = false;
+      clearDeadlines();
+      arm(deadlineMs);
+    };
+    child.stdout.on("data", onReady);
+    arm(awaitingReady ? 5000 : deadlineMs);
     child.once("error", (failure) => {
       error = failure;
     });
     child.once("close", (status, signal) => {
-      clearTimeout(deadline);
-      clearTimeout(escalation);
-      clearTimeout(pipeDeadline);
+      clearDeadlines();
+      child.stdout.off("data", onReady);
       resolve({ status, signal });
     });
   });
@@ -104,6 +139,7 @@ async function ownedRun(executable, args, options, deadlineMs = 5000) {
     groupCleanup: true,
     signalSent,
     shutdownSignals,
+    deadlineElapsedMs: performance.now() - deadlineStartedAt,
   };
 }
 function fixture() {
@@ -678,6 +714,7 @@ assert guard._CHILD is None
   it("bounds timeout with a child holding stdio and confirms group absence", async () => {
     const home = fixture();
     const started = performance.now();
+    const readyToken = randomUUID();
     const result = await ownedRun(
       "/usr/bin/python3",
       [
@@ -687,20 +724,22 @@ assert guard._CHILD is None
         "/usr/bin/python3",
         "-I",
         "-c",
-        "import time; print('child-running',flush=True); time.sleep(30)",
+        `import os, time; print("child-running:${readyToken}:" + str(os.getppid()), flush=True); time.sleep(30)`,
       ],
       {
+        readyToken,
         cwd: root,
         env: { HOME: home, PATH: "/usr/bin:/bin", LANG: "en_US.UTF-8" },
       },
       1000,
     );
-    expect(result.stdout).toContain("child-running");
-    expect(result.error?.message).toContain("deadline exceeded");
+    expect(result.stdout).toContain(`child-running:${readyToken}:`);
+    expect(result.error?.message).toBe("owned fixture deadline exceeded");
     expect(result.groupCleanup).toBe(true);
     expect(result.shutdownSignals).toEqual(["SIGTERM"]);
     expect(activeGroups.size).toBe(0);
-    expect(performance.now() - started).toBeLessThan(5000);
+    expect(result.deadlineElapsedMs).toBeLessThan(5000);
+    expect(performance.now() - started).toBeLessThan(10000);
   });
   it("forwards one queued spawn SIGTERM exactly once and waits for exit", async () => {
     await probe(
