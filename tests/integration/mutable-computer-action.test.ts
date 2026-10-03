@@ -547,7 +547,7 @@ describe("authorized mutable Computer action", () => {
   });
 
   it.each([
-    ["approval-unreadable", "COMPUTER_APPROVAL_STORE_UNAVAILABLE"],
+    ["approval-unreadable", "AUTHORITY_COMPUTER_MISMATCH"],
     ["approval-missing", "AUTHORITY_COMPUTER_MISMATCH"],
     ["participant-missing", "AUTHORITY_COMPUTER_MISMATCH"],
     ["participant-generation", "AUTHORITY_COMPUTER_MISMATCH"],
@@ -623,6 +623,47 @@ describe("authorized mutable Computer action", () => {
       expect(native.calls()).toBe(0);
     },
   );
+
+  it("keeps an unreadable-policy handoff refusal readable for restart and predecessor update drain", async () => {
+    const native = successfulWorkspace();
+    const stored = new PrivateWorkspaceMutationStore({ root: stateRoot });
+    let afterAdmission = false;
+    const runner = customService(native.workspace, {
+      approvals: {
+        async get() {
+          if (afterAdmission) throw new Error("unavailable");
+          return approval();
+        },
+      },
+      mutations: {
+        load: (identity) => stored.load(identity),
+        save: (record) => stored.save(record),
+        async admit(record) {
+          const result = await stored.admit(record);
+          afterAdmission = true;
+          return result;
+        },
+      },
+    });
+    const refused = await runner.execute(request());
+    expect(native.calls()).toBe(0);
+    // The store's production schema is kept byte-identical to base 1eb30bd;
+    // this exercises its real disk reader/drain after the new handoff failure.
+    const reopened = new PrivateWorkspaceMutationStore({ root: stateRoot });
+    await expect(reopened.settledForUpdate()).resolves.toBe(true);
+    expect(refused).toMatchObject({
+      ok: false,
+      error: {
+        code: "AUTHORITY_COMPUTER_MISMATCH",
+        source: "computer-policy",
+        retry: "never",
+      },
+    });
+    expect(
+      await service(native.workspace, reopened).execute(request()),
+    ).toMatchObject(refused);
+    expect(native.calls()).toBe(0);
+  });
 
   it("refuses a mutation when authority expires during durable admission", async () => {
     let now = 9_999;

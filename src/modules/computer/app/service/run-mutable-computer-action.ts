@@ -364,12 +364,15 @@ export class RunMutableComputerAction {
         ...prepared,
         phase: "failed",
         outcome: {
-          code: "COMPUTER_APPROVAL_STORE_UNAVAILABLE",
-          source: "authority-store",
+          code: "AUTHORITY_COMPUTER_MISMATCH",
+          source: "computer-policy",
         },
       };
       await this.trySave(terminal);
-      return failure("COMPUTER_APPROVAL_STORE_UNAVAILABLE", "authority-store");
+      // Current policy could not be matched at handoff. Keep the terminal
+      // refusal in the predecessor's vocabulary so rollback can still drain
+      // this journal; its identity and no-replay semantics do not change.
+      return failure("AUTHORITY_COMPUTER_MISMATCH", "computer-policy");
     }
     if (
       !currentApproval ||

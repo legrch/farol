@@ -9,15 +9,10 @@ import type {
 } from "../../domain/execution-authority";
 
 export type StoredWorkspaceMutationFailureCode =
-  | WorkspaceMutationErrorCode
-  | AuthorityErrorCode
-  | "COMPUTER_APPROVAL_STORE_UNAVAILABLE";
+  WorkspaceMutationErrorCode | AuthorityErrorCode;
 
 export type StoredWorkspaceMutationFailureSource =
-  | "native-workspace"
-  | "operation-store"
-  | "authority-store"
-  | AuthorityFailureSource;
+  "native-workspace" | "operation-store" | AuthorityFailureSource;
 
 export type WorkspaceMutationIdentity = Readonly<{
   operationId: string;

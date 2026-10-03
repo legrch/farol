@@ -86,8 +86,10 @@ runtime ceiling. A genuinely temporary approval's own expiry still limits and
 can refuse reissue. Separately sealed Codex/Claude task admissions are not renewed.
 
 Each admitted Computer execution receives a fixed lease in its own async context:
-15 seconds for native file operations and at most 10 minutes for shell authority,
-with the shell command's own timeout and any explicit caller deadline also binding.
+15 seconds for native file operations, 120 seconds for composite Git verification
+(the native sub-step budgets plus preparation/cleanup), and at most 10 minutes for
+shell authority. The shell command's own timeout and any explicit caller deadline
+also bind.
 Outer grant renewal cannot extend or replace this snapshot. Reads recheck current
 owner policy before disclosure; mutation handoff rechecks it after durable admission.
 Running shell watchdogs retain their original deadlines, check current policy and
@@ -96,7 +98,11 @@ stop on revocation. Cancel and confirmed cleanup remain available after revocati
 Reissue never redispatches an effect. Mutation records, shell intent tombstones,
 operation IDs, lifecycle digests and cleanup fences remain intact across renewal
 and reconnect. Unknown outcomes remain unknown; a fresh grant is no proof that an
-old mutation or process did not execute.
+old mutation or process did not execute. If current policy cannot be read after
+durable mutation admission, the terminal refusal uses the existing
+`AUTHORITY_COMPUTER_MISMATCH` / `computer-policy` journal vocabulary. The store
+schema remains byte-identical to base `1eb30bd`, preserving predecessor update
+drain and restart reads; pre-admission store errors remain separately classified.
 
 Clock-controlled regressions use disposable owner settings and real in-memory MCP
 framing; workspace ports in those tests are fixtures. The native shell regressions
