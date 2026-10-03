@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { execFileSync, spawn } from "node:child_process";
 import {
   mkdirSync,
@@ -613,4 +613,109 @@ it("admits UTF-16 pairs as scalars and refuses isolated units", () => {
     String.fromCharCode(0xd800, 0xd800),
   ])
     expect(validUnicode(value)).toBe(false);
+});
+
+it("detaches closed borrowed wrappers while the owner keeps its child alive", async () => {
+  const child = spawn(process.execPath, [
+    "-e",
+    "process.stdin.on('data',data=>process.stdout.write(data));",
+  ]);
+  await new Promise<void>((resolve, reject) => {
+    child.once("spawn", resolve);
+    child.once("error", reject);
+  });
+  const received: Buffer[] = [];
+  const ownerData = (data: Buffer): void => {
+    received.push(data);
+  };
+  child.stdout.on("data", ownerData);
+  const watch = [
+    [child.stdout, "data"],
+    [child.stdout, "end"],
+    [child.stdout, "error"],
+    [child.stdin, "error"],
+    [child.stdin, "drain"],
+    [child.stderr, "data"],
+    [child, "error"],
+    [child, "close"],
+  ] as const;
+  const baseline = watch.map(([source, event]) => source.listenerCount(event));
+  try {
+    for (let index = 0; index < 4; index++) {
+      const client = new Client(child);
+      const write = vi.spyOn(child.stdin, "write").mockReturnValue(false);
+      const pending = expect(
+        client.handshake(
+          {
+            protocolMajor: 1,
+            protocolMinor: 0,
+            buildId: "k0-test",
+            profileId: "test",
+          },
+          2000,
+        ),
+      ).rejects.toMatchObject({ state: "unknown", code: "client_closed" });
+      await client.close();
+      await pending;
+      write.mockRestore();
+      expect(
+        watch.map(([source, event]) => source.listenerCount(event)),
+      ).toEqual(baseline);
+      child.stderr.emit("data", Buffer.from("later diagnostic"));
+      expect(client.diagnosticByteCount).toBe(0);
+      expect(client.cleanupState).toBe("none");
+      expect(child.exitCode).toBeNull();
+      expect(child.signalCode).toBeNull();
+      expect(child.stdin.destroyed).toBe(false);
+      expect(child.stdout.destroyed).toBe(false);
+    }
+    const echo = new Promise<void>((resolve) =>
+      child.stdout.once("data", () => resolve()),
+    );
+    child.stdin.write("owner still connected");
+    await echo;
+    expect(Buffer.concat(received).toString()).toBe("owner still connected");
+  } finally {
+    vi.restoreAllMocks();
+    const terminal = new Promise<void>((resolve) =>
+      child.once("close", () => resolve()),
+    );
+    child.kill("SIGKILL");
+    await terminal;
+  }
+});
+
+it("refuses independently varied fixed wire limits before generating either peer", () => {
+  const root = join(directory, "unsupported-limit-schema");
+  mkdirSync(join(root, "tooling"), { recursive: true });
+  mkdirSync(join(root, "api/desktop/v1"), { recursive: true });
+  writeFileSync(
+    join(root, "tooling/generate-desktop-wire.mjs"),
+    readFileSync(resolve("tooling/generate-desktop-wire.mjs")),
+  );
+  const schema = JSON.parse(
+    readFileSync(resolve("api/desktop/v1/schema.json"), "utf8"),
+  ) as Record<string, unknown>;
+  for (const [name, value] of [
+    ["maxFrameBytes", 524288],
+    ["maxFrameBytes", "1048576"],
+    ["maxFrameBytes", undefined],
+    ["maxDepth", 16],
+    ["maxDepth", 64],
+    ["maxDepth", undefined],
+    ["maxRequests", 1024],
+    ["maxRequests", undefined],
+  ] as const) {
+    writeFileSync(
+      join(root, "api/desktop/v1/schema.json"),
+      JSON.stringify({ ...schema, [name]: value }),
+    );
+    expect(() =>
+      execFileSync(
+        process.execPath,
+        [join(root, "tooling/generate-desktop-wire.mjs")],
+        { stdio: "pipe" },
+      ),
+    ).toThrow("unsupported wire limits");
+  }
 });

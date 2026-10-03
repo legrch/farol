@@ -47,45 +47,80 @@ export class Client {
   private diagnosticBytes = 0;
   private writerBusy = false;
   private childClosed = false;
+  private detachStreams: (() => void)[] = [];
+  private onDrain = (): void => {
+    this.writerBusy = false;
+  };
   private cleanupPromise: Promise<void> | undefined;
   private cleanup: "none" | "pending" | "confirmed" | "unknown" = "none";
   constructor(
     private child: ChildProcessWithoutNullStreams,
     private owned = false,
   ) {
-    child.stdout.on("data", (data: Buffer) => {
+    const onData = (data: Buffer): void => {
       try {
         this.decoder.push(data, (value) => this.receive(value));
       } catch {
         this.fail("protocol_violation");
       }
-    });
-    child.stdout.on("end", () => {
+    };
+    const onEnd = (): void => {
       try {
         this.decoder.finish();
         this.fail("transport_ended");
       } catch {
         this.fail("truncated_frame");
       }
-    });
-    child.stdout.on("error", () => this.fail("transport_failed"));
-    child.stdin.on("error", () => this.fail("transport_failed"));
-    child.stderr.on("data", (data: Buffer) => {
+    };
+    const onStreamError = (): void => this.fail("transport_failed");
+    const onDiagnostic = (data: Buffer): void => {
       this.diagnosticBytes = Math.min(
         65536,
         this.diagnosticBytes + data.length,
       );
-    });
-    child.once("error", () =>
+    };
+    const onError = (): void =>
       this.fail(
         "backend_unavailable",
         child.pid === undefined ? "unavailable" : "unknown",
-      ),
-    );
-    child.once("close", () => {
+      );
+    const onClose = (): void => {
       this.childClosed = true;
       this.fail("backend_unavailable");
-    });
+    };
+    child.stdout.on("data", onData);
+    child.stdout.on("end", onEnd);
+    child.stdout.on("error", onStreamError);
+    child.stdin.on("error", onStreamError);
+    child.stderr.on("data", onDiagnostic);
+    child.once("error", onError);
+    child.once("close", onClose);
+    this.detachStreams = [
+      () => {
+        child.stdout.off("data", onData);
+      },
+      () => {
+        child.stdout.off("end", onEnd);
+      },
+      () => {
+        child.stdout.off("error", onStreamError);
+      },
+      () => {
+        child.stdin.off("error", onStreamError);
+      },
+      () => {
+        child.stdin.off("drain", this.onDrain);
+      },
+      () => {
+        child.stderr.off("data", onDiagnostic);
+      },
+      () => {
+        child.off("error", onError);
+      },
+      () => {
+        child.off("close", onClose);
+      },
+    ];
   }
   async handshake(expected: Handshake, timeoutMs: number): Promise<Identity> {
     if (this.context || this.identity || this.connecting)
@@ -191,9 +226,7 @@ export class Client {
       try {
         if (!this.child.stdin.write(bytes)) {
           this.writerBusy = true;
-          this.child.stdin.once("drain", () => {
-            this.writerBusy = false;
-          });
+          this.child.stdin.once("drain", this.onDrain);
         }
       } catch {
         this.fail("transport_failed");
@@ -315,6 +348,11 @@ export class Client {
       pending.reject(new BridgeError(state, code));
     }
     this.pending.clear();
+    if (!this.owned) {
+      for (const detach of this.detachStreams) detach();
+      this.detachStreams = [];
+      this.listeners.clear();
+    }
     // Admission cannot recover this pipe. Cleanup never resubmits work or proves
     // cancellation of a module-owned OS/provider operation.
     void this.terminateOwned().catch(() => {

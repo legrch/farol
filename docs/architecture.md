@@ -83,7 +83,6 @@ cycles and unclassified production files, and runs both positive and deliberatel
 invalid fixtures. It also rejects host/vendor imports from composition-only `boot`,
 all inner-layer imports of executable `apps`, and module imports of UI.
 
-
 The accepted Go layout uses `modules/<module>/contracts/<feature>` as a thin
 published in-process facade. It may import its own application/domain to delegate
 to the owner, and deliberately shared pure kernel vocabulary. Its request/response
