@@ -2,7 +2,6 @@ package update
 
 import (
 	"errors"
-	"sync"
 
 	"github.com/legrch/farol/modules/release/app/port"
 	release "github.com/legrch/farol/modules/release/domain"
@@ -11,7 +10,7 @@ import (
 // Service owns one updater lifetime. Ports own effects; snapshots do not grant
 // filesystem, provider, browser, or install authority. No background timer runs.
 type Service struct {
-	mu        sync.Mutex
+	mu        port.StateGate
 	state     release.State
 	runtime   port.Runtime
 	clock     port.Clock
@@ -19,10 +18,10 @@ type Service struct {
 	cancelled chan struct{}
 }
 
-func New(runtime port.Runtime, clock port.Clock) *Service {
+func New(runtime port.Runtime, clock port.Clock, gate port.StateGate) *Service {
 	drained := make(chan struct{})
 	close(drained)
-	return &Service{runtime: runtime, clock: clock, drained: drained, cancelled: make(chan struct{})}
+	return &Service{mu: gate, runtime: runtime, clock: clock, drained: drained, cancelled: make(chan struct{})}
 }
 
 type StatusRequest struct{}

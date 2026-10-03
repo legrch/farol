@@ -108,7 +108,7 @@ func staged() port.Archive {
 func fixture() (*Service, *runtimeFixture, *clockFixture) {
 	r := &runtimeFixture{}
 	c := &clockFixture{now: 1000}
-	return New(r, c), r, c
+	return New(r, c, &sync.Mutex{}), r, c
 }
 func snapshot(t *testing.T, s *Service) View {
 	t.Helper()
