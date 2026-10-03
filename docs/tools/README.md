@@ -1,6 +1,7 @@
 # Documentation checks
 
-Run the local checker from the repository root:
+Run the local checker from a Git checkout with the history of the named
+compatibility base, using the repository root:
 
 ```sh
 python3 docs/tools/check.py
@@ -14,7 +15,11 @@ It makes no network requests and edits no files.
 [redirects.json](redirects.json) records the original flat page addresses and their
 canonical page/section destinations. Its frozen `baseline_anchors` inventory
 comes from the named `compatibility_base` and also covers the original root README.
-Removing both an old anchor and its route still fails against that inventory.
+The checker reads that commit with local `git ls-tree` and `git show`, verifies
+the manifest inventory against it, and requires every original flat page address.
+Deleting an old anchor, its route, and its inventory entry together still fails.
+An unavailable commit refuses the check; use a complete clone or make its history
+available before running it. The checker never fetches history automatically.
 Those Markdown compatibility pages remain clickable on GitHub; they are not
 server-side redirects.
 

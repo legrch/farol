@@ -3,7 +3,9 @@
 
 import argparse
 import json
+import os
 import re
+import subprocess
 import sys
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
@@ -66,6 +68,25 @@ def check(root):
         raise ValueError("Unsupported documentation compatibility manifest")
     if not re.fullmatch(r"[a-f0-9]{40}", routes.get("compatibility_base", "")):
         raise ValueError("Missing original documentation compatibility base")
+    base = routes["compatibility_base"]
+
+    def git_read(*arguments):
+        result = subprocess.run(["git", "-C", str(root), *arguments],
+                                capture_output=True, text=True, timeout=10,
+                                env={**os.environ, "GIT_NO_LAZY_FETCH": "1",
+                                     "GIT_OPTIONAL_LOCKS": "0", "GIT_NO_REPLACE_OBJECTS": "1"})
+        if result.returncode != 0:
+            raise ValueError("Compatibility base is unavailable; use a Git checkout with its history")
+        return result.stdout
+
+    tracked = set(git_read("ls-tree", "-r", "--name-only", "-z", base,
+                           "--", "README.md", "docs").split("\0"))
+    original_pages = {path.removeprefix("docs/") for path in tracked
+                      if path.startswith("docs/") and path.count("/") == 1
+                      and path.endswith(".md") and path != "docs/README.md"}
+    baseline = {}
+    for path in ["README.md", *["docs/" + name for name in routes["pages"]]]:
+        baseline[path] = anchors(markdown_parts(git_read("show", f"{base}:{path}"))[0]) if path in tracked else set()
     aliases = {docs / name for name in routes["pages"]}
     tasks = set(re.findall(r"^  ([\w:-]+):\s*$", (root / "Taskfile.yml").read_text(), re.M))
 
@@ -137,11 +158,17 @@ def check(root):
         required = record["baseline_anchors"]
         if not isinstance(required, list) or not all(isinstance(anchor, str) for anchor in required):
             raise ValueError("Invalid original documentation anchor inventory")
+        expected = baseline[file.relative_to(root).as_posix()]
+        if set(required) != expected:
+            issue(file, "original anchor inventory differs from compatibility_base")
         actual = anchors(parts[file][0])
-        for anchor in required:
+        for anchor in sorted(expected):
             if anchor not in actual:
                 issue(file, f"missing original anchor: {anchor}")
-        return required
+        return expected
+
+    for name in sorted(original_pages - routes["pages"].keys()):
+        issue(docs / "tools/redirects.json", f"missing original compatibility page: {name}")
 
     landing = routes["landing"]
     original_anchors(root / "README.md", landing)
@@ -189,7 +216,7 @@ def main():
     args = parser.parse_args()
     try:
         errors, totals = check(args.root)
-    except (OSError, ValueError, KeyError, TypeError) as error:
+    except (OSError, ValueError, KeyError, TypeError, subprocess.TimeoutExpired) as error:
         print(f"Documentation check refused: {error}", file=sys.stderr)
         return 1
     if errors:

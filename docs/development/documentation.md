@@ -37,8 +37,11 @@ range changes those labels.
 Original flat URLs are compatibility pointers recorded in
 [redirects.json](../tools/redirects.json). They retain old section anchors and link
 into canonical pages. The manifest's `baseline_anchors` freeze the heading
-inventory from `compatibility_base`, including the original landing page. When a
-heading changes, preserve its old anchor with a
+inventory from `compatibility_base`, including the original landing page. The
+checker reads that Git commit and verifies both the original flat page addresses
+and the inventory against its contents; it refuses an unavailable base. Run it in
+a Git checkout whose history includes that commit. When a heading changes,
+preserve its old anchor with a
 [GitHub custom anchor](https://docs.github.com/en/get-started/writing-on-github/getting-started-with-writing-and-formatting-on-github/basic-writing-and-formatting-syntax#custom-anchors)
 beside the relevant replacement section. Do not remove a baseline entry to silence
 the checker. For another page move, capture its pre-move heading anchors and map
