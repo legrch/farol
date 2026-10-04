@@ -11,6 +11,7 @@ import type {
 } from "./contract";
 import { routeReadiness } from "../setup-presentation";
 import { TaskEditor } from "./task";
+import { ChatReadonly } from "./chat-readonly";
 const pages: readonly [SettingsPage, string][] = [
   ["general", "General"],
   ["appearance", "Appearance"],
@@ -167,6 +168,7 @@ function Home({
               Switching sections keeps ongoing work available.
             </p>
           </section>
+          <ChatReadonly snapshot={snapshot} facade={facade} />
           <section className="recent">
             <div className="section-heading">
               <h2>Recent activity</h2>

@@ -645,6 +645,15 @@ export const ProductConfigurationCommandSchema = z.discriminatedUnion("kind", [
     operationId: IdentifierSchema,
   }),
   z.strictObject({
+    kind: z.literal("chatgpt.inspect-readonly-account"),
+    operationId: IdentifierSchema,
+  }),
+  z.strictObject({
+    kind: z.literal("chatgpt.approve-readonly-account"),
+    operationId: IdentifierSchema,
+    confirmationId: IdentifierSchema,
+  }),
+  z.strictObject({
     kind: z.literal("chatgpt.cancel-readonly-task"),
     operationId: IdentifierSchema,
   }),
@@ -912,6 +921,12 @@ export const ProductConfigurationEvidenceSchema = z.discriminatedUnion("kind", [
     contextTruncated: z.boolean(),
     excludedPaths: z.array(ProductRelativePathSchema).max(32),
     expiresAt: CanonicalTimestampSchema,
+    account: z
+      .strictObject({
+        confirmationId: IdentifierSchema,
+        state: z.enum(["observed", "approved"]),
+      })
+      .optional(),
   }),
   z.strictObject({
     kind: z.literal("chatgpt.readonly-task"),
@@ -1253,6 +1268,10 @@ export const ProductConfigurationResultSchema = z.discriminatedUnion("ok", [
       "SETTINGS_INPUT_INVALID",
       "SETTINGS_WRITE_FAILED",
       "CHATGPT_ROUTE_UNAVAILABLE",
+      "CHATGPT_ACCOUNT_UNAVAILABLE",
+      "CHATGPT_ACCOUNT_CHANGED",
+      "CHATGPT_ACCOUNT_CONFIRMATION_INVALID",
+      "CHATGPT_ACCOUNT_APPROVAL_UNCONFIRMED",
       "CHATGPT_SIGN_IN_IN_PROGRESS",
       "CHATGPT_PAGE_UNREACHABLE",
       "CHATGPT_CONNECTION_NOT_VERIFIED",

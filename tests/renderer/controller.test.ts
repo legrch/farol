@@ -13,6 +13,29 @@ function sectionIntent(section = "settings", sequence = 1, taskId = "") {
   };
 }
 describe("F0 window owner", () => {
+  it("R10 retains an unknown explicit account confirmation without another command", async () => {
+    const f = fixture();
+    const c = new WindowController(f.api);
+    await c.start();
+    vi.mocked(f.api.configure).mockResolvedValue({
+      ok: false,
+      error: "CHATGPT_ACCOUNT_APPROVAL_UNCONFIRMED",
+      snapshot: bootstrap().configuration,
+    });
+    const command = {
+      kind: "chatgpt.approve-readonly-account" as const,
+      operationId: "11111111-1111-4111-8111-111111111111",
+      confirmationId: "22222222-2222-4222-8222-222222222222",
+    };
+    const first = await c.configure(command, "account:confirmation");
+    expect(first.state).toBe("unknown");
+    expect(await c.configure(command, "account:confirmation")).toEqual(first);
+    expect(f.api.configure).toHaveBeenCalledTimes(1);
+    expect(c.getSnapshot().intents["account:confirmation"]?.state).toBe(
+      "unknown",
+    );
+    c.dispose();
+  });
   it("R06 R08 conflicting buffered tasks cannot finish initial bootstrap as current", async () => {
     const f = fixture();
     const reply = deferred<unknown>();

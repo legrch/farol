@@ -45,6 +45,8 @@ import {
 } from "./saved-chat-page-scripts";
 
 import { ChatGptPhysical } from "../../../apps/desktop/chatgpt-physical";
+import { chatGptAccountProbeScript } from "../../../apps/desktop/chatgpt-account-probe";
+import { observeBoundChatGptAccount } from "../../../apps/desktop/chatgpt-account-observation";
 import type {
   ChatGptPhysicalApi,
   PhysicalBinding,
@@ -3773,6 +3775,28 @@ export class ChatGptRoute {
       binding,
       isDestroyed: () => candidate.webContents.isDestroyed(),
     };
+  }
+
+  // Explicit observation of the existing signed-in surface, without opening,
+  // navigating or granting approval. The host retains the returned binding.
+  observeAccount() {
+    return observeBoundChatGptAccount({
+      e2eOrigin: this.options.e2eOrigin,
+      snapshot: () => this.chatPhysicalSnapshot(),
+      read: async (surface) => {
+        const candidate = this.routeWindow;
+        if (
+          !candidate ||
+          candidate !== surface.handle ||
+          candidate.webContents.isDestroyed()
+        )
+          throw new Error("PHYSICAL_BINDING_LOST");
+        return candidate.webContents.executeJavaScript(
+          chatGptAccountProbeScript(this.options.e2eOrigin),
+          false,
+        );
+      },
+    });
   }
 
   // Internal native adapter seam. Go's caller supplies a full original lease

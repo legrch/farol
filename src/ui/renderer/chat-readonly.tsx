@@ -11,11 +11,6 @@ type Preview = Extract<
   Evidence["value"],
   { kind: "chatgpt.readonly-task-preview" }
 >;
-type Reviewed = Readonly<{
-  facade: RendererFacade;
-  intention: string;
-  evidence: Evidence;
-}>;
 const PREPARE = "chat-readonly:prepare:";
 const DISCARD = "chat-readonly:discard:";
 const LIMITATION =
@@ -102,17 +97,17 @@ function previewEvidence(snapshot: WindowSnapshot): Evidence | null {
     ? evidence
     : null;
 }
-function boundPreview(snapshot: WindowSnapshot, reviewed: Reviewed | null) {
-  const value = settings(snapshot);
-  const evidence = reviewed?.evidence;
-  return reviewed &&
-    evidence?.value.kind === "chatgpt.readonly-task-preview" &&
-    snapshot.evidence === evidence &&
-    evidence.revision === value?.revision &&
-    snapshot.intents[reviewed.intention]?.state === "applied" &&
-    !discarded(snapshot, evidence.value.operationId) &&
-    verifiedWorkspace(snapshot, evidence.value.workspaceId)
-    ? evidence.value
+function boundPreview(snapshot: WindowSnapshot) {
+  const retained = snapshot.readPreview;
+  return retained &&
+    retained.prepareIntention.startsWith(PREPARE) &&
+    retained.revision === settings(snapshot)?.revision &&
+    retained.buildId === snapshot.buildId &&
+    snapshot.intents[retained.prepareIntention]?.state === "applied" &&
+    snapshot.intents[retained.evidenceIntention]?.state === "applied" &&
+    !discarded(snapshot, retained.value.operationId) &&
+    verifiedWorkspace(snapshot, retained.value.workspaceId)
+    ? retained
     : null;
 }
 function feedback(result: Intent, action: "Prepare" | "Discard"): string {
@@ -127,19 +122,15 @@ function feedback(result: Intent, action: "Prepare" | "Discard"): string {
 /** Safe metadata only. Every command belongs to an explicit user intention. */
 export function ChatReadonly({ snapshot, facade }: ChatReadonlyProps) {
   const [workspaceId, setWorkspaceId] = useState("");
-  const [reviewed, setReviewed] = useState<Reviewed | null>(null);
   const [message, setMessage] = useState("");
   const [pending, setPending] = useState(false);
   const [uncertain, setUncertain] = useState(false);
   const busy = useRef(false);
-  const currentReviewed = reviewed?.facade === facade ? reviewed : null;
-  const preview = boundPreview(snapshot, currentReviewed);
-  // Retain metadata for explanation, but never reinterpret it as current proof.
-  const visibleEvidence =
-    currentReviewed?.evidence.value.kind === "chatgpt.readonly-task-preview" &&
-    !discarded(snapshot, currentReviewed.evidence.value.operationId)
-      ? currentReviewed.evidence
-      : previewEvidence(snapshot);
+  const current = boundPreview(snapshot);
+  const preview = current?.value;
+  // The controller retains correlated receipts across component remounts. It
+  // cannot recover an operation from a different window or backend lifetime.
+  const visibleEvidence = snapshot.readPreview ?? previewEvidence(snapshot);
   const visiblePreview: Preview | null =
     visibleEvidence?.value.kind === "chatgpt.readonly-task-preview"
       ? visibleEvidence.value
@@ -152,8 +143,8 @@ export function ChatReadonly({ snapshot, facade }: ChatReadonlyProps) {
     );
   const paused = pending || uncertain || fenced(snapshot);
   const discardId =
-    preview && currentReviewed
-      ? `${DISCARD}${currentReviewed.intention}:${preview.operationId}`
+    preview && current
+      ? `${DISCARD}${current.prepareIntention}:${preview.operationId}`
       : null;
   const discardAttempted = Boolean(discardId && snapshot.intents[discardId]);
   const blocked = retained && !pending && (!preview || discardAttempted);
@@ -178,41 +169,19 @@ export function ChatReadonly({ snapshot, facade }: ChatReadonlyProps) {
     const intention = `${PREPARE}${workspaceId}:${revision}:${ordinal}`;
     busy.current = true;
     setPending(true);
-    setReviewed(null);
     setMessage("Choose a text file in the system picker…");
     try {
       const result = await facade.configure(
         { kind: "chatgpt.prepare-readonly-task", workspaceId },
         intention,
       );
-      const after = facade.getSnapshot();
-      const evidence = after.evidence;
-      const soleIntent = Object.entries(after.intents).every(
-        ([id, intent]) => id === intention || before.intents[id] === intent,
-      );
-      // Evidence has no request ID. Accept only a fresh, sole-intent response
-      // at the unchanged configuration revision and selected workspace.
+      const retained = boundPreview(facade.getSnapshot());
       if (
-        result.id === intention &&
         result.state === "applied" &&
-        after.intents[intention]?.state === "applied" &&
-        after.status === "current" &&
-        soleIntent &&
-        after.buildId === before.buildId &&
-        settings(after)?.revision === revision &&
-        evidence !== before.evidence &&
-        evidence?.revision === revision &&
-        evidence.value.kind === "chatgpt.readonly-task-preview" &&
-        evidence.value.workspaceId === workspaceId &&
-        verifiedWorkspace(after, workspaceId)
-      ) {
-        setReviewed({ facade, intention, evidence });
-        setMessage(feedback(result, "Prepare"));
-      } else if (result.state === "applied") {
+        retained?.prepareIntention !== intention
+      )
         setMessage(LIMITATION);
-      } else {
-        setMessage(feedback(result, "Prepare"));
-      }
+      else setMessage(feedback(result, "Prepare"));
       if (result.state === "unknown") setUncertain(true);
     } catch {
       setUncertain(true);
@@ -224,16 +193,9 @@ export function ChatReadonly({ snapshot, facade }: ChatReadonlyProps) {
   }
   async function discard() {
     const current = facade.getSnapshot();
-    const exact = boundPreview(current, currentReviewed);
-    if (
-      busy.current ||
-      uncertain ||
-      fenced(current) ||
-      !exact ||
-      !currentReviewed
-    )
-      return;
-    const intention = `${DISCARD}${currentReviewed.intention}:${exact.operationId}`;
+    const exact = boundPreview(current);
+    if (busy.current || uncertain || fenced(current) || !exact) return;
+    const intention = `${DISCARD}${exact.prepareIntention}:${exact.value.operationId}`;
     if (current.intents[intention]) return;
     busy.current = true;
     setPending(true);
@@ -242,12 +204,10 @@ export function ChatReadonly({ snapshot, facade }: ChatReadonlyProps) {
       const result = await facade.configure(
         {
           kind: "chatgpt.cancel-readonly-task",
-          operationId: exact.operationId,
+          operationId: exact.value.operationId,
         },
         intention,
       );
-      if (result.id === intention && result.state === "applied")
-        setReviewed(null);
       if (result.state === "unknown") setUncertain(true);
       setMessage(feedback(result, "Discard"));
     } catch {
@@ -258,6 +218,63 @@ export function ChatReadonly({ snapshot, facade }: ChatReadonlyProps) {
       setPending(false);
     }
   }
+  async function accountAction(action: "inspect" | "approve") {
+    const state = facade.getSnapshot();
+    const exact = boundPreview(state);
+    if (busy.current || uncertain || fenced(state) || !exact) return;
+    const account = exact.value.account;
+    if (action === "approve" && account?.state !== "observed") return;
+    if (action === "inspect" && account) return;
+    const intention = `chat-readonly:${action}:${exact.prepareIntention}:${exact.value.operationId}`;
+    if (state.intents[intention]) return;
+    busy.current = true;
+    setPending(true);
+    setMessage(
+      action === "inspect"
+        ? "Reading the current ChatGPT account…"
+        : "Confirming this account…",
+    );
+    try {
+      const command =
+        action === "inspect"
+          ? {
+              kind: "chatgpt.inspect-readonly-account" as const,
+              operationId: exact.value.operationId,
+            }
+          : {
+              kind: "chatgpt.approve-readonly-account" as const,
+              operationId: exact.value.operationId,
+              confirmationId: account!.confirmationId,
+            };
+      const result = await facade.configure(command, intention);
+      if (result.state === "unknown") {
+        setUncertain(true);
+        setMessage(UNKNOWN);
+      } else if (result.state !== "applied")
+        setMessage(
+          "The account could not be confirmed. Discard this preview before starting again.",
+        );
+      else
+        setMessage(
+          action === "inspect"
+            ? "The current account was observed. Confirm it only if it is the account you intend to use."
+            : "Account confirmed for this preview. Nothing has been sent.",
+        );
+    } catch {
+      setUncertain(true);
+      setMessage(UNKNOWN);
+    } finally {
+      busy.current = false;
+      setPending(false);
+    }
+  }
+  const accountAttempted = (action: "inspect" | "approve") =>
+    Boolean(
+      current &&
+      snapshot.intents[
+        `chat-readonly:${action}:${current.prepareIntention}:${current.value.operationId}`
+      ],
+    );
   return (
     <section className="settings-group" aria-label="Read-only file preview">
       <h2>Read-only file preview</h2>
@@ -323,6 +340,39 @@ export function ChatReadonly({ snapshot, facade }: ChatReadonlyProps) {
               {visiblePreview.expiresAt}
             </time>
             . An expired preview may still need to be discarded.
+          </p>
+          <div className="control-row">
+            <button
+              type="button"
+              onClick={() => facade.navigate({ area: "chatgpt" })}
+            >
+              Open ChatGPT
+            </button>
+            {!visiblePreview.account ? (
+              <button
+                type="button"
+                disabled={paused || !preview || accountAttempted("inspect")}
+                onClick={() => void accountAction("inspect")}
+              >
+                Inspect current account
+              </button>
+            ) : visiblePreview.account.state === "observed" ? (
+              <button
+                type="button"
+                disabled={paused || !preview || accountAttempted("approve")}
+                onClick={() => void accountAction("approve")}
+              >
+                Use this account
+              </button>
+            ) : (
+              <p role="status">
+                Account confirmed for this preview. Nothing has been sent.
+              </p>
+            )}
+          </div>
+          <p className="description">
+            Check the account open in ChatGPT before confirming it for this
+            file.
           </p>
           <details>
             <summary>Details</summary>

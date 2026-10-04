@@ -6,6 +6,11 @@ import type { ChatComputerAdmissionResponse } from "../../../apps/desktop/bridge
 import { createDesktopChatBrowser } from "../../../apps/desktop/go-chat-host";
 import { GoChatBrowserDriver } from "../../../apps/desktop/go-chat-browser";
 import { BridgeError } from "../../../apps/desktop/bridge/client";
+import { ReadAccountConfirmation } from "../../../apps/desktop/read-account-confirmation";
+import {
+  ReadAccountCommands,
+  readAccountFailure,
+} from "../../../apps/desktop/read-account-commands";
 declare const __FAROL_GO_CORE__: unknown;
 import { createMenuBar } from "./menu-bar";
 import { promises as rawFs } from "original-fs";
@@ -1078,6 +1083,11 @@ type PendingChatGptReadonlyTask = Readonly<{
   expiresAt: number;
 }>;
 let pendingChatGptReadonlyTask: PendingChatGptReadonlyTask | null = null;
+const readonlyAccountCommands = new ReadAccountCommands();
+const readonlyAccountConfirmations = new WeakMap<
+  PendingChatGptReadonlyTask,
+  ReadAccountConfirmation
+>();
 const readonlyDiscardAttempts = new WeakMap<
   PendingChatGptReadonlyTask,
   Promise<boolean>
@@ -1160,6 +1170,7 @@ function codexAgentOperationActive(): boolean {
 function chatGptReadonlyTaskPreview(
   pending: PendingChatGptReadonlyTask,
 ): Readonly<Record<string, unknown>> {
+  const account = readonlyAccountConfirmations.get(pending)?.projection();
   return {
     kind: "chatgpt.readonly-task-preview",
     operationId: pending.operationId,
@@ -1172,7 +1183,41 @@ function chatGptReadonlyTaskPreview(
     contextTruncated: pending.contextTruncated,
     excludedPaths: pending.excludedPaths,
     expiresAt: new Date(pending.expiresAt).toISOString(),
+    ...(account ? { account } : {}),
   };
+}
+
+function readonlyAccountCurrent(
+  pending: PendingChatGptReadonlyTask,
+  route: ChatGptRoute,
+  core: DesktopGoCore,
+): boolean {
+  const snapshot = configuration?.snapshot();
+  if (
+    pendingChatGptReadonlyTask !== pending ||
+    chatGptRoute !== route ||
+    desktopGoCore !== core ||
+    !pending.goAdmission ||
+    Date.now() >= pending.expiresAt ||
+    snapshot?.status !== "ready"
+  )
+    return false;
+  const settings = snapshot.settings;
+  return (
+    !settings.setup.chatgpt.outcomeUnknown &&
+    pending.chatGptVerification.buildId === buildIdentity.buildId &&
+    isDeepStrictEqual(
+      settings.setup.chatgpt.verified,
+      pending.chatGptVerification,
+    ) &&
+    settings.computer.generation === pending.computerGeneration &&
+    settings.computer.workspaces.some(
+      (workspace) => workspace.workspaceId === pending.workspaceId,
+    ) &&
+    settings.setup.computer.verified?.workspaceId === pending.workspaceId &&
+    settings.setup.computer.verified.configRevision ===
+      pending.computerGeneration
+  );
 }
 
 function chatGptAttachmentTaskPreview(
@@ -5104,6 +5149,24 @@ function workspaceMutationFailure(code: string): ProductConfigurationResult {
 async function configureProduct(
   value: unknown,
 ): Promise<ProductConfigurationResult> {
+  const parsed = ProductConfigurationCommandSchema.safeParse(value);
+  if (
+    parsed.success &&
+    (parsed.data.kind === "chatgpt.inspect-readonly-account" ||
+      parsed.data.kind === "chatgpt.approve-readonly-account")
+  ) {
+    return readonlyAccountCommands.run(
+      parsed.data,
+      () => configureNewProductRequest(parsed.data),
+      configurationFailure,
+    );
+  }
+  return configureNewProductRequest(value);
+}
+
+async function configureNewProductRequest(
+  value: unknown,
+): Promise<ProductConfigurationResult> {
   if (installedUpdateAdmission)
     return configurationFailure("AUTHORITY_CHANGE_IN_PROGRESS");
   configurationRequests += 1;
@@ -6963,6 +7026,59 @@ async function configureAdmittedProduct(
           snapshot,
           evidence: chatGptReadonlyTaskPreview(pendingChatGptReadonlyTask),
         });
+      } finally {
+        chatGptTaskAdmission = false;
+      }
+    }
+    case "chatgpt.inspect-readonly-account":
+    case "chatgpt.approve-readonly-account": {
+      const pending = pendingChatGptReadonlyTask;
+      const route = chatGptRoute;
+      const core = desktopGoCore;
+      if (chatGptTaskAdmission)
+        return configurationFailure("CHATGPT_TASK_IN_PROGRESS");
+      if (!pending || pending.operationId !== command.operationId)
+        return configurationFailure("CHATGPT_TASK_PREVIEW_NOT_FOUND");
+      if (
+        !route ||
+        !core ||
+        !pending.goAdmission ||
+        !readonlyAccountCurrent(pending, route, core)
+      )
+        return configurationFailure("CHATGPT_ACCOUNT_CONFIRMATION_INVALID");
+      let confirmation = readonlyAccountConfirmations.get(pending);
+      if (
+        !confirmation &&
+        command.kind === "chatgpt.inspect-readonly-account"
+      ) {
+        confirmation = new ReadAccountConfirmation({
+          admission: pending.goAdmission,
+          current: () => readonlyAccountCurrent(pending, route, core),
+          read: () => route.observeAccount(),
+          approve: (input) => core.approveReadAccount(input),
+        });
+        readonlyAccountConfirmations.set(pending, confirmation);
+      }
+      if (!confirmation)
+        return configurationFailure("CHATGPT_ACCOUNT_CONFIRMATION_INVALID");
+      chatGptTaskAdmission = true;
+      try {
+        if (command.kind === "chatgpt.inspect-readonly-account")
+          await confirmation.inspect();
+        else await confirmation.confirm(command.confirmationId);
+        if (!readonlyAccountCurrent(pending, route, core))
+          return configurationFailure(
+            command.kind === "chatgpt.inspect-readonly-account"
+              ? "CHATGPT_ACCOUNT_CONFIRMATION_INVALID"
+              : "CHATGPT_ACCOUNT_APPROVAL_UNCONFIRMED",
+          );
+        return ProductConfigurationResultSchema.parse({
+          ok: true,
+          snapshot: configuration?.snapshot(),
+          evidence: chatGptReadonlyTaskPreview(pending),
+        });
+      } catch (error) {
+        return configurationFailure(readAccountFailure(command, error));
       } finally {
         chatGptTaskAdmission = false;
       }

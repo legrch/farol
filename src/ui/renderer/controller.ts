@@ -81,6 +81,7 @@ const initial: WindowSnapshot = {
   update: { phase: "unavailable", code: "UPDATE_STATUS_PENDING" },
   intents: {},
   evidence: null,
+  readPreview: null,
   shortcuts: { ...defaultNavigationShortcuts },
   workspaceEditDelivery: null,
   destination: home,
@@ -575,6 +576,7 @@ export class WindowController implements RendererFacade {
         code: "SETTINGS_INPUT_INVALID",
       });
     return this.dispatch(intention, command, async () => {
+      const before = this.state;
       const order = this.configOrder.begin();
       let transport: Parameters<typeof classifyConfigurationResponse>[0];
       try {
@@ -605,6 +607,76 @@ export class WindowController implements RendererFacade {
         : null;
       if (outcome.result.ok && outcome.result.evidence && revision !== null)
         this.patch({ evidence: { revision, value: outcome.result.evidence } });
+      if (outcome.result.ok) {
+        const value = outcome.result.evidence;
+        const retained = this.state.readPreview;
+        if (command.kind === "chatgpt.cancel-readonly-task") {
+          // Exact known cancellation retires this receipt even if a refresh won
+          // snapshot ordering. A different operation is never removed.
+          if (retained?.value.operationId === command.operationId)
+            this.patch({ readPreview: null });
+        } else if (command.kind === "chatgpt.prepare-readonly-task") {
+          if (
+            revision === null ||
+            before.configuration?.status !== "ready" ||
+            revision !== before.configuration.settings.revision ||
+            !before.buildId ||
+            before.buildId !== this.state.buildId ||
+            value?.kind !== "chatgpt.readonly-task-preview" ||
+            value.workspaceId !== command.workspaceId ||
+            retained !== null
+          )
+            return {
+              id: intention,
+              state: "unknown",
+              code: "READ_PREVIEW_UNCONFIRMED",
+            };
+          this.patch({
+            readPreview: {
+              prepareIntention: intention,
+              evidenceIntention: intention,
+              buildId: before.buildId,
+              revision,
+              value,
+            },
+          });
+        } else if (
+          command.kind === "chatgpt.inspect-readonly-account" ||
+          command.kind === "chatgpt.approve-readonly-account"
+        ) {
+          const sameMetadata =
+            retained &&
+            value?.kind === "chatgpt.readonly-task-preview" &&
+            JSON.stringify({ ...retained.value, account: undefined }) ===
+              JSON.stringify({ ...value, account: undefined });
+          if (
+            !retained ||
+            before.readPreview !== retained ||
+            retained.value.operationId !== command.operationId ||
+            retained.buildId !== this.state.buildId ||
+            revision !== retained.revision ||
+            !sameMetadata ||
+            value?.kind !== "chatgpt.readonly-task-preview" ||
+            !value.account ||
+            (retained.value.account &&
+              retained.value.account.confirmationId !==
+                value.account.confirmationId) ||
+            (retained.value.account?.state === "approved" &&
+              value.account.state !== "approved") ||
+            (command.kind === "chatgpt.approve-readonly-account" &&
+              (value.account.confirmationId !== command.confirmationId ||
+                value.account.state !== "approved"))
+          )
+            return {
+              id: intention,
+              state: "unknown",
+              code: "READ_ACCOUNT_UNCONFIRMED",
+            };
+          this.patch({
+            readPreview: { ...retained, evidenceIntention: intention, value },
+          });
+        }
+      }
       return {
         id: intention,
         state: configurationEffectOutcome(outcome),

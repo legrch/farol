@@ -90,6 +90,7 @@ it("distinguishes a settings write with failed readback from a refusal without e
     "CONNECTOR_RUNTIME_OUTCOME_UNKNOWN",
     "CONNECTOR_STOP_UNCONFIRMED",
     "WORKSPACE_MUTATION_OUTCOME_UNKNOWN",
+    "CHATGPT_ACCOUNT_APPROVAL_UNCONFIRMED",
   ]) {
     const result = classifyConfigurationResponse({
       settled: "fulfilled",
@@ -111,6 +112,21 @@ it("distinguishes a settings write with failed readback from a refusal without e
           error: "SETTINGS_INPUT_INVALID",
           snapshot: { status: "error", error: "SETTINGS_READ_FAILED" },
         },
+      }),
+    ),
+  ).toBe("refused");
+});
+
+it.each([
+  "CHATGPT_ACCOUNT_UNAVAILABLE",
+  "CHATGPT_ACCOUNT_CHANGED",
+  "CHATGPT_ACCOUNT_CONFIRMATION_INVALID",
+])("keeps known account refusal %s distinct from unknown", (error) => {
+  expect(
+    configurationEffectOutcome(
+      classifyConfigurationResponse({
+        settled: "fulfilled",
+        value: { ok: false, error, snapshot },
       }),
     ),
   ).toBe("refused");

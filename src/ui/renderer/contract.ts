@@ -91,6 +91,17 @@ export type WindowSnapshot = Readonly<{
   intents: Readonly<Record<string, Intent>>;
   shortcuts: NavigationShortcuts;
   workspaceEditDelivery: string | null;
+  /** Window-retained command receipt; not backend recovery or Send authority. */
+  readPreview: Readonly<{
+    prepareIntention: string;
+    evidenceIntention: string;
+    buildId: string;
+    revision: number;
+    value: Extract<
+      ProductConfigurationEvidence,
+      { kind: "chatgpt.readonly-task-preview" }
+    >;
+  }> | null;
   evidence: Readonly<{
     revision: number;
     value: ProductConfigurationEvidence;

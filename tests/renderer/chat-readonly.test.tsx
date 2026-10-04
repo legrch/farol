@@ -392,25 +392,30 @@ describe("ChatReadonly bounded component", () => {
         evidence: preview(),
       }),
     );
-    expect(h.host.textContent).toContain("current state is unavailable");
     expect(h.host.textContent).toContain(operationId);
-    expect(h.button("Discard preview").disabled).toBe(true);
+    expect(h.button("Discard preview").disabled).toBe(false);
     await h.render("again");
-    await h.click("Discard preview");
     expect(h.calls()).toHaveLength(1);
     expect(h.f.api.task).not.toHaveBeenCalled();
+    await h.click("Discard preview");
+    expect(h.calls()).toHaveLength(2);
   });
-  it("does not treat a retained preview as correlated after remount or after refresh clears evidence", async () => {
+  it("retains exact window correlation through remount and a same-revision refresh", async () => {
     const h = await mount();
     await h.select();
     await h.click("Choose file…");
+    const retained = h.c.getSnapshot().readPreview;
     await h.render("remounted");
-    expect(h.button("Discard preview").disabled).toBe(true);
+    expect(h.button("Discard preview").disabled).toBe(false);
     await act(async () => h.c.refresh());
-    expect(h.host.textContent).toContain("current state is unavailable");
+    expect(h.c.getSnapshot().evidence).toBeNull();
+    expect(h.c.getSnapshot().readPreview).toBe(retained);
     expect(h.button("Choose file…").disabled).toBe(true);
-    await h.click("Choose file…");
+    expect(h.button("Discard preview").disabled).toBe(false);
     expect(h.calls()).toHaveLength(1);
+    await h.click("Discard preview");
+    expect(h.calls()).toHaveLength(2);
+    expect(h.c.getSnapshot().readPreview).toBeNull();
   });
   it("withdraws Discard after a configuration revision changes, without losing metadata", async () => {
     const h = await mount();
@@ -493,7 +498,9 @@ describe("ChatReadonly bounded component", () => {
     });
     await h.select();
     await h.click("Choose file…");
-    expect(h.host.textContent).toContain(otherOperationId);
+    expect(h.host.textContent).toContain(operationId);
+    expect(h.c.getSnapshot().intents["foreign-prepare"]?.state).toBe("unknown");
+    expect(h.c.getSnapshot().readPreview?.value.operationId).toBe(operationId);
     expect(h.button("Discard preview").disabled).toBe(true);
     expect(
       h
@@ -674,5 +681,141 @@ describe("ChatReadonly bounded component", () => {
     expect(h.button("Discard preview").disabled).toBe(true);
     expect(h.calls()).toHaveLength(1);
     expect(h.host.textContent).toContain(operationId);
+  });
+  it("uses explicit inspect then confirmation, retains account state across remount, and never sends", async () => {
+    const h = await mount();
+    await h.select();
+    await h.click("Choose file…");
+    const original = h.c.getSnapshot().readPreview!;
+    const confirmationId = "77777777-7777-4777-8777-777777777777";
+    vi.mocked(h.f.api.configure).mockResolvedValueOnce({
+      ok: true,
+      snapshot: h.configuration,
+      evidence: preview({ account: { confirmationId, state: "observed" } }),
+    });
+    await h.click("Inspect current account");
+    expect(h.calls()[1]).toEqual({
+      kind: "chatgpt.inspect-readonly-account",
+      operationId,
+    });
+    expect(h.c.getSnapshot().readPreview?.prepareIntention).toBe(
+      original.prepareIntention,
+    );
+    await h.render("observed-remount");
+    expect(h.button("Use this account").disabled).toBe(false);
+    expect(h.calls()).toHaveLength(2);
+    const approval = deferred<unknown>();
+    vi.mocked(h.f.api.configure).mockReturnValueOnce(approval.promise);
+    await act(async () => {
+      h.button("Use this account").click();
+      h.button("Use this account").click();
+    });
+    expect(h.calls()[2]).toEqual({
+      kind: "chatgpt.approve-readonly-account",
+      operationId,
+      confirmationId,
+    });
+    await h.render("confirmation-pending");
+    expect(h.button("Use this account").disabled).toBe(true);
+    await act(async () =>
+      approval.resolve({
+        ok: true,
+        snapshot: h.configuration,
+        evidence: preview({ account: { confirmationId, state: "approved" } }),
+      }),
+    );
+    await h.render("approved-remount");
+    expect(h.host.textContent).toContain(
+      "Account confirmed for this preview. Nothing has been sent.",
+    );
+    expect(h.c.getSnapshot().readPreview?.value.account?.state).toBe(
+      "approved",
+    );
+    expect(h.calls()).toHaveLength(3);
+    expect(h.f.api.task).not.toHaveBeenCalled();
+    await h.click("Discard preview");
+    expect(h.calls()[3]).toEqual({
+      kind: "chatgpt.cancel-readonly-task",
+      operationId,
+    });
+    expect(h.c.getSnapshot().readPreview).toBeNull();
+  });
+  it.each([
+    "unknown",
+    "wrong-operation",
+    "wrong-confirmation",
+    "wrong-metadata",
+    "not-approved",
+  ])(
+    "keeps %s account confirmation unconfirmed across remount without another effect",
+    async (variant) => {
+      const h = await mount();
+      await h.select();
+      await h.click("Choose file…");
+      const confirmationId = "77777777-7777-4777-8777-777777777777";
+      vi.mocked(h.f.api.configure).mockResolvedValueOnce({
+        ok: true,
+        snapshot: h.configuration,
+        evidence: preview({ account: { confirmationId, state: "observed" } }),
+      });
+      await h.click("Inspect current account");
+      vi.mocked(h.f.api.configure).mockResolvedValueOnce(
+        variant === "unknown"
+          ? {
+              ok: false,
+              snapshot: h.configuration,
+              error: "CHATGPT_ACCOUNT_APPROVAL_UNCONFIRMED",
+            }
+          : {
+              ok: true,
+              snapshot: h.configuration,
+              evidence: preview({
+                operationId:
+                  variant === "wrong-operation"
+                    ? otherOperationId
+                    : operationId,
+                relativePath:
+                  variant === "wrong-metadata"
+                    ? "different.txt"
+                    : "docs/readme.txt",
+                account: {
+                  confirmationId:
+                    variant === "wrong-confirmation"
+                      ? otherOperationId
+                      : confirmationId,
+                  state: variant === "not-approved" ? "observed" : "approved",
+                },
+              }),
+            },
+      );
+      await h.click("Use this account");
+      expect(h.c.getSnapshot().readPreview?.value.account?.state).toBe(
+        "observed",
+      );
+      await h.render("unknown-approval");
+      expect(h.host.textContent).toContain("result is unknown");
+      expect(h.button("Use this account").disabled).toBe(true);
+      expect(h.button("Discard preview").disabled).toBe(true);
+      await h.click("Use this account");
+      expect(h.calls()).toHaveLength(3);
+    },
+  );
+  it("keeps a known refused account inspection one-shot but permits exact Discard", async () => {
+    const h = await mount();
+    await h.select();
+    await h.click("Choose file…");
+    vi.mocked(h.f.api.configure).mockResolvedValueOnce({
+      ok: false,
+      snapshot: h.configuration,
+      error: "CHATGPT_ACCOUNT_UNAVAILABLE",
+    });
+    await h.click("Inspect current account");
+    await h.render("inspection-refused");
+    expect(h.button("Inspect current account").disabled).toBe(true);
+    expect(h.button("Discard preview").disabled).toBe(false);
+    await h.click("Inspect current account");
+    expect(h.calls()).toHaveLength(2);
+    await h.click("Discard preview");
+    expect(h.calls()).toHaveLength(3);
   });
 });

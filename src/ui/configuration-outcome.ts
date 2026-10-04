@@ -81,6 +81,7 @@ export function configurationEffectOutcome(
     "CONNECTOR_STOP_UNCONFIRMED",
     "WORKSPACE_MUTATION_OUTCOME_UNKNOWN",
     "SETTINGS_WRITE_FAILED",
+    "CHATGPT_ACCOUNT_APPROVAL_UNCONFIRMED",
   ].includes(outcome.result.error)
     ? "unknown"
     : "refused";
