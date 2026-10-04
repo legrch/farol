@@ -101,6 +101,47 @@ describe("captured read intent transport", () => {
     expect(f.request).toHaveBeenCalledTimes(1);
     expect(f.request.mock.calls[0]![0]).toBe("chat.readintent.withdraw");
   });
+  it("coalesces simultaneous and later dismissals into the original withdrawal", async () => {
+    const f = fixture();
+    await Promise.all([
+      f.bridge.withdraw(admission),
+      f.bridge.withdraw(structuredClone(admission)),
+    ]);
+    await f.bridge.withdraw(admission);
+    expect(f.request).toHaveBeenCalledTimes(1);
+  });
+  it.each(["unknown", "refused", "unavailable"] as const)(
+    "retains a %s withdrawal instead of sending another effect",
+    async (status) => {
+      const f = fixture((o) => ({
+        ...o,
+        status,
+        code: "original-failure",
+        data: null,
+      }));
+      await expect(f.bridge.withdraw(admission)).rejects.toMatchObject({
+        state: status,
+      });
+      await expect(f.bridge.withdraw(admission)).rejects.toMatchObject({
+        state: status,
+      });
+      expect(f.request).toHaveBeenCalledTimes(1);
+    },
+  );
+  it("retains a thrown transport failure and does not reuse it for a crossed owner", async () => {
+    const f = fixture();
+    const failure = new Error("original transport lost");
+    f.request.mockRejectedValueOnce(failure);
+    await expect(f.bridge.withdraw(admission)).rejects.toBe(failure);
+    await expect(f.bridge.withdraw(admission)).rejects.toBe(failure);
+    await expect(
+      f.bridge.withdraw({ ...admission, taskId: "crossed" }),
+    ).rejects.toMatchObject({
+      state: "refused",
+      code: "read_intent_withdrawal_crossed",
+    });
+    expect(f.request).toHaveBeenCalledTimes(1);
+  });
   it.each(Object.keys(handle.binding))(
     "refuses crossed promotion %s",
     async (field) => {

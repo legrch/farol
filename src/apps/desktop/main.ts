@@ -1078,6 +1078,10 @@ type PendingChatGptReadonlyTask = Readonly<{
   expiresAt: number;
 }>;
 let pendingChatGptReadonlyTask: PendingChatGptReadonlyTask | null = null;
+const readonlyDiscardAttempts = new WeakMap<
+  PendingChatGptReadonlyTask,
+  Promise<boolean>
+>();
 type PendingChatGptAttachmentTask = Readonly<{
   operationId: string;
   attachments: StagedChatGptAttachments;
@@ -3583,6 +3587,37 @@ async function discardPreparedChatGptTask(
   } catch {
     return false;
   }
+}
+
+async function withdrawGoReadonlyAdmission(
+  admission: ChatComputerAdmissionResponse | undefined,
+): Promise<boolean> {
+  if (!admission) return true;
+  if (!desktopGoCore) return false;
+  try {
+    await desktopGoCore.withdrawReadIntent(admission);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function discardPreparedReadonlyTask(
+  pending: PendingChatGptReadonlyTask,
+): Promise<boolean> {
+  const previous = readonlyDiscardAttempts.get(pending);
+  if (previous) return previous;
+  // The Go owner must confirm cancellation/ACK before the legacy preview
+  // journal is cleared. Retain either failure; UI repetition is not a retry.
+  const result = Promise.resolve().then(async () => {
+    if (!(await withdrawGoReadonlyAdmission(pending.goAdmission))) return false;
+    if (!(await discardPreparedChatGptTask(pending.operationId))) return false;
+    if (pendingChatGptReadonlyTask === pending)
+      pendingChatGptReadonlyTask = null;
+    return true;
+  });
+  readonlyDiscardAttempts.set(pending, result);
+  return result;
 }
 
 async function selectedChatGptAttachmentPaths(): Promise<
@@ -6787,14 +6822,8 @@ async function configureAdmittedProduct(
               evidence: chatGptReadonlyTaskPreview(pending),
             });
           }
-          pendingChatGptReadonlyTask = null;
-          if (!chatGptTaskJournal) {
-            return configurationFailure("CHATGPT_TASK_JOURNAL_FAILED");
-          }
-          try {
-            await chatGptTaskJournal.discardPrepared(pending.operationId);
-          } catch {
-            return configurationFailure("CHATGPT_TASK_JOURNAL_FAILED");
+          if (!(await discardPreparedReadonlyTask(pending))) {
+            return configurationFailure("CHATGPT_TASK_REQUIRES_REVIEW");
           }
         }
         const relativePath = await selectedWorkspaceFile(workspace, {
@@ -6823,10 +6852,13 @@ async function configureAdmittedProduct(
               relativePath,
             );
             goAdmission = observed.admission;
-            if (observed.result.status !== "ok")
+            if (observed.result.status !== "ok") {
+              if (!(await withdrawGoReadonlyAdmission(goAdmission)))
+                return configurationFailure("CHATGPT_TASK_REQUIRES_REVIEW");
               return workspaceReadFailure(
                 observed.result.code ?? "WORKSPACE_READ_FAILED",
               );
+            }
             text = observed.result.data.text;
             bytes = Number(observed.result.data.bytes);
           } catch {
@@ -6855,6 +6887,8 @@ async function configureAdmittedProduct(
         const expiresAt = Date.now() + 10 * 60_000;
         const excludedPaths = workspaceDeniedPaths(workspace);
         if (!chatGptTaskJournal) {
+          if (!(await withdrawGoReadonlyAdmission(goAdmission)))
+            return configurationFailure("CHATGPT_TASK_REQUIRES_REVIEW");
           return configurationFailure("CHATGPT_TASK_JOURNAL_FAILED");
         }
         try {
@@ -6866,6 +6900,8 @@ async function configureAdmittedProduct(
             }),
           );
         } catch (error) {
+          if (!(await withdrawGoReadonlyAdmission(goAdmission)))
+            return configurationFailure("CHATGPT_TASK_REQUIRES_REVIEW");
           return configurationFailure(
             error instanceof PromotionPendingRefusal
               ? "CHATGPT_TASK_PROMOTION_PENDING"
@@ -6908,9 +6944,8 @@ async function configureAdmittedProduct(
         return configurationFailure("CHATGPT_TASK_PREVIEW_NOT_FOUND");
       }
       if (Date.now() >= pending.expiresAt) {
-        pendingChatGptReadonlyTask = null;
-        if (!(await discardPreparedChatGptTask(pending.operationId))) {
-          return configurationFailure("CHATGPT_TASK_JOURNAL_FAILED");
+        if (!(await discardPreparedReadonlyTask(pending))) {
+          return configurationFailure("CHATGPT_TASK_REQUIRES_REVIEW");
         }
         return configurationFailure("CHATGPT_TASK_PREVIEW_EXPIRED");
       }
@@ -6919,9 +6954,8 @@ async function configureAdmittedProduct(
         return configurationFailure("SETTINGS_UNAVAILABLE");
       }
       if (snapshot.settings.setup.chatgpt.outcomeUnknown) {
-        pendingChatGptReadonlyTask = null;
-        if (!(await discardPreparedChatGptTask(pending.operationId))) {
-          return configurationFailure("CHATGPT_TASK_JOURNAL_FAILED");
+        if (!(await discardPreparedReadonlyTask(pending))) {
+          return configurationFailure("CHATGPT_TASK_REQUIRES_REVIEW");
         }
         return configurationFailure("CHATGPT_TASK_REQUIRES_REVIEW");
       }
@@ -6931,9 +6965,8 @@ async function configureAdmittedProduct(
           pending.chatGptVerification,
         )
       ) {
-        pendingChatGptReadonlyTask = null;
-        if (!(await discardPreparedChatGptTask(pending.operationId))) {
-          return configurationFailure("CHATGPT_TASK_JOURNAL_FAILED");
+        if (!(await discardPreparedReadonlyTask(pending))) {
+          return configurationFailure("CHATGPT_TASK_REQUIRES_REVIEW");
         }
         return configurationFailure("CHATGPT_CONNECTION_NOT_VERIFIED");
       }
@@ -6947,12 +6980,16 @@ async function configureAdmittedProduct(
         computerVerification?.workspaceId !== pending.workspaceId ||
         computerVerification.configRevision !== pending.computerGeneration
       ) {
-        pendingChatGptReadonlyTask = null;
-        if (!(await discardPreparedChatGptTask(pending.operationId))) {
-          return configurationFailure("CHATGPT_TASK_JOURNAL_FAILED");
+        if (!(await discardPreparedReadonlyTask(pending))) {
+          return configurationFailure("CHATGPT_TASK_REQUIRES_REVIEW");
         }
         return configurationFailure("WORKSPACE_VERIFICATION_REQUIRED");
       }
+      // A Go-owned read cannot be sent by the legacy queue. Its promotion
+      // requires the production account/model control profile still to be wired.
+      // Keep the preview owned and discardable while that route is unavailable.
+      if (pending.goAdmission)
+        return configurationFailure("CHATGPT_ROUTE_UNAVAILABLE");
       if (!chatGptTaskJournal) {
         return configurationFailure("CHATGPT_TASK_JOURNAL_FAILED");
       }
@@ -7082,14 +7119,13 @@ async function configureAdmittedProduct(
       ) {
         return configurationFailure("CHATGPT_TASK_PREVIEW_NOT_FOUND");
       }
-      pendingChatGptReadonlyTask = null;
-      if (!chatGptTaskJournal) {
-        return configurationFailure("CHATGPT_TASK_JOURNAL_FAILED");
-      }
+      const pending = pendingChatGptReadonlyTask;
+      chatGptTaskAdmission = true;
       try {
-        await chatGptTaskJournal.discardPrepared(command.operationId);
-      } catch {
-        return configurationFailure("CHATGPT_TASK_JOURNAL_FAILED");
+        if (!(await discardPreparedReadonlyTask(pending)))
+          return configurationFailure("CHATGPT_TASK_REQUIRES_REVIEW");
+      } finally {
+        chatGptTaskAdmission = false;
       }
       return ProductConfigurationResultSchema.parse({
         ok: true,

@@ -13,6 +13,12 @@ import {
 // Transport for the already captured Go owner. No new task/turn identity,
 // automatic cancellation, replacement admission or retry is created here.
 export class ReadIntentBridge {
+  // Retain the original transport attempt, including rejection. A second UI
+  // dismissal must not mint a new effect after a lost withdrawal reply.
+  private readonly withdrawals = new Map<
+    string,
+    { admission: ChatComputerAdmissionResponse; result: Promise<void> }
+  >();
   constructor(private readonly client: Client) {}
 
   async promote(input: ChatReadIntentPromote): Promise<ChatHandle> {
@@ -44,6 +50,25 @@ export class ReadIntentBridge {
 
   async withdraw(admission: ChatComputerAdmissionResponse): Promise<void> {
     const selected = structuredClone(admission);
+    if (!validate("ChatReadIntentWithdraw", { admission: selected }))
+      throw new BridgeError("refused", "read_intent_request_invalid");
+    const existing = this.withdrawals.get(selected.admissionOperationId);
+    if (existing) {
+      if (!isDeepStrictEqual(existing.admission, selected))
+        throw new BridgeError("refused", "read_intent_withdrawal_crossed");
+      return existing.result;
+    }
+    const result = Promise.resolve().then(() => this.withdrawOnce(selected));
+    this.withdrawals.set(selected.admissionOperationId, {
+      admission: selected,
+      result,
+    });
+    return result;
+  }
+
+  private async withdrawOnce(
+    selected: ChatComputerAdmissionResponse,
+  ): Promise<void> {
     const reply = await this.call<ChatReadIntentWithdrawn>(
       "withdraw",
       "ChatReadIntentWithdraw",
