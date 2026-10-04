@@ -58,6 +58,12 @@ import {
   readWitnessSelfTest,
   consumedReadHandoffWitness,
 } from "./fixtures/go-read-discard-witness.mjs";
+import {
+  settingsExcludedCanaries,
+  settingsAuthorityWitness,
+  settingsListWitness,
+  settingsWitnessSelfTest,
+} from "./lib/computer-settings-witness.mjs";
 
 const root = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -82,8 +88,12 @@ const contract = Object.freeze({
   reopen:
     "Packaged --reopen only: confirmed first Quit -> same sealed artifact/profile -> retained computerId/Graphite -> new journal backend generation -> second confirmed Quit; no retry after refused/unknown outcomes",
   readDiscard:
-    "Explicit packaged --reopen --read-discard: normal configure add/verify-workspace (legacy native helper listing), fixture chatgpt.verify readiness, Go read-preview metadata, duplicate prepare, exact Discard/cancel/ACK, duplicate discard without writes, known Quit, original handoff consumed by one same-profile/package successor; requires production handoff support for acknowledged never-reserved NOT_DISPATCHED history",
+    "Explicit packaged --reopen --read-discard: normal configure add-workspace -> Verify -> check-folder -> list-workspace with independent Computer/Chat journal observations and exact canary listing, fixture chatgpt.verify readiness, Go read-preview metadata, duplicate prepare, exact Discard/cancel/ACK, duplicate discard without writes, known Quit, original handoff consumed by one same-profile/package successor; requires production handoff support for acknowledged never-reserved NOT_DISPATCHED history",
   readDiscardLimits: [
+    "Settings replies do not instrument executor origin. Source-only self-tests and a package built from ff2d84d4d2fb85bfc2fe9696696c0a90ddb1162e can still exercise TypeScript listings; Go acceptance requires Lead's new integrated package and exact production-source mapping of all three Settings commands to the Go owner executor",
+    "Settings approval revision/expiry may advance while generation and approval semantics stay fixed. Retained participant map and Chat journal prove no retained admission/ChatTurn change; no independent transient execution/admission counter exists",
+    "Synthetic .ssh directory and .env file exercise built-in listing exclusions only; custom owner exclusions and direct denied reads are not exercised",
+    "Root identity measurement, Git metadata discovery and configuration remain explicitly temporary TypeScript boundaries",
     "Preview exposes path/byte count/UTF-16 context character count, not text or body SHA; no body integrity hash claim",
     "Fixture page readiness is not production model/account-scope qualification, provider Send, or a live authenticated account",
     "Disposable private roots and hidden window observations are not hermetic containment of every native/OS path",
@@ -92,7 +102,7 @@ const contract = Object.freeze({
   isolation:
     "Existing E2E root/proof/app-data guard; new HOME/AppData, private per-user TMPDIR, hidden windows, fixture tunnel client, no workspace or provider verification",
   missingWitnesses: [
-    "Normal Go read bytes/hash and classified Go denial: prepare-readonly-task requires ChatGPT readiness and Computer verification; Check access/Verify workspace use the legacy native helper",
+    "Normal Go read bytes/hash and classified Go denial: prepare-readonly-task requires ChatGPT readiness and Computer verification; Settings executor origin requires exact integrated package production-source review",
     "Revoked old Go admission/no TS fallback: removing workspace is guarded before Go admission in normal preview; the normal configuration API does not expose the old admission or classified Go outcome",
     "No source-only claim of native execution, live provider/model, installed app, OS dialog/focus, or full migration acceptance",
   ],
@@ -640,6 +650,28 @@ async function native(selected, inputs, report, save) {
       readCanary.text,
       { mode: 0o600, flag: "wx" },
     );
+    // Synthetic names only, inside this scenario's already guarded disposable
+    // workspace. Built-in exclusions preserve the existing empty owner
+    // exclusion list and the unchanged read-preview selection/journey.
+    await fs.mkdir(
+      path.join(workspaceRoot, settingsExcludedCanaries.directory),
+      { mode: 0o700 },
+    );
+    for (const relative of [
+      settingsExcludedCanaries.file,
+      path.join(
+        settingsExcludedCanaries.directory,
+        settingsExcludedCanaries.child,
+      ),
+    ])
+      await fs.writeFile(
+        path.join(workspaceRoot, relative),
+        settingsExcludedCanaries.text,
+        {
+          mode: 0o600,
+          flag: "wx",
+        },
+      );
     assert.equal(
       (
         await regular(path.join(workspaceRoot, readCanary.relativePath))
@@ -1153,17 +1185,127 @@ async function native(selected, inputs, report, save) {
       assert.equal(added.snapshot.settings.computer.workspaces.length, 1);
       const workspaceId =
         added.snapshot.settings.computer.workspaces[0].workspaceId;
-      const verified = await configure({
-        kind: "computer.verify-workspace",
-        workspaceId,
+      const settingsReport = (report.readDiscard.settingsCommands = {
+        observations: [],
+        commands: [],
+        syntheticNames: {
+          included: readCanary.relativePath,
+          excludedDirectory: settingsExcludedCanaries.directory,
+          excludedDirectoryChild: settingsExcludedCanaries.child,
+          excludedFile: settingsExcludedCanaries.file,
+        },
+        sourceBinding: {
+          packageSourceCommit: inputs.identity.sourceCommit,
+          productionMainSHA: inputs.mainSHA,
+          settingsWitnessSourceSHA: report.settingsWitnessSourceSHA,
+        },
+        executorOrigin:
+          "Not instrumented by Settings replies; exact packaged production source must tie commands to the Go owner executor",
       });
-      assert.equal(
-        verified.ok,
-        true,
-        "READ_LEGACY_WORKSPACE_VERIFICATION_FAILED",
-      );
-      assert.equal(verified.evidence?.kind, "computer.workspace-list");
-      assert.equal(verified.evidence.workspaceId, workspaceId);
+      const observeSettings = async (label, currentSettings) => {
+        const physical = {
+          coreRoot: await physicalDirectory(path.join(stateRoot, "go-core")),
+          computerRoot: await physicalDirectory(
+            path.join(stateRoot, "go-core/computer"),
+          ),
+          chatRoot: await physicalDirectory(
+            path.join(stateRoot, "go-core/chat"),
+          ),
+          workspaceRoot: await physicalDirectory(workspaceRoot),
+        };
+        assert.deepEqual(physical.coreRoot, launch.physical.coreRoot);
+        assert.deepEqual(physical.chatRoot, launch.physical.chatRoot);
+        assert.deepEqual(physical.workspaceRoot, workspacePhysical);
+        const profile = await document(
+          path.join(physical.coreRoot.path, "profile.json"),
+          4096,
+        );
+        assert.deepEqual(
+          profile,
+          launch.goProfile,
+          "SETTINGS_GO_PROFILE_CHANGED",
+        );
+        const access = await document(
+          path.join(physical.computerRoot.path, "computer-access.json"),
+          1024 * 1024,
+        );
+        const chat = await document(
+          path.join(physical.chatRoot.path, "chat-lifecycle.json"),
+          1024 * 1024,
+        );
+        const configuration = await document(
+          path.join(stateRoot, "config.json"),
+          256 * 1024,
+        );
+        const observed = {
+          label,
+          profile,
+          access,
+          chat,
+          configuration,
+          settings: currentSettings,
+          physical,
+        };
+        const previous = settingsReport.observations.at(-1);
+        settingsReport.observations.push(observed);
+        await save();
+        assert.deepEqual(
+          configuration.value,
+          currentSettings,
+          "SETTINGS_SNAPSHOT_NOT_RETAINED",
+        );
+        // Separate read of the same known roots; captureJournal and its
+        // ready/read/Discard/retirement protections remain unchanged.
+        journalWitness(chat.value, profile.value.profileId, physical.chatRoot);
+        observed.counters = settingsAuthorityWitness(observed, previous);
+        zeroSends(site.driver.snapshot());
+        await save();
+        return observed;
+      };
+      let settingsCurrent = added.snapshot.settings;
+      for (const command of [
+        { kind: "computer.verify-workspace", workspaceId },
+        { kind: "computer.check-folder", workspaceId },
+        { kind: "computer.list-workspace", workspaceId, relativePath: "." },
+      ]) {
+        const before = await observeSettings(
+          `before-${command.kind}`,
+          settingsCurrent,
+        );
+        const reply = await configure(command);
+        const commandReport = { command, reply, before: before.label };
+        settingsReport.commands.push(commandReport);
+        await save();
+        if (reply.snapshot.status === "ready")
+          settingsCurrent = reply.snapshot.settings;
+        const after = await observeSettings(
+          `after-${command.kind}`,
+          settingsCurrent,
+        );
+        commandReport.after = after.label;
+        assert.equal(reply.ok, true, "SETTINGS_COMMAND_FAILED");
+        if (command.kind === "computer.check-folder") {
+          const checked = settingsCurrent.computer.workspaces[0].accessCheck;
+          assert.equal(checked?.buildId, selected.buildId);
+          assert.equal(
+            checked?.computerGeneration,
+            settingsCurrent.computer.generation,
+          );
+          assert.deepEqual(
+            checked?.rootIdentity,
+            settingsCurrent.computer.workspaces[0].rootIdentity,
+          );
+        } else
+          commandReport.list = settingsListWitness(
+            reply.evidence,
+            workspaceId,
+            ".",
+            readCanary.relativePath,
+          );
+        await save();
+      }
+      settingsReport.passed = true;
+      await save();
       // Normal Home/Settings startup keeps Browser lazy. Open its exact fixture
       // page before the observation-only Check connection command.
       const opened = await configure({ kind: "chatgpt.open-browser" });
@@ -1917,6 +2059,7 @@ function selfTest() {
     }),
   );
   readWitnessSelfTest(pass, reject);
+  settingsWitnessSelfTest(pass, reject, readCanary.relativePath);
   pass(() =>
     assert.equal(
       selection(["--read-discard", "--reopen", ...packageArgs]).readDiscard,
@@ -1943,7 +2086,7 @@ async function main(args) {
       ? contract.readDiscardLimits
       : contract.missingWitnesses,
     isolation: selected.readDiscard
-      ? "Private disposable workspace/HOME/AppData with existing E2E dialog seams and all windows hidden/unfocused; workspace verification remains a legacy native helper boundary; no hermetic all-paths claim"
+      ? "Private disposable workspace/HOME/AppData with existing E2E dialog seams and all windows hidden/unfocused; Settings executor origin requires exact production-source review; no hermetic all-paths claim"
       : contract.isolation,
     selection: selected,
     status: "checking",
@@ -1974,6 +2117,11 @@ async function main(args) {
     report.readWitnessSourceSHA = hash(
       await regular(
         new URL("./fixtures/go-read-discard-witness.mjs", import.meta.url),
+      ),
+    );
+    report.settingsWitnessSourceSHA = hash(
+      await regular(
+        new URL("./lib/computer-settings-witness.mjs", import.meta.url),
       ),
     );
     report.attestation = await attest(selected);
