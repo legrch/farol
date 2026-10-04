@@ -6,6 +6,8 @@ import (
 
 	wire "github.com/legrch/farol/gen/desktop/v1"
 	conversation "github.com/legrch/farol/modules/chat/contracts/conversation"
+	computerport "github.com/legrch/farol/modules/computer/app/port"
+	"github.com/legrch/farol/modules/computer/domain/authority"
 	"github.com/legrch/farol/transport/desktop"
 )
 
@@ -18,6 +20,8 @@ type capturedReadIntent struct {
 	admission    *wire.ChatComputerAdmissionResponse
 	promoteInput *wire.ChatReadIntentPromote
 	promoted     *chatHandle
+	route        *ComputerRoute
+	withdrawn    bool
 }
 
 // Caller holds effects across lookup and mutation. Publication, read admission,
@@ -38,14 +42,11 @@ func (s *ComputerIngress) capturedRead(a wire.ChatComputerAdmissionResponse) (*c
 func (s *ComputerIngress) promoteRead(ctx context.Context, operation string, in wire.ChatReadIntentPromote) (*wire.ChatHandle, error) {
 	s.effects.Lock()
 	defer s.effects.Unlock()
-	if ctx == nil || ctx.Err() != nil || validateIngress("ChatReadIntentPromote", in) != nil {
+	if ctx == nil || ctx.Err() != nil || !validIngressID(operation) || validateIngress("ChatReadIntentPromote", in) != nil {
 		return nil, errors.New("read_intent_invalid")
 	}
 	c, err := s.capturedRead(in.Admission)
 	if err != nil {
-		return nil, err
-	}
-	if err = s.claim(operation); err != nil {
 		return nil, err
 	}
 	if c.promoted != nil {
@@ -54,6 +55,9 @@ func (s *ComputerIngress) promoteRead(ctx context.Context, operation string, in 
 		}
 		out := chatWireHandle(*c.promoted)
 		return &out, nil
+	}
+	if err = s.claim(operation); err != nil {
+		return nil, err
 	}
 	s.guard.mu.Lock()
 	current := s.guard.active && !s.guard.exhausted && s.guard.revision == c.fence
@@ -75,7 +79,7 @@ func (s *ComputerIngress) promoteRead(ctx context.Context, operation string, in 
 		s.poison()
 		return nil, errors.New("read_intent_promotion_unconfirmed")
 	}
-	owned := chatHandle{id: id, binding: c.binding, handle: h}
+	owned := chatHandle{id: id, binding: c.binding, handle: h, beforeSend: c.checkDisclosure}
 	s.conversations.mu.Lock()
 	s.conversations.handles[id] = owned
 	s.conversations.mu.Unlock()
@@ -84,10 +88,35 @@ func (s *ComputerIngress) promoteRead(ctx context.Context, operation string, in 
 	return &out, nil
 }
 
+// This is a new explicit disclosure operation after any queue/prepare wait.
+// Recheck the original captured Computer route, not the root's latest route.
+// No filesystem/browser IO runs under either current-owner callback. As for
+// ordinary Computer disclosure, later revocation cannot retract admitted bytes.
+func (c *capturedReadIntent) checkDisclosure(ctx context.Context) error {
+	if c == nil || c.route == nil || c.route.issuer == nil {
+		return errors.New("read_intent_authority_unavailable")
+	}
+	lease, err := c.route.issuer.Admit(ctx, authority.Read)
+	if err != nil {
+		return err
+	}
+	b := c.binding
+	expected := operationBinding(b.OwnerID, b.SessionID, b.TaskID, b.TaskEpoch, b.ParticipantID, b.TurnID)
+	if lease.Binding() != expected {
+		return errors.New("read_intent_authority_crossed")
+	}
+	return lease.WithSnapshot(ctx, b.ParticipantID, func(snapshot computerport.AccessSnapshot) error {
+		if snapshot.Participant == nil || snapshot.Approval == nil {
+			return errors.New("read_intent_authority_unavailable")
+		}
+		return nil
+	})
+}
+
 func (s *ComputerIngress) withdrawRead(ctx context.Context, operation string, in wire.ChatReadIntentWithdraw) (*wire.ChatReadIntentWithdrawn, error) {
 	s.effects.Lock()
 	defer s.effects.Unlock()
-	if ctx == nil || ctx.Err() != nil || validateIngress("ChatReadIntentWithdraw", in) != nil {
+	if ctx == nil || ctx.Err() != nil || !validIngressID(operation) || validateIngress("ChatReadIntentWithdraw", in) != nil {
 		return nil, errors.New("read_intent_invalid")
 	}
 	c, err := s.capturedRead(in.Admission)
@@ -97,6 +126,9 @@ func (s *ComputerIngress) withdrawRead(ctx context.Context, operation string, in
 	if c.promoted != nil {
 		return nil, errors.New("read_intent_already_promoted")
 	}
+	if c.withdrawn {
+		return &wire.ChatReadIntentWithdrawn{Admission: *c.admission}, nil
+	}
 	if err = s.claim(operation); err != nil {
 		return nil, err
 	}
@@ -104,6 +136,7 @@ func (s *ComputerIngress) withdrawRead(ctx context.Context, operation string, in
 		s.poison()
 		return nil, errors.New("read_intent_withdrawal_unconfirmed")
 	}
+	c.withdrawn = true
 	return &wire.ChatReadIntentWithdrawn{Admission: *c.admission}, nil
 }
 

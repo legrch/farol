@@ -55,8 +55,13 @@ func TestReadIntentSameOwnerPromotionAndFollow(t *testing.T) {
 		t.Fatal("promotion replaced owner or sent", h)
 	}
 	entries := len(f.journal.entries)
+	claims := len(computer.used)
+	exactAgain, err := computer.promoteRead(ctx, "explicit-send", in)
+	if err != nil || !reflect.DeepEqual(h, exactAgain) || len(f.journal.entries) != entries || len(computer.used) != claims {
+		t.Fatal("same-command known replay changed ownership", exactAgain, err)
+	}
 	again, err := computer.promoteRead(ctx, "duplicate-ui-command", in)
-	if err != nil || !reflect.DeepEqual(h, again) || len(f.journal.entries) != entries {
+	if err != nil || !reflect.DeepEqual(h, again) || len(f.journal.entries) != entries || len(computer.used) != claims {
 		t.Fatal("known replay created another owner or write", again, err)
 	}
 	p, err := f.ingress.facade.PrepareNext(ctx, 10000)
@@ -67,7 +72,7 @@ func TestReadIntentSameOwnerPromotionAndFollow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := actual.handle.Send(ctx, 10000); err != nil {
+	if err := actual.send(ctx, 10000); err != nil {
 		t.Fatal(err)
 	}
 	for n := 0; n < 2; n++ {
@@ -122,12 +127,42 @@ func TestReadIntentSameOwnerPromotionAndFollow(t *testing.T) {
 	}
 }
 
+func TestReadIntentRechecksAuthorityAfterQueueBeforeSend(t *testing.T) {
+	f, computer, a := readIntentFixture(t)
+	ctx := context.Background()
+	h, err := computer.promoteRead(ctx, "promote-before-revoke", readIntentPromotion(a))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.ingress.facade.PrepareNext(ctx, 10000); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := computer.Deactivate(ctx, "revoke-after-queue"); err != nil {
+		t.Fatal(err)
+	}
+	actual, err := f.ingress.get(h.HandleId)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := len(f.journal.entries)
+	if err := actual.send(ctx, 10000); err == nil || f.physical.sends != 0 || len(f.journal.entries) != before {
+		t.Fatal("revoked queued intent reached Send", err)
+	}
+}
+
 func TestReadIntentExplicitWithdrawalClosesCapturedAdmission(t *testing.T) {
 	f, computer, a := readIntentFixture(t)
 	ctx := context.Background()
 	r, err := computer.withdrawRead(ctx, "explicit-discard", wire.ChatReadIntentWithdraw{Admission: a})
 	if err != nil || r == nil || r.Admission != a || f.physical.sends != 0 || f.count("cancel") != 1 || f.count("acknowledge") != 1 {
 		t.Fatal("withdraw", r, err)
+	}
+	claims, entries := len(computer.used), len(f.journal.entries)
+	for _, command := range []string{"explicit-discard", "duplicate-discard"} {
+		v, err := computer.withdrawRead(ctx, command, wire.ChatReadIntentWithdraw{Admission: a})
+		if err != nil || v == nil || *v != *r || len(computer.used) != claims || len(f.journal.entries) != entries {
+			t.Fatal("known withdrawal replay mutated claims or owner", v, err)
+		}
 	}
 	if h, err := computer.promoteRead(ctx, "late-send", readIntentPromotion(a)); err == nil || h != nil || f.physical.sends != 0 {
 		t.Fatal("withdrawn preview promoted", h, err)

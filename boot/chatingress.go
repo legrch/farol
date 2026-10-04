@@ -15,9 +15,19 @@ import (
 )
 
 type chatHandle struct {
-	id      string
-	binding conversation.Binding
-	handle  *conversation.Handle
+	id         string
+	binding    conversation.Binding
+	handle     *conversation.Handle
+	beforeSend func(context.Context) error
+}
+
+func (h chatHandle) send(ctx context.Context, deadline uint64) error {
+	if h.beforeSend != nil {
+		if err := h.beforeSend(ctx); err != nil {
+			return err
+		}
+	}
+	return h.handle.Send(ctx, deadline)
 }
 
 // ChatIngress binds a trusted inherited desktop pipe to the existing Chat owner.
@@ -214,7 +224,7 @@ func (s *ChatIngress) Methods() map[string]desktop.Method {
 				return invalidIngress()
 			}
 			if name == "send" {
-				e = h.handle.Send(ctx, wireUint(in.DeadlineMillis))
+				e = h.send(ctx, wireUint(in.DeadlineMillis))
 			} else {
 				e = h.handle.Observe(ctx, wireUint(in.DeadlineMillis))
 			}

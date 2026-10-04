@@ -286,6 +286,7 @@ func (s *ComputerIngress) Admit(ctx context.Context, operation string, in wire.C
 	response := wire.ChatComputerAdmissionResponse{OwnerId: binding.OwnerID, SessionId: binding.SessionID, TaskId: binding.TaskID, TaskEpoch: "1", ParticipantId: binding.ParticipantID, TurnId: binding.TurnID, Generation: "1", AdmissionOperationId: operation, StoreRevision: strconv.FormatUint(status.Revision, 10)}
 	retained := response
 	captured.admission = &retained
+	captured.route = route
 	return &response, nil
 }
 func readIntentPolicy(a authority.Approval, ids []string) (authority.Policy, error) {
