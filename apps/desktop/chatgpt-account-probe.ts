@@ -27,10 +27,20 @@ const observation = z.discriminatedUnion("state", [
         .refine((value) => {
           try {
             const url = new URL(value);
+            const production = url.origin === "https://chatgpt.com";
+            const fixture =
+              /^http:\/\/(?:localhost|127\.0\.0\.1|\[::1\]):[1-9][0-9]{0,4}$/u.test(
+                url.origin,
+              );
+            const supportedPath = production
+              ? url.pathname === "/" ||
+                /^\/c\/[A-Za-z0-9_-]{1,128}$/u.test(url.pathname)
+              : fixture &&
+                (url.pathname === "/chatgpt" ||
+                  /^\/chatgpt\/c\/[A-Za-z0-9_-]{1,128}$/u.test(url.pathname));
             return (
               url.href === value &&
-              (url.pathname === "/" ||
-                /^\/c\/[A-Za-z0-9_-]{1,128}$/u.test(url.pathname)) &&
+              supportedPath &&
               !url.username &&
               !url.password &&
               !value.includes("?") &&
@@ -182,11 +192,18 @@ export async function readChatGptAccount(
       refuse("origin_refused");
     code = "origin_refused";
     const url = new URL(documentUrl);
+    // Reuse the existing controlled site's /chatgpt namespace. This policy is
+    // explicit constructor input; production never admits that fixture path.
+    const supportedPath =
+      e2eOrigin === null
+        ? url.pathname === "/" ||
+          /^\/c\/[A-Za-z0-9_-]{1,128}$/u.test(url.pathname)
+        : url.pathname === "/chatgpt" ||
+          /^\/chatgpt\/c\/[A-Za-z0-9_-]{1,128}$/u.test(url.pathname);
     if (
       url.origin !== origin ||
       url.href !== documentUrl ||
-      (url.pathname !== "/" &&
-        !/^\/c\/[A-Za-z0-9_-]{1,128}$/u.test(url.pathname)) ||
+      !supportedPath ||
       url.username ||
       url.password ||
       documentUrl.includes("?") ||

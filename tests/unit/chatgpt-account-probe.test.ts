@@ -209,29 +209,31 @@ describe("read-only session identity mechanics", () => {
   ])("accepts a trusted canonical loopback override: %s", async (origin) => {
     const fixture = page({
       origin,
-      href: `${origin}/`,
+      href: `${origin}/chatgpt`,
       response: { url: `${origin}/api/auth/session` },
     });
-    expect(observed(await fixture.run()).documentUrl).toBe(`${origin}/`);
+    expect(observed(await fixture.run()).documentUrl).toBe(`${origin}/chatgpt`);
     expect(fixture.fetch.mock.calls[0]?.[0]).toBe(`${origin}/api/auth/session`);
   });
 
   it.each(["https://chatgpt.com", "http://127.0.0.1:4317"])(
     "accepts supported canonical chat documents at %s",
     async (origin) => {
+      const base = origin.startsWith("http:") ? "/chatgpt" : "";
       for (const path of [
         "/",
         "/c/12345678-1234-4123-8123-123456789abc",
         "/c/Az_09-",
         `/c/${"a".repeat(128)}`,
       ]) {
+        const documentPath = path === "/" ? base || "/" : `${base}${path}`;
         const fixture = page({
-          href: `${origin}${path}`,
+          href: `${origin}${documentPath}`,
           origin: origin.startsWith("http:") ? origin : null,
           response: { url: `${origin}/api/auth/session` },
         });
         expect(observed(await fixture.run()).documentUrl).toBe(
-          `${origin}${path}`,
+          `${origin}${documentPath}`,
         );
         expect(fixture.fetch).toHaveBeenCalledOnce();
       }
@@ -241,6 +243,7 @@ describe("read-only session identity mechanics", () => {
   it.each(["https://chatgpt.com", "http://127.0.0.1:4317"])(
     "refuses unsupported/aliased paths before GET at %s",
     async (origin) => {
+      const base = origin.startsWith("http:") ? "/chatgpt" : "";
       for (const path of [
         "/auth/TOKEN_CANARY",
         "/reset/USER_CANARY/TOKEN_CANARY",
@@ -257,13 +260,31 @@ describe("read-only session identity mechanics", () => {
         "/c/a.b",
         `/c/${"a".repeat(129)}`,
       ]) {
+        const documentPath = path === "/" ? base || "/" : `${base}${path}`;
         const fixture = page({
-          href: `${origin}${path}`,
+          href: `${origin}${documentPath}`,
           origin: origin.startsWith("http:") ? origin : null,
         });
         failure(await fixture.run(), "origin_refused");
         expect(fixture.fetch).not.toHaveBeenCalled();
       }
+    },
+  );
+
+  it.each([
+    { origin: null, href: "https://chatgpt.com/chatgpt" },
+    { origin: null, href: "https://chatgpt.com/chatgpt/c/fixture" },
+    { origin: "http://127.0.0.1:4317", href: "http://127.0.0.1:4317/" },
+    {
+      origin: "http://127.0.0.1:4317",
+      href: "http://127.0.0.1:4317/c/fixture",
+    },
+  ])(
+    "keeps production and controlled-site paths separate: $href",
+    async (input) => {
+      const fixture = page(input);
+      failure(await fixture.run(), "origin_refused");
+      expect(fixture.fetch).not.toHaveBeenCalled();
     },
   );
 
@@ -858,6 +879,10 @@ describe("closed observation parser", () => {
     { ...success, documentUrl: "https://chatgpt.com/auth/TOKEN_CANARY" },
     { ...success, documentUrl: "https://chatgpt.com/c/%66ixture" },
     { ...success, documentUrl: "https://chatgpt.com/g/custom-gpt" },
+    { ...success, documentUrl: "https://example.com/" },
+    { ...success, documentUrl: "http://chatgpt.com/" },
+    { ...success, documentUrl: "http://127.0.0.1:4317/" },
+    { ...success, documentUrl: "https://chatgpt.com/chatgpt" },
     { ...success, documentUrl: `${home}?token=TOKEN_CANARY` },
     { ...success, documentUrl: `${home}#COOKIE_CANARY` },
     {
