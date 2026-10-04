@@ -189,12 +189,18 @@ describe("ChatReadonly bounded component", () => {
     const first = Object.keys(h.c.getSnapshot().intents).find((id) =>
       id.startsWith("chat-readonly:prepare:"),
     );
+    vi.mocked(h.f.api.configure).mockResolvedValueOnce({
+      ok: true,
+      snapshot: h.configuration,
+      evidence: preview({ operationId: otherOperationId }),
+    });
     await h.click("Choose file…");
     const next = Object.keys(h.c.getSnapshot().intents).filter((id) =>
       id.startsWith("chat-readonly:prepare:"),
     );
     expect(next).toHaveLength(2);
     expect(next[1]).not.toBe(first);
+    expect(h.button("Discard preview").disabled).toBe(false);
     expect(h.f.api.task).not.toHaveBeenCalled();
   });
   it("latches double clicks before React disables Prepare and Discard", async () => {
@@ -226,6 +232,104 @@ describe("ChatReadonly bounded component", () => {
     await act(async () =>
       discard.resolve({ ok: true, snapshot: h.configuration }),
     );
+  });
+  it("retires exactly a confirmed Discard even when a newer refresh retains its old evidence", async () => {
+    const h = await mount();
+    await h.select();
+    await h.click("Choose file…");
+    const retainedEvidence = h.c.getSnapshot().evidence;
+    const discard = deferred<unknown>();
+    vi.mocked(h.f.api.configure).mockReturnValueOnce(discard.promise);
+    await h.click("Discard preview");
+    // Begin a newer request without accepting its snapshot. The real controller
+    // ignores the older Discard snapshot but still confirms its exact command.
+    const refreshReply = deferred<unknown>();
+    vi.mocked(h.f.api.bootstrap).mockReturnValueOnce(refreshReply.promise);
+    let refresh!: Promise<void>;
+    await act(async () => {
+      refresh = h.c.refresh();
+    });
+    await act(async () =>
+      discard.resolve({ ok: true, snapshot: h.configuration }),
+    );
+    expect(h.c.getSnapshot().evidence).toBe(retainedEvidence);
+    expect(h.button("Choose file…").disabled).toBe(false);
+    expect(h.host.textContent).not.toContain(operationId);
+    expect(h.host.querySelectorAll("button")).toHaveLength(1);
+    await h.render("confirmed-discard-remount");
+    expect(h.calls()).toHaveLength(2);
+    await h.select();
+    vi.mocked(h.f.api.configure).mockResolvedValueOnce({
+      ok: true,
+      snapshot: h.configuration,
+      evidence: preview({
+        operationId: otherOperationId,
+        relativePath: "docs/second.txt",
+      }),
+    });
+    await h.click("Choose file…");
+    expect(h.calls()).toEqual([
+      { kind: "chatgpt.prepare-readonly-task", workspaceId },
+      { kind: "chatgpt.cancel-readonly-task", operationId },
+      { kind: "chatgpt.prepare-readonly-task", workspaceId },
+    ]);
+    expect(h.host.textContent).toContain("docs/second.txt");
+    expect(h.button("Discard preview").disabled).toBe(false);
+    await act(async () => {
+      refreshReply.resolve({ ...bootstrap(), configuration: h.configuration });
+      await refresh;
+    });
+    expect(h.host.textContent).toContain(otherOperationId);
+    expect(h.calls()).toHaveLength(3);
+  });
+  it("does not project a different retained operation away after a confirmed Discard", async () => {
+    const h = await mount();
+    await h.select();
+    await h.click("Choose file…");
+    const discard = deferred<unknown>();
+    vi.mocked(h.f.api.configure).mockReturnValueOnce(discard.promise);
+    await h.click("Discard preview");
+    vi.mocked(h.f.api.configure).mockResolvedValueOnce({
+      ok: true,
+      snapshot: h.configuration,
+      evidence: preview({ operationId: otherOperationId }),
+    });
+    await act(async () =>
+      h.c.configure(
+        { kind: "chatgpt.prepare-readonly-task", workspaceId },
+        "foreign-prepare",
+      ),
+    );
+    await act(async () =>
+      discard.resolve({ ok: true, snapshot: h.configuration }),
+    );
+    expect(h.c.getSnapshot().evidence?.value).toMatchObject({
+      operationId: otherOperationId,
+    });
+    expect(h.host.textContent).toContain(otherOperationId);
+    expect(h.host.textContent).not.toContain(operationId);
+    expect(h.button("Choose file…").disabled).toBe(true);
+    expect(h.button("Discard preview").disabled).toBe(true);
+    await h.click("Choose file…");
+    await h.click("Discard preview");
+    expect(h.calls()).toHaveLength(3);
+  });
+  it("keeps operation and revision in optional Details and explains the preview in user terms", async () => {
+    const h = await mount();
+    await h.select();
+    await h.click("Choose file…");
+    const details = h.host.querySelector("details")!;
+    expect(details.open).toBe(false);
+    expect(details.textContent).toContain(operationId);
+    expect(details.textContent).toContain("Configuration revision: 1");
+    const defaultView = h.host.cloneNode(true) as HTMLElement;
+    defaultView.querySelectorAll("details").forEach((node) => node.remove());
+    expect(defaultView.textContent).toContain("Nothing is sent to ChatGPT");
+    expect(defaultView.textContent).not.toMatch(
+      /existing preview owner|revision|operation|request correlation|interface/iu,
+    );
+    await act(async () => details.querySelector("summary")!.click());
+    expect(h.calls()).toHaveLength(1);
   });
   it.each([
     "write",
@@ -288,9 +392,7 @@ describe("ChatReadonly bounded component", () => {
         evidence: preview(),
       }),
     );
-    expect(h.host.textContent).toContain(
-      "cannot be safely restored or retired",
-    );
+    expect(h.host.textContent).toContain("current state is unavailable");
     expect(h.host.textContent).toContain(operationId);
     expect(h.button("Discard preview").disabled).toBe(true);
     await h.render("again");
@@ -305,9 +407,7 @@ describe("ChatReadonly bounded component", () => {
     await h.render("remounted");
     expect(h.button("Discard preview").disabled).toBe(true);
     await act(async () => h.c.refresh());
-    expect(h.host.textContent).toContain(
-      "cannot be safely restored or retired",
-    );
+    expect(h.host.textContent).toContain("current state is unavailable");
     expect(h.button("Choose file…").disabled).toBe(true);
     await h.click("Choose file…");
     expect(h.calls()).toHaveLength(1);
@@ -337,9 +437,7 @@ describe("ChatReadonly bounded component", () => {
     await h.select();
     await h.click("Choose file…");
     expect(h.button("Discard preview").disabled).toBe(true);
-    expect(h.host.textContent).toContain(
-      "cannot be safely restored or retired",
-    );
+    expect(h.host.textContent).toContain("current state is unavailable");
   });
   it("does not bind evidence for another workspace", async () => {
     const h = await mount();
@@ -351,9 +449,7 @@ describe("ChatReadonly bounded component", () => {
     await h.select();
     await h.click("Choose file…");
     expect(h.button("Discard preview").disabled).toBe(true);
-    expect(h.host.textContent).toContain(
-      "cannot be safely restored or retired",
-    );
+    expect(h.host.textContent).toContain("current state is unavailable");
   });
   it("rejects a late preview when a newer same-revision configure crossed it", async () => {
     const h = await mount();
@@ -376,9 +472,7 @@ describe("ChatReadonly bounded component", () => {
     );
     expect(h.c.getSnapshot().evidence).toBeNull();
     expect(h.button("Discard preview").disabled).toBe(true);
-    expect(h.host.textContent).toContain(
-      "cannot be safely restored or retired",
-    );
+    expect(h.host.textContent).toContain("current state is unavailable");
     expect(h.calls()).toHaveLength(2);
   });
   it("rejects foreign same-revision evidence arriving after our preview but before its continuation", async () => {
@@ -436,9 +530,17 @@ describe("ChatReadonly bounded component", () => {
         new Error("lost reply"),
       );
       await h.click(action === "prepare" ? "Choose file…" : "Discard preview");
-      expect(h.host.textContent).toContain("outcome unknown");
+      expect(h.host.textContent).toContain("The result is unknown");
+      if (action === "discard") {
+        expect(h.host.textContent).toContain(operationId);
+        expect(h.c.getSnapshot().evidence?.value).toMatchObject({
+          operationId,
+        });
+        expect(h.button("Discard preview").disabled).toBe(true);
+      }
       const count = h.calls().length;
       await h.render("unknown-remount");
+      expect(h.host.textContent).toContain("The result is unknown");
       await act(async () => h.c.refresh());
       await h.click("Choose file…");
       await h.click("Discard preview");
@@ -476,9 +578,7 @@ describe("ChatReadonly bounded component", () => {
     await h.click("Choose file…");
     await h.render("requires-review");
     expect(h.button("Choose file…").disabled).toBe(true);
-    expect(h.host.textContent).toContain(
-      "cannot be safely restored or retired",
-    );
+    expect(h.host.textContent).toContain("current state is unavailable");
   });
   it("does not retry a refused Discard or interpret expiry as confirmed retirement", async () => {
     const h = await mount();
@@ -493,7 +593,9 @@ describe("ChatReadonly bounded component", () => {
     await h.select();
     await h.click("Choose file…");
     expect(h.host.textContent).not.toContain("Context is truncated");
-    expect(h.host.textContent).toContain("Expiry does not confirm discard");
+    expect(h.host.textContent).toContain(
+      "An expired preview may still need to be discarded",
+    );
     expect(h.button("Discard preview").disabled).toBe(false);
     vi.mocked(h.f.api.configure).mockResolvedValueOnce({
       ok: false,
@@ -537,9 +639,7 @@ describe("ChatReadonly bounded component", () => {
     });
     await h.select();
     await h.click("Choose file…");
-    expect(h.host.textContent).toContain(
-      "cannot be safely restored or retired",
-    );
+    expect(h.host.textContent).toContain("current state is unavailable");
     expect(h.button("Discard preview").disabled).toBe(true);
     await h.render("no-evidence");
     await h.click("Choose file…");

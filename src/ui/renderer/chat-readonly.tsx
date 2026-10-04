@@ -19,7 +19,9 @@ type Reviewed = Readonly<{
 const PREPARE = "chat-readonly:prepare:";
 const DISCARD = "chat-readonly:discard:";
 const LIMITATION =
-  "The retained preview cannot be safely restored or retired here. The current interface has no read-only preview observation with request correlation. Do not prepare again; ask for the retained operation to be reconciled.";
+  "This preview's current state is unavailable. Keep it on hold; preparing or discarding it again is unavailable here.";
+const UNKNOWN =
+  "The result is unknown. The preview may still exist. Do not repeat this action.";
 
 function settings(snapshot: WindowSnapshot) {
   return snapshot.configuration?.status === "ready"
@@ -77,6 +79,29 @@ function unresolvedPrepare(snapshot: WindowSnapshot): boolean {
     );
   });
 }
+function discarded(snapshot: WindowSnapshot, operationId: string): boolean {
+  const suffix = `:${operationId}`;
+  return Object.values(snapshot.intents).some((intent) => {
+    if (
+      intent.state !== "applied" ||
+      !intent.id.startsWith(`${DISCARD}${PREPARE}`) ||
+      !intent.id.endsWith(suffix)
+    )
+      return false;
+    const prepareId = intent.id.slice(DISCARD.length, -suffix.length);
+    return snapshot.intents[prepareId]?.state === "applied";
+  });
+}
+function previewEvidence(snapshot: WindowSnapshot): Evidence | null {
+  const evidence = snapshot.evidence;
+  // A successful exact Discard can leave evidence behind when its response
+  // snapshot loses the request-order race. Project only that operation away;
+  // refused/unknown intents and other operations remain visible and fenced.
+  return evidence?.value.kind === "chatgpt.readonly-task-preview" &&
+    !discarded(snapshot, evidence.value.operationId)
+    ? evidence
+    : null;
+}
 function boundPreview(snapshot: WindowSnapshot, reviewed: Reviewed | null) {
   const value = settings(snapshot);
   const evidence = reviewed?.evidence;
@@ -85,13 +110,13 @@ function boundPreview(snapshot: WindowSnapshot, reviewed: Reviewed | null) {
     snapshot.evidence === evidence &&
     evidence.revision === value?.revision &&
     snapshot.intents[reviewed.intention]?.state === "applied" &&
+    !discarded(snapshot, evidence.value.operationId) &&
     verifiedWorkspace(snapshot, evidence.value.workspaceId)
     ? evidence.value
     : null;
 }
 function feedback(result: Intent, action: "Prepare" | "Discard"): string {
-  if (result.state === "unknown")
-    return `${action} outcome unknown. Do not repeat this action. ${LIMITATION}`;
+  if (result.state === "unknown") return UNKNOWN;
   if (result.state !== "applied")
     return `${action} was refused. Check the current status before continuing.`;
   return action === "Discard"
@@ -110,13 +135,21 @@ export function ChatReadonly({ snapshot, facade }: ChatReadonlyProps) {
   const currentReviewed = reviewed?.facade === facade ? reviewed : null;
   const preview = boundPreview(snapshot, currentReviewed);
   // Retain metadata for explanation, but never reinterpret it as current proof.
+  const visibleEvidence =
+    currentReviewed?.evidence.value.kind === "chatgpt.readonly-task-preview" &&
+    !discarded(snapshot, currentReviewed.evidence.value.operationId)
+      ? currentReviewed.evidence
+      : previewEvidence(snapshot);
   const visiblePreview: Preview | null =
-    currentReviewed?.evidence.value.kind === "chatgpt.readonly-task-preview"
-      ? currentReviewed.evidence.value
-      : snapshot.evidence?.value.kind === "chatgpt.readonly-task-preview"
-        ? snapshot.evidence.value
-        : null;
+    visibleEvidence?.value.kind === "chatgpt.readonly-task-preview"
+      ? visibleEvidence.value
+      : null;
   const retained = unresolvedPrepare(snapshot) || visiblePreview !== null;
+  const outcomeUnknown =
+    uncertain ||
+    Object.values(snapshot.intents).some(
+      (intent) => intent.state === "unknown",
+    );
   const paused = pending || uncertain || fenced(snapshot);
   const discardId =
     preview && currentReviewed
@@ -132,7 +165,7 @@ export function ChatReadonly({ snapshot, facade }: ChatReadonlyProps) {
       uncertain ||
       fenced(before) ||
       unresolvedPrepare(before) ||
-      before.evidence?.value.kind === "chatgpt.readonly-task-preview" ||
+      previewEvidence(before) !== null ||
       !verifiedWorkspace(before, workspaceId)
     )
       return;
@@ -183,9 +216,7 @@ export function ChatReadonly({ snapshot, facade }: ChatReadonlyProps) {
       if (result.state === "unknown") setUncertain(true);
     } catch {
       setUncertain(true);
-      setMessage(
-        `Prepare outcome unknown. Do not repeat this action. ${LIMITATION}`,
-      );
+      setMessage(UNKNOWN);
     } finally {
       busy.current = false;
       setPending(false);
@@ -221,9 +252,7 @@ export function ChatReadonly({ snapshot, facade }: ChatReadonlyProps) {
       setMessage(feedback(result, "Discard"));
     } catch {
       setUncertain(true);
-      setMessage(
-        `Discard outcome unknown. Do not repeat this action. ${LIMITATION}`,
-      );
+      setMessage(UNKNOWN);
     } finally {
       busy.current = false;
       setPending(false);
@@ -234,13 +263,11 @@ export function ChatReadonly({ snapshot, facade }: ChatReadonlyProps) {
       <h2>Read-only file preview</h2>
       <p className="description">
         Choose a verified read-only folder, then select one text file in the
-        system picker. File contents stay with the existing preview owner; only
-        metadata appears here.
+        system picker. Review its file metadata here. Nothing is sent to ChatGPT
+        from this preview.
       </p>
       <p className="description">
-        An existing preview may return a previously selected file. Check its
-        path and operation. Recovery after a window reload is unavailable here;
-        expiry alone does not confirm retirement.
+        You may see a file selected earlier. Check its path before continuing.
       </p>
       <div className="control-row">
         <label>
@@ -295,15 +322,15 @@ export function ChatReadonly({ snapshot, facade }: ChatReadonlyProps) {
             <time dateTime={visiblePreview.expiresAt}>
               {visiblePreview.expiresAt}
             </time>
-            . Expiry does not confirm discard.
+            . An expired preview may still need to be discarded.
           </p>
-          <p>
-            Operation: <code>{visiblePreview.operationId}</code>
-          </p>
-          <p>
-            Configuration revision:{" "}
-            {currentReviewed?.evidence.revision ?? snapshot.evidence?.revision}
-          </p>
+          <details>
+            <summary>Details</summary>
+            <p>
+              Operation: <code>{visiblePreview.operationId}</code>
+            </p>
+            <p>Configuration revision: {visibleEvidence?.revision}</p>
+          </details>
           {visiblePreview.excludedPaths.length > 0 ? (
             <ul>
               {visiblePreview.excludedPaths.map((path) => (
@@ -317,14 +344,15 @@ export function ChatReadonly({ snapshot, facade }: ChatReadonlyProps) {
           )}
         </section>
       )}
-      {paused && (
+      {paused && !outcomeUnknown && (
         <p role="status">
-          Actions are paused while state is stale, unavailable, pending, or
-          unknown.
+          Actions are paused while an action is in progress or the current state
+          is unavailable.
         </p>
       )}
+      {outcomeUnknown && <p role="status">{UNKNOWN}</p>}
       {blocked && <p role="alert">{LIMITATION}</p>}
-      {message && <p role="status">{message}</p>}
+      {!outcomeUnknown && message && <p role="status">{message}</p>}
       {retained && (
         <div className="control-row">
           <button
