@@ -10,6 +10,7 @@ import (
 
 	wire "github.com/legrch/farol/gen/desktop/v1"
 	computerport "github.com/legrch/farol/modules/computer/app/port"
+	mutationct "github.com/legrch/farol/modules/computer/contracts/mutation"
 	"github.com/legrch/farol/modules/computer/domain/authority"
 	state "github.com/legrch/farol/modules/computer/domain/mutation"
 	"github.com/legrch/farol/pkg/ipc"
@@ -320,5 +321,27 @@ func TestSettingsMutationRetirementRequiresKnownDurableSettlement(t *testing.T) 
 				t.Fatal("retirement outcome changed")
 			}
 		})
+	}
+}
+
+func TestSettingsMutationPureRefusalDoesNotBlockRetirement(t *testing.T) {
+	s, _, j, n, in := settingsEditFixture(t)
+	in.Edits[0].NewText = in.Edits[0].OldText
+	if validateIngress("ComputerSettingsEditRequest", in) != nil {
+		t.Fatal("fixture must cross closed wire validation")
+	}
+	var classified *mutationct.Failure
+	if _, err := s.edit(context.Background(), "invalid-edit", in); !errors.As(err, &classified) || classified.Code != "COMPUTER_INVALID_REQUEST" {
+		t.Fatal("missing classified pure refusal", err)
+	}
+	if j.admits != 0 || j.saves != 0 || n.calls != 0 {
+		t.Fatal("pure refusal reached effects")
+	}
+	in.Edits[0].NewText = "corrected"
+	if _, err := s.edit(context.Background(), "invalid-edit", in); err == nil || j.admits != 0 || n.calls != 0 {
+		t.Fatal("refused operation ID regained an attempt")
+	}
+	if err := s.freezeForRetirement(); err != nil {
+		t.Fatal("pure refusal blocked retirement", err)
 	}
 }

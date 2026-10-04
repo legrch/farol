@@ -84,6 +84,15 @@ func (s *SettingsMutationIngress) edit(ctx context.Context, operation string, in
 		finish(nil, err, true)
 		return nil, err
 	}
+	edits := make([]mutationct.TextEdit, len(in.Edits))
+	for i, e := range in.Edits {
+		edits[i] = mutationct.TextEdit{OldText: e.OldText, NewText: e.NewText}
+	}
+	request := mutationct.OwnerRequest{WorkspaceID: in.WorkspaceId, Operation: mutationct.Edit{RelativePath: in.RelativePath, ExpectedSHA256: in.ExpectedSHA256, Edits: edits}}
+	if err = mutationct.ValidateOwnerRequest(request); err != nil {
+		finish(nil, err, true)
+		return nil, err
+	}
 	current, err := s.computer.settingsAuthority(ctx, in.Publication)
 	if err != nil {
 		finish(nil, err, true)
@@ -99,11 +108,7 @@ func (s *SettingsMutationIngress) edit(ctx context.Context, operation string, in
 		return nil, err
 	}
 	contract := mutationct.NewOwnerExecution(service)
-	edits := make([]mutationct.TextEdit, len(in.Edits))
-	for i, e := range in.Edits {
-		edits[i] = mutationct.TextEdit{OldText: e.OldText, NewText: e.NewText}
-	}
-	out, err := contract.Execute(ctx, mutationct.OwnerRequest{WorkspaceID: in.WorkspaceId, Operation: mutationct.Edit{RelativePath: in.RelativePath, ExpectedSHA256: in.ExpectedSHA256, Edits: edits}})
+	out, err := contract.Execute(ctx, request)
 	if err != nil {
 		finish(contract, err, false)
 		return nil, err

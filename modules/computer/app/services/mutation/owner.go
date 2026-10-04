@@ -79,13 +79,13 @@ func NewForOwnerExecution(ctx context.Context, selected OwnerSelection, current 
 }
 
 func (s *OwnerService) Execute(ctx context.Context, r OwnerRequest) (*OwnerResponse, error) {
-	if s == nil || s.engine == nil || !state.Identifier(r.WorkspaceID, 120) {
+	if s == nil || s.engine == nil {
 		return nil, invalid()
 	}
-	op := convert(r.Operation)
-	if err := state.ValidateInput(op); err != nil {
+	if err := ValidateOwnerRequest(r); err != nil {
 		return nil, err
 	}
+	op := convert(r.Operation)
 	digest, err := s.engine.digester.Digest(port.MutationDigestInput{WorkspaceID: r.WorkspaceID, Operation: op.Clone()})
 	if err != nil || !state.SHA256(digest) {
 		return nil, authority.Fail("COMPUTER_MUTATION_FINGERPRINT_FAILED", "operation-store")
@@ -97,6 +97,15 @@ func (s *OwnerService) Execute(ctx context.Context, r OwnerRequest) (*OwnerRespo
 		return nil, err
 	}
 	return ownerResponse(s.selected, r.WorkspaceID, out), nil
+}
+
+// ValidateOwnerRequest is pure. Composition may reject malformed intent before
+// beginning an execution lifetime; Execute independently enforces the same rule.
+func ValidateOwnerRequest(r OwnerRequest) error {
+	if !state.Identifier(r.WorkspaceID, 120) {
+		return invalid()
+	}
+	return state.ValidateInput(convert(r.Operation))
 }
 
 func ownerResponse(selected OwnerSelection, workspaceID string, out *attemptResult) *OwnerResponse {

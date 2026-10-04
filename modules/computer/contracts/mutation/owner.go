@@ -35,6 +35,13 @@ type OwnerResponse struct {
 	Failure                  *OutcomeFailure
 }
 
+func ValidateOwnerRequest(r OwnerRequest) error {
+	if err := app.ValidateOwnerRequest(app.OwnerRequest{WorkspaceID: r.WorkspaceID, Operation: toAppOperation(r.Operation)}); err != nil {
+		return ownerBoundary(err)
+	}
+	return nil
+}
+
 func (c *OwnerContract) Execute(ctx context.Context, r OwnerRequest) (*OwnerResponse, error) {
 	if c == nil || c.executor == nil {
 		return nil, ownerBoundary(nil)
