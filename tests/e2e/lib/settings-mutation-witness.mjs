@@ -13,7 +13,7 @@ export const mutationText = Object.freeze({
   newText: "Farol disposable edited canary",
 });
 export const mutationLimits = Object.freeze([
-  "Actual React Prepare/Old text/New text/Apply once; normal preload configuration supplies workspace write/Verify and exact retained Observe/ACK",
+  "Actual React Prepare/Old text/New text/Apply once and Record result delivery once; normal preload configuration supplies workspace write/Verify and exact retained Observe",
   "Go Apply/Observe origin is bound to exact packaged production inputs, not an independent Go RPC or transient admission counter",
   "ACK and pending delivery policy remain temporary TypeScript; this is not Go ACK acceptance",
   "Independent raw file bytes and strict content-free owner-v2 journal show one retained effect; no claim about every transient filesystem operation",
@@ -253,6 +253,55 @@ export function mutationAckWitness(command, reply, pending, settings) {
   );
 }
 
+export function mutationUiAckWitness(ui, pending, before, after) {
+  assert.deepEqual(before.computer.pendingEdit, pending);
+  assert.equal(ui.operationId, pending.operationId, "MUTATION_UI_ACK_CROSSED");
+  assert.equal(ui.name, "Record result delivery");
+  assert.equal(ui.clicks, 1, "MUTATION_UI_ACK_NOT_ONCE");
+  assert.equal(ui.before.noticeCount, 1, "MUTATION_UI_DELIVERY_AMBIGUOUS");
+  assert.equal(ui.before.ackButtonCount, 1, "MUTATION_UI_ACK_AMBIGUOUS");
+  assert.equal(ui.before.ackDisabled, false);
+  assert.match(
+    ui.before.deliveryText,
+    /^Guarded edit result: applied\. The exact edit outcome was delivered\./u,
+    "MUTATION_UI_RESULT_NOT_TERMINAL",
+  );
+  assert.deepEqual(
+    ui.after,
+    {
+      noticeCount: 0,
+      deliveryText: null,
+      ackButtonCount: 0,
+      ackDisabled: null,
+    },
+    "MUTATION_UI_ACK_NOT_CLEARED",
+  );
+  const expected = structuredClone(before);
+  expected.revision++;
+  expected.computer.pendingEdit = null;
+  assert.deepEqual(after, expected, "MUTATION_UI_ACK_CONFIG_UNCONFIRMED");
+}
+
+async function mutationDeliveryUi(window) {
+  return window.evaluate(() => {
+    const notices = [...document.querySelectorAll(".delivery-notice")];
+    const buttons = notices.flatMap((notice) =>
+      [...notice.querySelectorAll("button")].filter(
+        (button) => button.textContent.trim() === "Record result delivery",
+      ),
+    );
+    return {
+      noticeCount: notices.length,
+      deliveryText:
+        notices.length === 1
+          ? notices[0].textContent.replace(/\s+/gu, " ").trim()
+          : null,
+      ackButtonCount: buttons.length,
+      ackDisabled: buttons.length === 1 ? buttons[0].disabled : null,
+    };
+  });
+}
+
 // All IO is independent reads of the existing guarded disposable roots.
 // No production imports, fabricated task, backend invocation or journal writes.
 export async function readMutationState(io) {
@@ -422,7 +471,7 @@ export async function applyMutationJourney(io) {
   } = io;
   report.limits = mutationLimits;
   report.controlPath =
-    "Actual React Prepare edit… / Old text / New text / Apply edit; normal preload Observe/ACK; no synthetic task";
+    "Actual React Prepare edit… / Old text / New text / Apply edit / Record result delivery; normal preload Observe; no synthetic task";
   report.observations = [];
   report.commands = [];
   const command = async (value) => {
@@ -660,21 +709,54 @@ export async function reopenMutationJourney(io) {
     "MUTATION_OBSERVE_EXTRA_EFFECT",
   );
   await save();
-  // Restart has no in-memory submitted React intention. ACK uses the existing
-  // preload command after exact independent observation, not fabricated state.
-  const ack = {
-    kind: "computer.ack-workspace-edit",
+  // The ordinary controller admits ACK for the exact delivered operation after
+  // restart. Observe and independent receipt/config checks above precede the
+  // only UI click. No preload ACK or manufactured command response is used.
+  report.uiAck = {
+    name: "Record result delivery",
     operationId: report.pending.operationId,
+    clicks: 0,
+    before: await mutationDeliveryUi(window),
   };
-  const reply = await configure(ack);
-  mutationAckWitness(ack, reply, report.pending, afterObserve.settings);
-  report.commands.push({
-    command: ack,
-    reply,
-    policy: "temporary-ts-pending-delivery-not-go-ack",
-  });
+  assert.equal(report.uiAck.before.noticeCount, 1);
+  assert.equal(report.uiAck.before.ackButtonCount, 1);
+  assert.equal(report.uiAck.before.ackDisabled, false);
+  assert.match(
+    report.uiAck.before.deliveryText,
+    /^Guarded edit result: applied\. The exact edit outcome was delivered\./u,
+  );
+  await hidden();
+  active();
+  ledger();
+  report.uiAck.clicks = 1;
+  await save();
+  await window
+    .locator(".delivery-notice")
+    .getByRole("button", { name: "Record result delivery", exact: true })
+    .click({ timeout: 5000 });
+  await window
+    .locator(".delivery-notice")
+    .waitFor({ state: "detached", timeout: 20000 });
+  await window.waitForFunction(
+    async () => {
+      const bootstrap = await window.farolNext.bootstrap();
+      return (
+        bootstrap.configuration?.status === "ready" &&
+        bootstrap.configuration.settings.computer.pendingEdit === null
+      );
+    },
+    undefined,
+    { timeout: 20000 },
+  );
+  report.uiAck.after = await mutationDeliveryUi(window);
   const after = await readMutationState(io);
   await current(window, after);
+  mutationUiAckWitness(
+    report.uiAck,
+    report.pending,
+    afterObserve.settings,
+    after.settings,
+  );
   mutationAuthorityWitness(after, before);
   mutationEffectWitness(
     after,
@@ -1002,6 +1084,110 @@ export function mutationWitnessSelfTest(pass, reject) {
     snapshot: { status: "ready", settings: ackSettings },
   };
   pass(() => mutationAckWitness(ack, ackReply, pending, settings));
+  const uiAck = {
+    name: "Record result delivery",
+    operationId: pending.operationId,
+    clicks: 1,
+    before: {
+      noticeCount: 1,
+      deliveryText:
+        "Guarded edit result: applied. The exact edit outcome was delivered. Record result delivery",
+      ackButtonCount: 1,
+      ackDisabled: false,
+    },
+    after: {
+      noticeCount: 0,
+      deliveryText: null,
+      ackButtonCount: 0,
+      ackDisabled: null,
+    },
+  };
+  pass(() => mutationUiAckWitness(uiAck, pending, settings, ackSettings));
+  for (const mutate of [
+    (v) => {
+      v.name = "crossed";
+    },
+    (v) => {
+      v.operationId = "crossed";
+    },
+    (v) => {
+      delete v.operationId;
+    },
+    (v) => {
+      v.clicks = 0;
+    },
+    (v) => {
+      v.clicks = 2;
+    },
+    (v) => {
+      v.before.noticeCount = 0;
+    },
+    (v) => {
+      v.before.noticeCount = 2;
+    },
+    (v) => {
+      v.before.ackButtonCount = 0;
+    },
+    (v) => {
+      v.before.ackButtonCount = 2;
+    },
+    (v) => {
+      v.before.ackDisabled = true;
+    },
+    (v) => {
+      v.before.deliveryText = "Guarded edit result: pending.";
+    },
+    (v) => {
+      v.before.deliveryText = "Guarded edit result: unknown.";
+    },
+    (v) => {
+      v.before.deliveryText = "Guarded edit result: refused.";
+    },
+    (v) => {
+      v.after.noticeCount = 1;
+    },
+    (v) => {
+      v.after.ackButtonCount = 1;
+    },
+    (v) => {
+      v.after.deliveryText = "Retained delivery";
+    },
+  ]) {
+    const changedUi = structuredClone(uiAck);
+    mutate(changedUi);
+    reject(() =>
+      mutationUiAckWitness(changedUi, pending, settings, ackSettings),
+    );
+  }
+  reject(() =>
+    mutationUiAckWitness(
+      uiAck,
+      { ...pending, operationId: "crossed" },
+      settings,
+      ackSettings,
+    ),
+  );
+  reject(() => mutationUiAckWitness(uiAck, pending, settings, settings));
+  for (const mutate of [
+    (v) => {
+      v.revision--;
+    },
+    (v) => {
+      v.revision++;
+    },
+    (v) => {
+      v.computer.pendingEdit = pending;
+    },
+    (v) => {
+      v.computer.generation++;
+    },
+  ]) {
+    const changedSettings = structuredClone(ackSettings);
+    mutate(changedSettings);
+    reject(() =>
+      mutationUiAckWitness(uiAck, pending, settings, changedSettings),
+    );
+  }
   reject(() =>
     mutationAckWitness(
       { ...ack, operationId: "crossed" },

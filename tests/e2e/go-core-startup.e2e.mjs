@@ -26,7 +26,8 @@
  * this bounded snapshot mode uses existing preload configure.
  * --settings-edit-mutation requires packaged --reopen and excludes the read
  * modes: actual React Prepare/Old/New/Apply -> independent file/owner-v2 receipt
- * -> unacknowledged clean Quit -> same profile/package -> exact Observe/TS ACK.
+ * -> unacknowledged clean Quit -> same profile/package -> exact Observe ->
+ * actual React Record result delivery (temporary TS ACK policy).
  */
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
@@ -134,7 +135,7 @@ const contract = Object.freeze({
     "Explicit packaged --reopen --read-discard --edit-snapshot: existing disposable UTF-8 canary, normal configuration write grant/Verify, preload Prepare, independently read raw bytes/count/SHA-256, retained root/profile/current generation and unchanged Chat/participants, exact Cancel, restore read grant/Verify, then original read-discard/account journey",
   editSnapshotLimits: snapshotLimits,
   settingsEditMutation:
-    "Explicit packaged --reopen --settings-edit-mutation: normal workspace/write/Verify, actual React Prepare/Old/New/Apply once, independent raw bytes and owner-v2 journal/key/context/generation/hash, known same-op duplicate refused, original pending result retained through clean Quit and same-package/profile reopen, exact UI/preload Observe then normal temporary-TS delivery ACK with no extra effect or provider Send",
+    "Explicit packaged --reopen --settings-edit-mutation: normal workspace/write/Verify, actual React Prepare/Old/New/Apply once, independent raw bytes and owner-v2 journal/key/context/generation/hash, known same-op duplicate refused, original pending result retained through clean Quit and same-package/profile reopen, exact UI/preload Observe then actual React Record result delivery once, confirmed notice removal/pending null/revision+1, with no extra effect or provider Send; ACK policy remains temporary TS",
   settingsEditMutationLimits: mutationLimits,
   readDiscardLimits: [
     "Settings replies do not instrument executor origin. Source-only self-tests and a package built from ff2d84d4d2fb85bfc2fe9696696c0a90ddb1162e can still exercise TypeScript listings; Go acceptance requires Lead's new integrated package and exact production-source mapping of all three Settings commands to the Go owner executor",
