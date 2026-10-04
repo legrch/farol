@@ -168,6 +168,73 @@ provider admission or complete network containment. React Chat still lacks a Sen
 surface, and the normal Go Send path deliberately refuses until its legitimate
 account/model/control-profile producer is qualified.
 
+## React guarded edit and retained Go result
+
+Packaged source `04f4f2ad378c0dfb2489134f0b6fc6c47f179508` passed the normal
+React/Go guarded-edit journey on 4 October 2026. Build ID:
+`64bf86ec797b207f85c59c5ee20e77a2c949b02a7c1f83d702d684c1df7d8924`.
+Artifact SHA-256:
+`39e9f112046092e1982cd9b540444ed1a243b5dabcb6240034b5c68c1ff404cf`.
+It remains unsigned `local.farol.next.preview`, version `0.1.10-owner.beta.1`,
+build `12`. It is a local candidate, separate from the installed access hotfix;
+no installation, release or live-provider qualification is claimed.
+
+Harness `a4fb1a98f41f6df54c4bf0605a5251859bbe149d` used the existing startup
+fixture with `--run-native --reopen --settings-edit-mutation` and exact
+package/source/build/artifact pins. Normal configuration granted and verified a
+disposable write workspace. Actual React **Prepare edit…**, **Old text**,
+**New text** and **Apply edit** controls performed one unique replacement.
+Independent reads found 94 resulting bytes, the expected before/after hashes,
+and exactly one canonical owner-v2 record. There was no synthetic Task,
+participant, Chat turn or legacy TS mutation record. A duplicate of the known
+successful operation was refused without another file or journal change.
+
+The first ordinary Quit deliberately left result delivery pending. The same
+package and physical profile reopened with a new Go generation, retaining the
+original operation, workspace, path, generation and before hash. Actual UI
+**Observe existing edit** and a normal read-only observation returned that exact
+retained receipt. One React **Record result delivery** click removed the notice,
+cleared pending delivery and advanced configuration revision once. File and
+mutation journal stayed unchanged after observation, ACK and both Quits. Both
+original child processes exited normally with code 0, no signal, confirmed drain
+and removed run markers. Every test-owned window stayed hidden and unfocused;
+the independent site ledger counted zero attempted and accepted provider Sends.
+The successful disposable profile was removed only after confirmed cleanup.
+
+The local report is
+`_output/evidence/go-core-startup-080e3a8a-e8fc-44eb-9c4b-2e860bfd1d21.json`.
+Its packaged source and harness source are separate identities. The harness has
+945 browser-free checks, including 105 mutation checks. Frozen source `d11984a`
+passed `task ci:fast`: 7,491 main tests, 253 renderer tests, 164 protocol/architecture
+checks and the Go race/vet/static gates. The subsequent narrow transport fix
+passed 81 affected tests, strict TS/lint/format and independent source recheck.
+Removing its prewrite proof caused the owning regression to fail; restored bytes
+passed. These are scoped checks, not formal acceptance of the complete cutover range.
+
+Go owns native edit execution and retained observation. New native profile/2
+provisions its isolated mutation journal. Existing profile/1 is not migrated and
+cannot silently enable the writer. An unknown or memory-only mutation prevents
+clean retirement; a durable terminal result may survive a clean same-build
+restart before UI delivery is acknowledged. The operation identity remains
+consumed. A proven local transport refusal before dispatch preserves verification;
+a missing record after an uncertain response or new host lifetime is insufficient
+to infer non-admission. There is no error fallback from Go to TS execution.
+
+**Pending delivery and ACK policy still belong to the temporary TS configuration
+service.** The legacy no-Go execution branch remains to be retired; historical
+pending records still need their reader. This witness does not qualify Go ACK,
+legacy-profile migration, cross-build update, all conflict/revocation/failure paths,
+create/write/shell/Git journeys, native focus or hermetic network containment.
+Normal Chat Send still requires qualified model/control composition.
+
+| Obligation                                   | Executable evidence                                                                                                            | Exact layer                                                                                | Remaining boundary                                                         |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------- |
+| Exact-hash edit and retained receipt         | `TestNativeSettingsMutation*` in `boot/settingsmutationnative_test.go`; `mutationEffectWitness` and `--settings-edit-mutation` | Native Go module plus this exact packaged React/Go happy path                              | Packaged conflict, revocation and uncertain publication witnesses          |
+| No repeated edit after transport uncertainty | `tests/unit/go-settings-mutation.test.ts`; `tests/unit/core-host-context.test.ts`                                              | Closed transport and serialized in-memory pipes; branded-proof sensitivity failure         | Broader native timeout/cancel/reconnect matrix                             |
+| Result retention versus UI delivery          | `mutationReplyWitness`, `mutationUiAckWitness`, `mutationTerminalWitness` in `tests/e2e/lib/settings-mutation-witness.mjs`     | Same-package ordinary Quit/reopen and actual UI ACK; independent file/journal/config reads | Go-owned pending/ACK and cross-build recovery                              |
+| C07 independent expectations, partial        | `mutationEffectWitness` self-tests reject changed identity, hash, journal, duplicate records and fabricated task metadata      | Browser-free oracle sensitivity plus independently read packaged facts                     | Provider generation/DOM variants remain separate                           |
+| C12 one active owner, partial                | Normal source-selected Go Apply/Observe, host no-fallback tests and no TS record in this packaged witness                      | Source/transport plus normal packaged Go route                                             | Retire the active no-Go TS alternative and qualify delivery-policy cutover |
+
 ## Owner Settings edit snapshot through Go
 
 Packaged source `f398f9c15b7960351057b7647ebb055820f05d4d` passed the normal
@@ -222,12 +289,12 @@ Go-adapted regression was preserved. The harness has 838 browser-free checks,
 including 68 snapshot checks. Independent bounded source review found no actionable
 defects in the snapshot cutover; full-range formal acceptance remains open.
 
-| Required boundary                      | Executable evidence                                                                                                                                                              | Layer and remaining witness                                                                                                                                      |
-| -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Full metadata and no Chat admission    | `TestSettingsSnapshotUsesPublishedOwnerWithoutChatOrText` in `boot/computersettingssnapshot_test.go`; `settingsSnapshotWitness` in `tests/e2e/lib/settings-snapshot-witness.mjs` | Injected composition plus exact packaged physical file/hash observations; native size/BOM edges remain separate.                                                 |
-| Current authority before disclosure    | `TestSettingsSnapshotFinalCurrentGuard` and `TestSettingsSnapshotWireWithdrawalWhileNativeWaits` in `boot/computersettingssnapshot_test.go`; app snapshot policy tests           | Pure/framed Go owner evidence; removing the final app authority gate caused 13 owning regressions to fail. Real mid-read revocation is not this package witness. |
-| Exact host correlation and no fallback | `tests/unit/go-computer-authority.test.ts` and `tests/unit/go-workspace-snapshot.test.ts`                                                                                        | Closed request/backend/publication/workspace/root/generation checks, one request, no legacy dispatch.                                                            |
-| Normal Prepare/Cancel/reopen           | Opt-in `--edit-snapshot --read-account` with the pinned package/harness above                                                                                                    | Packaged preload + real Go/file system and React account controls. Actual React edit controls and Go Apply remain open.                                          |
+| Required boundary                      | Executable evidence                                                                                                                                                              | Layer and remaining witness                                                                                                                                          |
+| -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Full metadata and no Chat admission    | `TestSettingsSnapshotUsesPublishedOwnerWithoutChatOrText` in `boot/computersettingssnapshot_test.go`; `settingsSnapshotWitness` in `tests/e2e/lib/settings-snapshot-witness.mjs` | Injected composition plus exact packaged physical file/hash observations; native size/BOM edges remain separate.                                                     |
+| Current authority before disclosure    | `TestSettingsSnapshotFinalCurrentGuard` and `TestSettingsSnapshotWireWithdrawalWhileNativeWaits` in `boot/computersettingssnapshot_test.go`; app snapshot policy tests           | Pure/framed Go owner evidence; removing the final app authority gate caused 13 owning regressions to fail. Real mid-read revocation is not this package witness.     |
+| Exact host correlation and no fallback | `tests/unit/go-computer-authority.test.ts` and `tests/unit/go-workspace-snapshot.test.ts`                                                                                        | Closed request/backend/publication/workspace/root/generation checks, one request, no legacy dispatch.                                                                |
+| Normal Prepare/Cancel/reopen           | Opt-in `--edit-snapshot --read-account` with the pinned package/harness above                                                                                                    | Packaged preload + real Go/file system and React account controls. This older snapshot-only witness does not cover Apply; the newer guarded-edit witness above does. |
 
 ## React read-preview and explicit account confirmation
 
