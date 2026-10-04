@@ -341,6 +341,18 @@ export function readAccountSelfTest(pass, reject) {
         session.account.id,
       ]),
     );
+  // Initial Prepare cannot adopt unsolicited account state. Preserve the
+  // selected folder here so rejection specifically tests the account controls
+  // and approval projection, rather than an unrelated empty remount selection.
+  for (const unsolicited of [observed, approved])
+    reject(() =>
+      accountUiWitness(
+        { ...unsolicited, folder: ui.folder },
+        workspace,
+        "prepared",
+        original,
+      ),
+    );
   for (const change of [
     { operationId: confirmationId },
     { revision: "Configuration revision: 5" },
