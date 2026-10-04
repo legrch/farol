@@ -751,7 +751,7 @@ export class ProductConfigurationService {
   // Holds the exact lease a guarded edit's `recordPendingEdit` acquired,
   // keyed by its operation ID, from the moment the edit became durable until
   // `releaseWorkspaceEditLease` is called once its outcome is recorded (see
-  // `applyWorkspaceEdit` in `workspace-edit.ts`) or, as a backstop, once its
+  // `withSettingsEditLease` in `apps/desktop/with-settings-edit-lease.ts`) or, as a backstop, once its
   // delivery is acknowledged (`clearPendingEdit`). Never read for anything
   // but that one release; a process restart drops this map along with every
   // other in-memory admission, and the on-disk lease file is then recovered
@@ -1874,7 +1874,7 @@ export class ProductConfigurationService {
 
   // Releases the lease `recordPendingEdit` acquired for `operationId`, once
   // (and only once) that edit's outcome is durably recorded — see
-  // `applyWorkspaceEdit` in `workspace-edit.ts`, which calls this from its
+  // `withSettingsEditLease` in `apps/desktop/with-settings-edit-lease.ts`, which calls this from its
   // own `finally`. Idempotent: a second call, or a call for an operation
   // that never held a lease (no `promotionLease` dependency, or the record
   // itself was refused), is a no-op, exactly like `releasePromotionLease`
@@ -1954,7 +1954,7 @@ export class ProductConfigurationService {
       revision: settings.revision + 1,
       computer: { ...settings.computer, pendingEdit: null },
     }));
-    // Backstop only: `applyWorkspaceEdit` already releases this edit's lease
+    // Backstop only: `withSettingsEditLease` already releases this edit's lease
     // once its outcome is recorded, well before delivery is acknowledged
     // here. A lease still outstanding at this point (a caller that recorded
     // an edit but never applied it) must not survive its own acknowledgement

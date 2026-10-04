@@ -285,6 +285,60 @@ export class PrivateWorkspaceMutationStore implements WorkspaceMutationRepositor
     });
   }
 
+  // Historical delivery observation must not provision, repair or sweep the
+  // old writer's state. This is not admission or permission to execute again.
+  async loadExisting(
+    identity: WorkspaceMutationIdentity,
+  ): Promise<StoredWorkspaceMutation | null> {
+    const target = this.recordFile(identity);
+    return withMutationOperation(target, async () => {
+      const directories = [this.options.root, path.dirname(target)];
+      const before: Stats[] = [];
+      for (const directory of directories) {
+        let info;
+        try {
+          info = await fs.lstat(directory);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+          throw error;
+        }
+        if (
+          !info.isDirectory() ||
+          info.isSymbolicLink() ||
+          info.uid !== process.geteuid?.() ||
+          (info.mode & 0o077) !== 0 ||
+          (await fs.realpath(directory)) !== directory
+        )
+          throw new Error("WORKSPACE_MUTATION_DIRECTORY_UNSAFE");
+        before.push(info);
+      }
+      const prefix = `.${path.basename(target)}.tmp-`;
+      let count = 0;
+      for await (const entry of await fs.opendir(path.dirname(target))) {
+        if (++count > 4096 || entry.name.startsWith(prefix))
+          throw new Error("WORKSPACE_MUTATION_OBSERVATION_UNCERTAIN");
+      }
+      const record = await this.readRecord(target, identity, true);
+      for (const [index, directory] of directories.entries()) {
+        const after = await fs.lstat(directory),
+          prior = before[index]!;
+        if (
+          !after.isDirectory() ||
+          after.isSymbolicLink() ||
+          after.dev !== prior.dev ||
+          after.ino !== prior.ino ||
+          after.mode !== prior.mode ||
+          after.uid !== prior.uid ||
+          after.mtimeMs !== prior.mtimeMs ||
+          after.ctimeMs !== prior.ctimeMs ||
+          (await fs.realpath(directory)) !== directory
+        )
+          throw new Error("WORKSPACE_MUTATION_OBSERVATION_UNCERTAIN");
+      }
+      return record;
+    });
+  }
+
   async save(record: StoredWorkspaceMutation): Promise<void> {
     const validated = this.validateRecord(record);
     const target = this.recordFile(validated.identity);
@@ -313,12 +367,16 @@ export class PrivateWorkspaceMutationStore implements WorkspaceMutationRepositor
   private async readRecord(
     file: string,
     identity: WorkspaceMutationIdentity,
+    observationOnly = false,
   ): Promise<StoredWorkspaceMutation | null> {
     let handle;
     try {
       handle = await fs.open(
         file,
-        fsConstants.O_RDONLY | NO_FOLLOW | CLOSE_ON_EXEC,
+        fsConstants.O_RDONLY |
+          NO_FOLLOW |
+          CLOSE_ON_EXEC |
+          (observationOnly ? fsConstants.O_NONBLOCK : 0),
       );
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
@@ -327,7 +385,28 @@ export class PrivateWorkspaceMutationStore implements WorkspaceMutationRepositor
     try {
       const info = await handle.stat();
       this.assertPrivateFile(info);
-      const serialized = await handle.readFile("utf8");
+      let serialized: string;
+      if (observationOnly) {
+        const bytes = Buffer.alloc(MAXIMUM_RECORD_BYTES + 1);
+        const { bytesRead } = await handle.read(bytes, 0, bytes.length, 0);
+        const after = await handle.stat(),
+          named = await fs.lstat(file);
+        this.assertPrivateFile(after);
+        this.assertPrivateFile(named);
+        if (
+          bytesRead !== info.size ||
+          [after, named].some(
+            (value) =>
+              value.dev !== info.dev ||
+              value.ino !== info.ino ||
+              value.size !== info.size ||
+              value.mtimeMs !== info.mtimeMs ||
+              value.ctimeMs !== info.ctimeMs,
+          )
+        )
+          throw new Error("WORKSPACE_MUTATION_OBSERVATION_UNCERTAIN");
+        serialized = bytes.subarray(0, bytesRead).toString("utf8");
+      } else serialized = await handle.readFile("utf8");
       let value: unknown;
       try {
         value = JSON.parse(serialized);

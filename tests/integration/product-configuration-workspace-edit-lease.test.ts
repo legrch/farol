@@ -15,11 +15,7 @@ import {
   releasePromotionLease,
   verifyPromotionLease,
 } from "../../src/apps/desktop/promotion-lease";
-import {
-  applyWorkspaceEdit,
-  type PendingWorkspaceEdit,
-} from "../../src/apps/desktop/workspace-edit";
-import type { RunMutableComputerAction } from "../../src/modules/computer/app/service/run-mutable-computer-action";
+import { withSettingsEditLease } from "../../apps/desktop/with-settings-edit-lease";
 import type { PendingWorkspaceEditDelivery } from "../../src/pkg/product-settings/contract";
 import { SYNTHETIC_ROOT_IDENTITY } from "../fixtures/root-identity";
 
@@ -198,65 +194,10 @@ function deliveryOf(
     relativePath: "README.md",
     computerGeneration: workspace.computerGeneration,
     submittedAt,
-  };
-}
-
-function applyPendingOf(
-  delivery: PendingWorkspaceEditDelivery,
-): PendingWorkspaceEdit {
-  return {
-    operationId: delivery.operationId,
-    workspaceId: delivery.workspaceId,
-    computerGeneration: delivery.computerGeneration,
-    relativePath: delivery.relativePath,
-    bytes: 1,
+    backend: "go-owner-v2",
+    profileId: "11111111-1111-4111-8111-111111111111",
     beforeSha256: "a".repeat(64),
-    expiresAt: Date.now() + 10 * 60_000,
   };
-}
-
-function fakeAction(
-  outcome: "completed" | "outcome_unknown",
-): RunMutableComputerAction {
-  return {
-    execute: async () =>
-      outcome === "completed"
-        ? {
-            ok: true,
-            value: {
-              operationId: "fake",
-              ownerId: "owner-desktop",
-              sessionId: "desktop-computer-session",
-              taskId: "desktop-computer-task",
-              taskEpoch: 1,
-              participantId: "desktop-main",
-              turnId: "fake",
-              generation: 1,
-              callId: "fake",
-              workspaceId: "workspace",
-              relativePath: "README.md",
-              operation: "edit" as const,
-              receipt: {
-                operation: "edit" as const,
-                bytes: 1,
-                replacements: 1,
-                beforeSha256: "a".repeat(64),
-                afterSha256: "b".repeat(64),
-                relativePath: "README.md",
-              },
-              resultRetention: "durable" as const,
-              redelivered: false,
-            },
-          }
-        : {
-            ok: false,
-            error: {
-              code: "WORKSPACE_MUTATION_OUTCOME_UNKNOWN",
-              source: "native-workspace",
-              retry: "never",
-            },
-          },
-  } as unknown as RunMutableComputerAction;
 }
 
 describe("guarded workspace edit takes the promotion lease", () => {
@@ -290,14 +231,13 @@ describe("guarded workspace edit takes the promotion lease", () => {
     expect(promotionAttempt).toBeNull();
 
     // The edit's own outcome is now recorded (successfully, here); its
-    // lease releases in `applyWorkspaceEdit`'s own `finally`, exactly once.
-    const applied = await applyWorkspaceEdit(
-      fakeAction("completed"),
-      applyPendingOf(delivery),
-      { oldText: "old", newText: "new" },
-      (operationId) => service.releaseWorkspaceEditLease(operationId),
+    // lease releases in `withSettingsEditLease`'s own `finally`, exactly once.
+    const applied = await withSettingsEditLease(
+      delivery.operationId,
+      async () => ({ phase: "completed" }),
+      service.releaseWorkspaceEditLease.bind(service),
     );
-    expect(applied.ok).toBe(true);
+    expect(applied.phase).toBe("completed");
 
     // Only now can a promotion actually take the lease.
     const promotionAfter = await acquirePromotionLease(
@@ -376,7 +316,7 @@ describe("guarded workspace edit takes the promotion lease", () => {
     expect(midflight).toBeNull();
 
     // Acknowledged (e.g. after `recordComputerMutationOutcomeUnknown`) with
-    // `applyWorkspaceEdit` never having run at all — the backstop in
+    // `withSettingsEditLease` never having run at all — the backstop in
     // `clearPendingEdit` must still free the lease rather than widening its
     // critical section to the person's own acknowledgement.
     await service.clearPendingWorkspaceEdit(delivery.operationId);
@@ -402,12 +342,12 @@ describe("guarded workspace edit takes the promotion lease", () => {
 
     const recorded = await service.recordPendingWorkspaceEdit(delivery);
     expect(recorded).toMatchObject({ ok: true });
-    const applied = await applyWorkspaceEdit(
-      fakeAction("outcome_unknown"),
-      applyPendingOf(delivery),
-      { oldText: "old", newText: "new" },
+    const applied = await withSettingsEditLease(
+      delivery.operationId,
+      async () => ({ phase: "outcome_unknown" }),
+      service.releaseWorkspaceEditLease.bind(service),
     );
-    expect(applied.ok).toBe(false);
+    expect(applied.phase).toBe("outcome_unknown");
   });
 });
 

@@ -9,6 +9,7 @@ import type {
 import { createDesktopChatBrowser } from "../../../apps/desktop/go-chat-host";
 import { GoChatBrowserDriver } from "../../../apps/desktop/go-chat-browser";
 import { BridgeError } from "../../../apps/desktop/bridge/client";
+import { withSettingsEditLease } from "../../../apps/desktop/with-settings-edit-lease";
 import { reportSettingsMutationFailure } from "../../../apps/desktop/bridge/settings-mutation";
 import { readGoWorkspaceSnapshot } from "../../../apps/desktop/go-workspace-snapshot";
 import { ReadAccountConfirmation } from "../../../apps/desktop/read-account-confirmation";
@@ -307,10 +308,7 @@ import {
   type RouteBTaskSurfaces,
 } from "./route-b-runtime";
 import {
-  applyWorkspaceEdit,
-  desktopMutableWorkspaceAction,
   observeWorkspaceEdit,
-  prepareWorkspaceEdit,
   workspaceEditPreview,
   type PendingWorkspaceEdit,
 } from "./workspace-edit";
@@ -7719,6 +7717,8 @@ async function configureAdmittedProduct(
       if (workspaceMutationAdmission) {
         return configurationFailure("WORKSPACE_MUTATION_IN_PROGRESS");
       }
+      const core = compiledGoCore === null ? null : desktopGoCore;
+      if (!core) return configurationFailure("WORKSPACE_READ_FAILED");
       const snapshot = configuration.snapshot();
       if (snapshot.status !== "ready") {
         return configurationFailure("SETTINGS_UNAVAILABLE");
@@ -7767,73 +7767,55 @@ async function configureAdmittedProduct(
       }
       const operationId = randomUUID();
       const expiresAt = Date.now() + 10 * 60_000;
-      if (compiledGoCore !== null) {
-        const core = desktopGoCore;
-        if (!core) return configurationFailure("WORKSPACE_READ_FAILED");
-        const binding = {
-          generation: snapshot.settings.computer.generation,
-          workspaceId: selected.workspace.workspaceId,
-          relativePath,
-          root: {
-            path: selected.workspace.root,
-            ...selected.workspace.rootIdentity,
-          },
-        };
-        const observed = await readGoWorkspaceSnapshot({
-          binding,
-          current: () => {
-            const now = configuration?.snapshot();
-            const folder =
-              now?.status === "ready"
-                ? now.settings.computer.workspaces.find(
-                    (item) => item.workspaceId === binding.workspaceId,
-                  )
-                : undefined;
-            if (
-              desktopGoCore !== core ||
-              now?.status !== "ready" ||
-              !folder?.rootIdentity
-            )
-              return null;
-            return {
-              generation: now.settings.computer.generation,
-              workspaceId: folder.workspaceId,
-              relativePath,
-              root: { path: folder.root, ...folder.rootIdentity },
-            };
-          },
-          read: (value) =>
-            core.snapshotSettingsWorkspace(
-              value.generation,
-              value.workspaceId,
-              value.relativePath,
-            ),
-        });
-        if (!observed.ok) return workspaceReadFailure(observed.code);
-        pendingWorkspaceEdit = {
-          operationId,
-          workspaceId: binding.workspaceId,
-          computerGeneration: binding.generation,
-          relativePath,
-          bytes: observed.bytes,
-          beforeSha256: observed.sha256,
-          expiresAt,
-        };
-      } else {
-        // Explicit legacy build only; never an error fallback for a Go read.
-        const prepared = await prepareWorkspaceEdit(nativeWorkspace, {
-          operationId,
-          workspace: workspaceDescriptor(
-            selected.workspace,
-            selected.workspace.rootIdentity,
+      const binding = {
+        generation: snapshot.settings.computer.generation,
+        workspaceId: selected.workspace.workspaceId,
+        relativePath,
+        root: {
+          path: selected.workspace.root,
+          ...selected.workspace.rootIdentity,
+        },
+      };
+      const observed = await readGoWorkspaceSnapshot({
+        binding,
+        current: () => {
+          const now = configuration?.snapshot();
+          const folder =
+            now?.status === "ready"
+              ? now.settings.computer.workspaces.find(
+                  (item) => item.workspaceId === binding.workspaceId,
+                )
+              : undefined;
+          if (
+            desktopGoCore !== core ||
+            now?.status !== "ready" ||
+            !folder?.rootIdentity
+          )
+            return null;
+          return {
+            generation: now.settings.computer.generation,
+            workspaceId: folder.workspaceId,
+            relativePath,
+            root: { path: folder.root, ...folder.rootIdentity },
+          };
+        },
+        read: (value) =>
+          core.snapshotSettingsWorkspace(
+            value.generation,
+            value.workspaceId,
+            value.relativePath,
           ),
-          computerGeneration: snapshot.settings.computer.generation,
-          relativePath,
-          expiresAt,
-        });
-        if (!prepared.ok) return workspaceReadFailure(prepared.code);
-        pendingWorkspaceEdit = prepared.pending;
-      }
+      });
+      if (!observed.ok) return workspaceReadFailure(observed.code);
+      pendingWorkspaceEdit = {
+        operationId,
+        workspaceId: binding.workspaceId,
+        computerGeneration: binding.generation,
+        relativePath,
+        bytes: observed.bytes,
+        beforeSha256: observed.sha256,
+        expiresAt,
+      };
       return ProductConfigurationResultSchema.parse({
         ok: true,
         snapshot,
@@ -7871,34 +7853,14 @@ async function configureAdmittedProduct(
         pendingWorkspaceEdit = null;
         return configurationFailure("WORKSPACE_VERIFICATION_REQUIRED");
       }
-      const goCore = compiledGoCore !== null ? desktopGoCore : null;
-      let goProfile: string | undefined;
-      if (compiledGoCore !== null) {
-        try {
-          if (!goCore) throw new Error("GO_MUTATION_HOST_UNAVAILABLE");
-          goProfile = goCore.settingsMutationProfile();
-        } catch {
-          pendingWorkspaceEdit = null;
-          return configurationFailure("WORKSPACE_MUTATION_FAILED");
-        }
-      }
-      // Selection is fixed by this build; no failed Go attempt reaches TS.
-      const action =
-        compiledGoCore === null
-          ? desktopMutableWorkspaceAction(
-              snapshot.settings.computer,
-              workspace,
-              pending.expiresAt,
-              {
-                mutationStateRoot: workspaceMutationStateRoot(),
-                workspace: nativeWorkspace,
-                now: () => Date.now(),
-              },
-            )
-          : null;
-      if (compiledGoCore === null && !action) {
+      const goCore = compiledGoCore === null ? null : desktopGoCore;
+      let goProfile: string;
+      try {
+        if (!goCore) throw new Error("GO_MUTATION_HOST_UNAVAILABLE");
+        goProfile = goCore.settingsMutationProfile();
+      } catch {
         pendingWorkspaceEdit = null;
-        return configurationFailure("WORKSPACE_WRITE_APPROVAL_REQUIRED");
+        return configurationFailure("WORKSPACE_MUTATION_FAILED");
       }
       if (snapshot.settings.computer.pendingEdit !== null) {
         pendingWorkspaceEdit = null;
@@ -7915,79 +7877,41 @@ async function configureAdmittedProduct(
           relativePath: pending.relativePath,
           computerGeneration: pending.computerGeneration,
           submittedAt: new Date().toISOString(),
-          ...(goProfile === undefined
-            ? {}
-            : {
-                backend: "go-owner-v2" as const,
-                profileId: goProfile,
-                beforeSha256: pending.beforeSha256,
-              }),
+          backend: "go-owner-v2",
+          profileId: goProfile,
+          beforeSha256: pending.beforeSha256,
         });
         if (!recorded.ok) {
           return configurationFailure("SETTINGS_WRITE_FAILED");
         }
-        if (goCore) {
-          try {
-            const result = await goCore.editSettingsWorkspace(
-              pending.operationId,
-              pending.computerGeneration,
-              pending.workspaceId,
-              pending.relativePath,
-              pending.beforeSha256,
-              command.oldText,
-              command.newText,
-            );
-            return await goWorkspaceEditResult(result, pending, false);
-          } catch (error) {
-            // Keep the exact pending identity and consumed Apply even when the
-            // transport proves it refused this request before any dispatch.
-            return configurationFailure(
-              await reportSettingsMutationFailure(error, () =>
-                configuration!.recordComputerMutationOutcomeUnknown(
-                  pending.workspaceId,
+        return await withSettingsEditLease(
+          pending.operationId,
+          async () => {
+            try {
+              const result = await goCore.editSettingsWorkspace(
+                pending.operationId,
+                pending.computerGeneration,
+                pending.workspaceId,
+                pending.relativePath,
+                pending.beforeSha256,
+                command.oldText,
+                command.newText,
+              );
+              return await goWorkspaceEditResult(result, pending, false);
+            } catch (error) {
+              // Keep the exact pending identity and consumed Apply. A proven
+              // non-dispatch refusal does not invalidate workspace verification.
+              return configurationFailure(
+                await reportSettingsMutationFailure(error, () =>
+                  configuration!.recordComputerMutationOutcomeUnknown(
+                    pending.workspaceId,
+                  ),
                 ),
-              ),
-            );
-          } finally {
-            await configuration.releaseWorkspaceEditLease(pending.operationId);
-          }
-        }
-        if (!action)
-          return configurationFailure("WORKSPACE_MUTATION_OUTCOME_UNKNOWN");
-        const result = await applyWorkspaceEdit(
-          action,
-          pending,
-          {
-            oldText: command.oldText,
-            newText: command.newText,
+              );
+            }
           },
           configuration.releaseWorkspaceEditLease.bind(configuration),
         );
-        if (!result.ok) {
-          if (result.error.code === "WORKSPACE_MUTATION_OUTCOME_UNKNOWN") {
-            await configuration.recordComputerMutationOutcomeUnknown(
-              pending.workspaceId,
-            );
-          }
-          return workspaceMutationFailure(result.error.code);
-        }
-        return ProductConfigurationResultSchema.parse({
-          ok: true,
-          snapshot: configuration.snapshot(),
-          evidence: {
-            kind: "computer.workspace-mutation",
-            operationId: result.value.operationId,
-            workspaceId: result.value.workspaceId,
-            relativePath: result.value.relativePath,
-            operation: result.value.operation,
-            bytes: result.value.receipt.bytes,
-            replacements: result.value.receipt.replacements,
-            beforeSha256: result.value.receipt.beforeSha256,
-            afterSha256: result.value.receipt.afterSha256,
-            resultRetention: result.value.resultRetention,
-            redelivered: result.value.redelivered,
-          },
-        });
       } finally {
         workspaceMutationAdmission = false;
       }

@@ -11,30 +11,13 @@ import {
   acquirePromotionLease,
   releasePromotionLease,
 } from "../../src/apps/desktop/promotion-lease";
-import {
-  applyWorkspaceEdit,
-  type PendingWorkspaceEdit,
-} from "../../src/apps/desktop/workspace-edit";
-import type { RunMutableComputerAction } from "../../src/modules/computer/app/service/run-mutable-computer-action";
+import { withSettingsEditLease } from "../../apps/desktop/with-settings-edit-lease";
 import type { PendingWorkspaceEditDelivery } from "../../src/pkg/product-settings/contract";
 import { SYNTHETIC_ROOT_IDENTITY } from "../fixtures/root-identity";
 
-// S35-N03d: `8a1c1892` proved the mechanism (`ProductConfigurationService`'s
-// `promotionLease` dependency and `applyWorkspaceEdit`'s
-// `releaseWorkspaceEditLease` callback) against hand-rolled test doubles,
-// but left `main.ts` never actually passing them. This file exercises the
-// exact two wiring points `main.ts` now carries — `ProductConfigurationService`
-// constructed with the same `acquirePromotionLease`/`releasePromotionLease`
-// primitives in the "admission" role (see the `liveTaskRegistry` guard
-// `main.ts` already used for a Chat turn and a native Agent start), and
-// `applyWorkspaceEdit`'s fourth argument bound exactly the way the
-// `"computer.apply-workspace-edit"` dispatch now binds it
-// (`configuration.releaseWorkspaceEditLease.bind(configuration)`) — rather
-// than a substitute closure a unit test could get away with. `main.ts`
-// itself cannot be imported here (it is an Electron entry module), so this
-// reproduces its wiring inline, the same way
-// `promotion-flow.test.mjs`'s "the registry's own admission wiring" case
-// proves `LiveTaskRegistry`'s admission wiring without importing `main.ts`.
+// Real lease/configuration integration with the same admission guard and
+// withSettingsEditLease release wrapper used by normal main. Only the Go RPC
+// result is doubled; no native workspace mutation is performed here.
 
 const roots: string[] = [];
 
@@ -115,56 +98,66 @@ function deliveryOf(
     relativePath: "README.md",
     computerGeneration: workspace.computerGeneration,
     submittedAt,
-  };
-}
-
-function applyPendingOf(
-  delivery: PendingWorkspaceEditDelivery,
-): PendingWorkspaceEdit {
-  return {
-    operationId: delivery.operationId,
-    workspaceId: delivery.workspaceId,
-    computerGeneration: delivery.computerGeneration,
-    relativePath: delivery.relativePath,
-    bytes: 1,
+    backend: "go-owner-v2",
+    profileId: "11111111-1111-4111-8111-111111111111",
     beforeSha256: "a".repeat(64),
-    expiresAt: Date.now() + 10 * 60_000,
   };
-}
-
-function fakeCompletedAction(): RunMutableComputerAction {
-  return {
-    execute: async () => ({
-      ok: true,
-      value: {
-        operationId: "fake",
-        ownerId: "owner-desktop",
-        sessionId: "desktop-computer-session",
-        taskId: "desktop-computer-task",
-        taskEpoch: 1,
-        participantId: "desktop-main",
-        turnId: "fake",
-        generation: 1,
-        callId: "fake",
-        workspaceId: "workspace",
-        relativePath: "README.md",
-        operation: "edit" as const,
-        receipt: {
-          operation: "edit" as const,
-          bytes: 1,
-          replacements: 1,
-          beforeSha256: "a".repeat(64),
-          afterSha256: "b".repeat(64),
-          relativePath: "README.md",
-        },
-        resultRetention: "durable" as const,
-        redelivered: false,
-      },
-    }),
-  } as unknown as RunMutableComputerAction;
 }
 
 describe("desktop wiring: main.ts's own construction path shares the promotion lease", () => {
+  it.each(["refused", "unknown", "lost"] as const)(
+    "keeps the lease through %s result recording and releases without clearing delivery",
+    async (outcome) => {
+      const root = await userData();
+      const buildId = "build-go-edit";
+      const service = new ProductConfigurationService(
+        new ProductSettingsStore({ root: path.join(root, "farol-next-state") }),
+        { promotionLease: desktopPromotionLeaseGuard(root, buildId) },
+      );
+      await service.initialize();
+      const workspace = await verifiedWriteWorkspace(service);
+      const delivery = deliveryOf(
+        "00000000-0000-4000-8000-0000000000ea",
+        workspace,
+        "2026-10-04T22:00:00.000Z",
+      );
+      expect(await service.recordPendingWorkspaceEdit(delivery)).toMatchObject({
+        ok: true,
+      });
+      const original = new Error("original transport failure");
+      const attempt = withSettingsEditLease(
+        delivery.operationId,
+        async () => {
+          expect(
+            await acquirePromotionLease(root, buildId, "promotion"),
+          ).toBeNull();
+          if (outcome !== "refused") {
+            expect(
+              await service.recordComputerMutationOutcomeUnknown(
+                workspace.workspaceId,
+              ),
+            ).toMatchObject({ ok: true });
+            expect(
+              await acquirePromotionLease(root, buildId, "promotion"),
+            ).toBeNull();
+          }
+          if (outcome === "lost") throw original;
+          return outcome;
+        },
+        service.releaseWorkspaceEditLease.bind(service),
+      );
+      if (outcome === "lost") await expect(attempt).rejects.toBe(original);
+      else expect(await attempt).toBe(outcome);
+      const after = service.snapshot();
+      expect(after).toMatchObject({
+        status: "ready",
+        settings: { computer: { pendingEdit: delivery } },
+      });
+      const next = await acquirePromotionLease(root, buildId, "promotion");
+      expect(next).not.toBeNull();
+      await releasePromotionLease(next!);
+    },
+  );
   it("S35-N03d an admitted edit refuses a promotion, a promotion refuses an edit, and recording the edit's outcome releases the lease", async () => {
     const root = await userData();
     const buildId = "build-desktop-wiring";
@@ -198,19 +191,18 @@ describe("desktop wiring: main.ts's own construction path shares the promotion l
     );
     expect(promotionDuringEdit).toBeNull();
 
-    // Exactly `main.ts`'s dispatch: `applyWorkspaceEdit`'s fourth argument is
+    // Exactly `main.ts`'s dispatch: `withSettingsEditLease`'s release argument is
     // `configuration.releaseWorkspaceEditLease.bind(configuration)`, not a
     // substitute closure. The edit's outcome is recorded here, in
-    // `applyWorkspaceEdit`'s own `finally`, which must release the lease.
-    const applied = await applyWorkspaceEdit(
-      fakeCompletedAction(),
-      applyPendingOf(firstDelivery),
-      { oldText: "old", newText: "new" },
+    // `withSettingsEditLease`'s own `finally`, which must release the lease.
+    const applied = await withSettingsEditLease(
+      firstDelivery.operationId,
+      async () => ({ phase: "completed" }),
       service.releaseWorkspaceEditLease.bind(service),
     );
-    expect(applied.ok).toBe(true);
+    expect(applied.phase).toBe("completed");
     // Delivery acknowledgement (the caller's own follow-up, distinct from
-    // the lease release `applyWorkspaceEdit` already performed above) is
+    // the lease release `withSettingsEditLease` already performed above) is
     // what clears `computer.pendingEdit` so a later edit is admitted.
     await service.clearPendingWorkspaceEdit(firstDelivery.operationId);
 
