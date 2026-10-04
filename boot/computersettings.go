@@ -68,8 +68,8 @@ func (a *settingsApproval) WithCurrent(ctx context.Context, inspect func(*author
 	})
 }
 
-func (s *ComputerIngress) settingsList(ctx context.Context, in wire.ComputerSettingsListRequest) (*wire.ComputerSettingsListResponse, error) {
-	if ctx == nil || ctx.Err() != nil || validateIngress("ComputerSettingsListRequest", in) != nil || s.native == nil {
+func (s *ComputerIngress) settingsContract(ctx context.Context, requested wire.ComputerAuthorityPublication) (*settingsct.Contract, error) {
+	if ctx == nil || ctx.Err() != nil || s.native == nil {
 		return nil, computerUnavailable()
 	}
 	store, ok := s.store.(ownerApprovalStore)
@@ -78,7 +78,7 @@ func (s *ComputerIngress) settingsList(ctx context.Context, in wire.ComputerSett
 	}
 	s.mu.Lock()
 	p := s.publication
-	valid := !s.unknown && p != nil && p.receipt == in.Publication
+	valid := !s.unknown && p != nil && p.receipt == requested
 	var publication knownComputerPublication
 	if valid {
 		publication = knownComputerPublication{receipt: p.receipt, approval: p.approval.Clone()}
@@ -92,7 +92,17 @@ func (s *ComputerIngress) settingsList(ctx context.Context, in wire.ComputerSett
 	if clock == nil {
 		clock = accessrepo.Clock{}
 	}
-	contract := settingsct.New(settingssvc.New(current, s.native, clock))
+	return settingsct.New(settingssvc.New(current, s.native, clock)), nil
+}
+
+func (s *ComputerIngress) settingsList(ctx context.Context, in wire.ComputerSettingsListRequest) (*wire.ComputerSettingsListResponse, error) {
+	if ctx == nil || ctx.Err() != nil || validateIngress("ComputerSettingsListRequest", in) != nil || s.native == nil {
+		return nil, computerUnavailable()
+	}
+	contract, err := s.settingsContract(ctx, in.Publication)
+	if err != nil {
+		return nil, err
+	}
 	result, err := contract.List(ctx, settingsct.Request{WorkspaceID: in.WorkspaceId, RelativePath: in.RelativePath})
 	if err != nil {
 		return nil, err
@@ -109,7 +119,7 @@ func (s *ComputerIngress) settingsList(ctx context.Context, in wire.ComputerSett
 		return nil, err
 	}
 	return &wire.ComputerSettingsListResponse{
-		Publication: publication.receipt, WorkspaceId: result.WorkspaceID, RelativePath: result.RelativePath,
+		Publication: in.Publication, WorkspaceId: result.WorkspaceID, RelativePath: result.RelativePath,
 		Root:    wire.ComputerSettingsRoot{Path: result.Root.Path, Device: result.Root.Device, Inode: result.Root.Inode},
 		Entries: encoded, Truncated: result.Truncated,
 	}, nil
@@ -125,6 +135,45 @@ func (s *ComputerIngress) settingsListMethod() desktop.Method {
 			return invalidIngress()
 		}
 		value, err := s.settingsList(ctx, body)
+		var failure *settingsct.Failure
+		if errors.As(err, &failure) {
+			return &desktop.Outcome{Status: "refused", Code: failure.Code}, nil
+		}
+		return ingressOutcome(value, err)
+	}}
+}
+
+// Snapshot reads full raw-byte identity under the same owner publication. It
+// creates no Chat/Task admission and returns no file body to the host or UI.
+func (s *ComputerIngress) settingsSnapshot(ctx context.Context, in wire.ComputerSettingsSnapshotRequest) (*wire.ComputerSettingsSnapshotResponse, error) {
+	if validateIngress("ComputerSettingsSnapshotRequest", in) != nil {
+		return nil, computerUnavailable()
+	}
+	contract, err := s.settingsContract(ctx, in.Publication)
+	if err != nil {
+		return nil, err
+	}
+	result, err := contract.Snapshot(ctx, settingsct.Request{WorkspaceID: in.WorkspaceId, RelativePath: in.RelativePath})
+	if err != nil {
+		return nil, err
+	}
+	if result == nil || result.Bytes > 262144 {
+		return nil, computerUnavailable()
+	}
+	return &wire.ComputerSettingsSnapshotResponse{Publication: in.Publication, WorkspaceId: result.WorkspaceID, RelativePath: result.RelativePath,
+		Root: wire.ComputerSettingsRoot{Path: result.Root.Path, Device: result.Root.Device, Inode: result.Root.Inode}, Bytes: uint32(result.Bytes), Sha256: result.SHA256}, nil
+}
+
+func (s *ComputerIngress) settingsSnapshotMethod() desktop.Method {
+	return desktop.Method{Concurrent: true, Handle: func(ctx context.Context, r desktop.Request) (*desktop.Outcome, error) {
+		if r.OperationID != "" || ipc.ValidateJSON(r.Body) != nil || wire.Validate("ComputerSettingsSnapshotRequest", r.Body) != nil {
+			return invalidIngress()
+		}
+		var body wire.ComputerSettingsSnapshotRequest
+		if json.Unmarshal(r.Body, &body) != nil {
+			return invalidIngress()
+		}
+		value, err := s.settingsSnapshot(ctx, body)
 		var failure *settingsct.Failure
 		if errors.As(err, &failure) {
 			return &desktop.Outcome{Status: "refused", Code: failure.Code}, nil

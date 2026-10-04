@@ -6,6 +6,7 @@ import type { ChatComputerAdmissionResponse } from "../../../apps/desktop/bridge
 import { createDesktopChatBrowser } from "../../../apps/desktop/go-chat-host";
 import { GoChatBrowserDriver } from "../../../apps/desktop/go-chat-browser";
 import { BridgeError } from "../../../apps/desktop/bridge/client";
+import { readGoWorkspaceSnapshot } from "../../../apps/desktop/go-workspace-snapshot";
 import { ReadAccountConfirmation } from "../../../apps/desktop/read-account-confirmation";
 import {
   ReadAccountCommands,
@@ -7720,18 +7721,75 @@ async function configureAdmittedProduct(
       if (relativePath === "invalid") {
         return configurationFailure("WORKSPACE_FILE_SELECTION_INVALID");
       }
-      const prepared = await prepareWorkspaceEdit(nativeWorkspace, {
-        operationId: randomUUID(),
-        workspace: workspaceDescriptor(
-          selected.workspace,
-          selected.workspace.rootIdentity,
-        ),
-        computerGeneration: snapshot.settings.computer.generation,
-        relativePath,
-        expiresAt: Date.now() + 10 * 60_000,
-      });
-      if (!prepared.ok) return workspaceReadFailure(prepared.code);
-      pendingWorkspaceEdit = prepared.pending;
+      const operationId = randomUUID();
+      const expiresAt = Date.now() + 10 * 60_000;
+      if (compiledGoCore !== null) {
+        const core = desktopGoCore;
+        if (!core) return configurationFailure("WORKSPACE_READ_FAILED");
+        const binding = {
+          generation: snapshot.settings.computer.generation,
+          workspaceId: selected.workspace.workspaceId,
+          relativePath,
+          root: {
+            path: selected.workspace.root,
+            ...selected.workspace.rootIdentity,
+          },
+        };
+        const observed = await readGoWorkspaceSnapshot({
+          binding,
+          current: () => {
+            const now = configuration?.snapshot();
+            const folder =
+              now?.status === "ready"
+                ? now.settings.computer.workspaces.find(
+                    (item) => item.workspaceId === binding.workspaceId,
+                  )
+                : undefined;
+            if (
+              desktopGoCore !== core ||
+              now?.status !== "ready" ||
+              !folder?.rootIdentity
+            )
+              return null;
+            return {
+              generation: now.settings.computer.generation,
+              workspaceId: folder.workspaceId,
+              relativePath,
+              root: { path: folder.root, ...folder.rootIdentity },
+            };
+          },
+          read: (value) =>
+            core.snapshotSettingsWorkspace(
+              value.generation,
+              value.workspaceId,
+              value.relativePath,
+            ),
+        });
+        if (!observed.ok) return workspaceReadFailure(observed.code);
+        pendingWorkspaceEdit = {
+          operationId,
+          workspaceId: binding.workspaceId,
+          computerGeneration: binding.generation,
+          relativePath,
+          bytes: observed.bytes,
+          beforeSha256: observed.sha256,
+          expiresAt,
+        };
+      } else {
+        // Explicit legacy build only; never an error fallback for a Go read.
+        const prepared = await prepareWorkspaceEdit(nativeWorkspace, {
+          operationId,
+          workspace: workspaceDescriptor(
+            selected.workspace,
+            selected.workspace.rootIdentity,
+          ),
+          computerGeneration: snapshot.settings.computer.generation,
+          relativePath,
+          expiresAt,
+        });
+        if (!prepared.ok) return workspaceReadFailure(prepared.code);
+        pendingWorkspaceEdit = prepared.pending;
+      }
       return ProductConfigurationResultSchema.parse({
         ok: true,
         snapshot,

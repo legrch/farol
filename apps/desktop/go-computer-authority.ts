@@ -11,6 +11,7 @@ import {
   type ChatComputerAdmissionRequest,
   type ChatComputerAdmissionResponse,
   type ComputerSettingsListResponse,
+  type ComputerSettingsSnapshotResponse,
 } from "./bridge/wire";
 import type { ProductSettings } from "../../src/pkg/product-settings/contract";
 import { ownerSettingsComputerApproval } from "../../src/modules/computer/infra/repo/owner-settings-computer-approval";
@@ -168,6 +169,40 @@ export class GoComputerAuthority {
   ): Promise<
     Omit<ComputerSettingsListResponse, "entries"> & { entries: string[] }
   > {
+    return this.settingsWorkspace(
+      "list",
+      computerGeneration,
+      workspaceId,
+      relativePath,
+    ) as Promise<
+      Omit<ComputerSettingsListResponse, "entries"> & { entries: string[] }
+    >;
+  }
+
+  snapshotSettings(
+    computerGeneration: number,
+    workspaceId: string,
+    relativePath: string,
+  ): Promise<ComputerSettingsSnapshotResponse> {
+    return this.settingsWorkspace(
+      "snapshot",
+      computerGeneration,
+      workspaceId,
+      relativePath,
+    ) as Promise<ComputerSettingsSnapshotResponse>;
+  }
+
+  private async settingsWorkspace(
+    kind: "list" | "snapshot",
+    computerGeneration: number,
+    workspaceId: string,
+    relativePath: string,
+  ): Promise<
+    | (Omit<ComputerSettingsListResponse, "entries"> & { entries: string[] })
+    | ComputerSettingsSnapshotResponse
+  > {
+    const schema =
+      kind === "list" ? "ComputerSettingsList" : "ComputerSettingsSnapshot";
     const publication = this.ownerPublication;
     if (
       this.blocked ||
@@ -178,13 +213,13 @@ export class GoComputerAuthority {
     )
       throw new BridgeError("unavailable", "computer_publication_unavailable");
     const body = { publication, workspaceId, relativePath };
-    if (!validate("ComputerSettingsListRequest", body))
+    if (!validate(`${schema}Request`, body))
       throw new BridgeError("refused", "invalid_settings_workspace_request");
     this.settingsInFlight = true;
     try {
       const id = randomUUID();
       const outcome = await this.client.request(
-        "computer.settings.list",
+        `computer.settings.${kind}`,
         body as unknown as Json,
         { id, timeoutMs: 16_000 },
       );
@@ -203,22 +238,25 @@ export class GoComputerAuthority {
         );
       if (
         outcome.code !== undefined ||
-        !validate("ComputerSettingsListResponse", outcome.data)
+        !validate(`${schema}Response`, outcome.data)
       )
         throw new BridgeError("unknown", "invalid_settings_workspace_result");
-      const result = outcome.data as unknown as ComputerSettingsListResponse;
-      const entries = result.entries;
-      if (
-        !Array.isArray(entries) ||
-        entries.length > 500 ||
-        !entries.every(settingsEntry) ||
-        new Set(
-          entries.map((entry: string) =>
-            entry.endsWith("/") ? entry.slice(0, -1) : entry,
-          ),
-        ).size !== entries.length
-      )
-        throw new BridgeError("unknown", "invalid_settings_workspace_result");
+      const result = outcome.data as unknown as
+        ComputerSettingsListResponse | ComputerSettingsSnapshotResponse;
+      if (kind === "list") {
+        const entries = (result as ComputerSettingsListResponse).entries;
+        if (
+          !Array.isArray(entries) ||
+          entries.length > 500 ||
+          !entries.every(settingsEntry) ||
+          new Set(
+            entries.map((entry: string) =>
+              entry.endsWith("/") ? entry.slice(0, -1) : entry,
+            ),
+          ).size !== entries.length
+        )
+          throw new BridgeError("unknown", "invalid_settings_workspace_result");
+      }
       if (
         result.workspaceId !== workspaceId ||
         result.relativePath !== relativePath ||
@@ -229,12 +267,19 @@ export class GoComputerAuthority {
         throw new BridgeError("unknown", "crossed_settings_workspace_result");
       if (this.ownerPublication !== publication || this.pending || this.blocked)
         throw new BridgeError("refused", "settings_workspace_withdrawn");
-      return {
+      const copied = {
         ...result,
         publication: { ...result.publication },
         root: { ...result.root },
-        entries: [...entries],
       };
+      if (kind === "list")
+        return {
+          ...copied,
+          entries: [
+            ...((result as ComputerSettingsListResponse).entries as string[]),
+          ],
+        };
+      return copied as ComputerSettingsSnapshotResponse;
     } catch (error) {
       if (!(error instanceof BridgeError) || error.state === "unknown")
         this.blocked = true;

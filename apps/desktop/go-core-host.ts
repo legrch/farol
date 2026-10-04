@@ -185,6 +185,19 @@ export class DesktopGoCore {
       relativePath,
     );
   }
+  snapshotSettingsWorkspace(
+    computerGeneration: number,
+    workspaceId: string,
+    relativePath: string,
+  ) {
+    if (this.closeResult)
+      throw new BridgeError("unavailable", "host_computer_unavailable");
+    return this.authority.snapshotSettings(
+      computerGeneration,
+      workspaceId,
+      relativePath,
+    );
+  }
   promoteReadIntent(input: ChatReadIntentPromote) {
     if (this.closeResult)
       throw new BridgeError("unavailable", "host_read_intent_unavailable");

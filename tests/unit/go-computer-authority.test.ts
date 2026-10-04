@@ -29,6 +29,15 @@ async function fixture(fault?: (method: string, result: Outcome) => Outcome) {
           approvalDigest: "a".repeat(64),
           publishOperationId: options.operationId!,
         };
+      else if (method === "computer.settings.snapshot")
+        data = {
+          publication: input.publication!,
+          workspaceId: input.workspaceId!,
+          relativePath: input.relativePath!,
+          root: { path: "/synthetic/work", device: "1", inode: "2" },
+          bytes: 7,
+          sha256: "b".repeat(64),
+        };
       else if (method === "computer.settings.list")
         data = {
           publication: input.publication!,
@@ -430,4 +439,128 @@ describe("Go Computer host authority mapping", () => {
       expect(f.request).toHaveBeenCalledTimes(configured ? 2 : 1);
     },
   );
+});
+
+describe("Go owner Settings snapshot transport", () => {
+  it("reads only full-byte metadata without Chat admission or an effect ID", async () => {
+    const f = await fixture();
+    const added = await f.add();
+    if (!added.ok || added.snapshot.status !== "ready") throw Error("fixture");
+    const { generation, workspaces } = added.snapshot.settings.computer;
+    const out = await f.bridge.snapshotSettings(
+      generation,
+      workspaces[0]!.workspaceId,
+      "note.md",
+    );
+    expect(out).toMatchObject({ bytes: 7, sha256: "b".repeat(64) });
+    expect(out).not.toHaveProperty("text");
+    expect(f.request.mock.calls.map((call) => call[0])).toEqual([
+      "computer.authority.deactivate",
+      "computer.authority.publish",
+      "computer.settings.snapshot",
+    ]);
+    expect(f.request.mock.calls[2]![2]?.operationId).toBeUndefined();
+    await expect(
+      f.bridge.snapshotSettings(
+        generation + 1,
+        workspaces[0]!.workspaceId,
+        "note.md",
+      ),
+    ).rejects.toMatchObject({ code: "computer_publication_unavailable" });
+    expect(f.request).toHaveBeenCalledTimes(3);
+  });
+  it.each([
+    "bytes",
+    "sha",
+    "text",
+    "page",
+    "path",
+    "workspace",
+    "publication",
+    "backend",
+    "request",
+    "operation",
+  ])(
+    "fences malformed/crossed snapshot %s without another read",
+    async (fault) => {
+      const f = await fixture((method, out) => {
+        if (method !== "computer.settings.snapshot") return out;
+        const data = out.data as Record<string, Json>;
+        if (fault === "backend")
+          return {
+            ...out,
+            context: { ...out.context, backendGeneration: "other" },
+          };
+        if (fault === "request") return { ...out, requestId: "other" };
+        if (fault === "operation") return { ...out, operationId: "unexpected" };
+        return {
+          ...out,
+          data: {
+            ...data,
+            ...(fault === "bytes"
+              ? { bytes: 262145 }
+              : fault === "sha"
+                ? { sha256: "invalid" }
+                : fault === "text"
+                  ? { text: "must not leave Go" }
+                  : fault === "page"
+                    ? { page: {} }
+                    : fault === "path"
+                      ? { relativePath: "other" }
+                      : fault === "workspace"
+                        ? { workspaceId: "other" }
+                        : {
+                            publication: {
+                              ...(data.publication as Record<string, Json>),
+                              fence: "999",
+                            },
+                          }),
+          },
+        };
+      });
+      const added = await f.add();
+      if (!added.ok || added.snapshot.status !== "ready")
+        throw Error("fixture");
+      const { generation, workspaces } = added.snapshot.settings.computer;
+      await expect(
+        f.bridge.snapshotSettings(
+          generation,
+          workspaces[0]!.workspaceId,
+          "note.md",
+        ),
+      ).rejects.toMatchObject({ state: "unknown" });
+      await expect(
+        f.bridge.snapshotSettings(
+          generation,
+          workspaces[0]!.workspaceId,
+          "note.md",
+        ),
+      ).rejects.toMatchObject({ code: "computer_publication_unavailable" });
+      expect(f.request).toHaveBeenCalledTimes(3);
+    },
+  );
+  it("refuses snapshot disclosure if withdrawal crosses the awaited reply", async () => {
+    const f = await fixture();
+    const added = await f.add();
+    if (!added.ok || added.snapshot.status !== "ready") throw Error("fixture");
+    const { generation, workspaces } = added.snapshot.settings.computer;
+    const original = f.request.getMockImplementation()!;
+    f.request.mockImplementation(async (method, body, options) => {
+      const out = await original(method, body, options);
+      if (method === "computer.settings.snapshot") await f.bridge.withdraw();
+      return out;
+    });
+    await expect(
+      f.bridge.snapshotSettings(
+        generation,
+        workspaces[0]!.workspaceId,
+        "note.md",
+      ),
+    ).rejects.toMatchObject({ code: "settings_workspace_withdrawn" });
+    expect(
+      f.request.mock.calls.filter(
+        (call) => call[0] === "computer.settings.snapshot",
+      ),
+    ).toHaveLength(1);
+  });
 });

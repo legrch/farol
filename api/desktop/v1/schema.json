@@ -55,7 +55,8 @@
     "chat.readintent.withdraw": "effect",
     "computer.settings.list": "read",
     "chat.readintent.account.approve": "effect",
-    "chat.readintent.account.revoke": "effect"
+    "chat.readintent.account.revoke": "effect",
+    "computer.settings.snapshot": "read"
   },
   "definitions": {
     "Context": {
@@ -3269,6 +3270,49 @@
         },
         "approvalId": {
           "type": "id"
+        }
+      }
+    },
+    "ComputerSettingsSnapshotRequest": {
+      "type": "object",
+      "fields": {
+        "publication": {
+          "type": "ComputerAuthorityPublication"
+        },
+        "workspaceId": {
+          "type": "id"
+        },
+        "relativePath": {
+          "type": "string",
+          "minBytes": 1,
+          "maxBytes": 4096
+        }
+      }
+    },
+    "ComputerSettingsSnapshotResponse": {
+      "type": "object",
+      "fields": {
+        "publication": {
+          "type": "ComputerAuthorityPublication"
+        },
+        "workspaceId": {
+          "type": "id"
+        },
+        "relativePath": {
+          "type": "string",
+          "minBytes": 1,
+          "maxBytes": 4096
+        },
+        "root": {
+          "type": "ComputerSettingsRoot"
+        },
+        "bytes": {
+          "type": "uint32",
+          "maximum": 262144
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
         }
       }
     }
