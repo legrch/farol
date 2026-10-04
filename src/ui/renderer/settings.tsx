@@ -25,7 +25,10 @@ type Actions = {
     kind: ProductConfigurationCommand["kind"],
     workspaceId?: string,
   ): boolean;
-  run(command: ProductConfigurationCommand): Promise<Intent | null>;
+  run(
+    command: ProductConfigurationCommand,
+    admit?: (current: WindowSnapshot) => boolean,
+  ): Promise<Intent | null>;
 };
 type PageProps = SettingsProps & {
   settings: ProductSettings;
@@ -125,11 +128,15 @@ export function Settings({ snapshot, facade }: SettingsProps) {
   const actions: Actions = {
     disabled: pending || unconfirmed || fenced(snapshot),
     allowed,
-    async run(command) {
+    async run(command, admit) {
       const current = facade.getSnapshot();
       const id = intention(
         command.kind,
-        "workspaceId" in command ? command.workspaceId : undefined,
+        "workspaceId" in command
+          ? command.workspaceId
+          : "operationId" in command
+            ? command.operationId
+            : undefined,
       );
       if (
         busy.current ||
@@ -144,6 +151,7 @@ export function Settings({ snapshot, facade }: SettingsProps) {
         );
         return null;
       }
+      if (admit && !admit(current)) return null;
       busy.current = true;
       setPending(true);
       setMessage("Saving or checking…");
@@ -494,6 +502,7 @@ function Folder({
   settings,
   snapshot,
   actions,
+  facade,
 }: PageProps & { workspace: ApprovedProductWorkspace }) {
   const relativeExclusions = () => {
     const prefix = workspace.root === "/" ? "/" : `${workspace.root}/`;
@@ -570,6 +579,13 @@ function Folder({
           Remove folder
         </Command>
       </div>
+      <GuardedEdit
+        workspace={workspace}
+        settings={settings}
+        snapshot={snapshot}
+        actions={actions}
+        facade={facade}
+      />
       <details>
         <summary>More access options</summary>
         <p className="description">
@@ -647,6 +663,338 @@ function Folder({
         </form>
       </details>
     </article>
+  );
+}
+type EditReview = Readonly<{
+  evidence: NonNullable<WindowSnapshot["evidence"]>;
+  configuration: WindowSnapshot["configuration"];
+  buildId: string;
+  revision: number;
+  generation: number;
+}>;
+function editScope(current: WindowSnapshot, workspaceId: string) {
+  if (current.configuration?.status !== "ready") return null;
+  const settings = current.configuration.settings;
+  return JSON.stringify([
+    settings.computer.workspaces.find(
+      (item) => item.workspaceId === workspaceId,
+    ),
+    settings.setup.computer,
+  ]);
+}
+function editableWorkspace(current: WindowSnapshot, workspaceId: string) {
+  if (current.status !== "current" || current.configuration?.status !== "ready")
+    return false;
+  const settings = current.configuration.settings;
+  const workspace = settings.computer.workspaces.find(
+    (item) => item.workspaceId === workspaceId,
+  );
+  const verified = settings.setup.computer.verified;
+  return Boolean(
+    workspace?.access === "write" &&
+    current.buildId &&
+    folderAccessChecked(settings, workspace, current.buildId) &&
+    verified?.workspaceId === workspaceId &&
+    verified.configRevision === settings.computer.generation &&
+    verified.buildId === current.buildId &&
+    settings.setup.computer.reachable === "reachable" &&
+    !settings.setup.computer.outcomeUnknown,
+  );
+}
+function liveEdit(
+  current: WindowSnapshot,
+  review: EditReview | null,
+  workspaceId: string,
+) {
+  const evidence = review?.evidence.value;
+  return Boolean(
+    review &&
+    current.evidence === review.evidence &&
+    current.configuration === review.configuration &&
+    current.buildId === review.buildId &&
+    current.configuration?.status === "ready" &&
+    current.configuration.settings.revision === review.revision &&
+    current.configuration.settings.computer.generation === review.generation &&
+    review.evidence.revision === review.revision &&
+    evidence?.kind === "computer.workspace-edit-preview" &&
+    evidence.workspaceId === workspaceId &&
+    Date.parse(evidence.expiresAt) > Date.now() &&
+    editableWorkspace(current, workspaceId),
+  );
+}
+function editConsumed(current: WindowSnapshot, operationId: string) {
+  // Exact operation keys retain the one-shot UI disposition across remounts.
+  // This does not clear uncertainty or change the facade's dispatch policy.
+  return Boolean(
+    current.intents[intention("computer.apply-workspace-edit", operationId)] ||
+    current.intents[intention("computer.cancel-workspace-edit", operationId)],
+  );
+}
+function GuardedEdit({
+  workspace,
+  snapshot,
+  facade,
+  actions,
+}: PageProps & {
+  workspace: ApprovedProductWorkspace;
+}) {
+  const [review, setReview] = useState<EditReview | null>(null);
+  const [oldText, setOldText] = useState("");
+  const [newText, setNewText] = useState("");
+  const [notice, setNotice] = useState("");
+  const consumed = useRef(new Set<string>());
+  const preparing = useRef(false);
+  const mounted = useRef(true);
+  const observation = useRef<(() => void) | null>(null);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      observation.current?.();
+      observation.current = null;
+    };
+  }, []);
+  const preview = review?.evidence.value;
+  const selected =
+    preview?.kind === "computer.workspace-edit-preview" ? preview : null;
+  const live =
+    liveEdit(snapshot, review, workspace.workspaceId) &&
+    Boolean(
+      selected &&
+      !consumed.current.has(selected.operationId) &&
+      !editConsumed(snapshot, selected.operationId),
+    );
+  async function prepare() {
+    const before = facade.getSnapshot();
+    if (
+      preparing.current ||
+      fenced(before) ||
+      (liveEdit(before, review, workspace.workspaceId) &&
+        selected &&
+        !consumed.current.has(selected.operationId)) ||
+      !editableWorkspace(before, workspace.workspaceId)
+    )
+      return;
+    preparing.current = true;
+    const id = intention(
+      "computer.prepare-workspace-edit",
+      workspace.workspaceId,
+    );
+    let pending: Intent | null = null;
+    let observed: WindowSnapshot["evidence"] = null;
+    let previous = before;
+    let configurations = 0;
+    let raced = false;
+    // Observe the same pending intent -> evidence -> terminal intent transition.
+    // A final snapshot alone cannot distinguish foreign or overwritten evidence.
+    const dispose = facade.subscribe(() => {
+      const current = facade.getSnapshot();
+      if (
+        current.status !== "current" ||
+        current.buildId !== before.buildId ||
+        current.configuration?.status !== "ready" ||
+        before.configuration?.status !== "ready" ||
+        current.configuration.settings.revision !==
+          before.configuration.settings.revision ||
+        current.configuration.settings.computer.generation !==
+          before.configuration.settings.computer.generation ||
+        editScope(current, workspace.workspaceId) !==
+          editScope(before, workspace.workspaceId) ||
+        Object.keys({ ...before.intents, ...current.intents }).some(
+          (key) => key !== id && before.intents[key] !== current.intents[key],
+        )
+      )
+        raced = true;
+      if (current.configuration !== previous.configuration) configurations++;
+      if (configurations > 1) raced = true;
+      const intent = current.intents[id];
+      if (intent?.state === "pending") {
+        if (pending && pending !== intent) raced = true;
+        pending = intent;
+      }
+      if (current.evidence !== previous.evidence && current.evidence) {
+        if (!pending || intent !== pending || observed) raced = true;
+        observed = current.evidence;
+      } else if (observed && current.evidence !== observed) raced = true;
+      previous = current;
+    });
+    observation.current = dispose;
+    try {
+      const result = await actions.run({
+        kind: "computer.prepare-workspace-edit",
+        workspaceId: workspace.workspaceId,
+      });
+      const current = facade.getSnapshot();
+      const evidence = current.evidence;
+      const value = evidence?.value;
+      const candidate: EditReview | null =
+        evidence && current.buildId && current.configuration?.status === "ready"
+          ? {
+              evidence,
+              configuration: current.configuration,
+              buildId: current.buildId,
+              revision: current.configuration.settings.revision,
+              generation: current.configuration.settings.computer.generation,
+            }
+          : null;
+      const ambient = before.evidence?.value;
+      if (!mounted.current) return;
+      if (
+        result?.state === "applied" &&
+        result.id === id &&
+        current.intents[id] === result &&
+        pending &&
+        !raced &&
+        observed === evidence &&
+        value?.kind === "computer.workspace-edit-preview" &&
+        !(
+          ambient?.kind === "computer.workspace-edit-preview" &&
+          ambient.operationId === value.operationId
+        ) &&
+        !consumed.current.has(value.operationId) &&
+        !editConsumed(current, value.operationId) &&
+        liveEdit(current, candidate, workspace.workspaceId) &&
+        !fenced(current)
+      ) {
+        setReview(candidate);
+        setNotice("");
+      } else if (result) {
+        setNotice(
+          "The file preview could not be confirmed for this request. Check current status before continuing.",
+        );
+      }
+    } finally {
+      dispose();
+      observation.current = null;
+      preparing.current = false;
+    }
+  }
+  function finish(
+    kind: "computer.apply-workspace-edit" | "computer.cancel-workspace-edit",
+  ) {
+    if (!selected) return;
+    const command: ProductConfigurationCommand =
+      kind === "computer.apply-workspace-edit"
+        ? { kind, operationId: selected.operationId, oldText, newText }
+        : { kind, operationId: selected.operationId };
+    void actions.run(command, (current) => {
+      if (
+        !liveEdit(current, review, workspace.workspaceId) ||
+        consumed.current.has(selected.operationId) ||
+        editConsumed(current, selected.operationId)
+      )
+        return false;
+      consumed.current.add(selected.operationId);
+      setReview(null);
+      setNotice(
+        kind === "computer.apply-workspace-edit"
+          ? "Edit submitted once. Use Diagnostics to observe any unconfirmed result, then acknowledge the exact delivered result."
+          : "Cancellation submitted for the selected preview.",
+      );
+      return true;
+    });
+  }
+  const validText =
+    selected &&
+    ProductConfigurationCommandSchema.safeParse({
+      kind: "computer.apply-workspace-edit",
+      operationId: selected.operationId,
+      oldText,
+      newText,
+    }).success;
+  return (
+    <section aria-label={`Guarded edit for ${folderDisplayName(workspace)}`}>
+      <h4>Guarded text edit</h4>
+      <p className="description">
+        Choose a text file, then replace one unique occurrence of the old text.
+        Empty replacement text deletes that occurrence.
+      </p>
+      <button
+        type="button"
+        className="subtle"
+        disabled={
+          live ||
+          !editableWorkspace(snapshot, workspace.workspaceId) ||
+          !actions.allowed(
+            "computer.prepare-workspace-edit",
+            workspace.workspaceId,
+          )
+        }
+        onClick={() => void prepare()}
+      >
+        Prepare edit…
+      </button>
+      {selected && (
+        <p className="description">
+          Selected file: {selected.relativePath} · {selected.bytes} bytes.
+        </p>
+      )}
+      {selected && (
+        <details>
+          <summary>File details</summary>
+          <p className="description">
+            SHA-256: {selected.beforeSha256}. Expires: {selected.expiresAt}.
+          </p>
+        </details>
+      )}
+      {selected && !live && (
+        <p className="notice">
+          This preview is no longer current. Prepare and review the file again.
+        </p>
+      )}
+      <form
+        onSubmit={(event) => {
+          event.preventDefault();
+          finish("computer.apply-workspace-edit");
+        }}
+      >
+        <label className="setting-row">
+          Old text
+          <textarea
+            className="field"
+            value={oldText}
+            maxLength={32_768}
+            onChange={(event) => setOldText(event.currentTarget.value)}
+          />
+        </label>
+        <label className="setting-row">
+          New text
+          <textarea
+            className="field"
+            value={newText}
+            maxLength={32_768}
+            onChange={(event) => setNewText(event.currentTarget.value)}
+          />
+        </label>
+        <div className="control-row">
+          <button
+            className="primary"
+            disabled={
+              !live ||
+              !validText ||
+              !actions.allowed("computer.apply-workspace-edit")
+            }
+          >
+            Apply edit
+          </button>
+          <button
+            type="button"
+            className="subtle"
+            disabled={
+              !live || !actions.allowed("computer.cancel-workspace-edit")
+            }
+            onClick={() => finish("computer.cancel-workspace-edit")}
+          >
+            Cancel edit
+          </button>
+        </div>
+      </form>
+      {notice && (
+        <p className="notice" role="status">
+          {notice}
+        </p>
+      )}
+    </section>
   );
 }
 function ThisMac({ settings, snapshot, actions }: PageProps) {

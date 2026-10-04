@@ -120,6 +120,16 @@ async function mount(
     pageTo,
     calls,
     configuration,
+    async remount() {
+      await act(async () => root.render(null));
+      await act(async () =>
+        root.render(
+          <StrictMode>
+            <View />
+          </StrictMode>,
+        ),
+      );
+    },
   };
 }
 async function change(
@@ -775,4 +785,612 @@ it("R25 R29 unavailable facade projection retains dirty forms and fences command
   expect(field.value).toBe("activity");
   expect(h.button("Save navigation").disabled).toBe(false);
   expect(h.calls()).toEqual([]);
+});
+
+const editOperationId = "44444444-4444-4444-8444-444444444444";
+function writableFolder() {
+  const value = withFolder();
+  value.computer.workspaces[0]!.access = "write";
+  value.setup.computer.verified = proof(value);
+  value.setup.computer.reachable = "reachable";
+  return value;
+}
+function editPreview(operationId = editOperationId) {
+  return {
+    kind: "computer.workspace-edit-preview" as const,
+    operationId,
+    workspaceId,
+    relativePath: "file.txt",
+    bytes: 123,
+    beforeSha256: "b".repeat(64),
+    expiresAt: "2099-10-04T20:00:00.000Z",
+  };
+}
+type SettingsHarness = Awaited<ReturnType<typeof mount>>;
+async function prepareEdit(
+  h: SettingsHarness,
+  evidence: unknown = editPreview(),
+) {
+  vi.mocked(h.f.api.configure).mockResolvedValueOnce({
+    ok: true,
+    snapshot: h.configuration,
+    evidence,
+  });
+  await h.click("Prepare edit…");
+}
+describe("R07 R15 R17 R20 guarded edit controls (injected DOM only)", () => {
+  it("prepares explicitly, presents metadata as text, and applies one bounded replacement", async () => {
+    const h = await mount("folders", writableFolder());
+    expect(h.calls()).toEqual([]);
+    expect(h.button("Apply edit").disabled).toBe(true);
+    await prepareEdit(h, {
+      ...editPreview(),
+      relativePath: "<script>alert(1)</script>.txt",
+    });
+    expect(h.host.querySelector("script")).toBeNull();
+    expect(h.host.textContent).toContain("123 bytes");
+    expect(h.host.textContent).toContain("b".repeat(64));
+    expect(h.button("Prepare edit…").disabled).toBe(true);
+    await change(h.field("Old text"), "exact\nold text");
+    await change(h.field("New text"), "replacement\ntext");
+    expect(h.button("Apply edit").disabled).toBe(false);
+    await h.click("Apply edit");
+    await h.click("Apply edit");
+    expect(h.calls()).toEqual([
+      { kind: "computer.prepare-workspace-edit", workspaceId },
+      {
+        kind: "computer.apply-workspace-edit",
+        operationId: editOperationId,
+        oldText: "exact\nold text",
+        newText: "replacement\ntext",
+      },
+    ]);
+    expect(h.button("Apply edit").disabled).toBe(true);
+    expect(h.field("Old text").value).toBe("exact\nold text");
+    expect(h.f.api.task).not.toHaveBeenCalled();
+    expect(h.host.textContent).toContain("Use Diagnostics");
+  });
+  it("uses the original schema bounds and permits an empty replacement", async () => {
+    const h = await mount("folders", writableFolder());
+    await prepareEdit(h);
+    expect(h.field("Old text").getAttribute("maxlength")).toBe("32768");
+    expect(h.field("New text").getAttribute("maxlength")).toBe("32768");
+    await change(h.field("Old text"), "x".repeat(32_769));
+    expect(h.button("Apply edit").disabled).toBe(true);
+    await change(h.field("Old text"), "x");
+    await change(h.field("New text"), "y".repeat(32_769));
+    expect(h.button("Apply edit").disabled).toBe(true);
+    await change(h.field("New text"), "");
+    await h.click("Apply edit");
+    expect(h.calls()[1]).toEqual({
+      kind: "computer.apply-workspace-edit",
+      operationId: editOperationId,
+      oldText: "x",
+      newText: "",
+    });
+  });
+  it.each([
+    "read",
+    "unverified",
+    "wrong-build",
+    "wrong-generation",
+    "wrong-workspace",
+    "missing-identity",
+    "unknown",
+    "unchecked",
+  ])("requires verified current write access: %s", async (condition) => {
+    const value = writableFolder();
+    const folder = value.computer.workspaces[0]!;
+    if (condition === "read") folder.access = "read";
+    if (condition === "unverified") value.setup.computer.verified = null;
+    if (condition === "wrong-build")
+      value.setup.computer.verified!.buildId = "c".repeat(64);
+    if (condition === "wrong-generation") value.computer.generation++;
+    if (condition === "wrong-workspace")
+      value.setup.computer.verified!.workspaceId = selectionId;
+    if (condition === "missing-identity") delete folder.rootIdentity;
+    if (condition === "unknown") value.setup.computer.outcomeUnknown = true;
+    if (condition === "unchecked") folder.accessCheck = null;
+    const h = await mount("folders", value);
+    expect(h.button("Prepare edit…").disabled).toBe(true);
+    await h.click("Prepare edit…");
+    expect(h.calls()).toEqual([]);
+  });
+  it("cancels only the selected operation explicitly, with no mount/page cancellation", async () => {
+    const h = await mount("folders", writableFolder());
+    await prepareEdit(h);
+    await h.pageTo("general");
+    await h.pageTo("folders");
+    expect(h.calls()).toHaveLength(1);
+    await h.click("Cancel edit");
+    await h.click("Cancel edit");
+    expect(h.calls()[1]).toEqual({
+      kind: "computer.cancel-workspace-edit",
+      operationId: editOperationId,
+    });
+    expect(h.calls()).toHaveLength(2);
+    expect(h.button("Apply edit").disabled).toBe(true);
+  });
+  it("does not adopt ambient preview on remount, even after an explicit Prepare repeats it", async () => {
+    const h = await mount("folders", writableFolder());
+    await prepareEdit(h);
+    await change(h.field("Old text"), "old");
+    await h.remount();
+    expect(h.button("Apply edit").disabled).toBe(true);
+    expect(h.button("Cancel edit").disabled).toBe(true);
+    expect(h.calls()).toHaveLength(1);
+    await prepareEdit(h);
+    expect(h.button("Apply edit").disabled).toBe(true);
+    expect(h.button("Cancel edit").disabled).toBe(true);
+    expect(h.host.textContent).toContain("could not be confirmed");
+  });
+  it.each(["foreign-workspace", "expired", "malformed", "absent"])(
+    "rejects mismatched or missing preview: %s",
+    async (condition) => {
+      const h = await mount("folders", writableFolder());
+      const evidence =
+        condition === "absent"
+          ? undefined
+          : {
+              ...editPreview(),
+              ...(condition === "foreign-workspace"
+                ? { workspaceId: selectionId }
+                : {}),
+              ...(condition === "expired"
+                ? { expiresAt: "2020-01-01T00:00:00.000Z" }
+                : {}),
+              ...(condition === "malformed"
+                ? { beforeSha256: "bad-hash" }
+                : {}),
+            };
+      // Do not use the default argument for the absent-evidence fixture.
+      vi.mocked(h.f.api.configure).mockResolvedValueOnce({
+        ok: true,
+        snapshot: h.configuration,
+        ...(evidence ? { evidence } : {}),
+      });
+      await h.click("Prepare edit…");
+      await change(h.field("Old text"), "old");
+      expect(h.button("Apply edit").disabled).toBe(true);
+      expect(h.button("Cancel edit").disabled).toBe(true);
+      await h.click("Apply edit");
+      expect(h.calls()).toHaveLength(1);
+    },
+  );
+  it("fences a pending Prepare and Apply synchronously across duplicate clicks", async () => {
+    const h = await mount("folders", writableFolder());
+    const pending = deferred<unknown>();
+    vi.mocked(h.f.api.configure).mockReturnValueOnce(pending.promise);
+    await h.click("Prepare edit…");
+    await h.click("Prepare edit…");
+    expect(h.calls()).toHaveLength(1);
+    await act(async () =>
+      pending.resolve({
+        ok: true,
+        snapshot: h.configuration,
+        evidence: editPreview(),
+      }),
+    );
+    await change(h.field("Old text"), "old");
+    const apply = deferred<unknown>();
+    vi.mocked(h.f.api.configure).mockReturnValueOnce(apply.promise);
+    await act(async () => {
+      h.button("Apply edit").click();
+      h.button("Apply edit").click();
+      h.button("Cancel edit").click();
+    });
+    expect(h.calls()).toHaveLength(2);
+    await act(async () =>
+      apply.resolve({ ok: true, snapshot: h.configuration }),
+    );
+  });
+  it.each(["refused", "unknown"])(
+    "consumes Apply permanently after %s",
+    async (outcome) => {
+      const h = await mount("folders", writableFolder());
+      await prepareEdit(h);
+      await change(h.field("Old text"), "old");
+      if (outcome === "refused")
+        vi.mocked(h.f.api.configure).mockResolvedValueOnce({
+          ok: false,
+          error: "WORKSPACE_MUTATION_PREVIEW_NOT_FOUND",
+          snapshot: h.configuration,
+        });
+      else
+        vi.mocked(h.f.api.configure).mockRejectedValueOnce(
+          new Error("lost response"),
+        );
+      await h.click("Apply edit");
+      await h.pageTo("general");
+      await h.pageTo("folders");
+      await h.click("Apply edit");
+      expect(h.calls()).toHaveLength(2);
+      expect(h.button("Apply edit").disabled).toBe(true);
+      if (outcome === "unknown") {
+        await h.click("Prepare edit…");
+        expect(h.calls()).toHaveLength(2);
+      } else {
+        await prepareEdit(h); // A repeated consumed operation is never a new edit.
+        expect(h.button("Apply edit").disabled).toBe(true);
+      }
+    },
+  );
+  it("blocks every Settings command after an unknown Prepare, including after remount", async () => {
+    const h = await mount("folders", writableFolder());
+    vi.mocked(h.f.api.configure).mockRejectedValueOnce(
+      new Error("lost response"),
+    );
+    await h.click("Prepare edit…");
+    await h.remount();
+    await h.click("Prepare edit…");
+    await h.pageTo("general");
+    await h.click("Save navigation");
+    expect(h.calls()).toHaveLength(1);
+  });
+  it("allows a distinct new explicit edit after a known completion", async () => {
+    const h = await mount("folders", writableFolder());
+    await prepareEdit(h);
+    await change(h.field("Old text"), "old");
+    await h.click("Apply edit");
+    await prepareEdit(h, editPreview(selectionId));
+    await h.click("Apply edit");
+    expect(h.calls()).toHaveLength(4);
+    expect(h.calls()[3]).toEqual({
+      kind: "computer.apply-workspace-edit",
+      operationId: selectionId,
+      oldText: "old",
+      newText: "",
+    });
+  });
+  it("R25 R29 retains nodes, drafts, caret and IME across background and page changes", async () => {
+    const h = await mount("folders", writableFolder());
+    await prepareEdit(h);
+    const old = h.field("Old text") as HTMLTextAreaElement;
+    const replacement = h.field("New text");
+    await change(old, "old\ntext");
+    await change(replacement, "new\ntext");
+    old.focus();
+    old.setSelectionRange(2, 5);
+    await act(async () =>
+      old.dispatchEvent(
+        new CompositionEvent("compositionstart", { bubbles: true }),
+      ),
+    );
+    await act(async () => h.f.emit("route", { state: "loaded" }));
+    await h.click("Apply edit");
+    await h.click("Cancel edit");
+    expect(h.calls()).toHaveLength(1);
+    await h.pageTo("general");
+    await h.pageTo("folders");
+    expect(h.field("Old text")).toBe(old);
+    expect(old.value).toBe("old\ntext");
+    expect(old.selectionStart).toBe(2);
+    expect(old.selectionEnd).toBe(5);
+    expect(h.field("New text")).toBe(replacement);
+    expect(replacement.value).toBe("new\ntext");
+    await act(async () =>
+      old.dispatchEvent(
+        new CompositionEvent("compositionend", { bubbles: true }),
+      ),
+    );
+    await h.click("Apply edit");
+    expect(h.calls()).toHaveLength(2);
+  });
+  it("rejects a refresh racing Prepare, even at the same revision", async () => {
+    const h = await mount("folders", writableFolder());
+    const pending = deferred<unknown>();
+    vi.mocked(h.f.api.configure).mockReturnValueOnce(pending.promise);
+    await h.click("Prepare edit…");
+    await act(async () => h.c.refresh());
+    await act(async () =>
+      pending.resolve({
+        ok: true,
+        snapshot: h.configuration,
+        evidence: editPreview(),
+      }),
+    );
+    await change(h.field("Old text"), "old");
+    expect(h.button("Apply edit").disabled).toBe(true);
+    expect(h.host.textContent).toContain("could not be confirmed");
+  });
+  it("rejects evidence after any foreign command transition during Prepare", async () => {
+    const h = await mount("folders", writableFolder());
+    const pending = deferred<unknown>();
+    vi.mocked(h.f.api.configure).mockReturnValueOnce(pending.promise);
+    await h.click("Prepare edit…");
+    await act(async () =>
+      h.c.configure({ kind: "support.export" }, "foreign:command"),
+    );
+    await act(async () =>
+      pending.resolve({
+        ok: true,
+        snapshot: h.configuration,
+        evidence: editPreview(),
+      }),
+    );
+    expect(h.button("Cancel edit").disabled).toBe(true);
+    expect(h.host.textContent).toContain("could not be confirmed");
+  });
+  it.each([
+    "revision",
+    "generation",
+    "read",
+    "build",
+    "stale",
+    "expired",
+    "foreign-evidence",
+  ])(
+    "rechecks the latest facade at click time, despite old rendered eligibility: %s",
+    async (condition) => {
+      const h = await mount("folders", writableFolder());
+      await prepareEdit(h);
+      await change(h.field("Old text"), "old");
+      const current = h.c.getSnapshot();
+      const configuration = structuredClone(h.configuration);
+      const next = { ...current, configuration };
+      if (condition === "revision") configuration.settings.revision++;
+      if (condition === "generation")
+        configuration.settings.computer.generation++;
+      if (condition === "read")
+        configuration.settings.computer.workspaces[0]!.access = "read";
+      if (condition === "build") next.buildId = "c".repeat(64);
+      if (condition === "stale") next.status = "stale";
+      if (condition === "foreign-evidence" || condition === "expired")
+        next.evidence = {
+          revision: configuration.settings.revision,
+          value: {
+            ...editPreview(),
+            ...(condition === "expired"
+              ? { expiresAt: "2020-01-01T00:00:00.000Z" }
+              : { operationId: selectionId }),
+          },
+        };
+      vi.spyOn(h.c, "getSnapshot").mockReturnValue(next);
+      await h.click("Apply edit");
+      await h.click("Cancel edit");
+      await h.click("Prepare edit…");
+      expect(h.calls()).toHaveLength(1);
+    },
+  );
+  it("retains drafts but invalidates the review after an ordinary same-revision refresh", async () => {
+    const h = await mount("folders", writableFolder());
+    await prepareEdit(h);
+    const old = h.field("Old text");
+    await change(old, "draft");
+    await act(async () => h.c.refresh());
+    expect(h.field("Old text")).toBe(old);
+    expect(old.value).toBe("draft");
+    expect(h.button("Apply edit").disabled).toBe(true);
+    expect(h.button("Cancel edit").disabled).toBe(true);
+  });
+  it("fences Prepare while another Settings action or pending edit result is unresolved", async () => {
+    const h = await mount("general", writableFolder());
+    const pending = deferred<unknown>();
+    vi.mocked(h.f.api.configure).mockReturnValueOnce(pending.promise);
+    await h.click("Save navigation");
+    await h.pageTo("folders");
+    expect(h.button("Prepare edit…").disabled).toBe(true);
+    await h.click("Prepare edit…");
+    expect(h.calls()).toHaveLength(1);
+    await act(async () =>
+      pending.resolve({ ok: true, snapshot: h.configuration }),
+    );
+    const value = writableFolder();
+    value.computer.pendingEdit = {
+      operationId: editOperationId,
+      workspaceId,
+      relativePath: "file.txt",
+      computerGeneration: 1,
+      submittedAt: "2026-10-04T20:00:00.000Z",
+    };
+    const blocked = await mount("folders", value);
+    await blocked.click("Prepare edit…");
+    expect(blocked.calls()).toEqual([]);
+  });
+});
+
+it("R11 R22 unmount during Prepare releases only observation and never adopts its late result", async () => {
+  const h = await mount("folders", writableFolder());
+  const subscribe = h.c.subscribe;
+  const disposers: ReturnType<typeof vi.fn>[] = [];
+  vi.spyOn(h.c, "subscribe").mockImplementation((listener) => {
+    const dispose = vi.fn(subscribe(listener));
+    disposers.push(dispose);
+    return dispose;
+  });
+  const pending = deferred<unknown>();
+  vi.mocked(h.f.api.configure).mockReturnValueOnce(pending.promise);
+  await h.click("Prepare edit…");
+  const commandObservation = disposers[0]!;
+  await h.remount();
+  expect(commandObservation).toHaveBeenCalledOnce();
+  expect(h.calls()).toHaveLength(1);
+  await act(async () =>
+    pending.resolve({
+      ok: true,
+      snapshot: h.configuration,
+      evidence: editPreview(),
+    }),
+  );
+  expect(h.button("Apply edit").disabled).toBe(true);
+  expect(h.button("Cancel edit").disabled).toBe(true);
+  expect(h.calls()).toHaveLength(1);
+});
+it("R07 rejects authority drift in a Prepare reply even with equal revision and generation", async () => {
+  const h = await mount("folders", writableFolder());
+  const next = structuredClone(h.configuration);
+  next.settings.computer.workspaces[0]!.root = "/other/project";
+  vi.mocked(h.f.api.configure).mockResolvedValueOnce({
+    ok: true,
+    snapshot: next,
+    evidence: editPreview(),
+  });
+  await h.click("Prepare edit…");
+  expect(h.button("Cancel edit").disabled).toBe(true);
+  expect(h.host.textContent).toContain("could not be confirmed");
+});
+it("checks expiry at dispatch time without needing a background render", async () => {
+  const h = await mount("folders", writableFolder());
+  await prepareEdit(h);
+  await change(h.field("Old text"), "old");
+  vi.spyOn(Date, "now").mockReturnValue(Date.parse(editPreview().expiresAt));
+  await h.click("Apply edit");
+  await h.click("Cancel edit");
+  expect(h.calls()).toHaveLength(1);
+});
+it("reads latest facade authority before Prepare when its rendered control is still enabled", async () => {
+  const h = await mount("folders", writableFolder());
+  const current = h.c.getSnapshot();
+  const configuration = structuredClone(h.configuration);
+  configuration.settings.computer.workspaces[0]!.access = "read";
+  vi.spyOn(h.c, "getSnapshot").mockReturnValue({ ...current, configuration });
+  await h.click("Prepare edit…");
+  expect(h.calls()).toHaveLength(0);
+});
+it("R20 preserves result delivery and requires existing explicit acknowledgement before a new edit", async () => {
+  const h = await mount("folders", writableFolder());
+  await prepareEdit(h);
+  await change(h.field("Old text"), "old");
+  const pending = structuredClone(h.configuration);
+  pending.settings.revision++;
+  pending.settings.computer.pendingEdit = {
+    operationId: editOperationId,
+    workspaceId,
+    relativePath: "file.txt",
+    computerGeneration: 1,
+    submittedAt: "2026-10-04T20:00:00.000Z",
+  };
+  const evidence = {
+    kind: "computer.workspace-mutation",
+    operationId: editOperationId,
+    workspaceId,
+    relativePath: "file.txt",
+    operation: "edit",
+    bytes: 120,
+    replacements: 1,
+    beforeSha256: "b".repeat(64),
+    afterSha256: "c".repeat(64),
+    resultRetention: "durable",
+    redelivered: false,
+  };
+  vi.mocked(h.f.api.configure).mockResolvedValueOnce({
+    ok: true,
+    snapshot: pending,
+    evidence,
+  });
+  await h.click("Apply edit");
+  expect(h.c.getSnapshot().workspaceEditDelivery).toBe(editOperationId);
+  await h.remount();
+  await h.click("Prepare edit…");
+  expect(h.calls()).toHaveLength(2);
+  await h.pageTo("diagnostics");
+  vi.mocked(h.f.api.configure).mockResolvedValueOnce({
+    ok: true,
+    snapshot: pending,
+    evidence: { ...evidence, redelivered: true },
+  });
+  await h.click("Observe existing edit");
+  expect(h.calls()[2]).toEqual({
+    kind: "computer.observe-workspace-edit",
+    operationId: editOperationId,
+  });
+  expect(
+    h.calls().some((command) => command.kind === "computer.ack-workspace-edit"),
+  ).toBe(false);
+  const settled = structuredClone(pending);
+  settled.settings.revision++;
+  settled.settings.computer.pendingEdit = null;
+  vi.mocked(h.f.api.configure).mockResolvedValueOnce({
+    ok: true,
+    snapshot: settled,
+  });
+  await act(async () => h.c.acknowledgeWorkspaceEdit(editOperationId));
+  await h.pageTo("folders");
+  vi.mocked(h.f.api.configure).mockResolvedValueOnce({
+    ok: true,
+    snapshot: settled,
+    evidence: editPreview(selectionId),
+  });
+  await h.click("Prepare edit…");
+  await change(h.field("Old text"), "next");
+  expect(h.button("Apply edit").disabled).toBe(false);
+});
+it("reports the existing facade gap: reconciled unknown Apply still fences a new explicit Prepare", async () => {
+  const h = await mount("folders", writableFolder());
+  await prepareEdit(h);
+  await change(h.field("Old text"), "old");
+  vi.mocked(h.f.api.configure).mockRejectedValueOnce(
+    new Error("response lost after dispatch"),
+  );
+  await h.click("Apply edit");
+  const pending = structuredClone(h.configuration);
+  pending.settings.revision++;
+  pending.settings.computer.pendingEdit = {
+    operationId: editOperationId,
+    workspaceId,
+    relativePath: "file.txt",
+    computerGeneration: 1,
+    submittedAt: "2026-10-04T20:00:00.000Z",
+  };
+  vi.mocked(h.f.api.bootstrap).mockResolvedValue({
+    ...bootstrap(),
+    configuration: pending,
+  });
+  await act(async () => h.c.refresh());
+  await h.pageTo("diagnostics");
+  vi.mocked(h.f.api.configure).mockResolvedValueOnce({
+    ok: true,
+    snapshot: pending,
+    evidence: {
+      kind: "computer.workspace-mutation",
+      operationId: editOperationId,
+      workspaceId,
+      relativePath: "file.txt",
+      operation: "edit",
+      bytes: 120,
+      replacements: 1,
+      beforeSha256: "b".repeat(64),
+      afterSha256: "c".repeat(64),
+      resultRetention: "durable",
+      redelivered: true,
+    },
+  });
+  await h.click("Observe existing edit");
+  expect(h.c.getSnapshot().workspaceEditDelivery).toBe(editOperationId);
+  const settled = structuredClone(pending);
+  settled.settings.revision++;
+  settled.settings.computer.pendingEdit = null;
+  vi.mocked(h.f.api.configure).mockResolvedValueOnce({
+    ok: true,
+    snapshot: settled,
+  });
+  await act(async () => h.c.acknowledgeWorkspaceEdit(editOperationId));
+  await h.remount(); // Even the local uncertainty latch is gone now.
+  await h.pageTo("folders");
+  expect(
+    h.c.getSnapshot().intents[
+      `settings:computer.apply-workspace-edit:${editOperationId}`
+    ]?.state,
+  ).toBe("unknown");
+  expect(h.button("Prepare edit…").disabled).toBe(true);
+  await h.click("Prepare edit…");
+  expect(h.calls()).toHaveLength(4); // Prepare, Apply, exact Observe, exact ACK.
+});
+
+it("retains consumed operation identity after a known refusal and remount", async () => {
+  const h = await mount("folders", writableFolder());
+  await prepareEdit(h);
+  await change(h.field("Old text"), "old");
+  vi.mocked(h.f.api.configure).mockResolvedValueOnce({
+    ok: false,
+    error: "WORKSPACE_MUTATION_IN_PROGRESS",
+    snapshot: h.configuration,
+  });
+  await h.click("Apply edit");
+  await h.remount();
+  await prepareEdit(h);
+  await change(h.field("Old text"), "old");
+  expect(h.button("Apply edit").disabled).toBe(true);
+  expect(h.button("Cancel edit").disabled).toBe(true);
+  expect(h.calls()).toHaveLength(3);
 });
