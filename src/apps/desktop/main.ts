@@ -9690,7 +9690,7 @@ if (!primaryInstanceLock) {
     })
     .catch(async (error: unknown) => {
       try {
-        await desktopGoCore?.close();
+        await desktopGoCore?.abortStartup();
       } catch {
         error = new Error("GO_CORE_STARTUP_CLEANUP_UNCONFIRMED");
       }

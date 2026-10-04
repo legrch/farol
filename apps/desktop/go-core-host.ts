@@ -82,7 +82,7 @@ export class DesktopGoCore {
   private chatComputerBridge: ChatComputerBridge | undefined;
   private chatCallerBridge: ChatCallerBridge | undefined;
   private closeResult: Promise<void> | undefined;
-  private startupComplete = false;
+  private browserConnected = false;
   constructor(
     private readonly client: Client,
     private readonly settings: () => ProductSettings,
@@ -102,7 +102,7 @@ export class DesktopGoCore {
     this.chatComputerBridge = new ChatComputerBridge(this.client);
     this.chatCallerBridge = new ChatCallerBridge(this.client);
     this.pump.start();
-    this.startupComplete = true;
+    this.browserConnected = true;
   }
   get chat(): ChatBridge {
     if (!this.chatBridge || this.closeResult || this.pump?.state !== "running")
@@ -167,12 +167,18 @@ export class DesktopGoCore {
   }
   // Exact child closure remains distinct from module/journal clean retirement.
   close(): Promise<void> {
-    if (!this.closeResult) this.closeResult = this.closeOnce();
+    if (!this.closeResult) this.closeResult = this.closeOnce(true);
     return this.closeResult;
   }
-  private async closeOnce(): Promise<void> {
+  // Electron can still fail after this backend connects. Startup failure only
+  // cleans the original resources; it must not mint a retirement or recorder.
+  abortStartup(): Promise<void> {
+    if (!this.closeResult) this.closeResult = this.closeOnce(false);
+    return this.closeResult;
+  }
+  private async closeOnce(retire: boolean): Promise<void> {
     let retirementError: unknown;
-    if (this.completeRetirement && this.startupComplete) {
+    if (retire && this.completeRetirement && this.browserConnected) {
       try {
         const handoffId = randomUUID();
         const prepared = await this.client.request(
@@ -330,7 +336,7 @@ export async function startDesktopGoCore(
     host.connectBrowser(selection.browser(client.verifiedContext));
     return host;
   } catch (error) {
-    await host.close();
+    await host.abortStartup();
     throw error;
   }
 }

@@ -234,3 +234,56 @@ it("reopens the exact empty profile across actual graceful child lifetimes", asy
   expect(browserCalls).toBe(0);
   cleanupConfirmed = true;
 });
+
+it("cleans a post-connect startup abort without publishing a retirement", async () => {
+  cleanupConfirmed = false;
+  const stateRoot = path.join(root, "aborted-state");
+  const home = path.join(root, "aborted-home");
+  fs.mkdirSync(stateRoot, { mode: 0o700 });
+  fs.mkdirSync(home, { mode: 0o700 });
+  const configuration = new ProductConfigurationService(
+    new ProductSettingsStore({ root: stateRoot }),
+    { homeDirectory: home },
+  );
+  await configuration.initialize();
+  const settings = () => {
+    const value = configuration.snapshot();
+    if (value.status !== "ready") throw new Error("SETTINGS_UNAVAILABLE");
+    return value.settings;
+  };
+  const forbidden = async (): Promise<never> => {
+    throw new Error("PROVIDER_FORBIDDEN");
+  };
+  const driver: BrowserDriver = {
+    prepare: forbidden,
+    verifySend: forbidden,
+    send: forbidden,
+    observe: forbidden,
+    cancel: forbidden,
+    dispose: forbidden,
+  };
+  const selected = {
+    previousHostDrainConfirmed: true,
+    compiledArtifact: artifact,
+    build,
+    artifactRoot,
+    stateRoot,
+    home,
+    settings,
+    browser: () => ({ driver, withdraw: () => undefined }),
+  };
+  const host = await startDesktopGoCore(selected);
+  expect(host.chat).toBeDefined();
+  await host.abortStartup();
+  await host.close();
+  const chatRoot = path.join(stateRoot, "go-core", "chat");
+  const before = fs.readdirSync(chatRoot).sort();
+  expect(before.filter((name) => /^chat-handoff-/.test(name))).toEqual([]);
+  // The later normal host has no independent prior-drain witness. It refuses
+  // before creating a child, without trying to revive the retained claim.
+  await expect(
+    startDesktopGoCore({ ...selected, previousHostDrainConfirmed: false }),
+  ).rejects.toMatchObject({ code: "previous_host_drain_unconfirmed" });
+  expect(fs.readdirSync(chatRoot).sort()).toEqual(before);
+  cleanupConfirmed = true;
+});

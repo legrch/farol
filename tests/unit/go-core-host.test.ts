@@ -752,3 +752,34 @@ it("retains recorder uncertainty across repeated host close", async () => {
   expect(AttestedCore.prototype.completeRetirement).toHaveBeenCalledTimes(1);
   expect(f.close).toHaveBeenCalledTimes(1);
 });
+
+it("aborts a later Electron startup failure after browser connection without retirement", async () => {
+  const f = transport();
+  start.mockResolvedValue(f.client);
+  const host = await startDesktopGoCore(selection);
+  expect(host.chat).toBeDefined();
+  await host.abortStartup();
+  await host.abortStartup();
+  await host.close();
+  expect(f.events).not.toContain("core.retirement.prepare");
+  expect(f.events).not.toContain("core.retirement.ack");
+  expect(AttestedCore.prototype.completeRetirement).not.toHaveBeenCalled();
+  expect(f.close).toHaveBeenCalledTimes(1);
+});
+
+it("preserves unknown post-connect startup cleanup on later Quit", async () => {
+  const f = transport();
+  start.mockResolvedValue(f.client);
+  const host = await startDesktopGoCore(selection);
+  const original = f.close.getMockImplementation()!;
+  const failure = new BridgeError("unknown", "startup_cleanup_lost");
+  f.close.mockImplementation(async () => {
+    await original();
+    throw failure;
+  });
+  await expect(host.abortStartup()).rejects.toBe(failure);
+  await expect(host.close()).rejects.toBe(failure);
+  expect(f.events).not.toContain("core.retirement.prepare");
+  expect(AttestedCore.prototype.completeRetirement).not.toHaveBeenCalled();
+  expect(f.close).toHaveBeenCalledTimes(1);
+});
