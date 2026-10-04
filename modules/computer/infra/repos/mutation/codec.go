@@ -63,6 +63,7 @@ type ownerRecord struct {
 	Identity           ownerIdentity `json:"identity"`
 	ComputerGeneration uint64        `json:"computerGeneration"`
 	WorkspaceID        string        `json:"workspaceId"`
+	RelativePath       string        `json:"relativePath"`
 	RequestDigest      string        `json:"requestDigest"`
 	Phase              domain.Phase  `json:"phase"`
 	Outcome            *outcome      `json:"outcome"`
@@ -167,7 +168,7 @@ func encode(state *domain.State) ([]byte, error) {
 		// for v2, including authority-store. No diagnostic field is persisted.
 		value = ownerEnvelope{Version: 2, Kind: "workspace_owner_mutation", Record: ownerRecord{
 			Identity:           ownerIdentity{Scope: i.Scope, OperationID: i.OperationID, OwnerID: i.OwnerID, ProfileID: i.ProfileID, ComputerID: i.ComputerID},
-			ComputerGeneration: b.ComputerGeneration, WorkspaceID: b.WorkspaceID, RequestDigest: b.RequestDigest, Phase: r.Phase, Outcome: r.Outcome,
+			ComputerGeneration: b.ComputerGeneration, WorkspaceID: b.WorkspaceID, RelativePath: b.RelativePath, RequestDigest: b.RequestDigest, Phase: r.Phase, Outcome: r.Outcome,
 		}}
 	}
 	var buf bytes.Buffer
@@ -252,7 +253,7 @@ func decode(raw []byte) (*domain.State, error) {
 			return corrupt()
 		}
 		r, i := e.Record, e.Record.Identity
-		b = domain.Binding{Identity: domain.Identity{Scope: i.Scope, OperationID: i.OperationID, OwnerID: i.OwnerID, ProfileID: i.ProfileID, ComputerID: i.ComputerID}, ComputerGeneration: r.ComputerGeneration, WorkspaceID: r.WorkspaceID, RequestDigest: r.RequestDigest}
+		b = domain.Binding{Identity: domain.Identity{Scope: i.Scope, OperationID: i.OperationID, OwnerID: i.OwnerID, ProfileID: i.ProfileID, ComputerID: i.ComputerID}, ComputerGeneration: r.ComputerGeneration, WorkspaceID: r.WorkspaceID, RelativePath: r.RelativePath, RequestDigest: r.RequestDigest}
 		phase, result = r.Phase, r.Outcome
 	default:
 		return corrupt()

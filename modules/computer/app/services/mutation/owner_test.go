@@ -324,7 +324,7 @@ func TestOwnerObservationMissingPreparedCorruptAndLaterPeerCompletion(t *testing
 	observer, _ := NewOwnerObserver(f.selected, f.store)
 	_, err := observer.Observe(context.Background(), OwnerObservation{"work", "note.md"})
 	requireCode(t, err, "COMPUTER_MUTATION_OPERATION_NOT_FOUND")
-	b := state.Binding{Identity: f.selected.identity(), ComputerGeneration: 7, WorkspaceID: "work", RequestDigest: strings.Repeat("a", 64)}
+	b := state.Binding{Identity: f.selected.identity(), ComputerGeneration: 7, WorkspaceID: "work", RelativePath: "note.md", RequestDigest: strings.Repeat("a", 64)}
 	prepared, _ := state.NewPrepared(b)
 	f.store.record = prepared
 	out, err := f.service.Execute(context.Background(), f.request)
@@ -409,5 +409,47 @@ func TestOwnerMutationEditPreimageAndUncertaintyStayBound(t *testing.T) {
 				t.Fatal("edit repeated")
 			}
 		})
+	}
+}
+
+func TestOwnerObservationPathMustMatchEveryPhaseAndPublication(t *testing.T) {
+	for _, phase := range []state.Phase{state.Prepared, state.Failed, state.OutcomeUnknown, state.Completed} {
+		for _, publication := range []string{"durable", "memory_only"} {
+			t.Run(string(phase)+"/"+publication, func(t *testing.T) {
+				f := newOwnerFixture(t)
+				b := state.Binding{Identity: f.selected.identity(), WorkspaceID: "work", ComputerGeneration: 7, RelativePath: "note.md", RequestDigest: strings.Repeat("a", 64)}
+				prepared, err := state.NewPrepared(b)
+				if err != nil {
+					t.Fatal(err)
+				}
+				record := prepared
+				switch phase {
+				case state.Failed:
+					record, err = prepared.Refuse(state.Failure{Code: "WORKSPACE_MUTATION_CONFLICT", Source: "native-workspace"})
+				case state.OutcomeUnknown:
+					record, err = prepared.Refuse(state.Failure{Code: "WORKSPACE_MUTATION_OUTCOME_UNKNOWN", Source: "native-workspace"})
+				case state.Completed:
+					record, err = prepared.Complete(state.Receipt{Operation: state.WriteKind, RelativePath: "note.md", AfterSHA256: strings.Repeat("b", 64)})
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				f.store.record = record
+				f.service.engine.terminal = record
+				f.service.engine.publication = publication
+				_, err = f.service.Observe(context.Background(), OwnerObservation{"work", "other.md"})
+				requireCode(t, err, "COMPUTER_MUTATION_OPERATION_CONFLICT")
+				observer, _ := NewOwnerObserver(f.selected, f.store)
+				_, err = observer.Observe(context.Background(), OwnerObservation{"work", "other.md"})
+				requireCode(t, err, "COMPUTER_MUTATION_OPERATION_CONFLICT")
+				out, err := observer.Observe(context.Background(), OwnerObservation{"work", "note.md"})
+				if err != nil || out == nil {
+					t.Fatal("exact target observation refused", err)
+				}
+				if f.store.admissions != 0 || f.store.saves != 0 || f.native.calls != 0 {
+					t.Fatal("path correlation observation had effects")
+				}
+			})
+		}
 	}
 }

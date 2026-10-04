@@ -13,7 +13,7 @@ import (
 func ownerFixture(t *testing.T) (*Repository, *memory, *domain.State) {
 	t.Helper()
 	r, m, _ := fixture()
-	b := domain.Binding{Identity: domain.Identity{Scope: domain.ScopeOwnerSettings, OperationID: "op", OwnerID: "owner", ProfileID: "profile", ComputerID: "computer"}, ComputerGeneration: 7, WorkspaceID: "work", RequestDigest: strings.Repeat("a", 64)}
+	b := domain.Binding{Identity: domain.Identity{Scope: domain.ScopeOwnerSettings, OperationID: "op", OwnerID: "owner", ProfileID: "profile", ComputerID: "computer"}, ComputerGeneration: 7, WorkspaceID: "work", RelativePath: "file.md", RequestDigest: strings.Repeat("a", 64)}
 	s, err := domain.NewPrepared(b)
 	if err != nil {
 		t.Fatal(err)
@@ -23,7 +23,7 @@ func ownerFixture(t *testing.T) (*Repository, *memory, *domain.State) {
 
 func TestOwnerV2ExactBytesAndDomainSeparatedKey(t *testing.T) {
 	_, _, s := ownerFixture(t)
-	want := `{"schemaVersion":2,"kind":"workspace_owner_mutation","record":{"identity":{"scope":"owner-settings","operationId":"op","ownerId":"owner","profileId":"profile","computerId":"computer"},"computerGeneration":7,"workspaceId":"work","requestDigest":"` + strings.Repeat("a", 64) + `","phase":"prepared","outcome":null}}` + "\n"
+	want := `{"schemaVersion":2,"kind":"workspace_owner_mutation","record":{"identity":{"scope":"owner-settings","operationId":"op","ownerId":"owner","profileId":"profile","computerId":"computer"},"computerGeneration":7,"workspaceId":"work","relativePath":"file.md","requestDigest":"` + strings.Repeat("a", 64) + `","phase":"prepared","outcome":null}}` + "\n"
 	raw, err := encode(s)
 	if err != nil || string(raw) != want {
 		t.Fatalf("owner prepared bytes: %q %v", raw, err)
@@ -347,5 +347,38 @@ func TestV1RejectsEveryOwnerV2FieldAndEnvelope(t *testing.T) {
 			t.Fatal("v1 converted to owner format")
 		}
 		code(t, err, "WORKSPACE_MUTATION_STATE_CORRUPT")
+	}
+}
+
+func TestOwnerTargetRequiredInEveryJournalPhase(t *testing.T) {
+	_, _, prepared := ownerFixture(t)
+	failed, _ := prepared.Refuse(domain.Failure{Code: "WORKSPACE_MUTATION_CONFLICT", Source: "native-workspace"})
+	unknown, _ := prepared.Refuse(domain.Failure{Code: "WORKSPACE_MUTATION_OUTCOME_UNKNOWN", Source: "native-workspace"})
+	for _, record := range []*domain.State{prepared, failed, unknown, completed(t, prepared)} {
+		raw, err := encode(record)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, bad := range []string{
+			strings.Replace(string(raw), `"relativePath":"file.md",`, "", 1),
+			strings.Replace(string(raw), `"relativePath":"file.md"`, `"relativePath":"../escape"`, 1),
+			strings.Replace(string(raw), `"relativePath":"file.md"`, `"relativePath":null`, 1),
+		} {
+			if got, err := decode([]byte(bad)); got != nil || err == nil {
+				t.Fatal("unbound target decoded")
+			}
+		}
+	}
+	// A different target still collides with the original operation key.
+	b := prepared.Binding()
+	b.RelativePath = "other.md"
+	next, err := domain.NewPrepared(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, _ := recordKey(prepared.Binding().Identity)
+	other, _ := recordKey(next.Binding().Identity)
+	if key != other {
+		t.Fatal("changed target acquired a new key")
 	}
 }

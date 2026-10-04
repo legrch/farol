@@ -14,6 +14,7 @@ type Binding struct {
 	Identity                   Identity
 	WorkspaceID, RequestDigest string
 	ComputerGeneration         uint64
+	RelativePath               string
 }
 type Receipt struct {
 	Operation    Kind
@@ -79,7 +80,7 @@ func ValidIdentity(i Identity) bool {
 	}
 }
 func validBinding(b Binding) bool {
-	return ValidIdentity(b.Identity) && Identifier(b.WorkspaceID, 160) && SHA256(b.RequestDigest) && b.ComputerGeneration <= MaxSafeInteger && (b.Identity.Scope == ScopeOwnerSettings || b.ComputerGeneration == 0)
+	return ValidIdentity(b.Identity) && Identifier(b.WorkspaceID, 160) && SHA256(b.RequestDigest) && b.ComputerGeneration <= MaxSafeInteger && ((b.Identity.Scope == ScopeOwnerSettings && RelativePath(b.RelativePath)) || (b.Identity.Scope == "" && b.ComputerGeneration == 0 && b.RelativePath == ""))
 }
 
 // Stored receipt policy matches the existing private journal schema. Native
@@ -102,7 +103,7 @@ func Restore(b Binding, phase Phase, receipt *Receipt, failure *Failure) (*State
 	case Prepared:
 		valid = valid && receipt == nil && failure == nil
 	case Completed:
-		valid = valid && receipt != nil && failure == nil && ValidStoredReceipt(*receipt)
+		valid = valid && receipt != nil && failure == nil && ValidStoredReceipt(*receipt) && (b.Identity.Scope != ScopeOwnerSettings || receipt.RelativePath == b.RelativePath)
 	case Failed:
 		valid = valid && receipt == nil && failure != nil && validFailure(*failure, false)
 	case OutcomeUnknown:

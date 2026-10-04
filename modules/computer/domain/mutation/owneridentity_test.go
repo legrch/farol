@@ -6,7 +6,7 @@ import (
 )
 
 func ownerBinding() Binding {
-	return Binding{Identity: Identity{Scope: ScopeOwnerSettings, OperationID: "operation", OwnerID: "owner", ProfileID: "profile", ComputerID: "computer"}, ComputerGeneration: 7, WorkspaceID: "work", RequestDigest: digest("a")}
+	return Binding{Identity: Identity{Scope: ScopeOwnerSettings, OperationID: "operation", OwnerID: "owner", ProfileID: "profile", ComputerID: "computer"}, ComputerGeneration: 7, WorkspaceID: "work", RelativePath: "README.md", RequestDigest: digest("a")}
 }
 
 func TestOwnerIdentityScopeAndForbiddenTaskMixing(t *testing.T) {
@@ -195,5 +195,33 @@ func TestOwnerPreparedRecoveryRetainsBindingWithoutExecution(t *testing.T) {
 	}
 	if _, ok := got.(FailedRecovery); !ok {
 		t.Fatal("unknown recovered as execution")
+	}
+}
+
+func TestOwnerTargetIsRequiredBoundedAndCannotChange(t *testing.T) {
+	b := ownerBinding()
+	for _, path := range []string{"", ".", "../escape", "/absolute", "a//b", strings.Repeat("x", 4097), "bad\x00name"} {
+		x := b
+		x.RelativePath = path
+		if _, err := NewPrepared(x); err == nil {
+			t.Fatal("invalid owner target accepted")
+		}
+	}
+	task := binding()
+	task.RelativePath = "file"
+	if _, err := NewPrepared(task); err == nil {
+		t.Fatal("task v1 acquired owner target")
+	}
+	prepared, _ := NewPrepared(b)
+	other := b
+	other.RelativePath = "other.md"
+	next, _ := NewPrepared(other)
+	if _, err := prepared.Apply(*next); err == nil {
+		t.Fatal("owner target rebound")
+	}
+	wrong := receipt()
+	wrong.RelativePath = "other.md"
+	if _, err := prepared.Complete(wrong); err == nil {
+		t.Fatal("completed a different target")
 	}
 }

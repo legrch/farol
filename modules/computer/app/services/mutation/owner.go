@@ -91,7 +91,7 @@ func (s *OwnerService) Execute(ctx context.Context, r OwnerRequest) (*OwnerRespo
 		return nil, authority.Fail("COMPUTER_MUTATION_FINGERPRINT_FAILED", "operation-store")
 	}
 	binding := state.Binding{Identity: s.selected.identity(), WorkspaceID: r.WorkspaceID,
-		ComputerGeneration: s.selected.ComputerGeneration, RequestDigest: digest}
+		ComputerGeneration: s.selected.ComputerGeneration, RelativePath: op.Path(), RequestDigest: digest}
 	out, err := s.engine.executeBound(ctx, binding, op)
 	if err != nil {
 		return nil, err
@@ -178,7 +178,7 @@ func observeOwnerRecord(selected OwnerSelection, r OwnerObservation, record *sta
 	if _, err := state.Restore(binding, record.Phase(), record.Receipt(), record.Failure()); err != nil {
 		return nil, storeUnavailable()
 	}
-	if binding.Identity != selected.identity() || binding.ComputerGeneration != selected.ComputerGeneration || binding.WorkspaceID != r.WorkspaceID {
+	if binding.Identity != selected.identity() || binding.ComputerGeneration != selected.ComputerGeneration || binding.WorkspaceID != r.WorkspaceID || binding.RelativePath != r.RelativePath {
 		return nil, authority.Fail("COMPUTER_MUTATION_OPERATION_CONFLICT", "operation-store")
 	}
 	if receipt := record.Receipt(); receipt != nil && receipt.RelativePath != r.RelativePath {
