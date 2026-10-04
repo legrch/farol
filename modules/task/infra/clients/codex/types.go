@@ -70,6 +70,13 @@ type Options struct {
 	// Recheck must use the owning current grant and selected route/config/host
 	// generations, not only Selection.ExpiresAt or the model policy digest.
 	Recheck func(context.Context, task.Binding) error
+	// RecheckDispatch is immutable trusted Root wiring for mutation effects.
+	// It must verify the original Task/journal intent and actual current Parent
+	// through the selected owner, without IO inside the owner's gate callback.
+	// Called after qualification and transport write-lock acquisition, before
+	// the first byte of each thread/start or turn/start. Nil keeps only reads:
+	// Supports advertises no effects and mutations become sticky unknown.
+	RecheckDispatch func(context.Context, task.Intent) error
 }
 
 const maxMessageBytes = 8 * 1024 * 1024

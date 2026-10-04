@@ -79,10 +79,26 @@ func (s *Service) digest(intent task.Intent, message string) string {
 	}{intent, message})
 	return s.fingerprint(bytes)
 }
+
+// digestWithDispatch preserves legacy digest bytes unless an exact parent is
+// requested. The guard is durable through the existing operation fingerprint.
+func (s *Service) digestWithDispatch(intent task.Intent, message, expectedDispatchID string) string {
+	if expectedDispatchID == "" {
+		return s.digest(intent, message)
+	}
+	bytes, _ := json.Marshal(struct {
+		Intent                      task.Intent
+		Message, ExpectedDispatchID string
+	}{intent, message, expectedDispatchID})
+	return s.fingerprint(bytes)
+}
 func validRequest(req MutationRequest) bool {
 	return task.ID(req.OperationID) && task.ID(req.TaskID) && ((req.Action == task.Cancel && req.Message == "") || (req.Action != task.Cancel && task.Text(req.Message, 32768)))
 }
 func (s *Service) replay(ctx context.Context, req MutationRequest, binding *task.Binding, parent *task.Parent) (*MutationResponse, bool, error) {
+	return s.replayWithDispatch(ctx, req, binding, parent, "")
+}
+func (s *Service) replayWithDispatch(ctx context.Context, req MutationRequest, binding *task.Binding, parent *task.Parent, expectedDispatchID string) (*MutationResponse, bool, error) {
 	op, err := s.journal.Lookup(ctx, req.OperationID)
 	if err != nil {
 		return nil, true, task.ErrUnknown
@@ -93,10 +109,13 @@ func (s *Service) replay(ctx context.Context, req MutationRequest, binding *task
 	intent := op.Intent
 	original := intent.Digest
 	intent.Digest = ""
-	if intent.TaskID != req.TaskID || intent.Action != req.Action || s.digest(intent, req.Message) != original || (binding != nil && intent.Binding != *binding) || (parent != nil && intent.Parent != *parent) {
+	if intent.TaskID != req.TaskID || intent.Action != req.Action || s.digestWithDispatch(intent, req.Message, expectedDispatchID) != original || (binding != nil && intent.Binding != *binding) || (parent != nil && intent.Parent != *parent) {
 		return nil, true, task.ErrConflict
 	}
 	if err := s.recheck(ctx, op.Intent.Binding); err != nil {
+		return nil, true, err
+	}
+	if err := s.recheckParent(ctx, op.Intent.Parent); err != nil {
 		return nil, true, err
 	}
 	receipt := op.Receipt
@@ -106,14 +125,22 @@ func (s *Service) replay(ctx context.Context, req MutationRequest, binding *task
 	return response(op.Intent, receipt), true, nil
 }
 func (s *Service) execute(ctx context.Context, req MutationRequest, intent task.Intent, before port.Snapshot) (*MutationResponse, error) {
+	return s.executeWithDispatch(ctx, req, intent, before, "")
+}
+func (s *Service) executeWithDispatch(ctx context.Context, req MutationRequest, intent task.Intent, before port.Snapshot, expectedDispatchID string) (*MutationResponse, error) {
 	if err := s.recheck(ctx, intent.Binding); err != nil {
+		return nil, err
+	}
+	// Resolve/Supports may await external work. Recheck the original parent
+	// again before publishing any new launch/control intention.
+	if err := s.recheckParent(ctx, intent.Parent); err != nil {
 		return nil, err
 	}
 	prepared, err := s.prepareAdmission(before.Task, &intent)
 	if err != nil {
 		return nil, err
 	}
-	intent.Digest = s.digest(intent, req.Message)
+	intent.Digest = s.digestWithDispatch(intent, req.Message, expectedDispatchID)
 	admitted, err := s.journal.Admit(ctx, intent, before.Revision, prepared)
 	if err != nil {
 		return nil, task.ErrUnknown
@@ -127,6 +154,9 @@ func (s *Service) execute(ctx context.Context, req MutationRequest, intent task.
 			receipt = task.Receipt{State: task.Uncertain}
 		}
 		if err := s.recheck(ctx, intent.Binding); err != nil {
+			return nil, err
+		}
+		if err := s.recheckParent(ctx, intent.Parent); err != nil {
 			return nil, err
 		}
 		return response(intent, receipt), nil
@@ -168,6 +198,14 @@ func (s *Service) execute(ctx context.Context, req MutationRequest, intent task.
 		return unknown, nil
 	}
 	recordLineage := func(ref task.Reference) error { return progress.Record(ctx, ref) }
+	// Durable admission and progress construction do not preserve parent
+	// authority. Check immediately before Dispatch, including observed dispatch.
+	// A withdrawal after publication retains the pending intent as unknown;
+	// never settle it as rejection, issue another admission or call the provider.
+	if err := s.recheckParent(ctx, intent.Parent); err != nil {
+		_ = progress.Close(func() error { return nil })
+		return unknown, nil
+	}
 	var receipt task.Receipt
 	var dispatchErr error
 	if observed, ok := provider.(port.ObservedProvider); ok {
@@ -202,6 +240,12 @@ func (s *Service) execute(ctx context.Context, req MutationRequest, intent task.
 		return unknown, nil
 	}
 	if err := s.recheck(ctx, intent.Binding); err != nil {
+		return nil, err
+	}
+	// Retain the actual durable provider receipt even when the original parent
+	// withdrew during dispatch/Finish. Refuse this mutation disclosure; retained
+	// query APIs remain separate and do not dispatch or deliver to that parent.
+	if err := s.recheckParent(ctx, intent.Parent); err != nil {
 		return nil, err
 	}
 	return response(intent, receipt), nil
@@ -259,6 +303,28 @@ func (s *Service) recheck(ctx context.Context, binding task.Binding) error {
 		return err
 	}
 	err := s.authority.Recheck(ctx, binding)
+	if err != nil {
+		s.fence()
+	}
+	return err
+}
+
+// recheckParent is a negative fence for new effects and mutation acknowledgements,
+// not a prerequisite for ordinary historical reads. Parentless Tasks keep their
+// existing behavior. Binding and parent checks remain independent authorities.
+func (s *Service) recheckParent(ctx context.Context, parent task.Parent) error {
+	if err := ctx.Err(); err != nil {
+		s.fence()
+		return err
+	}
+	if !parent.Valid() {
+		s.fence()
+		return task.ErrIdentity
+	}
+	if parent == (task.Parent{}) {
+		return nil
+	}
+	err := s.authority.RecheckParent(ctx, parent)
 	if err != nil {
 		s.fence()
 	}

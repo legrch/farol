@@ -709,3 +709,234 @@ func TestDeliveryDispatchMarkerDoesNotInventParentAcknowledgement(t *testing.T) 
 		})
 	}
 }
+
+func TestFacadeContinueExactMapsDispatchAndPreservesExistingRequests(t *testing.T) {
+	f := newFixture(t, task.Codex)
+	f.create()
+	before, err := f.facade.Status(ctx, control.TaskRequest{TaskID: "task"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.selectRoute(2)
+	next := ref(task.Codex, "turn-2", "follow-up")
+	f.provider.steps = append(f.provider.steps, step{action: task.Continue, operation: "follow-up", message: "next", expected: ref(task.Codex, "turn-1", "create-1"), reference: next, lifecycle: task.Running})
+	req := control.ContinueExactRequest{OperationID: "follow-up", TaskID: "task", Message: "next", ExpectedDispatchID: "create-1"}
+	out, err := f.facade.ContinueExact(ctx, req)
+	if err != nil || out.OperationID != req.OperationID || out.TaskID != req.TaskID || out.Receipt.State != control.Known || out.Receipt.Reference.ThreadID != before.Reference.ThreadID || out.Receipt.Reference.TurnID == before.Reference.TurnID || f.provider.effects != 2 {
+		t.Fatal(out, err)
+	}
+	supports := f.provider.supports
+	if replay, err := f.facade.ContinueExact(ctx, req); err != nil || *replay != *out {
+		t.Fatal(replay, err)
+	}
+	changed := req
+	changed.ExpectedDispatchID = "follow-up"
+	_, err = f.facade.ContinueExact(ctx, changed)
+	requireFailure(t, err, "TASK_OPERATION_CONFLICT")
+	// The old positional contract remains source-compatible, but must not be
+	// used as an unguarded replay route for an exact operation.
+	_, err = f.facade.Continue(ctx, control.FollowupRequest{req.OperationID, req.TaskID, req.Message})
+	requireFailure(t, err, "TASK_OPERATION_CONFLICT")
+	if f.provider.supports != supports || f.provider.effects != 2 || f.delivery.calls != 0 {
+		t.Fatal("guarded replay performed extra work")
+	}
+}
+
+func TestFacadeContinueExactRejectsForeignOrMissingDispatch(t *testing.T) {
+	for _, parent := range []string{"", "bad\x00parent", "foreign", "old-dispatch"} {
+		t.Run(parent, func(t *testing.T) {
+			f := newFixture(t, task.Codex)
+			f.create()
+			if _, err := f.facade.Status(ctx, control.TaskRequest{TaskID: "task"}); err != nil {
+				t.Fatal(err)
+			}
+			f.selectRoute(2)
+			supports := f.provider.supports
+			_, err := f.facade.ContinueExact(ctx, control.ContinueExactRequest{OperationID: "follow-up", TaskID: "task", Message: "next", ExpectedDispatchID: parent})
+			want := "TASK_IDENTITY_MISMATCH"
+			if !task.ID(parent) {
+				want = "TASK_INPUT_INVALID"
+			}
+			requireFailure(t, err, want)
+			if f.provider.effects != 1 || f.provider.supports != supports || f.delivery.calls != 0 {
+				t.Fatal("rejected parent reached a boundary")
+			}
+		})
+	}
+	var empty *control.Contract
+	_, err := empty.ContinueExact(ctx, control.ContinueExactRequest{})
+	requireFailure(t, err, "TASK_UNAVAILABLE")
+}
+
+func TestFacadeContinueExactUnknownAndRefusedReplayWithoutEffects(t *testing.T) {
+	for _, mode := range []string{"unknown", "refused"} {
+		t.Run(mode, func(t *testing.T) {
+			f := newFixture(t, task.Codex)
+			f.create()
+			if _, err := f.facade.Status(ctx, control.TaskRequest{TaskID: "task"}); err != nil {
+				t.Fatal(err)
+			}
+			f.selectRoute(2)
+			script := step{action: task.Continue, operation: "follow-up", message: "next", expected: ref(task.Codex, "turn-1", "create-1"), reference: ref(task.Codex, "turn-2", "follow-up"), lifecycle: task.Running, lostAck: mode == "unknown"}
+			want := control.Uncertain
+			if mode == "refused" {
+				script.rejection = "PROVIDER_REFUSED"
+				want = control.Rejected
+			}
+			f.provider.steps = append(f.provider.steps, script)
+			req := control.ContinueExactRequest{"follow-up", "task", "next", "create-1"}
+			first, err := f.facade.ContinueExact(ctx, req)
+			if err != nil || first.Receipt.State != want {
+				t.Fatal(first, err)
+			}
+			supports := f.provider.supports
+			f.facade, err = control.New(f.service)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if replay, err := f.facade.ContinueExact(ctx, req); err != nil || *replay != *first {
+				t.Fatal(replay, err)
+			}
+			op, err := f.facade.Operation(ctx, control.OperationRequest{OperationID: req.OperationID})
+			if err != nil || op.Receipt.State != want || op.TaskID != "task" {
+				t.Fatal(op, err)
+			}
+			changed := req
+			changed.ExpectedDispatchID = "foreign"
+			_, err = f.facade.ContinueExact(ctx, changed)
+			requireFailure(t, err, "TASK_OPERATION_CONFLICT")
+			if f.provider.effects != 2 || f.provider.supports != supports || f.delivery.calls != 0 {
+				t.Fatal("unknown/refused replay performed work")
+			}
+		})
+	}
+}
+
+func TestFacadeContinueExactCannotEnableUnsupportedProvider(t *testing.T) {
+	f := newFixture(t, task.Claude)
+	f.create()
+	if _, err := f.facade.Status(ctx, control.TaskRequest{TaskID: "task"}); err != nil {
+		t.Fatal(err)
+	}
+	f.selectRoute(2)
+	_, err := f.facade.ContinueExact(ctx, control.ContinueExactRequest{"follow-up", "task", "next", "create-1"})
+	requireFailure(t, err, "TASK_CAPABILITY_UNAVAILABLE")
+	if f.provider.effects != 1 {
+		t.Fatal("guard advertised unsupported Continue")
+	}
+}
+
+func TestFacadeResumeExactMapsSameSessionAndBindsReplay(t *testing.T) {
+	for _, mode := range []string{"known", "unknown", "refused"} {
+		t.Run(mode, func(t *testing.T) {
+			f := newFixture(t, task.Claude)
+			f.create()
+			before, err := f.facade.Status(ctx, control.TaskRequest{TaskID: "task"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			f.selectRoute(2)
+			script := step{action: task.Resume, operation: "resume-2", message: "next", expected: ref(task.Claude, "", "create-1"), reference: ref(task.Claude, "", "resume-2"), lifecycle: task.Running, lostAck: mode == "unknown"}
+			want := control.Known
+			if mode == "unknown" {
+				want = control.Uncertain
+			}
+			if mode == "refused" {
+				script.rejection = "PROVIDER_REFUSED"
+				want = control.Rejected
+			}
+			f.provider.steps = append(f.provider.steps, script)
+			req := control.ResumeExactRequest{OperationID: "resume-2", TaskID: "task", Message: "next", ExpectedDispatchID: "create-1"}
+			out, err := f.facade.ResumeExact(ctx, req)
+			if err != nil || out.OperationID != req.OperationID || out.TaskID != req.TaskID || out.Receipt.State != want || f.provider.effects != 2 {
+				t.Fatal(out, err)
+			}
+			if mode == "known" && (out.Receipt.Reference.SessionID != before.Reference.SessionID || out.Receipt.Reference.InvocationID != req.OperationID || out.Receipt.Reference.InvocationID == before.Reference.InvocationID) {
+				t.Fatal("resume mapping changed session or reused invocation", out)
+			}
+			op, err := f.facade.Operation(ctx, control.OperationRequest{OperationID: req.OperationID})
+			if err != nil || op.Action != control.Resume || op.Receipt.State != want {
+				t.Fatal("ResumeExact mapped another action/receipt", op, err)
+			}
+			f.facade, err = control.New(f.service)
+			if err != nil {
+				t.Fatal(err)
+			}
+			supports := f.provider.supports
+			if replay, err := f.facade.ResumeExact(ctx, req); err != nil || *replay != *out {
+				t.Fatal(replay, err)
+			}
+			changed := req
+			changed.ExpectedDispatchID = "resume-2"
+			_, err = f.facade.ResumeExact(ctx, changed)
+			requireFailure(t, err, "TASK_OPERATION_CONFLICT")
+			changed = req
+			changed.Message = "different payload"
+			_, err = f.facade.ResumeExact(ctx, changed)
+			requireFailure(t, err, "TASK_OPERATION_CONFLICT")
+			// Existing positional DTOs keep their old shape, but cannot bypass
+			// the exact operation's guard or switch its action on replay.
+			_, err = f.facade.Resume(ctx, control.FollowupRequest{req.OperationID, req.TaskID, req.Message})
+			requireFailure(t, err, "TASK_OPERATION_CONFLICT")
+			_, err = f.facade.ContinueExact(ctx, control.ContinueExactRequest{req.OperationID, req.TaskID, req.Message, req.ExpectedDispatchID})
+			requireFailure(t, err, "TASK_OPERATION_CONFLICT")
+			if f.provider.supports != supports || f.provider.effects != 2 || f.delivery.calls != 0 {
+				t.Fatal("resume replay added boundary work")
+			}
+		})
+	}
+}
+
+func TestFacadeResumeExactRejectsMissingOrForeignParent(t *testing.T) {
+	for _, parent := range []string{"", "bad\x00parent", "foreign", "missing-dispatch"} {
+		t.Run(parent, func(t *testing.T) {
+			f := newFixture(t, task.Claude)
+			f.create()
+			if _, err := f.facade.Status(ctx, control.TaskRequest{TaskID: "task"}); err != nil {
+				t.Fatal(err)
+			}
+			f.selectRoute(2)
+			supports := f.provider.supports
+			_, err := f.facade.ResumeExact(ctx, control.ResumeExactRequest{"resume-2", "task", "next", parent})
+			want := "TASK_IDENTITY_MISMATCH"
+			if !task.ID(parent) {
+				want = "TASK_INPUT_INVALID"
+			}
+			requireFailure(t, err, want)
+			if f.provider.effects != 1 || f.provider.supports != supports || f.delivery.calls != 0 {
+				t.Fatal("guard rejection reached provider/delivery")
+			}
+		})
+	}
+	var empty *control.Contract
+	_, err := empty.ResumeExact(ctx, control.ResumeExactRequest{})
+	requireFailure(t, err, "TASK_UNAVAILABLE")
+	f := newFixture(t, task.Claude)
+	_, err = f.facade.ResumeExact(nil, control.ResumeExactRequest{})
+	requireFailure(t, err, "TASK_INPUT_INVALID")
+	if f.provider.effects != 0 || f.provider.supports != 0 {
+		t.Fatal("nil context performed work")
+	}
+}
+
+func TestFacadeResumeExactPreservesCapabilityAndRunningRefusals(t *testing.T) {
+	for _, p := range []task.Provider{task.Codex, task.Claude} {
+		t.Run(string(p), func(t *testing.T) {
+			f := newFixture(t, p)
+			f.create()
+			want := "TASK_STATE_REFUSED"
+			if p == task.Codex {
+				if _, err := f.facade.Status(ctx, control.TaskRequest{TaskID: "task"}); err != nil {
+					t.Fatal(err)
+				}
+				want = "TASK_CAPABILITY_UNAVAILABLE"
+			}
+			f.selectRoute(2)
+			_, err := f.facade.ResumeExact(ctx, control.ResumeExactRequest{"resume-2", "task", "next", "create-1"})
+			requireFailure(t, err, want)
+			if f.provider.effects != 1 || f.delivery.calls != 0 {
+				t.Fatal("ResumeExact invented supported/active controls")
+			}
+		})
+	}
+}

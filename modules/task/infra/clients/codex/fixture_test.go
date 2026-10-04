@@ -180,8 +180,7 @@ func fixtureRead(r io.Reader) (byte, []byte, error) {
 			return 0, nil, err
 		}
 		size = uint64(binary.BigEndian.Uint16(n[:]))
-	}
-	if size == 127 {
+	} else if size == 127 {
 		var n [8]byte
 		if _, err := io.ReadFull(r, n[:]); err != nil {
 			return 0, nil, err
@@ -264,7 +263,7 @@ func newFixture(t *testing.T) (*Client, *pipeFixture) {
 	s := testSelection()
 	f := &pipeFixture{selection: s}
 	f.valid.Store(true)
-	c, err := New(Options{Selection: s, Boundary: f, Now: func() time.Time { return s.GrantedAt.Add(time.Minute) }, Recheck: func(context.Context, task.Binding) error { return nil }})
+	c, err := New(Options{Selection: s, Boundary: f, Now: func() time.Time { return s.GrantedAt.Add(time.Minute) }, Recheck: func(context.Context, task.Binding) error { return nil }, RecheckDispatch: fixtureDispatchCheck})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -281,3 +280,6 @@ func dispatch(s Selection, id string) port.Dispatch {
 func completeRef() task.Reference {
 	return task.Reference{ThreadID: "thread-exact", TurnID: "turn-exact"}
 }
+
+// Explicit fake policy, not native Parent/Task authority qualification.
+func fixtureDispatchCheck(context.Context, task.Intent) error { return nil }

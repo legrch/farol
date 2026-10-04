@@ -607,3 +607,180 @@ func TestRejectedProgressClosesAdmissionBeforeProviderReturns(t *testing.T) {
 		t.Fatalf("contradiction settled: %+v", op)
 	}
 }
+
+func TestOwnedContinueExactRequiresFreshEpochAndKeepsProviderLineage(t *testing.T) {
+	_, j, a, f, d := setup(task.Codex)
+	o, old := ownerRoute(t, j)
+	s := ownedService(t, old, a, f, d)
+	create(t, s, task.Codex)
+	complete(t, s)
+	req := ContinueExactRequest{"follow-up", "task-1", "next", "create-1"}
+	if _, err := s.ContinueExact(ctx, req); !errors.Is(err, task.ErrState) {
+		t.Fatal("closed epoch revived", err)
+	}
+	if f.calls != 1 {
+		t.Fatal(f.calls)
+	}
+	r, err := o.Select(selection(2, "exact-followup-turn"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	followup := ownedService(t, r, a, f, d)
+	f.receipt.Reference = reference(task.Codex, "turn-2")
+	f.dispatch = func(func(task.Reference) error) {
+		op, err := j.Lookup(ctx, req.OperationID)
+		if err != nil || op == nil || op.Intent.Expected != reference(task.Codex, "turn-1") || op.Intent.Binding != a.binding || op.Intent.Admission.TaskEpoch != 2 || op.Intent.Admission.TurnID != "exact-followup-turn" || op.Intent.Admission.TurnID == old.Selection().TurnID {
+			t.Fatal("exact dispatch or fresh trusted admission changed", op, err)
+		}
+		requireActive(t, r)
+	}
+	out, err := followup.ContinueExact(ctx, req)
+	if err != nil || out.Receipt.State != task.Known || out.Receipt.Reference.ThreadID != "thread" || out.Receipt.Reference.TurnID != "turn-2" {
+		t.Fatal(out, err)
+	}
+	if _, err := followup.ContinueExact(ctx, req); err != nil || f.calls != 2 {
+		t.Fatal("owned replay dispatched", err)
+	}
+	f.dispatch = nil
+	f.observation.Reference = f.receipt.Reference
+	complete(t, followup)
+	third, err := o.Select(selection(3, "third-farol-turn"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	thirdService := ownedService(t, third, a, f, d)
+	if _, err := thirdService.ContinueExact(ctx, ContinueExactRequest{"third", "task-1", "next", "create-1"}); !errors.Is(err, task.ErrIdentity) {
+		t.Fatal("old parent replaced with latest", err)
+	}
+	if f.calls != 2 {
+		t.Fatal(f.calls)
+	}
+	f.receipt.Reference = reference(task.Codex, "turn-3")
+	out, err = thirdService.ContinueExact(ctx, ContinueExactRequest{"third", "task-1", "next", "follow-up"})
+	if err != nil || out.Receipt.Reference != reference(task.Codex, "turn-3") || f.calls != 3 {
+		t.Fatal(out, err)
+	}
+	stored, _ := j.Read(ctx, "task-1")
+	if stored.Task.DispatchID != "third" || stored.Task.Binding != a.binding || stored.Task.Admission.Binding.TaskEpoch != 3 {
+		t.Fatal(stored)
+	}
+}
+
+func TestOwnedContinueExactUnknownDoesNotReactivateAdmission(t *testing.T) {
+	_, j, a, f, d := setup(task.Codex)
+	o, old := ownerRoute(t, j)
+	s := ownedService(t, old, a, f, d)
+	create(t, s, task.Codex)
+	complete(t, s)
+	r, err := o.Select(selection(2, "unknown-followup-turn"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	followup := ownedService(t, r, a, f, d)
+	f.receipt.Reference = reference(task.Codex, "turn-2")
+	f.progress = []task.Reference{f.receipt.Reference}
+	f.dispatchErr = errors.New("lost followup acknowledgement")
+	req := ContinueExactRequest{"follow-up", "task-1", "next", "create-1"}
+	out, err := followup.ContinueExact(ctx, req)
+	if err != nil || out.Receipt.State != task.Uncertain {
+		t.Fatal(out, err)
+	}
+	requireAbsent(t, r, true)
+	if replay, err := followup.ContinueExact(ctx, req); err != nil || replay.Receipt.State != task.Uncertain {
+		t.Fatal(replay, err)
+	}
+	requireAbsent(t, r, true)
+	third, err := o.Select(selection(3, "cannot-replay-turn"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	thirdService := ownedService(t, third, a, f, d)
+	if _, err := thirdService.ContinueExact(ctx, ContinueExactRequest{"new-key", "task-1", "next", "create-1"}); !errors.Is(err, task.ErrUnknown) {
+		t.Fatal("pending work replayed under fresh epoch", err)
+	}
+	if f.calls != 2 {
+		t.Fatal("unknown effect duplicated", f.calls)
+	}
+	op, _ := j.Lookup(ctx, req.OperationID)
+	if op.Settled || op.Lineage != reference(task.Codex, "turn-2") || op.Intent.Admission.TaskEpoch != 2 {
+		t.Fatal(op)
+	}
+}
+
+func TestOwnedResumeExactRequiresFreshEpochSameSessionNewInvocation(t *testing.T) {
+	_, j, a, f, d := setup(task.Claude)
+	o, old := ownerRoute(t, j)
+	s := ownedService(t, old, a, f, d)
+	create(t, s, task.Claude)
+	complete(t, s)
+	req := ResumeExactRequest{"follow-up", "task-1", "next", "create-1"}
+	if _, err := s.ResumeExact(ctx, req); !errors.Is(err, task.ErrState) || f.calls != 1 {
+		t.Fatal("closed epoch revived", err, f.calls)
+	}
+	r, err := o.Select(selection(2, "exact-resume-turn"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	followup := ownedService(t, r, a, f, d)
+	f.receipt.Reference = reference(task.Claude, "turn-2")
+	f.progress = []task.Reference{f.receipt.Reference}
+	f.dispatch = func(func(task.Reference) error) {
+		op, err := j.Lookup(ctx, req.OperationID)
+		if err != nil || op == nil || op.Intent.Action != task.Resume || op.Intent.Expected != reference(task.Claude, "turn-1") || op.Intent.Binding != a.binding || op.Intent.Admission.TaskEpoch != 2 || op.Intent.Admission.TurnID != "exact-resume-turn" || op.Intent.Admission.TurnID == old.Selection().TurnID {
+			t.Fatal("resume changed selection/session or fresh admission", op, err)
+		}
+		requireActive(t, r)
+	}
+	out, err := followup.ResumeExact(ctx, req)
+	if err != nil || out.Receipt.State != task.Known || out.Receipt.Reference.SessionID != "session" || out.Receipt.Reference.InvocationID != req.OperationID {
+		t.Fatal(out, err)
+	}
+	requireActive(t, r)
+	if replay, err := followup.ResumeExact(ctx, req); err != nil || *replay != *out || f.calls != 2 {
+		t.Fatal("owned exact resume replay dispatched", replay, err)
+	}
+	f.dispatch = nil
+	f.observation.Reference = f.receipt.Reference
+	complete(t, followup)
+	requireAbsent(t, r, false)
+	stored, _ := j.Read(ctx, "task-1")
+	if stored.Task.DispatchID != req.OperationID || stored.Task.Binding != a.binding || stored.Task.Admission.Binding.TaskEpoch != 2 || stored.Task.Reference != out.Receipt.Reference {
+		t.Fatal(stored)
+	}
+}
+
+func TestOwnedResumeExactUnknownDoesNotRegrantOrRepeatInvocation(t *testing.T) {
+	_, j, a, f, d := setup(task.Claude)
+	o, old := ownerRoute(t, j)
+	s := ownedService(t, old, a, f, d)
+	create(t, s, task.Claude)
+	complete(t, s)
+	r, err := o.Select(selection(2, "unknown-resume-turn"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	followup := ownedService(t, r, a, f, d)
+	f.receipt.Reference = reference(task.Claude, "turn-2")
+	f.progress = []task.Reference{f.receipt.Reference}
+	f.dispatchErr = errors.New("lost resume acknowledgement")
+	req := ResumeExactRequest{"follow-up", "task-1", "next", "create-1"}
+	out, err := followup.ResumeExact(ctx, req)
+	if err != nil || out.Receipt.State != task.Uncertain {
+		t.Fatal(out, err)
+	}
+	requireAbsent(t, r, true)
+	if replay, err := followup.ResumeExact(ctx, req); err != nil || replay.Receipt.State != task.Uncertain {
+		t.Fatal(replay, err)
+	}
+	third, err := o.Select(selection(3, "cannot-repeat-resume"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ownedService(t, third, a, f, d).ResumeExact(ctx, ResumeExactRequest{"new-key", "task-1", "next", "create-1"}); !errors.Is(err, task.ErrUnknown) {
+		t.Fatal("unknown resume admitted under higher epoch", err)
+	}
+	op, _ := j.Lookup(ctx, req.OperationID)
+	if op.Settled || op.Lineage != reference(task.Claude, "turn-2") || op.Intent.Admission.TaskEpoch != 2 || f.calls != 2 {
+		t.Fatal("unknown resume duplicated or settled", op, f.calls)
+	}
+}

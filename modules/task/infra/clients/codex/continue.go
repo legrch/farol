@@ -14,6 +14,12 @@ import (
 // The owning Task service must first persist a new intent with higher-epoch
 // admission and a new Farol turn. This producer never mints or advances either.
 func (c *Client) Continue(parent context.Context, d port.Dispatch, progress func(task.Reference) error) (task.Receipt, error) {
+	return c.continueTurn(parent, d, progress, nil)
+}
+
+// prepare stages observed follow-up metadata inside the same dispatch gate. It
+// never publishes a partial new lineage or makes a second provider call.
+func (c *Client) continueTurn(parent context.Context, d port.Dispatch, progress func(task.Reference) error, prepare func(uint64)) (task.Receipt, error) {
 	if !c.followup.valid(c.selection) {
 		return refused("TASK_CONTROL_NOT_QUALIFIED"), task.ErrUnsupported
 	}
@@ -47,7 +53,16 @@ func (c *Client) Continue(parent context.Context, d port.Dispatch, progress func
 		return refused("CODEX_OPERATION_CAPACITY"), nil
 	}
 	c.used[i.OperationID] = fingerprint
-	epoch, err := c.qualify(ctx)
+	if c.dispatchRecheck == nil {
+		c.blocked = true
+		return unknown(i.Expected), nil
+	}
+	// A newly owned continuation must not retain the prior dispatch's sink,
+	// including while read-only selection/parent witnesses are in flight.
+	c.eventMu.Lock()
+	c.events = nil
+	c.eventMu.Unlock()
+	qualified, err := c.qualify(ctx)
 	if err != nil {
 		return refused("CODEX_SELECTION_UNAVAILABLE"), nil
 	}
@@ -63,7 +78,7 @@ func (c *Client) Continue(parent context.Context, d port.Dispatch, progress func
 	if !c.followupTurns(ctx, i.Expected, task.Reference{}) {
 		return refused("CODEX_COMPLETED_PARENT_REQUIRED"), nil
 	}
-	if err := c.current(ctx, epoch); err != nil {
+	if err := c.current(ctx, qualified.epoch); err != nil {
 		return refused("CODEX_SELECTION_CHANGED"), nil
 	}
 	ref := i.Expected
@@ -82,7 +97,10 @@ func (c *Client) Continue(parent context.Context, d port.Dispatch, progress func
 	}
 	// The vendor method has no parent CAS. Pre/post history witnesses detect a
 	// changed parent conservatively; any failure from this point is uncertain.
-	m, err = c.rpc(ctx, "turn/start", params)
+	if prepare != nil {
+		prepare(qualified.epoch)
+	}
+	m, err = c.mutationRPC(ctx, "turn/start", params, i, qualified)
 	if err != nil {
 		return uncertain()
 	}
@@ -98,7 +116,7 @@ func (c *Client) Continue(parent context.Context, d port.Dispatch, progress func
 	if !c.followupTurns(ctx, i.Expected, ref) {
 		return uncertain()
 	}
-	if err := c.current(ctx, epoch); err != nil {
+	if err := c.current(ctx, qualified.epoch); err != nil {
 		return uncertain()
 	}
 	return task.Receipt{State: task.Known, Reference: ref, Lifecycle: task.Running}, nil

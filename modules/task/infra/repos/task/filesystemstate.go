@@ -165,6 +165,9 @@ func filesystemImageValid(image *filesystemImage) bool {
 				return false
 			}
 		}
+		if op.Reservation != (task.NativeReservation{}) && !op.Reservation.Matches(i) {
+			return false
+		}
 		if i.Action == task.Create {
 			creates[i.TaskID]++
 			creation[i.TaskID] = op

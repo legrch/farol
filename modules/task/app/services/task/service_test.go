@@ -4,6 +4,7 @@ package task
 // They do not qualify durable filesystem publication, a native host or a provider.
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"sync"
 	"testing"
@@ -781,4 +782,367 @@ func (j *fakeJournal) Invalidate(_ context.Context, before port.Snapshot) error 
 		return errors.New("lost revoke acknowledgement")
 	}
 	return nil
+}
+
+// Exact-parent tests exercise the existing atomic journal CAS, not a provider
+// permission, filesystem durability or a native installed capability.
+type exactParentCountingProvider struct {
+	*fakeProvider
+	supports int
+}
+
+func (p *exactParentCountingProvider) Supports(c context.Context, b task.Binding) (task.Capabilities, error) {
+	p.supports++
+	return p.fakeProvider.Supports(c, b)
+}
+
+func TestContinueExactRejectsDifferentParentBeforeAnyProviderWork(t *testing.T) {
+	for _, parent := range []string{"", "bad\x00parent", "foreign-dispatch", "stale-dispatch"} {
+		t.Run(parent, func(t *testing.T) {
+			_, j, a, f, d := setup(task.Codex)
+			p := &exactParentCountingProvider{fakeProvider: f}
+			s := newService(j, a, map[task.Provider]port.Provider{task.Codex: p}, d)
+			create(t, s, task.Codex)
+			complete(t, s)
+			before, _ := j.Read(ctx, "task-1")
+			supports := p.supports
+			_, err := s.ContinueExact(ctx, ContinueExactRequest{"next", "task-1", "next", parent})
+			want := task.ErrIdentity
+			if !task.ID(parent) {
+				want = task.ErrInvalid
+			}
+			if !errors.Is(err, want) {
+				t.Fatal(err, want)
+			}
+			after, _ := j.Read(ctx, "task-1")
+			op, _ := j.Lookup(ctx, "next")
+			if *after != *before || op != nil || p.supports != supports || f.calls != 1 || f.reads != 1 {
+				t.Fatal("rejected parent changed task, journal or provider")
+			}
+		})
+	}
+}
+
+func TestContinueExactBindsRequestedParentInReplay(t *testing.T) {
+	s, j, _, f, _ := setup(task.Codex)
+	create(t, s, task.Codex)
+	complete(t, s)
+	f.receipt.Reference = reference(task.Codex, "turn-2")
+	req := ContinueExactRequest{"follow-up", "task-1", "next", "create-1"}
+	out, err := s.ContinueExact(ctx, req)
+	if err != nil || out.Receipt.State != task.Known || out.Receipt.Reference != reference(task.Codex, "turn-2") {
+		t.Fatal(out, err)
+	}
+	op, _ := j.Lookup(ctx, req.OperationID)
+	if op.Intent.Expected != reference(task.Codex, "turn-1") || op.Intent.Binding != binding(task.Codex) || op.Intent.OperationID == req.ExpectedDispatchID {
+		t.Fatal("requested parent/provider identity was substituted", op)
+	}
+	clean := op.Intent
+	clean.Digest = ""
+	if op.Intent.Digest == s.digest(clean, req.Message) {
+		t.Fatal("exact guard absent from durable fingerprint")
+	}
+	if replay, err := s.ContinueExact(ctx, req); err != nil || *replay != *out {
+		t.Fatal(replay, err)
+	}
+	changed := req
+	changed.ExpectedDispatchID = "follow-up"
+	if _, err := s.ContinueExact(ctx, changed); !errors.Is(err, task.ErrConflict) {
+		t.Fatal(err)
+	}
+	if _, err := s.Control(ctx, MutationRequest{req.OperationID, req.TaskID, req.Message, task.Continue}); !errors.Is(err, task.ErrConflict) {
+		t.Fatal("unguarded replay bypassed guard", err)
+	}
+	if f.calls != 2 {
+		t.Fatal("replay dispatched", f.calls)
+	}
+}
+
+type exactParentBarrierProvider struct {
+	*fakeProvider
+	entered, release chan struct{}
+}
+
+func (p *exactParentBarrierProvider) Supports(c context.Context, b task.Binding) (task.Capabilities, error) {
+	close(p.entered)
+	<-p.release
+	return p.fakeProvider.Supports(c, b)
+}
+
+func TestContinueExactSnapshotCASPreventsParentSubstitution(t *testing.T) {
+	winner, j, a, f, d := setup(task.Codex)
+	create(t, winner, task.Codex)
+	complete(t, winner)
+	blocked := &exactParentBarrierProvider{fakeProvider: &fakeProvider{caps: f.caps, receipt: task.Receipt{State: task.Known, Reference: reference(task.Codex, "turn-3"), Lifecycle: task.Running}}, entered: make(chan struct{}), release: make(chan struct{})}
+	loser := newService(j, a, map[task.Provider]port.Provider{task.Codex: blocked}, d)
+	done := make(chan error, 1)
+	go func() {
+		_, err := loser.ContinueExact(ctx, ContinueExactRequest{"loser", "task-1", "next", "create-1"})
+		done <- err
+	}()
+	await(t, blocked.entered)
+	f.receipt.Reference = reference(task.Codex, "turn-2")
+	if _, err := winner.ContinueExact(ctx, ContinueExactRequest{"winner", "task-1", "winner", "create-1"}); err != nil {
+		t.Fatal(err)
+	}
+	f.observation.Reference = f.receipt.Reference
+	complete(t, winner)
+	before, _ := j.Read(ctx, "task-1")
+	close(blocked.release)
+	if err := awaitError(t, done); !errors.Is(err, task.ErrUnknown) {
+		t.Fatal("changed snapshot accepted", err)
+	}
+	after, _ := j.Read(ctx, "task-1")
+	op, _ := j.Lookup(ctx, "loser")
+	if blocked.calls != 0 || f.calls != 2 || op != nil || *after != *before || after.Task.DispatchID != "winner" {
+		t.Fatal("CAS substituted the later completed parent or sent an effect")
+	}
+}
+
+func TestContinueExactLostAcknowledgementsNeverReplayEffects(t *testing.T) {
+	for _, window := range []string{"admit", "provider", "progress", "finish", "rejected"} {
+		t.Run(window, func(t *testing.T) {
+			s, j, _, f, _ := setup(task.Codex)
+			create(t, s, task.Codex)
+			complete(t, s)
+			f.receipt.Reference = reference(task.Codex, "turn-2")
+			switch window {
+			case "admit":
+				j.failAdmit = true
+			case "provider":
+				f.progress = []task.Reference{f.receipt.Reference}
+				f.dispatchErr = errors.New("lost provider acknowledgement")
+			case "progress":
+				f.progress = []task.Reference{f.receipt.Reference}
+				j.failProgress = true
+			case "finish":
+				j.failFinish = true
+			case "rejected":
+				f.receipt = task.Receipt{State: task.Rejected, Code: "PROVIDER_REFUSED"}
+			}
+			req := ContinueExactRequest{"follow-up", "task-1", "next", "create-1"}
+			first, err := s.ContinueExact(ctx, req)
+			if window == "admit" {
+				if !errors.Is(err, task.ErrUnknown) {
+					t.Fatal(first, err)
+				}
+			} else if err != nil || first.Receipt.State != task.Uncertain && window != "rejected" || window == "rejected" && first.Receipt.State != task.Rejected {
+				t.Fatal(first, err)
+			}
+			calls := f.calls
+			replay, err := s.ContinueExact(ctx, req)
+			if err != nil {
+				t.Fatal(replay, err)
+			}
+			// A lost Finish ACK is known only because this fixture actually retained
+			// a settled receipt. Other uncertain windows remain pending/unknown.
+			want := task.Uncertain
+			if window == "finish" {
+				want = task.Known
+			}
+			if window == "rejected" {
+				want = task.Rejected
+			}
+			if replay.Receipt.State != want || f.calls != calls {
+				t.Fatal(replay, f.calls, calls)
+			}
+			changed := req
+			changed.ExpectedDispatchID = "foreign"
+			if _, err := s.ContinueExact(ctx, changed); !errors.Is(err, task.ErrConflict) {
+				t.Fatal(err)
+			}
+			if _, err := s.Control(ctx, MutationRequest{req.OperationID, req.TaskID, req.Message, task.Continue}); !errors.Is(err, task.ErrConflict) {
+				t.Fatal(err)
+			}
+			if f.calls != calls {
+				t.Fatal("uncertain/rejected operation replayed")
+			}
+		})
+	}
+}
+
+func TestContinueExactConcurrentSameOperationHasOneEffect(t *testing.T) {
+	s, _, _, f, _ := setup(task.Codex)
+	create(t, s, task.Codex)
+	complete(t, s)
+	f.receipt.Reference = reference(task.Codex, "turn-2")
+	req := ContinueExactRequest{"follow-up", "task-1", "next", "create-1"}
+	start := make(chan struct{})
+	done := make(chan error, 2)
+	for n := 0; n < 2; n++ {
+		go func() { <-start; _, err := s.ContinueExact(ctx, req); done <- err }()
+	}
+	close(start)
+	for n := 0; n < 2; n++ {
+		if err := awaitError(t, done); err != nil && !errors.Is(err, task.ErrUnknown) && !errors.Is(err, task.ErrIdentity) {
+			t.Fatal(err)
+		}
+	}
+	if f.calls != 2 {
+		t.Fatal("concurrent replay sent duplicate effect", f.calls)
+	}
+}
+
+func TestLegacyContinueDigestAndPositionalCallersRemainCompatible(t *testing.T) {
+	s, j, _, f, _ := setup(task.Codex)
+	create(t, s, task.Codex)
+	complete(t, s)
+	f.receipt.Reference = reference(task.Codex, "turn-2")
+	req := MutationRequest{"follow-up", "task-1", "next", task.Continue}
+	if _, err := s.Control(ctx, req); err != nil {
+		t.Fatal(err)
+	}
+	op, _ := j.Lookup(ctx, req.OperationID)
+	oldIntent := op.Intent
+	oldIntent.Digest = ""
+	bytes, err := json.Marshal(struct {
+		Intent  task.Intent
+		Message string
+	}{oldIntent, req.Message})
+	if err != nil || intent.Fingerprint(bytes) != op.Intent.Digest {
+		t.Fatal("legacy canonical digest changed", err)
+	}
+	if _, err := s.Control(ctx, req); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ContinueExact(ctx, ContinueExactRequest{req.OperationID, req.TaskID, req.Message, "create-1"}); !errors.Is(err, task.ErrConflict) {
+		t.Fatal("legacy operation upgraded implicitly", err)
+	}
+	if f.calls != 2 {
+		t.Fatal(f.calls)
+	}
+}
+
+func TestResumeExactRejectsHistoricalParentBeforeProviderWork(t *testing.T) {
+	_, j, a, f, d := setup(task.Claude)
+	p := &exactParentCountingProvider{fakeProvider: f}
+	s := newService(j, a, map[task.Provider]port.Provider{task.Claude: p}, d)
+	create(t, s, task.Claude)
+	complete(t, s)
+	f.receipt.Reference = reference(task.Claude, "turn-2")
+	if _, err := s.ResumeExact(ctx, ResumeExactRequest{"follow-up", "task-1", "next", "create-1"}); err != nil {
+		t.Fatal(err)
+	}
+	f.observation.Reference = f.receipt.Reference
+	complete(t, s)
+	for _, parent := range []string{"", "bad\x00parent", "create-1", "foreign"} {
+		t.Run(parent, func(t *testing.T) {
+			before, _ := j.Read(ctx, "task-1")
+			supports, calls, reads := p.supports, f.calls, f.reads
+			_, err := s.ResumeExact(ctx, ResumeExactRequest{"third", "task-1", "next", parent})
+			want := task.ErrIdentity
+			if !task.ID(parent) {
+				want = task.ErrInvalid
+			}
+			if !errors.Is(err, want) {
+				t.Fatal(err, want)
+			}
+			after, _ := j.Read(ctx, "task-1")
+			op, _ := j.Lookup(ctx, "third")
+			if *after != *before || op != nil || p.supports != supports || f.calls != calls || f.reads != reads {
+				t.Fatal("historical parent substituted latest or performed provider work")
+			}
+		})
+	}
+}
+
+func TestResumeExactReplayBindsPayloadParentAndAction(t *testing.T) {
+	s, j, _, f, _ := setup(task.Claude)
+	create(t, s, task.Claude)
+	complete(t, s)
+	f.receipt.Reference = reference(task.Claude, "turn-2")
+	req := ResumeExactRequest{"follow-up", "task-1", "next", "create-1"}
+	out, err := s.ResumeExact(ctx, req)
+	if err != nil || out.Receipt.State != task.Known || out.Receipt.Reference != reference(task.Claude, "turn-2") {
+		t.Fatal(out, err)
+	}
+	op, _ := j.Lookup(ctx, req.OperationID)
+	clean := op.Intent
+	clean.Digest = ""
+	if op.Intent.Action != task.Resume || op.Intent.Expected != reference(task.Claude, "turn-1") || op.Intent.Binding != binding(task.Claude) || op.Intent.Digest == s.digest(clean, req.Message) {
+		t.Fatal("guard/action/binding absent from admitted intent", op)
+	}
+	if replay, err := s.ResumeExact(ctx, req); err != nil || *replay != *out {
+		t.Fatal(replay, err)
+	}
+	for _, mutate := range []func(*ResumeExactRequest){
+		func(r *ResumeExactRequest) { r.ExpectedDispatchID = "follow-up" },
+		func(r *ResumeExactRequest) { r.Message = "changed payload" },
+		func(r *ResumeExactRequest) { r.TaskID = "other-task" },
+	} {
+		changed := req
+		mutate(&changed)
+		if _, err := s.ResumeExact(ctx, changed); !errors.Is(err, task.ErrConflict) {
+			t.Fatal("changed exact replay accepted", err)
+		}
+	}
+	if _, err := s.Control(ctx, MutationRequest{req.OperationID, req.TaskID, req.Message, task.Resume}); !errors.Is(err, task.ErrConflict) {
+		t.Fatal("unguarded replay bypassed parent", err)
+	}
+	if _, err := s.ContinueExact(ctx, ContinueExactRequest{req.OperationID, req.TaskID, req.Message, req.ExpectedDispatchID}); !errors.Is(err, task.ErrConflict) {
+		t.Fatal("ResumeExact aliased ContinueExact", err)
+	}
+	if f.calls != 2 {
+		t.Fatal("replay dispatched", f.calls)
+	}
+}
+
+func TestResumeExactSnapshotCASPreventsParentSubstitution(t *testing.T) {
+	winner, j, a, f, d := setup(task.Claude)
+	create(t, winner, task.Claude)
+	complete(t, winner)
+	blocked := &exactParentBarrierProvider{fakeProvider: &fakeProvider{caps: f.caps, receipt: task.Receipt{State: task.Known, Reference: task.Reference{SessionID: "session", InvocationID: "loser"}, Lifecycle: task.Running}}, entered: make(chan struct{}), release: make(chan struct{})}
+	loser := newService(j, a, map[task.Provider]port.Provider{task.Claude: blocked}, d)
+	done := make(chan error, 1)
+	go func() {
+		_, err := loser.ResumeExact(ctx, ResumeExactRequest{"loser", "task-1", "next", "create-1"})
+		done <- err
+	}()
+	await(t, blocked.entered)
+	f.receipt.Reference = reference(task.Claude, "turn-2")
+	if _, err := winner.ResumeExact(ctx, ResumeExactRequest{"follow-up", "task-1", "winner", "create-1"}); err != nil {
+		t.Fatal(err)
+	}
+	f.observation.Reference = f.receipt.Reference
+	complete(t, winner)
+	before, _ := j.Read(ctx, "task-1")
+	close(blocked.release)
+	if err := awaitError(t, done); !errors.Is(err, task.ErrUnknown) {
+		t.Fatal("changed snapshot admitted stale session parent", err)
+	}
+	after, _ := j.Read(ctx, "task-1")
+	op, _ := j.Lookup(ctx, "loser")
+	if blocked.calls != 0 || f.calls != 2 || op != nil || *after != *before || after.Task.DispatchID != "follow-up" {
+		t.Fatal("resume CAS substituted newer parent or sent effect")
+	}
+}
+
+func TestResumeExactRejectsCrossedClaudeSessionOrInvocation(t *testing.T) {
+	for _, ref := range []task.Reference{
+		{SessionID: "other-session", InvocationID: "follow-up"},
+		{SessionID: "session", InvocationID: "create-1"},
+		{SessionID: "session", InvocationID: "crossed-invocation"},
+	} {
+		t.Run(ref.SessionID+"/"+ref.InvocationID, func(t *testing.T) {
+			s, j, _, f, _ := setup(task.Claude)
+			create(t, s, task.Claude)
+			complete(t, s)
+			before, _ := j.Lookup(ctx, "create-1")
+			f.receipt.Reference = ref
+			f.progress = []task.Reference{ref}
+			req := ResumeExactRequest{"follow-up", "task-1", "next", "create-1"}
+			out, err := s.ResumeExact(ctx, req)
+			if err != nil || out.Receipt.State != task.Uncertain {
+				t.Fatal("crossed lineage settled", out, err)
+			}
+			if replay, err := s.ResumeExact(ctx, req); err != nil || replay.Receipt.State != task.Uncertain || f.calls != 2 {
+				t.Fatal("crossed lineage replayed", replay, err)
+			}
+			op, _ := j.Lookup(ctx, "follow-up")
+			old, _ := j.Lookup(ctx, "create-1")
+			if op.Settled || op.Lineage != (task.Reference{}) || old.Receipt != before.Receipt {
+				t.Fatal("crossed session rewrote lineage or old result", op, old)
+			}
+		})
+	}
 }

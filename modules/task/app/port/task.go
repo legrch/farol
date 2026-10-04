@@ -26,11 +26,14 @@ type Snapshot struct {
 	Pending  string
 }
 type Operation struct {
-	Events  task.EventLog `json:",omitzero"`
-	Intent  task.Intent
-	Lineage task.Reference
-	Receipt task.Receipt
-	Settled bool
+	// Missing in old records means no native reservation proof. Omit zero keeps
+	// their canonical bytes and intent fingerprints unchanged.
+	Reservation task.NativeReservation `json:",omitzero"`
+	Events      task.EventLog          `json:",omitzero"`
+	Intent      task.Intent
+	Lineage     task.Reference
+	Receipt     task.Receipt
+	Settled     bool
 }
 type Admission struct {
 	Operation Operation

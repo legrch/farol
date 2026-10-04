@@ -101,6 +101,9 @@ func writeAll(w io.Writer, data []byte) error {
 	return nil
 }
 func (w *websocket) send(op byte, data []byte) error {
+	return w.sendChecked(op, data, nil)
+}
+func (w *websocket) sendChecked(op byte, data []byte, beforeWrite func() error) error {
 	if len(data) > maxMessageBytes || op >= 8 && len(data) > 125 {
 		return protocolError()
 	}
@@ -125,6 +128,14 @@ func (w *websocket) send(op byte, data []byte) error {
 	copy(frame, head)
 	for i, b := range data {
 		frame[len(head)+i] = b ^ mask[i%4]
+	}
+	// Serialization, mask construction and send-lock waiting are complete.
+	// The authority callback returns before provider IO starts; it must not
+	// execute this write inside a neighbor owner's WithCurrent callback.
+	if beforeWrite != nil {
+		if err := beforeWrite(); err != nil {
+			return err
+		}
 	}
 	return writeAll(w.stream, frame)
 }
@@ -151,8 +162,7 @@ func (w *websocket) receive() ([]byte, error) {
 			if size < 126 {
 				return nil, protocolError()
 			}
-		}
-		if size == 127 {
+		} else if size == 127 {
 			var n [8]byte
 			if _, err := io.ReadFull(w.reader, n[:]); err != nil {
 				return nil, err

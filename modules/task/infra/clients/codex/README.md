@@ -8,13 +8,37 @@ reads authentication, or reconnects a lost client.
 Trusted boot supplies an immutable selection, qualified executable/schema
 digests, saved project and physical writer identities, execution policy, resolved
 model/effort, grant lifetime, and a mandatory current-grant recheck. `New` is inert.
+`Options.RecheckDispatch` is immutable, mutation-only trusted Root wiring. Root
+must create the original retained Client with the exact initiating Parent peer
+and owning Task/journal intention check already connected. It receives the
+actual `task.Intent` before each `thread/start` / `turn/start` write, after all
+awaited qualification/history, write-lock waiting and frame construction. It
+checks current original Parent and exact selected Task/binding/intent; it does
+not issue admission. Its owner-gate callback performs value checks only and
+returns before provider IO. No context values, late guard rebinding or replacement
+Client may recover possible-effect work. A nil hook leaves construction/Observe
+available for source-compatible reads, advertises no effects through Supports,
+and makes attempted mutations sticky unknown without launching qualification.
+Hook failure/cancellation after a durable intent remains unknown without Send
+or retry; if thread creation already happened, its partial lineage is retained
+and the later turn start is prevented. Reads do not invoke this mutation hook.
+The originally qualified connection identity and account epoch are carried to
+each mutation write. They are matched after the write lock and again after the
+awaited Binding/dispatch checks. `account/updated` or `account/login/completed`
+during lock waiting or a guard invalidates this witness; no newer epoch is
+accepted, no requalification or replacement connection is attempted. The same
+unknown/partial-lineage fence applies before thread creation, between thread
+and turn, and before exact follow-up. Withdrawal after writing begins cannot
+undo bytes or attest remote cancellation; this is a point-in-time pre-write
+check, not a remote account/Parent CAS.
+
 `NativeBoundary` implements the actual macOS executable, socket, physical root,
 Git identity and exact proxy process checks. Other platforms are unavailable.
 Schema evidence and initialize home/platform checks do not identify an account
 or prove Codex Desktop visibility. No live installed capability is claimed here.
 
-`Supports` performs fresh project/model catalogue checks on one connection and
-advertises create. Continue additionally requires the independent bound witness
+With a dispatch hook present, `Supports` performs fresh project/model catalogue
+checks on one connection and advertises create. Continue additionally requires the independent bound witness
 described below; an ordinary create/status selection leaves it unsupported.
 An effort-capable model requires the resolved binding's explicit effort; the client never rewrites the binding with a guessed default.
 Create reserves its bounded local operation fence before qualification, sends

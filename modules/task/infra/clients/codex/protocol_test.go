@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"strings"
@@ -255,5 +256,132 @@ func TestSourceOnlyFullLocalOperationFenceHasNoEffect(t *testing.T) {
 	r, _ := c.Create(context.Background(), dispatch(c.selection, "over-capacity"), func(task.Reference) error { t.Fatal("capacity callback"); return nil })
 	if r.State != task.Rejected || r.Code != "CODEX_OPERATION_CAPACITY" || f.launches.Load() != 0 {
 		t.Fatal("full fence dispatched or evicted an operation")
+	}
+}
+
+// These cases exercise bytes over in-memory streams, not a native Codex route.
+func TestSourceOnlyWebSocketPayloadLengthBoundaries(t *testing.T) {
+	for _, tc := range []struct {
+		size   int
+		marker byte
+	}{
+		{125, 125}, {126, 126}, {127, 126}, {128, 126}, {65535, 126}, {65536, 127},
+	} {
+		t.Run(fmt.Sprint(tc.size), func(t *testing.T) {
+			payload := bytes.Repeat([]byte("x"), tc.size)
+			var frames bytes.Buffer
+			if err := fixtureSend(&frames, 1, payload); err != nil {
+				t.Fatal(err)
+			}
+			if frames.Bytes()[1] != tc.marker {
+				t.Fatal("fixture did not encode the selected length marker")
+			}
+			if err := fixtureSend(&frames, 1, []byte("next")); err != nil {
+				t.Fatal(err)
+			}
+			ws := newWebsocket(&memoryStream{Reader: bytes.NewReader(frames.Bytes())})
+			got, err := ws.receive()
+			if err != nil || !bytes.Equal(got, payload) {
+				t.Fatalf("payload length %d: received %d bytes, error %v", tc.size, len(got), err)
+			}
+			got, err = ws.receive()
+			if err != nil || string(got) != "next" {
+				t.Fatalf("next frame consumed by previous length: %q %v", got, err)
+			}
+
+			out := &memoryStream{Reader: bytes.NewReader(nil)}
+			if err := newWebsocket(out).send(1, payload); err != nil {
+				t.Fatal(err)
+			}
+			if out.writer.Bytes()[1] != tc.marker|0x80 {
+				t.Fatal("client length marker or mask bit differs")
+			}
+			r := bytes.NewReader(out.writer.Bytes())
+			op, got, err := fixtureRead(r)
+			if err != nil || op != 1 || !bytes.Equal(got, payload) || r.Len() != 0 {
+				t.Fatalf("masked client frame: opcode=%d bytes=%d trailing=%d error=%v", op, len(got), r.Len(), err)
+			}
+		})
+	}
+}
+
+func TestSourceOnlyWebSocketLengthEncodingFailures(t *testing.T) {
+	cases := map[string][]byte{
+		"truncated-header": {0x81},
+		"truncated-16":     {0x81, 126, 0},
+		"truncated-64":     {0x81, 127, 0, 0, 0, 0, 0, 0, 1},
+		"control-extended": {0x89, 126, 0, 126},
+	}
+	for _, size := range []uint16{0, 1, 125} {
+		cases[fmt.Sprintf("noncanonical-16-%d", size)] = binary.BigEndian.AppendUint16([]byte{0x81, 126}, size)
+	}
+	for _, size := range []uint64{0, 125, 126, 127, 65535, 1 << 63, maxMessageBytes + 1} {
+		cases[fmt.Sprintf("invalid-64-%d", size)] = binary.BigEndian.AppendUint64([]byte{0x81, 127}, size)
+	}
+	for name, raw := range cases {
+		t.Run(name, func(t *testing.T) {
+			got, err := newWebsocket(&memoryStream{Reader: bytes.NewReader(raw)}).receive()
+			if err == nil || got != nil {
+				t.Fatalf("invalid frame returned a message: %q %v", got, err)
+			}
+			if strings.HasPrefix(name, "noncanonical-") || strings.HasPrefix(name, "invalid-") || name == "control-extended" {
+				if err.Error() != "CODEX_PROXY_PROTOCOL_INVALID" {
+					t.Fatal("invalid length was not rejected before reading a payload", err)
+				}
+			}
+		})
+	}
+	for _, size := range []int{125, 126, 127, 128, 65535, 65536} {
+		t.Run(fmt.Sprintf("truncated-payload-%d", size), func(t *testing.T) {
+			var encoded bytes.Buffer
+			if err := fixtureSend(&encoded, 1, bytes.Repeat([]byte("x"), size)); err != nil {
+				t.Fatal(err)
+			}
+			raw := encoded.Bytes()
+			got, err := newWebsocket(&memoryStream{Reader: bytes.NewReader(raw[:len(raw)-1])}).receive()
+			if !errors.Is(err, io.ErrUnexpectedEOF) || got != nil {
+				t.Fatalf("truncated payload produced a message: bytes=%d error=%v", len(got), err)
+			}
+		})
+	}
+}
+
+func TestSourceOnlyWebSocketPostEffectReadFailureNeverResends(t *testing.T) {
+	for name, raw := range map[string][]byte{
+		"noncanonical-16": {0x81, 126, 0, 125},
+		"truncated-64":    {0x81, 127, 0, 0, 0},
+	} {
+		t.Run(name, func(t *testing.T) {
+			c, f := newFixture(t)
+			f.beforeReply = func(q fixtureRequest, conn net.Conn, _ *bufio.Reader) error {
+				if q.method != "turn/start" {
+					return nil
+				}
+				if err := writeAll(conn, raw); err != nil {
+					return err
+				}
+				return errors.New("source-only post-effect reply failure")
+			}
+			d := dispatch(c.selection, "post-effect-frame-failure")
+			r, err := c.Create(context.Background(), d, func(task.Reference) error { return nil })
+			if err != nil || r.State != task.Uncertain || r.Reference != (task.Reference{ThreadID: "thread-exact"}) {
+				t.Fatalf("failed acknowledgement misclassified: %+v %v", r, err)
+			}
+			for _, id := range []string{"post-effect-frame-failure", "other-after-frame-failure"} {
+				again, err := c.Create(context.Background(), dispatch(c.selection, id), func(task.Reference) error { t.Fatal("late effect callback"); return nil })
+				if err != nil || again.State != task.Uncertain {
+					t.Fatalf("read failure enabled dispatch: %+v %v", again, err)
+				}
+			}
+			if _, err := c.Supports(context.Background(), c.selection.Binding); !errors.Is(err, task.ErrUnknown) {
+				t.Fatal("connection failure did not fence capability", err)
+			}
+			if _, err := c.Observe(context.Background(), c.selection.Binding, completeRef()); !errors.Is(err, task.ErrUnknown) {
+				t.Fatal("connection failure produced observation", err)
+			}
+			if f.launches.Load() != 1 || len(f.seen("thread/start")) != 1 || len(f.seen("turn/start")) != 1 || len(f.seen("thread/read")) != 0 {
+				t.Fatal("post-effect read failure reopened a proxy or sent another effect")
+			}
+		})
 	}
 }

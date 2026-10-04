@@ -10,6 +10,7 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/legrch/farol/modules/task/app/port"
@@ -299,6 +300,278 @@ func TestObservedProducerRefMismatchAndUnknownPublicationNeverReplay(t *testing.
 			}
 			if _, err := c.Supports(context.Background(), c.selection.Binding); !errors.Is(err, task.ErrUnknown) {
 				t.Fatal("provider fence missing", err)
+			}
+		})
+	}
+}
+
+// The follow-up adapter uses the same concrete client/mapper and existing
+// eventJournal. The second journal stands for an already-admitted new intent;
+// Root/Owner/common-wire composition remains a separate integration check.
+func observedFollowupSetup(t *testing.T) (*Client, *pipeFixture, *eventJournal, port.Dispatch, *eventJournal) {
+	t.Helper()
+	c, f := newFollowupFixture(t)
+	f.handle = func(q fixtureRequest) (any, bool) {
+		switch q.method {
+		case "turn/start":
+			if len(f.seen("turn/start")) == 1 {
+				return f.response(q)
+			}
+			return map[string]any{"turn": map[string]any{"id": "turn-followup"}}, false
+		case "thread/turns/list":
+			if len(f.seen("turn/start")) < 2 {
+				return f.response(q)
+			}
+			return map[string]any{"data": []any{map[string]any{"id": "turn-followup", "status": "inProgress"}, map[string]any{"id": "turn-exact", "status": "completed"}}, "nextCursor": nil}, false
+		}
+		return f.response(q)
+	}
+	f.beforeReply = func(q fixtureRequest, conn net.Conn, _ *bufio.Reader) error {
+		if q.method != "turn/start" {
+			return nil
+		}
+		return sendEvent(conn, "turn/started", turnParams("turn-exact", "inProgress"))
+	}
+	s, old, _, req := eventService(t, c)
+	created, err := s.Create(context.Background(), req)
+	if err != nil || created.Receipt.State != task.Known || created.Receipt.Reference != completeRef() {
+		t.Fatal("first dispatch setup", created, err)
+	}
+	final, err := s.Result(context.Background(), tasksvc.ResultRequest{TaskID: req.TaskID})
+	if err != nil || !final.Retained || final.Text != "source-only final" {
+		t.Fatal("first retained result setup", final, err)
+	}
+	d := followupDispatch(c.selection, "observed-followup")
+	fresh := &eventJournal{}
+	if _, err := fresh.Admit(context.Background(), d.Intent, 0, task.Task{}); err != nil {
+		t.Fatal(err)
+	}
+	return c, f, old, d, fresh
+}
+
+func sendFollowupProgress(conn net.Conn) error {
+	if err := sendEvent(conn, "turn/started", turnParams("turn-followup", "inProgress")); err != nil {
+		return err
+	}
+	tool := itemParams("new-tool", "commandExecution")
+	tool["turnId"] = "turn-followup"
+	if err := sendEvent(conn, "item/completed", tool); err != nil {
+		return err
+	}
+	plan := map[string]any{"threadId": "thread-exact", "turnId": "turn-followup", "explanation": "PRIVATE_PLAN", "plan": []any{map[string]any{"step": "PRIVATE_STEP", "status": "completed"}}}
+	if err := sendEvent(conn, "turn/plan/updated", plan); err != nil {
+		return err
+	}
+	claim := itemParams("new-claim", "agentMessage")
+	claim["turnId"] = "turn-followup"
+	if err := sendEvent(conn, "item/completed", claim); err != nil {
+		return err
+	}
+	return sendEvent(conn, "turn/completed", turnParams("turn-followup", "completed"))
+}
+
+func TestObservedFollowupRetainsEarlyNewTurnAfterExactLineage(t *testing.T) {
+	c, f, old, d, fresh := observedFollowupSetup(t)
+	ctx := context.Background()
+	before, _ := old.Lookup(ctx, "event-dispatch")
+	beforeBytes, _ := json.Marshal(before)
+	f.beforeReply = func(q fixtureRequest, conn net.Conn, _ *bufio.Reader) error {
+		if q.method == "turn/start" {
+			if err := sendEvent(conn, "turn/completed", turnParams("turn-exact", "completed")); err != nil {
+				return err
+			}
+			if err := sendFollowupProgress(conn); err != nil {
+				return err
+			}
+			return sendEvent(conn, "item/completed", itemParams("late-old-tool", "commandExecution"))
+		}
+		if q.method == "thread/turns/list" && len(f.seen("turn/start")) == 2 {
+			return sendEvent(conn, "turn/completed", turnParams("turn-exact", "completed"))
+		}
+		return nil
+	}
+	published := 0
+	receipt, err := c.DispatchObserved(ctx, d, func(ref task.Reference) error {
+		if ref != followupRef() {
+			t.Fatal("partial/parent follow-up lineage was published", ref)
+		}
+		op, _ := fresh.Lookup(ctx, d.Intent.OperationID)
+		if len(op.Events.Events) != 0 || op.Lineage != (task.Reference{}) {
+			t.Fatal("events escaped before new durable lineage", op)
+		}
+		c.eventMu.Lock()
+		if c.events == nil || len(c.events.queued) != 5 {
+			c.eventMu.Unlock()
+			t.Fatal("new-turn metadata was not staged before ACK")
+		}
+		encoded, _ := json.Marshal(c.events.queued)
+		c.eventMu.Unlock()
+		if strings.Contains(string(encoded), "PRIVATE_") {
+			t.Fatal("private body entered pending queue")
+		}
+		published++
+		return fresh.Progress(ctx, d.Intent.OperationID, ref)
+	}, fresh.RecordEvent)
+	if err != nil || receipt.State != task.Known || receipt.Reference != followupRef() || published != 1 {
+		t.Fatal("early progress lost follow-up", receipt, err, published)
+	}
+	op, _ := fresh.Lookup(ctx, d.Intent.OperationID)
+	if len(op.Events.Events) != 5 || op.Events.LastSequence != 5 || op.Events.LastSource != 5 {
+		t.Fatal("early compact facts lost or old events consumed sequence", op.Events)
+	}
+	for _, e := range op.Events.Events {
+		if e.Reference != followupRef() || e.DispatchID != d.Intent.OperationID || e.Sequence == 0 {
+			t.Fatal("event crossed dispatch/turn", e)
+		}
+	}
+	if op.Events.StreamID == before.Events.StreamID || op.Settled {
+		t.Fatal("follow-up reused stream or notification settled it", op)
+	}
+	if op.Events.Events[1].Source != task.ToolReceiptEvidence || op.Events.Events[2].CompletedSteps != 1 || op.Events.Events[3].Source != task.AdvisoryEvidence {
+		t.Fatal("projection lost receipt/advisory distinction", op.Events)
+	}
+	after, _ := old.Lookup(ctx, "event-dispatch")
+	afterBytes, _ := json.Marshal(after)
+	if string(afterBytes) != string(beforeBytes) || !after.Settled || after.Receipt.Result != "source-only final" {
+		t.Fatal("old-turn traffic contaminated retained result", after)
+	}
+	if f.launches.Load() != 1 || len(f.seen("thread/start")) != 1 || len(f.seen("turn/start")) != 2 {
+		t.Fatal("progress required another effect or connection")
+	}
+}
+
+func TestObservedFollowupRetiresOldRouteBeforeQualification(t *testing.T) {
+	c, f, _, d, fresh := observedFollowupSetup(t)
+	c.eventMu.Lock()
+	c.events.record = func(context.Context, task.ExecutionEvent) error {
+		return task.ErrIdentity // The prior owner is no longer this dispatch's sink.
+	}
+	c.eventMu.Unlock()
+	f.beforeReply = func(q fixtureRequest, conn net.Conn, _ *bufio.Reader) error {
+		if q.method == "model/list" {
+			return sendEvent(conn, "turn/completed", turnParams("turn-exact", "completed"))
+		}
+		if q.method == "turn/start" {
+			return sendFollowupProgress(conn)
+		}
+		return nil
+	}
+	r, err := c.DispatchObserved(context.Background(), d, func(ref task.Reference) error { return fresh.Progress(context.Background(), d.Intent.OperationID, ref) }, fresh.RecordEvent)
+	if err != nil || r.State != task.Known || r.Reference != followupRef() {
+		t.Fatal("late old route blocked selected follow-up", r, err)
+	}
+}
+
+func TestObservedFollowupPublicationFailuresStayUnknownWithoutReplay(t *testing.T) {
+	for _, mode := range []string{"lineage", "lineage-after-persist", "event", "event-after-persist", "crossed-first", "crossed-last", "lost-ack", "overflow", "authority", "epoch"} {
+		t.Run(mode, func(t *testing.T) {
+			c, f, old, d, fresh := observedFollowupSetup(t)
+			before, _ := old.Lookup(context.Background(), "event-dispatch")
+			beforeBytes, _ := json.Marshal(before)
+			fresh.failEvent = mode == "event"
+			var denied atomic.Bool
+			c.recheck = func(context.Context, task.Binding) error {
+				if denied.Load() {
+					return task.ErrIdentity
+				}
+				return nil
+			}
+			f.beforeReply = func(q fixtureRequest, conn net.Conn, _ *bufio.Reader) error {
+				if q.method != "turn/start" {
+					return nil
+				}
+				if mode == "crossed-first" {
+					if err := sendEvent(conn, "turn/started", turnParams("crossed-turn", "inProgress")); err != nil {
+						return err
+					}
+				}
+				if mode == "authority" {
+					denied.Store(true)
+				}
+				if mode == "epoch" {
+					if err := sendEvent(conn, "account/updated", map[string]any{}); err != nil {
+						return err
+					}
+				}
+				if err := sendFollowupProgress(conn); err != nil {
+					return err
+				}
+				if mode == "crossed-last" {
+					return sendEvent(conn, "turn/started", turnParams("crossed-turn", "inProgress"))
+				}
+				if mode == "overflow" {
+					for n := 0; n < task.EventCapacity; n++ {
+						if err := sendEvent(conn, "turn/started", turnParams("turn-followup", "inProgress")); err != nil {
+							return err
+						}
+					}
+				}
+				if mode == "lost-ack" {
+					return errors.New("source-only lost follow-up ACK")
+				}
+				return nil
+			}
+			calls := 0
+			r, err := c.DispatchObserved(context.Background(), d, func(ref task.Reference) error {
+				if mode == "lineage" {
+					return task.ErrUnknown
+				}
+				if err := fresh.Progress(context.Background(), d.Intent.OperationID, ref); err != nil {
+					return err
+				}
+				if mode == "lineage-after-persist" {
+					return task.ErrUnknown
+				}
+				return nil
+			}, func(ctx context.Context, e task.ExecutionEvent) error {
+				calls++
+				if err := fresh.RecordEvent(ctx, e); err != nil {
+					return err
+				}
+				if mode == "event-after-persist" {
+					return task.ErrUnknown
+				}
+				return nil
+			})
+			if err != nil || r.State != task.Uncertain {
+				t.Fatal("failed publication became known", r, err)
+			}
+			expectedCalls := 0
+			if mode == "event" || mode == "event-after-persist" {
+				expectedCalls = 1
+			}
+			if calls != expectedCalls {
+				t.Fatal("invalid queue partially published", calls)
+			}
+			op, _ := fresh.Lookup(context.Background(), d.Intent.OperationID)
+			expectedEvents := 0
+			if mode == "event-after-persist" {
+				expectedEvents = 1 // A lost publication ACK cannot erase a durable fact.
+			}
+			if len(op.Events.Events) != expectedEvents || op.Settled {
+				t.Fatal("unknown publication lost its exact bounded evidence", op)
+			}
+			for _, id := range []string{d.Intent.OperationID, "different-follow-up"} {
+				next := d
+				next.Intent.OperationID = id
+				again, err := c.DispatchObserved(context.Background(), next, func(task.Reference) error { t.Fatal("late lineage replay"); return nil }, func(context.Context, task.ExecutionEvent) error { t.Fatal("late event replay"); return nil })
+				if err != nil || again.State != task.Uncertain {
+					t.Fatal("uncertainty allowed another effect", again, err)
+				}
+			}
+			if _, err := c.Supports(context.Background(), c.selection.Binding); !errors.Is(err, task.ErrUnknown) {
+				t.Fatal("unknown capability fence missing", err)
+			}
+			after, _ := old.Lookup(context.Background(), "event-dispatch")
+			afterBytes, _ := json.Marshal(after)
+			if string(afterBytes) != string(beforeBytes) {
+				t.Fatal("failure changed old retained result")
+			}
+			c.eventMu.Lock()
+			active := c.events != nil
+			c.eventMu.Unlock()
+			if active || f.launches.Load() != 1 || len(f.seen("thread/start")) != 1 || len(f.seen("turn/start")) != 2 {
+				t.Fatal("unknown retained route or repeated effect")
 			}
 		})
 	}

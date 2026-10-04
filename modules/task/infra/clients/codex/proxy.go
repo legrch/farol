@@ -72,7 +72,15 @@ func allowed(method string) bool {
 	}
 	return false
 }
+func mutationMethod(method string) bool { return method == "thread/start" || method == "turn/start" }
+
 func (p *proxy) request(ctx context.Context, method string, params any) (map[string]json.RawMessage, error) {
+	return p.requestChecked(ctx, method, params, nil)
+}
+func (p *proxy) requestChecked(ctx context.Context, method string, params any, beforeWrite func() error) (map[string]json.RawMessage, error) {
+	if mutationMethod(method) && beforeWrite == nil {
+		return nil, task.ErrUnsupported
+	}
 	if !allowed(method) || ctx.Err() != nil || p.lost.Load() {
 		return nil, task.ErrUnavailable
 	}
@@ -92,7 +100,7 @@ func (p *proxy) request(ctx context.Context, method string, params any) (map[str
 		p.fail()
 		return nil, task.ErrUnknown
 	}
-	if err := p.send(ctx, raw); err != nil {
+	if err := p.sendChecked(ctx, raw, beforeWrite); err != nil {
 		return nil, err
 	}
 	select {
@@ -113,11 +121,31 @@ func (p *proxy) notify(ctx context.Context, v any) error {
 	return p.send(ctx, raw)
 }
 func (p *proxy) send(ctx context.Context, raw []byte) error {
+	return p.sendChecked(ctx, raw, nil)
+}
+func (p *proxy) sendChecked(ctx context.Context, raw []byte, beforeWrite func() error) error {
 	if ctx.Err() != nil || p.lost.Load() {
 		return task.ErrUnknown
 	}
 	written := make(chan error, 1)
-	go func() { written <- p.ws.send(1, raw) }()
+	go func() {
+		written <- p.ws.sendChecked(1, raw, func() error {
+			// A cancelled/lost request queued behind the write lock must never
+			// write later, even if the outer send already returned unknown.
+			if ctx.Err() != nil || p.lost.Load() {
+				return task.ErrUnknown
+			}
+			if beforeWrite != nil {
+				if err := beforeWrite(); err != nil {
+					return err
+				}
+			}
+			if ctx.Err() != nil || p.lost.Load() {
+				return task.ErrUnknown
+			}
+			return nil
+		})
+	}()
 	select {
 	case err := <-written:
 		if err != nil {

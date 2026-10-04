@@ -22,7 +22,7 @@ func newFollowupFixture(t *testing.T) (*Client, *pipeFixture) {
 	s := testSelection()
 	f := &pipeFixture{selection: s}
 	f.valid.Store(true)
-	c, err := New(Options{Selection: s, Followup: followupQualification(s), Boundary: f, Now: func() time.Time { return s.GrantedAt.Add(time.Minute) }, Recheck: func(context.Context, task.Binding) error { return nil }})
+	c, err := New(Options{Selection: s, Followup: followupQualification(s), Boundary: f, Now: func() time.Time { return s.GrantedAt.Add(time.Minute) }, Recheck: func(context.Context, task.Binding) error { return nil }, RecheckDispatch: fixtureDispatchCheck})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +85,7 @@ func TestSourceOnlyFollowupQualificationBindsWholeSelection(t *testing.T) {
 			f := &pipeFixture{selection: s}
 			q := followupQualification(s)
 			mutate(&q)
-			_, err := New(Options{Selection: s, Followup: q, Boundary: f, Now: time.Now, Recheck: func(context.Context, task.Binding) error { return nil }})
+			_, err := New(Options{Selection: s, Followup: q, Boundary: f, Now: time.Now, Recheck: func(context.Context, task.Binding) error { return nil }, RecheckDispatch: fixtureDispatchCheck})
 			if !errors.Is(err, task.ErrInvalid) || f.launches.Load() != 0 || f.checks.Load() != 0 {
 				t.Fatal("unbound witness accepted or host reached")
 			}
@@ -344,7 +344,7 @@ func TestSourceOnlyContinueReadOnlyPolicyAndTerminalNewTurn(t *testing.T) {
 	s.Sandbox = "read-only"
 	f := &pipeFixture{selection: s}
 	f.valid.Store(true)
-	c, err := New(Options{Selection: s, Followup: followupQualification(s), Boundary: f, Now: func() time.Time { return s.GrantedAt.Add(time.Minute) }, Recheck: func(context.Context, task.Binding) error { return nil }})
+	c, err := New(Options{Selection: s, Followup: followupQualification(s), Boundary: f, Now: func() time.Time { return s.GrantedAt.Add(time.Minute) }, Recheck: func(context.Context, task.Binding) error { return nil }, RecheckDispatch: fixtureDispatchCheck})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -29,35 +29,63 @@ func (c *Client) DispatchObserved(ctx context.Context, d port.Dispatch, progress
 		return refused("CODEX_TASK_INVALID"), nil
 	}
 	var route *eventRoute
-	receipt, err := c.Dispatch(ctx, d, func(ref task.Reference) error {
+	// Callers hold eventMu; installation happens under the existing dispatch
+	// gate, after operation ownership and before the one follow-up effect.
+	install := func(ref task.Reference, epoch uint64) {
+		identity, _ := json.Marshal(struct {
+			Selection Selection
+			Operation string
+		}{c.selection, d.Intent.OperationID})
+		hash := sha256.Sum256(identity)
+		route = &eventRoute{dispatch: port.Dispatch{Intent: d.Intent}, ref: ref, stream: hex.EncodeToString(hash[:]), generation: epoch + 1, record: record}
+		c.events = route
+	}
+	lineage := func(ref task.Reference) error {
 		if err := publish(progress, ref); err != nil {
 			return err
 		}
 		c.eventMu.Lock()
 		defer c.eventMu.Unlock()
 		if route == nil {
-			identity, _ := json.Marshal(struct {
-				Selection Selection
-				Operation string
-			}{c.selection, d.Intent.OperationID})
-			hash := sha256.Sum256(identity)
-			route = &eventRoute{dispatch: port.Dispatch{Intent: d.Intent}, ref: ref, stream: hex.EncodeToString(hash[:]), generation: c.connection.epoch.Load() + 1, record: record}
-			c.events = route
+			install(ref, c.connection.epoch.Load())
 		}
-		route.ref = ref
+		if c.events != route || c.connection.epoch.Load()+1 != route.generation || c.guard(c.lifetime) != nil {
+			return task.ErrUnknown
+		}
 		if ref.Complete(task.Codex) {
+			// Validate the ENTIRE pending queue before publishing any prefix.
+			// A crossed turn remains unknown even if it arrived after valid facts.
 			for _, e := range route.queued {
 				if e.Reference != ref {
 					return task.ErrIdentity
 				}
+			}
+		}
+		route.ref = ref
+		if ref.Complete(task.Codex) {
+			for _, e := range route.queued {
 				if err := route.record(c.lifetime, e); err != nil {
+					c.events = nil
 					return err
 				}
 			}
 			route.queued = nil
 		}
 		return nil
-	})
+	}
+	var receipt task.Receipt
+	var err error
+	if d.Intent.Action == task.Continue {
+		receipt, err = c.continueTurn(ctx, d, lineage, func(epoch uint64) {
+			c.eventMu.Lock()
+			defer c.eventMu.Unlock()
+			// Thread is selected, but the new turn is not acknowledged yet.
+			// This is staging only; progress receives the complete new ref once.
+			install(task.Reference{ThreadID: d.Intent.Expected.ThreadID}, epoch)
+		})
+	} else {
+		receipt, err = c.Dispatch(ctx, d, lineage)
+	}
 	if err != nil || receipt.State != task.Known {
 		c.eventMu.Lock()
 		if c.events == route {
@@ -97,6 +125,9 @@ func (c *Client) notification(m map[string]json.RawMessage) error {
 	}
 	if !providerID(turnID) {
 		return protocolError()
+	}
+	if route.dispatch.Intent.Action == task.Continue && turnID == route.dispatch.Intent.Expected.TurnID {
+		return nil // Delayed parent traffic never enters the new stream/queue.
 	}
 	if route.ref.TurnID != "" && turnID != route.ref.TurnID {
 		return nil

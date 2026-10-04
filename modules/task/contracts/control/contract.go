@@ -82,6 +82,18 @@ type CreateRequest struct {
 	Parent                       Parent
 }
 type FollowupRequest struct{ OperationID, TaskID, Message string }
+
+// ContinueExactRequest is the opt-in dispatch-scoped contract. The expected
+// dispatch is mandatory; existing FollowupRequest callers retain their semantics.
+type ContinueExactRequest struct {
+	OperationID, TaskID, Message, ExpectedDispatchID string
+}
+
+// ResumeExactRequest publishes the dispatch-scoped resume guard independently.
+// Root selects authority and invocation; this body cannot select either.
+type ResumeExactRequest struct {
+	OperationID, TaskID, Message, ExpectedDispatchID string
+}
 type CancelRequest struct{ OperationID, TaskID string }
 type TaskRequest struct{ TaskID string }
 type OperationRequest struct{ OperationID string }
@@ -260,6 +272,31 @@ func (c *Contract) followup(ctx context.Context, req FollowupRequest, action tas
 }
 func (c *Contract) Continue(ctx context.Context, req FollowupRequest) (*MutationResponse, error) {
 	return c.followup(ctx, req, task.Continue)
+}
+
+// ContinueExact checks the requested parent inside the mutation owner, not by
+// resolving a dispatch and then calling the unguarded Continue method.
+func (c *Contract) ContinueExact(ctx context.Context, req ContinueExactRequest) (*MutationResponse, error) {
+	if err := c.ready(ctx); err != nil {
+		return nil, err
+	}
+	out, err := c.service.ContinueExact(ctx, tasksvc.ContinueExactRequest{OperationID: req.OperationID, TaskID: req.TaskID, Message: req.Message, ExpectedDispatchID: req.ExpectedDispatchID})
+	if err != nil {
+		return nil, classify(err)
+	}
+	return mutation(out), nil
+}
+
+// ResumeExact delegates directly to the same mutation owner and snapshot CAS.
+func (c *Contract) ResumeExact(ctx context.Context, req ResumeExactRequest) (*MutationResponse, error) {
+	if err := c.ready(ctx); err != nil {
+		return nil, err
+	}
+	out, err := c.service.ResumeExact(ctx, tasksvc.ResumeExactRequest{OperationID: req.OperationID, TaskID: req.TaskID, Message: req.Message, ExpectedDispatchID: req.ExpectedDispatchID})
+	if err != nil {
+		return nil, classify(err)
+	}
+	return mutation(out), nil
 }
 func (c *Contract) Resume(ctx context.Context, req FollowupRequest) (*MutationResponse, error) {
 	return c.followup(ctx, req, task.Resume)
