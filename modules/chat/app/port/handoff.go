@@ -57,10 +57,16 @@ type HandoffTerminal struct {
 	Signal         string
 }
 
+// PreviousHostDrainConfirmed is supplied only by the trusted host's independent
+// exact-profile drain witness. It means the preceding recorder reply AND exact
+// recorder child terminal were known successful before the host persisted clean
+// drain. It must never be inferred from this store's terminal bytes or Load.
+// Missing/crashed/unknown host completion is false, even with a valid terminal.
 type HandoffConsumption struct {
-	Next        JournalScope
-	NextBinding HandoffBinding
-	AttemptID   string
+	PreviousHostDrainConfirmed bool
+	Next                       JournalScope
+	NextBinding                HandoffBinding
+	AttemptID                  string
 }
 
 // HandoffRecord contains no credentials, provider content, clock or PID. Origin

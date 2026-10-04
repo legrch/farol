@@ -170,6 +170,9 @@ func reused(history []port.HandoffRecord, r port.HandoffRecord) bool {
 			}
 		}
 		if r.Stage == port.HandoffConsumed {
+			if old.Stage == port.HandoffCaptured && (old.Publication.Binding.HostLifetimeID == r.Consumption.NextBinding.HostLifetimeID || old.Publication.Binding.ChildLaunchID == r.Consumption.NextBinding.ChildLaunchID) {
+				return true
+			}
 			if old.Stage == port.HandoffCaptured && old.Publication.Binding.BackendGeneration == r.Consumption.Next.BackendGeneration {
 				return true
 			}

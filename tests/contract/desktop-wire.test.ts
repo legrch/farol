@@ -87,6 +87,11 @@ describe("K0 real inherited-pipe process", () => {
     } finally {
       await client.close();
     }
+    expect(await client.closeAndObserve()).toEqual({
+      exitCode: 0,
+      signal: null,
+      forced: false,
+    });
   });
   it("refuses wrong build/profile/version and missing backend", async () => {
     await expect(
@@ -285,6 +290,11 @@ it("cleans up its exact owned child after fatal timeout without an explicit clos
   await terminal;
   expect(client.cleanupState).toBe("confirmed");
   expect(child.signalCode).toBe("SIGKILL");
+  expect(await client.closeAndObserve()).toEqual({
+    exitCode: null,
+    signal: "SIGKILL",
+    forced: true,
+  });
   await expect(client.request("core.status", {})).rejects.toMatchObject({
     state: "unavailable",
   });

@@ -64,6 +64,106 @@ afterEach(() => {
 });
 
 describe("native backend launch binding", () => {
+  it("retains the exact close event independently of mutable child status fields", async () => {
+    const { child, native } = fixture();
+    const client = await spawnCore(
+      "/owned/backend",
+      "profile",
+      "test",
+      1000,
+      native,
+    );
+    const observed = await client.closeAndObserve();
+    expect(observed).toEqual({ exitCode: 0, signal: null, forced: false });
+    expect(Object.isFrozen(observed)).toBe(true);
+    Object.assign(child, { exitCode: 9, signalCode: "SIGTERM" });
+    expect(await client.closeAndObserve()).toBe(observed);
+    expect(child.kill).not.toHaveBeenCalled();
+  });
+  it("does not promote exitCode properties to an observed terminal event", async () => {
+    const { child, native } = fixture(false);
+    const client = await spawnCore(
+      "/owned/backend",
+      "profile",
+      "test",
+      1000,
+      native,
+    );
+    Object.assign(child, { exitCode: 0 });
+    await expect(client.closeAndObserve()).rejects.toMatchObject({
+      code: "backend_terminal_unobserved",
+    });
+    child.emit("close", 0, null);
+    await expect(client.closeAndObserve()).rejects.toMatchObject({
+      code: "backend_terminal_unobserved",
+    });
+    expect(child.kill).not.toHaveBeenCalled();
+  });
+  it("reports signal termination without converting it to normal exit", async () => {
+    const { child, native } = fixture(false);
+    const client = await spawnCore(
+      "/owned/backend",
+      "profile",
+      "test",
+      1000,
+      native,
+    );
+    child.emit("close", null, "SIGTERM");
+    expect(await client.closeAndObserve()).toEqual({
+      exitCode: null,
+      signal: "SIGTERM",
+      forced: false,
+    });
+  });
+  it("retains a forced termination attempt even if the child later reports exit zero", async () => {
+    vi.useFakeTimers();
+    const { child, native } = fixture(false);
+    const client = await spawnCore(
+      "/owned/backend",
+      "profile",
+      "test",
+      1000,
+      native,
+    );
+    const closing = client.closeAndObserve();
+    await vi.advanceTimersByTimeAsync(1001);
+    expect(child.kill).toHaveBeenCalledExactlyOnceWith("SIGKILL");
+    child.emit("close", 0, null);
+    expect(await closing).toEqual({ exitCode: 0, signal: null, forced: true });
+    await client.closeAndObserve();
+    expect(child.kill).toHaveBeenCalledTimes(1);
+  });
+  it("keeps terminal timeout unknown after a late close event", async () => {
+    vi.useFakeTimers();
+    const { child, native } = fixture(false);
+    const client = await spawnCore(
+      "/owned/backend",
+      "profile",
+      "test",
+      1000,
+      native,
+    );
+    const closing = expect(client.closeAndObserve()).rejects.toMatchObject({
+      code: "backend_cleanup_unconfirmed",
+    });
+    await vi.advanceTimersByTimeAsync(2001);
+    await closing;
+    child.emit("close", 0, null);
+    await expect(client.closeAndObserve()).rejects.toMatchObject({
+      code: "backend_cleanup_unconfirmed",
+    });
+  });
+  it("cannot observe an unowned process through cleanup", async () => {
+    const { child } = fixture(false);
+    const client = new Client(
+      child as unknown as ChildProcessWithoutNullStreams,
+    );
+    await expect(client.closeAndObserve()).rejects.toMatchObject({
+      code: "backend_child_not_owned",
+    });
+    expect(child.kill).not.toHaveBeenCalled();
+    await client.close();
+  });
   it("passes exact decimal identities and holds the profile until this child closes", async () => {
     const { native, profile } = fixture();
     const client = await spawnCore(
@@ -197,6 +297,9 @@ describe("native backend launch binding", () => {
       native,
     );
     await expect(client.close()).rejects.toMatchObject({
+      code: "profile_cleanup_unconfirmed",
+    });
+    await expect(client.closeAndObserve()).rejects.toMatchObject({
       code: "profile_cleanup_unconfirmed",
     });
     await expect(client.close()).rejects.toMatchObject({

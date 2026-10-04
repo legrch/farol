@@ -140,3 +140,70 @@ func TestBrowserExchangeRootClosureSettlesAllWaiters(t *testing.T) {
 		t.Fatal("closed root reported known provider result")
 	}
 }
+
+func TestBrowserExchangeQuiescenceWakesIdlePollWithoutClosingTransport(t *testing.T) {
+	b, _, command := exchangeFixture(t)
+	done := make(chan error, 1)
+	go func() {
+		value, err := b.next(context.Background(), uint64(time.Now().Add(14*time.Second).UnixMilli()))
+		if value != nil {
+			done <- context.Canceled
+			return
+		}
+		done <- err
+	}()
+	if err := b.QuiescePolling(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("idle poll must finish normally: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("idle poll did not wake for retirement ACK")
+	}
+	if b.ctx.Err() != nil {
+		t.Fatal("transport lifetime was closed")
+	}
+	if err := b.QuiescePolling(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.Exchange(context.Background(), command); err == nil {
+		t.Fatal("quiesced exchange admitted new effect")
+	}
+	if b.issued != 0 || len(b.ready) != 0 {
+		t.Fatal("shutdown command escaped")
+	}
+}
+
+func TestBrowserExchangeQuiescenceRefusesOutstandingEffect(t *testing.T) {
+	b, _, command := exchangeFixture(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := beginBrowserCall(b, ctx, command)
+	nextBrowserCall(t, b)
+	if b.QuiescePolling() == nil {
+		t.Fatal("pending effect reported quiescent")
+	}
+	select {
+	case <-b.pollStopped:
+		t.Fatal("refused quiescence stopped cleanup delivery")
+	default:
+	}
+	cancel()
+	if awaitBrowserCall(t, done).err == nil {
+		t.Fatal("cancel became known provider result")
+	}
+	if err := b.QuiescePolling(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestBrowserExchangeClosedLifetimeCannotProveQuiescence(t *testing.T) {
+	b, cancel, _ := exchangeFixture(t)
+	cancel()
+	if b.QuiescePolling() == nil {
+		t.Fatal("closed lifetime became quiescence")
+	}
+}

@@ -316,6 +316,7 @@ async function dispatch(command: Command): Promise<unknown> {
       mode: 0o600,
     });
     host = await startDesktopGoCore({
+      previousHostDrainConfirmed: true,
       compiledArtifact: __FAROL_NORMAL_CORE__,
       build: BuildIdentitySchema.parse(__FAROL_NORMAL_BUILD__),
       artifactRoot: config.artifactRoot,

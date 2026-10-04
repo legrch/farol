@@ -76,7 +76,7 @@ func nextRecord(t *testing.T, r port.HandoffRecord) port.HandoffRecord {
 		b.HostLifetimeID = "host-2"
 		b.ChildLaunchID = "child-2"
 		r.Stage = port.HandoffConsumed
-		r.Consumption = &port.HandoffConsumption{Next: port.JournalScope{ProfileID: b.ProfileID, BackendGeneration: b.BackendGeneration}, NextBinding: b, AttemptID: "attempt-2"}
+		r.Consumption = &port.HandoffConsumption{PreviousHostDrainConfirmed: true, Next: port.JournalScope{ProfileID: b.ProfileID, BackendGeneration: b.BackendGeneration}, NextBinding: b, AttemptID: "attempt-2"}
 	default:
 		t.Fatal("unexpected fixture stage")
 	}
@@ -211,5 +211,60 @@ func TestRepositoryRejectsHistoricalGenerationAndAttemptReuse(t *testing.T) {
 	consumed.Consumption.NextBinding.BackendGeneration = "generation-1"
 	if !reused(history, consumed) {
 		t.Fatal("old origin generation reused")
+	}
+}
+
+func TestRepositoryRefusesHistoricalHostAndChildBeforeSuccessor(t *testing.T) {
+	for _, identity := range []string{"host", "child"} {
+		t.Run(identity, func(t *testing.T) {
+			ctx := context.Background()
+			disk := &memoryDisk{}
+			repo := repoFixture(disk)
+			var head *port.HandoffHead
+			var err error
+			r := recordFixture()
+			head, _ = repo.Load(ctx)
+			for step := 0; step < 4; step++ {
+				head, err = repo.Publish(ctx, head.Digest, r)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if step < 3 {
+					r = nextRecord(t, r)
+				}
+			}
+			successor := r.Consumption
+			r = recordFixture()
+			r.Publication.Binding = successor.NextBinding
+			r.Publication.HandoffID = "handoff-2"
+			r.Receipt.Write.Scope = successor.Next
+			for step := 0; step < 3; step++ {
+				head, err = repo.Publish(ctx, head.Digest, r)
+				if err != nil {
+					t.Fatal(err)
+				}
+				r = nextRecord(t, r)
+			}
+			r.Consumption.Next.BackendGeneration = "generation-3"
+			r.Consumption.NextBinding.BackendGeneration = "generation-3"
+			r.Consumption.NextBinding.HostLifetimeID = "host-3"
+			r.Consumption.NextBinding.ChildLaunchID = "child-3"
+			r.Consumption.AttemptID = "attempt-3"
+			if identity == "host" {
+				r.Consumption.NextBinding.HostLifetimeID = "host-1"
+			} else {
+				r.Consumption.NextBinding.ChildLaunchID = "child-1"
+			}
+			// Adjacent identities are distinct; the bounded historical chain must veto.
+			if err := policy.ValidateRecord(r); err != nil {
+				t.Fatal(err)
+			}
+			if got, err := repo.Publish(ctx, head.Digest, r); got != nil || !errors.Is(err, Refused) {
+				t.Fatal("historical identity minted successor", err)
+			}
+			if disk.calls != 7 {
+				t.Fatal("refused consumption appended", disk.calls)
+			}
+		})
 	}
 }

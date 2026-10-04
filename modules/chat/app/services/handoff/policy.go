@@ -112,7 +112,7 @@ func ValidateRecord(r port.HandoffRecord) error {
 		}
 		return nil
 	}
-	if r.Consumption == nil || r.Consumption.Next.ProfileID != r.Publication.Binding.ProfileID || !validID(r.Consumption.Next.BackendGeneration) || r.Consumption.Next.BackendGeneration == r.Publication.Binding.BackendGeneration || !validID(r.Consumption.AttemptID) {
+	if r.Consumption == nil || !r.Consumption.PreviousHostDrainConfirmed || r.Consumption.Next.ProfileID != r.Publication.Binding.ProfileID || !validID(r.Consumption.Next.BackendGeneration) || r.Consumption.Next.BackendGeneration == r.Publication.Binding.BackendGeneration || !validID(r.Consumption.AttemptID) {
 		return Refused
 	}
 	c, b := r.Consumption, r.Publication.Binding

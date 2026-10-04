@@ -29,19 +29,38 @@ type browserExchangeCall struct {
 // scheduler or turn owner. It retains at most eight one-shot reciprocal calls.
 // Chat owns all admission, intent, queue, result and retry policy.
 type BrowserExchange struct {
-	ctx     context.Context
-	peer    wire.Context
-	mu      sync.Mutex
-	pending map[string]*browserExchangeCall
-	ready   chan *browserExchangeCall
-	issued  uint32
+	ctx         context.Context
+	peer        wire.Context
+	mu          sync.Mutex
+	pending     map[string]*browserExchangeCall
+	ready       chan *browserExchangeCall
+	issued      uint32
+	pollStopped chan struct{}
+	quiesced    bool
 }
 
 func NewBrowserExchange(ctx context.Context, peer wire.Context) (*BrowserExchange, error) {
 	if ctx == nil || ctx.Err() != nil || !validIngressID(peer.ProfileId) || !validIngressID(peer.BackendGeneration) {
 		return nil, errors.New("browser_exchange_invalid")
 	}
-	return &BrowserExchange{ctx: ctx, peer: peer, pending: make(map[string]*browserExchangeCall), ready: make(chan *browserExchangeCall, 8)}, nil
+	return &BrowserExchange{ctx: ctx, peer: peer, pending: make(map[string]*browserExchangeCall), ready: make(chan *browserExchangeCall, 8), pollStopped: make(chan struct{})}, nil
+}
+
+// QuiescePolling is transport shutdown after the actual Chat owner retires.
+// It wakes an idle reciprocal poll without closing the pipe needed for the
+// retirement ACK. Outstanding effects must settle first; this supplies no
+// provider cleanup or retirement proof and cannot be reversed.
+func (b *BrowserExchange) QuiescePolling() error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.ctx.Err() != nil || len(b.pending) != 0 {
+		return errors.New("browser_exchange_not_quiescent")
+	}
+	if !b.quiesced {
+		b.quiesced = true
+		close(b.pollStopped)
+	}
+	return nil
 }
 func browserLease(command browser.Command) (browser.Lease, bool) {
 	switch c := command.(type) {
@@ -95,6 +114,10 @@ func (b *BrowserExchange) Exchange(ctx context.Context, command browser.Command)
 	}
 	call := &browserExchangeCall{command: wire.BrowserCommand{CommandId: id, Kind: kind, Body: body}, ctx: callCtx, reply: make(chan browserReplyResult, 1)}
 	b.mu.Lock()
+	if b.quiesced {
+		b.mu.Unlock()
+		return nil, errors.New("browser_exchange_quiesced")
+	}
 	if len(b.pending) >= 8 || b.issued >= 4096 {
 		b.mu.Unlock()
 		return nil, errors.New("browser_exchange_saturated")
@@ -130,6 +153,8 @@ func (b *BrowserExchange) next(ctx context.Context, deadline uint64) (*wire.Brow
 	defer cancel()
 	for {
 		select {
+		case <-b.pollStopped:
+			return nil, nil
 		case <-b.ctx.Done():
 			return nil, b.ctx.Err()
 		case <-wait.Done():

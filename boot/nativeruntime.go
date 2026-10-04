@@ -24,9 +24,11 @@ import (
 // Root qualification owns no approval or live membership. HOME is independent
 // from the physical profile and selects only the already trusted filesystem port.
 type NativeLaunch struct {
-	Profile                   ProfileBinding
-	OwnerID, ComputerID, Home string
-	StoreMode                 string
+	Profile                       ProfileBinding
+	OwnerID, ComputerID, Home     string
+	StoreMode                     string
+	HostLifetimeID, ChildLaunchID string
+	PreviousHostDrainConfirmed    bool
 }
 type NativeRuntime struct {
 	cancel        context.CancelFunc
@@ -41,10 +43,14 @@ type NativeRuntime struct {
 	ingress       *ComputerIngress
 	closed        bool
 	closeErr      error
+	retirement    *nativeRetirement
 }
 
 func NewNativeRuntime(ctx context.Context, launch NativeLaunch, generation string) (*NativeRuntime, error) {
 	if ctx == nil || ctx.Err() != nil || !validIngressID(launch.OwnerID) || !validIngressID(launch.ComputerID) || !validIngressID(generation) || !validProfilePath(launch.Home) || (launch.StoreMode != "create" && launch.StoreMode != "open") {
+		return nil, profileFailure(ProfileInvalid)
+	}
+	if (launch.HostLifetimeID != "" || launch.ChildLaunchID != "") && (!validIngressID(launch.HostLifetimeID) || !validIngressID(launch.ChildLaunchID)) {
 		return nil, profileFailure(ProfileInvalid)
 	}
 	qualified, err := QualifyProfile(launch.Profile)
@@ -67,7 +73,19 @@ func NewNativeRuntime(ctx context.Context, launch NativeLaunch, generation strin
 	if err != nil {
 		return fail(err)
 	}
-	runtime.journal, err = chatrepo.New(ctx, chatrepo.Root{Path: chat.Path, ProfileID: chat.ProfileID, Device: chat.Device, Inode: chat.Inode, OwnerUID: chat.OwnerUID}, chatrepo.Limits{Bytes: 1048576, Records: 4096})
+	journalRoot := chatrepo.Root{Path: chat.Path, ProfileID: chat.ProfileID, Device: chat.Device, Inode: chat.Inode, OwnerUID: chat.OwnerUID}
+	limits := chatrepo.Limits{Bytes: 1048576, Records: 4096}
+	if launch.HostLifetimeID != "" {
+		runtime.retirement, err = newNativeRetirement(ctx, launch, generation, chat)
+		if err != nil {
+			return fail(err)
+		}
+		runtime.journal, err = runtime.retirement.openJournal(ctx, launch.StoreMode, journalRoot, limits)
+	} else {
+		// Legacy/test launch without an exact host lifetime can create only the
+		// original strict owner. It receives no retirement or successor capability.
+		runtime.journal, err = chatrepo.New(ctx, journalRoot, limits)
+	}
 	if err != nil {
 		return fail(err)
 	}
@@ -140,6 +158,9 @@ func (r *NativeRuntime) Close() error {
 	if r.store != nil {
 		failures = append(failures, r.store.Close())
 	}
+	if r.retirement != nil {
+		failures = append(failures, r.retirement.repo.Close())
+	}
 	if r.profile != nil {
 		failures = append(failures, r.profile.Close())
 	}
@@ -156,7 +177,7 @@ func (r *NativeRuntime) Methods() (map[string]desktop.Method, error) {
 		return nil, errors.New("native_runtime_unavailable")
 	}
 	merged := make(map[string]desktop.Method)
-	for _, source := range []map[string]desktop.Method{r.ingress.Methods(), r.browser.Methods(), r.conversations.Methods(), r.chatComputer.Methods()} {
+	for _, source := range []map[string]desktop.Method{r.ingress.Methods(), r.browser.Methods(), r.conversations.Methods(), r.chatComputer.Methods(), r.retirementMethods()} {
 		for name, method := range source {
 			if _, exists := merged[name]; exists {
 				return nil, errors.New("native_method_conflict")

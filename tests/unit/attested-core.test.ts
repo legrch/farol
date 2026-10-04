@@ -16,6 +16,11 @@ import {
   type Client,
 } from "../../apps/desktop/bridge/client.ts";
 
+import { recordTerminal } from "../../apps/desktop/bridge/terminal-recorder.ts";
+vi.mock("../../apps/desktop/bridge/terminal-recorder.ts", () => ({
+  recordTerminal: vi.fn(),
+}));
+
 vi.mock("../../apps/desktop/bridge/client.ts", async (importOriginal) => ({
   ...(await importOriginal<
     typeof import("../../apps/desktop/bridge/client.ts")
@@ -81,6 +86,7 @@ let expected: TrustedCoreExpectation;
 let close: ReturnType<typeof vi.fn>;
 let client: Client;
 beforeEach(() => {
+  vi.mocked(recordTerminal).mockReset().mockResolvedValue();
   root = fs.realpathSync(
     fs.mkdtempSync(join(tmpdir(), "farol-attested-core-")),
   );
@@ -652,5 +658,105 @@ describe("one-shot Child delegation", () => {
     });
     expect(mockSpawn).toHaveBeenCalledTimes(1);
     expect(close).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("retirement recorder attestation", () => {
+  const ack = {
+    handoffId: "retirement",
+    receiptDigest: "d".repeat(64),
+    ackDigest: "a".repeat(64),
+  };
+  async function started() {
+    const profile = {
+      beforeSpawn: vi.fn(() => ({
+        state: "qualified" as const,
+        binding: {
+          profileId: expected.profileId,
+          root: "/synthetic/profile",
+          home: "/synthetic/home",
+          device: "1",
+          inode: "2",
+        },
+      })),
+      close: vi.fn(() => ({ state: "closed" as const })),
+    };
+    const observe = vi
+      .fn()
+      .mockResolvedValue({ exitCode: 0, signal: null, forced: false });
+    Object.assign(client, {
+      verifiedContext: {
+        profileId: expected.profileId,
+        backendGeneration: "generation-1",
+      },
+      closeAndObserve: observe,
+    });
+    mockSpawn.mockImplementationOnce(
+      async (_path, _profile, _build, _timeout, native) => {
+        native!.profile.beforeSpawn();
+        return client;
+      },
+    );
+    const core = new AttestedCore(artifact, expected);
+    await core.start(1000, {
+      profile,
+      ownerId: "owner",
+      computerId: "computer",
+      storeMode: "create",
+      hostLifetimeId: "host-1",
+      childLaunchId: "child-1",
+    });
+    return { core, profile, observe };
+  }
+  it("retains original context and profile without another qualification", async () => {
+    const f = await started();
+    await f.core.completeRetirement(ack);
+    await f.core.completeRetirement(ack);
+    expect(f.observe).toHaveBeenCalledTimes(1);
+    expect(f.profile.beforeSpawn).toHaveBeenCalledTimes(1);
+    expect(recordTerminal).toHaveBeenCalledExactlyOnceWith(
+      executable,
+      {
+        profileId: expected.profileId,
+        root: "/synthetic/profile",
+        home: "/synthetic/home",
+        device: "1",
+        inode: "2",
+      },
+      {
+        ...ack,
+        backendGeneration: "generation-1",
+        hostLifetimeId: "host-1",
+        childLaunchId: "child-1",
+        exitCode: "0",
+        signal: "",
+        forced: false,
+      },
+      ack,
+    );
+  });
+  it("re-attests bytes after exact child close and refuses changed executable", async () => {
+    const f = await started();
+    f.observe.mockImplementation(async () => {
+      const bytes = nativeBytes();
+      bytes[127] = 43;
+      fs.writeFileSync(executable, bytes);
+      return { exitCode: 0, signal: null, forced: false };
+    });
+    await expect(f.core.completeRetirement(ack)).rejects.toMatchObject({
+      code: "core_artifact_digest_mismatch",
+    });
+    await expect(f.core.completeRetirement(ack)).rejects.toMatchObject({
+      code: "core_artifact_digest_mismatch",
+    });
+    expect(f.observe).toHaveBeenCalledTimes(1);
+    expect(recordTerminal).not.toHaveBeenCalled();
+  });
+  it("does not launch recorder after unknown original child cleanup", async () => {
+    const f = await started();
+    const failure = new BridgeError("unknown", "cleanup_lost");
+    f.observe.mockRejectedValue(failure);
+    await expect(f.core.completeRetirement(ack)).rejects.toBe(failure);
+    expect(recordTerminal).not.toHaveBeenCalled();
   });
 });

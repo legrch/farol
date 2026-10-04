@@ -133,6 +133,8 @@ function transport(fault?: Fault) {
   const events: string[] = [];
   const replies: Outcome[] = [];
   let closePoll: (() => void) | undefined;
+  let stopPoll: (() => void) | undefined;
+  let quiesced = false;
   const request = vi.fn<Client["request"]>(
     async (method, body, options = {}) => {
       events.push(method);
@@ -140,10 +142,29 @@ function transport(fault?: Fault) {
       let data: Json;
       switch (method) {
         case "chat.browser.next":
-          return new Promise<Outcome>((_resolve, reject) => {
+          if (quiesced) {
+            data = {};
+            break;
+          }
+          return new Promise<Outcome>((resolve, reject) => {
             closePoll = () =>
               reject(new BridgeError("unavailable", "client_closed"));
+            stopPoll = () =>
+              resolve({
+                status: "ok",
+                requestId: options.id!,
+                context,
+                data: {},
+              });
           });
+        case "core.retirement.prepare":
+          quiesced = true;
+          stopPoll?.();
+          data = { handoffId: input.handoffId!, receiptDigest: "d".repeat(64) };
+          break;
+        case "core.retirement.ack":
+          data = { ...input, ackDigest: "a".repeat(64) };
+          break;
         case "computer.authority.deactivate":
           data = { fence: "9", storeRevision: "40" };
           break;
@@ -225,6 +246,7 @@ beforeEach(async () => {
   );
   settings = await ownerSettings();
   selection = {
+    previousHostDrainConfirmed: true,
     compiledArtifact: structuredClone(artifact),
     build: {
       schema: 1,
@@ -273,6 +295,7 @@ beforeEach(async () => {
   start = vi
     .spyOn(AttestedCore.prototype, "start")
     .mockRejectedValue(new Error("Unconfigured synthetic core launch"));
+  vi.spyOn(AttestedCore.prototype, "completeRetirement").mockResolvedValue();
 });
 afterEach(() => {
   expect(ports.spawn).not.toHaveBeenCalled();
@@ -315,7 +338,11 @@ describe("normal Go host startup", () => {
         compiled.build.platform = { goos: "linux", goarch: "arm64" };
       else compiled.build.platform = { goos: "darwin", goarch: "amd64" };
       await expect(
-        startDesktopGoCore({ ...selection, compiledArtifact: compiled }),
+        startDesktopGoCore({
+          ...selection,
+          previousHostDrainConfirmed: true,
+          compiledArtifact: compiled,
+        }),
       ).rejects.toMatchObject({ code: "core_host_build_mismatch" });
       expect(ports.open).not.toHaveBeenCalled();
       expect(ports.provision).not.toHaveBeenCalled();
@@ -686,4 +713,42 @@ describe("normal Go host read intents", () => {
     expect(f.events).toEqual(methods);
     expect(start).not.toHaveBeenCalled();
   });
+});
+
+it("refuses unknown prior host drain before provisioning or child launch", async () => {
+  await expect(
+    startDesktopGoCore({ ...selection, previousHostDrainConfirmed: false }),
+  ).rejects.toMatchObject({ code: "previous_host_drain_unconfirmed" });
+  expect(start).not.toHaveBeenCalled();
+  expect(ports.provision).not.toHaveBeenCalled();
+});
+
+it.each(["core.retirement.prepare", "core.retirement.ack"])(
+  "never retries lost %s or calls the recorder",
+  async (method) => {
+    const fault = new BridgeError("unknown", "reply_lost");
+    const f = transport((name, reply) => {
+      if (name === method) throw fault;
+      return reply;
+    });
+    start.mockResolvedValue(f.client);
+    const host = await startDesktopGoCore(selection);
+    await expect(host.close()).rejects.toBe(fault);
+    await expect(host.close()).rejects.toBe(fault);
+    expect(f.events.filter((name) => name === method)).toHaveLength(1);
+    expect(AttestedCore.prototype.completeRetirement).not.toHaveBeenCalled();
+    expect(f.close).toHaveBeenCalledTimes(1);
+  },
+);
+
+it("retains recorder uncertainty across repeated host close", async () => {
+  const f = transport();
+  start.mockResolvedValue(f.client);
+  const fault = new BridgeError("unknown", "recorder_lost");
+  vi.mocked(AttestedCore.prototype.completeRetirement).mockRejectedValue(fault);
+  const host = await startDesktopGoCore(selection);
+  await expect(host.close()).rejects.toBe(fault);
+  await expect(host.close()).rejects.toBe(fault);
+  expect(AttestedCore.prototype.completeRetirement).toHaveBeenCalledTimes(1);
+  expect(f.close).toHaveBeenCalledTimes(1);
 });

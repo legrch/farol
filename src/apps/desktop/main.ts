@@ -1717,7 +1717,8 @@ const routeBTaskSurfaces: RouteBTaskSurfaces = {
   },
 };
 
-const QUIT_DRAIN_DEADLINE_MS = 5_000;
+// Includes the bounded Go retirement/ACK, exact child exit and terminal recorder.
+const QUIT_DRAIN_DEADLINE_MS = 10_000;
 
 // What the start did with the connector's execution fence, kept privately
 // for diagnostics: whether the store was read and how many summaries it
@@ -9149,6 +9150,11 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
     () => false,
     (error: unknown) => (error as NodeJS.ErrnoException).code === "ENOENT",
   );
+  if (compiledGoCore !== null && !previousRunClean) {
+    // A lost recorder response or unconfirmed host drain cannot be upgraded by
+    // reloading complete-looking Go handoff bytes. Preserve the original marker.
+    throw new Error("DESKTOP_PREVIOUS_QUIT_UNCONFIRMED");
+  }
   await writeRunMarker(stateRoot, {
     pid: process.pid,
     now: Date.now(),
@@ -9197,6 +9203,7 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
     };
     desktopGoCore = await startDesktopGoCore({
       compiledArtifact: compiledGoCore,
+      previousHostDrainConfirmed: previousRunClean,
       build: buildIdentity,
       artifactRoot: directory,
       stateRoot,

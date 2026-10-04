@@ -7,7 +7,14 @@ import {
   type Client,
   type NativeCoreLaunch,
 } from "./client.ts";
-import { protocolMajor, protocolMinor, validate } from "./wire.ts";
+import {
+  protocolMajor,
+  protocolMinor,
+  validate,
+  type CoreRetirementAcknowledged,
+} from "./wire.ts";
+import type { ProfileLaunchBinding } from "./profile.ts";
+import { recordTerminal } from "./terminal-recorder.ts";
 
 export interface CoreBuildBinding {
   readonly buildId: string;
@@ -335,6 +342,16 @@ function verifyBinary(expected: TrustedCoreExpectation): string {
 // lifetime: path-based spawnCore cannot atomically attest exec under host mutation.
 export class AttestedCore {
   private consumed = false;
+  private child: Client | undefined;
+  private verified: TrustedCoreExpectation | undefined;
+  private terminalBinding:
+    | Readonly<{
+        profile: ProfileLaunchBinding;
+        hostLifetimeId: string;
+        childLaunchId: string;
+      }>
+    | undefined;
+  private retirementResult: Promise<void> | undefined;
   constructor(
     private readonly artifact: unknown,
     private readonly expected: TrustedCoreExpectation,
@@ -351,6 +368,32 @@ export class AttestedCore {
       const artifact = parseCoreArtifactDeclaration(this.artifact);
       bind(artifact, expected);
       const executable = verifyBinary(expected);
+      this.verified = expected;
+      let selectedNative = native;
+      if (
+        native?.hostLifetimeId !== undefined &&
+        native.childLaunchId !== undefined
+      ) {
+        const originalProfile = native.profile;
+        const hostLifetimeId = native.hostLifetimeId;
+        const childLaunchId = native.childLaunchId;
+        selectedNative = {
+          ...native,
+          profile: {
+            beforeSpawn: () => {
+              const selected = originalProfile.beforeSpawn();
+              if (selected.state === "qualified")
+                this.terminalBinding = Object.freeze({
+                  profile: Object.freeze({ ...selected.binding }),
+                  hostLifetimeId,
+                  childLaunchId,
+                });
+              return selected;
+            },
+            close: () => originalProfile.close(),
+          },
+        };
+      }
       // spawnCore alone performs the one handshake and any owned-child cleanup.
       // Propagate its original rejection, including cleanup unknown, unchanged.
       return spawnCore(
@@ -358,10 +401,50 @@ export class AttestedCore {
         expected.profileId,
         expected.build.buildId,
         timeoutMs,
-        ...(native ? ([native] as const) : []),
-      );
+        ...(selectedNative ? ([selectedNative] as const) : []),
+      ).then((client) => {
+        this.child = client;
+        return client;
+      });
     } catch (error) {
       return Promise.reject(error);
     }
+  }
+
+  // Called only after the explicit durable ACK reply. The original Client,
+  // profile and attestation are retained; callers cannot supply exit facts.
+  completeRetirement(ack: CoreRetirementAcknowledged): Promise<void> {
+    if (!this.retirementResult)
+      this.retirementResult = this.completeRetirementOnce(ack);
+    return this.retirementResult;
+  }
+  private async completeRetirementOnce(
+    input: CoreRetirementAcknowledged,
+  ): Promise<void> {
+    if (
+      !this.child ||
+      !this.verified ||
+      !this.terminalBinding ||
+      !validate("CoreRetirementAcknowledged", input)
+    )
+      throw new BridgeError("refused", "core_retirement_unavailable");
+    const ack = structuredClone(input);
+    const context = this.child.verifiedContext;
+    const terminal = await this.child.closeAndObserve();
+    const executable = verifyBinary(this.verified);
+    await recordTerminal(
+      executable,
+      this.terminalBinding.profile,
+      {
+        ...ack,
+        backendGeneration: context.backendGeneration,
+        hostLifetimeId: this.terminalBinding.hostLifetimeId,
+        childLaunchId: this.terminalBinding.childLaunchId,
+        exitCode: terminal.exitCode === null ? "" : String(terminal.exitCode),
+        signal: terminal.signal ?? "",
+        forced: terminal.forced,
+      },
+      ack,
+    );
   }
 }

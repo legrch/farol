@@ -48,7 +48,9 @@
     "chat.caller.issue": "effect",
     "chat.computer.write": "effect",
     "chat.computer.edit": "effect",
-    "chat.computer.mutation.read": "read"
+    "chat.computer.mutation.read": "read",
+    "core.retirement.prepare": "effect",
+    "core.retirement.ack": "effect"
   },
   "definitions": {
     "Context": {
@@ -3018,6 +3020,86 @@
         },
         "request": {
           "type": "TaskObservationRequest"
+        }
+      }
+    },
+    "CoreRetirementPrepare": {
+      "type": "object",
+      "fields": {
+        "handoffId": {
+          "type": "id"
+        }
+      }
+    },
+    "CoreRetirementPrepared": {
+      "type": "object",
+      "fields": {
+        "handoffId": {
+          "type": "id"
+        },
+        "receiptDigest": {
+          "type": "text"
+        }
+      }
+    },
+    "CoreRetirementACK": {
+      "type": "object",
+      "fields": {
+        "handoffId": {
+          "type": "id"
+        },
+        "receiptDigest": {
+          "type": "text"
+        }
+      }
+    },
+    "CoreRetirementAcknowledged": {
+      "type": "object",
+      "fields": {
+        "handoffId": {
+          "type": "id"
+        },
+        "receiptDigest": {
+          "type": "text"
+        },
+        "ackDigest": {
+          "type": "text"
+        }
+      }
+    },
+    "CoreTerminalObservation": {
+      "type": "object",
+      "fields": {
+        "handoffId": {
+          "type": "id"
+        },
+        "receiptDigest": {
+          "type": "text"
+        },
+        "ackDigest": {
+          "type": "text"
+        },
+        "backendGeneration": {
+          "type": "id"
+        },
+        "hostLifetimeId": {
+          "type": "id"
+        },
+        "childLaunchId": {
+          "type": "id"
+        },
+        "exitCode": {
+          "type": "string",
+          "maxBytes": 11,
+          "pattern": "^(-?[0-9]+)?$"
+        },
+        "signal": {
+          "type": "string",
+          "maxBytes": 32,
+          "pattern": "^(SIG[A-Z0-9]+)?$"
+        },
+        "forced": {
+          "type": "boolean"
         }
       }
     }

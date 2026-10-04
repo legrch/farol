@@ -108,11 +108,11 @@ func TestNativeHandoffActualRetireSuccessorAndSecondCycle(t *testing.T) {
 	next.HostLifetimeID = "host-2"
 	next.ChildLaunchID = "child-2"
 	nextScope := port.JournalScope{ProfileID: roots.ProfileID, BackendGeneration: next.BackendGeneration}
-	successor, err := service.Consume(ctx, *publication, port.HandoffConsumption{Next: nextScope, NextBinding: next, AttemptID: "attempt-2"})
+	successor, err := service.Consume(ctx, *publication, port.HandoffConsumption{PreviousHostDrainConfirmed: true, Next: nextScope, NextBinding: next, AttemptID: "attempt-2"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = service.Consume(ctx, *publication, port.HandoffConsumption{Next: nextScope, NextBinding: next, AttemptID: "attempt-2"}); err == nil {
+	if _, err = service.Consume(ctx, *publication, port.HandoffConsumption{PreviousHostDrainConfirmed: true, Next: nextScope, NextBinding: next, AttemptID: "attempt-2"}); err == nil {
 		t.Fatal("consumed successor replayed")
 	}
 	reopened, err := lifecyclerepo.NewAfterRetirement(ctx, chatRoot, successor.Scope, limits, successor.Proof)

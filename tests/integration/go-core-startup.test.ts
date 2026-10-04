@@ -13,7 +13,8 @@ import type { BuildIdentity } from "../../src/pkg/build-info/identity";
 
 // Real host composition, serialized pipes, Go process and disposable stores.
 // The build declaration is synthetic test input, not package attestation. No
-// Electron window, provider, owner profile, or successor recovery is exercised.
+// Electron window, provider or owner profile is exercised. Empty-owner reopen
+// uses actual origin retirement and child terminal observation through the host.
 let root: string;
 let artifactRoot: string;
 let artifact: unknown;
@@ -116,6 +117,7 @@ it("starts the normal host with fresh default settings before any workspace is c
     dispose: forbidden,
   };
   const host = await startDesktopGoCore({
+    previousHostDrainConfirmed: true,
     compiledArtifact: artifact,
     build,
     artifactRoot,
@@ -160,7 +162,75 @@ it("starts the normal host with fresh default settings before any workspace is c
     });
     expect(browserCalls).toBe(0);
   } finally {
-    await host.close();
+    // This read still owns a Chat admission. Cleanup closes the child but must
+    // not misreport that unsettled owner as eligible for successor retirement.
+    await expect(host.close()).rejects.toMatchObject({
+      code: "core_retirement_prepare_unconfirmed",
+    });
     cleanupConfirmed = true;
   }
+});
+
+it("reopens the exact empty profile across actual graceful child lifetimes", async () => {
+  cleanupConfirmed = false;
+  const stateRoot = path.join(root, "reopen-state");
+  const home = path.join(root, "reopen-home");
+  fs.mkdirSync(stateRoot, { mode: 0o700 });
+  fs.mkdirSync(home, { mode: 0o700 });
+  const configuration = new ProductConfigurationService(
+    new ProductSettingsStore({ root: stateRoot }),
+    { homeDirectory: home },
+  );
+  await configuration.initialize();
+  const settings = () => {
+    const value = configuration.snapshot();
+    if (value.status !== "ready") throw new Error("SETTINGS_UNAVAILABLE");
+    return value.settings;
+  };
+  let browserCalls = 0;
+  const forbidden = async (): Promise<never> => {
+    browserCalls++;
+    throw new Error("PROVIDER_FORBIDDEN");
+  };
+  const driver: BrowserDriver = {
+    prepare: forbidden,
+    verifySend: forbidden,
+    send: forbidden,
+    observe: forbidden,
+    cancel: forbidden,
+    dispose: forbidden,
+  };
+  let identity: string | undefined;
+  let physical: string | undefined;
+  const generations = new Set<string>();
+  for (let cycle = 0; cycle < 3; cycle++) {
+    const host = await startDesktopGoCore({
+      previousHostDrainConfirmed: true,
+      compiledArtifact: artifact,
+      build,
+      artifactRoot,
+      stateRoot,
+      home,
+      settings,
+      browser: (context) => {
+        expect(generations.has(context.backendGeneration)).toBe(false);
+        generations.add(context.backendGeneration);
+        identity ??= context.profileId;
+        expect(context.profileId).toBe(identity);
+        return { driver, withdraw: () => undefined };
+      },
+    });
+    const stat = fs.lstatSync(path.join(stateRoot, "go-core"), {
+      bigint: true,
+    });
+    const current = `${stat.dev}:${stat.ino}`;
+    physical ??= current;
+    expect(current).toBe(physical);
+    expect(host.chat).toBeDefined();
+    await host.close();
+    await host.close(); // cached completion, no second recorder or publication
+  }
+  expect(generations.size).toBe(3);
+  expect(browserCalls).toBe(0);
+  cleanupConfirmed = true;
 });

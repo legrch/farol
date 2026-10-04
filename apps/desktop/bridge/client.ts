@@ -33,6 +33,14 @@ type Pending = {
   handshake?: Handshake;
 };
 
+// Facts observed on the original ChildProcess, not a clean-retirement decision.
+// Go must separately qualify origin retirement and the initiating host's ACK.
+export type ChildTerminalObservation = Readonly<{
+  exitCode: number | null;
+  signal: NodeJS.Signals | null;
+  forced: boolean;
+}>;
+
 // Trusted Electron host only. No renderer IPC, endpoint discovery or automatic restart.
 export class Client {
   private decoder = new Decoder();
@@ -48,6 +56,9 @@ export class Client {
   private diagnosticBytes = 0;
   private writerBusy = false;
   private childClosed = false;
+  private terminal: ChildTerminalObservation | undefined;
+  private terminalObservation: Promise<ChildTerminalObservation> | undefined;
+  private forcedTermination = false;
   private detachStreams: (() => void)[] = [];
   private onDrain = (): void => {
     this.writerBusy = false;
@@ -88,7 +99,15 @@ export class Client {
         "backend_unavailable",
         child.pid === undefined ? "unavailable" : "unknown",
       );
-    const onClose = (): void => {
+    const onClose = (
+      exitCode: number | null,
+      signal: NodeJS.Signals | null,
+    ): void => {
+      this.terminal = Object.freeze({
+        exitCode,
+        signal,
+        forced: this.forcedTermination,
+      });
       this.childClosed = true;
       this.fail("backend_unavailable");
     };
@@ -390,6 +409,7 @@ export class Client {
     this.cleanup = "pending";
     this.cleanupPromise = new Promise<void>((resolve, reject) => {
       const kill = setTimeout(() => {
+        this.forcedTermination = true;
         this.child.kill("SIGKILL");
       }, 1000);
       const deadline = setTimeout(() => {
@@ -429,6 +449,22 @@ export class Client {
     this.listeners.clear();
     await this.cleanupOwned();
   }
+
+  // Repeated observation returns the same retained facts without another signal.
+  // exitCode/signalCode properties or cleanupState alone are not this witness.
+  closeAndObserve(): Promise<ChildTerminalObservation> {
+    if (!this.terminalObservation)
+      this.terminalObservation = this.closeAndObserveOnce();
+    return this.terminalObservation;
+  }
+  private async closeAndObserveOnce(): Promise<ChildTerminalObservation> {
+    if (!this.owned)
+      throw new BridgeError("refused", "backend_child_not_owned");
+    await this.close();
+    if (!this.childClosed || !this.terminal)
+      throw new BridgeError("unknown", "backend_terminal_unobserved");
+    return this.terminal;
+  }
 }
 
 // Trusted host selection only. The profile qualifier is held for the exact
@@ -438,6 +474,9 @@ export interface NativeCoreLaunch {
   readonly ownerId: string;
   readonly computerId: string;
   readonly storeMode: "create" | "open";
+  readonly previousHostDrainConfirmed?: boolean;
+  readonly hostLifetimeId?: string;
+  readonly childLaunchId?: string;
 }
 
 export async function spawnCore(
@@ -479,6 +518,12 @@ export async function spawnCore(
         typeof native.computerId !== "string" ||
         !id.test(native.ownerId) ||
         !id.test(native.computerId) ||
+        ((native.hostLifetimeId !== undefined ||
+          native.childLaunchId !== undefined) &&
+          (typeof native.hostLifetimeId !== "string" ||
+            typeof native.childLaunchId !== "string" ||
+            !id.test(native.hostLifetimeId) ||
+            !id.test(native.childLaunchId))) ||
         (native.storeMode !== "create" && native.storeMode !== "open")
       )
         throw new BridgeError("refused", "invalid_native_launch");
@@ -506,7 +551,19 @@ export async function spawnCore(
         "--store-mode",
         native.storeMode,
       );
+      if (
+        native.hostLifetimeId !== undefined &&
+        native.childLaunchId !== undefined
+      )
+        args.push(
+          "--host-lifetime",
+          native.hostLifetimeId,
+          "--child-launch",
+          native.childLaunchId,
+        );
     }
+    if (native?.previousHostDrainConfirmed === true)
+      args.push("--previous-host-drain-confirmed");
     child = spawn(executable, args, { stdio: ["pipe", "pipe", "pipe"] });
   } catch (error) {
     // No child was returned: release only this launch's qualified descriptors.

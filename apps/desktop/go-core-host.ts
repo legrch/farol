@@ -11,7 +11,12 @@ import { BrowserPump, type BrowserDriver } from "./bridge/browser.ts";
 import { ChatBridge } from "./bridge/chat.ts";
 import { ChatComputerBridge } from "./bridge/chat-computer.ts";
 import { ChatCallerBridge } from "./bridge/chat-caller.ts";
-import type { Context } from "./bridge/wire.ts";
+import {
+  validate,
+  type Context,
+  type CoreRetirementPrepared,
+  type CoreRetirementAcknowledged,
+} from "./bridge/wire.ts";
 import { qualifyProfileLaunch } from "./bridge/profile.ts";
 import { openNativeProfileStorage } from "./bridge/profile-storage.ts";
 import { GoComputerAuthority } from "./go-computer-authority.ts";
@@ -29,6 +34,9 @@ export type DesktopCoreSelection = Readonly<{
   // Compiled into this host by the exact production builder, not environment,
   // renderer data, a runtime file's own claim or a freshly measured binary hash.
   compiledArtifact: unknown;
+  // Captured before the new host writes its run marker. Only the exact prior
+  // host's confirmed drain can clear that marker; Go terminal bytes cannot.
+  previousHostDrainConfirmed: boolean;
   build: BuildIdentity;
   artifactRoot: string;
   stateRoot: string;
@@ -74,9 +82,13 @@ export class DesktopGoCore {
   private chatComputerBridge: ChatComputerBridge | undefined;
   private chatCallerBridge: ChatCallerBridge | undefined;
   private closeResult: Promise<void> | undefined;
+  private startupComplete = false;
   constructor(
     private readonly client: Client,
     private readonly settings: () => ProductSettings,
+    private readonly completeRetirement?: (
+      ack: CoreRetirementAcknowledged,
+    ) => Promise<void>,
   ) {
     this.authority = new GoComputerAuthority(client, client.verifiedContext);
     this.computer = new ComputerBridge(client);
@@ -90,6 +102,7 @@ export class DesktopGoCore {
     this.chatComputerBridge = new ChatComputerBridge(this.client);
     this.chatCallerBridge = new ChatCallerBridge(this.client);
     this.pump.start();
+    this.startupComplete = true;
   }
   get chat(): ChatBridge {
     if (!this.chatBridge || this.closeResult || this.pump?.state !== "running")
@@ -158,6 +171,65 @@ export class DesktopGoCore {
     return this.closeResult;
   }
   private async closeOnce(): Promise<void> {
+    let retirementError: unknown;
+    if (this.completeRetirement && this.startupComplete) {
+      try {
+        const handoffId = randomUUID();
+        const prepared = await this.client.request(
+          "core.retirement.prepare",
+          { handoffId },
+          { operationId: randomUUID(), timeoutMs: 1000 },
+        );
+        if (
+          prepared.status !== "ok" ||
+          !validate("CoreRetirementPrepared", prepared.data)
+        )
+          throw new BridgeError(
+            "unknown",
+            "core_retirement_prepare_unconfirmed",
+          );
+        const publication = prepared.data as unknown as CoreRetirementPrepared;
+        if (
+          publication.handoffId !== handoffId ||
+          !/^[a-f0-9]{64}$/u.test(publication.receiptDigest)
+        )
+          throw new BridgeError(
+            "unknown",
+            "core_retirement_publication_crossed",
+          );
+        // Go has stopped idle polls after actual owner retirement. Preserve the
+        // pipe for explicit ACK; do not use transport loss to stop this pump.
+        await this.pump?.stop();
+        if (this.pump && this.pump.state !== "stopped")
+          throw new BridgeError(
+            "unknown",
+            "core_retirement_browser_unconfirmed",
+          );
+        const acknowledged = await this.client.request(
+          "core.retirement.ack",
+          {
+            handoffId: publication.handoffId,
+            receiptDigest: publication.receiptDigest,
+          },
+          { operationId: randomUUID(), timeoutMs: 1000 },
+        );
+        if (
+          acknowledged.status !== "ok" ||
+          !validate("CoreRetirementAcknowledged", acknowledged.data)
+        )
+          throw new BridgeError("unknown", "core_retirement_ack_unconfirmed");
+        const ack = acknowledged.data as unknown as CoreRetirementAcknowledged;
+        if (
+          ack.handoffId !== publication.handoffId ||
+          ack.receiptDigest !== publication.receiptDigest ||
+          !/^[a-f0-9]{64}$/u.test(ack.ackDigest)
+        )
+          throw new BridgeError("unknown", "core_retirement_ack_crossed");
+        await this.completeRetirement(ack);
+      } catch (error) {
+        retirementError = error;
+      }
+    }
     let withdrawalError: unknown;
     try {
       this.browser?.withdraw();
@@ -173,6 +245,7 @@ export class DesktopGoCore {
     for (const result of results) {
       if (result.status === "rejected") throw result.reason;
     }
+    if (retirementError !== undefined) throw retirementError;
     if (withdrawalError !== undefined) throw withdrawalError;
   }
 }
@@ -180,6 +253,8 @@ export class DesktopGoCore {
 export async function startDesktopGoCore(
   selection: DesktopCoreSelection,
 ): Promise<DesktopGoCore> {
+  if (selection.previousHostDrainConfirmed !== true)
+    throw new BridgeError("refused", "previous_host_drain_unconfirmed");
   const expected = parseCoreArtifactDeclaration(selection.compiledArtifact);
   if (
     selection.build.sourceDirty ||
@@ -223,17 +298,21 @@ export async function startDesktopGoCore(
     },
   };
   let client: Client;
+  const attested = new AttestedCore(artifact, {
+    artifactRoot: selection.artifactRoot,
+    build: expected.build,
+    binary: expected.binary,
+    profileId: storage.profileId,
+  });
   try {
-    client = await new AttestedCore(artifact, {
-      artifactRoot: selection.artifactRoot,
-      build: expected.build,
-      binary: expected.binary,
-      profileId: storage.profileId,
-    }).start(2000, {
+    client = await attested.start(2000, {
       profile,
       ownerId: "owner-desktop",
       computerId: settings.computer.computerId,
       storeMode: storage.storeMode,
+      previousHostDrainConfirmed: selection.previousHostDrainConfirmed,
+      hostLifetimeId: randomUUID(),
+      childLaunchId: randomUUID(),
     });
   } catch (error) {
     if (!handedToClient && !released) {
@@ -243,7 +322,9 @@ export async function startDesktopGoCore(
     }
     throw error;
   }
-  const host = new DesktopGoCore(client, selection.settings);
+  const host = new DesktopGoCore(client, selection.settings, (ack) =>
+    attested.completeRetirement(ack),
+  );
   try {
     await host.publishCurrent();
     host.connectBrowser(selection.browser(client.verifiedContext));

@@ -129,7 +129,7 @@ func consumption() port.HandoffConsumption {
 	b.BackendGeneration = "generation-2"
 	b.HostLifetimeID = "host-2"
 	b.ChildLaunchID = "child-2"
-	return port.HandoffConsumption{Next: port.JournalScope{ProfileID: "profile", BackendGeneration: "generation-2"}, AttemptID: "attempt-2", NextBinding: b}
+	return port.HandoffConsumption{PreviousHostDrainConfirmed: true, Next: port.JournalScope{ProfileID: "profile", BackendGeneration: "generation-2"}, AttemptID: "attempt-2", NextBinding: b}
 }
 
 func TestExactChainAndOneShotProof(t *testing.T) {
@@ -492,3 +492,21 @@ func TestClosedRecordRequiresOriginAndACK(t *testing.T) {
 }
 
 func (m *memoryStore) Fence(context.Context) error { m.fenced = true; return nil }
+
+func TestPersistedTerminalCannotReplaceIndependentHostDrainWitness(t *testing.T) {
+	_, disk, publication := terminated(t)
+	// Recorder bytes survive, but its result was lost before trusted host drain.
+	// A fresh service sees valid-looking terminal without any UNKNOWN marker.
+	fresh, err := New(disk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	attempt := consumption()
+	attempt.PreviousHostDrainConfirmed = false
+	if proof, err := fresh.Consume(context.Background(), publication, attempt); !errors.Is(err, Refused) || proof != nil {
+		t.Fatal("unknown host completion minted successor", err)
+	}
+	if disk.calls != 3 {
+		t.Fatal("unknown host completion appended")
+	}
+}
