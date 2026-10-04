@@ -63,6 +63,13 @@ class WorkspaceEditLeaseLost extends Error {
 
 export type ProductSettingsStoreOptions = Readonly<{ root: string }>;
 
+// Mechanical publication result for the retained single Settings writer. This
+// says nothing about mutation execution or whether a UI delivery may be ACKed.
+export type ConditionalSettingsWrite =
+  | Readonly<{ status: "committed"; settings: ProductSettings }>
+  | Readonly<{ status: "not_written" }>
+  | Readonly<{ status: "unknown" }>;
+
 // The same cross-process exclusion `LiveTaskRegistry.admitDurable` and
 // `withPromotionLease` use (see `live-task-registry.ts`), structurally
 // duplicated here rather than imported: both shapes are simple ports, and a
@@ -581,6 +588,8 @@ function defaultSettings(id: () => string): ProductSettings {
 }
 
 export class ProductSettingsStore {
+  private conditionalPublicationUnknown = false;
+
   constructor(
     private readonly options: ProductSettingsStoreOptions,
     private readonly hooks: StoreHooks = {},
@@ -627,6 +636,66 @@ export class ProductSettingsStore {
     settings: ProductSettings,
     fence: StoreWriteFence = {},
   ): Promise<void> {
+    if (this.conditionalPublicationUnknown)
+      throw new Error("SETTINGS_WRITE_OUTCOME_UNKNOWN");
+    return this.saveOnce(settings, fence);
+  }
+
+  // The owning service must serialize this with every other Settings mutation.
+  // Compare the complete existing document so unrelated values cannot be lost.
+  // This is conditional replacement under that one writer, not a filesystem CAS
+  // against arbitrary external writers. It does not decide a delivery transition.
+  async saveConditional(
+    expected: ProductSettings,
+    next: ProductSettings,
+    fence: StoreWriteFence = {},
+  ): Promise<ConditionalSettingsWrite> {
+    if (this.conditionalPublicationUnknown) return { status: "unknown" };
+    let attempted = false;
+    try {
+      const before = ProductSettingsSchema.parse(structuredClone(expected));
+      const candidate = ProductSettingsSchema.parse(structuredClone(next));
+      if (candidate.revision !== before.revision + 1)
+        return { status: "not_written" };
+      const serializedBefore = JSON.stringify(before);
+      const assertCurrent = async () => {
+        if (JSON.stringify(await this.load()) !== serializedBefore)
+          throw new Error("SETTINGS_CONDITIONAL_SOURCE_CHANGED");
+      };
+      await assertCurrent();
+      await this.saveOnce(
+        candidate,
+        {
+          beforeWrite: async () => {
+            await assertCurrent();
+            await fence.beforeWrite?.();
+          },
+        },
+        () => {
+          attempted = true;
+        },
+      );
+      const readBack = await this.load();
+      if (JSON.stringify(readBack) !== JSON.stringify(candidate))
+        throw new Error("SETTINGS_CONDITIONAL_READ_BACK_FAILED");
+      return { status: "committed", settings: readBack! };
+    } catch {
+      if (!attempted) return { status: "not_written" };
+      // Never re-read after the failed publication/readback to infer success.
+      // Visible bytes cannot settle an unknown acknowledgement. Even legacy
+      // writes through this retained store must now refuse.
+      this.conditionalPublicationUnknown = true;
+      return { status: "unknown" };
+    }
+  }
+
+  private async saveOnce(
+    settings: ProductSettings,
+    fence: StoreWriteFence,
+    publicationAttempted?: () => void,
+  ): Promise<void> {
+    if (this.conditionalPublicationUnknown)
+      throw new Error("SETTINGS_WRITE_OUTCOME_UNKNOWN");
     const validated = ProductSettingsSchema.parse(settings);
     await this.ensureRoot();
     const serialized = `${JSON.stringify(validated, null, 2)}\n`;
@@ -660,6 +729,7 @@ export class ProductSettingsStore {
       // leaves the target exactly as it was, and the temporary file is
       // removed by the `finally` below.
       await fence.beforeWrite?.();
+      publicationAttempted?.();
       await fs.rename(temporary, target);
       await fs.chmod(target, 0o600);
       await this.syncRoot();
