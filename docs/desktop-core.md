@@ -44,14 +44,76 @@ an independent host drain witness. Late/unknown publication and forced or
 unconfirmed closure cannot become a clean successor. Failure after browser
 connection uses `abortStartup()` and never publishes retirement.
 
-This successor path currently accepts **only the same build and an empty Chat
-registry**. Go result bodies remain in memory within one backend lifetime.
-Nonempty turns, retained-result recovery across restart, cross-build update,
-installation and live-provider compatibility remain unqualified. Normal
-Computer preview still spans Go admission and transitional TypeScript Send/result
-policy; its end-to-end cutover is pending. Production Go browser control
+That candidate accepted **only the same build and an empty Chat registry**;
+the newer read/Discard milestone below extends this bounded successor path. Go result bodies remain in memory within one backend lifetime.
+Provider-used turns, retained-result recovery across restart, cross-build update,
+installation and live-provider compatibility remain unqualified. Transitional
+TypeScript policy outside the newer read/Discard slice remains active. Production Go browser control
 translations are not qualified. The older K0/K1 sections below describe their
 original lower evidence boundaries, not these later packaged claims.
+
+## Go read-preview, Discard and same-profile reopen
+
+Packaged source `f1186ae5dd6e1b52cd79cfa264458cbb0b7594e4` passed the normal-main
+read/Discard/reopen journey on 4 October 2026. Build ID:
+`453fac7026dcb72b2552c0af344f61ec058aa6656598394c27f175e6a2362e44`.
+Artifact SHA-256:
+`671d2157a0e1257bd53e366854b0f0e46b0397389e706d451f42dcdc058909fe`.
+The package retains the preview identity/version above. No installation or live
+provider qualification occurred.
+
+The exact harness at `e630195b5d71efe78e09b3130c32bc7ade999524` used
+`tests/e2e/go-core-startup.e2e.mjs --run-native --reopen --read-discard`, with
+explicit package, metadata, source, build and artifact pins. It exercised ordinary
+preload configuration commands and the real Go child. A disposable multibyte file
+produced a preview of 92 bytes and 74 UTF-16 characters. Duplicate prepare returned
+the same operation and unchanged journals. Explicit Discard committed the exact
+Go `admit → cancel → acknowledge` history; a second Discard added no writes.
+
+Two ordinary Quits observed exit code 0, no signal, confirmed drain and removal of
+the run marker. Between them, the same profile and physical roots reopened with
+a new Go backend generation and an empty successor registry. Computer settings,
+workspace identity and Graphite were retained. All windows remained hidden and
+unfocused. The controlled site independently counted zero attempted and accepted
+Sends. The successful disposable profile was cleaned after the final Quit.
+
+The retained local report is
+`_output/evidence/go-core-startup-e4cc62f3-688b-4d66-b309-d3dd32426c09.json`.
+Two earlier harness attempts remain failed: one observed the lazy Browser before
+opening it; the other assumed fresh Home on configured-profile reopen. Their
+profiles and reports were preserved, not retried or relabelled as passes.
+Production bytes did not change during those harness corrections.
+
+The source gate at `bcde314` passed 7,079 main tests, 125 renderer tests, Go
+race/vet, generated/import/type checks, Hunt and secret scans. The subsequent
+handoff-size fix passed its pure/race/vet and native repository checks, plus a
+narrow independent recheck. Eight cancellations and a receipt near the byte bound
+now complete all four handoff stages; both regressions failed against the former
+16 KiB codec. `RetirementWrite` is bounded to 1 MiB with a separate 32 KiB reserve
+for later-stage metadata. The original live-owner receipt, host ACK, exact
+unforced child terminal and independent host drain remain mandatory.
+
+This is a scoped packaged witness, not whole-range cutover acceptance. Workspace
+selection/verification still includes the legacy native listing helper. The
+preview exposes path/bytes/character counts, not a content hash. The controlled
+page proves readiness only, not a real account or model selection. Normal Go Send
+is explicitly unavailable until a legitimate provider/control-profile producer
+is qualified; a Go-owned preview cannot fall through to legacy Send. Provider-used
+retirement, cross-build recovery and result-body persistence remain open.
+
+The current regression map keeps lower and higher boundaries separate:
+
+| Case                         | Executable evidence                                                                                                                                                                                           | Layer and scope                                                                                                      | Remaining boundary                                                                        |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| C06 useful output            | `TestReadIntentPromotionRetainsActualOwnerThroughUsefulResultAndFollow` in `modules/chat/app/services/lifecycle/readintent_test.go`; `TestReadIntentSameOwnerPromotionAndFollow` in `boot/readintent_test.go` | Real Go owners with controlled ports; useful output, retained result and same-conversation follow-up                 | Normal provider browser and selected Responses client                                     |
+| C07 independent expectations | `tests/e2e/fixtures/go-read-discard-witness.mjs` self-tests plus the pinned packaged harness above                                                                                                            | Independently observed journals, preview metadata and physical Send ledger                                           | Duplicate actual Send/browser-generation sensitivity belongs to the Send journey          |
+| C08 policy ownership         | `TestReadIntentFramedReadPromotionAndWithdrawal` in `boot/readintent_test.go`; packaged read/Discard above                                                                                                    | Framed Go composition and actual normal host/Go lifecycle                                                            | Full browser-used queue/cancel/release journey                                            |
+| C12 one active owner         | `TestReadIntentRevokedDuringVerifyNeverPhysicallySends` in `boot/readintent_test.go`; no-fallback branch in normal preview and packaged Go journal witness                                                    | Ingress/direct-handle revocation test; final guard removal fails owning regressions; normal read succeeds through Go | Active legacy verification and explicit legacy-build implementation have not been retired |
+
+These rows map only the current slice. They do not mark the complete C01–C12,
+M01–M12 or React R01–R45 obligations accepted. Local native execution also does
+not prove containment across every browser, Node, Go and child-process network
+path.
 
 ## Wire and generation
 
