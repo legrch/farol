@@ -1460,3 +1460,360 @@ it("R13 initial failed configuration never presents ready runtime as current per
   expect(f.api.task).not.toHaveBeenCalled();
   c.dispose();
 });
+
+// Injected transport only: these receipts prove renderer correlation, not a host write.
+async function unknownGuardedEdit(
+  retainPreview = true,
+  ambientPreview = false,
+) {
+  const f = fixture();
+  const c = new WindowController(f.api);
+  await c.start();
+  const operationId = "44444444-4444-4444-8444-444444444444";
+  const workspaceId = "22222222-2222-4222-8222-222222222222";
+  const intention = `settings:computer.apply-workspace-edit:${operationId}`;
+  const preview = {
+    kind: "computer.workspace-edit-preview" as const,
+    operationId,
+    workspaceId,
+    relativePath: "file.txt",
+    bytes: 123,
+    beforeSha256: "b".repeat(64),
+    expiresAt: "2099-10-04T20:00:00.000Z",
+  };
+  if (retainPreview) {
+    vi.mocked(f.api.configure).mockResolvedValueOnce({
+      ok: true,
+      snapshot: bootstrap().configuration,
+      evidence: preview,
+    });
+    await c.configure(
+      { kind: "computer.prepare-workspace-edit", workspaceId },
+      "prepare",
+    );
+  }
+  if (ambientPreview) {
+    vi.mocked(f.api.configure).mockResolvedValueOnce({
+      ok: true,
+      snapshot: bootstrap().configuration,
+      evidence: preview,
+    });
+    await c.configure({ kind: "support.export" }, "ambient-preview");
+  }
+  const command = {
+    kind: "computer.apply-workspace-edit" as const,
+    operationId,
+    oldText: "old",
+    newText: "new",
+  };
+  vi.mocked(f.api.configure).mockRejectedValueOnce(new Error("lost reply"));
+  const original = await c.configure(command, intention);
+  expect(original.state).toBe("unknown");
+  const pending = { status: "ready" as const, settings: settings(2) };
+  pending.settings.computer.pendingEdit = {
+    operationId,
+    workspaceId,
+    relativePath: "file.txt",
+    computerGeneration: 1,
+    submittedAt: "2026-10-04T20:00:00.000Z",
+  };
+  vi.mocked(f.api.bootstrap).mockResolvedValue({
+    ...bootstrap(),
+    configuration: pending,
+  });
+  await c.refresh();
+  const observation = {
+    ok: true as const,
+    snapshot: structuredClone(pending),
+    evidence: {
+      kind: "computer.workspace-mutation" as const,
+      operationId,
+      workspaceId,
+      relativePath: "file.txt",
+      operation: "edit" as "edit" | "write",
+      bytes: 120,
+      replacements: 1,
+      beforeSha256: "b".repeat(64),
+      afterSha256: "c".repeat(64),
+      resultRetention: "durable",
+      redelivered: true,
+    },
+  };
+  const settled = structuredClone(pending);
+  settled.settings.revision++;
+  settled.settings.computer.pendingEdit = null;
+  async function observe(result: unknown = observation) {
+    vi.mocked(f.api.configure).mockResolvedValueOnce(result);
+    return c.observeWorkspaceEdit(operationId);
+  }
+  async function ack(result: unknown = { ok: true, snapshot: settled }) {
+    vi.mocked(f.api.configure).mockResolvedValueOnce(result);
+    return c.acknowledgeWorkspaceEdit(operationId);
+  }
+  return {
+    f,
+    c,
+    operationId,
+    workspaceId,
+    intention,
+    original,
+    command,
+    preview,
+    pending,
+    observation,
+    settled,
+    observe,
+    ack,
+  };
+}
+it("settles only the exact unknown Apply after Observe and ACK while permanently consuming it", async () => {
+  const h = await unknownGuardedEdit();
+  await h.observe();
+  expect(h.c.getSnapshot().intents[h.intention]).toBe(h.original);
+  await h.ack();
+  expect(h.c.getSnapshot().intents[h.intention]?.state).toBe("applied");
+  const calls = vi.mocked(h.f.api.configure).mock.calls.length;
+  expect(await h.c.configure(h.command, h.intention)).toBe(h.original);
+  expect(
+    (await h.c.configure({ ...h.command, newText: "changed" }, h.intention))
+      .code,
+  ).toBe("INTENTION_PAYLOAD_CONFLICT");
+  expect((await h.c.configure(h.command, "another-apply-intention")).code).toBe(
+    "WORKSPACE_EDIT_ALREADY_CONSUMED",
+  );
+  expect(h.f.api.configure).toHaveBeenCalledTimes(calls);
+  // The old returned promise remains unknown; no reconciliation resubmits it.
+  expect(h.original.state).toBe("unknown");
+  expect(h.c.getSnapshot().intents[h.intention]?.state).toBe("applied");
+  h.c.dispose();
+});
+it("settles an exact observed known refusal only after ACK", async () => {
+  const h = await unknownGuardedEdit();
+  await h.observe({
+    ok: false,
+    error: "WORKSPACE_EDIT_NO_MATCH",
+    snapshot: h.pending,
+  });
+  expect(h.c.getSnapshot().intents[h.intention]).toBe(h.original);
+  await h.ack();
+  expect(h.c.getSnapshot().intents[h.intention]).toEqual({
+    id: h.intention,
+    state: "refused",
+    code: "WORKSPACE_EDIT_NO_MATCH",
+  });
+  h.c.dispose();
+});
+it.each([
+  "foreign-operation",
+  "foreign-workspace",
+  "foreign-path",
+  "foreign-before-hash",
+  "write-result",
+  "pending-operation",
+  "pending-workspace",
+  "pending-path",
+  "pending-generation",
+  "current-generation",
+  "current-computer",
+  "missing-evidence",
+  "unknown-outcome",
+  "admission-refusal",
+  "missing-preview",
+  "ambient-preview",
+])(
+  "never settles the original Apply from incomplete or foreign Observe: %s",
+  async (condition) => {
+    const h = await unknownGuardedEdit(
+      condition !== "missing-preview" && condition !== "ambient-preview",
+      condition === "ambient-preview",
+    );
+    const observed = structuredClone(h.observation);
+    const foreign = "33333333-3333-4333-8333-333333333333";
+    const pending = observed.snapshot.settings.computer.pendingEdit!;
+    if (condition === "foreign-operation")
+      observed.evidence.operationId = foreign;
+    if (condition === "foreign-workspace")
+      observed.evidence.workspaceId = foreign;
+    if (condition === "foreign-path")
+      observed.evidence.relativePath = "other.txt";
+    if (condition === "foreign-before-hash")
+      observed.evidence.beforeSha256 = "d".repeat(64);
+    if (condition === "write-result") observed.evidence.operation = "write";
+    if (condition === "pending-operation") pending.operationId = foreign;
+    if (condition === "pending-workspace") pending.workspaceId = foreign;
+    if (condition === "pending-path") pending.relativePath = "other.txt";
+    if (condition === "pending-generation") pending.computerGeneration++;
+    if (condition === "current-generation")
+      observed.snapshot.settings.computer.generation++;
+    if (condition === "current-computer")
+      observed.snapshot.settings.computer.computerId = foreign;
+    await h.observe(
+      condition === "missing-evidence"
+        ? { ok: true, snapshot: h.pending }
+        : condition === "unknown-outcome" || condition === "admission-refusal"
+          ? {
+              ok: false,
+              error:
+                condition === "unknown-outcome"
+                  ? "WORKSPACE_MUTATION_OUTCOME_UNKNOWN"
+                  : "WORKSPACE_MUTATION_IN_PROGRESS",
+              snapshot: h.pending,
+            }
+          : observed,
+    );
+    await h.ack();
+    expect(h.c.getSnapshot().intents[h.intention]).toBe(h.original);
+    h.c.dispose();
+  },
+);
+it.each([
+  "lost",
+  "malformed",
+  "refused",
+  "still-pending",
+  "foreign-pending",
+  "generation",
+  "computer",
+  "revision",
+])(
+  "never settles an unknown Apply from an uncertain or mismatched ACK: %s",
+  async (condition) => {
+    const h = await unknownGuardedEdit();
+    await h.observe();
+    const settled = structuredClone(h.settled);
+    if (condition === "generation") settled.settings.computer.generation++;
+    if (condition === "computer")
+      settled.settings.computer.computerId =
+        "33333333-3333-4333-8333-333333333333";
+    if (condition === "revision")
+      settled.settings.revision = h.pending.settings.revision;
+    if (condition === "foreign-pending")
+      settled.settings.computer.pendingEdit = {
+        ...h.pending.settings.computer.pendingEdit!,
+        operationId: "33333333-3333-4333-8333-333333333333",
+      };
+    if (condition === "lost") {
+      vi.mocked(h.f.api.configure).mockRejectedValueOnce(new Error("lost ACK"));
+      await h.c.acknowledgeWorkspaceEdit(h.operationId);
+      const calls = vi.mocked(h.f.api.configure).mock.calls.length;
+      await h.c.acknowledgeWorkspaceEdit(h.operationId);
+      expect(h.f.api.configure).toHaveBeenCalledTimes(calls);
+    } else
+      await h.ack(
+        condition === "malformed"
+          ? { ok: true }
+          : condition === "refused"
+            ? { ok: false, error: "SETTINGS_WRITE_FAILED", snapshot: settled }
+            : {
+                ok: true,
+                snapshot: condition === "still-pending" ? h.pending : settled,
+              },
+      );
+    expect(h.c.getSnapshot().intents[h.intention]).toBe(h.original);
+    h.c.dispose();
+  },
+);
+it.each([
+  "refresh-only",
+  "foreign-intention",
+  "refresh-after-observe",
+  "observe-race",
+  "ack-race",
+  "observation-gap",
+  "ack-gap",
+])(
+  "never uses ambient, superseded or gap evidence to settle Apply: %s",
+  async (condition) => {
+    const h = await unknownGuardedEdit();
+    if (condition === "refresh-only") {
+      vi.mocked(h.f.api.bootstrap).mockResolvedValue({
+        ...bootstrap(),
+        configuration: h.settled,
+      });
+      await h.c.refresh();
+    } else if (condition === "foreign-intention") {
+      vi.mocked(h.f.api.configure).mockResolvedValueOnce(h.observation);
+      expect(
+        (await h.c.configure({ kind: "support.export" }, "foreign-intention"))
+          .state,
+      ).toBe("applied");
+      await h.ack();
+    } else if (condition === "refresh-after-observe") {
+      await h.observe();
+      await h.c.refresh();
+      await h.ack();
+    } else {
+      if (condition === "ack-race" || condition === "ack-gap")
+        await h.observe();
+      const reply = deferred<unknown>();
+      vi.mocked(h.f.api.configure).mockReturnValueOnce(reply.promise);
+      const ack = condition === "ack-race" || condition === "ack-gap";
+      const requested = ack
+        ? h.c.acknowledgeWorkspaceEdit(h.operationId)
+        : h.c.observeWorkspaceEdit(h.operationId);
+      await vi.waitFor(() =>
+        expect(h.f.api.configure).toHaveBeenCalledTimes(ack ? 4 : 3),
+      );
+      if (condition.endsWith("gap")) h.f.emit("tasks", { malformed: true });
+      else await h.c.refresh();
+      reply.resolve(ack ? { ok: true, snapshot: h.settled } : h.observation);
+      await requested;
+      if (!ack) await h.ack();
+    }
+    expect(h.c.getSnapshot().intents[h.intention]).toBe(h.original);
+    h.c.dispose();
+  },
+);
+
+it.each(["relativePath", "beforeSha256", "bytes", "expiresAt"] as const)(
+  "retains preview identity even when refresh removes ambient evidence: %s",
+  async (field) => {
+    const h = await unknownGuardedEdit();
+    const preview = {
+      ...h.preview,
+      operationId: "33333333-3333-4333-8333-333333333333",
+    };
+    vi.mocked(h.f.api.configure).mockResolvedValueOnce({
+      ok: true,
+      snapshot: h.pending,
+      evidence: preview,
+    });
+    expect(
+      (
+        await h.c.configure(
+          {
+            kind: "computer.prepare-workspace-edit",
+            workspaceId: h.workspaceId,
+          },
+          "another-prepare",
+        )
+      ).state,
+    ).toBe("applied");
+    await h.c.refresh();
+    const changed = {
+      operationId: h.operationId,
+      workspaceId: h.operationId,
+      relativePath: "changed.txt",
+      beforeSha256: "d".repeat(64),
+      bytes: 125,
+      expiresAt: "2099-10-05T20:00:00.000Z",
+    };
+    vi.mocked(h.f.api.configure).mockResolvedValueOnce({
+      ok: true,
+      snapshot: h.pending,
+      evidence: { ...preview, [field]: changed[field] },
+    });
+    expect(
+      (
+        await h.c.configure(
+          {
+            kind: "computer.prepare-workspace-edit",
+            workspaceId: h.workspaceId,
+          },
+          "another-prepare",
+        )
+      ).state,
+    ).toBe("unknown");
+    h.c.dispose();
+  },
+);

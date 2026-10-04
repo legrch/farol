@@ -38,7 +38,11 @@ import {
   classifyConfigurationResponse,
   configurationEffectOutcome,
 } from "../configuration-outcome";
-import type { ProductConfigurationCommand } from "../../pkg/product-settings/contract";
+import type {
+  ProductConfigurationCommand,
+  ProductConfigurationEvidence,
+} from "../../pkg/product-settings/contract";
+
 import type { ProductTaskCommand } from "../../modules/chat/contract/product-task";
 import type {
   ActivityEntry,
@@ -50,6 +54,29 @@ import type {
   UpdateAction,
   WindowSnapshot,
 } from "./contract";
+
+type EditPreview = Extract<
+  ProductConfigurationEvidence,
+  { kind: "computer.workspace-edit-preview" }
+>;
+type EditReceipt = Readonly<{
+  preview: EditPreview;
+  configuration: WindowSnapshot["configuration"];
+  buildId: string;
+  computerId: string;
+  generation: number;
+}>;
+type SubmittedEdit = Readonly<{
+  intention: string;
+  receipt: EditReceipt | null;
+}>;
+type ObservedEdit = Readonly<{
+  submitted: SubmittedEdit;
+  configuration: WindowSnapshot["configuration"];
+  evidence: WindowSnapshot["evidence"];
+  state: "applied" | "refused";
+  code: string | null;
+}>;
 
 type SectionNavigationAction = Extract<
   ShellAction,
@@ -131,6 +158,10 @@ export class WindowController implements RendererFacade {
     string,
     { fingerprint: Promise<string>; promise: Promise<Intent> }
   >();
+  // Window-local provenance and permanent consumption, never backend authority.
+  private readonly editPreviews = new Map<string, EditReceipt>();
+  private readonly submittedEdits = new Map<string, SubmittedEdit>();
+  private readonly observedEdits = new Map<string, ObservedEdit>();
   constructor(
     private readonly api: PreloadApi,
     private readonly persistAppearance: (value: Appearance) => void = () => {},
@@ -577,6 +608,31 @@ export class WindowController implements RendererFacade {
       });
     return this.dispatch(intention, command, async () => {
       const before = this.state;
+      if (command.kind === "computer.apply-workspace-edit") {
+        if (this.submittedEdits.has(command.operationId))
+          return {
+            id: intention,
+            state: "refused",
+            code: "WORKSPACE_EDIT_ALREADY_CONSUMED",
+          };
+        const receipt = this.editPreviews.get(command.operationId);
+        this.submittedEdits.set(command.operationId, {
+          intention,
+          receipt:
+            receipt &&
+            before.configuration === receipt.configuration &&
+            before.evidence?.value === receipt.preview &&
+            this.sameEditOwner(receipt, before)
+              ? receipt
+              : null,
+        });
+      }
+      if (command.kind === "computer.observe-workspace-edit")
+        this.observedEdits.delete(command.operationId);
+      const acknowledged =
+        command.kind === "computer.ack-workspace-edit"
+          ? this.observedEdits.get(command.operationId)
+          : undefined;
       const order = this.configOrder.begin();
       let transport: Parameters<typeof classifyConfigurationResponse>[0];
       try {
@@ -683,12 +739,146 @@ export class WindowController implements RendererFacade {
           });
         }
       }
-      return {
+      const result: Intent = {
         id: intention,
         state: configurationEffectOutcome(outcome),
         code: outcome.result.ok ? null : outcome.result.error,
       };
+      const value = outcome.result.ok ? outcome.result.evidence : undefined;
+      if (
+        command.kind === "computer.prepare-workspace-edit" &&
+        value?.kind === "computer.workspace-edit-preview" &&
+        value.workspaceId === command.workspaceId &&
+        before.configuration?.status === "ready" &&
+        this.state.configuration?.status === "ready" &&
+        this.configOrder.isLatest(order) &&
+        revision === before.configuration.settings.revision &&
+        before.buildId &&
+        before.buildId === this.state.buildId &&
+        before.configuration.settings.computer.computerId ===
+          this.state.configuration.settings.computer.computerId &&
+        before.configuration.settings.computer.generation ===
+          this.state.configuration.settings.computer.generation &&
+        this.state.status === "current"
+      ) {
+        const retained = this.editPreviews.get(value.operationId);
+        if (
+          retained &&
+          (retained.buildId !== before.buildId ||
+            retained.computerId !==
+              before.configuration.settings.computer.computerId ||
+            retained.generation !==
+              before.configuration.settings.computer.generation ||
+            JSON.stringify(retained.preview) !== JSON.stringify(value))
+        )
+          return {
+            id: intention,
+            state: "unknown",
+            code: "WORKSPACE_EDIT_PREVIEW_UNCONFIRMED",
+          };
+        this.editPreviews.set(value.operationId, {
+          preview: value,
+          configuration: this.state.configuration,
+          buildId: before.buildId,
+          computerId: before.configuration.settings.computer.computerId,
+          generation: before.configuration.settings.computer.generation,
+        });
+      }
+      if (command.kind === "computer.observe-workspace-edit") {
+        // Only this parsed command reply can supply settlement evidence. Ambient
+        // snapshots, delivery IDs and another intention's evidence cannot.
+        this.observedEdits.delete(command.operationId);
+        const submitted = this.submittedEdits.get(command.operationId);
+        const receipt = submitted?.receipt;
+        if (
+          submitted &&
+          receipt &&
+          delivery === command.operationId &&
+          revision !== null &&
+          this.configOrder.isLatest(order) &&
+          this.samePendingEdit(receipt, before) &&
+          this.samePendingEdit(receipt, this.state) &&
+          (result.state === "applied" || result.state === "refused") &&
+          (result.state === "refused" ||
+            (value?.kind === "computer.workspace-mutation" &&
+              value.operation === "edit" &&
+              value.operationId === receipt.preview.operationId &&
+              value.workspaceId === receipt.preview.workspaceId &&
+              value.relativePath === receipt.preview.relativePath &&
+              value.beforeSha256 === receipt.preview.beforeSha256))
+        )
+          this.observedEdits.set(command.operationId, {
+            submitted,
+            configuration: this.state.configuration,
+            evidence: this.state.evidence,
+            state: result.state,
+            code: result.code,
+          });
+      }
+      if (
+        command.kind === "computer.ack-workspace-edit" &&
+        result.state === "applied" &&
+        revision !== null &&
+        this.configOrder.isLatest(order) &&
+        acknowledged?.submitted.receipt &&
+        before.workspaceEditDelivery === command.operationId &&
+        before.configuration === acknowledged.configuration &&
+        before.evidence === acknowledged.evidence &&
+        this.samePendingEdit(acknowledged.submitted.receipt, before) &&
+        this.sameEditOwner(acknowledged.submitted.receipt, this.state) &&
+        before.configuration?.status === "ready" &&
+        this.state.configuration?.status === "ready" &&
+        this.state.configuration.settings.revision >
+          before.configuration.settings.revision &&
+        this.state.configuration.settings.computer.pendingEdit === null
+      ) {
+        const original = this.state.intents[acknowledged.submitted.intention];
+        if (original?.state === "unknown")
+          this.patch({
+            intents: {
+              ...this.state.intents,
+              [original.id]: {
+                id: original.id,
+                state: acknowledged.state,
+                code: acknowledged.code,
+              },
+            },
+          });
+        // Retain both the submitted identity and the original dispatch latch.
+        // Settlement permits a NEW operation, never another original Apply.
+        this.observedEdits.delete(command.operationId);
+      }
+      return result;
     });
+  }
+  private sameEditOwner(
+    receipt: EditReceipt,
+    current: WindowSnapshot,
+  ): boolean {
+    return (
+      current.status === "current" &&
+      current.buildId === receipt.buildId &&
+      current.configuration?.status === "ready" &&
+      current.configuration.settings.computer.computerId ===
+        receipt.computerId &&
+      current.configuration.settings.computer.generation === receipt.generation
+    );
+  }
+  private samePendingEdit(
+    receipt: EditReceipt,
+    current: WindowSnapshot,
+  ): boolean {
+    const pending =
+      current.configuration?.status === "ready"
+        ? current.configuration.settings.computer.pendingEdit
+        : null;
+    return (
+      this.sameEditOwner(receipt, current) &&
+      pending?.operationId === receipt.preview.operationId &&
+      pending.workspaceId === receipt.preview.workspaceId &&
+      pending.relativePath === receipt.preview.relativePath &&
+      pending.computerGeneration === receipt.generation
+    );
   }
   task(command: ProductTaskCommand, intention: string): Promise<Intent> {
     if (!ProductTaskCommandSchema.safeParse(command).success)

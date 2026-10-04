@@ -118,15 +118,31 @@ export function Settings({ snapshot, facade }: SettingsProps) {
   const displayedSettings =
     configuration?.status === "ready" ? configuration.settings : lastReady;
   const busy = useRef(false);
-  const uncertain = useRef(false);
+  const uncertain = useRef<Intent | "unretained" | null>(null);
   const [unconfirmed, setUnconfirmed] = useState(false);
   const composing = useRef(false);
   const [message, setMessage] = useState("");
   const [pending, setPending] = useState(false);
+  const uncertaintySettled = (current: WindowSnapshot) => {
+    const original = uncertain.current;
+    const result =
+      original && original !== "unretained"
+        ? current.intents[original.id]
+        : null;
+    return Boolean(
+      original &&
+      original !== "unretained" &&
+      original.id.startsWith("settings:computer.apply-workspace-edit:") &&
+      result &&
+      result !== original &&
+      (result.state === "applied" || result.state === "refused"),
+    );
+  };
+  const locallyUnconfirmed = unconfirmed && !uncertaintySettled(snapshot);
   const allowed: Actions["allowed"] = () =>
-    !pending && !unconfirmed && !fenced(snapshot);
+    !pending && !locallyUnconfirmed && !fenced(snapshot);
   const actions: Actions = {
-    disabled: pending || unconfirmed || fenced(snapshot),
+    disabled: pending || locallyUnconfirmed || fenced(snapshot),
     allowed,
     async run(command, admit) {
       const current = facade.getSnapshot();
@@ -140,7 +156,7 @@ export function Settings({ snapshot, facade }: SettingsProps) {
       );
       if (
         busy.current ||
-        uncertain.current ||
+        (uncertain.current && !uncertaintySettled(current)) ||
         composing.current ||
         fenced(current)
       )
@@ -152,13 +168,15 @@ export function Settings({ snapshot, facade }: SettingsProps) {
         return null;
       }
       if (admit && !admit(current)) return null;
+      uncertain.current = null;
+      setUnconfirmed(false);
       busy.current = true;
       setPending(true);
       setMessage("Saving or checking…");
       try {
         const result = await facade.configure(command, id);
         if (result.state === "unknown") {
-          uncertain.current = true;
+          uncertain.current = result;
           setUnconfirmed(true);
         }
         setMessage(
@@ -174,7 +192,7 @@ export function Settings({ snapshot, facade }: SettingsProps) {
         return result;
       } catch {
         // Keep a local fence too if an adapter throws before retaining its intent.
-        uncertain.current = true;
+        uncertain.current = "unretained";
         setUnconfirmed(true);
         setMessage(
           "Outcome unknown. Do not repeat this action; inspect the existing result.",
@@ -849,7 +867,8 @@ function GuardedEdit({
         value?.kind === "computer.workspace-edit-preview" &&
         !(
           ambient?.kind === "computer.workspace-edit-preview" &&
-          ambient.operationId === value.operationId
+          ambient.operationId === value.operationId &&
+          JSON.stringify(ambient) !== JSON.stringify(value)
         ) &&
         !consumed.current.has(value.operationId) &&
         !editConsumed(current, value.operationId) &&
