@@ -50,14 +50,34 @@ type envelope struct {
 	Record  record `json:"record"`
 }
 
+// Owner Settings has its own strict v2 shape. Task fields are deliberately
+// absent; generation binds the result but is never part of the journal key.
+type ownerIdentity struct {
+	Scope       string `json:"scope"`
+	OperationID string `json:"operationId"`
+	OwnerID     string `json:"ownerId"`
+	ProfileID   string `json:"profileId"`
+	ComputerID  string `json:"computerId"`
+}
+type ownerRecord struct {
+	Identity           ownerIdentity `json:"identity"`
+	ComputerGeneration uint64        `json:"computerGeneration"`
+	WorkspaceID        string        `json:"workspaceId"`
+	RequestDigest      string        `json:"requestDigest"`
+	Phase              domain.Phase  `json:"phase"`
+	Outcome            *outcome      `json:"outcome"`
+}
+type ownerEnvelope struct {
+	Version uint8       `json:"schemaVersion"`
+	Kind    string      `json:"kind"`
+	Record  ownerRecord `json:"record"`
+}
+
 func toIdentity(i domain.Identity) identity {
 	return identity{i.OperationID, i.OwnerID, i.SessionID, i.TaskID, i.TaskEpoch, i.ParticipantID}
 }
 func (i identity) domain() domain.Identity {
 	return domain.Identity{OperationID: i.OperationID, OwnerID: i.OwnerID, SessionID: i.SessionID, TaskID: i.TaskID, TaskEpoch: i.TaskEpoch, ParticipantID: i.ParticipantID}
-}
-func validIdentity(i domain.Identity) bool {
-	return domain.Identifier(i.OperationID, 160) && domain.Identifier(i.OwnerID, 160) && domain.Identifier(i.SessionID, 160) && domain.Identifier(i.TaskID, 160) && domain.Identifier(i.ParticipantID, 160) && i.TaskEpoch <= domain.MaxSafeInteger
 }
 
 // quoteJS preserves valid UTF-8 HTML/U+2028/U+2029, astral characters and control
@@ -95,10 +115,13 @@ func quoteJS(text string) string {
 	return b.String()
 }
 func recordKey(i domain.Identity) (string, error) {
-	if !validIdentity(i) {
+	if !domain.ValidIdentity(i) {
 		return "", failure("WORKSPACE_MUTATION_STATE_INVALID")
 	}
 	raw := "[" + quoteJS(i.OperationID) + "," + quoteJS(i.OwnerID) + "," + quoteJS(i.SessionID) + "," + quoteJS(i.TaskID) + "," + strconv.FormatUint(i.TaskEpoch, 10) + "," + quoteJS(i.ParticipantID) + "]"
+	if i.Scope == domain.ScopeOwnerSettings {
+		raw = `["owner-settings-v2",` + quoteJS(i.OperationID) + "," + quoteJS(i.OwnerID) + "," + quoteJS(i.ProfileID) + "," + quoteJS(i.ComputerID) + "]"
+	}
 	digest := sha256.Sum256([]byte(raw))
 	return hex.EncodeToString(digest[:]) + ".json", nil
 }
@@ -123,7 +146,7 @@ func encode(state *domain.State) ([]byte, error) {
 		return nil, failure("WORKSPACE_MUTATION_STATE_INVALID")
 	}
 	b := state.Binding()
-	if _, err := domain.Restore(b, state.Phase(), state.Receipt(), state.Failure()); err != nil || !validIdentity(b.Identity) {
+	if _, err := domain.Restore(b, state.Phase(), state.Receipt(), state.Failure()); err != nil {
 		return nil, failure("WORKSPACE_MUTATION_STATE_INVALID")
 	}
 	r := record{Identity: toIdentity(b.Identity), WorkspaceID: b.WorkspaceID, RequestDigest: b.RequestDigest, Phase: state.Phase()}
@@ -133,15 +156,24 @@ func encode(state *domain.State) ([]byte, error) {
 	if f := state.Failure(); f != nil {
 		// v1 cannot encode the newer Go-only authority-store errors. Refuse storage
 		// instead of widening its enum or converting a known fact into another fact.
-		if !v1Failure(*f) {
+		if b.Identity.Scope == "" && !v1Failure(*f) {
 			return nil, failure("WORKSPACE_MUTATION_STATE_INVALID")
 		}
 		r.Outcome = &outcome{Code: f.Code, Source: f.Source}
 	}
+	var value any = envelope{Version: 1, Kind: "workspace_mutation", Record: r}
+	if i := b.Identity; i.Scope == domain.ScopeOwnerSettings {
+		// Restore above enforces the bounded classified domain failure vocabulary
+		// for v2, including authority-store. No diagnostic field is persisted.
+		value = ownerEnvelope{Version: 2, Kind: "workspace_owner_mutation", Record: ownerRecord{
+			Identity:           ownerIdentity{Scope: i.Scope, OperationID: i.OperationID, OwnerID: i.OwnerID, ProfileID: i.ProfileID, ComputerID: i.ComputerID},
+			ComputerGeneration: b.ComputerGeneration, WorkspaceID: b.WorkspaceID, RequestDigest: b.RequestDigest, Phase: r.Phase, Outcome: r.Outcome,
+		}}
+	}
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
 	enc.SetEscapeHTML(false)
-	if enc.Encode(envelope{Version: 1, Kind: "workspace_mutation", Record: r}) != nil {
+	if enc.Encode(value) != nil {
 		return nil, failure("WORKSPACE_MUTATION_STATE_INVALID")
 	}
 	raw, err := jsSeparators(buf.Bytes())
@@ -178,37 +210,72 @@ func jsSeparators(raw []byte) ([]byte, error) {
 	}
 	return out.Bytes(), nil
 }
+func decodeStrict(raw []byte, value any) error {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(value); err != nil {
+		return err
+	}
+	if dec.Decode(new(any)) != io.EOF {
+		return failure("WORKSPACE_MUTATION_STATE_CORRUPT")
+	}
+	return nil
+}
 func decode(raw []byte) (*domain.State, error) {
 	corrupt := func() (*domain.State, error) { return nil, failure("WORKSPACE_MUTATION_STATE_CORRUPT") }
 	if len(raw) == 0 || len(raw) > maxRecordBytes || !utf8.Valid(raw) {
 		return corrupt()
 	}
-	dec := json.NewDecoder(bytes.NewReader(raw))
-	dec.DisallowUnknownFields()
-	var e envelope
-	if dec.Decode(&e) != nil || dec.Decode(new(any)) != io.EOF || e.Version != 1 || e.Kind != "workspace_mutation" {
+	var header struct {
+		Version uint8           `json:"schemaVersion"`
+		Kind    string          `json:"kind"`
+		Record  json.RawMessage `json:"record"`
+	}
+	if decodeStrict(raw, &header) != nil {
 		return corrupt()
 	}
-	r := e.Record
+	var b domain.Binding
+	var phase domain.Phase
+	var result *outcome
+	switch {
+	case header.Version == 1 && header.Kind == "workspace_mutation":
+		var e envelope
+		if decodeStrict(raw, &e) != nil {
+			return corrupt()
+		}
+		r := e.Record
+		b = domain.Binding{Identity: r.Identity.domain(), WorkspaceID: r.WorkspaceID, RequestDigest: r.RequestDigest}
+		phase, result = r.Phase, r.Outcome
+	case header.Version == 2 && header.Kind == "workspace_owner_mutation":
+		var e ownerEnvelope
+		if decodeStrict(raw, &e) != nil || e.Record.Identity.Scope != domain.ScopeOwnerSettings {
+			return corrupt()
+		}
+		r, i := e.Record, e.Record.Identity
+		b = domain.Binding{Identity: domain.Identity{Scope: i.Scope, OperationID: i.OperationID, OwnerID: i.OwnerID, ProfileID: i.ProfileID, ComputerID: i.ComputerID}, ComputerGeneration: r.ComputerGeneration, WorkspaceID: r.WorkspaceID, RequestDigest: r.RequestDigest}
+		phase, result = r.Phase, r.Outcome
+	default:
+		return corrupt()
+	}
 	var rec *domain.Receipt
 	var f *domain.Failure
-	if r.Outcome != nil {
-		if r.Outcome.Receipt != nil {
-			v := r.Outcome.Receipt
-			if v.Kind != "workspace.mutation" || r.Outcome.Code != "" || r.Outcome.Source != "" {
+	if result != nil {
+		if result.Receipt != nil {
+			v := result.Receipt
+			if v.Kind != "workspace.mutation" || result.Code != "" || result.Source != "" {
 				return corrupt()
 			}
 			rec = &domain.Receipt{Operation: v.Operation, RelativePath: v.RelativePath, Bytes: v.Bytes, Replacements: v.Replacements, BeforeSHA256: v.BeforeSHA256, AfterSHA256: v.AfterSHA256}
 		} else {
-			f = &domain.Failure{Code: r.Outcome.Code, Source: r.Outcome.Source}
+			f = &domain.Failure{Code: result.Code, Source: result.Source}
 		}
 	}
-	state, err := domain.Restore(domain.Binding{Identity: r.Identity.domain(), WorkspaceID: r.WorkspaceID, RequestDigest: r.RequestDigest}, r.Phase, rec, f)
+	state, err := domain.Restore(b, phase, rec, f)
 	if err != nil {
 		return corrupt()
 	}
 	canonical, err := encode(state)
-	// Strict canonical v1 only. No conversion of alternate numbers, duplicate keys,
+	// Strict canonical bytes only. No conversion of alternate numbers, duplicate keys,
 	// malformed surrogates, unknown/missing fields, whitespace or historical formats.
 	if err != nil || !bytes.Equal(canonical, raw) {
 		return corrupt()

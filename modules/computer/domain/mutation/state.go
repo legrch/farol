@@ -2,14 +2,18 @@ package mutation
 
 import "github.com/legrch/farol/modules/computer/domain/authority"
 
+const ScopeOwnerSettings = "owner-settings"
+
 type Identity struct {
 	OperationID, OwnerID, SessionID, TaskID string
 	TaskEpoch                               uint64
 	ParticipantID                           string
+	Scope, ProfileID, ComputerID            string
 }
 type Binding struct {
 	Identity                   Identity
 	WorkspaceID, RequestDigest string
+	ComputerGeneration         uint64
 }
 type Receipt struct {
 	Operation    Kind
@@ -58,9 +62,24 @@ func (r State) Failure() *Failure {
 	return &copy
 }
 func (r State) Clone() State { r.receipt = r.Receipt(); r.failure = r.Failure(); return r }
+
+// ValidIdentity distinguishes the unchanged zero-scope task identity from an
+// explicit owner Settings identity. Neither form grants execution authority.
+func ValidIdentity(i Identity) bool {
+	if !Identifier(i.OperationID, 160) || !Identifier(i.OwnerID, 160) {
+		return false
+	}
+	switch i.Scope {
+	case "":
+		return i.ProfileID == "" && i.ComputerID == "" && Identifier(i.SessionID, 160) && Identifier(i.TaskID, 160) && i.TaskEpoch <= MaxSafeInteger && Identifier(i.ParticipantID, 160)
+	case ScopeOwnerSettings:
+		return Identifier(i.ProfileID, 160) && Identifier(i.ComputerID, 160) && i.SessionID == "" && i.TaskID == "" && i.TaskEpoch == 0 && i.ParticipantID == ""
+	default:
+		return false
+	}
+}
 func validBinding(b Binding) bool {
-	i := b.Identity
-	return Identifier(i.OperationID, 160) && Identifier(i.OwnerID, 160) && Identifier(i.SessionID, 160) && Identifier(i.TaskID, 160) && i.TaskEpoch <= MaxSafeInteger && Identifier(i.ParticipantID, 160) && Identifier(b.WorkspaceID, 160) && SHA256(b.RequestDigest)
+	return ValidIdentity(b.Identity) && Identifier(b.WorkspaceID, 160) && SHA256(b.RequestDigest) && b.ComputerGeneration <= MaxSafeInteger && (b.Identity.Scope == ScopeOwnerSettings || b.ComputerGeneration == 0)
 }
 
 // Stored receipt policy matches the existing private journal schema. Native
