@@ -25,6 +25,13 @@ export class BridgeError extends Error {
     super(code);
   }
 }
+// A local refusal before stdin.write, not a remote outcome or a pipe error.
+// Keep this distinct from an identically named provider/protocol failure.
+export class RequestNotSentError extends BridgeError {
+  constructor() {
+    super("unavailable", "backpressure");
+  }
+}
 type Pending = {
   resolve: (outcome: Outcome) => void;
   reject: (error: BridgeError) => void;
@@ -223,7 +230,7 @@ export class Client {
         new BridgeError("unavailable", "backend_unavailable"),
       );
     if (this.pending.size >= 32 || this.writerBusy || this.used.size >= 4096)
-      return Promise.reject(new BridgeError("unavailable", "backpressure"));
+      return Promise.reject(new RequestNotSentError());
     if (this.used.has(id))
       return Promise.reject(new BridgeError("refused", "duplicate_request_id"));
     if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || timeoutMs > 30000)

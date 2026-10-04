@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { BridgeError, type Client } from "./client.ts";
+import { BridgeError, RequestNotSentError, type Client } from "./client.ts";
 import {
   validate,
   type Json,
@@ -8,10 +8,31 @@ import {
   type ComputerSettingsMutationResponse,
 } from "./wire.ts";
 
+class SettingsMutationNotAdmitted extends BridgeError {
+  constructor() {
+    super("refused", "WORKSPACE_MUTATION_NOT_ADMITTED");
+  }
+}
+
+// Presentation of transport evidence only; this cannot clear pending delivery,
+// release authority, authorize a retry or fabricate a Go mutation receipt.
+export async function reportSettingsMutationFailure(
+  error: unknown,
+  recordUnknown?: () => Promise<unknown>,
+): Promise<
+  "WORKSPACE_MUTATION_NOT_ADMITTED" | "WORKSPACE_MUTATION_OUTCOME_UNKNOWN"
+> {
+  if (error instanceof SettingsMutationNotAdmitted)
+    return "WORKSPACE_MUTATION_NOT_ADMITTED";
+  await recordUnknown?.();
+  return "WORKSPACE_MUTATION_OUTCOME_UNKNOWN";
+}
+
 // Transport only. Go owns admission, native execution, retained state and
 // retirement. Observation never reissues the edit or renews its authority.
 export class SettingsMutationBridge {
   private readonly attempted = new Set<string>();
+  private readonly notSent = new Map<string, string>();
   constructor(
     private readonly client: Pick<Client, "request" | "verifiedContext">,
   ) {}
@@ -68,19 +89,51 @@ export class SettingsMutationBridge {
     const context = { ...this.client.verifiedContext };
     const id = randomUUID();
     const effect = method === "computer.settings.edit";
-    const outcome = await this.client.request(method, body as unknown as Json, {
-      id,
-      ...(effect ? { operationId: selected.operationId } : {}),
-      timeoutMs: 16_000,
-    });
+    const identity = JSON.stringify([
+      context.profileId,
+      context.backendGeneration,
+      selected.operationId,
+      selected.workspaceId,
+      selected.relativePath,
+      selected.computerGeneration,
+    ]);
+    let outcome;
+    try {
+      outcome = await this.client.request(method, body as unknown as Json, {
+        id,
+        ...(effect ? { operationId: selected.operationId } : {}),
+        timeoutMs: 16_000,
+      });
+    } catch (error) {
+      if (effect && error instanceof RequestNotSentError) {
+        this.notSent.set(selected.operationId, identity);
+        throw new SettingsMutationNotAdmitted();
+      }
+      if (!effect) this.notSent.delete(selected.operationId);
+      throw error;
+    }
     if (
       !validate("Outcome", outcome) ||
       outcome.requestId !== id ||
       outcome.operationId !== (effect ? selected.operationId : undefined) ||
       outcome.context.profileId !== context.profileId ||
       outcome.context.backendGeneration !== context.backendGeneration
-    )
+    ) {
+      if (!effect) this.notSent.delete(selected.operationId);
       throw new BridgeError("unknown", "crossed_settings_mutation_result");
+    }
+    // Absence alone never settles a lost Send. Only the exact original local
+    // non-dispatch proof plus a correlated read may present non-admission.
+    // This proof is intentionally not reconstructed in a new host lifetime.
+    if (
+      !effect &&
+      outcome.status === "refused" &&
+      outcome.code === "COMPUTER_MUTATION_OPERATION_NOT_FOUND" &&
+      outcome.data === undefined &&
+      this.notSent.get(selected.operationId) === identity
+    )
+      throw new SettingsMutationNotAdmitted();
+    if (!effect) this.notSent.delete(selected.operationId);
     if (outcome.status !== "ok")
       throw new BridgeError(
         outcome.status,

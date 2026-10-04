@@ -1,5 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
-import { SettingsMutationBridge } from "../../apps/desktop/bridge/settings-mutation";
+import {
+  SettingsMutationBridge,
+  reportSettingsMutationFailure,
+} from "../../apps/desktop/bridge/settings-mutation";
+import {
+  BridgeError,
+  RequestNotSentError,
+} from "../../apps/desktop/bridge/client";
 import { PendingWorkspaceEditDeliverySchema } from "../../src/pkg/product-settings/contract";
 import type { Client } from "../../apps/desktop/bridge/client";
 import type {
@@ -76,6 +83,96 @@ function fixture(change?: (outcome: MutableOutcome) => unknown) {
   };
 }
 describe("Go owner mutation transport", () => {
+  it("does not reuse non-dispatch proof after a contradictory result", async () => {
+    const f = fixture();
+    f.request.mockRejectedValueOnce(new RequestNotSentError());
+    expect(
+      await f.bridge
+        .edit("operation", input)
+        .catch(reportSettingsMutationFailure),
+    ).toBe("WORKSPACE_MUTATION_NOT_ADMITTED");
+    expect(await f.bridge.observe(selected)).toEqual(terminal);
+    f.request.mockImplementationOnce(async (_method, _body, options = {}) => ({
+      status: "refused",
+      code: "COMPUTER_MUTATION_OPERATION_NOT_FOUND",
+      requestId: options.id!,
+      context,
+    }));
+    expect(
+      await f.bridge.observe(selected).catch(reportSettingsMutationFailure),
+    ).toBe("WORKSPACE_MUTATION_OUTCOME_UNKNOWN");
+  });
+  it.each([
+    "lost",
+    "plainError",
+    "remoteBackpressure",
+    "crossedRead",
+    "otherPath",
+    "otherGeneration",
+    "newLifetime",
+  ])(
+    "does not turn %s plus a missing record into proof of no effect",
+    async (kind) => {
+      const f = fixture();
+      if (kind === "lost")
+        f.request.mockRejectedValueOnce(
+          new BridgeError("unknown", "response_timeout"),
+        );
+      else if (kind === "plainError")
+        f.request.mockRejectedValueOnce(
+          new BridgeError("unavailable", "backpressure"),
+        );
+      else if (kind === "remoteBackpressure")
+        f.request.mockImplementationOnce(
+          async (_method, _body, options = {}) => ({
+            status: "unavailable",
+            code: "backpressure",
+            requestId: options.id!,
+            operationId: options.operationId!,
+            context,
+          }),
+        );
+      else f.request.mockRejectedValueOnce(new RequestNotSentError());
+      const invalidation = vi.fn(async () => undefined);
+      const report = (error: unknown) =>
+        reportSettingsMutationFailure(error, invalidation);
+      const first = await f.bridge.edit("operation", input).catch(report);
+      expect(first).toBe(
+        ["lost", "plainError", "remoteBackpressure"].includes(kind)
+          ? "WORKSPACE_MUTATION_OUTCOME_UNKNOWN"
+          : "WORKSPACE_MUTATION_NOT_ADMITTED",
+      );
+      invalidation.mockClear();
+      f.request.mockImplementationOnce(
+        async (_method, _body, options = {}) => ({
+          status: "refused",
+          code: "COMPUTER_MUTATION_OPERATION_NOT_FOUND",
+          requestId: kind === "crossedRead" ? "other" : options.id!,
+          context,
+        }),
+      );
+      const observer =
+        kind === "newLifetime"
+          ? new SettingsMutationBridge({
+              request: f.request,
+              verifiedContext: context,
+            })
+          : f.bridge;
+      const read = {
+        ...selected,
+        ...(kind === "otherPath" ? { relativePath: "other.md" } : {}),
+        ...(kind === "otherGeneration" ? { computerGeneration: "5" } : {}),
+      };
+      expect(await observer.observe(read).catch(report)).toBe(
+        "WORKSPACE_MUTATION_OUTCOME_UNKNOWN",
+      );
+      expect(invalidation).toHaveBeenCalledTimes(1);
+      await expect(f.bridge.edit("operation", input)).rejects.toMatchObject({
+        code: "settings_mutation_attempt_consumed",
+      });
+      expect(f.request).toHaveBeenCalledTimes(2);
+    },
+  );
   it("sends exactly once then observes the original metadata without another effect", async () => {
     const f = fixture();
     expect(await f.bridge.edit("operation", input)).toEqual(terminal);

@@ -9,6 +9,7 @@ import type {
 import { createDesktopChatBrowser } from "../../../apps/desktop/go-chat-host";
 import { GoChatBrowserDriver } from "../../../apps/desktop/go-chat-browser";
 import { BridgeError } from "../../../apps/desktop/bridge/client";
+import { reportSettingsMutationFailure } from "../../../apps/desktop/bridge/settings-mutation";
 import { readGoWorkspaceSnapshot } from "../../../apps/desktop/go-workspace-snapshot";
 import { ReadAccountConfirmation } from "../../../apps/desktop/read-account-confirmation";
 import {
@@ -7937,13 +7938,16 @@ async function configureAdmittedProduct(
               command.newText,
             );
             return await goWorkspaceEditResult(result, pending, false);
-          } catch {
-            // A transport/admission refusal is not a terminal mutation receipt.
-            // Keep this exact Go identity available to Observe, never fall back.
-            await configuration.recordComputerMutationOutcomeUnknown(
-              pending.workspaceId,
+          } catch (error) {
+            // Keep the exact pending identity and consumed Apply even when the
+            // transport proves it refused this request before any dispatch.
+            return configurationFailure(
+              await reportSettingsMutationFailure(error, () =>
+                configuration!.recordComputerMutationOutcomeUnknown(
+                  pending.workspaceId,
+                ),
+              ),
             );
-            return configurationFailure("WORKSPACE_MUTATION_OUTCOME_UNKNOWN");
           } finally {
             await configuration.releaseWorkspaceEditLease(pending.operationId);
           }
@@ -8015,8 +8019,10 @@ async function configureAdmittedProduct(
             },
           );
           return await goWorkspaceEditResult(result, pendingEdit, true);
-        } catch {
-          return configurationFailure("WORKSPACE_MUTATION_OUTCOME_UNKNOWN");
+        } catch (error) {
+          return configurationFailure(
+            await reportSettingsMutationFailure(error),
+          );
         }
       }
       // Observation reads the durable operation record only: it executes
