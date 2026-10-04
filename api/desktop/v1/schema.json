@@ -60,7 +60,10 @@
     "computer.settings.edit": "effect",
     "computer.settings.mutation.read": "read",
     "computer.settings.store.next": "read",
-    "computer.settings.store.reply": "effect"
+    "computer.settings.store.reply": "effect",
+    "computer.settings.delivery.apply": "effect",
+    "computer.settings.delivery.observe": "effect",
+    "computer.settings.delivery.ack": "effect"
   },
   "definitions": {
     "Context": {
@@ -3564,6 +3567,81 @@
         "command": {
           "type": "SettingsStoreCommand",
           "optional": true
+        }
+      }
+    },
+    "SettingsDeliveryApply": {
+      "type": "object",
+      "fields": {
+        "deadlineMillis": {
+          "type": "decimal"
+        },
+        "request": {
+          "type": "ComputerSettingsEditRequest"
+        }
+      }
+    },
+    "SettingsDeliveryObserve": {
+      "type": "object",
+      "fields": {
+        "deadlineMillis": {
+          "type": "decimal"
+        },
+        "pending": {
+          "type": "SettingsStorePending"
+        }
+      }
+    },
+    "SettingsDeliveryResult": {
+      "type": "object",
+      "fields": {
+        "state": {
+          "type": "string",
+          "values": ["pending", "offered"]
+        },
+        "pending": {
+          "type": "SettingsStorePending"
+        },
+        "receiptId": {
+          "type": "id",
+          "optional": true
+        },
+        "result": {
+          "type": "ComputerSettingsMutationResponse",
+          "optional": true
+        },
+        "retention": {
+          "type": "string",
+          "values": ["durable", "memory_only"],
+          "optional": true
+        }
+      }
+    },
+    "SettingsDeliveryACK": {
+      "type": "object",
+      "fields": {
+        "deadlineMillis": {
+          "type": "decimal"
+        },
+        "receiptId": {
+          "type": "id"
+        },
+        "pending": {
+          "type": "SettingsStorePending"
+        }
+      }
+    },
+    "SettingsDeliveryACKResult": {
+      "type": "object",
+      "fields": {
+        "receiptId": {
+          "type": "id"
+        },
+        "pending": {
+          "type": "SettingsStorePending"
+        },
+        "acknowledged": {
+          "type": "boolean"
         }
       }
     }
