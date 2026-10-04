@@ -1275,6 +1275,8 @@ export type ChatGptRouteOptions = Readonly<{
   // Candidate source profile. Production composition must opt in only after
   // native DOM qualification; callbacks alone never enable unproved selectors.
   publicOutputProfile?: "message-anchors-v1";
+  // Independent session snapshot profile; it never grants Go account authority.
+  accountObservationProfile?: "provider-session-v1";
   // Synthetic settled units require a separately selected loopback fixture.
   physicalContentProfile?: PhysicalPageContentProfile;
   taskTimeoutMs?: number;
@@ -3788,7 +3790,12 @@ export class ChatGptRoute {
         throw new Error("PHYSICAL_BINDING_LOST");
       return candidate;
     };
-    const pagePolicy = { e2eOrigin: this.options.e2eOrigin };
+    const pagePolicy = {
+      e2eOrigin: this.options.e2eOrigin,
+      ...(this.options.accountObservationProfile
+        ? { accountObservationProfile: this.options.accountObservationProfile }
+        : {}),
+    };
     const contentProfile =
       this.options.physicalContentProfile ?? "message-anchors-v1";
     this.chatPhysicalApi = new ChatGptPhysical({

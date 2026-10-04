@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
+import { ChatGptAccountObservationSchema } from "./chatgpt-account-probe";
 import { PublicTurnFrameSchema } from "../../src/apps/desktop/chatgpt-public-turn";
 import type {
   ChatGptPhysicalApi,
@@ -114,6 +115,7 @@ const boundFields = {
 const boundSchema = z.strictObject(boundFields);
 const witnessSchema = z.strictObject({
   ...boundFields,
+  account: ChatGptAccountObservationSchema.optional(),
   evidenceId: id,
   intentDigest: id,
   previous: previousSchema,
@@ -147,6 +149,7 @@ const failureSchema = z.strictObject({
   code,
 });
 const rawWitnessSchema = z.strictObject({
+  account: ChatGptAccountObservationSchema.optional(),
   state: z.literal("witnessed"),
   binding: bindingSchema,
   operationId: id,
@@ -431,6 +434,7 @@ export class ChatGptPhysical implements ChatGptPhysicalApi {
     );
     if (!surface) return refuse("PHYSICAL_BINDING_LOST");
     try {
+      const startedAt = this.now();
       const raw = await this.port.verifySend(surface, request);
       const current = this.current(surface, guard, request.deadlineMillis);
       if (
@@ -450,6 +454,12 @@ export class ChatGptPhysical implements ChatGptPhysicalApi {
         proof.operationId !== request.operationId ||
         proof.intentDigest !== request.intentDigest ||
         !same(proof.previous, request.previous) ||
+        (proof.account !== undefined &&
+          (proof.account.state !== "observed" ||
+            proof.account.documentUrl !== request.binding.url ||
+            proof.account.observedAtMillis < startedAt ||
+            proof.account.observedAtMillis > this.now() ||
+            proof.account.expiresAtMillis <= this.now())) ||
         !this.selectionMatches(request.selection, proof.observed) ||
         this.witnesses.has(proof.evidenceId) ||
         new Set(proof.baselineUserIds).size !== proof.baselineUserIds.length ||
@@ -459,6 +469,7 @@ export class ChatGptPhysical implements ChatGptPhysicalApi {
       const witness: PhysicalWitness = {
         ...request,
         evidenceId: proof.evidenceId,
+        ...(proof.account ? { account: proof.account } : {}),
         selection: {
           declared: request.selection,
           observed: proof.observed,

@@ -1,4 +1,5 @@
 import type { z } from "zod";
+import type { ChatGptAccountObservation } from "./chatgpt-account-probe";
 import type { PublicTurnFrameSchema } from "../../src/apps/desktop/chatgpt-public-turn";
 
 // Physical browser contract only. Go owns leases, resolution, admission,
@@ -93,6 +94,9 @@ export type PhysicalWitness = BoundOperation &
     intentDigest: string; // Opaque Go envelope digest; NOT normalized prompt SHA.
     previous: PhysicalPrevious;
     selection: PhysicalSelectionEvidence;
+    // Independent page observation, never the declared AccountID or a grant.
+    // Absent means unqualified; Go account admission must refuse it.
+    account?: ChatGptAccountObservation | undefined;
   }>;
 export type PhysicalCorrelation = Readonly<{
   userTurnId: string | null;

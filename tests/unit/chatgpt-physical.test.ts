@@ -949,3 +949,83 @@ describe("dedicated physical host facade", () => {
     });
   });
 });
+
+describe("independent account witness at the physical host boundary", () => {
+  const account = {
+    state: "observed",
+    source: "provider-session-v1",
+    accountKey: "a".repeat(64),
+    observedAtMillis: 1000,
+    expiresAtMillis: 60_000,
+    documentUrl: home.url,
+  } as const;
+  function attach(h: ReturnType<typeof harness>, value: unknown) {
+    const original = h.port.verifySend;
+    h.port.verifySend = vi.fn(async (surface, request) => {
+      const reply = await original(surface, request);
+      if (reply === null || typeof reply !== "object")
+        throw new Error("invalid fixture");
+      return { ...reply, account: value };
+    });
+  }
+  it("preserves independent account facts without deriving them from declared pins", async () => {
+    const h = harness();
+    attach(h, account);
+    const witness = await h.witness();
+    expect(witness.account).toEqual(account);
+    expect(witness.account).not.toHaveProperty("accountId");
+    const changed = {
+      ...witness,
+      account: { ...account, accountKey: "b".repeat(64) },
+    };
+    expect(
+      await h.api.send(
+        {
+          ...h.operation,
+          witness: changed,
+          intentDigest: h.verify.intentDigest,
+          prompt: "text",
+        },
+        h.guard,
+      ),
+    ).toMatchObject({ state: "not-sent" });
+    expect(h.port.send).not.toHaveBeenCalled();
+    expect(
+      await h.api.send(
+        {
+          ...h.operation,
+          witness,
+          intentDigest: h.verify.intentDigest,
+          prompt: "text",
+        },
+        h.guard,
+      ),
+    ).toMatchObject({ state: "submitted" });
+    expect(vi.mocked(h.port.send).mock.calls[0]?.[1].witness.account).toEqual(
+      account,
+    );
+  });
+  it.each([
+    { ...account, documentUrl: bound.url },
+    { ...account, observedAtMillis: 999 },
+    { ...account, observedAtMillis: 1001 },
+    { ...account, expiresAtMillis: 1000 },
+    { ...account, accountKey: pins.accountId },
+    { ...account, documentUrl: `${home.url}?token=private-canary` },
+    { state: "unavailable", code: "timeout" },
+  ])(
+    "refuses crossed, stale, malformed or unavailable account evidence",
+    async (value) => {
+      const h = harness();
+      attach(h, value);
+      const result = await h.api.verifySend(h.verify, h.guard);
+      expect(result.state).toBe("refused");
+      expect(result).not.toHaveProperty("witness");
+      expect(JSON.stringify(result)).not.toContain("private-canary");
+      expect(h.port.send).not.toHaveBeenCalled();
+    },
+  );
+  it("keeps an omitted observation absent instead of turning a configured pin into a fact", async () => {
+    expect((await harness().witness()).account).toBeUndefined();
+  });
+});

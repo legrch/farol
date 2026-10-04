@@ -175,13 +175,55 @@ class SyntheticElement {
   }
 }
 
-type FactoryPolicy = Readonly<{ e2eOrigin: string | null }>;
+type FactoryPolicy = Readonly<{
+  e2eOrigin: string | null;
+  accountObservationProfile?: "provider-session-v1";
+}>;
 function page({
   editable = false,
   isHome = false,
   e2eOrigin = null,
-}: { editable?: boolean; isHome?: boolean; e2eOrigin?: string | null } = {}) {
-  const policy: FactoryPolicy = { e2eOrigin };
+  account = false,
+}: {
+  editable?: boolean;
+  isHome?: boolean;
+  e2eOrigin?: string | null;
+  account?: boolean;
+} = {}) {
+  const policy: FactoryPolicy = {
+    e2eOrigin,
+    ...(account
+      ? { accountObservationProfile: "provider-session-v1" as const }
+      : {}),
+  };
+  let accountID: string | null = "fixture-account-A";
+  let userID = "fixture-user-A";
+  let accountRequests = 0;
+  let accountTime = Date.now();
+  let onAccountFetch: () => void | Promise<void> = () => {};
+  const fetchAccount = async () => {
+    accountRequests++;
+    await onAccountFetch();
+    const payload = JSON.stringify({
+      user: { id: userID },
+      account: accountID === null ? null : { id: accountID },
+      expires: new Date(accountTime + 60_000).toISOString(),
+      accessToken: "never-exported-auth-canary",
+    });
+    return {
+      url: `${e2eOrigin ?? "https://chatgpt.com"}/api/auth/session`,
+      type: "basic",
+      redirected: false,
+      status: 200,
+      headers: { get: () => "application/json" },
+      body: new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode(payload));
+          controller.close();
+        },
+      }),
+    };
+  };
   const effects = {
     focus: 0,
     events: 0,
@@ -349,6 +391,24 @@ function page({
     location,
     URL,
     TextEncoder,
+    TextDecoder,
+    Uint8Array,
+    ArrayBuffer,
+    ReadableStream,
+    AbortController,
+    performance,
+    setTimeout,
+    clearTimeout,
+    ...(account
+      ? {
+          Date: class extends Date {
+            static override now() {
+              return accountTime;
+            }
+          },
+          fetch: fetchAccount,
+        }
+      : {}),
     crypto: {
       randomUUID: () => webcrypto.randomUUID(),
       subtle: {
@@ -406,6 +466,7 @@ function page({
       intentDigest: result.intentDigest,
       previous: result.previous,
       selection: evidence,
+      ...(result.account ? { account: result.account } : {}),
     };
     return { ...result, witness };
   };
@@ -470,6 +531,19 @@ function page({
     );
   return {
     policy,
+    account: {
+      requests: () => accountRequests,
+      change: (next: string | null, user = userID) => {
+        accountID = next;
+        userID = user;
+      },
+      beforeFetch: (fn: () => void | Promise<void>) => {
+        onAccountFetch = fn;
+      },
+      advance: (milliseconds: number) => {
+        accountTime += milliseconds;
+      },
+    },
     root,
     form,
     composer,
@@ -1712,7 +1786,6 @@ describe("physical PAGE scripts: synthetic DOM source qualification only", () =>
       prompt,
     });
     for (const source of [...readonlySources, sendSource]) {
-      expect(source).not.toContain("observedAtMillis");
       for (const value of [
         ...Object.values(pins).filter(
           (v): v is string => typeof v === "string",
@@ -1733,6 +1806,7 @@ describe("physical PAGE scripts: synthetic DOM source qualification only", () =>
     });
     expect(rawVerify).not.toHaveProperty("witness");
     expect(rawVerify).not.toHaveProperty("selection");
+    expect(rawVerify).not.toHaveProperty("account");
     expect(JSON.stringify(rawVerify)).not.toContain("private-account");
     expect(
       await p.sendWitness(verified.witness, prompt, candidate),
@@ -1765,5 +1839,135 @@ describe("physical PAGE scripts: synthetic DOM source qualification only", () =>
         .deadlineMillis,
     ).toBe(1); // Host owns deadline enforcement.
     expect(Object.values(p.effects).every((n) => n === 0)).toBe(true);
+  });
+});
+
+describe("account-bound page witness: offline snapshot mechanics only", () => {
+  it.each([null, "http://127.0.0.1:4317"])(
+    "observes independently twice and sends once at %s",
+    async (e2eOrigin) => {
+      const p = page({ isHome: true, account: true, e2eOrigin });
+      const verified = await p.verify();
+      expect(verified.account).toMatchObject({
+        state: "observed",
+        source: "provider-session-v1",
+        documentUrl: p.binding.url,
+      });
+      expect(JSON.stringify(verified)).not.toContain("fixture-account-A");
+      expect(JSON.stringify(verified)).not.toContain(
+        "never-exported-auth-canary",
+      );
+      expect(p.account.requests()).toBe(1);
+      expect(await p.sendWitness(verified.witness)).toMatchObject({
+        state: "submitted",
+      });
+      expect(p.account.requests()).toBe(2);
+      expect(p.effects.send).toBe(1);
+      expect(await p.sendWitness(verified.witness)).toMatchObject({
+        state: "not-sent",
+        code: "PHYSICAL_WITNESS_INVALID",
+      });
+      expect(p.account.requests()).toBe(2);
+      expect(p.effects.send).toBe(1);
+    },
+  );
+  it.each(["account", "user"])(
+    "refuses changed %s despite unchanged document and controls",
+    async (changed) => {
+      const p = page({ account: true });
+      const verified = await p.verify();
+      p.account.change(
+        changed === "account" ? "fixture-account-B" : "fixture-account-A",
+        changed === "user" ? "fixture-user-B" : "fixture-user-A",
+      );
+      expect(await p.sendWitness(verified.witness)).toMatchObject({
+        state: "not-sent",
+        code: "PHYSICAL_ACCOUNT_CHANGED",
+      });
+      expect(p.account.requests()).toBe(2);
+      expect(Object.values(p.effects).every((n) => n === 0)).toBe(true);
+      p.account.change("fixture-account-A", "fixture-user-A");
+      expect(await p.sendWitness(verified.witness)).toMatchObject({
+        state: "not-sent",
+        code: "PHYSICAL_WITNESS_INVALID",
+      });
+      expect(p.account.requests()).toBe(2);
+    },
+  );
+  it("refuses unavailable current account without insertion or replay", async () => {
+    const p = page({ account: true });
+    const verified = await p.verify();
+    p.account.change(null);
+    expect(await p.sendWitness(verified.witness)).toMatchObject({
+      state: "not-sent",
+      code: "PHYSICAL_ACCOUNT_UNAVAILABLE",
+    });
+    expect(Object.values(p.effects).every((n) => n === 0)).toBe(true);
+  });
+  it("does not mint a witness from a missing account", async () => {
+    const p = page({ account: true });
+    p.account.change(null);
+    expect(
+      await p.run(physicalVerifySendScript(p.input, p.policy)),
+    ).toMatchObject({ state: "refused", code: "PHYSICAL_ACCOUNT_UNAVAILABLE" });
+    expect(Object.values(p.effects).every((n) => n === 0)).toBe(true);
+  });
+  it("cannot drop the selected account observation profile at Send", async () => {
+    const p = page({ account: true });
+    const { witness } = await p.verify();
+    expect(
+      await p.run(physicalSendScript({ ...p.input, witness, prompt: "text" })),
+    ).toMatchObject({ state: "not-sent", code: "PHYSICAL_WITNESS_INVALID" });
+    expect(p.effects.send).toBe(0);
+    expect(p.account.requests()).toBe(1);
+  });
+  it("cannot replace the page-held principal with a caller-supplied observation", async () => {
+    const p = page({ account: true });
+    const { witness } = await p.verify();
+    if (witness.account?.state !== "observed")
+      throw new Error("missing fixture observation");
+    const changed = {
+      ...witness,
+      account: { ...witness.account, accountKey: "b".repeat(64) },
+    };
+    expect(await p.sendWitness(changed)).toMatchObject({
+      state: "not-sent",
+      code: "PHYSICAL_WITNESS_INVALID",
+    });
+    expect(p.effects.send).toBe(0);
+    expect(p.account.requests()).toBe(1);
+  });
+  it("rechecks deadline after the account fetch before insertion", async () => {
+    const p = page({ account: true });
+    const { witness } = await p.verify();
+    p.account.beforeFetch(() => p.account.advance(120_000));
+    expect(await p.sendWitness(witness)).toMatchObject({
+      state: "not-sent",
+      code: "PHYSICAL_ACCOUNT_DEADLINE",
+    });
+    expect(Object.values(p.effects).every((n) => n === 0)).toBe(true);
+  });
+  it("rechecks controls after the final account fetch", async () => {
+    const p = page({ account: true });
+    const { witness } = await p.verify();
+    p.account.beforeFetch(() => {
+      p.model.innerText = "Different model";
+    });
+    expect(await p.sendWitness(witness)).toMatchObject({ state: "not-sent" });
+    expect(Object.values(p.effects).every((n) => n === 0)).toBe(true);
+  });
+  it("records the snapshot limit when a synchronous input handler changes account", async () => {
+    const p = page({ account: true });
+    const { witness } = await p.verify();
+    let acceptedAccount = "";
+    p.onEvent(() => p.account.change("fixture-account-B"));
+    p.onSend(() => {
+      acceptedAccount = "fixture-account-B";
+    });
+    // This deliberately demonstrates the remaining provider-binding boundary.
+    // A session snapshot is not proof of which account accepts the next Send.
+    expect(await p.sendWitness(witness)).toMatchObject({ state: "submitted" });
+    expect(acceptedAccount).toBe("fixture-account-B");
+    expect(p.effects.send).toBe(1);
   });
 });

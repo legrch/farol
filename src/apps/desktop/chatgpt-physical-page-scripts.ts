@@ -1,4 +1,9 @@
 import { z } from "zod";
+import {
+  readChatGptAccount,
+  ChatGptAccountObservationSchema,
+  type ChatGptAccountObservation,
+} from "../../../apps/desktop/chatgpt-account-probe";
 import type {
   ChatGptPhysicalApi,
   PhysicalBinding,
@@ -19,7 +24,10 @@ export type PhysicalPageRequiredControls =
   PhysicalSelection["requiredControls"];
 export type PhysicalPageSelection = PhysicalSelection;
 export type PhysicalPageObservedSelection = PhysicalObservedSelection;
-export type PhysicalPagePolicy = Readonly<{ e2eOrigin: string | null }>;
+export type PhysicalPagePolicy = Readonly<{
+  e2eOrigin: string | null;
+  accountObservationProfile?: "provider-session-v1";
+}>;
 const productionPolicy: PhysicalPagePolicy = { e2eOrigin: null };
 
 type VerifyInput = Parameters<ChatGptPhysicalApi["verifySend"]>[0];
@@ -39,6 +47,7 @@ export type PhysicalPageVerifyResponse =
       observed: PhysicalPageObservedSelection;
       sourceProfile: "message-anchors-v1";
       baselineUserIds: readonly string[];
+      account?: ChatGptAccountObservation | undefined;
     }>;
 export type PhysicalPageSubmission = Readonly<{
   originBinding: PhysicalBinding;
@@ -117,6 +126,7 @@ const bindingSchema = z.discriminatedUnion("phase", [
   }),
 ]);
 const policySchema = z.strictObject({
+  accountObservationProfile: z.literal("provider-session-v1").optional(),
   e2eOrigin: z
     .string()
     .max(2048)
@@ -176,6 +186,7 @@ const observedSchema = z.strictObject({
 const operationSchema = { binding: bindingSchema, operationId: idSchema };
 const verifyFields = {
   ...operationSchema,
+  accountDeadlineMillis: z.number().int().positive().safe().optional(),
   previous: previousSchema,
   intentDigest: idSchema,
   controls: controlsSchema,
@@ -184,12 +195,14 @@ const verifyFields = {
 const verifySchema = z.strictObject(verifyFields);
 const witnessSchema = z.strictObject({
   ...verifyFields,
+  account: ChatGptAccountObservationSchema.optional(),
   evidenceId: z.string().uuid(),
   observed: observedSchema,
   sourceProfile: z.literal("message-anchors-v1"),
 });
 const sendSchema = z.strictObject({
   ...operationSchema,
+  accountDeadlineMillis: z.number().int().positive().safe().optional(),
   witness: witnessSchema,
   intentDigest: idSchema,
   prompt: z
@@ -218,15 +231,18 @@ const observationSchema = z.strictObject({
 });
 
 // The page receives only public controls and mechanics. Declaration provenance,
-// deadline, config, account and grant pins never cross this serialization boundary.
+// config, account and grant pins never cross this serialization boundary.
+// An explicit account observation profile also supplies a mechanical deadline.
 type PageVerify = Pick<
   VerifyInput,
   "binding" | "operationId" | "previous" | "intentDigest"
 > & {
   controls: PhysicalPageSelection["controls"];
   requiredControls: PhysicalPageRequiredControls;
+  accountDeadlineMillis?: number | undefined;
 };
 type PageWitness = PageVerify & {
+  account?: ChatGptAccountObservation | undefined;
   evidenceId: string;
   observed: PhysicalPageObservedSelection;
   sourceProfile: "message-anchors-v1";
@@ -234,7 +250,7 @@ type PageWitness = PageVerify & {
 type PageSend = Pick<
   SendInput,
   "binding" | "operationId" | "intentDigest" | "prompt"
-> & { witness: PageWitness };
+> & { witness: PageWitness; accountDeadlineMillis?: number | undefined };
 type PageSubmission = Omit<PhysicalPageSubmission, "selection"> & {
   controls: PhysicalPageSelection["controls"];
   requiredControls: PhysicalPageRequiredControls;
@@ -266,6 +282,8 @@ async function physicalPage(
   markdown: typeof publicMarkdownBlock,
   contentVisible: typeof publicContentVisible,
   e2eOrigin: string | null,
+  accountProfile: "provider-session-v1" | null,
+  readAccount: typeof readChatGptAccount | null,
 ): Promise<Response> {
   type WitnessRecord = {
     witness: PageWitness;
@@ -624,6 +642,12 @@ async function physicalPage(
       return abort("PHYSICAL_BINDING_STALE");
   };
   const checked = (input: PageVerify, expectedDraft: string) => {
+    if (
+      accountProfile !== null &&
+      (!Number.isSafeInteger(input.accountDeadlineMillis) ||
+        input.accountDeadlineMillis! <= Date.now())
+    )
+      return abort("PHYSICAL_ACCOUNT_DEADLINE");
     checkBinding(input.binding);
     const { composer, form } = currentComposer();
     if (normalize(draft(composer)) !== normalize(expectedDraft))
@@ -636,6 +660,26 @@ async function physicalPage(
     );
     const all = previousReady(input.binding, input.previous);
     return { composer, form, observed, controlFingerprint, all };
+  };
+  const accountCurrent = (
+    value: ChatGptAccountObservation | undefined,
+    binding: PhysicalBinding,
+  ) => {
+    const now = Date.now();
+    if (
+      !value ||
+      value.state !== "observed" ||
+      value.source !== "provider-session-v1" ||
+      value.documentUrl !== binding.url ||
+      !Number.isSafeInteger(now) ||
+      !Number.isSafeInteger(value.observedAtMillis) ||
+      value.observedAtMillis > now ||
+      now - value.observedAtMillis >= 5000 ||
+      value.expiresAtMillis <= now ||
+      !/^[a-f0-9]{64}$/u.test(value.accountKey)
+    )
+      return abort("PHYSICAL_ACCOUNT_UNAVAILABLE");
+    return value;
   };
   const errorCode = (error: unknown) =>
     error instanceof Error && /^PHYSICAL_[A-Z_]+$/u.test(error.message)
@@ -666,7 +710,13 @@ async function physicalPage(
   if (request.action === "verify") {
     const input = request.input;
     try {
-      const current = checked(input, "");
+      let current = checked(input, "");
+      let account: ChatGptAccountObservation | undefined;
+      if (accountProfile !== null) {
+        if (!readAccount) return fail("PHYSICAL_ACCOUNT_UNAVAILABLE");
+        account = accountCurrent(await readAccount(e2eOrigin), input.binding);
+        current = checked(input, "");
+      }
       const store = getStore();
       if (
         store.spentOperations.has(input.operationId) ||
@@ -682,6 +732,9 @@ async function physicalPage(
         previous: input.previous,
         controls: input.controls,
         requiredControls: input.requiredControls,
+        ...(account
+          ? { account, accountDeadlineMillis: input.accountDeadlineMillis! }
+          : {}),
         observed: current.observed,
         sourceProfile: "message-anchors-v1",
       };
@@ -711,6 +764,7 @@ async function physicalPage(
         observed: witness.observed,
         sourceProfile: witness.sourceProfile,
         baselineUserIds,
+        ...(account ? { account } : {}),
       };
     } catch (error) {
       return fail(errorCode(error));
@@ -738,7 +792,8 @@ async function physicalPage(
       !equal(record.witness, input.witness) ||
       !equal(input.binding, input.witness.binding) ||
       input.operationId !== input.witness.operationId ||
-      input.intentDigest !== input.witness.intentDigest
+      input.intentDigest !== input.witness.intentDigest ||
+      (accountProfile !== null) !== (record.witness.account !== undefined)
     )
       return result("not-sent", "PHYSICAL_WITNESS_INVALID");
     // Consume before any async work or insertion. Concurrent dispatches cannot pass.
@@ -751,6 +806,14 @@ async function physicalPage(
       intentDigest: input.intentDigest,
       controls: input.witness.controls,
       requiredControls: input.witness.requiredControls,
+      ...(accountProfile !== null
+        ? {
+            accountDeadlineMillis: Math.min(
+              input.accountDeadlineMillis ?? 0,
+              input.witness.accountDeadlineMillis ?? 0,
+            ),
+          }
+        : {}),
     };
     let submission: PageSubmission | undefined;
     let clicked = false;
@@ -769,7 +832,20 @@ async function physicalPage(
       fresh("");
       // Envelope intentDigest is opaque; only this separate digest correlates text.
       const promptDigest = await sha256(input.prompt);
-      const current = fresh(""); // Recheck everything after crypto yield.
+      fresh("");
+      let currentAccount: ChatGptAccountObservation | undefined;
+      if (accountProfile !== null) {
+        const original = accountCurrent(record.witness.account, input.binding);
+        if (!readAccount) return abort("PHYSICAL_ACCOUNT_UNAVAILABLE");
+        currentAccount = accountCurrent(
+          await readAccount(e2eOrigin),
+          input.binding,
+        );
+        if (currentAccount.accountKey !== original.accountKey)
+          return abort("PHYSICAL_ACCOUNT_CHANGED");
+      }
+      const current = fresh(""); // Recheck after the final awaited account/hash work.
+      if (currentAccount) accountCurrent(currentAccount, input.binding);
       submission = {
         originBinding: input.binding,
         operationId: input.operationId,
@@ -813,6 +889,7 @@ async function physicalPage(
       const send = sendControl(final.form);
       // Final synchronous check immediately before the one effect.
       fresh(input.prompt);
+      if (currentAccount) accountCurrent(currentAccount, input.binding);
       store.operations.set(input.operationId, {
         submission,
         correlation: null,
@@ -1150,7 +1227,7 @@ function script(request: Request, policy: PhysicalPagePolicy): string {
     };
     return `(${JSON.stringify(failure)})`;
   }
-  return `(${physicalPage.toString()})(${JSON.stringify(request)},${readPublicAssistantMessages.toString()},${publicMarkdownBlock.toString()},${publicContentVisible.toString()},${JSON.stringify(parsed.data.e2eOrigin)})`;
+  return `(${physicalPage.toString()})(${JSON.stringify(request)},${readPublicAssistantMessages.toString()},${publicMarkdownBlock.toString()},${publicContentVisible.toString()},${JSON.stringify(parsed.data.e2eOrigin)},${JSON.stringify(parsed.data.accountObservationProfile ?? null)},${parsed.data.accountObservationProfile ? readChatGptAccount.toString() : "null"})`;
 }
 const invalid = '({state:"refused",code:"PHYSICAL_INPUT_INVALID"})';
 export function physicalPrepareProbeScript(
@@ -1174,6 +1251,9 @@ export function physicalVerifySendScript(
     intentDigest: input.intentDigest,
     controls: physicalSelection?.controls,
     requiredControls: physicalSelection?.requiredControls,
+    ...(policy.accountObservationProfile
+      ? { accountDeadlineMillis: input.deadlineMillis }
+      : {}),
   });
   return parsed.success
     ? script({ action: "verify", input: parsed.data }, policy)
@@ -1190,6 +1270,9 @@ export function physicalSendScript(
     operationId: input.operationId,
     intentDigest: input.intentDigest,
     prompt: input.prompt,
+    ...(policy.accountObservationProfile
+      ? { accountDeadlineMillis: input.deadlineMillis }
+      : {}),
     witness: {
       binding: witness.binding,
       operationId: witness.operationId,
@@ -1200,6 +1283,12 @@ export function physicalSendScript(
       requiredControls: physicalSelection?.requiredControls,
       observed: witness.selection.observed,
       sourceProfile: witness.selection.sourceProfile,
+      ...(witness.account
+        ? {
+            account: witness.account,
+            accountDeadlineMillis: witness.deadlineMillis,
+          }
+        : {}),
     },
   });
   if (parsed.success)
