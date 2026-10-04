@@ -5,7 +5,7 @@
  * node tests/e2e/go-core-startup.e2e.mjs --self-test
  * node tests/e2e/go-core-startup.e2e.mjs [--check|--run-native]
  *   --candidate-root /absolute/_output/build/app --source-sha <SHA>
- *   --build-id <buildId> [--dependency-root /absolute/node_modules] [--reopen] [--read-discard] [--read-account] [--edit-snapshot]
+ *   --build-id <buildId> [--dependency-root /absolute/node_modules] [--reopen] [--read-discard] [--read-account] [--edit-snapshot] [--settings-edit-mutation]
  * Or replace --candidate-root with:
  *   --packaged /absolute/Farol.app --artifact-metadata /absolute/artifact.json
  *   --artifact-sha <independently selected artifactSha256>
@@ -22,8 +22,11 @@
  * Missing denied/revoked witnesses are reported, never counted as passes.
  * --edit-snapshot requires packaged --reopen --read-discard. Before the original
  * journey: normal write grant -> Verify -> Prepare metadata -> exact Cancel ->
- * restore read grant -> Verify. No Apply/observe/ACK. React has no edit controls;
- * this bounded witness uses existing preload configure, not UI acceptance.
+ * restore read grant -> Verify. No Apply/observe/ACK;
+ * this bounded snapshot mode uses existing preload configure.
+ * --settings-edit-mutation requires packaged --reopen and excludes the read
+ * modes: actual React Prepare/Old/New/Apply -> independent file/owner-v2 receipt
+ * -> unacknowledged clean Quit -> same profile/package -> exact Observe/TS ACK.
  */
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
@@ -91,6 +94,15 @@ import {
   snapshotWitnessSelfTest,
 } from "./lib/settings-snapshot-witness.mjs";
 
+import {
+  mutationLimits,
+  mutationProfileWitness,
+  mutationWitnessSelfTest,
+  applyMutationJourney,
+  reopenMutationJourney,
+  terminalMutationWitness,
+} from "./lib/settings-mutation-witness.mjs";
+
 const root = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "../..",
@@ -121,6 +133,9 @@ const contract = Object.freeze({
   editSnapshot:
     "Explicit packaged --reopen --read-discard --edit-snapshot: existing disposable UTF-8 canary, normal configuration write grant/Verify, preload Prepare, independently read raw bytes/count/SHA-256, retained root/profile/current generation and unchanged Chat/participants, exact Cancel, restore read grant/Verify, then original read-discard/account journey",
   editSnapshotLimits: snapshotLimits,
+  settingsEditMutation:
+    "Explicit packaged --reopen --settings-edit-mutation: normal workspace/write/Verify, actual React Prepare/Old/New/Apply once, independent raw bytes and owner-v2 journal/key/context/generation/hash, known same-op duplicate refused, original pending result retained through clean Quit and same-package/profile reopen, exact UI/preload Observe then normal temporary-TS delivery ACK with no extra effect or provider Send",
+  settingsEditMutationLimits: mutationLimits,
   readDiscardLimits: [
     "Settings replies do not instrument executor origin. Source-only self-tests and a package built from ff2d84d4d2fb85bfc2fe9696696c0a90ddb1162e can still exercise TypeScript listings; Go acceptance requires Lead's new integrated package and exact production-source mapping of all three Settings commands to the Go owner executor",
     "Settings approval revision/expiry may advance while generation and approval semantics stay fixed. Retained participant map and Chat journal prove no retained admission/ChatTurn change; no independent transient execution/admission counter exists",
@@ -147,6 +162,7 @@ function selection(args) {
     readDiscard: false,
     readAccount: false,
     editSnapshot: false,
+    settingsEditMutation: false,
     dependencyRoot: path.join(root, "node_modules"),
   };
   const options = new Map([
@@ -161,6 +177,16 @@ function selection(args) {
   const seen = new Set();
   for (let index = 0; index < args.length; index++) {
     const argument = args[index];
+    if (argument === "--settings-edit-mutation") {
+      assert.equal(
+        seen.has("settingsEditMutation"),
+        false,
+        "SETTINGS_EDIT_MUTATION_REPEATED",
+      );
+      seen.add("settingsEditMutation");
+      result.settingsEditMutation = true;
+      continue;
+    }
     if (argument === "--edit-snapshot") {
       assert.equal(seen.has("editSnapshot"), false, "EDIT_SNAPSHOT_REPEATED");
       seen.add("editSnapshot");
@@ -214,6 +240,19 @@ function selection(args) {
     assert.equal(result.reopen, false, "REOPEN_REQUIRES_PACKAGE");
     assert.equal(result.artifactMetadata, undefined, "PACKAGE_OPTION_WITH_DEV");
     assert.equal(result.artifactSHA, undefined, "PACKAGE_OPTION_WITH_DEV");
+  }
+  if (result.settingsEditMutation) {
+    assert.equal(
+      Boolean(result.packaged),
+      true,
+      "SETTINGS_EDIT_MUTATION_REQUIRES_PACKAGE",
+    );
+    assert.equal(result.reopen, true, "SETTINGS_EDIT_MUTATION_REQUIRES_REOPEN");
+    assert.equal(
+      result.readDiscard || result.readAccount || result.editSnapshot,
+      false,
+      "SETTINGS_EDIT_MUTATION_EXCLUDES_READ_MODES",
+    );
   }
   if (result.readAccount) {
     assert.equal(
@@ -414,7 +453,30 @@ async function attest(selected) {
       return input;
     });
   }
+  let mutationInputs;
+  if (selected.settingsEditMutation) {
+    mutationInputs = [
+      "src/apps/desktop/main.ts",
+      "src/apps/desktop/product-configuration.ts",
+      "src/ui/renderer/settings.tsx",
+      "src/ui/renderer/controller.ts",
+      "src/ui/renderer/shell.tsx",
+      "apps/desktop/go-core-host.ts",
+      "apps/desktop/go-computer-authority.ts",
+      "apps/desktop/bridge/profile-storage.ts",
+    ].map((inputPath) => {
+      const input = ledger.find(
+        (entry) => entry.kind === "source" && entry.path === inputPath,
+      );
+      assert.ok(
+        input?.exact === true,
+        `MUTATION_SOURCE_CONTRACT_MISSING:${inputPath}`,
+      );
+      return input;
+    });
+  }
   return {
+    ...(selected.settingsEditMutation ? { mutationInputs } : {}),
     ...(selected.readAccount ? { readAccountInputs } : {}),
     ...(selected.editSnapshot ? { editSnapshotInputs } : {}),
     appRoot,
@@ -757,8 +819,9 @@ async function native(selected, inputs, report, save) {
   // /private/tmp is refused by Go's writable-ancestor policy.
   for (const directory of [home, appData])
     await fs.mkdir(directory, { mode: 0o700 });
+  const hasWorkspace = selected.readDiscard || selected.settingsEditMutation;
   let workspaceRoot, workspacePhysical;
-  if (selected.readDiscard) {
+  if (hasWorkspace) {
     workspaceRoot = path.join(temporary, "read-workspace");
     await fs.mkdir(workspaceRoot, { mode: 0o700 });
     workspacePhysical = await physicalDirectory(workspaceRoot);
@@ -870,6 +933,23 @@ async function native(selected, inputs, report, save) {
           report.readDiscard.access.value.participants,
           "READ_REOPEN_PARTICIPANTS_CHANGED",
         );
+    } else if (
+      selected.settingsEditMutation &&
+      report.settingsEditMutation?.pending
+    ) {
+      mutationProfileWitness(profile.value);
+      assert.deepEqual(profile, report.settingsEditMutation.retained.profile);
+      assert.equal(access.value.profileId, profile.value.profileId);
+      assert.equal(access.value.computerId, computerId);
+      assert.equal(
+        access.value.generation,
+        String(report.settingsEditMutation.pending.computerGeneration),
+      );
+      assert.deepEqual(
+        access.value.participants,
+        {},
+        "MUTATION_CREATED_PARTICIPANT",
+      );
     } else zeroAuthority(profile.value, access.value, computerId);
     report.snapshots.push({ launch: launch.ordinal, label, profile, access });
     ledgerWitness(site.driver.snapshot());
@@ -1058,6 +1138,25 @@ async function native(selected, inputs, report, save) {
         await captureHandoff();
       }
       cleanLaunchClosure(launch.cleanup);
+      if (
+        selected.settingsEditMutation &&
+        report.settingsEditMutation?.retained
+      ) {
+        report.settingsEditMutation.terminals ??= [];
+        report.settingsEditMutation.terminals.push(
+          await terminalMutationWitness({
+            stateRoot,
+            workspaceRoot,
+            regular,
+            document,
+            physicalDirectory,
+            report: report.settingsEditMutation,
+            cleanup: launch.cleanup,
+            acknowledged: launch.ordinal === 2,
+          }),
+        );
+        await save();
+      }
       launch.status = "confirmed-clean-quit";
     } catch (error) {
       launch.status = "failed-or-unknown";
@@ -1096,7 +1195,7 @@ async function native(selected, inputs, report, save) {
       FAROL_NEXT_E2E_TEST_PROOF: proof,
       FAROL_NEXT_E2E_TUNNEL_CLIENT: tunnelClient,
       FAROL_NEXT_E2E_CHATGPT_URL: site.url,
-      ...(selected.readDiscard
+      ...(hasWorkspace
         ? {
             FAROL_NEXT_E2E_WORKSPACE_ROOT: workspaceRoot,
             FAROL_NEXT_E2E_WORKSPACE_FILE: path.join(
@@ -1154,7 +1253,7 @@ async function native(selected, inputs, report, save) {
       const window = await application.firstWindow({ timeout: 15000 });
       const bootstrap = await ready(window, active);
       const settings =
-        selected.readDiscard && ordinal === 2
+        hasWorkspace && ordinal === 2
           ? bootstrap.configuration.settings
           : unconfigured(bootstrap);
       const paths = await bounded(
@@ -1290,7 +1389,7 @@ async function native(selected, inputs, report, save) {
     report.settingsSHA = savedSettings.sha256;
     launch.settings = savedSettings;
     await capture("settings-ui-zero-authority", settings.computer.computerId);
-    if (selected.readDiscard) {
+    workspaceJourney: if (hasWorkspace) {
       // Only normal preload commands. No expected witness data is injected into
       // the production adapter, and no Send, sign-in or auth command is issued.
       const configure = async (command) => {
@@ -1399,6 +1498,57 @@ async function native(selected, inputs, report, save) {
         return observed;
       };
       let settingsCurrent = added.snapshot.settings;
+      if (selected.settingsEditMutation) {
+        const mutationReport = (report.settingsEditMutation = {
+          sourceBinding: {
+            packageSourceCommit: inputs.identity.sourceCommit,
+            productionMainSHA: inputs.mainSHA,
+            core: inputs.core,
+            inputs: inputs.mutationInputs,
+            goSourceBinding: {
+              sourceCommit: inputs.identity.sourceCommit,
+              sourceTreeDigest: inputs.identity.sourceTreeDigest,
+              core: inputs.core,
+              scope:
+                "Whole committed source tree and sealed Go artifact; Go files are not TS input-ledger entries",
+              reviewedPaths: [
+                "boot/settingsmutation.go",
+                "boot/nativeretirement.go",
+                "modules/computer/infra/repos/mutation/codec.go",
+                "modules/computer/infra/filesystem/digest.go",
+              ],
+            },
+            witnessSourceSHA: report.mutationWitnessSourceSHA,
+          },
+        });
+        settingsCurrent = await applyMutationJourney({
+          window,
+          workspaceId,
+          configure,
+          hidden,
+          active,
+          ledger: () => ledgerWitness(site.driver.snapshot()),
+          save,
+          report: mutationReport,
+          buildId: selected.buildId,
+          goProfile: launch.goProfile,
+          launchPhysical: launch.physical,
+          workspacePhysical,
+          stateRoot,
+          workspaceRoot,
+          regular,
+          document,
+          physicalDirectory,
+        });
+        savedSettings = await document(
+          path.join(stateRoot, "config.json"),
+          256 * 1024,
+        );
+        assert.deepEqual(savedSettings.value, settingsCurrent);
+        report.settingsSHA = savedSettings.sha256;
+        launch.settings = savedSettings;
+        break workspaceJourney;
+      }
       for (const command of [
         { kind: "computer.verify-workspace", workspaceId },
         { kind: "computer.check-folder", workspaceId },
@@ -1911,9 +2061,11 @@ async function native(selected, inputs, report, save) {
     active();
     await close();
     await capture(
-      selected.readDiscard
-        ? "confirmed-quit-read-discard"
-        : "confirmed-quit-zero-authority",
+      selected.settingsEditMutation
+        ? "confirmed-quit-mutation-result-unacknowledged"
+        : selected.readDiscard
+          ? "confirmed-quit-read-discard"
+          : "confirmed-quit-zero-authority",
       settings.computer.computerId,
     );
     if (selected.reopen) {
@@ -1970,7 +2122,50 @@ async function native(selected, inputs, report, save) {
         report.launches[0].readyJournal.value,
       );
       await captureHandoff(report.launches[0].terminalHandoff);
-      if (selected.readDiscard) {
+      if (selected.settingsEditMutation) {
+        assert.deepEqual(
+          reopened.settings,
+          savedSettings.value,
+          "MUTATION_PENDING_NOT_RETAINED_ON_REOPEN",
+        );
+        const configure = async (command) => {
+          active();
+          await reopened.hidden();
+          const reply = await bounded(
+            reopened.window.evaluate(
+              (command) => window.farolNext.configure(command),
+              command,
+            ),
+            20000,
+            "MUTATION_REOPEN_COMMAND_OUTCOME_UNKNOWN",
+          );
+          ledgerWitness(site.driver.snapshot());
+          await reopened.hidden();
+          return reply;
+        };
+        const acknowledged = await reopenMutationJourney({
+          window: reopened.window,
+          configure,
+          hidden: reopened.hidden,
+          active,
+          ledger: () => ledgerWitness(site.driver.snapshot()),
+          save,
+          report: report.settingsEditMutation,
+          stateRoot,
+          workspaceRoot,
+          regular,
+          document,
+          physicalDirectory,
+        });
+        savedSettings = await document(
+          path.join(stateRoot, "config.json"),
+          256 * 1024,
+        );
+        assert.deepEqual(savedSettings.value, acknowledged);
+        await reopened.window
+          .getByRole("button", { name: "Home", exact: true })
+          .click({ timeout: 5000 });
+      } else if (selected.readDiscard) {
         retainedApprovedSettings(reopened.settings, savedSettings.value);
         approvedSettingsWitness(
           reopened.settings,
@@ -2064,23 +2259,29 @@ async function native(selected, inputs, report, save) {
         path.join(stateRoot, "config.json"),
         256 * 1024,
       );
-      if (selected.readDiscard)
+      if (selected.settingsEditMutation)
+        assert.deepEqual(reopenedSettings, savedSettings);
+      else if (selected.readDiscard)
         retainedApprovedSettings(reopenedSettings, savedSettings);
       else retainedSettings(reopenedSettings.value, savedSettings.value);
       launch.settings = reopenedSettings;
       await capture(
-        selected.readDiscard
-          ? "reopen-ready-retained-approval"
-          : "reopen-ready-zero-authority",
+        selected.settingsEditMutation
+          ? "reopen-mutation-result-observed-and-ts-acknowledged"
+          : selected.readDiscard
+            ? "reopen-ready-retained-approval"
+            : "reopen-ready-zero-authority",
         settings.computer.computerId,
       );
       await reopened.hidden();
       active();
       await close();
       await capture(
-        selected.readDiscard
-          ? "reopen-confirmed-quit-retained-approval"
-          : "reopen-confirmed-quit-zero-authority",
+        selected.settingsEditMutation
+          ? "reopen-confirmed-quit-mutation-result-acknowledged"
+          : selected.readDiscard
+            ? "reopen-confirmed-quit-retained-approval"
+            : "reopen-confirmed-quit-zero-authority",
         settings.computer.computerId,
       );
     }
@@ -2653,8 +2854,30 @@ function selfTest() {
     ["--edit-snapshot", ...snapshotArgs],
   ])
     reject(() => selection(invalid));
+  const mutationChecksStart = checks;
+  mutationWitnessSelfTest(pass, reject);
+  const mutationArgs = ["--settings-edit-mutation", "--reopen", ...packageArgs];
+  pass(() => assert.equal(selection(mutationArgs).settingsEditMutation, true));
+  pass(() =>
+    assert.equal(
+      selection(["--run-native", ...mutationArgs]).mode,
+      "--run-native",
+    ),
+  );
+  pass(() => assert.equal(selection(args).settingsEditMutation, false));
+  for (const invalid of [
+    ["--settings-edit-mutation", ...packageArgs],
+    ["--settings-edit-mutation", "--reopen", ...args],
+    ["--settings-edit-mutation", ...mutationArgs],
+    ["--read-discard", ...mutationArgs],
+    ["--read-account", ...mutationArgs],
+    ["--edit-snapshot", ...mutationArgs],
+  ])
+    reject(() => selection(invalid));
+  // Existing closure self-tests already reject unknown child, drain, marker,
+  // handoff and provider terminal states. They gate this mode unchanged.
   process.stdout.write(
-    `Go startup harness browser-free contract checks: ${checks} passed (${checks - snapshotChecksStart} edit-snapshot); native NOT RUN\n`,
+    `Go startup harness browser-free contract checks: ${checks} passed (${mutationChecksStart - snapshotChecksStart} edit-snapshot, ${checks - mutationChecksStart} settings-edit-mutation); native NOT RUN\n`,
   );
 }
 
@@ -2662,21 +2885,26 @@ async function main(args) {
   const selected = selection(args);
   const report = {
     contract,
-    scenario: selected.editSnapshot
-      ? `${contract.editSnapshot}; ${selected.readAccount ? contract.readAccount : contract.readDiscard}`
+    scenario: selected.settingsEditMutation
+      ? contract.settingsEditMutation
+      : selected.editSnapshot
+        ? `${contract.editSnapshot}; ${selected.readAccount ? contract.readAccount : contract.readDiscard}`
+        : selected.readAccount
+          ? contract.readAccount
+          : selected.readDiscard
+            ? contract.readDiscard
+            : contract.scenario,
+    missingWitnesses: selected.settingsEditMutation
+      ? mutationLimits
       : selected.readAccount
-        ? contract.readAccount
+        ? [...contract.readDiscardLimits, ...readAccountLimits]
         : selected.readDiscard
-          ? contract.readDiscard
-          : contract.scenario,
-    missingWitnesses: selected.readAccount
-      ? [...contract.readDiscardLimits, ...readAccountLimits]
-      : selected.readDiscard
-        ? contract.readDiscardLimits
-        : contract.missingWitnesses,
-    isolation: selected.readDiscard
-      ? "Private disposable workspace/HOME/AppData with existing E2E dialog seams and all windows hidden/unfocused; Settings executor origin requires exact production-source review; no hermetic all-paths claim"
-      : contract.isolation,
+          ? contract.readDiscardLimits
+          : contract.missingWitnesses,
+    isolation:
+      selected.readDiscard || selected.settingsEditMutation
+        ? "Private disposable workspace/HOME/AppData with existing E2E dialog seams and all windows hidden/unfocused; Settings executor origin requires exact production-source review; no hermetic all-paths claim"
+        : contract.isolation,
     selection: selected,
     status: "checking",
     nativeRun: false,
@@ -2713,6 +2941,12 @@ async function main(args) {
         new URL("./lib/computer-settings-witness.mjs", import.meta.url),
       ),
     );
+    if (selected.settingsEditMutation)
+      report.mutationWitnessSourceSHA = hash(
+        await regular(
+          new URL("./lib/settings-mutation-witness.mjs", import.meta.url),
+        ),
+      );
     if (selected.editSnapshot) {
       report.snapshotWitnessSourceSHA = hash(
         await regular(
@@ -2747,17 +2981,19 @@ async function main(args) {
         report.harnessSource,
         "HARNESS_CHANGED_DURING_NATIVE_RUN",
       );
-      report.status = selected.editSnapshot
-        ? selected.readAccount
-          ? "passed-settings-edit-snapshot-and-react-read-account-discard-reopen-synthetic-only"
-          : "passed-settings-edit-snapshot-and-read-discard-reopen-fixture-only"
-        : selected.readAccount
-          ? "passed-react-read-account-discard-reopen-synthetic-account-only"
-          : selected.readDiscard
-            ? "passed-read-preview-discard-reopen-fixture-readiness-only"
-            : selected.reopen
-              ? "passed-reopen-startup-zero-authority-only"
-              : "passed-fresh-startup-zero-authority-only";
+      report.status = selected.settingsEditMutation
+        ? "passed-react-go-owner-edit-unacknowledged-quit-reopen-observe-ts-ack-zero-send"
+        : selected.editSnapshot
+          ? selected.readAccount
+            ? "passed-settings-edit-snapshot-and-react-read-account-discard-reopen-synthetic-only"
+            : "passed-settings-edit-snapshot-and-read-discard-reopen-fixture-only"
+          : selected.readAccount
+            ? "passed-react-read-account-discard-reopen-synthetic-account-only"
+            : selected.readDiscard
+              ? "passed-read-preview-discard-reopen-fixture-readiness-only"
+              : selected.reopen
+                ? "passed-reopen-startup-zero-authority-only"
+                : "passed-fresh-startup-zero-authority-only";
     }
   } catch (error) {
     report.status = "failed-or-unknown";
