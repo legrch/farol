@@ -5,6 +5,9 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"math"
+	"strings"
 	"testing"
 
 	"github.com/legrch/farol/modules/chat/app/port"
@@ -128,10 +131,34 @@ func cancelledRecordFixture() port.HandoffRecord {
 
 // Memory storage qualifies the persisted codec/chain, not native files or exit.
 func TestRepositoryNeverDispatchedRoundtripAndReplay(t *testing.T) {
+	for _, count := range []int{1, 8} {
+		t.Run(fmt.Sprint(count), func(t *testing.T) {
+			r := cancelledRecordFixture()
+			seed := r.Receipt.Write.Turns[0]
+			r.Receipt.Write.Turns = nil
+			for index := 0; index < count; index++ {
+				v := seed
+				v.Binding.OperationID = fmt.Sprintf("operation-%04d", index)
+				v.Binding.TurnID = fmt.Sprintf("turn-%04d", index)
+				v.Snapshot.Identity.OperationID = v.Binding.OperationID
+				v.Snapshot.Identity.TurnID = v.Binding.TurnID
+				v.AcknowledgedRevision = uint64(3 * (index + 1))
+				r.Receipt.Write.Turns = append(r.Receipt.Write.Turns, v)
+			}
+			r.Receipt.Write.PreviousRevision = uint64(3 * count)
+			r.Receipt.Write.Revision = r.Receipt.Write.PreviousRevision + 1
+			repositoryRoundtrip(t, r, false)
+		})
+	}
+}
+
+func repositoryRoundtrip(t *testing.T, r port.HandoffRecord, maximalSuccessor bool) {
+	t.Helper()
 	ctx := context.Background()
 	d := &memoryDisk{}
 	repo := repoFixture(d)
-	r := cancelledRecordFixture()
+	b := r.Publication.Binding
+	repo.owner.roots = Roots{ProfileID: b.ProfileID, Parent: Root{Identity: b.ParentRoot}, Chat: Root{Identity: b.ChatRoot}}
 	original := port.CopyRetirement(r.Receipt.Write)
 	head := &port.HandoffHead{}
 	for step := 0; step < 4; step++ {
@@ -142,7 +169,9 @@ func TestRepositoryNeverDispatchedRoundtripAndReplay(t *testing.T) {
 			t.Fatal(err)
 		}
 		// Every stage is decoded in a fresh fixture repository; no live owner is restored.
-		loaded, err := repoFixture(d).Load(ctx)
+		fresh := repoFixture(d)
+		fresh.owner.roots = repo.owner.roots
+		loaded, err := fresh.Load(ctx)
 		if err != nil || loaded.Digest != head.Digest || !port.SameRetirement(loaded.Record.Receipt.Write, original) {
 			t.Fatal("cancelled receipt changed in persisted chain", err)
 		}
@@ -151,10 +180,79 @@ func TestRepositoryNeverDispatchedRoundtripAndReplay(t *testing.T) {
 		}
 		if step < 3 {
 			r = nextRecord(t, r)
+			if maximalSuccessor && r.Consumption != nil {
+				c := r.Consumption
+				c.Next.BackendGeneration = strings.Repeat("<", 119) + "n"
+				c.NextBinding.BackendGeneration = c.Next.BackendGeneration
+				c.NextBinding.HostLifetimeID = strings.Repeat("<", 119) + "h"
+				c.NextBinding.ChildLaunchID = strings.Repeat("<", 119) + "c"
+				c.AttemptID = strings.Repeat("<", 120)
+			}
 		}
 	}
 	if d.calls != 4 || head.Record.Stage != port.HandoffConsumed {
 		t.Fatal("missing single consumption")
+	}
+}
+
+// Max-length HTML-escaped IDs and numeric/digest bounds exercise late-stage
+// metadata growth independently of the unchanged retirement payload. The
+// terminal/drain remain explicit fixtures; this is no host/process witness.
+func TestRepositoryRetirementBudgetReservesEveryLaterStage(t *testing.T) {
+	r := cancelledRecordFixture()
+	id := strings.Repeat("<", 120)
+	b := &r.Publication.Binding
+	b.ProfileID, b.BackendGeneration, b.BuildID, b.HostLifetimeID, b.ChildLaunchID = id, id, id, id, id
+	b.ParentRoot = port.JournalRoot{Device: math.MaxUint64, Inode: math.MaxUint64 - 1, OwnerUID: math.MaxUint32}
+	b.ChatRoot = port.JournalRoot{Device: math.MaxUint64, Inode: math.MaxUint64, OwnerUID: math.MaxUint32}
+	r.Publication.HandoffID = id
+	for index := range r.Publication.ReceiptDigest {
+		r.Publication.ReceiptDigest[index] = 255
+	}
+	r.Receipt.PublicationDigest = r.Publication.ReceiptDigest
+	w := &r.Receipt.Write
+	w.Scope = port.JournalScope{ProfileID: id, BackendGeneration: id}
+	w.Root = b.ChatRoot
+	w.PreviousRevision, w.Revision = math.MaxUint64-2, math.MaxUint64-1
+	seed := w.Turns[0]
+	seed.Binding = port.TurnBinding{ProfileID: id, BackendGeneration: id, OwnerID: id, SessionID: id, TaskID: id, TaskEpoch: math.MaxUint64, ParticipantID: id, TurnID: id, OperationID: id, TurnGeneration: math.MaxUint64}
+	seed.Snapshot.Identity = turn.Identity{ProfileID: id, OwnerID: id, SessionID: id, TaskID: id, TurnID: id, OperationID: id, Generation: math.MaxUint64}
+	seed.Snapshot.Result.ID = id
+	w.Turns = nil
+	var oversized port.HandoffRecord
+	for index := 0; index < turn.MaxRequests; index++ {
+		v := seed
+		unique := strings.Repeat("<", 116) + fmt.Sprintf("%04d", index)
+		v.Binding.OperationID, v.Binding.TurnID = unique, unique
+		v.Snapshot.Identity.OperationID, v.Snapshot.Identity.TurnID = unique, unique
+		v.AcknowledgedRevision = math.MaxUint64 - 2 - uint64(index)
+		w.Turns = append(w.Turns, v)
+		raw, err := json.Marshal(*w)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(raw) > 1024*1024 {
+			oversized = policy.Copy(r)
+			w.Turns = w.Turns[:len(w.Turns)-1]
+			break
+		}
+	}
+	if oversized.Receipt.Write.Turns == nil {
+		t.Fatal("fixture never reached retirement budget")
+	}
+	raw, err := json.Marshal(*w)
+	if err != nil || len(raw) < 1024*1024-16384 {
+		t.Fatal("fixture is not near retirement budget", len(raw), err)
+	}
+	repositoryRoundtrip(t, r, true)
+	d := &memoryDisk{}
+	repo := repoFixture(d)
+	repo.owner.roots = Roots{ProfileID: b.ProfileID, Parent: Root{Identity: b.ParentRoot}, Chat: Root{Identity: b.ChatRoot}}
+	if _, err := repo.Digest(oversized); !errors.Is(err, Invalid) {
+		t.Fatal("oversize digest admitted", err)
+	}
+	if h, err := repo.Publish(context.Background(), [32]byte{}, oversized); h != nil || !errors.Is(err, Invalid) || d.calls != 0 {
+		t.Fatal("oversize retirement published", err, d.calls)
 	}
 }
 

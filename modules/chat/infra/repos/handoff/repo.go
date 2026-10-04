@@ -14,7 +14,15 @@ import (
 	policy "github.com/legrch/farol/modules/chat/app/services/handoff"
 )
 
-const maxBytes = 16384
+// Normal boot's entire lifecycle journal is bounded to 1 MiB. A known native
+// retirement's Write is a subset of that snapshot. Reserve metadata separately
+// so a captured receipt cannot outgrow the codec at ACK, terminal or Consume.
+// At most 26 IDs of 120 UTF-8 bytes (6 JSON bytes per input byte), eight roots,
+// five digests and fixed keys/scalars fit below the 32 KiB reserve. Keep the
+// maximum-metadata regression aligned when the persisted schema changes.
+const maxRetirementBytes = 1024 * 1024
+const maxMetadataBytes = 32 * 1024
+const maxBytes = maxRetirementBytes + maxMetadataBytes
 const maxSteps = 1024
 
 type Root struct {
@@ -83,6 +91,10 @@ func New(ctx context.Context, roots Roots) (*Repository, error) {
 }
 func encode(r port.HandoffRecord) ([]byte, error) {
 	if policy.ValidateRecord(r) != nil {
+		return nil, fail(Invalid, false)
+	}
+	retirement, err := json.Marshal(r.Receipt.Write)
+	if err != nil || len(retirement) > maxRetirementBytes {
 		return nil, fail(Invalid, false)
 	}
 	raw, err := json.Marshal(r)
@@ -154,7 +166,9 @@ func (s *owner) scan(ctx context.Context) (*port.HandoffHead, int, []port.Handof
 		d := sha256.Sum256(raw)
 		copy := policy.Copy(r)
 		head = &port.HandoffHead{Record: &copy, Digest: d}
-		history = append(history, r)
+		// Replay checks need only these immutable identity projections. Do not
+		// retain every full retirement payload across the bounded chain scan.
+		history = append(history, port.HandoffRecord{Stage: r.Stage, Publication: r.Publication, Consumption: r.Consumption})
 	}
 	return nil, 0, nil, s.uncertain()
 }
