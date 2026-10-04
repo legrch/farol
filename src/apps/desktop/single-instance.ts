@@ -10,6 +10,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { z } from "zod";
+import { parseCoreArtifactDeclaration } from "../../../apps/desktop/bridge/attested-core";
 import type { BuildIdentity } from "../../pkg/build-info/identity";
 import type { DesktopEnvironment } from "./desktop-environment";
 
@@ -18,8 +19,7 @@ const sha256 = z.string().regex(/^[a-f0-9]{64}$/u);
 const sourceTreeDigest = sha256;
 const nonce = z.string().regex(/^[a-f0-9]{32}$/u);
 
-const buildIdentitySchema = z.object({
-  schema: z.literal(3),
+const buildIdentityFields = z.object({
   buildId: sha256,
   sourceCommit,
   sourceTreeDigest,
@@ -27,6 +27,13 @@ const buildIdentitySchema = z.object({
   inputExact: z.boolean(),
   inputLedgerSha256: sha256,
 });
+const buildIdentitySchema = z.discriminatedUnion("schema", [
+  buildIdentityFields.extend({
+    schema: z.literal(3),
+    core: z.never().optional(),
+  }),
+  buildIdentityFields.extend({ schema: z.literal(4), core: z.unknown() }),
+]);
 
 const instanceIdentitySchema = z.strictObject({
   schema: z.literal("farol.next.single-instance/2"),
@@ -215,6 +222,18 @@ export function readBuildLaunchIdentity(
       manifest.dirty !== runtimeIdentity.sourceDirty
     ) {
       throw new Error("manifest does not match runtime identity");
+    }
+    if (manifest.schema === 4) {
+      const core = parseCoreArtifactDeclaration(manifest.core);
+      if (
+        core.build.buildId !== manifest.buildId ||
+        core.build.sourceSHA !== manifest.sourceCommit ||
+        core.build.sourceTreeDigest !== manifest.sourceTreeDigest ||
+        manifest.dirty ||
+        !manifest.inputExact
+      ) {
+        throw new Error("Go manifest does not match exact build identity");
+      }
     }
     if (environment === "preview" && (manifest.dirty || !manifest.inputExact)) {
       throw new Error("candidate identity is not exact");

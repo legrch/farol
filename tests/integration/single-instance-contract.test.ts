@@ -91,6 +91,19 @@ async function writeBuildFixture(
   return { runtime: runtimeIdentity(input.dirty), inputLedgerSha256 };
 }
 
+function goCoreDeclaration() {
+  return {
+    schema: "farol-core-artifact/1",
+    build: {
+      buildId,
+      sourceSHA: primary.sourceCommit,
+      sourceTreeDigest: primary.sourceTreeDigest,
+      platform: { goos: "darwin", goarch: "arm64" },
+    },
+    binary: { path: "farol-backend", size: 128, sha256: "a".repeat(64) },
+  };
+}
+
 describe("Farol Next single-instance identity", () => {
   it("explains a verified background-only refusal without claiming an identity failure", () => {
     const hidden = createInstanceRequest(primary, true);
@@ -250,6 +263,99 @@ describe("Farol Next single-instance identity", () => {
     expect(() =>
       readBuildLaunchIdentity(root, "preview", dirty.runtime),
     ).toThrow("INSTANCE_BUILD_IDENTITY_INVALID");
+  });
+
+  it.each(["preview", "dev"] as const)(
+    "admits the Go builder's schema 4 identity for %s startup",
+    async (environment) => {
+      const root = await fs.mkdtemp(
+        path.join(os.tmpdir(), "farol-go-instance-"),
+      );
+      roots.push(root);
+      const fixture = await writeBuildFixture(root, {
+        dirty: false,
+        inputExact: true,
+      });
+      const file = path.join(root, "build-manifest.json");
+      const manifest = JSON.parse(await fs.readFile(file, "utf8"));
+      await fs.writeFile(
+        file,
+        JSON.stringify({ ...manifest, schema: 4, core: goCoreDeclaration() }),
+      );
+      expect(
+        readBuildLaunchIdentity(root, environment, fixture.runtime),
+      ).toEqual({
+        ...primary,
+        environment,
+      });
+    },
+  );
+
+  it.each<[string, Record<string, unknown>]>([
+    ["missing core", { schema: 4 }],
+    ["invalid core", { schema: 4, core: { schema: "farol-core-artifact/1" } }],
+    ["future schema", { schema: 5, core: goCoreDeclaration() }],
+    ["legacy core mismatch", { schema: 3, core: goCoreDeclaration() }],
+    ...["buildId", "sourceSHA", "sourceTreeDigest"].map(
+      (field): [string, Record<string, unknown>] => [
+        `foreign core ${field}`,
+        {
+          schema: 4,
+          core: {
+            ...goCoreDeclaration(),
+            build: {
+              ...goCoreDeclaration().build,
+              [field]: "f".repeat(field === "sourceSHA" ? 40 : 64),
+            },
+          },
+        },
+      ],
+    ),
+    [
+      "inexact Go input ledger",
+      { schema: 4, core: goCoreDeclaration(), inputExact: false },
+    ],
+  ])("rejects %s before Go instance admission", async (_reason, invalid) => {
+    const root = await fs.mkdtemp(
+      path.join(os.tmpdir(), "farol-go-instance-bad-"),
+    );
+    roots.push(root);
+    const fixture = await writeBuildFixture(root, {
+      dirty: false,
+      inputExact: true,
+    });
+    const file = path.join(root, "build-manifest.json");
+    const manifest = JSON.parse(await fs.readFile(file, "utf8"));
+    await fs.writeFile(file, JSON.stringify({ ...manifest, ...invalid }));
+    for (const environment of ["preview", "dev"] as const) {
+      expect(() =>
+        readBuildLaunchIdentity(root, environment, fixture.runtime),
+      ).toThrow("INSTANCE_BUILD_IDENTITY_INVALID");
+    }
+  });
+
+  it("keeps Go startup bound to a clean runtime and exact input ledger", async () => {
+    const root = await fs.mkdtemp(
+      path.join(os.tmpdir(), "farol-go-instance-inputs-"),
+    );
+    roots.push(root);
+    const file = path.join(root, "build-manifest.json");
+    for (const dirty of [true, false]) {
+      const fixture = await writeBuildFixture(root, {
+        dirty,
+        inputExact: true,
+      });
+      const manifest = JSON.parse(await fs.readFile(file, "utf8"));
+      await fs.writeFile(
+        file,
+        JSON.stringify({ ...manifest, schema: 4, core: goCoreDeclaration() }),
+      );
+      if (!dirty)
+        await fs.writeFile(path.join(root, "input-manifest.json"), "changed");
+      expect(() =>
+        readBuildLaunchIdentity(root, "dev", fixture.runtime),
+      ).toThrow("INSTANCE_BUILD_IDENTITY_INVALID");
+    }
   });
 
   it("admits dirty build inputs only for an explicit DEV launch", async () => {
