@@ -168,6 +168,67 @@ provider admission or complete network containment. React Chat still lacks a Sen
 surface, and the normal Go Send path deliberately refuses until its legitimate
 account/model/control-profile producer is qualified.
 
+## Owner Settings edit snapshot through Go
+
+Packaged source `f398f9c15b7960351057b7647ebb055820f05d4d` passed the normal
+host/Go edit-snapshot path on 4 October 2026. Build ID:
+`df54f25d1653527c9f81430165b3a89aeb1602fdee098169c41966964eddbc1a`.
+Artifact SHA-256:
+`95b7829b5d6a743877d3e4e299afd26f34ed9e486bcd13b5c23e2eb4eecb7e59`.
+It is unsigned `local.farol.next.preview`, version `0.1.10-owner.beta.1`, build
+`12`. Matching version metadata does not make it the separately installed access
+hotfix from source `569bd4d`. This React/Go package was neither installed nor released.
+
+The source-selected `computer.settings.snapshot` route performs one full Go
+native read under the current owner approval, with a fixed lease of at most
+15 seconds and final publication/policy checks. Its closed reply contains only
+root identity, relative path, raw byte count and SHA-256. It admits no Chat task
+or participant. Normal `computer.prepare-workspace-edit` uses this route in
+Go builds and refuses on failure without selecting the legacy reader. Full
+snapshots are bounded to 256 KiB; larger files are refused, never silently paged
+or truncated. The native digest includes any initial UTF-8 BOM and line endings.
+
+Harness `0d4296d1bc9149aea143f43b4af26d7cc1ca0bd4` adds `--edit-snapshot` to
+`tests/e2e/go-core-startup.e2e.mjs --run-native --reopen --read-discard --read-account`,
+with exact source/build/artifact pins. It uses the existing disposable UTF-8 canary
+and controlled site. Ordinary configuration commands grant write access, verify
+the folder, prepare the snapshot and cancel that exact preview. Independent file
+reads confirm 92 unchanged raw bytes and digest
+`d5316fef7f10cd316d10cffc1c85f80e5860b7e8559b3ef0ae52eee40a409ed6`.
+The retained profile/root/generation, participant map and Chat journal remain
+consistent. The harness then restores read access, verifies it and completes the
+React account/Discard/reopen journey described below, with account GETs exactly
+0 → 1 → 2 and zero attempted/accepted Sends. Both ordinary Quits observed exit0,
+no signal, confirmed drain and run-marker removal. All windows stayed hidden and
+unfocused. The successful disposable profile was removed after the final Quit.
+
+The local receipt is
+`_output/evidence/go-core-startup-ef4e9538-314f-4141-8dbc-ce322a7297a9.json`,
+profile `9ceba890-b317-4c63-ade0-28292ea745a8`. The exact package and an independently
+digest-checked copy are retained separately from the earlier account candidate.
+The witness uses normal preload `configure` for the edit commands: React currently
+has no Prepare/edit/Cancel controls. Executor origin is bound to the packaged
+source; it is not an independent Go RPC counter. Apply, observe and ACK still use
+the temporary TypeScript/Python path. Native BOM, size-bound, denied/revoked and
+conflict cases are not established by this particular packaged witness. This is
+not full Go mutation, installed workflow, live account or provider-Send acceptance.
+
+Frozen source `d232b72` passed `task ci:fast`: 7,450 main tests, 169 React tests,
+164 core protocol tests, Go root/nested race and vet, generated/import/type/lint,
+Hunt and secret gates. The subsequent main convergence changes only three version
+metadata files; 49 affected metadata tests pass and the full dependency graph is
+unchanged. The policy fix already matched accepted main byte-for-byte; its existing
+Go-adapted regression was preserved. The harness has 838 browser-free checks,
+including 68 snapshot checks. Independent bounded source review found no actionable
+defects in the snapshot cutover; full-range formal acceptance remains open.
+
+| Required boundary                      | Executable evidence                                                                                                                                                              | Layer and remaining witness                                                                                                                                      |
+| -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Full metadata and no Chat admission    | `TestSettingsSnapshotUsesPublishedOwnerWithoutChatOrText` in `boot/computersettingssnapshot_test.go`; `settingsSnapshotWitness` in `tests/e2e/lib/settings-snapshot-witness.mjs` | Injected composition plus exact packaged physical file/hash observations; native size/BOM edges remain separate.                                                 |
+| Current authority before disclosure    | `TestSettingsSnapshotFinalCurrentGuard` and `TestSettingsSnapshotWireWithdrawalWhileNativeWaits` in `boot/computersettingssnapshot_test.go`; app snapshot policy tests           | Pure/framed Go owner evidence; removing the final app authority gate caused 13 owning regressions to fail. Real mid-read revocation is not this package witness. |
+| Exact host correlation and no fallback | `tests/unit/go-computer-authority.test.ts` and `tests/unit/go-workspace-snapshot.test.ts`                                                                                        | Closed request/backend/publication/workspace/root/generation checks, one request, no legacy dispatch.                                                            |
+| Normal Prepare/Cancel/reopen           | Opt-in `--edit-snapshot --read-account` with the pinned package/harness above                                                                                                    | Packaged preload + real Go/file system and React account controls. Actual React edit controls and Go Apply remain open.                                          |
+
 ## React read-preview and explicit account confirmation
 
 Package `ac580aa026f9c126297e461a349461067177e30e` passed the normal production
