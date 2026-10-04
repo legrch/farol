@@ -15,6 +15,7 @@ import (
 
 type Service struct {
 	lease       Execution
+	owner       *ownerAuthority
 	gate        Gate
 	clock       port.Clock
 	repository  port.MutationRepository
@@ -90,6 +91,9 @@ func sameDescriptor(a, b port.MutationDescriptor) bool {
 // current constructs disclosure under the selected owners. Native IO and the
 // journal never execute inside the callback. Current exclusions remain binding.
 func (s *Service) current(ctx context.Context, workspaceID, path string, expected *port.MutationDescriptor, disclose func() error) (port.MutationDescriptor, error) {
+	if s.owner != nil {
+		return s.owner.current(ctx, workspaceID, path, expected, disclose)
+	}
 	var descriptor port.MutationDescriptor
 	if ctx == nil || ctx.Err() != nil {
 		return descriptor, authority.Fail("WORKSPACE_MUTATION_CANCELLED", "native-workspace")

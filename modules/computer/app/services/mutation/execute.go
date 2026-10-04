@@ -39,6 +39,16 @@ func (s *Service) Execute(ctx context.Context, r ExecuteRequest) (*ExecuteRespon
 		return nil, authority.Fail("COMPUTER_MUTATION_FINGERPRINT_FAILED", "operation-store")
 	}
 	binding := state.Binding{Identity: identity(r), WorkspaceID: r.WorkspaceID, RequestDigest: digest}
+	out, err := s.executeBound(ctx, binding, op)
+	if err != nil {
+		return nil, err
+	}
+	return taskResponse(r, out), nil
+}
+
+// executeBound is the single admission/native/publication engine. Task and
+// owner Settings select different authority owners, never different retries.
+func (s *Service) executeBound(ctx context.Context, binding state.Binding, op state.Operation) (*attemptResult, error) {
 	s.gate.Lock()
 	if s.binding != nil && *s.binding != binding {
 		s.gate.Unlock()
@@ -51,7 +61,7 @@ func (s *Service) Execute(ctx context.Context, r ExecuteRequest) (*ExecuteRespon
 	if s.terminal != nil {
 		record, publication := s.terminal.Clone(), s.publication
 		s.gate.Unlock()
-		return s.disclose(ctx, r, op.Path(), &record, publication)
+		return s.discloseResult(ctx, binding.WorkspaceID, op.Path(), &record, publication)
 	}
 	if s.blocked != nil {
 		err := s.blocked
@@ -61,7 +71,7 @@ func (s *Service) Execute(ctx context.Context, r ExecuteRequest) (*ExecuteRespon
 	s.binding = &binding
 	s.pending = true
 	s.gate.Unlock()
-	finish := func(record *state.State, publication string, err error) (*ExecuteResponse, error) {
+	finish := func(record *state.State, publication string, err error) (*attemptResult, error) {
 		s.gate.Lock()
 		s.pending = false
 		if record != nil {
@@ -75,9 +85,9 @@ func (s *Service) Execute(ctx context.Context, r ExecuteRequest) (*ExecuteRespon
 		if err != nil {
 			return nil, err
 		}
-		return s.disclose(ctx, r, op.Path(), record, publication)
+		return s.discloseResult(ctx, binding.WorkspaceID, op.Path(), record, publication)
 	}
-	descriptor, err := s.current(ctx, r.WorkspaceID, op.Path(), nil, nil)
+	descriptor, err := s.current(ctx, binding.WorkspaceID, op.Path(), nil, nil)
 	if err != nil {
 		return finish(nil, "", err)
 	}
@@ -109,7 +119,7 @@ func (s *Service) Execute(ctx context.Context, r ExecuteRequest) (*ExecuteRespon
 	}
 	var native *port.MutationReceipt
 	errGuard := func(ctx context.Context) error {
-		_, err := s.current(ctx, r.WorkspaceID, op.Path(), &descriptor, nil)
+		_, err := s.current(ctx, binding.WorkspaceID, op.Path(), &descriptor, nil)
 		return err
 	}
 	if err = errGuard(ctx); err == nil {
@@ -162,24 +172,49 @@ func preimageMatches(op state.Operation, observed *string) bool {
 	}
 	return false
 }
-func (s *Service) disclose(ctx context.Context, r CheckRequest, path string, record *state.State, publication string) (*ExecuteResponse, error) {
-	var response *ExecuteResponse
-	_, err := s.current(ctx, r.WorkspaceID, path, nil, func() error {
-		response = &ExecuteResponse{OperationID: r.OperationID, WorkspaceID: r.WorkspaceID, CallID: r.CallID, TurnID: r.TurnID, Generation: r.Generation, Phase: string(record.Phase()), Publication: publication}
-		if receipt := record.Receipt(); receipt != nil {
-			response.Receipt = &Receipt{Operation: string(receipt.Operation), RelativePath: receipt.RelativePath, Bytes: receipt.Bytes, Replacements: receipt.Replacements, BeforeSHA256: cloneHash(receipt.BeforeSHA256), AfterSHA256: receipt.AfterSHA256}
-		}
-		if failure := record.Failure(); failure != nil {
-			response.Failure = &Failure{Code: failure.Code, Source: failure.Source}
-		}
-		if record.Phase() == state.Prepared {
-			response.Phase = string(state.OutcomeUnknown)
-			response.Failure = &Failure{Code: "WORKSPACE_MUTATION_OUTCOME_UNKNOWN", Source: "operation-store"}
-		}
+
+type attemptResult struct {
+	Phase, Publication string
+	Receipt            *Receipt
+	Failure            *Failure
+}
+
+func resultOf(record *state.State, publication string) *attemptResult {
+	out := &attemptResult{Phase: string(record.Phase()), Publication: publication}
+	if receipt := record.Receipt(); receipt != nil {
+		out.Receipt = &Receipt{Operation: string(receipt.Operation), RelativePath: receipt.RelativePath, Bytes: receipt.Bytes, Replacements: receipt.Replacements, BeforeSHA256: cloneHash(receipt.BeforeSHA256), AfterSHA256: receipt.AfterSHA256}
+	}
+	if failure := record.Failure(); failure != nil {
+		out.Failure = &Failure{Code: failure.Code, Source: failure.Source}
+	}
+	if record.Phase() == state.Prepared {
+		out.Phase = string(state.OutcomeUnknown)
+		out.Failure = &Failure{Code: "WORKSPACE_MUTATION_OUTCOME_UNKNOWN", Source: "operation-store"}
+	}
+	return out
+}
+
+func taskResponse(r CheckRequest, out *attemptResult) *ExecuteResponse {
+	return &ExecuteResponse{OperationID: r.OperationID, WorkspaceID: r.WorkspaceID, CallID: r.CallID, TurnID: r.TurnID, Generation: r.Generation,
+		Phase: out.Phase, Publication: out.Publication, Receipt: out.Receipt, Failure: out.Failure}
+}
+
+func (s *Service) discloseResult(ctx context.Context, workspaceID, path string, record *state.State, publication string) (*attemptResult, error) {
+	var response *attemptResult
+	_, err := s.current(ctx, workspaceID, path, nil, func() error {
+		response = resultOf(record, publication)
 		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
 	return response, nil
+}
+
+func (s *Service) disclose(ctx context.Context, r CheckRequest, path string, record *state.State, publication string) (*ExecuteResponse, error) {
+	out, err := s.discloseResult(ctx, r.WorkspaceID, path, record, publication)
+	if err != nil {
+		return nil, err
+	}
+	return taskResponse(r, out), nil
 }

@@ -19,6 +19,12 @@ func AuthorizeOwnerRead(a Approval, workspaceID, path string, now time.Time) err
 	return authorizeOwner(a, workspaceID, path, now, Read)
 }
 
+// AuthorizeOwnerWrite requires both the explicit write capability and write
+// workspace access. Read/List authority never implies permission to mutate.
+func AuthorizeOwnerWrite(a Approval, workspaceID, path string, now time.Time) error {
+	return authorizeOwner(a, workspaceID, path, now, Write)
+}
+
 func authorizeOwner(a Approval, workspaceID, path string, now time.Time, capability Capability) error {
 	if !ownerIdentifier(a.OwnerID, 80) || !ownerIdentifier(a.ComputerID, 120) || !ownerApprovalValid(a) {
 		return fail("COMPUTER_APPROVAL_INVALID", ComputerApprovalSource)
@@ -29,7 +35,7 @@ func authorizeOwner(a Approval, workspaceID, path string, now time.Time, capabil
 	if !ownerIdentifier(workspaceID, 120) || !ownerPath(path, true) {
 		return fail("COMPUTER_PATH_INVALID", ComputerApprovalSource)
 	}
-	return authorizePolicy(approvalPolicy(a), Action{Operation: Operation{Kind: capability, WorkspaceID: workspaceID, Path: path}}, now, string(ComputerApprovalSource))
+	return authorizePolicy(approvalPolicy(a), Action{Operation: Operation{Kind: capability, WorkspaceID: workspaceID, Path: path, Write: capability == Write}}, now, string(ComputerApprovalSource))
 }
 
 func ownerApprovalValid(a Approval) bool {

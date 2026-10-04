@@ -77,16 +77,20 @@ func (c *Contract) Check(ctx context.Context, r CheckRequest) (*CheckResponse, e
 
 func toApp(r CheckRequest) mutationsvc.CheckRequest {
 	app := mutationsvc.CheckRequest{OperationID: r.OperationID, OwnerID: r.OwnerID, SessionID: r.SessionID, TaskID: r.TaskID, TaskEpoch: r.TaskEpoch, ParticipantID: r.ParticipantID, TurnID: r.TurnID, Generation: r.Generation, CallID: r.CallID, WorkspaceID: r.WorkspaceID}
-	switch v := r.Operation.(type) {
+	app.Operation = toAppOperation(r.Operation)
+	return app
+}
+
+func toAppOperation(operation Operation) mutationsvc.Operation {
+	switch v := operation.(type) {
 	case Write:
-		app.Operation = mutationsvc.Write{RelativePath: v.RelativePath, Content: v.Content, ExpectedSHA256: cloneHash(v.ExpectedSHA256)}
+		return mutationsvc.Write{RelativePath: v.RelativePath, Content: v.Content, ExpectedSHA256: cloneHash(v.ExpectedSHA256)}
 	case Edit:
 		edits := make([]mutationsvc.TextEdit, 0, len(v.Edits))
 		for _, e := range v.Edits {
 			edits = append(edits, mutationsvc.TextEdit{OldText: e.OldText, NewText: e.NewText})
 		}
-		app.Operation = mutationsvc.Edit{RelativePath: v.RelativePath, Edits: edits, ExpectedSHA256: v.ExpectedSHA256}
+		return mutationsvc.Edit{RelativePath: v.RelativePath, Edits: edits, ExpectedSHA256: v.ExpectedSHA256}
 	}
-
-	return app
+	return nil
 }

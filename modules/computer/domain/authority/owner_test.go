@@ -134,3 +134,30 @@ func TestAuthorizeOwnerRead(t *testing.T) {
 		})
 	}
 }
+
+func TestAuthorizeOwnerWriteRequiresExactWriteAuthority(t *testing.T) {
+	now := time.UnixMilli(1800000000000)
+	a := ownerFixture()
+	a.Capabilities = []Capability{Write}
+	if err := AuthorizeOwnerWrite(a, "work", "/work/file", now); err == nil {
+		t.Fatal("write capability inflated read-only workspace")
+	}
+	a.Workspaces[0].Access = WriteAccess
+	if err := AuthorizeOwnerWrite(a, "work", "/work/file", now); err != nil {
+		t.Fatal(err)
+	}
+	for _, capability := range []Capability{Read, List, Search} {
+		a.Capabilities = []Capability{capability}
+		if err := AuthorizeOwnerWrite(a, "work", "/work/file", now); err == nil {
+			t.Fatal("non-write capability granted mutation")
+		}
+	}
+	a.Capabilities = []Capability{Write}
+	a.ExcludedPaths = []Exclusion{{WorkspaceID: "work", Path: "/work/Café"}}
+	if err := AuthorizeOwnerWrite(a, "work", "/work/CAFE/file", now); err == nil {
+		t.Fatal("aliased exclusion bypassed")
+	}
+	if err := AuthorizeOwnerWrite(a, "work", "/work/file", a.ExpiresAt); err == nil {
+		t.Fatal("expired write granted")
+	}
+}
