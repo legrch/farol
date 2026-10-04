@@ -5,7 +5,7 @@
  * node tests/e2e/go-core-startup.e2e.mjs --self-test
  * node tests/e2e/go-core-startup.e2e.mjs [--check|--run-native]
  *   --candidate-root /absolute/_output/build/app --source-sha <SHA>
- *   --build-id <buildId> [--dependency-root /absolute/node_modules] [--reopen] [--read-discard]
+ *   --build-id <buildId> [--dependency-root /absolute/node_modules] [--reopen] [--read-discard] [--read-account]
  * Or replace --candidate-root with:
  *   --packaged /absolute/Farol.app --artifact-metadata /absolute/artifact.json
  *   --artifact-sha <independently selected artifactSha256>
@@ -15,7 +15,10 @@
  * Send, auth or app-under-test entry compilation. Never retry an unknown launch.
  * --read-discard requires packaged --reopen and selects a separate grant-bearing
  * read-preview -> explicit Discard -> Quit -> retained-settings reopen journey.
- * Only fixture readiness is verified; model/account scope and Send are excluded.
+ * Read-discard alone verifies fixture readiness; model/account scope and Send
+ * are excluded. The read-account extension is synthetic account evidence only.
+ * --read-account additionally requires --read-discard and drives actual React
+ * prepare/inspect/confirm/Discard controls against a synthetic account session.
  * Missing denied/revoked witnesses are reported, never counted as passes.
  */
 import assert from "node:assert/strict";
@@ -65,6 +68,16 @@ import {
   settingsWitnessSelfTest,
 } from "./lib/computer-settings-witness.mjs";
 
+import {
+  readAccountLimits,
+  accountLedgerWitness,
+  readAccountUi,
+  accountUiWitness,
+  accountReplyWitness,
+  accountUiAction,
+  readAccountSelfTest,
+} from "./lib/read-account-ui-witness.mjs";
+
 const root = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "../..",
@@ -89,6 +102,9 @@ const contract = Object.freeze({
     "Packaged --reopen only: confirmed first Quit -> same sealed artifact/profile -> retained computerId/Graphite -> new journal backend generation -> second confirmed Quit; no retry after refused/unknown outcomes",
   readDiscard:
     "Explicit packaged --reopen --read-discard: normal configure add-workspace -> Verify -> check-folder -> list-workspace with independent Computer/Chat journal observations and exact canary listing, fixture chatgpt.verify readiness, Go read-preview metadata, duplicate prepare, exact Discard/cancel/ACK, duplicate discard without writes, known Quit, original handoff consumed by one same-profile/package successor; requires production handoff support for acknowledged never-reserved NOT_DISPATCHED history",
+  readAccount:
+    "Explicit packaged --reopen --read-discard --read-account: React verified folder/Choose file -> explicit Inspect current account -> ChatGPT/Home remount and same-revision Diagnostics refresh -> explicit Use this account -> known original duplicate account commands -> React exact Discard -> known Quit/reopen; exactly one inspect GET and one fresh confirmation GET, zero attempted/accepted Sends",
+  readAccountLimits,
   readDiscardLimits: [
     "Settings replies do not instrument executor origin. Source-only self-tests and a package built from ff2d84d4d2fb85bfc2fe9696696c0a90ddb1162e can still exercise TypeScript listings; Go acceptance requires Lead's new integrated package and exact production-source mapping of all three Settings commands to the Go owner executor",
     "Settings approval revision/expiry may advance while generation and approval semantics stay fixed. Retained participant map and Chat journal prove no retained admission/ChatTurn change; no independent transient execution/admission counter exists",
@@ -113,6 +129,7 @@ function selection(args) {
     mode: "--check",
     reopen: false,
     readDiscard: false,
+    readAccount: false,
     dependencyRoot: path.join(root, "node_modules"),
   };
   const options = new Map([
@@ -127,6 +144,12 @@ function selection(args) {
   const seen = new Set();
   for (let index = 0; index < args.length; index++) {
     const argument = args[index];
+    if (argument === "--read-account") {
+      assert.equal(seen.has("readAccount"), false, "READ_ACCOUNT_REPEATED");
+      seen.add("readAccount");
+      result.readAccount = true;
+      continue;
+    }
     if (argument === "--read-discard") {
       assert.equal(seen.has("readDiscard"), false, "READ_DISCARD_REPEATED");
       seen.add("readDiscard");
@@ -168,6 +191,19 @@ function selection(args) {
     assert.equal(result.reopen, false, "REOPEN_REQUIRES_PACKAGE");
     assert.equal(result.artifactMetadata, undefined, "PACKAGE_OPTION_WITH_DEV");
     assert.equal(result.artifactSHA, undefined, "PACKAGE_OPTION_WITH_DEV");
+  }
+  if (result.readAccount) {
+    assert.equal(
+      Boolean(result.packaged),
+      true,
+      "READ_ACCOUNT_REQUIRES_PACKAGE",
+    );
+    assert.equal(result.reopen, true, "READ_ACCOUNT_REQUIRES_REOPEN");
+    assert.equal(
+      result.readDiscard,
+      true,
+      "READ_ACCOUNT_REQUIRES_READ_DISCARD",
+    );
   }
   if (result.readDiscard) {
     assert.equal(
@@ -299,7 +335,31 @@ async function attest(selected) {
     assert.equal(source.commit, selected.sourceSHA, "DEV_SOURCE_PIN_MISMATCH");
     assert.equal(source.treeDigest, identity.sourceTreeDigest);
   }
+  // Keep the fixed manifest/startup checks intact. The new mode also records
+  // exact packaged source inputs for Lead's production-composition audit; an
+  // older package lacking an account/UI contract cannot qualify this journey.
+  let readAccountInputs;
+  if (selected.readAccount) {
+    readAccountInputs = [
+      "src/apps/desktop/main.ts",
+      "src/apps/desktop/chatgpt-route.ts",
+      "src/ui/renderer/chat-readonly.tsx",
+      "src/ui/renderer/controller.ts",
+      "apps/desktop/read-account-confirmation.ts",
+      "apps/desktop/bridge/read-intent.ts",
+    ].map((inputPath) => {
+      const input = ledger.find(
+        (entry) => entry.kind === "source" && entry.path === inputPath,
+      );
+      assert.ok(
+        input?.exact === true,
+        `READ_ACCOUNT_SOURCE_CONTRACT_MISSING:${inputPath}`,
+      );
+      return input;
+    });
+  }
   return {
+    ...(selected.readAccount ? { readAccountInputs } : {}),
     appRoot,
     identity,
     core: build.core,
@@ -696,6 +756,19 @@ async function native(selected, inputs, report, save) {
     { mode: 0o700, flag: "wx" },
   );
   let site;
+  const accountSession = selected.readAccount
+    ? {
+        user: { id: "startup-synthetic-user" },
+        account: { id: "startup-synthetic-account" },
+        expires: new Date(Date.now() + 60 * 60_000).toISOString(),
+      }
+    : undefined;
+  let accountGets = 0;
+  const ledgerWitness = (ledger) => {
+    zeroSends(ledger);
+    if (selected.readAccount)
+      accountLedgerWitness(ledger, accountGets, accountSession);
+  };
   let application;
   let child;
   let exited;
@@ -742,7 +815,7 @@ async function native(selected, inputs, report, save) {
         );
     } else zeroAuthority(profile.value, access.value, computerId);
     report.snapshots.push({ launch: launch.ordinal, label, profile, access });
-    zeroSends(site.driver.snapshot());
+    ledgerWitness(site.driver.snapshot());
     await save();
   };
   const captureJournal = async (label, previous, retired = false) => {
@@ -916,7 +989,7 @@ async function native(selected, inputs, report, save) {
       });
       launch.cleanup.runMarkerRemoved = true;
       launch.terminalLedger = site.driver.snapshot();
-      zeroSends(launch.terminalLedger);
+      ledgerWitness(launch.terminalLedger);
       if (selected.reopen) {
         await captureJournal(
           "confirmed-quit",
@@ -941,6 +1014,7 @@ async function native(selected, inputs, report, save) {
     const { startControlledChatGptSite } =
       await import("./fixtures/chatgpt-controlled-site.mjs");
     site = await startControlledChatGptSite({
+      ...(selected.readAccount ? { account: accountSession } : {}),
       conversationId: "startup-no-send-conversation",
       selection: { model: "Startup fixture", effort: "Light", connector: null },
       turns: [
@@ -1173,7 +1247,7 @@ async function native(selected, inputs, report, save) {
           20000,
           "READ_CONFIGURATION_OUTCOME_UNKNOWN",
         );
-        zeroSends(site.driver.snapshot());
+        ledgerWitness(site.driver.snapshot());
         await hidden();
         report.readDiscard.commands ??= [];
         report.readDiscard.commands.push({ command, reply });
@@ -1258,7 +1332,7 @@ async function native(selected, inputs, report, save) {
         // ready/read/Discard/retirement protections remain unchanged.
         journalWitness(chat.value, profile.value.profileId, physical.chatRoot);
         observed.counters = settingsAuthorityWitness(observed, previous);
-        zeroSends(site.driver.snapshot());
+        ledgerWitness(site.driver.snapshot());
         await save();
         return observed;
       };
@@ -1322,14 +1396,60 @@ async function native(selected, inputs, report, save) {
         selected.buildId,
       );
       report.readDiscard.settings = configured;
-      const prepared = await configure({
-        kind: "chatgpt.prepare-readonly-task",
-        workspaceId,
-      });
-      assert.equal(prepared.ok, true, "READ_PREVIEW_FAILED");
-      retainedApprovedSettings(prepared.snapshot.settings, configured);
-      previewWitness(prepared.evidence, workspace);
-      launch.readPreview = prepared.evidence;
+      let originalUi;
+      const forbiddenUi = selected.readAccount
+        ? [accountSession.user.id, accountSession.account.id]
+        : [];
+      if (selected.readAccount) {
+        report.readAccount = {
+          limits: readAccountLimits,
+          observations: [],
+          commands: [],
+          sourceBinding: {
+            packageSourceCommit: inputs.identity.sourceCommit,
+            inputs: inputs.readAccountInputs,
+          },
+        };
+        await window
+          .getByRole("button", { name: "Home", exact: true })
+          .click({ timeout: 5000 });
+        await window
+          .locator(".home-page")
+          .waitFor({ state: "visible", timeout: 5000 });
+        await hidden();
+        const section = window.locator(
+          'section[aria-label="Read-only file preview"]',
+        );
+        await section
+          .getByLabel("Read-only folder", { exact: true })
+          .selectOption(workspaceId, { timeout: 5000 });
+        await accountUiAction(window, "Choose file…", "Discard preview");
+        await hidden();
+        originalUi = accountUiWitness(
+          await readAccountUi(window),
+          workspace,
+          "prepared",
+          undefined,
+          forbiddenUi,
+        );
+        assert.equal(
+          originalUi.revision,
+          configured.revision,
+          "ACCOUNT_UI_CONFIGURATION_CROSSED",
+        );
+        launch.readPreview = originalUi.preview;
+        report.readAccount.originalUi = originalUi;
+        ledgerWitness(site.driver.snapshot());
+      } else {
+        const prepared = await configure({
+          kind: "chatgpt.prepare-readonly-task",
+          workspaceId,
+        });
+        assert.equal(prepared.ok, true, "READ_PREVIEW_FAILED");
+        retainedApprovedSettings(prepared.snapshot.settings, configured);
+        previewWitness(prepared.evidence, workspace);
+        launch.readPreview = prepared.evidence;
+      }
       const previewJournal = await captureJournal("read-preview");
       await capture("read-preview-approved", settings.computer.computerId);
       const legacyPath = path.join(
@@ -1343,38 +1463,232 @@ async function native(selected, inputs, report, save) {
         "prepared",
       );
       report.readDiscard.legacyPrepared = legacyPrepared;
-      const repeated = await configure({
-        kind: "chatgpt.prepare-readonly-task",
-        workspaceId,
-      });
-      assert.equal(repeated.ok, true, "READ_DUPLICATE_PREPARE_FAILED");
-      assert.deepEqual(
-        repeated.evidence,
-        launch.readPreview,
-        "READ_DUPLICATE_PREVIEW_CHANGED",
-      );
-      retainedApprovedSettings(repeated.snapshot.settings, configured);
-      assert.deepEqual(
-        await captureJournal("duplicate-read-preview"),
-        previewJournal,
-        "READ_DUPLICATE_ADMISSION_WRITES",
-      );
-      assert.deepEqual(
-        await document(legacyPath, 65536),
-        legacyPrepared,
-        "READ_DUPLICATE_LEGACY_PREPARE_WRITES",
-      );
-      await capture(
-        "duplicate-read-preview-approved",
-        settings.computer.computerId,
-      );
+      if (selected.readAccount) {
+        const observeAccount = async (label, phase) => {
+          active();
+          await hidden();
+          const ui = await readAccountUi(window);
+          accountUiWitness(ui, workspace, phase, originalUi, forbiddenUi);
+          const journal = await captureJournal(label);
+          assert.deepEqual(
+            journal,
+            previewJournal,
+            "ACCOUNT_CHAT_TURN_MUTATED",
+          );
+          assert.deepEqual(
+            await document(legacyPath, 65536),
+            legacyPrepared,
+            "ACCOUNT_LEGACY_TURN_MUTATED",
+          );
+          const configuration = await document(
+            path.join(stateRoot, "config.json"),
+            256 * 1024,
+          );
+          retainedApprovedSettings(configuration.value, configured);
+          await capture(label, settings.computer.computerId);
+          const ledger = site.driver.snapshot();
+          ledgerWitness(ledger);
+          report.readAccount.observations.push({
+            label,
+            phase,
+            ui,
+            journal,
+            configuration,
+            ledger,
+          });
+          await save();
+        };
+        const gets = (expected) => {
+          accountLedgerWitness(
+            site.driver.snapshot(),
+            expected,
+            accountSession,
+          );
+          accountGets = expected;
+        };
+        const remount = async (label, phase) => {
+          await window
+            .locator('section[aria-label="Selected file metadata"]')
+            .getByRole("button", { name: "Open ChatGPT", exact: true })
+            .click({ timeout: 5000 });
+          await window
+            .locator('section[aria-label="Read-only file preview"]')
+            .waitFor({ state: "detached", timeout: 5000 });
+          await hidden();
+          ledgerWitness(site.driver.snapshot());
+          await window
+            .getByRole("button", { name: "Home", exact: true })
+            .click({ timeout: 5000 });
+          await window
+            .locator(".home-page")
+            .waitFor({ state: "visible", timeout: 5000 });
+          await window
+            .locator('section[aria-label="Read-only file preview"]')
+            .getByRole("button", { name: "Discard preview", exact: true })
+            .waitFor({ state: "visible", timeout: 5000 });
+          await observeAccount(label, phase);
+        };
+        await observeAccount(
+          "react-preview-before-inspect-zero-get",
+          "prepared",
+        );
+        await accountUiAction(
+          window,
+          "Inspect current account",
+          "Use this account",
+        );
+        gets(1);
+        await observeAccount("react-explicit-inspect-one-get", "observed");
+        // Exact UI success and independent zero-Send/one-GET/journal observations
+        // above are prerequisites. Unknown/refused first results never get here.
+        const inspected = await configure({
+          kind: "chatgpt.inspect-readonly-account",
+          operationId: originalUi.preview.operationId,
+        });
+        const confirmationId = accountReplyWitness(
+          inspected,
+          configured,
+          originalUi,
+          "observed",
+        );
+        report.readAccount.commands.push({
+          kind: "known-original-duplicate-inspect",
+          reply: inspected,
+        });
+        await observeAccount(
+          "duplicate-inspect-no-get-no-turn-change",
+          "observed",
+        );
+        await remount(
+          "observed-chatgpt-home-remount-no-implicit-effects",
+          "observed",
+        );
+        await window
+          .getByRole("button", { name: "Settings", exact: true })
+          .click({ timeout: 5000 });
+        await window
+          .locator(".contextual-sidebar")
+          .getByRole("button", { name: "Diagnostics", exact: true })
+          .click({ timeout: 5000 });
+        const diagnostics = window
+          .locator(".settings-page > div:not([hidden])")
+          .filter({
+            has: window.getByRole("heading", {
+              name: "Diagnostics",
+              exact: true,
+            }),
+          });
+        await diagnostics
+          .getByRole("button", { name: "Refresh status", exact: true })
+          .click({ timeout: 5000 });
+        const refreshed = await ready(window, active);
+        retainedApprovedSettings(refreshed.configuration.settings, configured);
+        assert.ok(
+          (await diagnostics.textContent()).includes(
+            `Configuration revision: ${originalUi.revision}.`,
+          ),
+        );
+        await window
+          .getByRole("button", { name: "Home", exact: true })
+          .click({ timeout: 5000 });
+        await window
+          .locator(".home-page")
+          .waitFor({ state: "visible", timeout: 5000 });
+        await observeAccount(
+          "observed-same-revision-refresh-retained",
+          "observed",
+        );
+        await accountUiAction(window, "Use this account", "approved");
+        gets(2);
+        await observeAccount(
+          "react-explicit-account-confirmed-two-gets",
+          "approved",
+        );
+        // Reuse the exact original operation + confirmation. No replacement key,
+        // reinspection or reapproval is authorized after unknown/refused work.
+        const approved = await configure({
+          kind: "chatgpt.approve-readonly-account",
+          operationId: originalUi.preview.operationId,
+          confirmationId,
+        });
+        accountReplyWitness(
+          approved,
+          configured,
+          originalUi,
+          "approved",
+          confirmationId,
+        );
+        report.readAccount.commands.push({
+          kind: "known-original-duplicate-confirm",
+          reply: approved,
+        });
+        await observeAccount(
+          "duplicate-confirm-no-get-no-turn-change",
+          "approved",
+        );
+        await remount(
+          "approved-chatgpt-home-remount-no-implicit-effects",
+          "approved",
+        );
+        report.readAccount.confirmationId = confirmationId;
+      } else {
+        const repeated = await configure({
+          kind: "chatgpt.prepare-readonly-task",
+          workspaceId,
+        });
+        assert.equal(repeated.ok, true, "READ_DUPLICATE_PREPARE_FAILED");
+        assert.deepEqual(
+          repeated.evidence,
+          launch.readPreview,
+          "READ_DUPLICATE_PREVIEW_CHANGED",
+        );
+        retainedApprovedSettings(repeated.snapshot.settings, configured);
+        assert.deepEqual(
+          await captureJournal("duplicate-read-preview"),
+          previewJournal,
+          "READ_DUPLICATE_ADMISSION_WRITES",
+        );
+        assert.deepEqual(
+          await document(legacyPath, 65536),
+          legacyPrepared,
+          "READ_DUPLICATE_LEGACY_PREPARE_WRITES",
+        );
+        await capture(
+          "duplicate-read-preview-approved",
+          settings.computer.computerId,
+        );
+      }
       const operationId = launch.readPreview.operationId;
-      const discarded = await configure({
-        kind: "chatgpt.cancel-readonly-task",
-        operationId,
-      });
-      assert.equal(discarded.ok, true, "READ_DISCARD_NOT_CONFIRMED");
-      retainedApprovedSettings(discarded.snapshot.settings, configured);
+      if (selected.readAccount) {
+        await accountUiAction(window, "Discard preview", "discarded");
+        const ui = await readAccountUi(window);
+        assert.equal(ui.operationId, null, "ACCOUNT_DISCARD_PREVIEW_RETAINED");
+        assert.equal(
+          ui.buttons.some((button) =>
+            [
+              "Discard preview",
+              "Use this account",
+              "Inspect current account",
+            ].includes(button.name),
+          ),
+          false,
+          "ACCOUNT_DISCARD_CONTROLS_RETAINED",
+        );
+        assert.ok(
+          ui.text.includes("The exact preview was discarded."),
+          "ACCOUNT_DISCARD_UI_UNCONFIRMED",
+        );
+        await hidden();
+        ledgerWitness(site.driver.snapshot());
+        report.readAccount.discardUi = ui;
+      } else {
+        const discarded = await configure({
+          kind: "chatgpt.cancel-readonly-task",
+          operationId,
+        });
+        assert.equal(discarded.ok, true, "READ_DISCARD_NOT_CONFIRMED");
+        retainedApprovedSettings(discarded.snapshot.settings, configured);
+      }
       launch.readDiscarded = true;
       const discardedJournal = await captureJournal(
         "explicit-discard-cancel-ack",
@@ -1546,6 +1860,32 @@ async function native(selected, inputs, report, save) {
         persistedTheme: "graphite",
         renderedTheme: "graphite",
       });
+      if (selected.readAccount) {
+        const ui = await readAccountUi(reopened.window);
+        assert.equal(
+          ui.operationId,
+          null,
+          "ACCOUNT_REOPEN_PREVIEW_RESURRECTED",
+        );
+        assert.equal(
+          ui.text.includes(report.readAccount.originalUi.preview.operationId),
+          false,
+          "ACCOUNT_REOPEN_ORIGINAL_RECEIPT_RESURRECTED",
+        );
+        assert.equal(
+          ui.buttons.some((button) =>
+            [
+              "Inspect current account",
+              "Use this account",
+              "Discard preview",
+            ].includes(button.name),
+          ),
+          false,
+          "ACCOUNT_REOPEN_CONTROLS_RESURRECTED",
+        );
+        ledgerWitness(site.driver.snapshot());
+        report.readAccount.reopenUi = ui;
+      }
       const reopenedSettings = await document(
         path.join(stateRoot, "config.json"),
         256 * 1024,
@@ -1595,7 +1935,7 @@ async function native(selected, inputs, report, save) {
     if (site) {
       report.ledger = site.driver.snapshot();
       try {
-        zeroSends(report.ledger);
+        ledgerWitness(report.ledger);
       } catch (error) {
         report.cleanup.ledgerError = String(error);
       }
@@ -2060,6 +2400,29 @@ function selfTest() {
   );
   readWitnessSelfTest(pass, reject);
   settingsWitnessSelfTest(pass, reject, readCanary.relativePath);
+  readAccountSelfTest(pass, reject);
+  const accountArgs = [
+    "--read-account",
+    "--read-discard",
+    "--reopen",
+    ...packageArgs,
+  ];
+  pass(() => assert.equal(selection(accountArgs).readAccount, true));
+  pass(() => assert.equal(selection(args).readAccount, false));
+  pass(() =>
+    assert.equal(
+      selection(["--run-native", ...accountArgs]).mode,
+      "--run-native",
+    ),
+  );
+  for (const invalid of [
+    ["--read-account", ...packageArgs],
+    ["--read-account", "--reopen", ...packageArgs],
+    ["--read-account", "--read-discard", ...packageArgs],
+    ["--read-account", "--read-discard", "--reopen", ...args],
+    ["--read-account", ...accountArgs],
+  ])
+    reject(() => selection(invalid));
   pass(() =>
     assert.equal(
       selection(["--read-discard", "--reopen", ...packageArgs]).readDiscard,
@@ -2081,10 +2444,16 @@ async function main(args) {
   const selected = selection(args);
   const report = {
     contract,
-    scenario: selected.readDiscard ? contract.readDiscard : contract.scenario,
-    missingWitnesses: selected.readDiscard
-      ? contract.readDiscardLimits
-      : contract.missingWitnesses,
+    scenario: selected.readAccount
+      ? contract.readAccount
+      : selected.readDiscard
+        ? contract.readDiscard
+        : contract.scenario,
+    missingWitnesses: selected.readAccount
+      ? [...contract.readDiscardLimits, ...readAccountLimits]
+      : selected.readDiscard
+        ? contract.readDiscardLimits
+        : contract.missingWitnesses,
     isolation: selected.readDiscard
       ? "Private disposable workspace/HOME/AppData with existing E2E dialog seams and all windows hidden/unfocused; Settings executor origin requires exact production-source review; no hermetic all-paths claim"
       : contract.isolation,
@@ -2124,6 +2493,12 @@ async function main(args) {
         new URL("./lib/computer-settings-witness.mjs", import.meta.url),
       ),
     );
+    if (selected.readAccount)
+      report.readAccountWitnessSourceSHA = hash(
+        await regular(
+          new URL("./lib/read-account-ui-witness.mjs", import.meta.url),
+        ),
+      );
     report.attestation = await attest(selected);
     if (selected.mode === "--check") report.status = "checked-native-not-run";
     else {
@@ -2140,11 +2515,13 @@ async function main(args) {
         report.harnessSource,
         "HARNESS_CHANGED_DURING_NATIVE_RUN",
       );
-      report.status = selected.readDiscard
-        ? "passed-read-preview-discard-reopen-fixture-readiness-only"
-        : selected.reopen
-          ? "passed-reopen-startup-zero-authority-only"
-          : "passed-fresh-startup-zero-authority-only";
+      report.status = selected.readAccount
+        ? "passed-react-read-account-discard-reopen-synthetic-account-only"
+        : selected.readDiscard
+          ? "passed-read-preview-discard-reopen-fixture-readiness-only"
+          : selected.reopen
+            ? "passed-reopen-startup-zero-authority-only"
+            : "passed-fresh-startup-zero-authority-only";
     }
   } catch (error) {
     report.status = "failed-or-unknown";
