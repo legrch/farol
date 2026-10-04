@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
@@ -59,6 +60,13 @@ func openRepo(t *testing.T, roots Roots) *Repository {
 	return r
 }
 func TestNativeHandoffActualRetireSuccessorAndSecondCycle(t *testing.T) {
+	for _, name := range []string{"empty", "withdrawn-read"} {
+		t.Run(name, func(t *testing.T) { nativeActualRetireSuccessor(t, name == "withdrawn-read") })
+	}
+}
+
+func nativeActualRetireSuccessor(t *testing.T, withdrawRead bool) {
+	t.Helper()
 	ctx := context.Background()
 	roots := nativeRoots(t)
 	b := nativeBinding(roots)
@@ -73,6 +81,25 @@ func TestNativeHandoffActualRetireSuccessorAndSecondCycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if withdrawRead {
+		fixed := port.TurnBinding{ProfileID: b.ProfileID, BackendGeneration: b.BackendGeneration, OwnerID: "owner", SessionID: "session", TaskID: "task", TaskEpoch: 1, ParticipantID: "participant", TurnID: "read-turn", OperationID: "read-operation", TurnGeneration: 1}
+		// Actual live admission and withdrawal; no Browser or provider is assembled.
+		h, err := actual.Admit(ctx, fixed, strings.Repeat("a", 64))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := actual.WithdrawReadIntent(ctx, h); err != nil {
+			t.Fatal(err)
+		}
+		if err := h.WithCurrent(ctx, func(current *port.CurrentTurn) error {
+			if current != nil {
+				t.Fatal("withdrawn read remains current")
+			}
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
 	origin, err := actual.Retire(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -82,6 +109,18 @@ func TestNativeHandoffActualRetireSuccessorAndSecondCycle(t *testing.T) {
 	publication, err := service.Capture(ctx, b, "handoff-1", origin)
 	if err != nil {
 		t.Fatal(err)
+	}
+	head, err := repo.Load(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := head.Record.Receipt.Write
+	if withdrawRead {
+		if w.PreviousRevision != 3 || w.Revision != 4 || len(w.Turns) != 1 || w.Turns[0].AcknowledgedRevision != 3 || w.Turns[0].Binding.OperationID != "read-operation" {
+			t.Fatal("capture did not retain exact withdrawn-read receipt")
+		}
+	} else if w.PreviousRevision != 0 || len(w.Turns) != 0 {
+		t.Fatal("empty retirement changed")
 	}
 	ack, err := service.Acknowledge(ctx, port.HandoffACK{Publication: *publication})
 	if err != nil {
@@ -120,12 +159,26 @@ func TestNativeHandoffActualRetireSuccessorAndSecondCycle(t *testing.T) {
 		t.Fatal("existing lifecycle successor rejected retained actual origin", err)
 	}
 	t.Cleanup(func() { reopened.Close() })
+	if err := successor.Proof.WithRetirement(ctx, func(*port.RetirementReceipt) error {
+		t.Fatal("native constructor proof reused")
+		return nil
+	}); !errors.Is(err, policy.Refused) {
+		t.Fatal("native constructor did not consume proof", err)
+	}
 	actualNext, err := lifecycleapp.New(ctx, successor.Scope, lifecycleapp.Dependencies{Gate: &sync.Mutex{}, Journal: reopened})
 	if err != nil {
 		t.Fatal(err)
 	}
 	nextOrigin, err := actualNext.Retire(ctx)
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := nextOrigin.WithRetirement(ctx, func(r *port.RetirementReceipt) error {
+		if r.Write.PreviousRevision != 0 || r.Write.Revision != 1 || r.Write.Turns == nil || len(r.Write.Turns) != 0 || r.Write.Scope != nextScope {
+			t.Fatal("native successor restored retired handles or history")
+		}
+		return nil
+	}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = service.Capture(ctx, next, "handoff-2", nextOrigin); err != nil {
@@ -135,7 +188,7 @@ func TestNativeHandoffActualRetireSuccessorAndSecondCycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	final := openRepo(t, roots)
-	head, err := final.Load(ctx)
+	head, err = final.Load(ctx)
 	if err != nil || head.Record.Publication.Binding != next || head.Record.Stage != port.HandoffCaptured {
 		t.Fatal("second-cycle continuity lost", err)
 	}

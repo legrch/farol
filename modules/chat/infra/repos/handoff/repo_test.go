@@ -3,11 +3,13 @@ package handoff
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"testing"
 
 	"github.com/legrch/farol/modules/chat/app/port"
 	policy "github.com/legrch/farol/modules/chat/app/services/handoff"
+	"github.com/legrch/farol/modules/chat/domain/turn"
 )
 
 // These fixtures contain no filesystem/process proof. They exercise storage
@@ -111,6 +113,68 @@ func TestRepositoryComparePublishAndReplay(t *testing.T) {
 	loaded, err := reopened.Load(ctx)
 	if err != nil || loaded.Digest != head.Digest || loaded.Record.Stage != port.HandoffConsumed {
 		t.Fatal("consumed fence lost", err)
+	}
+}
+
+func cancelledRecordFixture() port.HandoffRecord {
+	r := recordFixture()
+	b := r.Publication.Binding
+	fixed := port.TurnBinding{ProfileID: b.ProfileID, BackendGeneration: b.BackendGeneration, OwnerID: "owner", SessionID: "session", TaskID: "task", TaskEpoch: 1, ParticipantID: "participant", TurnID: "turn", OperationID: "operation", TurnGeneration: 1}
+	i := turn.Identity{ProfileID: fixed.ProfileID, OwnerID: fixed.OwnerID, SessionID: fixed.SessionID, TaskID: fixed.TaskID, TurnID: fixed.TurnID, OperationID: fixed.OperationID, Generation: fixed.TurnGeneration}
+	r.Receipt.Write.PreviousRevision, r.Receipt.Write.Revision = 3, 4
+	r.Receipt.Write.Turns = []port.RetirementTurn{{Binding: fixed, AcknowledgedRevision: 3, Snapshot: turn.Snapshot{Identity: i, Phase: turn.Cancelled, HasResult: true, Result: turn.Result{ID: "result", Outcome: turn.CancelledOutcome, Code: "NOT_DISPATCHED"}, DeliveryAcknowledged: true, LifecycleSettled: true}}}
+	return r
+}
+
+// Memory storage qualifies the persisted codec/chain, not native files or exit.
+func TestRepositoryNeverDispatchedRoundtripAndReplay(t *testing.T) {
+	ctx := context.Background()
+	d := &memoryDisk{}
+	repo := repoFixture(d)
+	r := cancelledRecordFixture()
+	original := port.CopyRetirement(r.Receipt.Write)
+	head := &port.HandoffHead{}
+	for step := 0; step < 4; step++ {
+		previous := head.Digest
+		var err error
+		head, err = repo.Publish(ctx, previous, r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Every stage is decoded in a fresh fixture repository; no live owner is restored.
+		loaded, err := repoFixture(d).Load(ctx)
+		if err != nil || loaded.Digest != head.Digest || !port.SameRetirement(loaded.Record.Receipt.Write, original) {
+			t.Fatal("cancelled receipt changed in persisted chain", err)
+		}
+		if _, err := repo.Publish(ctx, previous, r); !errors.Is(err, Refused) {
+			t.Fatal("cancelled transition replayed", err)
+		}
+		if step < 3 {
+			r = nextRecord(t, r)
+		}
+	}
+	if d.calls != 4 || head.Record.Stage != port.HandoffConsumed {
+		t.Fatal("missing single consumption")
+	}
+}
+
+func TestCodecNeverDispatchedRejectsUnsafePersistedProjection(t *testing.T) {
+	r := cancelledRecordFixture()
+	// Marshal bypasses encode's pre-publication policy to exercise decode itself.
+	r.Receipt.Write.Turns[0].Snapshot.SendIntent = true
+	raw, err := json.Marshal(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := decode(raw); err == nil {
+		t.Fatal("unsafe persisted cancellation decoded")
+	}
+	d := &memoryDisk{records: [][]byte{raw}}
+	if head, err := repoFixture(d).Load(context.Background()); head != nil || !errors.Is(err, Unknown) {
+		t.Fatal("unsafe persisted cancellation minted known head", err)
+	}
+	if d.calls != 0 {
+		t.Fatal("bad stored receipt was repaired")
 	}
 }
 func TestRepositoryPublicationFailureFencesReopen(t *testing.T) {

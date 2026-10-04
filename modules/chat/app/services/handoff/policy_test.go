@@ -5,11 +5,15 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"math"
+	"strings"
 	"sync"
 	"testing"
 
 	"github.com/legrch/farol/modules/chat/app/port"
 	"github.com/legrch/farol/modules/chat/app/services/lifecycle"
+	"github.com/legrch/farol/modules/chat/domain/turn"
 )
 
 // Memory ports qualify policy only, not native durability, processes or host ACK.
@@ -91,6 +95,119 @@ func binding() port.HandoffBinding {
 }
 func receipt(b port.HandoffBinding) port.RetirementReceipt {
 	return port.RetirementReceipt{Write: port.RetirementWrite{Scope: port.JournalScope{ProfileID: b.ProfileID, BackendGeneration: b.BackendGeneration}, Root: b.ChatRoot, PreviousRevision: 0, Revision: 1, Turns: []port.RetirementTurn{}}, PublicationDigest: [32]byte{7}}
+}
+
+// Value fixture for hostile receipt sensitivity, not an actual retirement proof.
+func cancelledReceipt(b port.HandoffBinding) port.RetirementReceipt {
+	r := receipt(b)
+	fixed := port.TurnBinding{ProfileID: b.ProfileID, BackendGeneration: b.BackendGeneration, OwnerID: "owner", SessionID: "session", TaskID: "task", TaskEpoch: 1, ParticipantID: "participant", TurnID: "turn", OperationID: "operation", TurnGeneration: 1}
+	identity := turn.Identity{ProfileID: fixed.ProfileID, OwnerID: fixed.OwnerID, SessionID: fixed.SessionID, TaskID: fixed.TaskID, TurnID: fixed.TurnID, OperationID: fixed.OperationID, Generation: fixed.TurnGeneration}
+	r.Write.PreviousRevision, r.Write.Revision = 3, 4
+	r.Write.Turns = []port.RetirementTurn{{Binding: fixed, AcknowledgedRevision: 3, Snapshot: turn.Snapshot{Identity: identity, Phase: turn.Cancelled, HasResult: true, Result: turn.Result{ID: "result", Outcome: turn.CancelledOutcome, Code: "NOT_DISPATCHED"}, DeliveryAcknowledged: true, LifecycleSettled: true}}}
+	return r
+}
+
+func TestNeverDispatchedReceiptRejectsEachBoundaryBeforePublication(t *testing.T) {
+	mutations := map[string]func(*port.RetirementTurn){
+		"profile":                 func(r *port.RetirementTurn) { r.Binding.ProfileID = "other" },
+		"backend":                 func(r *port.RetirementTurn) { r.Binding.BackendGeneration = "other" },
+		"owner":                   func(r *port.RetirementTurn) { r.Binding.OwnerID = ""; r.Snapshot.Identity.OwnerID = "" },
+		"session":                 func(r *port.RetirementTurn) { r.Binding.SessionID = ""; r.Snapshot.Identity.SessionID = "" },
+		"task":                    func(r *port.RetirementTurn) { r.Binding.TaskID = ""; r.Snapshot.Identity.TaskID = "" },
+		"participant":             func(r *port.RetirementTurn) { r.Binding.ParticipantID = "" },
+		"turn":                    func(r *port.RetirementTurn) { r.Binding.TurnID = ""; r.Snapshot.Identity.TurnID = "" },
+		"operation":               func(r *port.RetirementTurn) { r.Binding.OperationID = ""; r.Snapshot.Identity.OperationID = "" },
+		"generation":              func(r *port.RetirementTurn) { r.Binding.TurnGeneration = 0; r.Snapshot.Identity.Generation = 0 },
+		"identity-profile":        func(r *port.RetirementTurn) { r.Snapshot.Identity.ProfileID = "other" },
+		"identity-owner":          func(r *port.RetirementTurn) { r.Snapshot.Identity.OwnerID = "other" },
+		"identity-session":        func(r *port.RetirementTurn) { r.Snapshot.Identity.SessionID = "other" },
+		"identity-task":           func(r *port.RetirementTurn) { r.Snapshot.Identity.TaskID = "other" },
+		"identity-turn":           func(r *port.RetirementTurn) { r.Snapshot.Identity.TurnID = "other" },
+		"identity-operation":      func(r *port.RetirementTurn) { r.Snapshot.Identity.OperationID = "other" },
+		"identity-generation":     func(r *port.RetirementTurn) { r.Snapshot.Identity.Generation++ },
+		"not-closed-phase":        func(r *port.RetirementTurn) { r.Snapshot.Phase = turn.Admitted },
+		"unknown-phase":           func(r *port.RetirementTurn) { r.Snapshot.Phase = turn.Unknown },
+		"delivered-phase":         func(r *port.RetirementTurn) { r.Snapshot.Phase = turn.Delivered },
+		"reserved":                func(r *port.RetirementTurn) { r.Snapshot.Reserved = true },
+		"stale-reservation":       func(r *port.RetirementTurn) { r.Snapshot.Reservation.Ordinal = 1 },
+		"bound":                   func(r *port.RetirementTurn) { r.Snapshot.Bound = true },
+		"stale-binding":           func(r *port.RetirementTurn) { r.Snapshot.Binding.Reservation.Ordinal = 1 },
+		"provider-home":           func(r *port.RetirementTurn) { r.Snapshot.Binding.Document.ProviderState = turn.ProviderHome },
+		"provider-conversation":   func(r *port.RetirementTurn) { r.Snapshot.Binding.Document.ConversationID = "conversation" },
+		"send-intent":             func(r *port.RetirementTurn) { r.Snapshot.SendIntent = true },
+		"accepted":                func(r *port.RetirementTurn) { r.Snapshot.Accepted = true },
+		"delta":                   func(r *port.RetirementTurn) { r.Snapshot.DeltaCount = 1 },
+		"sequence":                func(r *port.RetirementTurn) { r.Snapshot.LastSequence = 1 },
+		"outstanding-call":        func(r *port.RetirementTurn) { r.Snapshot.OutstandingCallID = "call" },
+		"missing-result":          func(r *port.RetirementTurn) { r.Snapshot.HasResult = false },
+		"missing-result-id":       func(r *port.RetirementTurn) { r.Snapshot.Result.ID = "" },
+		"unknown-outcome":         func(r *port.RetirementTurn) { r.Snapshot.Result.Outcome = turn.UnknownOutcome },
+		"completed-outcome":       func(r *port.RetirementTurn) { r.Snapshot.Result.Outcome = turn.Completed },
+		"wrong-code":              func(r *port.RetirementTurn) { r.Snapshot.Result.Code = "CANCEL_AFTER_SEND" },
+		"unacknowledged":          func(r *port.RetirementTurn) { r.Snapshot.DeliveryAcknowledged = false },
+		"unsettled":               func(r *port.RetirementTurn) { r.Snapshot.LifecycleSettled = false },
+		"missing-ack-revision":    func(r *port.RetirementTurn) { r.AcknowledgedRevision = 0 },
+		"early-ack-revision":      func(r *port.RetirementTurn) { r.AcknowledgedRevision = 2 },
+		"retirement-ack-revision": func(r *port.RetirementTurn) { r.AcknowledgedRevision = 4 },
+		"settled-revision":        func(r *port.RetirementTurn) { r.SettledRevision = 1 },
+		"released-revision":       func(r *port.RetirementTurn) { r.ReleasedRevision = 2 },
+		"quiescence":              func(r *port.RetirementTurn) { r.Quiescence.Confirmed = true },
+		"stale-quiescence":        func(r *port.RetirementTurn) { r.Quiescence.ResultID = "result" },
+		"disposal":                func(r *port.RetirementTurn) { r.Disposal.Confirmed = true },
+		"stale-disposal":          func(r *port.RetirementTurn) { r.Disposal.ResultID = "result" },
+	}
+	for name, mutate := range mutations {
+		t.Run(name, func(t *testing.T) {
+			b := binding()
+			r := cancelledReceipt(b)
+			mutate(&r.Write.Turns[0])
+			m := &memoryStore{}
+			s, _ := New(m)
+			if p, err := s.Capture(context.Background(), b, "handoff", &fixtureOrigin{receipt: r}); p != nil || !errors.Is(err, Nonempty) || m.calls != 0 {
+				t.Fatal("unsafe turn admitted or published", err)
+			}
+		})
+	}
+}
+
+func TestNeverDispatchedReceiptIdentitySyntaxAndRevisionBounds(t *testing.T) {
+	for _, name := range []string{"whitespace", "control", "invalid-utf8", "oversized", "missing-history", "short-history", "revision-gap", "overflow", "zero-digest", "scope", "root", "nil-turns"} {
+		t.Run(name, func(t *testing.T) {
+			b := binding()
+			r := cancelledReceipt(b)
+			switch name {
+			case "whitespace":
+				r.Write.Turns[0].Binding.ParticipantID = "bad id"
+			case "control":
+				r.Write.Turns[0].Binding.ParticipantID = "bad\x7f"
+			case "invalid-utf8":
+				r.Write.Turns[0].Binding.ParticipantID = string([]byte{255})
+			case "oversized":
+				r.Write.Turns[0].Binding.ParticipantID = strings.Repeat("x", 121)
+			case "missing-history":
+				r.Write.PreviousRevision, r.Write.Revision = 0, 1
+			case "short-history":
+				r.Write.PreviousRevision, r.Write.Revision = 2, 3
+			case "revision-gap":
+				r.Write.Revision++
+			case "overflow":
+				r.Write.PreviousRevision, r.Write.Revision = math.MaxUint64-1, math.MaxUint64
+			case "zero-digest":
+				r.PublicationDigest = [32]byte{}
+			case "scope":
+				r.Write.Scope.BackendGeneration = "other"
+			case "root":
+				r.Write.Root.Inode++
+			case "nil-turns":
+				r.Write.Turns = nil
+			}
+			m := &memoryStore{}
+			s, _ := New(m)
+			if p, err := s.Capture(context.Background(), b, "handoff", &fixtureOrigin{receipt: r}); p != nil || err == nil || m.calls != 0 {
+				t.Fatal("invalid receipt admitted", err)
+			}
+		})
+	}
 }
 func prepared(t *testing.T) (*Service, *memoryStore, port.HandoffPublication) {
 	t.Helper()
@@ -405,6 +522,294 @@ func (j liveJournal) Commit(context.Context, port.JournalWrite) (*port.JournalRe
 }
 func (j liveJournal) Retire(_ context.Context, w port.RetirementWrite) (*port.RetirementReceipt, error) {
 	return &port.RetirementReceipt{Write: port.CopyRetirement(w), PublicationDigest: [32]byte{7}}, nil
+}
+
+// Deterministic exact-reply journal, without native durability qualification.
+type withdrawalJournal struct {
+	liveJournal
+	writes       []port.JournalWrite
+	failRevision uint64
+}
+
+func (j *withdrawalJournal) Commit(_ context.Context, w port.JournalWrite) (*port.JournalReceipt, error) {
+	if w.PreviousRevision != uint64(len(j.writes)) || w.Revision != w.PreviousRevision+1 {
+		return nil, errors.New("crossed fixture revision")
+	}
+	j.writes = append(j.writes, w)
+	if w.Revision == j.failRevision {
+		return nil, errors.New("lost fixture reply")
+	}
+	return &port.JournalReceipt{Write: w}, nil
+}
+
+func TestActualWithdrawReadIntentRetireAndHandoff(t *testing.T) {
+	for _, name := range []string{"read", "multiple", "queued-cancel"} {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			b := binding()
+			g := &trackingGate{}
+			j := &withdrawalJournal{liveJournal: liveJournal{root: b.ChatRoot}}
+			actual, err := lifecycle.New(ctx, receipt(b).Write.Scope, lifecycle.Dependencies{Gate: g, Journal: j})
+			if err != nil {
+				t.Fatal(err)
+			}
+			fixed := cancelledReceipt(b).Write.Turns[0].Binding
+			ids := []string{"operation"}
+			if name == "multiple" {
+				ids = []string{"operation-z", "operation-a"}
+			}
+			for _, id := range ids {
+				fixed.OperationID, fixed.TurnID = id, id
+				h, err := actual.Admit(ctx, fixed, strings.Repeat("a", 64))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if name == "queued-cancel" {
+					if _, err := actual.Apply(ctx, h, lifecycle.Change{Action: lifecycle.Enqueue}); err != nil {
+						t.Fatal(err)
+					}
+					if _, err := actual.Cancel(ctx, h, "result"); err != nil {
+						t.Fatal(err)
+					}
+					if _, err := actual.Apply(ctx, h, lifecycle.Change{Action: lifecycle.Acknowledge, ResultID: "result"}); err != nil {
+						t.Fatal(err)
+					}
+				} else if err := actual.WithdrawReadIntent(ctx, h); err != nil {
+					t.Fatal(err)
+				}
+				if err := h.WithCurrent(ctx, func(c *port.CurrentTurn) error {
+					if c != nil {
+						t.Fatal("closed read remained current")
+					}
+					return nil
+				}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			origin, err := actual.Retire(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			m := &memoryStore{inside: &g.inside}
+			s, _ := New(m)
+			p, err := s.Capture(ctx, b, "handoff", origin)
+			if err != nil {
+				t.Fatal(err)
+			}
+			w := m.head.Record.Receipt.Write
+			if len(w.Turns) != len(ids) || w.PreviousRevision != uint64(len(j.writes)) {
+				t.Fatal("actual turns/history lost")
+			}
+			for _, retired := range w.Turns {
+				entry := j.writes[retired.AcknowledgedRevision-1].Entry
+				if entry.Kind != "acknowledge" || !entry.Closed || entry.Binding != retired.Binding || entry.After != retired.Snapshot {
+					t.Fatal("ACK revision is not exact original transition")
+				}
+			}
+			d, err := s.Acknowledge(ctx, port.HandoffACK{Publication: *p})
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Terminal and host drain are explicit fixtures, not process evidence.
+			if err := s.ObserveTerminal(ctx, terminal(*p, d)); err != nil {
+				t.Fatal(err)
+			}
+			next, err := s.Consume(ctx, *p, consumption())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := next.Proof.WithRetirement(ctx, func(r *port.RetirementReceipt) error {
+				if !port.SameRetirement(r.Write, w) {
+					t.Fatal("consumed proof lost original receipt")
+				}
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if err := next.Proof.WithRetirement(ctx, func(*port.RetirementReceipt) error { t.Fatal("proof replay callback"); return nil }); !errors.Is(err, Refused) {
+				t.Fatal("proof replay", err)
+			}
+			if _, err := s.Consume(ctx, *p, consumption()); !errors.Is(err, Refused) {
+				t.Fatal("consumption replay", err)
+			}
+		})
+	}
+}
+
+func TestActualUnknownWithdrawalCannotSupplyHandoffOrigin(t *testing.T) {
+	for _, revision := range []uint64{2, 3} {
+		t.Run(map[uint64]string{2: "cancel", 3: "ACK"}[revision], func(t *testing.T) {
+			ctx := context.Background()
+			b := binding()
+			j := &withdrawalJournal{liveJournal: liveJournal{root: b.ChatRoot}, failRevision: revision}
+			actual, err := lifecycle.New(ctx, receipt(b).Write.Scope, lifecycle.Dependencies{Gate: &sync.Mutex{}, Journal: j})
+			if err != nil {
+				t.Fatal(err)
+			}
+			h, err := actual.Admit(ctx, cancelledReceipt(b).Write.Turns[0].Binding, strings.Repeat("a", 64))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := actual.WithdrawReadIntent(ctx, h); err == nil {
+				t.Fatal("unknown withdrawal succeeded")
+			}
+			origin, err := actual.Retire(ctx)
+			if origin != nil || !errors.Is(err, lifecycle.Unsettled) {
+				t.Fatal("unknown minted origin", err)
+			}
+			m := &memoryStore{}
+			s, _ := New(m)
+			if p, err := s.Capture(ctx, b, "handoff", origin); p != nil || err == nil || m.calls != 0 {
+				t.Fatal("unknown origin captured", err)
+			}
+			if uint64(len(j.writes)) != revision {
+				t.Fatal("unknown journal retried")
+			}
+		})
+	}
+}
+
+func TestNeverDispatchedRegistryOrderUniquenessAndEveryTurn(t *testing.T) {
+	b := binding()
+	r := cancelledReceipt(b)
+	first := r.Write.Turns[0]
+	second := first
+	first.Binding.OperationID, first.Binding.TurnID = "a", "a"
+	first.Snapshot.Identity.OperationID, first.Snapshot.Identity.TurnID = "a", "a"
+	second.Binding.OperationID, second.Binding.TurnID = "z", "z"
+	second.Snapshot.Identity.OperationID, second.Snapshot.Identity.TurnID = "z", "z"
+	second.AcknowledgedRevision = 6
+	r.Write.PreviousRevision, r.Write.Revision = 6, 7
+	r.Write.Turns = []port.RetirementTurn{first, second}
+	for _, name := range []string{"valid", "unordered", "duplicate-operation", "duplicate-logical-turn", "duplicate-ACK", "unsafe-second", "short-history"} {
+		t.Run(name, func(t *testing.T) {
+			bad := r
+			bad.Write = port.CopyRetirement(r.Write)
+			switch name {
+			case "unordered":
+				bad.Write.Turns[0], bad.Write.Turns[1] = bad.Write.Turns[1], bad.Write.Turns[0]
+			case "duplicate-operation":
+				bad.Write.Turns[1].Binding.OperationID = "a"
+				bad.Write.Turns[1].Snapshot.Identity.OperationID = "a"
+			case "duplicate-logical-turn":
+				bad.Write.Turns[1].Binding.TurnID = "a"
+				bad.Write.Turns[1].Snapshot.Identity.TurnID = "a"
+			case "duplicate-ACK":
+				bad.Write.Turns[1].AcknowledgedRevision = 3
+			case "unsafe-second":
+				bad.Write.Turns[1].Snapshot.SendIntent = true
+			case "short-history":
+				bad.Write.PreviousRevision, bad.Write.Revision = 5, 6
+				bad.Write.Turns[1].AcknowledgedRevision = 5
+			}
+			m := &memoryStore{}
+			s, _ := New(m)
+			p, err := s.Capture(context.Background(), b, "handoff", &fixtureOrigin{receipt: bad})
+			if name == "valid" {
+				if err != nil || p == nil || m.calls != 1 {
+					t.Fatal("complete ordered turns refused", err)
+				}
+			} else if err == nil || p != nil || m.calls != 0 {
+				t.Fatal("unsafe registry admitted", err)
+			}
+		})
+	}
+}
+
+func TestNeverDispatchedRegistryCannotExceedLiveQueueCapacity(t *testing.T) {
+	b := binding()
+	r := cancelledReceipt(b)
+	first := r.Write.Turns[0]
+	r.Write.Turns = make([]port.RetirementTurn, turn.MaxRequests+1)
+	for n := range r.Write.Turns {
+		actual := first
+		id := fmt.Sprintf("operation-%04d", n)
+		actual.Binding.OperationID, actual.Binding.TurnID = id, id
+		actual.Snapshot.Identity.OperationID, actual.Snapshot.Identity.TurnID = id, id
+		actual.AcknowledgedRevision = 3 * (uint64(n) + 1)
+		r.Write.Turns[n] = actual
+	}
+	r.Write.PreviousRevision = 3 * uint64(len(r.Write.Turns))
+	r.Write.Revision = r.Write.PreviousRevision + 1
+	m := &memoryStore{}
+	s, _ := New(m)
+	if p, err := s.Capture(context.Background(), b, "handoff", &fixtureOrigin{receipt: r}); p != nil || !errors.Is(err, Nonempty) || m.calls != 0 {
+		t.Fatal("impossible live registry admitted", err)
+	}
+}
+
+func TestNeverDispatchedHandoffKeepsHostAndSuccessorFences(t *testing.T) {
+	for _, name := range []string{"before-ACK", "crossed-ACK", "unknown-terminal", "forced-stop", "cross-build", "missing-drain", "old-host", "old-child", "cross-root", "receipt-change"} {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			b := binding()
+			origin := &fixtureOrigin{receipt: cancelledReceipt(b)}
+			m := &memoryStore{}
+			s, _ := New(m)
+			p, err := s.Capture(ctx, b, "handoff", origin)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if name == "before-ACK" {
+				if err := s.ObserveTerminal(ctx, terminal(*p, [32]byte{1})); !errors.Is(err, Refused) || m.calls != 1 {
+					t.Fatal("missing host ACK accepted", err)
+				}
+				return
+			}
+			d, err := s.Acknowledge(ctx, port.HandoffACK{Publication: *p})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if name == "receipt-change" {
+				bad := Copy(*m.head.Record)
+				bad.Stage = port.HandoffTerminated
+				event := terminal(*p, d)
+				bad.Terminal = &event
+				bad.Receipt.Write.Turns[0].Binding.TaskEpoch++
+				if err := ValidateRecord(bad); err != nil {
+					t.Fatal("fixture must otherwise be admissible", err)
+				}
+				if err := ValidateTransition(m.head.Record, d, bad); !errors.Is(err, Refused) {
+					t.Fatal("original receipt replaced", err)
+				}
+				return
+			}
+			event := terminal(*p, d)
+			switch name {
+			case "crossed-ACK":
+				event.KnownACKDigest[0]++
+			case "unknown-terminal":
+				event.Kind = "EOF"
+			case "forced-stop":
+				event.StopMode = port.HandoffForcedStop
+			}
+			if name == "crossed-ACK" || name == "unknown-terminal" || name == "forced-stop" {
+				if err := s.ObserveTerminal(ctx, event); err == nil || m.calls != 2 {
+					t.Fatal("unclean terminal accepted", err)
+				}
+				return
+			}
+			if err := s.ObserveTerminal(ctx, event); err != nil {
+				t.Fatal(err)
+			}
+			c := consumption()
+			switch name {
+			case "cross-build":
+				c.NextBinding.BuildID = "other"
+			case "missing-drain":
+				c.PreviousHostDrainConfirmed = false
+			case "old-host":
+				c.NextBinding.HostLifetimeID = b.HostLifetimeID
+			case "old-child":
+				c.NextBinding.ChildLaunchID = b.ChildLaunchID
+			case "cross-root":
+				c.NextBinding.ChatRoot.Inode++
+			}
+			if next, err := s.Consume(ctx, *p, c); next != nil || !errors.Is(err, Refused) || m.calls != 3 {
+				t.Fatal("unsafe successor accepted", err)
+			}
+		})
+	}
 }
 func TestActualLiveRetireCopiesBeforePersistence(t *testing.T) {
 	b := binding()

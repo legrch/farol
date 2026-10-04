@@ -1,4 +1,4 @@
-// Package handoff owns the narrow empty-registry clean-retirement protocol.
+// Package handoff owns clean retirement of empty or never-dispatched registries.
 // Trusted boot owns root/host qualification and exact successor construction.
 package handoff
 
@@ -11,6 +11,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/legrch/farol/modules/chat/app/port"
+	"github.com/legrch/farol/modules/chat/domain/turn"
 )
 
 type Code string
@@ -56,17 +57,60 @@ func Copy(r port.HandoffRecord) port.HandoffRecord {
 }
 func validReceipt(p port.HandoffPublication, r port.RetirementReceipt) error {
 	w := r.Write
-	if w.Turns != nil && len(w.Turns) != 0 {
-		return Nonempty
-	}
 	if !validBinding(p.Binding) || !validID(p.HandoffID) || p.ReceiptDigest == ([32]byte{}) || p.ReceiptDigest != r.PublicationDigest || w.Scope != (port.JournalScope{ProfileID: p.Binding.ProfileID, BackendGeneration: p.Binding.BackendGeneration}) || w.Root != p.Binding.ChatRoot || w.Turns == nil || w.PreviousRevision >= math.MaxUint64-1 || w.Revision != w.PreviousRevision+1 {
 		return Invalid
 	}
-	// The only supported origin is an actually empty registry, without history.
-	if w.PreviousRevision != 0 {
-		return Refused
+	if len(w.Turns) == 0 {
+		// Empty cannot explain any previous journal activity.
+		if w.PreviousRevision != 0 {
+			return Refused
+		}
+		return nil
+	}
+	if len(w.Turns) > turn.MaxRequests || w.PreviousRevision < 3*uint64(len(w.Turns)) {
+		return Nonempty
+	}
+	previousID := ""
+	identities := make(map[turn.Identity]bool, len(w.Turns))
+	acknowledgements := make(map[uint64]bool, len(w.Turns))
+	for _, actual := range w.Turns {
+		if !neverDispatched(actual, w.Scope) || actual.Binding.OperationID <= previousID || actual.AcknowledgedRevision < 3 || actual.AcknowledgedRevision > w.PreviousRevision || acknowledgements[actual.AcknowledgedRevision] {
+			return Nonempty
+		}
+		// Match the live queue's logical-turn uniqueness as well as operation order.
+		logical := actual.Snapshot.Identity
+		logical.OperationID = ""
+		if identities[logical] {
+			return Nonempty
+		}
+		identities[logical] = true
+		acknowledgements[actual.AcknowledgedRevision] = true
+		previousID = actual.Binding.OperationID
 	}
 	return nil
+}
+
+// Exact projection excludes even stale reservation/provider/call evidence hidden
+// behind false flags. Closure and original ACK revisions come from the actual
+// owner's callback; native successor qualification checks the original journal.
+// This admits no restored handles, conversation history or result bytes.
+func neverDispatched(actual port.RetirementTurn, scope port.JournalScope) bool {
+	b := actual.Binding
+	if b.ProfileID != scope.ProfileID || b.BackendGeneration != scope.BackendGeneration || b.TurnGeneration == 0 {
+		return false
+	}
+	for _, id := range []string{b.OwnerID, b.SessionID, b.TaskID, b.ParticipantID, b.TurnID, b.OperationID, actual.Snapshot.Result.ID} {
+		if !validID(id) {
+			return false
+		}
+	}
+	want := turn.Snapshot{
+		Identity: turn.Identity{ProfileID: b.ProfileID, OwnerID: b.OwnerID, SessionID: b.SessionID, TaskID: b.TaskID, TurnID: b.TurnID, OperationID: b.OperationID, Generation: b.TurnGeneration},
+		Phase:    turn.Cancelled, HasResult: true,
+		Result:               turn.Result{ID: actual.Snapshot.Result.ID, Outcome: turn.CancelledOutcome, Code: "NOT_DISPATCHED"},
+		DeliveryAcknowledged: true, LifecycleSettled: true,
+	}
+	return actual.Snapshot == want && actual.SettledRevision == 0 && actual.ReleasedRevision == 0 && actual.Quiescence == (turn.QuiescenceEvidence{}) && actual.Disposal == (turn.DisposalEvidence{})
 }
 
 // ValidateRecord validates closed persisted data, never manufactures a proof.
