@@ -100,7 +100,7 @@ const contract = Object.freeze({
     "Denied/revoked read, result persistence, install and full migration acceptance remain unwitnessed",
   ],
   isolation:
-    "Existing E2E root/proof/app-data guard; new HOME/AppData, private per-user TMPDIR, hidden windows, fixture tunnel client, no workspace or provider verification",
+    "Existing E2E root/proof/app-data guard; new HOME/AppData, private per-user TMPDIR, hidden windows and fixture tunnel client. Read-discard mode verifies a synthetic workspace and fixture readiness only; no real provider/account verification",
   missingWitnesses: [
     "Normal Go read bytes/hash and classified Go denial: prepare-readonly-task requires ChatGPT readiness and Computer verification; Settings executor origin requires exact integrated package production-source review",
     "Revoked old Go admission/no TS fallback: removing workspace is guarded before Go admission in normal preview; the normal configuration API does not expose the old admission or classified Go outcome",

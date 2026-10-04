@@ -93,8 +93,9 @@ now complete all four handoff stages; both regressions failed against the former
 for later-stage metadata. The original live-owner receipt, host ACK, exact
 unforced child terminal and independent host drain remain mandatory.
 
-This is a scoped packaged witness, not whole-range cutover acceptance. Workspace
-selection/verification still includes the legacy native listing helper. The
+This is a scoped packaged witness, not whole-range cutover acceptance. In that
+f118 package, workspace verification still uses the legacy listing helper; the
+newer Settings milestone below replaces those calls. The
 preview exposes path/bytes/character counts, not a content hash. The controlled
 page proves readiness only, not a real account or model selection. Normal Go Send
 is explicitly unavailable until a legitimate provider/control-profile producer
@@ -103,17 +104,69 @@ retirement, cross-build recovery and result-body persistence remain open.
 
 The current regression map keeps lower and higher boundaries separate:
 
-| Case                         | Executable evidence                                                                                                                                                                                           | Layer and scope                                                                                                      | Remaining boundary                                                                        |
-| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
-| C06 useful output            | `TestReadIntentPromotionRetainsActualOwnerThroughUsefulResultAndFollow` in `modules/chat/app/services/lifecycle/readintent_test.go`; `TestReadIntentSameOwnerPromotionAndFollow` in `boot/readintent_test.go` | Real Go owners with controlled ports; useful output, retained result and same-conversation follow-up                 | Normal provider browser and selected Responses client                                     |
-| C07 independent expectations | `tests/e2e/fixtures/go-read-discard-witness.mjs` self-tests plus the pinned packaged harness above                                                                                                            | Independently observed journals, preview metadata and physical Send ledger                                           | Duplicate actual Send/browser-generation sensitivity belongs to the Send journey          |
-| C08 policy ownership         | `TestReadIntentFramedReadPromotionAndWithdrawal` in `boot/readintent_test.go`; packaged read/Discard above                                                                                                    | Framed Go composition and actual normal host/Go lifecycle                                                            | Full browser-used queue/cancel/release journey                                            |
-| C12 one active owner         | `TestReadIntentRevokedDuringVerifyNeverPhysicallySends` in `boot/readintent_test.go`; no-fallback branch in normal preview and packaged Go journal witness                                                    | Ingress/direct-handle revocation test; final guard removal fails owning regressions; normal read succeeds through Go | Active legacy verification and explicit legacy-build implementation have not been retired |
+| Case                         | Executable evidence                                                                                                                                                                                           | Layer and scope                                                                                                      | Remaining boundary                                                                      |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| C06 useful output            | `TestReadIntentPromotionRetainsActualOwnerThroughUsefulResultAndFollow` in `modules/chat/app/services/lifecycle/readintent_test.go`; `TestReadIntentSameOwnerPromotionAndFollow` in `boot/readintent_test.go` | Real Go owners with controlled ports; useful output, retained result and same-conversation follow-up                 | Normal provider browser and selected Responses client                                   |
+| C07 independent expectations | `tests/e2e/fixtures/go-read-discard-witness.mjs` self-tests plus the pinned packaged harness above                                                                                                            | Independently observed journals, preview metadata and physical Send ledger                                           | Duplicate actual Send/browser-generation sensitivity belongs to the Send journey        |
+| C08 policy ownership         | `TestReadIntentFramedReadPromotionAndWithdrawal` in `boot/readintent_test.go`; packaged read/Discard above                                                                                                    | Framed Go composition and actual normal host/Go lifecycle                                                            | Full browser-used queue/cancel/release journey                                          |
+| C12 one active owner         | `TestReadIntentRevokedDuringVerifyNeverPhysicallySends` in `boot/readintent_test.go`; no-fallback branch in normal preview and packaged Go journal witness                                                    | Ingress/direct-handle revocation test; final guard removal fails owning regressions; normal read succeeds through Go | Other Computer mutations and explicit legacy-build implementation have not been retired |
 
 These rows map only the current slice. They do not mark the complete C01–C12,
 M01–M12 or React R01–R45 obligations accepted. Local native execution also does
 not prove containment across every browser, Node, Go and child-process network
 path.
+
+## Owner Settings listing through Go
+
+Package and harness source `9671a21d8c359e6dbd5725c48ac6dcf7302b2a77` passed
+normal production startup, Settings Verify / Check folder / List folder, and
+the read-preview / Discard / Quit / same-profile reopen journey above. Build ID:
+`b7440f0e470ab0d166c4a8891fd23674c288344affd156cdc8294da82dbcc560`;
+artifact SHA-256:
+`69db6c53cbe3a9fde30433cd5f92021af90890292ae6844f01db8a105db2f626`.
+The unsigned preview identity and version are unchanged. The package is preserved
+separately from f118; neither is a new installed or published release.
+
+All three normal Settings handlers call `computer.settings.list`. The Go app
+service obtains current owner approval from the same native Computer store,
+checks the exact publication and physical directory identity, applies exclusions
+and bounded entry validation, and rechecks authority before disclosure. A fixed
+15-second lease is not extended by repeated callbacks. No synthetic Chat Turn,
+Task or participant supplies owner Settings access. The wire handler allows
+withdrawal to complete while native listing is pending. A refused, malformed or
+unknown Go response does not invoke a TypeScript listing fallback.
+
+The exact packaged witness used ordinary preload configuration commands. It
+observed the Computer store, Chat journal and physical roots independently before
+and after each command: zero retained participants and zero Chat writes until the
+subsequent real read-intent admission. Verification advanced the approval revision
+without changing its generation or scope. The returned list contained only the
+synthetic canary; built-in exclusions hid `.ssh` and `.env`. Both ordinary Quits
+had exact exit 0, no signal, confirmed drain and removed run markers. The fixture
+recorded zero attempted/accepted provider Sends. All windows stayed hidden and
+unfocused; the successful disposable profile was removed after known cleanup.
+
+Local evidence is
+`_output/evidence/go-core-startup-f65297f4-50ac-402a-9032-3a0e1f8ba940.json`.
+The harness has 723 browser-free checks. On the exact source, `task ci:fast`
+passed 7,100 main tests, 125 renderer tests, 164 protocol tests, root and nested
+Go race/vet, generated/import/type/style/Hunt/output and secret checks. Independent
+source review closed two Settings findings after their regression-backed fixes;
+this is not formal acceptance of the complete outstanding migration range.
+
+| Obligation                               | Executable evidence                                                                                                                                                                                                              | Boundary and remaining witness                                                                                                                                                                               |
+| ---------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| C08/C12 owner policy and normal Go route | `TestSettingsListUsesPublishedOwnerWithoutChatAdmission` and `TestSettingsListWireWithdrawalWhileNativeWaits` in `boot/computersettings_test.go`; exact package above                                                            | Real framed Go owner plus normal packaged host. Removing concurrent dispatch makes the withdrawal test fail. Other Computer operations remain separate cutovers.                                             |
+| Final current authority                  | `TestFinalWithdrawalAndPolicyChanges` in `modules/computer/app/services/settingsworkspace/service_test.go`; `discards a completed listing if host withdrawal crossed its response` in `tests/unit/go-computer-authority.test.ts` | Pure app and host boundary; omission of the final owner callback fails the owning regressions. Native withdrawal during a packaged List remains a higher-boundary witness.                                   |
+| C07 independent expectations             | `tests/e2e/lib/computer-settings-witness.mjs` plus exact packaged report above                                                                                                                                                   | Independently read durable state, physical roots and fixture ledger. No transient admission counter or reply-level executor attestation is claimed; source mapping and package identity establish the route. |
+
+Root selection/measurement, Git metadata discovery and configuration persistence
+remain temporary TypeScript. Older unbound folders require explicit binding before
+inspection; binding alone never records successful verification. This witness
+does not qualify custom exclusions, direct denied reads, edits, shell/Git, live
+provider admission or complete network containment. React Chat still lacks a Send
+surface, and the normal Go Send path deliberately refuses until its legitimate
+account/model/control-profile producer is qualified.
 
 ## Wire and generation
 
