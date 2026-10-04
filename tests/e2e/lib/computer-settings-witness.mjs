@@ -34,7 +34,7 @@ export function settingsAuthorityWitness(observed, baseline) {
     "profileId",
     "schema",
   ]);
-  assert.equal(identity.schema, "farol-native-profile/1");
+  assert.match(identity.schema, /^farol-native-profile\/[12]$/u);
   assert.equal(identity.computerId, settings.computer.computerId);
   assert.equal(current.schema, 1);
   assert.deepEqual(
@@ -222,7 +222,7 @@ export function settingsWitnessSelfTest(pass, reject, canary) {
   };
   const profile = {
     value: {
-      schema: "farol-native-profile/1",
+      schema: "farol-native-profile/2",
       profileId: "fixture-profile",
       computerId: "fixture-computer",
     },

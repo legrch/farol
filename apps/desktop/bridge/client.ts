@@ -474,6 +474,7 @@ export interface NativeCoreLaunch {
   readonly ownerId: string;
   readonly computerId: string;
   readonly storeMode: "create" | "open";
+  readonly settingsMutations?: boolean;
   readonly previousHostDrainConfirmed?: boolean;
   readonly hostLifetimeId?: string;
   readonly childLaunchId?: string;
@@ -524,7 +525,9 @@ export async function spawnCore(
             typeof native.childLaunchId !== "string" ||
             !id.test(native.hostLifetimeId) ||
             !id.test(native.childLaunchId))) ||
-        (native.storeMode !== "create" && native.storeMode !== "open")
+        (native.storeMode !== "create" && native.storeMode !== "open") ||
+        (native.settingsMutations !== undefined &&
+          typeof native.settingsMutations !== "boolean")
       )
         throw new BridgeError("refused", "invalid_native_launch");
       if (!profileOwner)
@@ -564,6 +567,7 @@ export async function spawnCore(
     }
     if (native?.previousHostDrainConfirmed === true)
       args.push("--previous-host-drain-confirmed");
+    if (native?.settingsMutations === true) args.push("--settings-mutations");
     child = spawn(executable, args, { stdio: ["pipe", "pipe", "pipe"] });
   } catch (error) {
     // No child was returned: release only this launch's qualified descriptors.

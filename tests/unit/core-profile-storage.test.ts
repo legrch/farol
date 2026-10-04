@@ -184,22 +184,24 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-it("creates the fixed private Task child only in known first provisioning", () => {
+it("creates the version 2 mutation child only in known first provisioning", () => {
   const out = openNativeProfileStorage("/fixture/state", "computer");
   expect(out).toEqual({
     profileId: "new-profile",
     root: "/fixture/state/go-core",
     storeMode: "create",
+    settingsMutations: true,
   });
   expect(fixture.mkdirs).toEqual([
     "/fixture/state/go-core",
     "/fixture/state/go-core/computer",
+    "/fixture/state/go-core/computer/mutations",
     "/fixture/state/go-core/chat",
     "/fixture/state/go-core/task",
   ]);
   expect(fixture.node(out.root + "/task").mode).toBe(0o40700n);
   expect(JSON.parse(fixture.writes[0]!)).toEqual({
-    schema: "farol-native-profile/1",
+    schema: "farol-native-profile/2",
     profileId: "new-profile",
     computerId: "computer",
   });
@@ -213,6 +215,7 @@ it("opens an existing exact profile without provisioning children or changing it
     profileId: "existing-profile",
     root: "/fixture/state/go-core",
     storeMode: "open",
+    settingsMutations: false,
   });
   expect(fixture.mkdirs).toEqual(["/fixture/state/go-core"]);
   expect(fixture.writes).toEqual([]);
@@ -263,5 +266,49 @@ it("retains partial first provisioning and refuses a later open without completi
   ).toThrow();
   expect(fixture.mkdirs.filter((p) => p === taskPath)).toHaveLength(attempts);
   expect(fixture.nodes.has(taskPath)).toBe(false);
+  expect(fixture.writes).toEqual([]);
+});
+
+it("opens the exact version 2 layout without reprovisioning the journal", () => {
+  const first = openNativeProfileStorage("/fixture/state", "computer");
+  fixture.mkdirs.length = 0;
+  fixture.writes.length = 0;
+  expect(openNativeProfileStorage("/fixture/state", "computer")).toEqual({
+    ...first,
+    storeMode: "open",
+  });
+  expect(fixture.mkdirs).toEqual(["/fixture/state/go-core"]);
+  expect(fixture.writes).toEqual([]);
+});
+
+it.each(["missing", "permissions", "owner", "symlink"])(
+  "refuses version 2 mutation storage %s without repair or downgrade",
+  (kind) => {
+    openNativeProfileStorage("/fixture/state", "computer");
+    const target = "/fixture/state/go-core/computer/mutations";
+    if (kind === "missing") fixture.nodes.delete(target);
+    else if (kind === "permissions") fixture.node(target).mode = 0o40750n;
+    else if (kind === "owner") fixture.node(target).uid = 502n;
+    else fixture.node(target).kind = "symlink";
+    fixture.mkdirs.length = 0;
+    fixture.writes.length = 0;
+    expect(() =>
+      openNativeProfileStorage("/fixture/state", "computer"),
+    ).toThrow();
+    expect(fixture.mkdirs).toEqual(["/fixture/state/go-core"]);
+    expect(fixture.writes).toEqual([]);
+  },
+);
+
+it("does not infer a version 1 mutation route from an ambient directory", () => {
+  fixture.existing();
+  fixture.fs.mkdirSync("/fixture/state/go-core/computer/mutations", {
+    mode: 0o700,
+  });
+  fixture.mkdirs.length = 0;
+  expect(
+    openNativeProfileStorage("/fixture/state", "computer").settingsMutations,
+  ).toBe(false);
+  expect(fixture.mkdirs).toEqual(["/fixture/state/go-core"]);
   expect(fixture.writes).toEqual([]);
 });

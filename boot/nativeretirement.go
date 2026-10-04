@@ -129,6 +129,9 @@ func (r *NativeRuntime) retirementMethods() map[string]desktop.Method {
 				return retirementOutcome("", nil, handoff.Refused)
 			}
 			state.attempted = true
+			if err := r.mutations.freezeForRetirement(); err != nil {
+				return retirementOutcome("", nil, err)
+			}
 			if err := r.chat.FreezeAdmissions(ctx); err != nil {
 				return retirementOutcome("", nil, err)
 			}

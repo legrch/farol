@@ -17,6 +17,7 @@ import (
 	chatrepo "github.com/legrch/farol/modules/chat/infra/repos/lifecycle"
 	"github.com/legrch/farol/modules/computer/infra/filesystem"
 	accessrepo "github.com/legrch/farol/modules/computer/infra/repos/access"
+	mutationrepo "github.com/legrch/farol/modules/computer/infra/repos/mutation"
 )
 
 // NativeLaunch is supplied by the trusted desktop launcher. The explicit create
@@ -29,6 +30,7 @@ type NativeLaunch struct {
 	StoreMode                     string
 	HostLifetimeID, ChildLaunchID string
 	PreviousHostDrainConfirmed    bool
+	SettingsMutations             bool
 }
 type NativeRuntime struct {
 	cancel        context.CancelFunc
@@ -41,6 +43,8 @@ type NativeRuntime struct {
 	journal       *chatrepo.Repository
 	chat          *chatlifecycle.Service
 	ingress       *ComputerIngress
+	mutations     *SettingsMutationIngress
+	mutationStore *mutationrepo.Repository
 	closed        bool
 	closeErr      error
 	retirement    *nativeRetirement
@@ -51,6 +55,9 @@ func NewNativeRuntime(ctx context.Context, launch NativeLaunch, generation strin
 		return nil, profileFailure(ProfileInvalid)
 	}
 	if (launch.HostLifetimeID != "" || launch.ChildLaunchID != "") && (!validIngressID(launch.HostLifetimeID) || !validIngressID(launch.ChildLaunchID)) {
+		return nil, profileFailure(ProfileInvalid)
+	}
+	if launch.SettingsMutations && launch.HostLifetimeID == "" {
 		return nil, profileFailure(ProfileInvalid)
 	}
 	qualified, err := QualifyProfile(launch.Profile)
@@ -122,6 +129,19 @@ func NewNativeRuntime(ctx context.Context, launch NativeLaunch, generation strin
 	if err != nil {
 		return fail(err)
 	}
+	if launch.SettingsMutations {
+		runtime.mutationStore, err = mutationrepo.New(ctx, mutationrepo.Root{Path: computer.Path, Device: computer.Device, Inode: computer.Inode, OwnerUID: computer.OwnerUID})
+		if err != nil {
+			return fail(err)
+		}
+		runtime.mutations, err = NewSettingsMutationIngress(runtime.ingress, runtime.mutationStore, filesystem.NewMutable(launch.Home))
+		if err != nil {
+			return fail(err)
+		}
+		if _, _, err := qualified.Roots(); err != nil {
+			return fail(err)
+		}
+	}
 	return runtime, nil
 }
 
@@ -158,6 +178,9 @@ func (r *NativeRuntime) Close() error {
 	if r.store != nil {
 		failures = append(failures, r.store.Close())
 	}
+	if r.mutationStore != nil {
+		failures = append(failures, r.mutationStore.Close())
+	}
 	if r.retirement != nil {
 		failures = append(failures, r.retirement.repo.Close())
 	}
@@ -179,6 +202,14 @@ func (r *NativeRuntime) Methods() (map[string]desktop.Method, error) {
 	merged := make(map[string]desktop.Method)
 	for _, source := range []map[string]desktop.Method{r.ingress.Methods(), r.browser.Methods(), r.conversations.Methods(), r.chatComputer.Methods(), r.retirementMethods()} {
 		for name, method := range source {
+			if _, exists := merged[name]; exists {
+				return nil, errors.New("native_method_conflict")
+			}
+			merged[name] = method
+		}
+	}
+	if r.mutations != nil {
+		for name, method := range r.mutations.Methods() {
 			if _, exists := merged[name]; exists {
 				return nil, errors.New("native_method_conflict")
 			}

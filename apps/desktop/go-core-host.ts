@@ -369,6 +369,7 @@ export async function startDesktopGoCore(
       ownerId: "owner-desktop",
       computerId: settings.computer.computerId,
       storeMode: storage.storeMode,
+      settingsMutations: storage.settingsMutations,
       previousHostDrainConfirmed: selection.previousHostDrainConfirmed,
       hostLifetimeId: randomUUID(),
       childLaunchId: randomUUID(),

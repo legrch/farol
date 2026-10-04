@@ -297,6 +297,7 @@ beforeEach(async () => {
     profileId: context.profileId,
     root: "/synthetic/state/go-core",
     storeMode: "open",
+    settingsMutations: true,
   });
   profileClose = vi.fn(() => ({ state: "closed" as const }));
   ports.qualify.mockReturnValue({
@@ -438,6 +439,7 @@ describe("normal Go host startup", () => {
         ownerId: "owner-desktop",
         computerId: settings.computer.computerId,
         storeMode: "open",
+        settingsMutations: true,
       }),
     );
     expect(profileClose).not.toHaveBeenCalled();

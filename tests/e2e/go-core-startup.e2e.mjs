@@ -434,7 +434,7 @@ function zeroAuthority(profile, access, computerId) {
     "profileId",
     "schema",
   ]);
-  assert.equal(profile.schema, "farol-native-profile/1");
+  assert.match(profile.schema, /^farol-native-profile\/[12]$/u);
   assert.match(profile.profileId, /^[a-f0-9-]{36}$/u);
   assert.equal(profile.computerId, computerId);
   assert.deepEqual(Object.keys(access).sort(), [
@@ -2167,7 +2167,7 @@ function selfTest() {
     checks++;
   };
   const profile = {
-    schema: "farol-native-profile/1",
+    schema: "farol-native-profile/2",
     profileId: "12345678-1234-1234-1234-123456789abc",
     computerId: "computer-test",
   };
@@ -2183,6 +2183,20 @@ function selfTest() {
     participants: {},
   };
   pass(() => zeroAuthority(profile, access, profile.computerId));
+  pass(() =>
+    zeroAuthority(
+      { ...profile, schema: "farol-native-profile/1" },
+      access,
+      profile.computerId,
+    ),
+  );
+  reject(() =>
+    zeroAuthority(
+      { ...profile, schema: "farol-native-profile/3" },
+      access,
+      profile.computerId,
+    ),
+  );
   for (const [key, value] of [
     ["approval", { workspaces: [] }],
     ["participants", { fabricated: {} }],

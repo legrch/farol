@@ -18,17 +18,21 @@ import (
 
 // SettingsMutationIngress composes a qualified exclusive journal/native owner.
 // It never provisions/migrates storage or translates legacy Settings Task IDs.
-// NativeRuntime activation and the old writer's cutover are separate gates.
+// NativeRuntime owns this journal only in a qualified version 2 profile.
+// The host route and legacy writer cutover have separate acceptance gates.
 type SettingsMutationIngress struct {
-	mu           sync.Mutex
-	computer     *ComputerIngress
-	dependencies computerMutationDependencies
-	operations   map[string]*settingsMutationOperation
+	mu            sync.Mutex
+	computer      *ComputerIngress
+	dependencies  computerMutationDependencies
+	operations    map[string]*settingsMutationOperation
+	frozen        bool
+	retirementErr error
 }
 type settingsMutationOperation struct {
 	workspace, path string
 	generation      uint64
 	pending         bool
+	settled         bool
 	contract        *mutationct.OwnerContract
 	failure         error
 }
@@ -61,27 +65,28 @@ func (s *SettingsMutationIngress) edit(ctx context.Context, operation string, in
 		return nil, mutationInvalid()
 	}
 	s.mu.Lock()
-	if s.operations[operation] != nil || len(s.operations) >= 4096 {
+	if s.frozen || s.operations[operation] != nil || len(s.operations) >= 4096 {
 		s.mu.Unlock()
 		return nil, errors.New("settings_mutation_attempt_consumed")
 	}
 	record := &settingsMutationOperation{workspace: in.WorkspaceId, path: in.RelativePath, generation: generation, pending: true}
 	s.operations[operation] = record
 	s.mu.Unlock()
-	finish := func(contract *mutationct.OwnerContract, err error) {
+	finish := func(contract *mutationct.OwnerContract, err error, settled bool) {
 		s.mu.Lock()
 		record.contract = contract
 		record.failure = err
 		record.pending = false
+		record.settled = settled
 		s.mu.Unlock()
 	}
 	if err = s.computer.claim(operation); err != nil {
-		finish(nil, err)
+		finish(nil, err, true)
 		return nil, err
 	}
 	current, err := s.computer.settingsAuthority(ctx, in.Publication)
 	if err != nil {
-		finish(nil, err)
+		finish(nil, err, true)
 		return nil, err
 	}
 	var clock computerport.Clock = s.computer.clock
@@ -90,7 +95,7 @@ func (s *SettingsMutationIngress) edit(ctx context.Context, operation string, in
 	}
 	service, err := mutationsvc.NewForOwnerExecution(ctx, s.selection(operation, generation), current, s.dependencies.repository, s.dependencies.native, s.dependencies.digester, &sync.Mutex{}, clock)
 	if err != nil {
-		finish(nil, err)
+		finish(nil, err, true)
 		return nil, err
 	}
 	contract := mutationct.NewOwnerExecution(service)
@@ -99,11 +104,13 @@ func (s *SettingsMutationIngress) edit(ctx context.Context, operation string, in
 		edits[i] = mutationct.TextEdit{OldText: e.OldText, NewText: e.NewText}
 	}
 	out, err := contract.Execute(ctx, mutationct.OwnerRequest{WorkspaceID: in.WorkspaceId, Operation: mutationct.Edit{RelativePath: in.RelativePath, ExpectedSHA256: in.ExpectedSHA256, Edits: edits}})
-	finish(contract, err)
 	if err != nil {
+		finish(contract, err, false)
 		return nil, err
 	}
-	return settingsMutationResult(operation, in.WorkspaceId, in.RelativePath, generation, out)
+	result, err := settingsMutationResult(operation, in.WorkspaceId, in.RelativePath, generation, out)
+	finish(contract, err, settledSettingsMutation(result, err))
+	return result, err
 }
 func (s *SettingsMutationIngress) observe(ctx context.Context, in wire.ComputerSettingsMutationRead) (*wire.ComputerSettingsMutationResponse, error) {
 	if s == nil || ctx == nil || ctx.Err() != nil || validateIngress("ComputerSettingsMutationRead", in) != nil {
@@ -144,5 +151,38 @@ func (s *SettingsMutationIngress) observe(ctx context.Context, in wire.ComputerS
 	if err != nil {
 		return nil, err
 	}
-	return settingsMutationResult(in.OperationId, in.WorkspaceId, in.RelativePath, generation, out)
+	result, err := settingsMutationResult(in.OperationId, in.WorkspaceId, in.RelativePath, generation, out)
+	if record != nil && settledSettingsMutation(result, err) {
+		s.mu.Lock()
+		record.settled = true
+		s.mu.Unlock()
+	}
+	return result, err
+}
+
+func settledSettingsMutation(result *wire.ComputerSettingsMutationResponse, err error) bool {
+	return err == nil && result != nil && result.Publication == "durable" && (result.Phase == "completed" || result.Phase == "failed")
+}
+
+// freezeForRetirement blocks new admissions before judging this actual owner.
+// Pending/unknown publication and memory-only results cannot be replaced by a
+// fresh journal owner, even if visible disk bytes later look complete. A known
+// durable result remains observable after clean restart; delivery ACK is separate.
+func (s *SettingsMutationIngress) freezeForRetirement() error {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.frozen {
+		return s.retirementErr
+	}
+	s.frozen = true
+	for _, operation := range s.operations {
+		if operation.pending || !operation.settled {
+			s.retirementErr = &mutationct.Failure{Code: "WORKSPACE_MUTATION_OUTCOME_UNKNOWN", Source: "operation-store", Retry: "never"}
+			return s.retirementErr
+		}
+	}
+	return nil
 }

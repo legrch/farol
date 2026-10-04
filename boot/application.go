@@ -67,6 +67,7 @@ func Run(args []string, in io.ReadCloser, out io.WriteCloser, diagnostics io.Wri
 	computer := flags.String("computer", "", "trusted current Computer identity")
 	home := flags.String("home", "", "explicit independent selected HOME")
 	storeMode := flags.String("store-mode", "", "known first create or existing open; no fallback")
+	settingsMutations := flags.Bool("settings-mutations", false, "qualified version 2 profile mutation storage; no migration")
 	hostLifetime := flags.String("host-lifetime", "", "trusted initiating host lifetime")
 	previousDrain := flags.Bool("previous-host-drain-confirmed", false, "trusted exact-profile previous host drain witness; never inferred from journal")
 	childLaunch := flags.String("child-launch", "", "exact child launch identity")
@@ -83,8 +84,8 @@ func Run(args []string, in io.ReadCloser, out io.WriteCloser, diagnostics io.Wri
 		if err != nil || strconv.FormatUint(ino, 10) != *inode || ino == 0 {
 			return 2
 		}
-		launch = &NativeLaunch{Profile: ProfileBinding{ProfileID: *profile, Root: *root, Device: dev, Inode: ino}, OwnerID: *owner, ComputerID: *computer, Home: *home, StoreMode: *storeMode, HostLifetimeID: *hostLifetime, ChildLaunchID: *childLaunch, PreviousHostDrainConfirmed: *previousDrain}
-	} else if *device != "" || *inode != "" || *owner != "" || *computer != "" || *home != "" || *storeMode != "" || *hostLifetime != "" || *childLaunch != "" || *previousDrain {
+		launch = &NativeLaunch{Profile: ProfileBinding{ProfileID: *profile, Root: *root, Device: dev, Inode: ino}, OwnerID: *owner, ComputerID: *computer, Home: *home, StoreMode: *storeMode, HostLifetimeID: *hostLifetime, ChildLaunchID: *childLaunch, PreviousHostDrainConfirmed: *previousDrain, SettingsMutations: *settingsMutations}
+	} else if *device != "" || *inode != "" || *owner != "" || *computer != "" || *home != "" || *storeMode != "" || *hostLifetime != "" || *childLaunch != "" || *previousDrain || *settingsMutations {
 		return 2
 	}
 	if err := serve(context.Background(), *profile, launch, in, out); err != nil {

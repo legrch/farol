@@ -19,6 +19,9 @@ import (
 // Real disposable native stores and boot composition; terminal facts are explicit
 // fixtures here. Actual child close/recorder is covered by the TS host integration.
 func retirementFixture(t *testing.T) (NativeLaunch, *NativeRuntime) {
+	return retirementStorageFixture(t, false)
+}
+func retirementStorageFixture(t *testing.T, mutations bool) (NativeLaunch, *NativeRuntime) {
 	t.Helper()
 	if !*ingressNative {
 		t.Skip("Requires exclusive native lane and -ingress-native")
@@ -51,11 +54,17 @@ func retirementFixture(t *testing.T) (NativeLaunch, *NativeRuntime) {
 			t.Fatal(err)
 		}
 	}
+	if mutations {
+		if err := os.Mkdir(filepath.Join(root, "computer", "mutations"), 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
 	var st unix.Stat_t
 	if err := unix.Lstat(root, &st); err != nil {
 		t.Fatal(err)
 	}
 	launch := NativeLaunch{Profile: ProfileBinding{ProfileID: "retirement-profile", Root: root, Device: uint64(st.Dev), Inode: st.Ino}, OwnerID: "owner", ComputerID: "computer", Home: root, StoreMode: "create", HostLifetimeID: "host-1", ChildLaunchID: "child-1"}
+	launch.SettingsMutations = mutations
 	runtime, err := NewNativeRuntime(context.Background(), launch, "generation-1")
 	if err != nil {
 		t.Fatal(err)

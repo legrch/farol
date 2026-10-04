@@ -30,7 +30,7 @@ export function snapshotAuthorityWitness(observed, baseline, expectedAccess) {
     "profileId",
     "schema",
   ]);
-  assert.equal(identity.schema, "farol-native-profile/1");
+  assert.match(identity.schema, /^farol-native-profile\/[12]$/u);
   assert.equal(identity.computerId, settings.computer.computerId);
   assert.deepEqual(Object.keys(current).sort(), [
     "approval",
@@ -269,7 +269,7 @@ export function snapshotWitnessSelfTest(pass, reject) {
   const observed = {
     profile: {
       value: {
-        schema: "farol-native-profile/1",
+        schema: "farol-native-profile/2",
         profileId: "profile",
         computerId: "computer",
       },

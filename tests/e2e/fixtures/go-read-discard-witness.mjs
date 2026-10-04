@@ -308,7 +308,7 @@ export function readAccessWitness(profile, access, settings, binding) {
     "schema",
     "seenApproval",
   ]);
-  assert.equal(profile.schema, "farol-native-profile/1");
+  assert.match(profile.schema, /^farol-native-profile\/[12]$/u);
   assert.equal(profile.computerId, settings.computer.computerId);
   assert.equal(profile.profileId, binding.ProfileID);
   assert.equal(access.schema, 1);
@@ -674,7 +674,7 @@ export function readWitnessSelfTest(pass, reject) {
       ),
     );
   const profile = {
-    schema: "farol-native-profile/1",
+    schema: "farol-native-profile/2",
     profileId: binding.ProfileID,
     computerId: "computer",
   };

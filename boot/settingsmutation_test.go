@@ -274,3 +274,51 @@ func TestSettingsMutationWireWithdrawsWhileNativeGuardWaits(t *testing.T) {
 		t.Fatalf("guard lost %#v %v effects=%d", out, err, held.effects)
 	}
 }
+
+func TestSettingsMutationRetirementRequiresKnownDurableSettlement(t *testing.T) {
+	for _, fault := range []string{"empty", "completed", "before authority", "after effect observed", "after effect unobserved", "admit before", "admit after", "save before", "save after", "pending"} {
+		t.Run(fault, func(t *testing.T) {
+			s, _, j, n, in := settingsEditFixture(t)
+			known := fault == "empty" || fault == "completed" || fault == "before authority" || fault == "after effect observed"
+			switch fault {
+			case "before authority":
+				_, _ = s.computer.guard.deactivate()
+			case "after effect observed", "after effect unobserved":
+				n.after = func() { _, _ = s.computer.guard.deactivate() }
+			case "admit before":
+				j.admitFault = "before"
+			case "admit after":
+				j.admitFault = "after"
+			case "save before":
+				j.saveFault = "before"
+			case "save after":
+				j.saveFault = "after"
+			case "pending":
+				n.after = func() {
+					if s.freezeForRetirement() == nil {
+						t.Fatal("retired pending effect")
+					}
+				}
+			}
+			if fault != "empty" {
+				_, _ = s.edit(context.Background(), "op", in)
+			}
+			if fault == "after effect observed" {
+				if _, err := s.observe(context.Background(), settingsRead("op", in)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := s.freezeForRetirement(); (err == nil) != known {
+				t.Fatalf("known=%v retirement=%v", known, err)
+			}
+			before := n.calls
+			if _, err := s.edit(context.Background(), "new-op", in); err == nil || n.calls != before {
+				t.Fatal("new effect after freeze")
+			}
+			// A failed freeze stays failed even when a pending effect later finishes.
+			if err := s.freezeForRetirement(); (err == nil) != known {
+				t.Fatal("retirement outcome changed")
+			}
+		})
+	}
+}

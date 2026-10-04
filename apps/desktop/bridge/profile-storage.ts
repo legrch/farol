@@ -7,6 +7,7 @@ export type NativeProfileStorage = Readonly<{
   profileId: string;
   root: string;
   storeMode: "create" | "open";
+  settingsMutations: boolean;
 }>;
 const ID = /^[A-Za-z0-9._:/-]{1,120}$/u;
 function refused(): never {
@@ -58,8 +59,10 @@ export function openNativeProfileStorage(
   const directory = privateDirectory(root);
   const marker = path.join(root, "profile.json");
   let profileId: string;
+  let settingsMutations = false;
   if (created) {
     fs.mkdirSync(path.join(root, "computer"), { mode: 0o700 });
+    fs.mkdirSync(path.join(root, "computer", "mutations"), { mode: 0o700 });
     fs.mkdirSync(path.join(root, "chat"), { mode: 0o700 });
     fs.mkdirSync(path.join(root, "task"), { mode: 0o700 });
     profileId = randomUUID();
@@ -75,7 +78,7 @@ export function openNativeProfileStorage(
       fs.writeFileSync(
         fd,
         JSON.stringify({
-          schema: "farol-native-profile/1",
+          schema: "farol-native-profile/2",
           profileId,
           computerId,
         }) + "\n",
@@ -84,6 +87,21 @@ export function openNativeProfileStorage(
     } finally {
       fs.closeSync(fd);
     }
+    const computerPath = path.join(root, "computer");
+    const computer = privateDirectory(computerPath);
+    const computerFd = fs.openSync(
+      computerPath,
+      fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW,
+    );
+    try {
+      const held = fs.fstatSync(computerFd, { bigint: true });
+      if (held.dev !== computer.dev || held.ino !== computer.ino) refused();
+      fs.fsyncSync(computerFd);
+      unchanged(computerPath, computer);
+    } finally {
+      fs.closeSync(computerFd);
+    }
+    settingsMutations = true;
     const directoryFd = fs.openSync(
       root,
       fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW,
@@ -141,13 +159,15 @@ export function openNativeProfileStorage(
       if (
         Object.keys(record).sort().join(",") !==
           "computerId,profileId,schema" ||
-        record.schema !== "farol-native-profile/1" ||
+        (record.schema !== "farol-native-profile/1" &&
+          record.schema !== "farol-native-profile/2") ||
         record.computerId !== computerId ||
         typeof record.profileId !== "string" ||
         !ID.test(record.profileId)
       )
         refused();
       profileId = record.profileId;
+      settingsMutations = record.schema === "farol-native-profile/2";
     } finally {
       fs.closeSync(fd);
     }
@@ -156,11 +176,16 @@ export function openNativeProfileStorage(
   privateDirectory(path.join(root, "chat"));
   // Existing missing Task storage fails here; open never provisions or repairs it.
   privateDirectory(path.join(root, "task"));
+  // Version 1 stays readable without gaining a mutation writer or migration.
+  // Version 2 never recreates a lost/invalid journal child on open.
+  if (settingsMutations)
+    privateDirectory(path.join(root, "computer", "mutations"));
   unchanged(root, directory);
   unchanged(stateRoot, parent);
   return Object.freeze({
     profileId,
     root,
     storeMode: created ? "create" : "open",
+    settingsMutations,
   });
 }

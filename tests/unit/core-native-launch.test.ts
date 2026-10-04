@@ -308,3 +308,30 @@ describe("native backend launch binding", () => {
     expect(profile.close).toHaveBeenCalledTimes(1);
   });
 });
+
+it.each([true, false, undefined])(
+  "maps only explicit mutation storage selection %s",
+  async (settingsMutations) => {
+    const { native } = fixture();
+    const client = await spawnCore("/owned/backend", "profile", "test", 1000, {
+      ...native,
+      ...(settingsMutations === undefined ? {} : { settingsMutations }),
+    });
+    const args = vi.mocked(spawn).mock.calls[0]![1] as readonly string[];
+    expect(args.includes("--settings-mutations")).toBe(
+      settingsMutations === true,
+    );
+    await client.close();
+  },
+);
+
+it("refuses malformed mutation storage selection before spawning", async () => {
+  const { native } = fixture();
+  await expect(
+    spawnCore("/owned/backend", "profile", "test", 1000, {
+      ...native,
+      settingsMutations: "true" as unknown as boolean,
+    }),
+  ).rejects.toMatchObject({ code: "invalid_native_launch" });
+  expect(spawn).not.toHaveBeenCalled();
+});
