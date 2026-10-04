@@ -1161,6 +1161,10 @@ async function native(selected, inputs, report, save) {
       );
       assert.equal(verified.evidence?.kind, "computer.workspace-list");
       assert.equal(verified.evidence.workspaceId, workspaceId);
+      // Normal Home/Settings startup keeps Browser lazy. Open its exact fixture
+      // page before the observation-only Check connection command.
+      const opened = await configure({ kind: "chatgpt.open-browser" });
+      assert.equal(opened.ok, true, "READ_FIXTURE_BROWSER_OPEN_FAILED");
       const readiness = await configure({ kind: "chatgpt.verify" });
       assert.equal(readiness.ok, true, "READ_FIXTURE_READINESS_FAILED");
       assert.equal(readiness.evidence?.kind, "chatgpt.readiness");
