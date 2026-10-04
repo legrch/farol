@@ -4,10 +4,8 @@ package settingsworkspace
 import (
 	"context"
 	"errors"
-	"reflect"
 	"slices"
 	"strings"
-	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -21,6 +19,8 @@ type Service struct {
 	clock   port.Clock
 }
 
+// Composition supplies concrete nonnil dependencies. CurrentOwnerApproval owns
+// synchronization; its callback is synchronous and cannot escape to another goroutine.
 func New(current port.CurrentOwnerApproval, native port.Workspace, clock port.Clock) *Service {
 	return &Service{current: current, native: native, clock: clock}
 }
@@ -38,7 +38,7 @@ type Result struct {
 // does not create an ambient timer or promise to interrupt blocked native IO;
 // native execution retains the caller's cancellation context.
 func (s *Service) List(ctx context.Context, request Request) (*Result, error) {
-	if s == nil || knownNil(s.current) || knownNil(s.native) || knownNil(s.clock) {
+	if s == nil || s.current == nil || s.native == nil || s.clock == nil {
 		return nil, unavailable()
 	}
 	if err := active(ctx, s.clock.Now()); err != nil {
@@ -143,15 +143,12 @@ func (s *Service) List(ctx context.Context, request Request) (*Result, error) {
 // Preserve callback failures even if a broken port swallows them. A skipped,
 // repeated, late or mutated callback snapshot cannot admit or disclose output.
 func (s *Service) withCurrent(ctx context.Context, inspect func(authority.Approval) error) error {
-	var mu sync.Mutex
 	calls := 0
 	closed := false
 	var callbackErr error
 	var original *authority.Approval
 	var captured authority.Approval
 	err := s.current.WithCurrent(ctx, func(a *authority.Approval) error {
-		mu.Lock()
-		defer mu.Unlock()
 		if closed {
 			return unavailable()
 		}
@@ -168,8 +165,6 @@ func (s *Service) withCurrent(ctx context.Context, inspect func(authority.Approv
 		callbackErr = inspect(captured.Clone())
 		return callbackErr
 	})
-	mu.Lock()
-	defer mu.Unlock()
 	closed = true
 	if calls > 1 || calls == 0 && err == nil {
 		return unavailable()
@@ -204,23 +199,12 @@ func currentFailure(err error) error {
 	return unavailable()
 }
 
-func knownNil(value any) bool {
-	if value == nil {
-		return true
-	}
-	v := reflect.ValueOf(value)
-	switch v.Kind() {
-	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
-		return v.IsNil()
-	}
-	return false
-}
 func unavailable() error {
 	return authority.Fail("COMPUTER_AUTHORITY_STORE_UNAVAILABLE", "authority-store")
 }
 func malformed() error { return authority.Fail("WORKSPACE_HELPER_FAILED", "native-workspace") }
 func active(ctx context.Context, now time.Time) error {
-	if knownNil(ctx) || ctx.Err() != nil {
+	if ctx == nil || ctx.Err() != nil {
 		return authority.Fail("WORKSPACE_REQUEST_CANCELLED", "native-workspace")
 	}
 	if d, ok := ctx.Deadline(); ok && !now.Before(d) {

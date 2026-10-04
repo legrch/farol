@@ -1687,12 +1687,57 @@ export class ProductConfigurationService {
     });
   }
 
+  // Explicit owner Verify may bind a legacy unbound folder before the Go
+  // inspection. Persisting this observation is not successful verification.
+  // The exact normal withdraw/save/readback/publish sequence makes it available
+  // to Go without a temporary approval that bypasses the settings owner.
+  async bindWorkspaceRootIdentity(
+    workspaceId: string,
+    expectedRevision: number,
+    expectedRoot: string,
+    rootIdentity: WorkspaceRootIdentity,
+  ): Promise<MutationResult> {
+    const identity = WorkspaceRootIdentitySchema.safeParse(rootIdentity);
+    if (!identity.success) return this.failure("SETTINGS_INPUT_INVALID");
+    return this.exclusive(async () => {
+      if (this.current === null) return this.failure("SETTINGS_UNAVAILABLE");
+      const workspace = this.current.computer.workspaces.find(
+        (item) => item.workspaceId === workspaceId,
+      );
+      if (!workspace) return this.failure("WORKSPACE_NOT_FOUND");
+      if (
+        this.current.revision !== expectedRevision ||
+        workspace.root !== expectedRoot ||
+        workspace.rootIdentity
+      )
+        return this.failure("WORKSPACE_ROOT_CHANGED");
+      return this.commitComputerEvidence((settings) => ({
+        ...settings,
+        revision: settings.revision + 1,
+        computer: {
+          ...settings.computer,
+          workspaces: settings.computer.workspaces.map((item) =>
+            item.workspaceId === workspaceId
+              ? {
+                  ...item,
+                  rootIdentity: { ...identity.data },
+                  accessCheck: null,
+                }
+              : item,
+          ),
+        },
+      }));
+    });
+  }
+
   async recordComputerVerification(
     workspaceId: string,
     input: unknown,
     observed: Readonly<{
       rootIdentity: WorkspaceRootIdentity;
       gitMetadata?: WorkspaceGitMetadata | null;
+      expectedGeneration?: number;
+      expectedRoot?: string;
     }>,
   ): Promise<MutationResult> {
     const parsed = verificationInputSchema.safeParse(input);
@@ -1713,6 +1758,13 @@ export class ProductConfigurationService {
         (workspace) => workspace.workspaceId === workspaceId,
       );
       if (!verified) return this.failure("WORKSPACE_NOT_FOUND");
+      if (
+        (observed.expectedGeneration !== undefined &&
+          this.current.computer.generation !== observed.expectedGeneration) ||
+        (observed.expectedRoot !== undefined &&
+          verified.root !== observed.expectedRoot)
+      )
+        return this.failure("WORKSPACE_ROOT_CHANGED");
       const bound = verified.rootIdentity;
       if (
         bound &&

@@ -485,11 +485,8 @@ func TestCancellationDuringIOAndAfterFinalCallback(t *testing.T) {
 		assertFailure(t, out, err, "WORKSPACE_REQUEST_CANCELLED")
 	}
 }
-func TestTypedNilDependencies(t *testing.T) {
-	var native *nativeFixture
-	var clock *testClock
-	var current currentFunc
-	for _, replace := range []func(*fixture){func(f *fixture) { f.service.native = native }, func(f *fixture) { f.service.clock = clock }, func(f *fixture) { f.service.current = current }} {
+func TestMissingDependencies(t *testing.T) {
+	for _, replace := range []func(*fixture){func(f *fixture) { f.service.native = nil }, func(f *fixture) { f.service.clock = nil }, func(f *fixture) { f.service.current = nil }} {
 		f := newFixture()
 		replace(f)
 		out, err := f.service.List(context.Background(), request())

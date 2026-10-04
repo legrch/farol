@@ -52,7 +52,8 @@
     "core.retirement.prepare": "effect",
     "core.retirement.ack": "effect",
     "chat.readintent.promote": "effect",
-    "chat.readintent.withdraw": "effect"
+    "chat.readintent.withdraw": "effect",
+    "computer.settings.list": "read"
   },
   "definitions": {
     "Context": {
@@ -3140,6 +3141,64 @@
       "fields": {
         "admission": {
           "type": "ChatComputerAdmissionResponse"
+        }
+      }
+    },
+    "ComputerSettingsRoot": {
+      "type": "object",
+      "fields": {
+        "path": {
+          "type": "string",
+          "minBytes": 1,
+          "maxBytes": 4096
+        },
+        "device": {
+          "type": "decimal"
+        },
+        "inode": {
+          "type": "decimal"
+        }
+      }
+    },
+    "ComputerSettingsListRequest": {
+      "type": "object",
+      "fields": {
+        "publication": {
+          "type": "ComputerAuthorityPublication"
+        },
+        "workspaceId": {
+          "type": "id"
+        },
+        "relativePath": {
+          "type": "string",
+          "minBytes": 1,
+          "maxBytes": 4096
+        }
+      }
+    },
+    "ComputerSettingsListResponse": {
+      "type": "object",
+      "fields": {
+        "publication": {
+          "type": "ComputerAuthorityPublication"
+        },
+        "workspaceId": {
+          "type": "id"
+        },
+        "relativePath": {
+          "type": "string",
+          "minBytes": 1,
+          "maxBytes": 4096
+        },
+        "root": {
+          "type": "ComputerSettingsRoot"
+        },
+        "entries": {
+          "type": "json",
+          "description": "Array of at most 500 nonempty directory entry strings, each at most 1024 UTF-8 bytes; explicitly validated by the adapter."
+        },
+        "truncated": {
+          "type": "boolean"
         }
       }
     }

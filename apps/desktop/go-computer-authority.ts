@@ -3,12 +3,14 @@ import { codexTaskCurrentSource } from "./task-current-settings";
 import { BridgeError, type Client } from "./bridge/client";
 import {
   validate,
+  validUnicode,
   type Context,
   type Json,
   type ComputerAuthorityDeactivateResponse,
   type ComputerAuthorityPublication,
   type ChatComputerAdmissionRequest,
   type ChatComputerAdmissionResponse,
+  type ComputerSettingsListResponse,
 } from "./bridge/wire";
 import type { ProductSettings } from "../../src/pkg/product-settings/contract";
 import { ownerSettingsComputerApproval } from "../../src/modules/computer/infra/repo/owner-settings-computer-approval";
@@ -21,6 +23,8 @@ export class GoComputerAuthority {
   private blocked = false;
   private pending = false;
   private publication: ComputerAuthorityPublication | undefined;
+  private ownerPublication: ComputerAuthorityPublication | undefined;
+  private settingsInFlight = false;
   private readonly context: Context;
   constructor(
     private readonly client: Pick<Client, "request">,
@@ -37,6 +41,7 @@ export class GoComputerAuthority {
       throw new BridgeError("unavailable", "computer_publication_unavailable");
     this.pending = true;
     this.publication = undefined;
+    this.ownerPublication = undefined;
     const receipt = await this.effect<ComputerAuthorityDeactivateResponse>(
       "computer.authority.deactivate",
       {},
@@ -85,6 +90,7 @@ export class GoComputerAuthority {
           )
             throw new BridgeError("unknown", "crossed_computer_publication");
           this.publication = Object.freeze({ ...published });
+          this.ownerPublication = this.publication;
           this.pending = false;
         } catch (error) {
           this.blocked = true;
@@ -135,6 +141,93 @@ export class GoComputerAuthority {
     } catch (error) {
       this.blocked = true;
       throw error;
+    }
+  }
+
+  // An explicit Settings read uses the known owner publication, without a
+  // synthetic Chat admission or a renewed approval. Withdrawal remains able to
+  // invalidate this call while native IO is in progress.
+  async listSettings(
+    computerGeneration: number,
+    workspaceId: string,
+    relativePath: string,
+  ): Promise<
+    Omit<ComputerSettingsListResponse, "entries"> & { entries: string[] }
+  > {
+    const publication = this.ownerPublication;
+    if (
+      this.blocked ||
+      this.pending ||
+      this.settingsInFlight ||
+      !publication ||
+      publication.generation !== String(computerGeneration)
+    )
+      throw new BridgeError("unavailable", "computer_publication_unavailable");
+    const body = { publication, workspaceId, relativePath };
+    if (!validate("ComputerSettingsListRequest", body))
+      throw new BridgeError("refused", "invalid_settings_workspace_request");
+    this.settingsInFlight = true;
+    try {
+      const id = randomUUID();
+      const outcome = await this.client.request(
+        "computer.settings.list",
+        body as unknown as Json,
+        { id },
+      );
+      if (
+        !validate("Outcome", outcome) ||
+        outcome.requestId !== id ||
+        outcome.operationId !== undefined ||
+        outcome.context.profileId !== this.context.profileId ||
+        outcome.context.backendGeneration !== this.context.backendGeneration
+      )
+        throw new BridgeError("unknown", "crossed_settings_workspace_result");
+      if (outcome.status !== "ok")
+        throw new BridgeError(
+          outcome.status,
+          outcome.code ?? "settings_workspace_failed",
+        );
+      if (
+        outcome.code !== undefined ||
+        !validate("ComputerSettingsListResponse", outcome.data)
+      )
+        throw new BridgeError("unknown", "invalid_settings_workspace_result");
+      const result = outcome.data as unknown as ComputerSettingsListResponse;
+      const entries = result.entries;
+      if (
+        !Array.isArray(entries) ||
+        entries.length > 500 ||
+        !entries.every(
+          (entry): entry is string =>
+            typeof entry === "string" &&
+            entry.length > 0 &&
+            validUnicode(entry) &&
+            Buffer.byteLength(entry, "utf8") <= 1024,
+        )
+      )
+        throw new BridgeError("unknown", "invalid_settings_workspace_result");
+      if (
+        result.workspaceId !== workspaceId ||
+        result.relativePath !== relativePath ||
+        (
+          Object.keys(publication) as (keyof ComputerAuthorityPublication)[]
+        ).some((key) => result.publication[key] !== publication[key])
+      )
+        throw new BridgeError("unknown", "crossed_settings_workspace_result");
+      if (this.ownerPublication !== publication || this.pending || this.blocked)
+        throw new BridgeError("refused", "settings_workspace_withdrawn");
+      return {
+        ...result,
+        publication: { ...result.publication },
+        root: { ...result.root },
+        entries: [...entries],
+      };
+    } catch (error) {
+      if (!(error instanceof BridgeError) || error.state === "unknown")
+        this.blocked = true;
+      throw error;
+    } finally {
+      this.settingsInFlight = false;
     }
   }
 

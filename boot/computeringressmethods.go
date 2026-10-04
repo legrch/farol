@@ -36,6 +36,7 @@ func invalidIngress() (*desktop.Outcome, error) {
 // body IDs and the presence of a registered read capability create no authority.
 func (s *ComputerIngress) Methods() map[string]desktop.Method {
 	methods := map[string]desktop.Method{
+		"computer.settings.list": s.settingsListMethod(),
 		"computer.authority.deactivate": {Handle: func(ctx context.Context, r desktop.Request) (*desktop.Outcome, error) {
 			if r.OperationID == "" || ipc.ValidateJSON(r.Body) != nil || wire.Validate("ComputerAuthorityDeactivateRequest", r.Body) != nil {
 				return invalidIngress()

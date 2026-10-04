@@ -165,6 +165,30 @@ func TestNativeCLIComputerPublicationAdmissionAndRead(t *testing.T) {
 	if err := json.Unmarshal(r.Data, &published); err != nil {
 		t.Fatal(err)
 	}
+	// Settings uses the real native owner publication without a Chat/Task
+	// admission. Inspect the retained journals independently before/after IO.
+	beforeSettings := make(map[string][]byte)
+	for _, relative := range []string{"computer/computer-access.json", "chat/chat-lifecycle.json"} {
+		raw, err := os.ReadFile(filepath.Join(profile, relative))
+		if err != nil {
+			t.Fatal(err)
+		}
+		beforeSettings[relative] = raw
+	}
+	settingsRequest := wire.ComputerSettingsListRequest{Publication: published, WorkspaceId: "work", RelativePath: "."}
+	r = ok("computer.settings.list", settingsRequest, "")
+	var listed wire.ComputerSettingsListResponse
+	if err := json.Unmarshal(r.Data, &listed); err != nil || wire.Validate("ComputerSettingsListResponse", r.Data) != nil ||
+		listed.Publication != published || listed.Root.Path != workspace || listed.Root.Device != fmt.Sprint(ws.Dev) ||
+		listed.Root.Inode != fmt.Sprint(ws.Ino) || string(listed.Entries) != `["note.md"]` || listed.Truncated {
+		t.Fatalf("owner Settings native listing: %v %s", err, r.Data)
+	}
+	for relative, before := range beforeSettings {
+		after, err := os.ReadFile(filepath.Join(profile, relative))
+		if err != nil || !bytes.Equal(before, after) {
+			t.Fatalf("Settings changed %s: %v", relative, err)
+		}
+	}
 	r = ok("chat.turn", wire.ChatComputerAdmissionRequest{Publication: published, SessionId: "session-1", TaskId: "task-1", TurnId: "turn-1", WorkspaceIds: []string{"work"}}, "admit-1")
 	var admitted wire.ChatComputerAdmissionResponse
 	if err := json.Unmarshal(r.Data, &admitted); err != nil {
@@ -179,6 +203,9 @@ func TestNativeCLIComputerPublicationAdmissionAndRead(t *testing.T) {
 		t.Fatalf("native content mismatch: %v %s", err, r.Data)
 	}
 	ok("computer.authority.deactivate", map[string]any{}, "deactivate-2")
+	if r := invoke("computer.settings.list", settingsRequest, ""); r.Status == "ok" {
+		t.Fatal("withdrawn owner Settings authority disclosed entries")
+	}
 	read.CallId = "read-after-withdrawal"
 	if r := invoke("computer.workspace.read", read, ""); r.Status == "ok" {
 		t.Fatal("withdrawn authority disclosed content")

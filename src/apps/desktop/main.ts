@@ -4993,6 +4993,41 @@ function workspaceReadFailure(code: string): ProductConfigurationResult {
   }
 }
 
+async function listOwnerWorkspace(
+  generation: number,
+  workspace: ApprovedProductWorkspace,
+  identity: WorkspaceRootIdentity,
+  relativePath: string,
+): Promise<
+  | { ok: true; entries: string[]; truncated: boolean }
+  | { ok: false; code: string }
+> {
+  if (!desktopGoCore) return { ok: false, code: "WORKSPACE_READ_FAILED" };
+  try {
+    const result = await desktopGoCore.listSettingsWorkspace(
+      generation,
+      workspace.workspaceId,
+      relativePath,
+    );
+    const current = configuration?.snapshot();
+    if (
+      result.root.path !== workspace.root ||
+      result.root.device !== identity.device ||
+      result.root.inode !== identity.inode ||
+      current?.status !== "ready" ||
+      current.settings.computer.generation !== generation
+    )
+      return { ok: false, code: "WORKSPACE_ROOT_CHANGED" };
+    return { ok: true, entries: result.entries, truncated: result.truncated };
+  } catch (error) {
+    // A refused/unknown Go call never selects the legacy executor.
+    return {
+      ok: false,
+      code: error instanceof Error ? error.message : "WORKSPACE_READ_FAILED",
+    };
+  }
+}
+
 function workspaceMutationStateRoot(): string {
   return path.join(
     app.getPath("userData"),
@@ -7262,16 +7297,13 @@ async function configureAdmittedProduct(
         return configurationFailure("WORKSPACE_VERIFICATION_REQUIRED");
       // Recheck only the already approved root through the same descriptor.
       // No child names/content are returned and no selected-folder binding changes.
-      let reachable = false;
-      try {
-        const checked = await nativeWorkspace.execute({
-          workspace: workspaceDescriptor(workspace, identity),
-          operation: { kind: "workspace.list", relativePath: "." },
-        });
-        reachable = checked.ok && checked.value.kind === "workspace.entries";
-      } catch {
-        reachable = false;
-      }
+      const checked = await listOwnerWorkspace(
+        snapshot.settings.computer.generation,
+        workspace,
+        identity,
+        ".",
+      );
+      const reachable = checked.ok;
       const recorded = await configuration.recordFolderAccessCheck(
         workspace.workspaceId,
         snapshot.settings.computer.generation,
@@ -7285,8 +7317,8 @@ async function configureAdmittedProduct(
         : configurationFailure("WORKSPACE_VERIFICATION_FAILED");
     }
     case "computer.verify-workspace": {
-      const snapshot = configuration.snapshot();
-      const workspace =
+      let snapshot = configuration.snapshot();
+      let workspace =
         snapshot.status === "ready"
           ? snapshot.settings.computer.workspaces.find(
               (candidate) => candidate.workspaceId === command.workspaceId,
@@ -7308,18 +7340,44 @@ async function configureAdmittedProduct(
       ) {
         return configurationFailure("WORKSPACE_ROOT_CHANGED");
       }
-      // A bounded top-level listing through the descriptor-bound helper proves
-      // Farol opens exactly the approved folder. It reads no file content and
-      // says nothing about reading files, writing, or Git: those have their own
-      // checks, and none of them needs the owner to pick a file here.
-      const result = await nativeWorkspace.execute({
-        workspace: workspaceDescriptor(workspace, measured),
-        operation: { kind: "workspace.list", relativePath: "." },
-      });
-      if (!result.ok) return workspaceReadFailure(result.error.code);
-      if (result.value.kind !== "workspace.entries") {
-        return configurationFailure("WORKSPACE_VERIFICATION_FAILED");
+      if (!bound) {
+        if (snapshot.status !== "ready")
+          return configurationFailure("SETTINGS_UNAVAILABLE");
+        const bindingAdmission = configurationAdmission(command.kind, {
+          agentActive: codexAgentOperationActive(),
+          connectorRunning:
+            connectorTaskAdmission ||
+            secureMcpConnectorRuntime?.isRunning() === true,
+        });
+        if (bindingAdmission !== "admitted")
+          return configurationFailure(bindingAdmission);
+        const binding = await configuration.bindWorkspaceRootIdentity(
+          workspace.workspaceId,
+          snapshot.settings.revision,
+          workspace.root,
+          measured,
+        );
+        if (!binding.ok) return ProductConfigurationResultSchema.parse(binding);
+        snapshot = configuration.snapshot();
+        workspace =
+          snapshot.status === "ready"
+            ? snapshot.settings.computer.workspaces.find(
+                (item) => item.workspaceId === command.workspaceId,
+              )
+            : undefined;
       }
+      if (!workspace || snapshot.status !== "ready")
+        return configurationFailure("WORKSPACE_NOT_FOUND");
+      // Go performs bounded content-free inspection under the exact published
+      // approval. Native binding and final current authority are both checked.
+      const generation = snapshot.settings.computer.generation;
+      const result = await listOwnerWorkspace(
+        generation,
+        workspace,
+        measured,
+        ".",
+      );
+      if (!result.ok) return workspaceReadFailure(result.code);
       // Preserve the measured layout for task selection. Primary metadata is
       // bound only with explicit full-Git approval; linked grants stay exact.
       const gitMetadata = await discoverWorkspaceGitMetadata(
@@ -7347,7 +7405,12 @@ async function configureAdmittedProduct(
               ? "mutable-workspace/1"
               : "readonly-workspace/1",
         },
-        { rootIdentity: measured, gitMetadata },
+        {
+          rootIdentity: measured,
+          gitMetadata,
+          expectedGeneration: generation,
+          expectedRoot: workspace.root,
+        },
       );
       if (!recorded.ok) return ProductConfigurationResultSchema.parse(recorded);
       return ProductConfigurationResultSchema.parse({
@@ -7356,8 +7419,8 @@ async function configureAdmittedProduct(
           kind: "computer.workspace-list",
           workspaceId: workspace.workspaceId,
           relativePath: ".",
-          entries: result.value.entries,
-          truncated: result.value.truncated,
+          entries: result.entries,
+          truncated: result.truncated,
         },
       });
     }
@@ -7369,20 +7432,16 @@ async function configureAdmittedProduct(
       if (selected.status === "not_verified") {
         return configurationFailure("WORKSPACE_VERIFICATION_REQUIRED");
       }
-      const result = await nativeWorkspace.execute({
-        workspace: workspaceDescriptor(
-          selected.workspace,
-          selected.workspace.rootIdentity,
-        ),
-        operation: {
-          kind: "workspace.list",
-          relativePath: command.relativePath,
-        },
-      });
-      if (!result.ok) return workspaceReadFailure(result.error.code);
-      if (result.value.kind !== "workspace.entries") {
-        return configurationFailure("WORKSPACE_READ_FAILED");
-      }
+      const snapshot = configuration.snapshot();
+      if (snapshot.status !== "ready")
+        return configurationFailure("SETTINGS_UNAVAILABLE");
+      const result = await listOwnerWorkspace(
+        snapshot.settings.computer.generation,
+        selected.workspace,
+        selected.workspace.rootIdentity,
+        command.relativePath,
+      );
+      if (!result.ok) return workspaceReadFailure(result.code);
       return ProductConfigurationResultSchema.parse({
         ok: true,
         snapshot: configuration.snapshot(),
@@ -7390,8 +7449,8 @@ async function configureAdmittedProduct(
           kind: "computer.workspace-list",
           workspaceId: selected.workspace.workspaceId,
           relativePath: command.relativePath,
-          entries: result.value.entries,
-          truncated: result.value.truncated,
+          entries: result.entries,
+          truncated: result.truncated,
         },
       });
     }

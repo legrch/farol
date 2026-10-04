@@ -29,6 +29,15 @@ async function fixture(fault?: (method: string, result: Outcome) => Outcome) {
           approvalDigest: "a".repeat(64),
           publishOperationId: options.operationId!,
         };
+      else if (method === "computer.settings.list")
+        data = {
+          publication: input.publication!,
+          workspaceId: input.workspaceId!,
+          relativePath: input.relativePath!,
+          root: { path: "/synthetic/work", device: "1", inode: "2" },
+          entries: ["note.md", "folder/"],
+          truncated: false,
+        };
       else
         data = {
           ownerId: "owner-desktop",
@@ -44,7 +53,9 @@ async function fixture(fault?: (method: string, result: Outcome) => Outcome) {
       const result: Outcome = {
         status: "ok",
         requestId: options.id!,
-        operationId: options.operationId!,
+        ...(options.operationId === undefined
+          ? {}
+          : { operationId: options.operationId }),
         context,
         data,
       };
@@ -87,6 +98,177 @@ const intent = {
 };
 
 describe("Go Computer host authority mapping", () => {
+  it("lists for Settings under the exact publication without creating a Chat owner", async () => {
+    const f = await fixture();
+    const added = await f.add();
+    if (!added.ok || added.snapshot.status !== "ready") throw Error("fixture");
+    const { generation, workspaces } = added.snapshot.settings.computer;
+    const listed = await f.bridge.listSettings(
+      generation,
+      workspaces[0]!.workspaceId,
+      ".",
+    );
+    expect(listed.entries).toEqual(["note.md", "folder/"]);
+    expect(f.request.mock.calls.map((call) => call[0])).toEqual([
+      "computer.authority.deactivate",
+      "computer.authority.publish",
+      "computer.settings.list",
+    ]);
+    expect(f.request.mock.calls[2]![2]?.operationId).toBeUndefined();
+    await expect(
+      f.bridge.listSettings(generation + 1, workspaces[0]!.workspaceId, "."),
+    ).rejects.toMatchObject({ code: "computer_publication_unavailable" });
+    expect(f.request).toHaveBeenCalledTimes(3);
+    // Actual Chat admission consumes only its own admission receipt. A later
+    // owner list neither fabricates nor renews that Chat membership.
+    await f.bridge.admitRead(intent);
+    await f.bridge.listSettings(generation, workspaces[0]!.workspaceId, ".");
+    expect(
+      f.request.mock.calls.filter((call) => call[0] === "chat.turn"),
+    ).toHaveLength(1);
+  });
+
+  it.each(["publication", "workspace", "backend", "operation", "shape"])(
+    "fences a crossed Settings %s result without another physical request",
+    async (fault) => {
+      const f = await fixture((method, result) => {
+        if (method !== "computer.settings.list") return result;
+        const data = result.data as Record<string, Json>;
+        if (fault === "backend")
+          return {
+            ...result,
+            context: { ...result.context, backendGeneration: "other" },
+          };
+        if (fault === "operation")
+          return { ...result, operationId: "unexpected" };
+        if (fault === "shape")
+          return { ...result, data: { ...data, entries: [42] } };
+        return {
+          ...result,
+          data: {
+            ...data,
+            ...(fault === "workspace"
+              ? { workspaceId: "other" }
+              : {
+                  publication: {
+                    ...(data.publication as Record<string, Json>),
+                    settingsRevision: "999",
+                  },
+                }),
+          },
+        };
+      });
+      const added = await f.add();
+      if (!added.ok || added.snapshot.status !== "ready")
+        throw Error("fixture");
+      const { generation, workspaces } = added.snapshot.settings.computer;
+      await expect(
+        f.bridge.listSettings(generation, workspaces[0]!.workspaceId, "."),
+      ).rejects.toMatchObject({ state: "unknown" });
+      await expect(
+        f.bridge.listSettings(generation, workspaces[0]!.workspaceId, "."),
+      ).rejects.toMatchObject({ code: "computer_publication_unavailable" });
+      expect(f.request).toHaveBeenCalledTimes(3);
+    },
+  );
+
+  it("discards a completed listing if host withdrawal crossed its response", async () => {
+    const f = await fixture();
+    const added = await f.add();
+    if (!added.ok || added.snapshot.status !== "ready") throw Error("fixture");
+    const { generation, workspaces } = added.snapshot.settings.computer;
+    const implementation = f.request.getMockImplementation()!;
+    f.request.mockImplementation(async (method, body, options) => {
+      const result = await implementation(method, body, options);
+      if (method === "computer.settings.list") await f.bridge.withdraw();
+      return result;
+    });
+    await expect(
+      f.bridge.listSettings(generation, workspaces[0]!.workspaceId, "."),
+    ).rejects.toMatchObject({ code: "settings_workspace_withdrawn" });
+    expect(
+      f.request.mock.calls.filter(
+        (call) => call[0] === "computer.settings.list",
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("binds an old folder before inspection without inventing successful verification", async () => {
+    const f = await fixture();
+    const added = await f.service.addReadonlyWorkspace({
+      root: "/synthetic/legacy",
+      label: "Legacy",
+    });
+    if (!added.ok || added.snapshot.status !== "ready") throw Error("fixture");
+    const before = added.snapshot.settings;
+    const workspace = before.computer.workspaces[0]!;
+    f.request.mockClear();
+    const bound = await f.service.bindWorkspaceRootIdentity(
+      workspace.workspaceId,
+      before.revision,
+      workspace.root,
+      { device: "3", inode: "4" },
+    );
+    if (!bound.ok || bound.snapshot.status !== "ready")
+      throw Error("binding refused");
+    expect(bound.snapshot.settings.computer.workspaces[0]).toMatchObject({
+      rootIdentity: { device: "3", inode: "4" },
+      accessCheck: null,
+    });
+    expect(bound.snapshot.settings.setup.computer.verified).toBeNull();
+    expect(bound.snapshot.settings.computer.generation).toBe(
+      before.computer.generation + 1,
+    );
+    expect(f.request.mock.calls.map((call) => call[0])).toEqual([
+      "computer.authority.deactivate",
+      "computer.authority.publish",
+    ]);
+    f.request.mockClear();
+    await expect(
+      f.service.bindWorkspaceRootIdentity(
+        workspace.workspaceId,
+        bound.snapshot.settings.revision,
+        workspace.root,
+        { device: "3", inode: "5" },
+      ),
+    ).resolves.toMatchObject({ ok: false, error: "WORKSPACE_ROOT_CHANGED" });
+    expect(f.request).not.toHaveBeenCalled();
+  });
+
+  it("refuses binding and verification evidence from a stale configuration", async () => {
+    const f = await fixture();
+    const added = await f.add();
+    if (!added.ok || added.snapshot.status !== "ready") throw Error("fixture");
+    const settings = added.snapshot.settings;
+    const workspace = settings.computer.workspaces[0]!;
+    f.request.mockClear();
+    await expect(
+      f.service.bindWorkspaceRootIdentity(
+        workspace.workspaceId,
+        settings.revision - 1,
+        workspace.root,
+        { device: "1", inode: "2" },
+      ),
+    ).resolves.toMatchObject({ ok: false, error: "WORKSPACE_ROOT_CHANGED" });
+    await expect(
+      f.service.recordComputerVerification(
+        workspace.workspaceId,
+        {
+          profile: "computer.local.read/1",
+          runtimeGeneration: "runtime-1",
+          buildId: "c".repeat(64),
+          protocol: "readonly-workspace/1",
+        },
+        {
+          rootIdentity: workspace.rootIdentity!,
+          expectedGeneration: settings.computer.generation + 1,
+          expectedRoot: workspace.root,
+        },
+      ),
+    ).resolves.toMatchObject({ ok: false, error: "WORKSPACE_ROOT_CHANGED" });
+    expect(f.request).not.toHaveBeenCalled();
+  });
+
   it("keeps fresh settings inactive without publishing an empty grant, then accepts setup", async () => {
     const f = await fixture();
     const publication = await f.bridge.withdraw();
