@@ -64,7 +64,7 @@ const contract = Object.freeze({
   nativeAuthority:
     "Explicit --run-native; caller owns the exclusive native lane",
   isolation:
-    "Existing E2E root/proof/app-data guard; new HOME/AppData/TMPDIR, hidden windows, fixture tunnel client, no workspace or provider verification",
+    "Existing E2E root/proof/app-data guard; new HOME/AppData, private per-user TMPDIR, hidden windows, fixture tunnel client, no workspace or provider verification",
   missingWitnesses: [
     "Normal Go read bytes/hash and classified Go denial: prepare-readonly-task requires ChatGPT readiness and Computer verification; Check access/Verify workspace use the legacy native helper",
     "Revoked old Go admission/no TS fallback: removing workspace is guarded before Go admission in normal preview; the normal configuration API does not expose the old admission or classified Go outcome",
@@ -377,8 +377,14 @@ async function native(selected, inputs, report, save) {
     );
   // Reuse an existing guard-owned root name; new prefixes require a production
   // isolation change and are deliberately outside this harness's scope.
+  const temp = await fs.realpath(os.tmpdir());
+  assert.match(
+    temp,
+    /^\/private\/var\/folders\/[^/]+\/[^/]+\/T$/u,
+    "PRIVATE_MACOS_TEMP_REQUIRED_NO_FALLBACK",
+  );
   const temporary = await fs.realpath(
-    await fs.mkdtemp(path.join(os.tmpdir(), "farol-dev-onboarding-startup-")),
+    await fs.mkdtemp(path.join(temp, "farol-dev-onboarding-startup-")),
   );
   await fs.chmod(temporary, 0o700);
   report.temporary = temporary;
@@ -391,8 +397,10 @@ async function native(selected, inputs, report, save) {
   };
   const home = path.join(temporary, "home");
   const appData = path.join(temporary, "app-data");
-  const temp = path.join(temporary, "tmp");
-  for (const directory of [home, appData, temp])
+  // Match the existing Dev harness: keep native socket roots in the private
+  // per-user macOS temp directory. A nested TMPDIR exceeds AF_UNIX limits;
+  // /private/tmp is refused by Go's writable-ancestor policy.
+  for (const directory of [home, appData])
     await fs.mkdir(directory, { mode: 0o700 });
   const proof = randomUUID();
   await fs.writeFile(path.join(temporary, ".farol-next-e2e-root"), proof, {
