@@ -221,19 +221,55 @@ a missing record after an uncertain response or new host lifetime is insufficien
 to infer non-admission. There is no error fallback from Go to TS execution.
 
 **Pending delivery and ACK policy still belong to the temporary TS configuration
-service.** The legacy no-Go execution branch remains to be retired; historical
-pending records still need their reader. This witness does not qualify Go ACK,
+service.** Historical pending records still need their reader. This witness does not qualify Go ACK,
 legacy-profile migration, cross-build update, all conflict/revocation/failure paths,
 create/write/shell/Git journeys, native focus or hermetic network containment.
 Normal Chat Send still requires qualified model/control composition.
 
-| Obligation                                   | Executable evidence                                                                                                            | Exact layer                                                                                | Remaining boundary                                                         |
-| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------- |
-| Exact-hash edit and retained receipt         | `TestNativeSettingsMutation*` in `boot/settingsmutationnative_test.go`; `mutationEffectWitness` and `--settings-edit-mutation` | Native Go module plus this exact packaged React/Go happy path                              | Packaged conflict, revocation and uncertain publication witnesses          |
-| No repeated edit after transport uncertainty | `tests/unit/go-settings-mutation.test.ts`; `tests/unit/core-host-context.test.ts`                                              | Closed transport and serialized in-memory pipes; branded-proof sensitivity failure         | Broader native timeout/cancel/reconnect matrix                             |
-| Result retention versus UI delivery          | `mutationReplyWitness`, `mutationUiAckWitness`, `mutationTerminalWitness` in `tests/e2e/lib/settings-mutation-witness.mjs`     | Same-package ordinary Quit/reopen and actual UI ACK; independent file/journal/config reads | Go-owned pending/ACK and cross-build recovery                              |
-| C07 independent expectations, partial        | `mutationEffectWitness` self-tests reject changed identity, hash, journal, duplicate records and fabricated task metadata      | Browser-free oracle sensitivity plus independently read packaged facts                     | Provider generation/DOM variants remain separate                           |
-| C12 one active owner, partial                | Normal source-selected Go Apply/Observe, host no-fallback tests and no TS record in this packaged witness                      | Source/transport plus normal packaged Go route                                             | Retire the active no-Go TS alternative and qualify delivery-policy cutover |
+| Obligation                                   | Executable evidence                                                                                                            | Exact layer                                                                                | Remaining boundary                                                |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------ | ----------------------------------------------------------------- |
+| Exact-hash edit and retained receipt         | `TestNativeSettingsMutation*` in `boot/settingsmutationnative_test.go`; `mutationEffectWitness` and `--settings-edit-mutation` | Native Go module plus this exact packaged React/Go happy path                              | Packaged conflict, revocation and uncertain publication witnesses |
+| No repeated edit after transport uncertainty | `tests/unit/go-settings-mutation.test.ts`; `tests/unit/core-host-context.test.ts`                                              | Closed transport and serialized in-memory pipes; branded-proof sensitivity failure         | Broader native timeout/cancel/reconnect matrix                    |
+| Result retention versus UI delivery          | `mutationReplyWitness`, `mutationUiAckWitness`, `mutationTerminalWitness` in `tests/e2e/lib/settings-mutation-witness.mjs`     | Same-package ordinary Quit/reopen and actual UI ACK; independent file/journal/config reads | Go-owned pending/ACK and cross-build recovery                     |
+| C07 independent expectations, partial        | `mutationEffectWitness` self-tests reject changed identity, hash, journal, duplicate records and fabricated task metadata      | Browser-free oracle sensitivity plus independently read packaged facts                     | Provider generation/DOM variants remain separate                  |
+| C12 one active owner, partial                | Normal source-selected Go Apply/Observe, host no-fallback tests and no TS record in this packaged witness                      | Source/transport plus normal packaged Go route                                             | Go-owned delivery policy and remaining shared Computer routes     |
+
+### Retired Settings TS execution
+
+Source `1279490f85c1a0faef3e3f0837010a7c15eb6afe` removes the former Settings
+Task/participant executor and the unused TS edit-snapshot adapter. Prepare and
+Apply require the normal Go owner, including in development; a build without
+that owner refuses them. This does not remove the shared TS/Python Computer MCP
+route, which still has production consumers.
+
+The same React edit, unacknowledged Quit, same-profile reopen, retained Observe
+and UI ACK journey passed again on that exact source and package:
+
+- Build: `0d409da67a9a3cc0082b4d42942b2250bb25fcfe4eb6655d1fd30488dd227c6d`.
+- Artifact SHA-256: `9783ab190c21613389c1be0122ba17ccd5dd9b2751650c37456569cc306e221e`.
+- Local report: `_output/evidence/go-core-startup-9b38ece4-40b7-4ea6-89c3-0ebc2a909f80.json`.
+
+There was one measured edit, one owner-v2 record, zero attempted/accepted provider
+Sends, two confirmed normal exits and no extra file/journal change after
+observation or ACK. Every test-owned window stayed hidden and unfocused. The
+successful disposable profile was removed after confirmed cleanup. Package
+`04f4f2a` remains separately preserved; neither package is installed or released.
+
+The historical v1 reader uses existing-only, bounded reads. It never creates a
+missing directory, repairs permissions or sweeps an uncertain temporary file.
+Unsafe records and detected changes return unavailable. The focused legacy tests
+cover symlink, hardlink, FIFO and mode refusal, unchanged receipts and temporary
+publication preservation. Restoring the old effectful `load` makes four
+preservation regressions fail; restoring the corrected bytes passes. Absence of a
+historical record still does not independently prove that no old effect occurred;
+concurrent directory swaps are not native-qualified by these static fixtures.
+
+Frozen `1279490` passed `task ci:fast` (7,508 main tests, 253 renderer tests,
+164 protocol/architecture checks and Go race/vet/static gates). The focused
+retirement checks and narrow independent source review also passed. C12's
+Settings execution-alternative removal is closed at this package boundary;
+Go-owned delivery policy, the shared Computer routes and the complete cutover
+review remain open.
 
 ## Owner Settings edit snapshot through Go
 
