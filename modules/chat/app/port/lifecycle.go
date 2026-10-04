@@ -35,7 +35,8 @@ type JournalHead struct {
 }
 
 // JournalEntry is content-free transition evidence. Before/After are projections,
-// not startup admission authority. IntentDigest appears only on initial admission;
+// not startup admission authority. IntentDigest appears on initial admission and
+// the one-shot promote-conversation transition, which enqueues that same turn;
 // CallID retains resolved-call deduplication when replaying explicit transitions.
 // Effect is empty or a narrow browser capability (prepare/send), never arbitrary IO.
 // A pending effect remains in the journal until a second known settlement commit.

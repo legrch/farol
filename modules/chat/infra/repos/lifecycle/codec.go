@@ -62,6 +62,7 @@ func validate(value record, limits Limits) error {
 		return Invalid
 	}
 	bindings := make(map[string]port.TurnBinding)
+	promoted := make(map[string]bool)
 	pending := port.JournalEntry{}
 	proofs := make(map[string]port.RetirementTurn)
 	unresolvedCalls := make(map[string]string)
@@ -89,12 +90,18 @@ func validate(value record, limits Limits) error {
 			proofs[i.OperationID] = port.RetirementTurn{Binding: e.Binding, Snapshot: after}
 			continue
 		}
-		if bindings[i.OperationID] != e.Binding || e.IntentDigest != "" {
+		if bindings[i.OperationID] != e.Binding || (e.Kind != "promote-conversation" && e.IntentDigest != "") {
 			return Invalid
 		}
 		before, err := q.Snapshot(i)
 		if err != nil || before != e.Before {
 			return Invalid
+		}
+		if e.Kind == "promote-conversation" {
+			if promoted[i.OperationID] || before.Phase != turn.Admitted || before.Reserved || before.Bound || before.SendIntent || before.HasResult || before.OutstandingCallID != "" || e.After.Phase != turn.Pending || !validIntentDigest(e.IntentDigest) {
+				return Invalid
+			}
+			promoted[i.OperationID] = true
 		}
 		if pending.Effect != "" && (pending.Binding != e.Binding || (pending.Effect == "prepare" && e.Kind != "prepared") || (pending.Effect == "send" && e.Kind != "send-settled")) {
 			return Invalid
@@ -151,7 +158,7 @@ func validate(value record, limits Limits) error {
 func transition(q *turn.Queue, e port.JournalEntry, before turn.Snapshot, pending port.JournalEntry) (turn.Snapshot, error) {
 	i, b := before.Identity, before.Binding
 	switch e.Kind {
-	case "enqueue":
+	case "enqueue", "promote-conversation":
 		return q.Enqueue(i)
 	case "reserve":
 		r, err := q.Reserve()
@@ -217,6 +224,10 @@ func transition(q *turn.Queue, e port.JournalEntry, before turn.Snapshot, pendin
 		return q.Snapshot(i)
 	}
 	return turn.Snapshot{}, Invalid
+}
+
+func validIntentDigest(digest string) bool {
+	return len(digest) == 64 && strings.IndexFunc(digest, func(c rune) bool { return !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) }) == -1
 }
 
 func identity(b port.TurnBinding) turn.Identity {

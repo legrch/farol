@@ -76,6 +76,8 @@ type Handle struct {
 	sourceSequence                                 uint64
 	caller                                         *CallerToolCall
 	closed                                         bool // protected by owner's gate; monotonic membership withdrawal
+	readWithdrawal                                 bool // exact bare-read withdrawal intent, never a promoted turn
+	readPromoted                                   bool // known promotion receipt; ordinary Create is not promotion replay
 }
 
 var _ port.BoundTurn = (*Handle)(nil)
@@ -311,12 +313,13 @@ func (s *Service) Finish(ctx context.Context, h *Handle, binding turn.Binding, r
 }
 
 type mutation struct {
-	caller    *CallerToolCall
-	frames    *stream.Buffer
-	candidate *turn.Queue
-	handle    *Handle
-	fence     uint64
-	entry     port.JournalEntry
+	conversation *Conversation
+	caller       *CallerToolCall
+	frames       *stream.Buffer
+	candidate    *turn.Queue
+	handle       *Handle
+	fence        uint64
+	entry        port.JournalEntry
 }
 
 // stage derives a private candidate under Gate and withdraws ALL positive views
@@ -434,6 +437,8 @@ func (s *Service) commit(ctx context.Context, m *mutation, publish bool) error {
 	}
 	if publish {
 		switch m.entry.Kind {
+		case "promote-conversation":
+			m.publishPromotion()
 		case "admit":
 			if c := m.handle.conversation; c != nil {
 				c.root.latest = c
