@@ -6,7 +6,10 @@ import path from "node:path";
 import { Client } from "@modelcontextprotocol/client";
 import { InMemoryTransport } from "@modelcontextprotocol/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ProductSettingsStore } from "../../src/apps/desktop/product-configuration";
+import {
+  ProductConfigurationService,
+  ProductSettingsStore,
+} from "../../src/apps/desktop/product-configuration";
 import { createSecureMcpLaunchContract } from "../../src/apps/desktop/secure-mcp-launch-contract";
 import {
   ProductSettingsSchema,
@@ -648,6 +651,171 @@ describe("production Computer TaskGrant reissue", () => {
         error: { retry: "never" },
       });
       expect(current.execute).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each(["subtree-exclusion", "git-binding"] as const)(
+    "does not disclose a pending result after same-generation %s changes",
+    async (change) => {
+      const workspace = settings.computer.workspaces[0]!;
+      settings.computer.commands = "verification";
+      workspace.gitHistoryApproved = true;
+      workspace.gitMetadata = {
+        gitDirectory: path.join(workspace.root, ".git"),
+        commonDirectory: path.join(workspace.root, ".git"),
+      };
+      await save();
+      const configuration = new ProductConfigurationService(
+        new ProductSettingsStore({ root }),
+        { now: () => "2026-10-04T16:00:00.000Z" },
+      );
+      await configuration.initialize();
+      const ceiling = launch();
+      const binding = materializeReadonlyComputerLaunch(ceiling, now).binding;
+      const authority = issuer(ceiling);
+      const execute = vi.fn<ReadonlyWorkspace["execute"]>(async () => {
+        if (change === "subtree-exclusion") {
+          workspace.excludedPaths = [path.join(workspace.root, "private")];
+          await save();
+          return {
+            ok: true,
+            value: {
+              kind: "workspace.matches",
+              matches: [
+                {
+                  path: "private/note.md",
+                  line: 1,
+                  text: "withheld",
+                  truncated: false,
+                },
+              ],
+              resultLimited: false,
+              scanLimited: false,
+            },
+          };
+        }
+        const recorded = await configuration.recordComputerVerification(
+          workspaceId,
+          {
+            profile: "computer.local.write/1",
+            runtimeGeneration: "fixture-generation",
+            buildId: "b".repeat(64),
+            protocol: "mutable-workspace/1",
+          },
+          {
+            rootIdentity: workspace.rootIdentity!,
+            gitMetadata: {
+              gitDirectory: "/Users/example/other/.git/worktrees/brain",
+              commonDirectory: "/Users/example/other/.git",
+            },
+          },
+        );
+        expect(recorded.ok).toBe(true);
+        const snapshot = configuration.snapshot();
+        if (snapshot.status !== "ready") throw new Error("settings missing");
+        expect(snapshot.settings.computer.generation).toBe(
+          settings.computer.generation,
+        );
+        expect(
+          snapshot.settings.computer.workspaces[0]!.gitHistoryApproved,
+        ).toBe(false);
+        return {
+          ok: true,
+          value: {
+            kind: "workspace.command",
+            command: "git.head",
+            relativePath: ".",
+            exitCode: 0,
+            stdout: "withheld",
+            stderr: "",
+            outputBytes: 8,
+            network: "none",
+            coverage: "head-commit",
+            layout: "primary",
+          },
+        };
+      });
+      const contract = renewingReadonlyComputerContract(
+        new ReadonlyComputerContractHandler(
+          new RunReadonlyComputerAction(
+            authority,
+            authority.approvals,
+            { execute },
+            clock,
+          ),
+        ),
+        authority,
+      );
+      const operation =
+        change === "subtree-exclusion"
+          ? {
+              kind: "workspace.search" as const,
+              relativePath: ".",
+              pattern: "withheld",
+            }
+          : {
+              kind: "verification.run" as const,
+              command: "git.head" as const,
+              relativePath: "." as const,
+            };
+      const call = { ...request(binding), operation };
+      const result = await contract.execute(call);
+      expect(result).toMatchObject({
+        ok: false,
+        correlation: { callId: call.callId, workspaceId, operation },
+        error: {
+          code: "AUTHORITY_COMPUTER_MISMATCH",
+          source: "computer-policy",
+          retry: "never",
+        },
+      });
+      expect(JSON.stringify(result)).not.toContain("private/note.md");
+      expect(result).not.toHaveProperty("value");
+      expect(
+        await contract.execute({ ...call, callId: "next-call" }),
+      ).toMatchObject({
+        ok: false,
+        error: { code: "AUTHORITY_COMPUTER_MISMATCH", retry: "never" },
+      });
+      expect(execute).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each(["unavailable", "cancelled"] as const)(
+    "withholds output when the final policy read is %s without redispatch",
+    async (change) => {
+      const ceiling = launch();
+      const binding = materializeReadonlyComputerLaunch(ceiling, now).binding;
+      const authority = issuer(ceiling);
+      const current = readonly(authority);
+      const controller = new AbortController();
+      const get = authority.approvals.get.bind(authority.approvals);
+      let reads = 0;
+      vi.spyOn(authority.approvals, "get").mockImplementation(async (id) => {
+        reads++;
+        if (reads === 4) {
+          if (change === "unavailable") throw new Error("source unavailable");
+          controller.abort();
+        }
+        return get(id);
+      });
+      const result = await current.contract.execute(request(binding), {
+        signal: controller.signal,
+      });
+      expect(result).toMatchObject({
+        ok: false,
+        correlation: { callId: "call-1", workspaceId },
+        error: {
+          code:
+            change === "unavailable"
+              ? "COMPUTER_APPROVAL_STORE_UNAVAILABLE"
+              : "WORKSPACE_REQUEST_CANCELLED",
+          retry: "never",
+        },
+      });
+      expect(result).not.toHaveProperty("value");
+      expect(current.execute).toHaveBeenCalledTimes(1);
+      expect(reads).toBe(4);
     },
   );
 

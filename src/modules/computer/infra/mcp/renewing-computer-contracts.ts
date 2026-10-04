@@ -70,7 +70,42 @@ export function renewingReadonlyComputerContract(
           error: admissionError(error),
         };
       }
-      return authority.run(execution, () => handler.execute(request, context));
+      return authority.run(execution, async () => {
+        const result = await handler.execute(request, context);
+        if (!result.ok) return result;
+        // A subtree read or Git verification can yield while policy changes
+        // without a generation bump. Recheck the whole admitted ceiling before
+        // disclosing output; never redispatch the completed operation.
+        let current;
+        try {
+          current = await execution.current();
+        } catch (error) {
+          return {
+            ok: false as const,
+            correlation: readonlyComputerCallCorrelation(parsed.data),
+            error: admissionError(error),
+          };
+        }
+        if (!current) {
+          return {
+            ok: false as const,
+            correlation: readonlyComputerCallCorrelation(parsed.data),
+            error: admissionError(new Error("AUTHORITY_COMPUTER_MISMATCH")),
+          };
+        }
+        if (context?.signal?.aborted) {
+          return {
+            ok: false as const,
+            correlation: readonlyComputerCallCorrelation(parsed.data),
+            error: {
+              code: "WORKSPACE_REQUEST_CANCELLED" as const,
+              source: "native-workspace" as const,
+              retry: "never" as const,
+            },
+          };
+        }
+        return result;
+      });
     },
   };
 }
