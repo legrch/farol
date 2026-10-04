@@ -75,6 +75,7 @@ import {
   accountUiWitness,
   accountReplyWitness,
   accountUiAction,
+  refreshAccountUi,
   readAccountSelfTest,
 } from "./lib/read-account-ui-witness.mjs";
 
@@ -1410,6 +1411,10 @@ async function native(selected, inputs, report, save) {
             inputs: inputs.readAccountInputs,
           },
         };
+        report.readAccount.initialDiagnostics = await refreshAccountUi(
+          window,
+          configured.revision,
+        );
         await window
           .getByRole("button", { name: "Home", exact: true })
           .click({ timeout: 5000 });
@@ -1566,28 +1571,11 @@ async function native(selected, inputs, report, save) {
           "observed-chatgpt-home-remount-no-implicit-effects",
           "observed",
         );
-        await window
-          .getByRole("button", { name: "Settings", exact: true })
-          .click({ timeout: 5000 });
-        await window
-          .locator(".contextual-sidebar")
-          .getByRole("button", { name: "Diagnostics", exact: true })
-          .click({ timeout: 5000 });
-        const diagnostics = window
-          .locator(".settings-page > div:not([hidden])")
-          .filter({
-            has: window.getByRole("heading", {
-              name: "Diagnostics",
-              exact: true,
-            }),
-          });
-        await diagnostics
-          .getByRole("button", { name: "Refresh status", exact: true })
-          .click({ timeout: 5000 });
+        const diagnostics = await refreshAccountUi(window, originalUi.revision);
         const refreshed = await ready(window, active);
         retainedApprovedSettings(refreshed.configuration.settings, configured);
         assert.ok(
-          (await diagnostics.textContent()).includes(
+          diagnostics.includes(
             `Configuration revision: ${originalUi.revision}.`,
           ),
         );

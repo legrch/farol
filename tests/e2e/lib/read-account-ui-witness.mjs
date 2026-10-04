@@ -57,6 +57,12 @@ export async function readAccountUi(window) {
           ? {
               value: section.querySelector("select").value,
               disabled: section.querySelector("select").disabled,
+              options: [...section.querySelectorAll("select option")].map(
+                (option) => ({
+                  value: option.value,
+                  label: option.textContent,
+                }),
+              ),
             }
           : null,
         buttons: [...section.querySelectorAll("button")].map((button) => ({
@@ -265,6 +271,31 @@ export async function accountUiAction(window, name, after) {
     { after, title },
     { timeout: 20000 },
   );
+}
+
+export async function refreshAccountUi(window, revision) {
+  assert.ok(Number.isSafeInteger(revision) && revision >= 0);
+  await window
+    .getByRole("button", { name: "Settings", exact: true })
+    .click({ timeout: 5000 });
+  await window
+    .locator(".contextual-sidebar")
+    .getByRole("button", { name: "Diagnostics", exact: true })
+    .click({ timeout: 5000 });
+  const diagnostics = window
+    .locator(".settings-page > div:not([hidden])")
+    .filter({
+      has: window.getByRole("heading", { name: "Diagnostics", exact: true }),
+    });
+  await diagnostics
+    .getByRole("button", { name: "Refresh status", exact: true })
+    .click({ timeout: 5000 });
+  // Preload setup commands bypass the window controller's command receipts.
+  // Observe its adoption through the real UI before choosing a verified folder.
+  await diagnostics
+    .getByText(`Configuration revision: ${revision}.`)
+    .waitFor({ state: "visible", timeout: 5000 });
+  return diagnostics.textContent();
 }
 
 export function readAccountSelfTest(pass, reject) {
