@@ -222,3 +222,64 @@ describe("development launcher environment", () => {
     expect(received.options.env.FAROL_NEXT_ACCEPTANCE_PROFILE).toBeUndefined();
   });
 });
+
+describe("fresh review environment (CPU-only)", () => {
+  const marker = "review:8dc34907-9b18-4cbd-9486-9cfde2d05c75";
+  it("selects only the launcher marker and strips saved-chat opt-in without changing HOME", () => {
+    const environment = {
+      HOME: "/Users/owner",
+      FAROL_NEXT_SAVED_CHAT_PREVIEW: "1",
+      FAROL_NEXT_ACCEPTANCE_PROFILE: "review:inherited",
+      FAROL_NEXT_E2E: "1",
+    };
+    const sealed = devLaunchEnvironment(
+      environment,
+      "/declared/bin",
+      false,
+      marker,
+    );
+    expect(sealed.HOME).toBe(environment.HOME);
+    expect(sealed.FAROL_NEXT_ACCEPTANCE_PROFILE).toBe(marker);
+    expect(sealed.FAROL_NEXT_SAVED_CHAT_PREVIEW).toBeUndefined();
+    expect(sealed.FAROL_NEXT_E2E).toBeUndefined();
+    expect(
+      devLaunchEnvironment(environment).FAROL_NEXT_SAVED_CHAT_PREVIEW,
+    ).toBe("1");
+  });
+  it.each([
+    "1",
+    "review:../owner",
+    "review:00000000-0000-0000-0000-000000000000",
+  ])("refuses an invalid review marker %s", (marker) => {
+    expect(() =>
+      devLaunchEnvironment({}, "/declared/bin", false, marker),
+    ).toThrow("DEV_REVIEW_PROFILE_INVALID");
+  });
+  it("does not combine reusable acceptance and fresh review", () => {
+    expect(() =>
+      devLaunchEnvironment({}, "/declared/bin", true, marker),
+    ).toThrow("DEV_REVIEW_PROFILE_INVALID");
+  });
+  it("threads the review marker to Electron and requires the secondary display", async () => {
+    let received;
+    const stop = new Error("SPAWN_INTERCEPTED");
+    await expect(
+      launchPreview(
+        "/fixture/repository",
+        (command, args, options) => {
+          received = { command, args, options };
+          throw stop;
+        },
+        false,
+        false,
+        marker,
+      ),
+    ).rejects.toBe(stop);
+    expect(received.args).toEqual([
+      "_output/build/app/main.cjs",
+      "--preview-window-mode=secondary-visible",
+    ]);
+    expect(received.options.env.FAROL_NEXT_ACCEPTANCE_PROFILE).toBe(marker);
+    expect(received.options.env.FAROL_NEXT_E2E).toBeUndefined();
+  });
+});

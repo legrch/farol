@@ -145,6 +145,102 @@ function isolatedE2EAppData(
   return override;
 }
 
+const REVIEW_NAMESPACE = "Farol Dev Review";
+const REVIEW_RECEIPT = ".farol-dev-review-profile";
+const REVIEW_OPENED = ".farol-dev-review-opened";
+const REVIEW_MARKER =
+  /^review:([0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/u;
+
+function freshReviewAppData(nativeAppData: string, marker: string): string {
+  const invalid = () => new Error("DESKTOP_REVIEW_PROFILE_INVALID");
+  const token = REVIEW_MARKER.exec(marker)?.[1];
+  if (
+    token === undefined ||
+    nativeAppData.includes("\0") ||
+    !path.isAbsolute(nativeAppData) ||
+    path.resolve(nativeAppData) !== nativeAppData
+  )
+    throw invalid();
+  const namespace = path.join(nativeAppData, REVIEW_NAMESPACE);
+  const root = path.join(namespace, token);
+  try {
+    const directories = [nativeAppData, namespace, root];
+    const before = directories.map((directory, index) => {
+      const info = fs.lstatSync(directory);
+      if (
+        !info.isDirectory() ||
+        info.isSymbolicLink() ||
+        info.uid !== process.getuid?.() ||
+        (info.mode & 0o022) !== 0 ||
+        (index > 0 && (info.mode & 0o777) !== 0o700) ||
+        fs.realpathSync(directory) !== directory
+      )
+        throw invalid();
+      return info;
+    });
+    // Only a freshly minted leaf is admitted, before any Electron state opens.
+    // A prior/partial launch is retained and cannot be silently reopened.
+    const names = fs.readdirSync(root);
+    if (names.length !== 1 || names[0] !== REVIEW_RECEIPT) throw invalid();
+    const receipt = path.join(root, REVIEW_RECEIPT);
+    const fd = fs.openSync(
+      receipt,
+      fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK,
+    );
+    try {
+      const info = fs.fstatSync(fd);
+      if (
+        !info.isFile() ||
+        info.uid !== process.getuid?.() ||
+        info.nlink !== 1 ||
+        (info.mode & 0o777) !== 0o600 ||
+        info.size !== token.length
+      )
+        throw invalid();
+      const bytes = Buffer.alloc(token.length + 1);
+      const count = fs.readSync(fd, bytes, 0, bytes.length, 0);
+      const after = fs.fstatSync(fd);
+      const named = fs.lstatSync(receipt);
+      if (
+        count !== token.length ||
+        bytes.subarray(0, count).toString("utf8") !== token ||
+        after.size !== info.size ||
+        after.mode !== info.mode ||
+        after.uid !== info.uid ||
+        after.nlink !== info.nlink ||
+        after.mtimeMs !== info.mtimeMs ||
+        after.ctimeMs !== info.ctimeMs ||
+        named.dev !== info.dev ||
+        named.ino !== info.ino
+      )
+        throw invalid();
+    } finally {
+      fs.closeSync(fd);
+    }
+    directories.forEach((directory, index) => {
+      const now = fs.lstatSync(directory);
+      const prior = before[index];
+      if (
+        prior === undefined ||
+        now.dev !== prior.dev ||
+        now.ino !== prior.ino ||
+        now.mode !== prior.mode ||
+        now.uid !== prior.uid ||
+        fs.realpathSync(directory) !== directory
+      )
+        throw invalid();
+    });
+    // Exclusive admission also fences two concurrent starts of the same identity.
+    fs.writeFileSync(path.join(root, REVIEW_OPENED), token, {
+      flag: "wx",
+      mode: 0o600,
+    });
+  } catch {
+    throw invalid();
+  }
+  return root;
+}
+
 export function desktopAppDataPath(
   environment: DesktopEnvironment,
   nativeAppData: string,
@@ -157,6 +253,18 @@ export function desktopAppDataPath(
     testProof?: string | undefined;
   }>,
 ): string {
+  if (options.acceptanceProfile?.startsWith("review:") === true) {
+    if (
+      environment !== "dev" ||
+      options.enabled ||
+      options.override !== undefined ||
+      options.testRoot !== undefined ||
+      options.testProof !== undefined
+    ) {
+      throw new Error("DESKTOP_ACCEPTANCE_PROFILE_CONFLICT");
+    }
+    return freshReviewAppData(nativeAppData, options.acceptanceProfile);
+  }
   if (
     options.acceptanceProfile !== undefined &&
     options.acceptanceProfile !== "1"

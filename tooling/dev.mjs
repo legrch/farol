@@ -9,6 +9,8 @@
 // changes, and says so plainly. Ctrl+C stops only what it started.
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createOwnerLaunchResultCollector } from "./owner-launch-result.mjs";
@@ -422,6 +424,105 @@ export async function runOwnerManagedChild({
   return { stopLabel, outcome, protocolError, resultCollector };
 }
 
+// A fresh review has a fixed namespace and a launcher-minted identity. It never
+// accepts an owner path, HOME override, E2E seam, or a reusable acceptance root.
+const REVIEW_NAMESPACE = "Farol Dev Review";
+const REVIEW_RECEIPT = ".farol-dev-review-profile";
+const REVIEW_TOKEN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
+
+export function devGoBuildArguments(argv) {
+  const selected = argv.filter((argument) =>
+    argument.startsWith("--go-inputs"),
+  );
+  if (selected.length === 0) return [];
+  const argument = selected[0];
+  const file = argument.slice("--go-inputs=".length);
+  if (
+    selected.length !== 1 ||
+    !argument.startsWith("--go-inputs=") ||
+    file.includes("\0") ||
+    !path.isAbsolute(file) ||
+    path.resolve(file) !== file
+  ) {
+    throw new Error("DEV_GO_INPUTS_ARGUMENT_INVALID");
+  }
+  // The existing builder owns file parsing, SDK authentication and dirty-Go
+  // refusal. Forward its one argument verbatim; never substitute local inputs.
+  return [argument];
+}
+
+function reviewDirectory(directory, privateMode) {
+  const info = fs.lstatSync(directory);
+  if (
+    !info.isDirectory() ||
+    info.isSymbolicLink() ||
+    info.uid !== process.getuid?.() ||
+    (info.mode & 0o022) !== 0 ||
+    (privateMode && (info.mode & 0o777) !== 0o700) ||
+    fs.realpathSync(directory) !== directory
+  ) {
+    throw new Error("DEV_REVIEW_PROFILE_ROOT_UNSAFE");
+  }
+  return info;
+}
+
+export function createFreshReviewProfile(nativeAppData, token = randomUUID()) {
+  if (
+    !REVIEW_TOKEN.test(token) ||
+    !path.isAbsolute(nativeAppData) ||
+    path.resolve(nativeAppData) !== nativeAppData ||
+    nativeAppData.includes("\0")
+  ) {
+    throw new Error("DEV_REVIEW_PROFILE_INVALID");
+  }
+  reviewDirectory(nativeAppData, false);
+  const namespace = path.join(nativeAppData, REVIEW_NAMESPACE);
+  const appData = path.join(namespace, token);
+  try {
+    try {
+      fs.mkdirSync(namespace, { mode: 0o700 });
+    } catch (error) {
+      if (error.code !== "EEXIST") throw error;
+    }
+    reviewDirectory(namespace, true);
+    // No recursive leaf creation, collision retry, reuse, or failure cleanup.
+    fs.mkdirSync(appData, { mode: 0o700 });
+    reviewDirectory(appData, true);
+    fs.writeFileSync(path.join(appData, REVIEW_RECEIPT), token, {
+      flag: "wx",
+      mode: 0o600,
+    });
+  } catch (error) {
+    // Preserve identity evidence even if a partial creation was refused.
+    throw new Error(
+      `DEV_REVIEW_PROFILE_CREATE_FAILED (review:${token}; appData: ${appData}): ${error.message}`,
+      { cause: error },
+    );
+  }
+  return Object.freeze({
+    marker: `review:${token}`,
+    appData,
+    userData: path.join(appData, "Farol Dev"),
+  });
+}
+
+export function createOwnerFreshReviewProfile(
+  environment = process.env,
+  resolveSystemHome = () => os.userInfo().homedir,
+  platform = process.platform,
+) {
+  if (platform !== "darwin")
+    throw new Error("DEV_REVIEW_PROFILE_PLATFORM_INVALID");
+  const home = ownerLaunchEnvironment(environment).HOME;
+  // userInfo reads the account database; homedir would trust HOME itself.
+  if (home !== resolveSystemHome())
+    throw new Error("DEV_REVIEW_PROFILE_HOME_INVALID");
+  return createFreshReviewProfile(
+    path.join(home, "Library/Application Support"),
+  );
+}
+
 /**
  * The environment the development preview is launched with.
  *
@@ -448,8 +549,18 @@ export function devLaunchEnvironment(
   environment = process.env,
   nodeBinDirectory = path.dirname(process.execPath),
   acceptanceProfile = false,
+  reviewMarker,
 ) {
+  if (
+    reviewMarker !== undefined &&
+    (acceptanceProfile ||
+      !reviewMarker.startsWith("review:") ||
+      !REVIEW_TOKEN.test(reviewMarker.slice(7)))
+  ) {
+    throw new Error("DEV_REVIEW_PROFILE_INVALID");
+  }
   const owned = ownerLaunchEnvironment(environment);
+  if (reviewMarker !== undefined) delete owned.FAROL_NEXT_SAVED_CHAT_PREVIEW;
   return {
     ...owned,
     PATH: `${nodeBinDirectory}:${owned.PATH}`,
@@ -457,6 +568,9 @@ export function devLaunchEnvironment(
     // profile, while both remain development builds rather than candidates.
     [DESKTOP_ENVIRONMENT_ENV]: "dev",
     ...(acceptanceProfile ? { FAROL_NEXT_ACCEPTANCE_PROFILE: "1" } : {}),
+    ...(reviewMarker !== undefined
+      ? { FAROL_NEXT_ACCEPTANCE_PROFILE: reviewMarker }
+      : {}),
   };
 }
 
@@ -465,6 +579,7 @@ export async function launchPreview(
   spawnProcess = spawn,
   acceptanceProfile = false,
   secondaryDisplay = false,
+  reviewMarker,
 ) {
   const electronBin = path.join(root, "node_modules/.bin/electron");
   const { stopLabel, outcome, protocolError, resultCollector } =
@@ -474,7 +589,9 @@ export async function launchPreview(
           electronBin,
           [
             "_output/build/app/main.cjs",
-            ...(acceptanceProfile || secondaryDisplay
+            ...(acceptanceProfile ||
+            secondaryDisplay ||
+            reviewMarker !== undefined
               ? ["--preview-window-mode=secondary-visible"]
               : []),
           ],
@@ -484,6 +601,7 @@ export async function launchPreview(
               process.env,
               path.dirname(process.execPath),
               acceptanceProfile,
+              reviewMarker,
             ),
             stdio: ["inherit", "pipe", "pipe"],
           },
@@ -556,10 +674,19 @@ export async function main(argv, overrides = {}) {
     pinned = process.env[TOOLCHAIN_PINNED_ENV] === "1",
     ensureDependencies: ensureDependenciesFn = () =>
       ensureDependencies(vnextRoot, "npm", log),
-    runBuild = () =>
-      runInherited(process.execPath, ["tooling/build.mjs"], { cwd: vnextRoot }),
-    launch = (acceptanceProfile, secondaryDisplay) =>
-      launchPreview(vnextRoot, spawn, acceptanceProfile, secondaryDisplay),
+    runBuild = (arguments_) =>
+      runInherited(process.execPath, ["tooling/build.mjs", ...arguments_], {
+        cwd: vnextRoot,
+      }),
+    createReviewProfile = createOwnerFreshReviewProfile,
+    launch = (acceptanceProfile, secondaryDisplay, reviewMarker) =>
+      launchPreview(
+        vnextRoot,
+        spawn,
+        acceptanceProfile,
+        secondaryDisplay,
+        reviewMarker,
+      ),
     log = (line) => process.stdout.write(`${line}\n`),
     logError = (line) => process.stderr.write(`${line}\n`),
     exit = (code) => process.exit(code),
@@ -568,6 +695,25 @@ export async function main(argv, overrides = {}) {
   const checkOnly = argv.includes("--check");
   const acceptanceProfile = argv.includes("--acceptance-profile");
   const secondaryDisplay = argv.includes("--secondary-display");
+  const reviewFlags = argv.filter((argument) =>
+    argument.startsWith("--fresh-review-profile"),
+  );
+  const freshReview =
+    reviewFlags.length === 1 && reviewFlags[0] === "--fresh-review-profile";
+  let buildArguments;
+  try {
+    if (
+      reviewFlags.length > 1 ||
+      (reviewFlags.length === 1 && !freshReview) ||
+      (freshReview && acceptanceProfile)
+    )
+      throw new Error("DEV_REVIEW_PROFILE_ARGUMENT_INVALID");
+    buildArguments = devGoBuildArguments(argv);
+  } catch (error) {
+    logError(error.message);
+    exit(1);
+    return;
+  }
 
   if (!pinned) {
     const decision = resolveToolchain({
@@ -600,7 +746,7 @@ export async function main(argv, overrides = {}) {
   log(
     "Building the current development bytes (this is not a candidate build)...",
   );
-  const buildStatus = await runBuild();
+  const buildStatus = await runBuild(buildArguments);
   if (buildStatus !== 0) {
     exit(buildStatus);
     return;
@@ -613,6 +759,27 @@ export async function main(argv, overrides = {}) {
     return;
   }
 
+  if (freshReview) {
+    let review;
+    try {
+      review = createReviewProfile();
+    } catch (error) {
+      logError(
+        `Fresh review profile refused: ${error.message}. No launch or retry.`,
+      );
+      exit(1);
+      return;
+    }
+    log(`Fresh Dev review identity: ${review.marker}`);
+    log(`Fresh Dev review appData: ${review.appData}`);
+    log(`Fresh Dev review userData/sessionData: ${review.userData}`);
+    log(
+      "Development bytes, not a packaged candidate. Profile retained; this opener cannot reopen it. No automatic retry or recovery.",
+    );
+    log("Running Farol Dev on the secondary display. Press Ctrl+C to stop.");
+    await launch(false, true, review.marker);
+    return;
+  }
   log("Running Farol Dev in this terminal. Press Ctrl+C to stop.");
   await launch(acceptanceProfile, secondaryDisplay);
 }

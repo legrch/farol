@@ -11,6 +11,7 @@ import {
   applyDependencyPlan,
   createSignalEscalation,
   describeLaunchResult,
+  devGoBuildArguments,
   evaluateDependencies,
   exitCodeForOwnerStop,
   isDeclaredToolchain,
@@ -543,5 +544,146 @@ describe("dev.mjs main() toolchain re-exec / missing", () => {
     expect(errors[0]).toContain("24.20.0");
     expect(errors[0]).toContain("26.7.0");
     expect(errors[0]).toContain("11.19.0");
+  });
+});
+
+// CPU-only orchestration: no builder, Electron, provider or real profile runs.
+describe("dev opener bounded orchestration", () => {
+  const argument = "--go-inputs=/private/tmp/approved-go-inputs.json";
+  const marker = "review:8dc34907-9b18-4cbd-9486-9cfde2d05c75";
+  function fixture(extra = {}) {
+    const calls = [];
+    const logs = [];
+    const overrides = {
+      pinned: true,
+      currentNode: DECLARED_NODE_VERSIONS[0],
+      getCurrentNpmVersion: () => DECLARED_NPM_VERSION,
+      ensureDependencies: async () => {
+        calls.push("dependencies");
+        return 0;
+      },
+      runBuild: async (args) => {
+        calls.push(["build", args]);
+        return 0;
+      },
+      createReviewProfile: () => {
+        calls.push("profile");
+        return {
+          marker,
+          appData: "/fixture/review/root",
+          userData: "/fixture/review/root/Farol Dev",
+        };
+      },
+      launch: async (...args) => {
+        calls.push(["launch", ...args]);
+      },
+      log: (line) => logs.push(line),
+      logError: (line) => logs.push(line),
+      exit: (status) => calls.push(["exit", status]),
+      ...extra,
+    };
+    return { calls, logs, overrides };
+  }
+
+  it("forwards the one canonical Go input verbatim and provisions only after build", async () => {
+    const { calls, logs, overrides } = fixture();
+    await main(["--fresh-review-profile", argument], overrides);
+    expect(calls).toEqual([
+      "dependencies",
+      ["build", [argument]],
+      "profile",
+      ["launch", false, true, marker],
+    ]);
+    expect(logs.join("\n")).toContain(marker);
+    expect(logs.join("\n")).toContain("/fixture/review/root/Farol Dev");
+    expect(logs.join("\n")).toContain("cannot reopen");
+  });
+
+  it.each([
+    ["--go-inputs"],
+    ["--go-inputs="],
+    ["--go-inputs=relative.json"],
+    ["--go-inputs=/tmp/../tmp/input.json"],
+    ["--go-inputs=/tmp/input.json/"],
+    ["--go-inputs=/tmp/in\0put"],
+    [argument, argument],
+    ["--go-inputs-extra=/tmp/input"],
+    ["--fresh-review-profile", "--fresh-review-profile"],
+    ["--fresh-review-profile=existing"],
+    ["--fresh-review-profile", "--acceptance-profile"],
+  ])(
+    "rejects malformed or conflicting selection before dependencies: %j",
+    async (...args) => {
+      const { calls, overrides } = fixture();
+      await main(args, overrides);
+      expect(calls).toEqual([["exit", 1]]);
+    },
+  );
+
+  it("keeps ordinary builds free of Go arguments", () => {
+    expect(devGoBuildArguments([])).toEqual([]);
+    expect(devGoBuildArguments(["--check", argument])).toEqual([argument]);
+  });
+
+  it("does not mint or launch a review profile for --check", async () => {
+    const { calls, overrides } = fixture();
+    await main(["--check", "--fresh-review-profile", argument], overrides);
+    expect(calls).toEqual(["dependencies", ["build", [argument]]]);
+  });
+
+  it("does not provision or launch after the builder refuses dirty Go source", async () => {
+    const { calls, overrides } = fixture({ runBuild: async () => 2 });
+    await main(["--fresh-review-profile", argument], overrides);
+    expect(calls).toEqual(["dependencies", ["exit", 2]]);
+  });
+
+  it("does not provision after an unknown builder outcome or try a fallback build", async () => {
+    let attempts = 0;
+    const unknown = new Error("OUTCOME_UNKNOWN");
+    const { calls, overrides } = fixture({
+      runBuild: async () => {
+        attempts += 1;
+        throw unknown;
+      },
+    });
+    await expect(
+      main(["--fresh-review-profile", argument], overrides),
+    ).rejects.toBe(unknown);
+    expect(attempts).toBe(1);
+    expect(calls).toEqual(["dependencies"]);
+  });
+
+  it("does not provision a fresh profile when dependencies fail", async () => {
+    const { calls, overrides } = fixture({ ensureDependencies: async () => 3 });
+    await main(["--fresh-review-profile", argument], overrides);
+    expect(calls).toEqual([["exit", 3]]);
+  });
+
+  it("does not recover or launch after profile collision/refusal", async () => {
+    let attempts = 0;
+    const { calls, overrides } = fixture({
+      createReviewProfile: () => {
+        attempts += 1;
+        throw new Error("EEXIST");
+      },
+    });
+    await main(["--fresh-review-profile", argument], overrides);
+    expect(attempts).toBe(1);
+    expect(calls).toEqual(["dependencies", ["build", [argument]], ["exit", 1]]);
+  });
+
+  it("does not retry a refused or unknown launch", async () => {
+    let attempts = 0;
+    const refusal = new Error("OUTCOME_UNKNOWN");
+    const { overrides } = fixture({
+      launch: async () => {
+        attempts += 1;
+        throw refusal;
+      },
+    });
+    await expect(
+      main(["--fresh-review-profile", argument], overrides),
+    ).rejects.toBe(refusal);
+    expect(attempts).toBe(1);
   });
 });

@@ -436,3 +436,50 @@ describe("desktop environment identity", () => {
     ).toBe("/tmp/preview-codex");
   });
 });
+
+describe("fresh review profile selection", () => {
+  const marker = "review:8dc34907-9b18-4cbd-9486-9cfde2d05c75";
+  it.each([
+    { environment: "preview" as const, enabled: false, override: undefined },
+    { environment: "dev" as const, enabled: true, override: undefined },
+    {
+      environment: "dev" as const,
+      enabled: false,
+      override: "/fixture/override",
+    },
+  ])(
+    "rejects a conflicting environment before filesystem access: %j",
+    (option) => {
+      expect(() =>
+        desktopAppDataPath(option.environment, "/missing/appData", {
+          enabled: option.enabled,
+          override: option.override,
+          acceptanceProfile: marker,
+        }),
+      ).toThrow("DESKTOP_ACCEPTANCE_PROFILE_CONFLICT");
+    },
+  );
+  it("rejects an E2E proof on a fresh dev profile", () => {
+    expect(() =>
+      desktopAppDataPath("dev", "/missing/appData", {
+        enabled: false,
+        override: undefined,
+        acceptanceProfile: marker,
+        testProof: "inherited",
+      }),
+    ).toThrow("DESKTOP_ACCEPTANCE_PROFILE_CONFLICT");
+  });
+  it.each([
+    "review:../owner",
+    "review:",
+    "review:00000000-0000-0000-0000-000000000000",
+  ])("refuses malformed fresh identities %s", (acceptanceProfile) => {
+    expect(() =>
+      desktopAppDataPath("dev", "/missing/appData", {
+        enabled: false,
+        override: undefined,
+        acceptanceProfile,
+      }),
+    ).toThrow("DESKTOP_REVIEW_PROFILE_INVALID");
+  });
+});
