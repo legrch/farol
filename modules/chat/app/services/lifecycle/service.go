@@ -74,6 +74,7 @@ type Handle struct {
 	frames                                         *stream.Buffer
 	observing                                      bool
 	sourceSequence                                 uint64
+	caller                                         *CallerToolCall
 	closed                                         bool // protected by owner's gate; monotonic membership withdrawal
 }
 
@@ -310,6 +311,8 @@ func (s *Service) Finish(ctx context.Context, h *Handle, binding turn.Binding, r
 }
 
 type mutation struct {
+	caller    *CallerToolCall
+	frames    *stream.Buffer
 	candidate *turn.Queue
 	handle    *Handle
 	fence     uint64
@@ -444,8 +447,14 @@ func (s *Service) commit(ctx context.Context, m *mutation, publish bool) error {
 			}
 		case "request-computer":
 			m.handle.unresolvedCallID = m.entry.CallID
+			if m.caller != nil {
+				m.handle.caller, m.handle.frames = m.caller, m.frames
+			}
 		case "resolve-computer":
 			m.handle.unresolvedCallID = ""
+			if call := m.handle.caller; call != nil && call.phase == callerReturning {
+				call.phase, call.output.Output = callerReturned, ""
+			}
 		case "acknowledge":
 			if m.handle.ackRevision == 0 {
 				m.handle.ackRevision = write.Revision

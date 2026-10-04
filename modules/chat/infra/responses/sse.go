@@ -13,7 +13,8 @@ func Encode(frame conversation.Frame) ([]byte, error) {
 	switch frame.Type {
 	case "response.created", "response.output_item.added", "response.content_part.added",
 		"response.output_text.delta", "response.output_text.done", "response.content_part.done",
-		"response.output_item.done", "response.completed", "response.failed":
+		"response.output_item.done", "response.completed", "response.failed",
+		"response.function_call_arguments.delta", "response.function_call_arguments.done":
 	default:
 		return nil, &conversation.Failure{Code: "CHAT_RESPONSE_EVENT_INVALID", Source: "chat-responses", Retry: "never"}
 	}
