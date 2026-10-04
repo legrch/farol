@@ -33,6 +33,46 @@ const sameSelection = (left, right) =>
       left.connector.id === right.connector.id &&
       left.connector.label === right.connector.label);
 const clone = (value) => structuredClone(value);
+// Account inputs are closed, bounded data objects; never invoke accessors.
+const dataFields = (value, keys) =>
+  value !== null &&
+  typeof value === "object" &&
+  [Object.prototype, null].includes(Object.getPrototypeOf(value)) &&
+  Reflect.ownKeys(value).length === keys.length &&
+  keys.every((key) => {
+    const property = Object.getOwnPropertyDescriptor(value, key);
+    return property && property.enumerable && "value" in property;
+  });
+const accountScalar = (value) =>
+  typeof value === "string" &&
+  value.length > 0 &&
+  value.length <= 512 &&
+  value.trim().length > 0 &&
+  value.isWellFormed() &&
+  !/[\u0000-\u001f\u007f-\u009f]/u.test(value);
+const accountSessionValid = (value) => {
+  if (value === null) return true;
+  if (
+    !dataFields(value, ["user", "account", "expires"]) ||
+    !dataFields(value.user, ["id"]) ||
+    !dataFields(value.account, ["id"]) ||
+    !accountScalar(value.user.id) ||
+    !accountScalar(value.account.id) ||
+    typeof value.expires !== "string" ||
+    !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/u.test(value.expires)
+  )
+    return false;
+  const millis = Date.parse(value.expires);
+  return (
+    Number.isSafeInteger(millis) &&
+    millis >= 0 &&
+    new Date(millis).toISOString() ===
+      value.expires.replace(
+        /(?:\.(\d{1,3}))?Z$/u,
+        (_match, fraction) => `.${(fraction ?? "").padEnd(3, "0")}Z`,
+      )
+  );
+};
 const escape = (value) =>
   String(value).replace(
     /[&<>"']/gu,
@@ -46,11 +86,42 @@ const escape = (value) =>
       })[character],
   );
 
+/**
+ * Optional controlledScenario.account opts into synthetic GET /api/auth/session:
+ * exactly { user: { id }, account: { id }, expires: UTC ISO } or null (unavailable).
+ * Expired timestamps are served unchanged for the account probe to refuse.
+ * Returned driver.setAccountSession(session)/setAccountUnavailable() change it
+ * without a document reload or Send. driver.snapshot() adds accountSession and
+ * accountGets (owned-origin GET attempts, including refused query/body inputs);
+ * accepted ledger entries capture accountSession at acceptance,
+ * including lost ACKs. This is a fixture witness, not atomic provider binding.
+ * No account config means no endpoint or account witness. Controls and counters
+ * remain test-side; no real auth, cookies, credentials or provider qualification.
+ */
 export async function startControlledChatGptSite(candidate) {
+  const accountEnabled =
+    candidate !== null &&
+    typeof candidate === "object" &&
+    Object.hasOwn(candidate, "account");
   assert.ok(
-    fields(candidate, ["conversationId", "selection", "turns"]),
+    fields(candidate, [
+      "conversationId",
+      "selection",
+      "turns",
+      ...(accountEnabled ? ["account"] : []),
+    ]),
     "FIXTURE_SCENARIO_INVALID",
   );
+  if (accountEnabled) {
+    const property = Object.getOwnPropertyDescriptor(candidate, "account");
+    assert.ok(
+      property &&
+        property.enumerable &&
+        "value" in property &&
+        accountSessionValid(property.value),
+      "FIXTURE_ACCOUNT_INVALID",
+    );
+  }
   assert.ok(
     id(candidate.conversationId) && candidate.conversationId.length >= 8,
     "FIXTURE_CONVERSATION_INVALID",
@@ -110,6 +181,8 @@ export async function startControlledChatGptSite(candidate) {
   let origin = null;
   let loseNextAck = false;
   let closed = false;
+  let accountSession = accountEnabled ? clone(scenario.account) : null;
+  let accountGets = 0;
 
   const projection = () => ({
     conversationId: scenario.conversationId,
@@ -184,6 +257,24 @@ export async function startControlledChatGptSite(candidate) {
       return;
     }
     try {
+      if (accountEnabled && url.pathname === "/api/auth/session") {
+        if (request.method !== "GET") {
+          reject(405, "method-refused");
+          return;
+        }
+        accountGets += 1;
+        if (
+          url.search ||
+          request.headers["transfer-encoding"] !== undefined ||
+          (request.headers["content-length"] !== undefined &&
+            request.headers["content-length"] !== "0")
+        ) {
+          reject(400, "invalid-session-request");
+          return;
+        }
+        json(response, 200, accountSession);
+        return;
+      }
       if (
         request.method === "GET" &&
         (url.pathname === "/chatgpt" || url.pathname === conversationPath)
@@ -329,6 +420,7 @@ export async function startControlledChatGptSite(candidate) {
           documentGeneration: input.documentGeneration,
           userId: turn.userId,
           replyId: turn.replyId,
+          ...(accountEnabled ? { accountSession: clone(accountSession) } : {}),
         });
         publish();
         if (loseNextAck) {
@@ -391,6 +483,20 @@ export async function startControlledChatGptSite(candidate) {
     return { turn: accepted[index], script: scenario.turns[index] };
   };
   const driver = Object.freeze({
+    setAccountSession(value) {
+      assert.equal(closed, false, "FIXTURE_CLOSED");
+      assert.ok(accountEnabled, "FIXTURE_ACCOUNT_NOT_ENABLED");
+      assert.ok(
+        value !== null && accountSessionValid(value),
+        "FIXTURE_ACCOUNT_INVALID",
+      );
+      accountSession = clone(value);
+    },
+    setAccountUnavailable() {
+      assert.equal(closed, false, "FIXTURE_CLOSED");
+      assert.ok(accountEnabled, "FIXTURE_ACCOUNT_NOT_ENABLED");
+      accountSession = null;
+    },
     loseNextSendAcknowledgement() {
       loseNextAck = true;
     },
@@ -434,6 +540,7 @@ export async function startControlledChatGptSite(candidate) {
     },
     snapshot() {
       return clone({
+        ...(accountEnabled ? { accountSession, accountGets } : {}),
         attemptedSends: ledger.length,
         acceptedSends: ledger.filter((entry) => entry.accepted).length,
         ledger,

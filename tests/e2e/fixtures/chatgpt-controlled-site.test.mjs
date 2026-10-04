@@ -5,6 +5,8 @@ import { startChatGptFixture, stopChatGptFixture } from "./chatgpt-site.mjs";
 
 // Fixture protocol tests over owned loopback HTTP, not assembled-product E2E,
 // browser rendering, Go persistence, parent ACK or process-tree containment.
+// Synthetic sessions are protocol fixtures, not real authentication or proof of
+// the production probe's browser semantics or atomic provider Send binding.
 const sites = [];
 afterEach(async () => {
   await Promise.all(sites.splice(0).map(stopChatGptFixture));
@@ -101,6 +103,305 @@ function finish(fixture, config, index = 0) {
   fixture.driver.releaseTerminal(turn.replyId);
   fixture.driver.releaseRender(turn.replyId, turn.segments.length);
 }
+
+const session = (
+  accountId = "synthetic-account-A",
+  expires = "2099-01-01T00:00:00Z",
+) => ({
+  user: { id: "synthetic-user" },
+  account: { id: accountId },
+  expires,
+});
+const accountGet = (fixture, options) =>
+  fetch(`${fixture.origin}/api/auth/session`, options);
+
+describe("opt-in synthetic account-session fixture protocol", () => {
+  it("leaves controlled and legacy calls without account config unqualified", async () => {
+    const fixture = await site();
+    expect((await accountGet(fixture)).status).toBe(404);
+    expect(fixture.driver.snapshot()).not.toHaveProperty("accountSession");
+    expect(fixture.driver.snapshot()).not.toHaveProperty("accountGets");
+    expect(() => fixture.driver.setAccountSession(session())).toThrow(
+      "FIXTURE_ACCOUNT_NOT_ENABLED",
+    );
+    expect(() => fixture.driver.setAccountUnavailable()).toThrow(
+      "FIXTURE_ACCOUNT_NOT_ENABLED",
+    );
+    const page = await open(fixture);
+    await send(fixture, page, scenario());
+    expect(fixture.driver.snapshot().ledger[0]).not.toHaveProperty(
+      "accountSession",
+    );
+    const legacy = await startChatGptFixture();
+    sites.push(legacy);
+    const origin = new URL(legacy.url).origin;
+    expect((await fetch(`${origin}/api/auth/session`)).status).toBe(404);
+  });
+
+  it("serves one minimal no-store JSON snapshot and switches accounts on the same document without Send", async () => {
+    const initial = session();
+    const fixture = await site({ ...scenario(), account: initial });
+    const page = await open(fixture);
+    const before = await state(fixture, page);
+    initial.user.id = "caller-mutation";
+    const response = await accountGet(fixture);
+    expect(response.status).toBe(200);
+    expect(response.url).toBe(`${fixture.origin}/api/auth/session`);
+    expect(response.redirected).toBe(false);
+    expect(response.headers.get("content-type")).toBe("application/json");
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(response.headers.get("set-cookie")).toBeNull();
+    expect(await response.json()).toEqual(session());
+    expect(fixture.driver.snapshot().accountGets).toBe(1);
+    const next = session("synthetic-account-B", "2099-02-01T00:00:00.12Z");
+    fixture.driver.setAccountSession(next);
+    next.account.id = "caller-mutation";
+    expect(await (await accountGet(fixture)).json()).toEqual(
+      session("synthetic-account-B", "2099-02-01T00:00:00.12Z"),
+    );
+    expect(await state(fixture, page)).toEqual(before);
+    expect(fixture.driver.snapshot().accountGets).toBe(2);
+    counts(fixture, 0, 0);
+    const snapshot = fixture.driver.snapshot();
+    snapshot.accountSession.user.id = "snapshot-mutation";
+    expect(fixture.driver.snapshot().accountSession.user.id).toBe(
+      "synthetic-user",
+    );
+  });
+
+  it("exposes unavailable and expired inputs unchanged, without inventing an account or enforcing Send policy", async () => {
+    const config = { ...scenario(), account: null };
+    const fixture = await site(config);
+    const page = await open(fixture);
+    expect(await (await accountGet(fixture)).json()).toBeNull();
+    expect((await send(fixture, page, config)).status).toBe(200);
+    expect(fixture.driver.snapshot().ledger[0].accountSession).toBeNull();
+    finish(fixture, config);
+    const expired = session("synthetic-expired", "2000-01-01T00:00:00.000Z");
+    fixture.driver.setAccountSession(expired);
+    const body = await (await accountGet(fixture)).json();
+    expect(body).toEqual(expired);
+    expect(Date.parse(body.expires)).toBeLessThan(Date.now());
+    expect((await send(fixture, page, config, 1)).status).toBe(200);
+    expect(fixture.driver.snapshot().ledger[1].accountSession).toEqual(expired);
+    fixture.driver.setAccountUnavailable();
+    expect(await (await accountGet(fixture)).json()).toBeNull();
+    expect(fixture.driver.snapshot().accountSession).toBeNull();
+    expect(fixture.driver.snapshot().accountGets).toBe(3);
+    counts(fixture, 2, 2);
+  });
+
+  it("captures actual synthetic selection at accepted Send independently of account GETs and lost ACK", async () => {
+    const config = { ...scenario(), account: session() };
+    const fixture = await site(config);
+    const page = await open(fixture);
+    // A previous GET cannot supply the acceptance witness after a switch.
+    expect(await (await accountGet(fixture)).json()).toEqual(session());
+    const selected = session("synthetic-account-B");
+    fixture.driver.setAccountSession(selected);
+    fixture.driver.loseNextSendAcknowledgement();
+    await expect(send(fixture, page, config)).rejects.toThrow();
+    const captured = fixture.driver.snapshot();
+    expect(captured.ledger[0]).toMatchObject({
+      accepted: true,
+      acknowledgement: "lost",
+      conversationId: config.conversationId,
+      documentGeneration: page.documentGeneration,
+      userId: "user-1",
+      replyId: "reply-1",
+      accountSession: selected,
+    });
+    fixture.driver.setAccountSession(session("synthetic-account-C"));
+    expect((await send(fixture, page, config, 1)).status).toBe(409);
+    expect(fixture.driver.snapshot().ledger[1]).not.toHaveProperty(
+      "accountSession",
+    );
+    finish(fixture, config);
+    expect((await send(fixture, page, config, 1)).status).toBe(200);
+    expect(fixture.driver.snapshot().ledger[2]).toMatchObject({
+      conversationId: config.conversationId,
+      documentGeneration: page.documentGeneration,
+      userId: "user-2",
+      replyId: "reply-2",
+      accountSession: session("synthetic-account-C"),
+    });
+    expect(fixture.driver.snapshot().ledger[0]).toEqual(captured.ledger[0]);
+    expect(fixture.driver.snapshot().accountGets).toBe(1);
+    counts(fixture, 3, 2);
+  });
+
+  const invalidAccounts = [
+    undefined,
+    false,
+    [],
+    {},
+    { ...session(), token: "synthetic-forbidden-field" },
+    { ...session(), user: { id: "synthetic", email: "forbidden" } },
+    { ...session(), account: null },
+    { ...session(), user: { id: "" } },
+    { ...session(), user: { id: " " } },
+    { ...session(), user: { id: "x".repeat(513) } },
+    { ...session(), account: { id: 1 } },
+    { ...session(), account: { id: "bad\u0000id" } },
+    { ...session(), account: { id: "bad\u0085id" } },
+    { ...session(), user: { id: "bad\ud800id" } },
+    { ...session(), expires: 1 },
+    { ...session(), expires: "2099-02-30T00:00:00Z" },
+    { ...session(), expires: "2099-01-01T00:00:00+00:00" },
+    { ...session(), expires: "2099-01-01T00:00:00.1234Z" },
+    { ...session(), expires: "1969-12-31T23:59:59Z" },
+    Object.assign(session(), { [Symbol("hidden")]: true }),
+    Object.defineProperty(session(), "hidden", { value: true }),
+    Object.assign(Object.create({ inherited: true }), session()),
+  ];
+  it.each(invalidAccounts.map((value, index) => [index, value]))(
+    "refuses malformed account config and driver input %i without changing the snapshot",
+    async (_index, account) => {
+      await expect(site({ ...scenario(), account })).rejects.toThrow(
+        "FIXTURE_ACCOUNT_INVALID",
+      );
+      const fixture = await site({ ...scenario(), account: session() });
+      expect(() => fixture.driver.setAccountSession(account)).toThrow(
+        "FIXTURE_ACCOUNT_INVALID",
+      );
+      expect(fixture.driver.snapshot().accountSession).toEqual(session());
+      expect(fixture.driver.snapshot().accountGets).toBe(0);
+    },
+  );
+
+  it("refuses account accessors without evaluating them and fences closed drivers", async () => {
+    let reads = 0;
+    const accessor = {
+      enumerable: true,
+      get() {
+        reads += 1;
+        return session();
+      },
+    };
+    await expect(
+      site(Object.defineProperty(scenario(), "account", accessor)),
+    ).rejects.toThrow("FIXTURE_ACCOUNT_INVALID");
+    const malformed = Object.defineProperty(session(), "user", accessor);
+    await expect(site({ ...scenario(), account: malformed })).rejects.toThrow(
+      "FIXTURE_ACCOUNT_INVALID",
+    );
+    const fixture = await site({ ...scenario(), account: session() });
+    expect(() => fixture.driver.setAccountSession(malformed)).toThrow(
+      "FIXTURE_ACCOUNT_INVALID",
+    );
+    expect(() => fixture.driver.setAccountSession(null)).toThrow(
+      "FIXTURE_ACCOUNT_INVALID",
+    );
+    expect(reads).toBe(0);
+    await stopChatGptFixture(fixture);
+    expect(() => fixture.driver.setAccountSession(session())).toThrow(
+      "FIXTURE_CLOSED",
+    );
+    expect(() => fixture.driver.setAccountUnavailable()).toThrow(
+      "FIXTURE_CLOSED",
+    );
+  });
+
+  it("keeps origin/host checks and refuses HTTP effects or query controls", async () => {
+    const fixture = await site({ ...scenario(), account: session() });
+    expect(
+      (
+        await accountGet(fixture, {
+          headers: { origin: "https://example.invalid" },
+        })
+      ).status,
+    ).toBe(403);
+    const foreignHost = await new Promise((resolve, reject) => {
+      const request = httpRequest(
+        `${fixture.origin}/api/auth/session`,
+        {
+          headers: { host: "example.invalid" },
+        },
+        (response) => {
+          response.resume();
+          response.on("end", () => resolve(response.statusCode));
+        },
+      );
+      request.on("error", reject);
+      request.end();
+    });
+    expect(foreignHost).toBe(403);
+    for (const method of [
+      "POST",
+      "PUT",
+      "DELETE",
+      "PATCH",
+      "HEAD",
+      "OPTIONS",
+    ]) {
+      expect((await accountGet(fixture, { method })).status).toBe(405);
+    }
+    expect(
+      (await fetch(`${fixture.origin}/api/auth/session?account=synthetic-B`))
+        .status,
+    ).toBe(400);
+    const bodyAttempt = await new Promise((resolve, reject) => {
+      const request = httpRequest(
+        `${fixture.origin}/api/auth/session`,
+        {
+          method: "GET",
+          headers: { "content-length": "2" },
+        },
+        (response) => {
+          response.resume();
+          response.on("end", () => resolve(response.statusCode));
+        },
+      );
+      request.on("error", reject);
+      request.end("{}");
+    });
+    expect(bodyAttempt).toBe(400);
+    // Count owned-origin GET attempts, including refused query/body requests;
+    // foreign requests and other methods cannot increment this independent count.
+    expect(fixture.driver.snapshot().accountGets).toBe(2);
+    expect(
+      await (
+        await accountGet(fixture, { headers: { origin: fixture.origin } })
+      ).json(),
+    ).toEqual(session());
+    expect(fixture.driver.snapshot().accountGets).toBe(3);
+    counts(fixture, 0, 0);
+  });
+
+  it("keeps account controls/witnesses and future output outside ordinary page/client/state/session responses", async () => {
+    const config = { ...scenario(), account: session() };
+    const fixture = await site(config);
+    let page = await open(fixture);
+    const client = await (
+      await fetch(`${fixture.origin}/fixtures/chatgpt/client.mjs`)
+    ).text();
+    const ack = await (await send(fixture, page, config)).json();
+    fixture.driver.releaseGeneration("reply-1", 1);
+    fixture.driver.releaseRender("reply-1", 1);
+    page = await open(fixture);
+    const publicBytes = JSON.stringify([
+      page.html,
+      client,
+      ack,
+      await state(fixture, page),
+      await (await accountGet(fixture)).json(),
+    ]);
+    expect(publicBytes).not.toMatch(
+      /FUTURE_FINAL_CANARY|setAccountSession|setAccountUnavailable|accountGets|accountSession|ledger/u,
+    );
+    expect(JSON.stringify(await state(fixture, page))).not.toContain(
+      "synthetic-user",
+    );
+    expect(page.html).not.toContain("synthetic-account-A");
+    expect(
+      (await fetch(`${fixture.origin}/fixtures/chatgpt/account`)).status,
+    ).toBe(404);
+    expect(fixture.driver.snapshot().ledger[0].accountSession).toEqual(
+      session(),
+    );
+    counts(fixture, 1, 1);
+  });
+});
 
 describe("controlled ChatGPT fixture protocol and independent submission ledger", () => {
   it("keeps unreleased future output off the page, ordinary endpoints and reload storage", async () => {
