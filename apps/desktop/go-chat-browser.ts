@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
+import { ChatGptAccountObservationSchema } from "./chatgpt-account-probe.ts";
 import { BridgeError } from "./bridge/client.ts";
 import type { BrowserDriver } from "./bridge/browser.ts";
 import {
@@ -10,6 +11,7 @@ import {
   type BrowserVerifySend,
   type BrowserVerified,
   type BrowserVerification,
+  type BrowserAccountObservation,
   type BrowserSend,
   type BrowserSent,
   type BrowserObserve,
@@ -697,7 +699,31 @@ export class GoChatBrowserDriver implements BrowserDriver {
         this.evidenceIds.size >= 4096
       )
         fail("chat_browser_witness_mismatch");
+      let account: BrowserAccountObservation | undefined;
+      if (w.account !== undefined) {
+        const parsed = ChatGptAccountObservationSchema.safeParse(w.account);
+        if (!parsed.success || parsed.data.state !== "observed")
+          fail("chat_browser_account_unavailable");
+        const fact = parsed.data,
+          now = this.time();
+        if (
+          fact.documentUrl !== origin.url ||
+          fact.observedAtMillis < startedAt ||
+          fact.observedAtMillis > now ||
+          now - fact.observedAtMillis >= 5000 ||
+          fact.expiresAtMillis <= now
+        )
+          fail("chat_browser_account_unavailable");
+        account = {
+          state: "observed",
+          source: fact.source,
+          principalKey: fact.accountKey,
+          observedAtMillis: String(fact.observedAtMillis),
+          expiresAtMillis: String(fact.expiresAtMillis),
+        };
+      }
       const verification: BrowserVerification = {
+        ...(account ? { account } : {}),
         binding: copy(input.binding),
         observed: this.facts(s, w.selection, input.required, startedAt),
         pinned: copy(s.target.selection),

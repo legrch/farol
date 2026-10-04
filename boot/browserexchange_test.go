@@ -3,6 +3,7 @@ package boot
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -205,5 +206,80 @@ func TestBrowserExchangeClosedLifetimeCannotProveQuiescence(t *testing.T) {
 	cancel()
 	if b.QuiescePolling() == nil {
 		t.Fatal("closed lifetime became quiescence")
+	}
+}
+
+// Exercises both mailbox directions using the shared external snapshot bytes.
+// No pipe, browser, provider or admission is involved at this pure layer.
+func TestBrowserExchangeAccountSnapshotRoundTrip(t *testing.T) {
+	raw, err := os.ReadFile("../api/desktop/v1/fixtures/browser-account-observation.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var account wire.BrowserAccountObservation
+	if err := json.Unmarshal(raw, &account); err != nil {
+		t.Fatal(err)
+	}
+	for _, present := range []bool{true, false} {
+		t.Run(map[bool]string{true: "observed", false: "unqualified"}[present], func(t *testing.T) {
+			b, _, command := exchangeFixture(t)
+			verify := browser.VerifySendCommand{Binding: command.Binding, Requested: command.Verification.Pinned, Required: command.Verification.Required, IntentDigest: command.IntentDigest, DeadlineMillis: command.DeadlineMillis}
+			done := beginBrowserCall(b, context.Background(), verify)
+			call := nextBrowserCall(t, b)
+			if call.Kind != "verify-send" {
+				t.Fatal("wrong command")
+			}
+			proof := toBrowserVerification(command.Verification)
+			if present {
+				copy := account
+				proof.Account = &copy
+			}
+			encoded, err := json.Marshal(wire.BrowserVerified{Verification: proof})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := b.complete(wire.BrowserReply{CommandId: call.CommandId, Kind: call.Kind, Body: encoded}); err != nil {
+				t.Fatal(err)
+			}
+			result := awaitBrowserCall(t, done)
+			if result.err != nil {
+				t.Fatal(result.err)
+			}
+			returned, ok := result.reply.(browser.VerifiedReply)
+			if !ok {
+				t.Fatal("wrong reply")
+			}
+			want := browser.AccountObservation{}
+			if present {
+				want = browser.AccountObservation{State: "observed", Source: "provider-session-v1", PrincipalKey: strings.Repeat("c", 64), ObservedAtMillis: 1000, ExpiresAtMillis: 60000}
+			}
+			if returned.Verification.Account != want {
+				t.Fatal("inbound account lost or fabricated from pinned account")
+			}
+			command.Verification = returned.Verification
+			done = beginBrowserCall(b, context.Background(), command)
+			call = nextBrowserCall(t, b)
+			var sent wire.BrowserSend
+			if err := json.Unmarshal(call.Body, &sent); err != nil {
+				t.Fatal(err)
+			}
+			if present {
+				if sent.Verification.Account == nil || *sent.Verification.Account != account {
+					t.Fatal("outbound account changed")
+				}
+			} else if sent.Verification.Account != nil {
+				t.Fatal("omitted account fabricated")
+			}
+			encoded, err = json.Marshal(wire.BrowserSent{Binding: sent.Binding, VerificationId: sent.Verification.EvidenceId, Status: "submitted", Code: ""})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := b.complete(wire.BrowserReply{CommandId: call.CommandId, Kind: call.Kind, Body: encoded}); err != nil {
+				t.Fatal(err)
+			}
+			if result := awaitBrowserCall(t, done); result.err != nil {
+				t.Fatal(result.err)
+			}
+		})
 	}
 }

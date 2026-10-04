@@ -68,8 +68,9 @@ func (t ConversationTarget) Valid() bool {
 }
 
 // Verification is a fresh one-Send witness for the exact lease/document and
-// immutable intent. Desktop rechecks it atomically with composer insertion/Send;
-// a changed model/account/attachment must produce NotSent, never a fallback.
+// immutable intent. Desktop rechecks controls and available account snapshots
+// before insertion/Send; a detected mismatch produces NotSent, never a fallback.
+// An account snapshot cannot prove which provider account accepts the effect.
 // Pinned is configured scope correlation. Observed contains only independent
 // public controls, revalidated each turn; neither grants account/connector authority.
 type VerifySendRequest struct {
@@ -80,7 +81,12 @@ type VerifySendRequest struct {
 	IntentDigest                        string
 	DeadlineMillis                      uint64
 }
+
+// Account is an independently observed snapshot tied to this exact witness.
+// Zero means unqualified. It is never derived from Pinned.AccountID and grants
+// no authority; account-approved composition must check a current private grant.
 type SendVerification struct {
+	Account                             AccountObservation
 	Pinned                              Selection
 	Required                            RequiredControls
 	Binding                             BrowserBinding

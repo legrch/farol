@@ -3,6 +3,7 @@ package desktop
 import (
 	"encoding/json"
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -63,6 +64,39 @@ func TestBrowserWireRejectsBoundaryCorruption(t *testing.T) {
 			raw, _ := json.Marshal(value)
 			if Validate("BrowserObserved", raw) == nil {
 				t.Fatal("invalid browser data accepted")
+			}
+		})
+	}
+}
+
+func TestBrowserAccountObservationSharedFixture(t *testing.T) {
+	raw, err := os.ReadFile("../../../api/desktop/v1/fixtures/browser-account-observation.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = Validate("BrowserAccountObservation", raw); err != nil {
+		t.Fatal(err)
+	}
+	var snapshot BrowserAccountObservation
+	if err = json.Unmarshal(raw, &snapshot); err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.State != "observed" || snapshot.Source != "provider-session-v1" || snapshot.PrincipalKey != strings.Repeat("c", 64) || snapshot.ObservedAtMillis != "1000" || snapshot.ExpiresAtMillis != "60000" {
+		t.Fatal("snapshot values changed")
+	}
+	for field, value := range map[string]any{"accountId": "configured-is-not-observed", "principalKey": "user@example.invalid", "source": "configured", "state": "unknown", "accessToken": "private-boundary-canary", "observedAtMillis": 1000, "expiresAtMillis": "01"} {
+		t.Run(field, func(t *testing.T) {
+			var malformed map[string]any
+			if err := json.Unmarshal(raw, &malformed); err != nil {
+				t.Fatal(err)
+			}
+			malformed[field] = value
+			encoded, err := json.Marshal(malformed)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if Validate("BrowserAccountObservation", encoded) == nil {
+				t.Fatal("unqualified snapshot accepted")
 			}
 		})
 	}

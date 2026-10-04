@@ -61,7 +61,15 @@ type SelectionFacts struct {
 	ObservedAtMillis               uint64
 }
 type RequiredControls struct{ Model, Effort, Mode, Connector bool }
+
+// AccountObservation is a consumer-owned snapshot value, not wire or authority.
+// The zero value denotes an omitted/unqualified observation.
+type AccountObservation struct {
+	State, Source, PrincipalKey       string
+	ObservedAtMillis, ExpiresAtMillis uint64
+}
 type Verification struct {
+	Account                             AccountObservation
 	Pinned                              Selection
 	Required                            RequiredControls
 	Binding                             Binding

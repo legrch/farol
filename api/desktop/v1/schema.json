@@ -1201,6 +1201,29 @@
         }
       }
     },
+    "BrowserAccountObservation": {
+      "type": "object",
+      "fields": {
+        "state": {
+          "type": "text",
+          "values": ["observed"]
+        },
+        "source": {
+          "type": "text",
+          "values": ["provider-session-v1"]
+        },
+        "principalKey": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "observedAtMillis": {
+          "type": "decimal"
+        },
+        "expiresAtMillis": {
+          "type": "decimal"
+        }
+      }
+    },
     "BrowserVerification": {
       "type": "object",
       "fields": {
@@ -1232,6 +1255,10 @@
         },
         "pinned": {
           "type": "BrowserSelection"
+        },
+        "account": {
+          "type": "BrowserAccountObservation",
+          "optional": true
         }
       }
     },

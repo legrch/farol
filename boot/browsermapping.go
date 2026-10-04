@@ -141,7 +141,8 @@ func fromBrowserTarget(v wire.BrowserTarget) browser.Target {
 }
 func toBrowserVerification(v browser.Verification) wire.BrowserVerification {
 	return wire.BrowserVerification{
-		Pinned: toBrowserSelection(v.Pinned), Required: toBrowserRequired(v.Required),
+		Account: toBrowserAccount(v.Account),
+		Pinned:  toBrowserSelection(v.Pinned), Required: toBrowserRequired(v.Required),
 		Binding:            toBrowserBinding(v.Binding),
 		Observed:           toBrowserFacts(v.Observed),
 		PreviousUserTurnId: v.PreviousUserTurnID,
@@ -152,7 +153,8 @@ func toBrowserVerification(v browser.Verification) wire.BrowserVerification {
 }
 func fromBrowserVerification(v wire.BrowserVerification) browser.Verification {
 	return browser.Verification{
-		Pinned: fromBrowserSelection(v.Pinned), Required: fromBrowserRequired(v.Required),
+		Account: fromBrowserAccount(v.Account),
+		Pinned:  fromBrowserSelection(v.Pinned), Required: fromBrowserRequired(v.Required),
 		Binding:            fromBrowserBinding(v.Binding),
 		Observed:           fromBrowserFacts(v.Observed),
 		PreviousUserTurnID: v.PreviousUserTurnId,
@@ -308,4 +310,17 @@ func toBrowserFacts(v browser.SelectionFacts) wire.BrowserSelectionFacts {
 }
 func fromBrowserFacts(v wire.BrowserSelectionFacts) browser.SelectionFacts {
 	return browser.SelectionFacts{Model: fromBrowserFact(v.Model), Effort: fromBrowserFact(v.Effort), Mode: fromBrowserFact(v.Mode), Connector: fromBrowserFact(v.Connector), ObservedAtMillis: wireUint(v.ObservedAtMillis)}
+}
+
+func toBrowserAccount(v browser.AccountObservation) *wire.BrowserAccountObservation {
+	if v == (browser.AccountObservation{}) {
+		return nil
+	}
+	return &wire.BrowserAccountObservation{State: v.State, Source: v.Source, PrincipalKey: v.PrincipalKey, ObservedAtMillis: decimal(v.ObservedAtMillis), ExpiresAtMillis: decimal(v.ExpiresAtMillis)}
+}
+func fromBrowserAccount(v *wire.BrowserAccountObservation) browser.AccountObservation {
+	if v == nil {
+		return browser.AccountObservation{}
+	}
+	return browser.AccountObservation{State: v.State, Source: v.Source, PrincipalKey: v.PrincipalKey, ObservedAtMillis: wireUint(v.ObservedAtMillis), ExpiresAtMillis: wireUint(v.ExpiresAtMillis)}
 }

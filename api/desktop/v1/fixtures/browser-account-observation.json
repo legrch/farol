@@ -1,0 +1,7 @@
+{
+  "state": "observed",
+  "source": "provider-session-v1",
+  "principalKey": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "observedAtMillis": "1000",
+  "expiresAtMillis": "60000"
+}

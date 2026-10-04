@@ -56,3 +56,29 @@ describe("canonical browser wire", () => {
     expect(validate("boolean", null)).toBe(false);
   });
 });
+
+// Same fixture is decoded by Go. A valid wire snapshot is not an approval.
+describe("canonical account snapshot wire", () => {
+  const account = JSON.parse(
+    fs.readFileSync(
+      "api/desktop/v1/fixtures/browser-account-observation.json",
+      "utf8",
+    ),
+  );
+  it("retains the hashed principal and lossless timestamp strings", () => {
+    expect(validate("BrowserAccountObservation", account)).toBe(true);
+    expect(account.principalKey).toBe("c".repeat(64));
+    expect(account.observedAtMillis).toBe("1000");
+  });
+  it.each([
+    { ...account, accountId: "configured-is-not-observed" },
+    { ...account, principalKey: "user@example.invalid" },
+    { ...account, source: "configured" },
+    { ...account, state: "unknown" },
+    { ...account, accessToken: "private-boundary-canary" },
+    { ...account, observedAtMillis: 1000 },
+    { ...account, expiresAtMillis: "01" },
+  ])("refuses unqualified or private fields", (value) => {
+    expect(validate("BrowserAccountObservation", value)).toBe(false);
+  });
+});

@@ -24,7 +24,7 @@ func resolutionFromPort(v port.ModelResolution) Resolution {
 	return Resolution{RequestedAlias: v.RequestedAlias, RequestedExecutor: v.RequestedExecutor, RequestedEffort: v.RequestedEffort, RequestedMode: v.RequestedMode, Resolved: selectionFromPort(v.Resolved), ConfigSHA256: v.ConfigSHA256, TranslationID: v.TranslationID}
 }
 func verificationFromPort(v port.SendVerification) Verification {
-	return Verification{Binding: bindingFromPort(v.Binding), Pinned: selectionFromPort(v.Pinned), Required: requiredFromPort(v.Required), Observed: factsFromPort(v.Observed), PreviousUserTurnID: v.PreviousUserTurnID, PreviousReplyID: v.PreviousReplyID, IntentDigest: v.IntentDigest, EvidenceID: v.EvidenceID}
+	return Verification{Account: accountFromPort(v.Account), Binding: bindingFromPort(v.Binding), Pinned: selectionFromPort(v.Pinned), Required: requiredFromPort(v.Required), Observed: factsFromPort(v.Observed), PreviousUserTurnID: v.PreviousUserTurnID, PreviousReplyID: v.PreviousReplyID, IntentDigest: v.IntentDigest, EvidenceID: v.EvidenceID}
 }
 func leaseToPort(v Lease) port.BrowserLease {
 	return port.BrowserLease{Identity: identityToPort(v.Identity), BackendGeneration: v.BackendGeneration, SlotOrdinal: v.SlotOrdinal, SlotGeneration: v.SlotGeneration}
@@ -36,7 +36,7 @@ func resolutionToPort(v Resolution) port.ModelResolution {
 	return port.ModelResolution{RequestedAlias: v.RequestedAlias, RequestedExecutor: v.RequestedExecutor, RequestedEffort: v.RequestedEffort, RequestedMode: v.RequestedMode, Resolved: selectionToPort(v.Resolved), ConfigSHA256: v.ConfigSHA256, TranslationID: v.TranslationID}
 }
 func verificationToPort(v Verification) port.SendVerification {
-	return port.SendVerification{Binding: bindingToPort(v.Binding), Pinned: selectionToPort(v.Pinned), Required: requiredToPort(v.Required), Observed: factsToPort(v.Observed), PreviousUserTurnID: v.PreviousUserTurnID, PreviousReplyID: v.PreviousReplyID, IntentDigest: v.IntentDigest, EvidenceID: v.EvidenceID}
+	return port.SendVerification{Account: accountToPort(v.Account), Binding: bindingToPort(v.Binding), Pinned: selectionToPort(v.Pinned), Required: requiredToPort(v.Required), Observed: factsToPort(v.Observed), PreviousUserTurnID: v.PreviousUserTurnID, PreviousReplyID: v.PreviousReplyID, IntentDigest: v.IntentDigest, EvidenceID: v.EvidenceID}
 }
 func targetFromPort(v port.ConversationTarget) Target {
 	return Target{Required: requiredFromPort(v.Required), Mode: string(v.Mode), ConversationID: v.ConversationID, PreviousUserTurnID: v.PreviousUserTurnID, PreviousReplyID: v.PreviousReplyID, Selection: selectionFromPort(v.Selection), Resolution: resolutionFromPort(v.Resolution)}
@@ -59,4 +59,11 @@ func factsFromPort(v port.SelectionFacts) SelectionFacts {
 }
 func factsToPort(v SelectionFacts) port.SelectionFacts {
 	return port.SelectionFacts{Model: factToPort(v.Model), Effort: factToPort(v.Effort), Mode: factToPort(v.Mode), Connector: factToPort(v.Connector), ObservedAtMillis: v.ObservedAtMillis}
+}
+
+func accountFromPort(v port.AccountObservation) AccountObservation {
+	return AccountObservation{State: v.State, Source: v.Source, PrincipalKey: v.PrincipalKey, ObservedAtMillis: v.ObservedAtMillis, ExpiresAtMillis: v.ExpiresAtMillis}
+}
+func accountToPort(v AccountObservation) port.AccountObservation {
+	return port.AccountObservation{State: v.State, Source: v.Source, PrincipalKey: v.PrincipalKey, ObservedAtMillis: v.ObservedAtMillis, ExpiresAtMillis: v.ExpiresAtMillis}
 }

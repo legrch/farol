@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/legrch/farol/modules/chat/app/port"
+	"github.com/legrch/farol/modules/chat/app/services/accountapproval"
 	"github.com/legrch/farol/modules/chat/app/services/lifecycle"
 	"github.com/legrch/farol/modules/chat/infra/gate"
 	"github.com/legrch/farol/modules/chat/infra/intent"
@@ -614,4 +615,72 @@ func portFacts(s port.Selection) port.SelectionFacts {
 		return port.ControlFact{Value: v, Literal: "visible-" + v, Source: port.FactPublicControl}
 	}
 	return port.SelectionFacts{Model: known(s.ModelID), Effort: known(s.Effort), Mode: known(s.Mode), Connector: known(s.ConnectorID), ObservedAtMillis: 9}
+}
+
+// Real pure approval and adapter, injected exchange only: no boot/live approval.
+func TestObservedAccountReachesIndependentApprovalAndExactSend(t *testing.T) {
+	approved := port.AccountObservation{State: "observed", Source: "provider-session-v1", PrincipalKey: strings.Repeat("c", 64), ObservedAtMillis: 10, ExpiresAtMillis: 60000}
+	for _, variant := range []string{"matching", "changed", "omitted"} {
+		t.Run(variant, func(t *testing.T) {
+			a, e, clock := adapterFixture(t)
+			scope := port.AccountScope{ProfileID: "profile", BackendGeneration: "backend", OwnerID: "owner", SessionID: "session"}
+			owner, err := accountapproval.New(scope, &gate.Mutex{}, clock)
+			if err != nil {
+				t.Fatal(err)
+			}
+			grant, err := owner.Approve(context.Background(), "explicit-approval", 0, approved)
+			if err != nil {
+				t.Fatal(err)
+			}
+			snapshot := AccountObservation{State: "observed", Source: "provider-session-v1", PrincipalKey: strings.Repeat("c", 64), ObservedAtMillis: 10, ExpiresAtMillis: 60000}
+			if variant == "changed" {
+				snapshot.PrincipalKey = strings.Repeat("d", 64)
+			}
+			if variant == "omitted" {
+				snapshot = AccountObservation{}
+			}
+			e.hook = func(ctx context.Context, command Command) (Reply, error) {
+				if r, ok := command.(VerifySendCommand); ok {
+					return VerifiedReply{Verification: Verification{Account: snapshot, Binding: r.Binding, Pinned: r.Requested, Required: r.Required, Observed: exchangeFacts(r.Requested), PreviousUserTurnID: r.PreviousUserTurnID, PreviousReplyID: r.PreviousReplyID, IntentDigest: r.IntentDigest, EvidenceID: "proof-operation"}}, nil
+				}
+				r, ok := command.(SendCommand)
+				if !ok {
+					t.Fatal("unexpected command")
+				}
+				if r.Verification.Account != snapshot {
+					t.Fatal("account changed before Send")
+				}
+				return SentReply{Binding: r.Binding, VerificationID: r.Verification.EvidenceID, Status: "submitted"}, nil
+			}
+			proof, err := a.VerifySend(verifyFixture())
+			if err != nil {
+				t.Fatal(err)
+			}
+			inspected := false
+			err = grant.WithCurrent(context.Background(), scope, "explicit-approval", proof.Account, func(v port.AccountApproval) error {
+				inspected = true
+				if v.PrincipalKey != approved.PrincipalKey {
+					t.Fatal("configured account became authority")
+				}
+				return nil
+			})
+			if variant != "matching" {
+				if err == nil || inspected || len(e.calls) != 1 {
+					t.Fatal("missing or changed account authorized")
+				}
+				return
+			}
+			if err != nil || !inspected {
+				t.Fatal("mapped snapshot lost approval", err)
+			}
+			request := sendFixture()
+			request.Verification = *proof
+			if _, err := a.Send(request); err != nil {
+				t.Fatal(err)
+			}
+			if len(e.calls) != 2 {
+				t.Fatal("unexpected dispatch count")
+			}
+		})
+	}
 }

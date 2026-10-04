@@ -1423,3 +1423,93 @@ describe("Go Chat BrowserDriver — strict physical doubles, CPU only", () => {
     expect(f.api.send).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("independent account snapshot transport", () => {
+  const observedAccount = {
+    state: "observed",
+    source: "provider-session-v1",
+    accountKey: "c".repeat(64),
+    observedAtMillis: 1000,
+    expiresAtMillis: 60_000,
+    documentUrl: home.url,
+  } as const;
+  function accountFixture(account: unknown = observedAccount) {
+    const f = fixture();
+    const original = f.api.verifySend;
+    f.api.verifySend = vi.fn(async (input, guard) => {
+      const result = await original(input, guard);
+      if (result.state !== "witnessed")
+        throw new Error("missing fixture witness");
+      Object.assign(result.witness, { account });
+      return result;
+    });
+    return f;
+  }
+  it("round trips independent facts while retaining the exact physical witness", async () => {
+    const f = accountFixture();
+    await f.prepare();
+    const { verification } = await f.verify();
+    expect(verification.account).toEqual({
+      state: "observed",
+      source: "provider-session-v1",
+      principalKey: observedAccount.accountKey,
+      observedAtMillis: "1000",
+      expiresAtMillis: "60000",
+    });
+    expect(verification.pinned.accountId).toBe("account");
+    expect(verification.account).not.toHaveProperty("documentUrl");
+    expect(validate("BrowserVerification", verification)).toBe(true);
+    await expect(f.send()).resolves.toMatchObject({ status: "submitted" });
+    expect(vi.mocked(f.api.send).mock.calls[0]?.[0].witness.account).toEqual(
+      observedAccount,
+    );
+    expect(f.api.send).toHaveBeenCalledTimes(1);
+  });
+  it("does not fabricate an observation from configured account correlation", async () => {
+    const f = fixture();
+    await f.prepare();
+    expect((await f.verify()).verification.account).toBeUndefined();
+  });
+  it.each([
+    null,
+    { state: "unavailable", code: "timeout" },
+    { ...observedAccount, documentUrl: saved.url },
+    { ...observedAccount, observedAtMillis: 999 },
+    { ...observedAccount, observedAtMillis: 1001 },
+    { ...observedAccount, expiresAtMillis: 1000 },
+    { ...observedAccount, accountKey: selection.accountId },
+    { ...observedAccount, accessToken: "private-boundary-canary" },
+  ])(
+    "refuses malformed, unavailable, stale or crossed account facts",
+    async (value) => {
+      const f = accountFixture(value);
+      await f.prepare();
+      await expect(f.verify()).rejects.toThrow(
+        "chat_browser_account_unavailable",
+      );
+      expect(f.api.send).not.toHaveBeenCalled();
+    },
+  );
+  it.each(["drop", "principal", "time"])(
+    "refuses %s tampering with the returned verification",
+    async (kind) => {
+      const f = accountFixture();
+      await f.prepare();
+      const { verification } = await f.verify();
+      const changed = clone(verification);
+      if (kind === "drop") delete changed.account;
+      if (kind === "principal") changed.account!.principalKey = "d".repeat(64);
+      if (kind === "time") changed.account!.observedAtMillis = "1001";
+      await expect(
+        f.driver.send({
+          binding: f.binding,
+          verification: changed,
+          intentDigest: "b".repeat(64),
+          prompt: "Transient prompt",
+          deadlineMillis: "14000",
+        }),
+      ).rejects.toThrow("chat_browser_send_witness_mismatch");
+      expect(f.api.send).not.toHaveBeenCalled();
+    },
+  );
+});
