@@ -6,10 +6,7 @@ import path from "node:path";
 import { Client } from "@modelcontextprotocol/client";
 import { InMemoryTransport } from "@modelcontextprotocol/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  ProductConfigurationService,
-  ProductSettingsStore,
-} from "../../src/apps/desktop/product-configuration";
+import { ProductSettingsStore } from "../../src/apps/desktop/product-configuration";
 import { createSecureMcpLaunchContract } from "../../src/apps/desktop/secure-mcp-launch-contract";
 import {
   ProductSettingsSchema,
@@ -665,11 +662,6 @@ describe("production Computer TaskGrant reissue", () => {
         commonDirectory: path.join(workspace.root, ".git"),
       };
       await save();
-      const configuration = new ProductConfigurationService(
-        new ProductSettingsStore({ root }),
-        { now: () => "2026-10-04T16:00:00.000Z" },
-      );
-      await configuration.initialize();
       const ceiling = launch();
       const binding = materializeReadonlyComputerLaunch(ceiling, now).binding;
       const authority = issuer(ceiling);
@@ -694,31 +686,15 @@ describe("production Computer TaskGrant reissue", () => {
             },
           };
         }
-        const recorded = await configuration.recordComputerVerification(
-          workspaceId,
-          {
-            profile: "computer.local.write/1",
-            runtimeGeneration: "fixture-generation",
-            buildId: "b".repeat(64),
-            protocol: "mutable-workspace/1",
-          },
-          {
-            rootIdentity: workspace.rootIdentity!,
-            gitMetadata: {
-              gitDirectory: "/Users/example/other/.git/worktrees/brain",
-              commonDirectory: "/Users/example/other/.git",
-            },
-          },
-        );
-        expect(recorded.ok).toBe(true);
-        const snapshot = configuration.snapshot();
-        if (snapshot.status !== "ready") throw new Error("settings missing");
-        expect(snapshot.settings.computer.generation).toBe(
-          settings.computer.generation,
-        );
-        expect(
-          snapshot.settings.computer.workspaces[0]!.gitHistoryApproved,
-        ).toBe(false);
+        // Normal Go-composed settings now advance generation on this change.
+        // Model an older/external writer retaining the generation so the MCP
+        // boundary still has to compare the whole policy before disclosure.
+        workspace.gitMetadata = {
+          gitDirectory: "/Users/example/other/.git/worktrees/brain",
+          commonDirectory: "/Users/example/other/.git",
+        };
+        workspace.gitHistoryApproved = false;
+        await save();
         return {
           ok: true,
           value: {
