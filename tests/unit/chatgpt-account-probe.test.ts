@@ -209,12 +209,63 @@ describe("read-only session identity mechanics", () => {
   ])("accepts a trusted canonical loopback override: %s", async (origin) => {
     const fixture = page({
       origin,
-      href: `${origin}/fixture`,
+      href: `${origin}/`,
       response: { url: `${origin}/api/auth/session` },
     });
-    expect(observed(await fixture.run()).documentUrl).toBe(`${origin}/fixture`);
+    expect(observed(await fixture.run()).documentUrl).toBe(`${origin}/`);
     expect(fixture.fetch.mock.calls[0]?.[0]).toBe(`${origin}/api/auth/session`);
   });
+
+  it.each(["https://chatgpt.com", "http://127.0.0.1:4317"])(
+    "accepts supported canonical chat documents at %s",
+    async (origin) => {
+      for (const path of [
+        "/",
+        "/c/12345678-1234-4123-8123-123456789abc",
+        "/c/Az_09-",
+        `/c/${"a".repeat(128)}`,
+      ]) {
+        const fixture = page({
+          href: `${origin}${path}`,
+          origin: origin.startsWith("http:") ? origin : null,
+          response: { url: `${origin}/api/auth/session` },
+        });
+        expect(observed(await fixture.run()).documentUrl).toBe(
+          `${origin}${path}`,
+        );
+        expect(fixture.fetch).toHaveBeenCalledOnce();
+      }
+    },
+  );
+
+  it.each(["https://chatgpt.com", "http://127.0.0.1:4317"])(
+    "refuses unsupported/aliased paths before GET at %s",
+    async (origin) => {
+      for (const path of [
+        "/auth/TOKEN_CANARY",
+        "/reset/USER_CANARY/TOKEN_CANARY",
+        "/TOKEN_CANARY",
+        "/g/custom-gpt",
+        "/c/",
+        "/c/fixture/",
+        "/c/a/b",
+        "/c/%66ixture",
+        "/%63/fixture",
+        "/c/%2e%2e/",
+        "/c/./fixture",
+        "/c/é",
+        "/c/a.b",
+        `/c/${"a".repeat(129)}`,
+      ]) {
+        const fixture = page({
+          href: `${origin}${path}`,
+          origin: origin.startsWith("http:") ? origin : null,
+        });
+        failure(await fixture.run(), "origin_refused");
+        expect(fixture.fetch).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it.each([
     "https://example.com/",
@@ -804,6 +855,9 @@ describe("closed observation parser", () => {
     { ...success, expiresAtMillis: Infinity },
     { ...success, documentUrl: "x".repeat(4097) },
     { ...success, documentUrl: "\n" },
+    { ...success, documentUrl: "https://chatgpt.com/auth/TOKEN_CANARY" },
+    { ...success, documentUrl: "https://chatgpt.com/c/%66ixture" },
+    { ...success, documentUrl: "https://chatgpt.com/g/custom-gpt" },
     { ...success, documentUrl: `${home}?token=TOKEN_CANARY` },
     { ...success, documentUrl: `${home}#COOKIE_CANARY` },
     {

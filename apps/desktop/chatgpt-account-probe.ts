@@ -28,6 +28,9 @@ const observation = z.discriminatedUnion("state", [
           try {
             const url = new URL(value);
             return (
+              url.href === value &&
+              (url.pathname === "/" ||
+                /^\/c\/[A-Za-z0-9_-]{1,128}$/u.test(url.pathname)) &&
               !url.username &&
               !url.password &&
               !value.includes("?") &&
@@ -181,6 +184,9 @@ export async function readChatGptAccount(
     const url = new URL(documentUrl);
     if (
       url.origin !== origin ||
+      url.href !== documentUrl ||
+      (url.pathname !== "/" &&
+        !/^\/c\/[A-Za-z0-9_-]{1,128}$/u.test(url.pathname)) ||
       url.username ||
       url.password ||
       documentUrl.includes("?") ||
