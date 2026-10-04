@@ -75,3 +75,62 @@ func TestAuthorizeOwnerList(t *testing.T) {
 		}
 	}
 }
+
+func TestAuthorizeOwnerRead(t *testing.T) {
+	now := time.UnixMilli(1800000000000)
+	a := ownerFixture()
+	if err := AuthorizeOwnerRead(a, "work", "/work/file.txt", now); err == nil {
+		t.Fatal("List implied Read")
+	}
+	a.Capabilities = []Capability{Read}
+	if err := AuthorizeOwnerRead(a, "work", "/work/file.txt", now); err != nil {
+		t.Fatal(err)
+	}
+	if err := AuthorizeOwnerList(a, "work", "/work", now); err == nil {
+		t.Fatal("Read implied List")
+	}
+	// Both entrypoints must enforce the same owner validation and path policy.
+	changes := []struct {
+		name   string
+		change func(*Approval)
+		path   string
+		now    time.Time
+	}{
+		{"owner", func(a *Approval) { a.OwnerID = "" }, "/work/file", now},
+		{"computer", func(a *Approval) { a.ComputerID = "" }, "/work/file", now},
+		{"root", func(a *Approval) { a.Workspaces[0].Root = "/" }, "/work/file", now},
+		{"root identity", func(a *Approval) { a.Workspaces[0].RootIdentity.Device = "private" }, "/work/file", now},
+		{"git metadata", func(a *Approval) {
+			a.Workspaces[0].GitMetadata = &GitMetadata{GitDirectory: "relative", CommonDirectory: "/work/.git"}
+		}, "/work/file", now},
+		{"duplicates", func(a *Approval) { a.Workspaces = append(a.Workspaces, a.Workspaces[0]) }, "/work/file", now},
+		{"expiry", func(a *Approval) { a.ExpiresAt = now }, "/work/file", now},
+		{"fractional expiry", func(a *Approval) { a.ExpiresAt = a.ExpiresAt.Add(time.Nanosecond) }, "/work/file", now},
+		{"exclusion alias", func(a *Approval) { a.ExcludedPaths = []Exclusion{{WorkspaceID: "work", Path: "/work/Café"}} }, "/work/CAFE/file", now},
+		{"provenance", func(a *Approval) {
+			a.ExcludedPaths = []Exclusion{{WorkspaceID: "work", Path: "/work/secret", RestrictionSource: "private"}}
+		}, "/work/file", now},
+		{"network", func(a *Approval) { a.Network = "unknown" }, "/work/file", now},
+		{"commands", func(a *Approval) { a.Commands = "unknown" }, "/work/file", now},
+		{"outside", nil, "/other/file", now},
+		{"traversal", nil, "/work/../file", now},
+		{"invalid utf8", nil, "/work/\xff", now},
+		{"zero clock", nil, "/work/file", time.Time{}},
+		{"future clock", nil, "/work/file", time.UnixMilli(9007199254740992)},
+	}
+	for _, tc := range changes {
+		t.Run(tc.name, func(t *testing.T) {
+			a := ownerFixture()
+			if tc.change != nil {
+				tc.change(&a)
+			}
+			listErr := AuthorizeOwnerList(a, "work", tc.path, tc.now)
+			a.Capabilities = []Capability{Read}
+			readErr := AuthorizeOwnerRead(a, "work", tc.path, tc.now)
+			var listFailure, readFailure *Failure
+			if !errors.As(listErr, &listFailure) || !errors.As(readErr, &readFailure) || *listFailure != *readFailure {
+				t.Fatalf("list=%v read=%v", listErr, readErr)
+			}
+		})
+	}
+}

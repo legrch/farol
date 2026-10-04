@@ -60,6 +60,7 @@ var codes = map[string]bool{
 	"WORKSPACE_REQUEST_CANCELLED": true, "WORKSPACE_PATH_REFUSED": true,
 	"WORKSPACE_ROOT_CHANGED": true, "WORKSPACE_NOT_FOUND": true,
 	"WORKSPACE_RACE_DETECTED": true, "WORKSPACE_HELPER_FAILED": true,
+	"WORKSPACE_FILE_TOO_LARGE": true, "WORKSPACE_NOT_TEXT": true, "WORKSPACE_NOT_A_FILE": true,
 }
 var sources = map[string]bool{
 	"computer-approval": true, "authority-store": true,
