@@ -11,11 +11,14 @@ import { BrowserPump, type BrowserDriver } from "./bridge/browser.ts";
 import { ChatBridge } from "./bridge/chat.ts";
 import { ChatComputerBridge } from "./bridge/chat-computer.ts";
 import { ChatCallerBridge } from "./bridge/chat-caller.ts";
+import { ReadIntentBridge } from "./bridge/read-intent.ts";
 import {
   validate,
   type Context,
   type CoreRetirementPrepared,
   type CoreRetirementAcknowledged,
+  type ChatComputerAdmissionResponse,
+  type ChatReadIntentPromote,
 } from "./bridge/wire.ts";
 import { qualifyProfileLaunch } from "./bridge/profile.ts";
 import { openNativeProfileStorage } from "./bridge/profile-storage.ts";
@@ -75,6 +78,7 @@ function readDeclaration(root: string): unknown {
 export class DesktopGoCore {
   private readonly authority: GoComputerAuthority;
   private readonly computer: ComputerBridge;
+  private readonly readIntent: ReadIntentBridge;
   private readonly sessionId = randomUUID();
   private browser: DesktopBrowserConnection | undefined;
   private pump: BrowserPump | undefined;
@@ -92,6 +96,7 @@ export class DesktopGoCore {
   ) {
     this.authority = new GoComputerAuthority(client, client.verifiedContext);
     this.computer = new ComputerBridge(client);
+    this.readIntent = new ReadIntentBridge(client);
   }
   connectBrowser(connection: DesktopBrowserConnection): void {
     if (this.browser || this.closeResult)
@@ -164,6 +169,16 @@ export class DesktopGoCore {
       { requestId: randomUUID(), context: this.client.verifiedContext },
     );
     return { admission, result };
+  }
+  promoteReadIntent(input: ChatReadIntentPromote) {
+    if (this.closeResult)
+      throw new BridgeError("unavailable", "host_read_intent_unavailable");
+    return this.readIntent.promote(input);
+  }
+  withdrawReadIntent(admission: ChatComputerAdmissionResponse) {
+    if (this.closeResult)
+      throw new BridgeError("unavailable", "host_read_intent_unavailable");
+    return this.readIntent.withdraw(admission);
   }
   // Exact child closure remains distinct from module/journal clean retirement.
   close(): Promise<void> {

@@ -50,7 +50,9 @@
     "chat.computer.edit": "effect",
     "chat.computer.mutation.read": "read",
     "core.retirement.prepare": "effect",
-    "core.retirement.ack": "effect"
+    "core.retirement.ack": "effect",
+    "chat.readintent.promote": "effect",
+    "chat.readintent.withdraw": "effect"
   },
   "definitions": {
     "Context": {
@@ -3100,6 +3102,44 @@
         },
         "forced": {
           "type": "boolean"
+        }
+      }
+    },
+    "ChatReadIntentPromote": {
+      "type": "object",
+      "fields": {
+        "admission": {
+          "type": "ChatComputerAdmissionResponse"
+        },
+        "selection": {
+          "type": "BrowserSelection"
+        },
+        "resolution": {
+          "type": "BrowserResolution"
+        },
+        "prompt": {
+          "type": "string",
+          "minBytes": 1,
+          "maxBytes": 8192
+        },
+        "required": {
+          "type": "BrowserRequiredControls"
+        }
+      }
+    },
+    "ChatReadIntentWithdraw": {
+      "type": "object",
+      "fields": {
+        "admission": {
+          "type": "ChatComputerAdmissionResponse"
+        }
+      }
+    },
+    "ChatReadIntentWithdrawn": {
+      "type": "object",
+      "fields": {
+        "admission": {
+          "type": "ChatComputerAdmissionResponse"
         }
       }
     }

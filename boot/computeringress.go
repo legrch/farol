@@ -12,10 +12,8 @@ import (
 	"sync"
 
 	wire "github.com/legrch/farol/gen/desktop/v1"
-	chatport "github.com/legrch/farol/modules/chat/app/port"
-	chatadmission "github.com/legrch/farol/modules/chat/app/services/admission"
 	chatlifecycle "github.com/legrch/farol/modules/chat/app/services/lifecycle"
-	chatct "github.com/legrch/farol/modules/chat/contracts/admission"
+	conversation "github.com/legrch/farol/modules/chat/contracts/conversation"
 	computerport "github.com/legrch/farol/modules/computer/app/port"
 	execution "github.com/legrch/farol/modules/computer/app/services/execution"
 	"github.com/legrch/farol/modules/computer/domain/authority"
@@ -35,6 +33,9 @@ type ComputerIngress struct {
 	guard               activationFence
 	store               computerIngressStore
 	chat                *chatlifecycle.Service
+	readFacade          *conversation.Facade
+	conversations       *ChatIngress
+	readIntents         map[string]*capturedReadIntent
 	native              computerport.Workspace
 	clock               computerport.Clock
 	peer                wire.Context
@@ -220,12 +221,18 @@ func (s *ComputerIngress) Admit(ctx context.Context, operation string, in wire.C
 	s.tasks[in.TaskId] = true
 	s.turns[in.TurnId] = true
 	s.mu.Unlock()
-	binding := chatport.TurnBinding{ProfileID: s.peer.ProfileId, BackendGeneration: s.peer.BackendGeneration, OwnerID: s.ownerID, SessionID: in.SessionId, TaskID: in.TaskId, TaskEpoch: 1, ParticipantID: participantID, TurnID: in.TurnId, OperationID: operation, TurnGeneration: 1}
+	binding := conversation.Binding{ProfileID: s.peer.ProfileId, BackendGeneration: s.peer.BackendGeneration, OwnerID: s.ownerID, SessionID: in.SessionId, TaskID: in.TaskId, TaskEpoch: 1, ParticipantID: participantID, TurnID: in.TurnId, OperationID: operation, TurnGeneration: 1}
 	// Epoch/generation1 belong ONLY to a newly recorded Task/Turn. They are never
 	// derived from Computer generation, a restored ProductTask or startup metadata.
 	raw, _ := json.Marshal(in)
 	digest := sha256.Sum256(raw)
-	handle, e := s.chat.Admit(ctx, binding, hex.EncodeToString(digest[:]))
+	if s.readFacade == nil {
+		s.readFacade = conversation.New(s.chat)
+	}
+	if s.readIntents == nil {
+		s.readIntents = make(map[string]*capturedReadIntent)
+	}
+	handle, e := s.readFacade.AdmitReadIntent(ctx, binding, hex.EncodeToString(digest[:]))
 	if e != nil || handle == nil {
 		s.poison()
 		return nil, fmt.Errorf("CHAT_ADMISSION_UNKNOWN")
@@ -234,7 +241,11 @@ func (s *ComputerIngress) Admit(ctx context.Context, operation string, in wire.C
 		s.poison()
 		return nil, fmt.Errorf("CHAT_ADMISSION_UNKNOWN")
 	}
-	admitted, e := chatadmission.New(handle)
+	// Retain the actual owner before further Computer IO. An uncertain later
+	// boundary remains captured and poisoned; it cannot become a fresh admission.
+	captured := &capturedReadIntent{owner: handle, binding: binding, fence: fence}
+	s.readIntents[operation] = captured
+	admitted, e := handle.Current()
 	if e != nil {
 		s.poison()
 		return nil, e
@@ -244,7 +255,7 @@ func (s *ComputerIngress) Admit(ctx context.Context, operation string, in wire.C
 		s.poison()
 		return nil, fmt.Errorf("COMPUTER_ADMISSION_UNKNOWN")
 	}
-	current, e := admissionpeer.NewChat(chatct.New(admitted))
+	current, e := admissionpeer.NewChat(admitted)
 	if e != nil {
 		s.poison()
 		return nil, e
@@ -272,7 +283,10 @@ func (s *ComputerIngress) Admit(ctx context.Context, operation string, in wire.C
 	s.route = route
 	s.mu.Unlock()
 	s.guard.active = true
-	return &wire.ChatComputerAdmissionResponse{OwnerId: binding.OwnerID, SessionId: binding.SessionID, TaskId: binding.TaskID, TaskEpoch: "1", ParticipantId: binding.ParticipantID, TurnId: binding.TurnID, Generation: "1", AdmissionOperationId: operation, StoreRevision: strconv.FormatUint(status.Revision, 10)}, nil
+	response := wire.ChatComputerAdmissionResponse{OwnerId: binding.OwnerID, SessionId: binding.SessionID, TaskId: binding.TaskID, TaskEpoch: "1", ParticipantId: binding.ParticipantID, TurnId: binding.TurnID, Generation: "1", AdmissionOperationId: operation, StoreRevision: strconv.FormatUint(status.Revision, 10)}
+	retained := response
+	captured.admission = &retained
+	return &response, nil
 }
 func readIntentPolicy(a authority.Approval, ids []string) (authority.Policy, error) {
 	hasList, hasRead := false, false

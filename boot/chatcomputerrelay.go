@@ -47,6 +47,14 @@ func NewChatComputerIngress(chat *ChatIngress, computer *ComputerIngress) (*Chat
 	if chat == nil || computer == nil || chat.facade == nil || chat.peer != computer.peer || chat.owner != computer.ownerID {
 		return nil, computerUnavailable()
 	}
+	// Trusted composition shares the same facade before the first read admission.
+	// Promotion and subsequent Follow must retain the original facade identity.
+	computer.effects.Lock()
+	defer computer.effects.Unlock()
+	if len(computer.readIntents) != 0 || computer.conversations != nil {
+		return nil, computerUnavailable()
+	}
+	computer.readFacade, computer.conversations = chat.facade, chat
 	return &ChatComputerIngress{chat: chat, computer: computer, calls: make(map[chatComputerKey]*chatComputerReturn), turns: make(map[*conversation.Handle]*chatComputerTurn)}, nil
 }
 
