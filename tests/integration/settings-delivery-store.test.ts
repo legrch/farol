@@ -334,7 +334,7 @@ describe("typed mechanical Settings delivery store", () => {
         "SETTINGS_WRITE_OUTCOME_UNKNOWN",
       );
       expect(rename).toHaveBeenCalledTimes(1);
-      expect(withdraw).toHaveBeenCalledTimes(2);
+      expect(withdraw).toHaveBeenCalledTimes(1);
       expect(publish).toHaveBeenCalledTimes(stage === "rename" ? 0 : 1);
     },
   );
@@ -414,6 +414,207 @@ describe("typed mechanical Settings delivery store", () => {
       "SETTINGS_WRITE_OUTCOME_UNKNOWN",
     );
   });
+
+  it("refuses authority publication after caller loss during final storage readback", async () => {
+    const f = await fixture();
+    const publish = vi.fn(async () => undefined);
+    const withdraw = vi.fn(async () => ({ publish }));
+    f.service.attachComputerAuthority(withdraw);
+    let enter!: () => void, resume!: () => void;
+    const entered = new Promise<void>((r) => {
+      enter = r;
+    });
+    const resumed = new Promise<void>((r) => {
+      resume = r;
+    });
+    const load = f.store.load.bind(f.store);
+    let reads = 0;
+    vi.spyOn(f.store, "load").mockImplementation(async () => {
+      if (++reads === 3) {
+        enter();
+        await resumed;
+      }
+      return load();
+    });
+    const writing = f.adapter.replace({
+      expected: f.snapshot,
+      next: f.pending,
+      invalidateVerification: true,
+    });
+    await entered;
+    const fenced = f.adapter.fence();
+    resume();
+    expect(await writing).toEqual({ status: "unknown" });
+    await fenced;
+    expect(publish).not.toHaveBeenCalled();
+    expect(await f.adapter.read()).toEqual({ status: "unavailable" });
+    expect(f.service.snapshot().status).toBe("error");
+    expect((await load())?.computer.pendingEdit?.operationId).toBe(operationId);
+  });
+
+  it("retains uncertainty from the first withdrawal even before a settings write", async () => {
+    const f = await fixture();
+    const withdraw = vi.fn(async () => {
+      throw new Error("original withdrawal ACK lost");
+    });
+    f.service.attachComputerAuthority(withdraw);
+    const rename = vi.spyOn(fs, "rename");
+    expect(
+      await f.adapter.replace({
+        expected: f.snapshot,
+        next: f.pending,
+        invalidateVerification: true,
+      }),
+    ).toEqual({ status: "unknown" });
+    expect(rename).not.toHaveBeenCalled();
+    expect(await f.adapter.read()).toEqual({ status: "unavailable" });
+    expect((await f.service.renameComputer("Must stay closed")).ok).toBe(false);
+    expect(
+      await f.adapter.replace({
+        expected: f.snapshot,
+        next: f.pending,
+        invalidateVerification: true,
+      }),
+    ).toEqual({ status: "unknown" });
+    await expect(f.adapter.fence()).rejects.toThrow(
+      "original withdrawal ACK lost",
+    );
+    await expect(f.adapter.fence()).rejects.toThrow(
+      "original withdrawal ACK lost",
+    );
+    expect(withdraw).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not restore a successful result after caller loss while authority publish is in flight", async () => {
+    const f = await fixture();
+    let enter!: () => void, resume!: () => void;
+    const entered = new Promise<void>((r) => {
+      enter = r;
+    });
+    const resumed = new Promise<void>((r) => {
+      resume = r;
+    });
+    const publish = vi.fn(async () => {
+      enter();
+      await resumed;
+    });
+    const withdraw = vi.fn(async () => ({ publish }));
+    f.service.attachComputerAuthority(withdraw);
+    const writing = f.adapter.replace({
+      expected: f.snapshot,
+      next: f.pending,
+      invalidateVerification: true,
+    });
+    await entered;
+    const fenced = f.adapter.fence();
+    expect(f.service.snapshot().status).toBe("error");
+    resume();
+    expect(await writing).toEqual({ status: "unknown" });
+    await fenced;
+    expect(publish).toHaveBeenCalledTimes(1);
+    expect(withdraw).toHaveBeenCalledTimes(2);
+    expect(f.service.snapshot().status).toBe("error");
+  });
+
+  it("keeps ordinary queued Settings commits from republishing after a delivery fence", async () => {
+    const f = await fixture();
+    const publish = vi.fn(async () => undefined);
+    f.service.attachComputerAuthority(async () => ({ publish }));
+    let enter!: () => void, resume!: () => void;
+    const entered = new Promise<void>((r) => {
+      enter = r;
+    });
+    const resumed = new Promise<void>((r) => {
+      resume = r;
+    });
+    const load = f.store.load.bind(f.store);
+    vi.spyOn(f.store, "load").mockImplementationOnce(async () => {
+      enter();
+      await resumed;
+      return load();
+    });
+    const ordinary = f.service.renameComputer("Written before caller loss");
+    await entered;
+    const fenced = f.adapter.fence();
+    resume();
+    expect((await ordinary).ok).toBe(false);
+    await fenced;
+    expect(publish).not.toHaveBeenCalled();
+    expect(f.service.snapshot().status).toBe("error");
+    expect((await load())?.computer.name).toBe("Written before caller loss");
+  });
+
+  it("does not restore ordinary failure readback after a caller fence", async () => {
+    const f = await fixture();
+    vi.spyOn(f.store, "save").mockRejectedValueOnce(
+      new Error("storage write failed"),
+    );
+    let enter!: () => void, resume!: () => void;
+    const entered = new Promise<void>((r) => {
+      enter = r;
+    });
+    const resumed = new Promise<void>((r) => {
+      resume = r;
+    });
+    const load = f.store.load.bind(f.store);
+    vi.spyOn(f.store, "load").mockImplementationOnce(async () => {
+      enter();
+      await resumed;
+      return load();
+    });
+    const ordinary = f.service.renameComputer("Not persisted");
+    await entered;
+    const fenced = f.adapter.fence();
+    resume();
+    const result = await ordinary;
+    await fenced;
+    expect(result.ok).toBe(false);
+    expect(result.snapshot.status).toBe("error");
+    expect(f.service.snapshot().status).toBe("error");
+  });
+
+  it.each(["withdraw", "publish"])(
+    "retains ordinary %s rejection crossing a caller fence without another authority call",
+    async (stage) => {
+      const f = await fixture();
+      let enter!: () => void, reject!: (error: Error) => void;
+      const entered = new Promise<void>((r) => {
+        enter = r;
+      });
+      const lost = new Promise<never>((_, r) => {
+        reject = r;
+      });
+      const publish = vi.fn(async () => {
+        enter();
+        await lost;
+      });
+      const withdraw = vi.fn(async () => {
+        if (stage === "withdraw") {
+          enter();
+          await lost;
+        }
+        return { publish };
+      });
+      f.service.attachComputerAuthority(withdraw);
+      const ordinary = f.service.renameComputer(
+        "Changed before authority loss",
+      );
+      await entered;
+      const fenced = f.adapter.fence();
+      const held = expect(fenced).rejects.toThrow(
+        "original ordinary authority ACK lost",
+      );
+      reject(new Error("original ordinary authority ACK lost"));
+      expect((await ordinary).ok).toBe(false);
+      await held;
+      await expect(f.adapter.fence()).rejects.toThrow(
+        "original ordinary authority ACK lost",
+      );
+      expect(withdraw).toHaveBeenCalledTimes(1);
+      expect(publish).toHaveBeenCalledTimes(stage === "publish" ? 1 : 0);
+      expect(f.service.snapshot().status).toBe("error");
+    },
+  );
 
   it("preserves the original pending generation when clearing after a current generation change", async () => {
     const f = await fixture();

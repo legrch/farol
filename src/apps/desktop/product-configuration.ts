@@ -839,6 +839,7 @@ export class ProductConfigurationService {
   private settingsDeliveryAttached = false;
   private settingsDeliveryFenced = false;
   private settingsDeliveryFenceOutcome: Promise<void> | undefined;
+  private settingsDeliveryWithdrawalHeld = false;
   // One owner change at a time: each runs, with the checks its caller makes
   // against the current settings, through to its commit before the next one
   // clones them. Re-entrant, so a method that checks and then mutates holds
@@ -922,28 +923,43 @@ export class ProductConfigurationService {
         );
       },
       fence: () => {
-        // Stop a queued/in-flight write at its final publication boundary too.
-        this.store.fenceConditionalWrites();
+        // Loss is synchronous, including while a write/readback/publication is
+        // awaiting. The queued withdrawal must not be the first loss marker.
+        this.latchSettingsDeliveryLoss();
         return this.exclusive(() => this.fenceSettingsDeliveryStore());
       },
     };
   }
 
-  private fenceSettingsDeliveryStore(): Promise<void> {
-    if (this.settingsDeliveryFenceOutcome)
-      return this.settingsDeliveryFenceOutcome;
+  private latchSettingsDeliveryLoss(): void {
     this.settingsDeliveryFenced = true;
     this.store.fenceConditionalWrites();
     this.current = null;
     this.currentError = settingsError(
       new Error("SETTINGS_WRITE_OUTCOME_UNKNOWN"),
     );
+  }
+
+  private fenceSettingsDeliveryStore(): Promise<void> {
+    this.latchSettingsDeliveryLoss();
+    if (this.settingsDeliveryFenceOutcome)
+      return this.settingsDeliveryFenceOutcome;
     // No publication callback: authority remains withdrawn until an explicitly
     // supported recovery, never a fresh read of valid-looking disk bytes.
     this.settingsDeliveryFenceOutcome = (async () => {
+      // A successful withdrawal with an unused publication capability already
+      // proves inactivity. Repeating it would call the locked host owner again.
+      if (this.settingsDeliveryWithdrawalHeld) return;
       await this.withdrawComputerAuthority?.();
+      this.settingsDeliveryWithdrawalHeld = true;
     })();
     return this.settingsDeliveryFenceOutcome;
+  }
+
+  private retainSettingsDeliveryAuthorityFailure(error: unknown): void {
+    this.latchSettingsDeliveryLoss();
+    this.settingsDeliveryFenceOutcome = Promise.reject(error);
+    void this.settingsDeliveryFenceOutcome.catch(() => undefined);
   }
 
   private async replaceSettingsDeliveryStore(
@@ -977,10 +993,22 @@ export class ProductConfigurationService {
           JSON.stringify(ownerSettingsComputerApproval(candidate, 0)) ||
         JSON.stringify(taskSettingsProjection(before)) !==
           JSON.stringify(taskSettingsProjection(candidate));
-      const publication =
-        changed && this.withdrawComputerAuthority
-          ? await this.withdrawComputerAuthority()
-          : undefined;
+      let publication: ComputerSettingsPublication | undefined;
+      if (changed && this.withdrawComputerAuthority) {
+        try {
+          publication = await this.withdrawComputerAuthority();
+          this.settingsDeliveryWithdrawalHeld = true;
+        } catch (error) {
+          // The original authority call may have completed. Retain that exact
+          // uncertainty instead of retrying it through the generic fence hook.
+          this.retainSettingsDeliveryAuthorityFailure(error);
+          return { status: "unknown" };
+        }
+      }
+      if (this.settingsDeliveryFenced) {
+        await this.fenceSettingsDeliveryStore();
+        return { status: "unknown" };
+      }
       const verify = lease?.verify?.bind(lease);
       storeCalled = true;
       const written = await this.store.saveConditional(
@@ -995,12 +1023,23 @@ export class ProductConfigurationService {
           : {},
       );
       if (written.status === "not_written") return written;
-      if (written.status === "unknown") {
+      if (written.status === "unknown" || this.settingsDeliveryFenced) {
         await this.fenceSettingsDeliveryStore();
-        return written;
+        return { status: "unknown" };
       }
-      if (publication)
-        await publication.publish(structuredClone(written.settings));
+      if (publication) {
+        this.settingsDeliveryWithdrawalHeld = false;
+        try {
+          await publication.publish(structuredClone(written.settings));
+        } catch (error) {
+          this.retainSettingsDeliveryAuthorityFailure(error);
+          return { status: "unknown" };
+        }
+      }
+      if (this.settingsDeliveryFenced) {
+        await this.fenceSettingsDeliveryStore();
+        return { status: "unknown" };
+      }
       this.current = written.settings;
       this.currentError = null;
       if (beginning && lease) {
@@ -1017,6 +1056,7 @@ export class ProductConfigurationService {
         await this.releaseWorkspaceEditLease(
           before.computer.pendingEdit.operationId,
         );
+      if (this.settingsDeliveryFenced) return { status: "unknown" };
       return {
         status: "committed",
         snapshot: settingsStoreSnapshot(written.settings, scope),
@@ -1039,6 +1079,7 @@ export class ProductConfigurationService {
         loaded = await this.store.load();
       }
       if (loaded === null) throw new Error("SETTINGS_READ_BACK_FAILED");
+      if (this.settingsDeliveryFenced) return;
       this.current = this.fenceTaskSource(loaded);
       this.currentError = null;
     } catch (error) {
@@ -2974,10 +3015,17 @@ export class ProductConfigurationService {
           JSON.stringify(ownerSettingsComputerApproval(candidate, 0)) ||
         JSON.stringify(taskSettingsProjection(before)) !==
           JSON.stringify(taskSettingsProjection(candidate));
-      const publication =
-        changed && this.withdrawComputerAuthority
-          ? await this.withdrawComputerAuthority()
-          : undefined;
+      let publication: ComputerSettingsPublication | undefined;
+      if (changed && this.withdrawComputerAuthority) {
+        try {
+          publication = await this.withdrawComputerAuthority();
+          this.settingsDeliveryWithdrawalHeld = true;
+        } catch (error) {
+          if (this.settingsDeliveryAttached)
+            this.retainSettingsDeliveryAuthorityFailure(error);
+          throw error;
+        }
+      }
       await this.store.save(candidate, fence);
       const readBack = await this.store.load();
       if (
@@ -2986,16 +3034,36 @@ export class ProductConfigurationService {
       ) {
         throw new Error("SETTINGS_READ_BACK_FAILED");
       }
-      if (publication) await publication.publish(structuredClone(readBack));
+      if (this.settingsDeliveryFenced)
+        throw new Error("SETTINGS_WRITE_OUTCOME_UNKNOWN");
+      if (publication) {
+        this.settingsDeliveryWithdrawalHeld = false;
+        try {
+          await publication.publish(structuredClone(readBack));
+        } catch (error) {
+          if (this.settingsDeliveryAttached)
+            this.retainSettingsDeliveryAuthorityFailure(error);
+          throw error;
+        }
+      }
+      if (this.settingsDeliveryFenced)
+        throw new Error("SETTINGS_WRITE_OUTCOME_UNKNOWN");
       this.current = readBack;
       this.currentError = null;
       return { ok: true, snapshot: this.snapshot() };
     } catch (error) {
+      if (this.settingsDeliveryFenced) {
+        this.latchSettingsDeliveryLoss();
+        return this.failure("SETTINGS_WRITE_FAILED");
+      }
       // The save may have landed before its read-back failed; what the disk
       // holds is the truth, and the snapshot taken before is only a fallback.
-      this.current = this.fenceTaskSource(
-        (await this.store.load().catch(() => null)) ?? before,
-      );
+      const fallback = (await this.store.load().catch(() => null)) ?? before;
+      if (this.settingsDeliveryFenced) {
+        this.latchSettingsDeliveryLoss();
+        return this.failure("SETTINGS_WRITE_FAILED");
+      }
+      this.current = this.fenceTaskSource(fallback);
       // A fence refusal is not a write failure: nothing was written at all,
       // and the caller gets the reason rather than a generic disk error.
       if (error instanceof WorkspaceEditLeaseLost) {
