@@ -192,6 +192,22 @@ export class GoComputerAuthority {
     ) as Promise<ComputerSettingsSnapshotResponse>;
   }
 
+  // Exact previously acknowledged publication for the trusted host adapter.
+  // This performs no renewal, admission or transport and grants nothing locally.
+  settingsMutationPublication(
+    computerGeneration: number,
+  ): ComputerAuthorityPublication {
+    const publication = this.ownerPublication;
+    if (
+      this.blocked ||
+      this.pending ||
+      !publication ||
+      publication.generation !== String(computerGeneration)
+    )
+      throw new BridgeError("unavailable", "computer_publication_unavailable");
+    return { ...publication };
+  }
+
   private async settingsWorkspace(
     kind: "list" | "snapshot",
     computerGeneration: number,

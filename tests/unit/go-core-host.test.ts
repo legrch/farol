@@ -203,6 +203,27 @@ function transport(fault?: Fault) {
             sha256: "f".repeat(64),
           };
           break;
+        case "computer.settings.edit":
+        case "computer.settings.mutation.read":
+          data = {
+            operationId: options.operationId ?? input.operationId!,
+            workspaceId: input.workspaceId!,
+            computerGeneration:
+              method === "computer.settings.edit"
+                ? (input.publication as Record<string, Json>).generation!
+                : input.computerGeneration!,
+            phase: "completed",
+            publication: "durable",
+            receipt: {
+              operation: "edit",
+              relativePath: input.relativePath!,
+              bytes: "8",
+              replacements: 1,
+              beforeSHA256: "b".repeat(64),
+              afterSHA256: "c".repeat(64),
+            },
+          };
+          break;
         case "chat.readintent.account.approve":
           data = {
             admission: input.admission!,
@@ -874,4 +895,79 @@ it("preserves unknown post-connect startup cleanup on later Quit", async () => {
   expect(f.events).not.toContain("core.retirement.prepare");
   expect(AttestedCore.prototype.completeRetirement).not.toHaveBeenCalled();
   expect(f.close).toHaveBeenCalledTimes(1);
+});
+
+describe("normal host Go Settings mutation route", () => {
+  it("uses the captured owner publication, retains exact profile and observes after withdrawal", async () => {
+    const f = transport();
+    const host = new DesktopGoCore(f.client, () => settings, undefined, true);
+    await host.publishCurrent();
+    expect(host.settingsMutationProfile()).toBe(context.profileId);
+    const workspaceId = settings.computer.workspaces[0]!.workspaceId;
+    const result = await host.editSettingsWorkspace(
+      "edit",
+      7,
+      workspaceId,
+      "note.md",
+      "b".repeat(64),
+      "old",
+      "new",
+    );
+    expect(result.phase).toBe("completed");
+    await expect(
+      host.editSettingsWorkspace(
+        "edit",
+        7,
+        workspaceId,
+        "note.md",
+        "b".repeat(64),
+        "old",
+        "new",
+      ),
+    ).rejects.toMatchObject({ code: "settings_mutation_attempt_consumed" });
+    await host.withdraw();
+    const read = {
+      operationId: "edit",
+      workspaceId,
+      relativePath: "note.md",
+      computerGeneration: "7",
+    };
+    expect(await host.observeSettingsMutation(context.profileId, read)).toEqual(
+      result,
+    );
+    const calls = f.request.mock.calls.length;
+    expect(() => host.observeSettingsMutation("another-profile", read)).toThrow(
+      "host_mutation_profile_crossed",
+    );
+    expect(f.request).toHaveBeenCalledTimes(calls);
+    expect(f.events).toEqual([
+      "computer.authority.deactivate",
+      "computer.authority.publish",
+      "computer.settings.edit",
+      "computer.authority.deactivate",
+      "computer.settings.mutation.read",
+    ]);
+    expect(ports.legacyRead).not.toHaveBeenCalled();
+    await host.close();
+  });
+  it("does not enable writes for a legacy profile or infer readiness from settings", async () => {
+    const f = transport();
+    const host = new DesktopGoCore(f.client, () => settings);
+    expect(() => host.settingsMutationProfile()).toThrow(
+      "host_mutation_storage_unavailable",
+    );
+    expect(() =>
+      host.editSettingsWorkspace(
+        "edit",
+        7,
+        "work",
+        "note.md",
+        "b".repeat(64),
+        "old",
+        "new",
+      ),
+    ).toThrow("host_mutation_storage_unavailable");
+    expect(f.request).not.toHaveBeenCalled();
+    await host.close();
+  });
 });

@@ -564,3 +564,26 @@ describe("Go owner Settings snapshot transport", () => {
     ).toHaveLength(1);
   });
 });
+
+it("selects an immutable acknowledged mutation publication without transport or renewal", async () => {
+  const f = await fixture();
+  expect(() => f.bridge.settingsMutationPublication(1)).toThrow(
+    "computer_publication_unavailable",
+  );
+  const added = await f.add();
+  if (!added.ok || added.snapshot.status !== "ready") throw Error("fixture");
+  const generation = added.snapshot.settings.computer.generation;
+  const calls = f.request.mock.calls.length;
+  const publication = f.bridge.settingsMutationPublication(generation);
+  expect(publication.generation).toBe(String(generation));
+  Object.assign(publication, { fence: "999" });
+  expect(f.bridge.settingsMutationPublication(generation).fence).toBe("1");
+  expect(() => f.bridge.settingsMutationPublication(generation + 1)).toThrow(
+    "computer_publication_unavailable",
+  );
+  expect(f.request).toHaveBeenCalledTimes(calls);
+  await f.bridge.withdraw();
+  expect(() => f.bridge.settingsMutationPublication(generation)).toThrow(
+    "computer_publication_unavailable",
+  );
+});

@@ -468,13 +468,23 @@ export const SetupStepIdSchema = z.enum([
 // is recorded before the edit executes and cleared only after the renderer
 // acknowledges the delivered outcome, so a lost response or a restart leaves
 // the exact operation ID to observe instead of a reason to edit again.
-export const PendingWorkspaceEditDeliverySchema = z.strictObject({
+const PendingWorkspaceEditIdentity = {
   operationId: IdentifierSchema,
   workspaceId: IdentifierSchema,
   relativePath: ProductRelativePathSchema,
   computerGeneration: z.number().int().positive(),
   submittedAt: z.string().datetime(),
-});
+};
+export const PendingWorkspaceEditDeliverySchema = z.union([
+  // Absence is the exact historical TS journal format, never a Go fallback.
+  z.strictObject(PendingWorkspaceEditIdentity),
+  z.strictObject({
+    ...PendingWorkspaceEditIdentity,
+    backend: z.literal("go-owner-v2"),
+    profileId: IdentifierSchema,
+    beforeSha256: z.string().regex(/^[a-f0-9]{64}$/u),
+  }),
+]);
 
 export const ProductSettingsSchema = z.strictObject({
   schema: z.literal(1),

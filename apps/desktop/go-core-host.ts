@@ -12,6 +12,7 @@ import { ChatBridge } from "./bridge/chat.ts";
 import { ChatComputerBridge } from "./bridge/chat-computer.ts";
 import { ChatCallerBridge } from "./bridge/chat-caller.ts";
 import { ReadIntentBridge } from "./bridge/read-intent.ts";
+import { SettingsMutationBridge } from "./bridge/settings-mutation.ts";
 import {
   validate,
   type Context,
@@ -21,6 +22,7 @@ import {
   type ChatReadIntentPromote,
   type ChatReadIntentAccountApprove,
   type ChatReadIntentAccountRevoke,
+  type ComputerSettingsMutationRead,
 } from "./bridge/wire.ts";
 import { qualifyProfileLaunch } from "./bridge/profile.ts";
 import { openNativeProfileStorage } from "./bridge/profile-storage.ts";
@@ -81,6 +83,7 @@ export class DesktopGoCore {
   private readonly authority: GoComputerAuthority;
   private readonly computer: ComputerBridge;
   private readonly readIntent: ReadIntentBridge;
+  private readonly settingsMutation: SettingsMutationBridge;
   private readonly sessionId = randomUUID();
   private browser: DesktopBrowserConnection | undefined;
   private pump: BrowserPump | undefined;
@@ -95,10 +98,12 @@ export class DesktopGoCore {
     private readonly completeRetirement?: (
       ack: CoreRetirementAcknowledged,
     ) => Promise<void>,
+    private readonly hasMutationStorage = false,
   ) {
     this.authority = new GoComputerAuthority(client, client.verifiedContext);
     this.computer = new ComputerBridge(client);
     this.readIntent = new ReadIntentBridge(client);
+    this.settingsMutation = new SettingsMutationBridge(client);
   }
   connectBrowser(connection: DesktopBrowserConnection): void {
     if (this.browser || this.closeResult)
@@ -197,6 +202,39 @@ export class DesktopGoCore {
       workspaceId,
       relativePath,
     );
+  }
+
+  settingsMutationProfile(): string {
+    if (this.closeResult || !this.hasMutationStorage)
+      throw new BridgeError("unavailable", "host_mutation_storage_unavailable");
+    return this.client.verifiedContext.profileId;
+  }
+  editSettingsWorkspace(
+    operationId: string,
+    computerGeneration: number,
+    workspaceId: string,
+    relativePath: string,
+    expectedSHA256: string,
+    oldText: string,
+    newText: string,
+  ) {
+    this.settingsMutationProfile();
+    return this.settingsMutation.edit(operationId, {
+      publication:
+        this.authority.settingsMutationPublication(computerGeneration),
+      workspaceId,
+      relativePath,
+      expectedSHA256,
+      edits: [{ oldText, newText }],
+    });
+  }
+  observeSettingsMutation(
+    profileId: string,
+    input: ComputerSettingsMutationRead,
+  ) {
+    if (this.settingsMutationProfile() !== profileId)
+      throw new BridgeError("refused", "host_mutation_profile_crossed");
+    return this.settingsMutation.observe(input);
   }
   promoteReadIntent(input: ChatReadIntentPromote) {
     if (this.closeResult)
@@ -382,8 +420,11 @@ export async function startDesktopGoCore(
     }
     throw error;
   }
-  const host = new DesktopGoCore(client, selection.settings, (ack) =>
-    attested.completeRetirement(ack),
+  const host = new DesktopGoCore(
+    client,
+    selection.settings,
+    (ack) => attested.completeRetirement(ack),
+    storage.settingsMutations,
   );
   try {
     await host.publishCurrent();
