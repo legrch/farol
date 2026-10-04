@@ -248,7 +248,8 @@ const selection = {
   accountId: "controlled-account",
   modelId: "controlled-model",
   effort: "low",
-  mode: "standard",
+  // This controlled page has no independent mode control. Do not claim one.
+  mode: "",
   connectorId: "",
   connectorGrantId: "",
   toolsEnabled: false,
@@ -463,7 +464,7 @@ async function dispatch(command: Command): Promise<unknown> {
           requestedAlias: "chatgpt",
           requestedExecutor: "browser",
           requestedEffort: "low",
-          requestedMode: "standard",
+          requestedMode: "",
           configSHA256,
           translationId,
           resolved: selection,
