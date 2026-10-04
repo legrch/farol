@@ -412,6 +412,9 @@ func (p *Preparer) MatchesPolicy(snapshot port.AccessSnapshot) bool {
 	return ok && selected.matchesPolicy(p.template, snapshot)
 }
 func (p *Prepared) MatchesPolicy(snapshot port.AccessSnapshot) bool {
+	if parent, ok := p.boundary.(*parentBoundary); ok {
+		return parent.policy.matchesPolicy(p.command, snapshot)
+	}
 	native, ok := p.boundary.(nativeBoundary)
 	if !ok {
 		return false

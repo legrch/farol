@@ -43,6 +43,9 @@ func (c *Child) wait() {
 	c.finished = true
 	c.group = processsvc.CleanupUnverified
 	c.descendants = processsvc.CleanupUnverified
+	if err == nil && observed.Waited && observed.Drained && observed.cohort && !c.signalAttempted {
+		c.group, c.descendants = processsvc.CleanupConfirmed, processsvc.CleanupConfirmed
+	}
 	deadline, watch := c.deadline, c.watch
 	close(c.done)
 	c.mutex.Unlock()

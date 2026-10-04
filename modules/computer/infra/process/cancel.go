@@ -16,7 +16,8 @@ func (c *Child) stop(timeout bool) {
 	c.timedOut = timeout
 	root := c.process
 	c.mutex.Unlock()
-	// Only the retained os.Process handle. No integer identity, group scan,
+	// Only the retained owning resource: direct process handle or scoped anchor
+	// control link. No integer identity, group scan,
 	// escalation, alternate signal or executor after a refusal/unknown result.
 	err := root.Kill()
 	c.mutex.Lock()

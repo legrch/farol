@@ -1,6 +1,8 @@
 // Package process owns a real Go child and bounded retained output. It never
-// looks up or signals a numeric PID/PGID, restores a child from disk, or reports
-// root Wait as group/cohort completion. Native qualification is a later gate.
+// looks up an old numeric PID/PGID, restores a child from disk, or reports root
+// Wait as group/cohort completion. The separate fresh anchor role may signal its
+// OWN current live group once; that request is not settlement evidence. Native
+// qualification and product activation remain separate gates.
 package process
 
 import (
@@ -51,6 +53,7 @@ type exit struct {
 	Code            *int
 	Signal          int
 	Waited, Drained bool
+	cohort          bool
 }
 type owned interface {
 	Wait() (exit, error)
@@ -68,6 +71,8 @@ type Prepared struct {
 	clock     port.Clock
 	schedule  schedule
 	attempted bool
+	execution context.Context
+	retained  *Child
 }
 
 var _ processsvc.Prepared = (*Prepared)(nil)
@@ -171,14 +176,30 @@ func (p *Prepared) Spawn(ctx context.Context, request processsvc.SpawnRequest) (
 		return nil, &processsvc.NativeFailure{}
 	}
 	child := &Child{handle: "process-" + hex.EncodeToString(raw[:]), root: processsvc.RootRunning, group: processsvc.CleanupPending, descendants: processsvc.CleanupPending, done: make(chan struct{})}
-	root, err := p.boundary.Start(ctx, copyCommand(p.command), request.Check, output{child, false}, output{child, true})
-	if err != nil || root == nil {
+	execution := ctx
+	if p.execution != nil {
+		execution = p.execution
+	}
+	var root owned
+	var err error
+	if leased, ok := p.boundary.(leaseBoundary); ok {
+		root, err = leased.StartLease(ctx, copyCommand(p.command), request, output{child, false}, output{child, true})
+	} else {
+		root, err = p.boundary.Start(ctx, copyCommand(p.command), request.Check, output{child, false}, output{child, true})
+	}
+	if root != nil {
+		p.mutex.Lock()
+		p.retained = child
+		p.mutex.Unlock()
+	}
+	if root == nil {
 		var native *processsvc.NativeFailure
 		if errors.As(err, &native) {
 			return nil, native
 		}
 		return nil, &processsvc.NativeFailure{Unknown: true}
 	}
+	startErr := err
 	child.mutex.Lock()
 	child.process = root
 	limit := child.outputLimit
@@ -192,17 +213,24 @@ func (p *Prepared) Spawn(ctx context.Context, request processsvc.SpawnRequest) (
 	if finished && deadline != nil {
 		deadline.Stop()
 	}
-	// Cancelling the caller is a stop REQUEST only, never root/group completion.
+	// Cancellation of the selected execution owner is a stop REQUEST only.
+	// The legacy direct boundary still uses its caller as that owner.
 	go func() {
 		select {
-		case <-ctx.Done():
+		case <-execution.Done():
 			child.stop(false)
 		case <-child.done:
 		}
 	}()
-	child.watchCurrent(ctx, request.Check, p.schedule)
+	child.watchCurrent(execution, request.Check, p.schedule)
 	if limit {
 		child.stop(false)
+	}
+	if startErr != nil {
+		// The exact possible-start resource remains retained and owns wait/stop.
+		// It cannot become a successful Start or another spawn on observation.
+		child.stop(false)
+		return nil, &processsvc.NativeFailure{Unknown: true}
 	}
 	return child, nil
 }
