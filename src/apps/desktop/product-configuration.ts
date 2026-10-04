@@ -27,6 +27,16 @@ import {
 import { credentialStorePolicy } from "../../modules/computer/infra/native/home-secret-stores";
 import { ownerSettingsComputerApproval } from "../../modules/computer/infra/repo/owner-settings-computer-approval";
 import { taskSettingsProjection } from "../../../apps/desktop/task-current-settings";
+import {
+  SettingsStoreUnsupported,
+  settingsStoreSnapshot,
+  settingsStoreReplacement,
+  type SettingsStoreScope,
+} from "../../../apps/desktop/settings-store-document";
+import type {
+  SettingsStoreReadResult,
+  SettingsStoreReplaceResult,
+} from "../../../apps/desktop/bridge/wire";
 
 import { resolveOwnerTaskModel } from "./owner-config";
 
@@ -69,6 +79,16 @@ export type ConditionalSettingsWrite =
   | Readonly<{ status: "committed"; settings: ProductSettings }>
   | Readonly<{ status: "not_written" }>
   | Readonly<{ status: "unknown" }>;
+
+// Trusted host storage port; Go owns all delivery transitions. The retained
+// service queue serializes these calls with ordinary Settings commands.
+export type SettingsDeliveryStore = Readonly<{
+  read(): Promise<SettingsStoreReadResult>;
+  replace(change: unknown): Promise<SettingsStoreReplaceResult>;
+  // A lost caller/transport acknowledgement must fence this same writer even
+  // if a lower-level publication had already returned known bytes.
+  fence(): Promise<void>;
+}>;
 
 // The same cross-process exclusion `LiveTaskRegistry.admitDurable` and
 // `withPromotionLease` use (see `live-task-registry.ts`), structurally
@@ -599,6 +619,10 @@ export class ProductSettingsStore {
     }
   }
 
+  fenceConditionalWrites(): void {
+    this.conditionalPublicationUnknown = true;
+  }
+
   async load(): Promise<ProductSettings | null> {
     await this.ensureRoot();
     const target = path.join(this.options.root, FILE_NAME);
@@ -729,6 +753,8 @@ export class ProductSettingsStore {
       // leaves the target exactly as it was, and the temporary file is
       // removed by the `finally` below.
       await fence.beforeWrite?.();
+      if (this.conditionalPublicationUnknown)
+        throw new Error("SETTINGS_WRITE_OUTCOME_UNKNOWN");
       publicationAttempted?.();
       await fs.rename(temporary, target);
       await fs.chmod(target, 0o600);
@@ -810,6 +836,9 @@ export class ProductConfigurationService {
   private current: ProductSettings | null = null;
   private currentError: ProductConfigurationSnapshot | null = null;
   private taskSourceWithdrawalGeneration: number | null = null;
+  private settingsDeliveryAttached = false;
+  private settingsDeliveryFenced = false;
+  private settingsDeliveryFenceOutcome: Promise<void> | undefined;
   // One owner change at a time: each runs, with the checks its caller makes
   // against the current settings, through to its commit before the next one
   // clones them. Re-entrant, so a method that checks and then mutates holds
@@ -854,7 +883,155 @@ export class ProductConfigurationService {
     this.withdrawComputerAuthority = withdraw;
   }
 
+  // Exactly one trusted host binding, using the existing document and writer.
+  // This is not a renderer API and does not activate the Go delivery service.
+  attachSettingsDeliveryStore(
+    scope: SettingsStoreScope,
+  ): SettingsDeliveryStore {
+    if (this.settingsDeliveryAttached)
+      throw new Error("SETTINGS_DELIVERY_STORE_ALREADY_BOUND");
+    this.settingsDeliveryAttached = true;
+    const selected = structuredClone(scope);
+    return {
+      read: () =>
+        this.exclusive(async () => {
+          if (this.settingsDeliveryFenced || !this.current)
+            return { status: "unavailable" };
+          try {
+            const readback = await this.store.load();
+            if (JSON.stringify(readback) !== JSON.stringify(this.current))
+              return { status: "unavailable" };
+            return {
+              status: "ok",
+              snapshot: settingsStoreSnapshot(this.current, selected),
+            };
+          } catch (error) {
+            return {
+              status:
+                error instanceof SettingsStoreUnsupported
+                  ? "unsupported"
+                  : "unavailable",
+            };
+          }
+        }),
+      replace: (change) => {
+        // Capture caller bytes before joining the queue.
+        const captured: unknown = structuredClone(change);
+        return this.exclusive(() =>
+          this.replaceSettingsDeliveryStore(selected, captured),
+        );
+      },
+      fence: () => {
+        // Stop a queued/in-flight write at its final publication boundary too.
+        this.store.fenceConditionalWrites();
+        return this.exclusive(() => this.fenceSettingsDeliveryStore());
+      },
+    };
+  }
+
+  private fenceSettingsDeliveryStore(): Promise<void> {
+    if (this.settingsDeliveryFenceOutcome)
+      return this.settingsDeliveryFenceOutcome;
+    this.settingsDeliveryFenced = true;
+    this.store.fenceConditionalWrites();
+    this.current = null;
+    this.currentError = settingsError(
+      new Error("SETTINGS_WRITE_OUTCOME_UNKNOWN"),
+    );
+    // No publication callback: authority remains withdrawn until an explicitly
+    // supported recovery, never a fresh read of valid-looking disk bytes.
+    this.settingsDeliveryFenceOutcome = (async () => {
+      await this.withdrawComputerAuthority?.();
+    })();
+    return this.settingsDeliveryFenceOutcome;
+  }
+
+  private async replaceSettingsDeliveryStore(
+    scope: SettingsStoreScope,
+    change: unknown,
+  ): Promise<SettingsStoreReplaceResult> {
+    if (this.settingsDeliveryFenced) return { status: "unknown" };
+    if (!this.current) return { status: "not_written" };
+    const before = structuredClone(this.current);
+    let candidate: ProductSettings | undefined;
+    try {
+      candidate = settingsStoreReplacement(before, scope, change);
+    } catch {
+      return { status: "not_written" };
+    }
+    if (!candidate) return { status: "not_written" };
+    const beginning =
+      before.computer.pendingEdit === null &&
+      candidate.computer.pendingEdit !== null;
+    let lease: WorkspaceEditLeaseHold | null = null;
+    let storeCalled = false;
+    let keepLease = false;
+    try {
+      if (beginning && this.promotionLease) {
+        lease = await this.promotionLease.acquireForAdmission();
+        if (!lease || (lease.verify && !(await lease.verify())))
+          return { status: "not_written" };
+      }
+      const changed =
+        JSON.stringify(ownerSettingsComputerApproval(before, 0)) !==
+          JSON.stringify(ownerSettingsComputerApproval(candidate, 0)) ||
+        JSON.stringify(taskSettingsProjection(before)) !==
+          JSON.stringify(taskSettingsProjection(candidate));
+      const publication =
+        changed && this.withdrawComputerAuthority
+          ? await this.withdrawComputerAuthority()
+          : undefined;
+      const verify = lease?.verify?.bind(lease);
+      storeCalled = true;
+      const written = await this.store.saveConditional(
+        before,
+        candidate,
+        verify
+          ? {
+              beforeWrite: async () => {
+                if (!(await verify())) throw new WorkspaceEditLeaseLost();
+              },
+            }
+          : {},
+      );
+      if (written.status === "not_written") return written;
+      if (written.status === "unknown") {
+        await this.fenceSettingsDeliveryStore();
+        return written;
+      }
+      if (publication)
+        await publication.publish(structuredClone(written.settings));
+      this.current = written.settings;
+      this.currentError = null;
+      if (beginning && lease) {
+        this.pendingEditLeases.set(
+          candidate.computer.pendingEdit!.operationId,
+          lease,
+        );
+        keepLease = true;
+      }
+      if (
+        candidate.computer.pendingEdit === null &&
+        before.computer.pendingEdit !== null
+      )
+        await this.releaseWorkspaceEditLease(
+          before.computer.pendingEdit.operationId,
+        );
+      return {
+        status: "committed",
+        snapshot: settingsStoreSnapshot(written.settings, scope),
+      };
+    } catch {
+      if (!storeCalled) return { status: "not_written" };
+      await this.fenceSettingsDeliveryStore().catch(() => undefined);
+      return { status: "unknown" };
+    } finally {
+      if (!keepLease) await lease?.release();
+    }
+  }
+
   async initialize(): Promise<void> {
+    if (this.settingsDeliveryFenced) return;
     try {
       let loaded = await this.store.load();
       if (loaded === null) {

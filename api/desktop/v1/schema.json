@@ -58,7 +58,9 @@
     "chat.readintent.account.revoke": "effect",
     "computer.settings.snapshot": "read",
     "computer.settings.edit": "effect",
-    "computer.settings.mutation.read": "read"
+    "computer.settings.mutation.read": "read",
+    "computer.settings.store.next": "read",
+    "computer.settings.store.reply": "effect"
   },
   "definitions": {
     "Context": {
@@ -3386,6 +3388,181 @@
         },
         "failure": {
           "type": "ComputerMutationFailure",
+          "optional": true
+        }
+      }
+    },
+    "SettingsStoreIdentity": {
+      "type": "object",
+      "fields": {
+        "profileId": {
+          "type": "id"
+        },
+        "ownerId": {
+          "type": "id"
+        },
+        "computerId": {
+          "type": "id"
+        },
+        "generation": {
+          "type": "decimal"
+        }
+      }
+    },
+    "SettingsStorePending": {
+      "type": "object",
+      "fields": {
+        "backend": {
+          "type": "string",
+          "values": ["go-owner-v2"]
+        },
+        "operationId": {
+          "type": "id"
+        },
+        "profileId": {
+          "type": "id"
+        },
+        "workspaceId": {
+          "type": "id"
+        },
+        "relativePath": {
+          "type": "string",
+          "minBytes": 1,
+          "maxBytes": 4096
+        },
+        "computerGeneration": {
+          "type": "decimal"
+        },
+        "beforeSHA256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "submittedAt": {
+          "type": "utc"
+        }
+      }
+    },
+    "SettingsStoreSnapshot": {
+      "type": "object",
+      "fields": {
+        "revision": {
+          "type": "decimal"
+        },
+        "current": {
+          "type": "SettingsStoreIdentity"
+        },
+        "pending": {
+          "type": "SettingsStorePending",
+          "optional": true
+        },
+        "verificationInvalidated": {
+          "type": "boolean"
+        }
+      }
+    },
+    "SettingsStoreChange": {
+      "type": "object",
+      "fields": {
+        "expected": {
+          "type": "SettingsStoreSnapshot"
+        },
+        "next": {
+          "type": "SettingsStorePending",
+          "optional": true
+        },
+        "invalidateVerification": {
+          "type": "boolean"
+        }
+      }
+    },
+    "SettingsStoreRead": {
+      "type": "object",
+      "fields": {
+        "deadlineMillis": {
+          "type": "decimal"
+        }
+      }
+    },
+    "SettingsStoreReplace": {
+      "type": "object",
+      "fields": {
+        "deadlineMillis": {
+          "type": "decimal"
+        },
+        "change": {
+          "type": "SettingsStoreChange"
+        }
+      }
+    },
+    "SettingsStoreReadResult": {
+      "type": "object",
+      "fields": {
+        "status": {
+          "type": "string",
+          "values": ["ok", "unavailable", "unsupported"]
+        },
+        "snapshot": {
+          "type": "SettingsStoreSnapshot",
+          "optional": true
+        }
+      }
+    },
+    "SettingsStoreReplaceResult": {
+      "type": "object",
+      "fields": {
+        "status": {
+          "type": "string",
+          "values": ["committed", "not_written", "unknown"]
+        },
+        "snapshot": {
+          "type": "SettingsStoreSnapshot",
+          "optional": true
+        }
+      }
+    },
+    "SettingsStoreCommand": {
+      "type": "object",
+      "fields": {
+        "commandId": {
+          "type": "id"
+        },
+        "kind": {
+          "type": "string",
+          "values": ["read", "replace"]
+        },
+        "body": {
+          "type": "json"
+        }
+      }
+    },
+    "SettingsStoreReply": {
+      "type": "object",
+      "fields": {
+        "commandId": {
+          "type": "id"
+        },
+        "kind": {
+          "type": "string",
+          "values": ["read", "replace"]
+        },
+        "body": {
+          "type": "json"
+        }
+      }
+    },
+    "SettingsStoreNext": {
+      "type": "object",
+      "fields": {
+        "deadlineMillis": {
+          "type": "decimal"
+        }
+      }
+    },
+    "SettingsStoreNextResult": {
+      "type": "object",
+      "fields": {
+        "command": {
+          "type": "SettingsStoreCommand",
           "optional": true
         }
       }
