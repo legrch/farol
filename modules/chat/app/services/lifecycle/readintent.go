@@ -129,12 +129,29 @@ func (s *Service) WithdrawReadIntent(ctx context.Context, h *Handle) error {
 	}
 	h.closed, h.readWithdrawal = true, true
 	m := s.begin(candidate, h, port.JournalEntry{Binding: h.fixed, Kind: "cancel", Before: before, After: after, Closed: true})
+	m.readWithdrawal = true
 	s.deps.Gate.Unlock()
 	if err := s.commit(ctx, m, true); err != nil {
 		return err
 	}
-	_, err = s.Apply(ctx, h, Change{Action: Acknowledge, ResultID: h.fixed.OperationID})
-	return err
+	// The known cancel commit stages this same writer's ACK before releasing
+	// Gate. Keep journal IO outside Gate without allowing another writer between.
+	return s.commit(ctx, m, true)
+}
+
+// stageReadWithdrawalACK runs under the known cancel publication's Gate. Reuse
+// the exact pending mutation/fence, as with browser effect settlement; unknown
+// cancellation never reaches this continuation and unknown ACK never retries.
+func (s *Service) stageReadWithdrawalACK(m *mutation) error {
+	candidate := s.queue.Clone()
+	after, err := candidate.Acknowledge(identity(m.handle.fixed), m.entry.After.Result.ID)
+	if err != nil {
+		s.unknown = true
+		return Unsettled
+	}
+	m.candidate = candidate
+	m.entry = port.JournalEntry{Binding: m.handle.fixed, Kind: "acknowledge", Before: m.entry.After, After: after, Closed: true}
+	return nil
 }
 
 func bareReadAdmission(view turn.Snapshot) bool {

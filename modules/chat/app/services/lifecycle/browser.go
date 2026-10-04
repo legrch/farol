@@ -97,13 +97,18 @@ func (s *Service) Send(ctx context.Context, h *Handle, prompt string, deadlineMi
 	if h == nil || h.owner != s {
 		return nil, Invalid
 	}
-	if h.target.Mode != "" {
-		digest, err := s.intentDigest(h.fixed, h.target, prompt)
-		if err != nil || digest != h.digest {
-			return nil, Mismatch
-		}
-	}
+	var target port.ConversationTarget
+	var intentDigest string
 	m, err := s.stage(ctx, h, false, func(q *turn.Queue, before turn.Snapshot) (port.JournalEntry, error) {
+		// Promotion publishes these together under Gate. Validate and retain one
+		// coherent snapshot before dispatch; a pre-stage read can miss promotion.
+		target, intentDigest = h.target, h.digest
+		if target.Mode != "" {
+			digest, err := s.intentDigest(h.fixed, target, prompt)
+			if err != nil || digest != intentDigest {
+				return port.JournalEntry{}, Mismatch
+			}
+		}
 		binding, err := q.ActiveBinding(identity(h.fixed))
 		if err != nil {
 			return port.JournalEntry{}, err
@@ -125,12 +130,12 @@ func (s *Service) Send(ctx context.Context, h *Handle, prompt string, deadlineMi
 	h.prompt = ""
 	s.deps.Gate.Unlock()
 	var verification port.SendVerification
-	if h.target.Mode != "" {
+	if target.Mode != "" {
 		verified, ok := s.deps.Browser.(port.VerifiedBrowser)
 		if !ok {
 			return nil, s.fail(m)
 		}
-		request := port.VerifySendRequest{Binding: binding, Required: h.target.Required, Requested: h.target.Selection, IntentDigest: h.digest, PreviousUserTurnID: h.target.PreviousUserTurnID, PreviousReplyID: h.target.PreviousReplyID, DeadlineMillis: deadlineMillis}
+		request := port.VerifySendRequest{Binding: binding, Required: target.Required, Requested: target.Selection, IntentDigest: intentDigest, PreviousUserTurnID: target.PreviousUserTurnID, PreviousReplyID: target.PreviousReplyID, DeadlineMillis: deadlineMillis}
 		proof, err := verified.VerifySend(request)
 		if err != nil || !port.ValidVerification(request, proof) {
 			return nil, s.fail(m)
@@ -152,10 +157,10 @@ func (s *Service) Send(ctx context.Context, h *Handle, prompt string, deadlineMi
 			return nil, err
 		}
 	}
-	reply, browserErr := s.deps.Browser.Send(port.SendRequest{Verification: verification, Binding: binding, IntentDigest: h.digest, Prompt: prompt, DeadlineMillis: deadlineMillis})
+	reply, browserErr := s.deps.Browser.Send(port.SendRequest{Verification: verification, Binding: binding, IntentDigest: intentDigest, Prompt: prompt, DeadlineMillis: deadlineMillis})
 	outcome := turn.UnknownOutcome
 	code := "SEND_OUTCOME_UNKNOWN"
-	if browserErr == nil && reply != nil && reply.Binding == binding && (h.target.Mode == "" || reply.VerificationID == verification.EvidenceID) {
+	if browserErr == nil && reply != nil && reply.Binding == binding && (target.Mode == "" || reply.VerificationID == verification.EvidenceID) {
 		switch reply.Status {
 		case port.Submitted:
 			outcome = ""

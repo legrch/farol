@@ -313,13 +313,14 @@ func (s *Service) Finish(ctx context.Context, h *Handle, binding turn.Binding, r
 }
 
 type mutation struct {
-	conversation *Conversation
-	caller       *CallerToolCall
-	frames       *stream.Buffer
-	candidate    *turn.Queue
-	handle       *Handle
-	fence        uint64
-	entry        port.JournalEntry
+	readWithdrawal bool
+	conversation   *Conversation
+	caller         *CallerToolCall
+	frames         *stream.Buffer
+	candidate      *turn.Queue
+	handle         *Handle
+	fence          uint64
+	entry          port.JournalEntry
 }
 
 // stage derives a private candidate under Gate and withdraws ALL positive views
@@ -412,6 +413,7 @@ func (s *Service) settlementAvailable(ctx context.Context) error {
 // and after unlocked journal IO. A cancelled/late/mismatched reply never commits
 // live positive state. A successful effect-intent commit stays pending until its
 // separate effect settlement has also been durably acknowledged.
+// Bare read withdrawal likewise retains its writer through the required ACK.
 func (s *Service) commit(ctx context.Context, m *mutation, publish bool) error {
 	s.deps.Gate.Lock()
 	if err := s.current(ctx, m); err != nil {
@@ -437,6 +439,10 @@ func (s *Service) commit(ctx context.Context, m *mutation, publish bool) error {
 	}
 	if publish {
 		switch m.entry.Kind {
+		case "cancel":
+			if m.readWithdrawal {
+				return s.stageReadWithdrawalACK(m)
+			}
 		case "promote-conversation":
 			m.publishPromotion()
 		case "admit":

@@ -79,12 +79,14 @@ func (s *Service) createConversation(ctx context.Context, input port.Conversatio
 		return nil, err
 	}
 	if h := s.handles[input.Binding.OperationID]; h != nil {
-		s.deps.Gate.Unlock()
 		if h.fixed != input.Binding || h.digest != digest || h.target != target || h.conversation == nil {
+			s.deps.Gate.Unlock()
 			return nil, turn.Conflict
 		}
+		c := h.conversation
+		s.deps.Gate.Unlock()
 		// Exact known replay observes the same result; it performs no new Send.
-		return h.conversation, nil
+		return c, nil
 	}
 	s.deps.Gate.Unlock()
 	c := &Conversation{owner: s, input: input, target: target, previous: previous}

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/legrch/farol/modules/chat/app/port"
@@ -409,5 +410,155 @@ func TestReadIntentPromotionCannotReinterpretOrdinaryCreateAsDuplicate(t *testin
 	writes := j.count()
 	if got, err := s.PromoteConversation(context.Background(), c.handle, i); got != nil || !errors.Is(err, turn.Transition) || j.count() != writes || c.handle.readPromoted {
 		t.Fatal("ordinary Create became promotion replay", got, err)
+	}
+}
+
+// CPU-only scheduling seam: callbacks run outside the actual owner mutex. The
+// unlock selector runs under it, so tests can target a known publication edge.
+type readIntentInterleaveGate struct {
+	sync.Mutex
+	beforeLock  func()
+	afterUnlock func() func()
+}
+
+func (g *readIntentInterleaveGate) Lock() {
+	g.Mutex.Lock()
+	if hook := g.beforeLock; hook != nil {
+		g.beforeLock = nil
+		g.Mutex.Unlock()
+		hook()
+		g.Mutex.Lock()
+	}
+}
+
+func (g *readIntentInterleaveGate) Unlock() {
+	var hook func()
+	if g.afterUnlock != nil {
+		hook = g.afterUnlock()
+	}
+	g.Mutex.Unlock()
+	if hook != nil {
+		hook()
+	}
+}
+
+func TestReadIntentWithdrawalKeepsWriterBetweenKnownCancelAndACK(t *testing.T) {
+	s, _, j, _ := conversationOwner(t)
+	g := &readIntentInterleaveGate{}
+	s.deps.Gate = g
+	ctx := context.Background()
+	if _, err := s.CreateConversation(ctx, input("2")); err != nil {
+		t.Fatal(err)
+	}
+	h := admit(t, s, "1")
+	cancelRevision := s.revision + 1
+	reserveEntered, reserveRelease := make(chan struct{}), make(chan struct{})
+	prepareDone := make(chan error, 1)
+	j.hook = func(w port.JournalWrite) {
+		if w.Entry.Kind == "reserve" {
+			close(reserveEntered)
+			<-reserveRelease
+		}
+	}
+	interleaved, stoleWriter := false, false
+	var prepareErr error
+	g.afterUnlock = func() func() {
+		if s.revision != cancelRevision {
+			return nil
+		}
+		g.afterUnlock = nil
+		return func() {
+			interleaved = true
+			go func() { _, err := s.PrepareNext(ctx, 100); prepareDone <- err }()
+			select {
+			case <-reserveEntered:
+				stoleWriter = true
+			case prepareErr = <-prepareDone:
+			}
+		}
+	}
+	err := s.WithdrawReadIntent(ctx, h)
+	close(reserveRelease)
+	if stoleWriter {
+		prepareErr = <-prepareDone
+	}
+	if err != nil || !interleaved || stoleWriter || !errors.Is(prepareErr, Busy) {
+		t.Fatalf("cancel-to-ACK writer gap: withdrawal=%v interleaved=%v stolen=%v prepare=%v", err, interleaved, stoleWriter, prepareErr)
+	}
+	if j.count() != int(cancelRevision+1) || j.writes[cancelRevision-1].Entry.Kind != "cancel" || j.writes[cancelRevision].Entry.Kind != "acknowledge" || h.ackRevision != cancelRevision+1 {
+		t.Fatal("withdrawal did not retain consecutive known cancel/ACK commits")
+	}
+	if err := s.WithdrawReadIntent(ctx, h); err != nil {
+		t.Fatal("known duplicate did not settle", err)
+	}
+	if _, err := s.PrepareNext(ctx, 100); err != nil {
+		t.Fatal("writer not released after ACK", err)
+	}
+}
+
+func TestReadIntentCreateUsesSnapshotBeforePromotionAtUnlock(t *testing.T) {
+	s, _, j, _ := conversationOwner(t)
+	g := &readIntentInterleaveGate{}
+	s.deps.Gate = g
+	h, i := admit(t, s, "1"), input("1")
+	var promoted *Conversation
+	var promotionErr error
+	g.afterUnlock = func() func() {
+		g.afterUnlock = nil
+		return func() { promoted, promotionErr = s.PromoteConversation(context.Background(), h, i) }
+	}
+	c, err := s.CreateConversation(context.Background(), i)
+	if !errors.Is(err, turn.Conflict) || c != nil || promotionErr != nil || promoted == nil || j.count() != 2 {
+		t.Fatal("Create read promotion fields after releasing Gate", c, err, promotionErr)
+	}
+	if duplicate, err := s.CreateConversation(context.Background(), i); err != nil || duplicate != promoted || j.count() != 2 {
+		t.Fatal("known duplicate lost coherent snapshot", err)
+	}
+}
+
+func TestReadIntentSendValidatesPromotionSnapshotInsideStage(t *testing.T) {
+	s, b, j, _ := conversationOwner(t)
+	g := &readIntentInterleaveGate{}
+	s.deps.Gate = g
+	h, i := admit(t, s, "1"), input("1")
+	var promotionErr, prepareErr error
+	g.beforeLock = func() {
+		_, promotionErr = s.PromoteConversation(context.Background(), h, i)
+		_, prepareErr = s.PrepareNext(context.Background(), 100)
+	}
+	view, err := s.Send(context.Background(), h, "crossed prompt", 100, "failure")
+	if promotionErr != nil || prepareErr != nil || !errors.Is(err, Mismatch) || view != nil || len(b.sent) != 0 || len(b.verifies) != 0 || j.count() != 4 {
+		t.Fatal("Send missed promotion before protected stage", view, err, promotionErr, prepareErr)
+	}
+	if err := h.conversation.Send(context.Background(), 100); err != nil || len(b.sent) != 1 || b.sent[0].Prompt != i.Prompt || b.sent[0].IntentDigest != h.digest {
+		t.Fatal("exact promoted Send no longer works", err)
+	}
+}
+
+func TestReadIntentCreateAndSendRaceWithPromotion(t *testing.T) {
+	for n := 0; n < 64; n++ {
+		s, b, j, _ := conversationOwner(t)
+		h, i := admit(t, s, "1"), input("1")
+		start := make(chan struct{})
+		var wg sync.WaitGroup
+		var promoted, created *Conversation
+		var promotionErr, createErr, sendErr error
+		wg.Add(3)
+		go func() {
+			defer wg.Done()
+			<-start
+			promoted, promotionErr = s.PromoteConversation(context.Background(), h, i)
+		}()
+		go func() { defer wg.Done(); <-start; created, createErr = s.CreateConversation(context.Background(), i) }()
+		go func() {
+			defer wg.Done()
+			<-start
+			_, sendErr = s.Send(context.Background(), h, "crossed prompt", 100, "failure")
+		}()
+		close(start)
+		wg.Wait()
+		if promotionErr != nil || promoted == nil || (createErr == nil && created != promoted) || (createErr != nil && !errors.Is(createErr, Busy) && !errors.Is(createErr, turn.Conflict)) || sendErr == nil || len(b.sent) != 0 || j.count() != 2 {
+			t.Fatal("concurrent promotion lost coherent owner", promotionErr, createErr, sendErr)
+		}
 	}
 }
