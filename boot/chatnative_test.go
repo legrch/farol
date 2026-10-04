@@ -121,7 +121,7 @@ func chatNativeFixture(t *testing.T) *chatNativePeer {
 		t.Fatal(e)
 	}
 	t.Logf("Owned disposable fixture: %s", root)
-	for _, path := range []string{"profile", "profile/computer", "profile/chat", "home"} {
+	for _, path := range []string{"profile", "profile/computer", "profile/chat", "profile/task", "home"} {
 		if e := os.Mkdir(filepath.Join(root, path), 0700); e != nil {
 			t.Fatal(e)
 		}

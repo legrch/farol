@@ -34,13 +34,17 @@ export const ShellLayoutSchema = z.strictObject({
  * describe one owner intent.
  *
  * The distinction this exists for is whether an owner asked for it.
- * `settings-command`, `quick-switcher-command`, `overlay-dismissed` and
- * `sign-in-return-command` are owner actions. `auth-window-closed` follows
- * an auth window outcome, and `verification-completed` follows a network
+ * `settings-command`, `quick-switcher-command`, `overlay-dismissed`,
+ * `sign-in-return-command` and `section-shortcut-command` are owner actions.
+ * `auth-window-closed` follows an auth window outcome, and
+ * `verification-completed` follows a network
  * check; either may arrive after the owner has moved to another surface.
  */
 export const ShellActionSourceSchema = z.enum([
   "settings-command",
+  "sidebar-command",
+  "section-shortcut-command",
+  "update-command",
   "quick-switcher-command",
   "overlay-dismissed",
   "sign-in-return-command",
@@ -50,25 +54,41 @@ export const ShellActionSourceSchema = z.enum([
 
 export type ShellActionSource = z.infer<typeof ShellActionSourceSchema>;
 
-export const ShellActionSchema = z.strictObject({
-  action: z.enum([
-    "toggle-sidebar",
-    "open-quick-switcher",
-    "open-settings",
-    "sign-in-returned",
-    "close-overlay",
-  ]),
+const ShellActionEnvelope = {
   /** Unique per publish, so a recipient can tell a repeat from a duplicate. */
   eventId: z.string().uuid(),
-  source: ShellActionSourceSchema,
   /**
    * The auth window whose recorded outcome produced this publish, or null
    * when no auth window was involved. A delayed close from an older window
-   * carries that window's generation, not the current one — which is what
-   * makes a late event distinguishable from a current one.
+   * carries that window's generation, not the current one.
    */
   authWindowGeneration: z.number().int().nonnegative().nullable(),
-});
+};
+
+export const ShellActionSchema = z.discriminatedUnion("action", [
+  z.strictObject({
+    ...ShellActionEnvelope,
+    action: z.enum([
+      "toggle-sidebar",
+      "open-quick-switcher",
+      "open-settings",
+      "open-updates",
+      "sign-in-returned",
+      "close-overlay",
+    ]),
+    source: ShellActionSourceSchema.exclude(["section-shortcut-command"]),
+  }),
+  z.strictObject({
+    ...ShellActionEnvelope,
+    action: z.literal("navigate-section"),
+    source: z.literal("section-shortcut-command"),
+    authWindowGeneration: z.null(),
+    section: SurfaceSectionSchema,
+    taskId: z.string(),
+    /** Monotonic for the native publisher; old or reordered intent cannot replay. */
+    sequence: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+  }),
+]);
 
 export const WindowStateSchema = z.strictObject({
   focused: z.boolean(),

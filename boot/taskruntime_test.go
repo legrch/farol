@@ -28,10 +28,11 @@ var taskRuntimeTestCtx = context.Background()
 
 // Private one-task in-memory backing port, not a shipping persistence engine.
 type taskRuntimeTestMemory struct {
-	mu         sync.Mutex
-	snapshot   *port.Snapshot
-	ops        map[string]port.Operation
-	failFinish bool
+	mu                      sync.Mutex
+	snapshot                *port.Snapshot
+	ops                     map[string]port.Operation
+	failFinish              bool
+	eventPublicationUnknown bool
 }
 
 func (j *taskRuntimeTestMemory) Lookup(_ context.Context, id string) (*port.Operation, error) {

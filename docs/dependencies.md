@@ -20,7 +20,13 @@ darwin/arm64 distribution digest and the digest of the bundle that archive extra
 packaging and verification compare the installed and embedded runtime with that contract,
 never only with whatever `node_modules` currently holds.
 
-React, a second validator/test runner, Stryker, Bun, native addons, and an HTTP
-framework are dropped from this preview. The UI is small enough for DOM TypeScript;
-planted defects provide focused mutation proof; Node's HTTP server and Web streams
-cover the loopback fixture; and Electron already carries the production runtime.
+React and React DOM 19.3.0 (MIT) provide the Farol-owned renderer. Their direct
+versions, scheduler runtime closure, license notices and source/compiler identity
+are recorded by the existing build attestation. React type definitions 19.3.0,
+jsdom 30.1.1, ESLint 10.0.3 and eslint-plugin-react-hooks 7.1.1 support strict TSX,
+component fixtures and hook linting. React is restricted to renderer code.
+
+A second validator/test runner, Next.js/SSR/RSC, Redux, a query framework, Stryker,
+Bun, native addons and an HTTP framework are not required. Planted defects provide
+focused mutation proof; Node's HTTP server and Web streams cover the loopback
+fixture; Electron carries the production runtime.

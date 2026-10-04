@@ -22,8 +22,16 @@
     "paths": {
       "@next/*": ["./src/*"]
     },
-    "noEmit": true
+    "noEmit": true,
+    "jsx": "react-jsx"
   },
-  "include": ["src/**/*.ts", "tests/**/*.ts", "vitest.config.ts"],
+  "include": [
+    "src/**/*.ts",
+    "tests/**/*.ts",
+    "vitest.config.ts",
+    "src/**/*.tsx",
+    "tests/**/*.tsx",
+    "vitest.renderer.config.ts"
+  ],
   "exclude": ["dist", "node_modules", "tests/architecture/fixtures"]
 }

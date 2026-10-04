@@ -13,27 +13,27 @@ const base = {
 };
 
 describe("native Browser surface layout", () => {
-  it("places the page below the task dossier beside a full sidebar", () => {
+  it("places the page below the single toolbar beside a full sidebar", () => {
     expect(deriveSurfaceLayout(base)).toEqual({
-      sidebarWidth: 216,
+      sidebarWidth: 294,
       autoRail: false,
       pageVisible: true,
-      pageBounds: { x: 216, y: 178, width: 964, height: 582 },
+      pageBounds: { x: 294, y: 58, width: 886, height: 702 },
     });
   });
 
-  it("uses a 72 px rail by preference and automatically below 980 px", () => {
+  it("uses a 62 px rail by preference and automatically below 980 px", () => {
     expect(deriveSurfaceLayout({ ...base, sidebar: "rail" })).toMatchObject({
-      sidebarWidth: 72,
+      sidebarWidth: 62,
       autoRail: false,
-      pageBounds: { x: 72, y: 178, width: 1_108, height: 582 },
+      pageBounds: { x: 62, y: 58, width: 1_118, height: 702 },
     });
     expect(
       deriveSurfaceLayout({ ...base, width: 940, sidebar: "full" }),
     ).toMatchObject({
-      sidebarWidth: 72,
+      sidebarWidth: 62,
       autoRail: true,
-      pageBounds: { x: 72, y: 178, width: 868, height: 582 },
+      pageBounds: { x: 62, y: 58, width: 878, height: 702 },
     });
   });
 
@@ -42,7 +42,7 @@ describe("native Browser surface layout", () => {
       deriveSurfaceLayout({ ...base, browserChromeVisible: false }),
     ).toMatchObject({
       pageVisible: true,
-      pageBounds: { x: 216, y: 52, width: 964, height: 708 },
+      pageBounds: { x: 294, y: 58, width: 886, height: 702 },
     });
   });
 
@@ -50,7 +50,7 @@ describe("native Browser surface layout", () => {
     expect(
       deriveSurfaceLayout({ ...base, compactBrowser: true }),
     ).toMatchObject({
-      pageBounds: { x: 216, y: 52, width: 964, height: 683 },
+      pageBounds: { x: 294, y: 58, width: 886, height: 702 },
     });
     expect(
       deriveSurfaceLayout({
@@ -59,11 +59,11 @@ describe("native Browser surface layout", () => {
         browserChromeVisible: false,
       }),
     ).toMatchObject({
-      pageBounds: { x: 216, y: 52, width: 964, height: 708 },
+      pageBounds: { x: 294, y: 58, width: 886, height: 702 },
     });
   });
 
-  it("reserves a visible native-free row for the DEV check result", () => {
+  it("uses the single toolbar for the approved renderer", () => {
     expect(
       deriveSurfaceLayout({
         ...base,
@@ -71,7 +71,7 @@ describe("native Browser surface layout", () => {
         checkFeedbackVisible: true,
       }),
     ).toMatchObject({
-      pageBounds: { x: 216, y: 110, width: 964, height: 625 },
+      pageBounds: { x: 294, y: 58, width: 886, height: 702 },
     });
   });
 

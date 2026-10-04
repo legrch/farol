@@ -34,7 +34,11 @@ function applied(pending: string | null): ConfigurationOutcome {
     result: {
       ok: true,
       snapshot: snapshot(pending),
-      evidence: { kind: "computer.workspace-mutation", operationId },
+      evidence: {
+        kind: "computer.workspace-mutation",
+        operationId,
+        workspaceId,
+      },
     },
   } as unknown as ConfigurationOutcome;
 }
@@ -58,6 +62,20 @@ const observe = {
 };
 
 describe("guarded edit delivery acknowledgement", () => {
+  it("does not acknowledge evidence from another edit or workspace", () => {
+    const result = applied(operationId);
+    if (
+      result.kind !== "applied" ||
+      result.result.evidence?.kind !== "computer.workspace-mutation"
+    )
+      throw new Error("FIXTURE_INVALID");
+    result.result.evidence.operationId = "00000000-0000-4000-8000-000000000009";
+    expect(workspaceEditToAcknowledge(observe, result)).toBeNull();
+    result.result.evidence.operationId = operationId;
+    result.result.evidence.workspaceId = "00000000-0000-4000-8000-000000000009";
+    expect(workspaceEditToAcknowledge(observe, result)).toBeNull();
+  });
+
   it("acknowledges a delivered result of the pending operation", () => {
     expect(workspaceEditToAcknowledge(apply, applied(operationId))).toBe(
       operationId,

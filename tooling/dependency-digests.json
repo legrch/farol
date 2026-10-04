@@ -21,6 +21,18 @@
       "version": "0.28.2",
       "treeSha256": "847ae18bbca4df210fdeab533cf0eaa85b5efe773ee3caeb032b893f2c1bcc03"
     },
+    "node_modules/react": {
+      "version": "19.3.0",
+      "treeSha256": "72ccedeaacaded15702c867de8e5b47147e8635dd938e228bc5f71a045dc3340"
+    },
+    "node_modules/react-dom": {
+      "version": "19.3.0",
+      "treeSha256": "5a90ee3082cf0f3a453071691fad97b7d62d51a00c11a0e86cea3b9a0f3fe2e7"
+    },
+    "node_modules/scheduler": {
+      "version": "0.28.0",
+      "treeSha256": "d249c4b74a22888323e3310f1b25b4a69c4f81551dee8a09c08a66e193594968"
+    },
     "node_modules/ws": {
       "version": "8.22.0",
       "treeSha256": "2f9d67ea9bd7b0538f1f0241c79d7bfd8ea903f5ec9136ccc9b83d153eea5e8e"

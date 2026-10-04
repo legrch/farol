@@ -1,9 +1,11 @@
 import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { BridgeError, type Client } from "./client.ts";
 import {
   validate,
   type ChatCreate,
   type ChatHandle,
+  type ChatSubmissionState,
   type ChatPrepared,
   type ChatResult,
   type ChatFrames,
@@ -18,6 +20,23 @@ export class ChatBridge {
   constructor(private readonly client: Client) {}
   create(input: ChatCreate): Promise<ChatHandle> {
     return this.call("create", "ChatCreate", input, "ChatHandle", true);
+  }
+  // Observation only: not-dispatched may still be queued/prepared and able to
+  // Send. This never releases a replay guard or creates another operation.
+  async submission(handle: ChatHandle): Promise<ChatSubmissionState> {
+    if (!validate("ChatHandle", handle))
+      throw new BridgeError("refused", "chat_request_invalid");
+    const selected = structuredClone(handle);
+    const result = await this.call<ChatSubmissionState>(
+      "submission",
+      "ChatHandleRequest",
+      { handleId: selected.handleId },
+      "ChatSubmissionState",
+      false,
+    );
+    if (!isDeepStrictEqual(result.handle, selected))
+      throw new BridgeError("unknown", "chat_submission_handle_crossed");
+    return result;
   }
   prepare(deadlineMillis: string): Promise<ChatPrepared> {
     return this.call(

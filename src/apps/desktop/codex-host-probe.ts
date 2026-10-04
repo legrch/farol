@@ -6,7 +6,11 @@ import path from "node:path";
 
 import {
   inspectCodexHostContract,
+  inspectCodexHandoffHostContract,
+  inspectCodexFollowupHostContract,
   type CodexHostContract,
+  type CodexHandoffHostContract,
+  type CodexFollowupSchemaWitness,
 } from "./codex-host-contract";
 
 const NO_FOLLOW = fsConstants.O_NOFOLLOW ?? 0;
@@ -41,10 +45,35 @@ export type CodexProbeRunner = (
   command: CodexProbeCommand,
 ) => Promise<Readonly<{ stdout: string; stderr: string }>>;
 
+type TaskSourceBinding = Readonly<{
+  executablePath: string;
+  executableSha256: string;
+  baseSchemaSha256: string;
+}>;
+
+type TaskSourceFailure =
+  | "CODEX_HOST_SCHEMA_UNSAFE"
+  | "CODEX_HOST_SCHEMA_INVALID"
+  | "CODEX_HOST_HANDOFF_UNAVAILABLE"
+  | "CODEX_HOST_FOLLOWUP_UNAVAILABLE"
+  | "CODEX_HOST_TASK_SOURCE_CHANGED"
+  | "CODEX_HOST_TASK_SOURCE_UNCONFIRMED";
+
+/** Generated source evidence only; neither a serving grant nor Task admission. */
+export type CodexTaskSourceWitness<T> = TaskSourceBinding &
+  (
+    | Readonly<{ status: "supported"; contract: T }>
+    | Readonly<{ status: "unavailable"; code: TaskSourceFailure }>
+  );
+
 export type CodexHostProbe = CodexHostContract &
   Readonly<{
     executablePath: string;
     executableSha256: string;
+    taskSource: Readonly<{
+      handoff: CodexTaskSourceWitness<CodexHandoffHostContract>;
+      followup: CodexTaskSourceWitness<CodexFollowupSchemaWitness>;
+    }>;
   }>;
 
 type ProbeDependencies = Readonly<{ run?: CodexProbeRunner }>;
@@ -164,6 +193,32 @@ const runCodexProbe: CodexProbeRunner = async (command) =>
     );
   });
 
+async function inspectTaskSource<T>(
+  binding: TaskSourceBinding,
+  inspect: () => Promise<T>,
+): Promise<CodexTaskSourceWitness<T>> {
+  try {
+    return { ...binding, status: "supported", contract: await inspect() };
+  } catch (error) {
+    // Do not expose paths or parser diagnostics, and never substitute the base
+    // digest for additional evidence. Missing files are schema-unsafe too.
+    const code = error instanceof Error ? error.message : "";
+    switch (code) {
+      case "CODEX_HOST_SCHEMA_UNSAFE":
+      case "CODEX_HOST_SCHEMA_INVALID":
+      case "CODEX_HOST_HANDOFF_UNAVAILABLE":
+      case "CODEX_HOST_FOLLOWUP_UNAVAILABLE":
+        return { ...binding, status: "unavailable", code };
+      default:
+        return {
+          ...binding,
+          status: "unavailable",
+          code: "CODEX_HOST_TASK_SOURCE_UNCONFIRMED",
+        };
+    }
+  }
+}
+
 export async function probeCodexHost(
   input: Readonly<{
     executablePath: string;
@@ -232,10 +287,65 @@ export async function probeCodexHost(
     } catch {
       probeError("CODEX_HOST_INCOMPATIBLE");
     }
+    const binding: TaskSourceBinding = {
+      executablePath: pinned.canonicalPath,
+      executableSha256: pinned.sha256,
+      baseSchemaSha256: contract.schemaSha256,
+    };
+    let handoff = await inspectTaskSource(binding, () =>
+      inspectCodexHandoffHostContract(schemaRoot, versionOutput),
+    );
+    let followup = await inspectTaskSource(binding, () =>
+      inspectCodexFollowupHostContract(schemaRoot, versionOutput),
+    );
+    // All parsers consume this one generated directory before cleanup. Retain
+    // the original base result even when additional evidence is unsupported.
+    // A second source read/hash is not another executable/schema invocation.
+    try {
+      const afterBase = await inspectCodexHostContract(
+        schemaRoot,
+        versionOutput,
+      );
+      const afterExecutable = await pinSelectedExecutable(input.executablePath);
+      if (
+        afterBase.schemaSha256 !== contract.schemaSha256 ||
+        afterExecutable.canonicalPath !== pinned.canonicalPath ||
+        afterExecutable.sha256 !== pinned.sha256
+      )
+        probeError("CODEX_HOST_TASK_SOURCE_CHANGED");
+      if (handoff.status === "supported") {
+        const afterHandoff = await inspectCodexHandoffHostContract(
+          schemaRoot,
+          versionOutput,
+        );
+        if (
+          afterHandoff.schemaSha256 !== handoff.contract.schemaSha256 ||
+          handoff.contract.version !== contract.version ||
+          handoff.contract.protocol !== contract.protocol
+        )
+          probeError("CODEX_HOST_TASK_SOURCE_CHANGED");
+      }
+      if (
+        followup.status === "supported" &&
+        (handoff.status !== "supported" ||
+          followup.contract.baseSchemaSha256 !==
+            handoff.contract.schemaSha256 ||
+          followup.contract.protocol !== contract.protocol)
+      )
+        probeError("CODEX_HOST_TASK_SOURCE_CHANGED");
+    } catch {
+      handoff = {
+        ...binding,
+        status: "unavailable",
+        code: "CODEX_HOST_TASK_SOURCE_CHANGED",
+      };
+      followup = { ...handoff };
+    }
     return {
       executablePath: pinned.canonicalPath,
       executableSha256: pinned.sha256,
       ...contract,
+      taskSource: { handoff, followup },
     };
   } finally {
     await fs.rm(work, { recursive: true, force: true }).catch(() => undefined);

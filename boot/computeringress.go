@@ -16,11 +16,13 @@ import (
 	chatadmission "github.com/legrch/farol/modules/chat/app/services/admission"
 	chatlifecycle "github.com/legrch/farol/modules/chat/app/services/lifecycle"
 	chatct "github.com/legrch/farol/modules/chat/contracts/admission"
+	computerport "github.com/legrch/farol/modules/computer/app/port"
 	execution "github.com/legrch/farol/modules/computer/app/services/execution"
 	"github.com/legrch/farol/modules/computer/domain/authority"
 	"github.com/legrch/farol/modules/computer/infra/filesystem"
 	admissionpeer "github.com/legrch/farol/modules/computer/infra/peer/admission"
 	accessrepo "github.com/legrch/farol/modules/computer/infra/repos/access"
+	codexclient "github.com/legrch/farol/modules/task/infra/clients/codex"
 )
 
 // ComputerIngress belongs to trusted root composition. It never restores live
@@ -31,9 +33,10 @@ type ComputerIngress struct {
 	effects             sync.Mutex // serializes publication/admission IO, never current guards
 	mu                  sync.Mutex
 	guard               activationFence
-	store               *accessrepo.Store
+	store               computerIngressStore
 	chat                *chatlifecycle.Service
-	native              *filesystem.Workspace
+	native              computerport.Workspace
+	clock               computerport.Clock
 	peer                wire.Context
 	ownerID, computerID string
 	used                map[string]bool
@@ -44,8 +47,9 @@ type ComputerIngress struct {
 	route               *ComputerRoute
 }
 type knownComputerPublication struct {
-	receipt  wire.ComputerAuthorityPublication
-	approval authority.Approval
+	receipt   wire.ComputerAuthorityPublication
+	approval  authority.Approval
+	taskCodex *codexclient.AuthoritySnapshot
 }
 
 func NewComputerIngress(store *accessrepo.Store, chat *chatlifecycle.Service, native *filesystem.Workspace, peer wire.Context, ownerID, computerID string) (*ComputerIngress, error) {
@@ -113,6 +117,10 @@ func (s *ComputerIngress) Publish(ctx context.Context, operation string, in wire
 	if e != nil {
 		return nil, e
 	}
+	currentTask, e := s.parsePublishedCodex(in.TaskCodex, approval)
+	if e != nil {
+		return nil, e
+	}
 	fence, e := strconv.ParseUint(in.Fence, 10, 64)
 	if e != nil {
 		return nil, e
@@ -122,6 +130,12 @@ func (s *ComputerIngress) Publish(ctx context.Context, operation string, in wire
 		return nil, e
 	}
 	if !s.guard.inactive(fence) {
+		return nil, computerUnavailable()
+	}
+	s.mu.Lock()
+	republished := s.publication != nil && s.publication.receipt.Fence == in.Fence
+	s.mu.Unlock()
+	if republished {
 		return nil, computerUnavailable()
 	}
 	if e := s.claim(operation); e != nil {
@@ -154,7 +168,7 @@ func (s *ComputerIngress) Publish(ctx context.Context, operation string, in wire
 		return nil, fmt.Errorf("COMPUTER_PUBLICATION_UNKNOWN")
 	}
 	s.mu.Lock()
-	s.publication = &knownComputerPublication{receipt: receipt, approval: approval.Clone()}
+	s.publication = &knownComputerPublication{receipt: receipt, approval: approval.Clone(), taskCodex: currentTask}
 	s.mu.Unlock()
 	return &receipt, nil
 }

@@ -36,7 +36,9 @@ export function workspaceEditToAcknowledge(
     snapshot.status === "ready" ? snapshot.settings.computer.pendingEdit : null;
   if (pending?.operationId !== command.operationId) return null;
   if (outcome.kind === "applied") {
-    return outcome.result.evidence?.kind === "computer.workspace-mutation"
+    return outcome.result.evidence?.kind === "computer.workspace-mutation" &&
+      outcome.result.evidence.operationId === command.operationId &&
+      outcome.result.evidence.workspaceId === pending.workspaceId
       ? command.operationId
       : null;
   }

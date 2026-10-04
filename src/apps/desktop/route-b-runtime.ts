@@ -1,3 +1,4 @@
+import type { GoChatResponses } from "../../../apps/desktop/go-chat-responses.ts";
 import { randomBytes } from "node:crypto";
 import path from "node:path";
 import { CHATGPT_MODEL_ID as ROUTE_B_MODEL } from "../../pkg/model-route/contract";
@@ -53,6 +54,8 @@ export type RouteBRuntimeOptions = Readonly<{
   // Private Next state directory; the provider's turn journal lives inside it.
   stateRoot: string;
   surfaces: RouteBTaskSurfaces;
+  // An explicit startup selection; never a fallback from a Go operation.
+  goResponses?: GoChatResponses;
   compaction: CodexChatGptCompaction;
   relay?: RouteBToolRelay;
   // The durable journal of admitted initial requests: the private one under
@@ -156,6 +159,13 @@ export class RouteBAdmission {
       if (remaining > 0) this.held.set(threadId, remaining);
       else this.held.delete(threadId);
     };
+  }
+
+  // Scoped preparation exclusion only. Go keeps lifecycle/queue ownership;
+  // an already running original summary cannot admit a new preparation.
+  tryHold(threadId: string): (() => void) | null {
+    if (this.summarizing.has(threadId)) return null;
+    return this.hold(threadId);
   }
 
   beginTurn(threadId: string): boolean {
@@ -346,6 +356,42 @@ export async function startRouteBRuntime(
   }
   // A fresh token per start: only a host this process launched knows it.
   const token = randomBytes(32).toString("base64url");
+  if (options.goResponses) {
+    const transport = options.goResponses;
+    const admission = new RouteBAdmission();
+    const provider = await startCodexChatGptProvider({
+      model: ROUTE_B_MODEL,
+      token,
+      goResponses: transport,
+      compaction: admittedCompaction(
+        {
+          ...options.compaction,
+          compact: (input) => {
+            const threadId = compactionThread(input);
+            if (threadId && transport.owns(threadId)) {
+              return Promise.resolve(
+                failure("FAROL_NEXT_COMPACTION_TURN_ACTIVE"),
+              );
+            }
+            return options.compaction.compact(input);
+          },
+        },
+        admission,
+      ),
+      threads: { hold: (identity) => admission.tryHold(identity.threadId) },
+      turns:
+        options.journal ??
+        new PrivateProviderTurnJournal({
+          root: path.join(options.stateRoot, "provider-turns"),
+        }),
+    });
+    return {
+      endpoint: { baseUrl: `${provider.baseUrl}/v1`, token },
+      provider,
+      owns: (threadId) => transport.owns(threadId) || admission.owns(threadId),
+      close: () => provider.close(),
+    };
+  }
   const admission = new RouteBAdmission();
   const provider = await startCodexChatGptProvider({
     model: ROUTE_B_MODEL,

@@ -7,6 +7,8 @@ import path from "node:path";
 import { _electron as electron } from "playwright-core";
 import { parseOwnerLaunchResult } from "../../tooling/owner-launch-result.mjs";
 import { runBoundedProcess } from "./bounded-process.mjs";
+import { sourceIdentity } from "../../tooling/source-identity.mjs";
+import { verifyInputManifest } from "../../tooling/build-contract.mjs";
 
 const root = process.cwd();
 const useInstalledTunnelClient = process.argv.includes(
@@ -17,6 +19,26 @@ const executable = path.join(
   root,
   "node_modules/electron/dist/Electron.app/Contents/MacOS/Electron",
 );
+// Drive exact built React bytes. This hidden lane proves DOM/application
+// integration, not native focus, the OS folder dialog, or a live provider.
+const source = sourceIdentity(root, ".");
+const build = JSON.parse(
+  await fs.readFile(path.join(buildRoot, "build-manifest.json"), "utf8"),
+);
+assert.equal(source.dirty, false, "DEV_REACT_SOURCE_NOT_EXACT");
+assert.equal(
+  build.sourceCommit,
+  source.commit,
+  "DEV_REACT_BUILD_COMMIT_MISMATCH",
+);
+assert.equal(
+  build.sourceTreeDigest,
+  source.treeDigest,
+  "DEV_REACT_BUILD_TREE_MISMATCH",
+);
+assert.equal(build.dirty, false, "DEV_REACT_BUILD_DIRTY");
+assert.equal(build.inputExact, true, "DEV_REACT_INPUTS_NOT_EXACT");
+await verifyInputManifest(buildRoot, build);
 const temporaryRoot = await fs.realpath(
   await fs.mkdtemp(path.join(os.tmpdir(), "farol-dev-onboarding-startup-")),
 );
@@ -54,48 +76,81 @@ const environment = {
   LANG: "en_US.UTF-8",
   LC_ALL: "en_US.UTF-8",
   PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
-  TMPDIR: temporaryRoot,
+  TMPDIR: os.tmpdir(),
 };
 
-async function closeApplication(application) {
-  const mainProcess = application.process();
+const stopRequested = new WeakSet();
+let cleanupConfirmed = true;
+let launchUnresolved = false;
+async function launchApplication(env) {
+  launchUnresolved = true;
+  const result = await electron.launch({
+    executablePath: executable,
+    args: [path.join(buildRoot, "main.cjs"), "--preview-window-mode=hidden"],
+    env,
+    timeout: 15_000,
+  });
+  launchUnresolved = false;
+  return result;
+}
+async function stopApplication(application, ownerSignal) {
+  assert.equal(
+    stopRequested.has(application),
+    false,
+    "DEV_REACT_STOP_ALREADY_REQUESTED",
+  );
+  stopRequested.add(application);
+  const child = application.process();
   const closed = once(application, "close");
-  const timeout = new Promise((_, reject) => {
-    const timer = setTimeout(
-      () => reject(new Error("DEV_STARTUP_SMOKE_CLOSE_TIMEOUT")),
+  let timer;
+  const deadline = new Promise((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error("DEV_REACT_CLOSE_UNCONFIRMED")),
       10_000,
     );
     timer.unref();
   });
   try {
-    await Promise.race([application.close(), timeout]);
-    await Promise.race([closed, timeout]);
+    if (ownerSignal) child.kill("SIGINT");
+    else await Promise.race([application.close(), deadline]);
+    await Promise.race([closed, deadline]);
+    assert.equal(child.signalCode, null, "DEV_REACT_SIGNAL_DEATH");
+    assert.equal(child.exitCode, 0, "DEV_REACT_NONZERO_EXIT");
   } catch (error) {
-    if (Number.isSafeInteger(mainProcess.pid) && mainProcess.pid > 1) {
-      try {
-        process.kill(mainProcess.pid, "SIGKILL");
-      } catch (killError) {
-        if (killError?.code !== "ESRCH") throw killError;
-      }
-    }
+    cleanupConfirmed = false;
     throw error;
+  } finally {
+    clearTimeout(timer);
   }
 }
-
-async function stopApplicationWithOwnerSignal(application) {
-  const mainProcess = application.process();
-  const closed = once(application, "close");
-  const timeout = new Promise((_, reject) => {
-    const timer = setTimeout(
-      () => reject(new Error("DEV_STARTUP_SMOKE_SIGNAL_CLOSE_TIMEOUT")),
-      10_000,
-    );
-    timer.unref();
-  });
-  mainProcess.kill("SIGINT");
-  await Promise.race([closed, timeout]);
-  assert.equal(mainProcess.signalCode, null, "DEV_STARTUP_SMOKE_SIGNAL_DEATH");
-  assert.equal(mainProcess.exitCode, 0, "DEV_STARTUP_SMOKE_SIGNAL_EXIT");
+const closeApplication = (application) => stopApplication(application, false);
+const stopApplicationWithOwnerSignal = (application) =>
+  stopApplication(application, true);
+async function ready(window) {
+  await window.locator(".desktop").waitFor({ state: "visible" });
+  // Native bootstrap is asynchronous; Playwright predicates do not establish
+  // awaited IPC completion. Poll only this bounded read-only projection.
+  for (let attempt = 0; attempt < 100; attempt++) {
+    const value = await window.evaluate(() => window.farolNext.bootstrap());
+    if (
+      value.runtimeState === "ready" &&
+      value.configuration.status === "ready"
+    )
+      return value;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw new Error("DEV_REACT_BOOTSTRAP_NOT_READY");
+}
+async function settingsPage(window, name) {
+  await window.getByRole("button", { name: "Settings", exact: true }).click();
+  await window
+    .locator(".contextual-sidebar")
+    .getByRole("button", {
+      name: name === "Shortcuts" ? "Keyboard shortcuts" : name,
+      exact: true,
+    })
+    .click();
+  await window.getByRole("heading", { name, exact: true, level: 2 }).waitFor();
 }
 
 let application;
@@ -115,11 +170,13 @@ try {
   });
   const missingOverrideEnv = { ...environment };
   delete missingOverrideEnv.FAROL_NEXT_E2E_APP_DATA;
+  launchUnresolved = true;
   const refusedProfile = await runBoundedProcess(
     executable,
     [path.join(buildRoot, "main.cjs"), "--preview-window-mode=hidden"],
     { cwd: root, env: missingOverrideEnv, timeoutMs: 5_000 },
   );
+  launchUnresolved = false;
   assert.equal(
     refusedProfile.status,
     1,
@@ -136,22 +193,17 @@ try {
     "synthetic owner marker\n",
   );
 
-  application = await electron.launch({
-    executablePath: executable,
-    args: [path.join(buildRoot, "main.cjs"), "--preview-window-mode=hidden"],
-    env: environment,
-    timeout: 15_000,
-  });
+  application = await launchApplication(environment);
   let stderr = "";
   application.process().stderr?.on("data", (chunk) => {
     stderr += String(chunk);
   });
   const window = await application.firstWindow({ timeout: 15_000 });
-  await window.locator("#sidebar").waitFor({ state: "visible" });
+  const bootstrap = await ready(window);
   await window
-    .locator('#runtime-pill[data-state="ready"]')
-    .waitFor({ state: "visible" });
-  const bootstrap = await window.evaluate(() => window.farolNext.bootstrap());
+    .locator(".toolbar-title strong")
+    .getByText("Home", { exact: true })
+    .waitFor();
   assert.equal(bootstrap.environment, "dev");
   assert.equal(bootstrap.displayName, "Farol Dev");
   assert.equal(bootstrap.applicationId, "local.farol.dev");
@@ -174,94 +226,98 @@ try {
     "DEV_STARTUP_SMOKE_ESCAPED_TEMP_HOME",
   );
 
-  const setupDialog = window.locator("#setup-dialog");
-  await setupDialog.waitFor({ state: "hidden" });
-  await window.locator('[data-panel="computer"].active').waitFor();
   assert.equal(
-    await window.evaluate(() => document.documentElement.dataset.section),
-    "computer",
+    await window.locator("#setup-dialog, #guided-onboarding").count(),
+    0,
   );
-  const registry = JSON.parse(
-    await fs.readFile(
-      path.join(root, "tooling/external-dependencies.json"),
-      "utf8",
-    ),
-  );
-  const expectedTunnelVersion = useInstalledTunnelClient
-    ? registry.dependencies.tunnelClient.version.split(" ", 1)[0]
-    : "1.0.0";
-  await window.waitForFunction(
-    (version) =>
-      document
-        .querySelector("#connection-readiness .connector-row")
-        ?.textContent?.includes(`tunnel-client ${version}`),
-    expectedTunnelVersion,
-  );
-
-  const connectionsNav = window.locator(
-    '#onboarding-nav [data-onboarding-step="chatgpt"]',
-  );
-  const settingsNav = window.locator('.nav-item[data-section="settings"]');
-  const connectionsBox = await connectionsNav.boundingBox();
-  const settingsBox = await settingsNav.boundingBox();
-  assert.ok(connectionsBox && settingsBox);
-  assert.ok(
-    settingsBox.y > connectionsBox.y,
-    "DEV_CONNECTIONS_SETTINGS_NOT_AT_BOTTOM",
-  );
-
-  const guidedConnections = await window
-    .locator("#guided-onboarding")
-    .isVisible();
-  const scrollTarget = guidedConnections
-    ? window.locator("#onboarding-scroll")
-    : window.locator('[data-panel="computer"].active');
-  const connectionsLayout = await scrollTarget.evaluate((element) => ({
-    clientHeight: element.clientHeight,
-    scrollHeight: element.scrollHeight,
-    overflowY: getComputedStyle(element).overflowY,
-  }));
-  assert.ok(connectionsLayout.clientHeight > 0);
-  assert.ok(connectionsLayout.scrollHeight >= connectionsLayout.clientHeight);
-  assert.match(connectionsLayout.overflowY, /^(?:auto|scroll)$/u);
-  if (guidedConnections) {
-    assert.equal(
-      await window
-        .locator('[data-panel="computer"].active')
-        .evaluate((panel) => getComputedStyle(panel).overflowY),
-      "hidden",
-    );
+  for (const name of [
+    "General",
+    "Appearance",
+    "Folders",
+    "This Mac",
+    "Connection",
+    "Model",
+    "Shortcuts",
+    "Updates",
+    "Diagnostics",
+  ]) {
+    await settingsPage(window, name);
   }
-  const connectionRows = await window
-    .locator("#connection-readiness .connection-row")
-    .count();
-  assert.equal(connectionRows, 5, "DEV_CONNECTIONS_READINESS_INCOMPLETE");
-
-  await settingsNav.click();
-  await window.locator('[data-panel="settings"].active').waitFor();
+  await settingsPage(window, "Appearance");
+  await window.getByRole("button", { name: "Graphite", exact: true }).click();
   await window
-    .locator('#settings-nav [data-settings-category="diagnostics"]')
+    .getByRole("combobox", { name: /^Accent\b/u })
+    .selectOption("cobalt");
+  await window
+    .getByRole("combobox", { name: /^Font\b/u })
+    .selectOption("system");
+  await window.waitForFunction(() => {
+    const element = document.querySelector(".desktop");
+    return (
+      element?.dataset.theme === "graphite" &&
+      element.dataset.accent === "cobalt" &&
+      element.dataset.font === "system"
+    );
+  });
+  assert.deepEqual(
+    await window
+      .locator(".desktop")
+      .evaluate((element) => [
+        element.dataset.theme,
+        element.dataset.accent,
+        element.dataset.font,
+      ]),
+    ["graphite", "cobalt", "system"],
+  );
+  await window.getByRole("button", { name: "Home", exact: true }).click();
+  await window
+    .getByRole("button", { name: "Find a page", exact: true })
     .click();
-  await window.locator("#connection-diagnostics:visible").waitFor();
-  await window.locator("#settings-return").click();
-  await window.locator('[data-panel="browser"].active').waitFor();
-  await window.keyboard.press("Meta+2");
-  await window.locator('[data-panel="computer"].active').waitFor();
-
-  const returnToChatGpt = window.locator("#onboarding-return");
-  await returnToChatGpt.scrollIntoViewIfNeeded();
-  await returnToChatGpt.click();
-  await window.locator('[data-panel="browser"].active').waitFor();
-
-  await window.keyboard.press("Meta+2");
-  await window.locator('[data-panel="computer"].active').waitFor();
-  await window.keyboard.press("Meta+1");
-  await window.locator('[data-panel="browser"].active').waitFor();
+  await window
+    .getByRole("dialog")
+    .getByRole("button", { name: "Home", exact: true })
+    .click();
+  assert.equal(await window.getByRole("dialog").count(), 0);
+  assert.equal(await window.locator("main").getAttribute("inert"), null);
+  assert.equal(
+    await application.evaluate(({ BrowserWindow }) =>
+      BrowserWindow.getAllWindows().some((window) => window.isVisible()),
+    ),
+    false,
+    "DEV_REACT_HIDDEN_WINDOW_SHOWN",
+  );
 
   await stopApplicationWithOwnerSignal(application);
   application = undefined;
   assert.doesNotMatch(stderr, /INSTANCE_BUILD_IDENTITY_INVALID/u);
   assert.doesNotMatch(stderr, /App threw an error during load/u);
+
+  // Reopen the exact same disposable ordinary-Dev profile after a confirmed
+  // quit, rather than claiming persistence from the previous DOM projection.
+  application = await launchApplication(environment);
+  const reopenedWindow = await application.firstWindow({ timeout: 15_000 });
+  await ready(reopenedWindow);
+  await settingsPage(reopenedWindow, "Appearance");
+  assert.deepEqual(
+    await reopenedWindow
+      .locator(".desktop")
+      .evaluate((element) => [
+        element.dataset.theme,
+        element.dataset.accent,
+        element.dataset.font,
+      ]),
+    ["graphite", "cobalt", "system"],
+    "DEV_REACT_APPEARANCE_NOT_RETAINED",
+  );
+  assert.equal(
+    await application.evaluate(({ BrowserWindow }) =>
+      BrowserWindow.getAllWindows().some((window) => window.isVisible()),
+    ),
+    false,
+    "DEV_REACT_REOPEN_SHOWN",
+  );
+  await closeApplication(application);
+  application = undefined;
 
   // A legacy-spelled DEV directory is synthetic owner data, not a migration
   // input. Reopening must keep the same storage object and saved folder grant.
@@ -283,14 +339,13 @@ try {
   };
   let savedWorkspace;
   for (let launch = 0; launch < 2; launch += 1) {
-    application = await electron.launch({
-      executablePath: executable,
-      args: [path.join(buildRoot, "main.cjs"), "--preview-window-mode=hidden"],
-      env: legacyEnvironment,
-      timeout: 15_000,
-    });
+    application = await launchApplication(legacyEnvironment);
     const legacyWindow = await application.firstWindow({ timeout: 15_000 });
-    await legacyWindow.locator('#runtime-pill[data-state="ready"]').waitFor();
+    await ready(legacyWindow);
+    assert.equal(
+      await legacyWindow.locator("#setup-dialog, #guided-onboarding").count(),
+      0,
+    );
     const actualPath = await application.evaluate(({ app }) =>
       app.getPath("userData"),
     );
@@ -303,21 +358,43 @@ try {
       "synthetic pre-existing DEV profile\n",
     );
     if (launch === 0) {
-      await legacyWindow.locator('[data-onboarding-step="folder"]').click();
-      await legacyWindow.locator("#onboarding-add-folder").click();
+      await settingsPage(legacyWindow, "Folders");
       await legacyWindow
-        .locator('[data-onboarding-step="folder"].complete')
-        .waitFor({ state: "visible" });
+        .getByRole("button", { name: "Add folder…", exact: true })
+        .click();
       await legacyWindow
-        .locator("#onboarding-folder-list li")
-        .first()
-        .waitFor({ state: "visible", timeout: 15_000 });
+        .getByRole("button", {
+          name: "Add selected folder read-only",
+          exact: true,
+        })
+        .click();
+      await legacyWindow.locator(".folder-row").waitFor();
       await legacyWindow
-        .locator('#onboarding-form[aria-busy="false"]')
-        .waitFor({ state: "visible", timeout: 15_000 });
-      const value = await legacyWindow.evaluate(() =>
-        window.farolNext.bootstrap(),
+        .getByRole("button", { name: "Check access", exact: true })
+        .click();
+      await legacyWindow.waitForFunction(() =>
+        document
+          .querySelector(".folder-row .badges")
+          ?.textContent?.includes("Access checked"),
       );
+      await legacyWindow
+        .getByRole("button", { name: "Verify workspace", exact: true })
+        .click();
+      let value;
+      for (let attempt = 0; attempt < 100; attempt++) {
+        value = await legacyWindow.evaluate(() => window.farolNext.bootstrap());
+        const settings =
+          value.configuration.status === "ready"
+            ? value.configuration.settings
+            : null;
+        if (
+          settings?.setup.computer.verified?.workspaceId ===
+            settings?.computer.workspaces[0]?.workspaceId &&
+          settings?.computer.workspaces.length === 1
+        )
+          break;
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
       savedWorkspace = {
         workspaces: value.configuration.settings.computer.workspaces,
         verified: value.configuration.settings.setup.computer.verified,
@@ -327,10 +404,7 @@ try {
         1,
         JSON.stringify({
           status: value.configuration.status,
-          feedback: await legacyWindow
-            .locator("#onboarding-feedback")
-            .innerText(),
-          step: await legacyWindow.locator("#onboarding-title").innerText(),
+          workspaces: value.configuration.settings.computer.workspaces,
         }),
       );
       assert.equal(
@@ -360,6 +434,7 @@ try {
   await fs.writeFile(path.join(brokenRoot, "build-manifest.json"), "{}\n", {
     mode: 0o600,
   });
+  launchUnresolved = true;
   const broken = await runBoundedProcess(
     executable,
     [path.join(brokenRoot, "main.cjs"), "--preview-window-mode=hidden"],
@@ -369,6 +444,7 @@ try {
       timeoutMs: 5_000,
     },
   );
+  launchUnresolved = false;
   assert.equal(broken.status, 1, `${broken.stdout}${broken.stderr}`);
   assert.equal(broken.signal, null);
   assert.equal(
@@ -382,8 +458,16 @@ try {
   assert.doesNotMatch(broken.stderr, /App threw an error during load/u);
   assert.doesNotMatch(broken.stderr, /Uncaught Exception/u);
 
-  process.stdout.write("Farol Dev hidden startup smoke: PASS\n");
+  process.stdout.write(
+    "Farol Dev React hidden startup smoke: PASS (TS adapters; isolated native state; no live-provider or native-dialog/focus acceptance)\n",
+  );
 } finally {
-  if (application) await closeApplication(application).catch(() => undefined);
-  await fs.rm(temporaryRoot, { recursive: true, force: true });
+  if (application && !stopRequested.has(application)) {
+    await closeApplication(application).catch(() => {
+      cleanupConfirmed = false;
+    });
+  }
+  if (cleanupConfirmed && !launchUnresolved)
+    await fs.rm(temporaryRoot, { recursive: true, force: true });
+  else process.stderr.write(`DEV_REACT_RESOURCES_RETAINED:${temporaryRoot}\n`);
 }

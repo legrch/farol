@@ -79,6 +79,90 @@ const CodexAgentVerificationSchema = CodexAgentVerificationFieldsSchema.extend({
   verifiedAt: CanonicalTimestampSchema,
 });
 
+const CodexTaskSourceBindingShape = {
+  executablePath: CanonicalAbsolutePathSchema,
+  executableSha256: Sha256Schema,
+  baseSchemaSha256: Sha256Schema,
+};
+const CodexTaskSourceUnavailableSchema = z.strictObject({
+  ...CodexTaskSourceBindingShape,
+  status: z.literal("unavailable"),
+  code: z.enum([
+    "CODEX_HOST_SCHEMA_UNSAFE",
+    "CODEX_HOST_SCHEMA_INVALID",
+    "CODEX_HOST_HANDOFF_UNAVAILABLE",
+    "CODEX_HOST_FOLLOWUP_UNAVAILABLE",
+    "CODEX_HOST_TASK_SOURCE_CHANGED",
+    "CODEX_HOST_TASK_SOURCE_UNCONFIRMED",
+  ]),
+});
+
+// Source evidence only. A saved witness never issues a Task or serving grant.
+export const CodexTaskSourceSchema = z
+  .strictObject({
+    handoff: z.discriminatedUnion("status", [
+      CodexTaskSourceUnavailableSchema,
+      z.strictObject({
+        ...CodexTaskSourceBindingShape,
+        status: z.literal("supported"),
+        contract: z.strictObject({
+          version: z
+            .string()
+            .regex(/^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$/u),
+          protocol: z.literal("codex-app-server/v2"),
+          schemaSha256: Sha256Schema,
+          projectBoundCreateStatus: z.literal(true),
+        }),
+      }),
+    ]),
+    followup: z.discriminatedUnion("status", [
+      CodexTaskSourceUnavailableSchema,
+      z.strictObject({
+        ...CodexTaskSourceBindingShape,
+        status: z.literal("supported"),
+        contract: z.strictObject({
+          kind: z.literal("codex-followup-schema/v1"),
+          protocol: z.literal("codex-app-server/v2"),
+          baseSchemaSha256: Sha256Schema,
+          schemaSha256: Sha256Schema,
+        }),
+      }),
+    ]),
+  })
+  .superRefine(({ handoff, followup }, context) => {
+    // The producer's final snapshot fence withdraws both witnesses together.
+    const changed = (witness: typeof handoff | typeof followup) =>
+      witness.status === "unavailable" &&
+      witness.code === "CODEX_HOST_TASK_SOURCE_CHANGED";
+    if (
+      ((changed(handoff) || changed(followup)) &&
+        !(changed(handoff) && changed(followup))) ||
+      handoff.executablePath !== followup.executablePath ||
+      handoff.executableSha256 !== followup.executableSha256 ||
+      handoff.baseSchemaSha256 !== followup.baseSchemaSha256 ||
+      (handoff.status === "supported" &&
+        handoff.contract.schemaSha256 === handoff.baseSchemaSha256) ||
+      (followup.status === "supported" &&
+        (handoff.status !== "supported" ||
+          followup.contract.baseSchemaSha256 !==
+            handoff.contract.schemaSha256 ||
+          followup.contract.schemaSha256 === handoff.contract.schemaSha256 ||
+          followup.contract.schemaSha256 === handoff.baseSchemaSha256))
+    )
+      context.addIssue({
+        code: "custom",
+        message: "Task source binding is inconsistent.",
+      });
+  });
+export type CodexTaskSource = z.infer<typeof CodexTaskSourceSchema>;
+
+export const CodexTaskSourceRecordSchema = z.strictObject({
+  hostGeneration: z.number().int().positive().safe(),
+  localVerification: CodexHostLocalVerificationSchema,
+  evidence: CodexTaskSourceSchema,
+});
+export type CodexTaskSourceRecord = z.infer<typeof CodexTaskSourceRecordSchema>;
+
 export const CodexHostSelectionSchema = z.strictObject({
   executablePath: CanonicalAbsolutePathSchema,
   executableSha256: Sha256Schema,
@@ -87,6 +171,7 @@ export const CodexHostSelectionSchema = z.strictObject({
   schemaSha256: Sha256Schema,
   verifiedAt: CanonicalTimestampSchema,
   localVerification: CodexHostLocalVerificationSchema.nullable().default(null),
+  taskSource: CodexTaskSourceRecordSchema.nullable().default(null).optional(),
   liveVerification: CodexHostLiveVerificationSchema.nullable().default(null),
   agentVerification: CodexAgentVerificationSchema.nullable().default(null),
 });

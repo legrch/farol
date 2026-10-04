@@ -7,6 +7,7 @@ import { createDesktopChatBrowser } from "../../../apps/desktop/go-chat-host";
 import { GoChatBrowserDriver } from "../../../apps/desktop/go-chat-browser";
 import { BridgeError } from "../../../apps/desktop/bridge/client";
 declare const __FAROL_GO_CORE__: unknown;
+import { createMenuBar } from "./menu-bar";
 import { promises as rawFs } from "original-fs";
 import { createInstalledUpdateRuntime } from "./installed-update-runtime";
 import { drainInstalledComputer } from "./installed-computer-drain";
@@ -129,7 +130,7 @@ import {
   sectionForShortcut,
   type NavigationShortcuts,
 } from "../../pkg/ipc/navigation-shortcuts";
-import type { ShellActionSource } from "../../pkg/ipc/shell-state";
+import type { ShellAction, ShellActionSource } from "../../pkg/ipc/shell-state";
 import type { RuntimeStatus } from "../../pkg/ipc/runtime-status";
 import type { TaskSurfaceStatus } from "../../pkg/ipc/task-surface-status";
 import {
@@ -3812,6 +3813,7 @@ async function verifyCodexExecutable(
       version: probe.version,
       protocol: probe.protocol,
       schemaSha256: probe.schemaSha256,
+      taskSource: probe.taskSource,
       buildId: buildIdentity.buildId,
     });
     if (!recorded.ok) return ProductConfigurationResultSchema.parse(recorded);
@@ -5766,6 +5768,7 @@ async function configureAdmittedProduct(
           version: probe.version,
           protocol: probe.protocol,
           schemaSha256: probe.schemaSha256,
+          taskSource: probe.taskSource,
           buildId: buildIdentity.buildId,
         });
         if (!recordedContract.ok) {
@@ -5952,6 +5955,7 @@ async function configureAdmittedProduct(
             version: probe.version,
             protocol: probe.protocol,
             schemaSha256: probe.schemaSha256,
+            taskSource: probe.taskSource,
             buildId: buildIdentity.buildId,
           });
           if (!recordedContract.ok) {
@@ -7928,23 +7932,35 @@ function publishLayout(): void {
   });
 }
 
+let sectionNavigationSequence = 0;
+type SectionNavigationTarget = Pick<
+  Extract<ShellAction, { action: "navigate-section" }>,
+  "section" | "taskId" | "sequence"
+>;
+
 function publishShellAction(
-  action:
-    | "toggle-sidebar"
-    | "open-quick-switcher"
-    | "open-settings"
-    | "sign-in-returned"
-    | "close-overlay",
+  action: Exclude<ShellAction["action"], "navigate-section">,
+  source: Exclude<ShellActionSource, "section-shortcut-command">,
+  authWindowGeneration?: number | null,
+): void;
+function publishShellAction(
+  action: "navigate-section",
+  source: "section-shortcut-command",
+  authWindowGeneration: null,
+  navigation: SectionNavigationTarget,
+): void;
+function publishShellAction(
+  action: ShellAction["action"],
   source: ShellActionSource,
   authWindowGeneration: number | null = null,
+  navigation?: SectionNavigationTarget,
 ): void {
-  // S35-TA-16: provenance on the envelope only. Same actions, same
-  // recipient, same ordering — a recipient can now tell who asked.
   window?.webContents.send(channels.shellAction, {
     action,
     eventId: randomUUID(),
     source,
     authWindowGeneration,
+    ...navigation,
   });
 }
 
@@ -7964,6 +7980,7 @@ function focusForLayoutAfterRendererCommit(): void {
 }
 
 function requestQuickSwitcher(): void {
+  if (installedUpdateAdmission) return;
   if (!window || setupOpen) return;
   shellOverlay = "quick-switcher";
   applyLayout();
@@ -7972,28 +7989,30 @@ function requestQuickSwitcher(): void {
 }
 
 function requestSidebarToggle(): void {
-  if (!window || setupOpen) return;
-  const [width = 1] = window.getContentSize();
-  if (width <= 979) {
-    const opening = sidebarMode !== "overlay";
-    sidebarMode = opening ? "overlay" : "rail";
-    shellOverlay = opening ? "sidebar" : "none";
-  } else {
-    sidebarMode = sidebarMode === "full" ? "rail" : "full";
-    shellOverlay = "none";
-  }
-  applyLayout();
-  publishLayout();
-  focusForLayout();
+  if (installedUpdateAdmission) return;
+  if (!window || window.isDestroyed()) return;
+  publishShellAction("toggle-sidebar", "sidebar-command");
+}
+
+function requestUpdates(): void {
+  if (installedUpdateAdmission) return;
+  void containWindowOpenFailure(async () => {
+    await ensureWindow();
+    if (installedUpdateAdmission || !window || window.isDestroyed()) return;
+    publishShellAction("open-updates", "update-command");
+    window.webContents.focus();
+  }, recoverWindowOpenFailure);
 }
 
 function requestSettings(): void {
+  if (installedUpdateAdmission) return;
   if (!window) return;
   publishShellAction("open-settings", "settings-command");
   window.webContents.focus();
 }
 
 function closeShellOverlay(): void {
+  if (installedUpdateAdmission) return;
   if (shellOverlay === "none") return;
   if (sidebarMode === "overlay") sidebarMode = "rail";
   shellOverlay = "none";
@@ -8014,8 +8033,7 @@ function installApplicationMenu(): void {
                 id: "app.updates",
                 label: "Check for Updates…",
                 click: () => {
-                  requestSettings();
-                  void installedUpdateCommand({ kind: "check" });
+                  requestUpdates();
                 },
               },
               { type: "separator" },
@@ -8376,6 +8394,7 @@ function installNetworkFence(): Electron.Session | null {
 }
 
 function handleShortcut(input: Input): boolean {
+  if (input.isComposing || input.isAutoRepeat) return false;
   const key = input.key.toLowerCase();
   if (input.meta && input.key === ",") {
     requestSettings();
@@ -8399,17 +8418,20 @@ function handleShortcut(input: Input): boolean {
     return true;
   }
   if (input.control && input.key === "Tab") {
+    if (installedUpdateAdmission) return true;
     const tasks = productTasksState().tasks;
     if (tasks.length === 0) return false;
     const index = tasks.findIndex((task) => task.taskId === selectedTaskId);
     const direction = input.shift ? -1 : 1;
     const next = (index + direction + tasks.length) % tasks.length;
+    // Retain the native task cursor for consecutive Tab presses. Presentation
+    // and overlay closure are acknowledged by the single renderer owner.
     selectedTaskId = tasks[next]?.taskId ?? selectedTaskId;
-    section = "browser";
-    if (sidebarMode === "overlay") sidebarMode = "rail";
-    shellOverlay = "none";
-    applyLayout();
-    publishLayout();
+    publishShellAction("navigate-section", "section-shortcut-command", null, {
+      section: "browser",
+      taskId: selectedTaskId,
+      sequence: ++sectionNavigationSequence,
+    });
     if (liveTaskRoutes.has(selectedTaskId)) {
       void openLiveTaskSurface(selectedTaskId);
     } else {
@@ -8422,12 +8444,13 @@ function handleShortcut(input: Input): boolean {
       ? sectionForShortcut(navigationShortcuts, input.key)
       : null;
   if (shortcut) {
-    section = shortcut;
-    if (sidebarMode === "overlay") sidebarMode = "rail";
-    shellOverlay = "none";
-    applyLayout();
-    publishLayout();
-    if (section === "browser" && liveTaskRoutes.has(selectedTaskId)) {
+    if (installedUpdateAdmission) return true;
+    publishShellAction("navigate-section", "section-shortcut-command", null, {
+      section: shortcut,
+      taskId: selectedTaskId,
+      sequence: ++sectionNavigationSequence,
+    });
+    if (shortcut === "browser" && liveTaskRoutes.has(selectedTaskId)) {
       void openLiveTaskSurface(selectedTaskId);
     } else {
       focusForLayout();
@@ -9102,12 +9125,7 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
   startupStage("ready");
   if (process.platform === "darwin") {
     const icon = nativeImage.createFromPath(
-      path.join(
-        directory,
-        activeDesktopIdentity.environment === "dev"
-          ? "farol-dev-mark.png"
-          : "farol-mark.png",
-      ),
+      path.join(directory, "farol-mark.png"),
     );
     if (icon.isEmpty()) throw new Error("DESKTOP_BRAND_IMAGE_INVALID");
     app.dock?.setIcon(icon);
@@ -9404,6 +9422,45 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
   }
   installIpc();
   installApplicationMenu();
+  // Hidden tests own no visible status item. Ordinary owner launch gets one.
+  if (process.env.FAROL_NEXT_E2E !== "1" && process.platform === "darwin") {
+    const disposeMenuBar = createMenuBar(
+      {
+        open: () => {
+          void reopenWindow();
+        },
+        current: () => {
+          const task = productTasksState().tasks.find(
+            (item) => item.lifecycle === "running",
+          );
+          if (task) {
+            selectedTaskId = task.taskId;
+            section = "browser";
+            shellOverlay = "none";
+            applyLayout();
+            publishLayout();
+          }
+          void reopenWindow();
+        },
+        updates: () => {
+          requestUpdates();
+        },
+        quit: () => {
+          app.quit();
+        },
+      },
+      () => ({
+        label:
+          runtimeState === "ready"
+            ? "Farol · Local service available"
+            : "Farol · Service unavailable",
+        current:
+          productTasksState().tasks.find((task) => task.lifecycle === "running")
+            ?.label ?? null,
+      }),
+    );
+    app.once("will-quit", disposeMenuBar);
+  }
   await startRuntime();
   await ensureWindow();
   screen.on("display-added", reconcileVisibleTestDisplay);

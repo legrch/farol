@@ -36,6 +36,11 @@ import {
   findFarolModel,
 } from "../../pkg/model-route/contract";
 
+import type {
+  GoChatResponses,
+  GoChatPreparedInput,
+} from "../../../apps/desktop/go-chat-responses.ts";
+
 const visibleItemSchema = z.strictObject({
   sequence: z.number().int().positive(),
   id: z.string().min(1).max(256),
@@ -193,7 +198,9 @@ export type CodexChatGptProviderRuntime = Readonly<{
 type ProviderOptions = Readonly<{
   model: string;
   token: string;
-  conversation: CodexChatGptConversation;
+  conversation?: CodexChatGptConversation;
+  // Selected once at startup, before any ActiveProviderTurn is constructed.
+  goResponses?: GoChatResponses;
   compaction?: CodexChatGptCompaction;
   // Durable identity of every admitted initial request; see EV-05 in
   // handleResponses.
@@ -203,7 +210,7 @@ type ProviderOptions = Readonly<{
   // durable admission and the start of its conversation run, or until the
   // request is refused first. Releasing twice is harmless.
   threads?: Readonly<{
-    hold(identity: CodexChatGptTurnInput["identity"]): () => void;
+    hold(identity: CodexChatGptTurnInput["identity"]): (() => void) | null;
   }>;
 }>;
 
@@ -1310,6 +1317,58 @@ async function handleResponses(
   }
   const identity = identityFromRequest(parsed.data);
   const key = turnKey(identity);
+  if (options.goResponses) {
+    try {
+      await options.goResponses.serve({
+        key,
+        identity,
+        request: parsed.data,
+        response,
+        prepareInitial: async () => {
+          const release = options.threads
+            ? options.threads.hold(identity)
+            : () => undefined;
+          if (!release) {
+            const code = "FAROL_NEXT_COMPACTION_TURN_ACTIVE";
+            onRefusal(code);
+            refusal(response, 409, code);
+            return null;
+          }
+          try {
+            return await prepareInitialInput(
+              raw,
+              parsed.data,
+              key,
+              response,
+              options,
+              onRefusal,
+            );
+          } finally {
+            release();
+          }
+        },
+        onToolCall: onToolCallObserved,
+      });
+    } catch (error) {
+      if (!response.headersSent && !response.destroyed) {
+        const code =
+          error instanceof Error && /^FAROL_NEXT_[A-Z_]+$/u.test(error.message)
+            ? error.message
+            : "FAROL_NEXT_GO_OUTCOME_UNKNOWN";
+        onRefusal(code);
+        refusal(
+          response,
+          code.includes("UNSUPPORTED") || code.includes("UNAVAILABLE")
+            ? 422
+            : 409,
+          code,
+        );
+        return;
+      }
+      throw error;
+    }
+    return;
+  }
   const existing = turns.get(key);
   if (existing) {
     if (!existing.hasContinuation(parsed.data)) {
@@ -1356,7 +1415,14 @@ async function handleResponses(
   // From here the thread is in use: its context is prepared, the request is
   // admitted durably and its conversation run starts before the hold ends,
   // so nothing closes the task in between.
-  const release = options.threads?.hold(identity) ?? (() => undefined);
+  const release = options.threads
+    ? options.threads.hold(identity)
+    : () => undefined;
+  if (!release) {
+    onRefusal("FAROL_NEXT_COMPACTION_TURN_ACTIVE");
+    refusal(response, 409, "FAROL_NEXT_COMPACTION_TURN_ACTIVE");
+    return;
+  }
   try {
     await serveInitialRequest(
       raw,
@@ -1374,6 +1440,86 @@ async function handleResponses(
   }
 }
 
+async function prepareInitialInput(
+  raw: unknown,
+  data: ResponseRequest,
+  key: string,
+  response: ServerResponse,
+  options: ProviderOptions,
+  onRefusal: (code: string) => void,
+): Promise<GoChatPreparedInput | null> {
+  let trustedContext: string | null = null;
+  let contextDelivered: (() => void) | undefined;
+  if (options.compaction?.prepareTurn) {
+    const prepared = await options.compaction.prepareTurn({
+      body: structuredClone(raw),
+    });
+    if (!prepared.ok) {
+      refusal(response, 409, prepared.error.code);
+      return null;
+    }
+    trustedContext = prepared.value.trustedContext;
+    contextDelivered = prepared.value.delivered;
+  }
+  const prompt = promptFromInput(data.input, trustedContext);
+  if (prompt === null) {
+    refusal(response, 422, "FAROL_NEXT_INPUT_UNSUPPORTED");
+    return null;
+  }
+  try {
+    CodexNativeToolRegistry.parse(data.tools);
+  } catch (error) {
+    onRefusal(
+      error instanceof Error && /^CODEX_TOOL_[A-Z_]+$/u.test(error.message)
+        ? error.message
+        : "FAROL_NEXT_TOOL_CATALOGUE_INVALID",
+    );
+    refusal(response, 422, "FAROL_NEXT_TOOL_CATALOGUE_INVALID");
+    return null;
+  }
+  // A host may repeat an initial request after a terminal answer, a lost
+  // stream or a restart. The logical request is recorded durably, with its
+  // immutable intent, after every local refusal and before anything reaches
+  // ChatGPT, so a repeat never starts a second conversation run and the same
+  // identity cannot carry a different request. A deliberately new identity
+  // with the same text is a new request.
+  return {
+    prompt,
+    ...(contextDelivered ? { completed: contextDelivered } : {}),
+    admit: async () => {
+      let admission: ProviderTurnAdmission;
+      try {
+        admission = await options.turns.admit(
+          key,
+          digest(
+            canonicalJson({
+              model: data.model,
+              input: data.input,
+              tools: data.tools,
+            }),
+          ),
+        );
+      } catch {
+        onRefusal("FAROL_NEXT_TURN_JOURNAL_UNAVAILABLE");
+        refusal(response, 503, "FAROL_NEXT_TURN_JOURNAL_UNAVAILABLE");
+        return false;
+      }
+      if (admission !== "admitted") {
+        const code =
+          admission === "replayed"
+            ? "FAROL_NEXT_TURN_ALREADY_SUBMITTED"
+            : admission === "conflict"
+              ? "FAROL_NEXT_TURN_INTENT_CONFLICT"
+              : "FAROL_NEXT_TURN_STATE_UNKNOWN";
+        onRefusal(code);
+        refusal(response, 409, code);
+        return false;
+      }
+      return true;
+    },
+  };
+}
+
 async function serveInitialRequest(
   raw: unknown,
   data: ResponseRequest,
@@ -1385,69 +1531,19 @@ async function serveInitialRequest(
   onToolCallObserved: () => void,
   onRefusal: (code: string) => void,
 ): Promise<void> {
-  let trustedContext: string | null = null;
-  let contextDelivered: (() => void) | undefined;
-  if (options.compaction?.prepareTurn) {
-    const prepared = await options.compaction.prepareTurn({
-      body: structuredClone(raw),
-    });
-    if (!prepared.ok) {
-      refusal(response, 409, prepared.error.code);
-      return;
-    }
-    trustedContext = prepared.value.trustedContext;
-    contextDelivered = prepared.value.delivered;
-  }
-  const prompt = promptFromInput(data.input, trustedContext);
-  if (prompt === null) {
-    refusal(response, 422, "FAROL_NEXT_INPUT_UNSUPPORTED");
-    return;
-  }
-  try {
-    CodexNativeToolRegistry.parse(data.tools);
-  } catch (error) {
-    onRefusal(
-      error instanceof Error && /^CODEX_TOOL_[A-Z_]+$/u.test(error.message)
-        ? error.message
-        : "FAROL_NEXT_TOOL_CATALOGUE_INVALID",
-    );
-    refusal(response, 422, "FAROL_NEXT_TOOL_CATALOGUE_INVALID");
-    return;
-  }
-  // A host may repeat an initial request after a terminal answer, a lost
-  // stream or a restart. The logical request is recorded durably, with its
-  // immutable intent, after every local refusal and before anything reaches
-  // ChatGPT, so a repeat never starts a second conversation run and the same
-  // identity cannot carry a different request. A deliberately new identity
-  // with the same text is a new request.
-  let admission: ProviderTurnAdmission;
-  try {
-    admission = await options.turns.admit(
-      key,
-      digest(
-        canonicalJson({
-          model: data.model,
-          input: data.input,
-          tools: data.tools,
-        }),
-      ),
-    );
-  } catch {
-    onRefusal("FAROL_NEXT_TURN_JOURNAL_UNAVAILABLE");
-    refusal(response, 503, "FAROL_NEXT_TURN_JOURNAL_UNAVAILABLE");
-    return;
-  }
-  if (admission !== "admitted") {
-    const code =
-      admission === "replayed"
-        ? "FAROL_NEXT_TURN_ALREADY_SUBMITTED"
-        : admission === "conflict"
-          ? "FAROL_NEXT_TURN_INTENT_CONFLICT"
-          : "FAROL_NEXT_TURN_STATE_UNKNOWN";
-    onRefusal(code);
-    refusal(response, 409, code);
-    return;
-  }
+  const prepared = await prepareInitialInput(
+    raw,
+    data,
+    key,
+    response,
+    options,
+    onRefusal,
+  );
+  if (!prepared || !(await prepared.admit())) return;
+  const prompt = prepared.prompt;
+  const contextDelivered = prepared.completed;
+  if (!options.conversation)
+    throw new Error("FAROL_NEXT_PROVIDER_OPTIONS_INVALID");
   let turn: ActiveProviderTurn;
   try {
     turn = new ActiveProviderTurn(
@@ -1596,6 +1692,7 @@ export async function startCodexChatGptProvider(
     (options.model !== CHATGPT_MODEL_ID &&
       options.model !== "farol-next/mind" &&
       options.model !== "farol-next/drive") ||
+    Boolean(options.conversation) === Boolean(options.goResponses) ||
     options.token.length < 16 ||
     options.token.length > 512 ||
     /[\r\n]/u.test(options.token)
@@ -1717,7 +1814,7 @@ export async function startCodexChatGptProvider(
       responseRequests,
       unauthorizedRequests,
       failedRequests,
-      activeTurns: turns.size,
+      activeTurns: options.goResponses?.activeResponses ?? turns.size,
       toolCalls,
       compactionRequests,
       lastRefusalCode,
@@ -1733,6 +1830,7 @@ export async function startCodexChatGptProvider(
       lastRequestKindShape: [...lastRequestKindShape],
     }),
     close: async () => {
+      await options.goResponses?.close();
       for (const turn of [...turns.values()]) {
         turn.cancel("FAROL_NEXT_PROVIDER_CLOSED");
       }

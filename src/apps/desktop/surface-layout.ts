@@ -7,13 +7,13 @@ export type ShellOverlay =
 
 export const shellGeometry = Object.freeze({
   autoRailBelow: 980,
-  sidebarFull: 216,
-  sidebarRail: 72,
-  windowBar: 52,
-  taskStrip: 54,
-  dossier: 72,
-  browserStatusStrip: 25,
-  checkFeedbackBanner: 58,
+  sidebarFull: 294,
+  sidebarRail: 62,
+  windowBar: 58,
+  taskStrip: 0,
+  dossier: 0,
+  browserStatusStrip: 0,
+  checkFeedbackBanner: 0,
 });
 
 export function deriveSurfaceLayout(input: {

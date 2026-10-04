@@ -17,12 +17,12 @@ import {
 describe("owned product branding and immutable legacy packages", () => {
   it("verifies real source-local assets and refuses substituted or linked marks", async () => {
     const source = path.resolve("resources/brand");
-    await verifyBrandAssets(source);
+    await verifyBrandAssets(source, { source: true });
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "farol-brand-test-"));
     try {
       for (const resource of BRAND_RESOURCES)
         await fs.copyFile(
-          path.join(source, resource.output),
+          path.join(source, resource.source ?? resource.output),
           path.join(root, resource.output),
         );
       await verifyBrandAssets(root);
@@ -92,4 +92,29 @@ describe("owned product branding and immutable legacy packages", () => {
       await fs.rm(root, { recursive: true, force: true });
     }
   });
+});
+
+it("embeds exact approved native template pixels without expanding the package closure", async () => {
+  const source = await fs.readFile(
+    "src/apps/desktop/menu-bar-assets.ts",
+    "utf8",
+  );
+  for (const scale of [1, 2]) {
+    const match = source.match(
+      new RegExp(`menuBarTemplate${scale}x\\s*=\\s*"([A-Za-z0-9+/=]+)"`),
+    );
+    expect(match).not.toBeNull();
+    expect(Buffer.from(match[1], "base64")).toEqual(
+      await fs.readFile(
+        `resources/brand/signal-color/menu-bar-template${scale === 2 ? "@2x" : ""}.png`,
+      ),
+    );
+  }
+  expect(BRAND_RESOURCES.map((resource) => resource.output)).toEqual([
+    "farol-mark.svg",
+    "farol-dev-mark.svg",
+    "farol-mark.png",
+    "farol-dev-mark.png",
+    "farol.icns",
+  ]);
 });

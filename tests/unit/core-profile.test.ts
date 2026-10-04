@@ -97,6 +97,7 @@ const fixture = vi.hoisted(() => {
     add("/profiles/selected", 7n, 3n, 501n, 0o700n);
     add("/profiles/selected/computer", 7n, 4n, 501n, 0o700n);
     add("/profiles/selected/chat", 7n, 5n, 501n, 0o700n);
+    add("/profiles/selected/task", 7n, 8n, 501n, 0o700n);
     add("/homes", 9n, 6n, 0n, 0o755n);
     add("/homes/explicit", 9n, 7n, 501n, 0o755n);
   };
@@ -154,6 +155,7 @@ it("returns literal selection and exact canonical uint64 decimals mapped to Go P
     selection.root,
     selection.root + "/computer",
     selection.root + "/chat",
+    selection.root + "/task",
   ])
     fixture.node(path).dev = device;
   fixture.node(selection.root).ino = inode;
@@ -338,6 +340,13 @@ const physicalViolations: readonly [
   ["different child device", selection.root + "/computer", "dev", 8n],
   ["aliased children", selection.root + "/chat", "ino", 4n],
   ["aliased parent", selection.root + "/computer", "ino", 3n],
+  ["task mode", selection.root + "/task", "mode", 0o40750n],
+  ["task owner", selection.root + "/task", "uid", 502n],
+  ["task symlink", selection.root + "/task", "mode", 0o120700n],
+  ["task device", selection.root + "/task", "dev", 8n],
+  ["task aliases root", selection.root + "/task", "ino", 3n],
+  ["task aliases computer", selection.root + "/task", "ino", 4n],
+  ["task aliases chat", selection.root + "/task", "ino", 5n],
   ["profile physical alias", selection.root, "physical", "/profiles/Selected"],
   ["child physical alias", selection.root + "/chat", "physical", "/other/chat"],
   ["HOME physical alias", selection.home, "physical", "/homes/Explicit"],
@@ -355,6 +364,7 @@ it.each([
   selection.root,
   selection.root + "/computer",
   selection.root + "/chat",
+  selection.root + "/task",
   selection.home,
 ])("missing selected existing directory is unavailable: %s", (path) => {
   fixture.nodes.delete(path);
@@ -407,7 +417,7 @@ it.each([
     // reset deliberately lost fixture fd references; close still consumes ONLY
     // the owner's remembered descriptor numbers and never reopens any directory.
     profile.close();
-    expect(fixture.closed).toEqual([6, 5, 4, 3, 2, 1, 0]);
+    expect(fixture.closed).toEqual([7, 6, 5, 4, 3, 2, 1, 0]);
   },
 );
 it.each([
@@ -469,4 +479,23 @@ it("keeps close uncertainty sticky and never retries a consumed fd, including fa
 it("refuses unknown high mode bits instead of masking them into private permissions", () => {
   fixture.node(selection.root).mode = (1n << 31n) | 0o40700n;
   rejected(selection, "refused", "PROFILE_METADATA_INVALID");
+});
+
+it("retains Task continuity failure before spawn after the named child is repaired", () => {
+  const profile = qualified();
+  const taskPath = selection.root + "/task";
+  const original = { ...fixture.node(taskPath) };
+  fixture.nodes.set(taskPath, { ...original, ino: 99n });
+  const first = profile.beforeSpawn();
+  expect(first).toEqual({
+    state: "refused",
+    code: "PROFILE_CHANGED",
+    retry: "never",
+  });
+  fixture.nodes.set(taskPath, original);
+  const count = fixture.calls.length;
+  expect(profile.beforeSpawn()).toBe(first);
+  expect(fixture.calls).toHaveLength(count);
+  profile.close();
+  expect(fixture.closed).toEqual([...fixture.opened].reverse());
 });

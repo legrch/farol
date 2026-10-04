@@ -342,9 +342,14 @@ export function qualifyProfileLaunch(value: unknown): ProfileQualification {
     if (!root) return refuse("PROFILE_SELECTION_INVALID");
     const computer = pin(posix.join(selected.root, "computer"), "private");
     const chat = pin(posix.join(selected.root, "chat"), "private");
+    const task = pin(posix.join(selected.root, "task"), "private");
     if (
       computer.stat.device !== root.stat.device ||
       chat.stat.device !== root.stat.device ||
+      task.stat.device !== root.stat.device ||
+      sameIdentity(task.stat, computer.stat) ||
+      sameIdentity(task.stat, chat.stat) ||
+      sameIdentity(task.stat, root.stat) ||
       sameIdentity(computer.stat, chat.stat) ||
       sameIdentity(root.stat, computer.stat) ||
       sameIdentity(root.stat, chat.stat)

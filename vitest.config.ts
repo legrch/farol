@@ -4,6 +4,7 @@ export default defineConfig({
   test: {
     environment: "node",
     include: ["tests/**/*.test.{ts,mjs}"],
+    exclude: ["tests/renderer/**"],
     sequence: { concurrent: false },
     // 23 integration files spawn real processes, helpers or volumes, and none
     // of that fits vitest's 5 s default on a loaded machine. A budget, not an

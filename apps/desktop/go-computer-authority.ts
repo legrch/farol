@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { codexTaskCurrentSource } from "./task-current-settings";
 import { BridgeError, type Client } from "./bridge/client";
 import {
   validate,
@@ -48,12 +49,15 @@ export class GoComputerAuthority {
           throw new BridgeError("refused", "computer_publication_consumed");
         consumed = true;
         try {
-          const approval = ownerSettingsComputerApproval(settings, this.now());
+          const now = this.now();
+          const approval = ownerSettingsComputerApproval(settings, now);
+          const taskCodex = codexTaskCurrentSource(settings, now);
           const request = {
             fence: receipt.fence,
             expectedStoreRevision: receipt.storeRevision,
             settingsRevision: String(settings.revision),
             approval,
+            ...(taskCodex === undefined ? {} : { taskCodex }),
           };
           if (!validate("ComputerAuthorityPublishRequest", request))
             throw new BridgeError("refused", "invalid_computer_publication");

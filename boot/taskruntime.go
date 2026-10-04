@@ -23,8 +23,9 @@ import (
 
 // TaskRuntimeInputs is trusted Root composition, never a wire request. Route
 // belongs to the ONE existing qualified Task Owner/journal lifetime. Codex is
-// the existing concrete selected connection; construction neither connects nor
-// issues admission. Computer/native capability and retirement remain separate.
+// the existing concrete selected connection; Claude captures one deferred
+// operation. Construction neither connects nor issues admission. Native
+// capability qualification and retirement remain separate.
 type TaskRuntimeInputs struct {
 	Route     *taskrepo.Route
 	Binding   task.Binding
@@ -37,6 +38,7 @@ type ClaudeTaskInputs struct {
 	Selection   claudeclient.Selection
 	OperationID string
 	Computer    *computerprocess.Contract
+	Process     *ClaudeProcessInputs
 }
 type TaskRuntimeFailure struct{ Code string }
 
@@ -119,6 +121,26 @@ func NewTaskRuntime(in TaskRuntimeInputs) (*TaskRuntime, error) {
 		if err != nil {
 			return nil, taskRuntimeError(err)
 		}
+		if in.Claude.Process != nil {
+			// Normal composition uses the same selected Task route/journal. An
+			// explicit trusted port remains available for bounded CPU composition;
+			// a typed-nil port is invalid, not a request to choose another owner.
+			selected := *in.Claude
+			process := *selected.Process
+			if process.Reservations == nil {
+				reservation, err := newTaskProcessReservation(in.Route)
+				if err != nil {
+					return nil, err
+				}
+				process.Reservations = reservation
+			}
+			selected.Process = &process
+			provider, err := newTaskClaudeProvider(&selected)
+			if err != nil {
+				return nil, err
+			}
+			return taskRuntime(in, provider)
+		}
 		if in.Claude.Computer == nil {
 			return nil, taskRuntimeUnavailable("TASK_RUNTIME_COMPUTER_PROCESS_UNAVAILABLE")
 		}
@@ -126,10 +148,9 @@ func NewTaskRuntime(in TaskRuntimeInputs) (*TaskRuntime, error) {
 		if err != nil {
 			return nil, taskRuntimeError(err)
 		}
-		// Claude11 supplies selected arguments/parser and the real Computer
-		// peer, but no qualified ClaudeHost dispatch/observation implementation.
-		// A nonnil contract/Prepare echo cannot fill that missing prerequisite.
-		// Do not invent a provider loop, fake terminal or positive native grant.
+		// A preselected contract cannot supply the missing deferred native
+		// composition/qualification. Preserve the old unavailable boundary;
+		// do not fabricate authority or infer a Host from a Prepare echo.
 		return nil, taskRuntimeUnavailable("TASK_RUNTIME_CLAUDE_HOST_UNAVAILABLE")
 	default:
 		return nil, taskRuntimeUnavailable("TASK_RUNTIME_INPUT_INVALID")
@@ -137,8 +158,9 @@ func NewTaskRuntime(in TaskRuntimeInputs) (*TaskRuntime, error) {
 }
 
 // Existing consumer ports permit labelled CPU aggregate doubles, matching the
-// Computer root pattern. Public New accepts the concrete Codex Client and keeps
-// missing ClaudeHost unavailable; it accepts no caller-selected Provider map.
+// Computer root pattern. Public New accepts the concrete Codex Client or the
+// deferred Claude/Computer composition; it accepts no caller-selected Provider
+// map and keeps missing native qualification unavailable.
 func taskRuntime(in TaskRuntimeInputs, provider port.Provider) (*TaskRuntime, error) {
 	if err := taskRuntimeValidate(in); err != nil {
 		return nil, err

@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { randomUUID, createHash } from "node:crypto";
+import { configPath } from "./fixtures/go-chat-normal-config.ts";
 import { app, BrowserWindow, session } from "electron";
 import { ChatGptRoute } from "../../src/apps/desktop/chatgpt-route.ts";
 import { ProductSettingsSchema } from "../../src/pkg/product-settings/contract.ts";
@@ -25,6 +26,7 @@ declare const __FAROL_NORMAL_BUILD__: unknown;
 type Config = {
   paths: Record<string, string>;
   stateRoot: string;
+  workspaceRoot: string | null;
   artifactRoot: string;
   receipt: string;
   origin: string;
@@ -38,19 +40,28 @@ type Command =
   | { kind: "events"; handleId: string; afterSequence: string }
   | { kind: "frame-ack"; handleId: string; sequence: string }
   | { kind: "result-ack"; handleId: string; resultId: string }
+  | {
+      kind: "computer-read" | "computer-excluded-read" | "computer-revoke-read";
+    }
   | { kind: "snapshot" }
   | { kind: "close" };
-const config = JSON.parse(fs.readFileSync(process.argv[2]!, "utf8")) as Config;
+const config = JSON.parse(
+  fs.readFileSync(configPath(process.argv), "utf8"),
+) as Config;
 const origin = new URL(config.origin);
 assert.equal(origin.protocol, "http:");
 assert.equal(origin.hostname, "127.0.0.1");
 assert.equal(origin.origin, config.origin);
 assert.equal(config.homeUrl, `${config.origin}/chatgpt`);
+const settingsFile = path.join(config.stateRoot, "settings.json");
 const partition = "persist:farol-dev-chatgpt" as const;
 const routes: ChatGptRoute[] = [];
 let host: DesktopGoCore | undefined;
 let startAttempted = false;
 let closeAttempted = false;
+const computerAttempts = new Set<string>();
+let computerRead:
+  Awaited<ReturnType<DesktopGoCore["readForIntent"]>> | undefined;
 let violation: string | null = null;
 const receipt = {
   classification: "controlled-offline-production-composition",
@@ -172,6 +183,24 @@ function hidden() {
   };
 }
 function settings() {
+  const workspaces = [];
+  if (config.workspaceRoot !== null) {
+    assert.equal(
+      config.workspaceRoot,
+      path.join(path.dirname(config.stateRoot), "approved-workspace"),
+    );
+    assert.equal(fs.realpathSync(config.workspaceRoot), config.workspaceRoot);
+    const stat = fs.lstatSync(config.workspaceRoot, { bigint: true });
+    assert.ok(stat.isDirectory() && !stat.isSymbolicLink());
+    workspaces.push({
+      workspaceId: "controlled-workspace",
+      root: config.workspaceRoot,
+      label: "Disposable controlled workspace",
+      access: "read",
+      excludedPaths: [path.join(config.workspaceRoot, "excluded.md")],
+      rootIdentity: { device: String(stat.dev), inode: String(stat.ino) },
+    });
+  }
   const readiness = {
     visited: false,
     skipped: false,
@@ -195,7 +224,7 @@ function settings() {
       generation: 1,
       name: "Controlled offline fixture",
       commands: "none",
-      workspaces: [],
+      workspaces,
     },
     setup: {
       chatgpt: readiness,
@@ -205,6 +234,11 @@ function settings() {
       verify: readiness,
     },
   });
+}
+function currentSettings() {
+  return ProductSettingsSchema.parse(
+    JSON.parse(fs.readFileSync(settingsFile, "utf8")),
+  );
 }
 // Explicit synthetic catalogue, never inferred from requested labels or promoted
 // to production qualification. Account/config/grant pins are declarations.
@@ -277,7 +311,6 @@ async function dispatch(command: Command): Promise<unknown> {
       selected.on("will-download", (event) => event.preventDefault());
     }
     const document = settings();
-    const settingsFile = path.join(config.stateRoot, "settings.json");
     fs.writeFileSync(settingsFile, JSON.stringify(document), {
       flag: "wx",
       mode: 0o600,
@@ -288,10 +321,7 @@ async function dispatch(command: Command): Promise<unknown> {
       artifactRoot: config.artifactRoot,
       stateRoot: config.stateRoot,
       home: config.paths.home!,
-      settings: () =>
-        ProductSettingsSchema.parse(
-          JSON.parse(fs.readFileSync(settingsFile, "utf8")),
-        ),
+      settings: currentSettings,
       browser: (context) =>
         createDesktopChatBrowser({
           context,
@@ -363,6 +393,66 @@ async function dispatch(command: Command): Promise<unknown> {
   assert.ok(host, "HOST_NOT_STARTED");
   hidden();
   switch (command.kind) {
+    case "computer-read": {
+      assert.ok(config.workspaceRoot, "CONTROLLED_WORKSPACE_REQUIRED");
+      assert.equal(computerAttempts.has(command.kind), false, "NO_READ_REPLAY");
+      computerAttempts.add(command.kind);
+      computerRead = await host.readForIntent(
+        randomUUID(),
+        "controlled-workspace",
+        "note.md",
+      );
+      return computerRead;
+    }
+    case "computer-excluded-read":
+    case "computer-revoke-read": {
+      assert.ok(computerRead?.result.status === "ok", "KNOWN_READ_REQUIRED");
+      assert.equal(computerAttempts.has(command.kind), false, "NO_READ_REPLAY");
+      computerAttempts.add(command.kind);
+      if (command.kind === "computer-revoke-read") {
+        // Withdraw before saving narrowed disposable settings, then publish
+        // their exact readback. The next public readForIntent republishes and
+        // admits a NEW intent; this does not probe the prior admission's fence.
+        const publication = await host.withdraw();
+        const before = currentSettings();
+        assert.equal(before.computer.workspaces.length, 1);
+        assert.equal(before.computer.workspaces[0]?.root, config.workspaceRoot);
+        const after = ProductSettingsSchema.parse({
+          ...before,
+          revision: before.revision + 1,
+          computer: {
+            ...before.computer,
+            generation: before.computer.generation + 1,
+            workspaces: before.computer.workspaces.map((workspace) => ({
+              ...workspace,
+              excludedPaths: [
+                ...workspace.excludedPaths,
+                path.join(workspace.root, "note.md"),
+              ],
+            })),
+          },
+        });
+        fs.writeFileSync(`${settingsFile}.revoked`, JSON.stringify(after), {
+          flag: "wx",
+          mode: 0o600,
+        });
+        fs.renameSync(`${settingsFile}.revoked`, settingsFile);
+        const saved = currentSettings();
+        assert.deepEqual(saved, after);
+        await publication.publish(saved);
+      }
+      const document = currentSettings();
+      const read = await host.readForIntent(
+        randomUUID(),
+        "controlled-workspace",
+        command.kind === "computer-excluded-read" ? "excluded.md" : "note.md",
+      );
+      return {
+        ...read,
+        settingsRevision: document.revision,
+        computerGeneration: document.computer.generation,
+      };
+    }
     case "create": {
       const input: ChatCreate = {
         sessionId: "controlled-session",

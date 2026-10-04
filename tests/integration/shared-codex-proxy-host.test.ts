@@ -179,8 +179,11 @@ function closeFixtureInput(
 }
 
 const hosts: SharedCodexProxyHost[] = [];
-afterEach(() => {
-  for (const host of hosts.splice(0)) host.close();
+afterEach(async () => {
+  for (const host of hosts.splice(0))
+    expect(await host.closeAndWait(), "OWNED_PROXY_TERMINAL_REQUIRED").toBe(
+      true,
+    );
 });
 
 function fixture(mode = "normal", timeoutMs = 1_000): SharedCodexProxyHost {

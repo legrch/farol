@@ -55,3 +55,399 @@ A refusal preserves Computer's classified code and source with `retry: never`; m
 Focused generation/import fixtures, Go race/vet, real disposable reads and strict TS compilation are preparation evidence. K1 is not installed desktop acceptance, production authority persistence, provider/command parity or Computer R4 acceptance. Prerequisite Computer preparation remains feature-only; aggregate gates and required independent review remain integration work.
 
 K1's Unicode regression supplies a malformed path while an explicitly named U+FFFD file exists in the disposable tree and proves refusal before native IO. Its `--race-refusal` fixture injects Computer's classified native error to qualify route code/source/retry preservation only. The actual changed-file regression belongs to Computer's filesystem tests; this synthetic route vector is not native race proof.
+
+## Selected Task common-wire source checkpoint
+
+The source candidate includes generated Task DTOs and `TaskIngress.Methods()`.
+The facade captures one trusted Task Owner, current turn, provider/model binding
+and parent identity. Request bodies cannot select or renew that authority.
+Construction does not open a journal, connect to a provider or admit work.
+`NativeRuntime` does not register this facade yet; the default unavailable result
+remains until trusted selection, provider qualification and lifetime ownership are
+composed and accepted. These methods are not exposed to React or remote pages by
+this checkpoint.
+
+| Method                       | Operation | Behavior                                                                                                           |
+| ---------------------------- | --------- | ------------------------------------------------------------------------------------------------------------------ |
+| `task.resolve`               | Read      | Inspect the selected binding and supported capabilities.                                                           |
+| `task.create`                | Effect    | Create within the captured owner using the envelope operation ID.                                                  |
+| `task.continue`              | Effect    | Continue the exact completed Codex dispatch supplied in the body; the existing journal CAS binds that parent.      |
+| `task.resume`                | Effect    | Resume the exact terminal Claude dispatch in the same selected provider session, with a newly admitted invocation. |
+| `task.observe`               | Read      | Explicitly observe the current selected provider invocation and retain its state.                                  |
+| `task.status`, `task.result` | Read      | Read one exact retained dispatch, including historical results; never poll or dispatch a provider.                 |
+| `task.operation.status`      | Read      | Inspect an exact module-owned operation receipt, including retained uncertainty.                                   |
+| `task.observation.read`      | Read      | Read bounded progress metadata, cursor/gap state and optionally the retained result.                               |
+
+Progress, terminal provider evidence, retained result and parent delivery are
+separate facts. Model claims and plan checkpoints are advisory; a terminal
+notification alone does not settle the Task. Default progress contains bounded
+correlation and classification, never tool command bodies or private transcript
+text. Cursors use decimal uint64 strings. A page contains at most 32 events; the
+owning module reports missing history explicitly. A retained unknown receipt is
+an observation, not permission to send again.
+
+`boot/taskwire_test.go` composes the real framed server, facade, Task Service,
+Owner and concrete Codex client against an in-memory storage boundary and strict
+RPC peer. `tests/unit/task-wire.test.ts` covers the generated TypeScript boundary.
+They qualify source composition only. Native process/socket/storage behavior,
+installed provider support, normal app selection and owner journeys still need
+separate evidence. Active steering, cancellation and generic execution are not
+advertised by this facade.
+
+The selected Claude Root composition defers its Computer execution lease, process
+Service, published contract, concrete peer and Host until the Task Owner has
+successfully admitted the exact operation. `Supports` requires an independently
+supplied host qualifier and does not create an execution lease. The first
+selection is one-shot; subsequent observation reuses the same Host and original
+lease. Missing qualification stays unavailable, and an unknown selection, process
+start or cleanup cannot select a replacement process. When trusted composition
+omits a reservation port, Root maps the exact Computer process intent into the
+same selected Task route's durable reservation contract. The original operation,
+full admission binding, prepared command seal and representable absolute deadline
+must match. A known fresh publication returns `Reserved`; retained state or a
+repeat returns `Existing`, which never permits another spawn. Lost publication
+acknowledgement fences the original owner; restart or a missing old field cannot
+restore permission. No argv, stdin or provider transcript enters the reservation.
+This source path still needs a qualified native preparer and normal app startup
+selection. Controlled aggregate tests do not qualify native durability or CLI
+execution.
+
+The native profile layout includes a separate private `task` child, held by the
+same qualified profile lifetime. First provisioning creates it; opening an older
+profile without this child fails instead of repairing or migrating it. Its
+physical metadata creates no task, active admission or process permission.
+Existing profile update/recovery must be qualified separately before deployment.
+
+`boot/taskclaude_test.go` exercises that complete Go composition with controlled
+native boundaries: useful text precedes terminal output, the result is retained,
+and later result reads neither renew an expired lease nor start another child.
+`boot/taskprogress_test.go` checks Codex metadata before completion and across
+same-thread follow-up, including notifications arriving before the new turn ACK.
+Failed event publication stays uncertain without another Send. These CPU
+scenarios preserve the separate native/provider and installed-product gates.
+
+`boot/taskclauderesume_test.go` extends the controlled chain through `ResumeExact`
+and the framed `task.resume` method. The parent dispatch is checked in the same
+Task snapshot/journal CAS; the request cannot supply a provider session or choose
+latest state. A fresh trusted Root turn composes the new invocation, while the
+previous result remains readable without touching the old process. Lost start ACK
+keeps the resumed invocation unknown and does not launch a replacement.
+
+`TaskProfile` composes one journal for the qualified profile and one Task Owner
+with its original Codex client per TaskID. Trusted Root supplies each independent
+Task admission binding and the explicit parent association; the Chat generation
+is not an admission epoch producer. Selection opens no provider connection and
+publishes no Task admission. A completed dispatch can continue through the same
+Owner/client while earlier results remain retained. Closing first withdraws
+facade authority and fences every route, then closes the original clients and
+journal once. Unknown cleanup cannot select a replacement lifetime. This Root
+join is source-only: its native journal open, ordinary startup selector, current
+host/provider qualification and NativeRuntime activation are not accepted.
+
+`TaskSelector` now mints independent coding identities and selects a fresh scope
+for a known completed dispatch. It retains the original actual Chat family;
+an unrelated active Chat cannot replace that parent, including after the
+original is cancelled. A later turn of the same Chat uses its actual published
+parent peer while preserving the original Task Owner, client and provider thread.
+`BeginCurrentCodex` composes this path with Task's immutable selection authority.
+That authority compares the current complete grant, host/workspace generations,
+model policy and actual handoff/follow-up schema witnesses before and after
+physical verification. Each follow-up retains the same current reader and a
+separate actual parent peer. Controlled aggregate tests cover same-Chat follow-up
+and grant/parent withdrawal during provider qualification.
+
+The existing Settings publication now carries a closed optional `TaskCodexSource`
+projection. The desktop reads the saved host witness and explicit model policy;
+it retains the original grant dates and policy digest. Missing/stale provenance
+stays unavailable. Settings changes compare the final Computer and Task projections
+and await the existing negative Go fence before saving. Only an exact successful
+readback is published. Failed host writes retain the desktop's in-process source
+withdrawal across recovery reads; this is not a durable restart reconciliation.
+
+`BeginPublishedCodex` reads the actual known Root publication on every authority
+check, under the existing negative fence. A withdrawn, missing or poisoned source
+cannot fall back to old disk data. An identical known publication retains the
+original Task client across new publication/settings/store counters and Computer
+activation. Root cross-checks the same approved workspace and generation; native
+Task scopes with exclusions or without full Git approval remain unavailable
+because this adapter cannot enforce those narrower restrictions. Host identity
+and qualified private scratch remain fixed Root inputs.
+
+Controlled Go tests cover withdrawal before save while physical verification waits,
+withdrawal during provider qualification, same-thread continuation after identical
+republication, and current reads before/after Computer admission. Separate TS tests
+cover the real Settings queue and bridge mapping with memory/transport doubles.
+Together these are source composition evidence; they do not prove a delivered Go
+ACK, normal startup or native qualification. A lost transport response after a known
+Root commit is distinct from the tested unknown storage commit. No publication or
+Task effect may be replayed to reconcile that uncertainty. NativeRuntime Task
+activation and the exclusive journal/host/scratch qualification remain required.
+
+`TaskSurface` provides source-only addressing for these retained facades on one
+common desktop connection. Trusted Root selects a Task turn and returns an opaque
+`TaskHandle`; there is no wire selection or authority-grant method. `TaskRouted*`
+bodies carry only that handle and the existing typed request. The surface delegates
+to the captured facade, preserving its admission, original client and journal.
+A later trusted turn gets another handle on the same Task Owner. Old or missing
+handles cannot select another turn; profile closure withdraws all addresses.
+The bridge still uses the original operation ID, and reading an unknown operation
+after reconnect cannot turn it into a new Send. Protocol method registration does
+not establish provider capability or normal startup qualification.
+
+`apps/desktop/bridge/task.ts` uses this routed surface through the existing
+verified desktop `Client`. It snapshots the selected handle, request and backend
+context; checks the actual reply and nested dispatch/operation identities; and
+preserves partial lineage on unknown outcomes. An attempted effect ID remains
+consumed after refusal or loss. The adapter neither selects a provider nor
+reconnects or resends. An actual Client timeout closes that transport; a mock
+allowing subsequent reads on the same Client is not recovery evidence. Reading
+retained Go state after transport loss requires a separately trusted connection
+to the original retained owner, without issuing another mutation.
+
+The controlled cross-language Task journey uses the actual TypeScript Client and
+TaskBridge, inherited pipes, Go Server/TaskSurface, Task Owner and concrete Codex
+adapter. Its scripted provider records one connection/thread and two turns for
+same-thread follow-up, with useful progress before retained completion. A lost
+provider reply retains the original unknown operation; a duplicate effect ID
+and a new Create are both refused without another physical Send. The desktop
+pipe remains connected in that fault, so it does not qualify transport recovery.
+Follow-up and lost-reply each passed scoped runs; this is not a complete green
+run of the final suite bytes. The fixture directly selects TaskSurface and does
+not exercise the settings-backed selector or qualify native persistence/startup.
+
+The Task service rechecks the original parent after capability waits, before
+admission, before dispatch and before returning a mutation result. Withdrawal
+after durable intent keeps the operation unknown without another Send. Historical
+queries keep their existing read-authority rules. The concrete Codex client also
+requires an immutable dispatch check at the physical mutation write boundary;
+service checks alone cannot cover later provider qualification/history waits.
+Root constructs that client with the guard from the outset. It checks the same
+pending journal intent, host grant and exact current Task route before the final
+actual Chat parent read. Profile withdrawal uses an atomic flag, so no profile
+mutex or independent Task-gate wait follows that parent read. The transport also
+retains the originally qualified connection and account-notification epoch; a
+change observed while waiting for the write lock or Root guard prevents a new
+write. These are pre-write checks, not atomic remote cancellation. A partial
+thread creation must retain its original lineage and cannot be retried through
+another client.
+
+The Task parent peer uses the actual retained Chat admission facade. Root binds
+it explicitly to the initiating external thread/turn; those IDs are not derived
+from the Chat TaskID. Every recheck compares the complete current binding without
+provider calls or admission changes. Completion, cancellation and a later Chat
+turn invalidate the old association. This supplies the parent check only; current
+host/account/model qualification and normal Task startup selection remain open.
+
+## Running Chat to Computer source join
+
+The conversation facade can capture the admission of its actual running owner,
+commit a correlated `RequestComputer`, and retain an opaque call until the exact
+host result-return acknowledgement. It uses the existing lifecycle journal and
+queue. The call context includes logical owner/turn identity, physical browser
+lease/document identity, observed user/reply IDs and the source watermark.
+
+Root composition in `boot/chatcomputer.go` attaches that same admitted owner to
+current Computer publication without creating a second Chat admission. It narrows
+the first attachment to a read-only workspace, commits Computer membership once,
+and selects one bounded execution lease for the actual read. Independent new
+conversations receive distinct participants at their original admission; a
+same-conversation follow-up preserves its task and participant identity.
+
+`boot/chatcomputer_test.go` composes the real Chat owner, browser adapter, result
+retainer, admission facade, Computer policy, snapshot repository, execution lease
+and workspace service against controlled physical browser, native persistence and
+filesystem boundaries. Useful text precedes the read; an exact simulated host
+return ACK permits the next separately observed answer. Lost ACK, crossed identity,
+cancel, publication uncertainty, revoked authority and expired leases do not
+produce a duplicate read or Send. The participant collision regression is retained
+as a failing baseline and a passing corrected source witness.
+
+The inherited desktop registry now includes `chat.computer.read` and
+`chat.computer.return`. `boot/chatcomputerrelay.go` selects the existing Chat handle,
+retains its opaque call, and binds an original relay operation to the exact output
+UTF-8 digest and byte count. The read creates no return acknowledgement. Only a
+matching private receipt can resolve that original call, once. Unknown admission,
+lost Resolve acknowledgement or another transport operation cannot repeat the read
+or owner callback. Generated Go and TypeScript definitions share the same schema.
+
+`ChatComputerBridge` verifies the common response identity, closed payload, original
+operation correlation and exact output bytes. `chatComputerReadRelay` connects that
+bridge to the existing caller-relay's optional `invokeOwned` callback for one actual
+Chat handle and the whole-file `computer_workspace_read` capability. Other tools,
+namespaces and windowed requests are refused without legacy execution. Root still
+owns current admission, authority, execution and lifecycle settlement.
+
+The relay's trusted client parses the complete original result before sending one
+private receipt through the same endpoint. The server checks its original bounded
+operation record and invokes the captured callback at most once; the callback sends
+only the captured opaque Go receipt. Socket write/end is not an acknowledgement.
+The queued original callback also rechecks turn closure and expiry before starting
+any owned effect. Private receipt fields and operations stay outside the public MCP
+schema and result. Lost receipt, callback uncertainty or lost final confirmation
+never triggers recovery reconnect, result replay or another tool execution. A lost
+confirmation after known Go settlement leaves the client uncertain; it does not
+undo the durable Go fact.
+
+CPU evidence covers the real framed Go Server/Chat/Computer composition, generated
+cross-language frames, the real relay server/client with in-memory network and
+filesystem boundaries, and the selected TypeScript adapter/bridge against a
+controlled Go transport. These are separate controlled witnesses, not one launched
+native/provider journey. `Returned=true` by itself is not evidence: the trusted
+parsed-result producer supplies the return edge, and provider consumption requires
+its separate observation.
+
+After an exact known return, the same running Chat handle can issue another
+distinct whole-file read within its original workspace ceiling. Root retains the
+original immutable route selected by that opaque handle and binding, then asks the
+existing Computer issuer for a fresh operation lease. It does not repeat membership
+admission, widen policy or reuse/extend the prior operation's deadline. The current
+Computer and Chat owners are checked on every lease and disclosure phase. A return
+attempt or an observed settled owner does not replace the original known Root
+receipt; missing/unknown receipt keeps that chain closed.
+
+This remains one attachment for one running turn. Normal product routing must
+select the adapter for an actual Go conversation and qualify the complete path.
+A new turn/backend or follow-up cannot inherit this route; multi-turn Computer
+attachment remains pending. The external Responses owner/function-call SSE path
+is a separate join; an internally executed read must not become a second
+caller-executed function call. No native storage, package, install or live-provider
+acceptance is claimed.
+
+## Internal Computer mutation source join
+
+The canonical desktop schema includes `chat.computer.write`,
+`chat.computer.edit` and the read-only `chat.computer.mutation.read` observer.
+Root selects the actual running Chat handle before attaching Computer membership.
+The initial write attachment requires explicit existing write approval for the
+selected workspace and captures task mutation ownership in its original ceiling.
+A route first attached for reading cannot acquire write permission on a later call.
+
+Each mutation retains one copied request, one original execution lease and one
+Computer service. Chat's durable outstanding call precedes Computer admission;
+Computer's durable mutation intent precedes native execution. Repeated execution
+and new-key requests on an unsettled relay chain cannot dispatch another write.
+Only a known durable completed/failed result can produce an opaque relay receipt;
+the original parsed host return, rather than transport delivery or observation,
+settles that exact Chat call. A known `memory_only` completion remains readable
+under the original lease, but receives no usable relay receipt. Prepared or unknown
+outcomes remain fenced. Observations cannot admit, renew, Save, execute or ACK.
+
+The private Go mutation repository preserves the existing canonical v1 identity
+fingerprint and content-free records. A fresh permit requires this writer's
+confirmed create; an existing-name result can only observe Existing or fence
+unknown. Terminal publication is attempted once. New Go-only failure vocabulary
+that cannot fit v1 remains in memory instead of silently changing the stored
+schema. See `modules/computer/infra/repos/mutation/README.md` for the exact limits.
+
+Wire text is bounded to 256 KiB per field and existing typed arrays to 128 edits;
+empty edits are refused. Root additionally bounds the complete copied mutation
+before durable intent. The native 8 MiB capability does not enlarge the 1 MiB
+framing envelope or authorize chunking/retry.
+
+The selected TypeScript adapter accepts the existing external tool arguments,
+including the original stable `operationId` and `expectedSha256`. A nullable write
+preimage maps to the omitted wire `expectedSHA256`; the request digest still
+covers the original arguments. The effect ID stays separate from the relay call
+ID. Reusing either in the same bridge lifetime refuses another dispatch. Output
+checks bind the original handle, turn, generation, operation, path and receipt;
+a fresh retained observation also enforces the native 8 MiB result bound. Only
+known durable output reaches the existing single-attempt parsed-return ACK join.
+These controlled bridge tests do not replace the framed Go or native gates.
+
+`NewChatComputerMutationIngress` requires already qualified concrete journal and
+native workspace owners. It creates no roots and supplies no exclusive handoff
+from an old TypeScript writer. Ordinary `NewNativeRuntime` still selects its
+read-only join until that handoff and native qualification are accepted. The
+framed aggregate tests exercise real Go Chat/Computer services with explicitly
+controlled persistence and filesystem ports; they do not qualify native storage,
+installed startup, a live provider, or release acceptance.
+
+## External caller-tool round source join
+
+`chat.caller.begin`, `claim`, `output` and `return` compose one external
+caller-native tool round on an already admitted Go conversation. The existing
+host catalogue supplies its resolved function name, namespace and exact argument
+bytes. Root captures the actual logical/physical Chat context and retains the
+opaque `CallerToolCall`; the wire carries correlation and an opaque ticket, never
+admission, a Computer route or a caller-supplied authority snapshot.
+
+The first `response.completed` ends the HTTP round while the same Chat turn and
+worker remain outstanding. A single current `ClaimDispatch` is required before
+its original executable delivery. Reading retained frames or acknowledging a
+frame does not grant another dispatch. Exact external scope, call/item IDs,
+namespace and arguments bind the returned string or typed-text output. Accepting
+that output opens the next HTTP round on the same handle and does not Send again.
+The next round has distinct response/message IDs and only the new text suffix;
+the retained conversation result still contains the full answer.
+
+Output acceptance does not settle the tool. Only the original private relay
+parser receipt can return the captured Root receipt through `chat.caller.return`.
+That receipt binds a fresh receipt ID, original ticket/relay/call correlation and
+normalized UTF-8 output digest/length. Unknown publication, dispatch or settlement
+cannot mint another ticket or retry through another method. Cancellation keeps
+the existing unknown outcome and lease behavior. No external caller tool is
+executed by this attachment; an internal Go Computer read remains a distinct
+selected path and never produces another executable external function call.
+
+`chat.caller.check` reads the current state of the same already-claimed call
+under the actual Go owner gate. It issues no claim, write permit, execution,
+journal entry or acknowledgement. Cancellation or freeze can occur after the
+snapshot; a successful check is not a transport fence across an awaited write.
+
+`chat.conversation.submission` reports the actual owner snapshot as
+`not-dispatched`, `intent-committed` or `unknown`, bound to the exact handle and
+backend generation. None permits releasing an external replay guard. In
+particular, a queued or prepared handle can report `not-dispatched` and still
+perform its original Send later. Lost intent/Send replies remain unknown; even a
+known browser `NotSent` after durable intent remains `intent-committed`. These
+read methods cannot withdraw a handle or grant a replacement request.
+
+`chat.caller.issue` consumes one delivery attempt for that same claimed call.
+The Go owner returns only the original contiguous completion group captured at
+publication, including preceding text-completion frames. Root uses the existing
+Responses encoder, validates original correlation and bounds, and binds an
+opaque issuance ID plus SHA-256 and UTF-8 byte length to those exact bytes.
+Neither retained Events nor a successful `check` can replace this issuance.
+Lost reply, encoding failure, unavailable frames and unknown publication cannot
+reissue the group.
+
+The thin `writeGoCallerDelivery` adapter binds that issuance to one original HTTP
+response and its preceding sequence cursor. It installs monotonic abort/close/
+error listeners before awaiting issuance, then makes at most one exact
+`response.write` without an await after its final local fence check. A false
+write result means bytes were already buffered; drain never grants another
+write. Late withdrawal discards an in-transit reply or leaves a possibly written
+group unknown. Returned metadata is neither output acceptance nor a parsed
+receipt, frame ACK or proof of atomic network delivery. Composition must close
+its local fence before awaiting its own Go cancellation; already-issued remote
+data can remain in flight, so a Go freeze alone is not confirmed transport stop.
+
+The typed bridge is available from the existing desktop Go lifetime. The optional
+`goResponses` startup input selects the Go transport in `startRouteBRuntime` before
+a legacy provider turn exists. Existing HTTP authentication, model/schema parsing,
+compaction exclusion and durable external replay identity remain in that path.
+There is no legacy fallback after Go admission. The trusted `resolveCreate` producer
+must supply a legitimate browser account/model selection; ordinary production
+startup has not yet qualified that producer.
+
+The selected transport emits Go SSE frames incrementally, retains the original
+handle through a tool round, and resumes observation only after the original
+private parsed-result receipt returns to Go. The actual global Prepare result
+selects the connection; a known `CHAT_CAPACITY` from Prepare leaves the sixth
+conversation queued without a Send. Other preparation failures stay unknown.
+A successful Send command response does not erase submission uncertainty reported
+by the owning Go lifecycle.
+
+HTTP response observers remain attached until the original local `finish` event.
+Premature close/error first withdraws the local write fence. A continuation arriving
+before finish has a separate fenced response and cannot replace the old binding.
+Local finish, socket write and drain never become Go business acknowledgement.
+A later ordinary user turn and worker reuse still require their separate delivery
+settlement; this optional transport currently refuses that reuse. It supports one
+external tool round per Chat turn, not a general multi-round tool engine.
+
+The controlled Go process/ordinary HTTP tests use the real services, framed bridge
+and existing relay with scripted physical browser and memory journal ports.
+They are not a launched Electron, native filesystem, live provider, packaged or
+installed journey. The finish-order regressions require their own executed test
+receipt; prior transport results do not qualify changed afterimages.

@@ -180,7 +180,7 @@ await Promise.all([
   build({
     ...common,
     entryPoints: ["src/apps/desktop/desktop-entry.ts"],
-    define: { __FAROL_GO_CORE__: "null" },
+    define: { ...common.define, __FAROL_GO_CORE__: "null" },
     outfile: "_output/build/app/main.cjs",
     platform: "node",
     format: "cjs",
@@ -211,9 +211,11 @@ await Promise.all([
   }),
   build({
     bundle: true,
-    entryPoints: ["src/ui/shell.ts"],
+    entryPoints: ["src/ui/renderer/entry.tsx"],
     outfile: "_output/build/app/shell.js",
     platform: "browser",
+    jsx: "automatic",
+    define: { "process.env.NODE_ENV": '"production"' },
     format: "iife",
     logLevel: "warning",
     sourcemap: false,
@@ -242,10 +244,10 @@ await Promise.all([
       await fs.writeFile(path.join(output, name), bytes, { mode: 0o600 });
     },
   ),
-  readBuildInput("src/ui/shell.html").then((bytes) =>
+  readBuildInput("src/ui/renderer/shell.html").then((bytes) =>
     fs.writeFile("_output/build/app/shell.html", bytes),
   ),
-  readBuildInput("src/ui/shell.css").then((bytes) =>
+  readBuildInput("src/ui/renderer/shell.css").then((bytes) =>
     fs.writeFile("_output/build/app/shell.css", bytes),
   ),
   readBuildInput("resources.json").then((bytes) => {
@@ -266,9 +268,9 @@ await Promise.all([
     ),
   ),
   ...BRAND_RESOURCES.map((resource) =>
-    readBuildInput(`resources/brand/${resource.output}`).then((bytes) =>
-      fs.writeFile(path.join(output, resource.output), bytes),
-    ),
+    readBuildInput(
+      `resources/brand/${resource.source ?? resource.output}`,
+    ).then((bytes) => fs.writeFile(path.join(output, resource.output), bytes)),
   ),
 ]);
 const nativeArchive = await compileNativeArchive({
@@ -382,7 +384,7 @@ if (goInputs) {
   await build({
     ...common,
     entryPoints: ["src/apps/desktop/desktop-entry.ts"],
-    define: { __FAROL_GO_CORE__: JSON.stringify(core) },
+    define: { ...common.define, __FAROL_GO_CORE__: JSON.stringify(core) },
     outfile: "_output/build/app/main.cjs",
     platform: "node",
     format: "cjs",

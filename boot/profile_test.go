@@ -36,10 +36,10 @@ func newProfileDouble() (*profileDouble, ProfileBinding) {
 		return profileMetadata{device: device, inode: inode, uid: uid, mode: profileDirectoryType | mode}
 	}
 	return &profileDouble{
-		metadata: map[int]profileMetadata{0: m(1, 1, 0, 0755), 1: m(7, 2, 0, 0755), 2: m(7, 3, 501, 0700), 3: m(7, 4, 501, 0700), 4: m(7, 5, 501, 0700)},
-		entries:  map[profileEntry]int{{0, "profiles"}: 1, {1, "selected"}: 2, {2, "computer"}: 3, {2, "chat"}: 4},
-		parents:  map[int]int{1: 0, 2: 1, 3: 2, 4: 2},
-		paths:    map[int]string{0: "/", 1: "/profiles", 2: binding.Root, 3: filepath.Join(binding.Root, "computer"), 4: filepath.Join(binding.Root, "chat")},
+		metadata: map[int]profileMetadata{0: m(1, 1, 0, 0755), 1: m(7, 2, 0, 0755), 2: m(7, 3, 501, 0700), 3: m(7, 4, 501, 0700), 4: m(7, 5, 501, 0700), 5: m(7, 6, 501, 0700)},
+		entries:  map[profileEntry]int{{0, "profiles"}: 1, {1, "selected"}: 2, {2, "computer"}: 3, {2, "chat"}: 4, {2, "task"}: 5},
+		parents:  map[int]int{1: 0, 2: 1, 3: 2, 4: 2, 5: 2},
+		paths:    map[int]string{0: "/", 1: "/profiles", 2: binding.Root, 3: filepath.Join(binding.Root, "computer"), 4: filepath.Join(binding.Root, "chat"), 5: filepath.Join(binding.Root, "task")},
 		closeErr: map[int]error{}, openErr: map[int]error{}, statErr: map[int]error{},
 	}, binding
 }
@@ -163,6 +163,15 @@ func TestProfileQualifiedRootsAndSharedCleanup(t *testing.T) {
 	if err != nil || computer != wantComputer || chat != wantChat || len(d.closed) != 0 {
 		t.Fatalf("roots/lifetime mismatch: %v %v %v", computer, chat, err)
 	}
+	taskRoot, err := alias.TaskRoot()
+	wantTask := NativeRoot{Path: "/profiles/selected/task", ProfileID: binding.ProfileID, Device: 7, Inode: 6, OwnerUID: 501, Mode: 0700}
+	if err != nil || taskRoot != wantTask || len(d.closed) != 0 {
+		t.Fatalf("Task root/lifetime mismatch: %v %v", taskRoot, err)
+	}
+	taskRoot.Path = "/alternate"
+	if again, err := q.TaskRoot(); err != nil || again != wantTask {
+		t.Fatal("caller mutated retained Task root")
+	}
 	computer.Path = "/alternate"
 	binding.Root = "/alternate"
 	again, _, err := q.Roots()
@@ -180,6 +189,11 @@ func TestProfileQualifiedRootsAndSharedCleanup(t *testing.T) {
 	requireProfileFailure(t, err, ProfileUnavailable)
 	if computer != (NativeRoot{}) || chat != (NativeRoot{}) {
 		t.Fatal("closed qualification returned usable values")
+	}
+	taskRoot, err = alias.TaskRoot()
+	requireProfileFailure(t, err, ProfileUnavailable)
+	if taskRoot != (NativeRoot{}) {
+		t.Fatal("closed qualification returned Task root")
 	}
 }
 
@@ -203,6 +217,16 @@ func TestProfileQualificationRefusesPhysicalMismatch(t *testing.T) {
 		{"child permissions", func(d *profileDouble, b *ProfileBinding) { m := d.metadata[4]; m.mode |= 0001; d.metadata[4] = m }, ProfileRefused},
 		{"missing computer", func(d *profileDouble, b *ProfileBinding) { delete(d.entries, profileEntry{2, "computer"}) }, ProfileUnavailable},
 		{"missing chat", func(d *profileDouble, b *ProfileBinding) { delete(d.entries, profileEntry{2, "chat"}) }, ProfileUnavailable},
+		{"missing task", func(d *profileDouble, b *ProfileBinding) { delete(d.entries, profileEntry{2, "task"}) }, ProfileUnavailable},
+		{"task symlink", func(d *profileDouble, b *ProfileBinding) { m := d.metadata[5]; m.mode = 0120700; d.metadata[5] = m }, ProfileRefused},
+		{"task file", func(d *profileDouble, b *ProfileBinding) { m := d.metadata[5]; m.mode = 0100700; d.metadata[5] = m }, ProfileRefused},
+		{"task owner", func(d *profileDouble, b *ProfileBinding) { m := d.metadata[5]; m.uid++; d.metadata[5] = m }, ProfileRefused},
+		{"task permissions", func(d *profileDouble, b *ProfileBinding) { m := d.metadata[5]; m.mode |= 0040; d.metadata[5] = m }, ProfileRefused},
+		{"task device", func(d *profileDouble, b *ProfileBinding) { m := d.metadata[5]; m.device++; d.metadata[5] = m }, ProfileRefused},
+		{"task aliases root", func(d *profileDouble, b *ProfileBinding) { d.metadata[5] = d.metadata[2] }, ProfileRefused},
+		{"task aliases computer", func(d *profileDouble, b *ProfileBinding) { d.metadata[5] = d.metadata[3] }, ProfileRefused},
+		{"task aliases chat", func(d *profileDouble, b *ProfileBinding) { d.metadata[5] = d.metadata[4] }, ProfileRefused},
+
 		{"different device", func(d *profileDouble, b *ProfileBinding) { m := d.metadata[3]; m.device++; d.metadata[3] = m }, ProfileRefused},
 		{"aliased children", func(d *profileDouble, b *ProfileBinding) { d.metadata[4] = d.metadata[3] }, ProfileRefused},
 		{"different parent", func(d *profileDouble, b *ProfileBinding) { d.parents[3] = 1 }, ProfileRefused},
@@ -311,8 +335,59 @@ func TestProfileFailureAndZeroValueClassification(t *testing.T) {
 	for _, q := range []*QualifiedProfile{nil, {}} {
 		computer, chat, err := q.Roots()
 		requireProfileFailure(t, err, ProfileUnavailable)
+		taskRoot, taskErr := q.TaskRoot()
+		requireProfileFailure(t, taskErr, ProfileUnavailable)
+		if taskRoot != (NativeRoot{}) {
+			t.Fatal("zero value returned Task root")
+		}
 		if computer != (NativeRoot{}) || chat != (NativeRoot{}) || q.Close() != nil {
 			t.Fatal("zero value created roots or cleanup authority")
 		}
+	}
+}
+
+func TestProfileTaskContinuityAndCleanupAreSharedAndSticky(t *testing.T) {
+	for _, kind := range []string{"named replacement", "permissions", "reparent", "physical path"} {
+		t.Run(kind, func(t *testing.T) {
+			d, binding := newProfileDouble()
+			q, err := qualifyProfile(binding, d)
+			if err != nil {
+				t.Fatal(err)
+			}
+			original := d.metadata[5]
+			switch kind {
+			case "named replacement":
+				m := original
+				m.inode++
+				d.metadata[9] = m
+				d.entries[profileEntry{2, "task"}] = 9
+			case "permissions":
+				m := original
+				m.mode |= 0004
+				d.metadata[5] = m
+			case "reparent":
+				d.parents[5] = 1
+			case "physical path":
+				d.paths[5] = "/alternate/task"
+			}
+			root, first := q.TaskRoot()
+			requireProfileFailure(t, first, ProfileRefused)
+			if root != (NativeRoot{}) {
+				t.Fatal("changed Task returned root")
+			}
+			fresh, _ := newProfileDouble()
+			d.metadata, d.entries, d.parents, d.paths = fresh.metadata, fresh.entries, fresh.parents, fresh.paths
+			if _, next := q.TaskRoot(); next != first {
+				t.Fatal("Task failure recovered")
+			}
+			computer, chat, next := q.Roots()
+			if next != first || computer != (NativeRoot{}) || chat != (NativeRoot{}) {
+				t.Fatal("Roots bypassed shared Task fence")
+			}
+			if err := q.Close(); err != nil {
+				t.Fatal(err)
+			}
+			requireExactProfileCleanup(t, d)
+		})
 	}
 }

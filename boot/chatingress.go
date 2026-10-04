@@ -30,13 +30,16 @@ type ChatIngress struct {
 	owner   string
 	handles map[string]chatHandle
 	used    map[string]bool
+	caller  *chatCallerIngress
 }
 
 func NewChatIngress(facade *conversation.Facade, peer wire.Context, owner string) (*ChatIngress, error) {
 	if facade == nil || validateIngress("Context", peer) != nil || !validIngressID(owner) {
 		return nil, errors.New("chat_ingress_invalid")
 	}
-	return &ChatIngress{facade: facade, peer: peer, owner: owner, handles: make(map[string]chatHandle), used: make(map[string]bool)}, nil
+	ingress := &ChatIngress{facade: facade, peer: peer, owner: owner, handles: make(map[string]chatHandle), used: make(map[string]bool)}
+	ingress.caller = newChatCallerIngress(ingress)
+	return ingress, nil
 }
 func (s *ChatIngress) create(ctx context.Context, operation string, input wire.ChatCreate) (*wire.ChatHandle, error) {
 	s.mu.Lock()
@@ -57,7 +60,14 @@ func (s *ChatIngress) create(ctx context.Context, operation string, input wire.C
 	if err != nil {
 		return nil, err
 	}
-	binding := conversation.Binding{ProfileID: s.peer.ProfileId, BackendGeneration: s.peer.BackendGeneration, OwnerID: s.owner, SessionID: input.SessionId, TaskID: task, TaskEpoch: 1, ParticipantID: s.owner, TurnID: turn, OperationID: operation, TurnGeneration: 1}
+	// A participant belongs to this admitted task, not to the owner account.
+	// Follow below preserves it with TaskID; a new conversation must not collide
+	// with another task when Computer records the captured admission.
+	participant, err := randomIngressID()
+	if err != nil {
+		return nil, err
+	}
+	binding := conversation.Binding{ProfileID: s.peer.ProfileId, BackendGeneration: s.peer.BackendGeneration, OwnerID: s.owner, SessionID: input.SessionId, TaskID: task, TaskEpoch: 1, ParticipantID: participant, TurnID: turn, OperationID: operation, TurnGeneration: 1}
 	var previous *conversation.Handle
 	if input.PreviousHandle != nil {
 		old, ok := s.handles[*input.PreviousHandle]
@@ -147,7 +157,7 @@ func chatOutcome(shape string, value any, err error) (*desktop.Outcome, error) {
 	return &desktop.Outcome{Status: "ok", Data: raw}, nil
 }
 func (s *ChatIngress) Methods() map[string]desktop.Method {
-	methods := map[string]desktop.Method{}
+	methods := s.caller.Methods()
 	methods["chat.conversation.create"] = desktop.Method{Handle: func(ctx context.Context, r desktop.Request) (*desktop.Outcome, error) {
 		var in wire.ChatCreate
 		if r.OperationID == "" || chatDecode("ChatCreate", r, &in) != nil {
@@ -166,6 +176,14 @@ func (s *ChatIngress) Methods() map[string]desktop.Method {
 		}
 		p, e := s.facade.PrepareNext(ctx, wireUint(in.DeadlineMillis))
 		if e != nil {
+			// Only this facade's PrepareNext capacity result is known to precede
+			// reservation, journal publication and browser IO. Keep the queued
+			// handles; this is not permission to replace a request or retry Send.
+			// Other methods and every uncertain preparation remain unknown.
+			var failure *conversation.Failure
+			if p == nil && errors.As(e, &failure) && failure != nil && failure.Source == "chat-conversation" && failure.Retry == "never" && failure.Code == "CHAT_CAPACITY" {
+				return &desktop.Outcome{Status: "refused", Code: failure.Code}, nil
+			}
 			return nil, e
 		}
 		s.mu.Lock()
@@ -203,6 +221,20 @@ func (s *ChatIngress) Methods() map[string]desktop.Method {
 			return chatOutcome("Empty", wire.Empty{}, e)
 		}}
 	}
+	// Read-only intent observation. A queued/prepared not-dispatched handle can
+	// still Send later, so this result never releases an external replay guard.
+	methods["chat.conversation.submission"] = desktop.Method{Handle: func(ctx context.Context, r desktop.Request) (*desktop.Outcome, error) {
+		var in wire.ChatHandleRequest
+		if r.OperationID != "" || chatDecode("ChatHandleRequest", r, &in) != nil {
+			return invalidIngress()
+		}
+		h, e := s.get(in.HandleId)
+		if e != nil {
+			return invalidIngress()
+		}
+		state, e := h.handle.SubmissionState(ctx)
+		return chatOutcome("ChatSubmissionState", wire.ChatSubmissionState{Handle: chatWireHandle(h), State: string(state)}, e)
+	}}
 	methods["chat.conversation.result"] = desktop.Method{Handle: func(ctx context.Context, r desktop.Request) (*desktop.Outcome, error) {
 		var in wire.ChatHandleRequest
 		if r.OperationID != "" || chatDecode("ChatHandleRequest", r, &in) != nil {

@@ -144,12 +144,13 @@ installation, update/rollback and live provider qualification are separate steps
 
 ## Source architecture
 
-The current UI and browser mechanics remain TypeScript/Electron. The optional Go
-host source is wired through trusted profile and artifact checks:
+The Farol-owned shell is React + TypeScript. Electron and browser mechanics remain
+plain TypeScript. The optional Go host is wired through trusted profile and artifact
+checks:
 
 ```mermaid
 flowchart LR
-    UI[Current DOM / TypeScript UI] --> Host[Electron host]
+    UI[React / TypeScript shell] --> Host[Electron host]
     Host --> TS[Existing TypeScript routes]
     Host -. Go-enabled build .-> Bridge[Attested Desktop bridge]
     Bridge --> Core[Go boot and native runtime]
@@ -166,10 +167,19 @@ The normal host now composes the browser pump and physical adapter. Its producti
 control catalogue, real DOM/provider journey and startup acceptance remain unqualified;
 these source tests are not a working packaged model route.
 
+The selected Task facade also maps create, observe, exact dispatch status/result,
+same-thread continuation, exact-session resume and retained progress into the
+common framed protocol. Controlled in-memory boundaries exercise the real Task
+service, Codex transport and Claude Host/Computer service chain, including useful
+output before terminal, historical results and lost-ACK no-repeat behavior.
+The Claude execution lease is selected only after Task admission. `NativeRuntime`
+does not yet register these Task routes: trusted selection, native qualification
+and real Codex/Claude journeys remain separate acceptance work.
+
 | Location                                                                                 | Ownership at this checkpoint                                                                                                                     |
 | ---------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| [`src/`](src/)                                                                           | Existing DOM UI, Electron/browser adapters, TypeScript services and composition.                                                                 |
-| [`apps/desktop/`](apps/desktop/)                                                         | Attested Go host, authority publication and generated-wire bridge; no React UI here yet.                                                         |
+| [`src/`](src/)                                                                           | React shell under `src/ui/renderer/`, Electron/browser adapters, transitional services and composition.                                          |
+| [`apps/desktop/`](apps/desktop/)                                                         | Attested Go host, authority publication and generated Go/TypeScript wire bridge.                                                                 |
 | [`boot/`](boot/), [`cmd/farol/`](cmd/farol/), [`transport/desktop/`](transport/desktop/) | Go composition, entrypoint, native profile lifetime and framed protocol.                                                                         |
 | [`modules/computer/`](modules/computer/)                                                 | Authority, filesystem and process services. Native ingress selects catalogue/bootstrap/read; other prepared capabilities need their own cutover. |
 | [`modules/chat/`](modules/chat/)                                                         | Turn, queue, admission, browser exchange and bounded retained results; real browser host composition remains unqualified.                        |
@@ -180,7 +190,8 @@ Domain and application code use values and consumer-owned ports. Neighbors cross
 published contracts through `infra/peer`; Go contracts map independent DTOs and
 delegate to their own module. Root `boot/` composes Go and `src/boot/` composes the
 remaining TypeScript. Core does not become a second authority or journal owner.
-React presentation remains the target, outside this source checkpoint.
+The composed React source still requires native acceptance against its exact build;
+component and source checks do not establish an owner-openable artifact.
 
 The [documentation index](docs/README.md) links module contracts, migration limits,
 installation and verification. Unsigned distribution, remaining Python helpers,

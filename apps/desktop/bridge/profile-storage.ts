@@ -61,6 +61,7 @@ export function openNativeProfileStorage(
   if (created) {
     fs.mkdirSync(path.join(root, "computer"), { mode: 0o700 });
     fs.mkdirSync(path.join(root, "chat"), { mode: 0o700 });
+    fs.mkdirSync(path.join(root, "task"), { mode: 0o700 });
     profileId = randomUUID();
     const fd = fs.openSync(
       marker,
@@ -153,6 +154,8 @@ export function openNativeProfileStorage(
   }
   privateDirectory(path.join(root, "computer"));
   privateDirectory(path.join(root, "chat"));
+  // Existing missing Task storage fails here; open never provisions or repairs it.
+  privateDirectory(path.join(root, "task"));
   unchanged(root, directory);
   unchanged(stateRoot, parent);
   return Object.freeze({

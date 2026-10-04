@@ -19,8 +19,9 @@ type ProfileBinding struct {
 }
 
 // NativeRoot describes a fixed existing state child, not a workspace or positive
-// authority. Lead maps Computer.Path to accessrepo's current string API and Chat
-// to chatrepo.Root, retaining this qualification and checking the module opens.
+// authority. Lead maps Computer.Path to accessrepo's current string API, Chat
+// to chatrepo.Root, and Task to its existing journal root, retaining this
+// qualification and checking the module opens.
 // No owner, participant, approval, journal state or publication fence is inferred.
 type NativeRoot struct {
 	Path, ProfileID string
@@ -95,15 +96,15 @@ type profileDirectory struct {
 	private    bool
 }
 type profileOwner struct {
-	mu             sync.Mutex
-	os             profileOS
-	binding        ProfileBinding
-	uid            uint32
-	directories    []profileDirectory
-	computer, chat int
-	closed         bool
-	failure        error
-	closeErr       error
+	mu                   sync.Mutex
+	os                   profileOS
+	binding              ProfileBinding
+	uid                  uint32
+	directories          []profileDirectory
+	computer, chat, task int
+	closed               bool
+	failure              error
+	closeErr             error
 }
 
 // QualifyProfile never derives HOME. This seam needs only the explicit profile
@@ -169,7 +170,7 @@ func qualifyProfile(binding ProfileBinding, native profileOS) (*QualifiedProfile
 	if !validProfileBinding(binding) || native == nil {
 		return nil, profileFailure(ProfileInvalid)
 	}
-	owner := &profileOwner{os: native, binding: binding, uid: native.uid(), computer: -1, chat: -1}
+	owner := &profileOwner{os: native, binding: binding, uid: native.uid(), computer: -1, chat: -1, task: -1}
 	qualified := &QualifiedProfile{owner: owner}
 	fail := func(err error) (*QualifiedProfile, error) {
 		if closed := qualified.Close(); closed != nil {
@@ -204,7 +205,7 @@ func qualifyProfile(binding ProfileBinding, native profileOS) (*QualifiedProfile
 	if meta.device != binding.Device || meta.inode != binding.Inode {
 		return fail(profileFailure(ProfileRefused))
 	}
-	for _, name := range []string{"computer", "chat"} {
+	for _, name := range []string{"computer", "chat", "task"} {
 		if err := owner.appendDirectory(profile, name, true); err != nil {
 			return fail(err)
 		}
@@ -215,11 +216,15 @@ func qualifyProfile(binding ProfileBinding, native profileOS) (*QualifiedProfile
 		}
 		if name == "computer" {
 			owner.computer = index
-		} else {
+		} else if name == "chat" {
 			owner.chat = index
+		} else {
+			owner.task = index
 		}
 	}
-	if profileSame(owner.directories[owner.computer].meta, owner.directories[owner.chat].meta) {
+	if profileSame(owner.directories[owner.computer].meta, owner.directories[owner.chat].meta) ||
+		profileSame(owner.directories[owner.task].meta, owner.directories[owner.computer].meta) ||
+		profileSame(owner.directories[owner.task].meta, owner.directories[owner.chat].meta) {
 		return fail(profileFailure(ProfileRefused))
 	}
 	if err := owner.check(); err != nil {
@@ -323,6 +328,23 @@ func (q *QualifiedProfile) Roots() (computer NativeRoot, chat NativeRoot, err er
 		return NativeRoot{Path: d.path, ProfileID: s.binding.ProfileID, Device: d.meta.device, Inode: d.meta.inode, OwnerUID: d.meta.uid, Mode: d.meta.mode & 07777}
 	}
 	return root(s.computer), root(s.chat), nil
+}
+
+// TaskRoot exposes the distinct fixed Task child without changing Roots callers.
+// It shares their retained descriptor owner and sticky continuity check. This
+// metadata opens no journal and creates no Task admission or recovery authority.
+func (q *QualifiedProfile) TaskRoot() (root NativeRoot, err error) {
+	if q == nil || q.owner == nil {
+		return root, profileFailure(ProfileUnavailable)
+	}
+	s := q.owner
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.check(); err != nil {
+		return root, err
+	}
+	d := s.directories[s.task]
+	return NativeRoot{Path: d.path, ProfileID: s.binding.ProfileID, Device: d.meta.device, Inode: d.meta.inode, OwnerUID: d.meta.uid, Mode: d.meta.mode & 07777}, nil
 }
 
 // Close consumes only descriptors opened by this qualification, in reverse

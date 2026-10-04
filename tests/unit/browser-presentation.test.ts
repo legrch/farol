@@ -23,7 +23,7 @@ describe("Browser presentation selection", () => {
           selectedTaskPresent: true,
           compactBrowser: selected,
         }).pageBounds,
-      ).toEqual({ x: 216, y: 52, width: 964, height: 683 });
+      ).toEqual({ x: 294, y: 58, width: 886, height: 702 });
     },
   );
   it.each(["preview", "dev"] as const)(

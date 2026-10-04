@@ -52,7 +52,7 @@ func TestNativeCLIComputerPublicationAdmissionAndRead(t *testing.T) {
 		return p
 	}
 	profile, workspace, home := private("profile"), private("workspace"), private("home")
-	for _, name := range []string{"computer", "chat"} {
+	for _, name := range []string{"computer", "chat", "task"} {
 		if err := os.Mkdir(filepath.Join(profile, name), 0700); err != nil {
 			t.Fatal(err)
 		}

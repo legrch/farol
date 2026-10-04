@@ -1,0 +1,79 @@
+{
+  "schema": 1,
+  "identity": "Signal / Color",
+  "approvedSha256": "60fd10f1641d1c4090ce020587998fdc07cb42152b7ef339615294b400b37d62",
+  "appearance": "fixed-color",
+  "derivation": {
+    "pillow": "12.1.1",
+    "rsvg": "rsvg-convert version 2.58.4",
+    "alphaCleanup": "central >=128 connected component plus one-pixel band",
+    "resize": "premultiplied-alpha Lanczos from cleaned 1254px reference",
+    "icns": "native is32/il32 RGB+alpha; PNG Retina/large slots; big-endian lengths"
+  },
+  "files": {
+    "approved.png": {
+      "sha256": "60fd10f1641d1c4090ce020587998fdc07cb42152b7ef339615294b400b37d62",
+      "bytes": 945521
+    },
+    "farol.icns": {
+      "sha256": "5190df7cdfabf89a9481c1e66a5ccd1a924c2d94de47905f48b200a88d311919",
+      "bytes": 1137653
+    },
+    "farol.iconset/icon_128x128.png": {
+      "sha256": "a002be7eb5ba1218a1122d0943291e6fe49691b4255c337d4e0df86ff11e41ad",
+      "bytes": 17140
+    },
+    "farol.iconset/icon_128x128@2x.png": {
+      "sha256": "6660a0fd8873af6f20b9a0a36048faa05d67154884b1dab640c9da4b00d4cdfc",
+      "bytes": 52746
+    },
+    "farol.iconset/icon_16x16.png": {
+      "sha256": "4d49a342e509d8c65313678eb33d1c9675fe206314fa755def5f74a5178eb5d9",
+      "bytes": 797
+    },
+    "farol.iconset/icon_16x16@2x.png": {
+      "sha256": "484647df756811aa16d0e58d64c5bfbb42ed1e054df041c790e30e83fc2a2711",
+      "bytes": 2092
+    },
+    "farol.iconset/icon_256x256.png": {
+      "sha256": "6660a0fd8873af6f20b9a0a36048faa05d67154884b1dab640c9da4b00d4cdfc",
+      "bytes": 52746
+    },
+    "farol.iconset/icon_256x256@2x.png": {
+      "sha256": "697d2b02da941d6a9d3def7c128cbbc4d1258a2df7aad6be0603ffc6834ac30f",
+      "bytes": 185850
+    },
+    "farol.iconset/icon_32x32.png": {
+      "sha256": "484647df756811aa16d0e58d64c5bfbb42ed1e054df041c790e30e83fc2a2711",
+      "bytes": 2092
+    },
+    "farol.iconset/icon_32x32@2x.png": {
+      "sha256": "8caecbc745bbf69506ab433506655c0727dc543cf0c67c113d4593461f8020a0",
+      "bytes": 6047
+    },
+    "farol.iconset/icon_512x512.png": {
+      "sha256": "697d2b02da941d6a9d3def7c128cbbc4d1258a2df7aad6be0603ffc6834ac30f",
+      "bytes": 185850
+    },
+    "farol.iconset/icon_512x512@2x.png": {
+      "sha256": "17655e603019d11a309ab94da781c3b39c000a45521bcd8bee6881d9b7b484d9",
+      "bytes": 629928
+    },
+    "master.png": {
+      "sha256": "17655e603019d11a309ab94da781c3b39c000a45521bcd8bee6881d9b7b484d9",
+      "bytes": 629928
+    },
+    "menu-bar-template.png": {
+      "sha256": "4e312343ba54e00e892ee242f987fb49d34587b9622292e43ce51691aa8478e5",
+      "bytes": 339
+    },
+    "menu-bar-template.svg": {
+      "sha256": "2794e1890741c82b27241fd9369e18cbafe34141b58f0a6e6c159b36539fa8fd",
+      "bytes": 342
+    },
+    "menu-bar-template@2x.png": {
+      "sha256": "bdb09281cac1316e5875a01ec99a16b8199132ec3fabfb2898f31ecb348c929d",
+      "bytes": 605
+    }
+  }
+}

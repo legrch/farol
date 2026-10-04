@@ -289,7 +289,7 @@ function violationFor(source, target) {
   if (
     source.kind === "ui" &&
     target.kind === "module" &&
-    target.layer === "infra"
+    target.layer !== "contract"
   )
     return "ARCH_UI_TO_MODULE_INFRA";
   if (source.kind === "kernel" && target.kind === "module")
@@ -372,6 +372,21 @@ for (const file of files) {
     (sourceClass.kind === "kernel" &&
       ["domain", "app"].includes(sourceClass.layer));
   for (const specifier of importsFrom(file, violations)) {
+    if (
+      /^(?:react|react-dom)(?:\/|$)/u.test(specifier) &&
+      sourceClass.kind !== "ui"
+    )
+      violations.push({
+        code: "ARCH_REACT_OUTSIDE_RENDERER",
+        file: relative(file),
+        detail: specifier,
+      });
+    if (sourceClass.kind === "ui" && hostModules.has(specifier))
+      violations.push({
+        code: "ARCH_RENDERER_HOST_IMPORT",
+        file: relative(file),
+        detail: specifier,
+      });
     if (pure && hostModules.has(specifier)) {
       violations.push({
         code: "ARCH_PURE_HOST_IMPORT",
@@ -444,6 +459,24 @@ for (const file of files) {
   }
 }
 
+// Walk the complete local graph: a safe-looking intermediary cannot hide host IO.
+for (const file of files.filter((file) => classify(file).kind === "ui")) {
+  const seen = new Set();
+  function inspect(target) {
+    if (seen.has(target)) return;
+    seen.add(target);
+    for (const specifier of importsFrom(target, [])) {
+      if (hostModules.has(specifier))
+        violations.push({
+          code: "ARCH_RENDERER_HOST_IMPORT",
+          file: relative(file),
+          detail: `via ${relative(target)}: ${specifier}`,
+        });
+    }
+    for (const child of graph.get(target) ?? []) inspect(child);
+  }
+  inspect(file);
+}
 const visiting = new Set();
 const visited = new Set();
 function detectCycle(file, chain) {

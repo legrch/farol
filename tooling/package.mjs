@@ -205,6 +205,12 @@ await fs.writeFile(
     2,
   )}\n`,
 );
+const reactNotices = await Promise.all(
+  ["react", "react-dom", "scheduler"].map(
+    async (name) =>
+      `${name} (MIT)\n${await fs.readFile(path.join(root, "node_modules", name, "LICENSE"), "utf8")}`,
+  ),
+);
 const wsLicense = await fs.readFile(
   path.join(root, "node_modules/ws/LICENSE"),
   "utf8",
@@ -234,7 +240,7 @@ const nativeNotices = await fs.readFile(
 );
 await fs.writeFile(
   path.join(appResources, "THIRD_PARTY_NOTICES.txt"),
-  `Farol Next Preview direct runtime notice\n\nGeist ${GEIST_VERSION} (SIL Open Font License 1.1)\n${geistHashes}\n\n${geistLicense}\n\n@modelcontextprotocol/server 2.0.0 (MIT)\n${mcpServerLicense}\n\n@modelcontextprotocol/core 2.0.0 (MIT)\n${mcpCoreLicense}\n\nZod 4.6.5 (MIT)\n${zodLicense}\n\nws 8.22.0 (MIT)\n${wsLicense}\n\n${nativeNotices}\n\nElectron's own license and Chromium notices are retained in Contents/Resources.\n`,
+  `Farol Next Preview direct runtime notice\n\n${reactNotices.join("\n\n")}\n\nGeist ${GEIST_VERSION} (SIL Open Font License 1.1)\n${geistHashes}\n\n${geistLicense}\n\n@modelcontextprotocol/server 2.0.0 (MIT)\n${mcpServerLicense}\n\n@modelcontextprotocol/core 2.0.0 (MIT)\n${mcpCoreLicense}\n\nZod 4.6.5 (MIT)\n${zodLicense}\n\nws 8.22.0 (MIT)\n${wsLicense}\n\n${nativeNotices}\n\nElectron's own license and Chromium notices are retained in Contents/Resources.\n`,
 );
 if ((await treeDigest(runtimeApp)) !== electronSourceSha256) {
   throw new Error("PACKAGE_RUNTIME_COPY_MISMATCH");

@@ -9,6 +9,8 @@ import { BridgeError, type Client } from "./bridge/client.ts";
 import { ComputerBridge } from "./bridge/computer.ts";
 import { BrowserPump, type BrowserDriver } from "./bridge/browser.ts";
 import { ChatBridge } from "./bridge/chat.ts";
+import { ChatComputerBridge } from "./bridge/chat-computer.ts";
+import { ChatCallerBridge } from "./bridge/chat-caller.ts";
 import type { Context } from "./bridge/wire.ts";
 import { qualifyProfileLaunch } from "./bridge/profile.ts";
 import { openNativeProfileStorage } from "./bridge/profile-storage.ts";
@@ -69,6 +71,8 @@ export class DesktopGoCore {
   private browser: DesktopBrowserConnection | undefined;
   private pump: BrowserPump | undefined;
   private chatBridge: ChatBridge | undefined;
+  private chatComputerBridge: ChatComputerBridge | undefined;
+  private chatCallerBridge: ChatCallerBridge | undefined;
   private closeResult: Promise<void> | undefined;
   constructor(
     private readonly client: Client,
@@ -83,12 +87,32 @@ export class DesktopGoCore {
     this.browser = connection;
     this.pump = new BrowserPump(this.client, connection.driver);
     this.chatBridge = new ChatBridge(this.client);
+    this.chatComputerBridge = new ChatComputerBridge(this.client);
+    this.chatCallerBridge = new ChatCallerBridge(this.client);
     this.pump.start();
   }
   get chat(): ChatBridge {
     if (!this.chatBridge || this.closeResult || this.pump?.state !== "running")
       throw new BridgeError("unavailable", "host_chat_unavailable");
     return this.chatBridge;
+  }
+  get chatComputer(): ChatComputerBridge {
+    if (
+      !this.chatComputerBridge ||
+      this.closeResult ||
+      this.pump?.state !== "running"
+    )
+      throw new BridgeError("unavailable", "host_chat_unavailable");
+    return this.chatComputerBridge;
+  }
+  get chatCaller(): ChatCallerBridge {
+    if (
+      !this.chatCallerBridge ||
+      this.closeResult ||
+      this.pump?.state !== "running"
+    )
+      throw new BridgeError("unavailable", "host_chat_unavailable");
+    return this.chatCallerBridge;
   }
   withdraw() {
     return this.authority.withdraw();

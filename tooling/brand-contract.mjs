@@ -13,7 +13,8 @@ export const BRAND_RESOURCES = Object.freeze([
   },
   {
     output: "farol-mark.png",
-    sha256: "08a612b70b24e38e52c26c75c1a2bb8001e6755b0f2d17ce24c57179cba1a1e0",
+    source: "signal-color/master.png",
+    sha256: "17655e603019d11a309ab94da781c3b39c000a45521bcd8bee6881d9b7b484d9",
   },
   {
     output: "farol-dev-mark.png",
@@ -21,19 +22,24 @@ export const BRAND_RESOURCES = Object.freeze([
   },
   {
     output: "farol.icns",
-    sha256: "61722544638e8d017969b9c88edb69a0f4dcd6763e31d1e9f8122835e9b2e2d6",
+    source: "signal-color/farol.icns",
+    maxBytes: 1137653,
+    sha256: "5190df7cdfabf89a9481c1e66a5ccd1a924c2d94de47905f48b200a88d311919",
   },
 ]);
 
-export async function verifyBrandAssets(directory) {
+export async function verifyBrandAssets(directory, { source = false } = {}) {
   for (const resource of BRAND_RESOURCES) {
-    const file = path.join(directory, resource.output);
+    const file = path.join(
+      directory,
+      source ? (resource.source ?? resource.output) : resource.output,
+    );
     const info = await fs.lstat(file);
     if (
       !info.isFile() ||
       info.isSymbolicLink() ||
       info.size < 1 ||
-      info.size > 1024 * 1024
+      info.size > (resource.maxBytes ?? 1024 * 1024)
     )
       throw new Error(`BRAND_RESOURCE_TYPE_INVALID:${resource.output}`);
     if (

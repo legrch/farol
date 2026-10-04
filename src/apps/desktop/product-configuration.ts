@@ -7,6 +7,7 @@ import path from "node:path";
 import { z } from "zod";
 import {
   CodexAgentVerificationFieldsSchema,
+  CodexTaskSourceSchema,
   ProductConfigurationSnapshotSchema,
   ProductGeneralSettingsSchema,
   PendingWorkspaceEditDeliverySchema,
@@ -25,6 +26,7 @@ import {
 } from "../../pkg/product-settings/contract";
 import { credentialStorePolicy } from "../../modules/computer/infra/native/home-secret-stores";
 import { ownerSettingsComputerApproval } from "../../modules/computer/infra/repo/owner-settings-computer-approval";
+import { taskSettingsProjection } from "../../../apps/desktop/task-current-settings";
 
 import { resolveOwnerTaskModel } from "./owner-config";
 
@@ -140,14 +142,36 @@ const chatGptObservationSchema = z.discriminatedUnion("state", [
   z.strictObject({ state: z.literal("outcome_unknown") }),
 ]);
 
-const codexHostInputSchema = z.strictObject({
-  executablePath: z.string(),
-  executableSha256: z.string().regex(/^[a-f0-9]{64}$/u),
-  version: z.string().regex(/^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$/u),
-  protocol: z.literal("codex-app-server/v2"),
-  schemaSha256: z.string().regex(/^[a-f0-9]{64}$/u),
-  buildId: z.string().regex(/^[a-f0-9]{64}$/u),
-});
+const codexHostInputSchema = z
+  .strictObject({
+    executablePath: z.string(),
+    executableSha256: z.string().regex(/^[a-f0-9]{64}$/u),
+    version: z
+      .string()
+      .regex(/^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$/u),
+    protocol: z.literal("codex-app-server/v2"),
+    schemaSha256: z.string().regex(/^[a-f0-9]{64}$/u),
+    buildId: z.string().regex(/^[a-f0-9]{64}$/u),
+    taskSource: CodexTaskSourceSchema.nullable().default(null),
+  })
+  .superRefine((host, context) => {
+    const source = host.taskSource;
+    if (source === null) return;
+    if (
+      [source.handoff, source.followup].some(
+        (witness) =>
+          witness.executablePath !== host.executablePath ||
+          witness.executableSha256 !== host.executableSha256 ||
+          witness.baseSchemaSha256 !== host.schemaSha256,
+      ) ||
+      (source.handoff.status === "supported" &&
+        source.handoff.contract.version !== host.version)
+    )
+      context.addIssue({
+        code: "custom",
+        message: "Task source does not match the selected host.",
+      });
+  });
 
 const codexHostFailureSchema = z.enum(["unreachable", "unsupported"]);
 
@@ -386,6 +410,47 @@ function invalidateStaleAgentVerification(
           : "Run the live Codex host check first.",
         liveVerification !== null,
       ),
+    },
+  };
+}
+
+function invalidateStaleCodexTaskSource(
+  settings: ProductSettings,
+): ProductSettings {
+  const host = settings.nativeHosts.codex;
+  const source = host?.taskSource;
+  // Older settings remain readable without inventing source support or migrating
+  // unrelated host/Computer evidence. Root treats missing Task evidence as absent.
+  if (!host || !source) return settings;
+  const local = host.localVerification;
+  const bound =
+    source.hostGeneration === settings.nativeHosts.generation &&
+    local !== null &&
+    local.executableSha256 === host.executableSha256 &&
+    local.schemaSha256 === host.schemaSha256 &&
+    source.localVerification.executableSha256 === local.executableSha256 &&
+    source.localVerification.schemaSha256 === local.schemaSha256 &&
+    source.localVerification.buildId === local.buildId &&
+    source.localVerification.verifiedAt === local.verifiedAt &&
+    [source.evidence.handoff, source.evidence.followup].every(
+      (witness) =>
+        witness.executablePath === host.executablePath &&
+        witness.executableSha256 === host.executableSha256 &&
+        witness.baseSchemaSha256 === host.schemaSha256,
+    ) &&
+    (source.evidence.handoff.status !== "supported" ||
+      source.evidence.handoff.contract.version === host.version);
+  if (bound) return settings;
+  return {
+    ...settings,
+    nativeHosts: {
+      ...settings.nativeHosts,
+      generation:
+        source.hostGeneration === settings.nativeHosts.generation
+          ? settings.nativeHosts.generation + 1
+          : settings.nativeHosts.generation,
+      codex: { ...host, taskSource: null },
+      taskRoute: null,
     },
   };
 }
@@ -674,6 +739,7 @@ export class ProductConfigurationService {
   private readonly homeDirectory: string;
   private current: ProductSettings | null = null;
   private currentError: ProductConfigurationSnapshot | null = null;
+  private taskSourceWithdrawalGeneration: number | null = null;
   // One owner change at a time: each runs, with the checks its caller makes
   // against the current settings, through to its commit before the next one
   // clones them. Re-entrant, so a method that checks and then mutates holds
@@ -726,7 +792,7 @@ export class ProductConfigurationService {
         loaded = await this.store.load();
       }
       if (loaded === null) throw new Error("SETTINGS_READ_BACK_FAILED");
-      this.current = loaded;
+      this.current = this.fenceTaskSource(loaded);
       this.currentError = null;
     } catch (error) {
       this.current = null;
@@ -736,13 +802,27 @@ export class ProductConfigurationService {
     // Settings saved before folder identities existed may still name a
     // verified workspace without one; withdraw that verification before any
     // consumer reads it, and persist the withdrawal like any other change.
-    if (invalidateUnboundComputerVerification(this.current) !== this.current) {
+    if (
+      invalidateUnboundComputerVerification(this.current) !== this.current ||
+      invalidateStaleCodexTaskSource(this.current) !== this.current
+    ) {
       const withdrawn = await this.mutate((settings) => ({
         ...settings,
         revision: settings.revision + 1,
       }));
       if (!withdrawn.ok) {
-        this.current = invalidateUnboundComputerVerification(this.current);
+        const invalidated = invalidateStaleCodexTaskSource(
+          invalidateUnboundComputerVerification(this.current),
+        );
+        if (
+          this.current.nativeHosts.codex?.taskSource &&
+          !invalidated.nativeHosts.codex?.taskSource
+        )
+          this.taskSourceWithdrawalGeneration = Math.max(
+            this.taskSourceWithdrawalGeneration ?? 0,
+            invalidated.nativeHosts.generation,
+          );
+        this.current = this.fenceTaskSource(invalidated);
       }
     }
     // Older Dev profiles stored only the live attachment. Capture a valid
@@ -790,7 +870,10 @@ export class ProductConfigurationService {
             status: "error" as const,
             error: "SETTINGS_READ_FAILED" as const,
           })
-        : { status: "ready" as const, settings: structuredClone(this.current) };
+        : {
+            status: "ready" as const,
+            settings: structuredClone(this.fenceTaskSource(this.current)),
+          };
     return ProductConfigurationSnapshotSchema.parse(snapshot);
   }
 
@@ -1945,7 +2028,7 @@ export class ProductConfigurationService {
   async recordCodexHost(input: unknown): Promise<MutationResult> {
     const parsed = codexHostInputSchema.safeParse(input);
     if (!parsed.success) return this.failure("SETTINGS_INPUT_INVALID");
-    return this.mutate((settings) => {
+    return this.mutateCodexHost((settings) => {
       const previous = settings.nativeHosts.codex;
       const sameContract =
         previous?.executablePath === parsed.data.executablePath &&
@@ -1953,10 +2036,34 @@ export class ProductConfigurationService {
         previous.version === parsed.data.version &&
         previous.protocol === parsed.data.protocol &&
         previous.schemaSha256 === parsed.data.schemaSha256;
-      const generation = sameContract
-        ? settings.nativeHosts.generation
-        : settings.nativeHosts.generation + 1;
+      const sameTaskSource =
+        JSON.stringify(previous?.taskSource?.evidence ?? null) ===
+          JSON.stringify(parsed.data.taskSource) &&
+        (previous?.taskSource == null ||
+          previous.taskSource.localVerification.buildId ===
+            parsed.data.buildId);
+      const withdrawRoute =
+        settings.nativeHosts.taskRoute !== null &&
+        parsed.data.taskSource?.handoff.status !== "supported";
+      const generation =
+        sameContract && sameTaskSource && !withdrawRoute
+          ? settings.nativeHosts.generation
+          : settings.nativeHosts.generation + 1;
       const verifiedAt = this.now();
+      const localVerification = {
+        executableSha256: parsed.data.executableSha256,
+        schemaSha256: parsed.data.schemaSha256,
+        buildId: parsed.data.buildId,
+        verifiedAt,
+      };
+      const taskSource =
+        parsed.data.taskSource === null
+          ? null
+          : {
+              hostGeneration: generation,
+              localVerification,
+              evidence: parsed.data.taskSource,
+            };
       const liveVerification =
         sameContract &&
         previous.liveVerification?.buildId === parsed.data.buildId
@@ -1972,7 +2079,12 @@ export class ProductConfigurationService {
         revision: settings.revision + 1,
         nativeHosts: {
           generation,
-          taskRoute: sameContract ? settings.nativeHosts.taskRoute : null,
+          taskRoute:
+            sameContract &&
+            sameTaskSource &&
+            parsed.data.taskSource?.handoff.status === "supported"
+              ? settings.nativeHosts.taskRoute
+              : null,
           codex: {
             executablePath: parsed.data.executablePath,
             executableSha256: parsed.data.executableSha256,
@@ -1980,12 +2092,8 @@ export class ProductConfigurationService {
             protocol: parsed.data.protocol,
             schemaSha256: parsed.data.schemaSha256,
             verifiedAt,
-            localVerification: {
-              executableSha256: parsed.data.executableSha256,
-              schemaSha256: parsed.data.schemaSha256,
-              buildId: parsed.data.buildId,
-              verifiedAt,
-            },
+            localVerification,
+            taskSource,
             liveVerification,
             agentVerification,
           },
@@ -2329,7 +2437,7 @@ export class ProductConfigurationService {
   async recordCodexHostFailure(input: unknown): Promise<MutationResult> {
     const parsed = codexHostFailureSchema.safeParse(input);
     if (!parsed.success) return this.failure("SETTINGS_INPUT_INVALID");
-    return this.mutate((settings) => {
+    return this.mutateCodexHost((settings) => {
       const selected = settings.nativeHosts.codex;
       return {
         ...settings,
@@ -2377,7 +2485,7 @@ export class ProductConfigurationService {
   }
 
   async clearCodexHost(): Promise<MutationResult> {
-    return this.mutate((settings) => {
+    return this.mutateCodexHost((settings) => {
       if (settings.nativeHosts.codex === null) return settings;
       return {
         ...settings,
@@ -2463,6 +2571,67 @@ export class ProductConfigurationService {
     return this.exclusive(() => this.commit(transform, fence));
   }
 
+  private fenceTaskSource(settings: ProductSettings): ProductSettings {
+    const floor = this.taskSourceWithdrawalGeneration;
+    if (floor === null) return settings;
+    const host = settings.nativeHosts.codex;
+    if (
+      !host?.taskSource &&
+      settings.nativeHosts.taskRoute === null &&
+      settings.nativeHosts.generation >= floor
+    )
+      return settings;
+    return {
+      ...settings,
+      nativeHosts: {
+        ...settings.nativeHosts,
+        generation: Math.max(settings.nativeHosts.generation, floor),
+        codex: host ? { ...host, taskSource: null } : null,
+        taskRoute: null,
+      },
+    };
+  }
+
+  // Keep withdrawal through every recovery readback. Only a trusted host mutation
+  // with successful durable readback can release this in-process Task fence.
+  private mutateCodexHost(
+    transform: (settings: ProductSettings) => ProductSettings,
+  ): Promise<MutationResult> {
+    return this.exclusive(async () => {
+      const result = await this.commit(
+        (settings) => {
+          const candidate = transform(settings);
+          const previous = settings.nativeHosts.codex?.taskSource;
+          const next = candidate.nativeHosts.codex?.taskSource;
+          const taskChanged =
+            (previous != null ||
+              next != null ||
+              settings.nativeHosts.taskRoute !== null) &&
+            (settings.nativeHosts.generation !==
+              candidate.nativeHosts.generation ||
+              JSON.stringify(previous?.evidence ?? null) !==
+                JSON.stringify(next?.evidence ?? null) ||
+              previous?.localVerification.buildId !==
+                next?.localVerification.buildId ||
+              JSON.stringify(settings.nativeHosts.taskRoute) !==
+                JSON.stringify(candidate.nativeHosts.taskRoute));
+          if (taskChanged)
+            this.taskSourceWithdrawalGeneration = Math.max(
+              this.taskSourceWithdrawalGeneration ?? 0,
+              settings.nativeHosts.generation + 1,
+              candidate.nativeHosts.generation,
+            );
+          return candidate;
+        },
+        {},
+        true,
+      );
+      if (result.ok) this.taskSourceWithdrawalGeneration = null;
+      if (this.current) this.current = this.fenceTaskSource(this.current);
+      return { ...result, snapshot: this.snapshot() };
+    });
+  }
+
   private commitComputerEvidence(
     transform: (settings: ProductSettings) => ProductSettings,
   ): Promise<MutationResult> {
@@ -2474,17 +2643,22 @@ export class ProductConfigurationService {
   private async commit(
     transform: (settings: ProductSettings) => ProductSettings,
     fence: StoreWriteFence = {},
+    freshTaskSource = false,
   ): Promise<MutationResult> {
     if (this.current === null) return this.failure("SETTINGS_UNAVAILABLE");
-    const before = structuredClone(this.current);
+    const before = structuredClone(this.fenceTaskSource(this.current));
     let candidate: ProductSettings;
     try {
       const transformed = ProductSettingsSchema.parse(transform(before));
       const connectorInvalidated = invalidateStaleConnectorRuntime(
         invalidateUnboundComputerVerification(transformed),
       );
-      const invalidated =
-        invalidateStaleAgentVerification(connectorInvalidated);
+      const sourceInvalidated = invalidateStaleCodexTaskSource(
+        invalidateStaleAgentVerification(connectorInvalidated),
+      );
+      const invalidated = freshTaskSource
+        ? sourceInvalidated
+        : this.fenceTaskSource(sourceInvalidated);
       candidate = ProductSettingsSchema.parse(
         invalidated !== transformed && invalidated.revision === before.revision
           ? { ...invalidated, revision: before.revision + 1 }
@@ -2498,7 +2672,9 @@ export class ProductConfigurationService {
       // invalidation. Command-name lists cannot cover all authority changes.
       const changed =
         JSON.stringify(ownerSettingsComputerApproval(before, 0)) !==
-        JSON.stringify(ownerSettingsComputerApproval(candidate, 0));
+          JSON.stringify(ownerSettingsComputerApproval(candidate, 0)) ||
+        JSON.stringify(taskSettingsProjection(before)) !==
+          JSON.stringify(taskSettingsProjection(candidate));
       const publication =
         changed && this.withdrawComputerAuthority
           ? await this.withdrawComputerAuthority()
@@ -2518,7 +2694,9 @@ export class ProductConfigurationService {
     } catch (error) {
       // The save may have landed before its read-back failed; what the disk
       // holds is the truth, and the snapshot taken before is only a fallback.
-      this.current = (await this.store.load().catch(() => null)) ?? before;
+      this.current = this.fenceTaskSource(
+        (await this.store.load().catch(() => null)) ?? before,
+      );
       // A fence refusal is not a write failure: nothing was written at all,
       // and the caller gets the reason rather than a generic disk error.
       if (error instanceof WorkspaceEditLeaseLost) {

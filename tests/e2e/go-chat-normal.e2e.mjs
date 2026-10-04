@@ -13,7 +13,7 @@
  * or qualify production ChatGPT controls, accounts, selectors or live acceptance.
  */
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -39,6 +39,7 @@ import {
 import { treeDigest } from "../../tooling/artifact-digest.mjs";
 import { ELECTRON_RUNTIME } from "../../tooling/runtime-contract.mjs";
 import { DECLARED_NODE_VERSIONS } from "../../tooling/dev.mjs";
+import { configArgument } from "./fixtures/go-chat-normal-config.ts";
 
 const filename = fileURLToPath(import.meta.url);
 const root = path.resolve(path.dirname(filename), "../..");
@@ -49,6 +50,7 @@ const inputContract = {
   owned: [
     "tests/e2e/go-chat-normal.e2e.mjs",
     "tests/e2e/go-chat-normal.e2e.entry.ts",
+    "tests/e2e/fixtures/go-chat-normal-config.ts",
   ],
   candidate:
     "Clean attested schema-4 build artifact with core, build/input manifests and exact committed source; independent --source-sha and --build-id pins",
@@ -68,14 +70,20 @@ const inputContract = {
     "Explicit --run-native; caller must hold the exclusive native lane",
   normalScenario:
     "create -> prepare home -> one Send -> useful delta before terminal release -> retained result -> result/frame ACK -> physical quiescence -> same-CID follow-up -> second result",
+  computerScenario:
+    "Same DesktopGoCore/profile/settings: readForIntent -> real Go admission/services -> disposable approved file bytes/hash -> note-derived same-CID follow-up -> excluded-path refusal -> withdraw/save/publish narrowed settings -> formerly allowed file refused on fresh intent",
   faultScenario:
     "Fresh fixture/profile/child; actual loseNextSendAcknowledgement seam -> one accepted physical POST -> non-ok duplicate Send -> unchanged independent ledger through exact child terminal",
   limits: [
     "Production-constructor composition, not normal main/UI acceptance",
     "Controlled provider/site/profile/selection, not live ChatGPT qualification",
+    "Computer has its own admitted intent; the harness supplies read text to the scripted follow-up, not an autonomous model tool call",
+    "Revocation checks the new settings policy through readForIntent; its public API does not expose a read using the prior admission after withdrawal",
     "No installed app, owner profile, credentials, auth state, old operations or adapter doubles",
   ],
 };
+const computerPrompt = (text) =>
+  `Use this disposable workspace note: ${text}\nContinue this controlled conversation.`;
 const args = process.argv.slice(2);
 if (args.length === 1 && args[0] === "--contract") {
   process.stdout.write(`${JSON.stringify(inputContract, null, 2)}\n`);
@@ -474,6 +482,23 @@ async function nativeScenario({
   );
   const stateRoot = path.join(owned, "profile-settings");
   await fs.mkdir(stateRoot, { mode: 0o700 });
+  const workspaceRoot = fault ? null : path.join(owned, "approved-workspace");
+  const note = `Controlled Go Computer note ${randomUUID()}: a useful disposable file read.`;
+  if (workspaceRoot) {
+    await fs.mkdir(workspaceRoot, { mode: 0o700 });
+    await fs.writeFile(path.join(workspaceRoot, "note.md"), note, {
+      flag: "wx",
+      mode: 0o600,
+    });
+    await fs.writeFile(
+      path.join(workspaceRoot, "excluded.md"),
+      "Excluded synthetic content.",
+      {
+        flag: "wx",
+        mode: 0o600,
+      },
+    );
+  }
   const turns = [
     {
       userId: "user-first",
@@ -487,9 +512,9 @@ async function nativeScenario({
     {
       userId: "user-follow",
       replyId: "reply-follow",
-      prompt: "Continue this controlled conversation.",
+      prompt: computerPrompt(note),
       segments: [
-        { id: "follow-prefix", text: "Useful follow up text" },
+        { id: "follow-prefix", text: `The Computer note says: ${note}` },
         { id: "follow-final", text: "Final follow up text" },
       ],
     },
@@ -511,6 +536,7 @@ async function nativeScenario({
       JSON.stringify({
         paths,
         stateRoot,
+        workspaceRoot,
         artifactRoot: selection.artifactRoot,
         receipt,
         origin: site.origin,
@@ -523,7 +549,7 @@ async function nativeScenario({
     // Preserve the exact ChildProcess handle before acting on cancellation.
     application = await _electron.launch({
       executablePath: executable,
-      args: [bundle, configFile],
+      args: [bundle, configArgument(configFile)],
       artifactsDir: path.join(owned, "playwright-artifacts"),
       chromiumSandbox: true,
       cwd: owned,
@@ -744,9 +770,37 @@ async function nativeScenario({
         return result;
       };
       const firstResult = await finishTurn(first, turns[0], 1);
+      // Only readForIntent supplies these bytes. The fixture independently
+      // expects the fresh file's text in the physical follow-up submission.
+      const read = await call({ kind: "computer-read" });
+      row.computer = { workspaceRoot, read };
+      await save();
+      assert.equal(read.result.status, "ok");
+      assert.deepEqual(read.result.context, {
+        profileId: first.binding.profileId,
+        backendGeneration: first.binding.backendGeneration,
+      });
+      const data = read.result.data;
+      const bindingKeys = [
+        "ownerId",
+        "sessionId",
+        "taskId",
+        "taskEpoch",
+        "participantId",
+        "turnId",
+        "generation",
+      ];
+      for (const key of bindingKeys)
+        assert.equal(data[key], read.admission[key]);
+      assert.equal(data.workspaceId, "controlled-workspace");
+      assert.equal(data.relativePath, "note.md");
+      assert.equal(data.text, note);
+      assert.equal(data.bytes, String(Buffer.byteLength(note)));
+      assert.equal(data.sha256, hash(note));
+      assert.equal(site.driver.snapshot().attemptedSends, 1);
       const second = await call({
         kind: "create",
-        prompt: turns[1].prompt,
+        prompt: computerPrompt(data.text),
         previousHandle: first.handleId,
       });
       assert.equal(second.binding.taskId, first.binding.taskId);
@@ -761,6 +815,52 @@ async function nativeScenario({
       await call({ kind: "result", handleId: first.handleId });
       assert.equal(site.driver.snapshot().attemptedSends, 2);
       row.sameCID = secondResult.conversationId;
+      const requestIds = new Set([read.result.requestId]);
+      const callIds = new Set([data.callId]);
+      const taskIds = new Set([read.admission.taskId]);
+      let storeRevision = BigInt(read.admission.storeRevision);
+      // Both denials are new, one-shot reads of fixture paths. A non-ok or
+      // unknown transport error is not accepted as a classified Go refusal.
+      for (const [kind, relativePath, revision] of [
+        ["computer-excluded-read", "excluded.md", 1],
+        ["computer-revoke-read", "note.md", 2],
+      ]) {
+        const outcome = await call({ kind });
+        row.computer[kind] = outcome;
+        await save();
+        const { admission, result } = outcome;
+        assert.equal(outcome.settingsRevision, revision);
+        assert.equal(outcome.computerGeneration, revision);
+        assert.equal(admission.sessionId, read.admission.sessionId);
+        assert.equal(taskIds.has(admission.taskId), false);
+        assert.ok(BigInt(admission.storeRevision) > storeRevision);
+        assert.equal(result.status, "refused");
+        const code = "AUTHORITY_PATH_DENIED";
+        const source = "task-grant";
+        assert.equal(result.code, code);
+        assert.equal(result.retry, "never");
+        assert.deepEqual(result.context, read.result.context);
+        const request = result.refusal?.request;
+        assert.ok(request, "CLASSIFIED_READ_REFUSAL_REQUIRED");
+        for (const key of bindingKeys)
+          assert.equal(request[key], admission[key]);
+        assert.equal(request.workspaceId, data.workspaceId);
+        assert.equal(request.relativePath, relativePath);
+        assert.deepEqual(result.refusal, {
+          request,
+          code,
+          source,
+          retry: "never",
+        });
+        assert.equal(Object.hasOwn(result, "data"), false);
+        assert.equal(requestIds.has(result.requestId), false);
+        assert.equal(callIds.has(request.callId), false);
+        requestIds.add(result.requestId);
+        callIds.add(request.callId);
+        taskIds.add(admission.taskId);
+        storeRevision = BigInt(admission.storeRevision);
+      }
+      assert.equal(site.driver.snapshot().attemptedSends, 2);
     }
     row.status = "passed";
   } catch (error) {

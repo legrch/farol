@@ -82,6 +82,9 @@ describe("shell action provenance", () => {
   it("S35-TA-16 the source enum names publishers, and says which are owner actions", () => {
     expect(ShellActionSourceSchema.options).toEqual([
       "settings-command",
+      "sidebar-command",
+      "section-shortcut-command",
+      "update-command",
       "quick-switcher-command",
       "overlay-dismissed",
       "sign-in-return-command",
@@ -104,7 +107,10 @@ describe("shell action provenance", () => {
     const calls = [...source.matchAll(/publishShellAction\(\s*([^;]*?)\)/gsu)]
       .map((match) => match[1] ?? "")
       .filter((body) => !body.includes("action:"));
-    expect(calls).toHaveLength(5);
+    expect(calls).toHaveLength(9);
+    expect(
+      calls.filter((body) => body.includes('"update-command"')),
+    ).toHaveLength(1);
     expect(
       calls.filter((body) => body.includes('"quick-switcher-command"')),
     ).toHaveLength(1);
@@ -123,14 +129,90 @@ describe("shell action provenance", () => {
     expect(
       calls.filter((body) => body.includes('"verification-completed"')),
     ).toHaveLength(1);
+    expect(calls).toContain('"toggle-sidebar", "sidebar-command"');
     // Every publish is stamped: no call site may omit provenance.
     for (const body of calls) {
       expect(body).toMatch(
-        /"(settings-command|quick-switcher-command|overlay-dismissed|sign-in-return-command|verification-completed|auth-window-closed)"/u,
+        /"(settings-command|sidebar-command|section-shortcut-command|update-command|quick-switcher-command|overlay-dismissed|sign-in-return-command|verification-completed|auth-window-closed)"/u,
       );
     }
   });
 
+  it.each(["browser", "computer", "activity", "settings"])(
+    "R35 accepts stamped navigation to %s",
+    (section) => {
+      const value = envelope({
+        action: "navigate-section",
+        source: "section-shortcut-command",
+        section,
+        taskId: "task-1",
+        sequence: 1,
+      });
+      expect(ShellActionSchema.parse(value)).toEqual(value);
+    },
+  );
+  it.each([
+    { name: "missing section", field: "section", value: undefined },
+    { name: "unknown section", field: "section", value: "home" },
+    { name: "missing task", field: "taskId", value: undefined },
+    { name: "missing sequence", field: "sequence", value: undefined },
+    { name: "zero sequence", field: "sequence", value: 0 },
+    { name: "fractional sequence", field: "sequence", value: 1.5 },
+    {
+      name: "unsafe sequence",
+      field: "sequence",
+      value: Number.MAX_SAFE_INTEGER + 1,
+    },
+    { name: "background source", field: "source", value: "auth-window-closed" },
+    { name: "auth generation", field: "authWindowGeneration", value: 1 },
+    { name: "unknown field", field: "origin", value: "keyboard" },
+  ])("R35 refuses navigation with $name", ({ field, value }) => {
+    expect(
+      ShellActionSchema.safeParse(
+        envelope({
+          action: "navigate-section",
+          source: "section-shortcut-command",
+          section: "settings",
+          taskId: "",
+          sequence: 1,
+          [field]: value,
+        }),
+      ).success,
+    ).toBe(false);
+  });
+  it("R35 navigation provenance cannot authorize a legacy action", () => {
+    expect(
+      ShellActionSchema.safeParse(
+        envelope({ source: "section-shortcut-command" }),
+      ).success,
+    ).toBe(false);
+    expect(
+      ShellActionSchema.safeParse(
+        envelope({ sequence: 1, section: "settings", taskId: "" }),
+      ).success,
+    ).toBe(false);
+  });
+  it("R35 native shortcuts publish navigation without changing presentation or retrying updates", async () => {
+    const source = await readFile(mainSource, "utf8");
+    const handler = source.slice(
+      source.indexOf("function handleShortcut("),
+      source.indexOf("function applyLayout("),
+    );
+    expect(
+      handler.match(/publishShellAction\(\s*"navigate-section"/gu),
+    ).toHaveLength(2);
+    expect(handler.match(/"section-shortcut-command"/gu)).toHaveLength(2);
+    expect(
+      handler.match(/sequence: \+\+sectionNavigationSequence/gu),
+    ).toHaveLength(2);
+    expect(
+      handler.match(/if \(installedUpdateAdmission\) return true;/gu),
+    ).toHaveLength(2);
+    expect(handler).not.toMatch(
+      /section =|shellOverlay =|sidebarMode =|applyLayout\(\)|publishLayout\(\)/u,
+    );
+    expect(handler).toContain("input.isComposing || input.isAutoRepeat");
+  });
   it("S35-TA-16 a fresh eventId is minted per publish, not reused", async () => {
     const source = await readFile(mainSource, "utf8");
     expect(source).toContain("eventId: randomUUID()");

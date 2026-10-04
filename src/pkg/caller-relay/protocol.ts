@@ -46,9 +46,26 @@ export const CodexCallerRelayOperationSchema = z.discriminatedUnion(
   [DescribeOperationSchema, InvokeOperationSchema],
 );
 
+// Private wire receipt is intentionally excluded from the model-callable
+// CodexCallerRelayOperationSchema and public response/structuredContent surface.
+export const CodexCallerRelayReceiptSchema = z.strictObject({
+  operationId: IdentifierSchema,
+  binding: HexDigestSchema,
+  requestSHA256: HexDigestSchema,
+  receiptId: HexDigestSchema,
+  outputSHA256: HexDigestSchema,
+  outputBytes: z.number().int().min(0).max(CALLER_RELAY_MAX_FRAME_BYTES),
+});
+const ReceivedRequestSchema = CodexCallerRelayReceiptSchema.extend({
+  operation: z.literal("received"),
+  ticket: HexDigestSchema,
+  token: z.string(),
+});
+
 export const CodexCallerRelayRequestSchema = z.discriminatedUnion("operation", [
   DescribeOperationSchema.extend({ token: z.string() }),
   InvokeOperationSchema.extend({ token: z.string() }),
+  ReceivedRequestSchema,
 ]);
 
 const ErrorSchema = z.strictObject({
@@ -102,4 +119,23 @@ export type CodexCallerRelayRequest = z.infer<
 >;
 export type CodexCallerRelayResponse = z.infer<
   typeof CodexCallerRelayResponseSchema
+>;
+
+// Only the trusted client/server wire parser sees these private fields. The
+// client strips them before returning a CodexCallerRelayResponse to MCP.
+export const CodexCallerRelayWireResponseSchema = z.union([
+  SuccessSchema.options[1].extend({ receipt: CodexCallerRelayReceiptSchema }),
+  z.strictObject({
+    ok: z.literal(true),
+    operation: z.literal("received"),
+    operationId: IdentifierSchema,
+    receiptId: HexDigestSchema,
+  }),
+  CodexCallerRelayResponseSchema,
+]);
+export type CodexCallerRelayReceipt = z.infer<
+  typeof CodexCallerRelayReceiptSchema
+>;
+export type CodexCallerRelayWireResponse = z.infer<
+  typeof CodexCallerRelayWireResponseSchema
 >;

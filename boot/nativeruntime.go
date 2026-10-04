@@ -32,6 +32,7 @@ type NativeRuntime struct {
 	cancel        context.CancelFunc
 	browser       *BrowserExchange
 	conversations *ChatIngress
+	chatComputer  *ChatComputerIngress
 	results       *results.Memory
 	profile       *QualifiedProfile
 	store         *accessrepo.Store
@@ -99,6 +100,10 @@ func NewNativeRuntime(ctx context.Context, launch NativeLaunch, generation strin
 	if err != nil {
 		return fail(err)
 	}
+	runtime.chatComputer, err = NewChatComputerIngress(runtime.conversations, runtime.ingress)
+	if err != nil {
+		return fail(err)
+	}
 	return runtime, nil
 }
 
@@ -147,11 +152,11 @@ type browserClock struct{}
 
 func (browserClock) NowMillis() uint64 { return uint64(time.Now().UnixMilli()) }
 func (r *NativeRuntime) Methods() (map[string]desktop.Method, error) {
-	if r == nil || r.closed || r.ingress == nil || r.browser == nil || r.conversations == nil {
+	if r == nil || r.closed || r.ingress == nil || r.browser == nil || r.conversations == nil || r.chatComputer == nil {
 		return nil, errors.New("native_runtime_unavailable")
 	}
 	merged := make(map[string]desktop.Method)
-	for _, source := range []map[string]desktop.Method{r.ingress.Methods(), r.browser.Methods(), r.conversations.Methods()} {
+	for _, source := range []map[string]desktop.Method{r.ingress.Methods(), r.browser.Methods(), r.conversations.Methods(), r.chatComputer.Methods()} {
 		for name, method := range source {
 			if _, exists := merged[name]; exists {
 				return nil, errors.New("native_method_conflict")
