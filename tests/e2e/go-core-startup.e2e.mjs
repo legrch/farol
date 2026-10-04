@@ -802,7 +802,10 @@ async function native(selected, inputs, report, save) {
       ),
     );
     const name = attempts.at(-1);
-    const evidence = await document(path.join(directory, name), 16384);
+    const evidence = await document(
+      path.join(directory, name),
+      1024 * 1024 + 32 * 1024,
+    );
     evidence.file = name;
     report.handoffs.push({ launch: launch.ordinal, evidence });
     await save();
@@ -1330,6 +1333,13 @@ async function native(selected, inputs, report, save) {
         "REOPEN_RETIRED_JOURNAL_CHANGED",
       );
       const reopened = await start(2);
+      // Capture the new owner before optional UI assertions. Failure of an
+      // unrelated navigation check must not erase its cleanup correlation.
+      await captureJournal(
+        "reopen-ready",
+        report.launches[0].readyJournal.value,
+      );
+      await captureHandoff(report.launches[0].terminalHandoff);
       if (selected.readDiscard) {
         retainedApprovedSettings(reopened.settings, savedSettings.value);
         approvedSettingsWitness(
@@ -1360,6 +1370,11 @@ async function native(selected, inputs, report, save) {
           report.readDiscard.legacyDiscarded,
           "READ_REOPEN_LEGACY_JOURNAL_CHANGED",
         );
+        // This journey opened Browser in a configured profile. Use ordinary
+        // navigation instead of assuming its retained surface is fresh Home.
+        await reopened.window
+          .getByRole("button", { name: "Home", exact: true })
+          .click({ timeout: 5000 });
       } else retainedSettings(reopened.settings, savedSettings.value);
       await reopened.window
         .locator(".home-page")
@@ -1403,11 +1418,6 @@ async function native(selected, inputs, report, save) {
           : "reopen-ready-zero-authority",
         settings.computer.computerId,
       );
-      await captureJournal(
-        "reopen-ready",
-        report.launches[0].readyJournal.value,
-      );
-      await captureHandoff(report.launches[0].terminalHandoff);
       await reopened.hidden();
       active();
       await close();
