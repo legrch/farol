@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/legrch/farol/modules/computer/app/port"
-	"github.com/legrch/farol/modules/computer/app/services/mutation"
 	state "github.com/legrch/farol/modules/computer/domain/mutation"
 )
 
@@ -30,7 +29,7 @@ const MaxAttempts = 4096
 // values cannot mint execution. Its captured edit is never returned or persisted.
 type Permit struct {
 	pending  Pending
-	request  mutation.OwnerRequest
+	request  EditRequest
 	consumed bool
 }
 
@@ -55,7 +54,7 @@ const (
 type Receipt struct {
 	id                      uint64
 	pending                 Pending
-	result                  mutation.OwnerResponse
+	result                  Response
 	retention               Retention
 	attempted, acknowledged bool
 	ackErr                  error
@@ -73,7 +72,7 @@ func (r *Receipt) Binding() Pending {
 	}
 	return r.pending
 }
-func (r *Receipt) Outcome() *mutation.OwnerResponse {
+func (r *Receipt) Outcome() *Response {
 	if r == nil {
 		return nil
 	}
@@ -89,7 +88,7 @@ func (r *Receipt) Retention() Retention {
 type attempt struct {
 	binding   Pending
 	permit    *Permit
-	result    *mutation.OwnerResponse
+	result    *Response
 	receipt   *Receipt
 	settled   bool
 	uncertain bool
@@ -100,7 +99,7 @@ type Service struct {
 	store                                  Store
 	outcomes                               Outcomes
 	clock                                  port.Clock
-	gate                                   mutation.Gate
+	gate                                   Gate
 	attempts                               map[string]*attempt
 	publicationFence, effectFence, retired bool
 	nextReceipt                            uint64
@@ -108,7 +107,7 @@ type Service struct {
 
 // New injects all identity, storage, outcome, clock and serialization sources.
 // identity.Generation is ignored; current generation comes from a typed Load.
-func New(identity Identity, store Store, outcomes Outcomes, clock port.Clock, gate mutation.Gate) (*Service, error) {
+func New(identity Identity, store Store, outcomes Outcomes, clock port.Clock, gate Gate) (*Service, error) {
 	if !validIdentity(identity) || store == nil || outcomes == nil || clock == nil || gate == nil {
 		return nil, ErrInvalid
 	}
@@ -119,7 +118,7 @@ func New(identity Identity, store Store, outcomes Outcomes, clock port.Clock, ga
 // generation or existing pending, and saves before issuing one live permit.
 // A failed publication never yields a permit; no subsequent Load can repair an
 // uncertain save in this service. Operation IDs cannot be reused in a lifetime.
-func (s *Service) Begin(ctx context.Context, selected mutation.OwnerSelection, request mutation.OwnerRequest) (*Permit, error) {
+func (s *Service) Begin(ctx context.Context, selected Selection, request EditRequest) (*Permit, error) {
 	s.gate.Lock()
 	defer s.gate.Unlock()
 	if err := s.writable(ctx); err != nil {
@@ -129,10 +128,10 @@ func (s *Service) Begin(ctx context.Context, selected mutation.OwnerSelection, r
 	if selected.ProfileID != s.identity.ProfileID || selected.OwnerID != s.identity.OwnerID || selected.ComputerID != s.identity.ComputerID || selected.ComputerGeneration == 0 || selected.ComputerGeneration > state.MaxSafeInteger {
 		return nil, ErrInvalid
 	}
-	edit, ok := request.Operation.(mutation.Edit)
+	edit := request.Operation
 	edit.Edits = slices.Clone(edit.Edits)
-	request = mutation.OwnerRequest{WorkspaceID: request.WorkspaceID, Operation: edit}
-	if !ok || mutation.ValidateOwnerRequest(request) != nil || !state.Identifier(operationID, 160) {
+	request = EditRequest{WorkspaceID: request.WorkspaceID, Operation: edit}
+	if validateRequest(request) != nil || !uuidV4(operationID) {
 		return nil, ErrInvalid
 	}
 	if s.attempts[operationID] != nil {
@@ -159,14 +158,14 @@ func (s *Service) Begin(ctx context.Context, selected mutation.OwnerSelection, r
 		a.settled = !s.publicationFence
 		return nil, err
 	}
-	a.permit = &Permit{pending: pending, request: mutation.OwnerRequest{WorkspaceID: request.WorkspaceID, Operation: edit}}
+	a.permit = &Permit{pending: pending, request: EditRequest{WorkspaceID: request.WorkspaceID, Operation: edit}}
 	return a.permit, nil
 }
 
 // Execute consumes the permit before Load or any outcome call, even on refusal.
 // It performs no native admission/journal work itself: one injected invocation
 // dispatches the captured original edit through the existing owner engine.
-func (s *Service) Execute(ctx context.Context, permit *Permit) (*mutation.OwnerResponse, error) {
+func (s *Service) Execute(ctx context.Context, permit *Permit) (*Response, error) {
 	s.gate.Lock()
 	defer s.gate.Unlock()
 	if permit == nil {
@@ -178,7 +177,7 @@ func (s *Service) Execute(ctx context.Context, permit *Permit) (*mutation.OwnerR
 	}
 	permit.consumed = true
 	request := permit.request
-	permit.request = mutation.OwnerRequest{} // Retain no edit after dispatch consumption.
+	permit.request = EditRequest{} // Retain no edit after dispatch consumption.
 	if err := s.writable(ctx); err != nil {
 		return nil, err
 	}
@@ -212,7 +211,7 @@ func (s *Service) Execute(ctx context.Context, permit *Permit) (*mutation.OwnerR
 // Observe never mints a permit or dispatches. Original generation is retained
 // across restart/current generation changes. A retained result is immutable.
 // Known durable ACK replays from memory without loading or saving again.
-func (s *Service) Observe(ctx context.Context, pending Pending) (*mutation.OwnerResponse, error) {
+func (s *Service) Observe(ctx context.Context, pending Pending) (*Response, error) {
 	s.gate.Lock()
 	defer s.gate.Unlock()
 	a, err := s.observe(ctx, pending)
@@ -347,7 +346,7 @@ func (s *Service) observe(ctx context.Context, pending Pending) (*attempt, error
 		s.attempts[pending.OperationID] = a
 	}
 	if a.result == nil || a.result.Phase == "prepared" {
-		out, callErr := s.outcomes.Observe(ctx, s.selection(pending), mutation.OwnerObservation{WorkspaceID: pending.WorkspaceID, RelativePath: pending.RelativePath})
+		out, callErr := s.outcomes.Observe(ctx, s.selection(pending), Observation{WorkspaceID: pending.WorkspaceID, RelativePath: pending.RelativePath})
 		if callErr != nil || out == nil {
 			out = unknownResult(pending)
 		}
@@ -362,7 +361,7 @@ func (s *Service) observe(ctx context.Context, pending Pending) (*attempt, error
 	}
 	return a, nil
 }
-func (s *Service) retain(a *attempt, out *mutation.OwnerResponse) {
+func (s *Service) retain(a *attempt, out *Response) {
 	a.result = cloneResult(out)
 	a.settled = out.Publication == "durable" && (out.Phase == "completed" || out.Phase == "failed")
 	if !a.settled && out.Phase != "prepared" {
@@ -412,11 +411,41 @@ func (s *Service) writable(ctx context.Context) error {
 }
 func (s *Service) owns(p Pending) bool { return p.ProfileID == s.identity.ProfileID }
 func validIdentity(i Identity) bool {
-	return state.Identifier(i.ProfileID, 160) && state.Identifier(i.OwnerID, 80) && state.Identifier(i.ComputerID, 120) && i.Generation > 0 && i.Generation <= state.MaxSafeInteger
+	return uuidV4(i.ProfileID) && state.Identifier(i.OwnerID, 80) && uuidV4(i.ComputerID) && i.Generation > 0 && i.Generation <= state.MaxSafeInteger
 }
+
+// Validate text/path/hash policy through the existing domain, with explicit
+// DTO mapping. UUID validation preserves the current Settings storage contract.
+func validateRequest(r EditRequest) error {
+	if !uuidV4(r.WorkspaceID) {
+		return ErrInvalid
+	}
+	edits := make([]state.TextEdit, len(r.Operation.Edits))
+	for i, edit := range r.Operation.Edits {
+		edits[i] = state.TextEdit{OldText: edit.OldText, NewText: edit.NewText}
+	}
+	return state.ValidateInput(state.Edit{RelativePath: r.Operation.RelativePath, Edits: edits, ExpectedSHA256: r.Operation.ExpectedSHA256})
+}
+
+func uuidV4(id string) bool {
+	if len(id) != 36 || id[14] != '4' || !strings.ContainsRune("89ab", rune(id[19])) {
+		return false
+	}
+	for i, c := range id {
+		if i == 8 || i == 13 || i == 18 || i == 23 {
+			if c != '-' {
+				return false
+			}
+		} else if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
+			return false
+		}
+	}
+	return true
+}
+
 func validPending(p Pending) bool {
 	submitted, err := time.ParseInLocation(time.RFC3339Nano, p.SubmittedAt, time.UTC)
-	return p.Backend == "go-owner-v2" && state.Identifier(p.OperationID, 160) && state.Identifier(p.ProfileID, 160) && p.ComputerGeneration > 0 && p.ComputerGeneration <= state.MaxSafeInteger && state.Identifier(p.WorkspaceID, 120) && state.RelativePath(p.RelativePath) && state.SHA256(p.BeforeSHA256) && err == nil && strings.HasSuffix(p.SubmittedAt, "Z") && submitted.UnixMilli() > 0 && uint64(submitted.UnixMilli()) <= state.MaxSafeInteger
+	return p.Backend == "go-owner-v2" && uuidV4(p.OperationID) && uuidV4(p.ProfileID) && p.ComputerGeneration > 0 && p.ComputerGeneration <= state.MaxSafeInteger && uuidV4(p.WorkspaceID) && state.RelativePath(p.RelativePath) && state.SHA256(p.BeforeSHA256) && err == nil && strings.HasSuffix(p.SubmittedAt, "Z") && submitted.UnixMilli() > 0 && uint64(submitted.UnixMilli()) <= state.MaxSafeInteger
 }
 func (s *Service) load(ctx context.Context) (Snapshot, error) {
 	snapshot, err := s.store.Load(ctx)
@@ -446,13 +475,13 @@ func (s *Service) save(ctx context.Context, expected Snapshot, next *Pending, in
 	}
 	return nil
 }
-func (s *Service) selection(p Pending) mutation.OwnerSelection {
-	return mutation.OwnerSelection{OperationID: p.OperationID, ProfileID: p.ProfileID, OwnerID: s.identity.OwnerID, ComputerID: s.identity.ComputerID, ComputerGeneration: p.ComputerGeneration}
+func (s *Service) selection(p Pending) Selection {
+	return Selection{OperationID: p.OperationID, ProfileID: p.ProfileID, OwnerID: s.identity.OwnerID, ComputerID: s.identity.ComputerID, ComputerGeneration: p.ComputerGeneration}
 }
-func unknownResult(p Pending) *mutation.OwnerResponse {
-	return &mutation.OwnerResponse{OperationID: p.OperationID, WorkspaceID: p.WorkspaceID, ComputerGeneration: p.ComputerGeneration, Phase: "outcome_unknown", Publication: "memory_only", Failure: &mutation.Failure{Code: "WORKSPACE_MUTATION_OUTCOME_UNKNOWN", Source: "operation-store"}}
+func unknownResult(p Pending) *Response {
+	return &Response{OperationID: p.OperationID, WorkspaceID: p.WorkspaceID, ComputerGeneration: p.ComputerGeneration, Phase: "outcome_unknown", Publication: "memory_only", Failure: &Failure{Code: "WORKSPACE_MUTATION_OUTCOME_UNKNOWN", Source: "operation-store"}}
 }
-func (s *Service) validResult(p Pending, r *mutation.OwnerResponse) bool {
+func (s *Service) validResult(p Pending, r *Response) bool {
 	if r == nil || r.OperationID != p.OperationID || r.WorkspaceID != p.WorkspaceID || r.ComputerGeneration != p.ComputerGeneration || r.Publication != "durable" && r.Publication != "memory_only" {
 		return false
 	}
@@ -474,7 +503,7 @@ func (s *Service) validResult(p Pending, r *mutation.OwnerResponse) bool {
 	_, err := state.Restore(binding, state.Phase(r.Phase), receipt, failure)
 	return err == nil
 }
-func cloneResult(r *mutation.OwnerResponse) *mutation.OwnerResponse {
+func cloneResult(r *Response) *Response {
 	if r == nil {
 		return nil
 	}

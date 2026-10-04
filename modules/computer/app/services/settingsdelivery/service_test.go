@@ -2,6 +2,7 @@ package settingsdelivery
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"reflect"
@@ -9,8 +10,6 @@ import (
 	"sync"
 	"testing"
 	"time"
-
-	"github.com/legrch/farol/modules/computer/app/services/mutation"
 )
 
 // These ports are pure policy fixtures, not native, filesystem or provider proof.
@@ -53,15 +52,15 @@ func (m *memoryStore) commit(c Change) SaveResult {
 
 type outcomePort struct {
 	executes, observes int
-	selected           mutation.OwnerSelection
-	request            mutation.OwnerRequest
-	observation        mutation.OwnerObservation
-	out                *mutation.OwnerResponse
+	selected           Selection
+	request            EditRequest
+	observation        Observation
+	out                *Response
 	err                error
 	executeHook        func()
 }
 
-func (o *outcomePort) Execute(_ context.Context, s mutation.OwnerSelection, r mutation.OwnerRequest) (*mutation.OwnerResponse, error) {
+func (o *outcomePort) Execute(_ context.Context, s Selection, r EditRequest) (*Response, error) {
 	o.executes++
 	o.selected = s
 	o.request = r
@@ -70,15 +69,24 @@ func (o *outcomePort) Execute(_ context.Context, s mutation.OwnerSelection, r mu
 	}
 	return o.out, o.err
 }
-func (o *outcomePort) Observe(_ context.Context, s mutation.OwnerSelection, r mutation.OwnerObservation) (*mutation.OwnerResponse, error) {
+func (o *outcomePort) Observe(_ context.Context, s Selection, r Observation) (*Response, error) {
 	o.observes++
 	o.selected = s
 	o.observation = r
 	return o.out, o.err
 }
+
+// Deterministic lowercase UUIDv4-shaped fixtures only; no UUID authority or
+// native identity evidence is claimed by these pure tests.
+func fixtureID(label string) string {
+	bytes := sha256.Sum256([]byte(label))
+	bytes[6] = bytes[6]&0x0f | 0x40
+	bytes[8] = bytes[8]&0x3f | 0x80
+	return fmt.Sprintf("%x-%x-%x-%x-%x", bytes[:4], bytes[4:6], bytes[6:8], bytes[8:10], bytes[10:16])
+}
 func setup(t *testing.T) (*Service, *memoryStore, *outcomePort) {
 	t.Helper()
-	identity := Identity{ProfileID: "profile", OwnerID: "owner", ComputerID: "computer", Generation: 7}
+	identity := Identity{ProfileID: fixtureID("profile"), OwnerID: "owner", ComputerID: fixtureID("computer"), Generation: 7}
 	store := &memoryStore{snapshot: Snapshot{Revision: 10, Current: identity}, unrelated: "preserved"}
 	outcomes := &outcomePort{}
 	service, err := New(identity, store, outcomes, fixedClock{}, &sync.Mutex{})
@@ -87,11 +95,11 @@ func setup(t *testing.T) (*Service, *memoryStore, *outcomePort) {
 	}
 	return service, store, outcomes
 }
-func request() mutation.OwnerRequest {
-	return mutation.OwnerRequest{WorkspaceID: "workspace", Operation: mutation.Edit{RelativePath: "file.txt", ExpectedSHA256: strings.Repeat("a", 64), Edits: []mutation.TextEdit{{OldText: "before", NewText: "after"}}}}
+func request() EditRequest {
+	return EditRequest{WorkspaceID: fixtureID("workspace"), Operation: Edit{RelativePath: "file.txt", ExpectedSHA256: strings.Repeat("a", 64), Edits: []TextEdit{{OldText: "before", NewText: "after"}}}}
 }
-func selected(s *Service, id string) mutation.OwnerSelection {
-	return mutation.OwnerSelection{OperationID: id, ProfileID: s.identity.ProfileID, OwnerID: s.identity.OwnerID, ComputerID: s.identity.ComputerID, ComputerGeneration: s.identity.Generation}
+func selected(s *Service, id string) Selection {
+	return Selection{OperationID: fixtureID(id), ProfileID: s.identity.ProfileID, OwnerID: s.identity.OwnerID, ComputerID: s.identity.ComputerID, ComputerGeneration: s.identity.Generation}
 }
 func begin(t *testing.T, s *Service, id string) *Permit {
 	t.Helper()
@@ -101,9 +109,9 @@ func begin(t *testing.T, s *Service, id string) *Permit {
 	}
 	return p
 }
-func completed(p Pending) *mutation.OwnerResponse {
+func completed(p Pending) *Response {
 	hash := p.BeforeSHA256
-	return &mutation.OwnerResponse{OperationID: p.OperationID, WorkspaceID: p.WorkspaceID, ComputerGeneration: p.ComputerGeneration, Phase: "completed", Publication: "durable", Receipt: &mutation.Receipt{Operation: "edit", RelativePath: p.RelativePath, Bytes: 12, Replacements: 1, BeforeSHA256: &hash, AfterSHA256: strings.Repeat("b", 64)}}
+	return &Response{OperationID: p.OperationID, WorkspaceID: p.WorkspaceID, ComputerGeneration: p.ComputerGeneration, Phase: "completed", Publication: "durable", Receipt: &EffectReceipt{Operation: "edit", RelativePath: p.RelativePath, Bytes: 12, Replacements: 1, BeforeSHA256: &hash, AfterSHA256: strings.Repeat("b", 64)}}
 }
 func offered(t *testing.T, s *Service, o *outcomePort, p *Permit) *Receipt {
 	t.Helper()
@@ -162,12 +170,12 @@ func TestOriginalEditAndSingleConsumedAttempt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	original.Operation.(mutation.Edit).Edits[0].NewText = "changed by caller"
+	original.Operation.Edits[0].NewText = "changed by caller"
 	binding := p.Binding()
 	binding.RelativePath = "changed.txt"
 	o.out = completed(p.Binding())
 	store.loadHook = func(context.Context) {
-		if !p.consumed || p.request.Operation != nil {
+		if !p.consumed || !reflect.DeepEqual(p.request, EditRequest{}) {
 			t.Error("permit not consumed before asynchronous Load")
 		}
 	}
@@ -221,14 +229,14 @@ func TestBeginRefusesExistingAndStaleCAS(t *testing.T) {
 				p := begin(t, s, "existing")
 				value := p.Binding()
 				if mode == "foreign-profile" {
-					value.ProfileID = "foreign"
+					value.ProfileID = fixtureID("foreign")
 				}
 				store.snapshot.Pending = &value
 			case "stale-revision", "foreign-race":
 				store.saveHook = func(_ context.Context, c Change) (SaveResult, error) {
 					store.snapshot.Revision++
 					if mode == "foreign-race" {
-						p := Pending{Backend: "go-owner-v2", OperationID: "foreign", ProfileID: "profile", WorkspaceID: "workspace", RelativePath: "other.txt", ComputerGeneration: 7, BeforeSHA256: strings.Repeat("c", 64), SubmittedAt: "2026-10-04T00:00:00Z"}
+						p := Pending{Backend: "go-owner-v2", OperationID: fixtureID("foreign"), ProfileID: fixtureID("profile"), WorkspaceID: fixtureID("workspace"), RelativePath: "other.txt", ComputerGeneration: 7, BeforeSHA256: strings.Repeat("c", 64), SubmittedAt: "2026-10-04T00:00:00Z"}
 						store.snapshot.Pending = &p
 					}
 					return store.commit(c), nil
@@ -347,7 +355,7 @@ func TestFreshExecutionRequiresEntirePendingAndIdentity(t *testing.T) {
 			p := begin(t, s, "op")
 			switch mode {
 			case "operation":
-				store.snapshot.Pending.OperationID = "other"
+				store.snapshot.Pending.OperationID = fixtureID("other")
 			case "path":
 				store.snapshot.Pending.RelativePath = "other.txt"
 			case "sha":
@@ -357,11 +365,11 @@ func TestFreshExecutionRequiresEntirePendingAndIdentity(t *testing.T) {
 			case "generation":
 				store.snapshot.Current.Generation++
 			case "computer":
-				store.snapshot.Current.ComputerID = "other"
+				store.snapshot.Current.ComputerID = fixtureID("other")
 			case "owner":
 				store.snapshot.Current.OwnerID = "other"
 			case "profile":
-				store.snapshot.Current.ProfileID = "other"
+				store.snapshot.Current.ProfileID = fixtureID("other")
 			case "absent":
 				store.snapshot.Pending = nil
 			}
@@ -439,7 +447,7 @@ func TestACKNeverClearsNewOrForeignPending(t *testing.T) {
 			r := offered(t, s, o, p)
 			switch mode {
 			case "new":
-				store.snapshot.Pending.OperationID = "new"
+				store.snapshot.Pending.OperationID = fixtureID("new")
 			case "same-id-new-sha":
 				store.snapshot.Pending.BeforeSHA256 = strings.Repeat("c", 64)
 			case "same-id-new-time":
@@ -449,7 +457,7 @@ func TestACKNeverClearsNewOrForeignPending(t *testing.T) {
 			case "cas-race":
 				store.saveHook = func(_ context.Context, c Change) (SaveResult, error) {
 					store.snapshot.Revision++
-					store.snapshot.Pending.OperationID = "new"
+					store.snapshot.Pending.OperationID = fixtureID("new")
 					return store.commit(c), nil
 				}
 			}
@@ -513,7 +521,7 @@ func TestOutcomeRetentionAndUIACKCannotSettleEffectFence(t *testing.T) {
 				o.out.Phase = "failed"
 				o.out.Publication = "memory_only"
 				o.out.Receipt = nil
-				o.out.Failure = &mutation.Failure{Code: "WORKSPACE_EDIT_NO_MATCH", Source: "native-workspace"}
+				o.out.Failure = &Failure{Code: "WORKSPACE_EDIT_NO_MATCH", Source: "native-workspace"}
 			case "durable-unknown":
 				o.out = unknownResult(p.Binding())
 				o.out.Publication = "durable"
@@ -582,7 +590,7 @@ func TestPreparedObserveCannotOfferPrematureACK(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	o.out = &mutation.OwnerResponse{OperationID: "op", WorkspaceID: "workspace", ComputerGeneration: 7, Phase: "prepared", Publication: "durable"}
+	o.out = &Response{OperationID: fixtureID("op"), WorkspaceID: fixtureID("workspace"), ComputerGeneration: 7, Phase: "prepared", Publication: "durable"}
 	_, err = restored.Offer(context.Background(), p.Binding())
 	requireError(t, err, ErrNotReady)
 	o.out = completed(p.Binding())
@@ -603,9 +611,9 @@ func TestMalformedOutcomeCannotOfferOrClear(t *testing.T) {
 			o.out = completed(p.Binding())
 			switch mode {
 			case "operation":
-				o.out.OperationID = "other"
+				o.out.OperationID = fixtureID("other")
 			case "workspace":
-				o.out.WorkspaceID = "other"
+				o.out.WorkspaceID = fixtureID("other")
 			case "generation":
 				o.out.ComputerGeneration++
 			case "publication":
@@ -619,7 +627,7 @@ func TestMalformedOutcomeCannotOfferOrClear(t *testing.T) {
 			case "kind":
 				o.out.Receipt.Operation = "write"
 			case "shape":
-				o.out.Failure = &mutation.Failure{Code: "WORKSPACE_EDIT_NO_MATCH", Source: "native-workspace"}
+				o.out.Failure = &Failure{Code: "WORKSPACE_EDIT_NO_MATCH", Source: "native-workspace"}
 			}
 			_, err := s.Execute(context.Background(), p)
 			requireError(t, err, ErrInvalid)
@@ -754,11 +762,11 @@ func TestRetentionBoundAndDistinctReceiptProjection(t *testing.T) {
 }
 
 func TestRealEditValidationBeforeStorage(t *testing.T) {
-	for _, mode := range []string{"path", "sha", "no-edits", "same-text", "write"} {
+	for _, mode := range []string{"path", "sha", "no-edits", "same-text", "missing-edit"} {
 		t.Run(mode, func(t *testing.T) {
 			s, store, _ := setup(t)
 			r := request()
-			e := r.Operation.(mutation.Edit)
+			e := r.Operation
 			switch mode {
 			case "path":
 				e.RelativePath = "../escape"
@@ -770,8 +778,8 @@ func TestRealEditValidationBeforeStorage(t *testing.T) {
 				e.Edits[0].NewText = e.Edits[0].OldText
 			}
 			r.Operation = e
-			if mode == "write" {
-				r.Operation = mutation.Write{RelativePath: "file.txt", Content: "text"}
+			if mode == "missing-edit" {
+				r.Operation = Edit{}
 			}
 			_, err := s.Begin(context.Background(), selected(s, "op"), r)
 			requireError(t, err, ErrInvalid)
@@ -861,7 +869,7 @@ func TestInvalidationRefusalAmbiguityAndCancellationOfferNoReceipt(t *testing.T)
 				cancel()
 			}
 			if mode == "foreign-pending" {
-				store.snapshot.Pending.OperationID = "new"
+				store.snapshot.Pending.OperationID = fixtureID("new")
 			}
 			r, err := s.Offer(ctx, p.Binding())
 			if r != nil || err == nil {
@@ -928,14 +936,14 @@ func TestMalformedRestoredOutcomeRequiresInvalidationBeforeWarning(t *testing.T)
 		t.Fatal(err)
 	}
 	o.out = completed(p.Binding())
-	o.out.WorkspaceID = "foreign"
+	o.out.WorkspaceID = fixtureID("foreign")
 	_, err = restored.Observe(context.Background(), p.Binding())
 	requireError(t, err, ErrInvalid)
 	r, err := restored.Offer(context.Background(), p.Binding())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r.Outcome().WorkspaceID != "workspace" || r.Outcome().Phase != "outcome_unknown" || !store.snapshot.VerificationInvalidated || o.executes != 0 {
+	if r.Outcome().WorkspaceID != fixtureID("workspace") || r.Outcome().Phase != "outcome_unknown" || !store.snapshot.VerificationInvalidated || o.executes != 0 {
 		t.Fatal("malformed restored result became trustworthy")
 	}
 }
@@ -1001,9 +1009,9 @@ func TestBeginRequiresOriginalPreviewGenerationAndIdentity(t *testing.T) {
 			case "owner":
 				original.OwnerID = "foreign"
 			case "profile":
-				original.ProfileID = "foreign"
+				original.ProfileID = fixtureID("foreign")
 			case "computer":
-				original.ComputerID = "foreign"
+				original.ComputerID = fixtureID("foreign")
 			case "zero-generation":
 				original.ComputerGeneration = 0
 			}
@@ -1015,6 +1023,98 @@ func TestBeginRequiresOriginalPreviewGenerationAndIdentity(t *testing.T) {
 				requireError(t, err, ErrConflict)
 			} else {
 				requireError(t, err, ErrInvalid)
+			}
+		})
+	}
+}
+
+func TestSettingsUUIDContractRejectsIncompatibleIdentityBeforeWrite(t *testing.T) {
+	valid := fixtureID("operation")
+	for _, malformed := range []string{
+		"operation", strings.ToUpper(valid), valid[:14] + "5" + valid[15:], valid[:19] + "7" + valid[20:],
+		valid[:8] + "_" + valid[9:], valid + "0", " " + valid,
+	} {
+		for _, field := range []string{"operation", "profile", "computer", "workspace"} {
+			t.Run(field+"/"+malformed, func(t *testing.T) {
+				s, store, o := setup(t)
+				selection := selected(s, "op")
+				r := request()
+				switch field {
+				case "operation":
+					selection.OperationID = malformed
+				case "profile":
+					selection.ProfileID = malformed
+				case "computer":
+					selection.ComputerID = malformed
+				case "workspace":
+					r.WorkspaceID = malformed
+				}
+				permit, err := s.Begin(context.Background(), selection, r)
+				requireError(t, err, ErrInvalid)
+				if permit != nil || store.saves != 0 || store.loads != 0 || o.executes != 0 {
+					t.Fatal("incompatible Settings identity reached storage/execution")
+				}
+			})
+		}
+	}
+}
+
+func TestPersistedAndCurrentUUIDContractRefusesInsteadOfEmptyProjection(t *testing.T) {
+	for _, field := range []string{"pending-operation", "pending-profile", "pending-workspace", "current-profile", "current-computer", "legacy-backend"} {
+		t.Run(field, func(t *testing.T) {
+			s, store, o := setup(t)
+			p := begin(t, s, "op")
+			observer, constructErr := New(s.identity, store, o, fixedClock{}, &sync.Mutex{})
+			if constructErr != nil {
+				t.Fatal(constructErr)
+			}
+			switch field {
+			case "pending-operation":
+				store.snapshot.Pending.OperationID = "legacy-operation"
+			case "pending-profile":
+				store.snapshot.Pending.ProfileID = "legacy-profile"
+			case "pending-workspace":
+				store.snapshot.Pending.WorkspaceID = "legacy-workspace"
+			case "current-profile":
+				store.snapshot.Current.ProfileID = "legacy-profile"
+			case "current-computer":
+				store.snapshot.Current.ComputerID = "legacy-computer"
+			case "legacy-backend":
+				store.snapshot.Pending.Backend = ""
+			}
+			_, err := observer.Observe(context.Background(), p.Binding())
+			requireError(t, err, ErrInvalid)
+			_, err = observer.Begin(context.Background(), selected(observer, "new"), request())
+			requireError(t, err, ErrInvalid)
+			if store.saves != 1 || store.snapshot.Pending == nil || o.executes != 0 || o.observes != 0 {
+				t.Fatal("incompatible projection became empty pending or reached outcome port")
+			}
+		})
+	}
+}
+
+func TestDomainEditValidationStillEnforcesTextAndEditLimits(t *testing.T) {
+	for _, mode := range []string{"empty-old", "nul-text", "invalid-utf8", "too-many-edits"} {
+		t.Run(mode, func(t *testing.T) {
+			s, store, _ := setup(t)
+			r := request()
+			switch mode {
+			case "empty-old":
+				r.Operation.Edits[0].OldText = ""
+			case "nul-text":
+				r.Operation.Edits[0].NewText = "after\x00"
+			case "invalid-utf8":
+				r.Operation.Edits[0].NewText = string([]byte{0xff})
+			case "too-many-edits":
+				r.Operation.Edits = make([]TextEdit, 257)
+				for i := range r.Operation.Edits {
+					r.Operation.Edits[i] = TextEdit{OldText: "before", NewText: "after"}
+				}
+			}
+			_, err := s.Begin(context.Background(), selected(s, "op"), r)
+			requireError(t, err, ErrInvalid)
+			if store.saves != 0 || store.loads != 0 {
+				t.Fatal("invalid Edit passed the explicit domain mapping")
 			}
 		})
 	}

@@ -2,11 +2,50 @@
 // It neither owns a settings database nor admits native effects.
 package settingsdelivery
 
-import (
-	"context"
+import "context"
 
-	"github.com/legrch/farol/modules/computer/app/services/mutation"
-)
+// Selection carries the exact original preview identity from trusted root.
+// Settings operation/profile/workspace/computer IDs must be lowercase UUIDv4.
+// OwnerID is trusted composition identity and is not part of persisted pending.
+type Selection struct {
+	OperationID, OwnerID, ProfileID, ComputerID string
+	ComputerGeneration                          uint64
+}
+
+// EditRequest is deliberately narrow. Root explicitly maps it into the sole
+// owner engine's DTO; delivery owns neither a write operation nor another engine.
+type EditRequest struct {
+	WorkspaceID string
+	Operation   Edit
+}
+type Edit struct {
+	RelativePath   string
+	Edits          []TextEdit
+	ExpectedSHA256 string
+}
+type TextEdit struct{ OldText, NewText string }
+type Observation struct{ WorkspaceID, RelativePath string }
+type Response struct {
+	OperationID, WorkspaceID string
+	ComputerGeneration       uint64
+	Phase, Publication       string
+	Receipt                  *EffectReceipt
+	Failure                  *Failure
+}
+type EffectReceipt struct {
+	Operation, RelativePath string
+	Bytes                   uint64
+	Replacements            uint32
+	BeforeSHA256            *string
+	AfterSHA256             string
+}
+type Failure struct{ Code, Source string }
+
+// Gate serializes this service. Ports execute under it and must not reenter.
+type Gate interface {
+	Lock()
+	Unlock()
+}
 
 // Identity is selected by trusted composition. Generation is the current
 // computer publication, not a replacement for the original pending generation.
@@ -69,6 +108,6 @@ type Store interface {
 // A missing record is nil/error and is treated as unknown. This foundation has
 // no not_admitted seam: only a future exact live transport proof could add one.
 type Outcomes interface {
-	Execute(context.Context, mutation.OwnerSelection, mutation.OwnerRequest) (*mutation.OwnerResponse, error)
-	Observe(context.Context, mutation.OwnerSelection, mutation.OwnerObservation) (*mutation.OwnerResponse, error)
+	Execute(context.Context, Selection, EditRequest) (*Response, error)
+	Observe(context.Context, Selection, Observation) (*Response, error)
 }
