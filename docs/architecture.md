@@ -1,14 +1,23 @@
 # Farol Next architecture
 
-Status: accepted for the isolated local preview.
+Status: transitional source architecture. The React + TypeScript UI and Go backend
+target is accepted; complete product cutover and distribution acceptance are pending.
 
 ## Decision
 
-Farol Next is a strict-TypeScript modular monolith with four product modules:
-`computer`, `chat`, `agent`, and `release`. Electron owns the desktop/browser
-surface. One utility process owns the local runtime and loopback SSE endpoint.
-Source modules communicate in process through consumer-owned ports and published
+The target has four Go product modules: `computer`, `task`, `chat`, and `release`.
+React + TypeScript owns Farol UI; plain TypeScript owns Electron, preload and
+browser/DOM mechanics. Go owns backend policy, state, orchestration and native
+execution. Modules communicate through consumer-owned ports and published
 contracts; HTTP is not an internal module boundary.
+
+The current source combines that target with remaining TypeScript routes under
+`src/`. A Go-enabled normal host starts an attested backend and composes Chat and
+Computer; the legacy utility process and its loopback endpoint still serve
+unmigrated behavior. The following utility-process description applies to that
+remaining route. It is not evidence that every capability has moved to Go.
+See the [bounded packaged startup/reopen witness](desktop-core.md#normal-startup-and-empty-profile-reopen-candidate)
+and the remaining cutover limits there.
 
 `src/apps/desktop` owns the Electron main/preload host adapters and
 `src/apps/runtime` owns the utility-process entrypoint. The Chat-owned preview

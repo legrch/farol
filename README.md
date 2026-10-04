@@ -15,19 +15,19 @@ integration tree. Accepted `main`
 remains `acb131d9e7d483296d4edac262cf881cddfb91bb`; integrating source does not
 update the installed product.
 
-| State                            | Scope                                                                                                                                                                                                                                                                                           |
-| -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Published baseline               | [0.1.8-owner.beta.1](https://github.com/legrch/farol-releases/releases/tag/v0.1.8-owner.beta.1), build `10`, source `1eb30bd23df22c9581d277280f8e0699612786b5`. Release metadata was checked on 3 October 2026; the beta is unsigned and not notarized.                                         |
-| Accepted main                    | K0/K1 Go foundation and disposable Computer read evidence. It does not establish a shipping Go backend.                                                                                                                                                                                         |
-| Source checkpoint described here | Normal Electron host source can select an attested Go backend for Computer admission and reads. Normal Electron execution and the resulting native/package artifact remain unqualified. Source metadata says `0.1.9-owner.beta.1`, build `11`; this is not a new release or installation claim. |
-| UI target                        | React + TypeScript presentation with plain TypeScript Electron/browser adapters. This checkpoint still uses the existing DOM/TypeScript UI; the React replacement is separate work.                                                                                                             |
+| State                            | Scope                                                                                                                                                                                                                                                                                                   |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Published baseline               | [0.1.8-owner.beta.1](https://github.com/legrch/farol-releases/releases/tag/v0.1.8-owner.beta.1), build `10`, source `1eb30bd23df22c9581d277280f8e0699612786b5`. Release metadata was checked on 3 October 2026; the beta is unsigned and not notarized.                                                 |
+| Accepted main                    | K0/K1 Go foundation and disposable Computer read evidence. It does not establish a shipping Go backend.                                                                                                                                                                                                 |
+| Source checkpoint described here | A Go-enabled package has passed normal startup, React Home/Settings, confirmed Quit and same-build empty-profile reopening. Computer read → Chat Send and provider journeys remain unqualified. Source metadata says `0.1.9-owner.beta.1`, build `11`; this is not a new release or installation claim. |
+| UI target                        | React + TypeScript shell is composed. Plain TypeScript retains Electron/browser mechanics. Native empty-profile Home, Settings and Appearance have been exercised.                                                                                                                                      |
 
 The Go cutover is incomplete. Source tests do not prove a packaged route, a live
 provider turn, streaming or a second message in the same conversation.
 
 The last owner-reported installation was `0.1.8-owner.beta.1`, build `10`. That
 report is separate from release metadata; installation was not reverified for
-this source checkpoint. No new package, installation or live result is claimed.
+this source checkpoint. The local candidate described below is packaged and tested; it is not installed or live-provider qualified.
 
 ## Use and installation
 
@@ -103,12 +103,11 @@ The proposed test-command registry is not adopted. In the current
 and `tests/integration`; it is not a unit-only gate. Use the actual
 [`Taskfile.yml`](Taskfile.yml) and [testing policy](docs/testing.md).
 
-Targeted checks can validate work in progress. Full `task ci:fast` includes Hunt,
-which requires **clean committed source** and rejects a dirty worktree. Current
-[repository instructions](AGENTS.md) still require targeted tests, `ci:fast` and
-`git diff --check` before committing. Resolving that ordering conflict belongs to
-the repository maintainer; this page grants no checkpoint-commit exception.
-[Standalone build guidance](docs/standalone-build.md) does not override `AGENTS.md`.
+The [repository checkpoint policy](AGENTS.md) permits targeted verification,
+self-review and `git diff --check`, followed by an owned-only checkpoint commit.
+Freeze a coherent integration candidate before `task ci:fast` and its risk-selected
+independent review. Hunt requires clean committed source. A checkpoint preserves
+work; it is not product acceptance. See [standalone build guidance](docs/standalone-build.md).
 
 ### Optional declared Go backend build
 
@@ -164,7 +163,7 @@ methods. Controlled-peer tests through the normal Go CLI cover useful streaming,
 the first Home-to-conversation binding, same-conversation follow-up and a lost
 acknowledgement without another Send.
 The normal host now composes the browser pump and physical adapter. Its production
-control catalogue, real DOM/provider journey and startup acceptance remain unqualified;
+control catalogue and real DOM/provider journey remain unqualified;
 these source tests are not a working packaged model route.
 
 The selected Task facade also maps create, observe, exact dispatch status/result,
@@ -190,8 +189,9 @@ Domain and application code use values and consumer-owned ports. Neighbors cross
 published contracts through `infra/peer`; Go contracts map independent DTOs and
 delegate to their own module. Root `boot/` composes Go and `src/boot/` composes the
 remaining TypeScript. Core does not become a second authority or journal owner.
-The composed React source still requires native acceptance against its exact build;
-component and source checks do not establish an owner-openable artifact.
+The exact local `c1d67c0` package passed the bounded normal-main startup/reopen
+journey in [Desktop/Core evidence](docs/desktop-core.md#normal-startup-and-empty-profile-reopen-candidate).
+Component and source checks alone do not establish packaged or installed behavior.
 
 The [documentation index](docs/README.md) links module contracts, migration limits,
 installation and verification. Unsigned distribution, remaining Python helpers,

@@ -6,6 +6,53 @@ The accepted Go migration layout places the Core-owned host client, framed decod
 
 Run `go build ./cmd/farol`, then `farol serve --profile <id>`. The build owns `boot.BuildID`, set with `-ldflags "-X github.com/legrch/farol/boot.BuildID=<accepted-build-id>"`; development defaults to `development`. The host launches the exact accepted executable with inherited stdin/stdout pipes. Each process generates a fresh 128-bit random incarnation. The Go serve API owns closable input/output pipes and closes both exactly once on every terminal return; context cancellation closes those exact endpoints to interrupt idle reads and blocked writes, and passes the same context to the module handler. Module journals still decide OS/provider cancellation outcomes. The CLI lifetime follows its inherited pipes. K0 does not implement an endpoint discovery service, global per-profile lock, app installation, automatic restart, or MCP socket attachment.
 
+## Normal startup and empty-profile reopen candidate
+
+The local candidate at source `c1d67c072edb72c2d36d46e83474c868612e6b34`
+was built with `task package` and declared Go inputs on 4 October 2026. Its build ID
+is `478c020d323b1ec0114e1b38a2270f9ddedf83109706b8c030db4d42f0eab17b`;
+artifact SHA-256 is
+`4e1099c9f91ed84659e31b80bd00505d083114a40745635fda0c3dfa1c88000c`.
+It remains unsigned `local.farol.next.preview`, version `0.1.9-owner.beta.1`,
+build `11`. These are local candidate facts, not a release or installation.
+
+`tests/e2e/go-core-startup.e2e.mjs --run-native --reopen` exercised the actual
+packaged `main.cjs`, React Home, a Computer name change with no workspace grant,
+Settings/Graphite, and two confirmed ordinary Quits around a same-profile reopen.
+The independent snapshots retained the same profile and physical root identity,
+Computer identity and Appearance; the second Go lifetime had a new backend
+generation. All test-owned windows were hidden and unfocused. The controlled
+site counted zero attempted and accepted provider Sends. The successful disposable
+profile was cleaned; the receipt retains its identity, journal and handoff witnesses.
+
+Evidence is retained locally as
+`_output/evidence/go-core-startup-f9ff846d-903c-4aeb-b2fb-755933b7fb19.json`.
+The harness has 114 browser-free self-checks. `tests/integration/go-core-startup.test.ts`
+covers actual Go-host process lifetimes and post-connect startup abort. The frozen
+`4c88e84` aggregate passed 7,038 main tests, 125 renderer tests and the Go core gate;
+the subsequent narrow abort correction at `c1d67c0` passed 37 host unit tests,
+three real-host tests, strict typechecking and an independent targeted recheck.
+This reuses unchanged aggregate evidence; it does not claim a new full aggregate
+or full-range formal acceptance at `c1d67c0`.
+
+A fresh empty workspace projection now leaves the acknowledged Go authority
+withdrawal in place. It does not publish an invalid empty approval or weaken Go
+validation. Normal Quit captures the actual live owner's retirement receipt,
+acknowledges it, observes the original child's unforced normal terminal event,
+and uses an attested narrow recorder. A successor needs that exact handoff and
+an independent host drain witness. Late/unknown publication and forced or
+unconfirmed closure cannot become a clean successor. Failure after browser
+connection uses `abortStartup()` and never publishes retirement.
+
+This successor path currently accepts **only the same build and an empty Chat
+registry**. Go result bodies remain in memory within one backend lifetime.
+Nonempty turns, retained-result recovery across restart, cross-build update,
+installation and live-provider compatibility remain unqualified. Normal
+Computer preview still spans Go admission and transitional TypeScript Send/result
+policy; its end-to-end cutover is pending. Production Go browser control
+translations are not qualified. The older K0/K1 sections below describe their
+original lower evidence boundaries, not these later packaged claims.
+
 ## Wire and generation
 
 `api/desktop/v1/schema.json` is the single schema authority. `farol-wire/2` is a deliberately small local generator, not a general schema framework. Run `node tooling/generate-desktop-wire.mjs`; `--check` fails on drift. It uses the locked repository Prettier and Go formatter. Generated Go and TS contain the schema SHA-256; changing the schema requires regenerating both files. Validator templates are generator implementation, not independently authored DTOs. The source format is version 2: method metadata contains read/effect strings, and version-1 metadata is refused by the generator. Wire request/result/event envelopes retain protocol 1.0; the source-format version is not an on-wire protocol revision. Accepted host/backend build provenance and generated schema digests bind the corresponding artifacts.
