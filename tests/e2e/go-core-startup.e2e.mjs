@@ -1420,8 +1420,11 @@ async function native(selected, inputs, report, save) {
         const section = window.locator(
           'section[aria-label="Read-only file preview"]',
         );
+        report.readAccount.beforeSelection = await readAccountUi(window);
+        // The wrapping label includes the select's option text. Match the
+        // unique combobox inside the exact preview section, not that full text.
         await section
-          .getByLabel("Read-only folder", { exact: true })
+          .getByRole("combobox")
           .selectOption(workspaceId, { timeout: 5000 });
         await accountUiAction(window, "Choose file…", "Discard preview");
         await hidden();
