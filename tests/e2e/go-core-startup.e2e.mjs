@@ -5,13 +5,14 @@
  * node tests/e2e/go-core-startup.e2e.mjs --self-test
  * node tests/e2e/go-core-startup.e2e.mjs [--check|--run-native]
  *   --candidate-root /absolute/_output/build/app --source-sha <SHA>
- *   --build-id <buildId> [--dependency-root /absolute/node_modules]
+ *   --build-id <buildId> [--dependency-root /absolute/node_modules] [--reopen]
  * Or replace --candidate-root with:
  *   --packaged /absolute/Farol.app --artifact-metadata /absolute/artifact.json
  *   --artifact-sha <independently selected artifactSha256>
  *
- * Exactly one normal main launch, one fresh disposable E2E profile, no Send,
- * no reopening of a closed Go Chat claim, no app-under-test entry compilation.
+ * Fresh-only by default. Packaged --reopen opts into one same-build successor
+ * after confirmed clean retirement, at the same disposable E2E profile. No
+ * Send, auth or app-under-test entry compilation. Never retry an unknown launch.
  * Missing read/denied/revoked witnesses are reported, never counted as passes.
  */
 import assert from "node:assert/strict";
@@ -63,6 +64,8 @@ const contract = Object.freeze({
   modes: ["--contract", "--self-test", "--check", "--run-native"],
   nativeAuthority:
     "Explicit --run-native; caller owns the exclusive native lane",
+  reopen:
+    "Packaged --reopen only: confirmed first Quit -> same sealed artifact/profile -> retained computerId/Graphite -> new journal backend generation -> second confirmed Quit; no retry after refused/unknown outcomes",
   isolation:
     "Existing E2E root/proof/app-data guard; new HOME/AppData, private per-user TMPDIR, hidden windows, fixture tunnel client, no workspace or provider verification",
   missingWitnesses: [
@@ -75,6 +78,7 @@ const contract = Object.freeze({
 function selection(args) {
   const result = {
     mode: "--check",
+    reopen: false,
     dependencyRoot: path.join(root, "node_modules"),
   };
   const options = new Map([
@@ -89,6 +93,12 @@ function selection(args) {
   const seen = new Set();
   for (let index = 0; index < args.length; index++) {
     const argument = args[index];
+    if (argument === "--reopen") {
+      assert.equal(seen.has("reopen"), false, "REOPEN_REPEATED");
+      seen.add("reopen");
+      result.reopen = true;
+      continue;
+    }
     if (["--check", "--run-native"].includes(argument)) {
       assert.equal(seen.has("mode"), false, "MODE_REPEATED");
       seen.add("mode");
@@ -115,6 +125,7 @@ function selection(args) {
       "PACKAGE_PINS_REQUIRED",
     );
   } else {
+    assert.equal(result.reopen, false, "REOPEN_REQUIRES_PACKAGE");
     assert.equal(result.artifactMetadata, undefined, "PACKAGE_OPTION_WITH_DEV");
     assert.equal(result.artifactSHA, undefined, "PACKAGE_OPTION_WITH_DEV");
   }
@@ -288,7 +299,7 @@ function zeroSends(ledger) {
   assert.deepEqual(ledger.ledger, []);
   assert.deepEqual(ledger.turns, []);
 }
-function cleanClosure(cleanup) {
+function cleanLaunchClosure(cleanup) {
   assert.equal(cleanup.launchResolved, true, "LAUNCH_OUTCOME_UNKNOWN");
   assert.equal(cleanup.closeRequested, true, "CLOSE_NOT_REQUESTED");
   assert.equal(cleanup.exitObserved, true, "CHILD_TERMINAL_UNKNOWN");
@@ -296,7 +307,186 @@ function cleanClosure(cleanup) {
   assert.equal(cleanup.signal, null, "CHILD_SIGNAL_DEATH");
   assert.equal(cleanup.drained, true, "GO_OR_OTHER_CHILD_DRAIN_UNCONFIRMED");
   assert.equal(cleanup.runMarkerRemoved, true, "RUN_MARKER_RETAINED");
+}
+function cleanClosure(cleanup) {
+  cleanLaunchClosure(cleanup);
   assert.equal(cleanup.siteClosed, true, "FIXTURE_CLOSE_UNKNOWN");
+}
+
+function retainedSettings(current, previous) {
+  for (const key of ["computerId", "name", "generation"])
+    assert.equal(
+      current.computer[key],
+      previous.computer[key],
+      "REOPEN_COMPUTER_CHANGED",
+    );
+  assert.deepEqual(current.computer.workspaces, []);
+  assert.equal(current.setup.computer.verified, null);
+  assert.equal(current.setup.chatgpt.verified, null);
+}
+
+async function physicalDirectory(directory) {
+  assert.equal(await fs.realpath(directory), directory, "GO_ROOT_REDIRECTED");
+  const stat = await fs.lstat(directory, { bigint: true });
+  assert.ok(stat.isDirectory(), "GO_ROOT_NOT_DIRECTORY");
+  assert.equal(stat.mode & 0o777n, 0o700n, "GO_ROOT_NOT_PRIVATE");
+  assert.equal(stat.uid, BigInt(process.getuid()), "GO_ROOT_NOT_OWNED");
+  return {
+    path: directory,
+    Device: stat.dev.toString(),
+    Inode: stat.ino.toString(),
+    OwnerUID: stat.uid.toString(),
+  };
+}
+
+function journalWitness(journal, profileId, physical, previous, retired) {
+  assert.equal(journal.version, 2, "JOURNAL_VERSION_UNKNOWN");
+  assert.equal(journal.scope?.ProfileID, profileId, "JOURNAL_PROFILE_CHANGED");
+  const generation = journal.scope?.BackendGeneration;
+  assert.ok(
+    typeof generation === "string" && generation.length > 0,
+    "BACKEND_GENERATION_UNKNOWN",
+  );
+  for (const key of ["Device", "Inode", "OwnerUID"]) {
+    assert.ok(
+      Number.isSafeInteger(journal.root?.[key]),
+      "JOURNAL_ROOT_PRECISION_UNKNOWN",
+    );
+    assert.equal(
+      String(journal.root[key]),
+      physical[key],
+      "JOURNAL_PHYSICAL_ROOT_CHANGED",
+    );
+  }
+  assert.deepEqual(journal.writes, [], "UNEXPECTED_CHAT_JOURNAL_WRITES");
+  assert.deepEqual(
+    journal.incarnations,
+    previous ? [...previous.incarnations, generation] : [generation],
+    "BACKEND_HISTORY_CHANGED",
+  );
+  if (previous)
+    assert.notEqual(
+      generation,
+      previous.scope.BackendGeneration,
+      "BACKEND_GENERATION_REUSED",
+    );
+  if (retired) {
+    assert.deepEqual(
+      journal.retirement?.Scope,
+      journal.scope,
+      "RETIREMENT_SCOPE_UNKNOWN",
+    );
+    assert.deepEqual(
+      journal.retirement?.Root,
+      journal.root,
+      "RETIREMENT_ROOT_UNKNOWN",
+    );
+    assert.equal(journal.retirement?.PreviousRevision, 0);
+    assert.equal(journal.retirement?.Revision, 1);
+    assert.deepEqual(journal.retirement?.Turns, [], "RETIREMENT_NOT_EMPTY");
+  } else
+    assert.equal(journal.retirement, null, "READY_JOURNAL_ALREADY_RETIRED");
+}
+
+function handoffWitness(record, scope, buildId, previous) {
+  assert.equal(record.Version, 1, "HANDOFF_VERSION_UNKNOWN");
+  assert.equal(record.Origin, "LIVE_OWNER_CALLBACK", "HANDOFF_ORIGIN_UNKNOWN");
+  assert.equal(
+    record.Stage,
+    previous ? "SUCCESSOR_CONSUMED" : "CHILD_TERMINATED",
+    "HANDOFF_STAGE_UNCONFIRMED",
+  );
+  const binding = record.Publication?.Binding;
+  assert.equal(binding?.ProfileID, scope.ProfileID, "HANDOFF_PROFILE_CHANGED");
+  assert.equal(binding?.BuildID, buildId, "HANDOFF_BUILD_CHANGED");
+  assert.deepEqual(
+    record.ACK?.Publication,
+    record.Publication,
+    "HANDOFF_ACK_UNKNOWN",
+  );
+  assert.deepEqual(
+    record.Terminal?.Publication,
+    record.Publication,
+    "HANDOFF_TERMINAL_UNKNOWN",
+  );
+  assert.equal(record.Terminal?.Kind, "NORMAL_EXIT");
+  assert.equal(record.Terminal?.StopMode, "GRACEFUL_STOP");
+  assert.equal(record.Terminal?.ExitCode, 0);
+  assert.equal(record.Terminal?.Signal, "");
+  if (previous) {
+    assert.deepEqual(
+      record.Publication,
+      previous.Publication,
+      "HANDOFF_PREDECESSOR_CHANGED",
+    );
+    assert.equal(
+      record.Consumption?.PreviousHostDrainConfirmed,
+      true,
+      "HANDOFF_HOST_DRAIN_UNKNOWN",
+    );
+    assert.deepEqual(
+      record.Consumption?.Next,
+      scope,
+      "HANDOFF_SUCCESSOR_CHANGED",
+    );
+    const next = record.Consumption?.NextBinding;
+    assert.equal(next?.BackendGeneration, scope.BackendGeneration);
+    for (const key of ["ProfileID", "BuildID", "ParentRoot", "ChatRoot"])
+      assert.deepEqual(
+        next?.[key],
+        binding[key],
+        "HANDOFF_SUCCESSOR_BINDING_CHANGED",
+      );
+    for (const key of ["HostLifetimeID", "ChildLaunchID"]) {
+      assert.ok(
+        typeof next?.[key] === "string" && next[key].length > 0,
+        "HANDOFF_LIFETIME_UNKNOWN",
+      );
+      assert.notEqual(next[key], binding[key], "HANDOFF_LIFETIME_REUSED");
+    }
+  } else {
+    assert.equal(
+      binding.BackendGeneration,
+      scope.BackendGeneration,
+      "HANDOFF_BACKEND_CHANGED",
+    );
+    assert.equal(record.Consumption, null, "TERMINAL_HANDOFF_ALREADY_CONSUMED");
+  }
+}
+
+function permitReopen(launch) {
+  assert.equal(
+    launch.status,
+    "confirmed-clean-quit",
+    "FIRST_JOURNEY_NOT_CONFIRMED",
+  );
+  cleanLaunchClosure(launch.cleanup);
+  assert.ok(
+    launch.quitReceipt && launch.retiredJournal && launch.terminalHandoff,
+    "FIRST_TERMINAL_EVIDENCE_MISSING",
+  );
+  zeroSends(launch.terminalLedger);
+}
+
+function quitWitness(quit, marker, previous) {
+  assert.equal(quit.schema, 1);
+  assert.equal(quit.drained, true);
+  assert.deepEqual(quit.unconfirmed, []);
+  assert.ok(Number.isFinite(Date.parse(quit.at)), "QUIT_TIMESTAMP_UNKNOWN");
+  assert.equal(
+    new Date(quit.at).toISOString(),
+    quit.at,
+    "QUIT_TIMESTAMP_NOT_CANONICAL",
+  );
+  assert.ok(
+    Date.parse(quit.at) >= Date.parse(marker.startedAt),
+    "STALE_QUIT_RECEIPT",
+  );
+  if (previous)
+    assert.ok(
+      Date.parse(quit.at) > Date.parse(previous.at),
+      "REOPEN_QUIT_RECEIPT_NOT_NEW",
+    );
 }
 async function bounded(promise, ms, code) {
   let timer;
@@ -419,6 +609,7 @@ async function native(selected, inputs, report, save) {
   let exited;
   let stateRoot;
   let abort;
+  let launch;
   const cancel = () => {
     abort = "HARNESS_CANCELLED";
   };
@@ -437,32 +628,185 @@ async function native(selected, inputs, report, save) {
       1024 * 1024,
     );
     zeroAuthority(profile.value, access.value, computerId);
-    report.snapshots.push({ label, profile, access });
+    report.snapshots.push({ launch: launch.ordinal, label, profile, access });
     zeroSends(site.driver.snapshot());
+    await save();
+  };
+  const captureJournal = async (label, previous, retired = false) => {
+    const coreRoot = await physicalDirectory(path.join(stateRoot, "go-core"));
+    const chatRoot = await physicalDirectory(path.join(coreRoot.path, "chat"));
+    if (report.launches[0].physical) {
+      assert.deepEqual(
+        { coreRoot, chatRoot },
+        report.launches[0].physical,
+        "REOPEN_PHYSICAL_ROOT_CHANGED",
+      );
+    }
+    launch.physical = { coreRoot, chatRoot };
+    const profile = await document(
+      path.join(coreRoot.path, "profile.json"),
+      4096,
+    );
+    if (report.launches[0].goProfile)
+      assert.deepEqual(
+        profile,
+        report.launches[0].goProfile,
+        "REOPEN_GO_PROFILE_CHANGED",
+      );
+    launch.goProfile = profile;
+    const journal = await document(
+      path.join(chatRoot.path, "chat-lifecycle.json"),
+      1024 * 1024,
+    );
+    report.journals.push({ launch: launch.ordinal, label, journal });
+    await save();
+    // These are independently read observations, never an origin authority or
+    // permission to consume a claim. The production owner performs retirement.
+    journalWitness(
+      journal.value,
+      profile.value.profileId,
+      chatRoot,
+      previous,
+      retired,
+    );
+    if (retired) {
+      assert.deepEqual(
+        journal.value.scope,
+        launch.readyJournal.value.scope,
+        "QUIT_BACKEND_CHANGED",
+      );
+      launch.retiredJournal = journal;
+    } else launch.readyJournal = journal;
+    await save();
+  };
+  const captureHandoff = async (previous) => {
+    const directory = launch.physical.chatRoot.path;
+    const names = await fs.readdir(directory);
+    assert.equal(
+      names.includes("chat-handoff.unknown"),
+      false,
+      "HANDOFF_UNKNOWN_FENCE",
+    );
+    const attempts = names
+      .filter((name) => /^chat-handoff-\d{4}\.attempt$/u.test(name))
+      .sort();
+    assert.ok(
+      attempts.length > 0 && attempts.length <= 1024,
+      "HANDOFF_HISTORY_UNKNOWN",
+    );
+    const commits = names
+      .filter((name) => /^chat-handoff-\d{4}\.commit$/u.test(name))
+      .sort();
+    assert.deepEqual(
+      commits,
+      attempts.map((name) => name.replace(".attempt", ".commit")),
+      "HANDOFF_COMMIT_UNKNOWN",
+    );
+    attempts.forEach((name, index) =>
+      assert.equal(
+        name,
+        `chat-handoff-${String(index + 1).padStart(4, "0")}.attempt`,
+        "HANDOFF_HISTORY_GAP",
+      ),
+    );
+    const name = attempts.at(-1);
+    const evidence = await document(path.join(directory, name), 16384);
+    evidence.file = name;
+    report.handoffs.push({ launch: launch.ordinal, evidence });
+    await save();
+    const digest = (
+      await regular(
+        path.join(directory, name.replace(".attempt", ".commit")),
+        64,
+      )
+    ).toString("utf8");
+    assert.equal(digest, evidence.sha256, "HANDOFF_COMMIT_DIGEST_MISMATCH");
+    // Persisted records are observations, never a live-owner retirement proof.
+    handoffWitness(
+      evidence.value,
+      launch.readyJournal.value.scope,
+      selected.buildId,
+      previous?.value,
+    );
+    const binding = previous
+      ? evidence.value.Consumption.NextBinding
+      : evidence.value.Publication.Binding;
+    for (const [key, physical] of [
+      ["ParentRoot", launch.physical.coreRoot],
+      ["ChatRoot", launch.physical.chatRoot],
+    ])
+      for (const field of ["Device", "Inode", "OwnerUID"])
+        assert.equal(
+          String(binding[key]?.[field]),
+          physical[field],
+          "HANDOFF_PHYSICAL_ROOT_CHANGED",
+        );
+    if (previous) launch.successorHandoff = evidence;
+    else {
+      assert.deepEqual(
+        evidence.value.Receipt?.Write,
+        launch.retiredJournal.value.retirement,
+        "HANDOFF_RETIREMENT_CHANGED",
+      );
+      if (launch.successorHandoff)
+        assert.deepEqual(
+          binding,
+          launch.successorHandoff.value.Consumption.NextBinding,
+          "SECOND_TERMINAL_BINDING_CHANGED",
+        );
+      launch.terminalHandoff = evidence;
+    }
     await save();
   };
   const close = async () => {
     assert.equal(
-      report.cleanup.closeRequested,
+      launch.cleanup.closeRequested,
       false,
       "DUPLICATE_CLOSE_FORBIDDEN",
     );
-    report.cleanup.closeRequested = true;
-    assert.ok(child.kill("SIGINT"), "OWNED_QUIT_SIGNAL_FAILED");
-    await bounded(exited, 15000, "ELECTRON_CLOSE_UNKNOWN");
-    report.cleanup.exitObserved = true;
-    report.cleanup.exitCode = child.exitCode;
-    report.cleanup.signal = child.signalCode;
-    const quit = await document(path.join(stateRoot, "last-quit.json"), 8192);
-    assert.equal(quit.value.schema, 1);
-    assert.equal(quit.value.drained, true);
-    assert.deepEqual(quit.value.unconfirmed, []);
-    report.quitReceipt = quit;
-    report.cleanup.drained = true;
-    await assert.rejects(fs.lstat(path.join(stateRoot, "running.json")), {
-      code: "ENOENT",
-    });
-    report.cleanup.runMarkerRemoved = true;
+    launch.cleanup.closeRequested = true;
+    launch.status = "quit-requested";
+    await save();
+    try {
+      assert.ok(child.kill("SIGINT"), "OWNED_QUIT_SIGNAL_FAILED");
+      await bounded(exited, 15000, "ELECTRON_CLOSE_UNKNOWN");
+      // The event listener stores the exact child's terminal before receipt IO.
+      assert.equal(launch.cleanup.exitCode, 0, "CHILD_EXIT_FAILED");
+      assert.equal(launch.cleanup.signal, null, "CHILD_SIGNAL_DEATH");
+      const quit = await document(path.join(stateRoot, "last-quit.json"), 8192);
+      launch.quitReceipt = quit;
+      if (launch.ordinal === 1) report.quitReceipt = quit;
+      quitWitness(
+        quit.value,
+        launch.runMarker.value,
+        report.launches[launch.ordinal - 2]?.quitReceipt?.value,
+      );
+      launch.cleanup.drained = true;
+      await assert.rejects(fs.lstat(path.join(stateRoot, "running.json")), {
+        code: "ENOENT",
+      });
+      launch.cleanup.runMarkerRemoved = true;
+      launch.terminalLedger = site.driver.snapshot();
+      zeroSends(launch.terminalLedger);
+      if (selected.reopen) {
+        await captureJournal(
+          "confirmed-quit",
+          launch.ordinal === 2
+            ? report.launches[0].readyJournal.value
+            : undefined,
+          true,
+        );
+        await captureHandoff();
+      }
+      cleanLaunchClosure(launch.cleanup);
+      launch.status = "confirmed-clean-quit";
+    } catch (error) {
+      launch.status = "failed-or-unknown";
+      launch.error = String(error);
+      throw error;
+    } finally {
+      await save();
+    }
   };
   try {
     const { startControlledChatGptSite } =
@@ -499,69 +843,123 @@ async function native(selected, inputs, report, save) {
       LANG: "en_US.UTF-8",
       LC_ALL: "en_US.UTF-8",
     };
-    report.cleanup.launchAttempted = true;
-    await save();
-    active();
-    application = await electron.launch({
-      executablePath: executable,
-      args: [
-        ...(selected.packaged ? [] : [path.join(inputs.appRoot, "main.cjs")]),
-        "--preview-window-mode=hidden",
-      ],
-      env: environment,
-      timeout: 15000,
-    });
-    report.cleanup.launchResolved = true;
-    child = application.process();
-    exited = once(child, "exit");
-    // Observe terminal immediately; a rejection must not become unhandled.
-    exited.catch(() => undefined);
-    const window = await application.firstWindow({ timeout: 15000 });
-    const bootstrap = await ready(window, active);
-    const settings = unconfigured(bootstrap);
-    const paths = await bounded(
-      application.evaluate(({ app }) => ({
-        name: app.getName(),
-        userData: app.getPath("userData"),
-        sessionData: app.getPath("sessionData"),
-      })),
-      3000,
-      "PROFILE_PROJECTION_UNKNOWN",
-    );
-    assert.equal(
-      path.dirname(paths.userData),
-      appData,
-      "PROFILE_ESCAPED_DISPOSABLE_APP_DATA",
-    );
-    assert.equal(paths.sessionData, paths.userData);
-    assert.equal(paths.name, selected.packaged ? "Farol" : "Farol Dev");
-    assert.equal(bootstrap.environment, selected.packaged ? "preview" : "dev");
-    assert.equal(
-      bootstrap.applicationId,
-      selected.packaged ? "local.farol.next.preview" : "local.farol.dev",
-    );
-    stateRoot = path.join(paths.userData, "farol-next-state");
-    report.profile = paths;
-    const hidden = async () => {
-      const windows = await bounded(
-        application.evaluate(({ BrowserWindow }) =>
-          BrowserWindow.getAllWindows().map((value) => ({
-            visible: value.isVisible(),
-            focused: value.isFocused(),
-          })),
-        ),
+    const start = async (ordinal) => {
+      launch = {
+        ordinal,
+        status: "launch-attempted",
+        artifact: inputs,
+        windows: [],
+        cleanup: {
+          launchAttempted: false,
+          launchResolved: false,
+          closeRequested: false,
+        },
+      };
+      report.launches.push(launch);
+      // Retain the original fresh-only cleanup projection for existing readers.
+      report.cleanup = launch.cleanup;
+      launch.cleanup.launchAttempted = true;
+      await save();
+      active();
+      application = await electron.launch({
+        executablePath: executable,
+        args: [
+          ...(selected.packaged ? [] : [path.join(inputs.appRoot, "main.cjs")]),
+          "--preview-window-mode=hidden",
+        ],
+        env: environment,
+        timeout: 15000,
+      });
+      launch.cleanup.launchResolved = true;
+      child = application.process();
+      launch.pid = child.pid;
+      const launched = launch;
+      exited = once(child, "exit");
+      child.once("exit", (code, signal) => {
+        launched.cleanup.exitObserved = true;
+        launched.cleanup.exitCode = code;
+        launched.cleanup.signal = signal;
+      });
+      // Observe terminal immediately; a rejection must not become unhandled.
+      exited.catch(() => undefined);
+      const window = await application.firstWindow({ timeout: 15000 });
+      const bootstrap = await ready(window, active);
+      const settings = unconfigured(bootstrap);
+      const paths = await bounded(
+        application.evaluate(({ app }) => ({
+          name: app.getName(),
+          userData: app.getPath("userData"),
+          sessionData: app.getPath("sessionData"),
+        })),
         3000,
-        "WINDOW_PROJECTION_UNKNOWN",
+        "PROFILE_PROJECTION_UNKNOWN",
       );
-      assert.ok(windows.length > 0);
+      assert.equal(
+        path.dirname(paths.userData),
+        appData,
+        "PROFILE_ESCAPED_DISPOSABLE_APP_DATA",
+      );
+      assert.equal(paths.sessionData, paths.userData);
+      assert.equal(paths.name, selected.packaged ? "Farol" : "Farol Dev");
+      assert.equal(
+        bootstrap.environment,
+        selected.packaged ? "preview" : "dev",
+      );
+      assert.equal(
+        bootstrap.applicationId,
+        selected.packaged ? "local.farol.next.preview" : "local.farol.dev",
+      );
+      stateRoot = path.join(paths.userData, "farol-next-state");
+      launch.profile = paths;
+      if (launch.ordinal === 2)
+        assert.deepEqual(
+          paths,
+          report.launches[0].profile,
+          "REOPEN_PROFILE_CHANGED",
+        );
+      else report.profile = paths;
+      launch.runMarker = await document(
+        path.join(stateRoot, "running.json"),
+        4096,
+      );
+      assert.equal(launch.runMarker.value.schema, 1);
+      assert.equal(
+        launch.runMarker.value.pid,
+        child.pid,
+        "RUN_MARKER_CHILD_MISMATCH",
+      );
       assert.ok(
-        windows.every((value) => !value.visible && !value.focused),
-        "TEST_WINDOW_VISIBLE_OR_FOCUSED",
+        Number.isFinite(Date.parse(launch.runMarker.value.startedAt)),
+        "RUN_MARKER_TIME_UNKNOWN",
       );
-      report.windows.push(windows);
+      const hidden = async () => {
+        const windows = await bounded(
+          application.evaluate(({ BrowserWindow }) =>
+            BrowserWindow.getAllWindows().map((value) => ({
+              visible: value.isVisible(),
+              focused: value.isFocused(),
+            })),
+          ),
+          3000,
+          "WINDOW_PROJECTION_UNKNOWN",
+        );
+        assert.ok(windows.length > 0);
+        assert.ok(
+          windows.every((value) => !value.visible && !value.focused),
+          "TEST_WINDOW_VISIBLE_OR_FOCUSED",
+        );
+        report.windows.push(windows);
+        launch.windows.push(windows);
+      };
+      launch.status = "ready";
+      await hidden();
+      await save();
+      return { window, settings, hidden };
     };
+    const { window, settings, hidden } = await start(1);
     await hidden();
     await capture("fresh-ready", settings.computer.computerId);
+    if (selected.reopen) await captureJournal("fresh-ready");
     // Ordinary preload/configuration IPC, one bounded mutation of disposable
     // settings. A Computer-generation change exercises withdrawal/publication
     // without granting a folder or manufacturing a Go admission.
@@ -618,6 +1016,7 @@ async function native(selected, inputs, report, save) {
       settings.computer.generation + 1,
     );
     report.settingsSHA = savedSettings.sha256;
+    launch.settings = savedSettings;
     await capture("settings-ui-zero-authority", settings.computer.computerId);
     await hidden();
     active();
@@ -626,15 +1025,125 @@ async function native(selected, inputs, report, save) {
       "confirmed-quit-zero-authority",
       settings.computer.computerId,
     );
+    if (selected.reopen) {
+      // Only this straight-line success path can launch the one successor.
+      // No relaunch is reachable from catch/finally or an unknown receipt.
+      permitReopen(report.launches[0]);
+      active();
+      const reattested = await attest(selected);
+      assert.deepEqual(reattested, inputs, "ARTIFACT_CHANGED_BEFORE_REOPEN");
+      await assert.rejects(fs.lstat(path.join(stateRoot, "running.json")), {
+        code: "ENOENT",
+      });
+      const beforeReopen = await document(
+        path.join(stateRoot, "config.json"),
+        256 * 1024,
+      );
+      assert.deepEqual(
+        beforeReopen,
+        savedSettings,
+        "SETTINGS_CHANGED_BEFORE_REOPEN",
+      );
+      const first = report.launches[0];
+      assert.deepEqual(
+        await physicalDirectory(first.physical.coreRoot.path),
+        first.physical.coreRoot,
+        "REOPEN_PHYSICAL_ROOT_CHANGED",
+      );
+      assert.deepEqual(
+        await physicalDirectory(first.physical.chatRoot.path),
+        first.physical.chatRoot,
+        "REOPEN_PHYSICAL_ROOT_CHANGED",
+      );
+      assert.deepEqual(
+        await document(
+          path.join(first.physical.coreRoot.path, "profile.json"),
+          4096,
+        ),
+        first.goProfile,
+        "REOPEN_GO_PROFILE_CHANGED",
+      );
+      assert.deepEqual(
+        await document(
+          path.join(first.physical.chatRoot.path, "chat-lifecycle.json"),
+          1024 * 1024,
+        ),
+        first.retiredJournal,
+        "REOPEN_RETIRED_JOURNAL_CHANGED",
+      );
+      const reopened = await start(2);
+      retainedSettings(reopened.settings, savedSettings.value);
+      await reopened.window
+        .locator(".home-page")
+        .waitFor({ state: "visible", timeout: 5000 });
+      await reopened.window
+        .getByRole("button", { name: "Home", exact: true })
+        .waitFor({ state: "visible", timeout: 5000 });
+      await reopened.window.waitForFunction(
+        () => document.querySelector(".desktop")?.dataset.theme === "graphite",
+        undefined,
+        { timeout: 5000 },
+      );
+      launch.appearance = await bounded(
+        reopened.window.evaluate(() => {
+          const saved = JSON.parse(
+            localStorage.getItem("farol.appearance.v1") ?? "null",
+          );
+          return {
+            persistedTheme: saved?.theme,
+            renderedTheme: document.querySelector(".desktop")?.dataset.theme,
+          };
+        }),
+        3000,
+        "REOPEN_APPEARANCE_UNKNOWN",
+      );
+      assert.deepEqual(launch.appearance, {
+        persistedTheme: "graphite",
+        renderedTheme: "graphite",
+      });
+      const reopenedSettings = await document(
+        path.join(stateRoot, "config.json"),
+        256 * 1024,
+      );
+      retainedSettings(reopenedSettings.value, savedSettings.value);
+      launch.settings = reopenedSettings;
+      await capture(
+        "reopen-ready-zero-authority",
+        settings.computer.computerId,
+      );
+      await captureJournal(
+        "reopen-ready",
+        report.launches[0].readyJournal.value,
+      );
+      await captureHandoff(report.launches[0].terminalHandoff);
+      await reopened.hidden();
+      active();
+      await close();
+      await capture(
+        "reopen-confirmed-quit-zero-authority",
+        settings.computer.computerId,
+      );
+    }
     report.scenarioPassed = true;
+  } catch (error) {
+    if (launch) {
+      launch.journeyError = String(error);
+      if (launch.status !== "confirmed-clean-quit")
+        launch.status = "failed-or-unknown";
+    }
+    throw error;
   } finally {
     // A failed/unknown launch is never relaunched. A requested but unknown quit
     // is never retried or reinterpreted as clean; preserve the profile for Lead.
-    if (application && !report.cleanup.closeRequested) {
+    if (
+      application &&
+      launch.cleanup.launchResolved &&
+      !launch.cleanup.closeRequested
+    ) {
       try {
         await close();
       } catch (error) {
-        report.cleanup.closeError = String(error);
+        launch.cleanup.closeError = String(error);
       }
     }
     if (site) {
@@ -654,8 +1163,27 @@ async function native(selected, inputs, report, save) {
     process.off("SIGINT", cancel);
     process.off("SIGTERM", cancel);
     try {
+      for (const receipt of report.launches) {
+        cleanLaunchClosure(receipt.cleanup);
+        assert.equal(
+          receipt.status,
+          "confirmed-clean-quit",
+          "LIFECYCLE_EVIDENCE_UNCONFIRMED",
+        );
+      }
+      assert.equal(
+        report.launches.length,
+        selected.reopen ? 2 : 1,
+        "LAUNCH_SEQUENCE_INCOMPLETE",
+      );
       cleanClosure(report.cleanup);
       assert.equal(report.cleanup.ledgerError, undefined);
+      if (selected.reopen)
+        assert.equal(
+          report.scenarioPassed,
+          true,
+          "REOPEN_EVIDENCE_RETAINED_AFTER_FAILURE",
+        );
       await fs.rm(temporary, { recursive: true });
       report.cleanup.temporaryRemoved = true;
     } catch (error) {
@@ -777,6 +1305,18 @@ function selfTest() {
     "b".repeat(64),
   ];
   pass(() => assert.equal(selection(packageArgs).mode, "--check"));
+  pass(() => assert.equal(selection(packageArgs).reopen, false));
+  pass(() =>
+    assert.equal(selection(["--reopen", ...packageArgs]).reopen, true),
+  );
+  pass(() =>
+    assert.equal(
+      selection(["--run-native", "--reopen", ...packageArgs]).mode,
+      "--run-native",
+    ),
+  );
+  reject(() => selection(["--reopen", ...args]));
+  reject(() => selection(["--reopen", "--reopen", ...packageArgs]));
   reject(() => selection(packageArgs.slice(0, 4)));
   reject(() =>
     selection(packageArgs.filter((value, index) => index !== 4 && index !== 5)),
@@ -790,6 +1330,288 @@ function selfTest() {
   reject(() => pins({ ...identity, sourceDirty: true }, selected));
   reject(() => pins({ ...identity, sourceCommit: "d".repeat(40) }, selected));
   reject(() => pins({ ...identity, buildId: "d".repeat(64) }, selected));
+  const settings = {
+    computer: {
+      computerId: "computer-test",
+      name: "Startup regression computer",
+      generation: 2,
+      workspaces: [],
+    },
+    setup: { computer: { verified: null }, chatgpt: { verified: null } },
+  };
+  pass(() => retainedSettings(structuredClone(settings), settings));
+  for (const mutation of [
+    { computerId: "replacement" },
+    { name: "reset" },
+    { generation: 1 },
+    { workspaces: [{}] },
+  ])
+    reject(() =>
+      retainedSettings(
+        { ...settings, computer: { ...settings.computer, ...mutation } },
+        settings,
+      ),
+    );
+  for (const key of ["computer", "chatgpt"])
+    reject(() =>
+      retainedSettings(
+        {
+          ...settings,
+          setup: { ...settings.setup, [key]: { verified: true } },
+        },
+        settings,
+      ),
+    );
+  const physical = { Device: "1", Inode: "2", OwnerUID: "501" };
+  const journal = {
+    version: 2,
+    root: { Device: 1, Inode: 2, OwnerUID: 501 },
+    scope: { ProfileID: profile.profileId, BackendGeneration: "first" },
+    incarnations: ["first"],
+    writes: [],
+    retirement: null,
+  };
+  const successor = {
+    ...journal,
+    scope: { ...journal.scope, BackendGeneration: "second" },
+    incarnations: ["first", "second"],
+  };
+  const retired = (value) => ({
+    ...value,
+    retirement: {
+      Scope: value.scope,
+      Root: value.root,
+      PreviousRevision: 0,
+      Revision: 1,
+      Turns: [],
+    },
+  });
+  pass(() => journalWitness(journal, profile.profileId, physical));
+  pass(() =>
+    journalWitness(
+      retired(journal),
+      profile.profileId,
+      physical,
+      undefined,
+      true,
+    ),
+  );
+  pass(() => journalWitness(successor, profile.profileId, physical, journal));
+  pass(() =>
+    journalWitness(
+      retired(successor),
+      profile.profileId,
+      physical,
+      journal,
+      true,
+    ),
+  );
+  for (const mutation of [
+    { version: 1 },
+    { scope: { ...journal.scope, ProfileID: "other" } },
+    { scope: { ...journal.scope, BackendGeneration: "" } },
+    { root: { ...journal.root, Inode: 3 } },
+    { root: { ...journal.root, Device: Number.MAX_SAFE_INTEGER + 1 } },
+    { writes: [{}] },
+    { incarnations: [] },
+    { retirement: retired(journal).retirement },
+  ])
+    reject(() =>
+      journalWitness({ ...journal, ...mutation }, profile.profileId, physical),
+    );
+  reject(() =>
+    journalWitness(
+      { ...successor, scope: journal.scope, incarnations: ["first", "first"] },
+      profile.profileId,
+      physical,
+      journal,
+    ),
+  );
+  reject(() =>
+    journalWitness(
+      { ...successor, incarnations: ["second"] },
+      profile.profileId,
+      physical,
+      journal,
+    ),
+  );
+  reject(() =>
+    journalWitness(successor, profile.profileId, physical, journal, true),
+  );
+  for (const mutation of [
+    { Scope: successor.scope },
+    { Root: { ...journal.root, Inode: 3 } },
+    { PreviousRevision: 1 },
+    { Revision: 2 },
+    { Turns: [{}] },
+  ])
+    reject(() =>
+      journalWitness(
+        {
+          ...retired(journal),
+          retirement: { ...retired(journal).retirement, ...mutation },
+        },
+        profile.profileId,
+        physical,
+        undefined,
+        true,
+      ),
+    );
+  const quit = {
+    schema: 1,
+    at: "2026-10-04T12:00:01.000Z",
+    drained: true,
+    unconfirmed: [],
+  };
+  const marker = { startedAt: "2026-10-04T12:00:00.000Z" };
+  pass(() => quitWitness(quit, marker));
+  pass(() =>
+    quitWitness(
+      { ...quit, at: "2026-10-04T12:00:03.000Z" },
+      { startedAt: "2026-10-04T12:00:02.000Z" },
+      quit,
+    ),
+  );
+  for (const mutation of [
+    { schema: 2 },
+    { drained: false },
+    { unconfirmed: ["go-core"] },
+    { at: "invalid" },
+    { at: "2026-10-04T11:59:59.000Z" },
+  ])
+    reject(() => quitWitness({ ...quit, ...mutation }, marker));
+  reject(() => quitWitness(quit, marker, quit));
+  const publication = {
+    Binding: {
+      ...journal.scope,
+      BuildID: "b".repeat(64),
+      ParentRoot: journal.root,
+      ChatRoot: journal.root,
+      HostLifetimeID: "first-host",
+      ChildLaunchID: "first-child",
+    },
+  };
+  const handoff = {
+    Version: 1,
+    Origin: "LIVE_OWNER_CALLBACK",
+    Stage: "CHILD_TERMINATED",
+    Publication: publication,
+    ACK: { Publication: publication },
+    Terminal: {
+      Publication: publication,
+      Kind: "NORMAL_EXIT",
+      StopMode: "GRACEFUL_STOP",
+      ExitCode: 0,
+      Signal: "",
+    },
+    Consumption: null,
+  };
+  const consumed = {
+    ...handoff,
+    Stage: "SUCCESSOR_CONSUMED",
+    Consumption: {
+      PreviousHostDrainConfirmed: true,
+      Next: successor.scope,
+      NextBinding: {
+        ...publication.Binding,
+        BackendGeneration: "second",
+        HostLifetimeID: "second-host",
+        ChildLaunchID: "second-child",
+      },
+    },
+  };
+  pass(() =>
+    handoffWitness(handoff, journal.scope, publication.Binding.BuildID),
+  );
+  pass(() =>
+    handoffWitness(
+      consumed,
+      successor.scope,
+      publication.Binding.BuildID,
+      handoff,
+    ),
+  );
+  for (const mutation of [
+    { Version: 2 },
+    { Origin: "JOURNAL_REPLAY" },
+    { Stage: "HOST_ACKNOWLEDGED" },
+    { Stage: "child_terminated" },
+    { ACK: null },
+    { Consumption: {} },
+    { Terminal: { ...handoff.Terminal, StopMode: "FORCED_STOP" } },
+    { Terminal: { ...handoff.Terminal, ExitCode: 1 } },
+    { Terminal: { ...handoff.Terminal, Signal: "SIGKILL" } },
+  ])
+    reject(() =>
+      handoffWitness(
+        { ...handoff, ...mutation },
+        journal.scope,
+        publication.Binding.BuildID,
+      ),
+    );
+  reject(() => handoffWitness(handoff, journal.scope, "wrong-build"));
+  for (const mutation of [
+    { PreviousHostDrainConfirmed: false },
+    { Next: journal.scope },
+    {
+      NextBinding: {
+        ...consumed.Consumption.NextBinding,
+        HostLifetimeID: "first-host",
+      },
+    },
+    {
+      NextBinding: {
+        ...consumed.Consumption.NextBinding,
+        ChildLaunchID: "first-child",
+      },
+    },
+    {
+      NextBinding: {
+        ...consumed.Consumption.NextBinding,
+        BuildID: "wrong-build",
+      },
+    },
+  ])
+    reject(() =>
+      handoffWitness(
+        { ...consumed, Consumption: { ...consumed.Consumption, ...mutation } },
+        successor.scope,
+        publication.Binding.BuildID,
+        handoff,
+      ),
+    );
+  const launch = {
+    status: "confirmed-clean-quit",
+    cleanup,
+    quitReceipt: { value: quit },
+    retiredJournal: { value: retired(journal) },
+    terminalHandoff: { value: { Stage: "CHILD_TERMINATED" } },
+    terminalLedger: ledger,
+  };
+  pass(() => permitReopen(launch));
+  for (const status of [
+    "launch-attempted",
+    "ready",
+    "quit-requested",
+    "failed-or-unknown",
+    "refused",
+  ])
+    reject(() => permitReopen({ ...launch, status }));
+  for (const key of Object.keys(cleanup).filter((key) => key !== "siteClosed"))
+    reject(() =>
+      permitReopen({
+        ...launch,
+        cleanup: { ...cleanup, [key]: key === "signal" ? "SIGKILL" : null },
+      }),
+    );
+  for (const key of ["quitReceipt", "retiredJournal", "terminalHandoff"])
+    reject(() => permitReopen({ ...launch, [key]: undefined }));
+  reject(() =>
+    permitReopen({
+      ...launch,
+      terminalLedger: { ...ledger, attemptedSends: 1 },
+    }),
+  );
   process.stdout.write(
     `Go startup harness browser-free contract checks: ${checks} passed; native NOT RUN\n`,
   );
@@ -805,6 +1627,9 @@ async function main(args) {
     snapshots: [],
     windows: [],
     cleanup: null,
+    launches: [],
+    journals: [],
+    handoffs: [],
   };
   const output = path.join(root, "_output/evidence");
   await fs.mkdir(output, { recursive: true });
@@ -838,7 +1663,9 @@ async function main(args) {
         report.harnessSource,
         "HARNESS_CHANGED_DURING_NATIVE_RUN",
       );
-      report.status = "passed-fresh-startup-zero-authority-only";
+      report.status = selected.reopen
+        ? "passed-reopen-startup-zero-authority-only"
+        : "passed-fresh-startup-zero-authority-only";
     }
   } catch (error) {
     report.status = "failed-or-unknown";
