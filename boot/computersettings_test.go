@@ -12,6 +12,7 @@ import (
 	"github.com/legrch/farol/modules/computer/app/port"
 	"github.com/legrch/farol/modules/computer/domain/authority"
 	accessrepo "github.com/legrch/farol/modules/computer/infra/repos/access"
+	"github.com/legrch/farol/pkg/ipc"
 	"github.com/legrch/farol/transport/desktop"
 )
 
@@ -56,7 +57,7 @@ func settingsFixture(t *testing.T) (*ComputerIngress, *settingsStoreFixture, *se
 	store := &settingsStoreFixture{chatComputerStore: &chatComputerStore{Repository: accessrepo.New(), approval: a.Clone(), clock: clock, revision: 4}}
 	native := &settingsNativeFixture{}
 	publication := wire.ComputerAuthorityPublication{Fence: "1", StoreRevision: "4", SettingsRevision: "8", Generation: "3", ApprovalDigest: strings.Repeat("a", 64), PublishOperationId: "publication"}
-	root := &ComputerIngress{store: store, native: native, clock: clock, ownerID: "owner", computerID: "computer", peer: wire.Context{ProfileId: "profile", BackendGeneration: "backend"}, publication: &knownComputerPublication{receipt: publication, approval: a.Clone()}}
+	root := &ComputerIngress{store: store, native: native, clock: clock, ownerID: "owner", computerID: "computer", peer: wire.Context{ProfileId: "profile", BackendGeneration: "backend"}, used: make(map[string]bool), publication: &knownComputerPublication{receipt: publication, approval: a.Clone()}}
 	if _, err := root.guard.deactivate(); err != nil {
 		t.Fatal(err)
 	}
@@ -160,5 +161,73 @@ func TestSettingsListRejectsWithdrawalBeforeIOAndMalformedWire(t *testing.T) {
 		if err != nil || out == nil || out.Status != "refused" || native.calls != 0 {
 			t.Fatalf("invalid boundary accepted: %+v %v", out, err)
 		}
+	}
+}
+
+func TestSettingsListWireWithdrawalWhileNativeWaits(t *testing.T) {
+	root, store, native, request := settingsFixture(t)
+	// This real Server fixture supplies a real cancellation deadline; align the
+	// injected clock with it, rather than comparing it with a synthetic future.
+	now := time.Now().Truncate(time.Millisecond)
+	root.clock.(*computerClockFixture).now = now
+	store.approval.ExpiresAt = now.Add(time.Hour)
+	root.publication.approval.ExpiresAt = store.approval.ExpiresAt
+	entered, release := make(chan struct{}), make(chan struct{})
+	defer func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	}()
+	native.after = func() { close(entered); <-release }
+	p := taskWireTestConnectMethods(t, root.Methods(), root.peer)
+	requestFrame := func(id, method, operation string, body any) []byte {
+		raw, err := json.Marshal(body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		data, err := json.Marshal(wire.Request{Jsonrpc: "2.0", Id: id, Method: method, Params: wire.Call{Context: &p.scope, OperationId: taskWireOptional(operation), Body: raw}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return data
+	}
+	if err := ipc.WriteFrame(p.in, requestFrame("held-settings", "computer.settings.list", "", request)); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("Settings never reached native List")
+	}
+	type observed struct {
+		raw []byte
+		err error
+	}
+	ack := make(chan observed, 1)
+	deactivation := requestFrame("withdraw-owner", "computer.authority.deactivate", "withdraw", map[string]any{})
+	go func() {
+		if err := ipc.WriteFrame(p.in, deactivation); err != nil {
+			ack <- observed{err: err}
+			return
+		}
+		raw, err := ipc.ReadFrame(p.out)
+		ack <- observed{raw, err}
+	}()
+	select {
+	case got := <-ack:
+		var response wire.Response
+		if got.err != nil || json.Unmarshal(got.raw, &response) != nil || response.Id == nil || *response.Id != "withdraw-owner" || response.Result == nil || response.Result.Status != "ok" {
+			t.Fatalf("withdrawal did not ACK while native waited: %s %v", got.raw, got.err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("serial Settings handler blocked withdrawal")
+	}
+	close(release)
+	raw, err := ipc.ReadFrame(p.out)
+	var response wire.Response
+	if err != nil || json.Unmarshal(raw, &response) != nil || response.Result == nil || response.Result.Status != "refused" || len(response.Result.Data) != 0 || native.calls != 1 {
+		t.Fatalf("revoked native listing disclosed: %s %v", raw, err)
 	}
 }

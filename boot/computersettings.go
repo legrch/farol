@@ -116,7 +116,7 @@ func (s *ComputerIngress) settingsList(ctx context.Context, in wire.ComputerSett
 }
 
 func (s *ComputerIngress) settingsListMethod() desktop.Method {
-	return desktop.Method{Handle: func(ctx context.Context, r desktop.Request) (*desktop.Outcome, error) {
+	return desktop.Method{Concurrent: true, Handle: func(ctx context.Context, r desktop.Request) (*desktop.Outcome, error) {
 		if r.OperationID != "" || ipc.ValidateJSON(r.Body) != nil || wire.Validate("ComputerSettingsListRequest", r.Body) != nil {
 			return invalidIngress()
 		}

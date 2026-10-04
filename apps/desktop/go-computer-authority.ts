@@ -16,6 +16,20 @@ import type { ProductSettings } from "../../src/pkg/product-settings/contract";
 import { ownerSettingsComputerApproval } from "../../src/modules/computer/infra/repo/owner-settings-computer-approval";
 import type { ComputerSettingsPublication } from "../../src/apps/desktop/product-configuration";
 
+// Wire entries are one native UTF-8 component, with a trailing slash only for
+// a directory. Validate before any caller can persist verification evidence.
+function settingsEntry(value: unknown): value is string {
+  if (typeof value !== "string" || !validUnicode(value)) return false;
+  const name = value.endsWith("/") ? value.slice(0, -1) : value;
+  return (
+    name.length > 0 &&
+    name !== "." &&
+    name !== ".." &&
+    !/[\\/\u0000-\u001f\u007f]/u.test(name) &&
+    Buffer.byteLength(name, "utf8") <= 255
+  );
+}
+
 // Trusted desktop composition only. Go owns approval, live admission and durable
 // effects. This adapter retains exact acknowledgements and never reconstructs
 // authority from settings after an unknown response or restarts the backend.
@@ -172,7 +186,7 @@ export class GoComputerAuthority {
       const outcome = await this.client.request(
         "computer.settings.list",
         body as unknown as Json,
-        { id },
+        { id, timeoutMs: 16_000 },
       );
       if (
         !validate("Outcome", outcome) ||
@@ -197,13 +211,12 @@ export class GoComputerAuthority {
       if (
         !Array.isArray(entries) ||
         entries.length > 500 ||
-        !entries.every(
-          (entry): entry is string =>
-            typeof entry === "string" &&
-            entry.length > 0 &&
-            validUnicode(entry) &&
-            Buffer.byteLength(entry, "utf8") <= 1024,
-        )
+        !entries.every(settingsEntry) ||
+        new Set(
+          entries.map((entry: string) =>
+            entry.endsWith("/") ? entry.slice(0, -1) : entry,
+          ),
+        ).size !== entries.length
       )
         throw new BridgeError("unknown", "invalid_settings_workspace_result");
       if (

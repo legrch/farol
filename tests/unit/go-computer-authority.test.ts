@@ -193,6 +193,51 @@ describe("Go Computer host authority mapping", () => {
     ).toHaveLength(1);
   });
 
+  it.each([
+    ["../private"],
+    ["."],
+    ["../"],
+    ["folder/child"],
+    ["folder//"],
+    ["/"],
+    ["back\\slash"],
+    ["line\nfeed"],
+    ["control\u007f"],
+    ["é".repeat(128)],
+    ["duplicate", "duplicate"],
+    ["collision", "collision/"],
+  ])(
+    "rejects malformed Settings entries before evidence can be consumed: %j",
+    async (...entries) => {
+      const f = await fixture((method, result) =>
+        method === "computer.settings.list"
+          ? {
+              ...result,
+              data: { ...(result.data as Record<string, Json>), entries },
+            }
+          : result,
+      );
+      const added = await f.add();
+      if (!added.ok || added.snapshot.status !== "ready")
+        throw Error("fixture");
+      const { generation, workspaces } = added.snapshot.settings.computer;
+      const consumed = vi.fn();
+      await expect(
+        f.bridge
+          .listSettings(generation, workspaces[0]!.workspaceId, ".")
+          .then(consumed),
+      ).rejects.toMatchObject({
+        state: "unknown",
+        code: "invalid_settings_workspace_result",
+      });
+      expect(consumed).not.toHaveBeenCalled();
+      await expect(
+        f.bridge.listSettings(generation, workspaces[0]!.workspaceId, "."),
+      ).rejects.toMatchObject({ code: "computer_publication_unavailable" });
+      expect(f.request).toHaveBeenCalledTimes(3);
+    },
+  );
+
   it("binds an old folder before inspection without inventing successful verification", async () => {
     const f = await fixture();
     const added = await f.service.addReadonlyWorkspace({
