@@ -168,6 +168,70 @@ provider admission or complete network containment. React Chat still lacks a Sen
 surface, and the normal Go Send path deliberately refuses until its legitimate
 account/model/control-profile producer is qualified.
 
+## React read-preview and explicit account confirmation
+
+Package `ac580aa026f9c126297e461a349461067177e30e` passed the normal production
+main/React account journey on 4 October 2026. Build ID:
+`920503234237bc2930ef24ec466649cff51d4aafd5c8ac8da5b61e6d0052af1f`;
+artifact SHA-256:
+`c17a0f1b822a7b842ccfc3a4b4ff72fb627207868e482164f3e86967e47a08e1`.
+It retains the unsigned preview identity, version `0.1.9-owner.beta.1`, build
+`11`. The package is preserved independently of the older milestones above.
+
+The exact harness `dc45d27c4dc5555195d6487ee2fe97ec7581a7ec` ran
+`tests/e2e/go-core-startup.e2e.mjs --run-native --reopen --read-discard --read-account`
+with explicit source/build/artifact pins. The account mode uses the existing
+controlled loopback site and a synthetic session endpoint. After ordinary
+preload workspace setup, an explicit Diagnostics refresh updates the React
+controller. The subsequent Choose file, Inspect current account, Use this
+account and Discard actions are real React controls. Navigation remounts and
+same-revision refresh retain the exact preview and confirmation receipt.
+
+The independently counted session reads were exactly `0 → 1 → 2`: one inspection
+and one fresh observation before confirmation. Known duplicate inspection and
+confirmation commands added no reads; navigation added no account effects.
+Confirmation calls the original Go read-intent approval and retains its private
+grant in Go. No raw account ID, session, principal key or approval handle enters
+the UI. The UI displays safe preview metadata and correlated confirmation state.
+There is no independent native Go approval-RPC counter: no reapproval is supported
+by these read counts together with the pinned host's cached-command contract,
+not by unchanged journal bytes alone.
+
+Exact Discard, normal Quit, same-profile/build reopen with retained settings and
+Graphite, then another normal Quit all passed. Both Go lifetimes exited 0 without
+a signal, with confirmed drain and removed run markers. All windows were hidden
+and unfocused; the owner guard passed. The fixture counted zero attempted and
+accepted Sends throughout. The successful disposable profile was removed after
+known cleanup. The local report is
+`_output/evidence/go-core-startup-0ec68aa1-b329-4122-8dc9-eb74e938f1c1.json`.
+
+Two earlier account harness runs stopped before inspection. The first matched
+the entire wrapping label including option text; the second had not refreshed
+the controller after preload setup. Both reached ready and had confirmed clean
+Quits with zero account reads/Sends. Their reports and profiles remain preserved;
+each corrected run used a fresh profile. Only harness code changed between these
+runs; the selected package remained identical.
+
+The frozen source gate at `93c8cc8` passed 7,422 main tests (four skipped, two
+todo), 163 renderer tests, 164 protocol/architecture tests, Go race/vet and the
+static gates. Narrow reviewed UI fixes were followed by 169 renderer and 329
+related unit tests under Node 26.7.0. The final harness has 770 browser-free checks.
+These reuse unchanged aggregate coverage; they do not claim a new full aggregate
+or formal acceptance of the entire outstanding cutover range.
+
+This witness does not qualify a live signed-in account, entitlement, an atomic
+provider/account binding, a production model/control mapping, useful streaming
+or a Chat Send. Normal Go Send still refuses until that composition is qualified.
+Window receipts survive component remounts, not host restarts. Provider-used turn
+retirement, persisted result bodies and cross-build recovery remain open.
+
+| Obligation                                   | Executable evidence                                                                                                                                                                                                                                              | Boundary and remaining witness                                                                                                                               |
+| -------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| M03 current account approval                 | `separates inspection, explicit confirmation, fresh observation and Go approval` in `tests/unit/read-account-confirmation.test.ts`; `TestReadIntentAccountRevokeBlocksQueuedSendAndCannotBeReapproved` in `boot/readintentaccount_test.go`; pinned package above | Injected host/Go policy plus real packaged confirmation. Live account change at actual Send remains unqualified.                                             |
+| M09 retained outcome, account-command subset | `retains an unknown approval before fresh current checks after expiry/retirement` in `tests/unit/read-account-commands.test.ts`; known duplicate commands in `--read-account`                                                                                    | Exact IPC outcome retention and zero extra physical account reads. This does not qualify Responses replay or unknown provider Send recovery.                 |
+| M11 truthful confirmation                    | `never upgrades inspection to approval without explicit confirmation` and `does not display approval until its evidence intention is settled applied` in `tests/renderer/chat-readonly.test.tsx`; pinned React confirmation/remount witness                      | Component guards have pre-fix failure evidence; actual package displays only the correlated confirmation. This is not model or entitlement attestation.      |
+| C07 independent expectations                 | `accountLedgerWitness` / `accountUiWitness` in `tests/e2e/lib/read-account-ui-witness.mjs`, exercised by the pinned packaged harness                                                                                                                             | Separate fixture ledger, UI metadata and journal observations; no production expected-answer injection. Zero Sends does not test duplicate-Send sensitivity. |
+
 ## Wire and generation
 
 `api/desktop/v1/schema.json` is the single schema authority. `farol-wire/2` is a deliberately small local generator, not a general schema framework. Run `node tooling/generate-desktop-wire.mjs`; `--check` fails on drift. It uses the locked repository Prettier and Go formatter. Generated Go and TS contain the schema SHA-256; changing the schema requires regenerating both files. Validator templates are generator implementation, not independently authored DTOs. The source format is version 2: method metadata contains read/effect strings, and version-1 metadata is refused by the generator. Wire request/result/event envelopes retain protocol 1.0; the source-format version is not an on-wire protocol revision. Accepted host/backend build provenance and generated schema digests bind the corresponding artifacts.

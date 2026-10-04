@@ -12,22 +12,25 @@ Computer access controls and operation status keep workspace access explicit.
 
 Farol is an **owner beta for macOS on Apple Silicon**. This page describes the current source
 integration tree. Accepted `main`
-remains `acb131d9e7d483296d4edac262cf881cddfb91bb`; integrating source does not
+is `569bd4dd764e0d4478ba33d2b20fb8074881cbad`; integrating source does not
 update the installed product.
 
-| State                            | Scope                                                                                                                                                                                                                                                                                                                                                                                                       |
-| -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Published baseline               | [0.1.8-owner.beta.1](https://github.com/legrch/farol-releases/releases/tag/v0.1.8-owner.beta.1), build `10`, source `1eb30bd23df22c9581d277280f8e0699612786b5`. Release metadata was checked on 3 October 2026; the beta is unsigned and not notarized.                                                                                                                                                     |
-| Accepted main                    | K0/K1 Go foundation and disposable Computer read evidence. It does not establish a shipping Go backend.                                                                                                                                                                                                                                                                                                     |
-| Source checkpoint described here | Package `9671a21` passed normal React Home/Settings → Go workspace Verify / Check folder / List folder → Go read-preview → Discard → confirmed Quit → same-profile reopening. Root measurement, Git discovery and configuration remain TypeScript. Chat Send and live-provider journeys remain unqualified. Source metadata is `0.1.9-owner.beta.1`, build `11`; no new release or installation is claimed. |
-| UI target                        | React + TypeScript shell is composed. Plain TypeScript retains Electron/browser mechanics. Native Home, Settings, Appearance and configured-profile reopening have been exercised.                                                                                                                                                                                                                          |
+| State                            | Scope                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Published baseline               | [0.1.8-owner.beta.1](https://github.com/legrch/farol-releases/releases/tag/v0.1.8-owner.beta.1), build `10`, source `1eb30bd23df22c9581d277280f8e0699612786b5`. Release metadata was checked on 3 October 2026; the beta is unsigned and not notarized.                                                                                                                                                                                                                                |
+| Accepted main                    | K0/K1 Go foundation plus the separately accepted access hotfix. It does not establish the shipping React/Go cutover.                                                                                                                                                                                                                                                                                                                                                                   |
+| Source checkpoint described here | Package `ac580aa` passed normal React file selection → Go read-preview → explicit account inspection/confirmation → remount/refresh → Discard → confirmed Quit → same-profile reopening. The account endpoint is a controlled synthetic fixture; zero provider Sends occurred. Go Settings listing also passed. Root measurement, Git discovery and configuration remain TypeScript. Source metadata is `0.1.9-owner.beta.1`, build `11`; this candidate is not installed or released. |
+| UI target                        | React + TypeScript shell is composed. Plain TypeScript retains Electron/browser mechanics. Native Home, Settings, Appearance and configured-profile reopening have been exercised.                                                                                                                                                                                                                                                                                                     |
 
 The Go cutover is incomplete. Source tests do not prove a packaged route, a live
 provider turn, streaming or a second message in the same conversation.
 
-The last owner-reported installation was `0.1.8-owner.beta.1`, build `10`. That
-report is separate from release metadata; installation was not reverified for
-this source checkpoint. The local candidate described below is packaged and tested; it is not installed or live-provider qualified.
+Separately, the owner reported installation of the access hotfix
+`0.1.10-owner.beta.1`, build `12`, from source `569bd4d` on 4 October.
+Its update completion/recovery remains unresolved; a running target does not prove
+a completed update. That installed TypeScript runtime is separate from the local
+React/Go candidate described here. See the exact scope and limitations of the
+[packaged account witness](docs/desktop-core.md#react-read-preview-and-explicit-account-confirmation).
 
 ## Use and installation
 
