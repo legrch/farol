@@ -21,10 +21,7 @@ import type {
   ReadonlyWorkspaceExecutionContext,
   ReadonlyWorkspaceRequest,
   ReadonlyWorkspaceResult,
-  WorkspaceEditSnapshotReader,
-  WorkspaceEditSnapshotRequest,
   WorkspaceApprovedRoot,
-  WorkspaceEditSnapshotResult,
   WorkspaceMatch,
   WorkspaceText,
   WorkspaceReadRange,
@@ -1381,21 +1378,6 @@ function parseTextWindow(
   });
 }
 
-function parseEditSnapshot(raw: Buffer): WorkspaceEditSnapshotResult {
-  const text = parseText(raw);
-  if (!text.ok) return text;
-  // The digest covers the bytes this read returned, BOM included, which are
-  // the bytes the edit helper compares before it replaces the file.
-  return {
-    ok: true,
-    value: {
-      kind: "workspace.edit-snapshot",
-      bytes: text.value.bytes,
-      sha256: text.value.sha256,
-    },
-  };
-}
-
 function parseMutationReceipt(
   raw: Buffer,
   operation: WorkspaceMutationRequest["operation"],
@@ -1487,7 +1469,7 @@ function mutationErrorCode(
 }
 
 export class NativeReadonlyWorkspace
-  implements ReadonlyWorkspace, MutableWorkspace, WorkspaceEditSnapshotReader
+  implements ReadonlyWorkspace, MutableWorkspace
 {
   private helperAttestation: Promise<Buffer> | undefined;
   private readonly attestInterpreter: () => Promise<string>;
@@ -1602,46 +1584,6 @@ export class NativeReadonlyWorkspace
       case "workspace.search":
         return parseMatches(raw);
     }
-  }
-
-  async readEditSnapshot(
-    request: WorkspaceEditSnapshotRequest,
-    options: NativeReadonlyWorkspaceTestOptions = {},
-  ): Promise<WorkspaceEditSnapshotResult> {
-    const requested = validateRequest({
-      workspace: request.workspace,
-      operation: { kind: "workspace.read", relativePath: request.relativePath },
-    });
-    if (
-      requested === null ||
-      requested.operation.kind !== "workspace.read" ||
-      !validTestOptions(options)
-    ) {
-      return {
-        ok: false,
-        error: { code: "WORKSPACE_INVALID_REQUEST", retry: "never" },
-      };
-    }
-    const validated = this.withCredentialStores(requested);
-    if (validated === null) {
-      return {
-        ok: false,
-        error: { code: "WORKSPACE_PATH_REFUSED", retry: "never" },
-      };
-    }
-    if (deniedPaths(validated).length > MAX_HELPER_DENIED_PATHS) {
-      return {
-        ok: false,
-        error: { code: "WORKSPACE_POLICY_TOO_LARGE", retry: "never" },
-      };
-    }
-    // One helper read supplies both the text check and the identity; a second
-    // read for the digest could observe a different file.
-    const raw = await this.readonlyHelper(validated, options);
-    if (!Buffer.isBuffer(raw)) {
-      return { ok: false, error: { code: raw, retry: "never" } };
-    }
-    return parseEditSnapshot(raw);
   }
 
   private async readonlyHelper(

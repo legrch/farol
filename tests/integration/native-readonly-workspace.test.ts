@@ -663,17 +663,6 @@ describe("native readonly Computer workspace", () => {
           ),
         ).resolves.toEqual(refused);
         await expect(
-          workspace.readEditSnapshot({
-            workspace: {
-              workspaceId: "workspace-a",
-              root: candidate,
-              approvedRoot: approvedRootOf(candidate),
-              deniedPaths: [],
-            },
-            relativePath: "id_synthetic",
-          }),
-        ).resolves.toEqual(refused);
-        await expect(
           workspace.mutate({
             workspace: {
               workspaceId: "workspace-a",
@@ -844,17 +833,6 @@ describe("native readonly Computer workspace", () => {
         // N02: Git verification now runs for real, over a private snapshot,
         // and is bound to the same approved-root identity check every other
         // operation here already goes through.
-      ).resolves.toEqual(changed);
-      await expect(
-        workspace.readEditSnapshot({
-          workspace: {
-            workspaceId: "workspace-a",
-            root,
-            deniedPaths: [],
-            approvedRoot: approved,
-          },
-          relativePath: "README.md",
-        }),
       ).resolves.toEqual(changed);
       await expect(
         workspace.mutate({
