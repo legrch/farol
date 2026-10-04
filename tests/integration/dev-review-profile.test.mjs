@@ -22,7 +22,8 @@ afterEach(() => {
   for (const root of fixtures.splice(0))
     fs.rmSync(root, { recursive: true, force: true });
 });
-const token = "8dc34907-9b18-4cbd-9486-9cfde2d05c75";
+// Synthetic profile UUID, deliberately recognizable as test data.
+const token = "00000000-0000-4000-8000-000000000001";
 const receiptName = ".farol-dev-review-profile";
 function fixture() {
   const root = fs.realpathSync(
