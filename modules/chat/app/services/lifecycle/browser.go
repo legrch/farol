@@ -157,7 +157,16 @@ func (s *Service) Send(ctx context.Context, h *Handle, prompt string, deadlineMi
 			return nil, err
 		}
 	}
-	reply, browserErr := s.deps.Browser.Send(port.SendRequest{Verification: verification, Binding: binding, IntentDigest: intentDigest, Prompt: prompt, DeadlineMillis: deadlineMillis})
+	request, authorizationErr := s.authorizeSend(ctx, m, port.SendRequest{Verification: verification, Binding: binding, IntentDigest: intentDigest, Prompt: prompt, DeadlineMillis: deadlineMillis})
+	var reply *port.SendResponse
+	var browserErr error
+	if authorizationErr != nil {
+		// No physical call occurred. Settle through the same known not-sent
+		// result path; failure to retain/commit still fences the owning mutation.
+		reply = &port.SendResponse{VerificationID: verification.EvidenceID, Binding: binding, Status: port.NotSent}
+	} else {
+		reply, browserErr = s.deps.Browser.Send(*request)
+	}
 	outcome := turn.UnknownOutcome
 	code := "SEND_OUTCOME_UNKNOWN"
 	if browserErr == nil && reply != nil && reply.Binding == binding && (target.Mode == "" || reply.VerificationID == verification.EvidenceID) {

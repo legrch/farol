@@ -16,6 +16,19 @@ import (
 // the promoted handle's digest is the full canonical intent used by Send.
 // No browser operation occurs here, and no replacement turn/handle is minted.
 func (s *Service) PromoteConversation(ctx context.Context, h *Handle, input port.ConversationInput) (*Conversation, error) {
+	return s.promoteConversation(ctx, h, input, nil)
+}
+
+// PromoteConversationAuthorized captures the final disclosure check together
+// with this same turn's promotion. Even direct Handle.Send cannot bypass it.
+func (s *Service) PromoteConversationAuthorized(ctx context.Context, h *Handle, input port.ConversationInput, authorization port.SendAuthorization) (*Conversation, error) {
+	if authorization == nil {
+		return nil, Invalid
+	}
+	return s.promoteConversation(ctx, h, input, authorization)
+}
+
+func (s *Service) promoteConversation(ctx context.Context, h *Handle, input port.ConversationInput, authorization port.SendAuthorization) (*Conversation, error) {
 	if s == nil || ctx == nil || h == nil || h.owner != s {
 		return nil, Invalid
 	}
@@ -53,7 +66,7 @@ func (s *Service) PromoteConversation(ctx context.Context, h *Handle, input port
 			s.deps.Gate.Unlock()
 			return nil, turn.Transition
 		}
-		if h.digest != digest || h.target != target {
+		if h.digest != digest || h.target != target || (h.sendAuthorization == nil) != (authorization == nil) {
 			s.deps.Gate.Unlock()
 			return nil, turn.Conflict
 		}
@@ -76,7 +89,7 @@ func (s *Service) PromoteConversation(ctx context.Context, h *Handle, input port
 		s.deps.Gate.Unlock()
 		return nil, err
 	}
-	c := &Conversation{owner: s, input: input, target: target, handle: h}
+	c := &Conversation{owner: s, input: input, target: target, handle: h, sendAuthorization: authorization}
 	c.root = c
 	m := s.begin(candidate, h, port.JournalEntry{Binding: h.fixed, Kind: "promote-conversation", Before: before, After: after, IntentDigest: digest})
 	m.conversation, m.frames = c, frames
@@ -169,5 +182,6 @@ func (m *mutation) publishPromotion() {
 	h.prompt, c.input.Prompt = c.input.Prompt, ""
 	h.frames, h.output = m.frames, output.New(OutputBytesLimit, c.target.PreviousUserTurnID, c.target.PreviousReplyID)
 	h.readPromoted = true
+	h.sendAuthorization = c.sendAuthorization
 	c.root.latest = c
 }

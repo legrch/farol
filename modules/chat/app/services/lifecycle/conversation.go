@@ -25,6 +25,7 @@ type Conversation struct {
 	providerID             string
 	handle                 *Handle
 	root, previous, latest *Conversation
+	sendAuthorization      port.SendAuthorization
 }
 
 var _ port.ConversationOwner = (*Conversation)(nil)

@@ -78,6 +78,7 @@ type Handle struct {
 	closed                                         bool // protected by owner's gate; monotonic membership withdrawal
 	readWithdrawal                                 bool // exact bare-read withdrawal intent, never a promoted turn
 	readPromoted                                   bool // known promotion receipt; ordinary Create is not promotion replay
+	sendAuthorization                              port.SendAuthorization
 }
 
 var _ port.BoundTurn = (*Handle)(nil)

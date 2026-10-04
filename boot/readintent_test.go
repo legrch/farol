@@ -169,6 +169,53 @@ func TestReadIntentExplicitWithdrawalClosesCapturedAdmission(t *testing.T) {
 	}
 }
 
+func TestReadIntentRevokedDuringVerifyNeverPhysicallySends(t *testing.T) {
+	for _, raw := range []bool{false, true} {
+		t.Run(map[bool]string{false: "ingress", true: "direct-handle"}[raw], func(t *testing.T) {
+			f, computer, a := readIntentFixture(t)
+			ctx := context.Background()
+			h, err := computer.promoteRead(ctx, "promote", readIntentPromotion(a))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := f.ingress.facade.PrepareNext(ctx, 10000); err != nil {
+				t.Fatal(err)
+			}
+			actual, err := f.ingress.get(h.HandleId)
+			if err != nil {
+				t.Fatal(err)
+			}
+			verified := false
+			f.physical.verifyHook = func() {
+				verified = true
+				if _, err := computer.Deactivate(ctx, "revoke-during-verification"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if raw {
+				err = actual.handle.Send(ctx, 10000)
+			} else {
+				err = actual.send(ctx, 10000)
+			}
+			if err != nil || !verified || f.physical.sends != 0 || f.count("dispatch") != 1 || f.count("send-settled") != 1 {
+				t.Fatal("revoked disclosure sent or failed to settle", err, verified, f.physical.sends)
+			}
+			result, err := actual.handle.Result(ctx)
+			if err != nil || result.Outcome != "failed" || result.Code != "SEND_NOT_SENT" || result.Text != "" || result.Complete {
+				t.Fatal("known not-sent result not retained", result, err)
+			}
+			before := len(f.journal.entries)
+			if err := actual.handle.Send(ctx, 10000); err == nil || f.physical.sends != 0 || len(f.journal.entries) != before {
+				t.Fatal("refused disclosure retried", err)
+			}
+			retained, err := actual.handle.Result(ctx)
+			if err != nil || !reflect.DeepEqual(retained, result) {
+				t.Fatal("retained refusal changed", retained, err)
+			}
+		})
+	}
+}
+
 func TestReadIntentCrossedReceiptCannotSelectActualOwner(t *testing.T) {
 	for _, field := range []string{"OwnerId", "SessionId", "TaskId", "TaskEpoch", "ParticipantId", "TurnId", "Generation", "AdmissionOperationId", "StoreRevision"} {
 		t.Run(field, func(t *testing.T) {

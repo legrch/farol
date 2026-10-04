@@ -287,6 +287,8 @@ func (s *ComputerIngress) Admit(ctx context.Context, operation string, in wire.C
 	retained := response
 	captured.admission = &retained
 	captured.route = route
+	captured.access, captured.activation = s.store, &s.guard
+	captured.seal = execution.Ceiling{Participant: participant.Clone(), Approval: publication.approval.Clone()}
 	return &response, nil
 }
 func readIntentPolicy(a authority.Approval, ids []string) (authority.Policy, error) {

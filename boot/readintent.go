@@ -7,7 +7,9 @@ import (
 	wire "github.com/legrch/farol/gen/desktop/v1"
 	conversation "github.com/legrch/farol/modules/chat/contracts/conversation"
 	computerport "github.com/legrch/farol/modules/computer/app/port"
+	execution "github.com/legrch/farol/modules/computer/app/services/execution"
 	"github.com/legrch/farol/modules/computer/domain/authority"
+	admissionpeer "github.com/legrch/farol/modules/computer/infra/peer/admission"
 	"github.com/legrch/farol/transport/desktop"
 )
 
@@ -22,6 +24,9 @@ type capturedReadIntent struct {
 	promoted     *chatHandle
 	route        *ComputerRoute
 	withdrawn    bool
+	access       computerport.AccessRepository
+	seal         execution.Ceiling
+	activation   *activationFence
 }
 
 // Caller holds effects across lookup and mutation. Publication, read admission,
@@ -69,10 +74,10 @@ func (s *ComputerIngress) promoteRead(ctx context.Context, operation string, in 
 	if err != nil {
 		return nil, err
 	}
-	h, err := s.readFacade.PromoteReadIntent(ctx, c.owner, conversation.Input{
+	h, err := s.readFacade.PromoteReadIntentAuthorized(ctx, c.owner, conversation.Input{
 		Binding: c.binding, Prompt: in.Prompt, Selection: chatSelection(in.Selection), Resolution: chatResolution(in.Resolution),
 		Required: conversation.RequiredControls{Model: in.Required.Model, Effort: in.Required.Effort, Mode: in.Required.Mode, Connector: in.Required.Connector},
-	})
+	}, c)
 	if err != nil || h == nil || ctx.Err() != nil {
 		// An uncertain promotion is never repaired by a second admission, a
 		// different host route or a fresh prompt. The owning service retains it.
@@ -88,10 +93,8 @@ func (s *ComputerIngress) promoteRead(ctx context.Context, operation string, in 
 	return &out, nil
 }
 
-// This is a new explicit disclosure operation after any queue/prepare wait.
-// Recheck the original captured Computer route, not the root's latest route.
-// No filesystem/browser IO runs under either current-owner callback. As for
-// ordinary Computer disclosure, later revocation cannot retract admitted bytes.
+// Early refusal avoids dispatch IO when the captured route is already revoked.
+// Authorize below independently checks the final physical disclosure boundary.
 func (c *capturedReadIntent) checkDisclosure(ctx context.Context) error {
 	if c == nil || c.route == nil || c.route.issuer == nil {
 		return errors.New("read_intent_authority_unavailable")
@@ -103,6 +106,38 @@ func (c *capturedReadIntent) checkDisclosure(ctx context.Context) error {
 	b := c.binding
 	expected := operationBinding(b.OwnerID, b.SessionID, b.TaskID, b.TaskEpoch, b.ParticipantID, b.TurnID)
 	if lease.Binding() != expected {
+		return errors.New("read_intent_authority_crossed")
+	}
+	return lease.WithSnapshot(ctx, b.ParticipantID, func(snapshot computerport.AccessSnapshot) error {
+		if snapshot.Participant == nil || snapshot.Approval == nil {
+			return errors.New("read_intent_authority_unavailable")
+		}
+		return nil
+	})
+}
+
+// Authorize is required by the actual promoted Chat handle, including callers
+// that bypass the ingress wrapper. The specialized current belongs to its exact
+// known dispatch, not a positive ordinary admission reconstructed from IDs.
+func (c *capturedReadIntent) Authorize(ctx context.Context, current *conversation.SendCurrent) error {
+	if c == nil || c.access == nil || c.activation == nil || c.route == nil {
+		return errors.New("read_intent_authority_unavailable")
+	}
+	peer, err := admissionpeer.NewChatSend(current)
+	if err != nil {
+		return err
+	}
+	guarded := &activatedAdmission{guard: c.activation, fence: c.fence, current: peer}
+	issuer, err := execution.New(c.access, guarded, c.route.clock, c.seal)
+	if err != nil {
+		return err
+	}
+	lease, err := issuer.Admit(ctx, authority.Read)
+	if err != nil {
+		return err
+	}
+	b := c.binding
+	if lease.Binding() != operationBinding(b.OwnerID, b.SessionID, b.TaskID, b.TaskEpoch, b.ParticipantID, b.TurnID) {
 		return errors.New("read_intent_authority_crossed")
 	}
 	return lease.WithSnapshot(ctx, b.ParticipantID, func(snapshot computerport.AccessSnapshot) error {

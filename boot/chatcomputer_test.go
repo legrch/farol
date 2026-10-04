@@ -54,6 +54,7 @@ type chatComputerPhysical struct {
 	observes      int
 	prepares      int
 	distinctViews bool
+	verifyHook    func()
 }
 
 func (p *chatComputerPhysical) Exchange(_ context.Context, c browser.Command) (browser.Reply, error) {
@@ -70,6 +71,9 @@ func (p *chatComputerPhysical) Exchange(_ context.Context, c browser.Command) (b
 		}
 		return browser.PreparedReply{Readiness: "ready", Saved: state == "bound", Binding: browser.Binding{ProviderState: state, Lease: r.Lease, ViewID: view, ViewGeneration: r.Lease.SlotGeneration, DocumentGeneration: r.Lease.SlotGeneration, ConversationID: cid}}, nil
 	case browser.VerifySendCommand:
+		if p.verifyHook != nil {
+			p.verifyHook()
+		}
 		fact := func(value string) browser.ControlFact {
 			return browser.ControlFact{Value: value, Literal: value, Source: "public-control"}
 		}
