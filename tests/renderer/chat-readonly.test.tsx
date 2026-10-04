@@ -818,4 +818,73 @@ describe("ChatReadonly bounded component", () => {
     await h.click("Discard preview");
     expect(h.calls()).toHaveLength(3);
   });
+  it("never upgrades inspection to approval without explicit confirmation", async () => {
+    const h = await mount();
+    await h.select();
+    await h.click("Choose file…");
+    vi.mocked(h.f.api.configure).mockResolvedValueOnce({
+      ok: true,
+      snapshot: h.configuration,
+      evidence: preview({
+        account: { confirmationId: otherOperationId, state: "approved" },
+      }),
+    });
+    await h.click("Inspect current account");
+    expect(Object.values(h.c.getSnapshot().intents)).toContainEqual(
+      expect.objectContaining({
+        state: "unknown",
+        code: "READ_ACCOUNT_UNCONFIRMED",
+      }),
+    );
+    expect(h.c.getSnapshot().readPreview?.value.account).toBeUndefined();
+    expect(h.host.textContent).not.toContain("Account confirmed");
+    await h.render("unexpected-approved-inspection");
+    expect(h.host.textContent).not.toContain("Account confirmed");
+    expect(h.calls()).toHaveLength(2);
+  });
+  it("does not show approval from rejected wrong-workspace metadata", async () => {
+    const h = await mount();
+    vi.mocked(h.f.api.configure).mockResolvedValueOnce({
+      ok: true,
+      snapshot: h.configuration,
+      evidence: preview({
+        workspaceId: otherWorkspaceId,
+        account: { confirmationId: otherOperationId, state: "approved" },
+      }),
+    });
+    await h.select();
+    await h.click("Choose file…");
+    expect(h.c.getSnapshot().readPreview).toBeNull();
+    expect(h.host.textContent).not.toContain("Account confirmed");
+    await h.render("uncorrelated-approved");
+    expect(h.host.textContent).not.toContain("Account confirmed");
+    expect(h.host.textContent).toContain("result is unknown");
+  });
+  it("does not display approval until its evidence intention is settled applied", async () => {
+    const h = await mount();
+    await h.select();
+    await h.click("Choose file…");
+    const retained = h.c.getSnapshot().readPreview!;
+    const intention = "pending-approval";
+    const snapshot = {
+      ...h.c.getSnapshot(),
+      intents: {
+        ...h.c.getSnapshot().intents,
+        [intention]: { id: intention, state: "pending" as const, code: null },
+      },
+      readPreview: {
+        ...retained,
+        evidenceIntention: intention,
+        value: preview({
+          account: { confirmationId: otherOperationId, state: "approved" },
+        }),
+      },
+    };
+    await act(async () =>
+      h.root.render(<ChatReadonly snapshot={snapshot} facade={h.c} />),
+    );
+    expect(h.host.textContent).not.toContain("Account confirmed");
+    expect(h.button("Discard preview").disabled).toBe(true);
+    expect(h.calls()).toHaveLength(1);
+  });
 });

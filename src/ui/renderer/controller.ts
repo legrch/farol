@@ -663,6 +663,8 @@ export class WindowController implements RendererFacade {
                 value.account.confirmationId) ||
             (retained.value.account?.state === "approved" &&
               value.account.state !== "approved") ||
+            (command.kind === "chatgpt.inspect-readonly-account" &&
+              value.account.state !== "observed") ||
             (command.kind === "chatgpt.approve-readonly-account" &&
               (value.account.confirmationId !== command.confirmationId ||
                 value.account.state !== "approved"))

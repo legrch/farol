@@ -102,7 +102,7 @@ export type ChatGptAccountObservation = z.infer<
 >;
 
 /**
- * Page mechanics only; intentionally unwired. The endpoint is not live-qualified
+ * Page mechanics for explicit account observation. The endpoint is not live-qualified
  * and may not identify the active workspace/account used by Send. No entitlement,
  * model, billing, organization or owner-approval inference is made here.
  * The host must independently bind the physical view/document/partition and

@@ -99,7 +99,8 @@ function previewEvidence(snapshot: WindowSnapshot): Evidence | null {
 }
 function boundPreview(snapshot: WindowSnapshot) {
   const retained = snapshot.readPreview;
-  return retained &&
+  return snapshot.status === "current" &&
+    retained &&
     retained.prepareIntention.startsWith(PREPARE) &&
     retained.revision === settings(snapshot)?.revision &&
     retained.buildId === snapshot.buildId &&
@@ -258,7 +259,7 @@ export function ChatReadonly({ snapshot, facade }: ChatReadonlyProps) {
         setMessage(
           action === "inspect"
             ? "The current account was observed. Confirm it only if it is the account you intend to use."
-            : "Account confirmed for this preview. Nothing has been sent.",
+            : "",
         );
     } catch {
       setUncertain(true);
@@ -348,7 +349,7 @@ export function ChatReadonly({ snapshot, facade }: ChatReadonlyProps) {
             >
               Open ChatGPT
             </button>
-            {!visiblePreview.account ? (
+            {!preview?.account ? (
               <button
                 type="button"
                 disabled={paused || !preview || accountAttempted("inspect")}
@@ -356,7 +357,7 @@ export function ChatReadonly({ snapshot, facade }: ChatReadonlyProps) {
               >
                 Inspect current account
               </button>
-            ) : visiblePreview.account.state === "observed" ? (
+            ) : preview.account.state === "observed" ? (
               <button
                 type="button"
                 disabled={paused || !preview || accountAttempted("approve")}
