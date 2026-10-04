@@ -5,7 +5,7 @@
  * node tests/e2e/go-core-startup.e2e.mjs --self-test
  * node tests/e2e/go-core-startup.e2e.mjs [--check|--run-native]
  *   --candidate-root /absolute/_output/build/app --source-sha <SHA>
- *   --build-id <buildId> [--dependency-root /absolute/node_modules] [--reopen]
+ *   --build-id <buildId> [--dependency-root /absolute/node_modules] [--reopen] [--read-discard]
  * Or replace --candidate-root with:
  *   --packaged /absolute/Farol.app --artifact-metadata /absolute/artifact.json
  *   --artifact-sha <independently selected artifactSha256>
@@ -13,7 +13,10 @@
  * Fresh-only by default. Packaged --reopen opts into one same-build successor
  * after confirmed clean retirement, at the same disposable E2E profile. No
  * Send, auth or app-under-test entry compilation. Never retry an unknown launch.
- * Missing read/denied/revoked witnesses are reported, never counted as passes.
+ * --read-discard requires packaged --reopen and selects a separate grant-bearing
+ * read-preview -> explicit Discard -> Quit -> retained-settings reopen journey.
+ * Only fixture readiness is verified; model/account scope and Send are excluded.
+ * Missing denied/revoked witnesses are reported, never counted as passes.
  */
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
@@ -44,6 +47,18 @@ import {
   observeElectronRuntime,
 } from "../../tooling/runtime-contract.mjs";
 
+import {
+  readCanary,
+  previewWitness,
+  readJournalWitness,
+  approvedSettingsWitness,
+  readAccessWitness,
+  legacyPreviewWitness,
+  retainedApprovedSettings,
+  readWitnessSelfTest,
+  consumedReadHandoffWitness,
+} from "./fixtures/go-read-discard-witness.mjs";
+
 const root = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "../..",
@@ -66,6 +81,14 @@ const contract = Object.freeze({
     "Explicit --run-native; caller owns the exclusive native lane",
   reopen:
     "Packaged --reopen only: confirmed first Quit -> same sealed artifact/profile -> retained computerId/Graphite -> new journal backend generation -> second confirmed Quit; no retry after refused/unknown outcomes",
+  readDiscard:
+    "Explicit packaged --reopen --read-discard: normal configure add/verify-workspace (legacy native helper listing), fixture chatgpt.verify readiness, Go read-preview metadata, duplicate prepare, exact Discard/cancel/ACK, duplicate discard without writes, known Quit, original handoff consumed by one same-profile/package successor; requires production handoff support for acknowledged never-reserved NOT_DISPATCHED history",
+  readDiscardLimits: [
+    "Preview exposes path/byte count/UTF-16 context character count, not text or body SHA; no body integrity hash claim",
+    "Fixture page readiness is not production model/account-scope qualification, provider Send, or a live authenticated account",
+    "Disposable private roots and hidden window observations are not hermetic containment of every native/OS path",
+    "Denied/revoked read, result persistence, install and full migration acceptance remain unwitnessed",
+  ],
   isolation:
     "Existing E2E root/proof/app-data guard; new HOME/AppData, private per-user TMPDIR, hidden windows, fixture tunnel client, no workspace or provider verification",
   missingWitnesses: [
@@ -79,6 +102,7 @@ function selection(args) {
   const result = {
     mode: "--check",
     reopen: false,
+    readDiscard: false,
     dependencyRoot: path.join(root, "node_modules"),
   };
   const options = new Map([
@@ -93,6 +117,12 @@ function selection(args) {
   const seen = new Set();
   for (let index = 0; index < args.length; index++) {
     const argument = args[index];
+    if (argument === "--read-discard") {
+      assert.equal(seen.has("readDiscard"), false, "READ_DISCARD_REPEATED");
+      seen.add("readDiscard");
+      result.readDiscard = true;
+      continue;
+    }
     if (argument === "--reopen") {
       assert.equal(seen.has("reopen"), false, "REOPEN_REPEATED");
       seen.add("reopen");
@@ -128,6 +158,14 @@ function selection(args) {
     assert.equal(result.reopen, false, "REOPEN_REQUIRES_PACKAGE");
     assert.equal(result.artifactMetadata, undefined, "PACKAGE_OPTION_WITH_DEV");
     assert.equal(result.artifactSHA, undefined, "PACKAGE_OPTION_WITH_DEV");
+  }
+  if (result.readDiscard) {
+    assert.equal(
+      Boolean(result.packaged),
+      true,
+      "READ_DISCARD_REQUIRES_PACKAGE",
+    );
+    assert.equal(result.reopen, true, "READ_DISCARD_REQUIRES_REOPEN");
   }
   for (const key of [
     "candidateRoot",
@@ -592,6 +630,28 @@ async function native(selected, inputs, report, save) {
   // /private/tmp is refused by Go's writable-ancestor policy.
   for (const directory of [home, appData])
     await fs.mkdir(directory, { mode: 0o700 });
+  let workspaceRoot, workspacePhysical;
+  if (selected.readDiscard) {
+    workspaceRoot = path.join(temporary, "read-workspace");
+    await fs.mkdir(workspaceRoot, { mode: 0o700 });
+    workspacePhysical = await physicalDirectory(workspaceRoot);
+    await fs.writeFile(
+      path.join(workspaceRoot, readCanary.relativePath),
+      readCanary.text,
+      { mode: 0o600, flag: "wx" },
+    );
+    assert.equal(
+      (
+        await regular(path.join(workspaceRoot, readCanary.relativePath))
+      ).toString("utf8"),
+      readCanary.text,
+    );
+    report.readDiscard = {
+      workspaceRoot,
+      workspacePhysical,
+      limits: contract.readDiscardLimits,
+    };
+  }
   const proof = randomUUID();
   await fs.writeFile(path.join(temporary, ".farol-next-e2e-root"), proof, {
     mode: 0o600,
@@ -627,7 +687,28 @@ async function native(selected, inputs, report, save) {
       path.join(stateRoot, "go-core/computer/computer-access.json"),
       1024 * 1024,
     );
-    zeroAuthority(profile.value, access.value, computerId);
+    if (selected.readDiscard && report.readDiscard.binding) {
+      assert.equal(computerId, report.readDiscard.settings.computer.computerId);
+      readAccessWitness(
+        profile.value,
+        access.value,
+        report.readDiscard.settings,
+        report.readDiscard.binding,
+      );
+      if (launch.ordinal === 1 && report.readDiscard.access)
+        assert.deepEqual(
+          access,
+          report.readDiscard.access,
+          "READ_ACCESS_CHANGED_AFTER_PREVIEW",
+        );
+      if (!report.readDiscard.access) report.readDiscard.access = access;
+      if (launch.ordinal === 2)
+        assert.deepEqual(
+          access.value.participants,
+          report.readDiscard.access.value.participants,
+          "READ_REOPEN_PARTICIPANTS_CHANGED",
+        );
+    } else zeroAuthority(profile.value, access.value, computerId);
     report.snapshots.push({ launch: launch.ordinal, label, profile, access });
     zeroSends(site.driver.snapshot());
     await save();
@@ -662,13 +743,23 @@ async function native(selected, inputs, report, save) {
     await save();
     // These are independently read observations, never an origin authority or
     // permission to consume a claim. The production owner performs retirement.
-    journalWitness(
-      journal.value,
-      profile.value.profileId,
-      chatRoot,
-      previous,
-      retired,
-    );
+    if (selected.readDiscard && launch.ordinal === 1 && launch.readPreview) {
+      const binding = readJournalWitness(
+        journal.value,
+        launch.readyJournal.value,
+        launch.readPreview,
+        retired ? "retired" : launch.readDiscarded ? "discarded" : "preview",
+        report.readDiscard.binding,
+      );
+      if (!report.readDiscard.binding) report.readDiscard.binding = binding;
+    } else
+      journalWitness(
+        journal.value,
+        profile.value.profileId,
+        chatRoot,
+        previous,
+        retired,
+      );
     if (retired) {
       assert.deepEqual(
         journal.value.scope,
@@ -676,8 +767,9 @@ async function native(selected, inputs, report, save) {
         "QUIT_BACKEND_CHANGED",
       );
       launch.retiredJournal = journal;
-    } else launch.readyJournal = journal;
+    } else if (!launch.readPreview) launch.readyJournal = journal;
     await save();
+    return journal;
   };
   const captureHandoff = async (previous) => {
     const directory = launch.physical.chatRoot.path;
@@ -728,6 +820,8 @@ async function native(selected, inputs, report, save) {
       selected.buildId,
       previous?.value,
     );
+    if (previous && selected.readDiscard)
+      consumedReadHandoffWitness(evidence.value, previous.value);
     const binding = previous
       ? evidence.value.Consumption.NextBinding
       : evidence.value.Publication.Binding;
@@ -836,6 +930,15 @@ async function native(selected, inputs, report, save) {
       FAROL_NEXT_E2E_TEST_PROOF: proof,
       FAROL_NEXT_E2E_TUNNEL_CLIENT: tunnelClient,
       FAROL_NEXT_E2E_CHATGPT_URL: site.url,
+      ...(selected.readDiscard
+        ? {
+            FAROL_NEXT_E2E_WORKSPACE_ROOT: workspaceRoot,
+            FAROL_NEXT_E2E_WORKSPACE_FILE: path.join(
+              workspaceRoot,
+              readCanary.relativePath,
+            ),
+          }
+        : {}),
       ...(selected.packaged ? {} : { FAROL_NEXT_ENVIRONMENT: "dev" }),
       HOME: home,
       TMPDIR: temp,
@@ -884,7 +987,10 @@ async function native(selected, inputs, report, save) {
       exited.catch(() => undefined);
       const window = await application.firstWindow({ timeout: 15000 });
       const bootstrap = await ready(window, active);
-      const settings = unconfigured(bootstrap);
+      const settings =
+        selected.readDiscard && ordinal === 2
+          ? bootstrap.configuration.settings
+          : unconfigured(bootstrap);
       const paths = await bounded(
         application.evaluate(({ app }) => ({
           name: app.getName(),
@@ -1002,7 +1108,7 @@ async function native(selected, inputs, report, save) {
       { timeout: 5000 },
     );
     unconfigured(await ready(window, active));
-    const savedSettings = await document(
+    let savedSettings = await document(
       path.join(stateRoot, "config.json"),
       256 * 1024,
     );
@@ -1018,11 +1124,159 @@ async function native(selected, inputs, report, save) {
     report.settingsSHA = savedSettings.sha256;
     launch.settings = savedSettings;
     await capture("settings-ui-zero-authority", settings.computer.computerId);
+    if (selected.readDiscard) {
+      // Only normal preload commands. No expected witness data is injected into
+      // the production adapter, and no Send, sign-in or auth command is issued.
+      const configure = async (command) => {
+        active();
+        await hidden();
+        const reply = await bounded(
+          window.evaluate(
+            (command) => window.farolNext.configure(command),
+            command,
+          ),
+          20000,
+          "READ_CONFIGURATION_OUTCOME_UNKNOWN",
+        );
+        zeroSends(site.driver.snapshot());
+        await hidden();
+        report.readDiscard.commands ??= [];
+        report.readDiscard.commands.push({ command, reply });
+        await save();
+        return reply;
+      };
+      const added = await configure({ kind: "computer.add-workspace" });
+      assert.equal(added.ok, true, "READ_WORKSPACE_ADD_FAILED");
+      assert.equal(added.snapshot.settings.computer.workspaces.length, 1);
+      const workspaceId =
+        added.snapshot.settings.computer.workspaces[0].workspaceId;
+      const verified = await configure({
+        kind: "computer.verify-workspace",
+        workspaceId,
+      });
+      assert.equal(
+        verified.ok,
+        true,
+        "READ_LEGACY_WORKSPACE_VERIFICATION_FAILED",
+      );
+      assert.equal(verified.evidence?.kind, "computer.workspace-list");
+      assert.equal(verified.evidence.workspaceId, workspaceId);
+      const readiness = await configure({ kind: "chatgpt.verify" });
+      assert.equal(readiness.ok, true, "READ_FIXTURE_READINESS_FAILED");
+      assert.equal(readiness.evidence?.kind, "chatgpt.readiness");
+      assert.equal(readiness.evidence.state, "authenticated");
+      const configured = readiness.snapshot.settings;
+      const workspace = approvedSettingsWitness(
+        configured,
+        workspaceRoot,
+        workspacePhysical,
+        selected.buildId,
+      );
+      report.readDiscard.settings = configured;
+      const prepared = await configure({
+        kind: "chatgpt.prepare-readonly-task",
+        workspaceId,
+      });
+      assert.equal(prepared.ok, true, "READ_PREVIEW_FAILED");
+      retainedApprovedSettings(prepared.snapshot.settings, configured);
+      previewWitness(prepared.evidence, workspace);
+      launch.readPreview = prepared.evidence;
+      const previewJournal = await captureJournal("read-preview");
+      await capture("read-preview-approved", settings.computer.computerId);
+      const legacyPath = path.join(
+        stateRoot,
+        "chatgpt-task-journal/chatgpt-task-journal.json",
+      );
+      const legacyPrepared = await document(legacyPath, 65536);
+      legacyPreviewWitness(
+        legacyPrepared.value,
+        launch.readPreview.operationId,
+        "prepared",
+      );
+      report.readDiscard.legacyPrepared = legacyPrepared;
+      const repeated = await configure({
+        kind: "chatgpt.prepare-readonly-task",
+        workspaceId,
+      });
+      assert.equal(repeated.ok, true, "READ_DUPLICATE_PREPARE_FAILED");
+      assert.deepEqual(
+        repeated.evidence,
+        launch.readPreview,
+        "READ_DUPLICATE_PREVIEW_CHANGED",
+      );
+      retainedApprovedSettings(repeated.snapshot.settings, configured);
+      assert.deepEqual(
+        await captureJournal("duplicate-read-preview"),
+        previewJournal,
+        "READ_DUPLICATE_ADMISSION_WRITES",
+      );
+      assert.deepEqual(
+        await document(legacyPath, 65536),
+        legacyPrepared,
+        "READ_DUPLICATE_LEGACY_PREPARE_WRITES",
+      );
+      await capture(
+        "duplicate-read-preview-approved",
+        settings.computer.computerId,
+      );
+      const operationId = launch.readPreview.operationId;
+      const discarded = await configure({
+        kind: "chatgpt.cancel-readonly-task",
+        operationId,
+      });
+      assert.equal(discarded.ok, true, "READ_DISCARD_NOT_CONFIRMED");
+      retainedApprovedSettings(discarded.snapshot.settings, configured);
+      launch.readDiscarded = true;
+      const discardedJournal = await captureJournal(
+        "explicit-discard-cancel-ack",
+      );
+      await capture("explicit-discard-approved", settings.computer.computerId);
+      const legacyDiscarded = await document(legacyPath, 65536);
+      legacyPreviewWitness(
+        legacyDiscarded.value,
+        operationId,
+        "delivery_acknowledged",
+      );
+      assert.equal(
+        legacyDiscarded.value.createdAt,
+        legacyPrepared.value.createdAt,
+      );
+      report.readDiscard.legacyDiscarded = legacyDiscarded;
+      // A known successful discard permits this explicit idempotence probe.
+      // Refused/unknown first discard throws above and can never reach it.
+      const duplicateDiscard = await configure({
+        kind: "chatgpt.cancel-readonly-task",
+        operationId,
+      });
+      assert.equal(duplicateDiscard.ok, false);
+      assert.equal(duplicateDiscard.error, "CHATGPT_TASK_PREVIEW_NOT_FOUND");
+      retainedApprovedSettings(duplicateDiscard.snapshot.settings, configured);
+      assert.deepEqual(
+        await captureJournal("duplicate-discard-no-writes"),
+        discardedJournal,
+        "READ_DUPLICATE_DISCARD_WRITES",
+      );
+      assert.deepEqual(
+        await document(legacyPath, 65536),
+        legacyDiscarded,
+        "READ_DUPLICATE_LEGACY_DISCARD_WRITES",
+      );
+      await capture("duplicate-discard-approved", settings.computer.computerId);
+      savedSettings = await document(
+        path.join(stateRoot, "config.json"),
+        256 * 1024,
+      );
+      retainedApprovedSettings(savedSettings.value, configured);
+      report.settingsSHA = savedSettings.sha256;
+      launch.settings = savedSettings;
+    }
     await hidden();
     active();
     await close();
     await capture(
-      "confirmed-quit-zero-authority",
+      selected.readDiscard
+        ? "confirmed-quit-read-discard"
+        : "confirmed-quit-zero-authority",
       settings.computer.computerId,
     );
     if (selected.reopen) {
@@ -1072,7 +1326,37 @@ async function native(selected, inputs, report, save) {
         "REOPEN_RETIRED_JOURNAL_CHANGED",
       );
       const reopened = await start(2);
-      retainedSettings(reopened.settings, savedSettings.value);
+      if (selected.readDiscard) {
+        retainedApprovedSettings(reopened.settings, savedSettings.value);
+        approvedSettingsWitness(
+          reopened.settings,
+          workspaceRoot,
+          workspacePhysical,
+          selected.buildId,
+        );
+        assert.deepEqual(
+          await physicalDirectory(workspaceRoot),
+          workspacePhysical,
+          "READ_REOPEN_WORKSPACE_PHYSICAL_CHANGED",
+        );
+        assert.equal(
+          (
+            await regular(path.join(workspaceRoot, readCanary.relativePath))
+          ).toString("utf8"),
+          readCanary.text,
+        );
+        assert.deepEqual(
+          await document(
+            path.join(
+              stateRoot,
+              "chatgpt-task-journal/chatgpt-task-journal.json",
+            ),
+            65536,
+          ),
+          report.readDiscard.legacyDiscarded,
+          "READ_REOPEN_LEGACY_JOURNAL_CHANGED",
+        );
+      } else retainedSettings(reopened.settings, savedSettings.value);
       await reopened.window
         .locator(".home-page")
         .waitFor({ state: "visible", timeout: 5000 });
@@ -1105,10 +1389,14 @@ async function native(selected, inputs, report, save) {
         path.join(stateRoot, "config.json"),
         256 * 1024,
       );
-      retainedSettings(reopenedSettings.value, savedSettings.value);
+      if (selected.readDiscard)
+        retainedApprovedSettings(reopenedSettings, savedSettings);
+      else retainedSettings(reopenedSettings.value, savedSettings.value);
       launch.settings = reopenedSettings;
       await capture(
-        "reopen-ready-zero-authority",
+        selected.readDiscard
+          ? "reopen-ready-retained-approval"
+          : "reopen-ready-zero-authority",
         settings.computer.computerId,
       );
       await captureJournal(
@@ -1120,7 +1408,9 @@ async function native(selected, inputs, report, save) {
       active();
       await close();
       await capture(
-        "reopen-confirmed-quit-zero-authority",
+        selected.readDiscard
+          ? "reopen-confirmed-quit-retained-approval"
+          : "reopen-confirmed-quit-zero-authority",
         settings.computer.computerId,
       );
     }
@@ -1612,6 +1902,19 @@ function selfTest() {
       terminalLedger: { ...ledger, attemptedSends: 1 },
     }),
   );
+  readWitnessSelfTest(pass, reject);
+  pass(() =>
+    assert.equal(
+      selection(["--read-discard", "--reopen", ...packageArgs]).readDiscard,
+      true,
+    ),
+  );
+  pass(() => assert.equal(selection(args).readDiscard, false));
+  reject(() => selection(["--read-discard", ...packageArgs]));
+  reject(() => selection(["--read-discard", "--reopen", ...args]));
+  reject(() =>
+    selection(["--read-discard", "--read-discard", "--reopen", ...packageArgs]),
+  );
   process.stdout.write(
     `Go startup harness browser-free contract checks: ${checks} passed; native NOT RUN\n`,
   );
@@ -1621,6 +1924,13 @@ async function main(args) {
   const selected = selection(args);
   const report = {
     contract,
+    scenario: selected.readDiscard ? contract.readDiscard : contract.scenario,
+    missingWitnesses: selected.readDiscard
+      ? contract.readDiscardLimits
+      : contract.missingWitnesses,
+    isolation: selected.readDiscard
+      ? "Private disposable workspace/HOME/AppData with existing E2E dialog seams and all windows hidden/unfocused; workspace verification remains a legacy native helper boundary; no hermetic all-paths claim"
+      : contract.isolation,
     selection: selected,
     status: "checking",
     nativeRun: false,
@@ -1647,6 +1957,11 @@ async function main(args) {
       "HARNESS_SOURCE_NOT_COMMITTED_EXACT",
     );
     report.harnessSHA = hash(await regular(fileURLToPath(import.meta.url)));
+    report.readWitnessSourceSHA = hash(
+      await regular(
+        new URL("./fixtures/go-read-discard-witness.mjs", import.meta.url),
+      ),
+    );
     report.attestation = await attest(selected);
     if (selected.mode === "--check") report.status = "checked-native-not-run";
     else {
@@ -1663,9 +1978,11 @@ async function main(args) {
         report.harnessSource,
         "HARNESS_CHANGED_DURING_NATIVE_RUN",
       );
-      report.status = selected.reopen
-        ? "passed-reopen-startup-zero-authority-only"
-        : "passed-fresh-startup-zero-authority-only";
+      report.status = selected.readDiscard
+        ? "passed-read-preview-discard-reopen-fixture-readiness-only"
+        : selected.reopen
+          ? "passed-reopen-startup-zero-authority-only"
+          : "passed-fresh-startup-zero-authority-only";
     }
   } catch (error) {
     report.status = "failed-or-unknown";
