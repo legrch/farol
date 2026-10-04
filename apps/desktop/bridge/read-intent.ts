@@ -7,12 +7,30 @@ import {
   type ChatComputerAdmissionResponse,
   type ChatReadIntentPromote,
   type ChatReadIntentWithdrawn,
+  type ChatReadIntentAccountApprove,
+  type ChatReadIntentAccountApproved,
+  type ChatReadIntentAccountRevoke,
   type ChatHandle,
 } from "./wire.ts";
 
 // Transport for the already captured Go owner. No new task/turn identity,
 // automatic cancellation, replacement admission or retry is created here.
 export class ReadIntentBridge {
+  private readonly promotions = new Map<
+    string,
+    { input: ChatReadIntentPromote; result: Promise<ChatHandle> }
+  >();
+  private readonly approvals = new Map<
+    string,
+    {
+      input: ChatReadIntentAccountApprove;
+      result: Promise<ChatReadIntentAccountApproved>;
+    }
+  >();
+  private readonly revocations = new Map<
+    string,
+    { input: ChatReadIntentAccountRevoke; result: Promise<void> }
+  >();
   // Retain the original transport attempt, including rejection. A second UI
   // dismissal must not mint a new effect after a lost withdrawal reply.
   private readonly withdrawals = new Map<
@@ -23,6 +41,27 @@ export class ReadIntentBridge {
 
   async promote(input: ChatReadIntentPromote): Promise<ChatHandle> {
     const selected = structuredClone(input);
+    if (!validate("ChatReadIntentPromote", selected))
+      throw new BridgeError("refused", "read_intent_request_invalid");
+    const existing = this.promotions.get(
+      selected.admission.admissionOperationId,
+    );
+    if (existing) {
+      if (!isDeepStrictEqual(existing.input, selected))
+        throw new BridgeError("refused", "read_intent_promotion_crossed");
+      return structuredClone(await existing.result);
+    }
+    const result = Promise.resolve().then(() => this.promoteOnce(selected));
+    this.promotions.set(selected.admission.admissionOperationId, {
+      input: selected,
+      result,
+    });
+    return structuredClone(await result);
+  }
+
+  private async promoteOnce(
+    selected: ChatReadIntentPromote,
+  ): Promise<ChatHandle> {
     const handle = await this.call<ChatHandle>(
       "promote",
       "ChatReadIntentPromote",
@@ -46,6 +85,73 @@ export class ReadIntentBridge {
     )
       throw new BridgeError("unknown", "read_intent_owner_crossed");
     return handle;
+  }
+
+  // Called by trusted host composition only after explicit owner confirmation.
+  // Keep the original attempt across double-clicks, rerenders and lost replies.
+  async approveAccount(
+    input: ChatReadIntentAccountApprove,
+  ): Promise<ChatReadIntentAccountApproved> {
+    const selected = structuredClone(input);
+    if (
+      !validate("ChatReadIntentAccountApprove", selected) ||
+      selected.confirmedPrincipalKey !== selected.observation.principalKey
+    )
+      throw new BridgeError("refused", "read_intent_request_invalid");
+    const key = selected.admission.admissionOperationId;
+    const existing = this.approvals.get(key);
+    if (existing) {
+      if (!isDeepStrictEqual(existing.input, selected))
+        throw new BridgeError("refused", "read_intent_account_crossed");
+      return structuredClone(await existing.result);
+    }
+    const result = Promise.resolve().then(() =>
+      this.approveAccountOnce(selected),
+    );
+    this.approvals.set(key, { input: selected, result });
+    return structuredClone(await result);
+  }
+
+  private async approveAccountOnce(
+    selected: ChatReadIntentAccountApprove,
+  ): Promise<ChatReadIntentAccountApproved> {
+    const reply = await this.call<ChatReadIntentAccountApproved>(
+      "account.approve",
+      "ChatReadIntentAccountApprove",
+      selected,
+      "ChatReadIntentAccountApproved",
+    );
+    if (
+      !isDeepStrictEqual(reply.admission, selected.admission) ||
+      reply.principalKey !== selected.confirmedPrincipalKey
+    )
+      throw new BridgeError("unknown", "read_intent_account_crossed");
+    return reply;
+  }
+
+  async revokeAccount(input: ChatReadIntentAccountRevoke): Promise<void> {
+    const selected = structuredClone(input);
+    if (!validate("ChatReadIntentAccountRevoke", selected))
+      throw new BridgeError("refused", "read_intent_request_invalid");
+    const key = selected.admission.admissionOperationId;
+    const existing = this.revocations.get(key);
+    if (existing) {
+      if (!isDeepStrictEqual(existing.input, selected))
+        throw new BridgeError("refused", "read_intent_account_crossed");
+      return existing.result;
+    }
+    const result = Promise.resolve().then(async () => {
+      const reply = await this.call<ChatReadIntentWithdrawn>(
+        "account.revoke",
+        "ChatReadIntentAccountRevoke",
+        selected,
+        "ChatReadIntentWithdrawn",
+      );
+      if (!isDeepStrictEqual(reply.admission, selected.admission))
+        throw new BridgeError("unknown", "read_intent_account_crossed");
+    });
+    this.revocations.set(key, { input: selected, result });
+    return result;
   }
 
   async withdraw(admission: ChatComputerAdmissionResponse): Promise<void> {
@@ -80,7 +186,7 @@ export class ReadIntentBridge {
   }
 
   private async call<T>(
-    method: "promote" | "withdraw",
+    method: "promote" | "withdraw" | "account.approve" | "account.revoke",
     inputShape: string,
     input: unknown,
     outputShape: string,

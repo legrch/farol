@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	wire "github.com/legrch/farol/gen/desktop/v1"
+	"github.com/legrch/farol/modules/chat/app/services/accountapproval"
 	conversation "github.com/legrch/farol/modules/chat/contracts/conversation"
 	computerport "github.com/legrch/farol/modules/computer/app/port"
 	execution "github.com/legrch/farol/modules/computer/app/services/execution"
@@ -16,18 +17,22 @@ import (
 // An actual admitted owner is retained before Computer IO. Body IDs only select
 // this captured capability after exact receipt comparison; they never create it.
 type capturedReadIntent struct {
-	owner        *conversation.ReadIntent
-	binding      conversation.Binding
-	fence        uint64
-	admission    *wire.ChatComputerAdmissionResponse
-	promoteInput *wire.ChatReadIntentPromote
-	promoted     *chatHandle
-	route        *ComputerRoute
-	withdrawn    bool
-	access       computerport.AccessRepository
-	seal         execution.Ceiling
-	activation   *activationFence
-	account      *capturedChatAccount
+	owner          *conversation.ReadIntent
+	binding        conversation.Binding
+	fence          uint64
+	admission      *wire.ChatComputerAdmissionResponse
+	promoteInput   *wire.ChatReadIntentPromote
+	promoted       *chatHandle
+	route          *ComputerRoute
+	withdrawn      bool
+	access         computerport.AccessRepository
+	seal           execution.Ceiling
+	activation     *activationFence
+	account        *capturedChatAccount
+	accountOwner   *accountapproval.Service
+	accountInput   *wire.ChatReadIntentAccountApprove
+	accountReceipt *wire.ChatReadIntentAccountApproved
+	accountRevoked bool
 }
 
 // Caller holds effects across lookup and mutation. Publication, read admission,
@@ -61,6 +66,9 @@ func (s *ComputerIngress) promoteRead(ctx context.Context, operation string, in 
 		}
 		out := chatWireHandle(*c.promoted)
 		return &out, nil
+	}
+	if c.account == nil || c.accountRevoked {
+		return nil, errors.New("read_intent_account_not_approved")
 	}
 	if err = s.claim(operation); err != nil {
 		return nil, err

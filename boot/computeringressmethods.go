@@ -86,6 +86,9 @@ func (s *ComputerIngress) Methods() map[string]desktop.Method {
 			return selected.Methods(s.peer)[name].Handle(ctx, r)
 		}}
 	}
+	for name, method := range s.readAccountMethods() {
+		methods[name] = method
+	}
 	for name, method := range s.readIntentMethods() {
 		methods[name] = method
 	}

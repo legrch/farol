@@ -11,7 +11,7 @@ import (
 
 // Real app/facade/ingress composition with injected Computer, persistence and
 // physical browser ports. This is neither native storage nor a live provider.
-func readIntentFixture(t *testing.T) (*chatComputerFixture, *ComputerIngress, wire.ChatComputerAdmissionResponse) {
+func readIntentUnapprovedFixture(t *testing.T) (*chatComputerFixture, *ComputerIngress, wire.ChatComputerAdmissionResponse) {
 	t.Helper()
 	f := newChatComputerFixture(t)
 	computer, _, native, _ := f.computer(t)
@@ -36,6 +36,14 @@ func readIntentFixture(t *testing.T) (*chatComputerFixture, *ComputerIngress, wi
 		t.Fatal("captured read", read, native.calls)
 	}
 	return f, computer, *a
+}
+
+func readIntentFixture(t *testing.T) (*chatComputerFixture, *ComputerIngress, wire.ChatComputerAdmissionResponse) {
+	t.Helper()
+	f, computer, a := readIntentUnapprovedFixture(t)
+	approveReadAccountFixture(t, computer, a)
+	f.physical.account = accountSendSnapshot()
+	return f, computer, a
 }
 
 func readIntentPromotion(a wire.ChatComputerAdmissionResponse) wire.ChatReadIntentPromote {
@@ -286,6 +294,8 @@ func TestReadIntentFramedReadPromotionAndWithdrawal(t *testing.T) {
 				t.Fatal("read result", read)
 			}
 			if promote {
+				computer.accountClock = &accountSendClock{now: 1}
+				_ = taskWireTestData[wire.ChatReadIntentAccountApproved](t, peer.call("chat.readintent.account.approve", "wire-account", chatComputerWireJSON(t, readAccountInput(a))), "ChatReadIntentAccountApproved")
 				h := taskWireTestData[wire.ChatHandle](t, peer.call("chat.readintent.promote", "wire-send", chatComputerWireJSON(t, readIntentPromotion(a))), "ChatHandle")
 				if h.Binding.OperationId != a.AdmissionOperationId || f.count("promote-conversation") != 1 {
 					t.Fatal("promotion mapping", h)

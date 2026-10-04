@@ -6,6 +6,7 @@ import {
   type ChatComputerAdmissionResponse,
   type ChatReadIntentPromote,
   type ChatHandle,
+  type ChatReadIntentAccountApprove,
   type Json,
   type Outcome,
 } from "../../apps/desktop/bridge/wire.ts";
@@ -63,6 +64,23 @@ const handle: ChatHandle = {
     operationId: admission.admissionOperationId,
   },
 };
+const account: ChatReadIntentAccountApprove = {
+  admission,
+  confirmedPrincipalKey: "c".repeat(64),
+  observation: {
+    state: "observed",
+    source: "provider-session-v1",
+    principalKey: "c".repeat(64),
+    observedAtMillis: "1",
+    expiresAtMillis: "100",
+  },
+};
+const approved = {
+  admission,
+  approvalId: "go-account-approval",
+  principalKey: account.confirmedPrincipalKey,
+};
+const revoke = { admission, approvalId: approved.approvalId };
 function fixture(mutate: (reply: Outcome) => Outcome = (reply) => reply) {
   const request = vi.fn<Client["request"]>(
     async (method, _body, options = {}) =>
@@ -72,7 +90,11 @@ function fixture(mutate: (reply: Outcome) => Outcome = (reply) => reply) {
         context: { ...context },
         status: "ok",
         data: structuredClone(
-          method.endsWith("promote") ? handle : { admission },
+          method.endsWith("promote")
+            ? handle
+            : method.endsWith("account.approve")
+              ? approved
+              : { admission },
         ) as unknown as Json,
       }),
   );
@@ -162,6 +184,9 @@ describe("captured read intent transport", () => {
         state: "unknown",
         code: "read_intent_owner_crossed",
       });
+      await expect(f.bridge.promote(input)).rejects.toMatchObject({
+        state: "unknown",
+      });
       expect(f.request).toHaveBeenCalledTimes(1);
     },
   );
@@ -216,6 +241,9 @@ describe("captured read intent transport", () => {
         state: status,
         code: "controlled-failure",
       });
+      await expect(f.bridge.promote(input)).rejects.toMatchObject({
+        state: status,
+      });
       expect(f.request).toHaveBeenCalledTimes(1);
     },
   );
@@ -244,6 +272,131 @@ describe("captured read intent transport", () => {
         ...admission,
         workspaceRoot: "/",
       } as ChatComputerAdmissionResponse),
+    ).rejects.toMatchObject({ state: "refused" });
+    expect(f.request).not.toHaveBeenCalled();
+  });
+  it("retains one promotion and returns detached receipts across concurrent commands", async () => {
+    const f = fixture();
+    const [first, second] = await Promise.all([
+      f.bridge.promote(input),
+      f.bridge.promote(structuredClone(input)),
+    ]);
+    Reflect.set(first.binding, "turnId", "caller-mutation");
+    expect(second).toEqual(handle);
+    expect(await f.bridge.promote(input)).toEqual(handle);
+    await expect(
+      f.bridge.promote({ ...input, prompt: "replacement" }),
+    ).rejects.toMatchObject({ code: "read_intent_promotion_crossed" });
+    expect(f.request).toHaveBeenCalledTimes(1);
+  });
+  it("retains explicit account approval and revocation as separate exact effects", async () => {
+    const f = fixture();
+    const first = await f.bridge.approveAccount(account);
+    Reflect.set(first, "approvalId", "mutated");
+    const [a, b] = await Promise.all([
+      f.bridge.approveAccount(account),
+      f.bridge.approveAccount(structuredClone(account)),
+    ]);
+    expect(a).toEqual(approved);
+    expect(b).toEqual(approved);
+    await Promise.all([
+      f.bridge.revokeAccount(revoke),
+      f.bridge.revokeAccount(structuredClone(revoke)),
+    ]);
+    await f.bridge.revokeAccount(revoke);
+    expect(f.request.mock.calls.map(([method]) => method)).toEqual([
+      "chat.readintent.account.approve",
+      "chat.readintent.account.revoke",
+    ]);
+    for (const [method, , options] of f.request.mock.calls) {
+      expect(requiresOperationID(method)).toBe(true);
+      expect(options?.operationId).toBeTruthy();
+    }
+  });
+  it.each(["unknown", "refused", "unavailable", "thrown"] as const)(
+    "retains %s account effects without another RPC",
+    async (status) => {
+      for (const action of ["approve", "revoke"] as const) {
+        const f = fixture((o) => ({
+          ...o,
+          status: status === "thrown" ? "unknown" : status,
+          code: "original-failure",
+          data: null,
+        }));
+        const failure = new Error("original transport failure");
+        if (status === "thrown") f.request.mockRejectedValueOnce(failure);
+        const call = () =>
+          action === "approve"
+            ? f.bridge.approveAccount(account)
+            : f.bridge.revokeAccount(revoke);
+        for (let i = 0; i < 2; i++) {
+          if (status === "thrown") await expect(call()).rejects.toBe(failure);
+          else
+            await expect(call()).rejects.toMatchObject({
+              state: status,
+              code: "original-failure",
+            });
+        }
+        expect(f.request).toHaveBeenCalledTimes(1);
+      }
+    },
+  );
+  it.each([
+    "requestId",
+    "operationId",
+    "profileId",
+    "backendGeneration",
+    "admission",
+    "principalKey",
+  ])(
+    "refuses crossed account approval %s and retains refusal",
+    async (field) => {
+      const f = fixture((o) => {
+        if (field === "profileId" || field === "backendGeneration")
+          return { ...o, context: { ...context, [field]: "other" } };
+        if (field === "requestId" || field === "operationId")
+          return { ...o, [field]: "other" };
+        return {
+          ...o,
+          data: {
+            ...approved,
+            ...(field === "admission"
+              ? { admission: { ...admission, taskId: "other" } }
+              : { principalKey: "d".repeat(64) }),
+          } as unknown as Json,
+        };
+      });
+      await expect(f.bridge.approveAccount(account)).rejects.toMatchObject({
+        state: "unknown",
+      });
+      await expect(f.bridge.approveAccount(account)).rejects.toMatchObject({
+        state: "unknown",
+      });
+      expect(f.request).toHaveBeenCalledTimes(1);
+    },
+  );
+  it("does not refresh or cross a captured account confirmation", async () => {
+    const f = fixture();
+    await f.bridge.approveAccount(account);
+    await expect(
+      f.bridge.approveAccount({
+        ...account,
+        observation: { ...account.observation, observedAtMillis: "2" },
+      }),
+    ).rejects.toMatchObject({ code: "read_intent_account_crossed" });
+    await f.bridge.revokeAccount(revoke);
+    await expect(
+      f.bridge.revokeAccount({ ...revoke, approvalId: "other" }),
+    ).rejects.toMatchObject({ code: "read_intent_account_crossed" });
+    expect(f.request).toHaveBeenCalledTimes(2);
+  });
+  it("requires the explicitly confirmed principal to match the observation before RPC", async () => {
+    const f = fixture();
+    await expect(
+      f.bridge.approveAccount({
+        ...account,
+        confirmedPrincipalKey: "d".repeat(64),
+      }),
     ).rejects.toMatchObject({ state: "refused" });
     expect(f.request).not.toHaveBeenCalled();
   });

@@ -12,6 +12,7 @@ import (
 	"sync"
 
 	wire "github.com/legrch/farol/gen/desktop/v1"
+	chatport "github.com/legrch/farol/modules/chat/app/port"
 	chatlifecycle "github.com/legrch/farol/modules/chat/app/services/lifecycle"
 	conversation "github.com/legrch/farol/modules/chat/contracts/conversation"
 	computerport "github.com/legrch/farol/modules/computer/app/port"
@@ -38,6 +39,7 @@ type ComputerIngress struct {
 	readIntents         map[string]*capturedReadIntent
 	native              computerport.Workspace
 	clock               computerport.Clock
+	accountClock        chatport.AccountClock
 	peer                wire.Context
 	ownerID, computerID string
 	used                map[string]bool

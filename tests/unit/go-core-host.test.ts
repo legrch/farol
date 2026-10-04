@@ -18,7 +18,11 @@ import {
 } from "../../apps/desktop/bridge/attested-core.ts";
 import type { BrowserDriver } from "../../apps/desktop/bridge/browser.ts";
 import { BridgeError, type Client } from "../../apps/desktop/bridge/client.ts";
-import type { Json, Outcome } from "../../apps/desktop/bridge/wire.ts";
+import type {
+  Json,
+  Outcome,
+  ChatReadIntentAccountApprove,
+} from "../../apps/desktop/bridge/wire.ts";
 import {
   ProductConfigurationService,
   ProductSettingsStore,
@@ -198,6 +202,16 @@ function transport(fault?: Fault) {
             bytes: "14",
             sha256: "f".repeat(64),
           };
+          break;
+        case "chat.readintent.account.approve":
+          data = {
+            admission: input.admission!,
+            approvalId: "go-account-approval",
+            principalKey: input.confirmedPrincipalKey!,
+          };
+          break;
+        case "chat.readintent.account.revoke":
+          data = { admission: input.admission! };
           break;
         default:
           throw new Error(`Unexpected RPC: ${method}`);
@@ -497,6 +511,82 @@ describe("normal Go host startup", () => {
 });
 
 describe("normal Go host read intents", () => {
+  it("approves only on an explicit host call and retains the original Go receipt", async () => {
+    const f = transport();
+    const host = new DesktopGoCore(f.client, () => settings);
+    const read = await host.readForIntent(
+      "preview",
+      settings.computer.workspaces[0]!.workspaceId,
+      "README.md",
+    );
+    expect(f.events).toEqual(methods);
+    const request: ChatReadIntentAccountApprove = {
+      admission: read.admission,
+      confirmedPrincipalKey: "c".repeat(64),
+      observation: {
+        state: "observed",
+        source: "provider-session-v1",
+        principalKey: "c".repeat(64),
+        observedAtMillis: "1",
+        expiresAtMillis: "100",
+      },
+    };
+    const receipt = await host.approveReadAccount(request);
+    expect(await host.approveReadAccount(request)).toEqual(receipt);
+    expect(receipt).toEqual({
+      admission: read.admission,
+      approvalId: "go-account-approval",
+      principalKey: request.confirmedPrincipalKey,
+    });
+    const revoke = {
+      admission: read.admission,
+      approvalId: receipt.approvalId,
+    };
+    await host.revokeReadAccount(revoke);
+    await host.revokeReadAccount(revoke);
+    expect(f.events).toEqual([
+      ...methods,
+      "chat.readintent.account.approve",
+      "chat.readintent.account.revoke",
+    ]);
+    await host.close();
+    expect(() => host.approveReadAccount(request)).toThrow(
+      "host_read_intent_unavailable",
+    );
+    expect(() => host.revokeReadAccount(revoke)).toThrow(
+      "host_read_intent_unavailable",
+    );
+    expect(start).not.toHaveBeenCalled();
+  });
+
+  it("does not repeat an unknown explicit account confirmation", async () => {
+    const failure = new BridgeError("unknown", "lost-account-approval");
+    const f = transport((method, outcome) => {
+      if (method === "chat.readintent.account.approve") throw failure;
+      return outcome;
+    });
+    const host = new DesktopGoCore(f.client, () => settings);
+    const read = await host.readForIntent(
+      "preview",
+      settings.computer.workspaces[0]!.workspaceId,
+      "README.md",
+    );
+    const request: ChatReadIntentAccountApprove = {
+      admission: read.admission,
+      confirmedPrincipalKey: "c".repeat(64),
+      observation: {
+        state: "observed",
+        source: "provider-session-v1",
+        principalKey: "c".repeat(64),
+        observedAtMillis: "1",
+        expiresAtMillis: "100",
+      },
+    };
+    await expect(host.approveReadAccount(request)).rejects.toBe(failure);
+    await expect(host.approveReadAccount(request)).rejects.toBe(failure);
+    expect(f.events).toEqual([...methods, "chat.readintent.account.approve"]);
+    expect(ports.legacyRead).not.toHaveBeenCalled();
+  });
   it("reads settings after withdrawal and maps the exact Go admission into the read", async () => {
     const f = transport();
     let current = { ...settings, revision: 22 };

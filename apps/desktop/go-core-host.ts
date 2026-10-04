@@ -19,6 +19,8 @@ import {
   type CoreRetirementAcknowledged,
   type ChatComputerAdmissionResponse,
   type ChatReadIntentPromote,
+  type ChatReadIntentAccountApprove,
+  type ChatReadIntentAccountRevoke,
 } from "./bridge/wire.ts";
 import { qualifyProfileLaunch } from "./bridge/profile.ts";
 import { openNativeProfileStorage } from "./bridge/profile-storage.ts";
@@ -187,6 +189,16 @@ export class DesktopGoCore {
     if (this.closeResult)
       throw new BridgeError("unavailable", "host_read_intent_unavailable");
     return this.readIntent.promote(input);
+  }
+  approveReadAccount(input: ChatReadIntentAccountApprove) {
+    if (this.closeResult)
+      throw new BridgeError("unavailable", "host_read_intent_unavailable");
+    return this.readIntent.approveAccount(input);
+  }
+  revokeReadAccount(input: ChatReadIntentAccountRevoke) {
+    if (this.closeResult)
+      throw new BridgeError("unavailable", "host_read_intent_unavailable");
+    return this.readIntent.revokeAccount(input);
   }
   withdrawReadIntent(admission: ChatComputerAdmissionResponse) {
     if (this.closeResult)
