@@ -624,6 +624,7 @@ export class WindowController implements RendererFacade {
             before.buildId !== this.state.buildId ||
             value?.kind !== "chatgpt.readonly-task-preview" ||
             value.workspaceId !== command.workspaceId ||
+            value.account !== undefined ||
             retained !== null
           )
             return {
@@ -666,7 +667,10 @@ export class WindowController implements RendererFacade {
             (command.kind === "chatgpt.inspect-readonly-account" &&
               value.account.state !== "observed") ||
             (command.kind === "chatgpt.approve-readonly-account" &&
-              (value.account.confirmationId !== command.confirmationId ||
+              (!retained.value.account ||
+                retained.value.account.confirmationId !==
+                  command.confirmationId ||
+                value.account.confirmationId !== command.confirmationId ||
                 value.account.state !== "approved"))
           )
             return {

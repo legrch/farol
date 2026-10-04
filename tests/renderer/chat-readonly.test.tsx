@@ -887,4 +887,62 @@ describe("ChatReadonly bounded component", () => {
     expect(h.button("Discard preview").disabled).toBe(true);
     expect(h.calls()).toHaveLength(1);
   });
+  it.each(["observed", "approved"] as const)(
+    "does not import unsolicited %s account from initial Prepare",
+    async (state) => {
+      const h = await mount();
+      vi.mocked(h.f.api.configure).mockResolvedValueOnce({
+        ok: true,
+        snapshot: h.configuration,
+        evidence: preview({
+          account: { confirmationId: otherOperationId, state },
+        }),
+      });
+      await h.select();
+      await h.click("Choose file…");
+      expect(Object.values(h.c.getSnapshot().intents)).toContainEqual(
+        expect.objectContaining({
+          state: "unknown",
+          code: "READ_PREVIEW_UNCONFIRMED",
+        }),
+      );
+      expect(h.c.getSnapshot().readPreview).toBeNull();
+      expect(h.host.textContent).not.toContain("Account confirmed");
+      await h.render("unsolicited-account");
+      expect(h.host.textContent).not.toContain("Account confirmed");
+      expect(h.button("Inspect current account").disabled).toBe(true);
+      expect(h.calls()).toHaveLength(1);
+    },
+  );
+
+  it("does not bind approval without the previously observed confirmation", async () => {
+    const h = await mount();
+    await h.select();
+    await h.click("Choose file…");
+    vi.mocked(h.f.api.configure).mockResolvedValueOnce({
+      ok: true,
+      snapshot: h.configuration,
+      evidence: preview({
+        account: { confirmationId: otherOperationId, state: "approved" },
+      }),
+    });
+    let result;
+    await act(async () => {
+      result = await h.c.configure(
+        {
+          kind: "chatgpt.approve-readonly-account",
+          operationId,
+          confirmationId: otherOperationId,
+        },
+        "uncorrelated-approval",
+      );
+    });
+    expect(result).toMatchObject({
+      state: "unknown",
+      code: "READ_ACCOUNT_UNCONFIRMED",
+    });
+    expect(h.c.getSnapshot().readPreview?.value.account).toBeUndefined();
+    expect(h.host.textContent).not.toContain("Account confirmed");
+    expect(h.calls()).toHaveLength(2);
+  });
 });
