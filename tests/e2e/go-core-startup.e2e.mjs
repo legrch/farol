@@ -5,7 +5,7 @@
  * node tests/e2e/go-core-startup.e2e.mjs --self-test
  * node tests/e2e/go-core-startup.e2e.mjs [--check|--run-native]
  *   --candidate-root /absolute/_output/build/app --source-sha <SHA>
- *   --build-id <buildId> [--dependency-root /absolute/node_modules] [--reopen] [--read-discard] [--read-account]
+ *   --build-id <buildId> [--dependency-root /absolute/node_modules] [--reopen] [--read-discard] [--read-account] [--edit-snapshot]
  * Or replace --candidate-root with:
  *   --packaged /absolute/Farol.app --artifact-metadata /absolute/artifact.json
  *   --artifact-sha <independently selected artifactSha256>
@@ -20,6 +20,10 @@
  * --read-account additionally requires --read-discard and drives actual React
  * prepare/inspect/confirm/Discard controls against a synthetic account session.
  * Missing denied/revoked witnesses are reported, never counted as passes.
+ * --edit-snapshot requires packaged --reopen --read-discard. Before the original
+ * journey: normal write grant -> Verify -> Prepare metadata -> exact Cancel ->
+ * restore read grant -> Verify. No Apply/observe/ACK. React has no edit controls;
+ * this bounded witness uses existing preload configure, not UI acceptance.
  */
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
@@ -78,6 +82,14 @@ import {
   refreshAccountUi,
   readAccountSelfTest,
 } from "./lib/read-account-ui-witness.mjs";
+import {
+  snapshotLimits,
+  snapshotAuthorityWitness,
+  settingsSnapshotWitness,
+  snapshotUnchangedWitness,
+  snapshotCancelWitness,
+  snapshotWitnessSelfTest,
+} from "./lib/settings-snapshot-witness.mjs";
 
 const root = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -106,6 +118,9 @@ const contract = Object.freeze({
   readAccount:
     "Explicit packaged --reopen --read-discard --read-account: React verified folder/Choose file -> explicit Inspect current account -> ChatGPT/Home remount and same-revision Diagnostics refresh -> explicit Use this account -> known original duplicate account commands -> React exact Discard -> known Quit/reopen; exactly one inspect GET and one fresh confirmation GET, zero attempted/accepted Sends",
   readAccountLimits,
+  editSnapshot:
+    "Explicit packaged --reopen --read-discard --edit-snapshot: existing disposable UTF-8 canary, normal configuration write grant/Verify, preload Prepare, independently read raw bytes/count/SHA-256, retained root/profile/current generation and unchanged Chat/participants, exact Cancel, restore read grant/Verify, then original read-discard/account journey",
+  editSnapshotLimits: snapshotLimits,
   readDiscardLimits: [
     "Settings replies do not instrument executor origin. Source-only self-tests and a package built from ff2d84d4d2fb85bfc2fe9696696c0a90ddb1162e can still exercise TypeScript listings; Go acceptance requires Lead's new integrated package and exact production-source mapping of all three Settings commands to the Go owner executor",
     "Settings approval revision/expiry may advance while generation and approval semantics stay fixed. Retained participant map and Chat journal prove no retained admission/ChatTurn change; no independent transient execution/admission counter exists",
@@ -131,6 +146,7 @@ function selection(args) {
     reopen: false,
     readDiscard: false,
     readAccount: false,
+    editSnapshot: false,
     dependencyRoot: path.join(root, "node_modules"),
   };
   const options = new Map([
@@ -145,6 +161,12 @@ function selection(args) {
   const seen = new Set();
   for (let index = 0; index < args.length; index++) {
     const argument = args[index];
+    if (argument === "--edit-snapshot") {
+      assert.equal(seen.has("editSnapshot"), false, "EDIT_SNAPSHOT_REPEATED");
+      seen.add("editSnapshot");
+      result.editSnapshot = true;
+      continue;
+    }
     if (argument === "--read-account") {
       assert.equal(seen.has("readAccount"), false, "READ_ACCOUNT_REPEATED");
       seen.add("readAccount");
@@ -204,6 +226,19 @@ function selection(args) {
       result.readDiscard,
       true,
       "READ_ACCOUNT_REQUIRES_READ_DISCARD",
+    );
+  }
+  if (result.editSnapshot) {
+    assert.equal(
+      Boolean(result.packaged),
+      true,
+      "EDIT_SNAPSHOT_REQUIRES_PACKAGE",
+    );
+    assert.equal(result.reopen, true, "EDIT_SNAPSHOT_REQUIRES_REOPEN");
+    assert.equal(
+      result.readDiscard,
+      true,
+      "EDIT_SNAPSHOT_REQUIRES_READ_DISCARD",
     );
   }
   if (result.readDiscard) {
@@ -359,8 +394,29 @@ async function attest(selected) {
       return input;
     });
   }
+  let editSnapshotInputs;
+  if (selected.editSnapshot) {
+    editSnapshotInputs = [
+      "src/apps/desktop/main.ts",
+      "src/apps/desktop/workspace-edit.ts",
+      "apps/desktop/go-workspace-snapshot.ts",
+      "apps/desktop/go-core-host.ts",
+      "apps/desktop/go-computer-authority.ts",
+      "src/modules/computer/infra/repo/owner-settings-computer-approval.ts",
+    ].map((inputPath) => {
+      const input = ledger.find(
+        (entry) => entry.kind === "source" && entry.path === inputPath,
+      );
+      assert.ok(
+        input?.exact === true,
+        `EDIT_SNAPSHOT_SOURCE_CONTRACT_MISSING:${inputPath}`,
+      );
+      return input;
+    });
+  }
   return {
     ...(selected.readAccount ? { readAccountInputs } : {}),
+    ...(selected.editSnapshot ? { editSnapshotInputs } : {}),
     appRoot,
     identity,
     core: build.core,
@@ -1277,7 +1333,12 @@ async function native(selected, inputs, report, save) {
         executorOrigin:
           "Not instrumented by Settings replies; exact packaged production source must tie commands to the Go owner executor",
       });
-      const observeSettings = async (label, currentSettings) => {
+      const observeSettings = async (
+        label,
+        currentSettings,
+        observations = settingsReport.observations,
+        witness = settingsAuthorityWitness,
+      ) => {
         const physical = {
           coreRoot: await physicalDirectory(path.join(stateRoot, "go-core")),
           computerRoot: await physicalDirectory(
@@ -1321,8 +1382,8 @@ async function native(selected, inputs, report, save) {
           settings: currentSettings,
           physical,
         };
-        const previous = settingsReport.observations.at(-1);
-        settingsReport.observations.push(observed);
+        const previous = observations.at(-1);
+        observations.push(observed);
         await save();
         assert.deepEqual(
           configuration.value,
@@ -1332,7 +1393,7 @@ async function native(selected, inputs, report, save) {
         // Separate read of the same known roots; captureJournal and its
         // ready/read/Discard/retirement protections remain unchanged.
         journalWitness(chat.value, profile.value.profileId, physical.chatRoot);
-        observed.counters = settingsAuthorityWitness(observed, previous);
+        observed.counters = witness(observed, previous);
         ledgerWitness(site.driver.snapshot());
         await save();
         return observed;
@@ -1381,6 +1442,128 @@ async function native(selected, inputs, report, save) {
       }
       settingsReport.passed = true;
       await save();
+      if (selected.editSnapshot) {
+        const editReport = (report.editSnapshot = {
+          limits: snapshotLimits,
+          controlPath:
+            "Existing normal window.farolNext.configure; React Settings has no Prepare/edit/Cancel controls. Real edit UI acceptance remains open.",
+          executorOrigin:
+            "Source-bound normal packaged main -> readGoWorkspaceSnapshot -> GoCoreHost.snapshotSettingsWorkspace -> GoComputerAuthority.snapshotSettings -> computer.settings.snapshot; no independent Go RPC counter",
+          sourceBinding: {
+            packageSourceCommit: inputs.identity.sourceCommit,
+            productionMainSHA: inputs.mainSHA,
+            core: inputs.core,
+            inputs: inputs.editSnapshotInputs,
+            witnessSourceSHA: report.snapshotWitnessSourceSHA,
+          },
+          observations: [settingsReport.observations.at(-1)],
+          commands: [],
+        });
+        const observeEdit = (label, access) =>
+          observeSettings(
+            label,
+            settingsCurrent,
+            editReport.observations,
+            (observed, previous) =>
+              snapshotAuthorityWitness(observed, previous, access),
+          );
+        const editCommand = async (command, access) => {
+          const reply = await configure(command);
+          editReport.commands.push({ command, reply });
+          await save();
+          assert.equal(reply.ok, true, "EDIT_SNAPSHOT_COMMAND_FAILED");
+          assert.equal(reply.snapshot.status, "ready");
+          settingsCurrent = reply.snapshot.settings;
+          return {
+            reply,
+            observed: await observeEdit(`after-${command.kind}`, access),
+          };
+        };
+        await editCommand(
+          { kind: "computer.update-access", workspaceId, access: "write" },
+          "write",
+        );
+        const verified = await editCommand(
+          { kind: "computer.verify-workspace", workspaceId },
+          "write",
+        );
+        assert.equal(
+          settingsCurrent.setup.computer.verified?.buildId,
+          selected.buildId,
+        );
+        assert.equal(
+          settingsCurrent.setup.computer.verified?.protocol,
+          "mutable-workspace/1",
+        );
+        const canaryPath = path.join(workspaceRoot, readCanary.relativePath);
+        const originalBytes = await regular(canaryPath, 256 * 1024);
+        assert.deepEqual(originalBytes, Buffer.from(readCanary.text, "utf8"));
+        const prepared = await editCommand(
+          { kind: "computer.prepare-workspace-edit", workspaceId },
+          "write",
+        );
+        const preview = prepared.reply.evidence;
+        editReport.rawFile = settingsSnapshotWitness(
+          preview,
+          verified.observed,
+          prepared.observed,
+          originalBytes,
+          await regular(canaryPath, 256 * 1024),
+          readCanary.relativePath,
+        );
+        assert.ok(
+          Date.parse(preview.expiresAt) > Date.now(),
+          "EDIT_SNAPSHOT_ALREADY_EXPIRED",
+        );
+        editReport.preview = preview;
+        await save();
+        const cancelCommand = {
+          kind: "computer.cancel-workspace-edit",
+          operationId: preview.operationId,
+        };
+        const cancelled = await editCommand(cancelCommand, "write");
+        snapshotCancelWitness(
+          cancelCommand,
+          cancelled.reply,
+          preview,
+          verified.observed.settings,
+        );
+        snapshotUnchangedWitness(
+          verified.observed,
+          cancelled.observed,
+          originalBytes,
+          await regular(canaryPath, 256 * 1024),
+        );
+        await editCommand(
+          { kind: "computer.update-access", workspaceId, access: "read" },
+          "read",
+        );
+        const restored = await editCommand(
+          { kind: "computer.verify-workspace", workspaceId },
+          "read",
+        );
+        settingsAuthorityWitness(restored.observed);
+        assert.equal(
+          settingsCurrent.setup.computer.verified?.workspaceId,
+          workspaceId,
+        );
+        assert.equal(
+          settingsCurrent.setup.computer.verified?.configRevision,
+          settingsCurrent.computer.generation,
+        );
+        assert.equal(
+          settingsCurrent.setup.computer.verified?.buildId,
+          selected.buildId,
+        );
+        assert.equal(
+          settingsCurrent.setup.computer.verified?.protocol,
+          "readonly-workspace/1",
+        );
+        assert.deepEqual(await regular(canaryPath, 256 * 1024), originalBytes);
+        editReport.readAccessRestoredAndVerified = true;
+        editReport.passed = true;
+        await save();
+      }
       // Normal Home/Settings startup keeps Browser lazy. Open its exact fixture
       // page before the observation-only Check connection command.
       const opened = await configure({ kind: "chatgpt.open-browser" });
@@ -2426,8 +2609,38 @@ function selfTest() {
   reject(() =>
     selection(["--read-discard", "--read-discard", "--reopen", ...packageArgs]),
   );
+  const snapshotChecksStart = checks;
+  snapshotWitnessSelfTest(pass, reject);
+  const snapshotArgs = [
+    "--edit-snapshot",
+    "--read-discard",
+    "--reopen",
+    ...packageArgs,
+  ];
+  pass(() => assert.equal(selection(snapshotArgs).editSnapshot, true));
+  pass(() =>
+    assert.equal(
+      selection(["--edit-snapshot", ...accountArgs]).readAccount,
+      true,
+    ),
+  );
+  pass(() => assert.equal(selection(args).editSnapshot, false));
+  pass(() =>
+    assert.equal(
+      selection(["--run-native", ...snapshotArgs]).mode,
+      "--run-native",
+    ),
+  );
+  for (const invalid of [
+    ["--edit-snapshot", ...packageArgs],
+    ["--edit-snapshot", "--reopen", ...packageArgs],
+    ["--edit-snapshot", "--read-discard", ...packageArgs],
+    ["--edit-snapshot", "--read-discard", "--reopen", ...args],
+    ["--edit-snapshot", ...snapshotArgs],
+  ])
+    reject(() => selection(invalid));
   process.stdout.write(
-    `Go startup harness browser-free contract checks: ${checks} passed; native NOT RUN\n`,
+    `Go startup harness browser-free contract checks: ${checks} passed (${checks - snapshotChecksStart} edit-snapshot); native NOT RUN\n`,
   );
 }
 
@@ -2435,11 +2648,13 @@ async function main(args) {
   const selected = selection(args);
   const report = {
     contract,
-    scenario: selected.readAccount
-      ? contract.readAccount
-      : selected.readDiscard
-        ? contract.readDiscard
-        : contract.scenario,
+    scenario: selected.editSnapshot
+      ? `${contract.editSnapshot}; ${selected.readAccount ? contract.readAccount : contract.readDiscard}`
+      : selected.readAccount
+        ? contract.readAccount
+        : selected.readDiscard
+          ? contract.readDiscard
+          : contract.scenario,
     missingWitnesses: selected.readAccount
       ? [...contract.readDiscardLimits, ...readAccountLimits]
       : selected.readDiscard
@@ -2484,6 +2699,18 @@ async function main(args) {
         new URL("./lib/computer-settings-witness.mjs", import.meta.url),
       ),
     );
+    if (selected.editSnapshot) {
+      report.snapshotWitnessSourceSHA = hash(
+        await regular(
+          new URL("./lib/settings-snapshot-witness.mjs", import.meta.url),
+        ),
+      );
+      report.missingWitnesses = [
+        ...report.missingWitnesses,
+        ...snapshotLimits,
+        "React guarded-edit Prepare/Cancel controls absent; actual edit UI remains a higher acceptance gate",
+      ];
+    }
     if (selected.readAccount)
       report.readAccountWitnessSourceSHA = hash(
         await regular(
@@ -2506,13 +2733,17 @@ async function main(args) {
         report.harnessSource,
         "HARNESS_CHANGED_DURING_NATIVE_RUN",
       );
-      report.status = selected.readAccount
-        ? "passed-react-read-account-discard-reopen-synthetic-account-only"
-        : selected.readDiscard
-          ? "passed-read-preview-discard-reopen-fixture-readiness-only"
-          : selected.reopen
-            ? "passed-reopen-startup-zero-authority-only"
-            : "passed-fresh-startup-zero-authority-only";
+      report.status = selected.editSnapshot
+        ? selected.readAccount
+          ? "passed-settings-edit-snapshot-and-react-read-account-discard-reopen-synthetic-only"
+          : "passed-settings-edit-snapshot-and-read-discard-reopen-fixture-only"
+        : selected.readAccount
+          ? "passed-react-read-account-discard-reopen-synthetic-account-only"
+          : selected.readDiscard
+            ? "passed-read-preview-discard-reopen-fixture-readiness-only"
+            : selected.reopen
+              ? "passed-reopen-startup-zero-authority-only"
+              : "passed-fresh-startup-zero-authority-only";
     }
   } catch (error) {
     report.status = "failed-or-unknown";
