@@ -1,6 +1,11 @@
 version: "3"
 
 tasks:
+  checkpoint:
+    desc: Validate exact-source evidence for a local unaccepted checkpoint; never commits or accepts
+    cmds:
+      - /usr/bin/python3 -I ./scripts/assert-owner-untouched.py -- node tooling/checkpoint.mjs {{.CLI_ARGS}}
+
   ci:
     desc: Farol Next deterministic architecture, policy, coverage, Hunt, and _output build gate
     cmds:

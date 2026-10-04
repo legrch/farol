@@ -43,8 +43,26 @@ schemas are compatibility boundaries. Do not rename them as a source-layout fix.
 - Use English for source, tests, UI, logs, errors, and implementation documentation.
 
 - Preserve unrelated changes. Use named writers and stage only task-owned paths.
-- Run targeted tests, `task ci:fast`, and `git diff --check` before committing.
-  Use English Conventional Commits without assistant or vendor attribution.
+- For coherent local **unaccepted checkpoints**, inspect the complete owned diff,
+  run relevant targeted tests and type/import checks, then run `git diff --check`.
+  `task ci:fast` is not required before each commit. Retain the original terminal
+  receipts, tested source identity, dependency evidence and any verification limits.
+  Stage only owned paths and inspect the staged diff before committing. Use English
+  Conventional Commits without assistant or vendor attribution.
+  `task checkpoint -- --evidence /absolute/receipt.json` is an additional evidence
+  consistency check described in `docs/checkpoints.md`; it does not replace the
+  implementing Lead's provenance/coverage audit or grant product acceptance.
+- A checkpoint is not a ready slice, accepted baseline or candidate. Ready slices
+  require a frozen coherent range, representative domain/integration checks and
+  independent review under the current shared Critic policy. Before accepted-main
+  advancement, the final clean committed integrated source must pass the complete
+  required `task ci:fast` aggregate, including Core race/vet/import/discovery,
+  type/security/Hunt checks, applicable cross-module/native gates and required
+  independent review. Unknown/shared/policy changes keep these full obligations;
+  no documentation-only acceptance shortcut or blanket skip is introduced.
+  Source movement invalidates applicability to later bytes. Release/install still
+  require the exact accepted clean package and applicable native/update/recovery/
+  live journeys. Failed or outcome-unknown evidence remains failed or unknown.
 - Build candidates only with `task package` from clean committed bytes. Compiler,
   dependency, source, resource, and package attestation must remain fail closed.
 - Native tests use disposable state, inactive or hidden windows, and exact owned
