@@ -68,7 +68,7 @@ func (a *settingsApproval) WithCurrent(ctx context.Context, inspect func(*author
 	})
 }
 
-func (s *ComputerIngress) settingsContract(ctx context.Context, requested wire.ComputerAuthorityPublication) (*settingsct.Contract, error) {
+func (s *ComputerIngress) settingsAuthority(ctx context.Context, requested wire.ComputerAuthorityPublication) (*settingsApproval, error) {
 	if ctx == nil || ctx.Err() != nil || s.native == nil {
 		return nil, computerUnavailable()
 	}
@@ -87,7 +87,14 @@ func (s *ComputerIngress) settingsContract(ctx context.Context, requested wire.C
 	if !valid {
 		return nil, computerUnavailable()
 	}
-	current := &settingsApproval{root: s, store: store, publication: publication}
+	return &settingsApproval{root: s, store: store, publication: publication}, nil
+}
+
+func (s *ComputerIngress) settingsContract(ctx context.Context, requested wire.ComputerAuthorityPublication) (*settingsct.Contract, error) {
+	current, err := s.settingsAuthority(ctx, requested)
+	if err != nil {
+		return nil, err
+	}
 	var clock computerport.Clock = s.clock
 	if clock == nil {
 		clock = accessrepo.Clock{}

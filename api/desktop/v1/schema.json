@@ -56,7 +56,9 @@
     "computer.settings.list": "read",
     "chat.readintent.account.approve": "effect",
     "chat.readintent.account.revoke": "effect",
-    "computer.settings.snapshot": "read"
+    "computer.settings.snapshot": "read",
+    "computer.settings.edit": "effect",
+    "computer.settings.mutation.read": "read"
   },
   "definitions": {
     "Context": {
@@ -3313,6 +3315,78 @@
         "sha256": {
           "type": "string",
           "pattern": "^[a-f0-9]{64}$"
+        }
+      }
+    },
+    "ComputerSettingsEditRequest": {
+      "type": "object",
+      "fields": {
+        "publication": {
+          "type": "ComputerAuthorityPublication"
+        },
+        "workspaceId": {
+          "type": "id"
+        },
+        "relativePath": {
+          "type": "string",
+          "minBytes": 1,
+          "maxBytes": 4096
+        },
+        "expectedSHA256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "edits": {
+          "type": "ComputerTextEdit[]"
+        }
+      }
+    },
+    "ComputerSettingsMutationRead": {
+      "type": "object",
+      "fields": {
+        "operationId": {
+          "type": "id"
+        },
+        "workspaceId": {
+          "type": "id"
+        },
+        "relativePath": {
+          "type": "string",
+          "minBytes": 1,
+          "maxBytes": 4096
+        },
+        "computerGeneration": {
+          "type": "decimal"
+        }
+      }
+    },
+    "ComputerSettingsMutationResponse": {
+      "type": "object",
+      "fields": {
+        "operationId": {
+          "type": "id"
+        },
+        "workspaceId": {
+          "type": "id"
+        },
+        "computerGeneration": {
+          "type": "decimal"
+        },
+        "phase": {
+          "type": "string",
+          "values": ["completed", "failed", "outcome_unknown"]
+        },
+        "publication": {
+          "type": "string",
+          "values": ["durable", "memory_only"]
+        },
+        "receipt": {
+          "type": "ComputerMutationReceipt",
+          "optional": true
+        },
+        "failure": {
+          "type": "ComputerMutationFailure",
+          "optional": true
         }
       }
     }
