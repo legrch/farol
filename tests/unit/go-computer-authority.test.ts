@@ -87,6 +87,41 @@ const intent = {
 };
 
 describe("Go Computer host authority mapping", () => {
+  it("keeps fresh settings inactive without publishing an empty grant, then accepts setup", async () => {
+    const f = await fixture();
+    const publication = await f.bridge.withdraw();
+    const snapshot = f.service.snapshot();
+    if (snapshot.status !== "ready") throw new Error("fixture");
+    await publication.publish(snapshot.settings);
+    await expect(f.bridge.admitRead(intent)).rejects.toMatchObject({
+      code: "computer_publication_unavailable",
+    });
+    expect(f.request.mock.calls.map((call) => call[0])).toEqual([
+      "computer.authority.deactivate",
+    ]);
+    expect((await f.add()).ok).toBe(true);
+    expect((await f.bridge.admitRead(intent)).participantId).toBe(
+      "minted-by-go",
+    );
+  });
+
+  it("withdraws the last workspace without retaining the previous admission receipt", async () => {
+    const f = await fixture();
+    const added = await f.add();
+    if (!added.ok || added.snapshot.status !== "ready")
+      throw new Error("fixture");
+    const workspaceId =
+      added.snapshot.settings.computer.workspaces[0]!.workspaceId;
+    f.request.mockClear();
+    expect((await f.service.removeWorkspace(workspaceId)).ok).toBe(true);
+    expect(f.request.mock.calls.map((call) => call[0])).toEqual([
+      "computer.authority.deactivate",
+    ]);
+    await expect(f.bridge.admitRead(intent)).rejects.toMatchObject({
+      code: "computer_publication_unavailable",
+    });
+  });
+
   it("maps real settings commit to known publication then the actual admission response", async () => {
     const f = await fixture();
     expect((await f.add()).ok).toBe(true);
@@ -150,15 +185,22 @@ describe("Go Computer host authority mapping", () => {
     });
     expect(f.request).toHaveBeenCalledTimes(2);
   });
-  it("does not consume a second settings publication through the same closure", async () => {
-    const f = await fixture();
-    const publication = await f.bridge.withdraw();
-    const snapshot = f.service.snapshot();
-    if (snapshot.status !== "ready") throw new Error("fixture");
-    await publication.publish(snapshot.settings);
-    await expect(publication.publish(snapshot.settings)).rejects.toMatchObject({
-      code: "computer_publication_consumed",
-    });
-    expect(f.request).toHaveBeenCalledTimes(2);
-  });
+  it.each([false, true])(
+    "consumes each publication closure once with workspace configured=%s",
+    async (configured) => {
+      const f = await fixture();
+      if (configured) expect((await f.add()).ok).toBe(true);
+      f.request.mockClear();
+      const publication = await f.bridge.withdraw();
+      const snapshot = f.service.snapshot();
+      if (snapshot.status !== "ready") throw new Error("fixture");
+      await publication.publish(snapshot.settings);
+      await expect(
+        publication.publish(snapshot.settings),
+      ).rejects.toMatchObject({
+        code: "computer_publication_consumed",
+      });
+      expect(f.request).toHaveBeenCalledTimes(configured ? 2 : 1);
+    },
+  );
 });

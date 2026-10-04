@@ -51,6 +51,13 @@ export class GoComputerAuthority {
         try {
           const now = this.now();
           const approval = ownerSettingsComputerApproval(settings, now);
+          // Fresh setup (or removing the last bound workspace) has no grant to
+          // publish. The acknowledged withdrawal above keeps Go inactive; do
+          // not submit an invalid empty approval or retain an admission receipt.
+          if (approval.workspaces.length === 0) {
+            this.pending = false;
+            return;
+          }
           const taskCodex = codexTaskCurrentSource(settings, now);
           const request = {
             fence: receipt.fence,
