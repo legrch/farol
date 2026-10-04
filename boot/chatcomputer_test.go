@@ -50,6 +50,7 @@ type chatComputerClock struct{}
 func (chatComputerClock) NowMillis() uint64 { return 1 }
 
 type chatComputerPhysical struct {
+	account       browser.AccountObservation
 	sends         int
 	observes      int
 	prepares      int
@@ -81,7 +82,7 @@ func (p *chatComputerPhysical) Exchange(_ context.Context, c browser.Command) (b
 		if r.Requested.ToolsEnabled {
 			connector = fact(r.Requested.ConnectorID)
 		}
-		return browser.VerifiedReply{Verification: browser.Verification{Binding: r.Binding, Pinned: r.Requested, Required: r.Required, Observed: browser.SelectionFacts{Model: fact(r.Requested.ModelID), Effort: fact(r.Requested.Effort), Mode: fact(r.Requested.Mode), Connector: connector, ObservedAtMillis: 1}, IntentDigest: r.IntentDigest, EvidenceID: "proof-" + r.Binding.Lease.Identity.OperationID, PreviousUserTurnID: r.PreviousUserTurnID, PreviousReplyID: r.PreviousReplyID}}, nil
+		return browser.VerifiedReply{Verification: browser.Verification{Account: p.account, Binding: r.Binding, Pinned: r.Requested, Required: r.Required, Observed: browser.SelectionFacts{Model: fact(r.Requested.ModelID), Effort: fact(r.Requested.Effort), Mode: fact(r.Requested.Mode), Connector: connector, ObservedAtMillis: 1}, IntentDigest: r.IntentDigest, EvidenceID: "proof-" + r.Binding.Lease.Identity.OperationID, PreviousUserTurnID: r.PreviousUserTurnID, PreviousReplyID: r.PreviousReplyID}}, nil
 	case browser.SendCommand:
 		p.sends++
 		return browser.SentReply{Binding: r.Binding, VerificationID: r.Verification.EvidenceID, Status: "submitted"}, nil

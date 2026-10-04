@@ -25,17 +25,11 @@ func (c *sendCurrent) WithCurrent(ctx context.Context, inspect func(port.TurnBin
 	s := c.owner
 	s.deps.Gate.Lock()
 	defer s.deps.Gate.Unlock()
-	if !c.active {
-		return Unavailable
-	}
 	c.authorized = nil
-	if err := s.current(ctx, c.mutation); err != nil {
+	if err := c.check(ctx); err != nil {
 		return err
 	}
 	m := c.mutation
-	if s.revision != c.revision || m.entry.Kind != "dispatch" || m.entry.Effect != "send" || m.handle.closed || m.handle.verification != c.request.Verification || browserBinding(m.entry.After.Binding) != c.request.Binding || m.handle.digest != c.request.IntentDigest {
-		return Mismatch
-	}
 	if err := inspect(m.handle.fixed); err != nil {
 		return err
 	}
@@ -43,10 +37,39 @@ func (c *sendCurrent) WithCurrent(ctx context.Context, inspect func(port.TurnBin
 		return err
 	}
 	// Select the exact outgoing immutable bytes under both Computer and Chat
-	// guards. No journal or browser round trip follows this authorization.
+	// guards. No further journal commit or verification round trip precedes
+	// dispatch; the physical adapter still rechecks its own one-effect witness.
 	copy := c.request
 	c.authorized = &copy
 	return nil
+}
+
+// check requires the owner's Gate. Both read-only evidence and final selection
+// refer to the same original immutable dispatch; a snapshot never mints authority.
+func (c *sendCurrent) check(ctx context.Context) error {
+	if !c.active {
+		return Unavailable
+	}
+	s, m := c.owner, c.mutation
+	if err := s.current(ctx, m); err != nil {
+		return err
+	}
+	if s.revision != c.revision || m.entry.Kind != "dispatch" || m.entry.Effect != "send" || m.handle.closed || m.handle.verification != c.request.Verification || browserBinding(m.entry.After.Binding) != c.request.Binding || m.handle.digest != c.request.IntentDigest {
+		return Mismatch
+	}
+	return nil
+}
+func (c *sendCurrent) AccountSnapshot(ctx context.Context) (port.AccountObservation, error) {
+	if c == nil || c.owner == nil || ctx == nil {
+		return port.AccountObservation{}, Invalid
+	}
+	c.owner.deps.Gate.Lock()
+	defer c.owner.deps.Gate.Unlock()
+	if err := c.check(ctx); err != nil {
+		c.authorized = nil
+		return port.AccountObservation{}, err
+	}
+	return c.request.Verification.Account, nil
 }
 
 func (s *Service) authorizeSend(ctx context.Context, m *mutation, request port.SendRequest) (*port.SendRequest, error) {

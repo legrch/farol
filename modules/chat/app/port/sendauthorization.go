@@ -7,6 +7,9 @@ import "context"
 // positive admission while an effect is pending. It expires before Send returns.
 // Computer qualifies its access first, then enters this synchronous no-IO guard.
 type SendCurrent interface {
+	// AccountSnapshot reads only this dispatch's immutable witness, under the
+	// Chat gate. It neither refreshes the provider nor authorizes disclosure.
+	AccountSnapshot(context.Context) (AccountObservation, error)
 	WithCurrent(context.Context, func(TurnBinding) error) error
 }
 

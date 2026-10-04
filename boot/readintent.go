@@ -27,6 +27,7 @@ type capturedReadIntent struct {
 	access       computerport.AccessRepository
 	seal         execution.Ceiling
 	activation   *activationFence
+	account      *capturedChatAccount
 }
 
 // Caller holds effects across lookup and mutation. Publication, read admission,
@@ -127,7 +128,14 @@ func (c *capturedReadIntent) Authorize(ctx context.Context, current *conversatio
 	if err != nil {
 		return err
 	}
-	guarded := &activatedAdmission{guard: c.activation, fence: c.fence, current: peer}
+	var admitted computerport.CurrentTaskAdmission = peer
+	if c.account != nil {
+		admitted, err = c.account.forSend(ctx, current, c.binding, peer)
+		if err != nil {
+			return err
+		}
+	}
+	guarded := &activatedAdmission{guard: c.activation, fence: c.fence, current: admitted}
 	issuer, err := execution.New(c.access, guarded, c.route.clock, c.seal)
 	if err != nil {
 		return err
@@ -137,7 +145,11 @@ func (c *capturedReadIntent) Authorize(ctx context.Context, current *conversatio
 		return err
 	}
 	b := c.binding
-	if lease.Binding() != operationBinding(b.OwnerID, b.SessionID, b.TaskID, b.TaskEpoch, b.ParticipantID, b.TurnID) {
+	// The exact Chat capability supplies the current turn. Follow keeps the same
+	// admitted task/participant ceiling but has a new turn and operation identity.
+	// Never reconstruct a current turn from the original preview receipt.
+	live := lease.Binding()
+	if live.TurnID == "" || live != operationBinding(b.OwnerID, b.SessionID, b.TaskID, b.TaskEpoch, b.ParticipantID, live.TurnID) {
 		return errors.New("read_intent_authority_crossed")
 	}
 	return lease.WithSnapshot(ctx, b.ParticipantID, func(snapshot computerport.AccessSnapshot) error {

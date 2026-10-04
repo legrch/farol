@@ -95,6 +95,9 @@ func (s *Service) createConversation(ctx context.Context, input port.Conversatio
 		c.root = c
 	} else {
 		c.root = previous.root
+		// Follow retains the original disclosure guard; a new turn cannot silently
+		// shed Computer/account authority captured when this conversation began.
+		c.sendAuthorization = previous.sendAuthorization
 	}
 	h, err := s.admit(ctx, input.Binding, digest, c)
 	if err != nil {

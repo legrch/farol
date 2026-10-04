@@ -12,7 +12,8 @@ import (
 // activationFence is exclusively negative authority. Deactivate immediately
 // withdraws every prior route before any Settings or native publication IO.
 // Only trusted composition can activate the exact fence after known admission.
-// Computer's lock order is AccessRepository -> this fence -> real Chat owner.
+// Computer's lock order is AccessRepository -> this fence -> optional account
+// approval -> real Chat owner. The account guard is final-Send-only.
 // Neither callback performs IO, mutation, reentry or Computer reacquisition.
 type activationFence struct {
 	mu        sync.Mutex

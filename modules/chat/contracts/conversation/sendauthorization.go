@@ -27,6 +27,24 @@ func (c *SendCurrent) WithCurrent(ctx context.Context, inspect func(*Binding) er
 	return failure(err)
 }
 
+// AccountSnapshot is a detached fact projection, never a grant or an approval.
+// Zero denotes an unqualified witness. The underlying current expires at dispatch.
+type AccountSnapshot struct {
+	State, Source, PrincipalKey       string
+	ObservedAtMillis, ExpiresAtMillis uint64
+}
+
+func (c *SendCurrent) AccountSnapshot(ctx context.Context) (*AccountSnapshot, error) {
+	if c == nil || c.current == nil {
+		return nil, failure(lifecycle.Invalid)
+	}
+	v, err := c.current.AccountSnapshot(ctx)
+	if err != nil {
+		return nil, failure(err)
+	}
+	return &AccountSnapshot{State: v.State, Source: v.Source, PrincipalKey: v.PrincipalKey, ObservedAtMillis: v.ObservedAtMillis, ExpiresAtMillis: v.ExpiresAtMillis}, nil
+}
+
 type SendAuthorization interface {
 	Authorize(context.Context, *SendCurrent) error
 }

@@ -196,6 +196,7 @@ func (s *Service) admit(ctx context.Context, binding port.TurnBinding, digest st
 	h := &Handle{owner: s, fixed: binding, digest: digest}
 	if conversation != nil {
 		h.conversation, h.target, h.prompt = conversation, conversation.target, conversation.input.Prompt
+		h.sendAuthorization = conversation.sendAuthorization
 		conversation.input.Prompt = ""
 		conversation.handle = h
 		h.output = output.New(OutputBytesLimit, conversation.target.PreviousUserTurnID, conversation.target.PreviousReplyID)

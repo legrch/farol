@@ -196,8 +196,9 @@ func (g *Grant) current(scope port.AccountScope, approvalID string) error {
 // WithCurrent checks the exact private Grant under the same owner's Gate. Caller
 // supplies an independently pinned scope and selected ID, and fresh independently
 // observed principal. inspect receives a value, runs synchronously without IO,
-// and MUST NOT reenter this owner or acquire another owner gate. It can surround
-// the final Chat authorization guard, but cannot attest subsequent provider work.
+// and MUST NOT reenter this owner. Trusted composition may enter the exact
+// Chat send guard in its declared Computer -> activation -> account -> Chat order;
+// it must not reacquire an earlier gate. This cannot attest later provider work.
 // Callback errors are classified, never disclose callback/input content, and
 // imply no success. Recheck cancellation/current/time even after callback failure.
 func (g *Grant) WithCurrent(ctx context.Context, scope port.AccountScope, approvalID string, observation port.AccountObservation, inspect func(port.AccountApproval) error) error {
