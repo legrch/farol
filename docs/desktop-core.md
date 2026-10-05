@@ -220,8 +220,10 @@ consumed. A proven local transport refusal before dispatch preserves verificatio
 a missing record after an uncertain response or new host lifetime is insufficient
 to infer non-admission. There is no error fallback from Go to TS execution.
 
-**Pending delivery and ACK policy still belong to the temporary TS configuration
-service.** Historical pending records still need their reader. This witness does not qualify Go ACK,
+In that historical package, pending delivery and ACK policy still belonged to the
+temporary TS configuration service. The newer [Go delivery witness](#go-owned-settings-delivery)
+qualifies that policy cutover. Historical pending records still need their reader.
+The historical witness does not qualify Go ACK,
 legacy-profile migration, cross-build update, all conflict/revocation/failure paths,
 create/write/shell/Git journeys, native focus or hermetic network containment.
 Normal Chat Send still requires qualified model/control composition.
@@ -268,8 +270,73 @@ Frozen `1279490` passed `task ci:fast` (7,508 main tests, 253 renderer tests,
 164 protocol/architecture checks and Go race/vet/static gates). The focused
 retirement checks and narrow independent source review also passed. C12's
 Settings execution-alternative removal is closed at this package boundary;
-Go-owned delivery policy, the shared Computer routes and the complete cutover
-review remain open.
+Go-owned delivery was qualified later as described below. The shared Computer
+routes and complete cutover review remain open.
+
+### Go-owned Settings delivery
+
+Packaged source `bef6d56dba4dab91743a9a00a450b91bca451094` passed the normal
+React edit, unacknowledged Quit, same-profile reopen, retained Observe and
+**Go-owned ACK** journey on 5 October 2026:
+
+- Build: `05a909b31771607ad6ff1fd574b0ed6ae0993354b68dd4739b991a5fe473d5d3`.
+- Artifact SHA-256: `6a75463930b99d5260a3c376dfb70766015b47a2a547c4f298f38869104d9b97`.
+- Report: `_output/evidence/go-core-startup-cfc89a8d-284a-4697-a882-0f4ec1015969.json`.
+
+The package remains unsigned `local.farol.next.preview`, version
+`0.1.10-owner.beta.1`, build `12`. Package verification before and after the run
+bound the unchanged artifact, complete source tree and sealed Go executable.
+The harness and package use the same exact commit. No installation, update,
+release, live-provider or native-focus qualification is claimed.
+
+Actual React Prepare/Old text/New text/Apply controls caused one replacement
+from 92 to 94 bytes and one owner-v2 journal record. The original operation,
+profile, workspace, generation, before hash and microsecond timestamp survived
+ordinary Quit and reopen. Go retained the result and offered a new live receipt
+for that original pending tuple. Actual React **Record result delivery** called
+Go ACK, cleared pending delivery and advanced the configuration revision once.
+Independent file and journal reads found no second edit after duplicate refusal,
+observation, ACK or either Quit. No synthetic Task, participant, Chat turn or TS
+mutation record appeared. Both original children exited with code 0, no signal,
+confirmed drain and removed run markers. All owned windows stayed hidden and
+unfocused. The independent site ledger counted zero attempted and accepted
+provider Sends. Successful disposable roots were removed after known cleanup.
+
+Go now owns pending admission, the one-use execution permit, result offers and
+exact receipt acknowledgement. The host pumps typed read/conditional-replace
+commands through the same configuration writer; it does not own delivery policy
+or another mutation engine. The writer preserves unrelated fields and enforces
+the original deadline immediately before publication. Lost, late or crossed
+storage outcomes permanently fence that lifetime. An acknowledged uncertainty
+warning can clear the UI obligation but cannot settle execution or retirement
+uncertainty. Normal retirement freezes delivery, reconciles original pending
+work, then quiesces the storage pump before the existing handoff.
+
+Existing profile/1 is not migrated and cannot enable the new writer. Historical
+TS pending records retain their existing-only observer and ACK path. The obsolete
+TS pending writer and raw mutation bridge are inactive in normal Go composition;
+source removal remains a separate cleanup step. Configuration mechanics, root
+measurement, Git discovery and the shared Computer MCP TS/Python route remain
+transitional. Cross-build recovery, the complete packaged failure matrix and
+measured network containment remain unqualified.
+
+Frozen production source `8644de8` passed `task ci:fast`: 7,770 main tests
+(4 skipped, 2 todo), 253 React tests, 164 protocol/architecture tests and root/
+nested Go race, vet and static gates. Four real host/Go-process/config/native-file
+integration tests include retained unACKed Quit/rejoin and Go ACK. Independent
+source review of `a2ac864..8644de8` found no actionable P1/P2. The only subsequent
+change in `bef6d56` corrects the harness's millisecond-only timestamp assumption;
+956 browser-free checks and narrow independent recheck passed. The old witness
+fails the nanosecond regression. These results do not replace formal review of
+the complete outstanding cutover range.
+
+| Obligation                                       | Executable evidence                                                                                                                                                                                                                                                                     | Layer and source                                                                                                               | Remaining boundary                                                              |
+| ------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------- |
+| One pending admission and one original effect    | `TestConcurrentBeginOnePending`, `TestOriginalEditAndSingleConsumedAttempt`, `TestRestoredPendingObserverOnlyAndOriginalGeneration` in `modules/computer/app/services/settingsdelivery/service_test.go`; `TestSettingsDeliveryRootApplyThenExactACK` in `boot/settingsdelivery_test.go` | Pure/injected ports and framed root at `8644de8`; exact packaged happy path at `bef6d56`                                       | Full packaged conflict/revocation/cancellation matrix                           |
+| Exact result offer/ACK and permanent uncertainty | `TestOfferAndACKExactReceipt`, `TestACKNeverClearsNewOrForeignPending`, `TestLostACKPermanentlyFencesDespiteLaterReadback`, `TestOutcomeRetentionAndUIACKCannotSettleEffectFence`                                                                                                       | Pure Go app at `8644de8`; real-process rejoin in `tests/integration/go-core-startup.test.ts`; packaged normal ACK at `bef6d56` | Cross-build migration and storage/power-failure qualification                   |
+| Typed mechanical adapter, C08 partial            | `tests/unit/settings-store-pump.test.ts`, `tests/unit/settings-delivery-bridge.test.ts`, `tests/integration/settings-delivery-store.test.ts`                                                                                                                                            | Mocks plus real disposable config/native process; synchronous deadline and crossed-ACK sensitivity failures restored           | Browser worker allocation and provider Send policy are separate C08 obligations |
+| Independent evidence, C07 partial                | `mutationEffectWitness`, `mutationUiAckWitness`, `mutationTerminalWitness` and their self-tests in `tests/e2e/lib/settings-mutation-witness.mjs`                                                                                                                                        | Independent file/journal/config reads and exact `bef6d56` package, not an independent Go RPC counter                           | Streaming oracle, DOM corpus and provider generation remain separate            |
+| One normal Settings owner, C12 partial           | `TestSettingsDeliveryRootRestoredMissingRecordNeverExecutes`, bridge no-repeat tests and source-bound `--settings-edit-mutation`                                                                                                                                                        | Normal Go pending/offer/ACK route plus negative source tests                                                                   | Remove inactive replaced TS source; qualify remaining shared Computer routes    |
 
 ## Owner Settings edit snapshot through Go
 
