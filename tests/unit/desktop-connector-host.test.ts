@@ -133,3 +133,41 @@ it("keeps lost open or close replies blocked and never repeats effects", async (
     expect(request).toHaveBeenCalledTimes(calls);
   }
 });
+
+it.each(["missing", "wrong-path", "known"])(
+  "requires the original Go launch file receipt: %s",
+  async (mode) => {
+    const { host, request } = fixture(),
+      original = request.getMockImplementation()!;
+    request.mockImplementation(async (...args) => {
+      const response = await original(...args);
+      return {
+        ...response,
+        data: {
+          ...(response.data as object),
+          ...(mode === "missing"
+            ? {}
+            : {
+                launchFile:
+                  mode === "known"
+                    ? "/private/tmp/computer-go-launch.json"
+                    : "/private/tmp/other/computer-go-launch.json",
+                launchSha256: "d".repeat(64),
+              }),
+        },
+      };
+    });
+    const attempt = host.open({
+      ...input,
+      challengeSha256: "a".repeat(64),
+      lifecycleRoot: "/private/tmp/lifecycle",
+    });
+    if (mode === "known")
+      expect((await attempt).launchSha256).toBe("d".repeat(64));
+    else {
+      await expect(attempt).rejects.toMatchObject({ state: "unknown" });
+      await expect(host.close()).rejects.toMatchObject({ state: "unknown" });
+    }
+    expect(request).toHaveBeenCalledTimes(1);
+  },
+);

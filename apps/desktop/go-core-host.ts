@@ -233,7 +233,12 @@ export class DesktopGoCore {
       relativePath,
     );
   }
-  openComputerConnector(runtimeId: string, launchDigest: string) {
+  openComputerConnector(
+    runtimeId: string,
+    launchDigest: string,
+    challengeSha256: string,
+    lifecycleRoot: string,
+  ) {
     if (this.closeResult || !this.connector)
       throw new BridgeError("unavailable", "host_connector_unavailable");
     const settings = this.settings();
@@ -244,10 +249,17 @@ export class DesktopGoCore {
       runtimeId,
       connectorGeneration: String(settings.connectors.secureMcp.generation),
       launchDigest,
+      challengeSha256,
+      lifecycleRoot,
     });
   }
   closeComputerConnector(): Promise<void> {
     return this.connector?.close() ?? Promise.resolve();
+  }
+  observeComputerConnectorVerification() {
+    if (this.closeResult || !this.connector)
+      throw new BridgeError("unavailable", "host_connector_unavailable");
+    return this.connector.verification();
   }
   snapshotSettingsWorkspace(
     computerGeneration: number,

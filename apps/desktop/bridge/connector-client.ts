@@ -51,6 +51,7 @@ const workspaceMethods = new Set([
   "computer.workspace.list",
   "computer.workspace.catalogue",
   "computer.workspace.bootstrap",
+  "computer.connector.verify",
 ]);
 const validTimeout = (value: number): boolean =>
   Number.isFinite(value) && value > 0 && value <= 30000;

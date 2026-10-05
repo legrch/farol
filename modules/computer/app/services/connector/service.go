@@ -22,13 +22,15 @@ const (
 )
 
 type Service struct {
-	gate    port.ConnectorGate
-	journal port.ConnectorJournal
-	guard   port.CurrentConnectorGuard
-	launch  port.ConnectorLaunch
-	ceiling port.ConnectorExecutionCeiling
-	binding port.TaskBinding
-	phase   phase
+	gate         port.ConnectorGate
+	journal      port.ConnectorJournal
+	guard        port.CurrentConnectorGuard
+	launch       port.ConnectorLaunch
+	ceiling      port.ConnectorExecutionCeiling
+	binding      port.TaskBinding
+	phase        phase
+	clock        port.Clock
+	verification *verificationAttempt
 }
 
 var _ port.CurrentExecutionAdmission = (*Service)(nil)
@@ -51,7 +53,7 @@ func New(gate port.ConnectorGate, journal port.ConnectorJournal, guard port.Curr
 	if err != nil {
 		return nil, err
 	}
-	s := &Service{gate: gate, journal: journal, guard: guard, launch: launch,
+	s := &Service{gate: gate, journal: journal, guard: guard, launch: launch, clock: clock,
 		ceiling: port.ConnectorExecutionCeiling{Participant: p.Clone(), Approval: launch.Approval.Clone()},
 		binding: port.TaskBinding{Identity: i.Identity, ParticipantID: p.ParticipantID, TurnID: launch.TurnCorrelation}}
 	return s, nil

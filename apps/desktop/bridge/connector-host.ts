@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
+import path from "node:path";
 import { BridgeError, type Client } from "./client.ts";
+import { ConnectorVerificationBridge } from "./connector-verification.ts";
 import {
   validate,
   type Context,
@@ -15,6 +17,7 @@ export class ConnectorHostBridge {
   private current: ComputerConnectorOpened | undefined;
   private pending = false;
   private blocked = false;
+  private proof: ConnectorVerificationBridge | undefined;
   constructor(
     private readonly client: Pick<Client, "request">,
     private readonly context: Context,
@@ -62,6 +65,16 @@ export class ConnectorHostBridge {
         b.connectorGeneration !== body.connectorGeneration
       )
         throw new BridgeError("unknown", "connector_open_crossed");
+      if (
+        body.lifecycleRoot !== undefined &&
+        (value.launchFile !==
+          path.join(
+            path.dirname(value.endpoint.socketPath),
+            "computer-go-launch.json",
+          ) ||
+          value.launchSha256 === undefined)
+      )
+        throw new BridgeError("unknown", "connector_launch_unconfirmed");
       this.current = Object.freeze({
         ...value,
         execution: Object.freeze({ ...value.execution }),
@@ -70,6 +83,14 @@ export class ConnectorHostBridge {
           binding: Object.freeze({ ...b }),
         }),
       });
+      this.proof =
+        body.challengeSha256 === undefined
+          ? undefined
+          : new ConnectorVerificationBridge(
+              this.client,
+              this.current,
+              body.challengeSha256,
+            );
       return this.current;
     } catch (error) {
       this.blocked = true;
@@ -77,6 +98,21 @@ export class ConnectorHostBridge {
     } finally {
       this.pending = false;
     }
+  }
+  async verification() {
+    const current = this.current;
+    if (!current || !this.proof || this.pending || this.blocked)
+      throw new BridgeError(
+        "unavailable",
+        "connector_verification_unavailable",
+      );
+    const result = await this.proof.observe();
+    if (this.current !== current || this.pending || this.blocked)
+      throw new BridgeError(
+        "unavailable",
+        "connector_verification_unavailable",
+      );
+    return result;
   }
   async close(): Promise<void> {
     if (this.blocked || this.pending)
@@ -111,6 +147,7 @@ export class ConnectorHostBridge {
       )
         throw new BridgeError("unknown", "connector_close_crossed");
       this.current = undefined;
+      this.proof = undefined;
     } catch (error) {
       this.blocked = true;
       throw error;

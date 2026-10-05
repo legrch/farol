@@ -72,7 +72,9 @@
     "chat.conversation.account.revoke": "effect",
     "computer.workspace.list": "read",
     "computer.connector.open": "effect",
-    "computer.connector.close": "effect"
+    "computer.connector.close": "effect",
+    "computer.connector.verify": "read",
+    "computer.connector.verification": "read"
   },
   "definitions": {
     "Context": {
@@ -4200,6 +4202,15 @@
         "launchDigest": {
           "type": "string",
           "pattern": "^[a-f0-9]{64}$"
+        },
+        "challengeSha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$",
+          "optional": true
+        },
+        "lifecycleRoot": {
+          "type": "string",
+          "optional": true
         }
       }
     },
@@ -4240,6 +4251,15 @@
         },
         "admissionOperationId": {
           "type": "id"
+        },
+        "launchFile": {
+          "type": "text",
+          "optional": true
+        },
+        "launchSha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$",
+          "optional": true
         }
       }
     },
@@ -4259,6 +4279,74 @@
         },
         "closed": {
           "type": "boolean"
+        }
+      }
+    },
+    "ComputerConnectorVerify": {
+      "type": "object",
+      "fields": {
+        "challenge": {
+          "type": "string",
+          "pattern": "^[!-~]{1,160}$"
+        },
+        "workspaceId": {
+          "type": "id"
+        },
+        "callId": {
+          "type": "id"
+        }
+      }
+    },
+    "ComputerConnectorVerificationQuery": {
+      "type": "object",
+      "fields": {
+        "binding": {
+          "type": "ComputerConnectorBinding"
+        }
+      }
+    },
+    "ComputerConnectorVerificationReceipt": {
+      "type": "object",
+      "fields": {
+        "binding": {
+          "type": "ComputerConnectorBinding"
+        },
+        "execution": {
+          "type": "ComputerConnectorExecution"
+        },
+        "challengeSha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "workspaceId": {
+          "type": "id"
+        },
+        "callIdSha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "entryCount": {
+          "type": "uint32"
+        },
+        "truncated": {
+          "type": "boolean"
+        }
+      }
+    },
+    "ComputerConnectorVerificationState": {
+      "type": "object",
+      "fields": {
+        "binding": {
+          "type": "ComputerConnectorBinding"
+        },
+        "receipt": {
+          "type": "ComputerConnectorVerificationReceipt",
+          "optional": true
+        },
+        "receiptSha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$",
+          "optional": true
         }
       }
     }

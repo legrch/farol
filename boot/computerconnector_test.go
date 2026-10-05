@@ -2,8 +2,11 @@ package boot
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -39,11 +42,59 @@ func (j *connectorJournalFixture) WithdrawConnector(_ context.Context, id string
 }
 
 type connectorEndpointFixture struct {
-	value   wire.ComputerConnectorEndpoint
-	closes  int
-	fail    bool
-	closing chan struct{}
-	release chan struct{}
+	value      wire.ComputerConnectorEndpoint
+	closes     int
+	fail       bool
+	closing    chan struct{}
+	release    chan struct{}
+	published  []byte
+	publishErr error
+}
+
+func (e *connectorEndpointFixture) PublishLaunch(_ context.Context, data []byte) (string, string, error) {
+	e.published = append([]byte(nil), data...)
+	digest := sha256.Sum256(data)
+	return filepath.Join(filepath.Dir(e.value.SocketPath), "computer-go-launch.json"), hex.EncodeToString(digest[:]), e.publishErr
+}
+
+func TestComputerConnectorPublishesExactLaunchBeforeHostReply(t *testing.T) {
+	for _, lost := range []bool{false, true} {
+		s, _, _, endpoint, input := newConnectorFixture(t)
+		challenge, root := strings.Repeat("c", 64), "/private/tmp/lifecycle"
+		input.ChallengeSha256, input.LifecycleRoot = &challenge, &root
+		if lost {
+			endpoint.publishErr = errors.New("publication acknowledgement lost")
+		}
+		out, err := s.Open(context.Background(), "open", input)
+		if len(endpoint.published) == 0 {
+			t.Fatal("no original launch publication")
+		}
+		if lost {
+			if err == nil || out != nil {
+				t.Fatal("unknown launch publication exposed")
+			}
+			if s.Shutdown() == nil {
+				t.Fatal("shutdown upgraded unknown startup")
+			}
+			continue
+		}
+		if err != nil || out == nil || out.LaunchFile == nil || out.LaunchSha256 == nil {
+			t.Fatal("missing exact launch receipt", err)
+		}
+		hash := sha256.Sum256(endpoint.published)
+		if *out.LaunchSha256 != hex.EncodeToString(hash[:]) {
+			t.Fatal("crossed launch hash")
+		}
+		var contract struct {
+			Schema        string                       `json:"schema"`
+			Opened        wire.ComputerConnectorOpened `json:"opened"`
+			LifecycleRoot string                       `json:"lifecycleRoot"`
+			Challenge     string                       `json:"challengeSha256"`
+		}
+		if json.Unmarshal(endpoint.published, &contract) != nil || contract.Schema != "farol-go-connector/1" || contract.LifecycleRoot != root || contract.Challenge != challenge || contract.Opened.Endpoint != out.Endpoint || contract.Opened.Execution != out.Execution || contract.Opened.LaunchFile != nil {
+			t.Fatal("crossed private launch envelope")
+		}
+	}
 }
 
 func (e *connectorEndpointFixture) Endpoint() wire.ComputerConnectorEndpoint { return e.value }

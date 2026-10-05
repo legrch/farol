@@ -7,6 +7,8 @@ import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import process from "node:process";
+import { connectorLaunchBasename } from "../../../apps/desktop/bridge/connector-launch";
+import { runGoComputerMcp } from "./go-main";
 
 import { RunMutableComputerAction } from "../../modules/computer/app/service/run-mutable-computer-action";
 import { RunReadonlyComputerAction } from "../../modules/computer/app/service/run-readonly-computer-action";
@@ -63,6 +65,12 @@ async function main(): Promise<void> {
   const entryFile = process.argv[1];
   if (entryFile === undefined || !path.isAbsolute(entryFile)) {
     throw new Error("COMPUTER_MCP_ENTRY_INVALID");
+  }
+  if (path.basename(launchFile) === connectorLaunchBasename) {
+    // Selection is explicit and terminal. An unavailable Go owner never falls
+    // through to a legacy authority, helper, shell or provider route.
+    await runGoComputerMcp(launchFile);
+    return;
   }
   const workspace = new NativeReadonlyWorkspace({
     helperPath: path.join(path.dirname(entryFile), "computer-safe-open.py"),

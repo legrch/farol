@@ -3,10 +3,13 @@
 package desktop
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -30,11 +33,94 @@ type ConnectorListener struct {
 	mu                   sync.Mutex
 	connections          map[*net.UnixConn]bool
 	closing              bool
+	launchAttempted      bool
+	beforeLaunchOpen     func() // Test-only substitution seam, before descriptor-relative create.
+	beforeLaunchReadback func() // Test-only mutation seam, after the complete write and sync.
 	acceptDone           chan struct{}
 	workers              sync.WaitGroup
 	closeOnce            sync.Once
 	closeDone            chan struct{}
 	closeErr             error
+}
+
+// PublishLaunch writes once relative to the captured private root descriptor.
+// Pathname substitution can refuse publication but cannot redirect secret bytes.
+// The file and any partial attempt remain evidence; this method never retries,
+// chmods, renames or unlinks. Close waits for this original publisher as a worker.
+func (s *ConnectorListener) PublishLaunch(ctx context.Context, data []byte) (publishedPath string, publishedDigest string, result error) {
+	if ctx == nil || ctx.Err() != nil || len(data) == 0 || len(data) > 16384 {
+		return "", "", ErrConnectorUnavailable
+	}
+	s.mu.Lock()
+	if s.closing || s.launchAttempted {
+		s.mu.Unlock()
+		return "", "", ErrConnectorUnavailable
+	}
+	s.launchAttempted = true
+	s.workers.Add(1)
+	s.mu.Unlock()
+	defer s.workers.Done()
+	current := func() bool { return ctx.Err() == nil && s.ctx.Err() == nil && s.pathsCurrent() }
+	if !current() {
+		return "", "", ErrConnectorUnavailable
+	}
+	rootFD, err := unix.Open(s.root, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return "", "", ErrConnectorUnavailable
+	}
+	defer func() {
+		if unix.Close(rootFD) != nil {
+			result = ErrConnectorUnavailable
+		}
+	}()
+	var rootStat unix.Stat_t
+	expected := s.rootInfo.Sys().(*syscall.Stat_t)
+	if unix.Fstat(rootFD, &rootStat) != nil || uint64(rootStat.Dev) != uint64(expected.Dev) || rootStat.Ino != expected.Ino || rootStat.Mode&07777 != 0700 || rootStat.Uid != uint32(os.Getuid()) {
+		return "", "", ErrConnectorUnavailable
+	}
+	if s.beforeLaunchOpen != nil {
+		s.beforeLaunchOpen()
+	}
+	const name = "computer-go-launch.json"
+	fd, err := unix.Openat(rootFD, name, unix.O_RDWR|unix.O_CREAT|unix.O_EXCL|unix.O_NOFOLLOW|unix.O_CLOEXEC|unix.O_NONBLOCK, 0600)
+	if err != nil {
+		return "", "", ErrConnectorUnavailable
+	}
+	file := os.NewFile(uintptr(fd), name)
+	defer func() {
+		if file.Close() != nil {
+			result = ErrConnectorUnavailable
+		}
+	}()
+	check := func(size int64) bool {
+		var held, entry unix.Stat_t
+		return unix.Fstat(fd, &held) == nil && unix.Fstatat(rootFD, name, &entry, unix.AT_SYMLINK_NOFOLLOW) == nil &&
+			held.Dev == entry.Dev && held.Ino == entry.Ino && held.Mode&unix.S_IFMT == unix.S_IFREG && held.Mode&07777 == 0600 &&
+			held.Uid == uint32(os.Getuid()) && held.Nlink == 1 && held.Size == size && entry.Size == size && current()
+	}
+	// Qualify the created descriptor AND its anchored entry before writing secrets.
+	if !check(0) {
+		return "", "", ErrConnectorUnavailable
+	}
+	if n, err := file.Write(data); err != nil || n != len(data) {
+		return "", "", ErrConnectorUnavailable
+	}
+	if file.Sync() != nil || !check(int64(len(data))) {
+		return "", "", ErrConnectorUnavailable
+	}
+	if s.beforeLaunchReadback != nil {
+		s.beforeLaunchReadback()
+	}
+	// Read one extra byte: an equal prefix is not an exact publication.
+	readback := make([]byte, len(data)+1)
+	if n, err := file.ReadAt(readback, 0); err != io.EOF || n != len(data) || !bytes.Equal(readback[:n], data) || !check(int64(len(data))) {
+		return "", "", ErrConnectorUnavailable
+	}
+	if unix.Fsync(rootFD) != nil || !check(int64(len(data))) {
+		return "", "", ErrConnectorUnavailable
+	}
+	digest := sha256.Sum256(data)
+	return filepath.Join(s.root, name), hex.EncodeToString(digest[:]), nil
 }
 
 // StartConnector creates a fresh private socket for the exact existing backend and owner.

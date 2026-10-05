@@ -2,6 +2,7 @@ package boot
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"strconv"
@@ -20,6 +21,9 @@ import (
 type connectorEndpoint interface {
 	Endpoint() wire.ComputerConnectorEndpoint
 	Close(context.Context) error
+}
+type connectorLaunchPublisher interface {
+	PublishLaunch(context.Context, []byte) (string, string, error)
 }
 type connectorStart func(context.Context, wire.ComputerConnectorBinding, map[string]desktop.Method) (connectorEndpoint, error)
 
@@ -103,6 +107,9 @@ func (s *computerConnector) Open(ctx context.Context, operation string, in wire.
 	if ctx == nil || ctx.Err() != nil || s.lifetime.Err() != nil || validateIngress("ComputerConnectorOpen", in) != nil || s.current != nil || s.attempts >= 32 {
 		return nil, computerUnavailable()
 	}
+	if in.LifecycleRoot != nil && (in.ChallengeSha256 == nil || !validProfilePath(*in.LifecycleRoot)) {
+		return nil, computerUnavailable()
+	}
 	if err := s.root.claim(operation); err != nil {
 		return nil, err
 	}
@@ -154,6 +161,14 @@ func (s *computerConnector) Open(ctx context.Context, operation string, in wire.
 	launch := port.ConnectorLaunch{Host: host, Approval: approval, TurnCorrelation: ids[4],
 		Admission:   authority.Admission{Identity: authority.Identity{OwnerID: approval.OwnerID, SessionID: ids[0], TaskID: ids[1], TaskEpoch: 1}, AuthorityID: ids[2], ComputerID: approval.ComputerID, ComputerGeneration: approval.Generation, Policy: policy},
 		Participant: authority.ParticipantAdmission{ParticipantID: ids[3], Role: authority.Main, MutationOwnership: authority.NoOwnership}}
+	if in.ChallengeSha256 != nil {
+		value, decodeErr := hex.DecodeString(*in.ChallengeSha256)
+		if decodeErr != nil || len(value) != len(launch.VerificationChallenge) {
+			guard.close()
+			return nil, computerUnavailable()
+		}
+		copy(launch.VerificationChallenge[:], value)
+	}
 	slot.owner, err = connectorsvc.New(&sync.Mutex{}, s.journal, guard, s.clock, launch)
 	if err != nil {
 		guard.close()
@@ -174,7 +189,9 @@ func (s *computerConnector) Open(ctx context.Context, operation string, in wire.
 		return nil, err
 	}
 	binding := wire.ComputerConnectorBinding{BuildId: host.BuildID, ProfileId: host.ProfileID, BackendGeneration: host.BackendGeneration, RuntimeId: host.RuntimeID, ConnectorGeneration: in.ConnectorGeneration}
-	slot.endpoint, err = s.start(s.lifetime, binding, slot.route.Methods(s.root.peer))
+	methods := slot.route.Methods(s.root.peer)
+	methods["computer.connector.verify"] = s.verificationMethod(slot)
+	slot.endpoint, err = s.start(s.lifetime, binding, methods)
 	if err != nil || slot.endpoint == nil {
 		guard.close()
 		return nil, computerUnavailable()
@@ -186,6 +203,34 @@ func (s *computerConnector) Open(ctx context.Context, operation string, in wire.
 	}
 	slot.opened = wire.ComputerConnectorOpened{Endpoint: endpoint, AdmissionOperationId: operation,
 		Execution: wire.ComputerConnectorExecution{OwnerId: approval.OwnerID, SessionId: ids[0], TaskId: ids[1], TaskEpoch: "1", ParticipantId: ids[3], TurnId: ids[4], Generation: "1"}}
+	if in.LifecycleRoot != nil {
+		publisher, ok := slot.endpoint.(connectorLaunchPublisher)
+		if !ok {
+			guard.close()
+			return nil, computerUnavailable()
+		}
+		launch := struct {
+			Schema          string                       `json:"schema"`
+			Opened          wire.ComputerConnectorOpened `json:"opened"`
+			LifecycleRoot   string                       `json:"lifecycleRoot"`
+			ChallengeSHA256 string                       `json:"challengeSha256"`
+		}{"farol-go-connector/1", slot.opened, *in.LifecycleRoot, *in.ChallengeSha256}
+		data, encodeErr := json.Marshal(launch)
+		if encodeErr != nil {
+			guard.close()
+			return nil, computerUnavailable()
+		}
+		file, digest, publishErr := publisher.PublishLaunch(ctx, append(data, '\n'))
+		if publishErr != nil {
+			guard.close()
+			return nil, publishErr
+		}
+		slot.opened.LaunchFile, slot.opened.LaunchSha256 = &file, &digest
+		if validateIngress("ComputerConnectorOpened", slot.opened) != nil {
+			guard.close()
+			return nil, computerUnavailable()
+		}
+	}
 	// Late settings withdrawal or request loss cannot publish a usable endpoint.
 	if _, err = slot.owner.Reconnect(ctx); err != nil {
 		guard.close()
@@ -259,6 +304,7 @@ func (s *computerConnector) Methods() map[string]desktop.Method {
 		return nil
 	}
 	return map[string]desktop.Method{
+		"computer.connector.verification": s.verificationObservationMethod(),
 		"computer.connector.open": {Handle: func(ctx context.Context, r desktop.Request) (*desktop.Outcome, error) {
 			if r.OperationID == "" || ipc.ValidateJSON(r.Body) != nil || wire.Validate("ComputerConnectorOpen", r.Body) != nil {
 				return invalidIngress()

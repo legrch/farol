@@ -1,7 +1,8 @@
 # Bounded external Computer connector owner
 
-This is source foundation. It does not qualify an actual host, transport,
-connector, provider, packaged application or installation. External ChatGPT MCP
+This describes current source composition. Disposable Darwin socket and journal
+tests qualify their own native adapters; they do not qualify normal application
+startup, external ChatGPT, a packaged application or installation. External ChatGPT MCP
 Computer execution has no fabricated coding Task, Farol Chat or browser membership.
 
 Trusted root constructs `connector.New(gate, journal, guard, clock, launch)` once for
@@ -65,8 +66,8 @@ does not cancel native processes, settle mutation outcomes or implement drain.
 Trusted root now exposes `computer.connector.open/close` only on the inherited
 host pipe. Open consumes the current acknowledged Go Settings publication,
 mints the execution correlations above and registers a private socket on that
-same backend. Its initial surface is catalogue/bootstrap/list/read only, with
-read-only scope. The external attachment cannot issue authority or open another
+same backend. Its initial surface is catalogue/bootstrap/list/read and connector verification,
+with read-only scope. The external attachment cannot issue authority or open another
 connector. A failed or uncertain start retains its slot and cannot be upgraded
 to clean by a later shutdown. Root withdraws ingress before shutdown IO; shutdown
 cancels liveness before waiting for the bounded effect gate.
@@ -75,13 +76,33 @@ The TypeScript host adapter retains exact original open/close replies. The socke
 adapter authenticates the selected binding and then performs the canonical
 handshake. It bounds pending calls, request history, frames and writes, and never
 reconnects or retries automatically. Transport loss cannot become a known result.
-These adapters are source composition; the public MCP entrypoint has not yet
-switched to this route.
+The normal desktop now selects `computer-go-launch.json`. The MCP entrypoint
+loads that protected launch once, joins the existing adapter drain lifecycle and
+connects to this exact backend. It never constructs a workspace helper, shell or
+second authority Store. Go failure is terminal; explicit legacy launch fixtures
+remain a separate entry path. This source switch still requires normal Dev and
+external-client qualification.
 
 The Darwin transport uses a new private 0700 directory, same-user peer credentials
 and one random per-launch token. It does not chmod, unlink or reclaim a socket
 pathname after creation. Known Close settles exact handles and retains the small
 inert endpoint path; filesystem retirement is a separate unqualified boundary.
+
+Go publishes the launch envelope once with descriptor-relative exclusive creation
+in the captured private directory. It checks inode, ownership, mode, link count,
+exact length and EOF around write/sync/readback. Substitution cannot redirect the
+secret write. Any partial or uncertain publication remains fenced; no retry or
+path cleanup restores it. The TypeScript loader only reads and validates the
+protected file; it grants no authority.
+
+Verification reserves one attempt in the current Go owner before native List. A
+failed or uncertain List cannot become a new attempt. Successful proof retains
+the exact execution, challenge digest, workspace, original call digest and bounded
+entry count. Repeat observations return that proof without another List and still
+require current authority. The host reads proof through the inherited pipe and
+checks the current Settings binding before saving the attachment. A receipt file
+or cached UI attachment cannot establish positive liveness. This proves neither
+mutation nor shell capability.
 
 Lead must still complete and qualify:
 
@@ -102,7 +123,10 @@ Lead must still complete and qualify:
   native cases and package/installed/update gates against the selected bytes.
 
 The app/root/TypeScript adapter tests use offline value or stream fixtures and
-synchronization. All four native Store adapter suites passed on disposable roots
-at the integrated source. This proves native journal publication, withdrawal and
-refusal boundaries, not an application or external-client journey. Actual socket,
-normal Dev, package and installed qualification remain distinct gates.
+synchronization. Four native Store suites cover journal publication, withdrawal
+and refusal. Darwin socket suites exercise private endpoint identity, same-user
+authentication, canonical handshake, route restriction, bounded close/cancel and
+path substitution. The appended-byte publication regression is authored; its
+execution must be recorded separately against the final bytes. The TypeScript
+protected-file loader, process composition, normal Dev, external client, package
+and installed journeys remain distinct qualification gates.

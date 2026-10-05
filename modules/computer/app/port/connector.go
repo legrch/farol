@@ -39,6 +39,22 @@ type ConnectorLaunch struct {
 	Participant     authority.ParticipantAdmission
 	TurnCorrelation string
 	Approval        authority.Approval
+	// VerificationChallenge is the expected challenge digest computed by root.
+	// Zero disables verification for existing source fixtures. It is never wire input.
+	VerificationChallenge [32]byte
+}
+
+// ConnectorVerification is one content-free observation from this exact live
+// owner. Root records it only after the existing workspace List contract succeeds
+// and its final disclosure guard passes. It contains no entries or restored proof.
+type ConnectorVerification struct {
+	Host            ConnectorHost
+	Binding         TaskBinding
+	ChallengeDigest [32]byte
+	WorkspaceID     string
+	CallID          string
+	EntryCount      uint32
+	Truncated       bool
 }
 
 // ConnectorPublication contains known readback of a NEW original participant

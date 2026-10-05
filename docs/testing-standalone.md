@@ -6,6 +6,16 @@ prerequisites, not execution or acceptance. The later C09 TSX discovery correcti
 does not register these scripts in `test:unit`, `test:integration` or `test:fast`.
 See [testing scopes](testing.md) for the commands that are implemented.
 
+The external Go connector switch has additional tests outside this historical
+E2E inventory. `tests/unit/go-computer-mcp.test.ts` uses the MCP SDK in memory;
+connector client/host/launch/verification unit files use bounded offline fixtures.
+`go test -race -p 1 -run '^TestNativeConnectorSocket' ./transport/desktop`
+uses real disposable Darwin sockets and files and needs the exclusive native
+lane. It does not launch Electron, a child backend or a provider. Existing E2E
+scripts that construct `computer-launch.json` select the legacy adapter; they do
+not prove the normal desktop `computer-go-launch.json` path. That path still
+needs measured package, normal Dev and genuine external-client evidence.
+
 The complete `task test` union remains open. A missing binary, artifact,
 predecessor, containment mechanism or authorized display leaves its required
 scenario blocked. A check-only, build-only, selected reproduction or blocked-focus

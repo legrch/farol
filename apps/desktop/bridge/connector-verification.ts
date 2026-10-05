@@ -1,0 +1,113 @@
+import { createHash, randomUUID } from "node:crypto";
+import { BridgeError, type Client } from "./client.ts";
+import {
+  validate,
+  type ComputerConnectorOpened,
+  type ComputerConnectorVerificationState,
+  type Json,
+} from "./wire.ts";
+
+// Wire codec only. Go owns challenge admission, the actual List and retained
+// observation. This adapter cannot synthesize a successful receipt from IDs.
+export class ConnectorVerificationBridge {
+  private readonly binding;
+  private readonly execution;
+  constructor(
+    private readonly client: Pick<Client, "request">,
+    opened: ComputerConnectorOpened,
+    private readonly challengeSha256: string,
+  ) {
+    if (
+      !validate("ComputerConnectorOpened", opened) ||
+      !/^[a-f0-9]{64}$/u.test(challengeSha256)
+    )
+      throw new BridgeError("refused", "invalid_connector_verification");
+    this.binding = Object.freeze({ ...opened.endpoint.binding });
+    this.execution = Object.freeze({ ...opened.execution });
+  }
+  observe(): Promise<ComputerConnectorVerificationState> {
+    return this.request("computer.connector.verification", {
+      binding: this.binding,
+    });
+  }
+  async verify(
+    challenge: string,
+    workspaceId: string,
+    callId: string,
+  ): Promise<ComputerConnectorVerificationState> {
+    const body = { challenge, workspaceId, callId };
+    if (!validate("ComputerConnectorVerify", body))
+      throw new BridgeError("refused", "invalid_connector_verification");
+    const result = await this.request("computer.connector.verify", body);
+    if (
+      !result.receipt ||
+      result.receipt.workspaceId !== workspaceId ||
+      result.receipt.challengeSha256 !==
+        createHash("sha256").update(challenge).digest("hex")
+    )
+      throw new BridgeError("unknown", "crossed_connector_verification");
+    return result;
+  }
+  private async request(
+    method: string,
+    body: Json,
+  ): Promise<ComputerConnectorVerificationState> {
+    const id = randomUUID();
+    const out = await this.client.request(method, body, {
+      id,
+      timeoutMs: 10000,
+    });
+    if (
+      !validate("Outcome", out) ||
+      out.requestId !== id ||
+      out.operationId !== undefined ||
+      out.context.profileId !== this.binding.profileId ||
+      out.context.backendGeneration !== this.binding.backendGeneration
+    )
+      throw new BridgeError("unknown", "crossed_connector_verification");
+    if (out.status !== "ok")
+      throw new BridgeError(
+        out.status,
+        out.code ?? "connector_verification_unavailable",
+      );
+    if (
+      out.code !== undefined ||
+      !validate("ComputerConnectorVerificationState", out.data)
+    )
+      throw new BridgeError("unknown", "invalid_connector_verification");
+    const state = out.data as unknown as ComputerConnectorVerificationState;
+    const same = (expected: object, actual: object) =>
+      Object.entries(expected).every(
+        ([k, v]) => (actual as Record<string, unknown>)[k] === v,
+      );
+    if (
+      !same(this.binding, state.binding) ||
+      (state.receipt === undefined) !== (state.receiptSha256 === undefined)
+    )
+      throw new BridgeError("unknown", "crossed_connector_verification");
+    const receipt = state.receipt;
+    if (
+      receipt &&
+      (!same(this.binding, receipt.binding) ||
+        !same(this.execution, receipt.execution) ||
+        receipt.challengeSha256 !== this.challengeSha256 ||
+        receipt.entryCount > 500 ||
+        createHash("sha256").update(JSON.stringify(receipt)).digest("hex") !==
+          state.receiptSha256)
+    )
+      throw new BridgeError("unknown", "crossed_connector_verification");
+    return Object.freeze({
+      ...state,
+      binding: Object.freeze({ ...state.binding }),
+      ...(receipt
+        ? {
+            receipt: Object.freeze({
+              ...receipt,
+              binding: Object.freeze({ ...receipt.binding }),
+              execution: Object.freeze({ ...receipt.execution }),
+            }),
+          }
+        : {}),
+    });
+  }
+}

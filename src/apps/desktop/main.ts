@@ -5,6 +5,7 @@ import {
 import type {
   ChatComputerAdmissionResponse,
   SettingsDeliveryResult,
+  ComputerConnectorVerificationReceipt,
 } from "../../../apps/desktop/bridge/wire";
 import { createDesktopChatBrowser } from "../../../apps/desktop/go-chat-host";
 import { GoChatBrowserDriver } from "../../../apps/desktop/go-chat-browser";
@@ -68,7 +69,6 @@ import {
   lstat,
   mkdtemp,
   mkdir,
-  readFile,
   realpath,
   rm,
   unlink,
@@ -207,11 +207,7 @@ import {
   type StartupStage,
 } from "./primary-startup";
 import { readRuntimeBuildIdentity } from "./build-identity";
-import {
-  currentConnectorAttachment,
-  readPendingConnectorReceipt,
-  waitForConnectorAppReceipt,
-} from "./connector-app-receipt-wait";
+import { waitForConnectorAppReceipt } from "./connector-app-receipt-wait";
 import {
   ProductConfigurationService,
   ProductSettingsStore,
@@ -418,17 +414,8 @@ import {
 } from "./connector-resume-policy";
 import { identityBoundWorkspaces } from "./identity-bound-workspaces";
 import { AuthorityTransitionReservation } from "./authority-transition";
-import {
-  PrivateSecureMcpLaunchStore,
-  createSecureMcpLaunchContract,
-} from "./secure-mcp-launch-contract";
 import { SecureMcpConnectorRuntime } from "./secure-mcp-connector-runtime";
-import {
-  checkConnectorAttachment,
-  clearConnectorVerificationReceipt,
-  readConnectorVerificationReceipt,
-  type ConnectorVerificationReceipt,
-} from "../../modules/computer/infra/mcp/connector-verification-receipt";
+import { clearConnectorVerificationReceipt } from "../../modules/computer/infra/mcp/connector-verification-receipt";
 import { PrivateExecutionFence } from "../../modules/computer/infra/mcp/execution-fence";
 import { PrivateMcpLifecycle } from "../../modules/computer/infra/mcp/private-mcp-lifecycle";
 import {
@@ -3454,9 +3441,16 @@ async function stopAndConfirmComputerMcp(
     closeSavedChat: async () => {
       // Wait for admitted account work before closing its Browser endpoint.
       const savedChat = savedChatBridgeRuntime;
-      if (savedChat) {
-        await savedChat.close();
-        if (savedChatBridgeRuntime === savedChat) savedChatBridgeRuntime = null;
+      try {
+        if (savedChat) {
+          await savedChat.close();
+          if (savedChatBridgeRuntime === savedChat)
+            savedChatBridgeRuntime = null;
+        }
+      } finally {
+        // Withdraw the original Go owner even when the old adapter drain fails.
+        // A failure remains unconfirmed; it cannot authorize a new launch.
+        await desktopGoCore?.closeComputerConnector();
       }
     },
     confirmStop: () => lifecycle.confirmStop(),
@@ -4131,9 +4125,10 @@ async function startSecureMcpConnector(
       const stopped = await configuration.recordSecureMcpStopped();
       if (!stopped.ok) return ProductConfigurationResultSchema.parse(stopped);
     }
-    // Repair may have drained the previous bridge. Publish a new endpoint
-    // only if this launch still has an exact owner opt-in and current receipt.
-    await initializeSavedChatBridge();
+    // The ordinary Computer route is the selected Go backend. Its absence
+    // cannot fall back to a separate TS authority or native helper.
+    const core = desktopGoCore;
+    if (!core) return configurationFailure("CONNECTOR_START_FAILED");
     const snapshot = configuration.snapshot();
     if (snapshot.status !== "ready") {
       return configurationFailure("SETTINGS_UNAVAILABLE");
@@ -4175,53 +4170,31 @@ async function startSecureMcpConnector(
     const verificationChallengeSha256 = createHash("sha256")
       .update(verificationChallenge)
       .digest("hex");
-    const preparedDevProof =
-      runtimeEnvironment === "dev"
-        ? await readDevMcpProofPreparation(devMcpProofRoot()).catch(() => null)
-        : null;
-    const devMcpProof =
-      preparedDevProof !== null &&
-      preparedDevProof.buildId === buildIdentity.buildId &&
-      preparedDevProof.computerGeneration ===
-        snapshot.settings.computer.generation &&
-      snapshot.settings.computer.workspaces.some(
-        (workspace) =>
-          workspace.workspaceId === preparedDevProof.workspaceId &&
-          workspace.root === preparedDevProof.workspaceRoot &&
-          workspace.rootIdentity !== undefined,
-      )
-        ? preparedDevProof
-        : undefined;
     let launchFile: string;
     let launchContractSha256: string;
     try {
       await clearConnectorVerificationReceipt(secureMcpLaunchRoot());
-      const contract = createSecureMcpLaunchContract(snapshot.settings, {
-        now: Date.now(),
-        ownerSettingsRoot: path.join(
-          app.getPath("userData"),
-          "farol-next-state",
-        ),
-        runtimeId,
-        challengeSha256: verificationChallengeSha256,
-        // This is the OS account home, not the connector's isolated Dev HOME.
-        // It is sealed in the private launch contract and used only by the
-        // sandboxed Computer shell's explicit workspace policy.
-        gitSettingsHome: os.userInfo().homedir,
-        ...(devMcpProof === undefined ? {} : { devMcpProof }),
-        ...(callerRelayRuntime
-          ? { callerRelay: callerRelayRuntime.endpoint }
-          : {}),
-        ...(savedChatBridgeRuntime
-          ? { savedChat: savedChatBridgeRuntime.endpoint }
-          : {}),
-      });
-      launchFile = await new PrivateSecureMcpLaunchStore({
-        root: secureMcpLaunchRoot(),
-      }).write(contract);
-      launchContractSha256 = createHash("sha256")
-        .update(await readFile(launchFile))
+      const intentDigest = createHash("sha256")
+        .update(
+          JSON.stringify({
+            buildId: buildIdentity.buildId,
+            runtimeId,
+            computerGeneration: snapshot.settings.computer.generation,
+            connectorGeneration: connector.generation,
+            challengeSha256: verificationChallengeSha256,
+          }),
+        )
         .digest("hex");
+      const opened = await core.openComputerConnector(
+        runtimeId,
+        intentDigest,
+        verificationChallengeSha256,
+        secureMcpLaunchRoot(),
+      );
+      if (!opened.launchFile || !opened.launchSha256)
+        throw new Error("COMPUTER_MCP_GO_LAUNCH_UNAVAILABLE");
+      launchFile = opened.launchFile;
+      launchContractSha256 = opened.launchSha256;
       // An earlier Quit/update may have stopped admission while the contract
       // was being written. Do not clear its stop marker with a later prepare.
       if (quitInProgress || installedUpdateAdmission)
@@ -4406,30 +4379,6 @@ async function checkSecureMcpAttachment(
     const runtime = connector.runtime;
     const challenge = connector.challenge;
     if (
-      expectedBinding === undefined &&
-      secureMcpConnectorRuntime.isRunning()
-    ) {
-      const current = currentConnectorAttachment(
-        snapshot.settings,
-        buildIdentity.buildId,
-        expectedWorkspaceId,
-      );
-      if (current !== null) {
-        return ProductConfigurationResultSchema.parse({
-          ok: true,
-          snapshot,
-          evidence: {
-            kind: "connector.attachment",
-            runtimeGeneration: current.runtimeGeneration,
-            computerGeneration: current.computerGeneration,
-            workspaceId: current.workspaceId,
-            challengeSha256: current.challengeSha256,
-            receiptSha256: current.receiptSha256,
-          },
-        });
-      }
-    }
-    if (
       expectedWorkspaceId !== undefined &&
       snapshot.settings.setup.computer.verified?.workspaceId !==
         expectedWorkspaceId
@@ -4443,46 +4392,45 @@ async function checkSecureMcpAttachment(
     ) {
       return configurationFailure("CONNECTOR_CHALLENGE_UNAVAILABLE");
     }
-    let receipt;
+    const core = desktopGoCore;
+    if (!core) return configurationFailure("CONNECTOR_ATTACHMENT_INVALID");
+    let observed;
     try {
-      receipt = await readConnectorVerificationReceipt(secureMcpLaunchRoot());
+      observed = await core.observeComputerConnectorVerification();
     } catch {
       return configurationFailure("CONNECTOR_ATTACHMENT_INVALID");
     }
-    if (receipt === null) {
-      return configurationFailure("CONNECTOR_ATTACHMENT_NOT_FOUND");
-    }
-    // S35-TA-6: the verdict itself lives in `connector-verification-receipt.ts`
-    // so it can be exercised; what stays here is reading the snapshot, which
-    // only `main.ts` can do. Every refusal renders as the same closed code:
-    // telling an unverified connector which check refused it tells it what to
-    // forge next.
-    const verdict = checkConnectorAttachment({
-      receipt,
-      challenge: {
-        challengeSha256: challenge.challengeSha256,
-        preparedAt: challenge.preparedAt,
-      },
-      computerGeneration: snapshot.settings.computer.generation,
-      approvedWorkspaceIds: snapshot.settings.computer.workspaces.map(
-        (workspace) => workspace.workspaceId,
-      ),
-      expectedWorkspaceId,
-    });
-    if (!verdict.attached) {
+    const receipt = observed.receipt;
+    if (!receipt) return configurationFailure("CONNECTOR_ATTACHMENT_NOT_FOUND");
+    if (
+      !observed.receiptSha256 ||
+      receipt.challengeSha256 !== challenge.challengeSha256 ||
+      receipt.binding.buildId !== buildIdentity.buildId ||
+      receipt.binding.connectorGeneration !== String(connector.generation) ||
+      (expectedWorkspaceId !== undefined &&
+        receipt.workspaceId !== expectedWorkspaceId) ||
+      !snapshot.settings.computer.workspaces.some(
+        (workspace) => workspace.workspaceId === receipt.workspaceId,
+      )
+    )
       return configurationFailure("CONNECTOR_ATTACHMENT_INVALID");
-    }
     const latest = configuration.snapshot();
     if (
-      expectedBinding &&
-      (latest.status !== "ready" ||
+      latest.status !== "ready" ||
+      desktopGoCore !== core ||
+      latest.settings.computer.generation !==
+        snapshot.settings.computer.generation ||
+      latest.settings.connectors.secureMcp.generation !==
+        connector.generation ||
+      latest.settings.connectors.secureMcp.runtime?.runtimeGeneration !==
+        runtime.runtimeGeneration ||
+      latest.settings.connectors.secureMcp.challenge?.challengeSha256 !==
+        challenge.challengeSha256 ||
+      (expectedBinding &&
         !connectorAppBindingCurrent(latest.settings, expectedBinding))
-    ) {
+    )
       return configurationFailure("CONNECTOR_APP_VERIFICATION_STATE_CHANGED");
-    }
-    const receiptSha256 = createHash("sha256")
-      .update(`${JSON.stringify(receipt, null, 2)}\n`)
-      .digest("hex");
+    const receiptSha256 = observed.receiptSha256;
     const attached = await configuration.recordSecureMcpAttachment({
       workspaceId: receipt.workspaceId,
       runtimeGeneration: runtime.runtimeGeneration,
@@ -4521,6 +4469,9 @@ async function verifySecureMcpApp(): Promise<ProductConfigurationResult> {
   if (chatGptTaskAdmission || connectorTaskAdmission) {
     return configurationFailure("CHATGPT_TASK_IN_PROGRESS");
   }
+  const verificationCore = desktopGoCore;
+  if (!verificationCore)
+    return configurationFailure("CONNECTOR_APP_VERIFICATION_NOT_READY");
   // Reserve both routes before the first await so concurrent IPC calls cannot
   // both pass the check and race to claim or release the same verification.
   chatGptTaskAdmission = true;
@@ -4609,28 +4560,23 @@ async function verifySecureMcpApp(): Promise<ProductConfigurationResult> {
             !connectorAppBindingCurrent(current.settings, expectedBinding)
           )
             return false;
-          const receipt = await readPendingConnectorReceipt(() =>
-            readConnectorVerificationReceipt(stateRoot, { readOnly: true }),
-          );
-          if (receipt === null) return false;
+          const receipt = (
+            await verificationCore.observeComputerConnectorVerification()
+          ).receipt;
+          if (!receipt || desktopGoCore !== verificationCore) return false;
           const afterRead = configuration!.snapshot();
           if (
             afterRead.status !== "ready" ||
             !connectorAppBindingCurrent(afterRead.settings, expectedBinding)
           )
             return false;
-          return checkConnectorAttachment({
-            receipt,
-            challenge: {
-              challengeSha256: challenge.challengeSha256,
-              preparedAt: challenge.preparedAt,
-            },
-            computerGeneration: expectedBinding.computerGeneration,
-            approvedWorkspaceIds: afterRead.settings.computer.workspaces.map(
-              (workspace) => workspace.workspaceId,
-            ),
-            expectedWorkspaceId: expectedBinding.workspaceId,
-          }).attached;
+          return (
+            receipt.challengeSha256 === expectedBinding.challengeSha256 &&
+            receipt.workspaceId === expectedBinding.workspaceId &&
+            receipt.binding.buildId === expectedBinding.buildId &&
+            receipt.binding.connectorGeneration ===
+              String(expectedBinding.connectorGeneration)
+          );
         },
         onDispatchIntent: async () => {
           if (claimed) return;
@@ -4718,7 +4664,7 @@ async function verifySecureMcpApp(): Promise<ProductConfigurationResult> {
   }
   type ReceiptProbe = Readonly<
     | { state: "changed" }
-    | { state: "receipt"; receipt: ConnectorVerificationReceipt }
+    | { state: "receipt"; receipt: ComputerConnectorVerificationReceipt }
   >;
   let observed: ReceiptProbe | null;
   try {
@@ -4731,12 +4677,11 @@ async function verifySecureMcpApp(): Promise<ProductConfigurationResult> {
         ) {
           return { state: "changed" };
         }
-        const receipt = await readPendingConnectorReceipt(() =>
-          readConnectorVerificationReceipt(secureMcpLaunchRoot(), {
-            readOnly: true,
-          }),
-        );
-        return receipt === null ? null : { state: "receipt", receipt };
+        if (desktopGoCore !== verificationCore) return { state: "changed" };
+        const receipt = (
+          await verificationCore.observeComputerConnectorVerification()
+        ).receipt;
+        return receipt === undefined ? null : { state: "receipt", receipt };
       },
       (probe) =>
         probe.state === "changed" ||
