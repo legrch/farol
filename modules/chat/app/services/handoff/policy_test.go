@@ -155,6 +155,7 @@ func TestNeverDispatchedReceiptRejectsEachBoundaryBeforePublication(t *testing.T
 		"stale-quiescence":        func(r *port.RetirementTurn) { r.Quiescence.ResultID = "result" },
 		"disposal":                func(r *port.RetirementTurn) { r.Disposal.Confirmed = true },
 		"stale-disposal":          func(r *port.RetirementTurn) { r.Disposal.ResultID = "result" },
+		"invented-publication":    func(r *port.RetirementTurn) { r.ResultPublication = completedReceipt(binding()).Write.Turns[0].ResultPublication },
 	}
 	for name, mutate := range mutations {
 		t.Run(name, func(t *testing.T) {

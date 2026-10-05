@@ -1,4 +1,5 @@
-// Package handoff owns clean retirement of empty or never-dispatched registries.
+// Package handoff owns clean retirement of empty, never-dispatched or exactly
+// retained completed registries. It creates no restored conversation handles.
 // Trusted boot owns root/host qualification and exact successor construction.
 package handoff
 
@@ -73,9 +74,26 @@ func validReceipt(p port.HandoffPublication, r port.RetirementReceipt) error {
 	previousID := ""
 	identities := make(map[turn.Identity]bool, len(w.Turns))
 	acknowledgements := make(map[uint64]bool, len(w.Turns))
+	cleanupRevisions := make(map[uint64]bool, len(w.Turns)*2)
+	publications := make(map[[32]byte]bool)
+	var storageRoot port.JournalRoot
 	for _, actual := range w.Turns {
-		if !neverDispatched(actual, w.Scope) || actual.Binding.OperationID <= previousID || actual.AcknowledgedRevision < 3 || actual.AcknowledgedRevision > w.PreviousRevision || acknowledgements[actual.AcknowledgedRevision] {
+		completed := completedRetained(actual, w.Scope, w.Root, w.PreviousRevision)
+		if (!neverDispatched(actual, w.Scope) && !completed) || actual.Binding.OperationID <= previousID || actual.AcknowledgedRevision < 3 || actual.AcknowledgedRevision > w.PreviousRevision || acknowledgements[actual.AcknowledgedRevision] || cleanupRevisions[actual.AcknowledgedRevision] {
 			return Nonempty
+		}
+		if completed {
+			p := actual.ResultPublication
+			if publications[p.Digest] || (storageRoot != (port.JournalRoot{}) && storageRoot != p.StorageRoot) {
+				return Nonempty
+			}
+			publications[p.Digest], storageRoot = true, p.StorageRoot
+			for _, revision := range []uint64{actual.SettledRevision, actual.ReleasedRevision} {
+				if acknowledgements[revision] || cleanupRevisions[revision] || revision == actual.AcknowledgedRevision {
+					return Nonempty
+				}
+				cleanupRevisions[revision] = true
+			}
 		}
 		// Match the live queue's logical-turn uniqueness as well as operation order.
 		logical := actual.Snapshot.Identity

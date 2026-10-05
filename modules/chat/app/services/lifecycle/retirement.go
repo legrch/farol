@@ -173,6 +173,12 @@ func (s *Service) retirementTurns() ([]port.RetirementTurn, error) {
 		var publication port.ResultPublication
 		if h.retained != nil {
 			publication = h.retained.Publication
+			if publication != (port.ResultPublication{}) && view.Result.Outcome == turn.Completed {
+				metadata := h.retained.Conversation
+				if h.conversation == nil || !metadata.Complete || metadata.ProviderConversationID != view.Binding.Document.ConversationID {
+					return nil, Unsettled
+				}
+			}
 		}
 		out = append(out, port.RetirementTurn{Binding: h.fixed, Snapshot: view, AcknowledgedRevision: h.ackRevision, SettledRevision: h.settledRevision, ReleasedRevision: h.releasedRevision, Quiescence: h.quiescence, Disposal: h.disposal, ResultPublication: publication})
 	}

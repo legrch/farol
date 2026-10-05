@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/legrch/farol/modules/chat/app/port"
+	"github.com/legrch/farol/modules/chat/domain/turn"
 	"github.com/legrch/farol/modules/chat/infra/gate"
 	"github.com/legrch/farol/modules/chat/infra/intent"
 )
@@ -19,6 +20,24 @@ type durableResultFixture struct {
 	reads, fences int
 	readFault     string
 	readHook      func()
+}
+
+func TestGenericDurableResultCannotQualifyCompletedConversationRetirement(t *testing.T) {
+	s, j, _ := retiringOwner(t)
+	store := &durableResultFixture{publication: publicationFixture()}
+	s.deps.Results = store
+	h := admit(t, s, "1")
+	b := running(t, s, h)
+	r := turn.Result{ID: h.fixed.OperationID, Outcome: turn.Completed, Code: "PROVIDER_COMPLETED"}
+	if _, err := s.Finish(context.Background(), h, b, r, []byte("generic bytes")); err != nil {
+		t.Fatal(err)
+	}
+	applyOK(t, s, h, Change{Action: Acknowledge, ResultID: r.ID})
+	applyOK(t, s, h, Change{Action: Settle, Quiescence: turn.QuiescenceEvidence{Binding: b, ResultID: r.ID, Sequence: 93, Confirmed: true}})
+	applyOK(t, s, h, Change{Action: Release, Reservation: b.Reservation})
+	if _, err := s.Retire(context.Background()); !errors.Is(err, Unsettled) || j.retireCalls != 0 || store.reads != 0 {
+		t.Fatal("generic terminal acquired conversation retirement", err)
+	}
 }
 
 func publicationFixture() port.ResultPublication {
