@@ -62,7 +62,28 @@ reactivate this owner. The journal may still require Lead's exact reconciliation
 neither reconnect, status nor these APIs replay an unsettled write. This service
 does not cancel native processes, settle mutation outcomes or implement drain.
 
-Lead must still provide and qualify:
+Trusted root now exposes `computer.connector.open/close` only on the inherited
+host pipe. Open consumes the current acknowledged Go Settings publication,
+mints the execution correlations above and registers a private socket on that
+same backend. Its initial surface is catalogue/bootstrap/list/read only, with
+read-only scope. The external attachment cannot issue authority or open another
+connector. A failed or uncertain start retains its slot and cannot be upgraded
+to clean by a later shutdown. Root withdraws ingress before shutdown IO; shutdown
+cancels liveness before waiting for the bounded effect gate.
+
+The TypeScript host adapter retains exact original open/close replies. The socket
+adapter authenticates the selected binding and then performs the canonical
+handshake. It bounds pending calls, request history, frames and writes, and never
+reconnects or retries automatically. Transport loss cannot become a known result.
+These adapters are source composition; the public MCP entrypoint has not yet
+switched to this route.
+
+The Darwin transport uses a new private 0700 directory, same-user peer credentials
+and one random per-launch token. It does not chmod, unlink or reclaim a socket
+pathname after creation. Known Close settles exact handles and retains the small
+inert endpoint path; filesystem retirement is a separate unqualified boundary.
+
+Lead must still complete and qualify:
 
 - The one authenticated backend root/transport, with exact profile/backend
   identity, private endpoint ownership/mode, supported peer checks and protected
@@ -80,6 +101,8 @@ Lead must still provide and qualify:
 - Normal Dev identity/build/catalogue evidence, actual external ChatGPT calls,
   native cases and package/installed/update gates against the selected bytes.
 
-The app tests use only offline value fixtures and synchronization. The new native
-Store adapter tests are authored but **NOT RUN** in this writer task because the
-hotfix lane owns native execution. Pure checks cannot close the above host gates.
+The app/root/TypeScript adapter tests use offline value or stream fixtures and
+synchronization. All four native Store adapter suites passed on disposable roots
+at the integrated source. This proves native journal publication, withdrawal and
+refusal boundaries, not an application or external-client journey. Actual socket,
+normal Dev, package and installed qualification remain distinct gates.

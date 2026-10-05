@@ -44,6 +44,7 @@ type NativeRuntime struct {
 	journal          *chatrepo.Repository
 	chat             *chatlifecycle.Service
 	ingress          *ComputerIngress
+	connector        *computerConnector
 	mutations        *SettingsMutationIngress
 	settingsDelivery *SettingsDeliveryIngress
 	settingsStore    *SettingsStoreExchange
@@ -130,6 +131,16 @@ func NewNativeRuntime(ctx context.Context, launch NativeLaunch, generation strin
 	if err != nil {
 		return fail(err)
 	}
+	connectorJournal, err := accessrepo.NewConnectorJournal(runtime.store)
+	if err != nil {
+		return fail(err)
+	}
+	runtime.connector, err = newComputerConnector(lifetime, runtime.ingress, connectorJournal, accessrepo.Clock{}, func(ctx context.Context, binding wire.ComputerConnectorBinding, methods map[string]desktop.Method) (connectorEndpoint, error) {
+		return desktop.StartConnector(ctx, binding, methods)
+	})
+	if err != nil {
+		return fail(err)
+	}
 	runtime.chatComputer, err = NewChatComputerIngress(runtime.conversations, runtime.ingress)
 	if err != nil {
 		return fail(err)
@@ -197,6 +208,9 @@ func (r *NativeRuntime) Close() error {
 		_, err := r.ingress.guard.deactivate()
 		failures = append(failures, err)
 	}
+	if r.connector != nil {
+		failures = append(failures, r.connector.Shutdown())
+	}
 	if r.chat != nil {
 		failures = append(failures, r.chat.FreezeAdmissions(context.Background()))
 	}
@@ -236,7 +250,7 @@ func (r *NativeRuntime) Methods() (map[string]desktop.Method, error) {
 			merged[name] = method
 		}
 	}
-	for _, source := range []map[string]desktop.Method{r.ingress.Methods(), r.browser.Methods(), r.conversations.Methods(), r.chatComputer.Methods(), r.retirementMethods()} {
+	for _, source := range []map[string]desktop.Method{r.ingress.Methods(), r.connector.Methods(), r.browser.Methods(), r.conversations.Methods(), r.chatComputer.Methods(), r.retirementMethods()} {
 		for name, method := range source {
 			if _, exists := merged[name]; exists {
 				return nil, errors.New("native_method_conflict")

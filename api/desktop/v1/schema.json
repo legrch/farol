@@ -70,7 +70,9 @@
     "chat.history.result": "read",
     "chat.conversation.start": "effect",
     "chat.conversation.account.revoke": "effect",
-    "computer.workspace.list": "read"
+    "computer.workspace.list": "read",
+    "computer.connector.open": "effect",
+    "computer.connector.close": "effect"
   },
   "definitions": {
     "Context": {
@@ -4180,6 +4182,83 @@
         "token": {
           "type": "string",
           "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "ComputerConnectorOpen": {
+      "type": "object",
+      "fields": {
+        "publication": {
+          "type": "ComputerAuthorityPublication"
+        },
+        "runtimeId": {
+          "type": "id"
+        },
+        "connectorGeneration": {
+          "type": "decimal"
+        },
+        "launchDigest": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      }
+    },
+    "ComputerConnectorExecution": {
+      "type": "object",
+      "fields": {
+        "ownerId": {
+          "type": "id"
+        },
+        "sessionId": {
+          "type": "id"
+        },
+        "taskId": {
+          "type": "id"
+        },
+        "taskEpoch": {
+          "type": "decimal"
+        },
+        "participantId": {
+          "type": "id"
+        },
+        "turnId": {
+          "type": "id"
+        },
+        "generation": {
+          "type": "decimal"
+        }
+      }
+    },
+    "ComputerConnectorOpened": {
+      "type": "object",
+      "fields": {
+        "endpoint": {
+          "type": "ComputerConnectorEndpoint"
+        },
+        "execution": {
+          "type": "ComputerConnectorExecution"
+        },
+        "admissionOperationId": {
+          "type": "id"
+        }
+      }
+    },
+    "ComputerConnectorClose": {
+      "type": "object",
+      "fields": {
+        "binding": {
+          "type": "ComputerConnectorBinding"
+        }
+      }
+    },
+    "ComputerConnectorClosed": {
+      "type": "object",
+      "fields": {
+        "binding": {
+          "type": "ComputerConnectorBinding"
+        },
+        "closed": {
+          "type": "boolean"
         }
       }
     }

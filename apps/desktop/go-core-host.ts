@@ -7,6 +7,7 @@ import {
 } from "./bridge/attested-core.ts";
 import { BridgeError, type Client } from "./bridge/client.ts";
 import { ComputerBridge } from "./bridge/computer.ts";
+import { ConnectorHostBridge } from "./bridge/connector-host.ts";
 import { BrowserPump, type BrowserDriver } from "./bridge/browser.ts";
 import { ChatBridge } from "./bridge/chat.ts";
 import { ChatHistoryBridge } from "./bridge/chat-history.ts";
@@ -88,6 +89,7 @@ function readDeclaration(root: string): unknown {
 export class DesktopGoCore {
   private readonly authority: GoComputerAuthority;
   private readonly computer: ComputerBridge;
+  private readonly connector: ConnectorHostBridge | undefined;
   private readonly readIntent: ReadIntentBridge;
   private readonly historyBridge: ChatHistoryBridge;
   private readonly settingsDelivery: SettingsDeliveryBridge;
@@ -107,9 +109,14 @@ export class DesktopGoCore {
       ack: CoreRetirementAcknowledged,
     ) => Promise<void>,
     private readonly hasMutationStorage = false,
+    buildId?: string,
   ) {
     this.authority = new GoComputerAuthority(client, client.verifiedContext);
     this.computer = new ComputerBridge(client);
+    this.connector =
+      buildId === undefined
+        ? undefined
+        : new ConnectorHostBridge(client, client.verifiedContext, buildId);
     this.readIntent = new ReadIntentBridge(client);
     this.historyBridge = new ChatHistoryBridge(client);
     this.settingsDelivery = new SettingsDeliveryBridge(client);
@@ -226,6 +233,22 @@ export class DesktopGoCore {
       relativePath,
     );
   }
+  openComputerConnector(runtimeId: string, launchDigest: string) {
+    if (this.closeResult || !this.connector)
+      throw new BridgeError("unavailable", "host_connector_unavailable");
+    const settings = this.settings();
+    return this.connector.open({
+      publication: this.authority.settingsMutationPublication(
+        settings.computer.generation,
+      ),
+      runtimeId,
+      connectorGeneration: String(settings.connectors.secureMcp.generation),
+      launchDigest,
+    });
+  }
+  closeComputerConnector(): Promise<void> {
+    return this.connector?.close() ?? Promise.resolve();
+  }
   snapshotSettingsWorkspace(
     computerGeneration: number,
     workspaceId: string,
@@ -315,7 +338,17 @@ export class DesktopGoCore {
   }
   private async closeOnce(retire: boolean): Promise<void> {
     let retirementError: unknown;
-    if (retire && this.completeRetirement && this.browserConnected) {
+    try {
+      await this.connector?.close();
+    } catch (error) {
+      retirementError = error;
+    }
+    if (
+      retirementError === undefined &&
+      retire &&
+      this.completeRetirement &&
+      this.browserConnected
+    ) {
       try {
         const handoffId = randomUUID();
         const prepared = await this.client.request(
@@ -481,6 +514,7 @@ export async function startDesktopGoCore(
     selection.settings,
     (ack) => attested.completeRetirement(ack),
     storage.settingsMutations,
+    selection.build.buildId,
   );
   try {
     await host.publishCurrent();
