@@ -36,9 +36,12 @@ import {
   findFarolModel,
 } from "../../pkg/model-route/contract";
 
-import type {
-  GoChatResponses,
-  GoChatPreparedInput,
+import {
+  extractGoChatRequestSelection,
+  goChatRequestIntentSHA256,
+  type GoChatRequestSelection,
+  type GoChatResponses,
+  type GoChatPreparedInput,
 } from "../../../apps/desktop/go-chat-responses.ts";
 
 const visibleItemSchema = z.strictObject({
@@ -1319,6 +1322,7 @@ async function handleResponses(
   const key = turnKey(identity);
   if (options.goResponses) {
     try {
+      const requestSelection = extractGoChatRequestSelection(parsed.data);
       await options.goResponses.serve({
         key,
         identity,
@@ -1342,6 +1346,7 @@ async function handleResponses(
               response,
               options,
               onRefusal,
+              requestSelection,
             );
           } finally {
             release();
@@ -1447,7 +1452,11 @@ async function prepareInitialInput(
   response: ServerResponse,
   options: ProviderOptions,
   onRefusal: (code: string) => void,
+  requestSelection?: GoChatRequestSelection,
 ): Promise<GoChatPreparedInput | null> {
+  const intentSHA256 = requestSelection
+    ? goChatRequestIntentSHA256(data, requestSelection)
+    : undefined;
   let trustedContext: string | null = null;
   let contextDelivered: (() => void) | undefined;
   if (options.compaction?.prepareTurn) {
@@ -1491,13 +1500,14 @@ async function prepareInitialInput(
       try {
         admission = await options.turns.admit(
           key,
-          digest(
-            canonicalJson({
-              model: data.model,
-              input: data.input,
-              tools: data.tools,
-            }),
-          ),
+          intentSHA256 ??
+            digest(
+              canonicalJson({
+                model: data.model,
+                input: data.input,
+                tools: data.tools,
+              }),
+            ),
         );
       } catch {
         onRefusal("FAROL_NEXT_TURN_JOURNAL_UNAVAILABLE");

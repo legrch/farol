@@ -150,7 +150,7 @@ export async function startGoChatResponsesFixture(
     resolution: {
       requestedAlias: "chatgpt",
       requestedExecutor: "browser",
-      requestedEffort: "low",
+      requestedEffort: "",
       requestedMode: "standard",
       configSHA256: "a".repeat(64),
       translationId: "configured",

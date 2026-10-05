@@ -43,7 +43,7 @@ function hash(value: string) {
   return createHash("sha256").update(value).digest("hex");
 }
 const selection = {
-  provider: "chatgpt-web",
+  provider: "farol",
   alias: "chatgpt",
   accountId: "account",
   modelId: "model",
@@ -58,7 +58,7 @@ const target: Pick<ChatCreate, "selection" | "resolution" | "required"> = {
   resolution: {
     requestedAlias: "chatgpt",
     requestedExecutor: "chatgpt-web",
-    requestedEffort: "high",
+    requestedEffort: "",
     requestedMode: "chat",
     configSHA256: "a".repeat(64),
     translationId: "controlled-transport-fixture",
@@ -330,6 +330,7 @@ describe("startup-selected Go Responses transport with controlled peers", () => 
       journal?: ProviderTurnJournal;
       context?: string;
       relay?: boolean;
+      resolve?: GoChatResponsesOptions["resolveCreate"];
     } = {},
   ) {
     const root = await fs.mkdtemp(
@@ -358,7 +359,9 @@ describe("startup-selected Go Responses transport with controlled peers", () => 
     const legacy = vi.fn(async () => {
       throw new Error("Legacy executor must not run");
     });
-    const resolveCreate = vi.fn(() => target);
+    const resolveCreate = vi.fn<GoChatResponsesOptions["resolveCreate"]>(
+      opts.resolve ?? (() => target),
+    );
     const transport = createGoChatResponses({
       chat: p.chat,
       caller: p.caller,
@@ -397,6 +400,123 @@ describe("startup-selected Go Responses transport with controlled peers", () => 
       post,
     };
   }
+  it("refuses reasoning outside the supported effort subset before context, admission or relay", async () => {
+    const p = peer();
+    const a = await compose(p, { relay: true });
+    const open = vi.spyOn(a.relay!, "openTurn");
+    for (const reasoning of [
+      null,
+      [],
+      { effort: null },
+      { effort: "" },
+      { effort: "h".repeat(41) },
+      { effort: "high\n" },
+      { effort: "high", summary: "auto" },
+    ]) {
+      const response = await a.post({ ...body(), reasoning });
+      expect(response.status).toBeGreaterThanOrEqual(400);
+      expect(await response.text()).toMatch(
+        /FAROL_NEXT_REASONING_(INVALID|UNSUPPORTED)/u,
+      );
+    }
+    expect(a.compaction.prepareTurn).not.toHaveBeenCalled();
+    expect(a.resolveCreate).not.toHaveBeenCalled();
+    expect(a.admit).not.toHaveBeenCalled();
+    expect(open).not.toHaveBeenCalled();
+    expect(p.chat.create).not.toHaveBeenCalled();
+    expect(p.chat.send).not.toHaveBeenCalled();
+  });
+  it("carries exact explicit effort and declared translation from HTTP into resolver, intent and Create", async () => {
+    const p = peer();
+    const a = await compose(p, {
+      resolve: ({ requestSelection }) => {
+        const resolved = {
+          ...selection,
+          effort: requestSelection.effort === "Ultra" ? "route-max" : "high",
+        };
+        return {
+          ...target,
+          selection: resolved,
+          resolution: {
+            ...target.resolution,
+            requestedAlias: "configured-small",
+            requestedEffort: requestSelection.effort ?? "",
+            resolved,
+          },
+        };
+      },
+    });
+    for (const effort of ["high", "Ultra"]) {
+      const data = { ...body(`thread-${effort}`), reasoning: { effort } };
+      const response = await a.post(data);
+      expect(response.status).toBe(200);
+      await response.text();
+      const capture = a.resolveCreate.mock.calls.at(-1)![0].requestSelection;
+      expect(capture).toEqual({ model: "chatgpt", effort });
+      expect(Object.isFrozen(capture)).toBe(true);
+      expect(p.chat.create.mock.calls.at(-1)![0]).toMatchObject({
+        selection: {
+          provider: "farol",
+          alias: "chatgpt",
+          effort: effort === "Ultra" ? "route-max" : "high",
+        },
+        resolution: {
+          requestedAlias: "configured-small",
+          requestedEffort: effort,
+        },
+      });
+      expect(a.admit.mock.calls.at(-1)![1]).toBe(
+        hash(
+          JSON.stringify({
+            effort,
+            input: data.input,
+            model: "chatgpt",
+            tools: data.tools,
+          }),
+        ),
+      );
+    }
+  });
+  it("conflicts changed explicit effort across adapter lifetimes without retrying a lost Send", async () => {
+    const resolve: GoChatResponsesOptions["resolveCreate"] = ({
+      requestSelection,
+    }) => ({
+      ...target,
+      resolution: {
+        ...target.resolution,
+        requestedEffort: requestSelection.effort ?? "",
+      },
+    });
+    const p = peer("lost-send");
+    const a = await compose(p, { resolve });
+    const data = { ...body(), reasoning: { effort: "high" } };
+    expect(parse(await (await a.post(data)).text()).at(-1)!.type).toBe(
+      "response.failed",
+    );
+    await a.runtime.close();
+    const second = peer();
+    const b = await compose(second, {
+      resolve,
+      journal: new PrivateProviderTurnJournal({
+        root: path.join(a.root, "journal"),
+      }),
+    });
+    const replay = await b.post(data);
+    expect(await replay.text()).toContain("FAROL_NEXT_TURN_ALREADY_SUBMITTED");
+    for (const reasoning of [undefined, { effort: "low" }]) {
+      const conflict = await b.post({
+        ...body(),
+        ...(reasoning ? { reasoning } : {}),
+      });
+      expect(conflict.status).toBe(409);
+      expect(await conflict.text()).toContain(
+        "FAROL_NEXT_TURN_INTENT_CONFLICT",
+      );
+    }
+    expect(second.chat.create).not.toHaveBeenCalled();
+    expect(second.chat.send).not.toHaveBeenCalled();
+    expect(p.chat.send).toHaveBeenCalledTimes(1);
+  });
   it("selects Go before ActiveProviderTurn while retaining auth, schema, model, compaction and original admission", async () => {
     const p = peer();
     const a = await compose(p, { context: "Trusted checkpoint." });

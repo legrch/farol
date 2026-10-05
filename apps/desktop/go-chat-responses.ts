@@ -31,6 +31,13 @@ export type GoChatRequest = Readonly<{
   model: string;
   input: string | readonly unknown[];
   tools: readonly unknown[];
+  reasoning?: unknown;
+}>;
+// Public route identity, not a configured Go model alias. Only scalar request
+// selection is retained; Go owns resolution, admission and execution policy.
+export type GoChatRequestSelection = Readonly<{
+  model: "chatgpt";
+  effort?: string;
 }>;
 export type GoChatPreparedInput = Readonly<{
   prompt: string;
@@ -64,7 +71,11 @@ export type GoChatResponsesOptions = Readonly<{
   >;
   relay?: Pick<CodexCallerRelayRuntime, "openTurn">;
   resolveCreate(
-    input: Readonly<{ identity: GoChatIdentity; prompt: string }>,
+    input: Readonly<{
+      identity: GoChatIdentity;
+      prompt: string;
+      requestSelection: GoChatRequestSelection;
+    }>,
   ):
     | Pick<ChatCreate, "selection" | "resolution" | "required">
     | Promise<Pick<ChatCreate, "selection" | "resolution" | "required">>;
@@ -86,6 +97,48 @@ function object(value: unknown): value is Record<string, unknown> {
 }
 function fail(code: string): never {
   throw new Error(code);
+}
+export function extractGoChatRequestSelection(
+  request: unknown,
+): GoChatRequestSelection {
+  if (!object(request) || request.model !== "chatgpt")
+    fail("FAROL_NEXT_MODEL_UNAVAILABLE");
+  if (!Object.hasOwn(request, "reasoning"))
+    return Object.freeze({ model: "chatgpt" });
+  const reasoning = request.reasoning;
+  if (!object(reasoning)) fail("FAROL_NEXT_REASONING_INVALID");
+  if (Object.keys(reasoning).some((key) => key !== "effort"))
+    fail("FAROL_NEXT_REASONING_UNSUPPORTED");
+  if (!Object.hasOwn(reasoning, "effort"))
+    return Object.freeze({ model: "chatgpt" });
+  const effort = reasoning.effort;
+  // Matches the owning Go ModelRequest lexical boundary, not an effort enum.
+  if (
+    typeof effort !== "string" ||
+    effort.length < 1 ||
+    effort.length > 40 ||
+    /[^A-Za-z0-9_-]/u.test(effort)
+  )
+    fail("FAROL_NEXT_REASONING_INVALID");
+  return Object.freeze({ model: "chatgpt", effort });
+}
+
+export function goChatRequestIntentSHA256(
+  request: Pick<GoChatRequest, "input" | "tools">,
+  selection: GoChatRequestSelection,
+): string {
+  // Omission keeps the original canonical bytes so old unknown keys remain
+  // replay refusals. Explicit effort adds identity; it never replaces a key.
+  return createHash("sha256")
+    .update(
+      canonicalJson({
+        model: selection.model,
+        input: request.input,
+        tools: request.tools,
+        ...(selection.effort === undefined ? {} : { effort: selection.effort }),
+      }),
+    )
+    .digest("hex");
 }
 function relayInstruction(turn: CodexCallerRelayTurn): string {
   return [
@@ -109,10 +162,11 @@ type CallerConnection = {
   submitted: boolean;
 };
 // These records correlate transport endpoints with opaque Go handles. No output
-// history, lifecycle projection, slot allocation or user request is retained.
+// history, lifecycle projection, slot allocation or request body is retained.
 type Connection = {
   key: string;
   scope: ChatCallerScope;
+  requestSelection: GoChatRequestSelection;
   handle?: ChatHandle;
   sink?: Sink;
   waitingSink?: Sink;
@@ -504,8 +558,14 @@ export function createGoChatResponses(
   return {
     async serve(input) {
       if (closed) fail("FAROL_NEXT_PROVIDER_CLOSED");
+      const requestSelection = extractGoChatRequestSelection(input.request);
       const previous = connections.get(input.key);
       if (previous) {
+        if (
+          previous.requestSelection.model !== requestSelection.model ||
+          previous.requestSelection.effort !== requestSelection.effort
+        )
+          fail("FAROL_NEXT_CONTINUATION_SELECTION_CONFLICT");
         const caller = previous.caller;
         if (
           !current(previous) ||
@@ -583,6 +643,7 @@ export function createGoChatResponses(
       const c: Connection = {
         key: input.key,
         scope: { ...input.identity, model: "chatgpt" },
+        requestSelection,
         cursor: "0",
         fence: new AbortController(),
         barrier: false,
@@ -614,6 +675,7 @@ export function createGoChatResponses(
         const target = await options.resolveCreate({
           identity: input.identity,
           prompt,
+          requestSelection,
         });
         const create: ChatCreate = {
           ...target,
@@ -622,6 +684,14 @@ export function createGoChatResponses(
         };
         if (!validate("ChatCreate", create) || "previousHandle" in target)
           fail("FAROL_NEXT_GO_REQUEST_UNSUPPORTED");
+        if (
+          target.selection.provider !== "farol" ||
+          target.selection.alias !== requestSelection.model ||
+          target.resolution.requestedEffort !==
+            (requestSelection.effort ?? "") ||
+          !isDeepStrictEqual(target.resolution.resolved, target.selection)
+        )
+          fail("FAROL_NEXT_GO_SELECTION_CONFLICT");
         admitted = await prepared.admit();
         if (!admitted) {
           c.relay?.close();
