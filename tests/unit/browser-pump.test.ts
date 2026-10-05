@@ -241,6 +241,21 @@ async function fixture(onFailure?: (failure: BrowserPumpFailure) => void) {
   };
 }
 describe("one-shot typed browser pump", () => {
+  it("distinguishes an idle poll rejected by the original client's closure", async () => {
+    const report = vi.fn();
+    const f = await fixture(report);
+    expect(report).not.toHaveBeenCalled();
+    await f.client.close();
+    await f.pump.stop();
+    expect(report).toHaveBeenCalledExactlyOnceWith({
+      stage: "poll",
+      kind: null,
+      state: "unknown",
+      code: "client_closed",
+    });
+    expect(f.driver.prepare).not.toHaveBeenCalled();
+    expect(f.driver.send).not.toHaveBeenCalled();
+  });
   it("reports the first bounded driver failure without changing the one-shot fence", async () => {
     const report = vi.fn();
     const f = await fixture(report);

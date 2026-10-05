@@ -9,6 +9,18 @@ const failure = {
 const marker = (value: unknown) =>
   `FAROL_BROWSER_FAILURE ${JSON.stringify(value)}\n`;
 describe("content-free native browser failure witness", () => {
+  it("retains the exact local closure code without accepting arbitrary client error text", () => {
+    const c = browserFailureCollector();
+    const closed = {
+      stage: "poll",
+      kind: null,
+      state: "unknown",
+      code: "client_closed",
+    };
+    c.ingest(marker(closed));
+    c.ingest(marker({ ...closed, code: "client_private_error" }));
+    expect(c.failures).toEqual([closed]);
+  });
   it("retains exact classification across pipe chunks without recording surrounding output", () => {
     const c = browserFailureCollector();
     c.ingest("private noise\n" + marker(failure).slice(0, 30));

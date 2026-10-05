@@ -147,12 +147,20 @@ func (s *state) Exchange(ctx context.Context, c browser.Command) (browser.Reply,
 	}
 }
 func compose(ctx context.Context, scenario string) (*desktop.Server, *state, error) {
-	if scenario != "tool" && scenario != "text" && scenario != "lost-send-reply" {
+	if scenario != "tool" && scenario != "text" && scenario != "lost-send-reply" && scenario != "reciprocal" {
 		return nil, nil, errors.New("fixture_scenario_invalid")
 	}
 	s := newState(scenario)
 	scope := port.JournalScope{ProfileID: "profile", BackendGeneration: "backend"}
-	adapter, err := browser.New(ctx, browser.Scope{ProfileID: scope.ProfileID, BackendGeneration: scope.BackendGeneration}, s, clock{})
+	exchange, err := boot.NewBrowserExchange(ctx, wire.Context{ProfileId: scope.ProfileID, BackendGeneration: scope.BackendGeneration})
+	if err != nil {
+		return nil, nil, err
+	}
+	var browserPort browser.Exchange = s
+	if scenario == "reciprocal" {
+		browserPort = exchange
+	}
+	adapter, err := browser.New(ctx, browser.Scope{ProfileID: scope.ProfileID, BackendGeneration: scope.BackendGeneration}, browserPort, clock{})
 	if err != nil {
 		return nil, nil, err
 	}
@@ -169,6 +177,11 @@ func compose(ctx context.Context, scenario string) (*desktop.Server, *state, err
 		return nil, nil, err
 	}
 	methods := ingress.Methods()
+	if scenario == "reciprocal" {
+		for name, method := range exchange.Methods() {
+			methods[name] = method
+		}
+	}
 	for name, method := range methods {
 		original := method.Handle
 		method.Handle = func(ctx context.Context, r desktop.Request) (*desktop.Outcome, error) {

@@ -15,7 +15,7 @@ import type {
   BrowserRequiredControls,
 } from "../../../apps/desktop/bridge/wire.ts";
 
-const scenarios = ["tool", "text", "lost-send-reply"] as const;
+const scenarios = ["tool", "text", "lost-send-reply", "reciprocal"] as const;
 export type GoChatResponsesScenario = (typeof scenarios)[number];
 const count = z.number().int().nonnegative().max(100000);
 const receiptSchema = z.strictObject({

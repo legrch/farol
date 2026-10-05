@@ -653,7 +653,7 @@ export class GoChatBrowserDriver implements BrowserDriver {
         saved: reply.binding.phase === "conversation",
         binding: copy(s.binding),
         readiness: reply.readiness,
-        code: "physical_prepared",
+        code: "PHYSICAL_PREPARED",
       };
       shape("BrowserPrepared", result);
       return result;
@@ -816,7 +816,7 @@ export class GoChatBrowserDriver implements BrowserDriver {
           binding: copy(input.binding),
           verificationId: s.verification!.evidenceId,
           status: "unknown",
-          code: "physical_send_unknown",
+          code: "PHYSICAL_SEND_UNKNOWN",
         };
       }
       s.sendOutcome = result.status;
@@ -1087,7 +1087,7 @@ export class GoChatBrowserDriver implements BrowserDriver {
           return {
             binding: copy(input.binding),
             status: reply.state,
-            code: "physical_terminal_confirmed",
+            code: "PHYSICAL_TERMINAL_CONFIRMED",
           };
         }
         if (
@@ -1101,8 +1101,8 @@ export class GoChatBrowserDriver implements BrowserDriver {
           status: reply.state === "requested" ? "requested" : "unknown",
           code:
             reply.state === "requested"
-              ? "physical_stop_requested"
-              : "physical_stop_unconfirmed",
+              ? "PHYSICAL_STOP_REQUESTED"
+              : "PHYSICAL_STOP_UNCONFIRMED",
         };
       },
       true,
@@ -1143,8 +1143,8 @@ export class GoChatBrowserDriver implements BrowserDriver {
           lease: copy(input.lease),
           confirmed,
           code: confirmed
-            ? "physical_destroyed"
-            : "physical_destruction_unconfirmed",
+            ? "PHYSICAL_DESTROYED"
+            : "PHYSICAL_DESTRUCTION_UNCONFIRMED",
         };
       },
       true,

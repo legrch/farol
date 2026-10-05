@@ -1234,6 +1234,13 @@ async function native(selected, inputs, report, save) {
       "DUPLICATE_CLOSE_FORBIDDEN",
     );
     launch.cleanup.closeRequested = true;
+    if (selected.chatTwoTurn) {
+      // These are host observation boundaries, not stderr emission timestamps.
+      launch.browserFailuresObservedBeforeCleanup = structuredClone(
+        launch.browserFailures ?? [],
+      );
+      launch.cleanupRequestedObservedMillis = performance.now();
+    }
     launch.status = "quit-requested";
     await save();
     try {
@@ -2525,6 +2532,12 @@ async function native(selected, inputs, report, save) {
     report.scenarioPassed = true;
   } catch (error) {
     if (launch) {
+      if (selected.chatTwoTurn) {
+        launch.journeyFailedObservedMillis = performance.now();
+        launch.browserFailuresObservedAtJourneyFailure = structuredClone(
+          launch.browserFailures ?? [],
+        );
+      }
       launch.journeyError = String(error);
       if (
         !["confirmed-clean-quit", "quit-go-core-unconfirmed"].includes(

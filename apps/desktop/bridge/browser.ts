@@ -93,7 +93,7 @@ export class BrowserPump {
       state: classified ? error.state : "unknown",
       code:
         classified &&
-        /^(?:browser_|chat_browser_|host_browser_|host_chat_browser_|backend_)[a-z_]{1,80}$/u.test(
+        /^(?:client_closed|(?:browser_|chat_browser_|host_browser_|host_chat_browser_|backend_)[a-z_]{1,80})$/u.test(
           error.code,
         )
           ? error.code

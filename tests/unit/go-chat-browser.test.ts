@@ -884,7 +884,10 @@ describe("Go Chat BrowserDriver — strict physical doubles, CPU only", () => {
     const f = fixture();
     await f.start();
     const input = { binding: f.binding, deadlineMillis: "14000" };
-    expect((await f.driver.cancel(input)).status).toBe("requested");
+    expect(await f.driver.cancel(input)).toMatchObject({
+      status: "requested",
+      code: "PHYSICAL_STOP_REQUESTED",
+    });
     await expect(f.driver.cancel(input)).rejects.toThrow("cancel_consumed");
     expect(f.api.cancel).toHaveBeenCalledTimes(1);
   });
@@ -901,9 +904,11 @@ describe("Go Chat BrowserDriver — strict physical doubles, CPU only", () => {
       },
     });
     expect(
-      (await f.driver.cancel({ binding: f.binding, deadlineMillis: "14000" }))
-        .status,
-    ).toBe("confirmed-terminal");
+      await f.driver.cancel({ binding: f.binding, deadlineMillis: "14000" }),
+    ).toMatchObject({
+      status: "confirmed-terminal",
+      code: "PHYSICAL_TERMINAL_CONFIRMED",
+    });
     const g = fixture();
     await g.start();
     await g.observe();
@@ -926,6 +931,7 @@ describe("Go Chat BrowserDriver — strict physical doubles, CPU only", () => {
     expect(await f.driver.dispose(input)).toMatchObject({
       lease,
       confirmed: true,
+      code: "PHYSICAL_DESTROYED",
     });
     await expect(f.driver.dispose(input)).rejects.toThrow("not_prepared");
     expect(f.api.dispose).toHaveBeenCalledTimes(1);
@@ -978,7 +984,7 @@ describe("Go Chat BrowserDriver — strict physical doubles, CPU only", () => {
     );
     expect(await f.start()).toMatchObject({
       status: "unknown",
-      code: "physical_send_unknown",
+      code: "PHYSICAL_SEND_UNKNOWN",
     });
     expect((await f.observe()).events[0]?.kind).toBe("accepted");
     await expect(f.send()).rejects.toThrow("send_witness_mismatch");

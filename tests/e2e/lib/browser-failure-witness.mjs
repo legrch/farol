@@ -45,7 +45,7 @@ export function browserFailureCollector() {
               value.state,
             ) ||
             typeof value.code !== "string" ||
-            !/^(?:browser_|chat_browser_|host_browser_|host_chat_browser_|backend_)[a-z_]{1,80}$/u.test(
+            !/^(?:client_closed|(?:browser_|chat_browser_|host_browser_|host_chat_browser_|backend_)[a-z_]{1,80})$/u.test(
               value.code,
             )
           )
