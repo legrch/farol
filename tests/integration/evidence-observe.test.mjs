@@ -244,16 +244,16 @@ describe("EV-03/EV-08 effect observer", () => {
       ],
       { stdio: "ignore" },
     );
-    // Observe exit before yielding: the process may finish while the report
-    // is written on a loaded host. A late listener would wait forever.
+    // Capture exit before yielding and finish the child before publishing
+    // the report. Its exit event is then past regardless of host timing.
     const childExited = new Promise((resolve) => child.once("exit", resolve));
     children.push(child);
-    await new Promise((resolve) => setTimeout(resolve, 400));
+    await childExited;
+    expect(child.exitCode).toBe(0);
     await fs.writeFile(
       path.join(attempt.directory, "report.json"),
       JSON.stringify({ status: "PASS" }),
     );
-    await childExited;
     await attempt.finish("PASS", {
       cases: [...EVIDENCE_LANES["sealed-package"].cases],
     });
