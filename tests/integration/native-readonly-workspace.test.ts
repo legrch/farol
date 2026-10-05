@@ -6,6 +6,7 @@ import path from "node:path";
 import {
   NativeReadonlyWorkspace,
   NEXT_SAFE_OPEN_HELPER,
+  DEFAULT_DENIED_PATHS,
 } from "../../src/modules/computer/infra/native/native-readonly-workspace";
 import type { ReadonlyWorkspaceRequest } from "../../src/modules/computer/app/port/readonly-workspace";
 import { approvedRootOf } from "../fixtures/root-identity";
@@ -61,6 +62,79 @@ afterEach(async () => {
 });
 
 describe("native readonly Computer workspace", () => {
+  it.each([".codex", ".claude"])(
+    "reads, lists and searches the %s agent store under parent and direct roots",
+    async (directory) => {
+      // Disposable synthetic home; not the user's actual agent state.
+      const store = path.join(root, directory);
+      await fs.mkdir(store, { mode: 0o700 });
+      await fs.writeFile(
+        path.join(store, "marker.txt"),
+        "agent-store-marker\n",
+        { mode: 0o600 },
+      );
+      const native = new NativeReadonlyWorkspace({
+        helperPath: sourceHelper,
+        helper: NEXT_SAFE_OPEN_HELPER,
+        attestInterpreter: async () => "/usr/bin/python3",
+        homeDirectory: root,
+      });
+      for (const selected of [root, store]) {
+        const relative =
+          selected === root ? directory + "/marker.txt" : "marker.txt";
+        const descriptor = {
+          workspaceId: "agent-store",
+          root: selected,
+          approvedRoot: approvedRootOf(selected),
+          deniedPaths: [],
+        };
+        await expect(
+          native.execute({
+            workspace: descriptor,
+            operation: { kind: "workspace.read", relativePath: relative },
+          }),
+        ).resolves.toMatchObject({
+          ok: true,
+          value: { text: "agent-store-marker\n" },
+        });
+        await expect(
+          native.execute({
+            workspace: descriptor,
+            operation: {
+              kind: "workspace.list",
+              relativePath: selected === root ? directory : ".",
+            },
+          }),
+        ).resolves.toMatchObject({
+          ok: true,
+          value: { entries: ["marker.txt"], truncated: false },
+        });
+        await expect(
+          native.execute({
+            workspace: descriptor,
+            operation: {
+              kind: "workspace.search",
+              relativePath: ".",
+              pattern: "agent-store-marker",
+            },
+          }),
+        ).resolves.toMatchObject({
+          ok: true,
+          value: { matches: [{ path: relative, text: "agent-store-marker" }] },
+        });
+        await expect(
+          native.execute({
+            workspace: { ...descriptor, deniedPaths: [relative] },
+            operation: { kind: "workspace.read", relativePath: relative },
+          }),
+        ).resolves.toMatchObject({
+          ok: false,
+          error: { code: "WORKSPACE_PATH_REFUSED" },
+        });
+      }
+    },
+  );
+
   it("F1-1 refuses a request that names no approved folder identity", async () => {
     const { approvedRoot: _identity, ...unbound } = request({
       kind: "workspace.list",
@@ -891,15 +965,17 @@ describe("native readonly Computer workspace", () => {
     }
 
     it("accepts the largest exclusion union the helper enforces", async () => {
-      // 14 mandatory credential exclusions + 50 owner exclusions = 64.
-      await expect(reader().execute(withDenied(50))).resolves.toMatchObject({
+      // Include every mandatory prefix in the unchanged 64-prefix helper cap.
+      await expect(
+        reader().execute(withDenied(64 - DEFAULT_DENIED_PATHS.length)),
+      ).resolves.toMatchObject({
         ok: true,
         value: { kind: "workspace.text" },
       });
     });
 
     it("refuses one exclusion more with a specific policy error", async () => {
-      for (const count of [51, 200]) {
+      for (const count of [65 - DEFAULT_DENIED_PATHS.length, 200]) {
         await expect(reader().execute(withDenied(count))).resolves.toEqual({
           ok: false,
           error: { code: "WORKSPACE_POLICY_TOO_LARGE", retry: "never" },

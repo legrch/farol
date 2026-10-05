@@ -437,7 +437,6 @@ describe("Farol Next product configuration", () => {
       "/Users/example/.ssh",
       "/Users/example/.aws/profiles",
       "/Users/example/Library/Keychains",
-      "/Users/example/.Codex",
       // U+017F LONG S folds to "s" on APFS: this names ~/.ssh.
       "/Users/example/.\u017f\u017fh",
     ]) {
@@ -460,6 +459,74 @@ describe("Farol Next product configuration", () => {
       ).resolves.toMatchObject({ ok: true });
     }
   });
+
+  it.each([".codex", ".claude", ".Codex", ".CLAUDE"])(
+    "allows explicit read/write approval of the %s agent store without auto-enabling shell",
+    async (directory) => {
+      // Only synthetic settings are persisted in temporary state. No actual
+      // agent directory, transcript, config or credentials are read or changed.
+      const root = await stateRoot();
+      const service = new ProductConfigurationService(
+        new ProductSettingsStore({ root }),
+        { ...dependencies(), homeDirectory: "/Users/example" },
+      );
+      await service.initialize();
+      const added = await service.addReadonlyWorkspace({
+        root: "/Users/example/" + directory,
+        label: "Agent store",
+        rootIdentity: SYNTHETIC_ROOT_IDENTITY,
+      });
+      expect(added.ok).toBe(true);
+      const snapshot = service.snapshot();
+      if (snapshot.status !== "ready") throw new Error("settings missing");
+      const selected = snapshot.settings.computer.workspaces[0]!;
+      expect(selected.access).toBe("read");
+      expect(selected.rootIdentity).toEqual(SYNTHETIC_ROOT_IDENTITY);
+      const excluded = selected.root + "/private";
+      const commands = snapshot.settings.computer.commands;
+      const generation = snapshot.settings.computer.generation;
+      await expect(
+        service.updateWorkspaceAccess(selected.workspaceId, "write"),
+      ).resolves.toMatchObject({
+        ok: true,
+        snapshot: {
+          settings: {
+            computer: {
+              generation: generation + 1,
+              commands,
+              workspaces: [{ access: "write", gitHistoryApproved: false }],
+            },
+            setup: { computer: { verified: null } },
+          },
+        },
+      });
+      await expect(
+        service.updateWorkspaceExclusions(selected.workspaceId, [excluded]),
+      ).resolves.toMatchObject({
+        ok: true,
+        snapshot: {
+          settings: {
+            computer: {
+              workspaces: [{ excludedPaths: [excluded], access: "write" }],
+            },
+          },
+        },
+      });
+      await expect(
+        service.updateWorkspaceAccess(selected.workspaceId, "read"),
+      ).resolves.toMatchObject({
+        ok: true,
+        snapshot: {
+          settings: {
+            computer: {
+              commands,
+              workspaces: [{ excludedPaths: [excluded], access: "read" }],
+            },
+          },
+        },
+      });
+    },
+  );
 
   it("AUTH-10 binds an approved workspace to the folder identity seen at approval", async () => {
     const root = await stateRoot();

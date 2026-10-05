@@ -45,9 +45,11 @@ Git configuration inside each command to conceal missing production wiring.
 Do not pass a new caller-controlled environment bypass merely to satisfy tests.
 
 The managed writer under synthetic `.codex/worktrees` remains a reference-only
-part of this fixture. The product continues to refuse source roots inside the
-user's protected `.codex` store. Existing linked-worktree MCP tests cover a
-normal writer outside that store with its exact approved Git metadata. A
+part of this fixture. Product roots inside `.codex` or `.claude` follow
+[ordinary owner/task grants and explicit exclusions](agent-store-access.md);
+Git and linked-worktree metadata still require their separate approval.
+Existing linked-worktree MCP tests cover a normal writer outside those stores
+with its exact approved Git metadata. A
 second approved non-Git root and a new connector generation still need their
 own tests for this user-config behavior.
 

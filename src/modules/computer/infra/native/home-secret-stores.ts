@@ -9,12 +9,12 @@
  * as `service/.env.example` are not scanned: path policy is not a secret
  * detector.
  */
+// Agent stores (.codex/.claude) are ordinary workspaces, not mandatory
+// denials. Their contents, including credentials, follow the owner/task grant.
 export const HOME_CREDENTIAL_STORES = Object.freeze([
   ".ssh",
   ".aws",
   ".gnupg",
-  ".codex",
-  ".claude",
   ".git-credentials",
   ".netrc",
   ".npmrc",

@@ -989,6 +989,74 @@ describe.skipIf(process.platform !== "darwin")(
       expect(() => process.kill(-record.child.pid!, 0)).toThrow();
     });
 
+    it.each([".codex", ".claude"])(
+      "enforces read/write shell grants inside the %s agent store",
+      async (directory) => {
+        // New profile, disposable home and marker bytes. No installed agent is used.
+        const f = await fixture("workspace", false, directory);
+        const shell = new SandboxedWorkspaceShell(
+          f.approval,
+          f.participant,
+          binding,
+          path.join(f.root, "agent-private"),
+          () => Date.now(),
+          f.root,
+        );
+        shells.push(shell);
+        await fs.writeFile(
+          path.join(f.root, "outside.txt"),
+          "outside-agent-canary",
+        );
+        const started = await shell.start({
+          operationId: "agent-write",
+          workspaceId: "fixture",
+          relativeCwd: ".",
+          command: "printf agent-marker > marker.txt && cat marker.txt",
+          timeoutMs: 5_000,
+          write: true,
+        });
+        if (!started.ok) throw new Error(started.error.code);
+        const written = await complete(shell, started.value.handle, 300);
+        expect(written.exitCode, written.stderr).toBe(0);
+        expect(written.stdout).toBe("agent-marker");
+        const read = await shell.start({
+          operationId: "agent-read",
+          workspaceId: "fixture",
+          relativeCwd: ".",
+          command: "cat marker.txt",
+          timeoutMs: 5_000,
+          write: false,
+        });
+        if (!read.ok) throw new Error(read.error.code);
+        const observed = await complete(shell, read.value.handle, 300);
+        expect(observed.exitCode, observed.stderr).toBe(0);
+        expect(observed.stdout).toBe("agent-marker");
+        for (const [operationId, command] of [
+          ["agent-read-cannot-write", "printf forbidden > forbidden.txt"],
+          ["agent-outside-denied", "cat ../outside.txt"],
+        ] as const) {
+          const attempt = await shell.start({
+            operationId,
+            command,
+            workspaceId: "fixture",
+            relativeCwd: ".",
+            timeoutMs: 5_000,
+            write: false,
+          });
+          if (!attempt.ok) throw new Error(attempt.error.code);
+          const outcome = await complete(shell, attempt.value.handle, 300);
+          expect(outcome.exitCode).not.toBe(0);
+          expect(outcome.stdout).not.toContain("outside-agent-canary");
+        }
+        await expect(
+          fs.stat(path.join(f.workspace, "forbidden.txt")),
+        ).rejects.toMatchObject({ code: "ENOENT" });
+        expect(
+          await fs.readFile(path.join(f.workspace, "marker.txt"), "utf8"),
+        ).toBe("agent-marker");
+      },
+    );
+
     it("runs a normal write and Git workflow, denies outside and retains one operation", async () => {
       const { root, workspace, shell } = await fixture(
         "workspace",

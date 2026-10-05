@@ -125,6 +125,88 @@ async function atomicSave(file: string, content: string): Promise<void> {
 }
 
 describe("native mutable Computer workspace", () => {
+  it.each([".codex", ".claude"])(
+    "writes and edits the %s agent store without weakening collision, digest or exclusion checks",
+    async (directory) => {
+      // Native helper proof on synthetic files only, not a live settings edit.
+      const store = path.join(root, directory);
+      await fs.mkdir(store, { mode: 0o700 });
+      const native = new NativeReadonlyWorkspace({
+        helperPath: sourceHelper,
+        helper: NEXT_SAFE_OPEN_HELPER,
+        attestInterpreter: async () => "/usr/bin/python3",
+        homeDirectory: root,
+      });
+      for (const selected of [root, store]) {
+        const relativePath =
+          selected === root ? directory + "/parent.txt" : "direct.txt";
+        const descriptor = {
+          workspaceId: "agent-store",
+          root: selected,
+          approvedRoot: approvedRootOf(selected),
+          deniedPaths: [],
+          writeDeniedPaths: [".git"],
+        };
+        const create = {
+          workspace: descriptor,
+          operation: {
+            kind: "workspace.write" as const,
+            relativePath,
+            content: "before\n",
+            expectedSha256: null,
+          },
+        };
+        await expect(native.mutate(create)).resolves.toMatchObject({
+          ok: true,
+          value: { afterSha256: digest("before\n") },
+        });
+        await expect(native.mutate(create)).resolves.toMatchObject({
+          ok: false,
+        });
+        await expect(
+          native.mutate({
+            workspace: descriptor,
+            operation: {
+              kind: "workspace.edit",
+              relativePath,
+              expectedSha256: digest("before\n"),
+              edits: [{ oldText: "before", newText: "after" }],
+            },
+          }),
+        ).resolves.toMatchObject({
+          ok: true,
+          value: { afterSha256: digest("after\n"), replacements: 1 },
+        });
+        await expect(
+          native.mutate({
+            ...create,
+            operation: {
+              ...create.operation,
+              expectedSha256: digest("before\n"),
+              content: "stale overwrite",
+            },
+          }),
+        ).resolves.toMatchObject({ ok: false });
+        await expect(
+          native.mutate({
+            ...create,
+            workspace: { ...descriptor, deniedPaths: [relativePath] },
+            operation: {
+              ...create.operation,
+              expectedSha256: digest("after\n"),
+            },
+          }),
+        ).resolves.toMatchObject({
+          ok: false,
+          error: { code: "WORKSPACE_PATH_REFUSED" },
+        });
+        expect(
+          await fs.readFile(path.join(selected, relativePath), "utf8"),
+        ).toBe("after\n");
+      }
+    },
+  );
+
   it("F1-1 refuses a mutation that names no approved folder identity", async () => {
     const valid = request({
       kind: "workspace.write",

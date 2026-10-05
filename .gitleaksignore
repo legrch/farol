@@ -16,7 +16,7 @@ aebe84b6a6c669d5920e8bf1e421b55bb00ee0d7:tests/integration/codex-task-mcp.test.t
 06bc6e49dc26562502ab995fd200a0a3d4dcf380:tests/integration/codex-project-preference-mcp.test.ts:generic-api-key:7
 06bc6e49dc26562502ab995fd200a0a3d4dcf380:tests/integration/codex-project-preference.test.ts:generic-api-key:7
 
-# Exact historical false positives for the synthetic disposable review-profile
-# UUID. The active fixture now uses an obvious test UUID; retain all-ref scanning.
+# Reviewed synthetic bearer constant in disposable dev-review-profile fixtures.
+# Exact historical fingerprints only; current source and other copies still scan.
 113e3396eff34c0905838e726fb4c36b5304f60d:tests/integration/dev-review-profile.test.mjs:generic-api-key:25
 f4f24912ee7c05f1674396f7c3435e99ffa20041:tests/integration/dev-review-profile.test.mjs:generic-api-key:25
