@@ -11,6 +11,12 @@ export const conversationLimits = Object.freeze([
   "Go handoff requires durable completed results with explicit ACK and settlement. Any unconfirmed Quit still quarantines the profile; no replay, retry Quit or force-kill",
   "Go settlement/release is witnessed independently in the content-free lifecycle journal; UI follow-ready alone is not backend evidence",
 ]);
+export const typedConversationLimits = Object.freeze([
+  ...conversationLimits,
+  "Typed prompts describe a fictional canary; no selected file, workspace read, Computer grant or read admission is exercised",
+  "Independent disposable config/access snapshots gate typed turn polling and journey stages, including successor history and Quit; they do not instrument every transient native operation",
+  "Safe adopted account-preview IDs, exact retained IPC probes, UI state and the independent GET ledger witness account checking; no principal or private controller access",
+]);
 export const conversationId = "startup-two-turn-conversation";
 // Independently authored expected Markdown, kept in the test-side oracle only.
 // The site receives raw segment prose below; production derives these bytes
@@ -85,6 +91,183 @@ export function conversationScript(workspaceLabel) {
       ],
     },
   ];
+}
+
+// Same fixture segments and independent answer oracle. These prompts describe
+// fiction explicitly; they never claim that the harness or app read a file.
+export function typedConversationScript() {
+  const script = conversationScript("fictional-canary");
+  script[0].prompt = [
+    "This is a controlled synthetic typed-chat exercise.",
+    "Imagine a fictional read-only startup canary whose exact contents should be retained.",
+    "In this fiction, call the canary the selected file. No actual file was selected, read or attached.",
+    "Summarize that description and give one action item within the fiction.",
+  ].join("\n");
+  script[1].prompt =
+    "Give one concrete action item for the fictional canary described above. No actual file is involved.";
+  return script;
+}
+
+export function conversationSectionLabel(typed) {
+  assert.equal(typeof typed, "boolean", "CHAT_MODE_MUST_BE_BOOLEAN");
+  return typed ? "Chat conversation" : "Read conversation";
+}
+
+export function typedComputerSettingsWitness(settings) {
+  assert.deepEqual(
+    settings.computer.workspaces,
+    [],
+    "TYPED_WORKSPACE_FORBIDDEN",
+  );
+  assert.equal(
+    settings.computer.commands,
+    "none",
+    "TYPED_COMMAND_GRANT_FORBIDDEN",
+  );
+  assert.equal(settings.computer.pendingEdit, null, "TYPED_EDIT_FORBIDDEN");
+  assert.equal(
+    settings.setup.computer.verified,
+    null,
+    "TYPED_COMPUTER_VERIFY_FORBIDDEN",
+  );
+  assert.equal(settings.setup.computer.configured, false);
+  assert.equal(settings.nativeHosts.codex, null);
+  assert.equal(settings.nativeHosts.taskRoute, null);
+  assert.equal(settings.connectors.secureMcp.runtime, null);
+  assert.equal(settings.connectors.secureMcp.attachment, null);
+  assert.equal(settings.connectors.secureMcp.credential, "missing");
+}
+
+export function typedFirstUiWitness(ui, phase, prompt, session, original) {
+  assert.ok(["initial", "observed", "draft"].includes(phase));
+  assert.equal(ui.present, true, "TYPED_FORM_MISSING");
+  assert.equal(ui.currentPresent, false, "TYPED_IMPLICIT_TURN");
+  assert.equal(ui.readMetadataPresent, false, "TYPED_READ_PREVIEW_FORBIDDEN");
+  assert.deepEqual(ui.alerts, []);
+  assert.doesNotMatch(
+    ui.text,
+    /unknown|refused|unconfirmed|unavailable|paused/iu,
+  );
+  for (const privateId of [session.user.id, session.account.id])
+    assert.equal(ui.text.includes(privateId), false, "CHAT_ACCOUNT_ID_EXPOSED");
+  assert.equal(
+    ui.draft,
+    phase === "draft" ? prompt : "",
+    "TYPED_DRAFT_CROSSED",
+  );
+  assert.equal(ui.inputDisabled, false);
+  const preview = ui.preview;
+  if (phase === "initial")
+    assert.deepEqual(preview, {
+      operationId: null,
+      sessionId: null,
+      confirmationId: null,
+    });
+  else {
+    for (const key of ["operationId", "sessionId", "confirmationId"])
+      assert.match(
+        preview[key] ?? "",
+        /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/u,
+        `TYPED_PREVIEW_ID_INVALID:${key}`,
+      );
+    if (original) assert.deepEqual(preview, original, "TYPED_PREVIEW_CROSSED");
+  }
+  assert.deepEqual(ui.buttons, [
+    { name: "Check account", disabled: phase !== "initial" },
+    { name: "Use this account and send", disabled: phase !== "draft" },
+  ]);
+  assert.equal(
+    ui.statuses.includes("The account will be checked again before sending."),
+    phase !== "initial",
+    "TYPED_ACCOUNT_CHECK_NOT_CURRENT",
+  );
+}
+
+async function readTypedFirstUi(window) {
+  return window.evaluate(() => {
+    const sections = document.querySelectorAll(
+      'section[aria-label="New Chat conversation"]',
+    );
+    if (sections.length !== 1)
+      throw new Error("TYPED_FORM_MISSING_OR_AMBIGUOUS");
+    const section = sections[0];
+    const input = section.querySelector("textarea");
+    return {
+      present: true,
+      preview: {
+        operationId: section.getAttribute("data-operation-id"),
+        sessionId: section.getAttribute("data-session-id"),
+        confirmationId: section.getAttribute("data-confirmation-id"),
+      },
+      currentPresent: Boolean(
+        document.querySelector('[aria-label="Current Chat turn"]'),
+      ),
+      readMetadataPresent: Boolean(
+        document.querySelector('[aria-label="Selected file metadata"]'),
+      ),
+      text: section.textContent,
+      draft: input?.value ?? null,
+      inputDisabled: input ? input.disabled : null,
+      buttons: [...section.querySelectorAll("button")].map((b) => ({
+        name: b.textContent.trim(),
+        disabled: b.disabled,
+      })),
+      statuses: [...section.querySelectorAll('[role="status"]')].map(
+        (n) => n.textContent,
+      ),
+      alerts: [...document.querySelectorAll('[role="alert"]')].map(
+        (n) => n.textContent,
+      ),
+    };
+  });
+}
+
+export function typedInspectReplyWitness(reply, preview, revision) {
+  assert.equal(reply.ok, true, "TYPED_ORIGINAL_INSPECTION_UNCONFIRMED");
+  assert.equal(reply.snapshot.status, "ready");
+  assert.equal(reply.snapshot.settings.revision, revision);
+  typedComputerSettingsWitness(reply.snapshot.settings);
+  assert.deepEqual(
+    reply.evidence,
+    {
+      kind: "chatgpt.chat-account-preview",
+      ...preview,
+      state: "observed",
+    },
+    "TYPED_INSPECTION_CROSSED_OR_UNSAFE",
+  );
+}
+
+export function typedStartReplyWitness(reply, preview, ui, binding) {
+  assert.equal(reply.ok, true, "TYPED_ORIGINAL_START_UNCONFIRMED");
+  assert.equal(reply.snapshot.status, "ready");
+  typedComputerSettingsWitness(reply.snapshot.settings);
+  const value = reply.evidence;
+  assert.equal(value.kind, "chatgpt.readonly-conversation");
+  assert.equal(value.operationId, preview.operationId);
+  assert.equal(value.handleId, ui.handleId);
+  assert.equal(value.binding.sessionId, preview.sessionId);
+  assert.equal(value.binding.taskId, ui.taskId);
+  assert.equal(value.binding.turnId, ui.turnId);
+  for (const [dto, go] of [
+    ["profileId", "ProfileID"],
+    ["backendGeneration", "BackendGeneration"],
+    ["ownerId", "OwnerID"],
+    ["sessionId", "SessionID"],
+    ["taskId", "TaskID"],
+    ["taskEpoch", "TaskEpoch"],
+    ["participantId", "ParticipantID"],
+    ["turnId", "TurnID"],
+    ["operationId", "OperationID"],
+    ["turnGeneration", "TurnGeneration"],
+  ])
+    assert.equal(
+      String(value.binding[dto]),
+      String(binding[go]),
+      `TYPED_ORIGINAL_START_CROSSED:${dto}`,
+    );
+  // The retained first reply can precede physical delivery. Its current owner
+  // is proven by the independent UI/Go ACK witnesses, never this old phase.
 }
 
 // A normal-default settings document with ONLY tasks added. No workspace,
@@ -435,8 +618,10 @@ export function conversationQuitWitness(quit, marker, cleanup) {
   return "quit-go-core-unconfirmed";
 }
 
-export function conversationWitnessSelfTest(pass, reject) {
-  const script = conversationScript("read-workspace");
+export function conversationWitnessSelfTest(pass, reject, typed = false) {
+  const script = typed
+    ? typedConversationScript()
+    : conversationScript("read-workspace");
   const seed = conversationSeed("12345678-1234-4234-8234-123456789012");
   pass(() => assert.deepEqual(seed.tasks, syntheticTaskPolicy));
   pass(() => {
@@ -449,7 +634,7 @@ export function conversationWitnessSelfTest(pass, reject) {
     assert.equal(seed.connectors.secureMcp.runtime, null);
     assert.equal(seed.connectors.secureMcp.credential, "missing");
   });
-  pass(() => assert.ok(script[0].prompt.includes(readCanary.text)));
+  pass(() => assert.equal(script[0].prompt.includes(readCanary.text), !typed));
   pass(() => assert.ok(Buffer.byteLength(script[0].prompt, "utf8") <= 8192));
   pass(() =>
     assert.equal(script[0].prompt.includes(script[0].segments[1].text), false),
@@ -497,6 +682,27 @@ export function conversationWitnessSelfTest(pass, reject) {
       0,
     ),
   );
+  if (typed) {
+    const checked = {
+      ...ledger,
+      attemptedSends: 0,
+      acceptedSends: 0,
+      ledger: [],
+      turns: [],
+      accountGets: 1,
+    };
+    pass(() => conversationLedgerWitness(checked, script, 0, session, 1));
+    for (const accountGets of [0, 2, 4])
+      reject(() =>
+        conversationLedgerWitness(
+          { ...checked, accountGets },
+          script,
+          0,
+          session,
+          1,
+        ),
+      );
+  }
   for (const changed of [
     { attemptedSends: 3 },
     { acceptedSends: 1 },
@@ -575,6 +781,19 @@ export function conversationWitnessSelfTest(pass, reject) {
     reject(() =>
       conversationUiWitness({ ...ui, ...changed }, "early", script, 0),
     );
+  for (const future of script.flatMap((turn, i) =>
+    turn.segments.flatMap((segment, j) =>
+      i === 0 && j === 0 ? [] : [segment.text, conversationOutput[i][j]],
+    ),
+  ))
+    reject(() =>
+      conversationUiWitness(
+        { ...ui, text: `${ui.text}\n${future}` },
+        "early",
+        script,
+        0,
+      ),
+    );
   const full = conversationOutput[0].join("\n\n");
   const result = {
     ...ui,
@@ -641,6 +860,16 @@ export function conversationWitnessSelfTest(pass, reject) {
     retainedAnswers: [full],
   };
   pass(() => conversationUiWitness(second, "early", script, 1, ack));
+  for (const future of [script[1].segments[1].text, conversationOutput[1][1]])
+    reject(() =>
+      conversationUiWitness(
+        { ...second, text: `${second.text}\n${future}` },
+        "early",
+        script,
+        1,
+        ack,
+      ),
+    );
   for (const changed of [
     { taskId: "other" },
     { handleId: ack.handleId },
@@ -830,6 +1059,30 @@ export function conversationWitnessSelfTest(pass, reject) {
     ),
   );
   reject(() => conversationJournalWitness(journal, initial, ui, null));
+  for (const changed of [
+    { DeltaCount: 0 },
+    { HasResult: true },
+    { DeliveryAcknowledged: true },
+    { LifecycleSettled: true },
+    { Phase: "result-ready" },
+  ])
+    reject(() =>
+      conversationJournalWitness(
+        { ...initial, writes: [write("delta", { ...early, ...changed }, 0)] },
+        initial,
+        ui,
+        null,
+      ),
+    );
+  for (const kind of ["acknowledge", "release"])
+    reject(() =>
+      conversationJournalWitness(
+        { ...initial, writes: [write(kind, early, 0)] },
+        initial,
+        ui,
+        null,
+      ),
+    );
   const cleanup = {
     closeRequested: true,
     exitObserved: true,
@@ -879,10 +1132,247 @@ export function conversationWitnessSelfTest(pass, reject) {
     );
 }
 
+export function typedConversationWitnessSelfTest(pass, reject) {
+  // Run the unchanged answer/lifecycle/ledger/closure fences with typed input.
+  conversationWitnessSelfTest(pass, reject, true);
+  const script = typedConversationScript();
+  pass(() =>
+    assert.equal(conversationSectionLabel(false), "Read conversation"),
+  );
+  pass(() => assert.equal(conversationSectionLabel(true), "Chat conversation"));
+  for (const mode of [undefined, "Chat conversation", "typed", 1])
+    reject(() => conversationSectionLabel(mode));
+  for (const turn of script) {
+    pass(() => assert.ok(Buffer.byteLength(turn.prompt, "utf8") <= 8192));
+    for (const future of script.flatMap((t, i) =>
+      t.segments.flatMap((s, j) => [s.text, conversationOutput[i][j]]),
+    ))
+      pass(() => assert.equal(turn.prompt.includes(future), false));
+  }
+  const settings = conversationSeed("12345678-1234-4234-8234-123456789012");
+  pass(() => typedComputerSettingsWitness(settings));
+  for (const mutate of [
+    (s) => s.computer.workspaces.push({ workspaceId: "fake-read" }),
+    (s) => {
+      s.computer.commands = "all";
+    },
+    (s) => {
+      s.computer.pendingEdit = {};
+    },
+    (s) => {
+      s.setup.computer.verified = { protocol: "readonly-workspace/1" };
+    },
+    (s) => {
+      s.setup.computer.configured = true;
+    },
+    (s) => {
+      s.nativeHosts.codex = {};
+    },
+    (s) => {
+      s.nativeHosts.taskRoute = {};
+    },
+    (s) => {
+      s.connectors.secureMcp.runtime = {};
+    },
+    (s) => {
+      s.connectors.secureMcp.attachment = {};
+    },
+    (s) => {
+      s.connectors.secureMcp.credential = "present";
+    },
+  ])
+    reject(() => {
+      const copy = structuredClone(settings);
+      mutate(copy);
+      typedComputerSettingsWitness(copy);
+    });
+  const session = {
+    user: { id: "private-user" },
+    account: { id: "private-account" },
+  };
+  const preview = {
+    operationId: "11111111-1111-4111-8111-111111111111",
+    sessionId: "22222222-2222-4222-8222-222222222222",
+    confirmationId: "33333333-3333-4333-8333-333333333333",
+  };
+  const observed = {
+    present: true,
+    currentPresent: false,
+    readMetadataPresent: false,
+    alerts: [],
+    text: "Account observed",
+    draft: "",
+    inputDisabled: false,
+    preview,
+    statuses: ["The account will be checked again before sending."],
+    buttons: [
+      { name: "Check account", disabled: true },
+      { name: "Use this account and send", disabled: true },
+    ],
+  };
+  const draft = {
+    ...observed,
+    draft: script[0].prompt,
+    buttons: [observed.buttons[0], { ...observed.buttons[1], disabled: false }],
+  };
+  pass(() =>
+    typedFirstUiWitness(observed, "observed", script[0].prompt, session),
+  );
+  pass(() =>
+    typedFirstUiWitness(draft, "draft", script[0].prompt, session, preview),
+  );
+  pass(() =>
+    typedFirstUiWitness(
+      {
+        ...observed,
+        preview: { operationId: null, sessionId: null, confirmationId: null },
+        statuses: [],
+        buttons: [
+          { ...observed.buttons[0], disabled: false },
+          observed.buttons[1],
+        ],
+      },
+      "initial",
+      script[0].prompt,
+      session,
+    ),
+  );
+  for (const changed of [
+    { currentPresent: true },
+    { readMetadataPresent: true },
+    { draft: "changed" },
+    { inputDisabled: true },
+    { statuses: [] },
+    { text: "private-user" },
+    { text: "private-account" },
+    { text: "unconfirmed" },
+    { preview: { ...preview, sessionId: preview.operationId } },
+    { buttons: observed.buttons },
+    { alerts: ["bad"] },
+  ])
+    reject(() =>
+      typedFirstUiWitness(
+        { ...draft, ...changed },
+        "draft",
+        script[0].prompt,
+        session,
+        preview,
+      ),
+    );
+  for (const key of Object.keys(preview)) {
+    for (const value of [
+      null,
+      "invalid",
+      "44444444-4444-4444-8444-444444444444",
+    ])
+      reject(() =>
+        typedFirstUiWitness(
+          { ...draft, preview: { ...preview, [key]: value } },
+          "draft",
+          script[0].prompt,
+          session,
+          preview,
+        ),
+      );
+  }
+  const inspection = {
+    ok: true,
+    snapshot: { status: "ready", settings },
+    evidence: {
+      kind: "chatgpt.chat-account-preview",
+      ...preview,
+      state: "observed",
+    },
+  };
+  pass(() => typedInspectReplyWitness(inspection, preview, 1));
+  for (const change of [
+    { state: "approved" },
+    { kind: "chatgpt.readonly-task-preview" },
+    { principalKey: "private" },
+    { confirmationId: preview.operationId },
+  ])
+    reject(() =>
+      typedInspectReplyWitness(
+        { ...inspection, evidence: { ...inspection.evidence, ...change } },
+        preview,
+        1,
+      ),
+    );
+  for (const key of Object.keys(preview))
+    reject(() =>
+      typedInspectReplyWitness(
+        { ...inspection, evidence: { ...inspection.evidence, [key]: "other" } },
+        preview,
+        1,
+      ),
+    );
+  reject(() => typedInspectReplyWitness(inspection, preview, 2));
+  const ui = {
+    taskId: "independent-go-task",
+    turnId: "go-turn",
+    handleId: "go-handle",
+  };
+  const binding = {
+    ProfileID: "go-profile",
+    BackendGeneration: "go-backend",
+    OwnerID: "go-owner",
+    SessionID: preview.sessionId,
+    TaskID: ui.taskId,
+    TaskEpoch: 1,
+    ParticipantID: "go-chat-participant",
+    TurnID: ui.turnId,
+    OperationID: "go-operation",
+    TurnGeneration: 1,
+  };
+  const start = {
+    ...inspection,
+    evidence: {
+      kind: "chatgpt.readonly-conversation",
+      operationId: preview.operationId,
+      handleId: ui.handleId,
+      binding: {
+        profileId: binding.ProfileID,
+        backendGeneration: binding.BackendGeneration,
+        ownerId: binding.OwnerID,
+        sessionId: binding.SessionID,
+        taskId: binding.TaskID,
+        taskEpoch: "1",
+        participantId: binding.ParticipantID,
+        turnId: binding.TurnID,
+        operationId: binding.OperationID,
+        turnGeneration: "1",
+      },
+    },
+  };
+  pass(() => typedStartReplyWitness(start, preview, ui, binding));
+  for (const key of Object.keys(start.evidence.binding))
+    reject(() =>
+      typedStartReplyWitness(
+        {
+          ...start,
+          evidence: {
+            ...start.evidence,
+            binding: { ...start.evidence.binding, [key]: "other" },
+          },
+        },
+        preview,
+        ui,
+        binding,
+      ),
+    );
+}
+
 // Page evaluation takes one public DOM snapshot without Playwright's implicit
 // locator wait. The preview can remain mounted while the original Send runs.
-export async function readConversationUi(window) {
-  return window.evaluate(() => {
+export async function readConversationUi(
+  window,
+  sectionLabel = "Read conversation",
+) {
+  assert.ok(
+    ["Read conversation", "Chat conversation"].includes(sectionLabel),
+    "CHAT_SECTION_LABEL_INVALID",
+  );
+  return window.evaluate((sectionLabel) => {
     const currents = document.querySelectorAll(
       '[aria-label="Current Chat turn"]',
     );
@@ -917,7 +1407,9 @@ export async function readConversationUi(window) {
             .map((n) => (n.nodeName === "BR" ? "\n" : n.textContent))
             .join("")
         : "";
-    const conversation = current.closest('[aria-label="Read conversation"]');
+    const conversation = current.closest(
+      `section[aria-label="${sectionLabel}"]`,
+    );
     if (!conversation) throw new Error("CHAT_UI_CONVERSATION_MISSING");
     const buttons = [...conversation.querySelectorAll("button")];
     const status = (name) =>
@@ -951,7 +1443,7 @@ export async function readConversationUi(window) {
       followEnabled: enabled("Send follow-up"),
       followInputEnabled: Boolean(follow && !follow.disabled),
     };
-  });
+  }, sectionLabel);
 }
 
 // Diagnostic allowlist for this synthetic-fixture journey: no document body,
@@ -1142,15 +1634,41 @@ export async function runConversationJourney({
   journal,
   report,
   save,
+  typed = false,
+  authority,
+  retained,
 }) {
+  const sectionLabel = conversationSectionLabel(typed);
+  if (typed) {
+    assert.equal(workspace, undefined, "TYPED_WORKSPACE_ARGUMENT_FORBIDDEN");
+    assert.equal(
+      typeof authority,
+      "function",
+      "TYPED_INDEPENDENT_AUTHORITY_REQUIRED",
+    );
+    assert.equal(typeof retained, "function", "TYPED_RETAINED_STATE_REQUIRED");
+    typedComputerSettingsWitness(configured);
+    assert.deepEqual(script, typedConversationScript(), "TYPED_SCRIPT_CROSSED");
+  }
+  const readTurn = () => readConversationUi(window, sectionLabel);
   report.observations = [];
   const waitRead = (read, predicate, active) =>
-    waitConversationRead(read, predicate, active, {
-      onFailure: async (failure) => {
-        report.observationFailure = failure;
-        await save();
+    waitConversationRead(
+      async () => {
+        if (typed) await authority("before-ui-observation", false);
+        const value = await read();
+        if (typed) await authority("after-ui-observation", false);
+        return value;
       },
-    });
+      predicate,
+      active,
+      {
+        onFailure: async (failure) => {
+          report.observationFailure = failure;
+          await save();
+        },
+      },
+    );
   let sends = 0,
     gets = 0;
   const previewWitness = (ui, phase, original) => {
@@ -1171,6 +1689,7 @@ export async function runConversationJourney({
   const record = async (label, ui, go) => {
     active();
     await hidden();
+    if (typed) await authority(label);
     if (go) {
       const previous = report.observations.find((entry) => entry.go)?.go;
       if (previous) {
@@ -1202,43 +1721,10 @@ export async function runConversationJourney({
   await window
     .getByRole("button", { name: "Home", exact: true })
     .click({ timeout: 5000 });
-  const previewSection = window.locator(
-    'section[aria-label="Read-only file preview"]',
-  );
-  await previewSection
-    .getByRole("combobox")
-    .selectOption(workspace.workspaceId, { timeout: 5000 });
-  const accountClick = async (name, after) => {
-    await hidden();
-    active();
-    await previewSection
-      .getByRole("button", { name, exact: true })
-      .click({ timeout: 5000 });
-    return waitRead(
-      () => readAccountUi(window),
-      (ui) => ui.buttons.some((b) => b.name === after && !b.disabled),
-      active,
-    );
-  };
-  const prepared = previewWitness(
-    await accountClick("Choose file…", "Inspect current account"),
-    "prepared",
-  );
-  await record("react-prepared-zero-send", prepared);
-  const observed = await accountClick(
-    "Inspect current account",
-    "Use this account",
-  );
-  gets = 1;
-  previewWitness(observed, "observed", prepared);
-  await record("react-account-inspected-zero-send", prepared);
-  const approved = await accountClick("Use this account", "Send to ChatGPT");
-  gets = 2;
-  previewWitness(approved, "approved", prepared);
-  await record("react-account-confirmed-zero-send", prepared);
   const remount = async () => {
     await hidden();
     active();
+    if (typed) await authority("before-home-remount");
     await window
       .getByRole("button", { name: "Settings", exact: true })
       .click({ timeout: 5000 });
@@ -1246,19 +1732,175 @@ export async function runConversationJourney({
       .getByRole("button", { name: "Home", exact: true })
       .click({ timeout: 5000 });
   };
-  await remount();
-  previewWitness(await readAccountUi(window), "approved", prepared);
-  await record("approved-home-remount-no-send", prepared);
+  const previewSection = window.locator(
+    'section[aria-label="Read-only file preview"]',
+  );
+  const typedSection = window.locator(
+    'section[aria-label="New Chat conversation"]',
+  );
+  let typedPreview;
+  const probe = async (command) => {
+    active();
+    await hidden();
+    const before = await retained();
+    const beforeLedger = ledger();
+    const observation = { command, before, status: "requested" };
+    report.retainedProbes ??= [];
+    report.retainedProbes.push(observation);
+    await save();
+    let timer, reply;
+    try {
+      reply = await Promise.race([
+        window.evaluate(
+          (command) => window.farolNext.configure(command),
+          command,
+        ),
+        new Promise((_, reject) => {
+          timer = setTimeout(
+            () => reject(new Error("TYPED_RETAINED_IPC_UNKNOWN_NO_RETRY")),
+            20000,
+          );
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
+    active();
+    assert.deepEqual(
+      await retained(),
+      before,
+      "TYPED_DUPLICATE_MUTATED_RETAINED_STATE",
+    );
+    assert.deepEqual(
+      ledger(),
+      beforeLedger,
+      "TYPED_DUPLICATE_PROVIDER_ACTIVITY",
+    );
+    Object.assign(observation, {
+      reply,
+      status: "unchanged-retained-state-and-provider-ledger",
+    });
+    await save();
+    return reply;
+  };
+  if (typed) {
+    typedFirstUiWitness(
+      await readTypedFirstUi(window),
+      "initial",
+      script[0].prompt,
+      session,
+    );
+    await record(
+      "react-typed-first-empty-zero-send",
+      await readTypedFirstUi(window),
+    );
+    await hidden();
+    active();
+    await typedSection
+      .getByRole("button", { name: "Check account", exact: true })
+      .click({ timeout: 5000 });
+    const observed = await waitRead(
+      () => readTypedFirstUi(window),
+      (ui) =>
+        ui.statuses.includes(
+          "The account will be checked again before sending.",
+        ),
+      active,
+    );
+    gets = 1;
+    typedFirstUiWitness(observed, "observed", script[0].prompt, session);
+    typedPreview = observed.preview;
+    await record("react-typed-account-checked-one-get-zero-send", observed);
+    typedInspectReplyWitness(
+      await probe({
+        kind: "chatgpt.inspect-chat-account",
+        operationId: typedPreview.operationId,
+      }),
+      typedPreview,
+      configured.revision,
+    );
+    await typedSection
+      .getByRole("textbox", { name: "First message", exact: true })
+      .fill(script[0].prompt, { timeout: 5000 });
+    const draft = await waitRead(
+      () => readTypedFirstUi(window),
+      (ui) =>
+        ui.buttons.some(
+          (b) => b.name === "Use this account and send" && !b.disabled,
+        ),
+      active,
+    );
+    typedFirstUiWitness(
+      draft,
+      "draft",
+      script[0].prompt,
+      session,
+      typedPreview,
+    );
+    await record("react-typed-draft-zero-send", draft);
+    await remount();
+    const retained = await readTypedFirstUi(window);
+    typedFirstUiWitness(
+      retained,
+      "draft",
+      script[0].prompt,
+      session,
+      typedPreview,
+    );
+    await record(
+      "typed-home-remount-retains-account-and-draft-zero-send",
+      retained,
+    );
+  } else {
+    await previewSection
+      .getByRole("combobox")
+      .selectOption(workspace.workspaceId, { timeout: 5000 });
+    const accountClick = async (name, after) => {
+      await hidden();
+      active();
+      await previewSection
+        .getByRole("button", { name, exact: true })
+        .click({ timeout: 5000 });
+      return waitRead(
+        () => readAccountUi(window),
+        (ui) => ui.buttons.some((b) => b.name === after && !b.disabled),
+        active,
+      );
+    };
+    const prepared = previewWitness(
+      await accountClick("Choose file…", "Inspect current account"),
+      "prepared",
+    );
+    await record("react-prepared-zero-send", prepared);
+    const observed = await accountClick(
+      "Inspect current account",
+      "Use this account",
+    );
+    gets = 1;
+    previewWitness(observed, "observed", prepared);
+    await record("react-account-inspected-zero-send", prepared);
+    const approved = await accountClick("Use this account", "Send to ChatGPT");
+    gets = 2;
+    previewWitness(approved, "approved", prepared);
+    await record("react-account-confirmed-zero-send", prepared);
+    await remount();
+    previewWitness(await readAccountUi(window), "approved", prepared);
+    await record("approved-home-remount-no-send", prepared);
+  }
   let first;
   for (let index = 0; index < 2; index++) {
     active();
     await hidden();
+    if (typed) await authority(`before-turn-${index + 1}-send`);
     if (index === 0)
-      await previewSection
-        .getByRole("button", { name: "Send to ChatGPT", exact: true })
+      await (typed ? typedSection : previewSection)
+        .getByRole("button", {
+          name: typed ? "Use this account and send" : "Send to ChatGPT",
+          exact: true,
+        })
         .click({ timeout: 5000 });
     else {
-      const current = window.locator('[aria-label="Read conversation"]');
+      const current = window.locator(`section[aria-label="${sectionLabel}"]`);
       await current
         .getByRole("textbox", { name: "Follow-up message", exact: true })
         .fill(script[1].prompt, { timeout: 5000 });
@@ -1267,12 +1909,13 @@ export async function runConversationJourney({
         .click({ timeout: 5000 });
     }
     sends = index + 1;
-    // Physical Verify and the immediate pre-Send account check each issue one
-    // synthetic GET per turn, in addition to the two explicit UI account GETs.
+    // Typed: first UI check + fresh confirmation at Send + physical Verify /
+    // final account check = 4. Read: two explicit UI GETs + two physical GETs.
+    // Both paths then add two physical GETs for the follow-up, reaching 6.
     gets = 2 + 2 * sends;
     await waitRead(
       async () => ({
-        ...(await readConversationUi(window)),
+        ...(await readTurn()),
         ledger: driver.snapshot(),
       }),
       (v) => v.currentPresent && v.ledger.acceptedSends === sends,
@@ -1283,7 +1926,7 @@ export async function runConversationJourney({
     driver.releaseGeneration(turn.replyId, 1);
     driver.releaseRender(turn.replyId, 1);
     let ui = await waitRead(
-      () => readConversationUi(window),
+      readTurn,
       (v) => v.answer === conversationOutput[index][0],
       active,
     );
@@ -1304,7 +1947,7 @@ export async function runConversationJourney({
     driver.releaseRender(turn.replyId, 2);
     driver.releaseTerminal(turn.replyId);
     ui = await waitRead(
-      () => readConversationUi(window),
+      readTurn,
       (v) => v.phase === "result-ready" && v.ackEnabled,
       active,
     );
@@ -1319,7 +1962,7 @@ export async function runConversationJourney({
     // A poll already in flight can keep the exact ACK button disabled across
     // this remount. Wait only for its read reply; do not issue another action.
     ui = await waitRead(
-      () => readConversationUi(window),
+      readTurn,
       (v) => v.phase === "result-ready" && v.ackEnabled,
       active,
     );
@@ -1333,15 +1976,12 @@ export async function runConversationJourney({
     );
     active();
     await hidden();
+    if (typed) await authority(`before-turn-${sends}-explicit-ack`);
     await window
       .locator('[aria-label="Current Chat turn"]')
       .getByRole("button", { name: "Acknowledge result", exact: true })
       .click({ timeout: 5000 });
-    ui = await waitRead(
-      () => readConversationUi(window),
-      (v) => v.followReady === "true",
-      active,
-    );
+    ui = await waitRead(readTurn, (v) => v.followReady === "true", active);
     conversationUiWitness(ui, "acknowledged", script, index, first);
     assert.equal(ui.handleId, result.handleId);
     assert.equal(ui.turnId, result.turnId);
@@ -1349,6 +1989,46 @@ export async function runConversationJourney({
     assert.equal(ackGo.resultId, resultGo.resultId, "CHAT_ACK_RESULT_CROSSED");
     assert.deepEqual(ackGo.binding, resultGo.binding);
     await record(`turn-${sends}-explicit-ack-go-settled-released`, ui, ackGo);
+    if (typed && index === 0) {
+      const beforeUi = await readTurn();
+      typedInspectReplyWitness(
+        await probe({
+          kind: "chatgpt.inspect-chat-account",
+          operationId: typedPreview.operationId,
+        }),
+        typedPreview,
+        configured.revision,
+      );
+      const start = {
+        kind: "chatgpt.start-conversation",
+        operationId: typedPreview.operationId,
+        confirmationId: typedPreview.confirmationId,
+        prompt: script[0].prompt,
+      };
+      typedStartReplyWitness(
+        await probe(start),
+        typedPreview,
+        ui,
+        ackGo.binding,
+      );
+      const refused = await probe({
+        ...start,
+        prompt: `${start.prompt}\nChanged synthetic prompt.`,
+      });
+      assert.equal(refused.ok, false, "TYPED_CHANGED_START_ACCEPTED");
+      assert.equal(refused.error, "CHATGPT_CONVERSATION_REFUSED");
+      typedComputerSettingsWitness(refused.snapshot.settings);
+      assert.deepEqual(
+        await readTurn(),
+        beforeUi,
+        "TYPED_DUPLICATE_CHANGED_REACT_TURN",
+      );
+      await record(
+        "typed-known-delivery-original-start-retained-changed-prompt-refused",
+        ui,
+        await journal(ui, true),
+      );
+    }
     if (index === 1) {
       const firstGo = await journal(first, true);
       assert.notEqual(

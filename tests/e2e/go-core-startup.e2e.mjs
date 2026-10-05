@@ -9,6 +9,8 @@
  * --chat-two-turn requires Dev --candidate-root and excludes all other journey
  * flags. Actual React Prepare/Inspect/Confirm/Send -> early text -> retained
  * result -> explicit ACK + Go settle/release -> same conversation second Send.
+ * --chat-typed requires --chat-two-turn (Dev only): actual React Check account /
+ * First message / Use this account and send; no workspace, grant or read admission.
  * Optional --chat-history-reopen adds one same-profile/build clean successor
  * and actual React reads of both original answers, without another Send.
  * Ordinary Quit is recorded separately; unconfirmed profiles are quarantined.
@@ -117,6 +119,10 @@ import {
   syntheticTaskPolicy,
   conversationScript,
   conversationSeed,
+  typedConversationLimits,
+  typedConversationScript,
+  typedComputerSettingsWitness,
+  typedConversationWitnessSelfTest,
   conversationLedgerWitness,
   conversationJournalWitness,
   conversationQuitWitness,
@@ -162,6 +168,9 @@ const contract = Object.freeze({
   chatTwoTurn:
     "Explicit Dev --candidate-root --chat-two-turn: attested normal main.cjs/real Go; synthetic settings.tasks before startup; existing normal workspace setup; React Prepare/Inspect/Confirm/Send, useful incremental text before controlled terminal, retained result, explicit ACK + independently read Go settle/release, same conversation second Send/result with retained first; one ordinary Quit, separate journey/terminal evidence, quarantine every failed or unconfirmed profile",
   chatTwoTurnLimits: conversationLimits,
+  chatTyped:
+    "Explicit Dev --chat-two-turn --chat-typed: normal main/Go and synthetic tasks/account/site; actual React Check account -> retained safe preview IDs -> First message -> Use this account and send -> same exact two-turn barriers/results/ACK/settlement/follow/Quit; independent Computer zero grants/participants at all observed stages, no workspace creation, selection, verification or read admission; known retained inspect/start IPC probes and changed-prompt refusal without new Send",
+  chatTypedLimits: typedConversationLimits,
   chatHistoryReopen:
     "Explicit Dev --chat-two-turn --chat-history-reopen: original two-turn journey, confirmed ordinary Quit and handoff, reattest same source/build/profile, one successor, React Load saved answers and read both original result IDs/bytes, unchanged successor journal and provider ledger, second confirmed clean Quit",
   chatHistoryLimits: historyLimits,
@@ -199,6 +208,7 @@ function selection(args) {
     editSnapshot: false,
     settingsEditMutation: false,
     chatTwoTurn: false,
+    chatTyped: false,
     chatHistoryReopen: false,
     dependencyRoot: path.join(root, "node_modules"),
   };
@@ -214,6 +224,12 @@ function selection(args) {
   const seen = new Set();
   for (let index = 0; index < args.length; index++) {
     const argument = args[index];
+    if (argument === "--chat-typed") {
+      assert.equal(seen.has("chatTyped"), false, "CHAT_TYPED_REPEATED");
+      seen.add("chatTyped");
+      result.chatTyped = true;
+      continue;
+    }
     if (argument === "--chat-history-reopen") {
       assert.equal(
         seen.has("chatHistoryReopen"),
@@ -286,6 +302,8 @@ function selection(args) {
   );
   if (result.chatHistoryReopen)
     assert.equal(result.chatTwoTurn, true, "CHAT_HISTORY_REQUIRES_TWO_TURN");
+  if (result.chatTyped)
+    assert.equal(result.chatTwoTurn, true, "CHAT_TYPED_REQUIRES_TWO_TURN");
   if (result.chatTwoTurn) {
     assert.ok(
       result.candidateRoot && !result.packaged,
@@ -575,6 +593,19 @@ async function attest(selected) {
       "src/apps/desktop/chatgpt-physical-page-scripts.ts",
       "apps/desktop/read-conversation-projection.ts",
       "apps/desktop/bridge/read-conversation.ts",
+      ...(selected.chatTyped
+        ? [
+            "src/ui/renderer/chat-direct.tsx",
+            "src/ui/renderer/contract.ts",
+            "src/ui/renderer/conversation-draft.ts",
+            "src/ui/renderer/shell.tsx",
+            "src/pkg/product-settings/contract.ts",
+            "apps/desktop/account-observation-confirmation.ts",
+            "apps/desktop/chatgpt-account-observation.ts",
+            "apps/desktop/chatgpt-account-probe.ts",
+            "apps/desktop/bridge/chat.ts",
+          ]
+        : []),
       ...(selected.chatHistoryReopen
         ? [
             "src/ui/renderer/chat-history.tsx",
@@ -947,7 +978,7 @@ async function native(selected, inputs, report, save) {
   const hasWorkspace =
     selected.readDiscard ||
     selected.settingsEditMutation ||
-    selected.chatTwoTurn;
+    (selected.chatTwoTurn && !selected.chatTyped);
   let workspaceRoot, workspacePhysical;
   if (hasWorkspace) {
     workspaceRoot = path.join(temporary, "read-workspace");
@@ -1005,9 +1036,15 @@ async function native(selected, inputs, report, save) {
       JSON.stringify(seeded) + "\n",
       { mode: 0o600, flag: "wx" },
     );
-    script = conversationScript(path.basename(workspaceRoot));
+    if (selected.chatTyped) typedComputerSettingsWitness(seeded);
+    script = selected.chatTyped
+      ? typedConversationScript()
+      : conversationScript(path.basename(workspaceRoot));
     report.chatTwoTurn = {
-      limits: conversationLimits,
+      limits: selected.chatTyped ? typedConversationLimits : conversationLimits,
+      ...(selected.chatTyped
+        ? { origin: "typed", computerObservations: [], computerReadChecks: 0 }
+        : {}),
       seed: { path: path.join(seedRoot, "config.json"), tasks: seeded.tasks },
       journeyPassed: false,
       sourceBinding: {
@@ -1119,9 +1156,133 @@ async function native(selected, inputs, report, save) {
         "MUTATION_CREATED_PARTICIPANT",
       );
     } else zeroAuthority(profile.value, access.value, computerId);
+    if (selected.chatTyped) {
+      const configuration = await document(
+        path.join(stateRoot, "config.json"),
+        256 * 1024,
+      );
+      typedComputerSettingsWitness(configuration.value);
+      report.snapshots.push({
+        launch: launch.ordinal,
+        label: `${label}-typed-zero-workspaces`,
+        configuration,
+      });
+    }
     report.snapshots.push({ launch: launch.ordinal, label, profile, access });
     ledgerWitness(site.driver.snapshot());
     await save();
+  };
+  const observeTypedComputer = async (label, retain = true) => {
+    assert.equal(selected.chatTyped, true, "TYPED_OBSERVER_OUTSIDE_TYPED_MODE");
+    const physical = {
+      coreRoot: await physicalDirectory(path.join(stateRoot, "go-core")),
+      computerRoot: await physicalDirectory(
+        path.join(stateRoot, "go-core/computer"),
+      ),
+    };
+    assert.deepEqual(
+      physical.coreRoot,
+      report.launches[0].physical.coreRoot,
+      "TYPED_CORE_ROOT_CHANGED",
+    );
+    const configuration = await document(
+      path.join(stateRoot, "config.json"),
+      256 * 1024,
+    );
+    const profile = await document(
+      path.join(stateRoot, "go-core/profile.json"),
+      4096,
+    );
+    const access = await document(
+      path.join(stateRoot, "go-core/computer/computer-access.json"),
+      1024 * 1024,
+    );
+    typedComputerSettingsWitness(configuration.value);
+    zeroAuthority(
+      profile.value,
+      access.value,
+      configuration.value.computer.computerId,
+    );
+    assert.deepEqual(
+      profile,
+      report.launches[0].goProfile,
+      "TYPED_GO_PROFILE_CROSSED",
+    );
+    const first = report.chatTwoTurn.computerObservations[0];
+    if (first) {
+      assert.deepEqual(physical, first.physical, "TYPED_COMPUTER_ROOT_CHANGED");
+      assert.deepEqual(access, first.access, "TYPED_COMPUTER_ACCESS_CHANGED");
+      assert.deepEqual(
+        configuration.value.computer,
+        first.configuration.value.computer,
+        "TYPED_COMPUTER_SETTINGS_CHANGED",
+      );
+      assert.deepEqual(
+        configuration.value.setup.computer,
+        first.configuration.value.setup.computer,
+        "TYPED_COMPUTER_SETUP_CHANGED",
+      );
+    }
+    const observation = {
+      launch: launch.ordinal,
+      label,
+      physical,
+      configuration,
+      profile,
+      access,
+    };
+    report.chatTwoTurn.computerReadChecks++;
+    if (retain) {
+      report.chatTwoTurn.computerObservations.push(observation);
+      await save();
+    }
+    return observation;
+  };
+  const retainedTypedState = async () => {
+    const { physical, configuration, profile, access } =
+      await observeTypedComputer("retained-ipc-probe", false);
+    const journal = await document(
+      path.join(stateRoot, "go-core/chat/chat-lifecycle.json"),
+      1024 * 1024,
+    );
+    return { physical, configuration, profile, access, journal };
+  };
+  const runChatJourney = async ({ window, configured, workspace, hidden }) => {
+    await runConversationJourney({
+      window,
+      workspace,
+      configured,
+      hidden,
+      driver: site.driver,
+      script,
+      session: accountSession,
+      active,
+      typed: selected.chatTyped,
+      authority: observeTypedComputer,
+      retained: retainedTypedState,
+      report: report.chatTwoTurn,
+      save,
+      journal: async (ui, acknowledged) => {
+        const observed = await document(
+          path.join(stateRoot, "go-core/chat/chat-lifecycle.json"),
+          1024 * 1024,
+        );
+        const witness = conversationJournalWitness(
+          observed.value,
+          launch.readyJournal.value,
+          ui,
+          acknowledged,
+        );
+        report.journals.push({
+          launch: launch.ordinal,
+          label: `chat-${ui.turnId}-${acknowledged === null ? "early" : acknowledged ? "ack" : "result"}`,
+          journal: observed,
+          witness,
+        });
+        await save();
+        return witness;
+      },
+    });
   };
   const captureJournal = async (label, previous, retired = false) => {
     const coreRoot = await physicalDirectory(path.join(stateRoot, "go-core"));
@@ -1278,6 +1439,17 @@ async function native(selected, inputs, report, save) {
       "DUPLICATE_CLOSE_FORBIDDEN",
     );
     launch.cleanup.closeRequested = true;
+    // A failed observation must never prevent the one ordinary cleanup Quit.
+    // Keep its failure and quarantine after observing the child's terminal.
+    let typedAuthorityError;
+    if (selected.chatTyped) {
+      try {
+        await observeTypedComputer("before-ordinary-quit");
+      } catch (error) {
+        typedAuthorityError = error;
+        launch.cleanup.typedAuthorityError = String(error);
+      }
+    }
     if (selected.chatTwoTurn) {
       // These are host observation boundaries, not stderr emission timestamps.
       launch.browserFailuresObservedBeforeCleanup = structuredClone(
@@ -1336,6 +1508,8 @@ async function native(selected, inputs, report, save) {
       launch.cleanup.runMarkerRemoved = true;
       launch.terminalLedger = site.driver.snapshot();
       ledgerWitness(launch.terminalLedger);
+      if (selected.chatTyped)
+        await observeTypedComputer("confirmed-quit-zero-authority");
       if (selected.reopen || selected.chatHistoryReopen) {
         await captureJournal(
           "confirmed-quit",
@@ -1347,6 +1521,7 @@ async function native(selected, inputs, report, save) {
         await captureHandoff();
       }
       cleanLaunchClosure(launch.cleanup);
+      if (typedAuthorityError) throw typedAuthorityError;
       if (
         selected.settingsEditMutation &&
         report.settingsEditMutation?.retained
@@ -1478,7 +1653,7 @@ async function native(selected, inputs, report, save) {
       const window = await application.firstWindow({ timeout: 15000 });
       const bootstrap = await ready(window, active);
       const settings =
-        hasWorkspace && ordinal === 2
+        (hasWorkspace || selected.chatTyped) && ordinal === 2
           ? bootstrap.configuration.settings
           : unconfigured(bootstrap);
       const paths = await bounded(
@@ -1628,6 +1803,40 @@ async function native(selected, inputs, report, save) {
     report.settingsSHA = savedSettings.sha256;
     launch.settings = savedSettings;
     await capture("settings-ui-zero-authority", settings.computer.computerId);
+    if (selected.chatTyped) {
+      await observeTypedComputer("settings-ui-before-typed-chat");
+      const configure = async (command) => {
+        active();
+        await hidden();
+        const reply = await bounded(
+          window.evaluate(
+            (command) => window.farolNext.configure(command),
+            command,
+          ),
+          20000,
+          "TYPED_CONFIGURATION_OUTCOME_UNKNOWN",
+        );
+        assert.equal(reply.ok, true, "TYPED_CONFIGURATION_FAILED");
+        ledgerWitness(site.driver.snapshot());
+        await observeTypedComputer(`after-${command.kind}`);
+        return reply;
+      };
+      await configure({ kind: "chatgpt.open-browser" });
+      const readiness = await configure({ kind: "chatgpt.verify" });
+      assert.equal(readiness.evidence?.kind, "chatgpt.readiness");
+      assert.equal(readiness.evidence.state, "authenticated");
+      await runChatJourney({
+        window,
+        configured: readiness.snapshot.settings,
+        hidden,
+      });
+      savedSettings = await document(
+        path.join(stateRoot, "config.json"),
+        256 * 1024,
+      );
+      launch.settings = savedSettings;
+      report.settingsSHA = savedSettings.sha256;
+    }
     workspaceJourney: if (hasWorkspace) {
       // Only normal preload commands. No expected witness data is injected into
       // the production adapter. Send belongs only to the explicit new journey.
@@ -1979,38 +2188,7 @@ async function native(selected, inputs, report, save) {
           path.basename(workspaceRoot),
           "CHAT_FIXTURE_WORKSPACE_LABEL_CROSSED",
         );
-        await runConversationJourney({
-          window,
-          workspace,
-          configured,
-          driver: site.driver,
-          script,
-          session: accountSession,
-          active,
-          hidden,
-          report: report.chatTwoTurn,
-          save,
-          journal: async (ui, acknowledged) => {
-            const observed = await document(
-              path.join(stateRoot, "go-core/chat/chat-lifecycle.json"),
-              1024 * 1024,
-            );
-            const witness = conversationJournalWitness(
-              observed.value,
-              launch.readyJournal.value,
-              ui,
-              acknowledged,
-            );
-            report.journals.push({
-              launch: launch.ordinal,
-              label: `chat-${ui.turnId}-${acknowledged === null ? "early" : acknowledged ? "ack" : "result"}`,
-              journal: observed,
-              witness,
-            });
-            await save();
-            return witness;
-          },
-        });
+        await runChatJourney({ window, workspace, configured, hidden });
         savedSettings = await document(
           path.join(stateRoot, "config.json"),
           256 * 1024,
@@ -2426,6 +2604,8 @@ async function native(selected, inputs, report, save) {
       await captureHandoff(report.launches[0].terminalHandoff);
       if (selected.chatHistoryReopen) {
         retainedApprovedSettings(reopened.settings, savedSettings.value);
+        if (selected.chatTyped)
+          await observeTypedComputer("successor-ready-zero-authority");
         const successor = launch;
         const originals = historyOriginals(report.chatTwoTurn);
         const bootstrap = await bounded(
@@ -2450,6 +2630,8 @@ async function native(selected, inputs, report, save) {
           passed: false,
         });
         const unchanged = async () => {
+          if (selected.chatTyped)
+            await observeTypedComputer("history-read-zero-authority");
           ledgerWitness(site.driver.snapshot());
           assert.deepEqual(
             site.driver.snapshot(),
@@ -2469,16 +2651,18 @@ async function native(selected, inputs, report, save) {
             retainedConfig,
             "HISTORY_MUTATED_CONFIGURATION",
           );
-          assert.equal(
-            (
-              await regular(path.join(workspaceRoot, readCanary.relativePath))
-            ).toString("utf8"),
-            readCanary.text,
-          );
-          assert.deepEqual(
-            await physicalDirectory(workspaceRoot),
-            workspacePhysical,
-          );
+          if (!selected.chatTyped) {
+            assert.equal(
+              (
+                await regular(path.join(workspaceRoot, readCanary.relativePath))
+              ).toString("utf8"),
+              readCanary.text,
+            );
+            assert.deepEqual(
+              await physicalDirectory(workspaceRoot),
+              workspacePhysical,
+            );
+          }
         };
         await unchanged();
         await runHistoryReadJourney({
@@ -3316,8 +3500,64 @@ function selfTest() {
   ])
     reject(() => selection(invalid));
   historyWitnessSelfTest(pass, reject);
+  const typedChecksStart = checks;
+  for (const mode of ["--check", "--run-native"])
+    for (const history of [[], ["--chat-history-reopen"]])
+      pass(() => {
+        const selected = selection([
+          mode,
+          "--chat-two-turn",
+          "--chat-typed",
+          ...history,
+          ...args,
+        ]);
+        assert.equal(selected.chatTyped, true);
+        assert.equal(selected.chatHistoryReopen, history.length === 1);
+        assert.equal(selected.mode, mode);
+      });
+  for (const invalid of [
+    ["--chat-typed", ...args],
+    ["--chat-typed", "--chat-history-reopen", ...args],
+    ["--chat-two-turn", "--chat-typed", "--chat-typed", ...args],
+    ["--chat-two-turn", "--chat-typed", ...packageArgs],
+    ...[
+      "--reopen",
+      "--read-discard",
+      "--read-account",
+      "--edit-snapshot",
+      "--settings-edit-mutation",
+    ].map((flag) => ["--chat-two-turn", "--chat-typed", flag, ...args]),
+  ])
+    reject(() => selection(invalid));
+  pass(() =>
+    assert.equal(selection(["--chat-two-turn", ...args]).chatTyped, false),
+  );
+  typedConversationWitnessSelfTest(pass, reject);
+  const typedSettings = conversationSeed(
+    "12345678-1234-4234-8234-123456789012",
+  );
+  typedSettings.computer.computerId = profile.computerId;
+  pass(() => {
+    typedComputerSettingsWitness(typedSettings);
+    zeroAuthority(profile, access, typedSettings.computer.computerId);
+  });
+  for (const [key, value] of [
+    ["approval", { workspaces: [] }],
+    ["participants", { fabricated: {} }],
+    ["revision", "1"],
+    ["generation", "1"],
+    ["seenApproval", true],
+  ])
+    reject(() => {
+      typedComputerSettingsWitness(typedSettings);
+      zeroAuthority(
+        profile,
+        { ...access, [key]: value },
+        typedSettings.computer.computerId,
+      );
+    });
   process.stdout.write(
-    `Go startup harness browser-free contract checks: ${checks} passed (${mutationChecksStart - snapshotChecksStart} edit-snapshot, ${conversationChecksStart - mutationChecksStart} settings-edit-mutation, ${checks - conversationChecksStart} chat-two-turn); native NOT RUN\n`,
+    `Go startup harness browser-free contract checks: ${checks} passed (${mutationChecksStart - snapshotChecksStart} edit-snapshot, ${conversationChecksStart - mutationChecksStart} settings-edit-mutation, ${typedChecksStart - conversationChecksStart} chat-two-turn/history, ${checks - typedChecksStart} chat-typed); native NOT RUN\n`,
   );
 }
 
@@ -3326,33 +3566,41 @@ async function main(args) {
   const report = {
     contract,
     scenario: selected.chatHistoryReopen
-      ? contract.chatHistoryReopen
-      : selected.chatTwoTurn
-        ? contract.chatTwoTurn
-        : selected.settingsEditMutation
-          ? contract.settingsEditMutation
-          : selected.editSnapshot
-            ? `${contract.editSnapshot}; ${selected.readAccount ? contract.readAccount : contract.readDiscard}`
-            : selected.readAccount
-              ? contract.readAccount
-              : selected.readDiscard
-                ? contract.readDiscard
-                : contract.scenario,
+      ? `${selected.chatTyped ? `${contract.chatTyped}; ` : ""}${contract.chatHistoryReopen}`
+      : selected.chatTyped
+        ? contract.chatTyped
+        : selected.chatTwoTurn
+          ? contract.chatTwoTurn
+          : selected.settingsEditMutation
+            ? contract.settingsEditMutation
+            : selected.editSnapshot
+              ? `${contract.editSnapshot}; ${selected.readAccount ? contract.readAccount : contract.readDiscard}`
+              : selected.readAccount
+                ? contract.readAccount
+                : selected.readDiscard
+                  ? contract.readDiscard
+                  : contract.scenario,
     missingWitnesses: selected.chatHistoryReopen
-      ? historyLimits
-      : selected.chatTwoTurn
-        ? conversationLimits
-        : selected.settingsEditMutation
-          ? mutationLimits
-          : selected.readAccount
-            ? [...contract.readDiscardLimits, ...readAccountLimits]
-            : selected.readDiscard
-              ? contract.readDiscardLimits
-              : contract.missingWitnesses,
-    isolation:
-      selected.readDiscard ||
-      selected.settingsEditMutation ||
-      selected.chatTwoTurn
+      ? [
+          ...historyLimits,
+          ...(selected.chatTyped ? typedConversationLimits : []),
+        ]
+      : selected.chatTyped
+        ? typedConversationLimits
+        : selected.chatTwoTurn
+          ? conversationLimits
+          : selected.settingsEditMutation
+            ? mutationLimits
+            : selected.readAccount
+              ? [...contract.readDiscardLimits, ...readAccountLimits]
+              : selected.readDiscard
+                ? contract.readDiscardLimits
+                : contract.missingWitnesses,
+    isolation: selected.chatTyped
+      ? "Private disposable HOME/AppData, no Computer workspace or picker seam; all test windows hidden/unfocused; independent zero-grant settings/access observations; no hermetic all-paths claim"
+      : selected.readDiscard ||
+          selected.settingsEditMutation ||
+          selected.chatTwoTurn
         ? "Private disposable workspace/HOME/AppData with existing E2E dialog seams and all windows hidden/unfocused; Settings executor origin requires exact production-source review; no hermetic all-paths claim"
         : contract.isolation,
     selection: selected,
@@ -3457,22 +3705,26 @@ async function main(args) {
       );
       if (nativeError) throw nativeError;
       report.status = selected.chatHistoryReopen
-        ? "passed-react-two-turn-chat-clean-reopen-historical-reads-no-additional-send"
-        : selected.chatTwoTurn
-          ? "passed-react-two-turn-controlled-chat-and-confirmed-ordinary-quit"
-          : selected.settingsEditMutation
-            ? "passed-react-go-owner-edit-unacknowledged-quit-reopen-observe-go-ack-zero-send"
-            : selected.editSnapshot
-              ? selected.readAccount
-                ? "passed-settings-edit-snapshot-and-react-read-account-discard-reopen-synthetic-only"
-                : "passed-settings-edit-snapshot-and-read-discard-reopen-fixture-only"
-              : selected.readAccount
-                ? "passed-react-read-account-discard-reopen-synthetic-account-only"
-                : selected.readDiscard
-                  ? "passed-read-preview-discard-reopen-fixture-readiness-only"
-                  : selected.reopen
-                    ? "passed-reopen-startup-zero-authority-only"
-                    : "passed-fresh-startup-zero-authority-only";
+        ? selected.chatTyped
+          ? "passed-react-typed-two-turn-zero-computer-clean-reopen-historical-reads-no-additional-send"
+          : "passed-react-two-turn-chat-clean-reopen-historical-reads-no-additional-send"
+        : selected.chatTyped
+          ? "passed-react-typed-two-turn-zero-computer-and-confirmed-ordinary-quit"
+          : selected.chatTwoTurn
+            ? "passed-react-two-turn-controlled-chat-and-confirmed-ordinary-quit"
+            : selected.settingsEditMutation
+              ? "passed-react-go-owner-edit-unacknowledged-quit-reopen-observe-go-ack-zero-send"
+              : selected.editSnapshot
+                ? selected.readAccount
+                  ? "passed-settings-edit-snapshot-and-react-read-account-discard-reopen-synthetic-only"
+                  : "passed-settings-edit-snapshot-and-read-discard-reopen-fixture-only"
+                : selected.readAccount
+                  ? "passed-react-read-account-discard-reopen-synthetic-account-only"
+                  : selected.readDiscard
+                    ? "passed-read-preview-discard-reopen-fixture-readiness-only"
+                    : selected.reopen
+                      ? "passed-reopen-startup-zero-authority-only"
+                      : "passed-fresh-startup-zero-authority-only";
     }
   } catch (error) {
     report.status =
