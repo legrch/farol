@@ -492,6 +492,7 @@ export class WindowController implements RendererFacade {
       if (this.disposed || !this.configOrder.isLatest(order)) return;
       const parsed = BootstrapProjectionSchema.safeParse(value);
       if (!parsed.success) {
+        this.invalidateHistory();
         this.patch({ status: "incompatible" });
         return;
       }
@@ -500,6 +501,7 @@ export class WindowController implements RendererFacade {
         this.state.buildId &&
         parsed.data.build.buildId !== this.state.buildId
       ) {
+        this.invalidateHistory();
         this.patch({ status: "incompatible" });
         return;
       }
@@ -513,14 +515,18 @@ export class WindowController implements RendererFacade {
           ? parsed.data.runtimeState
           : this.state.runtime;
       this.adoptHistoryContext(parsed.data.chatHistoryContext ?? null);
+      const status =
+        parsed.data.configuration.status === "ready" &&
+        tasksAccepted &&
+        staleRevision === this.staleRevision &&
+        runtime === "ready"
+          ? "current"
+          : "stale";
+      // A later valid bootstrap with the same context must not revive cached
+      // answers or admit a read started before this loss of current state.
+      if (status !== "current") this.invalidateHistory();
       this.patch({
-        status:
-          parsed.data.configuration.status === "ready" &&
-          tasksAccepted &&
-          staleRevision === this.staleRevision &&
-          runtime === "ready"
-            ? "current"
-            : "stale",
+        status,
         runtime,
       });
     } catch {

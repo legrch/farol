@@ -78,6 +78,45 @@ describe("renderer current-authorized history reads", () => {
     },
   );
   it.each([
+    "configuration-error",
+    "runtime-not-ready",
+    "invalid-bootstrap",
+    "changed-build",
+  ])(
+    "rejects pending history after bootstrap %s and recovery",
+    async (fault) => {
+      const { f, c, read } = await setup();
+      const pending = deferred<unknown>();
+      read.mockReturnValueOnce(pending.promise);
+      const result = c.readChatHistory({ kind: "list", offset: 0 });
+      const check = expect(result).rejects.toThrow("CHAT_HISTORY_STALE");
+      const before = c.getSnapshot().chatHistoryEpoch;
+      const failed = { ...bootstrap(), chatHistoryContext: context };
+      vi.mocked(f.api.bootstrap).mockResolvedValueOnce(
+        fault === "configuration-error"
+          ? {
+              ...failed,
+              configuration: { status: "error", error: "SETTINGS_READ_FAILED" },
+            }
+          : fault === "runtime-not-ready"
+            ? { ...failed, runtimeState: "offline" }
+            : fault === "invalid-bootstrap"
+              ? { ...failed, schema: -1 }
+              : {
+                  ...failed,
+                  build: { ...failed.build, buildId: "4".repeat(64) },
+                },
+      );
+      await c.refresh();
+      expect(c.getSnapshot().status).not.toBe("current");
+      await c.refresh();
+      expect(c.getSnapshot().status).toBe("current");
+      pending.resolve(page);
+      await check;
+      expect(c.getSnapshot().chatHistoryEpoch).toBeGreaterThan(before);
+    },
+  );
+  it.each([
     "context",
     "offset",
     "same-backend",

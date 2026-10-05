@@ -174,4 +174,49 @@ describe("Saved Chat answers", () => {
     expect(f.host.textContent).toContain("Saved answers are unavailable.");
     expect(f.f.api.configure).not.toHaveBeenCalled();
   });
+  it.each([
+    "configuration-error",
+    "runtime-not-ready",
+    "invalid-bootstrap",
+    "changed-build",
+  ])(
+    "does not revive cached answers after bootstrap %s and recovery",
+    async (fault) => {
+      const f = await mount();
+      await act(async () => f.button("Load saved answers").click());
+      f.read.mockResolvedValueOnce({
+        context,
+        value: { kind: "result", entry, text: "old answer" },
+      });
+      await act(async () => f.button("Read turn 1").click());
+      const failed = { ...bootstrap(), chatHistoryContext: context };
+      vi.mocked(f.f.api.bootstrap).mockResolvedValueOnce(
+        fault === "configuration-error"
+          ? {
+              ...failed,
+              configuration: { status: "error", error: "SETTINGS_READ_FAILED" },
+            }
+          : fault === "runtime-not-ready"
+            ? { ...failed, runtimeState: "offline" }
+            : fault === "invalid-bootstrap"
+              ? { ...failed, schema: -1 }
+              : {
+                  ...failed,
+                  build: { ...failed.build, buildId: "4".repeat(64) },
+                },
+      );
+      await act(async () => f.c.refresh());
+      expect(f.c.getSnapshot().status).not.toBe("current");
+      expect(f.host.querySelector('[aria-label="Saved answer"]')).toBeNull();
+      await act(async () => f.c.refresh());
+      expect(f.c.getSnapshot().status).toBe("current");
+      expect(f.host.querySelector('[aria-label="Saved answer"]')).toBeNull();
+      expect(
+        [...f.host.querySelectorAll("button")].some(
+          (b) => b.textContent === "Read turn 1",
+        ),
+      ).toBe(false);
+      expect(f.read).toHaveBeenCalledTimes(2);
+    },
+  );
 });
