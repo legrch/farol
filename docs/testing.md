@@ -22,6 +22,13 @@ exceptions correct legacy folder placement; unknown locations, missing declared
 files and empty suites fail closed. New or changed tests need a scope review.
 Remaining mixed integration files are classified conservatively; their folder
 does not upgrade a fixture into native or product evidence.
+TSX tests outside the renderer directory use the same source classification and
+main Vitest configuration as TS tests. Renderer TSX remains in its separate
+configuration. C09's discovery subset is checked by
+`C09 assigns TSX fixtures to their scope and the actual main runner includes them`
+in `tests/unit/test-scope-plan.test.mjs`, plus actual execution of
+`tests/e2e/fixtures/scope-discovery.test.tsx`. These are test-runner checks, not
+assembled-product or native evidence; the complete-suite union remains open below.
 Standalone `.e2e.mjs` native/browser adapter witnesses retain their existing
 explicit entrypoints and are not yet part of these registered source scopes.
 Their further classification and inclusion remain part of the complete test

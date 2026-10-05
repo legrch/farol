@@ -1,6 +1,7 @@
 import path from "node:path";
 import { EventEmitter } from "node:events";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import mainVitestConfig from "../../vitest.config.ts";
 import { waitForOwnedSecondary } from "../e2e/owned-background-secondary.mjs";
 import {
   classifyTests,
@@ -29,6 +30,29 @@ const selectedFiles = (plan) =>
   plan.suites.flatMap((suite) => suite.files ?? []);
 
 describe("source test scopes", () => {
+  it("C09 assigns TSX fixtures to their scope and the actual main runner includes them", () => {
+    const fixture = "tests/e2e/fixtures/discovery-example.test.tsx";
+    const unit = "tests/unit/discovery-example.test.tsx";
+    const next = classifyTests([...files, fixture, unit]);
+    expect(next.integration).toContain(fixture);
+    expect(next.nodeUnit).toContain(unit);
+    expect(
+      selectedFiles(planTests("unit", [...files, fixture, unit])),
+    ).not.toContain(fixture);
+    expect(
+      selectedFiles(planTests("integration", [...files, fixture, unit])),
+    ).not.toContain(unit);
+    const accepted = (file) =>
+      mainVitestConfig.test.include.some((pattern) =>
+        path.matchesGlob(file, pattern),
+      ) &&
+      !mainVitestConfig.test.exclude.some((pattern) =>
+        path.matchesGlob(file, pattern),
+      );
+    expect(accepted(fixture)).toBe(true);
+    expect(accepted(unit)).toBe(true);
+    expect(accepted("tests/renderer/discovery-example.test.tsx")).toBe(false);
+  });
   it("binds the cancellation supervisor bytes even though it is not a discovered test file", () => {
     const before = selectionDigest([], () => "original");
     const changed = selectionDigest([], (file) =>

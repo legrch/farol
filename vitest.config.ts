@@ -3,7 +3,7 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   test: {
     environment: "node",
-    include: ["tests/**/*.test.{ts,mjs}"],
+    include: ["tests/**/*.test.{ts,tsx,mjs}"],
     exclude: ["tests/renderer/**"],
     sequence: { concurrent: false },
     // 23 integration files spawn real processes, helpers or volumes, and none

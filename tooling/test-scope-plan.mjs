@@ -106,7 +106,7 @@ export function classifyTests(files) {
       continue;
     } else if (/^tests\/renderer\/.+\.test\.tsx?$/u.test(file)) {
       renderer.push(file);
-    } else if (/^tests\/.+\.test\.(ts|mjs)$/u.test(file)) {
+    } else if (/^tests\/.+\.test\.(ts|tsx|mjs)$/u.test(file)) {
       if (integrationUnitFiles.includes(file)) integration.push(file);
       else if (
         file.startsWith("tests/unit/") ||
