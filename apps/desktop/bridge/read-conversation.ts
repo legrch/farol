@@ -149,6 +149,9 @@ export class ReadConversationClient {
     if (!t || t.handle.handleId !== handleId) fail("read_chat_turn_not_owned");
     return t;
   }
+  private stillCurrent(t: TransportTurn): void {
+    if (this.current !== t) fail("read_chat_turn_superseded");
+  }
   private async advance(t: TransportTurn): Promise<void> {
     if (t.sendAttempted) return;
     let prepared;
@@ -183,6 +186,7 @@ export class ReadConversationClient {
   ): Promise<ReadConversationProjection> {
     const t = this.turn(handleId);
     return this.exclusive(async () => {
+      this.stillCurrent(t);
       const after = this.cursor(t, deliveredCursor);
       while (after > t.acknowledged) {
         // The renderer supplies only the cursor it adopted from the previous reply.
@@ -199,7 +203,7 @@ export class ReadConversationClient {
       await this.advance(t);
       const state = await this.chat.state(t.handle);
       sameHandle(state.handle, t.handle);
-      if (t.sendAttempted && !state.released)
+      if (t.sendAttempted && !state.released && state.phase !== "unknown")
         await this.chat.observe(t.handle.handleId, this.deadline());
       return this.project(t, after);
     });
@@ -242,9 +246,10 @@ export class ReadConversationClient {
     deliveredCursor: string,
   ): Promise<ReadConversationProjection> {
     const t = this.turn(handleId);
-    return this.exclusive(() =>
-      this.project(t, this.cursor(t, deliveredCursor)),
-    );
+    return this.exclusive(() => {
+      this.stillCurrent(t);
+      return this.project(t, this.cursor(t, deliveredCursor));
+    });
   }
   acknowledge(handleId: string, resultId: string): Promise<void> {
     const t = this.turn(handleId);
@@ -256,6 +261,7 @@ export class ReadConversationClient {
     }
     const promise = Promise.resolve().then(() =>
       this.exclusive(async () => {
+        this.stillCurrent(t);
         const result = await this.chat.result(handleId);
         sameHandle(result.handle, t.handle);
         if (result.resultId !== resultId) fail("read_chat_result_not_owned");
@@ -277,9 +283,15 @@ export class ReadConversationClient {
     }
     const promise = Promise.resolve().then(() =>
       this.exclusive(async () => {
+        this.stillCurrent(previous);
         const state = await this.chat.state(previous.handle);
         sameHandle(state.handle, previous.handle);
-        if (!state.followReady) fail("read_chat_follow_not_ready");
+        if (!state.followReady) {
+          // No Create request was made. A later explicit click may check Go's
+          // readiness again. Once Create is attempted its promise stays pinned.
+          delete previous.follow;
+          fail("read_chat_follow_not_ready");
+        }
         const selected = this.selected;
         if (!selected) fail("read_chat_selection_missing");
         const handle = await this.chat.create({

@@ -199,6 +199,86 @@ function fixture() {
   };
 }
 describe("normal read conversation mechanical client", () => {
+  it.each(["progress", "snapshot"] as const)(
+    "refuses queued %s on a superseded turn before any RPC",
+    async (method) => {
+      const f = fixture();
+      await f.client.start(input, "Explain.");
+      f.states.set(handle.handleId, { ...state(handle), followReady: true });
+      let release!: () => void;
+      let entered!: () => void;
+      const started = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      const held = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const original = f.chat.create.getMockImplementation()!;
+      f.chat.create.mockImplementationOnce(async (request) => {
+        entered();
+        await held;
+        return original(request);
+      });
+      const follow = f.client.follow(handle.handleId, "Next.");
+      await started;
+      const stale = expect(
+        f.client[method](handle.handleId, "0"),
+      ).rejects.toMatchObject({ code: "read_chat_turn_superseded" });
+      release();
+      const next = await follow;
+      vi.clearAllMocks();
+      await stale;
+      expect(next.handle).toEqual(second);
+      expect(f.chat.observe).not.toHaveBeenCalled();
+      expect(f.chat.acknowledgeFrame).not.toHaveBeenCalled();
+      expect((await f.client.snapshot(second.handleId, "0")).handle).toEqual(
+        second,
+      );
+    },
+  );
+  it("permits a new deliberate Follow after a proven local not-ready refusal", async () => {
+    const f = fixture();
+    await f.client.start(input, "Explain.");
+    await expect(
+      f.client.follow(handle.handleId, "Too early."),
+    ).rejects.toMatchObject({ code: "read_chat_follow_not_ready" });
+    expect(f.chat.create).not.toHaveBeenCalled();
+    f.states.set(handle.handleId, { ...state(handle), followReady: true });
+    expect(
+      (await f.client.follow(handle.handleId, "Now ready.")).handle,
+    ).toEqual(second);
+    expect(f.chat.create).toHaveBeenCalledTimes(1);
+    expect(f.chat.send).toHaveBeenCalledTimes(2);
+  });
+  it("keeps a Go-retained unknown result readable and ACKable without Observe or another Send", async () => {
+    const f = fixture();
+    await f.client.start(input, "Explain.");
+    f.states.set(handle.handleId, {
+      ...state(handle),
+      phase: "unknown",
+      hasResult: true,
+    });
+    f.chat.result.mockImplementation(async () => ({
+      ...terminal(handle, f.states.get(handle.handleId)!.deliveryAcknowledged),
+      phase: "unknown",
+      outcome: "unknown",
+      complete: false,
+    }));
+    f.chat.observe.mockRejectedValue(
+      new BridgeError("unknown", "CHAT_UNSETTLED"),
+    );
+    const shown = await f.client.progress(handle.handleId, "0");
+    expect(shown.result?.outcome).toBe("unknown");
+    await f.client.acknowledge(handle.handleId, shown.result!.resultId);
+    expect(
+      (await f.client.snapshot(handle.handleId, "0")).result?.acknowledged,
+    ).toBe(true);
+    expect(f.chat.observe).not.toHaveBeenCalled();
+    expect(f.chat.send).toHaveBeenCalledTimes(1);
+    await expect(
+      f.client.follow(handle.handleId, "Unsafe"),
+    ).rejects.toMatchObject({ code: "read_chat_follow_not_ready" });
+  });
   it("reads a snapshot without Send, observation, preparation or delivery ACK", async () => {
     const f = fixture();
     await f.client.start(input, "Explain.");
