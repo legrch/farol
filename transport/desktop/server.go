@@ -32,12 +32,20 @@ type Method struct {
 	// capability. All existing owners remain serialized by default.
 	Concurrent bool
 	Handle     func(context.Context, Request) (*Outcome, error)
+	// AfterReply is a trusted, nonblocking local delivery notification. True
+	// means an OK frame was completely written, not received/acknowledged by
+	// the peer or retained durably. It is never called for an uninvoked handler.
+	AfterReply func(Request, bool)
 }
 type Config struct {
 	BuildID    string
 	ProfileID  string
 	Generation string
 	Methods    map[string]Method
+	// TerminalRejection is selected only for one-shot inherited role channels.
+	// A rejected request closes that channel after its response; ordinary desktop
+	// and connector servers keep their existing false/default behavior.
+	TerminalRejection bool
 }
 type Server struct {
 	config    Config
@@ -116,6 +124,22 @@ func (s *Server) Serve(parent context.Context, in io.ReadCloser, out io.WriteClo
 		}
 		return outputErr
 	}
+	invokeAndWrite := func(call *invocation) error {
+		response := s.invoke(ctx, call)
+		err := write(response)
+		if call.method.AfterReply != nil {
+			operation := ""
+			if call.request.Params.OperationId != nil {
+				operation = *call.request.Params.OperationId
+			}
+			call.method.AfterReply(Request{RequestID: call.request.Id, OperationID: operation, Body: call.request.Params.Body}, err == nil && response.Result != nil && response.Result.Status == "ok")
+		}
+		if err == nil && s.config.TerminalRejection && (response.Error != nil || response.Result == nil || response.Result.Status != "ok") {
+			cancel()
+			return errors.New("role request rejected")
+		}
+		return err
+	}
 	for attempt := 0; attempt < 4096; attempt++ {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -138,17 +162,23 @@ func (s *Server) Serve(parent context.Context, in io.ReadCloser, out io.WriteClo
 				go func() {
 					defer workers.Done()
 					defer func() { <-pending }()
-					_ = write(s.invoke(ctx, call))
+					_ = invokeAndWrite(call)
 				}()
 				continue
 			default:
 				response = s.result(call.request, &Outcome{Status: "unavailable", Code: "handler_backpressure"})
 			}
 		} else if call != nil {
-			response = s.invoke(ctx, call)
+			if err := invokeAndWrite(call); err != nil {
+				return err
+			}
+			continue
 		}
 		if err := write(response); err != nil {
 			return err
+		}
+		if s.config.TerminalRejection && (response.Error != nil || response.Result == nil || response.Result.Status != "ok") {
+			return errors.New("role request rejected")
 		}
 	}
 	return errors.New("request attempt budget exhausted")

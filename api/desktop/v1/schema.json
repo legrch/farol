@@ -78,7 +78,9 @@
     "computer.workspace.search": "read",
     "computer.workspace.write": "effect",
     "computer.workspace.edit": "effect",
-    "computer.workspace.mutation.read": "read"
+    "computer.workspace.mutation.read": "read",
+    "computer.process.held.ready": "read",
+    "computer.process.held.release": "effect"
   },
   "definitions": {
     "Context": {
@@ -4639,6 +4641,51 @@
         "failure": {
           "type": "ComputerMutationFailure",
           "optional": true
+        }
+      }
+    },
+    "ComputerHeldIdentity": {
+      "type": "object",
+      "fields": {
+        "buildId": {
+          "type": "text"
+        },
+        "profileId": {
+          "type": "id"
+        },
+        "backendGeneration": {
+          "type": "id"
+        },
+        "operationId": {
+          "type": "id"
+        },
+        "sealSha256": {
+          "type": "text",
+          "minBytes": 64,
+          "maxBytes": 64,
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "anchorLifetimeId": {
+          "type": "id"
+        },
+        "childLaunchId": {
+          "type": "id"
+        },
+        "deadline": {
+          "type": "utc"
+        }
+      }
+    },
+    "ComputerHeldBarrier": {
+      "type": "object",
+      "fields": {
+        "identity": {
+          "type": "ComputerHeldIdentity"
+        },
+        "barrier": {
+          "type": "uint32",
+          "minimum": 1,
+          "maximum": 2
         }
       }
     }
