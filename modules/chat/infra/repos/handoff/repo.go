@@ -78,6 +78,7 @@ type owner struct {
 }
 
 var _ port.HandoffStore = (*Repository)(nil)
+var _ port.HandoffHistoryStore = (*Repository)(nil)
 
 func New(ctx context.Context, roots Roots) (*Repository, error) {
 	if ctx == nil || ctx.Err() != nil {
@@ -146,6 +147,13 @@ func (s *owner) bound(r port.HandoffRecord) bool {
 	return b.ProfileID == s.roots.ProfileID && b.ParentRoot == s.roots.Parent.Identity && b.ChatRoot == s.roots.Chat.Identity
 }
 func (s *owner) scan(ctx context.Context) (*port.HandoffHead, int, []port.HandoffRecord, error) {
+	return s.scanEach(ctx, nil)
+}
+
+// scanEach shares the exact Load/Publish fences with read-only projections.
+// The visitor sees validated records, but its output cannot be exposed until
+// the complete chain, including the first missing step's inventory, is known.
+func (s *owner) scanEach(ctx context.Context, visit func(port.HandoffRecord) error) (*port.HandoffHead, int, []port.HandoffRecord, error) {
 	head := &port.HandoffHead{}
 	history := []port.HandoffRecord{}
 	for index := 1; index <= maxSteps+1; index++ {
@@ -162,6 +170,11 @@ func (s *owner) scan(ctx context.Context) (*port.HandoffHead, int, []port.Handof
 		r, err := decode(raw)
 		if err != nil || !s.bound(r) || policy.ValidateTransition(head.Record, head.Digest, r) != nil || reused(history, r) {
 			return nil, 0, nil, s.uncertain()
+		}
+		if visit != nil {
+			if err := visit(r); err != nil {
+				return nil, 0, nil, err
+			}
 		}
 		d := sha256.Sum256(raw)
 		copy := policy.Copy(r)
