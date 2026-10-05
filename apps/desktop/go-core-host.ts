@@ -127,7 +127,9 @@ export class DesktopGoCore {
     if (this.browser || this.closeResult)
       throw new BridgeError("refused", "host_browser_already_selected");
     this.browser = connection;
-    this.pump = new BrowserPump(this.client, connection.driver);
+    this.pump = new BrowserPump(this.client, connection.driver, (failure) => {
+      console.warn(`FAROL_BROWSER_FAILURE ${JSON.stringify(failure)}`);
+    });
     this.chatBridge = new ChatBridge(this.client);
     this.chatComputerBridge = new ChatComputerBridge(this.client);
     this.chatCallerBridge = new ChatCallerBridge(this.client);

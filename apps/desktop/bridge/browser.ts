@@ -51,6 +51,12 @@ const shapes = {
   cancel: ["BrowserCancel", "BrowserCancelled"],
   dispose: ["BrowserDispose", "BrowserDisposed"],
 } as const;
+export type BrowserPumpFailure = Readonly<{
+  stage: "poll" | "execute";
+  kind: BrowserCommand["kind"] | null;
+  state: "unavailable" | "unknown" | "refused" | "unsupported";
+  code: string;
+}>;
 
 // One-shot physical dispatch for one already handshaken child. Go owns leases,
 // queueing and durable intent. Failure latches this pump; it never reconnects,
@@ -61,12 +67,43 @@ export class BrowserPump {
   private readonly active = new Set<Promise<void>>();
   private loop: Promise<void> | undefined;
   private stopRequested = false;
+  private failureValue: BrowserPumpFailure | undefined;
   constructor(
     private readonly client: Client,
     private readonly driver: BrowserDriver,
+    private readonly onFailure?: (failure: BrowserPumpFailure) => void,
   ) {}
   get state() {
     return this.stateValue;
+  }
+  private failed(
+    stage: BrowserPumpFailure["stage"],
+    kind: BrowserPumpFailure["kind"],
+    error: unknown,
+  ): void {
+    this.stateValue = "unknown";
+    this.stopRequested = true;
+    if (this.failureValue) return;
+    // Retain only local machine classification. Never expose a command body,
+    // prompt, identity, URL, raw error message or stack in this diagnostic.
+    const classified = error instanceof BridgeError;
+    this.failureValue = Object.freeze({
+      stage,
+      kind,
+      state: classified ? error.state : "unknown",
+      code:
+        classified &&
+        /^(?:browser_|chat_browser_|host_browser_|host_chat_browser_|backend_)[a-z_]{1,80}$/u.test(
+          error.code,
+        )
+          ? error.code
+          : "browser_unclassified_failure",
+    });
+    try {
+      this.onFailure?.(this.failureValue);
+    } catch {
+      // Diagnostic publication cannot alter the original permanent fence.
+    }
   }
   start(): void {
     if (this.stateValue !== "idle")
@@ -114,16 +151,14 @@ export class BrowserPump {
         if (this.consumed.has(command.commandId) || this.consumed.size >= 4096)
           throw new BridgeError("unknown", "browser_command_replayed");
         this.consumed.add(command.commandId);
-        const work = this.execute(command).catch(() => {
-          this.stateValue = "unknown";
-          this.stopRequested = true;
-        });
+        const work = this.execute(command).catch((error: unknown) =>
+          this.failed("execute", command.kind, error),
+        );
         this.active.add(work);
         void work.finally(() => this.active.delete(work));
       }
-    } catch {
-      this.stateValue = "unknown";
-      this.stopRequested = true;
+    } catch (error) {
+      this.failed("poll", null, error);
     }
   }
   private async execute(command: BrowserCommand): Promise<void> {

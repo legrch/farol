@@ -121,6 +121,7 @@ import {
   conversationWitnessSelfTest,
   runConversationJourney,
 } from "./lib/read-conversation-witness.mjs";
+import { browserFailureCollector } from "./lib/browser-failure-witness.mjs";
 
 const root = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -1411,6 +1412,11 @@ async function native(selected, inputs, report, save) {
       child = application.process();
       launch.pid = child.pid;
       const launched = launch;
+      if (selected.chatTwoTurn) {
+        const diagnostics = browserFailureCollector();
+        launched.browserFailures = diagnostics.failures;
+        child.stderr.on("data", (chunk) => diagnostics.ingest(chunk));
+      }
       exited = once(child, "exit");
       child.once("exit", (code, signal) => {
         launched.cleanup.exitObserved = true;
@@ -3205,12 +3211,18 @@ async function main(args) {
         new URL("./lib/computer-settings-witness.mjs", import.meta.url),
       ),
     );
-    if (selected.chatTwoTurn)
+    if (selected.chatTwoTurn) {
       report.conversationWitnessSourceSHA = hash(
         await regular(
           new URL("./lib/read-conversation-witness.mjs", import.meta.url),
         ),
       );
+      report.browserFailureWitnessSourceSHA = hash(
+        await regular(
+          new URL("./lib/browser-failure-witness.mjs", import.meta.url),
+        ),
+      );
+    }
     if (selected.settingsEditMutation)
       report.mutationWitnessSourceSHA = hash(
         await regular(
