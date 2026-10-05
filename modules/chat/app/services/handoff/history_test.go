@@ -95,6 +95,36 @@ type historyResults struct {
 	fault string
 }
 
+func TestHistoryKnownFirstProvisioningHasOnlyAuthorizedEmptyCatalogue(t *testing.T) {
+	ctx := context.Background()
+	a := &historyAuthority{active: true, scope: port.HistoryReadScope{ProfileID: "profile", BackendGeneration: "fresh", OwnerID: "owner"}}
+	r, err := NewEmptyHistoryReader(port.JournalScope{ProfileID: "profile", BackendGeneration: "fresh"}, a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := r.List(ctx, 0)
+	if err != nil || p == nil || p.Total != 0 || p.Offset != 0 || p.Entries == nil || len(p.Entries) != 0 {
+		t.Fatal("missing exact empty catalogue", err)
+	}
+	if p, err := r.List(ctx, 1); err == nil || p != nil {
+		t.Fatal("invalid offset accepted")
+	}
+	if p, err := r.Read(ctx, port.HistoryKey{BackendGeneration: "old", OperationID: "operation"}); err == nil || p != nil {
+		t.Fatal("fresh reader fabricated history")
+	}
+	a.active = false
+	if p, err := r.List(ctx, 0); err == nil || p != nil {
+		t.Fatal("revoked empty catalogue exposed")
+	}
+	a.active, a.scope.BackendGeneration = true, "replacement"
+	if p, err := r.List(ctx, 0); err == nil || p != nil {
+		t.Fatal("replacement backend admitted")
+	}
+	if r, err := NewEmptyHistoryReader(port.JournalScope{}, a); err == nil || r != nil {
+		t.Fatal("invalid scope admitted")
+	}
+}
+
 func (*historyResults) Retain(context.Context, port.RetainRequest) (*port.RetainReceipt, error) {
 	panic("history cannot retain")
 }

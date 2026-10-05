@@ -97,6 +97,12 @@ func retainedNativeRetire(t *testing.T, launch NativeLaunch, runtime *NativeRunt
 	if prepared.Status != "ok" {
 		t.Fatalf("retirement prepare: %+v", prepared)
 	}
+	if runtime.history == nil {
+		t.Fatal("normal boot omitted current history reader")
+	}
+	if page, err := runtime.history.List(context.Background(), 0); err == nil || page != nil {
+		t.Fatal("retirement left historical read authority active")
+	}
 	p := decodeChat[wire.CoreRetirementPrepared](t, prepared.Data)
 	head, err := runtime.retirement.repo.Load(context.Background())
 	if err != nil || head == nil || head.Record == nil {
@@ -129,6 +135,9 @@ func TestNativeRetainedTwoTurnResultsSurviveCleanSuccessorsWithoutSend(t *testin
 		t.Fatal("normal Go startup still uses memory-only results")
 	}
 	ctx := context.Background()
+	if page, err := runtime.history.List(ctx, 0); err != nil || page == nil || page.Total != 0 || page.Entries == nil {
+		t.Fatal("fresh profile lacks authorized empty history", err)
+	}
 	p := &retainedNativePeer{t: t, runtime: runtime}
 	i := port.ConversationInput{Binding: port.TurnBinding{ProfileID: launch.Profile.ProfileID, BackendGeneration: "generation-1", OwnerID: launch.OwnerID, SessionID: "session", TaskID: "task", TaskEpoch: 1, ParticipantID: "participant", OperationID: "operation-1", TurnID: "turn-1", TurnGeneration: 1}, Selection: port.Selection{Provider: "farol", Alias: "chatgpt", AccountID: "controlled-account", ModelID: "controlled-model", Effort: "low"}, Required: port.RequiredControls{Model: true}, Prompt: "Synthetic durable result test"}
 	c, err := runtime.chat.CreateConversation(ctx, i)
@@ -175,6 +184,22 @@ func TestNativeRetainedTwoTurnResultsSurviveCleanSuccessorsWithoutSend(t *testin
 				t.Error(err)
 			}
 		})
+		// Discover references from the actual qualified ancestor chain. Test-held
+		// original values are only an independent oracle, never read authority.
+		page, err := next.history.List(ctx, 0)
+		if err != nil || page == nil || page.Total != 2 || len(page.Entries) != 2 {
+			t.Fatal("ancestor discovery failed", err)
+		}
+		for _, summary := range page.Entries {
+			got, err := next.history.Read(ctx, summary.Key)
+			w, found := want[summary.Key.OperationID]
+			if !found || err != nil || got == nil || got.Binding != w.Binding || got.Text != w.Text || got.ResultID != w.ResultID || got.ProviderConversationID != w.ProviderConversationID || got.ProviderUserTurnID != w.ProviderUserTurnID || got.ProviderReplyID != w.ProviderReplyID || got.Requested != w.Requested || got.Observed != w.Observed || got.Evidence != w.Evidence || !got.Complete || !got.Acknowledged || got.Phase != "delivered" || summary.Binding != w.Binding || summary.ResultID != w.ResultID || summary.ProviderConversationID != w.ProviderConversationID {
+				t.Fatal("authorized history lost original result", err)
+			}
+		}
+		if len(next.conversations.handles) != 0 || len(next.conversations.used) != 0 {
+			t.Fatal("historical read reconstructed live handles")
+		}
 		store := any(next.results).(port.DurableResults)
 		for _, read := range reads {
 			got, err := store.Read(ctx, read)
@@ -191,9 +216,14 @@ func TestNativeRetainedTwoTurnResultsSurviveCleanSuccessorsWithoutSend(t *testin
 			if retained := retainedNativeRetire(t, launch, next); len(retained) != 0 {
 				t.Fatal("old live handles were restored")
 			}
+		} else {
+			next.historyAuthority.close()
+			if v, err := next.history.Read(ctx, page.Entries[0].Key); err == nil || v != nil {
+				t.Fatal("closed authority disclosed retained content")
+			}
 		}
 	}
-	t.Log("Two controlled Sends, two retained results, two clean successor boots, zero successor browser commands; storage read only, no historical UI/current-read authority claim")
+	t.Log("Two controlled Sends, two retained results, actual ancestor discovery/current-authorized read across two successor boots, zero successor browser commands/live handles; host terminal/drain are fixtures, no historical UI or actual app restart claim")
 }
 
 func TestNativeRetainedMissingOrCorruptStoreRefusesSuccessorWithoutRepair(t *testing.T) {

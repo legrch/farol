@@ -27,6 +27,7 @@ type nativeRetirement struct {
 	attempted                  bool
 	previousHostDrainConfirmed bool
 	publication                *chatport.HandoffPublication
+	history                    *handoff.HistoryOrigin
 }
 
 func handoffRoots(launch NativeLaunch, chat NativeRoot) handoffrepo.Roots {
@@ -78,7 +79,12 @@ func (r *nativeRetirement) openJournal(ctx context.Context, mode string, root ch
 	}
 	// Consume fences this exact attempt before journal/open/handshake. Any later
 	// error retains that fence; no constructor fallback or replacement generation.
-	return chatrepo.NewAfterRetirement(ctx, root, successor.Scope, limits, successor.Proof)
+	journal, err := chatrepo.NewAfterRetirement(ctx, root, successor.Scope, limits, successor.Proof)
+	if err != nil {
+		return nil, err
+	}
+	r.history = successor.History
+	return journal, nil
 }
 
 func retirementDigest(value string) ([32]byte, error) {
@@ -130,6 +136,9 @@ func (r *NativeRuntime) retirementMethods() map[string]desktop.Method {
 				return retirementOutcome("", nil, handoff.Refused)
 			}
 			state.attempted = true
+			// Close the reader before any retirement IO. This releases its gate
+			// before Capture takes the handoff gate; no reverse lock ordering.
+			r.historyAuthority.close()
 			if err := r.settingsDelivery.freezeForRetirement(ctx); err != nil {
 				return retirementOutcome("", nil, err)
 			}

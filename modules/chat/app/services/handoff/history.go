@@ -22,6 +22,7 @@ type HistoryDependencies struct {
 
 type HistoryReader struct {
 	origin *HistoryOrigin
+	scope  port.JournalScope
 	deps   HistoryDependencies
 	store  port.HandoffHistoryStore
 }
@@ -47,7 +48,18 @@ func NewHistoryReader(origin *HistoryOrigin, deps HistoryDependencies) (*History
 	if !ok {
 		return nil, Refused
 	}
-	return &HistoryReader{origin: origin, deps: deps, store: store}, nil
+	return &HistoryReader{origin: origin, scope: origin.anchor.Consumption.Next, deps: deps, store: store}, nil
+}
+
+// NewEmptyHistoryReader is only for trusted known-first provisioning. It cannot
+// inspect storage or be upgraded to a successor reader. An open failure must
+// never fall back to this constructor. Current-lifetime answers remain live
+// conversation results; this catalogue contains consumed ancestors only.
+func NewEmptyHistoryReader(scope port.JournalScope, authority port.HistoryReadAuthority) (*HistoryReader, error) {
+	if !validID(scope.ProfileID) || !validID(scope.BackendGeneration) || authority == nil {
+		return nil, Invalid
+	}
+	return &HistoryReader{scope: scope, deps: HistoryDependencies{Authority: authority}}, nil
 }
 
 func historyScope(ctx context.Context, lease port.HistoryReadLease) (port.HistoryReadScope, error) {
@@ -79,7 +91,7 @@ func (r *HistoryReader) admit(ctx context.Context) (port.HistoryReadLease, port.
 		return nil, port.HistoryReadScope{}, err
 	}
 	scope, err := historyScope(ctx, lease)
-	if err != nil || scope.ProfileID != r.origin.anchor.Consumption.Next.ProfileID || scope.BackendGeneration != r.origin.anchor.Consumption.Next.BackendGeneration {
+	if err != nil || scope.ProfileID != r.scope.ProfileID || scope.BackendGeneration != r.scope.BackendGeneration {
 		return nil, port.HistoryReadScope{}, Refused
 	}
 	return lease, scope, nil
@@ -98,6 +110,13 @@ func (r *HistoryReader) available(ctx context.Context) error {
 	return nil
 }
 func (r *HistoryReader) current(ctx context.Context, lease port.HistoryReadLease, expected port.HistoryReadScope) error {
+	if r.origin == nil {
+		now, err := historyScope(ctx, lease)
+		if err != nil || now != expected {
+			return Refused
+		}
+		return nil
+	}
 	r.origin.owner.guard.Lock()
 	defer r.origin.owner.guard.Unlock()
 	return r.currentLocked(ctx, lease, expected)
@@ -129,6 +148,15 @@ func (r *HistoryReader) List(ctx context.Context, offset uint32) (*HistoryListin
 	lease, scope, err := r.admit(ctx)
 	if err != nil {
 		return nil, err
+	}
+	if r.origin == nil {
+		if offset != 0 {
+			return nil, Invalid
+		}
+		if err := r.current(ctx, lease, scope); err != nil {
+			return nil, err
+		}
+		return &HistoryListing{Entries: []HistorySummary{}}, nil
 	}
 	s := r.origin.owner
 	s.guard.Lock()
@@ -171,7 +199,7 @@ func (r *HistoryReader) Read(ctx context.Context, key port.HistoryKey) (*port.Co
 	if err != nil {
 		return nil, err
 	}
-	if key.BackendGeneration == scope.BackendGeneration {
+	if r.origin == nil || key.BackendGeneration == scope.BackendGeneration {
 		return nil, Refused
 	}
 	s := r.origin.owner

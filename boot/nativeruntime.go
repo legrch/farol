@@ -12,6 +12,7 @@ import (
 
 	wire "github.com/legrch/farol/gen/desktop/v1"
 	chatport "github.com/legrch/farol/modules/chat/app/port"
+	chathandoff "github.com/legrch/farol/modules/chat/app/services/handoff"
 	chatlifecycle "github.com/legrch/farol/modules/chat/app/services/lifecycle"
 	"github.com/legrch/farol/modules/chat/infra/gate"
 	chatrepo "github.com/legrch/farol/modules/chat/infra/repos/lifecycle"
@@ -50,6 +51,8 @@ type NativeRuntime struct {
 	closed           bool
 	closeErr         error
 	retirement       *nativeRetirement
+	historyAuthority *historyReadAuthority
+	history          *chathandoff.HistoryReader
 }
 
 func NewNativeRuntime(ctx context.Context, launch NativeLaunch, generation string) (*NativeRuntime, error) {
@@ -152,6 +155,23 @@ func NewNativeRuntime(ctx context.Context, launch NativeLaunch, generation strin
 			return fail(err)
 		}
 	}
+	if runtime.retirement != nil {
+		runtime.historyAuthority, err = newHistoryReadAuthority(lifetime, chatport.HistoryReadScope{ProfileID: scope.ProfileID, BackendGeneration: scope.BackendGeneration, OwnerID: launch.OwnerID}, func() error {
+			_, _, err := qualified.Roots()
+			return err
+		})
+		if err != nil {
+			return fail(err)
+		}
+		if launch.StoreMode == "create" {
+			runtime.history, err = chathandoff.NewEmptyHistoryReader(scope, runtime.historyAuthority)
+		} else {
+			runtime.history, err = chathandoff.NewHistoryReader(runtime.retirement.history, chathandoff.HistoryDependencies{Authority: runtime.historyAuthority, Results: runtime.results, ResultBytesLimit: chatlifecycle.OutputBytesLimit})
+		}
+		if err != nil {
+			return fail(err)
+		}
+	}
 	return runtime, nil
 }
 
@@ -168,6 +188,7 @@ func (r *NativeRuntime) Close() error {
 		return r.closeErr
 	}
 	r.closed = true
+	r.historyAuthority.close()
 	if r.cancel != nil {
 		r.cancel()
 	}
