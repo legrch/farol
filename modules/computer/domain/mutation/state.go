@@ -3,6 +3,24 @@ package mutation
 import "github.com/legrch/farol/modules/computer/domain/authority"
 
 const ScopeOwnerSettings = "owner-settings"
+const ScopeConnector = "external-connector"
+
+// ConnectorOrigin retains the original execution correlation, never authority.
+// It is part of the immutable binding, not the stable profile operation key.
+type ConnectorOrigin struct {
+	BuildID, BackendGeneration, RuntimeID            string
+	ConnectorGeneration                              uint64
+	SessionID, TaskID, ParticipantID, TurnID, CallID string
+	TaskEpoch, Generation                            uint64
+	Operation                                        Kind
+}
+
+func (o ConnectorOrigin) Valid() bool {
+	return Identifier(o.BuildID, 120) && Identifier(o.BackendGeneration, 120) && Identifier(o.RuntimeID, 120) &&
+		o.ConnectorGeneration > 0 && o.ConnectorGeneration <= MaxSafeInteger && Identifier(o.SessionID, 120) &&
+		Identifier(o.TaskID, 120) && Identifier(o.ParticipantID, 120) && Identifier(o.TurnID, 120) && Identifier(o.CallID, 120) &&
+		o.TaskEpoch <= MaxSafeInteger && o.Generation <= MaxSafeInteger && (o.Operation == WriteKind || o.Operation == EditKind)
+}
 
 type Identity struct {
 	OperationID, OwnerID, SessionID, TaskID string
@@ -15,6 +33,7 @@ type Binding struct {
 	WorkspaceID, RequestDigest string
 	ComputerGeneration         uint64
 	RelativePath               string
+	Connector                  ConnectorOrigin
 }
 type Receipt struct {
 	Operation    Kind
@@ -64,8 +83,8 @@ func (r State) Failure() *Failure {
 }
 func (r State) Clone() State { r.receipt = r.Receipt(); r.failure = r.Failure(); return r }
 
-// ValidIdentity distinguishes the unchanged zero-scope task identity from an
-// explicit owner Settings identity. Neither form grants execution authority.
+// ValidIdentity distinguishes the unchanged zero-scope task identity from
+// stable Settings and connector identities. None grants execution authority.
 func ValidIdentity(i Identity) bool {
 	if !Identifier(i.OperationID, 160) || !Identifier(i.OwnerID, 160) {
 		return false
@@ -73,14 +92,26 @@ func ValidIdentity(i Identity) bool {
 	switch i.Scope {
 	case "":
 		return i.ProfileID == "" && i.ComputerID == "" && Identifier(i.SessionID, 160) && Identifier(i.TaskID, 160) && i.TaskEpoch <= MaxSafeInteger && Identifier(i.ParticipantID, 160)
-	case ScopeOwnerSettings:
+	case ScopeOwnerSettings, ScopeConnector:
 		return Identifier(i.ProfileID, 160) && Identifier(i.ComputerID, 160) && i.SessionID == "" && i.TaskID == "" && i.TaskEpoch == 0 && i.ParticipantID == ""
 	default:
 		return false
 	}
 }
 func validBinding(b Binding) bool {
-	return ValidIdentity(b.Identity) && Identifier(b.WorkspaceID, 160) && SHA256(b.RequestDigest) && b.ComputerGeneration <= MaxSafeInteger && ((b.Identity.Scope == ScopeOwnerSettings && RelativePath(b.RelativePath)) || (b.Identity.Scope == "" && b.ComputerGeneration == 0 && b.RelativePath == ""))
+	if !ValidIdentity(b.Identity) || !Identifier(b.WorkspaceID, 160) || !SHA256(b.RequestDigest) || b.ComputerGeneration > MaxSafeInteger {
+		return false
+	}
+	switch b.Identity.Scope {
+	case "":
+		return b.ComputerGeneration == 0 && b.RelativePath == "" && b.Connector == (ConnectorOrigin{})
+	case ScopeOwnerSettings:
+		return RelativePath(b.RelativePath) && b.Connector == (ConnectorOrigin{})
+	case ScopeConnector:
+		return RelativePath(b.RelativePath) && b.Connector.Valid()
+	default:
+		return false
+	}
 }
 
 // Stored receipt policy matches the existing private journal schema. Native
@@ -103,7 +134,7 @@ func Restore(b Binding, phase Phase, receipt *Receipt, failure *Failure) (*State
 	case Prepared:
 		valid = valid && receipt == nil && failure == nil
 	case Completed:
-		valid = valid && receipt != nil && failure == nil && ValidStoredReceipt(*receipt) && (b.Identity.Scope != ScopeOwnerSettings || receipt.RelativePath == b.RelativePath)
+		valid = valid && receipt != nil && failure == nil && ValidStoredReceipt(*receipt) && (b.Identity.Scope == "" || receipt.RelativePath == b.RelativePath) && (b.Identity.Scope != ScopeConnector || receipt.Operation == b.Connector.Operation)
 	case Failed:
 		valid = valid && receipt == nil && failure != nil && validFailure(*failure, false)
 	case OutcomeUnknown:

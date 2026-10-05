@@ -74,6 +74,45 @@ type ownerEnvelope struct {
 	Record  ownerRecord `json:"record"`
 }
 
+// Connector v3 shares this repository and its uncertainty fences. Original
+// execution IDs remain immutable record data; they cannot create another key.
+type connectorOrigin struct {
+	BuildID             string      `json:"buildId"`
+	BackendGeneration   string      `json:"backendGeneration"`
+	RuntimeID           string      `json:"runtimeId"`
+	ConnectorGeneration uint64      `json:"connectorGeneration"`
+	SessionID           string      `json:"sessionId"`
+	TaskID              string      `json:"taskId"`
+	ParticipantID       string      `json:"participantId"`
+	TurnID              string      `json:"turnId"`
+	CallID              string      `json:"callId"`
+	TaskEpoch           uint64      `json:"taskEpoch"`
+	Generation          uint64      `json:"generation"`
+	Operation           domain.Kind `json:"operation"`
+}
+type connectorRecord struct {
+	Identity           ownerIdentity   `json:"identity"`
+	ComputerGeneration uint64          `json:"computerGeneration"`
+	WorkspaceID        string          `json:"workspaceId"`
+	RelativePath       string          `json:"relativePath"`
+	Origin             connectorOrigin `json:"origin"`
+	RequestDigest      string          `json:"requestDigest"`
+	Phase              domain.Phase    `json:"phase"`
+	Outcome            *outcome        `json:"outcome"`
+}
+type connectorEnvelope struct {
+	Version uint8           `json:"schemaVersion"`
+	Kind    string          `json:"kind"`
+	Record  connectorRecord `json:"record"`
+}
+
+func toConnector(o domain.ConnectorOrigin) connectorOrigin {
+	return connectorOrigin{o.BuildID, o.BackendGeneration, o.RuntimeID, o.ConnectorGeneration, o.SessionID, o.TaskID, o.ParticipantID, o.TurnID, o.CallID, o.TaskEpoch, o.Generation, o.Operation}
+}
+func (o connectorOrigin) domain() domain.ConnectorOrigin {
+	return domain.ConnectorOrigin{BuildID: o.BuildID, BackendGeneration: o.BackendGeneration, RuntimeID: o.RuntimeID, ConnectorGeneration: o.ConnectorGeneration, SessionID: o.SessionID, TaskID: o.TaskID, ParticipantID: o.ParticipantID, TurnID: o.TurnID, CallID: o.CallID, TaskEpoch: o.TaskEpoch, Generation: o.Generation, Operation: o.Operation}
+}
+
 func toIdentity(i domain.Identity) identity {
 	return identity{i.OperationID, i.OwnerID, i.SessionID, i.TaskID, i.TaskEpoch, i.ParticipantID}
 }
@@ -123,6 +162,9 @@ func recordKey(i domain.Identity) (string, error) {
 	if i.Scope == domain.ScopeOwnerSettings {
 		raw = `["owner-settings-v2",` + quoteJS(i.OperationID) + "," + quoteJS(i.OwnerID) + "," + quoteJS(i.ProfileID) + "," + quoteJS(i.ComputerID) + "]"
 	}
+	if i.Scope == domain.ScopeConnector {
+		raw = `["external-connector-v3",` + quoteJS(i.OperationID) + "," + quoteJS(i.OwnerID) + "," + quoteJS(i.ProfileID) + "," + quoteJS(i.ComputerID) + "]"
+	}
 	digest := sha256.Sum256([]byte(raw))
 	return hex.EncodeToString(digest[:]) + ".json", nil
 }
@@ -169,6 +211,12 @@ func encode(state *domain.State) ([]byte, error) {
 		value = ownerEnvelope{Version: 2, Kind: "workspace_owner_mutation", Record: ownerRecord{
 			Identity:           ownerIdentity{Scope: i.Scope, OperationID: i.OperationID, OwnerID: i.OwnerID, ProfileID: i.ProfileID, ComputerID: i.ComputerID},
 			ComputerGeneration: b.ComputerGeneration, WorkspaceID: b.WorkspaceID, RelativePath: b.RelativePath, RequestDigest: b.RequestDigest, Phase: r.Phase, Outcome: r.Outcome,
+		}}
+	}
+	if i := b.Identity; i.Scope == domain.ScopeConnector {
+		value = connectorEnvelope{Version: 3, Kind: "workspace_connector_mutation", Record: connectorRecord{
+			Identity:           ownerIdentity{Scope: i.Scope, OperationID: i.OperationID, OwnerID: i.OwnerID, ProfileID: i.ProfileID, ComputerID: i.ComputerID},
+			ComputerGeneration: b.ComputerGeneration, WorkspaceID: b.WorkspaceID, RelativePath: b.RelativePath, Origin: toConnector(b.Connector), RequestDigest: b.RequestDigest, Phase: r.Phase, Outcome: r.Outcome,
 		}}
 	}
 	var buf bytes.Buffer
@@ -254,6 +302,14 @@ func decode(raw []byte) (*domain.State, error) {
 		}
 		r, i := e.Record, e.Record.Identity
 		b = domain.Binding{Identity: domain.Identity{Scope: i.Scope, OperationID: i.OperationID, OwnerID: i.OwnerID, ProfileID: i.ProfileID, ComputerID: i.ComputerID}, ComputerGeneration: r.ComputerGeneration, WorkspaceID: r.WorkspaceID, RelativePath: r.RelativePath, RequestDigest: r.RequestDigest}
+		phase, result = r.Phase, r.Outcome
+	case header.Version == 3 && header.Kind == "workspace_connector_mutation":
+		var e connectorEnvelope
+		if decodeStrict(raw, &e) != nil || e.Record.Identity.Scope != domain.ScopeConnector {
+			return corrupt()
+		}
+		r, i := e.Record, e.Record.Identity
+		b = domain.Binding{Identity: domain.Identity{Scope: i.Scope, OperationID: i.OperationID, OwnerID: i.OwnerID, ProfileID: i.ProfileID, ComputerID: i.ComputerID}, ComputerGeneration: r.ComputerGeneration, WorkspaceID: r.WorkspaceID, RelativePath: r.RelativePath, Connector: r.Origin.domain(), RequestDigest: r.RequestDigest}
 		phase, result = r.Phase, r.Outcome
 	default:
 		return corrupt()
