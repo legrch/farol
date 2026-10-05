@@ -94,11 +94,11 @@ const HashSchema = z.string().regex(/^[a-f0-9]{64}$/u);
 const WriteInputSchema = z.strictObject({
   ...MutationTargetSchema,
   content: MutationTextSchema,
-  expectedSHA256: HashSchema.optional(),
+  expectedSha256: HashSchema.nullable(),
 });
 const EditInputSchema = z.strictObject({
   ...MutationTargetSchema,
-  expectedSHA256: HashSchema,
+  expectedSha256: HashSchema,
   edits: z
     .array(
       z
@@ -358,22 +358,24 @@ export function createGoComputerMcpServer(
       idempotentHint: false,
     };
     server.registerTool(
-      "computer_write",
+      "computer_workspace_write",
       {
         title: "Write an approved workspace file",
         description:
-          "Write through the selected Go owner. Supply a new operationId; never retry an effect. Without expectedSHA256 this is create-only; replacement requires the exact preimage hash. Content is bounded to 256 KiB of UTF-8. UNKNOWN returns operationId for computer_mutation_read. memory_only is not durable publication.",
+          "Write through the selected Go owner. Supply a new operationId; never retry an effect. expectedSha256=null is create-only; replacement requires the exact preimage hash. Content is bounded to 256 KiB of UTF-8. UNKNOWN returns operationId for computer_mutation_read. memory_only is not durable publication.",
         inputSchema: WriteInputSchema,
         annotations: effectAnnotations,
       },
-      async ({ operationId, expectedSHA256, ...input }, ctx) =>
+      async ({ operationId, expectedSha256, ...input }, ctx) =>
         run(
           ctx.mcpReq.signal,
           (call) =>
             mutations.write(
               {
                 ...input,
-                ...(expectedSHA256 === undefined ? {} : { expectedSHA256 }),
+                ...(expectedSha256 === null
+                  ? {}
+                  : { expectedSHA256: expectedSha256 }),
               },
               operationId,
               call,
@@ -382,18 +384,23 @@ export function createGoComputerMcpServer(
         ),
     );
     server.registerTool(
-      "computer_edit",
+      "computer_workspace_edit",
       {
         title: "Edit an approved workspace file",
         description:
-          "Apply 1 to 256 exact unique text replacements through the selected Go owner with the exact expectedSHA256. Supply a new operationId; never retry an effect. Total edit text is bounded to 256 KiB of UTF-8. UNKNOWN returns operationId for computer_mutation_read. memory_only is not durable publication.",
+          "Apply 1 to 256 exact unique text replacements through the selected Go owner with the exact expectedSha256. Supply a new operationId; never retry an effect. Total edit text is bounded to 256 KiB of UTF-8. UNKNOWN returns operationId for computer_mutation_read. memory_only is not durable publication.",
         inputSchema: EditInputSchema,
         annotations: effectAnnotations,
       },
-      async ({ operationId, ...input }, ctx) =>
+      async ({ operationId, expectedSha256, ...input }, ctx) =>
         run(
           ctx.mcpReq.signal,
-          (call) => mutations.edit(input, operationId, call),
+          (call) =>
+            mutations.edit(
+              { ...input, expectedSHA256: expectedSha256 },
+              operationId,
+              call,
+            ),
           operationId,
         ),
     );
@@ -485,7 +492,7 @@ export function createGoComputerMcpServer(
       ),
   );
   server.registerTool(
-    "farol_next_computer_search",
+    "computer_workspace_search",
     {
       title: "Search approved workspace text",
       description:

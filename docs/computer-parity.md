@@ -14,6 +14,15 @@ and retained-result observation. The historical write and shell rows below
 describe the legacy adapter and do not establish those tools on the new Go route.
 Normal Dev, packaged routing and external-client qualification remain open.
 
+The Go MCP adapter retains the published `computer_workspace_search`,
+`computer_workspace_write` and `computer_workspace_edit` names. Its public
+`expectedSha256` spelling remains unchanged: write requires an explicit `null`
+for create-only or an exact hash for replacement; edit requires an exact hash.
+The adapter translates these values once to the internal Go wire. Missing or
+misspelled preconditions are refused before mutation dispatch. Go's bounded
+256 KiB content/edit-text limit remains explicit; preserving tool names does not
+extend that limit or restore the legacy executor.
+
 Connector mutations use the existing Go mutation engine and
 journal. Its separate v3 record keeps a stable profile operation key and immutable
 original host/execution/call correlation; connector generation is an exact uint64

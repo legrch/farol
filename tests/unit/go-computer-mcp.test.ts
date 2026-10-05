@@ -236,7 +236,7 @@ it("registers verification only for the selected Go port and keeps it inside the
 });
 
 describe("Go Computer Search MCP (pure/in-memory only)", () => {
-  const name = "farol_next_computer_search";
+  const name = "computer_workspace_search";
   const input = {
     workspaceId: "workspace",
     relativePath: ".",
@@ -502,7 +502,7 @@ describe("Go Computer MCP codec (pure/in-memory only)", () => {
       { workspaceId: "workspace", relativePath: "file" },
     ],
     [
-      "farol_next_computer_search",
+      "computer_workspace_search",
       { workspaceId: "workspace", relativePath: ".", pattern: "🌊" },
     ],
   ])(
@@ -712,7 +712,7 @@ describe("Go Computer MCP codec (pure/in-memory only)", () => {
       "computer_workspace_bootstrap",
       "computer_workspace_list",
       "computer_workspace_read",
-      "farol_next_computer_search",
+      "computer_workspace_search",
     ]);
     for (const tool of tools) {
       expect(tool.inputSchema.additionalProperties).toBe(false);
@@ -1175,10 +1175,10 @@ describe("Go Computer mutation MCP (pure/in-memory only)", () => {
     relativePath: "note.md",
     operationId: "caller-operation",
   };
-  const writeInput = { ...target, content: "text" };
+  const writeInput = { ...target, content: "text", expectedSha256: null };
   const editInput = {
     ...target,
-    expectedSHA256: "a".repeat(64),
+    expectedSha256: "a".repeat(64),
     edits: [{ oldText: "old", newText: "new" }],
   };
   const mutations = () =>
@@ -1213,13 +1213,13 @@ describe("Go Computer mutation MCP (pure/in-memory only)", () => {
     const absent = await setup();
     expect(
       (await absent.client.listTools()).tools.map((tool) => tool.name),
-    ).not.toContain("computer_write");
+    ).not.toContain("computer_workspace_write");
     const selected = mutations();
     const { client } = await setup({ mutations: selected });
     const tools = (await client.listTools()).tools;
     for (const name of [
-      "computer_write",
-      "computer_edit",
+      "computer_workspace_write",
+      "computer_workspace_edit",
       "computer_mutation_read",
     ]) {
       const tool = tools.find((entry) => entry.name === name)!;
@@ -1237,8 +1237,12 @@ describe("Go Computer mutation MCP (pure/in-memory only)", () => {
     ).toContain("bounded mutations");
     const { operationId: _operationId, ...missing } = writeInput;
     expect(
-      (await client.callTool({ name: "computer_write", arguments: missing }))
-        .isError,
+      (
+        await client.callTool({
+          name: "computer_workspace_write",
+          arguments: missing,
+        })
+      ).isError,
     ).toBe(true);
     expect(selected.write).not.toHaveBeenCalled();
   });
@@ -1254,8 +1258,8 @@ describe("Go Computer mutation MCP (pure/in-memory only)", () => {
       fence: { acquireAdmission },
     });
     for (const [name, input] of [
-      ["computer_write", writeInput],
-      ["computer_edit", editInput],
+      ["computer_workspace_write", writeInput],
+      ["computer_workspace_edit", editInput],
       ["computer_mutation_read", target],
     ] as const) {
       const out = await client.callTool({ name, arguments: input });
@@ -1283,6 +1287,74 @@ describe("Go Computer mutation MCP (pure/in-memory only)", () => {
     expect(release).toHaveBeenCalledTimes(3);
     expect(request).not.toHaveBeenCalled();
   });
+  it("preserves published connector mutation names and maps public preimage spelling once", async () => {
+    const selected = mutations();
+    const { client } = await setup({ mutations: selected });
+    const names = (await client.listTools()).tools.map((tool) => tool.name);
+    expect(names).toContain("computer_workspace_search");
+    for (const alias of [
+      "computer_write",
+      "computer_edit",
+      "farol_next_computer_search",
+    ])
+      expect(names).not.toContain(alias);
+    const expectedSha256 = "b".repeat(64);
+    await client.callTool({
+      name: "computer_workspace_write",
+      arguments: { ...writeInput, expectedSha256 },
+    });
+    expect(selected.write).toHaveBeenCalledExactlyOnceWith(
+      {
+        workspaceId: target.workspaceId,
+        relativePath: target.relativePath,
+        content: "text",
+        expectedSHA256: expectedSha256,
+      },
+      target.operationId,
+      expect.objectContaining({ context }),
+    );
+    await client.callTool({
+      name: "computer_workspace_edit",
+      arguments: editInput,
+    });
+    expect(selected.edit).toHaveBeenCalledExactlyOnceWith(
+      {
+        workspaceId: target.workspaceId,
+        relativePath: target.relativePath,
+        edits: editInput.edits,
+        expectedSHA256: editInput.expectedSha256,
+      },
+      target.operationId,
+      expect.objectContaining({ context }),
+    );
+  });
+  it("refuses missing or misspelled public preimages before invoking mutations", async () => {
+    const selected = mutations();
+    const { client } = await setup({ mutations: selected });
+    const { expectedSha256: _createOnly, ...withoutWriteHash } = writeInput;
+    const { expectedSha256: _editHash, ...withoutEditHash } = editInput;
+    for (const [name, input] of [
+      ["computer_workspace_write", withoutWriteHash],
+      [
+        "computer_workspace_write",
+        { ...withoutWriteHash, expectedSHA256: "b".repeat(64) },
+      ],
+      [
+        "computer_workspace_write",
+        { ...writeInput, expectedSHA256: "b".repeat(64) },
+      ],
+      [
+        "computer_workspace_edit",
+        { ...withoutEditHash, expectedSHA256: "b".repeat(64) },
+      ],
+      ["computer_workspace_edit", { ...editInput, expectedSha256: null }],
+    ] as const)
+      expect((await client.callTool({ name, arguments: input })).isError).toBe(
+        true,
+      );
+    expect(selected.write).not.toHaveBeenCalled();
+    expect(selected.edit).not.toHaveBeenCalled();
+  });
   it("preserves the operation ID when abort or fence release makes the outcome unknown", async () => {
     const selected = mutations();
     const controller = new AbortController();
@@ -1299,7 +1371,7 @@ describe("Go Computer mutation MCP (pure/in-memory only)", () => {
     });
     const { tools } = await setup({ mutations: selected });
     const out = await tools
-      .get("computer_write")!
+      .get("computer_workspace_write")!
       .executor(writeInput, handlerContext(controller.signal));
     expect(out.structuredContent).toMatchObject({
       status: "unknown",
@@ -1318,7 +1390,7 @@ describe("Go Computer mutation MCP (pure/in-memory only)", () => {
       },
     });
     const response = await broken.client.callTool({
-      name: "computer_edit",
+      name: "computer_workspace_edit",
       arguments: editInput,
     });
     expect(response.structuredContent).toMatchObject({
@@ -1339,8 +1411,12 @@ describe("Go Computer mutation MCP (pure/in-memory only)", () => {
       },
     });
     expect(
-      (await client.callTool({ name: "computer_write", arguments: writeInput }))
-        .structuredContent,
+      (
+        await client.callTool({
+          name: "computer_workspace_write",
+          arguments: writeInput,
+        })
+      ).structuredContent,
     ).toMatchObject({
       status: "refused",
       operationId: target.operationId,
@@ -1354,7 +1430,7 @@ describe("Go Computer mutation MCP (pure/in-memory only)", () => {
     expect(
       (
         await stopping.client.callTool({
-          name: "computer_edit",
+          name: "computer_workspace_edit",
           arguments: editInput,
         })
       ).structuredContent,
