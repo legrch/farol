@@ -6,13 +6,18 @@
  * node tests/e2e/go-core-startup.e2e.mjs [--check|--run-native]
  *   --candidate-root /absolute/_output/build/app --source-sha <SHA>
  *   --build-id <buildId> [--dependency-root /absolute/node_modules] [--reopen] [--read-discard] [--read-account] [--edit-snapshot] [--settings-edit-mutation]
+ * --chat-two-turn requires Dev --candidate-root and excludes all other journey
+ * flags. Actual React Prepare/Inspect/Confirm/Send -> early text -> retained
+ * result -> explicit ACK + Go settle/release -> same conversation second Send.
+ * Ordinary Quit is recorded separately; unconfirmed profiles are quarantined.
  * Or replace --candidate-root with:
  *   --packaged /absolute/Farol.app --artifact-metadata /absolute/artifact.json
  *   --artifact-sha <independently selected artifactSha256>
  *
  * Fresh-only by default. Packaged --reopen opts into one same-build successor
- * after confirmed clean retirement, at the same disposable E2E profile. No
- * Send, auth or app-under-test entry compilation. Never retry an unknown launch.
+ * after confirmed clean retirement, at the same disposable E2E profile.
+ * Send is authorized only in --chat-two-turn; no real auth or app-under-test
+ * entry compilation. Never retry an unknown launch.
  * --read-discard requires packaged --reopen and selects a separate grant-bearing
  * read-preview -> explicit Discard -> Quit -> retained-settings reopen journey.
  * Read-discard alone verifies fixture readiness; model/account scope and Send
@@ -104,6 +109,19 @@ import {
   terminalMutationWitness,
 } from "./lib/settings-mutation-witness.mjs";
 
+import {
+  conversationLimits,
+  conversationId,
+  syntheticTaskPolicy,
+  conversationScript,
+  conversationSeed,
+  conversationLedgerWitness,
+  conversationJournalWitness,
+  conversationQuitWitness,
+  conversationWitnessSelfTest,
+  runConversationJourney,
+} from "./lib/read-conversation-witness.mjs";
+
 const root = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "../..",
@@ -120,7 +138,7 @@ const contract = Object.freeze({
   backendWitness:
     "Production-created go-core/profile.json and computer/computer-access.json, read independently; unchanged zero authority through closure",
   providerWitness:
-    "Existing controlled loopback fixture's independent attempted/accepted Send ledger must remain zero, including at child terminal",
+    "Default journeys require the controlled fixture Send ledger to stay zero; --chat-two-turn requires exactly one then two accepted physical Sends, unchanged at child terminal",
   modes: ["--contract", "--self-test", "--check", "--run-native"],
   nativeAuthority:
     "Explicit --run-native; caller owns the exclusive native lane",
@@ -131,6 +149,9 @@ const contract = Object.freeze({
   readAccount:
     "Explicit packaged --reopen --read-discard --read-account: React verified folder/Choose file -> explicit Inspect current account -> ChatGPT/Home remount and same-revision Diagnostics refresh -> explicit Use this account -> known original duplicate account commands -> React exact Discard -> known Quit/reopen; exactly one inspect GET and one fresh confirmation GET, zero attempted/accepted Sends",
   readAccountLimits,
+  chatTwoTurn:
+    "Explicit Dev --candidate-root --chat-two-turn: attested normal main.cjs/real Go; synthetic settings.tasks before startup; existing normal workspace setup; React Prepare/Inspect/Confirm/Send, useful incremental text before controlled terminal, retained result, explicit ACK + independently read Go settle/release, same conversation second Send/result with retained first; one ordinary Quit, separate journey/terminal evidence, quarantine every failed or unconfirmed profile",
+  chatTwoTurnLimits: conversationLimits,
   editSnapshot:
     "Explicit packaged --reopen --read-discard --edit-snapshot: existing disposable UTF-8 canary, normal configuration write grant/Verify, preload Prepare, independently read raw bytes/count/SHA-256, retained root/profile/current generation and unchanged Chat/participants, exact Cancel, restore read grant/Verify, then original read-discard/account journey",
   editSnapshotLimits: snapshotLimits,
@@ -164,6 +185,7 @@ function selection(args) {
     readAccount: false,
     editSnapshot: false,
     settingsEditMutation: false,
+    chatTwoTurn: false,
     dependencyRoot: path.join(root, "node_modules"),
   };
   const options = new Map([
@@ -178,6 +200,12 @@ function selection(args) {
   const seen = new Set();
   for (let index = 0; index < args.length; index++) {
     const argument = args[index];
+    if (argument === "--chat-two-turn") {
+      assert.equal(seen.has("chatTwoTurn"), false, "CHAT_TWO_TURN_REPEATED");
+      seen.add("chatTwoTurn");
+      result.chatTwoTurn = true;
+      continue;
+    }
     if (argument === "--settings-edit-mutation") {
       assert.equal(
         seen.has("settingsEditMutation"),
@@ -232,6 +260,21 @@ function selection(args) {
     true,
     "SELECT_ONE_ARTIFACT",
   );
+  if (result.chatTwoTurn) {
+    assert.ok(
+      result.candidateRoot && !result.packaged,
+      "CHAT_TWO_TURN_REQUIRES_DEV",
+    );
+    assert.equal(
+      result.reopen ||
+        result.readDiscard ||
+        result.readAccount ||
+        result.editSnapshot ||
+        result.settingsEditMutation,
+      false,
+      "CHAT_TWO_TURN_EXCLUDES_OTHER_JOURNEYS",
+    );
+  }
   if (result.packaged) {
     assert.ok(
       result.artifactMetadata && hex64.test(result.artifactSHA ?? ""),
@@ -488,7 +531,37 @@ async function attest(selected) {
       return input;
     });
   }
+  let conversationInputs;
+  if (selected.chatTwoTurn) {
+    conversationInputs = [
+      "src/apps/desktop/main.ts",
+      "src/apps/desktop/chatgpt-readonly-task.ts",
+      "src/apps/desktop/chatgpt-route.ts",
+      "src/ui/renderer/chat-readonly.tsx",
+      "src/ui/renderer/read-conversation.tsx",
+      "src/ui/renderer/read-conversation-state.ts",
+      "src/ui/renderer/controller.ts",
+      "src/pkg/product-settings/chat-conversation.ts",
+      "apps/desktop/go-chat-startup-profile.ts",
+      "apps/desktop/go-chat-model-snapshot.ts",
+      "apps/desktop/go-chat-browser.ts",
+      "apps/desktop/chatgpt-physical.ts",
+      "src/apps/desktop/chatgpt-physical-page-scripts.ts",
+      "apps/desktop/read-conversation-projection.ts",
+      "apps/desktop/bridge/read-conversation.ts",
+    ].map((inputPath) => {
+      const input = ledger.find(
+        (entry) => entry.kind === "source" && entry.path === inputPath,
+      );
+      assert.ok(
+        input?.exact === true,
+        `CHAT_TWO_TURN_SOURCE_CONTRACT_MISSING:${inputPath}`,
+      );
+      return input;
+    });
+  }
   return {
+    ...(selected.chatTwoTurn ? { conversationInputs } : {}),
     ...(selected.settingsEditMutation ? { mutationInputs } : {}),
     ...(selected.readAccount ? { readAccountInputs } : {}),
     ...(selected.editSnapshot ? { editSnapshotInputs } : {}),
@@ -832,7 +905,10 @@ async function native(selected, inputs, report, save) {
   // /private/tmp is refused by Go's writable-ancestor policy.
   for (const directory of [home, appData])
     await fs.mkdir(directory, { mode: 0o700 });
-  const hasWorkspace = selected.readDiscard || selected.settingsEditMutation;
+  const hasWorkspace =
+    selected.readDiscard ||
+    selected.settingsEditMutation ||
+    selected.chatTwoTurn;
   let workspaceRoot, workspacePhysical;
   if (hasWorkspace) {
     workspaceRoot = path.join(temporary, "read-workspace");
@@ -877,6 +953,34 @@ async function native(selected, inputs, report, save) {
       limits: contract.readDiscardLimits,
     };
   }
+  let script;
+  if (selected.chatTwoTurn) {
+    // Fresh private Dev only, before app startup. Every field besides tasks is
+    // the existing normal default; authority still comes from normal commands.
+    const seedRoot = path.join(appData, "Farol Dev", "farol-next-state");
+    await fs.mkdir(seedRoot, { recursive: true, mode: 0o700 });
+    await fs.chmod(path.dirname(seedRoot), 0o700);
+    const seeded = conversationSeed(randomUUID());
+    await fs.writeFile(
+      path.join(seedRoot, "config.json"),
+      JSON.stringify(seeded) + "\n",
+      { mode: 0o600, flag: "wx" },
+    );
+    script = conversationScript(path.basename(workspaceRoot));
+    report.chatTwoTurn = {
+      limits: conversationLimits,
+      seed: { path: path.join(seedRoot, "config.json"), tasks: seeded.tasks },
+      journeyPassed: false,
+      sourceBinding: {
+        sourceCommit: inputs.identity.sourceCommit,
+        productionMainSHA: inputs.mainSHA,
+        inputs: inputs.conversationInputs,
+        goArtifact: inputs.core,
+        scope:
+          "Whole exact source/build attestation covers Go; Go source is not a TypeScript input-ledger entry",
+      },
+    };
+  }
   const proof = randomUUID();
   await fs.writeFile(path.join(temporary, ".farol-next-e2e-root"), proof, {
     mode: 0o600,
@@ -889,15 +993,27 @@ async function native(selected, inputs, report, save) {
     { mode: 0o700, flag: "wx" },
   );
   let site;
-  const accountSession = selected.readAccount
-    ? {
-        user: { id: "startup-synthetic-user" },
-        account: { id: "startup-synthetic-account" },
-        expires: new Date(Date.now() + 60 * 60_000).toISOString(),
-      }
-    : undefined;
+  const accountSession =
+    selected.readAccount || selected.chatTwoTurn
+      ? {
+          user: { id: "startup-synthetic-user" },
+          account: { id: "startup-synthetic-account" },
+          expires: new Date(Date.now() + 60 * 60_000).toISOString(),
+        }
+      : undefined;
   let accountGets = 0;
   const ledgerWitness = (ledger) => {
+    if (selected.chatTwoTurn) {
+      const last = report.chatTwoTurn.observations?.at(-1);
+      conversationLedgerWitness(
+        ledger,
+        script,
+        last?.ledger.acceptedSends ?? 0,
+        accountSession,
+        last?.ledger.accountGets ?? 0,
+      );
+      return;
+    }
     zeroSends(ledger);
     if (selected.readAccount)
       accountLedgerWitness(ledger, accountGets, accountSession);
@@ -1128,6 +1244,35 @@ async function native(selected, inputs, report, save) {
       const quit = await document(path.join(stateRoot, "last-quit.json"), 8192);
       launch.quitReceipt = quit;
       if (launch.ordinal === 1) report.quitReceipt = quit;
+      if (selected.chatTwoTurn) {
+        launch.terminalLedger = site.driver.snapshot();
+        ledgerWitness(launch.terminalLedger);
+        report.chatTwoTurn.quit = {
+          receipt: quit,
+          cleanup: { ...launch.cleanup },
+          ledger: launch.terminalLedger,
+        };
+        await save();
+        report.chatTwoTurn.quit.journal = await document(
+          path.join(stateRoot, "go-core/chat/chat-lifecycle.json"),
+          1024 * 1024,
+        );
+        const terminal = conversationQuitWitness(
+          quit.value,
+          launch.runMarker.value,
+          launch.cleanup,
+        );
+        report.chatTwoTurn.quit.status = terminal;
+        // Persist the ordinary receipt before any closure assertion. Journey
+        // success never upgrades an unconfirmed Go handoff to clean retirement.
+        await save();
+        if (terminal === "quit-go-core-unconfirmed") {
+          launch.status = terminal;
+          throw new Error(
+            "CHAT_TWO_TURN_QUIT_GO_CORE_UNCONFIRMED_PROFILE_QUARANTINED",
+          );
+        }
+      }
       quitWitness(
         quit.value,
         launch.runMarker.value,
@@ -1172,7 +1317,8 @@ async function native(selected, inputs, report, save) {
       }
       launch.status = "confirmed-clean-quit";
     } catch (error) {
-      launch.status = "failed-or-unknown";
+      if (launch.status !== "quit-go-core-unconfirmed")
+        launch.status = "failed-or-unknown";
       launch.error = String(error);
       throw error;
     } finally {
@@ -1183,19 +1329,29 @@ async function native(selected, inputs, report, save) {
     const { startControlledChatGptSite } =
       await import("./fixtures/chatgpt-controlled-site.mjs");
     site = await startControlledChatGptSite({
-      ...(selected.readAccount ? { account: accountSession } : {}),
-      conversationId: "startup-no-send-conversation",
-      selection: { model: "Startup fixture", effort: "Light", connector: null },
-      turns: [
-        {
-          userId: "startup-user",
-          replyId: "startup-reply",
-          prompt: "No startup Send is authorized",
-          segments: [
-            { id: "startup-segment", text: "Unreleased startup canary" },
+      ...(selected.readAccount || selected.chatTwoTurn
+        ? { account: accountSession }
+        : {}),
+      conversationId: selected.chatTwoTurn
+        ? conversationId
+        : "startup-no-send-conversation",
+      selection: {
+        model: selected.chatTwoTurn ? "Test model" : "Startup fixture",
+        effort: "Light",
+        connector: null,
+      },
+      turns: selected.chatTwoTurn
+        ? script
+        : [
+            {
+              userId: "startup-user",
+              replyId: "startup-reply",
+              prompt: "No startup Send is authorized",
+              segments: [
+                { id: "startup-segment", text: "Unreleased startup canary" },
+              ],
+            },
           ],
-        },
-      ],
     });
     report.fixture = {
       origin: site.origin,
@@ -1284,6 +1440,19 @@ async function native(selected, inputs, report, save) {
         "PROFILE_ESCAPED_DISPOSABLE_APP_DATA",
       );
       assert.equal(paths.sessionData, paths.userData);
+      if (selected.chatTwoTurn) {
+        assert.equal(
+          bootstrap.chatgptPartition,
+          "persist:farol-dev-chatgpt",
+          "CHAT_TWO_TURN_DEV_PARTITION_REQUIRED",
+        );
+        assert.deepEqual(
+          settings.tasks,
+          syntheticTaskPolicy,
+          "CHAT_TWO_TURN_SEED_NOT_LOADED",
+        );
+        assert.equal(paths.userData, path.join(appData, "Farol Dev"));
+      }
       assert.equal(paths.name, selected.packaged ? "Farol" : "Farol Dev");
       assert.equal(
         bootstrap.environment,
@@ -1343,7 +1512,8 @@ async function native(selected, inputs, report, save) {
     const { window, settings, hidden } = await start(1);
     await hidden();
     await capture("fresh-ready", settings.computer.computerId);
-    if (selected.reopen) await captureJournal("fresh-ready");
+    if (selected.reopen || selected.chatTwoTurn)
+      await captureJournal("fresh-ready");
     // Ordinary preload/configuration IPC, one bounded mutation of disposable
     // settings. A Computer-generation change exercises withdrawal/publication
     // without granting a folder or manufacturing a Go admission.
@@ -1404,7 +1574,7 @@ async function native(selected, inputs, report, save) {
     await capture("settings-ui-zero-authority", settings.computer.computerId);
     workspaceJourney: if (hasWorkspace) {
       // Only normal preload commands. No expected witness data is injected into
-      // the production adapter, and no Send, sign-in or auth command is issued.
+      // the production adapter. Send belongs only to the explicit new journey.
       const configure = async (command) => {
         active();
         await hidden();
@@ -1747,6 +1917,46 @@ async function native(selected, inputs, report, save) {
         selected.buildId,
       );
       report.readDiscard.settings = configured;
+      if (selected.chatTwoTurn) {
+        assert.equal(
+          workspace.label,
+          path.basename(workspaceRoot),
+          "CHAT_FIXTURE_WORKSPACE_LABEL_CROSSED",
+        );
+        await runConversationJourney({
+          window,
+          workspace,
+          configured,
+          driver: site.driver,
+          script,
+          session: accountSession,
+          active,
+          hidden,
+          report: report.chatTwoTurn,
+          save,
+          journal: async (ui, acknowledged) => {
+            const observed = await document(
+              path.join(stateRoot, "go-core/chat/chat-lifecycle.json"),
+              1024 * 1024,
+            );
+            const witness = conversationJournalWitness(
+              observed.value,
+              launch.readyJournal.value,
+              ui,
+              acknowledged,
+            );
+            report.journals.push({
+              launch: launch.ordinal,
+              label: `chat-${ui.turnId}-${acknowledged === null ? "early" : acknowledged ? "ack" : "result"}`,
+              journal: observed,
+              witness,
+            });
+            await save();
+            return witness;
+          },
+        });
+        break workspaceJourney;
+      }
       let originalUi;
       const forbiddenUi = selected.readAccount
         ? [accountSession.user.id, accountSession.account.id]
@@ -2077,6 +2287,12 @@ async function native(selected, inputs, report, save) {
     await hidden();
     active();
     await close();
+    if (selected.chatTwoTurn) {
+      report.chatTwoTurn.quit.status = launch.status;
+      report.scenarioPassed = true;
+      await save();
+      return;
+    }
     await capture(
       selected.settingsEditMutation
         ? "confirmed-quit-mutation-result-unacknowledged"
@@ -2306,7 +2522,11 @@ async function native(selected, inputs, report, save) {
   } catch (error) {
     if (launch) {
       launch.journeyError = String(error);
-      if (launch.status !== "confirmed-clean-quit")
+      if (
+        !["confirmed-clean-quit", "quit-go-core-unconfirmed"].includes(
+          launch.status,
+        )
+      )
         launch.status = "failed-or-unknown";
     }
     throw error;
@@ -2356,7 +2576,7 @@ async function native(selected, inputs, report, save) {
       );
       cleanClosure(report.cleanup);
       assert.equal(report.cleanup.ledgerError, undefined);
-      if (selected.reopen)
+      if (selected.reopen || selected.chatTwoTurn)
         assert.equal(
           report.scenarioPassed,
           true,
@@ -2366,6 +2586,14 @@ async function native(selected, inputs, report, save) {
       report.cleanup.temporaryRemoved = true;
     } catch (error) {
       report.cleanup.retainedReason = String(error);
+      if (selected.chatTwoTurn) {
+        report.chatTwoTurn.quarantine = {
+          path: temporary,
+          reason: String(error),
+          action:
+            "Preserve in place. Lead must inspect the original receipt/process state; no automatic replay, relaunch, retry Quit or force-kill.",
+        };
+      }
     }
     await save();
   }
@@ -2893,8 +3121,23 @@ function selfTest() {
     reject(() => selection(invalid));
   // Existing closure self-tests already reject unknown child, drain, marker,
   // handoff and provider terminal states. They gate this mode unchanged.
+  const conversationChecksStart = checks;
+  pass(() =>
+    assert.equal(selection(["--chat-two-turn", ...args]).chatTwoTurn, true),
+  );
+  for (const flag of [
+    "--reopen",
+    "--read-discard",
+    "--read-account",
+    "--edit-snapshot",
+    "--settings-edit-mutation",
+    "--chat-two-turn",
+  ])
+    reject(() => selection(["--chat-two-turn", flag, ...args]));
+  reject(() => selection(["--chat-two-turn", ...packageArgs]));
+  conversationWitnessSelfTest(pass, reject);
   process.stdout.write(
-    `Go startup harness browser-free contract checks: ${checks} passed (${mutationChecksStart - snapshotChecksStart} edit-snapshot, ${checks - mutationChecksStart} settings-edit-mutation); native NOT RUN\n`,
+    `Go startup harness browser-free contract checks: ${checks} passed (${mutationChecksStart - snapshotChecksStart} edit-snapshot, ${conversationChecksStart - mutationChecksStart} settings-edit-mutation, ${checks - conversationChecksStart} chat-two-turn); native NOT RUN\n`,
   );
 }
 
@@ -2902,24 +3145,30 @@ async function main(args) {
   const selected = selection(args);
   const report = {
     contract,
-    scenario: selected.settingsEditMutation
-      ? contract.settingsEditMutation
-      : selected.editSnapshot
-        ? `${contract.editSnapshot}; ${selected.readAccount ? contract.readAccount : contract.readDiscard}`
+    scenario: selected.chatTwoTurn
+      ? contract.chatTwoTurn
+      : selected.settingsEditMutation
+        ? contract.settingsEditMutation
+        : selected.editSnapshot
+          ? `${contract.editSnapshot}; ${selected.readAccount ? contract.readAccount : contract.readDiscard}`
+          : selected.readAccount
+            ? contract.readAccount
+            : selected.readDiscard
+              ? contract.readDiscard
+              : contract.scenario,
+    missingWitnesses: selected.chatTwoTurn
+      ? conversationLimits
+      : selected.settingsEditMutation
+        ? mutationLimits
         : selected.readAccount
-          ? contract.readAccount
+          ? [...contract.readDiscardLimits, ...readAccountLimits]
           : selected.readDiscard
-            ? contract.readDiscard
-            : contract.scenario,
-    missingWitnesses: selected.settingsEditMutation
-      ? mutationLimits
-      : selected.readAccount
-        ? [...contract.readDiscardLimits, ...readAccountLimits]
-        : selected.readDiscard
-          ? contract.readDiscardLimits
-          : contract.missingWitnesses,
+            ? contract.readDiscardLimits
+            : contract.missingWitnesses,
     isolation:
-      selected.readDiscard || selected.settingsEditMutation
+      selected.readDiscard ||
+      selected.settingsEditMutation ||
+      selected.chatTwoTurn
         ? "Private disposable workspace/HOME/AppData with existing E2E dialog seams and all windows hidden/unfocused; Settings executor origin requires exact production-source review; no hermetic all-paths claim"
         : contract.isolation,
     selection: selected,
@@ -2958,6 +3207,12 @@ async function main(args) {
         new URL("./lib/computer-settings-witness.mjs", import.meta.url),
       ),
     );
+    if (selected.chatTwoTurn)
+      report.conversationWitnessSourceSHA = hash(
+        await regular(
+          new URL("./lib/read-conversation-witness.mjs", import.meta.url),
+        ),
+      );
     if (selected.settingsEditMutation)
       report.mutationWitnessSourceSHA = hash(
         await regular(
@@ -2986,7 +3241,13 @@ async function main(args) {
     if (selected.mode === "--check") report.status = "checked-native-not-run";
     else {
       report.nativeRun = true;
-      await native(selected, report.attestation, report, save);
+      let nativeError;
+      try {
+        await native(selected, report.attestation, report, save);
+      } catch (error) {
+        if (!selected.chatTwoTurn) throw error;
+        nativeError = error;
+      }
       const after = await attest(selected);
       assert.deepEqual(
         after,
@@ -2998,22 +3259,33 @@ async function main(args) {
         report.harnessSource,
         "HARNESS_CHANGED_DURING_NATIVE_RUN",
       );
-      report.status = selected.settingsEditMutation
-        ? "passed-react-go-owner-edit-unacknowledged-quit-reopen-observe-go-ack-zero-send"
-        : selected.editSnapshot
-          ? selected.readAccount
-            ? "passed-settings-edit-snapshot-and-react-read-account-discard-reopen-synthetic-only"
-            : "passed-settings-edit-snapshot-and-read-discard-reopen-fixture-only"
-          : selected.readAccount
-            ? "passed-react-read-account-discard-reopen-synthetic-account-only"
-            : selected.readDiscard
-              ? "passed-read-preview-discard-reopen-fixture-readiness-only"
-              : selected.reopen
-                ? "passed-reopen-startup-zero-authority-only"
-                : "passed-fresh-startup-zero-authority-only";
+      if (nativeError) throw nativeError;
+      report.status = selected.chatTwoTurn
+        ? "passed-react-two-turn-controlled-chat-and-confirmed-ordinary-quit"
+        : selected.settingsEditMutation
+          ? "passed-react-go-owner-edit-unacknowledged-quit-reopen-observe-go-ack-zero-send"
+          : selected.editSnapshot
+            ? selected.readAccount
+              ? "passed-settings-edit-snapshot-and-react-read-account-discard-reopen-synthetic-only"
+              : "passed-settings-edit-snapshot-and-read-discard-reopen-fixture-only"
+            : selected.readAccount
+              ? "passed-react-read-account-discard-reopen-synthetic-account-only"
+              : selected.readDiscard
+                ? "passed-read-preview-discard-reopen-fixture-readiness-only"
+                : selected.reopen
+                  ? "passed-reopen-startup-zero-authority-only"
+                  : "passed-fresh-startup-zero-authority-only";
     }
   } catch (error) {
-    report.status = "failed-or-unknown";
+    report.status =
+      selected.chatTwoTurn &&
+      report.chatTwoTurn?.journeyPassed &&
+      report.chatTwoTurn.quit?.status === "quit-go-core-unconfirmed" &&
+      String(error).includes(
+        "CHAT_TWO_TURN_QUIT_GO_CORE_UNCONFIRMED_PROFILE_QUARANTINED",
+      )
+        ? "partial-two-turn-journey-passed-ordinary-quit-unconfirmed"
+        : "failed-or-unknown";
     report.error = String(error?.stack ?? error);
     throw error;
   } finally {
