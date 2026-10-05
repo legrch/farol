@@ -74,7 +74,8 @@
     "computer.connector.open": "effect",
     "computer.connector.close": "effect",
     "computer.connector.verify": "read",
-    "computer.connector.verification": "read"
+    "computer.connector.verification": "read",
+    "computer.workspace.search": "read"
   },
   "definitions": {
     "Context": {
@@ -4347,6 +4348,154 @@
           "type": "string",
           "pattern": "^[a-f0-9]{64}$",
           "optional": true
+        }
+      }
+    },
+    "ComputerSearchRequest": {
+      "type": "object",
+      "fields": {
+        "ownerId": {
+          "type": "id"
+        },
+        "sessionId": {
+          "type": "id"
+        },
+        "taskId": {
+          "type": "id"
+        },
+        "taskEpoch": {
+          "type": "decimal"
+        },
+        "participantId": {
+          "type": "id"
+        },
+        "turnId": {
+          "type": "id"
+        },
+        "generation": {
+          "type": "decimal"
+        },
+        "callId": {
+          "type": "id"
+        },
+        "workspaceId": {
+          "type": "id"
+        },
+        "relativePath": {
+          "type": "string",
+          "minBytes": 1,
+          "maxBytes": 4096
+        },
+        "pattern": {
+          "type": "string",
+          "minBytes": 1,
+          "maxBytes": 4096
+        }
+      }
+    },
+    "ComputerSearchResponse": {
+      "type": "object",
+      "fields": {
+        "ownerId": {
+          "type": "id"
+        },
+        "sessionId": {
+          "type": "id"
+        },
+        "taskId": {
+          "type": "id"
+        },
+        "taskEpoch": {
+          "type": "decimal"
+        },
+        "participantId": {
+          "type": "id"
+        },
+        "turnId": {
+          "type": "id"
+        },
+        "generation": {
+          "type": "decimal"
+        },
+        "callId": {
+          "type": "id"
+        },
+        "workspaceId": {
+          "type": "id"
+        },
+        "relativePath": {
+          "type": "string",
+          "minBytes": 1,
+          "maxBytes": 4096
+        },
+        "pattern": {
+          "type": "string",
+          "minBytes": 1,
+          "maxBytes": 4096
+        },
+        "matches": {
+          "type": "json",
+          "description": "At most 100 ComputerSearchMatch values, validated by both adapters."
+        },
+        "resultLimited": {
+          "type": "boolean"
+        },
+        "scanLimited": {
+          "type": "boolean"
+        }
+      }
+    },
+    "ComputerSearchMatch": {
+      "type": "object",
+      "fields": {
+        "path": {
+          "type": "string",
+          "minBytes": 1,
+          "maxBytes": 4096
+        },
+        "line": {
+          "type": "decimal"
+        },
+        "text": {
+          "type": "string",
+          "minBytes": 0,
+          "maxBytes": 2000
+        },
+        "truncated": {
+          "type": "boolean"
+        }
+      }
+    },
+    "ComputerSearchRefusal": {
+      "type": "object",
+      "fields": {
+        "request": {
+          "type": "ComputerSearchRequest",
+          "optional": true
+        },
+        "code": {
+          "type": "text"
+        },
+        "source": {
+          "type": "text",
+          "values": [
+            "computer-approval",
+            "task-admission",
+            "task-grant",
+            "owner-restriction",
+            "unverified-provenance",
+            "role",
+            "computer-policy",
+            "native-host",
+            "authority-store",
+            "native-workspace",
+            "contract",
+            "transport"
+          ]
+        },
+        "retry": {
+          "type": "text",
+          "values": ["never"]
         }
       }
     }

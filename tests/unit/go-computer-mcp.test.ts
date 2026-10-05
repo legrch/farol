@@ -96,6 +96,14 @@ function dataFor(method: string): Record<string, unknown> {
       };
     case "computer.workspace.list":
       return { entries: ["AGENTS.md", "folder/"], truncated: true };
+    case "computer.workspace.search":
+      return {
+        matches: [
+          { path: "日本語.md", line: "1", text: "🌊\ttext", truncated: false },
+        ],
+        resultLimited: false,
+        scanLimited: true,
+      };
     default:
       return { text: "text", bytes: "4", sha256: "a".repeat(64) };
   }
@@ -225,6 +233,244 @@ it("registers verification only for the selected Go port and keeps it inside the
   expect(request).not.toHaveBeenCalled();
 });
 
+describe("Go Computer Search MCP (pure/in-memory only)", () => {
+  const name = "farol_next_computer_search";
+  const input = {
+    workspaceId: "workspace",
+    relativePath: ".",
+    pattern: "日本語|🌊",
+  };
+
+  it("publishes the legacy input shape with conservative RE2 and partial-result limits", async () => {
+    const { client, request, tools } = await setup();
+    const advertised = (await client.listTools()).tools.find(
+      (tool) => tool.name === name,
+    )!;
+    expect(Object.keys(advertised.inputSchema.properties ?? {})).toEqual([
+      "workspaceId",
+      "relativePath",
+      "pattern",
+    ]);
+    expect(advertised.inputSchema.required).toEqual([
+      "workspaceId",
+      "relativePath",
+      "pattern",
+    ]);
+    expect(advertised.inputSchema.additionalProperties).toBe(false);
+    for (const limitation of [
+      "conservative RE2",
+      "Python",
+      "4096 UTF-8 bytes",
+      "resultLimited",
+      "scanLimited",
+      "truncated",
+      "no fallback",
+    ])
+      expect(advertised.description).toContain(limitation);
+    const result = await client.callTool({ name, arguments: input });
+    expect(result.structuredContent).toMatchObject({
+      status: "ok",
+      data: { pattern: input.pattern, ...dataFor("computer.workspace.search") },
+    });
+    const ctx = handlerContext(new AbortController().signal);
+    await Promise.all([
+      tools.get(name)!.executor(input, ctx),
+      tools.get(name)!.executor(input, ctx),
+    ]);
+    expect(request).toHaveBeenCalledTimes(3);
+    const ids = request.mock.calls.map(([method, params, call]) => {
+      expect(method).toBe("computer.workspace.search");
+      expect(params).toEqual({ ...binding, ...input, callId: call?.id });
+      return call?.id;
+    });
+    expect(new Set(ids).size).toBe(3);
+    expect(ids).not.toContain("caller-chosen-id");
+  });
+
+  it.each([
+    [false, false],
+    [true, false],
+    [false, true],
+    [true, true],
+  ])(
+    "preserves empty SDK results and independent limits %s/%s",
+    async (resultLimited, scanLimited) => {
+      const { client, request } = await setup({
+        respond: (method, params, id) => {
+          const raw = wireReply(method, params, id);
+          raw.data = { ...raw.data, matches: [], resultLimited, scanLimited };
+          return raw;
+        },
+      });
+      const result = await client.callTool({ name, arguments: input });
+      expect(result.structuredContent).toMatchObject({
+        status: "ok",
+        data: { matches: [], resultLimited, scanLimited },
+      });
+      expect(request).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each([
+    { pattern: "" },
+    { pattern: "🌊".repeat(1025) },
+    { pattern: "\ud800" },
+    { pattern: "bad\npattern" },
+    { pattern: "bad\tpattern" },
+    { relativePath: "../file" },
+    { relativePath: "src\\file" },
+    { callId: "injected" },
+    { ownerId: "injected" },
+    { context },
+    { authority: "allow" },
+  ])(
+    "rejects invalid public Search input without dispatch %#",
+    async (extra) => {
+      const { client, request } = await setup();
+      expect(
+        (await client.callTool({ name, arguments: { ...input, ...extra } }))
+          .isError,
+      ).toBe(true);
+      expect(request).not.toHaveBeenCalled();
+    },
+  );
+  it("dispatches unsupported regex syntax once to the Go owner without choosing another engine", async () => {
+    const { client, request } = await setup({
+      respond: (_method, _params, id) => ({
+        status: "refused",
+        requestId: id,
+        context,
+        code: "WORKSPACE_INVALID_REQUEST",
+      }),
+    });
+    const result = await client.callTool({
+      name,
+      arguments: { ...input, pattern: "\\w+" },
+    });
+    expect(result.structuredContent).toMatchObject({
+      status: "refused",
+      code: "WORKSPACE_INVALID_REQUEST",
+      retry: "never",
+    });
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(request.mock.calls[0]?.[0]).toBe("computer.workspace.search");
+  });
+  it.each([
+    { pattern: "crossed" },
+    { ownerId: "crossed" },
+    {
+      matches: [
+        { path: "../private", line: "1", text: "private", truncated: false },
+      ],
+    },
+    {
+      matches: [{ path: "file", line: "0", text: "private", truncated: false }],
+    },
+    {
+      matches: [
+        { path: "file", line: "1", text: "a".repeat(501), truncated: false },
+      ],
+    },
+  ])(
+    "withholds crossed or malformed Search replies at the SDK boundary %#",
+    async (extra) => {
+      const { client, request } = await setup({
+        respond: (method, params, id) => {
+          const raw = wireReply(method, params, id);
+          raw.data = { ...raw.data, ...extra };
+          return raw;
+        },
+      });
+      const result = await client.callTool({ name, arguments: input });
+      expect(result.structuredContent).toMatchObject({
+        status: "unknown",
+        retry: "never",
+      });
+      expect(result.structuredContent).not.toHaveProperty("data");
+      expect(request).toHaveBeenCalledTimes(1);
+    },
+  );
+  it.each([
+    new BridgeError("unavailable", "go_owner_unavailable"),
+    new BridgeError("unknown", "go_outcome_unknown"),
+  ])(
+    "preserves selected-backend failure with one call and no fallback %#",
+    async (error) => {
+      const { client, request } = await setup({
+        respond: () => {
+          throw error;
+        },
+      });
+      const result = await client.callTool({ name, arguments: input });
+      expect(result.structuredContent).toMatchObject({
+        status: error.state,
+        code: error.code,
+        retry: "never",
+      });
+      expect(request).toHaveBeenCalledTimes(1);
+    },
+  );
+  it("does not dispatch Search when the run fence refuses admission", async () => {
+    const acquireAdmission = vi.fn(async () => ({
+      admitted: false as const,
+      code: "COMPUTER_SUMMARY_PHASE_ACTIVE",
+    }));
+    const { client, request } = await setup({ fence: { acquireAdmission } });
+    expect(
+      (await client.callTool({ name, arguments: input })).structuredContent,
+    ).toMatchObject({
+      status: "refused",
+      code: "COMPUTER_SUMMARY_PHASE_ACTIVE",
+      retry: "never",
+    });
+    expect(acquireAdmission).toHaveBeenCalledTimes(1);
+    expect(request).not.toHaveBeenCalled();
+  });
+  it.each(["before", "during", "release", "release-fails"])(
+    "keeps Search abort and release suppression inside the existing fence: %s",
+    async (mode) => {
+      const entered = deferred<void>();
+      const gate = deferred<void>();
+      const release = vi.fn(async () => {
+        if (mode === "release") {
+          entered.resolve();
+          await gate.promise;
+        }
+        if (mode === "release-fails") throw Error("private release error");
+      });
+      const { tools, request } = await setup({
+        fence: { acquireAdmission: async () => ({ admitted: true, release }) },
+        respond: async (method, params, id) => {
+          if (mode === "during") {
+            entered.resolve();
+            await gate.promise;
+          }
+          return wireReply(method, params, id);
+        },
+      });
+      const controller = new AbortController();
+      if (mode === "before") controller.abort();
+      const pending = tools
+        .get(name)!
+        .executor(input, handlerContext(controller.signal));
+      if (mode === "during" || mode === "release") {
+        await entered.promise;
+        controller.abort();
+        gate.resolve();
+      }
+      const result = await pending;
+      expect(result.structuredContent).toMatchObject({
+        status: mode === "before" ? "refused" : "unknown",
+        retry: "never",
+      });
+      expect(result.structuredContent).not.toHaveProperty("data");
+      expect(request).toHaveBeenCalledTimes(mode === "before" ? 0 : 1);
+      expect(release).toHaveBeenCalledTimes(mode === "before" ? 0 : 1);
+      expect(JSON.stringify(result)).not.toContain("private release error");
+    },
+  );
+});
+
 describe("Go Computer MCP codec (pure/in-memory only)", () => {
   it("requires a fence port at construction; there is no permissive production default", () => {
     const request = vi.fn();
@@ -252,6 +498,10 @@ describe("Go Computer MCP codec (pure/in-memory only)", () => {
     [
       "computer_workspace_read",
       { workspaceId: "workspace", relativePath: "file" },
+    ],
+    [
+      "farol_next_computer_search",
+      { workspaceId: "workspace", relativePath: ".", pattern: "🌊" },
     ],
   ])(
     "holds the injected fence across the whole Go operation for %s",
@@ -452,7 +702,7 @@ describe("Go Computer MCP codec (pure/in-memory only)", () => {
     expect(new Set(ids).size).toBe(2);
     expect(ids).not.toContain("caller-chosen-id");
   });
-  it("advertises exactly four public tools, preserves strict schemas and dispatches each Go operation once", async () => {
+  it("advertises exactly five public tools, preserves strict schemas and dispatches each Go operation once", async () => {
     const { client, request } = await setup();
     const { tools } = await client.listTools();
     expect(tools.map((tool) => tool.name)).toEqual([
@@ -460,6 +710,7 @@ describe("Go Computer MCP codec (pure/in-memory only)", () => {
       "computer_workspace_bootstrap",
       "computer_workspace_list",
       "computer_workspace_read",
+      "farol_next_computer_search",
     ]);
     for (const tool of tools) {
       expect(tool.inputSchema.additionalProperties).toBe(false);
@@ -476,6 +727,7 @@ describe("Go Computer MCP codec (pure/in-memory only)", () => {
       { workspaceId: "workspace", relativeDirectory: "src/sub" },
       { workspaceId: "workspace", relativePath: "." },
       { workspaceId: "workspace", relativePath: "file.md" },
+      { workspaceId: "workspace", relativePath: ".", pattern: "🌊" },
     ];
     for (const [index, tool] of tools.entries()) {
       const result = await client.callTool({
@@ -491,7 +743,7 @@ describe("Go Computer MCP codec (pure/in-memory only)", () => {
     }
     const ids = request.mock.calls.map(([method, params, call]) => {
       expect(method).toMatch(
-        /^computer\.workspace\.(catalogue|bootstrap|list|read)$/u,
+        /^computer\.workspace\.(catalogue|bootstrap|list|read|search)$/u,
       );
       expect(params).toMatchObject(binding);
       expect(params).toHaveProperty("callId", call?.id);
@@ -499,7 +751,7 @@ describe("Go Computer MCP codec (pure/in-memory only)", () => {
       expect(call?.id).not.toBe("caller-chosen-id");
       return call?.id;
     });
-    expect(new Set(ids).size).toBe(4);
+    expect(new Set(ids).size).toBe(5);
   });
 
   it("retains bootstrap completeness, catalogue provenance, list truncation and read page metadata", async () => {

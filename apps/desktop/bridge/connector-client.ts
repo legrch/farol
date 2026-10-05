@@ -49,6 +49,7 @@ type Phase = "new" | "opening" | "binding" | "handshake" | "ready" | "stopped";
 const workspaceMethods = new Set([
   "computer.workspace.read",
   "computer.workspace.list",
+  "computer.workspace.search",
   "computer.workspace.catalogue",
   "computer.workspace.bootstrap",
   "computer.connector.verify",

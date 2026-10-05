@@ -66,7 +66,7 @@ does not cancel native processes, settle mutation outcomes or implement drain.
 Trusted root now exposes `computer.connector.open/close` only on the inherited
 host pipe. Open consumes the current acknowledged Go Settings publication,
 mints the execution correlations above and registers a private socket on that
-same backend. Its initial surface is catalogue/bootstrap/list/read and connector verification,
+same backend. Its initial surface is catalogue/bootstrap/list/read/search and connector verification,
 with read-only scope. The external attachment cannot issue authority or open another
 connector. A failed or uncertain start retains its slot and cannot be upgraded
 to clean by a later shutdown. Root withdraws ingress before shutdown IO; shutdown

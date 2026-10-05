@@ -52,8 +52,8 @@ user Git settings. Activity and support export retain content-free diagnostics.
 The Farol Model route and Product Agent remain disabled.
 
 The current Go integration source selects the same backend through a private
-socket for external MCP catalogue, bootstrap, list, read and connector verification.
-Go owns the verification attempt and retained observation. Search, mutations,
+socket for external MCP catalogue, bootstrap, list, read, search and connector verification.
+Go owns the verification attempt and retained observation. Mutations,
 shell and coding tasks are not yet exposed by this new external route. Explicit
 legacy launch fixtures remain separate; a failed Go launch never falls back to
 them. Normal Dev, external ChatGPT and package acceptance of this switch remain
@@ -159,9 +159,12 @@ JSON file must have schema `farol-go-build-inputs/1` and these fields:
 See the [input parser](tooling/go-build-inputs.mjs) and
 [backend builder](tooling/go-backend-build.mjs) for exact validation. The builder
 embeds the backend declaration into the Electron host and emits build schema `4`;
-packaging uses schema `7`. Without `--go-inputs`, the build retains the TypeScript
-Computer selection and package schema `6`. Both paths still compile the separate
-Go archive helper; neither establishes installed Go Computer acceptance.
+packaging uses schema `7`. Without `--go-inputs`, the build emits package schema
+`6` without the Go backend. The current desktop external Computer route requires
+that backend and refuses its absence. For this integration line, supply the same
+declared inputs to `task dev -- --go-inputs=<absolute-json-path>` or `task package`.
+Both build paths still compile the separate Go archive helper; neither establishes
+installed Go Computer acceptance.
 
 `task package` remains the sole candidate producer. Its Go-enabled artifact needs
 normal Electron/native/package qualification before use as an accepted product.
@@ -207,15 +210,15 @@ The Claude execution lease is selected only after Task admission. `NativeRuntime
 does not yet register these Task routes: trusted selection, native qualification
 and real Codex/Claude journeys remain separate acceptance work.
 
-| Location                                                                                 | Ownership at this checkpoint                                                                                                                                                               |
-| ---------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| [`src/`](src/)                                                                           | React shell under `src/ui/renderer/`, Electron/browser adapters, transitional services and composition.                                                                                    |
-| [`apps/desktop/`](apps/desktop/)                                                         | Attested Go host, authority publication and generated Go/TypeScript wire bridge.                                                                                                           |
-| [`boot/`](boot/), [`cmd/farol/`](cmd/farol/), [`transport/desktop/`](transport/desktop/) | Go composition, entrypoint, native profile lifetime and framed protocol.                                                                                                                   |
-| [`modules/computer/`](modules/computer/)                                                 | Authority, filesystem and process services. Native ingress selects catalogue/bootstrap/list/read; external verification uses the same Go owner. Other capabilities need their own cutover. |
-| [`modules/chat/`](modules/chat/)                                                         | Turn, queue, admission, browser exchange and bounded retained results; controlled normal desktop Chat and authorized saved-answer reads across a clean same-build restart.                 |
-| [`modules/task/`](modules/task/)                                                         | Coding-task lifecycle and provider adapters; shipping task-route qualification remains separate.                                                                                           |
-| [`modules/release/`](modules/release/)                                                   | Update/recovery, journal and identity/adoption preparation; the existing updater is still active.                                                                                          |
+| Location                                                                                 | Ownership at this checkpoint                                                                                                                                                                      |
+| ---------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`src/`](src/)                                                                           | React shell under `src/ui/renderer/`, Electron/browser adapters, transitional services and composition.                                                                                           |
+| [`apps/desktop/`](apps/desktop/)                                                         | Attested Go host, authority publication and generated Go/TypeScript wire bridge.                                                                                                                  |
+| [`boot/`](boot/), [`cmd/farol/`](cmd/farol/), [`transport/desktop/`](transport/desktop/) | Go composition, entrypoint, native profile lifetime and framed protocol.                                                                                                                          |
+| [`modules/computer/`](modules/computer/)                                                 | Authority, filesystem and process services. Native ingress selects catalogue/bootstrap/list/read/search; external verification uses the same Go owner. Other capabilities need their own cutover. |
+| [`modules/chat/`](modules/chat/)                                                         | Turn, queue, admission, browser exchange and bounded retained results; controlled normal desktop Chat and authorized saved-answer reads across a clean same-build restart.                        |
+| [`modules/task/`](modules/task/)                                                         | Coding-task lifecycle and provider adapters; shipping task-route qualification remains separate.                                                                                                  |
+| [`modules/release/`](modules/release/)                                                   | Update/recovery, journal and identity/adoption preparation; the existing updater is still active.                                                                                                 |
 
 Domain and application code use values and consumer-owned ports. Neighbors cross
 published contracts through `infra/peer`; Go contracts map independent DTOs and

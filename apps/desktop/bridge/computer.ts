@@ -23,6 +23,10 @@ import {
   type ComputerListRequest,
   type ComputerListResponse,
   type ComputerListRefusal,
+  type ComputerSearchRequest,
+  type ComputerSearchResponse,
+  type ComputerSearchMatch,
+  type ComputerSearchRefusal,
 } from "./wire.ts";
 
 export type ComputerCall = Readonly<{
@@ -51,9 +55,13 @@ type Refusal =
   | ComputerCatalogueRefusal
   | ComputerBootstrapRefusal
   | ComputerReadRefusal
-  | ComputerListRefusal;
+  | ComputerListRefusal
+  | ComputerSearchRefusal;
 export type ComputerList = Omit<ComputerListResponse, "entries"> & {
   readonly entries: readonly string[];
+};
+export type ComputerSearch = Omit<ComputerSearchResponse, "matches"> & {
+  readonly matches: readonly ComputerSearchMatch[];
 };
 export type ComputerResult<T> =
   | Readonly<{ status: "ok"; requestId: string; context: Context; data: T }>
@@ -78,6 +86,7 @@ const names = {
   bootstrap: "ComputerBootstrap",
   read: "ComputerRead",
   list: "ComputerList",
+  search: "ComputerSearch",
 } as const;
 
 // Snapshot JSON values within the wire budget before recursive schema validation.
@@ -251,6 +260,41 @@ function list(value: unknown): ComputerList {
   return Object.freeze({ ...data, entries: Object.freeze(entries) });
 }
 
+function searchPath(value: string, root: boolean): boolean {
+  if (root && value === ".") return true;
+  return (
+    value.length > 0 &&
+    !value.startsWith("/") &&
+    !/[\\\u0000-\u001f\u007f]/u.test(value) &&
+    value
+      .split("/")
+      .every((part) => part !== "" && part !== "." && part !== "..")
+  );
+}
+
+function search(value: unknown, request: Json): ComputerSearch {
+  const data = dto<ComputerSearchResponse>("ComputerSearchResponse", value);
+  const scope = (request as unknown as ComputerSearchRequest).relativePath;
+  if (!Array.isArray(data.matches) || data.matches.length > 100)
+    throw Error("invalid_computer_search");
+  const matches = data.matches.map((value: unknown) => {
+    const match = dto<ComputerSearchMatch>("ComputerSearchMatch", value);
+    if (
+      !searchPath(match.path, false) ||
+      (scope !== "." &&
+        match.path !== scope &&
+        !match.path.startsWith(`${scope}/`)) ||
+      BigInt(match.line) === 0n ||
+      BigInt(match.line) > 9007199254740991n ||
+      [...match.text].length > 500 ||
+      /[\u0000-\u001f\u007f]/u.test(match.text.replaceAll("\t", ""))
+    )
+      throw Error("invalid_computer_search");
+    return match;
+  });
+  return Object.freeze({ ...data, matches: Object.freeze(matches) });
+}
+
 // Caller supplies an already selected, legitimate operation and verified context.
 // IDs/text/roots returned here are correlation/data, never positive admission.
 // Pick retains the real Client.request signature and permits injected unit transport.
@@ -284,17 +328,32 @@ export class ComputerBridge {
     return this.invoke("list", request, call, list);
   }
 
+  search(
+    request: ComputerSearchRequest,
+    call: ComputerCall,
+  ): Promise<ComputerResult<ComputerSearch>> {
+    return this.invoke("search", request, call, search);
+  }
+
   private async invoke<T>(
     method: keyof typeof names,
     input: unknown,
     selection: ComputerCall,
-    parse: (data: unknown) => T,
+    parse: (data: unknown, request: Json) => T,
   ): Promise<ComputerResult<T>> {
     let body: Json;
     let call: ComputerCall;
     try {
       body = snapshot(input);
       if (!validate(`${names[method]}Request`, body))
+        throw Error("invalid_computer_request");
+      if (
+        method === "search" &&
+        !searchPath(
+          (body as unknown as ComputerSearchRequest).relativePath,
+          true,
+        )
+      )
         throw Error("invalid_computer_request");
     } catch {
       throw new BridgeError("refused", "invalid_computer_request");
@@ -367,7 +426,7 @@ export class ComputerBridge {
       if (result.status === "ok") {
         if (Object.hasOwn(result, "code"))
           throw Error("invalid_computer_result");
-        const data = parse(result.data);
+        const data = parse(result.data, body);
         if (!matches(body, data, false))
           return failure("unknown", "crossed_computer_response");
         return Object.freeze({ ...identity, status: "ok", data });

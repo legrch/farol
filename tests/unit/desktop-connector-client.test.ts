@@ -67,6 +67,7 @@ function endpoint(): ComputerConnectorEndpoint {
 const methods = [
   "computer.workspace.read",
   "computer.workspace.list",
+  "computer.workspace.search",
   "computer.workspace.catalogue",
   "computer.workspace.bootstrap",
 ];
@@ -383,7 +384,6 @@ it.each([
   "computer.authority.publish",
   "computer.settings.snapshot",
   "computer.workspace.write",
-  "computer.workspace.search",
   "task.create",
   "unknown",
 ])("withholds route %s without a write", async (method) => {

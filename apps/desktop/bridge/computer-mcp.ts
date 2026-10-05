@@ -6,6 +6,7 @@ import { ComputerBridge, type ComputerCall } from "./computer.ts";
 import type { ConnectorVerificationBridge } from "./connector-verification.ts";
 import {
   validate,
+  validUnicode,
   type Context,
   type ComputerConnectorExecution,
 } from "./wire.ts";
@@ -49,6 +50,20 @@ const ScopePathSchema = z.string().refine((value) => relativePath(value, true));
 const ListInputSchema = z.strictObject({
   workspaceId: IdentifierSchema,
   relativePath: ScopePathSchema,
+});
+const SearchInputSchema = z.strictObject({
+  workspaceId: IdentifierSchema,
+  relativePath: ScopePathSchema,
+  pattern: z
+    .string()
+    .min(1)
+    .max(4096)
+    .refine(
+      (value) =>
+        validUnicode(value) &&
+        Buffer.byteLength(value, "utf8") <= 4096 &&
+        !/[\u0000-\u001f\u007f]/u.test(value),
+    ),
 });
 const BootstrapInputSchema = z.strictObject({
   workspaceId: IdentifierSchema,
@@ -282,7 +297,7 @@ export function createGoComputerMcpServer(
     {
       title: "Find available workspaces",
       description:
-        "Find exact task-accessible workspace IDs and approved roots in one Go catalogue operation. Call without arguments; do not guess IDs or roots. This bounded catalogue does not read file contents or grant authority. This connector currently supports only catalogue, bootstrap, list and read; search, writes, shell and task tools are unavailable.",
+        "Find exact task-accessible workspace IDs and approved roots in one Go catalogue operation. Call without arguments; do not guess IDs or roots. This bounded catalogue does not read file contents or grant authority. This connector supports catalogue, bootstrap, list, read and search; writes, shell and task tools are unavailable.",
       inputSchema: z.strictObject({}),
       annotations,
     },
@@ -345,6 +360,20 @@ export function createGoComputerMcpServer(
           },
           call,
         ),
+      ),
+  );
+  server.registerTool(
+    "farol_next_computer_search",
+    {
+      title: "Search approved workspace text",
+      description:
+        "Search text in one approved workspace subtree through the selected Go owner. Accepts a conservative RE2 subset, not full Python regex: Python-only constructs and shorthand escapes such as \\w, \\d, \\s and \\b are refused as WORKSPACE_INVALID_REQUEST, with no fallback. Patterns are bounded to 4096 UTF-8 bytes. Returns at most 100 matches with workspace-relative paths, one-based decimal-string line numbers and excerpts of at most 500 Unicode scalars. Per-match truncated, resultLimited and scanLimited are independent; empty limited results do not prove absence or complete coverage. No writes, commands, network or additional authority. Request abort suppresses disclosure but does not prove backend cancellation.",
+      inputSchema: SearchInputSchema,
+      annotations,
+    },
+    async (input, ctx) =>
+      run(ctx.mcpReq.signal, (call) =>
+        bridge.search({ ...identity(call), ...input }, call),
       ),
   );
   return server;
