@@ -223,6 +223,23 @@ describe("renderer adoption of exact Go conversation replies", () => {
     expect(c.getSnapshot().readConversation).toBeNull();
     expect(c.getSnapshot().configuration).toEqual(next.configuration);
   });
+  it("does not adopt a reply after refresh detects another build", async () => {
+    const { f, c, reply } = await setup();
+    const held = deferred<unknown>();
+    vi.mocked(f.api.configure).mockReturnValueOnce(held.promise);
+    const pending = c.configure(
+      { kind: "chatgpt.submit-readonly-task", operationId },
+      "send",
+    );
+    const next = bootstrap();
+    next.build.buildId = "4".repeat(64);
+    vi.mocked(f.api.bootstrap).mockResolvedValueOnce(next);
+    await c.refresh();
+    held.resolve(reply(base));
+    expect((await pending).state).toBe("unknown");
+    expect(c.getSnapshot().status).toBe("incompatible");
+    expect(c.getSnapshot().readConversation).toBeNull();
+  });
   it("latches a double Send synchronously and refuses crossed owner evidence without adoption", async () => {
     const { f, c, reply } = await setup();
     const held = deferred<unknown>();

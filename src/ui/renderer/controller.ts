@@ -696,6 +696,7 @@ export class WindowController implements RendererFacade {
             this.state.readPreview === first;
           const next =
             value?.kind === "chatgpt.readonly-conversation" &&
+            this.state.status === "current" &&
             before.buildId &&
             before.buildId === this.state.buildId &&
             conversationRevision !== null &&
