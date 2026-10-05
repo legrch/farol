@@ -42,12 +42,16 @@ func readIntentFixture(t *testing.T) (*chatComputerFixture, *ComputerIngress, wi
 	t.Helper()
 	f, computer, a := readIntentUnapprovedFixture(t)
 	approveReadAccountFixture(t, computer, a)
+	resolveReadSelectionFixture(t, computer, a)
 	f.physical.account = accountSendSnapshot()
 	return f, computer, a
 }
 
 func readIntentPromotion(a wire.ChatComputerAdmissionResponse) wire.ChatReadIntentPromote {
 	in := chatComputerInput(false)
+	in.Selection.AccountId = strings.Repeat("c", 64)
+	in.Resolution.Resolved = in.Selection
+	in.Resolution.ConfigSHA256 = "5bf5b497b199cfac19cccadec8ca426f7da9cbbe97b96eeec15364b138809e3e"
 	return wire.ChatReadIntentPromote{Admission: a, Selection: in.Selection, Resolution: in.Resolution, Required: in.Required, Prompt: "Explain the selected text: test"}
 }
 
@@ -108,6 +112,7 @@ func TestReadIntentSameOwnerPromotionAndFollow(t *testing.T) {
 		t.Fatal("retained result replay", retained, err)
 	}
 	next := chatComputerInput(false)
+	next.Selection, next.Resolution = in.Selection, in.Resolution
 	next.PreviousHandle = &h.HandleId
 	follow, err := f.ingress.create(ctx, "next-turn", next)
 	if err != nil || follow.Binding.TaskId != a.TaskId || follow.Binding.ParticipantId != a.ParticipantId || follow.Binding.TurnId == a.TurnId || follow.Binding.OperationId == a.AdmissionOperationId {
@@ -296,6 +301,7 @@ func TestReadIntentFramedReadPromotionAndWithdrawal(t *testing.T) {
 			if promote {
 				computer.accountClock = &accountSendClock{now: 1}
 				_ = taskWireTestData[wire.ChatReadIntentAccountApproved](t, peer.call("chat.readintent.account.approve", "wire-account", chatComputerWireJSON(t, readAccountInput(a))), "ChatReadIntentAccountApproved")
+				_ = taskWireTestData[wire.ChatReadIntentResolved](t, peer.call("chat.readintent.resolve", "wire-resolve", chatComputerWireJSON(t, readSelectionInput(a))), "ChatReadIntentResolved")
 				h := taskWireTestData[wire.ChatHandle](t, peer.call("chat.readintent.promote", "wire-send", chatComputerWireJSON(t, readIntentPromotion(a))), "ChatHandle")
 				if h.Binding.OperationId != a.AdmissionOperationId || f.count("promote-conversation") != 1 {
 					t.Fatal("promotion mapping", h)

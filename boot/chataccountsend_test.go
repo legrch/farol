@@ -149,6 +149,8 @@ func TestReadIntentAccountApprovalIsRetainedOnExactFollowup(t *testing.T) {
 			}
 			result := f.finish(t, actual)
 			next := chatComputerInput(false)
+			selected := readIntentPromotion(a)
+			next.Selection, next.Resolution = selected.Selection, selected.Resolution
 			next.PreviousHandle = &h.HandleId
 			follow, err := f.ingress.create(ctx, "followup", next)
 			if err != nil {

@@ -47,6 +47,7 @@ func TestReadIntentAccountExplicitApprovalIsRequiredAndRetained(t *testing.T) {
 	if _, err := computer.approveReadAccount(ctx, "refresh-by-replay", changed); err == nil || len(computer.used) != claims {
 		t.Fatal("approval silently refreshed", err)
 	}
+	resolveReadSelectionFixture(t, computer, a)
 	if _, err := computer.promoteRead(ctx, "promote-confirmed", readIntentPromotion(a)); err != nil {
 		t.Fatal(err)
 	}

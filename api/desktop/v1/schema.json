@@ -63,7 +63,8 @@
     "computer.settings.store.reply": "effect",
     "computer.settings.delivery.apply": "effect",
     "computer.settings.delivery.observe": "effect",
-    "computer.settings.delivery.ack": "effect"
+    "computer.settings.delivery.ack": "effect",
+    "chat.readintent.resolve": "effect"
   },
   "definitions": {
     "Context": {
@@ -3642,6 +3643,185 @@
         },
         "acknowledged": {
           "type": "boolean"
+        }
+      }
+    },
+    "ChatConfiguredModel": {
+      "type": "object",
+      "fields": {
+        "alias": {
+          "type": "string",
+          "minBytes": 1,
+          "maxBytes": 80,
+          "pattern": "^[a-z][a-z0-9]*(?:[-_.][a-z0-9]+)*$"
+        },
+        "model": {
+          "type": "string",
+          "minBytes": 1,
+          "maxBytes": 120,
+          "pattern": "^[A-Za-z0-9_./-]+$"
+        },
+        "defaultEffort": {
+          "type": "string",
+          "minBytes": 1,
+          "maxBytes": 40,
+          "pattern": "^[A-Za-z0-9_-]+$",
+          "optional": true
+        }
+      }
+    },
+    "ChatHarnessPolicy": {
+      "type": "object",
+      "fields": {
+        "name": {
+          "type": "string",
+          "minBytes": 1,
+          "maxBytes": 80,
+          "pattern": "^[a-z][a-z0-9]*(?:[-_.][a-z0-9]+)*$"
+        },
+        "defaultModel": {
+          "type": "string",
+          "minBytes": 1,
+          "maxBytes": 80,
+          "pattern": "^[a-z][a-z0-9]*(?:[-_.][a-z0-9]+)*$"
+        },
+        "models": {
+          "type": "ChatConfiguredModel[]"
+        }
+      }
+    },
+    "ChatModelPolicy": {
+      "type": "object",
+      "fields": {
+        "defaultHarness": {
+          "type": "string",
+          "minBytes": 1,
+          "maxBytes": 80,
+          "pattern": "^[a-z][a-z0-9]*(?:[-_.][a-z0-9]+)*$"
+        },
+        "harnesses": {
+          "type": "ChatHarnessPolicy[]"
+        }
+      }
+    },
+    "ChatModelRequest": {
+      "type": "object",
+      "fields": {
+        "harness": {
+          "type": "string",
+          "minBytes": 1,
+          "maxBytes": 80,
+          "pattern": "^[a-z][a-z0-9]*(?:[-_.][a-z0-9]+)*$",
+          "optional": true
+        },
+        "model": {
+          "type": "string",
+          "minBytes": 1,
+          "maxBytes": 80,
+          "pattern": "^[a-z][a-z0-9]*(?:[-_.][a-z0-9]+)*$",
+          "optional": true
+        },
+        "effort": {
+          "type": "string",
+          "minBytes": 1,
+          "maxBytes": 40,
+          "pattern": "^[A-Za-z0-9_-]+$",
+          "optional": true
+        },
+        "mode": {
+          "type": "string",
+          "values": ["standard", "pro"],
+          "optional": true
+        }
+      }
+    },
+    "ChatModelEffort": {
+      "type": "object",
+      "fields": {
+        "requested": {
+          "type": "string",
+          "minBytes": 1,
+          "maxBytes": 40,
+          "pattern": "^[A-Za-z0-9_-]+$"
+        },
+        "resolved": {
+          "type": "string",
+          "minBytes": 1,
+          "maxBytes": 40,
+          "pattern": "^[A-Za-z0-9_-]+$"
+        }
+      }
+    },
+    "ChatBrowserModelProfile": {
+      "type": "object",
+      "fields": {
+        "id": {
+          "type": "id"
+        },
+        "executor": {
+          "type": "string",
+          "minBytes": 1,
+          "maxBytes": 80,
+          "pattern": "^[a-z][a-z0-9]*(?:[-_.][a-z0-9]+)*$"
+        },
+        "runtimeModel": {
+          "type": "string",
+          "minBytes": 1,
+          "maxBytes": 120,
+          "pattern": "^[A-Za-z0-9_./-]+$"
+        },
+        "modelId": {
+          "type": "id"
+        },
+        "defaultEffort": {
+          "type": "string",
+          "minBytes": 0,
+          "maxBytes": 40,
+          "pattern": "^[A-Za-z0-9_-]*$"
+        },
+        "mode": {
+          "type": "string",
+          "values": ["", "standard", "pro"]
+        },
+        "efforts": {
+          "type": "ChatModelEffort[]"
+        },
+        "required": {
+          "type": "BrowserRequiredControls"
+        }
+      }
+    },
+    "ChatReadIntentResolve": {
+      "type": "object",
+      "fields": {
+        "admission": {
+          "type": "ChatComputerAdmissionResponse"
+        },
+        "policy": {
+          "type": "ChatModelPolicy"
+        },
+        "requested": {
+          "type": "ChatModelRequest"
+        },
+        "profiles": {
+          "type": "ChatBrowserModelProfile[]"
+        }
+      }
+    },
+    "ChatReadIntentResolved": {
+      "type": "object",
+      "fields": {
+        "admission": {
+          "type": "ChatComputerAdmissionResponse"
+        },
+        "selection": {
+          "type": "BrowserSelection"
+        },
+        "resolution": {
+          "type": "BrowserResolution"
+        },
+        "required": {
+          "type": "BrowserRequiredControls"
         }
       }
     }

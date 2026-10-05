@@ -24,6 +24,7 @@ import {
   type CoreRetirementAcknowledged,
   type ChatComputerAdmissionResponse,
   type ChatReadIntentPromote,
+  type ChatReadIntentResolve,
   type ChatReadIntentAccountApprove,
   type ChatReadIntentAccountRevoke,
   type SettingsStorePending,
@@ -262,6 +263,11 @@ export class DesktopGoCore {
     if (this.closeResult)
       throw new BridgeError("unavailable", "host_read_intent_unavailable");
     return this.readIntent.promote(input);
+  }
+  resolveReadIntent(input: ChatReadIntentResolve) {
+    if (this.closeResult)
+      throw new BridgeError("unavailable", "host_read_intent_unavailable");
+    return this.readIntent.resolve(input);
   }
   approveReadAccount(input: ChatReadIntentAccountApprove) {
     if (this.closeResult)

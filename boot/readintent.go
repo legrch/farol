@@ -33,6 +33,8 @@ type capturedReadIntent struct {
 	accountInput   *wire.ChatReadIntentAccountApprove
 	accountReceipt *wire.ChatReadIntentAccountApproved
 	accountRevoked bool
+	modelInput     [32]byte
+	modelCapture   *wire.ChatReadIntentResolved
 }
 
 // Caller holds effects across lookup and mutation. Publication, read admission,
@@ -69,6 +71,9 @@ func (s *ComputerIngress) promoteRead(ctx context.Context, operation string, in 
 	}
 	if c.account == nil || c.accountRevoked {
 		return nil, errors.New("read_intent_account_not_approved")
+	}
+	if c.modelCapture == nil || c.modelCapture.Selection != in.Selection || c.modelCapture.Resolution != in.Resolution || c.modelCapture.Required != in.Required {
+		return nil, readAccountRefusal("read_intent_selection_not_owned")
 	}
 	if err = s.claim(operation); err != nil {
 		return nil, err
@@ -197,13 +202,21 @@ func (s *ComputerIngress) withdrawRead(ctx context.Context, operation string, in
 
 func (s *ComputerIngress) readIntentMethods() map[string]desktop.Method {
 	return map[string]desktop.Method{
+		"chat.readintent.resolve": {Handle: func(ctx context.Context, r desktop.Request) (*desktop.Outcome, error) {
+			var in wire.ChatReadIntentResolve
+			if r.OperationID == "" || chatDecode("ChatReadIntentResolve", r, &in) != nil {
+				return invalidIngress()
+			}
+			v, e := s.resolveRead(ctx, r.OperationID, in)
+			return readAccountOutcome("ChatReadIntentResolved", v, e)
+		}},
 		"chat.readintent.promote": {Handle: func(ctx context.Context, r desktop.Request) (*desktop.Outcome, error) {
 			var in wire.ChatReadIntentPromote
 			if r.OperationID == "" || chatDecode("ChatReadIntentPromote", r, &in) != nil {
 				return invalidIngress()
 			}
 			v, e := s.promoteRead(ctx, r.OperationID, in)
-			return chatOutcome("ChatHandle", v, e)
+			return readAccountOutcome("ChatHandle", v, e)
 		}},
 		"chat.readintent.withdraw": {Handle: func(ctx context.Context, r desktop.Request) (*desktop.Outcome, error) {
 			var in wire.ChatReadIntentWithdraw

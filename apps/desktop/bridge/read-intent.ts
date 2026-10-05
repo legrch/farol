@@ -6,6 +6,8 @@ import {
   type Json,
   type ChatComputerAdmissionResponse,
   type ChatReadIntentPromote,
+  type ChatReadIntentResolve,
+  type ChatReadIntentResolved,
   type ChatReadIntentWithdrawn,
   type ChatReadIntentAccountApprove,
   type ChatReadIntentAccountApproved,
@@ -16,6 +18,10 @@ import {
 // Transport for the already captured Go owner. No new task/turn identity,
 // automatic cancellation, replacement admission or retry is created here.
 export class ReadIntentBridge {
+  private readonly selections = new Map<
+    string,
+    { input: ChatReadIntentResolve; result: Promise<ChatReadIntentResolved> }
+  >();
   private readonly promotions = new Map<
     string,
     { input: ChatReadIntentPromote; result: Promise<ChatHandle> }
@@ -38,6 +44,39 @@ export class ReadIntentBridge {
     { admission: ChatComputerAdmissionResponse; result: Promise<void> }
   >();
   constructor(private readonly client: Client) {}
+
+  async resolve(input: ChatReadIntentResolve): Promise<ChatReadIntentResolved> {
+    const selected = structuredClone(input);
+    if (!validate("ChatReadIntentResolve", selected))
+      throw new BridgeError("refused", "read_intent_request_invalid");
+    const key = selected.admission.admissionOperationId;
+    const existing = this.selections.get(key);
+    if (existing) {
+      if (!isDeepStrictEqual(existing.input, selected))
+        throw new BridgeError("refused", "read_intent_selection_crossed");
+      return structuredClone(await existing.result);
+    }
+    const result = Promise.resolve().then(async () => {
+      const reply = await this.call<ChatReadIntentResolved>(
+        "resolve",
+        "ChatReadIntentResolve",
+        selected,
+        "ChatReadIntentResolved",
+      );
+      if (
+        !isDeepStrictEqual(reply.admission, selected.admission) ||
+        !isDeepStrictEqual(reply.selection, reply.resolution.resolved) ||
+        !/^[a-f0-9]{64}$/u.test(reply.resolution.configSHA256) ||
+        !reply.resolution.translationId ||
+        !reply.resolution.requestedAlias ||
+        !reply.resolution.requestedExecutor
+      )
+        throw new BridgeError("unknown", "read_intent_selection_crossed");
+      return structuredClone(reply);
+    });
+    this.selections.set(key, { input: selected, result });
+    return structuredClone(await result);
+  }
 
   async promote(input: ChatReadIntentPromote): Promise<ChatHandle> {
     const selected = structuredClone(input);
@@ -186,7 +225,8 @@ export class ReadIntentBridge {
   }
 
   private async call<T>(
-    method: "promote" | "withdraw" | "account.approve" | "account.revoke",
+    method:
+      "resolve" | "promote" | "withdraw" | "account.approve" | "account.revoke",
     inputShape: string,
     input: unknown,
     outputShape: string,
