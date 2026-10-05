@@ -428,7 +428,9 @@ describe("shared Codex proxy transport fixture", () => {
   });
 
   it("fails closed when the proxy closes its input pipe", async () => {
-    const host = fixture("close-stdin", 200);
+    // Initialization includes spawning a real Node process. Use the ordinary
+    // bounded fixture budget so host load does not replace the pipe assertion.
+    const host = fixture("close-stdin");
     await host.connect();
     await expect(host.request("project/list", {})).rejects.toThrow(
       "CODEX_SHARED_HOST_UNAVAILABLE",
