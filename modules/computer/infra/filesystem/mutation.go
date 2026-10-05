@@ -74,6 +74,10 @@ func (w *mutationWalk) close() {
 func (w *mutationWalk) add(parent int, name string) (int, error) {
 	fd, err := w.fs.open(parent, name, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
 	if err != nil {
+		// ENOTDIR can name a refused symlink on macOS, not an absent directory.
+		if v, lookupErr := w.fs.lstat(parent, name); lookupErr == nil && v.mode&unix.S_IFMT == unix.S_IFLNK {
+			return -1, refusal("WORKSPACE_PATH_REFUSED")
+		}
 		return -1, openError(err)
 	}
 	v, err := w.fs.stat(fd)

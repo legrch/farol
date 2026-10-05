@@ -81,9 +81,10 @@ func (w *Workspace) parsePolicy(d port.Descriptor) (policy, error) {
 	}
 	// Agent stores (.codex/.claude) follow ordinary owner/task grants, including
 	// explicit exclusions. Their directory names alone never veto an approved root.
-	mandatory := []string{".env", ".ssh", ".aws", ".gnupg", ".git", ".git-credentials", ".netrc", ".npmrc", ".pypirc", ".docker/config.json", ".kube/config", "Library/Keychains"}
+	mandatory := []string{".env", ".ssh", ".aws", ".gnupg", ".git", ".git-credentials", ".netrc", ".pypirc", ".docker/config.json", ".kube/config", "Library/Keychains"}
 	prefixes := append([]string{}, mandatory...)
-	for _, store := range mandatory {
+	// Repository .npmrc follows owner/task scope; only HOME/.npmrc is mandatory.
+	for _, store := range append(append([]string{}, mandatory...), ".npmrc") {
 		if store == ".env" || store == ".git" {
 			continue
 		}

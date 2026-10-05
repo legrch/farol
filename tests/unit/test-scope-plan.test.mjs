@@ -30,6 +30,18 @@ const selectedFiles = (plan) =>
   plan.suites.flatMap((suite) => suite.files ?? []);
 
 describe("source test scopes", () => {
+  it("keeps repository config native helpers outside unit and fast scopes", () => {
+    const pure = "tests/unit/repository-config-access.test.ts";
+    const native = "tests/integration/repository-config-access.test.ts";
+    for (const scope of ["unit", "fast"]) {
+      const selected = selectedFiles(planTests(scope, files));
+      expect(selected).toContain(pure);
+      expect(selected).not.toContain(native);
+    }
+    const selected = selectedFiles(planTests("integration", files));
+    expect(selected).toContain(native);
+    expect(selected).not.toContain(pure);
+  });
   it("C09 assigns TSX fixtures to their scope and the actual main runner includes them", () => {
     const fixture = "tests/e2e/fixtures/discovery-example.test.tsx";
     const unit = "tests/unit/discovery-example.test.tsx";

@@ -1,6 +1,6 @@
 /**
  * Credential stores in the owner's home directory. Unlike the root-relative
- * conventions every workspace denies (`.env`, `.git`, and the same store names
+ * conventions every workspace denies (`.env`, `.git`, and other store names
  * directly under any root), these are absolute: they stay protected whichever
  * folder the owner selects. A root that is one of them, or lies inside one, is
  * refused outright, because no deny prefix relative to that root can name the
@@ -8,6 +8,7 @@
  * one more deny prefix. Owner exclusions stay separate, and nested names such
  * as `service/.env.example` are not scanned: path policy is not a secret
  * detector.
+ * `.npmrc` is HOME-only protection; repository copies follow owner/task scope.
  */
 // Agent stores (.codex/.claude) are ordinary workspaces, not mandatory
 // denials. Their contents, including credentials, follow the owner/task grant.

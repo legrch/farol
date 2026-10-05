@@ -40,7 +40,7 @@ describe("agent store owner-controlled access", () => {
       }
     },
   );
-  it("removes only the two agent-store names from both mandatory lists", () => {
+  it("keeps the exact HOME and root mandatory lists", () => {
     expect(HOME_CREDENTIAL_STORES).toEqual([
       ".ssh",
       ".aws",
@@ -61,7 +61,6 @@ describe("agent store owner-controlled access", () => {
       ".git",
       ".git-credentials",
       ".netrc",
-      ".npmrc",
       ".pypirc",
       ".docker/config.json",
       ".kube/config",

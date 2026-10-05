@@ -237,7 +237,7 @@ export function buildWorkspaceShellProfile(
   ${writes.join("\n  ")})
 ${denies.length ? `(deny file-read* file-write* ${denies.join(" ")})` : ""}
 (deny file-read* file-write*
-  (regex #"/(\\.env|\\.ssh|\\.aws|\\.gnupg|\\.git-credentials|\\.netrc|\\.npmrc|\\.pypirc)(/|$)"))
+  (regex #"/(\\.env|\\.ssh|\\.aws|\\.gnupg|\\.git-credentials|\\.netrc|\\.pypirc)(/|$)"))
 ${workspaces.some((workspace) => !workspace.gitHistoryApproved) ? '(deny file-read* file-write* (regex #"/\\.git(/|$)"))' : ""}
 ${parentRules}
 (deny network*)`;
