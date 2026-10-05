@@ -2369,18 +2369,47 @@ describe("Farol Next product configuration", () => {
           : {}),
       };
 
-      const recorded = await service.recordPendingWorkspaceEdit(pendingEdit);
-
-      expect(recorded).toMatchObject({
-        ok: true,
-        snapshot: {
-          settings: {
-            computer: {
-              generation: verified.settings.computer.generation,
-              pendingEdit,
+      const scope = {
+        profileId: "33333333-3333-4333-8333-333333333333",
+        ownerId: "owner-desktop",
+      };
+      if (backend === "legacy") {
+        // Historical bytes are existing-only input, never new TS admission.
+        const historical = structuredClone(verified.settings);
+        historical.revision += 1;
+        historical.computer.pendingEdit = pendingEdit;
+        await new ProductSettingsStore({ root }).save(historical);
+        await service.initialize();
+      } else {
+        const adapter = service.attachSettingsDeliveryStore(scope);
+        const read = await adapter.read();
+        expect(read.status).toBe("ok");
+        expect(
+          await adapter.replace({
+            expected: read.snapshot!,
+            next: {
+              backend: "go-owner-v2",
+              operationId: pendingEdit.operationId,
+              profileId: scope.profileId,
+              workspaceId,
+              relativePath: pendingEdit.relativePath,
+              computerGeneration: String(pendingEdit.computerGeneration),
+              beforeSHA256: pendingEdit.beforeSha256,
+              submittedAt: pendingEdit.submittedAt,
             },
-            setup: { computer: verified.settings.setup.computer },
+            invalidateVerification: false,
+          }),
+        ).toMatchObject({ status: "committed" });
+      }
+      const recorded = service.snapshot();
+      expect(recorded).toMatchObject({
+        status: "ready",
+        settings: {
+          computer: {
+            generation: verified.settings.computer.generation,
+            pendingEdit,
           },
+          setup: { computer: verified.settings.setup.computer },
         },
       });
       const restarted = new ProductConfigurationService(
@@ -2388,20 +2417,49 @@ describe("Farol Next product configuration", () => {
         dependencies(),
       );
       await restarted.initialize();
-      expect(restarted.snapshot()).toMatchObject(recorded.snapshot);
-      await expect(
-        restarted.clearPendingWorkspaceEdit(
-          "00000000-0000-4000-8000-0000000000bb",
-        ),
-      ).resolves.toMatchObject({
-        ok: false,
-        error: "WORKSPACE_MUTATION_NOT_PENDING",
-      });
-      await expect(
-        restarted.clearPendingWorkspaceEdit(pendingEdit.operationId),
-      ).resolves.toMatchObject({
-        ok: true,
-        snapshot: { settings: { computer: { pendingEdit: null } } },
+      expect(restarted.snapshot()).toEqual(recorded);
+      if (backend === "legacy") {
+        await expect(
+          restarted.clearPendingWorkspaceEdit(
+            "00000000-0000-4000-8000-0000000000bb",
+          ),
+        ).resolves.toMatchObject({
+          ok: false,
+          error: "WORKSPACE_MUTATION_NOT_PENDING",
+        });
+        expect(restarted.snapshot()).toEqual(recorded);
+        await expect(
+          restarted.clearPendingWorkspaceEdit(pendingEdit.operationId),
+        ).resolves.toMatchObject({ ok: true });
+      } else {
+        // Mechanical storage identity fencing; Go ACK policy is separate.
+        const adapter = restarted.attachSettingsDeliveryStore(scope);
+        const read = await adapter.read();
+        expect(read.status).toBe("ok");
+        const crossed = {
+          ...read.snapshot!,
+          pending: {
+            ...read.snapshot!.pending!,
+            operationId: "00000000-0000-4000-8000-0000000000bb",
+          },
+        };
+        expect(
+          await adapter.replace({
+            expected: crossed,
+            invalidateVerification: false,
+          }),
+        ).toEqual({ status: "not_written" });
+        expect(restarted.snapshot()).toEqual(recorded);
+        expect(
+          await adapter.replace({
+            expected: read.snapshot!,
+            invalidateVerification: false,
+          }),
+        ).toMatchObject({ status: "committed" });
+      }
+      expect(restarted.snapshot()).toMatchObject({
+        status: "ready",
+        settings: { computer: { pendingEdit: null } },
       });
     },
   );
@@ -2438,6 +2496,9 @@ describe("Farol Next product configuration", () => {
       relativePath: "README.md",
       computerGeneration: added.snapshot.settings.computer.generation,
       submittedAt: "2026-09-16T10:01:00.000Z",
+      backend: "go-owner-v2" as const,
+      profileId: "33333333-3333-4333-8333-333333333333",
+      beforeSha256: "a".repeat(64),
     };
     const general = {
       openAtLaunch: "activity",
@@ -2445,17 +2506,36 @@ describe("Farol Next product configuration", () => {
       activityDetail: "technical",
     } as const;
 
+    const adapter = service.attachSettingsDeliveryStore({
+      profileId: pendingEdit.profileId,
+      ownerId: "owner-desktop",
+    });
+    const read = await adapter.read();
+    expect(read.status).toBe("ok");
     let release!: () => void;
     gate = new Promise<void>((resolve) => {
       release = resolve;
     });
-    const journal = service.recordPendingWorkspaceEdit(pendingEdit);
+    const journal = adapter.replace({
+      expected: read.snapshot!,
+      next: {
+        backend: pendingEdit.backend,
+        operationId: pendingEdit.operationId,
+        profileId: pendingEdit.profileId,
+        workspaceId,
+        relativePath: pendingEdit.relativePath,
+        computerGeneration: String(pendingEdit.computerGeneration),
+        beforeSHA256: pendingEdit.beforeSha256,
+        submittedAt: pendingEdit.submittedAt,
+      },
+      invalidateVerification: false,
+    });
     const preference = service.updateGeneral(general);
     await new Promise((resolve) => setTimeout(resolve, 20));
     release();
     const [recorded, updated] = await Promise.all([journal, preference]);
 
-    expect(recorded.ok).toBe(true);
+    expect(recorded.status).toBe("committed");
     expect(updated.ok).toBe(true);
     const restarted = new ProductConfigurationService(
       new ProductSettingsStore({ root }),

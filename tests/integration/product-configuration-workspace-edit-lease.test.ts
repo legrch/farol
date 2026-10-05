@@ -8,6 +8,7 @@ import {
   ProductConfigurationService,
   ProductSettingsStore,
   type WorkspaceEditLeaseGuard,
+  type SettingsDeliveryStore,
 } from "../../src/apps/desktop/product-configuration";
 import {
   acquirePromotionLease,
@@ -19,21 +20,58 @@ import { withSettingsEditLease } from "../../apps/desktop/with-settings-edit-lea
 import type { PendingWorkspaceEditDelivery } from "../../src/pkg/product-settings/contract";
 import { SYNTHETIC_ROOT_IDENTITY } from "../fixtures/root-identity";
 
-// S35-N03c: `bfcb351f` closed the admission gap for a Chat turn and a
-// native Agent start (both now hold the SAME promotion lease a promotion
-// itself holds from before its drain check through placement, in the
-// "admission" role — see `live-task-registry.ts`), but left the guarded
-// workspace edit open: `recordPendingWorkspaceEdit` durably wrote
-// `EDIT_DELIVERY_PENDING`-observable state (and the edit then wrote real
-// bytes into the user's workspace) without checking or holding that lease
-// at all. These tests exercise the exact interleaving in both orders,
-// using the SAME `acquirePromotionLease`/`releasePromotionLease` primitives
-// `tooling/promote-preview.mjs` uses for role "promotion", to prove a real
-// promotion attempt and a real guarded edit now exclude each other.
+// S35-N03c: preserve the historical guarded-edit admission gap regression
+// through the active typed storage writer. Real disposable configuration and
+// promotion leases prove exclusion; no Go or native workspace edit runs here.
 
 const childScript = fileURLToPath(
   new URL("./fixtures/promotion-lease-child.mjs", import.meta.url),
 );
+
+// Mechanical store fixture only; Go owns admission and delivery policy.
+type GoDelivery = Extract<
+  PendingWorkspaceEditDelivery,
+  { backend: "go-owner-v2" }
+>;
+const deliveryStores = new WeakMap<
+  ProductConfigurationService,
+  SettingsDeliveryStore
+>();
+async function replaceDelivery(
+  service: ProductConfigurationService,
+  next?: GoDelivery,
+  invalidateVerification = false,
+) {
+  let adapter = deliveryStores.get(service);
+  if (!adapter) {
+    adapter = service.attachSettingsDeliveryStore({
+      profileId: "11111111-1111-4111-8111-111111111111",
+      ownerId: "owner-desktop",
+    });
+    deliveryStores.set(service, adapter);
+  }
+  const read = await adapter.read();
+  if (read.status !== "ok" || !read.snapshot)
+    throw new Error("settings missing");
+  return adapter.replace({
+    expected: read.snapshot,
+    ...(next
+      ? {
+          next: {
+            backend: next.backend,
+            operationId: next.operationId,
+            profileId: next.profileId,
+            workspaceId: next.workspaceId,
+            relativePath: next.relativePath,
+            computerGeneration: String(next.computerGeneration),
+            beforeSHA256: next.beforeSha256,
+            submittedAt: next.submittedAt,
+          },
+        }
+      : {}),
+    invalidateVerification,
+  });
+}
 
 const roots: string[] = [];
 const children: ReturnType<typeof spawn>[] = [];
@@ -123,7 +161,10 @@ function admissionLeaseGuard(
     acquireForAdmission: async () => {
       const handle = await acquirePromotionLease(root, generation, "admission");
       if (!handle) return null;
-      return { release: () => releasePromotionLease(handle) };
+      return {
+        release: () => releasePromotionLease(handle),
+        verify: () => verifyPromotionLease(handle),
+      };
     },
   };
 }
@@ -136,15 +177,23 @@ function admissionLeaseGuard(
 function fencedLeaseGuard(
   root: string,
   generation: string,
-): WorkspaceEditLeaseGuard & { verifies: () => number } {
-  let verifies = 0;
+): WorkspaceEditLeaseGuard & {
+  verifies: () => number;
+  releases: () => number;
+} {
+  let verifies = 0,
+    releases = 0;
   return {
     verifies: () => verifies,
+    releases: () => releases,
     acquireForAdmission: async () => {
       const handle = await acquirePromotionLease(root, generation, "admission");
       if (!handle) return null;
       return {
-        release: () => releasePromotionLease(handle),
+        release: async () => {
+          releases += 1;
+          await releasePromotionLease(handle);
+        },
         verify: async () => {
           verifies += 1;
           return verifyPromotionLease(handle);
@@ -187,7 +236,7 @@ function deliveryOf(
   operationId: string,
   workspace: Readonly<{ workspaceId: string; computerGeneration: number }>,
   submittedAt: string,
-): PendingWorkspaceEditDelivery {
+): GoDelivery {
   return {
     operationId,
     workspaceId: workspace.workspaceId,
@@ -216,8 +265,8 @@ describe("guarded workspace edit takes the promotion lease", () => {
       "2026-09-20T10:01:00.000Z",
     );
 
-    const recorded = await service.recordPendingWorkspaceEdit(delivery);
-    expect(recorded).toMatchObject({ ok: true });
+    const recorded = await replaceDelivery(service, delivery);
+    expect(recorded).toMatchObject({ status: "committed" });
 
     // A real promotion attempt, exactly as `promote-preview.mjs` makes it,
     // must refuse while the edit is durable: this is the gap the packet
@@ -249,7 +298,7 @@ describe("guarded workspace edit takes the promotion lease", () => {
     await releasePromotionLease(promotionAfter!);
   });
 
-  it("S35-N03c refuses a guarded edit with its own readable code while a promotion already holds the lease", async () => {
+  it("S35-N03c refuses a pending replacement without writing while a promotion already holds the lease", async () => {
     const root = await userData();
     const generation = "generation-b";
     const service = new ProductConfigurationService(
@@ -273,22 +322,19 @@ describe("guarded workspace edit takes the promotion lease", () => {
     );
     expect(promotionHold).not.toBeNull();
 
-    const refused = await service.recordPendingWorkspaceEdit(delivery);
-    expect(refused).toMatchObject({
-      ok: false,
-      error: "WORKSPACE_MUTATION_PROMOTION_PENDING",
-    });
+    const refused = await replaceDelivery(service, delivery);
+    expect(refused).toEqual({ status: "not_written" });
     // The refusal must be readable AND must never let the edit become
     // durable: a promotion reading `config.json` right now must
     // still see no pending edit at all.
-    expect(refused.snapshot).toMatchObject({
+    expect(service.snapshot()).toMatchObject({
       status: "ready",
       settings: { computer: { pendingEdit: null } },
     });
 
     await releasePromotionLease(promotionHold!);
-    const recordedAfter = await service.recordPendingWorkspaceEdit(delivery);
-    expect(recordedAfter).toMatchObject({ ok: true });
+    const recordedAfter = await replaceDelivery(service, delivery);
+    expect(recordedAfter).toMatchObject({ status: "committed" });
     await service.releaseWorkspaceEditLease(delivery.operationId);
   });
 
@@ -307,7 +353,9 @@ describe("guarded workspace edit takes the promotion lease", () => {
       "2026-09-20T10:03:00.000Z",
     );
 
-    await service.recordPendingWorkspaceEdit(delivery);
+    expect(await replaceDelivery(service, delivery)).toMatchObject({
+      status: "committed",
+    });
     const midflight = await acquirePromotionLease(
       root,
       generation,
@@ -315,11 +363,11 @@ describe("guarded workspace edit takes the promotion lease", () => {
     );
     expect(midflight).toBeNull();
 
-    // Acknowledged (e.g. after `recordComputerMutationOutcomeUnknown`) with
-    // `withSettingsEditLease` never having run at all — the backstop in
-    // `clearPendingEdit` must still free the lease rather than widening its
-    // critical section to the person's own acknowledgement.
-    await service.clearPendingWorkspaceEdit(delivery.operationId);
+    // Mechanical clear is a release backstop when the execution wrapper did
+    // not run. This fixture does not claim that Go would authorize an ACK.
+    expect(await replaceDelivery(service)).toMatchObject({
+      status: "committed",
+    });
 
     const afterAck = await acquirePromotionLease(root, generation, "promotion");
     expect(afterAck).not.toBeNull();
@@ -340,8 +388,8 @@ describe("guarded workspace edit takes the promotion lease", () => {
       "2026-09-20T10:04:00.000Z",
     );
 
-    const recorded = await service.recordPendingWorkspaceEdit(delivery);
-    expect(recorded).toMatchObject({ ok: true });
+    const recorded = await replaceDelivery(service, delivery);
+    expect(recorded).toMatchObject({ status: "committed" });
     const applied = await withSettingsEditLease(
       delivery.operationId,
       async () => ({ phase: "outcome_unknown" }),
@@ -351,19 +399,9 @@ describe("guarded workspace edit takes the promotion lease", () => {
   });
 });
 
-// S35-H1R. Taking the lease and verifying it once on entry is not a fence:
-// `recordPendingEdit` checked the hold and then went on to `mutate`, whose
-// own durable write happens several awaits later, inside
-// `ProductSettingsStore.save`. A lease deleted and re-taken in that window
-// left two holders and the edit was written straight through. The fence now
-// sits where the bytes actually move — the last thing before the rename
-// that commits `config.json`.
-//
-// The adversary is the real one: a real lease file, unlinked by name, and
-// the same `fixtures/promotion-lease-child.mjs` holder process the other
-// lease tests use taking the replacement inode. Only the instant is the
-// test's own — the store's `beforeCommit` seam fires it once, after the
-// entry check has passed and while the write is already under way.
+// S35-H1R: preserve the real stolen-inode regression at the typed writer's
+// pre-rename fence. The existing disposable holder takes a replacement lease
+// after entry verification, inside the store's beforeCommit seam.
 describe("the guarded edit's fence sits at the durable write (S35-H1R)", () => {
   function storeWithSeam(
     root: string,
@@ -404,13 +442,10 @@ describe("the guarded edit's fence sits at the durable write (S35-H1R)", () => {
     const bytesBefore = await fs.readFile(settingsFileOf(root), "utf8");
 
     seam.steal = () => stealLease(root);
-    const refused = await service.recordPendingWorkspaceEdit(delivery);
+    const refused = await replaceDelivery(service, delivery);
 
-    expect(refused).toMatchObject({
-      ok: false,
-      error: "WORKSPACE_MUTATION_PROMOTION_PENDING",
-    });
-    expect(refused.snapshot).toMatchObject({
+    expect(refused).toEqual({ status: "not_written" });
+    expect(service.snapshot()).toMatchObject({
       status: "ready",
       settings: { computer: { pendingEdit: null } },
     });
@@ -424,7 +459,9 @@ describe("the guarded edit's fence sits at the durable write (S35-H1R)", () => {
     // The hold this edit took is released rather than leaked: the thief is
     // the only holder left, and the edit's own operation has nothing
     // outstanding.
+    expect(guard.releases()).toBe(1);
     await service.releaseWorkspaceEditLease(delivery.operationId);
+    expect(guard.releases()).toBe(1);
   });
 
   it("S35-H1R control: the same edit records, and the same two checks run, when nobody steals the lease", async () => {
@@ -444,10 +481,10 @@ describe("the guarded edit's fence sits at the durable write (S35-H1R)", () => {
       "2026-09-20T10:06:00.000Z",
     );
 
-    const recorded = await service.recordPendingWorkspaceEdit(delivery);
+    const recorded = await replaceDelivery(service, delivery);
 
-    expect(recorded).toMatchObject({ ok: true });
-    expect(recorded.snapshot).toMatchObject({
+    expect(recorded).toMatchObject({ status: "committed" });
+    expect(service.snapshot()).toMatchObject({
       status: "ready",
       settings: {
         computer: { pendingEdit: { operationId: delivery.operationId } },
@@ -465,6 +502,16 @@ describe("the guarded edit's fence sits at the durable write (S35-H1R)", () => {
       "promotion",
     );
     expect(promotionAttempt).toBeNull();
+    expect(guard.releases()).toBe(0);
     await service.releaseWorkspaceEditLease(delivery.operationId);
+    await service.releaseWorkspaceEditLease(delivery.operationId);
+    expect(guard.releases()).toBe(1);
+    const afterRelease = await acquirePromotionLease(
+      root,
+      generation,
+      "promotion",
+    );
+    expect(afterRelease).not.toBeNull();
+    await releasePromotionLease(afterRelease!);
   });
 });

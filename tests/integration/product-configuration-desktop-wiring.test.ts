@@ -6,10 +6,12 @@ import {
   ProductConfigurationService,
   ProductSettingsStore,
   type WorkspaceEditLeaseGuard,
+  type SettingsDeliveryStore,
 } from "../../src/apps/desktop/product-configuration";
 import {
   acquirePromotionLease,
   releasePromotionLease,
+  verifyPromotionLease,
 } from "../../src/apps/desktop/promotion-lease";
 import { withSettingsEditLease } from "../../apps/desktop/with-settings-edit-lease";
 import type { PendingWorkspaceEditDelivery } from "../../src/pkg/product-settings/contract";
@@ -18,6 +20,51 @@ import { SYNTHETIC_ROOT_IDENTITY } from "../fixtures/root-identity";
 // Real lease/configuration integration with the same admission guard and
 // withSettingsEditLease release wrapper used by normal main. Only the Go RPC
 // result is doubled; no native workspace mutation is performed here.
+
+// Mechanical store fixture only; Go owns admission and delivery policy.
+type GoDelivery = Extract<
+  PendingWorkspaceEditDelivery,
+  { backend: "go-owner-v2" }
+>;
+const deliveryStores = new WeakMap<
+  ProductConfigurationService,
+  SettingsDeliveryStore
+>();
+async function replaceDelivery(
+  service: ProductConfigurationService,
+  next?: GoDelivery,
+  invalidateVerification = false,
+) {
+  let adapter = deliveryStores.get(service);
+  if (!adapter) {
+    adapter = service.attachSettingsDeliveryStore({
+      profileId: "11111111-1111-4111-8111-111111111111",
+      ownerId: "owner-desktop",
+    });
+    deliveryStores.set(service, adapter);
+  }
+  const read = await adapter.read();
+  if (read.status !== "ok" || !read.snapshot)
+    throw new Error("settings missing");
+  return adapter.replace({
+    expected: read.snapshot,
+    ...(next
+      ? {
+          next: {
+            backend: next.backend,
+            operationId: next.operationId,
+            profileId: next.profileId,
+            workspaceId: next.workspaceId,
+            relativePath: next.relativePath,
+            computerGeneration: String(next.computerGeneration),
+            beforeSHA256: next.beforeSha256,
+            submittedAt: next.submittedAt,
+          },
+        }
+      : {}),
+    invalidateVerification,
+  });
+}
 
 const roots: string[] = [];
 
@@ -53,7 +100,10 @@ function desktopPromotionLeaseGuard(
         "admission",
       ).catch(() => null);
       if (!handle) return null;
-      return { release: () => releasePromotionLease(handle) };
+      return {
+        release: () => releasePromotionLease(handle),
+        verify: () => verifyPromotionLease(handle),
+      };
     },
   };
 }
@@ -91,7 +141,7 @@ function deliveryOf(
   operationId: string,
   workspace: Readonly<{ workspaceId: string; computerGeneration: number }>,
   submittedAt: string,
-): PendingWorkspaceEditDelivery {
+): GoDelivery {
   return {
     operationId,
     workspaceId: workspace.workspaceId,
@@ -121,8 +171,8 @@ describe("desktop wiring: main.ts's own construction path shares the promotion l
         workspace,
         "2026-10-04T22:00:00.000Z",
       );
-      expect(await service.recordPendingWorkspaceEdit(delivery)).toMatchObject({
-        ok: true,
+      expect(await replaceDelivery(service, delivery)).toMatchObject({
+        status: "committed",
       });
       const original = new Error("original transport failure");
       const attempt = withSettingsEditLease(
@@ -133,10 +183,8 @@ describe("desktop wiring: main.ts's own construction path shares the promotion l
           ).toBeNull();
           if (outcome !== "refused") {
             expect(
-              await service.recordComputerMutationOutcomeUnknown(
-                workspace.workspaceId,
-              ),
-            ).toMatchObject({ ok: true });
+              await replaceDelivery(service, delivery, true),
+            ).toMatchObject({ status: "committed" });
             expect(
               await acquirePromotionLease(root, buildId, "promotion"),
             ).toBeNull();
@@ -151,7 +199,25 @@ describe("desktop wiring: main.ts's own construction path shares the promotion l
       const after = service.snapshot();
       expect(after).toMatchObject({
         status: "ready",
-        settings: { computer: { pendingEdit: delivery } },
+        settings: {
+          computer: {
+            pendingEdit: delivery,
+            generation: workspace.computerGeneration,
+          },
+          setup: {
+            computer:
+              outcome === "refused"
+                ? {
+                    outcomeUnknown: false,
+                    verified: { workspaceId: workspace.workspaceId },
+                  }
+                : {
+                    outcomeUnknown: true,
+                    verified: null,
+                    reachable: "unknown",
+                  },
+          },
+        },
       });
       const next = await acquirePromotionLease(root, buildId, "promotion");
       expect(next).not.toBeNull();
@@ -177,8 +243,8 @@ describe("desktop wiring: main.ts's own construction path shares the promotion l
 
     // The edit becomes durable and takes the same cross-process lease a
     // promotion would.
-    const recorded = await service.recordPendingWorkspaceEdit(firstDelivery);
-    expect(recorded).toMatchObject({ ok: true });
+    const recorded = await replaceDelivery(service, firstDelivery);
+    expect(recorded).toMatchObject({ status: "committed" });
 
     // An admitted edit refuses a promotion: a live promotion attempt sees
     // the lease already held and is refused with its own readable outcome
@@ -201,10 +267,11 @@ describe("desktop wiring: main.ts's own construction path shares the promotion l
       service.releaseWorkspaceEditLease.bind(service),
     );
     expect(applied.phase).toBe("completed");
-    // Delivery acknowledgement (the caller's own follow-up, distinct from
-    // the lease release `withSettingsEditLease` already performed above) is
-    // what clears `computer.pendingEdit` so a later edit is admitted.
-    await service.clearPendingWorkspaceEdit(firstDelivery.operationId);
+    // Exercise the mechanical clear separately from execution lease release.
+    // Go offer/ACK policy is covered by the delivery service's own tests.
+    expect(await replaceDelivery(service)).toMatchObject({
+      status: "committed",
+    });
 
     // Recording the outcome released the lease: a promotion can now take it.
     const promotionAfterOutcome = await acquirePromotionLease(
@@ -215,19 +282,15 @@ describe("desktop wiring: main.ts's own construction path shares the promotion l
     expect(promotionAfterOutcome).not.toBeNull();
 
     // A promotion refuses an edit: while a live promotion holds the lease,
-    // a new guarded edit is refused with its own readable code rather than
-    // becoming durable.
+    // a new pending replacement is not written while placement is protected.
     const secondDelivery = deliveryOf(
       "00000000-0000-4000-8000-0000000000ef",
       workspace,
       "2026-09-20T10:06:00.000Z",
     );
-    const refused = await service.recordPendingWorkspaceEdit(secondDelivery);
-    expect(refused).toMatchObject({
-      ok: false,
-      error: "WORKSPACE_MUTATION_PROMOTION_PENDING",
-    });
-    expect(refused.snapshot).toMatchObject({
+    const refused = await replaceDelivery(service, secondDelivery);
+    expect(refused).toEqual({ status: "not_written" });
+    expect(service.snapshot()).toMatchObject({
       status: "ready",
       settings: { computer: { pendingEdit: null } },
     });
@@ -235,9 +298,8 @@ describe("desktop wiring: main.ts's own construction path shares the promotion l
     // Once the promotion releases, the same edit can proceed and its own
     // lease releases the same way.
     await releasePromotionLease(promotionAfterOutcome!);
-    const recordedAfter =
-      await service.recordPendingWorkspaceEdit(secondDelivery);
-    expect(recordedAfter).toMatchObject({ ok: true });
+    const recordedAfter = await replaceDelivery(service, secondDelivery);
+    expect(recordedAfter).toMatchObject({ status: "committed" });
     await service.releaseWorkspaceEditLease(secondDelivery.operationId);
     const promotionFinal = await acquirePromotionLease(
       root,
