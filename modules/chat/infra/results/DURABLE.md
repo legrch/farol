@@ -4,7 +4,8 @@
 `port.DurableResults` contract. `Root{Path, ProfileID, Identity}` comes from trusted
 boot and names the existing qualified Chat directory. `mode` is exactly `create`
 or `open`. Darwin and Linux have the native adapter; other targets refuse it.
-There is no boot activation in this slice.
+Normal Go startup now composes this adapter. Current-authorized historical
+result discovery/read remains a separate application boundary.
 
 `create` creates only a never-existing `chat-results` child with mode 0700 and an
 immutable 0600 claim binding version 1, original profile and both physical roots.

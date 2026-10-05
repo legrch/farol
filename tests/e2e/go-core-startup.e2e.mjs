@@ -654,7 +654,7 @@ async function physicalDirectory(directory) {
 }
 
 function journalWitness(journal, profileId, physical, previous, retired) {
-  assert.equal(journal.version, 2, "JOURNAL_VERSION_UNKNOWN");
+  assert.equal(journal.version, 3, "JOURNAL_VERSION_UNKNOWN");
   assert.equal(journal.scope?.ProfileID, profileId, "JOURNAL_PROFILE_CHANGED");
   const generation = journal.scope?.BackendGeneration;
   assert.ok(
@@ -2800,7 +2800,7 @@ function selfTest() {
     );
   const physical = { Device: "1", Inode: "2", OwnerUID: "501" };
   const journal = {
-    version: 2,
+    version: 3,
     root: { Device: 1, Inode: 2, OwnerUID: 501 },
     scope: { ProfileID: profile.profileId, BackendGeneration: "first" },
     incarnations: ["first"],
@@ -2844,6 +2844,8 @@ function selfTest() {
   );
   for (const mutation of [
     { version: 1 },
+    { version: 2 },
+    { version: 4 },
     { scope: { ...journal.scope, ProfileID: "other" } },
     { scope: { ...journal.scope, BackendGeneration: "" } },
     { root: { ...journal.root, Inode: 3 } },

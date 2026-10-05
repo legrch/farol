@@ -7,8 +7,8 @@ import { readAccountUi, refreshAccountUi } from "./read-account-ui-witness.mjs";
 
 export const conversationLimits = Object.freeze([
   "Controlled loopback fixture and synthetic account only; no production model catalogue, live provider, installation or focus acceptance",
-  "Answers are retained in this window/backend lifetime only; no restart, durable answer, rejoin or replay claim",
-  "Go handoff currently admits only empty or ACKed never-dispatched history. Provider-used turns can complete while ordinary Quit reports go-core unconfirmed; retain/quarantine the profile and do not replay, retry Quit or force-kill",
+  "Journal v3 terminal publications and ordinary Quit are observed; no historical UI read, restart, rejoin or replay claim",
+  "Go handoff requires durable completed results with explicit ACK and settlement. Any unconfirmed Quit still quarantines the profile; no replay, retry Quit or force-kill",
   "Go settlement/release is witnessed independently in the content-free lifecycle journal; UI follow-ready alone is not backend evidence",
 ]);
 export const conversationId = "startup-two-turn-conversation";
@@ -300,7 +300,8 @@ export function conversationUiWitness(ui, stage, script, index, previous) {
 
 // Independently parsed Go file; no private renderer/controller state access.
 export function conversationJournalWitness(journal, initial, ui, acknowledged) {
-  assert.equal(journal.version, 2);
+  assert.equal(journal.version, 3);
+  assert.equal(initial.version, 3);
   assert.deepEqual(journal.scope, initial.scope, "CHAT_GO_SCOPE_CROSSED");
   assert.deepEqual(journal.root, initial.root, "CHAT_GO_ROOT_CROSSED");
   assert.deepEqual(journal.incarnations, initial.incarnations);
@@ -356,6 +357,29 @@ export function conversationJournalWitness(journal, initial, ui, acknowledged) {
   assert.equal(last.HasResult, true);
   assert.equal(last.Result.Outcome, "completed", "CHAT_GO_RESULT_NOT_USEFUL");
   assert.equal(last.Result.Code, "PROVIDER_COMPLETED");
+  const terminal = writes.filter(
+    (w) => w.Entry.ResultPublication !== undefined,
+  );
+  assert.equal(terminal.length, 1, "CHAT_DURABLE_PUBLICATION_COUNT");
+  assert.equal(terminal[0].Entry.Kind, "finish");
+  assert.deepEqual(terminal[0].Entry.After.Result, last.Result);
+  const publication = terminal[0].Entry.ResultPublication;
+  assert.equal(publication.Version, 1);
+  assert.deepEqual(publication.Root, initial.root, "CHAT_DURABLE_ROOT_CROSSED");
+  assert.equal(publication.StorageRoot?.Device, initial.root.Device);
+  assert.equal(publication.StorageRoot?.OwnerUID, initial.root.OwnerUID);
+  assert.ok(Number.isSafeInteger(publication.StorageRoot?.Inode));
+  assert.ok(publication.StorageRoot.Inode > 0);
+  assert.notEqual(publication.StorageRoot.Inode, initial.root.Inode);
+  assert.ok(Number.isSafeInteger(publication.EncodedBytes));
+  assert.ok(publication.EncodedBytes > 0 && publication.EncodedBytes <= 65536);
+  assert.ok(
+    Array.isArray(publication.Digest) && publication.Digest.length === 32,
+  );
+  assert.ok(
+    publication.Digest.every((v) => Number.isInteger(v) && v >= 0 && v <= 255),
+  );
+  assert.ok(publication.Digest.some((v) => v !== 0));
   assert.equal(last.Phase, acknowledged ? "delivered" : "result-ready");
   assert.equal(last.DeliveryAcknowledged, acknowledged, "CHAT_GO_IMPLICIT_ACK");
   const ack = writes.filter((w) => w.Entry.Kind === "acknowledge");
@@ -381,6 +405,7 @@ export function conversationJournalWitness(journal, initial, ui, acknowledged) {
   return {
     binding,
     resultId: last.Result.ID,
+    publication,
     acknowledged,
     revisions: writes.map((w) => ({
       revision: w.Revision,
@@ -626,7 +651,7 @@ export function conversationWitnessSelfTest(pass, reject) {
       conversationUiWitness({ ...second, ...changed }, "early", script, 1, ack),
     );
   const initial = {
-    version: 2,
+    version: 3,
     scope: { ProfileID: "profile", BackendGeneration: "backend" },
     root: { Device: 1, Inode: 2, OwnerUID: 501 },
     incarnations: ["backend"],
@@ -670,6 +695,17 @@ export function conversationWitnessSelfTest(pass, reject) {
       Binding: binding,
       Kind,
       After,
+      ...(Kind === "finish"
+        ? {
+            ResultPublication: {
+              Version: 1,
+              Root: initial.root,
+              StorageRoot: { ...initial.root, Inode: 3 },
+              Digest: Array(32).fill(17),
+              EncodedBytes: 2048,
+            },
+          }
+        : {}),
       Quiescence: {
         Confirmed: true,
         ResultID: "result",
@@ -695,6 +731,33 @@ export function conversationWitnessSelfTest(pass, reject) {
     ],
   };
   pass(() => conversationJournalWitness(released, initial, ack, true));
+  for (const version of [1, 2, 4])
+    reject(() =>
+      conversationJournalWitness({ ...released, version }, initial, ack, true),
+    );
+  for (const mutation of [
+    undefined,
+    { Version: 2 },
+    { Root: { ...initial.root, Inode: 4 } },
+    { StorageRoot: initial.root },
+    { Digest: Array(32).fill(0) },
+    { Digest: Array(32).fill(256) },
+    { EncodedBytes: 65537 },
+  ])
+    reject(() => {
+      const copy = structuredClone(released);
+      copy.writes[0].Entry.ResultPublication =
+        mutation === undefined
+          ? undefined
+          : { ...copy.writes[0].Entry.ResultPublication, ...mutation };
+      conversationJournalWitness(copy, initial, ack, true);
+    });
+  reject(() => {
+    const copy = structuredClone(released);
+    copy.writes[1].Entry.ResultPublication =
+      copy.writes[0].Entry.ResultPublication;
+    conversationJournalWitness(copy, initial, ack, true);
+  });
   for (const field of [
     "HasResult",
     "SendIntent",

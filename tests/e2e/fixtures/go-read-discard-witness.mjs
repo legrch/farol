@@ -470,7 +470,7 @@ export function consumedReadHandoffWitness(current, original) {
 
 export function readWitnessSelfTest(pass, reject) {
   const initial = {
-    version: 2,
+    version: 3,
     root: { Device: 1, Inode: 2, OwnerUID: 501 },
     scope: { ProfileID: "profile", BackendGeneration: "original" },
     incarnations: ["original"],
