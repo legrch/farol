@@ -33,6 +33,8 @@ Standalone `.e2e.mjs` native/browser adapter witnesses retain their existing
 explicit entrypoints and are not yet part of these registered source scopes.
 Their further classification and inclusion remain part of the complete test
 contract; the new integration command does not claim to cover them implicitly.
+The [standalone entrypoint inventory](testing-standalone.md) records all 23
+scripts, their distinct scenario selectors, required artifacts and known limits.
 
 The runner requires Node 24.20.0 or 26.7.0, Go 1.26.2 and already-installed local
 dependencies. `FAROL_TEST_GO` may name the local Go executable. Go toolchain/module
