@@ -21,6 +21,60 @@ afterEach(() => {
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true });
 });
 describe("native profile storage selection", () => {
+  it("adds only Go storage to a retained pre-Go desktop directory", () => {
+    const root = fixture();
+    // Invented bytes only; no real configuration, credential or transcript.
+    const retained = new Map([
+      ["configuration.json", "synthetic configuration and read-only grants\n"],
+      ["connector-reference.json", "synthetic credential reference\n"],
+      ["last-quit.json", "synthetic unconfirmed quit\n"],
+      ["installed-updates/retained.json", "synthetic unknown operation\n"],
+    ]);
+    fs.mkdirSync(path.join(root, "installed-updates"), { mode: 0o700 });
+    for (const [name, bytes] of retained)
+      fs.writeFileSync(path.join(root, name), bytes, { mode: 0o600 });
+    const before = new Map(
+      [...retained.keys()].map((name) => [
+        name,
+        fs.lstatSync(path.join(root, name), { bigint: true }),
+      ]),
+    );
+    const selected = openNativeProfileStorage(root, "computer");
+    expect(selected.storeMode).toBe("create");
+    for (const [name, bytes] of retained) {
+      const after = fs.lstatSync(path.join(root, name), { bigint: true });
+      const original = before.get(name)!;
+      for (const field of [
+        "dev",
+        "ino",
+        "mode",
+        "nlink",
+        "size",
+        "mtimeNs",
+        "ctimeNs",
+      ] as const)
+        expect(after[field]).toBe(original[field]);
+      expect(fs.readFileSync(path.join(root, name), "utf8")).toBe(bytes);
+    }
+    expect(fs.readdirSync(path.join(root, "installed-updates"))).toEqual([
+      "retained.json",
+    ]);
+    for (const child of ["chat", "task", "computer/mutations"])
+      expect(fs.readdirSync(path.join(selected.root, child))).toEqual([]);
+    expect(fs.readdirSync(path.join(selected.root, "computer"))).toEqual([
+      "mutations",
+    ]);
+    const marker = JSON.parse(
+      fs.readFileSync(path.join(selected.root, "profile.json"), "utf8"),
+    );
+    expect(marker).toEqual({
+      schema: "farol-native-profile/2",
+      profileId: selected.profileId,
+      computerId: "computer",
+    });
+    // Selection alone has not opened Go or made any retained desktop record
+    // safe to consume. It must not copy grants or settle those records.
+  });
   it("creates once and reuses the same identity without recreating journals", () => {
     const root = fixture();
     const first = openNativeProfileStorage(root, "computer");

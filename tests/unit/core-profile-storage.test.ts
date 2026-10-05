@@ -209,6 +209,47 @@ it("creates the version 2 mutation child only in known first provisioning", () =
   expect(Object.isFrozen(out)).toBe(true);
 });
 
+it("provisions Go storage beside retained desktop state without importing its authority", () => {
+  // Synthetic pre-Go desktop data. Presence is not admission, a clean Quit,
+  // a credential or a completed update. Those owners retain their own records.
+  const retained = [
+    ["configuration.json", "synthetic configuration with existing grants"],
+    ["connector-reference.json", "synthetic stored credential reference"],
+    ["last-quit.json", "synthetic unknown quit"],
+    ["installed-updates/retained.json", "synthetic unfinished update"],
+  ] as const;
+  fixture.fs.mkdirSync("/fixture/state/installed-updates", { mode: 0o700 });
+  for (const [name, content] of retained) {
+    const fd = fixture.fs.openSync("/fixture/state/" + name, 2 | 4, 0o600);
+    fixture.fs.writeFileSync(fd, content);
+    fixture.fs.closeSync(fd);
+  }
+  const before = new Map(
+    [...fixture.nodes].map(([name, node]) => [name, { ...node }]),
+  );
+  fixture.writes.length = 0;
+  const selected = openNativeProfileStorage("/fixture/state", "computer");
+  expect(selected.storeMode).toBe("create");
+  for (const [name, value] of before) expect(fixture.node(name)).toEqual(value);
+  expect(fixture.writes).toHaveLength(1);
+  expect(JSON.parse(fixture.writes[0]!)).toEqual({
+    schema: "farol-native-profile/2",
+    profileId: "new-profile",
+    computerId: "computer",
+  });
+  expect([...fixture.nodes.keys()].filter((name) => !before.has(name))).toEqual(
+    [
+      "/fixture/state/go-core",
+      "/fixture/state/go-core/computer",
+      "/fixture/state/go-core/computer/mutations",
+      "/fixture/state/go-core/chat",
+      "/fixture/state/go-core/task",
+      "/fixture/state/go-core/profile.json",
+    ],
+  );
+  expect(fixture.closed).toEqual(fixture.opened);
+});
+
 it("opens an existing exact profile without provisioning children or changing its identity", () => {
   fixture.existing();
   expect(openNativeProfileStorage("/fixture/state", "computer")).toEqual({
