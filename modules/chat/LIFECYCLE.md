@@ -1,11 +1,17 @@
 # Ordinary Chat lifecycle owner
 
-Status: implemented source checkpoint, pending aggregate review and integration.
+Status: integrated Go lifecycle, with qualification boundaries below.
 The Go owner uses the existing `domain/turn.Queue`; there is no new delegated task
 engine or browser implementation. The earlier admission projection now has an
 actual handle producer. Source tests use the concrete per-owner Mutex and injected
-journal, browser and result-retention fixtures. Native durability, Desktop IO,
-Computer composition, HTTP/SSE serving and installed acceptance remain unqualified.
+journal, browser and result-retention fixtures. The
+[controlled normal Desktop journey](../../docs/desktop-core.md#controlled-normal-desktop-chat)
+at `e31c636` proves two React/Go turns, explicit result ACK and settlement, clean
+Quit, same-build/profile restart and current-authorized reads of both answers.
+That exact Dev witness uses a synthetic provider; later source changes are not
+automatically covered. Production account/control/output qualification, ordinary
+typed-first-turn admission, external Responses next-user-turn delivery and
+installed acceptance remain open.
 
 ## Construct and capture one route
 
@@ -28,8 +34,12 @@ an effective Send therefore cannot lack terminal retention.
 wrong scope/revision, error, nil reply or cancelled context yields no owner.
 An uncertain claim cannot be repeated or rerouted through a new repository instance.
 The journal adapter must enforce scope ownership across all its instances.
-There is no history restore API. Restarted records can inform reconciliation and
-Activity, but cannot create current admission.
+The native journal's `NewAfterRetirement` consumes the exact qualified successor
+scope and original one-shot clean-retirement proof. Current-authorized history reads
+can recover exact retained answers through that chain. They never reconstruct
+live conversation handles, current admission or Send authority. See the
+[durable result contract](infra/results/DURABLE.md) for its storage and failure
+boundaries; arbitrary crash or cross-build recovery is not implied.
 
 The ordinary request owner calls `Admit` using its trusted admitted owner/session/
 task/TaskEpoch/participant/turn/operation identity and intent digest. These fields
@@ -126,9 +136,11 @@ URL, cookie or storage capability. No second Chromium/DOM engine is introduced.
 Resume, Delta, Request/ResolveComputer, Acknowledge, Settle/SettlePrepared and
 Release. Irrelevant fields and crossed identities are refused before persistence.
 It records metadata only and executes no Computer operation or browser call.
-Validated Observe-page mapping and the actual Cancel/Dispose adapters still need
-their owned integration. Every incoming event must bind the exact captured
-view/document generation; body correlation cannot select another live handle.
+`Conversation.Observe` validates one bounded semantic event and maps it to those
+transitions. Cancel/Dispose use the existing browser port and exact reservation.
+Every incoming event must bind the captured view/document generation; body
+correlation cannot select another live handle. Source and controlled-port checks
+do not qualify all native cancellation and disposal outcomes.
 
 ## Result, delivery and slot reuse
 
@@ -136,9 +148,11 @@ view/document generation; body correlation cannot select another live handle.
 bounded result bytes into the accepted retention port, then commits metadata.
 Known retention must match route, result and byte count. Unknown retention or its
 late reply cannot publish result-ready or settled absence. Repeated Finish cannot
-repeat retention. Results remain transient delivery data; no prompt/answer/raw
-error is stored in the lifecycle journal or Activity. Only the initial intent
-fingerprint and classified metadata are journal inputs.
+repeat retention. Normal startup uses the bounded durable result store. The
+journal retains exact publication metadata, not prompt/answer/raw error text;
+Activity remains content-free. Retirement re-reads the retained bytes before
+publishing its handoff. A stored file alone cannot establish a completed result,
+delivery ACK, settled lifecycle or reusable worker.
 
 Cancellation before Send retains the original known-cancel policy, including
 separate positive cleanup for a reserved surface. Cancellation after Send stays
@@ -146,10 +160,42 @@ Unknown. Client ACK and positive exact lifecycle settlement are separate; both
 are required for Release. Historical identity/binding remains unchanged after
 slot reuse, and the old route cannot open the new document.
 
-The delivery owner must connect retention lifetime to committed client ACK, and
-retain the existing bounded stream ordering, backpressure, replay and reconnect
-contract. This range supplies no SSE adapter or result-retention implementation.
-The pure stream tests remain source evidence, not socket/provider acceptance.
+Result acknowledgement and frame acknowledgement remain different operations.
+The lifecycle generates bounded Responses frames; the external HTTP adapter is
+separate and does not yet establish the business ACK needed for an ordinary next
+user turn. The pure stream tests remain source evidence, not selected-client or
+live-provider acceptance.
+
+## Text conversation capacity
+
+The current prompt and joined answer limits are each 8192 UTF-8 bytes. A prompt
+above that bound is refused before admission. A browser event's larger transport
+limit does not widen the joined-answer limit. Retention, frame cardinality and
+encoded frame/buffer sizes are additional independent bounds.
+
+If an answer crosses its limit after a useful delta, observation returns
+`CHAT_LIFECYCLE_UNSETTLED` and fences the owner. The already emitted text is not
+promoted to a truncated completed result. Ordinary observation, Send, Follow,
+ACK and replacement admission cannot resolve that fence or free the worker.
+This conservative behavior also blocks other work under that lifecycle owner;
+automatic cancellation or recovery after overflow is not implemented.
+
+The M10 capacity subset is executable in
+`app/services/lifecycle/bytebounds_test.go`:
+
+- `TestConversationPromptByteBoundaries` checks 8191/8192/8193-byte ASCII,
+  Cyrillic, emoji and escaped-control inputs before actual fixture Send.
+- `TestConversationOutputByteBoundaries` first delivers a useful delta, then
+  exposes the remaining generated text. It checks exact retained bytes at the
+  accepted limits and no completed publication, ACK, Follow or new Send after
+  overflow.
+- `TestConversationEscapedFrameByteBudget` separates raw answer bytes from
+  encoded delivery capacity and checks the same conservative refusal path.
+
+These are pure lifecycle tests with injected browser/journal/retention ports.
+The adapter call counter is not a physical provider acceptance ledger. Composer
+encoding, actual transport backpressure and packaged/live-provider limits remain
+separate higher-boundary witnesses; this is not complete M10 acceptance.
 
 ## Checks and integration handoff
 
@@ -159,10 +205,9 @@ completion/cancel during pending journal/browser/retention effects, wrong receip
 late replies, no repeat Send, exact immutable handles, five-slot waiting/reuse,
 Computer call history, counter/retention bounds and metadata privacy.
 
-These fixtures do not qualify a durable journal, Desktop binding at actual IO,
-Computer's final native disclosure, provider calls or ordinary production startup.
-Aggregate `ci:fast` and fresh required review remain separate Lead-reserved gates.
-No active TypeScript duplicate is removed, no boot/shared-file changes are included,
-and no main integration, packaging, installation or publication is performed.
-The earlier `33007e5` writer, failed canonical CI evidence and unknown resources
-remain preserved. The new range is a source checkpoint, not product completion.
+These fixtures do not themselves qualify durable storage, Desktop binding at
+actual IO, Computer's final native disclosure or provider calls. The linked
+Desktop evidence records the separate normal-startup and restart witnesses.
+Aggregate checks and applicable independent review remain candidate gates.
+Installation, live-provider qualification and full cutover acceptance remain
+separate from a source checkpoint.
