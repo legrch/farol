@@ -66,6 +66,11 @@ Lost publication ACK, readback substitution and post-create cancellation/check
 failure fence the same repository, including ordinary mutation APIs. An EEXIST
 race supplies Existing or refusal/unknown, never a fresh permit. No retry,
 repair, deletion, result, terminal record or retirement acceptance is provided.
-Tests use memory storage and the existing process Service with a fake selected
-child only. Root production registration, native persistence/reopen qualification,
+Pure tests use memory storage and the existing process Service with a fake
+selected child. Separate Darwin tests in `processnative_test.go` exercise real
+disposable repository roots: durable reservation, duplicate observation after a
+known Close, changed-host refusal, and the shared process/write operation fence
+in both orders. They independently inspect the original record key, bytes and
+permissions. Host, consent and execution identities remain fixtures; these tests
+do not qualify crash recovery or a process launch. Root production registration,
 shell/process execution, Task/provider activation and packaging remain unactivated.
