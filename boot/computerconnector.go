@@ -28,6 +28,13 @@ type connectorLaunchPublisher interface {
 }
 type connectorStart func(context.Context, wire.ComputerConnectorBinding, map[string]desktop.Method) (connectorEndpoint, error)
 
+// Only a failed pure constructor establishes that publication was not entered.
+// Policy failures after Publish may have effects and must not use this receipt.
+type connectorOpenBeforePublication struct{ cause error }
+
+func (e *connectorOpenBeforePublication) Error() string { return e.cause.Error() }
+func (e *connectorOpenBeforePublication) Unwrap() error { return e.cause }
+
 // One slot belongs to this backend lifetime. It is not endpoint discovery or a
 // second authority journal. MCP attachments never construct or replace it.
 type computerConnector struct {
@@ -144,7 +151,6 @@ func (s *computerConnector) Open(ctx context.Context, operation string, in wire.
 	host := port.ConnectorHost{ProfileID: s.root.peer.ProfileId, BackendGeneration: s.root.peer.BackendGeneration, BuildID: BuildID, RuntimeID: in.RuntimeId, ConnectorGeneration: generation, LaunchDigest: in.LaunchDigest}
 	guard := &connectorHostGuard{root: s.root, lifetime: s.lifetime, host: host, publication: in.Publication, fence: fence}
 	slot := &connectorSlot{guard: guard, startupUncertain: true}
-	s.current = slot // Any subsequent uncertain effect retains the original slot.
 	ids := make([]string, 5)
 	for i := range ids {
 		ids[i], err = randomIngressID()
@@ -186,8 +192,9 @@ func (s *computerConnector) Open(ctx context.Context, operation string, in wire.
 	slot.owner, err = connectorsvc.New(&sync.Mutex{}, s.journal, guard, s.clock, launch)
 	if err != nil {
 		guard.close()
-		return nil, err
+		return nil, &connectorOpenBeforePublication{cause: err}
 	}
+	s.current = slot // Retain the slot before the first possible publication.
 	if err = slot.owner.Publish(ctx); err != nil {
 		guard.close()
 		return nil, err
@@ -333,6 +340,10 @@ func (s *computerConnector) Methods() map[string]desktop.Method {
 				return invalidIngress()
 			}
 			value, err := s.Open(ctx, r.OperationID, body)
+			var beforePublication *connectorOpenBeforePublication
+			if errors.As(err, &beforePublication) {
+				return &desktop.Outcome{Status: "refused", Code: "connector_open_refused_before_publication"}, nil
+			}
 			return ingressOutcome(value, err)
 		}},
 		"computer.connector.close": {Handle: func(ctx context.Context, r desktop.Request) (*desktop.Outcome, error) {

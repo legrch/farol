@@ -1,4 +1,5 @@
 import { expect, it, vi } from "vitest";
+import { BridgeError } from "../../apps/desktop/bridge/client";
 import { ConnectorHostBridge } from "../../apps/desktop/bridge/connector-host";
 import type { Json, Outcome } from "../../apps/desktop/bridge/wire";
 const context = { profileId: "profile", backendGeneration: "backend" };
@@ -74,6 +75,137 @@ it("retains the exact Go reply and closes once without granting or reminting", a
     "computer.connector.close",
   ]);
 });
+const refusalCode = "connector_open_refused_before_publication";
+function refuseOpen(
+  request: ReturnType<typeof fixture>["request"],
+  change: (outcome: Outcome) => unknown = (outcome) => outcome,
+) {
+  request.mockImplementationOnce(async (_method, _body, options = {}) => {
+    return change({
+      status: "refused",
+      code: refusalCode,
+      requestId: options.id!,
+      operationId: options.operationId!,
+      context,
+    }) as Outcome;
+  });
+}
+it("retains the exact pre-publication refusal and closes without another request", async () => {
+  const { request, host } = fixture();
+  refuseOpen(request);
+  await expect(host.open(input)).rejects.toMatchObject({
+    state: "refused",
+    code: refusalCode,
+  });
+  expect(request).toHaveBeenCalledTimes(1);
+  await expect(host.open(input)).rejects.toMatchObject({
+    state: "refused",
+    code: refusalCode,
+  });
+  await expect(host.close()).resolves.toBeUndefined();
+  await expect(host.close()).resolves.toBeUndefined();
+  await expect(host.open(input)).rejects.toMatchObject({
+    state: "refused",
+    code: refusalCode,
+  });
+  expect(request.mock.calls.map(([method]) => method)).toEqual([
+    "computer.connector.open",
+  ]);
+});
+it.each<readonly [string, (outcome: Outcome) => unknown]>([
+  ["crossed request", (out) => ({ ...out, requestId: "crossed" })],
+  ["crossed operation", (out) => ({ ...out, operationId: "crossed" })],
+  [
+    "crossed context",
+    (out) => ({ ...out, context: { ...context, profileId: "crossed" } }),
+  ],
+  [
+    "crossed backend",
+    (out) => ({
+      ...out,
+      context: { ...context, backendGeneration: "crossed" },
+    }),
+  ],
+  ["unexpected data", (out) => ({ ...out, data: {} })],
+  ["null data", (out) => ({ ...out, data: null })],
+  ["undefined data", (out) => ({ ...out, data: undefined })],
+  ["unexpected code", (out) => ({ ...out, code: "authority_refused" })],
+  [
+    "missing code",
+    (out) => {
+      const { code: _code, ...rest } = out;
+      return rest;
+    },
+  ],
+  ["unknown status", (out) => ({ ...out, status: "unknown" })],
+  ["unavailable status", (out) => ({ ...out, status: "unavailable" })],
+  ["unsupported status", (out) => ({ ...out, status: "unsupported" })],
+  ["ok without data", (out) => ({ ...out, status: "ok" })],
+  ["invalid status", (out) => ({ ...out, status: "invalid" })],
+  [
+    "missing request",
+    (out) => {
+      const { requestId: _requestId, ...rest } = out;
+      return rest;
+    },
+  ],
+  [
+    "missing operation",
+    (out) => {
+      const { operationId: _operationId, ...rest } = out;
+      return rest;
+    },
+  ],
+  [
+    "missing context",
+    (out) => {
+      const { context: _context, ...rest } = out;
+      return rest;
+    },
+  ],
+  ["null context", (out) => ({ ...out, context: null })],
+  [
+    "extra context field",
+    (out) => ({ ...out, context: { ...context, extra: true } }),
+  ],
+  ["extra outcome field", (out) => ({ ...out, extra: true })],
+  ["missing outcome", () => undefined],
+  ["null outcome", () => null],
+])("keeps %s unknown and close blocked", async (_name, change) => {
+  const { request, host } = fixture();
+  refuseOpen(request, change);
+  await expect(host.open(input)).rejects.toMatchObject({
+    state: "unknown",
+    code: "connector_open_unconfirmed",
+  });
+  await expect(host.close()).rejects.toMatchObject({
+    state: "unknown",
+    code: "connector_close_unconfirmed",
+  });
+  await expect(host.open(input)).rejects.toMatchObject({
+    state: "unavailable",
+    code: "connector_host_unavailable",
+  });
+  expect(request).toHaveBeenCalledTimes(1);
+});
+it.each([refusalCode, "authority_refused"])(
+  "does not infer no publication from a rejected request: %s",
+  async (code) => {
+    const { request, host } = fixture();
+    const error = new BridgeError("refused", code);
+    request.mockRejectedValueOnce(error);
+    await expect(host.open(input)).rejects.toBe(error);
+    await expect(host.close()).rejects.toMatchObject({
+      state: "unknown",
+      code: "connector_close_unconfirmed",
+    });
+    await expect(host.open(input)).rejects.toMatchObject({
+      state: "unavailable",
+      code: "connector_host_unavailable",
+    });
+    expect(request).toHaveBeenCalledTimes(1);
+  },
+);
 it.each([
   "build",
   "profile",

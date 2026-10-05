@@ -17,6 +17,7 @@ export class ConnectorHostBridge {
   private current: ComputerConnectorOpened | undefined;
   private pending = false;
   private blocked = false;
+  private refusedBeforePublication = false;
   private proof: ConnectorVerificationBridge | undefined;
   constructor(
     private readonly client: Pick<Client, "request">,
@@ -28,6 +29,11 @@ export class ConnectorHostBridge {
     this.context = Object.freeze({ ...context });
   }
   async open(input: ComputerConnectorOpen): Promise<ComputerConnectorOpened> {
+    if (this.refusedBeforePublication)
+      throw new BridgeError(
+        "refused",
+        "connector_open_refused_before_publication",
+      );
     if (this.pending || this.blocked || this.current)
       throw new BridgeError("unavailable", "connector_host_unavailable");
     if (!validate("ComputerConnectorOpen", input))
@@ -46,13 +52,24 @@ export class ConnectorHostBridge {
         { id, operationId, timeoutMs: 5000 },
       );
       if (
-        out.status !== "ok" ||
+        !validate("Outcome", out) ||
         out.requestId !== id ||
         out.operationId !== operationId ||
         out.context.profileId !== this.context.profileId ||
-        out.context.backendGeneration !== this.context.backendGeneration ||
-        !validate("ComputerConnectorOpened", out.data)
+        out.context.backendGeneration !== this.context.backendGeneration
       )
+        throw new BridgeError("unknown", "connector_open_unconfirmed");
+      if (
+        out.status === "refused" &&
+        out.code === "connector_open_refused_before_publication" &&
+        !Object.hasOwn(out, "data")
+      ) {
+        // Only this original Go outcome proves no connector was published.
+        // The claim stays consumed: close is a no-op, and open stays refused.
+        this.refusedBeforePublication = true;
+        throw new BridgeError("refused", out.code);
+      }
+      if (out.status !== "ok" || !validate("ComputerConnectorOpened", out.data))
         throw new BridgeError("unknown", "connector_open_unconfirmed");
       const value = out.data as unknown as ComputerConnectorOpened;
       const b = value.endpoint.binding;
@@ -93,7 +110,7 @@ export class ConnectorHostBridge {
             );
       return this.current;
     } catch (error) {
-      this.blocked = true;
+      if (!this.refusedBeforePublication) this.blocked = true;
       throw error;
     } finally {
       this.pending = false;

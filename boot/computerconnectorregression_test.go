@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+	"time"
 
 	wire "github.com/legrch/farol/gen/desktop/v1"
 	"github.com/legrch/farol/modules/computer/app/port"
 	"github.com/legrch/farol/modules/computer/domain/authority"
+	"github.com/legrch/farol/transport/desktop"
 )
 
 // Real root/connector policy with injected stores, endpoint and native ports.
@@ -36,6 +38,46 @@ func TestComputerConnectorReadOnlyProfileWithMutationOwner(t *testing.T) {
 	}
 	if s.mutations.freezeForRetirement() != nil || s.Shutdown() != nil {
 		t.Fatal("settled read-only connector did not retire")
+	}
+}
+
+func TestComputerConnectorConstructorRefusalDoesNotPoisonRetirement(t *testing.T) {
+	s, journal, _, endpoint, in := newConnectorFixture(t)
+	journal.clock.now = journal.approval.ExpiresAt.Add(time.Second)
+	body, err := json.Marshal(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	method := s.Methods()["computer.connector.open"]
+	request := desktop.Request{RequestID: "request", OperationID: "expired-open", Body: body}
+	out, err := method.Handle(context.Background(), request)
+	if err != nil || out == nil || out.Status != "refused" || out.Code != "connector_open_refused_before_publication" || len(out.Data) != 0 {
+		t.Fatal("pure constructor refusal lost exact phase", out, err)
+	}
+	if journal.publications != 0 || endpoint.methods != nil || s.current != nil || !s.root.used[request.OperationID] {
+		t.Fatal("constructor refusal published or discarded its consumed operation")
+	}
+	if duplicate, err := method.Handle(context.Background(), request); err == nil && duplicate != nil && (duplicate.Status == "ok" || duplicate.Code == "connector_open_refused_before_publication") {
+		t.Fatal("consumed operation was replayed", duplicate)
+	}
+	if s.Shutdown() != nil || journal.withdrawals != 0 || endpoint.closes != 0 {
+		t.Fatal("known constructor refusal poisoned retirement or invented cleanup")
+	}
+}
+
+func TestComputerConnectorLostPublicationNeverClaimsConstructorRefusal(t *testing.T) {
+	s, journal, _, _, in := newConnectorFixture(t)
+	journal.lost = true
+	body, err := json.Marshal(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := s.Methods()["computer.connector.open"].Handle(context.Background(), desktop.Request{RequestID: "request", OperationID: "lost-open", Body: body})
+	if err == nil && out != nil && (out.Status == "ok" || out.Code == "connector_open_refused_before_publication") {
+		t.Fatal("lost publication became a pure refusal", out)
+	}
+	if journal.publications != 1 || s.current == nil || !s.current.startupUncertain || s.Shutdown() == nil {
+		t.Fatal("lost publication did not retain its original uncertainty")
 	}
 }
 
