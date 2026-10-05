@@ -6,11 +6,12 @@ engine or browser implementation. The earlier admission projection now has an
 actual handle producer. Source tests use the concrete per-owner Mutex and injected
 journal, browser and result-retention fixtures. The
 [controlled normal Desktop journey](../../docs/desktop-core.md#controlled-normal-desktop-chat)
-at `e31c636` proves two React/Go turns, explicit result ACK and settlement, clean
+at `56ed3941` proves an ordinary typed first message without Computer admission,
+two React/Go turns, explicit result ACK and settlement, clean
 Quit, same-build/profile restart and current-authorized reads of both answers.
 That exact Dev witness uses a synthetic provider; later source changes are not
-automatically covered. Production account/control/output qualification, ordinary
-typed-first-turn application qualification, external Responses next-user-turn delivery and
+automatically covered. Production account/control/output qualification,
+external Responses next-user-turn delivery and
 installed acceptance remain open.
 
 ## Construct and capture one route
@@ -86,8 +87,9 @@ requests cannot exhaust that slot. Unknown outcomes remain consumed.
 `ReadConversationClient.startAuthorized` uses this effect and the existing
 Prepare/Send/progress/frame-ACK/result-ACK/Follow path. It retains the original
 attempt, including errors, and refuses changed input or crossing start paths.
-The host must preserve one active PrepareNext consumer. This is source integration;
-production account/profile and exact assembled typed-start evidence remain open.
+The host must preserve one active PrepareNext consumer. The exact assembled
+typed-start path passed at `56ed3941` with the controlled provider; production
+account/profile qualification remains open.
 
 | Case subset                            | Executable source evidence                                                                                                                                                                                       | Layer and remaining witness                                                                               |
 | -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
@@ -95,6 +97,16 @@ production account/profile and exact assembled typed-start evidence remain open.
 | M07 early output and exact second turn | `TestChatStartResolvesApprovesAndFollowsOnlyAfterACKAndSettlement` in `boot/chatstart_test.go`                                                                                                                   | Actual Go resolver/approval/lifecycle; injected browser. Typed React/DOM witness is separate.             |
 | M09 lost admission/replay              | `TestChatStartDuplicateOperationIncludingLostJournalOutcomeNeverCreatesSecondOwner` in `boot/chatstart_test.go`; authorized-start cases in `tests/unit/read-conversation.test.ts`                                | Go injected publication and TS injected transport; neither proves provider uncertainty recovery.          |
 | Explicit confirmation                  | `tests/unit/account-observation-confirmation.test.ts` and `tests/unit/read-account-confirmation.test.ts`                                                                                                         | Mechanical current-binding/principal comparison and retained attempts; no real browser account authority. |
+
+The assembled M07 and known-command-repeat M09 subsets use
+`go-core-startup.e2e.mjs --chat-two-turn --chat-typed --chat-history-reopen --run-native`
+with exact source/build pins. At `56ed3941`, actual React first Send and Follow
+produced exactly two accepted fixture Sends; explicit ACK and Go settlement/release
+preceded Follow. Original inspect/start replay and changed-prompt refusal left
+the provider ledger, journal, configuration and current UI unchanged. Independent
+Computer observations found no grants or participants. This does not establish
+provider-unknown recovery or every transient native operation; those retain their
+separate lower-layer and live qualification requirements.
 
 The injected `TestChatAccountAuthorization*` tests in
 `boot/chataccountauthorization_test.go` map the M03 account-recheck subset to

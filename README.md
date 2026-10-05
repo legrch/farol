@@ -22,13 +22,15 @@ update the installed product.
 | Source checkpoint described here | Package `bef6d56` passed actual React edit → one Go native edit/retained journal → unacknowledged Quit → same-profile reopen → exact Observe → Go-owned delivery ACK. Independent file/journal checks found no second effect; provider Sends stayed zero. Go now owns Settings pending, offer and ACK policy. TypeScript retains typed configuration storage, legacy observation, root measurement and Git discovery. This unsigned `0.1.10-owner.beta.1`, build `12` candidate is not installed or released. |
 | UI target                        | React + TypeScript shell is composed. Plain TypeScript retains Electron/browser mechanics. Native Home, Settings, Appearance and configured-profile reopening have been exercised.                                                                                                                                                                                                                                                                                                                            |
 
-The Go cutover is incomplete. The `e31c636` normal-entrypoint Dev candidate passed
-a controlled React/Go two-turn Chat journey, clean Quit, and a same-profile/build
+The Go cutover is incomplete. The `56ed3941` normal-entrypoint Dev candidate passed
+a controlled React/Go two-turn Chat journey from the ordinary first-message form,
+without a selected file or Computer grant, clean Quit, and a same-profile/build
 restart. Home's Saved Chat answers view then discovered and read both original
 results through the current Go owner. Useful output preceded completion; explicit
 result ACK and Go settlement/release preceded Follow. The independent provider
-counter remained at exactly two accepted Sends across both app lifetimes. Both
-children quit cleanly. This is synthetic native evidence, not live-provider,
+counter remained at exactly two accepted Sends across both app lifetimes. Exact
+repeated inspect/start commands returned retained results; a changed first prompt
+was refused without another Send. Both children quit cleanly. This is synthetic native evidence, not live-provider,
 installed, cross-build recovery or full cutover qualification. Earlier failed
 profiles remain quarantined. See
 the [controlled Chat witness](docs/desktop-core.md#controlled-normal-desktop-chat).

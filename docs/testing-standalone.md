@@ -85,7 +85,9 @@ extensions, and separate packaged `--reopen --settings-edit-mutation`.
 Mutation excludes the read cases. Read-account is synthetic account evidence;
 edit-snapshot covers Prepare/Cancel, while mutation covers Apply/Observe/delivery.
 Dev `--chat-two-turn` excludes those cases; `--chat-history-reopen` requires
-`--chat-two-turn`. `--contract`, `--self-test` and `--check` do not execute native
+`--chat-two-turn`. Its Dev-only `--chat-typed` variant starts through the ordinary
+first-message form without workspace selection or Computer admission; it can use
+the same history-reopen witness. `--contract`, `--self-test` and `--check` do not execute native
 startup.
 
 ## Coverage union and prerequisites

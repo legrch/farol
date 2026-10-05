@@ -821,7 +821,47 @@ installed startup, a live provider, or release acceptance.
 
 ## Controlled normal desktop Chat
 
-The current scoped witness is source
+The current ordinary typed Chat witness is source
+`56ed39412082b943dc72ba1860c15de1fad102c0`, build
+`36631f24990c837d31cf2317642deb1564acc22123dc5160475916ef4fd34fd9`,
+paired unsigned app digest
+`87c88f8b035a4d520334ca5ab3e356901a05430ad509efcd310d74c650e614bb`.
+The existing harness adds `--chat-typed` to Dev `--chat-two-turn`, optionally with
+`--chat-history-reopen`. Actual React **Check account**, **First message** and
+**Use this account and send** reach the existing Go resolver, private account
+approval and conversation owner without a workspace, file read or Computer grant.
+The same client owns useful early output, retained result, explicit ACK,
+settlement/release and Follow in the same provider conversation.
+
+The exact native run passed both turns, ordinary Quit, one same-profile/build
+successor, and React reads of both original saved answers. The independent ledger
+ended at two attempted/accepted Sends and six synthetic account GETs. Exact
+original inspect/start commands returned retained replies; a changed prompt was
+refused. Those probes did not change the provider ledger, journal, configuration
+or current turn. There were 159 independent Computer observations with 35 retained
+stage snapshots, all showing zero grants/participants and unchanged physical roots.
+These observations do not instrument every transient native operation.
+
+Both children exited 0 without a signal, Go drains and run-marker removal were
+confirmed, and the disposable site/profile were removed after known cleanup.
+All 42 recorded window sets were hidden and unfocused. Package verification,
+relocated verification, Dev preflight and final source/artifact re-attestation
+passed. Receipt `go-core-startup-0e95b53e-6121-4674-8e99-6c6218a4e4aa.json`
+and command exit 0 bind this evidence to the paired Dev bytes. It does not qualify
+an installed runtime or a live provider.
+
+The full aggregate at `f976b4fd` passed 8,487 main tests, 388 React tests,
+164 protocol/architecture tests, Go root/nested race/vet, generation/import,
+strict TypeScript, lint, formatting, Hunt, output and secret checks. The later
+changes are harness-only: a reviewed typed diagnostic fix passed 19 focused tests
+and 1,303 offline checks, and preflight was corrected to bind an erased type-only
+file through the whole source tree rather than the runtime input ledger. The
+earlier `bd9ebf42` package passed packaging but failed that preflight before any
+profile or application launch; it remains separately preserved and unlaunched.
+No runtime-input, source-tree or startup validation was relaxed. These bounded
+reviews and checks are not full-range R3/R4 cutover acceptance.
+
+The preceding file-derived witness remains preserved at source
 `e31c636346c4bfddf390d3959ba54ff9383a352d`, build
 `4c66385bd417ec55c9adc61dec62cde8978159755a13b8f25afe9350b56d4b5e`,
 paired unsigned app digest
@@ -940,19 +980,20 @@ returns original delivered result bytes; it cannot mint a live handle or Send.
 
 The named Desktop read methods are `chat.history.list` and
 `chat.history.result`. Their generated schema digest is
-`4ff63ebc0951e5f8043c2b3584e0b453eb0129436455ad3532afe20085353d87`.
+`05a6a29594e7f1b43335bfa6e9ef0a4c6cde837825718d89b16f4a746ccd999d`.
 The narrow preload projection and React Home view keep bodies out of Activity and
 command intents. Context withdrawal, runtime gaps and failed/incompatible
 bootstrap invalidate cached text and pending replies, including recovery with the
 same context. History actions remain explicit; remount does not issue reads.
 
-| Layer                                    | Executable evidence                                                                                        | Covered source or artifact / remaining boundary                                                                                                                                |
-| ---------------------------------------- | ---------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Pure authority and closed history policy | `modules/chat/app/services/handoff/history_test.go`, `boot/historyauthority_test.go`                       | Current reader scope, guard-wait revocation, late outcomes, original receipt identity; no native host claim                                                                    |
-| Native repository                        | `modules/chat/infra/repos/handoff/historynative_test.go`                                                   | Real disposable files, roots, complete chain, missing/corrupt/unknown fences; no Electron process claim                                                                        |
-| Normal Go boot and wire                  | `boot/retainednative_test.go`, `boot/chathistory_test.go`, `gen/desktop/v1/history_test.go`                | Two original results through two successors and exact typed mapping; host terminal/browser facts are fixtures                                                                  |
-| Desktop and React                        | `tests/unit/chat-history-{bridge,view,wire}.test.ts`, `tests/renderer/chat-history{,-controller}.test.tsx` | Current context, bounded payloads, no effect commands, cache/late-reply invalidation; no native focus claim                                                                    |
-| Assembled native                         | `go-core-startup.e2e.mjs --chat-two-turn --chat-history-reopen --run-native`                               | Exact `e31c636` Dev candidate, two physical Sends, both clean Quits and React historical reads; installation, cross-build recovery and live-provider qualification remain open |
+| Layer                                    | Executable evidence                                                                                        | Covered source or artifact / remaining boundary                                                                                                                                                        |
+| ---------------------------------------- | ---------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Pure authority and closed history policy | `modules/chat/app/services/handoff/history_test.go`, `boot/historyauthority_test.go`                       | Current reader scope, guard-wait revocation, late outcomes, original receipt identity; no native host claim                                                                                            |
+| Native repository                        | `modules/chat/infra/repos/handoff/historynative_test.go`                                                   | Real disposable files, roots, complete chain, missing/corrupt/unknown fences; no Electron process claim                                                                                                |
+| Normal Go boot and wire                  | `boot/retainednative_test.go`, `boot/chathistory_test.go`, `gen/desktop/v1/history_test.go`                | Two original results through two successors and exact typed mapping; host terminal/browser facts are fixtures                                                                                          |
+| Desktop and React                        | `tests/unit/chat-history-{bridge,view,wire}.test.ts`, `tests/renderer/chat-history{,-controller}.test.tsx` | Current context, bounded payloads, no effect commands, cache/late-reply invalidation; no native focus claim                                                                                            |
+| Assembled native                         | `go-core-startup.e2e.mjs --chat-two-turn --chat-history-reopen --run-native`                               | Exact `e31c636` Dev candidate, two physical Sends, both clean Quits and React historical reads; installation, cross-build recovery and live-provider qualification remain open                         |
+| Assembled typed Chat                     | Same command with `--chat-typed` and exact source/build pins                                               | Exact `56ed3941` Dev candidate: typed first message, two physical Sends, retained command replay/refusal, zero Computer authority, both Quits and historical reads; same higher boundaries remain open |
 
 Production translations and output profiles remain
 unqualified. External Responses new-user-turn delivery/settlement and selected
