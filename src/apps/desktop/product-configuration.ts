@@ -10,7 +10,6 @@ import {
   CodexTaskSourceSchema,
   ProductConfigurationSnapshotSchema,
   ProductGeneralSettingsSchema,
-  PendingWorkspaceEditDeliverySchema,
   ProductSettingsSchema,
   SecureMcpAppSelectionSchema,
   SetupStepIdSchema,
@@ -19,7 +18,6 @@ import {
   CodexTaskSelectionSchema,
   type ProductConfigurationSnapshot,
   type ProductSettings,
-  type PendingWorkspaceEditDelivery,
   type SetupStepId,
   type WorkspaceGitMetadata,
   type WorkspaceRootIdentity,
@@ -126,8 +124,8 @@ export type ProductConfigurationDependencies = Readonly<{
   homeDirectory?: string;
   // Optional: when supplied, a guarded workspace edit takes this same
   // cross-process promotion lease (role "admission") for its durable
-  // critical phase — see `recordPendingEdit` and `releaseWorkspaceEditLease`.
-  // Left unset, a guarded edit behaves exactly as before (no exclusion).
+  // critical phase — see `replaceSettingsDeliveryStore` and
+  // `releaseWorkspaceEditLease`. Without this port there is no exclusion.
   promotionLease?: WorkspaceEditLeaseGuard;
 }>;
 
@@ -855,14 +853,10 @@ export class ProductConfigurationService {
   private tail: Promise<unknown> = Promise.resolve();
   private readonly promotionLease: WorkspaceEditLeaseGuard | undefined;
   private withdrawComputerAuthority: ProductConfigurationDependencies["withdrawComputerAuthority"];
-  // Holds the exact lease a guarded edit's `recordPendingEdit` acquired,
-  // keyed by its operation ID, from the moment the edit became durable until
-  // `releaseWorkspaceEditLease` is called once its outcome is recorded (see
-  // `withSettingsEditLease` in `apps/desktop/with-settings-edit-lease.ts`) or, as a backstop, once its
-  // delivery is acknowledged (`clearPendingEdit`). Never read for anything
-  // but that one release; a process restart drops this map along with every
-  // other in-memory admission, and the on-disk lease file is then recovered
-  // the same way every other crashed holder is (see `promotion-lease.ts`).
+  // The typed settings writer retains each admission lease through the native
+  // edit outcome. The host finally wrapper releases it; conditional pending
+  // clearance is a backstop. A restart drops only this in-memory reference;
+  // promotion-lease.ts owns recovery of the original on-disk holder.
   private readonly pendingEditLeases = new Map<
     string,
     WorkspaceEditLeaseHold
@@ -2150,30 +2144,8 @@ export class ProductConfigurationService {
     });
   }
 
-  // Recorded before a guarded edit executes and cleared only after delivery;
-  // neither step changes Computer authority or its verification.
-  //
-  // S35-N03c: a promotion's drain check decides "nothing owed" from a
-  // snapshot it never rechecks before placement (see
-  // `tooling/promotion-obligations.mjs`'s two-read comment and
-  // `promote-preview.mjs`'s F3-4 note). Recording this edit is the exact
-  // moment that decision could already be stale: the write below is what
-  // first makes `EDIT_DELIVERY_PENDING` observable on disk, and the bytes it
-  // guards are what a promotion could otherwise copy mid-write. When a
-  // `promotionLease` dependency is configured, this call therefore takes the
-  // SAME cross-process lease a promotion holds from before its drain check
-  // through placement, in the "admission" role — exactly the role
-  // `LiveTaskRegistry.admitDurable` takes for a new task (see
-  // `live-task-registry.ts`). The hold is kept, keyed by operation ID, until
-  // `releaseWorkspaceEditLease` is called once the edit's outcome is
-  // recorded — never widened to cover the delivery acknowledgement a person
-  // gives later, which would block promotion indefinitely.
-  recordPendingWorkspaceEdit(
-    pending: PendingWorkspaceEditDelivery,
-  ): Promise<MutationResult> {
-    return this.exclusive(() => this.recordPendingEdit(pending));
-  }
-
+  // Compatibility ACK for historical TS pending records. Go-owned pending
+  // delivery is cleared only through its exact receipt and typed storage port.
   clearPendingWorkspaceEdit(operationId: string): Promise<MutationResult> {
     return this.exclusive(() => this.clearPendingEdit(operationId));
   }
@@ -2184,13 +2156,8 @@ export class ProductConfigurationService {
     return this.exclusive(() => this.recordMutationOutcomeUnknown(workspaceId));
   }
 
-  // Releases the lease `recordPendingEdit` acquired for `operationId`, once
-  // (and only once) that edit's outcome is durably recorded — see
-  // `withSettingsEditLease` in `apps/desktop/with-settings-edit-lease.ts`, which calls this from its
-  // own `finally`. Idempotent: a second call, or a call for an operation
-  // that never held a lease (no `promotionLease` dependency, or the record
-  // itself was refused), is a no-op, exactly like `releasePromotionLease`
-  // itself is for a handle it does not recognise.
+  // The host's withSettingsEditLease finally releases the typed writer's hold
+  // after the effect outcome. Repeated release, or no original hold, is a no-op.
   async releaseWorkspaceEditLease(operationId: string): Promise<void> {
     const lease = this.pendingEditLeases.get(operationId);
     if (!lease) return;
@@ -2198,67 +2165,10 @@ export class ProductConfigurationService {
     await lease.release();
   }
 
-  private async recordPendingEdit(
-    pending: PendingWorkspaceEditDelivery,
-  ): Promise<MutationResult> {
-    if (this.current === null) return this.failure("SETTINGS_UNAVAILABLE");
-    const parsed = PendingWorkspaceEditDeliverySchema.safeParse(pending);
-    if (
-      !parsed.success ||
-      !this.current.computer.workspaces.some(
-        (workspace) => workspace.workspaceId === parsed.data.workspaceId,
-      )
-    ) {
-      return this.failure("WORKSPACE_NOT_FOUND");
-    }
-    const operationId = parsed.data.operationId;
-    const lease = this.promotionLease
-      ? await this.promotionLease.acquireForAdmission()
-      : null;
-    if (this.promotionLease && !lease) {
-      // A live promotion already holds the lease: refuse with a readable
-      // code of our own rather than racing its placement, exactly as a live
-      // promotion refuses a Chat turn or a native Agent start today.
-      return this.failure("WORKSPACE_MUTATION_PROMOTION_PENDING");
-    }
-    if (lease?.verify && !(await lease.verify())) {
-      await lease.release();
-      return this.failure("WORKSPACE_MUTATION_PROMOTION_PENDING");
-    }
-    // S35-H1R: the check above is the entry check, several awaits before
-    // anything durable happens. The write that first makes
-    // `EDIT_DELIVERY_PENDING` observable is inside `mutate`, so the hold is
-    // verified AGAIN immediately before those bytes move; a lease deleted
-    // and re-taken in between (two live holders) refuses there instead of
-    // being written straight through.
-    const verifyHold = lease?.verify?.bind(lease);
-    const fence: StoreWriteFence = verifyHold
-      ? {
-          beforeWrite: async () => {
-            if (!(await verifyHold())) throw new WorkspaceEditLeaseLost();
-          },
-        }
-      : {};
-    const result = await this.mutate(
-      (settings) => ({
-        ...settings,
-        revision: settings.revision + 1,
-        computer: { ...settings.computer, pendingEdit: parsed.data },
-      }),
-      fence,
-    );
-    if (!result.ok) {
-      // The durable write never landed: nothing for the lease to protect.
-      await lease?.release();
-      return result;
-    }
-    if (lease) this.pendingEditLeases.set(operationId, lease);
-    return result;
-  }
-
   private async clearPendingEdit(operationId: string): Promise<MutationResult> {
     if (this.current === null) return this.failure("SETTINGS_UNAVAILABLE");
-    if (this.current.computer.pendingEdit?.operationId !== operationId) {
+    const pending = this.current.computer.pendingEdit;
+    if (pending?.operationId !== operationId || "backend" in pending) {
       return this.failure("WORKSPACE_MUTATION_NOT_PENDING");
     }
     const result = await this.mutate((settings) => ({
@@ -2266,11 +2176,8 @@ export class ProductConfigurationService {
       revision: settings.revision + 1,
       computer: { ...settings.computer, pendingEdit: null },
     }));
-    // Backstop only: `withSettingsEditLease` already releases this edit's lease
-    // once its outcome is recorded, well before delivery is acknowledged
-    // here. A lease still outstanding at this point (a caller that recorded
-    // an edit but never applied it) must not survive its own acknowledgement
-    // — `releaseWorkspaceEditLease` is a no-op when there is nothing to do.
+    // Compatibility backstop; normal Go clearing uses the typed storage port.
+    // An absent or already released hold remains a no-op.
     await this.releaseWorkspaceEditLease(operationId);
     return result;
   }

@@ -2432,6 +2432,14 @@ describe("Farol Next product configuration", () => {
           restarted.clearPendingWorkspaceEdit(pendingEdit.operationId),
         ).resolves.toMatchObject({ ok: true });
       } else {
+        // The historical compatibility ACK must never clear a Go-owned record.
+        expect(
+          await restarted.clearPendingWorkspaceEdit(pendingEdit.operationId),
+        ).toMatchObject({
+          ok: false,
+          error: "WORKSPACE_MUTATION_NOT_PENDING",
+        });
+        expect(restarted.snapshot()).toEqual(recorded);
         // Mechanical storage identity fencing; Go ACK policy is separate.
         const adapter = restarted.attachSettingsDeliveryStore(scope);
         const read = await adapter.read();
