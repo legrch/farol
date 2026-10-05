@@ -1093,7 +1093,13 @@ export async function runConversationJourney({
     const resultGo = await journal(ui, false);
     await record(`turn-${sends}-retained-result-unacknowledged`, ui, resultGo);
     await remount();
-    ui = await readUi(window);
+    // A poll already in flight can keep the exact ACK button disabled across
+    // this remount. Wait only for its read reply; do not issue another action.
+    ui = await waitRead(
+      () => readUi(window),
+      (v) => v.phase === "result-ready" && v.ackEnabled,
+      active,
+    );
     conversationUiWitness(ui, "result", script, index, first);
     assert.equal(ui.handleId, result.handleId);
     assert.equal(ui.turnId, result.turnId);
