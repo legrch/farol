@@ -122,7 +122,11 @@ function frame(terminal = false): PhysicalFrame {
   };
 }
 function fixture(
-  options: { followup?: boolean; required?: BrowserRequiredControls } = {},
+  options: {
+    followup?: boolean;
+    required?: BrowserRequiredControls;
+    translation?: QualifiedControlTranslation;
+  } = {},
 ) {
   let now = 1000;
   let assignment: AssignedChatBrowser | undefined;
@@ -226,7 +230,7 @@ function fixture(
   });
   const driver = new GoChatBrowserDriver({
     lookup,
-    translations: [translation],
+    translations: [options.translation ?? translation],
     nowMillis: () => now,
   });
   const prepareInput: Mutable<BrowserPrepare> = {
@@ -545,6 +549,115 @@ describe("Go Chat BrowserDriver — strict physical doubles, CPU only", () => {
         }),
     ).toThrow("translation_unqualified");
   });
+  // Keep these literal vectors aligned with Go's TestControlFactLiteralConformance.
+  const literalVectors = [
+    ...[255, 256, 257, 512].flatMap((bytes) => [
+      {
+        name: `ASCII-${bytes}`,
+        literal: "x".repeat(bytes),
+        accepted: bytes <= 256,
+      },
+      {
+        name: `UTF8-two-byte-${bytes}`,
+        literal: "é".repeat(Math.floor(bytes / 2)) + "x".repeat(bytes % 2),
+        accepted: bytes <= 256,
+      },
+      {
+        name: `UTF8-four-byte-${bytes}`,
+        literal: "😀".repeat(Math.floor(bytes / 4)) + "x".repeat(bytes % 4),
+        accepted: bytes <= 256,
+      },
+    ]),
+    { name: "empty", literal: "", accepted: false },
+    ...[
+      " ",
+      "\u0085",
+      "\u00a0",
+      "\u1680",
+      ...Array.from({ length: 11 }, (_, i) => String.fromCodePoint(0x2000 + i)),
+      "\u2028",
+      "\u2029",
+      "\u202f",
+      "\u205f",
+      "\u3000",
+    ].map((literal) => ({
+      name: `blank-U+${literal.codePointAt(0)!.toString(16)}`,
+      literal,
+      accepted: false,
+    })),
+    ...[...Array.from({ length: 32 }, (_, i) => i), 127].map((code) => ({
+      name: `control-${code}`,
+      literal: `A${String.fromCodePoint(code)}B`,
+      accepted: false,
+    })),
+    { name: "unpaired-high-surrogate", literal: "\ud800", accepted: false },
+    { name: "unpaired-low-surrogate", literal: "\udc00", accepted: false },
+    {
+      name: "padded-exact-text",
+      literal: "\u0085 Model é 😀 \u3000",
+      accepted: true,
+    },
+    { name: "BOM-is-not-Go-whitespace", literal: "\ufeff", accepted: true },
+    { name: "C1-is-not-Go-control", literal: "\u0080\u009f", accepted: true },
+    { name: "replacement-character", literal: "\ufffd", accepted: true },
+    { name: "decomposed-exact-text", literal: "e\u0301", accepted: true },
+  ];
+  for (const field of ["model", "effort", "mode", "connector"] as const) {
+    it.each(literalVectors)(
+      `${field} literal conformance: $name`,
+      async ({ literal, accepted }) => {
+        const config = clone(translation);
+        config[field][0]!.literal = literal;
+        if (!accepted) {
+          const f = fixture();
+          await expect(async () => {
+            const driver = new GoChatBrowserDriver({
+              lookup: f.lookup,
+              translations: [config],
+              nowMillis: () => 1000,
+            });
+            await driver.prepare(f.prepareInput);
+          }).rejects.toThrow("translation_unqualified");
+          expect(f.lookup).not.toHaveBeenCalled();
+          expect(f.api.prepare).not.toHaveBeenCalled();
+          expect(f.api.verifySend).not.toHaveBeenCalled();
+          expect(f.api.send).not.toHaveBeenCalled();
+          return;
+        }
+        const f = fixture({ translation: config });
+        const facts = observed();
+        facts[`${field}Label`] = fact(literal);
+        f.setFacts(facts);
+        await f.prepare();
+        const result = await f.verify();
+        expect(result.verification.observed[field].literal).toBe(literal);
+        expect(
+          vi.mocked(f.api.verifySend).mock.calls[0]![0].selection.controls,
+        ).toEqual({
+          modelLabel: config.model[0]!.literal,
+          effortLabel: config.effort[0]!.literal,
+          modeLabel: config.mode[0]!.literal,
+          connector: { id: "connector", label: config.connector[0]!.literal },
+        });
+        await f.send();
+        expect(f.api.send).toHaveBeenCalledTimes(1);
+      },
+    );
+    it.each([120, 121, 128])(
+      `${field} canonical value conformance: %i bytes`,
+      (bytes) => {
+        const config = clone(translation);
+        config[field][0]!.value = "x".repeat(bytes);
+        const f = fixture();
+        const construct = () =>
+          new GoChatBrowserDriver({ lookup: f.lookup, translations: [config] });
+        if (bytes <= 120) expect(construct).not.toThrow();
+        else expect(construct).toThrow("translation_unqualified");
+        expect(f.lookup).not.toHaveBeenCalled();
+        expect(f.api.prepare).not.toHaveBeenCalled();
+      },
+    );
+  }
   it.each([
     "profileId",
     "ownerId",

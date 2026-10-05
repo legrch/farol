@@ -1,9 +1,72 @@
 package port
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
+
+func TestControlFactLiteralConformance(t *testing.T) {
+	// Keep these vectors aligned with go-chat-browser.test.ts. This pins the
+	// existing Go domain; it does not qualify any actual provider controls.
+	type vector struct {
+		name, literal string
+		accepted      bool
+	}
+	vectors := []vector{
+		{"empty", "", false},
+		{"invalid-UTF8-high-surrogate", string([]byte{0xed, 0xa0, 0x80}), false},
+		{"invalid-UTF8-low-surrogate", string([]byte{0xed, 0xb0, 0x80}), false},
+		{"padded-exact-text", "\u0085 Model é 😀 \u3000", true},
+		{"BOM-is-not-Go-whitespace", "\ufeff", true},
+		{"C1-is-not-Go-control", "\u0080\u009f", true},
+		{"replacement-character", "\ufffd", true},
+		{"decomposed-exact-text", "e\u0301", true},
+	}
+	for _, size := range []int{255, 256, 257, 512} {
+		for _, sample := range []struct {
+			name, literal string
+		}{
+			{"ASCII", strings.Repeat("x", size)},
+			{"UTF8-two-byte", strings.Repeat("é", size/2) + strings.Repeat("x", size%2)},
+			{"UTF8-four-byte", strings.Repeat("😀", size/4) + strings.Repeat("x", size%4)},
+		} {
+			if len(sample.literal) != size {
+				t.Fatalf("bad byte-length vector: %s-%d", sample.name, size)
+			}
+			vectors = append(vectors, vector{fmt.Sprintf("%s-%d", sample.name, size), sample.literal, size <= 256})
+		}
+	}
+	for _, c := range " \u0085\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000" {
+		vectors = append(vectors, vector{fmt.Sprintf("blank-U+%x", c), string(c), false})
+	}
+	for c := rune(0); c < 32; c++ {
+		vectors = append(vectors, vector{fmt.Sprintf("control-%d", c), "A" + string(c) + "B", false})
+	}
+	vectors = append(vectors, vector{"control-127", "A\u007fB", false})
+	for _, sample := range vectors {
+		t.Run(sample.name, func(t *testing.T) {
+			fact := ControlFact{Value: "model-pro", Literal: sample.literal, Source: FactPublicControl}
+			if got := fact.Valid(); got != sample.accepted {
+				t.Fatalf("Valid() = %v, want %v", got, sample.accepted)
+			}
+			if fact.Literal != sample.literal {
+				t.Fatal("literal text changed during validation")
+			}
+		})
+	}
+}
+
+func TestControlFactCanonicalValueBound(t *testing.T) {
+	for _, size := range []int{120, 121, 128} {
+		t.Run(fmt.Sprint(size), func(t *testing.T) {
+			fact := ControlFact{Value: strings.Repeat("x", size), Literal: "Model", Source: FactPublicControl}
+			if got := fact.Valid(); got != (size <= 120) {
+				t.Fatalf("Valid() = %v for %d canonical bytes", got, size)
+			}
+		})
+	}
+}
 
 func TestControlFactsAreFieldScopedAndRequiredUnknownFailsClosed(t *testing.T) {
 	selected := Selection{Provider: "farol", Alias: "chatgpt", AccountID: "configured-account", ModelID: "canonical-model", Effort: "configured-default", Mode: "standard"}

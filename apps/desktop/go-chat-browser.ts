@@ -105,6 +105,19 @@ const codePattern = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,119}$/;
 function validId(value: unknown): value is string {
   return typeof value === "string" && id.test(value);
 }
+function validControlLiteral(value: unknown): value is string {
+  // Match Go ControlFact.Valid without trimming or normalizing the literal.
+  // Go TrimSpace includes NEL but excludes BOM; JavaScript trim differs.
+  // In Unicode mode the surrogate range matches only unpaired surrogates.
+  return (
+    typeof value === "string" &&
+    Buffer.byteLength(value, "utf8") <= 256 &&
+    !/^[\u0009-\u000d\u0020\u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]*$/u.test(
+      value,
+    ) &&
+    !/[\u0000-\u001f\u007f\ud800-\udfff]/u.test(value)
+  );
+}
 function validCode(value: unknown): value is string {
   return typeof value === "string" && codePattern.test(value);
 }
@@ -266,9 +279,8 @@ export class GoChatBrowserDriver implements BrowserDriver {
           if (
             !row ||
             !validId(row.value) ||
-            typeof row.literal !== "string" ||
-            !row.literal ||
-            Buffer.byteLength(row.literal) > 512 ||
+            row.value.length > 120 ||
+            !validControlLiteral(row.literal) ||
             values.has(row.value) ||
             literals.has(row.literal)
           )
