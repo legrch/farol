@@ -6,9 +6,13 @@ ordinary Chat. `app/services/lifecycle.Service` now owns the live queue, fresh
 journal claim, private admitted handles and one-shot browser intent/settlement.
 See [ADMISSION.md](ADMISSION.md) for the published guard and
 [LIFECYCLE.md](LIFECYCLE.md) for actual owner semantics and constructor requirements.
-The durable adapter, production model route, Electron host, React facade and HTTP
-server composition remain pending. The active TypeScript implementation remains
-authoritative until its vertical cutover.
+Normal core-enabled Desktop now composes the native journal, browser exchange,
+in-memory results and React conversation facade. The
+[controlled normal desktop witness](../../docs/desktop-core.md#controlled-normal-desktop-chat)
+proves two deliberate turns within one backend lifetime. Durable answer recovery,
+provider-used clean retirement, production control/output profiles and ordinary
+next-user-turn support in the external Responses adapter remain open. Existing
+TypeScript routes outside this accepted slice retain their separate consumers.
 
 ## Turn and five-slot scheduling
 

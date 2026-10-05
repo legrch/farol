@@ -819,6 +819,54 @@ framed aggregate tests exercise real Go Chat/Computer services with explicitly
 controlled persistence and filesystem ports; they do not qualify native storage,
 installed startup, a live provider, or release acceptance.
 
+## Controlled normal desktop Chat
+
+Source `5724af71e3bd8f97b6d5de8e594723998615a566` passed the controlled two-turn
+journey through normal `main.cjs`, the real Go child, physical browser adapter and
+React Home UI. `tests/e2e/go-core-startup.e2e.mjs --chat-two-turn` uses the existing
+loopback behavioral site, synthetic account and an explicit Dev-only control and
+settled-output profile. The test-side generator withholds future output and
+counts physically accepted Sends independently of the production adapter.
+
+Both turns exposed useful Markdown text at stream cursor 4 while generation was
+still incomplete. Each final result reached cursor 9, survived Home remount,
+remained unacknowledged until the actual ACK button was clicked, and then acquired
+independently read Go journal evidence for acknowledgement, settlement and release.
+Follow preserved the provider conversation, profile/backend, original owner,
+session, task/epoch and participant. It used a new turn/operation and generation.
+The first result remained retained after the second; the ledger ended at exactly
+two attempted and accepted Sends, with no extra Send or implicit ACK on remount.
+
+The preserved build is
+`469b1ffdbb5cc8d9c658d6d237b80714fdad0763074d2539dccecb7e0fcbc5a4`.
+The paired unsigned app was built and independently verified with artifact digest
+`fcc156705c3d9b10780d9e6b6694c353b73950f3af0db92edb771c25fef0751b`.
+This witness launched the attested **Dev candidate**, not an installed app.
+Local native receipt `go-core-startup-92285d32-ec76-4041-8866-4ab48f37cc4f.json`
+separates the passing journey from the failing exit: the original Electron child
+exited 0 without a signal, but ordinary Quit reported `go-core` unconfirmed.
+The harness returned failure and retained/quarantined its profile; that profile
+must not be reopened or its operations replayed. No clean-retirement, restart
+restoration, current-provider or full hermetic-containment claim follows.
+
+The current presentation retains canonical Markdown as literal text. A raw-prose
+expectation incorrectly rejected escaped punctuation in the earlier witness.
+The oracle now uses independent expected Markdown kept outside the provider
+scenario; production receives no expected answer. Focused evidence includes:
+
+| Layer                       | Executable check                                                                                                      | Boundary                                                                                      |
+| --------------------------- | --------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| Parser / witness            | `tests/unit/read-conversation-witness.test.ts`, real public DOM parser and semantic reducer; all four segment vectors | Exact early text, no future text in raw or encoded form, content-free timeout diagnostics     |
+| React / controller          | `tests/renderer/chat-readonly.test.tsx`, two automatic polls through the real projection                              | Cursor 0 → 1 → 4, useful text while running, one Send, no result ACK or Follow                |
+| Pure harness                | `go-core-startup.e2e.mjs --self-test`                                                                                 | Exact logical ownership, physical Send counts, result ACK and Go settlement/release witnesses |
+| Assembled controlled native | `go-core-startup.e2e.mjs --chat-two-turn --run-native` with exact candidate/build identity                            | Normal startup and both UI turns; ordinary Quit remains a separately failed gate              |
+
+Answers remain bounded to 8192 UTF-8 bytes and retained only in the current
+backend/window lifetime. Production translations and output profiles remain
+unqualified. External Responses new-user-turn delivery/settlement and selected
+Codex compatibility are separate from both this UI journey and its existing
+same-turn tool-output continuation. No second registry or model engine is added.
+
 ## External caller-tool round source join
 
 `chat.caller.begin`, `claim`, `output` and `return` compose one external

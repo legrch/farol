@@ -22,8 +22,13 @@ update the installed product.
 | Source checkpoint described here | Package `bef6d56` passed actual React edit → one Go native edit/retained journal → unacknowledged Quit → same-profile reopen → exact Observe → Go-owned delivery ACK. Independent file/journal checks found no second effect; provider Sends stayed zero. Go now owns Settings pending, offer and ACK policy. TypeScript retains typed configuration storage, legacy observation, root measurement and Git discovery. This unsigned `0.1.10-owner.beta.1`, build `12` candidate is not installed or released. |
 | UI target                        | React + TypeScript shell is composed. Plain TypeScript retains Electron/browser mechanics. Native Home, Settings, Appearance and configured-profile reopening have been exercised.                                                                                                                                                                                                                                                                                                                            |
 
-The Go cutover is incomplete. Source tests do not prove a packaged route, a live
-provider turn, streaming or a second message in the same conversation.
+The Go cutover is incomplete. The `5724af7` normal-entrypoint Dev candidate passed
+a controlled React/Go two-turn Chat journey: useful output before completion,
+explicit result ACK, Go settlement/release, retained first result and exactly two
+accepted Sends in the same conversation. Ordinary Quit remained unconfirmed and
+the disposable profile was quarantined. This is synthetic native evidence within
+one backend lifetime, not live-provider, restart or installed qualification. See
+the [controlled Chat witness](docs/desktop-core.md#controlled-normal-desktop-chat).
 
 Separately, the owner reported installation of the access hotfix
 `0.1.10-owner.beta.1`, build `12`, from source `569bd4d` on 4 October.
@@ -165,9 +170,11 @@ also composes a typed browser exchange, bounded result retention and conversatio
 methods. Controlled-peer tests through the normal Go CLI cover useful streaming,
 the first Home-to-conversation binding, same-conversation follow-up and a lost
 acknowledgement without another Send.
-The normal host now composes the browser pump and physical adapter. Its production
-control catalogue and real DOM/provider journey remain unqualified;
-these source tests are not a working packaged model route.
+The normal host composes the browser pump and physical adapter. The controlled
+native witness above exercises their real DOM path and React delivery. Production
+control translations and output profiles remain unqualified; ordinary production
+Chat and the external model route are unavailable. A tool-output continuation does
+not establish support for a new user turn through the Responses adapter.
 
 The selected Task facade also maps create, observe, exact dispatch status/result,
 same-thread continuation, exact-session resume and retained progress into the
@@ -184,7 +191,7 @@ and real Codex/Claude journeys remain separate acceptance work.
 | [`apps/desktop/`](apps/desktop/)                                                         | Attested Go host, authority publication and generated Go/TypeScript wire bridge.                                                                 |
 | [`boot/`](boot/), [`cmd/farol/`](cmd/farol/), [`transport/desktop/`](transport/desktop/) | Go composition, entrypoint, native profile lifetime and framed protocol.                                                                         |
 | [`modules/computer/`](modules/computer/)                                                 | Authority, filesystem and process services. Native ingress selects catalogue/bootstrap/read; other prepared capabilities need their own cutover. |
-| [`modules/chat/`](modules/chat/)                                                         | Turn, queue, admission, browser exchange and bounded retained results; real browser host composition remains unqualified.                        |
+| [`modules/chat/`](modules/chat/)                                                         | Turn, queue, admission, browser exchange and bounded retained results; controlled normal desktop composition qualified within one lifetime.      |
 | [`modules/task/`](modules/task/)                                                         | Coding-task lifecycle and provider adapters; shipping task-route qualification remains separate.                                                 |
 | [`modules/release/`](modules/release/)                                                   | Update/recovery, journal and identity/adoption preparation; the existing updater is still active.                                                |
 

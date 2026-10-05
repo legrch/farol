@@ -99,9 +99,11 @@ typed conversation API. Controlled-peer tests through the normal Go CLI prove
 useful output before completion, the first Home-to-conversation binding,
 same-conversation follow-up and no second Send
 after a lost acknowledgement. These tests do not execute Electron or a real DOM.
-Normal Electron source now composes the browser pump and physical adapter. Its
-production control catalogue, real DOM journey, crash/reopen recovery and
-packaged/provider qualification remain unaccepted.
+The [normal desktop controlled Chat witness](desktop-core.md#controlled-normal-desktop-chat)
+at `5724af7` adds actual Electron DOM and React/Go two-turn delivery evidence.
+The paired app was built and verified; the witness launched its attested Dev
+candidate through normal main. Production profiles, ordinary provider-used Quit,
+crash/reopen recovery, installed and live-provider qualification remain open.
 
 - Computer: [migration map](../modules/computer/migration.md),
   [durable access](../modules/computer/access.md),
