@@ -209,11 +209,16 @@ describe("renderer adoption of exact Go conversation replies", () => {
   it("keeps a reply fenced when refresh changes its configuration revision", async () => {
     const { f, c, reply } = await setup();
     const held = deferred<unknown>();
-    vi.mocked(f.api.configure).mockReturnValueOnce(held.promise);
+    const entered = deferred<void>();
+    vi.mocked(f.api.configure).mockImplementationOnce(() => {
+      entered.resolve();
+      return held.promise;
+    });
     const pending = c.configure(
       { kind: "chatgpt.submit-readonly-task", operationId },
       "send",
     );
+    await entered.promise;
     const next = bootstrap();
     next.configuration.settings.revision += 1;
     vi.mocked(f.api.bootstrap).mockResolvedValueOnce(next);
@@ -226,11 +231,16 @@ describe("renderer adoption of exact Go conversation replies", () => {
   it("does not adopt a reply after refresh detects another build", async () => {
     const { f, c, reply } = await setup();
     const held = deferred<unknown>();
-    vi.mocked(f.api.configure).mockReturnValueOnce(held.promise);
+    const entered = deferred<void>();
+    vi.mocked(f.api.configure).mockImplementationOnce(() => {
+      entered.resolve();
+      return held.promise;
+    });
     const pending = c.configure(
       { kind: "chatgpt.submit-readonly-task", operationId },
       "send",
     );
+    await entered.promise;
     const next = bootstrap();
     next.build.buildId = "4".repeat(64);
     vi.mocked(f.api.bootstrap).mockResolvedValueOnce(next);
