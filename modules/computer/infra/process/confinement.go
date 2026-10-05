@@ -159,7 +159,9 @@ func comparableOverlap(a, b string) bool {
 	return authority.ComparableWithin(a, b) || authority.ComparableWithin(b, a)
 }
 
-var credentialStores = []string{".env", ".ssh", ".aws", ".gnupg", ".codex", ".claude", ".git-credentials", ".netrc", ".npmrc", ".pypirc", ".config/gh/hosts.yml", ".docker/config.json", ".kube/config", "Library/Keychains"}
+// Agent stores (.codex/.claude) follow ordinary owner/task scopes, including
+// separate read/write and shell permission and explicit exclusions.
+var credentialStores = []string{".env", ".ssh", ".aws", ".gnupg", ".git-credentials", ".netrc", ".npmrc", ".pypirc", ".config/gh/hosts.yml", ".docker/config.json", ".kube/config", "Library/Keychains"}
 
 func protectedPath(path, home string) bool {
 	for _, store := range credentialStores {

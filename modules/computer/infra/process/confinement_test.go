@@ -456,3 +456,162 @@ func TestSeatbeltRetainsExactCodeSubtreeInsideHomeApproval(t *testing.T) {
 		}
 	}
 }
+
+// Pure policy compilation of synthetic paths only; these cases never inspect an
+// agent store or invoke native qualification, preparation, spawn or endpoints.
+func TestSeatbeltAgentScopesFollowOrdinaryAccess(t *testing.T) {
+	for _, directory := range []string{".codex", ".claude", ".Codex", ".CLAUDE"} {
+		for _, shape := range []string{"direct", "descendant", "enclosing", "home-approval"} {
+			t.Run(directory+"/"+shape, func(t *testing.T) {
+				_, selection, command, evidence := confinementFixture(t)
+				root := selection.Home + "/" + directory
+				approvalRoot, scope, cwd := root, root, root
+				switch shape {
+				case "descendant":
+					approvalRoot, scope, cwd = root, root+"/worktrees/task/repo", root+"/worktrees/task/repo"
+				case "enclosing":
+					approvalRoot, scope, cwd = "/approved/work", "/approved/work/project", "/approved/work/project/"+directory+"/sessions"
+				case "home-approval":
+					approvalRoot = selection.Home
+				}
+				selection.Snapshot.Approval.Workspaces[0].Root = approvalRoot
+				selection.Snapshot.Participant.Grant.Workspaces[0].Root = scope
+				command.Root, command.Cwd = approvalRoot, cwd
+				for _, access := range []authority.Access{authority.ReadAccess, authority.WriteAccess} {
+					selection.Snapshot.Approval.Workspaces[0].Access = access
+					selection.Snapshot.Participant.Grant.Workspaces[0].Access = access
+					for _, write := range []bool{false, true} {
+						command.Write = write
+						command.Environment = seatbeltEnvironment(selection, write)
+						plan, err := compileSeatbelt(selection, command)
+						if access == authority.ReadAccess && write {
+							var failure *processsvc.NativeFailure
+							if !errors.As(err, &failure) || failure.Unknown || plan != nil {
+								t.Fatal("read-only agent scope accepted write", err)
+							}
+							continue
+						}
+						if err != nil {
+							t.Fatal("approved agent scope refused", err)
+						}
+						if !hasParameterRule(plan, "allow file-read*", "subpath", scope) ||
+							hasParameterRule(plan, "allow file-write*", "subpath", scope) != write ||
+							hasParameterRule(plan, "allow file-read*", "subpath", selection.Home) ||
+							hasParameterRule(plan, "allow file-write*", "subpath", selection.Home) {
+							t.Fatal("agent access widened or write not separately controlled")
+						}
+						for _, text := range []string{"(deny default)", "(deny network*)", `(regex #"/[.]git(/|$)")`} {
+							if !strings.Contains(plan.source, text) {
+								t.Fatal("missing default protection", text)
+							}
+						}
+						pattern := regexp.MustCompile(`\(deny file-read\* file-write\* \(regex #"([^"\n]+)"\)\)`).FindStringSubmatch(plan.source)
+						if len(pattern) != 2 {
+							t.Fatal("credential regex missing")
+						}
+						denied := regexp.MustCompile(pattern[1])
+						for _, agent := range []string{".codex", ".claude", ".Codex", ".CLAUDE"} {
+							for _, parent := range []string{selection.Home, scope} {
+								path := parent + "/" + agent
+								if hasParameterRule(plan, "deny file-read* file-write*", "subpath", path) || denied.MatchString(path+"/sessions") {
+									t.Fatal("blanket agent-store denial", path)
+								}
+							}
+						}
+						// Unrelated protected names remain denied at HOME, at the
+						// selected root and nested inside an ordinary agent directory.
+						for _, store := range []string{".env", ".ssh", ".aws", ".gnupg", ".git-credentials", ".netrc", ".npmrc", ".pypirc", ".config/gh/hosts.yml", ".docker/config.json", ".kube/config", "Library/Keychains"} {
+							for _, parent := range []string{selection.Home, scope} {
+								if !hasParameterRule(plan, "deny file-read* file-write*", "subpath", parent+"/"+store) {
+									t.Fatal("protected store parameter missing", store)
+								}
+							}
+							path := cwd + "/nested/" + strings.ToUpper(store) + "/child"
+							if !denied.MatchString(path) || !protectedPath(path, selection.Home) {
+								t.Fatal("nested protected store missed", path)
+							}
+						}
+					}
+				}
+				if evidence.calls != 0 {
+					t.Fatal("policy compilation invoked native evidence")
+				}
+			})
+		}
+	}
+}
+
+func TestSeatbeltAgentScopesRetainRefusalsAndExclusions(t *testing.T) {
+	for _, directory := range []string{".codex", ".claude"} {
+		for name, change := range map[string]func(*SeatbeltSelection, *Command){
+			"shell-verification": func(s *SeatbeltSelection, _ *Command) { s.Snapshot.Approval.Workspaces[0].ShellVerified = false },
+			"grant-no-shell":     func(s *SeatbeltSelection, _ *Command) { s.Snapshot.Participant.Grant.Capabilities = nil },
+			"owner-no-shell":     func(s *SeatbeltSelection, _ *Command) { s.Snapshot.Approval.Capabilities = nil },
+			"grant-no-commands":  func(s *SeatbeltSelection, _ *Command) { s.Snapshot.Participant.Grant.Commands = authority.NoCommands },
+			"owner-no-commands":  func(s *SeatbeltSelection, _ *Command) { s.Snapshot.Approval.Commands = authority.NoCommands },
+			"owner-read-only": func(s *SeatbeltSelection, _ *Command) {
+				s.Snapshot.Approval.Workspaces[0].Access = authority.ReadAccess
+			},
+			"grant-read-only": func(s *SeatbeltSelection, _ *Command) {
+				s.Snapshot.Participant.Grant.Workspaces[0].Access = authority.ReadAccess
+			},
+			"no-ownership": func(s *SeatbeltSelection, _ *Command) {
+				s.Snapshot.Participant.MutationOwnership = authority.NoOwnership
+			},
+			"owner-mismatch":     func(s *SeatbeltSelection, _ *Command) { s.Snapshot.Approval.OwnerID = "other" },
+			"physical-root":      func(_ *SeatbeltSelection, c *Command) { c.RootIdentity.Inode = "other" },
+			"root-case-mismatch": func(_ *SeatbeltSelection, c *Command) { c.Root = strings.ToUpper(c.Root) },
+			"unclean-cwd":        func(_ *SeatbeltSelection, c *Command) { c.Cwd += "/../sessions" },
+			"broad-home": func(s *SeatbeltSelection, c *Command) {
+				s.Snapshot.Approval.Workspaces[0].Root = s.Home
+				s.Snapshot.Participant.Grant.Workspaces[0].Root = s.Home
+				c.Root = s.Home
+			},
+			"owner-excluded-agent": func(s *SeatbeltSelection, c *Command) {
+				s.Snapshot.Approval.ExcludedPaths = []authority.Exclusion{{WorkspaceID: "work", Path: strings.ToUpper(c.Root)}}
+			},
+			"grant-excluded-agent": func(s *SeatbeltSelection, c *Command) {
+				s.Snapshot.Participant.Grant.ExcludedPaths = []authority.Exclusion{{WorkspaceID: "work", Path: c.Root}}
+			},
+			"nested-npmrc": func(_ *SeatbeltSelection, c *Command) { c.Cwd += "/nested/.NPMRC" },
+			"nested-ssh-scope": func(s *SeatbeltSelection, c *Command) {
+				c.Cwd += "/nested/.SSH"
+				s.Snapshot.Participant.Grant.Workspaces[0].Root = c.Cwd
+			},
+		} {
+			t.Run(directory+"/"+name, func(t *testing.T) {
+				_, selection, command, evidence := confinementFixture(t)
+				root := selection.Home + "/" + directory
+				selection.Snapshot.Approval.Workspaces[0].Root = root
+				selection.Snapshot.Participant.Grant.Workspaces[0].Root = root
+				command.Root, command.Cwd, command.Write = root, root, true
+				command.Environment = seatbeltEnvironment(selection, true)
+				change(&selection, &command)
+				plan, err := compileSeatbelt(selection, command)
+				var failure *processsvc.NativeFailure
+				if !errors.As(err, &failure) || failure.Unknown || plan != nil || evidence.calls != 0 {
+					t.Fatal("agent scope bypassed refusal or reached native evidence", err)
+				}
+			})
+		}
+		t.Run(directory+"/excluded-descendants", func(t *testing.T) {
+			_, selection, command, evidence := confinementFixture(t)
+			ownerExcluded := command.Cwd + "/" + directory
+			grantExcluded := command.Cwd + "/nested/" + directory
+			selection.Snapshot.Approval.ExcludedPaths = []authority.Exclusion{{WorkspaceID: "work", Path: ownerExcluded}}
+			selection.Snapshot.Participant.Grant.ExcludedPaths = []authority.Exclusion{{WorkspaceID: "work", Path: grantExcluded}}
+			plan, err := compileSeatbelt(selection, command)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, path := range []string{ownerExcluded, grantExcluded} {
+				if !hasParameterRule(plan, "deny file-read* file-write*", "subpath", path) {
+					t.Fatal("explicit agent exclusion omitted", path)
+				}
+			}
+			if evidence.calls != 0 {
+				t.Fatal("exclusion compilation invoked native evidence")
+			}
+		})
+	}
+}
