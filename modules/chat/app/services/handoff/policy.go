@@ -245,6 +245,7 @@ type Service struct {
 	guard     port.Gate
 	store     port.HandoffStore
 	uncertain bool
+	knownHead [32]byte
 }
 
 func New(store port.HandoffStore) (*Service, error) {
@@ -308,6 +309,7 @@ func (s *Service) publish(ctx context.Context, h *port.HandoffHead, r port.Hando
 		return nil, Unknown
 	}
 	copy := Copy(r)
+	s.knownHead = got.Digest
 	return &port.HandoffHead{Record: &copy, Digest: got.Digest}, nil
 }
 
@@ -414,8 +416,9 @@ func (s *Service) ObserveTerminal(ctx context.Context, t port.HandoffTerminal) e
 // trusted boot MUST pass this exact Scope to that constructor. Never expose proof
 // through wire DTOs. Lost launch/open/handshake cannot replay Consume.
 type Successor struct {
-	Scope port.JournalScope
-	Proof port.CleanRetirement
+	Scope   port.JournalScope
+	Proof   port.CleanRetirement
+	History *HistoryOrigin
 }
 
 func (s *Service) Consume(ctx context.Context, p port.HandoffPublication, c port.HandoffConsumption) (*Successor, error) {
@@ -437,10 +440,11 @@ func (s *Service) Consume(ctx context.Context, p port.HandoffPublication, c port
 	r := Copy(*h.Record)
 	r.Stage = port.HandoffConsumed
 	r.Consumption = &c
-	if _, err = s.publish(ctx, h, r); err != nil {
+	published, err := s.publish(ctx, h, r)
+	if err != nil {
 		return nil, err
 	}
-	return &Successor{Scope: c.Next, Proof: &retainedOrigin{receipt: Copy(r).Receipt, guard: s.guard}}, nil
+	return &Successor{Scope: c.Next, Proof: &retainedOrigin{receipt: Copy(r).Receipt, guard: s.guard}, History: &HistoryOrigin{owner: s, anchor: port.HistoryAnchor{HeadDigest: published.Digest, Consumption: c}}}, nil
 }
 
 type retainedOrigin struct {
