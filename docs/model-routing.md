@@ -35,6 +35,52 @@ The low-level continuity test composition still accepts its two exact historical
 Mind/Drive fixture IDs as distinct configured fixtures; neither is offered by the
 production catalogue, nor treated as a spelling of `chatgpt`.
 
+## Go Responses adapter selection boundary
+
+The Go Responses transport now captures the public model and optional explicit
+`reasoning.effort` as an immutable request selection. Omitted effort remains
+omitted for the existing Go model policy to resolve. Explicit effort is
+case-sensitive and must match the resolver's requested-effort provenance; a
+declared route translation may produce a different resolved effort. The public
+`chatgpt` route does not replace the independently configured model alias.
+
+Malformed reasoning values and unsupported reasoning fields, including
+`reasoning.summary`, refuse before context preparation, durable admission,
+relay setup or Go effects. Same-key tool continuation cannot change the
+selection. Explicit effort is included in the durable request digest; omission
+retains the former digest bytes so an old uncertain key cannot become a fresh
+submission. These checks do not acknowledge a result or unlock Follow.
+
+The integration checkpoint `468ffb5` passed 64 focused tests in
+`tests/unit/go-chat-responses-selection.test.ts` and
+`tests/integration/route-b-go-responses.test.ts`, including the controlled real-Go
+HTTP peer. Root and desktop bridge typechecks and targeted source review passed.
+These are adapter checks: normal application startup still does not construct
+`createGoChatResponses`. Ordinary external next-user-turn support, explicit
+business delivery ACK, settled Follow and current consumer compatibility remain
+separate exits. Existing tool-output continuation proves only a same-turn tool
+round.
+
+`tests/e2e/codex-responses-contract.e2e.mjs` is an explicit macOS compatibility
+observer, outside the ordinary suite. It requires an exact binary digest,
+expected version and caller-selected source commit. A fresh credential-free
+`CODEX_HOME`, allowlisted environment and deny-default Seatbelt profile separate
+its synthetic loopback peer from owner state and public networking. It measures
+allowed loopback access and denied external/owner-tree access before starting the
+selected client. It retains bounded original-child receipts and never retries a
+failed phase. The existing child supervisor's nine tests cover ordinary close,
+one requested stop and bounded unknown cleanup.
+
+The October 5 observation verified the selected `codex-cli 0.160.0` binary and
+those containment probes, but stopped before any Responses request because the
+confined client could not synchronize managed preferences. The last report is
+`_output/evidence/codex-responses-contract-5674023c-6bc9-4ad1-a02c-468ccf23aa9a.json`.
+All original children exited normally and all synthetic roots were retained.
+This is a blocked consumer qualification, not a request-shape fixture, successful
+two-turn client journey, live-provider result or business ACK. Earlier local
+profile syntax/path failures keep their original receipts. Managed requirements
+and preference checks were not disabled to obtain a passing observation.
+
 ## Default aliases and explicit pins
 
 `chatgpt` is a **floating default alias**, not a fixed version pin. It requests the
