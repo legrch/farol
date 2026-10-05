@@ -450,7 +450,7 @@ describe("ReadConversation presentation and explicit actions", () => {
         blocked: state === "blocked",
         history:
           state === "history-bound"
-            ? Array.from({ length: 32 }, (_, index) => ({
+            ? Array.from({ length: 31 }, (_, index) => ({
                 view: view({ handleId: `past-${index}` }),
                 text: "Previous text.",
               }))
@@ -501,8 +501,8 @@ describe("ReadConversation presentation and explicit actions", () => {
     await act(async () => wait.resolve());
   });
 
-  it("allows 31 retained turns, then disables Follow when the history bound arrives", async () => {
-    const history = Array.from({ length: 31 }, (_, index) => ({
+  it("allows 30 previous turns, then disables Follow at 32 total turns", async () => {
+    const history = Array.from({ length: 30 }, (_, index) => ({
       view: view({ handleId: `past-${index}` }),
       text: "Previous text.",
     }));

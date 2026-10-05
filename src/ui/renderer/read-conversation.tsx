@@ -79,7 +79,7 @@ export function ReadConversation({
   const followEnabled = Boolean(
     view?.followReady &&
     label &&
-    history.length < 32 &&
+    history.length < 31 &&
     !paused &&
     !composing &&
     validDraft,
@@ -258,7 +258,7 @@ export function ReadConversation({
         Follow becomes available when the current turn is ready. Use a nonblank
         prompt of at most 8192 UTF-8 bytes.
       </p>
-      {history.length >= 32 && (
+      {history.length >= 31 && (
         <p role="status">
           The retained conversation has reached its turn limit.
         </p>
