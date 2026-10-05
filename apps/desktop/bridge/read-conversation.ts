@@ -32,7 +32,8 @@ type ChatPort = Pick<
   | "result"
   | "acknowledgeFrame"
   | "acknowledgeResult"
-> & Partial<Pick<ChatBridge, "start">>;
+> &
+  Partial<Pick<ChatBridge, "start">>;
 type TransportTurn = {
   handle: ChatHandle;
   sendAttempted: boolean;

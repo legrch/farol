@@ -394,9 +394,9 @@ describe("normal read conversation mechanical client", () => {
   it("promotes the original owner once and sends once across duplicate submit and repeated progress", async () => {
     const f = fixture();
     const attempt = f.client.start(input, "Explain this file.");
-    expect(
-      f.client.start(structuredClone(input), "Explain this file."),
-    ).toBe(attempt);
+    expect(f.client.start(structuredClone(input), "Explain this file.")).toBe(
+      attempt,
+    );
     const [a, b] = await Promise.all([
       attempt,
       f.client.start(structuredClone(input), "Explain this file."),
