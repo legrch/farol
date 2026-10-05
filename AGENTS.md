@@ -76,8 +76,17 @@ schemas are compatibility boundaries. Do not rename them as a source-layout fix.
   required R3/R4 gate.
 - Build candidates only with `task package` from clean committed bytes. Compiler,
   dependency, source, resource, and package attestation must remain fail closed.
-- Native tests use disposable state, inactive or hidden windows, and exact owned
-  process cleanup. Never take focus or compete with an owner's live runtime.
+- Native tests use disposable state and exact owned process cleanup. **Farol Dev is
+  development-owned:** the active Lead may start, quit, restart, rebuild, and when
+  required by the test plan recreate Dev-only runtime/profile state without per-run
+  owner approval. Preserve explicitly quarantined unknown-effect evidence and never
+  mutate the installed production Farol profile under this rule. When two displays
+  are active, place visible Farol Dev work on the MacBook built-in display and avoid
+  disturbing the owner's other screen; when only one display is active, visible
+  launch, focus, and interaction on that display are allowed as needed. Do not stop
+  to ask merely for Farol Dev lifecycle or focus permission. This exception does not
+  authorize production installation/replacement/publication or replay of an
+  outcome-unknown effect.
 - The owner guard is a fingerprint, not a sandbox; a changed protected path fails
   a gate. It must not import or invoke a V0 implementation.
 - Never commit credentials, tokens, authentication state, browser profiles,
