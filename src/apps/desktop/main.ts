@@ -8,6 +8,13 @@ import type {
 } from "../../../apps/desktop/bridge/wire";
 import { createDesktopChatBrowser } from "../../../apps/desktop/go-chat-host";
 import { GoChatBrowserDriver } from "../../../apps/desktop/go-chat-browser";
+import {
+  captureChatStartupProfile,
+  chatWorkerInitialUrl,
+} from "../../../apps/desktop/go-chat-startup-profile";
+import { ReadConversationClient } from "../../../apps/desktop/bridge/read-conversation";
+import { projectReadConversation } from "../../../apps/desktop/read-conversation-projection";
+import { ReadConversationPromptSchema } from "../../pkg/product-settings/chat-conversation";
 import { BridgeError } from "../../../apps/desktop/bridge/client";
 import { withSettingsEditLease } from "../../../apps/desktop/with-settings-edit-lease";
 import { readGoWorkspaceSnapshot } from "../../../apps/desktop/go-workspace-snapshot";
@@ -1085,6 +1092,14 @@ type PendingChatGptReadonlyTask = Readonly<{
   expiresAt: number;
 }>;
 let pendingChatGptReadonlyTask: PendingChatGptReadonlyTask | null = null;
+let goChatStartupProfile: ReturnType<typeof captureChatStartupProfile> = null;
+// One window's original transport client, not a second model/task registry.
+let goReadonlyConversation: {
+  pending: PendingChatGptReadonlyTask;
+  core: DesktopGoCore;
+  client: ReadConversationClient;
+  start: Promise<ProductConfigurationResult>;
+} | null = null;
 const readonlyAccountCommands = new ReadAccountCommands();
 const readonlyAccountConfirmations = new WeakMap<
   PendingChatGptReadonlyTask,
@@ -1175,6 +1190,7 @@ function chatGptReadonlyTaskPreview(
   const account = readonlyAccountConfirmations.get(pending)?.projection();
   return {
     kind: "chatgpt.readonly-task-preview",
+    sendAvailable: Boolean(pending.goAdmission && goChatStartupProfile),
     operationId: pending.operationId,
     workspaceId: pending.workspaceId,
     workspaceLabel: pending.workspaceLabel,
@@ -3535,6 +3551,8 @@ function chatGptConversationState():
 }
 
 function chatGptConversationAdmissionFailure(): ProductConfigurationResult | null {
+  if (goReadonlyConversation)
+    return configurationFailure("CHATGPT_TASK_IN_PROGRESS");
   if (!chatGptConversationStore) {
     return configurationFailure("CHATGPT_CONVERSATION_STATE_FAILED");
   }
@@ -5186,6 +5204,12 @@ async function configureProduct(
   const parsed = ProductConfigurationCommandSchema.safeParse(value);
   if (
     parsed.success &&
+    parsed.data.kind === "chatgpt.submit-readonly-task" &&
+    goReadonlyConversation?.pending.operationId === parsed.data.operationId
+  )
+    return goReadonlyConversation.start;
+  if (
+    parsed.success &&
     (parsed.data.kind === "chatgpt.inspect-readonly-account" ||
       parsed.data.kind === "chatgpt.approve-readonly-account")
   ) {
@@ -5300,8 +5324,43 @@ async function configureAdmittedProduct(
   switch (command.kind) {
     case "chatgpt.observe-readonly-conversation":
     case "chatgpt.ack-readonly-conversation":
-    case "chatgpt.follow-readonly-conversation":
-      return configurationFailure("CHATGPT_ROUTE_UNAVAILABLE");
+    case "chatgpt.follow-readonly-conversation": {
+      const active = goReadonlyConversation;
+      if (
+        !active ||
+        active.pending.operationId !== command.operationId ||
+        desktopGoCore !== active.core
+      )
+        return configurationFailure("CHATGPT_CONVERSATION_REFUSED");
+      try {
+        const projection =
+          command.kind === "chatgpt.follow-readonly-conversation"
+            ? await active.client.follow(command.handleId, command.prompt)
+            : command.kind === "chatgpt.observe-readonly-conversation"
+              ? await active.client.progress(command.handleId, command.cursor)
+              : await (async () => {
+                  await active.client.acknowledge(
+                    command.handleId,
+                    command.resultId,
+                  );
+                  return active.client.snapshot(
+                    command.handleId,
+                    command.cursor,
+                  );
+                })();
+        return ProductConfigurationResultSchema.parse({
+          ok: true,
+          snapshot: configuration.snapshot(),
+          evidence: projectReadConversation(command.operationId, projection),
+        });
+      } catch (error) {
+        return configurationFailure(
+          error instanceof BridgeError && error.state === "refused"
+            ? "CHATGPT_CONVERSATION_REFUSED"
+            : "CHATGPT_CONVERSATION_UNCONFIRMED",
+        );
+      }
+    }
     case "onboarding.open-help": {
       try {
         await shell.openExternal(onboardingHelpUrl(command.destination));
@@ -6901,6 +6960,8 @@ async function configureAdmittedProduct(
       });
     }
     case "chatgpt.prepare-readonly-task": {
+      if (goReadonlyConversation)
+        return configurationFailure("CHATGPT_TASK_IN_PROGRESS");
       if (!chatGptRoute) {
         return configurationFailure("CHATGPT_ROUTE_UNAVAILABLE");
       }
@@ -7020,6 +7081,14 @@ async function configureAdmittedProduct(
           relativePath,
           text,
         });
+        if (
+          goAdmission &&
+          !ReadConversationPromptSchema.safeParse(prompt.text).success
+        ) {
+          if (!(await withdrawGoReadonlyAdmission(goAdmission)))
+            return configurationFailure("CHATGPT_TASK_REQUIRES_REVIEW");
+          return configurationFailure("CHATGPT_PROMPT_TOO_LARGE");
+        }
         const expiresAt = Date.now() + 10 * 60_000;
         const excludedPaths = workspaceDeniedPaths(workspace);
         if (!chatGptTaskJournal) {
@@ -7174,11 +7243,79 @@ async function configureAdmittedProduct(
         }
         return configurationFailure("WORKSPACE_VERIFICATION_REQUIRED");
       }
-      // A Go-owned read cannot be sent by the legacy queue. Its promotion
-      // requires the production account/model control profile still to be wired.
-      // Keep the preview owned and discardable while that route is unavailable.
-      if (pending.goAdmission)
-        return configurationFailure("CHATGPT_ROUTE_UNAVAILABLE");
+      if (pending.goAdmission) {
+        if (!ReadConversationPromptSchema.safeParse(pending.prompt).success)
+          return configurationFailure("CHATGPT_PROMPT_TOO_LARGE");
+        const core = desktopGoCore;
+        const profile = goChatStartupProfile;
+        if (!core || !profile)
+          return configurationFailure("CHATGPT_ROUTE_UNAVAILABLE");
+        if (
+          readonlyAccountConfirmations.get(pending)?.projection()?.state !==
+          "approved"
+        )
+          return configurationFailure("CHATGPT_ACCOUNT_CONFIRMATION_INVALID");
+        let current: ReturnType<typeof captureChatStartupProfile>;
+        try {
+          current = captureChatStartupProfile({
+            environment: runtimeEnvironment,
+            e2e: process.env.FAROL_NEXT_E2E === "1",
+            origin: chatGptE2eOrigin,
+            tasks: snapshot.settings.tasks,
+          });
+        } catch {
+          return configurationFailure("CHATGPT_ROUTE_UNAVAILABLE");
+        }
+        if (
+          !current ||
+          current.snapshot.configSHA256 !== profile.snapshot.configSHA256
+        )
+          return configurationFailure("CHATGPT_ROUTE_UNAVAILABLE");
+        const client = new ReadConversationClient(
+          {
+            resolve: (input) => core.resolveReadIntent(input),
+            promote: (input) => core.promoteReadIntent(input),
+          },
+          core.chat,
+        );
+        const admission = pending.goAdmission;
+        const start = Promise.resolve().then(
+          async (): Promise<ProductConfigurationResult> => {
+            chatGptTaskAdmission = true;
+            try {
+              const projection = await client.start(
+                {
+                  admission,
+                  policy: current.snapshot.policy,
+                  profiles: current.snapshot.profiles,
+                  requested: {},
+                },
+                pending.prompt,
+              );
+              return ProductConfigurationResultSchema.parse({
+                ok: true,
+                snapshot: configuration!.snapshot(),
+                evidence: projectReadConversation(
+                  pending.operationId,
+                  projection,
+                ),
+              });
+            } catch (error) {
+              return configurationFailure(
+                error instanceof BridgeError && error.state === "refused"
+                  ? "CHATGPT_CONVERSATION_REFUSED"
+                  : "CHATGPT_CONVERSATION_UNCONFIRMED",
+              );
+            } finally {
+              chatGptTaskAdmission = false;
+            }
+          },
+        );
+        // Publish the original attempt before any await so repeated IPC cannot
+        // mint another promotion or Send after a lost renderer reply.
+        goReadonlyConversation = { pending, core, client, start };
+        return start;
+      }
       if (!chatGptTaskJournal) {
         return configurationFailure("CHATGPT_TASK_JOURNAL_FAILED");
       }
@@ -7299,6 +7436,8 @@ async function configureAdmittedProduct(
       });
     }
     case "chatgpt.cancel-readonly-task": {
+      if (goReadonlyConversation?.pending.operationId === command.operationId)
+        return configurationFailure("CHATGPT_CONVERSATION_REFUSED");
       if (chatGptTaskAdmission) {
         return configurationFailure("CHATGPT_TASK_IN_PROGRESS");
       }
@@ -9499,6 +9638,37 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
     },
   );
   await configuration.initialize();
+  const e2eChatGptUrl =
+    process.env.FAROL_NEXT_E2E === "1"
+      ? process.env.FAROL_NEXT_E2E_CHATGPT_URL
+      : undefined;
+  let chatGptUrl = CHATGPT_HOME;
+  let e2eChatGptOrigin: string | null = null;
+  if (e2eChatGptUrl) {
+    const parsed = new URL(e2eChatGptUrl);
+    if (parsed.protocol !== "http:" || parsed.hostname !== "127.0.0.1") {
+      throw new Error("CHATGPT_E2E_URL_INVALID");
+    }
+    chatGptUrl = parsed.href;
+    e2eChatGptOrigin = parsed.origin;
+  }
+  chatGptHomeUrl = chatGptUrl;
+  chatGptE2eOrigin = e2eChatGptOrigin;
+  try {
+    const snapshot = configuration.snapshot();
+    goChatStartupProfile =
+      snapshot.status === "ready"
+        ? captureChatStartupProfile({
+            environment: runtimeEnvironment,
+            e2e: process.env.FAROL_NEXT_E2E === "1",
+            origin: chatGptE2eOrigin,
+            tasks: snapshot.settings.tasks,
+          })
+        : null;
+  } catch (error) {
+    if (!(error instanceof BridgeError)) throw error;
+    goChatStartupProfile = null;
+  }
   if (compiledGoCore !== null) {
     const currentSettings = () => {
       const snapshot = configuration!.snapshot();
@@ -9521,17 +9691,22 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
           // production model may be admitted. The normal host owns this adapter;
           // a missing profile cannot select the legacy browser executor instead.
           driver: (lookup) =>
-            new GoChatBrowserDriver({ lookup, translations: [] }),
+            new GoChatBrowserDriver({
+              lookup,
+              translations: goChatStartupProfile?.snapshot.translations ?? [],
+              ...(goChatStartupProfile
+                ? { e2eOrigin: goChatStartupProfile.origin }
+                : {}),
+            }),
           create: async (input) => {
-            let initialUrl = chatGptHomeUrl;
-            if (input.target.mode === "owned-saved") {
-              const selected = new URL(chatGptHomeUrl);
-              selected.pathname = `/c/${encodeURIComponent(input.target.conversationId)}`;
-              selected.search = "";
-              selected.hash = "";
-              initialUrl = selected.href;
-            }
+            const initialUrl = chatWorkerInitialUrl(
+              chatGptHomeUrl,
+              input.target.mode === "owned-saved"
+                ? input.target.conversationId
+                : undefined,
+            );
             const route = createManagedChatGptRoute({
+              ...(goChatStartupProfile?.route ?? {}),
               homeUrl: chatGptHomeUrl,
               initialUrl,
               e2eOrigin: chatGptE2eOrigin,
@@ -9634,22 +9809,6 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
     recoverableChatGptTask = null;
     recoverableChatGptObservationPersisted = false;
   }
-  const e2eChatGptUrl =
-    process.env.FAROL_NEXT_E2E === "1"
-      ? process.env.FAROL_NEXT_E2E_CHATGPT_URL
-      : undefined;
-  let chatGptUrl = CHATGPT_HOME;
-  let e2eChatGptOrigin: string | null = null;
-  if (e2eChatGptUrl) {
-    const parsed = new URL(e2eChatGptUrl);
-    if (parsed.protocol !== "http:" || parsed.hostname !== "127.0.0.1") {
-      throw new Error("CHATGPT_E2E_URL_INVALID");
-    }
-    chatGptUrl = parsed.href;
-    e2eChatGptOrigin = parsed.origin;
-  }
-  chatGptHomeUrl = chatGptUrl;
-  chatGptE2eOrigin = e2eChatGptOrigin;
   let chatGptInitialUrl = chatGptUrl;
   try {
     chatGptConversationStore = new PrivateChatGptConversationStore({

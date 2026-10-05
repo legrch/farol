@@ -91,6 +91,8 @@ export type WindowSnapshot = Readonly<{
   intents: Readonly<Record<string, Intent>>;
   shortcuts: NavigationShortcuts;
   workspaceEditDelivery: string | null;
+  readConversation:
+    import("./read-conversation-state").ReadConversationState | null;
   /** Window-retained command receipt; not backend recovery or Send authority. */
   readPreview: Readonly<{
     prepareIntention: string;

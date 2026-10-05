@@ -5,7 +5,13 @@ const id = z
   .min(1)
   .max(120)
   .regex(/^[\x21-\x7e]+$/u);
-const counter = z.string().regex(/^(0|[1-9][0-9]{0,19})$/u);
+const counter = z
+  .string()
+  .regex(/^(0|[1-9][0-9]{0,19})$/u)
+  .refine(
+    (value) =>
+      /^[0-9]+$/u.test(value) && BigInt(value) <= 18446744073709551615n,
+  );
 const text = z
   .string()
   .refine(

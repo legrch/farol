@@ -106,7 +106,7 @@ function state(h: ChatHandle): ChatState {
   return {
     handle: h,
     conversationId: "conversation",
-    phase: "submitted",
+    phase: "running",
     hasResult: false,
     deliveryAcknowledged: false,
     lifecycleSettled: false,
@@ -130,7 +130,7 @@ function terminal(h: ChatHandle, acknowledged = false): ChatResult {
       evidenceId: "",
       pinnedSource: "requested",
     },
-    phase: "completed",
+    phase: "result-ready",
     outcome: "completed",
     code: "",
     text: "First useful chunk. Final chunk.",
@@ -373,7 +373,7 @@ describe("normal read conversation mechanical client", () => {
     expect(f.chat.acknowledgeResult).not.toHaveBeenCalled();
     f.states.set(handle.handleId, {
       ...state(handle),
-      phase: "completed",
+      phase: "result-ready",
       hasResult: true,
     });
     const shown = await f.client.progress(handle.handleId, "0");

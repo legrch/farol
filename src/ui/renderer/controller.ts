@@ -6,6 +6,7 @@ import {
 import { workspaceEditToAcknowledge } from "../workspace-edit-delivery";
 import { AgentDraftStore } from "../agent-draft";
 import { z } from "zod";
+import { adoptReadConversation } from "./read-conversation-state";
 import {
   ProductConfigurationSnapshotSchema,
   ProductConfigurationCommandSchema,
@@ -109,6 +110,7 @@ const initial: WindowSnapshot = {
   intents: {},
   evidence: null,
   readPreview: null,
+  readConversation: null,
   shortcuts: { ...defaultNavigationShortcuts },
   workspaceEditDelivery: null,
   destination: home,
@@ -666,6 +668,57 @@ export class WindowController implements RendererFacade {
       if (outcome.result.ok) {
         const value = outcome.result.evidence;
         const retained = this.state.readPreview;
+        if (
+          command.kind === "chatgpt.submit-readonly-task" ||
+          command.kind === "chatgpt.observe-readonly-conversation" ||
+          command.kind === "chatgpt.ack-readonly-conversation" ||
+          command.kind === "chatgpt.follow-readonly-conversation"
+        ) {
+          const start = command.kind === "chatgpt.submit-readonly-task";
+          const first = before.readPreview;
+          const exactStart =
+            start &&
+            first &&
+            first.value.operationId === command.operationId &&
+            first.value.account?.state === "approved" &&
+            first.buildId === before.buildId &&
+            first.revision === revision &&
+            this.state.readPreview === first;
+          const next =
+            value?.kind === "chatgpt.readonly-conversation" &&
+            before.buildId &&
+            before.buildId === this.state.buildId &&
+            revision !== null &&
+            (!start || exactStart) &&
+            before.readConversation === this.state.readConversation
+              ? adoptReadConversation(before.readConversation, value, {
+                  action: start
+                    ? "start"
+                    : command.kind === "chatgpt.observe-readonly-conversation"
+                      ? "progress"
+                      : command.kind === "chatgpt.ack-readonly-conversation"
+                        ? "ack"
+                        : "follow",
+                  operationId: command.operationId,
+                  ...("handleId" in command
+                    ? { handleId: command.handleId }
+                    : {}),
+                  ...("cursor" in command ? { cursor: command.cursor } : {}),
+                  ...("resultId" in command
+                    ? { resultId: command.resultId }
+                    : {}),
+                  buildId: before.buildId,
+                  revision,
+                })
+              : null;
+          if (!next)
+            return {
+              id: intention,
+              state: "unknown",
+              code: "READ_CONVERSATION_UNCONFIRMED",
+            };
+          this.patch({ readConversation: next });
+        }
         if (command.kind === "chatgpt.cancel-readonly-task") {
           // Exact known cancellation retires this receipt even if a refresh won
           // snapshot ordering. A different operation is never removed.

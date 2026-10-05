@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import type { Intent, RendererFacade, WindowSnapshot } from "./contract";
 import { folderAccessChecked } from "../folder-access-state";
+import { ReadConversation } from "./read-conversation";
 
 export type ChatReadonlyProps = Readonly<{
   snapshot: WindowSnapshot;
@@ -113,6 +114,8 @@ function boundPreview(snapshot: WindowSnapshot) {
 }
 function feedback(result: Intent, action: "Prepare" | "Discard"): string {
   if (result.state === "unknown") return UNKNOWN;
+  if (result.code === "CHATGPT_PROMPT_TOO_LARGE")
+    return "The file and its context exceed the 8192-byte message limit. Choose a smaller text file.";
   if (result.state !== "applied")
     return `${action} was refused. Check the current status before continuing.`;
   return action === "Discard"
@@ -276,13 +279,150 @@ export function ChatReadonly({ snapshot, facade }: ChatReadonlyProps) {
         `chat-readonly:${action}:${current.prepareIntention}:${current.value.operationId}`
       ],
     );
+  async function send() {
+    const before = facade.getSnapshot();
+    const owner = boundPreview(before);
+    if (
+      busy.current ||
+      uncertain ||
+      fenced(before) ||
+      before.readConversation ||
+      !owner?.value.sendAvailable ||
+      owner?.value.account?.state !== "approved"
+    )
+      return;
+    const intention = `chat-readonly:send:${owner.value.operationId}`;
+    if (before.intents[intention]) return;
+    busy.current = true;
+    setPending(true);
+    try {
+      const result = await facade.configure(
+        {
+          kind: "chatgpt.submit-readonly-task",
+          operationId: owner.value.operationId,
+        },
+        intention,
+      );
+      if (result.state === "unknown") setUncertain(true);
+      if (result.state !== "applied")
+        setMessage(
+          result.state === "unknown"
+            ? UNKNOWN
+            : "Send is unavailable for the current account and model route. The file has not been resent.",
+        );
+    } catch {
+      setUncertain(true);
+      setMessage(UNKNOWN);
+    } finally {
+      busy.current = false;
+      setPending(false);
+    }
+  }
+  async function conversationAction(
+    action: "observe" | "ack" | "follow",
+    prompt?: string,
+  ) {
+    const before = facade.getSnapshot();
+    const retained = before.readConversation;
+    const view = retained?.turns.at(-1)?.view;
+    if (
+      busy.current ||
+      uncertain ||
+      fenced(before) ||
+      !retained ||
+      !view ||
+      retained.buildId !== before.buildId ||
+      retained.revision !== settings(before)?.revision
+    ) {
+      if (action === "observe") return;
+      throw new Error("READ_CONVERSATION_NOT_APPLIED");
+    }
+    const base = { operationId: retained.operationId, handleId: view.handleId };
+    const command =
+      action === "observe"
+        ? {
+            ...base,
+            kind: "chatgpt.observe-readonly-conversation" as const,
+            cursor: view.cursor,
+          }
+        : action === "ack" && view.result && !view.result.acknowledged
+          ? {
+              ...base,
+              kind: "chatgpt.ack-readonly-conversation" as const,
+              resultId: view.result.resultId,
+              cursor: view.cursor,
+            }
+          : action === "follow" && view.followReady && prompt !== undefined
+            ? {
+                ...base,
+                kind: "chatgpt.follow-readonly-conversation" as const,
+                prompt,
+              }
+            : null;
+    if (!command) throw new Error("READ_CONVERSATION_NOT_APPLIED");
+    busy.current = true;
+    setPending(true);
+    try {
+      const result = await facade.configure(
+        command,
+        `chat-readonly:${action}:${view.handleId}`,
+      );
+      if (result.state === "unknown") setUncertain(true);
+      if (result.state !== "applied") {
+        setMessage(
+          result.state === "unknown"
+            ? UNKNOWN
+            : "The conversation action was refused. Its retained result remains available.",
+        );
+        throw new Error("READ_CONVERSATION_NOT_APPLIED");
+      }
+    } catch (error) {
+      if (!(
+        error instanceof Error &&
+        error.message === "READ_CONVERSATION_NOT_APPLIED"
+      )) {
+        setUncertain(true);
+        setMessage(UNKNOWN);
+      }
+      throw error;
+    } finally {
+      busy.current = false;
+      setPending(false);
+    }
+  }
+  const conversation = snapshot.readConversation;
+  const latest = conversation?.turns.at(-1);
+  if (conversation && latest)
+    return (
+      <section
+        className="settings-group"
+        aria-label="Read-only Chat conversation"
+      >
+        <ReadConversation
+          view={latest.view}
+          text={latest.text}
+          history={conversation.turns.slice(0, -1)}
+          busy={pending}
+          blocked={
+            uncertain ||
+            fenced(snapshot) ||
+            conversation.buildId !== snapshot.buildId ||
+            conversation.revision !== settings(snapshot)?.revision
+          }
+          onObserve={() => conversationAction("observe")}
+          onAcknowledge={() => conversationAction("ack")}
+          onFollow={(prompt) => conversationAction("follow", prompt)}
+        />
+        {message && <p role="status">{message}</p>}
+      </section>
+    );
   return (
     <section className="settings-group" aria-label="Read-only file preview">
       <h2>Read-only file preview</h2>
       <p className="description">
         Choose a verified read-only folder, then select one text file in the
-        system picker. Review its file metadata here. Nothing is sent to ChatGPT
-        from this preview.
+        system picker. Nothing is sent to ChatGPT until you review the file,
+        confirm the account and choose Send.
       </p>
       <p className="description">
         You may see a file selected earlier. Check its path before continuing.
@@ -366,9 +506,34 @@ export function ChatReadonly({ snapshot, facade }: ChatReadonlyProps) {
                 Use this account
               </button>
             ) : (
-              <p role="status">
-                Account confirmed for this preview. Nothing has been sent.
-              </p>
+              <>
+                <p role="status">
+                  Account confirmed for this preview. Nothing has been sent.
+                </p>
+                {preview.sendAvailable && (
+                  <button
+                    type="button"
+                    className="primary"
+                    onClick={() => void send()}
+                    disabled={
+                      paused ||
+                      Boolean(
+                        snapshot.intents[
+                          `chat-readonly:send:${preview.operationId}`
+                        ],
+                      )
+                    }
+                  >
+                    Send to ChatGPT
+                  </button>
+                )}
+                {!preview.sendAvailable && (
+                  <p className="description">
+                    Sending from this preview is unavailable for the current
+                    model route.
+                  </p>
+                )}
+              </>
             )}
           </div>
           <p className="description">

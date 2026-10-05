@@ -943,6 +943,7 @@ export const ProductConfigurationEvidenceSchema = z.discriminatedUnion("kind", [
   }),
   z.strictObject({
     kind: z.literal("chatgpt.readonly-task-preview"),
+    sendAvailable: z.boolean().optional(),
     operationId: IdentifierSchema,
     workspaceId: IdentifierSchema,
     workspaceLabel: z.string().trim().min(1).max(120),
@@ -1306,6 +1307,7 @@ export const ProductConfigurationResultSchema = z.discriminatedUnion("ok", [
       "CHATGPT_ROUTE_UNAVAILABLE",
       "CHATGPT_CONVERSATION_UNCONFIRMED",
       "CHATGPT_CONVERSATION_REFUSED",
+      "CHATGPT_PROMPT_TOO_LARGE",
       "CHATGPT_ACCOUNT_UNAVAILABLE",
       "CHATGPT_ACCOUNT_CHANGED",
       "CHATGPT_ACCOUNT_CONFIRMATION_INVALID",

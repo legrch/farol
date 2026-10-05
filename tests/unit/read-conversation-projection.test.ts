@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { projectReadConversation } from "../../apps/desktop/read-conversation-projection.ts";
-import { ReadConversationPromptSchema } from "../../src/pkg/product-settings/chat-conversation.ts";
+import {
+  ReadConversationPromptSchema,
+  ReadConversationCursorSchema,
+} from "../../src/pkg/product-settings/chat-conversation.ts";
 import { ProductConfigurationCommandSchema } from "../../src/pkg/product-settings/contract.ts";
 import { configurationEffectOutcome } from "../../src/ui/configuration-outcome.ts";
 import type { ReadConversationProjection } from "../../apps/desktop/bridge/read-conversation.ts";
@@ -26,7 +29,7 @@ function fixture(): ReadConversationProjection {
     state: {
       handle,
       conversationId: "conversation",
-      phase: "submitted",
+      phase: "running",
       hasResult: false,
       deliveryAcknowledged: false,
       lifecycleSettled: false,
@@ -45,6 +48,13 @@ function fixture(): ReadConversationProjection {
   };
 }
 describe("renderer-safe Go Chat projection", () => {
+  it("parses bounded counters without throwing on malformed input", () => {
+    for (const value of ["", "x", "-1", "01", "18446744073709551616"])
+      expect(ReadConversationCursorSchema.safeParse(value).success).toBe(false);
+    expect(
+      ReadConversationCursorSchema.safeParse("18446744073709551615").success,
+    ).toBe(true);
+  });
   it("keeps exact owner and all transport sequences without inventing completion", () => {
     const p = fixture();
     const view = projectReadConversation("original", p);

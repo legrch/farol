@@ -21,6 +21,7 @@ afterEach(async () => {
   });
   for (const controller of controllers.splice(0)) controller.dispose();
   document.body.replaceChildren();
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 const workspaceId = "22222222-2222-4222-8222-222222222222";
@@ -79,7 +80,7 @@ function preview(
     ...overrides,
   };
 }
-async function mount(configuration = configured()) {
+async function mount(configuration = configured(), metadata = preview()) {
   const f = fixture();
   vi.mocked(f.api.bootstrap).mockResolvedValue({
     ...bootstrap(),
@@ -89,7 +90,7 @@ async function mount(configuration = configured()) {
     ok: true,
     snapshot: configuration,
     ...(command.kind === "chatgpt.prepare-readonly-task"
-      ? { evidence: preview() }
+      ? { evidence: metadata }
       : {}),
   }));
   const c = new WindowController(f.api);
@@ -149,6 +150,120 @@ async function mount(configuration = configured()) {
   };
 }
 describe("ChatReadonly bounded component", () => {
+  it("explains a known complete-prompt byte refusal and allows another file choice", async () => {
+    const h = await mount();
+    await h.select();
+    vi.mocked(h.f.api.configure).mockResolvedValueOnce({
+      ok: false,
+      error: "CHATGPT_PROMPT_TOO_LARGE",
+      snapshot: h.configuration,
+    });
+    await h.click("Choose file…");
+    expect(h.host.textContent).toContain(
+      "file and its context exceed the 8192-byte message limit",
+    );
+    expect(h.button("Choose file…").disabled).toBe(false);
+    expect(h.c.getSnapshot().readPreview).toBeNull();
+    expect(
+      h.calls().some((c) => c.kind === "chatgpt.submit-readonly-task"),
+    ).toBe(false);
+  });
+  it("sends only the exact approved preview once and retains early output across remount", async () => {
+    vi.useFakeTimers();
+    const metadata = preview({ sendAvailable: true });
+    const h = await mount(configured(), metadata);
+    await h.select();
+    await h.click("Choose file…");
+    const confirmationId = "77777777-7777-4777-8777-777777777777";
+    for (const [state, button] of [
+      ["observed", "Inspect current account"],
+      ["approved", "Use this account"],
+    ] as const) {
+      vi.mocked(h.f.api.configure).mockResolvedValueOnce({
+        ok: true,
+        snapshot: h.configuration,
+        evidence: { ...metadata, account: { confirmationId, state } },
+      });
+      await h.click(button);
+    }
+    const binding = {
+      profileId: "profile",
+      backendGeneration: "backend",
+      ownerId: "owner",
+      sessionId: "session",
+      taskId: "task",
+      taskEpoch: "1",
+      participantId: "participant",
+      turnId: "turn",
+      operationId,
+      turnGeneration: "1",
+    };
+    const view = {
+      kind: "chatgpt.readonly-conversation",
+      operationId,
+      handleId: "handle",
+      binding,
+      conversationId: "conversation",
+      phase: "running",
+      hasResult: false,
+      deliveryAcknowledged: false,
+      lifecycleSettled: false,
+      released: false,
+      followReady: false,
+      cursor: "0",
+      frames: [],
+    };
+    const first = deferred<unknown>();
+    vi.mocked(h.f.api.configure).mockReturnValueOnce(first.promise);
+    await act(async () => {
+      h.button("Send to ChatGPT").click();
+      h.button("Send to ChatGPT").click();
+    });
+    expect(
+      h.calls().filter((c) => c.kind === "chatgpt.submit-readonly-task"),
+    ).toEqual([{ kind: "chatgpt.submit-readonly-task", operationId }]);
+    await act(async () =>
+      first.resolve({ ok: true, snapshot: h.configuration, evidence: view }),
+    );
+    expect(
+      h.host
+        .querySelector('[aria-label="Current Chat turn"]')
+        ?.getAttribute("data-handle-id"),
+    ).toBe("handle");
+    vi.mocked(h.f.api.configure).mockResolvedValueOnce({
+      ok: true,
+      snapshot: h.configuration,
+      evidence: {
+        ...view,
+        cursor: "1",
+        frames: [{ sequence: "1", delta: "Visible before completion." }],
+      },
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(250);
+    });
+    expect(
+      h.host.querySelector('[aria-label="Chat answer"]')?.textContent,
+    ).toBe("Visible before completion.");
+    expect(h.button("Acknowledge result").disabled).toBe(true);
+    expect(h.button("Send follow-up").disabled).toBe(true);
+    await h.render("conversation-remount");
+    expect(
+      h.host.querySelector('[aria-label="Chat answer"]')?.textContent,
+    ).toBe("Visible before completion.");
+    expect(
+      h.calls().filter((c) => c.kind === "chatgpt.submit-readonly-task"),
+    ).toHaveLength(1);
+    expect(
+      h
+        .calls()
+        .some(
+          (c) =>
+            c.kind === "chatgpt.ack-readonly-conversation" ||
+            c.kind === "chatgpt.follow-readonly-conversation",
+        ),
+    ).toBe(false);
+  });
   it("does not dispatch on StrictMode mount, rerender or remount; requires explicit folder selection", async () => {
     const h = await mount();
     expect(h.button("Choose file…").disabled).toBe(true);
@@ -157,7 +272,12 @@ describe("ChatReadonly bounded component", () => {
     expect(h.calls()).toEqual([]);
     expect(h.f.api.task).not.toHaveBeenCalled();
     expect(h.f.api.snapshot).not.toHaveBeenCalled();
-    expect(h.host.textContent).not.toMatch(/Send|sign.in|Open ChatGPT/iu);
+    expect(h.host.textContent).not.toMatch(/sign.in|Open ChatGPT/iu);
+    expect(
+      [...h.host.querySelectorAll("button")].some((button) =>
+        /send/iu.test(button.textContent ?? ""),
+      ),
+    ).toBe(false);
     await h.select();
     expect(h.button("Choose file…").disabled).toBe(false);
     expect(h.calls()).toEqual([]);
