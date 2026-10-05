@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strconv"
 	"sync"
 	"time"
@@ -170,7 +171,7 @@ func (s *computerConnector) Open(ctx context.Context, operation string, in wire.
 	launch := port.ConnectorLaunch{Host: host, Approval: approval, TurnCorrelation: ids[4],
 		Admission:   authority.Admission{Identity: authority.Identity{OwnerID: approval.OwnerID, SessionID: ids[0], TaskID: ids[1], TaskEpoch: 1}, AuthorityID: ids[2], ComputerID: approval.ComputerID, ComputerGeneration: approval.Generation, Policy: policy},
 		Participant: authority.ParticipantAdmission{ParticipantID: ids[3], Role: authority.Main, MutationOwnership: authority.NoOwnership}}
-	if s.mutations != nil {
+	if slices.Contains(policy.Capabilities, authority.Write) {
 		// Existing Computer write-ownership policy, not Task/Chat membership.
 		launch.Participant.MutationOwnership = authority.TaskOwnership
 	}

@@ -72,6 +72,11 @@ func computerUnavailable() error {
 func computerFailure(err error) error {
 	var failure *authority.Failure
 	if errors.As(err, &failure) && failure != nil {
+		// Connector lifetime withdrawal is an unavailable current authority,
+		// expressed through the existing public workspace refusal vocabulary.
+		if failure.Code == "COMPUTER_AUTHORITY_STORE_UNAVAILABLE" && failure.Source == "connector-owner" {
+			return computerUnavailable()
+		}
 		return &workspacect.Failure{Code: failure.Code, Source: failure.Source, Retry: "never"}
 	}
 	return err // No unclassified error establishes an absent owner or replay.
