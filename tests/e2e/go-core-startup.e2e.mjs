@@ -595,8 +595,9 @@ async function attest(selected) {
       "apps/desktop/bridge/read-conversation.ts",
       ...(selected.chatTyped
         ? [
+            // Type-only renderer/contract.ts is erased, not a runtime input.
+            // The exact whole-source tree check above still binds its bytes.
             "src/ui/renderer/chat-direct.tsx",
-            "src/ui/renderer/contract.ts",
             "src/ui/renderer/conversation-draft.ts",
             "src/ui/renderer/shell.tsx",
             "src/pkg/product-settings/contract.ts",
