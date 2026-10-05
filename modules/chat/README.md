@@ -9,7 +9,7 @@ See [ADMISSION.md](ADMISSION.md) for the published guard and
 Normal core-enabled Desktop now composes the native journal, browser exchange,
 bounded durable results and React conversation facade. The
 [controlled normal desktop witness](../../docs/desktop-core.md#controlled-normal-desktop-chat)
-proves two deliberate turns within one backend lifetime. Native Go tests also
+proves two deliberate turns and ordinary clean Quit at05ffee4. Native Go tests also
 cover exact stored answers across clean successor boots, including an intervening
 empty retirement. Browser/host terminal facts are fixtures in those tests;
 current-authorized historical UI reads and app restart remain open. Production

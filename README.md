@@ -22,12 +22,13 @@ update the installed product.
 | Source checkpoint described here | Package `bef6d56` passed actual React edit → one Go native edit/retained journal → unacknowledged Quit → same-profile reopen → exact Observe → Go-owned delivery ACK. Independent file/journal checks found no second effect; provider Sends stayed zero. Go now owns Settings pending, offer and ACK policy. TypeScript retains typed configuration storage, legacy observation, root measurement and Git discovery. This unsigned `0.1.10-owner.beta.1`, build `12` candidate is not installed or released. |
 | UI target                        | React + TypeScript shell is composed. Plain TypeScript retains Electron/browser mechanics. Native Home, Settings, Appearance and configured-profile reopening have been exercised.                                                                                                                                                                                                                                                                                                                            |
 
-The Go cutover is incomplete. The `5724af7` normal-entrypoint Dev candidate passed
+The Go cutover is incomplete. The `05ffee4` normal-entrypoint Dev candidate passed
 a controlled React/Go two-turn Chat journey: useful output before completion,
 explicit result ACK, Go settlement/release, retained first result and exactly two
-accepted Sends in the same conversation. Ordinary Quit remained unconfirmed and
-the disposable profile was quarantined. This is synthetic native evidence within
-one backend lifetime, not live-provider, restart or installed qualification. See
+accepted Sends in the same conversation. Durable terminal references entered the
+Go journal, and ordinary Quit confirmed clean retirement and drain. This is
+synthetic native evidence, not live-provider, historical UI read, restart or
+installed qualification. The earlier failed profile remains quarantined. See
 the [controlled Chat witness](docs/desktop-core.md#controlled-normal-desktop-chat).
 
 Separately, the owner reported installation of the access hotfix

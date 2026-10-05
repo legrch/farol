@@ -821,7 +821,27 @@ installed startup, a live provider, or release acceptance.
 
 ## Controlled normal desktop Chat
 
-Source `5724af71e3bd8f97b6d5de8e594723998615a566` passed the controlled two-turn
+The current accepted scoped witness is source
+`05ffee490ec8c413372a472ac982338fa01ffbf1`, build
+`4d4e044ba711d8a19f030203b03e0eaecf8e93f407c738b2a85d12f12bacdf93`.
+Its paired unsigned app digest is
+`b2b632ba495f4acda911dbbc6a19a3a817674ff51f5a7b8a36b774812274c99a`.
+Package build, relocated standalone verification and exact Dev preflight passed.
+The actual normal-entrypoint Dev run passed both turns and **ordinary clean
+Quit**: the exact Electron child exited 0 without a signal, Go drain confirmed,
+the run marker was removed, and disposable fixture cleanup completed. The
+independent ledger recorded exactly two accepted Sends and six synthetic account
+GETs. All 38 recorded window sets were hidden and unfocused. The terminal journal
+was v3 with both retired turns and durable result publications.
+
+Local native receipt `go-core-startup-bb5ed032-ba0b-486a-a784-934c4ad89cc3.json`
+records this run; the command exited 0. Production behavior was covered by the
+complete aggregate at `44f77aa`; the later `05ffee4` change updated only the
+offline harness/documentation, with 1052 witness checks and 15 focused tests.
+Narrow independent source reviews found no P1/P2 findings. This is not full-range
+cutover, live-provider, installation, app-restart or historical UI acceptance.
+
+Earlier source `5724af71e3bd8f97b6d5de8e594723998615a566` passed the controlled two-turn
 journey through normal `main.cjs`, the real Go child, physical browser adapter and
 React Home UI. `tests/e2e/go-core-startup.e2e.mjs --chat-two-turn` uses the existing
 loopback behavioral site, synthetic account and an explicit Dev-only control and
@@ -837,7 +857,7 @@ session, task/epoch and participant. It used a new turn/operation and generation
 The first result remained retained after the second; the ledger ended at exactly
 two attempted and accepted Sends, with no extra Send or implicit ACK on remount.
 
-The preserved build is
+That earlier preserved build is
 `469b1ffdbb5cc8d9c658d6d237b80714fdad0763074d2539dccecb7e0fcbc5a4`.
 The paired unsigned app was built and independently verified with artifact digest
 `fcc156705c3d9b10780d9e6b6694c353b73950f3af0db92edb771c25fef0751b`.
@@ -859,7 +879,7 @@ scenario; production receives no expected answer. Focused evidence includes:
 | Parser / witness            | `tests/unit/read-conversation-witness.test.ts`, real public DOM parser and semantic reducer; all four segment vectors | Exact early text, no future text in raw or encoded form, content-free timeout diagnostics     |
 | React / controller          | `tests/renderer/chat-readonly.test.tsx`, two automatic polls through the real projection                              | Cursor 0 → 1 → 4, useful text while running, one Send, no result ACK or Follow                |
 | Pure harness                | `go-core-startup.e2e.mjs --self-test`                                                                                 | Exact logical ownership, physical Send counts, result ACK and Go settlement/release witnesses |
-| Assembled controlled native | `go-core-startup.e2e.mjs --chat-two-turn --run-native` with exact candidate/build identity                            | Normal startup and both UI turns; ordinary Quit remains a separately failed gate              |
+| Assembled controlled native | `go-core-startup.e2e.mjs --chat-two-turn --run-native` with exact candidate/build identity                            | Normal startup, both UI turns and clean Quit pass at05ffee4; earlier5724 Quit remains failed  |
 
 That candidate retained answers only in the current backend/window lifetime.
 Current source instead composes the bounded native result store, with the same
