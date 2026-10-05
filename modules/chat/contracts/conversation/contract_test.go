@@ -35,7 +35,7 @@ type results struct{ text string }
 
 func (r *results) Retain(_ context.Context, w port.RetainRequest) (*port.RetainReceipt, error) {
 	r.text = string(w.Payload)
-	return &port.RetainReceipt{Binding: w.Binding, Result: w.Result, Bytes: len(w.Payload)}, nil
+	return &port.RetainReceipt{Binding: w.Binding, Result: w.Result, Bytes: len(w.Payload), Conversation: w.Conversation}, nil
 }
 
 type browser struct {

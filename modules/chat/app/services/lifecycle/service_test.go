@@ -164,7 +164,7 @@ func (r *resultFixture) Retain(_ context.Context, request port.RetainRequest) (*
 	if r.hook != nil {
 		r.hook(request)
 	}
-	reply := &port.RetainReceipt{Binding: request.Binding, Result: request.Result, Bytes: len(request.Payload)}
+	reply := &port.RetainReceipt{Binding: request.Binding, Result: request.Result, Bytes: len(request.Payload), Conversation: request.Conversation}
 	switch r.fault {
 	case "error":
 		return nil, errors.New("private retention failure")
@@ -176,6 +176,10 @@ func (r *resultFixture) Retain(_ context.Context, request port.RetainRequest) (*
 		reply.Result.ID = "other"
 	case "bytes":
 		reply.Bytes++
+	case "conversation":
+		reply.Conversation.ProviderReplyID = "other"
+	case "conversation-missing":
+		reply.Conversation = port.RetainedConversation{}
 	}
 	return reply, nil
 }

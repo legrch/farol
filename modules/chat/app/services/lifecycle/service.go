@@ -280,18 +280,34 @@ func (s *Service) Cancel(ctx context.Context, h *Handle, resultID string) (*turn
 // then commits terminal metadata. A matching known retention reply is mandatory;
 // byte storage is not a journal field and is never persisted by this owner.
 func (s *Service) Finish(ctx context.Context, h *Handle, binding turn.Binding, result turn.Result, payload []byte) (*turn.Snapshot, error) {
+	return s.finish(ctx, h, binding, result, payload, nil)
+}
+
+// A conversation terminal is derived only from Observe's private staged state.
+// The public generic Finish cannot fabricate a completed conversation envelope.
+func (s *Service) finish(ctx context.Context, h *Handle, binding turn.Binding, result turn.Result, payload []byte, observed *output.State) (*turn.Snapshot, error) {
 	if s == nil || s.deps.Results == nil {
 		return nil, Unavailable
 	}
 	if len(payload) > s.deps.ResultBytesLimit {
 		return nil, Invalid
 	}
+	var metadata port.RetainedConversation
 	m, err := s.stage(ctx, h, true, func(q *turn.Queue, before turn.Snapshot) (port.JournalEntry, error) {
 		if before.HasResult {
 			return port.JournalEntry{}, turn.Transition
 		}
 		if binding.Reservation.Identity != identity(h.fixed) {
 			return port.JournalEntry{}, Mismatch
+		}
+		if h.conversation != nil {
+			if observed == nil || observed.Text() != string(payload) {
+				return port.JournalEntry{}, Invalid
+			}
+			metadata = retainedConversation(h, *observed)
+			if !metadata.Valid(result, payload) {
+				return port.JournalEntry{}, Invalid
+			}
 		}
 		after, err := q.Finish(binding, result)
 		return port.JournalEntry{Binding: h.fixed, Kind: "finish", Before: before, After: after, Closed: true}, err
@@ -303,8 +319,8 @@ func (s *Service) Finish(ctx context.Context, h *Handle, binding turn.Binding, r
 		return nil, err
 	}
 	bytes := append([]byte(nil), payload...)
-	receipt, err := s.deps.Results.Retain(ctx, port.RetainRequest{Binding: h.fixed, Result: result, Payload: bytes})
-	if err != nil || receipt == nil || receipt.Binding != h.fixed || receipt.Result != result || receipt.Bytes != len(payload) {
+	receipt, err := s.deps.Results.Retain(ctx, port.RetainRequest{Binding: h.fixed, Result: result, Payload: bytes, Conversation: metadata})
+	if err != nil || receipt == nil || receipt.Binding != h.fixed || receipt.Result != result || receipt.Bytes != len(payload) || receipt.Conversation != metadata {
 		return nil, s.fail(m)
 	}
 	if err := s.commit(ctx, m, true); err != nil {

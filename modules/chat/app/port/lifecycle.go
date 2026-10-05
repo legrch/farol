@@ -80,15 +80,17 @@ type Journal interface {
 // count held for delivery until the initiating client's explicit ACK. Reading/rendering is not that ACK.
 // The adapter owns accepted storage/bounds; errors are never permission to retry.
 type RetainRequest struct {
-	Binding TurnBinding
-	Result  turn.Result
-	Payload []byte
+	Binding      TurnBinding
+	Result       turn.Result
+	Payload      []byte
+	Conversation RetainedConversation
 }
 
 type RetainReceipt struct {
-	Binding TurnBinding
-	Result  turn.Result
-	Bytes   int
+	Binding      TurnBinding
+	Result       turn.Result
+	Bytes        int
+	Conversation RetainedConversation
 }
 
 type ResultRetention interface {

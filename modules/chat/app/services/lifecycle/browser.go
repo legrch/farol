@@ -187,8 +187,18 @@ func (s *Service) Send(ctx context.Context, h *Handle, prompt string, deadlineMi
 		if s.deps.Results == nil {
 			return nil, s.fail(m)
 		}
-		receipt, err := s.deps.Results.Retain(ctx, port.RetainRequest{Binding: h.fixed, Result: result})
-		if err != nil || receipt == nil || receipt.Binding != h.fixed || receipt.Result != result || receipt.Bytes != 0 {
+		s.deps.Gate.Lock()
+		currentErr := s.current(ctx, m)
+		metadata := retainedConversation(h, h.output)
+		s.deps.Gate.Unlock()
+		if currentErr != nil {
+			return nil, currentErr
+		}
+		if !metadata.Valid(result, nil) {
+			return nil, s.fail(m)
+		}
+		receipt, err := s.deps.Results.Retain(ctx, port.RetainRequest{Binding: h.fixed, Result: result, Conversation: metadata})
+		if err != nil || receipt == nil || receipt.Binding != h.fixed || receipt.Result != result || receipt.Bytes != 0 || receipt.Conversation != metadata {
 			return nil, s.fail(m)
 		}
 	}

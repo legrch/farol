@@ -134,6 +134,10 @@ func TestRelayContractUsefulDeltaToolReturnContinuesSameTurn(t *testing.T) {
 		t.Fatalf("result=%+v %v", result, err)
 	}
 	request := port.RetainRequest{Binding: toRetainBinding(scope.Binding), Result: turn.Result{ID: result.ResultID, Outcome: turn.Completed, Code: result.Code}, Payload: []byte("changed bytes")}
+	selection := port.Selection(result.Requested)
+	observed := fixtureFacts(selection).Projection()
+	request.Conversation = port.RetainedConversation{ProviderConversationID: result.ConversationID, ProviderUserTurnID: result.UserTurnID, ProviderReplyID: result.ReplyID, Requested: selection, Observed: observed, Complete: true,
+		Evidence: port.SelectionEvidence{Requested: selection, Admitted: selection, Observed: observed, ResolutionSource: "unknown", AdmissionSource: "chat-policy", PinnedSource: "configured-pinned-scope", ObservationSource: "field-facts", EvidenceID: "witness"}}
 	if _, err := m.Retain(ctx, request); !errors.Is(err, retained.Conflict) {
 		t.Fatalf("actual bytes were not retained: %v", err)
 	}

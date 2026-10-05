@@ -427,7 +427,7 @@ func (r *resultFixture) Retain(_ context.Context, w port.RetainRequest) (*port.R
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.calls++
-	return &port.RetainReceipt{Binding: w.Binding, Result: w.Result, Bytes: len(w.Payload)}, nil
+	return &port.RetainReceipt{Binding: w.Binding, Result: w.Result, Bytes: len(w.Payload), Conversation: w.Conversation}, nil
 }
 func serviceFixture(t *testing.T) (*lifecycle.Service, *exchangeFixture, *resultFixture, port.ConversationInput) {
 	t.Helper()

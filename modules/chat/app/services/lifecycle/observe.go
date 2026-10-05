@@ -116,14 +116,14 @@ func (c *Conversation) Observe(ctx context.Context, deadline uint64) error {
 		}
 	case port.Completed:
 		if !duplicate {
-			view, err = s.Finish(internal, h, before.Binding, turn.Result{ID: h.fixed.OperationID, Outcome: turn.Completed, Code: "PROVIDER_COMPLETED"}, []byte(state.Text()))
+			view, err = s.finish(internal, h, before.Binding, turn.Result{ID: h.fixed.OperationID, Outcome: turn.Completed, Code: "PROVIDER_COMPLETED"}, []byte(state.Text()), &state)
 		}
 	case port.Refused, port.OutcomeUnknown:
 		outcome, code := turn.Refused, "PROVIDER_REFUSED"
 		if event.Kind == port.OutcomeUnknown {
 			outcome, code = turn.UnknownOutcome, "PROVIDER_OUTCOME_UNKNOWN"
 		}
-		view, err = s.Finish(internal, h, before.Binding, turn.Result{ID: h.fixed.OperationID, Outcome: outcome, Code: code}, []byte(state.Text()))
+		view, err = s.finish(internal, h, before.Binding, turn.Result{ID: h.fixed.OperationID, Outcome: outcome, Code: code}, []byte(state.Text()), &state)
 	case port.AwaitingOwner:
 		view, err = s.Apply(internal, h, Change{Action: AwaitOwner, Binding: before.Binding})
 	case port.Quiescent:

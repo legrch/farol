@@ -76,14 +76,14 @@ func (m *Memory) Retain(ctx context.Context, request port.RetainRequest) (*port.
 	if m.lifetime == nil || m.closed || m.lifetime.Err() != nil || ctx.Err() != nil {
 		return nil, Unavailable
 	}
-	if !validBinding(request.Binding) || !validResult(request.Result) || len(request.Payload) > m.limits.ResultBytes {
+	if len(request.Payload) > m.limits.ResultBytes || !validBinding(request.Binding) || !validResult(request.Result) || !request.Conversation.Valid(request.Result, request.Payload) {
 		return nil, Invalid
 	}
 	if request.Binding.ProfileID != m.scope.ProfileID || request.Binding.BackendGeneration != m.scope.BackendGeneration {
 		return nil, Mismatch
 	}
 	if old, found := m.entries[request.Binding.OperationID]; found {
-		if old.receipt.Binding != request.Binding || old.receipt.Result != request.Result || !bytes.Equal(old.payload, request.Payload) {
+		if old.receipt.Binding != request.Binding || old.receipt.Result != request.Result || old.receipt.Conversation != request.Conversation || !bytes.Equal(old.payload, request.Payload) {
 			return nil, Conflict
 		}
 		receipt := old.receipt
@@ -96,7 +96,7 @@ func (m *Memory) Retain(ctx context.Context, request port.RetainRequest) (*port.
 	if ctx.Err() != nil || m.lifetime.Err() != nil {
 		return nil, Unavailable
 	}
-	receipt := port.RetainReceipt{Binding: request.Binding, Result: request.Result, Bytes: len(payload)}
+	receipt := port.RetainReceipt{Binding: request.Binding, Result: request.Result, Bytes: len(payload), Conversation: request.Conversation}
 	m.entries[request.Binding.OperationID] = retained{receipt: receipt, payload: payload}
 	m.usedBytes += len(payload)
 	return &receipt, nil

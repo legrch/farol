@@ -328,7 +328,7 @@ func (exactBrowser) Dispose(port.DisposeRequest) (*port.DisposeResponse, error) 
 type exactResults struct{}
 
 func (exactResults) Retain(_ context.Context, r port.RetainRequest) (*port.RetainReceipt, error) {
-	return &port.RetainReceipt{Binding: r.Binding, Result: r.Result, Bytes: len(r.Payload)}, nil
+	return &port.RetainReceipt{Binding: r.Binding, Result: r.Result, Bytes: len(r.Payload), Conversation: r.Conversation}, nil
 }
 
 func TestActualLifecycleTransactionsValidateThroughSlotRelease(t *testing.T) {
