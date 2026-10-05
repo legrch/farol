@@ -48,6 +48,7 @@ type JournalEntry struct {
 	Closed                       bool
 	Quiescence                   turn.QuiescenceEvidence
 	Disposal                     turn.DisposalEvidence
+	ResultPublication            ResultPublication `json:",omitzero"`
 }
 
 type JournalWrite struct {
@@ -108,6 +109,7 @@ type RetirementTurn struct {
 	AcknowledgedRevision, SettledRevision, ReleasedRevision uint64
 	Quiescence                                              turn.QuiescenceEvidence
 	Disposal                                                turn.DisposalEvidence
+	ResultPublication                                       ResultPublication `json:",omitzero"`
 }
 
 type RetirementWrite struct {

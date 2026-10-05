@@ -54,7 +54,7 @@ func decode(raw []byte, limits Limits) (record, error) {
 // Replay is ONLY validation of stored queue transitions. Its queue/registry never
 // escapes this function, creates a Handle or supplies current admission.
 func validate(value record, limits Limits) error {
-	if !validLimits(limits) || value.Version != 2 || value.Root.Device == 0 || value.Root.Inode == 0 || !validIncarnations(value.Incarnations, value.Scope, limits) || value.Writes == nil || len(value.Writes) > limits.Records {
+	if !validLimits(limits) || (value.Version != 2 && value.Version != 3) || value.Root.Device == 0 || value.Root.Inode == 0 || !validIncarnations(value.Incarnations, value.Scope, limits) || value.Writes == nil || len(value.Writes) > limits.Records {
 		return Invalid
 	}
 	q, err := turn.NewQueue(value.Scope.ProfileID, value.Scope.BackendGeneration)
@@ -71,6 +71,11 @@ func validate(value record, limits Limits) error {
 			return Invalid
 		}
 		e := w.Entry
+		if p := e.ResultPublication; p != (port.ResultPublication{}) {
+			if value.Version != 3 || !p.Valid() || p.Root != value.Root || (e.Kind != "finish" && e.Kind != "send-settled") || e.Before.HasResult || !e.After.HasResult {
+				return Invalid
+			}
+		}
 		if !validBinding(e.Binding, value.Scope) {
 			return Invalid
 		}
@@ -125,6 +130,9 @@ func validate(value record, limits Limits) error {
 		}
 		proof := proofs[i.OperationID]
 		proof.Snapshot = after
+		if !before.HasResult && after.HasResult {
+			proof.ResultPublication = e.ResultPublication
+		}
 		switch e.Kind {
 		case "request-computer":
 			unresolvedCalls[i.OperationID] = e.CallID

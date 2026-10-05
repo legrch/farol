@@ -115,7 +115,7 @@ func (r *Repository) OpenFresh(ctx context.Context, scope port.JournalScope) (*p
 		}
 		incarnations = append(append([]string{}, s.predecessor.Incarnations...), scope.BackendGeneration)
 	}
-	initial := record{Version: 2, Root: s.root, Scope: scope, Incarnations: incarnations, Writes: []port.JournalWrite{}}
+	initial := record{Version: 3, Root: s.root, Scope: scope, Incarnations: incarnations, Writes: []port.JournalWrite{}}
 	raw, err := encode(initial, s.limits)
 	if err != nil {
 		return nil, s.reject(Invalid, false)

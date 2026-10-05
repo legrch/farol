@@ -40,7 +40,7 @@ func TestReadIntentCodecPromotionRoundtripAndOriginalAdmission(t *testing.T) {
 		t.Fatal(err)
 	}
 	stored := codecRoundtrip(t, r, p)
-	if stored.Version != 2 || len(stored.Writes) != 2 || stored.Writes[0] != admitted || stored.Writes[1].Entry.Kind != "promote-conversation" || stored.Writes[1].Entry.IntentDigest == digest || stored.Writes[1].Entry.Binding != admitted.Entry.Binding || stored.Writes[1].Entry.Before.Phase != turn.Admitted || stored.Writes[1].Entry.After.Phase != turn.Pending {
+	if stored.Version != 3 || len(stored.Writes) != 2 || stored.Writes[0] != admitted || stored.Writes[1].Entry.Kind != "promote-conversation" || stored.Writes[1].Entry.IntentDigest == digest || stored.Writes[1].Entry.Binding != admitted.Entry.Binding || stored.Writes[1].Entry.Before.Phase != turn.Admitted || stored.Writes[1].Entry.After.Phase != turn.Pending {
 		t.Fatal("promotion rewrote admission/storage version")
 	}
 	raw := append([]byte(nil), p.raw...)
@@ -108,7 +108,7 @@ func TestReadIntentCodecWithdrawalAndOldRecordsKeepMeaning(t *testing.T) {
 		t.Fatal(err)
 	}
 	stored := codecRoundtrip(t, r, p)
-	if stored.Version != 2 || len(stored.Writes) != 3 || stored.Writes[0] != admitted.Writes[0] || stored.Writes[1].Entry.Kind != "cancel" || stored.Writes[2].Entry.Kind != "acknowledge" || !stored.Writes[2].Entry.After.DeliveryAcknowledged {
+	if stored.Version != 3 || len(stored.Writes) != 3 || stored.Writes[0] != admitted.Writes[0] || stored.Writes[1].Entry.Kind != "cancel" || stored.Writes[2].Entry.Kind != "acknowledge" || !stored.Writes[2].Entry.After.DeliveryAcknowledged {
 		t.Fatal("withdrawal changed codec contract")
 	}
 	raw := append([]byte(nil), p.raw...)

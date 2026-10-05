@@ -197,9 +197,8 @@ func (s *Service) Send(ctx context.Context, h *Handle, prompt string, deadlineMi
 		if !metadata.Valid(result, nil) {
 			return nil, s.fail(m)
 		}
-		receipt, err := s.deps.Results.Retain(ctx, port.RetainRequest{Binding: h.fixed, Result: result, Conversation: metadata})
-		if err != nil || receipt == nil || receipt.Binding != h.fixed || receipt.Result != result || receipt.Bytes != 0 || receipt.Conversation != metadata {
-			return nil, s.fail(m)
+		if err := s.retainResult(ctx, m, port.RetainRequest{Binding: h.fixed, Result: result, Conversation: metadata}); err != nil {
+			return nil, err
 		}
 	}
 	err = s.settle(ctx, m, func(q *turn.Queue, before turn.Snapshot) (port.JournalEntry, error) {

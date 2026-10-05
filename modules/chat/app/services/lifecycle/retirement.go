@@ -61,10 +61,36 @@ func (s *Service) Retire(ctx context.Context) (port.CleanRetirement, error) {
 		return nil, err
 	}
 	write := port.RetirementWrite{Scope: s.scope, Root: s.root, PreviousRevision: s.revision, Revision: s.revision + 1, Turns: turns}
+	retained := make([]retirementResult, 0, len(turns))
+	for _, item := range turns {
+		if item.ResultPublication != (port.ResultPublication{}) {
+			h := s.handles[item.Binding.OperationID]
+			retained = append(retained, retirementResult{receipt: *h.retained, text: h.output.Text()})
+		}
+	}
 	s.fence++
 	fence := s.fence
 	s.retiring = true
 	s.deps.Gate.Unlock()
+
+	// Durable bytes must still be readable at their exact physical publication
+	// before a clean retirement can describe them. IO never holds the live gate;
+	// the monotonic retiring state prevents new observation or result mutation.
+	if err := s.verifyRetirementResults(ctx, retained); err != nil {
+		s.deps.Gate.Lock()
+		s.unknown = true
+		s.deps.Gate.Unlock()
+		return nil, Unsettled
+	}
+	s.deps.Gate.Lock()
+	current := ctx.Err() == nil && !s.unknown && s.retiring && s.pending == nil && s.fence == fence && s.revision == write.PreviousRevision
+	if !current {
+		s.unknown = true
+	}
+	s.deps.Gate.Unlock()
+	if !current {
+		return nil, Unsettled
+	}
 
 	// The journal receives its own copy; a port cannot mutate the owner's proof.
 	receipt, err := journal.Retire(ctx, port.CopyRetirement(write))
@@ -83,6 +109,35 @@ func (s *Service) Retire(ctx context.Context) (port.CleanRetirement, error) {
 	s.revision, s.retiring = write.Revision, false
 	s.retired = &retirementProof{owner: s, receipt: known}
 	return s.retired, nil
+}
+
+type retirementResult struct {
+	receipt port.RetainReceipt
+	text    string
+}
+
+func (s *Service) verifyRetirementResults(ctx context.Context, retained []retirementResult) error {
+	if len(retained) == 0 {
+		return nil
+	}
+	store, ok := s.deps.Results.(port.DurableResults)
+	if !ok {
+		return Unavailable
+	}
+	for _, item := range retained {
+		expected := item.receipt
+		if !expected.Publication.Valid() || expected.Publication.Root != s.root {
+			return Mismatch
+		}
+		read, err := store.Read(ctx, port.ResultRead{Binding: expected.Binding, Result: expected.Result, Publication: expected.Publication})
+		if err != nil || ctx.Err() != nil || read == nil || read.Binding != expected.Binding || read.Result != expected.Result || read.Conversation != expected.Conversation || len(read.Payload) != expected.Bytes || !read.Conversation.Valid(read.Result, read.Payload) {
+			return Unsettled
+		}
+		if expected.Conversation != (port.RetainedConversation{}) && string(read.Payload) != item.text {
+			return Mismatch
+		}
+	}
+	return nil
 }
 
 func (s *Service) retirementTurns() ([]port.RetirementTurn, error) {
@@ -115,7 +170,11 @@ func (s *Service) retirementTurns() ([]port.RetirementTurn, error) {
 		} else if view.SendIntent || view.Result.Outcome != turn.CancelledOutcome || view.Result.Code != "NOT_DISPATCHED" || h.settledRevision != 0 || h.releasedRevision != 0 || h.quiescence != (turn.QuiescenceEvidence{}) || h.disposal != (turn.DisposalEvidence{}) {
 			return nil, Unsettled
 		}
-		out = append(out, port.RetirementTurn{Binding: h.fixed, Snapshot: view, AcknowledgedRevision: h.ackRevision, SettledRevision: h.settledRevision, ReleasedRevision: h.releasedRevision, Quiescence: h.quiescence, Disposal: h.disposal})
+		var publication port.ResultPublication
+		if h.retained != nil {
+			publication = h.retained.Publication
+		}
+		out = append(out, port.RetirementTurn{Binding: h.fixed, Snapshot: view, AcknowledgedRevision: h.ackRevision, SettledRevision: h.settledRevision, ReleasedRevision: h.releasedRevision, Quiescence: h.quiescence, Disposal: h.disposal, ResultPublication: publication})
 	}
 	return out, nil
 }

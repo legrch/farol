@@ -110,7 +110,7 @@ func neverDispatched(actual port.RetirementTurn, scope port.JournalScope) bool {
 		Result:               turn.Result{ID: actual.Snapshot.Result.ID, Outcome: turn.CancelledOutcome, Code: "NOT_DISPATCHED"},
 		DeliveryAcknowledged: true, LifecycleSettled: true,
 	}
-	return actual.Snapshot == want && actual.SettledRevision == 0 && actual.ReleasedRevision == 0 && actual.Quiescence == (turn.QuiescenceEvidence{}) && actual.Disposal == (turn.DisposalEvidence{})
+	return actual.Snapshot == want && actual.SettledRevision == 0 && actual.ReleasedRevision == 0 && actual.Quiescence == (turn.QuiescenceEvidence{}) && actual.Disposal == (turn.DisposalEvidence{}) && actual.ResultPublication == (port.ResultPublication{})
 }
 
 // ValidateRecord validates closed persisted data, never manufactures a proof.

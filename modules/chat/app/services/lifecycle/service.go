@@ -79,6 +79,7 @@ type Handle struct {
 	readWithdrawal                                 bool // exact bare-read withdrawal intent, never a promoted turn
 	readPromoted                                   bool // known promotion receipt; ordinary Create is not promotion replay
 	sendAuthorization                              port.SendAuthorization
+	retained                                       *port.RetainReceipt
 }
 
 var _ port.BoundTurn = (*Handle)(nil)
@@ -319,9 +320,8 @@ func (s *Service) finish(ctx context.Context, h *Handle, binding turn.Binding, r
 		return nil, err
 	}
 	bytes := append([]byte(nil), payload...)
-	receipt, err := s.deps.Results.Retain(ctx, port.RetainRequest{Binding: h.fixed, Result: result, Payload: bytes, Conversation: metadata})
-	if err != nil || receipt == nil || receipt.Binding != h.fixed || receipt.Result != result || receipt.Bytes != len(payload) || receipt.Conversation != metadata {
-		return nil, s.fail(m)
+	if err := s.retainResult(ctx, m, port.RetainRequest{Binding: h.fixed, Result: result, Payload: bytes, Conversation: metadata}); err != nil {
+		return nil, err
 	}
 	if err := s.commit(ctx, m, true); err != nil {
 		return nil, err
@@ -331,6 +331,7 @@ func (s *Service) finish(ctx context.Context, h *Handle, binding turn.Binding, r
 }
 
 type mutation struct {
+	retained       *port.RetainReceipt
 	readWithdrawal bool
 	conversation   *Conversation
 	caller         *CallerToolCall
@@ -438,6 +439,14 @@ func (s *Service) commit(ctx context.Context, m *mutation, publish bool) error {
 		s.deps.Gate.Unlock()
 		return err
 	}
+	if m.retained != nil {
+		if (m.entry.Kind != "finish" && m.entry.Kind != "send-settled") || !m.entry.After.HasResult || m.entry.After.Result != m.retained.Result || m.entry.Binding != m.retained.Binding {
+			s.unknown = true
+			s.deps.Gate.Unlock()
+			return Unsettled
+		}
+		m.entry.ResultPublication = m.retained.Publication
+	}
 	write := port.JournalWrite{Scope: s.scope, PreviousRevision: s.revision, Revision: s.revision + 1, Entry: m.entry}
 	s.deps.Gate.Unlock()
 	receipt, err := s.deps.Journal.Commit(ctx, write)
@@ -457,6 +466,11 @@ func (s *Service) commit(ctx context.Context, m *mutation, publish bool) error {
 	}
 	if publish {
 		switch m.entry.Kind {
+		case "finish", "send-settled":
+			if m.retained != nil {
+				copy := *m.retained
+				m.handle.retained = &copy
+			}
 		case "cancel":
 			if m.readWithdrawal {
 				return s.stageReadWithdrawalACK(m)
