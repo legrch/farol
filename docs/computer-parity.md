@@ -59,10 +59,11 @@ workspace; the live owner-connector selection and acceptance remain pending.
 Synthetic native Git fixtures do not settle that live proof. The user's actual
 configuration may reference further files, programs or credential stores that
 remain outside this approval; those are a visible command failure, not an
-unsandboxed fallback or proof of complete host-terminal parity. A worktree
-inside the user's protected `.codex` store remains denied even when its
-repository metadata has been approved; a normal linked worktree outside that
-store is covered by the existing explicit metadata grant.
+unsandboxed fallback or proof of complete host-terminal parity. Worktrees
+inside `.codex` or `.claude` follow ordinary owner/task workspace grants and
+explicit exclusions, as described in [Agent store access](agent-store-access.md).
+Their directory names do not veto an approved scope. Repository and linked
+worktree metadata still require the existing separate Git approval.
 
 Shell launch requires a current owner verification for each selected workspace:
 its access-check generation, folder identity and build evidence must match the
