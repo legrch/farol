@@ -674,6 +674,16 @@ export class WindowController implements RendererFacade {
           command.kind === "chatgpt.ack-readonly-conversation" ||
           command.kind === "chatgpt.follow-readonly-conversation"
         ) {
+          // An independent refresh may win configuration snapshot ordering.
+          // Conversation correlation still uses the exact current revision,
+          // build and retained owner below; do not adopt the older snapshot.
+          const conversationRevision = this.state.configuration
+            ? configurationEvidenceRevision(
+                this.state.configuration,
+                outcome.result.snapshot,
+                true,
+              )
+            : null;
           const start = command.kind === "chatgpt.submit-readonly-task";
           const first = before.readPreview;
           const exactStart =
@@ -682,13 +692,13 @@ export class WindowController implements RendererFacade {
             first.value.operationId === command.operationId &&
             first.value.account?.state === "approved" &&
             first.buildId === before.buildId &&
-            first.revision === revision &&
+            first.revision === conversationRevision &&
             this.state.readPreview === first;
           const next =
             value?.kind === "chatgpt.readonly-conversation" &&
             before.buildId &&
             before.buildId === this.state.buildId &&
-            revision !== null &&
+            conversationRevision !== null &&
             (!start || exactStart) &&
             before.readConversation === this.state.readConversation
               ? adoptReadConversation(before.readConversation, value, {
@@ -708,7 +718,7 @@ export class WindowController implements RendererFacade {
                     ? { resultId: command.resultId }
                     : {}),
                   buildId: before.buildId,
-                  revision,
+                  revision: conversationRevision,
                 })
               : null;
           if (!next)

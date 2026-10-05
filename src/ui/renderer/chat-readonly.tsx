@@ -139,6 +139,9 @@ export function ChatReadonly({ snapshot, facade }: ChatReadonlyProps) {
     visibleEvidence?.value.kind === "chatgpt.readonly-task-preview"
       ? visibleEvidence.value
       : null;
+  const submission = visiblePreview
+    ? snapshot.intents[`chat-readonly:send:${visiblePreview.operationId}`]
+    : undefined;
   const retained = unresolvedPrepare(snapshot) || visiblePreview !== null;
   const outcomeUnknown =
     uncertain ||
@@ -508,7 +511,11 @@ export function ChatReadonly({ snapshot, facade }: ChatReadonlyProps) {
             ) : (
               <>
                 <p role="status">
-                  Account confirmed for this preview. Nothing has been sent.
+                  {submission
+                    ? submission.state === "pending"
+                      ? "Submission is pending. Do not send this preview again."
+                      : "Submission was attempted. Check its result before continuing."
+                    : "Account confirmed for this preview. Nothing has been sent."}
                 </p>
                 {preview.sendAvailable && (
                   <button

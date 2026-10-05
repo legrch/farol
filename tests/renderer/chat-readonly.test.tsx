@@ -222,6 +222,8 @@ describe("ChatReadonly bounded component", () => {
     expect(
       h.calls().filter((c) => c.kind === "chatgpt.submit-readonly-task"),
     ).toEqual([{ kind: "chatgpt.submit-readonly-task", operationId }]);
+    expect(h.host.textContent).toContain("Submission is pending");
+    expect(h.host.textContent).not.toContain("Nothing has been sent");
     await act(async () =>
       first.resolve({ ok: true, snapshot: h.configuration, evidence: view }),
     );
@@ -263,6 +265,36 @@ describe("ChatReadonly bounded component", () => {
             c.kind === "chatgpt.follow-readonly-conversation",
         ),
     ).toBe(false);
+  });
+  it("never claims nothing was sent after a lost submission reply, including remount", async () => {
+    const metadata = preview({ sendAvailable: true });
+    const h = await mount(configured(), metadata);
+    await h.select();
+    await h.click("Choose file…");
+    const confirmationId = "77777777-7777-4777-8777-777777777777";
+    for (const [state, button] of [
+      ["observed", "Inspect current account"],
+      ["approved", "Use this account"],
+    ] as const) {
+      vi.mocked(h.f.api.configure).mockResolvedValueOnce({
+        ok: true,
+        snapshot: h.configuration,
+        evidence: { ...metadata, account: { confirmationId, state } },
+      });
+      await h.click(button);
+    }
+    expect(h.host.textContent).toContain("Nothing has been sent");
+    vi.mocked(h.f.api.configure).mockRejectedValueOnce(new Error("reply lost"));
+    await h.click("Send to ChatGPT");
+    expect(h.host.textContent).toContain("Submission was attempted");
+    expect(h.host.textContent).not.toContain("Nothing has been sent");
+    await h.render("lost-submit-remount");
+    expect(h.host.textContent).toContain("Submission was attempted");
+    expect(h.host.textContent).not.toContain("Nothing has been sent");
+    expect(h.button("Send to ChatGPT").disabled).toBe(true);
+    expect(
+      h.calls().filter((c) => c.kind === "chatgpt.submit-readonly-task"),
+    ).toHaveLength(1);
   });
   it("does not dispatch on StrictMode mount, rerender or remount; requires explicit folder selection", async () => {
     const h = await mount();

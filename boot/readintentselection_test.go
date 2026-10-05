@@ -47,6 +47,25 @@ func TestReadIntentSelectionRequiresApprovalAndCannotBeInventedByPromotion(t *te
 		t.Fatal("missing capture performed effect")
 	}
 }
+func TestReadIntentSelectionKnownRefusalAllowsExactWithdrawal(t *testing.T) {
+	f, s, a := readIntentUnapprovedFixture(t)
+	approveReadAccountFixture(t, s, a)
+	in := readSelectionInput(a)
+	unsupported := "high"
+	in.Requested.Effort = nil
+	in.Policy.Harnesses[0].Models[0].DefaultEffort = &unsupported
+	ctx := context.Background()
+	if out, err := s.resolveRead(ctx, "unsupported-model-effort", in); err == nil || out != nil {
+		t.Fatal("unsupported model effort resolved", out, err)
+	}
+	got, err := s.withdrawRead(ctx, "discard-refused-selection", wire.ChatReadIntentWithdraw{Admission: a})
+	if err != nil || got == nil || got.Admission != a || f.physical.sends != 0 || f.count("cancel") != 1 || f.count("acknowledge") != 1 {
+		t.Fatal("exact refusal withdrawal", got, err)
+	}
+	if out, err := s.resolveRead(ctx, "late-retry", readSelectionInput(a)); err == nil || out != nil || f.physical.sends != 0 {
+		t.Fatal("withdrawn selection was revived", out, err)
+	}
+}
 func TestReadIntentSelectionPinsDetachedPolicyAndExactReplay(t *testing.T) {
 	f, s, a := readIntentUnapprovedFixture(t)
 	approveReadAccountFixture(t, s, a)

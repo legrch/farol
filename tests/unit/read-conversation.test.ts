@@ -199,6 +199,39 @@ function fixture() {
   };
 }
 describe("normal read conversation mechanical client", () => {
+  it.each(["refused", "unknown", "transport"] as const)(
+    "allows exact admission withdrawal only after known resolution refusal: %s",
+    async (outcome) => {
+      const f = fixture();
+      const error =
+        outcome === "transport"
+          ? new Error("reply lost")
+          : new BridgeError(outcome, "model_unavailable");
+      expect(f.client.canWithdrawAdmission()).toBe(false);
+      f.owner.resolve.mockRejectedValueOnce(error);
+      const attempt = f.client.start(input, "First");
+      expect(f.client.canWithdrawAdmission()).toBe(false);
+      await expect(attempt).rejects.toBe(error);
+      expect(f.client.canWithdrawAdmission()).toBe(outcome === "refused");
+      await expect(f.client.start(input, "First")).rejects.toBe(error);
+      expect(f.owner.resolve).toHaveBeenCalledTimes(1);
+      expect(f.owner.promote).not.toHaveBeenCalled();
+      expect(f.chat.send).not.toHaveBeenCalled();
+    },
+  );
+  it.each(["refused", "unknown"] as const)(
+    "keeps attempted promotion fenced after %s",
+    async (outcome) => {
+      const f = fixture();
+      f.owner.promote.mockRejectedValueOnce(
+        new BridgeError(outcome, "promotion_failed"),
+      );
+      await expect(f.client.start(input, "First")).rejects.toThrow();
+      expect(f.client.canWithdrawAdmission()).toBe(false);
+      expect(f.owner.promote).toHaveBeenCalledTimes(1);
+      expect(f.chat.send).not.toHaveBeenCalled();
+    },
+  );
   it.each(["progress", "snapshot"] as const)(
     "refuses queued %s on a superseded turn before any RPC",
     async (method) => {

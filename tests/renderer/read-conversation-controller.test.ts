@@ -80,121 +80,148 @@ async function setup() {
   return { f, c, reply };
 }
 describe("renderer adoption of exact Go conversation replies", () => {
-  it("keeps early text, explicit result ACK, and same-owner follow-up as distinct steps", async () => {
-    const { f, c, reply } = await setup();
-    const command = {
-      kind: "chatgpt.submit-readonly-task" as const,
-      operationId,
-    };
-    vi.mocked(f.api.configure).mockResolvedValueOnce(reply(base));
-    expect((await c.configure(command, "send")).state).toBe("applied");
-    const early = {
-      ...base,
-      cursor: "1",
-      frames: [{ sequence: "1", delta: "Early." }],
-    };
-    vi.mocked(f.api.configure).mockResolvedValueOnce(reply(early));
-    expect(
-      (
-        await c.configure(
-          {
-            kind: "chatgpt.observe-readonly-conversation",
-            operationId,
-            handleId: "first",
-            cursor: "0",
-          },
-          "observe",
-        )
-      ).state,
-    ).toBe("applied");
-    expect(c.getSnapshot().readConversation?.turns[0]?.text).toBe("Early.");
-    expect(c.getSnapshot().readConversation?.turns[0]?.view.hasResult).toBe(
-      false,
-    );
-    const offered = {
-      ...early,
-      frames: [],
-      phase: "result-ready",
-      hasResult: true,
-      result: {
-        resultId: "result",
-        outcome: "completed",
-        code: "",
-        text: "Early.",
-        complete: true,
-        acknowledged: false,
-        retention: "memory_only",
-      },
-    };
-    vi.mocked(f.api.configure).mockResolvedValueOnce(reply(offered));
-    await c.configure(
-      {
-        kind: "chatgpt.observe-readonly-conversation",
+  it.each([false, true])(
+    "keeps early text, explicit result ACK, and same-owner follow-up (refresh=%s)",
+    async (refresh) => {
+      const { f, c, reply } = await setup();
+      const respond = (evidence: unknown) =>
+        vi.mocked(f.api.configure).mockImplementationOnce(async () => {
+          if (refresh) await c.refresh();
+          return reply(evidence);
+        });
+      const command = {
+        kind: "chatgpt.submit-readonly-task" as const,
         operationId,
-        handleId: "first",
+      };
+      respond(base);
+      expect((await c.configure(command, "send")).state).toBe("applied");
+      const early = {
+        ...base,
         cursor: "1",
-      },
-      "observe",
+        frames: [{ sequence: "1", delta: "Early." }],
+      };
+      respond(early);
+      expect(
+        (
+          await c.configure(
+            {
+              kind: "chatgpt.observe-readonly-conversation",
+              operationId,
+              handleId: "first",
+              cursor: "0",
+            },
+            "observe",
+          )
+        ).state,
+      ).toBe("applied");
+      expect(c.getSnapshot().readConversation?.turns[0]?.text).toBe("Early.");
+      expect(c.getSnapshot().readConversation?.turns[0]?.view.hasResult).toBe(
+        false,
+      );
+      const offered = {
+        ...early,
+        frames: [],
+        phase: "result-ready",
+        hasResult: true,
+        result: {
+          resultId: "result",
+          outcome: "completed",
+          code: "",
+          text: "Early.",
+          complete: true,
+          acknowledged: false,
+          retention: "memory_only",
+        },
+      };
+      respond(offered);
+      await c.configure(
+        {
+          kind: "chatgpt.observe-readonly-conversation",
+          operationId,
+          handleId: "first",
+          cursor: "1",
+        },
+        "observe",
+      );
+      expect(c.getSnapshot().readConversation?.turns[0]?.view.followReady).toBe(
+        false,
+      );
+      const ready = {
+        ...offered,
+        deliveryAcknowledged: true,
+        lifecycleSettled: true,
+        released: true,
+        followReady: true,
+        result: { ...offered.result, acknowledged: true },
+      };
+      respond(ready);
+      expect(
+        (
+          await c.configure(
+            {
+              kind: "chatgpt.ack-readonly-conversation",
+              operationId,
+              handleId: "first",
+              resultId: "result",
+              cursor: "1",
+            },
+            "ack",
+          )
+        ).state,
+      ).toBe("applied");
+      const next = {
+        ...base,
+        handleId: "second",
+        binding: {
+          ...binding,
+          turnId: "next-turn",
+          operationId: "next-op",
+          turnGeneration: "2",
+        },
+      };
+      respond(next);
+      expect(
+        (
+          await c.configure(
+            {
+              kind: "chatgpt.follow-readonly-conversation",
+              operationId,
+              handleId: "first",
+              prompt: "Next?",
+            },
+            "follow",
+          )
+        ).state,
+      ).toBe("applied");
+      expect(c.getSnapshot().readConversation?.turns).toHaveLength(2);
+      expect(
+        c.getSnapshot().readConversation?.turns[0]?.view.result?.text,
+      ).toBe("Early.");
+      expect(
+        vi
+          .mocked(f.api.configure)
+          .mock.calls.filter(
+            ([x]) => x.kind === "chatgpt.submit-readonly-task",
+          ),
+      ).toHaveLength(1);
+    },
+  );
+  it("keeps a reply fenced when refresh changes its configuration revision", async () => {
+    const { f, c, reply } = await setup();
+    const held = deferred<unknown>();
+    vi.mocked(f.api.configure).mockReturnValueOnce(held.promise);
+    const pending = c.configure(
+      { kind: "chatgpt.submit-readonly-task", operationId },
+      "send",
     );
-    expect(c.getSnapshot().readConversation?.turns[0]?.view.followReady).toBe(
-      false,
-    );
-    const ready = {
-      ...offered,
-      deliveryAcknowledged: true,
-      lifecycleSettled: true,
-      released: true,
-      followReady: true,
-      result: { ...offered.result, acknowledged: true },
-    };
-    vi.mocked(f.api.configure).mockResolvedValueOnce(reply(ready));
-    expect(
-      (
-        await c.configure(
-          {
-            kind: "chatgpt.ack-readonly-conversation",
-            operationId,
-            handleId: "first",
-            resultId: "result",
-            cursor: "1",
-          },
-          "ack",
-        )
-      ).state,
-    ).toBe("applied");
-    const next = {
-      ...base,
-      handleId: "second",
-      binding: {
-        ...binding,
-        turnId: "next-turn",
-        operationId: "next-op",
-        turnGeneration: "2",
-      },
-    };
-    vi.mocked(f.api.configure).mockResolvedValueOnce(reply(next));
-    expect(
-      (
-        await c.configure(
-          {
-            kind: "chatgpt.follow-readonly-conversation",
-            operationId,
-            handleId: "first",
-            prompt: "Next?",
-          },
-          "follow",
-        )
-      ).state,
-    ).toBe("applied");
-    expect(c.getSnapshot().readConversation?.turns).toHaveLength(2);
-    expect(c.getSnapshot().readConversation?.turns[0]?.view.result?.text).toBe(
-      "Early.",
-    );
-    expect(
-      vi
-        .mocked(f.api.configure)
-        .mock.calls.filter(([x]) => x.kind === "chatgpt.submit-readonly-task"),
-    ).toHaveLength(1);
+    const next = bootstrap();
+    next.configuration.settings.revision += 1;
+    vi.mocked(f.api.bootstrap).mockResolvedValueOnce(next);
+    await c.refresh();
+    held.resolve(reply(base));
+    expect((await pending).state).toBe("unknown");
+    expect(c.getSnapshot().readConversation).toBeNull();
+    expect(c.getSnapshot().configuration).toEqual(next.configuration);
   });
   it("latches a double Send synchronously and refuses crossed owner evidence without adoption", async () => {
     const { f, c, reply } = await setup();

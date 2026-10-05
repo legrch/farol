@@ -71,6 +71,7 @@ export class ReadConversationClient {
   private tail: Promise<void> = Promise.resolve();
   private pending = 0;
   private failed: { error: unknown } | undefined;
+  private resolutionRefused = false;
   constructor(
     private readonly owner: ReadOwner,
     private readonly chat: ChatPort,
@@ -81,6 +82,11 @@ export class ReadConversationClient {
     if (!Number.isSafeInteger(n) || n < 0 || !Number.isSafeInteger(n + 12000))
       fail("read_chat_clock_invalid");
     return String(n + 12000);
+  }
+  // Only a known refusal of the original read-only resolution proves that no
+  // promotion was attempted. The Go owner must still confirm exact withdrawal.
+  canWithdrawAdmission(): boolean {
+    return this.resolutionRefused;
   }
   private async exclusive<T>(run: () => Promise<T>): Promise<T> {
     if (this.failed) throw this.failed.error;
@@ -126,7 +132,14 @@ export class ReadConversationClient {
     }
     const promise = Promise.resolve().then(() =>
       this.exclusive(async () => {
-        const selected = await this.owner.resolve(copied);
+        let selected: ChatReadIntentResolved;
+        try {
+          selected = await this.owner.resolve(copied);
+        } catch (error) {
+          this.resolutionRefused =
+            error instanceof BridgeError && error.state === "refused";
+          throw error;
+        }
         if (!isDeepStrictEqual(selected.admission, copied.admission))
           fail("read_chat_owner_crossed", "unknown");
         this.selected = structuredClone(selected);

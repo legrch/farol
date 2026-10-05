@@ -7436,7 +7436,11 @@ async function configureAdmittedProduct(
       });
     }
     case "chatgpt.cancel-readonly-task": {
-      if (goReadonlyConversation?.pending.operationId === command.operationId)
+      const conversation = goReadonlyConversation;
+      if (
+        conversation?.pending.operationId === command.operationId &&
+        !conversation.client.canWithdrawAdmission()
+      )
         return configurationFailure("CHATGPT_CONVERSATION_REFUSED");
       if (chatGptTaskAdmission) {
         return configurationFailure("CHATGPT_TASK_IN_PROGRESS");
@@ -7452,6 +7456,11 @@ async function configureAdmittedProduct(
       try {
         if (!(await discardPreparedReadonlyTask(pending)))
           return configurationFailure("CHATGPT_TASK_REQUIRES_REVIEW");
+        if (
+          conversation?.pending === pending &&
+          goReadonlyConversation === conversation
+        )
+          goReadonlyConversation = null;
       } finally {
         chatGptTaskAdmission = false;
       }
