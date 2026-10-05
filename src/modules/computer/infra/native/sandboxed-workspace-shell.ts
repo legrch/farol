@@ -140,7 +140,10 @@ function exactRelative(value: string): boolean {
   );
 }
 
-function profile(
+/** Pure profile compilation from already-authorized, identity-checked scopes.
+ * This function grants nothing by itself; dispatch still validates live authority.
+ */
+export function buildWorkspaceShellProfile(
   workspaces: readonly EffectiveWorkspace[],
   exclusions: readonly Readonly<{ path: string }>[],
   scratch: string,
@@ -234,7 +237,7 @@ function profile(
   ${writes.join("\n  ")})
 ${denies.length ? `(deny file-read* file-write* ${denies.join(" ")})` : ""}
 (deny file-read* file-write*
-  (regex #"/(\\.env|\\.ssh|\\.aws|\\.gnupg|\\.codex|\\.claude|\\.git-credentials|\\.netrc|\\.npmrc|\\.pypirc)(/|$)"))
+  (regex #"/(\\.env|\\.ssh|\\.aws|\\.gnupg|\\.git-credentials|\\.netrc|\\.npmrc|\\.pypirc)(/|$)"))
 ${workspaces.some((workspace) => !workspace.gitHistoryApproved) ? '(deny file-read* file-write* (regex #"/\\.git(/|$)"))' : ""}
 ${parentRules}
 (deny network*)`;
@@ -769,7 +772,7 @@ export class SandboxedWorkspaceShell {
     if (signal?.aborted) {
       return abandonReserved("SHELL_OUTCOME_UNKNOWN");
     }
-    const sandbox = profile(
+    const sandbox = buildWorkspaceShellProfile(
       verified.effective,
       [
         ...this.participant.grant.excludedPaths.filter(

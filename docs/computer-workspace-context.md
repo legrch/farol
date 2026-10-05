@@ -114,3 +114,8 @@ These checks do not establish live ChatGPT acceptance. Live qualification must
 record the candidate identity and Brain/code successes in the same ChatGPT chat
 before and after normal turn renewal and reconnect; installation/restart remains
 Lead-owned and requires supported reconciliation of existing unknown updater work.
+
+## Agent directories
+
+See [Agent store workspace access](agent-store-access.md) for the ordinary
+read/write and shell grant policy for `.codex` and `.claude`.

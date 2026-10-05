@@ -79,7 +79,9 @@ func (w *Workspace) parsePolicy(d port.Descriptor) (policy, error) {
 	if err != nil {
 		return p, err
 	}
-	mandatory := []string{".env", ".ssh", ".aws", ".gnupg", ".codex", ".claude", ".git", ".git-credentials", ".netrc", ".npmrc", ".pypirc", ".docker/config.json", ".kube/config", "Library/Keychains"}
+	// Agent stores (.codex/.claude) follow ordinary owner/task grants, including
+	// explicit exclusions. Their directory names alone never veto an approved root.
+	mandatory := []string{".env", ".ssh", ".aws", ".gnupg", ".git", ".git-credentials", ".netrc", ".npmrc", ".pypirc", ".docker/config.json", ".kube/config", "Library/Keychains"}
 	prefixes := append([]string{}, mandatory...)
 	for _, store := range mandatory {
 		if store == ".env" || store == ".git" {

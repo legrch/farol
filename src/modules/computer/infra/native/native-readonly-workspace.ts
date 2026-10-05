@@ -67,8 +67,6 @@ export const DEFAULT_DENIED_PATHS = Object.freeze([
   ".ssh",
   ".aws",
   ".gnupg",
-  ".codex",
-  ".claude",
   ".git",
   ".git-credentials",
   ".netrc",
