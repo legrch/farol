@@ -168,6 +168,7 @@ func chatOutcome(shape string, value any, err error) (*desktop.Outcome, error) {
 }
 func (s *ChatIngress) Methods() map[string]desktop.Method {
 	methods := s.caller.Methods()
+	methods["chat.conversation.state"] = desktop.Method{Handle: s.conversationState}
 	methods["chat.conversation.create"] = desktop.Method{Handle: func(ctx context.Context, r desktop.Request) (*desktop.Outcome, error) {
 		var in wire.ChatCreate
 		if r.OperationID == "" || chatDecode("ChatCreate", r, &in) != nil {

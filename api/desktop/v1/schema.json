@@ -64,7 +64,8 @@
     "computer.settings.delivery.apply": "effect",
     "computer.settings.delivery.observe": "effect",
     "computer.settings.delivery.ack": "effect",
-    "chat.readintent.resolve": "effect"
+    "chat.readintent.resolve": "effect",
+    "chat.conversation.state": "read"
   },
   "definitions": {
     "Context": {
@@ -3822,6 +3823,36 @@
         },
         "required": {
           "type": "BrowserRequiredControls"
+        }
+      }
+    },
+    "ChatState": {
+      "type": "object",
+      "fields": {
+        "handle": {
+          "type": "ChatHandle"
+        },
+        "conversationId": {
+          "type": "string",
+          "maxBytes": 120
+        },
+        "phase": {
+          "type": "text"
+        },
+        "hasResult": {
+          "type": "boolean"
+        },
+        "deliveryAcknowledged": {
+          "type": "boolean"
+        },
+        "lifecycleSettled": {
+          "type": "boolean"
+        },
+        "released": {
+          "type": "boolean"
+        },
+        "followReady": {
+          "type": "boolean"
         }
       }
     }

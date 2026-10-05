@@ -80,6 +80,7 @@ function validateCompiled(row: CompiledChatModelProfile): void {
     p.required.mode !== (p.mode !== "") ||
     p.required.connector ||
     p.efforts.length === 0 ||
+    p.efforts.length > 32 ||
     requested.size !== p.efforts.length ||
     (p.defaultEffort !== "" && !resolved.includes(p.defaultEffort))
   )

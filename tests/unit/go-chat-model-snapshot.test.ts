@@ -65,6 +65,27 @@ function expectFrozen(value: unknown): void {
 }
 
 describe("existing settings to Go/browser model snapshot", () => {
+  it("matches the Go selection bound of 32 effort pairs", () => {
+    const row = profile();
+    row.metadata.efforts = Array.from({ length: 32 }, (_, index) => ({
+      requested: `effort${index}`,
+      resolved: `effort${index}`,
+    }));
+    row.metadata.defaultEffort = "effort0";
+    row.controls.effort = row.metadata.efforts.map(({ resolved }) => ({
+      value: resolved,
+      literal: `Control ${resolved}`,
+    }));
+    expect(
+      captureChatModelSnapshot(tasks(), [row]).profiles[0]!.efforts,
+    ).toHaveLength(32);
+    row.metadata.efforts.push({ requested: "effort32", resolved: "effort32" });
+    row.controls.effort.push({
+      value: "effort32",
+      literal: "Control effort32",
+    });
+    refused(() => captureChatModelSnapshot(tasks(), [row]));
+  });
   it("hashes exact taskPolicyIdentity bytes for the supplied d23b588 conformance fixture", () => {
     const config = tasks();
     const snapshot = captureChatModelSnapshot(config, [profile()]);

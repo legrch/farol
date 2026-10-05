@@ -6,6 +6,7 @@ import {
   type ChatCreate,
   type ChatHandle,
   type ChatSubmissionState,
+  type ChatState,
   type ChatPrepared,
   type ChatResult,
   type ChatFrames,
@@ -20,6 +21,21 @@ export class ChatBridge {
   constructor(private readonly client: Client) {}
   create(input: ChatCreate): Promise<ChatHandle> {
     return this.call("create", "ChatCreate", input, "ChatHandle", true);
+  }
+  async state(handle: ChatHandle): Promise<ChatState> {
+    if (!validate("ChatHandle", handle))
+      throw new BridgeError("refused", "chat_request_invalid");
+    const selected = structuredClone(handle);
+    const state = await this.call<ChatState>(
+      "state",
+      "ChatHandleRequest",
+      { handleId: selected.handleId },
+      "ChatState",
+      false,
+    );
+    if (!isDeepStrictEqual(state.handle, selected))
+      throw new BridgeError("unknown", "chat_state_handle_crossed");
+    return state;
   }
   // Observation only: not-dispatched may still be queued/prepared and able to
   // Send. This never releases a replay guard or creates another operation.
