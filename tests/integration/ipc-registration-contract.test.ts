@@ -65,6 +65,7 @@ describe("privileged IPC registration contract", () => {
       "bootstrap",
       "snapshot",
       "configuration",
+      "chatHistory",
       "task",
       "navigationShortcuts",
       "control",
