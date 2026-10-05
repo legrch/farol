@@ -358,9 +358,10 @@ func TestSearchNativeDenialAliasesAndDirectorySwap(t *testing.T) {
 }
 func TestSearchNativeOutputByteBudget(t *testing.T) {
 	d := fixture(t)
-	// Individual names stay below NAME_MAX; deep Unicode paths exercise the
-	// ASCII-escaped response budget independently of the 100-result ceiling.
-	parts := make([]string, 16)
+	// Names and the full path stay below macOS NAME_MAX/PATH_MAX. Three Unicode
+	// components plus the excerpts still exhaust the ASCII-escaped response
+	// budget before the 100-result ceiling.
+	parts := make([]string, 3)
 	for i := range parts {
 		parts[i] = strings.Repeat("🌊", 50)
 	}
