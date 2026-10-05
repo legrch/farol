@@ -136,6 +136,13 @@ type ConversationState struct {
 	Evidence               SelectionEvidence
 	Prepared               bool
 	Phase                  string
+	HasResult              bool
+	DeliveryAcknowledged   bool
+	LifecycleSettled       bool
+	Released               bool
+	// FollowReady observes the latest completed, acknowledged, settled and
+	// released turn. It grants no admission or future Send authority.
+	FollowReady bool
 }
 
 type ConversationOwner interface {

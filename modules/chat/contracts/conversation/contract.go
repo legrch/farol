@@ -43,12 +43,18 @@ type Prepared struct {
 	ConversationID                     string
 }
 type State struct {
-	Binding        Binding
-	ConversationID string
-	Requested      Selection
-	Evidence       SelectionEvidence
-	Prepared       bool
-	Phase          string
+	Binding              Binding
+	ConversationID       string
+	Requested            Selection
+	Evidence             SelectionEvidence
+	Prepared             bool
+	Phase                string
+	HasResult            bool
+	DeliveryAcknowledged bool
+	LifecycleSettled     bool
+	Released             bool
+	// FollowReady is an observation, never admission or future Send authority.
+	FollowReady bool
 }
 type Result struct {
 	Binding                                       Binding
@@ -164,7 +170,7 @@ func (h *Handle) WithState(ctx context.Context, inspect func(State) error) error
 	}
 	var inspected error
 	err := h.current.WithConversation(ctx, func(s port.ConversationState) error {
-		inspected = inspect(State{Binding: fromBinding(s.Binding), ConversationID: s.ProviderConversationID, Requested: fromSelection(s.Requested), Evidence: fromEvidence(s.Evidence), Prepared: s.Prepared, Phase: s.Phase})
+		inspected = inspect(State{Binding: fromBinding(s.Binding), ConversationID: s.ProviderConversationID, Requested: fromSelection(s.Requested), Evidence: fromEvidence(s.Evidence), Prepared: s.Prepared, Phase: s.Phase, HasResult: s.HasResult, DeliveryAcknowledged: s.DeliveryAcknowledged, LifecycleSettled: s.LifecycleSettled, Released: s.Released, FollowReady: s.FollowReady})
 		return inspected
 	})
 	if inspected != nil {

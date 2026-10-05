@@ -46,7 +46,7 @@ func (s *Service) FollowConversation(ctx context.Context, previous *Conversation
 	}
 	h := previous.handle
 	view, err := s.queue.Snapshot(identity(h.fixed))
-	if err != nil || h.observing || !view.HasResult || view.Result.Outcome != turn.Completed || !h.output.Complete || !view.DeliveryAcknowledged || !view.LifecycleSettled || h.releasedRevision == 0 || view.OutstandingCallID != "" || h.unresolvedCallID != "" {
+	if err != nil || !followSettled(h, view) {
 		s.deps.Gate.Unlock()
 		return nil, Unsettled
 	}
@@ -60,6 +60,13 @@ func (s *Service) FollowConversation(ctx context.Context, previous *Conversation
 	s.deps.Gate.Unlock()
 	return s.createConversation(ctx, input, target, previous)
 }
+
+// followSettled reads prerequisites under the owning gate. Follow keeps its
+// exact known successor replay; only a new admission requires the latest handle.
+func followSettled(h *Handle, view turn.Snapshot) bool {
+	return !h.observing && view.HasResult && view.Result.Outcome == turn.Completed && h.output.Complete && view.DeliveryAcknowledged && view.LifecycleSettled && h.releasedRevision != 0 && view.OutstandingCallID == "" && h.unresolvedCallID == ""
+}
+
 func (s *Service) createConversation(ctx context.Context, input port.ConversationInput, target port.ConversationTarget, previous *Conversation) (*Conversation, error) {
 	if s == nil || ctx == nil || !target.Valid() || input.Selection != target.Selection || len(input.Prompt) == 0 || len(input.Prompt) > PromptBytesLimit || !utf8.ValidString(input.Prompt) {
 		return nil, Invalid
@@ -193,7 +200,14 @@ func (c *Conversation) WithConversation(ctx context.Context, inspect func(port.C
 	if err != nil {
 		return err
 	}
-	if err := inspect(port.ConversationState{Binding: h.fixed, ProviderConversationID: c.providerID, Requested: h.target.Selection, Prepared: view.Bound && h.releasedRevision == 0, Phase: string(view.Phase), Evidence: selectionEvidence(h)}); err != nil {
+	if err := inspect(port.ConversationState{
+		Binding: h.fixed, ProviderConversationID: c.providerID, Requested: h.target.Selection,
+		Prepared: view.Bound && h.releasedRevision == 0, Phase: string(view.Phase), Evidence: selectionEvidence(h),
+		HasResult:            view.HasResult,
+		DeliveryAcknowledged: view.DeliveryAcknowledged, LifecycleSettled: view.LifecycleSettled,
+		Released:    h.releasedRevision != 0,
+		FollowReady: !s.frozen && c.root != nil && c.root.latest == c && followSettled(h, view),
+	}); err != nil {
 		return err
 	}
 	if ctx.Err() != nil {
