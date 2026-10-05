@@ -2,19 +2,28 @@
 // neither persisted nor returned, including on malformed or oversized input.
 export function browserFailureCollector() {
   let pending = "";
+  let droppingLine = false;
   const failures = [];
   return {
     failures,
     ingest(chunk) {
-      if (chunk.length > 8192) {
+      // Pipe chunks have no relationship to records. Bound each retained line,
+      // discard an oversized line through its newline, then resume parsing.
+      const data = String(chunk);
+      for (let start = 0; start < data.length;) {
+        const newline = data.indexOf("\n", start);
+        const end = newline === -1 ? data.length : newline;
+        if (!droppingLine) {
+          if (pending.length + end - start > 8192) {
+            pending = "";
+            droppingLine = true;
+          } else pending += data.slice(start, end);
+        }
+        if (newline === -1) break;
+        const line = droppingLine ? "" : pending;
         pending = "";
-        return;
-      }
-      pending += String(chunk);
-      const lines = pending.split("\n");
-      pending = lines.pop();
-      if (pending.length > 8192) pending = "";
-      for (const line of lines) {
+        droppingLine = false;
+        start = newline + 1;
         if (!line.startsWith("FAROL_BROWSER_FAILURE ") || failures.length >= 8)
           continue;
         try {

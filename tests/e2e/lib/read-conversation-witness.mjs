@@ -924,13 +924,15 @@ export async function waitConversationRead(
   const deadline = started + 20000;
   let lastUi = null,
     stopped = false,
-    timer;
+    timer,
+    cancellation;
   const timeout = () => new Error("CHAT_OBSERVATION_TIMEOUT_NO_RETRY");
   const poll = async () => {
     while (!stopped && now() < deadline) {
       active();
       const value = await read();
       if (stopped) return;
+      active();
       lastUi = boundedUiObservation(value);
       assert.notEqual(value.phase, "unknown", "CHAT_UI_OUTCOME_UNKNOWN");
       assert.equal((value.alerts ?? []).length, 0, "CHAT_UI_ALERT");
@@ -956,6 +958,14 @@ export async function waitConversationRead(
     return await Promise.race([
       poll(),
       new Promise((_, reject) => {
+        cancellation = setInterval(() => {
+          try {
+            active();
+          } catch (error) {
+            stopped = true;
+            reject(error);
+          }
+        }, 75);
         timer = setTimeout(() => {
           stopped = true;
           reject(timeout());
@@ -980,6 +990,7 @@ export async function waitConversationRead(
   } finally {
     stopped = true;
     clearTimeout(timer);
+    clearInterval(cancellation);
   }
 }
 

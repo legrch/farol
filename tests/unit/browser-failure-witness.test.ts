@@ -32,4 +32,14 @@ describe("content-free native browser failure witness", () => {
     for (let i = 0; i < 12; i++) c.ingest(marker(failure));
     expect(c.failures).toHaveLength(8);
   });
+  it("keeps valid lines coalesced with oversized noise and drops whole oversized lines", () => {
+    const c = browserFailureCollector();
+    c.ingest("x".repeat(9000) + "\n" + marker(failure) + "y".repeat(9000));
+    expect(c.failures).toEqual([failure]);
+    // This marker is still part of the same oversized line, not a new record.
+    c.ingest(marker(failure));
+    expect(c.failures).toHaveLength(1);
+    c.ingest(marker(failure));
+    expect(c.failures).toEqual([failure, failure]);
+  });
 });

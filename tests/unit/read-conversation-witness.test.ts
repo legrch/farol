@@ -138,7 +138,7 @@ describe("conversation transition observation, synthetic DOM only", () => {
         ),
       ).rejects.toThrow(code);
       expect(Date.now()).toBe(0);
-      expect(active).toHaveBeenCalledTimes(1);
+      expect(active).toHaveBeenCalledTimes(2); // Before and after the same read.
       expect(clicks).toHaveBeenCalledTimes(1);
       expect(failure).toHaveBeenCalledTimes(1);
       expect(failure.mock.calls[0]?.[0]).toMatchObject({
@@ -241,6 +241,45 @@ describe("conversation transition observation, synthetic DOM only", () => {
     expect(read).toHaveBeenCalledTimes(1);
     expect(vi.getTimerCount()).toBe(0);
   });
+
+  it.each([false, true])(
+    "honors cancellation during a pending read (resolves=%s)",
+    async (resolves) => {
+      const clicks = preview();
+      let cancelled = false;
+      let release: (value: unknown) => void = () => {};
+      const stalled = new Promise((resolve) => {
+        release = resolve;
+      });
+      const read = vi
+        .fn()
+        .mockImplementationOnce(() => readConversationUi(surface))
+        .mockReturnValue(stalled);
+      const failure = vi.fn();
+      const pending = waitConversationRead(
+        read,
+        current,
+        () => {
+          if (cancelled) throw new Error("HARNESS_CANCELLED");
+        },
+        { onFailure: failure },
+      ).catch((error: Error) => error);
+      await vi.advanceTimersByTimeAsync(100);
+      cancelled = true;
+      if (resolves) release({ currentPresent: true });
+      await vi.advanceTimersByTimeAsync(75);
+      expect(failure).toHaveBeenCalledTimes(1);
+      expect((await pending).message).toContain("HARNESS_CANCELLED");
+      expect(failure.mock.calls[0]?.[0].lastUi).toMatchObject({
+        currentPresent: false,
+      });
+      release({ currentPresent: true });
+      await vi.advanceTimersByTimeAsync(30000);
+      expect(read).toHaveBeenCalledTimes(2);
+      expect(clicks).toHaveBeenCalledTimes(1);
+      expect(vi.getTimerCount()).toBe(0);
+    },
+  );
 
   it("retains a projected unknown phase without copying answer or history content", async () => {
     const clicks = preview();
