@@ -58,6 +58,32 @@ this handle once via `app/services/admission.New(handle)` and then
 published guard throughout one qualified Computer operation and final disclosure.
 This is membership evidence; Computer still owns permission and execution leases.
 
+`boot/chataccountauthorization.go` prepares the account-only final Send guard
+for ordinary typed Chat. Trusted composition supplies an existing private
+explicit account grant, the original conversation binding and its selected
+account ID. The guard checks a fresh observation from the actual dispatch,
+requires its approved principal to match that selected account, then checks the
+original conversation or its exact current successor under account -> Chat
+gates. Follow may change turn, operation and generation while retaining the
+same profile/backend/owner/session/task/epoch/participant. A replaced or revoked
+grant cannot be restored from a copied receipt.
+
+This guard grants no Computer access and creates no read intent, model engine or
+registry. File-derived conversations retain their existing Computer/disclosure
+guard. The ordinary authorized-Create entrypoint, explicit confirmation UI and
+production route profile are separate pending integration boundaries; the guard
+alone does not activate typed Chat or qualify a real account.
+
+The injected `TestChatAccountAuthorization*` tests in
+`boot/chataccountauthorization_test.go` map the M03 account-recheck subset to
+actual private approval and final Send capabilities. They include requested
+account mismatch, revocation/replacement/expiry, crossed lineage, exact Follow
+after ACK/settlement, and an expired first-turn capability. The three-turn case
+preserves supported TurnID reuse at a later generation. Read-intent promotion is
+only the test's existing capability factory; no Computer read or ordinary typed
+Create endpoint is exercised. Normal UI/account/profile and native Send evidence
+remain higher-boundary requirements.
+
 ## Candidate publication and failure windows
 
 The owner keeps one committed queue and bounded handle registry. Every change
