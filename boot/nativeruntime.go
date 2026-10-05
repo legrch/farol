@@ -231,6 +231,11 @@ func (r *NativeRuntime) Methods() (map[string]desktop.Method, error) {
 		return nil, errors.New("native_runtime_unavailable")
 	}
 	merged := make(map[string]desktop.Method)
+	if r.history != nil {
+		for name, method := range chatHistoryMethods(conversation.NewHistory(r.history)) {
+			merged[name] = method
+		}
+	}
 	for _, source := range []map[string]desktop.Method{r.ingress.Methods(), r.browser.Methods(), r.conversations.Methods(), r.chatComputer.Methods(), r.retirementMethods()} {
 		for name, method := range source {
 			if _, exists := merged[name]; exists {

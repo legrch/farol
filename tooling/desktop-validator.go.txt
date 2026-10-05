@@ -1,5 +1,5 @@
 
-type field struct { Type string `json:"type"`; Optional bool `json:"optional"`; Values []string `json:"values"`; Minimum *int64 `json:"minimum"`; Maximum *int64 `json:"maximum"`; MinBytes *int `json:"minBytes"`; MaxBytes *int `json:"maxBytes"`; Pattern string `json:"pattern"` }
+type field struct { Type string `json:"type"`; Optional bool `json:"optional"`; Values []string `json:"values"`; Minimum *int64 `json:"minimum"`; Maximum *int64 `json:"maximum"`; MinBytes *int `json:"minBytes"`; MaxBytes *int `json:"maxBytes"`; Pattern string `json:"pattern"`; MaxItems *int `json:"maxItems"` }
 type definition struct { Fields map[string]field `json:"fields"` }
 var definitions = func() map[string]definition {
  var schema struct { Definitions map[string]definition `json:"definitions"` }
@@ -53,6 +53,7 @@ func valid(kind string,value interface{},depth int) bool {
   if !valid(spec.Type,item,depth+1){return false}
   if spec.Minimum!=nil || spec.Maximum!=nil {n,ok:=item.(json.Number);if !ok{return false};i,err:=strconv.ParseFloat(string(n),64);if err!=nil || math.IsInf(i,0) || math.IsNaN(i) || math.Trunc(i)!=i || (spec.Minimum!=nil && i<float64(*spec.Minimum)) || (spec.Maximum!=nil && i>float64(*spec.Maximum)){return false}}
   if spec.MinBytes!=nil || spec.MaxBytes!=nil || spec.Pattern!="" {s,ok:=item.(string);if !ok{return false};if (spec.MinBytes!=nil && len(s)<*spec.MinBytes) || (spec.MaxBytes!=nil && len(s)>*spec.MaxBytes){return false};if spec.Pattern!="" {matched,err:=regexp.MatchString(spec.Pattern,s);if err!=nil || !matched{return false}}}
+  if spec.MaxItems!=nil {a,ok:=item.([]interface{});if !ok || len(a)>*spec.MaxItems{return false}}
   if len(spec.Values)>0{matched:=false;for _,allowed:=range spec.Values{if item==allowed{matched=true}};if !matched{return false}}
  }
  if kind=="Response"{_,result:=object["result"];_,fault:=object["error"];if result==fault{return false};if result{if _,hasID:=object["id"];!hasID{return false}}}

@@ -13,6 +13,7 @@ import (
 
 	wire "github.com/legrch/farol/gen/desktop/v1"
 	"github.com/legrch/farol/modules/chat/app/port"
+	"github.com/legrch/farol/transport/desktop"
 )
 
 // This peer answers the actual normal-runtime browser exchange. Only browser
@@ -22,6 +23,27 @@ type retainedNativePeer struct {
 	t       *testing.T
 	runtime *NativeRuntime
 	sends   int
+}
+
+func retainedNativeHistoryRead(t *testing.T, runtime *NativeRuntime, method string, body any) *desktop.Outcome {
+	t.Helper()
+	methods, err := runtime.Methods()
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler, ok := methods[method]
+	if !ok {
+		t.Fatal("normal runtime omitted history method", method)
+	}
+	raw, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := handler.Handle(context.Background(), desktop.Request{Body: raw})
+	if err != nil || out == nil {
+		t.Fatal("history wire failed", err)
+	}
+	return out
 }
 
 func (p *retainedNativePeer) run(action func(uint64) error, kinds ...string) {
@@ -190,6 +212,25 @@ func TestNativeRetainedTwoTurnResultsSurviveCleanSuccessorsWithoutSend(t *testin
 		if err != nil || page == nil || page.Total != 2 || len(page.Entries) != 2 {
 			t.Fatal("ancestor discovery failed", err)
 		}
+		listing := retainedNativeHistoryRead(t, next, "chat.history.list", wire.ChatHistoryListRequest{})
+		if listing.Status != "ok" {
+			t.Fatal("normal history list refused", listing.Code)
+		}
+		wirePage := decodeChat[wire.ChatHistoryPage](t, listing.Data)
+		if wirePage.Offset != 0 || wirePage.Total != 2 || len(wirePage.Entries) != 2 {
+			t.Fatal("wire history lost discovered references")
+		}
+		for _, entry := range wirePage.Entries {
+			out := retainedNativeHistoryRead(t, next, "chat.history.result", entry.Key)
+			if out.Status != "ok" {
+				t.Fatal("normal history result refused", out.Code)
+			}
+			got := decodeChat[wire.ChatHistoryResult](t, out.Data)
+			w, found := want[entry.Key.OperationId]
+			if !found || got.Key != entry.Key || got.Binding != entry.Binding || got.Binding.BackendGeneration != w.Binding.BackendGeneration || got.Binding.OperationId != w.Binding.OperationID || got.Binding.TurnId != w.Binding.TurnID || got.ResultId != w.ResultID || got.ConversationId != w.ProviderConversationID || got.UserTurnId != w.ProviderUserTurnID || got.ReplyId != w.ProviderReplyID || got.Text != w.Text || !got.Complete || !got.Acknowledged {
+				t.Fatal("wire history changed original result identity")
+			}
+		}
 		for _, summary := range page.Entries {
 			got, err := next.history.Read(ctx, summary.Key)
 			w, found := want[summary.Key.OperationID]
@@ -218,6 +259,9 @@ func TestNativeRetainedTwoTurnResultsSurviveCleanSuccessorsWithoutSend(t *testin
 			}
 		} else {
 			next.historyAuthority.close()
+			if got := retainedNativeHistoryRead(t, next, "chat.history.result", wirePage.Entries[0].Key); got.Status == "ok" || len(got.Data) != 0 {
+				t.Fatal("wire exposed revoked history")
+			}
 			if v, err := next.history.Read(ctx, page.Entries[0].Key); err == nil || v != nil {
 				t.Fatal("closed authority disclosed retained content")
 			}

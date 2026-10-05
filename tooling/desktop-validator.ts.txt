@@ -1,5 +1,5 @@
 
-type Spec = { readonly type: string; readonly optional?: boolean; readonly values?: readonly string[]; readonly minimum?: number; readonly maximum?: number; readonly minBytes?: number; readonly maxBytes?: number; readonly pattern?: string };
+type Spec = { readonly type: string; readonly optional?: boolean; readonly values?: readonly string[]; readonly minimum?: number; readonly maximum?: number; readonly minBytes?: number; readonly maxBytes?: number; readonly pattern?: string; readonly maxItems?: number };
 type Definition = { readonly fields: Readonly<Record<string, Spec>> };
 const definitions: Readonly<Record<string, Definition>> = schema.definitions;
 
@@ -49,6 +49,7 @@ export function validate(name: string, value: unknown, depth = 0): boolean {
   if (spec.minBytes !== undefined && (typeof item !== "string" || Buffer.byteLength(item,"utf8") < spec.minBytes)) return false;
   if (spec.maxBytes !== undefined && (typeof item !== "string" || Buffer.byteLength(item,"utf8") > spec.maxBytes)) return false;
   if (spec.pattern !== undefined && (typeof item !== "string" || !new RegExp(spec.pattern,"u").test(item))) return false;
+  if (spec.maxItems !== undefined && (!Array.isArray(item) || item.length > spec.maxItems)) return false;
   if (spec.values && !spec.values.includes(String(object[key]))) return false;
  }
  if (name === "Response") {

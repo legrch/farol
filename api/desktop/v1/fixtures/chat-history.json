@@ -1,0 +1,99 @@
+{
+  "key": {
+    "backendGeneration": "original",
+    "operationId": "operation"
+  },
+  "binding": {
+    "profileId": "profile",
+    "backendGeneration": "original",
+    "ownerId": "owner",
+    "sessionId": "session",
+    "taskId": "task",
+    "taskEpoch": "9007199254740993",
+    "participantId": "participant",
+    "turnId": "turn",
+    "operationId": "operation",
+    "turnGeneration": "18446744073709551615"
+  },
+  "conversationId": "synthetic-conversation",
+  "userTurnId": "synthetic-user-turn",
+  "replyId": "synthetic-reply",
+  "resultId": "result",
+  "evidence": {
+    "requested": {
+      "provider": "farol",
+      "alias": "chatgpt",
+      "accountId": "synthetic-account",
+      "modelId": "synthetic-model",
+      "effort": "low",
+      "mode": "",
+      "connectorId": "",
+      "connectorGrantId": "",
+      "toolsEnabled": false
+    },
+    "resolution": {
+      "requestedAlias": "chatgpt",
+      "requestedExecutor": "chatgpt",
+      "requestedEffort": "low",
+      "requestedMode": "",
+      "configSHA256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "translationId": "synthetic-profile",
+      "resolved": {
+        "provider": "farol",
+        "alias": "chatgpt",
+        "accountId": "synthetic-account",
+        "modelId": "synthetic-model",
+        "effort": "low",
+        "mode": "",
+        "connectorId": "",
+        "connectorGrantId": "",
+        "toolsEnabled": false
+      }
+    },
+    "resolutionSource": "configured",
+    "admitted": {
+      "provider": "farol",
+      "alias": "chatgpt",
+      "accountId": "synthetic-account",
+      "modelId": "synthetic-model",
+      "effort": "low",
+      "mode": "",
+      "connectorId": "",
+      "connectorGrantId": "",
+      "toolsEnabled": false
+    },
+    "admissionSource": "owner-approved",
+    "observed": {
+      "model": {
+        "source": "public-control",
+        "value": "synthetic-model",
+        "literal": "Synthetic model"
+      },
+      "effort": {
+        "source": "unknown",
+        "value": "",
+        "literal": ""
+      },
+      "mode": {
+        "source": "unknown",
+        "value": "",
+        "literal": ""
+      },
+      "connector": {
+        "source": "unknown",
+        "value": "",
+        "literal": ""
+      },
+      "observedAtMillis": "1000"
+    },
+    "observationSource": "public-control",
+    "evidenceId": "synthetic-proof",
+    "pinnedSource": "configured"
+  },
+  "phase": "delivered",
+  "outcome": "completed",
+  "code": "CHAT_COMPLETED",
+  "text": "Retained answer \u2600",
+  "complete": true,
+  "acknowledged": true
+}

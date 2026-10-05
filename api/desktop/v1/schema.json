@@ -65,7 +65,9 @@
     "computer.settings.delivery.observe": "effect",
     "computer.settings.delivery.ack": "effect",
     "chat.readintent.resolve": "effect",
-    "chat.conversation.state": "read"
+    "chat.conversation.state": "read",
+    "chat.history.list": "read",
+    "chat.history.result": "read"
   },
   "definitions": {
     "Context": {
@@ -3858,6 +3860,113 @@
           "type": "boolean"
         },
         "followReady": {
+          "type": "boolean"
+        }
+      }
+    },
+    "ChatHistoryKey": {
+      "type": "object",
+      "fields": {
+        "backendGeneration": {
+          "type": "id"
+        },
+        "operationId": {
+          "type": "id"
+        }
+      }
+    },
+    "ChatHistoryListRequest": {
+      "type": "object",
+      "fields": {
+        "offset": {
+          "type": "uint32",
+          "maximum": 1024
+        }
+      }
+    },
+    "ChatHistorySummary": {
+      "type": "object",
+      "fields": {
+        "key": {
+          "type": "ChatHistoryKey"
+        },
+        "binding": {
+          "type": "ChatTurnBinding"
+        },
+        "resultId": {
+          "type": "id"
+        },
+        "conversationId": {
+          "type": "string",
+          "maxBytes": 256,
+          "pattern": "^[^\\x00\\r\\n]*$"
+        }
+      }
+    },
+    "ChatHistoryPage": {
+      "type": "object",
+      "fields": {
+        "offset": {
+          "type": "uint32",
+          "maximum": 1024
+        },
+        "total": {
+          "type": "uint32",
+          "maximum": 1024
+        },
+        "entries": {
+          "type": "ChatHistorySummary[]",
+          "maxItems": 32
+        }
+      }
+    },
+    "ChatHistoryResult": {
+      "type": "object",
+      "fields": {
+        "key": {
+          "type": "ChatHistoryKey"
+        },
+        "binding": {
+          "type": "ChatTurnBinding"
+        },
+        "conversationId": {
+          "type": "string",
+          "maxBytes": 256,
+          "pattern": "^[^\\x00\\r\\n]*$"
+        },
+        "userTurnId": {
+          "type": "string",
+          "maxBytes": 256,
+          "pattern": "^[^\\x00\\r\\n]*$"
+        },
+        "replyId": {
+          "type": "string",
+          "maxBytes": 256,
+          "pattern": "^[^\\x00\\r\\n]*$"
+        },
+        "resultId": {
+          "type": "id"
+        },
+        "evidence": {
+          "type": "ChatSelectionEvidence"
+        },
+        "phase": {
+          "type": "text"
+        },
+        "outcome": {
+          "type": "text"
+        },
+        "code": {
+          "type": "text"
+        },
+        "text": {
+          "type": "string",
+          "maxBytes": 8192
+        },
+        "complete": {
+          "type": "boolean"
+        },
+        "acknowledged": {
           "type": "boolean"
         }
       }
