@@ -2289,18 +2289,16 @@ async function native(selected, inputs, report, save) {
     await close();
     if (selected.chatTwoTurn) {
       report.chatTwoTurn.quit.status = launch.status;
-      report.scenarioPassed = true;
       await save();
-      return;
-    }
-    await capture(
-      selected.settingsEditMutation
-        ? "confirmed-quit-mutation-result-unacknowledged"
-        : selected.readDiscard
-          ? "confirmed-quit-read-discard"
-          : "confirmed-quit-zero-authority",
-      settings.computer.computerId,
-    );
+    } else
+      await capture(
+        selected.settingsEditMutation
+          ? "confirmed-quit-mutation-result-unacknowledged"
+          : selected.readDiscard
+            ? "confirmed-quit-read-discard"
+            : "confirmed-quit-zero-authority",
+        settings.computer.computerId,
+      );
     if (selected.reopen) {
       // Only this straight-line success path can launch the one successor.
       // No relaunch is reachable from catch/finally or an unknown receipt.
