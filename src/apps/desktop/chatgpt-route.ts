@@ -3814,14 +3814,15 @@ export class ChatGptRoute {
         throw new Error("PHYSICAL_BINDING_LOST");
       return candidate;
     };
+    const contentProfile =
+      this.options.physicalContentProfile ?? "message-anchors-v1";
     const pagePolicy = {
+      contentProfile,
       e2eOrigin: this.options.e2eOrigin,
       ...(this.options.accountObservationProfile
         ? { accountObservationProfile: this.options.accountObservationProfile }
         : {}),
     };
-    const contentProfile =
-      this.options.physicalContentProfile ?? "message-anchors-v1";
     this.chatPhysicalApi = new ChatGptPhysical({
       qualified: () =>
         this.options.publicOutputProfile === "message-anchors-v1" &&

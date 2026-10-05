@@ -6,8 +6,13 @@ vi.mock("electron", () => ({
 }));
 import { ChatGptRoute } from "../../src/apps/desktop/chatgpt-route";
 import type { PhysicalBinding } from "../../apps/desktop/chatgpt-physical-api";
+import * as pageScripts from "../../src/apps/desktop/chatgpt-physical-page-scripts";
 
-function fixture(qualified = true, fixtureOrigin: string | null = null) {
+function fixture(
+  qualified = true,
+  fixtureOrigin: string | null = null,
+  physicalContentProfile?: pageScripts.PhysicalPageContentProfile,
+) {
   const homeUrl = fixtureOrigin
     ? `${fixtureOrigin}/chatgpt`
     : "https://chatgpt.com/";
@@ -18,6 +23,7 @@ function fixture(qualified = true, fixtureOrigin: string | null = null) {
     parent: () => null,
     partition: "persist:farol-dev-chatgpt",
     windowPresentation: { mode: "hidden" },
+    ...(physicalContentProfile ? { physicalContentProfile } : {}),
     ...(qualified
       ? { publicOutputProfile: "message-anchors-v1" as const }
       : {}),
@@ -79,6 +85,52 @@ function fixture(qualified = true, fixtureOrigin: string | null = null) {
 }
 
 describe("ChatGptRoute physical mechanics wiring (mock native port)", () => {
+  it.each([
+    [null, undefined, "message-anchors-v1"],
+    [
+      "http://127.0.0.1:41011",
+      "farol-controlled-settled-segments-v1",
+      "farol-controlled-settled-segments-v1",
+    ],
+  ] as const)(
+    "binds route content profile %s/%s into the shared page policy",
+    async (origin, selected, expected) => {
+      const probe = vi.spyOn(pageScripts, "physicalPrepareProbeScript");
+      try {
+        const h = fixture(true, origin, selected);
+        expect(
+          await h.route.chatPhysical().prepare(
+            {
+              operationId: "prepare",
+              target: { kind: "new-saved" },
+              deadlineMillis: Date.now() + 5000,
+            },
+            () => true,
+          ),
+        ).toMatchObject({ state: "prepared" });
+        expect(probe).toHaveBeenCalledExactlyOnceWith(h.snapshot(), {
+          e2eOrigin: origin,
+          contentProfile: expected,
+        });
+      } finally {
+        probe.mockRestore();
+      }
+    },
+  );
+  it("refuses a controlled profile without its explicit loopback route", async () => {
+    const h = fixture(true, null, "farol-controlled-settled-segments-v1");
+    expect(
+      await h.route.chatPhysical().prepare(
+        {
+          operationId: "prepare",
+          target: { kind: "new-saved" },
+          deadlineMillis: Date.now() + 5000,
+        },
+        () => true,
+      ),
+    ).toMatchObject({ state: "refused" });
+    expect(h.contents.executeJavaScript).not.toHaveBeenCalled();
+  });
   it("uses one facade per route and never allocates or focuses a surface", async () => {
     const h = fixture();
     expect(h.route.chatPhysical()).toBe(h.route.chatPhysical());
