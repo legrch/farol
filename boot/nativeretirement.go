@@ -118,7 +118,7 @@ func (r *NativeRuntime) retirementMethods() map[string]desktop.Method {
 	}
 	state := r.retirement
 	return map[string]desktop.Method{
-		"core.retirement.prepare": {Handle: func(ctx context.Context, request desktop.Request) (*desktop.Outcome, error) {
+		"core.retirement.prepare": {Concurrent: true, Handle: func(ctx context.Context, request desktop.Request) (*desktop.Outcome, error) {
 			var in wire.CoreRetirementPrepare
 			if request.OperationID == "" || chatDecode("CoreRetirementPrepare", request, &in) != nil {
 				return invalidIngress()
@@ -129,6 +129,9 @@ func (r *NativeRuntime) retirementMethods() map[string]desktop.Method {
 				return retirementOutcome("", nil, handoff.Refused)
 			}
 			state.attempted = true
+			if err := r.settingsDelivery.freezeForRetirement(ctx); err != nil {
+				return retirementOutcome("", nil, err)
+			}
 			if err := r.mutations.freezeForRetirement(); err != nil {
 				return retirementOutcome("", nil, err)
 			}
@@ -145,6 +148,11 @@ func (r *NativeRuntime) retirementMethods() map[string]desktop.Method {
 			if err = r.browser.QuiescePolling(); err != nil {
 				return retirementOutcome("", nil, err)
 			}
+			if r.settingsStore != nil {
+				if err := r.settingsStore.QuiescePolling(); err != nil {
+					return retirementOutcome("", nil, err)
+				}
+			}
 			publication, err := state.service.Capture(ctx, state.binding, in.HandoffId, origin)
 			if err != nil {
 				return retirementOutcome("", nil, err)
@@ -152,7 +160,7 @@ func (r *NativeRuntime) retirementMethods() map[string]desktop.Method {
 			state.publication = publication
 			return retirementOutcome("CoreRetirementPrepared", wire.CoreRetirementPrepared{HandoffId: publication.HandoffID, ReceiptDigest: hex.EncodeToString(publication.ReceiptDigest[:])}, nil)
 		}},
-		"core.retirement.ack": {Handle: func(ctx context.Context, request desktop.Request) (*desktop.Outcome, error) {
+		"core.retirement.ack": {Concurrent: true, Handle: func(ctx context.Context, request desktop.Request) (*desktop.Outcome, error) {
 			var in wire.CoreRetirementACK
 			if request.OperationID == "" || chatDecode("CoreRetirementACK", request, &in) != nil {
 				return invalidIngress()

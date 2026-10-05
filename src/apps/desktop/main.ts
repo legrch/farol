@@ -4,13 +4,12 @@ import {
 } from "../../../apps/desktop/go-core-host";
 import type {
   ChatComputerAdmissionResponse,
-  ComputerSettingsMutationResponse,
+  SettingsDeliveryResult,
 } from "../../../apps/desktop/bridge/wire";
 import { createDesktopChatBrowser } from "../../../apps/desktop/go-chat-host";
 import { GoChatBrowserDriver } from "../../../apps/desktop/go-chat-browser";
 import { BridgeError } from "../../../apps/desktop/bridge/client";
 import { withSettingsEditLease } from "../../../apps/desktop/with-settings-edit-lease";
-import { reportSettingsMutationFailure } from "../../../apps/desktop/bridge/settings-mutation";
 import { readGoWorkspaceSnapshot } from "../../../apps/desktop/go-workspace-snapshot";
 import { ReadAccountConfirmation } from "../../../apps/desktop/read-account-confirmation";
 import {
@@ -5149,27 +5148,19 @@ function workspaceMutationFailure(code: string): ProductConfigurationResult {
   }
 }
 
-async function goWorkspaceEditResult(
-  result: ComputerSettingsMutationResponse,
-  pending: {
-    operationId: string;
-    workspaceId: string;
-    relativePath: string;
-    beforeSha256: string;
-  },
+function goWorkspaceEditResult(
+  delivery: SettingsDeliveryResult,
   redelivered: boolean,
-): Promise<ProductConfigurationResult> {
+): ProductConfigurationResult {
   if (!configuration) return configurationFailure("SETTINGS_UNAVAILABLE");
-  if (result.phase !== "completed") {
-    if (result.phase === "outcome_unknown")
-      await configuration.recordComputerMutationOutcomeUnknown(
-        pending.workspaceId,
-      );
+  if (delivery.state === "pending")
+    return configurationFailure("WORKSPACE_MUTATION_IN_PROGRESS");
+  const result = delivery.result!;
+  // The Go offer has already performed any required uncertainty invalidation.
+  // This adapter only projects the retained result for the React surface.
+  if (result.phase !== "completed")
     return workspaceMutationFailure(result.failure!.code);
-  }
   const receipt = result.receipt!;
-  if (receipt.beforeSHA256 !== pending.beforeSha256)
-    throw new Error("GO_MUTATION_PREVIEW_CROSSED");
   return ProductConfigurationResultSchema.parse({
     ok: true,
     snapshot: configuration.snapshot(),
@@ -5183,7 +5174,7 @@ async function goWorkspaceEditResult(
       replacements: receipt.replacements,
       beforeSha256: receipt.beforeSHA256,
       afterSha256: receipt.afterSHA256,
-      resultRetention: result.publication,
+      resultRetention: delivery.retention,
       redelivered,
     },
   });
@@ -7854,10 +7845,9 @@ async function configureAdmittedProduct(
         return configurationFailure("WORKSPACE_VERIFICATION_REQUIRED");
       }
       const goCore = compiledGoCore === null ? null : desktopGoCore;
-      let goProfile: string;
       try {
         if (!goCore) throw new Error("GO_MUTATION_HOST_UNAVAILABLE");
-        goProfile = goCore.settingsMutationProfile();
+        goCore.settingsMutationProfile();
       } catch {
         pendingWorkspaceEdit = null;
         return configurationFailure("WORKSPACE_MUTATION_FAILED");
@@ -7869,21 +7859,7 @@ async function configureAdmittedProduct(
       workspaceMutationAdmission = true;
       pendingWorkspaceEdit = null;
       try {
-        // The operation ID is durable before anything executes, so a lost
-        // response or a restart leaves this exact operation to observe.
-        const recorded = await configuration.recordPendingWorkspaceEdit({
-          operationId: pending.operationId,
-          workspaceId: pending.workspaceId,
-          relativePath: pending.relativePath,
-          computerGeneration: pending.computerGeneration,
-          submittedAt: new Date().toISOString(),
-          backend: "go-owner-v2",
-          profileId: goProfile,
-          beforeSha256: pending.beforeSha256,
-        });
-        if (!recorded.ok) {
-          return configurationFailure("SETTINGS_WRITE_FAILED");
-        }
+        // Go owns durable pending admission, one executor call and the offer.
         return await withSettingsEditLease(
           pending.operationId,
           async () => {
@@ -7897,17 +7873,11 @@ async function configureAdmittedProduct(
                 command.oldText,
                 command.newText,
               );
-              return await goWorkspaceEditResult(result, pending, false);
-            } catch (error) {
-              // Keep the exact pending identity and consumed Apply. A proven
-              // non-dispatch refusal does not invalidate workspace verification.
-              return configurationFailure(
-                await reportSettingsMutationFailure(error, () =>
-                  configuration!.recordComputerMutationOutcomeUnknown(
-                    pending.workspaceId,
-                  ),
-                ),
-              );
+              return goWorkspaceEditResult(result, false);
+            } catch {
+              // No retry and no host-side ACK/invalidation decision. The exact
+              // retained pending remains observable through the Go service.
+              return configurationFailure("WORKSPACE_MUTATION_OUTCOME_UNKNOWN");
             }
           },
           configuration.releaseWorkspaceEditLease.bind(configuration),
@@ -7933,20 +7903,19 @@ async function configureAdmittedProduct(
           const core = desktopGoCore;
           if (compiledGoCore === null || !core)
             throw new Error("GO_MUTATION_HOST_UNAVAILABLE");
-          const result = await core.observeSettingsMutation(
-            pendingEdit.profileId,
-            {
-              operationId: pendingEdit.operationId,
-              workspaceId: pendingEdit.workspaceId,
-              relativePath: pendingEdit.relativePath,
-              computerGeneration: String(pendingEdit.computerGeneration),
-            },
-          );
-          return await goWorkspaceEditResult(result, pendingEdit, true);
-        } catch (error) {
-          return configurationFailure(
-            await reportSettingsMutationFailure(error),
-          );
+          const result = await core.observeSettingsMutation({
+            backend: pendingEdit.backend,
+            operationId: pendingEdit.operationId,
+            profileId: pendingEdit.profileId,
+            workspaceId: pendingEdit.workspaceId,
+            relativePath: pendingEdit.relativePath,
+            computerGeneration: String(pendingEdit.computerGeneration),
+            beforeSHA256: pendingEdit.beforeSha256,
+            submittedAt: pendingEdit.submittedAt,
+          });
+          return goWorkspaceEditResult(result, true);
+        } catch {
+          return configurationFailure("WORKSPACE_MUTATION_OUTCOME_UNKNOWN");
         }
       }
       // Observation reads the durable operation record only: it executes
@@ -7988,10 +7957,33 @@ async function configureAdmittedProduct(
       }
       break;
     }
-    case "computer.ack-workspace-edit":
+    case "computer.ack-workspace-edit": {
+      if (workspaceMutationAdmission)
+        return configurationFailure("WORKSPACE_MUTATION_IN_PROGRESS");
+      const snapshot = configuration.snapshot();
+      if (snapshot.status !== "ready")
+        return configurationFailure("SETTINGS_UNAVAILABLE");
+      const pending = snapshot.settings.computer.pendingEdit;
+      if (pending?.operationId !== command.operationId)
+        return configurationFailure("WORKSPACE_MUTATION_NOT_PENDING");
+      if ("backend" in pending) {
+        try {
+          if (compiledGoCore === null || !desktopGoCore)
+            throw new Error("GO_MUTATION_HOST_UNAVAILABLE");
+          await desktopGoCore.acknowledgeSettingsMutation(command.operationId);
+          return ProductConfigurationResultSchema.parse({
+            ok: true,
+            snapshot: configuration.snapshot(),
+          });
+        } catch {
+          return configurationFailure("WORKSPACE_MUTATION_OUTCOME_UNKNOWN");
+        }
+      }
+      // Existing-only legacy delivery remains separate until migration is qualified.
       return ProductConfigurationResultSchema.parse(
         await configuration.clearPendingWorkspaceEdit(command.operationId),
       );
+    }
     case "computer.cancel-workspace-edit":
       if (
         !pendingWorkspaceEdit ||
@@ -9554,6 +9546,17 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
         }),
     });
     configuration.attachComputerAuthority(() => desktopGoCore!.withdraw());
+    desktopGoCore.connectSettingsStore((profileId) => {
+      const store = configuration!.attachSettingsDeliveryStore({
+        profileId,
+        ownerId: "owner-desktop",
+      });
+      return {
+        read: (input) => store.read(input.deadlineMillis),
+        replace: (input) => store.replace(input.change, input.deadlineMillis),
+        fence: () => store.fence(),
+      };
+    });
   }
   productAgentStore = new PrivateProductAgentStore({
     root: productAgentInputRoot(),

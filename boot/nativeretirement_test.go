@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	wire "github.com/legrch/farol/gen/desktop/v1"
+	delivery "github.com/legrch/farol/modules/computer/app/services/settingsdelivery"
 	"github.com/legrch/farol/transport/desktop"
 	"golang.org/x/sys/unix"
 )
@@ -65,9 +66,16 @@ func retirementStorageFixture(t *testing.T, mutations bool) (NativeLaunch, *Nati
 	}
 	launch := NativeLaunch{Profile: ProfileBinding{ProfileID: "retirement-profile", Root: root, Device: uint64(st.Dev), Inode: st.Ino}, OwnerID: "owner", ComputerID: "computer", Home: root, StoreMode: "create", HostLifetimeID: "host-1", ChildLaunchID: "child-1"}
 	launch.SettingsMutations = mutations
+	if mutations {
+		launch.Profile.ProfileID = "00000000-0000-4000-8000-000000000001"
+		launch.ComputerID = "00000000-0000-4000-8000-000000000002"
+	}
 	runtime, err := NewNativeRuntime(context.Background(), launch, "generation-1")
 	if err != nil {
 		t.Fatal(err)
+	}
+	if mutations {
+		runtime.settingsDelivery.store = &deliveryStoreFixture{value: delivery.Snapshot{Revision: 1, Current: delivery.Identity{ProfileID: launch.Profile.ProfileID, OwnerID: launch.OwnerID, ComputerID: launch.ComputerID, Generation: 1}}}
 	}
 	t.Cleanup(func() {
 		if err := runtime.Close(); err != nil {

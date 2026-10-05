@@ -12,7 +12,11 @@ import { ChatBridge } from "./bridge/chat.ts";
 import { ChatComputerBridge } from "./bridge/chat-computer.ts";
 import { ChatCallerBridge } from "./bridge/chat-caller.ts";
 import { ReadIntentBridge } from "./bridge/read-intent.ts";
-import { SettingsMutationBridge } from "./bridge/settings-mutation.ts";
+import { SettingsDeliveryBridge } from "./bridge/settings-delivery.ts";
+import {
+  SettingsStorePump,
+  type SettingsStoreDriver,
+} from "./bridge/settings-store.ts";
 import {
   validate,
   type Context,
@@ -22,7 +26,7 @@ import {
   type ChatReadIntentPromote,
   type ChatReadIntentAccountApprove,
   type ChatReadIntentAccountRevoke,
-  type ComputerSettingsMutationRead,
+  type SettingsStorePending,
 } from "./bridge/wire.ts";
 import { qualifyProfileLaunch } from "./bridge/profile.ts";
 import { openNativeProfileStorage } from "./bridge/profile-storage.ts";
@@ -83,7 +87,8 @@ export class DesktopGoCore {
   private readonly authority: GoComputerAuthority;
   private readonly computer: ComputerBridge;
   private readonly readIntent: ReadIntentBridge;
-  private readonly settingsMutation: SettingsMutationBridge;
+  private readonly settingsDelivery: SettingsDeliveryBridge;
+  private settingsStorePump: SettingsStorePump | undefined;
   private readonly sessionId = randomUUID();
   private browser: DesktopBrowserConnection | undefined;
   private pump: BrowserPump | undefined;
@@ -103,7 +108,19 @@ export class DesktopGoCore {
     this.authority = new GoComputerAuthority(client, client.verifiedContext);
     this.computer = new ComputerBridge(client);
     this.readIntent = new ReadIntentBridge(client);
-    this.settingsMutation = new SettingsMutationBridge(client);
+    this.settingsDelivery = new SettingsDeliveryBridge(client);
+  }
+  connectSettingsStore(
+    driver: (profileId: string) => SettingsStoreDriver,
+  ): void {
+    if (this.closeResult || this.settingsStorePump)
+      throw new BridgeError("refused", "host_settings_store_unavailable");
+    if (!this.hasMutationStorage) return;
+    this.settingsStorePump = new SettingsStorePump(
+      this.client,
+      driver(this.client.verifiedContext.profileId),
+    );
+    this.settingsStorePump.start();
   }
   connectBrowser(connection: DesktopBrowserConnection): void {
     if (this.browser || this.closeResult)
@@ -205,7 +222,11 @@ export class DesktopGoCore {
   }
 
   settingsMutationProfile(): string {
-    if (this.closeResult || !this.hasMutationStorage)
+    if (
+      this.closeResult ||
+      !this.hasMutationStorage ||
+      this.settingsStorePump?.state !== "running"
+    )
       throw new BridgeError("unavailable", "host_mutation_storage_unavailable");
     return this.client.verifiedContext.profileId;
   }
@@ -219,7 +240,7 @@ export class DesktopGoCore {
     newText: string,
   ) {
     this.settingsMutationProfile();
-    return this.settingsMutation.edit(operationId, {
+    return this.settingsDelivery.apply(operationId, {
       publication:
         this.authority.settingsMutationPublication(computerGeneration),
       workspaceId,
@@ -228,13 +249,14 @@ export class DesktopGoCore {
       edits: [{ oldText, newText }],
     });
   }
-  observeSettingsMutation(
-    profileId: string,
-    input: ComputerSettingsMutationRead,
-  ) {
-    if (this.settingsMutationProfile() !== profileId)
+  observeSettingsMutation(input: SettingsStorePending) {
+    if (this.settingsMutationProfile() !== input.profileId)
       throw new BridgeError("refused", "host_mutation_profile_crossed");
-    return this.settingsMutation.observe(input);
+    return this.settingsDelivery.observe(input);
+  }
+  acknowledgeSettingsMutation(operationId: string) {
+    this.settingsMutationProfile();
+    return this.settingsDelivery.acknowledge(operationId);
   }
   promoteReadIntent(input: ChatReadIntentPromote) {
     if (this.closeResult)
@@ -275,7 +297,7 @@ export class DesktopGoCore {
         const prepared = await this.client.request(
           "core.retirement.prepare",
           { handoffId },
-          { operationId: randomUUID(), timeoutMs: 1000 },
+          { operationId: randomUUID(), timeoutMs: 16000 },
         );
         if (
           prepared.status !== "ok" ||
@@ -301,6 +323,15 @@ export class DesktopGoCore {
           throw new BridgeError(
             "unknown",
             "core_retirement_browser_unconfirmed",
+          );
+        await this.settingsStorePump?.stop();
+        if (
+          this.settingsStorePump &&
+          this.settingsStorePump.state !== "stopped"
+        )
+          throw new BridgeError(
+            "unknown",
+            "core_retirement_settings_unconfirmed",
           );
         const acknowledged = await this.client.request(
           "core.retirement.ack",
@@ -337,6 +368,7 @@ export class DesktopGoCore {
     // Do not wait up to its deadline before starting exact child cleanup.
     const results = await Promise.allSettled([
       this.pump?.stop(),
+      this.settingsStorePump?.stop(),
       this.client.close(),
     ]);
     for (const result of results) {

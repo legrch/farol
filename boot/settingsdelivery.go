@@ -19,7 +19,7 @@ import (
 // SettingsDeliveryIngress owns transport correlation only. All public calls
 // share gate; the application has its separate injected gate. Begin and Execute
 // remain within one Apply invocation so the host never owns an execution Permit.
-// This preparation is not registered by NativeRuntime until host cutover.
+// NativeRuntime exposes this route instead of the raw owner edit methods.
 type SettingsDeliveryIngress struct {
 	gate                     sync.Mutex
 	mutations                *SettingsMutationIngress

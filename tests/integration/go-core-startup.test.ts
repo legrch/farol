@@ -1,9 +1,13 @@
 import { execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, beforeAll, expect, it } from "vitest";
-import { startDesktopGoCore } from "../../apps/desktop/go-core-host";
+import {
+  startDesktopGoCore,
+  type DesktopGoCore,
+} from "../../apps/desktop/go-core-host";
+import type { SettingsStorePending } from "../../apps/desktop/bridge/wire";
 import type { BrowserDriver } from "../../apps/desktop/bridge/browser";
 import {
   ProductConfigurationService,
@@ -15,6 +19,23 @@ import type { BuildIdentity } from "../../src/pkg/build-info/identity";
 // The build declaration is synthetic test input, not package attestation. No
 // Electron window, provider or owner profile is exercised. Empty-owner reopen
 // uses actual origin retirement and child terminal observation through the host.
+function connectSettings(
+  host: DesktopGoCore,
+  configuration: ProductConfigurationService,
+) {
+  configuration.attachComputerAuthority(() => host.withdraw());
+  host.connectSettingsStore((profileId) => {
+    const store = configuration.attachSettingsDeliveryStore({
+      profileId,
+      ownerId: "owner-desktop",
+    });
+    return {
+      read: (input) => store.read(input.deadlineMillis),
+      replace: (input) => store.replace(input.change, input.deadlineMillis),
+      fence: () => store.fence(),
+    };
+  });
+}
 let root: string;
 let artifactRoot: string;
 let artifact: unknown;
@@ -133,7 +154,7 @@ it("starts the normal host with fresh default settings before any workspace is c
     ).rejects.toMatchObject({
       code: "computer_publication_unavailable",
     });
-    configuration.attachComputerAuthority(() => host.withdraw());
+    connectSettings(host, configuration);
     const workspace = path.join(root, "workspace");
     fs.mkdirSync(workspace, { mode: 0o700 });
     fs.writeFileSync(path.join(workspace, "note.md"), "Configured Go read.\n");
@@ -177,7 +198,7 @@ it("reopens the exact empty profile across actual graceful child lifetimes", asy
   const home = path.join(root, "reopen-home");
   fs.mkdirSync(stateRoot, { mode: 0o700 });
   fs.mkdirSync(home, { mode: 0o700 });
-  const configuration = new ProductConfigurationService(
+  let configuration = new ProductConfigurationService(
     new ProductSettingsStore({ root: stateRoot }),
     { homeDirectory: home },
   );
@@ -204,6 +225,13 @@ it("reopens the exact empty profile across actual graceful child lifetimes", asy
   let physical: string | undefined;
   const generations = new Set<string>();
   for (let cycle = 0; cycle < 3; cycle++) {
+    if (cycle > 0) {
+      configuration = new ProductConfigurationService(
+        new ProductSettingsStore({ root: stateRoot }),
+        { homeDirectory: home },
+      );
+      await configuration.initialize();
+    }
     const host = await startDesktopGoCore({
       previousHostDrainConfirmed: true,
       compiledArtifact: artifact,
@@ -220,6 +248,7 @@ it("reopens the exact empty profile across actual graceful child lifetimes", asy
         return { driver, withdraw: () => undefined };
       },
     });
+    connectSettings(host, configuration);
     const stat = fs.lstatSync(path.join(stateRoot, "go-core"), {
       bigint: true,
     });
@@ -287,3 +316,136 @@ it("cleans a post-connect startup abort without publishing a retirement", async 
   expect(fs.readdirSync(chatRoot).sort()).toEqual(before);
   cleanupConfirmed = true;
 });
+
+it("saves Go pending before one native edit and reopens to exact Go result ACK", async () => {
+  cleanupConfirmed = false;
+  const stateRoot = path.join(root, "delivery-state"),
+    home = path.join(root, "delivery-home"),
+    workspace = path.join(root, "delivery-workspace");
+  for (const directory of [stateRoot, home, workspace])
+    fs.mkdirSync(directory, { mode: 0o700 });
+  const target = path.join(workspace, "note.md");
+  fs.writeFileSync(target, "one old fragment\n", { mode: 0o600 });
+  const original = fs.readFileSync(target),
+    beforeHash = createHash("sha256").update(original).digest("hex");
+  let configuration = new ProductConfigurationService(
+    new ProductSettingsStore({ root: stateRoot }),
+    { homeDirectory: home },
+  );
+  await configuration.initialize();
+  const settings = () => {
+    const v = configuration.snapshot();
+    if (v.status !== "ready") throw new Error("SETTINGS_UNAVAILABLE");
+    return v.settings;
+  };
+  const stat = fs.lstatSync(workspace, { bigint: true });
+  expect(
+    (
+      await configuration.addReadonlyWorkspace({
+        root: workspace,
+        label: "Disposable edit",
+        rootIdentity: { device: String(stat.dev), inode: String(stat.ino) },
+      })
+    ).ok,
+  ).toBe(true);
+  const workspaceId = settings().computer.workspaces[0]!.workspaceId;
+  expect(
+    (await configuration.updateWorkspaceAccess(workspaceId, "write")).ok,
+  ).toBe(true);
+  let providerCalls = 0;
+  const forbidden = async (): Promise<never> => {
+    providerCalls++;
+    throw new Error("PROVIDER_FORBIDDEN");
+  };
+  const driver: BrowserDriver = {
+    prepare: forbidden,
+    verifySend: forbidden,
+    send: forbidden,
+    observe: forbidden,
+    cancel: forbidden,
+    dispose: forbidden,
+  };
+  const selected = {
+    previousHostDrainConfirmed: true,
+    compiledArtifact: artifact,
+    build,
+    artifactRoot,
+    stateRoot,
+    home,
+    settings,
+    browser: () => ({ driver, withdraw: () => undefined }),
+  };
+  const host = await startDesktopGoCore(selected);
+  connectSettings(host, configuration);
+  const operationId = randomUUID(),
+    generation = settings().computer.generation;
+  const { offered, journal, entries, saved } = await (async () => {
+    try {
+      const offered = await host.editSettingsWorkspace(
+        operationId,
+        generation,
+        workspaceId,
+        "note.md",
+        beforeHash,
+        "old",
+        "new",
+      );
+      expect(offered.state).toBe("offered");
+      expect(offered.result?.phase).toBe("completed");
+      expect(offered.retention).toBe("durable");
+      expect(settings().computer.pendingEdit).toMatchObject({
+        operationId,
+        profileId: host.settingsMutationProfile(),
+        computerGeneration: generation,
+        beforeSha256: beforeHash,
+      });
+      expect(fs.readFileSync(target, "utf8")).toBe("one new fragment\n");
+      const journal = path.join(stateRoot, "go-core", "computer", "mutations");
+      const entries = fs.readdirSync(journal);
+      expect(entries).toHaveLength(1);
+      const saved = fs.readFileSync(path.join(journal, entries[0]!));
+      await expect(
+        host.editSettingsWorkspace(
+          operationId,
+          generation,
+          workspaceId,
+          "note.md",
+          beforeHash,
+          "old",
+          "new",
+        ),
+      ).rejects.toBeDefined();
+      return { offered, journal, entries, saved };
+    } finally {
+      await host.close(); // Known durable effect may retain unacknowledged delivery.
+    }
+  })();
+  configuration = new ProductConfigurationService(
+    new ProductSettingsStore({ root: stateRoot }),
+    { homeDirectory: home },
+  );
+  await configuration.initialize();
+  const next = await startDesktopGoCore(selected);
+  connectSettings(next, configuration);
+  try {
+    const observed = await next.observeSettingsMutation(
+      offered.pending as SettingsStorePending,
+    );
+    expect(observed.pending).toEqual(offered.pending);
+    expect(observed.result).toEqual(offered.result);
+    expect(observed.receiptId).not.toBe(offered.receiptId);
+    const revision = settings().revision;
+    expect(
+      (await next.acknowledgeSettingsMutation(operationId)).acknowledged,
+    ).toBe(true);
+    expect(settings().computer.pendingEdit).toBeNull();
+    expect(settings().revision).toBe(revision + 1);
+    expect(fs.readdirSync(journal)).toEqual(entries);
+    expect(fs.readFileSync(path.join(journal, entries[0]!))).toEqual(saved);
+    expect(fs.readFileSync(target, "utf8")).toBe("one new fragment\n");
+    expect(providerCalls).toBe(0);
+  } finally {
+    await next.close();
+  }
+  cleanupConfirmed = true;
+}, 25000);

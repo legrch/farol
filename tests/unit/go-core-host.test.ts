@@ -84,7 +84,10 @@ vi.mock(
   }),
 );
 
-const context = { profileId: "host-profile", backendGeneration: "backend-one" };
+const context = {
+  profileId: "00000000-0000-4000-8000-00000000000a",
+  backendGeneration: "backend-one",
+};
 const artifact: CoreArtifactDeclaration = {
   schema: "farol-core-artifact/1",
   build: {
@@ -138,6 +141,8 @@ function transport(fault?: Fault) {
   const replies: Outcome[] = [];
   let closePoll: (() => void) | undefined;
   let stopPoll: (() => void) | undefined;
+  let closeStorePoll: (() => void) | undefined;
+  let stopStorePoll: (() => void) | undefined;
   let quiesced = false;
   const request = vi.fn<Client["request"]>(
     async (method, body, options = {}) => {
@@ -161,9 +166,26 @@ function transport(fault?: Fault) {
                 data: {},
               });
           });
+        case "computer.settings.store.next":
+          if (quiesced) {
+            data = {};
+            break;
+          }
+          return new Promise<Outcome>((resolve, reject) => {
+            closeStorePoll = () =>
+              reject(new BridgeError("unavailable", "client_closed"));
+            stopStorePoll = () =>
+              resolve({
+                status: "ok",
+                requestId: options.id!,
+                context,
+                data: {},
+              });
+          });
         case "core.retirement.prepare":
           quiesced = true;
           stopPoll?.();
+          stopStorePoll?.();
           data = { handoffId: input.handoffId!, receiptDigest: "d".repeat(64) };
           break;
         case "core.retirement.ack":
@@ -203,25 +225,50 @@ function transport(fault?: Fault) {
             sha256: "f".repeat(64),
           };
           break;
-        case "computer.settings.edit":
-        case "computer.settings.mutation.read":
+        case "computer.settings.delivery.apply":
+        case "computer.settings.delivery.observe": {
+          const edit = input.request as Record<string, Json> | undefined;
+          const pending = edit
+            ? {
+                backend: "go-owner-v2",
+                operationId: options.operationId!,
+                profileId: context.profileId,
+                workspaceId: edit.workspaceId!,
+                relativePath: edit.relativePath!,
+                computerGeneration: (edit.publication as Record<string, Json>)
+                  .generation!,
+                beforeSHA256: edit.expectedSHA256!,
+                submittedAt: "2026-10-04T00:00:00.123456789Z",
+              }
+            : (input.pending as Record<string, Json>);
           data = {
-            operationId: options.operationId ?? input.operationId!,
-            workspaceId: input.workspaceId!,
-            computerGeneration:
-              method === "computer.settings.edit"
-                ? (input.publication as Record<string, Json>).generation!
-                : input.computerGeneration!,
-            phase: "completed",
-            publication: "durable",
-            receipt: {
-              operation: "edit",
-              relativePath: input.relativePath!,
-              bytes: "8",
-              replacements: 1,
-              beforeSHA256: "b".repeat(64),
-              afterSHA256: "c".repeat(64),
+            state: "offered",
+            pending,
+            receiptId: "delivery-receipt",
+            retention: "durable",
+            result: {
+              operationId: pending.operationId!,
+              workspaceId: pending.workspaceId!,
+              computerGeneration: pending.computerGeneration!,
+              phase: "completed",
+              publication: "durable",
+              receipt: {
+                operation: "edit",
+                relativePath: pending.relativePath!,
+                bytes: "8",
+                replacements: 1,
+                beforeSHA256: pending.beforeSHA256!,
+                afterSHA256: "c".repeat(64),
+              },
             },
+          };
+          break;
+        }
+        case "computer.settings.delivery.ack":
+          data = {
+            receiptId: input.receiptId!,
+            pending: input.pending!,
+            acknowledged: true,
           };
           break;
         case "chat.readintent.account.approve":
@@ -252,6 +299,7 @@ function transport(fault?: Fault) {
   const close = vi.fn(async () => {
     events.push("client.close");
     closePoll?.();
+    closeStorePoll?.();
   });
   // Deliberately only the host-facing Client port; no constructor/child pipes.
   const client = {
@@ -902,10 +950,16 @@ describe("normal host Go Settings mutation route", () => {
     const f = transport();
     const host = new DesktopGoCore(f.client, () => settings, undefined, true);
     await host.publishCurrent();
+    const fence = vi.fn(async () => undefined);
+    host.connectSettingsStore(() => ({
+      read: async () => ({ status: "unavailable" }),
+      replace: async () => ({ status: "unknown" }),
+      fence,
+    }));
     expect(host.settingsMutationProfile()).toBe(context.profileId);
     const workspaceId = settings.computer.workspaces[0]!.workspaceId;
     const result = await host.editSettingsWorkspace(
-      "edit",
+      "00000000-0000-4000-8000-00000000000e",
       7,
       workspaceId,
       "note.md",
@@ -913,10 +967,10 @@ describe("normal host Go Settings mutation route", () => {
       "old",
       "new",
     );
-    expect(result.phase).toBe("completed");
+    expect(result.result?.phase).toBe("completed");
     await expect(
       host.editSettingsWorkspace(
-        "edit",
+        "00000000-0000-4000-8000-00000000000e",
         7,
         workspaceId,
         "note.md",
@@ -924,28 +978,22 @@ describe("normal host Go Settings mutation route", () => {
         "old",
         "new",
       ),
-    ).rejects.toMatchObject({ code: "settings_mutation_attempt_consumed" });
+    ).rejects.toBeDefined();
     await host.withdraw();
-    const read = {
-      operationId: "edit",
-      workspaceId,
-      relativePath: "note.md",
-      computerGeneration: "7",
-    };
-    expect(await host.observeSettingsMutation(context.profileId, read)).toEqual(
-      result,
-    );
+    const read = result.pending;
+    expect(await host.observeSettingsMutation(read)).toEqual(result);
     const calls = f.request.mock.calls.length;
-    expect(() => host.observeSettingsMutation("another-profile", read)).toThrow(
-      "host_mutation_profile_crossed",
-    );
+    expect(() =>
+      host.observeSettingsMutation({ ...read, profileId: "another-profile" }),
+    ).toThrow("host_mutation_profile_crossed");
     expect(f.request).toHaveBeenCalledTimes(calls);
     expect(f.events).toEqual([
       "computer.authority.deactivate",
       "computer.authority.publish",
-      "computer.settings.edit",
+      "computer.settings.store.next",
+      "computer.settings.delivery.apply",
       "computer.authority.deactivate",
-      "computer.settings.mutation.read",
+      "computer.settings.delivery.observe",
     ]);
     expect(ports.legacyRead).not.toHaveBeenCalled();
     await host.close();

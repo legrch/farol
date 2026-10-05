@@ -59,6 +59,8 @@ type StoreHooks = Readonly<{
 // abandons the write with the target untouched.
 type StoreWriteFence = Readonly<{
   beforeWrite?: () => Promise<void>;
+  // Last synchronous check immediately before rename is submitted.
+  assertBeforePublication?: () => void;
 }>;
 
 // The one throw `beforeWrite` may raise on this path: the promotion lease a
@@ -83,8 +85,11 @@ export type ConditionalSettingsWrite =
 // Trusted host storage port; Go owns all delivery transitions. The retained
 // service queue serializes these calls with ordinary Settings commands.
 export type SettingsDeliveryStore = Readonly<{
-  read(): Promise<SettingsStoreReadResult>;
-  replace(change: unknown): Promise<SettingsStoreReplaceResult>;
+  read(deadlineMillis?: string): Promise<SettingsStoreReadResult>;
+  replace(
+    change: unknown,
+    deadlineMillis?: string,
+  ): Promise<SettingsStoreReplaceResult>;
   // A lost caller/transport acknowledgement must fence this same writer even
   // if a lower-level publication had already returned known bytes.
   fence(): Promise<void>;
@@ -694,6 +699,7 @@ export class ProductSettingsStore {
             await assertCurrent();
             await fence.beforeWrite?.();
           },
+          assertBeforePublication: () => fence.assertBeforePublication?.(),
         },
         () => {
           attempted = true;
@@ -755,6 +761,7 @@ export class ProductSettingsStore {
       await fence.beforeWrite?.();
       if (this.conditionalPublicationUnknown)
         throw new Error("SETTINGS_WRITE_OUTCOME_UNKNOWN");
+      fence.assertBeforePublication?.();
       publicationAttempted?.();
       await fs.rename(temporary, target);
       await fs.chmod(target, 0o600);
@@ -894,12 +901,14 @@ export class ProductConfigurationService {
     this.settingsDeliveryAttached = true;
     const selected = structuredClone(scope);
     return {
-      read: () =>
+      read: (deadlineMillis) =>
         this.exclusive(async () => {
           if (this.settingsDeliveryFenced || !this.current)
             return { status: "unavailable" };
           try {
+            this.assertSettingsDeliveryDeadline(deadlineMillis);
             const readback = await this.store.load();
+            this.assertSettingsDeliveryDeadline(deadlineMillis);
             if (JSON.stringify(readback) !== JSON.stringify(this.current))
               return { status: "unavailable" };
             return {
@@ -915,11 +924,11 @@ export class ProductConfigurationService {
             };
           }
         }),
-      replace: (change) => {
+      replace: (change, deadlineMillis) => {
         // Capture caller bytes before joining the queue.
         const captured: unknown = structuredClone(change);
         return this.exclusive(() =>
-          this.replaceSettingsDeliveryStore(selected, captured),
+          this.replaceSettingsDeliveryStore(selected, captured, deadlineMillis),
         );
       },
       fence: () => {
@@ -929,6 +938,22 @@ export class ProductConfigurationService {
         return this.exclusive(() => this.fenceSettingsDeliveryStore());
       },
     };
+  }
+
+  private assertSettingsDeliveryDeadline(
+    deadlineMillis: string | undefined,
+  ): void {
+    // Omission is for direct in-process storage callers only. The reciprocal
+    // driver always forwards the original Go command deadline unchanged.
+    if (deadlineMillis === undefined) return;
+    const deadline = Number(deadlineMillis);
+    if (
+      !/^[1-9][0-9]*$/u.test(deadlineMillis) ||
+      !Number.isSafeInteger(deadline) ||
+      deadline <= Date.now() ||
+      deadline - Date.now() > 15_000
+    )
+      throw new Error("SETTINGS_DELIVERY_DEADLINE_EXPIRED");
   }
 
   private latchSettingsDeliveryLoss(): void {
@@ -965,12 +990,14 @@ export class ProductConfigurationService {
   private async replaceSettingsDeliveryStore(
     scope: SettingsStoreScope,
     change: unknown,
+    deadlineMillis?: string,
   ): Promise<SettingsStoreReplaceResult> {
     if (this.settingsDeliveryFenced) return { status: "unknown" };
     if (!this.current) return { status: "not_written" };
     const before = structuredClone(this.current);
     let candidate: ProductSettings | undefined;
     try {
+      this.assertSettingsDeliveryDeadline(deadlineMillis);
       candidate = settingsStoreReplacement(before, scope, change);
     } catch {
       return { status: "not_written" };
@@ -1011,18 +1038,15 @@ export class ProductConfigurationService {
       }
       const verify = lease?.verify?.bind(lease);
       storeCalled = true;
-      const written = await this.store.saveConditional(
-        before,
-        candidate,
-        verify
-          ? {
-              beforeWrite: async () => {
-                if (!(await verify())) throw new WorkspaceEditLeaseLost();
-              },
-            }
-          : {},
-      );
+      const written = await this.store.saveConditional(before, candidate, {
+        beforeWrite: async () => {
+          if (verify && !(await verify())) throw new WorkspaceEditLeaseLost();
+        },
+        assertBeforePublication: () =>
+          this.assertSettingsDeliveryDeadline(deadlineMillis),
+      });
       if (written.status === "not_written") return written;
+      this.assertSettingsDeliveryDeadline(deadlineMillis);
       if (written.status === "unknown" || this.settingsDeliveryFenced) {
         await this.fenceSettingsDeliveryStore();
         return { status: "unknown" };

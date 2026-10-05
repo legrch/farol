@@ -75,6 +75,65 @@ async function current(
   return result.snapshot!;
 }
 describe("typed mechanical Settings delivery store", () => {
+  it("refuses an expired original deadline before any replacement", async () => {
+    const f = await fixture();
+    const rename = vi.spyOn(fs, "rename");
+    const result = await f.adapter.replace(
+      { expected: f.snapshot, next: f.pending, invalidateVerification: false },
+      String(Date.now() - 1),
+    );
+    expect(result).toEqual({ status: "not_written" });
+    expect(rename).not.toHaveBeenCalled();
+    expect(await f.store.load()).toEqual(f.before);
+  });
+
+  it("rechecks the original deadline immediately before rename after awaited work", async () => {
+    let expired = false;
+    const f = await fixture({
+      beforeCommit: async () => {
+        if (expired) vi.spyOn(Date, "now").mockReturnValue(2_000_000_000_100);
+      },
+    });
+    vi.spyOn(Date, "now").mockReturnValue(2_000_000_000_000);
+    const rename = vi.spyOn(fs, "rename");
+    expired = true;
+    const result = await f.adapter.replace(
+      { expected: f.snapshot, next: f.pending, invalidateVerification: false },
+      "2000000000100",
+    );
+    expect(result).toEqual({ status: "not_written" });
+    expect(rename).not.toHaveBeenCalled();
+    expect(await f.store.load()).toEqual(f.before);
+  });
+
+  it("retains uncertainty when publication completes after the original deadline", async () => {
+    const f = await fixture();
+    vi.spyOn(Date, "now").mockReturnValue(2_000_000_000_000);
+    const originalRename = fs.rename;
+    const rename = vi
+      .spyOn(fs, "rename")
+      .mockImplementation(async (...args) => {
+        await originalRename(...args);
+        vi.spyOn(Date, "now").mockReturnValue(2_000_000_000_100);
+      });
+    const change = {
+      expected: f.snapshot,
+      next: f.pending,
+      invalidateVerification: false,
+    };
+    expect(await f.adapter.replace(change, "2000000000100")).toEqual({
+      status: "unknown",
+    });
+    expect((await f.store.load())?.computer.pendingEdit?.operationId).toBe(
+      operationId,
+    );
+    expect(f.service.snapshot().status).toBe("error");
+    expect(await f.adapter.replace(change, "2000000001100")).toEqual({
+      status: "unknown",
+    });
+    expect(rename).toHaveBeenCalledTimes(1);
+  });
+
   it("projects no private content and preserves unrelated fields in an exact replacement", async () => {
     const f = await fixture({
       seed: (s) => {

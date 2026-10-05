@@ -20,7 +20,8 @@ import (
 )
 
 // Actual normal NativeRuntime, native private journal and native exact-hash edit.
-// The workspace/consent and host terminal/drain facts are fixtures. This is not
+// The settings document, workspace consent and host terminal/drain facts are
+// explicit fixtures. Real host storage/pipe are qualified separately. This is not
 // an Electron/package/installed or real host retirement observation.
 func nativeSettingsCall(t *testing.T, runtime *NativeRuntime, method, operation string, body any) *desktop.Outcome {
 	t.Helper()
@@ -53,7 +54,7 @@ func nativeSettingsPublication(t *testing.T, runtime *NativeRuntime, workspace s
 	if err != nil {
 		t.Fatal(err)
 	}
-	raw, err := json.Marshal(map[string]any{"ownerId": "owner", "computerId": "computer", "generation": generation, "workspaces": []any{map[string]any{"workspaceId": "work", "root": workspace, "access": "write", "rootIdentity": map[string]string{"device": fmt.Sprint(stat.Dev), "inode": fmt.Sprint(stat.Ino)}}}, "excludedPaths": []any{}, "capabilities": []string{"workspace.list", "workspace.read", "workspace.write"}, "network": "none", "commands": "none", "expiresAt": time.Now().Add(time.Hour).UnixMilli()})
+	raw, err := json.Marshal(map[string]any{"ownerId": "owner", "computerId": runtime.ingress.computerID, "generation": generation, "workspaces": []any{map[string]any{"workspaceId": "00000000-0000-4000-8000-000000000004", "root": workspace, "access": "write", "rootIdentity": map[string]string{"device": fmt.Sprint(stat.Dev), "inode": fmt.Sprint(stat.Ino)}}}, "excludedPaths": []any{}, "capabilities": []string{"workspace.list", "workspace.read", "workspace.write"}, "network": "none", "commands": "none", "expiresAt": time.Now().Add(time.Hour).UnixMilli()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,14 +81,19 @@ func TestNativeSettingsMutationNormalRuntimeAndCleanRejoin(t *testing.T) {
 		t.Fatal(err)
 	}
 	hash := sha256.Sum256([]byte(original))
-	request := wire.ComputerSettingsEditRequest{Publication: publication, WorkspaceId: "work", RelativePath: "note.md", ExpectedSHA256: hex.EncodeToString(hash[:]), Edits: []wire.ComputerTextEdit{{OldText: "old", NewText: "new"}}}
-	out := nativeSettingsCall(t, runtime, "computer.settings.edit", "native-edit", request)
+	request := wire.ComputerSettingsEditRequest{Publication: publication, WorkspaceId: "00000000-0000-4000-8000-000000000004", RelativePath: "note.md", ExpectedSHA256: hex.EncodeToString(hash[:]), Edits: []wire.ComputerTextEdit{{OldText: "old", NewText: "new"}}}
+	store := runtime.settingsDelivery.store.(*deliveryStoreFixture)
+	out := nativeSettingsCall(t, runtime, "computer.settings.delivery.apply", deliveryOperation, wire.SettingsDeliveryApply{DeadlineMillis: fmt.Sprint(time.Now().Add(10 * time.Second).UnixMilli()), Request: request})
 	if out.Status != "ok" {
 		t.Fatalf("edit: %#v", out)
 	}
-	var completed wire.ComputerSettingsMutationResponse
-	if err := json.Unmarshal(out.Data, &completed); err != nil || completed.Phase != "completed" || completed.Publication != "durable" || completed.Receipt == nil {
-		t.Fatalf("edit result: %s %v", out.Data, err)
+	var offered wire.SettingsDeliveryResult
+	if err := json.Unmarshal(out.Data, &offered); err != nil || offered.Result == nil {
+		t.Fatalf("offer: %s %v", out.Data, err)
+	}
+	completed := offered.Result
+	if completed.Phase != "completed" || completed.Publication != "durable" || completed.Receipt == nil {
+		t.Fatalf("edit result: %s", out.Data)
 	}
 	after, err := os.ReadFile(target)
 	if err != nil || string(after) != "one new fragment\n" {
@@ -100,13 +106,6 @@ func TestNativeSettingsMutationNormalRuntimeAndCleanRejoin(t *testing.T) {
 	afterChat, err := os.ReadFile(filepath.Join(launch.Profile.Root, "chat", "chat-lifecycle.json"))
 	if err != nil || string(before) != string(afterChat) || len(runtime.ingress.tasks) != 0 || len(runtime.ingress.turns) != 0 {
 		t.Fatal("Settings created synthetic Chat/Task authority")
-	}
-	conflict := request
-	conflict.ExpectedSHA256 = strings.Repeat("0", 64)
-	refused := nativeSettingsCall(t, runtime, "computer.settings.edit", "native-conflict", conflict)
-	var failed wire.ComputerSettingsMutationResponse
-	if refused.Status != "ok" || json.Unmarshal(refused.Data, &failed) != nil || failed.Phase != "failed" || failed.Publication != "durable" {
-		t.Fatalf("hash conflict not retained: %#v %s", refused, refused.Data)
 	}
 	// Exact mutation root survived actual retirement and a distinct backend owner.
 	terminal := preparedTerminal(t, runtime)
@@ -125,19 +124,33 @@ func TestNativeSettingsMutationNormalRuntimeAndCleanRejoin(t *testing.T) {
 			t.Error(err)
 		}
 	})
-	read := wire.ComputerSettingsMutationRead{OperationId: "native-edit", WorkspaceId: "work", RelativePath: "note.md", ComputerGeneration: "1"}
-	observed := nativeSettingsCall(t, next, "computer.settings.mutation.read", "", read)
-	if observed.Status != "ok" || string(observed.Data) != string(out.Data) {
-		t.Fatalf("exact retained result lost: %#v %s", observed, observed.Data)
+	// Restore the actual saved pending fixture into the distinct delivery owner.
+	next.settingsDelivery.store = store
+	observed := nativeSettingsCall(t, next, "computer.settings.delivery.observe", "observe", wire.SettingsDeliveryObserve{DeadlineMillis: fmt.Sprint(time.Now().Add(10 * time.Second).UnixMilli()), Pending: offered.Pending})
+	var redelivered wire.SettingsDeliveryResult
+	if observed.Status != "ok" || json.Unmarshal(observed.Data, &redelivered) != nil || redelivered.Result == nil || redelivered.Result.Phase != "completed" || redelivered.Result.ComputerGeneration != "1" {
+		t.Fatalf("retained result: %s", observed.Data)
 	}
-	read.RelativePath = "other.md"
-	if observed := nativeSettingsCall(t, next, "computer.settings.mutation.read", "", read); observed.Status == "ok" {
+	crossed := offered.Pending
+	crossed.RelativePath = "other.md"
+	if nativeSettingsCall(t, next, "computer.settings.delivery.observe", "crossed", wire.SettingsDeliveryObserve{DeadlineMillis: fmt.Sprint(time.Now().Add(10 * time.Second).UnixMilli()), Pending: crossed}).Status == "ok" {
 		t.Fatal("crossed path rejoined")
 	}
+	if nativeSettingsCall(t, next, "computer.settings.delivery.ack", "ack", wire.SettingsDeliveryACK{DeadlineMillis: fmt.Sprint(time.Now().Add(10 * time.Second).UnixMilli()), ReceiptId: *redelivered.ReceiptId, Pending: redelivered.Pending}).Status != "ok" {
+		t.Fatal("ACK failed")
+	}
 	request.Publication = nativeSettingsPublication(t, next, workspace, 2)
-	replay := nativeSettingsCall(t, next, "computer.settings.edit", "native-edit", request)
+	store.value.Current.Generation = 2
+	replay := nativeSettingsCall(t, next, "computer.settings.delivery.apply", deliveryOperation, wire.SettingsDeliveryApply{DeadlineMillis: fmt.Sprint(time.Now().Add(10 * time.Second).UnixMilli()), Request: request})
 	if replay.Status == "ok" {
-		t.Fatalf("changed generation re-admitted original: %s", replay.Data)
+		t.Fatal("original operation readmitted")
+	}
+	conflict := request
+	conflict.ExpectedSHA256 = strings.Repeat("0", 64)
+	refused := nativeSettingsCall(t, next, "computer.settings.delivery.apply", "00000000-0000-4000-8000-000000000005", wire.SettingsDeliveryApply{DeadlineMillis: fmt.Sprint(time.Now().Add(10 * time.Second).UnixMilli()), Request: conflict})
+	var failed wire.SettingsDeliveryResult
+	if refused.Status != "ok" || json.Unmarshal(refused.Data, &failed) != nil || failed.Result == nil || failed.Result.Phase != "failed" || failed.Result.Publication != "durable" {
+		t.Fatalf("hash conflict not retained: %s", refused.Data)
 	}
 	unchanged, err := os.ReadFile(target)
 	if err != nil || string(unchanged) != string(after) {

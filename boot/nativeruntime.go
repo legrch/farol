@@ -33,21 +33,23 @@ type NativeLaunch struct {
 	SettingsMutations             bool
 }
 type NativeRuntime struct {
-	cancel        context.CancelFunc
-	browser       *BrowserExchange
-	conversations *ChatIngress
-	chatComputer  *ChatComputerIngress
-	results       *results.Memory
-	profile       *QualifiedProfile
-	store         *accessrepo.Store
-	journal       *chatrepo.Repository
-	chat          *chatlifecycle.Service
-	ingress       *ComputerIngress
-	mutations     *SettingsMutationIngress
-	mutationStore *mutationrepo.Repository
-	closed        bool
-	closeErr      error
-	retirement    *nativeRetirement
+	cancel           context.CancelFunc
+	browser          *BrowserExchange
+	conversations    *ChatIngress
+	chatComputer     *ChatComputerIngress
+	results          *results.Memory
+	profile          *QualifiedProfile
+	store            *accessrepo.Store
+	journal          *chatrepo.Repository
+	chat             *chatlifecycle.Service
+	ingress          *ComputerIngress
+	mutations        *SettingsMutationIngress
+	settingsDelivery *SettingsDeliveryIngress
+	settingsStore    *SettingsStoreExchange
+	mutationStore    *mutationrepo.Repository
+	closed           bool
+	closeErr         error
+	retirement       *nativeRetirement
 }
 
 func NewNativeRuntime(ctx context.Context, launch NativeLaunch, generation string) (*NativeRuntime, error) {
@@ -138,6 +140,14 @@ func NewNativeRuntime(ctx context.Context, launch NativeLaunch, generation strin
 		if err != nil {
 			return fail(err)
 		}
+		runtime.settingsStore, err = NewSettingsStoreExchange(lifetime, peer)
+		if err != nil {
+			return fail(err)
+		}
+		runtime.settingsDelivery, err = NewSettingsDeliveryIngress(runtime.mutations, runtime.settingsStore)
+		if err != nil {
+			return fail(err)
+		}
 		if _, _, err := qualified.Roots(); err != nil {
 			return fail(err)
 		}
@@ -208,12 +218,16 @@ func (r *NativeRuntime) Methods() (map[string]desktop.Method, error) {
 			merged[name] = method
 		}
 	}
-	if r.mutations != nil {
-		for name, method := range r.mutations.Methods() {
-			if _, exists := merged[name]; exists {
-				return nil, errors.New("native_method_conflict")
+	// The owner engine is reachable only through Go delivery policy. There is
+	// no second public edit/ACK path around durable pending publication.
+	if r.settingsDelivery != nil {
+		for _, source := range []map[string]desktop.Method{r.settingsDelivery.Methods(), r.settingsStore.Methods()} {
+			for name, method := range source {
+				if _, exists := merged[name]; exists {
+					return nil, errors.New("native_method_conflict")
+				}
+				merged[name] = method
 			}
-			merged[name] = method
 		}
 	}
 	return merged, nil

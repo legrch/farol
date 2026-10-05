@@ -15,7 +15,7 @@ export const mutationText = Object.freeze({
 export const mutationLimits = Object.freeze([
   "Actual React Prepare/Old text/New text/Apply once and Record result delivery once; normal preload configuration supplies workspace write/Verify and exact retained Observe",
   "Go Apply/Observe origin is bound to exact packaged production inputs, not an independent Go RPC or transient admission counter",
-  "ACK and pending delivery policy remain temporary TypeScript; this is not Go ACK acceptance",
+  "Go owns pending, result offers and exact ACK; the retained TS settings writer supplies typed conditional storage. Route identity is tied to the exact matching source/package, not an independent RPC counter",
   "Independent raw file bytes and strict content-free owner-v2 journal show one retained effect; no claim about every transient filesystem operation",
   "Source/browser-free self-tests are synthetic expectations only; app, native, package, provider, install and full migration acceptance require Lead's separate execution",
 ]);
@@ -38,7 +38,7 @@ export function mutationProfileWitness(profile) {
 }
 export function mutationAuthorityWitness(observed, previous) {
   mutationProfileWitness(observed.profile.value);
-  // Validate the existing authority witness without treating a TS delivery
+  // Validate the existing authority witness without treating a pending delivery
   // record as an authority. The original independent config is checked below.
   const authority = structuredClone(observed);
   authority.settings.computer.pendingEdit = null;
@@ -779,7 +779,7 @@ export async function reopenMutationJourney(io) {
       `MUTATION_ACK_EXTRA_EFFECT:${key}`,
     );
   report.observations.push(contentFree(after));
-  report.ackPolicy = "temporary-ts-pending-delivery-not-go-ack";
+  report.ackPolicy = "go-owned-pending-offer-ack-with-typed-host-storage";
   report.passed = true;
   ledger();
   await hidden();
