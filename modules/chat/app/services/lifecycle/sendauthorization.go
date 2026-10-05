@@ -6,6 +6,15 @@ import (
 	"github.com/legrch/farol/modules/chat/app/port"
 )
 
+// CreateConversationAuthorized captures the final disclosure guard before the
+// same create/admit engine publishes this turn. Exact replay keeps that guard.
+func (s *Service) CreateConversationAuthorized(ctx context.Context, input port.ConversationInput, authorization port.SendAuthorization) (*Conversation, error) {
+	if authorization == nil {
+		return nil, Invalid
+	}
+	return s.createConversation(ctx, input, port.ConversationTarget{Mode: port.NewSaved, Required: input.Required, Selection: input.Selection, Resolution: input.Resolution}, nil, authorization)
+}
+
 // This private capability refers to the original live mutation, never replayed
 // journal data. Only final send authorization can create it. Ordinary Handle
 // projections remain pending/unavailable throughout this interval.

@@ -33,7 +33,7 @@ var _ port.ConversationOwner = (*Conversation)(nil)
 type observationKey struct{}
 
 func (s *Service) CreateConversation(ctx context.Context, input port.ConversationInput) (*Conversation, error) {
-	return s.createConversation(ctx, input, port.ConversationTarget{Mode: port.NewSaved, Required: input.Required, Selection: input.Selection, Resolution: input.Resolution}, nil)
+	return s.createConversation(ctx, input, port.ConversationTarget{Mode: port.NewSaved, Required: input.Required, Selection: input.Selection, Resolution: input.Resolution}, nil, nil)
 }
 func (s *Service) FollowConversation(ctx context.Context, previous *Conversation, input port.ConversationInput) (*Conversation, error) {
 	if s == nil || ctx == nil || previous == nil || previous.owner != s || previous.handle == nil {
@@ -58,7 +58,8 @@ func (s *Service) FollowConversation(ctx context.Context, previous *Conversation
 	}
 	target := port.ConversationTarget{Mode: port.OwnedSaved, Required: input.Required, ConversationID: previous.providerID, Selection: input.Selection, PreviousUserTurnID: h.output.UserID, PreviousReplyID: h.output.ReplyID, Resolution: input.Resolution}
 	s.deps.Gate.Unlock()
-	return s.createConversation(ctx, input, target, previous)
+	// Follow keeps the original disclosure guard for each newly admitted turn.
+	return s.createConversation(ctx, input, target, previous, previous.sendAuthorization)
 }
 
 // followSettled reads prerequisites under the owning gate. Follow keeps its
@@ -67,7 +68,7 @@ func followSettled(h *Handle, view turn.Snapshot) bool {
 	return !h.observing && view.HasResult && view.Result.Outcome == turn.Completed && h.output.Complete && view.DeliveryAcknowledged && view.LifecycleSettled && h.releasedRevision != 0 && view.OutstandingCallID == "" && h.unresolvedCallID == ""
 }
 
-func (s *Service) createConversation(ctx context.Context, input port.ConversationInput, target port.ConversationTarget, previous *Conversation) (*Conversation, error) {
+func (s *Service) createConversation(ctx context.Context, input port.ConversationInput, target port.ConversationTarget, previous *Conversation, authorization port.SendAuthorization) (*Conversation, error) {
 	if s == nil || ctx == nil || !target.Valid() || input.Selection != target.Selection || len(input.Prompt) == 0 || len(input.Prompt) > PromptBytesLimit || !utf8.ValidString(input.Prompt) {
 		return nil, Invalid
 	}
@@ -87,24 +88,21 @@ func (s *Service) createConversation(ctx context.Context, input port.Conversatio
 		return nil, err
 	}
 	if h := s.handles[input.Binding.OperationID]; h != nil {
-		if h.fixed != input.Binding || h.digest != digest || h.target != target || h.conversation == nil {
+		if h.fixed != input.Binding || h.digest != digest || h.target != target || h.conversation == nil || (h.sendAuthorization == nil) != (authorization == nil) {
 			s.deps.Gate.Unlock()
 			return nil, turn.Conflict
 		}
 		c := h.conversation
 		s.deps.Gate.Unlock()
-		// Exact known replay observes the same result; it performs no new Send.
+		// Exact known replay keeps the original guard and performs no new Send.
 		return c, nil
 	}
 	s.deps.Gate.Unlock()
-	c := &Conversation{owner: s, input: input, target: target, previous: previous}
+	c := &Conversation{owner: s, input: input, target: target, previous: previous, sendAuthorization: authorization}
 	if previous == nil {
 		c.root = c
 	} else {
 		c.root = previous.root
-		// Follow retains the original disclosure guard; a new turn cannot silently
-		// shed Computer/account authority captured when this conversation began.
-		c.sendAuthorization = previous.sendAuthorization
 	}
 	h, err := s.admit(ctx, input.Binding, digest, c)
 	if err != nil {

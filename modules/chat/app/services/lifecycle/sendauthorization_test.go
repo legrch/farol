@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/legrch/farol/modules/chat/app/port"
+	"github.com/legrch/farol/modules/chat/domain/turn"
 )
 
 type sendAuthorizationFunc func(context.Context, port.SendCurrent) error
@@ -15,11 +16,28 @@ func (f sendAuthorizationFunc) Authorize(ctx context.Context, c port.SendCurrent
 	return f(ctx, c)
 }
 
+func authorizedConversation(t *testing.T, s *Service, ctx context.Context, i port.ConversationInput, a port.SendAuthorization, direct bool) (*Conversation, error) {
+	t.Helper()
+	if direct {
+		return s.CreateConversationAuthorized(ctx, i, a)
+	}
+	return s.PromoteConversationAuthorized(ctx, admit(t, s, "1"), i, a)
+}
+
 func TestSendAuthorizationIsScopedToFinalKnownDispatch(t *testing.T) {
+	testSendAuthorizationIsScopedToFinalKnownDispatch(t, false)
+}
+
+func TestCreateAuthorizationIsScopedToFinalKnownDispatch(t *testing.T) {
+	testSendAuthorizationIsScopedToFinalKnownDispatch(t, true)
+}
+
+func testSendAuthorizationIsScopedToFinalKnownDispatch(t *testing.T, direct bool) {
 	s, b, _, _ := conversationOwner(t)
-	h, i := admit(t, s, "1"), input("1")
+	i := input("1")
 	ctx := context.Background()
 	var retained port.SendCurrent
+	var h *Handle
 	authorize := sendAuthorizationFunc(func(ctx context.Context, current port.SendCurrent) error {
 		retained = current
 		if len(b.verifies) != 1 || len(b.sent) != 0 {
@@ -40,10 +58,11 @@ func TestSendAuthorizationIsScopedToFinalKnownDispatch(t *testing.T) {
 			return nil
 		})
 	})
-	c, err := s.PromoteConversationAuthorized(ctx, h, i, authorize)
+	c, err := authorizedConversation(t, s, ctx, i, authorize, direct)
 	if err != nil {
 		t.Fatal(err)
 	}
+	h = c.handle
 	if _, err := s.PrepareNext(ctx, 100); err != nil {
 		t.Fatal(err)
 	}
@@ -65,10 +84,18 @@ func TestSendAuthorizationIsScopedToFinalKnownDispatch(t *testing.T) {
 }
 
 func TestSendAuthorizationCannotSkipOrLoseItsCurrentCallback(t *testing.T) {
+	testSendAuthorizationCannotSkipOrLoseItsCurrentCallback(t, false)
+}
+
+func TestCreateAuthorizationCannotSkipOrLoseItsCurrentCallback(t *testing.T) {
+	testSendAuthorizationCannotSkipOrLoseItsCurrentCallback(t, true)
+}
+
+func testSendAuthorizationCannotSkipOrLoseItsCurrentCallback(t *testing.T, direct bool) {
 	for _, kind := range []string{"skip", "account-snapshot-only", "refuse", "late-refusal"} {
 		t.Run(kind, func(t *testing.T) {
 			s, b, j, _ := conversationOwner(t)
-			h, i := admit(t, s, "1"), input("1")
+			i := input("1")
 			ctx := context.Background()
 			a := sendAuthorizationFunc(func(ctx context.Context, c port.SendCurrent) error {
 				if kind == "account-snapshot-only" {
@@ -89,7 +116,7 @@ func TestSendAuthorizationCannotSkipOrLoseItsCurrentCallback(t *testing.T) {
 				_ = c.WithCurrent(ctx, func(port.TurnBinding) error { return Unavailable })
 				return nil
 			})
-			c, err := s.PromoteConversationAuthorized(ctx, h, i, a)
+			c, err := authorizedConversation(t, s, ctx, i, a, direct)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -112,8 +139,16 @@ func TestSendAuthorizationCannotSkipOrLoseItsCurrentCallback(t *testing.T) {
 }
 
 func TestSendAuthorizationAccountSnapshotIsExactDetachedAndExpires(t *testing.T) {
+	testSendAuthorizationAccountSnapshotIsExactDetachedAndExpires(t, false)
+}
+
+func TestCreateAuthorizationAccountSnapshotIsExactDetachedAndExpires(t *testing.T) {
+	testSendAuthorizationAccountSnapshotIsExactDetachedAndExpires(t, true)
+}
+
+func testSendAuthorizationAccountSnapshotIsExactDetachedAndExpires(t *testing.T, direct bool) {
 	s, b, _, _ := conversationOwner(t)
-	h, i := admit(t, s, "1"), input("1")
+	i := input("1")
 	ctx := context.Background()
 	account := port.AccountObservation{State: "observed", Source: "provider-session-v1", PrincipalKey: strings.Repeat("c", 64), ObservedAtMillis: 1, ExpiresAtMillis: 100}
 	b.verifyHook = func(v *port.SendVerification) { v.Account = account }
@@ -131,7 +166,7 @@ func TestSendAuthorizationAccountSnapshotIsExactDetachedAndExpires(t *testing.T)
 		}
 		return current.WithCurrent(ctx, func(port.TurnBinding) error { return nil })
 	})
-	c, err := s.PromoteConversationAuthorized(ctx, h, i, a)
+	c, err := authorizedConversation(t, s, ctx, i, a, direct)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -147,11 +182,18 @@ func TestSendAuthorizationAccountSnapshotIsExactDetachedAndExpires(t *testing.T)
 }
 
 func TestSendAuthorizationSurvivesConversationFollow(t *testing.T) {
+	testSendAuthorizationSurvivesConversationFollow(t, false)
+}
+
+func TestCreateAuthorizationSurvivesConversationFollow(t *testing.T) {
+	testSendAuthorizationSurvivesConversationFollow(t, true)
+}
+
+func testSendAuthorizationSurvivesConversationFollow(t *testing.T, direct bool) {
 	for _, allowFollow := range []bool{true, false} {
 		t.Run(map[bool]string{true: "current", false: "revoked"}[allowFollow], func(t *testing.T) {
 			s, b, _, _ := conversationOwner(t)
 			ctx := context.Background()
-			h := admit(t, s, "1")
 			calls := 0
 			a := sendAuthorizationFunc(func(ctx context.Context, current port.SendCurrent) error {
 				calls++
@@ -169,7 +211,7 @@ func TestSendAuthorizationSurvivesConversationFollow(t *testing.T) {
 					return nil
 				})
 			})
-			first, err := s.PromoteConversationAuthorized(ctx, h, input("1"), a)
+			first, err := authorizedConversation(t, s, ctx, input("1"), a, direct)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -209,5 +251,115 @@ func TestSendAuthorizationSurvivesConversationFollow(t *testing.T) {
 				t.Fatal("followup dropped authorization", calls, len(b.sent))
 			}
 		})
+	}
+}
+
+func TestCreateAuthorizationNilRefusedBeforeAdmission(t *testing.T) {
+	s, b, j, _ := conversationOwner(t)
+	writes := j.count()
+	c, err := s.CreateConversationAuthorized(context.Background(), input("1"), nil)
+	if c != nil || err != Invalid || j.count() != writes || len(s.handles) != 0 || len(b.prepares) != 0 || len(b.verifies) != 0 || len(b.sent) != 0 {
+		t.Fatal("nil guard admitted or made effects", c, err)
+	}
+}
+
+func TestCreateAuthorizationReplayKeepsOriginalGuardBeforeAdmission(t *testing.T) {
+	s, b, j, _ := conversationOwner(t)
+	ctx, i := context.Background(), input("1")
+	calls, replacements := 0, 0
+	original := sendAuthorizationFunc(func(ctx context.Context, current port.SendCurrent) error {
+		calls++
+		return current.WithCurrent(ctx, func(binding port.TurnBinding) error {
+			if binding != i.Binding {
+				t.Fatal("crossed binding")
+			}
+			return nil
+		})
+	})
+	j.hook = func(w port.JournalWrite) {
+		if w.Entry.Kind == "admit" {
+			h := s.pending.handle
+			if h.sendAuthorization == nil || h.conversation == nil || h.conversation.sendAuthorization == nil {
+				t.Fatal("guard absent before admission commit")
+			}
+		}
+	}
+	c, err := s.CreateConversationAuthorized(ctx, i, original)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writes := j.count()
+	replacement := sendAuthorizationFunc(func(context.Context, port.SendCurrent) error {
+		replacements++
+		return Unavailable
+	})
+	replay, err := s.CreateConversationAuthorized(ctx, i, replacement)
+	if err != nil || replay != c || j.count() != writes || calls != 0 || replacements != 0 {
+		t.Fatal("replay changed admission or invoked authority", err)
+	}
+	if _, err := s.PrepareNext(ctx, 100); err != nil {
+		t.Fatal(err)
+	}
+	if err := replay.Send(ctx, 100); err != nil || calls != 1 || replacements != 0 || len(b.sent) != 1 {
+		t.Fatal("replay replaced guard", err)
+	}
+	writes = j.count()
+	if replay, err := s.CreateConversationAuthorized(ctx, i, replacement); err != nil || replay != c || j.count() != writes || calls != 1 || replacements != 0 || len(b.sent) != 1 {
+		t.Fatal("post-send replay replaced guard or dispatched", err)
+	}
+}
+
+func TestCreateAuthorizationGuardedUnguardedReplayConflicts(t *testing.T) {
+	for _, guarded := range []bool{false, true} {
+		t.Run(map[bool]string{false: "unguarded-first", true: "guarded-first"}[guarded], func(t *testing.T) {
+			s, b, j, _ := conversationOwner(t)
+			ctx, i := context.Background(), input("1")
+			a := sendAuthorizationFunc(func(context.Context, port.SendCurrent) error { return Unavailable })
+			create := func(guard bool, in port.ConversationInput) (*Conversation, error) {
+				if guard {
+					return s.CreateConversationAuthorized(ctx, in, a)
+				}
+				return s.CreateConversation(ctx, in)
+			}
+			c, err := create(guarded, i)
+			if err != nil {
+				t.Fatal(err)
+			}
+			writes := j.count()
+			if conflict, err := create(!guarded, i); conflict != nil || err != turn.Conflict || j.count() != writes {
+				t.Fatal("guard mode conflict admitted", err)
+			}
+			changed := i
+			changed.Prompt += " changed"
+			if conflict, err := create(guarded, changed); conflict != nil || err != turn.Conflict || j.count() != writes {
+				t.Fatal("changed intent admitted", err)
+			}
+			if replay, err := create(guarded, i); err != nil || replay != c || j.count() != writes || (c.handle.sendAuthorization != nil) != guarded {
+				t.Fatal("conflict changed original admission", err)
+			}
+			if len(b.prepares) != 0 || len(b.verifies) != 0 || len(b.sent) != 0 {
+				t.Fatal("replay conflict made effects")
+			}
+		})
+	}
+}
+
+func TestCreateAuthorizationLowLevelSendCannotBypass(t *testing.T) {
+	s, b, _, _ := conversationOwner(t)
+	ctx, i := context.Background(), input("1")
+	calls := 0
+	c, err := s.CreateConversationAuthorized(ctx, i, sendAuthorizationFunc(func(context.Context, port.SendCurrent) error {
+		calls++
+		return Unavailable
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.PrepareNext(ctx, 100); err != nil {
+		t.Fatal(err)
+	}
+	view, err := s.Send(ctx, c.handle, i.Prompt, 100, i.Binding.OperationID)
+	if err != nil || view == nil || !view.HasResult || view.Result.Outcome != turn.Failed || view.Result.Code != "SEND_NOT_SENT" || calls != 1 || len(b.sent) != 0 {
+		t.Fatal("low-level Send bypassed guard or lost classification", view, err)
 	}
 }

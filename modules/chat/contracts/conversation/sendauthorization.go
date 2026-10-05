@@ -54,6 +54,18 @@ func (a sendAuthorization) Authorize(ctx context.Context, current port.SendCurre
 	return a.selected.Authorize(ctx, &SendCurrent{current: current})
 }
 
+// CreateAuthorized captures the final Send guard in the existing Chat lifecycle.
+func (f *Facade) CreateAuthorized(ctx context.Context, input Input, authorization SendAuthorization) (*Handle, error) {
+	if f == nil || f.service == nil || authorization == nil {
+		return nil, failure(lifecycle.Invalid)
+	}
+	c, err := f.service.CreateConversationAuthorized(ctx, toInput(input), sendAuthorization{selected: authorization})
+	if c == nil {
+		return nil, failure(err)
+	}
+	return &Handle{facade: f, current: c}, failure(err)
+}
+
 func (f *Facade) PromoteReadIntentAuthorized(ctx context.Context, r *ReadIntent, input Input, authorization SendAuthorization) (*Handle, error) {
 	if f == nil || f.service == nil || r == nil || r.facade != f || r.actual == nil || authorization == nil {
 		return nil, failure(lifecycle.Invalid)

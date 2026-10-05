@@ -271,3 +271,153 @@ func fixtureFacts(s port.Selection) port.SelectionFacts {
 	}
 	return port.SelectionFacts{Model: known(s.ModelID), Effort: known(s.Effort), Mode: known(s.Mode), Connector: known(s.ConnectorID), ObservedAtMillis: 9}
 }
+
+// These authorization tests use the real facade/owner with in-memory ports.
+type contractSendAuthorizationFunc func(context.Context, *conversation.SendCurrent) error
+
+func (f contractSendAuthorizationFunc) Authorize(ctx context.Context, current *conversation.SendCurrent) error {
+	return f(ctx, current)
+}
+
+func assertConversationFailure(t *testing.T, err error, code string) {
+	t.Helper()
+	var failure *conversation.Failure
+	if !errors.As(err, &failure) || failure.Code != code || failure.Source != "chat-conversation" || failure.Retry != "never" {
+		t.Fatalf("failure=%+v err=%v", failure, err)
+	}
+}
+
+func TestFacadeCreateAuthorizedNilAndReplayConflicts(t *testing.T) {
+	for _, guarded := range []bool{false, true} {
+		t.Run(map[bool]string{false: "unguarded-first", true: "guarded-first"}[guarded], func(t *testing.T) {
+			f, b, j, _, i := followStateFacade(t)
+			ctx := context.Background()
+			revision := j.revision
+			if h, err := f.CreateAuthorized(ctx, i, nil); h != nil || err == nil || j.revision != revision {
+				t.Fatal("nil authorization admitted", h, err)
+			} else {
+				assertConversationFailure(t, err, "CHAT_LIFECYCLE_INVALID")
+			}
+			original, replacement := 0, 0
+			a := contractSendAuthorizationFunc(func(ctx context.Context, current *conversation.SendCurrent) error {
+				original++
+				return current.WithCurrent(ctx, func(binding *conversation.Binding) error {
+					if binding == nil || *binding != i.Binding {
+						t.Fatal("binding mapping changed", binding)
+					}
+					return nil
+				})
+			})
+			create := func(guard bool, authorization conversation.SendAuthorization) (*conversation.Handle, error) {
+				if guard {
+					return f.CreateAuthorized(ctx, i, authorization)
+				}
+				return f.Create(ctx, i)
+			}
+			h, err := create(guarded, a)
+			if err != nil {
+				t.Fatal(err)
+			}
+			revision = j.revision
+			if conflict, err := create(!guarded, a); conflict != nil || err == nil || j.revision != revision {
+				t.Fatal("guard conflict admitted", err)
+			} else {
+				assertConversationFailure(t, err, "CHAT_CONFLICT")
+			}
+			replayed, err := create(guarded, contractSendAuthorizationFunc(func(context.Context, *conversation.SendCurrent) error {
+				replacement++
+				return errors.New("replacement guard")
+			}))
+			if err != nil || replayed == nil || j.revision != revision || b.sends != 0 || original != 0 || replacement != 0 {
+				t.Fatal("exact replay changed admission", err)
+			}
+			if _, err := f.PrepareNext(ctx, 100); err != nil {
+				t.Fatal(err)
+			}
+			if err := replayed.Send(ctx, 100); err != nil || b.sends != 1 || replacement != 0 || original != map[bool]int{false: 0, true: 1}[guarded] {
+				t.Fatal("replay replaced captured guard", err)
+			}
+			if err := h.WithState(ctx, func(state conversation.State) error {
+				if state.Binding != i.Binding || state.Requested != i.Selection {
+					t.Fatal("replay changed original handle")
+				}
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestFacadeCreateAuthorizedFinalHandleSendCannotBypass(t *testing.T) {
+	for _, kind := range []string{"allow", "skip", "snapshot-only", "refuse", "late-refusal"} {
+		t.Run(kind, func(t *testing.T) {
+			f, b, i := fixture(t)
+			ctx := context.Background()
+			calls := 0
+			var retained *conversation.SendCurrent
+			sentinel := errors.New("consumer refusal")
+			h, err := f.CreateAuthorized(ctx, i, contractSendAuthorizationFunc(func(ctx context.Context, current *conversation.SendCurrent) error {
+				calls++
+				retained = current
+				if b.verifies != 1 || b.sends != 0 {
+					t.Fatal("guard outside final Send boundary")
+				}
+				if kind == "skip" {
+					return nil
+				}
+				if kind == "snapshot-only" {
+					_, err := current.AccountSnapshot(ctx)
+					return err
+				}
+				inspect := func(binding *conversation.Binding) error {
+					if binding == nil || *binding != i.Binding {
+						t.Fatal("binding mapping changed", binding)
+					}
+					if kind == "refuse" {
+						return sentinel
+					}
+					return nil
+				}
+				if err := current.WithCurrent(ctx, inspect); err != nil {
+					if err != sentinel {
+						t.Fatal("consumer failure mapping changed", err)
+					}
+					return err
+				}
+				if kind == "late-refusal" {
+					_ = current.WithCurrent(ctx, func(*conversation.Binding) error { return sentinel })
+				}
+				return nil
+			}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := f.PrepareNext(ctx, 100); err != nil {
+				t.Fatal(err)
+			}
+			if err := h.Send(ctx, 100); err != nil || calls != 1 {
+				t.Fatal("guarded Send failed", err)
+			}
+			called := false
+			err = retained.WithCurrent(ctx, func(*conversation.Binding) error { called = true; return nil })
+			assertConversationFailure(t, err, "CHAT_LIFECYCLE_UNAVAILABLE")
+			if called {
+				t.Fatal("expired final Send capability invoked callback")
+			}
+			if kind == "allow" {
+				if b.sends != 1 {
+					t.Fatal("authorized Send missing")
+				}
+				return
+			}
+			result, err := h.Result(ctx)
+			if err != nil || result.Code != "SEND_NOT_SENT" || result.Outcome != "failed" || result.Binding != i.Binding || b.sends != 0 {
+				t.Fatal("refusal lost classification", result, err)
+			}
+			if err := h.Send(ctx, 100); err == nil || calls != 1 || b.sends != 0 {
+				t.Fatal("refused Send retried", err)
+			}
+		})
+	}
+}
