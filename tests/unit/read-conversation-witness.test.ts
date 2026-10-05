@@ -17,7 +17,10 @@ const {
   conversationId,
   conversationUiWitness,
 } = await import(modulePath);
-const surface = { evaluate: async (read: () => unknown) => read() };
+const surface = {
+  evaluate: async <T>(read: (argument: T) => unknown, argument: T) =>
+    read(argument),
+};
 const active = vi.fn();
 const current = (value: { currentPresent: boolean }) => value.currentPresent;
 
@@ -71,6 +74,32 @@ afterEach(() => {
 });
 
 describe("conversation transition observation, synthetic DOM only", () => {
+  it.each(["Read conversation", "Chat conversation"])(
+    "reads only the exact %s section passed to page evaluation",
+    async (label) => {
+      preview();
+      projectTurn();
+      document
+        .querySelector('[aria-label="Read conversation"]')!
+        .setAttribute("aria-label", label);
+      const observed = await readConversationUi(surface, label);
+      expect(observed).toMatchObject({
+        currentPresent: true,
+        phase: "running",
+      });
+      const crossed =
+        label === "Read conversation"
+          ? "Chat conversation"
+          : "Read conversation";
+      await expect(readConversationUi(surface, crossed)).rejects.toThrow(
+        "CHAT_UI_CONVERSATION_MISSING",
+      );
+      await expect(
+        readConversationUi(surface, "Active Chat conversation"),
+      ).rejects.toThrow("CHAT_SECTION_LABEL_INVALID");
+    },
+  );
+
   it.each([
     [0, 0],
     [0, 1],
