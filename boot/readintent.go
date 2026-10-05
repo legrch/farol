@@ -91,7 +91,7 @@ func (s *ComputerIngress) promoteRead(ctx context.Context, operation string, in 
 	h, err := s.readFacade.PromoteReadIntentAuthorized(ctx, c.owner, conversation.Input{
 		Binding: c.binding, Prompt: in.Prompt, Selection: chatSelection(in.Selection), Resolution: chatResolution(in.Resolution),
 		Required: conversation.RequiredControls{Model: in.Required.Model, Effort: in.Required.Effort, Mode: in.Required.Mode, Connector: in.Required.Connector},
-	}, c)
+	}, c.Authorize)
 	if err != nil || h == nil || ctx.Err() != nil {
 		// An uncertain promotion is never repaired by a second admission, a
 		// different host route or a fresh prompt. The owning service retains it.

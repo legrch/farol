@@ -16,6 +16,6 @@ type SendCurrent interface {
 // SendAuthorization is captured once by trusted composition during promotion.
 // A refusal means the physical Send has not run. No callback may perform browser
 // IO or retain SendCurrent as authority for a later operation.
-type SendAuthorization interface {
-	Authorize(context.Context, SendCurrent) error
-}
+// A function keeps absent authorization directly nil-checkable at admission.
+// Implementations are trusted synchronous callbacks; this is not a panic sandbox.
+type SendAuthorization func(context.Context, SendCurrent) error

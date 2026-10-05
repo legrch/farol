@@ -28,13 +28,16 @@ type sendCurrent struct {
 }
 
 func (c *sendCurrent) WithCurrent(ctx context.Context, inspect func(port.TurnBinding) error) error {
-	if c == nil || c.owner == nil || ctx == nil || inspect == nil {
+	if c == nil || c.owner == nil {
 		return Invalid
 	}
 	s := c.owner
 	s.deps.Gate.Lock()
 	defer s.deps.Gate.Unlock()
 	c.authorized = nil
+	if ctx == nil || inspect == nil {
+		return Invalid
+	}
 	if err := c.check(ctx); err != nil {
 		return err
 	}
@@ -72,11 +75,15 @@ func (c *sendCurrent) check(ctx context.Context) error {
 	return nil
 }
 func (c *sendCurrent) AccountSnapshot(ctx context.Context) (port.AccountObservation, error) {
-	if c == nil || c.owner == nil || ctx == nil {
+	if c == nil || c.owner == nil {
 		return port.AccountObservation{}, Invalid
 	}
 	c.owner.deps.Gate.Lock()
 	defer c.owner.deps.Gate.Unlock()
+	if ctx == nil {
+		c.authorized = nil
+		return port.AccountObservation{}, Invalid
+	}
 	if err := c.check(ctx); err != nil {
 		c.authorized = nil
 		return port.AccountObservation{}, err
@@ -105,7 +112,7 @@ func (s *Service) authorizeSend(ctx context.Context, m *mutation, request port.S
 	}
 	current := &sendCurrent{owner: s, mutation: m, revision: s.revision, active: true, request: request}
 	s.deps.Gate.Unlock()
-	err := authorizer.Authorize(ctx, current)
+	err := authorizer(ctx, current)
 	s.deps.Gate.Lock()
 	defer s.deps.Gate.Unlock()
 	current.active = false

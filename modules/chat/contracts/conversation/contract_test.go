@@ -273,11 +273,7 @@ func fixtureFacts(s port.Selection) port.SelectionFacts {
 }
 
 // These authorization tests use the real facade/owner with in-memory ports.
-type contractSendAuthorizationFunc func(context.Context, *conversation.SendCurrent) error
-
-func (f contractSendAuthorizationFunc) Authorize(ctx context.Context, current *conversation.SendCurrent) error {
-	return f(ctx, current)
-}
+type contractSendAuthorizationFunc = conversation.SendAuthorization
 
 func assertConversationFailure(t *testing.T, err error, code string) {
 	t.Helper()
@@ -350,7 +346,7 @@ func TestFacadeCreateAuthorizedNilAndReplayConflicts(t *testing.T) {
 }
 
 func TestFacadeCreateAuthorizedFinalHandleSendCannotBypass(t *testing.T) {
-	for _, kind := range []string{"allow", "skip", "snapshot-only", "refuse", "late-refusal"} {
+	for _, kind := range []string{"allow", "skip", "snapshot-only", "refuse", "late-refusal", "late-nil-callback", "late-nil-context", "late-nil-snapshot-context"} {
 		t.Run(kind, func(t *testing.T) {
 			f, b, i := fixture(t)
 			ctx := context.Background()
@@ -388,6 +384,15 @@ func TestFacadeCreateAuthorizedFinalHandleSendCannotBypass(t *testing.T) {
 				if kind == "late-refusal" {
 					_ = current.WithCurrent(ctx, func(*conversation.Binding) error { return sentinel })
 				}
+				if kind == "late-nil-callback" {
+					_ = current.WithCurrent(ctx, nil)
+				}
+				if kind == "late-nil-context" {
+					_ = current.WithCurrent(nil, inspect)
+				}
+				if kind == "late-nil-snapshot-context" {
+					_, _ = current.AccountSnapshot(nil)
+				}
 				return nil
 			}))
 			if err != nil {
@@ -417,6 +422,31 @@ func TestFacadeCreateAuthorizedFinalHandleSendCannotBypass(t *testing.T) {
 			}
 			if err := h.Send(ctx, 100); err == nil || calls != 1 || b.sends != 0 {
 				t.Fatal("refused Send retried", err)
+			}
+		})
+	}
+}
+
+func TestFacadeAuthorizationTypedNilRefusedBeforeAdmission(t *testing.T) {
+	for name, a := range map[string]conversation.SendAuthorization{"function": contractSendAuthorizationFunc(nil)} {
+		t.Run(name, func(t *testing.T) {
+			f, b, j, _, i := followStateFacade(t)
+			ctx := context.Background()
+			revision := j.revision
+			if h, err := f.CreateAuthorized(ctx, i, a); h != nil || err == nil || j.revision != revision || b.sends != 0 {
+				t.Fatal("typed nil facade guard admitted", h, err)
+			} else {
+				assertConversationFailure(t, err, "CHAT_LIFECYCLE_INVALID")
+			}
+			r, err := f.AdmitReadIntent(ctx, i.Binding, strings.Repeat("a", 64))
+			if err != nil {
+				t.Fatal(err)
+			}
+			revision = j.revision
+			if h, err := f.PromoteReadIntentAuthorized(ctx, r, i, a); h != nil || err == nil || j.revision != revision || b.sends != 0 {
+				t.Fatal("typed nil promotion guard admitted", h, err)
+			} else {
+				assertConversationFailure(t, err, "CHAT_LIFECYCLE_INVALID")
 			}
 		})
 	}

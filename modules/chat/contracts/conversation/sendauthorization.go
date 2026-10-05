@@ -12,8 +12,13 @@ import (
 type SendCurrent struct{ current port.SendCurrent }
 
 func (c *SendCurrent) WithCurrent(ctx context.Context, inspect func(*Binding) error) error {
-	if c == nil || c.current == nil || inspect == nil {
+	if c == nil || c.current == nil {
 		return failure(lifecycle.Invalid)
+	}
+	if inspect == nil {
+		// The live owner must invalidate an earlier positive inspection, even
+		// when this wrapper can already classify the new callback as invalid.
+		return failure(c.current.WithCurrent(ctx, nil))
 	}
 	var inspected error
 	err := c.current.WithCurrent(ctx, func(b port.TurnBinding) error {
@@ -45,13 +50,13 @@ func (c *SendCurrent) AccountSnapshot(ctx context.Context) (*AccountSnapshot, er
 	return &AccountSnapshot{State: v.State, Source: v.Source, PrincipalKey: v.PrincipalKey, ObservedAtMillis: v.ObservedAtMillis, ExpiresAtMillis: v.ExpiresAtMillis}, nil
 }
 
-type SendAuthorization interface {
-	Authorize(context.Context, *SendCurrent) error
-}
-type sendAuthorization struct{ selected SendAuthorization }
+// The function port makes missing callbacks unambiguous without reflection.
+type SendAuthorization func(context.Context, *SendCurrent) error
 
-func (a sendAuthorization) Authorize(ctx context.Context, current port.SendCurrent) error {
-	return a.selected.Authorize(ctx, &SendCurrent{current: current})
+func mapSendAuthorization(selected SendAuthorization) port.SendAuthorization {
+	return func(ctx context.Context, current port.SendCurrent) error {
+		return selected(ctx, &SendCurrent{current: current})
+	}
 }
 
 // CreateAuthorized captures the final Send guard in the existing Chat lifecycle.
@@ -59,7 +64,7 @@ func (f *Facade) CreateAuthorized(ctx context.Context, input Input, authorizatio
 	if f == nil || f.service == nil || authorization == nil {
 		return nil, failure(lifecycle.Invalid)
 	}
-	c, err := f.service.CreateConversationAuthorized(ctx, toInput(input), sendAuthorization{selected: authorization})
+	c, err := f.service.CreateConversationAuthorized(ctx, toInput(input), mapSendAuthorization(authorization))
 	if c == nil {
 		return nil, failure(err)
 	}
@@ -70,7 +75,7 @@ func (f *Facade) PromoteReadIntentAuthorized(ctx context.Context, r *ReadIntent,
 	if f == nil || f.service == nil || r == nil || r.facade != f || r.actual == nil || authorization == nil {
 		return nil, failure(lifecycle.Invalid)
 	}
-	c, err := f.service.PromoteConversationAuthorized(ctx, r.actual, toInput(input), sendAuthorization{selected: authorization})
+	c, err := f.service.PromoteConversationAuthorized(ctx, r.actual, toInput(input), mapSendAuthorization(authorization))
 	if err != nil {
 		return nil, failure(err)
 	}

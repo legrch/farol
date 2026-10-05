@@ -65,5 +65,3 @@ func chatAccountConversation(original, live conversation.Binding) bool {
 	// immediate predecessor. The existing Follow owner enforces that comparison.
 	return live.ProfileID == original.ProfileID && live.BackendGeneration == original.BackendGeneration && live.OwnerID == original.OwnerID && live.SessionID == original.SessionID && live.TaskID == original.TaskID && live.TaskEpoch == original.TaskEpoch && live.ParticipantID == original.ParticipantID && live.TurnGeneration > original.TurnGeneration && live.OperationID != original.OperationID
 }
-
-var _ conversation.SendAuthorization = (*chatAccountAuthorization)(nil)

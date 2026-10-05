@@ -3,6 +3,7 @@ package lifecycle
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -10,11 +11,7 @@ import (
 	"github.com/legrch/farol/modules/chat/domain/turn"
 )
 
-type sendAuthorizationFunc func(context.Context, port.SendCurrent) error
-
-func (f sendAuthorizationFunc) Authorize(ctx context.Context, c port.SendCurrent) error {
-	return f(ctx, c)
-}
+type sendAuthorizationFunc = port.SendAuthorization
 
 func authorizedConversation(t *testing.T, s *Service, ctx context.Context, i port.ConversationInput, a port.SendAuthorization, direct bool) (*Conversation, error) {
 	t.Helper()
@@ -92,7 +89,7 @@ func TestCreateAuthorizationCannotSkipOrLoseItsCurrentCallback(t *testing.T) {
 }
 
 func testSendAuthorizationCannotSkipOrLoseItsCurrentCallback(t *testing.T, direct bool) {
-	for _, kind := range []string{"skip", "account-snapshot-only", "refuse", "late-refusal"} {
+	for _, kind := range []string{"skip", "account-snapshot-only", "refuse", "late-refusal", "late-nil-callback", "late-nil-context", "late-nil-snapshot-context"} {
 		t.Run(kind, func(t *testing.T) {
 			s, b, j, _ := conversationOwner(t)
 			i := input("1")
@@ -113,7 +110,16 @@ func testSendAuthorizationCannotSkipOrLoseItsCurrentCallback(t *testing.T, direc
 				}
 				// A broken consumer cannot hide a later refused inspection behind
 				// an earlier positive callback and still disclose bytes.
-				_ = c.WithCurrent(ctx, func(port.TurnBinding) error { return Unavailable })
+				switch kind {
+				case "late-nil-callback":
+					_ = c.WithCurrent(ctx, nil)
+				case "late-nil-context":
+					_ = c.WithCurrent(nil, func(port.TurnBinding) error { return nil })
+				case "late-nil-snapshot-context":
+					_, _ = c.AccountSnapshot(nil)
+				default:
+					_ = c.WithCurrent(ctx, func(port.TurnBinding) error { return Unavailable })
+				}
 				return nil
 			})
 			c, err := authorizedConversation(t, s, ctx, i, a, direct)
@@ -260,6 +266,32 @@ func TestCreateAuthorizationNilRefusedBeforeAdmission(t *testing.T) {
 	c, err := s.CreateConversationAuthorized(context.Background(), input("1"), nil)
 	if c != nil || err != Invalid || j.count() != writes || len(s.handles) != 0 || len(b.prepares) != 0 || len(b.verifies) != 0 || len(b.sent) != 0 {
 		t.Fatal("nil guard admitted or made effects", c, err)
+	}
+}
+
+func TestAuthorizationTypedNilRefusedBeforeAdmission(t *testing.T) {
+	for _, direct := range []bool{false, true} {
+		for name, a := range map[string]port.SendAuthorization{"function": sendAuthorizationFunc(nil)} {
+			t.Run(fmt.Sprintf("direct=%t/%s", direct, name), func(t *testing.T) {
+				s, b, j, _ := conversationOwner(t)
+				ctx, i := context.Background(), input("1")
+				var h *Handle
+				if !direct {
+					h = admit(t, s, "1")
+				}
+				writes, handles := j.count(), len(s.handles)
+				var c *Conversation
+				var err error
+				if direct {
+					c, err = s.CreateConversationAuthorized(ctx, i, a)
+				} else {
+					c, err = s.PromoteConversationAuthorized(ctx, h, i, a)
+				}
+				if c != nil || err != Invalid || j.count() != writes || len(s.handles) != handles || len(b.prepares) != 0 || len(b.sent) != 0 {
+					t.Fatal("typed nil guard admitted or made effects", c, err)
+				}
+			})
+		}
 	}
 }
 

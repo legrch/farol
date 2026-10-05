@@ -18,11 +18,7 @@ import (
 	"github.com/legrch/farol/modules/chat/infra/gate"
 )
 
-type chatAccountAuthorizationFunc func(context.Context, *conversation.SendCurrent) error
-
-func (f chatAccountAuthorizationFunc) Authorize(ctx context.Context, current *conversation.SendCurrent) error {
-	return f(ctx, current)
-}
+type chatAccountAuthorizationFunc = conversation.SendAuthorization
 
 func chatAccountAuthorizationInput() conversation.Input {
 	w := chatComputerInput(false)
