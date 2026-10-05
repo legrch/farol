@@ -27,6 +27,8 @@ export type PhysicalPageObservedSelection = PhysicalObservedSelection;
 export type PhysicalPagePolicy = Readonly<{
   e2eOrigin: string | null;
   accountObservationProfile?: "provider-session-v1";
+  // Selected by the host route, never inferred from provider markup.
+  contentProfile?: PhysicalPageContentProfile;
 }>;
 const productionPolicy: PhysicalPagePolicy = { e2eOrigin: null };
 
@@ -126,6 +128,9 @@ const bindingSchema = z.discriminatedUnion("phase", [
   }),
 ]);
 const policySchema = z.strictObject({
+  contentProfile: z
+    .enum(["message-anchors-v1", "farol-controlled-settled-segments-v1"])
+    .optional(),
   accountObservationProfile: z.literal("provider-session-v1").optional(),
   e2eOrigin: z
     .string()
@@ -284,9 +289,11 @@ async function physicalPage(
   e2eOrigin: string | null,
   accountProfile: "provider-session-v1" | null,
   readAccount: typeof readChatGptAccount | null,
+  contentProfile: PhysicalPageContentProfile,
 ): Promise<Response> {
   type WitnessRecord = {
     witness: PageWitness;
+    contentProfile: PhysicalPageContentProfile;
     baselineUserIds: string[];
     ids: string[];
     composerToken: string;
@@ -602,10 +609,7 @@ async function physicalPage(
       const assistants = all.slice(all.indexOf(user) + 1);
       if (!assistants[0] || anchor(assistants[0]) !== previous.replyId)
         return abort("PHYSICAL_PREVIOUS_MISMATCH");
-      if (
-        !readFrame(previous.userTurnId, assistants, "message-anchors-v1")
-          .terminal
-      )
+      if (!readFrame(previous.userTurnId, assistants, contentProfile).terminal)
         return abort("PHYSICAL_PREVIOUS_UNSETTLED");
     }
     return all;
@@ -748,6 +752,7 @@ async function physicalPage(
       }
       store.witnesses.set(witness.evidenceId, {
         witness,
+        contentProfile,
         baselineUserIds,
         ids: current.all.map(anchor),
         composerToken,
@@ -786,6 +791,7 @@ async function physicalPage(
     const record = store.witnesses.get(input.witness.evidenceId);
     if (
       !record ||
+      record.contentProfile !== contentProfile ||
       record.spent ||
       store.spentOperations.has(input.operationId) ||
       store.operations.has(input.operationId) ||
@@ -1213,7 +1219,12 @@ async function physicalPage(
 
 function script(request: Request, policy: PhysicalPagePolicy): string {
   const parsed = policySchema.safeParse(policy);
-  if (!parsed.success) {
+  if (
+    !parsed.success ||
+    ("contentProfile" in request &&
+      parsed.data.contentProfile !== undefined &&
+      request.contentProfile !== parsed.data.contentProfile)
+  ) {
     const failure = {
       state: request.action === "send" ? "not-sent" : "refused",
       code: "PHYSICAL_POLICY_INVALID",
@@ -1227,7 +1238,11 @@ function script(request: Request, policy: PhysicalPagePolicy): string {
     };
     return `(${JSON.stringify(failure)})`;
   }
-  return `(${physicalPage.toString()})(${JSON.stringify(request)},${readPublicAssistantMessages.toString()},${publicMarkdownBlock.toString()},${publicContentVisible.toString()},${JSON.stringify(parsed.data.e2eOrigin)},${JSON.stringify(parsed.data.accountObservationProfile ?? null)},${parsed.data.accountObservationProfile ? readChatGptAccount.toString() : "null"})`;
+  const contentProfile =
+    "contentProfile" in request
+      ? request.contentProfile
+      : (parsed.data.contentProfile ?? "message-anchors-v1");
+  return `(${physicalPage.toString()})(${JSON.stringify(request)},${readPublicAssistantMessages.toString()},${publicMarkdownBlock.toString()},${publicContentVisible.toString()},${JSON.stringify(parsed.data.e2eOrigin)},${JSON.stringify(parsed.data.accountObservationProfile ?? null)},${parsed.data.accountObservationProfile ? readChatGptAccount.toString() : "null"},${JSON.stringify(contentProfile)})`;
 }
 const invalid = '({state:"refused",code:"PHYSICAL_INPUT_INVALID"})';
 export function physicalPrepareProbeScript(
@@ -1310,28 +1325,46 @@ export function physicalSendScript(
 }
 export function physicalObserveScript(
   input: PhysicalPageObservation,
-  contentProfile: PhysicalPageContentProfile = "message-anchors-v1",
+  contentProfile: PhysicalPageContentProfile | undefined = undefined,
   policy: PhysicalPagePolicy = productionPolicy,
 ): string {
+  const selectedProfile =
+    contentProfile ?? policy.contentProfile ?? "message-anchors-v1";
   const parsed = observationSchema.safeParse(projectObservation(input));
   return parsed.success &&
     ["message-anchors-v1", "farol-controlled-settled-segments-v1"].includes(
-      contentProfile,
+      selectedProfile,
     )
-    ? script({ action: "observe", input: parsed.data, contentProfile }, policy)
+    ? script(
+        {
+          action: "observe",
+          input: parsed.data,
+          contentProfile: selectedProfile,
+        },
+        policy,
+      )
     : invalid;
 }
 export function physicalCancelScript(
   input: PhysicalPageObservation,
-  contentProfile: PhysicalPageContentProfile = "message-anchors-v1",
+  contentProfile: PhysicalPageContentProfile | undefined = undefined,
   policy: PhysicalPagePolicy = productionPolicy,
 ): string {
+  const selectedProfile =
+    contentProfile ?? policy.contentProfile ?? "message-anchors-v1";
   const parsed = observationSchema.safeParse(projectObservation(input));
   return parsed.success &&
     ["message-anchors-v1", "farol-controlled-settled-segments-v1"].includes(
-      contentProfile,
+      selectedProfile,
     )
-    ? script({ action: "cancel", input: parsed.data, contentProfile }, policy)
+    ? script(
+        {
+          action: "cancel",
+          input: parsed.data,
+          contentProfile: selectedProfile,
+        },
+        policy,
+      )
     : invalid;
 }
 

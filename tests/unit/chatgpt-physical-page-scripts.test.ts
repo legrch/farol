@@ -178,20 +178,24 @@ class SyntheticElement {
 type FactoryPolicy = Readonly<{
   e2eOrigin: string | null;
   accountObservationProfile?: "provider-session-v1";
+  contentProfile?: PhysicalPageContentProfile;
 }>;
 function page({
   editable = false,
   isHome = false,
   e2eOrigin = null,
   account = false,
+  contentProfile,
 }: {
   editable?: boolean;
   isHome?: boolean;
   e2eOrigin?: string | null;
   account?: boolean;
+  contentProfile?: PhysicalPageContentProfile;
 } = {}) {
   const policy: FactoryPolicy = {
     e2eOrigin,
+    ...(contentProfile ? { contentProfile } : {}),
     ...(account
       ? { accountObservationProfile: "provider-session-v1" as const }
       : {}),
@@ -1567,6 +1571,212 @@ describe("physical PAGE scripts: synthetic DOM source qualification only", () =>
     );
     if (changed.state !== "observed") throw new Error("Fixture failed");
     expect(() => reducer.observe(changed.frame, 2)).toThrow();
+  });
+  it("uses the explicitly selected content profile for first observation and follow Verify/Send", async () => {
+    const p = page({
+      isHome: true,
+      e2eOrigin: "http://127.0.0.1:12345",
+      contentProfile: "farol-controlled-settled-segments-v1",
+    });
+    const { observeInput } = await p.submit("First");
+    p.addMessage("u1", "user", "First");
+    const answer = p.addMessage("a1", "assistant", "Settled first", "u1");
+    const root = answer.querySelector(".markdown")!;
+    root.attributes["data-farol-source-profile"] =
+      "farol-controlled-settled-segments-v1";
+    root.children[0]!.attributes["data-segment-id"] = "first-segment";
+    root.children[0]!.attributes["data-segment-state"] = "settled";
+    const binding: PhysicalBinding = {
+      ...p.binding,
+      phase: "conversation",
+      conversationId,
+      url: `http://127.0.0.1:12345/chatgpt/c/${conversationId}`,
+    };
+    p.location.href = binding.url;
+    const firstInput = { ...observeInput, binding };
+    for (const profile of [undefined, "message-anchors-v1"] as const) {
+      expect(
+        await p.run(
+          physicalObserveScript(firstInput, profile, {
+            e2eOrigin: p.policy.e2eOrigin,
+          }),
+        ),
+      ).toMatchObject({
+        state: "refused",
+        code: "PHYSICAL_CONTENT_UNQUALIFIED",
+      });
+    }
+    expect(await p.observe(firstInput, "message-anchors-v1")).toMatchObject({
+      state: "refused",
+      code: "PHYSICAL_POLICY_INVALID",
+    });
+    expect(
+      await p.observe(firstInput, "unqualified" as PhysicalPageContentProfile),
+    ).toMatchObject({ state: "refused", code: "PHYSICAL_INPUT_INVALID" });
+    const first = await p.observe(firstInput);
+    expect(first).toMatchObject({
+      state: "observed",
+      frame: {
+        terminal: true,
+        messages: [
+          {
+            id: "a1",
+            complete: true,
+            segments: [
+              { id: "first-segment", text: "Settled first", complete: true },
+            ],
+          },
+        ],
+      },
+    });
+    p.draft("");
+    const follow: VerifyInput = {
+      ...p.input,
+      binding,
+      operationId: "follow",
+      previous: { userTurnId: "u1", replyId: "a1" },
+      intentDigest: "follow-envelope",
+    };
+    const verified = await p.verify(follow);
+    expect(verified.witness.previous).toEqual(follow.previous);
+    expect(
+      await p.sendWitness(verified.witness, "Follow", follow),
+    ).toMatchObject({ state: "submitted" });
+    expect(p.effects.send).toBe(2);
+    p.addMessage("u2", "user", "Follow", "a1");
+    const secondAnswer = p.addMessage(
+      "a2",
+      "assistant",
+      "Settled follow",
+      "u2",
+    );
+    const secondRoot = secondAnswer.querySelector(".markdown")!;
+    secondRoot.attributes["data-farol-source-profile"] =
+      "farol-controlled-settled-segments-v1";
+    secondRoot.children[0]!.attributes["data-segment-id"] = "follow-segment";
+    secondRoot.children[0]!.attributes["data-segment-state"] = "settled";
+    const second = await p.observe({
+      binding,
+      operationId: follow.operationId,
+      deadlineMillis: follow.deadlineMillis,
+      submission: {
+        originBinding: binding,
+        operationId: follow.operationId,
+        evidenceId: verified.witness.evidenceId,
+        intentDigest: follow.intentDigest,
+        promptDigest: digest("Follow"),
+        baselineUserIds: verified.baselineUserIds,
+        previous: follow.previous,
+        selection: follow.selection,
+      },
+      correlation: { userTurnId: null, replyId: null },
+    });
+    expect(second).toMatchObject({
+      state: "observed",
+      frame: {
+        terminal: true,
+        messages: [
+          {
+            id: "a2",
+            complete: true,
+            segments: [
+              { id: "follow-segment", text: "Settled follow", complete: true },
+            ],
+          },
+        ],
+      },
+    });
+  });
+  it.each([
+    [undefined, "PHYSICAL_CONTENT_UNQUALIFIED"],
+    ["message-anchors-v1", "PHYSICAL_CONTENT_UNQUALIFIED"],
+    ["unqualified", "PHYSICAL_POLICY_INVALID"],
+  ] as const)(
+    "refuses controlled previous history under profile %s without effects",
+    async (profile, code) => {
+      const p = page({
+        e2eOrigin: "http://127.0.0.1:12345",
+        ...(profile
+          ? { contentProfile: profile as PhysicalPageContentProfile }
+          : {}),
+      });
+      const root = p.root.querySelector(".markdown")!;
+      root.attributes["data-farol-source-profile"] =
+        "farol-controlled-settled-segments-v1";
+      root.children[0]!.attributes["data-segment-id"] = "previous-segment";
+      root.children[0]!.attributes["data-segment-state"] = "settled";
+      const before = { ...p.effects };
+      expect(
+        await p.run(physicalVerifySendScript(p.input, p.policy)),
+      ).toMatchObject({ state: "refused", code });
+      expect(p.effects).toEqual(before);
+    },
+  );
+  it.each([
+    ["unknown-profile", "PHYSICAL_CONTENT_UNQUALIFIED"],
+    ["pending-segment", "PHYSICAL_PREVIOUS_UNSETTLED"],
+    ["pending-article", "PHYSICAL_PREVIOUS_UNSETTLED"],
+    ["crossed-parent", "PHYSICAL_PARENT_MISMATCH"],
+    ["wrong-reply", "PHYSICAL_PREVIOUS_MISMATCH"],
+  ] as const)(
+    "keeps previous history guards with the explicit controlled profile: %s",
+    async (change, code) => {
+      const p = page({
+        e2eOrigin: "http://127.0.0.1:12345",
+        contentProfile: "farol-controlled-settled-segments-v1",
+      });
+      const answer = p.root.querySelector('[data-message-id="a1"]')!;
+      const root = answer.querySelector(".markdown")!;
+      root.attributes["data-farol-source-profile"] =
+        "farol-controlled-settled-segments-v1";
+      root.children[0]!.attributes["data-segment-id"] = "previous-segment";
+      root.children[0]!.attributes["data-segment-state"] = "settled";
+      let input = p.input;
+      if (change === "unknown-profile")
+        root.attributes["data-farol-source-profile"] = "unqualified";
+      if (change === "pending-segment")
+        root.children[0]!.attributes["data-segment-state"] = "pending";
+      if (change === "pending-article")
+        answer.attributes["data-is-streaming"] = "true";
+      if (change === "crossed-parent")
+        answer.attributes["data-parent-message-id"] = "other-user";
+      if (change === "wrong-reply")
+        input = {
+          ...input,
+          previous: { userTurnId: "u1", replyId: "other-reply" },
+        };
+      const before = { ...p.effects };
+      expect(
+        await p.run(physicalVerifySendScript(input, p.policy)),
+      ).toMatchObject({ state: "refused", code });
+      expect(p.effects).toEqual(before);
+    },
+  );
+  it("refuses Send if the selected profile changes after Verify", async () => {
+    const p = page({
+      e2eOrigin: "http://127.0.0.1:12345",
+      contentProfile: "farol-controlled-settled-segments-v1",
+    });
+    const verified = await p.verify();
+    const before = { ...p.effects };
+    const result = await p.run(
+      physicalSendScript(
+        {
+          binding: p.binding,
+          operationId: p.input.operationId,
+          deadlineMillis: p.input.deadlineMillis,
+          intentDigest: p.input.intentDigest,
+          witness: verified.witness,
+          prompt: "Follow",
+        },
+        { ...p.policy, contentProfile: "message-anchors-v1" },
+      ),
+    );
+    expect(result).toMatchObject({
+      state: "not-sent",
+      code: "PHYSICAL_WITNESS_INVALID",
+    });
+    expect(p.effects).toEqual(before);
   });
   it("ordinary pending prose stays buffered; unknown profile/hidden rich content never commits", async () => {
     const p = page();
