@@ -11,6 +11,7 @@ import { publicMarkdownBlock } from "../../src/apps/desktop/chatgpt-public-markd
 const modulePath = "../e2e/lib/read-conversation-witness.mjs";
 const {
   readConversationUi,
+  readTypedFirstUi,
   waitConversationRead,
   conversationScript,
   conversationOutput,
@@ -74,6 +75,64 @@ afterEach(() => {
 });
 
 describe("conversation transition observation, synthetic DOM only", () => {
+  it.each(["observed", "draft"])(
+    "polls the actual typed first-message reader in %s state with bounded diagnostics",
+    async (phase) => {
+      document.body.innerHTML = `<section aria-label="New Chat conversation"
+        data-operation-id="private-operation-excluded-from-diagnostics"
+        data-session-id="private-session-excluded-from-diagnostics"
+        data-confirmation-id="private-confirmation-excluded-from-diagnostics">
+        <p role="status">The account will be checked again before sending.</p>
+        <textarea aria-label="First message"></textarea>
+        <button disabled>Check account</button>
+        <button>Use this account and send</button>
+      </section>`;
+      const input = document.querySelector("textarea")!;
+      input.value =
+        phase === "draft" ? "private-draft-excluded-from-diagnostics" : "";
+      const send = document.querySelectorAll("button")[1]!;
+      send.disabled = phase !== "draft";
+      const clicks = vi.spyOn(send, "click");
+      const failure = vi.fn();
+      const value = await waitConversationRead(
+        () => readTypedFirstUi(surface),
+        (ui: { draft: string }) => ui.draft === input.value,
+        active,
+        { onFailure: failure },
+      );
+      expect(value.preview.sessionId).toBe(
+        "private-session-excluded-from-diagnostics",
+      );
+      expect(failure).not.toHaveBeenCalled();
+      document.querySelector('[role="status"]')!.textContent =
+        "Outcome unknown.";
+      const error = await waitConversationRead(
+        () => readTypedFirstUi(surface),
+        () => true,
+        active,
+        { onFailure: failure },
+      ).catch((error: Error) => error);
+      expect(error.message).toContain("CHAT_UI_REFUSED_OR_UNKNOWN");
+      expect(error.message).not.toContain("excluded-from-diagnostics");
+      expect(JSON.stringify(failure.mock.calls)).not.toContain(
+        "excluded-from-diagnostics",
+      );
+      expect(failure.mock.calls[0]?.[0].lastUi).toMatchObject({
+        preview: null,
+        typedFirst: {
+          present: true,
+          inputDisabled: false,
+          buttons: [
+            { name: "Check account", disabled: true },
+            { name: "Use this account and send", disabled: phase !== "draft" },
+          ],
+        },
+      });
+      expect(clicks).not.toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(0);
+    },
+  );
+
   it.each(["Read conversation", "Chat conversation"])(
     "reads only the exact %s section passed to page evaluation",
     async (label) => {

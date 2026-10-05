@@ -183,7 +183,7 @@ export function typedFirstUiWitness(ui, phase, prompt, session, original) {
   );
 }
 
-async function readTypedFirstUi(window) {
+export async function readTypedFirstUi(window) {
   return window.evaluate(() => {
     const sections = document.querySelectorAll(
       'section[aria-label="New Chat conversation"]',
@@ -193,6 +193,7 @@ async function readTypedFirstUi(window) {
     const section = sections[0];
     const input = section.querySelector("textarea");
     return {
+      kind: "typed-first",
       present: true,
       preview: {
         operationId: section.getAttribute("data-operation-id"),
@@ -1466,16 +1467,29 @@ function boundedUiObservation(value) {
         : null,
     statuses: texts(value.statuses),
     alerts: texts(value.alerts),
-    preview: value.preview
+    preview:
+      value.preview && value.kind !== "typed-first"
+        ? {
+            present: value.preview.present,
+            statuses: texts(value.preview.statuses),
+            buttons: value.preview.buttons.slice(0, 8).map((button) => ({
+              name: text(button.name),
+              disabled: button.disabled,
+            })),
+          }
+        : null,
+    ...(value.kind === "typed-first"
       ? {
-          present: value.preview.present,
-          statuses: texts(value.preview.statuses),
-          buttons: value.preview.buttons.slice(0, 8).map((button) => ({
-            name: text(button.name),
-            disabled: button.disabled,
-          })),
+          typedFirst: {
+            present: value.present,
+            inputDisabled: value.inputDisabled,
+            buttons: value.buttons.slice(0, 8).map((button) => ({
+              name: text(button.name),
+              disabled: button.disabled,
+            })),
+          },
         }
-      : null,
+      : {}),
     ledger: value.ledger
       ? {
           attemptedSends: value.ledger.attemptedSends,
