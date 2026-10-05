@@ -107,6 +107,21 @@ function expectedReceipt(original, changed, relativePath) {
     afterSha256: hash(changed),
   };
 }
+function mutationTimestampWitness(value) {
+  // Validate UTC calendar time without truncating the retained Go timestamp.
+  // RFC3339Nano omits zero fractions and retains up to nine fractional digits.
+  assert.equal(typeof value, "string", "MUTATION_PENDING_TIMESTAMP_INVALID");
+  const match =
+    /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,9}))?Z$/u.exec(value);
+  assert.ok(match, "MUTATION_PENDING_TIMESTAMP_INVALID");
+  const milliseconds = (match[2] ?? "").slice(0, 3).padEnd(3, "0");
+  assert.equal(
+    new Date(value).toISOString(),
+    `${match[1]}.${milliseconds}Z`,
+    "MUTATION_PENDING_TIMESTAMP_INVALID",
+  );
+}
+
 export function mutationEffectWitness(
   observed,
   pending,
@@ -140,10 +155,7 @@ export function mutationEffectWitness(
   );
   assert.equal(pending.relativePath, relativePath);
   assert.equal(pending.beforeSha256, hash(original));
-  assert.equal(
-    new Date(pending.submittedAt).toISOString(),
-    pending.submittedAt,
-  );
+  mutationTimestampWitness(pending.submittedAt);
   assert.deepEqual(
     observed.settings.computer.pendingEdit,
     acknowledged ? null : pending,
@@ -930,6 +942,37 @@ export function mutationWitnessSelfTest(pass, reject) {
   pass(() => {
     effect = check();
   });
+  for (const submittedAt of [
+    "2026-10-04T12:00:00Z",
+    "2026-10-04T12:00:00.1Z",
+    "2026-10-04T12:00:00.123456Z",
+    "2026-10-04T12:00:00.123456789Z",
+  ]) {
+    pass(() => {
+      const selected = { ...pending, submittedAt };
+      const copy = structuredClone(observed);
+      copy.settings.computer.pendingEdit = selected;
+      copy.configuration.value.computer.pendingEdit = structuredClone(selected);
+      mutationEffectWitness(
+        copy,
+        selected,
+        original,
+        changed,
+        readCanary.relativePath,
+      );
+      assert.equal(copy.settings.computer.pendingEdit.submittedAt, submittedAt);
+    });
+  }
+  for (const invalid of [
+    "2026-02-30T12:00:00.123Z",
+    "2026-10-04T24:00:00Z",
+    "2026-10-04T12:00:00.Z",
+    "2026-10-04T12:00:00.1234567890Z",
+    "2026-10-04T12:00:00+00:00",
+    "bad",
+    null,
+  ])
+    reject(() => mutationTimestampWitness(invalid));
   pass(() => mutationAuthorityWitness(observed, observed));
   for (const mutate of [
     (v) => {

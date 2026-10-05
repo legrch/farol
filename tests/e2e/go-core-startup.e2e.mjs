@@ -1526,7 +1526,11 @@ async function native(selected, inputs, report, save) {
                 "Whole committed source tree and sealed Go artifact; Go files are not TS input-ledger entries",
               reviewedPaths: [
                 "boot/settingsmutation.go",
+                "boot/settingsdelivery.go",
+                "boot/settingsstore.go",
+                "boot/nativeruntime.go",
                 "boot/nativeretirement.go",
+                "modules/computer/app/services/settingsdelivery/service.go",
                 "modules/computer/infra/repos/mutation/codec.go",
                 "modules/computer/infra/filesystem/digest.go",
               ],
