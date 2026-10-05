@@ -12,7 +12,14 @@ import {
 // then its DOM through the real serialized saved observation script/reducer.
 // Barriers and public state come from the owned HTTP fixture. Event delivery,
 // layout and DOM APIs are synthetic; this is not Chromium/live-provider proof.
-type TextNode = { nodeType: 3; nodeValue: string };
+class TextNode {
+  readonly nodeType = 3;
+  readonly nodeName = "#text";
+  constructor(public nodeValue: string) {}
+  get textContent(): string {
+    return this.nodeValue;
+  }
+}
 class SyntheticElement {
   readonly nodeType = 1;
   readonly attributes: Record<string, string> = {};
@@ -35,6 +42,12 @@ class SyntheticElement {
     },
   });
   constructor(readonly tagName: string) {}
+  get nodeName(): string {
+    return this.tagName;
+  }
+  get firstChild(): SyntheticElement | TextNode | null {
+    return this.childNodes[0] ?? null;
+  }
   get children(): SyntheticElement[] {
     return this.childNodes.filter(
       (node): node is SyntheticElement => node instanceof SyntheticElement,
@@ -52,7 +65,7 @@ class SyntheticElement {
   }
   set textContent(value: string) {
     this.replaceChildren();
-    if (value) this.childNodes.push({ nodeType: 3, nodeValue: value });
+    if (value) this.childNodes.push(new TextNode(value));
   }
   set className(value: string) {
     this.attributes.class = value;
