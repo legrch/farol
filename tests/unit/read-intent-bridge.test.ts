@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { ReadIntentBridge } from "../../apps/desktop/bridge/read-intent.ts";
+import { buildChatGptReadonlyTaskPrompt } from "../../src/apps/desktop/chatgpt-readonly-task.ts";
 import type { Client } from "../../apps/desktop/bridge/client.ts";
 import {
   requiresOperationID,
@@ -254,6 +255,57 @@ describe("captured read intent transport", () => {
       return o;
     });
     expect(await f.bridge.promote(selected)).toEqual(handle);
+  });
+  it.each([
+    { name: "ASCII 8191", prompt: "x".repeat(8191), bytes: 8191 },
+    { name: "ASCII 8192", prompt: "x".repeat(8192), bytes: 8192 },
+    { name: "Cyrillic 8191", prompt: "я".repeat(4095) + "x", bytes: 8191 },
+    { name: "Cyrillic 8192", prompt: "я".repeat(4096), bytes: 8192 },
+    { name: "emoji 8191", prompt: "🙂".repeat(2047) + "abc", bytes: 8191 },
+    { name: "emoji 8192", prompt: "🙂".repeat(2048), bytes: 8192 },
+  ])(
+    "preserves the exact final UTF-8 prompt at the boundary: $name",
+    async ({ prompt, bytes }) => {
+      expect(Buffer.byteLength(prompt, "utf8")).toBe(bytes);
+      const f = fixture();
+      await expect(f.bridge.promote({ ...input, prompt })).resolves.toEqual(
+        handle,
+      );
+      expect(f.request).toHaveBeenCalledTimes(1);
+      expect(f.request.mock.calls[0]![1]).toMatchObject({ prompt });
+    },
+  );
+  it.each(["x".repeat(8193), "я".repeat(4096) + "x", "🙂".repeat(2048) + "x"])(
+    "refuses an 8193-byte final prompt before original promotion",
+    async (prompt) => {
+      expect(Buffer.byteLength(prompt, "utf8")).toBe(8193);
+      const f = fixture();
+      await expect(
+        f.bridge.promote({ ...input, prompt }),
+      ).rejects.toMatchObject({
+        state: "refused",
+        code: "read_intent_request_invalid",
+      });
+      expect(f.request).not.toHaveBeenCalled();
+    },
+  );
+  it("counts the complete file envelope instead of its context character limit", async () => {
+    const built = buildChatGptReadonlyTaskPrompt({
+      workspaceLabel: "Controlled workspace",
+      relativePath: "note.txt",
+      text: "я".repeat(4096),
+    });
+    expect(built.contextTruncated).toBe(false);
+    expect(built.contextCharacters).toBe(4096);
+    expect(Buffer.byteLength(built.text, "utf8")).toBeGreaterThan(8192);
+    const f = fixture();
+    await expect(
+      f.bridge.promote({ ...input, prompt: built.text }),
+    ).rejects.toMatchObject({
+      state: "refused",
+      code: "read_intent_request_invalid",
+    });
+    expect(f.request).not.toHaveBeenCalled();
   });
   it.each(["", "x".repeat(8193), "é".repeat(4097)])(
     "rejects invalid prompt before an effect",
