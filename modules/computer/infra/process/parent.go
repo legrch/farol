@@ -52,6 +52,7 @@ type parentBoundary struct {
 	execution   context.Context
 	clock       port.Clock
 	wait        anchorWait
+	measure     func(context.Context, Command, *confinedLaunch) (func(), error)
 }
 
 // NewAnchoredPreparer executes nothing. Root supplies the already selected
@@ -65,7 +66,7 @@ func NewAnchoredPreparer(operationID, runtimeID string, template Command, policy
 	if err != nil {
 		return nil, err
 	}
-	p.anchor = &parentBoundary{operationID: operationID, policy: policy, bootstrap: bootstrap, execution: execution, clock: clock, wait: waitAnchor}
+	p.anchor = &parentBoundary{operationID: operationID, policy: policy, bootstrap: bootstrap, execution: execution, clock: clock, wait: waitAnchor, measure: measureLaunch}
 	return p, nil
 }
 
@@ -75,7 +76,7 @@ func (p *parentBoundary) Start(context.Context, Command, func(context.Context) e
 	return nil, &processsvc.NativeFailure{}
 }
 func (p *parentBoundary) StartLease(ctx context.Context, command Command, request processsvc.SpawnRequest, out, diagnostic io.Writer) (owned, error) {
-	if ctx == nil || ctx.Err() != nil || request.Check == nil || p.execution.Err() != nil || !p.clock.Now().Before(request.Deadline) || request.Deadline.After(p.clock.Now().Add(authority.OrdinaryExecutionLifetime)) {
+	if ctx == nil || ctx.Err() != nil || request.Check == nil || p.measure == nil || p.execution.Err() != nil || !p.clock.Now().Before(request.Deadline) || request.Deadline.After(p.clock.Now().Add(authority.OrdinaryExecutionLifetime)) {
 		return nil, &processsvc.NativeFailure{}
 	}
 	launch, err := selectedLaunch(p.policy, command)
@@ -102,6 +103,14 @@ func (p *parentBoundary) StartLease(ctx context.Context, command Command, reques
 		return nil, &processsvc.NativeFailure{}
 	}
 	bounded, cancel := context.WithDeadline(p.execution, originalDeadline)
+	closeMeasurements, measureErr := p.measure(bounded, copyCommand(command), launch)
+	if closeMeasurements != nil {
+		defer closeMeasurements()
+	}
+	if measureErr != nil || closeMeasurements == nil || check(bounded) != nil {
+		cancel()
+		return nil, &processsvc.NativeFailure{}
+	}
 	cmd, link, startErr := p.bootstrap.StartAnchor(bounded, AnchorLaunch{p.operationID, digest, copyCommand(command), copyCommand(launch.command), originalDeadline}, check, out, diagnostic)
 	if cmd == nil {
 		cancel()

@@ -10,8 +10,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"path/filepath"
-	"strconv"
 	"syscall"
 	"time"
 
@@ -29,43 +27,11 @@ func (n nativeBoundary) Start(ctx context.Context, command Command, check func(c
 	if err != nil {
 		return nil, &processsvc.NativeFailure{}
 	}
-	// These are fresh native measurements of the selected physical root and exact
-	// executable bytes, never request-body permission or a startup approval cache.
-	root, err := os.Lstat(command.Root)
-	if err != nil || !root.IsDir() || root.Mode()&os.ModeSymlink != 0 {
-		return nil, &processsvc.NativeFailure{}
+	closeMeasurements, err := measureLaunch(ctx, command, launch)
+	if err != nil {
+		return nil, err
 	}
-	identity, ok := root.Sys().(*syscall.Stat_t)
-	if !ok || strconv.FormatUint(uint64(identity.Dev), 10) != command.RootIdentity.Device || strconv.FormatUint(uint64(identity.Ino), 10) != command.RootIdentity.Inode {
-		return nil, &processsvc.NativeFailure{}
-	}
-	cwd, err := filepath.EvalSymlinks(command.Cwd)
-	if err != nil || cwd != command.Cwd {
-		return nil, &processsvc.NativeFailure{}
-	}
-	scratch, err := os.Lstat(launch.scratch)
-	if err != nil || !scratch.IsDir() || scratch.Mode()&os.ModeSymlink != 0 || scratch.Mode().Perm() != 0700 {
-		return nil, &processsvc.NativeFailure{}
-	}
-	scratchID, ok := scratch.Sys().(*syscall.Stat_t)
-	if !ok || int(scratchID.Uid) != os.Geteuid() || strconv.FormatUint(uint64(scratchID.Dev), 10) != launch.scratchIdentity.Device || strconv.FormatUint(uint64(scratchID.Ino), 10) != launch.scratchIdentity.Inode {
-		return nil, &processsvc.NativeFailure{}
-	}
-	// Keep every measured descriptor open through the single start attempt.
-	// This still requires independently qualified pathname/descriptor continuity.
-	var files []*os.File
-	defer func() {
-		for _, file := range files {
-			file.Close()
-		}
-	}()
-	for _, pin := range launch.pins {
-		file, err := pinnedExecutable(pin)
-		if err != nil {
-			return nil, &processsvc.NativeFailure{}
-		}
-		files = append(files, file)
-	}
+	defer closeMeasurements()
 	if ctx.Err() != nil || launch.qualification.Qualify(ctx, copyCommand(launch.command)) != nil {
 		return nil, &processsvc.NativeFailure{}
 	}

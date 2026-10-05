@@ -146,17 +146,18 @@ func (b *parentBootstrap) StartAnchor(ctx context.Context, l AnchorLaunch, check
 }
 
 type parentFixture struct {
-	preparer    *Preparer
-	route       *processcontract.Contract
-	lease       *parentLease
-	reservation *parentReservation
-	clock       *parentClock
-	boot        *parentBootstrap
-	evidence    *confinementEvidenceDouble
-	timers      *timers
-	waited      chan waited
-	waitCalls   atomic.Int32
-	cancel      context.CancelFunc
+	preparer      *Preparer
+	route         *processcontract.Contract
+	lease         *parentLease
+	reservation   *parentReservation
+	clock         *parentClock
+	boot          *parentBootstrap
+	evidence      *confinementEvidenceDouble
+	timers        *timers
+	waited        chan waited
+	waitCalls     atomic.Int32
+	measureCloses atomic.Int32
+	cancel        context.CancelFunc
 }
 
 func newParentFixture(t *testing.T) *parentFixture {
@@ -184,6 +185,12 @@ func newParentFixture(t *testing.T) *parentFixture {
 		t.Fatal(err)
 	}
 	f := &parentFixture{preparer: preparer, lease: lease, clock: clock, boot: boot, evidence: evidence, timers: &timers{}, waited: make(chan waited, 1), cancel: cancel}
+	preparer.anchor.measure = func(context.Context, Command, *confinedLaunch) (func(), error) {
+		if lease.inspecting.Load() {
+			panic("measurement under owner gate")
+		}
+		return func() { f.measureCloses.Add(1) }, nil
+	}
 	preparer.anchor.wait = func(cmd *exec.Cmd) (exit, error) {
 		if cmd != boot.cmd {
 			panic("waited replacement Cmd")
@@ -374,7 +381,7 @@ func TestParentPossibleStartRetainsWaitAndOneStopWithoutReplay(t *testing.T) {
 			}
 			_, err = f.route.Start(context.Background(), processcontract.StartRequest{OperationID: "operation"})
 			parentUnknown(t, err)
-			if f.boot.calls != 1 || f.reservation.calls != 1 || f.waitCalls.Load() != 1 {
+			if f.boot.calls != 1 || f.reservation.calls != 1 || f.waitCalls.Load() != 1 || f.measureCloses.Load() != 1 {
 				t.Fatal("uncertain operation replayed")
 			}
 		})
@@ -487,7 +494,7 @@ func TestParentMissingResourceAndReceiptErrorRemainOneAttempt(t *testing.T) {
 					t.Fatal("receipt error promoted", read, err)
 				}
 			}
-			if f.boot.calls != 1 || f.reservation.calls != 1 || f.boot.link.stops.Load() != 0 {
+			if f.boot.calls != 1 || f.reservation.calls != 1 || f.boot.link.stops.Load() != 0 || f.measureCloses.Load() != 1 {
 				t.Fatal("unknown retried")
 			}
 		})

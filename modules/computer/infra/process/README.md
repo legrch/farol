@@ -36,6 +36,15 @@ through the single start attempt. These measurements do not prove continuous
 kernel/pathname identity or effective policy enforcement. The qualified mechanism
 and native witnesses remain activation prerequisites owned by normal composition.
 
+Direct and anchored producers share the same measurement implementation. The
+anchored producer measures after reservation and the current-owner check, keeps
+the original deadline, and rechecks current authority before its one bootstrap.
+It retains the executable descriptors through that synchronous bootstrap attempt;
+measurement failure cannot call the bootstrap. Separate disposable Darwin tests
+cover changed roots, scratch modes/identity, symlink/hardlink and executable-pin
+refusals, plus actual descriptor retention and closure after partial measurement.
+Those tests execute no command and do not qualify the anchor/held role transport.
+
 Environment is explicit, including the empty-environment case. Parent environment
 is never copied. Command input and environment remain transient private process
 inputs; the reservation contains correlation, digest and deadline, not command
