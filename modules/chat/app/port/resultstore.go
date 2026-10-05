@@ -23,6 +23,10 @@ type ResultPublication struct {
 // selection evidence. This bounds decoding independently of payload capacity.
 const MaxResultRecordBytes = 64 * 1024
 
+// One bound for retained storage and its qualified historical catalogue. No
+// silent eviction is permitted when this capacity is reached.
+const MaxRetainedResults = turn.MaxRequests
+
 func (p ResultPublication) Valid() bool {
 	return p.Version == 1 && p.Root.Device != 0 && p.Root.Inode != 0 &&
 		p.StorageRoot.Device == p.Root.Device && p.StorageRoot.Inode != 0 && p.StorageRoot.Inode != p.Root.Inode && p.StorageRoot.OwnerUID == p.Root.OwnerUID &&
