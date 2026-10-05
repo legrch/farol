@@ -9,7 +9,7 @@ import type {
   SettingsPage,
   WindowSnapshot,
 } from "./contract";
-import { routeReadiness } from "../setup-presentation";
+import { computerSetup } from "./computer-setup";
 import { TaskEditor } from "./task";
 import { ChatReadonly } from "./chat-readonly";
 import { ChatDirect } from "./chat-direct";
@@ -47,24 +47,7 @@ export function Icon({ name }: { name: string }) {
   );
 }
 export function connection(snapshot: WindowSnapshot) {
-  const config = snapshot.configuration;
-  if (config?.status !== "ready" || !snapshot.buildId) return "Setup needed";
-  const ready = routeReadiness(config.settings.setup.chatgpt, {
-    stale:
-      config.settings.setup.chatgpt.verified !== null &&
-      config.settings.setup.chatgpt.verified.buildId !== snapshot.buildId,
-  });
-  return snapshot.status !== "current"
-    ? "Connection check needed"
-    : ready === "ready"
-      ? "Ready"
-      : ready === "outcome-unknown"
-        ? "Outcome unknown"
-        : ready === "failed"
-          ? "Disconnected"
-          : ready === "not-configured"
-            ? "Setup needed"
-            : "Connection check needed";
+  return computerSetup(snapshot).label;
 }
 function title(snapshot: WindowSnapshot) {
   return snapshot.destination.area === "settings"
@@ -129,7 +112,8 @@ function Home({
   snapshot: WindowSnapshot;
   facade: RendererFacade;
 }) {
-  const ready = connection(snapshot);
+  const setup = computerSetup(snapshot);
+  const ready = setup.label;
   const settings =
     snapshot.configuration?.status === "ready"
       ? snapshot.configuration.settings
@@ -138,18 +122,16 @@ function Home({
     <div className="home-page">
       <div className="home-intro">
         <span className="intro-mark">
-          <Icon name={ready === "Ready" ? "check" : "home"} />
+          <Icon name={setup.ready ? "check" : "home"} />
         </span>
         <div>
           <h1>
-            {ready === "Ready"
-              ? "Ready for your next task"
-              : "Make room for your next task"}
+            {setup.ready ? "Computer ready" : "Connect this Mac to ChatGPT"}
           </h1>
           <p>
-            {ready === "Ready"
-              ? "ChatGPT is connected. The connection check passed."
-              : `${ready}. Review connection and folder access independently.`}
+            {setup.ready
+              ? "External Computer access is verified for the current folder and connection."
+              : `${ready}. ${setup.next}`}
           </p>
         </div>
       </div>
@@ -188,16 +170,14 @@ function Home({
         </div>
         <aside className="readiness">
           <h2>Connection &amp; access</h2>
-          <div className="readiness-summary" data-ready={ready === "Ready"}>
+          <div className="readiness-summary" data-ready={setup.ready}>
             <strong>{ready}</strong>
             <p>
-              {ready === "Ready"
-                ? "ChatGPT is connected and the check passed."
-                : "Connection verification requires current evidence."}
+              {setup.ready
+                ? "External Computer access has current folder and attachment evidence."
+                : setup.next}
             </p>
           </div>
-          <h3>ChatGPT</h3>
-          <p>{ready}</p>
           <button
             className="text-button"
             onClick={() =>
@@ -206,6 +186,11 @@ function Home({
           >
             Manage connection
           </button>
+          <h3>Embedded ChatGPT · optional</h3>
+          <p>{setup.embeddedChatGPT}</p>
+          <p className="description">
+            Embedded sign-in is independent of external Computer access.
+          </p>
           <h3>This Mac</h3>
           <p>
             {snapshot.runtime === "ready"

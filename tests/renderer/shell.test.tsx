@@ -4,7 +4,8 @@ import { afterEach, expect, it, vi } from "vitest";
 import { Shell } from "../../src/ui/renderer/shell";
 import { Services } from "../../src/ui/renderer/services";
 import { WindowController } from "../../src/ui/renderer/controller";
-import { bootstrap, fixture, task } from "./fixture";
+import { bootstrap, fixture, task, settings } from "./fixture";
+import { ProductSettingsSchema } from "../../src/pkg/product-settings/contract";
 (
   globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }
 ).IS_REACT_ACT_ENVIRONMENT = true;
@@ -21,8 +22,9 @@ afterEach(async () => {
   for (const cleanup of cleanups.splice(0)) await cleanup();
   document.body.replaceChildren();
 });
-async function mount() {
+async function mount(data = bootstrap()) {
   const f = fixture();
+  vi.mocked(f.api.bootstrap).mockResolvedValue(data);
   const c = new WindowController(f.api);
   await c.start();
   const host = document.createElement("div");
@@ -519,4 +521,131 @@ it("R24 checking and rollback controls follow recovery and drain eligibility", a
   );
   expect(button(host, "Roll Back").disabled).toBe(true);
   expect(f.api.installedUpdate).not.toHaveBeenCalledWith({ kind: "rollback" });
+});
+
+const buildId = "3".repeat(64);
+const runtimeGeneration = "a".repeat(64);
+const workspaceId = "22222222-2222-4222-8222-222222222222";
+const timestamp = "2026-10-02T20:00:00.000Z";
+function homeComputerSettings() {
+  const value = settings();
+  value.computer.workspaces = [
+    {
+      workspaceId,
+      root: "/approved/project",
+      label: "Project",
+      access: "read",
+      excludedPaths: [],
+      rootIdentity: { device: "1", inode: "2" },
+      accessCheck: {
+        buildId,
+        computerGeneration: 1,
+        verifiedAt: timestamp,
+        rootIdentity: { device: "1", inode: "2" },
+      },
+    },
+  ];
+  const witness = {
+    profile: "farol-next",
+    configRevision: 1,
+    workspaceId,
+    runtimeGeneration,
+    buildId,
+    protocol: "secure-mcp",
+    verifiedAt: timestamp,
+  };
+  value.setup.computer.verified = witness;
+  value.setup.connect.verified = witness;
+  value.connectors.secureMcp = {
+    ...value.connectors.secureMcp,
+    tunnelId: "owner-tunnel",
+    credential: "stored",
+    tunnelClient: {
+      executablePath: "/approved/tunnel",
+      executableSha256: "b".repeat(64),
+      version: "1.0.0",
+      protocol: "openai-tunnel-client/v1",
+      verifiedAt: timestamp,
+    },
+    runtime: {
+      state: "ready",
+      connectorGeneration: 1,
+      computerGeneration: 1,
+      runtimeGeneration,
+      buildId,
+      observedAt: timestamp,
+    },
+    challenge: {
+      value: "33333333-3333-4333-8333-333333333333",
+      challengeSha256: "c".repeat(64),
+      computerGeneration: 1,
+      runtimeGeneration,
+      buildId,
+      preparedAt: timestamp,
+    },
+    attachment: {
+      tunnelId: "owner-tunnel",
+      workspaceId,
+      connectorGeneration: 1,
+      computerGeneration: 1,
+      runtimeGeneration,
+      buildId,
+      challengeSha256: "c".repeat(64),
+      receiptSha256: "d".repeat(64),
+      verifiedAt: timestamp,
+    },
+  };
+  return ProductSettingsSchema.parse(value);
+}
+
+it("Home is Computer-ready without embedded login, with no commands on mount or navigation", async () => {
+  const data = bootstrap();
+  data.configuration.settings = homeComputerSettings();
+  const { host, c, f } = await mount(data);
+  await act(async () => c.navigate({ area: "home" }));
+  expect(host.querySelector(".home-intro h1")?.textContent).toBe(
+    "Computer ready",
+  );
+  expect(
+    host.querySelector(".readiness-summary")?.getAttribute("data-ready"),
+  ).toBe("true");
+  expect(host.querySelector(".readiness")?.textContent).toContain(
+    "Embedded ChatGPT · optional",
+  );
+  expect(host.querySelector(".readiness")?.textContent).toContain(
+    "Sign-in check needed",
+  );
+  for (const page of ["folders", "computer", "connection"] as const) {
+    await act(async () => c.navigate({ area: "settings", page }));
+    await act(async () => c.navigate({ area: "home" }));
+  }
+  expect(f.api.configure).not.toHaveBeenCalled();
+  expect(f.api.task).not.toHaveBeenCalled();
+});
+it("Home keeps login readiness separate from external Computer readiness", async () => {
+  const data = bootstrap();
+  data.configuration.settings.setup.chatgpt.verified =
+    homeComputerSettings().setup.computer.verified;
+  const { host, c, f } = await mount(data);
+  expect(
+    host.querySelector(".readiness-summary")?.getAttribute("data-ready"),
+  ).toBe("false");
+  expect(host.querySelector(".readiness-summary")?.textContent).toContain(
+    "Setup needed",
+  );
+  expect(
+    [...host.querySelectorAll(".readiness h3")].find(
+      (node) => node.textContent === "Embedded ChatGPT · optional",
+    )?.nextElementSibling?.textContent,
+  ).toBe("Ready");
+  const changed = bootstrap();
+  changed.configuration.settings = homeComputerSettings();
+  changed.configuration.settings.setup.connect.verified!.runtimeGeneration =
+    "e".repeat(64);
+  vi.mocked(f.api.bootstrap).mockResolvedValue(changed);
+  await act(async () => c.refresh());
+  expect(
+    host.querySelector(".readiness-summary")?.getAttribute("data-ready"),
+  ).toBe("false");
+  expect(f.api.configure).not.toHaveBeenCalled();
 });

@@ -167,6 +167,59 @@ function proof(value: ProductSettings) {
     verifiedAt: "2026-10-02T20:00:00.000Z",
   };
 }
+function connectionSettings() {
+  const value = withFolder();
+  const timestamp = "2026-10-02T20:00:00.000Z";
+  const buildId = "3".repeat(64),
+    runtimeGeneration = "a".repeat(64);
+  value.setup.chatgpt.verified = proof(value);
+  value.setup.computer.verified = proof(value);
+  value.setup.computer.reachable = "reachable";
+  value.setup.connect.verified = proof(value);
+  const connector = value.connectors.secureMcp;
+  connector.tunnelId = "owner-tunnel";
+  connector.credential = "stored";
+  connector.tunnelClient = {
+    executablePath: "/approved/tunnel",
+    executableSha256: "b".repeat(64),
+    version: "1.0.0",
+    protocol: "openai-tunnel-client/v1",
+    verifiedAt: timestamp,
+  };
+  connector.runtime = {
+    state: "ready",
+    connectorGeneration: 1,
+    runtimeGeneration,
+    computerGeneration: 1,
+    buildId,
+    observedAt: timestamp,
+  };
+  connector.challenge = {
+    value: selectionId,
+    challengeSha256: "c".repeat(64),
+    runtimeGeneration,
+    computerGeneration: 1,
+    buildId,
+    preparedAt: timestamp,
+  };
+  connector.chatgptApp = {
+    name: "My Farol",
+    tunnelId: "owner-tunnel",
+    connectorGeneration: 1,
+  };
+  connector.attachment = {
+    tunnelId: "owner-tunnel",
+    workspaceId,
+    connectorGeneration: 1,
+    runtimeGeneration,
+    computerGeneration: 1,
+    buildId,
+    challengeSha256: "c".repeat(64),
+    receiptSha256: "d".repeat(64),
+    verifiedAt: timestamp,
+  };
+  return value;
+}
 describe("bounded Settings writer", () => {
   it("renders all nine approved pages in StrictMode without effects or saves", async () => {
     const h = await mount();
@@ -497,9 +550,9 @@ describe("bounded Settings writer", () => {
     const h = await mount("connection", withFolder());
     expect(h.c.getSnapshot().runtime).toBe("ready");
     expect(
-      h.host.querySelector('section[aria-label="ChatGPT"] .badges')
+      h.host.querySelector('section[aria-label="This Mac connection"] .badges')
         ?.textContent,
-    ).not.toBe("Ready");
+    ).not.toBe("Computer ready");
     expect(h.button("Start connection").disabled).toBe(true);
     expect(h.button("Check in ChatGPT once").disabled).toBe(true);
     await h.click("Sign in");
@@ -510,61 +563,12 @@ describe("bounded Settings writer", () => {
     ]);
   });
   it("requires current correlated attachment for Ready and sends a Dev app check once", async () => {
-    const value = withFolder();
-    const timestamp = "2026-10-02T20:00:00.000Z";
-    const buildId = "3".repeat(64),
-      runtimeGeneration = "a".repeat(64);
-    value.setup.chatgpt.verified = proof(value);
-    value.setup.computer.verified = proof(value);
-    value.setup.computer.reachable = "reachable";
-    value.setup.connect.verified = proof(value);
-    const connector = value.connectors.secureMcp;
-    connector.tunnelId = "owner-tunnel";
-    connector.credential = "stored";
-    connector.tunnelClient = {
-      executablePath: "/approved/tunnel",
-      executableSha256: "b".repeat(64),
-      version: "1.0.0",
-      protocol: "openai-tunnel-client/v1",
-      verifiedAt: timestamp,
-    };
-    connector.runtime = {
-      state: "ready",
-      connectorGeneration: 1,
-      runtimeGeneration,
-      computerGeneration: 1,
-      buildId,
-      observedAt: timestamp,
-    };
-    connector.challenge = {
-      value: selectionId,
-      challengeSha256: "c".repeat(64),
-      runtimeGeneration,
-      computerGeneration: 1,
-      buildId,
-      preparedAt: timestamp,
-    };
-    connector.chatgptApp = {
-      name: "My Farol",
-      tunnelId: "owner-tunnel",
-      connectorGeneration: 1,
-    };
-    connector.attachment = {
-      tunnelId: "owner-tunnel",
-      workspaceId,
-      connectorGeneration: 1,
-      runtimeGeneration,
-      computerGeneration: 1,
-      buildId,
-      challengeSha256: "c".repeat(64),
-      receiptSha256: "d".repeat(64),
-      verifiedAt: timestamp,
-    };
+    const value = connectionSettings();
     const h = await mount("connection", value, "dev");
     const badge = () =>
-      h.host.querySelector('section[aria-label="ChatGPT"] .badges')
+      h.host.querySelector('section[aria-label="This Mac connection"] .badges')
         ?.textContent;
-    expect(badge()).toBe("Ready");
+    expect(badge()).toBe("Computer ready");
     await h.click("Check attachment");
     await h.click("Check local connection");
     await h.click("Check in ChatGPT once");
@@ -1479,4 +1483,171 @@ it("retains consumed operation identity after a known refusal and remount", asyn
   expect(h.button("Apply edit").disabled).toBe(true);
   expect(h.button("Cancel edit").disabled).toBe(true);
   expect(h.calls()).toHaveLength(3);
+});
+
+describe("Computer-first setup and explicit reconnect", () => {
+  it("shows the exact verified workspace and challenge without embedded login or automatic commands", async () => {
+    const value = connectionSettings();
+    value.setup.chatgpt.verified = null;
+    value.connectors.secureMcp.attachment = null;
+    value.setup.connect.verified = null;
+    const other = structuredClone(value.computer.workspaces[0]!);
+    other.workspaceId = selectionId;
+    other.root = "/other/folder";
+    other.rootIdentity = { device: "1", inode: "3" };
+    other.excludedPaths = [];
+    other.accessCheck = {
+      buildId: "3".repeat(64),
+      computerGeneration: value.computer.generation,
+      rootIdentity: other.rootIdentity,
+      verifiedAt: "2026-10-02T20:00:00.000Z",
+    };
+    value.computer.workspaces.unshift(other);
+    ProductSettingsSchema.parse(value);
+    const h = await mount("connection", value);
+    expect(h.c.getSnapshot().configuration?.status).toBe("ready");
+    expect(h.host.textContent).toContain("Verify from external ChatGPT");
+    const card = h.host.querySelector("[data-connector-challenge]");
+    expect(card?.querySelectorAll("code")[0]?.textContent).toBe(selectionId);
+    expect(card?.querySelectorAll("code")[1]?.textContent).toBe(workspaceId);
+    expect(card?.textContent).toContain("/approved/project");
+    expect(card?.textContent).not.toContain("/other/folder");
+    for (const page of ["folders", "computer", "connection"] as const)
+      await h.pageTo(page);
+    expect(h.calls()).toEqual([]);
+    expect(h.button("Check in ChatGPT once").disabled).toBe(true);
+    expect(h.button("Check attachment").disabled).toBe(false);
+  });
+  it.each(["build", "runtime", "computer", "connector", "workspace", "stale"])(
+    "hides a challenge with mismatched current provenance: %s",
+    async (mismatch) => {
+      const value = connectionSettings();
+      value.connectors.secureMcp.attachment = null;
+      value.setup.connect.verified = null;
+      if (mismatch === "build")
+        value.connectors.secureMcp.challenge!.buildId = "e".repeat(64);
+      if (mismatch === "runtime")
+        value.connectors.secureMcp.challenge!.runtimeGeneration = "e".repeat(
+          64,
+        );
+      if (mismatch === "computer")
+        value.connectors.secureMcp.challenge!.computerGeneration++;
+      if (mismatch === "connector") value.connectors.secureMcp.generation++;
+      if (mismatch === "workspace")
+        value.setup.computer.verified!.workspaceId = selectionId;
+      const h = await mount("connection", value);
+      if (mismatch === "stale")
+        await act(async () =>
+          h.f.emit("runtime", {
+            state: "offline",
+            error: null,
+            identity: null,
+            embeddedNode: null,
+            embeddedElectron: null,
+          }),
+        );
+      expect(h.host.querySelector("[data-connector-challenge]")).toBeNull();
+      expect(h.calls()).toEqual([]);
+    },
+  );
+  it("double-click submits one Repair, never a renderer Stop/Start chain", async () => {
+    const h = await mount("connection", connectionSettings());
+    const pending = deferred<unknown>();
+    vi.mocked(h.f.api.configure).mockReturnValueOnce(pending.promise);
+    const reconnect = h.button("Reconnect");
+    expect(h.button("Start connection").disabled).toBe(true);
+    await act(async () => {
+      reconnect.click();
+      reconnect.click();
+    });
+    expect(h.calls()).toEqual([{ kind: "connector.repair" }]);
+    expect(h.button("Reconnect").disabled).toBe(true);
+    await h.pageTo("folders");
+    await h.pageTo("connection");
+    await h.click("Reconnect");
+    expect(h.calls()).toHaveLength(1);
+    await act(async () =>
+      pending.resolve({
+        ok: false,
+        error: "CONNECTOR_STOP_UNCONFIRMED",
+        snapshot: h.configuration,
+      }),
+    );
+    expect(h.host.textContent).toContain("CONNECTOR_STOP_UNCONFIRMED");
+    expect(h.calls()).toEqual([{ kind: "connector.repair" }]);
+  });
+  it.each([
+    "pending",
+    "unknown",
+    "stale",
+    "runtime-unknown",
+    "runtime-stale",
+    "unavailable",
+  ])(
+    "rechecks latest facade admission before reconnect, despite an enabled old control: %s",
+    async (fence) => {
+      const h = await mount("connection", connectionSettings());
+      const next = { ...structuredClone(h.c.getSnapshot()) };
+      if (fence === "pending" || fence === "unknown")
+        next.intents = {
+          ...next.intents,
+          foreign: { id: "foreign", state: fence, code: null },
+        };
+      if (fence === "stale") next.status = "stale";
+      if (fence === "unavailable") next.configuration = null;
+      if (next.configuration?.status === "ready") {
+        if (fence === "runtime-unknown")
+          next.configuration.settings.connectors.secureMcp.runtime!.state =
+            "outcome_unknown";
+        if (fence === "runtime-stale")
+          next.configuration.settings.connectors.secureMcp.runtime!
+            .connectorGeneration++;
+      }
+      vi.spyOn(h.c, "getSnapshot").mockReturnValue(next);
+      await h.click("Reconnect");
+      expect(h.calls()).toEqual([]);
+    },
+  );
+  it("lost Repair reply stays unknown through page changes and does not repeat", async () => {
+    const h = await mount("connection", connectionSettings());
+    vi.mocked(h.f.api.configure).mockRejectedValueOnce(new Error("reply lost"));
+    await h.click("Reconnect");
+    await h.pageTo("folders");
+    await h.pageTo("connection");
+    await h.click("Reconnect");
+    expect(h.calls()).toEqual([{ kind: "connector.repair" }]);
+    expect(h.host.textContent).toContain("Outcome unknown");
+    expect(h.button("Start connection").disabled).toBe(true);
+  });
+  it("explicit narrowing invalidates readiness and preserves drafts without auto reconnect", async () => {
+    const value = connectionSettings();
+    value.computer.workspaces[0]!.access = "write";
+    const h = await mount("connection", value);
+    await change(h.field("Tunnel ID"), "unsaved-tunnel");
+    const tunnel = h.field("Tunnel ID");
+    const narrowed = structuredClone(h.configuration);
+    narrowed.settings.revision++;
+    narrowed.settings.computer.generation++;
+    narrowed.settings.computer.workspaces[0]!.access = "read";
+    narrowed.settings.setup.computer.verified = null;
+    narrowed.settings.connectors.secureMcp.attachment = null;
+    vi.mocked(h.f.api.configure).mockResolvedValueOnce({
+      ok: true,
+      snapshot: narrowed,
+    });
+    await h.pageTo("folders");
+    await h.click("Use read-only");
+    await h.pageTo("connection");
+    expect(h.field("Tunnel ID")).toBe(tunnel);
+    expect(tunnel.value).toBe("unsaved-tunnel");
+    expect(
+      h.host.querySelector('section[aria-label="This Mac connection"] .badges')
+        ?.textContent,
+    ).toBe("Setup needed");
+    expect(h.button("Start connection").disabled).toBe(true);
+    expect(h.button("Reconnect").disabled).toBe(true);
+    expect(h.calls()).toEqual([
+      { kind: "computer.update-access", workspaceId, access: "read" },
+    ]);
+  });
 });

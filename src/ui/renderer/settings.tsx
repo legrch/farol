@@ -12,7 +12,7 @@ import {
   type ProductSettings,
 } from "../../pkg/product-settings/contract";
 import { folderAccessChecked, folderDisplayName } from "../folder-access-state";
-import { onboardingFacts } from "../guided-onboarding";
+import { computerSetup } from "./computer-setup";
 import type { Intent, RendererFacade, WindowSnapshot } from "./contract";
 
 export type SettingsProps = Readonly<{
@@ -83,12 +83,14 @@ function Command({
   children,
   className = "subtle",
   disabled = false,
+  admit,
 }: {
   command: ProductConfigurationCommand;
   actions: Actions;
   children: ReactNode;
   className?: string;
   disabled?: boolean;
+  admit?: (current: WindowSnapshot) => boolean;
 }) {
   const workspaceId =
     "workspaceId" in command ? command.workspaceId : undefined;
@@ -97,7 +99,7 @@ function Command({
       type="button"
       className={className}
       disabled={disabled || !actions.allowed(command.kind, workspaceId)}
-      onClick={() => void actions.run(command)}
+      onClick={() => void actions.run(command, admit)}
     >
       {children}
     </button>
@@ -457,9 +459,21 @@ function Folders(props: PageProps) {
     <>
       <h2>Folders</h2>
       <p className="description">
+        Approve a folder read-only first. Write access is optional and requires
+        explicit approval. Choose optional command access in This Mac, then
+        check access and verify the workspace before starting the connection.
+      </p>
+      <p className="description">
         Folders start read-only. Read &amp; write allows guarded changes that
         still require approval. Access changes require a fresh check.
       </p>
+      <button
+        type="button"
+        className="text-button"
+        onClick={() => facade.navigate({ area: "settings", page: "computer" })}
+      >
+        Review optional command access
+      </button>
       <Group title="Approved folders">
         <div className="control-row">
           <button
@@ -1016,11 +1030,23 @@ function GuardedEdit({
     </section>
   );
 }
-function ThisMac({ settings, snapshot, actions }: PageProps) {
+function ThisMac({ settings, snapshot, facade, actions }: PageProps) {
   const [commands, setCommands] = useState(settings.computer.commands);
   return (
     <>
       <h2>This Mac</h2>
+      <p className="description">
+        Command access is optional. After changing folder or command access,
+        verify the workspace again in Folders, then open Connection to start or
+        reconnect explicitly.
+      </p>
+      <button
+        type="button"
+        className="text-button"
+        onClick={() => facade.navigate({ area: "settings", page: "folders" })}
+      >
+        Review folder verification
+      </button>
       <Group title="Local service">
         <div className="setting-row">
           <strong>{settings.computer.name}</strong>
@@ -1082,12 +1108,8 @@ function ThisMac({ settings, snapshot, actions }: PageProps) {
 }
 function Connection({ settings, snapshot, actions }: PageProps) {
   const connector = settings.connectors.secureMcp;
-  const facts = onboardingFacts(settings, snapshot.buildId ?? "");
-  const ready =
-    snapshot.status === "current" &&
-    facts.chat === "ready" &&
-    facts.attachmentCurrent &&
-    !facts.outcomeUnknown;
+  const setup = computerSetup(snapshot);
+  const externalChallenge = setup.externalChallenge;
   const [tunnelId, setTunnelId] = useState(connector.tunnelId ?? "");
   const [key, setKey] = useState("");
   const keyComposing = useRef(false);
@@ -1097,33 +1119,9 @@ function Connection({ settings, snapshot, actions }: PageProps) {
   return (
     <>
       <h2>Connection</h2>
-      <Group title="ChatGPT">
-        <p className="badges">
-          {facts.outcomeUnknown
-            ? "Outcome unknown"
-            : ready
-              ? "Ready"
-              : facts.runtimeCurrent
-                ? "Connection check needed"
-                : "Setup needed or disconnected"}
-        </p>
-        <p className="description">
-          Sign-in, the local service and end-to-end access have separate checks.
-          A running service alone cannot establish Ready.
-        </p>
-        <div className="control-row">
-          <Command actions={actions} command={{ kind: "chatgpt.open-sign-in" }}>
-            Sign in
-          </Command>
-          <Command actions={actions} command={{ kind: "chatgpt.open-browser" }}>
-            Open ChatGPT
-          </Command>
-          <Command actions={actions} command={{ kind: "chatgpt.verify" }}>
-            Check sign-in
-          </Command>
-        </div>
-      </Group>
       <Group title="This Mac connection">
+        <p className="badges">{setup.label}</p>
+        <p className="description">{setup.next}</p>
         <p className="description">
           Select the tunnel client, save the tunnel, then start the connection.
           An approved, verified folder is required for local access.
@@ -1196,16 +1194,19 @@ function Connection({ settings, snapshot, actions }: PageProps) {
         <div className="control-row">
           <Command
             actions={actions}
-            disabled={
-              !facts.client ||
-              !facts.credentialStored ||
-              !facts.tunnelId ||
-              facts.folder !== "ready" ||
-              connector.runtime !== null
-            }
+            disabled={!setup.canStart}
+            admit={(current) => computerSetup(current).canStart}
             command={{ kind: "connector.start" }}
           >
             Start connection
+          </Command>
+          <Command
+            actions={actions}
+            disabled={!setup.canReconnect}
+            admit={(current) => computerSetup(current).canReconnect}
+            command={{ kind: "connector.repair" }}
+          >
+            Reconnect
           </Command>
           <Command
             actions={actions}
@@ -1216,7 +1217,8 @@ function Connection({ settings, snapshot, actions }: PageProps) {
           <Command
             actions={actions}
             command={{ kind: "connector.check-attachment" }}
-            disabled={!facts.runtimeCurrent}
+            disabled={!setup.canCheckAttachment}
+            admit={(current) => computerSetup(current).canCheckAttachment}
           >
             Check attachment
           </Command>
@@ -1224,6 +1226,43 @@ function Connection({ settings, snapshot, actions }: PageProps) {
             Stop connection
           </Command>
         </div>
+        <p className="description">
+          Reconnect asks the host to confirm Stop before Start and creates a
+          fresh challenge. It does not resend an earlier verification. Pending,
+          unknown or stale state must be resolved before reconnecting.
+        </p>
+        {externalChallenge && (
+          <div
+            className="connector-challenge"
+            data-connector-challenge="pending"
+          >
+            <strong>Verify from external ChatGPT</strong>
+            <p>
+              Attach tunnel {externalChallenge.tunnelId} in ChatGPT Settings.
+              Ask the connector to call farol_next_connector_verify once with:
+            </p>
+            <dl>
+              <div>
+                <dt>challenge</dt>
+                <dd>
+                  <code>{externalChallenge.value}</code>
+                </dd>
+              </div>
+              <div>
+                <dt>workspaceId</dt>
+                <dd>
+                  <code>{externalChallenge.workspaceId}</code>
+                </dd>
+              </div>
+            </dl>
+            <p>Verified folder: {externalChallenge.root}</p>
+            <small>
+              The one-time check lists only the approved workspace root and
+              returns counts, never names or file contents. Then press Check
+              attachment.
+            </small>
+          </div>
+        )}
         <details>
           <summary>ChatGPT app and technical options</summary>
           <p className="description">
@@ -1271,10 +1310,7 @@ function Connection({ settings, snapshot, actions }: PageProps) {
               appCheckAttempted ||
               !actions.allowed("connector.verify-app") ||
               snapshot.environment !== "dev" ||
-              !facts.runtimeCurrent ||
-              facts.chat !== "ready" ||
-              facts.folder !== "ready" ||
-              !connector.challenge ||
+              !setup.canVerifyEmbeddedApp ||
               !connector.chatgptApp ||
               connector.chatgptApp.connectorGeneration !==
                 connector.generation ||
@@ -1284,14 +1320,28 @@ function Connection({ settings, snapshot, actions }: PageProps) {
               if (appCheckStarted.current) return;
               appCheckStarted.current = true;
               setAppCheckAttempted(true);
-              void actions.run({ kind: "connector.verify-app" });
+              void actions.run({ kind: "connector.verify-app" }, (current) => {
+                const latest = computerSetup(current);
+                return (
+                  current.environment === "dev" &&
+                  latest.canVerifyEmbeddedApp &&
+                  current.configuration?.status === "ready" &&
+                  current.configuration.settings.connectors.secureMcp.chatgptApp
+                    ?.connectorGeneration ===
+                    current.configuration.settings.connectors.secureMcp
+                      .generation &&
+                  current.configuration.settings.connectors.secureMcp.chatgptApp
+                    ?.tunnelId ===
+                    current.configuration.settings.connectors.secureMcp.tunnelId
+                );
+              });
             }}
           >
             Check in ChatGPT once
           </button>
           <p className="description">
-            External verification: use the existing challenge and attachment
-            flow. Health checks do not prove ChatGPT attachment.
+            External verification uses the challenge above and does not require
+            embedded sign-in. Health checks do not prove ChatGPT attachment.
           </p>
           <div className="control-row">
             <Command
@@ -1311,6 +1361,24 @@ function Connection({ settings, snapshot, actions }: PageProps) {
             </Command>
           </div>
         </details>
+      </Group>
+      <Group title="Embedded ChatGPT · optional">
+        <p className="badges">{setup.embeddedChatGPT}</p>
+        <p className="description">
+          Embedded sign-in is optional for external Computer access. It has its
+          own check.
+        </p>
+        <div className="control-row">
+          <Command actions={actions} command={{ kind: "chatgpt.open-sign-in" }}>
+            Sign in
+          </Command>
+          <Command actions={actions} command={{ kind: "chatgpt.open-browser" }}>
+            Open ChatGPT
+          </Command>
+          <Command actions={actions} command={{ kind: "chatgpt.verify" }}>
+            Check sign-in
+          </Command>
+        </div>
       </Group>
     </>
   );
