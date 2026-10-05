@@ -1835,13 +1835,19 @@
           "type": "ChatHandle"
         },
         "conversationId": {
-          "type": "text"
+          "type": "string",
+          "maxBytes": 256,
+          "pattern": "^[^\\x00\\r\\n]*$"
         },
         "userTurnId": {
-          "type": "text"
+          "type": "string",
+          "maxBytes": 256,
+          "pattern": "^[^\\x00\\r\\n]*$"
         },
         "replyId": {
-          "type": "text"
+          "type": "string",
+          "maxBytes": 256,
+          "pattern": "^[^\\x00\\r\\n]*$"
         },
         "resultId": {
           "type": "id"

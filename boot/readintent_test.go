@@ -12,13 +12,19 @@ import (
 // Real app/facade/ingress composition with injected Computer, persistence and
 // physical browser ports. This is neither native storage nor a live provider.
 func readIntentUnapprovedFixture(t *testing.T) (*chatComputerFixture, *ComputerIngress, wire.ChatComputerAdmissionResponse) {
+	f, computer, admission, _ := readIntentUnapprovedWireFixture(t)
+	return f, computer, admission
+}
+
+func readIntentUnapprovedWireFixture(t *testing.T) (*chatComputerFixture, *ComputerIngress, wire.ChatComputerAdmissionResponse, *ChatComputerIngress) {
 	t.Helper()
 	f := newChatComputerFixture(t)
 	computer, _, native, _ := f.computer(t)
 	computer.publication.receipt.SettingsRevision = "1"
 	computer.publication.receipt.PublishOperationId = "publication"
 	computer.publication.receipt.ApprovalDigest = strings.Repeat("a", 64)
-	if _, err := NewChatComputerIngress(f.ingress, computer); err != nil {
+	relay, err := NewChatComputerIngress(f.ingress, computer)
+	if err != nil {
 		t.Fatal(err)
 	}
 	a, err := computer.Admit(context.Background(), "original-read-admission", wire.ChatComputerAdmissionRequest{
@@ -35,7 +41,7 @@ func readIntentUnapprovedFixture(t *testing.T) (*chatComputerFixture, *ComputerI
 	if read.Status != "ok" || native.calls != 1 || f.physical.sends != 0 {
 		t.Fatal("captured read", read, native.calls)
 	}
-	return f, computer, *a
+	return f, computer, *a, relay
 }
 
 func readIntentFixture(t *testing.T) (*chatComputerFixture, *ComputerIngress, wire.ChatComputerAdmissionResponse) {

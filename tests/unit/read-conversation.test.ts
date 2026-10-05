@@ -1,14 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
 import { ReadConversationClient } from "../../apps/desktop/bridge/read-conversation.ts";
 import { BridgeError } from "../../apps/desktop/bridge/client.ts";
-import type {
-  ChatHandle,
-  ChatReadIntentResolve,
-  ChatReadIntentResolved,
-  ChatState,
-  ChatFrame,
-  ChatResult,
-  ChatCreate,
+import {
+  validate,
+  type ChatHandle,
+  type ChatReadIntentResolve,
+  type ChatReadIntentResolved,
+  type ChatState,
+  type ChatFrame,
+  type ChatResult,
+  type ChatCreate,
 } from "../../apps/desktop/bridge/wire.ts";
 
 // Mechanical client fixture. Go owns all status decisions in production; these
@@ -138,6 +139,39 @@ function terminal(h: ChatHandle, acknowledged = false): ChatResult {
     acknowledged,
   };
 }
+it("represents absent provider IDs without widening populated result-ID bounds", () => {
+  const result = {
+    ...terminal(handle),
+    evidence: { ...terminal(handle).evidence, evidenceId: "verified-evidence" },
+    conversationId: "",
+    userTurnId: "",
+    replyId: "",
+    outcome: "failed",
+    code: "SEND_NOT_SENT",
+    text: "",
+    complete: false,
+  };
+  expect(validate("ChatResult", result)).toBe(true);
+  for (const field of ["conversationId", "userTurnId", "replyId"] as const) {
+    for (const value of ["", "a".repeat(256), "é".repeat(128)])
+      expect(validate("ChatResult", { ...result, [field]: value })).toBe(true);
+    for (const value of [
+      "a".repeat(257),
+      "é".repeat(129),
+      "bad\u0000id",
+      "bad\rid",
+      "bad\nid",
+      "bad\ud800id",
+      null,
+      1,
+    ])
+      expect(validate("ChatResult", { ...result, [field]: value })).toBe(false);
+    const absent: Record<string, unknown> = { ...result };
+    delete absent[field];
+    expect(validate("ChatResult", absent)).toBe(false);
+  }
+});
+
 function fixture() {
   let next = handle;
   const states = new Map([

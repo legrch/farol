@@ -52,7 +52,9 @@ export function adoptReadConversation(
   let text = "";
   let turns: ReadConversationTurn[] = [];
   if (input.action === "start") {
-    if (previous || next.binding.operationId !== input.operationId) return null;
+    // The preview operation names the admitted task; Go assigns a distinct
+    // admission/turn operation. The bridge verifies that exact admission tuple.
+    if (previous || next.binding.taskId !== input.operationId) return null;
   } else {
     if (
       !previous ||

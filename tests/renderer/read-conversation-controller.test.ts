@@ -10,11 +10,11 @@ const binding = {
   backendGeneration: "backend",
   ownerId: "owner",
   sessionId: "session",
-  taskId: "task",
+  taskId: operationId,
   taskEpoch: "1",
   participantId: "participant",
   turnId: "turn",
-  operationId,
+  operationId: "55555555-5555-4555-8555-555555555555",
   turnGeneration: "1",
 };
 const base: ReadConversationView = {
@@ -260,7 +260,7 @@ describe("renderer adoption of exact Go conversation replies", () => {
     await Promise.resolve();
     await Promise.resolve();
     held.resolve(
-      reply({ ...base, binding: { ...binding, operationId: "replacement" } }),
+      reply({ ...base, binding: { ...binding, taskId: "replacement" } }),
     );
     expect((await a).state).toBe("unknown");
     expect((await b).state).toBe("unknown");

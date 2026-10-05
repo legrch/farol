@@ -6,11 +6,11 @@ const binding = {
   backendGeneration: "backend",
   ownerId: "owner",
   sessionId: "session",
-  taskId: "task",
+  taskId: "original",
   taskEpoch: "1",
   participantId: "participant",
   turnId: "turn",
-  operationId: "original",
+  operationId: "admission-operation",
   turnGeneration: "1",
 };
 function view(
@@ -69,6 +69,24 @@ const progress = {
   cursor: "2",
 };
 describe("window-local Chat delivery adoption", () => {
+  it("correlates the preview with its Go task, preserving the distinct turn operation", () => {
+    expect(initial()?.turns[0]?.view.binding.operationId).toBe(
+      "admission-operation",
+    );
+    expect(
+      adoptReadConversation(
+        null,
+        view({
+          binding: {
+            ...binding,
+            taskId: "crossed-task",
+            operationId: input.operationId,
+          },
+        }),
+        input,
+      ),
+    ).toBeNull();
+  });
   it("retains an early useful delta without inventing a result or ACK", () => {
     const s = initial();
     expect(s.turns[0]!.text).toBe("Early output.");

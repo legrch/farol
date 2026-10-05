@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	wire "github.com/legrch/farol/gen/desktop/v1"
 	chatport "github.com/legrch/farol/modules/chat/app/port"
@@ -45,6 +46,63 @@ func attachAccountForTest(t *testing.T, computer *ComputerIngress, a wire.ChatCo
 func accountSendSnapshot() browser.AccountObservation {
 	return browser.AccountObservation{State: "observed", Source: "provider-session-v1", PrincipalKey: strings.Repeat("c", 64), ObservedAtMillis: 1, ExpiresAtMillis: 100}
 }
+func TestReadIntentKnownNotSentResultSurvivesWireWithoutProviderIDs(t *testing.T) {
+	f, computer, admission, relay := readIntentUnapprovedWireFixture(t)
+	approveReadAccountFixture(t, computer, admission)
+	resolveReadSelectionFixture(t, computer, admission)
+	f.physical.account = accountSendSnapshot()
+	peer := chatComputerWireConnectRelay(t, f, computer, relay)
+	deadline := decimal(uint64(time.Now().Add(12 * time.Second).UnixMilli()))
+	handle, err := computer.promoteRead(context.Background(), "wire-promote", readIntentPromotion(admission))
+	if err != nil {
+		t.Fatal(err)
+	}
+	taskWireTestData[wire.ChatPrepared](t, peer.call("chat.conversation.prepare", "wire-prepare", chatComputerWireJSON(t, wire.ChatDeadline{DeadlineMillis: deadline})), "ChatPrepared")
+	// Known final account mismatch: no physical Send and no provider IDs exist.
+	f.physical.verifyHook = func() { f.physical.account.PrincipalKey = strings.Repeat("d", 64) }
+	taskWireTestData[wire.Empty](t, peer.call("chat.conversation.send", "wire-send", chatComputerWireJSON(t, wire.ChatAction{HandleId: handle.HandleId, DeadlineMillis: deadline})), "Empty")
+	before := len(f.journal.entries)
+	body := chatComputerWireJSON(t, wire.ChatHandleRequest{HandleId: handle.HandleId})
+	for attempt := range 2 {
+		state := taskWireTestData[wire.ChatState](t, peer.call("chat.conversation.state", "", body), "ChatState")
+		if state.Handle != *handle || !state.HasResult || state.Phase != "result-ready" || state.DeliveryAcknowledged || state.LifecycleSettled || state.Released || state.FollowReady {
+			t.Fatal("known failure state changed", state)
+		}
+		taskWireTestData[wire.ChatFrames](t, peer.call("chat.conversation.events", "", chatComputerWireJSON(t, wire.ChatEventsRequest{HandleId: handle.HandleId, AfterSequence: "0"})), "ChatFrames")
+		result := taskWireTestData[wire.ChatResult](t, peer.call("chat.conversation.result", "", body), "ChatResult")
+		if result.Handle != *handle || result.Outcome != "failed" || result.Code != "SEND_NOT_SENT" || result.ConversationId != "" || result.UserTurnId != "" || result.ReplyId != "" || result.Acknowledged || result.Complete || result.Text != "" {
+			t.Fatal("known failure result changed", result)
+		}
+		if attempt == 0 {
+			for _, field := range []string{"conversation", "user", "reply"} {
+				for _, vector := range []struct {
+					value string
+					valid bool
+				}{
+					{"", true}, {strings.Repeat("a", 256), true}, {strings.Repeat("é", 128), true},
+					{strings.Repeat("a", 257), false}, {strings.Repeat("é", 129), false}, {"bad\x00id", false}, {"bad\rid", false}, {"bad\nid", false},
+				} {
+					v := result
+					switch field {
+					case "conversation":
+						v.ConversationId = vector.value
+					case "user":
+						v.UserTurnId = vector.value
+					case "reply":
+						v.ReplyId = vector.value
+					}
+					if (wire.Validate("ChatResult", []byte(chatComputerWireJSON(t, v))) == nil) != vector.valid {
+						t.Fatal("provider ID bound changed", field, len(vector.value))
+					}
+				}
+			}
+		}
+	}
+	if f.physical.sends != 0 || len(f.journal.entries) != before {
+		t.Fatal("retained observation repeated or settled Send")
+	}
+}
+
 func TestReadIntentAccountApprovalGuardsFinalDisclosure(t *testing.T) {
 	for _, variant := range []string{"matching", "missing", "changed", "revoked", "replaced", "expired", "scope", "selected-id", "missing-grant"} {
 		t.Run(variant, func(t *testing.T) {
