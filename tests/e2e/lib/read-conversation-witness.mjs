@@ -12,6 +12,19 @@ export const conversationLimits = Object.freeze([
   "Go settlement/release is witnessed independently in the content-free lifecycle journal; UI follow-ready alone is not backend evidence",
 ]);
 export const conversationId = "startup-two-turn-conversation";
+// Independently authored expected Markdown, kept in the test-side oracle only.
+// The site receives raw segment prose below; production derives these bytes
+// through its real public DOM parser. Never send this table to either adapter.
+export const conversationOutput = Object.freeze([
+  Object.freeze([
+    "The selected file is a read\\-only startup canary\\.",
+    "Action item: retain its exact contents\\. FIRST\\_RESULT\\_END\\.",
+  ]),
+  Object.freeze([
+    "Keep the canary unchanged for the next check\\.",
+    "Use the same selected file\\. SECOND\\_RESULT\\_END\\.",
+  ]),
+]);
 export const syntheticTaskPolicy = Object.freeze({
   defaultHarness: "browser",
   harnesses: {
@@ -201,7 +214,7 @@ export function conversationUiWitness(ui, stage, script, index, previous) {
     ["true", "false"].includes(ui.followReady),
     "CHAT_UI_FOLLOW_STATE_MISSING",
   );
-  const text = script[index].segments.map((s) => s.text).join("\n\n");
+  const text = conversationOutput[index].join("\n\n");
   if (stage === "early") {
     assert.ok(
       ["pending", "running", "awaiting-owner"].includes(ui.phase),
@@ -209,13 +222,17 @@ export function conversationUiWitness(ui, stage, script, index, previous) {
     );
     assert.equal(
       ui.answer,
-      script[index].segments[0].text,
+      conversationOutput[index][0],
       "CHAT_EARLY_USEFUL_TEXT",
     );
     for (const future of script
       .slice(index)
       .flatMap((turn, offset) =>
-        turn.segments.slice(offset === 0 ? 1 : 0).map((s) => s.text),
+        turn.segments.flatMap((s, segment) =>
+          offset === 0 && segment === 0
+            ? []
+            : [s.text, conversationOutput[index + offset][segment]],
+        ),
       ))
       assert.equal(
         ui.text.includes(future),
@@ -266,9 +283,7 @@ export function conversationUiWitness(ui, stage, script, index, previous) {
       assert.notEqual(ui.handleId, previous.handleId, "CHAT_HANDLE_REUSED");
       assert.notEqual(ui.turnId, previous.turnId, "CHAT_TURN_REUSED");
       assert.ok(
-        ui.retainedAnswers.includes(
-          script[0].segments.map((s) => s.text).join("\n\n"),
-        ),
+        ui.retainedAnswers.includes(conversationOutput[0].join("\n\n")),
         "CHAT_FIRST_RESULT_LOST",
       );
     } else {
@@ -510,8 +525,8 @@ export function conversationWitnessSelfTest(pass, reject) {
     phase: "running",
     followReady: "false",
     alerts: [],
-    answer: script[0].segments[0].text,
-    text: script[0].segments[0].text,
+    answer: conversationOutput[0][0],
+    text: conversationOutput[0][0],
     retainedAnswers: [],
     ackEnabled: false,
     followEnabled: false,
@@ -529,11 +544,13 @@ export function conversationWitnessSelfTest(pass, reject) {
     { ackEnabled: true },
     { text: ui.text + script[0].segments[1].text },
     { text: ui.text + script[1].segments[0].text },
+    { text: ui.text + conversationOutput[0][1] },
+    { text: ui.text + conversationOutput[1][0] },
   ])
     reject(() =>
       conversationUiWitness({ ...ui, ...changed }, "early", script, 0),
     );
-  const full = script[0].segments.map((s) => s.text).join("\n\n");
+  const full = conversationOutput[0].join("\n\n");
   const result = {
     ...ui,
     phase: "result-ready",
@@ -594,8 +611,8 @@ export function conversationWitnessSelfTest(pass, reject) {
     ...ui,
     handleId: "handle-2",
     turnId: "turn-2",
-    answer: script[1].segments[0].text,
-    text: script[1].segments[0].text,
+    answer: conversationOutput[1][0],
+    text: conversationOutput[1][0],
     retainedAnswers: [full],
   };
   pass(() => conversationUiWitness(second, "early", script, 1, ack));
@@ -885,6 +902,13 @@ function boundedUiObservation(value) {
   return {
     currentPresent: value.currentPresent ?? null,
     phase: text(value.phase),
+    cursor: /^(0|[1-9][0-9]{0,19})$/u.test(value.cursor ?? "")
+      ? value.cursor
+      : null,
+    answerBytes:
+      typeof value.answer === "string"
+        ? Buffer.byteLength(value.answer, "utf8")
+        : null,
     statuses: texts(value.statuses),
     alerts: texts(value.alerts),
     preview: value.preview
@@ -1197,7 +1221,7 @@ export async function runConversationJourney({
     driver.releaseRender(turn.replyId, 1);
     let ui = await waitRead(
       () => readConversationUi(window),
-      (v) => v.answer === turn.segments[0].text,
+      (v) => v.answer === conversationOutput[index][0],
       active,
     );
     conversationUiWitness(ui, "early", script, index, first);

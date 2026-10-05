@@ -4,6 +4,8 @@ import type { Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ChatReadonly } from "../../src/ui/renderer/chat-readonly";
 import { WindowController } from "../../src/ui/renderer/controller";
+import { projectReadConversation } from "../../apps/desktop/read-conversation-projection";
+import type { ReadConversationProjection } from "../../apps/desktop/bridge/read-conversation";
 import type { ProductConfigurationEvidence } from "../../src/pkg/product-settings/contract";
 import { ProductSettingsSchema } from "../../src/pkg/product-settings/contract";
 import { bootstrap, deferred, fixture, settings } from "./fixture";
@@ -191,18 +193,16 @@ describe("ChatReadonly bounded component", () => {
       backendGeneration: "backend",
       ownerId: "owner",
       sessionId: "session",
-      taskId: "task",
+      taskId: operationId,
       taskEpoch: "1",
       participantId: "participant",
       turnId: "turn",
-      operationId,
+      operationId: "55555555-5555-4555-8555-555555555555",
       turnGeneration: "1",
     };
-    const view = {
-      kind: "chatgpt.readonly-conversation",
-      operationId,
-      handleId: "handle",
-      binding,
+    const handle = { handleId: "handle", binding };
+    const state: ReadConversationProjection["state"] = {
+      handle,
       conversationId: "conversation",
       phase: "running",
       hasResult: false,
@@ -210,9 +210,13 @@ describe("ChatReadonly bounded component", () => {
       lifecycleSettled: false,
       released: false,
       followReady: false,
-      cursor: "0",
-      frames: [],
     };
+    const projection = (
+      cursor: string,
+      frames: ReadConversationProjection["frames"],
+    ) =>
+      projectReadConversation(operationId, { handle, state, cursor, frames });
+    const view = projection("0", []);
     const first = deferred<unknown>();
     vi.mocked(h.f.api.configure).mockReturnValueOnce(first.promise);
     await act(async () => {
@@ -235,11 +239,31 @@ describe("ChatReadonly bounded component", () => {
     vi.mocked(h.f.api.configure).mockResolvedValueOnce({
       ok: true,
       snapshot: h.configuration,
-      evidence: {
-        ...view,
-        cursor: "1",
-        frames: [{ sequence: "1", delta: "Visible before completion." }],
-      },
+      evidence: projection("1", [
+        { sequence: "1", kind: "response.created", data: {} },
+      ]),
+    });
+    await act(async () => vi.advanceTimersByTimeAsync(250));
+    expect(
+      h.host
+        .querySelector('[aria-label="Current Chat turn"]')
+        ?.getAttribute("data-cursor"),
+    ).toBe("1");
+    expect(
+      h.host.querySelector('[aria-label="Chat answer"]')?.textContent,
+    ).toBe("");
+    vi.mocked(h.f.api.configure).mockResolvedValueOnce({
+      ok: true,
+      snapshot: h.configuration,
+      evidence: projection("4", [
+        { sequence: "2", kind: "response.output_item.added", data: {} },
+        { sequence: "3", kind: "response.content_part.added", data: {} },
+        {
+          sequence: "4",
+          kind: "response.output_text.delta",
+          data: { delta: "Visible before completion." },
+        },
+      ]),
     });
     await act(async () => {
       await vi.advanceTimersByTimeAsync(250);
@@ -247,6 +271,34 @@ describe("ChatReadonly bounded component", () => {
     expect(
       h.host.querySelector('[aria-label="Chat answer"]')?.textContent,
     ).toBe("Visible before completion.");
+    expect(
+      h.host
+        .querySelector('[aria-label="Current Chat turn"]')
+        ?.getAttribute("data-cursor"),
+    ).toBe("4");
+    expect(
+      h.host
+        .querySelector('[aria-label="Current Chat turn"]')
+        ?.getAttribute("data-phase"),
+    ).toBe("running");
+    expect(
+      h
+        .calls()
+        .filter((c) => c.kind === "chatgpt.observe-readonly-conversation"),
+    ).toEqual([
+      {
+        kind: "chatgpt.observe-readonly-conversation",
+        operationId,
+        handleId: "handle",
+        cursor: "0",
+      },
+      {
+        kind: "chatgpt.observe-readonly-conversation",
+        operationId,
+        handleId: "handle",
+        cursor: "1",
+      },
+    ]);
     expect(h.button("Acknowledge result").disabled).toBe(true);
     expect(h.button("Send follow-up").disabled).toBe(true);
     await h.render("conversation-remount");

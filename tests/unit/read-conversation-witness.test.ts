@@ -1,5 +1,10 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  ChatGptPublicTurn,
+  readPublicAssistantMessages,
+} from "../../src/apps/desktop/chatgpt-public-turn";
+import { publicMarkdownBlock } from "../../src/apps/desktop/chatgpt-public-markdown";
 
 // The harness is untyped JS. Exercise its real DOM reader in JSDOM and its
 // observation loop with virtual time; no Electron, browser or provider runs.
@@ -8,6 +13,7 @@ const {
   readConversationUi,
   waitConversationRead,
   conversationScript,
+  conversationOutput,
   conversationId,
   conversationUiWitness,
 } = await import(modulePath);
@@ -48,7 +54,7 @@ function projectTurn() {
     <textarea disabled aria-label="Follow-up message"></textarea>
     <button disabled>Send follow-up</button>`;
   section.querySelector('[aria-label="Chat answer"]')!.textContent =
-    script[0].segments[0].text;
+    conversationOutput[0][0];
   document.body.append(section);
   return script;
 }
@@ -65,6 +71,61 @@ afterEach(() => {
 });
 
 describe("conversation transition observation, synthetic DOM only", () => {
+  it.each([
+    [0, 0],
+    [0, 1],
+    [1, 0],
+    [1, 1],
+  ])(
+    "keeps the independent turn %s segment %s expectation equal to public Markdown",
+    (turn, segment) => {
+      const raw = conversationScript("Synthetic workspace")[turn].segments[
+        segment
+      ];
+      expect(Object.keys(raw).sort()).toEqual(["id", "text"]);
+      const paragraph = document.createElement("p");
+      paragraph.textContent = raw.text;
+      expect(publicMarkdownBlock(paragraph, () => true)).toBe(
+        conversationOutput[turn][segment],
+      );
+    },
+  );
+
+  it("accepts the real public Markdown projection before terminal generation", async () => {
+    preview();
+    const script = projectTurn();
+    const article = document.createElement("article");
+    article.innerHTML = `<div data-message-id="${script[0].replyId}"
+      data-parent-message-id="${script[0].userId}"
+      data-message-author-role="assistant" data-message-channel="final"
+      data-is-streaming="true"><div class="markdown"
+      data-farol-source-profile="farol-controlled-settled-segments-v1">
+      <p data-segment-id="${script[0].segments[0].id}"
+      data-segment-state="settled"></p></div></div>`;
+    article.querySelector("p")!.textContent = script[0].segments[0].text;
+    const messages = readPublicAssistantMessages(
+      [article.firstElementChild!],
+      () => true,
+      publicMarkdownBlock,
+      () => true,
+      true,
+    );
+    const output = new ChatGptPublicTurn(
+      script[0].userId,
+      script[0].replyId,
+      0,
+    ).observe({ userId: script[0].userId, messages, terminal: false }, 0);
+    expect(output.completed).toBe(false);
+    expect(output.items).toHaveLength(1);
+    expect(output.answer).toBe(
+      "The selected file is a read\\-only startup canary\\.",
+    );
+    document.querySelector('[aria-label="Chat answer"]')!.textContent =
+      output.answer;
+    const ui = await readConversationUi(surface);
+    expect(() => conversationUiWitness(ui, "early", script, 0)).not.toThrow();
+  });
+
   it("waits past 5 seconds for the original Send projection, before the 12-second command deadline", async () => {
     const clicks = preview();
     const failure = vi.fn();
@@ -288,7 +349,10 @@ describe("conversation transition observation, synthetic DOM only", () => {
       .querySelector('[aria-label="Current Chat turn"]')!
       .setAttribute("data-phase", "unknown");
     document.querySelector('[aria-label="Chat answer"]')!.textContent =
-      "synthetic-answer-excluded-from-diagnostics";
+      "synthetic-answer-excluded-from-diagnostics😀";
+    document
+      .querySelector('[aria-label="Current Chat turn"]')!
+      .setAttribute("data-cursor", "2");
     const history = document.createElement("section");
     history.setAttribute("aria-label", "Previous turns");
     history.innerHTML =
@@ -304,7 +368,15 @@ describe("conversation transition observation, synthetic DOM only", () => {
     expect(error.message).toContain("CHAT_UI_OUTCOME_UNKNOWN");
     expect(error.message).not.toContain("excluded-from-diagnostics");
     expect(failure.mock.calls[0]?.[0]).toMatchObject({
-      lastUi: { currentPresent: true, phase: "unknown" },
+      lastUi: {
+        currentPresent: true,
+        phase: "unknown",
+        cursor: "2",
+        answerBytes: Buffer.byteLength(
+          "synthetic-answer-excluded-from-diagnostics😀",
+          "utf8",
+        ),
+      },
     });
     expect(JSON.stringify(failure.mock.calls)).not.toContain(
       "excluded-from-diagnostics",
