@@ -22,6 +22,31 @@ launch loader using real disposable files, path substitution and one bounded
 application startup. Authoring or compiling this suite is not native execution
 evidence.
 
+`go-computer-mcp.e2e.mjs` consumes an independently pinned schema-4 candidate:
+
+```sh
+node tests/e2e/go-computer-mcp.e2e.mjs --check \
+  --candidate-root /absolute/preserved/app \
+  --source-sha <40hex> --build-id <64hex>
+```
+
+Replace `--check` with `--run-native` only in the exclusive native lane. The
+runner verifies the build/input/core manifests and every joined production
+source against the candidate's sealed input ledger. It compiles a separate
+recorded test controller; it does not rebuild the candidate. Its source-matched
+DesktopGoCore constructor opens disposable authority and the real Go publisher,
+then the candidate's actual MCP executable serves a bounded legacy stdio client.
+The journey covers catalogue/bootstrap/list/read/search, a hash-bound create/edit,
+duplicate suppression, retained result after reconnect, current authority
+withdrawal, ordinary closure and refusal with the selected backend closed.
+MCP children close through EOF without signal escalation. Go uses the production
+host cleanup and clean-retirement checks; a failed or forced retirement does not
+pass the journey. Failed or uncertain fixtures remain preserved. Reports record
+candidate and controller identities and content-free request progress.
+This is native adapter composition, not normal Electron startup, a tunnel,
+ChatGPT-client, installed workflow or complete network-containment qualification.
+The standalone entry is not registered in an aggregate by this documentation.
+
 Connector mutations have separate lower-layer evidence:
 
 - `TestConnectorV3*` in Computer domain and repository tests checks exact retained
