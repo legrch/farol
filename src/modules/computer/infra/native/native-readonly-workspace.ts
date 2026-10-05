@@ -67,7 +67,6 @@ export const DEFAULT_DENIED_PATHS = Object.freeze([
   ".git",
   ".git-credentials",
   ".netrc",
-  ".npmrc",
   ".pypirc",
   ".docker/config.json",
   ".kube/config",

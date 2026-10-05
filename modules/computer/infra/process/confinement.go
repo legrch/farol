@@ -161,10 +161,13 @@ func comparableOverlap(a, b string) bool {
 
 // Agent stores (.codex/.claude) follow ordinary owner/task scopes, including
 // separate read/write and shell permission and explicit exclusions.
-var credentialStores = []string{".env", ".ssh", ".aws", ".gnupg", ".git-credentials", ".netrc", ".npmrc", ".pypirc", ".config/gh/hosts.yml", ".docker/config.json", ".kube/config", "Library/Keychains"}
+var credentialStores = []string{".env", ".ssh", ".aws", ".gnupg", ".git-credentials", ".netrc", ".pypirc", ".config/gh/hosts.yml", ".docker/config.json", ".kube/config", "Library/Keychains"}
+
+// Repository copies follow ordinary scope; this store is protected only at HOME.
+var homeOnlyCredentialStores = []string{".npmrc"}
 
 func protectedPath(path, home string) bool {
-	for _, store := range credentialStores {
+	for _, store := range slices.Concat(credentialStores, homeOnlyCredentialStores) {
 		if authority.ComparableWithin(filepath.Join(home, store), path) {
 			return true
 		}
@@ -190,7 +193,7 @@ func protectedScope(root, home string) bool {
 	if authority.ComparableWithin(root, home) || protectedPath(root, home) {
 		return true
 	}
-	for _, store := range credentialStores {
+	for _, store := range slices.Concat(credentialStores, homeOnlyCredentialStores) {
 		if comparableOverlap(root, filepath.Join(home, store)) {
 			return true
 		}
@@ -294,6 +297,9 @@ func compileSeatbelt(s SeatbeltSelection, command Command) (*seatbeltPlan, error
 	for _, store := range credentialStores {
 		add("subpath", filepath.Join(s.Home, store), &secrets)
 		add("subpath", filepath.Join(scope.Root, store), &secrets)
+	}
+	for _, store := range homeOnlyCredentialStores {
+		add("subpath", filepath.Join(s.Home, store), &secrets)
 	}
 	if s.Git == DenyGit {
 		add("subpath", filepath.Join(scope.Root, ".git"), &secrets)

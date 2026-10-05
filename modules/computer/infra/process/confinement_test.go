@@ -520,7 +520,7 @@ func TestSeatbeltAgentScopesFollowOrdinaryAccess(t *testing.T) {
 						}
 						// Unrelated protected names remain denied at HOME, at the
 						// selected root and nested inside an ordinary agent directory.
-						for _, store := range []string{".env", ".ssh", ".aws", ".gnupg", ".git-credentials", ".netrc", ".npmrc", ".pypirc", ".config/gh/hosts.yml", ".docker/config.json", ".kube/config", "Library/Keychains"} {
+						for _, store := range []string{".env", ".ssh", ".aws", ".gnupg", ".git-credentials", ".netrc", ".pypirc", ".config/gh/hosts.yml", ".docker/config.json", ".kube/config", "Library/Keychains"} {
 							for _, parent := range []string{selection.Home, scope} {
 								if !hasParameterRule(plan, "deny file-read* file-write*", "subpath", parent+"/"+store) {
 									t.Fatal("protected store parameter missing", store)
@@ -573,7 +573,11 @@ func TestSeatbeltAgentScopesRetainRefusalsAndExclusions(t *testing.T) {
 			"grant-excluded-agent": func(s *SeatbeltSelection, c *Command) {
 				s.Snapshot.Participant.Grant.ExcludedPaths = []authority.Exclusion{{WorkspaceID: "work", Path: c.Root}}
 			},
-			"nested-npmrc": func(_ *SeatbeltSelection, c *Command) { c.Cwd += "/nested/.NPMRC" },
+			"home-npmrc": func(s *SeatbeltSelection, c *Command) {
+				c.Root, c.Cwd = s.Home+"/.NPMRC", s.Home+"/.NPMRC"
+				s.Snapshot.Approval.Workspaces[0].Root = c.Root
+				s.Snapshot.Participant.Grant.Workspaces[0].Root = c.Root
+			},
 			"nested-ssh-scope": func(s *SeatbeltSelection, c *Command) {
 				c.Cwd += "/nested/.SSH"
 				s.Snapshot.Participant.Grant.Workspaces[0].Root = c.Cwd
