@@ -101,18 +101,24 @@ task dev
 Farol Dev profile. **Ctrl+C** stops what it started. It does not select the optional
 Go backend recipe below or turn a development build into a package candidate.
 
-| Existing command | Purpose                                                                                                                        |
-| ---------------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| `task test:core` | Generated wire/import checks, root and transitional nested Go race/vet checks, bridge tests and strict TypeScript compilation. |
-| `task ci:fast`   | Complete deterministic source gate, including core, coverage, Hunt, output layout and secret scanning.                         |
-| `task package`   | Build and verify a candidate from exact clean committed bytes.                                                                 |
-| `task run`       | Verify the existing candidate against source and open its private launch snapshot.                                             |
-| `task test:e2e`  | Separate packaged Electron checks with explicit display/focus requirements.                                                    |
+| Existing command        | Purpose                                                                                                                        |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `task test:unit`        | Unit/component selection across TypeScript, React and Go.                                                                      |
+| `task test:integration` | Module, adapter, process and native tests, excluding the unit selection.                                                       |
+| `task test:fast`        | Unit/component plus four explicitly selected browser-free integration files.                                                   |
+| `task test:core`        | Generated wire/import checks, root and transitional nested Go race/vet checks, bridge tests and strict TypeScript compilation. |
+| `task ci:fast`          | Complete deterministic source gate, including core, coverage, Hunt, output layout and secret scanning.                         |
+| `task package`          | Build and verify a candidate from exact clean committed bytes.                                                                 |
+| `task run`              | Verify the existing candidate against source and open its private launch snapshot.                                             |
+| `task test:e2e`         | Separate packaged Electron checks with explicit display/focus requirements.                                                    |
 
-The proposed test-command registry is not adopted. In the current
-[`package.json`](package.json), `npm run test:unit` selects **both** `tests/unit`
-and `tests/integration`; it is not a unit-only gate. Use the actual
-[`Taskfile.yml`](Taskfile.yml) and [testing policy](docs/testing.md).
+The three scoped commands accept `-- --list` to show exact files, packages and
+prerequisites without running tests. Their npm aliases use the same selector.
+Selection follows reviewed behavior, including corrections to legacy folder names.
+They require the declared Node and Go toolchains and installed dependencies; they
+do not download tools or build a candidate. Full `task test` and `task qualify:live`
+are still target contracts, not implemented aggregates. Existing `task test:e2e`
+keeps its packaged Electron meaning. See the [testing policy](docs/testing.md).
 
 The [repository checkpoint policy](AGENTS.md) permits targeted verification,
 self-review and `git diff --check`, followed by an owned-only checkpoint commit.

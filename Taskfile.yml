@@ -17,6 +17,21 @@ tasks:
     cmds:
       - /usr/bin/python3 -I ./scripts/assert-owner-untouched.py -- node tooling/check-core.mjs
 
+  test:unit:
+    desc: Unit/component selection across TypeScript, React and Go; --list shows the plan
+    cmds:
+      - /usr/bin/python3 -I ./scripts/assert-owner-untouched.py -- node tooling/test-scopes.mjs --scope=unit {{.CLI_ARGS}}
+
+  test:integration:
+    desc: Module, process and native integration without repeating unit suites
+    cmds:
+      - /usr/bin/python3 -I ./scripts/assert-owner-untouched.py -- node tooling/test-scopes.mjs --scope=integration {{.CLI_ARGS}}
+
+  test:fast:
+    desc: Unit/component plus four explicit browser-free integration files
+    cmds:
+      - /usr/bin/python3 -I ./scripts/assert-owner-untouched.py -- node tooling/test-scopes.mjs --scope=fast {{.CLI_ARGS}}
+
   dev:
     # The owner's one development command: pick the declared toolchain, make
     # sure dependencies match the lock, build whatever is on disk right now

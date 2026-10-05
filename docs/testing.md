@@ -1,5 +1,72 @@
 # Farol Next GUI test policy
 
+## Source test scopes
+
+`task test:unit`, `task test:integration` and `task test:fast` use
+`tooling/test-scope-plan.mjs` and `tooling/test-scopes.mjs`. Each accepts
+`-- --list` for a read-only JSON plan. The npm aliases use the same runner.
+
+- **Unit:** TypeScript policies/components, React component tests, bounded Hunt
+  properties, and Go app/domain plus IPC value/codec tests. Static source checks
+  remain source evidence, even when their old path says `integration`.
+- **Integration:** actual module/adapter collaboration, process/filesystem/native
+  tests, architecture and wire checks, transitional native-release Go tests, and
+  the separate disposable ordinary-Git reference fixture. Whole mixed files stay
+  here. Pure test files selected as unit are not repeated.
+- **Fast:** the complete unit selection plus exactly `chat-turn`, `agent-delivery`,
+  `context-continuity` and `codex-caller-relay-receipt`. These four production
+  collaborations use memory repositories or protocol doubles and no browser.
+
+Discovery accounts for test files under the declared source roots. Reviewed
+exceptions correct legacy folder placement; unknown locations, missing declared
+files and empty suites fail closed. New or changed tests need a scope review.
+Remaining mixed integration files are classified conservatively; their folder
+does not upgrade a fixture into native or product evidence.
+Standalone `.e2e.mjs` native/browser adapter witnesses retain their existing
+explicit entrypoints and are not yet part of these registered source scopes.
+Their further classification and inclusion remain part of the complete test
+contract; the new integration command does not claim to cover them implicitly.
+
+The runner requires Node 24.20.0 or 26.7.0, Go 1.26.2 and already-installed local
+dependencies. `FAROL_TEST_GO` may name the local Go executable. Go toolchain/module
+downloads are disabled. Integration Vitest files run in serial groups of at most
+16 files, each with a five-minute deadline. This prevents the combined runtime of
+several compiler/native suites from exhausting one collection-wide deadline.
+Each suite has a declared deadline; suites run once in
+sequence, stopping on the first failure or unknown terminal. Cleanup observes the
+exact owned child and permits at most one bounded termination request. Unknown
+children remain recorded and must be reconciled before another native run.
+Catchable SIGINT/SIGTERM stops further issuance and uses that same bounded cleanup.
+Uncatchable termination and descendant-process cleanup are not proven by a parent
+terminal; an interrupted receipt cannot establish that those processes stopped.
+
+Reports under `_output/evidence/test-scopes/<attempt>/report.json` retain the
+selection, literal commands, child terminals, logs, selected/executed suite counts,
+passed/failed/blocked/not-run suites and actual test counts. Go counts include
+subtests. The runner checks exact Vitest files and Go packages rather than treating
+exit zero as proof of selection. Zero execution, incomplete reports and selection
+changes fail. A prerequisite failure is `BLOCKED` with zero executed suites.
+The selection digest binds test/selector bytes, not all production source or a
+candidate; reports explicitly describe current working-tree evidence and host
+platform. Integration build tests can replace disposable `_output/build` bytes;
+preserved candidates must remain in their separate evidence directories.
+Complete assertion-failure reports retain their actual counts. Missing, unfinished
+or invalid reports leave counts explicitly unavailable; pending Vitest assertions
+are not relabelled as skipped tests.
+
+These are provider-free source scopes. An environment allowlist removes inherited
+provider credentials, proxy settings and Node injection flags. It is not a sandbox:
+normal HOME and host executables remain available, and complete browser, Node, Go
+and descendant-process egress containment is not established. Do not describe these
+reports as hermetic assembled E2E or live-provider compatibility.
+
+Existing `task ci`, `task ci:fast`, `task test:core`, coverage and package/native
+wrappers keep their prior checks. `task test:e2e` still means the existing packaged
+Electron lane below. The broader `task test` and `task qualify:live` contracts are
+not implemented aggregates yet; assembling their declared prerequisites, complete
+case mappings and containment evidence remains open. No alias silently builds a
+candidate, omits a native prerequisite or consumes provider quota.
+
 ## Evidence hierarchy
 
 Electron tests should not interrupt the owner's desktop merely because they exercise

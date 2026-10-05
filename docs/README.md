@@ -66,13 +66,17 @@ accepted clean bytes, explicit owner promotion and onboarding:
 `task dev` builds current development files. `task test:core` checks generated
 wire, import boundaries, Go race/vet and the TypeScript bridge. Full `task ci:fast`
 includes Hunt and requires **clean committed source**; targeted WIP checks do not
-replace it. Current `AGENTS.md` still requires the full gate before commit. The
-ordering conflict remains for the repository maintainer to resolve; these pages
-and `standalone-build.md` grant no checkpoint-commit exception.
+replace it. Current `AGENTS.md` permits a coherent checkpoint after targeted
+verification, self-review and diff checking; a frozen integration candidate needs
+the applicable aggregate and independent review gates.
 
-The proposed test-command registry is unadopted. `npm run test:unit` currently
-runs both `tests/unit` and `tests/integration`; no unit-only meaning is implied.
-Use the existing [Taskfile](../Taskfile.yml) and [npm scripts](../package.json).
+`task test:unit`, `task test:integration` and `task test:fast` now select explicit
+source scopes across TypeScript, React and Go, with exact execution reports.
+Their npm aliases use the same runner. These are not assembled-product or full
+containment claims. `task test` and `task qualify:live` remain target contracts;
+existing `task test:e2e` retains its packaged Electron meaning. See the
+[scope and evidence rules](testing.md#source-test-scopes),
+[Taskfile](../Taskfile.yml) and [npm scripts](../package.json).
 
 [The optional declared Go recipe](../README.md#optional-declared-go-backend-build)
 uses `task package -- --go-inputs=...` with approved local SDK/module inputs. It is

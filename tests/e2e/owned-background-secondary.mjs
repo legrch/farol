@@ -20,6 +20,7 @@ export async function waitForOwnedSecondary(
     timeoutMs = 20000,
     cleanupTimeoutMs = 10000,
     onObservation = () => {},
+    stopSignal,
   } = {},
 ) {
   const onError = () => {};
@@ -36,10 +37,24 @@ export async function waitForOwnedSecondary(
     });
     child.on("error", onError);
   });
-  const initial = await within(terminal, timeoutMs);
+  let onStop;
+  const stopped = new Promise((resolve) => {
+    onStop = () => resolve(null);
+    if (stopSignal?.aborted) onStop();
+    else stopSignal?.addEventListener("abort", onStop, { once: true });
+  });
+  let initial;
+  try {
+    initial = await within(Promise.race([terminal, stopped]), timeoutMs);
+  } finally {
+    stopSignal?.removeEventListener("abort", onStop);
+  }
+  const cancelled = Boolean(stopSignal?.aborted);
+  const cancellation = cancelled ? { cancelled: true } : {};
   if (initial)
     return {
       ...initial,
+      ...cancellation,
       timedOut: false,
       stopRequested: false,
       stopError: null,
@@ -73,12 +88,24 @@ export async function waitForOwnedSecondary(
   });
   const reconciled = await within(terminal, cleanupTimeoutMs);
   if (reconciled)
-    return { ...reconciled, timedOut: true, stopRequested, stopError };
+    return {
+      ...reconciled,
+      ...cancellation,
+      timedOut: !cancelled,
+      stopRequested,
+      stopError,
+    };
 
   // The unknown child stays recorded, and no signal is sent again. Release only
   // this runner's owned pipe handles so its failure can reach a terminal report.
   child.stdout?.destroy();
   child.stderr?.destroy();
   child.unref();
-  return { terminal: false, timedOut: true, stopRequested, stopError };
+  return {
+    terminal: false,
+    ...cancellation,
+    timedOut: !cancelled,
+    stopRequested,
+    stopError,
+  };
 }
