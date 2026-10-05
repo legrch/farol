@@ -45,3 +45,27 @@ Tests use a private injected byte store, without New/native adapter calls, real
 filesystem/profile/process operations, Electron or live state. Targeted CPU/race,
 codec and publication-fault evidence does not prove Darwin persistence/crash
 windows, host cleanup, restart qualification, installation or product acceptance.
+
+`ConnectorProcessReservation(scope)` supplies a source-only `process.Reservation`
+port from this SAME Repository, with no constructor IO and an exact scalar scope
+copy. It uses the existing external-connector-v3 stable operation key shared by
+write/edit, and a separate strict schemaVersion 4 `workspace_connector_process`
+record. Legacy mutation APIs refuse v4; process reservation refuses v1-v3.
+The reservation retains the full host, call, generations, original task binding,
+launch seal, physical root identity, root/cwd, and original deadline. All uint64
+counters are lossless canonical decimal strings, consistent with the access
+owner's full-width counters; this format does not apply v1-v3 safe-integer limits
+or relax the process app's own admission guards. Deadline is a positive signed
+int64 UnixNano decimal string with an exact time roundtrip. There is no ambient
+clock, expiry renewal, command/argv/stdin/output or credential persistence.
+
+Only a new durable create with exact readback returns Reserved. Exact retained
+bytes return Existing, including an independently injected repository lifetime;
+changed scope/intent and a different record kind refuse without replacement.
+Lost publication ACK, readback substitution and post-create cancellation/check
+failure fence the same repository, including ordinary mutation APIs. An EEXIST
+race supplies Existing or refusal/unknown, never a fresh permit. No retry,
+repair, deletion, result, terminal record or retirement acceptance is provided.
+Tests use memory storage and the existing process Service with a fake selected
+child only. Root production registration, native persistence/reopen qualification,
+shell/process execution, Task/provider activation and packaging remain unactivated.
