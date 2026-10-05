@@ -17,7 +17,8 @@ import (
 
 // Composition retains the actual owner receipt; the Chat handoff service owns
 // publication, ACK, terminal and successor policy. No journal projection is
-// promoted to a proof here. The first supported retirement has no Chat turns.
+// promoted to a proof here. Completed Chat turns require exact durable results,
+// explicit delivery ACK, and independently confirmed browser settlement.
 type nativeRetirement struct {
 	mu                         sync.Mutex
 	binding                    chatport.HandoffBinding

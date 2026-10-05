@@ -861,8 +861,23 @@ scenario; production receives no expected answer. Focused evidence includes:
 | Pure harness                | `go-core-startup.e2e.mjs --self-test`                                                                                 | Exact logical ownership, physical Send counts, result ACK and Go settlement/release witnesses |
 | Assembled controlled native | `go-core-startup.e2e.mjs --chat-two-turn --run-native` with exact candidate/build identity                            | Normal startup and both UI turns; ordinary Quit remains a separately failed gate              |
 
-Answers remain bounded to 8192 UTF-8 bytes and retained only in the current
-backend/window lifetime. Production translations and output profiles remain
+That candidate retained answers only in the current backend/window lifetime.
+Current source instead composes the bounded native result store, with the same
+8192-byte answer limit, 1024-result limit and 8 MiB aggregate payload limit.
+Exact terminal publications enter journal v3 and clean-retirement receipts;
+retirement re-reads the original bytes and metadata before publication. No
+result, ACK, settled worker or Send authority is inferred from orphan files.
+
+`boot/retainednative_test.go` exercises actual Go startup, two completed and
+acknowledged turns, retirement/ACK and two successor boots, including an empty
+intervening retirement. Both original results remain exactly readable from
+storage; successor browser-command count is zero. Browser observations and
+host terminal/drain facts are explicit fixtures. Missing/corrupt stores refuse
+startup without repair. This is native composition evidence, not an app restart
+or a current-authorized historical UI read. Open never creates an absent result
+store, so older memory-only profiles have no automatic migration path.
+
+Production translations and output profiles remain
 unqualified. External Responses new-user-turn delivery/settlement and selected
 Codex compatibility are separate from both this UI journey and its existing
 same-turn tool-output continuation. No second registry or model engine is added.

@@ -37,7 +37,7 @@ type NativeRuntime struct {
 	browser          *BrowserExchange
 	conversations    *ChatIngress
 	chatComputer     *ChatComputerIngress
-	results          *results.Memory
+	results          *results.Native
 	profile          *QualifiedProfile
 	store            *accessrepo.Store
 	journal          *chatrepo.Repository
@@ -111,7 +111,7 @@ func NewNativeRuntime(ctx context.Context, launch NativeLaunch, generation strin
 	if err != nil {
 		return fail(err)
 	}
-	runtime.results, err = results.NewMemory(lifetime, scope, results.TextLimits())
+	runtime.results, err = results.NewNative(ctx, lifetime, results.Root{Path: chat.Path, ProfileID: chat.ProfileID, Identity: chatport.JournalRoot{Device: chat.Device, Inode: chat.Inode, OwnerUID: chat.OwnerUID}}, scope, results.TextLimits(), launch.StoreMode)
 	if err != nil {
 		return fail(err)
 	}

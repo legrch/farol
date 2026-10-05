@@ -7,10 +7,13 @@ journal claim, private admitted handles and one-shot browser intent/settlement.
 See [ADMISSION.md](ADMISSION.md) for the published guard and
 [LIFECYCLE.md](LIFECYCLE.md) for actual owner semantics and constructor requirements.
 Normal core-enabled Desktop now composes the native journal, browser exchange,
-in-memory results and React conversation facade. The
+bounded durable results and React conversation facade. The
 [controlled normal desktop witness](../../docs/desktop-core.md#controlled-normal-desktop-chat)
-proves two deliberate turns within one backend lifetime. Durable answer recovery,
-provider-used clean retirement, production control/output profiles and ordinary
+proves two deliberate turns within one backend lifetime. Native Go tests also
+cover exact stored answers across clean successor boots, including an intervening
+empty retirement. Browser/host terminal facts are fixtures in those tests;
+current-authorized historical UI reads and app restart remain open. Production
+control/output profiles and ordinary
 next-user-turn support in the external Responses adapter remain open. Existing
 TypeScript routes outside this accepted slice retain their separate consumers.
 
