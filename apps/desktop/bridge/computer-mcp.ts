@@ -3,6 +3,7 @@ import { McpServer, type CallToolResult } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import { BridgeError } from "./client.ts";
 import { ComputerBridge, type ComputerCall } from "./computer.ts";
+import type { ConnectorMutationBridge } from "./connector-mutation.ts";
 import type { ConnectorVerificationBridge } from "./connector-verification.ts";
 import {
   validate,
@@ -25,6 +26,7 @@ export type GoComputerMcpOptions = Readonly<{
   fence: GoComputerMcpFence;
   lifecycle?: GoComputerMcpLifecycle;
   verification?: Pick<ConnectorVerificationBridge, "verify">;
+  mutations?: Pick<ConnectorMutationBridge, "write" | "edit" | "read">;
 }>;
 
 const IdentifierSchema = z.string().min(1).max(120);
@@ -74,6 +76,50 @@ const ReadInputSchema = z.strictObject({
   relativePath: z.string().refine((value) => relativePath(value, false)),
   offset: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional(),
   length: z.number().int().min(4).max(262144).optional(),
+});
+const MutationTextSchema = z
+  .string()
+  .refine(
+    (value) =>
+      validUnicode(value) &&
+      !value.includes("\0") &&
+      Buffer.byteLength(value, "utf8") <= 262144,
+  );
+const MutationTargetSchema = {
+  operationId: z.string().refine((value) => validate("id", value)),
+  workspaceId: IdentifierSchema,
+  relativePath: z.string().refine((value) => relativePath(value, false)),
+};
+const HashSchema = z.string().regex(/^[a-f0-9]{64}$/u);
+const WriteInputSchema = z.strictObject({
+  ...MutationTargetSchema,
+  content: MutationTextSchema,
+  expectedSHA256: HashSchema.optional(),
+});
+const EditInputSchema = z.strictObject({
+  ...MutationTargetSchema,
+  expectedSHA256: HashSchema,
+  edits: z
+    .array(
+      z
+        .strictObject({
+          oldText: MutationTextSchema,
+          newText: MutationTextSchema,
+        })
+        .refine((edit) => edit.oldText !== "" && edit.oldText !== edit.newText),
+    )
+    .min(1)
+    .max(256)
+    .refine(
+      (edits) =>
+        edits.reduce(
+          (bytes, edit) =>
+            bytes +
+            Buffer.byteLength(edit.oldText, "utf8") +
+            Buffer.byteLength(edit.newText, "utf8"),
+          0,
+        ) <= 262144,
+    ),
 });
 const annotations = {
   readOnlyHint: true,
@@ -149,13 +195,23 @@ export function createGoComputerMcpServer(
   const run = async (
     signal: AbortSignal,
     operation: (call: ComputerCall) => Promise<{ readonly status: string }>,
+    operationId?: string,
   ): Promise<CallToolResult> => {
     const call = Object.freeze({
       requestId: randomUUID(),
       context: selectedContext,
     });
     const failure = (status: "refused" | "unknown", code: string) =>
-      encode({ ...call, status, code, retry: "never" }, true);
+      encode(
+        {
+          ...call,
+          ...(operationId === undefined ? {} : { operationId }),
+          status,
+          code,
+          retry: "never",
+        },
+        true,
+      );
     if (signal.aborted)
       return failure("refused", "computer_mcp_aborted_before_dispatch");
     let release: (() => void) | null | undefined;
@@ -210,6 +266,7 @@ export function createGoComputerMcpServer(
           ? encode(
               {
                 ...call,
+                ...(operationId === undefined ? {} : { operationId }),
                 status: error.state,
                 code: error.code,
                 retry: "never",
@@ -292,12 +349,77 @@ export function createGoComputerMcpServer(
     );
   }
 
+  if (options.mutations) {
+    const mutations = options.mutations;
+    const effectAnnotations = {
+      ...annotations,
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+    };
+    server.registerTool(
+      "computer_write",
+      {
+        title: "Write an approved workspace file",
+        description:
+          "Write through the selected Go owner. Supply a new operationId; never retry an effect. Without expectedSHA256 this is create-only; replacement requires the exact preimage hash. Content is bounded to 256 KiB of UTF-8. UNKNOWN returns operationId for computer_mutation_read. memory_only is not durable publication.",
+        inputSchema: WriteInputSchema,
+        annotations: effectAnnotations,
+      },
+      async ({ operationId, expectedSHA256, ...input }, ctx) =>
+        run(
+          ctx.mcpReq.signal,
+          (call) =>
+            mutations.write(
+              {
+                ...input,
+                ...(expectedSHA256 === undefined ? {} : { expectedSHA256 }),
+              },
+              operationId,
+              call,
+            ),
+          operationId,
+        ),
+    );
+    server.registerTool(
+      "computer_edit",
+      {
+        title: "Edit an approved workspace file",
+        description:
+          "Apply 1 to 256 exact unique text replacements through the selected Go owner with the exact expectedSHA256. Supply a new operationId; never retry an effect. Total edit text is bounded to 256 KiB of UTF-8. UNKNOWN returns operationId for computer_mutation_read. memory_only is not durable publication.",
+        inputSchema: EditInputSchema,
+        annotations: effectAnnotations,
+      },
+      async ({ operationId, ...input }, ctx) =>
+        run(
+          ctx.mcpReq.signal,
+          (call) => mutations.edit(input, operationId, call),
+          operationId,
+        ),
+    );
+    server.registerTool(
+      "computer_mutation_read",
+      {
+        title: "Read a retained workspace mutation",
+        description:
+          "Read one existing operationId and exact workspace/path through the selected Go owner without executing or retrying the mutation. Original origin and publication remain unchanged, including after reconnect. memory_only is not durable publication.",
+        inputSchema: z.strictObject(MutationTargetSchema),
+        annotations,
+      },
+      async (input, ctx) =>
+        run(
+          ctx.mcpReq.signal,
+          (call) => mutations.read(input, call),
+          input.operationId,
+        ),
+    );
+  }
+
   server.registerTool(
     "computer_workspace_catalogue",
     {
       title: "Find available workspaces",
-      description:
-        "Find exact task-accessible workspace IDs and approved roots in one Go catalogue operation. Call without arguments; do not guess IDs or roots. This bounded catalogue does not read file contents or grant authority. This connector supports catalogue, bootstrap, list, read and search; writes, shell and task tools are unavailable.",
+      description: `Find exact task-accessible workspace IDs and approved roots in one Go catalogue operation. Call without arguments; do not guess IDs or roots. This bounded catalogue does not read file contents or grant authority. ${options.mutations ? "This connector supports catalogue, bootstrap, list, read, search and bounded mutations." : "This connector supports catalogue, bootstrap, list, read and search; writes are unavailable."} Shell and task tools are unavailable.`,
       inputSchema: z.strictObject({}),
       annotations,
     },

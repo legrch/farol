@@ -71,6 +71,19 @@ for (const [name, def] of Object.entries(schema.definitions)) {
   go += `type ${name} struct {\n`;
   ts += `export interface ${name} {\n`;
   for (const [field, spec] of Object.entries(def.fields)) {
+    if (spec.minItems !== undefined || spec.maxItems !== undefined) {
+      const min = spec.minItems ?? 0;
+      const max = spec.maxItems ?? (spec.type === "text[]" ? 64 : 128);
+      if (
+        !spec.type.endsWith("[]") ||
+        !Number.isSafeInteger(min) ||
+        !Number.isSafeInteger(max) ||
+        min < 0 ||
+        max < min ||
+        max > 4096
+      )
+        throw Error(`invalid array limits: ${name}.${field}`);
+    }
     const goType =
       goTypes[spec.type] ??
       (spec.type.endsWith("[]") ? `[]${spec.type.slice(0, -2)}` : spec.type);

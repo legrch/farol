@@ -165,6 +165,9 @@ func NewNativeRuntime(ctx context.Context, launch NativeLaunch, generation strin
 		if _, _, err := qualified.Roots(); err != nil {
 			return fail(err)
 		}
+		// External MCP and Settings share the same mutation journal, native owner,
+		// retained attempt map and retirement fence. No second executor is opened.
+		runtime.connector.mutations = runtime.mutations
 	}
 	if runtime.retirement != nil {
 		runtime.historyAuthority, err = newHistoryReadAuthority(lifetime, chatport.HistoryReadScope{ProfileID: scope.ProfileID, BackendGeneration: scope.BackendGeneration, OwnerID: launch.OwnerID}, func() error {

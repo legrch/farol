@@ -75,7 +75,10 @@
     "computer.connector.close": "effect",
     "computer.connector.verify": "read",
     "computer.connector.verification": "read",
-    "computer.workspace.search": "read"
+    "computer.workspace.search": "read",
+    "computer.workspace.write": "effect",
+    "computer.workspace.edit": "effect",
+    "computer.workspace.mutation.read": "read"
   },
   "definitions": {
     "Context": {
@@ -4496,6 +4499,146 @@
         "retry": {
           "type": "text",
           "values": ["never"]
+        }
+      }
+    },
+    "ComputerConnectorWrite": {
+      "type": "object",
+      "fields": {
+        "execution": {
+          "type": "ComputerConnectorExecution"
+        },
+        "callId": {
+          "type": "id"
+        },
+        "workspaceId": {
+          "type": "id"
+        },
+        "relativePath": {
+          "type": "string",
+          "minBytes": 1,
+          "maxBytes": 4096
+        },
+        "content": {
+          "type": "string",
+          "maxBytes": 262144
+        },
+        "expectedSHA256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "optional": true
+        }
+      }
+    },
+    "ComputerConnectorEdit": {
+      "type": "object",
+      "fields": {
+        "execution": {
+          "type": "ComputerConnectorExecution"
+        },
+        "callId": {
+          "type": "id"
+        },
+        "workspaceId": {
+          "type": "id"
+        },
+        "relativePath": {
+          "type": "string",
+          "minBytes": 1,
+          "maxBytes": 4096
+        },
+        "expectedSHA256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "edits": {
+          "type": "ComputerTextEdit[]",
+          "minItems": 1,
+          "maxItems": 256
+        }
+      }
+    },
+    "ComputerConnectorMutationRead": {
+      "type": "object",
+      "fields": {
+        "execution": {
+          "type": "ComputerConnectorExecution"
+        },
+        "callId": {
+          "type": "id"
+        },
+        "workspaceId": {
+          "type": "id"
+        },
+        "relativePath": {
+          "type": "string",
+          "minBytes": 1,
+          "maxBytes": 4096
+        },
+        "operationId": {
+          "type": "id"
+        }
+      }
+    },
+    "ComputerConnectorMutationOrigin": {
+      "type": "object",
+      "fields": {
+        "binding": {
+          "type": "ComputerConnectorBinding"
+        },
+        "execution": {
+          "type": "ComputerConnectorExecution"
+        },
+        "callId": {
+          "type": "id"
+        },
+        "operation": {
+          "type": "string",
+          "values": ["write", "edit"]
+        }
+      }
+    },
+    "ComputerConnectorMutationResponse": {
+      "type": "object",
+      "fields": {
+        "execution": {
+          "type": "ComputerConnectorExecution"
+        },
+        "callId": {
+          "type": "id"
+        },
+        "workspaceId": {
+          "type": "id"
+        },
+        "relativePath": {
+          "type": "string",
+          "minBytes": 1,
+          "maxBytes": 4096
+        },
+        "operationId": {
+          "type": "id"
+        },
+        "computerGeneration": {
+          "type": "decimal"
+        },
+        "origin": {
+          "type": "ComputerConnectorMutationOrigin"
+        },
+        "phase": {
+          "type": "string",
+          "values": ["completed", "failed", "outcome_unknown"]
+        },
+        "publication": {
+          "type": "string",
+          "values": ["durable", "memory_only"]
+        },
+        "receipt": {
+          "type": "ComputerMutationReceipt",
+          "optional": true
+        },
+        "failure": {
+          "type": "ComputerMutationFailure",
+          "optional": true
         }
       }
     }

@@ -12,6 +12,14 @@ import (
 	state "github.com/legrch/farol/modules/computer/domain/mutation"
 )
 
+// The engine may have admitted or completed an effect before an error reaches
+// composition (for example, final disclosure after authority expires). Only its
+// retained result can settle that attempt; a typed policy error alone cannot.
+type connectorMutationUnsettled struct{ cause error }
+
+func (e *connectorMutationUnsettled) Error() string { return "connector_mutation_unsettled" }
+func (e *connectorMutationUnsettled) Unwrap() error { return e.cause }
+
 func connectorMutationTarget(op mutationct.Operation) (string, state.Kind) {
 	switch v := op.(type) {
 	case mutationct.Write:
@@ -81,6 +89,9 @@ func (s *computerConnector) mutate(ctx context.Context, slot *connectorSlot, ope
 	}
 	result, err := mutationct.NewConnectorExecution(service).Execute(ctx, request)
 	finish(service, err, settledConnectorMutation(result, err))
+	if err != nil {
+		return nil, &connectorMutationUnsettled{cause: err}
+	}
 	return result, err
 }
 

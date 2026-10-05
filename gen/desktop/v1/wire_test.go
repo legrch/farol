@@ -71,3 +71,25 @@ func TestMethodAdvertisementsRemainClosedAndBounded(t *testing.T) {
 		t.Fatal("workspace ID bound expanded")
 	}
 }
+
+func TestConnectorEditDeclaredArrayLimitDoesNotWidenOtherArrays(t *testing.T) {
+	for _, count := range []int{0, 128, 129, 256, 257} {
+		edits := make([]ComputerTextEdit, count)
+		for i := range edits {
+			edits[i] = ComputerTextEdit{OldText: "old", NewText: "new"}
+		}
+		request := ComputerConnectorEdit{Execution: ComputerConnectorExecution{OwnerId: "owner", SessionId: "session", TaskId: "task", TaskEpoch: "1", ParticipantId: "participant", TurnId: "turn", Generation: "1"}, CallId: "call", WorkspaceId: "workspace", RelativePath: "note.md", ExpectedSHA256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Edits: edits}
+		raw, _ := json.Marshal(request)
+		if (Validate("ComputerConnectorEdit", raw) == nil) != (count > 0 && count <= 256) {
+			t.Fatalf("declared field bound at %d", count)
+		}
+		raw, _ = json.Marshal(edits)
+		if (Validate("ComputerTextEdit[]", raw) == nil) != (count <= 128) {
+			t.Fatalf("undeclared array bound widened at %d", count)
+		}
+	}
+	// The custom field path must preserve the same depth bound as every array.
+	if valid("ComputerConnectorEdit", map[string]interface{}{"execution": map[string]interface{}{}, "edits": []interface{}{}}, 32) {
+		t.Fatal("declared array bypassed depth bound")
+	}
+}

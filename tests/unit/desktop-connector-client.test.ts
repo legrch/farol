@@ -70,7 +70,10 @@ const methods = [
   "computer.workspace.search",
   "computer.workspace.catalogue",
   "computer.workspace.bootstrap",
+  "computer.workspace.mutation.read",
+  "computer.connector.verify",
 ];
+const effectMethods = ["computer.workspace.write", "computer.workspace.edit"];
 function identity(): Identity {
   return {
     protocolMajor,
@@ -79,7 +82,7 @@ function identity(): Identity {
     profileId: "profile",
     backendGeneration: "backend",
     maxFrameBytes,
-    capabilities: ["core.status", ...methods],
+    capabilities: ["core.status", ...methods, ...effectMethods],
   };
 }
 const context = { profileId: "profile", backendGeneration: "backend" };
@@ -98,6 +101,17 @@ function response(id: string, data: Json = {}): object {
     jsonrpc: "2.0",
     id,
     result: { status: "ok", requestId: id, context, data },
+  };
+}
+function effectResponse(
+  id: string,
+  operationId: string,
+  status: "ok" | "refused" | "unknown" | "unavailable" | "unsupported" = "ok",
+) {
+  return {
+    jsonrpc: "2.0",
+    id,
+    result: { status, requestId: id, operationId, context, data: {} },
   };
 }
 const clients: SocketConnectorClient[] = [];
@@ -267,6 +281,7 @@ it.each([
   {},
   { ...endpoint().binding, token: endpoint().token },
   { ...endpoint().binding, connectorGeneration: 1 },
+  { ...endpoint().binding, operationId: "op" },
 ])("rejects non-exact ACK shape %#", async (ack) => {
   const f = opening();
   const rejected = expect(f.connected).rejects.toMatchObject(
@@ -383,7 +398,6 @@ it.each([
   "core.status",
   "computer.authority.publish",
   "computer.settings.snapshot",
-  "computer.workspace.write",
   "task.create",
   "unknown",
 ])("withholds route %s without a write", async (method) => {
@@ -393,6 +407,325 @@ it.each([
     f.client.request(method, {}, { operationId: "op" }),
   ).rejects.toMatchObject(error("unsupported", "connector_method_unsupported"));
   expect(f.socket.writes).toHaveLength(count);
+});
+
+it.each(methods)("forbids operation IDs on read route %s", async (method) => {
+  const f = await ready();
+  const count = f.socket.writes.length;
+  await expect(
+    f.client.request(method, {}, { operationId: "op" }),
+  ).rejects.toMatchObject(error("refused", "connector_operation_id_forbidden"));
+  expect(f.socket.writes).toHaveLength(count);
+});
+
+it.each(effectMethods)(
+  "requires a caller-selected valid operation ID on %s before submission",
+  async (method) => {
+    const f = await ready();
+    const count = f.socket.writes.length;
+    for (const operationId of [
+      undefined,
+      "",
+      "bad id",
+      "-op",
+      "x".repeat(129),
+      "op\0",
+      "op\n",
+      "op\ud800",
+      null,
+      1,
+    ]) {
+      await expect(
+        f.client.request(method, {}, { operationId: operationId as string }),
+      ).rejects.toMatchObject(
+        error("refused", "connector_operation_id_required"),
+      );
+    }
+    expect(f.socket.writes).toHaveLength(count);
+    const operationId = "a".repeat(128);
+    const pending = f.client.request(method, {}, { id: "valid", operationId });
+    expect(requestAt(f.socket).params.operationId).toBe(operationId);
+    f.socket.receive(effectResponse("valid", operationId));
+    await expect(pending).resolves.toMatchObject({ operationId });
+  },
+);
+
+it.each(effectMethods)(
+  "sends and correlates the outer operation ID on every %s outcome",
+  async (method) => {
+    const f = await ready();
+    for (const status of [
+      "ok",
+      "refused",
+      "unknown",
+      "unavailable",
+      "unsupported",
+    ] as const) {
+      const id = `request-${status}`;
+      const operationId = `caller/${status}:op`;
+      const body = { operationId: "untrusted-body-operation" };
+      const pending = f.client.request(method, body, { id, operationId });
+      expect(requestAt(f.socket)).toEqual({
+        jsonrpc: "2.0",
+        id,
+        method,
+        params: { context, body, operationId },
+      });
+      const ack = effectResponse(id, operationId, status);
+      f.socket.receive(ack);
+      await expect(pending).resolves.toEqual(ack.result);
+      const count = f.socket.writes.length;
+      await expect(
+        f.client.request(method, body, { id: `new-${id}`, operationId }),
+      ).rejects.toMatchObject(error("refused", "duplicate_operation_id"));
+      expect(f.socket.writes).toHaveLength(count);
+    }
+  },
+);
+
+it("never resubmits a pending operation under another request ID or effect method", async () => {
+  const f = await ready();
+  const pending = f.client.request(
+    effectMethods[0]!,
+    {},
+    { id: "write", operationId: "op" },
+  );
+  for (const id of ["write", "edit"]) {
+    await expect(
+      f.client.request(effectMethods[1]!, {}, { id, operationId: "op" }),
+    ).rejects.toMatchObject(error("refused", "duplicate_operation_id"));
+  }
+  expect(f.socket.writes).toHaveLength(3);
+  f.socket.receive(effectResponse("write", "op"));
+  await pending;
+});
+
+it("correlates concurrent effects received out of order", async () => {
+  const f = await ready();
+  const a = f.client.request(
+    effectMethods[0]!,
+    {},
+    { id: "a", operationId: "op-a" },
+  );
+  const b = f.client.request(
+    effectMethods[1]!,
+    {},
+    { id: "b", operationId: "op-b" },
+  );
+  f.socket.emit(
+    "data",
+    Buffer.concat([
+      frame(effectResponse("b", "op-b")),
+      frame(effectResponse("a", "op-a")),
+    ]),
+  );
+  await expect(a).resolves.toMatchObject({
+    requestId: "a",
+    operationId: "op-a",
+  });
+  await expect(b).resolves.toMatchObject({
+    requestId: "b",
+    operationId: "op-b",
+  });
+});
+
+it.each([
+  "missing",
+  "crossed",
+  "invalid",
+  "request",
+  "context",
+  "fault",
+  "malformed",
+])("leaves both effects unknown and stops on a %s effect ACK", async (kind) => {
+  const f = await ready();
+  const a = f.client.request(
+    effectMethods[0]!,
+    {},
+    { id: "a", operationId: "op-a" },
+  );
+  const b = f.client.request(
+    effectMethods[1]!,
+    {},
+    { id: "b", operationId: "op-b" },
+  );
+  const rejectedA = expect(a).rejects.toMatchObject({ state: "unknown" });
+  const rejectedB = expect(b).rejects.toMatchObject({ state: "unknown" });
+  const ack = effectResponse(
+    "a",
+    kind === "crossed" ? "op-b" : kind === "invalid" ? "" : "op-a",
+  );
+  const { operationId: _omitted, ...withoutOperation } = ack.result;
+  f.socket.receive(
+    kind === "fault"
+      ? {
+          jsonrpc: "2.0",
+          id: "a",
+          error: { code: -32602, message: "private peer detail" },
+        }
+      : {
+          ...ack,
+          result:
+            kind === "missing"
+              ? withoutOperation
+              : {
+                  ...ack.result,
+                  ...(kind === "request" ? { requestId: "b" } : {}),
+                  ...(kind === "context"
+                    ? { context: { ...context, backendGeneration: "other" } }
+                    : {}),
+                  ...(kind === "malformed" ? { unexpected: true } : {}),
+                },
+        },
+  );
+  await rejectedA;
+  await rejectedB;
+  expect(f.socket.destroyed).toBe(true);
+  await expect(f.client.connect()).rejects.toMatchObject(
+    error("refused", "connector_already_used"),
+  );
+  expect(f.factory).toHaveBeenCalledTimes(1);
+  expect(f.socket.writes).toHaveLength(4);
+});
+
+it("forbids operation IDs in the handshake outcome", async () => {
+  const f = opening();
+  f.socket.receive(endpoint().binding);
+  expect(requestAt(f.socket).params).not.toHaveProperty("operationId");
+  const rejected = expect(f.connected).rejects.toMatchObject(
+    error("unknown", "crossed_response_context"),
+  );
+  f.socket.receive({
+    ...effectResponse(requestAt(f.socket).id, "op"),
+    result: {
+      ...effectResponse(requestAt(f.socket).id, "op").result,
+      data: identity(),
+    },
+  });
+  await rejected;
+  expect(f.socket.destroyed).toBe(true);
+});
+
+it("retains submitted operation IDs through backpressure without consuming unsent ones", async () => {
+  const f = await ready();
+  f.socket.acceptWrites = false;
+  const first = f.client.request(
+    effectMethods[0]!,
+    {},
+    { id: "first", operationId: "op-first" },
+  );
+  await expect(
+    f.client.request(
+      effectMethods[1]!,
+      {},
+      { id: "duplicate", operationId: "op-first" },
+    ),
+  ).rejects.toMatchObject(error("refused", "duplicate_operation_id"));
+  await expect(
+    f.client.request(
+      effectMethods[1]!,
+      {},
+      { id: "not-sent", operationId: "op-next" },
+    ),
+  ).rejects.toBeInstanceOf(RequestNotSentError);
+  expect(f.socket.writes).toHaveLength(3);
+  f.socket.receive(effectResponse("first", "op-first"));
+  await first;
+  f.socket.acceptWrites = true;
+  f.socket.emit("drain");
+  const next = f.client.request(
+    effectMethods[1]!,
+    {},
+    { id: "not-sent", operationId: "op-next" },
+  );
+  f.socket.receive(effectResponse("not-sent", "op-next"));
+  await expect(next).resolves.toMatchObject({ operationId: "op-next" });
+  expect(f.socket.writes).toHaveLength(4);
+});
+
+it.each(["error", "end", "close", "write-throw", "timeout", "client-close"])(
+  "keeps a submitted effect unknown on %s without retry or reconnect",
+  async (event) => {
+    const f = await ready();
+    if (event === "write-throw") f.socket.writeFailure = true;
+    const pending = f.client.request(
+      effectMethods[0]!,
+      {},
+      { id: "write", operationId: "op", timeoutMs: 20 },
+    );
+    const rejected = expect(pending).rejects.toMatchObject({
+      state: "unknown",
+    });
+    if (event === "timeout") await vi.advanceTimersByTimeAsync(20);
+    else if (event === "client-close") await f.client.close();
+    else if (event !== "write-throw") f.socket.emit(event);
+    await rejected;
+    f.socket.receive(effectResponse("write", "op")); // A late ACK cannot recover the stream.
+    await expect(
+      f.client.request(
+        effectMethods[1]!,
+        {},
+        { id: "retry", operationId: "op" },
+      ),
+    ).rejects.toMatchObject(error("unavailable", "connector_unavailable"));
+    await expect(f.client.connect()).rejects.toMatchObject(
+      error("refused", "connector_already_used"),
+    );
+    expect(f.factory).toHaveBeenCalledTimes(1);
+    expect(f.socket.writes).toHaveLength(3);
+  },
+);
+
+it("stops on a late duplicate effect ACK and leaves another submitted effect unknown", async () => {
+  const f = await ready();
+  const a = f.client.request(
+    effectMethods[0]!,
+    {},
+    { id: "a", operationId: "op-a" },
+  );
+  f.socket.receive(effectResponse("a", "op-a"));
+  await a;
+  const b = f.client.request(
+    effectMethods[1]!,
+    {},
+    { id: "b", operationId: "op-b" },
+  );
+  const rejected = expect(b).rejects.toMatchObject(
+    error("unknown", "crossed_response_id"),
+  );
+  f.socket.receive(effectResponse("a", "op-a"));
+  await rejected;
+  expect(f.socket.destroyed).toBe(true);
+  expect(f.socket.writes).toHaveLength(4);
+});
+
+it("bounds submitted operation history within the 4096-request stream budget", async () => {
+  const f = await ready();
+  f.socket.onWrite = (bytes) => {
+    const request = decode(bytes) as Request;
+    f.socket.receive(effectResponse(request.id, request.params.operationId!));
+  };
+  for (let i = 0; i < 4095; i++)
+    await f.client.request(
+      effectMethods[i % 2]!,
+      {},
+      { id: `r${i}`, operationId: `op${i}` },
+    );
+  await expect(
+    f.client.request(
+      effectMethods[0]!,
+      {},
+      { id: "overflow", operationId: "op0" },
+    ),
+  ).rejects.toMatchObject(error("refused", "duplicate_operation_id"));
+  await expect(
+    f.client.request(
+      effectMethods[0]!,
+      {},
+      { id: "overflow", operationId: "op-overflow" },
+    ),
+  ).rejects.toBeInstanceOf(RequestNotSentError);
+  expect(f.socket.writes).toHaveLength(4097);
 });
 
 it("rejects operation IDs, invalid IDs/deadlines/body and oversized frames before writing", async () => {

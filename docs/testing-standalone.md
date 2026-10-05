@@ -22,7 +22,7 @@ launch loader using real disposable files, path substitution and one bounded
 application startup. Authoring or compiling this suite is not native execution
 evidence.
 
-Connector mutation preparation has separate lower-layer evidence:
+Connector mutations have separate lower-layer evidence:
 
 - `TestConnectorV3*` in Computer domain and repository tests checks exact retained
   bytes, full uint64 connector generation, immutable origin and shared-key
@@ -37,9 +37,30 @@ Connector mutation preparation has separate lower-layer evidence:
   ledger and retirement gate. It checks concurrent duplicates, current-authorized
   observation after reconnect, and uncertainty surviving connector close. Native
   storage, effects and endpoint drain remain explicit doubles.
+- `TestConnectorMutationWire*` invokes the actual registered Go handlers with
+  those owners. It covers strict request identity and bounds, write/edit receipt
+  mapping, duplicates, closed slots, current read authority and original retained
+  provenance after reconnect.
+- `desktop-connector-client.test.ts` uses injected streams to check required
+  effect IDs, same-stream duplicate suppression, exact outcome correlation and
+  unknown transport outcomes. It does not execute a native socket or mutation.
+- `desktop-connector-mutation.test.ts`, `connector-mutation-wire.test.ts` and the
+  mutation cases in `go-computer-mcp.test.ts` check the generated field limits,
+  current/original identities, content-free outcomes, handshake advertisement
+  and existing MCP fence/drain with injected clients and in-memory SDK transport.
 
 These selectors neither run native effects nor qualify the external mutation
 route, clean retirement, installed recovery or a live ChatGPT connector.
+
+`go test -race -p 1 -run '^TestNativeConnectorMutation' ./boot -ingress-native`
+uses the normal Go runtime with an actual private Darwin socket, mutation journal
+and disposable workspace. It covers create, collision, exact-hash edit, stale
+preimage refusal, reconnect observation, duplicate suppression and current
+authority withdrawal. Workspace approval and the inherited host open call remain
+fixtures. No Electron, child backend, MCP process, provider or real host retirement
+is exercised. It requires the exclusive native lane. The adjacent
+`TestNativeSettingsMutation*` suites protect the shared owner's Settings and
+retirement behavior, with explicit fixture terminal/host facts.
 
 The complete `task test` union remains open. A missing binary, artifact,
 predecessor, containment mechanism or authorized display leaves its required

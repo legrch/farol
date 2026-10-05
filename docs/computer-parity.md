@@ -8,12 +8,13 @@ boundary ran against an actual temporary macOS workspace or installed host;
 provider/host fixture; `BLOCKED_OWNER` and `NOT_RUN` remain open evidence rows.
 
 The current Go desktop source selects the protected Go connector for catalogue,
-bootstrap, list, read, search and one-shot verification. The historical write and
-shell rows below describe the legacy adapter and do not establish those tools on
-the new Go route. Normal Dev, packaged routing and external-client qualification
-of the new route remain open.
+bootstrap, list, read, search and one-shot verification. When the selected native
+runtime enables Settings mutations, the same Go owner also supplies write, edit
+and retained-result observation. The historical write and shell rows below
+describe the legacy adapter and do not establish those tools on the new Go route.
+Normal Dev, packaged routing and external-client qualification remain open.
 
-Connector mutation preparation now uses the existing Go mutation engine and
+Connector mutations use the existing Go mutation engine and
 journal. Its separate v3 record keeps a stable profile operation key and immutable
 original host/execution/call correlation; connector generation is an exact uint64
 decimal string. Existing task v1 and Settings v2 bytes are unchanged. A selected
@@ -21,10 +22,13 @@ write lease covers admission, native publication and initial disclosure. Retaine
 metadata can be read with current connector read authority after that write lease
 expires, without admitting or executing a mutation. Original unknown and
 memory-only outcomes cannot be upgraded by reading apparently complete disk data.
-The prepared root join shares Settings' bounded operation ledger and retirement
-gate. Closing or replacing a connector does not remove uncertain attempts. These
-are source-level contracts: normal startup does not yet attach the mutation owner
-to the external connector, and its write/edit wire route is not activated.
+The root join shares Settings' bounded operation ledger and retirement gate.
+Closing or replacing a connector does not remove uncertain attempts. The wire
+response separates current request correlation from the original retained
+operation. Write/edit require a caller-selected operation ID; observation reads
+that ID without dispatching it. MCP advertises this slice only when the exact Go
+handshake provides all three routes. These are source-level behavior and bounded
+fixture checks, not evidence of a normal Dev or installed mutation journey.
 
 ## Legacy-to-Next disposition
 

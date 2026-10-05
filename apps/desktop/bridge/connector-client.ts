@@ -37,6 +37,7 @@ type Pending = {
   timer: ReturnType<typeof setTimeout>;
   submitted: boolean;
   handshake: boolean;
+  operationId?: string;
 };
 type Connection = {
   resolve: (identity: Identity) => void;
@@ -52,7 +53,12 @@ const workspaceMethods = new Set([
   "computer.workspace.search",
   "computer.workspace.catalogue",
   "computer.workspace.bootstrap",
+  "computer.workspace.mutation.read",
   "computer.connector.verify",
+]);
+const effectMethods = new Set([
+  "computer.workspace.write",
+  "computer.workspace.edit",
 ]);
 const validTimeout = (value: number): boolean =>
   Number.isFinite(value) && value > 0 && value <= 30000;
@@ -67,6 +73,7 @@ export class SocketConnectorClient {
   private decoder = new Decoder();
   private pending = new Map<string, Pending>();
   private used = new Set<string>();
+  private usedOperations = new Set<string>();
   private connection: Connection | undefined;
   private context: Readonly<Context> | undefined;
   private identity: Readonly<Identity> | undefined;
@@ -150,11 +157,16 @@ export class SocketConnectorClient {
       return Promise.reject(
         new BridgeError("unavailable", "handshake_required"),
       );
-    if (!workspaceMethods.has(method))
+    const effect = effectMethods.has(method);
+    if (!workspaceMethods.has(method) && !effect)
       return Promise.reject(
         new BridgeError("unsupported", "connector_method_unsupported"),
       );
-    if (options.operationId !== undefined)
+    if (effect && !validate("id", options.operationId))
+      return Promise.reject(
+        new BridgeError("refused", "connector_operation_id_required"),
+      );
+    if (!effect && options.operationId !== undefined)
       return Promise.reject(
         new BridgeError("refused", "connector_operation_id_forbidden"),
       );
@@ -163,6 +175,7 @@ export class SocketConnectorClient {
       body,
       options.id ?? randomUUID(),
       options.timeoutMs ?? 2000,
+      options.operationId,
     );
   }
 
@@ -250,13 +263,23 @@ export class SocketConnectorClient {
     body: Json,
     id: string,
     timeoutMs: number,
+    operationId?: string,
     handshake = false,
   ): Promise<Outcome> {
     if (this.phase === "stopped")
       return Promise.reject(
         new BridgeError("unavailable", "connector_unavailable"),
       );
-    if (this.pending.size >= 32 || this.used.size >= 4096 || this.writerBusy)
+    if (operationId !== undefined && this.usedOperations.has(operationId))
+      return Promise.reject(
+        new BridgeError("refused", "duplicate_operation_id"),
+      );
+    if (
+      this.pending.size >= 32 ||
+      this.used.size >= 4096 ||
+      this.usedOperations.size >= 4096 ||
+      this.writerBusy
+    )
       return Promise.reject(new RequestNotSentError());
     if (this.used.has(id))
       return Promise.reject(new BridgeError("refused", "duplicate_request_id"));
@@ -266,7 +289,11 @@ export class SocketConnectorClient {
       jsonrpc: "2.0",
       id,
       method,
-      params: { body, ...(handshake ? {} : { context: this.context! }) },
+      params: {
+        body,
+        ...(handshake ? {} : { context: this.context! }),
+        ...(operationId !== undefined ? { operationId } : {}),
+      },
     };
     let bytes: Buffer;
     try {
@@ -287,11 +314,13 @@ export class SocketConnectorClient {
     if (!this.canWrite(bytes.length))
       return Promise.reject(new RequestNotSentError());
     this.used.add(id);
+    if (operationId !== undefined) this.usedOperations.add(operationId);
     return new Promise((resolve, reject) => {
       const pending: Pending = {
         resolve,
         reject,
         handshake,
+        ...(operationId !== undefined ? { operationId } : {}),
         submitted: false,
         timer: setTimeout(() => this.fail("response_timeout"), timeoutMs),
       };
@@ -330,6 +359,7 @@ export class SocketConnectorClient {
         },
         randomUUID(),
         30000,
+        undefined,
         true,
       ).catch((error: BridgeError) => {
         this.fail(
@@ -353,6 +383,11 @@ export class SocketConnectorClient {
     const result = response.result;
     if (!result) {
       // Raw peer messages/data are never copied into diagnostics.
+      // A protocol fault cannot correlate an effect's operation or prove no write.
+      if (pending.operationId !== undefined) {
+        this.fail("uncorrelated_effect_response");
+        return;
+      }
       clearTimeout(pending.timer);
       this.pending.delete(response.id!);
       pending.reject(new BridgeError("refused", "connector_protocol_refused"));
@@ -362,7 +397,9 @@ export class SocketConnectorClient {
     const binding = this.#endpoint.binding;
     if (
       result.requestId !== response.id ||
-      Object.hasOwn(result, "operationId") ||
+      (pending.operationId === undefined
+        ? Object.hasOwn(result, "operationId")
+        : result.operationId !== pending.operationId) ||
       result.context.profileId !== binding.profileId ||
       result.context.backendGeneration !== binding.backendGeneration
     ) {
@@ -425,6 +462,7 @@ export class SocketConnectorClient {
     }
     this.pending.clear();
     this.used.clear();
+    this.usedOperations.clear();
     this.context = undefined;
     this.identity = undefined;
     this.decoder = new Decoder();

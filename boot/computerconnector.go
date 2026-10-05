@@ -204,6 +204,11 @@ func (s *computerConnector) Open(ctx context.Context, operation string, in wire.
 	binding := wire.ComputerConnectorBinding{BuildId: host.BuildID, ProfileId: host.ProfileID, BackendGeneration: host.BackendGeneration, RuntimeId: host.RuntimeID, ConnectorGeneration: in.ConnectorGeneration}
 	methods := slot.route.Methods(s.root.peer)
 	methods["computer.connector.verify"] = s.verificationMethod(slot)
+	if s.mutations != nil {
+		for name, method := range s.mutationMethods(slot) {
+			methods[name] = method
+		}
+	}
 	slot.endpoint, err = s.start(s.lifetime, binding, methods)
 	if err != nil || slot.endpoint == nil {
 		guard.close()

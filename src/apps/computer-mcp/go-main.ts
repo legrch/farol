@@ -1,4 +1,8 @@
 import { serveStdio } from "@modelcontextprotocol/server/stdio";
+import {
+  ConnectorMutationBridge,
+  connectorSupportsMutations,
+} from "../../../apps/desktop/bridge/connector-mutation";
 import { SocketConnectorClient } from "../../../apps/desktop/bridge/connector-client";
 import { loadConnectorLaunch } from "../../../apps/desktop/bridge/connector-launch";
 import { ComputerBridge } from "../../../apps/desktop/bridge/computer";
@@ -14,8 +18,16 @@ export async function runGoComputerMcp(file: string): Promise<void> {
   const lifecycle = new PrivateMcpLifecycle(launch.lifecycleRoot);
   const lease = await lifecycle.join(sha256);
   const client = new SocketConnectorClient(launch.opened.endpoint);
+  let mutations: ConnectorMutationBridge | undefined;
   try {
-    await client.connect();
+    const identity = await client.connect();
+    if (connectorSupportsMutations(identity)) {
+      mutations = new ConnectorMutationBridge(
+        client,
+        launch.opened,
+        client.verifiedContext,
+      );
+    }
   } catch (error) {
     await client.close();
     // No module request has been admitted before the completed handshake.
@@ -35,7 +47,7 @@ export async function runGoComputerMcp(file: string): Promise<void> {
         bridge,
         launch.opened.execution,
         client.verifiedContext,
-        { lifecycle, fence, verification },
+        { lifecycle, fence, verification, ...(mutations ? { mutations } : {}) },
       ),
     {
       legacy: "serve",

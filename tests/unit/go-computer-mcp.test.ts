@@ -127,6 +127,7 @@ async function setup(
     lifecycle?: GoComputerMcpLifecycle;
     fence?: GoComputerMcpFence;
     verification?: GoComputerMcpOptions["verification"];
+    mutations?: GoComputerMcpOptions["mutations"];
     respond?: (method: string, params: Json, id: string) => unknown;
   } = {},
 ) {
@@ -149,6 +150,7 @@ async function setup(
       fence: options.fence ?? fixtureOptions().fence,
       ...(options.lifecycle ? { lifecycle: options.lifecycle } : {}),
       ...(options.verification ? { verification: options.verification } : {}),
+      ...(options.mutations ? { mutations: options.mutations } : {}),
     },
   );
   const tools = new Map<string, RegisteredTool>();
@@ -1164,5 +1166,203 @@ describe("Go Computer MCP codec (pure/in-memory only)", () => {
       retry: "never",
     });
     expect(request).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("Go Computer mutation MCP (pure/in-memory only)", () => {
+  const target = {
+    workspaceId: "workspace",
+    relativePath: "note.md",
+    operationId: "caller-operation",
+  };
+  const writeInput = { ...target, content: "text" };
+  const editInput = {
+    ...target,
+    expectedSHA256: "a".repeat(64),
+    edits: [{ oldText: "old", newText: "new" }],
+  };
+  const mutations = () =>
+    ({
+      write: vi.fn(async (_input, operationId, call) => ({
+        status: "unknown" as const,
+        operationId,
+        requestId: call.requestId,
+        context: call.context,
+        code: "response_timeout",
+        retry: "never" as const,
+      })),
+      edit: vi.fn(async (_input, operationId, call) => ({
+        status: "unknown" as const,
+        operationId,
+        requestId: call.requestId,
+        context: call.context,
+        code: "response_timeout",
+        retry: "never" as const,
+      })),
+      read: vi.fn(async (input, call) => ({
+        status: "refused" as const,
+        operationId: input.operationId,
+        requestId: call.requestId,
+        context: call.context,
+        code: "COMPUTER_MUTATION_NOT_FOUND",
+        retry: "never" as const,
+      })),
+    }) satisfies NonNullable<GoComputerMcpOptions["mutations"]>;
+
+  it("advertises effects only when the host supplies mutations and requires operationId", async () => {
+    const absent = await setup();
+    expect(
+      (await absent.client.listTools()).tools.map((tool) => tool.name),
+    ).not.toContain("computer_write");
+    const selected = mutations();
+    const { client } = await setup({ mutations: selected });
+    const tools = (await client.listTools()).tools;
+    for (const name of [
+      "computer_write",
+      "computer_edit",
+      "computer_mutation_read",
+    ]) {
+      const tool = tools.find((entry) => entry.name === name)!;
+      expect(tool.inputSchema.required).toContain("operationId");
+      expect(tool.inputSchema.additionalProperties).toBe(false);
+      expect(tool.annotations?.readOnlyHint).toBe(
+        name === "computer_mutation_read",
+      );
+      if (name !== "computer_mutation_read")
+        expect(tool.annotations?.idempotentHint).toBe(false);
+    }
+    expect(
+      tools.find((tool) => tool.name === "computer_workspace_catalogue")
+        ?.description,
+    ).toContain("bounded mutations");
+    const { operationId: _operationId, ...missing } = writeInput;
+    expect(
+      (await client.callTool({ name: "computer_write", arguments: missing }))
+        .isError,
+    ).toBe(true);
+    expect(selected.write).not.toHaveBeenCalled();
+  });
+  it("uses the existing fence once per call, forwards caller IDs and returns them on UNKNOWN", async () => {
+    const selected = mutations();
+    const release = vi.fn(async () => {});
+    const acquireAdmission = vi.fn(async () => ({
+      admitted: true as const,
+      release,
+    }));
+    const { client, request } = await setup({
+      mutations: selected,
+      fence: { acquireAdmission },
+    });
+    for (const [name, input] of [
+      ["computer_write", writeInput],
+      ["computer_edit", editInput],
+      ["computer_mutation_read", target],
+    ] as const) {
+      const out = await client.callTool({ name, arguments: input });
+      expect(out.isError).toBe(true);
+      expect(out.structuredContent).toMatchObject({
+        operationId: target.operationId,
+        retry: "never",
+      });
+    }
+    expect(selected.write).toHaveBeenCalledExactlyOnceWith(
+      {
+        workspaceId: target.workspaceId,
+        relativePath: target.relativePath,
+        content: "text",
+      },
+      target.operationId,
+      expect.objectContaining({ requestId: expect.any(String), context }),
+    );
+    expect(selected.edit).toHaveBeenCalledTimes(1);
+    expect(selected.read).toHaveBeenCalledExactlyOnceWith(
+      target,
+      expect.objectContaining({ context }),
+    );
+    expect(acquireAdmission).toHaveBeenCalledTimes(3);
+    expect(release).toHaveBeenCalledTimes(3);
+    expect(request).not.toHaveBeenCalled();
+  });
+  it("preserves the operation ID when abort or fence release makes the outcome unknown", async () => {
+    const selected = mutations();
+    const controller = new AbortController();
+    selected.write.mockImplementationOnce(async (_input, operationId, call) => {
+      controller.abort();
+      return {
+        status: "unknown",
+        operationId,
+        requestId: call.requestId,
+        context: call.context,
+        code: "response_timeout",
+        retry: "never",
+      };
+    });
+    const { tools } = await setup({ mutations: selected });
+    const out = await tools
+      .get("computer_write")!
+      .executor(writeInput, handlerContext(controller.signal));
+    expect(out.structuredContent).toMatchObject({
+      status: "unknown",
+      operationId: target.operationId,
+      code: "computer_mcp_aborted_after_dispatch",
+    });
+    const broken = await setup({
+      mutations: mutations(),
+      fence: {
+        acquireAdmission: async () => ({
+          admitted: true,
+          release: async () => {
+            throw Error("fixture");
+          },
+        }),
+      },
+    });
+    const response = await broken.client.callTool({
+      name: "computer_edit",
+      arguments: editInput,
+    });
+    expect(response.structuredContent).toMatchObject({
+      status: "unknown",
+      operationId: target.operationId,
+      code: "COMPUTER_EXECUTION_FENCE_RELEASE_FAILED",
+    });
+  });
+  it("blocks stopping/denied-fence effects without replay or dropping the caller ID", async () => {
+    const selected = mutations();
+    const { client } = await setup({
+      mutations: selected,
+      fence: {
+        acquireAdmission: async () => ({
+          admitted: false,
+          code: "AUTHORITY_EXPIRED",
+        }),
+      },
+    });
+    expect(
+      (await client.callTool({ name: "computer_write", arguments: writeInput }))
+        .structuredContent,
+    ).toMatchObject({
+      status: "refused",
+      operationId: target.operationId,
+      code: "AUTHORITY_EXPIRED",
+    });
+    expect(selected.write).not.toHaveBeenCalled();
+    const stopping = await setup({
+      mutations: selected,
+      lifecycle: { isStopping: async () => true, enterHandler: () => () => {} },
+    });
+    expect(
+      (
+        await stopping.client.callTool({
+          name: "computer_edit",
+          arguments: editInput,
+        })
+      ).structuredContent,
+    ).toMatchObject({
+      status: "refused",
+      operationId: target.operationId,
+      code: "COMPUTER_MCP_STOPPING",
+    });
+    expect(selected.edit).not.toHaveBeenCalled();
   });
 });

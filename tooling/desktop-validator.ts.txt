@@ -1,5 +1,5 @@
 
-type Spec = { readonly type: string; readonly optional?: boolean; readonly values?: readonly string[]; readonly minimum?: number; readonly maximum?: number; readonly minBytes?: number; readonly maxBytes?: number; readonly pattern?: string; readonly maxItems?: number };
+type Spec = { readonly type: string; readonly optional?: boolean; readonly values?: readonly string[]; readonly minimum?: number; readonly maximum?: number; readonly minBytes?: number; readonly maxBytes?: number; readonly pattern?: string; readonly maxItems?: number; readonly minItems?: number };
 type Definition = { readonly fields: Readonly<Record<string, Spec>> };
 const definitions: Readonly<Record<string, Definition>> = schema.definitions;
 
@@ -44,12 +44,16 @@ export function validate(name: string, value: unknown, depth = 0): boolean {
  for (const [key,spec] of Object.entries(def.fields)) {
   if (!Object.hasOwn(object,key)) { if (!spec.optional) return false; continue; }
   const item = object[key];
-  if (!validate(spec.type,item,depth+1)) return false;
+  if (spec.maxItems !== undefined && spec.type.endsWith("[]") && spec.type !== "text[]" && spec.type !== "method[]") {
+   if (depth+1 > schema.maxDepth) return false;
+   if (!Array.isArray(item) || item.length > spec.maxItems || !item.every(element => validate(spec.type.slice(0,-2),element,depth+2))) return false;
+  } else if (!validate(spec.type,item,depth+1)) return false;
   if (spec.minimum !== undefined && (typeof item !== "number" || item < spec.minimum)) return false;
   if (spec.maximum !== undefined && (typeof item !== "number" || item > spec.maximum)) return false;
   if (spec.minBytes !== undefined && (typeof item !== "string" || Buffer.byteLength(item,"utf8") < spec.minBytes)) return false;
   if (spec.maxBytes !== undefined && (typeof item !== "string" || Buffer.byteLength(item,"utf8") > spec.maxBytes)) return false;
   if (spec.pattern !== undefined && (typeof item !== "string" || !new RegExp(spec.pattern,"u").test(item))) return false;
+  if (spec.minItems !== undefined && (!Array.isArray(item) || item.length < spec.minItems)) return false;
   if (spec.maxItems !== undefined && (!Array.isArray(item) || item.length > spec.maxItems)) return false;
   if (spec.values && !spec.values.includes(String(object[key]))) return false;
  }

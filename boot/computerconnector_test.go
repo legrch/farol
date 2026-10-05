@@ -43,6 +43,7 @@ func (j *connectorJournalFixture) WithdrawConnector(_ context.Context, id string
 
 type connectorEndpointFixture struct {
 	value      wire.ComputerConnectorEndpoint
+	methods    map[string]desktop.Method
 	closes     int
 	fail       bool
 	closing    chan struct{}
@@ -117,8 +118,9 @@ func newConnectorFixture(t *testing.T) (*computerConnector, *connectorJournalFix
 	e := &connectorEndpointFixture{}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	s, err := newComputerConnector(ctx, root, j, store.clock, func(_ context.Context, b wire.ComputerConnectorBinding, _ map[string]desktop.Method) (connectorEndpoint, error) {
+	s, err := newComputerConnector(ctx, root, j, store.clock, func(_ context.Context, b wire.ComputerConnectorBinding, methods map[string]desktop.Method) (connectorEndpoint, error) {
 		e.value = wire.ComputerConnectorEndpoint{Binding: b, SocketPath: "/private/tmp/fixture.sock", Token: strings.Repeat("a", 64)}
+		e.methods = methods
 		return e, nil
 	})
 	if err != nil {
