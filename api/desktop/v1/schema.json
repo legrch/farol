@@ -4133,6 +4133,55 @@
           "values": ["never"]
         }
       }
+    },
+    "ComputerConnectorBinding": {
+      "type": "object",
+      "fields": {
+        "buildId": {
+          "type": "text"
+        },
+        "profileId": {
+          "type": "id"
+        },
+        "backendGeneration": {
+          "type": "id"
+        },
+        "runtimeId": {
+          "type": "id"
+        },
+        "connectorGeneration": {
+          "type": "decimal"
+        }
+      }
+    },
+    "ComputerConnectorEndpoint": {
+      "type": "object",
+      "fields": {
+        "binding": {
+          "type": "ComputerConnectorBinding"
+        },
+        "socketPath": {
+          "type": "string",
+          "minBytes": 1,
+          "maxBytes": 100
+        },
+        "token": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "ComputerConnectorHello": {
+      "type": "object",
+      "fields": {
+        "binding": {
+          "type": "ComputerConnectorBinding"
+        },
+        "token": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
     }
   }
 }
