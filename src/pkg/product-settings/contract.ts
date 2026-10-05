@@ -1,4 +1,10 @@
 import { z } from "zod";
+import {
+  ReadConversationViewSchema,
+  ReadConversationHandleSchema,
+  ReadConversationCursorSchema,
+  ReadConversationPromptSchema,
+} from "./chat-conversation.ts";
 import { TaskModelCatalogueViewSchema } from "../owner-config/contract.ts";
 import {
   CHATGPT_MODEL_ID,
@@ -655,6 +661,25 @@ export const ProductConfigurationCommandSchema = z.discriminatedUnion("kind", [
     operationId: IdentifierSchema,
   }),
   z.strictObject({
+    kind: z.literal("chatgpt.observe-readonly-conversation"),
+    operationId: IdentifierSchema,
+    handleId: ReadConversationHandleSchema,
+    cursor: ReadConversationCursorSchema,
+  }),
+  z.strictObject({
+    kind: z.literal("chatgpt.ack-readonly-conversation"),
+    operationId: IdentifierSchema,
+    handleId: ReadConversationHandleSchema,
+    resultId: ReadConversationHandleSchema,
+    cursor: ReadConversationCursorSchema,
+  }),
+  z.strictObject({
+    kind: z.literal("chatgpt.follow-readonly-conversation"),
+    operationId: IdentifierSchema,
+    handleId: ReadConversationHandleSchema,
+    prompt: ReadConversationPromptSchema,
+  }),
+  z.strictObject({
     kind: z.literal("chatgpt.inspect-readonly-account"),
     operationId: IdentifierSchema,
   }),
@@ -803,6 +828,7 @@ const DiscoveryCandidateSchema = z.strictObject({
 });
 
 export const ProductConfigurationEvidenceSchema = z.discriminatedUnion("kind", [
+  ReadConversationViewSchema,
   z.strictObject({
     kind: z.literal("host.task-models"),
     view: TaskModelCatalogueViewSchema,
@@ -1278,6 +1304,8 @@ export const ProductConfigurationResultSchema = z.discriminatedUnion("ok", [
       "SETTINGS_INPUT_INVALID",
       "SETTINGS_WRITE_FAILED",
       "CHATGPT_ROUTE_UNAVAILABLE",
+      "CHATGPT_CONVERSATION_UNCONFIRMED",
+      "CHATGPT_CONVERSATION_REFUSED",
       "CHATGPT_ACCOUNT_UNAVAILABLE",
       "CHATGPT_ACCOUNT_CHANGED",
       "CHATGPT_ACCOUNT_CONFIRMATION_INVALID",

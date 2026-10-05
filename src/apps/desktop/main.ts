@@ -5298,6 +5298,10 @@ async function configureAdmittedProduct(
 ): Promise<ProductConfigurationResult> {
   if (!configuration) return configurationFailure("SETTINGS_UNAVAILABLE");
   switch (command.kind) {
+    case "chatgpt.observe-readonly-conversation":
+    case "chatgpt.ack-readonly-conversation":
+    case "chatgpt.follow-readonly-conversation":
+      return configurationFailure("CHATGPT_ROUTE_UNAVAILABLE");
     case "onboarding.open-help": {
       try {
         await shell.openExternal(onboardingHelpUrl(command.destination));
