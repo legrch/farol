@@ -1,10 +1,22 @@
-import { Fragment, useEffect, useRef, useState } from "react";
+import {
+  Fragment,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
+import {
+  conversationDraftKey,
+  type ConversationDraftStore,
+} from "./conversation-draft";
 import {
   ReadConversationPromptSchema,
   type ReadConversationView,
 } from "../../pkg/product-settings/chat-conversation";
 
 export type ReadConversationProps = Readonly<{
+  drafts: ConversationDraftStore;
   view: ReadConversationView | null;
   history: readonly { view: ReadConversationView; text: string }[];
   text: string;
@@ -47,6 +59,7 @@ function plainText(text: string) {
 
 /** Presentation and an unsent local draft; the window retains turn ownership. */
 export function ReadConversation({
+  drafts,
   view,
   history,
   text,
@@ -56,7 +69,11 @@ export function ReadConversation({
   onAcknowledge,
   onFollow,
 }: ReadConversationProps) {
-  const [draft, setDraft] = useState("");
+  const draftKey = conversationDraftKey(view);
+  const draft = useSyncExternalStore(drafts.subscribe, () =>
+    drafts.read(draftKey),
+  );
+  const field = useRef<HTMLTextAreaElement>(null);
   const [pending, setPending] = useState(false);
   const [composing, setComposing] = useState(false);
   const [failure, setFailure] = useState("");
@@ -75,7 +92,7 @@ export function ReadConversation({
     !view.result.acknowledged &&
     !view.deliveryAcknowledged,
   );
-  const validDraft = ReadConversationPromptSchema.safeParse(draft).success;
+  const validDraft = ReadConversationPromptSchema.safeParse(draft.text).success;
   const followEnabled = Boolean(
     view?.followReady &&
     label &&
@@ -91,6 +108,16 @@ export function ReadConversation({
       mounted.current = false;
     };
   }, []);
+  useLayoutEffect(() => {
+    const input = field.current;
+    const saved = drafts.read(draftKey);
+    input?.setSelectionRange(saved.selectionStart, saved.selectionEnd);
+    // Preserve caret on section unmount without moving focus on its return.
+    return () => {
+      if (input)
+        drafts.selection(draftKey, input.selectionStart, input.selectionEnd);
+    };
+  }, [draftKey, drafts]);
   useEffect(() => {
     observe.current = onObserve;
   }, [onObserve]);
@@ -149,13 +176,13 @@ export function ReadConversation({
       !followEnabled
     )
       return;
-    const submitted = draft;
+    const submitted = draft.text;
+    const submittedEdit = draft.edit;
     action.current = true;
     setPending(true);
     try {
       await onFollow(submitted);
-      if (mounted.current && !composition.current)
-        setDraft((current) => (current === submitted ? "" : current));
+      if (!composition.current) drafts.clearSubmitted(draftKey, submittedEdit);
     } catch {
       failed.current = true;
       if (mounted.current)
@@ -242,11 +269,35 @@ export function ReadConversation({
       <label className="field">
         Follow-up message
         <textarea
-          value={draft}
-          onChange={(event) => setDraft(event.target.value)}
-          onCompositionStart={() => {
+          ref={field}
+          value={draft.text}
+          onChange={(event) => {
+            const input = event.currentTarget;
+            drafts.capture(
+              draftKey,
+              input.value,
+              input.selectionStart,
+              input.selectionEnd,
+            );
+          }}
+          onSelect={(event) => {
+            const input = event.currentTarget;
+            drafts.selection(
+              draftKey,
+              input.selectionStart,
+              input.selectionEnd,
+            );
+          }}
+          onCompositionStart={(event) => {
             composition.current = true;
             setComposing(true);
+            const input = event.currentTarget;
+            drafts.capture(
+              draftKey,
+              input.value,
+              input.selectionStart,
+              input.selectionEnd,
+            );
           }}
           onCompositionEnd={() => {
             composition.current = false;

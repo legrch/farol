@@ -5,6 +5,7 @@ import {
 } from "../../pkg/ipc/navigation-shortcuts";
 import { workspaceEditToAcknowledge } from "../workspace-edit-delivery";
 import { AgentDraftStore } from "../agent-draft";
+import { ConversationDraftStore } from "./conversation-draft";
 import { z } from "zod";
 import {
   ChatHistoryContextSchema,
@@ -141,6 +142,7 @@ const initial: WindowSnapshot = {
 };
 export class WindowController implements RendererFacade {
   readonly draft = new AgentDraftStore();
+  readonly conversationDraft = new ConversationDraftStore();
   private state: WindowSnapshot = immutable({ ...initial });
   private readonly listeners = new Set<() => void>();
   private disposers: (() => void)[] = [];
@@ -373,6 +375,7 @@ export class WindowController implements RendererFacade {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
+    this.conversationDraft.dispose();
     this.pendingSectionNavigation = null;
     for (const dispose of this.disposers) dispose();
     this.disposers = [];

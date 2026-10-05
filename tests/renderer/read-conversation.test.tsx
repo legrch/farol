@@ -6,6 +6,7 @@ import {
   type ReadConversationProps,
 } from "../../src/ui/renderer/read-conversation";
 import type { ReadConversationView } from "../../src/pkg/product-settings/chat-conversation";
+import { ConversationDraftStore } from "../../src/ui/renderer/conversation-draft";
 
 // Component fixtures only: no Electron, Go execution, native host or provider proof.
 (
@@ -89,6 +90,7 @@ function deferred() {
 }
 async function mount(overrides: Partial<ReadConversationProps> = {}) {
   let props: ReadConversationProps = {
+    drafts: new ConversationDraftStore(),
     view: view(),
     history: [],
     text: "",
@@ -483,6 +485,98 @@ describe("ReadConversation presentation and explicit actions", () => {
     await type(h.field, "A newer draft.");
     await act(async () => wait.resolve());
     expect(h.field.value).toBe("A newer draft.");
+  });
+
+  it("retains the unsent follow-up and caret across remount without taking focus or sending", async () => {
+    const h = await mount({ view: ready() });
+    await type(h.field, "Keep this next question 日本語.");
+    h.field.focus();
+    h.field.setSelectionRange(3, 11);
+    await h.remount();
+    expect(h.field.value).toBe("Keep this next question 日本語.");
+    expect([h.field.selectionStart, h.field.selectionEnd]).toEqual([3, 11]);
+    expect(document.activeElement).not.toBe(h.field);
+    expect(h.props.onFollow).not.toHaveBeenCalled();
+    expect(h.props.onAcknowledge).not.toHaveBeenCalled();
+  });
+
+  it("clears only the submitted draft when Follow resolves after remount", async () => {
+    const wait = deferred();
+    const h = await mount({
+      view: ready(),
+      onFollow: vi.fn(() => wait.promise),
+    });
+    await type(h.field, "Submitted question.");
+    await h.click("Send follow-up");
+    await h.remount();
+    expect(h.field.value).toBe("Submitted question.");
+    await act(async () => wait.resolve());
+    expect(h.field.value).toBe("");
+    expect(h.props.onFollow).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps an identical newer edit after remount and late Follow completion", async () => {
+    const wait = deferred();
+    const h = await mount({
+      view: ready(),
+      onFollow: vi.fn(() => wait.promise),
+    });
+    await type(h.field, "Same words.");
+    await h.click("Send follow-up");
+    await h.remount();
+    await type(h.field, "Changed.");
+    await type(h.field, "Same words.");
+    await act(async () => wait.resolve());
+    expect(h.field.value).toBe("Same words.");
+    expect(h.props.onFollow).toHaveBeenCalledTimes(1);
+  });
+
+  it("cannot clear a new draft after the draft owner changes and returns", async () => {
+    const wait = deferred();
+    const original = ready();
+    const h = await mount({
+      view: original,
+      onFollow: vi.fn(() => wait.promise),
+    });
+    await type(h.field, "Same words.");
+    await h.click("Send follow-up");
+    await h.update({
+      view: { ...ready(), operationId: "another-conversation" },
+    });
+    expect(h.field.value).toBe("");
+    await type(h.field, "Other owner.");
+    await h.update({ view: original });
+    expect(h.field.value).toBe("");
+    await type(h.field, "Same words.");
+    await act(async () => wait.resolve());
+    expect(h.field.value).toBe("Same words.");
+  });
+
+  it("preserves draft text through a Follow turn but isolates a new backend incarnation", async () => {
+    const original = ready();
+    const h = await mount({ view: original });
+    await type(h.field, "Another question.");
+    await h.update({
+      view: {
+        ...original,
+        handleId: "next-handle",
+        binding: {
+          ...original.binding,
+          turnId: "next-turn",
+          operationId: "next-operation",
+          turnGeneration: "2",
+        },
+      },
+    });
+    expect(h.field.value).toBe("Another question.");
+    await h.update({
+      view: {
+        ...original,
+        binding: { ...original.binding, backendGeneration: "new-backend" },
+      },
+    });
+    expect(h.field.value).toBe("");
+    expect(h.props.onFollow).not.toHaveBeenCalled();
   });
 
   it("shares the synchronous action latch between Follow and ACK", async () => {

@@ -301,7 +301,21 @@ describe("ChatReadonly bounded component", () => {
     ]);
     expect(h.button("Acknowledge result").disabled).toBe(true);
     expect(h.button("Send follow-up").disabled).toBe(true);
+    const draft = h.host.querySelector("textarea")!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(
+        HTMLTextAreaElement.prototype,
+        "value",
+      )!.set!.call(draft, "Next question 日本語.");
+      draft.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    draft.focus();
+    draft.setSelectionRange(2, 7);
     await h.render("conversation-remount");
+    const restored = h.host.querySelector("textarea")!;
+    expect(restored.value).toBe("Next question 日本語.");
+    expect([restored.selectionStart, restored.selectionEnd]).toEqual([2, 7]);
+    expect(document.activeElement).not.toBe(restored);
     expect(
       h.host.querySelector('[aria-label="Chat answer"]')?.textContent,
     ).toBe("Visible before completion.");

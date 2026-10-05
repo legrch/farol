@@ -402,6 +402,7 @@ export function ChatReadonly({ snapshot, facade }: ChatReadonlyProps) {
         aria-label="Read-only Chat conversation"
       >
         <ReadConversation
+          drafts={facade.conversationDraft}
           view={latest.view}
           text={latest.text}
           history={conversation.turns.slice(0, -1)}

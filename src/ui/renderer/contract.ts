@@ -1,5 +1,6 @@
 import type { NavigationShortcuts } from "../../pkg/ipc/navigation-shortcuts";
 import type { AgentDraftStore } from "../agent-draft";
+import type { ConversationDraftStore } from "./conversation-draft";
 import type {
   ProductConfigurationCommand,
   ProductConfigurationEvidence,
@@ -134,6 +135,7 @@ export type WindowSnapshot = Readonly<{
 }>;
 export interface RendererFacade {
   readonly draft: AgentDraftStore;
+  readonly conversationDraft: ConversationDraftStore;
   getSnapshot(): WindowSnapshot;
   subscribe(listener: () => void): () => void;
   configure(
