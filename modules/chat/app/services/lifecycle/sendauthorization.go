@@ -54,6 +54,9 @@ func (c *sendCurrent) check(ctx context.Context) error {
 	if err := s.current(ctx, m); err != nil {
 		return err
 	}
+	if s.frozen {
+		return Frozen
+	}
 	if s.revision != c.revision || m.entry.Kind != "dispatch" || m.entry.Effect != "send" || m.handle.closed || m.handle.verification != c.request.Verification || browserBinding(m.entry.After.Binding) != c.request.Binding || m.handle.digest != c.request.IntentDigest {
 		return Mismatch
 	}
@@ -78,6 +81,14 @@ func (s *Service) authorizeSend(ctx context.Context, m *mutation, request port.S
 		s.deps.Gate.Unlock()
 		return nil, err
 	}
+	// Verification and the consumer's authorization can both yield. A durable
+	// dispatch intent does not grant a new physical Send after admissions freeze.
+	// Refuse through the existing known-not-sent settlement path, which must stay
+	// available for the original mutation even though new effects are frozen.
+	if s.frozen {
+		s.deps.Gate.Unlock()
+		return nil, Frozen
+	}
 	authorizer := m.handle.sendAuthorization
 	if authorizer == nil {
 		s.deps.Gate.Unlock()
@@ -94,6 +105,9 @@ func (s *Service) authorizeSend(ctx context.Context, m *mutation, request port.S
 	}
 	if err := s.current(ctx, m); err != nil {
 		return nil, err
+	}
+	if s.frozen {
+		return nil, Frozen
 	}
 	if current.authorized == nil {
 		return nil, Unavailable

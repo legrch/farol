@@ -33,6 +33,16 @@ correlated evidence API after Desktop/Core agreement.
 Only an independently designed reconciliation path could settle them; ordinary
 late callbacks cannot rewrite them.
 
+`FreezeAdmissions` also applies at final Send authorization after browser
+verification and after the consumer guard returns. A freeze observed there
+retains `SEND_NOT_SENT` through the original result/settlement path, without a
+physical Send or retry. Already-issued effects can still settle. The pure
+`TestFreezeBeforePhysicalSendRetainsKnownNotSent` regression in
+`app/services/lifecycle/freezesend_test.go` covers both verification paths and
+both sides of the final guard; the existing retirement test covers an issued
+Send settling after freeze. This is source evidence. The unlocked adapter handoff
+does not make native dispatch atomic with a later freeze.
+
 A request has admitted, pending, running, awaiting-owner, result-ready, delivered,
 cancelled or unknown state. Known refusal/failure remains a distinct result
 outcome. The pure `result-ready` state describes known result metadata. The
