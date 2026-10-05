@@ -238,3 +238,20 @@ func TestConnectorMutationWireEditArrayBoundary(t *testing.T) {
 		}
 	}
 }
+
+func TestConnectorMutationWireUnapprovedTargetRefusesBeforeIntent(t *testing.T) {
+	s, _, journal, native, _ := connectorMutationFixture(t)
+	in := connectorWireWrite(s)
+	in.WorkspaceId = "unapproved"
+	out := connectorMutationInvoke(t, s, "computer.workspace.write", "unapproved-target", in)
+	if out.Status != "refused" || journal.admits != 0 || journal.saves != 0 || native.calls != 0 {
+		t.Fatalf("known policy refusal reported possible effect: %s/%s", out.Status, out.Code)
+	}
+	in.WorkspaceId = "work"
+	if out := connectorMutationInvoke(t, s, "computer.workspace.write", "unapproved-target", in); out.Status == "ok" || journal.admits != 0 || native.calls != 0 {
+		t.Fatal("known refused operation was repurposed")
+	}
+	if s.mutations.freezeForRetirement() != nil {
+		t.Fatal("known pre-intent target refusal blocked ordinary retirement")
+	}
+}

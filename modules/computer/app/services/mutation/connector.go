@@ -101,6 +101,24 @@ func (l *connectorMutationLease) WithSnapshot(ctx context.Context, participant s
 	return inspected
 }
 
+// Check qualifies the exact target under the original lease before composition
+// enters the mutation engine. It persists nothing and is never reusable proof:
+// Execute still rechecks at admission, native publication and disclosure.
+func (s *ConnectorService) Check(ctx context.Context, r ConnectorRequest) error {
+	if s == nil || s.engine == nil {
+		return invalid()
+	}
+	if err := ValidateOwnerRequest(OwnerRequest{WorkspaceID: r.WorkspaceID, Operation: r.Operation}); err != nil {
+		return err
+	}
+	op := convert(r.Operation)
+	if op.Kind() != s.selected.Origin.Operation {
+		return invalid()
+	}
+	_, err := s.engine.current(ctx, r.WorkspaceID, op.Path(), nil, nil)
+	return err
+}
+
 func (s *ConnectorService) Execute(ctx context.Context, r ConnectorRequest) (*ConnectorResponse, error) {
 	if s == nil || s.engine == nil {
 		return nil, invalid()

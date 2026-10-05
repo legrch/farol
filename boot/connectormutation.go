@@ -87,7 +87,14 @@ func (s *computerConnector) mutate(ctx context.Context, slot *connectorSlot, ope
 		finish(nil, err, true)
 		return nil, err
 	}
-	result, err := mutationct.NewConnectorExecution(service).Execute(ctx, request)
+	contract := mutationct.NewConnectorExecution(service)
+	if err := contract.Check(ctx, request); err != nil {
+		// No mutation intent, journal write or native execution has been entered.
+		// Keep the one-shot refusal without blocking ordinary clean retirement.
+		finish(nil, err, true)
+		return nil, err
+	}
+	result, err := contract.Execute(ctx, request)
 	finish(service, err, settledConnectorMutation(result, err))
 	if err != nil {
 		return nil, &connectorMutationUnsettled{cause: err}

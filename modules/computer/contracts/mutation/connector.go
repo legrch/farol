@@ -55,6 +55,18 @@ func ValidateConnectorRequest(r ConnectorRequest) error {
 	return nil
 }
 
+// Check has no journal/native mutation effects and never renews the selected
+// execution lease. A successful check does not replace Execute's current guards.
+func (c *ConnectorContract) Check(ctx context.Context, r ConnectorRequest) error {
+	if c == nil || c.executor == nil {
+		return ownerBoundary(nil)
+	}
+	if err := c.executor.Check(ctx, app.ConnectorRequest{WorkspaceID: r.WorkspaceID, Operation: toAppOperation(r.Operation)}); err != nil {
+		return ownerBoundary(err)
+	}
+	return nil
+}
+
 func (c *ConnectorContract) Execute(ctx context.Context, r ConnectorRequest) (*ConnectorResponse, error) {
 	if c == nil || c.executor == nil {
 		return nil, ownerBoundary(nil)

@@ -77,6 +77,29 @@ func connectorContractFailure(t *testing.T, response *ConnectorResponse, err err
 	}
 }
 
+func TestConnectorContractCheckHasNoEffectAndIsNotAuthorityProof(t *testing.T) {
+	service, lease, store, native, _, request := connectorContractFixture(t)
+	contract := NewConnectorExecution(service)
+	if err := contract.Check(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	if store.admit != 0 || store.save != 0 || store.load != 0 || native.calls != 0 {
+		t.Fatal("target check performed mutation IO")
+	}
+	lease.fail = true
+	if out, err := contract.Execute(context.Background(), request); err == nil || out != nil || store.admit != 0 || native.calls != 0 {
+		t.Fatal("previous check bypassed original lease recheck")
+	}
+	service, _, store, native, _, request = connectorContractFixture(t)
+	request.WorkspaceID = "unapproved"
+	if err := NewConnectorExecution(service).Check(context.Background(), request); err == nil || store.admit != 0 || store.load != 0 || native.calls != 0 {
+		t.Fatal("unapproved target check accepted or persisted")
+	}
+	if NewConnectorObservation(nil).Check(context.Background(), request) == nil {
+		t.Fatal("read-only facade became execution preflight")
+	}
+}
+
 func TestConnectorContractExecutionAndOriginalObservation(t *testing.T) {
 	service, lease, store, native, selected, request := connectorContractFixture(t)
 	executor := NewConnectorExecution(service)
