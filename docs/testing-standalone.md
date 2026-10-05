@@ -16,6 +16,27 @@ scripts that construct `computer-launch.json` select the legacy adapter; they do
 not prove the normal desktop `computer-go-launch.json` path. That path still
 needs measured package, normal Dev and genuine external-client evidence.
 
+`tests/integration/go-connector-launch.test.ts` covers the production protected
+launch loader using real disposable files, path substitution and one bounded
+`mkfifo` child. It requires the same native lane and does not establish normal
+application startup. Authoring or compiling this suite is not native execution
+evidence.
+
+Connector mutation preparation has separate lower-layer evidence:
+
+- `TestConnectorV3*` in Computer domain and repository tests checks exact retained
+  bytes, full uint64 connector generation, immutable origin and shared-key
+  conflicts. Repository effects are injected memory storage.
+- `TestConnectorMutation*` and `TestConnectorObservation*` in the mutation service
+  use injected authority, journal and native ports to check one-effect execution,
+  expiry, current read guards and retained uncertainty.
+- `TestConnectorContract*` checks explicit DTO mapping and original result copies.
+- `TestConnectorMutationRead*` in `boot/` joins the real connector/execution read
+  policy with injected storage and endpoint, including final withdrawal.
+
+These selectors neither run native effects nor qualify the external mutation
+route, clean retirement, installed recovery or a live ChatGPT connector.
+
 The complete `task test` union remains open. A missing binary, artifact,
 predecessor, containment mechanism or authorized display leaves its required
 scenario blocked. A check-only, build-only, selected reproduction or blocked-focus

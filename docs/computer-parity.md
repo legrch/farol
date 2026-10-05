@@ -7,6 +7,23 @@ boundary ran against an actual temporary macOS workspace or installed host;
 `FIXTURE_APP` means the assembled Electron product ran with the deterministic
 provider/host fixture; `BLOCKED_OWNER` and `NOT_RUN` remain open evidence rows.
 
+The current Go desktop source selects the protected Go connector for catalogue,
+bootstrap, list, read, search and one-shot verification. The historical write and
+shell rows below describe the legacy adapter and do not establish those tools on
+the new Go route. Normal Dev, packaged routing and external-client qualification
+of the new route remain open.
+
+Connector mutation preparation now uses the existing Go mutation engine and
+journal. Its separate v3 record keeps a stable profile operation key and immutable
+original host/execution/call correlation; connector generation is an exact uint64
+decimal string. Existing task v1 and Settings v2 bytes are unchanged. A selected
+write lease covers admission, native publication and initial disclosure. Retained
+metadata can be read with current connector read authority after that write lease
+expires, without admitting or executing a mutation. Original unknown and
+memory-only outcomes cannot be upgraded by reading apparently complete disk data.
+These are source-level contracts; shared root retirement accounting and the
+external write/edit wire route are not yet activated.
+
 ## Legacy-to-Next disposition
 
 | Legacy capability                                                                                                 | Farol Next disposition                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   | Product consumer and evidence                                                                                                                          | Status                                                                                                         |

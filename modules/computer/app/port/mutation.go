@@ -31,6 +31,17 @@ type MutationRepository interface {
 	Save(context.Context, *mutation.State) error
 }
 
+// CurrentMutationObservation authorizes metadata disclosure under the current
+// authenticated connector, its original ceiling and current Computer policy.
+// The stable profile identity comes from trusted composition. This port grants
+// no execution, admission or lease renewal. It must check read access to the
+// exact workspace/path and invoke inspect synchronously exactly once, serialized
+// against connector withdrawal and policy changes. Entry and inspect perform no
+// native IO and must not reenter those owners. Repository IO happens outside it.
+type CurrentMutationObservation interface {
+	WithMutationObservation(context.Context, mutation.Identity, string, string, func() error) error
+}
+
 // The native digester must match SHA256(JSON.stringify([workspaceId,kind,path,
 // expectedHash,content OR ordered [oldText,newText] pairs])). It excludes outer
 // operation identity and Turn/Generation/CallID. Plain Go JSON escaping is not
