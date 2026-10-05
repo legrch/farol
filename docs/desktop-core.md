@@ -821,7 +821,38 @@ installed startup, a live provider, or release acceptance.
 
 ## Controlled normal desktop Chat
 
-The current accepted scoped witness is source
+The current scoped witness is source
+`e31c636346c4bfddf390d3959ba54ff9383a352d`, build
+`4c66385bd417ec55c9adc61dec62cde8978159755a13b8f25afe9350b56d4b5e`,
+paired unsigned app digest
+`4fd8d6105e44f75e1a3d57c63a43722b3d22cc46731b43bd9901a68524b9f5a7`.
+It passed the two-turn journey below, confirmed ordinary Quit, then one new
+backend generation in the same profile/build. Actual React **Load saved answers**
+and **Read turn** controls discovered and read both original result IDs and exact
+113/98-byte answer bodies. The successor's journal and configuration stayed
+unchanged during those reads. The fixture ledger stayed at two attempted and
+accepted Sends and six synthetic account GETs, including Home remount and the
+second clean Quit. No live turn, composer or Follow authority was restored.
+
+Both exact children exited 0 without a signal, Go drain confirmed, run markers
+were removed and disposable roots were removed only after known cleanup. All 49
+recorded window sets were hidden and unfocused. Relocated package verification,
+Dev preflight and final source/artifact re-attestation passed. Local receipt
+`go-core-startup-323443b8-634a-44ca-9692-b4c408ce4ee1.json` records the run;
+the command exited 0. This launched the paired attested Dev bytes, not the
+packaged app or an installed runtime.
+
+The complete bounded aggregate at `e31c636` passed 8,361 main tests, 330 renderer
+tests and 164 protocol tests, plus Go root/nested race and vet, generated bindings,
+import rules, strict TypeScript, lint, formatting, Hunt, output and secret checks.
+Narrow independent review found a bootstrap-recovery cache invalidation gap;
+eight regressions failed the old code, passed the correction at `35cd4b9`, and
+its targeted recheck was clear. The source and harness reviews are not formal
+full-range R3/R4 acceptance. The first aggregate's sole failure was a missing
+explicit IPC test inventory entry; `e31c636` added the already guarded history
+channel, and the full rerun passed.
+
+The earlier one-lifetime witness remains preserved at source
 `05ffee490ec8c413372a472ac982338fa01ffbf1`, build
 `4d4e044ba711d8a19f030203b03e0eaecf8e93f407c738b2a85d12f12bacdf93`.
 Its paired unsigned app digest is
@@ -881,8 +912,8 @@ scenario; production receives no expected answer. Focused evidence includes:
 | Pure harness                | `go-core-startup.e2e.mjs --self-test`                                                                                 | Exact logical ownership, physical Send counts, result ACK and Go settlement/release witnesses |
 | Assembled controlled native | `go-core-startup.e2e.mjs --chat-two-turn --run-native` with exact candidate/build identity                            | Normal startup, both UI turns and clean Quit pass at05ffee4; earlier5724 Quit remains failed  |
 
-That candidate retained answers only in the current backend/window lifetime.
-Current source instead composes the bounded native result store, with the same
+Earlier memory-only candidates retained answers within a backend lifetime.
+Current source composes the bounded native result store, with the same
 8192-byte answer limit, 1024-result limit and 8 MiB aggregate payload limit.
 Exact terminal publications enter journal v3 and clean-retirement receipts;
 retirement re-reads the original bytes and metadata before publication. No
@@ -893,9 +924,35 @@ acknowledged turns, retirement/ACK and two successor boots, including an empty
 intervening retirement. Both original results remain exactly readable from
 storage; successor browser-command count is zero. Browser observations and
 host terminal/drain facts are explicit fixtures. Missing/corrupt stores refuse
-startup without repair. This is native composition evidence, not an app restart
-or a current-authorized historical UI read. Open never creates an absent result
-store, so older memory-only profiles have no automatic migration path.
+startup without repair. These tests also exercise current-authorized lookup and
+read through normal boot and the typed Desktop API. The actual app witness above
+supplies the separate Electron restart and React read boundary. Open never creates
+an absent result store, so older memory-only profiles have no automatic migration
+path.
+
+History discovery traverses the existing fully validated handoff chain. It pins
+the exact consumed head, keeps original owner/profile/turn/result identity across
+empty intervening retirements, bounds pages to 32 and completed entries to 1024,
+and refuses gaps, uncertainty or crossed roots. Boot mints read authority only
+after normal startup succeeds and closes it before retirement. The current read
+lease is checked after acquiring the handoff gate and before disclosure. Reading
+returns original delivered result bytes; it cannot mint a live handle or Send.
+
+The named Desktop read methods are `chat.history.list` and
+`chat.history.result`. Their generated schema digest is
+`4ff63ebc0951e5f8043c2b3584e0b453eb0129436455ad3532afe20085353d87`.
+The narrow preload projection and React Home view keep bodies out of Activity and
+command intents. Context withdrawal, runtime gaps and failed/incompatible
+bootstrap invalidate cached text and pending replies, including recovery with the
+same context. History actions remain explicit; remount does not issue reads.
+
+| Layer                                    | Executable evidence                                                                                        | Covered source or artifact / remaining boundary                                                                                                                                |
+| ---------------------------------------- | ---------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Pure authority and closed history policy | `modules/chat/app/services/handoff/history_test.go`, `boot/historyauthority_test.go`                       | Current reader scope, guard-wait revocation, late outcomes, original receipt identity; no native host claim                                                                    |
+| Native repository                        | `modules/chat/infra/repos/handoff/historynative_test.go`                                                   | Real disposable files, roots, complete chain, missing/corrupt/unknown fences; no Electron process claim                                                                        |
+| Normal Go boot and wire                  | `boot/retainednative_test.go`, `boot/chathistory_test.go`, `gen/desktop/v1/history_test.go`                | Two original results through two successors and exact typed mapping; host terminal/browser facts are fixtures                                                                  |
+| Desktop and React                        | `tests/unit/chat-history-{bridge,view,wire}.test.ts`, `tests/renderer/chat-history{,-controller}.test.tsx` | Current context, bounded payloads, no effect commands, cache/late-reply invalidation; no native focus claim                                                                    |
+| Assembled native                         | `go-core-startup.e2e.mjs --chat-two-turn --chat-history-reopen --run-native`                               | Exact `e31c636` Dev candidate, two physical Sends, both clean Quits and React historical reads; installation, cross-build recovery and live-provider qualification remain open |
 
 Production translations and output profiles remain
 unqualified. External Responses new-user-turn delivery/settlement and selected

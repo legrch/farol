@@ -22,13 +22,15 @@ update the installed product.
 | Source checkpoint described here | Package `bef6d56` passed actual React edit → one Go native edit/retained journal → unacknowledged Quit → same-profile reopen → exact Observe → Go-owned delivery ACK. Independent file/journal checks found no second effect; provider Sends stayed zero. Go now owns Settings pending, offer and ACK policy. TypeScript retains typed configuration storage, legacy observation, root measurement and Git discovery. This unsigned `0.1.10-owner.beta.1`, build `12` candidate is not installed or released. |
 | UI target                        | React + TypeScript shell is composed. Plain TypeScript retains Electron/browser mechanics. Native Home, Settings, Appearance and configured-profile reopening have been exercised.                                                                                                                                                                                                                                                                                                                            |
 
-The Go cutover is incomplete. The `05ffee4` normal-entrypoint Dev candidate passed
-a controlled React/Go two-turn Chat journey: useful output before completion,
-explicit result ACK, Go settlement/release, retained first result and exactly two
-accepted Sends in the same conversation. Durable terminal references entered the
-Go journal, and ordinary Quit confirmed clean retirement and drain. This is
-synthetic native evidence, not live-provider, historical UI read, restart or
-installed qualification. The earlier failed profile remains quarantined. See
+The Go cutover is incomplete. The `e31c636` normal-entrypoint Dev candidate passed
+a controlled React/Go two-turn Chat journey, clean Quit, and a same-profile/build
+restart. Home's Saved Chat answers view then discovered and read both original
+results through the current Go owner. Useful output preceded completion; explicit
+result ACK and Go settlement/release preceded Follow. The independent provider
+counter remained at exactly two accepted Sends across both app lifetimes. Both
+children quit cleanly. This is synthetic native evidence, not live-provider,
+installed, cross-build recovery or full cutover qualification. Earlier failed
+profiles remain quarantined. See
 the [controlled Chat witness](docs/desktop-core.md#controlled-normal-desktop-chat).
 
 Separately, the owner reported installation of the access hotfix
@@ -186,15 +188,15 @@ The Claude execution lease is selected only after Task admission. `NativeRuntime
 does not yet register these Task routes: trusted selection, native qualification
 and real Codex/Claude journeys remain separate acceptance work.
 
-| Location                                                                                 | Ownership at this checkpoint                                                                                                                     |
-| ---------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| [`src/`](src/)                                                                           | React shell under `src/ui/renderer/`, Electron/browser adapters, transitional services and composition.                                          |
-| [`apps/desktop/`](apps/desktop/)                                                         | Attested Go host, authority publication and generated Go/TypeScript wire bridge.                                                                 |
-| [`boot/`](boot/), [`cmd/farol/`](cmd/farol/), [`transport/desktop/`](transport/desktop/) | Go composition, entrypoint, native profile lifetime and framed protocol.                                                                         |
-| [`modules/computer/`](modules/computer/)                                                 | Authority, filesystem and process services. Native ingress selects catalogue/bootstrap/read; other prepared capabilities need their own cutover. |
-| [`modules/chat/`](modules/chat/)                                                         | Turn, queue, admission, browser exchange and bounded retained results; controlled normal desktop composition qualified within one lifetime.      |
-| [`modules/task/`](modules/task/)                                                         | Coding-task lifecycle and provider adapters; shipping task-route qualification remains separate.                                                 |
-| [`modules/release/`](modules/release/)                                                   | Update/recovery, journal and identity/adoption preparation; the existing updater is still active.                                                |
+| Location                                                                                 | Ownership at this checkpoint                                                                                                                                               |
+| ---------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`src/`](src/)                                                                           | React shell under `src/ui/renderer/`, Electron/browser adapters, transitional services and composition.                                                                    |
+| [`apps/desktop/`](apps/desktop/)                                                         | Attested Go host, authority publication and generated Go/TypeScript wire bridge.                                                                                           |
+| [`boot/`](boot/), [`cmd/farol/`](cmd/farol/), [`transport/desktop/`](transport/desktop/) | Go composition, entrypoint, native profile lifetime and framed protocol.                                                                                                   |
+| [`modules/computer/`](modules/computer/)                                                 | Authority, filesystem and process services. Native ingress selects catalogue/bootstrap/read; other prepared capabilities need their own cutover.                           |
+| [`modules/chat/`](modules/chat/)                                                         | Turn, queue, admission, browser exchange and bounded retained results; controlled normal desktop Chat and authorized saved-answer reads across a clean same-build restart. |
+| [`modules/task/`](modules/task/)                                                         | Coding-task lifecycle and provider adapters; shipping task-route qualification remains separate.                                                                           |
+| [`modules/release/`](modules/release/)                                                   | Update/recovery, journal and identity/adoption preparation; the existing updater is still active.                                                                          |
 
 Domain and application code use values and consumer-owned ports. Neighbors cross
 published contracts through `infra/peer`; Go contracts map independent DTOs and

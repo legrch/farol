@@ -9,10 +9,13 @@ See [ADMISSION.md](ADMISSION.md) for the published guard and
 Normal core-enabled Desktop now composes the native journal, browser exchange,
 bounded durable results and React conversation facade. The
 [controlled normal desktop witness](../../docs/desktop-core.md#controlled-normal-desktop-chat)
-proves two deliberate turns and ordinary clean Quit at05ffee4. Native Go tests also
-cover exact stored answers across clean successor boots, including an intervening
-empty retirement. Browser/host terminal facts are fixtures in those tests;
-current-authorized historical UI reads and app restart remain open. Production
+proves two deliberate turns, ordinary clean Quit, same-build/profile restart and
+current-authorized React reads of both original answers at `e31c636`. The
+controlled provider ledger remains at two accepted Sends across both lifetimes.
+Native Go tests also cover exact stored answers across two successor boots,
+including an intervening empty retirement; browser/host terminal facts are
+fixtures at that lower layer. Installation, cross-build recovery and live-provider
+qualification remain open. Production
 control/output profiles and ordinary
 next-user-turn support in the external Responses adapter remain open. Existing
 TypeScript routes outside this accepted slice retain their separate consumers.
