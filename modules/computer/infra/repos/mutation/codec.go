@@ -80,7 +80,7 @@ type connectorOrigin struct {
 	BuildID             string      `json:"buildId"`
 	BackendGeneration   string      `json:"backendGeneration"`
 	RuntimeID           string      `json:"runtimeId"`
-	ConnectorGeneration uint64      `json:"connectorGeneration"`
+	ConnectorGeneration string      `json:"connectorGeneration"`
 	SessionID           string      `json:"sessionId"`
 	TaskID              string      `json:"taskId"`
 	ParticipantID       string      `json:"participantId"`
@@ -107,10 +107,14 @@ type connectorEnvelope struct {
 }
 
 func toConnector(o domain.ConnectorOrigin) connectorOrigin {
-	return connectorOrigin{o.BuildID, o.BackendGeneration, o.RuntimeID, o.ConnectorGeneration, o.SessionID, o.TaskID, o.ParticipantID, o.TurnID, o.CallID, o.TaskEpoch, o.Generation, o.Operation}
+	return connectorOrigin{o.BuildID, o.BackendGeneration, o.RuntimeID, strconv.FormatUint(o.ConnectorGeneration, 10), o.SessionID, o.TaskID, o.ParticipantID, o.TurnID, o.CallID, o.TaskEpoch, o.Generation, o.Operation}
 }
 func (o connectorOrigin) domain() domain.ConnectorOrigin {
-	return domain.ConnectorOrigin{BuildID: o.BuildID, BackendGeneration: o.BackendGeneration, RuntimeID: o.RuntimeID, ConnectorGeneration: o.ConnectorGeneration, SessionID: o.SessionID, TaskID: o.TaskID, ParticipantID: o.ParticipantID, TurnID: o.TurnID, CallID: o.CallID, TaskEpoch: o.TaskEpoch, Generation: o.Generation, Operation: o.Operation}
+	generation, err := strconv.ParseUint(o.ConnectorGeneration, 10, 64)
+	if err != nil {
+		return domain.ConnectorOrigin{}
+	}
+	return domain.ConnectorOrigin{BuildID: o.BuildID, BackendGeneration: o.BackendGeneration, RuntimeID: o.RuntimeID, ConnectorGeneration: generation, SessionID: o.SessionID, TaskID: o.TaskID, ParticipantID: o.ParticipantID, TurnID: o.TurnID, CallID: o.CallID, TaskEpoch: o.TaskEpoch, Generation: o.Generation, Operation: o.Operation}
 }
 
 func toIdentity(i domain.Identity) identity {

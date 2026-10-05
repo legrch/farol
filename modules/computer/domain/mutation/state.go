@@ -17,7 +17,7 @@ type ConnectorOrigin struct {
 
 func (o ConnectorOrigin) Valid() bool {
 	return Identifier(o.BuildID, 120) && Identifier(o.BackendGeneration, 120) && Identifier(o.RuntimeID, 120) &&
-		o.ConnectorGeneration > 0 && o.ConnectorGeneration <= MaxSafeInteger && Identifier(o.SessionID, 120) &&
+		o.ConnectorGeneration > 0 && Identifier(o.SessionID, 120) &&
 		Identifier(o.TaskID, 120) && Identifier(o.ParticipantID, 120) && Identifier(o.TurnID, 120) && Identifier(o.CallID, 120) &&
 		o.TaskEpoch <= MaxSafeInteger && o.Generation <= MaxSafeInteger && (o.Operation == WriteKind || o.Operation == EditKind)
 }

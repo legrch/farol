@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -13,6 +14,28 @@ import (
 	"github.com/legrch/farol/modules/computer/domain/authority"
 	domain "github.com/legrch/farol/modules/computer/domain/mutation"
 )
+
+func TestConnectorV3FullConnectorGeneration(t *testing.T) {
+	for _, generation := range []uint64{1, 9007199254740993, ^uint64(0)} {
+		t.Run(strconv.FormatUint(generation, 10), func(t *testing.T) {
+			_, _, original := connectorV3Fixture(t)
+			b := original.Binding()
+			b.Connector.ConnectorGeneration = generation
+			prepared, err := domain.NewPrepared(b)
+			if err != nil {
+				t.Fatal("valid wire connector generation refused", err)
+			}
+			raw, err := encode(prepared)
+			if err != nil || !bytes.Contains(raw, []byte(`"connectorGeneration":"`+strconv.FormatUint(generation, 10)+`"`)) {
+				t.Fatalf("generation not stored as exact decimal: %s %v", raw, err)
+			}
+			got, err := decode(raw)
+			if err != nil || got == nil || got.Binding() != b {
+				t.Fatal("generation changed during roundtrip", err)
+			}
+		})
+	}
+}
 
 // fixture uses injected memory storage only; no native constructor or effects.
 func connectorV3Fixture(t *testing.T) (*Repository, *memory, *domain.State) {
@@ -43,7 +66,7 @@ func TestConnectorV3CanonicalFixtureAndLegacyNamespaces(t *testing.T) {
 	}{
 		{"v1", task, `{"schemaVersion":1,"kind":"workspace_mutation","record":{"identity":{"operationId":"op","ownerId":"owner","sessionId":"session","taskId":"task","taskEpoch":7,"participantId":"participant"},"workspaceId":"work","requestDigest":"` + digest + `","phase":"prepared","outcome":null}}` + "\n", `["op","owner","session","task",7,"participant"]`},
 		{"v2", owner, `{"schemaVersion":2,"kind":"workspace_owner_mutation","record":{"identity":{"scope":"owner-settings","operationId":"op","ownerId":"owner","profileId":"profile","computerId":"computer"},"computerGeneration":7,"workspaceId":"work","relativePath":"file.md","requestDigest":"` + digest + `","phase":"prepared","outcome":null}}` + "\n", `["owner-settings-v2","op","owner","profile","computer"]`},
-		{"v3", connector, `{"schemaVersion":3,"kind":"workspace_connector_mutation","record":{"identity":{"scope":"external-connector","operationId":"op","ownerId":"owner","profileId":"profile","computerId":"computer"},"computerGeneration":7,"workspaceId":"work","relativePath":"file.md","origin":{"buildId":"build","backendGeneration":"backend","runtimeId":"runtime","connectorGeneration":2,"sessionId":"session","taskId":"task","participantId":"participant","turnId":"turn","callId":"call","taskEpoch":3,"generation":4,"operation":"write"},"requestDigest":"` + digest + `","phase":"prepared","outcome":null}}` + "\n", `["external-connector-v3","op","owner","profile","computer"]`},
+		{"v3", connector, `{"schemaVersion":3,"kind":"workspace_connector_mutation","record":{"identity":{"scope":"external-connector","operationId":"op","ownerId":"owner","profileId":"profile","computerId":"computer"},"computerGeneration":7,"workspaceId":"work","relativePath":"file.md","origin":{"buildId":"build","backendGeneration":"backend","runtimeId":"runtime","connectorGeneration":"2","sessionId":"session","taskId":"task","participantId":"participant","turnId":"turn","callId":"call","taskEpoch":3,"generation":4,"operation":"write"},"requestDigest":"` + digest + `","phase":"prepared","outcome":null}}` + "\n", `["external-connector-v3","op","owner","profile","computer"]`},
 	}
 	keys := make(map[string]bool)
 	for _, v := range cases {
@@ -145,28 +168,31 @@ func TestConnectorV3RejectsMissingMixedAndCorruptRaw(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	origin := `"origin":{"buildId":"build","backendGeneration":"backend","runtimeId":"runtime","connectorGeneration":2,"sessionId":"session","taskId":"task","participantId":"participant","turnId":"turn","callId":"call","taskEpoch":3,"generation":4,"operation":"write"}`
+	origin := `"origin":{"buildId":"build","backendGeneration":"backend","runtimeId":"runtime","connectorGeneration":"2","sessionId":"session","taskId":"task","participantId":"participant","turnId":"turn","callId":"call","taskEpoch":3,"generation":4,"operation":"write"}`
 	for name, pair := range map[string][2]string{
-		"missing-origin":            {origin + ",", ""},
-		"null-origin":               {origin, `"origin":null`},
-		"empty-origin":              {origin, `"origin":{}`},
-		"missing-origin-field":      {`"callId":"call",`, ""},
-		"empty-id":                  {`"callId":"call"`, `"callId":""`},
-		"oversized-id":              {`"buildId":"build"`, `"buildId":"` + strings.Repeat("x", 121) + `"`},
-		"zero-connector-generation": {`"connectorGeneration":2`, `"connectorGeneration":0`},
-		"unsafe-number":             {`"taskEpoch":3`, `"taskEpoch":9007199254740992`},
-		"fraction":                  {`"generation":4`, `"generation":4.5`},
-		"unsupported-operation":     {`"operation":"write"`, `"operation":"read"`},
-		"legacy-session":            {`"scope":"external-connector"`, `"scope":"external-connector","sessionId":"session"`},
-		"legacy-task":               {`"scope":"external-connector"`, `"scope":"external-connector","taskId":"task"`},
-		"legacy-epoch":              {`"scope":"external-connector"`, `"scope":"external-connector","taskEpoch":0`},
-		"legacy-participant":        {`"scope":"external-connector"`, `"scope":"external-connector","participantId":"participant"`},
-		"wrong-scope":               {`"scope":"external-connector"`, `"scope":"owner-settings"`},
-		"wrong-version":             {`"schemaVersion":3`, `"schemaVersion":2`},
-		"wrong-kind":                {`"kind":"workspace_connector_mutation"`, `"kind":"workspace_owner_mutation"`},
-		"unknown-origin-field":      {`"callId":"call"`, `"callId":"call","extra":true`},
-		"duplicate":                 {`"callId":"call"`, `"callId":"call","callId":"call"`},
-		"surrogate":                 {`"callId":"call"`, `"callId":"\ud800"`},
+		"missing-origin":                    {origin + ",", ""},
+		"null-origin":                       {origin, `"origin":null`},
+		"empty-origin":                      {origin, `"origin":{}`},
+		"missing-origin-field":              {`"callId":"call",`, ""},
+		"empty-id":                          {`"callId":"call"`, `"callId":""`},
+		"oversized-id":                      {`"buildId":"build"`, `"buildId":"` + strings.Repeat("x", 121) + `"`},
+		"zero-connector-generation":         {`"connectorGeneration":"2"`, `"connectorGeneration":"0"`},
+		"overflow-connector-generation":     {`"connectorGeneration":"2"`, `"connectorGeneration":"18446744073709551616"`},
+		"number-connector-generation":       {`"connectorGeneration":"2"`, `"connectorGeneration":2`},
+		"noncanonical-connector-generation": {`"connectorGeneration":"2"`, `"connectorGeneration":"02"`},
+		"unsafe-number":                     {`"taskEpoch":3`, `"taskEpoch":9007199254740992`},
+		"fraction":                          {`"generation":4`, `"generation":4.5`},
+		"unsupported-operation":             {`"operation":"write"`, `"operation":"read"`},
+		"legacy-session":                    {`"scope":"external-connector"`, `"scope":"external-connector","sessionId":"session"`},
+		"legacy-task":                       {`"scope":"external-connector"`, `"scope":"external-connector","taskId":"task"`},
+		"legacy-epoch":                      {`"scope":"external-connector"`, `"scope":"external-connector","taskEpoch":0`},
+		"legacy-participant":                {`"scope":"external-connector"`, `"scope":"external-connector","participantId":"participant"`},
+		"wrong-scope":                       {`"scope":"external-connector"`, `"scope":"owner-settings"`},
+		"wrong-version":                     {`"schemaVersion":3`, `"schemaVersion":2`},
+		"wrong-kind":                        {`"kind":"workspace_connector_mutation"`, `"kind":"workspace_owner_mutation"`},
+		"unknown-origin-field":              {`"callId":"call"`, `"callId":"call","extra":true`},
+		"duplicate":                         {`"callId":"call"`, `"callId":"call","callId":"call"`},
+		"surrogate":                         {`"callId":"call"`, `"callId":"\ud800"`},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if !bytes.Contains(raw, []byte(pair[0])) {

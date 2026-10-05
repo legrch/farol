@@ -90,11 +90,14 @@ func TestConnectorV3OriginBoundsAndLegacyExclusion(t *testing.T) {
 		"computer-generation":  func(b *Binding, v uint64) { b.ComputerGeneration = v },
 	} {
 		t.Run(name, func(t *testing.T) {
-			for _, value := range []uint64{0, 1, MaxSafeInteger, MaxSafeInteger + 1} {
+			for _, value := range []uint64{0, 1, MaxSafeInteger, MaxSafeInteger + 1, ^uint64(0)} {
 				b := connectorV3Binding()
 				set(&b, value)
 				got, err := NewPrepared(b)
-				valid := value <= MaxSafeInteger && (name != "connector-generation" || value > 0)
+				valid := value <= MaxSafeInteger
+				if name == "connector-generation" {
+					valid = value > 0
+				}
 				if valid {
 					if err != nil || got == nil {
 						t.Fatalf("valid value %d rejected: %v", value, err)
