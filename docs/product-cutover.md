@@ -101,6 +101,11 @@ retains the deferred stale-build launch guard P1; this procedure is not its PASS
 
 ## Ordinary Dev closed recovery
 
+The command below handles the transitional connector-only failure contract.
+It does not settle an unconfirmed Go backend or clean-retirement handoff. The
+[prepared native-state diagnostic](native-state-inspection.md) preserves that
+boundary and grants no recovery or restart authority.
+
 The same exact-evidence maintenance command accepts `--development` to select
 the existing ordinary Farol Dev profile under the genuine owner home. It uses
 Task Dev's metadata-only spelling resolver (`Farol Dev` / `Farol DEV`), rejects

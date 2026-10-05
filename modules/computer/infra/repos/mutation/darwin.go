@@ -55,11 +55,15 @@ func (d *disk) add(parent int, name string) error {
 	return nil
 }
 func openNative(root Root) (storage, error) {
+	return openNativeMode(root, true)
+}
+
+func openNativeMode(root Root, createWriter bool) (*disk, error) {
 	if root.OwnerUID != uint32(os.Geteuid()) {
 		return nil, unavailable()
 	}
 	d := &disk{root: root, dir: -1, lock: -1}
-	fail := func() (storage, error) { _ = d.close(); return nil, unavailable() }
+	fail := func() (*disk, error) { _ = d.close(); return nil, unavailable() }
 	fd, err := unix.Open("/", unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
 	if err != nil {
 		return nil, unavailable()
@@ -89,7 +93,11 @@ func openNative(root Root) (storage, error) {
 	d.dir = child.fd
 	// The root and child were independently qualified; only this retained writer
 	// lock may be created. No state root/child/file is created, repaired or swept.
-	d.lock, err = unix.Openat(r.fd, writerName, unix.O_RDWR|unix.O_CREAT|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC, 0600)
+	flags := unix.O_RDONLY | unix.O_NOFOLLOW | unix.O_NONBLOCK | unix.O_CLOEXEC
+	if createWriter {
+		flags |= unix.O_RDWR | unix.O_CREAT
+	}
+	d.lock, err = unix.Openat(r.fd, writerName, flags, 0600)
 	if err != nil {
 		return fail()
 	}
