@@ -6,6 +6,7 @@ import type {
   PhysicalBinding,
 } from "../../apps/desktop/chatgpt-physical-api";
 import {
+  physicalComposerDraft,
   physicalPrepareProbeScript,
   physicalVerifySendScript,
   physicalSendScript,
@@ -174,6 +175,63 @@ class SyntheticElement {
     return true;
   }
 }
+
+describe("logical composer draft", () => {
+  const read = (composer: SyntheticElement): string =>
+    vm.runInNewContext(`(${physicalComposerDraft.toString()})(composer)`, {
+      composer,
+      HTMLElement: SyntheticElement,
+      HTMLTextAreaElement: class {},
+    }) as string;
+  it.each(["DIV", "P"])(
+    "preserves empty and trailing %s lines without mutating inline chips",
+    (tag) => {
+      const composer = new SyntheticElement("DIV", {}, "first");
+      const chip = new SyntheticElement(
+        "SPAN",
+        { "data-testid": "composer-app-chip" },
+        "not prompt",
+      );
+      const empty = () => {
+        const line = new SyntheticElement(tag);
+        line.append(new SyntheticElement("BR"));
+        return line;
+      };
+      composer.append(
+        chip,
+        empty(),
+        new SyntheticElement(tag, {}, "third"),
+        empty(),
+      );
+      expect(read(composer)).toBe("first\n\nthird\n");
+      expect(composer.contains(chip)).toBe(true);
+      expect(chip.innerText).toBe("not prompt");
+    },
+  );
+  it("preserves text and inline breaks, and refuses unsupported or excessive markup", () => {
+    const composer = new SyntheticElement("DIV", {}, "first");
+    composer.append(
+      new SyntheticElement("BR"),
+      new SyntheticElement("STRONG", {}, "second"),
+    );
+    expect(read(composer)).toBe("first\nsecond");
+    composer.append(new SyntheticElement("TABLE"));
+    expect(() => read(composer)).toThrow("PHYSICAL_DRAFT_UNQUALIFIED");
+    const deep = new SyntheticElement("DIV");
+    let cursor = deep;
+    for (let index = 0; index < 34; index++) {
+      const next = new SyntheticElement("SPAN");
+      cursor.append(next);
+      cursor = next;
+    }
+    expect(() => read(deep)).toThrow("PHYSICAL_DRAFT_UNQUALIFIED");
+    const wide = new SyntheticElement("DIV");
+    wide.append(
+      ...Array.from({ length: 8193 }, () => new SyntheticElement("BR")),
+    );
+    expect(() => read(wide)).toThrow("PHYSICAL_DRAFT_UNQUALIFIED");
+  });
+});
 
 type FactoryPolicy = Readonly<{
   e2eOrigin: string | null;

@@ -285,7 +285,7 @@ export async function startControlledChatGptSite(candidate) {
         eventResponses.clear();
         response.writeHead(200, publicHeaders);
         response.end(`<!doctype html><html><head><meta charset="utf-8"><title>Controlled provider fixture</title>
-          <style>body{font:16px sans-serif}button,#prompt-textarea{min-width:120px;min-height:36px}.markdown{white-space:pre-wrap}</style></head>
+          <style>body{font:16px sans-serif}button,#prompt-textarea{min-width:120px;min-height:36px}#prompt-textarea,.markdown{white-space:pre-wrap}</style></head>
           <body data-conversation-id="${escape(scenario.conversationId)}" data-document-id="${currentDocument.id}" data-document-generation="${documentGeneration}">
           <button aria-label="Select ChatGPT model">${escape(selected.model)}</button>
           <form><div id="prompt-textarea" contenteditable="true" data-virtualkeyboard="true" aria-label="Message"></div>

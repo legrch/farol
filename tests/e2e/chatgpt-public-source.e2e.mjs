@@ -2,9 +2,10 @@
  * Synthetic HTML in hidden native Electron/Chromium, NOT live ChatGPT selector,
  * provider, host/tool execution, packaged-product, or account acceptance.
  * Parent owns the native lane. No launch unless --run-native is explicit.
- * From any cwd, with Node 24.20.0:
+ * From any cwd, with a declared Node toolchain:
  *   node tests/e2e/chatgpt-public-source.e2e.mjs --build-only
  *   node tests/e2e/chatgpt-public-source.e2e.mjs --run-native
+ * Add --composer-only to run only the native composer regression.
  */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -15,6 +16,7 @@ import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 import { treeDigest } from "../../tooling/artifact-digest.mjs";
 import { ELECTRON_RUNTIME } from "../../tooling/runtime-contract.mjs";
+import { DECLARED_NODE_VERSIONS } from "../../tooling/dev.mjs";
 
 // Serialized into a standalone main-process bundle with production imports.
 // All dependencies are explicit; nothing here imports or starts the desktop app.
@@ -30,6 +32,7 @@ function childMain({
   publicMarkdownBlock,
   publicContentVisible,
   ChatGptPublicTurn,
+  physicalComposerDraft,
   config,
 }) {
   const receipt = {
@@ -259,6 +262,75 @@ function childMain({
         probeFactorySha256: hash(taskProbeScript.toString()),
         visibilitySha256: hash(publicContentVisible.toString()),
       };
+      await row("composer-multiline-native-insertion", async () => {
+        for (const prompt of [
+          "first\nsecond",
+          "first\n\nthird",
+          "first\nsecond\n",
+        ]) {
+          await window.loadURL(
+            "data:text/html;charset=utf-8," +
+              encodeURIComponent(
+                '<html><body><div id="composer" contenteditable="true" style="white-space:pre-wrap"></div></body></html>',
+              ),
+          );
+          const observed = await execute(`(() => {
+            const composer = document.getElementById("composer");
+            composer.focus();
+            const range = document.createRange(); range.selectNodeContents(composer); range.collapse(false);
+            const caret = window.getSelection(); caret.removeAllRanges(); caret.addRange(range);
+            const inserted = document.execCommand("insertText", false, ${JSON.stringify(prompt)});
+            return { inserted, html: composer.innerHTML, rendered: composer.innerText,
+              draft: (${physicalComposerDraft.toString()})(composer) };
+          })()`);
+          receipt.composer ??= [];
+          receipt.composer.push(observed);
+          assert.equal(observed.inserted, true);
+          assert.equal(observed.draft, prompt);
+        }
+      });
+      await row("controlled-client-multiline-submission", async () => {
+        await window.loadURL(
+          "data:text/html;charset=utf-8," +
+            encodeURIComponent(
+              '<body data-document-id="test-document" data-document-generation="1" data-conversation-id="test-conversation">' +
+                '<div id="prompt-textarea" contenteditable="true" style="white-space:pre-wrap"></div>' +
+                '<button data-testid="send-button">Send</button><button data-testid="stop-button">Stop</button>' +
+                '<div data-testid="network-error" hidden></div><div id="conversation"></div>' +
+                '<button aria-label="Select ChatGPT model">Test model</button>' +
+                '<button aria-haspopup="menu" data-tone="neutral">Light</button>' +
+                '<span data-testid="composer-app-chip" hidden></span></body>',
+            ),
+        );
+        const prompt = "first\n\nthird\n";
+        const observed = await execute(`(() => {
+          const requests = [];
+          globalThis.fetch = async (path, init) => {
+            requests.push({ path, body: JSON.parse(init.body) });
+            return { ok: true, json: async () => ({ accepted: true }) };
+          };
+          globalThis.EventSource = class { addEventListener() {} close() {} };
+          (() => { ${config.controlledClientSource} })();
+          const composer = document.getElementById("prompt-textarea");
+          composer.focus();
+          const range = document.createRange(); range.selectNodeContents(composer); range.collapse(false);
+          const caret = window.getSelection(); caret.removeAllRanges(); caret.addRange(range);
+          const inserted = document.execCommand("insertText", false, ${JSON.stringify(prompt)});
+          const send = document.querySelector('[data-testid="send-button"]');
+          const enabled = !send.disabled;
+          send.click(); send.click();
+          return { inserted, enabled, requests };
+        })()`);
+        assert.equal(observed.inserted, true);
+        assert.equal(observed.enabled, true);
+        assert.equal(observed.requests.length, 1);
+        assert.equal(observed.requests[0].path, "/fixtures/chatgpt/send");
+        assert.equal(observed.requests[0].body.message, prompt);
+      });
+      if (config.composerOnly) {
+        receipt.status = "passed";
+        return receipt;
+      }
       await row("rich-markdown-link-code-table", async () => {
         const html =
           '<p>Hello <strong>world</strong> <a href="https://example.test/a?b=1&amp;c=2">source</a> <code>x &lt; y</code></p>' +
@@ -713,11 +785,16 @@ const vnext = path.resolve(path.dirname(filename), "../..");
 const output = path.resolve(vnext, "_output");
 const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const mode = process.argv[2];
+const composerOnly = process.argv[3] === "--composer-only";
 assert.ok(
-  ["--build-only", "--run-native"].includes(mode) && process.argv.length === 3,
+  ["--build-only", "--run-native"].includes(mode) &&
+    (process.argv.length === 3 || (composerOnly && process.argv.length === 4)),
   "Choose --build-only or --run-native explicitly; native execution belongs to the parent lane",
 );
-assert.equal(process.versions.node, "24.20.0", "Use pinned Node 24.20.0");
+assert.ok(
+  DECLARED_NODE_VERSIONS.includes(process.versions.node),
+  "Use a declared Node toolchain",
+);
 await fs.mkdir(path.join(output, "evidence"), { recursive: true });
 await fs.mkdir(path.join(output, "tmp"), { recursive: true });
 const temporary = await fs.mkdtemp(
@@ -800,7 +877,21 @@ try {
     ),
   );
   const bundle = path.join(temporary, "fixture.cjs");
-  const config = { paths, receipt: childReceipt };
+  const clientSourcePath = "tests/e2e/fixtures/chatgpt-controlled-client.mjs";
+  const controlledClientSource = await fs.readFile(
+    path.join(vnext, clientSourcePath),
+    "utf8",
+  );
+  report.sources.push({
+    path: clientSourcePath,
+    sha256: hash(controlledClientSource),
+  });
+  const config = {
+    paths,
+    receipt: childReceipt,
+    composerOnly,
+    controlledClientSource,
+  };
   const built = await build({
     absWorkingDir: vnext,
     bundle: true,
@@ -826,9 +917,10 @@ try {
       import { taskProbeScript } from './src/apps/desktop/chatgpt-route.ts';
       import { publicMarkdownBlock } from './src/apps/desktop/chatgpt-public-markdown.ts';
       import { publicContentVisible, ChatGptPublicTurn } from './src/apps/desktop/chatgpt-public-turn.ts';
+      import { physicalComposerDraft } from './src/apps/desktop/chatgpt-physical-page-scripts.ts';
       (${childMain.toString()})({ app, BrowserWindow, session, assert, fs, path,
         hash: bytes => createHash('sha256').update(bytes).digest('hex'),
-        taskProbeScript, publicMarkdownBlock, publicContentVisible, ChatGptPublicTurn,
+        taskProbeScript, publicMarkdownBlock, publicContentVisible, ChatGptPublicTurn, physicalComposerDraft,
         config: ${JSON.stringify(config)} });`,
     },
     plugins: [

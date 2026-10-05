@@ -20,6 +20,61 @@ import {
 } from "./chatgpt-public-turn";
 import { publicMarkdownBlock } from "./chatgpt-public-markdown";
 
+// Serialized with the physical page adapter; only public composer DOM is read.
+export function physicalComposerDraft(composer: HTMLElement): string {
+  if (composer instanceof HTMLTextAreaElement) return composer.value;
+  const chipSelector =
+    '[data-testid="composer-app-chip"],[data-testid*="app-mention"],[data-testid*="connector-chip"],[data-prompt-link-href^="app://asdk_app_"],a[href*="/plugins/plugin_asdk_app_"]';
+  // Chromium inserts DIV/BR line blocks; paragraph editors use P. innerText
+  // doubles empty-block breaks, while detached textContent loses all breaks.
+  // Read these explicit editor shapes without changing the live DOM or chips.
+  let nodes = 0;
+  const read = (parent: HTMLElement, depth: number): string => {
+    if (depth > 32) throw new Error("PHYSICAL_DRAFT_UNQUALIFIED");
+    let text = "";
+    let previousBlock = false;
+    const children = [...parent.childNodes].filter(
+      (node) => !(node instanceof HTMLElement && node.matches(chipSelector)),
+    );
+    for (const node of children) {
+      if (++nodes > 8192) throw new Error("PHYSICAL_DRAFT_UNQUALIFIED");
+      if (node.nodeType === 3) {
+        if (!node.nodeValue) continue;
+        if (previousBlock) text += "\n";
+        text += node.nodeValue;
+        previousBlock = false;
+        continue;
+      }
+      if (!(node instanceof HTMLElement))
+        throw new Error("PHYSICAL_DRAFT_UNQUALIFIED");
+      const block = node.tagName === "DIV" || node.tagName === "P";
+      if (
+        !block &&
+        !["BR", "SPAN", "B", "STRONG", "I", "EM", "CODE", "A"].includes(
+          node.tagName,
+        )
+      )
+        throw new Error("PHYSICAL_DRAFT_UNQUALIFIED");
+      // A sole BR keeps an empty editor line selectable; it is not another line.
+      const value =
+        node.tagName === "BR"
+          ? children.length === 1
+            ? ""
+            : "\n"
+          : read(node, depth + 1);
+      if (
+        (block && (text.length > 0 || previousBlock)) ||
+        (!block && previousBlock)
+      )
+        text += "\n";
+      text += value;
+      previousBlock = block;
+    }
+    return text;
+  };
+  return read(composer, 0);
+}
+
 export type PhysicalPageRequiredControls =
   PhysicalSelection["requiredControls"];
 export type PhysicalPageSelection = PhysicalSelection;
@@ -290,6 +345,7 @@ async function physicalPage(
   accountProfile: "provider-session-v1" | null,
   readAccount: typeof readChatGptAccount | null,
   contentProfile: PhysicalPageContentProfile,
+  draft: typeof physicalComposerDraft,
 ): Promise<Response> {
   type WitnessRecord = {
     witness: PageWitness;
@@ -398,12 +454,6 @@ async function physicalPage(
       (element, _index, all) =>
         !all.some((parent) => parent !== element && parent.contains(element)),
     );
-  const draft = (composer: HTMLElement) => {
-    if (composer instanceof HTMLTextAreaElement) return composer.value;
-    const clone = composer.cloneNode(true) as HTMLElement;
-    for (const chip of clone.querySelectorAll(chipSelector)) chip.remove();
-    return clone.innerText || clone.textContent || "";
-  };
   const fact = (value: string | null) =>
     value === null
       ? { state: "unknown" as const, code: "not-exposed" as const }
@@ -1242,7 +1292,7 @@ function script(request: Request, policy: PhysicalPagePolicy): string {
     "contentProfile" in request
       ? request.contentProfile
       : (parsed.data.contentProfile ?? "message-anchors-v1");
-  return `(${physicalPage.toString()})(${JSON.stringify(request)},${readPublicAssistantMessages.toString()},${publicMarkdownBlock.toString()},${publicContentVisible.toString()},${JSON.stringify(parsed.data.e2eOrigin)},${JSON.stringify(parsed.data.accountObservationProfile ?? null)},${parsed.data.accountObservationProfile ? readChatGptAccount.toString() : "null"},${JSON.stringify(contentProfile)})`;
+  return `(${physicalPage.toString()})(${JSON.stringify(request)},${readPublicAssistantMessages.toString()},${publicMarkdownBlock.toString()},${publicContentVisible.toString()},${JSON.stringify(parsed.data.e2eOrigin)},${JSON.stringify(parsed.data.accountObservationProfile ?? null)},${parsed.data.accountObservationProfile ? readChatGptAccount.toString() : "null"},${JSON.stringify(contentProfile)},${physicalComposerDraft.toString()})`;
 }
 const invalid = '({state:"refused",code:"PHYSICAL_INPUT_INVALID"})';
 export function physicalPrepareProbeScript(

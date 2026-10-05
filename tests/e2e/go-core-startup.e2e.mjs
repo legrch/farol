@@ -1254,7 +1254,6 @@ async function native(selected, inputs, report, save) {
       if (launch.ordinal === 1) report.quitReceipt = quit;
       if (selected.chatTwoTurn) {
         launch.terminalLedger = site.driver.snapshot();
-        ledgerWitness(launch.terminalLedger);
         report.chatTwoTurn.quit = {
           receipt: quit,
           cleanup: { ...launch.cleanup },

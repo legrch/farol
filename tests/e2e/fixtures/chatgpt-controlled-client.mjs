@@ -26,8 +26,22 @@ const publicSelection = () => ({
     : { id: connector.dataset.pluginId, label: connector.dataset.appName },
 });
 const busy = () => state.turns.some((turn) => !turn.renderedTerminal);
+// This fixture editor contains only native text, DIV line blocks and BRs.
+// Serialize its logical lines independently of the production draft reader.
+const message = () =>
+  Array.from(composer.childNodes, (node, index) => {
+    if (node.nodeName === "DIV")
+      return (
+        (index > 0 ? "\n" : "") +
+        (node.childNodes.length === 1 && node.firstChild.nodeName === "BR"
+          ? ""
+          : node.textContent)
+      );
+    if (node.nodeName === "BR") return "\n";
+    return node.textContent;
+  }).join("");
 const updateSend = () => {
-  send.disabled = submitting || busy() || composer.textContent.length === 0;
+  send.disabled = submitting || busy() || message().length === 0;
 };
 const post = async (path, value) => {
   const response = await fetch(path, {
@@ -111,7 +125,7 @@ send.addEventListener("click", async () => {
   const previous = state.turns.at(-1);
   try {
     const result = await post("/fixtures/chatgpt/send", {
-      message: composer.textContent,
+      message: message(),
       selection: publicSelection(),
       previousUserId: previous?.userId ?? null,
       previousReplyId: previous?.replyId ?? null,
