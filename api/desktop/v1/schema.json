@@ -69,7 +69,8 @@
     "chat.history.list": "read",
     "chat.history.result": "read",
     "chat.conversation.start": "effect",
-    "chat.conversation.account.revoke": "effect"
+    "chat.conversation.account.revoke": "effect",
+    "computer.workspace.list": "read"
   },
   "definitions": {
     "Context": {
@@ -119,7 +120,7 @@
           "type": "id"
         },
         "capabilities": {
-          "type": "text[]"
+          "type": "method[]"
         },
         "maxFrameBytes": {
           "type": "uint32"
@@ -4016,6 +4017,120 @@
         },
         "required": {
           "type": "BrowserRequiredControls"
+        }
+      }
+    },
+    "ComputerListRequest": {
+      "type": "object",
+      "fields": {
+        "ownerId": {
+          "type": "id"
+        },
+        "sessionId": {
+          "type": "id"
+        },
+        "taskId": {
+          "type": "id"
+        },
+        "taskEpoch": {
+          "type": "decimal"
+        },
+        "participantId": {
+          "type": "id"
+        },
+        "turnId": {
+          "type": "id"
+        },
+        "generation": {
+          "type": "decimal"
+        },
+        "callId": {
+          "type": "id"
+        },
+        "workspaceId": {
+          "type": "id"
+        },
+        "relativePath": {
+          "type": "string",
+          "minBytes": 1,
+          "maxBytes": 4096
+        }
+      }
+    },
+    "ComputerListResponse": {
+      "type": "object",
+      "fields": {
+        "ownerId": {
+          "type": "id"
+        },
+        "sessionId": {
+          "type": "id"
+        },
+        "taskId": {
+          "type": "id"
+        },
+        "taskEpoch": {
+          "type": "decimal"
+        },
+        "participantId": {
+          "type": "id"
+        },
+        "turnId": {
+          "type": "id"
+        },
+        "generation": {
+          "type": "decimal"
+        },
+        "callId": {
+          "type": "id"
+        },
+        "workspaceId": {
+          "type": "id"
+        },
+        "relativePath": {
+          "type": "string",
+          "minBytes": 1,
+          "maxBytes": 4096
+        },
+        "entries": {
+          "type": "json",
+          "description": "At most 500 native UTF-8 components; directory names end with /. Explicitly validated by both adapters."
+        },
+        "truncated": {
+          "type": "boolean"
+        }
+      }
+    },
+    "ComputerListRefusal": {
+      "type": "object",
+      "fields": {
+        "request": {
+          "type": "ComputerListRequest",
+          "optional": true
+        },
+        "code": {
+          "type": "text"
+        },
+        "source": {
+          "type": "text",
+          "values": [
+            "computer-approval",
+            "task-admission",
+            "task-grant",
+            "owner-restriction",
+            "unverified-provenance",
+            "role",
+            "computer-policy",
+            "native-host",
+            "authority-store",
+            "native-workspace",
+            "contract",
+            "transport"
+          ]
+        },
+        "retry": {
+          "type": "text",
+          "values": ["never"]
         }
       }
     }

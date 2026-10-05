@@ -45,7 +45,47 @@ func (w *computerWorkspaceFixture) Read(context.Context, port.ReadRequest) (*por
 }
 func (w *computerWorkspaceFixture) List(_ context.Context, in port.ListRequest) (*port.ListResponse, error) {
 	w.calls++
+	if w.after != nil {
+		w.after()
+	}
 	return &port.ListResponse{Binding: &port.DirectoryBinding{RelativePath: in.RelativePath, Root: in.Workspace.Root, ApprovedRoot: in.Workspace.ApprovedRoot}}, nil
+}
+
+func TestComputerRootListUsesCurrentSelectedOwner(t *testing.T) {
+	for _, mode := range []string{"allowed", "wrong-turn", "revoked", "late-revoke", "expired", "no-list"} {
+		t.Run(mode, func(t *testing.T) {
+			capability := authority.List
+			if mode == "no-list" {
+				capability = authority.Read
+			}
+			route, access, current, native, clock, read := computerFixture(t, capability)
+			body := wire.ComputerListRequest{OwnerId: read.OwnerId, SessionId: read.SessionId, TaskId: read.TaskId, TaskEpoch: read.TaskEpoch, ParticipantId: read.ParticipantId, TurnId: read.TurnId, Generation: read.Generation, CallId: read.CallId, WorkspaceId: read.WorkspaceId, RelativePath: "."}
+			switch mode {
+			case "wrong-turn":
+				body.TurnId = "other"
+			case "revoked":
+				current.binding = nil
+			case "late-revoke":
+				native.after = func() { access.RevokeParticipant("participant") }
+			case "expired":
+				native.after = func() { clock.now = clock.now.Add(16 * time.Second) }
+			}
+			method := route.Methods(wire.Context{ProfileId: "profile", BackendGeneration: "backend"})["computer.workspace.list"]
+			out := computerInvoke(t, method, body)
+			if mode == "allowed" {
+				if out.Status != "ok" || native.calls != 1 {
+					t.Fatalf("list unavailable: %+v", out)
+				}
+			} else {
+				if out.Status != "refused" {
+					t.Fatalf("invalid authority disclosed listing: %+v", out)
+				}
+				if mode != "late-revoke" && mode != "expired" && native.calls != 0 {
+					t.Fatal("invalid selected owner reached native listing")
+				}
+			}
+		})
+	}
 }
 func computerFixture(t *testing.T, capabilities ...authority.Capability) (*ComputerRoute, *accessrepo.Repository, *computerCurrentFixture, *computerWorkspaceFixture, *computerClockFixture, wire.ComputerReadRequest) {
 	t.Helper()

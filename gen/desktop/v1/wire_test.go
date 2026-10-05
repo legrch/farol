@@ -46,3 +46,28 @@ func TestTimestampGrammar(t *testing.T) {
 		}
 	}
 }
+
+func TestMethodAdvertisementsRemainClosedAndBounded(t *testing.T) {
+	methods := MethodNames()
+	if len(methods) <= 64 {
+		t.Fatal("fixture must exercise expanded method catalogue")
+	}
+	raw, _ := json.Marshal(methods)
+	if Validate("method[]", raw) != nil {
+		t.Fatal("registered methods refused")
+	}
+	for _, values := range [][]string{append(append([]string{}, methods...), methods[0]), {"computer.unknown"}, make([]string, 129)} {
+		raw, _ = json.Marshal(values)
+		if Validate("method[]", raw) == nil {
+			t.Fatal("invalid advertisement accepted")
+		}
+	}
+	values := make([]string, 65)
+	for i := range values {
+		values[i] = "workspace"
+	}
+	raw, _ = json.Marshal(values)
+	if Validate("text[]", raw) == nil {
+		t.Fatal("workspace ID bound expanded")
+	}
+}

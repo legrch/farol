@@ -12,7 +12,7 @@ if (
   !schema.methods ||
   Array.isArray(schema.methods) ||
   Object.keys(schema.methods).length === 0 ||
-  Object.keys(schema.methods).length > 64 ||
+  Object.keys(schema.methods).length > 128 ||
   Object.entries(schema.methods).some(
     ([name, kind]) =>
       !/^[a-z]+(?:\.[a-z]+)+$/u.test(name) ||
@@ -42,6 +42,7 @@ const goTypes = {
   int32: "int32",
   json: "json.RawMessage",
   "text[]": "[]string",
+  "method[]": "[]string",
 };
 const tsTypes = {
   boolean: "boolean",
@@ -55,6 +56,7 @@ const tsTypes = {
   int32: "number",
   json: "Json",
   "text[]": "readonly string[]",
+  "method[]": "readonly string[]",
 };
 let go = `// ${title}\npackage desktop\nimport ("encoding/json"; "errors"; "math"; "regexp"; "strconv"; "strings"; "time"; "unicode/utf8")\n`;
 go += `const ProtocolMajor uint32 = ${schema.protocolMajor}\nconst ProtocolMinor uint32 = ${schema.protocolMinor}\nconst SchemaSHA256 = "${digest}"\nconst Schema = ${JSON.stringify(bytes.toString("utf8"))}\n`;

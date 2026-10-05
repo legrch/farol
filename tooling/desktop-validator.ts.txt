@@ -17,7 +17,7 @@ export function validUnicode(value: string): boolean {
 export function validate(name: string, value: unknown, depth = 0): boolean {
  if (depth > schema.maxDepth) return false;
  if (name === "boolean") return typeof value === "boolean";
- if (name.endsWith("[]") && name !== "text[]") return Array.isArray(value) && value.length <= 128 && value.every(item => validate(name.slice(0,-2),item,depth+1));
+ if (name.endsWith("[]") && name !== "text[]" && name !== "method[]") return Array.isArray(value) && value.length <= 128 && value.every(item => validate(name.slice(0,-2),item,depth+1));
  if (name === "string") return typeof value === "string" && validUnicode(value);
  if (name === "nullableId") return value === null || validate("id",value,depth+1);
  if (["text", "id", "decimal", "utc"].includes(name)) {
@@ -28,6 +28,7 @@ export function validate(name: string, value: unknown, depth = 0): boolean {
   return value.length > 0 && Buffer.byteLength(value,"utf8") <= 256 && !/[\0\r\n]/u.test(value);
  }
  if (name === "uint32" || name === "int32") return typeof value === "number" && Number.isInteger(value) && (name === "uint32" ? value >= 0 && value <= 4294967295 : value >= -2147483648 && value <= 2147483647);
+ if (name === "method[]") return Array.isArray(value) && value.length <= 128 && value.every(item => typeof item === "string" && knownMethod(item)) && new Set(value).size === value.length;
  if (name === "text[]") return Array.isArray(value) && value.length <= 64 && value.every(item => validate("text",item,depth+1));
  if (name === "json") {
   if (value === null || typeof value === "boolean") return true;

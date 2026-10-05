@@ -104,6 +104,9 @@ func operationBinding(owner, session, task string, epoch uint64, participant, tu
 // Root Serve does not adopt this preparation until its trusted ingress is wired.
 func (r *ComputerRoute) Methods(peer wire.Context) map[string]desktop.Method {
 	return map[string]desktop.Method{
+		"computer.workspace.list": desktop.ListMethod(func(ctx context.Context, in workspacect.ListRequest) (*workspacect.Contract, error) {
+			return r.selectContract(ctx, operationBinding(in.OwnerID, in.SessionID, in.TaskID, in.TaskEpoch, in.ParticipantID, in.TurnID), authority.List)
+		}, peer),
 		"computer.workspace.read": desktop.ReadMethodForOperation(func(ctx context.Context, op desktop.ReadOperation) (*workspacect.Contract, error) {
 			in := op.Input
 			return r.selectContract(ctx, operationBinding(in.OwnerID, in.SessionID, in.TaskID, in.TaskEpoch, in.ParticipantID, in.TurnID), authority.Read)

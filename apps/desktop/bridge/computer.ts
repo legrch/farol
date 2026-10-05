@@ -20,6 +20,9 @@ import {
   type ComputerReadRequest,
   type ComputerReadResponse,
   type ComputerReadRefusal,
+  type ComputerListRequest,
+  type ComputerListResponse,
+  type ComputerListRefusal,
 } from "./wire.ts";
 
 export type ComputerCall = Readonly<{
@@ -45,7 +48,13 @@ export type ComputerBootstrap = Omit<
   readonly instructions: readonly ComputerInstruction[];
 };
 type Refusal =
-  ComputerCatalogueRefusal | ComputerBootstrapRefusal | ComputerReadRefusal;
+  | ComputerCatalogueRefusal
+  | ComputerBootstrapRefusal
+  | ComputerReadRefusal
+  | ComputerListRefusal;
+export type ComputerList = Omit<ComputerListResponse, "entries"> & {
+  readonly entries: readonly string[];
+};
 export type ComputerResult<T> =
   | Readonly<{ status: "ok"; requestId: string; context: Context; data: T }>
   | Readonly<{
@@ -68,6 +77,7 @@ const names = {
   catalogue: "ComputerCatalogue",
   bootstrap: "ComputerBootstrap",
   read: "ComputerRead",
+  list: "ComputerList",
 } as const;
 
 // Snapshot JSON values within the wire budget before recursive schema validation.
@@ -217,6 +227,30 @@ function read(value: unknown): ComputerReadResponse {
   return data;
 }
 
+function list(value: unknown): ComputerList {
+  const data = dto<ComputerListResponse>("ComputerListResponse", value);
+  if (!Array.isArray(data.entries) || data.entries.length > 500)
+    throw Error("invalid_computer_list");
+  const seen = new Set<string>();
+  const entries = data.entries.map((entry) => {
+    if (typeof entry !== "string" || !validUnicode(entry))
+      throw Error("invalid_computer_list");
+    const name = entry.endsWith("/") ? entry.slice(0, -1) : entry;
+    if (
+      !name ||
+      name === "." ||
+      name === ".." ||
+      /[\\/\u0000-\u001f\u007f]/u.test(name) ||
+      Buffer.byteLength(name, "utf8") > 255 ||
+      seen.has(name)
+    )
+      throw Error("invalid_computer_list");
+    seen.add(name);
+    return entry;
+  });
+  return Object.freeze({ ...data, entries: Object.freeze(entries) });
+}
+
 // Caller supplies an already selected, legitimate operation and verified context.
 // IDs/text/roots returned here are correlation/data, never positive admission.
 // Pick retains the real Client.request signature and permits injected unit transport.
@@ -241,6 +275,13 @@ export class ComputerBridge {
     call: ComputerCall,
   ): Promise<ComputerResult<ComputerReadResponse>> {
     return this.invoke("read", request, call, read);
+  }
+
+  list(
+    request: ComputerListRequest,
+    call: ComputerCall,
+  ): Promise<ComputerResult<ComputerList>> {
+    return this.invoke("list", request, call, list);
   }
 
   private async invoke<T>(
