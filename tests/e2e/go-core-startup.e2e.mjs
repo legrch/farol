@@ -9,6 +9,8 @@
  * --chat-two-turn requires Dev --candidate-root and excludes all other journey
  * flags. Actual React Prepare/Inspect/Confirm/Send -> early text -> retained
  * result -> explicit ACK + Go settle/release -> same conversation second Send.
+ * Optional --chat-history-reopen adds one same-profile/build clean successor
+ * and actual React reads of both original answers, without another Send.
  * Ordinary Quit is recorded separately; unconfirmed profiles are quarantined.
  * Or replace --candidate-root with:
  *   --packaged /absolute/Farol.app --artifact-metadata /absolute/artifact.json
@@ -121,6 +123,13 @@ import {
   conversationWitnessSelfTest,
   runConversationJourney,
 } from "./lib/read-conversation-witness.mjs";
+import {
+  historyLimits,
+  historyOriginals,
+  historyRetirementWitness,
+  historyWitnessSelfTest,
+  runHistoryReadJourney,
+} from "./lib/chat-history-witness.mjs";
 import { browserFailureCollector } from "./lib/browser-failure-witness.mjs";
 
 const root = path.resolve(
@@ -153,6 +162,9 @@ const contract = Object.freeze({
   chatTwoTurn:
     "Explicit Dev --candidate-root --chat-two-turn: attested normal main.cjs/real Go; synthetic settings.tasks before startup; existing normal workspace setup; React Prepare/Inspect/Confirm/Send, useful incremental text before controlled terminal, retained result, explicit ACK + independently read Go settle/release, same conversation second Send/result with retained first; one ordinary Quit, separate journey/terminal evidence, quarantine every failed or unconfirmed profile",
   chatTwoTurnLimits: conversationLimits,
+  chatHistoryReopen:
+    "Explicit Dev --chat-two-turn --chat-history-reopen: original two-turn journey, confirmed ordinary Quit and handoff, reattest same source/build/profile, one successor, React Load saved answers and read both original result IDs/bytes, unchanged successor journal and provider ledger, second confirmed clean Quit",
+  chatHistoryLimits: historyLimits,
   editSnapshot:
     "Explicit packaged --reopen --read-discard --edit-snapshot: existing disposable UTF-8 canary, normal configuration write grant/Verify, preload Prepare, independently read raw bytes/count/SHA-256, retained root/profile/current generation and unchanged Chat/participants, exact Cancel, restore read grant/Verify, then original read-discard/account journey",
   editSnapshotLimits: snapshotLimits,
@@ -187,6 +199,7 @@ function selection(args) {
     editSnapshot: false,
     settingsEditMutation: false,
     chatTwoTurn: false,
+    chatHistoryReopen: false,
     dependencyRoot: path.join(root, "node_modules"),
   };
   const options = new Map([
@@ -201,6 +214,16 @@ function selection(args) {
   const seen = new Set();
   for (let index = 0; index < args.length; index++) {
     const argument = args[index];
+    if (argument === "--chat-history-reopen") {
+      assert.equal(
+        seen.has("chatHistoryReopen"),
+        false,
+        "CHAT_HISTORY_REOPEN_REPEATED",
+      );
+      seen.add("chatHistoryReopen");
+      result.chatHistoryReopen = true;
+      continue;
+    }
     if (argument === "--chat-two-turn") {
       assert.equal(seen.has("chatTwoTurn"), false, "CHAT_TWO_TURN_REPEATED");
       seen.add("chatTwoTurn");
@@ -261,6 +284,8 @@ function selection(args) {
     true,
     "SELECT_ONE_ARTIFACT",
   );
+  if (result.chatHistoryReopen)
+    assert.equal(result.chatTwoTurn, true, "CHAT_HISTORY_REQUIRES_TWO_TURN");
   if (result.chatTwoTurn) {
     assert.ok(
       result.candidateRoot && !result.packaged,
@@ -550,6 +575,16 @@ async function attest(selected) {
       "src/apps/desktop/chatgpt-physical-page-scripts.ts",
       "apps/desktop/read-conversation-projection.ts",
       "apps/desktop/bridge/read-conversation.ts",
+      ...(selected.chatHistoryReopen
+        ? [
+            "src/ui/renderer/chat-history.tsx",
+            "src/pkg/ipc/chat-history.ts",
+            "apps/desktop/chat-history-view.ts",
+            "apps/desktop/bridge/chat-history.ts",
+            "apps/desktop/go-core-host.ts",
+            "src/apps/desktop/preload.ts",
+          ]
+        : []),
     ].map((inputPath) => {
       const input = ledger.find(
         (entry) => entry.kind === "source" && entry.path === inputPath,
@@ -768,7 +803,7 @@ function handoffWitness(record, scope, buildId, previous) {
   }
 }
 
-function permitReopen(launch) {
+function permitCleanReopen(launch) {
   assert.equal(
     launch.status,
     "confirmed-clean-quit",
@@ -779,6 +814,9 @@ function permitReopen(launch) {
     launch.quitReceipt && launch.retiredJournal && launch.terminalHandoff,
     "FIRST_TERMINAL_EVIDENCE_MISSING",
   );
+}
+function permitReopen(launch) {
+  permitCleanReopen(launch);
   zeroSends(launch.terminalLedger);
 }
 
@@ -1124,6 +1162,12 @@ async function native(selected, inputs, report, save) {
         report.readDiscard.binding,
       );
       if (!report.readDiscard.binding) report.readDiscard.binding = binding;
+    } else if (selected.chatHistoryReopen && launch.ordinal === 1 && retired) {
+      historyRetirementWitness(
+        journal.value,
+        launch.readyJournal.value,
+        historyOriginals(report.chatTwoTurn),
+      );
     } else
       journalWitness(
         journal.value,
@@ -1252,7 +1296,7 @@ async function native(selected, inputs, report, save) {
       const quit = await document(path.join(stateRoot, "last-quit.json"), 8192);
       launch.quitReceipt = quit;
       if (launch.ordinal === 1) report.quitReceipt = quit;
-      if (selected.chatTwoTurn) {
+      if (selected.chatTwoTurn && launch.ordinal === 1) {
         launch.terminalLedger = site.driver.snapshot();
         report.chatTwoTurn.quit = {
           receipt: quit,
@@ -1292,7 +1336,7 @@ async function native(selected, inputs, report, save) {
       launch.cleanup.runMarkerRemoved = true;
       launch.terminalLedger = site.driver.snapshot();
       ledgerWitness(launch.terminalLedger);
-      if (selected.reopen) {
+      if (selected.reopen || selected.chatHistoryReopen) {
         await captureJournal(
           "confirmed-quit",
           launch.ordinal === 2
@@ -1967,6 +2011,12 @@ async function native(selected, inputs, report, save) {
             return witness;
           },
         });
+        savedSettings = await document(
+          path.join(stateRoot, "config.json"),
+          256 * 1024,
+        );
+        launch.settings = savedSettings;
+        report.settingsSHA = savedSettings.sha256;
         break workspaceJourney;
       }
       let originalUi;
@@ -2311,10 +2361,19 @@ async function native(selected, inputs, report, save) {
             : "confirmed-quit-zero-authority",
         settings.computer.computerId,
       );
-    if (selected.reopen) {
+    if (selected.reopen || selected.chatHistoryReopen) {
       // Only this straight-line success path can launch the one successor.
       // No relaunch is reachable from catch/finally or an unknown receipt.
-      permitReopen(report.launches[0]);
+      if (selected.chatHistoryReopen) {
+        permitCleanReopen(report.launches[0]);
+        assert.equal(report.chatTwoTurn.journeyPassed, true);
+        ledgerWitness(report.launches[0].terminalLedger);
+        historyRetirementWitness(
+          report.launches[0].retiredJournal.value,
+          report.launches[0].readyJournal.value,
+          historyOriginals(report.chatTwoTurn),
+        );
+      } else permitReopen(report.launches[0]);
       active();
       const reattested = await attest(selected);
       assert.deepEqual(reattested, inputs, "ARTIFACT_CHANGED_BEFORE_REOPEN");
@@ -2365,168 +2424,251 @@ async function native(selected, inputs, report, save) {
         report.launches[0].readyJournal.value,
       );
       await captureHandoff(report.launches[0].terminalHandoff);
-      if (selected.settingsEditMutation) {
-        assert.deepEqual(
-          reopened.settings,
-          savedSettings.value,
-          "MUTATION_PENDING_NOT_RETAINED_ON_REOPEN",
+      if (selected.chatHistoryReopen) {
+        retainedApprovedSettings(reopened.settings, savedSettings.value);
+        const successor = launch;
+        const originals = historyOriginals(report.chatTwoTurn);
+        const bootstrap = await bounded(
+          reopened.window.evaluate(() => window.farolNext.bootstrap()),
+          5000,
+          "HISTORY_BOOTSTRAP_UNKNOWN",
         );
-        const configure = async (command) => {
-          active();
-          await reopened.hidden();
-          const reply = await bounded(
-            reopened.window.evaluate(
-              (command) => window.farolNext.configure(command),
-              command,
-            ),
-            20000,
-            "MUTATION_REOPEN_COMMAND_OUTCOME_UNKNOWN",
-          );
-          ledgerWitness(site.driver.snapshot());
-          await reopened.hidden();
-          return reply;
-        };
-        const acknowledged = await reopenMutationJourney({
-          window: reopened.window,
-          configure,
-          hidden: reopened.hidden,
-          active,
-          ledger: () => ledgerWitness(site.driver.snapshot()),
-          save,
-          report: report.settingsEditMutation,
-          stateRoot,
-          workspaceRoot,
-          regular,
-          document,
-          physicalDirectory,
+        assert.deepEqual(bootstrap.chatHistoryContext, {
+          profileId: successor.readyJournal.value.scope.ProfileID,
+          backendGeneration:
+            successor.readyJournal.value.scope.BackendGeneration,
         });
-        savedSettings = await document(
+        const retainedConfig = await document(
           path.join(stateRoot, "config.json"),
           256 * 1024,
         );
-        assert.deepEqual(savedSettings.value, acknowledged);
-        await reopened.window
-          .getByRole("button", { name: "Home", exact: true })
-          .click({ timeout: 5000 });
-      } else if (selected.readDiscard) {
-        retainedApprovedSettings(reopened.settings, savedSettings.value);
-        approvedSettingsWitness(
-          reopened.settings,
-          workspaceRoot,
-          workspacePhysical,
-          selected.buildId,
-        );
-        assert.deepEqual(
-          await physicalDirectory(workspaceRoot),
-          workspacePhysical,
-          "READ_REOPEN_WORKSPACE_PHYSICAL_CHANGED",
-        );
-        assert.equal(
-          (
-            await regular(path.join(workspaceRoot, readCanary.relativePath))
-          ).toString("utf8"),
-          readCanary.text,
-        );
-        assert.deepEqual(
-          await document(
-            path.join(
-              stateRoot,
-              "chatgpt-task-journal/chatgpt-task-journal.json",
-            ),
-            65536,
-          ),
-          report.readDiscard.legacyDiscarded,
-          "READ_REOPEN_LEGACY_JOURNAL_CHANGED",
-        );
-        // This journey opened Browser in a configured profile. Use ordinary
-        // navigation instead of assuming its retained surface is fresh Home.
-        await reopened.window
-          .getByRole("button", { name: "Home", exact: true })
-          .click({ timeout: 5000 });
-      } else retainedSettings(reopened.settings, savedSettings.value);
-      await reopened.window
-        .locator(".home-page")
-        .waitFor({ state: "visible", timeout: 5000 });
-      await reopened.window
-        .getByRole("button", { name: "Home", exact: true })
-        .waitFor({ state: "visible", timeout: 5000 });
-      await reopened.window.waitForFunction(
-        () => document.querySelector(".desktop")?.dataset.theme === "graphite",
-        undefined,
-        { timeout: 5000 },
-      );
-      launch.appearance = await bounded(
-        reopened.window.evaluate(() => {
-          const saved = JSON.parse(
-            localStorage.getItem("farol.appearance.v1") ?? "null",
+        const providerBefore = site.driver.snapshot();
+        const history = (report.historyReopen = {
+          limits: historyLimits,
+          originals,
+          context: bootstrap.chatHistoryContext,
+          passed: false,
+        });
+        const unchanged = async () => {
+          ledgerWitness(site.driver.snapshot());
+          assert.deepEqual(
+            site.driver.snapshot(),
+            providerBefore,
+            "HISTORY_PROVIDER_ACTIVITY",
           );
-          return {
-            persistedTheme: saved?.theme,
-            renderedTheme: document.querySelector(".desktop")?.dataset.theme,
+          assert.deepEqual(
+            await document(
+              path.join(stateRoot, "go-core/chat/chat-lifecycle.json"),
+              1024 * 1024,
+            ),
+            successor.readyJournal,
+            "HISTORY_MUTATED_SUCCESSOR_JOURNAL",
+          );
+          assert.deepEqual(
+            await document(path.join(stateRoot, "config.json"), 256 * 1024),
+            retainedConfig,
+            "HISTORY_MUTATED_CONFIGURATION",
+          );
+          assert.equal(
+            (
+              await regular(path.join(workspaceRoot, readCanary.relativePath))
+            ).toString("utf8"),
+            readCanary.text,
+          );
+          assert.deepEqual(
+            await physicalDirectory(workspaceRoot),
+            workspacePhysical,
+          );
+        };
+        await unchanged();
+        await runHistoryReadJourney({
+          window: reopened.window,
+          originals,
+          hidden: reopened.hidden,
+          active,
+          unchanged,
+          report: history,
+          save,
+        });
+        await reopened.hidden();
+        active();
+        await close();
+        history.quit = {
+          status: launch.status,
+          receipt: launch.quitReceipt,
+          cleanup: { ...launch.cleanup },
+        };
+        assert.deepEqual(
+          site.driver.snapshot(),
+          providerBefore,
+          "HISTORY_QUIT_PROVIDER_ACTIVITY",
+        );
+        await save();
+      } else {
+        if (selected.settingsEditMutation) {
+          assert.deepEqual(
+            reopened.settings,
+            savedSettings.value,
+            "MUTATION_PENDING_NOT_RETAINED_ON_REOPEN",
+          );
+          const configure = async (command) => {
+            active();
+            await reopened.hidden();
+            const reply = await bounded(
+              reopened.window.evaluate(
+                (command) => window.farolNext.configure(command),
+                command,
+              ),
+              20000,
+              "MUTATION_REOPEN_COMMAND_OUTCOME_UNKNOWN",
+            );
+            ledgerWitness(site.driver.snapshot());
+            await reopened.hidden();
+            return reply;
           };
-        }),
-        3000,
-        "REOPEN_APPEARANCE_UNKNOWN",
-      );
-      assert.deepEqual(launch.appearance, {
-        persistedTheme: "graphite",
-        renderedTheme: "graphite",
-      });
-      if (selected.readAccount) {
-        const ui = await readAccountUi(reopened.window);
-        assert.equal(
-          ui.operationId,
-          null,
-          "ACCOUNT_REOPEN_PREVIEW_RESURRECTED",
+          const acknowledged = await reopenMutationJourney({
+            window: reopened.window,
+            configure,
+            hidden: reopened.hidden,
+            active,
+            ledger: () => ledgerWitness(site.driver.snapshot()),
+            save,
+            report: report.settingsEditMutation,
+            stateRoot,
+            workspaceRoot,
+            regular,
+            document,
+            physicalDirectory,
+          });
+          savedSettings = await document(
+            path.join(stateRoot, "config.json"),
+            256 * 1024,
+          );
+          assert.deepEqual(savedSettings.value, acknowledged);
+          await reopened.window
+            .getByRole("button", { name: "Home", exact: true })
+            .click({ timeout: 5000 });
+        } else if (selected.readDiscard) {
+          retainedApprovedSettings(reopened.settings, savedSettings.value);
+          approvedSettingsWitness(
+            reopened.settings,
+            workspaceRoot,
+            workspacePhysical,
+            selected.buildId,
+          );
+          assert.deepEqual(
+            await physicalDirectory(workspaceRoot),
+            workspacePhysical,
+            "READ_REOPEN_WORKSPACE_PHYSICAL_CHANGED",
+          );
+          assert.equal(
+            (
+              await regular(path.join(workspaceRoot, readCanary.relativePath))
+            ).toString("utf8"),
+            readCanary.text,
+          );
+          assert.deepEqual(
+            await document(
+              path.join(
+                stateRoot,
+                "chatgpt-task-journal/chatgpt-task-journal.json",
+              ),
+              65536,
+            ),
+            report.readDiscard.legacyDiscarded,
+            "READ_REOPEN_LEGACY_JOURNAL_CHANGED",
+          );
+          // This journey opened Browser in a configured profile. Use ordinary
+          // navigation instead of assuming its retained surface is fresh Home.
+          await reopened.window
+            .getByRole("button", { name: "Home", exact: true })
+            .click({ timeout: 5000 });
+        } else retainedSettings(reopened.settings, savedSettings.value);
+        await reopened.window
+          .locator(".home-page")
+          .waitFor({ state: "visible", timeout: 5000 });
+        await reopened.window
+          .getByRole("button", { name: "Home", exact: true })
+          .waitFor({ state: "visible", timeout: 5000 });
+        await reopened.window.waitForFunction(
+          () =>
+            document.querySelector(".desktop")?.dataset.theme === "graphite",
+          undefined,
+          { timeout: 5000 },
         );
-        assert.equal(
-          ui.text.includes(report.readAccount.originalUi.preview.operationId),
-          false,
-          "ACCOUNT_REOPEN_ORIGINAL_RECEIPT_RESURRECTED",
+        launch.appearance = await bounded(
+          reopened.window.evaluate(() => {
+            const saved = JSON.parse(
+              localStorage.getItem("farol.appearance.v1") ?? "null",
+            );
+            return {
+              persistedTheme: saved?.theme,
+              renderedTheme: document.querySelector(".desktop")?.dataset.theme,
+            };
+          }),
+          3000,
+          "REOPEN_APPEARANCE_UNKNOWN",
         );
-        assert.equal(
-          ui.buttons.some((button) =>
-            [
-              "Inspect current account",
-              "Use this account",
-              "Discard preview",
-            ].includes(button.name),
-          ),
-          false,
-          "ACCOUNT_REOPEN_CONTROLS_RESURRECTED",
+        assert.deepEqual(launch.appearance, {
+          persistedTheme: "graphite",
+          renderedTheme: "graphite",
+        });
+        if (selected.readAccount) {
+          const ui = await readAccountUi(reopened.window);
+          assert.equal(
+            ui.operationId,
+            null,
+            "ACCOUNT_REOPEN_PREVIEW_RESURRECTED",
+          );
+          assert.equal(
+            ui.text.includes(report.readAccount.originalUi.preview.operationId),
+            false,
+            "ACCOUNT_REOPEN_ORIGINAL_RECEIPT_RESURRECTED",
+          );
+          assert.equal(
+            ui.buttons.some((button) =>
+              [
+                "Inspect current account",
+                "Use this account",
+                "Discard preview",
+              ].includes(button.name),
+            ),
+            false,
+            "ACCOUNT_REOPEN_CONTROLS_RESURRECTED",
+          );
+          ledgerWitness(site.driver.snapshot());
+          report.readAccount.reopenUi = ui;
+        }
+        const reopenedSettings = await document(
+          path.join(stateRoot, "config.json"),
+          256 * 1024,
         );
-        ledgerWitness(site.driver.snapshot());
-        report.readAccount.reopenUi = ui;
+        if (selected.settingsEditMutation)
+          assert.deepEqual(reopenedSettings, savedSettings);
+        else if (selected.readDiscard)
+          retainedApprovedSettings(reopenedSettings, savedSettings);
+        else retainedSettings(reopenedSettings.value, savedSettings.value);
+        launch.settings = reopenedSettings;
+        await capture(
+          selected.settingsEditMutation
+            ? "reopen-mutation-result-observed-and-go-acknowledged"
+            : selected.readDiscard
+              ? "reopen-ready-retained-approval"
+              : "reopen-ready-zero-authority",
+          settings.computer.computerId,
+        );
+        await reopened.hidden();
+        active();
+        await close();
+        await capture(
+          selected.settingsEditMutation
+            ? "reopen-confirmed-quit-mutation-result-acknowledged"
+            : selected.readDiscard
+              ? "reopen-confirmed-quit-retained-approval"
+              : "reopen-confirmed-quit-zero-authority",
+          settings.computer.computerId,
+        );
       }
-      const reopenedSettings = await document(
-        path.join(stateRoot, "config.json"),
-        256 * 1024,
-      );
-      if (selected.settingsEditMutation)
-        assert.deepEqual(reopenedSettings, savedSettings);
-      else if (selected.readDiscard)
-        retainedApprovedSettings(reopenedSettings, savedSettings);
-      else retainedSettings(reopenedSettings.value, savedSettings.value);
-      launch.settings = reopenedSettings;
-      await capture(
-        selected.settingsEditMutation
-          ? "reopen-mutation-result-observed-and-go-acknowledged"
-          : selected.readDiscard
-            ? "reopen-ready-retained-approval"
-            : "reopen-ready-zero-authority",
-        settings.computer.computerId,
-      );
-      await reopened.hidden();
-      active();
-      await close();
-      await capture(
-        selected.settingsEditMutation
-          ? "reopen-confirmed-quit-mutation-result-acknowledged"
-          : selected.readDiscard
-            ? "reopen-confirmed-quit-retained-approval"
-            : "reopen-confirmed-quit-zero-authority",
-        settings.computer.computerId,
-      );
     }
     report.scenarioPassed = true;
   } catch (error) {
@@ -2587,7 +2729,7 @@ async function native(selected, inputs, report, save) {
       }
       assert.equal(
         report.launches.length,
-        selected.reopen ? 2 : 1,
+        selected.reopen || selected.chatHistoryReopen ? 2 : 1,
         "LAUNCH_SEQUENCE_INCOMPLETE",
       );
       cleanClosure(report.cleanup);
@@ -3154,6 +3296,26 @@ function selfTest() {
     reject(() => selection(["--chat-two-turn", flag, ...args]));
   reject(() => selection(["--chat-two-turn", ...packageArgs]));
   conversationWitnessSelfTest(pass, reject);
+  pass(() =>
+    assert.equal(
+      selection(["--chat-two-turn", "--chat-history-reopen", ...args])
+        .chatHistoryReopen,
+      true,
+    ),
+  );
+  for (const invalid of [
+    ["--chat-history-reopen", ...args],
+    [
+      "--chat-two-turn",
+      "--chat-history-reopen",
+      "--chat-history-reopen",
+      ...args,
+    ],
+    ["--chat-two-turn", "--chat-history-reopen", "--reopen", ...args],
+    ["--chat-two-turn", "--chat-history-reopen", ...packageArgs],
+  ])
+    reject(() => selection(invalid));
+  historyWitnessSelfTest(pass, reject);
   process.stdout.write(
     `Go startup harness browser-free contract checks: ${checks} passed (${mutationChecksStart - snapshotChecksStart} edit-snapshot, ${conversationChecksStart - mutationChecksStart} settings-edit-mutation, ${checks - conversationChecksStart} chat-two-turn); native NOT RUN\n`,
   );
@@ -3163,26 +3325,30 @@ async function main(args) {
   const selected = selection(args);
   const report = {
     contract,
-    scenario: selected.chatTwoTurn
-      ? contract.chatTwoTurn
-      : selected.settingsEditMutation
-        ? contract.settingsEditMutation
-        : selected.editSnapshot
-          ? `${contract.editSnapshot}; ${selected.readAccount ? contract.readAccount : contract.readDiscard}`
+    scenario: selected.chatHistoryReopen
+      ? contract.chatHistoryReopen
+      : selected.chatTwoTurn
+        ? contract.chatTwoTurn
+        : selected.settingsEditMutation
+          ? contract.settingsEditMutation
+          : selected.editSnapshot
+            ? `${contract.editSnapshot}; ${selected.readAccount ? contract.readAccount : contract.readDiscard}`
+            : selected.readAccount
+              ? contract.readAccount
+              : selected.readDiscard
+                ? contract.readDiscard
+                : contract.scenario,
+    missingWitnesses: selected.chatHistoryReopen
+      ? historyLimits
+      : selected.chatTwoTurn
+        ? conversationLimits
+        : selected.settingsEditMutation
+          ? mutationLimits
           : selected.readAccount
-            ? contract.readAccount
+            ? [...contract.readDiscardLimits, ...readAccountLimits]
             : selected.readDiscard
-              ? contract.readDiscard
-              : contract.scenario,
-    missingWitnesses: selected.chatTwoTurn
-      ? conversationLimits
-      : selected.settingsEditMutation
-        ? mutationLimits
-        : selected.readAccount
-          ? [...contract.readDiscardLimits, ...readAccountLimits]
-          : selected.readDiscard
-            ? contract.readDiscardLimits
-            : contract.missingWitnesses,
+              ? contract.readDiscardLimits
+              : contract.missingWitnesses,
     isolation:
       selected.readDiscard ||
       selected.settingsEditMutation ||
@@ -3225,6 +3391,12 @@ async function main(args) {
         new URL("./lib/computer-settings-witness.mjs", import.meta.url),
       ),
     );
+    if (selected.chatHistoryReopen)
+      report.historyWitnessSourceSHA = hash(
+        await regular(
+          new URL("./lib/chat-history-witness.mjs", import.meta.url),
+        ),
+      );
     if (selected.chatTwoTurn) {
       report.conversationWitnessSourceSHA = hash(
         await regular(
@@ -3284,21 +3456,23 @@ async function main(args) {
         "HARNESS_CHANGED_DURING_NATIVE_RUN",
       );
       if (nativeError) throw nativeError;
-      report.status = selected.chatTwoTurn
-        ? "passed-react-two-turn-controlled-chat-and-confirmed-ordinary-quit"
-        : selected.settingsEditMutation
-          ? "passed-react-go-owner-edit-unacknowledged-quit-reopen-observe-go-ack-zero-send"
-          : selected.editSnapshot
-            ? selected.readAccount
-              ? "passed-settings-edit-snapshot-and-react-read-account-discard-reopen-synthetic-only"
-              : "passed-settings-edit-snapshot-and-read-discard-reopen-fixture-only"
-            : selected.readAccount
-              ? "passed-react-read-account-discard-reopen-synthetic-account-only"
-              : selected.readDiscard
-                ? "passed-read-preview-discard-reopen-fixture-readiness-only"
-                : selected.reopen
-                  ? "passed-reopen-startup-zero-authority-only"
-                  : "passed-fresh-startup-zero-authority-only";
+      report.status = selected.chatHistoryReopen
+        ? "passed-react-two-turn-chat-clean-reopen-historical-reads-no-additional-send"
+        : selected.chatTwoTurn
+          ? "passed-react-two-turn-controlled-chat-and-confirmed-ordinary-quit"
+          : selected.settingsEditMutation
+            ? "passed-react-go-owner-edit-unacknowledged-quit-reopen-observe-go-ack-zero-send"
+            : selected.editSnapshot
+              ? selected.readAccount
+                ? "passed-settings-edit-snapshot-and-react-read-account-discard-reopen-synthetic-only"
+                : "passed-settings-edit-snapshot-and-read-discard-reopen-fixture-only"
+              : selected.readAccount
+                ? "passed-react-read-account-discard-reopen-synthetic-account-only"
+                : selected.readDiscard
+                  ? "passed-read-preview-discard-reopen-fixture-readiness-only"
+                  : selected.reopen
+                    ? "passed-reopen-startup-zero-authority-only"
+                    : "passed-fresh-startup-zero-authority-only";
     }
   } catch (error) {
     report.status =
