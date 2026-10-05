@@ -91,6 +91,7 @@ type RetainReceipt struct {
 	Result       turn.Result
 	Bytes        int
 	Conversation RetainedConversation
+	Publication  ResultPublication
 }
 
 type ResultRetention interface {
