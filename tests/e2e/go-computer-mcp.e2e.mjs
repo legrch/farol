@@ -143,7 +143,13 @@ try {
                 sha256 = hash(bytes);
               if (relative.startsWith("node_modules/"))
                 packages.add(packageRootOf(relative));
-              if (relative !== entry)
+              // Only these test-owned harness inputs sit outside the sealed
+              // production ledger; all joined production/dependency bytes still match.
+              if (
+                ![entry, "tests/e2e/go-computer-mcp.diagnostics.ts"].includes(
+                  relative,
+                )
+              )
                 assert.equal(
                   sha256,
                   ledger.get(relative),
@@ -200,9 +206,11 @@ try {
     });
     report.status = "passed-native-mcp-go-adapter";
   }
-} catch (error) {
+} catch {
   report.status = "failed";
-  report.error = error instanceof Error ? error.message : "unknown_failure";
+  // Assertion messages can contain complete boundary values. Persist only the
+  // classified entry failure; raw exception content never enters diagnostics.
+  report.error = report.journeyError ?? "WITNESS_HARNESS_FAILED";
   process.exitCode = 1;
 } finally {
   await fs.writeFile(

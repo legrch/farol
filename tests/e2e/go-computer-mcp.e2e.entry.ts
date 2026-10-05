@@ -1,5 +1,11 @@
 import assert from "node:assert/strict";
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn } from "node:child_process";
+import {
+  BUDGETS,
+  Peer,
+  WitnessDiagnostics,
+  diagnosticCode,
+} from "./go-computer-mcp.diagnostics.ts";
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -24,185 +30,6 @@ function object(value: unknown): RecordValue {
 }
 const hash = (bytes: string | Buffer) =>
   createHash("sha256").update(bytes).digest("hex");
-async function bounded<T>(
-  promise: Promise<T>,
-  code: string,
-  ms = 8000,
-): Promise<T> {
-  let timer: NodeJS.Timeout | undefined;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error(code)), ms);
-      }),
-    ]);
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-// A bounded test client speaks ordinary legacy MCP JSON-RPC lines. It owns one
-// exact child and ends stdin once. No SDK negotiation sibling, signals, numeric
-// process lookup, automatic restart or TERM/KILL escalation is used.
-class Peer {
-  readonly child: ChildProcessWithoutNullStreams;
-  readonly terminal: Promise<{
-    code: number | null;
-    signal: NodeJS.Signals | null;
-  }>;
-  private buffer = Buffer.alloc(0);
-  private stderrBytes = 0;
-  private stderr = Buffer.alloc(0);
-  private closed = false;
-  private sequence = 0;
-  private stopped: Promise<void> | undefined;
-  private failure: Error | undefined;
-  readonly requests: {
-    id: number;
-    method: string;
-    tool?: string;
-    state: string;
-  }[] = [];
-  private readonly pending = new Map<
-    number,
-    { resolve(value: RecordValue): void; reject(error: Error): void }
-  >();
-  constructor(entry: string, launch: string, home: string) {
-    this.child = spawn(process.execPath, [entry, "--launch-contract", launch], {
-      cwd: home,
-      env: { HOME: home, PATH: "/usr/bin:/bin", TMPDIR: home },
-      stdio: "pipe",
-    });
-    this.terminal = new Promise((resolve) =>
-      this.child.once("close", (code, signal) => {
-        this.closed = true;
-        for (const waiter of this.pending.values())
-          waiter.reject(new Error("MCP_CHILD_CLOSED"));
-        this.pending.clear();
-        resolve({ code, signal });
-      }),
-    );
-    this.child.on("error", (error) => this.fail(error));
-    this.child.stdin.on("error", (error) => this.fail(error));
-    this.child.stderr.on("data", (chunk: Buffer) => {
-      this.stderrBytes += chunk.length;
-      if (this.stderrBytes > 65536) this.fail(new Error("MCP_STDERR_LIMIT"));
-      else this.stderr = Buffer.concat([this.stderr, chunk]);
-    });
-    this.child.stdout.on("data", (chunk: Buffer) => {
-      try {
-        assert.ok(
-          this.buffer.length + chunk.length <= 2 * 1024 * 1024,
-          "MCP_FRAME_LIMIT",
-        );
-        this.buffer = Buffer.concat([this.buffer, chunk]);
-        for (;;) {
-          const end = this.buffer.indexOf(10);
-          if (end < 0) break;
-          const message = object(
-            JSON.parse(
-              new TextDecoder("utf-8", { fatal: true }).decode(
-                this.buffer.subarray(0, end),
-              ),
-            ),
-          );
-          this.buffer = this.buffer.subarray(end + 1);
-          assert.equal(message.jsonrpc, "2.0");
-          assert.equal(
-            typeof message.id,
-            "number",
-            "UNEXPECTED_MCP_NOTIFICATION",
-          );
-          const waiter = this.pending.get(message.id as number);
-          assert.ok(waiter, "MCP_CROSSED_RESPONSE");
-          this.pending.delete(message.id as number);
-          waiter.resolve(message);
-        }
-      } catch (error) {
-        this.fail(
-          error instanceof Error ? error : new Error("MCP_INVALID_OUTPUT"),
-        );
-      }
-    });
-  }
-  private fail(error: Error) {
-    this.failure ??= error;
-    for (const waiter of this.pending.values()) waiter.reject(error);
-    this.pending.clear();
-  }
-  async request(method: string, params: RecordValue): Promise<RecordValue> {
-    if (this.failure) throw this.failure;
-    if (this.closed) throw new Error("MCP_CHILD_CLOSED");
-    assert.ok(!this.stopped);
-    const id = ++this.sequence;
-    const observation = {
-      id,
-      method,
-      ...(method === "tools/call" && typeof params.name === "string"
-        ? { tool: params.name }
-        : {}),
-      state: "submitted-outcome-unknown",
-    };
-    this.requests.push(observation);
-    const response = new Promise<RecordValue>((resolve, reject) =>
-      this.pending.set(id, { resolve, reject }),
-    );
-    this.child.stdin.write(
-      JSON.stringify({ jsonrpc: "2.0", id, method, params }) + "\n",
-    );
-    const result = await bounded(response, "MCP_REPLY_UNKNOWN");
-    observation.state =
-      result.error === undefined ? "response" : "protocol-error";
-    assert.equal(result.error, undefined);
-    return object(result.result);
-  }
-  async initialize() {
-    const result = await this.request("initialize", {
-      protocolVersion: "2025-06-18",
-      capabilities: {},
-      clientInfo: { name: "farol-go-native-fixture", version: "1" },
-    });
-    assert.equal(result.protocolVersion, "2025-06-18");
-    this.child.stdin.write(
-      JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) +
-        "\n",
-    );
-  }
-  async call(name: string, args: RecordValue, error = false) {
-    const result = await this.request("tools/call", { name, arguments: args });
-    assert.equal(result.isError === true, error, name);
-    return object(result.structuredContent);
-  }
-  close(expectedCode = 0): Promise<void> {
-    this.stopped ??= (async () => {
-      this.child.stdin.end();
-      assert.deepEqual(
-        await bounded(this.terminal, "MCP_CLEANUP_UNCONFIRMED"),
-        { code: expectedCode, signal: null },
-      );
-      assert.equal(this.buffer.length, 0, "MCP_TRUNCATED_OUTPUT");
-      if (this.failure) throw this.failure;
-    })();
-    return this.stopped;
-  }
-  async requireStartupFailure(): Promise<void> {
-    // Observe spontaneous failure before any request or EOF can cause it.
-    // Timeout and protocol failure never count as backend-refusal evidence.
-    assert.equal(this.sequence, 0);
-    assert.equal(this.child.stdin.writableEnded, false);
-    assert.deepEqual(
-      await bounded(this.terminal, "MCP_STARTUP_TERMINAL_UNKNOWN"),
-      { code: 1, signal: null },
-    );
-    assert.equal(this.buffer.length, 0);
-    assert.equal(
-      this.stderr.toString("utf8"),
-      "Farol Next Computer MCP failed to start.\n",
-    );
-    if (this.failure) throw this.failure;
-  }
-}
 
 export async function run(input: {
   artifactRoot: string;
@@ -213,6 +40,16 @@ export async function run(input: {
 }) {
   assert.equal(process.platform, "darwin");
   assert.equal(process.arch, "arm64");
+  const diagnostics = new WitnessDiagnostics(
+    input.report,
+    async (serialized) => {
+      // Same-directory rename prevents a crash leaving partial JSON. Writes are serialized.
+      const pending = path.join(input.output, "report.pending.json");
+      await fs.writeFile(pending, serialized, { mode: 0o600 });
+      await fs.rename(pending, path.join(input.output, "report.json"));
+    },
+  );
+  await diagnostics.checkpoint("journey-before");
   // Profile qualification rejects writable ancestors such as /private/tmp.
   // Reuse the established host-integration fixture parent under this checkout.
   const parent = path.resolve(input.output, "../../tmp");
@@ -235,13 +72,90 @@ export async function run(input: {
     passed = false;
   const observations: Record<string, unknown>[] = [];
   input.report.journey = { temporary, observations };
-  let primary: unknown;
-  const save = () =>
-    fs.writeFile(
-      path.join(input.output, "report.json"),
-      JSON.stringify(input.report, null, 2) + "\n",
-      { mode: 0o600 },
+  Object.defineProperty(input.report, "requests", {
+    enumerable: true,
+    get: () => peers.map((peer) => peer.snapshot()),
+  });
+  const go = {
+    start: "not-requested",
+    close: "not-requested",
+    retirement: "unobserved",
+    terminal: "not-exposed-by-host",
+  };
+  input.report.go = go;
+  const spawnPeer = (launch: string) => {
+    const child = spawn(
+      process.execPath,
+      [
+        path.join(input.artifactRoot, "computer-mcp.cjs"),
+        "--launch-contract",
+        launch,
+      ],
+      {
+        cwd: home,
+        env: { HOME: home, PATH: "/usr/bin:/bin", TMPDIR: home },
+        stdio: "pipe",
+      },
     );
+    const peer = new Peer(child, diagnostics);
+    peers.push(peer);
+    return peer;
+  };
+  let hostCloseResult: Promise<void> | undefined;
+  const closeHost = (): Promise<void> => {
+    hostCloseResult ??= (async () => {
+      assert.ok(host);
+      go.close = "requested-outcome-unknown";
+      await diagnostics.stage(
+        "go-close",
+        BUDGETS.hostCleanup,
+        "HOST_CLEANUP_UNCONFIRMED",
+        async () => {
+          await host!.close();
+          hostClosed = true;
+          go.close = "returned";
+          // Public host close aggregates retirement and child drain. It exposes no
+          // individual ACK/terminal facts; do not manufacture them from MCP EOF.
+          go.retirement = "host-close-returned-no-separate-receipt";
+        },
+        true,
+      );
+    })();
+    return hostCloseResult;
+  };
+  Object.defineProperty(input.report, "unresolvedEffects", {
+    enumerable: true,
+    get: () => {
+      const unresolved: unknown[] = peers.flatMap((peer, index) => [
+        ...peer.requests
+          .filter(
+            (request) =>
+              request.state === "failed-outcome-unknown" &&
+              request.stdinWrite !== "not-submitted" &&
+              request.response === "unobserved",
+          )
+          .map((request) => ({
+            peer: index,
+            id: request.id,
+            method: request.method,
+            ...(request.tool ? { tool: request.tool } : {}),
+            state: "reply-unknown-never-retry",
+          })),
+        ...(peer.terminalFacts
+          ? []
+          : [{ peer: index, state: "mcp-terminal-unknown" }]),
+      ]);
+      if (host && !hostClosed)
+        unresolved.push({
+          state: "go-close-unconfirmed",
+        });
+      if (go.start === "requested-outcome-unknown")
+        unresolved.push({ state: "go-start-unconfirmed" });
+      return unresolved;
+    },
+  });
+  let primary: unknown;
+  const save = () => diagnostics.checkpoint("journey-final");
   let socketRoot: string | undefined,
     socketIdentity: import("node:fs").BigIntStats | undefined;
   try {
@@ -259,7 +173,12 @@ export async function run(input: {
       new ProductSettingsStore({ root: stateRoot }),
       { homeDirectory: home },
     );
-    await configuration.initialize();
+    await diagnostics.stage(
+      "settings-initialize",
+      BUDGETS.initialize,
+      "WITNESS_PHASE_UNKNOWN",
+      () => configuration.initialize(),
+    );
     const settings = () => {
       const snapshot = configuration.snapshot();
       assert.equal(snapshot.status, "ready");
@@ -294,16 +213,27 @@ export async function run(input: {
       cancel: forbidden,
       dispose: forbidden,
     };
-    host = await startDesktopGoCore({
-      previousHostDrainConfirmed: true,
-      artifactRoot: input.artifactRoot,
-      compiledArtifact: input.artifact,
-      build: input.build,
-      stateRoot,
-      home,
-      settings,
-      browser: () => ({ driver, withdraw: () => undefined }),
-    });
+    go.start = "requested-outcome-unknown";
+    host = await diagnostics.stage(
+      "go-start",
+      BUDGETS.initialize,
+      "HOST_STARTUP_UNKNOWN",
+      async () => {
+        // Retain the returned owner even if its after-checkpoint cannot persist.
+        host = await startDesktopGoCore({
+          previousHostDrainConfirmed: true,
+          artifactRoot: input.artifactRoot,
+          compiledArtifact: input.artifact,
+          build: input.build,
+          stateRoot,
+          home,
+          settings,
+          browser: () => ({ driver, withdraw: () => undefined }),
+        });
+        go.start = "returned";
+        return host;
+      },
+    );
     // Match normal main's required storage transport before retirement can read
     // Settings. This is the existing document owner, not a fixture answer port.
     host.connectSettingsStore((profileId) => {
@@ -319,11 +249,17 @@ export async function run(input: {
       };
     });
     const challenge = randomUUID();
-    const opened = await host.openComputerConnector(
-      randomUUID(),
-      hash("synthetic-launch"),
-      hash(challenge),
-      lifecycleRoot,
+    const opened = await diagnostics.stage(
+      "go-connector-open",
+      BUDGETS.initialize,
+      "HOST_OPEN_UNKNOWN",
+      () =>
+        host!.openComputerConnector(
+          randomUUID(),
+          hash("synthetic-launch"),
+          hash(challenge),
+          lifecycleRoot,
+        ),
     );
     assert.ok(opened.launchFile && opened.launchSha256);
     assert.equal(opened.endpoint.binding.buildId, input.build.buildId);
@@ -335,15 +271,22 @@ export async function run(input: {
       execution: opened.execution,
       launchSha256: opened.launchSha256,
     });
-    await new PrivateMcpLifecycle(lifecycleRoot).prepare(opened.launchSha256);
+    await diagnostics.stage(
+      "mcp-lifecycle-prepare",
+      BUDGETS.initialize,
+      "WITNESS_PHASE_UNKNOWN",
+      () =>
+        new PrivateMcpLifecycle(lifecycleRoot).prepare(opened.launchSha256!),
+    );
     const connect = async () => {
-      const peer = new Peer(
-        path.join(input.artifactRoot, "computer-mcp.cjs"),
-        opened.launchFile!,
-        home,
-      );
-      peers.push(peer);
+      await diagnostics.checkpoint("mcp-spawn-before");
+      const peer = spawnPeer(opened.launchFile!);
+      await diagnostics.checkpoint("mcp-spawn-after");
       await peer.initialize();
+      await diagnostics.checkpoint("mcp-initialize-returned", {
+        stdioReady: "initialize-response-observed",
+        socketHandshake: "not-separately-observed",
+      });
       return peer;
     };
     let peer = await connect();
@@ -466,7 +409,12 @@ export async function run(input: {
       finalSha256: hash(finalBytes),
       retainedOrigin: object(created.data).origin,
     });
-    await host.withdraw();
+    await diagnostics.stage(
+      "go-withdraw",
+      BUDGETS.request,
+      "HOST_WITHDRAW_UNKNOWN",
+      () => host!.withdraw(),
+    );
     const revoked = await peer.call(
       "computer_workspace_read",
       {
@@ -485,17 +433,18 @@ export async function run(input: {
       code: revoked.code,
     });
     await peer.close();
-    await host.close();
-    hostClosed = true;
+    await closeHost();
     // One new connection to a known closed selected backend must fail. No tool
     // request/effect is submitted, and the legacy adapter cannot replace it.
-    const unavailable = new Peer(
-      path.join(input.artifactRoot, "computer-mcp.cjs"),
-      opened.launchFile,
-      home,
+    await diagnostics.checkpoint("mcp-unavailable-spawn-before");
+    const unavailable = spawnPeer(opened.launchFile);
+    await diagnostics.checkpoint("mcp-unavailable-spawn-after");
+    await diagnostics.stage(
+      "mcp-startup-refusal",
+      BUDGETS.initialize,
+      "MCP_STARTUP_TERMINAL_UNKNOWN",
+      () => unavailable.requireStartupFailure(),
     );
-    peers.push(unavailable);
-    await unavailable.requireStartupFailure();
     await unavailable.close(1);
     assert.equal(providerCalls, 0);
     observations.push({
@@ -505,63 +454,77 @@ export async function run(input: {
     passed = true;
   } catch (error) {
     primary = error;
-    input.report.journeyError =
-      error instanceof Error ? error.message : "unknown_failure";
+    input.report.journeyError = diagnosticCode(error);
   } finally {
-    // Content-free correlation survives a timeout; never record tool payloads.
-    input.report.requests = peers.map((peer) => ({
-      pid: peer.child.pid,
-      requests: peer.requests,
-    }));
+    // Persist the first failure before touching cleanup, even if a close hangs.
+    input.report.cleanup = "pending";
     let cleanup: unknown;
+    const cleanupFailures: string[] = [];
+    const noteCleanup = (error: unknown) => {
+      cleanup ??= error;
+      cleanupFailures.push(diagnosticCode(error));
+      input.report.cleanupErrors = cleanupFailures;
+    };
+    try {
+      await diagnostics.checkpoint("cleanup-before");
+    } catch (error) {
+      noteCleanup(error);
+    }
     for (const peer of peers) {
       try {
         await peer.close();
       } catch (error) {
-        cleanup ??= error;
+        noteCleanup(error);
       }
     }
     if (host && !hostClosed) {
       try {
-        await host.close();
-        hostClosed = true;
+        await closeHost();
       } catch (error) {
-        cleanup ??= error;
+        noteCleanup(error);
       }
     }
-    input.report.terminals = await Promise.all(
-      peers.map(async (peer) => {
-        try {
-          return {
-            pid: peer.child.pid,
-            ...(await bounded(peer.terminal, "MCP_TERMINAL_UNKNOWN")),
-          };
-        } catch (error) {
-          cleanup ??= error;
-          return { pid: peer.child.pid, terminal: "unknown" };
-        }
-      }),
-    );
+    // Terminal events are retained by Peer independently of close validation.
+    // Do not spend another timeout or call close again to obtain these facts.
+    input.report.terminals = peers.map((peer) => ({
+      pid: peer.child.pid,
+      ...(peer.terminalFacts ?? { terminal: "unknown" }),
+    }));
     input.report.hostClosed = hostClosed;
+    input.report.cleanup = "retained";
     if (passed && !cleanup && hostClosed) {
-      const current = await fs.lstat(temporary, { bigint: true });
-      assert.equal(current.dev, initialRoot.dev);
-      assert.equal(current.ino, initialRoot.ino);
-      if (socketRoot && socketIdentity) {
-        const selected = await fs.lstat(socketRoot, { bigint: true });
-        assert.equal(selected.dev, socketIdentity.dev);
-        assert.equal(selected.ino, socketIdentity.ino);
-        // Native close intentionally retains an inert socket and launch file.
-        // Only this successful fixture owns their removal after all exact waits.
-        await fs.rm(socketRoot, { recursive: true });
+      try {
+        await diagnostics.stage(
+          "fixture-remove",
+          BUDGETS.mcpCleanup,
+          "WITNESS_PHASE_UNKNOWN",
+          async () => {
+            const current = await fs.lstat(temporary, { bigint: true });
+            assert.equal(current.dev, initialRoot.dev);
+            assert.equal(current.ino, initialRoot.ino);
+            if (socketRoot && socketIdentity) {
+              const selected = await fs.lstat(socketRoot, { bigint: true });
+              assert.equal(selected.dev, socketIdentity.dev);
+              assert.equal(selected.ino, socketIdentity.ino);
+              // Native close intentionally retains an inert socket and launch file.
+              // Only this successful fixture owns their removal after all exact waits.
+              await fs.rm(socketRoot, { recursive: true });
+            }
+            await fs.rm(temporary, { recursive: true });
+          },
+        );
+        input.report.cleanup = "confirmed";
+      } catch (error) {
+        noteCleanup(error);
       }
-      await fs.rm(temporary, { recursive: true });
-      input.report.cleanup = "confirmed";
-    } else input.report.cleanup = "retained";
-    if (cleanup)
-      input.report.cleanupError =
-        cleanup instanceof Error ? cleanup.message : "unknown_cleanup";
-    await save();
+    }
+    if (cleanup) input.report.cleanupError = diagnosticCode(cleanup);
+    try {
+      await save();
+    } catch (error) {
+      noteCleanup(error);
+    }
+    if (cleanup) input.report.cleanupError = diagnosticCode(cleanup);
     if (primary) throw primary;
     if (cleanup) throw cleanup;
   }
