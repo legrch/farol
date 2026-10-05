@@ -6,6 +6,15 @@ import {
 import { workspaceEditToAcknowledge } from "../workspace-edit-delivery";
 import { AgentDraftStore } from "../agent-draft";
 import { z } from "zod";
+import {
+  ChatHistoryContextSchema,
+  ChatHistoryQuerySchema,
+  ChatHistoryReplySchema,
+  sameHistoryContext,
+  type ChatHistoryQuery,
+  type ChatHistoryReply,
+  type ChatHistoryContext,
+} from "../../pkg/ipc/chat-history";
 import { adoptReadConversation } from "./read-conversation-state";
 import {
   ProductConfigurationSnapshotSchema,
@@ -95,6 +104,7 @@ export const BootstrapProjectionSchema = z.object({
   taskRevision: z.number().int().nonnegative(),
   tasks: ProductTasksStateSchema.shape.tasks,
   windowState: WindowStateSchema,
+  chatHistoryContext: ChatHistoryContextSchema.nullable().optional(),
 });
 const home: Destination = { area: "home", page: "general", taskId: "" };
 const initial: WindowSnapshot = {
@@ -111,6 +121,8 @@ const initial: WindowSnapshot = {
   evidence: null,
   readPreview: null,
   readConversation: null,
+  chatHistoryContext: null,
+  chatHistoryEpoch: 0,
   shortcuts: { ...defaultNavigationShortcuts },
   workspaceEditDelivery: null,
   destination: home,
@@ -141,6 +153,7 @@ export class WindowController implements RendererFacade {
   private updateRevision = 0;
   private pendingUpdateCheck = false;
   private staleRevision = 0;
+  private historyRevision = 0;
   private bufferedTasks: WindowSnapshot["tasks"] | null = null;
   private bufferedEvents: ActivityEntry[] = [];
   private overflow = false;
@@ -224,6 +237,7 @@ export class WindowController implements RendererFacade {
         const parsed = RuntimeStatusSchema.safeParse(value);
         if (parsed.success) {
           this.runtimeRevision++;
+          if (parsed.data.state !== "ready") this.invalidateHistory();
           this.patch({
             runtime: parsed.data.state,
             ...(parsed.data.state === "offline" ||
@@ -262,6 +276,7 @@ export class WindowController implements RendererFacade {
           return;
         }
         const data = parsed.data;
+        this.adoptHistoryContext(data.chatHistoryContext ?? null);
         this.patch({
           environment: data.environment,
           buildId: data.build.buildId,
@@ -365,6 +380,7 @@ export class WindowController implements RendererFacade {
   }
   private stale(): void {
     this.staleRevision++;
+    this.invalidateHistory();
     if (this.booting) this.overflow = true;
     this.patch({ status: "stale", evidence: null });
   }
@@ -496,6 +512,7 @@ export class WindowController implements RendererFacade {
         runtimeRevision === this.runtimeRevision
           ? parsed.data.runtimeState
           : this.state.runtime;
+      this.adoptHistoryContext(parsed.data.chatHistoryContext ?? null);
       this.patch({
         status:
           parsed.data.configuration.status === "ready" &&
@@ -509,6 +526,66 @@ export class WindowController implements RendererFacade {
     } catch {
       if (this.configOrder.isLatest(order)) this.stale();
     }
+  }
+  async readChatHistory(query: ChatHistoryQuery): Promise<ChatHistoryReply> {
+    const before = this.state;
+    const context = before.chatHistoryContext;
+    const revision = this.staleRevision;
+    const runtimeRevision = this.runtimeRevision;
+    const historyRevision = this.historyRevision;
+    const request = ChatHistoryQuerySchema.parse(query);
+    if (
+      this.disposed ||
+      before.status !== "current" ||
+      !context ||
+      !this.api.chatHistory
+    )
+      throw new Error("CHAT_HISTORY_UNAVAILABLE");
+    const raw = await this.api.chatHistory({ context, query: request });
+    if (
+      this.disposed ||
+      this.state.status !== "current" ||
+      revision !== this.staleRevision ||
+      runtimeRevision !== this.runtimeRevision ||
+      historyRevision !== this.historyRevision ||
+      before.buildId !== this.state.buildId ||
+      !sameHistoryContext(context, this.state.chatHistoryContext)
+    )
+      throw new Error("CHAT_HISTORY_STALE");
+    const reply = ChatHistoryReplySchema.parse(raw);
+    if (
+      !sameHistoryContext(reply.context, context) ||
+      reply.value.kind !== (request.kind === "list" ? "page" : "result")
+    )
+      throw new Error("CHAT_HISTORY_CROSSED");
+    if (
+      request.kind === "list" &&
+      reply.value.kind === "page" &&
+      reply.value.offset !== request.offset
+    )
+      throw new Error("CHAT_HISTORY_CROSSED");
+    if (
+      request.kind === "result" &&
+      reply.value.kind === "result" &&
+      (reply.value.entry.key.operationId !== request.key.operationId ||
+        reply.value.entry.key.backendGeneration !==
+          request.key.backendGeneration)
+    )
+      throw new Error("CHAT_HISTORY_CROSSED");
+    return immutable(reply);
+  }
+  private adoptHistoryContext(context: ChatHistoryContext | null): void {
+    if (
+      sameHistoryContext(context, this.state.chatHistoryContext) ||
+      (context === null && this.state.chatHistoryContext === null)
+    )
+      return;
+    this.invalidateHistory();
+    this.patch({ chatHistoryContext: context });
+  }
+  private invalidateHistory(): void {
+    this.historyRevision++;
+    this.patch({ chatHistoryEpoch: this.historyRevision });
   }
   private dispatch(
     key: string,

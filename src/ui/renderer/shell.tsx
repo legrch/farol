@@ -12,6 +12,7 @@ import type {
 import { routeReadiness } from "../setup-presentation";
 import { TaskEditor } from "./task";
 import { ChatReadonly } from "./chat-readonly";
+import { ChatHistory } from "./chat-history";
 const pages: readonly [SettingsPage, string][] = [
   ["general", "General"],
   ["appearance", "Appearance"],
@@ -169,6 +170,7 @@ function Home({
             </p>
           </section>
           <ChatReadonly snapshot={snapshot} facade={facade} />
+          <ChatHistory snapshot={snapshot} facade={facade} />
           <section className="recent">
             <div className="section-heading">
               <h2>Recent activity</h2>

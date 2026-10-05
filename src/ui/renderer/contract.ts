@@ -11,12 +11,18 @@ import type {
 } from "../../modules/chat/contract/product-task";
 import type { InstalledUpdateView } from "../../modules/release/contract/installed-update";
 import type { WindowState } from "../../pkg/ipc/shell-state";
+import type {
+  ChatHistoryContext,
+  ChatHistoryQuery,
+  ChatHistoryReply,
+} from "../../pkg/ipc/chat-history";
 
 /** F0 is a window-local presentation facade, not the Desktop/Core wire API. */
 export type PreloadApi = Readonly<{
   bootstrap(): Promise<unknown>;
   snapshot(): Promise<unknown>;
   configure(command: ProductConfigurationCommand): Promise<unknown>;
+  chatHistory?(request: unknown): Promise<unknown>;
   task(command: ProductTaskCommand): Promise<unknown>;
   installedUpdate(command: { kind: UpdateAction | "status" }): Promise<unknown>;
   setNavigationShortcuts(shortcuts: unknown): Promise<unknown>;
@@ -93,6 +99,9 @@ export type WindowSnapshot = Readonly<{
   workspaceEditDelivery: string | null;
   readConversation:
     import("./read-conversation-state").ReadConversationState | null;
+  chatHistoryContext: ChatHistoryContext | null;
+  /** Local invalidation counter, not a backend revision or restored authority. */
+  chatHistoryEpoch: number;
   /** Window-retained command receipt; not backend recovery or Send authority. */
   readPreview: Readonly<{
     prepareIntention: string;
@@ -137,6 +146,7 @@ export interface RendererFacade {
   acknowledgeWorkspaceEdit(operationId: string): Promise<Intent>;
   shortcuts(value: NavigationShortcuts): Promise<Intent>;
   refresh(): Promise<void>;
+  readChatHistory(query: ChatHistoryQuery): Promise<ChatHistoryReply>;
   navigate(destination: Partial<Destination>): void;
   travel(direction: -1 | 1): void;
   toggleSidebar(compact: boolean): void;

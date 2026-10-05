@@ -9,6 +9,7 @@ import { BridgeError, type Client } from "./bridge/client.ts";
 import { ComputerBridge } from "./bridge/computer.ts";
 import { BrowserPump, type BrowserDriver } from "./bridge/browser.ts";
 import { ChatBridge } from "./bridge/chat.ts";
+import { ChatHistoryBridge } from "./bridge/chat-history.ts";
 import { ChatComputerBridge } from "./bridge/chat-computer.ts";
 import { ChatCallerBridge } from "./bridge/chat-caller.ts";
 import { ReadIntentBridge } from "./bridge/read-intent.ts";
@@ -88,6 +89,7 @@ export class DesktopGoCore {
   private readonly authority: GoComputerAuthority;
   private readonly computer: ComputerBridge;
   private readonly readIntent: ReadIntentBridge;
+  private readonly historyBridge: ChatHistoryBridge;
   private readonly settingsDelivery: SettingsDeliveryBridge;
   private settingsStorePump: SettingsStorePump | undefined;
   private readonly sessionId = randomUUID();
@@ -109,6 +111,7 @@ export class DesktopGoCore {
     this.authority = new GoComputerAuthority(client, client.verifiedContext);
     this.computer = new ComputerBridge(client);
     this.readIntent = new ReadIntentBridge(client);
+    this.historyBridge = new ChatHistoryBridge(client);
     this.settingsDelivery = new SettingsDeliveryBridge(client);
   }
   connectSettingsStore(
@@ -140,6 +143,19 @@ export class DesktopGoCore {
     if (!this.chatBridge || this.closeResult || this.pump?.state !== "running")
       throw new BridgeError("unavailable", "host_chat_unavailable");
     return this.chatBridge;
+  }
+  get historyContext(): Readonly<Context> | null {
+    if (this.closeResult) return null;
+    try {
+      return this.client.verifiedContext;
+    } catch {
+      return null;
+    }
+  }
+  get history(): ChatHistoryBridge {
+    if (!this.historyContext)
+      throw new BridgeError("unavailable", "host_history_unavailable");
+    return this.historyBridge;
   }
   get chatComputer(): ChatComputerBridge {
     if (

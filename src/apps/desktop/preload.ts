@@ -23,6 +23,8 @@ contextBridge.exposeInMainWorld("farolNext", {
   snapshot: () => ipcRenderer.invoke(channels.snapshot) as Promise<unknown>,
   configure: (command: unknown) =>
     ipcRenderer.invoke(channels.configuration, command) as Promise<unknown>,
+  chatHistory: (request: unknown) =>
+    ipcRenderer.invoke(channels.chatHistory, request) as Promise<unknown>,
   task: (command: unknown) =>
     ipcRenderer.invoke(channels.task, command) as Promise<unknown>,
   control: (taskId: string, action: string) =>

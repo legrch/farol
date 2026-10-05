@@ -13,6 +13,7 @@ import {
   chatWorkerInitialUrl,
 } from "../../../apps/desktop/go-chat-startup-profile";
 import { ReadConversationClient } from "../../../apps/desktop/bridge/read-conversation";
+import { readChatHistoryView } from "../../../apps/desktop/chat-history-view";
 import { projectReadConversation } from "../../../apps/desktop/read-conversation-projection";
 import { ReadConversationPromptSchema } from "../../pkg/product-settings/chat-conversation";
 import { BridgeError } from "../../../apps/desktop/bridge/client";
@@ -1382,6 +1383,7 @@ function bootstrap() {
   const taskState = productTasksState();
   return {
     schema: 3,
+    chatHistoryContext: desktopGoCore?.historyContext ?? null,
     productName,
     bundleId,
     environment: activeDesktopIdentity.environment,
@@ -9235,6 +9237,11 @@ function installIpc(): void {
     isTrustedIpcSender(event, window)
       ? configureProduct(value)
       : configurationFailure("SETTINGS_UNAVAILABLE"),
+  );
+  ipcMain.handle(channels.chatHistory, (event, value: unknown) =>
+    isTrustedIpcSender(event, window)
+      ? readChatHistoryView(() => desktopGoCore, value)
+      : { error: "IPC_SENDER_DENIED" },
   );
   ipcMain.handle(channels.task, (event, value: unknown) =>
     isTrustedIpcSender(event, window)
