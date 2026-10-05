@@ -67,7 +67,9 @@
     "chat.readintent.resolve": "effect",
     "chat.conversation.state": "read",
     "chat.history.list": "read",
-    "chat.history.result": "read"
+    "chat.history.result": "read",
+    "chat.conversation.start": "effect",
+    "chat.conversation.account.revoke": "effect"
   },
   "definitions": {
     "Context": {
@@ -3968,6 +3970,52 @@
         },
         "acknowledged": {
           "type": "boolean"
+        }
+      }
+    },
+    "ChatStart": {
+      "type": "object",
+      "fields": {
+        "sessionId": {
+          "type": "id"
+        },
+        "prompt": {
+          "type": "string",
+          "minBytes": 1,
+          "maxBytes": 8192
+        },
+        "policy": {
+          "type": "ChatModelPolicy"
+        },
+        "profiles": {
+          "type": "ChatBrowserModelProfile[]"
+        },
+        "requested": {
+          "type": "ChatModelRequest"
+        },
+        "confirmedPrincipalKey": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "observation": {
+          "type": "BrowserAccountObservation"
+        }
+      }
+    },
+    "ChatStarted": {
+      "type": "object",
+      "fields": {
+        "handle": {
+          "type": "ChatHandle"
+        },
+        "selection": {
+          "type": "BrowserSelection"
+        },
+        "resolution": {
+          "type": "BrowserResolution"
+        },
+        "required": {
+          "type": "BrowserRequiredControls"
         }
       }
     }

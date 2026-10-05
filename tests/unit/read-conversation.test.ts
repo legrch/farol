@@ -10,6 +10,8 @@ import {
   type ChatFrame,
   type ChatResult,
   type ChatCreate,
+  type ChatStart,
+  type ChatStarted,
 } from "../../apps/desktop/bridge/wire.ts";
 
 // Mechanical client fixture. Go owns all status decisions in production; these
@@ -391,8 +393,12 @@ describe("normal read conversation mechanical client", () => {
   });
   it("promotes the original owner once and sends once across duplicate submit and repeated progress", async () => {
     const f = fixture();
+    const attempt = f.client.start(input, "Explain this file.");
+    expect(
+      f.client.start(structuredClone(input), "Explain this file."),
+    ).toBe(attempt);
     const [a, b] = await Promise.all([
-      f.client.start(input, "Explain this file."),
+      attempt,
       f.client.start(structuredClone(input), "Explain this file."),
     ]);
     expect(a).toEqual(b);
@@ -617,6 +623,353 @@ describe("normal read conversation mechanical client", () => {
     expect(() => f.client.follow(handle.handleId, "x".repeat(8193))).toThrow(
       "read_chat_prompt_invalid",
     );
+    expect(f.chat.create).not.toHaveBeenCalled();
+  });
+});
+
+function authorizedFixture() {
+  const f = fixture();
+  const principal = "c".repeat(64);
+  const request: ChatStart = {
+    sessionId: handle.binding.sessionId,
+    prompt: "Explain.",
+    policy: input.policy,
+    profiles: input.profiles,
+    requested: input.requested,
+    confirmedPrincipalKey: principal,
+    observation: {
+      state: "observed",
+      source: "provider-session-v1",
+      principalKey: principal,
+      observedAtMillis: "1",
+      expiresAtMillis: "100",
+    },
+  };
+  const resolvedSelection = { ...selection, accountId: principal };
+  const started: ChatStarted = {
+    handle: structuredClone(handle),
+    selection: resolvedSelection,
+    resolution: { ...selected.resolution, resolved: { ...resolvedSelection } },
+    required,
+  };
+  const chat = {
+    ...f.chat,
+    start: vi.fn(async (_request: ChatStart): Promise<ChatStarted> =>
+      structuredClone(started),
+    ),
+  };
+  chat.result.mockImplementation(async (id) => ({
+    ...terminal(
+      id === handle.handleId ? handle : second,
+      f.states.get(id)!.deliveryAcknowledged,
+    ),
+    evidence: {
+      ...terminal(handle).evidence,
+      requested: started.selection,
+      resolution: started.resolution,
+    },
+  }));
+  return {
+    ...f,
+    request: structuredClone(request),
+    started: structuredClone(started),
+    chat,
+    client: new ReadConversationClient(null, chat, () => 1),
+  };
+}
+
+// Injected Chat port only: these states prove client mechanics, not Go
+// admission, provider authorization, native transport or actual settlement.
+describe("authorized ordinary conversation mechanical client", () => {
+  it("pins the exact promise synchronously and starts, prepares and sends once", async () => {
+    const f = authorizedFixture();
+    const attempt = f.client.startAuthorized(f.request);
+    expect(f.chat.start).not.toHaveBeenCalled();
+    expect(f.client.startAuthorized(structuredClone(f.request))).toBe(attempt);
+    const first = await attempt;
+    expect(f.client.startAuthorized(f.request)).toBe(attempt);
+    expect(first.handle).toEqual(handle);
+    expect(f.chat.start).toHaveBeenCalledWith(f.request);
+    expect(f.chat.start.mock.contexts[0]).toBe(f.chat);
+    await f.client.progress(handle.handleId, "0");
+    await f.client.progress(handle.handleId, "0");
+    expect(f.chat.start).toHaveBeenCalledTimes(1);
+    expect(f.chat.prepare).toHaveBeenCalledTimes(1);
+    expect(f.chat.send).toHaveBeenCalledTimes(1);
+    expect(f.chat.send).toHaveBeenCalledWith(handle.handleId, "12001");
+    expect(f.chat.create).not.toHaveBeenCalled();
+    expect(f.owner.resolve).not.toHaveBeenCalled();
+    expect(f.owner.promote).not.toHaveBeenCalled();
+    expect(f.client.canWithdrawAdmission()).toBe(false);
+  });
+
+  it.each(["start", "prepare", "send", "state", "events"] as const)(
+    "retains the exact failed promise after unknown %s without replay effects",
+    async (stage) => {
+      const f = authorizedFixture();
+      const error = new BridgeError("unknown", "lost");
+      f.chat[stage].mockRejectedValueOnce(error);
+      const attempt = f.client.startAuthorized(f.request);
+      expect(f.client.startAuthorized(f.request)).toBe(attempt);
+      await expect(attempt).rejects.toBe(error);
+      expect(f.client.startAuthorized(f.request)).toBe(attempt);
+      await expect(f.client.startAuthorized(f.request)).rejects.toBe(error);
+      expect(f.chat[stage]).toHaveBeenCalledTimes(1);
+      expect(f.chat.start).toHaveBeenCalledTimes(1);
+      expect(f.chat.send.mock.calls.length).toBeLessThanOrEqual(1);
+      expect(f.client.canWithdrawAdmission()).toBe(false);
+    },
+  );
+
+  it.each(["refused", "transport"] as const)(
+    "retains a %s admission attempt without another start",
+    async (outcome) => {
+      const f = authorizedFixture();
+      const error =
+        outcome === "refused"
+          ? new BridgeError("refused", "account_unavailable")
+          : new Error("reply lost");
+      f.chat.start.mockRejectedValueOnce(error);
+      const attempt = f.client.startAuthorized(f.request);
+      await expect(attempt).rejects.toBe(error);
+      expect(f.client.startAuthorized(f.request)).toBe(attempt);
+      await expect(attempt).rejects.toBe(error);
+      expect(() =>
+        f.client.startAuthorized({ ...f.request, prompt: "Changed." }),
+      ).toThrow("read_chat_start_crossed");
+      expect(() => f.client.start(input, "Explain.")).toThrow(
+        "read_chat_start_crossed",
+      );
+      expect(f.chat.start).toHaveBeenCalledTimes(1);
+      expect(f.chat.prepare).not.toHaveBeenCalled();
+      expect(f.chat.send).not.toHaveBeenCalled();
+      expect(f.client.canWithdrawAdmission()).toBe(false);
+    },
+  );
+
+  it.each(["read", "authorized"] as const)(
+    "refuses changed input and crossing from the %s start path before effects",
+    async (path) => {
+      const f = authorizedFixture();
+      const client = new ReadConversationClient(f.owner, f.chat, () => 1);
+      const attempt =
+        path === "read"
+          ? client.start(input, "Explain.")
+          : client.startAuthorized(f.request);
+      if (path === "read") {
+        expect(() => client.startAuthorized(f.request)).toThrow(
+          "read_chat_start_crossed",
+        );
+        expect(() => client.start(input, "Changed.")).toThrow(
+          "read_chat_start_crossed",
+        );
+      } else {
+        expect(() => client.start(input, "Explain.")).toThrow(
+          "read_chat_start_crossed",
+        );
+        for (const changed of [
+          { ...f.request, prompt: "Changed." },
+          { ...f.request, sessionId: "other-session" },
+          { ...f.request, requested: { effort: "high" } },
+          {
+            ...f.request,
+            observation: { ...f.request.observation, expiresAtMillis: "101" },
+          },
+        ])
+          expect(() => client.startAuthorized(changed)).toThrow(
+            "read_chat_start_crossed",
+          );
+      }
+      await attempt;
+      expect(f.chat.start).toHaveBeenCalledTimes(path === "read" ? 0 : 1);
+      expect(f.owner.promote).toHaveBeenCalledTimes(path === "read" ? 1 : 0);
+      expect(f.chat.send).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("refuses unavailable ports and invalid requests before admission or transport", () => {
+    const f = fixture();
+    const direct = authorizedFixture();
+    const client = new ReadConversationClient(null, f.chat, () => 1);
+    expect(() => client.startAuthorized(direct.request)).toThrow(
+      "read_chat_start_unavailable",
+    );
+    expect(() => client.start(input, "Explain.")).toThrow(
+      "read_chat_owner_unavailable",
+    );
+    for (const request of [
+      { ...direct.request, prompt: "" },
+      { ...direct.request, prompt: "x".repeat(8193) },
+      { ...direct.request, prompt: "bad\ud800" },
+      { ...direct.request, approved: true },
+      {
+        ...direct.request,
+        observation: {
+          ...direct.request.observation,
+          principalKey: "d".repeat(64),
+        },
+      },
+    ])
+      expect(() => direct.client.startAuthorized(request)).toThrow(BridgeError);
+    expect(direct.chat.start).not.toHaveBeenCalled();
+    expect(f.chat.prepare).not.toHaveBeenCalled();
+    expect(f.chat.send).not.toHaveBeenCalled();
+    expect(direct.chat.prepare).not.toHaveBeenCalled();
+    expect(direct.chat.send).not.toHaveBeenCalled();
+  });
+
+  it.each(["invalid", "session", "principal", "resolution", "generation"])(
+    "fences a %s start result before Prepare or Send",
+    async (field) => {
+      const f = authorizedFixture();
+      const out = f.started;
+      if (field === "invalid") Reflect.set(out, "extra", true);
+      if (field === "session")
+        Reflect.set(out.handle.binding, "sessionId", "other");
+      if (field === "principal") {
+        Reflect.set(out.selection, "accountId", "d".repeat(64));
+        Reflect.set(out.resolution.resolved, "accountId", "d".repeat(64));
+      }
+      if (field === "resolution")
+        Reflect.set(out.resolution.resolved, "modelId", "other-model");
+      if (field === "generation")
+        Reflect.set(out.handle.binding, "turnGeneration", "2");
+      f.chat.start.mockResolvedValueOnce(out);
+      const attempt = f.client.startAuthorized(f.request);
+      await expect(attempt).rejects.toMatchObject({
+        state: "unknown",
+        code:
+          field === "invalid"
+            ? "read_chat_start_invalid"
+            : "read_chat_start_result_crossed",
+      });
+      expect(f.client.startAuthorized(f.request)).toBe(attempt);
+      await expect(attempt).rejects.toBeInstanceOf(BridgeError);
+      expect(f.chat.start).toHaveBeenCalledTimes(1);
+      expect(f.chat.prepare).not.toHaveBeenCalled();
+      expect(f.chat.send).not.toHaveBeenCalled();
+    },
+  );
+
+  it("detaches input, port replies and projections while pinning Go's selection for Follow", async () => {
+    const f = authorizedFixture();
+    const original = structuredClone(f.request);
+    const authoritative = {
+      ...f.started,
+      selection: { ...f.started.selection, modelId: "go-selected-model" },
+      resolution: {
+        ...f.started.resolution,
+        resolved: { ...f.started.selection, modelId: "go-selected-model" },
+      },
+    };
+    const expected = structuredClone(authoritative);
+    f.chat.start.mockImplementationOnce(async (request) => {
+      expect(request).toEqual(original);
+      Reflect.set(request, "prompt", "port mutation");
+      return authoritative;
+    });
+    const attempt = f.client.startAuthorized(f.request);
+    Reflect.set(f.request, "prompt", "caller mutation");
+    const first = await attempt;
+    expect(f.client.startAuthorized(original)).toBe(attempt);
+    Reflect.set(authoritative.selection, "modelId", "later port mutation");
+    Reflect.set(authoritative.handle.binding, "ownerId", "later port mutation");
+    Reflect.set(first.handle.binding, "sessionId", "projection mutation");
+    Reflect.set(first.state, "followReady", true);
+    expect((await f.client.snapshot(handle.handleId, "0")).handle).toEqual(
+      handle,
+    );
+    await expect(
+      f.client.follow(handle.handleId, "Too early."),
+    ).rejects.toMatchObject({ code: "read_chat_follow_not_ready" });
+    expect(f.chat.create).not.toHaveBeenCalled();
+    f.states.set(handle.handleId, { ...state(handle), followReady: true });
+    await f.client.follow(handle.handleId, "Next.");
+    expect(f.chat.create).toHaveBeenCalledWith({
+      previousHandle: handle.handleId,
+      sessionId: handle.binding.sessionId,
+      prompt: "Next.",
+      selection: expected.selection,
+      resolution: expected.resolution,
+      required: expected.required,
+    });
+    expect(f.chat.start).toHaveBeenCalledTimes(1);
+    expect(f.chat.send).toHaveBeenCalledTimes(2);
+  });
+
+  it("uses the same frame ACK, result ACK and Go settlement gate before Follow", async () => {
+    const f = authorizedFixture();
+    await f.client.startAuthorized(f.request);
+    f.batches.set(handle.handleId, [
+      { sequence: "1", kind: "response.created", data: {} },
+      {
+        sequence: "2",
+        kind: "response.output_text.delta",
+        data: { delta: "Useful." },
+      },
+    ]);
+    const early = await f.client.progress(handle.handleId, "0");
+    expect(early.cursor).toBe("2");
+    expect(early.result).toBeUndefined();
+    await f.client.progress(handle.handleId, early.cursor);
+    expect(f.chat.acknowledgeFrame.mock.calls).toEqual([
+      [handle.handleId, "1"],
+      [handle.handleId, "2"],
+    ]);
+    expect(f.chat.acknowledgeResult).not.toHaveBeenCalled();
+    f.states.set(handle.handleId, {
+      ...state(handle),
+      phase: "result-ready",
+      hasResult: true,
+    });
+    const shown = await f.client.snapshot(handle.handleId, early.cursor);
+    const ack = f.client.acknowledge(handle.handleId, shown.result!.resultId);
+    expect(f.client.acknowledge(handle.handleId, shown.result!.resultId)).toBe(
+      ack,
+    );
+    await ack;
+    expect(f.chat.acknowledgeResult).toHaveBeenCalledTimes(1);
+    await expect(
+      f.client.follow(handle.handleId, "Too early."),
+    ).rejects.toMatchObject({ code: "read_chat_follow_not_ready" });
+    f.states.set(handle.handleId, {
+      ...f.states.get(handle.handleId)!,
+      lifecycleSettled: true,
+      released: false,
+    });
+    await expect(
+      f.client.follow(handle.handleId, "Still early."),
+    ).rejects.toMatchObject({ code: "read_chat_follow_not_ready" });
+    expect(f.chat.create).not.toHaveBeenCalled();
+    f.states.set(handle.handleId, {
+      ...f.states.get(handle.handleId)!,
+      released: true,
+      followReady: true,
+    });
+    expect((await f.client.follow(handle.handleId, "Next.")).handle).toEqual(
+      second,
+    );
+    expect(f.chat.create).toHaveBeenCalledTimes(1);
+    expect(f.chat.prepare).toHaveBeenCalledTimes(2);
+    expect(f.chat.send).toHaveBeenCalledTimes(2);
+    expect(f.chat.start).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves the capacity-refused queued handle until deliberate progress", async () => {
+    const f = authorizedFixture();
+    f.chat.prepare.mockRejectedValueOnce(
+      new BridgeError("refused", "CHAT_CAPACITY"),
+    );
+    const attempt = f.client.startAuthorized(f.request);
+    await attempt;
+    expect(f.client.startAuthorized(f.request)).toBe(attempt);
+    expect(f.chat.prepare).toHaveBeenCalledTimes(1);
+    expect(f.chat.send).not.toHaveBeenCalled();
+    await f.client.progress(handle.handleId, "0");
+    await f.client.progress(handle.handleId, "0");
+    expect(f.chat.start).toHaveBeenCalledTimes(1);
+    expect(f.chat.prepare).toHaveBeenCalledTimes(2);
+    expect(f.chat.send).toHaveBeenCalledTimes(1);
     expect(f.chat.create).not.toHaveBeenCalled();
   });
 });

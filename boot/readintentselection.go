@@ -87,37 +87,10 @@ func (s *ComputerIngress) resolveRead(ctx context.Context, operation string, in 
 	return &reply, nil
 }
 
-// Wire arrays keep generated boundaries closed. Reject duplicate names before
-// mapping into the existing policy's maps; never let last-wins change meaning.
 func readModelPolicy(in wire.ChatReadIntentResolve) (chatport.ModelPolicy, []chatport.BrowserModelProfile, error) {
-	invalid := readAccountRefusal("read_intent_selection_invalid")
-	p := chatport.ModelPolicy{DefaultHarness: in.Policy.DefaultHarness, Harnesses: make(map[string]chatport.ModelHarnessPolicy)}
-	if len(in.Policy.Harnesses) < 1 || len(in.Policy.Harnesses) > 16 || len(in.Profiles) < 1 || len(in.Profiles) > 128 {
-		return p, nil, invalid
+	policy, profiles, err := chatModelPolicy(in.Policy, in.Profiles)
+	if err != nil {
+		return policy, nil, readAccountRefusal("read_intent_selection_invalid")
 	}
-	for _, h := range in.Policy.Harnesses {
-		if _, exists := p.Harnesses[h.Name]; exists || len(h.Models) < 1 || len(h.Models) > 64 {
-			return p, nil, invalid
-		}
-		mapped := chatport.ModelHarnessPolicy{DefaultModel: h.DefaultModel, Models: make(map[string]chatport.ConfiguredModel)}
-		for _, m := range h.Models {
-			if _, exists := mapped.Models[m.Alias]; exists {
-				return p, nil, invalid
-			}
-			mapped.Models[m.Alias] = chatport.ConfiguredModel{Model: m.Model, DefaultEffort: m.DefaultEffort}
-		}
-		p.Harnesses[h.Name] = mapped
-	}
-	profiles := make([]chatport.BrowserModelProfile, 0, len(in.Profiles))
-	for _, profile := range in.Profiles {
-		if len(profile.Efforts) < 1 || len(profile.Efforts) > 32 {
-			return p, nil, invalid
-		}
-		pairs := make([]chatport.BrowserModelEffort, 0, len(profile.Efforts))
-		for _, pair := range profile.Efforts {
-			pairs = append(pairs, chatport.BrowserModelEffort{Requested: pair.Requested, Resolved: pair.Resolved})
-		}
-		profiles = append(profiles, chatport.BrowserModelProfile{ID: profile.Id, Executor: profile.Executor, RuntimeModel: profile.RuntimeModel, ModelID: profile.ModelId, DefaultEffort: profile.DefaultEffort, Mode: profile.Mode, Efforts: pairs, Required: chatport.RequiredControls{Model: profile.Required.Model, Effort: profile.Required.Effort, Mode: profile.Required.Mode, Connector: profile.Required.Connector}})
-	}
-	return p, profiles, nil
+	return policy, profiles, nil
 }

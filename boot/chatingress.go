@@ -9,16 +9,19 @@ import (
 	"sync"
 
 	wire "github.com/legrch/farol/gen/desktop/v1"
+	chatport "github.com/legrch/farol/modules/chat/app/port"
+	"github.com/legrch/farol/modules/chat/app/services/accountapproval"
 	conversation "github.com/legrch/farol/modules/chat/contracts/conversation"
 	"github.com/legrch/farol/pkg/ipc"
 	"github.com/legrch/farol/transport/desktop"
 )
 
 type chatHandle struct {
-	id         string
-	binding    conversation.Binding
-	handle     *conversation.Handle
-	beforeSend func(context.Context) error
+	id           string
+	binding      conversation.Binding
+	handle       *conversation.Handle
+	beforeSend   func(context.Context) error
+	accountOwner *accountapproval.Service
 }
 
 func (h chatHandle) send(ctx context.Context, deadline uint64) error {
@@ -34,30 +37,51 @@ func (h chatHandle) send(ctx context.Context, deadline uint64) error {
 // This map contains opaque facade handles only: no queue, output, retry policy,
 // admission restoration, provider state or independent task engine.
 type ChatIngress struct {
-	mu      sync.Mutex
-	facade  *conversation.Facade
-	peer    wire.Context
-	owner   string
-	handles map[string]chatHandle
-	used    map[string]bool
-	caller  *chatCallerIngress
+	mu           sync.Mutex
+	facade       *conversation.Facade
+	peer         wire.Context
+	owner        string
+	handles      map[string]chatHandle
+	used         map[string]bool
+	caller       *chatCallerIngress
+	accountClock chatport.AccountClock
+	// One ledger slot per admitted account is unavailable to ordinary creation.
+	// All successor handles share this one-shot withdrawal reservation.
+	withdrawals map[*accountapproval.Service]bool
 }
 
 func NewChatIngress(facade *conversation.Facade, peer wire.Context, owner string) (*ChatIngress, error) {
 	if facade == nil || validateIngress("Context", peer) != nil || !validIngressID(owner) {
 		return nil, errors.New("chat_ingress_invalid")
 	}
-	ingress := &ChatIngress{facade: facade, peer: peer, owner: owner, handles: make(map[string]chatHandle), used: make(map[string]bool)}
+	ingress := &ChatIngress{facade: facade, peer: peer, owner: owner, handles: make(map[string]chatHandle), used: make(map[string]bool), withdrawals: make(map[*accountapproval.Service]bool)}
 	ingress.caller = newChatCallerIngress(ingress)
 	return ingress, nil
 }
 func (s *ChatIngress) create(ctx context.Context, operation string, input wire.ChatCreate) (*wire.ChatHandle, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !validIngressID(operation) || s.used[operation] || len(s.used) >= 1024 || ctx.Err() != nil {
-		return nil, errors.New("chat_ingress_refused")
+	if err := s.claimChatOperation(ctx, operation); err != nil {
+		return nil, err
 	}
-	s.used[operation] = true // consumed before admission; an uncertain admission cannot be replayed
+	return s.createLocked(ctx, operation, input, nil)
+}
+
+// Caller holds mu. The same operation ledger covers ordinary and authorized
+// creation; a late or lost admission result cannot mint replacement work.
+func (s *ChatIngress) claimChatOperation(ctx context.Context, operation string) error {
+	return s.claimChatOperationCapacity(ctx, operation, 0)
+}
+
+func (s *ChatIngress) claimChatOperationCapacity(ctx context.Context, operation string, reserve int) error {
+	if ctx == nil || !validIngressID(operation) || s.used[operation] || len(s.used)+len(s.withdrawals)+reserve >= 1024 || ctx.Err() != nil {
+		return errors.New("chat_ingress_refused")
+	}
+	s.used[operation] = true
+	return nil
+}
+
+func (s *ChatIngress) createLocked(ctx context.Context, operation string, input wire.ChatCreate, account *chatStartAccount) (*wire.ChatHandle, error) {
 	id, err := randomIngressID()
 	if err != nil {
 		return nil, err
@@ -79,7 +103,11 @@ func (s *ChatIngress) create(ctx context.Context, operation string, input wire.C
 	}
 	binding := conversation.Binding{ProfileID: s.peer.ProfileId, BackendGeneration: s.peer.BackendGeneration, OwnerID: s.owner, SessionID: input.SessionId, TaskID: task, TaskEpoch: 1, ParticipantID: participant, TurnID: turn, OperationID: operation, TurnGeneration: 1}
 	var previous *conversation.Handle
+	var accountOwner *accountapproval.Service
 	if input.PreviousHandle != nil {
+		if account != nil {
+			return nil, errors.New("chat_previous_account_refused")
+		}
 		old, ok := s.handles[*input.PreviousHandle]
 		if !ok || old.binding.SessionID != input.SessionId || old.binding.TurnGeneration == math.MaxUint64 {
 			return nil, errors.New("chat_previous_handle_refused")
@@ -89,16 +117,26 @@ func (s *ChatIngress) create(ctx context.Context, operation string, input wire.C
 		binding.OperationID = operation
 		binding.TurnGeneration++
 		previous = old.handle
+		accountOwner = old.accountOwner
 	}
 	in := conversation.Input{Required: conversation.RequiredControls{Model: input.Required.Model, Effort: input.Required.Effort, Mode: input.Required.Mode, Connector: input.Required.Connector}, Binding: binding, Selection: chatSelection(input.Selection), Resolution: chatResolution(input.Resolution), Prompt: input.Prompt}
 	var handle *conversation.Handle
 	if previous == nil {
-		handle, err = s.facade.Create(ctx, in)
+		if account == nil {
+			handle, err = s.facade.Create(ctx, in)
+		} else {
+			authorization, e := newChatAccountAuthorization(&account.captured, binding, in.Selection.AccountID)
+			if e != nil {
+				return nil, e
+			}
+			accountOwner = account.owner
+			handle, err = s.facade.CreateAuthorized(ctx, in, authorization.Authorize)
+		}
 	} else {
 		handle, err = s.facade.Follow(ctx, previous, in)
 	}
 	if handle != nil {
-		s.handles[id] = chatHandle{id: id, binding: binding, handle: handle}
+		s.handles[id] = chatHandle{id: id, binding: binding, handle: handle, accountOwner: accountOwner}
 	}
 	if err != nil {
 		return nil, err
@@ -168,6 +206,9 @@ func chatOutcome(shape string, value any, err error) (*desktop.Outcome, error) {
 }
 func (s *ChatIngress) Methods() map[string]desktop.Method {
 	methods := s.caller.Methods()
+	for name, method := range s.startMethods() {
+		methods[name] = method
+	}
 	methods["chat.conversation.state"] = desktop.Method{Handle: s.conversationState}
 	methods["chat.conversation.create"] = desktop.Method{Handle: func(ctx context.Context, r desktop.Request) (*desktop.Outcome, error) {
 		var in wire.ChatCreate

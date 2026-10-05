@@ -1,0 +1,106 @@
+{
+  "input": {
+    "sessionId": "session",
+    "prompt": "Synthetic ordinary Chat input.",
+    "policy": {
+      "defaultHarness": "browser",
+      "harnesses": [
+        {
+          "name": "browser",
+          "defaultModel": "chatgpt",
+          "models": [
+            {
+              "alias": "chatgpt",
+              "model": "controlled-model",
+              "defaultEffort": "low"
+            }
+          ]
+        }
+      ]
+    },
+    "profiles": [
+      {
+        "id": "controlled",
+        "executor": "browser",
+        "runtimeModel": "controlled-model",
+        "modelId": "controlled-model",
+        "defaultEffort": "low",
+        "mode": "",
+        "efforts": [
+          {
+            "requested": "low",
+            "resolved": "low"
+          }
+        ],
+        "required": {
+          "model": true,
+          "effort": true,
+          "mode": false,
+          "connector": false
+        }
+      }
+    ],
+    "requested": {},
+    "confirmedPrincipalKey": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "observation": {
+      "state": "observed",
+      "source": "provider-session-v1",
+      "principalKey": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "observedAtMillis": "1",
+      "expiresAtMillis": "100"
+    }
+  },
+  "output": {
+    "handle": {
+      "handleId": "handle",
+      "binding": {
+        "profileId": "profile",
+        "backendGeneration": "backend",
+        "ownerId": "owner",
+        "sessionId": "session",
+        "taskId": "task",
+        "taskEpoch": "1",
+        "participantId": "participant",
+        "turnId": "turn",
+        "operationId": "operation",
+        "turnGeneration": "1"
+      }
+    },
+    "selection": {
+      "provider": "farol",
+      "alias": "chatgpt",
+      "accountId": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "modelId": "controlled-model",
+      "effort": "low",
+      "mode": "",
+      "toolsEnabled": false,
+      "connectorId": "",
+      "connectorGrantId": ""
+    },
+    "resolution": {
+      "requestedAlias": "chatgpt",
+      "requestedExecutor": "browser",
+      "requestedEffort": "",
+      "requestedMode": "",
+      "resolved": {
+        "provider": "farol",
+        "alias": "chatgpt",
+        "accountId": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "modelId": "controlled-model",
+        "effort": "low",
+        "mode": "",
+        "toolsEnabled": false,
+        "connectorId": "",
+        "connectorGrantId": ""
+      },
+      "configSHA256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "translationId": "controlled"
+    },
+    "required": {
+      "model": true,
+      "effort": true,
+      "mode": false,
+      "connector": false
+    }
+  }
+}

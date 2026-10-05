@@ -6,6 +6,7 @@ import {
   validate,
   type ChatReadIntentResolve,
   type ChatReadIntentResolved,
+  type ChatStart,
   type ChatHandle,
   type ChatState,
   type ChatFrames,
@@ -31,7 +32,7 @@ type ChatPort = Pick<
   | "result"
   | "acknowledgeFrame"
   | "acknowledgeResult"
->;
+> & Partial<Pick<ChatBridge, "start">>;
 type TransportTurn = {
   handle: ChatHandle;
   sendAttempted: boolean;
@@ -61,19 +62,29 @@ function sameHandle(a: ChatHandle, b: ChatHandle): void {
 // It does not own a queue, allocate workers, store results, infer settlement or
 // choose models. Every positive lifecycle decision comes from the same Go owner.
 export class ReadConversationClient {
-  private startAttempt?: {
-    input: ChatReadIntentResolve;
-    prompt: string;
-    promise: Promise<ReadConversationProjection>;
-  };
-  private selected?: ChatReadIntentResolved;
+  private startAttempt?:
+    | {
+        kind: "read";
+        input: ChatReadIntentResolve;
+        prompt: string;
+        promise: Promise<ReadConversationProjection>;
+      }
+    | {
+        kind: "authorized";
+        input: ChatStart;
+        promise: Promise<ReadConversationProjection>;
+      };
+  private selected?: Pick<
+    ChatReadIntentResolved,
+    "selection" | "resolution" | "required"
+  >;
   private current?: TransportTurn;
   private tail: Promise<void> = Promise.resolve();
   private pending = 0;
   private failed: { error: unknown } | undefined;
   private resolutionRefused = false;
   constructor(
-    private readonly owner: ReadOwner,
+    private readonly owner: ReadOwner | null,
     private readonly chat: ChatPort,
     private readonly now: () => number = Date.now,
   ) {}
@@ -124,17 +135,20 @@ export class ReadConversationClient {
     const copied = structuredClone(input);
     if (this.startAttempt) {
       if (
+        this.startAttempt.kind !== "read" ||
         this.startAttempt.prompt !== prompt ||
         !isDeepStrictEqual(this.startAttempt.input, copied)
       )
         fail("read_chat_start_crossed");
-      return this.startAttempt.promise.then((value) => structuredClone(value));
+      return this.startAttempt.promise;
     }
+    const owner = this.owner;
+    if (!owner) fail("read_chat_owner_unavailable");
     const promise = Promise.resolve().then(() =>
       this.exclusive(async () => {
         let selected: ChatReadIntentResolved;
         try {
-          selected = await this.owner.resolve(copied);
+          selected = await owner.resolve(structuredClone(copied));
         } catch (error) {
           this.resolutionRefused =
             error instanceof BridgeError && error.state === "refused";
@@ -143,7 +157,7 @@ export class ReadConversationClient {
         if (!isDeepStrictEqual(selected.admission, copied.admission))
           fail("read_chat_owner_crossed", "unknown");
         this.selected = structuredClone(selected);
-        const handle = await this.owner.promote({ ...selected, prompt });
+        const handle = await owner.promote({ ...selected, prompt });
         this.current = {
           handle: structuredClone(handle),
           sendAttempted: false,
@@ -154,8 +168,60 @@ export class ReadConversationClient {
         return this.project(this.current, 0n);
       }),
     );
-    this.startAttempt = { input: copied, prompt, promise };
-    return promise.then((value) => structuredClone(value));
+    this.startAttempt = { kind: "read", input: copied, prompt, promise };
+    return promise;
+  }
+  // Ordinary owner-authorized admission uses Go's captured selection and handle.
+  // The same client must remain the sole active host PrepareNext consumer.
+  startAuthorized(input: ChatStart): Promise<ReadConversationProjection> {
+    if (!validate("ChatStart", input)) fail("read_chat_request_invalid");
+    promptBytes(input.prompt);
+    if (input.confirmedPrincipalKey !== input.observation.principalKey)
+      fail("read_chat_principal_crossed");
+    const copied = structuredClone(input);
+    if (this.startAttempt) {
+      if (
+        this.startAttempt.kind !== "authorized" ||
+        !isDeepStrictEqual(this.startAttempt.input, copied)
+      )
+        fail("read_chat_start_crossed");
+      return this.startAttempt.promise;
+    }
+    const start = this.chat.start;
+    if (!start) fail("read_chat_start_unavailable");
+    const promise = Promise.resolve().then(() =>
+      this.exclusive(async () => {
+        // ChatBridge correlates the host context and operation. Keep our replay
+        // capture separate from the port input and detach its authoritative reply.
+        const response = await start.call(this.chat, structuredClone(copied));
+        if (!validate("ChatStarted", response))
+          fail("read_chat_start_invalid", "unknown");
+        const started = structuredClone(response);
+        if (
+          started.handle.binding.sessionId !== copied.sessionId ||
+          started.handle.binding.turnGeneration !== "1" ||
+          started.selection.accountId !== copied.confirmedPrincipalKey ||
+          !isDeepStrictEqual(started.selection, started.resolution.resolved)
+        )
+          fail("read_chat_start_result_crossed", "unknown");
+        this.selected = {
+          selection: started.selection,
+          resolution: started.resolution,
+          required: started.required,
+        };
+        this.current = {
+          handle: started.handle,
+          sendAttempted: false,
+          offered: 0n,
+          acknowledged: 0n,
+        };
+        await this.advance(this.current);
+        return this.project(this.current, 0n);
+      }),
+    );
+    // Pin before the deferred call can admit, prepare or Send, including failures.
+    this.startAttempt = { kind: "authorized", input: copied, promise };
+    return promise;
   }
   private turn(handleId: string): TransportTurn {
     const t = this.current;

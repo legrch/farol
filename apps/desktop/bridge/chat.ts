@@ -4,6 +4,8 @@ import { BridgeError, type Client } from "./client.ts";
 import {
   validate,
   type ChatCreate,
+  type ChatStart,
+  type ChatStarted,
   type ChatHandle,
   type ChatSubmissionState,
   type ChatState,
@@ -21,6 +23,34 @@ export class ChatBridge {
   constructor(private readonly client: Client) {}
   create(input: ChatCreate): Promise<ChatHandle> {
     return this.call("create", "ChatCreate", input, "ChatHandle", true);
+  }
+  start(input: ChatStart): Promise<ChatStarted> {
+    const selected = structuredClone(input);
+    const context = this.client.verifiedContext;
+    return this.call<ChatStarted>(
+      "start",
+      "ChatStart",
+      selected,
+      "ChatStarted",
+      true,
+      (out, operationId) =>
+        out.handle.binding.profileId === context.profileId &&
+        out.handle.binding.backendGeneration === context.backendGeneration &&
+        out.handle.binding.sessionId === selected.sessionId &&
+        out.handle.binding.operationId === operationId &&
+        out.handle.binding.turnGeneration === "1" &&
+        out.selection.accountId === selected.confirmedPrincipalKey &&
+        isDeepStrictEqual(out.selection, out.resolution.resolved),
+    );
+  }
+  revokeAccount(handleId: string): Promise<Record<string, never>> {
+    return this.call(
+      "account.revoke",
+      "ChatHandleRequest",
+      { handleId },
+      "Empty",
+      true,
+    );
   }
   async state(handle: ChatHandle): Promise<ChatState> {
     if (!validate("ChatHandle", handle))
@@ -153,6 +183,7 @@ export class ChatBridge {
     input: unknown,
     outputShape: string,
     effect: boolean,
+    correlated?: (output: T, operationId: string | undefined) => boolean,
   ): Promise<T> {
     if (!validate(inputShape, input))
       throw new BridgeError("refused", "chat_request_invalid");
@@ -178,6 +209,8 @@ export class ChatBridge {
       );
     if (!validate(outputShape, result.data))
       throw new BridgeError("unknown", "chat_response_invalid");
+    if (correlated && !correlated(result.data as T, operationId))
+      throw new BridgeError("unknown", "chat_response_crossed");
     return result.data as T;
   }
 }
