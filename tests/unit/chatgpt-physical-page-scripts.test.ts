@@ -231,6 +231,16 @@ describe("logical composer draft", () => {
     );
     expect(() => read(wide)).toThrow("PHYSICAL_DRAFT_UNQUALIFIED");
   });
+  it("preserves an inline-wrapped break while a sole root BR remains empty", () => {
+    const composer = new SyntheticElement("DIV", {}, "first");
+    const inline = new SyntheticElement("SPAN");
+    inline.append(new SyntheticElement("BR"));
+    composer.append(inline, new SyntheticElement("SPAN", {}, "second"));
+    expect(read(composer)).toBe("first\nsecond");
+    const empty = new SyntheticElement("DIV");
+    empty.append(new SyntheticElement("BR"));
+    expect(read(empty)).toBe("");
+  });
 });
 
 type FactoryPolicy = Readonly<{

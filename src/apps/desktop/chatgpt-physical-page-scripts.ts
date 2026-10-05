@@ -58,7 +58,10 @@ export function physicalComposerDraft(composer: HTMLElement): string {
       // A sole BR keeps an empty editor line selectable; it is not another line.
       const value =
         node.tagName === "BR"
-          ? children.length === 1
+          ? children.length === 1 &&
+            (parent === composer ||
+              parent.tagName === "DIV" ||
+              parent.tagName === "P")
             ? ""
             : "\n"
           : read(node, depth + 1);

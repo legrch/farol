@@ -37,7 +37,8 @@ const message = () =>
           ? ""
           : node.textContent)
       );
-    if (node.nodeName === "BR") return "\n";
+    if (node.nodeName === "BR")
+      return composer.childNodes.length === 1 ? "" : "\n";
     return node.textContent;
   }).join("");
 const updateSend = () => {
