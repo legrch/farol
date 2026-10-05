@@ -282,4 +282,47 @@ describe("explicit read account confirmation", () => {
     expect(f.read).toHaveBeenCalledTimes(1);
     expect(f.approve).not.toHaveBeenCalled();
   });
+  it("keeps invalid wrapper commands outside the original approval attempt", async () => {
+    const f = fixture();
+    await expect(f.confirmation.confirm("invented")).rejects.toMatchObject({
+      state: "refused",
+    });
+    const view = await f.confirmation.inspect();
+    await expect(f.confirmation.confirm("invented")).rejects.toMatchObject({
+      state: "refused",
+    });
+    expect(await f.confirmation.confirm(view.confirmationId)).toEqual({
+      ...view,
+      state: "approved",
+    });
+    expect(f.approve).toHaveBeenCalledTimes(1);
+  });
+  it.each(["admission", "principal"] as const)(
+    "does not let approval-port mutation of %s replace the pinned expectation",
+    async (variant) => {
+      const f = fixture();
+      const view = await f.confirmation.inspect();
+      f.approve.mockImplementationOnce(async (request) => {
+        if (variant === "admission")
+          Reflect.set(request.admission, "taskId", "replacement");
+        else Reflect.set(request, "confirmedPrincipalKey", "d".repeat(64));
+        return {
+          admission: request.admission,
+          approvalId: "crossed-grant",
+          principalKey: request.confirmedPrincipalKey,
+        };
+      });
+      await expect(
+        f.confirmation.confirm(view.confirmationId),
+      ).rejects.toMatchObject({
+        state: "unknown",
+        code: "CHATGPT_ACCOUNT_APPROVAL_UNCONFIRMED",
+      });
+      await expect(
+        f.confirmation.confirm(view.confirmationId),
+      ).rejects.toMatchObject({ state: "unknown" });
+      expect(f.confirmation.projection()?.state).toBe("observed");
+      expect(f.approve).toHaveBeenCalledTimes(1);
+    },
+  );
 });
