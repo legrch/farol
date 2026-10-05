@@ -100,6 +100,15 @@ export type WindowSnapshot = Readonly<{
   workspaceEditDelivery: string | null;
   readConversation:
     import("./read-conversation-state").ReadConversationState | null;
+  directChatPreview: Readonly<{
+    intention: string;
+    buildId: string;
+    revision: number;
+    value: Extract<
+      ProductConfigurationEvidence,
+      { kind: "chatgpt.chat-account-preview" }
+    >;
+  }> | null;
   chatHistoryContext: ChatHistoryContext | null;
   /** Local invalidation counter, not a backend revision or restored authority. */
   chatHistoryEpoch: number;

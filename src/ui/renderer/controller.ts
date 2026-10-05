@@ -122,6 +122,7 @@ const initial: WindowSnapshot = {
   evidence: null,
   readPreview: null,
   readConversation: null,
+  directChatPreview: null,
   chatHistoryContext: null,
   chatHistoryEpoch: 0,
   shortcuts: { ...defaultNavigationShortcuts },
@@ -756,6 +757,7 @@ export class WindowController implements RendererFacade {
         const retained = this.state.readPreview;
         if (
           command.kind === "chatgpt.submit-readonly-task" ||
+          command.kind === "chatgpt.start-conversation" ||
           command.kind === "chatgpt.observe-readonly-conversation" ||
           command.kind === "chatgpt.ack-readonly-conversation" ||
           command.kind === "chatgpt.follow-readonly-conversation"
@@ -771,6 +773,16 @@ export class WindowController implements RendererFacade {
               )
             : null;
           const start = command.kind === "chatgpt.submit-readonly-task";
+          const typedStart = command.kind === "chatgpt.start-conversation";
+          const inspected = before.directChatPreview;
+          const exactTypedStart =
+            typedStart &&
+            inspected &&
+            inspected.value.operationId === command.operationId &&
+            inspected.value.confirmationId === command.confirmationId &&
+            inspected.buildId === before.buildId &&
+            inspected.revision === conversationRevision &&
+            this.state.directChatPreview === inspected;
           const first = before.readPreview;
           const exactStart =
             start &&
@@ -787,16 +799,22 @@ export class WindowController implements RendererFacade {
             before.buildId === this.state.buildId &&
             conversationRevision !== null &&
             (!start || exactStart) &&
+            (!typedStart || exactTypedStart) &&
             before.readConversation === this.state.readConversation
               ? adoptReadConversation(before.readConversation, value, {
-                  action: start
-                    ? "start"
-                    : command.kind === "chatgpt.observe-readonly-conversation"
-                      ? "progress"
-                      : command.kind === "chatgpt.ack-readonly-conversation"
-                        ? "ack"
-                        : "follow",
+                  action: typedStart
+                    ? "typed-start"
+                    : start
+                      ? "start"
+                      : command.kind === "chatgpt.observe-readonly-conversation"
+                        ? "progress"
+                        : command.kind === "chatgpt.ack-readonly-conversation"
+                          ? "ack"
+                          : "follow",
                   operationId: command.operationId,
+                  ...(typedStart && inspected
+                    ? { sessionId: inspected.value.sessionId }
+                    : {}),
                   ...("handleId" in command
                     ? { handleId: command.handleId }
                     : {}),
@@ -816,7 +834,33 @@ export class WindowController implements RendererFacade {
             };
           this.patch({ readConversation: next });
         }
-        if (command.kind === "chatgpt.cancel-readonly-task") {
+        if (command.kind === "chatgpt.inspect-chat-account") {
+          if (
+            revision === null ||
+            before.configuration?.status !== "ready" ||
+            revision !== before.configuration.settings.revision ||
+            !before.buildId ||
+            before.buildId !== this.state.buildId ||
+            this.state.status !== "current" ||
+            this.state.directChatPreview !== null ||
+            before.readConversation !== null ||
+            value?.kind !== "chatgpt.chat-account-preview" ||
+            value.operationId !== command.operationId
+          )
+            return {
+              id: intention,
+              state: "unknown",
+              code: "CHAT_ACCOUNT_UNCONFIRMED",
+            };
+          this.patch({
+            directChatPreview: {
+              intention,
+              buildId: before.buildId,
+              revision,
+              value,
+            },
+          });
+        } else if (command.kind === "chatgpt.cancel-readonly-task") {
           // Exact known cancellation retires this receipt even if a refresh won
           // snapshot ordering. A different operation is never removed.
           if (retained?.value.operationId === command.operationId)

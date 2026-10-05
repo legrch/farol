@@ -12,7 +12,10 @@ import {
   captureChatStartupProfile,
   chatWorkerInitialUrl,
 } from "../../../apps/desktop/go-chat-startup-profile";
-import { ReadConversationClient } from "../../../apps/desktop/bridge/read-conversation";
+import {
+  ReadConversationClient,
+  type ReadConversationProjection,
+} from "../../../apps/desktop/bridge/read-conversation";
 import { readChatHistoryView } from "../../../apps/desktop/chat-history-view";
 import { projectReadConversation } from "../../../apps/desktop/read-conversation-projection";
 import { ReadConversationPromptSchema } from "../../pkg/product-settings/chat-conversation";
@@ -20,6 +23,7 @@ import { BridgeError } from "../../../apps/desktop/bridge/client";
 import { withSettingsEditLease } from "../../../apps/desktop/with-settings-edit-lease";
 import { readGoWorkspaceSnapshot } from "../../../apps/desktop/go-workspace-snapshot";
 import { ReadAccountConfirmation } from "../../../apps/desktop/read-account-confirmation";
+import { AccountObservationConfirmation } from "../../../apps/desktop/account-observation-confirmation";
 import {
   ReadAccountCommands,
   readAccountFailure,
@@ -802,6 +806,7 @@ async function initializeInstalledUpdater(): Promise<void> {
           configurationRequests > 0 ||
           chatGptTaskAdmission ||
           pendingChatGptReadonlyTask ||
+          directChatStart ||
           pendingChatGptAttachmentTask ||
           pendingWorkspaceEdit ||
           workspaceMutationAdmission ||
@@ -1096,10 +1101,28 @@ let pendingChatGptReadonlyTask: PendingChatGptReadonlyTask | null = null;
 let goChatStartupProfile: ReturnType<typeof captureChatStartupProfile> = null;
 // One window's original transport client, not a second model/task registry.
 let goReadonlyConversation: {
-  pending: PendingChatGptReadonlyTask;
+  pending: PendingChatGptReadonlyTask | null;
+  operationId: string;
   core: DesktopGoCore;
   client: ReadConversationClient;
   start: Promise<ProductConfigurationResult>;
+} | null = null;
+// One window's retained inspection and first transport attempt. The Go owner
+// mints the account grant, task and turn; no provider state is restored here.
+let directChatStart: {
+  operationId: string;
+  sessionId: string;
+  core: DesktopGoCore;
+  client: ReadConversationClient;
+  confirmation: AccountObservationConfirmation<ReadConversationProjection>;
+  inspection: Promise<ProductConfigurationResult>;
+  start?: {
+    command: Extract<
+      ProductConfigurationCommand,
+      { kind: "chatgpt.start-conversation" }
+    >;
+    promise: Promise<ProductConfigurationResult>;
+  };
 } | null = null;
 const readonlyAccountCommands = new ReadAccountCommands();
 const readonlyAccountConfirmations = new WeakMap<
@@ -3553,7 +3576,7 @@ function chatGptConversationState():
 }
 
 function chatGptConversationAdmissionFailure(): ProductConfigurationResult | null {
-  if (goReadonlyConversation)
+  if (goReadonlyConversation || directChatStart)
     return configurationFailure("CHATGPT_TASK_IN_PROGRESS");
   if (!chatGptConversationStore) {
     return configurationFailure("CHATGPT_CONVERSATION_STATE_FAILED");
@@ -5204,10 +5227,21 @@ async function configureProduct(
   value: unknown,
 ): Promise<ProductConfigurationResult> {
   const parsed = ProductConfigurationCommandSchema.safeParse(value);
+  if (parsed.success && directChatStart) {
+    const command = parsed.data;
+    if (command.kind === "chatgpt.inspect-chat-account")
+      return command.operationId === directChatStart.operationId
+        ? directChatStart.inspection
+        : configurationFailure("CHATGPT_CONVERSATION_REFUSED");
+    if (command.kind === "chatgpt.start-conversation" && directChatStart.start)
+      return isDeepStrictEqual(command, directChatStart.start.command)
+        ? directChatStart.start.promise
+        : configurationFailure("CHATGPT_CONVERSATION_REFUSED");
+  }
   if (
     parsed.success &&
     parsed.data.kind === "chatgpt.submit-readonly-task" &&
-    goReadonlyConversation?.pending.operationId === parsed.data.operationId
+    goReadonlyConversation?.pending?.operationId === parsed.data.operationId
   )
     return goReadonlyConversation.start;
   if (
@@ -5324,13 +5358,167 @@ async function configureAdmittedProduct(
 ): Promise<ProductConfigurationResult> {
   if (!configuration) return configurationFailure("SETTINGS_UNAVAILABLE");
   switch (command.kind) {
+    case "chatgpt.inspect-chat-account": {
+      const route = chatGptRoute;
+      const core = desktopGoCore;
+      const profile = goChatStartupProfile;
+      const snapshot = configuration.snapshot();
+      if (!route || !core || !profile || snapshot.status !== "ready")
+        return configurationFailure("CHATGPT_ROUTE_UNAVAILABLE");
+      if (
+        directChatStart ||
+        goReadonlyConversation ||
+        chatGptTaskAdmission ||
+        pendingChatGptReadonlyTask ||
+        pendingChatGptAttachmentTask ||
+        recoverableChatGptTask ||
+        snapshot.settings.setup.chatgpt.outcomeUnknown ||
+        installedUpdateAdmission ||
+        quitInProgress
+      )
+        return configurationFailure("CHATGPT_TASK_IN_PROGRESS");
+      const revision = snapshot.settings.revision;
+      let selected: ReturnType<typeof captureChatStartupProfile>;
+      try {
+        selected = captureChatStartupProfile({
+          environment: runtimeEnvironment,
+          e2e: process.env.FAROL_NEXT_E2E === "1",
+          origin: chatGptE2eOrigin,
+          tasks: snapshot.settings.tasks,
+        });
+      } catch {
+        return configurationFailure("CHATGPT_ROUTE_UNAVAILABLE");
+      }
+      if (
+        !selected ||
+        selected.snapshot.configSHA256 !== profile.snapshot.configSHA256
+      )
+        return configurationFailure("CHATGPT_ROUTE_UNAVAILABLE");
+      const model = selected.snapshot;
+      const operationId = command.operationId;
+      const sessionId = randomUUID();
+      const client = new ReadConversationClient(null, core.chat);
+      const current = () => {
+        const now = configuration?.snapshot();
+        return (
+          directChatStart?.operationId === operationId &&
+          desktopGoCore === core &&
+          chatGptRoute === route &&
+          goChatStartupProfile === profile &&
+          !installedUpdateAdmission &&
+          !quitInProgress &&
+          now?.status === "ready" &&
+          now.settings.revision === revision &&
+          !now.settings.setup.chatgpt.outcomeUnknown
+        );
+      };
+      const confirmation =
+        new AccountObservationConfirmation<ReadConversationProjection>({
+          current,
+          read: () => route.observeAccount(),
+          commit: (account) => {
+            const start = directChatStart?.start;
+            if (!start || !current())
+              throw new BridgeError(
+                "refused",
+                "CHATGPT_ACCOUNT_CONFIRMATION_INVALID",
+              );
+            return client.startAuthorized({
+              sessionId,
+              prompt: start.command.prompt,
+              policy: model.policy,
+              profiles: model.profiles,
+              requested: {},
+              ...account,
+            });
+          },
+        });
+      const inspection = Promise.resolve().then(async () => {
+        chatGptTaskAdmission = true;
+        try {
+          const inspected = await confirmation.inspect();
+          return ProductConfigurationResultSchema.parse({
+            ok: true,
+            snapshot: configuration!.snapshot(),
+            evidence: {
+              kind: "chatgpt.chat-account-preview",
+              operationId,
+              sessionId,
+              ...inspected,
+            },
+          });
+        } catch (error) {
+          return configurationFailure(
+            error instanceof BridgeError && error.state === "refused"
+              ? "CHATGPT_ACCOUNT_CONFIRMATION_INVALID"
+              : "CHATGPT_CONVERSATION_UNCONFIRMED",
+          );
+        } finally {
+          chatGptTaskAdmission = false;
+        }
+      });
+      directChatStart = {
+        operationId,
+        sessionId,
+        core,
+        client,
+        confirmation,
+        inspection,
+      };
+      return inspection;
+    }
+    case "chatgpt.start-conversation": {
+      const pending = directChatStart;
+      if (
+        !pending ||
+        command.operationId !== pending.operationId ||
+        pending.start ||
+        goReadonlyConversation ||
+        chatGptTaskAdmission ||
+        desktopGoCore !== pending.core
+      )
+        return configurationFailure("CHATGPT_CONVERSATION_REFUSED");
+      const captured = structuredClone(command);
+      const start = Promise.resolve().then(async () => {
+        chatGptTaskAdmission = true;
+        try {
+          const projection = await pending.confirmation.confirm(
+            captured.confirmationId,
+          );
+          return ProductConfigurationResultSchema.parse({
+            ok: true,
+            snapshot: configuration!.snapshot(),
+            evidence: projectReadConversation(captured.operationId, projection),
+          });
+        } catch (error) {
+          return configurationFailure(
+            error instanceof BridgeError && error.state === "refused"
+              ? "CHATGPT_CONVERSATION_REFUSED"
+              : "CHATGPT_CONVERSATION_UNCONFIRMED",
+          );
+        } finally {
+          chatGptTaskAdmission = false;
+        }
+      });
+      pending.start = { command: captured, promise: start };
+      // Pin before fresh account observation or admission. This same client is
+      // the only host PrepareNext consumer, including after a lost reply.
+      goReadonlyConversation = {
+        pending: null,
+        operationId: pending.operationId,
+        core: pending.core,
+        client: pending.client,
+        start,
+      };
+      return start;
+    }
     case "chatgpt.observe-readonly-conversation":
     case "chatgpt.ack-readonly-conversation":
     case "chatgpt.follow-readonly-conversation": {
       const active = goReadonlyConversation;
       if (
         !active ||
-        active.pending.operationId !== command.operationId ||
+        active.operationId !== command.operationId ||
         desktopGoCore !== active.core
       )
         return configurationFailure("CHATGPT_CONVERSATION_REFUSED");
@@ -7315,7 +7503,13 @@ async function configureAdmittedProduct(
         );
         // Publish the original attempt before any await so repeated IPC cannot
         // mint another promotion or Send after a lost renderer reply.
-        goReadonlyConversation = { pending, core, client, start };
+        goReadonlyConversation = {
+          pending,
+          operationId: pending.operationId,
+          core,
+          client,
+          start,
+        };
         return start;
       }
       if (!chatGptTaskJournal) {
@@ -7440,7 +7634,7 @@ async function configureAdmittedProduct(
     case "chatgpt.cancel-readonly-task": {
       const conversation = goReadonlyConversation;
       if (
-        conversation?.pending.operationId === command.operationId &&
+        conversation?.pending?.operationId === command.operationId &&
         !conversation.client.canWithdrawAdmission()
       )
         return configurationFailure("CHATGPT_CONVERSATION_REFUSED");

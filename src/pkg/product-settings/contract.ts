@@ -641,6 +641,16 @@ export const ProductConfigurationCommandSchema = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("chatgpt.prepare-attachment-task") }),
   z.strictObject({ kind: z.literal("chatgpt.recover-task-result") }),
   z.strictObject({
+    kind: z.literal("chatgpt.inspect-chat-account"),
+    operationId: IdentifierSchema,
+  }),
+  z.strictObject({
+    kind: z.literal("chatgpt.start-conversation"),
+    operationId: IdentifierSchema,
+    confirmationId: IdentifierSchema,
+    prompt: ReadConversationPromptSchema,
+  }),
+  z.strictObject({
     kind: z.literal("chatgpt.ack-task-result"),
     operationId: IdentifierSchema,
   }),
@@ -829,6 +839,13 @@ const DiscoveryCandidateSchema = z.strictObject({
 
 export const ProductConfigurationEvidenceSchema = z.discriminatedUnion("kind", [
   ReadConversationViewSchema,
+  z.strictObject({
+    kind: z.literal("chatgpt.chat-account-preview"),
+    operationId: IdentifierSchema,
+    sessionId: IdentifierSchema,
+    confirmationId: IdentifierSchema,
+    state: z.literal("observed"),
+  }),
   z.strictObject({
     kind: z.literal("host.task-models"),
     view: TaskModelCatalogueViewSchema,

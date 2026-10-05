@@ -119,8 +119,10 @@ witnesses. Source acceptance does not mark this migration product done.
 These inactive files are not imported by the production renderer. Their tests
 remain tracked and do not substantiate the new UI. Pure draft, setup, permission,
 reverification and exact edit-delivery policies remain shared and applicable.
-D5 is pending, not complete. Go K0 status supplies no feature operation adapter;
-R09, durable R19 and dual-adapter R40 need the matching future Core/module contract.
+D5 is pending, not complete. The original K0 foundation alone did not qualify a
+feature operation adapter. Later Settings delivery and controlled Chat milestones
+are recorded in [Desktop Core](../desktop-core.md); they do not close every R09,
+durable R19 or dual-adapter R40 case for the remaining product flows.
 
 The window preserves newer runtime/update notifications while a read is pending.
 A conflicting same-revision task response leaves controls stale. Settings can
@@ -131,11 +133,13 @@ retained until readiness, deduplicated by its event ID, and never dispatched fro
 a render Effect. Closing the owned window stops new facade dispatches; it does
 not cancel already admitted work.
 
-The isolated writer currently lacks its own reviewed Electron distribution.
-`ci:fast` reports that missing dependency instead of silently selecting another
-runtime. Hidden source-build smoke may select an existing reviewed distribution
-explicitly, but is not a package or complete CI gate. There is no installation,
-activation, live provider Send or production connector qualification here.
+The initial renderer writer lacked a reviewed Electron distribution. The later
+integration line packaged and qualified the exact controlled normal-entrypoint
+candidate recorded in [Desktop Core](../desktop-core.md#controlled-normal-desktop-chat).
+That Dev witness proves its hidden React/Go journey and clean same-build restart;
+it does not prove native focus, installation, live provider Send or production
+connector compatibility. Every later candidate still needs its own declared
+dependencies, source identity and applicable native/package evidence.
 
 Settings retain the last ready presentation solely to keep draft-owning forms
 mounted through a temporary configuration failure. Actual configuration status

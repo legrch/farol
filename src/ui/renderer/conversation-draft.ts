@@ -83,6 +83,11 @@ export class ConversationDraftStore {
     if (this.held?.key !== key || this.held.value.edit !== edit) return;
     this.capture(key, "", 0, 0);
   }
+  rebind(from: string, to: string): void {
+    if (this.closed || this.held?.key !== from || from === to) return;
+    this.held = { key: to, value: this.held.value };
+    for (const listener of this.listeners) listener();
+  }
   dispose(): void {
     this.closed = true;
     this.held = null;

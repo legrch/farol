@@ -33,11 +33,13 @@ function fenced(snapshot: WindowSnapshot): boolean {
       (intent) => intent.state === "pending" || intent.state === "unknown",
     ) ||
     Boolean(
-      value.computer.pendingEdit ||
-      Object.values(value.setup).some(
-        (step) => "outcomeUnknown" in step && step.outcomeUnknown,
-      ) ||
-      value.connectors.secureMcp.runtime?.state === "outcome_unknown",
+      value.setup.chatgpt.outcomeUnknown ||
+      (snapshot.readConversation?.origin !== "typed" &&
+        (value.computer.pendingEdit ||
+          Object.values(value.setup).some(
+            (step) => "outcomeUnknown" in step && step.outcomeUnknown,
+          ) ||
+          value.connectors.secureMcp.runtime?.state === "outcome_unknown")),
     )
   );
 }
@@ -399,9 +401,18 @@ export function ChatReadonly({ snapshot, facade }: ChatReadonlyProps) {
     return (
       <section
         className="settings-group"
-        aria-label="Read-only Chat conversation"
+        aria-label={
+          conversation.origin === "typed"
+            ? "Active Chat conversation"
+            : "Read-only Chat conversation"
+        }
       >
         <ReadConversation
+          title={
+            conversation.origin === "typed"
+              ? "Chat conversation"
+              : "Read conversation"
+          }
           drafts={facade.conversationDraft}
           view={latest.view}
           text={latest.text}
@@ -420,6 +431,7 @@ export function ChatReadonly({ snapshot, facade }: ChatReadonlyProps) {
         {message && <p role="status">{message}</p>}
       </section>
     );
+  if (snapshot.directChatPreview) return null;
   return (
     <section className="settings-group" aria-label="Read-only file preview">
       <h2>Read-only file preview</h2>

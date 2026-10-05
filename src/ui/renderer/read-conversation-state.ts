@@ -5,6 +5,7 @@ export type ReadConversationTurn = Readonly<{
   text: string;
 }>;
 export type ReadConversationState = Readonly<{
+  origin?: "typed";
   operationId: string;
   buildId: string;
   revision: number;
@@ -26,7 +27,8 @@ export function adoptReadConversation(
   previous: ReadConversationState | null,
   next: ReadConversationView,
   input: Readonly<{
-    action: "start" | "progress" | "ack" | "follow";
+    action: "start" | "typed-start" | "progress" | "ack" | "follow";
+    sessionId?: string;
     operationId: string;
     handleId?: string;
     cursor?: string;
@@ -51,7 +53,17 @@ export function adoptReadConversation(
   let after = 0n;
   let text = "";
   let turns: ReadConversationTurn[] = [];
-  if (input.action === "start") {
+  if (input.action === "typed-start") {
+    // A typed start has no Computer task. The window binds the reply to the
+    // host's retained account inspection session, while Go owns the task ID.
+    if (
+      previous ||
+      !input.sessionId ||
+      next.binding.sessionId !== input.sessionId ||
+      next.binding.turnGeneration !== "1"
+    )
+      return null;
+  } else if (input.action === "start") {
     // The preview operation names the admitted task; Go assigns a distinct
     // admission/turn operation. The bridge verifies that exact admission tuple.
     if (previous || next.binding.taskId !== input.operationId) return null;
@@ -134,6 +146,9 @@ export function adoptReadConversation(
     return null;
   turns.push({ view: next, text });
   return {
+    ...(input.action === "typed-start" || previous?.origin === "typed"
+      ? { origin: "typed" as const }
+      : {}),
     operationId: input.operationId,
     buildId: input.buildId,
     revision: input.revision,

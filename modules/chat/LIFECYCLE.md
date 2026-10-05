@@ -10,7 +10,7 @@ at `e31c636` proves two React/Go turns, explicit result ACK and settlement, clea
 Quit, same-build/profile restart and current-authorized reads of both answers.
 That exact Dev witness uses a synthetic provider; later source changes are not
 automatically covered. Production account/control/output qualification, ordinary
-typed-first-turn admission, external Responses next-user-turn delivery and
+typed-first-turn application qualification, external Responses next-user-turn delivery and
 installed acceptance remain open.
 
 ## Construct and capture one route
@@ -70,9 +70,31 @@ grant cannot be restored from a copied receipt.
 
 This guard grants no Computer access and creates no read intent, model engine or
 registry. File-derived conversations retain their existing Computer/disclosure
-guard. The ordinary authorized-Create entrypoint, explicit confirmation UI and
-production route profile are separate pending integration boundaries; the guard
-alone does not activate typed Chat or qualify a real account.
+guard. `CreateAuthorized` captures the function port before journal admission;
+legacy unguarded admission cannot replay that binding. A late invalid callback or
+context clears an earlier positive disclosure check under the owning gate.
+
+The compound `chat.conversation.start` wire effect now resolves the existing Go
+model policy, mints the private account approval and calls `CreateAuthorized`.
+It returns the original handle and immutable selection before Prepare or Send.
+The normal host's explicit inspect/confirm flow supplies the observed principal;
+it grants no Computer access. `chat.conversation.account.revoke` uses the same
+retained account service across all successor handles. Each admitted account
+reserves one slot in the bounded operation ledger for withdrawal; failed creation
+requests cannot exhaust that slot. Unknown outcomes remain consumed.
+
+`ReadConversationClient.startAuthorized` uses this effect and the existing
+Prepare/Send/progress/frame-ACK/result-ACK/Follow path. It retains the original
+attempt, including errors, and refuses changed input or crossing start paths.
+The host must preserve one active PrepareNext consumer. This is source integration;
+production account/profile and exact assembled typed-start evidence remain open.
+
+| Case subset                            | Executable source evidence                                                                                                                                                                                       | Layer and remaining witness                                                                               |
+| -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| M03 account recheck/withdrawal         | `TestChatStartFinalAccountMismatchPreventsOriginalAndSuccessorSend`, `TestChatStartRevokeAnyHandleHasNoBrowserIOAndPreventsSend`, `TestChatStartWithdrawalSurvivesAdmissionCapacity` in `boot/chatstart_test.go` | Actual Go owners, injected journal/browser. Native/current provider account change remains separate.      |
+| M07 early output and exact second turn | `TestChatStartResolvesApprovesAndFollowsOnlyAfterACKAndSettlement` in `boot/chatstart_test.go`                                                                                                                   | Actual Go resolver/approval/lifecycle; injected browser. Typed React/DOM witness is separate.             |
+| M09 lost admission/replay              | `TestChatStartDuplicateOperationIncludingLostJournalOutcomeNeverCreatesSecondOwner` in `boot/chatstart_test.go`; authorized-start cases in `tests/unit/read-conversation.test.ts`                                | Go injected publication and TS injected transport; neither proves provider uncertainty recovery.          |
+| Explicit confirmation                  | `tests/unit/account-observation-confirmation.test.ts` and `tests/unit/read-account-confirmation.test.ts`                                                                                                         | Mechanical current-binding/principal comparison and retained attempts; no real browser account authority. |
 
 The injected `TestChatAccountAuthorization*` tests in
 `boot/chataccountauthorization_test.go` map the M03 account-recheck subset to

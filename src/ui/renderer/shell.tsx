@@ -12,6 +12,7 @@ import type {
 import { routeReadiness } from "../setup-presentation";
 import { TaskEditor } from "./task";
 import { ChatReadonly } from "./chat-readonly";
+import { ChatDirect } from "./chat-direct";
 import { ChatHistory } from "./chat-history";
 const pages: readonly [SettingsPage, string][] = [
   ["general", "General"],
@@ -169,6 +170,7 @@ function Home({
               Switching sections keeps ongoing work available.
             </p>
           </section>
+          <ChatDirect snapshot={snapshot} facade={facade} />
           <ChatReadonly snapshot={snapshot} facade={facade} />
           <ChatHistory snapshot={snapshot} facade={facade} />
           <section className="recent">

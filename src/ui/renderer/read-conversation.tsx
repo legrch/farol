@@ -16,6 +16,7 @@ import {
 } from "../../pkg/product-settings/chat-conversation";
 
 export type ReadConversationProps = Readonly<{
+  title?: string;
   drafts: ConversationDraftStore;
   view: ReadConversationView | null;
   history: readonly { view: ReadConversationView; text: string }[];
@@ -59,6 +60,7 @@ function plainText(text: string) {
 
 /** Presentation and an unsent local draft; the window retains turn ownership. */
 export function ReadConversation({
+  title = "Read conversation",
   drafts,
   view,
   history,
@@ -118,6 +120,15 @@ export function ReadConversation({
         drafts.selection(draftKey, input.selectionStart, input.selectionEnd);
     };
   }, [draftKey, drafts]);
+  useLayoutEffect(() => {
+    // A first-turn reply can bind an already-mounted Follow field to newer
+    // unsent text. Restore its retained selection without moving focus or IME.
+    const input = field.current;
+    // Unmount cleanup may have captured a newer selection after this render.
+    const saved = drafts.read(draftKey);
+    if (input && !composition.current && input.value === saved.text)
+      input.setSelectionRange(saved.selectionStart, saved.selectionEnd);
+  }, [draft, draftKey, drafts]);
   useEffect(() => {
     observe.current = onObserve;
   }, [onObserve]);
@@ -196,8 +207,8 @@ export function ReadConversation({
   }
 
   return (
-    <section className="settings-group" aria-label="Read conversation">
-      <h2>Read conversation</h2>
+    <section className="settings-group" aria-label={title}>
+      <h2>{title}</h2>
       {history.length > 0 && (
         <section aria-label="Previous turns">
           <h3>Previous turns</h3>

@@ -69,6 +69,41 @@ const progress = {
   cursor: "2",
 };
 describe("window-local Chat delivery adoption", () => {
+  it("binds a typed start to the inspected session without fabricating a Computer task", () => {
+    const typed = {
+      ...input,
+      action: "typed-start" as const,
+      sessionId: "session",
+    };
+    const ordinary = view({ binding: { ...binding, taskId: "go-owned-task" } });
+    const accepted = adoptReadConversation(null, ordinary, typed);
+    expect(accepted?.origin).toBe("typed");
+    expect(accepted?.turns[0]?.view.binding.taskId).toBe("go-owned-task");
+    expect(adoptReadConversation(null, ordinary, input)).toBeNull();
+    for (const change of [{ sessionId: "crossed" }, { turnGeneration: "2" }])
+      expect(
+        adoptReadConversation(
+          null,
+          view({ binding: { ...ordinary.binding, ...change } }),
+          typed,
+        ),
+      ).toBeNull();
+    expect(
+      adoptReadConversation(null, ordinary, { ...typed, sessionId: "" }),
+    ).toBeNull();
+    expect(adoptReadConversation(accepted, ordinary, typed)).toBeNull();
+    const progressed = adoptReadConversation(
+      accepted,
+      { ...ordinary, frames: [] },
+      {
+        ...typed,
+        action: "progress",
+        handleId: ordinary.handleId,
+        cursor: ordinary.cursor,
+      },
+    );
+    expect(progressed?.origin).toBe("typed");
+  });
   it("correlates the preview with its Go task, preserving the distinct turn operation", () => {
     expect(initial()?.turns[0]?.view.binding.operationId).toBe(
       "admission-operation",
