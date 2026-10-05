@@ -33,6 +33,10 @@ Connector mutation preparation has separate lower-layer evidence:
 - `TestConnectorContract*` checks explicit DTO mapping and original result copies.
 - `TestConnectorMutationRead*` in `boot/` joins the real connector/execution read
   policy with injected storage and endpoint, including final withdrawal.
+- `TestConnectorMutationRoot*` joins the same mutation owner, Settings operation
+  ledger and retirement gate. It checks concurrent duplicates, current-authorized
+  observation after reconnect, and uncertainty surviving connector close. Native
+  storage, effects and endpoint drain remain explicit doubles.
 
 These selectors neither run native effects nor qualify the external mutation
 route, clean retirement, installed recovery or a live ChatGPT connector.

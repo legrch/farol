@@ -21,8 +21,10 @@ write lease covers admission, native publication and initial disclosure. Retaine
 metadata can be read with current connector read authority after that write lease
 expires, without admitting or executing a mutation. Original unknown and
 memory-only outcomes cannot be upgraded by reading apparently complete disk data.
-These are source-level contracts; shared root retirement accounting and the
-external write/edit wire route are not yet activated.
+The prepared root join shares Settings' bounded operation ledger and retirement
+gate. Closing or replacing a connector does not remove uncertain attempts. These
+are source-level contracts: normal startup does not yet attach the mutation owner
+to the external connector, and its write/edit wire route is not activated.
 
 ## Legacy-to-Next disposition
 

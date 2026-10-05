@@ -17,6 +17,8 @@ import (
 )
 
 // SettingsMutationIngress composes a qualified exclusive journal/native owner.
+// Its bounded operation ledger also owns prepared external connector attempts;
+// closing a connector must not discard their uncertainty or retirement fences.
 // It never provisions/migrates storage or translates legacy Settings Task IDs.
 // NativeRuntime owns this journal only in a qualified version 2 profile.
 // The host route and legacy writer cutover have separate acceptance gates.
@@ -34,6 +36,8 @@ type settingsMutationOperation struct {
 	pending         bool
 	settled         bool
 	contract        *mutationct.OwnerContract
+	connector       *mutationsvc.ConnectorService
+	connectorScope  bool
 	failure         error
 }
 
@@ -129,7 +133,7 @@ func (s *SettingsMutationIngress) observe(ctx context.Context, in wire.ComputerS
 	record := s.operations[in.OperationId]
 	var contract *mutationct.OwnerContract
 	if record != nil {
-		if record.workspace != in.WorkspaceId || record.path != in.RelativePath || record.generation != generation {
+		if record.connectorScope || record.workspace != in.WorkspaceId || record.path != in.RelativePath || record.generation != generation {
 			s.mu.Unlock()
 			return nil, mutationInvalid()
 		}

@@ -30,15 +30,16 @@ type connectorStart func(context.Context, wire.ComputerConnectorBinding, map[str
 // One slot belongs to this backend lifetime. It is not endpoint discovery or a
 // second authority journal. MCP attachments never construct or replace it.
 type computerConnector struct {
-	effects  chan struct{}
-	root     *ComputerIngress
-	journal  port.ConnectorJournal
-	lifetime context.Context
-	cancel   context.CancelFunc
-	clock    port.Clock
-	start    connectorStart
-	current  *connectorSlot
-	attempts uint64
+	effects   chan struct{}
+	root      *ComputerIngress
+	journal   port.ConnectorJournal
+	lifetime  context.Context
+	cancel    context.CancelFunc
+	clock     port.Clock
+	start     connectorStart
+	mutations *SettingsMutationIngress
+	current   *connectorSlot
+	attempts  uint64
 }
 type connectorSlot struct {
 	guard            *connectorHostGuard
@@ -107,6 +108,9 @@ func (s *computerConnector) Open(ctx context.Context, operation string, in wire.
 	if ctx == nil || ctx.Err() != nil || s.lifetime.Err() != nil || validateIngress("ComputerConnectorOpen", in) != nil || s.current != nil || s.attempts >= 32 {
 		return nil, computerUnavailable()
 	}
+	if s.mutations != nil && s.mutations.computer != s.root {
+		return nil, computerUnavailable()
+	}
 	if in.LifecycleRoot != nil && (in.ChallengeSha256 == nil || !validProfilePath(*in.LifecycleRoot)) {
 		return nil, computerUnavailable()
 	}
@@ -148,19 +152,28 @@ func (s *computerConnector) Open(ctx context.Context, operation string, in wire.
 			return nil, err
 		}
 	}
-	// The first socket surface is read-only. Keep unsupported capabilities absent.
+	// Only a qualified shared mutation owner can preserve approved write access.
+	// Normal runtime remains read-only until that owner and its routes are wired.
 	policy := authority.Policy{ExcludedPaths: approval.Clone().ExcludedPaths, Network: authority.NoNetwork, Commands: authority.NoCommands, ExpiresAt: approval.ExpiresAt}
 	for _, workspace := range approval.Workspaces {
-		policy.Workspaces = append(policy.Workspaces, authority.Scope{WorkspaceID: workspace.WorkspaceID, Root: workspace.Root, Mode: authority.Subtree, Access: authority.ReadAccess})
+		access := authority.ReadAccess
+		if s.mutations != nil {
+			access = workspace.Access
+		}
+		policy.Workspaces = append(policy.Workspaces, authority.Scope{WorkspaceID: workspace.WorkspaceID, Root: workspace.Root, Mode: authority.Subtree, Access: access})
 	}
 	for _, capability := range approval.Capabilities {
-		if capability == authority.List || capability == authority.Read || capability == authority.Search || capability == authority.Verify {
+		if capability == authority.List || capability == authority.Read || capability == authority.Search || capability == authority.Verify || capability == authority.Write && s.mutations != nil {
 			policy.Capabilities = append(policy.Capabilities, capability)
 		}
 	}
 	launch := port.ConnectorLaunch{Host: host, Approval: approval, TurnCorrelation: ids[4],
 		Admission:   authority.Admission{Identity: authority.Identity{OwnerID: approval.OwnerID, SessionID: ids[0], TaskID: ids[1], TaskEpoch: 1}, AuthorityID: ids[2], ComputerID: approval.ComputerID, ComputerGeneration: approval.Generation, Policy: policy},
 		Participant: authority.ParticipantAdmission{ParticipantID: ids[3], Role: authority.Main, MutationOwnership: authority.NoOwnership}}
+	if s.mutations != nil {
+		// Existing Computer write-ownership policy, not Task/Chat membership.
+		launch.Participant.MutationOwnership = authority.TaskOwnership
+	}
 	if in.ChallengeSha256 != nil {
 		value, decodeErr := hex.DecodeString(*in.ChallengeSha256)
 		if decodeErr != nil || len(value) != len(launch.VerificationChallenge) {
