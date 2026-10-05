@@ -799,73 +799,188 @@ export function conversationWitnessSelfTest(pass, reject) {
     );
 }
 
-async function readUi(window) {
-  return window.locator('[aria-label="Current Chat turn"]').evaluate(
-    (current) => {
-      const plain = (node) =>
-        node
-          ? [...node.childNodes]
-              .map((n) => (n.nodeName === "BR" ? "\n" : n.textContent))
-              .join("")
-          : "";
-      const conversation = current.closest('[aria-label="Read conversation"]');
-      const buttons = [...conversation.querySelectorAll("button")];
-      const status = (name) =>
-        [...current.querySelectorAll("dt")].find((n) => n.textContent === name)
-          ?.nextElementSibling?.textContent ?? null;
-      const follow = conversation.querySelector("textarea");
-      const enabled = (name) =>
-        buttons.some((b) => b.textContent.trim() === name && !b.disabled);
-      return {
-        handleId: current.getAttribute("data-handle-id"),
-        turnId: current.getAttribute("data-turn-id"),
-        taskId: current.getAttribute("data-task-id"),
-        conversationId: current.getAttribute("data-conversation-id"),
-        cursor: current.getAttribute("data-cursor"),
-        phase: current.getAttribute("data-phase"),
-        followReady: current.getAttribute("data-follow-ready"),
-        text: conversation.textContent,
-        answer: plain(current.querySelector('[aria-label="Chat answer"]')),
-        retainedAnswers: [
-          ...conversation.querySelectorAll(
-            '[aria-label="Previous turns"] p.notice',
-          ),
-        ].map(plain),
-        resultAcknowledgement: status("Result acknowledgement"),
-        deliveryAcknowledgement: status("Delivery acknowledgement"),
-        lifecycleSettlement: status("Lifecycle settlement"),
-        resourceRelease: status("Resource release"),
-        complete: current.textContent.includes("Result complete."),
-        alerts: [...document.querySelectorAll('[role="alert"]')].map(
-          (n) => n.textContent,
+// Page evaluation takes one public DOM snapshot without Playwright's implicit
+// locator wait. The preview can remain mounted while the original Send runs.
+export async function readConversationUi(window) {
+  return window.evaluate(() => {
+    const currents = document.querySelectorAll(
+      '[aria-label="Current Chat turn"]',
+    );
+    if (currents.length > 1) throw new Error("CHAT_UI_CURRENT_AMBIGUOUS");
+    const current = currents[0];
+    const preview = document.querySelector(
+      'section[aria-label="Read-only file preview"]',
+    );
+    const texts = (root, selector) =>
+      [...(root?.querySelectorAll(selector) ?? [])].map(
+        (n) => n.textContent ?? "",
+      );
+    const observation = {
+      currentPresent: Boolean(current),
+      preview: {
+        present: Boolean(preview),
+        statuses: texts(preview, '[role="status"]'),
+        buttons: [...(preview?.querySelectorAll("button") ?? [])].map(
+          (button) => ({
+            name: button.textContent.trim(),
+            disabled: button.disabled,
+          }),
         ),
-        ackEnabled: enabled("Acknowledge result"),
-        followEnabled: enabled("Send follow-up"),
-        followInputEnabled: Boolean(follow && !follow.disabled),
-      };
-    },
-    undefined,
-    { timeout: 5000 },
-  );
+      },
+      statuses: texts(document, '[role="status"]'),
+      alerts: texts(document, '[role="alert"]'),
+    };
+    if (!current) return observation;
+    const plain = (node) =>
+      node
+        ? [...node.childNodes]
+            .map((n) => (n.nodeName === "BR" ? "\n" : n.textContent))
+            .join("")
+        : "";
+    const conversation = current.closest('[aria-label="Read conversation"]');
+    if (!conversation) throw new Error("CHAT_UI_CONVERSATION_MISSING");
+    const buttons = [...conversation.querySelectorAll("button")];
+    const status = (name) =>
+      [...current.querySelectorAll("dt")].find((n) => n.textContent === name)
+        ?.nextElementSibling?.textContent ?? null;
+    const follow = conversation.querySelector("textarea");
+    const enabled = (name) =>
+      buttons.some((b) => b.textContent.trim() === name && !b.disabled);
+    return {
+      ...observation,
+      handleId: current.getAttribute("data-handle-id"),
+      turnId: current.getAttribute("data-turn-id"),
+      taskId: current.getAttribute("data-task-id"),
+      conversationId: current.getAttribute("data-conversation-id"),
+      cursor: current.getAttribute("data-cursor"),
+      phase: current.getAttribute("data-phase"),
+      followReady: current.getAttribute("data-follow-ready"),
+      text: conversation.textContent,
+      answer: plain(current.querySelector('[aria-label="Chat answer"]')),
+      retainedAnswers: [
+        ...conversation.querySelectorAll(
+          '[aria-label="Previous turns"] p.notice',
+        ),
+      ].map(plain),
+      resultAcknowledgement: status("Result acknowledgement"),
+      deliveryAcknowledgement: status("Delivery acknowledgement"),
+      lifecycleSettlement: status("Lifecycle settlement"),
+      resourceRelease: status("Resource release"),
+      complete: current.textContent.includes("Result complete."),
+      ackEnabled: enabled("Acknowledge result"),
+      followEnabled: enabled("Send follow-up"),
+      followInputEnabled: Boolean(follow && !follow.disabled),
+    };
+  });
 }
 
-// All waits below read public UI or fixture ledger only. A refused/unknown
-// action is never clicked again, and barriers remain exclusively test-side.
-async function waitRead(read, predicate, active) {
-  const deadline = Date.now() + 20000;
-  while (Date.now() < deadline) {
-    active();
-    const value = await read();
-    assert.notEqual(value.phase, "unknown", "CHAT_UI_OUTCOME_UNKNOWN");
-    assert.deepEqual(value.alerts ?? [], [], "CHAT_UI_ALERT");
-    assert.doesNotMatch(
-      value.text ?? "",
-      /outcome unknown|result is unknown|was refused|unconfirmed|could not be confirmed/iu,
+// Diagnostic allowlist for this synthetic-fixture journey: no document body,
+// file preview, prompt/draft, answer, retained transcript or account session.
+function boundedUiObservation(value) {
+  const text = (s) =>
+    typeof s === "string"
+      ? s.replace(/[\u0000-\u001f\u007f]/gu, " ").slice(0, 256)
+      : null;
+  const texts = (items) => (items ?? []).slice(0, 8).map(text);
+  return {
+    currentPresent: value.currentPresent ?? null,
+    phase: text(value.phase),
+    statuses: texts(value.statuses),
+    alerts: texts(value.alerts),
+    preview: value.preview
+      ? {
+          present: value.preview.present,
+          statuses: texts(value.preview.statuses),
+          buttons: value.preview.buttons.slice(0, 8).map((button) => ({
+            name: text(button.name),
+            disabled: button.disabled,
+          })),
+        }
+      : null,
+    ledger: value.ledger
+      ? {
+          attemptedSends: value.ledger.attemptedSends,
+          acceptedSends: value.ledger.acceptedSends,
+          accountGets: value.ledger.accountGets,
+        }
+      : null,
+  };
+}
+
+// All waits read public UI or fixture ledger only. The original action stays
+// one-shot. The deadline also bounds a stalled read; no background poll resumes
+// after timeout. Injectable time/wait permit deterministic offline regressions.
+export async function waitConversationRead(
+  read,
+  predicate,
+  active,
+  {
+    now = Date.now,
+    wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    onFailure = async () => {},
+  } = {},
+) {
+  const started = now();
+  const deadline = started + 20000;
+  let lastUi = null,
+    stopped = false,
+    timer;
+  const timeout = () => new Error("CHAT_OBSERVATION_TIMEOUT_NO_RETRY");
+  const poll = async () => {
+    while (!stopped && now() < deadline) {
+      active();
+      const value = await read();
+      if (stopped) return;
+      lastUi = boundedUiObservation(value);
+      assert.notEqual(value.phase, "unknown", "CHAT_UI_OUTCOME_UNKNOWN");
+      assert.equal((value.alerts ?? []).length, 0, "CHAT_UI_ALERT");
+      const statusText = [
+        value.text ?? "",
+        ...(value.statuses ?? []),
+        ...(value.preview?.statuses ?? []),
+      ].join("\n");
+      assert.equal(
+        /\bunknown\b|\brefused\b|unconfirmed|could not be confirmed|Send is unavailable/iu.test(
+          statusText,
+        ),
+        false,
+        "CHAT_UI_REFUSED_OR_UNKNOWN",
+      );
+      if (now() >= deadline) throw timeout();
+      if (predicate(value)) return value;
+      await wait(Math.min(75, deadline - now()));
+    }
+    throw timeout();
+  };
+  try {
+    return await Promise.race([
+      poll(),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => {
+          stopped = true;
+          reject(timeout());
+        }, 20000);
+      }),
+    ]);
+  } catch (error) {
+    stopped = true;
+    const failure = {
+      reason:
+        error instanceof Error
+          ? error.message.slice(0, 256)
+          : "CHAT_OBSERVATION_READ_FAILED",
+      elapsedMillis: now() - started,
+      lastUi,
+    };
+    await onFailure(failure);
+    throw new Error(
+      `${failure.reason}; CHAT_LAST_UI=${JSON.stringify(lastUi)}`,
+      { cause: error },
     );
-    if (predicate(value)) return value;
-    await new Promise((resolve) => setTimeout(resolve, 75));
+  } finally {
+    stopped = true;
+    clearTimeout(timer);
   }
-  throw new Error("CHAT_OBSERVATION_TIMEOUT_NO_RETRY");
 }
 
 function accountPreview(ui, workspace, phase, original) {
@@ -931,6 +1046,13 @@ export async function runConversationJourney({
   save,
 }) {
   report.observations = [];
+  const waitRead = (read, predicate, active) =>
+    waitConversationRead(read, predicate, active, {
+      onFailure: async (failure) => {
+        report.observationFailure = failure;
+        await save();
+      },
+    });
   let sends = 0,
     gets = 0;
   const previewWitness = (ui, phase, original) => {
@@ -1051,8 +1173,11 @@ export async function runConversationJourney({
     // synthetic GET per turn, in addition to the two explicit UI account GETs.
     gets = 2 + 2 * sends;
     await waitRead(
-      async () => ({ ...(await readUi(window)), ledger: driver.snapshot() }),
-      (v) => v.ledger.acceptedSends === sends,
+      async () => ({
+        ...(await readConversationUi(window)),
+        ledger: driver.snapshot(),
+      }),
+      (v) => v.currentPresent && v.ledger.acceptedSends === sends,
       active,
     );
     ledger();
@@ -1060,7 +1185,7 @@ export async function runConversationJourney({
     driver.releaseGeneration(turn.replyId, 1);
     driver.releaseRender(turn.replyId, 1);
     let ui = await waitRead(
-      () => readUi(window),
+      () => readConversationUi(window),
       (v) => v.answer === turn.segments[0].text,
       active,
     );
@@ -1081,7 +1206,7 @@ export async function runConversationJourney({
     driver.releaseRender(turn.replyId, 2);
     driver.releaseTerminal(turn.replyId);
     ui = await waitRead(
-      () => readUi(window),
+      () => readConversationUi(window),
       (v) => v.phase === "result-ready" && v.ackEnabled,
       active,
     );
@@ -1096,7 +1221,7 @@ export async function runConversationJourney({
     // A poll already in flight can keep the exact ACK button disabled across
     // this remount. Wait only for its read reply; do not issue another action.
     ui = await waitRead(
-      () => readUi(window),
+      () => readConversationUi(window),
       (v) => v.phase === "result-ready" && v.ackEnabled,
       active,
     );
@@ -1115,7 +1240,7 @@ export async function runConversationJourney({
       .getByRole("button", { name: "Acknowledge result", exact: true })
       .click({ timeout: 5000 });
     ui = await waitRead(
-      () => readUi(window),
+      () => readConversationUi(window),
       (v) => v.followReady === "true",
       active,
     );
