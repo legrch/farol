@@ -45,6 +45,7 @@ vi.mock("../../tooling/update-slot-observer.mjs", () => ({
   observeUpdateSlot: ports.observe,
 }));
 import { runSupervisedUpdate } from "../../tooling/supervised-update-controller.mjs";
+import { InstalledUpdater } from "../../src/modules/release/app/installed-updater.ts";
 
 // Real disposable archive reads; installed roots/lifecycle/lease/package/helper
 // adapters are mocked. No process, app, provider or actual profile is touched.
@@ -555,5 +556,132 @@ describe("supervised update composition (mocked lifecycle)", () => {
       code: "UPDATE_TARGET_UNCONFIRMED",
       helper: { completion: complete },
     });
+  });
+});
+
+describe("supervisor reporting with the real updater lifecycle", () => {
+  function useRealUpdater() {
+    const effects = {
+      prepareLocal: vi.fn(async () => ({
+        ok: true,
+        update: { handle: "retained-local-fixture", manifest: input.manifest },
+      })),
+      retain: vi.fn(async () => undefined),
+      restart: vi.fn(async () => {
+        selected.observeHelper(operation);
+        return { status: "accepted" };
+      }),
+      cancelPending: vi.fn(),
+    };
+    ports.create.mockImplementation(async (options) => {
+      selected = options;
+      runtime = new InstalledUpdater({
+        now: () => 0,
+        recover: async () => ({ ok: true, update: null }),
+        discover: async () => {
+          throw new Error("UNEXPECTED_DISCOVERY");
+        },
+        download: async () => {
+          throw new Error("UNEXPECTED_DOWNLOAD");
+        },
+        restore: async () => {
+          throw new Error("UNEXPECTED_RESTORE");
+        },
+        publish: options.publish,
+        ...effects,
+      });
+      vi.spyOn(runtime, "close");
+      return runtime;
+    });
+    return effects;
+  }
+
+  async function boundedResult(run) {
+    let timer;
+    try {
+      return await Promise.race([
+        run,
+        new Promise((resolve) => {
+          timer = setTimeout(() => resolve({ status: "DRAIN_HUNG" }), 250);
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  it.each(["downloading", "ready"])(
+    "settles actual staging after a %s reporter failure and does not dispatch",
+    async (phase) => {
+      const effects = useRealUpdater();
+      const result = await boundedResult(
+        runSupervisedUpdate(input, (event) => {
+          if (event.view?.phase === phase)
+            throw new Error("PRIVATE_SINK_ERROR");
+        }),
+      );
+      expect(result).toMatchObject({
+        status: "blocked",
+        stage: "stage",
+        code: "UPDATE_PROGRESS_REPORT_FAILED",
+        reportingFailure: "UPDATE_PROGRESS_REPORT_FAILED",
+        predecessorClosed: true,
+        helper: null,
+      });
+      expect(effects.prepareLocal).toHaveBeenCalledTimes(1);
+      expect(effects.retain).toHaveBeenCalledTimes(1);
+      expect(effects.restart).not.toHaveBeenCalled();
+      expect(effects.cancelPending).toHaveBeenCalledTimes(1);
+      expect(runtime.close).toHaveBeenCalledTimes(1);
+      expect(ports.release).toHaveBeenCalledTimes(1);
+      expect(JSON.stringify(result)).not.toContain("PRIVATE_SINK_ERROR");
+    },
+  );
+
+  it("settles actual applying and retains the original terminal after a reporter failure", async () => {
+    const effects = useRealUpdater();
+    const result = await boundedResult(
+      runSupervisedUpdate(input, (event) => {
+        if (event.view?.phase === "applying") throw new Error("OUTPUT_CLOSED");
+      }),
+    );
+    expect(result).toMatchObject({
+      status: "completed",
+      reportingFailure: "UPDATE_PROGRESS_REPORT_FAILED",
+      helper: { operationId: operation.operationId, completion: complete },
+    });
+    expect(effects.restart).toHaveBeenCalledTimes(1);
+    expect(effects.cancelPending).toHaveBeenCalledTimes(1);
+    expect(runtime.close).toHaveBeenCalledTimes(1);
+    expect(ports.release).not.toHaveBeenCalled();
+  });
+
+  it("does not Quit when the prepared report cannot be delivered", async () => {
+    const result = await runSupervisedUpdate(input, () => {
+      throw new Error("OUTPUT_CLOSED");
+    });
+    expect(result).toMatchObject({
+      status: "blocked",
+      stage: "preflight",
+      code: "UPDATE_PROGRESS_REPORT_FAILED",
+      reportingFailure: "UPDATE_PROGRESS_REPORT_FAILED",
+      predecessorClosed: false,
+    });
+    expect(predecessor.requestQuit).not.toHaveBeenCalled();
+    expect(ports.release).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses asynchronous reporting before Quit and consumes its rejection", async () => {
+    const result = await runSupervisedUpdate(input, async () => {
+      throw new Error("ASYNC_OUTPUT_CLOSED");
+    });
+    expect(result).toMatchObject({
+      status: "blocked",
+      code: "UPDATE_PROGRESS_REPORT_FAILED",
+      reportingFailure: "UPDATE_PROGRESS_REPORT_FAILED",
+      predecessorClosed: false,
+    });
+    expect(predecessor.requestQuit).not.toHaveBeenCalled();
+    expect(ports.release).toHaveBeenCalledTimes(1);
   });
 });

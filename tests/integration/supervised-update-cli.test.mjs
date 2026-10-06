@@ -67,6 +67,13 @@ describe("external supervisor entry (mocked controller, disposable input)", () =
   it.each([
     [{ status: "blocked" }, 2],
     [{ status: "unknown" }, 3],
+    [
+      {
+        status: "completed",
+        reportingFailure: "UPDATE_PROGRESS_REPORT_FAILED",
+      },
+      3,
+    ],
     [{ status: "completed", controllerClose: "unconfirmed" }, 3],
     [{ status: "blocked", leaseRelease: "unconfirmed" }, 3],
   ])("preserves the controller classification %j", async (report, code) => {

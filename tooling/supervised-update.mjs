@@ -97,6 +97,7 @@ export async function runSupervisedUpdateCLI(
   output(result);
   if (
     result.status === "unknown" ||
+    result.reportingFailure != null ||
     result.controllerClose === "unconfirmed" ||
     result.leaseRelease === "unconfirmed"
   )

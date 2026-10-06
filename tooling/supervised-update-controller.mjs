@@ -228,12 +228,32 @@ export async function runSupervisedUpdate(raw, publish = () => {}) {
   let restartAttempted = false;
   let completion = null;
   let outcome = null;
+  let reportingFailure = null;
+  // The updater's synchronous observer is outside some drain guards. A failed
+  // output sink must never interrupt that owner or turn reporting into an effect.
+  const publishSafely = (value) => {
+    if (reportingFailure !== null) return;
+    try {
+      const pending = publish(value);
+      if (pending && typeof pending.then === "function") {
+        // Asynchronous sinks cannot acknowledge this synchronous boundary.
+        // Consume a rejection, retain the failure and stop at the next safe step.
+        reportingFailure = "UPDATE_PROGRESS_REPORT_FAILED";
+        Promise.resolve(pending).catch(() => {});
+      }
+    } catch {
+      reportingFailure = "UPDATE_PROGRESS_REPORT_FAILED";
+    }
+  };
+  const requireReporting = () =>
+    requireValue(reportingFailure === null, "UPDATE_PROGRESS_REPORT_FAILED");
   const report = (status, code = null) =>
     Object.freeze({
       schema: "farol.supervised-update-observation/1",
       status,
       stage,
       code,
+      reportingFailure,
       source: input.expectedSource,
       target,
       predecessor: predecessor?.original ?? null,
@@ -291,7 +311,8 @@ export async function runSupervisedUpdate(raw, publish = () => {}) {
     });
     requireValue(await verifyPromotionLease(lease), "UPDATE_LEASE_CHANGED");
     requireValue(await resources.verify(), "UPDATE_RESOURCES_CHANGED");
-    publish(report("prepared"));
+    publishSafely(report("prepared"));
+    requireReporting();
     stage = "quit";
     quitAttempted = true;
     await predecessor.requestQuit();
@@ -324,7 +345,7 @@ export async function runSupervisedUpdate(raw, publish = () => {}) {
         }),
       removeDirectory: (directory, force) =>
         fs.rm(directory, { recursive: true, force }),
-      publish: (view) => publish({ ...report("progress"), view }),
+      publish: (view) => publishSafely({ ...report("progress"), view }),
       observeHelper: (original) => {
         requireValue(
           helper === null || helper === original,
@@ -339,12 +360,14 @@ export async function runSupervisedUpdate(raw, publish = () => {}) {
       runtime.snapshot().phase === "idle",
       "UPDATE_BASELINE_NOT_ADMITTED",
     );
+    requireReporting();
     await runtime.prepareLocal();
     requireValue(
       runtime.snapshot().phase === "ready" &&
         runtime.snapshot().version === target.version,
       "UPDATE_LOCAL_PACKAGE_NOT_READY",
     );
+    requireReporting();
     requireValue(await backup.verify(), "UPDATE_BACKUP_UNCONFIRMED");
     stage = "apply";
     restartAttempted = true;
