@@ -1213,8 +1213,12 @@ export class WindowController implements RendererFacade {
       taskId: destination.taskId ?? this.state.destination.taskId,
     };
     if (JSON.stringify(next) === JSON.stringify(this.state.destination)) {
-      if (this.state.overlay === "search") {
-        this.patch({ overlay: "none" });
+      if (this.state.overlay === "search" || this.state.sidebar === "overlay") {
+        this.patch({
+          overlay: "none",
+          sidebar:
+            this.state.sidebar === "overlay" ? "rail" : this.state.sidebar,
+        });
         this.presentation();
       }
       return;
@@ -1231,6 +1235,7 @@ export class WindowController implements RendererFacade {
       back: this.cursor > 0,
       forward: false,
       overlay: "none",
+      sidebar: this.state.sidebar === "overlay" ? "rail" : this.state.sidebar,
     });
     this.presentation();
   }
@@ -1247,6 +1252,7 @@ export class WindowController implements RendererFacade {
       back: cursor > 0,
       forward: cursor < this.history.length - 1,
       overlay: "none",
+      sidebar: this.state.sidebar === "overlay" ? "rail" : this.state.sidebar,
     });
     this.presentation();
   }

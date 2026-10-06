@@ -298,6 +298,45 @@ it.each([
   },
 );
 
+it.each(["Setup", "Home", "Back"] as const)(
+  "narrow page-list navigation to %s closes the scrim and restores page input",
+  async (label) => {
+    const { host, c, f } = await mount();
+    const originalWidth = window.innerWidth;
+    try {
+      await act(async () => {
+        window.innerWidth = 758;
+        window.dispatchEvent(new Event("resize"));
+        if (label === "Back") c.navigate({ area: "settings", page: "folders" });
+      });
+      await act(async () => button(host, "Toggle sidebar").click());
+      expect(host.querySelector(".sidebar-overlay")).not.toBeNull();
+      expect(host.querySelector("main")?.hasAttribute("inert")).toBe(true);
+      const before = c.getSnapshot();
+      await act(async () => button(host, label).click());
+      expect(host.querySelector(".sidebar-overlay")).toBeNull();
+      expect(host.querySelector(".sidebar-scrim")).toBeNull();
+      expect(host.querySelector("main")?.hasAttribute("inert")).toBe(false);
+      expect(c.getSnapshot().sidebar).toBe("rail");
+      expect(vi.mocked(f.api.layout).mock.calls.at(-1)?.slice(4, 6)).toEqual([
+        "rail",
+        "none",
+      ]);
+      if (label === "Home") {
+        expect(c.getSnapshot().back).toBe(before.back);
+        expect(c.getSnapshot().destination).toEqual(before.destination);
+      }
+      expect(f.api.configure).not.toHaveBeenCalled();
+      expect(f.api.task).not.toHaveBeenCalled();
+    } finally {
+      await act(async () => {
+        window.innerWidth = originalWidth;
+        window.dispatchEvent(new Event("resize"));
+      });
+    }
+  },
+);
+
 it("automatically uses the rail at narrow widths and opens a bounded page-list overlay", async () => {
   const { host, c, f } = await mount();
   const originalWidth = window.innerWidth;
