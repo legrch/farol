@@ -52,13 +52,15 @@ dependency attestation/notices, renderer test environment/coverage and lint) are
 included in this source composition. Exact integrated checks and native acceptance
 remain Lead-owned.
 
-## Approved shell implementation
+## Current shell implementation
 
 The production build entry is `src/ui/renderer/entry.tsx`, with one React root,
 one controller and exclusive ownership of its descendants. The old `shell.ts`
-entry and old HTML/CSS are not loaded by this build. Approved tokens use a 58px
-single toolbar, 62px icon rail and 232px contextual sidebar, with native bounds
-computed by the host from those logical states. Theme changes preserve geometry.
+entry and old HTML/CSS are not loaded by this build. The shared geometry in
+`src/pkg/shell-layout/geometry.ts` supplies a 58px toolbar, 56px icon rail and
+180px default contextual sidebar (resizable from 152px to 288px). React and
+the native host consume these values. The page-list resizer draws its single
+boundary; it does not add another sidebar border. Theme changes preserve geometry.
 Home, settings pages, work slots, Activity inspection, search, task assignment,
 update review and toolbar task options use the same facade. Native browser pages
 remain WebContentsView instances owned by the host.
@@ -84,10 +86,52 @@ and current state but no scheduling preference. Automatic installation and
 explicit interruption remain separate unavailable controls. K0 status alone
 cannot supply these capabilities.
 
-The approved Signal Color master supplies fixed-color Dock/ICNS bytes for both
-themes. Native template pixels are embedded in the host to preserve the existing
-schema-6 entry closure. Historical predecessor/rollback packages and installed
-icon acceptance still require Lead's exact release qualification.
+Sunrise is the current icon direction. Runtime PNG and bundle ICNS resources
+use the same artwork in both themes; the current export does not yet distinguish
+Dev with a separate badge. The earlier Signal / Color approval remains historical.
+In-app SVG emblems and the native menu-bar template mark are separate resources.
+Source mapping and asset checks do not establish Dock, Finder or installed icon
+acceptance, which remain exact-build qualification steps.
+
+## Setup and Home
+
+Setup is a separate top-level destination: Connection, Folders & access, Add to
+ChatGPT, then Finish. It presents the same configuration, evidence and commands
+as Settings. Reviewing Setup does not reset a profile, clear credentials, add a
+grant, verify access or repeat a command. Embedded ChatGPT sign-in and Model
+configuration are optional for external Computer readiness. A partial profile
+retains its configured state and offers a continuation path after reopening.
+
+Home implements the current sidebar proposal, still under owner review rather
+than owner accepted. Its five local views are Overview, Current work, Needs
+attention, Recent activity and Connection & access. Task/event/attention selection
+opens an inspector inside Home; Back and Forward retain that local destination.
+Only explicit destination actions leave Home. Projections reuse existing task,
+Activity and configuration evidence, with no extra task, issue or history store.
+Task targets use exact identity, so reusing a numbered browser window cannot make
+an old record open another task. The global rail has no New-chat plus.
+
+Command eligibility follows the owning operation and its dependencies. Independent
+optional Model/browser uncertainty does not invalidate current Computer evidence.
+Computer, connector, shared configuration writer and unclassified uncertainty
+still block conflicting effects. Safe navigation and supported observation do not
+settle an unknown outcome; stale generations and late replies remain fenced.
+
+| Behavior                                                                     | Executable coverage                                                       | Evidence boundary                                                                                          |
+| ---------------------------------------------------------------------------- | ------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| Home-local navigation, exact task targets and missing evidence               | `tests/renderer/home.test.tsx` and `controller.test.ts`                   | Renderer fixtures; no provider or native focus claim                                                       |
+| Separate Setup, retained credential drafts and non-destructive review        | `tests/renderer/settings.test.tsx` and `controller.test.ts`               | DOM/command projection; normal native dialog and external attachment are separate                          |
+| Optional versus shared/Computer uncertainty and freshness                    | `tests/renderer/computer-setup.test.ts`, `settings.test.tsx`              | Pure/renderer contracts; unknown is never settled by remount                                               |
+| Fresh and partial Setup, Appearance, Quit/reopen, retained live idle browser | `tests/e2e/dev-onboarding-startup.e2e.mjs`                                | Built current React + real Go + local provider fixture; four hidden disposable lifetimes, zero Sends       |
+| Cleared/destroyed browser contents and safe native detach                    | `tests/unit/native-view-visibility.test.ts` plus the native journey above | Callback regression and real child attachment; visible keyboard focus and OS AX inspection remain separate |
+
+The four-lifetime native journey passed at source `5c702016`, build
+`a3bea6c3d99de91bc3fd5b348f037add4d6f465c1b7193fe7e96d7ac18b0204a`,
+attempt `7dd3cc15-f8bf-411a-9353-b18c33ef584e`. All lifetimes recorded clean
+closure. It does not prove clean-profile external attachment, installation,
+provider Send or an update. Actual ordinary Dev also retained a completed file
+edit across the same-source rebuild/reopen and exposed the original result through
+`computer_mutation_read`; that external receipt is separate from this fixture.
 
 ## Native harness and retirement gate
 
@@ -101,20 +145,22 @@ Fixture startup refusals are retained as failed tests, not native UI acceptance.
 Do not count inactive legacy presentation source assertions as React coverage.
 `tests/renderer` is the replacement coverage scope. Old presentation source/tests
 remain pending their explicit consumer inventory and native replacement gates;
-policy helpers remain applicable. Existing `preview.e2e.mjs` and guided-setup
-harnesses target retired selectors and are not qualified for the new shell.
+policy helpers remain applicable. Existing `preview.e2e.mjs` and
+`guided-setup-selection.e2e.mjs` target retired selectors and are not qualified
+for the new shell. `dev-onboarding-startup.e2e.mjs` has been ported to the
+current React Setup with the bounded evidence described above.
 D5 removal and R19/R40/R44/R45 require their missing native/backend/integration
 witnesses. Source acceptance does not mark this migration product done.
 
 ## Legacy consumer inventory and pending exits
 
-| Inactive presentation consumer                                                                                                    | Replacement                                                                        | Remaining deletion witness                                                                                 |
-| --------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| `src/ui/shell.ts`, `shell.html`, `shell.css`                                                                                      | One `renderer/entry.tsx` build and renderer-only assets                            | No old entry in input ledger; full CI and packaged new-profile/configured-profile setup flow               |
-| `guided-onboarding-view.ts` modal/required IDs                                                                                    | Mounted settings pages, Home readiness and configuration forms                     | Native real folder selection and successful first-run/recheck failure/retention paths                      |
-| `installed-update-view.ts` DOM writers                                                                                            | Passive React update sheet with distinct backend commands                          | Exact package check/apply/recover/rollback eligibility and retained unknown outcome                        |
-| `agent-draft-contract`, `task-menu-note-contract`, `watch-rail-product-contract` source assertions                                | `tests/renderer/{controller,shell,settings}.test.*` and existing pure policy tests | Task note/result UI inventory and native acknowledgement correlation before deleting historical assertions |
-| `preview.e2e.mjs`, `guided-setup-selection.e2e.mjs`, `dev-onboarding-startup.e2e.mjs`, `setup-config-error.e2e.mjs` old selectors | `react-shell.e2e.mjs` covers shell/native geometry/composition subset              | Port the remaining operational cases; selector retirement alone is not replacement coverage                |
+| Inactive presentation consumer                                                                     | Replacement                                                                                            | Remaining deletion witness                                                                                 |
+| -------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------- |
+| `src/ui/shell.ts`, `shell.html`, `shell.css`                                                       | One `renderer/entry.tsx` build and renderer-only assets                                                | No old entry in input ledger; full CI and packaged new-profile/configured-profile setup flow               |
+| `guided-onboarding-view.ts` modal/required IDs                                                     | Separate React Setup sharing mounted Settings forms and readiness evidence                             | Native real folder selection and external first-run/recheck failure paths                                  |
+| `installed-update-view.ts` DOM writers                                                             | Passive React update sheet with distinct backend commands                                              | Exact package check/apply/recover/rollback eligibility and retained unknown outcome                        |
+| `agent-draft-contract`, `task-menu-note-contract`, `watch-rail-product-contract` source assertions | `tests/renderer/{controller,shell,settings}.test.*` and existing pure policy tests                     | Task note/result UI inventory and native acknowledgement correlation before deleting historical assertions |
+| `preview.e2e.mjs`, `guided-setup-selection.e2e.mjs`, `setup-config-error.e2e.mjs` old selectors    | `react-shell.e2e.mjs` and current-React `dev-onboarding-startup.e2e.mjs` cover distinct native subsets | Port remaining operational cases; hidden fixture coverage is not external or installed acceptance          |
 
 These inactive files are not imported by the production renderer. Their tests
 remain tracked and do not substantiate the new UI. Pure draft, setup, permission,
