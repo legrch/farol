@@ -58,7 +58,7 @@ func (s *Service) Snapshot(ctx context.Context, request Request) (*SnapshotResul
 		if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
 			deadline = d
 		}
-		descriptor = port.Descriptor{WorkspaceID: w.WorkspaceID, Root: w.Root,
+		descriptor = port.Descriptor{FilePolicy: a.FilePolicy, WorkspaceID: w.WorkspaceID, Root: w.Root,
 			ApprovedRoot: port.Root{Path: w.Root, Device: w.RootIdentity.Device, Inode: w.RootIdentity.Inode}}
 		for _, e := range a.ExcludedPaths {
 			if e.WorkspaceID == w.WorkspaceID && authority.Within(w.Root, e.Path) && e.Path != w.Root {

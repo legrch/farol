@@ -46,6 +46,9 @@ type ExecutionLease struct {
 // Call only after a fresh outer grant has been admitted under current policy.
 // The outer expiry gates admission; execution has its own fixed deadline.
 func Lease(p Participant, a Approval, now time.Time, lifetime time.Duration) (*ExecutionLease, error) {
+	if !p.Grant.FilePolicy.Valid() || !a.FilePolicy.Valid() || p.Grant.FilePolicy != a.FilePolicy || p.Grant.ComputerID != a.ComputerID || p.Grant.ComputerGeneration != a.Generation {
+		return nil, fail("AUTHORITY_COMPUTER_MISMATCH", ComputerApprovalSource)
+	}
 	if now.After(p.Grant.ExpiresAt) {
 		return nil, fail("AUTHORITY_EXPIRED", TaskAdmissionSource)
 	}
@@ -83,7 +86,7 @@ func (a Approval) Clone() Approval {
 // remain part of the sealed ceiling; nil and empty collections are equivalent.
 func SameApprovalPolicy(a, b Approval) bool {
 	return a.OwnerID == b.OwnerID && a.ComputerID == b.ComputerID &&
-		a.Generation == b.Generation && a.Network == b.Network && a.Commands == b.Commands &&
+		a.Generation == b.Generation && a.FilePolicy == b.FilePolicy && a.Network == b.Network && a.Commands == b.Commands &&
 		slices.Equal(a.Capabilities, b.Capabilities) && slices.Equal(a.ExcludedPaths, b.ExcludedPaths) &&
 		slices.EqualFunc(a.Workspaces, b.Workspaces, func(a, b ApprovedWorkspace) bool {
 			metadata := a.GitMetadata == nil && b.GitMetadata == nil || a.GitMetadata != nil && b.GitMetadata != nil && *a.GitMetadata == *b.GitMetadata
@@ -99,7 +102,7 @@ func SameParticipantCeiling(a, b Participant) bool {
 		samePolicy(a.Grant.Policy, b.Grant.Policy)
 }
 func samePolicy(a, b Policy) bool {
-	return a.Network == b.Network && a.Commands == b.Commands &&
+	return a.FilePolicy == b.FilePolicy && a.Network == b.Network && a.Commands == b.Commands &&
 		slices.Equal(a.Capabilities, b.Capabilities) && slices.Equal(a.ExcludedPaths, b.ExcludedPaths) &&
 		slices.EqualFunc(a.Workspaces, b.Workspaces, func(a, b Scope) bool {
 			return a.WorkspaceID == b.WorkspaceID && a.Root == b.Root && a.Mode == b.Mode &&

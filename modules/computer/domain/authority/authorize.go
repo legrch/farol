@@ -12,6 +12,9 @@ func AuthorizeIdentity(p Participant, identity Identity) error {
 	return nil
 }
 func authorizePolicy(policy Policy, action Action, now time.Time, source string) error {
+	if !policy.FilePolicy.Valid() {
+		return Fail("AUTHORITY_INFLATION_DENIED", source)
+	}
 	if now.After(policy.ExpiresAt) {
 		return Fail("AUTHORITY_EXPIRED", source)
 	}
@@ -66,7 +69,7 @@ func AuthorizeComputer(p Participant, a Approval, action Action, now time.Time) 
 	if a.OwnerID != p.Grant.OwnerID {
 		return Fail("AUTHORITY_OWNER_MISMATCH", "computer-policy")
 	}
-	if a.ComputerID != p.Grant.ComputerID || a.Generation != p.Grant.ComputerGeneration {
+	if a.ComputerID != p.Grant.ComputerID || a.Generation != p.Grant.ComputerGeneration || !a.FilePolicy.Valid() || a.FilePolicy != p.Grant.FilePolicy {
 		return Fail("AUTHORITY_COMPUTER_MISMATCH", "computer-policy")
 	}
 	return authorizePolicy(approvalPolicy(a), action, now, "computer-policy")
@@ -80,6 +83,9 @@ func AuthorizeNativeHost(p Participant, host NativeHost, action Action, now time
 	}
 	if host.TaskID != action.TaskID || host.TaskEpoch != action.TaskEpoch {
 		return Fail("AUTHORITY_TASK_MISMATCH", "native-host")
+	}
+	if !host.FilePolicy.Valid() || host.FilePolicy != p.Grant.FilePolicy {
+		return Fail("AUTHORITY_COMPUTER_MISMATCH", "native-host")
 	}
 	return authorizePolicy(host.Policy, action, now, "native-host")
 }

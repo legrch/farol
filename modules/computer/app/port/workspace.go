@@ -1,10 +1,18 @@
 // Package port defines consumer-owned Computer application dependencies.
 package port
 
-import "context"
+import (
+	"context"
+
+	"github.com/legrch/farol/modules/computer/domain/authority"
+)
 
 type Root struct{ Path, Device, Inode string }
+
+// FilePolicy is selected from a trusted current approval/grant snapshot. It is
+// never a caller selector; native composition must use the same policy meaning.
 type Descriptor struct {
+	FilePolicy                  authority.FilePolicy
 	WorkspaceID, Root           string
 	ApprovedRoot                Root
 	DeniedPaths, ExactFilePaths []string

@@ -72,6 +72,7 @@ type exclusionValue struct {
 	RestrictionSource authority.Source `json:"restrictionSource"`
 }
 type policyValue struct {
+	FilePolicy    *authority.FilePolicy  `json:"filePolicy,omitempty"`
 	Workspaces    []scopeValue           `json:"workspaces"`
 	ExcludedPaths []exclusionValue       `json:"excludedPaths"`
 	Capabilities  []authority.Capability `json:"capabilities"`
@@ -80,6 +81,7 @@ type policyValue struct {
 	ExpiresAt     int64                  `json:"expiresAt"`
 }
 type approvalValue struct {
+	FilePolicy    *authority.FilePolicy  `json:"filePolicy,omitempty"`
 	OwnerID       string                 `json:"ownerId"`
 	ComputerID    string                 `json:"computerId"`
 	Generation    string                 `json:"generation"`
@@ -128,22 +130,37 @@ func decodeExclusions(in []exclusionValue) []authority.Exclusion {
 	}
 	return out
 }
+
+// Omit legacy mode on writes so existing missing-value snapshots retain their
+// canonical bytes. The decoder also accepts a canonical explicit empty string.
+func encodeFilePolicy(p authority.FilePolicy) *authority.FilePolicy {
+	if p == authority.LegacyProtectedFiles {
+		return nil
+	}
+	return &p
+}
+func decodeFilePolicy(p *authority.FilePolicy) authority.FilePolicy {
+	if p == nil {
+		return authority.LegacyProtectedFiles
+	}
+	return *p
+}
 func encodePolicy(p authority.Policy) policyValue {
-	v := policyValue{Workspaces: make([]scopeValue, len(p.Workspaces)), ExcludedPaths: encodeExclusions(p.ExcludedPaths), Capabilities: p.Capabilities, Network: p.Network, Commands: p.Commands, ExpiresAt: p.ExpiresAt.UnixMilli()}
+	v := policyValue{FilePolicy: encodeFilePolicy(p.FilePolicy), Workspaces: make([]scopeValue, len(p.Workspaces)), ExcludedPaths: encodeExclusions(p.ExcludedPaths), Capabilities: p.Capabilities, Network: p.Network, Commands: p.Commands, ExpiresAt: p.ExpiresAt.UnixMilli()}
 	for i, s := range p.Workspaces {
 		v.Workspaces[i] = scopeValue{s.WorkspaceID, s.Root, s.Mode, s.Paths, s.Access, s.RestrictionSource}
 	}
 	return v
 }
 func decodePolicy(v policyValue) authority.Policy {
-	p := authority.Policy{Workspaces: make([]authority.Scope, len(v.Workspaces)), ExcludedPaths: decodeExclusions(v.ExcludedPaths), Capabilities: v.Capabilities, Network: v.Network, Commands: v.Commands, ExpiresAt: time.UnixMilli(v.ExpiresAt)}
+	p := authority.Policy{FilePolicy: decodeFilePolicy(v.FilePolicy), Workspaces: make([]authority.Scope, len(v.Workspaces)), ExcludedPaths: decodeExclusions(v.ExcludedPaths), Capabilities: v.Capabilities, Network: v.Network, Commands: v.Commands, ExpiresAt: time.UnixMilli(v.ExpiresAt)}
 	for i, s := range v.Workspaces {
 		p.Workspaces[i] = authority.Scope{WorkspaceID: s.WorkspaceID, Root: s.Root, Mode: s.Mode, Paths: s.Paths, Access: s.Access, RestrictionSource: s.RestrictionSource}
 	}
 	return p
 }
 func encodeApproval(a authority.Approval) *approvalValue {
-	v := &approvalValue{OwnerID: a.OwnerID, ComputerID: a.ComputerID, Generation: decimal(a.Generation), Workspaces: make([]workspaceValue, len(a.Workspaces)), ExcludedPaths: encodeExclusions(a.ExcludedPaths), Capabilities: a.Capabilities, Network: a.Network, Commands: a.Commands, ExpiresAt: a.ExpiresAt.UnixMilli()}
+	v := &approvalValue{FilePolicy: encodeFilePolicy(a.FilePolicy), OwnerID: a.OwnerID, ComputerID: a.ComputerID, Generation: decimal(a.Generation), Workspaces: make([]workspaceValue, len(a.Workspaces)), ExcludedPaths: encodeExclusions(a.ExcludedPaths), Capabilities: a.Capabilities, Network: a.Network, Commands: a.Commands, ExpiresAt: a.ExpiresAt.UnixMilli()}
 	for i, w := range a.Workspaces {
 		v.Workspaces[i] = workspaceValue{WorkspaceID: w.WorkspaceID, Root: w.Root, Access: w.Access, RootIdentity: rootValue{w.RootIdentity.Device, w.RootIdentity.Inode}, GitHistoryApproved: w.GitHistoryApproved, ShellVerified: w.ShellVerified}
 		if w.GitMetadata != nil {
@@ -160,7 +177,7 @@ func decodeApproval(v *approvalValue) (*authority.Approval, error) {
 	if err != nil {
 		return nil, err
 	}
-	a := &authority.Approval{OwnerID: v.OwnerID, ComputerID: v.ComputerID, Generation: gen, Workspaces: make([]authority.ApprovedWorkspace, len(v.Workspaces)), ExcludedPaths: decodeExclusions(v.ExcludedPaths), Capabilities: v.Capabilities, Network: v.Network, Commands: v.Commands, ExpiresAt: time.UnixMilli(v.ExpiresAt)}
+	a := &authority.Approval{FilePolicy: decodeFilePolicy(v.FilePolicy), OwnerID: v.OwnerID, ComputerID: v.ComputerID, Generation: gen, Workspaces: make([]authority.ApprovedWorkspace, len(v.Workspaces)), ExcludedPaths: decodeExclusions(v.ExcludedPaths), Capabilities: v.Capabilities, Network: v.Network, Commands: v.Commands, ExpiresAt: time.UnixMilli(v.ExpiresAt)}
 	for i, w := range v.Workspaces {
 		a.Workspaces[i] = authority.ApprovedWorkspace{WorkspaceID: w.WorkspaceID, Root: w.Root, Access: w.Access, RootIdentity: authority.RootIdentity{Device: w.RootIdentity.Device, Inode: w.RootIdentity.Inode}, GitHistoryApproved: w.GitHistoryApproved, ShellVerified: w.ShellVerified}
 		if w.GitMetadata != nil {
@@ -174,7 +191,7 @@ func encodeParticipant(p authority.Participant, revoked bool) participantValue {
 	return participantValue{ParticipantID: p.ParticipantID, ParentParticipantID: p.ParentParticipantID, Role: p.Role, MutationOwnership: p.MutationOwnership, AuthorityID: g.AuthorityID, OwnerID: g.OwnerID, SessionID: g.SessionID, TaskID: g.TaskID, TaskEpoch: decimal(g.TaskEpoch), ComputerID: g.ComputerID, ComputerGeneration: decimal(g.ComputerGeneration), Policy: encodePolicy(g.Policy), Revoked: revoked}
 }
 
-func encodeState(b Binding, s state) ([]byte, error) {
+func stateDocument(b Binding, s state) document {
 	d := document{Schema: 1, ProfileID: b.ProfileID, OwnerID: b.OwnerID, ComputerID: b.ComputerID, Revision: decimal(s.Revision), Generation: decimal(s.Generation), SeenApproval: s.SeenApproval, Participants: map[string]participantValue{}}
 	if s.Approval != nil {
 		d.Approval = encodeApproval(*s.Approval)
@@ -182,11 +199,17 @@ func encodeState(b Binding, s state) ([]byte, error) {
 	for id, r := range s.Participants {
 		d.Participants[id] = encodeParticipant(r.Value, r.Revoked)
 	}
+	return d
+}
+func encodeDocument(d document) ([]byte, error) {
 	raw, err := json.Marshal(d)
 	if err != nil || len(raw)+1 > maxStateBytes {
 		return nil, unavailable()
 	}
 	return append(raw, '\n'), nil
+}
+func encodeState(b Binding, s state) ([]byte, error) {
+	return encodeDocument(stateDocument(b, s))
 }
 func decodeState(b Binding, raw []byte) (state, error) {
 	s := state{Participants: map[string]retainedParticipant{}}
@@ -228,9 +251,19 @@ func decodeState(b Binding, raw []byte) (state, error) {
 		}
 		s.Participants[id] = retainedParticipant{p, v.Revoked}
 	}
-	// This format has exactly one canonical encoding. Unknown, duplicate, missing,
-	// differently cased keys and trailing data cannot become trusted state.
-	canonical, err := encodeState(b, s)
+	// Preserve only the optional legacy field presence from the input. Every
+	// other field must still match the canonical, validated state encoding;
+	// duplicate, null, missing required and differently cased keys refuse.
+	current := stateDocument(b, s)
+	if current.Approval != nil && d.Approval.FilePolicy != nil {
+		current.Approval.FilePolicy = d.Approval.FilePolicy
+	}
+	for id, v := range d.Participants {
+		p := current.Participants[id]
+		p.Policy.FilePolicy = v.Policy.FilePolicy
+		current.Participants[id] = p
+	}
+	canonical, err := encodeDocument(current)
 	if err != nil || !bytes.Equal(canonical, raw) {
 		return s, unavailable()
 	}
@@ -244,7 +277,7 @@ func decodeState(b Binding, raw []byte) (state, error) {
 			}
 			child := p
 			ceiling := parent.Value
-			if child.Grant.ComputerGeneration != ceiling.Grant.ComputerGeneration || child.Grant.ComputerID != ceiling.Grant.ComputerID || child.Grant.ExpiresAt.After(ceiling.Grant.ExpiresAt) {
+			if child.Grant.FilePolicy != ceiling.Grant.FilePolicy || child.Grant.ComputerGeneration != ceiling.Grant.ComputerGeneration || child.Grant.ComputerID != ceiling.Grant.ComputerID || child.Grant.ExpiresAt.After(ceiling.Grant.ExpiresAt) {
 				return s, unavailable()
 			}
 			narrowed, err := authority.Delegate(ceiling, authority.Delegation{ParticipantAdmission: authority.ParticipantAdmission{ParticipantID: child.ParticipantID, Role: child.Role, MutationOwnership: child.MutationOwnership}, Narrowing: &authority.Narrowing{Workspaces: child.Grant.Workspaces, ExcludedPaths: child.Grant.ExcludedPaths, Capabilities: child.Grant.Capabilities, Network: child.Grant.Network, Commands: child.Grant.Commands}})
@@ -336,7 +369,7 @@ func permissions(c []authority.Capability, n authority.Network, cmd authority.Co
 	return true
 }
 func validPolicy(p authority.Policy) bool {
-	if len(p.Workspaces) == 0 || len(p.Workspaces) > 32 || !exclusions(p.ExcludedPaths) || !permissions(p.Capabilities, p.Network, p.Commands) || !expiry(p.ExpiresAt) {
+	if !p.FilePolicy.Valid() || len(p.Workspaces) == 0 || len(p.Workspaces) > 32 || !exclusions(p.ExcludedPaths) || !permissions(p.Capabilities, p.Network, p.Commands) || !expiry(p.ExpiresAt) {
 		return false
 	}
 	seen := map[string]bool{}
@@ -367,7 +400,7 @@ func validPolicy(p authority.Policy) bool {
 	return err == nil
 }
 func validApproval(a authority.Approval, b Binding) bool {
-	if a.OwnerID != b.OwnerID || a.ComputerID != b.ComputerID || len(a.Workspaces) == 0 || len(a.Workspaces) > 32 || !exclusions(a.ExcludedPaths) || !permissions(a.Capabilities, a.Network, a.Commands) || !expiry(a.ExpiresAt) {
+	if !a.FilePolicy.Valid() || a.OwnerID != b.OwnerID || a.ComputerID != b.ComputerID || len(a.Workspaces) == 0 || len(a.Workspaces) > 32 || !exclusions(a.ExcludedPaths) || !permissions(a.Capabilities, a.Network, a.Commands) || !expiry(a.ExpiresAt) {
 		return false
 	}
 	seen := map[string]bool{}
@@ -390,7 +423,7 @@ func validApproval(a authority.Approval, b Binding) bool {
 	for i, w := range a.Workspaces {
 		scopes[i] = authority.Scope{WorkspaceID: w.WorkspaceID, Root: w.Root, Mode: authority.Subtree, Access: w.Access}
 	}
-	_, err := authority.Derive(a, authority.Admission{Identity: authority.Identity{OwnerID: b.OwnerID, SessionID: "validation", TaskID: "validation"}, AuthorityID: "validation", ComputerID: b.ComputerID, ComputerGeneration: a.Generation, Policy: authority.Policy{Workspaces: scopes, ExcludedPaths: a.ExcludedPaths, Capabilities: a.Capabilities, Network: a.Network, Commands: a.Commands, ExpiresAt: a.ExpiresAt}}, time.UnixMilli(1))
+	_, err := authority.Derive(a, authority.Admission{Identity: authority.Identity{OwnerID: b.OwnerID, SessionID: "validation", TaskID: "validation"}, AuthorityID: "validation", ComputerID: b.ComputerID, ComputerGeneration: a.Generation, Policy: authority.Policy{FilePolicy: a.FilePolicy, Workspaces: scopes, ExcludedPaths: a.ExcludedPaths, Capabilities: a.Capabilities, Network: a.Network, Commands: a.Commands, ExpiresAt: a.ExpiresAt}}, time.UnixMilli(1))
 	return err == nil
 }
 func validParticipant(p authority.Participant, b Binding) bool {

@@ -3,6 +3,7 @@ package port
 import (
 	"context"
 
+	"github.com/legrch/farol/modules/computer/domain/authority"
 	"github.com/legrch/farol/modules/computer/domain/mutation"
 )
 
@@ -53,7 +54,10 @@ type MutationDigestInput struct {
 type MutationDigester interface {
 	Digest(MutationDigestInput) (string, error)
 }
+
+// FilePolicy has the same trusted snapshot contract as Descriptor.FilePolicy.
 type MutationDescriptor struct {
+	FilePolicy                    authority.FilePolicy
 	WorkspaceID, Root             string
 	ApprovedRoot                  Root
 	DeniedPaths, WriteDeniedPaths []string

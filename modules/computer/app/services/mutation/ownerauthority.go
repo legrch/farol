@@ -60,7 +60,7 @@ func (s *ownerAuthority) current(ctx context.Context, workspaceID, path string, 
 		if err := authority.AuthorizeOwnerWrite(a, workspaceID, w.Root+"/"+path, s.clock.Now()); err != nil {
 			return err
 		}
-		descriptor = port.MutationDescriptor{WorkspaceID: workspaceID, Root: w.Root, ApprovedRoot: port.Root{Path: w.Root, Device: w.RootIdentity.Device, Inode: w.RootIdentity.Inode}}
+		descriptor = port.MutationDescriptor{FilePolicy: a.FilePolicy, WorkspaceID: workspaceID, Root: w.Root, ApprovedRoot: port.Root{Path: w.Root, Device: w.RootIdentity.Device, Inode: w.RootIdentity.Inode}}
 		for _, ex := range a.ExcludedPaths {
 			if ex.WorkspaceID == workspaceID && authority.Within(w.Root, ex.Path) && ex.Path != w.Root {
 				descriptor.DeniedPaths = append(descriptor.DeniedPaths, strings.TrimPrefix(ex.Path, w.Root+"/"))

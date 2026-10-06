@@ -36,7 +36,7 @@ func approvalPolicy(a Approval) Policy {
 	for i, workspace := range a.Workspaces {
 		scopes[i] = Scope{WorkspaceID: workspace.WorkspaceID, Root: workspace.Root, Mode: Subtree, Access: workspace.Access}
 	}
-	return Policy{Workspaces: scopes, ExcludedPaths: a.ExcludedPaths, Capabilities: a.Capabilities, Network: a.Network, Commands: a.Commands, ExpiresAt: a.ExpiresAt}
+	return Policy{FilePolicy: a.FilePolicy, Workspaces: scopes, ExcludedPaths: a.ExcludedPaths, Capabilities: a.Capabilities, Network: a.Network, Commands: a.Commands, ExpiresAt: a.ExpiresAt}
 }
 func Derive(a Approval, admission Admission, now time.Time) (*Grant, error) {
 	if a.OwnerID != admission.OwnerID {
@@ -48,10 +48,11 @@ func Derive(a Approval, admission Admission, now time.Time) (*Grant, error) {
 	if now.After(a.ExpiresAt) || now.After(admission.ExpiresAt) {
 		return nil, fail("AUTHORITY_EXPIRED", TaskAdmissionSource)
 	}
-	if !exclusionsValid(approvalPolicy(a).Workspaces, a.ExcludedPaths) {
+	if !a.FilePolicy.Valid() || !exclusionsValid(approvalPolicy(a).Workspaces, a.ExcludedPaths) {
 		return nil, fail("AUTHORITY_INFLATION_DENIED", ComputerApprovalSource)
 	}
-	if admission.ExpiresAt.After(a.ExpiresAt) || !capabilitiesInclude(a.Capabilities, admission.Capabilities) || !networkIncludes(a.Network, admission.Network) || !commandsInclude(a.Commands, admission.Commands) || !scopesSubset(approvalPolicy(a).Workspaces, admission.Workspaces) || !exclusionsValid(admission.Workspaces, admission.ExcludedPaths) {
+	// File modes are distinct meanings, not ordered levels of permission.
+	if !admission.FilePolicy.Valid() || admission.FilePolicy != a.FilePolicy || admission.ExpiresAt.After(a.ExpiresAt) || !capabilitiesInclude(a.Capabilities, admission.Capabilities) || !networkIncludes(a.Network, admission.Network) || !commandsInclude(a.Commands, admission.Commands) || !scopesSubset(approvalPolicy(a).Workspaces, admission.Workspaces) || !exclusionsValid(admission.Workspaces, admission.ExcludedPaths) {
 		return nil, fail("AUTHORITY_INFLATION_DENIED", TaskAdmissionSource)
 	}
 	p := clonePolicy(admission.Policy)
@@ -68,13 +69,14 @@ func validParticipant(a ParticipantAdmission) bool {
 	return (a.Role == Main || a.Role == Agent || a.Role == Critic) && (a.MutationOwnership == NoOwnership || a.MutationOwnership == TaskOwnership)
 }
 func Create(g Grant, admission ParticipantAdmission) (*Participant, error) {
-	if !validParticipant(admission) || (admission.MutationOwnership == TaskOwnership && !capabilitiesInclude(g.Capabilities, []Capability{Write})) {
+	if !g.FilePolicy.Valid() || !validParticipant(admission) || (admission.MutationOwnership == TaskOwnership && !capabilitiesInclude(g.Capabilities, []Capability{Write})) {
 		return nil, Fail("AUTHORITY_INFLATION_DENIED", "role")
 	}
 	return &Participant{ParticipantID: admission.ParticipantID, Role: admission.Role, MutationOwnership: admission.MutationOwnership, Grant: g.Clone()}, nil
 }
 func Narrow(g Grant, n Narrowing) (*Grant, error) {
-	if !capabilitiesInclude(g.Capabilities, n.Capabilities) || !networkIncludes(g.Network, n.Network) || !commandsInclude(g.Commands, n.Commands) || !scopesSubset(g.Workspaces, n.Workspaces) || !exclusionsValid(n.Workspaces, n.ExcludedPaths) {
+	// Narrowing cannot select another file mode; the captured mode is retained.
+	if !g.FilePolicy.Valid() || !capabilitiesInclude(g.Capabilities, n.Capabilities) || !networkIncludes(g.Network, n.Network) || !commandsInclude(g.Commands, n.Commands) || !scopesSubset(g.Workspaces, n.Workspaces) || !exclusionsValid(n.Workspaces, n.ExcludedPaths) {
 		return nil, fail("AUTHORITY_INFLATION_DENIED", OwnerRestrictionSource)
 	}
 	out := g.Clone()

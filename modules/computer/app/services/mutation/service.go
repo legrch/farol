@@ -85,7 +85,7 @@ func (s *Service) matches(r CheckRequest) bool {
 	return s != nil && s.lease != nil && r.OperationID == s.operationID && r.OwnerID == s.selected.OwnerID && r.SessionID == s.selected.SessionID && r.TaskID == s.selected.TaskID && r.TaskEpoch == s.selected.TaskEpoch && r.ParticipantID == s.selected.ParticipantID && r.TurnID == s.selected.TurnID
 }
 func sameDescriptor(a, b port.MutationDescriptor) bool {
-	return a.WorkspaceID == b.WorkspaceID && a.Root == b.Root && a.ApprovedRoot == b.ApprovedRoot && slices.Equal(a.DeniedPaths, b.DeniedPaths) && slices.Equal(a.WriteDeniedPaths, b.WriteDeniedPaths)
+	return a.FilePolicy == b.FilePolicy && a.WorkspaceID == b.WorkspaceID && a.Root == b.Root && a.ApprovedRoot == b.ApprovedRoot && slices.Equal(a.DeniedPaths, b.DeniedPaths) && slices.Equal(a.WriteDeniedPaths, b.WriteDeniedPaths)
 }
 
 // current constructs disclosure under the selected owners. Native IO and the
@@ -127,7 +127,7 @@ func (s *Service) current(ctx context.Context, workspaceID, path string, expecte
 		if err := authority.AuthorizeComputer(p, a, action, now); err != nil {
 			return reject(err)
 		}
-		descriptor = port.MutationDescriptor{WorkspaceID: workspaceID, Root: scope.Root, ApprovedRoot: port.Root{Path: approved.Root, Device: approved.RootIdentity.Device, Inode: approved.RootIdentity.Inode}}
+		descriptor = port.MutationDescriptor{FilePolicy: a.FilePolicy, WorkspaceID: workspaceID, Root: scope.Root, ApprovedRoot: port.Root{Path: approved.Root, Device: approved.RootIdentity.Device, Inode: approved.RootIdentity.Inode}}
 		depth := len(strings.Split(strings.TrimPrefix(scope.Root, "/"), "/"))
 		if scope.Root == "/" {
 			depth = 0

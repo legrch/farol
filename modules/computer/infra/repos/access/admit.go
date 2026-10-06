@@ -115,7 +115,7 @@ func (s *Store) Delegate(ctx context.Context, revision uint64, parentID string, 
 	if n.Approval == nil {
 		return nil, authority.Fail("COMPUTER_APPROVAL_NOT_FOUND", "computer-policy")
 	}
-	if parent.Value.Grant.ComputerGeneration != n.Approval.Generation {
+	if parent.Value.Grant.ComputerGeneration != n.Approval.Generation || !n.Approval.FilePolicy.Valid() || parent.Value.Grant.FilePolicy != n.Approval.FilePolicy {
 		return nil, authority.Fail("AUTHORITY_COMPUTER_MISMATCH", "computer-policy")
 	}
 	now, err := s.now()

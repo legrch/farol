@@ -40,7 +40,7 @@ func authorizeOwner(a Approval, workspaceID, path string, now time.Time, capabil
 
 func ownerApprovalValid(a Approval) bool {
 	ms := a.ExpiresAt.UnixMilli()
-	if ms <= 0 || ms > 9007199254740991 || !a.ExpiresAt.Equal(time.UnixMilli(ms)) ||
+	if !a.FilePolicy.Valid() || ms <= 0 || ms > 9007199254740991 || !a.ExpiresAt.Equal(time.UnixMilli(ms)) ||
 		len(a.Workspaces) == 0 || len(a.Workspaces) > 32 || len(a.Capabilities) > 7 ||
 		!networkIncludes(a.Network, a.Network) || !commandsInclude(a.Commands, a.Commands) {
 		return false

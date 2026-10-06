@@ -95,6 +95,7 @@ type Exclusion struct {
 	RestrictionSource Source
 }
 type Policy struct {
+	FilePolicy    FilePolicy
 	Workspaces    []Scope
 	ExcludedPaths []Exclusion
 	Capabilities  []Capability
@@ -105,6 +106,7 @@ type Policy struct {
 type Approval struct {
 	OwnerID, ComputerID string
 	Generation          uint64
+	FilePolicy          FilePolicy
 	Workspaces          []ApprovedWorkspace
 	ExcludedPaths       []Exclusion
 	Capabilities        []Capability

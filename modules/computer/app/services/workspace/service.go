@@ -112,11 +112,14 @@ func (s *Service) withAuthority(ctx context.Context, caller caller, inspect func
 }
 
 func descriptor(scope authority.Scope, p authority.Participant, a authority.Approval) (port.Descriptor, error) {
+	if !p.Grant.FilePolicy.Valid() || !a.FilePolicy.Valid() || p.Grant.FilePolicy != a.FilePolicy {
+		return port.Descriptor{}, authority.Fail("AUTHORITY_COMPUTER_MISMATCH", "computer-policy")
+	}
 	approved, found := authority.FindApproved(a, scope.WorkspaceID)
 	if !found {
 		return port.Descriptor{}, authority.Fail("AUTHORITY_PATH_DENIED", "computer-approval")
 	}
-	d := port.Descriptor{WorkspaceID: scope.WorkspaceID, Root: scope.Root, ApprovedRoot: port.Root{Path: approved.Root, Device: approved.RootIdentity.Device, Inode: approved.RootIdentity.Inode}}
+	d := port.Descriptor{FilePolicy: a.FilePolicy, WorkspaceID: scope.WorkspaceID, Root: scope.Root, ApprovedRoot: port.Root{Path: approved.Root, Device: approved.RootIdentity.Device, Inode: approved.RootIdentity.Inode}}
 	// Include current policy exclusions as well as inherited grant exclusions.
 	// Component comparison keeps aliases of excluded descendants visible to the
 	// native deny comparator even beneath a narrower root.
@@ -214,7 +217,7 @@ func (s *Service) disclose(ctx context.Context, caller caller, initial admission
 		if current.Root != initial.descriptor.Root || scope.Mode != initial.mode || current.ApprovedRoot != initial.descriptor.ApprovedRoot {
 			return authority.Fail("WORKSPACE_ROOT_CHANGED", "native-workspace")
 		}
-		if p.Grant.AuthorityID != initial.authorityID || p.Grant.ComputerID != initial.computerID || p.Grant.ComputerGeneration != initial.computerGeneration {
+		if current.FilePolicy != initial.descriptor.FilePolicy || p.Grant.AuthorityID != initial.authorityID || p.Grant.ComputerID != initial.computerID || p.Grant.ComputerGeneration != initial.computerGeneration {
 			return authority.Fail("AUTHORITY_COMPUTER_MISMATCH", "computer-policy")
 		}
 		// Re-authorizing just the directory is insufficient for list output: a newly
@@ -301,7 +304,7 @@ func (s *Service) withDiscovery(ctx context.Context, binding correlation, inspec
 		if a.OwnerID != p.Grant.OwnerID {
 			return authority.Fail("AUTHORITY_OWNER_MISMATCH", "computer-policy")
 		}
-		if a.ComputerID != p.Grant.ComputerID || a.Generation != p.Grant.ComputerGeneration {
+		if a.ComputerID != p.Grant.ComputerID || a.Generation != p.Grant.ComputerGeneration || !p.Grant.FilePolicy.Valid() || !a.FilePolicy.Valid() || p.Grant.FilePolicy != a.FilePolicy {
 			return authority.Fail("AUTHORITY_COMPUTER_MISMATCH", "computer-policy")
 		}
 		if now.After(a.ExpiresAt) {
