@@ -82,7 +82,16 @@ type HoldState = {
   device: bigint;
   inode: bigint;
   released: boolean;
+  role: PromotionLeaseRole;
+  transferSelected: boolean;
 };
+
+export type PromotionLeaseTransfer = Readonly<{
+  descriptor: number;
+  identity: Readonly<{ device: string; inode: string }>;
+  verify(): Promise<boolean>;
+  release(): Promise<void>;
+}>;
 
 // Private per-handle state: the open descriptor that IS the lease, and the
 // identity of the inode it locks. Kept out of the handle object so a handle
@@ -204,12 +213,86 @@ export async function acquirePromotionLease(
       device: info.dev,
       inode: info.ino,
       released: false,
+      role,
+      transferSelected: false,
     });
     return lease;
   } catch (error) {
     await handle.close().catch(() => undefined);
     throw error;
   }
+}
+
+/** Selects one inherited handoff of this owner's existing kernel lock. */
+export async function createPromotionLeaseTransfer(
+  lease: PromotionLeaseHandle,
+): Promise<PromotionLeaseTransfer> {
+  const state = holds.get(lease);
+  if (!state || state.released || state.role !== "promotion") {
+    throw new Error("PROMOTION_LEASE_NOT_HELD");
+  }
+  if (state.transferSelected) {
+    throw new Error("PROMOTION_LEASE_TRANSFER_ALREADY_SELECTED");
+  }
+  state.transferSelected = true;
+  const file = lease.file;
+  const directory = path.dirname(file);
+  const originalDirectory = await fs.lstat(directory, { bigint: true });
+  const descriptor = state.handle.fd;
+  let releaseAttempted = false;
+  async function verify(): Promise<boolean> {
+    if (state!.released || state!.handle.fd !== descriptor || descriptor < 0) {
+      return false;
+    }
+    try {
+      const opened = await state!.handle.stat({ bigint: true });
+      const named = await fs.lstat(file, { bigint: true });
+      const parent = await fs.lstat(directory, { bigint: true });
+      const canonical = await fs.realpath(file);
+      return (
+        !state!.released &&
+        state!.handle.fd === descriptor &&
+        canonical === file &&
+        opened.isFile() &&
+        named.isFile() &&
+        opened.nlink === 1n &&
+        named.nlink === 1n &&
+        privateAndOwned(opened) &&
+        privateAndOwned(named) &&
+        opened.dev === state!.device &&
+        opened.ino === state!.inode &&
+        named.dev === state!.device &&
+        named.ino === state!.inode &&
+        originalDirectory.isDirectory() &&
+        privateAndOwned(originalDirectory) &&
+        parent.isDirectory() &&
+        privateAndOwned(parent) &&
+        parent.dev === originalDirectory.dev &&
+        parent.ino === originalDirectory.ino
+      );
+    } catch {
+      return false;
+    }
+  }
+  if (!(await verify())) throw new Error("PROMOTION_LEASE_TRANSFER_UNSAFE");
+  return Object.freeze({
+    descriptor,
+    identity: Object.freeze({
+      device: state.device.toString(),
+      inode: state.inode.toString(),
+    }),
+    verify,
+    async release(): Promise<void> {
+      if (releaseAttempted)
+        throw new Error("PROMOTION_LEASE_TRANSFER_ALREADY_RELEASED");
+      releaseAttempted = true;
+      if (!(await verify())) throw new Error("PROMOTION_LEASE_TRANSFER_UNSAFE");
+      // The acknowledged child already owns an inherited reference to this
+      // lock. Do not truncate its diagnostic record or hide a failed close.
+      state.released = true;
+      await state.handle.close();
+    },
+  });
 }
 
 /**
