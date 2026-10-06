@@ -83,76 +83,112 @@ func (o *Observer) Read(ctx context.Context, request ReadRequest) (*ReadResponse
 	return o.service.read(ctx, request, o.withCurrent)
 }
 
+// observationGuard shares current READ policy between live and retained readers.
+// It has no execution lease, service, child, admission issuer or mutable owner.
+type observationGuard struct {
+	current   ObservationAuthority
+	binding   port.TaskBinding
+	deadline  time.Time
+	connector *ConnectorReadScope
+	clock     port.Clock
+}
+
 func (o *Observer) withCurrent(ctx context.Context, disclose func() error) error {
-	// Current READ authority gates even the physical qualification lookup.
-	if err := o.withAuthority(ctx, nil); err != nil {
-		return err
-	}
-	// Physical qualification is outside all Computer/admission/app inspect
-	// gates, both before child IO and before final disclosure. Store snapshots
-	// alone contain approved metadata and cannot prove the root still exists.
-	physical, err := o.workspace.ObserveWorkspace(ctx)
-	if err != nil || physical == nil {
-		return fail("PROCESS_ADMISSION_UNAVAILABLE", false)
-	}
 	o.service.gate.Lock()
 	seal := o.service.intent.Seal
 	o.service.gate.Unlock()
+	return withObservedWorkspace(ctx, o.workspace, seal, o.withAuthority, disclose)
+}
+
+func withObservedWorkspace(ctx context.Context, workspace ObservationWorkspace, seal Seal, current func(context.Context, func() error) error, disclose func() error) error {
+	// Current READ authority gates even the physical qualification lookup.
+	if err := current(ctx, nil); err != nil {
+		return err
+	}
+	// Physical qualification runs outside all Computer/admission/app gates.
+	// Saved approval metadata cannot prove that the original root still exists.
+	physical, err := workspace.ObserveWorkspace(ctx)
+	if err != nil || physical == nil {
+		return fail("PROCESS_ADMISSION_UNAVAILABLE", false)
+	}
 	if physical.WorkspaceID != seal.WorkspaceID || physical.Root != seal.Root || physical.RootIdentity != seal.RootIdentity {
 		return authority.Fail("AUTHORITY_COMPUTER_MISMATCH", "computer-policy")
 	}
 	// Qualification may yield to withdrawal, expiry or workspace-policy changes.
-	// Recheck the coherent owners before allowing child IO or disclosure.
-	return o.withAuthority(ctx, disclose)
+	return current(ctx, disclose)
 }
 
 func (o *Observer) withAuthority(ctx context.Context, disclose func() error) error {
+	s := o.service
+	s.gate.Lock()
+	seal := s.intent.Seal
+	s.gate.Unlock()
+	guard := observationGuard{o.current, o.binding, o.deadline, o.connector, s.clock}
+	return guard.withAuthority(ctx, seal, func(p authority.Participant) error {
+		s.gate.Lock()
+		wrongAdmission := o.connector == nil && s.invocation != nil && p.Grant.AuthorityID != s.invocation.AdmissionID
+		s.gate.Unlock()
+		if wrongAdmission {
+			return authority.Fail("AUTHORITY_TASK_MISMATCH", "task-grant")
+		}
+		return nil
+	}, disclose)
+}
+
+func (g observationGuard) selected(now time.Time) error {
+	if now.UnixMilli() <= 0 || now.UnixMilli() > 9007199254740991 || !now.Before(g.deadline) {
+		return authority.Fail("AUTHORITY_EXPIRED", "task-grant")
+	}
+	// A producer cannot extend or replace the independent captured lifetime.
+	if g.current.Binding() != g.binding || !g.current.Deadline().Equal(g.deadline) {
+		return fail("PROCESS_ADMISSION_UNAVAILABLE", false)
+	}
+	if g.connector != nil {
+		current, ok := g.current.(ConnectorObservationAuthority)
+		if !ok || current.ConnectorScope() != *g.connector {
+			return fail("PROCESS_ADMISSION_UNAVAILABLE", false)
+		}
+	}
+	return nil
+}
+
+func (g observationGuard) withAuthority(ctx context.Context, seal Seal, originalAdmission func(authority.Participant) error, disclose func() error) error {
 	if ctx.Err() != nil {
 		return fail("PROCESS_CANCELLED", false)
 	}
 	calls := 0
 	var inspected error
-	err := o.current.WithSnapshot(ctx, o.binding.ParticipantID, func(snapshot port.AccessSnapshot) error {
+	var grantExpiry, approvalExpiry time.Time
+	err := g.current.WithSnapshot(ctx, g.binding.ParticipantID, func(snapshot port.AccessSnapshot) error {
 		calls++
 		reject := func(err error) error { inspected = err; return err }
 		if calls != 1 || snapshot.Participant == nil || snapshot.Approval == nil {
 			return reject(fail("PROCESS_ADMISSION_UNAVAILABLE", false))
 		}
-		now := o.service.clock.Now()
-		if now.UnixMilli() <= 0 || now.UnixMilli() > 9007199254740991 || !now.Before(o.deadline) {
-			return reject(authority.Fail("AUTHORITY_EXPIRED", "task-grant"))
-		}
-		// A producer must not drift its selected binding or deadline. Extending
-		// this port's value cannot extend the independent captured deadline.
-		if o.current.Binding() != o.binding || !o.current.Deadline().Equal(o.deadline) {
-			return reject(fail("PROCESS_ADMISSION_UNAVAILABLE", false))
+		now := g.clock.Now()
+		if err := g.selected(now); err != nil {
+			return reject(err)
 		}
 		p, a := snapshot.Participant.Clone(), snapshot.Approval.Clone()
-		if !now.Before(p.Grant.ExpiresAt) || !now.Before(a.ExpiresAt) {
+		grantExpiry, approvalExpiry = p.Grant.ExpiresAt, a.ExpiresAt
+		if !now.Before(grantExpiry) || !now.Before(approvalExpiry) {
 			return reject(authority.Fail("AUTHORITY_EXPIRED", "task-grant"))
 		}
-		if p.ParticipantID != o.binding.ParticipantID {
+		if p.ParticipantID != g.binding.ParticipantID {
 			return reject(authority.Fail("AUTHORITY_TASK_MISMATCH", "task-grant"))
 		}
-		s := o.service
-		if o.connector != nil {
-			current, ok := o.current.(ConnectorObservationAuthority)
-			if !ok || current.ConnectorScope() != *o.connector {
-				return reject(fail("PROCESS_ADMISSION_UNAVAILABLE", false))
-			}
-			if p.Grant.ComputerID != o.connector.ComputerID || a.ComputerID != o.connector.ComputerID ||
-				p.Grant.ComputerGeneration != o.connector.ComputerGeneration || a.Generation != o.connector.ComputerGeneration {
+		if g.connector != nil {
+			if p.Grant.ComputerID != g.connector.ComputerID || a.ComputerID != g.connector.ComputerID ||
+				p.Grant.ComputerGeneration != g.connector.ComputerGeneration || a.Generation != g.connector.ComputerGeneration {
 				return reject(authority.Fail("AUTHORITY_COMPUTER_MISMATCH", "computer-policy"))
 			}
 		}
-		s.gate.Lock()
-		wrongAdmission := o.connector == nil && s.invocation != nil && p.Grant.AuthorityID != s.invocation.AdmissionID
-		seal := s.intent.Seal
-		s.gate.Unlock()
-		if wrongAdmission {
-			return reject(authority.Fail("AUTHORITY_TASK_MISMATCH", "task-grant"))
+		if originalAdmission != nil {
+			if err := originalAdmission(p); err != nil {
+				return reject(err)
+			}
 		}
-		action := authority.Action{Identity: o.binding.Identity, Operation: authority.Operation{Kind: authority.Read, WorkspaceID: seal.WorkspaceID, Path: seal.Cwd}}
+		action := authority.Action{Identity: g.binding.Identity, Operation: authority.Operation{Kind: authority.Read, WorkspaceID: seal.WorkspaceID, Path: seal.Cwd}}
 		if err := authority.AuthorizeComputer(p, a, action, now); err != nil {
 			return reject(err)
 		}
@@ -160,9 +196,8 @@ func (o *Observer) withAuthority(ctx context.Context, disclose func() error) err
 		if !ok || workspace.Root != seal.Root || workspace.RootIdentity != seal.RootIdentity {
 			return reject(authority.Fail("AUTHORITY_COMPUTER_MISMATCH", "computer-policy"))
 		}
-		// Read authority may be narrower than the launch's Shell policy. It
-		// must still authorize the original cwd in its original workspace;
-		// neither ShellVerified nor write/command rights are required to read.
+		// READ may be narrower than the original Shell policy, but must still
+		// authorize its original cwd. Shell/write/command rights are not required.
 		if ctx.Err() != nil {
 			return reject(fail("PROCESS_CANCELLED", false))
 		}
@@ -185,5 +220,18 @@ func (o *Observer) withAuthority(ctx context.Context, disclose func() error) err
 	if ctx.Err() != nil {
 		return fail("PROCESS_CANCELLED", false)
 	}
-	return inspected
+	if inspected != nil {
+		return inspected
+	}
+	// A callback may have passed and then returned late. Prepared output must
+	// not escape after expiry or selected-value drift, even if the port returns
+	// nil. Withdrawal/generation changes remain serialized by WithSnapshot.
+	now := g.clock.Now()
+	if err := g.selected(now); err != nil {
+		return err
+	}
+	if !now.Before(grantExpiry) || !now.Before(approvalExpiry) {
+		return authority.Fail("AUTHORITY_EXPIRED", "task-grant")
+	}
+	return nil
 }

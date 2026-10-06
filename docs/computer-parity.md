@@ -42,6 +42,30 @@ tests. HOME/scratch semantics, ordinary linked-worktree Git and descendant clean
 also remain gates. The historical shell table below describes the earlier
 TypeScript route and does not qualify Go shell.
 
+The prepared Go process path now retains complete terminal output, bounded at
+4 MiB, in the existing mutation repository. Its original v4 reservation remains
+unchanged. A v5 terminal manifest references immutable blocks of at most 32 KiB;
+the existing 64 KiB per-record limit is unchanged. Publication returns a digest
+only after complete readback. A lost acknowledgement remains unresolved in the
+original owner and cannot be upgraded through either a live child or a disk read.
+Current READ authority can observe the same retained child after reconnect, or
+read a stored terminal value in a qualified successor lifetime. The latter has
+no child to restore, execution lease to renew, or retirement state to settle.
+Both paths recheck the original physical workspace and current authority; root
+also reconciles the shared operation ledger before disclosing output.
+
+| Process result evidence | Executable boundary | What it establishes |
+| --- | --- | --- |
+| Complete capture, current authority and copied bounded windows | `modules/computer/app/services/process/{terminal,retained}_test.go` | Pure application policy with explicit child, clock, authority and workspace doubles |
+| Chunk layout, exact original binding, immutable result and lost-publication fence | `modules/computer/infra/repos/mutation/processresult{,codec}_test.go` | Controlled repository and codec tests; no native durability claim |
+| Empty, above-64-KiB and 4-MiB persistence; missing-block refusal | `modules/computer/infra/repos/mutation/processresultnative_test.go` | Real disposable Darwin storage and known repository Close/reopen, with synthetic terminal and authority values |
+| Reconnect, late owner/publication fences and no child reconstruction | `boot/connectorprocess{,result,terminal}_test.go` | Actual Go composition with controlled storage, physical observation and child boundaries |
+
+These source and storage results do not establish real process closure, crash or
+power-loss recovery, normal-startup Shell admission, public MCP Shell/Git,
+installed behavior or accepted whole-range cutover. The active Go route still
+withholds those tools while confinement and lifecycle qualification remain open.
+
 Actual external `computer_mutation_read` is now qualified separately from its
 source registration. Dev `67d8af51` observed the original completed edit after a
 normal Quit and source/build change on the same profile, with its original

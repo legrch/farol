@@ -9,7 +9,21 @@ import (
 // Observer publishes only retained reads. Trusted composition selects current
 // authority separately from the unchanged body DTO, using the SAME Contract.
 // It cannot Prepare, Start, Cancel, restore or look up another operation.
-type Observer struct{ observer *processsvc.Observer }
+type processReader interface {
+	Read(context.Context, processsvc.ReadRequest) (*processsvc.ReadResponse, error)
+}
+
+type Observer struct{ observer processReader }
+
+// NewRetainedObservation maps the existing read DTO onto a read-only retained
+// value. Root must already select qualified cold storage and exclude an existing
+// unresolved owner; this adapter cannot prove publication or restore a Child.
+func NewRetainedObservation(observer *processsvc.RetainedObserver) (*Observer, error) {
+	if observer == nil {
+		return nil, failure(&processsvc.Failure{Code: "PROCESS_UNAVAILABLE"})
+	}
+	return &Observer{observer: observer}, nil
+}
 
 func (c *Contract) Observer(current processsvc.ObservationAuthority, workspace processsvc.ObservationWorkspace) (*Observer, error) {
 	if c == nil || c.service == nil {

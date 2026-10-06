@@ -178,21 +178,32 @@ func (s *computerConnector) observeProcess(ctx context.Context, slot *connectorS
 	ledger := s.mutations
 	ledger.mu.Lock()
 	record := ledger.operations[operation]
-	if record == nil || record.process == nil {
+	if record == nil {
 		ledger.mu.Unlock()
-		// Disk intent cannot restore a Child. No cold lookup or inferred absence.
+		return s.observeStoredProcess(ctx, current, operation, request, nativeProcessObservation)
+	}
+	if record.process == nil {
+		ledger.mu.Unlock()
 		return nil, connectorProcessRefusal("PROCESS_HANDLE_MISMATCH")
 	}
 	if record.pending {
 		ledger.mu.Unlock()
 		return nil, connectorProcessUnknown()
 	}
-	contract, workspace := record.process.contract, record.process.workspace
+	if record.process.publishAttempted && record.process.publication == "" {
+		ledger.mu.Unlock()
+		// A live child's complete bytes cannot upgrade a lost publication ACK.
+		return nil, connectorProcessUnknown()
+	}
+	retained := record.process
+	contract, workspace := retained.contract, retained.workspace
 	ledger.mu.Unlock()
 	if contract == nil || workspace == nil {
 		return nil, connectorProcessRefusal("PROCESS_UNAVAILABLE")
 	}
-	observer, err := contract.ConnectorObserver(current, workspace)
+	guarded := &processReadObservation{connectorProcessObservation: current, ledger: ledger,
+		operation: operation, original: record, process: retained}
+	observer, err := contract.ConnectorObserver(guarded, workspace)
 	if err != nil {
 		return nil, err
 	}
