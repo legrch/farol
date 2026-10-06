@@ -35,6 +35,12 @@ func (s *Service) Read(ctx context.Context, request ReadRequest) (*ReadResponse,
 	if s == nil || ctx == nil {
 		return nil, fail("PROCESS_INPUT_INVALID", false)
 	}
+	return s.read(ctx, request, s.withCurrent)
+}
+
+// Both readers retain the SAME child and sticky fences. The guard is selected
+// internally by the service/observer, never supplied in a request body.
+func (s *Service) read(ctx context.Context, request ReadRequest, current func(context.Context, func() error) error) (*ReadResponse, error) {
 	s.gate.Lock()
 	child, handle := s.child, s.handle
 	s.gate.Unlock()
@@ -50,7 +56,7 @@ func (s *Service) Read(ctx context.Context, request ReadRequest) (*ReadResponse,
 	if request.StdoutOffset > MaximumOutput || request.StderrOffset > MaximumOutput {
 		return nil, fail("PROCESS_INPUT_INVALID", false)
 	}
-	if err := s.current(ctx); err != nil {
+	if err := current(ctx, nil); err != nil {
 		return nil, err
 	}
 	window := Window{request.StdoutOffset, request.StderrOffset}
@@ -86,7 +92,7 @@ func (s *Service) Read(ctx context.Context, request ReadRequest) (*ReadResponse,
 	var response *ReadResponse
 	// Final response construction observes sticky state while under the current
 	// authority gates. No native IO or authority-owner mutation occurs here.
-	err = s.withCurrent(ctx, func() error {
+	err = current(ctx, func() error {
 		s.gate.Lock()
 		state := Running
 		if s.uncertain {

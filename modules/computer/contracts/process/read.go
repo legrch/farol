@@ -28,6 +28,10 @@ func (c *Contract) Read(ctx context.Context, request ReadRequest) (*ReadResponse
 		return nil, failure(&processsvc.Failure{Code: "PROCESS_UNAVAILABLE"})
 	}
 	out, err := c.service.Read(ctx, processsvc.ReadRequest{Handle: request.Handle, StdoutOffset: request.StdoutOffset, StderrOffset: request.StderrOffset})
+	return readResponse(out, err)
+}
+
+func readResponse(out *processsvc.ReadResponse, err error) (*ReadResponse, error) {
 	if err != nil {
 		return nil, failure(err)
 	}
