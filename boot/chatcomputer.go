@@ -58,6 +58,9 @@ func (s *ComputerIngress) bindConversationIntent(ctx context.Context, operation 
 	}
 	s.effects.Lock()
 	defer s.effects.Unlock()
+	if s.retiring {
+		return nil, computerUnavailable()
+	}
 	if err := currentConversation(ctx, current, binding); err != nil {
 		return nil, err
 	}

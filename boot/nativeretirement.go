@@ -136,6 +136,12 @@ func (r *NativeRuntime) retirementMethods() map[string]desktop.Method {
 				return retirementOutcome("", nil, handoff.Refused)
 			}
 			state.attempted = true
+			// Join all original publication/admission IO, then permanently close
+			// that existing owner before any retirement snapshot. Later negative
+			// withdrawal for the Settings pump remains possible, never publication.
+			if err := r.ingress.freezeForRetirement(ctx); err != nil {
+				return retirementOutcome("", nil, err)
+			}
 			// Close the reader before any retirement IO. This releases its gate
 			// before Capture takes the handoff gate; no reverse lock ordering.
 			r.historyAuthority.close()
@@ -149,9 +155,6 @@ func (r *NativeRuntime) retirementMethods() map[string]desktop.Method {
 				return retirementOutcome("", nil, err)
 			}
 			if err := r.chat.FreezeAdmissions(ctx); err != nil {
-				return retirementOutcome("", nil, err)
-			}
-			if _, err := r.ingress.guard.deactivate(); err != nil {
 				return retirementOutcome("", nil, err)
 			}
 			origin, err := r.chat.Retire(ctx)

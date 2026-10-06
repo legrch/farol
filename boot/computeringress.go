@@ -30,6 +30,7 @@ import (
 // ordinary list/read intents; it performs no browser/provider dispatch.
 type ComputerIngress struct {
 	effects             sync.Mutex // serializes publication/admission IO, never current guards
+	retiring            bool       // effects-owned; permanent publication/admission closure
 	mu                  sync.Mutex
 	guard               activationFence
 	store               computerIngressStore
@@ -120,7 +121,7 @@ func (s *ComputerIngress) Deactivate(ctx context.Context, operation string) (*wi
 func (s *ComputerIngress) Publish(ctx context.Context, operation string, in wire.ComputerAuthorityPublishRequest) (*wire.ComputerAuthorityPublication, error) {
 	s.effects.Lock()
 	defer s.effects.Unlock()
-	if ctx == nil || ctx.Err() != nil || validateIngress("ComputerAuthorityPublishRequest", in) != nil {
+	if s.retiring || ctx == nil || ctx.Err() != nil || validateIngress("ComputerAuthorityPublishRequest", in) != nil {
 		return nil, computerUnavailable()
 	}
 	approval, e := parseDesktopApproval(in.Approval, s.ownerID, s.computerID)
@@ -185,7 +186,7 @@ func (s *ComputerIngress) Publish(ctx context.Context, operation string, in wire
 func (s *ComputerIngress) Admit(ctx context.Context, operation string, in wire.ChatComputerAdmissionRequest) (*wire.ChatComputerAdmissionResponse, error) {
 	s.effects.Lock()
 	defer s.effects.Unlock()
-	if ctx == nil || ctx.Err() != nil || validateIngress("ChatComputerAdmissionRequest", in) != nil || !validIngressID(in.SessionId) || !validIngressID(in.TaskId) || !validIngressID(in.TurnId) {
+	if s.retiring || ctx == nil || ctx.Err() != nil || validateIngress("ChatComputerAdmissionRequest", in) != nil || !validIngressID(in.SessionId) || !validIngressID(in.TaskId) || !validIngressID(in.TurnId) {
 		return nil, computerUnavailable()
 	}
 	s.mu.Lock()
