@@ -28,8 +28,13 @@ var _ connectorProcessRepository = (*mutationrepo.Repository)(nil)
 type connectorProcessSelection func(context.Context, *execution.Lease) (processsvc.Prepared, processsvc.ObservationWorkspace, error)
 
 type connectorProcessOperation struct {
-	contract  *processct.Contract
-	workspace processsvc.ObservationWorkspace
+	contract         *processct.Contract
+	service          *processsvc.Service
+	workspace        processsvc.ObservationWorkspace
+	capturing        bool
+	publishAttempted bool
+	result           *processsvc.TerminalResult
+	publication      string
 }
 
 func connectorProcessRefusal(code string) error {
@@ -117,7 +122,7 @@ func (s *computerConnector) startProcess(ctx context.Context, slot *connectorSlo
 	seal := prepared.Seal()
 	ledger.mu.Lock()
 	record.workspace, record.path = seal.WorkspaceID, seal.Cwd
-	record.process.contract, record.process.workspace = contract, workspace
+	record.process.contract, record.process.service, record.process.workspace = contract, service, workspace
 	// A concurrent retirement that saw pending has already permanently refused.
 	// A freeze already visible after selection also prevents entering Start.
 	frozen := ledger.frozen
