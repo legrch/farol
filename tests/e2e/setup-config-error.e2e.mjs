@@ -8,6 +8,12 @@ import os from "node:os";
 import path from "node:path";
 import { _electron as electron } from "playwright-core";
 import { assertOwnerPreviewIdle } from "./native-preview-admission.mjs";
+import {
+  waitForReactShell,
+  openSetup,
+  setupStep,
+  assertSetupFinish,
+} from "./current-react-setup.mjs";
 
 const packaged = process.argv.includes("--packaged");
 const devOnly = process.argv.includes("--dev-only");
@@ -128,9 +134,7 @@ for (const environment of packaged
         "SETUP_CONFIG_FAULT_PROFILE_NOT_OWNED",
       );
       const window = await application.firstWindow({ timeout: 15000 });
-      await window.waitForFunction(
-        () => document.documentElement.dataset.ready === "true",
-      );
+      await waitForReactShell(window);
       const bootstrap = await window.evaluate(() =>
         window.farolNext.bootstrap(),
       );
@@ -138,45 +142,101 @@ for (const environment of packaged
         status: "error",
         error: expected,
       });
+      // The current renderer starts on Home. The fault code is retained at
+      // the boundary; React exposes unavailable evidence and observation UI.
+      await window
+        .getByRole("heading", {
+          name: "Current state needs review",
+          exact: true,
+        })
+        .waitFor();
+      await window
+        .getByRole("navigation", { name: "Home views", exact: true })
+        .getByRole("button", { name: /^Needs attention\b/u })
+        .click();
+      await window
+        .getByText("Setup evidence is unavailable", { exact: true })
+        .waitFor();
+      await window
+        .getByText(
+          "State is stale. Observe current state before changing access.",
+          { exact: false },
+        )
+        .waitFor();
+      await openSetup(window);
+      await window
+        .locator('.setup-page[data-setup-step="connection"]')
+        .waitFor();
+      const unavailable = window.locator(".setup-page .settings-page");
+      await unavailable
+        .getByText(
+          "Settings are unavailable. Refresh the current state before making changes.",
+          { exact: true },
+        )
+        .waitFor();
+      // With no valid settings React mounts no editable forms or mutation
+      // controls. Navigation and Refresh remain available for inspection.
       assert.equal(
-        await window.locator("#setup-dialog").isVisible(),
-        false,
-        "LEGACY_MODAL_OPEN_ON_CONFIGURATION_ERROR",
+        await unavailable.locator("input, select, textarea, form").count(),
+        0,
       );
-      assert.equal(
-        await window.locator('[data-panel="computer"].active').isVisible(),
-        true,
+      assert.deepEqual(
+        await unavailable.getByRole("button").allTextContents(),
+        ["Refresh status"],
       );
-      assert.equal(
-        await window.locator("#guided-onboarding").isVisible(),
-        true,
+      // Refresh requests a read observation. The unavailable UI must remain
+      // closed to edits, and neither observation nor navigation may reset bytes.
+      await unavailable
+        .getByRole("button", { name: "Refresh status", exact: true })
+        .click();
+      await unavailable
+        .getByText(
+          "Settings are unavailable. Refresh the current state before making changes.",
+          { exact: true },
+        )
+        .waitFor();
+      assert.deepEqual(
+        (await window.evaluate(() => window.farolNext.bootstrap()))
+          .configuration,
+        { status: "error", error: expected },
+        "REFRESH_RESET_CONFIGURATION_FAULT",
       );
-      assert.match(
-        await window.locator("#onboarding-feedback").innerText(),
-        new RegExp(expected),
-      );
-      assert.equal(
-        await window.locator("#onboarding-primary").isDisabled(),
-        true,
-      );
-      for (const selector of [
-        "#onboarding-open-chatgpt",
-        "#onboarding-open-account",
+      for (const [step, label] of [
+        ["folders", "Folders & access"],
+        ["attachment", "Add to ChatGPT"],
       ]) {
+        await setupStep(window, step, label);
         assert.equal(
-          await window.locator(selector).isDisabled(),
-          true,
-          `CONFIGURATION_ACTION_STILL_ENABLED:${selector}`,
+          await unavailable.locator("input, select, textarea, form").count(),
+          0,
+        );
+        assert.deepEqual(
+          await unavailable.getByRole("button").allTextContents(),
+          ["Refresh status"],
         );
       }
-      const helpDisabled = await window
-        .locator("[data-onboarding-help]")
-        .evaluateAll((buttons) => buttons.map((button) => button.disabled));
-      assert.ok(helpDisabled.length > 0);
-      assert.ok(
-        helpDisabled.every(Boolean),
-        "CONFIGURATION_HELP_ACTION_STILL_ENABLED",
-      );
+      await assertSetupFinish(window, false);
+      await window
+        .getByRole("region", { name: "Computer setup status", exact: true })
+        .getByRole("button", { name: "Continue setup", exact: true })
+        .click();
+      await window
+        .locator('.setup-page[data-setup-step="connection"]')
+        .waitFor();
+      await unavailable
+        .getByRole("button", { name: "Refresh status", exact: true })
+        .waitFor();
+      assert.equal(await window.locator("dialog[open]").count(), 0);
+      await window
+        .getByRole("navigation", { name: "Sections", exact: true })
+        .getByRole("button", { name: "ChatGPT", exact: true })
+        .click();
+      for (const name of ["Open ChatGPT", "Sign in"]) {
+        assert.equal(
+          await window.getByRole("button", { name, exact: true }).isDisabled(),
+          true,
+        );
+      }
       assert.equal(
         await fs.readFile(file, "utf8"),
         bytes,
@@ -186,8 +246,10 @@ for (const environment of packaged
         environment,
         fault,
         code: expected,
-        sidebarSetup: true,
-        legacyModal: false,
+        currentReactSetup: true,
+        recoveryObservationAvailable: true,
+        editableConfiguration: false,
+        ready: false,
         configurationPreserved: true,
       });
     } finally {

@@ -1,9 +1,9 @@
 // Owned hidden Electron windows and disposable state only. This proves Setup
-// selection and IPC/UI integration, never a live account or NEW connector.
+// selection and IPC/UI integration, never external ChatGPT or live attachment.
 import assert from "node:assert/strict";
 import { Client } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs/promises";
@@ -17,6 +17,15 @@ import {
 } from "./native-preview-admission.mjs";
 
 import { waitForOwnedSecondary } from "./owned-background-secondary.mjs";
+import {
+  waitForReactShell,
+  openSetup,
+  setupStep,
+  readSetupSettings,
+  setupAction,
+  assertSetupFinish,
+  reviewSetupWithoutChanges,
+} from "./current-react-setup.mjs";
 
 const packaged = process.argv.includes("--packaged");
 const devOnly = process.argv.includes("--dev-only");
@@ -54,27 +63,72 @@ const workspace = path.join(temporaryRoot, "approved-folder");
 await fs.mkdir(workspace, { mode: 0o700 });
 const observations = [];
 let nonReadRequests = 0;
-let fixtureMode = "receipt";
+let fixtureVerifications = 0;
 let activeFixtureProfile;
 let activeFixtureLaunch;
 const backgroundChildren = [];
 const mcpChildren = [];
-const fixtureApp = "NEW fixture";
 const tunnelFixture = path.join(temporaryRoot, "tunnel-client.cjs");
 await fs.writeFile(
   tunnelFixture,
   `#!${process.execPath}\n${await fs.readFile(new URL("./tunnel-client.fixture.cjs", import.meta.url), "utf8")}`,
   { mode: 0o700 },
 );
-async function fixtureVerification(prompt) {
-  const challenge = /with challenge "([^"]+)" and workspaceId "([^"]+)"/.exec(
-    prompt,
-  );
-  assert.ok(challenge, "FIXTURE_VERIFICATION_PROMPT_INVALID");
+async function fixtureVerification(challenge, settings) {
+  assert.match(challenge.value, /^[a-z0-9][a-z0-9-]*$/u);
+  assert.ok(challenge.workspaceId);
+  fixtureVerifications += 1;
   assert.ok(activeFixtureProfile, "FIXTURE_PROFILE_UNCONFIRMED");
-  const launchFile = path.join(
+  // The active Go launch lives beside its owned socket, not at the removed
+  // legacy computer-launch.json path. Read exactly the command our disposable
+  // tunnel-client init recorded; never scan host sockets or evaluate shell text.
+  const connectorRoot = path.join(
     activeFixtureProfile.userData,
-    "farol-next-state/secure-mcp-connector/computer-authority/computer-launch.json",
+    "farol-next-state/secure-mcp-connector",
+  );
+  const initArguments = JSON.parse(
+    await fs.readFile(
+      path.join(connectorRoot, "state/farol-e2e-tunnel-init.json"),
+      "utf8",
+    ),
+  );
+  assert.ok(
+    Array.isArray(initArguments) &&
+      initArguments.every((value) => typeof value === "string"),
+  );
+  assert.equal(
+    initArguments.filter((value) => value === "--mcp-command").length,
+    1,
+  );
+  const command = initArguments[initArguments.indexOf("--mcp-command") + 1];
+  const selected =
+    /'--launch-contract' '(\/private\/tmp\/farol-mcp-[A-Za-z0-9-]+\/computer-go-launch\.json)'$/u.exec(
+      command,
+    );
+  assert.ok(selected, "FIXTURE_GO_LAUNCH_NOT_SELECTED");
+  const launchFile = await fs.realpath(selected[1]);
+  assert.equal(launchFile, selected[1]);
+  const launch = JSON.parse(await fs.readFile(launchFile, "utf8"));
+  assert.equal(launch.schema, "farol-go-connector/1");
+  assert.equal(
+    launch.lifecycleRoot,
+    await fs.realpath(path.join(connectorRoot, "computer-authority")),
+  );
+  assert.equal(
+    launch.opened.endpoint.socketPath,
+    path.join(path.dirname(launchFile), "computer.sock"),
+  );
+  assert.equal(
+    launch.challengeSha256,
+    createHash("sha256").update(challenge.value).digest("hex"),
+  );
+  assert.equal(
+    launch.opened.endpoint.binding.buildId,
+    settings.connectors.secureMcp.runtime.buildId,
+  );
+  assert.equal(
+    launch.opened.endpoint.binding.connectorGeneration,
+    String(settings.connectors.secureMcp.generation),
   );
   const transport = new StdioClientTransport({
     command: executable,
@@ -93,7 +147,7 @@ async function fixtureVerification(prompt) {
     stderr: "pipe",
   });
   const client = new Client({
-    name: "owned-embedded-setup-fixture",
+    name: "owned-external-setup-fixture",
     version: "1.0.0",
   });
   const start = transport.start.bind(transport);
@@ -113,13 +167,30 @@ async function fixtureVerification(prompt) {
     const result = await bounded(
       client.callTool({
         name: "farol_next_connector_verify",
-        arguments: { challenge: challenge[1], workspaceId: challenge[2] },
+        arguments: {
+          challenge: challenge.value,
+          workspaceId: challenge.workspaceId,
+        },
       }),
       "FIXTURE_MCP_VERIFY_TIMEOUT",
     );
-    assert.equal(result.isError, undefined, JSON.stringify(result));
-    assert.equal(result.structuredContent?.workspaceId, challenge[2]);
-    return "Owned fixture receipt recorded";
+    assert.equal(result.isError ?? false, false, JSON.stringify(result));
+    const verified = result.structuredContent;
+    assert.equal(verified?.status, "ok", JSON.stringify(result));
+    assert.equal(verified.data.receipt.workspaceId, challenge.workspaceId);
+    assert.equal(verified.data.receipt.challengeSha256, launch.challengeSha256);
+    assert.deepEqual(verified.data.binding, launch.opened.endpoint.binding);
+    assert.deepEqual(verified.data.receipt.execution, launch.opened.execution);
+    assert.equal(
+      verified.data.receiptSha256,
+      createHash("sha256")
+        .update(JSON.stringify(verified.data.receipt))
+        .digest("hex"),
+    );
+    observations.push({
+      kind: "owned-mcp-fixture-verification",
+      fixtureVerifications,
+    });
   } finally {
     const failures = [];
     try {
@@ -158,57 +229,17 @@ async function fixtureVerification(prompt) {
       throw new AggregateError(failures, "FIXTURE_MCP_CLEANUP_FAILED");
   }
 }
-const chatFixture = createServer(async (request, response) => {
-  if (
-    behavior &&
-    request.method === "POST" &&
-    request.url === "/fixture-send"
-  ) {
+// The browser document remains local and read-only. External attachment is
+// simulated only by the owned MCP peer, never by a reply or production seam.
+const chatFixture = createServer((request, response) => {
+  if (request.method !== "GET") {
     nonReadRequests += 1;
-    try {
-      let body = "";
-      for await (const chunk of request) {
-        body += chunk;
-        assert.ok(body.length < 8192);
-      }
-      const result =
-        fixtureMode === "receipt"
-          ? await fixtureVerification(JSON.parse(body).prompt)
-          : "Owned fixture reply without a receipt";
-      response.writeHead(200, { "content-type": "application/json" });
-      response.end(JSON.stringify({ result }));
-    } catch (error) {
-      response.writeHead(500);
-      response.end(JSON.stringify({ error: String(error) }));
-    }
+    response.writeHead(405).end();
     return;
   }
-
-  if (request.method !== "GET") nonReadRequests += 1;
   response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-  if (behavior) {
-    response.end(`<!doctype html><html><head><title>Owned Setup fixture</title></head><body style="margin:24px;font:18px sans-serif">
-      <h1>Owned Setup fixture</h1>
-      <button aria-label="Close sidebar" onclick="document.body.dataset.sidebarClicks=String(Number(document.body.dataset.sidebarClicks||0)+1);this.setAttribute('aria-label',this.getAttribute('aria-label')==='Close sidebar'?'Open sidebar':'Close sidebar')">Toggle fixture sidebar</button>
-      <button aria-label="Turn off temporary chat">Temporary fixture</button><button>Personalized</button><button id="fixture-model-control" aria-label="Select ChatGPT model" onclick="setTimeout(() => { document.querySelector('#fixture-instant-effort').hidden=false; }, 250)">Pro</button><input id="fixture-instant-effort" hidden type="range" min="0" max="5" value="4" aria-label="Fixture Instant effort" oninput="document.querySelector('#fixture-model-control').innerText=this.value==='0'?'Instant':'Pro'" />
-      <div id="messages"></div><form onsubmit="return false"><span data-testid="composer-app-chip">${fixtureApp}</span><textarea id="prompt-textarea" aria-label="Fixture composer"></textarea><button type="button" data-testid="send-button" onclick="sendFixture()">Send to owned fixture</button></form>
-      <script>
-      async function sendFixture() {
-        const composer = document.querySelector('#prompt-textarea');
-        const prompt = composer.value;
-        const user = document.createElement('div');
-        user.dataset.messageAuthorRole='user'; user.dataset.messageId='fixture-user-'+Date.now(); user.textContent=prompt;
-        document.querySelector('#messages').append(user); composer.value='';
-        const stop=document.createElement('button');stop.dataset.testid='stop-button';stop.textContent='Fixture pending';document.body.append(stop);
-        const response=await fetch('/fixture-send',{method:'POST',body:JSON.stringify({prompt})});
-        const reply=await response.json();stop.remove();
-        const assistant=document.createElement('div');assistant.dataset.messageAuthorRole='assistant';assistant.dataset.messageId='fixture-assistant-'+Date.now();assistant.dataset.parentMessageId=user.dataset.messageId;assistant.textContent=reply.result||reply.error;document.querySelector('#messages').append(assistant);
-      }
-      </script></body></html>`);
-    return;
-  }
   response.end(
-    `<!doctype html><html><head><title>Local Browser fixture</title></head><body style="margin:24px;font:18px sans-serif"><h1>Local Browser fixture</h1><button aria-label="Close sidebar" onclick="document.body.dataset.sidebarClicks=String(Number(document.body.dataset.sidebarClicks||0)+1);this.setAttribute('aria-label',this.getAttribute('aria-label')==='Close sidebar'?'Open sidebar':'Close sidebar')">Toggle fixture sidebar</button><textarea id="prompt-textarea" aria-label="Fixture composer"></textarea></body></html>`,
+    '<!doctype html><html><head><title>Local Browser fixture</title></head><body><h1>Local Browser fixture</h1><textarea id="prompt-textarea" aria-label="Fixture composer"></textarea></body></html>',
   );
 });
 await bounded(
@@ -296,25 +327,68 @@ async function closeOwned() {
   assert.equal(child.exitCode, 0);
 }
 
-async function assertReturningChat(window, openSetup = true) {
-  await window.waitForFunction(
-    () => document.documentElement.dataset.section === "browser",
+async function waitForResumeStage(expected) {
+  const file = path.join(
+    activeFixtureProfile.home,
+    ".farol-next-connector-resume-stage",
   );
-  assert.equal(await window.locator("#onboarding-nav").isVisible(), false);
-  const state = await window.evaluate(() => window.farolNext.bootstrap());
-  assert.equal(state.configuration.settings.general.openAtLaunch, "browser");
-  assert.ok(
-    state.configuration.settings.connectors.secureMcp.lastVerifiedAttachment,
-  );
-  observations.push({
-    kind: "saved-setup-opens-chatgpt-after-restart",
-    section: "browser",
-    sends: nonReadRequests,
-  });
-  if (openSetup) {
-    await window.locator('.nav-item[data-section="computer"]').click();
-    await window.locator("#onboarding-nav").waitFor({ state: "visible" });
+  const deadline = Date.now() + 15000;
+  for (;;) {
+    const stage = (
+      await fs.readFile(file, "utf8").catch((error) => {
+        if (error.code === "ENOENT") return "";
+        throw error;
+      })
+    ).trim();
+    if (stage) {
+      assert.equal(stage, expected, "CONNECTOR_RESUME_STAGE_UNEXPECTED");
+      return;
+    }
+    if (Date.now() >= deadline)
+      throw new Error("CONNECTOR_RESUME_STAGE_TIMEOUT");
+    await new Promise((resolve) => setTimeout(resolve, 50));
   }
+}
+
+async function verifyDisplayedAttachment(window) {
+  await setupStep(window, "attachment", "Add to ChatGPT");
+  const card = window.locator(
+    '.setup-page [data-connector-challenge="pending"]',
+  );
+  await card.waitFor({ state: "visible" });
+  const displayed = await card.evaluate((node) =>
+    Object.fromEntries(
+      [...node.querySelectorAll("dl > div")].map((row) => [
+        row.querySelector("dt").textContent,
+        row.querySelector("dd code").textContent,
+      ]),
+    ),
+  );
+  const before = await readSetupSettings(window);
+  assert.equal(before.connectors.secureMcp.attachment, null);
+  assert.equal(before.setup.connect.verified, null);
+  assert.equal(
+    displayed.challenge,
+    before.connectors.secureMcp.challenge.value,
+  );
+  assert.equal(
+    displayed.workspaceId,
+    before.setup.computer.verified.workspaceId,
+  );
+  await fixtureVerification(
+    { value: displayed.challenge, workspaceId: displayed.workspaceId },
+    before,
+  );
+  // A local peer's receipt is not the app's verdict or external ChatGPT proof.
+  assert.equal(
+    (await readSetupSettings(window)).connectors.secureMcp.attachment,
+    null,
+  );
+  await setupAction(window, "Check attachment");
+  await window
+    .locator('.setup-page [role="status"]')
+    .filter({ hasText: "Attachment checked · Computer ready" })
+    .waitFor();
 }
 
 async function launch(environment, mode = "normal", profile = mode) {
@@ -366,7 +440,6 @@ async function launch(environment, mode = "normal", profile = mode) {
     args: [
       ...(normalPackagedProfile ? [] : [entry, `--user-data-dir=${userData}`]),
       "--preview-window-mode=hidden",
-      ...(mode === "demo" ? ["--demo"] : []),
     ],
     env: {
       HOME: home,
@@ -381,7 +454,6 @@ async function launch(environment, mode = "normal", profile = mode) {
       FAROL_NEXT_E2E_WORKSPACE_ROOT: workspace,
       FAROL_NEXT_E2E_CHATGPT_URL: fixtureUrl,
       ...(behavior ? { FAROL_NEXT_E2E_TUNNEL_CLIENT: tunnelFixture } : {}),
-      ...(mode === "legacy" ? { FAROL_NEXT_E2E_LEGACY_SETUP: "1" } : {}),
     },
     timeout: 15000,
   };
@@ -446,9 +518,7 @@ async function launch(environment, mode = "normal", profile = mode) {
     "GUIDED_SETUP_WINDOW_TIMEOUT",
     30000,
   );
-  await window
-    .locator("#sidebar")
-    .waitFor({ state: "visible", timeout: 15000 });
+  await bounded(waitForReactShell(window), "GUIDED_SETUP_REACT_SHELL_TIMEOUT");
   const child = application.process();
   const startupDeadline = Date.now() + 30000;
   for (;;) {
@@ -481,7 +551,7 @@ async function launch(environment, mode = "normal", profile = mode) {
   });
   const bootstrap = await window.evaluate(() => window.farolNext.bootstrap());
   assert.equal(bootstrap.environment, environment);
-  assert.equal(bootstrap.legacySetupTestMode, mode === "legacy");
+  assert.equal(bootstrap.legacySetupTestMode, false);
   if (freshProfile && mode === "normal")
     assert.equal(
       bootstrap.configuration.settings.computer.workspaces.length,
@@ -505,126 +575,6 @@ async function launch(environment, mode = "normal", profile = mode) {
     windows,
   });
   return window;
-}
-
-async function browserGeometry(window, environment, width) {
-  await application.evaluate(({ BrowserWindow }, width) => {
-    BrowserWindow.getAllWindows()
-      .find(
-        (window) =>
-          window.webContents.getURL().startsWith("file:") &&
-          window.webContents.getURL().endsWith("/shell.html"),
-      )
-      .setContentSize(width, 760);
-  }, width);
-  await window.waitForFunction((width) => innerWidth === width, width);
-  await window.locator("#browser-status-bar").waitFor({ state: "visible" });
-  await window.locator("#task-dossier").waitFor({ state: "hidden" });
-  await window.waitForFunction(
-    () => document.documentElement.dataset.compactBrowser === "true",
-  );
-  const chrome = await window.evaluate(() => {
-    const rect = (selector) => {
-      const box = document.querySelector(selector).getBoundingClientRect();
-      return {
-        x: box.x,
-        y: box.y,
-        width: box.width,
-        height: box.height,
-        right: box.right,
-      };
-    };
-    const firstTab = document.querySelector("#task-tabs .task-tab");
-    const box = firstTab.getBoundingClientRect();
-    const menu = document.querySelector("#browser-task-menu");
-    const menuBox = menu.getBoundingClientRect();
-    return {
-      tabs: rect(".task-bar"),
-      footer: rect("#browser-status-bar"),
-      surface: rect(".surface"),
-      sidebar: rect("#sidebar"),
-      toggle: rect("#sidebar-toggle"),
-      firstTab: rect("#task-tabs .task-tab"),
-      firstTabHittable: firstTab.contains(
-        document.elementFromPoint(box.x + 10, box.y + 20),
-      ),
-      menuHittable: menu.contains(
-        document.elementFromPoint(menuBox.x + 16, menuBox.y + 16),
-      ),
-    };
-  });
-  const native = await application.evaluate(
-    ({ BrowserWindow, WebContentsView }, fixtureUrl) => {
-      const owned = BrowserWindow.getAllWindows().find(
-        (window) =>
-          window.webContents.getURL().startsWith("file:") &&
-          window.webContents.getURL().endsWith("/shell.html"),
-      );
-      const page = owned.contentView.children.find(
-        (child) =>
-          child instanceof WebContentsView &&
-          child.getVisible() &&
-          child.webContents.getURL().startsWith(fixtureUrl),
-      );
-      return {
-        visible: Boolean(page),
-        bounds: page?.getBounds() ?? null,
-        focused: owned.isFocused(),
-        windowVisible: owned.isVisible(),
-      };
-    },
-    fixtureUrl,
-  );
-  observations.push({
-    kind: "compact-browser-measurement",
-    environment,
-    width,
-    chrome,
-    native,
-  });
-  assert.equal(chrome.tabs.y, 0);
-  assert.equal(chrome.tabs.height, 52);
-  assert.equal(chrome.footer.y, 735);
-  assert.equal(chrome.footer.height, 25);
-  assert.equal(chrome.footer.x, chrome.sidebar.width);
-  assert.equal(chrome.surface.y, 52);
-  assert.equal(chrome.surface.height, 683);
-  assert.ok(chrome.firstTab.x >= chrome.toggle.right);
-  assert.equal(chrome.firstTabHittable, true);
-  assert.equal(chrome.menuHittable, false);
-  for (const selector of [
-    "#browser-task-menu",
-    "#browser-sidebar-toggle",
-    "#new-task",
-    "#task-menu-button",
-  ]) {
-    assert.equal(await window.locator(selector).isVisible(), false);
-  }
-  assert.equal(await window.locator(".task-tab-close").count(), 0);
-  assert.equal(native.visible, true);
-  assert.equal(native.focused, false);
-  assert.equal(native.windowVisible, false);
-  assert.deepEqual(native.bounds, {
-    x: width < 980 ? 72 : 216,
-    y: 52,
-    width: width - (width < 980 ? 72 : 216),
-    height: 683,
-  });
-  observations.push({
-    kind: "compact-browser",
-    environment,
-    width,
-    chrome,
-    native,
-  });
-  const output = path.join(root, "_output/evidence/guided-setup-selection");
-  await fs.mkdir(output, { recursive: true, mode: 0o700 });
-  await window.screenshot({
-    path: path.join(
-      output,
-      `${packaged ? "package" : "development"}-${environment}-browser-${width}.png`,
-    ),
-  });
 }
 
 async function checkBackgroundSecondary() {
@@ -712,901 +662,254 @@ try {
       : devOnly
         ? ["dev"]
         : ["preview", "dev"]) {
-    const window = await launch(environment, "normal", environment);
+    let window = await launch(environment, "normal", environment);
     if (packaged && behavior) await checkBackgroundSecondary();
-    await window.locator("#onboarding-nav").waitFor({ state: "visible" });
-    await window.locator("#setup-dialog").waitFor({ state: "hidden" });
-    await window.locator("#guided-onboarding").waitFor({ state: "visible" });
-    await window.locator('[data-onboarding-step="folder"]').click();
-    await window.locator("#onboarding-add-folder").click();
-    await window.waitForFunction(
-      () =>
-        document
-          .querySelector("#onboarding-folder-list")
-          ?.textContent?.includes("approved-folder"),
-      undefined,
-      { timeout: 15000 },
-    );
-    // Selection is saved before its access check settles. Do not send the
-    // next navigation click while Guided Setup is still deliberately busy.
-    await window.waitForFunction(
-      () => !document.querySelector("#onboarding-add-folder")?.disabled,
-      undefined,
-      { timeout: 15000 },
-    );
-    const saved = await window.evaluate(() => window.farolNext.bootstrap());
-    assert.equal(saved.configuration.settings.computer.workspaces.length, 1);
-    assert.equal(
-      saved.configuration.settings.computer.workspaces[0].root,
-      await fs.realpath(workspace),
-    );
-    assert.equal(
-      saved.configuration.settings.computer.workspaces[0].access,
-      "read",
-    );
-    assert.equal(saved.configuration.settings.setup.chatgpt.verified, null);
-    const inode =
-      saved.configuration.settings.computer.workspaces[0].rootIdentity;
-    // These are real UI/configuration transitions in the existing owned,
-    // hidden fixture. No owner profile, live connector or browser Send.
-    await window
-      .locator("#onboarding-folder-confirmation")
-      .waitFor({ state: "visible" });
-    await window.locator("#onboarding-cancel-folder").click();
-    assert.equal(
-      (await window.evaluate(() => window.farolNext.bootstrap())).configuration
-        .settings.computer.workspaces[0].access,
-      "read",
-    );
-    await window
-      .locator('.nav-utility .nav-item[data-section="settings"]')
-      .click();
-    await window
-      .locator('#settings-nav [data-settings-category="preferences"]')
-      .click();
-    await window
-      .locator("#computer-workspaces")
-      .getByRole("button", { name: "Enable edits", exact: true })
-      .click();
-    await window
-      .locator("#onboarding-folder-confirmation")
-      .waitFor({ state: "visible" });
-    assert.equal(
-      (await window.evaluate(() => window.farolNext.bootstrap())).configuration
-        .settings.computer.workspaces[0].access,
-      "read",
-    );
-    await window.locator("#onboarding-confirm-folder").click();
-    await window
-      .locator('#onboarding-form[aria-busy="false"]')
-      .waitFor({ state: "attached" });
-    let accessState = await window.evaluate(() => window.farolNext.bootstrap());
-    assert.equal(
-      accessState.configuration.settings.computer.workspaces[0].access,
-      "write",
-    );
-    assert.notEqual(
-      accessState.configuration.settings.computer.commands,
-      "workspace",
-    );
-    assert.notEqual(
-      accessState.configuration.settings.computer.workspaces[0]
-        .gitHistoryApproved,
-      true,
-    );
-    assert.equal(
-      accessState.configuration.settings.connectors.secureMcp.runtime,
-      null,
-    );
-    // Read-only remains actionable even for an incomplete local-work grant.
-    await window
-      .locator("#onboarding-folder-list")
-      .getByRole("button", { name: "Use read-only…", exact: true })
-      .click();
-    await window.locator("#onboarding-confirm-folder").click();
-    await window
-      .locator('#onboarding-form[aria-busy="false"]')
-      .waitFor({ state: "attached" });
-    accessState = await window.evaluate(() => window.farolNext.bootstrap());
-    assert.equal(
-      accessState.configuration.settings.computer.workspaces[0].access,
-      "read",
-    );
-    assert.notEqual(
-      accessState.configuration.settings.computer.workspaces[0]
-        .gitHistoryApproved,
-      true,
-    );
-    observations.push({
-      kind: "settings-edits-explicit-consent-and-independent-downgrade",
-      environment,
-      liveSends: 0,
-    });
-    if (environment === "preview") {
-      await window.locator('[data-onboarding-step="app"]').click();
-      assert.match(
-        await window.locator("#onboarding-copy").innerText(),
-        /sends one short message/,
-      );
-      assert.equal(
-        await window.locator("#onboarding-verify-again").isVisible(),
-        false,
-      );
-      await window
-        .locator("#onboarding-verification-method")
-        .selectOption("external");
-      assert.match(
-        await window.locator("#onboarding-copy").innerText(),
-        /does not send a message/,
-      );
-      await window
-        .locator("#onboarding-verification-method")
-        .selectOption("embedded");
-    }
-    {
-      await window
-        .locator('.nav-utility .nav-item[data-section="settings"]')
-        .click();
-      await window.locator('[data-panel="settings"].active').waitFor();
-      await window
-        .locator("#computer-command-policy")
-        .waitFor({ state: "visible" });
-      await window
-        .locator('#settings-nav [data-settings-category="diagnostics"]')
-        .click();
-      const connection = window.locator("#connection-diagnostics");
-      if (!(await connection.evaluate((details) => details.open)))
-        await connection.locator("summary").click();
-    }
-    await window.locator("#review-setup").click();
-    await window.locator("#onboarding-return").click();
-    await window.locator('[data-panel="browser"].active').waitFor();
-    // The application menu must reach Settings in both normal environments;
-    // the disposable, non-installed profile cannot check the live update channel.
-    await application.evaluate(({ Menu }) => {
-      const item = Menu.getApplicationMenu()?.getMenuItemById("app.updates");
-      if (!item?.click) throw new Error("UPDATE_MENU_ITEM_MISSING");
-      item.click();
-    });
-    await window.locator('[data-panel="settings"].active').waitFor();
-    assert.equal(await window.locator("#onboarding-nav").isVisible(), false);
-    assert.equal(
-      await window.locator(".installed-update-preferences").isVisible(),
-      true,
-      "UPDATE_MENU_RESULT_HIDDEN",
-    );
-    assert.equal(
-      await window
-        .locator('#settings-nav [data-settings-category="preferences"]')
-        .getAttribute("aria-current"),
-      "page",
-    );
-    observations.push({ kind: "update-menu-opens-settings", environment });
-    // Settings already owns the rail; the former utility item is hidden.
-    // Review Setup must remain reachable in an empty profile.
-    {
-      await window
-        .locator('#settings-nav [data-settings-category="diagnostics"]')
-        .click();
-      const diagnostics = window.locator("#connection-diagnostics");
-      if (!(await diagnostics.evaluate((details) => details.open)))
-        await diagnostics.locator("summary").click();
-    }
-    await window.locator("#review-setup").click();
-    observations.push({ kind: "review-setup", environment });
-    await window.locator("#onboarding-nav").waitFor({ state: "visible" });
-    await window.locator("#setup-dialog").waitFor({ state: "hidden" });
-    await window.locator("#onboarding-return").click();
-    await window.locator('[data-panel="browser"].active').waitFor();
-    assert.equal(await window.locator("#browser-task-menu").isVisible(), false);
-    await window.locator('.nav-item[data-section="computer"]').click();
-    await window.locator("#onboarding-nav").waitFor({ state: "visible" });
-    await window.locator("#setup-dialog").waitFor({ state: "hidden" });
-    assert.equal(
-      await window.locator("#window-location").innerText(),
-      "Overview",
-    );
-    observations.push({ kind: "sidebar-setup-location", environment });
-
+    await openSetup(window);
+    await window.locator('.setup-page[data-setup-step="connection"]').waitFor();
     if (behavior) {
-      // Real configuration IPC and owned tunnel health, with no embedded login
-      // witness yet. Save does not start a process or expose its saved key.
-      await window.locator('[data-onboarding-step="tunnel"]').click();
-      await window.locator("#onboarding-tunnel-id").fill("new_fixture_tunnel");
+      // Only the explicit E2E picker selects our disposable tunnel executable.
+      // Saving its synthetic key must not start a process or verify attachment.
+      await setupAction(window, "Choose tunnel client…");
       await window
-        .locator("#onboarding-runtime-key")
+        .getByLabel("Tunnel ID", { exact: true })
+        .fill("new_fixture_tunnel");
+      await window
+        .getByLabel("Runtime key", { exact: true })
         .fill("synthetic-owned-fixture-runtime-key");
-      await window.locator("#onboarding-primary").click();
+      await setupAction(window, "Save credentials");
+      await window.locator(".credentials-saved").waitFor({ state: "visible" });
+      const configured = await readSetupSettings(window);
+      assert.ok(configured.connectors.secureMcp.tunnelClient);
+      assert.equal(configured.connectors.secureMcp.credential, "stored");
+      assert.equal(configured.connectors.secureMcp.runtime, null);
+      assert.equal(configured.connectors.secureMcp.attachment, null);
       await window
-        .locator("#onboarding-credentials-saved")
-        .waitFor({ state: "visible" });
-      let state = await window.evaluate(() => window.farolNext.bootstrap());
+        .getByRole("button", { name: "Replace credentials", exact: true })
+        .click();
       assert.equal(
-        state.configuration.settings.connectors.secureMcp.runtime,
-        null,
-      );
-      assert.equal(state.configuration.settings.setup.chatgpt.verified, null);
-      await window.locator("#onboarding-replace-credentials").click();
-      assert.equal(
-        await window.locator("#onboarding-runtime-key").inputValue(),
+        await window.getByLabel("Runtime key", { exact: true }).inputValue(),
         "",
       );
       await window
-        .locator("#onboarding-runtime-key")
+        .getByLabel("Runtime key", { exact: true })
         .fill("unused-fixture-replacement-runtime-key");
-      await window.locator("#onboarding-keep-credentials").click();
-      assert.deepEqual(
-        (await window.evaluate(() => window.farolNext.bootstrap()))
-          .configuration,
-        state.configuration,
-      );
-      await window.locator("#onboarding-primary").click();
       await window
-        .locator('[data-onboarding-step="tunnel"].complete')
-        .waitFor({ timeout: 30000 });
-      state = await window.evaluate(() => window.farolNext.bootstrap());
-      assert.equal(state.configuration.settings.setup.chatgpt.verified, null);
-      assert.equal(
-        state.configuration.settings.connectors.secureMcp.runtime.state,
-        "ready",
-      );
-      assert.equal(
-        state.configuration.settings.connectors.secureMcp.attachment,
-        null,
-      );
-      // Explicit Reconnect must replace even a current, challenge-ready runtime.
-      // These are disposable tunnel and MCP fixtures; no live provider is used.
-      const readyConnector = state.configuration.settings.connectors.secureMcp;
-      assert.equal(
-        readyConnector.challenge.runtimeGeneration,
-        readyConnector.runtime.runtimeGeneration,
-      );
-      const readyWorkspaces = state.configuration.settings.computer.workspaces;
-      await window.locator("#onboarding-reconnect").click();
-      await window
-        .locator('#onboarding-form[aria-busy="false"]')
-        .waitFor({ state: "attached", timeout: 30000 });
-      state = await window.evaluate(() => window.farolNext.bootstrap());
-      assert.equal(
-        state.configuration.settings.connectors.secureMcp.runtime.state,
-        "ready",
-      );
-      assert.notEqual(
-        state.configuration.settings.connectors.secureMcp.runtime
-          .runtimeGeneration,
-        readyConnector.runtime.runtimeGeneration,
-        "EXPLICIT_RECONNECT_RETAINED_CURRENT_RUNTIME",
-      );
-      assert.deepEqual(
-        state.configuration.settings.computer.workspaces,
-        readyWorkspaces,
-      );
-      assert.equal(nonReadRequests, 0);
-      observations.push({
-        kind: "explicit-current-runtime-reconnect-without-send",
-        environment,
-      });
-      const priorRuntime =
-        state.configuration.settings.connectors.secureMcp.runtime
-          .runtimeGeneration;
-      await window.locator('[data-onboarding-step="folder"]').click();
-      await window
-        .locator("#onboarding-folder-list")
-        .getByRole("button", { name: "Allow edits & commands…", exact: true })
+        .getByRole("button", { name: "Keep saved credentials", exact: true })
         .click();
-      await window.locator("#onboarding-confirm-folder").click();
-      await window
-        .locator('#onboarding-form[aria-busy="false"]')
-        .waitFor({ state: "attached", timeout: 30000 });
-      state = await window.evaluate(() => window.farolNext.bootstrap());
-      assert.equal(
-        state.configuration.settings.computer.workspaces[0].access,
-        "write",
-      );
-      assert.equal(state.configuration.settings.computer.commands, "workspace");
-      assert.equal(
-        state.configuration.settings.computer.workspaces[0].gitHistoryApproved,
-        true,
-      );
-      assert.equal(
-        state.configuration.settings.connectors.secureMcp.runtime.state,
-        "ready",
-      );
-      assert.notEqual(
-        state.configuration.settings.connectors.secureMcp.runtime
-          .runtimeGeneration,
-        priorRuntime,
-      );
-      assert.equal(
-        state.configuration.settings.connectors.secureMcp.runtime
-          .computerGeneration,
-        state.configuration.settings.computer.generation,
-      );
-      const grantedRuntime =
-        state.configuration.settings.connectors.secureMcp.runtime
-          .runtimeGeneration;
-      assert.equal(nonReadRequests, 0);
-      await window
-        .locator("#onboarding-folder-list")
-        .getByRole("button", { name: "Use read-only…", exact: true })
-        .click();
-      await window.locator("#onboarding-confirm-folder").click();
-      await window
-        .locator('#onboarding-form[aria-busy="false"]')
-        .waitFor({ state: "attached", timeout: 30000 });
-      state = await window.evaluate(() => window.farolNext.bootstrap());
-      assert.equal(
-        state.configuration.settings.computer.workspaces[0].access,
-        "read",
-      );
-      assert.equal(
-        state.configuration.settings.computer.workspaces[0].gitHistoryApproved,
-        false,
-      );
-      assert.equal(
-        state.configuration.settings.connectors.secureMcp.runtime.state,
-        "ready",
-      );
-      assert.equal(nonReadRequests, 0);
-      assert.notEqual(
-        state.configuration.settings.connectors.secureMcp.runtime
-          .runtimeGeneration,
-        grantedRuntime,
-      );
-      assert.equal(
-        state.configuration.settings.connectors.secureMcp.runtime
-          .computerGeneration,
-        state.configuration.settings.computer.generation,
-      );
-      observations.push({
-        kind: "local-work-approval-and-revocation-reconnect-without-send",
-        environment,
-      });
-      const noTarget = await window.evaluate(() =>
-        window.farolNext.configure({ kind: "connector.verify-app" }),
-      );
-      assert.equal(noTarget.error, "CONNECTOR_APP_TARGET_REQUIRED");
-      assert.equal(nonReadRequests, 0);
-      await window.locator('[data-onboarding-step="app"]').click();
-      await window.locator("#onboarding-app-name").fill(fixtureApp);
-      await window.locator("#onboarding-save-app").click();
-      await window
-        .locator('#onboarding-form[aria-busy="false"]')
-        .waitFor({ state: "attached" });
-      state = await window.evaluate(() => window.farolNext.bootstrap());
-      assert.equal(
-        state.configuration.settings.connectors.secureMcp.chatgptApp.name,
-        fixtureApp,
-      );
-      observations.push({
-        kind: "activation-without-embedded-login",
-        noTarget: noTarget.error,
-        runtime: "ready",
-        sends: nonReadRequests,
-      });
+      assert.deepEqual(await readSetupSettings(window), configured);
     }
-    // Readiness and task views use only the local composer fixture. No Send,
-    // external account, Codex task or inference is performed.
-    await window.locator('[data-onboarding-step="chatgpt"]').click();
-    await window.locator("#onboarding-open-account").click();
-    await window.locator("#sign-in-return").waitFor({ state: "visible" });
-    await window.waitForFunction(
-      () => document.documentElement.dataset.section === "browser",
-    );
-    const embedded = await application.evaluate(
-      ({ BrowserWindow, WebContentsView }, fixtureUrl) => {
-        const windows = BrowserWindow.getAllWindows();
-        const shell = windows.find(
-          (window) =>
-            window.webContents.getURL().startsWith("file:") &&
-            window.webContents.getURL().endsWith("/shell.html"),
-        );
-        return {
-          windowCount: windows.length,
-          hidden: windows.every(
-            (window) => !window.isVisible() && !window.isFocused(),
-          ),
-          pageVisible:
-            shell?.contentView.children.some(
-              (child) =>
-                child instanceof WebContentsView &&
-                child.webContents.getURL() === fixtureUrl &&
-                child.getVisible(),
-            ) ?? false,
-        };
-      },
-      fixtureUrl,
-    );
-    assert.deepEqual(embedded, {
-      windowCount: 1,
-      hidden: true,
-      pageVisible: true,
-    });
-    observations.push({
-      kind: "embedded-sign-in-surface",
-      environment,
-      ...embedded,
-    });
-    let authReturnEventId = null;
-    const authReturnHandled = window
-      .waitForEvent("console", {
-        timeout: 15000,
-        predicate: (message) => {
-          const match = /^farol\.shell-(action|decision) (.+)$/u.exec(
-            message.text(),
-          );
-          if (!match) return false;
-          let event;
-          try {
-            event = JSON.parse(match[2]);
-          } catch {
-            return false;
-          }
-          if (match[1] === "action" && event.source === "auth-window-closed") {
-            authReturnEventId = event.eventId;
-            return false;
-          }
-          return (
-            match[1] === "decision" &&
-            typeof authReturnEventId === "string" &&
-            event.eventId === authReturnEventId &&
-            event.refreshReadiness === true
-          );
-        },
-      })
-      .then(
-        () => null,
-        (error) => error,
-      );
-    await window.locator("#sign-in-return").click();
-    const authReturnError = await authReturnHandled;
-    if (authReturnError) throw authReturnError;
-    await window.locator("#onboarding-nav").waitFor({ state: "visible" });
-    const readinessDeadline = Date.now() + 15000;
-    for (;;) {
-      const snapshot = await bounded(
-        window.evaluate(() => window.farolNext.bootstrap()),
-        "BROWSER_FIXTURE_READINESS_REPLY_TIMEOUT",
-        5000,
-      );
-      if (snapshot.configuration.settings.setup.chatgpt.verified !== null)
-        break;
-      if (Date.now() >= readinessDeadline)
-        throw new Error("BROWSER_FIXTURE_READINESS_TIMEOUT");
-      await new Promise((resolve) => setTimeout(resolve, 50));
-    }
-    // The matching auth-close action and renderer decision were observed.
-    // Assert the settled step, not a transient layout before that action.
+    // Exercise the actual sequential Setup navigation, then the two-stage
+    // native folder selection and the separate access/workspace checks.
+    await window
+      .locator(".setup-navigation")
+      .getByRole("button", { name: "Continue", exact: true })
+      .click();
+    await window.locator('.setup-page[data-setup-step="folders"]').waitFor();
+    await setupAction(window, "Add folder…");
+    await setupAction(window, "Add selected folder read-only");
+    const folder = window.locator(".setup-page .folder-row");
+    await folder.waitFor();
+    let saved = await readSetupSettings(window);
+    assert.equal(saved.computer.workspaces.length, 1);
     assert.equal(
-      await window.locator("html").getAttribute("data-section"),
-      "computer",
-      "SIGN_IN_RETURN_LEFT_GUIDED_SETUP",
+      saved.computer.workspaces[0].root,
+      await fs.realpath(workspace),
     );
-    assert.equal(await window.locator("#onboarding-nav").isVisible(), true);
+    assert.equal(saved.computer.workspaces[0].access, "read");
+    assert.notEqual(saved.computer.workspaces[0].gitHistoryApproved, true);
+    assert.notEqual(saved.computer.commands, "workspace");
+    await setupAction(window, "Check access");
+    await window.waitForFunction(() =>
+      document
+        .querySelector(".setup-page .folder-row .badges")
+        ?.textContent.includes("Access checked"),
+    );
+    await setupAction(window, "Verify workspace");
+    saved = await readSetupSettings(window);
+    const build = (await window.evaluate(() => window.farolNext.bootstrap()))
+      .build;
+    assert.equal(
+      saved.setup.computer.verified.workspaceId,
+      saved.computer.workspaces[0].workspaceId,
+    );
+    assert.equal(saved.setup.computer.verified.buildId, build.buildId);
+    assert.equal(
+      saved.setup.computer.verified.configRevision,
+      saved.computer.generation,
+    );
+    assert.equal(saved.setup.chatgpt.verified, null);
+    assert.equal(saved.setup.connect.verified, null);
+    const retainedWorkspaces = saved.computer.workspaces;
+    await assertSetupFinish(window, false);
+    assert.equal(nonReadRequests, 0);
+    // A known graceful quit permits reusing this SAME disposable profile.
+    // Approved folders and saved credentials alone never make Computer ready.
+    await closeOwned();
+    window = await launch(environment, "normal", environment);
+    await waitForResumeStage("connector-resume-skipped");
+    const partial = await readSetupSettings(window);
+    assert.deepEqual(partial.computer.workspaces, retainedWorkspaces);
+    assert.deepEqual(
+      partial.setup.computer.verified,
+      saved.setup.computer.verified,
+    );
+    assert.equal(partial.connectors.secureMcp.runtime, null);
+    assert.equal(partial.connectors.secureMcp.attachment, null);
+    assert.equal(partial.connectors.secureMcp.lastVerifiedAttachment, null);
+    assert.equal(partial.setup.connect.verified, null);
+    await reviewSetupWithoutChanges(window, false);
+    assert.equal(nonReadRequests, 0);
     observations.push({
-      kind: "embedded-sign-in-return",
+      kind: "partial-quit-reopen-and-nondestructive-review",
       environment,
-      taskCount: (await window.evaluate(() => window.farolNext.bootstrap()))
-        .tasks.length,
     });
-    if (behavior) {
-      await window.locator('[data-onboarding-step="app"]').click();
-      await window.locator("#onboarding-primary").click();
-      await window
-        .locator('#browser-check-banner[data-tone="complete"]')
-        .waitFor({ state: "visible", timeout: 30000 });
-      assert.equal(nonReadRequests, 1);
-      let state = await window.evaluate(() => window.farolNext.bootstrap());
-      assert.ok(state.configuration.settings.connectors.secureMcp.attachment);
-      assert.equal(
-        state.configuration.settings.setup.connect.outcomeUnknown,
-        false,
-      );
-      let visibleReply;
-      const visibleReplyDeadline = Date.now() + 30000;
-      for (;;) {
-        visibleReply = await bounded(
-          application.evaluate(async ({ BrowserWindow, WebContentsView }) => {
-            const shell = BrowserWindow.getAllWindows().find((window) =>
-              window.webContents.getURL().endsWith("/shell.html"),
-            );
-            const page = shell.contentView.children.find(
-              (child) => child instanceof WebContentsView && child.getVisible(),
-            );
-            return {
-              url: page.webContents.getURL(),
-              reply: await page.webContents.executeJavaScript(
-                "document.querySelector('[data-message-author-role=assistant]')?.innerText",
-              ),
-            };
-          }),
-          "FIXTURE_VISIBLE_REPLY_READ_TIMEOUT",
-          5000,
-        );
-        if (visibleReply.reply === "Owned fixture receipt recorded") break;
-        if (Date.now() >= visibleReplyDeadline)
-          throw new Error("FIXTURE_VISIBLE_REPLY_TIMEOUT");
-        await new Promise((resolve) => setTimeout(resolve, 50));
-      }
-      assert.match(visibleReply.url, /temporary-chat=true/);
-      assert.equal(visibleReply.reply, "Owned fixture receipt recorded");
-      await window.locator("#browser-check-return").click();
-      await window.locator("#onboarding-nav").waitFor({ state: "visible" });
-      await window.locator('[data-onboarding-step="app"]').click();
-      assert.equal(
-        await window.locator("#onboarding-verify-again").isVisible(),
-        true,
-      );
-      observations.push({
-        kind: "embedded-current-receipt-and-visible-reply",
-        sends: nonReadRequests,
-        ...visibleReply,
-      });
-      // Preserve a completed profile, then re-open it. Runtime shutdown makes
-      // live attachment stale; no implicit Send may restore it.
-      const previousRuntime =
-        state.configuration.settings.connectors.secureMcp.runtime;
-      const previousWorkspaces =
-        state.configuration.settings.computer.workspaces;
+    if (!behavior) {
       await closeOwned();
-      if (resumeRefusal) {
-        // Change only this disposable executable after the old owned process
-        // has exited. If any command executes the changed bytes, the sentinel
-        // proves it. No live executable or provider endpoint is involved.
-        const executed = path.join(temporaryRoot, "changed-client-executed");
-        const fixtureBytes = await fs.readFile(tunnelFixture, "utf8");
-        await fs.writeFile(
-          tunnelFixture,
-          fixtureBytes.replace(
-            "\n",
-            `\nrequire("node:fs").writeFileSync(${JSON.stringify(executed)}, "executed");\n`,
-          ),
-        );
-        const returning = await launch(environment, "normal", environment);
-        await assertReturningChat(returning);
-        const stagePath = path.join(
-          activeFixtureProfile.home,
-          ".farol-next-connector-resume-stage",
-        );
-        const deadline = Date.now() + 15000;
-        for (;;) {
-          const stage = await fs.readFile(stagePath, "utf8").catch(() => "");
-          if (stage.trim() === "connector-resume-refused") break;
-          if (Date.now() >= deadline)
-            throw new Error("CHANGED_EXECUTABLE_RESUME_NOT_REFUSED");
-          await new Promise((resolve) => setTimeout(resolve, 50));
-        }
-        const refused = await returning.evaluate(() =>
-          window.farolNext.bootstrap(),
-        );
-        const connector = refused.configuration.settings.connectors.secureMcp;
-        assert.equal(
-          connector.runtime,
-          null,
-          "REFUSED_RESUME_RETAINED_PREVIOUS_LIVE_RUNTIME",
-        );
-        assert.equal(connector.challenge, null);
-        assert.equal(connector.attachment, null);
-        assert.deepEqual(
-          connector.lastVerifiedAttachment,
-          state.configuration.settings.connectors.secureMcp
-            .lastVerifiedAttachment,
-        );
-        assert.equal(
-          refused.configuration.settings.setup.connect.verified,
-          null,
-        );
-        assert.equal(
-          refused.configuration.settings.setup.connect.unavailable,
-          "TUNNEL_CLIENT_DISCOVERY_CANDIDATE_STALE",
-        );
-        assert.deepEqual(
-          refused.configuration.settings.computer.workspaces,
-          previousWorkspaces,
-        );
-        await returning.locator('[data-onboarding-step="tunnel"]').click();
-        assert.doesNotMatch(
-          await returning.locator("#onboarding-tunnel-note").innerText(),
-          /The tunnel is ready/,
-        );
-        assert.match(
-          await returning.locator("#onboarding-tunnel-note").innerText(),
-          /The saved tunnel-client could not be verified/,
-        );
-        await assert.rejects(fs.stat(executed), { code: "ENOENT" });
-        assert.equal(nonReadRequests, 1, "REFUSED_RESUME_SENT_A_PROMPT");
-        observations.push({
-          kind: "changed-executable-resume-refused-live-proof-withdrawn",
-          refusal: refused.configuration.settings.setup.connect.unavailable,
-          historicalCompletionPreserved: true,
-          changedExecutableExecuted: false,
-          sends: nonReadRequests,
-        });
-        await closeOwned();
-        break;
-      }
-      let returning = await launch(environment, "normal", environment);
-      await assertReturningChat(returning);
-      // A confirmed Quit permits this configured Computer-only connector to
-      // establish a new runtime. It never sends or reuses the old attachment.
-      let resumed;
-      const resumeDeadline = Date.now() + 15000;
-      for (;;) {
-        resumed = await bounded(
-          returning.evaluate(() => window.farolNext.bootstrap()),
-          "FIXTURE_CONNECTOR_RESUME_READ_TIMEOUT",
-          5000,
-        );
-        const runtime =
-          resumed.configuration.settings.connectors.secureMcp.runtime;
-        if (
-          runtime?.state === "ready" &&
-          runtime.runtimeGeneration !== previousRuntime.runtimeGeneration
-        )
-          break;
-        if (Date.now() >= resumeDeadline)
-          throw new Error("CONFIGURED_COMPUTER_CONNECTOR_NOT_RESUMED");
-        await new Promise((resolve) => setTimeout(resolve, 50));
-      }
-      assert.equal(nonReadRequests, 1, "CONNECTOR_RESUME_SENT_A_PROMPT");
-      assert.equal(
-        resumed.configuration.settings.connectors.secureMcp.attachment,
-        null,
+      continue;
+    }
+    await setupStep(window, "connection", "Connection");
+    await setupAction(window, "Start connection");
+    let state = await readSetupSettings(window);
+    assert.equal(state.connectors.secureMcp.runtime.state, "ready");
+    assert.equal(state.connectors.secureMcp.attachment, null);
+    assert.equal(state.setup.chatgpt.verified, null);
+    const startedRuntime = state.connectors.secureMcp.runtime.runtimeGeneration;
+    await setupAction(window, "Check local connection");
+    await setupAction(window, "Reconnect");
+    state = await readSetupSettings(window);
+    assert.equal(state.connectors.secureMcp.runtime.state, "ready");
+    assert.notEqual(
+      state.connectors.secureMcp.runtime.runtimeGeneration,
+      startedRuntime,
+    );
+    assert.deepEqual(state.computer.workspaces, retainedWorkspaces);
+    await assertSetupFinish(window, false);
+    await verifyDisplayedAttachment(window);
+    state = await readSetupSettings(window);
+    const connector = state.connectors.secureMcp;
+    assert.equal(
+      connector.attachment.runtimeGeneration,
+      connector.runtime.runtimeGeneration,
+    );
+    assert.equal(
+      connector.attachment.workspaceId,
+      state.setup.computer.verified.workspaceId,
+    );
+    assert.equal(connector.attachment.buildId, build.buildId);
+    assert.equal(
+      connector.attachment.connectorGeneration,
+      connector.generation,
+    );
+    assert.equal(
+      connector.attachment.computerGeneration,
+      state.computer.generation,
+    );
+    assert.equal(
+      connector.attachment.challengeSha256,
+      connector.challenge.challengeSha256,
+    );
+    assert.equal(
+      state.setup.connect.verified.runtimeGeneration,
+      connector.runtime.runtimeGeneration,
+    );
+    assert.deepEqual(connector.lastVerifiedAttachment, connector.attachment);
+    assert.equal(
+      state.setup.chatgpt.verified,
+      null,
+      "EXTERNAL_FIXTURE_CREATED_EMBEDDED_SIGN_IN_PROOF",
+    );
+    await assertSetupFinish(window, true);
+    await reviewSetupWithoutChanges(window, true);
+    assert.equal(
+      fixtureVerifications,
+      1,
+      "REVIEW_SETUP_REPEATED_MCP_VERIFICATION",
+    );
+    assert.equal(nonReadRequests, 0, "REVIEW_SETUP_SENT_TO_BROWSER_FIXTURE");
+    await window
+      .getByRole("region", { name: "Computer setup status", exact: true })
+      .getByRole("button", { name: "Open Home", exact: true })
+      .click();
+    await window
+      .locator('.home-candidate[data-home-view="overview"]')
+      .waitFor();
+    observations.push({
+      kind: "current-react-setup-finished-with-owned-mcp-receipt",
+      environment,
+      fixtureVerifications,
+    });
+    const completed = await readSetupSettings(window);
+    await closeOwned();
+    if (resumeRefusal) {
+      // Preserve the existing optional changed-client refusal case. Only our
+      // disposable executable changes after confirmed exit; it is never retried.
+      const executed = path.join(temporaryRoot, "changed-client-executed");
+      const fixtureBytes = await fs.readFile(tunnelFixture, "utf8");
+      await fs.writeFile(
+        tunnelFixture,
+        fixtureBytes.replace(
+          "\n",
+          `\nrequire("node:fs").writeFileSync(${JSON.stringify(executed)}, "executed");\n`,
+        ),
       );
-      assert.equal(resumed.configuration.settings.setup.connect.verified, null);
-      assert.equal(
-        resumed.configuration.settings.connectors.secureMcp.runtime.buildId,
-        resumed.build.buildId,
-      );
+      window = await launch(environment, "normal", environment);
+      await waitForResumeStage("connector-resume-refused");
+      const refused = await readSetupSettings(window);
+      assert.equal(refused.connectors.secureMcp.runtime, null);
+      assert.equal(refused.connectors.secureMcp.challenge, null);
+      assert.equal(refused.connectors.secureMcp.attachment, null);
       assert.deepEqual(
-        resumed.configuration.settings.computer.workspaces,
-        previousWorkspaces,
+        refused.connectors.secureMcp.lastVerifiedAttachment,
+        completed.connectors.secureMcp.lastVerifiedAttachment,
       );
+      assert.equal(refused.setup.connect.verified, null);
+      assert.equal(
+        refused.setup.connect.unavailable,
+        "TUNNEL_CLIENT_DISCOVERY_CANDIDATE_STALE",
+      );
+      assert.deepEqual(refused.computer.workspaces, retainedWorkspaces);
+      await reviewSetupWithoutChanges(window, false);
+      await assert.rejects(fs.stat(executed), { code: "ENOENT" });
+      assert.equal(fixtureVerifications, 1);
+      assert.equal(nonReadRequests, 0);
       observations.push({
-        kind: "configured-computer-connector-resumed-without-send",
-        previousRuntime: previousRuntime.runtimeGeneration,
-        currentRuntime:
-          resumed.configuration.settings.connectors.secureMcp.runtime
-            .runtimeGeneration,
-        sends: nonReadRequests,
-      });
-      await returning.locator('[data-onboarding-step="tunnel"]').click();
-      await returning
-        .locator("#onboarding-recheck")
-        .waitFor({ state: "visible" });
-      // Stop is an explicit owner decision, not a reason to auto-reconnect.
-      const stopped = await returning.evaluate(() =>
-        window.farolNext.configure({ kind: "connector.stop" }),
-      );
-      assert.equal(stopped.ok, true);
-      await closeOwned();
-      returning = await launch(environment, "normal", environment);
-      const stoppedState = await returning.evaluate(() =>
-        window.farolNext.bootstrap(),
-      );
-      await assertReturningChat(returning);
-      assert.equal(
-        stoppedState.configuration.settings.connectors.secureMcp.runtime,
-        null,
-      );
-      assert.equal(
-        (
-          await fs.readFile(
-            path.join(
-              activeFixtureProfile.home,
-              ".farol-next-connector-resume-stage",
-            ),
-            "utf8",
-          )
-        ).trim(),
-        "connector-resume-skipped",
-      );
-      assert.equal(nonReadRequests, 1);
-      observations.push({
-        kind: "explicit-stop-preserved-after-reopen",
-        sends: nonReadRequests,
-      });
-      // The later explicit fresh-check action restores the stopped local
-      // fixture through normal UI recovery. Direct IPC would leave the
-      // renderer stale and cause a duplicate start before that check.
-      await returning.locator('[data-onboarding-step="app"]').click();
-      assert.equal(
-        await returning.locator("#onboarding-app-name").inputValue(),
-        fixtureApp,
-      );
-      assert.equal(nonReadRequests, 1);
-      fixtureMode = "no-receipt";
-      await returning.locator("#onboarding-verify-again").click();
-      await returning.locator("#onboarding-confirm-new-check").click();
-      await returning
-        .locator('#browser-check-banner[data-tone="failed"]')
-        .waitFor({ state: "visible", timeout: 65000 });
-      state = await returning.evaluate(() => window.farolNext.bootstrap());
-      assert.equal(
-        state.configuration.settings.setup.connect.outcomeUnknown,
-        true,
-      );
-      assert.equal(nonReadRequests, 2);
-      const noReplay = await returning.evaluate(() =>
-        window.farolNext.configure({ kind: "connector.verify-app" }),
-      );
-      assert.equal(
-        noReplay.error,
-        "CONNECTOR_APP_VERIFICATION_OUTCOME_UNKNOWN",
-      );
-      const noRetarget = await returning.evaluate((name) => {
-        return window.farolNext.bootstrap().then(({ configuration }) =>
-          window.farolNext.configure({
-            kind: "connector.select-chatgpt-app",
-            name,
-            tunnelId: configuration.settings.connectors.secureMcp.tunnelId,
-            connectorGeneration:
-              configuration.settings.connectors.secureMcp.generation,
-          }),
-        );
-      }, "Another fixture");
-      assert.equal(
-        noRetarget.error,
-        "CONNECTOR_APP_VERIFICATION_OUTCOME_UNKNOWN",
-      );
-      await returning.locator("#browser-check-return").click();
-      await returning.locator("#onboarding-nav").waitFor({ state: "visible" });
-      await returning.locator('[data-onboarding-step="app"]').click();
-      await returning.locator("#onboarding-diagnostics").click();
-      await returning
-        .locator(
-          '#settings-nav [data-settings-category="diagnostics"][aria-current="page"]',
-        )
-        .waitFor({ state: "visible" });
-      assert.equal(
-        await returning
-          .locator("#connection-diagnostics")
-          .evaluate((details) => details.open),
-        true,
-      );
-      assert.equal(nonReadRequests, 2);
-      observations.push({
-        kind: "returning-stale-then-pending-no-replay",
-        sends: nonReadRequests,
-        noReplay: noReplay.error,
-        noRetarget: noRetarget.error,
-      });
-      const unknownGeneration =
-        state.configuration.settings.connectors.secureMcp.runtime
-          .runtimeGeneration;
-      await closeOwned();
-      returning = await launch(environment, "normal", environment);
-      const unknownState = await returning.evaluate(() =>
-        window.farolNext.bootstrap(),
-      );
-      await assertReturningChat(returning, false);
-      assert.equal(
-        unknownState.configuration.settings.setup.connect.outcomeUnknown,
-        true,
-      );
-      assert.equal(
-        unknownState.configuration.settings.connectors.secureMcp.runtime
-          .runtimeGeneration,
-        unknownGeneration,
-      );
-      assert.equal(
-        (
-          await fs.readFile(
-            path.join(
-              activeFixtureProfile.home,
-              ".farol-next-connector-resume-stage",
-            ),
-            "utf8",
-          )
-        ).trim(),
-        "connector-resume-skipped",
-      );
-      assert.equal(nonReadRequests, 2);
-      observations.push({
-        kind: "unknown-check-not-resumed-after-reopen",
-        sends: nonReadRequests,
+        kind: "changed-executable-resume-refused-live-proof-withdrawn",
+        historicalCompletionPreserved: true,
       });
       await closeOwned();
       break;
     }
-    await window.locator("#onboarding-return").click();
-    for (let index = 0; index < 4; index += 1) {
-      const created = await bounded(
-        window.evaluate(() =>
-          window.farolNext.task({ kind: "task.create-chatgpt" }),
-        ),
-        "BROWSER_FIXTURE_CREATE_TIMEOUT",
-      );
-      assert.equal(created.ok, true);
-      assert.ok(created.selectedTaskId);
-    }
-    await window
-      .locator('#task-tabs [role="tab"]')
-      .nth(3)
-      .waitFor({ state: "visible" });
-    // Only the provider's own sidebar UI remains. Farol no longer adds a
-    // competing toolbar toggle or any task creation/close affordance.
-    assert.equal(
-      await window.locator("#browser-sidebar-toggle").isVisible(),
-      false,
+    window = await launch(environment, "normal", environment);
+    await waitForResumeStage("connector-resumed");
+    const resumed = await readSetupSettings(window);
+    assert.equal(resumed.connectors.secureMcp.runtime.state, "ready");
+    assert.notEqual(
+      resumed.connectors.secureMcp.runtime.runtimeGeneration,
+      completed.connectors.secureMcp.runtime.runtimeGeneration,
     );
-    assert.equal(await window.locator("#new-task").isVisible(), false);
-    assert.equal(await window.locator("#task-tabs .task-tab-close").count(), 0);
-    const viewNames = await window
-      .locator("#task-tabs .task-tab > span")
-      .allTextContents();
-    assert.deepEqual(viewNames, [
-      "ChatGPT 1",
-      "ChatGPT 2",
-      "ChatGPT 3",
-      "ChatGPT 4",
-    ]);
-    observations.push({
-      kind: "compact-chat-selector",
-      environment,
-      viewNames,
-    });
-    await browserGeometry(window, environment, 1180);
-    await browserGeometry(window, environment, 940);
-    await application.evaluate(({ BrowserWindow }) =>
-      BrowserWindow.getAllWindows()
-        .find(
-          (window) =>
-            window.webContents.getURL().startsWith("file:") &&
-            window.webContents.getURL().endsWith("/shell.html"),
-        )
-        .setContentSize(1180, 760),
-    );
-    await window.waitForFunction(() => innerWidth === 1180);
-    await window.locator('#task-tabs [role="tab"]').first().click();
-    assert.equal(
-      await window.locator('#task-tabs [aria-selected="true"]').count(),
-      1,
-    );
-    await window.locator('.nav-item[data-section="activity"]').click();
-    assert.equal(
-      await window.locator("#window-location").innerText(),
-      "Activity",
-    );
-    await window.locator("#activity-chats button").last().click();
-    await window.locator("#task-menu").waitFor({ state: "visible" });
-    assert.equal(
-      await window.locator("#task-menu-title").innerText(),
-      "Chat details",
-    );
-    assert.equal(await window.locator("#task-menu-cancel").isEnabled(), false);
-    assert.equal(
-      await window.locator("#task-menu-close-task").isEnabled(),
-      true,
-    );
-    await window.locator("#task-menu-close-task").click();
-    await window.locator("#task-menu").waitFor({ state: "hidden" });
-    await window.waitForFunction(
-      () => document.querySelectorAll('#task-tabs [role="tab"]').length === 3,
-    );
-    await window.locator('.nav-item[data-section="computer"]').click();
-    await window.locator("#onboarding-nav").waitFor({ state: "visible" });
-    assert.equal(nonReadRequests, 0);
-    await closeOwned();
-    const reopened = await launch(environment, "normal", environment);
-    await reopened.locator("#onboarding-nav").waitFor({ state: "visible" });
-    const readback = await reopened.evaluate(() =>
-      window.farolNext.bootstrap(),
-    );
+    assert.equal(resumed.connectors.secureMcp.runtime.buildId, build.buildId);
+    assert.deepEqual(resumed.computer.workspaces, retainedWorkspaces);
     assert.deepEqual(
-      readback.configuration.settings.computer.workspaces[0].rootIdentity,
-      inode,
+      resumed.connectors.secureMcp.lastVerifiedAttachment,
+      completed.connectors.secureMcp.lastVerifiedAttachment,
     );
-    assert.equal(
-      readback.configuration.settings.computer.workspaces[0].root,
-      await fs.realpath(workspace),
-    );
-    await closeOwned();
-  }
-  for (const mode of devOnly || behavior ? [] : ["legacy", "demo"]) {
-    const window = await launch("preview", mode);
-    await window.locator("#setup-dialog").waitFor({ state: "visible" });
-    assert.equal(await window.locator("#onboarding-nav").isVisible(), false);
+    assert.equal(resumed.connectors.secureMcp.attachment, null);
+    assert.equal(resumed.setup.connect.verified, null);
+    await reviewSetupWithoutChanges(window, false);
+    assert.equal(fixtureVerifications, 1, "REOPEN_REPLAYED_MCP_VERIFICATION");
+    assert.equal(nonReadRequests, 0, "REOPEN_SENT_TO_BROWSER_FIXTURE");
+    // Historical completion survives quit; current readiness requires the new
+    // displayed challenge, answered once by the owned MCP peer, then Check.
+    await verifyDisplayedAttachment(window);
+    await assertSetupFinish(window, true);
+    await reviewSetupWithoutChanges(window, true);
+    assert.equal(fixtureVerifications, 2);
+    assert.equal(nonReadRequests, 0);
+    observations.push({
+      kind: "completed-quit-reopen-retains-history-fresh-receipt-restores-readiness",
+      environment,
+      fixtureVerifications,
+    });
     await closeOwned();
   }
 } catch (error) {
@@ -1626,9 +929,10 @@ try {
             shell.evaluate(async () => {
               const bootstrap = await window.farolNext.bootstrap();
               return {
-                feedback: document.querySelector("#onboarding-feedback")
-                  ?.textContent,
-                folders: document.querySelector("#onboarding-folder-list")
+                feedback: document.querySelector(
+                  '.setup-page .settings-page > p[role="status"]',
+                )?.textContent,
+                folders: document.querySelector(".setup-page .folder-row")
                   ?.textContent,
                 workspaces:
                   bootstrap.configuration.settings.computer.workspaces.map(
@@ -1750,16 +1054,17 @@ try {
         behavior,
         resumeRefusal,
         observations,
+        fixtureVerifications,
         primaryFailure: primaryFailure ? String(primaryFailure) : null,
         cleanupFailures: cleanupFailures.map(String),
         cleanupUnknown,
         limits: [
-          "Hidden renderer, native page bounds and disposable IPC fixtures only",
-          behavior
-            ? "Embedded Send, app chip and provider reply are owned local HTTP fixtures; no live ChatGPT"
-            : "Browser readiness and task pages are local HTTP fixtures, not live ChatGPT",
+          "Hidden React renderer and disposable native/IPC fixtures only",
+          "Browser pages are read-only local HTTP fixtures, not live ChatGPT",
+          "Attachment receipts come from an owned local MCP peer, never external ChatGPT",
+          "Browser geometry, legacy/demo modal and embedded Send flows are outside this current-React Setup journey",
           "Native folder picker is replaced by the explicit E2E selection",
-          "No live account, provider Send, model inference or live NEW connector",
+          "No live account, provider Send, model inference or real external attachment",
         ],
       },
       null,
