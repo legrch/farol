@@ -131,6 +131,88 @@ function fixture(mode: string | null = "go-prepared-v1", selected = true) {
 }
 
 describe("explicitly selected prepared watchdog without native effects", () => {
+  it.each([0, 7, 91])(
+    "preserves root exit %i after early stdin EPIPE",
+    (code) => {
+      const f = fixture();
+      f.prepare();
+      f.start();
+      f.child.stdin.emit("error", { code: "EPIPE", message: "PRIVATE_INPUT" });
+      expect(f.signals).toEqual([]);
+      f.child.stderr.emit("data", Buffer.from("real child diagnostic"));
+      f.child.emit("exit", code, null);
+      f.child.emit("close", code, null);
+      expect(f.messages.map((message) => message.type)).toEqual([
+        "prepared",
+        "ready",
+        "stderr",
+        "exit",
+        "close",
+      ]);
+      expect(f.messages.at(-1)).toEqual({
+        type: "close",
+        id: f.id,
+        code,
+        signal: null,
+      });
+      expect(f.signals).toEqual([[-4242, "SIGKILL"]]);
+      expect(f.spawn).toHaveBeenCalledTimes(1);
+      expect(JSON.stringify(f.messages)).not.toContain("PRIVATE_INPUT");
+    },
+  );
+
+  it("does not turn stdin EPIPE into command completion or renew its deadline", () => {
+    const f = fixture();
+    f.prepare();
+    f.start();
+    f.child.stdin.emit("error", { code: "EPIPE" });
+    expect(f.messages.map((message) => message.type)).toEqual([
+      "prepared",
+      "ready",
+    ]);
+    expect(f.signals).toEqual([]);
+    f.tick(16000);
+    expect(f.messages.at(-1)).toEqual({ type: "deadline", id: f.id });
+    expect(f.signals).toEqual([[-4242, "SIGKILL"]]);
+    f.start();
+    expect(f.spawn).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps queued output and root facts after stdin EPIPE", () => {
+    const f = fixture();
+    f.prepare();
+    f.start();
+    f.hold("stdout");
+    f.child.stdout.emit("data", Buffer.from("tail"));
+    f.child.stdin.emit("error", { code: "EPIPE" });
+    f.child.emit("exit", 7, null);
+    f.child.emit("close", 7, null);
+    expect(f.signals).toEqual([]);
+    f.deliver();
+    expect(f.messages.map((message) => message.type)).toEqual([
+      "prepared",
+      "ready",
+      "stdout",
+      "exit",
+      "close",
+    ]);
+    expect(f.signals).toEqual([[-4242, "SIGKILL"]]);
+  });
+
+  it("still fences non-EPIPE stdin errors after an early close", () => {
+    const f = fixture();
+    f.prepare();
+    f.start();
+    f.child.stdin.emit("error", { code: "EPIPE" });
+    f.child.stdin.emit("error", { code: "SYNTHETIC_OTHER" });
+    expect(f.messages.at(-1)).toEqual({
+      type: "error",
+      id: f.id,
+      reason: "stdin-error",
+    });
+    expect(f.signals).toEqual([[-4242, "SIGKILL"]]);
+  });
+
   it.each([
     "invalid-prepare",
     "invalid-control",
@@ -138,7 +220,6 @@ describe("explicitly selected prepared watchdog without native effects", () => {
     "invalid-exit",
     "invalid-close",
     "command-error",
-    "stdin-epipe",
     "stdin-error",
     "dispatch-exception",
   ])(
@@ -148,7 +229,7 @@ describe("explicitly selected prepared watchdog without native effects", () => {
       const privateText =
         "SYNTHETIC_PRIVATE_PATH_ENV_CODE_EXCEPTION_NEVER_SEND";
       const error = Object.assign(Error(privateText), {
-        code: reason === "stdin-epipe" ? "EPIPE" : privateText,
+        code: privateText,
         path: privateText,
         environment: privateText,
       });
@@ -301,7 +382,7 @@ describe("explicitly selected prepared watchdog without native effects", () => {
         f.fail("error", "backpressure");
       } else f.fail("error", kind as "callback" | "throw");
       f.child.stdin.emit("error", {
-        code: "EPIPE",
+        code: "EIO",
         message: "PRIVATE_EXCEPTION",
       });
       const sent = f.messages.length;
@@ -309,11 +390,11 @@ describe("explicitly selected prepared watchdog without native effects", () => {
       expect(f.messages.filter((message) => message.type === "error")).toEqual(
         kind === "behind-output"
           ? []
-          : [{ type: "error", id: f.id, reason: "stdin-epipe" }],
+          : [{ type: "error", id: f.id, reason: "stdin-error" }],
       );
       f.deliver();
       f.deliver(Error("PRIVATE_CALLBACK"));
-      f.child.stdin.emit("error", { code: "EPIPE" });
+      f.child.stdin.emit("error", { code: "EIO" });
       f.child.emit("close", 0, null);
       f.start();
       f.stop();

@@ -184,8 +184,14 @@ if (process.env?.FAROL_SHELL_WATCHDOG_MODE === "go-prepared-v1" &&
         // facts only, never descendant/group settlement. Flush before self-stop.
         emit("close", { code, signal: number }, stopNow);
       });
-      command.stdin.on("error", (error) => refuse(
-        error?.code === "EPIPE" ? errorReason.stdinEpipe : errorReason.stdinError));
+      command.stdin.on("error", (error) => {
+        // A command may deliberately close stdin early (head, an argument error,
+        // or a fast exit). EPIPE says nothing about root exit or output drain.
+        // Keep observing that SAME child instead of killing away its diagnostics.
+        // This is not an input-consumption ACK and does not extend the deadline.
+        if (error?.code === "EPIPE") return;
+        refuse(errorReason.stdinError);
+      });
       command.stdin.end(selected.input);
     } catch { refuse(errorReason.dispatchException); }
   });
