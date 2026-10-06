@@ -116,3 +116,38 @@ export function shouldResumeComputerConnector(
     )
   );
 }
+
+/** Compose the existing workspace check before a new-build connector start.
+ * The check must return a known success; readback cannot repair a lost reply.
+ * It may refresh only the already bound workspace selected by clean resume.
+ */
+export async function resumeComputerConnector(
+  input: Parameters<typeof shouldResumeComputerConnector>[0] & {
+    buildId: string;
+  },
+  ports: Readonly<{
+    current(): ProductConfigurationSnapshot;
+    verifyWorkspace(workspaceId: string): Promise<{ ok: boolean }>;
+    start(): Promise<{ ok: boolean }>;
+  }>,
+): Promise<"skipped" | "verification-refused" | "started" | "start-refused"> {
+  if (!shouldResumeComputerConnector(input)) return "skipped";
+  if (input.snapshot.status !== "ready") return "skipped";
+  const settings = input.snapshot.settings;
+  const verified = settings.setup.computer.verified!;
+  if (verified.buildId !== input.buildId) {
+    const result = await ports.verifyWorkspace(verified.workspaceId!);
+    if (!result.ok) return "verification-refused";
+    const current = ports.current();
+    if (
+      !shouldResumeComputerConnector({ ...input, snapshot: current }) ||
+      current.status !== "ready" ||
+      current.settings.computer.generation !== settings.computer.generation ||
+      current.settings.setup.computer.verified?.workspaceId !==
+        verified.workspaceId ||
+      current.settings.setup.computer.verified.buildId !== input.buildId
+    )
+      return "verification-refused";
+  }
+  return (await ports.start()).ok ? "started" : "start-refused";
+}

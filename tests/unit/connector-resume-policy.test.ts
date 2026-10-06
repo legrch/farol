@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   createUpdateAbortConnectorRecovery,
   shouldResumeComputerConnector,
+  resumeComputerConnector,
 } from "../../src/apps/desktop/connector-resume-policy";
 import {
   ProductSettingsSchema,
@@ -102,6 +103,104 @@ function check(
     snapshot: { status: "ready", settings },
   });
 }
+
+describe("clean connector resume across builds", () => {
+  function fixture() {
+    const settings = configured();
+    const current = structuredClone(settings);
+    const buildId = "d".repeat(64);
+    const order: string[] = [];
+    const input = {
+      environment: "dev" as const,
+      buildEnvironment: "dev" as const,
+      previousRunClean: true,
+      buildId,
+      snapshot: { status: "ready" as const, settings },
+    };
+    const ports = {
+      current: () => ({ status: "ready" as const, settings: current }),
+      verifyWorkspace: vi.fn(async (id: string) => {
+        order.push(`verify:${id}`);
+        current.setup.computer.verified!.buildId = buildId;
+        return { ok: true };
+      }),
+      start: vi.fn(async () => {
+        order.push("start");
+        return { ok: true };
+      }),
+    };
+    return { input, ports, order, current };
+  }
+  it("refreshes the exact saved workspace before starting a new-build connection", async () => {
+    const f = fixture();
+    expect(await resumeComputerConnector(f.input, f.ports)).toBe("started");
+    expect(f.order).toEqual([`verify:${workspaceId}`, "start"]);
+    expect(f.input.snapshot.settings.setup.computer.verified!.buildId).toBe(
+      "a".repeat(64),
+    );
+  });
+  it("keeps same-build resume on the existing start path", async () => {
+    const f = fixture();
+    f.input.buildId = "a".repeat(64);
+    expect(await resumeComputerConnector(f.input, f.ports)).toBe("started");
+    expect(f.ports.verifyWorkspace).not.toHaveBeenCalled();
+  });
+  it.each(["unclean", "unbound", "explicit-stop"])(
+    "does not verify or start %s state",
+    async (mode) => {
+      const f = fixture();
+      if (mode === "unclean") f.input.previousRunClean = false;
+      if (mode === "unbound")
+        delete f.input.snapshot.settings.computer.workspaces[0]!.rootIdentity;
+      if (mode === "explicit-stop")
+        f.input.snapshot.settings.connectors.secureMcp.runtime = null;
+      expect(await resumeComputerConnector(f.input, f.ports)).toBe("skipped");
+      expect(f.order).toEqual([]);
+    },
+  );
+  it("does not upgrade a refused verification from complete-looking readback", async () => {
+    const f = fixture();
+    f.current.setup.computer.verified!.buildId = f.input.buildId;
+    f.ports.verifyWorkspace.mockResolvedValue({ ok: false });
+    expect(await resumeComputerConnector(f.input, f.ports)).toBe(
+      "verification-refused",
+    );
+    expect(f.ports.start).not.toHaveBeenCalled();
+  });
+  it("does not start or repeat after a lost verification reply", async () => {
+    const f = fixture();
+    f.ports.verifyWorkspace.mockRejectedValue(new Error("LOST_REPLY"));
+    await expect(resumeComputerConnector(f.input, f.ports)).rejects.toThrow(
+      "LOST_REPLY",
+    );
+    expect(f.ports.verifyWorkspace).toHaveBeenCalledTimes(1);
+    expect(f.ports.start).not.toHaveBeenCalled();
+  });
+  it.each([
+    "old-build",
+    "changed-generation",
+    "changed-workspace",
+    "stopped",
+    "unknown",
+  ])("refuses %s after verification", async (mode) => {
+    const f = fixture();
+    f.ports.verifyWorkspace.mockImplementation(async () => {
+      if (mode !== "old-build")
+        f.current.setup.computer.verified!.buildId = f.input.buildId;
+      if (mode === "changed-generation") f.current.computer.generation++;
+      if (mode === "changed-workspace")
+        f.current.setup.computer.verified!.workspaceId =
+          "00000000-0000-4000-8000-000000000009";
+      if (mode === "stopped") f.current.connectors.secureMcp.runtime = null;
+      if (mode === "unknown") f.current.setup.computer.outcomeUnknown = true;
+      return { ok: true };
+    });
+    expect(await resumeComputerConnector(f.input, f.ports)).toBe(
+      "verification-refused",
+    );
+    expect(f.ports.start).not.toHaveBeenCalled();
+  });
+});
 describe("configured Computer connector resume", () => {
   it.each(["preview", "dev"] as const)(
     "resumes a previously ready approved Computer-only %s route without changing settings",

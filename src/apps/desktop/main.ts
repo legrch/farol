@@ -410,7 +410,7 @@ import {
 } from "./tunnel-client-probe";
 import {
   createUpdateAbortConnectorRecovery,
-  shouldResumeComputerConnector,
+  resumeComputerConnector,
 } from "./connector-resume-policy";
 import { identityBoundWorkspaces } from "./identity-bound-workspaces";
 import { AuthorityTransitionReservation } from "./authority-transition";
@@ -10234,29 +10234,36 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
   });
   quitSignals.ready();
   installedUpdaterInitialization = initializeInstalledUpdater();
-  if (
-    shouldResumeComputerConnector({
+  void resumeComputerConnector(
+    {
       environment: runtimeEnvironment,
       buildEnvironment,
+      buildId: buildIdentity.buildId,
       previousRunClean,
       snapshot: configuration.snapshot(),
-    })
-  ) {
-    // One new owned connector lifetime, using the normal fenced start. No
-    // repair loop, no verification Send, and no implicit Codex admission.
-    void startSecureMcpConnector(false, true).then(
-      (result) => {
-        startupStage(
-          result.ok ? "connector-resumed" : "connector-resume-refused",
-        );
-        if (!quitInProgress && window && !window.isDestroyed())
-          window.webContents.send(channels.configurationChanged);
-      },
-      () => startupStage("connector-resume-failed"),
-    );
-  } else {
-    startupStage("connector-resume-skipped");
-  }
+    },
+    {
+      current: () => configuration!.snapshot(),
+      // The normal command retains authority reservation, physical-root and
+      // Go inspection checks. No synthetic verification receipt is written.
+      verifyWorkspace: (workspaceId) =>
+        configureProduct({ kind: "computer.verify-workspace", workspaceId }),
+      start: () => startSecureMcpConnector(false, true),
+    },
+  ).then(
+    (status) => {
+      startupStage(
+        status === "started"
+          ? "connector-resumed"
+          : status === "skipped"
+            ? "connector-resume-skipped"
+            : "connector-resume-refused",
+      );
+      if (!quitInProgress && window && !window.isDestroyed())
+        window.webContents.send(channels.configurationChanged);
+    },
+    () => startupStage("connector-resume-failed"),
+  );
 }
 
 const primaryInstanceLock = app.requestSingleInstanceLock(instanceRequest);
