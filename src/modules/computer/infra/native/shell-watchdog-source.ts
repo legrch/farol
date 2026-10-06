@@ -7,6 +7,136 @@ export const SHELL_WATCHDOG_SIGNAL_REFUSED_EXIT_CODE = 84;
 export const SHELL_WATCHDOG_SOURCE = String.raw`
 "use strict";
 const { spawn } = require("node:child_process");
+// Explicit Go selection reuses this watchdog and Node's private JSON IPC.
+// Legacy launches have no mode variable and retain the existing path below.
+if (process.env?.FAROL_SHELL_WATCHDOG_MODE === "go-prepared-v1" &&
+    process.argv?.[1] === "--farol-go-prepared-v1") {
+  const { constants } = require("node:os");
+  let selected = null;
+  let command = null;
+  let timer = null;
+  let id = null;
+  let started = false;
+  let ready = false;
+  let closed = false;
+  let stopped = false;
+  let signalAttempted = false;
+  let stopRequested = false;
+  let channelFailed = false;
+  let outputBytes = 0;
+  const exact = (value, keys) => value && typeof value === "object" &&
+    !Array.isArray(value) && Object.keys(value).length === keys.length &&
+    keys.every((key) => Object.hasOwn(value, key));
+  function stopNow() {
+    if (stopped) return;
+    stopped = true;
+    if (timer) clearTimeout(timer);
+    if (!command) { process.exit(0); return; }
+    if (signalAttempted) return;
+    signalAttempted = true;
+    try { process.kill(-process.pid, "SIGKILL"); }
+    catch {
+      // One failed signal freezes this resource. No escalation or PID probe.
+      if (process.connected && !channelFailed) {
+        try { process.send({ type: "signal-refused", id }); } catch {}
+      }
+    }
+  }
+  function emit(type, fields = {}, delivered) {
+    if (channelFailed || !process.connected) { stopNow(); return false; }
+    try {
+      const accepted = process.send({ type, id, ...fields }, (error) => {
+        if (error) { channelFailed = true; stopNow(); }
+        else delivered?.();
+      });
+      if (!accepted) { channelFailed = true; stopNow(); }
+      return accepted;
+    } catch { channelFailed = true; stopNow(); return false; }
+  }
+  function refuse() { emit("error"); stopNow(); }
+  function output(type, chunk) {
+    if (!ready || closed || stopped || channelFailed) return;
+    outputBytes += chunk.length;
+    if (outputBytes > 4 * 1024 * 1024) { emit("output-limit"); stopNow(); return; }
+    // Keep every private output frame below Go's 96 KiB bound.
+    for (let offset = 0; offset < chunk.length; offset += 48 * 1024) {
+      if (!emit(type, { data: chunk.subarray(offset, offset + 48 * 1024).toString("base64") })) return;
+    }
+  }
+  process.on("disconnect", stopNow);
+  process.on("error", () => { channelFailed = true; stopNow(); });
+  process.on("SIGTERM", stopNow);
+  process.on("SIGINT", stopNow);
+  process.on("message", (message) => {
+    if (stopped || channelFailed) return;
+    if (message?.type === "prepare") {
+      if (selected || started || !exact(message, ["type", "id", "executable", "args", "cwd", "environment", "stdinBase64", "deadlineAt"]) ||
+          typeof message.id !== "string" || !/^[a-f0-9]{64}$/.test(message.id) ||
+          typeof message.executable !== "string" || !message.executable.startsWith("/") || message.executable.includes("\0") ||
+          typeof message.cwd !== "string" || !message.cwd.startsWith("/") || message.cwd.includes("\0") ||
+          !Array.isArray(message.args) || message.args.length > 256 ||
+          message.args.some((arg) => typeof arg !== "string" || arg.includes("\0")) ||
+          message.args.reduce((total, arg) => total + Buffer.byteLength(arg), 0) > 64 * 1024 ||
+          !message.environment || typeof message.environment !== "object" || Array.isArray(message.environment) ||
+          Object.keys(message.environment).length > 64 ||
+          Object.entries(message.environment).some(([name, value]) => !/^[A-Za-z_][A-Za-z0-9_]*$/.test(name) || typeof value !== "string" || value.includes("\0")) ||
+          Object.entries(message.environment).reduce((total, [name, value]) => total + Buffer.byteLength(name) + Buffer.byteLength(value) + 1, 0) > 64 * 1024 ||
+          typeof message.stdinBase64 !== "string" || message.stdinBase64.length > 1398104 ||
+          !Number.isSafeInteger(message.deadlineAt) || message.deadlineAt <= Date.now() || message.deadlineAt > Date.now() + 15000) {
+        refuse(); return;
+      }
+      const input = Buffer.from(message.stdinBase64, "base64");
+      if (input.length > 1024 * 1024 || input.toString("base64") !== message.stdinBase64) { refuse(); return; }
+      id = message.id;
+      selected = { ...message, args: [...message.args], environment: { ...message.environment }, input };
+      timer = setTimeout(() => { emit("deadline"); stopNow(); }, message.deadlineAt - Date.now());
+      emit("prepared");
+      return;
+    }
+    if (!exact(message, ["type", "id"]) || !selected || message.id !== id) { refuse(); return; }
+    if (message.type === "stop") {
+      if (stopRequested) return;
+      stopRequested = true;
+      // ACK is control intent only; the ONE self-group signal follows its write.
+      emit("stop-requested", {}, stopNow);
+      return;
+    }
+    if (message.type !== "start" || started || stopRequested || Date.now() >= selected.deadlineAt) { refuse(); return; }
+    started = true; // Consumed before the one spawn, including unknown failure.
+    try {
+      command = spawn(selected.executable, selected.args, {
+        cwd: selected.cwd, env: selected.environment, detached: false,
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+      command.once("spawn", () => {
+        if (stopped || channelFailed || Date.now() >= selected.deadlineAt) { stopNow(); return; }
+        ready = true;
+        emit("ready");
+      });
+      command.stdout.on("data", (chunk) => output("stdout", chunk));
+      command.stderr.on("data", (chunk) => output("stderr", chunk));
+      command.on("error", refuse);
+      command.once("exit", (code, signal) => {
+        if (stopped) return;
+        const number = signal === null ? null : constants.signals[signal];
+        if (!ready || (signal !== null && !Number.isInteger(number))) { refuse(); return; }
+        // Root exit is useful even while a descendant keeps a stdio pipe open.
+        emit("exit", { code, signal: number });
+      });
+      command.on("close", (code, signal) => {
+        if (closed || stopped) return;
+        closed = true;
+        const number = signal === null ? null : constants.signals[signal];
+        if (!ready || (signal !== null && !Number.isInteger(number))) { refuse(); return; }
+        // Node close follows root exit AND its stdio closure. This supplies root
+        // facts only, never descendant/group settlement. Flush before self-stop.
+        emit("close", { code, signal: number }, stopNow);
+      });
+      command.stdin.on("error", refuse);
+      command.stdin.end(selected.input);
+    } catch { refuse(); }
+  });
+} else {
 let command = null;
 let deadline = null;
 let escalation = null;
@@ -132,4 +262,5 @@ process.on("message", (message) => {
   command.stdin.end(message.stdin);
   report({ type: "ready", pid: command.pid });
 });
+}
 `;
