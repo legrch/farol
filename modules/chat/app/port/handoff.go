@@ -86,6 +86,10 @@ type HandoffRecord struct {
 type HandoffHead struct {
 	Record *HandoffRecord
 	Digest [32]byte
+	// EmptyRetirementChain is derived from the complete validated prefix ending
+	// at this exact Record/Digest, including its retirement. It is false without
+	// a record. It is neither persisted nor origin/host-drain proof.
+	EmptyRetirementChain bool
 }
 
 // HandoffStore is the consumer-owned persistence seam. Publish compares exact
@@ -93,6 +97,9 @@ type HandoffHead struct {
 // mismatched, late or errored reply is uncertain, not permission to repeat.
 // Load returns an empty head only for a qualified never-used store. Existing
 // incomplete/unknown records must fail closed across process boundaries.
+// Load and Publish derive EmptyRetirementChain from that same validated head.
+// Append and read independently refuse a cross-build consumption unless its
+// current receipt and every retirement in the preceding prefix are empty.
 // Boot injects the native adapter at the exact approved physical roots; a memory
 // fixture is not native authority. Store IO occurs outside the origin's gate.
 type HandoffStore interface {

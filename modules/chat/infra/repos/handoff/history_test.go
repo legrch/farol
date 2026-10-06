@@ -154,6 +154,80 @@ func TestHistoryCompletedAcrossEmptySuccessorRetirement(t *testing.T) {
 	}
 }
 
+// Fixed CPU authority and unreachable result IO qualify only catalogue behavior.
+type compatibilityHistoryAuthority struct{ scope port.HistoryReadScope }
+
+func (a compatibilityHistoryAuthority) AdmitHistoryRead(context.Context) (port.HistoryReadLease, error) {
+	return a, nil
+}
+func (a compatibilityHistoryAuthority) WithCurrent(_ context.Context, inspect func(port.HistoryReadScope) error) error {
+	return inspect(a.scope)
+}
+
+type compatibilityHistoryResults struct{}
+
+func (compatibilityHistoryResults) Retain(context.Context, port.RetainRequest) (*port.RetainReceipt, error) {
+	panic("catalogue cannot retain")
+}
+func (compatibilityHistoryResults) Read(context.Context, port.ResultRead) (*port.RetainRequest, error) {
+	panic("empty history cannot read result bytes")
+}
+func (compatibilityHistoryResults) Fence(context.Context) error {
+	panic("catalogue cannot fence results")
+}
+
+func TestHistoryCrossBuildEmptyPrefixPreservesLaterSameBuildHistory(t *testing.T) {
+	ctx := context.Background()
+	d := &memoryDisk{}
+	repo := repoFixture(d)
+	r := recordFixture()
+	for cycle := 1; cycle <= 3; cycle++ {
+		if cycle == 3 {
+			r = historyRecord(r.Publication.Binding, r.Publication.HandoffID, historyTurnSpec{"completed", "owner", false})
+		}
+		head := publishRetirementHead(t, repo, r)
+		build := fmt.Sprintf("build-%d", cycle+1)
+		if cycle == 3 {
+			build = r.Publication.Binding.BuildID
+		}
+		next := nextBuildRecord(t, *head.Record, cycle+1, build)
+		service, _ := policy.New(repo)
+		successor, err := service.Consume(ctx, r.Publication, *next.Consumption)
+		if err != nil {
+			t.Fatal(err)
+		}
+		reader, err := policy.NewHistoryReader(successor.History, policy.HistoryDependencies{
+			Authority: compatibilityHistoryAuthority{port.HistoryReadScope{ProfileID: successor.Scope.ProfileID, BackendGeneration: successor.Scope.BackendGeneration, OwnerID: "owner"}},
+			Results:   compatibilityHistoryResults{}, ResultBytesLimit: 8192,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		calls, count := d.calls, len(d.records)
+		page, err := reader.List(ctx, 0)
+		if err != nil || page == nil || page.Entries == nil {
+			t.Fatal("history became unavailable across empty build edge", err)
+		}
+		if cycle < 3 {
+			if page.Total != 0 || len(page.Entries) != 0 {
+				t.Fatal("empty chain fabricated history")
+			}
+			if got, err := reader.List(ctx, 1); got != nil || err == nil {
+				t.Fatal("empty history accepted invalid offset")
+			}
+		} else if page.Total != 1 || len(page.Entries) != 1 || page.Entries[0].Key != historyKey(r.Receipt.Write.Turns[0]) || page.Entries[0].Binding != r.Receipt.Write.Turns[0].Binding {
+			t.Fatal("empty ancestors hid later meaningful same-build history")
+		}
+		if got, err := reader.Read(ctx, port.HistoryKey{BackendGeneration: "generation-1", OperationID: "missing"}); got != nil || !errors.Is(err, policy.Refused) {
+			t.Fatal("empty ancestor fabricated a result", err)
+		}
+		if d.calls != calls || len(d.records) != count || d.fenced {
+			t.Fatal("history queries changed retirement state")
+		}
+		r = historyRecord(next.Consumption.NextBinding, fmt.Sprintf("handoff-%d", cycle+1))
+	}
+}
+
 func TestHistoryPageStableOrderOwnerOffsetsAndMissingFind(t *testing.T) {
 	ctx := context.Background()
 	d := &memoryDisk{}

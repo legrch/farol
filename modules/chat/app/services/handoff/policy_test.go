@@ -37,7 +37,7 @@ func (m *memoryStore) Load(context.Context) (*port.HandoffHead, error) {
 		return &port.HandoffHead{}, nil
 	}
 	r := Copy(*m.head.Record)
-	return &port.HandoffHead{Record: &r, Digest: m.head.Digest}, nil
+	return &port.HandoffHead{Record: &r, Digest: m.head.Digest, EmptyRetirementChain: m.head.EmptyRetirementChain}, nil
 }
 func (m *memoryStore) Publish(ctx context.Context, expected [32]byte, r port.HandoffRecord) (*port.HandoffHead, error) {
 	if m.inside != nil && *m.inside {
@@ -52,7 +52,8 @@ func (m *memoryStore) Publish(ctx context.Context, expected [32]byte, r port.Han
 	}
 	digest, _ := Digest(r)
 	r = Copy(r)
-	m.head = port.HandoffHead{Record: &r, Digest: digest}
+	emptyChain := (m.head.Record == nil || m.head.EmptyRetirementChain) && len(r.Receipt.Write.Turns) == 0
+	m.head = port.HandoffHead{Record: &r, Digest: digest, EmptyRetirementChain: emptyChain}
 	switch m.fault {
 	case "error":
 		return nil, errors.New("lost publication")
@@ -65,6 +66,8 @@ func (m *memoryStore) Publish(ctx context.Context, expected [32]byte, r port.Han
 	case "record":
 		r.Origin = ""
 		return &port.HandoffHead{Record: &r, Digest: digest}, nil
+	case "prefix":
+		return &port.HandoffHead{Record: &r, Digest: digest, EmptyRetirementChain: !emptyChain}, nil
 	case "cancel":
 		if cancel, ok := ctx.Value(cancelKey{}).(context.CancelFunc); ok {
 			cancel()
@@ -155,7 +158,9 @@ func TestNeverDispatchedReceiptRejectsEachBoundaryBeforePublication(t *testing.T
 		"stale-quiescence":        func(r *port.RetirementTurn) { r.Quiescence.ResultID = "result" },
 		"disposal":                func(r *port.RetirementTurn) { r.Disposal.Confirmed = true },
 		"stale-disposal":          func(r *port.RetirementTurn) { r.Disposal.ResultID = "result" },
-		"invented-publication":    func(r *port.RetirementTurn) { r.ResultPublication = completedReceipt(binding()).Write.Turns[0].ResultPublication },
+		"invented-publication": func(r *port.RetirementTurn) {
+			r.ResultPublication = completedReceipt(binding()).Write.Turns[0].ResultPublication
+		},
 	}
 	for name, mutate := range mutations {
 		t.Run(name, func(t *testing.T) {
@@ -424,7 +429,7 @@ func TestInvalidSuccessorAndReplay(t *testing.T) {
 	}
 }
 func TestUncertainPublicationAtEveryStepIsSticky(t *testing.T) {
-	for _, fault := range []string{"error", "nil", "digest", "record", "crossed-digest", "cancel"} {
+	for _, fault := range []string{"error", "nil", "digest", "record", "crossed-digest", "prefix", "cancel"} {
 		for _, stage := range []string{"capture", "ACK", "terminal", "consume"} {
 			t.Run(fault+"/"+stage, func(t *testing.T) {
 				ctx, cancel := context.WithCancel(context.Background())
@@ -843,8 +848,8 @@ func Digest(r port.HandoffRecord) ([32]byte, error) {
 }
 
 func (m *memoryStore) Digest(r port.HandoffRecord) ([32]byte, error) { return Digest(r) }
-func TestSuccessorRequiresExactNewHostAndSameBuild(t *testing.T) {
-	for _, name := range []string{"missing-binding", "old-host", "old-child", "cross-build", "cross-parent", "cross-chat", "cross-generation"} {
+func TestSuccessorRequiresExactNewHostAndRoots(t *testing.T) {
+	for _, name := range []string{"missing-binding", "old-host", "old-child", "cross-parent", "cross-chat", "cross-generation"} {
 		t.Run(name, func(t *testing.T) {
 			s, m, p := terminated(t)
 			c := consumption()
@@ -855,8 +860,6 @@ func TestSuccessorRequiresExactNewHostAndSameBuild(t *testing.T) {
 				c.NextBinding.HostLifetimeID = p.Binding.HostLifetimeID
 			case "old-child":
 				c.NextBinding.ChildLaunchID = p.Binding.ChildLaunchID
-			case "cross-build":
-				c.NextBinding.BuildID = "other"
 			case "cross-parent":
 				c.NextBinding.ParentRoot.Inode++
 			case "cross-chat":
@@ -914,5 +917,125 @@ func TestPersistedTerminalCannotReplaceIndependentHostDrainWitness(t *testing.T)
 	}
 	if disk.calls != 3 {
 		t.Fatal("unknown host completion appended")
+	}
+}
+
+func terminateReceipt(t *testing.T, s *Service, b port.HandoffBinding, id string, value port.RetirementReceipt) port.HandoffPublication {
+	t.Helper()
+	ctx := context.Background()
+	p, err := s.Capture(ctx, b, id, &fixtureOrigin{receipt: value})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ack, err := s.Acknowledge(ctx, port.HandoffACK{Publication: *p})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ObserveTerminal(ctx, terminal(*p, ack)); err != nil {
+		t.Fatal(err)
+	}
+	return *p
+}
+
+func TestCrossBuildEmptyChainKeepsBuildsAndOneShotProof(t *testing.T) {
+	ctx := context.Background()
+	m := &memoryStore{}
+	s, _ := New(m)
+	b := binding()
+	for cycle := 1; cycle <= 2; cycle++ {
+		original := receipt(b)
+		p := terminateReceipt(t, s, b, fmt.Sprintf("handoff-%d", cycle), original)
+		c := consumption()
+		c.NextBinding = b
+		c.NextBinding.BuildID = fmt.Sprintf("build-%d", cycle+1)
+		c.NextBinding.BackendGeneration = fmt.Sprintf("generation-%d", cycle+1)
+		c.NextBinding.HostLifetimeID = fmt.Sprintf("host-%d", cycle+1)
+		c.NextBinding.ChildLaunchID = fmt.Sprintf("child-%d", cycle+1)
+		c.Next.BackendGeneration, c.AttemptID = c.NextBinding.BackendGeneration, fmt.Sprintf("attempt-%d", cycle+1)
+		successor, err := s.Consume(ctx, p, c)
+		if err != nil || successor == nil || successor.Scope != c.Next {
+			t.Fatal("empty cross-build successor refused", err)
+		}
+		if !m.head.EmptyRetirementChain || m.head.Record.Publication != p || m.head.Record.Consumption.NextBinding != c.NextBinding || m.head.Record.Version != 1 {
+			t.Fatal("cross-build consumption changed provenance or format")
+		}
+		if err := successor.Proof.WithRetirement(ctx, func(got *port.RetirementReceipt) error {
+			if !port.SameRetirement(got.Write, original.Write) || got.PublicationDigest != original.PublicationDigest {
+				t.Fatal("successor rewrote original receipt")
+			}
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if err := successor.Proof.WithRetirement(ctx, func(*port.RetirementReceipt) error { t.Fatal("replayed proof"); return nil }); err != Refused {
+			t.Fatal("cross-build proof replay", err)
+		}
+		calls := m.calls
+		fresh, _ := New(m)
+		if got, err := fresh.Consume(ctx, p, c); got != nil || err != Refused || m.calls != calls {
+			t.Fatal("cross-build consumption replay", err)
+		}
+		b, s = c.NextBinding, fresh
+	}
+}
+
+func TestCrossBuildConsumeRefusesNonemptyCurrentOrAncestorBeforePublication(t *testing.T) {
+	for _, kind := range []string{"cancelled", "completed", "cancelled-ancestor", "completed-ancestor", "missing-prefix"} {
+		t.Run(kind, func(t *testing.T) {
+			ctx := context.Background()
+			m := &memoryStore{}
+			s, _ := New(m)
+			b := binding()
+			value := cancelledReceipt(b)
+			if strings.HasPrefix(kind, "completed") {
+				value = completedReceipt(b)
+			} else if kind == "missing-prefix" {
+				value = receipt(b)
+			}
+			p := terminateReceipt(t, s, b, "handoff-1", value)
+			c := consumption()
+			if strings.HasSuffix(kind, "ancestor") {
+				if _, err := s.Consume(ctx, p, c); err != nil {
+					t.Fatal("same-build nonempty consumption refused", err)
+				}
+				b = c.NextBinding
+				p = terminateReceipt(t, s, b, "handoff-2", receipt(b))
+				c.Next.BackendGeneration, c.NextBinding.BackendGeneration = "generation-3", "generation-3"
+				c.NextBinding.HostLifetimeID, c.NextBinding.ChildLaunchID, c.AttemptID = "host-3", "child-3", "attempt-3"
+			}
+			if kind == "missing-prefix" {
+				m.head.EmptyRetirementChain = false
+			}
+			c.NextBinding.BuildID = "new-build"
+			before, calls := m.head.Digest, m.calls
+			fresh, _ := New(m)
+			if got, err := fresh.Consume(ctx, p, c); got != nil || err != Refused || m.calls != calls || m.fenced || m.head.Digest != before {
+				t.Fatal("incompatible prefix published or became unknown", err)
+			}
+		})
+	}
+}
+
+func TestCrossBuildConsumeUnknownNeverAdmitsAnotherBuild(t *testing.T) {
+	for _, fault := range []string{"error", "nil", "digest", "record", "crossed-digest", "prefix", "cancel"} {
+		t.Run(fault, func(t *testing.T) {
+			s, m, p := terminated(t)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			ctx = context.WithValue(ctx, cancelKey{}, context.CancelFunc(cancel))
+			c := consumption()
+			c.NextBinding.BuildID = "new-build"
+			m.fault = fault
+			if got, err := s.Consume(ctx, p, c); got != nil || err != Unknown {
+				t.Fatal("unknown cross-build consumption minted proof", err)
+			}
+			calls := m.calls
+			m.fault = ""
+			fresh, _ := New(m)
+			c.NextBinding.BuildID = "another-build"
+			if got, err := fresh.Consume(context.Background(), p, c); got != nil || err != Unknown || m.calls != calls || !m.fenced {
+				t.Fatal("new build erased uncertainty", err)
+			}
+		})
 	}
 }

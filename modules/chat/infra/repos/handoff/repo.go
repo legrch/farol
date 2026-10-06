@@ -168,7 +168,7 @@ func (s *owner) scanEach(ctx context.Context, visit func(port.HandoffRecord) err
 			return nil, 0, nil, s.uncertain()
 		}
 		r, err := decode(raw)
-		if err != nil || !s.bound(r) || policy.ValidateTransition(head.Record, head.Digest, r) != nil || reused(history, r) {
+		if err != nil || !s.bound(r) || policy.ValidateTransition(head.Record, head.Digest, r) != nil || (!head.EmptyRetirementChain && crossesBuild(r)) || reused(history, r) {
 			return nil, 0, nil, s.uncertain()
 		}
 		if visit != nil {
@@ -178,12 +178,18 @@ func (s *owner) scanEach(ctx context.Context, visit func(port.HandoffRecord) err
 		}
 		d := sha256.Sum256(raw)
 		copy := policy.Copy(r)
-		head = &port.HandoffHead{Record: &copy, Digest: d}
+		head = &port.HandoffHead{Record: &copy, Digest: d, EmptyRetirementChain: (head.Record == nil || head.EmptyRetirementChain) && len(r.Receipt.Write.Turns) == 0}
 		// Replay checks need only these immutable identity projections. Do not
 		// retain every full retirement payload across the bounded chain scan.
 		history = append(history, port.HandoffRecord{Stage: r.Stage, Publication: r.Publication, Consumption: r.Consumption})
 	}
 	return nil, 0, nil, s.uncertain()
+}
+
+// Called only after record/transition validation. The independently scanned
+// prefix, never a caller's head flag, decides cross-build compatibility.
+func crossesBuild(r port.HandoffRecord) bool {
+	return r.Stage == port.HandoffConsumed && r.Consumption.NextBinding.BuildID != r.Publication.Binding.BuildID
 }
 
 // At cycle boundaries no old origin, host lifetime, child launch, successor
@@ -242,7 +248,7 @@ func (r *Repository) Publish(ctx context.Context, expected [32]byte, next port.H
 	if err != nil {
 		return nil, err
 	}
-	if h.Digest != expected || policy.ValidateTransition(h.Record, h.Digest, next) != nil || reused(history, next) || index > maxSteps {
+	if h.Digest != expected || policy.ValidateTransition(h.Record, h.Digest, next) != nil || (!h.EmptyRetirementChain && crossesBuild(next)) || reused(history, next) || index > maxSteps {
 		return nil, fail(Refused, false)
 	}
 	if ctx.Err() != nil {
@@ -255,7 +261,7 @@ func (r *Repository) Publish(ctx context.Context, expected [32]byte, next port.H
 	if err != nil || !present || !bytes.Equal(visible, raw) || ctx.Err() != nil {
 		return nil, s.uncertain()
 	}
-	return &port.HandoffHead{Record: &next, Digest: sha256.Sum256(raw)}, nil
+	return &port.HandoffHead{Record: &next, Digest: sha256.Sum256(raw), EmptyRetirementChain: (h.Record == nil || h.EmptyRetirementChain) && len(next.Receipt.Write.Turns) == 0}, nil
 }
 
 // Close releases only owned descriptors. It never removes a claim, attempt,

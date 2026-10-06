@@ -179,7 +179,13 @@ func ValidateRecord(r port.HandoffRecord) error {
 	}
 	c, b := r.Consumption, r.Publication.Binding
 	n := c.NextBinding
-	if !validBinding(n) || n.ProfileID != c.Next.ProfileID || n.BackendGeneration != c.Next.BackendGeneration || n.ParentRoot != b.ParentRoot || n.ChatRoot != b.ChatRoot || n.BuildID != b.BuildID || n.HostLifetimeID == b.HostLifetimeID || n.ChildLaunchID == b.ChildLaunchID {
+	if !validBinding(n) || n.ProfileID != c.Next.ProfileID || n.BackendGeneration != c.Next.BackendGeneration || n.ParentRoot != b.ParentRoot || n.ChatRoot != b.ChatRoot || n.HostLifetimeID == b.HostLifetimeID || n.ChildLaunchID == b.ChildLaunchID {
+		return Refused
+	}
+	// v1's explicit empty receipt is build-independent. Consume and the store
+	// also require the complete retained prefix to be empty; this record alone
+	// cannot establish that. Nonempty compatibility remains same-build only.
+	if n.BuildID != b.BuildID && len(r.Receipt.Write.Turns) != 0 {
 		return Refused
 	}
 	return nil
@@ -277,19 +283,19 @@ func (s *Service) load(ctx context.Context) (*port.HandoffHead, error) {
 		return nil, Unknown
 	}
 	if h.Record == nil {
-		if h.Digest != ([32]byte{}) {
+		if h.Digest != ([32]byte{}) || h.EmptyRetirementChain {
 			s.markUnknown(ctx)
 			return nil, Unknown
 		}
 		return &port.HandoffHead{}, nil
 	}
 	d, e := s.store.Digest(Copy(*h.Record))
-	if ValidateRecord(*h.Record) != nil || e != nil || h.Digest == ([32]byte{}) || d != h.Digest {
+	if ValidateRecord(*h.Record) != nil || e != nil || h.Digest == ([32]byte{}) || d != h.Digest || (h.EmptyRetirementChain && len(h.Record.Receipt.Write.Turns) != 0) {
 		s.markUnknown(ctx)
 		return nil, Unknown
 	}
 	r := Copy(*h.Record)
-	return &port.HandoffHead{Record: &r, Digest: h.Digest}, nil
+	return &port.HandoffHead{Record: &r, Digest: h.Digest, EmptyRetirementChain: h.EmptyRetirementChain}, nil
 }
 func (s *Service) publish(ctx context.Context, h *port.HandoffHead, r port.HandoffRecord) (*port.HandoffHead, error) {
 	if err := ValidateTransition(h.Record, h.Digest, r); err != nil {
@@ -304,13 +310,14 @@ func (s *Service) publish(ctx context.Context, h *port.HandoffHead, r port.Hando
 		s.markUnknown(ctx)
 		return nil, Unknown
 	}
-	if ValidateRecord(*got.Record) != nil || !sameRecord(*got.Record, r) {
+	emptyChain := (h.Record == nil || h.EmptyRetirementChain) && len(r.Receipt.Write.Turns) == 0
+	if ValidateRecord(*got.Record) != nil || !sameRecord(*got.Record, r) || got.EmptyRetirementChain != emptyChain {
 		s.markUnknown(ctx)
 		return nil, Unknown
 	}
 	copy := Copy(r)
 	s.knownHead = got.Digest
-	return &port.HandoffHead{Record: &copy, Digest: got.Digest}, nil
+	return &port.HandoffHead{Record: &copy, Digest: got.Digest, EmptyRetirementChain: emptyChain}, nil
 }
 
 // Capture copies only inside the actual owner's callback. Store IO happens after
@@ -435,6 +442,11 @@ func (s *Service) Consume(ctx context.Context, p port.HandoffPublication, c port
 		return nil, err
 	}
 	if h.Record == nil || h.Record.Stage != port.HandoffTerminated || h.Record.Publication != p {
+		return nil, Refused
+	}
+	// A known incompatible ancestor must refuse before Publish: an attempted
+	// publication's failed reply is uncertainty, not a compatibility decision.
+	if c.NextBinding.BuildID != p.Binding.BuildID && !h.EmptyRetirementChain {
 		return nil, Refused
 	}
 	r := Copy(*h.Record)

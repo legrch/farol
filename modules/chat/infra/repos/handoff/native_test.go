@@ -60,12 +60,14 @@ func openRepo(t *testing.T, roots Roots) *Repository {
 	return r
 }
 func TestNativeHandoffActualRetireSuccessorAndSecondCycle(t *testing.T) {
-	for _, name := range []string{"empty", "withdrawn-read"} {
-		t.Run(name, func(t *testing.T) { nativeActualRetireSuccessor(t, name == "withdrawn-read") })
+	for _, name := range []string{"empty", "withdrawn-read", "empty-cross-build"} {
+		t.Run(name, func(t *testing.T) {
+			nativeActualRetireSuccessor(t, name == "withdrawn-read", name == "empty-cross-build")
+		})
 	}
 }
 
-func nativeActualRetireSuccessor(t *testing.T, withdrawRead bool) {
+func nativeActualRetireSuccessor(t *testing.T, withdrawRead, crossBuild bool) {
 	t.Helper()
 	ctx := context.Background()
 	roots := nativeRoots(t)
@@ -122,6 +124,9 @@ func nativeActualRetireSuccessor(t *testing.T, withdrawRead bool) {
 	} else if w.PreviousRevision != 0 || len(w.Turns) != 0 {
 		t.Fatal("empty retirement changed")
 	}
+	if head.EmptyRetirementChain == withdrawRead {
+		t.Fatal("native scan misclassified retirement prefix")
+	}
 	ack, err := service.Acknowledge(ctx, port.HandoffACK{Publication: *publication})
 	if err != nil {
 		t.Fatal(err)
@@ -143,6 +148,9 @@ func nativeActualRetireSuccessor(t *testing.T, withdrawRead bool) {
 	successorStore := openRepo(t, roots)
 	service, _ = policy.New(successorStore)
 	next := b
+	if crossBuild {
+		next.BuildID = "new-build"
+	}
 	next.BackendGeneration = "generation-2"
 	next.HostLifetimeID = "host-2"
 	next.ChildLaunchID = "child-2"
@@ -150,6 +158,10 @@ func nativeActualRetireSuccessor(t *testing.T, withdrawRead bool) {
 	successor, err := service.Consume(ctx, *publication, port.HandoffConsumption{PreviousHostDrainConfirmed: true, Next: nextScope, NextBinding: next, AttemptID: "attempt-2"})
 	if err != nil {
 		t.Fatal(err)
+	}
+	consumed, err := successorStore.Load(ctx)
+	if err != nil || consumed.Record.Publication != *publication || consumed.Record.Consumption.NextBinding != next {
+		t.Fatal("native cross-build provenance changed", err)
 	}
 	if _, err = service.Consume(ctx, *publication, port.HandoffConsumption{PreviousHostDrainConfirmed: true, Next: nextScope, NextBinding: next, AttemptID: "attempt-2"}); err == nil {
 		t.Fatal("consumed successor replayed")

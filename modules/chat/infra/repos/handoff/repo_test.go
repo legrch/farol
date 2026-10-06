@@ -18,10 +18,11 @@ import (
 // These fixtures contain no filesystem/process proof. They exercise storage
 // reply failures, closed decoding and immutable-chain policy only.
 type memoryDisk struct {
-	records [][]byte
-	fault   string
-	fenced  bool
-	calls   int
+	records     [][]byte
+	fault       string
+	fenced      bool
+	calls       int
+	afterAppend func()
 }
 
 func (d *memoryDisk) read(_ context.Context, index int) ([]byte, bool, error) {
@@ -43,6 +44,9 @@ func (d *memoryDisk) append(_ context.Context, index int, raw []byte) error {
 		return errors.New("partial publication")
 	}
 	d.records = append(d.records, append([]byte{}, raw...))
+	if d.afterAppend != nil {
+		d.afterAppend()
+	}
 	if d.fault == "lost" {
 		return errors.New("lost publication reply")
 	}
@@ -426,6 +430,141 @@ func TestRepositoryRefusesHistoricalHostAndChildBeforeSuccessor(t *testing.T) {
 			}
 			if disk.calls != 7 {
 				t.Fatal("refused consumption appended", disk.calls)
+			}
+		})
+	}
+}
+
+func publishRetirementHead(t *testing.T, repo *Repository, record port.HandoffRecord) *port.HandoffHead {
+	t.Helper()
+	ctx := context.Background()
+	head, err := repo.Load(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for step := 0; step < 3; step++ {
+		head, err = repo.Publish(ctx, head.Digest, record)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if step < 2 {
+			record = nextRecord(t, record)
+		}
+	}
+	return head
+}
+
+func nextBuildRecord(t *testing.T, record port.HandoffRecord, generation int, build string) port.HandoffRecord {
+	t.Helper()
+	r := nextRecord(t, record)
+	c := r.Consumption
+	c.NextBinding = historyNextBinding(record.Publication.Binding, generation)
+	c.NextBinding.BuildID = build
+	c.Next.BackendGeneration, c.AttemptID = c.NextBinding.BackendGeneration, fmt.Sprintf("attempt-%d", generation)
+	return r
+}
+
+func TestRepositoryCrossBuildEmptyChainReopenAndCAS(t *testing.T) {
+	ctx := context.Background()
+	d := &memoryDisk{}
+	repo := repoFixture(d)
+	r := recordFixture()
+	for cycle := 1; cycle <= 2; cycle++ {
+		head := publishRetirementHead(t, repo, r)
+		if !head.EmptyRetirementChain {
+			t.Fatal("empty prefix was not qualified")
+		}
+		before, calls := head.Digest, d.calls
+		head.EmptyRetirementChain = false
+		repo = repoFixture(d)
+		head, err := repo.Load(ctx)
+		if err != nil || !head.EmptyRetirementChain || head.Digest != before {
+			t.Fatal("derived fact was lost or caller mutation escaped", err)
+		}
+		next := nextBuildRecord(t, *head.Record, cycle+1, fmt.Sprintf("build-%d", cycle+1))
+		if got, err := repo.Publish(ctx, [32]byte{55}, next); got != nil || !errors.Is(err, Refused) || d.calls != calls || d.fenced {
+			t.Fatal("cross-build stale CAS appended or fenced", err)
+		}
+		published, err := repo.Publish(ctx, before, next)
+		if err != nil || !published.EmptyRetirementChain || published.Record.Publication != r.Publication || published.Record.Consumption.NextBinding != next.Consumption.NextBinding {
+			t.Fatal("cross-build publication changed build provenance", err)
+		}
+		loaded, err := repoFixture(d).Load(ctx)
+		if err != nil || loaded.Digest != published.Digest || !loaded.EmptyRetirementChain {
+			t.Fatal("cross-build chain did not reopen", err)
+		}
+		r = historyRecord(next.Consumption.NextBinding, fmt.Sprintf("handoff-%d", cycle+1))
+	}
+	for _, raw := range d.records {
+		if strings.Contains(string(raw), "EmptyRetirementChain") {
+			t.Fatal("derived head fact changed persisted format")
+		}
+	}
+}
+
+func TestRepositoryCrossBuildRefusesNonemptyAncestorBeforeAppendAndOnRead(t *testing.T) {
+	for _, cancelled := range []bool{false, true} {
+		t.Run(fmt.Sprintf("cancelled-%t", cancelled), func(t *testing.T) {
+			ctx := context.Background()
+			d := &memoryDisk{}
+			original := historyRecord(recordFixture().Publication.Binding, "handoff-1", historyTurnSpec{"operation", "owner", cancelled})
+			anchor := historyCycle(t, d, original, historyNextBinding(original.Publication.Binding, 2))
+			repo := repoFixture(d)
+			head := publishRetirementHead(t, repo, historyRecord(anchor.Consumption.NextBinding, "handoff-2"))
+			if head.EmptyRetirementChain || len(head.Record.Receipt.Write.Turns) != 0 {
+				t.Fatal("latest empty retirement hid ancestor")
+			}
+			next := nextBuildRecord(t, *head.Record, 3, "new-build")
+			calls, count, digest := d.calls, len(d.records), head.Digest
+			service, _ := policy.New(repo)
+			if got, err := service.Consume(ctx, head.Record.Publication, *next.Consumption); got != nil || !errors.Is(err, policy.Refused) || d.calls != calls || d.fenced {
+				t.Fatal("nonempty ancestor reached consume publication", err)
+			}
+			// Direct append has to enforce the same rule without the service.
+			if got, err := repo.Publish(ctx, digest, next); got != nil || !errors.Is(err, Refused) || d.calls != calls || len(d.records) != count || d.fenced {
+				t.Fatal("direct append bypassed ancestor refusal", err)
+			}
+			if got, err := repo.Load(ctx); err != nil || got.Digest != digest || got.EmptyRetirementChain {
+				t.Fatal("known refusal changed retained head", err)
+			}
+			// A canonical individually valid record is not a valid retained chain.
+			raw, err := encode(next)
+			if err != nil {
+				t.Fatal("record alone should be structurally valid", err)
+			}
+			d.records = append(d.records, raw)
+			if got, err := repoFixture(d).Load(ctx); got != nil || !errors.Is(err, Unknown) || !d.fenced || d.calls != calls {
+				t.Fatal("read accepted an incompatible persisted edge", err)
+			}
+		})
+	}
+}
+
+func TestRepositoryCrossBuildPublicationUnknownStaysFenced(t *testing.T) {
+	for _, fault := range []string{"partial", "lost", "late"} {
+		t.Run(fault, func(t *testing.T) {
+			d := &memoryDisk{}
+			repo := repoFixture(d)
+			head := publishRetirementHead(t, repo, recordFixture())
+			next := nextBuildRecord(t, *head.Record, 2, "new-build")
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			d.fault = fault
+			if fault == "late" {
+				d.afterAppend = cancel
+			}
+			if got, err := repo.Publish(ctx, head.Digest, next); got != nil || !errors.Is(err, Unknown) || !d.fenced {
+				t.Fatal("uncertain cross-build publication admitted", err)
+			}
+			calls := d.calls
+			d.fault, d.afterAppend = "", nil
+			fresh := repoFixture(d)
+			if got, err := fresh.Load(context.Background()); got != nil || !errors.Is(err, Unknown) {
+				t.Fatal("new repository forgot unknown", err)
+			}
+			next.Consumption.NextBinding.BuildID = "another-build"
+			if got, err := fresh.Publish(context.Background(), head.Digest, next); got != nil || !errors.Is(err, Unknown) || d.calls != calls {
+				t.Fatal("new build retried unknown publication", err)
 			}
 		})
 	}
