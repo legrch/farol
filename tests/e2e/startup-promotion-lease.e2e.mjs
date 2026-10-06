@@ -59,7 +59,7 @@ const save = () =>
   );
 await save();
 const profile = await fs.realpath(
-  await fs.mkdtemp(path.join(os.tmpdir(), "farol-startup-promotion-e2e-")),
+  await fs.mkdtemp(path.join(os.tmpdir(), "farol-next-e2e-home-")),
 );
 report.profile = profile;
 await fs.chmod(profile, 0o700);
@@ -98,7 +98,7 @@ try {
         HOME: profile,
         PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
         LANG: "C",
-        TMPDIR: profile,
+        TMPDIR: os.tmpdir(),
         FAROL_NEXT_ENVIRONMENT: "dev",
         FAROL_NEXT_E2E: "1",
         FAROL_NEXT_E2E_APP_DATA: appData,
