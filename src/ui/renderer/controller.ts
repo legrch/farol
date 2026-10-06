@@ -4,6 +4,7 @@ import {
   type NavigationShortcuts,
 } from "../../pkg/ipc/navigation-shortcuts";
 import { workspaceEditToAcknowledge } from "../workspace-edit-delivery";
+import { clampPageListWidth, shellGeometry } from "../../pkg/shell-geometry";
 import { AgentDraftStore } from "../agent-draft";
 import { ConversationDraftStore } from "./conversation-draft";
 import { z } from "zod";
@@ -131,6 +132,8 @@ const initial: WindowSnapshot = {
   back: false,
   forward: false,
   sidebar: "full",
+  sidebarWidth: shellGeometry.pageListDefault,
+  sidebarResizing: false,
   overlay: "none",
   window: { focused: false, fullScreen: false, trafficLightPosition: null },
   appearance: { theme: "system", accent: "iris", font: "geist" },
@@ -1263,6 +1266,29 @@ export class WindowController implements RendererFacade {
     this.patch({ overlay: kind });
     this.presentation();
   }
+  resizeSidebar(width: number, active: boolean): void {
+    if (this.disposed) return;
+    if (this.state.update.phase === "applying") {
+      // A pointer ending during apply must not leave a stale drag afterwards.
+      if (!active && this.state.sidebarResizing)
+        this.patch({ sidebarResizing: false });
+      return;
+    }
+    if (
+      active &&
+      (this.state.overlay !== "none" || this.state.sidebar === "rail")
+    )
+      return;
+    const sidebarWidth = clampPageListWidth(width);
+    if (
+      sidebarWidth === this.state.sidebarWidth &&
+      active === this.state.sidebarResizing
+    )
+      return;
+    this.presentationRevision++;
+    this.patch({ sidebarWidth, sidebarResizing: active });
+    this.presentation();
+  }
   appearance(value: Appearance): void {
     if (this.disposed) return;
     this.patch({ appearance: value });
@@ -1271,7 +1297,7 @@ export class WindowController implements RendererFacade {
   presentation(): void {
     if (this.disposed) return;
     const state = this.state;
-    const sidebar = state.destination.area === "home" ? "rail" : state.sidebar;
+    const sidebar = state.sidebar;
     this.api.layout(
       state.destination.area === "chatgpt"
         ? "browser"
@@ -1283,12 +1309,13 @@ export class WindowController implements RendererFacade {
       false,
       sidebar,
       state.overlay === "none"
-        ? sidebar === "overlay"
+        ? sidebar === "overlay" || state.sidebarResizing
           ? "sidebar"
           : "none"
         : state.overlay === "search"
           ? "quick-switcher"
           : "task-menu",
+      state.sidebarWidth,
     );
   }
   private hostLayout(value: unknown): void {

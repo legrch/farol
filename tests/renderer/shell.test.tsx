@@ -138,8 +138,9 @@ it("Home retains the approved rail and context sidebar and compact overlays keep
     "",
     false,
     false,
-    "rail",
-    "none",
+    "overlay",
+    "sidebar",
+    180,
   );
   await act(async () => button(host, "Close sidebar").click());
   expect(host.querySelector("main")?.hasAttribute("inert")).toBe(false);
@@ -152,6 +153,7 @@ it("Home retains the approved rail and context sidebar and compact overlays keep
     false,
     "overlay",
     "sidebar",
+    180,
   );
   await act(async () =>
     host.dispatchEvent(
@@ -161,6 +163,159 @@ it("Home retains the approved rail and context sidebar and compact overlays keep
   expect(host.querySelector(".sidebar-scrim")).toBeNull();
   expect(host.querySelector("main")?.hasAttribute("inert")).toBe(false);
 });
+it("resizes the page list with keyboard bounds and remembers its width only in this window", async () => {
+  const { host, c, f } = await mount();
+  const divider = host.querySelector<HTMLElement>('[role="separator"]')!;
+  const key = async (value: string) =>
+    act(async () => {
+      divider.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: value,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    });
+  expect(divider.getAttribute("aria-valuenow")).toBe("180");
+  await key("ArrowRight");
+  expect(c.getSnapshot().sidebarWidth).toBe(188);
+  expect(
+    host
+      .querySelector<HTMLElement>(".desktop")!
+      .style.getPropertyValue("--side-width"),
+  ).toBe("188px");
+  expect(f.api.layout).toHaveBeenLastCalledWith(
+    "activity",
+    "",
+    false,
+    false,
+    "full",
+    "none",
+    188,
+  );
+  await key("End");
+  await key("ArrowRight");
+  expect(c.getSnapshot().sidebarWidth).toBe(288);
+  await key("Home");
+  await key("ArrowLeft");
+  expect(c.getSnapshot().sidebarWidth).toBe(152);
+  await act(async () => c.toggleSidebar(false));
+  expect(host.querySelector('[role="separator"]')).toBeNull();
+  await act(async () => c.toggleSidebar(false));
+  expect(
+    host.querySelector('[role="separator"]')?.getAttribute("aria-valuenow"),
+  ).toBe("152");
+  expect(f.api.configure).not.toHaveBeenCalled();
+  expect(f.api.task).not.toHaveBeenCalled();
+});
+
+it.each([
+  "pointerup",
+  "pointercancel",
+  "lostpointercapture",
+  "blur",
+  "collapse",
+  "escape",
+])(
+  "hides native browser input during resizing and releases it after %s",
+  async (ending) => {
+    const { host, c, f } = await mount();
+    await act(async () => c.navigate({ area: "chatgpt" }));
+    const divider = host.querySelector<HTMLElement>('[role="separator"]')!;
+    divider.setPointerCapture = vi.fn();
+    divider.releasePointerCapture = vi.fn();
+    const pointer = async (type: string, x: number) =>
+      act(async () => {
+        const event = new MouseEvent(type, {
+          bubbles: true,
+          cancelable: true,
+          button: 0,
+          clientX: x,
+        });
+        Object.defineProperty(event, "pointerId", { value: 1 });
+        divider.dispatchEvent(event);
+      });
+    await pointer("pointerdown", 235);
+    expect(c.getSnapshot().sidebarResizing).toBe(true);
+    expect(f.api.layout).toHaveBeenLastCalledWith(
+      "browser",
+      "",
+      false,
+      false,
+      "full",
+      "sidebar",
+      180,
+    );
+    await pointer("pointermove", 275);
+    expect(c.getSnapshot().sidebarWidth).toBe(220);
+    if (ending === "blur")
+      await act(async () => window.dispatchEvent(new Event("blur")));
+    else if (ending === "escape")
+      await act(async () =>
+        divider.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+        ),
+      );
+    else if (ending === "collapse")
+      await act(async () => c.toggleSidebar(false));
+    else await pointer(ending, 275);
+    expect(c.getSnapshot().sidebarResizing).toBe(false);
+    expect(c.getSnapshot().sidebarWidth).toBe(ending === "escape" ? 180 : 220);
+    expect(f.api.layout).toHaveBeenLastCalledWith(
+      "browser",
+      "",
+      false,
+      false,
+      ending === "collapse" ? "rail" : "full",
+      "none",
+      ending === "escape" ? 180 : 220,
+    );
+    expect(f.api.task).not.toHaveBeenCalled();
+    expect(f.api.configure).not.toHaveBeenCalled();
+  },
+);
+
+it("automatically uses the rail at narrow widths and opens a bounded page-list overlay", async () => {
+  const { host, c, f } = await mount();
+  const originalWidth = window.innerWidth;
+  try {
+    await act(async () => {
+      window.innerWidth = 979;
+      window.dispatchEvent(new Event("resize"));
+    });
+    expect(host.querySelector(".contextual-sidebar")).toBeNull();
+    expect(button(host, "Toggle sidebar").getAttribute("aria-expanded")).toBe(
+      "false",
+    );
+    await act(async () => button(host, "Toggle sidebar").click());
+    expect(host.querySelector(".sidebar-overlay")).not.toBeNull();
+    expect(f.api.layout).toHaveBeenLastCalledWith(
+      "activity",
+      "",
+      false,
+      false,
+      "overlay",
+      "sidebar",
+      180,
+    );
+    await act(async () => button(host, "Close sidebar").click());
+    await act(async () => {
+      window.innerWidth = 1180;
+      window.dispatchEvent(new Event("resize"));
+    });
+    // Explicit dismissal preserves the user's collapsed preference when wider.
+    expect(host.querySelector(".contextual-sidebar")).toBeNull();
+    await act(async () => button(host, "Toggle sidebar").click());
+    expect(c.getSnapshot().sidebar).toBe("full");
+    expect(host.querySelector(".contextual-sidebar")).not.toBeNull();
+  } finally {
+    await act(async () => {
+      window.innerWidth = originalWidth;
+      window.dispatchEvent(new Event("resize"));
+    });
+  }
+});
+
 it("R36 R39 new profile opens Home without a legacy modal and has one leaf toolbar", async () => {
   const { host, f } = await mount();
   expect(host.querySelector(".toolbar-title")?.textContent).toBe("Home");

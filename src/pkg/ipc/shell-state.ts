@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { shellGeometry } from "../shell-geometry";
 
 export const SurfaceSectionSchema = z.enum([
   "browser",
@@ -23,6 +24,12 @@ export const ShellLayoutSchema = z.strictObject({
   setupOpen: z.boolean(),
   checkFeedbackVisible: z.boolean().default(false),
   sidebar: SidebarModeSchema,
+  sidebarWidth: z
+    .number()
+    .int()
+    .min(shellGeometry.pageListMin)
+    .max(shellGeometry.pageListMax)
+    .default(shellGeometry.pageListDefault),
   overlay: ShellOverlaySchema,
 });
 

@@ -140,6 +140,7 @@ describe("F0 window owner", () => {
       false,
       "full",
       "none",
+      180,
     );
     c.travel(1);
     expect(c.getSnapshot().destination.page).toBe("appearance");
@@ -1084,6 +1085,7 @@ it.each([
   ["history forward", (c: WindowController) => c.travel(1)],
   ["compact sidebar", (c: WindowController) => c.toggleSidebar(true)],
   ["full sidebar", (c: WindowController) => c.toggleSidebar(false)],
+  ["sidebar resize", (c: WindowController) => c.resizeSidebar(224, false)],
   ["search overlay", (c: WindowController) => c.overlay("search")],
   ["task overlay", (c: WindowController) => c.overlay("task")],
   ["dismiss overlay", (c: WindowController) => c.overlay("none")],
@@ -1114,6 +1116,22 @@ it.each([
     }
   },
 );
+it("ends a drag during update admission without resuming native browser input", async () => {
+  const f = fixture();
+  const c = new WindowController(f.api);
+  await c.start();
+  c.resizeSidebar(224, true);
+  f.emit("update", { phase: "applying", version: "1.0" });
+  vi.mocked(f.api.layout).mockClear();
+  c.resizeSidebar(224, false);
+  expect(c.getSnapshot().sidebarResizing).toBe(false);
+  expect(f.api.layout).not.toHaveBeenCalled();
+  c.dispose();
+  c.resizeSidebar(288, true);
+  expect(c.getSnapshot().sidebarWidth).toBe(224);
+  expect(f.api.layout).not.toHaveBeenCalled();
+});
+
 it.each([
   ["open-quick-switcher", "quick-switcher-command"],
   ["toggle-sidebar", "sidebar-command"],

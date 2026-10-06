@@ -1,3 +1,6 @@
+import { clampPageListWidth, shellGeometry } from "../../pkg/shell-geometry";
+export { shellGeometry } from "../../pkg/shell-geometry";
+
 export type SurfaceSection = "browser" | "computer" | "activity" | "settings";
 
 export type SidebarMode = "full" | "rail" | "overlay";
@@ -5,21 +8,11 @@ export type SidebarMode = "full" | "rail" | "overlay";
 export type ShellOverlay =
   "none" | "sidebar" | "task-menu" | "quick-switcher" | "context-preview";
 
-export const shellGeometry = Object.freeze({
-  autoRailBelow: 980,
-  sidebarFull: 294,
-  sidebarRail: 62,
-  windowBar: 58,
-  taskStrip: 0,
-  dossier: 0,
-  browserStatusStrip: 0,
-  checkFeedbackBanner: 0,
-});
-
 export function deriveSurfaceLayout(input: {
   width: number;
   height: number;
   sidebar: SidebarMode;
+  sidebarWidth?: number;
   overlay: ShellOverlay;
   section: SurfaceSection;
   setupOpen: boolean;
@@ -33,21 +26,9 @@ export function deriveSurfaceLayout(input: {
   const sidebarWidth =
     autoRail || input.sidebar !== "full"
       ? shellGeometry.sidebarRail
-      : shellGeometry.sidebarFull;
-  const pageTop =
-    shellGeometry.windowBar +
-    (input.browserChromeVisible === false
-      ? 0
-      : input.compactBrowser
-        ? 0
-        : shellGeometry.taskStrip + shellGeometry.dossier) +
-    (input.compactBrowser && input.checkFeedbackVisible
-      ? shellGeometry.checkFeedbackBanner
-      : 0);
-  const bottomReserved =
-    input.compactBrowser && input.browserChromeVisible !== false
-      ? shellGeometry.browserStatusStrip
-      : 0;
+      : shellGeometry.sidebarRail +
+        clampPageListWidth(input.sidebarWidth ?? shellGeometry.pageListDefault);
+  const pageTop = shellGeometry.windowBar;
   return {
     sidebarWidth,
     autoRail,
@@ -61,7 +42,7 @@ export function deriveSurfaceLayout(input: {
       x: sidebarWidth,
       y: pageTop,
       width: Math.max(1, input.width - sidebarWidth),
-      height: Math.max(1, input.height - pageTop - bottomReserved),
+      height: Math.max(1, input.height - pageTop),
     },
   } as const;
 }

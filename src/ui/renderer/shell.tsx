@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import type { ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
+import { shellGeometry } from "../../pkg/shell-geometry";
 import { useRenderer } from "./services";
 import { PanelBoundary } from "./boundary";
 import { Settings, useSettingsAttention } from "./settings";
@@ -604,11 +605,107 @@ function ChatBrowser({
     </div>
   );
 }
+function PageListResizer({
+  facade,
+  width,
+}: {
+  facade: RendererFacade;
+  width: number;
+}) {
+  const drag = useRef<{ pointerId: number; x: number; width: number } | null>(
+    null,
+  );
+  const finish = () => {
+    if (!drag.current) return;
+    drag.current = null;
+    facade.resizeSidebar(facade.getSnapshot().sidebarWidth, false);
+  };
+  useEffect(() => {
+    window.addEventListener("blur", finish);
+    return () => {
+      window.removeEventListener("blur", finish);
+      finish();
+    };
+  }, [facade]);
+  return (
+    <div
+      className="page-list-resizer"
+      role="separator"
+      aria-label="Resize page list"
+      aria-orientation="vertical"
+      aria-valuemin={shellGeometry.pageListMin}
+      aria-valuemax={shellGeometry.pageListMax}
+      aria-valuenow={width}
+      tabIndex={0}
+      title="Drag or use arrow keys to resize the page list"
+      onPointerDown={(event) => {
+        if (event.button !== 0 || drag.current) return;
+        const state = facade.getSnapshot();
+        facade.resizeSidebar(state.sidebarWidth, true);
+        if (!facade.getSnapshot().sidebarResizing) return;
+        event.preventDefault();
+        event.currentTarget.focus();
+        drag.current = {
+          pointerId: event.pointerId,
+          x: event.clientX,
+          width: state.sidebarWidth,
+        };
+        event.currentTarget.setPointerCapture(event.pointerId);
+      }}
+      onPointerMove={(event) => {
+        const start = drag.current;
+        if (start?.pointerId !== event.pointerId) return;
+        facade.resizeSidebar(start.width + event.clientX - start.x, true);
+      }}
+      onPointerUp={(event) => {
+        if (drag.current?.pointerId !== event.pointerId) return;
+        finish();
+        event.currentTarget.releasePointerCapture(event.pointerId);
+      }}
+      onPointerCancel={finish}
+      onLostPointerCapture={finish}
+      onKeyDown={(event) => {
+        if (event.key === "Escape" && drag.current) {
+          const original = drag.current.width;
+          finish();
+          facade.resizeSidebar(original, false);
+        } else if (event.key === "ArrowLeft")
+          facade.resizeSidebar(width - 8, drag.current !== null);
+        else if (event.key === "ArrowRight")
+          facade.resizeSidebar(width + 8, drag.current !== null);
+        else if (event.key === "Home")
+          facade.resizeSidebar(
+            shellGeometry.pageListMin,
+            drag.current !== null,
+          );
+        else if (event.key === "End")
+          facade.resizeSidebar(
+            shellGeometry.pageListMax,
+            drag.current !== null,
+          );
+        else return;
+        event.preventDefault();
+        event.stopPropagation();
+      }}
+    />
+  );
+}
+
 export function Shell() {
   const { snapshot, facade } = useRenderer();
   const state = snapshot;
   const destination = state.destination;
-  const sideVisible = state.sidebar !== "rail";
+  const [compactWindow, setCompactWindow] = useState(
+    () => window.innerWidth < shellGeometry.autoRailBelow,
+  );
+  useEffect(() => {
+    const resize = () =>
+      setCompactWindow(window.innerWidth < shellGeometry.autoRailBelow);
+    window.addEventListener("resize", resize);
+    return () => window.removeEventListener("resize", resize);
+  }, []);
+  const sideVisible =
+    state.sidebar === "overlay" || (state.sidebar === "full" && !compactWindow);
   const sidebarOverlay = sideVisible && state.sidebar === "overlay";
   const settings = destination.area === "settings";
   const settingsAttention = useSettingsAttention(facade, state);
@@ -649,7 +746,6 @@ export function Shell() {
           reviewNewChat();
       });
   };
-  const compact = () => window.matchMedia("(max-width: 979px)").matches;
   useEffect(() => {
     const listener = (event: KeyboardEvent) => {
       if (event.isComposing || event.repeat) return;
@@ -679,6 +775,15 @@ export function Shell() {
       data-font={state.appearance.font}
       data-sidebar={sidebarOverlay ? "overlay" : sideVisible ? "full" : "rail"}
       data-window-active={state.window.focused}
+      data-sidebar-resizing={state.sidebarResizing}
+      style={
+        {
+          "--rail-width": `${shellGeometry.sidebarRail}px`,
+          "--toolbar-height": `${shellGeometry.windowBar}px`,
+          "--page-list-width": `${state.sidebarWidth}px`,
+          "--side-width": `${sideVisible && !sidebarOverlay ? state.sidebarWidth : 0}px`,
+        } as CSSProperties
+      }
     >
       <header className="toolbar">
         <div className="navigation-chrome">
@@ -701,7 +806,7 @@ export function Shell() {
             title="Show or hide page list"
             aria-label="Toggle sidebar"
             aria-expanded={sideVisible}
-            onClick={() => facade.toggleSidebar(compact())}
+            onClick={() => facade.toggleSidebar(compactWindow)}
           >
             <Icon name="sidebar" />
           </button>
@@ -843,6 +948,7 @@ export function Shell() {
           className={`sidebar contextual-sidebar ${sidebarOverlay ? "sidebar-overlay" : ""}`}
           aria-label={settings ? "Settings pages" : "Page list"}
         >
+          <PageListResizer facade={facade} width={state.sidebarWidth} />
           <h2>
             {settings
               ? "Settings"

@@ -44,6 +44,7 @@ contextBridge.exposeInMainWorld("farolNext", {
     checkFeedbackVisible: boolean,
     sidebar: string,
     overlay: string,
+    sidebarWidth?: number,
   ) => {
     ipcRenderer.send(channels.layout, {
       section,
@@ -52,6 +53,7 @@ contextBridge.exposeInMainWorld("farolNext", {
       checkFeedbackVisible,
       sidebar,
       overlay,
+      sidebarWidth,
     });
   },
   onRuntimeEvent: (listener: (event: unknown) => void) => {

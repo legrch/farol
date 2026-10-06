@@ -122,20 +122,14 @@ code {
   --tint: #ece7f8;
   --good: #2f7555;
   --warn: #8c581b;
-  /* Match the existing host bounds until its owner changes the geometry. */
-  --side-width: 232px;
   color: var(--fg);
   background: var(--bg);
   height: 100%;
   display: grid;
-  grid-template-columns: 62px var(--side-width) minmax(0, 1fr);
-  grid-template-rows: 58px minmax(0, 1fr);
+  grid-template-columns: var(--rail-width) var(--side-width) minmax(0, 1fr);
+  grid-template-rows: var(--toolbar-height) minmax(0, 1fr);
   overflow: hidden;
   color-scheme: light;
-}
-.desktop[data-sidebar="rail"],
-.desktop[data-sidebar="overlay"] {
-  --side-width: 0px;
 }
 .desktop[data-font="geist"] {
   font-family:
@@ -220,7 +214,7 @@ code {
 .navigation-chrome {
   display: flex;
   align-items: center;
-  width: calc(62px + var(--side-width));
+  width: calc(var(--rail-width) + var(--side-width));
   min-width: 216px;
   gap: 2px;
   height: 100%;
@@ -342,6 +336,7 @@ kbd {
   padding-top: 12px;
 }
 .contextual-sidebar {
+  position: relative;
   grid-column: 2;
   grid-row: 2;
   background: var(--side);
@@ -350,6 +345,24 @@ kbd {
   overflow: auto;
   min-width: 0;
   scrollbar-gutter: stable;
+}
+.page-list-resizer {
+  position: absolute;
+  inset: 0 0 0 auto;
+  width: 6px;
+  cursor: col-resize;
+  touch-action: none;
+  -webkit-app-region: no-drag;
+  z-index: 1;
+}
+.page-list-resizer:hover,
+.page-list-resizer:focus-visible {
+  background: var(--accent);
+  outline: none;
+}
+.desktop[data-sidebar-resizing="true"] {
+  cursor: col-resize;
+  user-select: none;
 }
 .contextual-sidebar h2,
 .contextual-sidebar > .description {
@@ -704,14 +717,14 @@ kbd {
   grid-row: 2;
   background: #0004;
   position: absolute;
-  inset: 58px 0 0 62px;
+  inset: var(--toolbar-height) 0 0 var(--rail-width);
   z-index: 4;
   border-radius: 0;
 }
 .sidebar-overlay {
   position: absolute;
-  inset: 58px auto 0 62px;
-  width: 232px;
+  inset: var(--toolbar-height) auto 0 var(--rail-width);
+  width: var(--page-list-width);
   z-index: 5;
 }
 ::-webkit-scrollbar {
@@ -724,12 +737,6 @@ kbd {
   border-radius: 6px;
 }
 @media (max-width: 979px) {
-  .desktop {
-    --side-width: 0px;
-  }
-  .contextual-sidebar:not(.sidebar-overlay) {
-    display: none;
-  }
   .home-columns {
     grid-template-columns: minmax(0, 1fr) 210px;
     gap: 24px;

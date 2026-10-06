@@ -212,7 +212,7 @@ import {
   ProductConfigurationService,
   ProductSettingsStore,
 } from "./product-configuration";
-import { deriveSurfaceLayout } from "./surface-layout";
+import { deriveSurfaceLayout, shellGeometry } from "./surface-layout";
 import {
   NativeReadonlyWorkspace,
   NEXT_SAFE_OPEN_HELPER,
@@ -727,6 +727,7 @@ let section: SurfaceSection = "browser";
 let selectedTaskId: string = expectedTasks[0]?.taskId ?? "";
 let setupOpen = true;
 let sidebarMode: SidebarMode = "full";
+let sidebarWidth: number = shellGeometry.pageListDefault;
 let shellOverlay: ShellOverlay = "none";
 let navigationShortcuts: NavigationShortcuts = {
   ...defaultNavigationShortcuts,
@@ -8522,6 +8523,7 @@ function publishLayout(): void {
     setupOpen,
     checkFeedbackVisible,
     sidebar: sidebarMode,
+    sidebarWidth,
     overlay: shellOverlay,
   });
 }
@@ -9067,6 +9069,7 @@ function applyLayout(): void {
     width,
     height,
     sidebar: sidebarMode,
+    sidebarWidth,
     overlay: shellOverlay,
     section,
     setupOpen,
@@ -9463,6 +9466,7 @@ function installIpc(): void {
     setupOpen = parsed.data.setupOpen;
     checkFeedbackVisible = parsed.data.checkFeedbackVisible;
     sidebarMode = parsed.data.sidebar;
+    sidebarWidth = parsed.data.sidebarWidth;
     shellOverlay = parsed.data.overlay;
     applyLayout();
     if (focusTargetChanged) focusForLayoutAfterRendererCommit();
