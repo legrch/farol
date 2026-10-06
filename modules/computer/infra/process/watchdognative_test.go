@@ -44,9 +44,15 @@ func TestNativeWatchdogTransport(t *testing.T) {
 			diagnostic := []byte{0, 255, 'E', 'R', 'R', '\n'}
 			const command = `
 const timer = setTimeout(() => process.exit(90), 1500);
+// Darwin CoreFoundation may add its own per-UID text-encoding field after exec.
+// It is not inherited command authority. Reject every other unexpected field;
+// the selected environment remains exactly the two synthetic values below.
+const encoding = process.env.__CF_USER_TEXT_ENCODING;
+const encodingValid = encoding === undefined ||
+  new RegExp("^" + process.getuid() + ":0x[0-9a-fA-F]+:0x[0-9a-fA-F]+$").test(encoding);
 if (process.cwd() !== process.env.SYNTHETIC_CWD ||
     process.env.SYNTHETIC_VALUE !== "transport-only" ||
-    Object.keys(process.env).sort().join(",") !== "SYNTHETIC_CWD,SYNTHETIC_VALUE" ||
+    !encodingValid || Object.keys(process.env).filter((name) => name !== "__CF_USER_TEXT_ENCODING").sort().join(",") !== "SYNTHETIC_CWD,SYNTHETIC_VALUE" ||
     process.argv[1] !== "opaque argument λ") process.exit(91);
 const chunks = [];
 process.stdin.on("data", (chunk) => chunks.push(chunk));
