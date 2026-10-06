@@ -4,7 +4,10 @@ import type { Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Settings } from "../../src/ui/renderer/settings";
 import { WindowController } from "../../src/ui/renderer/controller";
-import type { SettingsPage } from "../../src/ui/renderer/contract";
+import type {
+  SettingsPage,
+  WindowSnapshot,
+} from "../../src/ui/renderer/contract";
 import {
   ProductConfigurationCommandSchema,
   ProductSettingsSchema,
@@ -46,8 +49,10 @@ async function mount(
   page: SettingsPage = "general",
   value: ProductSettings = settings(),
   environment: "preview" | "dev" = "preview",
+  update: WindowSnapshot["update"] = { phase: "idle", checkedAt: null },
 ) {
   const f = fixture();
+  vi.mocked(f.api.installedUpdate).mockResolvedValue(update);
   const configuration = { status: "ready" as const, settings: value };
   vi.mocked(f.api.bootstrap).mockResolvedValue({
     ...bootstrap(),
@@ -702,6 +707,80 @@ describe("bounded Settings writer", () => {
       kind: "check",
     });
   });
+  it.each<WindowSnapshot["update"]>([
+    { phase: "unavailable", code: "UPDATE_NOT_INSTALLED" },
+    { phase: "idle", checkedAt: null },
+    {
+      phase: "ready",
+      version: "0.2.1-owner.beta.1",
+      deferred: false,
+      blockedBy: null,
+    },
+  ])(
+    "explains Dev rebuilds without installed update controls for $phase",
+    async (update) => {
+      const h = await mount("updates", settings(), "dev", update);
+      const page = h.host.querySelector(
+        'section[aria-label="Development app"]',
+      )!.parentElement!;
+      expect(page.closest("div[hidden]")).toBeNull();
+      expect(page.textContent).toContain("Development app");
+      expect(page.textContent).toContain(
+        "Farol Dev is updated by rebuilding the development app from source.",
+      );
+      expect(page.textContent).toContain(
+        "Installed app updates are available in the installed Farol app.",
+      );
+      expect(page.textContent).not.toContain("Installed update");
+      expect(page.textContent).not.toContain("unavailable");
+      expect(page.textContent).not.toContain("UPDATE_NOT_INSTALLED");
+      expect(page.querySelectorAll("button")).toHaveLength(0);
+      expect(h.c.getSnapshot().update).toEqual(update);
+      expect(h.c.getSnapshot().overlay).toBe("none");
+      expect(h.f.api.installedUpdate).toHaveBeenCalledExactlyOnceWith({
+        kind: "status",
+      });
+      expect(h.calls()).toEqual([]);
+      await h.pageTo("diagnostics");
+      expect(h.host.textContent).toContain("Environment: dev");
+      expect(h.c.getSnapshot().update).toEqual(update);
+      await h.pageTo("updates");
+      expect(page.closest("div[hidden]")).toBeNull();
+      expect(page.textContent).toContain("Development app");
+      expect(page.querySelectorAll("button")).toHaveLength(0);
+      expect(h.f.api.installedUpdate).toHaveBeenCalledTimes(1);
+    },
+  );
+  it("preserves installed update diagnostics even with UPDATE_NOT_INSTALLED", async () => {
+    const h = await mount("updates", settings(), "preview", {
+      phase: "unavailable",
+      code: "UPDATE_NOT_INSTALLED",
+    });
+    expect(h.host.textContent).toContain("Installed update");
+    expect(h.host.textContent).toContain("unavailable");
+    expect(h.host.textContent).toContain("UPDATE_NOT_INSTALLED");
+    expect(h.host.textContent).not.toContain("Development app");
+    expect(h.button("Check for updates once").disabled).toBe(false);
+    vi.mocked(h.f.api.installedUpdate).mockClear();
+    await h.click("Review update");
+    expect(h.c.getSnapshot().overlay).toBe("update");
+    expect(h.f.api.installedUpdate).not.toHaveBeenCalled();
+  });
+  it.each<WindowSnapshot["update"]>([
+    { phase: "checking" },
+    { phase: "downloading" },
+    { phase: "applying", version: "0.2.1-owner.beta.1" },
+  ])(
+    "preserves the installed update check guard for $phase",
+    async (update) => {
+      const h = await mount("updates");
+      await act(async () => h.f.emit("update", update));
+      vi.mocked(h.f.api.installedUpdate).mockClear();
+      expect(h.button("Check for updates once").disabled).toBe(true);
+      await h.click("Check for updates once");
+      expect(h.f.api.installedUpdate).not.toHaveBeenCalled();
+    },
+  );
   it("exports diagnostics explicitly and observes only the existing pending edit", async () => {
     const h = await mount("diagnostics");
     await h.click("Export support diagnostics…");

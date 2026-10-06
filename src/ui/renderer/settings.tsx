@@ -1911,6 +1911,19 @@ function Updates({ snapshot, facade, actions }: PageProps) {
   const busy = useRef(false);
   const [checked, setChecked] = useState(false);
   const update = snapshot.update;
+  if (snapshot.environment === "dev") {
+    return (
+      <>
+        <h2>Updates</h2>
+        <Group title="Development app">
+          <p className="description">
+            Farol Dev is updated by rebuilding the development app from source.
+            Installed app updates are available in the installed Farol app.
+          </p>
+        </Group>
+      </>
+    );
+  }
   return (
     <>
       <h2>Updates</h2>
