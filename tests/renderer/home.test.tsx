@@ -503,8 +503,85 @@ it("derives unknown and refused attention without rerunning operations", async (
     id: "intent:refused",
   });
   expect(h.content().textContent).toContain("does not retry");
+  expect(h.content().textContent).toContain("refused");
+  expect(h.content().textContent).toContain("REFUSED");
+  await h.click("Inspect action details");
+  expect(h.c.getSnapshot().destination).toMatchObject({
+    area: "settings",
+    page: "diagnostics",
+  });
   noEffects(h.f);
 });
+it("keeps unknown action identity and directs its review to retained Diagnostics", async () => {
+  const h = await mount([], {
+    intents: {
+      "settings:model.preview:": {
+        id: "settings:model.preview:",
+        state: "unknown",
+        code: "MODEL_PREVIEW_UNKNOWN",
+      },
+    },
+  });
+  await act(async () =>
+    h.c.navigate({
+      area: "home",
+      homeView: "attention",
+      homeSelection: {
+        kind: "attention",
+        id: "intent:settings:model.preview:",
+      },
+    }),
+  );
+  expect(h.content().textContent).toContain("settings:model.preview:");
+  expect(h.content().textContent).toContain("MODEL_PREVIEW_UNKNOWN");
+  expect(h.content().textContent).not.toContain("Open full Activity");
+  await h.click("Inspect action details");
+  expect(h.c.getSnapshot().destination).toMatchObject({
+    area: "settings",
+    page: "diagnostics",
+  });
+  noEffects(h.f);
+});
+it.each(["pending", "delivery"] as const)(
+  "routes a %s folder edit to its existing observation surface without substituting another operation",
+  async (state) => {
+    const value = readySettings();
+    const operationId = "33333333-3333-4333-8333-333333333333";
+    if (state === "pending")
+      value.computer.pendingEdit = {
+        operationId,
+        workspaceId: folder.workspaceId,
+        relativePath: "file.txt",
+        computerGeneration: 1,
+        submittedAt: "2026-10-06T10:00:00.000Z",
+      };
+    const h = await mount([], {
+      configuration: { status: "ready", settings: value },
+      workspaceEditDelivery: state === "delivery" ? operationId : null,
+    });
+    await act(async () =>
+      h.c.navigate({
+        area: "home",
+        homeView: "attention",
+        homeSelection: { kind: "attention", id: `folder-edit:${operationId}` },
+      }),
+    );
+    expect(h.content().textContent).toContain(operationId);
+    await h.click("Inspect action details");
+    expect(h.c.getSnapshot().destination).toMatchObject({
+      area: "settings",
+      page: "diagnostics",
+    });
+    await act(async () => h.c.travel(-1));
+    await h.set({
+      configuration: { status: "ready", settings: readySettings() },
+      workspaceEditDelivery: "44444444-4444-4444-8444-444444444444",
+    });
+    expect(h.content().textContent).toContain("This item is no longer present");
+    expect(h.content().textContent).not.toContain("44444444");
+    noEffects(h.f);
+  },
+);
 it("shows missing attention and event inspectors without substituting another record", async () => {
   const h = await mount();
   await act(async () =>

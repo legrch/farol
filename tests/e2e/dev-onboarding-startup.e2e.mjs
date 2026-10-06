@@ -483,13 +483,16 @@ try {
           exact: true,
         })
         .click();
-      await legacyWindow.locator(".folder-row").waitFor();
+      await legacyWindow
+        .getByRole("region", { name: "Approved folders", exact: true })
+        .locator(".folder-row")
+        .waitFor();
       await legacyWindow
         .getByRole("button", { name: "Check access", exact: true })
         .click();
       await legacyWindow.waitForFunction(() =>
         document
-          .querySelector(".folder-row .badges")
+          .querySelector('[aria-label="Approved folders"] .folder-row .badges')
           ?.textContent?.includes("Access checked"),
       );
       await legacyWindow

@@ -24,8 +24,9 @@ type Issue = {
   title: string;
   state: string;
   copy: string;
-  target: "access" | "folders" | "work" | "activity";
+  target: "access" | "folders" | "work" | "diagnostics";
   task?: ProductTask;
+  details?: [string, ReactNode][];
 };
 
 function Glyph({ name }: { name: string }) {
@@ -147,13 +148,20 @@ function projection(snapshot: WindowSnapshot) {
         copy: `Configured access: ${item.folder.access === "write" ? "Read and write" : "Read only"}. Sharing a folder and verifying its access are separate steps.`,
         target: "folders",
       });
-    if (settings.computer.pendingEdit || snapshot.workspaceEditDelivery)
+    const editIds = new Set(
+      [
+        settings.computer.pendingEdit?.operationId,
+        snapshot.workspaceEditDelivery,
+      ].filter((id): id is string => Boolean(id)),
+    );
+    for (const operationId of editIds)
       issues.push({
-        id: "folder-edit",
+        id: `folder-edit:${operationId}`,
         title: "A folder edit needs review",
         state: "Pending review",
-        copy: "Inspect the existing operation in Settings before changing folder access.",
-        target: "folders",
+        copy: "Inspect the existing operation and its delivery state in Diagnostics before preparing another edit.",
+        target: "diagnostics",
+        details: [["Operation", operationId]],
       });
   }
   for (const task of work.filter((task) =>
@@ -184,7 +192,11 @@ function projection(snapshot: WindowSnapshot) {
         intent.state === "unknown"
           ? "The action has no confirmed result. Opening this item does not repeat it."
           : "The action was refused. Opening this item does not retry it.",
-      target: "activity",
+      target: "diagnostics",
+      details: [
+        ["Action", intent.id],
+        ["Recorded code", intent.code ?? "Not recorded"],
+      ],
     });
   const connection = !current(snapshot)
     ? "Evidence unavailable"
@@ -544,6 +556,7 @@ function Inspector({ snapshot, facade }: Props) {
         <h2>{issue.title}</h2>
         <Badge>{issue.state}</Badge>
         <p className="home-candidate-copy">{issue.copy}</p>
+        {issue.details && <Facts rows={issue.details} />}
         <div className="home-candidate-actions">
           {issue.target === "folders" ? (
             <button
@@ -567,12 +580,14 @@ function Inspector({ snapshot, facade }: Props) {
             >
               Inspect current work
             </button>
-          ) : issue.target === "activity" ? (
+          ) : issue.target === "diagnostics" ? (
             <button
               type="button"
-              onClick={() => facade.navigate({ area: "activity" })}
+              onClick={() =>
+                facade.navigate({ area: "settings", page: "diagnostics" })
+              }
             >
-              Open full Activity <Glyph name="forward" />
+              Inspect action details <Glyph name="forward" />
             </button>
           ) : (
             <button type="button" onClick={() => go(facade, "access")}>
