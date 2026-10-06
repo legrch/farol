@@ -1947,6 +1947,9 @@ async function createRuntime(
               ...(supervised ? { promotionLease: supervised.transfer } : {}),
               recordSpawn: async (spawned) => {
                 operation = spawned;
+                // The external supervisor must retain this original child even
+                // if recording or measuring its identity subsequently fails.
+                supervised?.observeHelper(spawned);
                 if (spawned.pid === null)
                   throw new Error("UPDATE_HELPER_IDENTITY_UNKNOWN");
                 // Record before helper code or request bytes are sent, then enrich
@@ -1966,7 +1969,6 @@ async function createRuntime(
                   },
                 };
                 await writeRecord(readyFile, retained);
-                supervised?.observeHelper(spawned);
               },
             },
           );

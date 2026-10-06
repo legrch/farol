@@ -456,6 +456,51 @@ describe("supervised installed updater (native files/lease, mocked package/proce
     });
     await controller!.close();
   });
+
+  it("retains the original helper before its identity observation can fail", async () => {
+    const input = await selected();
+    const operation = {
+      pid: 123,
+      operationId: "original-start-unknown",
+      completion: new Promise(() => undefined),
+      observe: () => ({}),
+    };
+    mocks.helper.mockImplementation(async (_path, _request, launch) => {
+      try {
+        await launch.recordSpawn(operation);
+        throw new Error("fixture expected failed start observation");
+      } catch {
+        return {
+          status: "outcome_unknown",
+          reason: "spawn_record_unknown",
+          operation,
+        };
+      }
+    });
+    const controller = await createSupervisedInstalledUpdateRuntime(input);
+    await controller!.initialize();
+    await controller!.prepareLocal();
+    mocks.captureStart.mockImplementation(async (pid: number) => {
+      if (pid === 123) {
+        expect(input.observeHelper).toHaveBeenCalledExactlyOnceWith(operation);
+        throw new Error("fixture original child start observation failed");
+      }
+      return "selected-start";
+    });
+    await controller!.restart();
+    expect(controller!.snapshot()).toMatchObject({
+      phase: "failed",
+      code: "UPDATE_HANDOFF_UNKNOWN",
+      recoveryRequired: true,
+    });
+    expect(input.observeHelper).toHaveBeenCalledExactlyOnceWith(operation);
+    expect(JSON.parse(await fs.readFile(ready, "utf8"))).toMatchObject({
+      helper: { pid: 123, processStart: null },
+    });
+    await controller!.restart();
+    expect(mocks.helper).toHaveBeenCalledTimes(1);
+    await controller!.close();
+  });
 });
 
 describe("installed updater composition (disposable filesystem and mocked native/GitHub ports)", () => {
