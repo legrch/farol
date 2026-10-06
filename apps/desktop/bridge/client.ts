@@ -242,10 +242,12 @@ export class Client {
           : undefined;
     const retiring =
       method === "computer.connector.close" ||
+      method === "computer.authority.deactivate" ||
       method === "core.retirement.prepare" ||
       method === "core.retirement.ack";
     // Reserve eight one-shot control calls so reaching the ordinary history
-    // bound cannot prevent connector closure and the original retirement ACK.
+    // bound cannot prevent authority withdrawal, connector closure, and the
+    // original retirement ACK. All keep their lifetime one-shot ID fence.
     if (
       this.pending.size >= 32 ||
       this.writerBusy ||

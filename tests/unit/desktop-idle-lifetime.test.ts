@@ -8,9 +8,11 @@ import {
 } from "../../apps/desktop/bridge/client.ts";
 import { Decoder, frame } from "../../apps/desktop/bridge/frame.ts";
 import type { Request } from "../../apps/desktop/bridge/wire.ts";
+import { SettingsStorePump } from "../../apps/desktop/bridge/settings-store.ts";
+import { GoComputerAuthority } from "../../apps/desktop/go-computer-authority.ts";
 
 // Real framed Client, controlled in-memory pipe peer. No Go/Electron/provider.
-async function peer() {
+async function peer(heldMethods: readonly string[] = []) {
   const child = Object.assign(new EventEmitter(), {
     stdin: new PassThrough(),
     stdout: new PassThrough(),
@@ -18,38 +20,43 @@ async function peer() {
   });
   const context = { profileId: "profile", backendGeneration: "backend" };
   const calls: Request[] = [];
+  const answered = new Set<Request>();
+  const reply = (request: Request, data?: unknown) => {
+    if (answered.has(request)) return;
+    answered.add(request);
+    child.stdout.write(
+      frame({
+        jsonrpc: "2.0",
+        id: request.id,
+        result: {
+          status: "ok",
+          requestId: request.id,
+          context,
+          ...(request.params.operationId === undefined
+            ? {}
+            : { operationId: request.params.operationId }),
+          data:
+            data ??
+            (request.method === "core.handshake"
+              ? {
+                  protocolMajor: 1,
+                  protocolMinor: 0,
+                  buildId: "build",
+                  ...context,
+                  capabilities: [],
+                  maxFrameBytes: 1048576,
+                }
+              : {}),
+        },
+      }),
+    );
+  };
   const decoder = new Decoder();
   child.stdin.on("data", (bytes: Buffer) =>
     decoder.push(bytes, (value) => {
       const request = value as Request;
       calls.push(request);
-      child.stdout.write(
-        frame({
-          jsonrpc: "2.0",
-          id: request.id,
-          result: {
-            status: "ok",
-            requestId: request.id,
-            context,
-            ...(request.params.operationId === undefined
-              ? {}
-              : { operationId: request.params.operationId }),
-            data:
-              request.method === "core.handshake"
-                ? {
-                    protocolMajor: 1,
-                    protocolMinor: 0,
-                    buildId: "build",
-                    ...context,
-                    capabilities: [],
-                    maxFrameBytes: 1048576,
-                  }
-                : request.method.endsWith(".next")
-                  ? { command: null }
-                  : {},
-          },
-        }),
-      );
+      if (!heldMethods.includes(request.method)) reply(request);
     }),
   );
   const client = new Client(child as unknown as ChildProcessWithoutNullStreams);
@@ -62,8 +69,85 @@ async function peer() {
     },
     1000,
   );
-  return { client, calls };
+  return { client, calls, reply };
 }
+
+it.each([true, false])(
+  "retires the running Settings pump at history saturation only after the original withdrawal ACK (valid=%s)",
+  async (valid) => {
+    const { client, calls, reply } = await peer([
+      "computer.settings.store.next",
+      "computer.authority.deactivate",
+    ]);
+    const authority = new GoComputerAuthority(client, client.verifiedContext);
+    let fences = 0;
+    const pump = new SettingsStorePump(client, {
+      read: async () => {
+        throw new Error("unexpected_read");
+      },
+      replace: async () => {
+        throw new Error("unexpected_replace");
+      },
+      fence: async () => {
+        fences++;
+        await authority.withdraw();
+      },
+    });
+    pump.start();
+    try {
+      for (let i = 0; i < 4087; i++)
+        await client.request("core.status", {}, { id: `status-${i}` });
+      await expect(
+        client.request("core.status", {}, { id: "overflow" }),
+      ).rejects.toBeInstanceOf(RequestNotSentError);
+      await client.request(
+        "core.retirement.prepare",
+        {},
+        { operationId: "prepare" },
+      );
+      const stopped = pump.stop();
+      expect(pump.stop()).toBe(stopped);
+      expect(pump.state).toBe("running");
+      expect(pump.fenceState).toBe("pending");
+      const withdrawal = calls.filter(
+        (call) => call.method === "computer.authority.deactivate",
+      );
+      expect(withdrawal).toHaveLength(1);
+      reply(
+        calls.find((call) => call.method === "computer.settings.store.next")!,
+      );
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(pump.fenceState).toBe("pending");
+      expect(pump.state).toBe("running");
+      reply(withdrawal[0]!, valid ? { fence: "1", storeRevision: "0" } : {});
+      await stopped;
+      expect(fences).toBe(1);
+      expect(pump.state).toBe(valid ? "stopped" : "unknown");
+      expect(pump.fenceState).toBe(valid ? "confirmed" : "failed");
+      await pump.stop();
+      expect(fences).toBe(1);
+      if (valid) {
+        await client.request(
+          "computer.connector.close",
+          {},
+          { operationId: "close" },
+        );
+        await client.request("core.retirement.ack", {}, { operationId: "ack" });
+      }
+      expect(
+        calls.filter((call) => call.method === "core.retirement.ack"),
+      ).toHaveLength(valid ? 1 : 0);
+      expect(
+        calls.filter((call) => call.method === "computer.authority.deactivate"),
+      ).toHaveLength(1);
+    } finally {
+      for (const call of calls) reply(call);
+      await pump.stop();
+      await client.close();
+    }
+  },
+  30000,
+);
 
 it("keeps both idle polls alive beyond a night's old stream budget and retains retirement capacity", async () => {
   const { client, calls } = await peer();
