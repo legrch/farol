@@ -13,19 +13,19 @@ export const BRAND_RESOURCES = Object.freeze([
   },
   {
     output: "farol-mark.png",
-    source: "sunrise/master.png",
-    sha256: "d97ba675a63d121ba0f8b6b9f4b7f3511f2a3b697b9ee623551baae80162ea1d",
+    source: "sunrise-dock/farol-sunrise.png",
+    sha256: "f39686f1a403a2467ada335b57465c18a8d0e3fb24481cbc7afdfb8e183b933a",
   },
   {
     output: "farol-dev-mark.png",
-    source: "sunrise/master.png",
-    sha256: "d97ba675a63d121ba0f8b6b9f4b7f3511f2a3b697b9ee623551baae80162ea1d",
+    source: "sunrise-dock/farol-sunrise-dev.png",
+    sha256: "df215365ee0e57768fb6c42e44c26822ea44c61e1a779e4166597936ef1ab94d",
   },
   {
     output: "farol.icns",
-    source: "sunrise/farol.icns",
-    maxBytes: 1413163,
-    sha256: "58a47e3db012eeec25f4cf3569c396a73c2b91c6e0347e99aa94c00f264aed5f",
+    source: "sunrise-dock/farol-sunrise.icns",
+    maxBytes: 1517952,
+    sha256: "5f224ce9c647a279cea50d109edbe6aca5cb264b0017efc62280bb47d664a2a1",
   },
 ]);
 

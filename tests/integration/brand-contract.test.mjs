@@ -117,4 +117,23 @@ it("embeds exact approved native template pixels without expanding the package c
     "farol-dev-mark.png",
     "farol.icns",
   ]);
+
+  const standard = BRAND_RESOURCES.find(
+    (resource) => resource.output === "farol-mark.png",
+  );
+  const development = BRAND_RESOURCES.find(
+    (resource) => resource.output === "farol-dev-mark.png",
+  );
+  const bundle = BRAND_RESOURCES.find(
+    (resource) => resource.output === "farol.icns",
+  );
+  expect(standard?.source).toBe("sunrise-dock/farol-sunrise.png");
+  expect(development?.source).toBe("sunrise-dock/farol-sunrise-dev.png");
+  expect(development?.sha256).not.toBe(standard?.sha256);
+  expect(bundle?.source).toBe("sunrise-dock/farol-sunrise.icns");
+
+  const desktop = await fs.readFile("src/apps/desktop/main.ts", "utf8");
+  expect(desktop).toContain('activeDesktopIdentity.environment === "dev"');
+  expect(desktop).toContain('"farol-dev-mark.png"');
+  expect(desktop).toContain('"farol-mark.png"');
 });

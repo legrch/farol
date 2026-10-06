@@ -9813,7 +9813,12 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
   );
   if (process.platform === "darwin") {
     const icon = nativeImage.createFromPath(
-      path.join(directory, "farol-mark.png"),
+      path.join(
+        directory,
+        activeDesktopIdentity.environment === "dev"
+          ? "farol-dev-mark.png"
+          : "farol-mark.png",
+      ),
     );
     if (icon.isEmpty()) throw new Error("DESKTOP_BRAND_IMAGE_INVALID");
     app.dock?.setIcon(icon);
