@@ -38,9 +38,23 @@ remain separate implementation/qualification slices. The actual native Seatbelt
 alias test denied direct protected paths, symlinks and outside-root reads but
 allowed a hardlink alias to synthetic protected bytes. That failed stronger
 confinement claim remains open; it has not been waived or fixed by source-only
-tests. HOME/scratch semantics, ordinary linked-worktree Git and descendant cleanup
+tests. The selected contract is strict object protection: an excluded file must
+remain inaccessible through another hardlink in an allowed subtree, for both
+reading and writing throughout execution. Path-only rules and a passing finite
+fixture do not establish that invariant. Current Seatbelt selection has no
+continuous object-level enforcement, so normal Shell activation stays refused;
+read-only access or a smaller subtree is not a demonstrated safe exception.
+HOME/scratch semantics, ordinary linked-worktree Git and descendant cleanup
 also remain gates. The historical shell table below describes the earlier
 TypeScript route and does not qualify Go shell.
+
+A fresh authorized watchdog transport run at `6de0871a` failed in its first
+root-exit scenario. The retained channel observed `prepared`, `ready`, then
+`error`; the exact helper was waited once and ended by SIGKILL. No command exit,
+output drain or group/descendant closure was observed. Later cases did not run,
+and the unresolved synthetic tree was retained. That result does not qualify
+Shell or settle the earlier failed watchdog operation. Diagnostic classification
+must not turn either unknown outcome into a retry or success.
 
 The prepared Go process path now retains complete terminal output, bounded at
 4 MiB, in the existing mutation repository. Its original v4 reservation remains

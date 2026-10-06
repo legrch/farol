@@ -12,6 +12,14 @@ const { spawn } = require("node:child_process");
 if (process.env?.FAROL_SHELL_WATCHDOG_MODE === "go-prepared-v1" &&
     process.argv?.[1] === "--farol-go-prepared-v1") {
   const { constants } = require("node:os");
+  // Private, closed diagnostics only. Never forward exception/code/path text.
+  const errorReason = Object.freeze({
+    invalidPrepare: "invalid-prepare", invalidControl: "invalid-control",
+    invalidStart: "invalid-start", invalidExit: "invalid-exit",
+    invalidClose: "invalid-close", commandError: "command-error",
+    stdinEpipe: "stdin-epipe", stdinError: "stdin-error",
+    dispatchException: "dispatch-exception",
+  });
   let selected = null;
   let command = null;
   let timer = null;
@@ -97,7 +105,7 @@ if (process.env?.FAROL_SHELL_WATCHDOG_MODE === "go-prepared-v1" &&
     pump();
     return !stopped && !channelFailed;
   }
-  function refuse() { emit("error"); stopNow(); }
+  function refuse(reason) { emit("error", { reason }); stopNow(); }
   function output(type, chunk) {
     if (!ready || closed || stopped || channelFailed) return;
     outputBytes += chunk.length;
@@ -127,17 +135,17 @@ if (process.env?.FAROL_SHELL_WATCHDOG_MODE === "go-prepared-v1" &&
           Object.entries(message.environment).reduce((total, [name, value]) => total + Buffer.byteLength(name) + Buffer.byteLength(value) + 1, 0) > 64 * 1024 ||
           typeof message.stdinBase64 !== "string" || message.stdinBase64.length > 1398104 ||
           !Number.isSafeInteger(message.deadlineAt) || message.deadlineAt <= Date.now() || message.deadlineAt > Date.now() + 15000) {
-        refuse(); return;
+        refuse(errorReason.invalidPrepare); return;
       }
       const input = Buffer.from(message.stdinBase64, "base64");
-      if (input.length > 1024 * 1024 || input.toString("base64") !== message.stdinBase64) { refuse(); return; }
+      if (input.length > 1024 * 1024 || input.toString("base64") !== message.stdinBase64) { refuse(errorReason.invalidPrepare); return; }
       id = message.id;
       selected = { ...message, args: [...message.args], environment: { ...message.environment }, input };
       timer = setTimeout(() => { emit("deadline"); stopNow(); }, message.deadlineAt - Date.now());
       emit("prepared");
       return;
     }
-    if (!exact(message, ["type", "id"]) || !selected || message.id !== id) { refuse(); return; }
+    if (!exact(message, ["type", "id"]) || !selected || message.id !== id) { refuse(errorReason.invalidControl); return; }
     if (message.type === "stop") {
       if (stopRequested) return;
       stopRequested = true;
@@ -145,7 +153,7 @@ if (process.env?.FAROL_SHELL_WATCHDOG_MODE === "go-prepared-v1" &&
       emit("stop-requested", {}, stopNow);
       return;
     }
-    if (message.type !== "start" || started || stopRequested || Date.now() >= selected.deadlineAt) { refuse(); return; }
+    if (message.type !== "start" || started || stopRequested || Date.now() >= selected.deadlineAt) { refuse(errorReason.invalidStart); return; }
     started = true; // Consumed before the one spawn, including unknown failure.
     try {
       command = spawn(selected.executable, selected.args, {
@@ -159,11 +167,11 @@ if (process.env?.FAROL_SHELL_WATCHDOG_MODE === "go-prepared-v1" &&
       });
       command.stdout.on("data", (chunk) => output("stdout", chunk));
       command.stderr.on("data", (chunk) => output("stderr", chunk));
-      command.on("error", refuse);
+      command.on("error", () => refuse(errorReason.commandError));
       command.once("exit", (code, signal) => {
         if (stopped) return;
         const number = signal === null ? null : constants.signals[signal];
-        if (!ready || (signal !== null && !Number.isInteger(number))) { refuse(); return; }
+        if (!ready || (signal !== null && !Number.isInteger(number))) { refuse(errorReason.invalidExit); return; }
         // Root exit is useful even while a descendant keeps a stdio pipe open.
         emit("exit", { code, signal: number });
       });
@@ -171,14 +179,15 @@ if (process.env?.FAROL_SHELL_WATCHDOG_MODE === "go-prepared-v1" &&
         if (closed || stopped) return;
         closed = true;
         const number = signal === null ? null : constants.signals[signal];
-        if (!ready || (signal !== null && !Number.isInteger(number))) { refuse(); return; }
+        if (!ready || (signal !== null && !Number.isInteger(number))) { refuse(errorReason.invalidClose); return; }
         // Node close follows root exit AND its stdio closure. This supplies root
         // facts only, never descendant/group settlement. Flush before self-stop.
         emit("close", { code, signal: number }, stopNow);
       });
-      command.stdin.on("error", refuse);
+      command.stdin.on("error", (error) => refuse(
+        error?.code === "EPIPE" ? errorReason.stdinEpipe : errorReason.stdinError));
       command.stdin.end(selected.input);
-    } catch { refuse(); }
+    } catch { refuse(errorReason.dispatchException); }
   });
 } else {
 let command = null;

@@ -25,3 +25,14 @@ Live `recover` (`relaunch: true`) checks the exact physical pair and owner run m
 Before one `/usr/bin/open -a` request, the helper writes `launch_requested` for a verified target, `cancel_launch_requested` for cancelled N, or `rollback_launch_requested` for restored N. Successful return records `completed`, `cancel_completed`, or `rollback_completed` respectively. A later recovery recognizes these phases and **never repeats** the launch; a requested phase is outcome-unknown until owner readback. Completion means only that `open` returned success, not that GUI startup or activation passed. The current slot and preserved companion must still be verified independently before claiming installed acceptance. A failed post-exchange target check in the same helper run atomically restores N and retains the rejected target in `failed.app`; those rejected bytes are not an accepted digest. The existing promotion lease and accepted-release records remain authoritative; journal phases do not supersede them.
 
 The tests use only disposable private temp homes and test-owned processes, including a Node caller that exits naturally immediately after readiness. Transport fixtures cover malformed/binding failures, premature exit, timeout, late acknowledgment, bounded output, and retention of the same operation; those fixtures are not native process evidence. They prove helper mechanics and refusals, not an installed app, GitHub feed, LaunchServices activation, or live provider behavior. The Lead owns combined package/CI/native/U1–U3 acceptance.
+
+The closed-predecessor route has separate native evidence at source `6de0871a`:
+all 32 cases in `tests/integration/installed-update-helper-closed.test.mjs` passed
+in one authorized host run. This exercised the real Python helper and retained
+kernel lease on disposable app/state trees, including the TypeScript transfer
+barrier, one atomic exchange, invalid lease/predecessor refusals, continuation
+failures and rechecks before mutation. Each test awaited its owned children,
+closed its handles and removed its fixture tree. The earlier sandbox refusal
+remains a refusal; this is a distinct run. It does not establish installed
+replacement, profile compatibility, post-start recovery or a normal N → N+1
+update, and did not touch the installed application.

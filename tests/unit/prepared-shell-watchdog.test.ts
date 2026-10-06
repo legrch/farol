@@ -111,6 +111,9 @@ function fixture(mode: string | null = "go-prepared-v1", selected = true) {
     start,
     stop,
     tick,
+    setNow(time: number) {
+      now = time; // Advance only the synthetic clock, without firing timers.
+    },
     fail(type: string, kind: typeof fault) {
       faultType = type;
       fault = kind;
@@ -128,6 +131,199 @@ function fixture(mode: string | null = "go-prepared-v1", selected = true) {
 }
 
 describe("explicitly selected prepared watchdog without native effects", () => {
+  it.each([
+    "invalid-prepare",
+    "invalid-control",
+    "invalid-start",
+    "invalid-exit",
+    "invalid-close",
+    "command-error",
+    "stdin-epipe",
+    "stdin-error",
+    "dispatch-exception",
+  ])(
+    "emits only the closed %s reason and permanently consumes failure",
+    (reason) => {
+      const f = fixture();
+      const privateText =
+        "SYNTHETIC_PRIVATE_PATH_ENV_CODE_EXCEPTION_NEVER_SEND";
+      const error = Object.assign(Error(privateText), {
+        code: reason === "stdin-epipe" ? "EPIPE" : privateText,
+        path: privateText,
+        environment: privateText,
+      });
+      f.prepare();
+      if (reason === "invalid-prepare")
+        f.message({ ...f.selection, extra: privateText });
+      else if (reason === "invalid-control")
+        f.message({ type: "start", id: privateText });
+      else if (reason === "dispatch-exception") {
+        f.spawn.mockImplementationOnce(() => {
+          throw error;
+        });
+        f.start();
+      } else {
+        f.start();
+        if (reason === "invalid-start") f.start();
+        else if (reason === "invalid-exit")
+          f.child.emit("exit", null, privateText);
+        else if (reason === "invalid-close")
+          f.child.emit("close", null, privateText);
+        else if (reason === "command-error") f.child.emit("error", error);
+        else f.child.stdin.emit("error", error);
+      }
+      expect(f.messages.filter((message) => message.type === "error")).toEqual([
+        { type: "error", id: f.id, reason },
+      ]);
+      expect(JSON.stringify(f.messages)).not.toContain(privateText);
+      const attempted = f.spawn.mock.calls.length;
+      const sent = f.messages.length;
+      f.prepare();
+      f.start();
+      f.stop();
+      // No child listeners exist when validation/spawn fails before ownership.
+      if (f.child.listenerCount("error")) f.child.emit("error", error);
+      if (f.child.stdin.listenerCount("error"))
+        f.child.stdin.emit("error", error);
+      f.child.emit("exit", 0, null);
+      f.child.emit("close", 0, null);
+      f.process.emit("disconnect");
+      f.tick(17000);
+      expect(f.spawn).toHaveBeenCalledTimes(attempted);
+      expect(f.messages).toHaveLength(sent);
+      expect(f.signals).toEqual(
+        attempted && reason !== "dispatch-exception"
+          ? [[-4242, "SIGKILL"]]
+          : [],
+      );
+      expect(f.process.exit).toHaveBeenCalledTimes(f.signals.length ? 0 : 1);
+    },
+  );
+
+  it.each([
+    undefined,
+    null,
+    "EPIPE",
+    { code: "OTHER_PRIVATE_CODE" },
+    Error("EPIPE"),
+  ])("does not infer EPIPE from arbitrary stdin text (%s)", (error) => {
+    const f = fixture();
+    f.prepare();
+    f.start();
+    f.child.stdin.emit("error", error);
+    expect(f.messages.at(-1)).toEqual({
+      type: "error",
+      id: f.id,
+      reason: "stdin-error",
+    });
+    expect(f.signals).toEqual([[-4242, "SIGKILL"]]);
+  });
+
+  it.each(["exit", "close"])(
+    "classifies %s before ready without root facts",
+    (type) => {
+      const f = fixture();
+      f.prepare();
+      f.message({ type: "start", id: f.id });
+      f.child.emit(type, 0, null);
+      f.child.emit("spawn");
+      expect(f.messages.map((message) => message.type)).toEqual([
+        "prepared",
+        "error",
+      ]);
+      expect(f.messages.at(-1)).toEqual({
+        type: "error",
+        id: f.id,
+        reason: `invalid-${type}`,
+      });
+      expect(f.signals).toEqual([[-4242, "SIGKILL"]]);
+    },
+  );
+
+  it("classifies expired start and start after stop without extending authority", () => {
+    for (const kind of ["deadline", "stop"] as const) {
+      const f = fixture();
+      f.prepare();
+      if (kind === "deadline") f.setNow(16000);
+      else {
+        f.hold("stop-requested");
+        f.stop();
+      }
+      f.start();
+      if (kind === "deadline")
+        expect(f.messages.at(-1)).toEqual({
+          type: "error",
+          id: f.id,
+          reason: "invalid-start",
+        });
+      else
+        expect(f.messages.map((message) => message.type)).toEqual([
+          "prepared",
+          "stop-requested",
+        ]);
+      // A queued diagnostic is discarded by the SAME immediate stop.
+      f.deliver();
+      f.prepare();
+      f.start();
+      expect(f.spawn).not.toHaveBeenCalled();
+      expect(f.process.exit).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it("redacts a synchronous stdin dispatch exception after the one spawn", () => {
+    const f = fixture();
+    f.child.stdin.end.mockImplementationOnce(() => {
+      throw Error("PRIVATE_STDIN_INPUT");
+    });
+    f.prepare();
+    f.start();
+    f.start();
+    expect(f.messages).toEqual([
+      { type: "prepared", id: f.id },
+      { type: "error", id: f.id, reason: "dispatch-exception" },
+    ]);
+    expect(f.spawn).toHaveBeenCalledTimes(1);
+    expect(f.signals).toEqual([[-4242, "SIGKILL"]]);
+  });
+
+  it.each(["held", "callback", "throw", "behind-output"])(
+    "keeps diagnostic failure one-shot under %s backpressure",
+    (kind) => {
+      const f = fixture();
+      f.prepare();
+      f.start();
+      if (kind === "behind-output") {
+        f.hold("stdout");
+        f.fail("stdout", "backpressure");
+        f.child.stdout.emit("data", Buffer.from("synthetic queued output"));
+      } else if (kind === "held") {
+        f.hold("error");
+        f.fail("error", "backpressure");
+      } else f.fail("error", kind as "callback" | "throw");
+      f.child.stdin.emit("error", {
+        code: "EPIPE",
+        message: "PRIVATE_EXCEPTION",
+      });
+      const sent = f.messages.length;
+      expect(f.signals).toEqual([[-4242, "SIGKILL"]]);
+      expect(f.messages.filter((message) => message.type === "error")).toEqual(
+        kind === "behind-output"
+          ? []
+          : [{ type: "error", id: f.id, reason: "stdin-epipe" }],
+      );
+      f.deliver();
+      f.deliver(Error("PRIVATE_CALLBACK"));
+      f.child.stdin.emit("error", { code: "EPIPE" });
+      f.child.emit("close", 0, null);
+      f.start();
+      f.stop();
+      expect(f.messages).toHaveLength(sent);
+      expect(JSON.stringify(f.messages)).not.toContain("PRIVATE");
+      expect(f.spawn).toHaveBeenCalledTimes(1);
+      expect(f.signals).toHaveLength(1);
+    },
+  );
+
   it("holds dispatch until the Go release and retains immutable selection", () => {
     const f = fixture();
     f.prepare();

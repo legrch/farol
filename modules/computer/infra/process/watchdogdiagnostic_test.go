@@ -25,6 +25,7 @@ const watchdogDiagnosticFrameLimit = 16
 
 type watchdogFrameDiagnostic struct {
 	Type      string
+	Reason    string // Closed error reason only; never arbitrary wire text.
 	Bytes     int
 	SHA256    string // Hash of captured wire bytes, including newline if complete.
 	Complete  bool
@@ -41,7 +42,8 @@ type watchdogChannelDiagnostic struct {
 // carries code/input/env and is forwarded untouched without any recording.
 // At most 256 KiB is inspected, one 96 KiB frame is temporarily buffered, and
 // at most 16 metadata records survive. No payload bytes or arbitrary type/error
-// strings appear in snapshots. This observer is not a decoder or authority.
+// strings appear in snapshots. Only allowlisted error reasons survive; stdout,
+// stderr and other frames never supply a reason. Not a decoder or authority.
 type watchdogDiagnosticChannel struct {
 	watchdogChannel // Same retained object; all other methods delegate unchanged.
 	mutex           sync.Mutex
@@ -94,7 +96,10 @@ func watchdogFrameMetadata(raw []byte, complete bool) watchdogFrameDiagnostic {
 	metadata := watchdogFrameDiagnostic{Type: "unparsed", Bytes: len(raw),
 		SHA256: hex.EncodeToString(digest[:]), Complete: complete, JSONValid: validWatchdogJSON(raw)}
 	if metadata.JSONValid {
-		var event struct{ Type string }
+		var event struct {
+			Type   string
+			Reason json.RawMessage
+		}
 		if json.Unmarshal(raw, &event) == nil {
 			switch event.Type {
 			case "prepared", "ready", "stdout", "stderr", "exit", "close", "stop-requested",
@@ -102,6 +107,16 @@ func watchdogFrameMetadata(raw []byte, complete bool) watchdogFrameDiagnostic {
 				metadata.Type = event.Type
 			default:
 				metadata.Type = "unrecognized"
+			}
+			if event.Type == "error" {
+				var reason string
+				if json.Unmarshal(event.Reason, &reason) == nil {
+					switch reason {
+					case "invalid-prepare", "invalid-control", "invalid-start", "invalid-exit",
+						"invalid-close", "command-error", "stdin-epipe", "stdin-error", "dispatch-exception":
+						metadata.Reason = reason
+					}
+				}
 			}
 		}
 	}
@@ -237,6 +252,94 @@ func TestWatchdogDiagnosticChannelEnforcesCaptureBounds(t *testing.T) {
 				if frame.Bytes > watchdogFrameLimit || frame.Type == "SYNTHETIC_TYPE_NEVER_LOG" {
 					t.Fatal("frame metadata exceeded bounds or exposed unknown type")
 				}
+			}
+		})
+	}
+}
+
+func TestWatchdogDiagnosticErrorReasonAllowlistAndRedaction(t *testing.T) {
+	for _, reason := range []string{
+		"invalid-prepare", "invalid-control", "invalid-start", "invalid-exit", "invalid-close",
+		"command-error", "stdin-epipe", "stdin-error", "dispatch-exception",
+	} {
+		t.Run(reason, func(t *testing.T) {
+			raw := []byte(`{"type":"error","reason":"` + reason + `","data":"PRIVATE_PAYLOAD","path":"PRIVATE_PATH","code":"PRIVATE_CODE","environment":"PRIVATE_ENV","message":"PRIVATE_EXCEPTION"}` + "\n")
+			underlying := &watchdogDiagnosticMemoryChannel{reader: bytes.NewReader(raw)}
+			channel := &watchdogDiagnosticChannel{watchdogChannel: underlying}
+			got, err := io.ReadAll(channel)
+			state := channel.snapshot()
+			if err != nil || !bytes.Equal(got, raw) || len(state.Frames) != 1 ||
+				state.Frames[0].Type != "error" || state.Frames[0].Reason != reason {
+				t.Fatal("allowlisted error reason changed underlying IO or was lost")
+			}
+			recorded, err := json.Marshal(state)
+			if err != nil || strings.Contains(string(recorded), "PRIVATE") {
+				t.Fatal("diagnostic exposed arbitrary error fields")
+			}
+		})
+	}
+	for _, raw := range []string{
+		`{"type":"error"}`, // Original generic error stays unclassified.
+		`{"type":"error","reason":"PRIVATE_PATH_ENV_CODE_EXCEPTION"}`,
+		`{"type":"error","reason":"EPIPE"}`,
+		`{"type":"error","reason":"STDIN-EPIPE"}`,
+		`{"type":"error","reason":null}`,
+		`{"type":"error","reason":1}`,
+		`{"type":"error","reason":{"text":"PRIVATE_EXCEPTION"}}`,
+		`{"type":"error","reason":["stdin-epipe"]}`,
+		`{"type":"error","reason":"stdin-epipe","reason":"PRIVATE_EXCEPTION"}`,
+		`{"type":"error","reason":"stdin-epipe"`, // Truncated frame.
+		`{"type":"stdout","reason":"stdin-epipe","data":"PRIVATE_STDOUT"}`,
+		`{"type":"stderr","reason":"stdin-epipe","data":"PRIVATE_STDERR"}`,
+		`{"type":"ready","reason":"stdin-epipe"}`,
+		`{"type":"PRIVATE_TYPE","reason":"stdin-epipe"}`,
+	} {
+		metadata := watchdogFrameMetadata([]byte(raw), false)
+		recorded, err := json.Marshal(metadata)
+		if metadata.Reason != "" || err != nil || strings.Contains(string(recorded), "PRIVATE") {
+			t.Fatal("non-error, malformed or unknown reason escaped diagnostic allowlist")
+		}
+	}
+}
+
+func TestWatchdogDiagnosticErrorFramesStillFenceProductionDecoder(t *testing.T) {
+	for _, reason := range []string{
+		"", "invalid-prepare", "invalid-control", "invalid-start", "invalid-exit", "invalid-close",
+		"command-error", "stdin-epipe", "stdin-error", "dispatch-exception", "PRIVATE_UNKNOWN",
+	} {
+		t.Run(reason, func(t *testing.T) {
+			id := strings.Repeat("a", 64)
+			fields := map[string]string{"type": "error", "id": id}
+			if reason != "" {
+				fields["reason"] = reason
+			}
+			raw, err := json.Marshal(fields)
+			if err != nil {
+				t.Fatal("synthetic frame could not be encoded")
+			}
+			// Pure memory only: receive observes the error before any corrected
+			// close. No host, process, socket, helper Wait, admission or launch.
+			raw = append(raw, []byte("\n"+`{"type":"close","id":"`+id+`","code":0,"signal":null}`+"\n")...)
+			underlying := &watchdogDiagnosticMemoryChannel{reader: bytes.NewReader(raw)}
+			channel := &watchdogDiagnosticChannel{watchdogChannel: underlying}
+			child := newWatchdogChild(nil, channel, time.Unix(123, 0), nil, io.Discard, io.Discard)
+			child.id, child.preparedSeen, child.readySeen, child.startSent = id, true, true, true
+			child.receive()
+			if !child.uncertain || child.rootExited || child.rootClosed || child.bytes != 0 ||
+				child.outputLimit || child.stopSeen || !underlying.closed {
+				t.Fatal("diagnostic error changed production fence or claimed root facts")
+			}
+			select {
+			case <-child.failed:
+			default:
+				t.Fatal("production decoder did not publish failure")
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			if child.send(ctx, watchdogControl{Type: "start", ID: id}) == nil ||
+				child.Kill() == nil || child.Kill() == nil || underlying.writes.Len() != 0 ||
+				child.event([]byte(`{"type":"ready","id":"`+id+`"}`)) == nil {
+				t.Fatal("fenced decoder accepted corrected ACK, resend or new control dispatch")
 			}
 		})
 	}
