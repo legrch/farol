@@ -128,6 +128,7 @@ async function setup(
     fence?: GoComputerMcpFence;
     verification?: GoComputerMcpOptions["verification"];
     mutations?: GoComputerMcpOptions["mutations"];
+    processes?: GoComputerMcpOptions["processes"];
     respond?: (method: string, params: Json, id: string) => unknown;
   } = {},
 ) {
@@ -151,6 +152,7 @@ async function setup(
       ...(options.lifecycle ? { lifecycle: options.lifecycle } : {}),
       ...(options.verification ? { verification: options.verification } : {}),
       ...(options.mutations ? { mutations: options.mutations } : {}),
+      ...(options.processes ? { processes: options.processes } : {}),
     },
   );
   const tools = new Map<string, RegisteredTool>();
@@ -180,6 +182,184 @@ function handlerContext(signal: AbortSignal): ServerContext {
     mcpReq: { id: "caller-chosen-id", signal },
   } as unknown as ServerContext;
 }
+
+describe("selected Go process MCP projection", () => {
+  type Processes = NonNullable<GoComputerMcpOptions["processes"]>;
+  const target = { operationId: "original-process", handle: "original-handle" };
+  const startInput = {
+    operationId: target.operationId,
+    workspaceId: "workspace",
+    relativeCwd: ".",
+    command: "synthetic command",
+    write: false,
+  };
+  const ports = () =>
+    ({
+      start: vi.fn(
+        async (
+          ...[_input, operationId, call]: Parameters<Processes["start"]>
+        ) => ({
+          status: "unknown" as const,
+          operationId,
+          requestId: call.requestId,
+          context: call.context,
+          code: "fixture_only",
+          retry: "never" as const,
+        }),
+      ),
+      read: vi.fn(async (...[input, call]: Parameters<Processes["read"]>) => ({
+        status: "unknown" as const,
+        operationId: input.operationId,
+        requestId: call.requestId,
+        context: call.context,
+        code: "fixture_only",
+        retry: "never" as const,
+      })),
+      cancel: vi.fn(
+        async (
+          ...[input, cancelOperationId, call]: Parameters<Processes["cancel"]>
+        ) => ({
+          status: "unknown" as const,
+          operationId: input.operationId,
+          cancelOperationId,
+          requestId: call.requestId,
+          context: call.context,
+          code: "fixture_only",
+          retry: "never" as const,
+        }),
+      ),
+    }) satisfies Processes;
+
+  it("exposes the complete slice only for the selected Go port", async () => {
+    const unavailable = await setup();
+    expect(
+      (await unavailable.client.listTools()).tools.some((tool) =>
+        tool.name.startsWith("computer_shell_"),
+      ),
+    ).toBe(false);
+    const processes = ports();
+    const selected = await setup({ processes });
+    const shell = (await selected.client.listTools()).tools.filter((tool) =>
+      tool.name.startsWith("computer_shell_"),
+    );
+    expect(shell.map((tool) => tool.name).sort()).toEqual([
+      "computer_shell_cancel",
+      "computer_shell_read",
+      "computer_shell_start",
+    ]);
+    expect(
+      shell.find((tool) => tool.name === "computer_shell_read")?.annotations,
+    ).toMatchObject({ readOnlyHint: true, idempotentHint: true });
+    for (const name of ["computer_shell_start", "computer_shell_cancel"])
+      expect(
+        shell.find((tool) => tool.name === name)?.annotations,
+      ).toMatchObject({ readOnlyHint: false, idempotentHint: false });
+    await selected.client.callTool({
+      name: "computer_shell_start",
+      arguments: startInput,
+    });
+    expect(processes.start).toHaveBeenCalledExactlyOnceWith(
+      {
+        workspaceId: "workspace",
+        relativeCwd: ".",
+        command: "synthetic command",
+        write: false,
+      },
+      target.operationId,
+      expect.objectContaining({ context }),
+    );
+    const read = await selected.client.callTool({
+      name: "computer_shell_read",
+      arguments: target,
+    });
+    expect(read.structuredContent).toMatchObject({
+      status: "unknown",
+      operationId: target.operationId,
+      retry: "never",
+    });
+    expect(processes.read).toHaveBeenCalledExactlyOnceWith(
+      { ...target, stdoutOffset: "0", stderrOffset: "0" },
+      expect.objectContaining({ context }),
+    );
+    const cancel = await selected.client.callTool({
+      name: "computer_shell_cancel",
+      arguments: { ...target, cancelOperationId: "cancel-effect" },
+    });
+    expect(cancel.structuredContent).toMatchObject({
+      status: "unknown",
+      operationId: target.operationId,
+      cancelOperationId: "cancel-effect",
+      retry: "never",
+    });
+    expect(processes.cancel).toHaveBeenCalledExactlyOnceWith(
+      target,
+      "cancel-effect",
+      expect.objectContaining({ context }),
+    );
+    expect(selected.request).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["computer_shell_start", { ...startInput, command: "\0" }],
+    ["computer_shell_start", { ...startInput, command: "🌊".repeat(16385) }],
+    ["computer_shell_start", { ...startInput, relativeCwd: "../outside" }],
+    ["computer_shell_start", { ...startInput, environment: ["PATH=/other"] }],
+    ["computer_shell_read", { ...target, stdoutOffset: 4194305 }],
+    [
+      "computer_shell_cancel",
+      { ...target, cancelOperationId: target.operationId },
+    ],
+  ])("refuses malformed %s before any Go call", async (name, input) => {
+    const processes = ports();
+    const { client } = await setup({ processes });
+    const result = await client.callTool({ name, arguments: input });
+    expect(result.isError).toBe(true);
+    expect(processes.start).not.toHaveBeenCalled();
+    expect(processes.read).not.toHaveBeenCalled();
+    expect(processes.cancel).not.toHaveBeenCalled();
+  });
+
+  it("keeps stopping and lost-fence outcomes distinct without a second process call", async () => {
+    const processes = ports();
+    const stopping = await setup({
+      processes,
+      lifecycle: { isStopping: async () => true, enterHandler: () => () => {} },
+    });
+    expect(
+      (
+        await stopping.client.callTool({
+          name: "computer_shell_start",
+          arguments: startInput,
+        })
+      ).structuredContent,
+    ).toMatchObject({ status: "refused", operationId: target.operationId });
+    expect(processes.start).not.toHaveBeenCalled();
+    const lost = await setup({
+      processes,
+      fence: {
+        acquireAdmission: async () => ({
+          admitted: true,
+          release: async () => {
+            throw Error("lost fixture release");
+          },
+        }),
+      },
+    });
+    expect(
+      (
+        await lost.client.callTool({
+          name: "computer_shell_start",
+          arguments: startInput,
+        })
+      ).structuredContent,
+    ).toMatchObject({
+      status: "unknown",
+      operationId: target.operationId,
+      code: "COMPUTER_EXECUTION_FENCE_RELEASE_FAILED",
+    });
+    expect(processes.start).toHaveBeenCalledTimes(1);
+  });
+});
 
 it("registers verification only for the selected Go port and keeps it inside the fence", async () => {
   const events: string[] = [];

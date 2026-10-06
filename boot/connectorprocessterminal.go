@@ -34,7 +34,7 @@ func (s *computerConnector) retainProcess(ctx context.Context, slot *connectorSl
 	}
 	ledger.mu.Lock()
 	record := ledger.operations[operation]
-	if ledger.frozen || record == nil || record.pending || record.process == nil || record.process.service == nil || record.process.workspace == nil {
+	if ledger.frozen || record == nil || record.pending || record.process == nil || record.process.cancelling || record.process.cancelUnknown || record.process.service == nil || record.process.workspace == nil {
 		ledger.mu.Unlock()
 		return "", connectorProcessRefusal("PROCESS_UNAVAILABLE")
 	}
@@ -75,7 +75,8 @@ func (s *computerConnector) retainProcess(ctx context.Context, slot *connectorSl
 		return "", err
 	}
 	ledger.mu.Lock()
-	retained.publication, record.settled = digest, true
+	retained.publication = digest
+	record.settled = !retained.cancelling && !retained.cancelUnknown
 	ledger.mu.Unlock()
 	return digest, nil
 }

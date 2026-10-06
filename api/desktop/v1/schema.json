@@ -80,7 +80,10 @@
     "computer.workspace.edit": "effect",
     "computer.workspace.mutation.read": "read",
     "computer.process.held.ready": "read",
-    "computer.process.held.release": "effect"
+    "computer.process.held.release": "effect",
+    "computer.process.start": "effect",
+    "computer.process.read": "read",
+    "computer.process.cancel": "effect"
   },
   "definitions": {
     "Context": {
@@ -4686,6 +4689,206 @@
           "type": "uint32",
           "minimum": 1,
           "maximum": 2
+        }
+      }
+    },
+    "ComputerConnectorProcessStart": {
+      "type": "object",
+      "fields": {
+        "execution": {
+          "type": "ComputerConnectorExecution"
+        },
+        "callId": {
+          "type": "id"
+        },
+        "workspaceId": {
+          "type": "id"
+        },
+        "relativeCwd": {
+          "type": "string",
+          "minBytes": 1,
+          "maxBytes": 4096
+        },
+        "command": {
+          "type": "string",
+          "minBytes": 1,
+          "maxBytes": 65536
+        },
+        "stdin": {
+          "type": "string",
+          "minBytes": 0,
+          "maxBytes": 262144,
+          "optional": true
+        },
+        "write": {
+          "type": "boolean"
+        }
+      }
+    },
+    "ComputerConnectorProcessStarted": {
+      "type": "object",
+      "fields": {
+        "execution": {
+          "type": "ComputerConnectorExecution"
+        },
+        "callId": {
+          "type": "id"
+        },
+        "operationId": {
+          "type": "id"
+        },
+        "handle": {
+          "type": "id"
+        }
+      }
+    },
+    "ComputerConnectorProcessRead": {
+      "type": "object",
+      "fields": {
+        "execution": {
+          "type": "ComputerConnectorExecution"
+        },
+        "callId": {
+          "type": "id"
+        },
+        "operationId": {
+          "type": "id"
+        },
+        "handle": {
+          "type": "id"
+        },
+        "stdoutOffset": {
+          "type": "decimal"
+        },
+        "stderrOffset": {
+          "type": "decimal"
+        }
+      }
+    },
+    "ComputerConnectorProcessResult": {
+      "type": "object",
+      "fields": {
+        "execution": {
+          "type": "ComputerConnectorExecution"
+        },
+        "callId": {
+          "type": "id"
+        },
+        "operationId": {
+          "type": "id"
+        },
+        "handle": {
+          "type": "id"
+        },
+        "state": {
+          "type": "string",
+          "values": ["running", "terminal", "unknown"]
+        },
+        "rootState": {
+          "type": "string",
+          "values": ["running", "exited"]
+        },
+        "rootWaited": {
+          "type": "boolean"
+        },
+        "exitCode": {
+          "type": "uint32",
+          "optional": true
+        },
+        "exitSignal": {
+          "type": "uint32"
+        },
+        "groupCleanup": {
+          "type": "string",
+          "values": ["pending", "confirmed", "unverified"]
+        },
+        "descendantCleanup": {
+          "type": "string",
+          "values": ["pending", "confirmed", "unverified"]
+        },
+        "stdoutBase64": {
+          "type": "string",
+          "minBytes": 0,
+          "maxBytes": 87384
+        },
+        "stderrBase64": {
+          "type": "string",
+          "minBytes": 0,
+          "maxBytes": 87384
+        },
+        "stdoutOffset": {
+          "type": "decimal"
+        },
+        "stderrOffset": {
+          "type": "decimal"
+        },
+        "stdoutNext": {
+          "type": "decimal"
+        },
+        "stderrNext": {
+          "type": "decimal"
+        },
+        "stdoutBytes": {
+          "type": "decimal"
+        },
+        "stderrBytes": {
+          "type": "decimal"
+        },
+        "outputLimitReached": {
+          "type": "boolean"
+        },
+        "outputDrained": {
+          "type": "boolean"
+        },
+        "cancelRequested": {
+          "type": "boolean"
+        },
+        "timedOut": {
+          "type": "boolean"
+        },
+        "authorityLost": {
+          "type": "boolean"
+        }
+      }
+    },
+    "ComputerConnectorProcessCancel": {
+      "type": "object",
+      "fields": {
+        "execution": {
+          "type": "ComputerConnectorExecution"
+        },
+        "callId": {
+          "type": "id"
+        },
+        "operationId": {
+          "type": "id"
+        },
+        "handle": {
+          "type": "id"
+        }
+      }
+    },
+    "ComputerConnectorProcessCancelled": {
+      "type": "object",
+      "fields": {
+        "execution": {
+          "type": "ComputerConnectorExecution"
+        },
+        "callId": {
+          "type": "id"
+        },
+        "operationId": {
+          "type": "id"
+        },
+        "handle": {
+          "type": "id"
+        },
+        "cancelOperationId": {
+          "type": "id"
+        },
+        "status": {
+          "type": "string",
+          "values": ["requested", "already_terminal", "unknown"]
         }
       }
     }

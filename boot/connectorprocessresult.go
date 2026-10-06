@@ -39,7 +39,7 @@ func (a *processReadObservation) ledgerCurrent() error {
 	defer a.ledger.mu.Unlock()
 	record := a.ledger.operations[a.operation]
 	if a.original == nil && record != nil || a.original != nil &&
-		(record != a.original || record.pending || record.process != a.process || a.process == nil ||
+		(record != a.original || record.pending || record.process != a.process || a.process == nil || a.process.cancelUnknown ||
 			a.process.publishAttempted && a.process.publication == "") {
 		return &processsvc.Failure{Code: "PROCESS_OUTCOME_UNKNOWN", Unknown: true}
 	}

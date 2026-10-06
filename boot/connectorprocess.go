@@ -28,6 +28,8 @@ var _ connectorProcessRepository = (*mutationrepo.Repository)(nil)
 type connectorProcessSelection func(context.Context, *execution.Lease) (processsvc.Prepared, processsvc.ObservationWorkspace, error)
 
 type connectorProcessOperation struct {
+	owner            *connectorSlot
+	origin           processsvc.ConnectorReservationScope
 	contract         *processct.Contract
 	service          *processsvc.Service
 	workspace        processsvc.ObservationWorkspace
@@ -35,6 +37,8 @@ type connectorProcessOperation struct {
 	publishAttempted bool
 	result           *processsvc.TerminalResult
 	publication      string
+	cancelling       bool
+	cancelUnknown    bool
 }
 
 func connectorProcessRefusal(code string) error {
@@ -54,7 +58,8 @@ func (s *computerConnector) processSlot(slot *connectorSlot) bool {
 // startProcess joins the existing current connector, execution issuer, shared
 // operation ledger and durable reservation before ONE selected Start. Requests
 // cannot inject a lease, scope, journal or replacement producer. This unexported
-// composition method has no wire/MCP registration or native default.
+// composition method is shared by the optional wire adapter; normal startup
+// still supplies no native default.
 func (s *computerConnector) startProcess(ctx context.Context, slot *connectorSlot, operation, call string, selectLaunch connectorProcessSelection) (*processct.StartResponse, error) {
 	if !s.processSlot(slot) || ctx == nil || ctx.Err() != nil || !validIngressID(operation) || !validIngressID(call) || selectLaunch == nil {
 		return nil, connectorProcessRefusal("PROCESS_INPUT_INVALID")
@@ -77,7 +82,7 @@ func (s *computerConnector) startProcess(ctx context.Context, slot *connectorSlo
 		ledger.mu.Unlock()
 		return nil, connectorProcessUnknown()
 	}
-	record := &settingsMutationOperation{generation: generation, pending: true, connectorScope: true, process: &connectorProcessOperation{}}
+	record := &settingsMutationOperation{generation: generation, pending: true, connectorScope: true, process: &connectorProcessOperation{owner: slot}}
 	ledger.operations[operation] = record
 	ledger.mu.Unlock()
 	finish := func(err error, beforeStart bool) {
@@ -97,6 +102,9 @@ func (s *computerConnector) startProcess(ctx context.Context, slot *connectorSlo
 	// Copy original provenance once and pass the identical value to both owners.
 	selected := processsvc.ConnectorReservationScope{Host: slot.guard.host, OwnerID: s.root.ownerID, ComputerID: s.root.computerID,
 		CallID: call, ComputerGeneration: generation, Generation: callGeneration}
+	ledger.mu.Lock()
+	record.process.origin = selected
+	ledger.mu.Unlock()
 	reservation, err := repository.ConnectorProcessReservation(selected)
 	if err != nil || reservation == nil {
 		err = connectorProcessRefusal("PROCESS_UNAVAILABLE")
@@ -186,7 +194,7 @@ func (s *computerConnector) observeProcess(ctx context.Context, slot *connectorS
 		ledger.mu.Unlock()
 		return nil, connectorProcessRefusal("PROCESS_HANDLE_MISMATCH")
 	}
-	if record.pending {
+	if record.pending || record.process.cancelUnknown {
 		ledger.mu.Unlock()
 		return nil, connectorProcessUnknown()
 	}

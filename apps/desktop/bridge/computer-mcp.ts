@@ -4,6 +4,7 @@ import { z } from "zod";
 import { BridgeError } from "./client.ts";
 import { ComputerBridge, type ComputerCall } from "./computer.ts";
 import type { ConnectorMutationBridge } from "./connector-mutation.ts";
+import type { ConnectorProcessBridge } from "./connector-process.ts";
 import type { ConnectorVerificationBridge } from "./connector-verification.ts";
 import {
   validate,
@@ -27,6 +28,7 @@ export type GoComputerMcpOptions = Readonly<{
   lifecycle?: GoComputerMcpLifecycle;
   verification?: Pick<ConnectorVerificationBridge, "verify">;
   mutations?: Pick<ConnectorMutationBridge, "write" | "edit" | "read">;
+  processes?: Pick<ConnectorProcessBridge, "start" | "read" | "cancel">;
 }>;
 
 const IdentifierSchema = z.string().min(1).max(120);
@@ -91,6 +93,38 @@ const MutationTargetSchema = {
   relativePath: z.string().refine((value) => relativePath(value, false)),
 };
 const HashSchema = z.string().regex(/^[a-f0-9]{64}$/u);
+const ProcessIDSchema = z.string().refine((value) => validate("id", value));
+const ProcessTargetSchema = {
+  operationId: ProcessIDSchema,
+  handle: ProcessIDSchema,
+};
+const ProcessOffsetSchema = z
+  .number()
+  .int()
+  .min(0)
+  .max(4 * 1024 * 1024);
+const ProcessStartSchema = z.strictObject({
+  operationId: ProcessIDSchema,
+  workspaceId: IdentifierSchema,
+  relativeCwd: ScopePathSchema,
+  command: z
+    .string()
+    .min(1)
+    .refine(
+      (value) =>
+        validUnicode(value) &&
+        !value.includes("\0") &&
+        Buffer.byteLength(value, "utf8") <= 65536,
+    ),
+  stdin: z
+    .string()
+    .refine(
+      (value) =>
+        validUnicode(value) && Buffer.byteLength(value, "utf8") <= 262144,
+    )
+    .optional(),
+  write: z.boolean(),
+});
 const WriteInputSchema = z.strictObject({
   ...MutationTargetSchema,
   content: MutationTextSchema,
@@ -196,6 +230,7 @@ export function createGoComputerMcpServer(
     signal: AbortSignal,
     operation: (call: ComputerCall) => Promise<{ readonly status: string }>,
     operationId?: string,
+    cancelOperationId?: string,
   ): Promise<CallToolResult> => {
     const call = Object.freeze({
       requestId: randomUUID(),
@@ -206,6 +241,7 @@ export function createGoComputerMcpServer(
         {
           ...call,
           ...(operationId === undefined ? {} : { operationId }),
+          ...(cancelOperationId === undefined ? {} : { cancelOperationId }),
           status,
           code,
           retry: "never",
@@ -267,6 +303,9 @@ export function createGoComputerMcpServer(
               {
                 ...call,
                 ...(operationId === undefined ? {} : { operationId }),
+                ...(cancelOperationId === undefined
+                  ? {}
+                  : { cancelOperationId }),
                 status: error.state,
                 code: error.code,
                 retry: "never",
@@ -422,11 +461,92 @@ export function createGoComputerMcpServer(
     );
   }
 
+  if (options.processes) {
+    const processes = options.processes;
+    const effectAnnotations = {
+      ...annotations,
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+    };
+    server.registerTool(
+      "computer_shell_start",
+      {
+        title: "Start an approved workspace command",
+        description:
+          "Start once through the selected Go process owner. Supply a new stable operationId, exact workspaceId, relativeCwd and explicit write flag. The original Go deadline is fixed; request timeouts do not extend it. UNKNOWN must never be retried with the same or another ID. No executable, environment, root or extra permissions can be supplied here.",
+        inputSchema: ProcessStartSchema,
+        annotations: effectAnnotations,
+      },
+      async ({ operationId, stdin, ...input }, ctx) =>
+        run(
+          ctx.mcpReq.signal,
+          (call) =>
+            processes.start(
+              { ...input, ...(stdin === undefined ? {} : { stdin }) },
+              operationId,
+              call,
+            ),
+          operationId,
+        ),
+    );
+    server.registerTool(
+      "computer_shell_read",
+      {
+        title: "Read an owned command result",
+        description:
+          "Observe the exact original operationId and handle through Go, including after an admitted reconnect. stdout/stderr are canonical base64 byte windows, at most 64 KiB each. Offsets are bytes; omitted offsets start at zero. Root exit, group cleanup and descendant cleanup remain separate facts. Terminal observation alone does not prove durable publication. Reading never starts, cancels or restores a child.",
+        inputSchema: z.strictObject({
+          ...ProcessTargetSchema,
+          stdoutOffset: ProcessOffsetSchema.optional(),
+          stderrOffset: ProcessOffsetSchema.optional(),
+        }),
+        annotations,
+      },
+      async ({ stdoutOffset, stderrOffset, ...input }, ctx) =>
+        run(
+          ctx.mcpReq.signal,
+          (call) =>
+            processes.read(
+              {
+                ...input,
+                stdoutOffset: String(stdoutOffset ?? 0),
+                stderrOffset: String(stderrOffset ?? 0),
+              },
+              call,
+            ),
+          input.operationId,
+        ),
+    );
+    server.registerTool(
+      "computer_shell_cancel",
+      {
+        title: "Request cancellation of an owned command",
+        description:
+          "Request cleanup of the same live command owned by this connector lifetime. Keep original operationId and handle; supply a distinct new cancelOperationId. The reply is a cancellation ACK, not terminal or cleanup proof. Read the original handle for actual facts. A reconnect permits observation but does not restore control; UNKNOWN cancellation is never retried.",
+        inputSchema: z
+          .strictObject({
+            ...ProcessTargetSchema,
+            cancelOperationId: ProcessIDSchema,
+          })
+          .refine((value) => value.cancelOperationId !== value.operationId),
+        annotations: effectAnnotations,
+      },
+      async ({ cancelOperationId, ...input }, ctx) =>
+        run(
+          ctx.mcpReq.signal,
+          (call) => processes.cancel(input, cancelOperationId, call),
+          input.operationId,
+          cancelOperationId,
+        ),
+    );
+  }
+
   server.registerTool(
     "computer_workspace_catalogue",
     {
       title: "Find available workspaces",
-      description: `Find exact task-accessible workspace IDs and approved roots in one Go catalogue operation. Call without arguments; do not guess IDs or roots. This bounded catalogue does not read file contents or grant authority. ${options.mutations ? "This connector supports catalogue, bootstrap, list, read, search and bounded mutations." : "This connector supports catalogue, bootstrap, list, read and search; writes are unavailable."} Shell and task tools are unavailable.`,
+      description: `Find exact task-accessible workspace IDs and approved roots in one Go catalogue operation. Call without arguments; do not guess IDs or roots. This bounded catalogue does not read file contents or grant authority. ${options.mutations ? "This connector supports catalogue, bootstrap, list, read, search and bounded mutations." : "This connector supports catalogue, bootstrap, list, read and search; writes are unavailable."} ${options.processes ? "Shell start/read/cancel uses the same Go owner." : "Shell tools are unavailable."} Task tools are unavailable.`,
       inputSchema: z.strictObject({}),
       annotations,
     },

@@ -46,6 +46,7 @@ type computerConnector struct {
 	clock     port.Clock
 	start     connectorStart
 	mutations *SettingsMutationIngress
+	processes connectorShellSelection
 	current   *connectorSlot
 	attempts  uint64
 }
@@ -159,9 +160,12 @@ func (s *computerConnector) Open(ctx context.Context, operation string, in wire.
 			return nil, err
 		}
 	}
-	// Only a qualified shared mutation owner can preserve approved write access.
-	// Normal runtime remains read-only until that owner and its routes are wired.
+	// The shared mutation owner preserves approved write access. Shell requires
+	// an independently selected producer, absent from normal startup.
 	policy := authority.Policy{ExcludedPaths: approval.Clone().ExcludedPaths, Network: authority.NoNetwork, Commands: authority.NoCommands, ExpiresAt: approval.ExpiresAt}
+	if s.processes != nil && s.mutations != nil {
+		policy.Commands = approval.Commands
+	}
 	for _, workspace := range approval.Workspaces {
 		access := authority.ReadAccess
 		if s.mutations != nil {
@@ -170,7 +174,7 @@ func (s *computerConnector) Open(ctx context.Context, operation string, in wire.
 		policy.Workspaces = append(policy.Workspaces, authority.Scope{WorkspaceID: workspace.WorkspaceID, Root: workspace.Root, Mode: authority.Subtree, Access: access})
 	}
 	for _, capability := range approval.Capabilities {
-		if capability == authority.List || capability == authority.Read || capability == authority.Search || capability == authority.Verify || capability == authority.Write && s.mutations != nil {
+		if capability == authority.List || capability == authority.Read || capability == authority.Search || capability == authority.Verify || capability == authority.Write && s.mutations != nil || capability == authority.Shell && s.processes != nil && s.mutations != nil {
 			policy.Capabilities = append(policy.Capabilities, capability)
 		}
 	}
@@ -215,6 +219,11 @@ func (s *computerConnector) Open(ctx context.Context, operation string, in wire.
 	if s.mutations != nil {
 		for name, method := range s.mutationMethods(slot) {
 			methods[name] = method
+		}
+		if s.processes != nil {
+			for name, method := range s.processMethods(slot, s.processes) {
+				methods[name] = method
+			}
 		}
 	}
 	slot.endpoint, err = s.start(s.lifetime, binding, methods)

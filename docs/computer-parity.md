@@ -54,12 +54,25 @@ no child to restore, execution lease to renew, or retirement state to settle.
 Both paths recheck the original physical workspace and current authority; root
 also reconciles the shared operation ledger before disclosing output.
 
-| Process result evidence | Executable boundary | What it establishes |
-| --- | --- | --- |
-| Complete capture, current authority and copied bounded windows | `modules/computer/app/services/process/{terminal,retained}_test.go` | Pure application policy with explicit child, clock, authority and workspace doubles |
-| Chunk layout, exact original binding, immutable result and lost-publication fence | `modules/computer/infra/repos/mutation/processresult{,codec}_test.go` | Controlled repository and codec tests; no native durability claim |
-| Empty, above-64-KiB and 4-MiB persistence; missing-block refusal | `modules/computer/infra/repos/mutation/processresultnative_test.go` | Real disposable Darwin storage and known repository Close/reopen, with synthetic terminal and authority values |
-| Reconnect, late owner/publication fences and no child reconstruction | `boot/connectorprocess{,result,terminal}_test.go` | Actual Go composition with controlled storage, physical observation and child boundaries |
+The prepared connector transport maps `computer.process.start/read/cancel` to
+the existing process owner, and the thin MCP adapter maps those methods to
+`computer_shell_start/read/cancel` only when the exact Go handshake advertises
+all three. Normal startup still supplies no qualified shell producer and does
+not advertise these methods. Request data cannot select an executable,
+environment, root, deadline or authority. A start binds the original operation
+once; reads use its exact handle and bounded base64 byte windows. A new connector
+lifetime can observe under current access, but cannot restore a control handle.
+Cancellation uses a distinct effect ID, retains the same service's one-shot ACK,
+and never settles the command merely because cancellation was requested. Lost
+control acknowledgement also fences the existing operation and retirement.
+
+| Process result evidence                                                           | Executable boundary                                                                                                       | What it establishes                                                                                            |
+| --------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| Complete capture, current authority and copied bounded windows                    | `modules/computer/app/services/process/{terminal,retained}_test.go`                                                       | Pure application policy with explicit child, clock, authority and workspace doubles                            |
+| Chunk layout, exact original binding, immutable result and lost-publication fence | `modules/computer/infra/repos/mutation/processresult{,codec}_test.go`                                                     | Controlled repository and codec tests; no native durability claim                                              |
+| Empty, above-64-KiB and 4-MiB persistence; missing-block refusal                  | `modules/computer/infra/repos/mutation/processresultnative_test.go`                                                       | Real disposable Darwin storage and known repository Close/reopen, with synthetic terminal and authority values |
+| Reconnect, late owner/publication fences and no child reconstruction              | `boot/connectorprocess{,result,terminal}_test.go`                                                                         | Actual Go composition with controlled storage, physical observation and child boundaries                       |
+| Selected transport, no duplicate dispatch, exact output and cancellation identity | `boot/connectorprocesswire_test.go`, `tests/unit/desktop-connector-process.test.ts`, `tests/unit/go-computer-mcp.test.ts` | Pure registered-handler, codec and SDK-memory tests; no native process or external Shell witness               |
 
 These source and storage results do not establish real process closure, crash or
 power-loss recovery, normal-startup Shell admission, public MCP Shell/Git,
@@ -70,7 +83,7 @@ Actual external `computer_mutation_read` is now qualified separately from its
 source registration. Dev `67d8af51` observed the original completed edit after a
 normal Quit and source/build change on the same profile, with its original
 operation/call identity and durable publication intact. It did not repeat the
-mutation. Ordinary Dev `5376fac6` later reconnected on that same profile and
+mutation. Ordinary Dev `33831412` later reconnected on that same profile and
 passed a fresh external catalogue and attachment check. This confirms the
 current caller surface and retained file outcome; it does not establish Go
 process retention, installed recovery or full Computer parity.

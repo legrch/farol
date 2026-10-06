@@ -3,6 +3,10 @@ import {
   ConnectorMutationBridge,
   connectorSupportsMutations,
 } from "../bridge/connector-mutation";
+import {
+  ConnectorProcessBridge,
+  connectorSupportsProcesses,
+} from "../bridge/connector-process";
 import { SocketConnectorClient } from "../bridge/connector-client";
 import { loadConnectorLaunch } from "../bridge/connector-launch";
 import { ComputerBridge } from "../bridge/computer";
@@ -19,10 +23,18 @@ export async function runGoComputerMcp(file: string): Promise<void> {
   const lease = await lifecycle.join(sha256);
   const client = new SocketConnectorClient(launch.opened.endpoint);
   let mutations: ConnectorMutationBridge | undefined;
+  let processes: ConnectorProcessBridge | undefined;
   try {
     const identity = await client.connect();
     if (connectorSupportsMutations(identity)) {
       mutations = new ConnectorMutationBridge(
+        client,
+        launch.opened,
+        client.verifiedContext,
+      );
+    }
+    if (connectorSupportsProcesses(identity)) {
+      processes = new ConnectorProcessBridge(
         client,
         launch.opened,
         client.verifiedContext,
@@ -47,7 +59,13 @@ export async function runGoComputerMcp(file: string): Promise<void> {
         bridge,
         launch.opened.execution,
         client.verifiedContext,
-        { lifecycle, fence, verification, ...(mutations ? { mutations } : {}) },
+        {
+          lifecycle,
+          fence,
+          verification,
+          ...(mutations ? { mutations } : {}),
+          ...(processes ? { processes } : {}),
+        },
       ),
     {
       legacy: "serve",
