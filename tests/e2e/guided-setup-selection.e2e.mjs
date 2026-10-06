@@ -728,8 +728,11 @@ try {
     await window.locator('.setup-page[data-setup-step="folders"]').waitFor();
     await setupAction(window, "Add folder…");
     await setupAction(window, "Add selected folder read-only");
-    const folder = window.locator(".setup-page .folder-row");
+    // Settings retains hidden pages; Diagnostics projects the same folder.
+    // Observe only the current guided form, not its hidden diagnostic record.
+    const folder = window.locator(".setup-page .folder-row:visible");
     await folder.waitFor();
+    assert.equal(await folder.count(), 1);
     let saved = await readSetupSettings(window);
     assert.equal(saved.computer.workspaces.length, 1);
     assert.equal(
