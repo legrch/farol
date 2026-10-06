@@ -1,0 +1,79 @@
+{
+  "schema": 1,
+  "identity": "Sunrise",
+  "source": {
+    "repository": "farol-design",
+    "path": "light-palette-expanded-2026-10-04/assets/sunrise.png",
+    "sha256": "d1fe70502c90b71755aefc57f99d942d1401f071784b3e49676d557c34e952ec",
+    "bytes": 1125137,
+    "format": "PNG",
+    "mode": "RGB",
+    "width": 1254,
+    "height": 1254
+  },
+  "decision": "Owner preference recorded in CURRENT-DESIGN.md on 2026-10-06",
+  "appearance": "fixed-color; same artwork for light and dark",
+  "derivation": {
+    "pillow": "12.1.1",
+    "zlib": "1.2.12",
+    "resize": "Lanczos directly from unchanged full 1254px RGB canvas",
+    "alpha": "opaque RGBA conversion; no alpha cleanup or shape mask",
+    "png": "compress_level=9; optimize=False; no copied source metadata",
+    "icns": "native is32/il32 uncompressed ARGB+alpha masks; PNG Retina/large slots; big-endian lengths"
+  },
+  "evidenceScope": "Offline source derivation only; package and visible Dock acceptance pending",
+  "files": {
+    "farol.icns": {
+      "sha256": "58a47e3db012eeec25f4cf3569c396a73c2b91c6e0347e99aa94c00f264aed5f",
+      "bytes": 1413163
+    },
+    "farol.iconset/icon_128x128.png": {
+      "sha256": "febf0ebfe867a2220c52c73aee1708f4d806b4bc9eb02f9435a0fddd1943f8f1",
+      "bytes": 15424
+    },
+    "farol.iconset/icon_128x128@2x.png": {
+      "sha256": "40f851dfa8f14cda8fd06d08a819c4126aa5eee9d9c5599d090e294045682a6a",
+      "bytes": 53551
+    },
+    "farol.iconset/icon_16x16.png": {
+      "sha256": "7513fca225aae352e94be6607827226858f8af0381c6321a8bc7c8c15bde7b4e",
+      "bytes": 613
+    },
+    "farol.iconset/icon_16x16@2x.png": {
+      "sha256": "b2d811f17d99998cfb73367791b5f5604f65a1e3d5987a4aac3bd738b1dfb8e0",
+      "bytes": 1758
+    },
+    "farol.iconset/icon_256x256.png": {
+      "sha256": "40f851dfa8f14cda8fd06d08a819c4126aa5eee9d9c5599d090e294045682a6a",
+      "bytes": 53551
+    },
+    "farol.iconset/icon_256x256@2x.png": {
+      "sha256": "def771921e2a3c1872deb855410bc34d1b7aaf793362162cc6de37c3285e745c",
+      "bytes": 217507
+    },
+    "farol.iconset/icon_32x32.png": {
+      "sha256": "b2d811f17d99998cfb73367791b5f5604f65a1e3d5987a4aac3bd738b1dfb8e0",
+      "bytes": 1758
+    },
+    "farol.iconset/icon_32x32@2x.png": {
+      "sha256": "da28e141e2a252b1a97b7eaeadd4d10213581c48bc8bf0f75e6a7307349e534f",
+      "bytes": 5062
+    },
+    "farol.iconset/icon_512x512.png": {
+      "sha256": "def771921e2a3c1872deb855410bc34d1b7aaf793362162cc6de37c3285e745c",
+      "bytes": 217507
+    },
+    "farol.iconset/icon_512x512@2x.png": {
+      "sha256": "d97ba675a63d121ba0f8b6b9f4b7f3511f2a3b697b9ee623551baae80162ea1d",
+      "bytes": 842299
+    },
+    "master.png": {
+      "sha256": "d97ba675a63d121ba0f8b6b9f4b7f3511f2a3b697b9ee623551baae80162ea1d",
+      "bytes": 842299
+    },
+    "source.png": {
+      "sha256": "d1fe70502c90b71755aefc57f99d942d1401f071784b3e49676d557c34e952ec",
+      "bytes": 1125137
+    }
+  }
+}

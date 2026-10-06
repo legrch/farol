@@ -1,5 +1,17 @@
 # Farol brand assets
 
+The current raster/Dock/package source is [Sunrise](sunrise/README.md), selected
+as the owner's current direction on October 6, 2026. `tooling/brand-contract.mjs`
+maps its exact source-local master to both raster output names and its ICNS to
+the existing package resource name. Light and dark use identical artwork.
+Native/package acceptance is separate from the offline resource checks.
+
+The following lamp provenance and the [Signal / Color](signal-color/README.md)
+record describe historical resources. They remain preserved; their original
+approval records and frozen packages are not changed by the Sunrise mapping.
+
+## Historical lamp resources
+
 The owner authorized reuse of the existing Farol lamp mark for the product
 cutover on October 1, 2026. These are source-local assets; building Farol does
 not read a legacy checkout or installed application.
