@@ -477,6 +477,11 @@ it("task completion cannot verify a configured folder; only matching access evid
 });
 it("does not treat missing configuration as zero folders or verified access", async () => {
   const h = await mount([], { configuration: null });
+  expect(h.content().textContent).toContain("A few things to review");
+  expect(h.content().textContent).not.toContain("Current state needs review");
+  await act(async () => h.c.navigate({ area: "home", homeView: "attention" }));
+  expect(h.content().textContent).toContain("Setup evidence is unavailable");
+  await act(async () => h.c.navigate({ area: "home", homeView: "overview" }));
   await h.click("Review setup status");
   expect(h.content().textContent).toContain("Evidence unavailable");
   expect(h.content().textContent).not.toContain("No folders shared");

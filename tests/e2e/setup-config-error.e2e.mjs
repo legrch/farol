@@ -208,26 +208,14 @@ try {
           status: "error",
           error: expected,
         });
-        // The current renderer starts on Home. The fault code is retained at
-        // the boundary; React exposes unavailable evidence and observation UI.
-        await window
-          .getByRole("heading", {
-            name: "Current state needs review",
-            exact: true,
-          })
-          .waitFor();
+        // Configuration availability and snapshot freshness are independent.
+        // Home must expose the retained fault even when its snapshot is current.
         await window
           .getByRole("navigation", { name: "Home views", exact: true })
           .getByRole("button", { name: /^Needs attention\b/u })
           .click();
         await window
           .getByText("Setup evidence is unavailable", { exact: true })
-          .waitFor();
-        await window
-          .getByText(
-            "State is stale. Observe current state before changing access.",
-            { exact: false },
-          )
           .waitFor();
         await openSetup(window);
         await window
