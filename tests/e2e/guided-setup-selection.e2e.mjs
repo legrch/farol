@@ -391,6 +391,7 @@ async function verifyDisplayedAttachment(window) {
     .locator('.setup-page [role="status"]')
     .filter({ hasText: "Attachment checked · Computer ready" })
     .waitFor();
+  return before.connectors.secureMcp.challenge;
 }
 
 async function launch(environment, mode = "normal", profile = mode) {
@@ -808,7 +809,7 @@ try {
     );
     assert.deepEqual(state.computer.workspaces, retainedWorkspaces);
     await assertSetupFinish(window, false);
-    await verifyDisplayedAttachment(window);
+    const verifiedChallenge = await verifyDisplayedAttachment(window);
     state = await readSetupSettings(window);
     const connector = state.connectors.secureMcp;
     assert.equal(
@@ -830,8 +831,9 @@ try {
     );
     assert.equal(
       connector.attachment.challengeSha256,
-      connector.challenge.challengeSha256,
+      verifiedChallenge.challengeSha256,
     );
+    assert.equal(connector.challenge, null, "VERIFIED_CHALLENGE_NOT_CONSUMED");
     assert.equal(
       state.setup.connect.verified.runtimeGeneration,
       connector.runtime.runtimeGeneration,
