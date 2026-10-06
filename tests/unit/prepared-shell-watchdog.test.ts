@@ -7,8 +7,14 @@ import { SHELL_WATCHDOG_SOURCE } from "../../src/modules/computer/infra/native/s
 // native sandbox, actual Node IPC, filesystem, fork or cleanup qualification.
 function fixture(mode: string | null = "go-prepared-v1", selected = true) {
   const child = Object.assign(new EventEmitter(), {
-    stdout: new EventEmitter(),
-    stderr: new EventEmitter(),
+    stdout: Object.assign(new EventEmitter(), {
+      pause: vi.fn(),
+      resume: vi.fn(),
+    }),
+    stderr: Object.assign(new EventEmitter(), {
+      pause: vi.fn(),
+      resume: vi.fn(),
+    }),
     stdin: Object.assign(new EventEmitter(), { end: vi.fn() }),
   });
   const messages: Record<string, unknown>[] = [];
@@ -20,7 +26,7 @@ function fixture(mode: string | null = "go-prepared-v1", selected = true) {
   let faultType = "";
   let refuseSignal = false;
   let holdType = "";
-  let held: (() => void) | undefined;
+  const held: ((error?: Error) => void)[] = [];
   const process = Object.assign(new EventEmitter(), {
     pid: 4242,
     connected: true,
@@ -33,7 +39,7 @@ function fixture(mode: string | null = "go-prepared-v1", selected = true) {
       messages.push(message);
       if (message.type === faultType && fault === "throw")
         throw Error("synthetic IPC failure");
-      if (message.type === holdType) held = () => callback?.();
+      if (message.type === holdType) held.push((error) => callback?.(error));
       else
         callback?.(
           message.type === faultType && fault === "callback"
@@ -115,8 +121,8 @@ function fixture(mode: string | null = "go-prepared-v1", selected = true) {
     hold(type: string) {
       holdType = type;
     },
-    deliver() {
-      held?.();
+    deliver(error?: Error) {
+      held.shift()?.(error);
     },
   };
 }
@@ -203,7 +209,7 @@ describe("explicitly selected prepared watchdog without native effects", () => {
   it.each(["prepared", "ready", "stop-requested"])(
     "freezes failed %s ACK without resend/replacement",
     (type) => {
-      for (const kind of ["backpressure", "callback", "throw"] as const) {
+      for (const kind of ["callback", "throw"] as const) {
         const f = fixture();
         f.fail(type, kind);
         f.prepare();
@@ -223,6 +229,167 @@ describe("explicitly selected prepared watchdog without native effects", () => {
       }
     },
   );
+
+  it("waits for queued output callbacks without resending or losing root events", () => {
+    const f = fixture();
+    f.prepare();
+    f.start();
+    f.hold("stdout");
+    f.fail("stdout", "backpressure");
+    const bytes = Buffer.alloc(65540, 255);
+    f.child.stdout.emit("data", bytes);
+    f.child.stderr.emit("data", Buffer.from("tail"));
+    f.child.emit("exit", 7, null);
+    f.child.emit("close", 7, null);
+    expect(f.signals).toEqual([]);
+    expect(f.messages.map((message) => message.type)).toEqual([
+      "prepared",
+      "ready",
+      "stdout",
+    ]);
+    expect(f.child.stdout.pause).toHaveBeenCalled();
+    expect(f.child.stderr.pause).toHaveBeenCalled();
+    f.deliver();
+    expect(
+      f.messages.filter((message) => message.type === "stdout"),
+    ).toHaveLength(2);
+    expect(f.signals).toEqual([]);
+    f.deliver();
+    expect(f.messages.map((message) => message.type)).toEqual([
+      "prepared",
+      "ready",
+      "stdout",
+      "stdout",
+      "stderr",
+      "exit",
+      "close",
+    ]);
+    expect(
+      Buffer.concat(
+        f.messages
+          .filter((message) => message.type === "stdout")
+          .map((message) => Buffer.from(message.data as string, "base64")),
+      ),
+    ).toEqual(bytes);
+    expect(f.signals).toEqual([[-4242, "SIGKILL"]]);
+    f.deliver();
+    expect(f.spawn).toHaveBeenCalledTimes(1);
+    expect(f.signals).toHaveLength(1);
+  });
+
+  it.each(["prepared", "ready", "stop-requested"])(
+    "retains the single queued %s write until its callback",
+    (type) => {
+      const f = fixture();
+      f.hold(type);
+      f.fail(type, "backpressure");
+      f.prepare();
+      if (type !== "prepared") f.start();
+      if (type === "stop-requested") f.stop();
+      expect(f.signals).toEqual([]);
+      expect(f.process.exit).not.toHaveBeenCalled();
+      expect(
+        f.messages.filter((message) => message.type === type),
+      ).toHaveLength(1);
+      f.deliver();
+      if (type === "prepared") f.start();
+      if (type !== "stop-requested") {
+        f.child.emit("exit", 0, null);
+        f.child.emit("close", 0, null);
+      }
+      expect(f.spawn).toHaveBeenCalledTimes(1);
+      expect(f.signals).toEqual([[-4242, "SIGKILL"]]);
+      expect(
+        f.messages.filter((message) => message.type === type),
+      ).toHaveLength(1);
+    },
+  );
+
+  it("discards queued observations after disconnect without a second send", () => {
+    const f = fixture();
+    f.prepare();
+    f.start();
+    f.hold("stdout");
+    f.child.stdout.emit("data", Buffer.from("queued"));
+    f.child.emit("exit", 0, null);
+    f.child.emit("close", 0, null);
+    f.process.connected = false;
+    f.process.emit("disconnect");
+    const count = f.messages.length;
+    f.deliver();
+    expect(f.messages).toHaveLength(count);
+    expect(f.signals).toEqual([[-4242, "SIGKILL"]]);
+    expect(f.spawn).toHaveBeenCalledTimes(1);
+  });
+
+  it("resumes pipes after output delivery but fences a callback failure permanently", () => {
+    const f = fixture();
+    f.prepare();
+    f.start();
+    f.child.stdout.resume.mockClear();
+    f.child.stderr.resume.mockClear();
+    f.hold("stdout");
+    f.fail("stdout", "backpressure");
+    f.child.stdout.emit("data", Buffer.from("first"));
+    expect(f.child.stdout.resume).not.toHaveBeenCalled();
+    f.deliver();
+    expect(f.child.stdout.resume).toHaveBeenCalledTimes(1);
+    expect(f.child.stderr.resume).toHaveBeenCalledTimes(1);
+    f.child.stdout.emit("data", Buffer.from("second"));
+    f.child.emit("exit", 0, null);
+    f.child.emit("close", 0, null);
+    f.deliver(Error("synthetic write failure"));
+    f.deliver();
+    f.start();
+    expect(f.spawn).toHaveBeenCalledTimes(1);
+    expect(f.signals).toEqual([[-4242, "SIGKILL"]]);
+    expect(
+      f.messages.some(
+        (message) => message.type === "exit" || message.type === "close",
+      ),
+    ).toBe(false);
+  });
+
+  it.each(["bytes", "frames"])(
+    "bounds pending %s when a callback stalls",
+    (limit) => {
+      const f = fixture();
+      f.prepare();
+      f.start();
+      f.hold("stdout");
+      f.fail("stdout", "backpressure");
+      for (let index = 0; index < 20; index++)
+        f.child.stdout.emit(
+          "data",
+          Buffer.alloc(limit === "bytes" ? 49152 : 1),
+        );
+      expect(
+        f.messages.filter((message) => message.type === "stdout"),
+      ).toHaveLength(1);
+      expect(f.signals).toEqual([[-4242, "SIGKILL"]]);
+      f.deliver();
+      f.child.emit("close", 0, null);
+      expect(f.messages.some((message) => message.type === "close")).toBe(
+        false,
+      );
+    },
+  );
+
+  it("keeps the original deadline while a send callback is missing", () => {
+    const f = fixture();
+    f.prepare();
+    f.start();
+    f.hold("stdout");
+    f.fail("stdout", "backpressure");
+    f.child.stdout.emit("data", Buffer.from("pending"));
+    expect(f.signals).toEqual([]);
+    f.tick(16000);
+    expect(f.signals).toEqual([[-4242, "SIGKILL"]]);
+    f.deliver();
+    expect(f.messages.some((message) => message.type === "deadline")).toBe(
+      false,
+    );
+  });
 
   it("consumes stop before its delayed ACK and signals only its own current group", () => {
     const f = fixture();

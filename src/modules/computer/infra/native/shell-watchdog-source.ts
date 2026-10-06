@@ -24,12 +24,18 @@ if (process.env?.FAROL_SHELL_WATCHDOG_MODE === "go-prepared-v1" &&
   let stopRequested = false;
   let channelFailed = false;
   let outputBytes = 0;
+  const pending = [];
+  let pendingBytes = 0;
+  let sending = false;
+  let pumping = false;
   const exact = (value, keys) => value && typeof value === "object" &&
     !Array.isArray(value) && Object.keys(value).length === keys.length &&
     keys.every((key) => Object.hasOwn(value, key));
   function stopNow() {
     if (stopped) return;
     stopped = true;
+    pending.length = 0;
+    pendingBytes = 0;
     if (timer) clearTimeout(timer);
     if (!command) { process.exit(0); return; }
     if (signalAttempted) return;
@@ -42,16 +48,54 @@ if (process.env?.FAROL_SHELL_WATCHDOG_MODE === "go-prepared-v1" &&
       }
     }
   }
-  function emit(type, fields = {}, delivered) {
-    if (channelFailed || !process.connected) { stopNow(); return false; }
+  function pump() {
+    if (pumping) return;
+    pumping = true;
     try {
-      const accepted = process.send({ type, id, ...fields }, (error) => {
-        if (error) { channelFailed = true; stopNow(); }
-        else delivered?.();
-      });
-      if (!accepted) { channelFailed = true; stopNow(); }
-      return accepted;
-    } catch { channelFailed = true; stopNow(); return false; }
+      while (!sending && pending.length && !stopped && !channelFailed) {
+        if (!process.connected) { channelFailed = true; stopNow(); break; }
+        const item = pending.shift();
+        sending = true;
+        let settled = false;
+        try {
+          // false can mean queued backpressure, not a failed send. Retain this
+          // one attempt until its callback; never resend or send ahead of it.
+          process.send(item.message, (error) => {
+            if (settled) return;
+            settled = true;
+            sending = false;
+            if (stopped || channelFailed) return;
+            pendingBytes -= item.bytes;
+            if (error || !process.connected) { channelFailed = true; stopNow(); return; }
+            item.delivered?.();
+            pump();
+          });
+        } catch { channelFailed = true; stopNow(); }
+      }
+    } finally {
+      pumping = false;
+      if (!sending && !pending.length && !stopped && !closed && !stopRequested && !channelFailed) {
+        command?.stdout.resume();
+        command?.stderr.resume();
+      }
+    }
+  }
+  function emit(type, fields = {}, delivered) {
+    if (stopped || channelFailed || !process.connected) { stopNow(); return false; }
+    const message = { type, id, ...fields };
+    const bytes = Buffer.byteLength(JSON.stringify(message)) + 1;
+    // Includes the one in-flight message. Paused pipes normally leave only one
+    // read chunk buffered; cap both bytes and frames even for tiny chunks.
+    if (bytes > 96 * 1024 || pendingBytes + bytes > 256 * 1024 ||
+        pending.length + Number(sending) >= 16) {
+      channelFailed = true; stopNow(); return false;
+    }
+    pending.push({ message, bytes, delivered });
+    pendingBytes += bytes;
+    command?.stdout.pause();
+    command?.stderr.pause();
+    pump();
+    return !stopped && !channelFailed;
   }
   function refuse() { emit("error"); stopNow(); }
   function output(type, chunk) {
