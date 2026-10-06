@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import { parse } from "@babel/parser";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -194,10 +195,19 @@ describe("shell action provenance", () => {
   });
   it("R35 native shortcuts publish navigation without changing presentation or retrying updates", async () => {
     const source = await readFile(mainSource, "utf8");
-    const handler = source.slice(
-      source.indexOf("function handleShortcut("),
-      source.indexOf("function applyLayout("),
+    const handlers = parse(source, {
+      sourceType: "module",
+      plugins: ["typescript"],
+    }).program.body.filter(
+      (node) =>
+        node.type === "FunctionDeclaration" &&
+        node.id?.name === "handleShortcut",
     );
+    expect(handlers).toHaveLength(1);
+    const handlerNode = handlers[0];
+    if (handlerNode?.start == null || handlerNode.end == null)
+      throw new Error("Shortcut handler source boundary missing");
+    const handler = source.slice(handlerNode.start, handlerNode.end);
     expect(
       handler.match(/publishShellAction\(\s*"navigate-section"/gu),
     ).toHaveLength(2);
