@@ -11,7 +11,7 @@ provider/host fixture; `BLOCKED_OWNER` and `NOT_RUN` remain open evidence rows.
 
 The current desktop selects the protected Go connector for catalogue, bootstrap,
 list, read, search and one-shot verification. The same Go owner supplies write,
-edit and retained-result observation. On 6 October, ordinary Dev `ad718d9b`
+edit and retained-result observation. On 6 October, ordinary Dev `0a651651`
 served real external catalogue/bootstrap/read/search and attachment verification
 with the retained ordinary profile. Dev `426f36d6` previously served synthetic
 file create → read → exact-digest edit → stale-digest conflict → readback through
@@ -20,6 +20,17 @@ folder configuration and connection without recreating the profile or repeating
 the mutation. These are ordinary Dev/external witnesses, not installed or
 canonical-package acceptance. Exact request/build/profile receipts
 are preserved locally under `_output/evidence/startup-recovery-20261004/`.
+
+The same running Dev also passed a later external read of its repository checkout
+inside `.codex`, then create → exact-digest edit → readback of a synthetic file in
+that checkout. The enclosing HOME grant was sufficient; no extra child-folder
+approval was added. Each mutation used one distinct operation ID and returned a
+durable completion receipt. This qualifies that file route, not `.claude`, shell,
+Git or provider-session behavior. Bootstrap correctly reports an unavailable
+ancestor `AGENTS.md` when it is a symlink and leaves `complete: false`; ordinary
+checkout files remain readable. No symlink target or credential was read to
+override that guard. The exact bounded operation evidence is retained in
+`external-dev-0a651651-agent-store.json`.
 
 The Go route does not advertise shell/Git or coding-task tools. Its process
 reservation, anchored measurement, held control, watchdog and retained observation
