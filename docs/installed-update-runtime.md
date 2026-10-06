@@ -111,8 +111,9 @@ and stay within the installer's limits.
 The archive helper is an attested, offline-built native executable. Its resource
 filename remains `update-archive.py` for package compatibility; it is executed
 directly, not through Python. The package includes its Go and Unicode dependency
-notices. The Computer filesystem and install/swap helpers still use their
-existing reviewed Python boundary; this slice does not remove those dependencies.
+notices. The React/Go Dev's external Computer file route now uses Go. Install/swap
+helpers retain their existing reviewed Python boundary; this remains a transitional
+release dependency. These source changes do not replace the installed 0.1.11 app.
 
 A pre-readiness refusal is retryable only after that same helper's classified
 terminal exit confirms it never crossed the mutation handoff. The app rechecks
@@ -216,6 +217,44 @@ These source tests exercise ports and disposable filesystem state. They are not
 proof of a public GitHub download, installed N-to-N+1 upgrade, native relaunch,
 configuration preservation or rollback on the owner's live installation. Those
 require separate release/update receipts from the accepted packaged candidate.
+
+## Prepared external transition
+
+`tooling/supervised-update.mjs` is an external owner-transition entry, composed
+with the existing installed updater. It is prepared source, not an accepted
+public installer or an installed-upgrade result. Its bundled entry has been
+compiled and exercised with `--help` outside the checkout; apply remains subject
+to native helper, accepted-package, state and recovery qualification.
+
+One private, hash-bound selection names the exact source, target, manifest and
+local archive. The controller attests resources without executing candidate code,
+checks the measured predecessor and existing obligations, acquires the existing
+promotion lease, and requests one ordinary Quit. Only the exact predecessor's
+confirmed exit and fresh drained receipt permit preservation and staging.
+An uncertain Quit, pending update intent or changed identity refuses progression.
+
+The preservation adapter copies the closed app and profile into a private root.
+It retains file bytes, POSIX modes and literal symlinks under bounded inventory,
+identity and readback checks. A capacity estimate precedes copying; it reserves
+no disk space. The private `preservation.json` identifies the source build,
+closed lifetime and pair digests without an entry inventory or profile contents.
+Receipt presence alone proves neither completed capture nor permission to restore.
+Partial copies and uncertain writes stay retained. ACLs, extended attributes,
+timestamps and real installed-profile recovery are not qualified by these tests.
+
+The existing updater imports the selected archive, retains its ready intent and
+launches the same helper under the inherited lease. The controller retains the
+original child before metadata recording and observes its actual terminal result;
+an applying view, exit without protocol completion or lost observation is not
+success. A completed helper must also match the measured target slot. This proves
+replacement only; application startup and external Computer still require their
+own checks. This route does not implement supervised restore or a second journal.
+
+Reporting failures cannot interrupt the updater's drain. The controller settles
+the current step, records reporting loss and stops before the next effect where
+possible. Once apply starts, it continues observing the original operation.
+Final CLI reporting loss returns exit 3 without changing a known lifecycle
+terminal or launching a replacement operation.
 
 ## Physical staging cleanup
 
