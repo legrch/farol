@@ -16,6 +16,7 @@ import {
 export class ConnectorHostBridge {
   private current: ComputerConnectorOpened | undefined;
   private pending = false;
+  private closeInFlight: Promise<void> | undefined;
   private blocked = false;
   private refusedBeforePublication = false;
   private proof: ConnectorVerificationBridge | undefined;
@@ -131,12 +132,24 @@ export class ConnectorHostBridge {
       );
     return result;
   }
-  async close(): Promise<void> {
+  close(): Promise<void> {
+    // Join the original request, including its exact failure, before checking
+    // pending: an in-flight open still has no close promise and remains fenced.
+    if (this.closeInFlight) return this.closeInFlight;
     if (this.blocked || this.pending)
-      throw new BridgeError("unknown", "connector_close_unconfirmed");
+      return Promise.reject(
+        new BridgeError("unknown", "connector_close_unconfirmed"),
+      );
     const current = this.current;
-    if (!current) return;
+    if (!current) return Promise.resolve();
     this.pending = true;
+    this.closeInFlight = this.closeCurrent(current).finally(() => {
+      this.pending = false;
+      this.closeInFlight = undefined;
+    });
+    return this.closeInFlight;
+  }
+  private async closeCurrent(current: ComputerConnectorOpened): Promise<void> {
     const id = randomUUID(),
       operationId = randomUUID();
     try {
@@ -168,8 +181,6 @@ export class ConnectorHostBridge {
     } catch (error) {
       this.blocked = true;
       throw error;
-    } finally {
-      this.pending = false;
     }
   }
 }

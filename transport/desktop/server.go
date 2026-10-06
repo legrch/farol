@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"regexp"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -48,10 +50,13 @@ type Config struct {
 	TerminalRejection bool
 }
 type Server struct {
-	config    Config
-	started   time.Time
-	connected bool
-	seen      map[string]bool
+	config       Config
+	started      time.Time
+	connected    bool
+	seen         map[string]bool
+	pollNonce    string
+	polls        map[string]uint64
+	pollAdmitted bool
 }
 
 func New(config Config) (*Server, error) {
@@ -67,7 +72,7 @@ func New(config Config) (*Server, error) {
 		methods[name] = method
 	}
 	config.Methods = methods
-	return &Server{config: config, started: time.Now(), seen: make(map[string]bool)}, nil
+	return &Server{config: config, started: time.Now(), seen: make(map[string]bool), polls: make(map[string]uint64)}, nil
 }
 
 // Serve owns the supplied pipe endpoints for its lifetime. Cancellation closes
@@ -140,7 +145,7 @@ func (s *Server) Serve(parent context.Context, in io.ReadCloser, out io.WriteClo
 		}
 		return err
 	}
-	for attempt := 0; attempt < 4096; attempt++ {
+	for attempt := 0; attempt < 4096; {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -155,6 +160,12 @@ func (s *Server) Serve(parent context.Context, in io.ReadCloser, out io.WriteClo
 			return fmt.Errorf("protocol frame: %w", err)
 		}
 		response, call := s.prepareDispatch(data)
+		// Valid, strictly ordered reciprocal polls retain two counters rather
+		// than spending the bounded effect/control request history while idle.
+		// Invalid frames, forged polls and all other calls still spend the cap.
+		if !s.pollAdmitted {
+			attempt++
+		}
 		if call != nil && call.method.Concurrent {
 			select {
 			case pending <- struct{}{}:
@@ -200,6 +211,7 @@ func (s *Server) dispatch(ctx context.Context, data []byte) wire.Response {
 // Called only by the pipe reader. Handshake, request deduplication and all
 // boundary validation finish before a handler may run concurrently.
 func (s *Server) prepareDispatch(data []byte) (wire.Response, *invocation) {
+	s.pollAdmitted = false
 	if err := ipc.ValidateJSON(data); err != nil {
 		return fault("", -32700, "invalid JSON"), nil
 	}
@@ -210,13 +222,20 @@ func (s *Server) prepareDispatch(data []byte) (wire.Response, *invocation) {
 	if err := json.Unmarshal(data, &req); err != nil {
 		return fault("", -32600, "invalid request"), nil
 	}
-	if s.seen[req.Id] {
-		return fault(req.Id, -32600, "duplicate request ID"), nil
+	if strings.HasPrefix(req.Id, "desktop-poll-") {
+		if !s.admitPoll(req) {
+			return fault(req.Id, -32600, "invalid ordered poll"), nil
+		}
+		s.pollAdmitted = true
+	} else {
+		if s.seen[req.Id] {
+			return fault(req.Id, -32600, "duplicate request ID"), nil
+		}
+		if len(s.seen) >= 4096 {
+			return fault(req.Id, -32000, "request budget exhausted"), nil
+		}
+		s.seen[req.Id] = true
 	}
-	if len(s.seen) >= 4096 {
-		return fault(req.Id, -32000, "request budget exhausted"), nil
-	}
-	s.seen[req.Id] = true
 	if req.Method == "core.handshake" {
 		return s.handshake(req), nil
 	}
@@ -248,6 +267,33 @@ func (s *Server) prepareDispatch(data []byte) (wire.Response, *invocation) {
 		return s.result(req, &Outcome{Status: "unavailable", Code: "capability_unavailable"}), nil
 	}
 	return wire.Response{}, &invocation{request: req, method: method}
+}
+
+var orderedPoll = regexp.MustCompile(`^desktop-poll-(browser|settings):([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}):([1-9][0-9]{0,19})$`)
+
+// This private inherited-pipe namespace admits only the two registered read
+// polls. It cannot admit an effect, renew authority or reset a request fence.
+// The pipe reader alone owns these constant-space sequence counters.
+func (s *Server) admitPoll(req wire.Request) bool {
+	parts := orderedPoll.FindStringSubmatch(req.Id)
+	if len(parts) != 4 || !s.connected || req.Params.Context == nil || *req.Params.Context != s.context() || req.Params.OperationId != nil {
+		return false
+	}
+	method, shape := "chat.browser.next", "BrowserNext"
+	if parts[1] == "settings" {
+		method, shape = "computer.settings.store.next", "SettingsStoreNext"
+	}
+	if req.Method != method || s.config.Methods[method].Handle == nil || wire.Validate(shape, req.Params.Body) != nil || (s.pollNonce != "" && s.pollNonce != parts[2]) {
+		return false
+	}
+	sequence, err := strconv.ParseUint(parts[3], 10, 64)
+	previous := s.polls[parts[1]]
+	if err != nil || previous == ^uint64(0) || sequence != previous+1 {
+		return false
+	}
+	s.pollNonce = parts[2]
+	s.polls[parts[1]] = sequence
+	return true
 }
 
 func (s *Server) invoke(ctx context.Context, call *invocation) wire.Response {

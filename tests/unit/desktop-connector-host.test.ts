@@ -59,6 +59,15 @@ function fixture() {
     host: new ConnectorHostBridge({ request }, context, "build"),
   };
 }
+function deferredOutcome() {
+  let resolve!: (outcome: Outcome) => void;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<Outcome>((resolveReply, rejectReply) => {
+    resolve = resolveReply;
+    reject = rejectReply;
+  });
+  return { promise, resolve, reject };
+}
 it("retains the exact Go reply and closes once without granting or reminting", async () => {
   const { request, host } = fixture();
   const result = await host.open(input);
@@ -74,6 +83,156 @@ it("retains the exact Go reply and closes once without granting or reminting", a
     "computer.connector.open",
     "computer.connector.close",
   ]);
+});
+it("joins the original overlapping close until its exact ACK confirms closure", async () => {
+  const { request, host } = fixture();
+  const original = request.getMockImplementation()!;
+  await host.open(input);
+  const reply = deferredOutcome();
+  request.mockReturnValueOnce(reply.promise);
+  const first = host.close();
+  const second = host.close();
+  const completed = vi.fn();
+  const results = Promise.allSettled([first, second]).then((outcomes) => {
+    completed();
+    return outcomes;
+  });
+  expect(second).toBe(first);
+  await Promise.resolve();
+  expect(completed).not.toHaveBeenCalled();
+  expect(request.mock.calls.map(([method]) => method)).toEqual([
+    "computer.connector.open",
+    "computer.connector.close",
+  ]);
+  await expect(host.open(input)).rejects.toMatchObject({
+    state: "unavailable",
+    code: "connector_host_unavailable",
+  });
+  reply.resolve(await original(...request.mock.calls[1]!));
+  expect(await results).toEqual([
+    { status: "fulfilled", value: undefined },
+    { status: "fulfilled", value: undefined },
+  ]);
+  await expect(host.close()).resolves.toBeUndefined();
+  expect(request).toHaveBeenCalledTimes(2);
+});
+it.each(["unknown", "lost"])(
+  "joins the original overlapping close and retains its exact %s failure",
+  async (mode) => {
+    const { request, host } = fixture();
+    await host.open(input);
+    const reply = deferredOutcome();
+    request.mockReturnValueOnce(reply.promise);
+    const first = host.close();
+    const second = host.close();
+    const completed = vi.fn();
+    const results = Promise.allSettled([first, second]).then((outcomes) => {
+      completed();
+      return outcomes;
+    });
+    expect(second).toBe(first);
+    await Promise.resolve();
+    expect(completed).not.toHaveBeenCalled();
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "computer.connector.open",
+      "computer.connector.close",
+    ]);
+    const error =
+      mode === "unknown"
+        ? new BridgeError("unknown", "original_close_unknown")
+        : new Error("lost close response");
+    reply.reject(error);
+    const outcomes = await results;
+    for (const outcome of outcomes) {
+      expect(outcome.status).toBe("rejected");
+      expect((outcome as PromiseRejectedResult).reason).toBe(error);
+    }
+    await expect(host.close()).rejects.toMatchObject({
+      state: "unknown",
+      code: "connector_close_unconfirmed",
+    });
+    await expect(host.open(input)).rejects.toMatchObject({
+      state: "unavailable",
+      code: "connector_host_unavailable",
+    });
+    expect(request).toHaveBeenCalledTimes(2);
+  },
+);
+it("refuses close while the original open is pending without sending a close request", async () => {
+  const { request, host } = fixture();
+  const original = request.getMockImplementation()!;
+  const reply = deferredOutcome();
+  request.mockReturnValueOnce(reply.promise);
+  const opening = host.open(input);
+  await expect(host.close()).rejects.toMatchObject({
+    state: "unknown",
+    code: "connector_close_unconfirmed",
+  });
+  expect(request).toHaveBeenCalledTimes(1);
+  reply.resolve(await original(...request.mock.calls[0]!));
+  await opening;
+  await expect(host.close()).resolves.toBeUndefined();
+  expect(request.mock.calls.map(([method]) => method)).toEqual([
+    "computer.connector.open",
+    "computer.connector.close",
+  ]);
+});
+it.each<readonly [string, (outcome: Outcome) => Outcome]>([
+  ["unknown status", (out) => ({ ...out, status: "unknown" })],
+  ["crossed request", (out) => ({ ...out, requestId: "crossed" })],
+  ["crossed operation", (out) => ({ ...out, operationId: "crossed" })],
+  [
+    "crossed profile",
+    (out) => ({ ...out, context: { ...context, profileId: "crossed" } }),
+  ],
+  [
+    "crossed backend",
+    (out) => ({
+      ...out,
+      context: { ...context, backendGeneration: "crossed" },
+    }),
+  ],
+  ["invalid data", (out) => ({ ...out, data: {} })],
+  [
+    "unconfirmed closure",
+    (out) => ({ ...out, data: { binding, closed: false } }),
+  ],
+  [
+    "crossed binding",
+    (out) => ({
+      ...out,
+      data: { binding: { ...binding, runtimeId: "crossed" }, closed: true },
+    }),
+  ],
+])("fences overlapping close callers after %s", async (_name, change) => {
+  const { request, host } = fixture();
+  const original = request.getMockImplementation()!;
+  await host.open(input);
+  const reply = deferredOutcome();
+  request.mockReturnValueOnce(reply.promise);
+  const first = host.close();
+  const second = host.close();
+  const results = Promise.allSettled([first, second]);
+  expect(second).toBe(first);
+  expect(request).toHaveBeenCalledTimes(2);
+  reply.resolve(change(await original(...request.mock.calls[1]!)));
+  const outcomes = await results;
+  expect(outcomes[0]).toMatchObject({
+    status: "rejected",
+    reason: { state: "unknown" },
+  });
+  expect(outcomes[1]).toMatchObject({ status: "rejected" });
+  expect((outcomes[1] as PromiseRejectedResult).reason).toBe(
+    (outcomes[0] as PromiseRejectedResult).reason,
+  );
+  await expect(host.close()).rejects.toMatchObject({
+    state: "unknown",
+    code: "connector_close_unconfirmed",
+  });
+  await expect(host.open(input)).rejects.toMatchObject({
+    state: "unavailable",
+  });
+  expect(request).toHaveBeenCalledTimes(2);
 });
 const refusalCode = "connector_open_refused_before_publication";
 function refuseOpen(

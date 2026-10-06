@@ -33,6 +33,7 @@ export class RequestNotSentError extends BridgeError {
   }
 }
 type Pending = {
+  callerId: string;
   resolve: (outcome: Outcome) => void;
   reject: (error: BridgeError) => void;
   timer: ReturnType<typeof setTimeout>;
@@ -53,6 +54,10 @@ export class Client {
   private decoder = new Decoder();
   private pending = new Map<string, Pending>();
   private used = new Set<string>();
+  // Only the two reciprocal, read-only host polls use constant-space ordered
+  // wire IDs. Effect/command IDs keep their lifetime replay fence.
+  private readonly pollNonce = randomUUID();
+  private readonly polls = new Map<string, bigint>();
   private stopped = false;
   private context: Context | undefined;
   private identity: Identity | undefined;
@@ -229,18 +234,56 @@ export class Client {
       return Promise.reject(
         new BridgeError("unavailable", "backend_unavailable"),
       );
-    if (this.pending.size >= 32 || this.writerBusy || this.used.size >= 4096)
+    const pollLane =
+      method === "chat.browser.next"
+        ? "browser"
+        : method === "computer.settings.store.next"
+          ? "settings"
+          : undefined;
+    const retiring =
+      method === "computer.connector.close" ||
+      method === "core.retirement.prepare" ||
+      method === "core.retirement.ack";
+    // Reserve eight one-shot control calls so reaching the ordinary history
+    // bound cannot prevent connector closure and the original retirement ACK.
+    if (
+      this.pending.size >= 32 ||
+      this.writerBusy ||
+      (pollLane === undefined && this.used.size >= (retiring ? 4096 : 4088))
+    )
       return Promise.reject(new RequestNotSentError());
+    if (id.startsWith("desktop-poll-"))
+      return Promise.reject(new BridgeError("refused", "reserved_request_id"));
     if (this.used.has(id))
       return Promise.reject(new BridgeError("refused", "duplicate_request_id"));
     if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || timeoutMs > 30000)
       return Promise.reject(new BridgeError("refused", "invalid_deadline"));
+    if (
+      !validate("id", id) ||
+      (pollLane !== undefined &&
+        (operationId !== undefined ||
+          !validate(
+            pollLane === "browser" ? "BrowserNext" : "SettingsStoreNext",
+            body,
+          )))
+    )
+      return Promise.reject(new BridgeError("refused", "invalid_request"));
     const params = {
       body,
       ...(this.context ? { context: this.context } : {}),
       ...(operationId !== undefined ? { operationId } : {}),
     };
-    const request: Request = { jsonrpc: "2.0", id, method, params };
+    const sequence =
+      pollLane === undefined
+        ? undefined
+        : (this.polls.get(pollLane) ?? 0n) + 1n;
+    if (sequence !== undefined && sequence > 18446744073709551615n)
+      return Promise.reject(new RequestNotSentError());
+    const wireId =
+      sequence === undefined
+        ? id
+        : `desktop-poll-${pollLane}:${this.pollNonce}:${sequence}`;
+    const request: Request = { jsonrpc: "2.0", id: wireId, method, params };
     if (!validate("Request", request))
       return Promise.reject(new BridgeError("refused", "invalid_request"));
     let bytes: Buffer;
@@ -249,14 +292,16 @@ export class Client {
     } catch {
       return Promise.reject(new BridgeError("refused", "oversized_request"));
     }
-    this.used.add(id);
+    if (pollLane === undefined) this.used.add(id);
+    else this.polls.set(pollLane, sequence!);
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
-        this.pending.delete(id);
+        this.pending.delete(wireId);
         reject(new BridgeError("unknown", "response_timeout"));
         this.fail("response_timeout");
       }, timeoutMs);
-      this.pending.set(id, {
+      this.pending.set(wireId, {
+        callerId: id,
         resolve,
         reject,
         timer,
@@ -364,7 +409,13 @@ export class Client {
       }
       clearTimeout(pending.timer);
       this.pending.delete(response.id);
-      pending.resolve(result);
+      // Validate the exact original wire reply above before translating the
+      // private poll correlation back to its host caller. Never map effects.
+      pending.resolve(
+        result.requestId === pending.callerId
+          ? result
+          : { ...result, requestId: pending.callerId },
+      );
     } else {
       clearTimeout(pending.timer);
       this.pending.delete(response.id);
