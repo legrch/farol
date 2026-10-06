@@ -8,7 +8,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 
 const HELPER_SHA256 =
-  "aa33a892282306e1deb4055965a08297b3fcc0b190fb7f2ac5ca614bf9e4522f";
+  "de170fc990acb9fc96c60c4bab00c788fd9029d7d1af03028a0425f8b1c89e99";
 const MAX_HELPER_BYTES = 64 * 1024;
 const APP_NAME = "Farol.app";
 const execFileAsync = promisify(execFile);
@@ -20,8 +20,28 @@ export interface AcceptedInstalledBuild {
   readonly buildId: string;
 }
 
-export interface InstalledUpdateRequest {
-  readonly action: "apply" | "recover" | "rollback";
+export interface InstalledUpdateInode {
+  readonly device: string;
+  readonly inode: string;
+}
+
+export interface ConfirmedClosedPredecessor {
+  readonly kind: "confirmed_closed";
+  readonly startedAt: string;
+  readonly lastQuitSha256: string;
+  readonly stateIdentity: InstalledUpdateInode;
+}
+
+export interface PromotionLeaseTransfer {
+  readonly descriptor: number;
+  readonly identity: InstalledUpdateInode;
+  /** Confirm this exact descriptor still owns the exclusive promotion lease. */
+  verify(): Promise<boolean>;
+  /** One shot: close the parent's descriptor only. Never LOCK_UN the shared lock. */
+  release(): Promise<void>;
+}
+
+interface InstalledUpdateFields {
   readonly operationId: string;
   readonly source: AcceptedInstalledBuild;
   readonly target: AcceptedInstalledBuild;
@@ -35,6 +55,28 @@ export interface InstalledUpdateRequest {
   readonly processStart: string;
   readonly waitSeconds: number;
   readonly relaunch: boolean;
+}
+
+export type InstalledUpdateRequest = InstalledUpdateFields &
+  (
+    | Readonly<{
+        action: "apply" | "recover" | "rollback";
+        predecessor?: never;
+      }>
+    | Readonly<{
+        action: "apply";
+        predecessor: ConfirmedClosedPredecessor;
+      }>
+  );
+
+function validInode(value: InstalledUpdateInode): boolean {
+  return (
+    !!value &&
+    [value.device, value.inode].every(
+      (part) =>
+        typeof part === "string" && /^(0|[1-9][0-9]{0,29})$/u.test(part),
+    )
+  );
 }
 
 function assertInput(input: InstalledUpdateRequest): void {
@@ -65,6 +107,21 @@ function assertInput(input: InstalledUpdateRequest): void {
   ) {
     throw new Error("INSTALLED_UPDATE_INPUT_INVALID");
   }
+  if (
+    "predecessor" in input &&
+    (!input.predecessor ||
+      input.action !== "apply" ||
+      input.predecessor.kind !== "confirmed_closed" ||
+      !sha.test(input.predecessor.lastQuitSha256) ||
+      typeof input.predecessor.startedAt !== "string" ||
+      input.predecessor.startedAt.length > 64 ||
+      !/^\d{4}-\d{2}-\d{2}T.*(?:Z|[+-]\d{2}:\d{2})$/u.test(
+        input.predecessor.startedAt,
+      ) ||
+      !Number.isFinite(Date.parse(input.predecessor.startedAt)) ||
+      !validInode(input.predecessor.stateIdentity))
+  )
+    throw new Error("INSTALLED_UPDATE_INPUT_INVALID");
 }
 
 async function helperBytes(helperPath: string): Promise<Buffer> {
@@ -148,6 +205,7 @@ export async function captureInstalledProcessStart(
 
 export type InstalledUpdateHandoff =
   | Readonly<{ phase: "waiting_for_exit" }>
+  | Readonly<{ phase: "closed_predecessor_ready" }>
   | Readonly<{ phase: "refused"; error: string }>;
 
 export interface InstalledUpdateCompletion {
@@ -174,10 +232,15 @@ export type InstalledUpdateLaunch =
       reason:
         | "helper_spawn_failed"
         | "helper_preflight_failed"
-        | "owner_home_invalid";
+        | "owner_home_invalid"
+        | "promotion_lease_unconfirmed"
+        | "spawn_record_required";
       operation: InstalledUpdateOperation;
     }>
   | Readonly<{ status: "ready"; operation: InstalledUpdateOperation }>
+  // The transfer was released and one continue frame was written. Completion,
+  // not this result, reports whether the closed apply actually finished.
+  | Readonly<{ status: "continued"; operation: InstalledUpdateOperation }>
   | Readonly<{
       status: "refused";
       reason: string;
@@ -196,6 +259,34 @@ export type InstalledUpdateLaunch =
 
 const MAX_CHANNEL_BYTES = 4096;
 const HANDOFF_SCHEMA = "farol.installed-update-handoff/1";
+const CONTINUE_SCHEMA = "farol.installed-update-continue/1";
+
+function correlation(
+  input: InstalledUpdateRequest,
+  lease?: InstalledUpdateInode,
+) {
+  return {
+    operationId: input.operationId,
+    action: input.action,
+    source: input.source,
+    target: input.target,
+    pid: input.pid,
+    processStart: input.processStart,
+    ...(input.predecessor
+      ? { predecessor: input.predecessor, leaseIdentity: lease }
+      : {}),
+  };
+}
+
+function sameInode(value: unknown, expected: InstalledUpdateInode): boolean {
+  const record = object(value);
+  return (
+    record !== null &&
+    Object.keys(record).length === 2 &&
+    record["device"] === expected.device &&
+    record["inode"] === expected.inode
+  );
+}
 
 function object(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" && !Array.isArray(value)
@@ -217,6 +308,7 @@ function sameBuild(value: unknown, expected: AcceptedInstalledBuild): boolean {
 function parseHandoff(
   bytes: Buffer,
   expected: InstalledUpdateRequest,
+  lease?: InstalledUpdateInode,
 ): InstalledUpdateHandoff | null {
   try {
     const event = object(JSON.parse(bytes.toString("utf8")));
@@ -231,8 +323,29 @@ function parseHandoff(
       !sameBuild(event["target"], expected.target)
     )
       return null;
+    const closed = expected.predecessor;
+    if (closed) {
+      const proof = object(event["predecessor"]);
+      if (
+        !lease ||
+        !sameInode(event["leaseIdentity"], lease) ||
+        !proof ||
+        Object.keys(proof).length !== 4 ||
+        proof["kind"] !== closed.kind ||
+        proof["startedAt"] !== closed.startedAt ||
+        proof["lastQuitSha256"] !== closed.lastQuitSha256 ||
+        !sameInode(proof["stateIdentity"], closed.stateIdentity)
+      )
+        return null;
+      if (
+        event["phase"] === "closed_predecessor_ready" &&
+        Object.keys(event).length === 10
+      )
+        return { phase: "closed_predecessor_ready" };
+    }
     if (
       event["phase"] === "waiting_for_exit" &&
+      !closed &&
       (expected.action !== "recover" || expected.relaunch) &&
       Object.keys(event).length === 8
     ) {
@@ -240,7 +353,7 @@ function parseHandoff(
     }
     if (
       event["phase"] === "refused" &&
-      Object.keys(event).length === 9 &&
+      Object.keys(event).length === (closed ? 11 : 9) &&
       typeof event["error"] === "string" &&
       /^[a-z][a-z0-9_]{0,79}$/u.test(event["error"])
     ) {
@@ -284,12 +397,14 @@ function parseTerminal(
  * Only `ready` authorizes normal Quit for apply/rollback or live recover. Every post-spawn
  * outcome retains the same child via its observation/completion handle.
  * Offline `recover` has no live-app handoff and returns a terminal result instead.
+ * Closed apply uses its explicit transfer barrier and never grants live-app Quit.
  */
 export async function startInstalledUpdateHelper(
   helperPath: string,
   input: InstalledUpdateRequest,
   options: Readonly<{
     readinessTimeoutMs?: number;
+    promotionLease?: PromotionLeaseTransfer;
     // The application records this actual handle before any helper program or
     // operation bytes are sent. Failure remains an observed, unknown launch.
     recordSpawn?(operation: InstalledUpdateOperation): Promise<void>;
@@ -306,8 +421,7 @@ export async function startInstalledUpdateHelper(
   }
   // Pin the request before asynchronous preflight; later caller mutation cannot
   // change either the bytes sent or the identity expected in the acknowledgment.
-  const pinned: InstalledUpdateRequest = {
-    action: input.action,
+  const fields: InstalledUpdateFields = {
     operationId: input.operationId,
     source: { ...input.source },
     target: { ...input.target },
@@ -317,8 +431,31 @@ export async function startInstalledUpdateHelper(
     waitSeconds: input.waitSeconds,
     relaunch: input.relaunch,
   };
+  const pinned: InstalledUpdateRequest = input.predecessor
+    ? {
+        ...fields,
+        action: "apply",
+        predecessor: {
+          ...input.predecessor,
+          stateIdentity: { ...input.predecessor.stateIdentity },
+        },
+      }
+    : { ...fields, action: input.action };
+  const selectedLease = options.promotionLease;
+  const lease = selectedLease
+    ? {
+        descriptor: selectedLease.descriptor,
+        identity: { ...selectedLease.identity },
+        verify: selectedLease.verify.bind(selectedLease),
+        release: selectedLease.release.bind(selectedLease),
+      }
+    : null;
   const beforeSpawn = (
-    reason: "helper_preflight_failed" | "owner_home_invalid",
+    reason:
+      | "helper_preflight_failed"
+      | "owner_home_invalid"
+      | "promotion_lease_unconfirmed"
+      | "spawn_record_required",
   ): InstalledUpdateLaunch => {
     // This receipt explicitly has no process and no process exit code. It is
     // created only on the preflight side of the spawn boundary.
@@ -339,6 +476,33 @@ export async function startInstalledUpdateHelper(
       },
     };
   };
+  if (
+    Boolean(pinned.predecessor) !== Boolean(lease) ||
+    (lease &&
+      (!Number.isSafeInteger(lease.descriptor) ||
+        lease.descriptor < 3 ||
+        !validInode(lease.identity)))
+  )
+    return beforeSpawn("promotion_lease_unconfirmed");
+  if (lease && !options.recordSpawn)
+    return beforeSpawn("spawn_record_required");
+  if (lease) {
+    // This read-only preflight may itself lose its reply. No child exists yet.
+    let deadline: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const verified = await Promise.race([
+        lease.verify(),
+        new Promise<false>((resolve) => {
+          deadline = setTimeout(() => resolve(false), readinessTimeoutMs);
+        }),
+      ]);
+      if (verified !== true) return beforeSpawn("promotion_lease_unconfirmed");
+    } catch {
+      return beforeSpawn("promotion_lease_unconfirmed");
+    } finally {
+      clearTimeout(deadline);
+    }
+  }
   let bytes: Buffer;
   try {
     bytes = await helperBytes(helperPath);
@@ -361,12 +525,15 @@ export async function startInstalledUpdateHelper(
     schema: "farol.installed-update/1",
     ...pinned,
     home: user.homedir,
+    ...(lease ? { leaseIdentity: lease.identity } : {}),
   };
   const child = spawn("/usr/bin/python3", ["-I", "-S", "-B", "-"], {
     cwd: "/",
     env: { LANG: "C.UTF-8", PATH: "/usr/bin:/bin" },
     detached: true,
-    stdio: ["pipe", "pipe", "ignore", "pipe", "pipe"],
+    stdio: lease
+      ? ["pipe", "pipe", "ignore", "pipe", "pipe", lease.descriptor, "pipe"]
+      : ["pipe", "pipe", "ignore", "pipe", "pipe"],
   });
   let handoff: InstalledUpdateHandoff | null = null;
   let exit: InstalledUpdateCompletion | null = null;
@@ -391,6 +558,12 @@ export async function startInstalledUpdateHelper(
   let spawned = false;
   let spawnFailed = false;
   let requestSent = false;
+  let transferStarted = false;
+  let continueSent = false;
+  let continueWritten = false;
+  const continuePipe = lease
+    ? (child.stdio.at(6) as Writable | null | undefined)
+    : null;
   const detach = (): void => {
     child.unref();
     for (const pipe of child.stdio)
@@ -405,6 +578,8 @@ export async function startInstalledUpdateHelper(
       child.stdin?.destroy();
       (child.stdio[3] as Writable | null)?.destroy();
     }
+    if (lease && result.status !== "continued" && result.status !== "terminal")
+      continuePipe?.destroy();
     clearTimeout(timer);
     detach();
     resolveLaunch(result);
@@ -412,6 +587,74 @@ export async function startInstalledUpdateHelper(
   const unknown = (reason: string): void => {
     protocolError ??= reason;
     finish({ status: "outcome_unknown", reason, operation });
+  };
+  const finishClosedTransfer = (): void => {
+    if (!continueWritten || settled) return;
+    if (exit) {
+      if (
+        exit.code === 0 &&
+        !exit.signal &&
+        !exit.protocolError &&
+        exit.terminal &&
+        exit.terminal.error === null &&
+        ["verified", "completed"].includes(exit.terminal.phase)
+      )
+        finish({ status: "terminal", operation, result: exit });
+      else unknown("closed_apply_terminal_unconfirmed");
+    } else finish({ status: "continued", operation });
+  };
+  const transfer = async (): Promise<void> => {
+    if (settled || transferStarted || !lease) return;
+    if (!requestSent) {
+      unknown("readiness_before_request");
+      return;
+    }
+    transferStarted = true;
+    try {
+      if ((await lease.verify()) !== true) {
+        unknown("promotion_lease_unconfirmed");
+        return;
+      }
+    } catch {
+      unknown("promotion_lease_unconfirmed");
+      return;
+    }
+    if (settled) return;
+    try {
+      await lease.release();
+    } catch {
+      unknown("promotion_lease_release_unknown");
+      return;
+    }
+    // A late release reply after timeout never opens the mutation barrier.
+    if (settled) return;
+    if (!continuePipe) {
+      unknown("continue_channel_missing");
+      return;
+    }
+    const frame =
+      JSON.stringify({
+        schema: CONTINUE_SCHEMA,
+        ...correlation(pinned, lease.identity),
+      }) + "\n";
+    if (Buffer.byteLength(frame) > MAX_CHANNEL_BYTES) {
+      unknown("continue_oversized");
+      return;
+    }
+    continueSent = true;
+    try {
+      continuePipe.end(frame, (error?: Error | null) => {
+        if (settled) return;
+        if (error) {
+          unknown("continue_write_unknown");
+          return;
+        }
+        continueWritten = true;
+        finishClosedTransfer();
+      });
+    } catch {
+      unknown("continue_write_unknown");
+    }
   };
   const timer = setTimeout(
     () => unknown("readiness_timeout"),
@@ -449,13 +692,14 @@ export async function startInstalledUpdateHelper(
   ack?.on("end", () => {
     ackEnded = true;
     if (ackInvalid || ackBytes === 0) return;
-    handoff = parseHandoff(Buffer.concat(ackChunks), pinned);
+    handoff = parseHandoff(Buffer.concat(ackChunks), pinned, lease?.identity);
     if (!handoff) {
       unknown("readiness_malformed");
       return;
     }
     if (handoff.phase === "refused")
       finish({ status: "refused", reason: handoff.error, operation });
+    else if (handoff.phase === "closed_predecessor_ready") void transfer();
     else finish({ status: "ready", operation });
   });
   ack?.on("close", () => {
@@ -521,7 +765,13 @@ export async function startInstalledUpdateHelper(
         protocolError ?? (terminal ? null : "terminal_output_invalid"),
     };
     resolveCompletion(exit);
-    if (
+    if (lease) {
+      if (continueWritten) finishClosedTransfer();
+      else if (!continueSent && !settled)
+        unknown("helper_exited_before_continue");
+      // An immediate terminal can race the stream's write callback. That
+      // callback or the original deadline settles the same transfer once.
+    } else if (
       pinned.action === "recover" &&
       !pinned.relaunch &&
       code === 0 &&
@@ -549,19 +799,37 @@ export async function startInstalledUpdateHelper(
   };
   child.once("spawn", () => {
     spawned = true;
-    if (!options.recordSpawn) {
+    if (!options.recordSpawn && !lease) {
       sendRequest();
       return;
     }
     void (async () => {
       try {
-        await options.recordSpawn!(operation);
-        sendRequest();
+        if (options.recordSpawn) await options.recordSpawn(operation);
       } catch {
         unknown("spawn_record_failed");
+        return;
       }
+      if (settled) return;
+      if (lease) {
+        try {
+          if ((await lease.verify()) !== true) {
+            unknown("promotion_lease_unconfirmed");
+            return;
+          }
+        } catch {
+          unknown("promotion_lease_unconfirmed");
+          return;
+        }
+      }
+      sendRequest();
     })();
   });
+  continuePipe?.on("error", () => unknown("continue_write_unknown"));
+  continuePipe?.on("close", () => {
+    if (!continueWritten && !settled) unknown("continue_channel_closed");
+  });
+  if (lease && !continuePipe) unknown("continue_channel_missing");
   if (!ack || !child.stdout) unknown("readiness_channel_missing");
   return launched;
 }

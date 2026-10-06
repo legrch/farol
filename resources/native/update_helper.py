@@ -12,6 +12,7 @@ import json
 import os
 import plistlib
 import posixpath
+import select
 import stat
 import struct
 import subprocess
@@ -329,6 +330,126 @@ def confirmed_quit(state, started_at=None):
         fail("quit_invalid")
 
 
+def inode_matches(st, expected):
+    return str(st.st_dev) == expected["device"] and str(st.st_ino) == expected["inode"]
+
+
+def valid_inode(value):
+    return isinstance(value, dict) and set(value) == {"device", "inode"} and all(
+        isinstance(part, str) and 1 <= len(part) <= 30 and part.isascii() and part.isdigit()
+        and (part == "0" or not part.startswith("0")) for part in value.values())
+
+
+def verify_inherited_lease(home, state, request, lease):
+    # Reopen the canonical state route, not just a possibly detached directory.
+    current_home = open_home(request["home"])
+    current_state = None
+    try:
+        if identity(os.fstat(home)) != identity(os.fstat(current_home)):
+            fail("closed_state_changed")
+        current_state = open_owner_state(current_home)
+        named = os.fstat(current_state)
+        held = os.fstat(state)
+        if identity(named) != identity(held) or named.st_nlink != held.st_nlink or stat.S_IMODE(named.st_mode) != 0o700 or not inode_matches(held, request["predecessor"]["stateIdentity"]):
+            fail("closed_state_changed")
+        before = entry(state, "promotion.lease")
+        inherited = os.fstat(lease)
+        if before is None or not stat.S_ISREG(before.st_mode) or before.st_uid != os.geteuid() or before.st_nlink != 1 or stat.S_IMODE(before.st_mode) != 0o600 or inherited.st_nlink != 1 or identity(before) != identity(inherited) or not inode_matches(inherited, request["leaseIdentity"]):
+            fail("inherited_lease_identity")
+        if fcntl.fcntl(lease, fcntl.F_GETFL) & os.O_ACCMODE != os.O_RDWR:
+            fail("inherited_lease_access")
+        # The trusted producer keeps its exact descriptor locked until the ACK.
+        # First refuse an unlocked/shared lock using an independent description;
+        # then the idempotent exclusive check rejects a crossed description.
+        # Never unlock: parent and child share this same flock after inheritance.
+        probe = os.open("promotion.lease", FILE_FLAGS, dir_fd=state)
+        try:
+            if identity(os.fstat(probe)) != identity(inherited):
+                fail("inherited_lease_identity")
+            try:
+                fcntl.flock(probe, fcntl.LOCK_SH | fcntl.LOCK_NB)
+            except BlockingIOError:
+                pass
+            else:
+                fail("inherited_lease_unheld")
+        finally:
+            os.close(probe)
+        try:
+            fcntl.flock(lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            fail("inherited_lease_crossed")
+        current = entry(state, "promotion.lease")
+        if current is None or current.st_nlink != 1 or identity(current) != identity(inherited):
+            fail("inherited_lease_identity")
+    finally:
+        if current_state is not None:
+            os.close(current_state)
+        os.close(current_home)
+
+
+def confirmed_closed(state, request):
+    if process_start(request["pid"]) is not None:
+        fail("closed_process_running")
+    if entry(state, "running.json") is not None:
+        fail("run_marker_present")
+    before = entry(state, "last-quit.json")
+    data = read_file(state, "last-quit.json", 8192)
+    after = entry(state, "last-quit.json")
+    if before is None or after is None or before.st_mode & 0o077 or after.st_nlink != 1 or identity(before) != identity(after) or (before.st_size, before.st_mtime_ns, before.st_ctime_ns) != (after.st_size, after.st_mtime_ns, after.st_ctime_ns):
+        fail("closed_quit_changed")
+    if hashlib.sha256(data).hexdigest() != request["predecessor"]["lastQuitSha256"]:
+        fail("closed_quit_digest")
+    try:
+        receipt = json.loads(data)
+        if not isinstance(receipt, dict) or set(receipt) != {"schema", "at", "drained", "unconfirmed"} or type(receipt["schema"]) is not int or receipt["schema"] != 1 or receipt["drained"] is not True or receipt["unconfirmed"] != [] or not isinstance(receipt["at"], str):
+            fail("quit_not_confirmed")
+        at = datetime.datetime.fromisoformat(receipt["at"].replace("Z", "+00:00"))
+        started = datetime.datetime.fromisoformat(request["predecessor"]["startedAt"].replace("Z", "+00:00"))
+        if at.tzinfo is None or started.tzinfo is None or at <= started or at > datetime.datetime.now(datetime.timezone.utc):
+            fail("quit_stale")
+    except (ValueError, TypeError):
+        fail("quit_invalid")
+
+
+def correlation(request):
+    value = {key: request[key] for key in ("operationId", "action", "source", "target", "pid", "processStart")}
+    if "predecessor" in request:
+        value.update(predecessor=request["predecessor"], leaseIdentity=request["leaseIdentity"])
+    return value
+
+
+def continue_channel():
+    channel = os.fstat(6)
+    if not (stat.S_ISFIFO(channel.st_mode) or stat.S_ISSOCK(channel.st_mode)):
+        fail("continue_channel")
+
+
+def await_continue(request):
+    continue_channel()
+    os.set_blocking(6, False)
+    deadline = time.monotonic() + request["waitSeconds"]
+    data = bytearray()
+    try:
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0 or not select.select([6], [], [], remaining)[0]:
+                fail("continue_timeout")
+            chunk = os.read(6, min(4096, 4097 - len(data)))
+            if not chunk:
+                break
+            data.extend(chunk)
+            if len(data) > 4096:
+                fail("continue_size")
+        try:
+            frame = json.loads(data)
+        except (ValueError, UnicodeError):
+            fail("continue_invalid")
+        if frame != {"schema": "farol.installed-update-continue/1", **correlation(request)}:
+            fail("continue_identity")
+    finally:
+        os.close(6)
+
+
 
 _handoff_sent = False
 
@@ -344,12 +465,7 @@ def emit_handoff(request, phase, error=None):
     event = {
         "schema": "farol.installed-update-handoff/1",
         "phase": phase,
-        "operationId": request["operationId"],
-        "action": request["action"],
-        "source": request["source"],
-        "target": request["target"],
-        "pid": request["pid"],
-        "processStart": request["processStart"],
+        **correlation(request),
     }
     if error is not None:
         event["error"] = error
@@ -414,6 +530,11 @@ def parse_request():
     except (ValueError, UnicodeError):
         fail("input")
     required = {"schema", "action", "home", "operationId", "source", "target", "drain", "pid", "processStart", "waitSeconds", "relaunch"}
+    if isinstance(request, dict) and "predecessor" in request:
+        required.update(("predecessor", "leaseIdentity"))
+        proof = request["predecessor"]
+        if request.get("action") != "apply" or not isinstance(proof, dict) or set(proof) != {"kind", "startedAt", "lastQuitSha256", "stateIdentity"} or proof["kind"] != "confirmed_closed" or not isinstance(proof["startedAt"], str) or not 1 <= len(proof["startedAt"]) <= 64 or not isinstance(proof["lastQuitSha256"], str) or len(proof["lastQuitSha256"]) != 64 or any(c not in "0123456789abcdef" for c in proof["lastQuitSha256"]) or not valid_inode(proof["stateIdentity"]) or not valid_inode(request.get("leaseIdentity")):
+            fail("input")
     if not isinstance(request, dict) or set(request) != required or request["schema"] != "farol.installed-update/1" or request["action"] not in ("apply", "recover", "rollback"):
         fail("input")
     if not isinstance(request["operationId"], str) or len(request["operationId"]) != 32 or any(c not in "0123456789abcdef" for c in request["operationId"]):
@@ -622,6 +743,44 @@ def reconcile(apps, op, request, fence):
     return phase
 
 
+def update_lock(update):
+    before = entry(update, "lock")
+    if before is None:
+        fd = os.open("lock", os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600, dir_fd=update)
+        os.fsync(update)
+    else:
+        if not stat.S_ISREG(before.st_mode) or before.st_uid != os.geteuid() or before.st_nlink != 1:
+            fail("lock_type")
+        fd = os.open("lock", os.O_RDWR | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=update)
+        if identity(os.fstat(fd)) != identity(before):
+            os.close(fd)
+            fail("lock_replaced")
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        os.close(fd)
+        fail("update_busy")
+    return fd
+
+
+def verify_staging_route(home, update, op, request):
+    current = home
+    opened = []
+    try:
+        for part in ROOT_PARTS:
+            current = open_dir(current, part)
+            opened.append(current)
+        if identity(os.fstat(current)) != identity(os.fstat(update)):
+            fail("closed_staging_changed")
+        current = open_dir(current, request["operationId"])
+        opened.append(current)
+        if identity(os.fstat(current)) != identity(os.fstat(op)):
+            fail("closed_staging_changed")
+    finally:
+        for fd in opened:
+            os.close(fd)
+
+
 def run(request):
     home = open_home(request["home"])
     apps = None
@@ -630,55 +789,70 @@ def run(request):
     lock_fd = None
     state = None
     lease_fd = None
+    closed = "predecessor" in request
     def fence():
         if lease_fd is None:
             fail("owner_lease_lost")
-        verify_owner_lease(state, lease_fd)
+        if closed:
+            verify_inherited_lease(home, state, request, lease_fd)
+            verify_staging_route(home, update, op, request)
+        else:
+            verify_owner_lease(state, lease_fd)
         assert_parent_path(request["home"], home, apps)
     try:
         apps = open_dir(home, "Applications")
         state = open_owner_state(home)
+        if closed:
+            lease_fd = 5
+            os.set_inheritable(lease_fd, False)
+            verify_inherited_lease(home, state, request, lease_fd)
+            confirmed_closed(state, request)
         current = home
         for part in ROOT_PARTS:
-            child = ensure_dir(current, part) if request["action"] == "apply" else open_dir(current, part)
+            child = ensure_dir(current, part) if request["action"] == "apply" and not closed else open_dir(current, part)
             if current != home:
                 os.close(current)
             current = child
         update = current
-        lock_before = entry(update, "lock")
-        if lock_before is None:
-            lock_fd = os.open("lock", os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600, dir_fd=update)
-            os.fsync(update)
-        else:
-            if not stat.S_ISREG(lock_before.st_mode) or lock_before.st_uid != os.geteuid() or lock_before.st_nlink != 1:
-                fail("lock_type")
-            lock_fd = os.open("lock", os.O_RDWR | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=update)
-            if identity(os.fstat(lock_fd)) != identity(lock_before):
-                fail("lock_replaced")
-        try:
-            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            fail("update_busy")
-        op = ensure_dir(update, request["operationId"]) if request["action"] == "apply" else open_dir(update, request["operationId"])
+        if not closed:
+            lock_fd = update_lock(update)
+        op = ensure_dir(update, request["operationId"]) if request["action"] == "apply" and not closed else open_dir(update, request["operationId"])
         if request["action"] == "apply":
-            started_at = initial_marker(state, request)
+            started_at = None if closed else initial_marker(state, request)
             if entry(op, "journal.json") is not None or entry(op, "previous.app") is not None or entry(op, "failed.app") is not None:
                 fail("operation_exists")
             if entry(apps, APP) is None:
                 fail("app_missing")
             checked_tree(apps, APP, request["source"]["digest"], request["source"]["version"], request["source"]["buildId"])
             checked_tree(op, "staged.app", request["target"]["digest"], request["target"]["version"], request["target"]["buildId"])
-            # Establish process identity before it may exit; never infer it from an absent PID.
-            if process_start(request["pid"]) != request["processStart"]:
-                fail("process_identity")
-            emit_handoff(request, "waiting_for_exit")
-            wait_exit(request["pid"], request["processStart"], request["waitSeconds"], observed=True)
-            lease_fd = owner_lease(state)
-            confirmed_quit(state, started_at)
+            if closed:
+                fence()
+                confirmed_closed(state, request)
+                continue_channel()
+                emit_handoff(request, "closed_predecessor_ready")
+                await_continue(request)
+                fence()
+                confirmed_closed(state, request)
+                # No journal, app mutation or relaunch is possible before the
+                # parent closes its reference and sends this exact continuation.
+                lock_fd = update_lock(update)
+            else:
+                # Establish process identity before it may exit; never infer it from an absent PID.
+                if process_start(request["pid"]) != request["processStart"]:
+                    fail("process_identity")
+                emit_handoff(request, "waiting_for_exit")
+                wait_exit(request["pid"], request["processStart"], request["waitSeconds"], observed=True)
+                lease_fd = owner_lease(state)
+                confirmed_quit(state, started_at)
             checked_tree(apps, APP, request["source"]["digest"], request["source"]["version"], request["source"]["buildId"])
             checked_tree(op, "staged.app", request["target"]["digest"], request["target"]["version"], request["target"]["buildId"])
             predecessor_inode = identity(entry(apps, APP))
             staged_inode = identity(entry(op, "staged.app"))
+            if closed:
+                fence()
+                confirmed_closed(state, request)
+                if any(entry(op, name) is not None for name in ("journal.json", "previous.app", "failed.app")):
+                    fail("operation_exists")
             assert_parent_path(request["home"], home, apps)
             write_record(op, "journal.json", record_for(request, "prepared"))
             verify_owner_lease(state, lease_fd)

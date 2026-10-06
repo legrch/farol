@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   startInstalledUpdateHelper,
   type InstalledUpdateRequest,
+  type PromotionLeaseTransfer,
 } from "../../src/modules/release/infra/native/installed-update-helper.js";
 
 vi.mock("node:child_process", async (original) => ({
@@ -54,7 +55,22 @@ class Transport extends EventEmitter {
     write: (_chunk, _encoding, done) => done(),
   });
   readonly ack = new PassThrough();
-  readonly stdio = [this.stdin, this.stdout, null, this.requestPipe, this.ack];
+  readonly continues: Buffer[] = [];
+  readonly continuation = new Writable({
+    write: (chunk: Buffer, _encoding, done) => {
+      this.continues.push(Buffer.from(chunk));
+      done();
+    },
+  });
+  readonly stdio = [
+    this.stdin,
+    this.stdout,
+    null,
+    this.requestPipe,
+    this.ack,
+    null,
+    this.continuation,
+  ];
   readonly unref = vi.fn();
   finish(code: number, phase = "verified"): void {
     this.stdout.end(
@@ -67,12 +83,14 @@ const tick = async (): Promise<void> =>
   await new Promise((resolve) => setImmediate(resolve));
 async function launch(
   readinessTimeoutMs = 1000,
-  input = request,
+  input: InstalledUpdateRequest = request,
   recordSpawn?: (
     operation: import("../../src/modules/release/infra/native/installed-update-helper.js").InstalledUpdateOperation,
   ) => Promise<void>,
+  promotionLease?: PromotionLeaseTransfer,
+  transport?: Transport,
 ) {
-  const child = new Transport();
+  const child = transport ?? new Transport();
   let seen!: () => void;
   const spawned = new Promise<void>((resolve) => {
     seen = resolve;
@@ -87,6 +105,7 @@ async function launch(
   const pending = startInstalledUpdateHelper(helperPath, input, {
     readinessTimeoutMs,
     ...(recordSpawn ? { recordSpawn } : {}),
+    ...(promotionLease ? { promotionLease } : {}),
   });
   await spawned;
   return { child, pending };
@@ -384,4 +403,240 @@ describe("installed helper bounded readiness protocol", () => {
     expect(result.operation.observe().exit?.code).toBe(70);
     expect(spawn).toHaveBeenCalledOnce();
   });
+});
+
+const closedRequest: InstalledUpdateRequest = {
+  ...request,
+  action: "apply",
+  predecessor: {
+    kind: "confirmed_closed",
+    startedAt: "2026-09-29T22:00:00.000Z",
+    lastQuitSha256: "5".repeat(64),
+    stateIdentity: { device: "11", inode: "22" },
+  },
+};
+function leaseFixture() {
+  return {
+    descriptor: 17,
+    identity: { device: "11", inode: "33" },
+    verify: vi.fn(async () => true),
+    release: vi.fn(async (): Promise<void> => undefined),
+  } satisfies PromotionLeaseTransfer;
+}
+function closedEvent(lease: PromotionLeaseTransfer) {
+  return {
+    ...event(),
+    phase: "closed_predecessor_ready",
+    predecessor: closedRequest.predecessor,
+    leaseIdentity: lease.identity,
+  };
+}
+
+describe("closed predecessor transfer protocol (Node pipe doubles only)", () => {
+  it.each([
+    "missing-lease",
+    "bad-descriptor",
+    "unverified",
+    "verify-throws",
+    "no-record",
+    "live-lease",
+  ])("refuses %s before spawning or releasing", async (kind) => {
+    const lease = leaseFixture();
+    if (kind === "bad-descriptor") lease.descriptor = 1;
+    if (kind === "unverified") lease.verify.mockResolvedValue(false);
+    if (kind === "verify-throws")
+      lease.verify.mockRejectedValue(new Error("lost verification"));
+    const result = await startInstalledUpdateHelper(
+      helperPath,
+      kind === "live-lease" ? request : closedRequest,
+      {
+        ...(kind === "missing-lease" ? {} : { promotionLease: lease }),
+        ...(kind === "no-record" ? {} : { recordSpawn: async () => undefined }),
+      },
+    );
+    expect(result.status).toBe("not_started");
+    expect(result.operation.pid).toBeNull();
+    expect((await result.operation.completion).code).toBeNull();
+    expect(spawn).not.toHaveBeenCalled();
+    expect(lease.release).not.toHaveBeenCalled();
+  });
+
+  it("passes the same descriptor and writes one correlated continuation only after known release", async () => {
+    const lease = leaseFixture();
+    let release!: () => void;
+    lease.release.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve;
+        }),
+    );
+    const record = vi.fn(async () => undefined);
+    const { child, pending } = await launch(1000, closedRequest, record, lease);
+    await tick();
+    const options = vi.mocked(spawn).mock.calls[0]![2];
+    expect(options).toMatchObject({
+      stdio: ["pipe", "pipe", "ignore", "pipe", "pipe", 17, "pipe"],
+    });
+    expect(record).toHaveBeenCalledOnce();
+    expect(child.requestPipe.writableEnded).toBe(true);
+    child.ack.write(JSON.stringify(closedEvent(lease)));
+    await tick();
+    expect(lease.release).not.toHaveBeenCalled();
+    child.ack.end("\n");
+    await tick();
+    expect(lease.release).toHaveBeenCalledOnce();
+    expect(child.continues).toEqual([]);
+    release();
+    const result = await pending;
+    expect(result.status).toBe("continued");
+    const { phase: _phase, ...expected } = closedEvent(lease);
+    expect(JSON.parse(Buffer.concat(child.continues).toString())).toEqual({
+      ...expected,
+      schema: "farol.installed-update-continue/1",
+    });
+    expect(child.continuation.writableEnded).toBe(true);
+    expect(lease.verify).toHaveBeenCalledTimes(3);
+    child.finish(0);
+    expect((await result.operation.completion).terminal?.phase).toBe(
+      "verified",
+    );
+  });
+
+  it.each([
+    "wrong-state",
+    "wrong-lease",
+    "wrong-quit",
+    "live-ack",
+    "partial",
+    "duplicate",
+    "oversized",
+  ])("does not release or continue after %s ACK", async (kind) => {
+    const lease = leaseFixture();
+    const { child, pending } = await launch(
+      1000,
+      closedRequest,
+      async () => undefined,
+      lease,
+    );
+    await tick();
+    const frame = closedEvent(lease);
+    if (kind === "wrong-state")
+      frame.predecessor = {
+        ...closedRequest.predecessor!,
+        stateIdentity: { device: "11", inode: "99" },
+      };
+    if (kind === "wrong-lease")
+      frame.leaseIdentity = { device: "11", inode: "99" };
+    if (kind === "wrong-quit")
+      frame.predecessor = {
+        ...closedRequest.predecessor!,
+        lastQuitSha256: "0".repeat(64),
+      };
+    if (kind === "live-ack") frame.phase = "waiting_for_exit";
+    const raw = JSON.stringify(frame);
+    child.ack.end(
+      kind === "partial"
+        ? raw.slice(0, -1)
+        : kind === "duplicate"
+          ? raw + raw
+          : kind === "oversized"
+            ? "x".repeat(4097)
+            : raw,
+    );
+    const result = await pending;
+    expect(result.status).toBe("outcome_unknown");
+    expect(lease.release).not.toHaveBeenCalled();
+    expect(child.continues).toEqual([]);
+    expect(child.continuation.destroyed).toBe(true);
+    child.finish(70, "refused");
+    await result.operation.completion;
+    expect(spawn).toHaveBeenCalledOnce();
+  });
+
+  it.each(["release-throws", "late-release", "late-ack", "verify-lost"])(
+    "keeps %s fenced with the original child and no continue",
+    async (kind) => {
+      const lease = leaseFixture();
+      let release: () => void = () => undefined;
+      if (kind === "release-throws")
+        lease.release.mockRejectedValue(new Error("lost release"));
+      if (kind === "late-release")
+        lease.release.mockImplementation(
+          () =>
+            new Promise<void>((resolve) => {
+              release = resolve;
+            }),
+        );
+      if (kind === "verify-lost")
+        lease.verify
+          .mockResolvedValueOnce(true)
+          .mockResolvedValueOnce(true)
+          .mockRejectedValue(new Error("lost verification"));
+      const { child, pending } = await launch(
+        25,
+        closedRequest,
+        async () => undefined,
+        lease,
+      );
+      await tick();
+      if (kind !== "late-ack")
+        child.ack.end(JSON.stringify(closedEvent(lease)));
+      const result = await pending;
+      if (kind === "late-ack")
+        child.ack.end(JSON.stringify(closedEvent(lease)));
+      release();
+      await tick();
+      expect(result.status).toBe("outcome_unknown");
+      expect(child.continues).toEqual([]);
+      expect(child.continuation.destroyed).toBe(true);
+      expect(lease.release.mock.calls.length).toBe(
+        kind === "late-ack" || kind === "verify-lost" ? 0 : 1,
+      );
+      child.finish(70, "refused");
+      await result.operation.completion;
+      expect(spawn).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each(["immediate", "write-failure", "exit-before-continue"])(
+    "retains exact completion when %s races the barrier",
+    async (kind) => {
+      const lease = leaseFixture();
+      const child = new Transport();
+      child.stdio[6] = new Writable({
+        write: (_chunk, _encoding, done) => {
+          if (kind === "write-failure") {
+            done(new Error("lost write"));
+            return;
+          }
+          child.finish(0);
+          done();
+        },
+      });
+      const { pending } = await launch(
+        1000,
+        closedRequest,
+        async () => undefined,
+        lease,
+        child,
+      );
+      await tick();
+      if (kind === "exit-before-continue") {
+        child.ack.end();
+        child.finish(0);
+      } else child.ack.end(JSON.stringify(closedEvent(lease)));
+      const result = await pending;
+      expect(result.status).toBe(
+        kind === "immediate" ? "terminal" : "outcome_unknown",
+      );
+      if (kind === "write-failure") child.finish(70, "refused");
+      expect((await result.operation.completion).code).toBe(
+        kind === "write-failure" ? 70 : 0,
+      );
+      expect(lease.release.mock.calls.length).toBe(
+        kind === "exit-before-continue" ? 0 : 1,
+      );
+      expect(spawn).toHaveBeenCalledOnce();
+    },
+  );
 });
