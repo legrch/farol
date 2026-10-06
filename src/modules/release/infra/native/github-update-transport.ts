@@ -10,6 +10,7 @@ import {
 import { get as httpsGet, type RequestOptions } from "node:https";
 import type { IncomingMessage } from "node:http";
 import path from "node:path";
+import { parseGithubReleaseManifest } from "../../app/github-release";
 import { PackageVerificationError } from "./update-package-verifier";
 import {
   GITHUB_RELEASES_API,
@@ -44,6 +45,7 @@ export type TransportFailure = PortFailure &
       | "http_status"
       | "network"
       | "cancelled"
+      | "timeout"
       | "invalid_json"
       | "content_length"
       | "content_encoding"
@@ -82,6 +84,14 @@ export type GithubUpdateTransport = GithubReleasePorts &
       url: string,
       maxBytes: number,
     ): Promise<TransportResult<DownloadedArchive>>;
+    // Local selection is not a GitHub download or package acceptance. The
+    // returned handle uses this transport's normal verification/cleanup owner.
+    importLocal(
+      sourcePath: string,
+      manifest: unknown,
+    ): Promise<
+      TransportResult<Pick<DownloadedArchive, "handle" | "size" | "sha256">>
+    >;
     verifyPackage(
       handle: string,
       manifest: RetainedReleaseManifest,
@@ -312,13 +322,17 @@ async function validStagedFile(
   }
 }
 
-function sameOwnedFile(current: BigIntStats, issued: BigIntStats): boolean {
+function sameOwnedFile(
+  current: BigIntStats,
+  issued: BigIntStats,
+  privateMode = true,
+): boolean {
   return (
     current.isFile() &&
     issued.isFile() &&
     current.nlink === 1n &&
     current.uid === BigInt(process.getuid!()) &&
-    (current.mode & 0o077n) === 0n &&
+    (!privateMode || (current.mode & 0o077n) === 0n) &&
     current.dev === issued.dev &&
     current.ino === issued.ino &&
     current.size === issued.size &&
@@ -546,6 +560,251 @@ export function createGithubUpdateTransport(
         return fail("interrupted", "private_state", "unknown");
       }
       issuedArchives.set(handle, issuedIdentity);
+      return result;
+    },
+    async importLocal(sourcePath, manifest) {
+      const parsed = parseGithubReleaseManifest(manifest);
+      if (!parsed.ok) return fail("package_mismatch", "verification");
+      // Capture validated scalar values before any await or caller mutation.
+      const { archiveSize, archiveSha256 } = parsed.value;
+      if (
+        typeof sourcePath !== "string" ||
+        !path.isAbsolute(sourcePath) ||
+        path.normalize(sourcePath) !== sourcePath
+      )
+        return fail("package_mismatch", "invalid_handle");
+      const deadline = Date.now() + ARCHIVE_TIMEOUT_MS;
+      const interruption = () =>
+        signal.aborted
+          ? fail("interrupted", "cancelled")
+          : Date.now() >= deadline
+            ? fail("interrupted", "timeout")
+            : null;
+      const alreadyStopped = interruption();
+      if (alreadyStopped) return alreadyStopped;
+
+      let source: FileHandle | undefined;
+      let file: FileHandle | undefined;
+      let handle: string | undefined;
+      let ownsStage = false;
+      let issuedIdentity: BigIntStats | null = null;
+      let stageCurrent: (() => Promise<boolean>) | undefined;
+      let result: TransportResult<
+        Pick<DownloadedArchive, "handle" | "size" | "sha256">
+      >;
+      try {
+        result = await (async () => {
+          const before = await lstat(sourcePath, { bigint: true });
+          if (
+            !sameOwnedFile(before, before, false) ||
+            (await realpath(sourcePath)) !== sourcePath
+          )
+            return fail("package_mismatch", "invalid_handle");
+          if (before.size !== BigInt(archiveSize))
+            return fail("package_mismatch", "content_length");
+          const closeOnExec =
+            (Reflect.get(constants, "O_CLOEXEC") as number | undefined) ?? 0;
+          source = await open(
+            sourcePath,
+            constants.O_RDONLY |
+              constants.O_NOFOLLOW |
+              constants.O_NONBLOCK |
+              closeOnExec,
+          );
+          const sourceCurrent = async () =>
+            sameOwnedFile(
+              await source!.stat({ bigint: true }),
+              before,
+              false,
+            ) &&
+            sameOwnedFile(
+              await lstat(sourcePath, { bigint: true }),
+              before,
+              false,
+            ) &&
+            (await realpath(sourcePath)) === sourcePath;
+          if (!(await sourceCurrent()))
+            return fail("package_mismatch", "invalid_handle");
+          const stopped = interruption();
+          if (stopped) return stopped;
+          const directory = await stageDirectory(options.privateStateDirectory);
+          if (!directory) return fail("interrupted", "private_state");
+          // Bind both directories for this copy, not merely their pathnames.
+          const parents = await Promise.all(
+            [options.privateStateDirectory, directory].map(async (name) => ({
+              name,
+              identity: await lstat(name, { bigint: true }),
+            })),
+          );
+          stageCurrent = async () => {
+            for (const parent of parents) {
+              if (!(await privateDirectory(parent.name))) return false;
+              const now = await lstat(parent.name, { bigint: true });
+              if (
+                !parent.identity.isDirectory() ||
+                !now.isDirectory() ||
+                now.dev !== parent.identity.dev ||
+                now.ino !== parent.identity.ino
+              )
+                return false;
+            }
+            return true;
+          };
+          if (!(await stageCurrent()))
+            return fail("interrupted", "private_state");
+          const reusable = emptySlot;
+          emptySlot = null;
+          handle =
+            reusable?.handle ?? path.join(directory, `${randomUUID()}.zip`);
+          file = await open(
+            handle,
+            constants.O_RDWR |
+              (reusable ? 0 : constants.O_CREAT | constants.O_EXCL) |
+              constants.O_NOFOLLOW |
+              constants.O_NONBLOCK |
+              closeOnExec,
+            0o600,
+          );
+          const opened = await file.stat({ bigint: true });
+          if (
+            !sameOwnedFile(opened, reusable?.identity ?? opened) ||
+            opened.size !== 0n
+          )
+            return fail("interrupted", "stage_cleanup", "unknown");
+          ownsStage = true;
+          if (!(await stageCurrent()))
+            return fail("interrupted", "private_state", "unknown");
+          const buffer = Buffer.allocUnsafe(64 * 1024);
+          const digest = createHash("sha256");
+          let position = 0;
+          while (position < archiveSize) {
+            const stopped = interruption();
+            if (stopped) return stopped;
+            const length = Math.min(buffer.length, archiveSize - position);
+            const { bytesRead } = await source.read(
+              buffer,
+              0,
+              length,
+              position,
+            );
+            if (bytesRead < 1 || bytesRead > length)
+              return fail("package_mismatch", "content_length");
+            let offset = 0;
+            while (offset < bytesRead) {
+              const stopped = interruption();
+              if (stopped) return stopped;
+              const { bytesWritten } = await file.write(
+                buffer,
+                offset,
+                bytesRead - offset,
+                position + offset,
+              );
+              if (bytesWritten < 1 || bytesWritten > bytesRead - offset)
+                return fail("interrupted", "stream");
+              offset += bytesWritten;
+            }
+            digest.update(buffer.subarray(0, bytesRead));
+            position += bytesRead;
+          }
+          if (!(await sourceCurrent()))
+            return fail("package_mismatch", "invalid_handle");
+          if (digest.digest("hex") !== archiveSha256)
+            return fail("package_mismatch", "verification");
+          await file.sync();
+          issuedIdentity = await file.stat({ bigint: true });
+          if (
+            !sameOwnedFile(issuedIdentity, issuedIdentity) ||
+            issuedIdentity.dev !== opened.dev ||
+            issuedIdentity.ino !== opened.ino ||
+            issuedIdentity.size !== BigInt(archiveSize)
+          )
+            return fail("interrupted", "private_state", "unknown");
+          // Rehash the actual staged descriptor before issuing it. Source
+          // checks alone cannot establish bytes changed during a stage write.
+          const stagedDigest = createHash("sha256");
+          position = 0;
+          while (position < archiveSize) {
+            const stopped = interruption();
+            if (stopped) return stopped;
+            const length = Math.min(buffer.length, archiveSize - position);
+            const { bytesRead } = await file.read(buffer, 0, length, position);
+            if (bytesRead < 1 || bytesRead > length)
+              return fail("interrupted", "stream");
+            stagedDigest.update(buffer.subarray(0, bytesRead));
+            position += bytesRead;
+          }
+          if (
+            stagedDigest.digest("hex") !== archiveSha256 ||
+            !sameOwnedFile(await file.stat({ bigint: true }), issuedIdentity) ||
+            !(await sourceCurrent())
+          )
+            return fail("package_mismatch", "verification");
+          const cancelled = interruption();
+          if (cancelled) return cancelled;
+          if (
+            !(await stageCurrent()) ||
+            !sameOwnedFile(
+              await lstat(handle, { bigint: true }),
+              issuedIdentity,
+            )
+          )
+            return fail("interrupted", "private_state", "unknown");
+          return {
+            ok: true as const,
+            value: { handle, size: archiveSize, sha256: archiveSha256 },
+          };
+        })();
+      } catch {
+        result =
+          handle && !ownsStage
+            ? fail("interrupted", "stage_cleanup", "unknown")
+            : (interruption() ??
+              fail("interrupted", file ? "stream" : "invalid_handle"));
+      }
+      try {
+        await source?.close();
+      } catch {
+        result = fail("interrupted", "stream", "unknown");
+      }
+      if (file) {
+        if (result.ok) result = interruption() ?? result;
+        if (!result.ok && ownsStage) {
+          try {
+            const reusable = await emptyOpenedArchive(file, handle!);
+            if (!(await stageCurrent!()))
+              throw new Error("UPDATE_STAGE_CHANGED");
+            emptySlot = reusable;
+          } catch {
+            result = fail("interrupted", "stage_cleanup", "unknown");
+          }
+        }
+        try {
+          await file.close();
+        } catch {
+          emptySlot = null;
+          result = fail("interrupted", "stage_cleanup", "unknown");
+        }
+      }
+      if (!result.ok) return result;
+      try {
+        if (
+          !issuedIdentity ||
+          !(await stageCurrent!()) ||
+          !sameOwnedFile(await lstat(handle!, { bigint: true }), issuedIdentity)
+        )
+          return fail("interrupted", "private_state", "unknown");
+      } catch {
+        return fail("interrupted", "private_state", "unknown");
+      }
+      // Cancellation during final readback leaves owned bytes for the caller's
+      // existing unknown-outcome fence; it never reports a successful import.
+      if (interruption())
+        return fail(
+          "interrupted",
+          signal.aborted ? "cancelled" : "timeout",
+          "unknown",
+        );
+      issuedArchives.set(handle!, issuedIdentity);
       return result;
     },
     async discard(handle) {
