@@ -89,6 +89,29 @@ it("a partial saved folder does not dismiss setup or imply readiness on a new wi
   expect(f.api.configure).not.toHaveBeenCalled();
 });
 describe("F0 window owner", () => {
+  it("keeps the host's restored task identity through returning-profile Home and Setup navigation", async () => {
+    const f = fixture();
+    const data = bootstrap();
+    data.configuration.settings.setup.journey.dismissed = true;
+    vi.mocked(f.api.bootstrap).mockResolvedValue({
+      ...data,
+      taskRevision: 1,
+      tasks: [task("retained")],
+      selectedTaskId: "retained",
+    });
+    const c = new WindowController(f.api);
+    await c.start();
+    expect(c.getSnapshot().destination).toMatchObject({
+      area: "chatgpt",
+      taskId: "retained",
+    });
+    for (const area of ["home", "setup", "chatgpt"] as const) {
+      c.navigate({ area });
+      expect(vi.mocked(f.api.layout).mock.calls.at(-1)?.[1]).toBe("retained");
+    }
+    expect(f.api.task).not.toHaveBeenCalled();
+    c.dispose();
+  });
   it("R10 retains an unknown explicit account confirmation without another command", async () => {
     const f = fixture();
     const c = new WindowController(f.api);

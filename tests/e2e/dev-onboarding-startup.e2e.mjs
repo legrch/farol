@@ -10,6 +10,10 @@ import { runBoundedProcess } from "./bounded-process.mjs";
 import { sourceIdentity } from "../../tooling/source-identity.mjs";
 import { verifyInputManifest } from "../../tooling/build-contract.mjs";
 import { verifyGoCoreArtifact } from "../../tooling/go-core-artifact.mjs";
+import {
+  startChatGptFixture,
+  stopChatGptFixture,
+} from "./fixtures/chatgpt-site.mjs";
 
 const root = process.cwd();
 const useInstalledTunnelClient = process.argv.includes(
@@ -225,7 +229,12 @@ async function settingsPage(window, name) {
 }
 
 let application;
+let browserFixture;
 try {
+  browserFixture = await startChatGptFixture();
+  // Reuse the existing local provider fixture for browser ownership only.
+  // No sign-in, model turn, Send, or answer is requested by this journey.
+  environment.FAROL_NEXT_E2E_CHATGPT_URL = browserFixture.url;
   // A missing override must fail before the first app-ready boundary and
   // leave even a synthetic ordinary-Dev startup marker untouched.
   const ordinaryMarker = path.join(
@@ -388,6 +397,65 @@ try {
     .click();
   assert.equal(await window.getByRole("dialog").count(), 0);
   assert.equal(await window.locator("main").getAttribute("inert"), null);
+  // Create one real, idle native task through the application owner. The
+  // resulting task event does not imply that the renderer selected it. Home
+  // must still conceal its browser; no automatic task replacement is allowed.
+  const created = await window.evaluate(() =>
+    window.farolNext.task({ kind: "task.create-chatgpt" }),
+  );
+  assert.equal(created.ok, true, JSON.stringify(created));
+  const retainedTaskId = created.selectedTaskId;
+  assert.equal(typeof retainedTaskId, "string");
+  assert.ok(retainedTaskId.length > 0);
+  const openedViews = await application.evaluate(({ BrowserWindow }) =>
+    BrowserWindow.getAllWindows().flatMap((owner) =>
+      owner.contentView.children
+        .filter(
+          (view) =>
+            "webContents" in view &&
+            view.webContents.id !== owner.webContents.id,
+        )
+        .map((view) => ({
+          id: view.webContents.id,
+          visible: view.getVisible(),
+        })),
+    ),
+  );
+  assert.equal(openedViews.length, 1, "CREATED_NATIVE_BROWSER_REQUIRED");
+  assert.equal(openedViews[0].visible, true);
+  await window.getByRole("button", { name: "ChatGPT", exact: true }).click();
+  await window.getByRole("button", { name: "Home", exact: true }).click();
+  async function assertBrowserDetached() {
+    let views = [];
+    for (let attempt = 0; attempt < 100; attempt++) {
+      views = await application.evaluate(({ BrowserWindow }) =>
+        BrowserWindow.getAllWindows().flatMap((owner) =>
+          owner.contentView.children
+            .filter(
+              (view) =>
+                "webContents" in view &&
+                view.webContents.id !== owner.webContents.id,
+            )
+            .map((view) => ({
+              id: view.webContents.id,
+              visible: view.getVisible(),
+            })),
+        ),
+      );
+      if (views.length === 0) return;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    assert.deepEqual(views, [], "HOME_MUST_DETACH_RETAINED_BROWSER");
+  }
+  await assertBrowserDetached();
+  assert.equal(
+    await application.evaluate(({ webContents }, id) => {
+      const contents = webContents.fromId(id);
+      return Boolean(contents && !contents.isDestroyed());
+    }, openedViews[0].id),
+    true,
+    "HIDDEN_BROWSER_LIFETIME_MUST_REMAIN",
+  );
   assert.equal(
     await application.evaluate(({ BrowserWindow }) =>
       BrowserWindow.getAllWindows().some((window) => window.isVisible()),
@@ -405,7 +473,22 @@ try {
   // quit, rather than claiming persistence from the previous DOM projection.
   application = await launchApplication(environment);
   const reopenedWindow = await application.firstWindow({ timeout: 15_000 });
-  await ready(reopenedWindow);
+  const reopened = await ready(reopenedWindow);
+  assert.equal(
+    reopened.selectedTaskId,
+    retainedTaskId,
+    "RESTORED_SELECTED_TASK_NOT_PROJECTED",
+  );
+  assert.ok(reopened.tasks.some((task) => task.taskId === retainedTaskId));
+  await reopenedWindow
+    .locator(".toolbar-title strong")
+    .getByText("Overview", { exact: true })
+    .waitFor();
+  await assertBrowserDetached();
+  report.checks.push(
+    "retained-idle-task-Quit-reopen-bootstrap-identity-and-Home-native-detachment",
+  );
+  await save();
   await settingsPage(reopenedWindow, "Appearance");
   assert.deepEqual(
     await reopenedWindow
@@ -609,16 +692,19 @@ try {
     "No external attachment, provider Send, live credentials, native dialog or visible focus acceptance",
     "Ready-profile Review Setup and actual external retained observation have separate ordinary Dev evidence",
   ];
-  process.stdout.write(
-    `Farol Dev React Setup: PASS; exact source ${source.commit}; evidence ${evidenceRoot}\n`,
-  );
 } finally {
   if (application && !stopRequested.has(application)) {
     await closeApplication(application).catch(() => {
       cleanupConfirmed = false;
     });
   }
-  report.status = passed ? "passed" : "failed";
+  if (browserFixture) {
+    await stopChatGptFixture(browserFixture).catch(() => {
+      cleanupConfirmed = false;
+    });
+  }
+  report.status =
+    passed && cleanupConfirmed && !launchUnresolved ? "passed" : "failed";
   report.cleanup = {
     cleanupConfirmed,
     launchUnresolved,
@@ -629,4 +715,9 @@ try {
   if (passed && cleanupConfirmed && !launchUnresolved)
     await fs.rm(temporaryRoot, { recursive: true, force: true });
   else process.stderr.write(`DEV_REACT_RESOURCES_RETAINED:${temporaryRoot}\n`);
+  if (passed && (!cleanupConfirmed || launchUnresolved))
+    throw new Error("DEV_REACT_CLEANUP_UNCONFIRMED");
 }
+process.stdout.write(
+  `Farol Dev React Setup: PASS; exact source ${source.commit}; evidence ${evidenceRoot}\n`,
+);

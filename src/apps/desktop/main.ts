@@ -1416,6 +1416,7 @@ function bootstrap() {
     embeddedElectron: runtime?.embeddedElectron ?? process.versions.electron,
     taskRevision: taskState.revision,
     tasks: taskState.tasks,
+    selectedTaskId,
     partition: activeDesktopIdentity.runtimePartition,
     chatgptPartition: activeDesktopIdentity.chatGptPartition,
     chatgptRecoveryPending: recoverableChatGptTask !== null,
@@ -9062,6 +9063,38 @@ function handleShortcut(input: Input): boolean {
   return false;
 }
 
+function applyRendererLayout(value: unknown): void {
+  const parsed = ShellLayoutSchema.safeParse(value);
+  if (!parsed.success) return;
+  const tasks = productTasksState().tasks;
+  const knownTask =
+    tasks.length === 0
+      ? parsed.data.taskId === ""
+      : tasks.some((task) => task.taskId === parsed.data.taskId);
+  // Shell navigation can conceal a browser even if its retained task selection
+  // is missing or stale. It cannot select a replacement or reveal an unknown
+  // conversation. Browser admission still requires the exact known task.
+  const concealsBrowser =
+    parsed.data.section !== "browser" ||
+    parsed.data.setupOpen ||
+    parsed.data.overlay !== "none";
+  if (!knownTask && !concealsBrowser) return;
+  const focusTargetChanged =
+    section !== parsed.data.section ||
+    (knownTask && selectedTaskId !== parsed.data.taskId) ||
+    setupOpen !== parsed.data.setupOpen ||
+    shellOverlay !== parsed.data.overlay;
+  section = parsed.data.section;
+  if (knownTask) selectedTaskId = parsed.data.taskId;
+  setupOpen = parsed.data.setupOpen;
+  checkFeedbackVisible = parsed.data.checkFeedbackVisible;
+  sidebarMode = parsed.data.sidebar;
+  sidebarWidth = parsed.data.sidebarWidth;
+  shellOverlay = parsed.data.overlay;
+  applyLayout();
+  if (focusTargetChanged) focusForLayoutAfterRendererCommit();
+}
+
 function applyLayout(): void {
   if (!window || window.isDestroyed()) return;
   const [width = 1, height = 1] = window.getContentSize();
@@ -9462,30 +9495,7 @@ function installIpc(): void {
   });
   ipcMain.on(channels.layout, (event, value: unknown) => {
     if (installedUpdateAdmission || !isTrustedIpcSender(event, window)) return;
-    const parsed = ShellLayoutSchema.safeParse(value);
-    if (!parsed.success) return;
-    const tasks = productTasksState().tasks;
-    if (
-      tasks.length === 0
-        ? parsed.data.taskId !== ""
-        : !tasks.some((task) => task.taskId === parsed.data.taskId)
-    ) {
-      return;
-    }
-    const focusTargetChanged =
-      section !== parsed.data.section ||
-      selectedTaskId !== parsed.data.taskId ||
-      setupOpen !== parsed.data.setupOpen ||
-      shellOverlay !== parsed.data.overlay;
-    section = parsed.data.section;
-    selectedTaskId = parsed.data.taskId;
-    setupOpen = parsed.data.setupOpen;
-    checkFeedbackVisible = parsed.data.checkFeedbackVisible;
-    sidebarMode = parsed.data.sidebar;
-    sidebarWidth = parsed.data.sidebarWidth;
-    shellOverlay = parsed.data.overlay;
-    applyLayout();
-    if (focusTargetChanged) focusForLayoutAfterRendererCommit();
+    applyRendererLayout(value);
   });
 }
 

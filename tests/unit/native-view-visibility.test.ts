@@ -9,6 +9,7 @@ import {
   type NativeViewHost,
 } from "../../apps/desktop/bridge/native-view-visibility";
 import { deriveSurfaceLayout } from "../../src/apps/desktop/surface-layout";
+import { ShellLayoutSchema } from "../../src/pkg/ipc/shell-state";
 
 // Native-interface fakes and extracted production callbacks only. These tests
 // prove attachment/focus calls, not Electron pixels, macOS AX, or provider state.
@@ -287,6 +288,7 @@ const callbackNames = [
   "detachTaskViews",
   "disposeTaskView",
   "applyLayout",
+  "applyRendererLayout",
   "focusForLayout",
   "liveChatGptSurfaceFactory",
   "createTaskViews",
@@ -372,6 +374,8 @@ function desktopFixture() {
     stopStreams: () => f.events.push("stop-streams"),
     SIGN_IN_SURFACE_ID: "sign-in",
     deriveSurfaceLayout,
+    ShellLayoutSchema,
+    focusForLayoutAfterRendererCommit: () => f.events.push("deferred-focus"),
     compactBrowserSelected: () => false,
     productTasksState: () => ({
       tasks: [...taskViews.keys()].map((taskId) => ({ taskId })),
@@ -388,6 +392,7 @@ function desktopFixture() {
     context,
   ) as {
     applyLayout(): void;
+    applyRendererLayout(value: unknown): void;
     attachTaskViews(): void;
     detachTaskViews(): void;
     focusForLayout(): void;
@@ -413,6 +418,69 @@ function desktopFixture() {
 // Integration of the actual main.ts callbacks with the shared layout function.
 // No Electron module, native process, window, filesystem profile, or provider runs.
 describe("desktop layout attachment integration (source callbacks + fake host)", () => {
+  it.each([
+    { section: "activity" },
+    { section: "settings" },
+    { setupOpen: true },
+    { overlay: "quick-switcher" },
+    { overlay: "sidebar" },
+  ])(
+    "conceals a retained page despite an absent or stale renderer selection: %j",
+    (change) => {
+      for (const taskId of ["", "removed-task"]) {
+        const f = desktopFixture();
+        f.api.applyLayout();
+        expect(f.host.children).toEqual([f.view]);
+        f.api.applyRendererLayout({
+          section: "browser",
+          taskId,
+          setupOpen: false,
+          sidebar: "full",
+          sidebarWidth: 180,
+          overlay: "none",
+          ...change,
+        });
+        expect(f.host.children).toEqual([]);
+        expect(f.view.visible).toBe(false);
+        expect(f.view.webContents.destroyed).toBe(false);
+        expect(f.context.selectedTaskId).toBe("page");
+      }
+    },
+  );
+  it("never reveals or substitutes a missing browser selection", () => {
+    const f = desktopFixture();
+    f.context.section = "activity";
+    f.api.applyLayout();
+    f.events.length = 0;
+    for (const taskId of ["", "removed-task"])
+      f.api.applyRendererLayout({
+        section: "browser",
+        taskId,
+        setupOpen: false,
+        sidebar: "full",
+        overlay: "none",
+      });
+    expect(f.host.children).toEqual([]);
+    expect(f.events).toEqual([]);
+    expect(f.context.section).toBe("activity");
+    expect(f.context.selectedTaskId).toBe("page");
+    f.api.applyRendererLayout({
+      section: "browser",
+      taskId: "page",
+      setupOpen: false,
+      sidebar: "full",
+      overlay: "none",
+    });
+    expect(f.host.children).toEqual([f.view]);
+  });
+  it("rejects malformed concealment messages without changing native layout", () => {
+    const f = desktopFixture();
+    f.api.applyLayout();
+    f.events.length = 0;
+    f.api.applyRendererLayout({ section: "activity", taskId: "" });
+    expect(f.host.children).toEqual([f.view]);
+    expect(f.events).toEqual([]);
+  });
   it("runtime view destruction detaches its view and preserves another task", async () => {
     const f = desktopFixture();
     f.context.selectedTaskId = "runtime";
