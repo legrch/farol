@@ -2,14 +2,14 @@ import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import {
   ConnectorMutationBridge,
   connectorSupportsMutations,
-} from "../../../apps/desktop/bridge/connector-mutation";
-import { SocketConnectorClient } from "../../../apps/desktop/bridge/connector-client";
-import { loadConnectorLaunch } from "../../../apps/desktop/bridge/connector-launch";
-import { ComputerBridge } from "../../../apps/desktop/bridge/computer";
-import { ConnectorVerificationBridge } from "../../../apps/desktop/bridge/connector-verification";
-import { createGoComputerMcpServer } from "../../../apps/desktop/bridge/computer-mcp";
-import { PrivateMcpLifecycle } from "../../modules/computer/infra/mcp/private-mcp-lifecycle";
-import { PrivateExecutionFence } from "../../modules/computer/infra/mcp/execution-fence";
+} from "../bridge/connector-mutation";
+import { SocketConnectorClient } from "../bridge/connector-client";
+import { loadConnectorLaunch } from "../bridge/connector-launch";
+import { ComputerBridge } from "../bridge/computer";
+import { ConnectorVerificationBridge } from "../bridge/connector-verification";
+import { createGoComputerMcpServer } from "../bridge/computer-mcp";
+import { PrivateMcpLifecycle } from "../../../src/modules/computer/infra/mcp/private-mcp-lifecycle";
+import { PrivateExecutionFence } from "../../../src/modules/computer/infra/mcp/execution-fence";
 
 // Stdio, socket and existing adapter drain mechanics only. This path never
 // constructs a workspace helper, authority repository, shell or provider host.

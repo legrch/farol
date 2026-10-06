@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const netMock = vi.hoisted(() => ({ connect: vi.fn() }));
 vi.mock("node:net", () => ({ createConnection: netMock.connect }));
 
-import { SavedChatBridgeClient } from "../../src/apps/computer-mcp/saved-chat-bridge-client";
+import { SavedChatBridgeClient } from "../../apps/desktop/computer-mcp/saved-chat-bridge-client";
 import { SAVED_CHAT_BRIDGE_PROTOCOL } from "../../src/pkg/saved-chat-bridge/protocol";
 
 const key = "12345678-1234-4123-8123-123456789abc";

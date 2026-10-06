@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 
-const root = path.resolve("src");
+const roots = [path.resolve("src"), path.resolve("apps/desktop")];
 const rules = [
   ["LINT_EXPLICIT_ANY", /(?::|<|,)\s*any(?:\s*[>,;)=]|$)/u],
   ["LINT_ANY_ASSERTION", /\bas\s+any\b/u],
@@ -25,7 +25,8 @@ function files(directory) {
 }
 
 const violations = [];
-for (const file of files(root)) {
+const productionFiles = roots.flatMap(files).sort();
+for (const file of productionFiles) {
   const source = fs.readFileSync(file, "utf8");
   for (const [code, pattern] of rules) {
     if (pattern.test(source)) {
@@ -39,6 +40,6 @@ if (violations.length > 0) {
   process.exitCode = 1;
 } else {
   process.stdout.write(
-    `Farol Next lint: ${files(root).length} production files checked.\n`,
+    `Farol Next lint: ${productionFiles.length} production files checked.\n`,
   );
 }

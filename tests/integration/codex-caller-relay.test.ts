@@ -6,7 +6,7 @@ import {
   startCodexCallerRelay,
   type CodexCallerRelayRuntime,
 } from "../../src/apps/desktop/codex-caller-relay";
-import { CodexCallerRelayClient } from "../../src/apps/computer-mcp/codex-caller-relay-client";
+import { CodexCallerRelayClient } from "../../apps/desktop/computer-mcp/codex-caller-relay-client";
 
 const command = {
   type: "function",

@@ -19,8 +19,13 @@ remaining route. It is not evidence that every capability has moved to Go.
 See the [bounded packaged startup/reopen witness](desktop-core.md#normal-startup-and-empty-profile-reopen-candidate)
 and the remaining cutover limits there.
 
-`src/apps/desktop` owns the Electron main/preload host adapters and
-`src/apps/runtime` owns the utility-process entrypoint. The Chat-owned preview
+`apps/desktop` and the remaining `src/apps/desktop` sources own the Electron
+main/preload host adapters. The desktop-owned Computer MCP child entry and its
+socket clients live under `apps/desktop/computer-mcp`; the Go launch route uses
+the adjacent bridge without constructing a second Computer owner. Its packaged
+entry remains `computer-mcp.cjs`. The explicit legacy launch route remains
+transitional and is never selected after a failed Go launch.
+`src/apps/runtime` owns the separate utility-process entrypoint. The Chat-owned preview
 server adapter lives under `modules/chat/infra/server`; it receives Computer and
 UI capabilities at composition rather than importing their implementations.
 `src/boot/runtime-server.ts` only wires those concrete dependencies.
@@ -91,6 +96,10 @@ parses static imports, re-exports, aliases, literal dynamic imports and CommonJS
 cycles and unclassified production files, and runs both positive and deliberately
 invalid fixtures. It also rejects host/vendor imports from composition-only `boot`,
 all inner-layer imports of executable `apps`, and module imports of UI.
+Independent executable applications cannot import one another. Both desktop
+source trees receive the same strict TypeScript, lint and architecture checks.
+Shared CSS-pixel layout values live under `src/pkg/shell-layout` so native views,
+IPC validation and the renderer use the same geometry without a host dependency.
 
 The accepted Go layout uses `modules/<module>/contracts/<feature>` as a thin
 published in-process facade. It may import its own application/domain to delegate

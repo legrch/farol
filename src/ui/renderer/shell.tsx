@@ -6,7 +6,7 @@ import {
   useState,
 } from "react";
 import type { CSSProperties, ReactNode } from "react";
-import { shellGeometry } from "../../pkg/shell-geometry";
+import { shellGeometry } from "../../pkg/shell-layout/geometry";
 import { useRenderer } from "./services";
 import { PanelBoundary } from "./boundary";
 import { Settings, useSettingsAttention } from "./settings";

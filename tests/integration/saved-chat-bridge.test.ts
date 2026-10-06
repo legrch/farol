@@ -6,7 +6,7 @@ import path from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { SavedChatBridgeClient } from "../../src/apps/computer-mcp/saved-chat-bridge-client";
+import { SavedChatBridgeClient } from "../../apps/desktop/computer-mcp/saved-chat-bridge-client";
 import { startSavedChatBridge } from "../../src/apps/desktop/saved-chat-bridge";
 import type { PersistentChatGptHandoff } from "../../src/modules/chat/app/service/persistent-chatgpt-handoff";
 import { PrivateExecutionFence } from "../../src/modules/computer/infra/mcp/execution-fence";

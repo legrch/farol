@@ -4,7 +4,10 @@ import {
   type NavigationShortcuts,
 } from "../../pkg/ipc/navigation-shortcuts";
 import { workspaceEditToAcknowledge } from "../workspace-edit-delivery";
-import { clampPageListWidth, shellGeometry } from "../../pkg/shell-geometry";
+import {
+  clampPageListWidth,
+  shellGeometry,
+} from "../../pkg/shell-layout/geometry";
 import { AgentDraftStore } from "../agent-draft";
 import { ConversationDraftStore } from "./conversation-draft";
 import { z } from "zod";

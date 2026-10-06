@@ -196,7 +196,7 @@ await Promise.all([
   }),
   build({
     ...common,
-    entryPoints: ["src/apps/computer-mcp/main.ts"],
+    entryPoints: ["apps/desktop/computer-mcp/main.ts"],
     outfile: "_output/build/app/computer-mcp.cjs",
     platform: "node",
     format: "cjs",

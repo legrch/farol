@@ -12,7 +12,7 @@ import {
   type CodexCallerRelayEndpoint,
   type CodexCallerRelayOperation,
   type CodexCallerRelayResponse,
-} from "../../pkg/caller-relay/protocol";
+} from "../../../src/pkg/caller-relay/protocol";
 
 const DEFAULT_TIMEOUT_MS = 15 * 60 * 1_000;
 

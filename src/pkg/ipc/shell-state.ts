@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { shellGeometry } from "../shell-geometry";
+import { shellGeometry } from "../shell-layout/geometry";
 
 export const SurfaceSectionSchema = z.enum([
   "browser",

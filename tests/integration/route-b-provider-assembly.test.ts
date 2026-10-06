@@ -28,7 +28,7 @@ import {
 import { chatGptTaskConversation } from "../../src/apps/desktop/route-b-runtime";
 import { startCodexChatGptProvider } from "../../src/apps/desktop/codex-chatgpt-provider";
 import { startCodexCallerRelay } from "../../src/apps/desktop/codex-caller-relay";
-import { CodexCallerRelayClient } from "../../src/apps/computer-mcp/codex-caller-relay-client";
+import { CodexCallerRelayClient } from "../../apps/desktop/computer-mcp/codex-caller-relay-client";
 import type { ProviderTurnJournal } from "../../src/apps/desktop/provider-turn-journal";
 import { CHATGPT_MODEL_ID } from "../../src/pkg/model-route/contract";
 

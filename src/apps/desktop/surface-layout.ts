@@ -1,5 +1,8 @@
-import { clampPageListWidth, shellGeometry } from "../../pkg/shell-geometry";
-export { shellGeometry } from "../../pkg/shell-geometry";
+import {
+  clampPageListWidth,
+  shellGeometry,
+} from "../../pkg/shell-layout/geometry";
+export { shellGeometry } from "../../pkg/shell-layout/geometry";
 
 export type SurfaceSection = "browser" | "computer" | "activity" | "settings";
 

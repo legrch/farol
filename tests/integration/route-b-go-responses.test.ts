@@ -27,7 +27,7 @@ import {
 } from "../../src/apps/desktop/provider-turn-journal.ts";
 import type { CodexChatGptCompaction } from "../../src/apps/desktop/codex-chatgpt-provider.ts";
 import { startCodexCallerRelay } from "../../src/apps/desktop/codex-caller-relay.ts";
-import { CodexCallerRelayClient } from "../../src/apps/computer-mcp/codex-caller-relay-client.ts";
+import { CodexCallerRelayClient } from "../../apps/desktop/computer-mcp/codex-caller-relay-client.ts";
 
 // Real provider HTTP, durable admission and private relay/client. The facade
 // below is an in-memory transport peer, not Go/native/provider qualification.

@@ -21,7 +21,7 @@ import type {
   ChatGptReadonlyTaskResult,
   ChatGptTaskObserver,
 } from "../../src/apps/desktop/chatgpt-route";
-import { CodexCallerRelayClient } from "../../src/apps/computer-mcp/codex-caller-relay-client";
+import { CodexCallerRelayClient } from "../../apps/desktop/computer-mcp/codex-caller-relay-client";
 import {
   startCodexCallerRelay,
   type CodexCallerRelayRuntime,

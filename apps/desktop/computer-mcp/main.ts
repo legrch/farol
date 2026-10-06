@@ -1,53 +1,53 @@
-import { PersistentClaudeHandoff } from "../../modules/chat/app/service/persistent-claude-handoff";
-import { AdmittedClaudeTaskRoute } from "../../modules/chat/infra/native/admitted-claude-task-route";
-import { SandboxedClaudePrintHost } from "../../modules/chat/infra/native/sandboxed-claude-print-host";
-import { PrivateClaudeHandoffJournal } from "../../modules/chat/infra/repo/private-claude-handoff-journal";
-import { ClaudeTaskProcessPeer } from "../../modules/computer/infra/peer/claude-task-process-peer";
+import { PersistentClaudeHandoff } from "../../../src/modules/chat/app/service/persistent-claude-handoff";
+import { AdmittedClaudeTaskRoute } from "../../../src/modules/chat/infra/native/admitted-claude-task-route";
+import { SandboxedClaudePrintHost } from "../../../src/modules/chat/infra/native/sandboxed-claude-print-host";
+import { PrivateClaudeHandoffJournal } from "../../../src/modules/chat/infra/repo/private-claude-handoff-journal";
+import { ClaudeTaskProcessPeer } from "../../../src/modules/computer/infra/peer/claude-task-process-peer";
 import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import process from "node:process";
-import { connectorLaunchBasename } from "../../../apps/desktop/bridge/connector-launch";
+import { connectorLaunchBasename } from "../bridge/connector-launch";
 import { runGoComputerMcp } from "./go-main";
 
-import { RunMutableComputerAction } from "../../modules/computer/app/service/run-mutable-computer-action";
-import { RunReadonlyComputerAction } from "../../modules/computer/app/service/run-readonly-computer-action";
-import { createReadonlyComputerMcpServer } from "../../modules/computer/infra/mcp/create-readonly-computer-mcp";
-import { MutableComputerContractHandler } from "../../modules/computer/infra/mutable-contract-handler";
+import { RunMutableComputerAction } from "../../../src/modules/computer/app/service/run-mutable-computer-action";
+import { RunReadonlyComputerAction } from "../../../src/modules/computer/app/service/run-readonly-computer-action";
+import { createReadonlyComputerMcpServer } from "../../../src/modules/computer/infra/mcp/create-readonly-computer-mcp";
+import { MutableComputerContractHandler } from "../../../src/modules/computer/infra/mutable-contract-handler";
 import {
   NativeReadonlyWorkspace,
   NEXT_SAFE_OPEN_HELPER,
-} from "../../modules/computer/infra/native/native-readonly-workspace";
-import { Sha256WorkspaceMutationDigester } from "../../modules/computer/infra/native/sha256-workspace-mutation-digester";
-import { ReadonlyComputerContractHandler } from "../../modules/computer/infra/readonly-contract-handler";
-import { InMemoryAuthorityRepository } from "../../modules/computer/infra/repo/in-memory-authorities";
-import { CurrentOwnerComputerApprovals } from "../../modules/computer/infra/repo/current-owner-computer-approvals";
-import { RenewableComputerAuthority } from "../../modules/computer/infra/mcp/renewable-computer-authority";
+} from "../../../src/modules/computer/infra/native/native-readonly-workspace";
+import { Sha256WorkspaceMutationDigester } from "../../../src/modules/computer/infra/native/sha256-workspace-mutation-digester";
+import { ReadonlyComputerContractHandler } from "../../../src/modules/computer/infra/readonly-contract-handler";
+import { InMemoryAuthorityRepository } from "../../../src/modules/computer/infra/repo/in-memory-authorities";
+import { CurrentOwnerComputerApprovals } from "../../../src/modules/computer/infra/repo/current-owner-computer-approvals";
+import { RenewableComputerAuthority } from "../../../src/modules/computer/infra/mcp/renewable-computer-authority";
 import {
   renewingReadonlyComputerContract,
   renewingMutableComputerContract,
-} from "../../modules/computer/infra/mcp/renewing-computer-contracts";
-import { InMemoryComputerApprovalRepository } from "../../modules/computer/infra/repo/in-memory-computer-approvals";
-import { PrivateWorkspaceMutationStore } from "../../modules/computer/infra/repo/private-workspace-mutation-store";
+} from "../../../src/modules/computer/infra/mcp/renewing-computer-contracts";
+import { InMemoryComputerApprovalRepository } from "../../../src/modules/computer/infra/repo/in-memory-computer-approvals";
+import { PrivateWorkspaceMutationStore } from "../../../src/modules/computer/infra/repo/private-workspace-mutation-store";
 import {
   loadReadonlyComputerLaunchContract,
   materializeReadonlyComputerLaunch,
   serializeReadonlyComputerLaunchContract,
   ReadonlyComputerLaunchContractSchema,
-} from "../../modules/computer/infra/mcp/launch-contract";
-import { PrivateConnectorVerificationRecorder } from "../../modules/computer/infra/mcp/connector-verification-receipt";
-import { PrivateExecutionFence } from "../../modules/computer/infra/mcp/execution-fence";
-import { PrivateMcpLifecycle } from "../../modules/computer/infra/mcp/private-mcp-lifecycle";
-import { PrivateDevMcpProofRecorder } from "../../modules/computer/infra/mcp/dev-mcp-proof";
+} from "../../../src/modules/computer/infra/mcp/launch-contract";
+import { PrivateConnectorVerificationRecorder } from "../../../src/modules/computer/infra/mcp/connector-verification-receipt";
+import { PrivateExecutionFence } from "../../../src/modules/computer/infra/mcp/execution-fence";
+import { PrivateMcpLifecycle } from "../../../src/modules/computer/infra/mcp/private-mcp-lifecycle";
+import { PrivateDevMcpProofRecorder } from "../../../src/modules/computer/infra/mcp/dev-mcp-proof";
 import { CodexCallerRelayClient } from "./codex-caller-relay-client";
 import { SavedChatBridgeClient } from "./saved-chat-bridge-client";
-import { SandboxedWorkspaceShell } from "../../modules/computer/infra/native/sandboxed-workspace-shell";
-import { PersistentCodexHandoff } from "../../modules/chat/app/service/persistent-codex-handoff";
-import { AdmittedCodexTaskRoute } from "../../modules/chat/infra/native/admitted-codex-task-route";
-import { PhysicalCodexHandoffAuthority } from "../../modules/chat/infra/native/physical-codex-handoff-authority";
-import { Sha256HandoffRequestDigester } from "../../modules/chat/infra/native/sha256-handoff-request-digester";
-import { SharedCodexProxyHost } from "../../modules/chat/infra/native/shared-codex-proxy-host";
-import { PrivateCodexHandoffJournal } from "../../modules/chat/infra/repo/private-codex-handoff-journal";
+import { SandboxedWorkspaceShell } from "../../../src/modules/computer/infra/native/sandboxed-workspace-shell";
+import { PersistentCodexHandoff } from "../../../src/modules/chat/app/service/persistent-codex-handoff";
+import { AdmittedCodexTaskRoute } from "../../../src/modules/chat/infra/native/admitted-codex-task-route";
+import { PhysicalCodexHandoffAuthority } from "../../../src/modules/chat/infra/native/physical-codex-handoff-authority";
+import { Sha256HandoffRequestDigester } from "../../../src/modules/chat/infra/native/sha256-handoff-request-digester";
+import { SharedCodexProxyHost } from "../../../src/modules/chat/infra/native/shared-codex-proxy-host";
+import { PrivateCodexHandoffJournal } from "../../../src/modules/chat/infra/repo/private-codex-handoff-journal";
 
 function launchContractArgument(arguments_: readonly string[]): string {
   if (

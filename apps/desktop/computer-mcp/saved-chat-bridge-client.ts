@@ -8,7 +8,7 @@ import {
   type SavedChatBridgeEndpoint,
   type SavedChatBridgeOperation,
   type SavedChatBridgeResponse,
-} from "../../pkg/saved-chat-bridge/protocol";
+} from "../../../src/pkg/saved-chat-bridge/protocol";
 
 const TIMEOUT_MS = 60_000;
 

@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const netMock = vi.hoisted(() => ({ connect: vi.fn() }));
 vi.mock("node:net", () => ({ createConnection: netMock.connect }));
 
-import { CodexCallerRelayClient } from "../../src/apps/computer-mcp/codex-caller-relay-client";
+import { CodexCallerRelayClient } from "../../apps/desktop/computer-mcp/codex-caller-relay-client";
 import {
   CALLER_RELAY_PROTOCOL,
   type CodexCallerRelayOperation,
