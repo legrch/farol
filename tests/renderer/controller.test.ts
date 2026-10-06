@@ -60,56 +60,282 @@ it("Setup is a separate history destination with the same Settings host surface 
   expect(f.api.task).not.toHaveBeenCalled();
   c.dispose();
 });
-it("a partial saved folder does not dismiss setup or imply readiness on a new window lifetime", async () => {
-  const f = fixture();
-  const data = bootstrap();
-  data.configuration.settings.computer.workspaces = [
-    {
-      workspaceId: "22222222-2222-4222-8222-222222222222",
-      root: "/tmp/partial-setup",
-      label: "Partial",
-      access: "read",
-      excludedPaths: [],
-      rootIdentity: { device: "1", inode: "2" },
-    },
-  ];
-  // Parse the complete fixture through the production schema at bootstrap.
-  vi.mocked(f.api.bootstrap).mockResolvedValue(data);
-  for (let lifetime = 0; lifetime < 2; lifetime++) {
-    const c = new WindowController(f.api);
-    await c.start();
-    expect(c.getSnapshot().status).toBe("current");
-    expect(c.getSnapshot().destination.area).toBe("home");
-    c.navigate({ area: "setup" });
-    expect(c.getSnapshot().destination.setupStep).toBe("connection");
-    expect(data.configuration.settings.general.openAtLaunch).toBe("browser");
-    expect(data.configuration.settings.setup.journey.dismissed).toBe(false);
-    c.dispose();
-  }
-  expect(f.api.configure).not.toHaveBeenCalled();
-});
-describe("F0 window owner", () => {
-  it("keeps the host's restored task identity through returning-profile Home and Setup navigation", async () => {
+it.each(["browser", "computer", "settings", "activity"] as const)(
+  "a returning partial profile retains its task through Home, Setup and ChatGPT with %s launch preference",
+  async (launch) => {
     const f = fixture();
     const data = bootstrap();
-    data.configuration.settings.setup.journey.dismissed = true;
+    data.configuration.settings.general.openAtLaunch = launch;
+    data.configuration.settings.computer.workspaces = [
+      {
+        workspaceId: "22222222-2222-4222-8222-222222222222",
+        root: "/tmp/partial-setup",
+        label: "Partial",
+        access: "read",
+        excludedPaths: [],
+        rootIdentity: { device: "1", inode: "2" },
+      },
+    ];
+    // Parse the complete fixture through the production schema at bootstrap.
     vi.mocked(f.api.bootstrap).mockResolvedValue({
+      ...data,
+      taskRevision: 1,
+      tasks: [task("other"), task("retained")],
+      selectedTaskId: "retained",
+    });
+    for (let lifetime = 0; lifetime < 2; lifetime++) {
+      const c = new WindowController(f.api);
+      await c.start();
+      expect(c.getSnapshot().status).toBe("current");
+      expect(c.getSnapshot().destination).toMatchObject({
+        area: "home",
+        taskId: "retained",
+      });
+      expect(c.getSnapshot().back).toBe(false);
+      expect(c.getSnapshot().forward).toBe(false);
+      const home = c.getSnapshot().destination;
+      c.travel(-1);
+      expect(c.getSnapshot().destination).toBe(home);
+      c.navigate({ area: "setup" });
+      expect(c.getSnapshot().destination.setupStep).toBe("connection");
+      expect(c.getSnapshot().destination.taskId).toBe("retained");
+      c.navigate({ area: "chatgpt" });
+      expect(c.getSnapshot().destination.taskId).toBe("retained");
+      expect(vi.mocked(f.api.layout).mock.calls.at(-1)?.slice(0, 2)).toEqual([
+        "browser",
+        "retained",
+      ]);
+      expect(data.configuration.settings.general.openAtLaunch).toBe(launch);
+      expect(data.configuration.settings.setup.journey.dismissed).toBe(false);
+      c.dispose();
+    }
+    expect(f.api.configure).not.toHaveBeenCalled();
+    expect(f.api.task).not.toHaveBeenCalled();
+  },
+);
+describe("F0 window owner", () => {
+  it.each([
+    { launch: "browser", area: "chatgpt", page: "general" },
+    { launch: "computer", area: "settings", page: "computer" },
+    { launch: "settings", area: "settings", page: "general" },
+    { launch: "activity", area: "activity", page: "general" },
+  ] as const)(
+    "keeps the retained task independently of the chosen $launch destination",
+    async ({ launch, area, page }) => {
+      const f = fixture();
+      const data = bootstrap();
+      data.configuration.settings.setup.journey.dismissed = true;
+      data.configuration.settings.general.openAtLaunch = launch;
+      vi.mocked(f.api.bootstrap).mockResolvedValue({
+        ...data,
+        taskRevision: 1,
+        tasks: [task("other"), task("retained")],
+        selectedTaskId: "retained",
+      });
+      const c = new WindowController(f.api);
+      await c.start();
+      expect(c.getSnapshot().destination).toMatchObject({
+        area,
+        page,
+        taskId: "retained",
+      });
+      for (const area of ["home", "setup", "chatgpt"] as const) {
+        c.navigate({ area });
+        expect(vi.mocked(f.api.layout).mock.calls.at(-1)?.[1]).toBe("retained");
+      }
+      expect(f.api.task).not.toHaveBeenCalled();
+      expect(f.api.configure).not.toHaveBeenCalled();
+      c.dispose();
+    },
+  );
+  it.each(["", "unknown", " retained", "retained ", "RETAINED"])(
+    "does not substitute a task for an unmatched bootstrap selector %j",
+    async (selectedTaskId) => {
+      const f = fixture();
+      const data = bootstrap();
+      data.configuration.settings.setup.journey.dismissed = true;
+      vi.mocked(f.api.bootstrap).mockResolvedValue({
+        ...data,
+        taskRevision: 1,
+        tasks: [task("other"), task("retained")],
+        selectedTaskId,
+      });
+      const c = new WindowController(f.api);
+      await c.start();
+      expect(c.getSnapshot().destination).toMatchObject({
+        area: "chatgpt",
+        taskId: "",
+      });
+      expect(f.api.task).not.toHaveBeenCalled();
+      c.dispose();
+    },
+  );
+  it("does not restore a bootstrap selector removed by a newer buffered task list", async () => {
+    const f = fixture();
+    const reply = deferred<unknown>();
+    vi.mocked(f.api.bootstrap).mockReturnValue(reply.promise);
+    const c = new WindowController(f.api);
+    const started = c.start();
+    f.emit("tasks", { revision: 2, tasks: [task("other")] });
+    const data = bootstrap();
+    data.configuration.settings.setup.journey.dismissed = true;
+    reply.resolve({
       ...data,
       taskRevision: 1,
       tasks: [task("retained")],
       selectedTaskId: "retained",
     });
+    await started;
+    expect(c.getSnapshot().tasks).toEqual({
+      revision: 2,
+      tasks: [task("other")],
+    });
+    expect(c.getSnapshot().destination.taskId).toBe("");
+    expect(f.api.task).not.toHaveBeenCalled();
+    c.dispose();
+  });
+  it.each([
+    "navigation",
+    "task selection",
+    "explicit empty selection",
+    "pending navigation",
+    "invalid pending navigation",
+    "overlay",
+    "sidebar",
+  ])(
+    "bootstrap selection preserves newer %s before bootstrap resolves",
+    async (owner) => {
+      const f = fixture();
+      const reply = deferred<unknown>();
+      vi.mocked(f.api.bootstrap).mockReturnValue(reply.promise);
+      const c = new WindowController(f.api);
+      const started = c.start();
+      if (owner === "navigation") {
+        c.navigate({ area: "setup", setupStep: "folders" });
+        c.navigate({ area: "setup", setupStep: "attachment" });
+        c.travel(-1);
+      } else if (owner === "task selection")
+        c.navigate({ area: "chatgpt", taskId: "newer" });
+      else if (owner === "explicit empty selection") c.navigate({ taskId: "" });
+      else if (owner === "pending navigation")
+        f.emit("action", sectionIntent("computer", 1, "newer"));
+      else if (owner === "invalid pending navigation")
+        f.emit("action", sectionIntent("computer", 1, "unknown"));
+      else if (owner === "overlay") c.overlay("search");
+      else c.toggleSidebar(true);
+      const before = c.getSnapshot();
+      const data = bootstrap();
+      data.configuration.settings.setup.journey.dismissed = true;
+      reply.resolve({
+        ...data,
+        taskRevision: 1,
+        tasks: [task("retained"), task("newer")],
+        selectedTaskId: "retained",
+      });
+      await started;
+      if (owner === "pending navigation")
+        expect(c.getSnapshot().destination).toEqual({
+          area: "settings",
+          page: "computer",
+          taskId: "newer",
+        });
+      else if (
+        owner === "task selection" ||
+        owner === "explicit empty selection"
+      ) {
+        expect(c.getSnapshot().destination).toEqual(before.destination);
+        expect(c.getSnapshot().overlay).toBe(before.overlay);
+        expect(c.getSnapshot().sidebar).toBe(before.sidebar);
+      } else {
+        expect(c.getSnapshot().destination).toEqual({
+          ...before.destination,
+          taskId: "retained",
+        });
+        expect(c.getSnapshot().overlay).toBe(before.overlay);
+        expect(c.getSnapshot().sidebar).toBe(before.sidebar);
+        expect(c.getSnapshot().back).toBe(before.back);
+        expect(c.getSnapshot().forward).toBe(before.forward);
+        if (owner === "navigation") {
+          const setup = c.getSnapshot().destination;
+          c.travel(-1);
+          expect(c.getSnapshot().destination).toMatchObject({
+            area: "home",
+            taskId: "retained",
+          });
+          expect(c.getSnapshot().back).toBe(false);
+          c.travel(1);
+          expect(c.getSnapshot().destination).toEqual(setup);
+          expect(c.getSnapshot().forward).toBe(true);
+        }
+        f.emit(
+          "action",
+          sectionIntent("browser", 2, c.getSnapshot().destination.taskId),
+        );
+        expect(c.getSnapshot().destination).toMatchObject({
+          area: "chatgpt",
+          taskId: "retained",
+        });
+        expect(vi.mocked(f.api.layout).mock.calls.at(-1)?.slice(0, 2)).toEqual([
+          "browser",
+          "retained",
+        ]);
+      }
+      if (
+        owner === "task selection" ||
+        owner === "explicit empty selection" ||
+        owner === "pending navigation"
+      )
+        expect(
+          vi
+            .mocked(f.api.layout)
+            .mock.calls.some(([, taskId]) => taskId === "retained"),
+        ).toBe(false);
+      expect(f.api.task).not.toHaveBeenCalled();
+      expect(f.api.configure).not.toHaveBeenCalled();
+      c.dispose();
+    },
+  );
+  it("retains the bootstrap cursor through early Home to Setup, Back to Home and ChatGPT", async () => {
+    const f = fixture();
+    const reply = deferred<unknown>();
+    vi.mocked(f.api.bootstrap).mockReturnValue(reply.promise);
     const c = new WindowController(f.api);
-    await c.start();
+    const started = c.start();
+    c.navigate({ area: "setup", setupStep: "folders" });
+    reply.resolve({
+      ...bootstrap(),
+      taskRevision: 1,
+      tasks: [task("other"), task("retained")],
+      selectedTaskId: "retained",
+    });
+    await started;
+    expect(c.getSnapshot().destination).toMatchObject({
+      area: "setup",
+      setupStep: "folders",
+      taskId: "retained",
+    });
+    c.travel(-1);
+    expect(c.getSnapshot().destination).toEqual({
+      area: "home",
+      page: "general",
+      taskId: "retained",
+    });
+    expect(c.getSnapshot().back).toBe(false);
+    expect(c.getSnapshot().forward).toBe(true);
+    f.emit(
+      "action",
+      sectionIntent("browser", 1, c.getSnapshot().destination.taskId),
+    );
     expect(c.getSnapshot().destination).toMatchObject({
       area: "chatgpt",
       taskId: "retained",
     });
-    for (const area of ["home", "setup", "chatgpt"] as const) {
-      c.navigate({ area });
-      expect(vi.mocked(f.api.layout).mock.calls.at(-1)?.[1]).toBe("retained");
-    }
+    expect(vi.mocked(f.api.layout).mock.calls.at(-1)?.slice(0, 2)).toEqual([
+      "browser",
+      "retained",
+    ]);
     expect(f.api.task).not.toHaveBeenCalled();
+    expect(f.api.configure).not.toHaveBeenCalled();
     c.dispose();
   });
   it("R10 retains an unknown explicit account confirmation without another command", async () => {

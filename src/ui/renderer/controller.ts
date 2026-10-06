@@ -173,6 +173,7 @@ export class WindowController implements RendererFacade {
   private history: Destination[] = [home];
   private cursor = 0;
   private navigationRevision = 0;
+  private taskSelectionRevision = 0;
   private readonly seenActions = new Set<string>();
   private sectionNavigationSequence = 0;
   private presentationRevision = 0;
@@ -310,6 +311,33 @@ export class WindowController implements RendererFacade {
         )
           return;
         if (this.bufferedTasks && !this.adoptTasks(this.bufferedTasks)) return;
+        const pending = this.pendingSectionNavigation;
+        const pendingTaskSelection =
+          pending &&
+          pending.presentationRevision === this.presentationRevision &&
+          this.state.tasks.tasks.some(
+            (task) => task.taskId === pending.action.taskId,
+          );
+        if (
+          this.taskSelectionRevision === 0 &&
+          !pendingTaskSelection &&
+          this.state.update.phase !== "applying" &&
+          data.selectedTaskId !== "" &&
+          this.state.tasks.tasks.some(
+            (task) => task.taskId === data.selectedTaskId,
+          )
+        ) {
+          // Before any explicit task choice, blank history cursors are startup
+          // placeholders. Restore them in place without adding navigation.
+          this.history = this.history.map((destination) =>
+            destination.taskId === ""
+              ? { ...destination, taskId: data.selectedTaskId }
+              : destination,
+          );
+          const destination = this.history[this.cursor]!;
+          this.draft.select(destination.taskId);
+          this.patch({ destination });
+        }
         const ids = new Set(
           this.state.tasks.tasks.map((task) => `${task.taskId}:${task.turnId}`),
         );
@@ -338,7 +366,7 @@ export class WindowController implements RendererFacade {
             const launch = settings.general.openAtLaunch;
             this.navigate(
               launch === "browser"
-                ? { area: "chatgpt", taskId: data.selectedTaskId }
+                ? { area: "chatgpt" }
                 : launch === "computer"
                   ? { area: "settings", page: "computer" }
                   : launch === "settings"
@@ -1210,6 +1238,7 @@ export class WindowController implements RendererFacade {
   }
   navigate(destination: Partial<Destination>): void {
     if (this.disposed || this.state.update.phase === "applying") return;
+    if (destination.taskId !== undefined) this.taskSelectionRevision++;
     this.presentationRevision++;
     const next: Destination = {
       area: destination.area ?? this.state.destination.area,
@@ -1270,6 +1299,8 @@ export class WindowController implements RendererFacade {
     const cursor = this.cursor + direction;
     if (cursor < 0 || cursor >= this.history.length) return;
     this.presentationRevision++;
+    if (this.history[cursor]!.taskId !== this.state.destination.taskId)
+      this.taskSelectionRevision++;
     this.draft.select(this.history[cursor]!.taskId);
     this.cursor = cursor;
     this.navigationRevision++;
