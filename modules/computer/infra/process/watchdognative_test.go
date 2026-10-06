@@ -48,8 +48,11 @@ const timer = setTimeout(() => process.exit(90), 1500);
 // It is not inherited command authority. Reject every other unexpected field;
 // the selected environment remains exactly the two synthetic values below.
 const encoding = process.env.__CF_USER_TEXT_ENCODING;
+const encodingParts = typeof encoding === "string" &&
+  /^(0x[0-9a-fA-F]+|[0-9]+):(0x[0-9a-fA-F]+|[0-9]+):(0x[0-9a-fA-F]+|[0-9]+)$/.exec(encoding);
 const encodingValid = encoding === undefined ||
-  new RegExp("^" + process.getuid() + ":0x[0-9a-fA-F]+:0x[0-9a-fA-F]+$").test(encoding);
+  (encodingParts && Number(encodingParts[1]) === process.getuid() &&
+   encodingParts.slice(1).every((part) => Number(part) <= 0xffffffff));
 // Distinct synthetic exit codes identify the failed guard without disclosing
 // environment values. They do not change the command or transport's outcome.
 if (process.cwd() !== process.env.SYNTHETIC_CWD) process.exit(91);
