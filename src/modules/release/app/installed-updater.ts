@@ -108,6 +108,9 @@ export class InstalledUpdater {
         phase: "failed",
         code: prepared.code,
         recoveryRequired: prepared.recoveryRequired ?? false,
+        ...(!prepared.recoveryRequired && this.rollbackVersion
+          ? { rollbackVersion: this.rollbackVersion }
+          : {}),
       });
       return;
     }
@@ -119,6 +122,9 @@ export class InstalledUpdater {
         phase: "failed",
         code: retention.code,
         recoveryRequired: retention.recoveryRequired ?? false,
+        ...(!retention.recoveryRequired && this.rollbackVersion
+          ? { rollbackVersion: this.rollbackVersion }
+          : {}),
       });
       return;
     }
@@ -251,6 +257,9 @@ export class InstalledUpdater {
         phase: "failed",
         code: "UPDATE_LOCAL_IMPORT_UNAVAILABLE",
         recoveryRequired: false,
+        ...(this.rollbackVersion
+          ? { rollbackVersion: this.rollbackVersion }
+          : {}),
       });
       return;
     }

@@ -631,6 +631,11 @@ describe("explicit local preparation (ports only, no archive or installed accept
     "keeps an unknown %s result fenced across both preparation routes",
     async (boundary) => {
       const { updater, ports } = localFixture();
+      ports.recover.mockResolvedValue({
+        ok: true,
+        update: null,
+        rollbackVersion: "0.1.0-owner.beta.1",
+      });
       if (boundary === "import")
         ports.prepareLocal.mockRejectedValue(new Error("lost import reply"));
       else ports.retain.mockRejectedValue(new Error("lost retention reply"));
@@ -644,10 +649,53 @@ describe("explicit local preparation (ports only, no archive or installed accept
       await updater.prepareLocal();
       await updater.check(true);
       await updater.restart();
+      await updater.restore("rollback");
       expect(ports.prepareLocal).toHaveBeenCalledTimes(1);
       expect(ports.discover).not.toHaveBeenCalled();
       expect(ports.download).not.toHaveBeenCalled();
       expect(ports.restart).not.toHaveBeenCalled();
+      expect(ports.restore).not.toHaveBeenCalled();
+      await updater.close();
+    },
+  );
+
+  it.each(["unavailable", "refused", "retention"])(
+    "preserves a reconciled rollback after known local %s",
+    async (boundary) => {
+      const fixture = localFixture();
+      const { ports } = fixture;
+      ports.recover.mockResolvedValue({
+        ok: true,
+        update: null,
+        rollbackVersion: "0.1.0-owner.beta.1",
+      });
+      const updater =
+        boundary === "unavailable"
+          ? new InstalledUpdater(
+              (({ prepareLocal: _local, ...ordinary }) => ordinary)(ports),
+            )
+          : fixture.updater;
+      if (boundary === "refused")
+        ports.prepareLocal.mockResolvedValue({
+          ok: false,
+          code: "UPDATE_LOCAL_MANIFEST_INVALID",
+        });
+      if (boundary === "retention")
+        ports.retain.mockResolvedValue({
+          ok: false,
+          code: "UPDATE_READY_PERSIST_FAILED",
+        });
+      await updater.initialize();
+      await updater.prepareLocal();
+      expect(updater.snapshot()).toMatchObject({
+        phase: "failed",
+        recoveryRequired: false,
+        rollbackVersion: "0.1.0-owner.beta.1",
+      });
+      await updater.restore("rollback");
+      expect(ports.restore).toHaveBeenCalledExactlyOnceWith("rollback");
+      expect(ports.discover).not.toHaveBeenCalled();
+      expect(ports.download).not.toHaveBeenCalled();
       await updater.close();
     },
   );
