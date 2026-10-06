@@ -4,7 +4,32 @@ This is source preparation, not an executed migration. The additive Go policy is
 not wired to startup and performs no I/O. Integration, shared-file leases,
 packaging, installation and live acceptance belong to the integration owner.
 
-## Accepted identities
+## Current integration status
+
+Source inspection at `5376fac6` confirms that the final values below are targets,
+not the currently emitted package/runtime identity. Packaging still emits
+`local.farol.next.preview`; production startup retains `Farol Next Preview`
+user/session data. Dev declares `local.farol.dev` and uses the protected
+`Farol Dev`/legacy-spelling profile selection, while ordinary `task dev` launches
+the attested vendor Electron bundle rather than a separately branded Dev bundle.
+Runtime and ChatGPT partitions remain distinct compatibility values in
+`desktop-environment.ts`; merging them would also change their network boundary.
+
+New release discovery already selects `legrch/farol`. The older
+`farol-releases` destination remains only for exact retained recovery context.
+The pinned inventory below predates that integrated feed change and must not
+be used as a current replacement list.
+
+The existing supervised transition uses the existing updater/helper and stops
+at `verified_closed`; it does not activate final profile/session identity.
+The Go migration plan's `VerifyLayout` result remains a stop before separately
+qualified layout/state/operation reconciliation. Package verification, updater
+admission and the native helper still pin the compatibility bundle/root.
+Changing a display string or the package plist alone cannot complete this
+boundary. No source inspection here proves a migration, recovery, installation
+or a subsequent update.
+
+## Accepted target identities
 
 | Surface                      | Production                            | Development                                         |
 | ---------------------------- | ------------------------------------- | --------------------------------------------------- |

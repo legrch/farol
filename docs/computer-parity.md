@@ -42,6 +42,15 @@ tests. HOME/scratch semantics, ordinary linked-worktree Git and descendant clean
 also remain gates. The historical shell table below describes the earlier
 TypeScript route and does not qualify Go shell.
 
+Actual external `computer_mutation_read` is now qualified separately from its
+source registration. Dev `67d8af51` observed the original completed edit after a
+normal Quit and source/build change on the same profile, with its original
+operation/call identity and durable publication intact. It did not repeat the
+mutation. Ordinary Dev `5376fac6` later reconnected on that same profile and
+passed a fresh external catalogue and attachment check. This confirms the
+current caller surface and retained file outcome; it does not establish Go
+process retention, installed recovery or full Computer parity.
+
 The Go MCP adapter retains the published `computer_workspace_search`,
 `computer_workspace_write` and `computer_workspace_edit` names. Its public
 `expectedSha256` spelling remains unchanged: write requires an explicit `null`
@@ -87,7 +96,11 @@ external no-duplicate witness; lower-layer duplicate guards retain their own sco
 `NOT_SELECTED_U2` is not a compatibility claim. Those rows must remain visible in
 any later Legacy-replacement decision.
 
-## Daily-driver Computer command mode
+## Historical TypeScript workspace-shell command mode
+
+This section records the earlier executor's contract and qualification limits.
+The active Go Dev connector does not expose these shell tools. Do not follow
+these settings as instructions for enabling an unqualified Go process route.
 
 The owner must select **Workspace shell** in Computer settings and verify the
 approved folder again before starting the new connector. This is separate from

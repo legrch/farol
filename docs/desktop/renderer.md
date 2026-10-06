@@ -123,6 +123,7 @@ settle an unknown outcome; stale generations and late replies remain fenced.
 | Separate Setup, retained credential drafts and non-destructive review        | `tests/renderer/settings.test.tsx` and `controller.test.ts`               | DOM/command projection; normal native dialog and external attachment are separate                          |
 | Optional versus shared/Computer uncertainty and freshness                    | `tests/renderer/computer-setup.test.ts`, `settings.test.tsx`              | Pure/renderer contracts; unknown is never settled by remount                                               |
 | Fresh and partial Setup, Appearance, Quit/reopen, retained live idle browser | `tests/e2e/dev-onboarding-startup.e2e.mjs`                                | Built current React + real Go + local provider fixture; four hidden disposable lifetimes, zero Sends       |
+| Normal/compact bounds, Light/Graphite, bounded resizer and overlay detach    | The same restored idle-browser phase in `dev-onboarding-startup.e2e.mjs`  | Real Electron child bounds and React rectangles; renderer-directed input, not visible focus or OS AX       |
 | Cleared/destroyed browser contents and safe native detach                    | `tests/unit/native-view-visibility.test.ts` plus the native journey above | Callback regression and real child attachment; visible keyboard focus and OS AX inspection remain separate |
 
 The four-lifetime native journey passed at source `5c702016`, build
@@ -133,6 +134,28 @@ provider Send or an update. Actual ordinary Dev also retained a completed file
 edit across the same-source rebuild/reopen and exposed the original result through
 `computer_mutation_read`; that external receipt is separate from this fixture.
 
+The extended journey passed at source `5376fac6`, build
+`7387e945193394eb45189e785f5a3ee9f478b492bbade8d28336dc54244afba3`,
+attempt `c7f91524-fc2a-4205-b007-ce9313b726a9`. It compared actual native and
+React bounds at 1160px and 800px in Light and Graphite, checked both resizer
+limits and the single divider, and detached the same live browser during
+resize, search and compact-sidebar overlays. Renderer-directed overlay input
+produced no fixture-provider input or Send. Original window/sidebar/theme values
+were restored; all four app lifetimes closed cleanly. Sampled windows stayed
+hidden and unfocused. This does not qualify visible compositor routing, OS AX,
+IME, a real provider or installation.
+
+Separate ordinary Dev evidence on source `5c702016` observed the actual provider
+AX subtree disappear on Home and under search, then return on dismissal. The
+search field initially lost focus to Close; `fdd51fa5` fixed that modal ordering
+and an owning renderer regression proved the failure before the correction.
+Visible ordinary Dev at `67d8af51` then accepted immediate typing after Command-K.
+Its one timed-out Open ChatGPT action remains unconfirmed and was not repeated;
+the newer hidden fixture cannot settle it. Ordinary Dev at `5376fac6` separately
+passed fresh external attachment after normal Quit/reopen and retained Home-local
+Back/Forward navigation. These are distinct receipts, not a single full native
+or installed acceptance claim.
+
 ## Native harness and retirement gate
 
 `tests/e2e/react-shell.e2e.mjs` requires an explicitly selected, hash-verified
@@ -141,6 +164,9 @@ profile, hidden window and loopback GET-only synthetic document. Native bounds,
 overlay occlusion and view identity are inspected in the owned child. Evidence
 is local `_output/evidence/react-shell`, and is not an installed/provider receipt.
 Fixture startup refusals are retained as failed tests, not native UI acceptance.
+That legacy harness still requires build schema 3; it was not used to qualify
+the current Go schema-4 build. The current Setup harness above owns the new
+normal/compact geometry witness.
 
 Do not count inactive legacy presentation source assertions as React coverage.
 `tests/renderer` is the replacement coverage scope. Old presentation source/tests
