@@ -1128,6 +1128,11 @@ it("ends a drag during update admission without resuming native browser input", 
   expect(f.api.layout).not.toHaveBeenCalled();
   f.emit("update", { phase: "failed", code: "UPDATE_ABORTED" });
   expect(f.api.layout).not.toHaveBeenCalled(); // Missing settlement fields are not an ACK.
+  const held = c.getSnapshot().destination;
+  c.navigate({ area: "settings", page: "diagnostics" });
+  c.presentation();
+  expect(c.getSnapshot().destination).toBe(held);
+  expect(f.api.layout).not.toHaveBeenCalled();
   f.emit("update", {
     phase: "failed",
     code: "UPDATE_ABORTED",

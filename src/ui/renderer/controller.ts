@@ -488,10 +488,12 @@ export class WindowController implements RendererFacade {
       this.patch({ update: parsed.data });
       if (parsed.data.phase !== "applying" && this.presentationDeferred)
         this.presentation();
-    } else
+    } else if (this.state.update.phase !== "applying")
       this.patch({
         update: { phase: "unavailable", code: "UPDATE_STATE_INVALID" },
       });
+    // An invalid projection cannot release the last known applying admission.
+    // Keep deferred presentation until a valid settlement arrives.
   }
   async refresh(): Promise<void> {
     if (this.disposed) return;

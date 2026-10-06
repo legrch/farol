@@ -283,9 +283,15 @@ it.each([
     );
     // A still-held pointer cannot restart a drag cancelled by the native action.
     if (cancelled) {
+      await act(async () =>
+        divider.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }),
+        ),
+      );
+      expect(c.getSnapshot().sidebarResizing).toBe(false);
       await pointer("pointermove", 290);
       expect(c.getSnapshot().sidebarResizing).toBe(false);
-      expect(c.getSnapshot().sidebarWidth).toBe(180);
+      expect(c.getSnapshot().sidebarWidth).toBe(188);
     }
     expect(f.api.task).not.toHaveBeenCalled();
     expect(f.api.configure).not.toHaveBeenCalled();

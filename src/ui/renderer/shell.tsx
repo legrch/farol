@@ -669,6 +669,7 @@ function PageListResizer({
       onPointerCancel={finish}
       onLostPointerCapture={finish}
       onKeyDown={(event) => {
+        if (!facade.getSnapshot().sidebarResizing) drag.current = null;
         if (event.key === "Escape" && drag.current) {
           drag.current = null;
           facade.dismissOverlay();
