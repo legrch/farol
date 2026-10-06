@@ -25,13 +25,21 @@ import (
 // CPU only: injected image/physical measurement, evidence, socket and owning
 // helper Wait. No os/exec, actual Node, shell, sandbox, native signal or endpoint.
 type watchdogTestProcess struct {
-	ended chan error
-	waits atomic.Int32
+	ended   chan error
+	waiting chan struct{}
+	waits   atomic.Int32
 }
 
-func (p *watchdogTestProcess) Wait() error { p.waits.Add(1); return <-p.ended }
+func (p *watchdogTestProcess) Wait() error {
+	p.waits.Add(1)
+	if p.waiting != nil {
+		close(p.waiting)
+	}
+	return <-p.ended
+}
 
 type watchdogTestHost struct {
+	preflights     atomic.Int32
 	calls          atomic.Int32
 	starts         atomic.Int32
 	stops          atomic.Int32
@@ -39,13 +47,25 @@ type watchdogTestHost struct {
 	peer           net.Conn
 	frames         chan map[string]any
 	selection      WatchdogSelection
+	beforeStart    func()
 	beforePrepared func()
+	holdWait       bool
 	reply          string
 	reservation    *parentReservation
 	lease          *parentLease
 }
 
-func (h *watchdogTestHost) Start(_ context.Context, selection WatchdogSelection, cwd string) (watchdogProcess, watchdogChannel, error) {
+func (h *watchdogTestHost) Start(ctx context.Context, selection WatchdogSelection, cwd string, check func() error) (watchdogProcess, watchdogChannel, error) {
+	h.preflights.Add(1)
+	if h.beforeStart != nil {
+		h.beforeStart()
+	}
+	return startWatchdogHelper(ctx, check, func() (watchdogProcess, watchdogChannel, error) {
+		return h.start(selection, cwd)
+	})
+}
+
+func (h *watchdogTestHost) start(selection WatchdogSelection, cwd string) (watchdogProcess, watchdogChannel, error) {
 	if h.lease.inspecting.Load() || h.reservation.calls != 1 {
 		panic("helper before reservation/outside owner gate")
 	}
@@ -58,7 +78,11 @@ func (h *watchdogTestHost) Start(_ context.Context, selection WatchdogSelection,
 	h.peer = peer
 	go func() {
 		defer peer.Close()
-		defer func() { h.process.ended <- nil }()
+		defer func() {
+			if !h.holdWait {
+				h.process.ended <- nil
+			}
+		}()
 		reader := bufio.NewReader(peer)
 		for {
 			raw, err := reader.ReadBytes('\n')
@@ -295,6 +319,126 @@ func TestWatchdogRefusesCurrentLossBeforeHelperAndBeforeRelease(t *testing.T) {
 		})
 	}
 }
+
+func TestWatchdogRefusesOwnerLossDuringHelperPreflight(t *testing.T) {
+	for _, phase := range []string{"revoked", "expired", "response-cancelled"} {
+		t.Run(phase, func(t *testing.T) {
+			f := newWatchdogFixture(t)
+			f.prepare(t)
+			response, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			f.host.beforeStart = func() {
+				switch phase {
+				case "revoked":
+					f.lease.change(func(s *port.AccessSnapshot) { s.Participant.Grant.Commands = authority.NoCommands })
+				case "expired":
+					f.clock.advance(15 * time.Second)
+				case "response-cancelled":
+					cancel()
+				}
+			}
+			_, err := f.route.Start(response, processcontract.StartRequest{OperationID: "operation"})
+			if f.host.calls.Load() != 0 {
+				f.settle(t)
+			}
+			if err == nil || f.host.preflights.Load() != 1 || f.host.calls.Load() != 0 || f.host.starts.Load() != 0 || f.preparer.RetainedHandle() != "" {
+				t.Fatal("helper launched after owner loss during preflight", err, f.host.calls.Load())
+			}
+			_, err = f.route.Start(context.Background(), processcontract.StartRequest{OperationID: "operation"})
+			if err == nil || f.host.preflights.Load() != 1 || f.reservation.calls != 1 {
+				t.Fatal("refused helper attempt repeated", err)
+			}
+		})
+	}
+}
+
+func TestWatchdogFencePublishesUnknownBeforeHelperWait(t *testing.T) {
+	for _, scenario := range []struct{ name, root, fault string }{
+		{"running-lost-ipc", "", "disconnect"},
+		{"running-malformed-ipc", "", "malformed"},
+		{"running-signal-refused", "", "signal-refused"},
+		{"running-output-limit", "", "output-limit"},
+		{"exited-open-pipes", "exit", "signal-refused"},
+		{"closed-root", "close", "signal-refused"},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			f := newWatchdogFixture(t)
+			f.host.holdWait = true
+			f.host.process.waiting = make(chan struct{})
+			f.prepare(t)
+			start := f.start(t)
+			child := f.child()
+			child.mutex.Lock()
+			watchdog := child.process.(*watchdogChild)
+			child.mutex.Unlock()
+			t.Cleanup(func() {
+				f.host.peer.Close()
+				f.host.process.ended <- nil
+				select {
+				case <-child.done:
+				case <-time.After(time.Second):
+					t.Error("released CPU helper Wait did not settle")
+				}
+			})
+			select {
+			case <-f.host.process.waiting:
+			case <-time.After(time.Second):
+				t.Fatal("CPU helper Wait did not start")
+			}
+			prepare := <-f.host.frames
+			id := prepare["id"]
+			f.emit(t, map[string]any{"type": "stdout", "id": id, "data": "QQ=="})
+			f.emit(t, map[string]any{"type": "stderr", "id": id, "data": "RQ=="})
+			if scenario.root != "" {
+				f.emit(t, map[string]any{"type": scenario.root, "id": id, "code": 7, "signal": nil})
+			}
+			switch scenario.fault {
+			case "disconnect":
+				f.host.peer.Close()
+			case "malformed":
+				f.emit(t, map[string]any{"type": "stdout", "id": id, "data": "invalid"})
+			default:
+				f.emit(t, map[string]any{"type": scenario.fault, "id": id})
+			}
+			select {
+			case <-watchdog.done:
+			case <-time.After(time.Second):
+				t.Fatal("CPU IPC did not fence")
+			}
+			select {
+			case <-child.done:
+				t.Fatal("IPC fence settled the unresolved helper Wait")
+			default:
+			}
+			out, err := f.route.Read(context.Background(), processcontract.ReadRequest{Handle: start.Handle})
+			if err != nil || out.State != processcontract.Unknown || out.GroupCleanup != processcontract.CleanupUnverified || out.DescendantCleanup != processcontract.CleanupUnverified {
+				t.Fatal("IPC uncertainty hidden behind helper Wait", out, err)
+			}
+			if out.StdoutBase64 != "QQ==" || out.StderrBase64 != "RQ==" || out.StdoutBytes != 1 || out.StderrBytes != 1 || out.OutputLimitReached != (scenario.fault == "output-limit") || out.OutputDrained != (scenario.root == "close") {
+				t.Fatal("fence changed known output facts", out)
+			}
+			if scenario.root == "" {
+				if out.RootState != processcontract.RootRunning || out.RootWaited || out.ExitCode != nil || out.ExitSignal != 0 {
+					t.Fatal("fence fabricated root exit", out)
+				}
+			} else if out.RootState != processcontract.RootExited || !out.RootWaited || out.ExitCode == nil || *out.ExitCode != 7 || out.ExitSignal != 0 {
+				t.Fatal("fence erased known root exit", out)
+			}
+			if _, err := f.route.Start(context.Background(), processcontract.StartRequest{OperationID: "operation"}); err == nil {
+				t.Fatal("fenced operation accepted Start")
+			}
+			for i := 0; i < 2; i++ {
+				if _, err := f.route.Cancel(context.Background(), processcontract.CancelRequest{Handle: start.Handle}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if f.host.process.waits.Load() != 1 || f.host.calls.Load() != 1 || f.host.starts.Load() != 1 || f.host.stops.Load() != 0 || f.reservation.calls != 1 || f.preparer.RetainedHandle() != start.Handle {
+				t.Fatal("fence replaced ownership or retried an effect")
+			}
+		})
+	}
+}
+
 func TestWatchdogLostOrMalformedStartNeverResends(t *testing.T) {
 	for _, reply := range []string{"lost", "malformed", "lost-prepared", "start-error"} {
 		t.Run(reply, func(t *testing.T) {

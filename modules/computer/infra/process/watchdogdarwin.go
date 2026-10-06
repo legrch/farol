@@ -18,7 +18,7 @@ import (
 type nativeWatchdogHost struct{}
 type nativeWatchdogProcess struct{ command *exec.Cmd }
 
-func (nativeWatchdogHost) Start(ctx context.Context, selection WatchdogSelection, cwd string) (watchdogProcess, watchdogChannel, error) {
+func (nativeWatchdogHost) Start(ctx context.Context, selection WatchdogSelection, cwd string, check func() error) (watchdogProcess, watchdogChannel, error) {
 	image, err := pinnedExecutable(selection.Executable)
 	if err != nil {
 		return nil, nil, err
@@ -45,13 +45,16 @@ func (nativeWatchdogHost) Start(ctx context.Context, selection WatchdogSelection
 	command.Stdout, command.Stderr = io.Discard, io.Discard
 	command.WaitDelay = time.Second
 	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	if ctx == nil || ctx.Err() != nil {
-		connection.Close()
-		return nil, nil, &processsvc.NativeFailure{}
-	}
+	// Image measurement and IPC setup precede the SAME final owner check.
 	// No CommandContext, parent signal, inherited environment or second attempt.
-	err = command.Start()
-	return &nativeWatchdogProcess{command}, connection, err
+	process, channel, startErr := startWatchdogHelper(ctx, check, func() (watchdogProcess, watchdogChannel, error) {
+		err := command.Start()
+		return &nativeWatchdogProcess{command}, connection, err
+	})
+	if process == nil {
+		connection.Close()
+	}
+	return process, channel, startErr
 }
 func (p *nativeWatchdogProcess) Wait() error {
 	err := p.command.Wait()

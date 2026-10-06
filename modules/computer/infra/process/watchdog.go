@@ -135,8 +135,18 @@ type watchdogChannel interface {
 	SetWriteDeadline(time.Time) error
 }
 type watchdogHost interface {
-	Start(context.Context, WatchdogSelection, string) (watchdogProcess, watchdogChannel, error)
+	Start(context.Context, WatchdogSelection, string, func() error) (watchdogProcess, watchdogChannel, error)
 }
+
+// Native and CPU hosts use this same final step after helper preflight. The
+// original selected owner guard must pass immediately before the one Start.
+func startWatchdogHelper(ctx context.Context, check func() error, start func() (watchdogProcess, watchdogChannel, error)) (watchdogProcess, watchdogChannel, error) {
+	if ctx == nil || ctx.Err() != nil || check == nil || check() != nil || ctx.Err() != nil {
+		return nil, nil, &processsvc.NativeFailure{}
+	}
+	return start()
+}
+
 type watchdogBoundary struct {
 	policy    *Seatbelt
 	selection WatchdogSelection
@@ -167,6 +177,9 @@ func (b *watchdogBoundary) StartLease(ctx context.Context, command Command, requ
 		if ctx.Err() != nil || bounded.Err() != nil || !b.clock.Now().Before(request.Deadline) || request.Check(bounded) != nil {
 			return &processsvc.NativeFailure{}
 		}
+		if ctx.Err() != nil || bounded.Err() != nil || !b.clock.Now().Before(request.Deadline) {
+			return &processsvc.NativeFailure{}
+		}
 		return nil
 	}
 	closeMeasurement, err := b.measure(bounded, copyCommand(command), launch)
@@ -177,7 +190,7 @@ func (b *watchdogBoundary) StartLease(ctx context.Context, command Command, requ
 		cancel()
 		return nil, &processsvc.NativeFailure{}
 	}
-	process, channel, startErr := b.host.Start(bounded, b.selection, command.Cwd)
+	process, channel, startErr := b.host.Start(bounded, b.selection, command.Cwd, check)
 	if process == nil {
 		cancel()
 		if channel != nil {

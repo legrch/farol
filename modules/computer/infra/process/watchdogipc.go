@@ -77,6 +77,14 @@ func (c *watchdogChild) fence() {
 	c.mutex.Lock()
 	c.uncertain = true
 	c.mutex.Unlock()
+	// Helper Wait may remain unresolved after a refused stop. Publish uncertainty
+	// now in the same observation owner, without changing known root/output facts.
+	if writer, ok := c.stdout.(output); ok {
+		child := writer.child
+		child.mutex.Lock()
+		child.group, child.descendants = processsvc.CleanupUnverified, processsvc.CleanupUnverified
+		child.mutex.Unlock()
+	}
 	c.failOnce.Do(func() { close(c.failed) })
 	c.close()
 }
