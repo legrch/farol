@@ -1,4 +1,10 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import type { CSSProperties, ReactNode } from "react";
 import { shellGeometry } from "../../pkg/shell-geometry";
 import { useRenderer } from "./services";
@@ -615,18 +621,18 @@ function PageListResizer({
   const drag = useRef<{ pointerId: number; x: number; width: number } | null>(
     null,
   );
-  const finish = () => {
+  const finish = useCallback(() => {
     if (!drag.current) return;
     drag.current = null;
     facade.resizeSidebar(facade.getSnapshot().sidebarWidth, false);
-  };
+  }, [facade]);
   useEffect(() => {
     window.addEventListener("blur", finish);
     return () => {
       window.removeEventListener("blur", finish);
       finish();
     };
-  }, [facade]);
+  }, [finish]);
   return (
     <div
       className="page-list-resizer"
