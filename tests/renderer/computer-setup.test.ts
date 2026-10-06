@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { commandAllowed } from "../../src/ui/renderer/command-eligibility";
 import { computerSetup } from "../../src/ui/renderer/computer-setup";
 import { WindowController } from "../../src/ui/renderer/controller";
 import { ProductSettingsSchema } from "../../src/pkg/product-settings/contract";
@@ -182,6 +183,133 @@ describe("current Computer setup projection", () => {
     expect(setup.ready).toBe(false);
     expect(setup.canStart).toBe(true);
     expect(setup.canReconnect).toBe(false);
+  });
+  it.each(["pending", "refused", "unknown"] as const)(
+    "keeps independent optional Model/Chat browser %s separate from Computer",
+    async (state) => {
+      const current = await snapshot();
+      for (const kind of [
+        "model.preview",
+        "model.apply",
+        "model.rollback",
+        "model.rotate-token",
+        "model.status",
+        "chatgpt.open-browser",
+        "chatgpt.toggle-sidebar",
+      ]) {
+        const id = `settings:${kind}:`;
+        const next = {
+          ...current,
+          intents: { [id]: { id, state, code: null } },
+        };
+        expect(computerSetup(next).ready).toBe(true);
+        expect(computerSetup(next).canReconnect).toBe(true);
+        expect(commandAllowed(next, "connector.repair")).toBe(true);
+      }
+    },
+  );
+  it("keeps retained optional Chat readiness unknown without changing Computer evidence", async () => {
+    const value = configured();
+    value.setup.chatgpt.outcomeUnknown = true;
+    const current = await snapshot(value);
+    expect(computerSetup(current).ready).toBe(true);
+    expect(computerSetup(current).embeddedChatGPT).toBe("Outcome unknown");
+    expect(commandAllowed(current, "connector.repair")).toBe(true);
+    expect(commandAllowed(current, "chatgpt.verify")).toBe(false);
+    expect(current.configuration).toEqual({ status: "ready", settings: value });
+  });
+  it.each([
+    "chatgpt.open-sign-in",
+    "chatgpt.verify",
+    "general.update",
+    "connector.repair",
+    "computer.check-folder",
+    "unclassified",
+  ])("preserves shared-writer or unclassified unknown: %s", async (kind) => {
+    const current = await snapshot();
+    const id = `settings:${kind}:`;
+    const next = {
+      ...current,
+      intents: { [id]: { id, state: "unknown" as const, code: null } },
+    };
+    expect(computerSetup(next).ready).toBe(false);
+    expect(commandAllowed(next, "connector.repair")).toBe(false);
+    expect(commandAllowed(next, "model.status")).toBe(false);
+  });
+  it.each(["computer", "connect", "hosts", "verify"] as const)(
+    "keeps actual owner uncertainty fenced: %s",
+    async (step) => {
+      const value = configured();
+      value.setup[step].outcomeUnknown = true;
+      expect(computerSetup(await snapshot(value)).ready).toBe(false);
+    },
+  );
+  it("allows a new model observation without retrying an unknown status or clearing an unknown apply", async () => {
+    const current = await snapshot();
+    const id = "settings:model.apply:";
+    const unknown = { id, state: "unknown" as const, code: null };
+    const next = { ...current, intents: { [id]: unknown } };
+    expect(commandAllowed(next, "model.status")).toBe(true);
+    expect(commandAllowed(next, "model.apply")).toBe(false);
+    expect(commandAllowed(next, "model.rollback")).toBe(false);
+    expect(commandAllowed(next, "connector.repair")).toBe(true);
+    expect(commandAllowed(next, "computer.check-folder", workspaceId)).toBe(
+      true,
+    );
+    expect(commandAllowed(next, "computer.check-folder", "missing")).toBe(
+      false,
+    );
+    const observation = "settings:model.status:";
+    expect(
+      commandAllowed(
+        {
+          ...next,
+          intents: {
+            ...next.intents,
+            [observation]: { id: observation, state: "unknown", code: null },
+          },
+        },
+        "model.status",
+      ),
+    ).toBe(false);
+    expect(next.intents[id]).toBe(unknown);
+  });
+  it("fails closed for missing retention, mismatched intent IDs and uncertain writer refusals", async () => {
+    const current = await snapshot();
+    const local = {
+      id: "settings:model.apply:",
+      state: "unknown" as const,
+      code: null,
+    };
+    expect(
+      commandAllowed(current, "connector.repair", undefined, [local]),
+    ).toBe(false);
+    expect(
+      computerSetup({ ...current, intents: { foreign: local } }).ready,
+    ).toBe(false);
+    expect(
+      computerSetup({
+        ...current,
+        intents: {
+          [local.id]: {
+            ...local,
+            state: "refused",
+            code: "SETTINGS_WRITE_FAILED",
+          },
+        },
+      }).ready,
+    ).toBe(false);
+    expect(
+      computerSetup({
+        ...current,
+        intents: {
+          "settings:model.apply:foreign": {
+            ...local,
+            id: "settings:model.apply:foreign",
+          },
+        },
+      }).ready,
+    ).toBe(false);
   });
   it.each(["pending", "unknown", "stale"])(
     "fences presentation and commands for %s",

@@ -13,6 +13,7 @@ import {
 } from "../../pkg/product-settings/contract";
 import { folderAccessChecked, folderDisplayName } from "../folder-access-state";
 import { computerSetup } from "./computer-setup";
+import { commandAllowed } from "./command-eligibility";
 import { ChatDirect } from "./chat-direct";
 import { ChatReadonly } from "./chat-readonly";
 import { ChatHistory } from "./chat-history";
@@ -26,6 +27,7 @@ import type {
 export type SettingsProps = Readonly<{
   snapshot: WindowSnapshot;
   facade: RendererFacade;
+  setupStep?: "connection" | "folders" | "attachment" | undefined;
 }>;
 type Actions = {
   disabled: boolean;
@@ -54,8 +56,8 @@ function createFeedback() {
   const listeners = new Set<() => void>();
   return {
     pages: {} as Partial<Record<SettingsPage, PageFeedback>>,
-    busy: false,
-    uncertain: null as Intent | "unretained" | null,
+    intents: {} as Record<string, Intent>,
+    unretained: false,
     subscribe(listener: () => void) {
       listeners.add(listener);
       return () => {
@@ -107,7 +109,10 @@ export function useSettingsAttention(
 ) {
   const feedback = useSettingsFeedback(facade);
   return Boolean(
-    feedback.uncertain && !settledEdit(feedback.uncertain, snapshot),
+    feedback.unretained ||
+    Object.values(feedback.intents).some(
+      (intent) => intent.state === "unknown" && !settledEdit(intent, snapshot),
+    ),
   );
 }
 function actionFeedback(result: Intent): string {
@@ -128,27 +133,6 @@ function actionFeedback(result: Intent): string {
   if (result.code === "MODEL_ENDPOINT_UNAVAILABLE")
     return "The model connection is unavailable. See Diagnostics for details.";
   return "This action could not be completed. Review the current status or see Diagnostics for details.";
-}
-function fenced(snapshot: WindowSnapshot): boolean {
-  const settings =
-    snapshot.configuration?.status === "ready"
-      ? snapshot.configuration.settings
-      : null;
-  return (
-    snapshot.status !== "current" ||
-    snapshot.configuration?.status !== "ready" ||
-    Object.values(snapshot.intents).some(
-      (item) => item.state === "pending" || item.state === "unknown",
-    ) ||
-    Boolean(
-      settings &&
-      (settings.computer.pendingEdit ||
-        Object.values(settings.setup).some(
-          (step) => "outcomeUnknown" in step && step.outcomeUnknown,
-        ) ||
-        settings.connectors.secureMcp.runtime?.state === "outcome_unknown"),
-    )
-  );
 }
 // Evidence carries a revision, but no request ID. If another facade intent
 // changed during a picker/preview, do not attribute its evidence to our action.
@@ -200,7 +184,7 @@ function Command({
 }
 
 /** Presentation only: mounting, observation and background updates never save. */
-export function Settings({ snapshot, facade }: SettingsProps) {
+export function Settings({ snapshot, facade, setupStep }: SettingsProps) {
   const configuration = snapshot.configuration;
   const [lastReady, setLastReady] = useState<ProductSettings | null>(() =>
     configuration?.status === "ready" ? configuration.settings : null,
@@ -214,13 +198,15 @@ export function Settings({ snapshot, facade }: SettingsProps) {
     configuration?.status === "ready" ? configuration.settings : lastReady;
   const feedback = useSettingsFeedback(facade);
   const composing = useRef(false);
-  const locallyUnconfirmed = Boolean(
-    feedback.uncertain && !settledEdit(feedback.uncertain, snapshot),
-  );
-  const allowed: Actions["allowed"] = () =>
-    !feedback.busy && !locallyUnconfirmed && !fenced(snapshot);
+  const retained = (current: WindowSnapshot) =>
+    Object.values(feedback.intents).map(
+      (intent) => settledEdit(intent, current) ?? intent,
+    );
+  const allowed: Actions["allowed"] = (kind, workspaceId) =>
+    !feedback.unretained &&
+    commandAllowed(snapshot, kind, workspaceId, retained(snapshot));
   const actions: Actions = {
-    disabled: feedback.busy || locallyUnconfirmed || fenced(snapshot),
+    disabled: !allowed("general.update"),
     allowed,
     async run(command, admit) {
       const current = facade.getSnapshot();
@@ -241,10 +227,14 @@ export function Settings({ snapshot, facade }: SettingsProps) {
             : undefined,
       );
       if (
-        feedback.busy ||
-        (feedback.uncertain && !settledEdit(feedback.uncertain, current)) ||
+        feedback.unretained ||
         composing.current ||
-        fenced(current)
+        !commandAllowed(
+          current,
+          command.kind,
+          "workspaceId" in command ? command.workspaceId : undefined,
+          retained(current),
+        )
       )
         return null;
       if (!ProductConfigurationCommandSchema.safeParse(command).success) {
@@ -256,26 +246,25 @@ export function Settings({ snapshot, facade }: SettingsProps) {
       }
       if (admit && !admit(current)) return null;
       feedback.pages[page] = { request, text: "", result: null };
-      feedback.uncertain = null;
-      feedback.busy = true;
+      feedback.intents[id] = { id, state: "pending", code: null };
       report("Saving or checking…", { id, state: "pending", code: null });
       try {
         const result = await facade.configure(command, id);
-        if (result.state === "unknown") {
-          feedback.uncertain = result;
-        }
+        // Keep every unresolved dependency, even when a newer independent
+        // request owns the page message. Refresh/remount cannot settle it.
+        feedback.intents[id] = result;
         report(actionFeedback(result), result);
         return result;
       } catch {
         // Keep a local fence too if an adapter throws before retaining its intent.
-        feedback.uncertain = "unretained";
+        feedback.unretained = true;
+        feedback.intents[id] = { id, state: "unknown", code: null };
         report(
           "Outcome unknown. Do not repeat this action; inspect the existing result.",
           { id, state: "unknown", code: null },
         );
         return null;
       } finally {
-        feedback.busy = false;
         feedback.changed();
       }
     },
@@ -298,6 +287,7 @@ export function Settings({ snapshot, facade }: SettingsProps) {
     facade,
     settings: displayedSettings,
     actions,
+    setupStep,
   };
   const pageFeedback = feedback.pages[snapshot.destination.page];
   const settled = settledEdit(pageFeedback?.result ?? null, snapshot);
@@ -329,13 +319,19 @@ export function Settings({ snapshot, facade }: SettingsProps) {
       )}
       {actions.disabled && (
         <p className="notice">
-          Changes are paused while state is stale, an action is pending, or an
-          outcome is unconfirmed. Refresh observes status; it does not replay an
-          action.
+          Some actions are paused while state is stale, a dependent action is
+          pending, or its outcome is unconfirmed. Refresh observes status; it
+          does not replay an action.
         </p>
       )}
       <div hidden={snapshot.destination.page !== "general"}>
-        <SetupOverview {...props} />
+        <button
+          type="button"
+          className="subtle"
+          onClick={() => facade.navigate({ area: "setup" })}
+        >
+          Review Setup
+        </button>
         <General {...props} />
       </div>
       <div hidden={snapshot.destination.page !== "appearance"}>
@@ -368,80 +364,6 @@ export function Settings({ snapshot, facade }: SettingsProps) {
   );
 }
 
-function SetupOverview({ snapshot, settings, facade }: PageProps) {
-  const setup = computerSetup(snapshot);
-  const connector = settings.connectors.secureMcp;
-  const checked = settings.computer.workspaces.filter(
-    (workspace) =>
-      snapshot.status === "current" &&
-      snapshot.buildId &&
-      !settings.setup.computer.outcomeUnknown &&
-      folderAccessChecked(settings, workspace, snapshot.buildId),
-  ).length;
-  const steps = [
-    {
-      label: "Folders",
-      page: "folders" as const,
-      status: `${settings.computer.workspaces.length} approved · ${checked} checked`,
-      help: "Choose folders and review their access levels.",
-    },
-    {
-      label: "Connection",
-      page: "connection" as const,
-      status:
-        connector.credential === "stored"
-          ? "Tunnel credentials saved"
-          : "Credentials needed",
-      help: setup.facts.runtimeCurrent
-        ? "The local connection is running. ChatGPT attachment has its own check."
-        : "Save credentials, then start and check the connection.",
-    },
-    {
-      label: "Add to ChatGPT",
-      page: "connection" as const,
-      status: setup.ready ? "Attachment checked" : "Attachment check needed",
-      help: "Attach the tunnel in ChatGPT and verify the current connection.",
-    },
-    {
-      label: "Embedded ChatGPT · optional",
-      page: "connection" as const,
-      status: setup.embeddedChatGPT,
-      help: "Embedded ChatGPT is optional for external Computer access.",
-    },
-  ];
-  return (
-    <section aria-label="Setup overview">
-      <h2>Setup</h2>
-      <p className="description">
-        {setup.ready
-          ? "Computer ready. Review or change your setup at any time."
-          : "Continue setup. Each check has its own status."}
-      </p>
-      <div className="setup-checks">
-        {steps.map((step, index) => (
-          <button
-            key={step.label}
-            className="setup-check"
-            onClick={() =>
-              facade.navigate({ area: "settings", page: step.page })
-            }
-          >
-            <span className="setup-number">{index + 1}</span>
-            <span>
-              <strong>{step.label}</strong>
-              <small>{step.status}</small>
-              <small>{step.help}</small>
-            </span>
-          </button>
-        ))}
-      </div>
-      <p className="description">
-        Terminal &amp; Git access is optional in This Mac. Model configuration
-        is available in Diagnostics.
-      </p>
-    </section>
-  );
-}
 function General({ settings, actions }: PageProps) {
   const [start, setStart] = useState(settings.general.openAtLaunch);
   const [sidebar, setSidebar] = useState(settings.general.sidebarDefault);
@@ -950,7 +872,11 @@ function GuardedEdit({
     const before = facade.getSnapshot();
     if (
       preparing.current ||
-      fenced(before) ||
+      !commandAllowed(
+        before,
+        "computer.prepare-workspace-edit",
+        workspace.workspaceId,
+      ) ||
       (liveEdit(before, review, workspace.workspaceId) &&
         selected &&
         !consumed.current.has(selected.operationId)) ||
@@ -1037,7 +963,11 @@ function GuardedEdit({
         !consumed.current.has(value.operationId) &&
         !editConsumed(current, value.operationId) &&
         liveEdit(current, candidate, workspace.workspaceId) &&
-        !fenced(current)
+        commandAllowed(
+          current,
+          "computer.prepare-workspace-edit",
+          workspace.workspaceId,
+        )
       ) {
         setReview(candidate);
         setNotice("");
@@ -1253,7 +1183,13 @@ function ThisMac({ settings, snapshot, facade, actions }: PageProps) {
     </>
   );
 }
-function Connection({ settings, snapshot, facade, actions }: PageProps) {
+function Connection({
+  settings,
+  snapshot,
+  facade,
+  actions,
+  setupStep,
+}: PageProps) {
   const connector = settings.connectors.secureMcp;
   const setup = computerSetup(snapshot);
   const externalChallenge = setup.externalChallenge;
@@ -1268,284 +1204,298 @@ function Connection({ settings, snapshot, facade, actions }: PageProps) {
   return (
     <>
       <h2>Connection</h2>
-      <Group title="This Mac connection">
-        <p className="badges">{setup.label}</p>
-        <p className="description">{setup.next}</p>
-        <p className="description">
-          Select the tunnel client, save the tunnel, then start the connection.
-          An approved, verified folder is required for local access.
-        </p>
-        <Command
-          actions={actions}
-          command={{ kind: "connector.select-client" }}
-        >
-          Choose tunnel client…
-        </Command>
-        <p className="badges">
-          Client: {connector.tunnelClient ? "Selected" : "Not selected"} · Key:{" "}
-          {connector.credential === "stored" ? "Saved" : "Needed"} · Service:{" "}
-          {connector.runtime?.state ?? "Stopped"}
-        </p>
-        {saved && (
-          <div
-            className="credentials-saved"
-            data-unconfirmed={replacementUnconfirmed}
-            role="status"
+      <div hidden={setupStep !== undefined && setupStep !== "connection"}>
+        <Group title="This Mac connection">
+          <p className="badges">{setup.label}</p>
+          <p className="description">{setup.next}</p>
+          <p className="description">
+            Select the tunnel client, save the tunnel, then start the
+            connection. An approved, verified folder is required for local
+            access.
+          </p>
+          <Command
+            actions={actions}
+            command={{ kind: "connector.select-client" }}
           >
-            <strong>
-              {replacementUnconfirmed
-                ? "Credential replacement unconfirmed"
-                : "Tunnel credentials saved"}
-            </strong>
-            <p className="description">
-              {replacementUnconfirmed
-                ? "Do not submit another replacement. Review the existing result in Diagnostics."
-                : "The saved key stays private. Saving credentials and checking the connection are separate steps."}
-            </p>
-            {!replacing && (
-              <button
-                type="button"
-                className="subtle"
-                disabled={actions.disabled}
-                onClick={() => {
-                  setTunnelId(connector.tunnelId ?? "");
-                  setKey("");
-                  setReplacing(true);
-                }}
-              >
-                Replace credentials
-              </button>
-            )}
-          </div>
-        )}
-        {editing && (
-          <form
-            autoComplete="off"
-            onCompositionStart={() => {
-              keyComposing.current = true;
-            }}
-            onCompositionEnd={() => {
-              keyComposing.current = false;
-            }}
-            onSubmit={(event) => {
-              event.preventDefault();
-              if (
-                keyComposing.current ||
-                !actions.allowed("connector.configure")
-              )
-                return;
-              const command: ProductConfigurationCommand = {
-                kind: "connector.configure",
-                tunnelId,
-                runtimeKey: key,
-              };
-              if (
-                !key.trim() ||
-                !ProductConfigurationCommandSchema.safeParse(command).success
-              )
-                return;
-              setKey("");
-              void actions.run(command).then((result) => {
-                if (result?.state === "applied") setReplacing(false);
-              });
-            }}
-          >
-            <label className="setting-row">
-              Tunnel ID
-              <input
-                className="field"
-                value={tunnelId}
-                onChange={(event) => setTunnelId(event.currentTarget.value)}
-                required
-                maxLength={160}
-              />
-            </label>
-            <label className="setting-row">
-              Runtime key
-              <input
-                className="field"
-                type="password"
-                autoComplete="new-password"
-                value={key}
-                onChange={(event) => setKey(event.currentTarget.value)}
-                maxLength={512}
-                required
-              />
-            </label>
-            <p className="description">
-              Enter a new runtime key to save credentials. It is cleared from
-              this field when submitted.
-            </p>
-            <button
-              className="primary"
-              disabled={
-                !key.trim() ||
-                !ProductConfigurationCommandSchema.safeParse({
+            Choose tunnel client…
+          </Command>
+          <p className="badges">
+            Client: {connector.tunnelClient ? "Selected" : "Not selected"} ·
+            Key: {connector.credential === "stored" ? "Saved" : "Needed"} ·
+            Service: {connector.runtime?.state ?? "Stopped"}
+          </p>
+          {saved && (
+            <div
+              className="credentials-saved"
+              data-unconfirmed={replacementUnconfirmed}
+              role="status"
+            >
+              <strong>
+                {replacementUnconfirmed
+                  ? "Credential replacement unconfirmed"
+                  : "Tunnel credentials saved"}
+              </strong>
+              <p className="description">
+                {replacementUnconfirmed
+                  ? "Do not submit another replacement. Review the existing result in Diagnostics."
+                  : "The saved key stays private. Saving credentials and checking the connection are separate steps."}
+              </p>
+              {!replacing && (
+                <button
+                  type="button"
+                  className="subtle"
+                  disabled={!actions.allowed("connector.configure")}
+                  onClick={() => {
+                    setTunnelId(connector.tunnelId ?? "");
+                    setKey("");
+                    setReplacing(true);
+                  }}
+                >
+                  Replace credentials
+                </button>
+              )}
+            </div>
+          )}
+          {editing && (
+            <form
+              autoComplete="off"
+              onCompositionStart={() => {
+                keyComposing.current = true;
+              }}
+              onCompositionEnd={() => {
+                keyComposing.current = false;
+              }}
+              onSubmit={(event) => {
+                event.preventDefault();
+                if (
+                  keyComposing.current ||
+                  !actions.allowed("connector.configure")
+                )
+                  return;
+                const command: ProductConfigurationCommand = {
                   kind: "connector.configure",
                   tunnelId,
                   runtimeKey: key,
-                }).success ||
-                !actions.allowed("connector.configure")
-              }
+                };
+                if (
+                  !key.trim() ||
+                  !ProductConfigurationCommandSchema.safeParse(command).success
+                )
+                  return;
+                setKey("");
+                void actions.run(command).then((result) => {
+                  if (result?.state === "applied") setReplacing(false);
+                });
+              }}
             >
-              Save credentials
-            </button>
-            {saved && (
+              <label className="setting-row">
+                Tunnel ID
+                <input
+                  className="field"
+                  value={tunnelId}
+                  onChange={(event) => setTunnelId(event.currentTarget.value)}
+                  required
+                  maxLength={160}
+                />
+              </label>
+              <label className="setting-row">
+                Runtime key
+                <input
+                  className="field"
+                  type="password"
+                  autoComplete="new-password"
+                  value={key}
+                  onChange={(event) => setKey(event.currentTarget.value)}
+                  maxLength={512}
+                  required
+                />
+              </label>
+              <p className="description">
+                Enter a new runtime key to save credentials. It is cleared from
+                this field when submitted.
+              </p>
+              <button
+                className="primary"
+                disabled={
+                  !key.trim() ||
+                  !ProductConfigurationCommandSchema.safeParse({
+                    kind: "connector.configure",
+                    tunnelId,
+                    runtimeKey: key,
+                  }).success ||
+                  !actions.allowed("connector.configure")
+                }
+              >
+                Save credentials
+              </button>
+              {saved && (
+                <button
+                  type="button"
+                  className="subtle"
+                  onClick={() => {
+                    setKey("");
+                    setTunnelId(connector.tunnelId ?? "");
+                    setReplacing(false);
+                  }}
+                >
+                  Keep saved credentials
+                </button>
+              )}
+            </form>
+          )}
+          {!setup.canStart &&
+            !setup.canReconnect &&
+            setup.facts.folder !== "ready" && (
               <button
                 type="button"
-                className="subtle"
-                onClick={() => {
-                  setKey("");
-                  setTunnelId(connector.tunnelId ?? "");
-                  setReplacing(false);
-                }}
+                className="text-button"
+                onClick={() =>
+                  facade.navigate({ area: "settings", page: "folders" })
+                }
               >
-                Keep saved credentials
+                Review folder access
               </button>
             )}
-          </form>
-        )}
-        {!setup.canStart &&
-          !setup.canReconnect &&
-          setup.facts.folder !== "ready" && (
-            <button
-              type="button"
-              className="text-button"
-              onClick={() =>
-                facade.navigate({ area: "settings", page: "folders" })
-              }
+          <div className="control-row">
+            <Command
+              actions={actions}
+              disabled={!setup.canStart}
+              admit={(current) => computerSetup(current).canStart}
+              command={{ kind: "connector.start" }}
             >
-              Review folder access
-            </button>
-          )}
-        <div className="control-row">
-          <Command
-            actions={actions}
-            disabled={!setup.canStart}
-            admit={(current) => computerSetup(current).canStart}
-            command={{ kind: "connector.start" }}
-          >
-            Start connection
-          </Command>
-          <Command
-            actions={actions}
-            disabled={!setup.canReconnect}
-            admit={(current) => computerSetup(current).canReconnect}
-            command={{ kind: "connector.repair" }}
-          >
-            Reconnect
-          </Command>
-          <Command
-            actions={actions}
-            command={{ kind: "connector.check-health" }}
-          >
-            Check local connection
-          </Command>
-          <Command actions={actions} command={{ kind: "connector.stop" }}>
-            Stop connection
-          </Command>
-        </div>
-        <p className="description">
-          Reconnect asks the host to confirm Stop before Start and creates a
-          fresh challenge. It does not resend an earlier verification. Pending,
-          unknown or stale state must be resolved before reconnecting.
-        </p>
-        <button
-          type="button"
-          className="text-button"
-          onClick={() =>
-            facade.navigate({ area: "settings", page: "diagnostics" })
-          }
-        >
-          Connection diagnostics
-        </button>
-      </Group>
-      <Group title="Add to ChatGPT">
-        <p className="description">
-          Attach your tunnel in ChatGPT. The runtime key stays in Farol.
-          Checking the local connection does not prove attachment.
-        </p>
-        <div className="control-row">
-          <Command
-            actions={actions}
-            command={{ kind: "onboarding.open-help", destination: "tunnels" }}
-          >
-            Open Tunnels
-          </Command>
-          <Command
-            actions={actions}
-            command={{
-              kind: "onboarding.open-help",
-              destination: "setup-guide",
-            }}
-          >
-            Connection guide
-          </Command>
-        </div>
-        {externalChallenge && (
-          <div
-            className="connector-challenge"
-            data-connector-challenge="pending"
-          >
-            <strong>Verify from external ChatGPT</strong>
-            <p>
-              Attach tunnel {externalChallenge.tunnelId} in ChatGPT Settings.
-              Ask the connector to call farol_next_connector_verify once with:
-            </p>
-            <dl>
-              <div>
-                <dt>challenge</dt>
-                <dd>
-                  <code>{externalChallenge.value}</code>
-                </dd>
-              </div>
-              <div>
-                <dt>workspaceId</dt>
-                <dd>
-                  <code>{externalChallenge.workspaceId}</code>
-                </dd>
-              </div>
-            </dl>
-            <p>Verified folder: {externalChallenge.root}</p>
-            <small>
-              The one-time check lists only the approved workspace root and
-              returns counts, never names or file contents. Then press Check
-              attachment.
-            </small>
+              Start connection
+            </Command>
+            <Command
+              actions={actions}
+              disabled={!setup.canReconnect}
+              admit={(current) => computerSetup(current).canReconnect}
+              command={{ kind: "connector.repair" }}
+            >
+              Reconnect
+            </Command>
+            <Command
+              actions={actions}
+              command={{ kind: "connector.check-health" }}
+            >
+              Check local connection
+            </Command>
+            <Command actions={actions} command={{ kind: "connector.stop" }}>
+              Stop connection
+            </Command>
           </div>
-        )}
-        <p className="badges" role="status">
-          {setup.ready
-            ? "Attachment checked · Computer ready"
-            : "Attachment check needed"}
-        </p>
-        <Command
-          actions={actions}
-          command={{ kind: "connector.check-attachment" }}
-          disabled={!setup.canCheckAttachment}
-          admit={(current) => computerSetup(current).canCheckAttachment}
-        >
-          Check attachment
-        </Command>
-      </Group>
-      <Group title="Embedded ChatGPT · optional">
-        <p className="badges">{setup.embeddedChatGPT}</p>
-        <p className="description">
-          Embedded sign-in is optional for external Computer access. It has its
-          own check.
-        </p>
-        <div className="control-row">
-          <Command actions={actions} command={{ kind: "chatgpt.open-sign-in" }}>
-            Sign in
+          <p className="description">
+            Reconnect asks the host to confirm Stop before Start and creates a
+            fresh challenge. It does not resend an earlier verification.
+            Pending, unknown or stale state must be resolved before
+            reconnecting.
+          </p>
+          <button
+            type="button"
+            className="text-button"
+            onClick={() =>
+              facade.navigate({ area: "settings", page: "diagnostics" })
+            }
+          >
+            Connection diagnostics
+          </button>
+        </Group>
+      </div>
+      <div hidden={setupStep !== undefined && setupStep !== "attachment"}>
+        <Group title="Add to ChatGPT">
+          <p className="description">
+            Attach your tunnel in ChatGPT. The runtime key stays in Farol.
+            Checking the local connection does not prove attachment.
+          </p>
+          <div className="control-row">
+            <Command
+              actions={actions}
+              command={{ kind: "onboarding.open-help", destination: "tunnels" }}
+            >
+              Open Tunnels
+            </Command>
+            <Command
+              actions={actions}
+              command={{
+                kind: "onboarding.open-help",
+                destination: "setup-guide",
+              }}
+            >
+              Connection guide
+            </Command>
+          </div>
+          {externalChallenge && (
+            <div
+              className="connector-challenge"
+              data-connector-challenge="pending"
+            >
+              <strong>Verify from external ChatGPT</strong>
+              <p>
+                Attach tunnel {externalChallenge.tunnelId} in ChatGPT Settings.
+                Ask the connector to call farol_next_connector_verify once with:
+              </p>
+              <dl>
+                <div>
+                  <dt>challenge</dt>
+                  <dd>
+                    <code>{externalChallenge.value}</code>
+                  </dd>
+                </div>
+                <div>
+                  <dt>workspaceId</dt>
+                  <dd>
+                    <code>{externalChallenge.workspaceId}</code>
+                  </dd>
+                </div>
+              </dl>
+              <p>Verified folder: {externalChallenge.root}</p>
+              <small>
+                The one-time check lists only the approved workspace root and
+                returns counts, never names or file contents. Then press Check
+                attachment.
+              </small>
+            </div>
+          )}
+          <p className="badges" role="status">
+            {setup.ready
+              ? "Attachment checked · Computer ready"
+              : "Attachment check needed"}
+          </p>
+          <Command
+            actions={actions}
+            command={{ kind: "connector.check-attachment" }}
+            disabled={!setup.canCheckAttachment}
+            admit={(current) => computerSetup(current).canCheckAttachment}
+          >
+            Check attachment
           </Command>
-          <Command actions={actions} command={{ kind: "chatgpt.open-browser" }}>
-            Open ChatGPT
-          </Command>
-          <Command actions={actions} command={{ kind: "chatgpt.verify" }}>
-            Check sign-in
-          </Command>
-        </div>
-      </Group>
+        </Group>
+      </div>
+      <div hidden={setupStep !== undefined}>
+        <Group title="Embedded ChatGPT · optional">
+          <p className="badges">{setup.embeddedChatGPT}</p>
+          <p className="description">
+            Embedded sign-in is optional for external Computer access. It has
+            its own check.
+          </p>
+          <div className="control-row">
+            <Command
+              actions={actions}
+              command={{ kind: "chatgpt.open-sign-in" }}
+            >
+              Sign in
+            </Command>
+            <Command
+              actions={actions}
+              command={{ kind: "chatgpt.open-browser" }}
+            >
+              Open ChatGPT
+            </Command>
+            <Command actions={actions} command={{ kind: "chatgpt.verify" }}>
+              Check sign-in
+            </Command>
+          </div>
+        </Group>
+      </div>
     </>
   );
 }
@@ -1950,13 +1900,17 @@ function Updates({ snapshot, facade, actions }: PageProps) {
             disabled={
               checked ||
               actions.disabled ||
-              fenced(snapshot) ||
+              !commandAllowed(snapshot, "general.update") ||
               update.phase === "checking" ||
               update.phase === "downloading" ||
               update.phase === "applying"
             }
             onClick={() => {
-              if (busy.current || fenced(facade.getSnapshot())) return;
+              if (
+                busy.current ||
+                !commandAllowed(facade.getSnapshot(), "general.update")
+              )
+                return;
               busy.current = true;
               setChecked(true);
               void facade.update("check").catch(() => {});

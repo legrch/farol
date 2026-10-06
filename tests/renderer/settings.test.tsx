@@ -50,7 +50,9 @@ async function mount(
   value: ProductSettings = settings(),
   environment: "preview" | "dev" = "preview",
   update: WindowSnapshot["update"] = { phase: "idle", checkedAt: null },
+  setupStep?: "connection" | "folders" | "attachment",
 ) {
+  let activeSetupStep = setupStep;
   const f = fixture();
   vi.mocked(f.api.installedUpdate).mockResolvedValue(update);
   const configuration = { status: "ready" as const, settings: value };
@@ -74,7 +76,7 @@ async function mount(
   function View() {
     const snapshot = useSyncExternalStore(c.subscribe, c.getSnapshot);
     return snapshot.destination.area === "settings" ? (
-      <Settings snapshot={snapshot} facade={c} />
+      <Settings snapshot={snapshot} facade={c} setupStep={activeSetupStep} />
     ) : null;
   }
   await act(async () =>
@@ -127,6 +129,16 @@ async function mount(
     pageTo,
     calls,
     configuration,
+    async stepTo(step: "connection" | "folders" | "attachment") {
+      activeSetupStep = step;
+      await act(async () =>
+        root.render(
+          <StrictMode>
+            <View />
+          </StrictMode>,
+        ),
+      );
+    },
     async remount() {
       await act(async () => root.render(null));
       await act(async () =>
@@ -243,7 +255,6 @@ describe("bounded Settings writer", () => {
     expect(
       [...h.host.querySelectorAll("h2")].map((node) => node.textContent),
     ).toEqual([
-      "Setup",
       "Appearance",
       "Folders",
       "This Mac",
@@ -1745,33 +1756,63 @@ function activePage(host: Element) {
   return host.querySelector<HTMLElement>(".settings-page > div:not([hidden])")!;
 }
 describe("owner Setup presentation checkpoint (DOM fixtures only)", () => {
-  it("offers four compact checks without starting setup or requiring Model", async () => {
+  it("General offers Review Setup navigation without effects or Model requirements", async () => {
     const h = await mount("general");
-    const overview = h.host.querySelector('[aria-label="Setup overview"]')!;
-    const checks = [
-      ...overview.querySelectorAll<HTMLButtonElement>(".setup-check"),
-    ];
-    expect(
-      checks.map((check) => check.querySelector("strong")?.textContent),
-    ).toEqual([
-      "Folders",
-      "Connection",
-      "Add to ChatGPT",
-      "Embedded ChatGPT · optional",
-    ]);
-    expect(overview.textContent).toContain("Continue setup");
-    for (const [index, page] of [
-      [0, "folders"],
-      [1, "connection"],
-      [2, "connection"],
-      [3, "connection"],
-    ] as const) {
-      await act(async () => checks[index]!.click());
-      expect(h.c.getSnapshot().destination.page).toBe(page);
-      await h.pageTo("general");
-    }
+    const navigate = vi.spyOn(h.c, "navigate");
+    await h.click("Review Setup");
+    expect(navigate).toHaveBeenCalledExactlyOnceWith({ area: "setup" });
+    expect(h.host.querySelector('[aria-label="Setup overview"]')).toBeNull();
     expect(h.calls()).toEqual([]);
     expect(h.f.api.task).not.toHaveBeenCalled();
+  });
+  it.each(["connection", "attachment"] as const)(
+    "Setup %s hides other groups while retaining mounted forms",
+    async (step) => {
+      const h = await mount(
+        "connection",
+        settings(),
+        "preview",
+        { phase: "idle", checkedAt: null },
+        step,
+      );
+      const group = (title: string) =>
+        h.host.querySelector(`[aria-label="${title}"]`)!;
+      expect(group("This Mac connection").closest("div[hidden]") !== null).toBe(
+        step !== "connection",
+      );
+      expect(group("Add to ChatGPT").closest("div[hidden]") !== null).toBe(
+        step !== "attachment",
+      );
+      expect(
+        group("Embedded ChatGPT · optional").closest("div[hidden]"),
+      ).not.toBeNull();
+      expect(
+        group("This Mac connection").querySelector('input[type="password"]'),
+      ).not.toBeNull();
+      expect(h.calls()).toEqual([]);
+    },
+  );
+  it("Setup step changes retain the same credential draft nodes without saving", async () => {
+    const h = await mount(
+      "connection",
+      settings(),
+      "preview",
+      { phase: "idle", checkedAt: null },
+      "connection",
+    );
+    const tunnel = h.field("Tunnel ID");
+    const key = h.field("Runtime key");
+    await change(tunnel, "draft-tunnel");
+    await change(key, "draft-key");
+    await h.stepTo("attachment");
+    expect(tunnel.isConnected).toBe(true);
+    expect(tunnel.closest("div[hidden]")).not.toBeNull();
+    await h.stepTo("connection");
+    expect(h.field("Tunnel ID")).toBe(tunnel);
+    expect(h.field("Runtime key")).toBe(key);
+    expect(tunnel.value).toBe("draft-tunnel");
+    expect(key.value).toBe("draft-key");
+    expect(h.calls()).toEqual([]);
   });
   it("keeps all folders visible and binds checks, access changes and removal to their own folder", async () => {
     const value = withFolder();
@@ -2166,12 +2207,7 @@ describe("review regressions: retained action origins and exact edit delivery", 
     value.setup.chatgpt.verified = null;
     value.setup.connect.verified = null;
     value.connectors.secureMcp.attachment = null;
-    const h = await mount("general", value);
-    const continueStep = [
-      ...activePage(h.host).querySelectorAll<HTMLButtonElement>(".setup-check"),
-    ].find((button) => button.textContent?.includes("Add to ChatGPT"))!;
-    await act(async () => continueStep.click());
-    expect(h.c.getSnapshot().destination.page).toBe("connection");
+    const h = await mount("connection", value);
     const attachment = () =>
       activePage(h.host).querySelector('[aria-label="Add to ChatGPT"]')!;
     expect(attachment().querySelector("details")).toBeNull();
@@ -2192,5 +2228,131 @@ describe("review regressions: retained action origins and exact edit delivery", 
     );
     expect(h.calls()).toEqual([{ kind: "connector.check-attachment" }]);
     expect(activePage(h.host).textContent).not.toContain("Check account");
+  });
+});
+
+// Eligibility fixtures prove presentation/adapter behavior only.
+describe("dependency-scoped Settings admission", () => {
+  it.each(["pending", "refused", "unknown"] as const)(
+    "independent Model %s allows folder actions without settling Model",
+    async (state) => {
+      const h = await mount("diagnostics", withFolder());
+      const wait = deferred<unknown>();
+      vi.mocked(h.f.api.configure).mockReturnValueOnce(wait.promise);
+      await h.click("Preview model configuration");
+      if (state !== "pending")
+        await act(async () =>
+          state === "unknown"
+            ? wait.reject(new Error("lost model reply"))
+            : wait.resolve({
+                ok: false,
+                error: "MODEL_ENDPOINT_UNAVAILABLE",
+                snapshot: h.configuration,
+              }),
+        );
+      await h.pageTo("folders");
+      expect(h.button("Check access").disabled).toBe(false);
+      await h.click("Check access");
+      expect(h.calls()).toEqual([
+        { kind: "model.preview", selectAsDefault: false },
+        { kind: "computer.check-folder", workspaceId },
+      ]);
+      if (state === "pending")
+        await act(async () => wait.reject(new Error("late old model reply")));
+      if (state !== "refused") {
+        await act(async () => h.c.refresh());
+        await h.remount();
+        expect(h.button("Check access").disabled).toBe(false);
+        expect(
+          h.c.getSnapshot().intents["settings:model.preview:"]?.state,
+        ).toBe("unknown");
+        await h.pageTo("diagnostics");
+        expect(h.button("Preview model configuration").disabled).toBe(true);
+        expect(h.button("Check model status").disabled).toBe(false);
+        await h.click("Check model status");
+        expect(
+          h.c.getSnapshot().intents["settings:model.preview:"]?.state,
+        ).toBe("unknown");
+        await h.remount();
+        expect(h.button("Preview model configuration").disabled).toBe(true);
+      }
+    },
+  );
+  it.each(["pending", "refused", "unknown"] as const)(
+    "independent Chat browser %s allows folder actions and keeps its receipt",
+    async (state) => {
+      const h = await mount("connection", withFolder());
+      const wait = deferred<unknown>();
+      vi.mocked(h.f.api.configure).mockReturnValueOnce(wait.promise);
+      await h.click("Open ChatGPT");
+      if (state !== "pending")
+        await act(async () =>
+          state === "unknown"
+            ? wait.reject(new Error("lost browser reply"))
+            : wait.resolve({
+                ok: false,
+                error: "CHATGPT_PAGE_UNREACHABLE",
+                snapshot: h.configuration,
+              }),
+        );
+      await h.pageTo("folders");
+      expect(h.button("Check access").disabled).toBe(false);
+      await h.click("Check access");
+      if (state === "pending")
+        await act(async () => wait.reject(new Error("late browser reply")));
+      await h.remount();
+      expect(h.button("Check access").disabled).toBe(false);
+      if (state !== "refused") {
+        await h.pageTo("connection");
+        expect(h.button("Open ChatGPT").disabled).toBe(true);
+        expect(
+          h.c.getSnapshot().intents["settings:chatgpt.open-browser:"]?.state,
+        ).toBe("unknown");
+      }
+      expect(h.calls()).toEqual([
+        { kind: "chatgpt.open-browser" },
+        { kind: "computer.check-folder", workspaceId },
+      ]);
+    },
+  );
+  it("retained Chat readiness uncertainty permits folders while sign-in stays fenced through refresh/remount", async () => {
+    const value = withFolder();
+    value.setup.chatgpt.outcomeUnknown = true;
+    const h = await mount("connection", value);
+    expect(h.button("Sign in").disabled).toBe(true);
+    await h.pageTo("folders");
+    await h.click("Check access");
+    await act(async () => h.c.refresh());
+    await h.remount();
+    expect(h.button("Check access").disabled).toBe(false);
+    expect(h.c.getSnapshot().configuration).toEqual(h.configuration);
+    await h.pageTo("connection");
+    expect(h.button("Sign in").disabled).toBe(true);
+  });
+  it("shared sign-in writer unknown blocks Computer but leaves navigation and Refresh observation available", async () => {
+    const h = await mount("connection", withFolder());
+    vi.mocked(h.f.api.configure).mockRejectedValueOnce(
+      new Error("lost shared writer reply"),
+    );
+    await h.click("Sign in");
+    await h.pageTo("folders");
+    expect(h.button("Check access").disabled).toBe(true);
+    await h.remount();
+    await h.pageTo("diagnostics");
+    await h.click("Refresh status");
+    await h.click("Return to Connection");
+    expect(h.button("Sign in").disabled).toBe(true);
+    expect(h.calls()).toHaveLength(1);
+  });
+  it("an unretained Model adapter failure stays global across remount", async () => {
+    const h = await mount("diagnostics", withFolder());
+    vi.spyOn(h.c, "configure").mockRejectedValueOnce(
+      new Error("adapter lost retention"),
+    );
+    await h.click("Preview model configuration");
+    await h.pageTo("folders");
+    await h.remount();
+    expect(h.button("Check access").disabled).toBe(true);
+    expect(h.calls()).toEqual([]);
   });
 });

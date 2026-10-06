@@ -4,6 +4,7 @@ import {
 } from "../guided-onboarding";
 import { routeReadiness } from "../setup-presentation";
 import type { WindowSnapshot } from "./contract";
+import { dependencyFences } from "./command-eligibility";
 
 /** Read-only presentation of existing authority and receipts; never a grant. */
 export function computerSetup(snapshot: WindowSnapshot) {
@@ -21,20 +22,7 @@ export function computerSetup(snapshot: WindowSnapshot) {
     settings?.computer.workspaces.find(
       (item) => item.workspaceId === verified?.workspaceId,
     ) ?? null;
-  const pending = Object.values(snapshot.intents).some(
-    (intent) => intent.state === "pending",
-  );
-  const unknown =
-    Object.values(snapshot.intents).some(
-      (intent) => intent.state === "unknown",
-    ) ||
-    Boolean(
-      settings &&
-      Object.values(settings.setup).some(
-        (step) => "outcomeUnknown" in step && step.outcomeUnknown,
-      ),
-    ) ||
-    facts.outcomeUnknown;
+  const { pending, unknown } = dependencyFences(snapshot, "computer");
   const current =
     snapshot.status === "current" &&
     snapshot.runtime === "ready" &&
