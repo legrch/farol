@@ -12,7 +12,8 @@ import os from "node:os";
 import path from "node:path";
 import { _electron as electron } from "playwright-core";
 import {
-  assertOwnerPreviewIdle,
+  assertNativePreviewAdmission,
+  recheckNativePreviewIsolation,
   readOwnedStartupMarker,
 } from "./native-preview-admission.mjs";
 
@@ -254,6 +255,7 @@ const ownerPreviewStateRoot = path.join(
   "Library/Application Support/Farol Next Preview/farol-next-state",
 );
 const profiles = new Map();
+const profileAdmissions = new Map();
 let primaryFailure;
 const cleanupFailures = [];
 let cleanupUnknown = false;
@@ -402,10 +404,6 @@ async function launch(environment, mode = "normal", profile = mode) {
     undefined,
     "GUIDED_SETUP_PRIOR_INSTANCE_NOT_CLOSED",
   );
-  observations.push({
-    kind: "owner-preview-idle-preflight",
-    ...(await assertOwnerPreviewIdle(ownerPreviewStateRoot)),
-  });
   profileIsolationConfirmed = false;
   let profileRoot = profiles.get(profile);
   const freshProfile = !profileRoot;
@@ -422,9 +420,12 @@ async function launch(environment, mode = "normal", profile = mode) {
   const home = profileRoot;
   const appData = path.join(profileRoot, "app-data");
   const normalPackagedProfile = packaged && mode === "normal-profile";
-  const userData = normalPackagedProfile
-    ? path.join(appData, "Farol Next Preview")
-    : path.join(profileRoot, "user-data");
+  const userData =
+    environment === "dev"
+      ? path.join(appData, "Farol Dev")
+      : normalPackagedProfile
+        ? path.join(appData, "Farol Next Preview")
+        : path.join(profileRoot, "user-data");
   await fs.mkdir(home, { recursive: true, mode: 0o700 });
   await fs.mkdir(appData, { recursive: true, mode: 0o700 });
   await fs.mkdir(userData, { recursive: true, mode: 0o700 });
@@ -457,6 +458,15 @@ async function launch(environment, mode = "normal", profile = mode) {
     },
     timeout: 15000,
   };
+  const admission = await assertNativePreviewAdmission(ownerPreviewStateRoot, {
+    profileRoot,
+    proof,
+    launchOptions,
+    fixture: chatFixture,
+    auxiliaryRoot: temporaryRoot,
+    previous: profileAdmissions.get(profileRoot),
+  });
+  observations.push(admission);
   const pending = electron.launch(launchOptions);
   // A late launch stays owned and is closed; never start another on top of it.
   closingLateLaunch = false;
@@ -486,24 +496,27 @@ async function launch(environment, mode = "normal", profile = mode) {
     return value;
   });
   application = await bounded(pendingLaunch, "GUIDED_SETUP_LAUNCH_TIMEOUT");
+  const window = await bounded(
+    application.firstWindow(),
+    "GUIDED_SETUP_WINDOW_TIMEOUT",
+    30000,
+  );
   // Prove selected native paths before touching UI. HOME alone does not
   // select Electron's profile; both environments require the private proof.
-  const nativePaths = await application.evaluate(({ app }) => ({
+  const nativePaths = await application.evaluate(({ app, BrowserWindow }) => ({
+    home: app.getPath("home"),
     userData: app.getPath("userData"),
     sessionData: app.getPath("sessionData"),
+    temp: app.getPath("temp"),
+    windows: BrowserWindow.getAllWindows().map((window) => ({
+      visible: window.isVisible(),
+      focused: window.isFocused(),
+    })),
   }));
-  for (const actual of Object.values(nativePaths)) {
-    const physical = await fs.realpath(actual);
-    assert.ok(
-      physical.startsWith(`${await fs.realpath(profileRoot)}${path.sep}`),
-      "GUIDED_SETUP_PROFILE_NOT_OWNED",
-    );
-  }
-  if (environment === "preview")
-    assert.equal(
-      await fs.realpath(nativePaths.userData),
-      await fs.realpath(userData),
-    );
+  profileAdmissions.set(
+    profileRoot,
+    await recheckNativePreviewIsolation(admission, nativePaths),
+  );
   profileIsolationConfirmed = true;
   activeFixtureLaunch = launchOptions;
   activeFixtureProfile = { home, userData: nativePaths.userData };
@@ -513,11 +526,6 @@ async function launch(environment, mode = "normal", profile = mode) {
     profileRoot,
     nativePaths,
   });
-  const window = await bounded(
-    application.firstWindow(),
-    "GUIDED_SETUP_WINDOW_TIMEOUT",
-    30000,
-  );
   await bounded(waitForReactShell(window), "GUIDED_SETUP_REACT_SHELL_TIMEOUT");
   const child = application.process();
   const startupDeadline = Date.now() + 30000;
