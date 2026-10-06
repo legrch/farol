@@ -10,6 +10,7 @@ import { runBoundedProcess } from "./bounded-process.mjs";
 import { sourceIdentity } from "../../tooling/source-identity.mjs";
 import { verifyInputManifest } from "../../tooling/build-contract.mjs";
 import { verifyGoCoreArtifact } from "../../tooling/go-core-artifact.mjs";
+import { shellGeometry } from "../../src/pkg/shell-layout/geometry.ts";
 import {
   startChatGptFixture,
   stopChatGptFixture,
@@ -132,6 +133,7 @@ async function launchApplication(env) {
   await save();
   const first = await result.firstWindow({ timeout: 15_000 });
   await ready(first);
+  await assertHiddenWindows(result);
   const userData = await result.evaluate(({ app }) => app.getPath("userData"));
   record.stateRoot = path.join(userData, "farol-next-state");
   const marker = JSON.parse(
@@ -196,6 +198,24 @@ async function stopApplication(application, ownerSignal) {
 const closeApplication = (application) => stopApplication(application, false);
 const stopApplicationWithOwnerSignal = (application) =>
   stopApplication(application, true);
+async function assertHiddenWindows(application) {
+  const windows = await application.evaluate(({ BrowserWindow }) =>
+    BrowserWindow.getAllWindows().map((owner) => ({
+      id: owner.id,
+      visible: owner.isVisible(),
+      focused: owner.isFocused(),
+    })),
+  );
+  assert.ok(windows.length > 0, "HIDDEN_SETUP_WINDOW_REQUIRED");
+  for (const owner of windows) {
+    assert.equal(owner.visible, false, `HIDDEN_SETUP_WINDOW_SHOWN:${owner.id}`);
+    assert.equal(
+      owner.focused,
+      false,
+      `HIDDEN_SETUP_WINDOW_FOCUSED:${owner.id}`,
+    );
+  }
+}
 async function ready(window) {
   await window.locator(".desktop").waitFor({ state: "visible" });
   // Native bootstrap is asynchronous; Playwright predicates do not establish
@@ -528,6 +548,7 @@ try {
             })),
         ),
       );
+      await assertHiddenWindows(application);
       if (views.length === 0) return;
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
@@ -589,6 +610,360 @@ try {
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
   assert.equal(restoredAttached, true, "RESTORED_TASK_RAIL_SELECTION_REQUIRED");
+  // Extend this same restored idle browser, without another app/provider lane.
+  // Electron attachment and CSS rectangles are hidden evidence only: input
+  // below is renderer-directed, not visible compositor, OS AX, focus or IME QA.
+  const button = (name) =>
+    reopenedWindow.getByRole("button", { name, exact: true });
+  const originalWindow = await application.evaluate(({ BrowserWindow }, id) => {
+    const owner = BrowserWindow.getAllWindows().find((candidate) =>
+      candidate.contentView.children.some(
+        (view) => view.webContents?.id === id,
+      ),
+    );
+    if (!owner) throw new Error("RESTORED_BROWSER_OWNER_REQUIRED");
+    return {
+      id: owner.id,
+      bounds: owner.getBounds(),
+      size: owner.getContentSize(),
+    };
+  }, reopenedContents.id);
+  const originalShell = await reopenedWindow
+    .locator(".desktop")
+    .evaluate((element) => ({
+      theme: element.dataset.theme,
+      sidebar: element.dataset.sidebar,
+      width: Number.parseFloat(
+        getComputedStyle(element).getPropertyValue("--page-list-width"),
+      ),
+    }));
+  async function setContentSize(width) {
+    await application.evaluate(
+      ({ BrowserWindow }, input) => {
+        BrowserWindow.fromId(input.id).setContentSize(
+          input.width,
+          input.height,
+        );
+      },
+      { id: originalWindow.id, width, height: originalWindow.size[1] },
+    );
+    await reopenedWindow.waitForFunction(
+      (width) => window.innerWidth === width,
+      width,
+    );
+    assert.deepEqual(
+      await application.evaluate(
+        ({ BrowserWindow }, id) => BrowserWindow.fromId(id).getContentSize(),
+        originalWindow.id,
+      ),
+      [width, originalWindow.size[1]],
+      "REQUESTED_CONTENT_SIZE_REQUIRED",
+    );
+  }
+  async function assertBrowserGeometry(theme, sidebar, pageListWidth) {
+    await reopenedWindow.waitForFunction(
+      ({ theme, sidebar, pageListWidth }) => {
+        const shell = document.querySelector(".desktop");
+        return (
+          shell?.dataset.theme === theme &&
+          shell.dataset.sidebar === sidebar &&
+          shell.dataset.sidebarResizing === "false" &&
+          Number.parseFloat(
+            getComputedStyle(shell).getPropertyValue("--page-list-width"),
+          ) === pageListWidth
+        );
+      },
+      { theme, sidebar, pageListWidth },
+    );
+    let native;
+    let expected;
+    for (let attempt = 0; attempt < 100; attempt++) {
+      await assertHiddenWindows(application);
+      native = await application.evaluate(({ BrowserWindow }, id) => {
+        const owner = BrowserWindow.fromId(id);
+        return {
+          size: owner.getContentSize(),
+          views: owner.contentView.children
+            .filter(
+              (view) =>
+                "webContents" in view &&
+                view.webContents.id !== owner.webContents.id,
+            )
+            .map((view) => ({
+              id: view.webContents.id,
+              visible: view.getVisible(),
+              bounds: view.getBounds(),
+            })),
+        };
+      }, originalWindow.id);
+      const x =
+        shellGeometry.sidebarRail + (sidebar === "full" ? pageListWidth : 0);
+      expected = {
+        x,
+        y: shellGeometry.windowBar,
+        width: native.size[0] - x,
+        height: native.size[1] - shellGeometry.windowBar,
+      };
+      if (
+        native.views.length === 1 &&
+        native.views[0].id === reopenedContents.id &&
+        native.views[0].visible &&
+        Object.entries(expected).every(
+          ([key, value]) => native.views[0].bounds[key] === value,
+        )
+      )
+        break;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    assert.deepEqual(
+      native.views,
+      [{ id: reopenedContents.id, visible: true, bounds: expected }],
+      "RESTORED_NATIVE_BROWSER_GEOMETRY",
+    );
+    const dom = await reopenedWindow.evaluate(() => {
+      const rect = (selector) => {
+        const bounds = document.querySelector(selector).getBoundingClientRect();
+        return {
+          x: bounds.x,
+          y: bounds.y,
+          width: bounds.width,
+          height: bounds.height,
+        };
+      };
+      const sidebar = document.querySelector(".contextual-sidebar");
+      const divider = document.querySelector(".page-list-resizer");
+      const line = divider && getComputedStyle(divider, "::after");
+      return {
+        size: [window.innerWidth, window.innerHeight],
+        stage: rect(".stage"),
+        rail: rect(".rail"),
+        toolbar: rect(".toolbar"),
+        sidebar: sidebar ? rect(".contextual-sidebar") : null,
+        divider: divider
+          ? {
+              count: document.querySelectorAll(".page-list-resizer").length,
+              right: divider.getBoundingClientRect().right,
+              lineWidth: line.width,
+              content: line.content,
+              background: line.backgroundColor,
+              sidebarBorder: getComputedStyle(sidebar).borderRightWidth,
+              stageBorder: getComputedStyle(document.querySelector(".stage"))
+                .borderLeftWidth,
+            }
+          : null,
+      };
+    });
+    assert.deepEqual(
+      dom.size,
+      native.size,
+      "RENDERER_NATIVE_CONTENT_SIZE_DRIFT",
+    );
+    assert.deepEqual(
+      dom.stage,
+      expected,
+      "RENDERER_NATIVE_BROWSER_BOUNDS_DRIFT",
+    );
+    assert.equal(dom.rail.width, shellGeometry.sidebarRail);
+    assert.equal(dom.toolbar.height, shellGeometry.windowBar);
+    if (sidebar === "full") {
+      assert.deepEqual(dom.sidebar, {
+        x: shellGeometry.sidebarRail,
+        y: expected.y,
+        width: pageListWidth,
+        height: expected.height,
+      });
+      assert.equal(dom.divider.count, 1, "SINGLE_PAGE_LIST_DIVIDER_REQUIRED");
+      assert.equal(dom.divider.right, expected.x);
+      assert.equal(dom.divider.lineWidth, "1px");
+      assert.equal(dom.divider.content, '""');
+      assert.notEqual(dom.divider.background, "rgba(0, 0, 0, 0)");
+      assert.equal(
+        dom.divider.sidebarBorder,
+        "0px",
+        "DUPLICATE_SIDEBAR_DIVIDER",
+      );
+      assert.equal(dom.divider.stageBorder, "0px", "DUPLICATE_STAGE_DIVIDER");
+    } else {
+      assert.equal(dom.sidebar, null);
+      assert.equal(dom.divider, null);
+    }
+    assert.equal(
+      (await fixtureContents(retainedTaskId)).id,
+      reopenedContents.id,
+      "RESTORED_BROWSER_IDENTITY_DRIFT",
+    );
+    report.checks.push(
+      `restored-idle-${theme}-${sidebar}-${pageListWidth}-bounds:${JSON.stringify(expected)}`,
+    );
+    return { size: native.size, stage: dom.stage, sidebar: dom.sidebar };
+  }
+  // A local DOM probe records whether renderer-directed overlay interaction
+  // leaked into this exact synthetic provider. Never send input via its owner.
+  await application.evaluate(async ({ webContents }, id) => {
+    await webContents.fromId(id).executeJavaScript(`(() => {
+      window.__farolOverlayInputCount = 0;
+      for (const event of ['pointerdown', 'keydown', 'input'])
+        document.addEventListener(event, () => window.__farolOverlayInputCount++, true);
+    })()`);
+  }, reopenedContents.id);
+  async function assertOverlayBlocksBrowser() {
+    await assertBrowserDetached();
+    await assertContentsAlive(reopenedContents.id);
+    assert.notEqual(
+      await reopenedWindow.locator("main").getAttribute("inert"),
+      null,
+    );
+    const input = await application.evaluate(
+      async ({ webContents }, id) =>
+        webContents.fromId(id).executeJavaScript(`(() => ({
+        events: window.__farolOverlayInputCount,
+        prompt: document.querySelector('#prompt-textarea').textContent,
+        submits: window.__farolSubmitCount
+      }))()`),
+      reopenedContents.id,
+    );
+    assert.deepEqual(
+      input,
+      { events: 0, prompt: "", submits: 0 },
+      "OVERLAY_PROVIDER_INPUT_LEAK",
+    );
+  }
+  async function checkSearchOverlay(theme, sidebar, geometry) {
+    await button("Find a page").click();
+    await assertOverlayBlocksBrowser();
+    const search = reopenedWindow.getByRole("dialog", {
+      name: "Find a page",
+      exact: true,
+    });
+    await search
+      .getByRole("textbox", { name: "Find a page", exact: true })
+      .fill("ChatGPT");
+    await search
+      .getByRole("textbox", { name: "Find a page", exact: true })
+      .press("ArrowDown");
+    await assertOverlayBlocksBrowser();
+    await search.getByRole("button", { name: "Close", exact: true }).click();
+    assert.deepEqual(
+      await assertBrowserGeometry(theme, sidebar, originalShell.width),
+      geometry,
+      "SEARCH_DISMISS_WIDTH_DRIFT",
+    );
+  }
+  const geometryByTheme = [];
+  for (const theme of ["Light", "Graphite"]) {
+    const geometry = (sidebar, width = originalShell.width) =>
+      assertBrowserGeometry(theme.toLowerCase(), sidebar, width);
+    await setContentSize(
+      shellGeometry.autoRailBelow + shellGeometry.pageListDefault,
+    );
+    if (
+      (await reopenedWindow
+        .locator(".desktop")
+        .getAttribute("data-sidebar")) !== "full"
+    )
+      await button("Toggle sidebar").click();
+    await settingsPage(reopenedWindow, "Appearance");
+    await button(theme).click();
+    await button("ChatGPT").click();
+    const normal = await geometry("full");
+    await checkSearchOverlay(theme.toLowerCase(), "full", normal);
+    const divider = reopenedWindow.getByRole("separator", {
+      name: "Resize page list",
+      exact: true,
+    });
+    for (const [key, width] of [
+      ["Home", shellGeometry.pageListMin],
+      ["ArrowLeft", shellGeometry.pageListMin],
+      ["End", shellGeometry.pageListMax],
+      ["ArrowRight", shellGeometry.pageListMax],
+    ]) {
+      await divider.press(key);
+      await geometry("full", width);
+    }
+    // Restore the non-step-aligned original width through the actual resizer.
+    const handle = await divider.boundingBox();
+    assert.ok(handle, "PAGE_LIST_RESIZER_BOUNDS_REQUIRED");
+    await reopenedWindow.mouse.move(
+      handle.x + handle.width / 2,
+      handle.y + handle.height / 2,
+    );
+    await reopenedWindow.mouse.down();
+    await reopenedWindow.mouse.move(
+      handle.x +
+        handle.width / 2 +
+        originalShell.width -
+        shellGeometry.pageListMax,
+      handle.y + handle.height / 2,
+    );
+    await assertBrowserDetached();
+    await reopenedWindow.mouse.up();
+    assert.deepEqual(
+      await geometry("full"),
+      normal,
+      "RESIZE_RESTORE_WIDTH_DRIFT",
+    );
+    await button("Toggle sidebar").click();
+    await geometry("rail");
+    await button("Toggle sidebar").click();
+    await geometry("full");
+    await setContentSize(
+      shellGeometry.autoRailBelow - shellGeometry.pageListDefault,
+    );
+    const compact = await geometry("rail");
+    await button("Toggle sidebar").click();
+    await reopenedWindow.locator(".sidebar-overlay").waitFor();
+    await assertOverlayBlocksBrowser();
+    await button("Toggle sidebar").press("ArrowDown");
+    await assertOverlayBlocksBrowser();
+    await button("Close sidebar").click();
+    assert.deepEqual(
+      await geometry("rail"),
+      compact,
+      "SIDEBAR_DISMISS_WIDTH_DRIFT",
+    );
+    await checkSearchOverlay(theme.toLowerCase(), "rail", compact);
+    geometryByTheme.push({ normal, compact });
+  }
+  assert.deepEqual(
+    geometryByTheme[0],
+    geometryByTheme[1],
+    "LIGHT_GRAPHITE_WIDTH_DRIFT",
+  );
+  await setContentSize(
+    shellGeometry.autoRailBelow + shellGeometry.pageListDefault,
+  );
+  await button("Toggle sidebar").click();
+  await settingsPage(reopenedWindow, "Appearance");
+  await reopenedWindow
+    .getByRole("button", {
+      name: originalShell.theme[0].toUpperCase() + originalShell.theme.slice(1),
+      exact: true,
+    })
+    .click();
+  await button("ChatGPT").click();
+  if (originalShell.sidebar !== "full") await button("Toggle sidebar").click();
+  await application.evaluate(
+    ({ BrowserWindow }, original) =>
+      BrowserWindow.fromId(original.id).setBounds(original.bounds),
+    originalWindow,
+  );
+  await assertBrowserGeometry(
+    originalShell.theme,
+    originalShell.sidebar,
+    originalShell.width,
+  );
+  assert.deepEqual(
+    await application.evaluate(
+      ({ BrowserWindow }, id) => BrowserWindow.fromId(id).getBounds(),
+      originalWindow.id,
+    ),
+    originalWindow.bounds,
+    "ORIGINAL_WINDOW_BOUNDS_NOT_RESTORED",
+  );
+  report.checks.push(
+    "restored-idle-Light-Graphite-normal-compact-bounded-resize-single-divider-overlay-detach-no-renderer-input-original-state-restored",
+  );
+  await save();
   await reopenedWindow
     .getByRole("button", { name: "Home", exact: true })
     .click();
@@ -761,6 +1136,7 @@ try {
         savedWorkspace.verified,
       );
     }
+    await assertHiddenWindows(application);
     await closeApplication(application);
     application = undefined;
   }
@@ -798,6 +1174,8 @@ try {
   report.status = "passed";
   report.limits = [
     "Fresh/partial current React and real Go startup/retention only",
+    "Hidden Electron bounds/child attachment, computed divider source and renderer-directed overlay input only; window visibility/focus checked at sampled boundaries",
+    "No visible compositor, OS AX, IME, native keyboard focus or installed/browser-provider qualification",
     "No external attachment, provider Send, live credentials, native dialog or visible focus acceptance",
     "Ready-profile Review Setup and actual external retained observation have separate ordinary Dev evidence",
   ];
