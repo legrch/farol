@@ -61,6 +61,7 @@ type Seatbelt struct {
 type confinedLaunch struct {
 	command         Command
 	pins            []ExecutablePin
+	roots           []rootScopeBinding
 	scratch         string
 	scratchIdentity authority.RootIdentity
 	qualification   Qualification
@@ -133,7 +134,7 @@ func selectedLaunch(qualification Qualification, command Command) (*confinedLaun
 		return nil, &processsvc.NativeFailure{}
 	}
 	return &confinedLaunch{command: wrapped, pins: append([]ExecutablePin{{seatbeltExecutable, selected.selection.MechanismSHA256}}, selected.selection.Executables...),
-		scratch: selected.selection.Scratch, scratchIdentity: selected.selection.ScratchIdentity, qualification: selected.qualification}, nil
+		roots: append([]rootScopeBinding(nil), plan.roots...), scratch: selected.selection.Scratch, scratchIdentity: selected.selection.ScratchIdentity, qualification: selected.qualification}, nil
 }
 
 // Qualify delegates the exact wrapped invocation to the existing evidence port.
@@ -231,6 +232,7 @@ type seatbeltPlan struct {
 	source    string
 	arguments []string
 	digest    string
+	roots     []rootScopeBinding
 }
 
 func compileSeatbelt(s SeatbeltSelection, command Command) (*seatbeltPlan, error) {
@@ -270,13 +272,15 @@ func compileSeatbelt(s SeatbeltSelection, command Command) (*seatbeltPlan, error
 		}
 	}
 
-	selectedScopes := []authority.Scope{scope}
+	selectedScopes := []rootScopeBinding{{scope.WorkspaceID, workspace.Root, scope.Root, workspace.RootIdentity, scope.Access}}
+	var sealedRoots []rootScopeBinding
 	if s.FilePolicy == authority.RootScopedFiles {
 		var err error
 		selectedScopes, err = rootScopedScopes(s, command)
 		if err != nil {
 			return refuse()
 		}
+		sealedRoots = selectedScopes
 	}
 	var parameters, reads, writes, execs, denies, parents, executableWrites, rootAnchors []string
 	add := func(kind, path string, rules *[]string) {
@@ -285,14 +289,14 @@ func compileSeatbelt(s SeatbeltSelection, command Command) (*seatbeltPlan, error
 		*rules = append(*rules, fmt.Sprintf("(%s (param %q))", kind, key))
 	}
 	for _, selected := range selectedScopes {
-		add("subpath", selected.Root, &reads)
+		add("subpath", selected.ScopeRoot, &reads)
 		if command.Write && selected.Access == authority.WriteAccess {
-			add("subpath", selected.Root, &writes)
+			add("subpath", selected.ScopeRoot, &writes)
 		}
 		if s.FilePolicy == authority.RootScopedFiles {
 			// Runtime dependencies outside these approved roots need a grant too.
-			add("subpath", selected.Root, &execs)
-			add("literal", selected.Root, &rootAnchors)
+			add("subpath", selected.ScopeRoot, &execs)
+			add("literal", selected.ScopeRoot, &rootAnchors)
 		}
 	}
 	add("subpath", s.Scratch, &reads)
@@ -332,7 +336,7 @@ func compileSeatbelt(s SeatbeltSelection, command Command) (*seatbeltPlan, error
 		add("subpath", filepath.Join(scope.Root, ".git"), &secrets)
 	}
 	for _, selected := range selectedScopes {
-		for ancestor := filepath.Dir(selected.Root); ancestor != "/"; ancestor = filepath.Dir(ancestor) {
+		for ancestor := filepath.Dir(selected.ScopeRoot); ancestor != "/"; ancestor = filepath.Dir(ancestor) {
 			add("literal", ancestor, &parents)
 		}
 	}
@@ -383,12 +387,13 @@ func compileSeatbelt(s SeatbeltSelection, command Command) (*seatbeltPlan, error
 		Arguments       []string
 		ScratchIdentity authority.RootIdentity
 		Pins            []ExecutablePin
-	}{source, arguments, s.ScratchIdentity, s.Executables})
+		Roots           []rootScopeBinding `json:",omitempty"`
+	}{source, arguments, s.ScratchIdentity, s.Executables, sealedRoots})
 	if err != nil {
 		return refuse()
 	}
 	digest := sha256.Sum256(encoded)
-	return &seatbeltPlan{source: source, arguments: arguments, digest: hex.EncodeToString(digest[:])}, nil
+	return &seatbeltPlan{source: source, arguments: arguments, digest: hex.EncodeToString(digest[:]), roots: sealedRoots}, nil
 }
 
 // Environment is constructed from trusted policy, then matched exactly. Neither

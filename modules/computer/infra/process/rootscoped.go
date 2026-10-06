@@ -7,18 +7,25 @@ import (
 	"github.com/legrch/farol/modules/computer/domain/authority"
 )
 
+// Value-only physical approval and effective scope, copied into the plan/seal.
+type rootScopeBinding struct {
+	WorkspaceID, ApprovedRoot, ScopeRoot string
+	RootIdentity                         authority.RootIdentity
+	Access                               authority.Access
+}
+
 // rootScopedScopes projects the SAME current owner/task authority into the kernel
 // profile. Additional workspace/toolchain/Git roots must already be present on
 // both sides. A cwd, argv, symlink target, Git common dir or approval *request*
 // cannot manufacture a grant here. No filesystem IO or approval occurs here.
-func rootScopedScopes(s SeatbeltSelection, command Command) ([]authority.Scope, error) {
-	refuse := func() ([]authority.Scope, error) { return nil, &processsvc.NativeFailure{} }
+func rootScopedScopes(s SeatbeltSelection, command Command) ([]rootScopeBinding, error) {
+	refuse := func() ([]rootScopeBinding, error) { return nil, &processsvc.NativeFailure{} }
 	p, a := s.Snapshot.Participant, s.Snapshot.Approval
 	if p == nil || a == nil || len(p.Grant.Workspaces) == 0 || len(p.Grant.Workspaces) > 64 {
 		return refuse()
 	}
 	seen := map[string]bool{}
-	out := make([]authority.Scope, 0, len(p.Grant.Workspaces))
+	out := make([]rootScopeBinding, 0, len(p.Grant.Workspaces))
 	for _, scope := range p.Grant.Workspaces {
 		if seen[scope.WorkspaceID] || !bindingID(scope.WorkspaceID) {
 			return refuse()
@@ -43,7 +50,15 @@ func rootScopedScopes(s SeatbeltSelection, command Command) ([]authority.Scope, 
 		if !command.Write || scope.Access != authority.WriteAccess || approved.Access != authority.WriteAccess {
 			scope.Access = authority.ReadAccess
 		}
-		out = append(out, scope)
+		for _, previous := range out {
+			// Omission of a write allowance cannot constrain another root's
+			// broader allowance. Refuse conflicting effective accesses, including
+			// comparable aliases, instead of manufacturing a new permission.
+			if previous.Access != scope.Access && comparableOverlap(previous.ScopeRoot, scope.Root) {
+				return refuse()
+			}
+		}
+		out = append(out, rootScopeBinding{scope.WorkspaceID, approved.Root, scope.Root, approved.RootIdentity, scope.Access})
 	}
 	// Old explicit restrictions must be replaced by an owner-approved policy
 	// transition, not dropped by choosing this compiler. Check cross-workspace
@@ -53,7 +68,7 @@ func rootScopedScopes(s SeatbeltSelection, command Command) ([]authority.Scope, 
 			return refuse()
 		}
 		for _, scope := range out {
-			if exclusion.WorkspaceID == scope.WorkspaceID || comparableOverlap(exclusion.Path, scope.Root) {
+			if exclusion.WorkspaceID == scope.WorkspaceID || comparableOverlap(exclusion.Path, scope.ScopeRoot) {
 				return refuse()
 			}
 		}

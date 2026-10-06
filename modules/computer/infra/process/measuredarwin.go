@@ -4,70 +4,91 @@ package process
 
 import (
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 
 	processsvc "github.com/legrch/farol/modules/computer/app/services/process"
+	"github.com/legrch/farol/modules/computer/domain/authority"
+	"golang.org/x/sys/unix"
 )
 
-// measureLaunch checks the same physical roots and executable pins for both
-// direct and anchored starts. It grants no authority or confinement proof.
-// The returned closure retains measured descriptors through the start attempt;
+// measureLaunch uses the same physical measurement boundary for direct and
+// anchored starts. Its closer holds ALL measured handles through the attempt;
 // pathname measurement alone is not continuous kernel identity evidence.
 func measureLaunch(ctx context.Context, command Command, launch *confinedLaunch) (func(), error) {
-	if ctx == nil || ctx.Err() != nil || launch == nil {
+	return measureLaunchFiles(ctx, command, launch, darwinLaunchFilesystem{})
+}
+
+type darwinLaunchFilesystem struct{}
+
+func (darwinLaunchFilesystem) resolve(path string) (string, error) {
+	return filepath.EvalSymlinks(path)
+}
+func (darwinLaunchFilesystem) effectiveUID() int { return os.Geteuid() }
+func (darwinLaunchFilesystem) pinExecutable(pin ExecutablePin) (io.Closer, error) {
+	file, err := pinnedExecutable(pin)
+	if file == nil {
+		return nil, err
+	}
+	return file, err
+}
+func (darwinLaunchFilesystem) openDirectory(path string) (directoryPin, error) {
+	if !absolutePolicyPath(path) {
 		return nil, &processsvc.NativeFailure{}
 	}
-	root, err := os.Lstat(command.Root)
-	if err != nil || !root.IsDir() || root.Mode()&os.ModeSymlink != 0 {
+	fd, err := unix.Open("/", unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	if err != nil {
 		return nil, &processsvc.NativeFailure{}
 	}
-	identity, ok := root.Sys().(*syscall.Stat_t)
-	if !ok || strconv.FormatUint(uint64(identity.Dev), 10) != command.RootIdentity.Device || strconv.FormatUint(uint64(identity.Ino), 10) != command.RootIdentity.Inode {
+	root := &darwinDirectoryPin{os.NewFile(uintptr(fd), "/")}
+	defer root.Close()
+	return root.openDirectory(strings.TrimPrefix(path, "/"))
+}
+
+type darwinDirectoryPin struct{ *os.File }
+
+func (d *darwinDirectoryPin) inspect(path string) (directoryFacts, error) {
+	info, err := d.Stat()
+	named, namedErr := os.Lstat(path)
+	if err != nil || namedErr != nil || !info.IsDir() || !named.IsDir() || named.Mode()&os.ModeSymlink != 0 || !os.SameFile(info, named) {
+		return directoryFacts{}, &processsvc.NativeFailure{}
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return directoryFacts{}, &processsvc.NativeFailure{}
+	}
+	return directoryFacts{authority.RootIdentity{Device: strconv.FormatUint(uint64(stat.Dev), 10), Inode: strconv.FormatUint(uint64(stat.Ino), 10)}, info.Mode(), int(stat.Uid)}, nil
+}
+
+// Open each component relative to the retained directory without following
+// symlinks. An effective scope never reopens its approved ancestor by name.
+func (d *darwinDirectoryPin) openDirectory(relative string) (directoryPin, error) {
+	if relative == "" || filepath.IsAbs(relative) || filepath.Clean(relative) != relative {
 		return nil, &processsvc.NativeFailure{}
 	}
-	cwd, err := filepath.EvalSymlinks(command.Cwd)
-	if err != nil || cwd != command.Cwd {
-		return nil, &processsvc.NativeFailure{}
-	}
-	scratch, err := os.Lstat(launch.scratch)
-	if err != nil || !scratch.IsDir() || scratch.Mode()&os.ModeSymlink != 0 || scratch.Mode().Perm() != 0700 {
-		return nil, &processsvc.NativeFailure{}
-	}
-	scratchID, ok := scratch.Sys().(*syscall.Stat_t)
-	if !ok || int(scratchID.Uid) != os.Geteuid() || strconv.FormatUint(uint64(scratchID.Dev), 10) != launch.scratchIdentity.Device || strconv.FormatUint(uint64(scratchID.Ino), 10) != launch.scratchIdentity.Inode {
-		return nil, &processsvc.NativeFailure{}
-	}
-	// Keep every measured descriptor open through the single start attempt.
-	// This still requires independently qualified pathname/descriptor continuity.
-	var files []*os.File
-	retained := false
-	closeFiles := func() {
-		for _, file := range files {
-			_ = file.Close()
-		}
-	}
-	defer func() {
-		if !retained {
-			closeFiles()
-		}
-	}()
-	for _, pin := range launch.pins {
-		if ctx.Err() != nil {
+	parts := strings.Split(relative, "/")
+	for _, part := range parts {
+		if part == ".." || (part == "." && relative != ".") {
 			return nil, &processsvc.NativeFailure{}
 		}
-		file, err := pinnedExecutable(pin)
+	}
+	// '.' produces an independent close-on-exec handle when scope equals root.
+	parent := int(d.Fd())
+	var held *os.File
+	for _, part := range parts {
+		fd, err := unix.Openat(parent, part, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+		if held != nil {
+			_ = held.Close()
+		}
 		if err != nil {
 			return nil, &processsvc.NativeFailure{}
 		}
-		files = append(files, file)
+		held = os.NewFile(uintptr(fd), part)
+		parent = fd
 	}
-
-	if ctx.Err() != nil {
-		return nil, &processsvc.NativeFailure{}
-	}
-	retained = true
-	return closeFiles, nil
+	return &darwinDirectoryPin{held}, nil
 }
