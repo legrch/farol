@@ -985,9 +985,10 @@ export function Shell() {
               </p>
               <button
                 className="subtle"
-                onClick={() =>
-                  facade.navigate({ area: "settings", page: "diagnostics" })
-                }
+                onClick={() => {
+                  facade.overlay("none");
+                  facade.navigate({ area: "settings", page: "diagnostics" });
+                }}
               >
                 Inspect action details
               </button>

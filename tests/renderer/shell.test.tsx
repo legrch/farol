@@ -840,6 +840,42 @@ it("keeps late New chat failure reviewable without moving the current page or fo
     host.querySelector('dialog[aria-label="Chat options"]'),
   ).not.toBeNull();
 });
+it.each(["refused", "unknown"] as const)(
+  "dismisses a %s New chat result when action details is already the current page",
+  async (outcome) => {
+    const { host, c, f } = await mount();
+    await act(async () =>
+      c.navigate({ area: "settings", page: "diagnostics" }),
+    );
+    if (outcome === "unknown")
+      vi.mocked(f.api.task).mockRejectedValueOnce(
+        new Error("Create reply lost"),
+      );
+    else
+      vi.mocked(f.api.task).mockResolvedValueOnce({
+        ok: false,
+        error: "TASK_OPERATION_IN_PROGRESS",
+        state: { revision: 0, tasks: [] },
+      });
+    await act(async () => button(host, "New chat").click());
+    const retained = c.getSnapshot().intents["task:new"];
+    for (let visit = 0; visit < 2; visit++) {
+      expect(
+        host.querySelector('dialog[aria-label="New chat"]'),
+      ).not.toBeNull();
+      await act(async () => button(host, "Inspect action details").click());
+      expect(host.querySelector("dialog")).toBeNull();
+      expect(host.querySelector("main")?.hasAttribute("inert")).toBe(false);
+      expect(c.getSnapshot().destination.page).toBe("diagnostics");
+      expect(c.getSnapshot().intents["task:new"]).toEqual(retained);
+      if (visit === 0)
+        await act(async () => button(host, "Review New chat result").click());
+    }
+    expect(f.api.task).toHaveBeenCalledTimes(1);
+    if (outcome === "unknown")
+      expect(button(host, "New chat").disabled).toBe(true);
+  },
+);
 it("keeps a pending New chat out of the review overlay so successful navigation completes", async () => {
   const { host, c, f } = await mount();
   const waiting = deferred<unknown>();
