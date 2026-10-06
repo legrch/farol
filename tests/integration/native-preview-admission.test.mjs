@@ -208,6 +208,26 @@ describe("hidden disposable Setup admission", () => {
   }
   const admit = (value) =>
     assertNativePreviewAdmission("/unavailable-owner-profile", value);
+  it("accepts a native temp separator only with the same physical root", async () => {
+    const selected = await selection();
+    const receipt = await admit(selected);
+    selected.actual.temp = `${selected.actual.temp}${path.sep}`;
+    await expect(
+      recheckNativePreviewIsolation(receipt, selected.actual),
+    ).resolves.toMatchObject({ kind: "isolated-native-preview-readback" });
+  });
+  it.each(["relative", "nul", "missing"])(
+    "refuses malformed native temp readback: %s",
+    async (kind) => {
+      const selected = await selection();
+      const receipt = await admit(selected);
+      selected.actual.temp =
+        kind === "relative" ? "T/" : kind === "nul" ? "/tmp\0/" : undefined;
+      await expect(
+        recheckNativePreviewIsolation(receipt, selected.actual),
+      ).rejects.toThrow("NATIVE_ISOLATION_PATH_INVALID");
+    },
+  );
   it.each([
     ["preview", false],
     ["dev", false],

@@ -151,7 +151,7 @@ async function tree(root, sockets = false) {
       (!info.isDirectory() && info.nlink !== 1) ||
       (await fs.realpath(value)) !== value
     )
-      throw invalid("TREE_UNSAFE");
+      throw invalid(`TREE_UNSAFE:${path.relative(root, value)}`);
     if (info.isDirectory()) {
       for (const name of await fs.readdir(value))
         await walk(path.join(value, name));
@@ -424,10 +424,16 @@ export async function recheckNativePreviewIsolation(receipt, actual) {
     )
       throw invalid(`NATIVE_PATH_CHANGED_${key}`);
   }
+  // Native macOS paths may use /var rather than /private/var and retain a
+  // trailing separator. Compare their physical root; launch inputs stay strict.
+  const nativeTemp = actual?.temp;
   if (
-    (await fs.realpath(absolute(actual?.temp))) !==
-    path.dirname(receipt.profileRoot)
+    typeof nativeTemp !== "string" ||
+    nativeTemp.includes("\0") ||
+    !path.isAbsolute(nativeTemp)
   )
+    throw invalid("PATH_INVALID");
+  if ((await fs.realpath(nativeTemp)) !== path.dirname(receipt.profileRoot))
     throw invalid("NATIVE_PATH_CHANGED");
   if (
     !Array.isArray(actual?.windows) ||
