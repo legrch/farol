@@ -229,17 +229,14 @@ if (development) {
 // runs is exactly the predecessor's, never this candidate's.
 async function resolvePredecessor(artifactFile) {
   const manifest = JSON.parse(await fs.readFile(artifactFile, "utf8"));
-  assert.equal(manifest.schema, 5, "E2E_PREDECESSOR_MANIFEST_SCHEMA");
   assert.equal(manifest.sourceDirty, false, "E2E_PREDECESSOR_DIRTY");
   assert.ok(
     typeof manifest.artifactPath === "string" &&
       path.isAbsolute(manifest.artifactPath),
     "E2E_PREDECESSOR_PATH_INVALID",
   );
-  const { checkoutRoot: predecessorRoot } = predecessorPackagePaths(
-    artifactFile,
-    manifest.artifactPath,
-  );
+  const { checkoutRoot: predecessorRoot, executable: predecessorExecutable } =
+    predecessorPackagePaths(artifactFile, manifest);
   assert.notEqual(manifest.sourceCommit, artifact.sourceCommit);
   assert.notEqual(manifest.buildId, artifact.buildId);
   assert.notEqual(manifest.artifactSha256, artifact.artifactSha256);
@@ -286,14 +283,22 @@ async function resolvePredecessor(artifactFile) {
   }
   const verified = spawnSync(
     process.execPath,
-    [path.join(predecessorRoot, "tooling/verify-package.mjs")],
+    [
+      path.join(predecessorRoot, "tooling/verify-package.mjs"),
+      "--artifact",
+      artifactFile,
+      "--app",
+      manifest.artifactPath,
+    ],
     { cwd: predecessorRoot, encoding: "utf8" },
   );
   assert.equal(verified.status, 0, `${verified.stdout}${verified.stderr}`);
   assert.ok(
-    verified.stdout.includes(
-      ` ${manifest.artifactSha256} (clean) at ${manifest.artifactPath}`,
-    ),
+    verified.stdout
+      .split(/\r?\n/u)
+      .includes(
+        `verified Farol Next Preview ${manifest.version} ${manifest.artifactSha256} (clean) at ${manifest.artifactPath}`,
+      ),
     `E2E_PREDECESSOR_NOT_VERIFIED:${verified.stdout}`,
   );
   return {
@@ -303,10 +308,7 @@ async function resolvePredecessor(artifactFile) {
     buildId: manifest.buildId,
     builtAt: manifest.builtAt,
     appPath: manifest.artifactPath,
-    executable: path.join(
-      manifest.artifactPath,
-      "Contents/MacOS/Farol Next Preview",
-    ),
+    executable: predecessorExecutable,
     verifier: {
       root: predecessorRoot,
       pinnedFiles: entries.length,
