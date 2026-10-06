@@ -228,6 +228,55 @@ async function settingsPage(window, name) {
     .waitFor();
 }
 
+async function fixtureContents(taskId = null) {
+  for (let attempt = 0; attempt < 100; attempt++) {
+    const surface = await application.evaluate(
+      async ({ webContents }, input) => {
+        const matches = webContents.getAllWebContents().filter((contents) => {
+          if (contents.isDestroyed()) return false;
+          try {
+            const url = new URL(contents.getURL());
+            const fixture = new URL(input.url);
+            return (
+              url.origin === fixture.origin &&
+              url.pathname === fixture.pathname &&
+              url.searchParams.get("farol-e2e-task") === input.taskId
+            );
+          } catch {
+            return false;
+          }
+        });
+        if (matches.length > 1) throw new Error("FIXTURE_CONTENTS_AMBIGUOUS");
+        const contents = matches[0];
+        if (!contents || contents.isLoading()) return null;
+        const state = await contents.executeJavaScript(`(() => ({
+          ready: document.querySelector('#prompt-textarea') !== null,
+          submits: window.__farolSubmitCount
+        }))()`);
+        return { id: contents.id, ...state };
+      },
+      { url: browserFixture.url, taskId },
+    );
+    if (surface?.ready) {
+      assert.equal(surface.submits, 0, "SETUP_MUST_NOT_SEND");
+      return surface;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error(`FIXTURE_CONTENTS_NOT_READY:${taskId ?? "home"}`);
+}
+
+async function assertContentsAlive(id) {
+  assert.equal(
+    await application.evaluate(({ webContents }, id) => {
+      const contents = webContents.fromId(id);
+      return Boolean(contents && !contents.isDestroyed());
+    }, id),
+    true,
+    "HIDDEN_BROWSER_LIFETIME_MUST_REMAIN",
+  );
+}
+
 let application;
 let browserFixture;
 try {
@@ -397,6 +446,41 @@ try {
     .click();
   assert.equal(await window.getByRole("dialog").count(), 0);
   assert.equal(await window.locator("main").getAttribute("inert"), null);
+  // Establish admission using the existing production observation command.
+  // Only the test side operates the local fixture's synthetic login control;
+  // no ready settings or expected provider answer enter the adapter directly.
+  const opened = await window.evaluate(() =>
+    window.farolNext.configure({ kind: "chatgpt.open-browser" }),
+  );
+  assert.equal(opened.ok, true, JSON.stringify(opened));
+  const fixtureHome = await fixtureContents();
+  assert.equal(
+    await application.evaluate(async ({ webContents }, id) => {
+      const contents = webContents.fromId(id);
+      if (!contents || contents.isDestroyed()) return false;
+      return contents.executeJavaScript(`(() => {
+        const login = document.querySelector('[data-testid="login-button"]');
+        if (!(login instanceof HTMLButtonElement) || login.hidden || login.disabled) return false;
+        login.click();
+        return true;
+      })()`);
+    }, fixtureHome.id),
+    true,
+    "FIXTURE_LOGIN_CONTROL_REQUIRED",
+  );
+  const readiness = await window.evaluate(() =>
+    window.farolNext.configure({ kind: "chatgpt.verify" }),
+  );
+  assert.equal(readiness.ok, true, JSON.stringify(readiness));
+  assert.equal(readiness.evidence?.kind, "chatgpt.readiness");
+  assert.equal(readiness.evidence.state, "authenticated");
+  assert.equal(readiness.snapshot.settings.setup.chatgpt.configured, true);
+  assert.equal(
+    readiness.snapshot.settings.setup.chatgpt.reachable,
+    "reachable",
+  );
+  assert.ok(readiness.snapshot.settings.setup.chatgpt.verified);
+  await window.getByRole("button", { name: "Home", exact: true }).click();
   // Create one real, idle native task through the application owner. The
   // resulting task event does not imply that the renderer selected it. Home
   // must still conceal its browser; no automatic task replacement is allowed.
@@ -407,6 +491,7 @@ try {
   const retainedTaskId = created.selectedTaskId;
   assert.equal(typeof retainedTaskId, "string");
   assert.ok(retainedTaskId.length > 0);
+  const createdContents = await fixtureContents(retainedTaskId);
   const openedViews = await application.evaluate(({ BrowserWindow }) =>
     BrowserWindow.getAllWindows().flatMap((owner) =>
       owner.contentView.children
@@ -422,6 +507,7 @@ try {
     ),
   );
   assert.equal(openedViews.length, 1, "CREATED_NATIVE_BROWSER_REQUIRED");
+  assert.equal(openedViews[0].id, createdContents.id);
   assert.equal(openedViews[0].visible, true);
   await window.getByRole("button", { name: "ChatGPT", exact: true }).click();
   await window.getByRole("button", { name: "Home", exact: true }).click();
@@ -448,14 +534,7 @@ try {
     assert.deepEqual(views, [], "HOME_MUST_DETACH_RETAINED_BROWSER");
   }
   await assertBrowserDetached();
-  assert.equal(
-    await application.evaluate(({ webContents }, id) => {
-      const contents = webContents.fromId(id);
-      return Boolean(contents && !contents.isDestroyed());
-    }, openedViews[0].id),
-    true,
-    "HIDDEN_BROWSER_LIFETIME_MUST_REMAIN",
-  );
+  await assertContentsAlive(createdContents.id);
   assert.equal(
     await application.evaluate(({ BrowserWindow }) =>
       BrowserWindow.getAllWindows().some((window) => window.isVisible()),
@@ -484,7 +563,37 @@ try {
     .locator(".toolbar-title strong")
     .getByText("Overview", { exact: true })
     .waitFor();
+  // An empty child list alone is not restoration evidence: first witness the
+  // exact task's loaded, live native contents in this new Electron lifetime.
+  const reopenedContents = await fixtureContents(retainedTaskId);
   await assertBrowserDetached();
+  await assertContentsAlive(reopenedContents.id);
+  await reopenedWindow
+    .getByRole("button", { name: "Setup", exact: true })
+    .click();
+  await reopenedWindow
+    .getByRole("button", { name: "ChatGPT", exact: true })
+    .click();
+  let restoredAttached = false;
+  for (let attempt = 0; attempt < 100; attempt++) {
+    restoredAttached = await application.evaluate(
+      ({ BrowserWindow }, id) =>
+        BrowserWindow.getAllWindows().some((owner) =>
+          owner.contentView.children.some(
+            (view) => view.webContents?.id === id && view.getVisible(),
+          ),
+        ),
+      reopenedContents.id,
+    );
+    if (restoredAttached) break;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  assert.equal(restoredAttached, true, "RESTORED_TASK_RAIL_SELECTION_REQUIRED");
+  await reopenedWindow
+    .getByRole("button", { name: "Home", exact: true })
+    .click();
+  await assertBrowserDetached();
+  await assertContentsAlive(reopenedContents.id);
   report.checks.push(
     "retained-idle-task-Quit-reopen-bootstrap-identity-and-Home-native-detachment",
   );
