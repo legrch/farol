@@ -4,7 +4,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { Shell } from "../../src/ui/renderer/shell";
 import { Services } from "../../src/ui/renderer/services";
 import { WindowController } from "../../src/ui/renderer/controller";
-import { bootstrap, fixture, task, settings } from "./fixture";
+import { bootstrap, fixture, task, settings, deferred } from "./fixture";
 import { ProductSettingsSchema } from "../../src/pkg/product-settings/contract";
 (
   globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }
@@ -115,9 +115,16 @@ it.each([
     expect(f.api.configure).not.toHaveBeenCalled();
   },
 );
-it("Home retains the single sidebar and compact overlays keep the existing host layout reporting", async () => {
+it("Home retains the approved rail and context sidebar and compact overlays keep the existing host layout reporting", async () => {
   const { host, c, f } = await mount();
   expect(host.querySelectorAll(".sidebar")).toHaveLength(1);
+  expect(host.querySelectorAll(".rail")).toHaveLength(1);
+  expect(
+    host.querySelector(".rail button:first-child")?.getAttribute("aria-label"),
+  ).toBe("Home");
+  expect(
+    host.querySelector(".rail button:last-child")?.getAttribute("aria-label"),
+  ).toBe("Settings");
   expect(host.querySelector(".contextual-sidebar")).not.toBeNull();
   expect(host.querySelector("main")?.hasAttribute("inert")).toBe(false);
   await act(async () => c.toggleSidebar(false));
@@ -427,7 +434,7 @@ it("R16 R25 R27 R28 task actions and assignment scope survive panels without res
       input.dispatchEvent(new Event(event, { bubbles: true }));
     });
   await edit("#task-label", "Renamed");
-  for (const label of ["Rename", "Pin", "Cancel work", "Close task"])
+  for (const label of ["Rename", "Pin", "Cancel work", "Close chat"])
     await act(async () => button(host, label).click());
   expect(f.api.task).toHaveBeenCalledWith({
     kind: "task.rename",
@@ -680,9 +687,16 @@ it("Home keeps login readiness separate from external Computer readiness", async
   expect(f.api.configure).not.toHaveBeenCalled();
 });
 
-it("opens Setup from the single sidebar and retains ordinary navigation and appearance", async () => {
+it("opens Setup from the approved rail and context sidebar and retains ordinary navigation and appearance", async () => {
   const { host, c, f } = await mount();
   expect(host.querySelectorAll(".sidebar")).toHaveLength(1);
+  expect(host.querySelectorAll(".rail")).toHaveLength(1);
+  expect(
+    host.querySelector(".rail button:first-child")?.getAttribute("aria-label"),
+  ).toBe("Home");
+  expect(
+    host.querySelector(".rail button:last-child")?.getAttribute("aria-label"),
+  ).toBe("Settings");
   await act(async () => button(host, "Setup").click());
   expect(c.getSnapshot().destination).toMatchObject({
     area: "settings",
@@ -761,4 +775,119 @@ it.each([
   if (code === "TASK_OPERATION_IN_PROGRESS")
     expect(f.api.task).toHaveBeenCalledTimes(1);
   else expect(f.api.configure).toHaveBeenCalledTimes(1);
+});
+
+it.each(["full", "rail", "overlay"] as const)(
+  "shows New chat refusal and unknown outcomes outside the %s page list",
+  async (width) => {
+    const { host, c, f } = await mount();
+    if (width !== "full")
+      await act(async () => c.toggleSidebar(width === "overlay"));
+    vi.mocked(f.api.task).mockResolvedValueOnce({
+      ok: false,
+      error: "TASK_OPERATION_IN_PROGRESS",
+      state: { revision: 0, tasks: [] },
+    });
+    await act(async () => button(host, "New chat").click());
+    expect(
+      host.querySelector('dialog [aria-label="New chat result"]')?.textContent,
+    ).toContain("Another action is still in progress");
+    expect(host.querySelector("dialog")?.closest(".sidebar")).toBeNull();
+    await act(async () =>
+      button(host.querySelector("dialog")!, "Close").click(),
+    );
+    expect(
+      host.querySelector('.rail [aria-label="Review New chat result"]'),
+    ).not.toBeNull();
+    vi.mocked(f.api.task).mockRejectedValueOnce(new Error("Create reply lost"));
+    await act(async () => button(host, "New chat").click());
+    expect(host.querySelector('dialog [role="status"]')?.textContent).toContain(
+      "New chat: Outcome unknown",
+    );
+    expect(button(host, "New chat").disabled).toBe(true);
+    await act(async () =>
+      button(host.querySelector("dialog")!, "Close").click(),
+    );
+    await act(async () => c.navigate({ area: "activity" }));
+    await act(async () => button(host, "Review New chat result").click());
+    expect(host.querySelector('dialog [role="status"]')?.textContent).toContain(
+      "New chat: Outcome unknown",
+    );
+    expect(f.api.task).toHaveBeenCalledTimes(2);
+  },
+);
+it("keeps late New chat failure reviewable without moving the current page or focus", async () => {
+  const { host, c, f } = await mount();
+  const waiting = deferred<unknown>();
+  vi.mocked(f.api.task).mockReturnValueOnce(waiting.promise);
+  await act(async () => button(host, "New chat").click());
+  await act(async () => c.navigate({ area: "settings", page: "folders" }));
+  await act(async () => waiting.reject(new Error("Late reply lost")));
+  expect(c.getSnapshot().destination.page).toBe("folders");
+  expect(host.querySelector("dialog")).toBeNull();
+  await act(async () => button(host, "Review New chat result").click());
+  expect(host.querySelector('dialog [role="status"]')?.textContent).toContain(
+    "Outcome unknown",
+  );
+  await act(async () => button(host, "Inspect action details").click());
+  expect(
+    host.querySelector('[aria-label="Retained actions"]')?.textContent,
+  ).toContain("task:new");
+  await act(async () => f.emit("tasks", { revision: 1, tasks: [task()] }));
+  await act(async () => c.navigate({ area: "chatgpt", taskId: "task-1" }));
+  await act(async () => c.overlay("task"));
+  expect(
+    host.querySelector('dialog[aria-label="Chat options"]'),
+  ).not.toBeNull();
+});
+it("keeps a pending New chat out of the review overlay so successful navigation completes", async () => {
+  const { host, c, f } = await mount();
+  const waiting = deferred<unknown>();
+  vi.mocked(f.api.task).mockReturnValueOnce(waiting.promise);
+  await act(async () => button(host, "New chat").click());
+  expect(button(host, "New chat").getAttribute("aria-busy")).toBe("true");
+  expect(
+    host.querySelector('[aria-label="Review New chat result"]'),
+  ).toBeNull();
+  expect(host.querySelector("dialog")).toBeNull();
+  await act(async () =>
+    waiting.resolve({
+      ok: true,
+      state: { revision: 1, tasks: [task()] },
+      selectedTaskId: "task-1",
+    }),
+  );
+  expect(c.getSnapshot().destination).toMatchObject({
+    area: "chatgpt",
+    taskId: "task-1",
+  });
+  expect(host.querySelector("dialog")).toBeNull();
+  expect(f.api.task).toHaveBeenCalledTimes(1);
+});
+it("keeps unknown task work discoverable after its options are dismissed and Home is collapsed", async () => {
+  const { host, c, f } = await mount();
+  const running = { ...task(), lifecycle: "running" };
+  await act(async () => f.emit("tasks", { revision: 1, tasks: [running] }));
+  await act(async () => c.navigate({ area: "chatgpt", taskId: "task-1" }));
+  await act(async () => button(host, "Chat options").click());
+  vi.mocked(f.api.task).mockResolvedValueOnce({
+    ok: false,
+    error: "TASK_CANCEL_FAILED",
+    state: { revision: 1, tasks: [running] },
+  });
+  await act(async () => button(host, "Cancel work").click());
+  expect(
+    host.querySelector('[aria-label="Chat action results"]')?.textContent,
+  ).toContain("Cancel work: Outcome unknown");
+  await act(async () => button(host.querySelector("dialog")!, "Close").click());
+  await act(async () => c.navigate({ area: "home" }));
+  await act(async () => c.toggleSidebar(false));
+  expect(
+    host.querySelector('.rail [aria-label="Review unresolved actions"]'),
+  ).not.toBeNull();
+  await act(async () => button(host, "Review unresolved actions").click());
+  expect(
+    host.querySelector('[aria-label="Retained actions"]')?.textContent,
+  ).toContain("TASK_CANCEL_FAILED");
+  expect(f.api.task).toHaveBeenCalledTimes(1);
 });

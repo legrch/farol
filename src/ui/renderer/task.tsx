@@ -1,5 +1,6 @@
 import { useState } from "react";
-import type { RendererFacade, WindowSnapshot } from "./contract";
+import type { Intent, RendererFacade, WindowSnapshot } from "./contract";
+import type { ProductTaskCommand } from "../../modules/chat/contract/product-task";
 import { EMPTY_AGENT_DRAFT } from "../agent-draft";
 import {
   agentAuthorityUnchanged,
@@ -7,6 +8,16 @@ import {
 } from "../shell-action-policy";
 import type { AgentAuthority } from "../shell-action-policy";
 import { ProductAgentScopeSelectionSchema } from "../../modules/chat/contract/product-task";
+export function taskActionFeedback(label: string, result: Intent) {
+  if (result.state === "pending") return `${label}: In progress…`;
+  if (result.state === "unknown")
+    return `${label}: Outcome unknown. The action may have taken effect. Review the retained result in Diagnostics before continuing.`;
+  if (result.state === "refused")
+    return result.code === "TASK_OPERATION_IN_PROGRESS"
+      ? `${label}: Another action is still in progress. Wait for its result.`
+      : `${label}: Could not be completed. See Diagnostics for details.`;
+  return `${label}: Confirmed.`;
+}
 export function TaskEditor({
   snapshot,
   facade,
@@ -30,6 +41,74 @@ export function TaskEditor({
   );
   const [label, setLabel] = useState(task?.label ?? "");
   const [feedback, setFeedback] = useState<string | null>(null);
+  const [returned, setReturned] = useState<
+    Record<string, { result: Intent; retained: Intent | undefined }>
+  >({});
+  const taskId = snapshot.destination.taskId;
+  const actionLabels = [
+    ["rename", "Rename"],
+    ["pin", "Pin"],
+    ["cancel", "Cancel work"],
+    ["close", "Close chat"],
+    ["agent", "Agent assignment"],
+    ["rejoin", "Observe Agent"],
+  ] as const;
+  const resultFor = (id: string) => {
+    const current = snapshot.intents[id];
+    const local = returned[id];
+    return local && local.retained === current ? local.result : current;
+  };
+  const disabled = (action: string) => {
+    const result = resultFor(`${action}:${taskId}`);
+    return (
+      snapshot.status !== "current" ||
+      result?.state === "pending" ||
+      result?.state === "unknown"
+    );
+  };
+  const run = (command: ProductTaskCommand, action: string) => {
+    const id = `${action}:${taskId}`;
+    const latest = facade.getSnapshot();
+    if (
+      latest.status !== "current" ||
+      ["pending", "unknown"].includes(latest.intents[id]?.state ?? "")
+    )
+      return;
+    void facade.task(command, id).then((result) => {
+      const retained = facade.getSnapshot().intents[id];
+      // Immediate validation refusals need not enter the controller map. A
+      // late reply must never replace another dispatch's retained result.
+      if (retained === result || retained === latest.intents[id])
+        setReturned((previous) => ({
+          ...previous,
+          [id]: { result, retained },
+        }));
+    });
+  };
+  const results = actionLabels.flatMap(([action, label]) => {
+    const id = `${action}:${taskId}`;
+    const result = resultFor(id);
+    return result
+      ? [
+          <p key={id} role="status">
+            {taskActionFeedback(label, result)}
+          </p>,
+        ]
+      : [];
+  });
+  const resultView = results.length > 0 && (
+    <section aria-label="Chat action results">
+      {results}
+      <button
+        className="text-button"
+        onClick={() =>
+          facade.navigate({ area: "settings", page: "diagnostics" })
+        }
+      >
+        Inspect action details
+      </button>
+    </section>
+  );
   const authority: AgentAuthority | null =
     settings && workspaceId
       ? {
@@ -47,7 +126,13 @@ export function TaskEditor({
     setFields(next);
     facade.draft.capture(snapshot.destination.taskId, next, composedUnder);
   };
-  if (!task) return <p>No current task is selected.</p>;
+  if (!task)
+    return (
+      <div>
+        {resultView}
+        <p>No current chat is selected.</p>
+      </div>
+    );
   const unchanged = agentAuthorityUnchanged(composedUnder, authority);
   const submit = () => {
     if (!unchanged) {
@@ -74,31 +159,23 @@ export function TaskEditor({
       setFeedback("Review the relative paths and exclusions.");
       return;
     }
-    void facade
-      .task(
-        {
-          kind: "task.start-agent",
-          taskId: task.taskId,
-          workspaceId,
-          objective: fields.objective,
-          scope: scope.data,
-        },
-        `agent:${task.taskId}`,
-      )
-      .then((result) =>
-        setFeedback(
-          result.state === "unknown"
-            ? "Outcome unknown. Observe the same child; do not start another."
-            : result.state === "refused"
-              ? `Action refused: ${result.code}`
-              : "Assignment admitted. Inspect its retained task state.",
-        ),
-      );
+    run(
+      {
+        kind: "task.start-agent",
+        taskId: task.taskId,
+        workspaceId,
+        objective: fields.objective,
+        scope: scope.data,
+      },
+      "agent",
+    );
   };
   return (
     <div>
       <div className="field">
-        <label htmlFor="task-label">Task name</label>
+        <label htmlFor="task-label">
+          {task.agent ? "Task name" : "Chat name"}
+        </label>
         <input
           id="task-label"
           value={label}
@@ -108,47 +185,45 @@ export function TaskEditor({
       </div>
       <div className="control-row">
         <button
+          disabled={disabled("rename") || !label.trim()}
           onClick={() =>
-            void facade.task(
-              { kind: "task.rename", taskId: task.taskId, label },
-              `rename:${task.taskId}`,
-            )
+            run({ kind: "task.rename", taskId: task.taskId, label }, "rename")
           }
         >
           Rename
         </button>
         <button
+          disabled={disabled("pin")}
           onClick={() =>
-            void facade.task(
+            run(
               { kind: "task.pin", taskId: task.taskId, pinned: !task.pinned },
-              `pin:${task.taskId}`,
+              "pin",
             )
           }
         >
           {task.pinned ? "Unpin" : "Pin"}
         </button>
         <button
-          disabled={!["running", "event_driven"].includes(task.lifecycle)}
+          disabled={
+            disabled("cancel") ||
+            !["running", "event_driven"].includes(task.lifecycle)
+          }
           onClick={() =>
-            void facade.task(
-              { kind: "task.cancel", taskId: task.taskId },
-              `cancel:${task.taskId}`,
-            )
+            run({ kind: "task.cancel", taskId: task.taskId }, "cancel")
           }
         >
           Cancel work
         </button>
         <button
+          disabled={disabled("close")}
           onClick={() =>
-            void facade.task(
-              { kind: "task.close", taskId: task.taskId },
-              `close:${task.taskId}`,
-            )
+            run({ kind: "task.close", taskId: task.taskId }, "close")
           }
         >
-          Close task
+          Close chat
         </button>
       </div>
+      {resultView}
       <h3>Agent assignment</h3>
       <p className="description">
         Use only the currently approved workspace and scope. Closing this panel
@@ -259,11 +334,9 @@ export function TaskEditor({
         </button>
         {task.agent && (
           <button
+            disabled={disabled("rejoin")}
             onClick={() =>
-              void facade.task(
-                { kind: "task.rejoin-agent", taskId: task.taskId },
-                `rejoin:${task.taskId}`,
-              )
+              run({ kind: "task.rejoin-agent", taskId: task.taskId }, "rejoin")
             }
           >
             Observe same Agent

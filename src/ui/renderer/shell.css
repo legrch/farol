@@ -123,19 +123,19 @@ code {
   --good: #2f7555;
   --warn: #8c581b;
   /* Match the existing host bounds until its owner changes the geometry. */
-  --side-width: 294px;
+  --side-width: 232px;
   color: var(--fg);
   background: var(--bg);
   height: 100%;
   display: grid;
-  grid-template-columns: var(--side-width) minmax(0, 1fr);
+  grid-template-columns: 62px var(--side-width) minmax(0, 1fr);
   grid-template-rows: 58px minmax(0, 1fr);
   overflow: hidden;
   color-scheme: light;
 }
 .desktop[data-sidebar="rail"],
 .desktop[data-sidebar="overlay"] {
-  --side-width: 62px;
+  --side-width: 0px;
 }
 .desktop[data-font="geist"] {
   font-family:
@@ -311,8 +311,20 @@ kbd {
 .rail .rail-bottom {
   margin-top: auto;
 }
+.rail .attention-action {
+  color: var(--warn);
+}
+.attention-dot {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--warn);
+}
 .sidebar {
-  grid-column: 1;
+  grid-column: 2;
   grid-row: 2;
   display: flex;
   flex-direction: column;
@@ -329,12 +341,8 @@ kbd {
   margin-top: 12px;
   padding-top: 12px;
 }
-.sidebar-settings {
-  margin-top: auto;
-  padding-top: 24px;
-}
 .contextual-sidebar {
-  grid-column: 1;
+  grid-column: 2;
   grid-row: 2;
   background: var(--side);
   border-right: 1px solid var(--line);
@@ -375,7 +383,7 @@ kbd {
   font-weight: 400;
 }
 .stage {
-  grid-column: 2;
+  grid-column: 3;
   grid-row: 2;
   overflow: auto;
   min-width: 0;
@@ -702,8 +710,8 @@ kbd {
 }
 .sidebar-overlay {
   position: absolute;
-  inset: 58px auto 0 0;
-  width: 294px;
+  inset: 58px auto 0 62px;
+  width: 232px;
   z-index: 5;
 }
 ::-webkit-scrollbar {
@@ -717,21 +725,10 @@ kbd {
 }
 @media (max-width: 979px) {
   .desktop {
-    --side-width: 62px;
+    --side-width: 0px;
   }
   .contextual-sidebar:not(.sidebar-overlay) {
-    padding: 12px 7px;
-    scrollbar-gutter: auto;
-  }
-  .sidebar:not(.sidebar-overlay) .sidebar-section,
-  .sidebar:not(.sidebar-overlay) button span,
-  .sidebar:not(.sidebar-overlay) > p,
-  .sidebar:not(.sidebar-overlay) .sidebar-settings button:not(:first-child) {
     display: none;
-  }
-  .sidebar:not(.sidebar-overlay) button {
-    padding: 12px;
-    width: 44px;
   }
   .home-columns {
     grid-template-columns: minmax(0, 1fr) 210px;

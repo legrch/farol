@@ -3,7 +3,7 @@ import {
   parseNavigationShortcuts,
   type NavigationShortcuts,
 } from "../../pkg/ipc/navigation-shortcuts";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { ReactNode } from "react";
 import {
   ProductConfigurationCommandSchema,
@@ -44,9 +44,80 @@ type PageProps = SettingsProps & {
 };
 const intention = (kind: string, workspaceId = "") =>
   `settings:${kind}:${workspaceId}`;
+type PageFeedback = Readonly<{
+  request: object;
+  text: string;
+  result: Intent | null;
+}>;
+function createFeedback() {
+  let revision = 0;
+  const listeners = new Set<() => void>();
+  return {
+    pages: {} as Partial<Record<SettingsPage, PageFeedback>>,
+    busy: false,
+    uncertain: null as Intent | "unretained" | null,
+    subscribe(listener: () => void) {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+    getSnapshot: () => revision,
+    changed() {
+      revision++;
+      listeners.forEach((listener) => listener());
+    },
+  };
+}
+// Window-owned presentation receipts survive page dismissal. No command bodies,
+// credentials or authority are cached; the facade still owns operation outcomes.
+const feedbackByWindow = new WeakMap<
+  RendererFacade,
+  ReturnType<typeof createFeedback>
+>();
+function useSettingsFeedback(facade: RendererFacade) {
+  let feedback = feedbackByWindow.get(facade);
+  if (!feedback) {
+    feedback = createFeedback();
+    feedbackByWindow.set(facade, feedback);
+  }
+  useSyncExternalStore(feedback.subscribe, feedback.getSnapshot);
+  return feedback;
+}
+function settledEdit(
+  result: Intent | "unretained" | null,
+  snapshot: WindowSnapshot,
+) {
+  if (
+    !result ||
+    result === "unretained" ||
+    !result.id.startsWith("settings:computer.apply-workspace-edit:")
+  )
+    return null;
+  const current = snapshot.intents[result.id];
+  return current &&
+    current !== result &&
+    (current.state === "applied" || current.state === "refused")
+    ? current
+    : null;
+}
+export function useSettingsAttention(
+  facade: RendererFacade,
+  snapshot: WindowSnapshot,
+) {
+  const feedback = useSettingsFeedback(facade);
+  return Boolean(
+    feedback.uncertain && !settledEdit(feedback.uncertain, snapshot),
+  );
+}
 function actionFeedback(result: Intent): string {
+  if (result.state === "pending") return "Saving or checking…";
   if (result.state === "unknown")
     return "Outcome unknown. Do not repeat this action; inspect the existing result in Diagnostics.";
+  if (result.id.startsWith("settings:computer.apply-workspace-edit:"))
+    return result.state === "applied"
+      ? "Folder edit confirmed. Review the exact result in Diagnostics."
+      : "Folder edit refused. Review the exact result in Diagnostics.";
   if (result.state === "applied")
     return "Action confirmed. Check the current status below.";
   if (result.code?.endsWith("_CANCELLED")) return "Action cancelled.";
@@ -141,40 +212,26 @@ export function Settings({ snapshot, facade }: SettingsProps) {
   // always uses the actual snapshot, including unavailable configuration.
   const displayedSettings =
     configuration?.status === "ready" ? configuration.settings : lastReady;
-  const busy = useRef(false);
-  const uncertain = useRef<Intent | "unretained" | null>(null);
-  const [unconfirmed, setUnconfirmed] = useState(false);
+  const feedback = useSettingsFeedback(facade);
   const composing = useRef(false);
-  const [feedback, setFeedback] = useState<{
-    page: SettingsPage;
-    text: string;
-  } | null>(null);
-  const [pending, setPending] = useState(false);
-  const uncertaintySettled = (current: WindowSnapshot) => {
-    const original = uncertain.current;
-    const result =
-      original && original !== "unretained"
-        ? current.intents[original.id]
-        : null;
-    return Boolean(
-      original &&
-      original !== "unretained" &&
-      original.id.startsWith("settings:computer.apply-workspace-edit:") &&
-      result &&
-      result !== original &&
-      (result.state === "applied" || result.state === "refused"),
-    );
-  };
-  const locallyUnconfirmed = unconfirmed && !uncertaintySettled(snapshot);
+  const locallyUnconfirmed = Boolean(
+    feedback.uncertain && !settledEdit(feedback.uncertain, snapshot),
+  );
   const allowed: Actions["allowed"] = () =>
-    !pending && !locallyUnconfirmed && !fenced(snapshot);
+    !feedback.busy && !locallyUnconfirmed && !fenced(snapshot);
   const actions: Actions = {
-    disabled: pending || locallyUnconfirmed || fenced(snapshot),
+    disabled: feedback.busy || locallyUnconfirmed || fenced(snapshot),
     allowed,
     async run(command, admit) {
       const current = facade.getSnapshot();
       const page = current.destination.page;
-      const report = (text: string) => setFeedback({ page, text });
+      const request = {};
+      const report = (text: string, result: Intent | null = null) => {
+        // A late reply can update only its own page and request.
+        if (feedback.pages[page]?.request !== request) return;
+        feedback.pages[page] = { request, text, result };
+        feedback.changed();
+      };
       const id = intention(
         command.kind,
         "workspaceId" in command
@@ -184,43 +241,42 @@ export function Settings({ snapshot, facade }: SettingsProps) {
             : undefined,
       );
       if (
-        busy.current ||
-        (uncertain.current && !uncertaintySettled(current)) ||
+        feedback.busy ||
+        (feedback.uncertain && !settledEdit(feedback.uncertain, current)) ||
         composing.current ||
         fenced(current)
       )
         return null;
       if (!ProductConfigurationCommandSchema.safeParse(command).success) {
+        feedback.pages[page] = { request, text: "", result: null };
         report(
           "Check the fields. Paths must be unique relative paths without dot segments; connection fields must match their required format.",
         );
         return null;
       }
       if (admit && !admit(current)) return null;
-      uncertain.current = null;
-      setUnconfirmed(false);
-      busy.current = true;
-      setPending(true);
-      report("Saving or checking…");
+      feedback.pages[page] = { request, text: "", result: null };
+      feedback.uncertain = null;
+      feedback.busy = true;
+      report("Saving or checking…", { id, state: "pending", code: null });
       try {
         const result = await facade.configure(command, id);
         if (result.state === "unknown") {
-          uncertain.current = result;
-          setUnconfirmed(true);
+          feedback.uncertain = result;
         }
-        report(actionFeedback(result));
+        report(actionFeedback(result), result);
         return result;
       } catch {
         // Keep a local fence too if an adapter throws before retaining its intent.
-        uncertain.current = "unretained";
-        setUnconfirmed(true);
+        feedback.uncertain = "unretained";
         report(
           "Outcome unknown. Do not repeat this action; inspect the existing result.",
+          { id, state: "unknown", code: null },
         );
         return null;
       } finally {
-        busy.current = false;
-        setPending(false);
+        feedback.busy = false;
+        feedback.changed();
       }
     },
   };
@@ -243,6 +299,8 @@ export function Settings({ snapshot, facade }: SettingsProps) {
     settings: displayedSettings,
     actions,
   };
+  const pageFeedback = feedback.pages[snapshot.destination.page];
+  const settled = settledEdit(pageFeedback?.result ?? null, snapshot);
   // Keep each form mounted across page/background changes. No revision key or
   // snapshot effect may replace a draft or interrupt IME composition.
   return (
@@ -264,9 +322,9 @@ export function Settings({ snapshot, facade }: SettingsProps) {
           </button>
         </p>
       )}
-      {feedback?.page === snapshot.destination.page && (
+      {pageFeedback && (
         <p className="notice" role="status">
-          {feedback.text}
+          {settled ? actionFeedback(settled) : pageFeedback.text}
         </p>
       )}
       {actions.disabled && (
@@ -322,12 +380,6 @@ function SetupOverview({ snapshot, settings, facade }: PageProps) {
   ).length;
   const steps = [
     {
-      label: "Sign in",
-      page: "connection" as const,
-      status: setup.embeddedChatGPT,
-      help: "Embedded ChatGPT is optional for external Computer access.",
-    },
-    {
       label: "Folders",
       page: "folders" as const,
       status: `${settings.computer.workspaces.length} approved · ${checked} checked`,
@@ -349,6 +401,12 @@ function SetupOverview({ snapshot, settings, facade }: PageProps) {
       page: "connection" as const,
       status: setup.ready ? "Attachment checked" : "Attachment check needed",
       help: "Attach the tunnel in ChatGPT and verify the current connection.",
+    },
+    {
+      label: "Embedded ChatGPT · optional",
+      page: "connection" as const,
+      status: setup.embeddedChatGPT,
+      help: "Embedded ChatGPT is optional for external Computer access.",
     },
   ];
   return (
@@ -1383,14 +1441,6 @@ function Connection({ settings, snapshot, facade, actions }: PageProps) {
           >
             Check local connection
           </Command>
-          <Command
-            actions={actions}
-            command={{ kind: "connector.check-attachment" }}
-            disabled={!setup.canCheckAttachment}
-            admit={(current) => computerSetup(current).canCheckAttachment}
-          >
-            Check attachment
-          </Command>
           <Command actions={actions} command={{ kind: "connector.stop" }}>
             Stop connection
           </Command>
@@ -1400,12 +1450,6 @@ function Connection({ settings, snapshot, facade, actions }: PageProps) {
           fresh challenge. It does not resend an earlier verification. Pending,
           unknown or stale state must be resolved before reconnecting.
         </p>
-        {externalChallenge && (
-          <p className="notice">
-            The connection is awaiting a ChatGPT attachment check. Open
-            Diagnostics for the current verification details.
-          </p>
-        )}
         <button
           type="button"
           className="text-button"
@@ -1415,24 +1459,6 @@ function Connection({ settings, snapshot, facade, actions }: PageProps) {
         >
           Connection diagnostics
         </button>
-      </Group>
-      <Group title="Embedded ChatGPT · optional">
-        <p className="badges">{setup.embeddedChatGPT}</p>
-        <p className="description">
-          Embedded sign-in is optional for external Computer access. It has its
-          own check.
-        </p>
-        <div className="control-row">
-          <Command actions={actions} command={{ kind: "chatgpt.open-sign-in" }}>
-            Sign in
-          </Command>
-          <Command actions={actions} command={{ kind: "chatgpt.open-browser" }}>
-            Open ChatGPT
-          </Command>
-          <Command actions={actions} command={{ kind: "chatgpt.verify" }}>
-            Check sign-in
-          </Command>
-        </div>
       </Group>
       <Group title="Add to ChatGPT">
         <p className="description">
@@ -1456,48 +1482,86 @@ function Connection({ settings, snapshot, facade, actions }: PageProps) {
             Connection guide
           </Command>
         </div>
+        {externalChallenge && (
+          <div
+            className="connector-challenge"
+            data-connector-challenge="pending"
+          >
+            <strong>Verify from external ChatGPT</strong>
+            <p>
+              Attach tunnel {externalChallenge.tunnelId} in ChatGPT Settings.
+              Ask the connector to call farol_next_connector_verify once with:
+            </p>
+            <dl>
+              <div>
+                <dt>challenge</dt>
+                <dd>
+                  <code>{externalChallenge.value}</code>
+                </dd>
+              </div>
+              <div>
+                <dt>workspaceId</dt>
+                <dd>
+                  <code>{externalChallenge.workspaceId}</code>
+                </dd>
+              </div>
+            </dl>
+            <p>Verified folder: {externalChallenge.root}</p>
+            <small>
+              The one-time check lists only the approved workspace root and
+              returns counts, never names or file contents. Then press Check
+              attachment.
+            </small>
+          </div>
+        )}
+        <p className="badges" role="status">
+          {setup.ready
+            ? "Attachment checked · Computer ready"
+            : "Attachment check needed"}
+        </p>
+        <Command
+          actions={actions}
+          command={{ kind: "connector.check-attachment" }}
+          disabled={!setup.canCheckAttachment}
+          admit={(current) => computerSetup(current).canCheckAttachment}
+        >
+          Check attachment
+        </Command>
+      </Group>
+      <Group title="Embedded ChatGPT · optional">
+        <p className="badges">{setup.embeddedChatGPT}</p>
+        <p className="description">
+          Embedded sign-in is optional for external Computer access. It has its
+          own check.
+        </p>
+        <div className="control-row">
+          <Command actions={actions} command={{ kind: "chatgpt.open-sign-in" }}>
+            Sign in
+          </Command>
+          <Command actions={actions} command={{ kind: "chatgpt.open-browser" }}>
+            Open ChatGPT
+          </Command>
+          <Command actions={actions} command={{ kind: "chatgpt.verify" }}>
+            Check sign-in
+          </Command>
+        </div>
       </Group>
     </>
   );
 }
-function ConnectionDiagnostics({ settings, snapshot, actions }: PageProps) {
+function ConnectionDiagnostics({
+  settings,
+  snapshot,
+  facade,
+  actions,
+}: PageProps) {
   const connector = settings.connectors.secureMcp;
   const setup = computerSetup(snapshot);
-  const externalChallenge = setup.externalChallenge;
   const [appName, setAppName] = useState(connector.chatgptApp?.name ?? "");
   const appCheckStarted = useRef(false);
   const [appCheckAttempted, setAppCheckAttempted] = useState(false);
   return (
     <Group title="Connection verification details">
-      {externalChallenge && (
-        <div className="connector-challenge" data-connector-challenge="pending">
-          <strong>Verify from external ChatGPT</strong>
-          <p>
-            Attach tunnel {externalChallenge.tunnelId} in ChatGPT Settings. Ask
-            the connector to call farol_next_connector_verify once with:
-          </p>
-          <dl>
-            <div>
-              <dt>challenge</dt>
-              <dd>
-                <code>{externalChallenge.value}</code>
-              </dd>
-            </div>
-            <div>
-              <dt>workspaceId</dt>
-              <dd>
-                <code>{externalChallenge.workspaceId}</code>
-              </dd>
-            </div>
-          </dl>
-          <p>Verified folder: {externalChallenge.root}</p>
-          <small>
-            The one-time check lists only the approved workspace root and
-            returns counts, never names or file contents. Then press Check
-            attachment.
-          </small>
-        </div>
-      )}
       <details>
         <summary>ChatGPT app and technical options</summary>
         <p className="description">
@@ -1574,9 +1638,19 @@ function ConnectionDiagnostics({ settings, snapshot, actions }: PageProps) {
           Check in ChatGPT once
         </button>
         <p className="description">
-          External verification uses the challenge above and does not require
-          embedded sign-in. Health checks do not prove ChatGPT attachment.
+          External verification uses the challenge in Connection and does not
+          require embedded sign-in. Health checks do not prove ChatGPT
+          attachment.
         </p>
+        <button
+          type="button"
+          className="text-button"
+          onClick={() =>
+            facade.navigate({ area: "settings", page: "connection" })
+          }
+        >
+          Continue attachment setup
+        </button>
         <div className="control-row">
           <Command
             actions={actions}
@@ -1887,7 +1961,150 @@ function Updates({ snapshot, facade, actions }: PageProps) {
     </>
   );
 }
+function WorkspaceEditResults({
+  snapshot,
+  settings,
+  facade,
+}: Omit<PageProps, "actions">) {
+  const applyPrefix = intention("computer.apply-workspace-edit");
+  const operations = new Set<string>();
+  if (settings.computer.pendingEdit)
+    operations.add(settings.computer.pendingEdit.operationId);
+  if (snapshot.workspaceEditDelivery)
+    operations.add(snapshot.workspaceEditDelivery);
+  for (const id of Object.keys(snapshot.intents)) {
+    const prefix = [applyPrefix, "observe:", "ack:"].find((candidate) =>
+      id.startsWith(candidate),
+    );
+    if (prefix) operations.add(id.slice(prefix.length));
+  }
+  const unsettled = (intent: Intent | undefined) =>
+    intent?.state === "pending" || intent?.state === "unknown";
+  const stateLabel = (intent: Intent | undefined) =>
+    !intent
+      ? "Not observed in this window"
+      : intent.state === "unknown"
+        ? "Outcome unknown"
+        : intent.state === "pending"
+          ? "Checking…"
+          : intent.state === "refused"
+            ? "Refused"
+            : "Confirmed";
+  return [...operations].map((operationId) => {
+    const applied = snapshot.intents[`${applyPrefix}${operationId}`];
+    const observation = snapshot.intents[`observe:${operationId}`];
+    const acknowledgement = snapshot.intents[`ack:${operationId}`];
+    const awaitingDelivery = snapshot.workspaceEditDelivery === operationId;
+    return (
+      <Group title="Folder edit result" key={operationId}>
+        <p className="description">
+          Operation: <code>{operationId}</code>
+        </p>
+        <p role="status">
+          Edit submission: {stateLabel(applied)}.
+          {applied?.code && (
+            <>
+              {" "}
+              <code>{applied.code}</code>
+            </>
+          )}
+        </p>
+        {observation && (
+          <p role="status">
+            Observation: {stateLabel(observation)}.{" "}
+            {observation.code && <code>{observation.code}</code>}
+          </p>
+        )}
+        {acknowledgement && (
+          <p role="status">
+            Result acknowledgement: {stateLabel(acknowledgement)}.
+            {acknowledgement.code && (
+              <>
+                {" "}
+                <code>{acknowledgement.code}</code>
+              </>
+            )}
+            {acknowledgement.state === "unknown" &&
+              " Do not repeat acknowledgement; delivery is unconfirmed."}
+            {acknowledgement.state === "applied" &&
+              " Delivery recorded. This does not change the edit outcome."}
+          </p>
+        )}
+        {settings.computer.pendingEdit?.operationId === operationId && (
+          <>
+            <p className="description">
+              Observe this existing edit to retrieve its result without
+              repeating the edit.
+            </p>
+            <button
+              type="button"
+              className="subtle"
+              disabled={
+                snapshot.status !== "current" ||
+                unsettled(observation) ||
+                acknowledgement?.state === "pending"
+              }
+              onClick={() => {
+                const current = facade.getSnapshot();
+                if (
+                  current.status === "current" &&
+                  current.configuration?.status === "ready" &&
+                  current.configuration.settings.computer.pendingEdit
+                    ?.operationId === operationId &&
+                  !unsettled(current.intents[`observe:${operationId}`]) &&
+                  current.intents[`ack:${operationId}`]?.state !== "pending"
+                )
+                  void facade.observeWorkspaceEdit(operationId);
+              }}
+            >
+              Observe existing edit
+            </button>
+          </>
+        )}
+        {awaitingDelivery && (
+          <>
+            <p className="description">
+              Review the result above, then record its delivery before preparing
+              another edit.
+            </p>
+            <button
+              type="button"
+              className="subtle"
+              disabled={
+                snapshot.status !== "current" ||
+                observation?.state === "pending" ||
+                unsettled(acknowledgement)
+              }
+              onClick={() => {
+                const current = facade.getSnapshot();
+                if (
+                  current.status === "current" &&
+                  current.workspaceEditDelivery === operationId &&
+                  current.intents[`observe:${operationId}`]?.state !==
+                    "pending" &&
+                  !unsettled(current.intents[`ack:${operationId}`])
+                )
+                  void facade.acknowledgeWorkspaceEdit(operationId);
+              }}
+            >
+              Record result delivery
+            </button>
+          </>
+        )}
+      </Group>
+    );
+  });
+}
+
 function Diagnostics({ snapshot, settings, facade, actions }: PageProps) {
+  const feedback = useSettingsFeedback(facade);
+  const unresolved = Object.entries(feedback.pages).filter(
+    ([, entry]) =>
+      entry &&
+      (entry.result?.state === "pending" ||
+        entry.result?.state === "unknown") &&
+      !settledEdit(entry.result, snapshot),
+  );
   const evidence =
     snapshot.evidence?.revision === settings.revision
       ? snapshot.evidence.value
@@ -1895,6 +2112,35 @@ function Diagnostics({ snapshot, settings, facade, actions }: PageProps) {
   return (
     <>
       <h2>Diagnostics</h2>
+      {unresolved.length > 0 && (
+        <Group title="Actions needing observation">
+          {unresolved.map(([page, entry]) => (
+            <div key={page}>
+              <p>{entry.text}</p>
+              <p className="description">
+                <code>{entry.result?.id}</code>
+              </p>
+              <button
+                type="button"
+                className="text-button"
+                onClick={() =>
+                  facade.navigate({
+                    area: "settings",
+                    page: page as SettingsPage,
+                  })
+                }
+              >
+                Return to{" "}
+                {page === "general"
+                  ? "Setup"
+                  : page === "computer"
+                    ? "This Mac"
+                    : page.charAt(0).toUpperCase() + page.slice(1)}
+              </button>
+            </div>
+          ))}
+        </Group>
+      )}
       <Group title="Current status">
         <div className="setting-row">
           Snapshot<span className="badges">{snapshot.status}</span>
@@ -1928,7 +2174,11 @@ function Diagnostics({ snapshot, settings, facade, actions }: PageProps) {
           Export uses the existing native support flow.
         </p>
       </Group>
-      <details>
+      <details
+        open={Object.values(snapshot.intents).some(
+          (intent) => intent.state === "pending" || intent.state === "unknown",
+        )}
+      >
         <summary>Action details</summary>
         <ul aria-label="Retained actions">
           {Object.values(snapshot.intents).map((intent) => (
@@ -1944,49 +2194,11 @@ function Diagnostics({ snapshot, settings, facade, actions }: PageProps) {
           ))}
         </ul>
       </details>
-      {snapshot.workspaceEditDelivery && (
-        <Group title="Folder edit result">
-          <p role="status">
-            The exact edit result was delivered. Record its delivery before
-            preparing another edit.
-          </p>
-          <button
-            type="button"
-            className="subtle"
-            onClick={() =>
-              void facade.acknowledgeWorkspaceEdit(
-                snapshot.workspaceEditDelivery!,
-              )
-            }
-          >
-            Record result delivery
-          </button>
-        </Group>
-      )}
-      {settings.computer.pendingEdit && (
-        <Group title="Unconfirmed folder edit">
-          <p className="notice">
-            An existing edit is awaiting delivery. Observe that exact operation
-            instead of repeating it.
-          </p>
-          <button
-            type="button"
-            className="subtle"
-            onClick={() => {
-              const edit = facade.getSnapshot().configuration;
-              if (
-                edit?.status === "ready" &&
-                edit.settings.computer.pendingEdit
-              )
-                void facade.observeWorkspaceEdit(
-                  edit.settings.computer.pendingEdit.operationId,
-                );
-            }}
-          >
-            Observe existing edit
-          </button>
-        </Group>
-      )}
+      <WorkspaceEditResults
+        snapshot={snapshot}
+        facade={facade}
+        settings={settings}
+      />
       <details>
         <summary>Folder diagnostics and guarded edits</summary>
         {settings.computer.workspaces.map((workspace) => (

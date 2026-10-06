@@ -1674,11 +1674,16 @@ describe("owner Setup presentation checkpoint (DOM fixtures only)", () => {
     ];
     expect(
       checks.map((check) => check.querySelector("strong")?.textContent),
-    ).toEqual(["Sign in", "Folders", "Connection", "Add to ChatGPT"]);
+    ).toEqual([
+      "Folders",
+      "Connection",
+      "Add to ChatGPT",
+      "Embedded ChatGPT · optional",
+    ]);
     expect(overview.textContent).toContain("Continue setup");
     for (const [index, page] of [
-      [0, "connection"],
-      [1, "folders"],
+      [0, "folders"],
+      [1, "connection"],
       [2, "connection"],
       [3, "connection"],
     ] as const) {
@@ -1873,5 +1878,240 @@ describe("owner Setup presentation checkpoint (DOM fixtures only)", () => {
     expect(activePage(h.host).textContent).toContain("Check account");
     expect(activePage(h.host).textContent).toContain("Saved Chat answers");
     expect(h.calls()).toHaveLength(1);
+  });
+});
+
+describe("review regressions: retained action origins and exact edit delivery", () => {
+  const notice = (host: Element) =>
+    host.querySelector('.settings-page > [role="status"]')?.textContent;
+  it.each(["Check access", "Add folder…"])(
+    "retains Connection refusal after Folders %s and Settings remount",
+    async (action) => {
+      const h = await mount("connection", withFolder());
+      vi.mocked(h.f.api.configure).mockResolvedValueOnce({
+        ok: false,
+        error: "CHATGPT_SIGN_IN_IN_PROGRESS",
+        snapshot: h.configuration,
+      });
+      await h.click("Sign in");
+      await h.pageTo("folders");
+      if (action === "Add folder…")
+        vi.mocked(h.f.api.configure).mockResolvedValueOnce({
+          ok: false,
+          error: "WORKSPACE_PICKER_CANCELLED",
+          snapshot: h.configuration,
+        });
+      await h.click(action);
+      expect(notice(h.host)).toContain(
+        action === "Add folder…" ? "Action cancelled" : "Action confirmed",
+      );
+      await act(async () => h.c.navigate({ area: "home" }));
+      await act(async () =>
+        h.c.navigate({ area: "settings", page: "connection" }),
+      );
+      expect(notice(h.host)).toContain("Sign-in is already open");
+      await h.pageTo("folders");
+      expect(notice(h.host)).toContain(
+        action === "Add folder…" ? "Action cancelled" : "Action confirmed",
+      );
+      expect(h.calls()).toHaveLength(2);
+    },
+  );
+  it("retains a late refusal after leaving Settings without overwriting another page", async () => {
+    const h = await mount("connection");
+    const waiting = deferred<unknown>();
+    vi.mocked(h.f.api.configure).mockReturnValueOnce(waiting.promise);
+    await h.click("Sign in");
+    await act(async () => h.c.navigate({ area: "home" }));
+    await act(async () =>
+      waiting.resolve({
+        ok: false,
+        error: "CHATGPT_SIGN_IN_IN_PROGRESS",
+        snapshot: h.configuration,
+      }),
+    );
+    await act(async () => h.c.navigate({ area: "settings", page: "folders" }));
+    expect(notice(h.host)).toBeUndefined();
+    vi.mocked(h.f.api.configure).mockResolvedValueOnce({
+      ok: false,
+      error: "WORKSPACE_PICKER_CANCELLED",
+      snapshot: h.configuration,
+    });
+    await h.click("Add folder…");
+    await h.pageTo("connection");
+    expect(notice(h.host)).toContain("Sign-in is already open");
+    await h.click("Sign in");
+    expect(notice(h.host)).toContain("Action confirmed");
+    await h.pageTo("folders");
+    expect(notice(h.host)).toBe("Action cancelled.");
+    expect(h.calls()).toHaveLength(3);
+  });
+  it("keeps an adapter exception fenced and visible even if no controller intent was retained", async () => {
+    const h = await mount("connection");
+    vi.spyOn(h.c, "configure").mockRejectedValueOnce(
+      new Error("adapter failed before dispatch"),
+    );
+    await h.click("Sign in");
+    await h.remount();
+    expect(notice(h.host)).toContain("Outcome unknown");
+    expect(h.button("Sign in").disabled).toBe(true);
+    await h.pageTo("folders");
+    expect(h.button("Add folder…").disabled).toBe(true);
+    await h.pageTo("diagnostics");
+    expect(
+      activePage(h.host).querySelector(
+        '[aria-label="Actions needing observation"]',
+      )?.textContent,
+    ).toContain("settings:chatgpt.open-sign-in:");
+    await h.click("Return to Connection");
+    expect(h.c.getSnapshot().destination.page).toBe("connection");
+    expect(h.calls()).toEqual([]);
+  });
+  it.each(["confirmed", "unknown", "refused"] as const)(
+    "shows the exact refused edit and %s acknowledgement across remount",
+    async (ack) => {
+      const h = await mount("diagnostics", writableFolder());
+      await prepareEdit(h);
+      await change(h.field("Old text"), "old");
+      vi.mocked(h.f.api.configure).mockRejectedValueOnce(
+        new Error("Apply reply lost"),
+      );
+      await h.click("Apply edit");
+      const pending = structuredClone(h.configuration);
+      pending.settings.revision++;
+      pending.settings.computer.pendingEdit = {
+        operationId: editOperationId,
+        workspaceId,
+        relativePath: "file.txt",
+        computerGeneration: 1,
+        submittedAt: "2026-10-04T20:00:00.000Z",
+      };
+      vi.mocked(h.f.api.bootstrap).mockResolvedValue({
+        ...bootstrap(),
+        configuration: pending,
+      });
+      await act(async () => h.c.refresh());
+      vi.mocked(h.f.api.configure).mockResolvedValueOnce({
+        ok: false,
+        error: "WORKSPACE_MUTATION_CONFLICT",
+        snapshot: pending,
+      });
+      await h.click("Observe existing edit");
+      const edit = () =>
+        activePage(h.host).querySelector('[aria-label="Folder edit result"]')!;
+      expect(edit().textContent).toContain(editOperationId);
+      expect(edit().textContent).toContain(
+        "Observation: Refused. WORKSPACE_MUTATION_CONFLICT",
+      );
+      expect(edit().textContent).toContain("Edit submission: Outcome unknown");
+      expect(h.button("Prepare edit…").disabled).toBe(true);
+      const settled = structuredClone(pending);
+      settled.settings.revision++;
+      settled.settings.computer.pendingEdit = null;
+      if (ack === "unknown")
+        vi.mocked(h.f.api.configure).mockRejectedValueOnce(
+          new Error("ACK reply lost"),
+        );
+      else if (ack === "refused")
+        vi.mocked(h.f.api.configure).mockResolvedValueOnce({
+          ok: false,
+          error: "WORKSPACE_MUTATION_NOT_PENDING",
+          snapshot: pending,
+        });
+      else
+        vi.mocked(h.f.api.configure).mockResolvedValueOnce({
+          ok: true,
+          snapshot: settled,
+        });
+      await h.click("Record result delivery");
+      await h.remount();
+      expect(edit().textContent).toContain(
+        "Observation: Refused. WORKSPACE_MUTATION_CONFLICT",
+      );
+      if (ack === "confirmed") {
+        expect(edit().textContent).toContain(
+          "Edit submission: Refused. WORKSPACE_MUTATION_CONFLICT",
+        );
+        expect(edit().textContent).toContain(
+          "Result acknowledgement: Confirmed.",
+        );
+        expect(notice(h.host)).toBe(
+          "Folder edit refused. Review the exact result in Diagnostics.",
+        );
+        expect(edit().textContent).not.toContain("Outcome unknown");
+        expect(h.button("Prepare edit…").disabled).toBe(false);
+      } else {
+        expect(edit().textContent).toContain(
+          `Result acknowledgement: ${ack === "unknown" ? "Outcome unknown" : "Refused"}.`,
+        );
+        expect(edit().textContent).toContain(
+          ack === "unknown"
+            ? "CONFIGURATION_OUTCOME_UNKNOWN"
+            : "WORKSPACE_MUTATION_NOT_PENDING",
+        );
+        expect(h.button("Prepare edit…").disabled).toBe(true);
+        if (ack === "unknown") {
+          expect(h.button("Record result delivery").disabled).toBe(true);
+          await h.click("Record result delivery");
+          expect(h.button("Observe existing edit").disabled).toBe(false);
+          vi.mocked(h.f.api.configure).mockResolvedValueOnce({
+            ok: false,
+            error: "WORKSPACE_MUTATION_CONFLICT",
+            snapshot: pending,
+          });
+          await h.click("Observe existing edit");
+          expect(edit().textContent).toContain(
+            "Result acknowledgement: Outcome unknown.",
+          );
+          expect(h.button("Prepare edit…").disabled).toBe(true);
+        }
+      }
+      expect(
+        h
+          .calls()
+          .filter((command) => command.kind === "computer.ack-workspace-edit"),
+      ).toEqual([
+        { kind: "computer.ack-workspace-edit", operationId: editOperationId },
+      ]);
+      expect(
+        h
+          .calls()
+          .filter(
+            (command) => command.kind === "computer.apply-workspace-edit",
+          ),
+      ).toHaveLength(1);
+    },
+  );
+  it("keeps actual external verification and Check attachment together in normal Connection", async () => {
+    const value = connectionSettings();
+    value.setup.chatgpt.verified = null;
+    value.setup.connect.verified = null;
+    value.connectors.secureMcp.attachment = null;
+    const h = await mount("general", value);
+    const continueStep = [
+      ...activePage(h.host).querySelectorAll<HTMLButtonElement>(".setup-check"),
+    ].find((button) => button.textContent?.includes("Add to ChatGPT"))!;
+    await act(async () => continueStep.click());
+    expect(h.c.getSnapshot().destination.page).toBe("connection");
+    const attachment = () =>
+      activePage(h.host).querySelector('[aria-label="Add to ChatGPT"]')!;
+    expect(attachment().querySelector("details")).toBeNull();
+    expect(attachment().textContent).toContain("farol_next_connector_verify");
+    expect(attachment().textContent).toContain(workspaceId);
+    expect(attachment().textContent).toContain(selectionId);
+    expect(h.button("Check attachment").disabled).toBe(false);
+    const verified = connectionSettings();
+    verified.revision++;
+    verified.setup.chatgpt.verified = null;
+    vi.mocked(h.f.api.configure).mockResolvedValueOnce({
+      ok: true,
+      snapshot: { status: "ready", settings: verified },
+    });
+    await h.click("Check attachment");
+    expect(attachment().textContent).toContain(
+      "Attachment checked · Computer ready",
+    );
+    expect(h.calls()).toEqual([{ kind: "connector.check-attachment" }]);
+    expect(activePage(h.host).textContent).not.toContain("Check account");
   });
 });
