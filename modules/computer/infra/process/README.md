@@ -4,6 +4,18 @@ This source slice owns one process operation in Go. It is not registered in the
 product route, and its tests do not qualify native execution. The active
 TypeScript sandbox/watchdog and Claude peer remain in place.
 
+The opt-in Darwin test `TestNativeSeatbeltCredentialAliases` is an explicit
+native policy gate (`go test -tags farol_native_process
+./modules/computer/infra/process -run '^TestNativeSeatbeltCredentialAliases$'
+-count=1`). It runs one bounded `/bin/cat` child under the actual generated
+Seatbelt profile, using only disposable synthetic files. On October 6, 2026,
+the allowed baseline succeeded and direct credential, symlink and outside-root
+reads were denied, but a hardlink revealed the protected synthetic content.
+The exact child exited and the gate **failed**. This demonstrates a confinement
+gap, not process/product qualification. Do not enable the production shell or
+substitute a permissive qualification callback while this gate is unresolved.
+The build tag keeps this real native operation out of ordinary pure tests.
+
 ## Trusted composition
 
 Boot supplies one already admitted immutable execution lease, a prepared native
