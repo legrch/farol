@@ -58,10 +58,21 @@ export type SettingsPage =
   | "updates"
   | "diagnostics";
 export type Destination = Readonly<{
-  area: "home" | "chatgpt" | "activity" | "settings";
+  area: "home" | "chatgpt" | "activity" | "setup" | "settings";
   page: SettingsPage;
   taskId: string;
+  homeView?: HomeView;
+  homeSelection?: Readonly<{
+    kind: "task" | "activity" | "attention";
+    id: string;
+    turnId?: string;
+  }> | null;
+  setupStep?: SetupStep;
+  activityId?: string | null;
 }>;
+export type HomeView =
+  "overview" | "work" | "attention" | "activity" | "access";
+export type SetupStep = "connection" | "folders" | "attachment" | "finish";
 export type UpdateAction =
   "check" | "later" | "restart" | "recover" | "rollback";
 export type Intent = Readonly<{

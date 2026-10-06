@@ -9,6 +9,7 @@ import { parseOwnerLaunchResult } from "../../tooling/owner-launch-result.mjs";
 import { runBoundedProcess } from "./bounded-process.mjs";
 import { sourceIdentity } from "../../tooling/source-identity.mjs";
 import { verifyInputManifest } from "../../tooling/build-contract.mjs";
+import { verifyGoCoreArtifact } from "../../tooling/go-core-artifact.mjs";
 
 const root = process.cwd();
 const useInstalledTunnelClient = process.argv.includes(
@@ -20,7 +21,9 @@ const executable = path.join(
   "node_modules/electron/dist/Electron.app/Contents/MacOS/Electron",
 );
 // Drive exact built React bytes. This hidden lane proves DOM/application
-// integration, not native focus, the OS folder dialog, or a live provider.
+// integration through normal Go startup, not native focus, the OS folder dialog,
+// external ChatGPT attachment or a live provider. The ordinary Dev supplies the
+// separate external witness; these profiles never borrow its credential.
 const source = sourceIdentity(root, ".");
 const build = JSON.parse(
   await fs.readFile(path.join(buildRoot, "build-manifest.json"), "utf8"),
@@ -39,6 +42,29 @@ assert.equal(
 assert.equal(build.dirty, false, "DEV_REACT_BUILD_DIRTY");
 assert.equal(build.inputExact, true, "DEV_REACT_INPUTS_NOT_EXACT");
 await verifyInputManifest(buildRoot, build);
+assert.equal(build.schema, 4, "DEV_SETUP_REQUIRES_GO_BUILD");
+const identity = JSON.parse(
+  await fs.readFile(path.join(buildRoot, "build-identity.json"), "utf8"),
+);
+await verifyGoCoreArtifact(buildRoot, build.core, identity);
+const attemptId = randomUUID();
+const evidenceRoot = path.join(root, "_output/evidence/react-setup", attemptId);
+await fs.mkdir(evidenceRoot, { recursive: true, mode: 0o700 });
+const report = {
+  attemptId,
+  source,
+  buildId: identity.buildId,
+  launches: [],
+  checks: [],
+  status: "running",
+};
+const save = () =>
+  fs.writeFile(
+    path.join(evidenceRoot, "report.json"),
+    JSON.stringify(report, null, 2) + "\n",
+    { mode: 0o600 },
+  );
+await save();
 const temporaryRoot = await fs.realpath(
   await fs.mkdtemp(path.join(os.tmpdir(), "farol-dev-onboarding-startup-")),
 );
@@ -82,6 +108,8 @@ const environment = {
 const stopRequested = new WeakSet();
 let cleanupConfirmed = true;
 let launchUnresolved = false;
+let passed = false;
+const ownedLaunches = new WeakMap();
 async function launchApplication(env) {
   launchUnresolved = true;
   const result = await electron.launch({
@@ -91,6 +119,24 @@ async function launchApplication(env) {
     timeout: 15_000,
   });
   launchUnresolved = false;
+  // Retain the returned child before diagnostic I/O can fail. The outer
+  // finally still owns one ordinary close even if startup observation fails.
+  application = result;
+  const record = { pid: result.process().pid, status: "child-returned" };
+  ownedLaunches.set(result, record);
+  report.launches.push(record);
+  await save();
+  const first = await result.firstWindow({ timeout: 15_000 });
+  await ready(first);
+  const userData = await result.evaluate(({ app }) => app.getPath("userData"));
+  record.stateRoot = path.join(userData, "farol-next-state");
+  const marker = JSON.parse(
+    await fs.readFile(path.join(record.stateRoot, "running.json"), "utf8"),
+  );
+  assert.equal(marker.pid, result.process().pid);
+  record.startedAt = marker.startedAt;
+  record.status = "ready";
+  await save();
   return result;
 }
 async function stopApplication(application, ownerSignal) {
@@ -116,6 +162,26 @@ async function stopApplication(application, ownerSignal) {
     await Promise.race([closed, deadline]);
     assert.equal(child.signalCode, null, "DEV_REACT_SIGNAL_DEATH");
     assert.equal(child.exitCode, 0, "DEV_REACT_NONZERO_EXIT");
+    const record = ownedLaunches.get(application);
+    assert.ok(record, "OWNED_SETUP_LAUNCH_REQUIRED");
+    record.terminal = { exitCode: child.exitCode, signal: child.signalCode };
+    const quit = JSON.parse(
+      await fs.readFile(path.join(record.stateRoot, "last-quit.json"), "utf8"),
+    );
+    record.quit = quit;
+    await save();
+    assert.equal(quit.drained, true, "SETUP_QUIT_NOT_DRAINED");
+    assert.deepEqual(quit.unconfirmed, [], "SETUP_QUIT_UNCONFIRMED");
+    assert.ok(
+      Date.parse(quit.at) >= Date.parse(record.startedAt),
+      "SETUP_QUIT_RECEIPT_STALE",
+    );
+    await assert.rejects(
+      fs.lstat(path.join(record.stateRoot, "running.json")),
+      { code: "ENOENT" },
+    );
+    record.status = "closed-cleanly";
+    await save();
   } catch (error) {
     cleanupConfirmed = false;
     throw error;
@@ -150,7 +216,12 @@ async function settingsPage(window, name) {
       exact: true,
     })
     .click();
-  await window.getByRole("heading", { name, exact: true, level: 2 }).waitFor();
+  await window
+    .locator(".toolbar-title strong")
+    .getByText(name === "Shortcuts" ? "Keyboard shortcuts" : name, {
+      exact: true,
+    })
+    .waitFor();
 }
 
 let application;
@@ -202,7 +273,7 @@ try {
   const bootstrap = await ready(window);
   await window
     .locator(".toolbar-title strong")
-    .getByText("Home", { exact: true })
+    .getByText("Overview", { exact: true })
     .waitFor();
   assert.equal(bootstrap.environment, "dev");
   assert.equal(bootstrap.displayName, "Farol Dev");
@@ -230,13 +301,51 @@ try {
     await window.locator("#setup-dialog, #guided-onboarding").count(),
     0,
   );
+  // Current React Setup, not the retained legacy wizard selectors.
+  const beforeReview = bootstrap.configuration;
+  await window.getByRole("button", { name: "Setup", exact: true }).click();
+  for (const name of [
+    "Connection",
+    "Folders & access",
+    "Add to ChatGPT",
+    "Finish",
+  ]) {
+    await window
+      .getByRole("navigation", { name: "Setup steps" })
+      .getByRole("button", { name, exact: true })
+      .click();
+    assert.equal(
+      await window
+        .locator('.rail [aria-label="Setup"]')
+        .getAttribute("aria-current"),
+      "page",
+    );
+  }
+  await window
+    .locator(".setup-finish")
+    .getByRole("heading", { name: "A few checks remain", exact: true })
+    .waitFor();
+  assert.equal(
+    await window.locator('.rail [aria-label="New chat"]').count(),
+    0,
+  );
+  assert.deepEqual(
+    (await window.evaluate(() => window.farolNext.bootstrap())).configuration,
+    beforeReview,
+  );
+  report.checks.push(
+    "fresh-current-React-Setup-navigation-no-effects-no-false-ready",
+  );
+  await save();
+  await window
+    .getByRole("button", { name: "Back to Home", exact: true })
+    .click();
   for (const name of [
     "General",
     "Appearance",
     "Folders",
     "This Mac",
     "Connection",
-    "Model",
     "Shortcuts",
     "Updates",
     "Diagnostics",
@@ -358,7 +467,13 @@ try {
       "synthetic pre-existing DEV profile\n",
     );
     if (launch === 0) {
-      await settingsPage(legacyWindow, "Folders");
+      await legacyWindow
+        .getByRole("button", { name: "Setup", exact: true })
+        .click();
+      await legacyWindow
+        .getByRole("navigation", { name: "Setup steps" })
+        .getByRole("button", { name: "Folders & access", exact: true })
+        .click();
       await legacyWindow
         .getByRole("button", { name: "Add folder…", exact: true })
         .click();
@@ -413,6 +528,32 @@ try {
         "DEV_STARTUP_SMOKE_WORKSPACE_VERIFICATION_MISSING",
       );
     } else {
+      // A saved verified folder is still partial without connection/attachment.
+      await legacyWindow
+        .locator(".toolbar-title strong")
+        .getByText("Overview", { exact: true })
+        .waitFor();
+      await legacyWindow
+        .getByRole("button", { name: "Continue setup", exact: true })
+        .click();
+      assert.equal(
+        await legacyWindow
+          .locator(".setup-page")
+          .getAttribute("data-setup-step"),
+        "connection",
+      );
+      await legacyWindow
+        .getByRole("navigation", { name: "Setup steps" })
+        .getByRole("button", { name: "Finish", exact: true })
+        .click();
+      await legacyWindow
+        .locator(".setup-finish")
+        .getByRole("heading", { name: "A few checks remain", exact: true })
+        .waitFor();
+      report.checks.push(
+        "partial-folder-Quit-reopen-retained-obvious-continuation-no-false-ready",
+      );
+      await save();
       const value = await legacyWindow.evaluate(() =>
         window.farolNext.bootstrap(),
       );
@@ -458,8 +599,15 @@ try {
   assert.doesNotMatch(broken.stderr, /App threw an error during load/u);
   assert.doesNotMatch(broken.stderr, /Uncaught Exception/u);
 
+  passed = true;
+  report.status = "passed";
+  report.limits = [
+    "Fresh/partial current React and real Go startup/retention only",
+    "No external attachment, provider Send, live credentials, native dialog or visible focus acceptance",
+    "Ready-profile Review Setup and actual external retained observation have separate ordinary Dev evidence",
+  ];
   process.stdout.write(
-    "Farol Dev React hidden startup smoke: PASS (TS adapters; isolated native state; no live-provider or native-dialog/focus acceptance)\n",
+    `Farol Dev React Setup: PASS; exact source ${source.commit}; evidence ${evidenceRoot}\n`,
   );
 } finally {
   if (application && !stopRequested.has(application)) {
@@ -467,7 +615,15 @@ try {
       cleanupConfirmed = false;
     });
   }
-  if (cleanupConfirmed && !launchUnresolved)
+  report.status = passed ? "passed" : "failed";
+  report.cleanup = {
+    cleanupConfirmed,
+    launchUnresolved,
+    retainedRoot:
+      passed && cleanupConfirmed && !launchUnresolved ? null : temporaryRoot,
+  };
+  await save();
+  if (passed && cleanupConfirmed && !launchUnresolved)
     await fs.rm(temporaryRoot, { recursive: true, force: true });
   else process.stderr.write(`DEV_REACT_RESOURCES_RETAINED:${temporaryRoot}\n`);
 }

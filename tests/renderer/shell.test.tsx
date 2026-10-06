@@ -380,7 +380,7 @@ it("automatically uses the rail at narrow widths and opens a bounded page-list o
 
 it("R36 R39 new profile opens Home without a legacy modal and has one leaf toolbar", async () => {
   const { host, f } = await mount();
-  expect(host.querySelector(".toolbar-title")?.textContent).toBe("Home");
+  expect(host.querySelector(".toolbar-title")?.textContent).toBe("Overview");
   expect(host.querySelector("dialog")).toBeNull();
   expect(host.textContent).toContain("Setup needed");
   expect(f.api.configure).not.toHaveBeenCalled();
@@ -485,36 +485,29 @@ it("R24 refused/unavailable update remains honest and review is dismissible", as
   expect(c.getSnapshot().overlay).toBe("none");
 });
 
-it("R31 R36 Home destinations and sidebar work actions use the facade", async () => {
+it("R31 R36 Home keeps local views selected and explicit destinations use existing routes", async () => {
   const { host, c, f } = await mount();
   for (const [label, page] of [
     ["Manage connection", "connection"],
-    ["Review access", "computer"],
-    ["Manage folders", "folders"],
+    ["Manage folder access", "folders"],
   ] as const) {
+    await act(async () =>
+      c.navigate({ area: "home", homeView: "access", homeSelection: null }),
+    );
     await act(async () => button(host, label).click());
-    expect(c.getSnapshot().destination.page).toBe(page);
-    await act(async () => c.navigate({ area: "home" }));
+    expect(c.getSnapshot().destination).toMatchObject({
+      area: "settings",
+      page,
+    });
   }
-  await act(async () => button(host, "View all").click());
-  expect(c.getSnapshot().destination.area).toBe("activity");
-  await act(async () => button(host, "New chat").click());
-  expect(f.api.task).toHaveBeenCalledWith({ kind: "task.create-chatgpt" });
-  await act(async () => {
-    c.navigate({ area: "home" });
-    f.emit("tasks", { revision: 1, tasks: [agentTask()] });
-  });
   await act(async () =>
-    host.querySelector<HTMLButtonElement>(".work-row")!.click(),
+    c.navigate({ area: "home", homeView: "activity", homeSelection: null }),
   );
-  expect(f.api.task).toHaveBeenCalledWith({
-    kind: "task.activate",
-    taskId: "task-1",
-  });
-  await act(async () => button(host, "Chat options").click());
-  expect(c.getSnapshot().overlay).toBe("task");
-  await act(async () => button(host, "Close").click());
-  expect(c.getSnapshot().overlay).toBe("none");
+  await act(async () => button(host, "Open full Activity").click());
+  expect(c.getSnapshot().destination.area).toBe("activity");
+  expect(host.querySelector('.rail [aria-label="New chat"]')).toBeNull();
+  expect(f.api.task).not.toHaveBeenCalled();
+  expect(f.api.configure).not.toHaveBeenCalled();
 });
 it("R05 R32 R34 activity inspection displays only metadata and returns to exact chat", async () => {
   const { host, c, f } = await mount();
@@ -852,21 +845,84 @@ function homeComputerSettings() {
   return ProductSettingsSchema.parse(value);
 }
 
-it("Home is Computer-ready without embedded login, with no commands on mount or navigation", async () => {
+it("fresh Setup navigation never writes, verifies, clears credentials or invents Computer readiness", async () => {
+  const { host, c, f } = await mount();
+  const saved = c.getSnapshot().configuration;
+  await act(async () => button(host, "Setup").click());
+  for (const step of [
+    "Connection",
+    "Folders & access",
+    "Add to ChatGPT",
+    "Finish",
+  ]) {
+    await act(async () => button(host, step).click());
+    expect(c.getSnapshot().destination.area).toBe("setup");
+  }
+  expect(host.querySelector(".setup-finish h2")?.textContent).toBe(
+    "A few checks remain",
+  );
+  expect(c.getSnapshot().configuration).toBe(saved);
+  await act(async () => button(host, "Continue setup").click());
+  expect(c.getSnapshot().destination.setupStep).toBe("connection");
+  expect(f.api.configure).not.toHaveBeenCalled();
+  expect(f.api.task).not.toHaveBeenCalled();
+});
+
+it("ready Review Setup retains saved credentials and cancels replacement without any configuration effect", async () => {
   const data = bootstrap();
   data.configuration.settings = homeComputerSettings();
   const { host, c, f } = await mount(data);
-  await act(async () => c.navigate({ area: "home" }));
-  expect(host.querySelector(".home-intro h1")?.textContent).toBe(
+  const saved = c.getSnapshot().configuration;
+  await act(async () => c.navigate({ area: "settings", page: "general" }));
+  await act(async () => button(host, "Review Setup").click());
+  expect(c.getSnapshot().destination).toMatchObject({
+    area: "setup",
+    setupStep: "finish",
+  });
+  expect(host.querySelector(".setup-finish h2")?.textContent).toBe(
     "Computer ready",
   );
-  expect(
-    host.querySelector(".readiness-summary")?.getAttribute("data-ready"),
-  ).toBe("true");
-  expect(host.querySelector(".readiness")?.textContent).toContain(
-    "Embedded ChatGPT · optional",
+  await act(async () => button(host, "Connection").click());
+  expect(host.querySelector(".credentials-saved")?.textContent).toContain(
+    "Tunnel credentials saved",
   );
-  expect(host.querySelector(".readiness")?.textContent).toContain(
+  await act(async () => button(host, "Replace credentials").click());
+  const password = host.querySelector<HTMLInputElement>(
+    'input[type="password"]',
+  )!;
+  expect(password.value).toBe("");
+  await act(async () => button(host, "Keep saved credentials").click());
+  await act(async () => button(host, "Back to Home").click());
+  expect(c.getSnapshot().configuration).toBe(saved);
+  expect(f.api.configure).not.toHaveBeenCalled();
+  expect(f.api.task).not.toHaveBeenCalled();
+});
+
+it("partial setup survives controller reopen with an obvious continuation and unchanged launch preference", async () => {
+  const data = bootstrap();
+  data.configuration.settings.computer.workspaces =
+    homeComputerSettings().computer.workspaces;
+  for (let lifetime = 0; lifetime < 2; lifetime++) {
+    const { host, c, f } = await mount(data);
+    expect(c.getSnapshot().destination.area).toBe("home");
+    await act(async () => button(host, "Continue setup").click());
+    expect(c.getSnapshot().destination).toMatchObject({
+      area: "setup",
+      setupStep: "connection",
+    });
+    expect(data.configuration.settings.general.openAtLaunch).toBe("browser");
+    expect(data.configuration.settings.computer.workspaces).toHaveLength(1);
+    expect(f.api.configure).not.toHaveBeenCalled();
+  }
+});
+
+it("Home projects Computer readiness separately from optional embedded login", async () => {
+  const data = bootstrap();
+  data.configuration.settings = homeComputerSettings();
+  const { host, c, f } = await mount(data);
+  await act(async () => c.navigate({ area: "home", homeView: "access" }));
+  expect(host.querySelector("main")?.textContent).toContain("Computer ready");
+  expect(host.querySelector("main")?.textContent).toContain(
     "Sign-in check needed",
   );
   for (const page of ["folders", "computer", "connection"] as const) {
@@ -876,56 +932,53 @@ it("Home is Computer-ready without embedded login, with no commands on mount or 
   expect(f.api.configure).not.toHaveBeenCalled();
   expect(f.api.task).not.toHaveBeenCalled();
 });
-it("Home keeps login readiness separate from external Computer readiness", async () => {
+it("Home never upgrades embedded login or stale attachment to Computer ready", async () => {
   const data = bootstrap();
   data.configuration.settings.setup.chatgpt.verified =
     homeComputerSettings().setup.computer.verified;
   const { host, c, f } = await mount(data);
-  expect(
-    host.querySelector(".readiness-summary")?.getAttribute("data-ready"),
-  ).toBe("false");
-  expect(host.querySelector(".readiness-summary")?.textContent).toContain(
-    "Setup needed",
+  await act(async () => c.navigate({ area: "home", homeView: "access" }));
+  expect(host.querySelector("main")?.textContent).toContain("Setup needed");
+  expect(host.querySelector("main")?.textContent).not.toContain(
+    "Computer ready",
   );
-  expect(
-    [...host.querySelectorAll(".readiness h3")].find(
-      (node) => node.textContent === "Embedded ChatGPT · optional",
-    )?.nextElementSibling?.textContent,
-  ).toBe("Ready");
   const changed = bootstrap();
   changed.configuration.settings = homeComputerSettings();
   changed.configuration.settings.setup.connect.verified!.runtimeGeneration =
     "e".repeat(64);
   vi.mocked(f.api.bootstrap).mockResolvedValue(changed);
   await act(async () => c.refresh());
-  expect(
-    host.querySelector(".readiness-summary")?.getAttribute("data-ready"),
-  ).toBe("false");
+  expect(host.querySelector("main")?.textContent).not.toContain(
+    "Computer ready",
+  );
   expect(f.api.configure).not.toHaveBeenCalled();
 });
-
-it("opens Setup from the approved rail and context sidebar and retains ordinary navigation and appearance", async () => {
+it("Setup owns a separate guided rail destination and shares existing Settings without effects", async () => {
   const { host, c, f } = await mount();
-  expect(host.querySelectorAll(".sidebar")).toHaveLength(1);
-  expect(host.querySelectorAll(".rail")).toHaveLength(1);
-  expect(
-    host.querySelector(".rail button:first-child")?.getAttribute("aria-label"),
-  ).toBe("Home");
-  expect(
-    host.querySelector(".rail button:last-child")?.getAttribute("aria-label"),
-  ).toBe("Settings");
   await act(async () => button(host, "Setup").click());
   expect(c.getSnapshot().destination).toMatchObject({
-    area: "settings",
-    page: "general",
+    area: "setup",
+    page: "connection",
+    setupStep: "connection",
   });
-  expect(host.querySelector(".toolbar-title strong")?.textContent).toBe(
-    "Setup",
-  );
-  expect(host.querySelector('[aria-label="Setup overview"]')).not.toBeNull();
-  await act(async () => button(host, "Folders").click());
+  expect(
+    host
+      .querySelector('.rail [aria-label="Setup"]')
+      ?.getAttribute("aria-current"),
+  ).toBe("page");
+  expect(
+    host
+      .querySelector('.rail [aria-label="Settings"]')
+      ?.hasAttribute("aria-current"),
+  ).toBe(false);
+  expect(host.querySelector('[aria-label="Setup steps"]')).not.toBeNull();
+  await act(async () => button(host, "Folders & access").click());
+  expect(c.getSnapshot().destination).toMatchObject({
+    area: "setup",
+    page: "folders",
+  });
   expect(host.querySelector(".toolbar-title")?.textContent).toContain(
-    "Setup /Folders",
+    "Folders & access",
   );
   await act(async () => button(host, "Settings").click());
   expect(c.getSnapshot().destination.page).toBe("appearance");
@@ -933,24 +986,24 @@ it("opens Setup from the approved rail and context sidebar and retains ordinary 
   expect(f.api.configure).not.toHaveBeenCalled();
   expect(f.api.task).not.toHaveBeenCalled();
 });
-it("does not present foreign ChatGPT windows as Farol work or expose acceptance tools on Home", async () => {
+it("Home projects current window metadata without creating a chat or exposing qualification forms", async () => {
   const { host, c, f } = await mount();
   await act(async () =>
     f.emit("tasks", { revision: 1, tasks: [task(), task("task-2")] }),
   );
-  expect(host.querySelector(".work-row")).toBeNull();
-  expect(host.textContent).not.toMatch(
-    /Task 1|task-1|task-2|Five current|Check account|Read-only file preview|Saved Chat answers/,
+  await act(async () => c.navigate({ area: "home", homeView: "work" }));
+  expect(host.querySelector("main")?.textContent).toContain("Task 1");
+  expect(host.querySelector("main")?.textContent).not.toMatch(
+    /Check account|Read-only file preview|Saved Chat answers/,
   );
+  expect(host.querySelector('.rail [aria-label="New chat"]')).toBeNull();
   expect(f.api.task).not.toHaveBeenCalled();
   await act(async () => c.navigate({ area: "chatgpt", taskId: "task-1" }));
   expect(host.querySelector(".toolbar-title strong")?.textContent).toBe(
     "ChatGPT",
   );
   expect(host.querySelector('[aria-label="Farol work"]')).toBeNull();
-  await act(async () => button(host, "New chat").click());
-  expect(f.api.task).toHaveBeenCalledTimes(1);
-  expect(f.api.task).toHaveBeenCalledWith({ kind: "task.create-chatgpt" });
+  expect(host.querySelector('[aria-label="New chat"]')).toBeNull();
 });
 it.each([
   "MODEL_ENDPOINT_UNAVAILABLE",
@@ -994,127 +1047,52 @@ it.each([
   else expect(f.api.configure).toHaveBeenCalledTimes(1);
 });
 
+// The global task-create control is retired. Keep its retained-outcome safety
+// coverage through the actual facade and Diagnostics, without restoring that UI.
 it.each(["full", "rail", "overlay"] as const)(
-  "shows New chat refusal and unknown outcomes outside the %s page list",
+  "retained unknown creation stays observable with %s sidebar and no global resubmit",
   async (width) => {
     const { host, c, f } = await mount();
     if (width !== "full")
       await act(async () => c.toggleSidebar(width === "overlay"));
-    vi.mocked(f.api.task).mockResolvedValueOnce({
-      ok: false,
-      error: "TASK_OPERATION_IN_PROGRESS",
-      state: { revision: 0, tasks: [] },
-    });
-    await act(async () => button(host, "New chat").click());
-    expect(
-      host.querySelector('dialog [aria-label="New chat result"]')?.textContent,
-    ).toContain("Another action is still in progress");
-    expect(host.querySelector("dialog")?.closest(".sidebar")).toBeNull();
-    await act(async () =>
-      button(host.querySelector("dialog")!, "Close").click(),
-    );
-    expect(
-      host.querySelector('.rail [aria-label="Review New chat result"]'),
-    ).not.toBeNull();
     vi.mocked(f.api.task).mockRejectedValueOnce(new Error("Create reply lost"));
-    await act(async () => button(host, "New chat").click());
-    expect(host.querySelector('dialog [role="status"]')?.textContent).toContain(
-      "New chat: Outcome unknown",
-    );
-    expect(button(host, "New chat").disabled).toBe(true);
-    await act(async () =>
-      button(host.querySelector("dialog")!, "Close").click(),
-    );
-    await act(async () => c.navigate({ area: "activity" }));
-    await act(async () => button(host, "Review New chat result").click());
-    expect(host.querySelector('dialog [role="status"]')?.textContent).toContain(
-      "New chat: Outcome unknown",
-    );
-    expect(f.api.task).toHaveBeenCalledTimes(2);
+    await act(async () => c.task({ kind: "task.create-chatgpt" }, "task:new"));
+    const original = c.getSnapshot().intents["task:new"];
+    expect(original?.state).toBe("unknown");
+    expect(host.querySelector('[aria-label="New chat"]')).toBeNull();
+    await act(async () => button(host, "Review unresolved actions").click());
+    expect(
+      host.querySelector('[aria-label="Retained actions"]')?.textContent,
+    ).toContain("task:new");
+    await act(async () => c.navigate({ area: "home" }));
+    await act(async () => c.refresh());
+    expect(c.getSnapshot().intents["task:new"]).toEqual(original);
+    await act(async () => c.task({ kind: "task.create-chatgpt" }, "task:new"));
+    expect(f.api.task).toHaveBeenCalledTimes(1);
   },
 );
-it("keeps late New chat failure reviewable without moving the current page or focus", async () => {
+it("a late creation failure preserves the current Setup step and remains observable", async () => {
   const { host, c, f } = await mount();
   const waiting = deferred<unknown>();
   vi.mocked(f.api.task).mockReturnValueOnce(waiting.promise);
-  await act(async () => button(host, "New chat").click());
-  await act(async () => c.navigate({ area: "settings", page: "folders" }));
-  await act(async () => waiting.reject(new Error("Late reply lost")));
-  expect(c.getSnapshot().destination.page).toBe("folders");
+  let result: ReturnType<typeof c.task>;
+  await act(async () => {
+    result = c.task({ kind: "task.create-chatgpt" }, "task:new");
+  });
+  await act(async () => c.navigate({ area: "setup", setupStep: "folders" }));
+  await act(async () => {
+    waiting.reject(new Error("Late reply lost"));
+    await result;
+  });
+  expect(c.getSnapshot().destination).toMatchObject({
+    area: "setup",
+    setupStep: "folders",
+  });
   expect(host.querySelector("dialog")).toBeNull();
-  await act(async () => button(host, "Review New chat result").click());
-  expect(host.querySelector('dialog [role="status"]')?.textContent).toContain(
-    "Outcome unknown",
-  );
-  await act(async () => button(host, "Inspect action details").click());
+  await act(async () => button(host, "Review unresolved actions").click());
   expect(
     host.querySelector('[aria-label="Retained actions"]')?.textContent,
   ).toContain("task:new");
-  await act(async () => f.emit("tasks", { revision: 1, tasks: [task()] }));
-  await act(async () => c.navigate({ area: "chatgpt", taskId: "task-1" }));
-  await act(async () => c.overlay("task"));
-  expect(
-    host.querySelector('dialog[aria-label="Chat options"]'),
-  ).not.toBeNull();
-});
-it.each(["refused", "unknown"] as const)(
-  "dismisses a %s New chat result when action details is already the current page",
-  async (outcome) => {
-    const { host, c, f } = await mount();
-    await act(async () =>
-      c.navigate({ area: "settings", page: "diagnostics" }),
-    );
-    if (outcome === "unknown")
-      vi.mocked(f.api.task).mockRejectedValueOnce(
-        new Error("Create reply lost"),
-      );
-    else
-      vi.mocked(f.api.task).mockResolvedValueOnce({
-        ok: false,
-        error: "TASK_OPERATION_IN_PROGRESS",
-        state: { revision: 0, tasks: [] },
-      });
-    await act(async () => button(host, "New chat").click());
-    const retained = c.getSnapshot().intents["task:new"];
-    for (let visit = 0; visit < 2; visit++) {
-      expect(
-        host.querySelector('dialog[aria-label="New chat"]'),
-      ).not.toBeNull();
-      await act(async () => button(host, "Inspect action details").click());
-      expect(host.querySelector("dialog")).toBeNull();
-      expect(host.querySelector("main")?.hasAttribute("inert")).toBe(false);
-      expect(c.getSnapshot().destination.page).toBe("diagnostics");
-      expect(c.getSnapshot().intents["task:new"]).toEqual(retained);
-      if (visit === 0)
-        await act(async () => button(host, "Review New chat result").click());
-    }
-    expect(f.api.task).toHaveBeenCalledTimes(1);
-    if (outcome === "unknown")
-      expect(button(host, "New chat").disabled).toBe(true);
-  },
-);
-it("keeps a pending New chat out of the review overlay so successful navigation completes", async () => {
-  const { host, c, f } = await mount();
-  const waiting = deferred<unknown>();
-  vi.mocked(f.api.task).mockReturnValueOnce(waiting.promise);
-  await act(async () => button(host, "New chat").click());
-  expect(button(host, "New chat").getAttribute("aria-busy")).toBe("true");
-  expect(
-    host.querySelector('[aria-label="Review New chat result"]'),
-  ).toBeNull();
-  expect(host.querySelector("dialog")).toBeNull();
-  await act(async () =>
-    waiting.resolve({
-      ok: true,
-      state: { revision: 1, tasks: [task()] },
-      selectedTaskId: "task-1",
-    }),
-  );
-  expect(c.getSnapshot().destination).toMatchObject({
-    area: "chatgpt",
-    taskId: "task-1",
-  });
-  expect(host.querySelector("dialog")).toBeNull();
   expect(f.api.task).toHaveBeenCalledTimes(1);
 });
 it("keeps unknown task work discoverable after its options are dismissed and Home is collapsed", async () => {

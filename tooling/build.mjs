@@ -247,8 +247,14 @@ await Promise.all([
   readBuildInput("src/ui/renderer/shell.html").then((bytes) =>
     fs.writeFile("_output/build/app/shell.html", bytes),
   ),
-  readBuildInput("src/ui/renderer/shell.css").then((bytes) =>
-    fs.writeFile("_output/build/app/shell.css", bytes),
+  Promise.all([
+    readBuildInput("src/ui/renderer/shell.css"),
+    readBuildInput("src/ui/renderer/home.css"),
+  ]).then((parts) =>
+    fs.writeFile(
+      "_output/build/app/shell.css",
+      Buffer.concat(parts.flatMap((bytes) => [bytes, Buffer.from("\n")])),
+    ),
   ),
   readBuildInput("resources.json").then((bytes) => {
     assertResourceManifest(JSON.parse(bytes.toString("utf8")));

@@ -21,6 +21,8 @@ import {
   type ChatHistoryContext,
 } from "../../pkg/ipc/chat-history";
 import { adoptReadConversation } from "./read-conversation-state";
+import { computerSetup } from "./computer-setup";
+import { nextSetupStep, setupPage } from "./setup-navigation";
 import {
   ProductConfigurationSnapshotSchema,
   ProductConfigurationCommandSchema,
@@ -331,8 +333,7 @@ export class WindowController implements RendererFacade {
           if (
             !this.pendingSectionNavigation &&
             (settings.setup.journey.dismissed ||
-              settings.setup.chatgpt.configured ||
-              settings.computer.workspaces.length > 0)
+              computerSetup(this.state).ready)
           ) {
             const launch = settings.general.openAtLaunch;
             this.navigate(
@@ -1215,6 +1216,28 @@ export class WindowController implements RendererFacade {
       page: destination.page ?? this.state.destination.page,
       taskId: destination.taskId ?? this.state.destination.taskId,
     };
+    const homeView = destination.homeView ?? this.state.destination.homeView;
+    const activityId = Object.hasOwn(destination, "activityId")
+      ? destination.activityId
+      : this.state.destination.activityId;
+    if (activityId !== undefined) Object.assign(next, { activityId });
+    if (homeView) Object.assign(next, { homeView });
+    const homeSelection = Object.hasOwn(destination, "homeSelection")
+      ? destination.homeSelection
+      : destination.homeView &&
+          destination.homeView !== this.state.destination.homeView
+        ? null
+        : this.state.destination.homeSelection;
+    if (homeSelection !== undefined) Object.assign(next, { homeSelection });
+    if (next.area === "setup") {
+      const setupStep =
+        destination.setupStep ??
+        (this.state.destination.area === "setup"
+          ? this.state.destination.setupStep
+          : undefined) ??
+        nextSetupStep(this.state);
+      Object.assign(next, { setupStep, page: setupPage(setupStep) });
+    }
     if (JSON.stringify(next) === JSON.stringify(this.state.destination)) {
       if (this.state.overlay === "search" || this.state.sidebar === "overlay") {
         this.patch({
@@ -1342,7 +1365,8 @@ export class WindowController implements RendererFacade {
     this.api.layout(
       state.destination.area === "chatgpt"
         ? "browser"
-        : state.destination.area === "settings"
+        : state.destination.area === "settings" ||
+            state.destination.area === "setup"
           ? "settings"
           : "activity",
       state.destination.taskId,

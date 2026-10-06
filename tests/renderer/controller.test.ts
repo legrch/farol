@@ -12,6 +12,82 @@ function sectionIntent(section = "settings", sequence = 1, taskId = "") {
     sequence,
   };
 }
+it("Home local views and exact record identities survive Back and Forward without a command", async () => {
+  const f = fixture();
+  const c = new WindowController(f.api);
+  await c.start();
+  c.navigate({ area: "home", homeView: "work", homeSelection: null });
+  c.navigate({
+    area: "home",
+    homeView: "work",
+    homeSelection: { kind: "task", id: "owned-task", turnId: "original-turn" },
+  });
+  const inspected = c.getSnapshot().destination;
+  c.navigate({ area: "home", homeView: "activity" });
+  expect(c.getSnapshot().destination.homeSelection).toBeNull();
+  c.travel(-1);
+  expect(c.getSnapshot().destination).toEqual(inspected);
+  c.travel(1);
+  expect(c.getSnapshot().destination).toMatchObject({
+    area: "home",
+    homeView: "activity",
+    homeSelection: null,
+  });
+  expect(f.api.configure).not.toHaveBeenCalled();
+  expect(f.api.task).not.toHaveBeenCalled();
+  c.dispose();
+});
+it("Setup is a separate history destination with the same Settings host surface and no automatic effects", async () => {
+  const f = fixture();
+  const c = new WindowController(f.api);
+  await c.start();
+  c.navigate({ area: "setup" });
+  expect(c.getSnapshot().destination).toMatchObject({
+    area: "setup",
+    setupStep: "connection",
+    page: "connection",
+  });
+  c.navigate({ area: "setup", setupStep: "folders" });
+  c.navigate({ area: "setup", setupStep: "attachment" });
+  c.travel(-1);
+  expect(c.getSnapshot().destination).toMatchObject({
+    area: "setup",
+    setupStep: "folders",
+    page: "folders",
+  });
+  expect(vi.mocked(f.api.layout).mock.calls.at(-1)?.[0]).toBe("settings");
+  expect(f.api.configure).not.toHaveBeenCalled();
+  expect(f.api.task).not.toHaveBeenCalled();
+  c.dispose();
+});
+it("a partial saved folder does not dismiss setup or imply readiness on a new window lifetime", async () => {
+  const f = fixture();
+  const data = bootstrap();
+  data.configuration.settings.computer.workspaces = [
+    {
+      workspaceId: "22222222-2222-4222-8222-222222222222",
+      root: "/tmp/partial-setup",
+      label: "Partial",
+      access: "read",
+      excludedPaths: [],
+      rootIdentity: { device: "1", inode: "2" },
+    },
+  ];
+  // Parse the complete fixture through the production schema at bootstrap.
+  vi.mocked(f.api.bootstrap).mockResolvedValue(data);
+  for (let lifetime = 0; lifetime < 2; lifetime++) {
+    const c = new WindowController(f.api);
+    await c.start();
+    expect(c.getSnapshot().status).toBe("current");
+    expect(c.getSnapshot().destination.area).toBe("home");
+    c.navigate({ area: "setup" });
+    expect(c.getSnapshot().destination.setupStep).toBe("connection");
+    expect(data.configuration.settings.general.openAtLaunch).toBe("browser");
+    expect(data.configuration.settings.setup.journey.dismissed).toBe(false);
+    c.dispose();
+  }
+  expect(f.api.configure).not.toHaveBeenCalled();
+});
 describe("F0 window owner", () => {
   it("R10 retains an unknown explicit account confirmation without another command", async () => {
     const f = fixture();

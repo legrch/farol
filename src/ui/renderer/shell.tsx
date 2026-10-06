@@ -10,16 +10,14 @@ import { shellGeometry } from "../../pkg/shell-layout/geometry";
 import { useRenderer } from "./services";
 import { PanelBoundary } from "./boundary";
 import { Settings, useSettingsAttention } from "./settings";
-import type {
-  ActivityEntry,
-  RendererFacade,
-  SettingsPage,
-  WindowSnapshot,
-} from "./contract";
+import type { RendererFacade, SettingsPage, WindowSnapshot } from "./contract";
 import { computerSetup } from "./computer-setup";
-import { TaskEditor, taskActionFeedback } from "./task";
+import { TaskEditor } from "./task";
+import { Home, HomeNavigation, homeTitle } from "./home";
+import { Setup, SetupNavigation } from "./setup";
+import { setupSteps } from "./setup-navigation";
 const pages: readonly [SettingsPage, string][] = [
-  ["general", "Setup"],
+  ["general", "General"],
   ["folders", "Folders"],
   ["computer", "This Mac"],
   ["connection", "Connection"],
@@ -63,174 +61,11 @@ function title(snapshot: WindowSnapshot) {
         )?.label ?? "ChatGPT")
       : snapshot.destination.area === "activity"
         ? "Activity"
-        : "Home";
-}
-function Work({
-  snapshot,
-  facade,
-}: {
-  snapshot: WindowSnapshot;
-  facade: RendererFacade;
-}) {
-  const work = snapshot.tasks.tasks.filter((task) => task.agent);
-  return (
-    <div className="work-list">
-      {work.length === 0 ? (
-        <p className="empty">No Farol tasks yet. Open ChatGPT to begin.</p>
-      ) : (
-        work.map((task) => (
-          <button
-            className="work-row"
-            key={task.taskId}
-            onClick={() => {
-              facade.navigate({ area: "chatgpt", taskId: task.taskId });
-              void facade.task(
-                { kind: "task.activate", taskId: task.taskId },
-                `activate:${task.taskId}`,
-              );
-            }}
-          >
-            <Icon name="chatgpt" />
-            <span className="work-label">
-              <strong>{task.label}</strong>
-              <small>
-                {task.agent?.observation === "unavailable"
-                  ? "Observation unavailable"
-                  : "Farol task"}
-              </small>
-            </span>
-            <span className="phase">
-              {task.agent?.phase ?? task.lifecycle.replaceAll("_", " ")}
-            </span>
-            <Icon name="forward" />
-          </button>
-        ))
-      )}
-    </div>
-  );
-}
-function Home({
-  snapshot,
-  facade,
-}: {
-  snapshot: WindowSnapshot;
-  facade: RendererFacade;
-}) {
-  const setup = computerSetup(snapshot);
-  const ready = setup.label;
-  const settings =
-    snapshot.configuration?.status === "ready"
-      ? snapshot.configuration.settings
-      : null;
-  return (
-    <div className="home-page">
-      <div className="home-intro">
-        <span className="intro-mark">
-          <Icon name={setup.ready ? "check" : "home"} />
-        </span>
-        <div>
-          <h1>
-            {setup.ready ? "Computer ready" : "Connect this Mac to ChatGPT"}
-          </h1>
-          <p>
-            {setup.ready
-              ? "External Computer access is verified for the current folder and connection."
-              : `${ready}. ${setup.next}`}
-          </p>
-          <button
-            className="text-button"
-            onClick={() =>
-              facade.navigate({ area: "settings", page: "general" })
-            }
-          >
-            {setup.ready ? "Review setup" : "Continue setup"}
-          </button>
-        </div>
-      </div>
-      <div className="home-columns">
-        <div>
-          <section>
-            <div className="section-heading">
-              <h2>Farol work</h2>
-              <button
-                className="text-button"
-                onClick={() => facade.navigate({ area: "chatgpt" })}
-              >
-                View ChatGPT
-              </button>
-            </div>
-            <Work snapshot={snapshot} facade={facade} />
-            <p className="description">
-              Switching sections keeps ongoing work available.
-            </p>
-          </section>
-          <section className="recent">
-            <div className="section-heading">
-              <h2>Recent activity</h2>
-              <button
-                className="text-button"
-                onClick={() => facade.navigate({ area: "activity" })}
-              >
-                View all
-              </button>
-            </div>
-            <Activity snapshot={snapshot} facade={facade} recent />
-          </section>
-        </div>
-        <aside className="readiness">
-          <h2>Connection &amp; access</h2>
-          <div className="readiness-summary" data-ready={setup.ready}>
-            <strong>{ready}</strong>
-            <p>
-              {setup.ready
-                ? "External Computer access has current folder and attachment evidence."
-                : setup.next}
-            </p>
-          </div>
-          <button
-            className="text-button"
-            onClick={() =>
-              facade.navigate({ area: "settings", page: "connection" })
-            }
-          >
-            Manage connection
-          </button>
-          <h3>Embedded ChatGPT · optional</h3>
-          <p>{setup.embeddedChatGPT}</p>
-          <p className="description">
-            Embedded sign-in is independent of external Computer access.
-          </p>
-          <h3>This Mac</h3>
-          <p>
-            {snapshot.runtime === "ready"
-              ? "Local service available"
-              : "Local service unavailable"}
-          </p>
-          <button
-            className="text-button"
-            onClick={() =>
-              facade.navigate({ area: "settings", page: "computer" })
-            }
-          >
-            Review access
-          </button>
-          <h3>Shared folders</h3>
-          <p>{settings?.computer.workspaces.length ?? 0} approved folders</p>
-          <p className="description">
-            Folder status is separate from the connection.
-          </p>
-          <button
-            className="text-button"
-            onClick={() =>
-              facade.navigate({ area: "settings", page: "folders" })
-            }
-          >
-            Manage folders
-          </button>
-        </aside>
-      </div>
-    </div>
-  );
+        : snapshot.destination.area === "setup"
+          ? (setupSteps.find(
+              ([step]) => step === snapshot.destination.setupStep,
+            )?.[1] ?? "Setup")
+          : homeTitle(snapshot);
 }
 function Activity({
   snapshot,
@@ -241,7 +76,9 @@ function Activity({
   facade: RendererFacade;
   recent?: boolean;
 }) {
-  const [selected, setSelected] = useState<ActivityEntry | null>(null);
+  const selected = snapshot.activity.find(
+    (event) => event.id === snapshot.destination.activityId,
+  );
   const items = [...snapshot.activity].reverse().slice(0, recent ? 5 : 256);
   return (
     <>
@@ -256,7 +93,7 @@ function Activity({
             className="activity-row"
             key={event.id}
             onClick={() => {
-              setSelected(event);
+              facade.navigate({ area: "activity", activityId: event.id });
               facade.overlay("activity");
             }}
           >
@@ -281,7 +118,6 @@ function Activity({
         <Overlay
           title="Recorded event"
           onClose={() => {
-            setSelected(null);
             facade.overlay("none");
           }}
         >
@@ -319,6 +155,14 @@ function Activity({
               The recorded conversation is no longer available in this slot.
             </p>
           )}
+        </Overlay>
+      )}
+      {!selected && snapshot.overlay === "activity" && (
+        <Overlay title="Recorded event" onClose={() => facade.overlay("none")}>
+          <p>
+            This event is no longer available in this window. Its absence does
+            not establish an outcome.
+          </p>
         </Overlay>
       )}
     </>
@@ -391,6 +235,7 @@ function Search({
     { label: "Home", area: "home" as const, page: "general" as const },
     { label: "ChatGPT", area: "chatgpt" as const, page: "general" as const },
     { label: "Activity", area: "activity" as const, page: "general" as const },
+    { label: "Setup", area: "setup" as const, page: "general" as const },
     ...pages.map(([page, label]) => ({
       label,
       area: "settings" as const,
@@ -707,9 +552,11 @@ export function Shell() {
   const destination = state.destination;
   const stage = useRef<HTMLElement>(null);
   const pageKey =
-    destination.area === "settings"
-      ? `settings:${destination.page}`
-      : destination.area;
+    destination.area === "settings" || destination.area === "setup"
+      ? `${destination.area}:${destination.page}:${destination.setupStep ?? ""}`
+      : destination.area === "home"
+        ? `home:${destination.homeView ?? "overview"}:${destination.homeSelection?.id ?? ""}`
+        : destination.area;
   useLayoutEffect(() => {
     if (stage.current) {
       stage.current.scrollTop = 0;
@@ -746,27 +593,6 @@ export function Shell() {
       (step) => "outcomeUnknown" in step && step.outcomeUnknown,
     ) ||
     configuration?.connectors.secureMcp.runtime?.state === "outcome_unknown";
-  const [newChatReview, setNewChatReview] = useState(false);
-  const newChatResult = state.intents["task:new"];
-  const reviewNewChat = () => {
-    setNewChatReview(true);
-    facade.overlay("task");
-  };
-  const newChat = () => {
-    const origin = facade.getSnapshot().destination;
-    void facade
-      .task({ kind: "task.create-chatgpt" }, "task:new")
-      .then((result) => {
-        const current = facade.getSnapshot();
-        // A late result remains reviewable without pulling focus from a new page.
-        if (
-          result.state !== "applied" &&
-          current.destination === origin &&
-          current.overlay === "none"
-        )
-          reviewNewChat();
-      });
-  };
   useEffect(() => {
     const listener = (event: KeyboardEvent) => {
       if (event.isComposing || event.repeat) return;
@@ -777,12 +603,8 @@ export function Shell() {
         facade.dismissOverlay();
       }
     };
-    const unsubscribe = facade.subscribe(() => {
-      if (facade.getSnapshot().overlay !== "task") setNewChatReview(false);
-    });
     window.addEventListener("keydown", listener);
     return () => {
-      unsubscribe();
       window.removeEventListener("keydown", listener);
     };
   }, [facade]);
@@ -831,11 +653,9 @@ export function Shell() {
           </button>
         </div>
         <div className="toolbar-title">
-          {settings && destination.page !== "general" && (
+          {(settings || destination.area === "setup") && (
             <span>
-              {["folders", "computer", "connection"].includes(destination.page)
-                ? "Setup"
-                : "Settings"}{" "}
+              {settings ? "Settings" : "Setup"}{" "}
               <span className="separator">/</span>
             </span>
           )}
@@ -855,7 +675,6 @@ export function Shell() {
           <button
             aria-label="Chat options"
             onClick={() => {
-              setNewChatReview(false);
               facade.overlay("task");
             }}
           >
@@ -898,44 +717,11 @@ export function Shell() {
         <button
           aria-label="Setup"
           title="Setup"
-          aria-current={
-            settings && destination.page === "general" ? "page" : undefined
-          }
-          onClick={() => facade.navigate({ area: "settings", page: "general" })}
+          aria-current={destination.area === "setup" ? "page" : undefined}
+          onClick={() => facade.navigate({ area: "setup" })}
         >
           <Icon name="check" />
         </button>
-        <button
-          aria-label="New chat"
-          title={
-            newChatResult?.state === "pending"
-              ? "Opening a new chat…"
-              : "New chat"
-          }
-          aria-busy={newChatResult?.state === "pending"}
-          disabled={
-            state.status !== "current" ||
-            state.tasks.tasks.length >= 5 ||
-            newChatResult?.state === "pending" ||
-            newChatResult?.state === "unknown"
-          }
-          onClick={newChat}
-        >
-          <Icon name="plus" />
-        </button>
-        {newChatResult &&
-          (newChatResult.state === "refused" ||
-            newChatResult.state === "unknown") && (
-            <button
-              aria-label="Review New chat result"
-              title={taskActionFeedback("New chat", newChatResult)}
-              className="attention-action"
-              onClick={reviewNewChat}
-            >
-              <Icon name="chatgpt" />
-              <span className="attention-dot" />
-            </button>
-          )}
         {unresolved && (
           <button
             aria-label="Review unresolved actions"
@@ -952,9 +738,7 @@ export function Shell() {
           className="rail-bottom"
           aria-label="Settings"
           title="Settings"
-          aria-current={
-            settings && destination.page !== "general" ? "page" : undefined
-          }
+          aria-current={settings ? "page" : undefined}
           onClick={() =>
             facade.navigate({ area: "settings", page: "appearance" })
           }
@@ -972,78 +756,72 @@ export function Shell() {
             {settings
               ? "Settings"
               : destination.area === "home"
-                ? "Your Mac"
-                : destination.area === "chatgpt"
-                  ? "ChatGPT"
-                  : "Activity"}
+                ? "Home"
+                : destination.area === "setup"
+                  ? "Setup"
+                  : destination.area === "chatgpt"
+                    ? "ChatGPT"
+                    : "Activity"}
           </h2>
-          {(settings || destination.area === "home") && (
-            <nav aria-label={settings ? "Settings navigation" : "Setup pages"}>
-              {pages
-                .filter(
-                  ([page]) =>
-                    settings ||
-                    ["general", "folders", "computer", "connection"].includes(
-                      page,
-                    ),
-                )
-                .map(([page, label]) => (
-                  <button
-                    key={page}
-                    aria-current={
-                      settings && destination.page === page ? "page" : undefined
-                    }
-                    onClick={() => facade.navigate({ area: "settings", page })}
-                  >
-                    <Icon
-                      name={
-                        page === "folders"
-                          ? "sidebar"
-                          : page === "general"
-                            ? "check"
-                            : "settings"
+          {destination.area === "home" && (
+            <HomeNavigation snapshot={state} facade={facade} />
+          )}
+          {destination.area === "setup" && (
+            <SetupNavigation snapshot={state} facade={facade} />
+          )}
+          {settings && (
+            <nav aria-label="Settings navigation">
+              {pages.map(([page, label]) => (
+                <button
+                  key={page}
+                  aria-current={destination.page === page ? "page" : undefined}
+                  onClick={() => facade.navigate({ area: "settings", page })}
+                >
+                  <Icon name={page === "folders" ? "sidebar" : "settings"} />
+                  <span>{label}</span>
+                </button>
+              ))}
+            </nav>
+          )}
+          {destination.area === "chatgpt" &&
+            state.tasks.tasks.some((task) => task.agent) && (
+              <nav className="sidebar-section" aria-label="Farol work">
+                <h2>Farol work</h2>
+                {state.tasks.tasks
+                  .filter((task) => task.agent)
+                  .map((task) => (
+                    <button
+                      key={task.taskId}
+                      aria-current={
+                        destination.area === "chatgpt" &&
+                        destination.taskId === task.taskId
+                          ? "page"
+                          : undefined
                       }
-                    />
-                    <span>{label}</span>
-                  </button>
-                ))}
-            </nav>
-          )}
-          {!settings && state.tasks.tasks.some((task) => task.agent) && (
-            <nav className="sidebar-section" aria-label="Farol work">
-              <h2>Farol work</h2>
-              {state.tasks.tasks
-                .filter((task) => task.agent)
-                .map((task) => (
-                  <button
-                    key={task.taskId}
-                    aria-current={
-                      destination.area === "chatgpt" &&
-                      destination.taskId === task.taskId
-                        ? "page"
-                        : undefined
-                    }
-                    onClick={() => {
-                      facade.navigate({ area: "chatgpt", taskId: task.taskId });
-                      void facade.task(
-                        { kind: "task.activate", taskId: task.taskId },
-                        `activate:${task.taskId}`,
-                      );
-                    }}
-                  >
-                    <Icon name="chatgpt" />
-                    <span>
-                      {task.label}
-                      <small>{task.agent?.phase.replaceAll("_", " ")}</small>
-                    </span>
-                  </button>
-                ))}
-            </nav>
-          )}
+                      onClick={() => {
+                        facade.navigate({
+                          area: "chatgpt",
+                          taskId: task.taskId,
+                        });
+                        void facade.task(
+                          { kind: "task.activate", taskId: task.taskId },
+                          `activate:${task.taskId}`,
+                        );
+                      }}
+                    >
+                      <Icon name="chatgpt" />
+                      <span>
+                        {task.label}
+                        <small>{task.agent?.phase.replaceAll("_", " ")}</small>
+                      </span>
+                    </button>
+                  ))}
+              </nav>
+            )}
           {destination.area === "chatgpt" && (
             <p className="description">
-              Your conversations stay in ChatGPT. Use New chat to start a
-              conversation.
+              Your conversations stay in ChatGPT. Use its own New chat action to
+              start a conversation.
             </p>
           )}
           {destination.area === "activity" && (
@@ -1080,6 +858,8 @@ export function Shell() {
         <PanelBoundary key={destination.area}>
           {destination.area === "home" ? (
             <Home snapshot={state} facade={facade} />
+          ) : destination.area === "setup" ? (
+            <Setup snapshot={state} facade={facade} />
           ) : destination.area === "settings" ? (
             <Settings snapshot={state} facade={facade} />
           ) : destination.area === "activity" ? (
@@ -1098,34 +878,12 @@ export function Shell() {
         <Update snapshot={state} facade={facade} />
       )}{" "}
       {state.overlay === "task" && (
-        <Overlay
-          title={newChatReview ? "New chat" : "Chat options"}
-          onClose={() => facade.overlay("none")}
-        >
-          {newChatReview ? (
-            <section aria-label="New chat result">
-              <p role="status">
-                {newChatResult
-                  ? taskActionFeedback("New chat", newChatResult)
-                  : "No result is recorded."}
-              </p>
-              <button
-                className="subtle"
-                onClick={() => {
-                  facade.overlay("none");
-                  facade.navigate({ area: "settings", page: "diagnostics" });
-                }}
-              >
-                Inspect action details
-              </button>
-            </section>
-          ) : (
-            <TaskEditor
-              key={destination.taskId}
-              snapshot={state}
-              facade={facade}
-            />
-          )}
+        <Overlay title="Chat options" onClose={() => facade.overlay("none")}>
+          <TaskEditor
+            key={destination.taskId}
+            snapshot={state}
+            facade={facade}
+          />
         </Overlay>
       )}
     </div>

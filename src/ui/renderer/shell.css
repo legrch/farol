@@ -340,11 +340,10 @@ kbd {
   grid-column: 2;
   grid-row: 2;
   background: var(--side);
-  border-right: 1px solid var(--line);
   padding: 24px 11px;
-  overflow: auto;
+  overflow-y: auto;
+  overflow-x: hidden;
   min-width: 0;
-  scrollbar-gutter: stable;
 }
 .page-list-resizer {
   position: absolute;
@@ -355,10 +354,50 @@ kbd {
   -webkit-app-region: no-drag;
   z-index: 1;
 }
-.page-list-resizer:hover,
+.page-list-resizer::after {
+  content: "";
+  position: absolute;
+  inset: 0 0 0 auto;
+  width: 1px;
+  background: var(--line);
+  pointer-events: none;
+}
 .page-list-resizer:focus-visible {
-  background: var(--accent);
   outline: none;
+}
+.page-list-resizer:hover::after,
+.page-list-resizer:focus-visible::after {
+  background: var(--accent);
+}
+.setup-intro,
+.setup-finish,
+.setup-navigation {
+  max-width: 900px;
+  padding: 28px 40px;
+}
+.setup-intro {
+  padding-bottom: 0;
+}
+.setup-eyebrow {
+  color: var(--muted);
+  font-size: 12px;
+}
+.setup-page .settings-page {
+  padding-top: 20px;
+}
+.setup-navigation {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.setup-step-number {
+  color: var(--muted);
+  font-size: 12px;
+}
+.contextual-sidebar button[aria-current="step"] {
+  background: var(--tint);
+  color: var(--fg);
+  font-weight: 600;
 }
 .desktop[data-sidebar-resizing="true"] {
   cursor: col-resize;
