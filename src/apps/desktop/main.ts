@@ -467,6 +467,8 @@ const runtimeEnvironment = (() => {
     throw error;
   }
 })();
+const isolatedE2EHome =
+  process.env.FAROL_NEXT_E2E === "1" ? process.env.HOME : undefined;
 const desktopAppData = (() => {
   try {
     return desktopAppDataPath(buildEnvironment, app.getPath("appData"), {
@@ -474,7 +476,7 @@ const desktopAppData = (() => {
       override: process.env.FAROL_NEXT_E2E_APP_DATA,
       acceptanceProfile: process.env.FAROL_NEXT_ACCEPTANCE_PROFILE,
       testRoot: process.env.FAROL_NEXT_E2E_TEST_ROOT,
-      testHome: process.env.HOME,
+      testHome: isolatedE2EHome,
       testProof: process.env.FAROL_NEXT_E2E_TEST_PROOF,
     });
   } catch (error) {
@@ -487,6 +489,10 @@ const desktopAppData = (() => {
     throw error;
   }
 })();
+// On macOS Electron's native home may ignore the child's HOME environment.
+// The existing app-data proof has already validated this exact private HOME;
+// select it before Go/native child composition can observe the owner's home.
+if (isolatedE2EHome !== undefined) app.setPath("home", isolatedE2EHome);
 const declaredDesktopIdentity = desktopIdentity(
   runtimeEnvironment,
   desktopAppData,
