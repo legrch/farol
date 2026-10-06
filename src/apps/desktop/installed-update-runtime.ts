@@ -8,6 +8,7 @@ import { promisify } from "node:util";
 import { z } from "zod";
 import {
   InstalledUpdater,
+  type InstalledUpdaterPorts,
   type ReadyUpdate,
   type UpdateHandoff,
 } from "../../modules/release/app/installed-updater";
@@ -15,12 +16,15 @@ import {
   discoverGithubUpdate,
   downloadAndVerifyGithubUpdate,
   packageMatchesRelease,
+  parseGithubReleaseManifest,
   parseRetainedGithubReleaseManifest,
 } from "../../modules/release/app/github-release";
 import type {
   UpdateCandidate,
   VerifiedGithubUpdate,
+  ReleaseManifest,
 } from "../../modules/release/domain/github-release-contract";
+import { compareReleaseVersions } from "../../modules/release/domain/github-version";
 import type { InstalledUpdateView } from "../../modules/release/contract/installed-update";
 import { createGithubUpdateTransport } from "../../modules/release/infra/native/github-update-transport";
 import { createUpdatePackageVerifier } from "../../modules/release/infra/native/update-package-verifier";
@@ -383,6 +387,9 @@ export type InstalledUpdateRuntimeOptions = Readonly<{
   directory: string;
   userData: string;
   build: BuildIdentity;
+  // Selected by the trusted supervisory caller, never renderer request data.
+  // This is a source for the existing staging/retention owner, not a Ready record.
+  localArchive?: Readonly<{ path: string; manifest: unknown }>;
   // Electron must copy physical ASAR files, not its virtual archive filesystem.
   copyApp(source: string, destination: string): Promise<void>;
   // Removal has the same physical ASAR boundary as copying a package.
@@ -399,6 +406,18 @@ export type InstalledUpdateRuntimeOptions = Readonly<{
 export async function createInstalledUpdateRuntime(
   options: InstalledUpdateRuntimeOptions,
 ): Promise<InstalledUpdater | null> {
+  const selectedLocal = options.localArchive;
+  const parsedLocal = selectedLocal
+    ? parseGithubReleaseManifest(selectedLocal.manifest)
+    : null;
+  const localArchive = selectedLocal
+    ? {
+        path: selectedLocal.path,
+        manifest: parsedLocal?.ok
+          ? Object.freeze({ ...parsedLocal.value })
+          : null,
+      }
+    : null;
   if (
     options.build.updateChannel !== "github-owner-beta" ||
     !options.build.buildVersion ||
@@ -954,6 +973,100 @@ export async function createInstalledUpdateRuntime(
       await parent.close();
     }
   };
+  const stageSelectedUpdate = async (
+    manifest: ReleaseManifest,
+    produce: (
+      verify: typeof checkedTransport.verifyPackage,
+    ) => ReturnType<typeof downloadAndVerifyGithubUpdate>,
+  ): ReturnType<InstalledUpdaterPorts["download"]> => {
+    let processStart: string;
+    try {
+      processStart = await captureInstalledProcessStart(process.pid);
+    } catch {
+      return known("UPDATE_PRODUCER_IDENTITY_UNCONFIRMED");
+    }
+    const download: z.infer<typeof DownloadStage> = {
+      phase: "downloading",
+      id: randomBytes(16).toString("hex"),
+      producer: { pid: process.pid, processStart },
+    };
+    const intent = {
+      schema: "farol.update-download-intent/1" as const,
+      buildId: manifest.buildId,
+      archiveSha256: manifest.archiveSha256,
+      download,
+    };
+    // Bind allocation and the original process before any request or extraction.
+    // A crash can reconcile this exact directory without touching older rollback.
+    await writeRecord(pendingDownloadFile, intent);
+    const directory = downloadDirectory(download.id);
+    await fs.mkdir(directory, { mode: 0o700 });
+    await canonicalOwnedDirectory(directory, true);
+    const metadata = await fs.lstat(directory, { bigint: true });
+    download.identity = {
+      dev: String(metadata.dev),
+      ino: String(metadata.ino),
+      birthtimeNs: String(metadata.birthtimeNs),
+    };
+    await writeRecord(pendingDownloadFile, intent);
+    await selectDownload(download.id);
+    if (downloadsCancelled) {
+      // No request or extraction has begun. Do not revive a cancelled lifetime
+      // by replacing its transport after Quit raced durable allocation.
+      await fs.rmdir(directory);
+      await fs.unlink(pendingDownloadFile);
+      return known("UPDATE_DOWNLOAD_CANCELLED");
+    }
+    let downloaded: Awaited<ReturnType<typeof downloadAndVerifyGithubUpdate>>;
+    try {
+      downloaded = await produce(async (handle, expectedManifest) => {
+        // Native verification may have its own child lifetime. A lost
+        // result must not be treated as an interrupted HTTP-only stage.
+        download.phase = "verifying";
+        await writeRecord(pendingDownloadFile, intent);
+        return checkedTransport.verifyPackage(handle, expectedManifest);
+      });
+    } catch {
+      return {
+        ok: false,
+        code: "UPDATE_STAGING_OUTCOME_UNKNOWN",
+        recoveryRequired: true,
+      };
+    }
+    if (transportOutcomeUnknown)
+      return {
+        ok: false,
+        code: "UPDATE_STAGING_OUTCOME_UNKNOWN",
+        recoveryRequired: true,
+      };
+    if (!downloaded.ok) {
+      if (stagedDownloadHandle !== null) {
+        try {
+          await verifier.discard(stagedDownloadHandle);
+          const cleanup = await transport.discard(stagedDownloadHandle);
+          if (!cleanup.ok) throw new Error("UPDATE_STAGE_CLEANUP_UNKNOWN");
+          stagedDownloadHandle = null;
+        } catch {
+          return {
+            ok: false,
+            code: "UPDATE_STAGING_OUTCOME_UNKNOWN",
+            recoveryRequired: true,
+          };
+        }
+      }
+      // A known failed request has drained all its native work. Reclaim this
+      // attempt before clearing its intent; uncertainty keeps recovery fenced.
+      await removeDownloadStage(download);
+      await fs.unlink(pendingDownloadFile);
+      return known(`UPDATE_${downloaded.code.toUpperCase()}`);
+    }
+    verified = downloaded.value;
+    return {
+      ok: true,
+      update: { handle: verified.handle, manifest: verified.manifest },
+    };
+  };
+
   const controller = new InstalledUpdater({
     cancelPending: () => {
       downloadsCancelled = true;
@@ -1279,96 +1392,73 @@ export async function createInstalledUpdateRuntime(
     },
     download: async () => {
       if (!candidate) return known("UPDATE_CANDIDATE_MISSING");
-      let processStart: string;
-      try {
-        processStart = await captureInstalledProcessStart(process.pid);
-      } catch {
-        return known("UPDATE_PRODUCER_IDENTITY_UNCONFIRMED");
-      }
-      const download: z.infer<typeof DownloadStage> = {
-        phase: "downloading",
-        id: randomBytes(16).toString("hex"),
-        producer: { pid: process.pid, processStart },
-      };
-      const intent = {
-        schema: "farol.update-download-intent/1" as const,
-        buildId: candidate.manifest.buildId,
-        archiveSha256: candidate.manifest.archiveSha256,
-        download,
-      };
-      // Bind allocation and the original process before any request or extraction.
-      // A crash can reconcile this exact directory without touching older rollback.
-      await writeRecord(pendingDownloadFile, intent);
-      const directory = downloadDirectory(download.id);
-      await fs.mkdir(directory, { mode: 0o700 });
-      await canonicalOwnedDirectory(directory, true);
-      const metadata = await fs.lstat(directory, { bigint: true });
-      download.identity = {
-        dev: String(metadata.dev),
-        ino: String(metadata.ino),
-        birthtimeNs: String(metadata.birthtimeNs),
-      };
-      await writeRecord(pendingDownloadFile, intent);
-      await selectDownload(download.id);
-      if (downloadsCancelled) {
-        // No request or extraction has begun. Do not revive a cancelled lifetime
-        // by replacing its transport after Quit raced durable allocation.
-        await fs.rmdir(directory);
-        await fs.unlink(pendingDownloadFile);
-        return known("UPDATE_DOWNLOAD_CANCELLED");
-      }
-      let downloaded: Awaited<ReturnType<typeof downloadAndVerifyGithubUpdate>>;
-      try {
-        downloaded = await downloadAndVerifyGithubUpdate(candidate, {
+      const selected = candidate;
+      return stageSelectedUpdate(selected.manifest, (verifyPackage) =>
+        downloadAndVerifyGithubUpdate(selected, {
           ...checkedTransport,
-          verifyPackage: async (handle, manifest) => {
-            // Native verification may have its own child lifetime. A lost
-            // result must not be treated as an interrupted HTTP-only stage.
-            download.phase = "verifying";
-            await writeRecord(pendingDownloadFile, intent);
-            return checkedTransport.verifyPackage(handle, manifest);
-          },
-        });
-      } catch {
-        return {
-          ok: false,
-          code: "UPDATE_STAGING_OUTCOME_UNKNOWN",
-          recoveryRequired: true,
-        };
-      }
-      if (transportOutcomeUnknown)
-        return {
-          ok: false,
-          code: "UPDATE_STAGING_OUTCOME_UNKNOWN",
-          recoveryRequired: true,
-        };
-      if (!downloaded.ok) {
-        if (stagedDownloadHandle !== null) {
-          try {
-            await verifier.discard(stagedDownloadHandle);
-            const cleanup = await transport.discard(stagedDownloadHandle);
-            if (!cleanup.ok) throw new Error("UPDATE_STAGE_CLEANUP_UNKNOWN");
-            stagedDownloadHandle = null;
-          } catch {
-            return {
-              ok: false,
-              code: "UPDATE_STAGING_OUTCOME_UNKNOWN",
-              recoveryRequired: true,
-            };
-          }
-        }
-        // A known failed request has drained all its native work. Reclaim this
-        // attempt before clearing its intent; uncertainty keeps recovery fenced.
-        await removeDownloadStage(download);
-        await fs.unlink(pendingDownloadFile);
-        return known(`UPDATE_${downloaded.code.toUpperCase()}`);
-      }
-      verified = downloaded.value;
-      return {
-        ok: true,
-        update: { handle: verified.handle, manifest: verified.manifest },
-      };
+          verifyPackage,
+        }),
+      );
     },
+    ...(localArchive
+      ? {
+          prepareLocal: async () => {
+            const manifest = localArchive.manifest;
+            if (!manifest || manifest.channel !== "owner-beta")
+              return known("UPDATE_LOCAL_MANIFEST_INVALID");
+            let current: z.infer<typeof AcceptedBuild>;
+            try {
+              current = await readAcceptedSource();
+            } catch {
+              return known("UPDATE_SOURCE_IDENTITY_UNCONFIRMED");
+            }
+            if (
+              current.buildId !== options.build.buildId ||
+              current.version !== options.build.version
+            )
+              return known("UPDATE_SOURCE_IDENTITY_MISMATCH");
+            const order = compareReleaseVersions(
+              manifest.version,
+              current.version,
+            );
+            if (
+              order === null ||
+              order <= 0 ||
+              BigInt(manifest.buildVersion) <=
+                BigInt(options.build.buildVersion!)
+            )
+              return known("UPDATE_LOCAL_VERSION_MISMATCH");
+            if (manifest.buildId === declinedBuildId)
+              return known("UPDATE_LOCAL_TARGET_DECLINED");
+            return stageSelectedUpdate(manifest, async (verifyPackage) => {
+              const imported = await transport.importLocal(
+                localArchive.path,
+                manifest,
+              );
+              if (!imported.ok) {
+                if (imported.certainty === "unknown")
+                  transportOutcomeUnknown = true;
+                return { ok: false, code: imported.kind };
+              }
+              const archive = imported.value;
+              stagedDownloadHandle = archive.handle;
+              if (
+                archive.size !== manifest.archiveSize ||
+                archive.sha256 !== manifest.archiveSha256
+              )
+                return { ok: false, code: "checksum_mismatch" };
+              const checked = await verifyPackage(archive.handle, manifest);
+              if (!checked.ok) return { ok: false, code: checked.kind };
+              if (!packageMatchesRelease(checked.value.identity, manifest))
+                return { ok: false, code: "package_mismatch" };
+              return {
+                ok: true,
+                value: { handle: archive.handle, manifest, ...checked.value },
+              };
+            });
+          },
+        }
+      : {}),
     retain: async (update: ReadyUpdate) => {
       // Later retains the archive, not an extra expanded application. Restart
       // re-verifies the same archive before copying it to the helper's stage.

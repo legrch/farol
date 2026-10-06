@@ -19,6 +19,7 @@ const mocks = vi.hoisted(() => ({
   discover: vi.fn(),
   download: vi.fn(),
   archiveDownload: vi.fn(),
+  importLocal: vi.fn(),
   cancelPending: vi.fn(),
   discardArchive: vi.fn(),
   reclaimArchive: vi.fn(),
@@ -49,6 +50,7 @@ vi.mock(
     createGithubUpdateTransport: () => ({
       verifyPackage: mocks.verify,
       download: mocks.archiveDownload,
+      importLocal: mocks.importLocal,
       cancelPending: mocks.cancelPending,
       discard: mocks.discardArchive,
       reclaimRetained: mocks.reclaimArchive,
@@ -189,6 +191,14 @@ beforeEach(async () => {
   mocks.archiveDownload.mockResolvedValue({
     ok: true,
     value: { handle: path.join(root, "downloaded.zip") },
+  });
+  mocks.importLocal.mockResolvedValue({
+    ok: true,
+    value: {
+      handle: path.join(root, "local-archive.zip"),
+      size: manifest.archiveSize,
+      sha256: manifest.archiveSha256,
+    },
   });
   const identity = { ...manifest, updateChannel: "github-owner-beta" };
   mocks.download.mockResolvedValue({
@@ -3039,5 +3049,186 @@ ${scenario === "missing" ? "" : `<key>CFBundleVersion</key><string>${scenario ==
     await expect(
       fs.stat(path.join(userData, "installed-updates/restore-pending.json")),
     ).rejects.toMatchObject({ code: "ENOENT" });
+  });
+});
+
+describe("selected local update composition (disposable state, native ports doubled)", () => {
+  function localOptions(selected = manifest) {
+    return {
+      ...options(),
+      localArchive: {
+        path: path.join(root, "selected.zip"),
+        manifest: selected,
+      },
+    };
+  }
+
+  it("uses the existing durable download intent, package verifier and Ready record", async () => {
+    const selected = localOptions();
+    const pending = path.join(
+      userData,
+      "installed-updates/download-pending.json",
+    );
+    mocks.importLocal.mockImplementation(async () => {
+      const intent = JSON.parse(await fs.readFile(pending, "utf8"));
+      expect(intent).toMatchObject({
+        schema: "farol.update-download-intent/1",
+        buildId: manifest.buildId,
+        archiveSha256: manifest.archiveSha256,
+        download: {
+          phase: "downloading",
+          producer: { pid: process.pid, processStart: "fixture-start" },
+        },
+      });
+      expect(intent.download.identity).toBeDefined();
+      return {
+        ok: true,
+        value: {
+          handle: path.join(root, "local-archive.zip"),
+          size: manifest.archiveSize,
+          sha256: manifest.archiveSha256,
+        },
+      };
+    });
+    const verify = mocks.verify.getMockImplementation()!;
+    mocks.verify.mockImplementation(async (...args) => {
+      expect(
+        JSON.parse(await fs.readFile(pending, "utf8")).download.phase,
+      ).toBe("verifying");
+      return verify(...args);
+    });
+    const controller = await createInstalledUpdateRuntime(selected);
+    await controller!.initialize();
+    await controller!.prepareLocal();
+    expect(controller!.snapshot()).toMatchObject({
+      phase: "ready",
+      version: manifest.version,
+    });
+    expect(mocks.importLocal).toHaveBeenCalledExactlyOnceWith(
+      selected.localArchive.path,
+      manifest,
+    );
+    expect(mocks.verify).toHaveBeenCalledExactlyOnceWith(
+      path.join(root, "local-archive.zip"),
+      manifest,
+    );
+    expect(mocks.discover).not.toHaveBeenCalled();
+    expect(mocks.download).not.toHaveBeenCalled();
+    expect(mocks.archiveDownload).not.toHaveBeenCalled();
+    const record = JSON.parse(await fs.readFile(ready, "utf8"));
+    expect(record).toMatchObject({
+      schema: "farol.ready-update/1",
+      manifest,
+      operation: null,
+      handle: path.join(root, "local-archive.zip"),
+    });
+    expect(record.downloadId).toMatch(/^[a-f0-9]{32}$/u);
+    await expect(fs.lstat(pending)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(mocks.helper).not.toHaveBeenCalled();
+    expect(quit).not.toHaveBeenCalled();
+    await controller!.close();
+  });
+
+  it.each([
+    { repository: "legrch/farol-releases" },
+    {
+      version: build.version,
+      archiveName: `Farol-${build.version}-darwin-arm64.zip`,
+    },
+    { buildVersion: build.buildVersion },
+  ])(
+    "refuses an ineligible local selection before archive effects: %j",
+    async (change) => {
+      const controller = await createInstalledUpdateRuntime(
+        localOptions({ ...manifest, ...change } as ReleaseManifest),
+      );
+      await controller!.initialize();
+      await controller!.prepareLocal();
+      expect(controller!.snapshot()).toMatchObject({
+        phase: "failed",
+        recoveryRequired: false,
+      });
+      expect(mocks.importLocal).not.toHaveBeenCalled();
+      expect(mocks.verify).not.toHaveBeenCalled();
+      expect(mocks.discover).not.toHaveBeenCalled();
+      await expect(fs.lstat(ready)).rejects.toMatchObject({ code: "ENOENT" });
+      await controller!.close();
+    },
+  );
+
+  it("captures the selected path and manifest before its first await", async () => {
+    const original = { ...manifest };
+    const selected = localOptions(original);
+    const constructing = createInstalledUpdateRuntime(selected);
+    original.archiveSha256 = "0".repeat(64);
+    selected.localArchive.path = path.join(root, "replacement.zip");
+    const controller = await constructing;
+    await controller!.initialize();
+    await controller!.prepareLocal();
+    expect(mocks.importLocal).toHaveBeenCalledExactlyOnceWith(
+      path.join(root, "selected.zip"),
+      manifest,
+    );
+    expect(controller!.snapshot().phase).toBe("ready");
+    await controller!.close();
+  });
+
+  it("does not erase a local import with unknown completion or start network discovery", async () => {
+    mocks.importLocal.mockResolvedValue({
+      ok: false,
+      kind: "interrupted",
+      reason: "stage_cleanup",
+      certainty: "unknown",
+    });
+    const controller = await createInstalledUpdateRuntime(localOptions());
+    await controller!.initialize();
+    await controller!.prepareLocal();
+    expect(controller!.snapshot()).toEqual({
+      phase: "failed",
+      code: "UPDATE_STAGING_OUTCOME_UNKNOWN",
+      recoveryRequired: true,
+    });
+    expect(
+      await fs.readFile(
+        path.join(userData, "installed-updates/download-pending.json"),
+        "utf8",
+      ),
+    ).toContain(manifest.buildId);
+    await controller!.prepareLocal();
+    await controller!.check(true);
+    expect(mocks.importLocal).toHaveBeenCalledTimes(1);
+    expect(mocks.discover).not.toHaveBeenCalled();
+    expect(mocks.discardArchive).not.toHaveBeenCalled();
+    expect(mocks.helper).not.toHaveBeenCalled();
+    await controller!.close();
+  });
+
+  it("cleans only this known failed staging attempt after a checksum mismatch", async () => {
+    mocks.importLocal.mockResolvedValue({
+      ok: true,
+      value: {
+        handle: path.join(root, "local-archive.zip"),
+        size: manifest.archiveSize,
+        sha256: "0".repeat(64),
+      },
+    });
+    const controller = await createInstalledUpdateRuntime(localOptions());
+    await controller!.initialize();
+    await controller!.prepareLocal();
+    expect(controller!.snapshot()).toEqual({
+      phase: "failed",
+      code: "UPDATE_CHECKSUM_MISMATCH",
+      recoveryRequired: false,
+    });
+    expect(mocks.verify).not.toHaveBeenCalled();
+    expect(mocks.discardArchive).toHaveBeenCalledExactlyOnceWith(
+      path.join(root, "local-archive.zip"),
+    );
+    await expect(
+      fs.lstat(path.join(userData, "installed-updates/download-pending.json")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.lstat(ready)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(mocks.helper).not.toHaveBeenCalled();
+    await controller!.close();
   });
 });
