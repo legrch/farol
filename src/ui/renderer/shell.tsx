@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import { shellGeometry } from "../../pkg/shell-geometry";
 import { useRenderer } from "./services";
@@ -699,6 +699,17 @@ export function Shell() {
   const { snapshot, facade } = useRenderer();
   const state = snapshot;
   const destination = state.destination;
+  const stage = useRef<HTMLElement>(null);
+  const pageKey =
+    destination.area === "settings"
+      ? `settings:${destination.page}`
+      : destination.area;
+  useLayoutEffect(() => {
+    if (stage.current) {
+      stage.current.scrollTop = 0;
+      stage.current.scrollLeft = 0;
+    }
+  }, [pageKey]);
   const [compactWindow, setCompactWindow] = useState(
     () => window.innerWidth < shellGeometry.autoRailBelow,
   );
@@ -1044,6 +1055,7 @@ export function Shell() {
         />
       )}
       <main
+        ref={stage}
         className="stage"
         inert={state.overlay !== "none" || sidebarOverlay}
       >
