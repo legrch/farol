@@ -397,6 +397,7 @@ it("R34 search dismisses, restores focus and uses real navigation", async () => 
   await act(async () => trigger.click());
   expect(c.getSnapshot().overlay).toBe("search");
   expect(host.querySelector("main")?.hasAttribute("inert")).toBe(true);
+  expect(document.activeElement).toBe(host.querySelector("dialog input"));
   await act(async () => button(host, "Appearance").click());
   expect(c.getSnapshot().destination.page).toBe("appearance");
   expect(host.querySelector("dialog")).toBeNull();

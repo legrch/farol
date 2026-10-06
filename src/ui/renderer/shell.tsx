@@ -5,7 +5,7 @@ import {
   useRef,
   useState,
 } from "react";
-import type { CSSProperties, ReactNode } from "react";
+import type { CSSProperties, ReactNode, RefObject } from "react";
 import { shellGeometry } from "../../pkg/shell-layout/geometry";
 import { useRenderer } from "./services";
 import { PanelBoundary } from "./boundary";
@@ -173,11 +173,13 @@ export function Overlay({
   children,
   onClose,
   dismissible = true,
+  initialFocus,
 }: {
   title: string;
   children: ReactNode;
   onClose: () => void;
   dismissible?: boolean;
+  initialFocus?: RefObject<HTMLElement | null>;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
   const close = useRef(onClose);
@@ -189,12 +191,14 @@ export function Overlay({
     if (!dialog) return;
     const restore = trigger.current;
     dialog.showModal();
+    const target = initialFocus?.current;
+    if (target && dialog.contains(target)) target.focus();
     return () => {
       dialog.close();
       if (restore instanceof HTMLElement && restore.isConnected)
         restore.focus();
     };
-  }, []);
+  }, [initialFocus]);
   return (
     <dialog
       ref={ref}
@@ -231,6 +235,7 @@ function Search({
   facade: RendererFacade;
 }) {
   const [query, setQuery] = useState("");
+  const input = useRef<HTMLInputElement>(null);
   const targets = [
     { label: "Home", area: "home" as const, page: "general" as const },
     { label: "ChatGPT", area: "chatgpt" as const, page: "general" as const },
@@ -243,9 +248,13 @@ function Search({
     })),
   ];
   return (
-    <Overlay title="Find a page" onClose={() => facade.overlay("none")}>
+    <Overlay
+      title="Find a page"
+      onClose={() => facade.overlay("none")}
+      initialFocus={input}
+    >
       <input
-        autoFocus
+        ref={input}
         aria-label="Find a page"
         value={query}
         onChange={(event) => setQuery(event.target.value)}
