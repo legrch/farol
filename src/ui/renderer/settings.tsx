@@ -476,8 +476,8 @@ function General({ settings, actions }: PageProps) {
             </select>
           </label>
           <p className="description">
-            Home is available in the sidebar. The current launch contract
-            supports these four destinations.
+            Choose what Farol shows when it opens. Home is always available in
+            the sidebar.
           </p>
           <label className="setting-row">
             Sidebar
@@ -493,8 +493,8 @@ function General({ settings, actions }: PageProps) {
             </select>
           </label>
           <p className="description">
-            The toolbar toggles the page list. Remembering the last choice is
-            not supported by the current settings contract.
+            This choice applies when Farol opens. Use the toolbar button to show
+            or hide the page list during a session.
           </p>
           <div className="control-row">
             <button

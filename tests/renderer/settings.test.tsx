@@ -279,7 +279,7 @@ describe("bounded Settings writer", () => {
       },
     ]);
     expect(h.host.textContent).toContain(
-      "Remembering the last choice is not supported",
+      "This choice applies when Farol opens.",
     );
   });
   it("changes appearance through facade only on user selection", async () => {
