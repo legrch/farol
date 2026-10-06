@@ -246,9 +246,20 @@ The existing updater imports the selected archive, retains its ready intent and
 launches the same helper under the inherited lease. The controller retains the
 original child before metadata recording and observes its actual terminal result;
 an applying view, exit without protocol completion or lost observation is not
-success. A completed helper must also match the measured target slot. This proves
-replacement only; application startup and external Computer still require their
-own checks. This route does not implement supervised restore or a second journal.
+success. Supervised apply selects `relaunch:false`. Only a successful original
+helper exit at `verified`, followed by a matching measured target slot, returns
+`verified_closed`. The controller also rechecks the original closed lifetime,
+absent run marker, state-root identity and unchanged Quit receipt after the swap.
+That observation does not prevent a later independent app launch.
+`launch_requested` and `completed` are outside this closed
+transition and remain unknown to this controller. Ordinary installed updates
+retain their existing relaunch behavior.
+
+The target stays closed until recovery and state compatibility are separately
+qualified. The CLI does not launch it or automatically roll back an uncertain
+operation. This route does not yet implement supervised restore. The preserved
+profile cannot be blindly restored over updater journals or the promotion-lease
+inode; application startup and external Computer require their own checks.
 
 Reporting failures cannot interrupt the updater's drain. The controller settles
 the current step, records reporting loss and stops before the next effect where

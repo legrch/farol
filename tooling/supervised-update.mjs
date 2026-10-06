@@ -33,7 +33,8 @@ export async function runSupervisedUpdateCLI(
   if (args.length === 1 && args[0] === "--help") {
     return deliverFinal(output, {
       usage: USAGE,
-      effect: "one explicitly selected installed transition",
+      effect:
+        "one explicitly selected closed installed transition; no target launch",
     })
       ? 0
       : 3;
@@ -119,7 +120,7 @@ export async function runSupervisedUpdateCLI(
     result.leaseRelease === "unconfirmed"
   )
     return 3;
-  return result.status === "completed" ? 0 : 2;
+  return result.status === "verified_closed" ? 0 : 2;
 }
 
 if (

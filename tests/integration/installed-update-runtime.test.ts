@@ -349,6 +349,7 @@ describe("supervised installed updater (native files/lease, mocked package/proce
     const request = mocks.helper.mock.calls[0]![1];
     expect(request).toMatchObject({
       action: "apply",
+      relaunch: false,
       pid: 4001,
       processStart: input.predecessor.original.processStart,
       source,
@@ -376,6 +377,49 @@ describe("supervised installed updater (native files/lease, mocked package/proce
     });
     await controller!.close();
   });
+
+  it.each(["verified", "launch_requested", "completed"])(
+    "admits only a closed supervised helper terminal: %s",
+    async (phase) => {
+      const input = await selected();
+      const result = {
+        code: 0,
+        signal: null,
+        protocolError: null,
+        terminal: { phase, error: null },
+      };
+      const originalOperation = {
+        pid: 123,
+        operationId: "closed-terminal-fixture",
+        completion: Promise.resolve(result),
+        observe: () => ({}),
+      };
+      mocks.helper.mockImplementation(async (_path, _request, launch) => {
+        await launch.recordSpawn(originalOperation);
+        await launch.promotionLease.release();
+        return { status: "terminal", operation: originalOperation, result };
+      });
+      const controller = await createSupervisedInstalledUpdateRuntime(input);
+      await controller!.initialize();
+      await controller!.prepareLocal();
+      await controller!.restart();
+      expect(controller!.snapshot()).toMatchObject(
+        phase === "verified"
+          ? { phase: "applying" }
+          : {
+              phase: "failed",
+              code: "UPDATE_HANDOFF_UNKNOWN",
+              recoveryRequired: true,
+            },
+      );
+      expect(mocks.helper).toHaveBeenCalledTimes(1);
+      expect(input.observeHelper).toHaveBeenCalledExactlyOnceWith(
+        originalOperation,
+      );
+      expect(quit).not.toHaveBeenCalled();
+      await controller!.close();
+    },
+  );
 
   it.each(["resources", "proof", "lease"])(
     "blocks changed %s before helper dispatch",

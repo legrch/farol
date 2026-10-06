@@ -382,7 +382,7 @@ export async function runSupervisedUpdate(raw, publish = () => {}) {
           completion?.code === 0 &&
           completion.signal === null &&
           completion.protocolError === null &&
-          completion.terminal?.phase === "completed" &&
+          completion.terminal?.phase === "verified" &&
           completion.terminal.error === null,
         "UPDATE_HELPER_COMPLETION_UNCONFIRMED",
       );
@@ -391,9 +391,14 @@ export async function runSupervisedUpdate(raw, publish = () => {}) {
         sameBuild(await observeUpdateSlot(slot), target),
         "UPDATE_TARGET_UNCONFIRMED",
       );
-      stage = "completed";
-      // This proves physical replacement, not startup or external Computer readiness.
-      outcome = report("completed");
+      stage = "verify-closed";
+      // Do not poll or reinterpret a newly present marker/changed Quit receipt
+      // after replacement. Target startup would invalidate pre-launch recovery.
+      await predecessor.observeClosed();
+      stage = "verified-closed";
+      // The original helper has ended without requesting target startup. Keep
+      // first launch behind independent recovery and state qualification.
+      outcome = report("verified_closed");
     }
   } catch (error) {
     if (

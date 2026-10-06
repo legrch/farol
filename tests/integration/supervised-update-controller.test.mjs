@@ -72,7 +72,7 @@ const complete = {
   code: 0,
   signal: null,
   protocolError: null,
-  terminal: { phase: "completed", error: null },
+  terminal: { phase: "verified", error: null },
 };
 beforeEach(async () => {
   vi.clearAllMocks();
@@ -209,7 +209,7 @@ describe("supervised update composition (mocked lifecycle)", () => {
     });
     const result = await runSupervisedUpdate(input);
     expect(result).toMatchObject({
-      status: "completed",
+      status: "verified_closed",
       source,
       target,
       predecessorClosed: true,
@@ -226,6 +226,7 @@ describe("supervised update composition (mocked lifecycle)", () => {
       "initialize",
       "stage",
       "restart",
+      "closed",
       "close",
     ]);
     expect(ports.backup).toHaveBeenCalledWith({
@@ -342,8 +343,8 @@ describe("supervised update composition (mocked lifecycle)", () => {
     predecessor.observeClosed.mockRejectedValueOnce(
       new Error("UPDATE_PREDECESSOR_STILL_PRESENT"),
     );
-    expect((await runSupervisedUpdate(input)).status).toBe("completed");
-    expect(predecessor.observeClosed).toHaveBeenCalledTimes(2);
+    expect((await runSupervisedUpdate(input)).status).toBe("verified_closed");
+    expect(predecessor.observeClosed).toHaveBeenCalledTimes(3);
     predecessor.observeClosed
       .mockReset()
       .mockRejectedValue(new Error("UPDATE_PREDECESSOR_CLOSURE_UNCONFIRMED"));
@@ -389,6 +390,8 @@ describe("supervised update composition (mocked lifecycle)", () => {
 
   it.each([
     { code: 0, signal: null, protocolError: null, terminal: null },
+    { ...complete, terminal: { phase: "launch_requested", error: null } },
+    { ...complete, terminal: { phase: "completed", error: null } },
     { ...complete, protocolError: "lost_terminal" },
     { ...complete, code: 70 },
     { ...complete, signal: "SIGKILL" },
@@ -455,7 +458,7 @@ describe("supervised update composition (mocked lifecycle)", () => {
       ]),
     ).toBe("pending");
     finish(complete);
-    expect((await result).status).toBe("completed");
+    expect((await result).status).toBe("verified_closed");
   });
 
   it("keeps a bounded referenced wait and preserves timeout without replacement", async () => {
@@ -542,7 +545,7 @@ describe("supervised update composition (mocked lifecycle)", () => {
   it("does not lose a recorded terminal when close fails", async () => {
     runtime.close.mockRejectedValue(new Error("CLOSE_LOST"));
     expect(await runSupervisedUpdate(input)).toMatchObject({
-      status: "completed",
+      status: "verified_closed",
       controllerClose: "unconfirmed",
       helper: { completion: complete },
     });
@@ -557,6 +560,32 @@ describe("supervised update composition (mocked lifecycle)", () => {
       helper: { completion: complete },
     });
   });
+
+  it.each([
+    "UPDATE_PREDECESSOR_RUN_MARKER_PRESENT",
+    "UPDATE_PREDECESSOR_QUIT_CHANGED",
+    "UPDATE_PREDECESSOR_ROOT_CHANGED",
+    "UPDATE_PREDECESSOR_STILL_PRESENT",
+  ])(
+    "retains closed apply but refuses post-swap closure drift: %s",
+    async (code) => {
+      predecessor.observeClosed
+        .mockReset()
+        .mockResolvedValueOnce({ quitDigest: "c".repeat(64) })
+        .mockRejectedValue(new Error(code));
+      const result = await runSupervisedUpdate(input);
+      expect(result).toMatchObject({
+        status: "unknown",
+        stage: "verify-closed",
+        code,
+        helper: { completion: complete },
+      });
+      expect(predecessor.observeClosed).toHaveBeenCalledTimes(2);
+      expect(predecessor.requestQuit).toHaveBeenCalledTimes(1);
+      expect(runtime.restart).toHaveBeenCalledTimes(1);
+      expect(ports.release).not.toHaveBeenCalled();
+    },
+  );
 });
 
 describe("supervisor reporting with the real updater lifecycle", () => {
@@ -646,7 +675,7 @@ describe("supervisor reporting with the real updater lifecycle", () => {
       }),
     );
     expect(result).toMatchObject({
-      status: "completed",
+      status: "verified_closed",
       reportingFailure: "UPDATE_PROGRESS_REPORT_FAILED",
       helper: { operationId: operation.operationId, completion: complete },
     });

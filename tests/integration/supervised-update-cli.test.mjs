@@ -24,7 +24,7 @@ beforeEach(async () => {
   await fs.writeFile(file, bytes, { mode: 0o600 });
   vi.mocked(runSupervisedUpdate)
     .mockReset()
-    .mockResolvedValue({ status: "completed" });
+    .mockResolvedValue({ status: "verified_closed" });
 });
 afterEach(async () => {
   await fs.rm(root, { recursive: true, force: true });
@@ -37,7 +37,9 @@ describe("external supervisor entry (mocked controller, disposable input)", () =
       JSON.parse(bytes),
       output,
     );
-    expect(output).toHaveBeenCalledExactlyOnceWith({ status: "completed" });
+    expect(output).toHaveBeenCalledExactlyOnceWith({
+      status: "verified_closed",
+    });
   });
   it.each([
     "missing-apply",
@@ -65,16 +67,17 @@ describe("external supervisor entry (mocked controller, disposable input)", () =
     expect(runSupervisedUpdate).not.toHaveBeenCalled();
   });
   it.each([
+    [{ status: "completed" }, 2],
     [{ status: "blocked" }, 2],
     [{ status: "unknown" }, 3],
     [
       {
-        status: "completed",
+        status: "verified_closed",
         reportingFailure: "UPDATE_PROGRESS_REPORT_FAILED",
       },
       3,
     ],
-    [{ status: "completed", controllerClose: "unconfirmed" }, 3],
+    [{ status: "verified_closed", controllerClose: "unconfirmed" }, 3],
     [{ status: "blocked", leaseRelease: "unconfirmed" }, 3],
   ])("preserves the controller classification %j", async (report, code) => {
     vi.mocked(runSupervisedUpdate).mockResolvedValue(report);
@@ -94,7 +97,7 @@ describe("external supervisor entry (mocked controller, disposable input)", () =
     "returns reporting loss for a final-only %s without changing the terminal",
     async (kind) => {
       const terminal = Object.freeze({
-        status: "completed",
+        status: "verified_closed",
         reportingFailure: null,
         helper: { operationId: "exact-original-fixture" },
       });
@@ -105,14 +108,14 @@ describe("external supervisor entry (mocked controller, disposable input)", () =
         },
       );
       const output = vi.fn((value) => {
-        if (value.status !== "completed") return;
+        if (value.status !== "verified_closed") return;
         if (kind === "reject")
           return Promise.reject(new Error("OUTPUT_CLOSED"));
         throw new Error("OUTPUT_CLOSED");
       });
       expect(await runSupervisedUpdateCLI(argumentsFor(), output)).toBe(3);
       expect(output).toHaveBeenLastCalledWith(terminal);
-      expect(terminal.status).toBe("completed");
+      expect(terminal.status).toBe("verified_closed");
       expect(runSupervisedUpdate).toHaveBeenCalledTimes(1);
     },
   );

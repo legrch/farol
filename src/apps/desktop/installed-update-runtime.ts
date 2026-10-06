@@ -1941,7 +1941,9 @@ async function createRuntime(
               pid: supervised?.predecessor.pid ?? process.pid,
               processStart,
               waitSeconds: 120,
-              relaunch: true,
+              // First-transition recovery must be qualified before the target
+              // can write its state. Ordinary installed updates still relaunch.
+              relaunch: !supervised,
             },
             {
               ...(supervised ? { promotionLease: supervised.transfer } : {}),
@@ -2025,7 +2027,7 @@ async function createRuntime(
                 handoff.result.code === 0 &&
                 handoff.result.signal === null &&
                 handoff.result.protocolError === null &&
-                handoff.result.terminal?.phase === "completed" &&
+                handoff.result.terminal?.phase === "verified" &&
                 handoff.result.terminal.error === null)
             : handoff.status === "ready";
           if (!admittedHandoff)
