@@ -27,8 +27,15 @@ const extractor = path.join(
   appPath,
   "Contents/Resources/app/update-archive.py",
 );
+const packageResources = path.join(appPath, "Contents/Resources/app");
 const executable = path.join(runtime, "Contents/MacOS/Electron");
-const expected = { ...artifact, channel: "owner-beta", signing: "unsigned" };
+const expected = {
+  ...artifact,
+  channel: "owner-beta",
+  signing: "unsigned",
+  platform: artifact.runtime.platform,
+  arch: artifact.runtime.arch,
+};
 const scratch = await fs.mkdtemp(path.join(os.tmpdir(), "farol-asar-cleanup-"));
 let probeEnded = true;
 try {
@@ -94,6 +101,18 @@ cp.execFile[promisify.custom] = async (command, args) => {
     const resources = path.join(appPath, "Contents/Resources");
     await raw.mkdir(resources, { recursive: true });
     await raw.copyFile(${JSON.stringify(vendorAsar)}, path.join(resources, "default_app.asar"));
+    ${
+      layout.core
+        ? `
+    // Keep the real Go declaration/manifest correlation at this consumer seam.
+    // The reply below remains a fixture: no backend is copied or executed.
+    const appResources = path.join(resources, "app");
+    await raw.mkdir(appResources, { recursive: true });
+    for (const name of ["build-manifest.json", "core-artifact.json"])
+      await raw.copyFile(path.join(${JSON.stringify(packageResources)}, name), path.join(appResources, name));
+    `
+        : ""
+    }
     const artifactPath = path.join(stagingRoot, "artifact.json");
     await raw.writeFile(artifactPath, ${JSON.stringify(JSON.stringify(publicArtifact))});
     return { stdout: JSON.stringify({ appPath, artifactPath }), stderr: "" };

@@ -2,6 +2,7 @@ import { StrictMode, act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
 import { Shell } from "../../src/ui/renderer/shell";
+import type { WindowSnapshot } from "../../src/ui/renderer/contract";
 import { Services } from "../../src/ui/renderer/services";
 import { WindowController } from "../../src/ui/renderer/controller";
 import { bootstrap, fixture, task, settings, deferred } from "./fixture";
@@ -1123,3 +1124,142 @@ it("keeps unknown task work discoverable after its options are dismissed and Hom
   ).toContain("TASK_CANCEL_FAILED");
   expect(f.api.task).toHaveBeenCalledTimes(1);
 });
+
+// B04 DOM fixtures: presentation and dispatch fences, not native recovery proof.
+it.each([
+  [{ phase: "recovery", version: "1.0", blockedBy: null }, "Recover", "1.0"],
+  [
+    { phase: "failed", code: "RECOVERY_REQUIRED", recoveryRequired: true },
+    "Recover",
+    null,
+  ],
+  [
+    { phase: "idle", checkedAt: null, rollbackVersion: "0.9" },
+    "Roll Back",
+    "0.9",
+  ],
+  [
+    {
+      phase: "failed",
+      code: "UPDATE_FAILED",
+      recoveryRequired: false,
+      rollbackVersion: "0.9",
+    },
+    "Roll Back",
+    "0.9",
+  ],
+] satisfies [WindowSnapshot["update"], string, string | null][])(
+  "B04 %j explains closure and a separate verified start before %s",
+  async (update, action, version) => {
+    const { host, c, f } = await mount();
+    await act(async () => {
+      f.emit("update", update);
+      c.overlay("update");
+    });
+    const copy = host
+      .querySelector("dialog")!
+      .textContent!.replace(/\s+/gu, " ");
+    expect(copy).toContain("Farol will quit");
+    expect(copy).toContain(
+      "stays closed until recovery completion is confirmed",
+    );
+    expect(copy).toContain(
+      "after confirmation, then verify that start before resuming work",
+    );
+    if (version) expect(copy).toContain(version);
+    expect(button(host, action).disabled).toBe(false);
+    expect(copy).not.toContain("restart into the new version");
+    expect(f.api.installedUpdate).not.toHaveBeenCalledWith({ kind: "recover" });
+    expect(f.api.installedUpdate).not.toHaveBeenCalledWith({
+      kind: "rollback",
+    });
+  },
+);
+it("B04 an ordinary successful target update explains restart with its available version", async () => {
+  const { host, c, f } = await mount();
+  await act(async () => {
+    f.emit("update", {
+      phase: "ready",
+      version: "1.0",
+      deferred: false,
+      blockedBy: null,
+    });
+    c.overlay("update");
+  });
+  const copy = host.querySelector("dialog")!.textContent!.replace(/\s+/gu, " ");
+  expect(copy).toContain(
+    "install version 1.0 and restart into the new version after a successful update",
+  );
+  expect(copy).not.toContain("stays closed");
+  expect(button(host, "Restart & Update").disabled).toBe(false);
+  await act(async () => button(host, "Restart & Update").click());
+  expect(f.api.installedUpdate).toHaveBeenCalledWith({ kind: "restart" });
+});
+const boundedUpdateActions = [
+  [
+    { phase: "recovery", version: "1.0", blockedBy: null },
+    "Recover",
+    "recover",
+  ],
+  [
+    { phase: "idle", checkedAt: null, rollbackVersion: "0.9" },
+    "Roll Back",
+    "rollback",
+  ],
+  [
+    { phase: "ready", version: "1.0", deferred: false, blockedBy: null },
+    "Restart & Update",
+    "restart",
+  ],
+] satisfies [
+  WindowSnapshot["update"],
+  string,
+  "recover" | "rollback" | "restart",
+][];
+it.each(boundedUpdateActions)(
+  "B04 blocked current work fences %j while %s remains inspectable",
+  async (update, action, kind) => {
+    const { host, c, f } = await mount();
+    await act(async () => {
+      f.emit("update", { ...update, blockedBy: "WORK_PENDING" });
+      c.overlay("update");
+    });
+    expect(button(host, action).disabled).toBe(true);
+    await act(async () => button(host, action).click());
+    expect(f.api.installedUpdate).not.toHaveBeenCalledWith({ kind });
+    await act(async () => button(host, "Close").click());
+    expect(c.getSnapshot().overlay).toBe("none");
+  },
+);
+it.each(boundedUpdateActions)(
+  "B04 pending then unknown %j fences %s across sheet reopening",
+  async (update, action, kind) => {
+    const { host, c, f } = await mount();
+    const operation = deferred<unknown>();
+    vi.mocked(f.api.installedUpdate).mockReturnValueOnce(operation.promise);
+    await act(async () => {
+      f.emit("update", update);
+      c.overlay("update");
+    });
+    await act(async () => button(host, action).click());
+    expect(c.getSnapshot().intents.update?.state).toBe("pending");
+    expect(button(host, action).disabled).toBe(true);
+    expect(button(host, "Check for Updates").disabled).toBe(true);
+    await act(async () => button(host, action).click());
+    await act(async () => operation.reject(new Error("reply lost")));
+    expect(c.getSnapshot().intents.update?.state).toBe("unknown");
+    expect(host.querySelector("dialog")?.textContent).toContain(
+      "Outcome unknown",
+    );
+    await act(async () => button(host, "Close").click());
+    await act(async () => c.overlay("update"));
+    expect(button(host, action).disabled).toBe(true);
+    expect(button(host, "Check for Updates").disabled).toBe(true);
+    await act(async () => button(host, action).click());
+    expect(
+      vi
+        .mocked(f.api.installedUpdate)
+        .mock.calls.filter(([command]) => command.kind === kind),
+    ).toHaveLength(1);
+  },
+);

@@ -310,6 +310,14 @@ function Update({
     snapshot.status !== "current" ||
     intent?.state === "pending" ||
     intent?.state === "unknown";
+  const recovery =
+    update.phase === "recovery" ||
+    (update.phase === "failed" && update.recoveryRequired);
+  const rollbackVersion =
+    update.phase === "idle" ||
+    (update.phase === "failed" && !update.recoveryRequired)
+      ? update.rollbackVersion
+      : undefined;
   const canCheck =
     update.phase === "idle" ||
     (update.phase === "ready" && update.blockedBy !== null) ||
@@ -333,13 +341,33 @@ function Update({
               : update.phase === "recovery"
                 ? `Recovery required for ${update.version}`
                 : update.phase === "applying"
-                  ? "Applying update…"
+                  ? `Applying version ${update.version}…`
                   : update.phase === "checking"
                     ? "Checking for updates…"
                     : update.phase === "downloading"
                       ? "Downloading update…"
                       : "You can check for updates."}
       </p>
+      {recovery ? (
+        <p className="description">
+          Farol will quit to finish recovery. If recovery restores the previous
+          version, it stays closed until recovery completion is confirmed. Start
+          the restored version separately after confirmation, then verify that
+          start before resuming work.
+        </p>
+      ) : rollbackVersion ? (
+        <p className="description">
+          Version {rollbackVersion} is available to restore. Farol will quit to
+          roll back, and the restored version stays closed until recovery
+          completion is confirmed. Start it separately after confirmation, then
+          verify that start before resuming work.
+        </p>
+      ) : update.phase === "ready" ? (
+        <p className="description">
+          Restart &amp; Update will quit Farol, install version {update.version}{" "}
+          and restart into the new version after a successful update.
+        </p>
+      ) : null}
       {update.phase === "ready" && update.blockedBy && (
         <p role="alert">
           Installation blocked: {update.blockedBy}. Current work must be

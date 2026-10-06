@@ -1188,11 +1188,20 @@ function ThisMac({ settings, snapshot, facade, actions }: PageProps) {
       <Group title="Terminal & Git">
         <p className="description">
           {settings.computer.commands === "none"
-            ? "Command access is off."
+            ? "Saved command permission: off."
             : settings.computer.commands === "verification"
-              ? "Git checks are allowed."
-              : "Terminal commands are allowed in approved folders."}{" "}
-          Changing access requires workspace verification again.
+              ? "Saved command permission: Git checks only."
+              : "Saved command permission: Terminal in approved folders."}{" "}
+          Changing saved permissions requires workspace verification again.
+        </p>
+        <p className="description">
+          Command capability: unavailable in this beta. Shell and Git execution
+          are not active through the external connector.
+        </p>
+        <p className="description">
+          Command verification: not qualified for this beta. File and connection
+          checks do not verify command execution. File Computer can be ready
+          independently of command availability.
         </p>
         <form
           onSubmit={(event) => {
@@ -1215,8 +1224,9 @@ function ThisMac({ settings, snapshot, facade, actions }: PageProps) {
             </select>
           </label>
           <p className="description">
-            Commands stay within your selected access level. Review technical
-            limits in Diagnostics.
+            Saving preserves your permission choice; it does not activate
+            command execution in this beta. Review technical limits in
+            Diagnostics.
           </p>
           <button
             className="primary"
@@ -2238,10 +2248,11 @@ function Diagnostics({ snapshot, settings, facade, actions }: PageProps) {
       <details>
         <summary>Terminal &amp; Git details</summary>
         <p className="description">
-          Fixed verification runs bounded Git status and HEAD commands with
-          Apple Git. Approved folders allow a sandboxed workspace shell. Both
-          exclude network access; expanded Git access remains a separate folder
-          approval.
+          Shell and Git execution are unavailable and unqualified in this beta.
+          The saved Git-check permission covers bounded Git status and HEAD
+          commands with Apple Git; the saved workspace permission covers a
+          sandboxed workspace shell. Both exclude network access; expanded Git
+          access remains a separate folder approval.
         </p>
       </details>
       <details>

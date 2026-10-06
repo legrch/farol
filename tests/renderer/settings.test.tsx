@@ -2370,3 +2370,51 @@ describe("dependency-scoped Settings admission", () => {
     expect(h.calls()).toEqual([]);
   });
 });
+
+// No command capability projection is exposed to this renderer in the current beta.
+it.each(["none", "verification", "workspace"] as const)(
+  "B04 saved %s permission stays distinct from unavailable beta commands with current or stale file evidence",
+  async (commands) => {
+    for (const current of [true, false]) {
+      const value = connectionSettings();
+      value.computer.commands = commands;
+      if (!current) value.setup.connect.verified!.buildId = "f".repeat(64);
+      const h = await mount("computer", value);
+      const group = h.host.querySelector(
+        'section[aria-label="Terminal & Git"]',
+      )!;
+      const copy = () => group.textContent!.replace(/\s+/gu, " ");
+      const saved =
+        commands === "none"
+          ? "off"
+          : commands === "verification"
+            ? "Git checks only"
+            : "Terminal in approved folders";
+      expect(copy()).toContain(`Saved command permission: ${saved}.`);
+      expect(copy()).toContain("Command capability: unavailable in this beta");
+      expect(copy()).toContain(
+        "Shell and Git execution are not active through the external connector",
+      );
+      expect(copy()).toContain(
+        "Command verification: not qualified for this beta",
+      );
+      expect(copy()).toContain(
+        "File and connection checks do not verify command execution",
+      );
+      expect(h.field("Command access").value).toBe(commands);
+      await change(
+        h.field("Command access"),
+        commands === "none" ? "workspace" : "none",
+      );
+      expect(copy()).toContain(`Saved command permission: ${saved}.`);
+      expect(h.c.getSnapshot().configuration).toEqual(h.configuration);
+      expect(h.calls()).toEqual([]);
+      await h.pageTo("connection");
+      const badge = h.host.querySelector(
+        'section[aria-label="This Mac connection"] .badges',
+      )!.textContent;
+      expect(badge === "Computer ready").toBe(current);
+      expect(h.calls()).toEqual([]);
+    }
+  },
+);
