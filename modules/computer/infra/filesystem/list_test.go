@@ -147,8 +147,9 @@ func TestHomeStoresCannotBeChosenAsRootsOrReachedThroughEnclosingRoots(t *testin
 }
 func TestMandatoryAndOwnerPolicyBoundFailsWithoutDroppingExclusions(t *testing.T) {
 	d := fixture(t)
-	// Twelve mandatory paths plus 53 distinct owner paths exceed the cap.
-	for i := 0; i < 53; i++ {
+	// Eleven mandatory paths plus 54 distinct owner paths exceed the cap.
+	// Repository .npmrc follows its owner grant and is not a mandatory prefix.
+	for i := 0; i < 54; i++ {
 		d.DeniedPaths = append(d.DeniedPaths, fmt.Sprintf("private-%d", i))
 	}
 	_, err := New(d.Root+"-home").List(context.Background(), port.ListRequest{Workspace: d, RelativePath: "."})
