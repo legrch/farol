@@ -14,6 +14,8 @@ func rootScopedFixture(t *testing.T) (SeatbeltSelection, Command) {
 	t.Helper()
 	_, selection, command, _ := confinementFixture(t)
 	selection.FilePolicy = authority.RootScopedFiles
+	selection.Snapshot.Participant.Grant.FilePolicy = authority.RootScopedFiles
+	selection.Snapshot.Approval.FilePolicy = authority.RootScopedFiles
 	selection.Git = RootScopedGit
 	command.Environment = seatbeltEnvironment(selection, command.Write)
 	return selection, command
@@ -207,9 +209,31 @@ func TestRootScopedSeatbeltModeIsSealedAndDoesNotMutateExistingGrants(t *testing
 	}
 	legacy := selected.selection
 	legacy.FilePolicy, legacy.Git = authority.LegacyProtectedFiles, DenyGit
+	p := legacy.Snapshot.Participant.Clone()
+	a := legacy.Snapshot.Approval.Clone()
+	p.Grant.FilePolicy, a.FilePolicy = authority.LegacyProtectedFiles, authority.LegacyProtectedFiles
+	legacy.Snapshot.Participant, legacy.Snapshot.Approval = &p, &a
 	c.Environment = seatbeltEnvironment(legacy, false)
 	legacyPlan, err := compileSeatbelt(legacy, c)
 	if err != nil || legacyPlan.digest == plan.digest {
 		t.Fatal("distinct policy did not change reservation seal", err)
+	}
+}
+
+func TestRootScopedSeatbeltRequiresCapturedOwnerFilePolicy(t *testing.T) {
+	for _, mismatch := range []string{"owner", "task", "selection"} {
+		s, c := rootScopedFixture(t)
+		switch mismatch {
+		case "owner":
+			s.Snapshot.Approval.FilePolicy = authority.LegacyProtectedFiles
+		case "task":
+			s.Snapshot.Participant.Grant.FilePolicy = authority.LegacyProtectedFiles
+		case "selection":
+			s.FilePolicy, s.Git = authority.LegacyProtectedFiles, DenyGit
+			c.Environment = seatbeltEnvironment(s, c.Write)
+		}
+		if _, err := compileSeatbelt(s, c); err == nil {
+			t.Fatal("compiler reinterpreted captured authority", mismatch)
+		}
 	}
 }

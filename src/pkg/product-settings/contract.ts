@@ -504,6 +504,8 @@ export const ProductSettingsSchema = z.strictObject({
     generation: z.number().int().positive(),
     name: z.string().trim().min(1).max(80),
     commands: z.enum(["none", "verification", "workspace"]).default("none"),
+    // Missing is the historical protected-files policy, never implicit consent.
+    filePolicy: z.enum(["", "approved-roots-v1"]).optional(),
     workspaces: z.array(ApprovedProductWorkspaceSchema).max(64),
     pendingEdit: PendingWorkspaceEditDeliverySchema.nullable().default(null),
   }),
@@ -736,6 +738,10 @@ export const ProductConfigurationCommandSchema = z.discriminatedUnion("kind", [
   z.strictObject({
     kind: z.literal("computer.update-commands"),
     commands: z.enum(["none", "verification", "workspace"]),
+  }),
+  z.strictObject({
+    kind: z.literal("computer.update-file-policy"),
+    filePolicy: z.enum(["", "approved-roots-v1"]),
   }),
   z.strictObject({
     kind: z.literal("computer.check-folder"),

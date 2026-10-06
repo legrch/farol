@@ -4,6 +4,11 @@ import {
   ProductSettingsStore,
 } from "../../src/apps/desktop/product-configuration";
 import type { ProductSettings } from "../../src/pkg/product-settings/contract";
+import {
+  ProductConfigurationCommandSchema,
+  ProductSettingsSchema,
+} from "../../src/pkg/product-settings/contract";
+import { ownerSettingsComputerApproval } from "../../src/modules/computer/infra/repo/owner-settings-computer-approval";
 
 // In-memory storage and bridge doubles prove ordering only. No actual Go
 // publication, native persistence or owner approval is established here.
@@ -46,6 +51,90 @@ const workspace = {
 };
 
 describe("settings to Go publication ordering", () => {
+  it("keeps missing file policy legacy and rejects unknown caller choices", async () => {
+    const f = await fixture();
+    const before = f.service.snapshot();
+    if (before.status !== "ready") throw new Error("fixture");
+    expect(before.settings.computer.filePolicy ?? "").toBe("");
+    expect(
+      ownerSettingsComputerApproval(before.settings, 0),
+    ).not.toHaveProperty("filePolicy");
+    expect(
+      ProductSettingsSchema.safeParse({
+        ...before.settings,
+        computer: { ...before.settings.computer, filePolicy: "full-access" },
+      }).success,
+    ).toBe(false);
+    expect(
+      ProductConfigurationCommandSchema.safeParse({
+        kind: "computer.update-file-policy",
+        filePolicy: "full-access",
+      }).success,
+    ).toBe(false);
+    expect((await f.service.updateComputerFilePolicy("full-access")).ok).toBe(
+      false,
+    );
+    expect((await f.service.updateComputerFilePolicy("")).ok).toBe(true);
+    expect(f.service.snapshot()).toEqual(before);
+    expect(f.events).toEqual([]);
+  });
+  it("publishes an explicit file-policy generation through the existing owner without clearing grants or credentials", async () => {
+    const f = await fixture();
+    await f.service.addReadonlyWorkspace(workspace);
+    const before = f.service.snapshot();
+    if (before.status !== "ready") throw new Error("fixture");
+    f.events.length = 0;
+    const result =
+      await f.service.updateComputerFilePolicy("approved-roots-v1");
+    expect(result.ok).toBe(true);
+    if (result.snapshot.status !== "ready") throw new Error("fixture");
+    const next = result.snapshot.settings;
+    expect(f.events).toEqual(["withdraw", "save", "readback", "publish"]);
+    expect(next.computer.generation).toBe(
+      before.settings.computer.generation + 1,
+    );
+    expect(next.computer.workspaces).toEqual(
+      before.settings.computer.workspaces,
+    );
+    expect(next.computer.commands).toBe(before.settings.computer.commands);
+    expect(next.connectors.secureMcp.credential).toBe(
+      before.settings.connectors.secureMcp.credential,
+    );
+    expect(next.connectors.secureMcp.tunnelId).toBe(
+      before.settings.connectors.secureMcp.tunnelId,
+    );
+    expect(next.setup.computer.verified).toBeNull();
+    expect(next.setup.computer.reachable).toBe("unknown");
+    expect(ownerSettingsComputerApproval(next, 0).filePolicy).toBe(
+      "approved-roots-v1",
+    );
+    f.events.length = 0;
+    expect(
+      (await f.service.updateComputerFilePolicy("approved-roots-v1")).ok,
+    ).toBe(true);
+    expect(f.events).toEqual([]);
+  });
+  it("does not publish or repeat a file-policy transition after failed durable readback", async () => {
+    const f = await fixture();
+    f.load.mockResolvedValueOnce(null);
+    expect(
+      (await f.service.updateComputerFilePolicy("approved-roots-v1")).ok,
+    ).toBe(false);
+    expect(f.save).toHaveBeenCalledTimes(1);
+    expect(f.withdraw).toHaveBeenCalledTimes(1);
+    expect(f.publish).not.toHaveBeenCalled();
+  });
+  it("coalesces concurrent identical file-policy choices under the existing settings queue", async () => {
+    const f = await fixture();
+    const result = await Promise.all([
+      f.service.updateComputerFilePolicy("approved-roots-v1"),
+      f.service.updateComputerFilePolicy("approved-roots-v1"),
+    ]);
+    expect(result.every((r) => r.ok)).toBe(true);
+    expect(f.save).toHaveBeenCalledTimes(1);
+    expect(f.withdraw).toHaveBeenCalledTimes(1);
+    expect(f.publish).toHaveBeenCalledTimes(1);
+  });
   it("withdraws before save and publishes only its exact readback", async () => {
     const f = await fixture();
     const result = await f.service.addReadonlyWorkspace(workspace);

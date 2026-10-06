@@ -6,6 +6,7 @@ import (
 
 	"github.com/legrch/farol/modules/computer/app/port"
 	"github.com/legrch/farol/modules/computer/domain/authority"
+	"github.com/legrch/farol/modules/computer/domain/mutation"
 )
 
 // Pure parsing coverage is deliberately separate from rootpolicy_test.go's
@@ -16,7 +17,7 @@ func TestRootFilePolicyParsesNamesWithoutImplicitExclusions(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		p, err := w.parsePolicy(port.Descriptor{Root: root})
+		p, err := w.parsePolicy(port.Descriptor{FilePolicy: authority.RootScopedFiles, Root: root})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -30,7 +31,7 @@ func TestRootFilePolicyParsesNamesWithoutImplicitExclusions(t *testing.T) {
 
 func TestRootFilePolicyParsesOnlyExplicitRestrictions(t *testing.T) {
 	w, _ := NewWithFilePolicy("/owner/home", authority.RootScopedFiles)
-	p, err := w.parsePolicy(port.Descriptor{Root: "/repo", DeniedPaths: []string{".env", "private", "private"}, ExactFilePaths: []string{".npmrc"}})
+	p, err := w.parsePolicy(port.Descriptor{FilePolicy: authority.RootScopedFiles, Root: "/repo", DeniedPaths: []string{".env", "private", "private"}, ExactFilePaths: []string{".npmrc"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,8 +39,30 @@ func TestRootFilePolicyParsesOnlyExplicitRestrictions(t *testing.T) {
 		t.Fatal("explicit denial/exact scope was weakened or duplicated")
 	}
 	for _, bad := range []string{"../other", "/other", "./other"} {
-		if _, err := w.parsePolicy(port.Descriptor{Root: "/repo", DeniedPaths: []string{bad}}); err == nil {
+		if _, err := w.parsePolicy(port.Descriptor{FilePolicy: authority.RootScopedFiles, Root: "/repo", DeniedPaths: []string{bad}}); err == nil {
 			t.Fatal("bad policy path accepted")
+		}
+	}
+}
+
+func TestRootFilePolicyConstructorAndDescriptorMustMatch(t *testing.T) {
+	for _, selected := range []authority.FilePolicy{authority.LegacyProtectedFiles, authority.RootScopedFiles} {
+		w, err := NewWithFilePolicy("/owner/home", selected)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, descriptor := range []authority.FilePolicy{authority.LegacyProtectedFiles, authority.RootScopedFiles, "unknown"} {
+			_, err := w.parsePolicy(port.Descriptor{FilePolicy: descriptor, Root: "/repo"})
+			if (err == nil) != (selected == descriptor) {
+				t.Fatal("constructor silently reinterpreted descriptor policy", selected, descriptor, err)
+			}
+			m, _ := fakeMutable()
+			m.filePolicy = selected
+			d := fakeRequest(mutation.Write{}).Workspace
+			d.FilePolicy = descriptor
+			if err := m.policy(d, "ordinary"); (err == nil) != (selected == descriptor) {
+				t.Fatal("mutation constructor silently reinterpreted descriptor policy", selected, descriptor, err)
+			}
 		}
 	}
 }

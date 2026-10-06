@@ -1999,6 +1999,20 @@ describe("owner Setup presentation checkpoint (DOM fixtures only)", () => {
     expect(activePage(h.host).textContent).toContain("Saved Chat answers");
     expect(h.calls()).toHaveLength(1);
   });
+  it("changes file policy only on the explicit save action and describes linked-file access", async () => {
+    const h = await mount("computer", withFolder());
+    expect(h.field("File access").value).toBe("");
+    expect(activePage(h.host).textContent).toContain(
+      "linked into an approved folder",
+    );
+    expect(h.calls()).toEqual([]);
+    await change(h.field("File access"), "approved-roots-v1");
+    expect(h.calls()).toEqual([]);
+    await h.click("Save file permissions");
+    expect(h.calls()).toEqual([
+      { kind: "computer.update-file-policy", filePolicy: "approved-roots-v1" },
+    ]);
+  });
 });
 
 describe("review regressions: retained action origins and exact edit delivery", () => {

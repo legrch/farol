@@ -56,6 +56,13 @@ type knownComputerPublication struct {
 }
 
 func NewComputerIngress(store *accessrepo.Store, chat *chatlifecycle.Service, native *filesystem.Workspace, peer wire.Context, ownerID, computerID string) (*ComputerIngress, error) {
+	if native == nil {
+		return nil, computerUnavailable()
+	}
+	return newComputerIngress(store, chat, native, peer, ownerID, computerID)
+}
+
+func newComputerIngress(store *accessrepo.Store, chat *chatlifecycle.Service, native computerport.Workspace, peer wire.Context, ownerID, computerID string) (*ComputerIngress, error) {
 	if store == nil || chat == nil || native == nil || !validIngressID(ownerID) || !validIngressID(computerID) || validateIngress("Context", peer) != nil {
 		return nil, computerUnavailable()
 	}
@@ -302,7 +309,7 @@ func readIntentPolicy(a authority.Approval, ids []string) (authority.Policy, err
 	if !hasList || !hasRead || len(ids) < 1 || len(ids) > 32 {
 		return authority.Policy{}, computerUnavailable()
 	}
-	policy := authority.Policy{Capabilities: []authority.Capability{authority.List, authority.Read}, Network: authority.NoNetwork, Commands: authority.NoCommands, ExpiresAt: a.ExpiresAt}
+	policy := authority.Policy{FilePolicy: a.FilePolicy, Capabilities: []authority.Capability{authority.List, authority.Read}, Network: authority.NoNetwork, Commands: authority.NoCommands, ExpiresAt: a.ExpiresAt}
 	selected := make(map[string]bool)
 	for _, id := range ids {
 		if !validIngressID(id) || selected[id] {

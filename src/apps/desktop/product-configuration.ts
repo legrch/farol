@@ -1859,6 +1859,45 @@ export class ProductConfigurationService {
     });
   }
 
+  // A distinct owner choice through the same serialized settings publication.
+  // Existing profiles, restrictions and in-flight receipts are never rewritten.
+  async updateComputerFilePolicy(input: unknown): Promise<MutationResult> {
+    const parsed = z.enum(["", "approved-roots-v1"]).safeParse(input);
+    if (!parsed.success) return this.failure("SETTINGS_INPUT_INVALID");
+    return this.exclusive(async () => {
+      if (this.current === null) return this.failure("SETTINGS_UNAVAILABLE");
+      if ((this.current.computer.filePolicy ?? "") === parsed.data) {
+        return { ok: true, snapshot: this.snapshot() };
+      }
+      return this.commit((settings) => {
+        const configured = settings.computer.workspaces.length > 0;
+        return {
+          ...settings,
+          revision: settings.revision + 1,
+          computer: {
+            ...settings.computer,
+            generation: settings.computer.generation + 1,
+            filePolicy: parsed.data,
+          },
+          setup: {
+            ...settings.setup,
+            computer: {
+              ...settings.setup.computer,
+              configured,
+              reachable: "unknown" as const,
+              verified: null,
+              needsAction: configured
+                ? "Verify folder access after changing file permissions."
+                : "Add a folder.",
+              unavailable: null,
+              outcomeUnknown: false,
+            },
+          },
+        };
+      });
+    });
+  }
+
   // Owner verification is when a workspace's folder is bound: a workspace
   // approved before identities were recorded is bound to the folder this
   // verification observed, and a bound workspace is never rebound to another

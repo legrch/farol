@@ -26,6 +26,7 @@ type desktopApproval struct {
 	Capabilities  []authority.Capability     `json:"capabilities"`
 	Network       authority.Network          `json:"network"`
 	Commands      authority.Commands         `json:"commands"`
+	FilePolicy    authority.FilePolicy       `json:"filePolicy,omitempty"`
 	ExpiresAt     json.Number                `json:"expiresAt"`
 }
 type desktopApprovedWorkspace struct {
@@ -113,7 +114,10 @@ func parseDesktopApproval(raw json.RawMessage, ownerID, computerID string) (auth
 	if e != nil {
 		return invalid()
 	}
-	output := authority.Approval{OwnerID: ownerID, ComputerID: computerID, Generation: generation, Capabilities: append([]authority.Capability(nil), input.Capabilities...), Network: input.Network, Commands: input.Commands, ExpiresAt: time.UnixMilli(int64(expiry)).UTC()}
+	if !input.FilePolicy.Valid() {
+		return invalid()
+	}
+	output := authority.Approval{OwnerID: ownerID, ComputerID: computerID, Generation: generation, Capabilities: append([]authority.Capability(nil), input.Capabilities...), Network: input.Network, Commands: input.Commands, FilePolicy: input.FilePolicy, ExpiresAt: time.UnixMilli(int64(expiry)).UTC()}
 	if input.Network != authority.NoNetwork && input.Network != authority.ApprovedNetwork {
 		return invalid()
 	}

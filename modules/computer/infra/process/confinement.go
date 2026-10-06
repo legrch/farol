@@ -215,6 +215,7 @@ func validSelection(s SeatbeltSelection) bool {
 		filepath.Dir(s.Scratch) != "/private/tmp" || !strings.HasPrefix(filepath.Base(s.Scratch), "farol-") || !s.FilePolicy.Valid() || !seatbeltNetworkAllowed(s) ||
 		(s.FilePolicy == authority.LegacyProtectedFiles && (s.Git != DenyGit && s.Git != WorkspaceGit)) ||
 		(s.FilePolicy == authority.RootScopedFiles && s.Git != RootScopedGit) ||
+		s.FilePolicy != s.Snapshot.Participant.Grant.FilePolicy || s.FilePolicy != s.Snapshot.Approval.FilePolicy ||
 		(s.FilePolicy == authority.LegacyProtectedFiles && protectedPath(s.Scratch, s.Home)) {
 		return false
 	}

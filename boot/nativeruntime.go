@@ -127,7 +127,11 @@ func NewNativeRuntime(ctx context.Context, launch NativeLaunch, generation strin
 	if err != nil {
 		return fail(err)
 	}
-	runtime.ingress, err = NewComputerIngress(runtime.store, runtime.chat, filesystem.New(launch.Home), wire.Context{ProfileId: launch.Profile.ProfileID, BackendGeneration: generation}, launch.OwnerID, launch.ComputerID)
+	fileOwners, err := newComputerFileOwners(launch.Home)
+	if err != nil {
+		return fail(err)
+	}
+	runtime.ingress, err = newComputerIngress(runtime.store, runtime.chat, fileOwners, wire.Context{ProfileId: launch.Profile.ProfileID, BackendGeneration: generation}, launch.OwnerID, launch.ComputerID)
 	if err != nil {
 		return fail(err)
 	}
@@ -150,7 +154,7 @@ func NewNativeRuntime(ctx context.Context, launch NativeLaunch, generation strin
 		if err != nil {
 			return fail(err)
 		}
-		runtime.mutations, err = NewSettingsMutationIngress(runtime.ingress, runtime.mutationStore, filesystem.NewMutable(launch.Home))
+		runtime.mutations, err = settingsMutationIngress(runtime.ingress, computerMutationDependencies{repository: runtime.mutationStore, native: fileOwners, digester: filesystem.Digester{}})
 		if err != nil {
 			return fail(err)
 		}

@@ -162,7 +162,7 @@ func (s *computerConnector) Open(ctx context.Context, operation string, in wire.
 	}
 	// The shared mutation owner preserves approved write access. Shell requires
 	// an independently selected producer, absent from normal startup.
-	policy := authority.Policy{ExcludedPaths: approval.Clone().ExcludedPaths, Network: authority.NoNetwork, Commands: authority.NoCommands, ExpiresAt: approval.ExpiresAt}
+	policy := authority.Policy{FilePolicy: approval.FilePolicy, ExcludedPaths: approval.Clone().ExcludedPaths, Network: authority.NoNetwork, Commands: authority.NoCommands, ExpiresAt: approval.ExpiresAt}
 	if s.processes != nil && s.mutations != nil {
 		policy.Commands = approval.Commands
 	}

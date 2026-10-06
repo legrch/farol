@@ -19,6 +19,7 @@ import (
 // existing explicitly labelled syscall model: they are not native-write evidence.
 func TestRootFilePolicyReadsAndListsApprovedNames(t *testing.T) {
 	d := fixture(t)
+	d.FilePolicy = authority.RootScopedFiles
 	w, err := NewWithFilePolicy(d.Root, authority.RootScopedFiles)
 	if err != nil {
 		t.Fatal(err)
@@ -49,12 +50,15 @@ func TestRootFilePolicyReadsAndListsApprovedNames(t *testing.T) {
 		}
 	}
 	// Existing persisted callers do not silently acquire the new semantics.
-	_, err = New(d.Root).Read(context.Background(), port.ReadRequest{Workspace: d, RelativePath: ".env"})
+	legacy := d
+	legacy.FilePolicy = authority.LegacyProtectedFiles
+	_, err = New(d.Root).Read(context.Background(), port.ReadRequest{Workspace: legacy, RelativePath: ".env"})
 	expectCode(t, err, "WORKSPACE_PATH_REFUSED")
 }
 
 func TestRootFilePolicyStillEnforcesExplicitScopeAndPhysicalBoundary(t *testing.T) {
 	d := fixture(t)
+	d.FilePolicy = authority.RootScopedFiles
 	w, err := NewWithFilePolicy(d.Root, authority.RootScopedFiles)
 	if err != nil {
 		t.Fatal(err)
@@ -104,6 +108,7 @@ func TestRootFilePolicyMutationPreservesCASAndPublicationGuard(t *testing.T) {
 			m, f := fakeMutable()
 			m.filePolicy = authority.RootScopedFiles
 			request := fakeRequest(mutation.Write{RelativePath: name, Content: "SYNTHETIC\n"})
+			request.Workspace.FilePolicy = authority.RootScopedFiles
 			if _, err := m.Mutate(context.Background(), request); err != nil {
 				t.Fatal(err)
 			}
@@ -128,6 +133,7 @@ func TestRootFilePolicyMutationPreservesCASAndPublicationGuard(t *testing.T) {
 			m, f := fakeMutable()
 			m.filePolicy = authority.RootScopedFiles
 			request := fakeRequest(mutation.Write{RelativePath: ".env", Content: "SYNTHETIC"})
+			request.Workspace.FilePolicy = authority.RootScopedFiles
 			switch reason {
 			case "write-exclusion":
 				request.Workspace.WriteDeniedPaths = []string{".env"}
@@ -150,6 +156,7 @@ func TestRootFilePolicyAllowsGitNamesButNotExplicitDeniedMetadata(t *testing.T) 
 	m, _ := fakeMutable()
 	m.filePolicy = authority.RootScopedFiles
 	d := fakeRequest(mutation.Write{}).Workspace
+	d.FilePolicy = authority.RootScopedFiles
 	for _, path := range []string{".git/config", "nested/.git/config", ".ssh/key"} {
 		if err := m.policy(d, path); err != nil {
 			t.Fatal(path, err)

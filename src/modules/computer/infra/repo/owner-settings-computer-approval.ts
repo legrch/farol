@@ -63,6 +63,9 @@ export function ownerSettingsComputerApproval(
     capabilities,
     network: "none",
     commands: effectiveCommands,
+    ...(settings.computer.filePolicy === "approved-roots-v1"
+      ? { filePolicy: settings.computer.filePolicy }
+      : {}),
     expiresAt,
   };
 }

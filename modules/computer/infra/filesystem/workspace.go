@@ -86,7 +86,7 @@ type policy struct {
 
 func (w *Workspace) parsePolicy(d port.Descriptor) (policy, error) {
 	p := policy{exact: d.ExactFilePaths}
-	if w == nil || !w.filePolicy.Valid() {
+	if w == nil || !w.filePolicy.Valid() || !d.FilePolicy.Valid() || d.FilePolicy != w.filePolicy {
 		return p, refusal("WORKSPACE_INVALID_REQUEST")
 	}
 	home, err := components(w.homeDirectory, true, false)

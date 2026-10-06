@@ -199,7 +199,7 @@ func expectedHash(op mutation.Operation) *string {
 }
 func (m *Mutable) policy(d port.MutationDescriptor, path string) error {
 	denied := append(append([]string{}, d.DeniedPaths...), d.WriteDeniedPaths...)
-	p, err := (&Workspace{homeDirectory: m.home, filePolicy: m.filePolicy}).parsePolicy(port.Descriptor{Root: d.Root, DeniedPaths: denied})
+	p, err := (&Workspace{homeDirectory: m.home, filePolicy: m.filePolicy}).parsePolicy(port.Descriptor{FilePolicy: d.FilePolicy, Root: d.Root, DeniedPaths: denied})
 	if err != nil {
 		return err
 	}

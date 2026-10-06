@@ -91,6 +91,8 @@ export type ComputerApproval = Readonly<{
   capabilities: readonly AuthorityCapability[];
   network: NetworkAuthority;
   commands: CommandAuthority;
+  // Trusted owner-settings projection for the Go route. Missing stays legacy.
+  filePolicy?: "" | "approved-roots-v1" | undefined;
   expiresAt: number;
 }>;
 

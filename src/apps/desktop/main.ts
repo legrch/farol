@@ -7730,6 +7730,10 @@ async function configureAdmittedProduct(
       return ProductConfigurationResultSchema.parse(
         await configuration.updateComputerCommands(command.commands),
       );
+    case "computer.update-file-policy":
+      return ProductConfigurationResultSchema.parse(
+        await configuration.updateComputerFilePolicy(command.filePolicy),
+      );
     case "computer.check-folder": {
       const snapshot = configuration.snapshot();
       if (snapshot.status !== "ready")

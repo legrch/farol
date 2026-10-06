@@ -24,6 +24,26 @@ func TestDesktopApprovalPreservesExistingQualifiedProjection(t *testing.T) {
 		t.Fatal("missing explicit approval provenance")
 	}
 }
+
+func TestDesktopApprovalFilePolicyIsClosedAndReadIntentRetainsIt(t *testing.T) {
+	for _, mode := range []string{"", "approved-roots-v1"} {
+		raw := strings.Replace(desktopApprovalFixture, `"commands":"workspace"`, `"commands":"workspace","filePolicy":"`+mode+`"`, 1)
+		approval, err := parseDesktopApproval(json.RawMessage(raw), "owner", "computer")
+		if err != nil || string(approval.FilePolicy) != mode {
+			t.Fatal("trusted file policy lost", err)
+		}
+		policy, err := readIntentPolicy(approval, []string{"work"})
+		if err != nil || policy.FilePolicy != approval.FilePolicy || len(policy.ExcludedPaths) != 1 {
+			t.Fatal("read intent lost file policy or exclusions", err)
+		}
+	}
+	for _, value := range []string{`"unknown"`, `null`, `true`, `1`} {
+		raw := strings.Replace(desktopApprovalFixture, `"commands":"workspace"`, `"commands":"workspace","filePolicy":`+value, 1)
+		if _, err := parseDesktopApproval(json.RawMessage(raw), "owner", "computer"); err == nil {
+			t.Fatal("invalid file policy admitted", value)
+		}
+	}
+}
 func TestDesktopApprovalRejectsUnknownNullableAndLossyInputs(t *testing.T) {
 	cases := map[string]string{
 		"nested-extra":          strings.Replace(desktopApprovalFixture, `"device":"18446744073709551615"`, `"extra":1,"device":"18446744073709551615"`, 1),

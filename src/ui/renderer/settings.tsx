@@ -1112,6 +1112,9 @@ function GuardedEdit({
 }
 function ThisMac({ settings, snapshot, facade, actions }: PageProps) {
   const [commands, setCommands] = useState(settings.computer.commands);
+  const [filePolicy, setFilePolicy] = useState(
+    settings.computer.filePolicy ?? "",
+  );
   return (
     <>
       <h2>This Mac</h2>
@@ -1138,6 +1141,49 @@ function ThisMac({ settings, snapshot, facade, actions }: PageProps) {
           Local service status is independent of connection verification and
           folder access.
         </p>
+      </Group>
+      <Group title="Files in approved folders">
+        <p className="description">
+          Your existing file policy stays in effect until you save a new choice.
+          Allowing all names includes hidden and sensitive files inside approved
+          folders. A file linked into an approved folder can be accessible
+          there. Explicit folder exclusions remain in place.
+        </p>
+        <form
+          onSubmit={(event) => {
+            event.preventDefault();
+            void actions.run({
+              kind: "computer.update-file-policy",
+              filePolicy,
+            });
+          }}
+        >
+          <label className="setting-row">
+            File access
+            <select
+              className="field"
+              value={filePolicy}
+              onChange={(event) =>
+                setFilePolicy(event.currentTarget.value as typeof filePolicy)
+              }
+            >
+              <option value="">Keep protected-file restrictions</option>
+              <option value="approved-roots-v1">
+                Allow all names in approved folders
+              </option>
+            </select>
+          </label>
+          <p className="description">
+            Saving requires a stopped connection and fresh folder verification.
+            It does not grant another folder or enable Terminal access.
+          </p>
+          <button
+            className="primary"
+            disabled={!actions.allowed("computer.update-file-policy")}
+          >
+            Save file permissions
+          </button>
+        </form>
       </Group>
       <Group title="Terminal & Git">
         <p className="description">

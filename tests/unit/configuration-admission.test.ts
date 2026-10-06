@@ -13,6 +13,7 @@ const computerAuthorityCommands = [
   "computer.update-access",
   "computer.update-git-history",
   "computer.update-commands",
+  "computer.update-file-policy",
   "dev-proof.prepare",
   "host.configure-codex-tasks",
   "host.clear-codex-tasks",
