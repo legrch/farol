@@ -4,7 +4,7 @@
 [Optional Go build](../README.md#optional-declared-go-backend-build)
 
 This index describes the current source integration tree.
-Accepted `main` remains `acb131d9e7d483296d4edac262cf881cddfb91bb`. Source integration,
+Accepted `main` remains `8c09f4c7fd9fc82f23a30ad42e701d041189aeea`. Source integration,
 a packaged candidate, installation and live-provider qualification are distinct.
 Some technical pages retain earlier checkpoint descriptions; their historical
 integration notes must not be read as current product acceptance.
@@ -25,11 +25,14 @@ source fixtures are not proof of a live task route.
 
 ## Installation and updates
 
-The previously checked [0.1.8 owner beta](https://github.com/legrch/farol-releases/releases/tag/v0.1.8-owner.beta.1)
-is unsigned macOS ARM64 build `10`, source
-`1eb30bd23df22c9581d277280f8e0699612786b5` (release metadata checked 3 October 2026).
-This checkpoint's `0.1.9-owner.beta.1` / build `11` metadata does not prove another
-release or identify the currently installed app.
+The existing published baseline is
+[0.1.11-owner.beta.1](https://github.com/legrch/farol-releases/releases/tag/v0.1.11-owner.beta.1),
+unsigned macOS ARM64 build `13`, source `8c09f4c7`. The separately preserved
+React/Go `0.2.0-owner.beta.1` Dev and package candidates do not establish an
+installed 0.2 release. New binary publication and updater discovery select
+`legrch/farol`; [historical feed records](github-release-contract.md) remain
+valid only in their retained recovery context. No new 0.2 publication or
+successful ordinary next update is claimed here.
 
 **First installation by an external recipient from the published ZIP remains
 unqualified as a supported end-to-end workflow.** A manual app copy is not an

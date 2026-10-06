@@ -7,12 +7,29 @@ boundary ran against an actual temporary macOS workspace or installed host;
 `FIXTURE_APP` means the assembled Electron product ran with the deterministic
 provider/host fixture; `BLOCKED_OWNER` and `NOT_RUN` remain open evidence rows.
 
-The current Go desktop source selects the protected Go connector for catalogue,
-bootstrap, list, read, search and one-shot verification. When the selected native
-runtime enables Settings mutations, the same Go owner also supplies write, edit
-and retained-result observation. The historical write and shell rows below
-describe the legacy adapter and do not establish those tools on the new Go route.
-Normal Dev, packaged routing and external-client qualification remain open.
+## Current Go Dev evidence
+
+The current desktop selects the protected Go connector for catalogue, bootstrap,
+list, read, search and one-shot verification. The same Go owner supplies write,
+edit and retained-result observation. On 6 October, ordinary Dev `ad718d9b`
+served real external catalogue/bootstrap/read/search and attachment verification
+with the retained ordinary profile. Dev `426f36d6` previously served synthetic
+file create → read → exact-digest edit → stale-digest conflict → readback through
+the external connection. Normal Quit and later builds retained that edited file,
+folder configuration and connection without recreating the profile or repeating
+the mutation. These are ordinary Dev/external witnesses, not installed or
+canonical-package acceptance. Exact request/build/profile receipts
+are preserved locally under `_output/evidence/startup-recovery-20261004/`.
+
+The Go route does not advertise shell/Git or coding-task tools. Its process
+reservation, anchored measurement, held control, watchdog and retained observation
+remain separate implementation/qualification slices. The actual native Seatbelt
+alias test denied direct protected paths, symlinks and outside-root reads but
+allowed a hardlink alias to synthetic protected bytes. That failed stronger
+confinement claim remains open; it has not been waived or fixed by source-only
+tests. HOME/scratch semantics, ordinary linked-worktree Git and descendant cleanup
+also remain gates. The historical shell table below describes the earlier
+TypeScript route and does not qualify Go shell.
 
 The Go MCP adapter retains the published `computer_workspace_search`,
 `computer_workspace_write` and `computer_workspace_edit` names. Its public
@@ -36,8 +53,10 @@ Closing or replacing a connector does not remove uncertain attempts. The wire
 response separates current request correlation from the original retained
 operation. Write/edit require a caller-selected operation ID; observation reads
 that ID without dispatching it. MCP advertises this slice only when the exact Go
-handshake provides all three routes. These are source-level behavior and bounded
-fixture checks, not evidence of a normal Dev or installed mutation journey.
+handshake provides all three routes. The normal external Dev file journey above now supplements these source and
+fixture checks. Installed mutation and full Computer parity remain unqualified.
+An earlier duplicate-write probe was refused before execution and is not a passing
+external no-duplicate witness; lower-layer duplicate guards retain their own scope.
 
 ## Legacy-to-Next disposition
 

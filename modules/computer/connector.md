@@ -80,8 +80,10 @@ The normal desktop now selects `computer-go-launch.json`. The MCP entrypoint
 loads that protected launch once, joins the existing adapter drain lifecycle and
 connects to this exact backend. It never constructs a workspace helper, shell or
 second authority Store. Go failure is terminal; explicit legacy launch fixtures
-remain a separate entry path. This source switch still requires normal Dev and
-external-client qualification.
+remain a separate entry path. Ordinary Dev now has external
+catalogue/bootstrap/read/search and guarded create/edit/conflict/readback evidence; see
+[the current evidence boundary](../../docs/computer-parity.md#current-go-dev-evidence).
+This does not qualify installed routing, shell or provider tasks.
 
 The Darwin transport uses a new private 0700 directory, same-user peer credentials
 and one random per-launch token. It does not chmod, unlink or reclaim a socket

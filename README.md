@@ -15,12 +15,13 @@ integration tree. Accepted `main`
 is `8c09f4c7fd9fc82f23a30ad42e701d041189aeea`; integrating source does not
 update the installed product.
 
-| State                            | Scope                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Published baseline               | [0.1.11-owner.beta.1](https://github.com/legrch/farol-releases/releases/tag/v0.1.11-owner.beta.1), build `13`, source `8c09f4c7fd9fc82f23a30ad42e701d041189aeea`. Publication and download are recorded in the 5 October access-hotfix handoff; installation remains a separate gate; the beta is unsigned and not notarized.                                                                                                                                                                                 |
-| Accepted main                    | K0/K1 Go foundation plus the separately accepted access hotfix. It does not establish the shipping React/Go cutover.                                                                                                                                                                                                                                                                                                                                                                                          |
-| Source checkpoint described here | Package `bef6d56` passed actual React edit → one Go native edit/retained journal → unacknowledged Quit → same-profile reopen → exact Observe → Go-owned delivery ACK. Independent file/journal checks found no second effect; provider Sends stayed zero. Go now owns Settings pending, offer and ACK policy. TypeScript retains typed configuration storage, legacy observation, root measurement and Git discovery. This unsigned `0.1.10-owner.beta.1`, build `12` candidate is not installed or released. |
-| UI target                        | React + TypeScript shell is composed. Plain TypeScript retains Electron/browser mechanics. Native Home, Settings, Appearance and configured-profile reopening have been exercised.                                                                                                                                                                                                                                                                                                                            |
+| State                        | Scope                                                                                                                                                                                                                                                                                                                               |
+| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Published baseline           | [0.1.11-owner.beta.1](https://github.com/legrch/farol-releases/releases/tag/v0.1.11-owner.beta.1), build `13`, source `8c09f4c7fd9fc82f23a30ad42e701d041189aeea`. The existing beta is unsigned and not notarized. New releases target `legrch/farol`; historical assets remain unchanged.                                          |
+| Accepted main                | K0/K1 Go foundation plus the separately accepted access hotfix. It does not establish the shipping React/Go cutover.                                                                                                                                                                                                                |
+| Ordinary Dev evidence        | The preserved `ad718d9b` React/Go Dev opens with its ordinary isolated profile and serves actual external catalogue, bootstrap, read and search requests. Earlier `426f36d6` passed external create, edit and stale-digest conflict checks; the resulting file survives normal Quit and subsequent builds without another mutation. |
+| UI evidence                  | Home, guided Setup, saved-credential cancellation, Appearance, sidebar sizing, native browser overlay focus and the Dev Updates explanation have native witnesses. The compact sidebar navigation correction at `0455aa3b` has renderer regressions and still needs a rebuilt native witness.                                       |
+| Remaining daily-driver gates | Go shell/Git, complete process cleanup and authority qualification, accepted main/package, supported installed replacement and the next ordinary update remain open. Dev readiness does not complete those gates.                                                                                                                   |
 
 The Go cutover is incomplete. The `56ed3941` normal-entrypoint Dev candidate passed
 a controlled React/Go two-turn Chat journey from the ordinary first-message form,
@@ -35,12 +36,13 @@ installed, cross-build recovery or full cutover qualification. Earlier failed
 profiles remain quarantined. See
 the [controlled Chat witness](docs/desktop-core.md#controlled-normal-desktop-chat).
 
-Separately, the owner reported installation of the access hotfix
-`0.1.10-owner.beta.1`, build `12`, from source `569bd4d` on 4 October.
-Its update completion/recovery remains unresolved; a running target does not prove
-a completed update. That installed TypeScript runtime is separate from the local
-React/Go candidate described here. See the exact scope and limitations of the
-[packaged Go delivery witness](docs/desktop-core.md#go-owned-settings-delivery).
+The installed predecessor was observed on 6 October as `0.1.11-owner.beta.1`,
+build `13`, source `8c09f4c7`, separately from the React/Go Dev. Its retained
+completed `0.1.10` → `0.1.11` update is a distinct operation; it does not settle
+an older outcome-unknown update. Fresh installed lifetime, active-operation,
+state and recovery checks are still required before replacement. The earlier
+[packaged Go Settings delivery witness](docs/desktop-core.md#go-owned-settings-delivery)
+remains evidence for its exact package, not for the installed predecessor.
 
 ## Use and installation
 
@@ -51,13 +53,17 @@ access remains denied; full Git can expose older excluded content and approved
 user Git settings. Activity and support export retain content-free diagnostics.
 The Farol Model route and Product Agent remain disabled.
 
-The current Go integration source selects the same backend through a private
-socket for external MCP catalogue, bootstrap, list, read, search and connector verification.
-Go owns the verification attempt and retained observation. Mutations,
-shell and coding tasks are not yet exposed by this new external route. Explicit
-legacy launch fixtures remain separate; a failed Go launch never falls back to
-them. Normal Dev, external ChatGPT and package acceptance of this switch remain
-open. See the [connector contract](modules/computer/connector.md).
+The current Go integration selects the same backend through a private socket
+for external MCP catalogue, bootstrap, list, read, search, connector verification,
+write, edit and retained-result observation. Go owns authority, mutation intent
+and retained outcome. The ordinary Dev has actual external read/search and file
+mutation evidence, including normal Quit and cross-build reopening with the same
+profile. Shell and coding tasks are not exposed by this Go route. The native
+shell qualification currently fails its stronger hardlink-alias guard; HOME/Git
+and descendant settlement also remain open. Explicit legacy launch fixtures
+remain separate, and a failed Go launch never falls back to them. See the
+[current Computer evidence](docs/computer-parity.md#current-go-dev-evidence)
+and [connector contract](modules/computer/connector.md).
 
 The published beta includes a ZIP, release manifest and checksum file. **First
 installation by an external recipient from that ZIP is not currently documented
@@ -184,7 +190,7 @@ flowchart LR
     Host -. Go-enabled build .-> Bridge[Attested Desktop bridge]
     Bridge --> Core[Go boot and native runtime]
     Core --> Admission[Chat admission and lifecycle journal]
-    Core --> Computer[Computer authority and workspace reads]
+    Core --> Computer[Computer authority, reads and guarded mutations]
 ```
 
 The external connector has its own bounded Go execution owner and uses the
@@ -210,15 +216,15 @@ The Claude execution lease is selected only after Task admission. `NativeRuntime
 does not yet register these Task routes: trusted selection, native qualification
 and real Codex/Claude journeys remain separate acceptance work.
 
-| Location                                                                                 | Ownership at this checkpoint                                                                                                                                                                      |
-| ---------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [`src/`](src/)                                                                           | React shell under `src/ui/renderer/`, Electron/browser adapters, transitional services and composition.                                                                                           |
-| [`apps/desktop/`](apps/desktop/)                                                         | Attested Go host, authority publication and generated Go/TypeScript wire bridge.                                                                                                                  |
-| [`boot/`](boot/), [`cmd/farol/`](cmd/farol/), [`transport/desktop/`](transport/desktop/) | Go composition, entrypoint, native profile lifetime and framed protocol.                                                                                                                          |
-| [`modules/computer/`](modules/computer/)                                                 | Authority, filesystem and process services. Native ingress selects catalogue/bootstrap/list/read/search; external verification uses the same Go owner. Other capabilities need their own cutover. |
-| [`modules/chat/`](modules/chat/)                                                         | Turn, queue, admission, browser exchange and bounded retained results; controlled normal desktop Chat and authorized saved-answer reads across a clean same-build restart.                        |
-| [`modules/task/`](modules/task/)                                                         | Coding-task lifecycle and provider adapters; shipping task-route qualification remains separate.                                                                                                  |
-| [`modules/release/`](modules/release/)                                                   | Update/recovery, journal and identity/adoption preparation; the existing updater is still active.                                                                                                 |
+| Location                                                                                 | Ownership at this checkpoint                                                                                                                                                                                                               |
+| ---------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| [`src/`](src/)                                                                           | React shell under `src/ui/renderer/`, Electron/browser adapters, transitional services and composition.                                                                                                                                    |
+| [`apps/desktop/`](apps/desktop/)                                                         | Attested Go host, authority publication and generated Go/TypeScript wire bridge.                                                                                                                                                           |
+| [`boot/`](boot/), [`cmd/farol/`](cmd/farol/), [`transport/desktop/`](transport/desktop/) | Go composition, entrypoint, native profile lifetime and framed protocol.                                                                                                                                                                   |
+| [`modules/computer/`](modules/computer/)                                                 | Authority, filesystem and process services. Native ingress selects catalogue/bootstrap/list/read/search and guarded write/edit/observe; external verification uses the same Go owner. Shell and other capabilities need their own cutover. |
+| [`modules/chat/`](modules/chat/)                                                         | Turn, queue, admission, browser exchange and bounded retained results; controlled normal desktop Chat and authorized saved-answer reads across a clean same-build restart.                                                                 |
+| [`modules/task/`](modules/task/)                                                         | Coding-task lifecycle and provider adapters; shipping task-route qualification remains separate.                                                                                                                                           |
+| [`modules/release/`](modules/release/)                                                   | Update/recovery, journal and identity/adoption preparation; the existing updater is still active.                                                                                                                                          |
 
 Domain and application code use values and consumer-owned ports. Neighbors cross
 published contracts through `infra/peer`; Go contracts map independent DTOs and
