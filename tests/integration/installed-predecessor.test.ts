@@ -173,6 +173,70 @@ describe("installed predecessor (native files, process observations simulated)",
     await expect(control.observeClosed()).rejects.toThrow("QUIT_CHANGED");
   });
 
+  it.each(["refusal", "different-digest"])(
+    "cannot publish over a concurrent %s",
+    async (concurrent) => {
+      const control = await captureInstalledPredecessor();
+      await closeFixture();
+      let markPaused!: () => void;
+      const paused = new Promise<void>((resolve) => {
+        markPaused = resolve;
+      });
+      let resume!: () => void;
+      const resumed = new Promise<void>((resolve) => {
+        resume = resolve;
+      });
+      const realpath = fs.realpath.bind(fs);
+      let homeObservations = 0;
+      vi.spyOn(fs, "realpath").mockImplementation(async (...args) => {
+        if (args[0] === home && ++homeObservations === 2) {
+          markPaused();
+          await resumed;
+        }
+        return realpath(...args);
+      });
+      const first = control.observeClosed();
+      // Attach a rejection handler before releasing either observation.
+      const result = first.then(
+        (proof) => ({ proof }),
+        (error: unknown) => ({ error }),
+      );
+      try {
+        await paused;
+        await fs.writeFile(
+          path.join(state, "last-quit.json"),
+          serializeQuitReceipt(
+            { drained: concurrent !== "refusal", unconfirmed: [] },
+            "2026-09-01T00:02:00.000Z",
+          ),
+        );
+        if (concurrent === "refusal") {
+          await expect(control.observeClosed()).rejects.toThrow(
+            "QUIT_UNCONFIRMED",
+          );
+        } else {
+          await expect(control.observeClosed()).resolves.toMatchObject(
+            control.original,
+          );
+        }
+      } finally {
+        resume();
+      }
+      const outcome = await result;
+      expect(outcome).toHaveProperty("error");
+      if ("error" in outcome) {
+        expect(outcome.error).toBeInstanceOf(Error);
+        expect((outcome.error as Error).message).toContain(
+          concurrent === "refusal" ? "CLOSURE_UNCONFIRMED" : "QUIT_CHANGED",
+        );
+      }
+      await expect(control.observeClosed()).rejects.toThrow(
+        "CLOSURE_UNCONFIRMED",
+      );
+      expect(signal).not.toHaveBeenCalled();
+    },
+  );
+
   it("does not repeat an uncertain signal", async () => {
     const control = await captureInstalledPredecessor();
     signal.mockImplementation(() => {

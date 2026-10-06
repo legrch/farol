@@ -232,13 +232,17 @@ export async function captureInstalledPredecessor(): Promise<InstalledPredecesso
           throw new Error("UPDATE_PREDECESSOR_QUIT_UNCONFIRMED");
         }
         const quitDigest = createHash("sha256").update(bytes).digest("hex");
-        if (closedDigest !== undefined && closedDigest !== quitDigest) {
-          throw new Error("UPDATE_PREDECESSOR_QUIT_CHANGED");
-        }
         await verifyRoots();
         await markerAbsent();
         if (processAlive(original.pid))
           throw new Error("UPDATE_PREDECESSOR_STILL_PRESENT");
+        // Publish without yielding: another observation may have refused or
+        // retained a different digest while the physical checks were pending.
+        if (closureUnconfirmed)
+          throw new Error("UPDATE_PREDECESSOR_CLOSURE_UNCONFIRMED");
+        if (closedDigest !== undefined && closedDigest !== quitDigest) {
+          throw new Error("UPDATE_PREDECESSOR_QUIT_CHANGED");
+        }
         closedDigest = quitDigest;
         return Object.freeze({ ...original, quitDigest, stateIdentity });
       } catch (error) {
