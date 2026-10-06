@@ -33,7 +33,10 @@ import {
 declare const __FAROL_GO_CORE__: unknown;
 import { createMenuBar } from "./menu-bar";
 import { promises as rawFs } from "original-fs";
-import { createInstalledUpdateRuntime } from "./installed-update-runtime";
+import {
+  createInstalledUpdateRuntime,
+  waitForInstalledUpdateRelaunch,
+} from "./installed-update-runtime";
 import { drainInstalledComputer } from "./installed-computer-drain";
 import {
   InstalledUpdateCommandSchema,
@@ -137,6 +140,7 @@ import {
   releasePromotionLease,
   verifyPromotionLease,
 } from "./promotion-lease";
+import { withStartupPromotionLease } from "./startup-promotion-lease";
 import {
   reconcileTaskContexts,
   toProductTaskContext,
@@ -9763,9 +9767,50 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
       void handleSecondInstance(candidate);
     },
   );
-  startupStage("before-ready");
-  await app.whenReady();
-  startupStage("ready");
+  const updateRelaunch = await waitForInstalledUpdateRelaunch({
+    args: process.argv,
+    directory,
+    userData: app.getPath("userData"),
+    build: buildIdentity,
+  });
+  const stateRoot = path.join(app.getPath("userData"), "farol-next-state");
+  const previousRunClean = await withStartupPromotionLease(
+    app.getPath("userData"),
+    buildIdentity.buildId,
+    async (verify) => {
+      await updateRelaunch?.recheck();
+      startupStage("before-ready");
+      await app.whenReady();
+      startupStage("ready");
+      // Startup participates in the updater's existing exclusion before
+      // readiness and until its durable runtime obligation is published.
+      // A busy promotion refuses this launch; it never waits to resurrect
+      // potentially displaced code or modifies the predecessor's marker.
+      // Presence is inspected without reading or repairing an old marker.
+      // An access error is never treated as absence.
+      const clean = await lstat(path.join(stateRoot, "running.json")).then(
+        () => false,
+        (error: unknown) => (error as NodeJS.ErrnoException).code === "ENOENT",
+      );
+      if (compiledGoCore !== null && !clean) {
+        // Reloading complete-looking handoff bytes cannot settle a lost
+        // recorder response or an unconfirmed host drain.
+        throw new Error("DESKTOP_PREVIOUS_QUIT_UNCONFIRMED");
+      }
+      await updateRelaunch?.recheck();
+      if (!(await verify())) {
+        throw new Error("STARTUP_PROMOTION_LEASE_LOST");
+      }
+      await writeRunMarker(stateRoot, {
+        pid: process.pid,
+        now: Date.now(),
+        bootTime: currentBootTimeMs(),
+        processStart: readProcessStart(process.pid),
+      });
+      startupStage("run-marker");
+      return clean;
+    },
+  );
   if (process.platform === "darwin") {
     const icon = nativeImage.createFromPath(
       path.join(directory, "farol-mark.png"),
@@ -9773,7 +9818,7 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
     if (icon.isEmpty()) throw new Error("DESKTOP_BRAND_IMAGE_INVALID");
     app.dock?.setIcon(icon);
   }
-  // N03/D2: the run marker is the first thing this generation writes and the
+  // N03/D2: the run marker is this generation's first durable runtime obligation and the
   // last thing it removes — only after a quit whose drain was confirmed (see
   // the quit drain's `record` below and `run-marker.ts`). A promotion that
   // finds it decides between "still running" (a live pid on this boot) and
@@ -9782,28 +9827,8 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
   // marker that cannot be written fails startup like any other state-root
   // failure would: an unmarked generation is one whose crash would go
   // unnoticed.
-  const stateRoot = path.join(app.getPath("userData"), "farol-next-state");
-  // Inspect only presence before this generation writes its marker. A marker
-  // left by a crash/unconfirmed Quit requires deliberate recovery; never
-  // read or repair it here, and never interpret an access error as absence.
-  const previousRunClean = await lstat(
-    path.join(stateRoot, "running.json"),
-  ).then(
-    () => false,
-    (error: unknown) => (error as NodeJS.ErrnoException).code === "ENOENT",
-  );
-  if (compiledGoCore !== null && !previousRunClean) {
-    // A lost recorder response or unconfirmed host drain cannot be upgraded by
-    // reloading complete-looking Go handoff bytes. Preserve the original marker.
-    throw new Error("DESKTOP_PREVIOUS_QUIT_UNCONFIRMED");
-  }
-  await writeRunMarker(stateRoot, {
-    pid: process.pid,
-    now: Date.now(),
-    bootTime: currentBootTimeMs(),
-    processStart: readProcessStart(process.pid),
-  });
-  startupStage("run-marker");
+  // The startup lease has been released before configuration and ordinary
+  // admission take the same lease. No nested owner or second lock is used.
   try {
     await cleanupChatGptAttachmentStaging(chatGptAttachmentStagingRoot());
   } catch {

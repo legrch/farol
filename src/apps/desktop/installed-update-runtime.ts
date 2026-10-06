@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { constants } from "node:fs";
+import { constants, type BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -204,6 +204,547 @@ const CANCELLED_PHASES = [
 ];
 const TARGET_PHASES = ["verified", "launch_requested", "completed"];
 const MAX_RECORD_BYTES = 65536;
+const ProcessStart = z
+  .string()
+  .max(128)
+  .regex(
+    /^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2} \d{2}:\d{2}:\d{2} \d{4}$/u,
+  );
+const RelaunchHint = z.strictObject({
+  operationId: Operation.shape.operationId,
+  action: z.enum(["apply", "recover", "rollback"]),
+  phase: z.enum(["completed", "cancel_completed", "rollback_completed"]),
+  helper: z.strictObject({
+    pid: z.number().int().min(2).max(Number.MAX_SAFE_INTEGER),
+    processStart: ProcessStart,
+  }),
+  buildId: Digest,
+});
+const RELAUNCH_ARGUMENT = "--farol-installed-update-relaunch";
+
+function sameBuild(
+  a: z.infer<typeof AcceptedBuild>,
+  b: z.infer<typeof AcceptedBuild>,
+): boolean {
+  return (
+    a.digest === b.digest && a.version === b.version && a.buildId === b.buildId
+  );
+}
+
+function sameOperation(
+  a: z.infer<typeof Operation>,
+  b: z.infer<typeof Operation>,
+): boolean {
+  return (
+    a.operationId === b.operationId &&
+    sameBuild(a.source, b.source) &&
+    sameBuild(a.target, b.target)
+  );
+}
+
+async function readOperationJournal(
+  root: string,
+  op: z.infer<typeof Operation>,
+  read: typeof readRecord = readRecord,
+): Promise<z.infer<typeof Journal>> {
+  const journal = Journal.parse(
+    await read(path.join(root, op.operationId, "journal.json")),
+  );
+  if (!sameOperation(journal, op))
+    throw new Error("UPDATE_OPERATION_IDENTITY_MISMATCH");
+  return journal;
+}
+
+async function runInstalledTrusted(
+  directory: string,
+  entry: string,
+  args: string[],
+  timeout = 180000,
+): Promise<unknown> {
+  const { stdout } = await execute(
+    process.execPath,
+    [path.join(directory, entry), ...args],
+    {
+      env: {
+        PATH: "/usr/bin:/bin",
+        ELECTRON_RUN_AS_NODE: "1",
+        ELECTRON_NO_ASAR: "1",
+      },
+      encoding: "utf8",
+      maxBuffer: 65536,
+      timeout,
+    },
+  );
+  return JSON.parse(stdout) as unknown;
+}
+
+async function readInstalledProcess(
+  pid: number,
+): Promise<Readonly<{ stdout: string; stderr: string }>> {
+  return execute("/bin/ps", ["-p", String(pid), "-o", "lstart="], {
+    timeout: 3000,
+    maxBuffer: 4096,
+    env: { PATH: "/usr/bin:/bin", LANG: "C" },
+  });
+}
+
+async function observeInstalledHelper(
+  helper: z.infer<typeof Retained>["helper"],
+  read: typeof readInstalledProcess = readInstalledProcess,
+): Promise<"live" | "ended" | "changed" | "unknown"> {
+  if (!helper) return "unknown";
+  try {
+    const { stdout, stderr } = await read(helper.pid);
+    if (
+      helper.processStart === null ||
+      stderr ||
+      !ProcessStart.safeParse(stdout.trim()).success
+    )
+      return "unknown";
+    return stdout.trim() === helper.processStart ? "live" : "changed";
+  } catch (error) {
+    // Only the existing clean ps absence classification establishes termination.
+    const result = error as {
+      code?: unknown;
+      stdout?: unknown;
+      stderr?: unknown;
+    } | null;
+    return result?.code === 1 && result.stdout === "" && result.stderr === ""
+      ? "ended"
+      : "unknown";
+  }
+}
+
+type RejectedDirectoryStat = Pick<
+  BigIntStats,
+  "dev" | "ino" | "uid" | "mode" | "isDirectory"
+>;
+
+async function openRejectedDirectory(directory: string): Promise<
+  Readonly<{
+    stat(): Promise<RejectedDirectoryStat>;
+    close(): Promise<void>;
+  }>
+> {
+  const fd = await fs.open(
+    directory,
+    constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
+  );
+  return { stat: () => fd.stat({ bigint: true }), close: () => fd.close() };
+}
+
+const readRejectedEntry = (file: string): Promise<RejectedDirectoryStat> =>
+  fs.lstat(file, { bigint: true });
+
+/** Existing rejected-target proof: accepted operation, ended helper, exact inode/layout. */
+async function confirmRejectedTarget(
+  root: string,
+  op: z.infer<typeof Operation>,
+  helperEnded: () => Promise<boolean>,
+  reads: Readonly<{
+    canonicalOwnedDirectory: typeof canonicalOwnedDirectory;
+    readRecord: typeof readRecord;
+    openDirectory: typeof openRejectedDirectory;
+    lstat: typeof readRejectedEntry;
+  }> = {
+    canonicalOwnedDirectory,
+    readRecord,
+    openDirectory: openRejectedDirectory,
+    lstat: readRejectedEntry,
+  },
+): Promise<z.infer<typeof RejectedTarget> | null> {
+  const directory = path.join(root, op.operationId);
+  await reads.canonicalOwnedDirectory(directory, true);
+  const raw = await reads.readRecord(
+    path.join(directory, "rejected-target.json"),
+  );
+  if (raw === null) return null;
+  const witness = RejectedTarget.parse(raw);
+  if (!sameOperation(witness, op) || !(await helperEnded()))
+    throw new Error("UPDATE_REJECTED_TARGET_UNCONFIRMED");
+  // Only metadata is needed for rejected bytes; never execute their verifier
+  // or reinterpret their corrupt contents as an accepted application.
+  const rejected = path.join(directory, "failed.app");
+  await reads.canonicalOwnedDirectory(rejected, false);
+  const fd = await reads.openDirectory(rejected);
+  try {
+    const metadata = await fd.stat();
+    if (
+      !metadata.isDirectory() ||
+      metadata.uid !== BigInt(process.getuid?.() ?? -1) ||
+      (metadata.mode & 0o022n) !== 0n ||
+      String(metadata.dev) !== witness.directoryIdentity.device ||
+      String(metadata.ino) !== witness.directoryIdentity.inode
+    )
+      throw new Error("UPDATE_REJECTED_TARGET_CHANGED");
+    for (const name of ["previous.app", "staged.app"]) {
+      let present = false;
+      try {
+        await reads.lstat(path.join(directory, name));
+        present = true;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+      if (present) throw new Error("UPDATE_REJECTED_TARGET_LAYOUT_UNCONFIRMED");
+    }
+    const current = await reads.lstat(rejected);
+    if (
+      current.dev !== metadata.dev ||
+      current.ino !== metadata.ino ||
+      !current.isDirectory()
+    )
+      throw new Error("UPDATE_REJECTED_TARGET_CHANGED");
+  } finally {
+    await fd.close();
+  }
+  return witness;
+}
+
+export type InstalledUpdateRelaunchOptions = Readonly<{
+  args: readonly string[];
+  directory: string;
+  userData: string;
+  build: BuildIdentity;
+  timeoutMs?: number;
+  intervalMs?: number;
+  now?: () => number;
+  pause?: (ms: number) => Promise<void>;
+  // Read-only seams for pure fixtures; production uses the existing native owners.
+  observation?: Readonly<{
+    canonicalOwnedDirectory: typeof canonicalOwnedDirectory;
+    readRecord: typeof readRecord;
+    readBuild(
+      directory: string,
+      file: string,
+      timeoutMs: number,
+    ): Promise<unknown>;
+    readProcess: typeof readInstalledProcess;
+    rejectedDirectory?: Readonly<{
+      openDirectory: typeof openRejectedDirectory;
+      lstat: typeof readRejectedEntry;
+    }>;
+  }>;
+}>;
+
+/** Observe one explicit updater relaunch before the first startup lease acquire. */
+export async function waitForInstalledUpdateRelaunch(
+  options: InstalledUpdateRelaunchOptions,
+): Promise<Readonly<{ recheck(): Promise<void> }> | null> {
+  const hints = options.args.filter(
+    (arg) =>
+      arg === RELAUNCH_ARGUMENT || arg.startsWith(RELAUNCH_ARGUMENT + "="),
+  );
+  if (hints.length === 0) return null;
+  const argument = hints[0]!;
+  if (hints.length !== 1 || !argument.startsWith(RELAUNCH_ARGUMENT + "="))
+    throw new Error("UPDATE_RELAUNCH_HINT_INVALID");
+  const json = argument.slice(RELAUNCH_ARGUMENT.length + 1);
+  if (Buffer.byteLength(json, "utf8") > 2048)
+    throw new Error("UPDATE_RELAUNCH_HINT_INVALID");
+  let hint: z.infer<typeof RelaunchHint>;
+  try {
+    hint = RelaunchHint.parse(JSON.parse(json) as unknown);
+  } catch {
+    throw new Error("UPDATE_RELAUNCH_HINT_INVALID");
+  }
+  const build = BuildIdentitySchema.parse(options.build);
+  const slot = installedFarolSlot();
+  const profile = path.join(
+    os.userInfo().homedir,
+    "Library/Application Support/Farol Next Preview",
+  );
+  const directory = path.join(slot, "Contents/Resources/app");
+  const root = path.join(profile, "installed-updates");
+  if (
+    options.userData !== profile ||
+    options.directory !== directory ||
+    build.updateChannel !== "github-owner-beta" ||
+    !build.buildVersion ||
+    build.sourceDirty ||
+    hint.buildId !== build.buildId ||
+    createHash("sha256")
+      .update(canonicalBuildIdentityPayload(build))
+      .digest("hex") !== build.buildId
+  )
+    throw new Error("UPDATE_RELAUNCH_IDENTITY_MISMATCH");
+  if (
+    (hint.action === "apply" && hint.phase !== "completed") ||
+    (hint.action === "rollback" && hint.phase !== "rollback_completed")
+  )
+    throw new Error("UPDATE_RELAUNCH_HINT_INVALID");
+  const timeoutMs = options.timeoutMs ?? 30000;
+  const intervalMs = options.intervalMs ?? 50;
+  if (
+    !Number.isSafeInteger(timeoutMs) ||
+    timeoutMs < 1 ||
+    timeoutMs > 60000 ||
+    !Number.isSafeInteger(intervalMs) ||
+    intervalMs < 1 ||
+    intervalMs > 1000
+  )
+    throw new Error("UPDATE_RELAUNCH_DEADLINE_INVALID");
+  const now = options.now ?? (() => performance.now());
+  const pause =
+    options.pause ??
+    ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  const reads: NonNullable<InstalledUpdateRelaunchOptions["observation"]> =
+    options.observation ?? {
+      canonicalOwnedDirectory,
+      readRecord,
+      readBuild: async (
+        appDirectory: string,
+        file: string,
+        remaining: number,
+      ) =>
+        runInstalledTrusted(appDirectory, "update-slot.mjs", [file], remaining),
+      readProcess: readInstalledProcess,
+    };
+  const pendingPhase = {
+    completed: "launch_requested",
+    cancel_completed: "cancel_launch_requested",
+    rollback_completed: "rollback_launch_requested",
+  }[hint.phase];
+  const receiptFile = path.join(
+    root,
+    hint.action === "apply" ? "ready.json" : "restore-pending.json",
+  );
+  let pinned: z.infer<typeof Operation> | undefined;
+  let completedObserved = false;
+  let rejectedTargetObserved: z.infer<typeof RejectedTarget> | undefined;
+
+  const observe = async (wait: boolean): Promise<void> => {
+    const deadline = now() + timeoutMs;
+    const remaining = () => {
+      const ms = Math.ceil(deadline - now());
+      if (ms <= 0) throw new Error("UPDATE_RELAUNCH_TIMEOUT");
+      return ms;
+    };
+    const bounded = async <T>(read: () => Promise<T>): Promise<T> => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        const budget = remaining();
+        const value = await Promise.race([
+          read(),
+          new Promise<never>((_resolve, reject) => {
+            timer = setTimeout(
+              () => reject(new Error("UPDATE_RELAUNCH_TIMEOUT")),
+              budget,
+            );
+          }),
+        ]);
+        remaining();
+        return value;
+      } finally {
+        if (timer !== undefined) clearTimeout(timer);
+      }
+    };
+    const routes = async () => {
+      for (const [route, privateMode] of [
+        [path.dirname(slot), false],
+        [slot, false],
+        [directory, false],
+        [path.dirname(profile), false],
+        [profile, true],
+        [root, true],
+      ] as const)
+        await bounded(() => reads.canonicalOwnedDirectory(route, privateMode));
+      const operation = pinned;
+      if (operation)
+        await bounded(() =>
+          reads.canonicalOwnedDirectory(
+            path.join(root, operation.operationId),
+            true,
+          ),
+        );
+    };
+    const correlate = async () => {
+      await routes();
+      const raw = await bounded(() => reads.readRecord(receiptFile));
+      if (
+        hint.action === "apply" &&
+        (await bounded(() =>
+          reads.readRecord(path.join(root, "restore-pending.json")),
+        )) !== null
+      )
+        throw new Error("UPDATE_RELAUNCH_RECEIPT_MISMATCH");
+      const receipt =
+        hint.action === "apply"
+          ? Retained.parse(raw)
+          : RestoreIntent.parse(raw);
+      const op = receipt.operation;
+      if (
+        !op ||
+        op.operationId !== hint.operationId ||
+        !receipt.helper ||
+        receipt.helper.pid !== hint.helper.pid ||
+        receipt.helper.processStart !== hint.helper.processStart ||
+        (hint.action !== "apply" &&
+          (!("action" in receipt) ||
+            receipt.action !== hint.action ||
+            "notStartedAt" in receipt)) ||
+        (pinned && !sameOperation(pinned, op))
+      )
+        throw new Error("UPDATE_RELAUNCH_RECEIPT_MISMATCH");
+      if ("preparation" in receipt && receipt.preparation)
+        throw new Error("UPDATE_RELAUNCH_RECEIPT_MISMATCH");
+      if ("priorPhase" in receipt) {
+        const eligible =
+          hint.action === "rollback"
+            ? ["verified", "launch_requested", "completed"]
+            : hint.phase === "completed"
+              ? ["prepared", "predecessor_saved", "new_installed", "verified"]
+              : hint.phase === "cancel_completed"
+                ? ["prepared", "cancelled"]
+                : [
+                    "prepared",
+                    "predecessor_saved",
+                    "rollback_started",
+                    "rolled_back",
+                  ];
+        if (!eligible.includes(receipt.priorPhase))
+          throw new Error("UPDATE_RELAUNCH_RECEIPT_MISMATCH");
+      }
+      pinned ??= Operation.parse(op);
+      await bounded(() =>
+        reads.canonicalOwnedDirectory(
+          path.join(root, pinned!.operationId),
+          true,
+        ),
+      );
+      const expected =
+        hint.phase === "completed" ? pinned.target : pinned.source;
+      if (
+        expected.buildId !== build.buildId ||
+        expected.version !== build.version ||
+        pinned.source.buildId === pinned.target.buildId ||
+        pinned.source.digest === pinned.target.digest
+      )
+        throw new Error("UPDATE_RELAUNCH_IDENTITY_MISMATCH");
+      // Read the journal after process observation: a confirmed exit must see
+      // the completion written before that exit, not an earlier launch intent.
+      const helper = await bounded(() =>
+        observeInstalledHelper(hint.helper, reads.readProcess),
+      );
+      const journal = await bounded(() =>
+        readOperationJournal(root, pinned!, reads.readRecord),
+      );
+      if (
+        journal.phase !== hint.phase &&
+        (journal.phase !== pendingPhase || completedObserved)
+      )
+        throw new Error("UPDATE_RELAUNCH_PHASE_MISMATCH");
+      if (journal.phase === hint.phase) completedObserved = true;
+      if (helper === "unknown" || helper === "changed")
+        throw new Error("UPDATE_RELAUNCH_HELPER_UNCONFIRMED");
+      if (helper === "ended" && journal.phase !== hint.phase)
+        throw new Error("UPDATE_RELAUNCH_COMPLETION_UNCONFIRMED");
+      return { journal, helper };
+    };
+    const physical = async () => {
+      const expected =
+        hint.phase === "completed" ? pinned!.target : pinned!.source;
+      const companion =
+        hint.phase === "completed"
+          ? "previous.app"
+          : hint.phase === "cancel_completed"
+            ? "staged.app"
+            : "failed.app";
+      const companionPath = path.join(root, pinned!.operationId, companion);
+      await bounded(() => reads.canonicalOwnedDirectory(companionPath, false));
+      const stored = BuildIdentitySchema.parse(
+        await bounded(() =>
+          reads.readRecord(path.join(directory, "build-identity.json"), false),
+        ),
+      );
+      if (
+        stored.buildId !== build.buildId ||
+        canonicalBuildIdentityPayload(stored) !==
+          canonicalBuildIdentityPayload(build) ||
+        !sameBuild(
+          AcceptedBuild.parse(
+            await bounded(() => reads.readBuild(directory, slot, remaining())),
+          ),
+          expected,
+        )
+      )
+        throw new Error("UPDATE_RELAUNCH_PHYSICAL_PAIR_CHANGED");
+      if (hint.phase === "rollback_completed") {
+        const confirmed = await bounded(() =>
+          confirmRejectedTarget(
+            root,
+            pinned!,
+            async () =>
+              (await bounded(() =>
+                observeInstalledHelper(hint.helper, reads.readProcess),
+              )) === "ended",
+            {
+              canonicalOwnedDirectory: reads.canonicalOwnedDirectory,
+              readRecord: reads.readRecord,
+              openDirectory:
+                reads.rejectedDirectory?.openDirectory ?? openRejectedDirectory,
+              lstat: reads.rejectedDirectory?.lstat ?? readRejectedEntry,
+            },
+          ),
+        );
+        if (confirmed) {
+          if (
+            rejectedTargetObserved &&
+            (confirmed.directoryIdentity.device !==
+              rejectedTargetObserved.directoryIdentity.device ||
+              confirmed.directoryIdentity.inode !==
+                rejectedTargetObserved.directoryIdentity.inode)
+          )
+            throw new Error("UPDATE_REJECTED_TARGET_CHANGED");
+          rejectedTargetObserved = confirmed;
+          return;
+        }
+        if (rejectedTargetObserved)
+          throw new Error("UPDATE_REJECTED_TARGET_UNCONFIRMED");
+      }
+      if (
+        !sameBuild(
+          AcceptedBuild.parse(
+            await bounded(() =>
+              reads.readBuild(directory, companionPath, remaining()),
+            ),
+          ),
+          hint.phase === "completed" ? pinned!.source : pinned!.target,
+        )
+      )
+        throw new Error("UPDATE_RELAUNCH_PHYSICAL_PAIR_CHANGED");
+    };
+    let pairObserved = false;
+    for (;;) {
+      const result = await correlate();
+      if (
+        !wait &&
+        (result.journal.phase !== hint.phase || result.helper !== "ended")
+      )
+        throw new Error("UPDATE_RELAUNCH_COMPLETION_UNCONFIRMED");
+      if (
+        (!pairObserved &&
+          (hint.phase !== "rollback_completed" || result.helper === "ended")) ||
+        (result.journal.phase === hint.phase && result.helper === "ended")
+      ) {
+        await physical();
+        pairObserved = true;
+      }
+      if (result.journal.phase === hint.phase && result.helper === "ended") {
+        // The helper may finalize while a tree is measured; never use that
+        // earlier observation to admit a changed receipt or operation.
+        const final = await correlate();
+        if (final.journal.phase !== hint.phase || final.helper !== "ended")
+          throw new Error("UPDATE_RELAUNCH_COMPLETION_UNCONFIRMED");
+        return;
+      }
+      if (!wait) throw new Error("UPDATE_RELAUNCH_COMPLETION_UNCONFIRMED");
+      await bounded(() => pause(Math.min(intervalMs, remaining())));
+    }
+  };
+  await observe(true);
+  // The caller invokes this under its existing lease before readiness/marker.
+  return Object.freeze({ recheck: () => observe(false) });
+}
 
 async function canonicalOwnedDirectory(
   directory: string,
@@ -695,30 +1236,11 @@ async function createRuntime(
   const runTrusted = async (entry: string, args: string[]) => {
     if (supervised && (await supervised.verifyResources()) !== true)
       throw new Error("UPDATE_SUPERVISOR_RESOURCES_CHANGED");
-    const { stdout } = await execute(
-      process.execPath,
-      [path.join(options.directory, entry), ...args],
-      {
-        env: {
-          PATH: "/usr/bin:/bin",
-          ELECTRON_RUN_AS_NODE: "1",
-          ELECTRON_NO_ASAR: "1",
-        },
-        encoding: "utf8",
-        maxBuffer: 65536,
-        timeout: 180000,
-      },
-    );
-    return JSON.parse(stdout) as unknown;
+    return runInstalledTrusted(options.directory, entry, args);
   };
   const readBuild = async (file: string) =>
     AcceptedBuild.parse(await runTrusted("update-slot.mjs", [file]));
   const known = (code: string) => ({ ok: false as const, code });
-  const sameBuild = (
-    a: z.infer<typeof AcceptedBuild>,
-    b: z.infer<typeof AcceptedBuild>,
-  ) =>
-    a.digest === b.digest && a.version === b.version && a.buildId === b.buildId;
   const readAcceptedSource = async () => {
     await canonicalOwnedDirectory(path.dirname(slot), false);
     const repairRaw = await readRecord(slot + ".repair.json");
@@ -876,21 +1398,8 @@ async function createRuntime(
       throw new Error("UPDATE_ACCEPTED_SOURCE_CHANGED");
     return measured;
   };
-  const sameOperation = (
-    a: z.infer<typeof Operation>,
-    b: z.infer<typeof Operation>,
-  ) =>
-    a.operationId === b.operationId &&
-    sameBuild(a.source, b.source) &&
-    sameBuild(a.target, b.target);
-  const readJournal = async (op: z.infer<typeof Operation>) => {
-    const journal = Journal.parse(
-      await readRecord(path.join(root, op.operationId, "journal.json")),
-    );
-    if (!sameOperation(journal, op))
-      throw new Error("UPDATE_OPERATION_IDENTITY_MISMATCH");
-    return journal;
-  };
+  const readJournal = (op: z.infer<typeof Operation>) =>
+    readOperationJournal(root, op);
   const optionalBuild = async (op: z.infer<typeof Operation>, name: string) => {
     const file = path.join(root, op.operationId, name);
     try {
@@ -904,88 +1413,16 @@ async function createRuntime(
   const originalHelperEnded = async (
     record: Pick<z.infer<typeof Retained>, "helper">,
   ) => {
-    if (!record.helper) return false;
-    try {
-      const { stdout, stderr } = await execute(
-        "/bin/ps",
-        ["-p", String(record.helper.pid), "-o", "lstart="],
-        {
-          timeout: 3000,
-          maxBuffer: 4096,
-          env: { PATH: "/usr/bin:/bin", LANG: "C" },
-        },
-      );
-      return (
-        record.helper.processStart !== null &&
-        !stderr &&
-        /^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2} \d{2}:\d{2}:\d{2} \d{4}$/u.test(
-          stdout.trim(),
-        ) &&
-        stdout.trim() !== record.helper.processStart
-      );
-    } catch (error) {
-      // ps exit 1 with no output is an absent PID. EPERM, timeout, or malformed
-      // observation cannot establish termination or permit a replacement helper.
-      const result = error as {
-        code?: unknown;
-        stdout?: unknown;
-        stderr?: unknown;
-      };
-      return result.code === 1 && result.stdout === "" && result.stderr === "";
-    }
+    const status = await observeInstalledHelper(record.helper);
+    return status === "ended" || status === "changed";
   };
   const confirmedRejectedTarget = async (
     op: z.infer<typeof Operation>,
     record: z.infer<typeof Retained>,
-  ) => {
-    const directory = path.join(root, op.operationId);
-    await canonicalOwnedDirectory(directory, true);
-    const raw = await readRecord(path.join(directory, "rejected-target.json"));
-    if (raw === null) return false;
-    const witness = RejectedTarget.parse(raw);
-    if (!sameOperation(witness, op) || !(await originalHelperEnded(record)))
-      throw new Error("UPDATE_REJECTED_TARGET_UNCONFIRMED");
-    // Only metadata is needed for rejected bytes; never execute their verifier
-    // or reinterpret their corrupt contents as an accepted application.
-    const rejected = path.join(directory, "failed.app");
-    await canonicalOwnedDirectory(rejected, false);
-    const fd = await fs.open(
-      rejected,
-      constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
-    );
-    try {
-      const metadata = await fd.stat({ bigint: true });
-      if (
-        !metadata.isDirectory() ||
-        metadata.uid !== BigInt(process.getuid?.() ?? -1) ||
-        (metadata.mode & 0o022n) !== 0n ||
-        String(metadata.dev) !== witness.directoryIdentity.device ||
-        String(metadata.ino) !== witness.directoryIdentity.inode
-      )
-        throw new Error("UPDATE_REJECTED_TARGET_CHANGED");
-      for (const name of ["previous.app", "staged.app"]) {
-        let present = false;
-        try {
-          await fs.lstat(path.join(directory, name));
-          present = true;
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-        }
-        if (present)
-          throw new Error("UPDATE_REJECTED_TARGET_LAYOUT_UNCONFIRMED");
-      }
-      const current = await fs.lstat(rejected, { bigint: true });
-      if (
-        current.dev !== metadata.dev ||
-        current.ino !== metadata.ino ||
-        !current.isDirectory()
-      )
-        throw new Error("UPDATE_REJECTED_TARGET_CHANGED");
-    } finally {
-      await fd.close();
-    }
-    return true;
-  };
+  ) =>
+    (await confirmRejectedTarget(root, op, () =>
+      originalHelperEnded(record),
+    )) !== null;
   const removeDownloadStage = async (
     download: z.infer<typeof DownloadStage>,
   ) => {

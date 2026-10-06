@@ -781,6 +781,33 @@ def verify_staging_route(home, update, op, request):
             os.close(fd)
 
 
+def relaunch_arguments(request, completion):
+    """Correlate this single launch while the existing owner lease remains held.
+
+    The target observes this exact helper's completion before its first startup
+    acquisition. Ordinary uncorrelated launches still refuse a busy promotion.
+    No path or authority is supplied by the startup hint.
+    """
+    if completion not in ("completed", "cancel_completed", "rollback_completed"):
+        fail("launch_phase")
+    helper_pid = os.getpid()
+    helper_start = process_start(helper_pid)
+    if helper_start is None:
+        fail("launch_helper_identity")
+    build = request["target"] if completion == "completed" else request["source"]
+    hint = json.dumps({
+        "operationId": request["operationId"],
+        "action": request["action"],
+        "phase": completion,
+        "helper": {"pid": helper_pid, "processStart": helper_start},
+        "buildId": build["buildId"],
+    }, separators=(",", ":"))
+    if len(hint.encode("utf-8")) > 2048:
+        fail("launch_hint_bound")
+    return ("/usr/bin/open", "-a", request["home"] + "/Applications/" + APP,
+            "--args", "--farol-installed-update-relaunch=" + hint)
+
+
 def run(request):
     home = open_home(request["home"])
     apps = None
@@ -940,8 +967,7 @@ def run(request):
             write_record(op, "journal.json", record_for(request, launch_requested))
             # One request only. A failed/unknown launch remains explicit for caller reconciliation.
             assert_parent_path(request["home"], home, apps)
-            path = request["home"] + "/Applications/" + APP
-            result = subprocess.run(("/usr/bin/open", "-a", path), timeout=10, check=False)
+            result = subprocess.run(relaunch_arguments(request, completed), timeout=10, check=False)
             if result.returncode != 0:
                 fail("launch_failed", launch_requested)
             write_record(op, "journal.json", record_for(request, completed))

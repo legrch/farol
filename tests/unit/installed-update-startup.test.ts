@@ -1,0 +1,653 @@
+import { createHash } from "node:crypto";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  waitForInstalledUpdateRelaunch,
+  type InstalledUpdateRelaunchOptions,
+} from "../../src/apps/desktop/installed-update-runtime";
+import {
+  BuildIdentitySchema,
+  canonicalBuildIdentityPayload,
+} from "../../src/pkg/build-info/identity";
+
+// Pure read/clock fixtures: no filesystem, native process, lease or app launch.
+const home = "/Users/farol-startup-fixture";
+const profile = path.join(
+  home,
+  "Library/Application Support/Farol Next Preview",
+);
+const slot = path.join(home, "Applications/Farol.app");
+const directory = path.join(slot, "Contents/Resources/app");
+const root = path.join(profile, "installed-updates");
+const operationId = "a".repeat(32);
+const opRoot = path.join(root, operationId);
+const helper = { pid: 1234, processStart: "Tue Oct  6 12:00:00 2026" };
+const prefix = "--farol-installed-update-relaunch=";
+
+function identity(version: string, buildVersion: string, commit: string) {
+  const build = BuildIdentitySchema.parse({
+    schema: 1,
+    product: "Farol Next Preview",
+    bundleId: "local.farol.next.preview",
+    updateChannel: "github-owner-beta",
+    version,
+    buildVersion,
+    builtAt: "2026-10-06T00:00:00.000Z",
+    sourceCommit: commit.repeat(40),
+    sourceTreeDigest: commit.repeat(64),
+    sourceDirty: false,
+    buildId: "0".repeat(64),
+  });
+  build.buildId = createHash("sha256")
+    .update(canonicalBuildIdentityPayload(build))
+    .digest("hex");
+  return build;
+}
+const sourceBuild = identity("0.1.0-owner.beta.1", "1", "1");
+const targetBuild = identity("0.1.1-owner.beta.1", "2", "2");
+const source = {
+  digest: "3".repeat(64),
+  version: sourceBuild.version,
+  buildId: sourceBuild.buildId,
+};
+const target = {
+  digest: "4".repeat(64),
+  version: targetBuild.version,
+  buildId: targetBuild.buildId,
+};
+const operation = { operationId, source, target };
+type Phase = "completed" | "cancel_completed" | "rollback_completed";
+type Action = "apply" | "recover" | "rollback";
+
+function fixture(phase: Phase = "completed", action: Action = "apply") {
+  const build = phase === "completed" ? targetBuild : sourceBuild;
+  const hint = {
+    operationId,
+    action,
+    phase,
+    helper: { ...helper },
+    buildId: build.buildId,
+  };
+  const receiptFile = path.join(
+    root,
+    action === "apply" ? "ready.json" : "restore-pending.json",
+  );
+  const receipt: Record<string, unknown> =
+    action === "apply"
+      ? {
+          schema: "farol.ready-update/1",
+          handle: "/private/retained.zip",
+          manifest: {},
+          operation,
+          helper: { ...helper },
+        }
+      : {
+          schema: "farol.update-restore-intent/1",
+          action,
+          operation,
+          priorPhase: action === "rollback" ? "completed" : "prepared",
+          installedBefore: source,
+          helper: { ...helper },
+        };
+  const journal: Record<string, unknown> = {
+    schema: "farol.installed-update-journal/1",
+    ...operation,
+    phase,
+  };
+  const companion =
+    phase === "completed"
+      ? "previous.app"
+      : phase === "cancel_completed"
+        ? "staged.app"
+        : "failed.app";
+  const companionPath = path.join(opRoot, companion);
+  const records = new Map<string, unknown>([
+    [receiptFile, receipt],
+    [path.join(opRoot, "journal.json"), journal],
+    [path.join(directory, "build-identity.json"), build],
+  ]);
+  const builds = new Map<string, unknown>([
+    [slot, phase === "completed" ? target : source],
+    [companionPath, phase === "completed" ? source : target],
+  ]);
+  let time = 0;
+  const events: string[] = [];
+  const transitions: (() => void)[] = [];
+  const rejectedMetadata = {
+    dev: 7n,
+    ino: 8n,
+    uid: 501n,
+    mode: 0o700n,
+    isDirectory: () => true,
+  };
+  const rejectedHandle = {
+    stat: vi.fn(async () => ({ ...rejectedMetadata })),
+    close: vi.fn(async () => undefined),
+  };
+  const observation = {
+    canonicalOwnedDirectory: vi.fn(
+      async (_file: string, _privateMode: boolean) => undefined,
+    ),
+    readRecord: vi.fn(async (file: string, _privateMode?: boolean) => {
+      events.push("record:" + path.basename(file));
+      return structuredClone(records.get(file) ?? null);
+    }),
+    readBuild: vi.fn(
+      async (_directory: string, file: string, _timeoutMs: number) =>
+        structuredClone(builds.get(file)),
+    ),
+    readProcess: vi.fn(
+      async (_pid: number): Promise<{ stdout: string; stderr: string }> => {
+        events.push("process");
+        throw { code: 1, stdout: "", stderr: "" };
+      },
+    ),
+    rejectedDirectory: {
+      openDirectory: vi.fn(async (_file: string) => rejectedHandle),
+      lstat: vi.fn(async (file: string) => {
+        if (file !== path.join(opRoot, "failed.app")) throw { code: "ENOENT" };
+        return { ...rejectedMetadata };
+      }),
+    },
+  };
+  const options: InstalledUpdateRelaunchOptions = {
+    args: [prefix + JSON.stringify(hint)],
+    directory,
+    userData: profile,
+    build,
+    observation,
+    timeoutMs: 100,
+    intervalMs: 10,
+    now: () => time,
+    pause: vi.fn(async (ms: number) => {
+      events.push("pause");
+      time += ms;
+      transitions.shift()?.();
+    }),
+  };
+  const withHint = (value: unknown) => ({
+    ...options,
+    args: [prefix + JSON.stringify(value)],
+  });
+  return {
+    options,
+    observation,
+    records,
+    builds,
+    receipt,
+    receiptFile,
+    journal,
+    hint,
+    withHint,
+    events,
+    transitions,
+    companionPath,
+    rejectedMetadata,
+    rejectedHandle,
+  };
+}
+
+function rejectedFixture() {
+  const f = fixture("rollback_completed", "recover");
+  f.receipt.priorPhase = "rolled_back";
+  const proof = {
+    schema: "farol.rejected-update-target/1",
+    ...operation,
+    directoryIdentity: { device: "7", inode: "8" },
+  };
+  const proofFile = path.join(opRoot, "rejected-target.json");
+  f.records.set(proofFile, proof);
+  f.observation.readBuild.mockImplementation(async (_directory, file) => {
+    if (file === f.companionPath) throw new Error("REJECTED_VERIFIER_EXECUTED");
+    return structuredClone(f.builds.get(file));
+  });
+  return { ...f, proof, proofFile };
+}
+
+beforeEach(() => {
+  vi.spyOn(process, "getuid").mockReturnValue(501);
+  vi.spyOn(os, "userInfo").mockReturnValue({
+    username: "fixture",
+    uid: 501,
+    gid: 20,
+    homedir: home,
+    shell: "/bin/zsh",
+  });
+});
+afterEach(() => vi.restoreAllMocks());
+
+describe("installed updater startup correlation (pure ports only)", () => {
+  it("admits the healthy source with exact rejected-corrupt proof without verifying rejected bytes", async () => {
+    const f = rejectedFixture();
+    const admission = await waitForInstalledUpdateRelaunch(f.options);
+    expect(admission).not.toBeNull();
+    await admission!.recheck();
+    expect(
+      f.observation.readBuild.mock.calls.every((call) => call[1] === slot),
+    ).toBe(true);
+    expect(f.rejectedHandle.close).toHaveBeenCalledTimes(2);
+  });
+
+  it("waits for the current recovery helper to end before accepting rejected proof", async () => {
+    const f = rejectedFixture();
+    f.journal.phase = "rollback_launch_requested";
+    f.observation.readProcess.mockResolvedValue({
+      stdout: helper.processStart,
+      stderr: "",
+    });
+    f.transitions.push(() => {
+      expect(f.observation.readBuild).not.toHaveBeenCalled();
+      expect(
+        f.observation.rejectedDirectory.openDirectory,
+      ).not.toHaveBeenCalled();
+      f.journal.phase = "rollback_completed";
+      f.observation.readProcess.mockRejectedValue({
+        code: 1,
+        stdout: "",
+        stderr: "",
+      });
+    });
+    expect(await waitForInstalledUpdateRelaunch(f.options)).not.toBeNull();
+    expect(f.options.pause).toHaveBeenCalledTimes(1);
+    expect(
+      f.observation.readBuild.mock.calls.every((call) => call[1] === slot),
+    ).toBe(true);
+  });
+
+  it.each([
+    "missing",
+    "malformed",
+    "operation",
+    "target",
+    "device",
+    "inode",
+    "layout",
+    "named",
+    "owner",
+    "mode",
+    "type",
+  ])("refuses %s rejected-target proof", async (failure) => {
+    const f = rejectedFixture();
+    if (failure === "missing") f.records.delete(f.proofFile);
+    if (failure === "malformed")
+      f.records.set(f.proofFile, { schema: "farol.rejected-update-target/1" });
+    if (failure === "operation") f.proof.operationId = "b".repeat(32);
+    if (failure === "target")
+      f.records.set(f.proofFile, {
+        ...f.proof,
+        target: { ...target, digest: "f".repeat(64) },
+      });
+    if (failure === "device") f.rejectedMetadata.dev = 9n;
+    if (failure === "inode") f.rejectedMetadata.ino = 9n;
+    if (failure === "layout")
+      f.observation.rejectedDirectory.lstat.mockResolvedValue({
+        ...f.rejectedMetadata,
+      });
+    if (failure === "named")
+      f.observation.rejectedDirectory.lstat.mockImplementation(async (file) => {
+        if (file !== f.companionPath) throw { code: "ENOENT" };
+        return { ...f.rejectedMetadata, ino: 9n };
+      });
+    if (failure === "owner") f.rejectedMetadata.uid = 502n;
+    if (failure === "mode") f.rejectedMetadata.mode = 0o722n;
+    if (failure === "type") f.rejectedMetadata.isDirectory = () => false;
+    await expect(waitForInstalledUpdateRelaunch(f.options)).rejects.toThrow();
+    if (failure !== "missing")
+      expect(
+        f.observation.readBuild.mock.calls.every((call) => call[1] === slot),
+      ).toBe(true);
+  });
+
+  it.each(["withdrawn", "operation", "inode", "layout", "replaced", "source"])(
+    "rejects %s evidence in the under-lease recheck",
+    async (change) => {
+      const f = rejectedFixture();
+      const admission = await waitForInstalledUpdateRelaunch(f.options);
+      if (change === "withdrawn") f.records.delete(f.proofFile);
+      if (change === "operation") f.proof.operationId = "b".repeat(32);
+      if (change === "inode") f.rejectedMetadata.ino = 9n;
+      if (change === "layout")
+        f.observation.rejectedDirectory.lstat.mockResolvedValue({
+          ...f.rejectedMetadata,
+        });
+      if (change === "replaced") {
+        f.rejectedMetadata.ino = 9n;
+        f.proof.directoryIdentity.inode = "9";
+      }
+      if (change === "source") f.builds.set(slot, target);
+      await expect(admission!.recheck()).rejects.toThrow();
+      expect(
+        f.observation.readBuild.mock.calls.every((call) => call[1] === slot),
+      ).toBe(true);
+      expect(f.options.pause).not.toHaveBeenCalled();
+    },
+  );
+
+  it("returns null without a hint and never reads or waits", async () => {
+    const f = fixture();
+    expect(
+      await waitForInstalledUpdateRelaunch({
+        ...f.options,
+        args: [],
+        directory: "/checkout",
+        userData: "/other",
+      }),
+    ).toBeNull();
+    expect(f.observation.readRecord).not.toHaveBeenCalled();
+    expect(f.observation.canonicalOwnedDirectory).not.toHaveBeenCalled();
+    expect(f.observation.readBuild).not.toHaveBeenCalled();
+    expect(f.observation.readProcess).not.toHaveBeenCalled();
+    expect(f.options.pause).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["completed", "apply"],
+    ["completed", "recover"],
+    ["cancel_completed", "recover"],
+    ["rollback_completed", "recover"],
+    ["rollback_completed", "rollback"],
+  ] as const)(
+    "binds %s/%s to the executing build and preserved companion",
+    async (phase, action) => {
+      const f = fixture(phase, action);
+      const admission = await waitForInstalledUpdateRelaunch(f.options);
+      expect(admission).not.toBeNull();
+      await admission!.recheck();
+      expect(f.observation.readBuild).toHaveBeenCalledWith(
+        directory,
+        slot,
+        expect.any(Number),
+      );
+      expect(f.observation.readBuild).toHaveBeenCalledWith(
+        directory,
+        f.companionPath,
+        expect.any(Number),
+      );
+      expect(f.options.pause).not.toHaveBeenCalled();
+    },
+  );
+
+  it("waits for completion and exact helper exit, with process observation before journal read", async () => {
+    const f = fixture();
+    f.journal.phase = "launch_requested";
+    f.observation.readProcess.mockResolvedValue({
+      stdout: helper.processStart + "\n",
+      stderr: "",
+    });
+    f.transitions.push(
+      () => {
+        f.journal.phase = "completed";
+      },
+      () => {
+        f.observation.readProcess.mockRejectedValue({
+          code: 1,
+          stdout: "",
+          stderr: "",
+        });
+      },
+    );
+    const admission = await waitForInstalledUpdateRelaunch(f.options);
+    expect(admission).not.toBeNull();
+    expect(f.options.pause).toHaveBeenCalledTimes(2);
+    expect(f.events.indexOf("process")).toBeLessThan(
+      f.events.indexOf("record:journal.json"),
+    );
+  });
+
+  it("observes completion written between the process probe and journal read", async () => {
+    const f = fixture();
+    f.journal.phase = "launch_requested";
+    f.observation.readProcess.mockImplementation(async () => {
+      f.journal.phase = "completed";
+      throw { code: 1, stdout: "", stderr: "" };
+    });
+    expect(await waitForInstalledUpdateRelaunch(f.options)).not.toBeNull();
+  });
+
+  it("times out a live helper without another operation or startup acquire", async () => {
+    const f = fixture();
+    f.journal.phase = "launch_requested";
+    f.observation.readProcess.mockResolvedValue({
+      stdout: helper.processStart,
+      stderr: "",
+    });
+    await expect(waitForInstalledUpdateRelaunch(f.options)).rejects.toThrow(
+      "UPDATE_RELAUNCH_TIMEOUT",
+    );
+    expect(f.options.pause).toHaveBeenCalledTimes(10);
+    expect(f.journal.phase).toBe("launch_requested");
+  });
+
+  it("bounds a read that never settles", async () => {
+    const f = fixture();
+    f.observation.readRecord.mockImplementation(() => new Promise(() => {}));
+    await expect(
+      waitForInstalledUpdateRelaunch({ ...f.options, timeoutMs: 5 }),
+    ).rejects.toThrow("UPDATE_RELAUNCH_TIMEOUT");
+    expect(f.observation.readProcess).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { code: "EPERM", stdout: "", stderr: "" },
+    { code: 1, stdout: "", stderr: "denied" },
+    { code: "ETIMEDOUT", stdout: "", stderr: "" },
+    null,
+  ])("refuses unknown helper observation %j immediately", async (failure) => {
+    const f = fixture();
+    f.observation.readProcess.mockRejectedValue(failure);
+    await expect(waitForInstalledUpdateRelaunch(f.options)).rejects.toThrow(
+      "UPDATE_RELAUNCH_HELPER_UNCONFIRMED",
+    );
+    expect(f.options.pause).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { stdout: "Tue Oct  6 12:00:01 2026", stderr: "" },
+    { stdout: "", stderr: "" },
+    { stdout: "not a process start", stderr: "" },
+  ])("refuses changed or malformed process identity %j", async (result) => {
+    const f = fixture();
+    f.observation.readProcess.mockResolvedValue(result);
+    await expect(waitForInstalledUpdateRelaunch(f.options)).rejects.toThrow(
+      "UPDATE_RELAUNCH_HELPER_UNCONFIRMED",
+    );
+  });
+
+  it("refuses helper exit without the expected durable completion", async () => {
+    const f = fixture();
+    f.journal.phase = "launch_requested";
+    await expect(waitForInstalledUpdateRelaunch(f.options)).rejects.toThrow(
+      "UPDATE_RELAUNCH_COMPLETION_UNCONFIRMED",
+    );
+  });
+
+  it.each(["prepared", "verified", "rollback_completed"])(
+    "does not broaden phase authority to %s",
+    async (phase) => {
+      const f = fixture();
+      f.journal.phase = phase;
+      await expect(waitForInstalledUpdateRelaunch(f.options)).rejects.toThrow(
+        "UPDATE_RELAUNCH_PHASE_MISMATCH",
+      );
+    },
+  );
+
+  it.each(["slot", "companion", "metadata", "receipt", "journal", "helper"])(
+    "rechecks %s under the caller's lease without waiting",
+    async (change) => {
+      const f = fixture();
+      const admission = await waitForInstalledUpdateRelaunch(f.options);
+      if (change === "slot") f.builds.set(slot, source);
+      if (change === "companion") f.builds.set(f.companionPath, target);
+      if (change === "metadata")
+        f.records.set(path.join(directory, "build-identity.json"), sourceBuild);
+      if (change === "receipt")
+        f.receipt.helper = { ...helper, pid: helper.pid + 1 };
+      if (change === "journal") f.journal.phase = "launch_requested";
+      if (change === "helper")
+        f.observation.readProcess.mockResolvedValue({
+          stdout: helper.processStart,
+          stderr: "",
+        });
+      await expect(admission!.recheck()).rejects.toThrow();
+      expect(f.options.pause).not.toHaveBeenCalled();
+    },
+  );
+
+  it("refuses a changed physical pair at the end of a live observation", async () => {
+    const f = fixture();
+    f.journal.phase = "launch_requested";
+    f.observation.readProcess.mockResolvedValue({
+      stdout: helper.processStart,
+      stderr: "",
+    });
+    f.transitions.push(() => {
+      f.journal.phase = "completed";
+      f.builds.set(f.companionPath, target);
+      f.observation.readProcess.mockRejectedValue({
+        code: 1,
+        stdout: "",
+        stderr: "",
+      });
+    });
+    await expect(waitForInstalledUpdateRelaunch(f.options)).rejects.toThrow(
+      "UPDATE_RELAUNCH_PHYSICAL_PAIR_CHANGED",
+    );
+  });
+
+  it.each(["record", "route", "tree"])(
+    "propagates unreadable %s instead of waiting",
+    async (failure) => {
+      const f = fixture();
+      if (failure === "record")
+        f.observation.readRecord.mockRejectedValue(new Error("READ_REFUSED"));
+      if (failure === "route")
+        f.observation.canonicalOwnedDirectory.mockRejectedValue(
+          new Error("ROUTE_UNSAFE"),
+        );
+      if (failure === "tree")
+        f.observation.readBuild.mockRejectedValue(new Error("TREE_UNKNOWN"));
+      await expect(waitForInstalledUpdateRelaunch(f.options)).rejects.toThrow();
+      expect(f.options.pause).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["missing", "helper", "operation", "stale", "action"])(
+    "refuses %s dispatch correlation",
+    async (failure) => {
+      const f = fixture("rollback_completed", "rollback");
+      if (failure === "missing") f.records.delete(f.receiptFile);
+      if (failure === "helper")
+        f.receipt.helper = {
+          ...helper,
+          processStart: "Tue Oct  6 12:00:01 2026",
+        };
+      if (failure === "operation")
+        f.receipt.operation = { ...operation, operationId: "b".repeat(32) };
+      if (failure === "stale") f.receipt.notStartedAt = source;
+      if (failure === "action") f.receipt.action = "recover";
+      await expect(waitForInstalledUpdateRelaunch(f.options)).rejects.toThrow();
+    },
+  );
+
+  it("refuses recovery receipts already at the requested launch/completion", async () => {
+    const f = fixture("cancel_completed", "recover");
+    f.receipt.priorPhase = "cancel_launch_requested";
+    await expect(waitForInstalledUpdateRelaunch(f.options)).rejects.toThrow(
+      "UPDATE_RELAUNCH_RECEIPT_MISMATCH",
+    );
+  });
+
+  it("refuses an apply hint superseded by a restore dispatch", async () => {
+    const f = fixture();
+    f.records.set(path.join(root, "restore-pending.json"), {
+      schema: "farol.update-restore-intent/1",
+      action: "rollback",
+      operation,
+      priorPhase: "completed",
+      helper,
+    });
+    await expect(waitForInstalledUpdateRelaunch(f.options)).rejects.toThrow(
+      "UPDATE_RELAUNCH_RECEIPT_MISMATCH",
+    );
+  });
+
+  it("refuses an operation changed during observation", async () => {
+    const f = fixture();
+    f.journal.phase = "launch_requested";
+    f.observation.readProcess.mockResolvedValue({
+      stdout: helper.processStart,
+      stderr: "",
+    });
+    f.transitions.push(() => {
+      f.receipt.operation = {
+        ...operation,
+        source: { ...source, digest: "f".repeat(64) },
+      };
+    });
+    await expect(waitForInstalledUpdateRelaunch(f.options)).rejects.toThrow(
+      "UPDATE_RELAUNCH_RECEIPT_MISMATCH",
+    );
+  });
+
+  it.each([
+    "duplicate",
+    "bare",
+    "json",
+    "oversized",
+    "extra",
+    "badpid",
+    "badstart",
+    "badid",
+  ])("rejects %s hints before observation", async (failure) => {
+    const f = fixture();
+    let args = f.options.args;
+    if (failure === "duplicate") args = [...args, ...args];
+    if (failure === "bare") args = [prefix.slice(0, -1)];
+    if (failure === "json") args = [prefix + "{"];
+    if (failure === "oversized") args = [prefix + " ".repeat(2049)];
+    if (failure === "extra")
+      args = [prefix + JSON.stringify({ ...f.hint, path: slot })];
+    if (failure === "badpid")
+      args = [
+        prefix + JSON.stringify({ ...f.hint, helper: { ...helper, pid: 1 } }),
+      ];
+    if (failure === "badstart")
+      args = [
+        prefix +
+          JSON.stringify({
+            ...f.hint,
+            helper: { ...helper, processStart: "unknown" },
+          }),
+      ];
+    if (failure === "badid")
+      args = [prefix + JSON.stringify({ ...f.hint, operationId: "../other" })];
+    await expect(
+      waitForInstalledUpdateRelaunch({ ...f.options, args }),
+    ).rejects.toThrow();
+    expect(f.observation.readRecord).not.toHaveBeenCalled();
+    expect(f.observation.canonicalOwnedDirectory).not.toHaveBeenCalled();
+    expect(f.observation.readProcess).not.toHaveBeenCalled();
+  });
+
+  it.each(["profile", "directory", "build", "action", "mapping"])(
+    "rejects foreign %s before observation",
+    async (failure) => {
+      const f = fixture();
+      let options = f.options;
+      if (failure === "profile")
+        options = { ...options, userData: profile + "-other" };
+      if (failure === "directory")
+        options = { ...options, directory: "/checkout" };
+      if (failure === "build")
+        options = f.withHint({ ...f.hint, buildId: source.buildId });
+      if (failure === "action")
+        options = f.withHint({ ...f.hint, action: "rollback" });
+      if (failure === "mapping")
+        options = f.withHint({ ...f.hint, phase: "cancel_completed" });
+      await expect(waitForInstalledUpdateRelaunch(options)).rejects.toThrow();
+      expect(f.observation.readRecord).not.toHaveBeenCalled();
+    },
+  );
+});
