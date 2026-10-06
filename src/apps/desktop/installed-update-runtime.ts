@@ -3,7 +3,7 @@ import { constants } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { promisify } from "node:util";
 import { z } from "zod";
 import {
@@ -35,7 +35,21 @@ import {
   type InstalledUpdateOperation,
   type InstalledUpdateLaunch,
 } from "../../modules/release/infra/native/installed-update-helper";
-import type { BuildIdentity } from "../../pkg/build-info/identity";
+import {
+  BuildIdentitySchema,
+  canonicalBuildIdentityPayload,
+  type BuildIdentity,
+} from "../../pkg/build-info/identity";
+import {
+  createPromotionLeaseTransfer,
+  promotionLeasePath,
+  type PromotionLeaseHandle,
+  type PromotionLeaseTransfer,
+} from "./promotion-lease";
+import type {
+  ClosedInstalledPredecessor,
+  InstalledPredecessorControl,
+} from "./installed-predecessor";
 
 const execute = promisify(execFile);
 const Digest = z.string().regex(/^[a-f0-9]{64}$/u);
@@ -244,7 +258,10 @@ async function privateDirectory(directory: string): Promise<void> {
   }
   await canonicalOwnedDirectory(directory, true);
 }
-async function readRecord(file: string): Promise<unknown | null> {
+async function readRecord(
+  file: string,
+  privateMode = true,
+): Promise<unknown | null> {
   let before;
   try {
     before = await fs.lstat(file);
@@ -257,7 +274,7 @@ async function readRecord(file: string): Promise<unknown | null> {
     before.isSymbolicLink() ||
     before.nlink !== 1 ||
     before.uid !== process.getuid?.() ||
-    (before.mode & 0o077) !== 0 ||
+    (before.mode & (privateMode ? 0o077 : 0o022)) !== 0 ||
     before.size > MAX_RECORD_BYTES
   )
     throw new Error("UPDATE_RECORD_INVALID");
@@ -406,6 +423,121 @@ export type InstalledUpdateRuntimeOptions = Readonly<{
 export async function createInstalledUpdateRuntime(
   options: InstalledUpdateRuntimeOptions,
 ): Promise<InstalledUpdater | null> {
+  return createRuntime(options);
+}
+
+export type SupervisedInstalledUpdateOptions = Omit<
+  InstalledUpdateRuntimeOptions,
+  "build" | "acquireAdmission" | "quit"
+> &
+  Readonly<{
+    predecessor: InstalledPredecessorControl;
+    lease: PromotionLeaseHandle;
+    observeHelper(operation: InstalledUpdateOperation): void;
+    resources: Readonly<{
+      app: string;
+      // The standalone controller verifies this exact accepted package using the
+      // existing package verifier. A checkout directory is never sufficient.
+      verify(): Promise<boolean>;
+    }>;
+  }>;
+
+type SupervisedExecution = Readonly<{
+  app: string;
+  predecessor: ClosedInstalledPredecessor;
+  transfer: PromotionLeaseTransfer;
+  verifyResources(): Promise<boolean>;
+  observeHelper(operation: InstalledUpdateOperation): void;
+}>;
+
+/** Explicit external control after a captured predecessor's confirmed Quit. */
+export async function createSupervisedInstalledUpdateRuntime(
+  options: SupervisedInstalledUpdateOptions,
+): Promise<InstalledUpdater | null> {
+  const slot = installedFarolSlot();
+  const profile = path.join(
+    os.userInfo().homedir,
+    "Library/Application Support/Farol Next Preview",
+  );
+  const resources = {
+    app: options.resources.app,
+    verify: options.resources.verify.bind(options.resources),
+  };
+  if (
+    options.userData !== profile ||
+    options.lease.file !== promotionLeasePath(profile) ||
+    resources.app === slot ||
+    resources.app.startsWith(profile + path.sep) ||
+    options.directory !== path.join(resources.app, "Contents/Resources/app")
+  )
+    return null;
+  await canonicalOwnedDirectory(slot, false);
+  await canonicalOwnedDirectory(resources.app, false);
+  await canonicalOwnedDirectory(options.directory, false);
+  if ((await resources.verify()) !== true) return null;
+  const predecessor = await options.predecessor.observeClosed();
+  const build = BuildIdentitySchema.parse(
+    await readRecord(
+      path.join(slot, "Contents/Resources/app/build-identity.json"),
+      false,
+    ),
+  );
+  if (
+    createHash("sha256")
+      .update(canonicalBuildIdentityPayload(build))
+      .digest("hex") !== build.buildId
+  )
+    return null;
+  const transfer = await createPromotionLeaseTransfer(options.lease);
+  const expectedProof = JSON.stringify(predecessor);
+  let admitted = false;
+  const recheck = async () => {
+    try {
+      if (
+        (await transfer.verify()) !== true ||
+        (await resources.verify()) !== true ||
+        JSON.stringify(await options.predecessor.observeClosed()) !==
+          expectedProof
+      ) {
+        return { ok: false as const, code: "UPDATE_SUPERVISOR_UNCONFIRMED" };
+      }
+      return { ok: true as const };
+    } catch {
+      return { ok: false as const, code: "UPDATE_SUPERVISOR_UNCONFIRMED" };
+    }
+  };
+  return createRuntime(
+    {
+      ...options,
+      build,
+      acquireAdmission: async (settled) => {
+        if (admitted)
+          return { ok: false, code: "UPDATE_SUPERVISOR_ALREADY_USED" };
+        admitted = true;
+        const checked = await recheck();
+        if (!checked.ok) return checked;
+        if (!(await settled()))
+          return { ok: false, code: "UPDATE_WORK_PENDING" };
+        return { ok: true, release: () => transfer.release(), recheck };
+      },
+      quit: () => {
+        throw new Error("UPDATE_SUPERVISOR_PREDECESSOR_ALREADY_CLOSED");
+      },
+    },
+    {
+      app: resources.app,
+      predecessor,
+      transfer,
+      verifyResources: resources.verify,
+      observeHelper: options.observeHelper,
+    },
+  );
+}
+
+async function createRuntime(
+  options: InstalledUpdateRuntimeOptions,
+  supervised?: SupervisedExecution,
+): Promise<InstalledUpdater | null> {
   const selectedLocal = options.localArchive;
   const parsedLocal = selectedLocal
     ? parseGithubReleaseManifest(selectedLocal.manifest)
@@ -426,10 +558,11 @@ export async function createInstalledUpdateRuntime(
     return null;
   const slot = installedFarolSlot();
   const actualApp = path.resolve(options.directory, "../../..");
-  // Checkouts and temporary task-run copies can never mutate the installed slot.
+  // Ordinary checkouts cannot mutate the slot. Only the separate supervisory
+  // entry can supply verified controller resources and confirmed closure.
   if (
-    actualApp !== slot ||
-    (await fs.realpath(actualApp)) !== slot ||
+    actualApp !== (supervised?.app ?? slot) ||
+    (await fs.realpath(actualApp)) !== (supervised?.app ?? slot) ||
     options.userData !==
       path.join(
         os.userInfo().homedir,
@@ -449,8 +582,11 @@ export async function createInstalledUpdateRuntime(
     });
     const transport = createGithubUpdateTransport({
       privateStateDirectory: directory,
-      verifyPackage: (handle, manifest) =>
-        verifier.verifyPackage(handle, manifest),
+      verifyPackage: async (handle, manifest) => {
+        if (supervised && (await supervised.verifyResources()) !== true)
+          throw new Error("UPDATE_SUPERVISOR_RESOURCES_CHANGED");
+        return verifier.verifyPackage(handle, manifest);
+      },
     });
     return { verifier, transport };
   };
@@ -557,6 +693,8 @@ export async function createInstalledUpdateRuntime(
   let restoreKind: "recover" | "rollback" | null = null;
   let declinedBuildId: string | null = null;
   const runTrusted = async (entry: string, args: string[]) => {
+    if (supervised && (await supervised.verifyResources()) !== true)
+      throw new Error("UPDATE_SUPERVISOR_RESOURCES_CHANGED");
     const { stdout } = await execute(
       process.execPath,
       [path.join(options.directory, entry), ...args],
@@ -917,7 +1055,7 @@ export async function createInstalledUpdateRuntime(
       .parse(
         await runTrusted("update-obligations.mjs", [
           options.userData,
-          String(process.pid),
+          String(supervised?.predecessor.pid ?? process.pid),
         ]),
       );
     return report.drained;
@@ -1499,6 +1637,11 @@ export async function createInstalledUpdateRuntime(
       return undefined;
     },
     restore: async (action) => {
+      if (supervised)
+        return {
+          status: "blocked",
+          code: "UPDATE_SUPERVISED_RESTORE_UNQUALIFIED",
+        };
       if (admissionReleaseUnconfirmed)
         return {
           status: "blocked",
@@ -1681,7 +1824,9 @@ export async function createInstalledUpdateRuntime(
               status: "blocked",
               code: "UPDATE_SOURCE_IDENTITY_MISMATCH",
             };
-          const processStart = await captureInstalledProcessStart(process.pid);
+          const processStart =
+            supervised?.predecessor.processStart ??
+            (await captureInstalledProcessStart(process.pid));
           const check = await transport.verifyPackage(
             update.handle,
             update.manifest,
@@ -1783,12 +1928,23 @@ export async function createInstalledUpdateRuntime(
                 acceptedSource: source.buildId,
                 acceptedTarget: target.buildId,
               },
-              pid: process.pid,
+              ...(supervised
+                ? {
+                    predecessor: {
+                      kind: "confirmed_closed" as const,
+                      startedAt: supervised.predecessor.startedAt,
+                      lastQuitSha256: supervised.predecessor.quitDigest,
+                      stateIdentity: supervised.predecessor.stateIdentity,
+                    },
+                  }
+                : {}),
+              pid: supervised?.predecessor.pid ?? process.pid,
               processStart,
               waitSeconds: 120,
               relaunch: true,
             },
             {
+              ...(supervised ? { promotionLease: supervised.transfer } : {}),
               recordSpawn: async (spawned) => {
                 operation = spawned;
                 if (spawned.pid === null)
@@ -1810,6 +1966,7 @@ export async function createInstalledUpdateRuntime(
                   },
                 };
                 await writeRecord(readyFile, retained);
+                supervised?.observeHelper(spawned);
               },
             },
           );
@@ -1860,7 +2017,16 @@ export async function createInstalledUpdateRuntime(
               `farol-update-helper ${JSON.stringify({ operationId, code: result.code, phase: result.terminal?.phase ?? "unknown" })}\n`,
             );
           });
-          if (handoff.status !== "ready")
+          const admittedHandoff = supervised
+            ? handoff.status === "continued" ||
+              (handoff.status === "terminal" &&
+                handoff.result.code === 0 &&
+                handoff.result.signal === null &&
+                handoff.result.protocolError === null &&
+                handoff.result.terminal?.phase === "completed" &&
+                handoff.result.terminal.error === null)
+            : handoff.status === "ready";
+          if (!admittedHandoff)
             return {
               status: "unknown",
               code:
@@ -1868,7 +2034,7 @@ export async function createInstalledUpdateRuntime(
                   ? "UPDATE_HELPER_REFUSED"
                   : "UPDATE_HANDOFF_UNKNOWN",
             };
-          options.quit();
+          if (!supervised) options.quit();
           return { status: "accepted" };
         } catch {
           if (verified && !(await discardVerifiedStage(verified.handle)))

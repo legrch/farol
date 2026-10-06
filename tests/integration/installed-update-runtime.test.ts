@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import fs from "node:fs/promises";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { setFlagsFromString } from "node:v8";
@@ -12,7 +13,10 @@ import {
   releasePromotionLease,
   type PromotionLeaseHandle,
 } from "../../src/apps/desktop/promotion-lease";
-import { BuildIdentitySchema } from "../../src/pkg/build-info/identity";
+import {
+  BuildIdentitySchema,
+  canonicalBuildIdentityPayload,
+} from "../../src/pkg/build-info/identity";
 import type { ReleaseManifest } from "../../src/modules/release/domain/github-release-contract";
 
 const mocks = vi.hoisted(() => ({
@@ -73,7 +77,10 @@ vi.mock(
     startInstalledUpdateHelper: mocks.helper,
   }),
 );
-import { createInstalledUpdateRuntime } from "../../src/apps/desktop/installed-update-runtime";
+import {
+  createInstalledUpdateRuntime,
+  createSupervisedInstalledUpdateRuntime,
+} from "../../src/apps/desktop/installed-update-runtime";
 import { drainInstalledComputerWork } from "../../src/apps/desktop/installed-computer-drain";
 
 const manifest: ReleaseManifest = {
@@ -110,6 +117,9 @@ const build = BuildIdentitySchema.parse({
   sourceTreeDigest: "2".repeat(64),
   sourceDirty: false,
 });
+build.buildId = createHash("sha256")
+  .update(canonicalBuildIdentityPayload(build))
+  .digest("hex");
 let root: string;
 let slot: string;
 let userData: string;
@@ -255,6 +265,197 @@ beforeEach(async () => {
 afterEach(async () => {
   vi.restoreAllMocks();
   await fs.rm(root, { recursive: true, force: true });
+});
+
+describe("supervised installed updater (native files/lease, mocked package/process ports)", () => {
+  let held: PromotionLeaseHandle | null;
+  afterEach(async () => {
+    if (held) await releasePromotionLease(held);
+    held = null;
+  });
+  async function selected() {
+    const app = path.join(root, "accepted-controller/Farol.app");
+    const directory = path.join(app, "Contents/Resources/app");
+    await fs.mkdir(directory, { recursive: true });
+    await fs.mkdir(path.join(slot, "Contents/Resources/app"), {
+      recursive: true,
+    });
+    await fs.writeFile(
+      path.join(slot, "Contents/Resources/app/build-identity.json"),
+      JSON.stringify(build),
+      { mode: 0o644 },
+    );
+    held = await acquirePromotionLease(
+      userData,
+      "supervisor-fixture",
+      "promotion",
+    );
+    expect(held).not.toBeNull();
+    const state = await fs.stat(path.join(userData, "farol-next-state"), {
+      bigint: true,
+    });
+    const original = {
+      pid: 4001,
+      processStart: "real-selected-start-fixture",
+      startedAt: "2026-09-30T01:00:00.000Z",
+    };
+    const proof = {
+      ...original,
+      quitDigest: "a".repeat(64),
+      stateIdentity: {
+        device: state.dev.toString(),
+        inode: state.ino.toString(),
+      },
+    };
+    const observeClosed = vi.fn(async () => proof);
+    return {
+      directory,
+      userData,
+      localArchive: { path: path.join(root, "selected.zip"), manifest },
+      copyApp: mocks.copyApp,
+      removeDirectory: (directory: string, force: boolean) =>
+        fs.rm(directory, { recursive: true, force }),
+      publish: vi.fn(),
+      predecessor: { original, requestQuit: vi.fn(), observeClosed },
+      lease: held!,
+      resources: { app, verify: vi.fn(async () => true) },
+      observeHelper: vi.fn(),
+    };
+  }
+  it("uses the measured installed build, retained archive and original closed lifetime", async () => {
+    const input = await selected();
+    const originalOperation = {
+      pid: 123,
+      operationId: "fixture",
+      completion: new Promise(() => undefined),
+      observe: () => ({}),
+    };
+    mocks.helper.mockImplementation(async (_path, _request, launch) => {
+      await launch.recordSpawn(originalOperation);
+      await launch.promotionLease.release();
+      return { status: "continued", operation: originalOperation };
+    });
+    const controller = await createSupervisedInstalledUpdateRuntime(input);
+    expect(controller).not.toBeNull();
+    await controller!.initialize();
+    await controller!.prepareLocal();
+    expect(controller!.snapshot().phase).toBe("ready");
+    // The archive producer is this controller; it must not impersonate the
+    // closed predecessor when the existing download intent is persisted.
+    expect(mocks.captureStart).toHaveBeenCalledWith(process.pid);
+    mocks.captureStart.mockClear();
+    await controller!.restart();
+    expect(controller!.snapshot().phase).toBe("applying");
+    const request = mocks.helper.mock.calls[0]![1];
+    expect(request).toMatchObject({
+      action: "apply",
+      pid: 4001,
+      processStart: input.predecessor.original.processStart,
+      source,
+      target,
+      predecessor: {
+        kind: "confirmed_closed",
+        startedAt: input.predecessor.original.startedAt,
+        lastQuitSha256: "a".repeat(64),
+      },
+    });
+    expect(input.observeHelper).toHaveBeenCalledExactlyOnceWith(
+      originalOperation,
+    );
+    expect(mocks.captureStart).not.toHaveBeenCalledWith(process.pid);
+    expect(
+      mocks.exec.mock.calls
+        .filter((call) => call[1][0].endsWith("update-obligations.mjs"))
+        .every((call) => call[1][2] === "4001"),
+    ).toBe(true);
+    expect(input.predecessor.requestQuit).not.toHaveBeenCalled();
+    expect(quit).not.toHaveBeenCalled();
+    expect(JSON.parse(await fs.readFile(ready, "utf8"))).toMatchObject({
+      operation: { source, target },
+      helper: { pid: 123 },
+    });
+    await controller!.close();
+  });
+
+  it.each(["resources", "proof", "lease"])(
+    "blocks changed %s before helper dispatch",
+    async (boundary) => {
+      const input = await selected();
+      const controller = await createSupervisedInstalledUpdateRuntime(input);
+      await controller!.initialize();
+      await controller!.prepareLocal();
+      expect(controller!.snapshot().phase).toBe("ready");
+      if (boundary === "resources")
+        input.resources.verify.mockResolvedValue(false);
+      if (boundary === "proof")
+        input.predecessor.observeClosed.mockImplementation(async () => {
+          throw new Error("changed");
+        });
+      if (boundary === "lease") await releasePromotionLease(held!);
+      await controller!.restart();
+      expect(controller!.snapshot()).toMatchObject({
+        phase: "ready",
+        blockedBy: "UPDATE_SUPERVISOR_UNCONFIRMED",
+      });
+      await controller!.restart();
+      expect(controller!.snapshot()).toMatchObject({
+        phase: "ready",
+        blockedBy: "UPDATE_SUPERVISOR_ALREADY_USED",
+      });
+      expect(mocks.helper).not.toHaveBeenCalled();
+      await controller!.close();
+    },
+  );
+
+  it("does not relax the ordinary installed-slot guard for a controller app", async () => {
+    const input = await selected();
+    expect(
+      await createInstalledUpdateRuntime({
+        ...options(),
+        directory: input.directory,
+      }),
+    ).toBeNull();
+    input.resources.verify.mockResolvedValue(false);
+    expect(await createSupervisedInstalledUpdateRuntime(input)).toBeNull();
+    expect(mocks.importLocal).not.toHaveBeenCalled();
+    expect(mocks.helper).not.toHaveBeenCalled();
+  });
+
+  it("preserves an uncertain original helper and does not start a replacement", async () => {
+    const input = await selected();
+    const operation = {
+      pid: 123,
+      operationId: "original-unknown",
+      completion: new Promise(() => undefined),
+      observe: () => ({}),
+    };
+    mocks.helper.mockImplementation(async (_path, _request, launch) => {
+      await launch.recordSpawn(operation);
+      return {
+        status: "outcome_unknown",
+        reason: "promotion_lease_release_unknown",
+        operation,
+      };
+    });
+    const controller = await createSupervisedInstalledUpdateRuntime(input);
+    await controller!.initialize();
+    await controller!.prepareLocal();
+    await controller!.restart();
+    expect(controller!.snapshot()).toMatchObject({
+      phase: "failed",
+      code: "UPDATE_HANDOFF_UNKNOWN",
+      recoveryRequired: true,
+    });
+    await controller!.restart();
+    await controller!.prepareLocal();
+    expect(mocks.helper).toHaveBeenCalledTimes(1);
+    expect(input.observeHelper).toHaveBeenCalledExactlyOnceWith(operation);
+    expect(JSON.parse(await fs.readFile(ready, "utf8"))).toMatchObject({
+      operation: { source, target },
+      helper: { pid: 123 },
+    });
+    await controller!.close();
+  });
 });
 
 describe("installed updater composition (disposable filesystem and mocked native/GitHub ports)", () => {
