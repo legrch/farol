@@ -717,4 +717,30 @@ describe("desktop layout attachment integration (source callbacks + fake host)",
     expect(f.taskViews.has("live")).toBe(false);
     expect(f.host.children).toEqual([]);
   });
+  it("handles Electron clearing view.webContents before its destroyed callback", () => {
+    const f = desktopFixture();
+    const surface = f.api.liveChatGptSurfaceFactory("live")({
+      webPreferences: {},
+    });
+    f.context.selectedTaskId = "live";
+    surface.reveal();
+    const view = f.taskViews.get("live")!;
+    const contents = view.webContents;
+    Object.defineProperty(view, "webContents", {
+      get: () => (contents.destroyed ? undefined : contents),
+    });
+    expect(() => contents.close()).not.toThrow();
+    expect(f.taskViews.has("live")).toBe(false);
+    expect(f.host.children).toEqual([]);
+    expect(surface.webContents).toBe(contents);
+    f.events.length = 0;
+    expect(() => {
+      surface.hide();
+      surface.reveal();
+      surface.focus();
+      surface.destroy();
+      f.api.applyLayout();
+    }).not.toThrow();
+    expect(f.events).toEqual([]);
+  });
 });

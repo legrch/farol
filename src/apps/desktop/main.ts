@@ -8722,7 +8722,7 @@ function attachTaskView(
   if (
     !window ||
     window.isDestroyed() ||
-    view.webContents.isDestroyed() ||
+    view.webContents?.isDestroyed() !== false ||
     taskViews.get(taskId) !== view
   ) {
     return;
@@ -8750,6 +8750,7 @@ function liveChatGptSurfaceFactory(taskId: string): ChatGptRouteSurfaceFactory {
         backgroundThrottling: false,
       },
     });
+    const contents = view.webContents;
     const closingListeners = new Set<() => void>();
     const closedListeners = new Set<() => void>();
     let closingNotified = false;
@@ -8767,21 +8768,21 @@ function liveChatGptSurfaceFactory(taskId: string): ChatGptRouteSurfaceFactory {
     view.setVisible(false);
     taskViews.set(taskId, view);
     taskViewKinds.set(taskId, "chatgpt");
-    view.webContents.on("before-input-event", (event, input) => {
+    contents.on("before-input-event", (event, input) => {
       if (handleShortcut(input)) event.preventDefault();
     });
-    view.webContents.once("destroyed", () => {
+    contents.once("destroyed", () => {
       disposeTaskView(taskId, view);
       notifyClosed();
     });
     return {
       kind: "embedded",
-      webContents: view.webContents,
-      isDestroyed: () => view.webContents.isDestroyed(),
-      loadURL: (url) => view.webContents.loadURL(url),
+      webContents: contents,
+      isDestroyed: () => contents.isDestroyed(),
+      loadURL: (url) => contents.loadURL(url),
       hide: () => nativeViewVisibility.hide(view),
       reveal: () => {
-        if (taskViews.get(taskId) !== view || view.webContents.isDestroyed()) {
+        if (taskViews.get(taskId) !== view || contents.isDestroyed()) {
           return;
         }
         applyLayout();
@@ -8793,12 +8794,12 @@ function liveChatGptSurfaceFactory(taskId: string): ChatGptRouteSurfaceFactory {
       },
       setTitle: () => undefined,
       destroy: () => {
-        if (!view.webContents.isDestroyed()) notifyClosing();
+        if (!contents.isDestroyed()) notifyClosing();
         disposeTaskView(taskId, view);
         notifyClosed();
       },
       onPageTitleUpdated: (listener) => {
-        view.webContents.on("page-title-updated", (event) => listener(event));
+        contents.on("page-title-updated", (event) => listener(event));
       },
       onClosing: (listener) => closingListeners.add(listener),
       onClosed: (listener) => closedListeners.add(listener),
@@ -8834,8 +8835,9 @@ function disposeTaskView(taskId: string, view: WebContentsView): void {
     taskViewKinds.delete(taskId);
   }
   nativeViewVisibility.hide(view);
-  if (!view.webContents.isDestroyed()) {
-    view.webContents.close({ waitForBeforeUnload: false });
+  const contents = view.webContents;
+  if (contents && !contents.isDestroyed()) {
+    contents.close({ waitForBeforeUnload: false });
   }
 }
 
@@ -9132,7 +9134,7 @@ function applyLayout(): void {
   // Detach covered and unselected pages first so the host has at most one
   // browser child, regardless of task insertion order.
   for (const [taskId, view] of taskViews) {
-    if (taskId !== visibleTaskId || view.webContents.isDestroyed()) {
+    if (taskId !== visibleTaskId || view.webContents?.isDestroyed() !== false) {
       nativeViewVisibility.hide(view);
     }
   }

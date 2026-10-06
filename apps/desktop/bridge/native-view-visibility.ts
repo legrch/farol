@@ -8,7 +8,7 @@ type FocusableContents = Pick<
 export type NativeBrowserView = Pick<
   WebContentsView,
   "getVisible" | "setVisible" | "setBounds"
-> & { readonly webContents: FocusableContents };
+> & { readonly webContents?: FocusableContents };
 
 export interface NativeViewHost<V extends NativeBrowserView> {
   isDestroyed(): boolean;
@@ -27,7 +27,7 @@ export class NativeViewVisibility<V extends NativeBrowserView> {
   private readonly owners = new Map<V, NativeViewHost<V>>();
 
   show(host: NativeViewHost<V>, view: V, bounds: Rectangle): void {
-    if (host.isDestroyed() || view.webContents.isDestroyed()) return;
+    if (host.isDestroyed() || view.webContents?.isDestroyed() !== false) return;
     const previous = this.owners.get(view);
     if (previous && previous !== host) this.hide(view, false);
     // Each host owns one browser lane. This also detaches a replaced view that
@@ -50,13 +50,15 @@ export class NativeViewVisibility<V extends NativeBrowserView> {
       host !== undefined &&
       !host.isDestroyed() &&
       host.contentView.children.includes(view);
-    const live = !view.webContents.isDestroyed();
+    // Electron can clear this property before its destroyed listeners run.
+    const contents = view.webContents;
+    const live = contents !== undefined && !contents.isDestroyed();
     const returnFocus =
       transferFocus &&
       attached &&
       live &&
       host.isFocused() &&
-      view.webContents.isFocused();
+      contents.isFocused();
     if (live && view.getVisible()) view.setVisible(false);
     // Remove before the caller closes WebContents; also remove a view whose
     // WebContents was destroyed independently. Never access a destroyed host.
@@ -79,17 +81,19 @@ export class NativeViewVisibility<V extends NativeBrowserView> {
   }
 
   focus(host: NativeViewHost<V>, view: V): boolean {
+    const contents = view.webContents;
     if (
       host.isDestroyed() ||
       !host.isFocused() ||
-      view.webContents.isDestroyed() ||
+      !contents ||
+      contents.isDestroyed() ||
       this.owners.get(view) !== host ||
       !host.contentView.children.includes(view) ||
       !view.getVisible()
     ) {
       return false;
     }
-    view.webContents.focus();
+    contents.focus();
     return true;
   }
 }
