@@ -1,6 +1,8 @@
 import { constants } from "node:fs";
 import { createHash } from "node:crypto";
+import { ChildProcess } from "node:child_process";
 import { Server } from "node:http";
+import os from "node:os";
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
@@ -139,11 +141,21 @@ async function proofRoot(root, proof, auxiliary = false) {
 }
 // Metadata only: reject links/special files before any child can follow them.
 // Private roots protect descendant bytes; do not read credentials or profiles.
-async function tree(root, sockets = false) {
+async function tree(root, sockets = false, links = new Map()) {
   let count = 0;
   async function walk(value) {
     if (++count > 20000) throw invalid("TREE_LIMIT");
     const info = await fs.lstat(value);
+    const link = links.get(value);
+    if (link) {
+      if (
+        !info.isSymbolicLink() ||
+        !same(info, link.witness) ||
+        (await fs.readlink(value)) !== link.target
+      )
+        throw invalid("SINGLETON_CHANGED");
+      return;
+    }
     if (
       info.uid !== process.getuid?.() ||
       info.isSymbolicLink() ||
@@ -160,6 +172,163 @@ async function tree(root, sockets = false) {
       throw invalid("TREE_CHANGED");
   }
   await walk(root);
+}
+
+// Chromium's three ProcessSingleton links are one bound native resource, not
+// a pathname exception. Never connect to its socket, inspect another PID or
+// invoke Chromium's stale-instance recovery. Targets/cookies stay internal.
+const singletonNames = ["SingletonLock", "SingletonCookie", "SingletonSocket"];
+async function singletonLink(file) {
+  const before = await fs.lstat(file);
+  if (
+    !before.isSymbolicLink() ||
+    before.uid !== process.getuid?.() ||
+    before.nlink !== 1 ||
+    before.size < 1 ||
+    before.size > 1024
+  )
+    throw invalid("SINGLETON_UNSAFE");
+  const witness = {
+    ...identity(before),
+    nlink: before.nlink,
+    size: before.size,
+    mtimeMs: before.mtimeMs,
+    ctimeMs: before.ctimeMs,
+  };
+  const target = await fs.readlink(file);
+  if (!same(await fs.lstat(file), witness)) throw invalid("SINGLETON_CHANGED");
+  return { witness, target };
+}
+async function singleton(admitted, actual, child) {
+  if (
+    !(child instanceof ChildProcess) ||
+    !Number.isSafeInteger(child.pid) ||
+    child.pid < 1 ||
+    actual?.pid !== child.pid ||
+    (admitted.child && admitted.child !== child)
+  )
+    throw invalid("SINGLETON_CHILD_UNOWNED");
+  const userData = admitted.paths.userData;
+  if (child.exitCode !== null || child.signalCode !== null) {
+    if (
+      !admitted.checked ||
+      !admitted.singleton ||
+      child.exitCode !== 0 ||
+      child.signalCode !== null
+    )
+      throw invalid("SINGLETON_TERMINAL_UNCONFIRMED");
+    for (const name of singletonNames) {
+      try {
+        await fs.lstat(path.join(userData, name));
+        throw invalid("SINGLETON_NOT_RELEASED");
+      } catch (error) {
+        if (error.code !== "ENOENT") throw error;
+      }
+    }
+    return undefined;
+  }
+  const links = new Map();
+  for (const name of singletonNames) {
+    const file = path.join(userData, name);
+    links.set(file, await singletonLink(file));
+  }
+  if (
+    links.get(path.join(userData, "SingletonLock")).target !==
+    `${os.hostname()}-${child.pid}`
+  )
+    throw invalid("SINGLETON_CHILD_MISMATCH");
+  const cookie = links.get(path.join(userData, "SingletonCookie")).target;
+  if (!/^[0-9]{1,20}$/u.test(cookie) || BigInt(cookie) > 0xffffffffffffffffn)
+    throw invalid("SINGLETON_COOKIE_INVALID");
+  const socketTarget = absolute(
+    links.get(path.join(userData, "SingletonSocket")).target,
+  );
+  const directoryInput = path.dirname(socketTarget);
+  const inputMetadata = await fs.lstat(directoryInput);
+  const socketRoot = await fs.realpath(directoryInput);
+  if (
+    !inputMetadata.isDirectory() ||
+    inputMetadata.isSymbolicLink() ||
+    (await fs.realpath(path.dirname(directoryInput))) !==
+      path.dirname(actual.home) ||
+    path.basename(socketTarget) !== "SingletonSocket" ||
+    path.dirname(socketRoot) !== path.dirname(actual.home) ||
+    socketRoot === actual.home
+  )
+    throw invalid("SINGLETON_SOCKET_OUTSIDE_TEMP");
+  const rootIdentity = await directory(socketRoot);
+  const remoteCookiePath = path.join(socketRoot, "SingletonCookie");
+  const remoteCookie = await singletonLink(remoteCookiePath);
+  if (remoteCookie.target !== cookie)
+    throw invalid("SINGLETON_COOKIE_MISMATCH");
+  const socketPath = path.join(socketRoot, "SingletonSocket");
+  const info = await fs.lstat(socketPath);
+  if (
+    !info.isSocket() ||
+    info.isSymbolicLink() ||
+    info.nlink !== 1 ||
+    info.uid !== process.getuid?.() ||
+    (await fs.realpath(socketPath)) !== socketPath ||
+    (await fs.realpath(socketTarget)) !== socketPath
+  )
+    throw invalid("SINGLETON_SOCKET_UNSAFE");
+  if (
+    JSON.stringify((await fs.readdir(socketRoot)).sort()) !==
+    JSON.stringify(["SingletonCookie", "SingletonSocket"])
+  )
+    throw invalid("SINGLETON_DIRECTORY_UNSAFE");
+  const socketIdentity = { ...identity(info), nlink: info.nlink };
+  const prior = admitted.singleton;
+  if (
+    prior &&
+    (prior.socketRoot !== socketRoot ||
+      !same(rootIdentity, prior.rootIdentity) ||
+      !same(socketIdentity, prior.socketIdentity) ||
+      [...links].some(([file, link]) => {
+        const previous = prior.links.get(file);
+        return (
+          !previous ||
+          previous.target !== link.target ||
+          !same(link.witness, previous.witness)
+        );
+      }) ||
+      remoteCookie.target !== prior.remoteCookie.target ||
+      !same(remoteCookie.witness, prior.remoteCookie.witness))
+  )
+    throw invalid("SINGLETON_CHANGED");
+  return {
+    links,
+    directoryInput,
+    socketTarget,
+    socketRoot,
+    rootIdentity,
+    socketPath,
+    socketIdentity,
+    remoteCookiePath,
+    remoteCookie,
+  };
+}
+async function recheckSingleton(resource, child) {
+  if (!resource) return;
+  for (const [file, link] of [
+    ...resource.links,
+    [resource.remoteCookiePath, resource.remoteCookie],
+  ]) {
+    const current = await singletonLink(file);
+    if (current.target !== link.target || !same(current.witness, link.witness))
+      throw invalid("SINGLETON_CHANGED");
+  }
+  if (
+    !same(await directory(resource.socketRoot), resource.rootIdentity) ||
+    !same(await fs.lstat(resource.directoryInput), resource.rootIdentity) ||
+    !same(await fs.lstat(resource.socketPath), resource.socketIdentity) ||
+    (await fs.realpath(resource.socketTarget)) !== resource.socketPath ||
+    JSON.stringify((await fs.readdir(resource.socketRoot)).sort()) !==
+      JSON.stringify(["SingletonCookie", "SingletonSocket"]) ||
+    child.exitCode !== null ||
+    child.signalCode !== null
+  )
+    throw invalid("SINGLETON_CHANGED");
 }
 function endpoint(launch, fixture) {
   if (!(fixture instanceof Server) || !fixture.listening)
@@ -352,6 +521,11 @@ export async function assertNativePreviewAdmission(ownerStateRoot, isolation) {
         !same(rootProof.witness, prior.rootProof.witness))
     )
       throw invalid("RECEIPT_INVALID");
+    if (
+      prior?.child &&
+      (prior.child.exitCode !== 0 || prior.child.signalCode !== null)
+    )
+      throw invalid("SINGLETON_TERMINAL_UNCONFIRMED");
     let relay;
     try {
       relay = await directory(relayRoot);
@@ -409,7 +583,7 @@ export async function assertNativePreviewAdmission(ownerStateRoot, isolation) {
   }
 }
 
-export async function recheckNativePreviewIsolation(receipt, actual) {
+export async function recheckNativePreviewIsolation(receipt, actual, child) {
   const admitted = admissions.get(receipt);
   if (!admitted) throw invalid("RECEIPT_INVALID");
   // Consume the exact witness before checking. Failure cannot be retried or
@@ -443,7 +617,13 @@ export async function recheckNativePreviewIsolation(receipt, actual) {
     )
   )
     throw invalid("NATIVE_WINDOW_CHANGED");
-  await tree(receipt.profileRoot);
+  // Without a child, only the original metadata-only no-link fixtures qualify.
+  // Real Electron callers always supply their retained original ChildProcess.
+  const resource =
+    child === undefined && !admitted.child
+      ? undefined
+      : await singleton(admitted, actual, child);
+  await tree(receipt.profileRoot, false, resource?.links);
   if (admitted.auxiliary) await tree(admitted.auxiliaryRoot);
   await recheckBindings(admitted);
   let relay;
@@ -455,12 +635,19 @@ export async function recheckNativePreviewIsolation(receipt, actual) {
   if (admitted.relay && (!relay || !same(relay, admitted.relay)))
     throw invalid("RELAY_CHANGED");
   if (relay) await tree(admitted.relayRoot, true);
+  await recheckSingleton(resource, child);
   // Internal witness only; callers cannot rewrite a receipt to waive a recheck.
   const observed = Object.freeze({
     ...receipt,
     kind: "isolated-native-preview-readback",
   });
-  admissions.set(observed, { ...admitted, relay, checked: true });
+  admissions.set(observed, {
+    ...admitted,
+    relay,
+    child,
+    singleton: resource,
+    checked: true,
+  });
   return observed;
 }
 

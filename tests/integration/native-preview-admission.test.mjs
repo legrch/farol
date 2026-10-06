@@ -1,5 +1,5 @@
 import fs from "node:fs/promises";
-import { execFile } from "node:child_process";
+import { ChildProcess, execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { Server } from "node:http";
 import os from "node:os";
@@ -34,6 +34,7 @@ it("imports native admission through standalone Node without the test bundler", 
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   for (const root of roots.splice(0))
     await fs.rm(root, { recursive: true, force: true });
 });
@@ -208,6 +209,210 @@ describe("hidden disposable Setup admission", () => {
   }
   const admit = (value) =>
     assertNativePreviewAdmission("/unavailable-owner-profile", value);
+  // Synthetic socket metadata only: no socket/child is started or contacted.
+  // The exact real resource is qualified separately by the native Setup run.
+  async function singletonFixture() {
+    const selected = await selection();
+    const receipt = await admit(selected);
+    const child = new ChildProcess();
+    child.pid = 2147483000;
+    selected.actual.pid = child.pid;
+    const socketRoot = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), "farol-singleton-metadata-")),
+    );
+    roots.push(socketRoot);
+    await fs.chmod(socketRoot, 0o700);
+    const cookie = "18446744073709551615";
+    const links = {
+      lock: path.join(selected.actual.userData, "SingletonLock"),
+      cookie: path.join(selected.actual.userData, "SingletonCookie"),
+      socket: path.join(selected.actual.userData, "SingletonSocket"),
+      remote: path.join(socketRoot, "SingletonCookie"),
+    };
+    const socketPath = path.join(socketRoot, "SingletonSocket");
+    await fs.symlink(`${os.hostname()}-${child.pid}`, links.lock);
+    await fs.symlink(cookie, links.cookie);
+    await fs.symlink(cookie, links.remote);
+    await fs.symlink(socketPath, links.socket);
+    await fs.writeFile(socketPath, "metadata fixture", { mode: 0o600 });
+    const original = fs.lstat.bind(fs);
+    const socketMetadata = vi
+      .spyOn(fs, "lstat")
+      .mockImplementation(async (file, ...args) => {
+        const info = await original(file, ...args);
+        if (file === socketPath) {
+          info.mode = 0o140600;
+          info.isSocket = () => true;
+          info.isFile = () => false;
+        }
+        return info;
+      });
+    return {
+      selected,
+      receipt,
+      child,
+      links,
+      socketRoot,
+      socketPath,
+      socketMetadata,
+    };
+  }
+  it("admits only the complete singleton correlated with the original child", async () => {
+    const s = await singletonFixture();
+    const observed = await recheckNativePreviewIsolation(
+      s.receipt,
+      s.selected.actual,
+      s.child,
+    );
+    expect(observed.kind).toBe("isolated-native-preview-readback");
+    // Targets and runtime cookies never enter the returned diagnostic receipt.
+    expect(JSON.stringify(observed)).not.toContain("18446744073709551615");
+    expect(JSON.stringify(observed)).not.toContain(s.socketRoot);
+    await expect(
+      admit({ ...s.selected, previous: observed }),
+    ).rejects.toThrow();
+  });
+  it.each([
+    "unowned-child",
+    "native-pid",
+    "lock-pid",
+    "lock-host",
+    "missing-link",
+    "invalid-cookie",
+    "cookie-mismatch",
+    "socket-file",
+    "socket-hardlink",
+    "socket-root-mode",
+    "extra-socket-file",
+    "unrelated-link",
+  ])("refuses an unqualified singleton boundary: %s", async (kind) => {
+    const s = await singletonFixture();
+    let child = s.child;
+    const replace = async (file, target) => {
+      await fs.unlink(file);
+      await fs.symlink(target, file);
+    };
+    if (kind === "unowned-child")
+      child = { pid: s.child.pid, exitCode: null, signalCode: null };
+    if (kind === "native-pid") s.selected.actual.pid++;
+    if (kind === "lock-pid")
+      await replace(s.links.lock, `${os.hostname()}-${s.child.pid + 1}`);
+    if (kind === "lock-host")
+      await replace(s.links.lock, `another-host-${s.child.pid}`);
+    if (kind === "missing-link") await fs.unlink(s.links.cookie);
+    if (kind === "invalid-cookie")
+      await replace(s.links.cookie, "18446744073709551616");
+    if (kind === "cookie-mismatch") await replace(s.links.remote, "1");
+    if (kind === "socket-file") s.socketMetadata.mockRestore();
+    if (kind === "socket-hardlink")
+      await fs.link(s.socketPath, path.join(await root(), "alias"));
+    if (kind === "socket-root-mode") await fs.chmod(s.socketRoot, 0o755);
+    if (kind === "extra-socket-file")
+      await fs.writeFile(path.join(s.socketRoot, "other"), "synthetic");
+    if (kind === "unrelated-link")
+      await fs.symlink(
+        "/outside",
+        path.join(s.selected.actual.userData, "other"),
+      );
+    await expect(
+      recheckNativePreviewIsolation(s.receipt, s.selected.actual, child),
+    ).rejects.toThrow();
+    await expect(
+      recheckNativePreviewIsolation(s.receipt, s.selected.actual, s.child),
+    ).rejects.toThrow("RECEIPT_INVALID");
+  });
+  it("refuses singleton links without any original child witness", async () => {
+    const s = await singletonFixture();
+    await expect(
+      recheckNativePreviewIsolation(s.receipt, s.selected.actual),
+    ).rejects.toThrow("TREE_UNSAFE");
+  });
+  it("refuses an additional directory alias in the native socket target", async () => {
+    const s = await singletonFixture();
+    const alias = s.socketRoot + "-alias";
+    roots.push(alias);
+    await fs.symlink(s.socketRoot, alias);
+    await fs.unlink(s.links.socket);
+    await fs.symlink(path.join(alias, "SingletonSocket"), s.links.socket);
+    await expect(
+      recheckNativePreviewIsolation(s.receipt, s.selected.actual, s.child),
+    ).rejects.toThrow("SINGLETON_SOCKET_OUTSIDE_TEMP");
+  });
+  it.each(["target-resolution", "directory-entries"])(
+    "rechecks the original socket boundary before accepting: %s",
+    async (kind) => {
+      const s = await singletonFixture();
+      let observations = 0;
+      if (kind === "target-resolution") {
+        const original = fs.realpath.bind(fs);
+        vi.spyOn(fs, "realpath").mockImplementation(async (file, ...args) => {
+          if (file === s.socketPath && ++observations === 3)
+            return "/outside/SingletonSocket";
+          return original(file, ...args);
+        });
+      } else {
+        const original = fs.readdir.bind(fs);
+        vi.spyOn(fs, "readdir").mockImplementation(async (file, ...args) => {
+          if (file === s.socketRoot && ++observations === 2)
+            return ["SingletonCookie", "SingletonSocket", "other"];
+          return original(file, ...args);
+        });
+      }
+      await expect(
+        recheckNativePreviewIsolation(s.receipt, s.selected.actual, s.child),
+      ).rejects.toThrow("SINGLETON_CHANGED");
+      await expect(
+        recheckNativePreviewIsolation(s.receipt, s.selected.actual, s.child),
+      ).rejects.toThrow("RECEIPT_INVALID");
+    },
+  );
+  it.each(["link-replaced", "different-child", "early-exit"])(
+    "refuses changed retained singleton correlation: %s",
+    async (kind) => {
+      const s = await singletonFixture();
+      const observed = await recheckNativePreviewIsolation(
+        s.receipt,
+        s.selected.actual,
+        s.child,
+      );
+      let child = s.child;
+      if (kind === "link-replaced") {
+        const target = await fs.readlink(s.links.cookie);
+        await fs.unlink(s.links.cookie);
+        await fs.symlink(target, s.links.cookie);
+      }
+      if (kind === "different-child") {
+        child = new ChildProcess();
+        child.pid = s.child.pid;
+      }
+      if (kind === "early-exit") s.child.exitCode = 1;
+      await expect(
+        recheckNativePreviewIsolation(observed, s.selected.actual, child),
+      ).rejects.toThrow();
+    },
+  );
+  it("requires known graceful terminal and absent singleton before reopen", async () => {
+    const s = await singletonFixture();
+    const observed = await recheckNativePreviewIsolation(
+      s.receipt,
+      s.selected.actual,
+      s.child,
+    );
+    s.child.exitCode = 0;
+    await expect(
+      admit({ ...s.selected, previous: observed }),
+    ).rejects.toThrow();
+    for (const file of [s.links.lock, s.links.cookie, s.links.socket])
+      await fs.unlink(file);
+    const closed = await recheckNativePreviewIsolation(
+      observed,
+      s.selected.actual,
+      s.child,
+    );
+    await expect(
+      admit({ ...s.selected, previous: closed }),
+    ).resolves.toBeDefined();
+  });
   it("accepts a native temp separator only with the same physical root", async () => {
     const selected = await selection();
     const receipt = await admit(selected);

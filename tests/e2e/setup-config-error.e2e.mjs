@@ -172,6 +172,7 @@ try {
         application = await electron.launch(launchOptions);
         const window = await application.firstWindow({ timeout: 15000 });
         const actual = await application.evaluate(({ app, BrowserWindow }) => ({
+          pid: process.pid,
           home: app.getPath("home"),
           userData: app.getPath("userData"),
           sessionData: app.getPath("sessionData"),
@@ -190,6 +191,7 @@ try {
         isolationWitness = await recheckNativePreviewIsolation(
           admission,
           actual,
+          application.process(),
         );
         nativePaths = actual;
         observations.push(isolationWitness);
@@ -326,7 +328,11 @@ try {
         if (closed && isolationWitness) {
           // Preserve an unsafe/unknown profile. Recheck the immutable physical
           // binding after the original child exits before disposable cleanup.
-          await recheckNativePreviewIsolation(isolationWitness, nativePaths);
+          await recheckNativePreviewIsolation(
+            isolationWitness,
+            nativePaths,
+            application.process(),
+          );
           await fs.rm(profile, { recursive: true, force: true });
         }
       }

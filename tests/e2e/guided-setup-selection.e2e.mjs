@@ -504,6 +504,7 @@ async function launch(environment, mode = "normal", profile = mode) {
   // Prove selected native paths before touching UI. HOME alone does not
   // select Electron's profile; both environments require the private proof.
   const nativePaths = await application.evaluate(({ app, BrowserWindow }) => ({
+    pid: process.pid,
     home: app.getPath("home"),
     userData: app.getPath("userData"),
     sessionData: app.getPath("sessionData"),
@@ -523,7 +524,11 @@ async function launch(environment, mode = "normal", profile = mode) {
   });
   profileAdmissions.set(
     profileRoot,
-    await recheckNativePreviewIsolation(admission, nativePaths),
+    await recheckNativePreviewIsolation(
+      admission,
+      nativePaths,
+      application.process(),
+    ),
   );
   profileIsolationConfirmed = true;
   activeFixtureLaunch = launchOptions;
