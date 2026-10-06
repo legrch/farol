@@ -9,6 +9,19 @@ const USAGE =
   "supervised-update --input <absolute-json> --sha256 <exact-input-digest> --apply";
 const MAX_INPUT_BYTES = 32 * 1024;
 
+function deliverFinal(output, value) {
+  try {
+    const pending = output(value);
+    if (pending && typeof pending.then === "function") {
+      Promise.resolve(pending).catch(() => {});
+      return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // This entry is bundled from reviewed source and run in an external Node
 // process. It must remain independent of the Farol instance being replaced.
 export async function runSupervisedUpdateCLI(
@@ -18,11 +31,12 @@ export async function runSupervisedUpdateCLI(
   },
 ) {
   if (args.length === 1 && args[0] === "--help") {
-    output({
+    return deliverFinal(output, {
       usage: USAGE,
       effect: "one explicitly selected installed transition",
-    });
-    return 0;
+    })
+      ? 0
+      : 3;
   }
   if (
     args.length !== 5 ||
@@ -94,8 +108,11 @@ export async function runSupervisedUpdateCLI(
     await fd.close();
   }
   const result = await runSupervisedUpdate(input, output);
-  output(result);
+  // Delivery is separate from the already observed lifecycle terminal. Never
+  // re-enter the controller or rewrite completion when this final report is lost.
+  const reported = deliverFinal(output, result);
   if (
+    !reported ||
     result.status === "unknown" ||
     result.reportingFailure != null ||
     result.controllerClose === "unconfirmed" ||

@@ -89,4 +89,46 @@ describe("external supervisor entry (mocked controller, disposable input)", () =
     expect(output).toHaveBeenCalledTimes(1);
     expect(runSupervisedUpdate).not.toHaveBeenCalled();
   });
+
+  it.each(["throw", "reject"])(
+    "returns reporting loss for a final-only %s without changing the terminal",
+    async (kind) => {
+      const terminal = Object.freeze({
+        status: "completed",
+        reportingFailure: null,
+        helper: { operationId: "exact-original-fixture" },
+      });
+      vi.mocked(runSupervisedUpdate).mockImplementation(
+        async (_input, publish) => {
+          publish({ status: "prepared" });
+          return terminal;
+        },
+      );
+      const output = vi.fn((value) => {
+        if (value.status !== "completed") return;
+        if (kind === "reject")
+          return Promise.reject(new Error("OUTPUT_CLOSED"));
+        throw new Error("OUTPUT_CLOSED");
+      });
+      expect(await runSupervisedUpdateCLI(argumentsFor(), output)).toBe(3);
+      expect(output).toHaveBeenLastCalledWith(terminal);
+      expect(terminal.status).toBe("completed");
+      expect(runSupervisedUpdate).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("consumes an async final rejection after an earlier reporting failure", async () => {
+    const result = {
+      status: "blocked",
+      reportingFailure: "UPDATE_PROGRESS_REPORT_FAILED",
+    };
+    vi.mocked(runSupervisedUpdate).mockResolvedValue(result);
+    expect(
+      await runSupervisedUpdateCLI(argumentsFor(), async () => {
+        throw new Error("OUTPUT_CLOSED");
+      }),
+    ).toBe(3);
+    expect(result.status).toBe("blocked");
+    expect(runSupervisedUpdate).toHaveBeenCalledTimes(1);
+  });
 });
