@@ -464,6 +464,10 @@ describe("Agent app service", () => {
     const crashed = new Promise<void>((resolve) => {
       releaseCrashed = resolve;
     });
+    let confirmLineage!: () => void;
+    const lineageRecorded = new Promise<void>((resolve) => {
+      confirmLineage = resolve;
+    });
     let first: Promise<unknown> = Promise.resolve();
     try {
       const store = () =>
@@ -481,6 +485,7 @@ describe("Agent app service", () => {
             parentTurnId: "parent-turn-crash",
             childId: null,
           });
+          confirmLineage();
           // The dead process never answers; releasing it at the end only
           // lets this test's in-memory execution finish.
           await crashed;
@@ -494,11 +499,17 @@ describe("Agent app service", () => {
         },
       };
       first = createRunner(crashing, store()).execute(command);
-      await vi.waitFor(async () =>
-        expect(
-          (await store().load(command.identity))?.assignment.parentTurnId,
-        ).toBe("parent-turn-crash"),
-      );
+      // Wait for the actual durable callback, not a short polling budget on
+      // a loaded CI host. Early execution failure still fails immediately.
+      await Promise.race([
+        lineageRecorded,
+        first.then(() => {
+          throw new Error("CRASH_FIXTURE_ENDED_BEFORE_LINEAGE");
+        }),
+      ]);
+      expect(
+        (await store().load(command.identity))?.assignment.parentTurnId,
+      ).toBe("parent-turn-crash");
 
       // A restarted process has a fresh service module: nothing of the dead
       // spawn survives in memory, only what it recorded.
