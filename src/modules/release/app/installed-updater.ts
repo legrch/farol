@@ -38,6 +38,12 @@ export type InstalledUpdaterPorts = Readonly<{
   download(): Promise<
     Readonly<{ ok: true; update: ReadyUpdate }> | KnownFailure
   >;
+  // A supervised transition may select one local archive in composition. This
+  // port must stage and verify it through the same archive/package owner. It is
+  // not a caller-supplied ReadyUpdate or an alternate persistence mechanism.
+  prepareLocal?(): Promise<
+    Readonly<{ ok: true; update: ReadyUpdate }> | KnownFailure
+  >;
   retain(update: ReadyUpdate): Promise<void | KnownFailure>;
   // The composition holds existing admission fences, checks real obligations,
   // and hands off to the helper before it requests the application's normal quit.
@@ -80,6 +86,50 @@ export class InstalledUpdater {
   private publish(view: UpdateView): void {
     this.view = view;
     if (!this.closed) this.ports.publish(view);
+  }
+
+  private canPrepare(): boolean {
+    return (
+      this.initialized &&
+      !this.busy &&
+      !this.closed &&
+      !this.ready &&
+      this.view.phase !== "applying" &&
+      this.view.phase !== "recovery" &&
+      !(this.view.phase === "failed" && this.view.recoveryRequired)
+    );
+  }
+
+  private async retainPrepared(
+    prepared: Awaited<ReturnType<InstalledUpdaterPorts["download"]>>,
+  ): Promise<void> {
+    if (!prepared.ok) {
+      this.publish({
+        phase: "failed",
+        code: prepared.code,
+        recoveryRequired: prepared.recoveryRequired ?? false,
+      });
+      return;
+    }
+    // Quit still settles the durable staging intent. A completed, verified
+    // archive must be retained even if its UI lifetime has already closed.
+    const retention = await this.ports.retain(prepared.update);
+    if (retention) {
+      this.publish({
+        phase: "failed",
+        code: retention.code,
+        recoveryRequired: retention.recoveryRequired ?? false,
+      });
+      return;
+    }
+    if (this.closed) return;
+    this.ready = prepared.update;
+    this.publish({
+      phase: "ready",
+      version: prepared.update.manifest.version,
+      deferred: false,
+      blockedBy: null,
+    });
   }
 
   async initialize(): Promise<void> {
@@ -140,16 +190,7 @@ export class InstalledUpdater {
       this.publish({ ...this.view, blockedBy: null });
       return;
     }
-    if (
-      !this.initialized ||
-      this.busy ||
-      this.closed ||
-      this.ready ||
-      this.view.phase === "applying" ||
-      this.view.phase === "recovery" ||
-      (this.view.phase === "failed" && this.view.recoveryRequired)
-    )
-      return;
+    if (!this.canPrepare()) return;
     const now = this.ports.now();
     if (
       !manual &&
@@ -190,40 +231,40 @@ export class InstalledUpdater {
       this.publish({ phase: "downloading" });
       stagingStarted = true;
       const downloaded = await this.ports.download();
-      // Quit still settles the durable download intent. A completed, verified
-      // archive must be retained even if its UI lifetime has already closed.
-      if (!downloaded.ok) {
-        this.publish({
-          phase: "failed",
-          code: downloaded.code,
-          recoveryRequired: downloaded.recoveryRequired ?? false,
-        });
-        return;
-      }
-      // A visible ready state always has a durable, verifiable restart record.
-      const retention = await this.ports.retain(downloaded.update);
-      if (retention) {
-        this.publish({
-          phase: "failed",
-          code: retention.code,
-          recoveryRequired: retention.recoveryRequired ?? false,
-        });
-        return;
-      }
+      await this.retainPrepared(downloaded);
       stagingStarted = false;
-      if (this.closed) return;
-      this.ready = downloaded.update;
-      this.publish({
-        phase: "ready",
-        version: downloaded.update.manifest.version,
-        deferred: false,
-        blockedBy: null,
-      });
     } catch {
       this.publish({
         phase: "failed",
         code: "UPDATE_CHECK_FAILED",
         recoveryRequired: stagingStarted,
+      });
+    } finally {
+      this.finish();
+    }
+  }
+
+  async prepareLocal(): Promise<void> {
+    if (!this.canPrepare()) return;
+    if (!this.ports.prepareLocal) {
+      this.publish({
+        phase: "failed",
+        code: "UPDATE_LOCAL_IMPORT_UNAVAILABLE",
+        recoveryRequired: false,
+      });
+      return;
+    }
+    this.begin();
+    this.publish({ phase: "downloading" });
+    try {
+      await this.retainPrepared(await this.ports.prepareLocal());
+    } catch {
+      // Import or retention may already have published durable bytes. The
+      // original owner must reconcile them; another import is not recovery.
+      this.publish({
+        phase: "failed",
+        code: "UPDATE_LOCAL_IMPORT_UNKNOWN",
+        recoveryRequired: true,
       });
     } finally {
       this.finish();

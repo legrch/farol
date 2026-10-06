@@ -507,3 +507,163 @@ describe("installed update orchestration (port fixture, no native or GitHub acce
     expect(ports.restart).not.toHaveBeenCalled();
   });
 });
+
+describe("explicit local preparation (ports only, no archive or installed acceptance)", () => {
+  function localFixture() {
+    const { ports } = fixture();
+    const selected = {
+      ...ports,
+      prepareLocal: vi
+        .fn<NonNullable<InstalledUpdaterPorts["prepareLocal"]>>()
+        .mockResolvedValue({ ok: true, update: staged }),
+    };
+    return { ports: selected, updater: new InstalledUpdater(selected) };
+  }
+
+  it("uses the selected importer and durable retention before offering restart", async () => {
+    const { updater, ports } = localFixture();
+    let saved!: () => void;
+    ports.retain.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          saved = resolve;
+        }),
+    );
+    await updater.prepareLocal();
+    expect(ports.prepareLocal).not.toHaveBeenCalled();
+    await updater.initialize();
+    const importing = updater.prepareLocal();
+    await Promise.resolve();
+    expect(updater.snapshot().phase).toBe("downloading");
+    await updater.restart();
+    expect(ports.restart).not.toHaveBeenCalled();
+    saved();
+    await importing;
+    expect(ports.prepareLocal).toHaveBeenCalledTimes(1);
+    expect(ports.retain).toHaveBeenCalledExactlyOnceWith(staged);
+    expect(ports.discover).not.toHaveBeenCalled();
+    expect(ports.download).not.toHaveBeenCalled();
+    expect(updater.snapshot()).toMatchObject({
+      phase: "ready",
+      version: staged.manifest.version,
+    });
+    updater.later();
+    await updater.prepareLocal();
+    expect(ports.prepareLocal).toHaveBeenCalledTimes(1);
+    await updater.restart();
+    expect(ports.restart).toHaveBeenCalledExactlyOnceWith(staged);
+    await updater.close();
+  });
+
+  it.each(["retained", "recovery", "unknown", "closed"])(
+    "does not import over %s ownership",
+    async (state) => {
+      const { updater, ports } = localFixture();
+      if (state === "retained")
+        ports.recover.mockResolvedValue({ ok: true, update: staged });
+      if (state === "recovery")
+        ports.recover.mockResolvedValue({
+          ok: true,
+          update: null,
+          recoveryVersion: staged.manifest.version,
+        });
+      if (state === "unknown")
+        ports.recover.mockResolvedValue({
+          ok: false,
+          code: "UPDATE_RECOVERY_UNAVAILABLE",
+          recoveryRequired: true,
+        });
+      await updater.initialize();
+      if (state === "closed") await updater.close();
+      await updater.prepareLocal();
+      expect(ports.prepareLocal).not.toHaveBeenCalled();
+      expect(ports.discover).not.toHaveBeenCalled();
+      expect(ports.download).not.toHaveBeenCalled();
+      await updater.close();
+    },
+  );
+
+  it("serializes local preparation with Check and retains completed import during Quit", async () => {
+    const { updater, ports } = localFixture();
+    let imported!: (
+      value: Awaited<
+        ReturnType<NonNullable<InstalledUpdaterPorts["prepareLocal"]>>
+      >,
+    ) => void;
+    let saved!: () => void;
+    ports.prepareLocal.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          imported = resolve;
+        }),
+    );
+    ports.retain.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          saved = resolve;
+        }),
+    );
+    await updater.initialize();
+    const preparing = updater.prepareLocal();
+    await updater.prepareLocal();
+    await updater.check(true);
+    expect(ports.prepareLocal).toHaveBeenCalledTimes(1);
+    expect(ports.discover).not.toHaveBeenCalled();
+    ports.publish.mockClear();
+    let drained = false;
+    const closing = updater.close().then(() => {
+      drained = true;
+    });
+    await Promise.resolve();
+    expect(drained).toBe(false);
+    imported({ ok: true, update: staged });
+    await Promise.resolve();
+    expect(drained).toBe(false);
+    saved();
+    await Promise.all([preparing, closing]);
+    expect(ports.cancelPending).toHaveBeenCalledTimes(1);
+    expect(ports.retain).toHaveBeenCalledExactlyOnceWith(staged);
+    expect(ports.publish).not.toHaveBeenCalled();
+    expect(ports.restart).not.toHaveBeenCalled();
+  });
+
+  it.each(["import", "retention"])(
+    "keeps an unknown %s result fenced across both preparation routes",
+    async (boundary) => {
+      const { updater, ports } = localFixture();
+      if (boundary === "import")
+        ports.prepareLocal.mockRejectedValue(new Error("lost import reply"));
+      else ports.retain.mockRejectedValue(new Error("lost retention reply"));
+      await updater.initialize();
+      await updater.prepareLocal();
+      expect(updater.snapshot()).toEqual({
+        phase: "failed",
+        code: "UPDATE_LOCAL_IMPORT_UNKNOWN",
+        recoveryRequired: true,
+      });
+      await updater.prepareLocal();
+      await updater.check(true);
+      await updater.restart();
+      expect(ports.prepareLocal).toHaveBeenCalledTimes(1);
+      expect(ports.discover).not.toHaveBeenCalled();
+      expect(ports.download).not.toHaveBeenCalled();
+      expect(ports.restart).not.toHaveBeenCalled();
+      await updater.close();
+    },
+  );
+
+  it("does not silently replace an unavailable local source with network discovery", async () => {
+    const { updater, ports } = fixture();
+    await updater.initialize();
+    await updater.prepareLocal();
+    expect(updater.snapshot()).toEqual({
+      phase: "failed",
+      code: "UPDATE_LOCAL_IMPORT_UNAVAILABLE",
+      recoveryRequired: false,
+    });
+    expect(ports.discover).not.toHaveBeenCalled();
+    expect(ports.download).not.toHaveBeenCalled();
+    expect(ports.retain).not.toHaveBeenCalled();
+    await updater.close();
+  });
+});
