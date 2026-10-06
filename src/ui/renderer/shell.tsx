@@ -11,16 +11,12 @@ import type {
 } from "./contract";
 import { computerSetup } from "./computer-setup";
 import { TaskEditor } from "./task";
-import { ChatReadonly } from "./chat-readonly";
-import { ChatDirect } from "./chat-direct";
-import { ChatHistory } from "./chat-history";
 const pages: readonly [SettingsPage, string][] = [
-  ["general", "General"],
-  ["appearance", "Appearance"],
+  ["general", "Setup"],
   ["folders", "Folders"],
   ["computer", "This Mac"],
   ["connection", "Connection"],
-  ["model", "Model"],
+  ["appearance", "Appearance"],
   ["shortcuts", "Keyboard shortcuts"],
   ["updates", "Updates"],
   ["diagnostics", "Diagnostics"],
@@ -55,7 +51,7 @@ function title(snapshot: WindowSnapshot) {
         "Settings")
     : snapshot.destination.area === "chatgpt"
       ? (snapshot.tasks.tasks.find(
-          (task) => task.taskId === snapshot.destination.taskId,
+          (task) => task.taskId === snapshot.destination.taskId && task.agent,
         )?.label ?? "ChatGPT")
       : snapshot.destination.area === "activity"
         ? "Activity"
@@ -68,12 +64,13 @@ function Work({
   snapshot: WindowSnapshot;
   facade: RendererFacade;
 }) {
+  const work = snapshot.tasks.tasks.filter((task) => task.agent);
   return (
     <div className="work-list">
-      {snapshot.tasks.tasks.length === 0 ? (
-        <p className="empty">No current work. Open ChatGPT to begin.</p>
+      {work.length === 0 ? (
+        <p className="empty">No Farol tasks yet. Open ChatGPT to begin.</p>
       ) : (
-        snapshot.tasks.tasks.map((task, index) => (
+        work.map((task) => (
           <button
             className="work-row"
             key={task.taskId}
@@ -85,14 +82,13 @@ function Work({
               );
             }}
           >
-            <span className="slot-number">{index + 1}</span>
+            <Icon name="chatgpt" />
             <span className="work-label">
               <strong>{task.label}</strong>
               <small>
-                Window {index + 1} ·{" "}
                 {task.agent?.observation === "unavailable"
                   ? "Observation unavailable"
-                  : "Current slot"}
+                  : "Farol task"}
               </small>
             </span>
             <span className="phase">
@@ -133,13 +129,21 @@ function Home({
               ? "External Computer access is verified for the current folder and connection."
               : `${ready}. ${setup.next}`}
           </p>
+          <button
+            className="text-button"
+            onClick={() =>
+              facade.navigate({ area: "settings", page: "general" })
+            }
+          >
+            {setup.ready ? "Review setup" : "Continue setup"}
+          </button>
         </div>
       </div>
       <div className="home-columns">
         <div>
           <section>
             <div className="section-heading">
-              <h2>Current work</h2>
+              <h2>Farol work</h2>
               <button
                 className="text-button"
                 onClick={() => facade.navigate({ area: "chatgpt" })}
@@ -152,9 +156,6 @@ function Home({
               Switching sections keeps ongoing work available.
             </p>
           </section>
-          <ChatDirect snapshot={snapshot} facade={facade} />
-          <ChatReadonly snapshot={snapshot} facade={facade} />
-          <ChatHistory snapshot={snapshot} facade={facade} />
           <section className="recent">
             <div className="section-heading">
               <h2>Recent activity</h2>
@@ -549,11 +550,64 @@ function Update({
     </Overlay>
   );
 }
+function ChatBrowser({
+  snapshot,
+  facade,
+}: {
+  snapshot: WindowSnapshot;
+  facade: RendererFacade;
+}) {
+  const intentions = ["chatgpt.open-browser", "chatgpt.open-sign-in"] as const;
+  const relevant = intentions
+    .map((kind) => snapshot.intents[`settings:${kind}:`])
+    .filter((intent) => intent && intent.state !== "applied");
+  return (
+    <div className="native-browser-placeholder">
+      <p>
+        ChatGPT opens in its own browser view. Existing conversations belong to
+        ChatGPT.
+      </p>
+      <div className="control-row">
+        {intentions.map((kind) => {
+          const intent = snapshot.intents[`settings:${kind}:`];
+          return (
+            <button
+              key={kind}
+              disabled={
+                snapshot.status !== "current" ||
+                intent?.state === "pending" ||
+                intent?.state === "unknown"
+              }
+              onClick={() =>
+                void facade.configure({ kind }, `settings:${kind}:`)
+              }
+            >
+              {kind === "chatgpt.open-browser" ? "Open ChatGPT" : "Sign in"}
+            </button>
+          );
+        })}
+      </div>
+      {relevant.length > 0 && (
+        <p className="notice" role="status">
+          {relevant.some((intent) => intent?.state === "unknown")
+            ? "Opening ChatGPT is unconfirmed. See Diagnostics before repeating this action."
+            : relevant.some((intent) => intent?.state === "pending")
+              ? "Opening ChatGPT…"
+              : relevant.some(
+                    (intent) => intent?.code === "CHATGPT_SIGN_IN_IN_PROGRESS",
+                  )
+                ? "Sign-in is already open in ChatGPT. Finish there, then check sign-in in Connection."
+                : "ChatGPT could not be opened. Check Connection or see Diagnostics for details."}
+        </p>
+      )}
+    </div>
+  );
+}
 export function Shell() {
   const { snapshot, facade } = useRenderer();
   const state = snapshot;
   const destination = state.destination;
-  const sideVisible = destination.area !== "home" && state.sidebar !== "rail";
+  const sideVisible = state.sidebar !== "rail";
   const sidebarOverlay = sideVisible && state.sidebar === "overlay";
   const settings = destination.area === "settings";
   const compact = () => window.matchMedia("(max-width: 979px)").matches;
@@ -572,18 +626,13 @@ export function Shell() {
     window.addEventListener("keydown", listener);
     return () => window.removeEventListener("keydown", listener);
   }, [facade]);
-  const intents = Object.values(state.intents);
-  const busy =
-    intents.find(
-      (intent) => intent.state === "pending" || intent.state === "unknown",
-    ) ?? [...intents].reverse().find((intent) => intent.state === "refused");
   return (
     <div
       className="desktop"
       data-theme={state.appearance.theme}
       data-accent={state.appearance.accent}
       data-font={state.appearance.font}
-      data-sidebar={sideVisible ? "full" : "rail"}
+      data-sidebar={sidebarOverlay ? "overlay" : sideVisible ? "full" : "rail"}
       data-window-active={state.window.focused}
     >
       <header className="toolbar">
@@ -612,9 +661,12 @@ export function Shell() {
           </button>
         </div>
         <div className="toolbar-title">
-          {settings && (
+          {settings && destination.page !== "general" && (
             <span>
-              Settings <span className="separator">/</span>
+              {["folders", "computer", "connection"].includes(destination.page)
+                ? "Setup"
+                : "Settings"}{" "}
+              <span className="separator">/</span>
             </span>
           )}
           <strong>{title(state)}</strong>
@@ -631,7 +683,7 @@ export function Shell() {
         </button>
         {destination.area === "chatgpt" && destination.taskId && (
           <button
-            aria-label="Task options"
+            aria-label="Chat options"
             onClick={() => facade.overlay("task")}
           >
             <Icon name="settings" />
@@ -646,67 +698,108 @@ export function Shell() {
           </button>
         )}
       </header>
-      <nav className="rail" aria-label="Sections">
-        {(["home", "chatgpt", "activity"] as const).map((area) => (
+      <aside
+        className={`sidebar ${sideVisible ? "contextual-sidebar" : "rail"} ${sidebarOverlay ? "sidebar-overlay" : ""}`}
+        aria-label="Navigation"
+      >
+        <nav aria-label="Sections">
+          {(["home", "chatgpt", "activity"] as const).map((area) => (
+            <button
+              aria-label={
+                area === "chatgpt"
+                  ? "ChatGPT"
+                  : area === "home"
+                    ? "Home"
+                    : "Activity"
+              }
+              key={area}
+              aria-current={destination.area === area ? "page" : undefined}
+              onClick={() => facade.navigate({ area })}
+            >
+              <Icon name={area} />
+              {sideVisible && (
+                <span>
+                  {area === "chatgpt"
+                    ? "ChatGPT"
+                    : area === "home"
+                      ? "Home"
+                      : "Activity"}
+                </span>
+              )}
+            </button>
+          ))}
           <button
-            aria-label={
-              area === "chatgpt"
-                ? "ChatGPT"
-                : area === "home"
-                  ? "Home"
-                  : "Activity"
+            aria-label="Setup"
+            aria-current={
+              settings && destination.page === "general" ? "page" : undefined
             }
-            key={area}
-            aria-current={destination.area === area ? "page" : undefined}
-            onClick={() => facade.navigate({ area })}
+            onClick={() =>
+              facade.navigate({ area: "settings", page: "general" })
+            }
           >
-            <Icon name={area} />
+            <Icon name="check" />
+            {sideVisible && <span>Setup</span>}
           </button>
-        ))}
+        </nav>
+        {sideVisible && (
+          <nav className="sidebar-section" aria-label="Setup pages">
+            {pages
+              .filter(([page]) =>
+                ["folders", "computer", "connection"].includes(page),
+              )
+              .map(([page, label]) => (
+                <button
+                  key={page}
+                  aria-current={
+                    settings && destination.page === page ? "page" : undefined
+                  }
+                  onClick={() => facade.navigate({ area: "settings", page })}
+                >
+                  <Icon name={page === "folders" ? "sidebar" : "settings"} />
+                  <span>{label}</span>
+                </button>
+              ))}
+          </nav>
+        )}
         <button
-          className="rail-bottom"
-          aria-label="Settings"
-          aria-current={settings ? "page" : undefined}
-          onClick={() => facade.navigate({ area: "settings", page: "general" })}
+          aria-label="New chat"
+          disabled={
+            state.status !== "current" ||
+            state.tasks.tasks.length >= 5 ||
+            state.intents["task:new"]?.state === "pending" ||
+            state.intents["task:new"]?.state === "unknown"
+          }
+          onClick={() =>
+            void facade.task({ kind: "task.create-chatgpt" }, "task:new")
+          }
         >
-          <Icon name="settings" />
+          <Icon name="plus" />
+          {sideVisible && <span>New chat</span>}
         </button>
-      </nav>
-      {sideVisible && (
-        <aside
-          className={`contextual-sidebar ${state.sidebar === "overlay" ? "sidebar-overlay" : ""}`}
-          aria-label={settings ? "Settings pages" : "Current work"}
-        >
-          <h2>
-            {settings
-              ? "Settings"
-              : destination.area === "activity"
-                ? "Activity"
-                : "ChatGPT"}
-          </h2>
-          <p className="description">
-            {settings
-              ? "Clear pages. Independent controls."
-              : "Five current browser slots."}
-          </p>
-          {settings ? (
-            pages.map(([page, label]) => (
-              <button
-                key={page}
-                aria-current={destination.page === page ? "page" : undefined}
-                onClick={() => facade.navigate({ page })}
-              >
-                <Icon name={page === "folders" ? "sidebar" : "settings"} />
-                {label}
-              </button>
-            ))
-          ) : (
-            <>
-              {state.tasks.tasks.map((task, index) => (
+        {sideVisible &&
+          state.intents["task:new"] &&
+          state.intents["task:new"]?.state !== "applied" && (
+            <p className="description" role="status">
+              {state.intents["task:new"]?.state === "pending"
+                ? "Opening a new chat…"
+                : state.intents["task:new"]?.state === "unknown"
+                  ? "Opening this chat is unconfirmed. Review its result in Diagnostics before continuing."
+                  : "A new chat could not be opened. See Diagnostics for details."}
+            </p>
+          )}
+        {sideVisible && state.tasks.tasks.some((task) => task.agent) && (
+          <nav className="sidebar-section" aria-label="Farol work">
+            <h2>Farol work</h2>
+            {state.tasks.tasks
+              .filter((task) => task.agent)
+              .map((task) => (
                 <button
                   key={task.taskId}
                   aria-current={
-                    destination.taskId === task.taskId ? "page" : undefined
+                    destination.area === "chatgpt" &&
+                    destination.taskId === task.taskId
+                      ? "page"
+                      : undefined
                   }
                   onClick={() => {
                     facade.navigate({ area: "chatgpt", taskId: task.taskId });
@@ -716,33 +809,58 @@ export function Shell() {
                     );
                   }}
                 >
-                  <span className="slot-number">{index + 1}</span>
+                  <Icon name="chatgpt" />
                   <span>
                     {task.label}
-                    <small>
-                      {task.agent?.phase ?? task.lifecycle.replaceAll("_", " ")}
-                    </small>
+                    <small>{task.agent?.phase.replaceAll("_", " ")}</small>
                   </span>
                 </button>
               ))}
-              <button
-                disabled={
-                  state.status !== "current" ||
-                  state.tasks.tasks.length >= 5 ||
-                  state.intents["task:new"]?.state === "pending" ||
-                  state.intents["task:new"]?.state === "unknown"
-                }
-                onClick={() =>
-                  void facade.task({ kind: "task.create-chatgpt" }, "task:new")
-                }
-              >
-                <Icon name="plus" />
-                New ChatGPT task
-              </button>
-            </>
-          )}
-        </aside>
-      )}
+          </nav>
+        )}
+        <nav className="sidebar-settings" aria-label="Settings pages">
+          <button
+            aria-label="Settings"
+            aria-current={
+              settings &&
+              [
+                "appearance",
+                "shortcuts",
+                "updates",
+                "diagnostics",
+                "model",
+              ].includes(destination.page)
+                ? "page"
+                : undefined
+            }
+            onClick={() =>
+              facade.navigate({ area: "settings", page: "appearance" })
+            }
+          >
+            <Icon name="settings" />
+            {sideVisible && <span>Settings</span>}
+          </button>
+          {sideVisible &&
+            pages
+              .filter(([page]) =>
+                ["shortcuts", "updates", "diagnostics"].includes(page),
+              )
+              .map(([page, label]) => (
+                <button
+                  key={page}
+                  aria-current={
+                    settings && destination.page === page ? "page" : undefined
+                  }
+                  onClick={() => facade.navigate({ area: "settings", page })}
+                >
+                  <Icon
+                    name={page === "diagnostics" ? "activity" : "settings"}
+                  />
+                  <span>{label}</span>
+                </button>
+              ))}
+        </nav>
+      </aside>
       {sidebarOverlay && (
         <button
           className="sidebar-scrim"
@@ -766,18 +884,6 @@ export function Shell() {
             <button onClick={() => void facade.refresh()}>Refresh state</button>
           </div>
         )}
-        {busy && (
-          <div
-            className="notice"
-            role={busy.state === "refused" ? "alert" : "status"}
-          >
-            {busy.state === "pending"
-              ? "Action in progress…"
-              : busy.state === "unknown"
-                ? "Outcome unknown. The action may already have taken effect."
-                : `Action refused: ${busy.code}`}
-          </div>
-        )}
         <PanelBoundary key={destination.area}>
           {destination.area === "home" ? (
             <Home snapshot={state} facade={facade} />
@@ -788,53 +894,10 @@ export function Shell() {
               <Activity snapshot={state} facade={facade} />
             </div>
           ) : (
-            <div className="native-browser-placeholder">
-              <p>
-                Existing ChatGPT pages remain in their native browser views.
-              </p>
-              <div className="control-row">
-                <button
-                  onClick={() =>
-                    void facade.configure(
-                      { kind: "chatgpt.open-browser" },
-                      "settings:chatgpt.open-browser:",
-                    )
-                  }
-                >
-                  Open ChatGPT
-                </button>
-                <button
-                  onClick={() =>
-                    void facade.configure(
-                      { kind: "chatgpt.open-sign-in" },
-                      "settings:chatgpt.open-sign-in:",
-                    )
-                  }
-                >
-                  Sign in
-                </button>
-              </div>
-            </div>
+            <ChatBrowser snapshot={state} facade={facade} />
           )}
         </PanelBoundary>
       </main>
-      {state.workspaceEditDelivery && (
-        <div className="delivery-notice" role="status">
-          Guarded edit result:{" "}
-          {state.intents[`observe:${state.workspaceEditDelivery}`]?.state ??
-            "applied"}
-          .{" "}
-          {state.intents[`observe:${state.workspaceEditDelivery}`]?.code ??
-            "The exact edit outcome was delivered."}{" "}
-          <button
-            onClick={() =>
-              void facade.acknowledgeWorkspaceEdit(state.workspaceEditDelivery!)
-            }
-          >
-            Record result delivery
-          </button>
-        </div>
-      )}
       {state.overlay === "search" && (
         <Search snapshot={state} facade={facade} />
       )}{" "}
@@ -842,7 +905,7 @@ export function Shell() {
         <Update snapshot={state} facade={facade} />
       )}{" "}
       {state.overlay === "task" && (
-        <Overlay title="Current task" onClose={() => facade.overlay("none")}>
+        <Overlay title="Chat options" onClose={() => facade.overlay("none")}>
           <TaskEditor
             key={destination.taskId}
             snapshot={state}

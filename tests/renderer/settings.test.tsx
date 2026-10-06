@@ -238,15 +238,18 @@ describe("bounded Settings writer", () => {
     expect(
       [...h.host.querySelectorAll("h2")].map((node) => node.textContent),
     ).toEqual([
-      "General",
+      "Setup",
       "Appearance",
       "Folders",
       "This Mac",
       "Connection",
-      "Model",
       "Shortcuts",
       "Updates",
       "Diagnostics",
+      "Model",
+      "Chat",
+      "Read-only file preview",
+      "Saved Chat answers",
     ]);
     expect(h.f.api.configure).not.toHaveBeenCalled();
     expect(h.f.api.task).not.toHaveBeenCalled();
@@ -421,7 +424,7 @@ describe("bounded Settings writer", () => {
     expect(stale.calls()).toHaveLength(0);
   });
   it("keeps exclusions stable during IME and validates relative paths before saving", async () => {
-    const h = await mount("folders", withFolder());
+    const h = await mount("diagnostics", withFolder());
     const input = h.field("Excluded paths for project");
     await act(async () =>
       input.dispatchEvent(
@@ -453,8 +456,10 @@ describe("bounded Settings writer", () => {
   });
   it("separates guarded writes, expanded Git approval and access/workspace checks", async () => {
     const h = await mount("folders", withFolder());
-    await h.click("Allow guarded changes");
+    await h.click("Change access to read & write");
+    await h.pageTo("diagnostics");
     await h.click("Approve expanded Git access");
+    await h.pageTo("folders");
     await h.click("Check access");
     await h.click("Verify workspace");
     expect(h.calls()).toEqual([
@@ -469,7 +474,7 @@ describe("bounded Settings writer", () => {
     const value = withFolder();
     value.setup.computer.verified = proof(value);
     value.setup.computer.reachable = "reachable";
-    const h = await mount("folders", value);
+    const h = await mount("diagnostics", value);
     expect(h.host.textContent).toContain("Access checked");
     const input = h.field("Excluded paths for project");
     await change(input, "draft");
@@ -491,8 +496,8 @@ describe("bounded Settings writer", () => {
   it("uses all real command policies and never performs an Astra host check", async () => {
     const h = await mount("computer");
     for (const commands of ["verification", "workspace", "none"]) {
-      await change(h.field("Command policy"), commands);
-      await h.click("Apply command policy");
+      await change(h.field("Command access"), commands);
+      await h.click("Save permissions");
     }
     expect(h.calls()).toEqual(
       ["verification", "workspace", "none"].map((commands) => ({
@@ -515,7 +520,7 @@ describe("bounded Settings writer", () => {
     expect(h.field("Runtime key").value).toBe(secret);
     expect(JSON.stringify(h.c.getSnapshot())).not.toContain(secret);
     expect(h.host.textContent).not.toContain(secret);
-    await h.click("Save connection");
+    await h.click("Save credentials");
     expect(h.calls()).toEqual([
       {
         kind: "connector.configure",
@@ -524,12 +529,9 @@ describe("bounded Settings writer", () => {
       },
     ]);
     expect(h.field("Runtime key").value).toBe("");
-    await h.click("Save connection");
-    expect(h.calls()[1]).toEqual({
-      kind: "connector.configure",
-      tunnelId: "owner-tunnel",
-      runtimeKey: null,
-    });
+    await h.click("Save credentials");
+    expect(h.calls()).toHaveLength(1); // Empty credentials never look like a missing saved key or resubmit.
+    expect(h.button("Save credentials").disabled).toBe(true);
     expect(JSON.stringify(h.c.getSnapshot())).not.toContain(secret);
   });
   it("does not clear or submit a composing credential", async () => {
@@ -542,7 +544,7 @@ describe("bounded Settings writer", () => {
       ),
     );
     await change(input, "explicit-test-key-000000000000");
-    await h.click("Save connection");
+    await h.click("Save credentials");
     expect(input.value).toBe("explicit-test-key-000000000000");
     expect(h.calls()).toEqual([]);
   });
@@ -554,7 +556,9 @@ describe("bounded Settings writer", () => {
         ?.textContent,
     ).not.toBe("Computer ready");
     expect(h.button("Start connection").disabled).toBe(true);
+    await h.pageTo("diagnostics");
     expect(h.button("Check in ChatGPT once").disabled).toBe(true);
+    await h.pageTo("connection");
     await h.click("Sign in");
     await h.click("Choose tunnel client…");
     expect(h.calls()).toEqual([
@@ -571,6 +575,7 @@ describe("bounded Settings writer", () => {
     expect(badge()).toBe("Computer ready");
     await h.click("Check attachment");
     await h.click("Check local connection");
+    await h.pageTo("diagnostics");
     await h.click("Check in ChatGPT once");
     await h.click("Check in ChatGPT once");
     expect(h.calls()).toEqual([
@@ -591,6 +596,7 @@ describe("bounded Settings writer", () => {
     next.setup.connect.outcomeUnknown = true;
     await act(async () => h.c.refresh());
     expect(badge()).toBe("Outcome unknown");
+    await h.pageTo("connection");
     expect(h.button("Check attachment").disabled).toBe(true);
     expect(h.calls().some((command) => command.kind.startsWith("host."))).toBe(
       false,
@@ -600,7 +606,7 @@ describe("bounded Settings writer", () => {
   it("binds app selection to exact current tunnel/generation and checks only Dev", async () => {
     const value = withFolder();
     value.connectors.secureMcp.tunnelId = "owner-tunnel";
-    const h = await mount("connection", value, "dev");
+    const h = await mount("diagnostics", value, "dev");
     await change(h.field("ChatGPT app name"), "My Farol");
     await h.click("Select ChatGPT app");
     expect(h.calls()).toEqual([
@@ -826,7 +832,7 @@ async function prepareEdit(
 }
 describe("R07 R15 R17 R20 guarded edit controls (injected DOM only)", () => {
   it("prepares explicitly, presents metadata as text, and applies one bounded replacement", async () => {
-    const h = await mount("folders", writableFolder());
+    const h = await mount("diagnostics", writableFolder());
     expect(h.calls()).toEqual([]);
     expect(h.button("Apply edit").disabled).toBe(true);
     await prepareEdit(h, {
@@ -857,7 +863,7 @@ describe("R07 R15 R17 R20 guarded edit controls (injected DOM only)", () => {
     expect(h.host.textContent).toContain("Use Diagnostics");
   });
   it("uses the original schema bounds and permits an empty replacement", async () => {
-    const h = await mount("folders", writableFolder());
+    const h = await mount("diagnostics", writableFolder());
     await prepareEdit(h);
     expect(h.field("Old text").getAttribute("maxlength")).toBe("32768");
     expect(h.field("New text").getAttribute("maxlength")).toBe("32768");
@@ -897,16 +903,16 @@ describe("R07 R15 R17 R20 guarded edit controls (injected DOM only)", () => {
     if (condition === "missing-identity") delete folder.rootIdentity;
     if (condition === "unknown") value.setup.computer.outcomeUnknown = true;
     if (condition === "unchecked") folder.accessCheck = null;
-    const h = await mount("folders", value);
+    const h = await mount("diagnostics", value);
     expect(h.button("Prepare edit…").disabled).toBe(true);
     await h.click("Prepare edit…");
     expect(h.calls()).toEqual([]);
   });
   it("cancels only the selected operation explicitly, with no mount/page cancellation", async () => {
-    const h = await mount("folders", writableFolder());
+    const h = await mount("diagnostics", writableFolder());
     await prepareEdit(h);
     await h.pageTo("general");
-    await h.pageTo("folders");
+    await h.pageTo("diagnostics");
     expect(h.calls()).toHaveLength(1);
     await h.click("Cancel edit");
     await h.click("Cancel edit");
@@ -918,7 +924,7 @@ describe("R07 R15 R17 R20 guarded edit controls (injected DOM only)", () => {
     expect(h.button("Apply edit").disabled).toBe(true);
   });
   it("requires a fresh correlated Prepare to regain the same unconsumed preview after remount", async () => {
-    const h = await mount("folders", writableFolder());
+    const h = await mount("diagnostics", writableFolder());
     await prepareEdit(h);
     await change(h.field("Old text"), "old");
     await h.remount();
@@ -932,11 +938,13 @@ describe("R07 R15 R17 R20 guarded edit controls (injected DOM only)", () => {
     expect(h.calls()).toHaveLength(2);
   });
   it("regains a reused preview only by explicit Prepare after leaving Settings", async () => {
-    const h = await mount("folders", writableFolder());
+    const h = await mount("diagnostics", writableFolder());
     await prepareEdit(h);
     await act(async () => h.c.navigate({ area: "home" }));
     expect(h.host.textContent).toBe("");
-    await act(async () => h.c.navigate({ area: "settings", page: "folders" }));
+    await act(async () =>
+      h.c.navigate({ area: "settings", page: "diagnostics" }),
+    );
     expect(h.button("Cancel edit").disabled).toBe(true);
     expect(h.calls()).toHaveLength(1);
     await prepareEdit(h);
@@ -956,7 +964,7 @@ describe("R07 R15 R17 R20 guarded edit controls (injected DOM only)", () => {
   ] as const)(
     "rejects changed metadata for the same ambient operation: %s",
     async (field) => {
-      const h = await mount("folders", writableFolder());
+      const h = await mount("diagnostics", writableFolder());
       await prepareEdit(h);
       await h.remount();
       const changed = {
@@ -977,7 +985,7 @@ describe("R07 R15 R17 R20 guarded edit controls (injected DOM only)", () => {
   it.each(["foreign-workspace", "expired", "malformed", "absent"])(
     "rejects mismatched or missing preview: %s",
     async (condition) => {
-      const h = await mount("folders", writableFolder());
+      const h = await mount("diagnostics", writableFolder());
       const evidence =
         condition === "absent"
           ? undefined
@@ -1008,7 +1016,7 @@ describe("R07 R15 R17 R20 guarded edit controls (injected DOM only)", () => {
     },
   );
   it("fences a pending Prepare and Apply synchronously across duplicate clicks", async () => {
-    const h = await mount("folders", writableFolder());
+    const h = await mount("diagnostics", writableFolder());
     const pending = deferred<unknown>();
     vi.mocked(h.f.api.configure).mockReturnValueOnce(pending.promise);
     await h.click("Prepare edit…");
@@ -1037,7 +1045,7 @@ describe("R07 R15 R17 R20 guarded edit controls (injected DOM only)", () => {
   it.each(["refused", "unknown"])(
     "consumes Apply permanently after %s",
     async (outcome) => {
-      const h = await mount("folders", writableFolder());
+      const h = await mount("diagnostics", writableFolder());
       await prepareEdit(h);
       await change(h.field("Old text"), "old");
       if (outcome === "refused")
@@ -1052,7 +1060,7 @@ describe("R07 R15 R17 R20 guarded edit controls (injected DOM only)", () => {
         );
       await h.click("Apply edit");
       await h.pageTo("general");
-      await h.pageTo("folders");
+      await h.pageTo("diagnostics");
       await h.click("Apply edit");
       expect(h.calls()).toHaveLength(2);
       expect(h.button("Apply edit").disabled).toBe(true);
@@ -1066,7 +1074,7 @@ describe("R07 R15 R17 R20 guarded edit controls (injected DOM only)", () => {
     },
   );
   it("blocks every Settings command after an unknown Prepare, including after remount", async () => {
-    const h = await mount("folders", writableFolder());
+    const h = await mount("diagnostics", writableFolder());
     vi.mocked(h.f.api.configure).mockRejectedValueOnce(
       new Error("lost response"),
     );
@@ -1078,7 +1086,7 @@ describe("R07 R15 R17 R20 guarded edit controls (injected DOM only)", () => {
     expect(h.calls()).toHaveLength(1);
   });
   it("allows a distinct new explicit edit after a known completion", async () => {
-    const h = await mount("folders", writableFolder());
+    const h = await mount("diagnostics", writableFolder());
     await prepareEdit(h);
     await change(h.field("Old text"), "old");
     await h.click("Apply edit");
@@ -1093,7 +1101,7 @@ describe("R07 R15 R17 R20 guarded edit controls (injected DOM only)", () => {
     });
   });
   it("R25 R29 retains nodes, drafts, caret and IME across background and page changes", async () => {
-    const h = await mount("folders", writableFolder());
+    const h = await mount("diagnostics", writableFolder());
     await prepareEdit(h);
     const old = h.field("Old text") as HTMLTextAreaElement;
     const replacement = h.field("New text");
@@ -1111,7 +1119,7 @@ describe("R07 R15 R17 R20 guarded edit controls (injected DOM only)", () => {
     await h.click("Cancel edit");
     expect(h.calls()).toHaveLength(1);
     await h.pageTo("general");
-    await h.pageTo("folders");
+    await h.pageTo("diagnostics");
     expect(h.field("Old text")).toBe(old);
     expect(old.value).toBe("old\ntext");
     expect(old.selectionStart).toBe(2);
@@ -1127,7 +1135,7 @@ describe("R07 R15 R17 R20 guarded edit controls (injected DOM only)", () => {
     expect(h.calls()).toHaveLength(2);
   });
   it("rejects a refresh racing Prepare, even at the same revision", async () => {
-    const h = await mount("folders", writableFolder());
+    const h = await mount("diagnostics", writableFolder());
     const pending = deferred<unknown>();
     vi.mocked(h.f.api.configure).mockReturnValueOnce(pending.promise);
     await h.click("Prepare edit…");
@@ -1144,7 +1152,7 @@ describe("R07 R15 R17 R20 guarded edit controls (injected DOM only)", () => {
     expect(h.host.textContent).toContain("could not be confirmed");
   });
   it("rejects evidence after any foreign command transition during Prepare", async () => {
-    const h = await mount("folders", writableFolder());
+    const h = await mount("diagnostics", writableFolder());
     const pending = deferred<unknown>();
     vi.mocked(h.f.api.configure).mockReturnValueOnce(pending.promise);
     await h.click("Prepare edit…");
@@ -1172,7 +1180,7 @@ describe("R07 R15 R17 R20 guarded edit controls (injected DOM only)", () => {
   ])(
     "rechecks the latest facade at click time, despite old rendered eligibility: %s",
     async (condition) => {
-      const h = await mount("folders", writableFolder());
+      const h = await mount("diagnostics", writableFolder());
       await prepareEdit(h);
       await change(h.field("Old text"), "old");
       const current = h.c.getSnapshot();
@@ -1203,7 +1211,7 @@ describe("R07 R15 R17 R20 guarded edit controls (injected DOM only)", () => {
     },
   );
   it("retains drafts but invalidates the review after an ordinary same-revision refresh", async () => {
-    const h = await mount("folders", writableFolder());
+    const h = await mount("diagnostics", writableFolder());
     await prepareEdit(h);
     const old = h.field("Old text");
     await change(old, "draft");
@@ -1218,7 +1226,7 @@ describe("R07 R15 R17 R20 guarded edit controls (injected DOM only)", () => {
     const pending = deferred<unknown>();
     vi.mocked(h.f.api.configure).mockReturnValueOnce(pending.promise);
     await h.click("Save navigation");
-    await h.pageTo("folders");
+    await h.pageTo("diagnostics");
     expect(h.button("Prepare edit…").disabled).toBe(true);
     await h.click("Prepare edit…");
     expect(h.calls()).toHaveLength(1);
@@ -1233,14 +1241,14 @@ describe("R07 R15 R17 R20 guarded edit controls (injected DOM only)", () => {
       computerGeneration: 1,
       submittedAt: "2026-10-04T20:00:00.000Z",
     };
-    const blocked = await mount("folders", value);
+    const blocked = await mount("diagnostics", value);
     await blocked.click("Prepare edit…");
     expect(blocked.calls()).toEqual([]);
   });
 });
 
 it("R11 R22 unmount during Prepare releases only observation and never adopts its late result", async () => {
-  const h = await mount("folders", writableFolder());
+  const h = await mount("diagnostics", writableFolder());
   const subscribe = h.c.subscribe;
   const disposers: ReturnType<typeof vi.fn>[] = [];
   vi.spyOn(h.c, "subscribe").mockImplementation((listener) => {
@@ -1267,7 +1275,7 @@ it("R11 R22 unmount during Prepare releases only observation and never adopts it
   expect(h.calls()).toHaveLength(1);
 });
 it("R07 rejects authority drift in a Prepare reply even with equal revision and generation", async () => {
-  const h = await mount("folders", writableFolder());
+  const h = await mount("diagnostics", writableFolder());
   const next = structuredClone(h.configuration);
   next.settings.computer.workspaces[0]!.root = "/other/project";
   vi.mocked(h.f.api.configure).mockResolvedValueOnce({
@@ -1280,7 +1288,7 @@ it("R07 rejects authority drift in a Prepare reply even with equal revision and 
   expect(h.host.textContent).toContain("could not be confirmed");
 });
 it("checks expiry at dispatch time without needing a background render", async () => {
-  const h = await mount("folders", writableFolder());
+  const h = await mount("diagnostics", writableFolder());
   await prepareEdit(h);
   await change(h.field("Old text"), "old");
   vi.spyOn(Date, "now").mockReturnValue(Date.parse(editPreview().expiresAt));
@@ -1289,7 +1297,7 @@ it("checks expiry at dispatch time without needing a background render", async (
   expect(h.calls()).toHaveLength(1);
 });
 it("reads latest facade authority before Prepare when its rendered control is still enabled", async () => {
-  const h = await mount("folders", writableFolder());
+  const h = await mount("diagnostics", writableFolder());
   const current = h.c.getSnapshot();
   const configuration = structuredClone(h.configuration);
   configuration.settings.computer.workspaces[0]!.access = "read";
@@ -1298,7 +1306,7 @@ it("reads latest facade authority before Prepare when its rendered control is st
   expect(h.calls()).toHaveLength(0);
 });
 it("R20 preserves result delivery and requires existing explicit acknowledgement before a new edit", async () => {
-  const h = await mount("folders", writableFolder());
+  const h = await mount("diagnostics", writableFolder());
   await prepareEdit(h);
   await change(h.field("Old text"), "old");
   const pending = structuredClone(h.configuration);
@@ -1355,7 +1363,7 @@ it("R20 preserves result delivery and requires existing explicit acknowledgement
     snapshot: settled,
   });
   await act(async () => h.c.acknowledgeWorkspaceEdit(editOperationId));
-  await h.pageTo("folders");
+  await h.pageTo("diagnostics");
   vi.mocked(h.f.api.configure).mockResolvedValueOnce({
     ok: true,
     snapshot: settled,
@@ -1368,7 +1376,7 @@ it("R20 preserves result delivery and requires existing explicit acknowledgement
 it.each([false, true])(
   "settles unknown Apply only after exact Observe+ACK and enables a NEW edit (remount: %s)",
   async (remount) => {
-    const h = await mount("folders", writableFolder());
+    const h = await mount("diagnostics", writableFolder());
     await prepareEdit(h);
     await change(h.field("Old text"), "old");
     vi.mocked(h.f.api.configure).mockRejectedValueOnce(
@@ -1414,7 +1422,7 @@ it.each([false, true])(
         `settings:computer.apply-workspace-edit:${editOperationId}`
       ]?.state,
     ).toBe("unknown");
-    await h.pageTo("folders");
+    await h.pageTo("diagnostics");
     expect(h.button("Prepare edit…").disabled).toBe(true);
     await h.click("Prepare edit…");
     expect(h.calls()).toHaveLength(3); // Observation alone does not retire the intent.
@@ -1428,7 +1436,7 @@ it.each([false, true])(
     });
     await act(async () => h.c.acknowledgeWorkspaceEdit(editOperationId));
     if (remount) await h.remount();
-    await h.pageTo("folders");
+    await h.pageTo("diagnostics");
     expect(
       h.c.getSnapshot().intents[
         `settings:computer.apply-workspace-edit:${editOperationId}`
@@ -1468,7 +1476,7 @@ it.each([false, true])(
 );
 
 it("retains consumed operation identity after a known refusal and remount", async () => {
-  const h = await mount("folders", writableFolder());
+  const h = await mount("diagnostics", writableFolder());
   await prepareEdit(h);
   await change(h.field("Old text"), "old");
   vi.mocked(h.f.api.configure).mockResolvedValueOnce({
@@ -1504,7 +1512,7 @@ describe("Computer-first setup and explicit reconnect", () => {
     };
     value.computer.workspaces.unshift(other);
     ProductSettingsSchema.parse(value);
-    const h = await mount("connection", value);
+    const h = await mount("diagnostics", value);
     expect(h.c.getSnapshot().configuration?.status).toBe("ready");
     expect(h.host.textContent).toContain("Verify from external ChatGPT");
     const card = h.host.querySelector("[data-connector-challenge]");
@@ -1515,8 +1523,9 @@ describe("Computer-first setup and explicit reconnect", () => {
     for (const page of ["folders", "computer", "connection"] as const)
       await h.pageTo(page);
     expect(h.calls()).toEqual([]);
-    expect(h.button("Check in ChatGPT once").disabled).toBe(true);
     expect(h.button("Check attachment").disabled).toBe(false);
+    await h.pageTo("diagnostics");
+    expect(h.button("Check in ChatGPT once").disabled).toBe(true);
   });
   it.each(["build", "runtime", "computer", "connector", "workspace", "stale"])(
     "hides a challenge with mismatched current provenance: %s",
@@ -1535,7 +1544,7 @@ describe("Computer-first setup and explicit reconnect", () => {
       if (mismatch === "connector") value.connectors.secureMcp.generation++;
       if (mismatch === "workspace")
         value.setup.computer.verified!.workspaceId = selectionId;
-      const h = await mount("connection", value);
+      const h = await mount("diagnostics", value);
       if (mismatch === "stale")
         await act(async () =>
           h.f.emit("runtime", {
@@ -1623,6 +1632,7 @@ describe("Computer-first setup and explicit reconnect", () => {
     const value = connectionSettings();
     value.computer.workspaces[0]!.access = "write";
     const h = await mount("connection", value);
+    await h.click("Replace credentials");
     await change(h.field("Tunnel ID"), "unsaved-tunnel");
     const tunnel = h.field("Tunnel ID");
     const narrowed = structuredClone(h.configuration);
@@ -1636,7 +1646,7 @@ describe("Computer-first setup and explicit reconnect", () => {
       snapshot: narrowed,
     });
     await h.pageTo("folders");
-    await h.click("Use read-only");
+    await h.click("Change access to read-only");
     await h.pageTo("connection");
     expect(h.field("Tunnel ID")).toBe(tunnel);
     expect(tunnel.value).toBe("unsaved-tunnel");
@@ -1649,5 +1659,219 @@ describe("Computer-first setup and explicit reconnect", () => {
     expect(h.calls()).toEqual([
       { kind: "computer.update-access", workspaceId, access: "read" },
     ]);
+  });
+});
+
+function activePage(host: Element) {
+  return host.querySelector<HTMLElement>(".settings-page > div:not([hidden])")!;
+}
+describe("owner Setup presentation checkpoint (DOM fixtures only)", () => {
+  it("offers four compact checks without starting setup or requiring Model", async () => {
+    const h = await mount("general");
+    const overview = h.host.querySelector('[aria-label="Setup overview"]')!;
+    const checks = [
+      ...overview.querySelectorAll<HTMLButtonElement>(".setup-check"),
+    ];
+    expect(
+      checks.map((check) => check.querySelector("strong")?.textContent),
+    ).toEqual(["Sign in", "Folders", "Connection", "Add to ChatGPT"]);
+    expect(overview.textContent).toContain("Continue setup");
+    for (const [index, page] of [
+      [0, "connection"],
+      [1, "folders"],
+      [2, "connection"],
+      [3, "connection"],
+    ] as const) {
+      await act(async () => checks[index]!.click());
+      expect(h.c.getSnapshot().destination.page).toBe(page);
+      await h.pageTo("general");
+    }
+    expect(h.calls()).toEqual([]);
+    expect(h.f.api.task).not.toHaveBeenCalled();
+  });
+  it("keeps all folders visible and binds checks, access changes and removal to their own folder", async () => {
+    const value = withFolder();
+    value.computer.workspaces.push({
+      ...structuredClone(value.computer.workspaces[0]!),
+      workspaceId: selectionId,
+      root: "/approved/second",
+      rootIdentity: { device: "1", inode: "3" },
+      access: "write",
+      excludedPaths: [],
+    });
+    const h = await mount("folders", ProductSettingsSchema.parse(value));
+    const rows = [
+      ...activePage(h.host).querySelectorAll<HTMLElement>(".folder-row"),
+    ];
+    expect(rows).toHaveLength(2);
+    expect(rows[0]?.textContent).toContain("/approved/project");
+    expect(rows[1]?.textContent).toContain("/approved/second");
+    for (const label of [
+      "Check access",
+      "Change access to read-only",
+      "Remove folder",
+    ]) {
+      const control = [
+        ...rows[1]!.querySelectorAll<HTMLButtonElement>("button"),
+      ].find((item) => item.textContent?.trim() === label)!;
+      await act(async () => control.click());
+    }
+    expect(h.calls()).toEqual([
+      { kind: "computer.check-folder", workspaceId: selectionId },
+      {
+        kind: "computer.update-access",
+        workspaceId: selectionId,
+        access: "read",
+      },
+      { kind: "computer.remove-workspace", workspaceId: selectionId },
+    ]);
+    expect(activePage(h.host).textContent).not.toMatch(
+      /Old text|New text|Prepare edit|Excluded paths|expanded Git/,
+    );
+    await h.pageTo("diagnostics");
+    expect(activePage(h.host).textContent).toContain("Old text");
+    expect(h.calls()).toHaveLength(3); // Moving the tools never prepares an edit.
+  });
+  it("shows saved credentials without a key field and cancels only the replacement draft", async () => {
+    const h = await mount("connection", connectionSettings());
+    const page = activePage(h.host);
+    expect(page.querySelector('input[type="password"]')).toBeNull();
+    expect(page.textContent).toContain("Tunnel credentials saved");
+    await h.click("Replace credentials");
+    expect(h.field("Runtime key").value).toBe("");
+    await change(h.field("Tunnel ID"), "unsaved-tunnel");
+    await change(h.field("Runtime key"), "explicit-test-replacement-000000");
+    await h.click("Keep saved credentials");
+    expect(page.querySelector('input[type="password"]')).toBeNull();
+    expect(h.calls()).toEqual([]);
+    await h.click("Replace credentials");
+    expect(h.field("Tunnel ID").value).toBe("owner-tunnel");
+    expect(h.field("Runtime key").value).toBe("");
+    expect(h.button("Save credentials").disabled).toBe(true);
+  });
+  it("requires a valid new key, clears it on dispatch and never reloads it from saved state", async () => {
+    const value = connectionSettings();
+    const h = await mount("connection", value);
+    await h.click("Replace credentials");
+    await change(h.field("Runtime key"), "short");
+    await h.click("Save credentials");
+    expect(h.field("Runtime key").value).toBe("short");
+    expect(h.calls()).toEqual([]);
+    const secret = "explicit-test-replacement-000000";
+    await change(h.field("Runtime key"), secret);
+    const wait = deferred<unknown>();
+    vi.mocked(h.f.api.configure).mockReturnValueOnce(wait.promise);
+    await h.click("Save credentials");
+    expect(h.field("Runtime key").value).toBe("");
+    await h.click("Save credentials");
+    expect(h.calls()).toEqual([
+      {
+        kind: "connector.configure",
+        tunnelId: "owner-tunnel",
+        runtimeKey: secret,
+      },
+    ]);
+    await act(async () =>
+      wait.resolve({ ok: true, snapshot: h.configuration }),
+    );
+    expect(
+      activePage(h.host).querySelector('input[type="password"]'),
+    ).toBeNull();
+    expect(JSON.stringify(h.c.getSnapshot())).not.toContain(secret);
+    await h.click("Replace credentials");
+    expect(h.field("Runtime key").value).toBe("");
+  });
+  it("keeps an unknown replacement fenced without reporting new credentials as saved", async () => {
+    const h = await mount("connection", connectionSettings());
+    await h.click("Replace credentials");
+    await change(h.field("Runtime key"), "explicit-test-replacement-000000");
+    vi.mocked(h.f.api.configure).mockRejectedValueOnce(new Error("reply lost"));
+    await h.click("Save credentials");
+    expect(h.button("Save credentials").disabled).toBe(true);
+    expect(
+      activePage(h.host).querySelector(".credentials-saved strong")
+        ?.textContent,
+    ).toBe("Credential replacement unconfirmed");
+    expect(
+      h.host.querySelector('.settings-page > [role="status"]')?.textContent,
+    ).toContain("Outcome unknown");
+    await h.pageTo("folders");
+    await h.pageTo("connection");
+    await h.click("Save credentials");
+    expect(h.calls()).toHaveLength(1);
+    expect(h.field("Runtime key").value).toBe("");
+  });
+  it("keeps pending and late feedback on the page that initiated the action", async () => {
+    const h = await mount("connection");
+    const wait = deferred<unknown>();
+    vi.mocked(h.f.api.configure).mockReturnValueOnce(wait.promise);
+    await h.click("Sign in");
+    expect(
+      h.host.querySelector('.settings-page > [role="status"]')?.textContent,
+    ).toContain("Saving or checking");
+    await h.pageTo("folders");
+    expect(h.host.querySelector('.settings-page > [role="status"]')).toBeNull();
+    await act(async () =>
+      wait.resolve({
+        ok: false,
+        error: "CHATGPT_SIGN_IN_IN_PROGRESS",
+        snapshot: h.configuration,
+      }),
+    );
+    expect(h.host.querySelector('.settings-page > [role="status"]')).toBeNull();
+    await h.pageTo("connection");
+    expect(
+      h.host.querySelector('.settings-page > [role="status"]')?.textContent,
+    ).toContain("Sign-in is already open");
+    expect(
+      h.host.querySelector('.settings-page > [role="status"]')?.textContent,
+    ).not.toContain("CHATGPT_SIGN_IN_IN_PROGRESS");
+    expect(h.calls()).toHaveLength(1);
+  });
+  it.each(["SUPPORT_EXPORT_CANCELLED", "WORKSPACE_PICKER_CANCELLED"])(
+    "presents %s as a local cancellation and retains the raw result in Diagnostics",
+    async (code) => {
+      const page =
+        code === "SUPPORT_EXPORT_CANCELLED" ? "diagnostics" : "folders";
+      const h = await mount(page);
+      vi.mocked(h.f.api.configure).mockResolvedValueOnce({
+        ok: false,
+        error: code,
+        snapshot: h.configuration,
+      });
+      await h.click(
+        page === "diagnostics" ? "Export support diagnostics…" : "Add folder…",
+      );
+      const notice = h.host.querySelector('.settings-page > [role="status"]');
+      expect(notice?.textContent).toBe("Action cancelled.");
+      expect(h.host.querySelector('[role="alert"]')).toBeNull();
+      await h.pageTo("computer");
+      expect(
+        h.host.querySelector('.settings-page > [role="status"]'),
+      ).toBeNull();
+      await h.pageTo("diagnostics");
+      expect(
+        activePage(h.host).querySelector('[aria-label="Retained actions"]')
+          ?.textContent,
+      ).toContain(code);
+      expect(h.calls()).toHaveLength(1);
+    },
+  );
+  it("keeps This Mac focused on permissions and exposes acceptance controls only in Diagnostics", async () => {
+    const h = await mount("computer", withFolder());
+    const normal = activePage(h.host);
+    expect(normal.textContent).toContain("Terminal & Git");
+    expect(normal.textContent).not.toMatch(
+      /Astra|Apple Git|sandboxed|Check account|first message|Read-only file preview|Saved Chat answers/,
+    );
+    await change(h.field("Command access"), "verification");
+    await h.click("Save permissions");
+    expect(h.calls()).toEqual([
+      { kind: "computer.update-commands", commands: "verification" },
+    ]);
+    await h.pageTo("diagnostics");
+    expect(activePage(h.host).textContent).toContain("Check account");
+    expect(activePage(h.host).textContent).toContain("Saved Chat answers");
+    expect(h.calls()).toHaveLength(1);
   });
 });

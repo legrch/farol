@@ -54,6 +54,19 @@ function button(host: Element, label: string) {
   if (!found) throw new Error(`BUTTON_MISSING:${label}`);
   return found;
 }
+function agentTask(id = "task-1") {
+  return {
+    ...task(id),
+    label: "Review project",
+    agent: {
+      phase: "running",
+      workspaceId: "approved",
+      parentDelivery: "not_applicable",
+      workspaceEnforcement: "verified",
+      resultAvailable: false,
+    },
+  };
+}
 it.each([
   ["Home", "click"],
   ["Home", "Enter"],
@@ -102,33 +115,44 @@ it.each([
     expect(f.api.configure).not.toHaveBeenCalled();
   },
 );
-it("R32 R37 compact sidebar on Home has no hidden scrim or inert content", async () => {
+it("Home retains the single sidebar and compact overlays keep the existing host layout reporting", async () => {
   const { host, c, f } = await mount();
-  const homeIsAccessible = () => {
-    expect(host.querySelector(".contextual-sidebar")).toBeNull();
-    expect(host.querySelector(".sidebar-scrim")).toBeNull();
-    expect(host.querySelector("main")?.hasAttribute("inert")).toBe(false);
-    expect(f.api.layout).toHaveBeenLastCalledWith(
-      "activity",
-      "",
-      false,
-      false,
-      "rail",
-      "none",
-    );
-  };
-  await act(async () => c.toggleSidebar(true));
-  homeIsAccessible();
-  await act(async () => c.navigate({ area: "chatgpt" }));
+  expect(host.querySelectorAll(".sidebar")).toHaveLength(1);
   expect(host.querySelector(".contextual-sidebar")).not.toBeNull();
+  expect(host.querySelector("main")?.hasAttribute("inert")).toBe(false);
+  await act(async () => c.toggleSidebar(false));
+  expect(host.querySelector(".contextual-sidebar")).toBeNull();
+  expect(host.querySelector(".sidebar-scrim")).toBeNull();
+  await act(async () => c.toggleSidebar(true));
   expect(host.querySelector(".sidebar-scrim")).not.toBeNull();
   expect(host.querySelector("main")?.hasAttribute("inert")).toBe(true);
-  await act(async () => c.navigate({ area: "home" }));
-  homeIsAccessible();
-  await act(async () => c.travel(-1));
-  expect(host.querySelector(".sidebar-scrim")).not.toBeNull();
-  await act(async () => c.travel(-1));
-  homeIsAccessible();
+  expect(f.api.layout).toHaveBeenLastCalledWith(
+    "activity",
+    "",
+    false,
+    false,
+    "rail",
+    "none",
+  );
+  await act(async () => button(host, "Close sidebar").click());
+  expect(host.querySelector("main")?.hasAttribute("inert")).toBe(false);
+  await act(async () => c.navigate({ area: "chatgpt" }));
+  await act(async () => c.toggleSidebar(true));
+  expect(f.api.layout).toHaveBeenLastCalledWith(
+    "browser",
+    "",
+    false,
+    false,
+    "overlay",
+    "sidebar",
+  );
+  await act(async () =>
+    host.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+    ),
+  );
+  expect(host.querySelector(".sidebar-scrim")).toBeNull();
+  expect(host.querySelector("main")?.hasAttribute("inert")).toBe(false);
 });
 it("R36 R39 new profile opens Home without a legacy modal and has one leaf toolbar", async () => {
   const { host, f } = await mount();
@@ -139,7 +163,7 @@ it("R36 R39 new profile opens Home without a legacy modal and has one leaf toolb
   expect(f.api.task).not.toHaveBeenCalled();
   await act(async () => button(host, "Settings").click());
   expect(host.querySelector(".toolbar-title")?.textContent).toContain(
-    "General",
+    "Appearance",
   );
 });
 it("R34 search dismisses, restores focus and uses real navigation", async () => {
@@ -198,7 +222,10 @@ it("R05 renders hostile labels as text and stable task identity survives reorder
   await act(async () => {
     f.emit("tasks", {
       revision: 1,
-      tasks: [{ ...task(), label: "<script>owned()</script>" }, task("task-2")],
+      tasks: [
+        { ...agentTask(), label: "<script>owned()</script>" },
+        agentTask("task-2"),
+      ],
     });
     c.navigate({ area: "chatgpt" });
   });
@@ -207,7 +234,10 @@ it("R05 renders hostile labels as text and stable task identity survives reorder
   await act(async () =>
     f.emit("tasks", {
       revision: 2,
-      tasks: [task("task-2"), { ...task(), label: "<script>owned()</script>" }],
+      tasks: [
+        agentTask("task-2"),
+        { ...agentTask(), label: "<script>owned()</script>" },
+      ],
     }),
   );
   expect([...host.querySelectorAll(".contextual-sidebar button")]).toContain(
@@ -244,11 +274,11 @@ it("R31 R36 Home destinations and sidebar work actions use the facade", async ()
   }
   await act(async () => button(host, "View all").click());
   expect(c.getSnapshot().destination.area).toBe("activity");
-  await act(async () => button(host, "New ChatGPT task").click());
+  await act(async () => button(host, "New chat").click());
   expect(f.api.task).toHaveBeenCalledWith({ kind: "task.create-chatgpt" });
   await act(async () => {
     c.navigate({ area: "home" });
-    f.emit("tasks", { revision: 1, tasks: [task()] });
+    f.emit("tasks", { revision: 1, tasks: [agentTask()] });
   });
   await act(async () =>
     host.querySelector<HTMLButtonElement>(".work-row")!.click(),
@@ -257,7 +287,7 @@ it("R31 R36 Home destinations and sidebar work actions use the facade", async ()
     kind: "task.activate",
     taskId: "task-1",
   });
-  await act(async () => button(host, "Task options").click());
+  await act(async () => button(host, "Chat options").click());
   expect(c.getSnapshot().overlay).toBe("task");
   await act(async () => button(host, "Close").click());
   expect(c.getSnapshot().overlay).toBe("none");
@@ -648,4 +678,87 @@ it("Home keeps login readiness separate from external Computer readiness", async
     host.querySelector(".readiness-summary")?.getAttribute("data-ready"),
   ).toBe("false");
   expect(f.api.configure).not.toHaveBeenCalled();
+});
+
+it("opens Setup from the single sidebar and retains ordinary navigation and appearance", async () => {
+  const { host, c, f } = await mount();
+  expect(host.querySelectorAll(".sidebar")).toHaveLength(1);
+  await act(async () => button(host, "Setup").click());
+  expect(c.getSnapshot().destination).toMatchObject({
+    area: "settings",
+    page: "general",
+  });
+  expect(host.querySelector(".toolbar-title strong")?.textContent).toBe(
+    "Setup",
+  );
+  expect(host.querySelector('[aria-label="Setup overview"]')).not.toBeNull();
+  await act(async () => button(host, "Folders").click());
+  expect(host.querySelector(".toolbar-title")?.textContent).toContain(
+    "Setup /Folders",
+  );
+  await act(async () => button(host, "Settings").click());
+  expect(c.getSnapshot().destination.page).toBe("appearance");
+  expect(host.querySelector('[aria-label="Settings pages"]')).not.toBeNull();
+  expect(f.api.configure).not.toHaveBeenCalled();
+  expect(f.api.task).not.toHaveBeenCalled();
+});
+it("does not present foreign ChatGPT windows as Farol work or expose acceptance tools on Home", async () => {
+  const { host, c, f } = await mount();
+  await act(async () =>
+    f.emit("tasks", { revision: 1, tasks: [task(), task("task-2")] }),
+  );
+  expect(host.querySelector(".work-row")).toBeNull();
+  expect(host.textContent).not.toMatch(
+    /Task 1|task-1|task-2|Five current|Check account|Read-only file preview|Saved Chat answers/,
+  );
+  expect(f.api.task).not.toHaveBeenCalled();
+  await act(async () => c.navigate({ area: "chatgpt", taskId: "task-1" }));
+  expect(host.querySelector(".toolbar-title strong")?.textContent).toBe(
+    "ChatGPT",
+  );
+  expect(host.querySelector('[aria-label="Farol work"]')).toBeNull();
+  await act(async () => button(host, "New chat").click());
+  expect(f.api.task).toHaveBeenCalledTimes(1);
+  expect(f.api.task).toHaveBeenCalledWith({ kind: "task.create-chatgpt" });
+});
+it.each([
+  "MODEL_ENDPOINT_UNAVAILABLE",
+  "CHATGPT_SIGN_IN_IN_PROGRESS",
+  "TASK_OPERATION_IN_PROGRESS",
+  "SUPPORT_EXPORT_CANCELLED",
+])("does not broadcast %s across unrelated pages", async (code) => {
+  const { host, c, f } = await mount();
+  if (code === "TASK_OPERATION_IN_PROGRESS") {
+    vi.mocked(f.api.task).mockResolvedValueOnce({
+      ok: false,
+      error: code,
+      state: { revision: 0, tasks: [] },
+    });
+    await act(async () => c.task({ kind: "task.create-chatgpt" }, "task:new"));
+    expect(c.getSnapshot().intents["task:new"]?.code).toBe(code);
+  } else {
+    vi.mocked(f.api.configure).mockResolvedValueOnce({
+      ok: false,
+      error: code,
+      snapshot: bootstrap().configuration,
+    });
+    await act(async () =>
+      c.configure({ kind: "support.export" }, "settings:support.export:"),
+    );
+    expect(c.getSnapshot().intents["settings:support.export:"]?.code).toBe(
+      code,
+    );
+  }
+  for (const area of ["home", "chatgpt", "activity"] as const) {
+    await act(async () => c.navigate({ area }));
+    expect(host.querySelector("main")?.textContent).not.toContain(code);
+    expect(host.querySelector('main > [role="alert"]')).toBeNull();
+  }
+  await act(async () => c.navigate({ area: "settings", page: "diagnostics" }));
+  expect(
+    host.querySelector('[aria-label="Retained actions"]')?.textContent,
+  ).toContain(code);
+  if (code === "TASK_OPERATION_IN_PROGRESS")
+    expect(f.api.task).toHaveBeenCalledTimes(1);
+  else expect(f.api.configure).toHaveBeenCalledTimes(1);
 });
