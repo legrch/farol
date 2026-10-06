@@ -221,6 +221,33 @@ describe("development launcher environment", () => {
     expect(received.options.env.FAROL_NEXT_PROFILE_MODE).toBeUndefined();
     expect(received.options.env.FAROL_NEXT_ACCEPTANCE_PROFILE).toBeUndefined();
   });
+
+  it("selects the built-in display and carries explicit primary-screen permission", async () => {
+    let received;
+    const stop = new Error("SPAWN_INTERCEPTED");
+    await expect(
+      launchPreview(
+        "/fixture/repository",
+        (command, args, options) => {
+          received = { command, args, options };
+          throw stop;
+        },
+        false,
+        false,
+        undefined,
+        { builtInDisplayOnly: true, allowPrimaryDisplay: true },
+      ),
+    ).rejects.toBe(stop);
+    expect(received.args).toEqual([
+      "_output/build/app/main.cjs",
+      "--preview-window-mode=secondary-visible",
+      "--built-in-display-only",
+      "--allow-primary-display",
+    ]);
+    expect(received.options.env.FAROL_NEXT_ENVIRONMENT).toBe("dev");
+    expect(received.options.env.FAROL_NEXT_ACCEPTANCE_PROFILE).toBeUndefined();
+    expect(received.options.env.FAROL_NEXT_E2E).toBeUndefined();
+  });
 });
 
 describe("fresh review environment (CPU-only)", () => {

@@ -580,6 +580,7 @@ export async function launchPreview(
   acceptanceProfile = false,
   secondaryDisplay = false,
   reviewMarker,
+  displayOptions = {},
 ) {
   const electronBin = path.join(root, "node_modules/.bin/electron");
   const { stopLabel, outcome, protocolError, resultCollector } =
@@ -591,8 +592,15 @@ export async function launchPreview(
             "_output/build/app/main.cjs",
             ...(acceptanceProfile ||
             secondaryDisplay ||
+            displayOptions.builtInDisplayOnly === true ||
             reviewMarker !== undefined
               ? ["--preview-window-mode=secondary-visible"]
+              : []),
+            ...(displayOptions.builtInDisplayOnly === true
+              ? ["--built-in-display-only"]
+              : []),
+            ...(displayOptions.allowPrimaryDisplay === true
+              ? ["--allow-primary-display"]
               : []),
           ],
           {
@@ -679,13 +687,19 @@ export async function main(argv, overrides = {}) {
         cwd: vnextRoot,
       }),
     createReviewProfile = createOwnerFreshReviewProfile,
-    launch = (acceptanceProfile, secondaryDisplay, reviewMarker) =>
+    launch = (
+      acceptanceProfile,
+      secondaryDisplay,
+      reviewMarker,
+      displayOptions,
+    ) =>
       launchPreview(
         vnextRoot,
         spawn,
         acceptanceProfile,
         secondaryDisplay,
         reviewMarker,
+        displayOptions,
       ),
     log = (line) => process.stdout.write(`${line}\n`),
     logError = (line) => process.stderr.write(`${line}\n`),
@@ -695,6 +709,10 @@ export async function main(argv, overrides = {}) {
   const checkOnly = argv.includes("--check");
   const acceptanceProfile = argv.includes("--acceptance-profile");
   const secondaryDisplay = argv.includes("--secondary-display");
+  const displayOptions = {
+    builtInDisplayOnly: argv.includes("--built-in-display-only"),
+    allowPrimaryDisplay: argv.includes("--allow-primary-display"),
+  };
   const reviewFlags = argv.filter((argument) =>
     argument.startsWith("--fresh-review-profile"),
   );
@@ -777,11 +795,11 @@ export async function main(argv, overrides = {}) {
       "Development bytes, not a packaged candidate. Profile retained; this opener cannot reopen it. No automatic retry or recovery.",
     );
     log("Running Farol Dev on the secondary display. Press Ctrl+C to stop.");
-    await launch(false, true, review.marker);
+    await launch(false, true, review.marker, displayOptions);
     return;
   }
   log("Running Farol Dev in this terminal. Press Ctrl+C to stop.");
-  await launch(acceptanceProfile, secondaryDisplay);
+  await launch(acceptanceProfile, secondaryDisplay, undefined, displayOptions);
 }
 
 const isMainModule =

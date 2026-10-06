@@ -458,7 +458,39 @@ describe("dev.mjs main() orchestration with an already-declared toolchain", () =
       launch: async (...options) => selected.push(options),
     });
     await main(["--secondary-display"], overrides);
-    expect(selected).toEqual([[false, true]]);
+    expect(selected).toEqual([
+      [
+        false,
+        true,
+        undefined,
+        {
+          builtInDisplayOnly: false,
+          allowPrimaryDisplay: false,
+        },
+      ],
+    ]);
+  });
+
+  it("forwards only explicit owner display choices without changing the Dev profile", async () => {
+    const selected = [];
+    const { overrides } = baseOverrides({
+      launch: async (...options) => selected.push(options),
+    });
+    await main(
+      ["--built-in-display-only", "--allow-primary-display"],
+      overrides,
+    );
+    expect(selected).toEqual([
+      [
+        false,
+        false,
+        undefined,
+        {
+          builtInDisplayOnly: true,
+          allowPrimaryDisplay: true,
+        },
+      ],
+    ]);
   });
 
   it("exits with the dependency status and never builds when dependencies fail", async () => {
@@ -592,7 +624,16 @@ describe("dev opener bounded orchestration", () => {
       "dependencies",
       ["build", [argument]],
       "profile",
-      ["launch", false, true, marker],
+      [
+        "launch",
+        false,
+        true,
+        marker,
+        {
+          builtInDisplayOnly: false,
+          allowPrimaryDisplay: false,
+        },
+      ],
     ]);
     expect(logs.join("\n")).toContain(marker);
     expect(logs.join("\n")).toContain("/fixture/review/root/Farol Dev");
