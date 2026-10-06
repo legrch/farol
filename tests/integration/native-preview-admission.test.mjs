@@ -1,8 +1,10 @@
 import fs from "node:fs/promises";
+import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { Server } from "node:http";
 import os from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   assertOwnerPreviewIdle,
@@ -12,6 +14,25 @@ import {
 } from "../e2e/native-preview-admission.mjs";
 
 const roots = [];
+const runNode = promisify(execFile);
+
+it("imports native admission through standalone Node without the test bundler", async () => {
+  const module = new URL(
+    "../e2e/native-preview-admission.mjs",
+    import.meta.url,
+  );
+  const result = await runNode(
+    process.execPath,
+    [
+      "--input-type=module",
+      "--eval",
+      `await import(${JSON.stringify(module.href)}); process.stdout.write('imported');`,
+    ],
+    { timeout: 5000, maxBuffer: 8192 },
+  );
+  expect(result.stdout).toBe("imported");
+});
+
 afterEach(async () => {
   for (const root of roots.splice(0))
     await fs.rm(root, { recursive: true, force: true });

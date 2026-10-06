@@ -4,7 +4,7 @@ import {
   DEV_DATA_DIRECTORY_NAME,
   LEGACY_DEV_DATA_DIRECTORY_NAME,
   type DevDataDirectoryName,
-} from "./dev-profile-directory";
+} from "./dev-profile-directory.ts";
 
 export const DEV_DISPLAY_NAME = "Farol Dev";
 
