@@ -9868,7 +9868,10 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
     if (!(error instanceof BridgeError)) throw error;
     goChatStartupProfile = null;
   }
-  if (compiledGoCore !== null) {
+  // Configuration faults remain observable in the recovery UI. Without the
+  // configured Computer identity, do not provision or start a Go profile.
+  // Selected Go operations still refuse when their host is unavailable.
+  if (compiledGoCore !== null && configuration.snapshot().status === "ready") {
     const currentSettings = () => {
       const snapshot = configuration!.snapshot();
       if (snapshot.status !== "ready") throw new Error("SETTINGS_UNAVAILABLE");

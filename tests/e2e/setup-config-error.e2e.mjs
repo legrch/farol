@@ -2,12 +2,15 @@
 // model or owner-state acceptance is claimed by these configuration faults.
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { once } from "node:events";
 import { createServer } from "node:http";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { _electron as electron } from "playwright-core";
+import {
+  retainOriginalChild,
+  closeOriginalChild,
+} from "./setup-config-error-child.mjs";
 import {
   assertNativePreviewAdmission,
   recheckNativePreviewIsolation,
@@ -45,6 +48,9 @@ const ownerState = path.join(
   "Library/Application Support/Farol Next Preview/farol-next-state",
 );
 const observations = [];
+let primaryFailure;
+const cleanupFailures = [];
+let cleanupUnknown = false;
 // Even unavailable configuration starts the Browser route. Select an owned
 // loopback document so startup cannot fall back to the public ChatGPT home.
 const chatFixture = createServer((_request, response) => {
@@ -66,30 +72,6 @@ async function fixtureWait(promise, label) {
   }
 }
 
-async function closeOwned(application) {
-  const child = application.process();
-  const terminal = once(child, "exit");
-  let timer;
-  try {
-    await Promise.race([
-      application.close().then(async () => {
-        if (child.exitCode === null && child.signalCode === null)
-          await terminal;
-      }),
-      new Promise((_, reject) => {
-        timer = setTimeout(
-          () => reject(new Error("SETUP_CONFIG_FAULT_QUIT_UNKNOWN")),
-          15000,
-        );
-      }),
-    ]);
-    assert.equal(child.exitCode, 0);
-    assert.equal(child.signalCode, null);
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
 try {
   await fixtureWait(
     new Promise((resolve, reject) => {
@@ -101,7 +83,7 @@ try {
   const fixtureAddress = chatFixture.address();
   assert.ok(fixtureAddress && typeof fixtureAddress !== "string");
   const fixtureUrl = `http://127.0.0.1:${fixtureAddress.port}/`;
-  for (const environment of packaged
+  environments: for (const environment of packaged
     ? ["preview"]
     : devOnly
       ? ["dev"]
@@ -138,9 +120,23 @@ try {
             ? "SETTINGS_CORRUPT"
             : "SETTINGS_UNSAFE";
       let application;
-      let closed = false;
+      let owned;
       let isolationWitness;
       let nativePaths;
+      let stage = "admission";
+      const run = {
+        kind: "config-fault-run",
+        environment,
+        fault,
+        code: expected,
+        profileRoot: profile,
+        primaryFailure: null,
+        cleanupFailures: [],
+        child: null,
+        profileCleanup: "retained",
+      };
+      observations.push(run);
+      const cleanupStart = cleanupFailures.length;
       try {
         const launchOptions = {
           executablePath: executable,
@@ -169,8 +165,15 @@ try {
           launchOptions,
           fixture: chatFixture,
         });
+        stage = "launch";
         application = await electron.launch(launchOptions);
+        owned = retainOriginalChild(application, observations, {
+          environment,
+          fault,
+        });
+        stage = "first-window";
         const window = await application.firstWindow({ timeout: 15000 });
+        stage = "native-isolation";
         const actual = await application.evaluate(({ app, BrowserWindow }) => ({
           pid: process.pid,
           home: app.getPath("home"),
@@ -191,15 +194,12 @@ try {
         isolationWitness = await recheckNativePreviewIsolation(
           admission,
           actual,
-          application.process(),
+          owned.child,
         );
         nativePaths = actual;
         observations.push(isolationWitness);
-        await readOwnedStartupMarker(
-          stateRoot,
-          profile,
-          application.process().pid,
-        );
+        await readOwnedStartupMarker(stateRoot, profile, owned.child.pid);
+        stage = "configuration-ui";
         await waitForReactShell(window);
         const bootstrap = await window.evaluate(() =>
           window.farolNext.bootstrap(),
@@ -320,33 +320,87 @@ try {
           ready: false,
           configurationPreserved: true,
         });
+      } catch (error) {
+        primaryFailure = error;
+        run.primaryFailure = String(error);
+        run.failureStage = stage;
       } finally {
-        if (application) {
-          await closeOwned(application);
-          closed = true;
+        if (owned) {
+          const result = await closeOriginalChild(
+            application,
+            owned,
+            fixtureWait,
+          );
+          run.child = {
+            ...result,
+            closeError: result.closeError ? String(result.closeError) : null,
+            exitError: result.exitError ? String(result.exitError) : null,
+          };
+          cleanupFailures.push(
+            ...[result.closeError, result.exitError].filter(Boolean),
+          );
+          cleanupUnknown ||= !result.terminal;
+          if (result.terminal && (result.exit !== 0 || result.signal !== null))
+            cleanupFailures.push(new Error("SETUP_CONFIG_FAULT_UNCLEAN_EXIT"));
+        } else if (application || stage === "launch") {
+          cleanupUnknown = true;
         }
-        if (closed && isolationWitness) {
+        if (
+          !primaryFailure &&
+          cleanupFailures.length === cleanupStart &&
+          run.child?.terminal &&
+          isolationWitness
+        ) {
           // Preserve an unsafe/unknown profile. Recheck the immutable physical
           // binding after the original child exits before disposable cleanup.
-          await recheckNativePreviewIsolation(
-            isolationWitness,
-            nativePaths,
-            application.process(),
-          );
-          await fs.rm(profile, { recursive: true, force: true });
+          try {
+            await recheckNativePreviewIsolation(
+              isolationWitness,
+              nativePaths,
+              owned.child,
+            );
+            run.profileCleanup = "removal-started";
+            await fs.rm(profile, { recursive: true, force: true });
+            run.profileCleanup = "removed";
+          } catch (error) {
+            cleanupFailures.push(error);
+            if (run.profileCleanup === "removal-started") {
+              run.profileCleanup = "removal-unknown";
+              cleanupUnknown = true;
+            }
+          }
         }
+        run.cleanupFailures = cleanupFailures.slice(cleanupStart).map(String);
+        run.cleanupUnknown = cleanupUnknown;
       }
+      if (primaryFailure || cleanupFailures.length || cleanupUnknown)
+        break environments;
     }
   }
+} catch (error) {
+  primaryFailure ??= error;
 } finally {
-  if (chatFixture.listening)
-    await fixtureWait(
-      new Promise((resolve, reject) =>
-        chatFixture.close((error) => (error ? reject(error) : resolve())),
-      ),
-      "SETUP_CONFIG_FIXTURE_CLOSE_UNKNOWN",
-    );
+  try {
+    if (chatFixture.listening)
+      await fixtureWait(
+        new Promise((resolve, reject) =>
+          chatFixture.close((error) => (error ? reject(error) : resolve())),
+        ),
+        "SETUP_CONFIG_FIXTURE_CLOSE_UNKNOWN",
+      );
+  } catch (error) {
+    cleanupFailures.push(error);
+    cleanupUnknown = true;
+  }
+  process.stdout.write(
+    `${JSON.stringify({ scope: "hidden-disposable-config-faults", packaged, devOnly, observations, primaryFailure: primaryFailure ? String(primaryFailure) : null, cleanupFailures: cleanupFailures.map(String), cleanupUnknown })}\n`,
+  );
 }
-process.stdout.write(
-  `${JSON.stringify({ scope: "hidden-disposable-config-faults", packaged, observations })}\n`,
-);
+if (primaryFailure || cleanupFailures.length || cleanupUnknown) {
+  throw new AggregateError(
+    [primaryFailure, ...cleanupFailures].filter(Boolean),
+    cleanupUnknown
+      ? "SETUP_CONFIG_FAULT_CLEANUP_UNKNOWN"
+      : "SETUP_CONFIG_FAULT_FAILED",
+  );
+}
