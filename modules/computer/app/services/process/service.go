@@ -34,6 +34,7 @@ type Service struct {
 	prepared                                               Prepared
 	preparer                                               InvocationPreparer
 	scope                                                  Scope
+	connector                                              *ConnectorReservationScope
 	invocation                                             *Invocation
 	reservations                                           Reservation
 	gate                                                   Gate

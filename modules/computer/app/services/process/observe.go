@@ -48,6 +48,7 @@ type Observer struct {
 	workspace ObservationWorkspace
 	binding   port.TaskBinding
 	deadline  time.Time
+	connector *ConnectorReadScope
 }
 
 // Observer binds an independent READ lifetime to the original operation. The
@@ -94,7 +95,9 @@ func (o *Observer) withCurrent(ctx context.Context, disclose func() error) error
 	if err != nil || physical == nil {
 		return fail("PROCESS_ADMISSION_UNAVAILABLE", false)
 	}
+	o.service.gate.Lock()
 	seal := o.service.intent.Seal
+	o.service.gate.Unlock()
 	if physical.WorkspaceID != seal.WorkspaceID || physical.Root != seal.Root || physical.RootIdentity != seal.RootIdentity {
 		return authority.Fail("AUTHORITY_COMPUTER_MISMATCH", "computer-policy")
 	}
@@ -132,10 +135,23 @@ func (o *Observer) withAuthority(ctx context.Context, disclose func() error) err
 			return reject(authority.Fail("AUTHORITY_TASK_MISMATCH", "task-grant"))
 		}
 		s := o.service
-		if s.invocation != nil && p.Grant.AuthorityID != s.invocation.AdmissionID {
+		if o.connector != nil {
+			current, ok := o.current.(ConnectorObservationAuthority)
+			if !ok || current.ConnectorScope() != *o.connector {
+				return reject(fail("PROCESS_ADMISSION_UNAVAILABLE", false))
+			}
+			if p.Grant.ComputerID != o.connector.ComputerID || a.ComputerID != o.connector.ComputerID ||
+				p.Grant.ComputerGeneration != o.connector.ComputerGeneration || a.Generation != o.connector.ComputerGeneration {
+				return reject(authority.Fail("AUTHORITY_COMPUTER_MISMATCH", "computer-policy"))
+			}
+		}
+		s.gate.Lock()
+		wrongAdmission := o.connector == nil && s.invocation != nil && p.Grant.AuthorityID != s.invocation.AdmissionID
+		seal := s.intent.Seal
+		s.gate.Unlock()
+		if wrongAdmission {
 			return reject(authority.Fail("AUTHORITY_TASK_MISMATCH", "task-grant"))
 		}
-		seal := s.intent.Seal
 		action := authority.Action{Identity: o.binding.Identity, Operation: authority.Operation{Kind: authority.Read, WorkspaceID: seal.WorkspaceID, Path: seal.Cwd}}
 		if err := authority.AuthorizeComputer(p, a, action, now); err != nil {
 			return reject(err)
