@@ -21,6 +21,7 @@ import { readChatHistoryView } from "../../../apps/desktop/chat-history-view";
 import { projectReadConversation } from "../../../apps/desktop/read-conversation-projection";
 import { ReadConversationPromptSchema } from "../../pkg/product-settings/chat-conversation";
 import { BridgeError } from "../../../apps/desktop/bridge/client";
+import { NativeViewVisibility } from "../../../apps/desktop/bridge/native-view-visibility";
 import { withSettingsEditLease } from "../../../apps/desktop/with-settings-edit-lease";
 import { readGoWorkspaceSnapshot } from "../../../apps/desktop/go-workspace-snapshot";
 import { ReadAccountConfirmation } from "../../../apps/desktop/read-account-confirmation";
@@ -1355,7 +1356,7 @@ function verificationWorkspaceAction(
 const windowOpenCoordinator = new WindowOpenCoordinator();
 const taskViews = new Map<string, WebContentsView>();
 const taskViewKinds = new Map<string, "runtime" | "chatgpt">();
-const attachedTaskViewIds = new Set<string>();
+const nativeViewVisibility = new NativeViewVisibility<WebContentsView>();
 const streamControllers = new Map<string, AbortController>();
 const taskSurfaceFailures = new Map<string, string>();
 const pendingComputer = new Map<
@@ -8561,14 +8562,22 @@ function publishShellAction(
 }
 
 function focusForLayout(): void {
-  if (!window || window.isDestroyed()) return;
+  if (
+    !window ||
+    window.isDestroyed() ||
+    !window.isFocused() ||
+    window.webContents.isDestroyed()
+  ) {
+    return;
+  }
   if (setupOpen || shellOverlay !== "none" || section !== "browser") {
     window.webContents.focus();
     return;
   }
   const selected = taskViews.get(selectedTaskId);
-  if (selected) selected.webContents.focus();
-  else window.webContents.focus();
+  if (!selected || !nativeViewVisibility.focus(window, selected)) {
+    if (!window.webContents.isDestroyed()) window.webContents.focus();
+  }
 }
 
 function focusForLayoutAfterRendererCommit(): void {
@@ -8704,32 +8713,28 @@ function installApplicationMenu(): void {
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
-function attachTaskView(taskId: string, view: WebContentsView): void {
+function attachTaskView(
+  taskId: string,
+  view: WebContentsView,
+  bounds: Electron.Rectangle,
+): void {
   if (
     !window ||
     window.isDestroyed() ||
     view.webContents.isDestroyed() ||
-    attachedTaskViewIds.has(taskId)
+    taskViews.get(taskId) !== view
   ) {
     return;
   }
-  window.contentView.addChildView(view);
-  attachedTaskViewIds.add(taskId);
+  nativeViewVisibility.show(window, view, bounds);
 }
 
 function attachTaskViews(): void {
-  for (const [taskId, view] of taskViews) attachTaskView(taskId, view);
+  applyLayout();
 }
 
 function detachTaskViews(): void {
-  const host = window;
-  if (host && !host.isDestroyed()) {
-    for (const taskId of attachedTaskViewIds) {
-      const view = taskViews.get(taskId);
-      if (view) host.contentView.removeChildView(view);
-    }
-  }
-  attachedTaskViewIds.clear();
+  if (window) nativeViewVisibility.detachHost(window);
 }
 
 function liveChatGptSurfaceFactory(taskId: string): ChatGptRouteSurfaceFactory {
@@ -8761,31 +8766,33 @@ function liveChatGptSurfaceFactory(taskId: string): ChatGptRouteSurfaceFactory {
     view.setVisible(false);
     taskViews.set(taskId, view);
     taskViewKinds.set(taskId, "chatgpt");
-    attachTaskView(taskId, view);
     view.webContents.on("before-input-event", (event, input) => {
       if (handleShortcut(input)) event.preventDefault();
     });
-    view.webContents.once("destroyed", notifyClosed);
+    view.webContents.once("destroyed", () => {
+      disposeTaskView(taskId, view);
+      notifyClosed();
+    });
     return {
       kind: "embedded",
       webContents: view.webContents,
       isDestroyed: () => view.webContents.isDestroyed(),
       loadURL: (url) => view.webContents.loadURL(url),
-      hide: () => view.setVisible(false),
+      hide: () => nativeViewVisibility.hide(view),
       reveal: () => {
-        attachTaskView(taskId, view);
+        if (taskViews.get(taskId) !== view || view.webContents.isDestroyed()) {
+          return;
+        }
         applyLayout();
       },
       focus: () => {
-        if (view.getVisible()) view.webContents.focus();
+        if (window && taskViews.get(taskId) === view) {
+          nativeViewVisibility.focus(window, view);
+        }
       },
       setTitle: () => undefined,
       destroy: () => {
-        if (view.webContents.isDestroyed()) {
-          notifyClosed();
-          return;
-        }
-        notifyClosing();
+        if (!view.webContents.isDestroyed()) notifyClosing();
         disposeTaskView(taskId, view);
         notifyClosed();
       },
@@ -8821,11 +8828,11 @@ function signInChatGptSurfaceFactory(): ChatGptRouteSurfaceFactory {
 }
 
 function disposeTaskView(taskId: string, view: WebContentsView): void {
-  taskViews.delete(taskId);
-  taskViewKinds.delete(taskId);
-  if (attachedTaskViewIds.delete(taskId) && window && !window.isDestroyed()) {
-    window.contentView.removeChildView(view);
+  if (taskViews.get(taskId) === view) {
+    taskViews.delete(taskId);
+    taskViewKinds.delete(taskId);
   }
+  nativeViewVisibility.hide(view);
   if (!view.webContents.isDestroyed()) {
     view.webContents.close({ waitForBeforeUnload: false });
   }
@@ -9056,7 +9063,7 @@ function handleShortcut(input: Input): boolean {
 }
 
 function applyLayout(): void {
-  if (!window) return;
+  if (!window || window.isDestroyed()) return;
   const [width = 1, height = 1] = window.getContentSize();
   const showBrowserHome =
     signInSurfaceOpen ||
@@ -9083,13 +9090,22 @@ function applyLayout(): void {
     }),
     checkFeedbackVisible,
   });
+  const visibleTaskId =
+    !installedUpdateAdmission && layout.pageVisible
+      ? showBrowserHome
+        ? SIGN_IN_SURFACE_ID
+        : selectedTaskId
+      : null;
+  // Detach covered and unselected pages first so the host has at most one
+  // browser child, regardless of task insertion order.
   for (const [taskId, view] of taskViews) {
-    const visible =
-      !installedUpdateAdmission &&
-      layout.pageVisible &&
-      taskId === (showBrowserHome ? SIGN_IN_SURFACE_ID : selectedTaskId);
-    view.setVisible(visible);
-    view.setBounds(layout.pageBounds);
+    if (taskId !== visibleTaskId || view.webContents.isDestroyed()) {
+      nativeViewVisibility.hide(view);
+    }
+  }
+  if (visibleTaskId !== null) {
+    const view = taskViews.get(visibleTaskId);
+    if (view) attachTaskView(visibleTaskId, view, layout.pageBounds);
   }
 }
 
@@ -9102,7 +9118,6 @@ async function createTaskViews(): Promise<void> {
     if (runtimeState !== "ready" || runtime !== activeRuntime) return;
     const retained = taskViews.get(task.taskId);
     if (retained && !retained.webContents.isDestroyed()) {
-      attachTaskView(task.taskId, retained);
       continue;
     }
     const view = new WebContentsView({
@@ -9117,7 +9132,9 @@ async function createTaskViews(): Promise<void> {
     view.setVisible(false);
     taskViews.set(task.taskId, view);
     taskViewKinds.set(task.taskId, "runtime");
-    attachTaskView(task.taskId, view);
+    view.webContents.once("destroyed", () => {
+      disposeTaskView(task.taskId, view);
+    });
     view.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
     view.webContents.on("will-navigate", (event, url) => {
       if (!url.startsWith(`${base}/`)) event.preventDefault();
@@ -9525,10 +9542,12 @@ async function createWindow(): Promise<void> {
     applyLayout();
     publishWindowState();
   });
-  window.on("close", detachTaskViews);
+  const taskViewHost = window;
+  window.on("close", () => nativeViewVisibility.detachHost(taskViewHost));
   window.on("closed", () => {
+    nativeViewVisibility.detachHost(taskViewHost);
+    if (window !== taskViewHost) return;
     stopStreams();
-    attachedTaskViewIds.clear();
     window = null;
     windowPresentationReady = false;
   });
