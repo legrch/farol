@@ -23,12 +23,13 @@ import (
 // NativeRuntime owns this journal only in a qualified version 2 profile.
 // The host route and legacy writer cutover have separate acceptance gates.
 type SettingsMutationIngress struct {
-	mu            sync.Mutex
-	computer      *ComputerIngress
-	dependencies  computerMutationDependencies
-	operations    map[string]*settingsMutationOperation
-	frozen        bool
-	retirementErr error
+	mu              sync.Mutex
+	computer        *ComputerIngress
+	dependencies    computerMutationDependencies
+	operations      map[string]*settingsMutationOperation
+	frozen          bool
+	processDraining bool
+	retirementErr   error
 }
 type settingsMutationOperation struct {
 	workspace, path string

@@ -39,6 +39,9 @@ type connectorProcessOperation struct {
 	publication      string
 	cancelling       bool
 	cancelUnknown    bool
+	cancelDone       chan struct{}
+	collectionDone   chan struct{}
+	collectionErr    error
 }
 
 func connectorProcessRefusal(code string) error {
@@ -78,16 +81,19 @@ func (s *computerConnector) startProcess(ctx context.Context, slot *connectorSlo
 	}
 	ledger := s.mutations
 	ledger.mu.Lock()
-	if ledger.frozen || ledger.operations[operation] != nil || len(ledger.operations) >= 4096 {
+	if ledger.frozen || ledger.processDraining || ledger.operations[operation] != nil || len(ledger.operations) >= 4096 {
 		ledger.mu.Unlock()
 		return nil, connectorProcessUnknown()
 	}
-	record := &settingsMutationOperation{generation: generation, pending: true, connectorScope: true, process: &connectorProcessOperation{owner: slot}}
+	record := &settingsMutationOperation{generation: generation, pending: true, connectorScope: true, process: &connectorProcessOperation{owner: slot, collectionDone: make(chan struct{})}}
 	ledger.operations[operation] = record
 	ledger.mu.Unlock()
 	finish := func(err error, beforeStart bool) {
 		ledger.mu.Lock()
 		record.failure, record.pending, record.settled = err, false, beforeStart
+		if beforeStart {
+			close(record.process.collectionDone)
+		}
 		ledger.mu.Unlock()
 	}
 	if err = s.root.claim(operation); err != nil {
@@ -133,7 +139,7 @@ func (s *computerConnector) startProcess(ctx context.Context, slot *connectorSlo
 	record.process.contract, record.process.service, record.process.workspace = contract, service, workspace
 	// A concurrent retirement that saw pending has already permanently refused.
 	// A freeze already visible after selection also prevents entering Start.
-	frozen := ledger.frozen
+	frozen := ledger.frozen || ledger.processDraining
 	ledger.mu.Unlock()
 	if frozen {
 		err = connectorProcessRefusal("PROCESS_UNAVAILABLE")
@@ -145,6 +151,9 @@ func (s *computerConnector) startProcess(ctx context.Context, slot *connectorSlo
 	// Even terminal memory observation is not a durable result publication. Keep
 	// retirement fenced until the existing repository owns qualified settlement.
 	finish(err, false)
+	// The original child remains owned even when final Start disclosure fails.
+	// Its backend-lifetime collector never renews execution or external READ.
+	go s.collectProcess(record, operation)
 	return result, err
 }
 
@@ -194,7 +203,7 @@ func (s *computerConnector) observeProcess(ctx context.Context, slot *connectorS
 		ledger.mu.Unlock()
 		return nil, connectorProcessRefusal("PROCESS_HANDLE_MISMATCH")
 	}
-	if record.pending || record.process.cancelUnknown {
+	if record.pending || record.process.cancelUnknown || record.process.collectionErr != nil {
 		ledger.mu.Unlock()
 		return nil, connectorProcessUnknown()
 	}

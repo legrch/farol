@@ -149,6 +149,7 @@ func (s *computerConnector) cancelProcess(ctx context.Context, slot *connectorSl
 		return nil, connectorProcessUnknown()
 	}
 	p.cancelling = true
+	p.cancelDone = make(chan struct{})
 	settled := record.settled
 	record.settled = false // Retirement cannot pass while control is in flight.
 	contract := p.contract
@@ -156,6 +157,7 @@ func (s *computerConnector) cancelProcess(ctx context.Context, slot *connectorSl
 	finish := func(unknown bool) {
 		ledger.mu.Lock()
 		p.cancelling = false
+		close(p.cancelDone)
 		p.cancelUnknown = p.cancelUnknown || unknown
 		record.settled = settled && !p.cancelUnknown
 		ledger.mu.Unlock()

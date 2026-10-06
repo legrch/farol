@@ -15,18 +15,11 @@ type connectorProcessPublisher interface {
 
 var _ connectorProcessPublisher = (*mutationrepo.Repository)(nil)
 
-// retainProcess is root's explicit terminal-preservation step, not a public READ
-// handler. It uses the SAME operation and repository; a known durable complete
-// result can settle that ledger entry. Native confinement/cleanup, normal startup
-// activation and cold-result authority/disclosure remain separate gates.
-func (s *computerConnector) retainProcess(ctx context.Context, slot *connectorSlot, operation string) (string, error) {
-	if !validIngressID(operation) {
-		return "", connectorProcessRefusal("PROCESS_INPUT_INVALID")
-	}
-	current, err := s.processObservation(ctx, slot)
-	if err != nil {
-		return "", err
-	}
+// retainProcessResult is the lifecycle owner's one publication step. The private
+// capture closure retains the SAME started service; it is never selected by a
+// READ request. Publication has no current-connector dependency and grants no
+// disclosure. Reconnect still needs a fresh admitted READ and physical checks.
+func (s *computerConnector) retainProcessResult(ctx context.Context, operation string, original *settingsMutationOperation, capture func(context.Context) (*processsvc.TerminalResult, error)) (string, error) {
 	ledger := s.mutations
 	publisher, ok := ledger.dependencies.repository.(connectorProcessPublisher)
 	if !ok {
@@ -34,7 +27,21 @@ func (s *computerConnector) retainProcess(ctx context.Context, slot *connectorSl
 	}
 	ledger.mu.Lock()
 	record := ledger.operations[operation]
-	if ledger.frozen || record == nil || record.pending || record.process == nil || record.process.cancelling || record.process.cancelUnknown || record.process.service == nil || record.process.workspace == nil {
+	for record != nil && record == original && record.process != nil && record.process.cancelling {
+		done := record.process.cancelDone
+		ledger.mu.Unlock()
+		if done == nil {
+			return "", connectorProcessUnknown()
+		}
+		select {
+		case <-done:
+		case <-ctx.Done():
+			return "", connectorProcessUnknown()
+		}
+		ledger.mu.Lock()
+		record = ledger.operations[operation]
+	}
+	if ledger.frozen || record == nil || record != original || record.pending || record.process == nil || record.process.cancelUnknown || record.process.collectionErr != nil || record.process.service == nil || capture == nil {
 		ledger.mu.Unlock()
 		return "", connectorProcessRefusal("PROCESS_UNAVAILABLE")
 	}
@@ -44,21 +51,23 @@ func (s *computerConnector) retainProcess(ctx context.Context, slot *connectorSl
 		return "", connectorProcessRefusal("PROCESS_RESULT_ATTEMPT_CONSUMED")
 	}
 	retained.capturing = true
-	service, workspace := retained.service, retained.workspace
 	ledger.mu.Unlock()
-	result, err := service.CaptureTerminal(ctx, current, workspace)
+	result, err := capture(ctx)
 	ledger.mu.Lock()
-	retained.capturing = false
 	if err != nil || result == nil {
+		retained.capturing = false
 		ledger.mu.Unlock()
 		if err != nil {
 			return "", err
 		}
 		return "", connectorProcessUnknown()
 	}
-	if ledger.frozen || ctx.Err() != nil {
+	if ledger.frozen || ctx.Err() != nil || ledger.operations[operation] != original || record.process != retained ||
+		retained.cancelling || retained.cancelUnknown || retained.collectionErr != nil ||
+		!processsvc.ValidTerminalResult(*result) || result.Scope != retained.origin || result.Intent.OperationID != operation {
+		retained.capturing = false
 		ledger.mu.Unlock()
-		return "", connectorProcessRefusal("PROCESS_UNAVAILABLE")
+		return "", connectorProcessUnknown()
 	}
 	copy := result.Clone()
 	retained.result, retained.publishAttempted = &copy, true
@@ -67,16 +76,16 @@ func (s *computerConnector) retainProcess(ctx context.Context, slot *connectorSl
 	// survives any late error, but visible stored bytes cannot settle a lost ACK.
 	digest, err := publisher.PublishProcessTerminal(ctx, result.Clone())
 	decoded, decodeErr := hex.DecodeString(digest)
-	if err != nil || ctx.Err() != nil || decodeErr != nil || len(decoded) != 32 || strings.ToLower(digest) != digest {
+	ledger.mu.Lock()
+	defer ledger.mu.Unlock()
+	retained.capturing = false
+	if err != nil || ctx.Err() != nil || decodeErr != nil || len(decoded) != 32 || strings.ToLower(digest) != digest ||
+		ledger.frozen || ledger.operations[operation] != original || record.process != retained || retained.cancelling || retained.cancelUnknown || retained.collectionErr != nil {
 		err = connectorProcessUnknown()
-		ledger.mu.Lock()
 		record.failure = err
-		ledger.mu.Unlock()
 		return "", err
 	}
-	ledger.mu.Lock()
 	retained.publication = digest
-	record.settled = !retained.cancelling && !retained.cancelUnknown
-	ledger.mu.Unlock()
+	record.settled = true
 	return digest, nil
 }

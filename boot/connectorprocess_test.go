@@ -48,18 +48,30 @@ func (j *connectorProcessJournalDouble) Reserve(_ context.Context, intent proces
 }
 
 type connectorProcessNativeDouble struct {
-	s           *computerConnector
-	journal     *connectorProcessJournalDouble
-	seal        processsvc.Seal
-	selects     int
-	spawns      int
-	reads       int
-	probes      int
-	beforeSpawn func()
-	afterRead   func()
-	afterProbe  func()
-	readErr     error
-	terminal    bool
+	s             *computerConnector
+	journal       *connectorProcessJournalDouble
+	seal          processsvc.Seal
+	selects       int
+	spawns        int
+	reads         int
+	probes        int
+	beforeSpawn   func()
+	afterSpawn    func()
+	afterRead     func()
+	afterProbe    func()
+	readErr       error
+	terminal      bool
+	completed     chan struct{}
+	completionErr error
+}
+
+func (n *connectorProcessNativeDouble) WaitForCompletion(ctx context.Context) error {
+	select {
+	case <-n.completed:
+		return n.completionErr
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (n *connectorProcessNativeDouble) selectLaunch(_ context.Context, lease *execution.Lease) (processsvc.Prepared, processsvc.ObservationWorkspace, error) {
@@ -83,6 +95,9 @@ func (n *connectorProcessNativeDouble) Spawn(ctx context.Context, request proces
 		return nil, &processsvc.NativeFailure{}
 	}
 	n.spawns++
+	if n.afterSpawn != nil {
+		n.afterSpawn()
+	}
 	return n, nil
 }
 
@@ -91,10 +106,12 @@ func (n *connectorProcessNativeDouble) unlocked() bool {
 		return false
 	}
 	n.s.mutations.mu.Unlock()
-	if !n.s.current.guard.mu.TryLock() {
-		return false
+	if n.s.current != nil {
+		if !n.s.current.guard.mu.TryLock() {
+			return false
+		}
+		n.s.current.guard.mu.Unlock()
 	}
-	n.s.current.guard.mu.Unlock()
 	return true
 }
 
@@ -151,7 +168,25 @@ func connectorProcessFixture(t *testing.T) (*computerConnector, *connectorJourna
 	if err != nil {
 		t.Fatal(err)
 	}
-	n := &connectorProcessNativeDouble{s: s, journal: j, seal: processsvc.Seal{Digest: strings.Repeat("a", 64), WorkspaceID: "work", Root: "/disposable", Cwd: "/disposable", RootIdentity: authority.RootIdentity{Device: "1", Inode: "2"}}}
+	n := &connectorProcessNativeDouble{s: s, journal: j, completed: make(chan struct{}), seal: processsvc.Seal{Digest: strings.Repeat("a", 64), WorkspaceID: "work", Root: "/disposable", Cwd: "/disposable", RootIdentity: authority.RootIdentity{Device: "1", Inode: "2"}}}
+	t.Cleanup(func() {
+		s.cancel()
+		s.mutations.mu.Lock()
+		var waits []<-chan struct{}
+		for _, operation := range s.mutations.operations {
+			if operation.process != nil && operation.process.collectionDone != nil {
+				waits = append(waits, operation.process.collectionDone)
+			}
+		}
+		s.mutations.mu.Unlock()
+		for _, done := range waits {
+			select {
+			case <-done:
+			case <-time.After(time.Second):
+				t.Error("controlled completion waiter did not close")
+			}
+		}
+	})
 	selectConnectorProcessSlot(t, s, access, input, "original")
 	return s, access, j, n, input
 }

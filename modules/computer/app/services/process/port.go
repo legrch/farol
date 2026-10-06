@@ -118,6 +118,14 @@ type Child interface {
 	Cancel(context.Context) (*CancelReceipt, error)
 }
 
+// ChildCompletion is an optional internal notification from the SAME child.
+// It waits for the existing lifecycle owner, without another OS wait, lookup,
+// probe, signal or polling. Success is not terminal, drained-output or cleanup
+// proof and grants no READ admission, disclosure, renewal or recovery authority.
+type ChildCompletion interface {
+	WaitForCompletion(context.Context) error
+}
+
 // NativeFailure classifies a one-attempt boundary result without disclosing OS
 // errors/paths. Unknown is irreversible here; it never authorizes another effect.
 type NativeFailure struct{ Unknown bool }

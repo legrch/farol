@@ -46,6 +46,9 @@ type Service struct {
 	refusal                                                error
 	cancellation                                           *CancelReceipt
 	cancelFailure                                          error
+	completionAttempted, completionPending, completed      bool
+	completionOwner                                        *ownedSelection
+	completionFailure                                      error
 }
 
 // New captures one already selected operation. Callers cannot replace its

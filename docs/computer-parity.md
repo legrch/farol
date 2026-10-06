@@ -54,6 +54,19 @@ no child to restore, execution lease to renew, or retirement state to settle.
 Both paths recheck the original physical workspace and current authority; root
 also reconciles the shared operation ledger before disclosing output.
 
+The prepared lifecycle now starts one internal completion waiter with the original
+process operation. It listens to the retained child's existing completion signal,
+then validates and preserves the complete terminal result through that same
+repository. Completion alone does not prove root exit, output drain or descendant
+cleanup. An expired execution lease or a closed connector does not discard an
+already-owned result; internal preservation grants no external access. Public
+reads still require current READ authority and never publish a result. Retirement
+stops new process admissions and waits for the original publication acknowledgement
+before judging the journal. It does not automatically cancel a running command,
+retry an unknown publication or treat valid-looking disk bytes as an acknowledgement.
+These lifecycle checks use controlled children and publication fixtures; normal
+native shell activation and actual Quit with a running command remain unqualified.
+
 The prepared connector transport maps `computer.process.start/read/cancel` to
 the existing process owner, and the thin MCP adapter maps those methods to
 `computer_shell_start/read/cancel` only when the exact Go handshake advertises

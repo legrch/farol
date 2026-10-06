@@ -142,6 +142,9 @@ func (r *NativeRuntime) retirementMethods() map[string]desktop.Method {
 			if err := r.settingsDelivery.freezeForRetirement(ctx); err != nil {
 				return retirementOutcome("", nil, err)
 			}
+			if err := r.connector.drainProcessesForRetirement(ctx); err != nil {
+				return retirementOutcome("", nil, err)
+			}
 			if err := r.mutations.freezeForRetirement(); err != nil {
 				return retirementOutcome("", nil, err)
 			}

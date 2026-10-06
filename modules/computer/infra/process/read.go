@@ -23,8 +23,30 @@ type Child struct {
 }
 
 var _ processsvc.Child = (*Child)(nil)
+var _ processsvc.ChildCompletion = (*Child)(nil)
 
 func (c *Child) Handle() string { return c.handle }
+
+// WaitForCompletion observes only the existing waiter's notification. Root
+// Wait, output drain and cohort cleanup must still be validated by retention.
+func (c *Child) WaitForCompletion(ctx context.Context) error {
+	if ctx == nil || ctx.Err() != nil {
+		return &processsvc.NativeFailure{}
+	}
+	if c == nil || c.done == nil {
+		return &processsvc.NativeFailure{Unknown: true}
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-c.done:
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		return nil
+	}
+}
+
 func (c *Child) wait() {
 	observed, err := c.process.Wait()
 	c.mutex.Lock()

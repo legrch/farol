@@ -21,15 +21,35 @@ type connectorProcessPublisherDouble struct {
 	digest    string
 }
 
+// Explicit guarded capture is a test-only interleaving driver. Production uses
+// the started child's lifecycle collector; external Read never publishes.
+func (s *computerConnector) retainProcess(ctx context.Context, slot *connectorSlot, operation string) (string, error) {
+	current, err := s.processObservation(ctx, slot)
+	if err != nil {
+		return "", err
+	}
+	s.mutations.mu.Lock()
+	record := s.mutations.operations[operation]
+	s.mutations.mu.Unlock()
+	if record == nil || record.process == nil || record.process.service == nil {
+		return "", connectorProcessRefusal("PROCESS_UNAVAILABLE")
+	}
+	return s.retainProcessResult(ctx, operation, record, func(ctx context.Context) (*processsvc.TerminalResult, error) {
+		return record.process.service.CaptureTerminal(ctx, current, record.process.workspace)
+	})
+}
+
 func (p *connectorProcessPublisherDouble) PublishProcessTerminal(_ context.Context, result processsvc.TerminalResult) (string, error) {
 	if !p.s.mutations.mu.TryLock() {
 		return "", errors.New("publication under ledger gate")
 	}
 	p.s.mutations.mu.Unlock()
-	if !p.s.current.guard.mu.TryLock() {
-		return "", errors.New("publication under current host gate")
+	if p.s.current != nil {
+		if !p.s.current.guard.mu.TryLock() {
+			return "", errors.New("publication under current host gate")
+		}
+		p.s.current.guard.mu.Unlock()
 	}
-	p.s.current.guard.mu.Unlock()
 	p.publishes++
 	if !processsvc.ValidTerminalResult(result) || result.Intent != p.intent || result.Scope != p.scope {
 		return "", errors.New("crossed original result")
@@ -91,7 +111,7 @@ func TestConnectorProcessTerminalLostAndLatePublicationRemainUnsettled(t *testin
 				s.current.guard.close()
 			}
 			digest, err := s.retainProcess(ctx, s.current, start.OperationID)
-			if fault != "freeze-during-publication" && (digest != "" || err == nil) {
+			if digest != "" || err == nil {
 				t.Fatal("lost/denied publication passed", digest, err)
 			}
 			// Valid-looking saved bytes and a fresh caller do not retry the
