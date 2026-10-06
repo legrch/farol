@@ -183,12 +183,18 @@ app remains available for rollback; no workspace or settings are reclaimed.
 At startup the updater reads the same operation journal and measures the current
 slot and predecessor/staged/failed pair. It does not launch a helper while
 rendering or silently download a replacement. A settled target offers the measured
-predecessor through **Restart & Restore Previous Version**. A known interrupted
-pair offers **Restart & Finish Recovery** only after the original helper PID/start
+predecessor through **Quit & Restore Previous Version**. A known interrupted
+pair offers **Quit & Finish Recovery** only after the original helper PID/start
 time has been observed as ended; a permission error or malformed process readback
 keeps recovery blocked. Both actions acquire the existing work
 admission fences, record their exact dispatch intent, and use the helper's normal
 Quit protocol. The helper, not the renderer, owns atomic exchange and reconciliation.
+Only a reconciled verified target is automatically relaunched. Cancellation and
+rollback leave the restored source closed, with `cancelled` or `rolled_back`
+retained. A predecessor can predate the startup lease protocol, so it must not
+start while the helper still owns that lease. Independent completion, physical
+identity and state-compatibility verification must precede a normal cold launch.
+Historical source-launch phases remain readable; observation never repeats them.
 
 Once dispatch intent requires admission to remain held, the runtime retains the
 admission handle itself, including its kernel lease, until the process exits.

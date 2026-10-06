@@ -405,7 +405,7 @@ describe("installed update helper", () => {
       ).toBe("rolled_back");
     });
   }
-  it("settles a live prepared recovery and never repeats its launch request", async () => {
+  it("settles a live prepared recovery without launching the older source", async () => {
     const f = await fixture();
     const interrupted = invokeCrashAtExchange(f.request, "before");
     await interrupted.ready;
@@ -435,15 +435,15 @@ describe("installed update helper", () => {
       await recovery.ready;
       await confirmQuit(f);
       current.kill("SIGTERM");
-      expect((await recovery).result.phase).toBe("cancel_completed");
-      expect(await fs.readFile(log, "utf8")).toBe("open\n");
+      expect((await recovery).result.phase).toBe("cancelled");
+      await expect(fs.lstat(log)).rejects.toMatchObject({ code: "ENOENT" });
     }
     expect(
       await fs.readFile(path.join(f.app, "Contents/payload"), "utf8"),
     ).toBe("N");
     expect(
       (await invoke({ ...f.request, action: "recover" })).result.phase,
-    ).toBe("cancel_completed");
+    ).toBe("cancelled");
   });
   it("replaces fixed NEW slot only after exact PID exits, preserves N, and rolls back", async () => {
     const f = await fixture();
@@ -478,16 +478,22 @@ describe("installed update helper", () => {
     });
     await new Promise((resolve) => ps.on("close", resolve));
     await setMarker(f.state, rollbackProcess.pid, rollbackStart.trim());
-    const rollback = invoke({
-      ...f.request,
-      action: "rollback",
-      pid: rollbackProcess.pid,
-      processStart: rollbackStart.trim(),
-    });
+    const launchLog = path.join(f.root, "rollback-open.log");
+    const rollback = invokeWithFakeOpen(
+      {
+        ...f.request,
+        action: "rollback",
+        pid: rollbackProcess.pid,
+        processStart: rollbackStart.trim(),
+        relaunch: true,
+      },
+      launchLog,
+    );
     await rollback.ready;
     await confirmQuit(f);
     rollbackProcess.kill("SIGTERM");
     expect((await rollback).result.phase).toBe("rolled_back");
+    await expect(fs.lstat(launchLog)).rejects.toMatchObject({ code: "ENOENT" });
     expect(
       await fs.readFile(path.join(f.app, "Contents/payload"), "utf8"),
     ).toBe("N");

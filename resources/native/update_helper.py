@@ -788,13 +788,15 @@ def relaunch_arguments(request, completion):
     acquisition. Ordinary uncorrelated launches still refuse a busy promotion.
     No path or authority is supplied by the startup hint.
     """
-    if completion not in ("completed", "cancel_completed", "rollback_completed"):
+    # A restored source may predate the startup lease/correlation protocol.
+    # Never launch it from a helper that still owns the promotion lease.
+    if completion != "completed":
         fail("launch_phase")
     helper_pid = os.getpid()
     helper_start = process_start(helper_pid)
     if helper_start is None:
         fail("launch_helper_identity")
-    build = request["target"] if completion == "completed" else request["source"]
+    build = request["target"]
     hint = json.dumps({
         "operationId": request["operationId"],
         "action": request["action"],
@@ -960,9 +962,13 @@ def run(request):
         verify_owner_lease(state, lease_fd)
         assert_parent_path(request["home"], home, apps)
         phase = reconcile(apps, op, request, fence)
-        if request["relaunch"] and phase in ("verified", "cancelled", "rolled_back"):
-            launch_phases = {"verified": ("launch_requested", "completed"), "cancelled": ("cancel_launch_requested", "cancel_completed"), "rolled_back": ("rollback_launch_requested", "rollback_completed")}
-            launch_requested, completed = launch_phases[phase]
+        # Only the verified new target participates in correlated startup.
+        # Cancellation/rollback keeps the predecessor closed, including older
+        # binaries that would ignore our startup hint and promotion lease.
+        # Their durable terminal remains cancelled/rolled_back; historical
+        # launch-requested records are still observational and never retried.
+        if request["relaunch"] and phase == "verified":
+            launch_requested, completed = "launch_requested", "completed"
             fence()
             write_record(op, "journal.json", record_for(request, launch_requested))
             # One request only. A failed/unknown launch remains explicit for caller reconciliation.

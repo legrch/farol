@@ -35,7 +35,7 @@ function description(view: InstalledUpdateView): string {
     case "unavailable":
       return "Update checks are available in the installed Farol owner beta. Install and open the owner beta to use updates.";
     case "recovery":
-      return `An interrupted update was found. Restart to finish recovery of ${updateName(view.version)}. No update will be downloaded or applied again.${view.blockedBy ? ` ${blockedMessages[view.blockedBy] ?? "Finish active work before restarting."}` : ""}`;
+      return `An interrupted update was found. Quit to finish recovery of ${updateName(view.version)}. No update will be downloaded or applied again. If recovery restores the previous version, it stays closed until completion is verified.${view.blockedBy ? ` ${blockedMessages[view.blockedBy] ?? "Finish active work before quitting."}` : ""}`;
     case "idle":
       if (view.blockedBy)
         return (
@@ -43,7 +43,7 @@ function description(view: InstalledUpdateView): string {
           "Farol can’t restart safely yet. Review active work before restoring the previous version."
         );
       if (view.rollbackVersion)
-        return `The previous accepted version, ${updateName(view.rollbackVersion)}, is available to restore. Your settings and folders are kept.`;
+        return `The previous accepted version, ${updateName(view.rollbackVersion)}, is available to restore. Farol will quit and the restored version will stay closed until completion is verified. Your settings and folders are kept.`;
       return view.checkedAt === null
         ? "Check for a newer version of Farol when you’re ready."
         : "You’re up to date.";
@@ -71,7 +71,7 @@ function description(view: InstalledUpdateView): string {
       if (view.recoveryRequired)
         return `${reason} Updating is paused until recovery is complete. Review Settings → Diagnostics.`;
       return view.rollbackVersion
-        ? `${reason} The previous accepted version, ${updateName(view.rollbackVersion)}, is still available to restore. Your settings and folders are kept.`
+        ? `${reason} The previous accepted version, ${updateName(view.rollbackVersion)}, is still available to restore. Farol will quit and the restored version will stay closed until completion is verified. Your settings and folders are kept.`
         : `${reason} You can check for updates again when you’re ready.`;
     }
   }
