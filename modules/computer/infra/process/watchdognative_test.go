@@ -50,10 +50,13 @@ const timer = setTimeout(() => process.exit(90), 1500);
 const encoding = process.env.__CF_USER_TEXT_ENCODING;
 const encodingValid = encoding === undefined ||
   new RegExp("^" + process.getuid() + ":0x[0-9a-fA-F]+:0x[0-9a-fA-F]+$").test(encoding);
-if (process.cwd() !== process.env.SYNTHETIC_CWD ||
-    process.env.SYNTHETIC_VALUE !== "transport-only" ||
-    !encodingValid || Object.keys(process.env).filter((name) => name !== "__CF_USER_TEXT_ENCODING").sort().join(",") !== "SYNTHETIC_CWD,SYNTHETIC_VALUE" ||
-    process.argv[1] !== "opaque argument λ") process.exit(91);
+// Distinct synthetic exit codes identify the failed guard without disclosing
+// environment values. They do not change the command or transport's outcome.
+if (process.cwd() !== process.env.SYNTHETIC_CWD) process.exit(91);
+if (process.env.SYNTHETIC_VALUE !== "transport-only") process.exit(92);
+if (!encodingValid) process.exit(93);
+if (Object.keys(process.env).filter((name) => name !== "__CF_USER_TEXT_ENCODING").sort().join(",") !== "SYNTHETIC_CWD,SYNTHETIC_VALUE") process.exit(94);
+if (process.argv[1] !== "opaque argument λ") process.exit(95);
 const chunks = [];
 process.stdin.on("data", (chunk) => chunks.push(chunk));
 process.stdin.on("end", () => {
