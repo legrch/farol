@@ -75,6 +75,8 @@ export function createUpdateAbortConnectorRecovery(
 
 // Resume only a previously ready Computer-only route after confirmed shutdown,
 // including a generation-bound update drain that withdrew its live proof.
+// The ordinary Dev or preview identity must match its build: a development
+// build using the preview profile cannot inherit that profile's connection.
 // An explicit Stop clears the saved runtime. Unknown recovery and selected
 // Codex routes require their own deliberate admission, never a startup replay.
 export function shouldResumeComputerConnector(
@@ -86,8 +88,7 @@ export function shouldResumeComputerConnector(
   }>,
 ): boolean {
   if (
-    input.environment !== "preview" ||
-    input.buildEnvironment !== "preview" ||
+    input.environment !== input.buildEnvironment ||
     !input.previousRunClean ||
     input.snapshot.status !== "ready"
   )

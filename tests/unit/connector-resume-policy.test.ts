@@ -103,12 +103,15 @@ function check(
   });
 }
 describe("configured Computer connector resume", () => {
-  it("resumes a previously ready approved Computer-only route without changing settings", () => {
-    const settings = configured();
-    const before = structuredClone(settings);
-    expect(check(settings)).toBe(true);
-    expect(settings).toEqual(before);
-  });
+  it.each(["preview", "dev"] as const)(
+    "resumes a previously ready approved Computer-only %s route without changing settings",
+    (environment) => {
+      const settings = configured();
+      const before = structuredClone(settings);
+      expect(check(settings, true, environment)).toBe(true);
+      expect(settings).toEqual(before);
+    },
+  );
   it("resumes a confirmed update drain without accepting the stopped runtime as live", () => {
     const settings = configured();
     settings.connectors.secureMcp.runtime!.state = "unreachable";
@@ -116,14 +119,16 @@ describe("configured Computer connector resume", () => {
     expect(check(settings)).toBe(true);
     expect(settings.connectors.secureMcp.runtime!.state).toBe("unreachable");
     expect(check(settings, false)).toBe(false);
-    expect(check(settings, true, "dev")).toBe(false);
+    expect(check(settings, true, "dev")).toBe(true);
     settings.connectors.secureMcp.runtime = null;
     expect(check(settings)).toBe(false);
   });
-  it("does not resume Dev or an unconfirmed prior run", () => {
-    expect(check(configured(), false)).toBe(false);
-    expect(check(configured(), true, "dev")).toBe(false);
-  });
+  it.each(["preview", "dev"] as const)(
+    "does not resume an unconfirmed prior %s run",
+    (environment) => {
+      expect(check(configured(), false, environment)).toBe(false);
+    },
+  );
   it("does not automatically resume a development build using the NEW profile", () => {
     const input = {
       environment: "preview" as const,
@@ -132,6 +137,13 @@ describe("configured Computer connector resume", () => {
       snapshot: { status: "ready" as const, settings: configured() },
     };
     expect(shouldResumeComputerConnector(input)).toBe(false);
+    expect(
+      shouldResumeComputerConnector({
+        ...input,
+        environment: "dev",
+        buildEnvironment: "preview",
+      }),
+    ).toBe(false);
   });
   it("does not turn a configuration error into an automatic repair", () => {
     expect(
@@ -252,6 +264,7 @@ describe("configured Computer connector resume", () => {
       const settings = configured();
       alter(settings);
       expect(check(settings)).toBe(false);
+      expect(check(settings, true, "dev")).toBe(false);
     });
   }
   it("never starts a selected Codex task route as a side effect of Computer resume", () => {
@@ -262,6 +275,7 @@ describe("configured Computer connector resume", () => {
       ProductSettings["nativeHosts"]["taskRoute"]
     >;
     expect(check(settings)).toBe(false);
+    expect(check(settings, true, "dev")).toBe(false);
   });
 });
 
