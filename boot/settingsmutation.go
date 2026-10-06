@@ -37,6 +37,7 @@ type settingsMutationOperation struct {
 	settled         bool
 	contract        *mutationct.OwnerContract
 	connector       *mutationsvc.ConnectorService
+	process         *connectorProcessOperation
 	connectorScope  bool
 	failure         error
 }

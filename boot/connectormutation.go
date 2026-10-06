@@ -129,7 +129,7 @@ func (s *computerConnector) observeMutation(ctx context.Context, slot *connector
 		record := ledger.operations[operation]
 		var service *mutationsvc.ConnectorService
 		if record != nil {
-			if !record.connectorScope || record.workspace != request.WorkspaceID || record.path != request.RelativePath {
+			if !record.connectorScope || record.process != nil || record.workspace != request.WorkspaceID || record.path != request.RelativePath {
 				ledger.mu.Unlock()
 				return nil, &mutationct.Failure{Code: "COMPUTER_MUTATION_OPERATION_CONFLICT", Source: "operation-store", Retry: "never"}
 			}
