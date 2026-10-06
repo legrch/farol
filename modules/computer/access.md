@@ -30,9 +30,13 @@ this exact private state; it is not a general profile process mutex.
 Every approval update, admission, delegation and revocation uses this same owner
 and its mutex. `WithSnapshot` verifies durable bytes, obtains independent values,
 and calls its synchronous callback exactly once while that mutex remains held.
-The callback must perform no native IO, repository mutation or reentrant call.
+The callback must perform no repository mutation or reentrant call. Only the
+`MutationRequest.WithPublication` callback may run one absent workspace-parent
+mkdir or final native file publication/verification/guarded undo under these locks. Preparation, staging and
+operation-journal IO remain outside.
 Workspace admission and final response construction already use this callback.
-Native file IO remains outside it. An update completed before final disclosure
+Native reads and publication preparation remain outside it. An update completed
+before final disclosure
 wins; a later update does not retract bytes already admitted by the callback.
 
 `access.New()` remains the explicitly disposable K1 in-memory fixture. It is not

@@ -31,7 +31,12 @@ no acknowledgement/deletion owner.
 
 Current authorization is rechecked after Admit, at the native pre-effect boundary,
 and during final disclosure. Both grant and current approval exclusions narrow
-the native descriptor. No journal/native IO runs inside an owner callback. Local
+the native descriptor. Preparation/staging and journal IO remain outside owner
+callbacks. `MutationRequest.WithPublication` rechecks the same current selected
+authority and exact descriptor under its existing locks, then invokes one
+workspace-parent mkdir or final file publication callback synchronously without
+releasing those locks. Each callback is a distinct required effect of the same
+admitted operation, never a retry of a previous directory or file effect. Local
 pending calls report in_progress; they cannot become another Mutate. Only one
 native Mutate attempt is admitted, and only one terminal Save is attempted. Lost
 terminal publication acknowledgement retains the known completed/failed/unknown
@@ -42,9 +47,9 @@ under current owners. Read never Admit/Save/Mutate and exposes no ACK method.
 
 Root/Core must map these independent in-process DTOs into the accepted wire
 contract, including local pending/not_found states. They are not advertised public
-methods. Source checks cannot prove production activation fencing or atomicity
-between the synchronous current-owner callback and the following native syscall.
-The trusted root must qualify that handoff and confinement before activation.
+methods. The final publication syscall now executes inside the synchronous
+current-owner callback. Source and pure tests do not qualify production activation fencing,
+actual native locks/filesystem behavior or adversarial confinement.
 
 ## Operation and fingerprint parity
 
@@ -78,10 +83,20 @@ UID and no group/other write bits. Symlinks, hardlinks, FIFO/nonregular files,
 credential exclusions, Git metadata and write-denied paths are refused. There is
 no non-Darwin implementation or plain-rename fallback.
 
-Writes may create absent parents. Each mkdir follows the same current guard;
+Writes may create absent parents. Each visible workspace-parent mkdir uses the
+same request owner gate as final file publication: current authority and pinned
+parent checks plus exact absence are rechecked with the owner locks held through
+the one mkdir attempt. Directory fsync and no-follow open occur after release;
 a successful parent creation is already a possible effect, so any later failure
 or cancellation is unknown. Private sibling staging is mode 0700; its candidate is
 exclusive/no-follow, written, chmod'd and fsync'd. Existing target mode is preserved.
+Traversal, content preparation, private staging and candidate fsync remain outside
+the owner gates. The final callback repeats current owner/generation/lease/policy/descriptor validation,
+cancellation and pinned-directory/name checks with the existing access owner
+held through Linkat or RenameatxNp. Settings lock order is access Store -> root
+activation -> root state. Connector lock order is access Store -> connector owner
+-> host guard -> root activation -> root state. No publication callback reenters
+these owners or the operation journal; no new authority registry/store is added.
 Create publishes with one Linkat that cannot overwrite. Replace publishes with
 one Darwin RenameatxNp(RENAME_SWAP), then verifies the displaced original inode
 and expected digest through a descriptor.
@@ -89,7 +104,9 @@ and expected digest through a descriptor.
 **One effect means one admitted native Mutate attempt.** A displaced-preimage
 mismatch permits at most one guarded internal undo while the target still holds
 the owned candidate, before reporting any outcome. A newer target prevents undo.
-A failed/lost undo ACK, a changed recovered candidate or a newer object moved to
+Swap verification and any one guarded internal undo remain inside that same
+owner gate. Successful disposal, directory fsync and final readback occur outside
+it. A failed/lost undo ACK, a changed recovered candidate or a newer object moved to
 staging is unknown: retain stage/displaced objects, no additional undo/cleanup
 attempt and no executor retry. Unsupported swap refuses without weak rename.
 
@@ -104,10 +121,20 @@ This is the existing bounded swap/verify/guarded-undo algorithm, **not adversari
 same-user isolation or atomic hash CAS**. Residuals include an already-open original
 written after its digest check, an already-open candidate changed after undo
 verification, a save between the pre-undo identity check and swap (retained in
-staging), deliberately replaced/written staging entries, and revocation/parent
-rename in the check-to-syscall interval. Descriptor pinning detects substitutions
-at observations but cannot prevent every intervening same-user/root action. No
-stronger confinement/ownership claim follows from the injected tests.
+staging), deliberately replaced/written staging entries, and parent rename in the
+check-to-syscall interval.
+Approval, execution and configured host-fence withdrawal through the existing
+owners is serialized through each visible parent mkdir and final link/swap
+publication. A parent created before withdrawal remains a possible effect: a
+later guard refusal prevents later mkdir/file publication and preserves the
+operation's existing unknown classification without directory rollback or retry.
+This correction does not extend owner locks across traversal, private staging or
+sync/open IO, or provide isolation from arbitrary external filesystem changes.
+Descriptor pinning detects substitutions at observations but cannot prevent every intervening same-user/root action. No
+stronger confinement/ownership claim follows from the injected tests. Missing,
+skipped, repeated or late publication callbacks never add another syscall; a
+lost/swallowed guard acknowledgement after an attempted publication remains
+unknown, retaining staging evidence without retry or cleanup.
 
 ## Verification boundary
 
@@ -115,8 +142,11 @@ App/contracts tests inject owners, clock, journal, native receipts and gate. New
 filesystem tests inject a private in-memory inode/FD/syscall model; digest/edit
 vectors use synthetic text. They cover expiry/revoke after durable admission,
 one attempt, uncertain admission/save, restart Prepared, pending peer observation,
-retained disclosure, create-only/hash/conflict, safe undo/newer saves, uncertain
-cleanup/cancel, parent identity, BOM/mixed endings and exact fingerprints.
+retained disclosure, Settings/connector withdrawal at the modeled syscall
+boundary for create/replace/edit, visible parent mkdir withdrawal and partial
+directory effects, changed generations/owners/policy during staging,
+malformed/late guard callbacks, create-only/hash/conflict, safe undo/newer saves,
+uncertain cleanup/cancel, parent identity, BOM/mixed endings and exact fingerprints.
 
 These tests never execute the native filesystem producer on real files and do not
 prove durable persistence, Darwin syscall/filesystem behavior, fixed-lease native

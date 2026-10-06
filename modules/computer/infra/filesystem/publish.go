@@ -107,61 +107,87 @@ func (m *Mutable) publish(ctx context.Context, request port.MutationRequest, wal
 		settled = true
 		return mutationError("MUTATION_OUTCOME_UNKNOWN")
 	}
-	// This current-owner guard is adjacent to the single publication attempt.
-	// The syscall boundary still has the disclosed same-user check-to-use race.
+	// Preparation check stays outside the publication gate. The gate below
+	// rechecks authority and retains its locks through the actual link/swap.
 	if err = checkMutation(ctx, request, walk); err != nil {
 		return err
 	}
-	if previous == nil {
-		err = m.fs.link(stage, candidate, parent, leaf)
-		if err != nil {
-			if deterministicNoEffect(err) {
-				return refusal("WORKSPACE_MUTATION_CONFLICT")
-			}
+	uncertain, err := withMutationPublication(ctx, request, walk, func() error {
+		// Recheck exact name bindings inside the current-owner gate as well.
+		if !m.stageHeld(parent, name, directory) {
 			settled = true
 			return mutationError("MUTATION_OUTCOME_UNKNOWN")
 		}
-		owned = nil
+		target, lookupErr := m.fs.lstat(parent, leaf)
+		if previous == nil {
+			if !errors.Is(lookupErr, unix.ENOENT) {
+				return refusal("WORKSPACE_MUTATION_CONFLICT")
+			}
+		} else if lookupErr != nil || target != *previous {
+			return refusal("WORKSPACE_MUTATION_CONFLICT")
+		}
+		if previous == nil {
+			err = m.fs.link(stage, candidate, parent, leaf)
+			if err != nil {
+				if deterministicNoEffect(err) {
+					return refusal("WORKSPACE_MUTATION_CONFLICT")
+				}
+				settled = true
+				return mutationError("MUTATION_OUTCOME_UNKNOWN")
+			}
+			owned = nil
+		} else {
+			err = m.fs.swap(stage, candidate, parent, leaf)
+			if err != nil {
+				if errors.Is(err, unix.ENOTSUP) || errors.Is(err, unix.EINVAL) {
+					return refusal("WORKSPACE_PATH_REFUSED")
+				}
+				if deterministicNoEffect(err) {
+					return refusal("WORKSPACE_MUTATION_CONFLICT")
+				}
+				settled = true
+				return mutationError("MUTATION_OUTCOME_UNKNOWN")
+			}
+			owned = nil
+			if !m.checkedOriginal(stage, candidate, *previous, expectedHash(request.Operation)) {
+				// A newer target stays in place. The displaced object/stage is retained.
+				if !m.holds(parent, leaf, written) {
+					settled = true
+					return mutationError("MUTATION_OUTCOME_UNKNOWN")
+				}
+				// Exactly ONE guarded internal undo. A lost/failed ACK is final unknown.
+				if err = m.fs.swap(stage, candidate, parent, leaf); err != nil {
+					settled = true
+					return mutationError("MUTATION_OUTCOME_UNKNOWN")
+				}
+				if !m.unchanged(stage, candidate, written, hash, false) {
+					settled = true
+					return mutationError("MUTATION_OUTCOME_UNKNOWN")
+				}
+				owned = &written
+				// Defer may discard only this unchanged candidate and exact stage.
+				return refusal("WORKSPACE_MUTATION_CONFLICT")
+			}
+		}
+		return nil
+	})
+	if uncertain {
+		settled = true // A broken guard acknowledgement cannot permit cleanup/replay.
+	}
+	if err != nil {
+		return err
+	}
+
+	// Verification needed for guarded undo completed under the owner gate.
+	// Successful disposal/fsync/readback need no authority reentry and stay out.
+	if previous == nil {
 		if !m.unchanged(stage, candidate, written, hash, true) || !m.discard(stage, candidate, written) {
 			settled = true
 			return mutationError("MUTATION_OUTCOME_UNKNOWN")
 		}
-	} else {
-		err = m.fs.swap(stage, candidate, parent, leaf)
-		if err != nil {
-			if errors.Is(err, unix.ENOTSUP) || errors.Is(err, unix.EINVAL) {
-				return refusal("WORKSPACE_PATH_REFUSED")
-			}
-			if deterministicNoEffect(err) {
-				return refusal("WORKSPACE_MUTATION_CONFLICT")
-			}
-			settled = true
-			return mutationError("MUTATION_OUTCOME_UNKNOWN")
-		}
-		owned = nil
-		if !m.checkedOriginal(stage, candidate, *previous, expectedHash(request.Operation)) {
-			// A newer target stays in place. The displaced object/stage is retained.
-			if !m.holds(parent, leaf, written) {
-				settled = true
-				return mutationError("MUTATION_OUTCOME_UNKNOWN")
-			}
-			// Exactly ONE guarded internal undo. A lost/failed ACK is final unknown.
-			if err = m.fs.swap(stage, candidate, parent, leaf); err != nil {
-				settled = true
-				return mutationError("MUTATION_OUTCOME_UNKNOWN")
-			}
-			if !m.unchanged(stage, candidate, written, hash, false) {
-				settled = true
-				return mutationError("MUTATION_OUTCOME_UNKNOWN")
-			}
-			owned = &written
-			// Defer may discard only this unchanged candidate and exact stage.
-			return refusal("WORKSPACE_MUTATION_CONFLICT")
-		}
-		if !m.holds(parent, leaf, written) || !m.checkedOriginal(stage, candidate, *previous, expectedHash(request.Operation)) || !m.discard(stage, candidate, *previous) {
-			settled = true
-			return mutationError("MUTATION_OUTCOME_UNKNOWN")
-		}
+	} else if !m.holds(parent, leaf, written) || !m.checkedOriginal(stage, candidate, *previous, expectedHash(request.Operation)) || !m.discard(stage, candidate, *previous) {
+		settled = true
+		return mutationError("MUTATION_OUTCOME_UNKNOWN")
 	}
 	// No cleanup is repeated after any uncertain disposal/removal attempt.
 	settled = true

@@ -110,7 +110,7 @@ func repositoryConfigNativeFixture(t *testing.T) (port.Descriptor, string, strin
 
 func repositoryConfigNativeMutation(d port.Descriptor, op mutation.Operation) port.MutationRequest {
 	return port.MutationRequest{Workspace: port.MutationDescriptor{WorkspaceID: d.WorkspaceID, Root: d.Root, ApprovedRoot: d.ApprovedRoot, DeniedPaths: d.DeniedPaths},
-		Operation: op, BeforePublish: func(context.Context) error { return nil }} // Synthetic lease double, not admission proof.
+		Operation: op, BeforePublish: func(context.Context) error { return nil }, WithPublication: func(_ context.Context, publish func() error) error { return publish() }} // Synthetic lease double, not admission proof.
 }
 
 func TestRepositoryConfigNativeOrdinaryReadCreateEdit(t *testing.T) {

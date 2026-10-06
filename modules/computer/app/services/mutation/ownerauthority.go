@@ -81,8 +81,9 @@ func (s *ownerAuthority) current(ctx context.Context, workspaceID, path string, 
 }
 
 // The port owns synchronization and calls back synchronously. Refuse skipped,
-// repeated, late, swallowed or subsequently mutated snapshots. IO never occurs
-// inside this callback, including journal admission and terminal publication.
+// repeated, late, swallowed or subsequently mutated snapshots. Only one workspace-parent
+// mkdir or final file publication may run inside this callback. Preparation/staging and
+// journal admission/terminal persistence always remain outside.
 func (s *ownerAuthority) withCurrent(ctx context.Context, inspect func(authority.Approval) error) error {
 	calls, closed := 0, false
 	var callbackErr error

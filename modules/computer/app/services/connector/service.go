@@ -142,7 +142,8 @@ func (s *Service) Publish(ctx context.Context) error {
 
 // WithCurrent provides an independent value under the synchronous owner gate.
 // Pending/publishing is absent; unsettled/withdrawn is unavailable. No journal,
-// filesystem, native host or provider call is made here, including guard entry.
+// filesystem, native host or provider call is made on entry. Only one workspace-parent
+// mkdir or final file publication callback may run native IO under these locks.
 func (s *Service) WithCurrent(ctx context.Context, inspect func(*port.TaskBinding) error) error {
 	if s == nil || inspect == nil {
 		return failure()

@@ -66,8 +66,15 @@ type MutationRequest struct {
 	Workspace MutationDescriptor
 	Operation mutation.Operation
 	// Rechecks the SAME selected execution lease, outside owner callbacks.
-	// Required before the first directory effect and target publication.
+	// Required before the first directory effect and publication preparation.
 	BeforePublish func(context.Context) error
+	// Rechecks the same selected owner/lease, generations and exact descriptor,
+	// then invokes publish exactly once per call synchronously while ALL
+	// current-owner locks remain held through its return. Each call encloses one
+	// absent workspace-parent mkdir OR final file publication/verification/undo.
+	// Traversal, content preparation, staging, directory sync/open, journal IO and
+	// owner reentry stay outside. Errors must be propagated; no effect is retried.
+	WithPublication func(context.Context, func() error) error
 }
 type MutationReceipt struct {
 	Operation, RelativePath string
@@ -81,8 +88,9 @@ type MutationReceipt struct {
 // is a refusal; lost publication acknowledgement or uncertainty after parent
 // creation/publication is unknown. One guarded internal undo may settle a swap
 // preimage mismatch before reporting; no retry/fallback after unknown/refusal.
-// This port is not authority/admission proof. Native IO never runs inside owner
-// callbacks. Confinement/linearization must be qualified before activation.
+// This port is not authority/admission proof. Only WithPublication may run the
+// bounded parent mkdir or final native publication under owner locks.
+// Confinement still requires native qualification before activation.
 type MutableWorkspace interface {
 	Mutate(context.Context, MutationRequest) (*MutationReceipt, error)
 }

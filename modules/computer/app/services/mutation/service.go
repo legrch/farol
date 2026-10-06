@@ -88,8 +88,9 @@ func sameDescriptor(a, b port.MutationDescriptor) bool {
 	return a.FilePolicy == b.FilePolicy && a.WorkspaceID == b.WorkspaceID && a.Root == b.Root && a.ApprovedRoot == b.ApprovedRoot && slices.Equal(a.DeniedPaths, b.DeniedPaths) && slices.Equal(a.WriteDeniedPaths, b.WriteDeniedPaths)
 }
 
-// current constructs disclosure under the selected owners. Native IO and the
-// journal never execute inside the callback. Current exclusions remain binding.
+// current validates under the selected owners and retains their locks through
+// the callback. Only one workspace-parent mkdir, final file publication or value
+// disclosure runs inside it; preparation/staging and journal IO stay outside. Exclusions bind.
 func (s *Service) current(ctx context.Context, workspaceID, path string, expected *port.MutationDescriptor, disclose func() error) (port.MutationDescriptor, error) {
 	if s.owner != nil {
 		return s.owner.current(ctx, workspaceID, path, expected, disclose)

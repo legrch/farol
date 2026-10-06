@@ -228,7 +228,7 @@ func (f *fakeMutationFS) unlink(parent int, name string, dir bool) error {
 	return nil
 }
 func fakeRequest(op mutation.Operation) port.MutationRequest {
-	return port.MutationRequest{Workspace: port.MutationDescriptor{WorkspaceID: "work", Root: "/work", ApprovedRoot: port.Root{Path: "/work", Device: "7", Inode: "2"}}, Operation: op, BeforePublish: func(context.Context) error { return nil }}
+	return port.MutationRequest{Workspace: port.MutationDescriptor{WorkspaceID: "work", Root: "/work", ApprovedRoot: port.Root{Path: "/work", Device: "7", Inode: "2"}}, Operation: op, BeforePublish: func(context.Context) error { return nil }, WithPublication: func(_ context.Context, publish func() error) error { return publish() }}
 }
 func fakeMutable() (*Mutable, *fakeMutationFS) {
 	f := newFakeMutationFS()

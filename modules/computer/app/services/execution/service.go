@@ -52,8 +52,9 @@ func classified(err error) error {
 }
 
 // Computer qualifies native state before entering either inspect callback.
-// The task projection is synchronous and performs no native IO, including on
-// entry. Shared activation must adopt this one access-before-task order.
+// The task projection is synchronous and performs no native IO on entry. Only
+// one workspace-parent mkdir or final file publication callback may run native
+// IO under the current owners. Shared activation must adopt this one access-before-task order.
 func (s *Service) withCurrent(ctx context.Context, expected *port.TaskBinding, inspect func(port.TaskBinding, port.AccessSnapshot) error) error {
 	if err := cancelled(ctx); err != nil {
 		return err

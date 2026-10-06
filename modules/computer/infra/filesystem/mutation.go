@@ -178,7 +178,7 @@ func checkMutation(ctx context.Context, request port.MutationRequest, walk *muta
 	if ctx == nil || ctx.Err() != nil {
 		return refusal("WORKSPACE_MUTATION_CANCELLED")
 	}
-	if request.BeforePublish == nil {
+	if request.BeforePublish == nil || request.WithPublication == nil {
 		return refusal("WORKSPACE_PATH_REFUSED")
 	}
 	if err := request.BeforePublish(ctx); err != nil {

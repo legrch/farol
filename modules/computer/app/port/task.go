@@ -23,6 +23,8 @@ type TaskBinding struct {
 // changes. nil means no current admission; errors mean unavailable, not absent.
 // Selected lock order is AccessRepository.WithSnapshot -> this callback.
 // WithCurrent itself, including entry before inspect, must perform no native IO.
+// Only MutationRequest.WithPublication may perform one workspace-parent mkdir
+// or final file publication/verification/guarded undo inside inspect. Other IO stays outside.
 // Neither callback may reenter or mutate these owners. Execution withdrawal
 // invalidates admission under its own gate, releases it, then makes any separate
 // Computer update. It must not expose stale positive admission while persistence

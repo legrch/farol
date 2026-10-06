@@ -10,7 +10,10 @@ import (
 // composition for explicit Settings inspection. It creates no participant or
 // execution grant. The caller must bind its actual publication and owner before
 // passing a narrower current-approval port to the application service.
-// The callback is synchronous and must not perform IO or reenter this store.
+// The callback is synchronous and must not reenter this store. Only one guarded
+// workspace-parent mkdir or final file publication/verification/undo callback
+// may perform native IO;
+// preparation, staging and operation-journal IO remain outside this owner gate.
 func (s *Store) WithOwnerApproval(ctx context.Context, inspect func(Status, *authority.Approval) error) error {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()

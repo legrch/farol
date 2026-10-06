@@ -47,13 +47,25 @@ func (m *Mutable) Mutate(ctx context.Context, request port.MutationRequest) (rec
 			if err = checkMutation(ctx, request, walk); err != nil {
 				return nil, err
 			}
-			if err = m.fs.mkdir(parent, part, 0755); err != nil {
-				if deterministicNoEffect(err) {
-					return nil, refusal("WORKSPACE_PATH_REFUSED")
+			// A visible parent is itself a publication. Use the same selected
+			// owner gate for this single mkdir, without extending it across sync,
+			// directory opening or private staging IO.
+			_, err = withMutationPublication(ctx, request, walk, func() error {
+				if _, lookupErr := m.fs.lstat(parent, part); !errors.Is(lookupErr, unix.ENOENT) {
+					return refusal("WORKSPACE_PATH_REFUSED")
 				}
-				return nil, mutationError("MUTATION_OUTCOME_UNKNOWN")
+				if mkdirErr := m.fs.mkdir(parent, part, 0755); mkdirErr != nil {
+					if deterministicNoEffect(mkdirErr) {
+						return refusal("WORKSPACE_PATH_REFUSED")
+					}
+					return mutationError("MUTATION_OUTCOME_UNKNOWN")
+				}
+				created = true
+				return nil
+			})
+			if err != nil {
+				return nil, err
 			}
-			created = true
 			if err = m.fs.sync(parent); err != nil {
 				return nil, mutationError("MUTATION_OUTCOME_UNKNOWN")
 			}

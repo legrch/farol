@@ -19,8 +19,10 @@ Lock/Unlock must perform no IO and must not share the Store or guard gate. The a
 depends on this consumer-owned port, not a native synchronization implementation.
 
 The mandatory `CurrentConnectorGuard` must be selected by root. Its entry and
-callback are synchronous and perform no IO. It serializes the exact authenticated
-host lifetime and settings fence, without a permissive default. Root must qualify
+callback are synchronous. Entry performs no IO; only the callback in
+`MutationRequest.WithPublication` may run one absent workspace-parent mkdir or
+final native publication/verification/guarded undo inside it. It serializes the exact
+authenticated host lifetime and settings fence, without a permissive default. Root must qualify
 physical host/settings facts outside these callbacks and publish negative fences
 before using changed host/settings resources. Time-only approval renewal under
 the same policy seal remains allowed. A negative/unavailable guard permanently
@@ -54,7 +56,10 @@ participant, policy, restrictions and provenance stay sealed.
 Lock order is access snapshot -> connector owner -> root guard. `WithCurrent`
 passes an independent value exactly once on a successful inspection; unavailable
 owners return a classified failure rather than absence. No owner-held path calls
-the Store. Consumer callbacks cannot reenter owners, mutate owners or perform IO.
+the Store. Consumer callbacks cannot reenter or mutate owners. Only
+`MutationRequest.WithPublication` may run one absent workspace-parent mkdir or
+final native file publication/verification/guarded undo under these locks; staging and journal IO
+stay outside.
 The guard also releases its gate before requesting owner withdrawal.
 
 `Withdraw` makes liveness negative first, then attempts revocation outside the

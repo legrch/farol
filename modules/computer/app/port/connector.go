@@ -76,8 +76,10 @@ type ConnectorJournal interface {
 	WithdrawConnector(context.Context, string) error
 }
 
-// CurrentConnectorGuard is mandatory, root-selected, synchronous and no-IO,
-// including entry. It serializes host/settings fences with inspect exactly once.
+// CurrentConnectorGuard is mandatory, root-selected and synchronous; its entry
+// performs no IO. It serializes host/settings fences with inspect exactly once.
+// Only MutationRequest.WithPublication may perform bounded final native file
+// publication/verification/guarded undo inside inspect; other IO stays outside.
 // true requires this exact authenticated host lifetime and unchanged policy
 // seal; time-only approval renewal is permitted. No permissive default exists.
 // Lock order: AccessSnapshot -> connector owner -> guard. Fence changes release

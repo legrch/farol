@@ -123,7 +123,11 @@ func (s *Service) executeBound(ctx context.Context, binding state.Binding, op st
 		return err
 	}
 	if err = errGuard(ctx); err == nil {
-		native, err = s.native.Mutate(ctx, port.MutationRequest{Workspace: descriptor, Operation: op.Clone(), BeforePublish: errGuard})
+		native, err = s.native.Mutate(ctx, port.MutationRequest{Workspace: descriptor, Operation: op.Clone(), BeforePublish: errGuard,
+			WithPublication: func(ctx context.Context, publish func() error) error {
+				_, err := s.current(ctx, binding.WorkspaceID, op.Path(), &descriptor, publish)
+				return err
+			}})
 	}
 	var terminal *state.State
 	if err == nil && native != nil {

@@ -15,8 +15,11 @@ type AccessSnapshot struct {
 
 // AccessRepository serializes the callback with every grant/approval mutation.
 // It calls inspect exactly once while the snapshot remains current, and passes
-// independent values. inspect is synchronous and must not perform native IO or
-// modify this repository. Disclosure admission and response construction finish
+// independent values. inspect is synchronous and must not modify/reenter this
+// repository. Only MutationRequest.WithPublication may run one workspace-parent
+// mkdir or final file publication/verification/guarded undo inside inspect;
+// other IO stays outside.
+// Disclosure admission and response construction finish
 // inside inspect; a later revocation does not retract already admitted bytes.
 // An unavailable store returns a classified failure; it never looks absent.
 type AccessRepository interface {
