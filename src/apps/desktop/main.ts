@@ -8610,11 +8610,10 @@ function requestSettings(): void {
 function closeShellOverlay(): void {
   if (installedUpdateAdmission) return;
   if (shellOverlay === "none") return;
-  if (sidebarMode === "overlay") sidebarMode = "rail";
-  shellOverlay = "none";
-  applyLayout();
+  // Keep native input hidden until the renderer acknowledges the complete
+  // dismissal, including an active resize or compact page-list overlay.
   publishShellAction("close-overlay", "overlay-dismissed");
-  focusForLayout();
+  window?.webContents.focus();
 }
 
 function installApplicationMenu(): void {

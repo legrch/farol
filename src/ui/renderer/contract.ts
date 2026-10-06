@@ -167,6 +167,7 @@ export interface RendererFacade {
   toggleSidebar(compact: boolean): void;
   resizeSidebar(width: number, active: boolean): void;
   overlay(kind: WindowSnapshot["overlay"]): void;
+  dismissOverlay(): void;
   appearance(value: Appearance): void;
   presentation(): void;
 }

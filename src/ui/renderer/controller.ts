@@ -171,6 +171,8 @@ export class WindowController implements RendererFacade {
   private readonly seenActions = new Set<string>();
   private sectionNavigationSequence = 0;
   private presentationRevision = 0;
+  private resizeStartWidth: number | null = null;
+  private presentationDeferred = false;
   private pendingSectionNavigation: {
     action: SectionNavigationAction;
     presentationRevision: number;
@@ -484,6 +486,8 @@ export class WindowController implements RendererFacade {
       if (parsed.data.phase === "failed" || parsed.data.phase === "unavailable")
         parsed.data.code = displayCode(parsed.data.code);
       this.patch({ update: parsed.data });
+      if (parsed.data.phase !== "applying" && this.presentationDeferred)
+        this.presentation();
     } else
       this.patch({
         update: { phase: "unavailable", code: "UPDATE_STATE_INVALID" },
@@ -1270,8 +1274,11 @@ export class WindowController implements RendererFacade {
     if (this.disposed) return;
     if (this.state.update.phase === "applying") {
       // A pointer ending during apply must not leave a stale drag afterwards.
-      if (!active && this.state.sidebarResizing)
+      if (!active && this.state.sidebarResizing) {
+        this.resizeStartWidth = null;
+        this.presentationDeferred = true;
         this.patch({ sidebarResizing: false });
+      }
       return;
     }
     if (
@@ -1285,8 +1292,26 @@ export class WindowController implements RendererFacade {
       active === this.state.sidebarResizing
     )
       return;
+    if (active && !this.state.sidebarResizing)
+      this.resizeStartWidth = this.state.sidebarWidth;
+    if (!active) this.resizeStartWidth = null;
     this.presentationRevision++;
     this.patch({ sidebarWidth, sidebarResizing: active });
+    this.presentation();
+  }
+  dismissOverlay(): void {
+    if (this.disposed || this.state.update.phase === "applying") return;
+    const sidebarWidth = this.state.sidebarResizing
+      ? (this.resizeStartWidth ?? this.state.sidebarWidth)
+      : this.state.sidebarWidth;
+    this.resizeStartWidth = null;
+    this.presentationRevision++;
+    this.patch({
+      overlay: "none",
+      sidebar: this.state.sidebar === "overlay" ? "rail" : this.state.sidebar,
+      sidebarWidth,
+      sidebarResizing: false,
+    });
     this.presentation();
   }
   appearance(value: Appearance): void {
@@ -1297,6 +1322,11 @@ export class WindowController implements RendererFacade {
   presentation(): void {
     if (this.disposed) return;
     const state = this.state;
+    if (state.update.phase === "applying") {
+      this.presentationDeferred = true;
+      return;
+    }
+    this.presentationDeferred = false;
     const sidebar = state.sidebar;
     this.api.layout(
       state.destination.area === "chatgpt"
@@ -1379,7 +1409,7 @@ export class WindowController implements RendererFacade {
     } else if (action.action === "toggle-sidebar")
       this.toggleSidebar(this.compactViewport());
     else if (action.action === "open-quick-switcher") this.overlay("search");
-    else if (action.action === "close-overlay") this.overlay("none");
+    else if (action.action === "close-overlay") this.dismissOverlay();
     else if (action.action === "open-updates") {
       this.navigate({ area: "settings", page: "updates" });
       this.overlay("update");

@@ -1126,6 +1126,23 @@ it("ends a drag during update admission without resuming native browser input", 
   c.resizeSidebar(224, false);
   expect(c.getSnapshot().sidebarResizing).toBe(false);
   expect(f.api.layout).not.toHaveBeenCalled();
+  f.emit("update", { phase: "failed", code: "UPDATE_ABORTED" });
+  expect(f.api.layout).not.toHaveBeenCalled(); // Missing settlement fields are not an ACK.
+  f.emit("update", {
+    phase: "failed",
+    code: "UPDATE_ABORTED",
+    recoveryRequired: false,
+  });
+  expect(f.api.layout).toHaveBeenLastCalledWith(
+    "activity",
+    "",
+    false,
+    false,
+    "full",
+    "none",
+    224,
+  );
+  vi.mocked(f.api.layout).mockClear();
   c.dispose();
   c.resizeSidebar(288, true);
   expect(c.getSnapshot().sidebarWidth).toBe(224);

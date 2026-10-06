@@ -653,6 +653,10 @@ function PageListResizer({
         event.currentTarget.setPointerCapture(event.pointerId);
       }}
       onPointerMove={(event) => {
+        if (!facade.getSnapshot().sidebarResizing) {
+          drag.current = null;
+          return;
+        }
         const start = drag.current;
         if (start?.pointerId !== event.pointerId) return;
         facade.resizeSidebar(start.width + event.clientX - start.x, true);
@@ -666,9 +670,8 @@ function PageListResizer({
       onLostPointerCapture={finish}
       onKeyDown={(event) => {
         if (event.key === "Escape" && drag.current) {
-          const original = drag.current.width;
-          finish();
-          facade.resizeSidebar(original, false);
+          drag.current = null;
+          facade.dismissOverlay();
         } else if (event.key === "ArrowLeft")
           facade.resizeSidebar(width - 8, drag.current !== null);
         else if (event.key === "ArrowRight")
@@ -753,9 +756,7 @@ export function Shell() {
         event.preventDefault();
         facade.overlay("search");
       } else if (event.key === "Escape") {
-        facade.overlay("none");
-        if (facade.getSnapshot().sidebar === "overlay")
-          facade.toggleSidebar(true);
+        facade.dismissOverlay();
       }
     };
     const unsubscribe = facade.subscribe(() => {

@@ -216,6 +216,7 @@ it.each([
   "blur",
   "collapse",
   "escape",
+  "native-escape",
 ])(
   "hides native browser input during resizing and releases it after %s",
   async (ending) => {
@@ -250,6 +251,15 @@ it.each([
     expect(c.getSnapshot().sidebarWidth).toBe(220);
     if (ending === "blur")
       await act(async () => window.dispatchEvent(new Event("blur")));
+    else if (ending === "native-escape")
+      await act(async () =>
+        f.emit("action", {
+          action: "close-overlay",
+          source: "overlay-dismissed",
+          eventId: "11111111-1111-4111-8111-111111111177",
+          authWindowGeneration: null,
+        }),
+      );
     else if (ending === "escape")
       await act(async () =>
         divider.dispatchEvent(
@@ -260,7 +270,8 @@ it.each([
       await act(async () => c.toggleSidebar(false));
     else await pointer(ending, 275);
     expect(c.getSnapshot().sidebarResizing).toBe(false);
-    expect(c.getSnapshot().sidebarWidth).toBe(ending === "escape" ? 180 : 220);
+    const cancelled = ending === "escape" || ending === "native-escape";
+    expect(c.getSnapshot().sidebarWidth).toBe(cancelled ? 180 : 220);
     expect(f.api.layout).toHaveBeenLastCalledWith(
       "browser",
       "",
@@ -268,8 +279,14 @@ it.each([
       false,
       ending === "collapse" ? "rail" : "full",
       "none",
-      ending === "escape" ? 180 : 220,
+      cancelled ? 180 : 220,
     );
+    // A still-held pointer cannot restart a drag cancelled by the native action.
+    if (cancelled) {
+      await pointer("pointermove", 290);
+      expect(c.getSnapshot().sidebarResizing).toBe(false);
+      expect(c.getSnapshot().sidebarWidth).toBe(180);
+    }
     expect(f.api.task).not.toHaveBeenCalled();
     expect(f.api.configure).not.toHaveBeenCalled();
   },
