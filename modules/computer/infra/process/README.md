@@ -1,5 +1,7 @@
 # Selected process ownership
 
+The opt-in `approved-roots-v1` compiler is documented in [Root-scoped access and approvals](../../../../docs/sandbox-approvals.md). It preserves the existing process/lease/journal owners and does not activate native Shell. The strict credential-alias gate described below remains historical evidence for the legacy policy; it is not a completed qualification of the new root-scoped contract.
+
 This source slice owns one process operation in Go. It is not registered in the
 product route, and its tests do not qualify native execution. The active
 TypeScript sandbox/watchdog and Claude peer remain in place.

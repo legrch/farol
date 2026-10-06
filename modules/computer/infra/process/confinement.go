@@ -24,16 +24,23 @@ type ConfinementBinding struct{ ProfileSHA256, MechanismSHA256 string }
 type ExecutablePin struct{ Path, SHA256 string }
 type GitPolicy string
 
+// RootScopedGit uses the already approved roots, including explicitly granted
+// external metadata/config roots. It never infers a grant from a .git file.
+const RootScopedGit GitPolicy = "approved-roots"
+
 const (
 	DenyGit      GitPolicy = "deny"
 	WorkspaceGit GitPolicy = "workspace"
 )
 
 // SeatbeltSelection is trusted composition input from the SAME selected lease's
-// coherent snapshot. It is not a tool/request DTO. One selected subtree is
-// supported; external Git metadata/config and network allow remain unqualified.
+// coherent snapshot, never a tool/request DTO. Legacy mode selects one subtree.
+// Root-scoped mode intersects explicit approved/task roots and network authority.
+// Compilation remains distinct from native enforcement and live qualification.
 // Scratch is a root-owned, operation-private directory, not another workspace.
 type SeatbeltSelection struct {
+	// Explicit owner-selected composition semantics; never copied from an MCP request.
+	FilePolicy                                             authority.FilePolicy
 	Snapshot                                               port.AccessSnapshot
 	RuntimeID, WorkspaceID, Home, Scratch, MechanismSHA256 string
 	ScratchIdentity                                        authority.RootIdentity
@@ -204,12 +211,15 @@ func protectedScope(root, home string) bool {
 func validSelection(s SeatbeltSelection) bool {
 	if s.Snapshot.Participant == nil || s.Snapshot.Approval == nil || !bindingID(s.RuntimeID) || !bindingID(s.WorkspaceID) || !absolutePolicyPath(s.Home) || !absolutePolicyPath(s.Scratch) ||
 		!digestValue(s.MechanismSHA256) || s.ScratchIdentity.Device == "" || s.ScratchIdentity.Inode == "" || len(s.Executables) == 0 || len(s.Executables) > 16 ||
-		filepath.Dir(s.Scratch) != "/private/tmp" || !strings.HasPrefix(filepath.Base(s.Scratch), "farol-") || s.Network != authority.NoNetwork || (s.Git != DenyGit && s.Git != WorkspaceGit) || protectedPath(s.Scratch, s.Home) {
+		filepath.Dir(s.Scratch) != "/private/tmp" || !strings.HasPrefix(filepath.Base(s.Scratch), "farol-") || !s.FilePolicy.Valid() || !seatbeltNetworkAllowed(s) ||
+		(s.FilePolicy == authority.LegacyProtectedFiles && (s.Git != DenyGit && s.Git != WorkspaceGit)) ||
+		(s.FilePolicy == authority.RootScopedFiles && s.Git != RootScopedGit) ||
+		(s.FilePolicy == authority.LegacyProtectedFiles && protectedPath(s.Scratch, s.Home)) {
 		return false
 	}
 	seen := map[string]bool{}
 	for _, pin := range s.Executables {
-		if !absolutePolicyPath(pin.Path) || !digestValue(pin.SHA256) || seen[pin.Path] || strings.Contains(pin.Path, ":") || pin.Path == seatbeltExecutable || protectedPath(pin.Path, s.Home) {
+		if !absolutePolicyPath(pin.Path) || !digestValue(pin.SHA256) || seen[pin.Path] || strings.Contains(pin.Path, ":") || pin.Path == seatbeltExecutable || (s.FilePolicy == authority.LegacyProtectedFiles && protectedPath(pin.Path, s.Home)) {
 			return false
 		}
 		seen[pin.Path] = true
@@ -233,7 +243,7 @@ func compileSeatbelt(s SeatbeltSelection, command Command) (*seatbeltPlan, error
 	scope, scoped := authority.FindScope(p.Grant, s.WorkspaceID)
 	if !found || !scoped || !absolutePolicyPath(workspace.Root) || !workspace.ShellVerified || (scope.Access != authority.ReadAccess && scope.Access != authority.WriteAccess) || (workspace.Access != authority.ReadAccess && workspace.Access != authority.WriteAccess) || scope.Mode != authority.Subtree || len(scope.Paths) != 0 || !absolutePolicyPath(scope.Root) ||
 		workspace.Root != command.Root || workspace.RootIdentity != command.RootIdentity || !insidePolicy(workspace.Root, scope.Root) || !insidePolicy(scope.Root, command.Cwd) ||
-		protectedScope(scope.Root, s.Home) || comparableOverlap(scope.Root, s.Scratch) ||
+		(s.FilePolicy == authority.LegacyProtectedFiles && protectedScope(scope.Root, s.Home)) || comparableOverlap(scope.Root, s.Scratch) ||
 		p.Grant.ComputerID != a.ComputerID || p.Grant.ComputerGeneration != a.Generation || p.Grant.OwnerID != a.OwnerID ||
 		p.Grant.Commands != authority.WorkspaceCommands || a.Commands != authority.WorkspaceCommands || !slices.Contains(p.Grant.Capabilities, authority.Shell) || !slices.Contains(a.Capabilities, authority.Shell) ||
 		(command.Write && (scope.Access != authority.WriteAccess || workspace.Access != authority.WriteAccess || p.MutationOwnership != authority.TaskOwnership)) {
@@ -248,7 +258,7 @@ func compileSeatbelt(s SeatbeltSelection, command Command) (*seatbeltPlan, error
 			return refuse()
 		}
 	}
-	if !matched || protectedPath(command.Cwd, s.Home) {
+	if !matched || (s.FilePolicy == authority.LegacyProtectedFiles && protectedPath(command.Cwd, s.Home)) {
 		return refuse()
 	}
 	if s.Git == WorkspaceGit {
@@ -260,15 +270,30 @@ func compileSeatbelt(s SeatbeltSelection, command Command) (*seatbeltPlan, error
 		}
 	}
 
-	var parameters, reads, writes, execs, denies, parents, executableWrites []string
+	selectedScopes := []authority.Scope{scope}
+	if s.FilePolicy == authority.RootScopedFiles {
+		var err error
+		selectedScopes, err = rootScopedScopes(s, command)
+		if err != nil {
+			return refuse()
+		}
+	}
+	var parameters, reads, writes, execs, denies, parents, executableWrites, rootAnchors []string
 	add := func(kind, path string, rules *[]string) {
 		key := fmt.Sprintf("FAROL_%d", len(parameters)/2)
 		parameters = append(parameters, "-D", key+"="+path)
 		*rules = append(*rules, fmt.Sprintf("(%s (param %q))", kind, key))
 	}
-	add("subpath", scope.Root, &reads)
-	if command.Write {
-		add("subpath", scope.Root, &writes)
+	for _, selected := range selectedScopes {
+		add("subpath", selected.Root, &reads)
+		if command.Write && selected.Access == authority.WriteAccess {
+			add("subpath", selected.Root, &writes)
+		}
+		if s.FilePolicy == authority.RootScopedFiles {
+			// Runtime dependencies outside these approved roots need a grant too.
+			add("subpath", selected.Root, &execs)
+			add("literal", selected.Root, &rootAnchors)
+		}
 	}
 	add("subpath", s.Scratch, &reads)
 	add("subpath", s.Scratch, &writes)
@@ -292,20 +317,24 @@ func compileSeatbelt(s SeatbeltSelection, command Command) (*seatbeltPlan, error
 		}
 		add("subpath", exclusion.Path, &denies)
 	}
-	// Deny credential stores regardless of a selected workspace enclosing HOME.
 	var secrets []string
-	for _, store := range credentialStores {
-		add("subpath", filepath.Join(s.Home, store), &secrets)
-		add("subpath", filepath.Join(scope.Root, store), &secrets)
-	}
-	for _, store := range homeOnlyCredentialStores {
-		add("subpath", filepath.Join(s.Home, store), &secrets)
+	if s.FilePolicy == authority.LegacyProtectedFiles {
+		// Deny credential stores regardless of a selected workspace enclosing HOME.
+		for _, store := range credentialStores {
+			add("subpath", filepath.Join(s.Home, store), &secrets)
+			add("subpath", filepath.Join(scope.Root, store), &secrets)
+		}
+		for _, store := range homeOnlyCredentialStores {
+			add("subpath", filepath.Join(s.Home, store), &secrets)
+		}
 	}
 	if s.Git == DenyGit {
 		add("subpath", filepath.Join(scope.Root, ".git"), &secrets)
 	}
-	for ancestor := filepath.Dir(scope.Root); ancestor != "/"; ancestor = filepath.Dir(ancestor) {
-		add("literal", ancestor, &parents)
+	for _, selected := range selectedScopes {
+		for ancestor := filepath.Dir(selected.Root); ancestor != "/"; ancestor = filepath.Dir(ancestor) {
+			add("literal", ancestor, &parents)
+		}
 	}
 	if !slices.Equal(command.Environment, seatbeltEnvironment(s, command.Write)) {
 		return refuse()
@@ -318,10 +347,25 @@ func compileSeatbelt(s SeatbeltSelection, command Command) (*seatbeltPlan, error
 (allow file-read* (subpath "/System/Library") (subpath "/usr/lib") (literal "/dev/null") (literal "/dev/urandom") ` + strings.Join(reads, " ") + `)
 (allow process-exec ` + strings.Join(execs, " ") + `)
 (allow file-write* (literal "/dev/null") (literal "/dev/stdout") (literal "/dev/stderr") (regex #"^/dev/fd/[0-9]+$") ` + strings.Join(writes, " ") + `)
-(deny file-write* ` + strings.Join(executableWrites, " ") + `)
-(deny file-read* file-write* ` + strings.Join(secrets, " ") + `)
-(deny file-read* file-write* (regex #"` + credentialRegex() + `"))
-(deny network*)`
+(deny file-write* ` + strings.Join(executableWrites, " ") + `)`
+	if len(secrets) > 0 {
+		source += "\n(deny file-read* file-write* " + strings.Join(secrets, " ") + ")"
+	}
+	if s.FilePolicy == authority.LegacyProtectedFiles {
+		source += `
+(deny file-read* file-write* (regex #"` + credentialRegex() + `"))`
+	} else {
+		source += "\n; approved-roots-v1: path grants, not object-level exclusions"
+		for _, anchor := range rootAnchors {
+			// Preserve the named root across operations; this is not a filename ban.
+			source += "\n(deny file-write-unlink (require-all " + anchor + " (vnode-type DIRECTORY)))"
+		}
+	}
+	if s.Network == authority.NoNetwork {
+		source += "\n(deny network*)"
+	} else {
+		source += "\n(allow network*)"
+	}
 	if len(denies) > 0 {
 		source += "\n(deny file-read* file-write* " + strings.Join(denies, " ") + ")"
 	}
@@ -347,9 +391,10 @@ func compileSeatbelt(s SeatbeltSelection, command Command) (*seatbeltPlan, error
 	return &seatbeltPlan{source: source, arguments: arguments, digest: hex.EncodeToString(digest[:])}, nil
 }
 
-// Environment is constructed from trusted policy, then matched exactly. It
-// disables external Git config/prompts and never carries tokens, owner HOME,
-// inherited NODE_OPTIONS/DYLD_*, GIT_CONFIG_COUNT or credential helpers.
+// Environment is constructed from trusted policy, then matched exactly. Neither
+// mode copies ambient tokens or loader overrides. Legacy keeps isolated HOME and
+// disabled external Git config; root-scoped mode uses explicit HOME and ordinary
+// Git configuration subject to the SAME sandbox roots. Neither permits prompts.
 func (s *Seatbelt) Environment(write bool) []string { return seatbeltEnvironment(s.selection, write) }
 func seatbeltEnvironment(s SeatbeltSelection, write bool) []string {
 	var dirs []string
@@ -362,6 +407,13 @@ func seatbeltEnvironment(s SeatbeltSelection, write bool) []string {
 	locks := "0"
 	if write {
 		locks = "1"
+	}
+	if s.FilePolicy == authority.RootScopedFiles {
+		// Explicit host values, not os.Environ: no inherited tokens/loader options.
+		// Git config/hooks are not secretly disabled. Their paths/executables still
+		// need sandbox admission: pointing HOME there grants no filesystem access.
+		return []string{"HOME=" + s.Home, "TMPDIR=" + s.Scratch, "XDG_CONFIG_HOME=" + filepath.Join(s.Home, ".config"),
+			"PATH=" + strings.Join(dirs, ":"), "GIT_TERMINAL_PROMPT=0", "GIT_OPTIONAL_LOCKS=" + locks, "LANG=C", "LC_ALL=C"}
 	}
 	return []string{"HOME=" + s.Scratch, "TMPDIR=" + s.Scratch, "XDG_CONFIG_HOME=" + filepath.Join(s.Scratch, ".config"), "PATH=" + strings.Join(dirs, ":"),
 		"GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null", "GIT_CONFIG_NOSYSTEM=1", "GIT_TERMINAL_PROMPT=0", "GIT_OPTIONAL_LOCKS=" + locks, "LANG=C.UTF-8", "LC_ALL=C.UTF-8"}

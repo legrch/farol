@@ -20,11 +20,26 @@ const maxReadBytes = 256 * 1024
 // Workspace owns no mutable authority or shared request state.
 type Workspace struct {
 	homeDirectory string
+	filePolicy    authority.FilePolicy
 	afterRead     func() // Package-private deterministic fault point; never configured by a caller.
 }
 
 // New requires the trusted host home; it is never selected by a tool request.
 func New(homeDirectory string) *Workspace { return &Workspace{homeDirectory: homeDirectory} }
+
+// NewWithFilePolicy is selected by trusted composition after the owner accepts
+// the policy meaning. A tool request cannot choose this constructor. RootScoped
+// removes built-in filename bans, not descriptor authority, explicit restrictions,
+// no-follow/physical-root checks, byte limits, or compare-and-swap protection.
+func NewWithFilePolicy(homeDirectory string, selected authority.FilePolicy) (*Workspace, error) {
+	if !selected.Valid() {
+		return nil, refusal("WORKSPACE_INVALID_REQUEST")
+	}
+	if _, err := components(homeDirectory, true, false); err != nil {
+		return nil, err
+	}
+	return &Workspace{homeDirectory: homeDirectory, filePolicy: selected}, nil
+}
 
 func refusal(code string) error {
 	return &authority.Failure{Code: code, Source: "native-workspace", Retry: "never"}
@@ -71,6 +86,9 @@ type policy struct {
 
 func (w *Workspace) parsePolicy(d port.Descriptor) (policy, error) {
 	p := policy{exact: d.ExactFilePaths}
+	if w == nil || !w.filePolicy.Valid() {
+		return p, refusal("WORKSPACE_INVALID_REQUEST")
+	}
 	home, err := components(w.homeDirectory, true, false)
 	if err != nil {
 		return p, err
@@ -79,21 +97,24 @@ func (w *Workspace) parsePolicy(d port.Descriptor) (policy, error) {
 	if err != nil {
 		return p, err
 	}
-	// Agent stores (.codex/.claude) follow ordinary owner/task grants, including
-	// explicit exclusions. Their directory names alone never veto an approved root.
-	mandatory := []string{".env", ".ssh", ".aws", ".gnupg", ".git", ".git-credentials", ".netrc", ".pypirc", ".docker/config.json", ".kube/config", "Library/Keychains"}
-	prefixes := append([]string{}, mandatory...)
-	// Repository .npmrc follows owner/task scope; only HOME/.npmrc is mandatory.
-	for _, store := range append(append([]string{}, mandatory...), ".npmrc") {
-		if store == ".env" || store == ".git" {
-			continue
-		}
-		absolute := append(append([]string{}, home...), strings.Split(store, "/")...)
-		if under(absolute, root) {
-			return p, refusal("WORKSPACE_PATH_REFUSED")
-		}
-		if under(root, absolute) {
-			prefixes = append(prefixes, strings.Join(absolute[len(root):], "/"))
+	var prefixes []string
+	if w.filePolicy == authority.LegacyProtectedFiles {
+		// Agent stores (.codex/.claude) follow ordinary owner/task grants, including
+		// explicit exclusions. Their directory names alone never veto an approved root.
+		mandatory := []string{".env", ".ssh", ".aws", ".gnupg", ".git", ".git-credentials", ".netrc", ".pypirc", ".docker/config.json", ".kube/config", "Library/Keychains"}
+		prefixes = append(prefixes, mandatory...)
+		// Repository .npmrc follows owner/task scope; only HOME/.npmrc is mandatory.
+		for _, store := range append(append([]string{}, mandatory...), ".npmrc") {
+			if store == ".env" || store == ".git" {
+				continue
+			}
+			absolute := append(append([]string{}, home...), strings.Split(store, "/")...)
+			if under(absolute, root) {
+				return p, refusal("WORKSPACE_PATH_REFUSED")
+			}
+			if under(root, absolute) {
+				prefixes = append(prefixes, strings.Join(absolute[len(root):], "/"))
+			}
 		}
 	}
 	prefixes = append(prefixes, d.DeniedPaths...)

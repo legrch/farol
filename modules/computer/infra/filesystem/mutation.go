@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/legrch/farol/modules/computer/app/port"
+	"github.com/legrch/farol/modules/computer/domain/authority"
 	"github.com/legrch/farol/modules/computer/domain/mutation"
 	"golang.org/x/sys/unix"
 )
@@ -14,12 +15,23 @@ import (
 // Mutable is an independent native producer. Its private syscall seam exists
 // only for hermetic package tests; production always selects the platform adapter.
 type Mutable struct {
-	home string
-	fs   mutationFS
+	filePolicy authority.FilePolicy
+	home       string
+	fs         mutationFS
 }
 
 func NewMutable(trustedHome string) *Mutable {
 	return &Mutable{home: trustedHome, fs: nativeMutationFS()}
+}
+
+// NewMutableWithFilePolicy pairs with NewWithFilePolicy at the SAME trusted
+// composition boundary. It changes filename semantics, never the publication
+// guard, expected digest, descriptor validation or native transaction protocol.
+func NewMutableWithFilePolicy(trustedHome string, selected authority.FilePolicy) (*Mutable, error) {
+	if _, err := NewWithFilePolicy(trustedHome, selected); err != nil {
+		return nil, err
+	}
+	return &Mutable{home: trustedHome, filePolicy: selected, fs: nativeMutationFS()}, nil
 }
 
 var _ port.MutableWorkspace = (*Mutable)(nil)
@@ -187,7 +199,7 @@ func expectedHash(op mutation.Operation) *string {
 }
 func (m *Mutable) policy(d port.MutationDescriptor, path string) error {
 	denied := append(append([]string{}, d.DeniedPaths...), d.WriteDeniedPaths...)
-	p, err := (&Workspace{homeDirectory: m.home}).parsePolicy(port.Descriptor{Root: d.Root, DeniedPaths: denied})
+	p, err := (&Workspace{homeDirectory: m.home, filePolicy: m.filePolicy}).parsePolicy(port.Descriptor{Root: d.Root, DeniedPaths: denied})
 	if err != nil {
 		return err
 	}
@@ -198,9 +210,10 @@ func (m *Mutable) policy(d port.MutationDescriptor, path string) error {
 	if p.denies(parts) {
 		return refusal("WORKSPACE_PATH_REFUSED")
 	}
-	// Git metadata is never mutable through this ordinary filesystem producer.
+	// Legacy callers retain their explicit Git-metadata boundary. The new root
+	// policy allows ordinary named files; authority/publication guards still apply.
 	for _, part := range parts {
-		if strings.EqualFold(part, ".git") {
+		if m.filePolicy == authority.LegacyProtectedFiles && strings.EqualFold(part, ".git") {
 			return refusal("WORKSPACE_PATH_REFUSED")
 		}
 	}
