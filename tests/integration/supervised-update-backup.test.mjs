@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { constants } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -14,6 +15,8 @@ import { preserveClosedInstalledPair } from "../../tooling/supervised-update-bac
 // through os.userInfo. The slot observer, lease and predecessor are mocked: no
 // actual installed/profile reads, kernel leases, PID checks, children or apps.
 // These cases qualify the preservation adapter, not a real package or shutdown.
+// Receipt I/O and statfs fault cases delegate to real disposable files or return
+// explicit capacity observations. No actual volume filling/crash is attempted.
 vi.mock("../../tooling/update-slot-observer.mjs", () => ({
   observeUpdateSlot: vi.fn(),
 }));
@@ -203,7 +206,11 @@ describe("closed installed pair preservation (disposable FS, mocked authority)",
         await mode(path.join(f.userData, relative)),
       );
     }
-    expect(await fs.readdir(result.root)).toEqual(["Farol.app", "profile"]);
+    expect((await fs.readdir(result.root)).sort()).toEqual([
+      "Farol.app",
+      "preservation.json",
+      "profile",
+    ]);
     expect(f.predecessor.requestQuit).not.toHaveBeenCalled();
     expect(f.predecessor.observeClosed).toHaveBeenCalledTimes(4);
     f.expectedSource.digest = "0".repeat(64);
@@ -732,5 +739,252 @@ describe("closed installed pair preservation (disposable FS, mocked authority)",
     expect(await first).toBe(false);
     expect(await second).toBe(false);
     expect(await result.verify()).toBe(false);
+  });
+
+  it("keeps a minimal private receipt intelligible after the capability is discarded", async () => {
+    const f = await fixture();
+    let result = await preserve(f);
+    const root = result.root;
+    const profileDigest = result.profileDigest;
+    result = null;
+    f.authority.held = false;
+    f.predecessor.observeClosed.mockRejectedValue(
+      new Error("capability no longer active"),
+    );
+    const receipt = path.join(root, "preservation.json");
+    const bytes = await fs.readFile(receipt, "utf8");
+    expect(JSON.parse(bytes)).toEqual({
+      schema: "farol.closed-installed-pair-preservation/1",
+      source: f.source,
+      predecessor: f.proof,
+      profileDigest,
+      appDigest: f.source.digest,
+      app: "Farol.app",
+      profile: "profile",
+    });
+    expect(Buffer.byteLength(bytes)).toBeLessThanOrEqual(4096);
+    expect(bytes).not.toContain(f.home);
+    expect(bytes).not.toContain("Browser/Profile/data");
+    expect(bytes).not.toContain("fixture evidence");
+    expect(await mode(receipt)).toBe(0o400);
+    expect((await fs.lstat(receipt)).nlink).toBe(1);
+    expect(await mode(root)).toBe(0o700);
+    expect(await treeDigest(f.installed)).toBe(f.source.digest);
+    expect(
+      await fs.readFile(path.join(f.state, "last-quit.json"), "utf8"),
+    ).toBe("fixture evidence, not a receipt");
+  });
+
+  it.each([
+    "corrupt",
+    "grow",
+    "substitute",
+    "missing",
+    "symlink",
+    "hardlink",
+    "mode",
+  ])("permanently refuses a %s preservation receipt", async (kind) => {
+    const f = await fixture();
+    const result = await preserve(f);
+    const receipt = path.join(result.root, "preservation.json");
+    const bytes = await fs.readFile(receipt);
+    if (kind === "corrupt" || kind === "grow") {
+      await fs.chmod(receipt, 0o600);
+      if (kind === "corrupt")
+        await fs.writeFile(receipt, Buffer.alloc(bytes.length, 32));
+      else await fs.appendFile(receipt, " ");
+      await fs.chmod(receipt, 0o400);
+    }
+    if (kind === "substitute" || kind === "symlink") {
+      await fs.rename(receipt, receipt + ".retained");
+      if (kind === "substitute")
+        await fs.writeFile(receipt, bytes, { mode: 0o400 });
+      else await fs.symlink("preservation.json.retained", receipt);
+    }
+    if (kind === "missing") await fs.unlink(receipt);
+    if (kind === "hardlink")
+      await fs.link(receipt, path.join(f.root, "receipt-alias"));
+    if (kind === "mode") await fs.chmod(receipt, 0o600);
+    expect(await result.verify()).toBe(false);
+    const checks = vi.mocked(verifyPromotionLease).mock.calls.length;
+    if (kind === "mode") await fs.chmod(receipt, 0o400);
+    if (kind === "missing") await fs.writeFile(receipt, bytes, { mode: 0o400 });
+    expect(await result.verify()).toBe(false);
+    expect(verifyPromotionLease).toHaveBeenCalledTimes(checks);
+    expect(await treeDigest(f.installed)).toBe(f.source.digest);
+  });
+
+  it("rechecks receipt bytes and identity after the final closure callback", async () => {
+    const f = await fixture();
+    let calls = 0;
+    f.predecessor.observeClosed.mockImplementation(async () => {
+      if (++calls === 4) {
+        const receipt = path.join(await backupRoot(f), "preservation.json");
+        await fs.chmod(receipt, 0o600);
+        await fs.appendFile(receipt, "late write");
+        await fs.chmod(receipt, 0o400);
+      }
+      return f.proof;
+    });
+    let failure;
+    try {
+      await preserve(f);
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure?.message).toBe("SUPERVISED_BACKUP_RECEIPT_CHANGED");
+    expect(failure.partialRoot).toBe(await backupRoot(f));
+    expect(
+      await fs.readFile(path.join(f.state, "last-quit.json"), "utf8"),
+    ).toBe("fixture evidence, not a receipt");
+  });
+
+  it.each(["write", "sync", "close"])(
+    "retains a partial pair without retry after an unknown late receipt %s outcome",
+    async (method) => {
+      const f = await fixture();
+      const open = fs.open.bind(fs);
+      let attempted = 0;
+      vi.spyOn(fs, "open").mockImplementation(async (file, flags, ...rest) => {
+        const handle = await open(file, flags, ...rest);
+        if (
+          path.basename(file) === "preservation.json" &&
+          flags & constants.O_CREAT
+        ) {
+          const actual = handle[method].bind(handle);
+          vi.spyOn(handle, method).mockImplementationOnce(async (...args) => {
+            attempted += 1;
+            await actual(...args);
+            throw new Error("fixture lost completion; must not retry");
+          });
+        }
+        return handle;
+      });
+      let failure;
+      try {
+        await preserve(f);
+      } catch (error) {
+        failure = error;
+      }
+      expect(failure?.message).toBe("SUPERVISED_BACKUP_UNCONFIRMED");
+      expect(attempted).toBe(1);
+      expect(failure.partialRoot).toBe(await backupRoot(f));
+      expect(
+        JSON.parse(
+          await fs.readFile(
+            path.join(failure.partialRoot, "preservation.json"),
+            "utf8",
+          ),
+        ).source,
+      ).toEqual(f.source);
+      expect(await treeDigest(f.installed)).toBe(f.source.digest);
+      expect(
+        await fs.readFile(path.join(f.state, "last-quit.json"), "utf8"),
+      ).toBe("fixture evidence, not a receipt");
+    },
+  );
+
+  it("completes a known partial receipt write through the same descriptor", async () => {
+    const f = await fixture();
+    const open = fs.open.bind(fs);
+    let writes;
+    vi.spyOn(fs, "open").mockImplementation(async (file, flags, ...rest) => {
+      const handle = await open(file, flags, ...rest);
+      if (
+        path.basename(file) === "preservation.json" &&
+        flags & constants.O_CREAT
+      ) {
+        const actual = handle.write.bind(handle);
+        writes = vi
+          .spyOn(handle, "write")
+          .mockImplementationOnce((bytes, offset, _length, position) =>
+            actual(bytes, offset, 1, position),
+          );
+      }
+      return handle;
+    });
+    const result = await preserve(f);
+    expect(writes).toHaveBeenCalledTimes(2);
+    expect(await result.verify()).toBe(true);
+  });
+
+  it.each(["read", "close"])(
+    "sticks to refusal after an unknown receipt verification %s",
+    async (method) => {
+      const f = await fixture();
+      const result = await preserve(f);
+      const receipt = path.join(result.root, "preservation.json");
+      const open = fs.open.bind(fs);
+      let attempted = 0;
+      vi.spyOn(fs, "open").mockImplementation(async (file, ...args) => {
+        const handle = await open(file, ...args);
+        if (file === receipt) {
+          const actual = handle[method].bind(handle);
+          vi.spyOn(handle, method).mockImplementationOnce(async (...values) => {
+            attempted += 1;
+            await actual(...values);
+            throw new Error("fixture unknown receipt verification");
+          });
+        }
+        return handle;
+      });
+      expect(await result.verify()).toBe(false);
+      expect(await result.verify()).toBe(false);
+      expect(attempted).toBe(1);
+    },
+  );
+
+  it.each([
+    "none",
+    "payload-only",
+    "invalid-block",
+    "unbounded-block",
+    "negative-available",
+    "unknown",
+  ])(
+    "refuses %s destination capacity before creating a root or copying",
+    async (kind) => {
+      const f = await fixture();
+      vi.spyOn(fs, "statfs").mockImplementation(async (directory, options) => {
+        expect(directory).toBe(f.destinationParent);
+        expect(options).toEqual({ bigint: true });
+        if (kind === "unknown") throw new Error("fixture capacity unavailable");
+        return {
+          bsize:
+            kind === "invalid-block"
+              ? 0n
+              : kind === "unbounded-block"
+                ? 2n * 1024n * 1024n
+                : 4096n,
+          bavail:
+            kind === "none" ? 0n : kind === "negative-available" ? -1n : 1n,
+        };
+      });
+      let failure;
+      try {
+        await preserve(f);
+      } catch (error) {
+        failure = error;
+      }
+      expect(failure?.message).toMatch(
+        /^SUPERVISED_BACKUP_(?:SPACE_INSUFFICIENT|SPACE_UNCONFIRMED|UNCONFIRMED)$/u,
+      );
+      expect(failure.partialRoot).toBeUndefined();
+      expect(await fs.readdir(f.destinationParent)).toEqual([]);
+      expect(observeUpdateSlot).not.toHaveBeenCalled();
+      expect(await treeDigest(f.installed)).toBe(f.source.digest);
+    },
+  );
+
+  it("refuses a parent replaced during statfs without creating a snapshot", async () => {
+    const f = await fixture();
+    vi.spyOn(fs, "statfs").mockImplementationOnce(async () => {
+      await fs.rename(f.destinationParent, f.destinationParent + ".retained");
+      await fs.mkdir(f.destinationParent, { mode: 0o700 });
+      return { bsize: 4096n, bavail: 1_000_000n };
+    });
+    await expect(preserve(f)).rejects.toThrow("DIRECTORY_CHANGED");
+    expect(await fs.readdir(f.destinationParent)).toEqual([]);
+    expect(await fs.readdir(f.destinationParent + ".retained")).toEqual([]);
   });
 });

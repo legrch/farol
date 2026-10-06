@@ -17,6 +17,9 @@ const MAX_FILE_BYTES = 512 * 1024 * 1024;
 const MAX_TOTAL_BYTES = 16 * 1024 * 1024 * 1024;
 const MAX_DEPTH = 128;
 const CHUNK_BYTES = 1024 * 1024;
+const RECEIPT_NAME = "preservation.json";
+const RECEIPT_SCHEMA = "farol.closed-installed-pair-preservation/1";
+const MAX_RECEIPT_BYTES = 4096;
 const SHA256 = /^[a-f0-9]{64}$/u;
 const READ = constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK;
 const IDENTITY = ["dev", "ino", "mode", "uid", "gid"];
@@ -192,6 +195,125 @@ async function withDirectory(file, uid, frames, expected, mutable, operation) {
     const result = await operation(chain, info);
     await checkFrames(chain);
     return result;
+  } finally {
+    await fd.close();
+  }
+}
+
+async function preflightSpace(parent, uid, retainedParent, budget) {
+  await withDirectory(parent, uid, [], undefined, true, async (frames) => {
+    requireValue(
+      same(frames.at(-1).info, retainedParent, IDENTITY),
+      "PARENT_CHANGED",
+    );
+    const space = await fs.statfs(parent, { bigint: true });
+    requireValue(
+      typeof space.bsize === "bigint" &&
+        space.bsize >= 512n &&
+        space.bsize <= 1024n * 1024n &&
+        typeof space.bavail === "bigint" &&
+        space.bavail >= 0n,
+      "SPACE_UNCONFIRMED",
+    );
+    // Rounded payload plus four blocks and the maximum link length per entry:
+    // allocation slack, directory/metadata blocks and literal symlink storage.
+    // Four extra entries cover the pair roots, wrapper root and receipt; 1 MiB
+    // adds fixed headroom. This bounded estimate is not a capacity reservation.
+    const block = space.bsize;
+    const payload = ((BigInt(budget.bytes) + block - 1n) / block) * block;
+    const overhead =
+      BigInt(budget.entries + 4) * (4n * block + 4096n) + 1024n * 1024n;
+    requireValue(
+      space.bavail * block >= payload + overhead,
+      "SPACE_INSUFFICIENT",
+    );
+  });
+}
+
+async function writeReceipt(file, bytes, uid, frames) {
+  requireValue(
+    bytes.length > 0 && bytes.length <= MAX_RECEIPT_BYTES,
+    "RECEIPT_SIZE",
+  );
+  await checkFrames(frames);
+  const fd = await fs.open(
+    file,
+    constants.O_WRONLY |
+      constants.O_CREAT |
+      constants.O_EXCL |
+      constants.O_NOFOLLOW |
+      constants.O_NONBLOCK,
+    0o600,
+  );
+  try {
+    const created = await fd.stat({ bigint: true });
+    requireValue(
+      created.isFile() &&
+        created.uid === uid &&
+        created.nlink === 1n &&
+        created.size === 0n &&
+        (created.mode & 0o7777n) === 0o600n,
+      "RECEIPT_UNSAFE",
+    );
+    let offset = 0;
+    while (offset < bytes.length) {
+      await checkFrames(frames);
+      const part = await fd.write(bytes, offset, bytes.length - offset, offset);
+      requireValue(
+        part.bytesWritten > 0 && part.bytesWritten <= bytes.length - offset,
+        "RECEIPT_WRITE_UNCONFIRMED",
+      );
+      offset += part.bytesWritten;
+    }
+    await fd.chmod(0o400);
+    await fd.sync();
+    const info = await fd.stat({ bigint: true });
+    requireValue(
+      info.isFile() &&
+        info.uid === uid &&
+        info.nlink === 1n &&
+        info.dev === created.dev &&
+        info.ino === created.ino &&
+        info.size === BigInt(bytes.length) &&
+        (info.mode & 0o7777n) === 0o400n &&
+        same(info, await fs.lstat(file, { bigint: true })),
+      "RECEIPT_CHANGED",
+    );
+    await checkFrames(frames);
+    return { info, bytes };
+  } finally {
+    await fd.close();
+  }
+}
+
+async function verifyReceipt(file, retained, frames) {
+  await checkFrames(frames);
+  requireValue(
+    same(retained.info, await fs.lstat(file, { bigint: true })),
+    "RECEIPT_CHANGED",
+  );
+  const fd = await fs.open(file, READ);
+  try {
+    requireValue(
+      same(retained.info, await fd.stat({ bigint: true })),
+      "RECEIPT_CHANGED",
+    );
+    const bytes = Buffer.alloc(retained.bytes.length + 1);
+    let offset = 0;
+    while (offset < bytes.length) {
+      await checkFrames(frames);
+      const part = await fd.read(bytes, offset, bytes.length - offset, offset);
+      if (part.bytesRead === 0) break;
+      offset += part.bytesRead;
+    }
+    requireValue(
+      offset === retained.bytes.length &&
+        retained.bytes.equals(bytes.subarray(0, offset)) &&
+        same(retained.info, await fd.stat({ bigint: true })) &&
+        same(retained.info, await fs.lstat(file, { bigint: true })),
+      "RECEIPT_CHANGED",
+    );
+    await checkFrames(frames);
   } finally {
     await fd.close();
   }
@@ -504,6 +626,8 @@ function sameInventory(observed, retained) {
  * Initial capture requires unchanged live sources. Later verification permits
  * legitimate updater staging in the live profile and validates the saved pair,
  * original root identities, exact closed proof and held lease instead.
+ * preservation.json describes the pair after this capability is gone. Receipt
+ * presence alone does not prove a completed capture or authorize restoration.
  */
 export async function preserveClosedInstalledPair({
   destinationParent,
@@ -604,6 +728,7 @@ export async function preserveClosedInstalledPair({
     const budget = { entries: 0, bytes: 0 };
     const appEntries = await inventory(installed, uid, budget);
     const profileEntries = await inventory(userData, uid, budget);
+    await preflightSpace(parent, uid, parents.get(parent), budget);
     await observeSource();
     await guard();
     await rootsSafe();
@@ -618,9 +743,11 @@ export async function preserveClosedInstalledPair({
     );
     const app = path.join(root, "Farol.app");
     const profile = path.join(root, "profile");
+    const receipt = path.join(root, RECEIPT_NAME);
     let appDigest;
     let profileDigest;
     let retainedRoot;
+    let retainedReceipt;
     const savedApp = new Map();
     const savedProfile = new Map();
     await withDirectory(root, uid, [], rootInfo, true, async (frames) => {
@@ -639,6 +766,24 @@ export async function preserveClosedInstalledPair({
         profile,
         frames,
         savedProfile,
+      );
+      // No entry names or contents are persisted in this receipt. appDigest is
+      // the existing package tree digest, not the private inventory fingerprint.
+      retainedReceipt = await writeReceipt(
+        receipt,
+        Buffer.from(
+          JSON.stringify({
+            schema: RECEIPT_SCHEMA,
+            source,
+            predecessor: proof,
+            profileDigest,
+            appDigest: source.digest,
+            app: "Farol.app",
+            profile: "profile",
+          }) + "\n",
+        ),
+        uid,
+        frames,
       );
       await frames.at(-1).fd.sync();
       retainedRoot = await frames.at(-1).fd.stat({ bigint: true });
@@ -674,6 +819,7 @@ export async function preserveClosedInstalledPair({
         retainedRoot,
         false,
         async (frames) => {
+          await verifyReceipt(receipt, retainedReceipt, frames);
           requireValue(
             (await readTree(app, uid, savedApp, undefined, frames)) ===
               appDigest,
@@ -714,20 +860,28 @@ export async function preserveClosedInstalledPair({
         }
       }
       const savedBudget = { entries: 0, bytes: 0 };
-      await withDirectory(root, uid, [], retainedRoot, false, async () => {
-        for (const [directory, retained] of [
-          [app, savedApp],
-          [profile, savedProfile],
-        ]) {
-          requireValue(
-            sameInventory(
-              await inventory(directory, uid, savedBudget),
-              retained,
-            ),
-            "BACKUP_CHANGED",
-          );
-        }
-      });
+      await withDirectory(
+        root,
+        uid,
+        [],
+        retainedRoot,
+        false,
+        async (frames) => {
+          for (const [directory, retained] of [
+            [app, savedApp],
+            [profile, savedProfile],
+          ]) {
+            requireValue(
+              sameInventory(
+                await inventory(directory, uid, savedBudget),
+                retained,
+              ),
+              "BACKUP_CHANGED",
+            );
+          }
+          await verifyReceipt(receipt, retainedReceipt, frames);
+        },
+      );
       await rootsSafe();
       requireValue(await verifyPromotionLease(lease), "LEASE_UNCONFIRMED");
     }
