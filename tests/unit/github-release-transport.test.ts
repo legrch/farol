@@ -90,9 +90,9 @@ import {
 
 // All responses are scripted in memory. No test makes a GitHub or other network request.
 const asset =
-  "https://github.com/legrch/farol-releases/releases/download/v0.1.1/Farol-0.1.1-darwin-arm64.zip";
+  "https://github.com/legrch/farol/releases/download/v0.1.1/Farol-0.1.1-darwin-arm64.zip";
 const manifestAsset =
-  "https://github.com/legrch/farol-releases/releases/download/v0.1.1/farol-release.json";
+  "https://github.com/legrch/farol/releases/download/v0.1.1/farol-release.json";
 const cdn =
   "https://release-assets.githubusercontent.com/opaque?signature=fixture";
 const manifest = {
@@ -189,6 +189,71 @@ function transport(root: string, openHttps: OpenHttps) {
     verifyPackage,
   };
 }
+
+describe("GitHub release feed URL policy (pure scripted responses)", () => {
+  it("reads only the new catalogue and its pinned manifest redirect", async () => {
+    const openHttps = scripted(
+      response(200, [Buffer.from("[]")]),
+      response(302, [], { location: cdn }),
+      response(200, [Buffer.from('{"repository":"legrch/farol"}')]),
+    );
+    const { instance } = transport("/unused-source-fixture", openHttps);
+    expect(await instance.fetchJson(GITHUB_RELEASES_API, 1024)).toMatchObject({
+      ok: true,
+      value: { value: [], finalUrl: GITHUB_RELEASES_API, redirects: [] },
+    });
+    expect(await instance.fetchJson(manifestAsset, 1024)).toMatchObject({
+      ok: true,
+      value: {
+        value: { repository: "legrch/farol" },
+        finalUrl: cdn,
+        redirects: [manifestAsset, cdn],
+      },
+    });
+    expect(vi.mocked(openHttps).mock.calls.map(([url]) => url)).toEqual([
+      "https://api.github.com/repos/legrch/farol/releases?per_page=100",
+      manifestAsset,
+      cdn,
+    ]);
+  });
+
+  it.each([
+    "https://api.github.com/repos/legrch/farol-releases/releases?per_page=100",
+    "https://api.github.com/repos/legrch/farol/releases/latest",
+    "https://api.github.com/repos/other/farol/releases?per_page=100",
+    "https://github.com/legrch/farol-releases/releases/download/v0.1.1/farol-release.json",
+    "https://github.com/legrch/farol-releases/releases/download/v0.1.1/Farol-0.1.1-darwin-arm64.zip",
+    "https://github.com/other/farol/releases/download/v0.1.1/file.zip",
+    "https://github.com/legrch/other/releases/download/v0.1.1/file.zip",
+    "https://github.com/legrch/farol/releases/download/v0.1.1/file.zip?override=old",
+  ])("refuses retired and foreign URLs before any IO (%s)", async (url) => {
+    const openHttps = scripted();
+    const { instance } = transport("/unused-source-fixture", openHttps);
+    expect(await instance.fetchJson(url, 1024)).toMatchObject({
+      ok: false,
+      reason: "invalid_url",
+    });
+    expect(await instance.download(url, 1024)).toMatchObject({
+      ok: false,
+      reason: "invalid_url",
+    });
+    expect(openHttps).not.toHaveBeenCalled();
+  });
+
+  it("refuses a new-feed redirect back to the old asset repository", async () => {
+    const openHttps = scripted(
+      response(302, [], {
+        location: manifestAsset.replace("/farol/", "/farol-releases/"),
+      }),
+    );
+    const { instance } = transport("/unused-source-fixture", openHttps);
+    expect(await instance.fetchJson(manifestAsset, 1024)).toMatchObject({
+      ok: false,
+      reason: "redirect",
+    });
+    expect(openHttps).toHaveBeenCalledTimes(1);
+  });
+});
 
 describe("GitHub HTTPS transport", () => {
   it.each(["opening", "streaming", "uncertain-cleanup"] as const)(
@@ -688,7 +753,7 @@ describe("GitHub HTTPS transport", () => {
     ).toMatchObject({ ok: false, reason: "invalid_url" });
     expect(
       await instance.download(
-        "http://github.com/legrch/farol-releases/releases/download/v1/file.zip",
+        "http://github.com/legrch/farol/releases/download/v1/file.zip",
         100,
       ),
     ).toMatchObject({ ok: false, reason: "invalid_url" });

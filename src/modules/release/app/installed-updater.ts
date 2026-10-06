@@ -1,10 +1,10 @@
-import type { ReleaseManifest } from "../domain/github-release-contract";
+import type { RetainedReleaseManifest } from "../domain/github-release-contract";
 
 export const UPDATE_RECHECK_MS = 6 * 60 * 60 * 1_000;
 
 export type ReadyUpdate = Readonly<{
   handle: string;
-  manifest: ReleaseManifest;
+  manifest: RetainedReleaseManifest;
 }>;
 export type { InstalledUpdateView as UpdateView } from "../domain/installed-update";
 import type { InstalledUpdateView as UpdateView } from "../domain/installed-update";

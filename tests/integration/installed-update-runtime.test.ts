@@ -76,7 +76,7 @@ import { drainInstalledComputerWork } from "../../src/apps/desktop/installed-com
 
 const manifest: ReleaseManifest = {
   schema: "farol.github-release/1",
-  repository: "legrch/farol-releases",
+  repository: "legrch/farol",
   channel: "owner-beta",
   product: "Farol Next Preview",
   bundleId: "local.farol.next.preview",
@@ -125,6 +125,7 @@ const target = {
   version: manifest.version,
   buildId: manifest.buildId,
 };
+const repos = ["legrch/farol", "legrch/farol-releases"] as const;
 function options() {
   return {
     directory: path.join(slot, "Contents/Resources/app"),
@@ -1352,6 +1353,84 @@ ${scenario === "missing" ? "" : `<key>CFBundleVersion</key><string>${scenario ==
     expect(mocks.download).toHaveBeenCalledTimes(1);
     expect(quit).not.toHaveBeenCalled();
   });
+
+  it("reverifies an existing old-feed Ready archive without fetching or rewriting its manifest", async () => {
+    const first = await prepared();
+    await first.close();
+    const record = JSON.parse(await fs.readFile(ready, "utf8"));
+    const historical = { ...manifest, repository: "legrch/farol-releases" };
+    await fs.writeFile(
+      ready,
+      JSON.stringify({ ...record, manifest: historical }),
+      {
+        mode: 0o600,
+      },
+    );
+    mocks.discover.mockClear();
+    mocks.download.mockClear();
+    const second = await createInstalledUpdateRuntime(options());
+    await second!.initialize();
+    await second!.check(true);
+    expect(second!.snapshot()).toMatchObject({
+      phase: "ready",
+      deferred: true,
+    });
+    expect(mocks.verify).toHaveBeenCalledExactlyOnceWith(
+      record.handle,
+      historical,
+    );
+    expect(JSON.parse(await fs.readFile(ready, "utf8")).manifest).toEqual(
+      historical,
+    );
+    expect(mocks.discover).not.toHaveBeenCalled();
+    expect(mocks.download).not.toHaveBeenCalled();
+    expect(mocks.archiveDownload).not.toHaveBeenCalled();
+    expect(mocks.helper).not.toHaveBeenCalled();
+    await second!.close();
+  });
+
+  it.each(["digest", "version", "buildId"] as const)(
+    "refuses an old-feed retained operation with a mismatched target %s",
+    async (field) => {
+      const first = await prepared();
+      await first.close();
+      const record = JSON.parse(await fs.readFile(ready, "utf8"));
+      await fs.writeFile(
+        ready,
+        JSON.stringify({
+          ...record,
+          manifest: { ...manifest, repository: "legrch/farol-releases" },
+          operation: {
+            operationId: "a".repeat(32),
+            source,
+            target: {
+              ...target,
+              [field]: field === "version" ? source.version : "f".repeat(64),
+            },
+          },
+        }),
+        { mode: 0o600 },
+      );
+      const retainedBytes = await fs.readFile(ready);
+      mocks.discover.mockClear();
+      mocks.download.mockClear();
+      const second = await createInstalledUpdateRuntime(options());
+      await second!.initialize();
+      await second!.check(true);
+      expect(second!.snapshot()).toMatchObject({
+        phase: "failed",
+        recoveryRequired: true,
+        code: "UPDATE_RETAINED_MANIFEST_INVALID",
+      });
+      expect(await fs.readFile(ready)).toEqual(retainedBytes);
+      expect(mocks.verify).not.toHaveBeenCalled();
+      expect(mocks.reclaimArchive).not.toHaveBeenCalled();
+      expect(mocks.discover).not.toHaveBeenCalled();
+      expect(mocks.download).not.toHaveBeenCalled();
+      expect(mocks.helper).not.toHaveBeenCalled();
+      await second!.close();
+    },
+  );
   it("recovers the same archive if the app exits during retention cleanup", async () => {
     let entered!: () => void;
     const atCleanup = new Promise<void>((resolve) => {
@@ -2830,10 +2909,13 @@ ${scenario === "missing" ? "" : `<key>CFBundleVersion</key><string>${scenario ==
       expect(mocks.helper).toHaveBeenCalledTimes(2);
     });
   }
-  it("reconciles the new running build and retained predecessor against the same operation journal", async () => {
+  it.each(repos)("recovers %s retained records", async (repository) => {
     const controller = await prepared();
     await controller.restart();
     const retained = JSON.parse(await fs.readFile(ready, "utf8"));
+    const retainedManifest = { ...manifest, repository };
+    retained.manifest = retainedManifest;
+    await fs.writeFile(ready, JSON.stringify(retained), { mode: 0o600 });
     const op = retained.operation;
     await fs.writeFile(
       path.join(userData, "installed-updates", op.operationId, "journal.json"),
@@ -2891,10 +2973,11 @@ ${scenario === "missing" ? "" : `<key>CFBundleVersion</key><string>${scenario ==
     );
     expect(receipt.runningBuildId).toBe(manifest.buildId);
     expect(receipt.archiveReleased).toBe(true);
+    expect(receipt.manifest).toEqual(retainedManifest);
     expect(mocks.reclaimArchive).toHaveBeenCalledTimes(2);
     expect(mocks.reclaimArchive).toHaveBeenLastCalledWith(
       path.join(root, "archive.zip"),
-      manifest,
+      retainedManifest,
     );
     expect(receipt.operation.source).toEqual(source);
     expect(mocks.helper).toHaveBeenCalledTimes(1);

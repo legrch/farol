@@ -6,7 +6,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import type {
   PackageIdentity,
-  ReleaseManifest,
+  RetainedReleaseManifest,
 } from "../../domain/github-release-contract";
 
 const execFileAsync = promisify(execFile);
@@ -166,7 +166,10 @@ async function readArtifact(
     throw new PackageVerificationError("package_mismatch", cause);
   }
 }
-function claimsMatch(value: unknown, expected: ReleaseManifest): boolean {
+function claimsMatch(
+  value: unknown,
+  expected: RetainedReleaseManifest,
+): boolean {
   if (value === null || typeof value !== "object" || Array.isArray(value))
     return false;
   const a = value as Record<string, unknown>;
@@ -208,7 +211,7 @@ function exactKeys(
 function goClaimsMatch(
   embedded: unknown,
   core: unknown,
-  expected: ReleaseManifest,
+  expected: RetainedReleaseManifest,
 ): boolean {
   const manifest = record(embedded);
   const declaration = record(core);
@@ -268,7 +271,10 @@ function goClaimsMatch(
     /^[a-f0-9]{64}$/u.test(hashes["core-artifact.json"])
   );
 }
-function measuredMatches(a: MeasuredIdentity, e: ReleaseManifest): boolean {
+function measuredMatches(
+  a: MeasuredIdentity,
+  e: RetainedReleaseManifest,
+): boolean {
   return (
     a.product === e.product &&
     a.bundleId === e.bundleId &&
@@ -303,7 +309,7 @@ export function createUpdatePackageVerifier(
   return {
     async verifyPackage(
       handle: string,
-      expected: ReleaseManifest,
+      expected: RetainedReleaseManifest,
     ): Promise<VerifiedStagedPackage> {
       if (!handle || verified.has(handle))
         throw new PackageVerificationError("invalid_handle");

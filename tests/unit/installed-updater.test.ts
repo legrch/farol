@@ -11,7 +11,7 @@ const staged: ReadyUpdate = {
   handle: "owned-stage",
   manifest: {
     schema: "farol.github-release/1",
-    repository: "legrch/farol-releases",
+    repository: "legrch/farol",
     channel: "owner-beta",
     product: "Farol Next Preview",
     bundleId: "local.farol.next.preview",
@@ -63,6 +63,51 @@ function fixture() {
 }
 
 describe("installed update orchestration (port fixture, no native or GitHub acceptance)", () => {
+  it("keeps an exactly recovered old-feed archive Ready without rediscovery or download", async () => {
+    const { updater, ports } = fixture();
+    const historical: ReadyUpdate = {
+      ...staged,
+      manifest: { ...staged.manifest, repository: "legrch/farol-releases" },
+    };
+    ports.recover.mockResolvedValueOnce({ ok: true, update: historical });
+    await updater.initialize();
+    await updater.check(true);
+    updater.later();
+    expect(updater.snapshot()).toMatchObject({
+      phase: "ready",
+      version: historical.manifest.version,
+      deferred: true,
+    });
+    expect(ports.discover).not.toHaveBeenCalled();
+    expect(ports.download).not.toHaveBeenCalled();
+    expect(ports.retain).not.toHaveBeenCalled();
+    expect(ports.restart).not.toHaveBeenCalled();
+    await updater.restart();
+    expect(ports.restart).toHaveBeenCalledExactlyOnceWith(historical);
+    await updater.close();
+  });
+
+  it("keeps refused retained context fenced without querying another feed", async () => {
+    const { updater, ports } = fixture();
+    ports.recover.mockResolvedValueOnce({
+      ok: false,
+      code: "UPDATE_RETAINED_MANIFEST_INVALID",
+      recoveryRequired: true,
+    });
+    await updater.initialize();
+    await updater.check(true);
+    await updater.restart();
+    expect(updater.snapshot()).toMatchObject({
+      phase: "failed",
+      recoveryRequired: true,
+      code: "UPDATE_RETAINED_MANIFEST_INVALID",
+    });
+    expect(ports.discover).not.toHaveBeenCalled();
+    expect(ports.download).not.toHaveBeenCalled();
+    expect(ports.restart).not.toHaveBeenCalled();
+    await updater.close();
+  });
+
   it("drains and durably retains a completed download after Quit without publishing or restarting", async () => {
     const { updater, ports } = fixture();
     let finish!: (

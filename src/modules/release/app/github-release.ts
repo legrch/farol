@@ -6,6 +6,7 @@ import {
   MAX_MANIFEST_BYTES,
   MAX_RELEASES_JSON_BYTES,
   RELEASE_MANIFEST_ASSET,
+  RETAINED_GITHUB_RELEASE_REPOSITORY,
   type GithubReleaseErrorCode,
   type GithubReleasePorts,
   type InstalledReleaseIdentity,
@@ -13,6 +14,8 @@ import {
   type PackageIdentity,
   type ReleaseAsset,
   type ReleaseManifest,
+  type RetainedReleaseManifest,
+  type RetainedReleaseRecord,
   type UpdateCandidate,
   type VerifiedGithubUpdate,
 } from "../domain/github-release-contract";
@@ -112,9 +115,7 @@ function parseRelease(value: unknown): Outcome<Release | null> {
   return { ok: true, value: { tag: data.tag_name, version, assets } };
 }
 
-export function parseGithubReleaseManifest(
-  value: unknown,
-): Outcome<ReleaseManifest> {
+function parseManifest(value: unknown): Outcome<RetainedReleaseManifest> {
   const data = object(value);
   const keys = [
     "schema",
@@ -141,7 +142,8 @@ export function parseGithubReleaseManifest(
     !data ||
     !hasExactKeys(data, keys) ||
     data.schema !== "farol.github-release/1" ||
-    data.repository !== GITHUB_RELEASE_REPOSITORY ||
+    (data.repository !== GITHUB_RELEASE_REPOSITORY &&
+      data.repository !== RETAINED_GITHUB_RELEASE_REPOSITORY) ||
     !["stable", "owner-beta"].includes(data.channel as string) ||
     data.product !== "Farol Next Preview" ||
     data.bundleId !== FAROL_BUNDLE_ID ||
@@ -172,7 +174,46 @@ export function parseGithubReleaseManifest(
     data.sourceDirty !== false
   )
     return failure("invalid_manifest");
-  return { ok: true, value: data as ReleaseManifest };
+  return { ok: true, value: data as RetainedReleaseManifest };
+}
+
+/** Producer and live discovery validation: only the selected new release feed. */
+export function parseGithubReleaseManifest(
+  value: unknown,
+): Outcome<ReleaseManifest> {
+  const parsed = parseManifest(value);
+  if (!parsed.ok) return parsed;
+  if (parsed.value.repository !== GITHUB_RELEASE_REPOSITORY)
+    return failure("invalid_manifest");
+  return { ok: true, value: parsed.value as ReleaseManifest };
+}
+
+/** Decode an existing local record; this does not authorize a network request. */
+export function parseRetainedGithubReleaseManifest(
+  record: RetainedReleaseRecord,
+): Outcome<RetainedReleaseManifest> {
+  if (
+    record.schema !== "farol.ready-update/1" ||
+    typeof record.handle !== "string" ||
+    record.handle.length < 1 ||
+    record.handle.length > 4096
+  )
+    return failure("invalid_manifest");
+  const parsed = parseManifest(record.manifest);
+  if (!parsed.ok) return parsed;
+  for (const operation of [record.operation, record.preparation]) {
+    if (operation === null || operation === undefined) continue;
+    if (
+      !operation.target ||
+      operation.target.digest !== parsed.value.artifactSha256 ||
+      operation.target.version !== parsed.value.version ||
+      operation.target.buildId !== parsed.value.buildId
+    )
+      return failure("release_mismatch");
+  }
+  // Archive-only Ready records still require fresh local archive/package
+  // verification before readiness, under the existing retained handle.
+  return parsed;
 }
 
 function validResponseUrl(
@@ -326,7 +367,7 @@ export async function discoverGithubUpdate(
 
 export function packageMatchesRelease(
   actual: PackageIdentity,
-  expected: ReleaseManifest,
+  expected: RetainedReleaseManifest,
 ): boolean {
   return (
     actual.product === expected.product &&
@@ -354,6 +395,12 @@ export async function downloadAndVerifyGithubUpdate(
   if (!checked.ok) return checked;
   if (
     candidate.tag !== `v${candidate.manifest.version}` ||
+    candidate.manifestAsset.name !== RELEASE_MANIFEST_ASSET ||
+    !Number.isSafeInteger(candidate.manifestAsset.size) ||
+    candidate.manifestAsset.size < 1 ||
+    candidate.manifestAsset.size > MAX_MANIFEST_BYTES ||
+    candidate.manifestAsset.url !==
+      assetUrl(candidate.tag, RELEASE_MANIFEST_ASSET) ||
     candidate.archiveAsset.name !== candidate.manifest.archiveName ||
     candidate.archiveAsset.size !== candidate.manifest.archiveSize ||
     candidate.archiveAsset.url !==

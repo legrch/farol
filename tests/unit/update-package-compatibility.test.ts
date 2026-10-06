@@ -127,7 +127,7 @@ import {
 
 const expected: ReleaseManifest = {
   schema: "farol.github-release/1",
-  repository: "legrch/farol-releases",
+  repository: "legrch/farol",
   channel: "owner-beta",
   product: "Farol Next Preview",
   bundleId: "local.farol.next.preview",
@@ -254,6 +254,43 @@ async function expectRefusal(
 }
 
 describe("explicit update package generations", () => {
+  it.each([6, 7])(
+    "locally reverifies an unchanged retained old-feed schema %s package",
+    async (schema) => {
+      const verifier = prepare((docs) => {
+        docs.artifact.schema = schema;
+      });
+      const historical = {
+        ...expected,
+        repository: "legrch/farol-releases" as const,
+      };
+      const result = await verifier.verifyPackage(
+        "exact-retained-handle",
+        historical,
+      );
+      expect(result.identity).toEqual(fixture.measured);
+      expect(contentCalls()).toHaveLength(1);
+      expect(vi.mocked(execFile).mock.calls[0]![1]).toEqual([
+        "/fixture-download/owned.zip",
+        stage,
+        String(historical.archiveSize),
+        historical.archiveSha256,
+      ]);
+    },
+  );
+
+  it("refuses a retained old-feed package whose measured identity mismatches", async () => {
+    const verifier = prepare();
+    fixture.measured = { ...fixture.measured!, buildId: "f".repeat(64) };
+    await expect(
+      verifier.verifyPackage("exact-retained-handle", {
+        ...expected,
+        repository: "legrch/farol-releases",
+      }),
+    ).rejects.toMatchObject({ code: "package_mismatch" });
+    expect(verifier.verifiedAppPath("exact-retained-handle")).toBeNull();
+  });
+
   it("keeps schema 6 verification and performs no Go claim reads", async () => {
     const verifier = prepare((docs) => {
       docs.artifact.schema = 6;

@@ -20,7 +20,7 @@ import {
   type DownloadedArchive,
   type FetchedJson,
   type GithubReleasePorts,
-  type ReleaseManifest,
+  type RetainedReleaseManifest,
   type PortFailure,
   type VerifiedPackage,
 } from "../../domain/github-release-contract";
@@ -84,12 +84,12 @@ export type GithubUpdateTransport = GithubReleasePorts &
     ): Promise<TransportResult<DownloadedArchive>>;
     verifyPackage(
       handle: string,
-      manifest: ReleaseManifest,
+      manifest: RetainedReleaseManifest,
     ): Promise<TransportResult<VerifiedPackage>>;
     discard(handle: string): Promise<TransportResult<void>>;
     reclaimRetained(
       handle: string,
-      manifest: ReleaseManifest,
+      manifest: RetainedReleaseManifest,
     ): Promise<TransportResult<void>>;
   }>;
 
@@ -333,7 +333,7 @@ export function createGithubUpdateTransport(
     privateStateDirectory: string;
     verifyPackage(
       handle: string,
-      manifest: ReleaseManifest,
+      manifest: RetainedReleaseManifest,
     ): Promise<VerifiedPackage>;
     openHttps?: OpenHttps;
   }>,

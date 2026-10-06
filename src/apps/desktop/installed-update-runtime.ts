@@ -15,7 +15,7 @@ import {
   discoverGithubUpdate,
   downloadAndVerifyGithubUpdate,
   packageMatchesRelease,
-  parseGithubReleaseManifest,
+  parseRetainedGithubReleaseManifest,
 } from "../../modules/release/app/github-release";
 import type {
   UpdateCandidate,
@@ -586,7 +586,7 @@ export async function createInstalledUpdateRuntime(
     if (saved !== null) {
       const receipt = SavedReceipt.parse(saved);
       const op = receipt.operation;
-      const parsed = parseGithubReleaseManifest(receipt.manifest);
+      const parsed = parseRetainedGithubReleaseManifest(receipt);
       if (
         !op ||
         !parsed.ok ||
@@ -1005,7 +1005,7 @@ export async function createInstalledUpdateRuntime(
             }) => record)(SavedReceipt.parse(previous)),
           );
       await selectDownload(retained.downloadId);
-      const parsed = parseGithubReleaseManifest(retained.manifest);
+      const parsed = parseRetainedGithubReleaseManifest(retained);
       if (!parsed.ok) return known("UPDATE_RETAINED_MANIFEST_INVALID");
       if (
         downloadIntent &&
