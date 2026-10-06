@@ -39,6 +39,7 @@ type Pending = {
   timer: ReturnType<typeof setTimeout>;
   operationId?: string;
   handshake?: Handshake;
+  retirementHandoffId?: string;
 };
 
 // Facts observed on the original ChildProcess, not a clean-retirement decision.
@@ -79,6 +80,7 @@ export class Client {
   private resourceReleased = false;
   private resourceError: BridgeError | undefined;
   private cleanup: "none" | "pending" | "confirmed" | "unknown" = "none";
+  private retirementPrepared = false;
   constructor(
     private child: ChildProcessWithoutNullStreams,
     private owned = false,
@@ -242,12 +244,14 @@ export class Client {
           : undefined;
     const retiring =
       method === "computer.connector.close" ||
-      method === "computer.authority.deactivate" ||
+      (this.retirementPrepared && method === "computer.authority.deactivate") ||
       method === "core.retirement.prepare" ||
       method === "core.retirement.ack";
     // Reserve eight one-shot control calls so reaching the ordinary history
     // bound cannot prevent authority withdrawal, connector closure, and the
-    // original retirement ACK. All keep their lifetime one-shot ID fence.
+    // original retirement ACK. Withdrawal joins this reserve only after an
+    // exact prepare ACK, so ordinary Settings changes cannot spend it.
+    // All keep their lifetime one-shot ID fence.
     if (
       this.pending.size >= 32 ||
       this.writerBusy ||
@@ -309,6 +313,11 @@ export class Client {
         timer,
         ...(operationId !== undefined ? { operationId } : {}),
         ...(handshake ? { handshake } : {}),
+        ...(method === "core.retirement.prepare" &&
+        operationId !== undefined &&
+        validate("CoreRetirementPrepare", body)
+          ? { retirementHandoffId: (body as { handoffId: string }).handoffId }
+          : {}),
       });
       try {
         if (!this.child.stdin.write(bytes)) {
@@ -411,6 +420,17 @@ export class Client {
       }
       clearTimeout(pending.timer);
       this.pending.delete(response.id);
+      if (
+        pending.retirementHandoffId !== undefined &&
+        result.status === "ok" &&
+        validate("CoreRetirementPrepared", result.data) &&
+        (result.data as { handoffId: string }).handoffId ===
+          pending.retirementHandoffId &&
+        /^[a-f0-9]{64}$/u.test(
+          (result.data as { receiptDigest: string }).receiptDigest,
+        )
+      )
+        this.retirementPrepared = true;
       // Validate the exact original wire reply above before translating the
       // private poll correlation back to its host caller. Never map effects.
       pending.resolve(

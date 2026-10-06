@@ -46,7 +46,15 @@ async function peer(heldMethods: readonly string[] = []) {
                   capabilities: [],
                   maxFrameBytes: 1048576,
                 }
-              : {}),
+              : request.method === "core.retirement.prepare"
+                ? {
+                    handoffId: (request.params.body as { handoffId: string })
+                      .handoffId,
+                    receiptDigest: "a".repeat(64),
+                  }
+                : request.method === "computer.authority.deactivate"
+                  ? { fence: "1", storeRevision: "0" }
+                  : {}),
         },
       }),
     );
@@ -102,7 +110,7 @@ it.each([true, false])(
       ).rejects.toBeInstanceOf(RequestNotSentError);
       await client.request(
         "core.retirement.prepare",
-        {},
+        { handoffId: "handoff" },
         { operationId: "prepare" },
       );
       const stopped = pump.stop();
@@ -149,6 +157,74 @@ it.each([true, false])(
   30000,
 );
 
+it("refuses ordinary authority withdrawals before consuming retirement capacity", async () => {
+  const { client, calls } = await peer();
+  try {
+    for (let i = 0; i < 4087; i++)
+      await client.request("core.status", {}, { id: `status-${i}` });
+    const before = calls.length;
+    // Independent callers cannot spend the reserve through a repeatable
+    // Settings withdrawal. The caller refuses before any later save/publish.
+    for (let i = 0; i < 8; i++) {
+      const authority = new GoComputerAuthority(client, client.verifiedContext);
+      await expect(authority.withdraw()).rejects.toBeInstanceOf(
+        RequestNotSentError,
+      );
+    }
+    expect(calls).toHaveLength(before);
+    await client.request(
+      "computer.connector.close",
+      {},
+      { operationId: "close" },
+    );
+    await client.request(
+      "core.retirement.prepare",
+      { handoffId: "handoff" },
+      { operationId: "prepare" },
+    );
+    await new GoComputerAuthority(client, client.verifiedContext).withdraw();
+    await client.request("core.retirement.ack", {}, { operationId: "ack" });
+    expect(calls.slice(before).map((call) => call.method)).toEqual([
+      "computer.connector.close",
+      "core.retirement.prepare",
+      "computer.authority.deactivate",
+      "core.retirement.ack",
+    ]);
+  } finally {
+    await client.close();
+  }
+}, 30000);
+
+it.each([
+  ["missing", {}],
+  ["crossed", { handoffId: "other", receiptDigest: "a".repeat(64) }],
+  ["malformed", { handoffId: "handoff", receiptDigest: "short" }],
+] as const)(
+  "keeps the withdrawal reserve closed after a %s prepare response",
+  async (_name, data) => {
+    const { client, calls, reply } = await peer(["core.retirement.prepare"]);
+    try {
+      for (let i = 0; i < 4087; i++)
+        await client.request("core.status", {}, { id: `status-${i}` });
+      const preparation = client.request(
+        "core.retirement.prepare",
+        { handoffId: "handoff" },
+        { operationId: "prepare" },
+      );
+      reply(calls.at(-1)!, data);
+      await preparation;
+      const before = calls.length;
+      await expect(
+        new GoComputerAuthority(client, client.verifiedContext).withdraw(),
+      ).rejects.toBeInstanceOf(RequestNotSentError);
+      expect(calls).toHaveLength(before);
+    } finally {
+      await client.close();
+    }
+  },
+  30000,
+);
+
 it("keeps both idle polls alive beyond a night's old stream budget and retains retirement capacity", async () => {
   const { client, calls } = await peer();
   try {
@@ -189,7 +265,9 @@ it("keeps both idle polls alive beyond a night's old stream budget and retains r
         (
           await client.request(
             method,
-            {},
+            method === "core.retirement.prepare"
+              ? { handoffId: "handoff" }
+              : {},
             { id: `quit-${method}`, operationId: `op-${method}` },
           )
         ).status,
