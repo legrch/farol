@@ -422,7 +422,7 @@ export async function recheckNativePreviewIsolation(receipt, actual) {
       absolute(actual?.[key]) !== admitted.paths[key] ||
       (await fs.realpath(actual[key])) !== actual[key]
     )
-      throw invalid("NATIVE_PATH_CHANGED");
+      throw invalid(`NATIVE_PATH_CHANGED_${key}`);
   }
   if (
     (await fs.realpath(absolute(actual?.temp))) !==

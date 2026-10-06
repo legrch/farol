@@ -513,6 +513,14 @@ async function launch(environment, mode = "normal", profile = mode) {
       focused: window.isFocused(),
     })),
   }));
+  // Metadata only, before admission: retain the exact OS path boundary on
+  // refusal without inspecting UI, settings or unqualified profile bytes.
+  observations.push({
+    kind: "native-profile-path-readback",
+    environment,
+    profileRoot,
+    nativePaths,
+  });
   profileAdmissions.set(
     profileRoot,
     await recheckNativePreviewIsolation(admission, nativePaths),

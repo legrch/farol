@@ -181,6 +181,12 @@ try {
             focused: window.isFocused(),
           })),
         }));
+        observations.push({
+          kind: "native-profile-path-readback",
+          environment,
+          profileRoot: profile,
+          nativePaths: actual,
+        });
         isolationWitness = await recheckNativePreviewIsolation(
           admission,
           actual,
