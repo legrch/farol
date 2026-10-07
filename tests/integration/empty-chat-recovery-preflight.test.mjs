@@ -1,9 +1,39 @@
 import { describe, expect, it } from "vitest";
-import { parseEmptyRecoveryOptions } from "../../tooling/recover-empty-chat.mjs";
+import {
+  assertEmptyRecoveryProcesses,
+  parseEmptyRecoveryOptions,
+} from "../../tooling/recover-empty-chat.mjs";
 
 // Actual private CLI admission only; no process, profile, maintenance or native
 // effect. These checks do not confer host or recovery authority.
 describe("one-shot empty Chat recovery preflight", () => {
+  it("checks connector and Go roots under both fixed Dev spellings", () => {
+    const seen = [];
+    assertEmptyRecoveryProcesses(
+      "/Users/test/Library/Application Support/Farol DEV/farol-next-state/secure-mcp-connector",
+      (root) => seen.push(root),
+    );
+    expect(seen).toEqual([
+      "/Users/test/Library/Application Support/Farol DEV/farol-next-state/secure-mcp-connector",
+      "/Users/test/Library/Application Support/Farol DEV/farol-next-state/go-core",
+      "/Users/test/Library/Application Support/Farol Dev/farol-next-state/secure-mcp-connector",
+      "/Users/test/Library/Application Support/Farol Dev/farol-next-state/go-core",
+    ]);
+  });
+  it("refuses a Go child using the alternate spelling without continuing", () => {
+    const seen = [];
+    expect(() =>
+      assertEmptyRecoveryProcesses(
+        "/Users/test/Library/Application Support/Farol Dev/farol-next-state/secure-mcp-connector",
+        (root) => {
+          seen.push(root);
+          if (root.endsWith("Farol DEV/farol-next-state/go-core"))
+            throw Error("CLOSED_COMPUTER_RECOVERY_PROCESS_UNVERIFIED");
+        },
+      ),
+    ).toThrow("CLOSED_COMPUTER_RECOVERY_PROCESS_UNVERIFIED");
+    expect(seen).toHaveLength(4);
+  });
   const exact = [
     "--apply",
     "--development",

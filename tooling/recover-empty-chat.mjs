@@ -49,6 +49,15 @@ export function parseEmptyRecoveryOptions(args) {
   return values;
 }
 
+// The two supported Dev spellings can name one physical profile. Both the
+// connector and Go child command lines must be absent under either spelling.
+export function assertEmptyRecoveryProcesses(connectorRoot, inspect) {
+  assertClosedRecoveryProcesses(connectorRoot, true, (currentRoot) => {
+    inspect(currentRoot);
+    inspect(path.join(path.dirname(currentRoot), "go-core"));
+  });
+}
+
 async function privateBytes(file, maximum) {
   const f = await fs.open(
     file,
@@ -195,12 +204,10 @@ async function run() {
       desktopState: () => activationObligations(userData),
       attest,
       processesAbsent: () => {
-        assertClosedRecoveryProcesses(
+        assertEmptyRecoveryProcesses(
           path.join(userData, "farol-next-state", "secure-mcp-connector"),
-          true,
           assertClosedConnectorProcesses,
         );
-        assertClosedConnectorProcesses(profileRoot);
       },
     });
     process.stdout.write(
