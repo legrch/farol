@@ -66,8 +66,12 @@ accepted clean bytes, explicit owner promotion and onboarding:
 - [Ordinary Git fixture](ordinary-git-environment-fixture.md) — disposable
   worktree/config/hook inputs, not installed-connector evidence.
 
-`task dev` builds current development files. `task test:core` checks generated
-wire, import boundaries, Go race/vet and the TypeScript bridge. Full `task ci:fast`
+`task dev` builds clean committed React/Go source using separately approved local
+Go inputs at `_output/go-build-inputs.json`, or an explicit `--go-inputs` file.
+Missing or invalid inputs refuse the build before launching; there is no implicit
+desktop-only fallback. See [ordinary Dev setup](../README.md#develop-from-source).
+`task test:core` checks generated wire, import boundaries, Go race/vet and the
+TypeScript bridge. Full `task ci:fast`
 includes Hunt and requires **clean committed source**; targeted WIP checks do not
 replace it. Current `AGENTS.md` permits a coherent checkpoint after targeted
 verification, self-review and diff checking; a frozen integration candidate needs
