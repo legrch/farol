@@ -45,6 +45,11 @@ const original = Object.freeze({
   configSHA: "aab749c360e7b213ba6eb4de8df938f82b1a93f32d0d662e04ae3c42ba7904e8",
 });
 const sum = (bytes) => createHash("sha256").update(bytes).digest("hex");
+const originalFailureDirectory = `/private/tmp/farol-ordinary-empty-recovery-${original.operationId}`;
+const originalTerminalLog = path.join(
+  originalFailureDirectory,
+  "terminal-4dbeef45.log",
+);
 const fail = () => {
   throw Error("EMPTY_CHAT_KNOWN_COMPLETION_REFUSED");
 };
@@ -124,8 +129,15 @@ export function qualifyKnownCompletionFailure(receipt, log, selection) {
   });
 }
 
-async function bytes(file, maximum, binary = false) {
-  const f = await fs.open(
+async function bytes(
+  file,
+  maximum,
+  binary = false,
+  io = fs,
+  retainedTerminal = false,
+) {
+  if (retainedTerminal && (binary || file !== originalTerminalLog)) fail();
+  const f = await io.open(
     file,
     constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
   );
@@ -138,14 +150,15 @@ async function bytes(file, maximum, binary = false) {
       a.size > BigInt(maximum) ||
       (binary
         ? (a.mode & 0o111n) === 0n || (a.mode & 0o022n) !== 0n
-        : (a.mode & 0o777n) !== 0o600n)
+        : (a.mode & 0o777n) !== 0o600n &&
+          !(retainedTerminal && (a.mode & 0o777n) === 0o644n))
     )
       fail();
     const buffer = Buffer.alloc(Number(a.size) + 1);
     const { bytesRead } = await f.read(buffer, 0, buffer.length, 0);
     const raw = buffer.subarray(0, bytesRead);
     const b = await f.stat({ bigint: true });
-    const n = await fs.lstat(file, { bigint: true });
+    const n = await io.lstat(file, { bigint: true });
     if (
       BigInt(raw.length) !== a.size ||
       a.size !== b.size ||
@@ -159,6 +172,59 @@ async function bytes(file, maximum, binary = false) {
     return raw;
   } finally {
     await f.close();
+  }
+}
+
+function sameFailureDirectory(a, b) {
+  return (
+    a.isDirectory() &&
+    b.isDirectory() &&
+    !b.isSymbolicLink() &&
+    a.uid === BigInt(process.geteuid()) &&
+    a.uid === b.uid &&
+    (a.mode & 0o7777n) === 0o700n &&
+    a.mode === b.mode &&
+    a.dev === b.dev &&
+    a.ino === b.ino &&
+    a.nlink === b.nlink &&
+    a.mtimeNs === b.mtimeNs &&
+    a.ctimeNs === b.ctimeNs
+  );
+}
+
+// Only the fixed original diagnostic may retain its observed 0644 mode. The
+// private physical parent is held and rechecked; every other evidence file
+// keeps the existing 0600 rule. No evidence chmod, copy or rewrite occurs.
+export async function readKnownOriginalTerminalLog(io = fs) {
+  const directory = await io.open(
+    originalFailureDirectory,
+    constants.O_RDONLY |
+      constants.O_DIRECTORY |
+      constants.O_NOFOLLOW |
+      constants.O_NONBLOCK,
+  );
+  try {
+    const before = await directory.stat({ bigint: true });
+    if (
+      !sameFailureDirectory(
+        before,
+        await io.lstat(originalFailureDirectory, { bigint: true }),
+      ) ||
+      (await io.realpath(originalFailureDirectory)) !== originalFailureDirectory
+    )
+      fail();
+    const log = await bytes(originalTerminalLog, 4096, false, io, true);
+    if (
+      !sameFailureDirectory(before, await directory.stat({ bigint: true })) ||
+      !sameFailureDirectory(
+        before,
+        await io.lstat(originalFailureDirectory, { bigint: true }),
+      )
+    )
+      fail();
+    return log;
+  } finally {
+    await directory.close();
   }
 }
 
@@ -305,12 +371,12 @@ async function run() {
   const currentManifest = JSON.parse(
     await fs.readFile(path.join(currentApp, "build-manifest.json"), "utf8"),
   );
-  const failed = `/private/tmp/farol-ordinary-empty-recovery-${original.operationId}`;
+  const failed = originalFailureDirectory;
   const failureBytes = await bytes(
     path.join(failed, "original-failure-receipt.json"),
     16384,
   );
-  const log = await bytes(path.join(failed, "terminal-4dbeef45.log"), 4096);
+  const log = await readKnownOriginalTerminalLog();
   const selection = await bytes(
     path.join(failed, "selection-4dbeef45.json"),
     65536,
@@ -388,9 +454,7 @@ async function run() {
         !(
           await bytes(path.join(failed, "original-failure-receipt.json"), 16384)
         ).equals(failureBytes) ||
-        !(await bytes(path.join(failed, "terminal-4dbeef45.log"), 4096)).equals(
-          log,
-        ) ||
+        !(await readKnownOriginalTerminalLog()).equals(log) ||
         !(
           await bytes(path.join(failed, "selection-4dbeef45.json"), 65536)
         ).equals(selection) ||
