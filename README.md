@@ -114,7 +114,7 @@ task dev
 ```
 
 `task dev` uses the ordinary saved Farol Dev profile and requires the Go backend.
-Place the separately approved local [Go input declaration](#optional-declared-go-backend-build)
+Place the separately approved local [Go input declaration](#declared-go-backend-inputs)
 at `_output/go-build-inputs.json` (ignored by Git), or select an explicit absolute
 file with `task dev -- --go-inputs=/absolute/path.json`. Missing, invalid or
 unauthenticated inputs refuse the build; Dev does not silently start without Go.
@@ -149,7 +149,15 @@ Freeze a coherent integration candidate before `task ci:fast` and its risk-selec
 independent review. Hunt requires clean committed source. A checkpoint preserves
 work; it is not product acceptance. See [standalone build guidance](docs/standalone-build.md).
 
-### Optional declared Go backend build
+Hunt now uses the same Go-required `tooling/dev.mjs --check` producer and verifies
+the source, input ledger, complete entry set and core artifact before recording
+evidence. Consequently, `task ci:fast` also needs the separately approved inputs
+at `_output/go-build-inputs.json`. The manual hosted standalone workflow does not
+yet provision that declaration and its SDK/module inputs; a fresh hosted run is
+not qualified. Missing inputs refuse the build rather than emit core-less output.
+Local checks, native acceptance and package acceptance remain separate evidence.
+
+### Declared Go backend inputs
 
 The existing candidate command accepts an explicit local input declaration:
 
@@ -172,9 +180,10 @@ JSON file must have schema `farol-go-build-inputs/1` and these fields:
 See the [input parser](tooling/go-build-inputs.mjs) and
 [backend builder](tooling/go-backend-build.mjs) for exact validation. The builder
 embeds the backend declaration into the Electron host and emits build schema `4`;
-packaging uses schema `7`. Without `--go-inputs`, the build emits package schema
-`6` without the Go backend. The current desktop external Computer route requires
-that backend and refuses its absence. For this integration line, supply the same
+packaging uses schema `7`. The low-level builder can still emit legacy schema `3`
+without Go inputs, but the 0.2 candidate packager refuses that output before
+package effects. The current desktop external Computer route requires the
+backend and refuses its absence. For this integration line, supply the same
 declared inputs to `task dev -- --go-inputs=<absolute-json-path>` or `task package`.
 Both build paths still compile the separate Go archive helper; neither establishes
 installed Go Computer acceptance.

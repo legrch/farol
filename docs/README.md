@@ -1,11 +1,13 @@
 # Farol documentation
 
 [Farol overview](../README.md) · [Development](../README.md#develop-from-source) ·
-[Optional Go build](../README.md#optional-declared-go-backend-build)
+[Declared Go build inputs](../README.md#declared-go-backend-inputs)
 
 This index describes the current source integration tree.
-Accepted `main` remains `8c09f4c7fd9fc82f23a30ad42e701d041189aeea`. Source integration,
-a packaged candidate, installation and live-provider qualification are distinct.
+The prior pre-Go accepted baseline was
+`8c09f4c7fd9fc82f23a30ad42e701d041189aeea`; local `main` contains later integration.
+Source checkpoints, accepted ranges, packages, installation and live qualification
+are distinct.
 Some technical pages retain earlier checkpoint descriptions; their historical
 integration notes must not be read as current product acceptance.
 
@@ -85,10 +87,10 @@ existing `task test:e2e` retains its packaged Electron meaning. See the
 [scope and evidence rules](testing.md#source-test-scopes),
 [Taskfile](../Taskfile.yml) and [npm scripts](../package.json).
 
-[The optional declared Go recipe](../README.md#optional-declared-go-backend-build)
+[The declared Go inputs](../README.md#declared-go-backend-inputs)
 uses `task package -- --go-inputs=...` with approved local SDK/module inputs. It is
-source-supported, not production-qualified. Core-enabled package schema `7` and
-default schema `6` require separate artifact evidence. No recipe or source PASS
+source-supported, not production-qualified. A 0.2 candidate requires core-enabled
+package schema `7`; legacy schema `6` is not an eligible 0.2 candidate. No recipe or source PASS
 qualifies normal Electron execution, installation or a live provider.
 
 ## Architecture and Go modules
