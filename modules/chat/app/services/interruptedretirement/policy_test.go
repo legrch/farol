@@ -287,6 +287,22 @@ func TestSelectRefusesStaleCrossedNonemptyOrInventedClosure(t *testing.T) {
 	}
 }
 
+func TestSelectRefusesOriginalHandoffAsMaintenanceOperation(t *testing.T) {
+	s, o := fixture()
+	s.OriginalHandoffID = s.OperationID
+	o.Head.Record.Publication.HandoffID = s.OriginalHandoffID
+	o.Head.Record.ACK.Publication = o.Head.Record.Publication
+	raw, err := json.Marshal(o.Head.Record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.HeadDigest = sha256.Sum256(raw)
+	s.ExpectedACKDigest, o.Head.Digest = s.HeadDigest, s.HeadDigest
+	if p, err := Select(s, o, canonicalValidator{}); p != nil || err != Refused {
+		t.Fatal("original unresolved handoff ID reused", p, err)
+	}
+}
+
 type validatorFunc func(port.HandoffRecord) error
 
 func (f validatorFunc) Validate(r port.HandoffRecord) error { return f(r) }

@@ -42,6 +42,9 @@ func root(r port.JournalRoot) bool { return r.Device != 0 && r.Inode != 0 }
 
 func selection(s port.InterruptedRetirementSelection) bool {
 	b := s.Current
+	if s.OperationID == s.OriginalHandoffID {
+		return false
+	}
 	return operation(s.OperationID) && id(b.ProfileID) && id(b.BackendGeneration) && id(b.BuildID) && id(b.HostLifetimeID) && id(b.ChildLaunchID) && root(b.ParentRoot) && root(b.ChatRoot) && b.ParentRoot != b.ChatRoot && b.ParentRoot.Device == b.ChatRoot.Device && b.ParentRoot.OwnerUID == b.ChatRoot.OwnerUID && s.HeadDigest != ([32]byte{}) && s.LifecycleDigest != ([32]byte{}) && id(s.OriginalHandoffID) && s.ExpectedACKDigest == s.HeadDigest && id(s.BuildID) && id(s.HostLifetimeID) && id(s.ChildLaunchID) && s.HostLifetimeID != b.HostLifetimeID && s.ChildLaunchID != b.ChildLaunchID && s.Next.ProfileID == b.ProfileID && id(s.Next.BackendGeneration) && s.Next.BackendGeneration != b.BackendGeneration
 }
 
