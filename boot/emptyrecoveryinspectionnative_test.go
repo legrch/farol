@@ -19,6 +19,7 @@ import (
 	chatport "github.com/legrch/farol/modules/chat/app/port"
 	handoffrepo "github.com/legrch/farol/modules/chat/infra/repos/handoff"
 	lifecyclerepo "github.com/legrch/farol/modules/chat/infra/repos/lifecycle"
+	delivery "github.com/legrch/farol/modules/computer/app/services/settingsdelivery"
 	domain "github.com/legrch/farol/modules/computer/domain/mutation"
 	accessrepo "github.com/legrch/farol/modules/computer/infra/repos/access"
 	mutationrepo "github.com/legrch/farol/modules/computer/infra/repos/mutation"
@@ -30,6 +31,9 @@ func emptyRecoveryFixture(t *testing.T) emptyRecoveryInspectionInput {
 	return emptyRecoveryFixtureAt(t, true)
 }
 func emptyRecoveryFixtureAt(t *testing.T, desktopLayout bool) emptyRecoveryInspectionInput {
+	return emptyRecoveryFixtureStateAt(t, desktopLayout, false)
+}
+func emptyRecoveryFixtureStateAt(t *testing.T, desktopLayout, interrupted bool) emptyRecoveryInspectionInput {
 	t.Helper()
 	launch, runtime := retirementStorageFixtureAt(t, true, desktopLayout)
 	terminal := preparedTerminal(t, runtime)
@@ -43,6 +47,20 @@ func emptyRecoveryFixtureAt(t *testing.T, desktopLayout bool) emptyRecoveryInspe
 	current, err := NewNativeRuntime(context.Background(), launch, "failed-current")
 	if err != nil {
 		t.Fatal(err)
+	}
+	if interrupted {
+		// This in-process fixture has no desktop Settings responder. Preserve
+		// the same explicit store double used by the first fixture lifetime.
+		current.settingsDelivery.store = &deliveryStoreFixture{value: delivery.Snapshot{Revision: 1, Current: delivery.Identity{ProfileID: launch.Profile.ProfileID, OwnerID: launch.OwnerID, ComputerID: launch.ComputerID, Generation: 1}}}
+		prepared := retirementCall(t, current, "core.retirement.prepare", wire.CoreRetirementPrepare{HandoffId: "interrupted-handoff"})
+		var publication wire.CoreRetirementPrepared
+		if prepared.Status != "ok" || json.Unmarshal(prepared.Data, &publication) != nil {
+			t.Fatal("interrupted prepare", prepared.Status)
+		}
+		ack := retirementCall(t, current, "core.retirement.ack", wire.CoreRetirementACK{HandoffId: publication.HandoffId, ReceiptDigest: publication.ReceiptDigest})
+		if ack.Status != "ok" {
+			t.Fatal("interrupted ACK", ack.Status)
+		}
 	}
 	if err := current.Close(); err != nil {
 		t.Fatal(err)
@@ -61,7 +79,7 @@ func emptyRecoveryFixtureAt(t *testing.T, desktopLayout bool) emptyRecoveryInspe
 		t.Fatal(err)
 	}
 	head, err := h.Load(context.Background())
-	if err != nil || head.Record == nil || head.Record.Consumption == nil {
+	if err != nil || head.Record == nil || (!interrupted && head.Record.Consumption == nil) {
 		t.Fatal("missing consumed head", err)
 	}
 	if err := h.Close(); err != nil {
@@ -77,8 +95,15 @@ func emptyRecoveryFixtureAt(t *testing.T, desktopLayout bool) emptyRecoveryInspe
 		t.Fatal(err)
 	}
 	expected := make([]mutationrepo.ExpectedSettledRecord, 0, 2)
-	for _, kind := range []domain.Kind{domain.WriteKind, domain.EditKind} {
+	kinds := []domain.Kind{domain.WriteKind, domain.EditKind}
+	if interrupted {
+		kinds = append(kinds, domain.WriteKind, domain.EditKind, domain.EditKind)
+	}
+	for index, kind := range kinds {
 		operation := string(kind) + "-fixture"
+		if interrupted {
+			operation += "-" + strconv.Itoa(index)
+		}
 		b := domain.Binding{Identity: domain.Identity{Scope: domain.ScopeConnector, OperationID: operation, OwnerID: launch.OwnerID, ProfileID: launch.Profile.ProfileID, ComputerID: launch.ComputerID}, WorkspaceID: "synthetic", ComputerGeneration: 1, RelativePath: operation + ".md", RequestDigest: strings.Repeat("a", 64), Connector: domain.ConnectorOrigin{BuildID: BuildID, BackendGeneration: "failed-current", RuntimeID: "synthetic-runtime", ConnectorGeneration: 1, SessionID: "synthetic-session", TaskID: "synthetic-task", ParticipantID: "synthetic-participant", TurnID: "synthetic-turn", CallID: operation, TaskEpoch: 1, Generation: 1, Operation: kind}}
 		prepared, err := domain.NewPrepared(b)
 		if err != nil {
@@ -94,6 +119,9 @@ func emptyRecoveryFixtureAt(t *testing.T, desktopLayout bool) emptyRecoveryInspe
 			receipt.BeforeSHA256 = &hash
 		}
 		completed, err := prepared.Complete(receipt)
+		if interrupted && index == 4 {
+			completed, err = prepared.Refuse(domain.Failure{Code: "WORKSPACE_MUTATION_CONFLICT", Source: "native-workspace"})
+		}
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -117,7 +145,17 @@ func emptyRecoveryFixtureAt(t *testing.T, desktopLayout bool) emptyRecoveryInspe
 	if err != nil {
 		t.Fatal(err)
 	}
-	return emptyRecoveryInspectionInput{Profile: launch.Profile, OwnerID: launch.OwnerID, ComputerID: launch.ComputerID, AccessDigest: sha256.Sum256(access), Mutations: expected, Selection: chatport.EmptyRecoverySelection{OperationID: "835a913b-bc20-42c6-bf56-9b83852cde3c", Current: head.Record.Consumption.NextBinding, HeadDigest: head.Digest, LifecycleDigest: l.SnapshotDigest, Next: chatport.JournalScope{ProfileID: launch.Profile.ProfileID, BackendGeneration: "maintenance"}, BuildID: BuildID, HostLifetimeID: "maintenance-host", ChildLaunchID: "maintenance-child"}}
+	var binding chatport.HandoffBinding
+	if interrupted {
+		binding = head.Record.Publication.Binding
+	} else {
+		binding = head.Record.Consumption.NextBinding
+	}
+	in := emptyRecoveryInspectionInput{Profile: launch.Profile, OwnerID: launch.OwnerID, ComputerID: launch.ComputerID, AccessDigest: sha256.Sum256(access), Mutations: expected, Selection: chatport.EmptyRecoverySelection{OperationID: "835a913b-bc20-42c6-bf56-9b83852cde3c", Current: binding, HeadDigest: head.Digest, LifecycleDigest: l.SnapshotDigest, Next: chatport.JournalScope{ProfileID: launch.Profile.ProfileID, BackendGeneration: "maintenance"}, BuildID: BuildID, HostLifetimeID: "maintenance-host", ChildLaunchID: "maintenance-child"}}
+	if interrupted {
+		in.Interrupted = &interruptedRetirementInput{OriginalHandoffID: head.Record.Publication.HandoffID, ExpectedACKDigest: head.Digest}
+	}
+	return in
 }
 
 func TestNativeEmptyRecoveryInspectionCompositePreservesAndHoldsClaims(t *testing.T) {

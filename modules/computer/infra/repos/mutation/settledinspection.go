@@ -119,55 +119,83 @@ func qualifySettled(entries []settledBytes, expected [settledRecordCount]Expecte
 	entries = append([]settledBytes(nil), entries...)
 	sort.Slice(entries, func(i, j int) bool { return entries[i].key < entries[j].key })
 	for n, entry := range entries {
-		e := expected[n]
-		state, err := decode(entry.raw)
-		if err != nil || state == nil || state.Phase() != domain.Completed || state.Binding() != e.Binding || entry.key != e.Key {
+		state, observed, err := qualifySettledRecord(entry, expected[n])
+		if err != nil || state.Phase() != domain.Completed || !completedSettledReceipt(state) {
 			return retained, settledRefusal()
 		}
-		key, err := recordKey(state.Binding().Identity)
-		digest := sha256.Sum256(entry.raw)
-		observed := hex.EncodeToString(digest[:])
-		if err != nil || key != entry.key || observed != e.SHA256 {
-			return retained, settledRefusal()
-		}
-		receipt := state.Receipt()
-		if receipt == nil || (receipt.Operation == domain.WriteKind && receipt.Replacements != 0) || (receipt.Operation == domain.EditKind && receipt.Replacements == 0) {
-			return retained, settledRefusal()
-		}
-		retained[n] = SettledRetainedRecord{Key: key, SHA256: observed, Identity: state.Binding().Identity}
+		retained[n] = observed
 	}
 	return retained, nil
 }
 
+func qualifySettledRecord(entry settledBytes, expected ExpectedSettledRecord) (*domain.State, SettledRetainedRecord, error) {
+	state, err := decode(entry.raw)
+	if err != nil || state == nil || state.Binding() != expected.Binding || entry.key != expected.Key {
+		return nil, SettledRetainedRecord{}, settledRefusal()
+	}
+	key, err := recordKey(state.Binding().Identity)
+	digest := sha256.Sum256(entry.raw)
+	observed := hex.EncodeToString(digest[:])
+	if err != nil || key != entry.key || observed != expected.SHA256 {
+		return nil, SettledRetainedRecord{}, settledRefusal()
+	}
+	return state, SettledRetainedRecord{Key: key, SHA256: observed, Identity: state.Binding().Identity}, nil
+}
+
+func completedSettledReceipt(state *domain.State) bool {
+	receipt := state.Receipt()
+	return receipt != nil && (receipt.Operation == domain.WriteKind && receipt.Replacements == 0 || receipt.Operation == domain.EditKind && receipt.Replacements > 0)
+}
+
 func observeSettled(ctx context.Context, expected [settledRecordCount]ExpectedSettledRecord, observation settledObservation, visit func(SettledInspection) error) (*SettledInspection, error) {
-	if ctx == nil || ctx.Err() != nil || observation == nil || visit == nil {
+	if visit == nil {
 		return nil, unavailable()
 	}
-	entries, err := observation.inventory()
-	if err != nil || ctx.Err() != nil {
-		return nil, unavailable()
-	}
-	retained, err := qualifySettled(entries, expected)
+	var retained [settledRecordCount]SettledRetainedRecord
+	var result SettledInspection
+	err := observeSettledRecords(ctx, observation, func(entries []settledBytes) (err error) {
+		retained, err = qualifySettled(entries, expected)
+		return err
+	}, func(meta SettledInspection) error {
+		result = meta
+		result.Retained = retained
+		return visit(result)
+	})
 	if err != nil {
 		return nil, err
 	}
+	return &result, nil
+}
+
+// Both closed inspectors use one observation lifecycle; their exact selection
+// cardinality and terminal policies remain separate.
+func observeSettledRecords(ctx context.Context, observation settledObservation, qualify func([]settledBytes) error, visit func(SettledInspection) error) error {
+	if ctx == nil || ctx.Err() != nil || observation == nil || qualify == nil || visit == nil {
+		return unavailable()
+	}
+	entries, err := observation.inventory()
+	if err != nil || ctx.Err() != nil {
+		return unavailable()
+	}
+	if err := qualify(entries); err != nil {
+		return err
+	}
 	if observation.recheck(entries) != nil || ctx.Err() != nil {
-		return nil, unavailable()
+		return unavailable()
 	}
 	result := observation.metadata()
-	result.Retained = retained
 	if ctx.Err() != nil {
-		return nil, unavailable()
+		return unavailable()
 	}
 	visitErr := visit(result)
 	// Even a refused or late visitor is followed by the complete fresh check;
 	// its return value cannot stand in for journal qualification.
 	checkErr := observation.recheck(entries)
 	if checkErr != nil || ctx.Err() != nil {
-		return nil, unavailable()
+		return unavailable()
 	}
 	if visitErr != nil {
-		return nil, failure("COMPUTER_MUTATION_INSPECTION_CALLBACK_REFUSED")
+		return failure("COMPUTER_MUTATION_INSPECTION_CALLBACK_REFUSED")
 	}
-	return &result, nil
+	return nil
 }

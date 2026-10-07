@@ -9,7 +9,9 @@ import (
 )
 
 // ClosedInspection describes the entire canonical empty retirement chain ending
-// in an already-consumed successor matching Scope. Persisted stage/binding data
+// in an already-consumed successor matching Scope, or an interrupted retirement
+// ACK in the original Scope when using the separate interrupted inspector.
+// Persisted stage/binding data
 // is not live origin, drain, recovery, admission or replay authority.
 type ClosedInspection struct {
 	Scope       port.JournalScope
@@ -110,6 +112,21 @@ func closedInspectionValue(roots Roots, scope port.JournalScope, chain closedIns
 	return ClosedInspection{Scope: scope, ParentRoot: roots.Parent.Identity, ChatRoot: roots.Chat.Identity,
 		HeadDigest: head.Digest, HeadStage: head.Record.Stage, Publication: head.Record.Publication,
 		NextBinding: c.NextBinding, AttemptID: c.AttemptID, Stages: chain.stages, Head: copyClosedInspectionHead(head)}, nil
+}
+
+func interruptedRetirementInspectionValue(roots Roots, scope port.JournalScope, chain closedInspectionChain) (ClosedInspection, error) {
+	h := chain.head
+	if h == nil || h.Record == nil || !h.EmptyRetirementChain {
+		return ClosedInspection{}, fail(Refused, false)
+	}
+	r := h.Record
+	b := r.Publication.Binding
+	if r.Stage != port.HandoffAcknowledged || r.Origin != port.HandoffLiveOwner || r.ACK == nil || r.ACK.Publication != r.Publication || r.Terminal != nil || r.Consumption != nil || (port.JournalScope{ProfileID: b.ProfileID, BackendGeneration: b.BackendGeneration}) != scope || b.ParentRoot != roots.Parent.Identity || b.ChatRoot != roots.Chat.Identity {
+		return ClosedInspection{}, fail(Refused, false)
+	}
+	return ClosedInspection{Scope: scope, ParentRoot: roots.Parent.Identity, ChatRoot: roots.Chat.Identity,
+		HeadDigest: h.Digest, HeadStage: r.Stage, Publication: r.Publication,
+		Stages: append([]ClosedInspectionStage(nil), chain.stages...), Head: copyClosedInspectionHead(h)}, nil
 }
 
 func copyClosedInspectionHead(head *port.HandoffHead) *port.HandoffHead {

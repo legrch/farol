@@ -21,6 +21,14 @@ import (
 // Desktop projection is a declared crash fixture, not UI, actual saved-profile
 // process history, external MCP or installed-product acceptance.
 func TestNativeEmptyRecoveryHostWithBuiltCore(t *testing.T) {
+	testEmptyRecoveryHostWithBuiltCore(t, false)
+}
+
+func TestNativeInterruptedRetirementHostWithBuiltCore(t *testing.T) {
+	testEmptyRecoveryHostWithBuiltCore(t, true)
+}
+
+func testEmptyRecoveryHostWithBuiltCore(t *testing.T, interrupted bool) {
 	if !*ingressNative {
 		t.Skip("Requires exclusive native lane and -ingress-native")
 	}
@@ -39,7 +47,7 @@ func TestNativeEmptyRecoveryHostWithBuiltCore(t *testing.T) {
 	previous := BuildID
 	BuildID = manifest.BuildID
 	defer func() { BuildID = previous }()
-	in := emptyRecoveryFixtureAt(t, true)
+	in := emptyRecoveryFixtureStateAt(t, true, interrupted)
 	in.Selection.OperationID = freshEmptyRecoveryFixtureUUID(t)
 	in.Selection.HostLifetimeID = freshEmptyRecoveryFixtureUUID(t)
 	in.Selection.ChildLaunchID = freshEmptyRecoveryFixtureUUID(t)
@@ -57,13 +65,23 @@ func TestNativeEmptyRecoveryHostWithBuiltCore(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	quit := []byte("{\"schema\":1,\"at\":\"2026-10-07T21:13:07.697Z\",\"drained\":false,\"unconfirmed\":[\"go-core\"]}\n")
+	if interrupted {
+		if err := os.WriteFile(filepath.Join(state, "last-quit.json"), quit, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
 	profile := in.Profile
 	in.Profile = ProfileBinding{}
 	fixture := struct {
 		Input                                   emptyRecoveryInspectionInput
 		Profile                                 ProfileBinding
 		ExpectedRunSha256, ExpectedConfigSha256 string
-	}{in, profile, hex.EncodeToString(sumFixture(run)), hex.EncodeToString(sumFixture(config))}
+		ExpectedQuitSha256                      string `json:",omitempty"`
+	}{Input: in, Profile: profile, ExpectedRunSha256: hex.EncodeToString(sumFixture(run)), ExpectedConfigSha256: hex.EncodeToString(sumFixture(config))}
+	if interrupted {
+		fixture.ExpectedQuitSha256 = hex.EncodeToString(sumFixture(quit))
+	}
 	raw, err = json.Marshal(fixture)
 	if err != nil {
 		t.Fatal(err)
@@ -107,6 +125,15 @@ func TestNativeEmptyRecoveryHostWithBuiltCore(t *testing.T) {
 	t.Logf("built-core host receipt retained: %s; SHA256 %x", evidence, sha256.Sum256(receipt))
 	if _, err := os.Lstat(filepath.Join(state, "running.json")); !os.IsNotExist(err) {
 		t.Fatal("failed run not retained away from live marker", err)
+	}
+	if interrupted {
+		archivedQuit, err := os.ReadFile(filepath.Join(profile.Root, "chat-retired-"+in.Selection.OperationID, "failed-last-quit.json"))
+		if err != nil || string(archivedQuit) != string(quit) {
+			t.Fatal("original failed Quit not preserved", err)
+		}
+		if _, err := os.Lstat(filepath.Join(state, "last-quit.json")); !os.IsNotExist(err) {
+			t.Fatal("live failed Quit not archived", err)
+		}
 	}
 	if err := refusePendingEmptyRecovery(profile); err != nil {
 		t.Fatal(err)

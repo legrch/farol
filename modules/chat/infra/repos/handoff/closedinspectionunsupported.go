@@ -16,6 +16,10 @@ func acquireClosedInspection(context.Context, Roots, port.JournalScope) (*Closed
 	return nil, fail(Unavailable, false)
 }
 
+func acquireInterruptedRetirementInspection(context.Context, Roots, port.JournalScope) (*ClosedLease, error) {
+	return nil, fail(Unavailable, false)
+}
+
 func acquireAcknowledgedInspection(context.Context, Roots, port.HandoffBinding, string) (*AcknowledgedLease, error) {
 	return nil, fail(Unavailable, false)
 }

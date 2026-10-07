@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { retainEmptyArchive } from "../../src/apps/desktop/retained-empty-archive";
+import {
+  retainEmptyArchive,
+  retainEmptyChatForArchival,
+} from "../../src/apps/desktop/retained-empty-archive";
 
 // Controlled fs port only: exercises preservation across the observation /
 // eligibility interval. This does not prove real native filesystem behavior.
@@ -127,12 +130,13 @@ describe("retained empty archive byte and physical pin", () => {
     };
     await expect(retainEmptyArchive(root)).rejects.toThrow();
   });
-  it("accounts only for four exact host artifacts with expected inode and bytes", async () => {
+  it("accounts only for exact host artifacts with expected inode and bytes", async () => {
     const pin = await retainEmptyArchive(root);
     for (const name of [
       "known-completion-attempt.json",
       "maintenance-completed.json",
       "failed-running.json",
+      "failed-last-quit.json",
       "maintenance-intent.json",
     ]) {
       add(name, "retained", 100n + BigInt(files.size));
@@ -152,6 +156,34 @@ describe("retained empty archive byte and physical pin", () => {
       ).rejects.toThrow();
     }
   });
+  it.each(["unchanged", "bytes", "inode", "extra"])(
+    "pins original empty Chat across a sibling archive move: %s",
+    async (kind) => {
+      const chat = "/synthetic/chat";
+      const archive =
+        "/synthetic/chat-retired-11111111-1111-4111-8111-111111111111";
+      const move = (from: string, to: string) => {
+        for (const [name, entry] of [...files]) {
+          if (name === from || name.startsWith(from + "/")) {
+            files.delete(name);
+            files.set(to + name.slice(from.length), entry);
+          }
+        }
+      };
+      move(root, chat);
+      const observeMoved = await retainEmptyChatForArchival(chat, archive);
+      move(chat, archive);
+      const old = files.get(archive + "/chat-handoff-0001.commit")!;
+      if (kind === "bytes") old.content = Buffer.from("changed!");
+      if (kind === "inode") old.ino++;
+      if (kind === "extra") files.set(archive + "/unexpected", { ...old });
+      if (kind === "unchanged") await (await observeMoved()).verify();
+      else
+        await expect(observeMoved()).rejects.toThrow(
+          "EMPTY_CHAT_RECOVERY_ARCHIVE_CHANGED",
+        );
+    },
+  );
   it("adding a host artifact cannot authorize changed original records", async () => {
     const pin = await retainEmptyArchive(root);
     add("maintenance-completed.json", "receipt", 55n);

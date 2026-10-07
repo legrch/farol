@@ -29,6 +29,19 @@ func AcquireClosedInspection(ctx context.Context, roots Roots, scope port.Journa
 	}
 	return acquireClosedInspection(ctx, roots, scope)
 }
+
+// AcquireInterruptedRetirementInspection retains the existing read-only claim
+// over a canonical empty chain ending at the original scope's host ACK. A nil
+// terminal remains unknown; this inspection never establishes clean closure.
+func AcquireInterruptedRetirementInspection(ctx context.Context, roots Roots, scope port.JournalScope) (*ClosedLease, error) {
+	if ctx == nil || ctx.Err() != nil {
+		return nil, fail(Cancelled, false)
+	}
+	if !historyID(roots.ProfileID) || !historyID(scope.BackendGeneration) || scope.ProfileID != roots.ProfileID {
+		return nil, fail(Invalid, false)
+	}
+	return acquireInterruptedRetirementInspection(ctx, roots, scope)
+}
 func (l *ClosedLease) Observation() (ClosedInspection, error) {
 	if l == nil {
 		return ClosedInspection{}, fail(Unavailable, false)

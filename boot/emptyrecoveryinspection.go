@@ -7,6 +7,7 @@ import (
 	chatport "github.com/legrch/farol/modules/chat/app/port"
 	"github.com/legrch/farol/modules/chat/app/services/emptyrecovery"
 	"github.com/legrch/farol/modules/chat/app/services/handoff"
+	"github.com/legrch/farol/modules/chat/app/services/interruptedretirement"
 	handoffrepo "github.com/legrch/farol/modules/chat/infra/repos/handoff"
 	lifecyclerepo "github.com/legrch/farol/modules/chat/infra/repos/lifecycle"
 	"github.com/legrch/farol/modules/chat/infra/results"
@@ -20,6 +21,12 @@ type emptyRecoveryInspectionInput struct {
 	OwnerID, ComputerID string
 	AccessDigest        [32]byte
 	Mutations           []mutationrepo.ExpectedSettledRecord
+	Interrupted         *interruptedRetirementInput `json:",omitempty"`
+}
+
+type interruptedRetirementInput struct {
+	OriginalHandoffID string
+	ExpectedACKDigest [32]byte
 }
 
 type emptyRecoveryInspection struct {
@@ -27,6 +34,7 @@ type emptyRecoveryInspection struct {
 	Computer, Chat, Task NativeRoot
 	Access               accessrepo.ClosedInspection
 	Retained             mutationrepo.SettledInspection
+	InterruptedRetained  *mutationrepo.InterruptedChatSettledInspection
 	HandoffSteps         int
 }
 
@@ -80,12 +88,18 @@ func withEmptyRecoveryClaims(ctx context.Context, in emptyRecoveryInspectionInpu
 	scope := chatport.JournalScope{ProfileID: in.Profile.ProfileID, BackendGeneration: in.Selection.Current.BackendGeneration}
 	return withEmptyRecoveryTask(ctx, task, func() error {
 		return accessrepo.WithClosedInspection(ctx, computer.Path, accessrepo.Binding{ProfileID: in.Profile.ProfileID, OwnerID: in.OwnerID, ComputerID: in.ComputerID}, in.AccessDigest, func(access accessrepo.ClosedInspection) (resultErr error) {
-			h, err := handoffrepo.AcquireClosedInspection(ctx, handoffRoots(NativeLaunch{Profile: in.Profile}, chat), scope)
+			acquireHandoff := handoffrepo.AcquireClosedInspection
+			acquireLifecycle := lifecyclerepo.AcquireClosedInspection
+			if in.Interrupted != nil {
+				acquireHandoff = handoffrepo.AcquireInterruptedRetirementInspection
+				acquireLifecycle = lifecyclerepo.AcquireInterruptedRetirementInspection
+			}
+			h, err := acquireHandoff(ctx, handoffRoots(NativeLaunch{Profile: in.Profile}, chat), scope)
 			if err != nil {
 				return err
 			}
 			defer func() { resultErr = errors.Join(resultErr, h.Close()) }()
-			l, err := lifecyclerepo.AcquireClosedInspection(ctx, lifecyclerepo.Root{Path: chat.Path, ProfileID: chat.ProfileID, Device: chat.Device, Inode: chat.Inode, OwnerUID: chat.OwnerUID}, scope, lifecyclerepo.Limits{Bytes: 1048576, Records: 4096})
+			l, err := acquireLifecycle(ctx, lifecyclerepo.Root{Path: chat.Path, ProfileID: chat.ProfileID, Device: chat.Device, Inode: chat.Inode, OwnerUID: chat.OwnerUID}, scope, lifecyclerepo.Limits{Bytes: 1048576, Records: 4096})
 			if err != nil {
 				return err
 			}
@@ -111,7 +125,13 @@ func withEmptyRecoveryClaims(ctx context.Context, in emptyRecoveryInspectionInpu
 			if hv.Head == nil {
 				return emptyrecovery.Refused
 			}
-			plan, err := emptyrecovery.Select(in.Selection, chatport.EmptyRecoveryObservation{Head: *hv.Head, Scope: lv.Scope, Root: lv.Root, LifecycleDigest: lv.SnapshotDigest, Incarnations: lv.Incarnations, ResultsRoot: rv.Root, ResultsStorageRoot: rv.StorageRoot, ResultCount: rv.ResultCount}, emptyRecoveryRecordValidator{})
+			observation := chatport.EmptyRecoveryObservation{Head: *hv.Head, Scope: lv.Scope, Root: lv.Root, LifecycleDigest: lv.SnapshotDigest, Incarnations: lv.Incarnations, ResultsRoot: rv.Root, ResultsStorageRoot: rv.StorageRoot, ResultCount: rv.ResultCount, RetirementPresent: lv.Retirement != nil}
+			var plan *chatport.EmptyRecoveryPlan
+			if in.Interrupted == nil {
+				plan, err = emptyrecovery.Select(in.Selection, observation, emptyRecoveryRecordValidator{})
+			} else {
+				plan, err = interruptedretirement.Select(chatport.InterruptedRetirementSelection{EmptyRecoverySelection: in.Selection, OriginalHandoffID: in.Interrupted.OriginalHandoffID, ExpectedACKDigest: in.Interrupted.ExpectedACKDigest}, chatport.InterruptedRetirementObservation{EmptyRecoveryObservation: observation, Retirement: lv.Retirement}, emptyRecoveryRecordValidator{})
+			}
 			if err != nil {
 				return err
 			}
@@ -136,6 +156,16 @@ func withEmptyRecoveryClaims(ctx context.Context, in emptyRecoveryInspectionInpu
 				return inspectEmptyRecoveryNamespaces(ctx, computer, chat, task, len(hv.Stages))
 			}
 			if err := verify(); err != nil {
+				return err
+			}
+			if in.Interrupted != nil {
+				_, err = mutationrepo.InspectInterruptedChatSettled(ctx, mutationrepo.Root{Path: computer.Path, Device: computer.Device, Inode: computer.Inode, OwnerUID: computer.OwnerUID}, mutationrepo.SettledSelection{OwnerID: in.OwnerID, ProfileID: in.Profile.ProfileID, ComputerID: in.ComputerID}, in.Mutations, func(retained mutationrepo.InterruptedChatSettledInspection) error {
+					if err := verify(); err != nil {
+						return err
+					}
+					callbackErr := visit(emptyRecoveryInspection{Plan: *plan, Computer: computer, Chat: chat, Task: task, Access: access, InterruptedRetained: &retained, HandoffSteps: len(hv.Stages)}, claims)
+					return errors.Join(callbackErr, verify())
+				})
 				return err
 			}
 			_, err = mutationrepo.InspectSettled(ctx, mutationrepo.Root{Path: computer.Path, Device: computer.Device, Inode: computer.Inode, OwnerUID: computer.OwnerUID}, mutationrepo.SettledSelection{OwnerID: in.OwnerID, ProfileID: in.Profile.ProfileID, ComputerID: in.ComputerID}, in.Mutations, func(retained mutationrepo.SettledInspection) error {

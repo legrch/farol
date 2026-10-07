@@ -6,8 +6,9 @@ import (
 	"github.com/legrch/farol/modules/chat/app/port"
 )
 
-// ClosedInspection is metadata for a canonical, currently empty journal with no
-// recorded retirement. It is diagnostic data, never recovery, admission, clean
+// ClosedInspection is metadata for a canonical, currently empty journal. The
+// normal inspection refuses retirement; the interrupted variant copies it.
+// It is diagnostic data, never recovery, admission, clean
 // retirement or permission to repeat an unknown operation. Incarnations includes
 // only the recorded generation history, not an inventory of the profile.
 type ClosedInspection struct {
@@ -17,6 +18,39 @@ type ClosedInspection struct {
 	Version        int
 	Revision       uint64
 	Incarnations   []string
+	Retirement     *port.RetirementWrite `json:"-"`
+}
+
+// Reuse the existing canonical decoder and inspection policy, then copy the
+// actual empty retirement write. Never reconstruct a receipt from diagnostics.
+func interruptedRetirementInspectionMetadata(raw []byte, root Root, scope port.JournalScope, limits Limits) (ClosedInspection, error) {
+	value, err := inspectRecord(raw, root, limits)
+	if err != nil {
+		return ClosedInspection{}, err
+	}
+	if value.Scope != scope || value.WriteCount != 0 || value.TurnCount != 0 || value.Retirement == nil || value.Retirement.TurnCount != 0 {
+		return ClosedInspection{}, failure(Refused, false)
+	}
+	record, err := decode(raw, limits)
+	if err != nil {
+		return ClosedInspection{}, failure(Invalid, false)
+	}
+	w := record.Retirement
+	if w == nil || w.Scope != scope || w.Root != value.Root || w.PreviousRevision != 0 || w.Revision != 1 || w.Turns == nil || len(w.Turns) != 0 {
+		return ClosedInspection{}, failure(Refused, false)
+	}
+	retirement := port.CopyRetirement(*w)
+	return ClosedInspection{Scope: value.Scope, Root: value.Root, SnapshotDigest: value.SnapshotDigest,
+		Version: value.Version, Revision: w.Revision, Incarnations: append([]string(nil), value.Incarnations...), Retirement: &retirement}, nil
+}
+
+func copyClosedInspection(value ClosedInspection) ClosedInspection {
+	value.Incarnations = append([]string(nil), value.Incarnations...)
+	if value.Retirement != nil {
+		w := port.CopyRetirement(*value.Retirement)
+		value.Retirement = &w
+	}
+	return value
 }
 
 // WithClosedInspection retains the EXISTING claim lock through inspect and the
@@ -47,7 +81,7 @@ func closedInspectionCallback(ctx context.Context, value ClosedInspection, reche
 	if ctx.Err() != nil {
 		return failure(Cancelled, false)
 	}
-	value.Incarnations = append([]string(nil), value.Incarnations...)
+	value = copyClosedInspection(value)
 	callbackErr := inspect(value)
 	// Even a failed callback must recheck before releasing the claim. A changed
 	// observation wins over the callback error; neither authorizes a retry.

@@ -10,6 +10,7 @@ const additions = new Set([
   "known-completion-attempt.json",
   "maintenance-completed.json",
   "failed-running.json",
+  "failed-last-quit.json",
   "maintenance-intent.json",
 ]);
 type Entry = { identity: bigint[]; bytes?: Buffer };
@@ -92,6 +93,29 @@ async function scan(root: string): Promise<Map<string, Entry>> {
 
 export async function retainEmptyArchive(root: string) {
   const retained = await scan(root);
+  return pinnedArchive(root, retained);
+}
+
+// Observe the original Chat before Go's exclusive sibling rename. No rename or
+// repair is performed here; the same physical tree and all bytes must survive.
+export async function retainEmptyChatForArchival(
+  root: string,
+  archive: string,
+) {
+  if (
+    path.basename(root) !== "chat" ||
+    path.dirname(root) !== path.dirname(archive) ||
+    !/^chat-retired-[a-f0-9-]{36}$/u.test(path.basename(archive))
+  )
+    refused();
+  const retained = await scan(root);
+  return async () => {
+    if (!isDeepStrictEqual(await scan(archive), retained)) refused();
+    return pinnedArchive(archive, retained);
+  };
+}
+
+function pinnedArchive(root: string, retained: Map<string, Entry>) {
   const verify = async () => {
     if (!isDeepStrictEqual(await scan(root), retained)) refused();
   };

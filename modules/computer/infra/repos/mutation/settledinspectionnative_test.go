@@ -20,6 +20,12 @@ import (
 // canonical receipts only; no owner profile, app, process or provider evidence.
 func settledNativeFixture(t *testing.T) (Root, SettledSelection, []ExpectedSettledRecord, []settledBytes) {
 	t.Helper()
+	selection, expected, entries := settledPureFixture(t)
+	return settledNativeFixtureForRecords(t, selection, expected, entries)
+}
+
+func settledNativeFixtureForRecords(t *testing.T, selection SettledSelection, expected []ExpectedSettledRecord, entries []settledBytes) (Root, SettledSelection, []ExpectedSettledRecord, []settledBytes) {
+	t.Helper()
 	path, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -39,7 +45,6 @@ func settledNativeFixture(t *testing.T) (Root, SettledSelection, []ExpectedSettl
 		t.Fatal(err)
 	}
 	root := Root{Path: path, Device: uint64(s.Dev), Inode: s.Ino, OwnerUID: s.Uid}
-	selection, expected, entries := settledPureFixture(t)
 	for _, e := range entries {
 		if err := os.WriteFile(filepath.Join(path, "mutations", e.key), e.raw, 0600); err != nil {
 			t.Fatal(err)

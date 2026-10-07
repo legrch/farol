@@ -42,19 +42,25 @@ func runEmptyRecoveryInspection(args []string, in io.Reader, out io.Writer, diag
 			SHA256 string `json:"sha256"`
 		}
 		observed := struct {
-			Schema             string      `json:"schema"`
-			BuildID            string      `json:"inspectionBuildId"`
-			ProfileID          string      `json:"profileId"`
-			Scope              string      `json:"observedChatGeneration"`
-			Head               string      `json:"chatHandoffSha256"`
-			Lifecycle          string      `json:"chatLifecycleSha256"`
-			Access             string      `json:"computerAccessSha256"`
-			Steps              int         `json:"emptyHandoffSteps"`
-			Retained           [2]retained `json:"retainedMutationResults"`
-			RecoveryAuthorized bool        `json:"recoveryAuthorized"`
+			Schema             string     `json:"schema"`
+			BuildID            string     `json:"inspectionBuildId"`
+			ProfileID          string     `json:"profileId"`
+			Scope              string     `json:"observedChatGeneration"`
+			Head               string     `json:"chatHandoffSha256"`
+			Lifecycle          string     `json:"chatLifecycleSha256"`
+			Access             string     `json:"computerAccessSha256"`
+			Steps              int        `json:"emptyHandoffSteps"`
+			Retained           []retained `json:"retainedMutationResults"`
+			RecoveryAuthorized bool       `json:"recoveryAuthorized"`
 		}{Schema: "farol-empty-recovery-inspection/1", BuildID: BuildID, ProfileID: binding.ProfileID, Scope: v.Plan.Selection.Current.BackendGeneration, Head: hex.EncodeToString(v.Plan.Selection.HeadDigest[:]), Lifecycle: hex.EncodeToString(v.Plan.Selection.LifecycleDigest[:]), Access: hex.EncodeToString(v.Access.Digest[:]), Steps: v.HandoffSteps}
-		for n, r := range v.Retained.Retained {
-			observed.Retained[n] = retained{r.Key, r.SHA256}
+		if v.InterruptedRetained != nil {
+			for _, r := range v.InterruptedRetained.Retained {
+				observed.Retained = append(observed.Retained, retained{r.Key, r.SHA256})
+			}
+		} else {
+			for _, r := range v.Retained.Retained {
+				observed.Retained = append(observed.Retained, retained{r.Key, r.SHA256})
+			}
 		}
 		encoded, err := json.Marshal(observed)
 		if err != nil {
@@ -79,6 +85,11 @@ func runEmptyRecoveryInspection(args []string, in io.Reader, out io.Writer, diag
 // differently spelled keys cannot overwrite one selected identity.
 func emptyRecoveryCanonicalFields(raw json.RawMessage, target reflect.Type) bool {
 	switch target.Kind() {
+	case reflect.Pointer:
+		if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+			return true
+		}
+		return emptyRecoveryCanonicalFields(raw, target.Elem())
 	case reflect.Struct:
 		var object map[string]json.RawMessage
 		if json.Unmarshal(raw, &object) != nil || object == nil {

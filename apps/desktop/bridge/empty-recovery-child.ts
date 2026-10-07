@@ -40,6 +40,10 @@ export interface ExactEmptyRecoverySelection {
   readonly backendGeneration: string;
 }
 export interface EmptyRecoverySelectionInput {
+  readonly Interrupted?: {
+    readonly OriginalHandoffID: string;
+    readonly ExpectedACKDigest: readonly number[];
+  };
   readonly Profile?: {
     readonly ProfileID: "";
     readonly Root: "";
@@ -187,19 +191,26 @@ export function prepareEmptyRecoveryChild(
     const input = parseJSON(payload);
     if (!validate("json", input)) throw Error("invalid input JSON");
     const fields = Object.keys(input as object);
-    const v = object(
-      input,
-      fields.includes("Profile")
-        ? [
-            "Profile",
-            "Selection",
-            "OwnerID",
-            "ComputerID",
-            "AccessDigest",
-            "Mutations",
-          ]
-        : ["Selection", "OwnerID", "ComputerID", "AccessDigest", "Mutations"],
-    );
+    const v = object(input, [
+      "Selection",
+      "OwnerID",
+      "ComputerID",
+      "AccessDigest",
+      "Mutations",
+      ...(fields.includes("Profile") ? ["Profile"] : []),
+      ...(fields.includes("Interrupted") ? ["Interrupted"] : []),
+    ]);
+    if (fields.includes("Interrupted")) {
+      const interrupted = object(v.Interrupted, [
+        "OriginalHandoffID",
+        "ExpectedACKDigest",
+      ]);
+      if (
+        !id(interrupted.OriginalHandoffID) ||
+        !digest(interrupted.ExpectedACKDigest)
+      )
+        throw Error("invalid interrupted retirement");
+    }
     if (
       fields.includes("Profile") &&
       !isDeepStrictEqual(v.Profile, {

@@ -64,6 +64,26 @@ describe("one-shot empty Chat recovery preflight", () => {
       }
     }
   });
+  it("requires an explicit interrupted-retirement selection with the failed Quit digest", () => {
+    const selected = [
+      ...exact,
+      "--interrupted-retirement",
+      "--expected-quit",
+      "e".repeat(64),
+    ];
+    expect(parseEmptyRecoveryOptions(selected)["--expected-quit"]).toBe(
+      "e".repeat(64),
+    );
+    expect(() =>
+      parseEmptyRecoveryOptions([...exact, "--interrupted-retirement"]),
+    ).toThrow();
+    expect(() =>
+      parseEmptyRecoveryOptions([...exact, "--expected-quit", "e".repeat(64)]),
+    ).toThrow();
+    expect(() =>
+      parseEmptyRecoveryOptions([...selected, "--interrupted-retirement"]),
+    ).toThrow();
+  });
   it.each([
     "--profile",
     "--home",

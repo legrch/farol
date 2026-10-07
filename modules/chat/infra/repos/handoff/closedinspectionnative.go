@@ -127,6 +127,18 @@ func acquireClosedInspection(ctx context.Context, roots Roots, scope port.Journa
 	return &ClosedLease{value: value, verify: verify, close: close}, nil
 }
 
+func acquireInterruptedRetirementInspection(ctx context.Context, roots Roots, scope port.JournalScope) (*ClosedLease, error) {
+	chain, verify, close, err := acquireClosedInspectionChain(ctx, roots, func(chain closedInspectionChain) error {
+		_, err := interruptedRetirementInspectionValue(roots, scope, chain)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	value, _ := interruptedRetirementInspectionValue(roots, scope, chain)
+	return &ClosedLease{value: value, verify: verify, close: close}, nil
+}
+
 func acquireAcknowledgedInspection(ctx context.Context, roots Roots, expected port.HandoffBinding, handoffID string) (*AcknowledgedLease, error) {
 	chain, verify, close, err := acquireClosedInspectionChain(ctx, roots, func(chain closedInspectionChain) error {
 		return acknowledgedInspectionQualify(chain, expected, handoffID)
@@ -137,8 +149,8 @@ func acquireAcknowledgedInspection(ctx context.Context, roots Roots, expected po
 	return &AcknowledgedLease{head: copyClosedInspectionHead(chain.head), verify: verify, close: close}, nil
 }
 
-// Retain the same read-only disk and complete canonical scanner for both exact
-// predicates. Neither predicate changes the consumed-only public API.
+// Retain the same read-only disk and complete canonical scanner for each exact
+// predicates. The ordinary public API remains consumed-only.
 func acquireClosedInspectionChain(ctx context.Context, roots Roots, qualify func(closedInspectionChain) error) (_ closedInspectionChain, verify, close func() error, err error) {
 	d, err := openClosedInspectionDisk(ctx, roots)
 	if err != nil {

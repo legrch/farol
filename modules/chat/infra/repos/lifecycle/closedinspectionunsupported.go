@@ -15,3 +15,7 @@ func withClosedInspection(context.Context, Root, port.JournalScope, Limits, func
 func acquireClosedInspection(context.Context, Root, port.JournalScope, Limits) (*ClosedLease, error) {
 	return nil, failure(Unavailable, false)
 }
+
+func acquireInterruptedRetirementInspection(context.Context, Root, port.JournalScope, Limits) (*ClosedLease, error) {
+	return nil, failure(Unavailable, false)
+}

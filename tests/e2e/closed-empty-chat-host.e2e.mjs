@@ -78,7 +78,7 @@ try {
   await build({
     stdin: {
       contents:
-        'export { recoverClosedEmptyChat } from "./src/apps/desktop/closed-empty-chat-recovery.ts"; export { assertClosedConnectorProcesses } from "./src/apps/desktop/closed-computer-recovery.ts";',
+        'export { recoverClosedEmptyChat, recoverInterruptedEmptyChat } from "./src/apps/desktop/closed-empty-chat-recovery.ts"; export { assertClosedConnectorProcesses } from "./src/apps/desktop/closed-computer-recovery.ts";',
       resolveDir: root,
       loader: "ts",
     },
@@ -89,10 +89,17 @@ try {
     target: "node24",
     logLevel: "silent",
   });
-  const { recoverClosedEmptyChat, assertClosedConnectorProcesses } =
-    createRequire(import.meta.url)(output);
+  const {
+    recoverClosedEmptyChat,
+    recoverInterruptedEmptyChat,
+    assertClosedConnectorProcesses,
+  } = createRequire(import.meta.url)(output);
   const s = fixture.Input.Selection;
-  const result = await recoverClosedEmptyChat({
+  const interrupted = fixture.Input.Interrupted !== undefined;
+  const recover = interrupted
+    ? recoverInterruptedEmptyChat
+    : recoverClosedEmptyChat;
+  const result = await recover({
     userData,
     executable: path.join(directory, "farol-backend"),
     profile: {
@@ -113,8 +120,11 @@ try {
     },
     expectedRunSha256: fixture.ExpectedRunSha256,
     expectedConfigSha256: fixture.ExpectedConfigSha256,
+    ...(interrupted ? { expectedQuitSha256: fixture.ExpectedQuitSha256 } : {}),
     desktopState: async () => ({
-      obligations: ["QUIT_UNCONFIRMED:crash"],
+      obligations: interrupted
+        ? ["QUIT_UNCONFIRMED:go-core", "QUIT_UNCONFIRMED:crash"]
+        : ["QUIT_UNCONFIRMED:crash"],
       unreadable: [],
       changed: [],
     }),

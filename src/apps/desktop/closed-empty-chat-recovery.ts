@@ -22,7 +22,10 @@ import { MAX_RUN_MARKER_BYTES } from "./run-marker";
 import type { ClosedRecoveryState } from "./closed-computer-recovery";
 import { validate } from "../../../apps/desktop/bridge/wire";
 import type { EmptyRecoveryPublication } from "../../../apps/desktop/bridge/empty-recovery-child";
-import { retainEmptyArchive } from "./retained-empty-archive";
+import {
+  retainEmptyArchive,
+  retainEmptyChatForArchival,
+} from "./retained-empty-archive";
 
 const FLAGS = constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK;
 const sum = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex");
@@ -174,6 +177,42 @@ export async function recoverClosedEmptyChat(
     operationId: string;
   }>
 > {
+  if (input.selectionInput.Interrupted !== undefined)
+    throw Error("EMPTY_CHAT_RECOVERY_SELECTION_INVALID");
+  return recoverSelectedEmptyChat(input);
+}
+
+// Explicit Dev-only abandonment of an empty acknowledged lifetime. Its missing
+// terminal remains missing in the archive. Only the NEW owner is retired below.
+export async function recoverInterruptedEmptyChat(
+  input: ClosedEmptyChatRecoveryInput & { expectedQuitSha256: string },
+): Promise<
+  Readonly<{
+    phase: "prepared_for_cold_start";
+    archive: string;
+    operationId: string;
+  }>
+> {
+  const interrupted = input.selectionInput.Interrupted;
+  if (
+    !interrupted ||
+    !/^[a-f0-9]{64}$/u.test(input.expectedQuitSha256) ||
+    !["Farol Dev", "Farol DEV"].includes(path.basename(input.userData))
+  )
+    throw Error("INTERRUPTED_CHAT_RECOVERY_SELECTION_INVALID");
+  return recoverSelectedEmptyChat(input, input.expectedQuitSha256);
+}
+
+async function recoverSelectedEmptyChat(
+  input: ClosedEmptyChatRecoveryInput,
+  expectedQuitSha256?: string,
+): Promise<
+  Readonly<{
+    phase: "prepared_for_cold_start";
+    archive: string;
+    operationId: string;
+  }>
+> {
   const selected = structuredClone({
     userData: input.userData,
     profile: input.profile,
@@ -221,6 +260,20 @@ export async function recoverClosedEmptyChat(
         );
         const run = await snapshot(running, MAX_RUN_MARKER_BYTES);
         const config = await snapshot(configuration, 256 * 1024);
+        const failedQuit =
+          expectedQuitSha256 === undefined
+            ? undefined
+            : await snapshot(path.join(state, "last-quit.json"), 16384);
+        if (failedQuit) {
+          const quit = JSON.parse(failedQuit.bytes.toString("utf8"));
+          if (
+            sum(failedQuit.bytes) !== expectedQuitSha256 ||
+            quit.schema !== 1 ||
+            quit.drained !== false ||
+            !isDeepStrictEqual(quit.unconfirmed, ["go-core"])
+          )
+            throw Error("INTERRUPTED_CHAT_RECOVERY_QUIT_CHANGED");
+        }
         if (
           sum(run.bytes) !== input.expectedRunSha256 ||
           sum(config.bytes) !== input.expectedConfigSha256
@@ -250,12 +303,19 @@ export async function recoverClosedEmptyChat(
             throw Error("EMPTY_CHAT_RECOVERY_ARCHIVE_CHANGED");
           await unchanged(running, run);
           await unchanged(configuration, config);
-          await absent(path.join(state, "last-quit.json"));
+          if (failedQuit)
+            await unchanged(path.join(state, "last-quit.json"), failedQuit);
+          else await absent(path.join(state, "last-quit.json"));
           const desktop = await input.desktopState();
           if (
             desktop.changed.length ||
             desktop.unreadable.length ||
-            !isDeepStrictEqual(desktop.obligations, ["QUIT_UNCONFIRMED:crash"])
+            !isDeepStrictEqual(
+              desktop.obligations,
+              failedQuit
+                ? ["QUIT_UNCONFIRMED:go-core", "QUIT_UNCONFIRMED:crash"]
+                : ["QUIT_UNCONFIRMED:crash"],
+            )
           )
             throw Error("EMPTY_CHAT_RECOVERY_WORK_PENDING");
           input.processesAbsent();
@@ -266,6 +326,12 @@ export async function recoverClosedEmptyChat(
         await absent(archive);
         await input.attest();
         await proof();
+        const movedArchive = failedQuit
+          ? await retainEmptyChatForArchival(
+              path.join(profile.root, "chat"),
+              archive,
+            )
+          : undefined;
         // Original child facts, never reconstructed from a complete-looking head.
         const child = await prepareEmptyRecoveryChild(
           input.executable,
@@ -310,6 +376,8 @@ export async function recoverClosedEmptyChat(
           preparedRoots,
           lease,
           proof,
+          ...(failedQuit ? { failedQuit } : {}),
+          ...(movedArchive ? { archivePin: await movedArchive() } : {}),
         });
       },
     );
@@ -604,6 +672,7 @@ async function finishEmptyRecoveryHost({
   proof,
   knownFailure,
   archivePin,
+  failedQuit,
 }: {
   input: ClosedEmptyChatRecoveryInput;
   child: EmptyRecoveryChildResult;
@@ -623,6 +692,7 @@ async function finishEmptyRecoveryHost({
   proof(): Promise<void>;
   knownFailure?: { receiptSha256: string; completionOperationId: string };
   archivePin?: Awaited<ReturnType<typeof retainEmptyArchive>>;
+  failedQuit?: Snapshot;
 }): Promise<{
   phase: "prepared_for_cold_start";
   archive: string;
@@ -640,8 +710,16 @@ async function finishEmptyRecoveryHost({
   await proof();
   await unchanged(pending, intent);
   const completion = path.join(archive, "maintenance-completed.json");
+  const interruptedRetirement = failedQuit
+    ? {
+        originalHandoffId: input.selectionInput.Interrupted!.OriginalHandoffID,
+        originalTerminal: "unobserved",
+        failedQuitSha256: sum(failedQuit.bytes),
+        terminalReceiptScope: "new-maintenance-child",
+      }
+    : undefined;
   const receipt = Buffer.from(
-    `${JSON.stringify({ schema: "farol.closed-empty-chat-recovery/1", operationId: exact.operationId, buildId: exact.buildId, failedRunSha256: input.expectedRunSha256, configSha256: input.expectedConfigSha256, publication: child.publication, acknowledgement: child.acknowledgement, originalChildTerminal: child.terminal, recorderConfirmed: true, ...(knownFailure ? { knownFailure } : {}) })}\n`,
+    `${JSON.stringify({ schema: "farol.closed-empty-chat-recovery/1", operationId: exact.operationId, buildId: exact.buildId, failedRunSha256: input.expectedRunSha256, configSha256: input.expectedConfigSha256, publication: child.publication, acknowledgement: child.acknowledgement, originalChildTerminal: child.terminal, recorderConfirmed: true, ...(knownFailure ? { knownFailure } : {}), ...(interruptedRetirement ? { interruptedRetirement } : {}) })}\n`,
   );
   const f = await fs.open(
     completion,
@@ -674,6 +752,17 @@ async function finishEmptyRecoveryHost({
   await sync(archive);
   await unchanged(retainedRun, run);
   await archivePin?.include("failed-running.json", run);
+  if (failedQuit) {
+    const originalQuit = path.join(state, "last-quit.json");
+    const retainedQuit = path.join(archive, "failed-last-quit.json");
+    await unchanged(originalQuit, failedQuit);
+    await absent(retainedQuit);
+    await fs.rename(originalQuit, retainedQuit);
+    await sync(state);
+    await sync(archive);
+    await unchanged(retainedQuit, failedQuit);
+    await archivePin?.include("failed-last-quit.json", failedQuit);
+  }
   await unchanged(configuration, config);
   await unchanged(pending, intent);
   if (

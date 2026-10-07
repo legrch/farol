@@ -22,13 +22,18 @@ const digest = (value) => createHash("sha256").update(value).digest("hex");
 
 export function parseEmptyRecoveryOptions(args) {
   const values = {};
-  const flags = new Set(["--apply", "--development"]);
+  const flags = new Set([
+    "--apply",
+    "--development",
+    "--interrupted-retirement",
+  ]);
   const fields = new Set([
     "--selection",
     "--selection-sha",
     "--expected-source",
     "--expected-run",
     "--expected-config",
+    "--expected-quit",
   ]);
   for (let n = 0; n < args.length; n++) {
     const name = args[n];
@@ -43,7 +48,10 @@ export function parseEmptyRecoveryOptions(args) {
     !/^[a-f0-9]{40}$/u.test(values["--expected-source"] ?? "") ||
     !["--selection-sha", "--expected-run", "--expected-config"].every((name) =>
       /^[a-f0-9]{64}$/u.test(values[name] ?? ""),
-    )
+    ) ||
+    (values["--interrupted-retirement"] === true
+      ? !/^[a-f0-9]{64}$/u.test(values["--expected-quit"] ?? "")
+      : Object.hasOwn(values, "--expected-quit"))
   )
     throw Error("EMPTY_CHAT_RECOVERY_EXACT_EVIDENCE_REQUIRED");
   return values;
@@ -136,7 +144,7 @@ async function run() {
     await build({
       stdin: {
         contents:
-          'export { recoverClosedEmptyChat } from "./src/apps/desktop/closed-empty-chat-recovery.ts"; export { assertClosedConnectorProcesses } from "./src/apps/desktop/closed-computer-recovery.ts"; export { parseJSON } from "./apps/desktop/bridge/frame.ts";',
+          'export { recoverClosedEmptyChat, recoverInterruptedEmptyChat } from "./src/apps/desktop/closed-empty-chat-recovery.ts"; export { assertClosedConnectorProcesses } from "./src/apps/desktop/closed-computer-recovery.ts"; export { parseJSON } from "./apps/desktop/bridge/frame.ts";',
         resolveDir: root,
         sourcefile: "empty-chat-host-entry.ts",
         loader: "ts",
@@ -150,11 +158,17 @@ async function run() {
     });
     const {
       recoverClosedEmptyChat,
+      recoverInterruptedEmptyChat,
       assertClosedConnectorProcesses,
       parseJSON,
     } = createRequire(import.meta.url)(output);
     const metadata = parseJSON(marker.toString("utf8"));
     const selected = parseJSON(selection.toString("utf8"));
+    if (
+      (options["--interrupted-retirement"] === true) !==
+      Object.hasOwn(selected, "Interrupted")
+    )
+      throw Error("EMPTY_CHAT_RECOVERY_SELECTION_MISMATCH");
     if (
       Object.keys(metadata).sort().join(",") !==
         "computerId,profileId,schema" ||
@@ -187,7 +201,11 @@ async function run() {
       )
         throw Error("EMPTY_CHAT_RECOVERY_ATTESTATION_CHANGED");
     };
-    const result = await recoverClosedEmptyChat({
+    const recover =
+      options["--interrupted-retirement"] === true
+        ? recoverInterruptedEmptyChat
+        : recoverClosedEmptyChat;
+    const result = await recover({
       userData,
       executable: path.join(root, "_output/build/app/farol-backend"),
       profile: {
@@ -201,6 +219,9 @@ async function run() {
       exact,
       expectedRunSha256: options["--expected-run"],
       expectedConfigSha256: options["--expected-config"],
+      ...(options["--interrupted-retirement"] === true
+        ? { expectedQuitSha256: options["--expected-quit"] }
+        : {}),
       desktopState: () => activationObligations(userData),
       attest,
       processesAbsent: () => {

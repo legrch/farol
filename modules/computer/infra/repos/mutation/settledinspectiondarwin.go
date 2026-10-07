@@ -20,17 +20,46 @@ type settledFile struct {
 }
 
 type nativeSettledObservation struct {
-	d     *disk
-	files []settledFile
+	d           *disk
+	files       []settledFile
+	recordCount int
 }
 
-func inspectSettledExisting(ctx context.Context, root Root, expected [settledRecordCount]ExpectedSettledRecord, visit func(SettledInspection) error) (result *SettledInspection, err error) {
-	// Existing owner only: no O_CREAT, mkdir, repair, sync or publication.
-	d, err := openNativeMode(root, false)
+func inspectSettledExisting(ctx context.Context, root Root, expected [settledRecordCount]ExpectedSettledRecord, visit func(SettledInspection) error) (*SettledInspection, error) {
+	var result *SettledInspection
+	err := inspectSettledNative(ctx, root, settledRecordCount, func(o settledObservation) (err error) {
+		result, err = observeSettled(ctx, expected, o, visit)
+		return err
+	})
 	if err != nil {
 		return nil, err
 	}
-	o := &nativeSettledObservation{d: d}
+	return result, nil
+}
+
+func inspectInterruptedChatSettledExisting(ctx context.Context, root Root, expected [interruptedChatSettledRecordCount]ExpectedSettledRecord, visit func(InterruptedChatSettledInspection) error) (*InterruptedChatSettledInspection, error) {
+	var result *InterruptedChatSettledInspection
+	err := inspectSettledNative(ctx, root, interruptedChatSettledRecordCount, func(o settledObservation) (err error) {
+		result, err = observeInterruptedChatSettled(ctx, expected, o, visit)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func inspectSettledNative(ctx context.Context, root Root, count int, observe func(settledObservation) error) (err error) {
+	// Only the two named closed policies may select a native inventory bound.
+	if count != settledRecordCount && count != interruptedChatSettledRecordCount {
+		return settledRefusal()
+	}
+	// Existing owner only: no O_CREAT, mkdir, repair, sync or publication.
+	d, err := openNativeMode(root, false)
+	if err != nil {
+		return err
+	}
+	o := &nativeSettledObservation{d: d, recordCount: count}
 	defer func() {
 		var closeErr error
 		for _, f := range o.files {
@@ -38,10 +67,10 @@ func inspectSettledExisting(ctx context.Context, root Root, expected [settledRec
 		}
 		closeErr = errors.Join(closeErr, d.close())
 		if closeErr != nil || ctx.Err() != nil {
-			result, err = nil, unavailable()
+			err = unavailable()
 		}
 	}()
-	return observeSettled(ctx, expected, o, visit)
+	return observe(o)
 }
 
 func (o *nativeSettledObservation) check() error {
@@ -73,12 +102,12 @@ func (o *nativeSettledObservation) names() ([]string, error) {
 		return nil, unavailable()
 	}
 	f := os.NewFile(uintptr(fd), "settled-mutation-inventory")
-	names, readErr := f.Readdirnames(settledRecordCount + 1)
+	names, readErr := f.Readdirnames(o.recordCount + 1)
 	// Explicit EOF qualification covers the complete bounded namespace, even
 	// when Readdirnames returns its partial final batch with a nil error.
 	extra, endErr := f.Readdirnames(1)
 	closeErr := f.Close()
-	if closeErr != nil || (readErr != nil && readErr != io.EOF) || endErr != io.EOF || len(extra) != 0 || len(names) != settledRecordCount || o.check() != nil {
+	if closeErr != nil || (readErr != nil && readErr != io.EOF) || endErr != io.EOF || len(extra) != 0 || len(names) != o.recordCount || o.check() != nil {
 		return nil, unavailable()
 	}
 	sort.Strings(names)
@@ -87,8 +116,10 @@ func (o *nativeSettledObservation) names() ([]string, error) {
 			return nil, settledRefusal()
 		}
 	}
-	if names[0] == names[1] {
-		return nil, settledRefusal()
+	for n := 1; n < len(names); n++ {
+		if names[n-1] == names[n] {
+			return nil, settledRefusal()
+		}
 	}
 	return names, nil
 }
@@ -140,7 +171,7 @@ func (o *nativeSettledObservation) inventory() ([]settledBytes, error) {
 
 func (o *nativeSettledObservation) recheck(entries []settledBytes) error {
 	names, err := o.names()
-	if err != nil || len(o.files) != settledRecordCount || len(entries) != settledRecordCount {
+	if err != nil || len(o.files) != o.recordCount || len(entries) != o.recordCount {
 		return unavailable()
 	}
 	for n, f := range o.files {
