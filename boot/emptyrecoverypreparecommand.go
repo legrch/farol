@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"path/filepath"
 	"reflect"
 	"time"
 
@@ -15,7 +16,9 @@ import (
 	"github.com/legrch/farol/pkg/ipc"
 )
 
-// No public runtime method exposes this mode. The exact, independently verified
+// No public runtime method exposes this mode. The Go entry also confines its
+// physical profile to the two Dev namespaces; production roots are refused.
+// The exact, independently verified
 // native host owns profile lease/process closure before starting this child.
 // ACK is a separate initiating-host message, not a recorded journal projection.
 func runEmptyRecoveryPreparation(args []string, in io.Reader, out, diagnostics io.Writer) int {
@@ -27,7 +30,7 @@ func runEmptyRecoveryPreparation(args []string, in io.Reader, out, diagnostics i
 // before effects; it never abandons an outstanding read/write goroutine.
 func runEmptyRecoveryPreparationDeadline(args []string, in io.Reader, out, diagnostics io.Writer, deadline time.Time) (code int) {
 	binding, ok := nativeInspectionBinding(args)
-	if !ok {
+	if !ok || !emptyRecoveryDevRoot(binding.Root) {
 		return 2
 	}
 	input, output, closeStreams, err := emptyRecoveryDeadlineStreams(in, out)
@@ -101,4 +104,19 @@ func runEmptyRecoveryPreparationDeadline(args []string, in io.Reader, out, diagn
 		return 1
 	}
 	return 0
+}
+
+// Trusted launch identity and held native claims are still required separately.
+// Scope is deliberately narrower than the general inspection/serve modes.
+// Disposable qualification uses the same Dev namespace under a private parent.
+func emptyRecoveryDevRoot(root string) bool {
+	if !validProfilePath(root) || filepath.Base(root) != "go-core" {
+		return false
+	}
+	state := filepath.Dir(root)
+	if filepath.Base(state) != "farol-next-state" {
+		return false
+	}
+	name := filepath.Base(filepath.Dir(state))
+	return name == "Farol Dev" || name == "Farol DEV"
 }

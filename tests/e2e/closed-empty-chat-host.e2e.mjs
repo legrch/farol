@@ -25,8 +25,9 @@ if (process.argv.length !== 3 || !fixtureFile || !path.isAbsolute(fixtureFile))
 const fixture = JSON.parse(await fs.readFile(fixtureFile, "utf8"));
 const userData = path.dirname(path.dirname(fixture.Profile.Root));
 if (
-  path.dirname(userData) !== path.join(root, "_output/tmp") ||
-  !path.basename(userData).startsWith("retirement-boot-")
+  path.basename(userData) !== "Farol Dev" ||
+  path.dirname(path.dirname(userData)) !== path.join(root, "_output/tmp") ||
+  !path.basename(path.dirname(userData)).startsWith("retirement-boot-")
 )
   throw Error("HOST_FIXTURE_SCOPE_REFUSED");
 const phase = async (value) =>

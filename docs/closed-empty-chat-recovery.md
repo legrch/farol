@@ -10,7 +10,12 @@ the exact Go-enabled build and compiler/module inputs. It selects the ordinary
 Dev path through the existing trusted owner-home resolver. It requires exact
 profile identity, selected consumed handoff and empty lifecycle digests, access
 digest, two complete retained Computer mutation records, failed-run digest and
-configuration digest. Missing Quit is explicit. The full desktop owning
+configuration digest. The effectful Go CLI independently refuses profile roots
+outside the exact `Farol Dev/farol-next-state/go-core` and legacy `Farol DEV`
+namespace. Physical canonical-path and inode qualification prevents a Dev-named
+symlink from selecting a production root. The trusted launcher still supplies
+host authority; these path checks are not parent-process authentication.
+Missing Quit is explicit. The full desktop owning
 projection must report only the crash obligation, with no changed/unreadable
 state. Existing promotion and Computer admission locks plus current connector
 and Go process absence are required; an inspection cannot supply this authority.
