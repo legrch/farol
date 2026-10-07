@@ -34,12 +34,12 @@ tasks:
 
   dev:
     # The owner's one development command: pick the declared toolchain, make
-    # sure dependencies match the lock, build whatever is on disk right now
-    # (uncommitted changes included, and said so plainly), and run it in this
-    # terminal. This is not `task package` / `task run`, which build
+    # sure dependencies match the lock, build the clean committed React/Go
+    # source using approved local inputs, and run it in this terminal.
+    # This is not `task package` / `task run`, which build
     # and launch only an exact, committed, verified candidate; both keep their
     # current strict behavior unchanged. Ctrl+C stops only what this started.
-    desc: One development entrypoint - toolchain, locked deps, current dev build, run here (not a candidate)
+    desc: Ordinary React/Go Dev - toolchain, locked deps, approved Go inputs, run here (not a candidate)
     cmds:
       - /usr/bin/python3 -I ./scripts/assert-owner-untouched.py -- node tooling/dev.mjs {{.CLI_ARGS}}
 

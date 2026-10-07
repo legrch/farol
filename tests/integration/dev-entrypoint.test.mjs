@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import {
   DECLARED_NODE_VERSIONS,
   DECLARED_NPM_VERSION,
+  DEFAULT_GO_INPUTS_FILE,
   ESCALATION_MESSAGES,
   OWNER_STOP_EXIT_CODE,
   applyDependencyPlan,
@@ -18,6 +19,7 @@ import {
   main,
   planDependencyActions,
   resolveToolchain,
+  runDevBuild,
   runOwnerManagedChild,
 } from "../../tooling/dev.mjs";
 
@@ -661,9 +663,70 @@ describe("dev opener bounded orchestration", () => {
     },
   );
 
-  it("keeps ordinary builds free of Go arguments", () => {
-    expect(devGoBuildArguments([])).toEqual([]);
+  it("requires the fixed local Go inputs in ordinary Dev without an extra flag", () => {
+    expect(devGoBuildArguments([])).toEqual([
+      `--go-inputs=${DEFAULT_GO_INPUTS_FILE}`,
+    ]);
+    expect(DEFAULT_GO_INPUTS_FILE).toBe(
+      path.resolve(here, "../../_output/go-build-inputs.json"),
+    );
     expect(devGoBuildArguments(["--check", argument])).toEqual([argument]);
+  });
+
+  it("ordinary Dev builds Go and retains its ordinary profile selection", async () => {
+    const { calls, overrides } = fixture();
+    await main([], overrides);
+    expect(calls).toEqual([
+      "dependencies",
+      ["build", [`--go-inputs=${DEFAULT_GO_INPUTS_FILE}`]],
+      [
+        "launch",
+        false,
+        false,
+        undefined,
+        { builtInDisplayOnly: false, allowPrimaryDisplay: false },
+      ],
+    ]);
+  });
+
+  it.each([null, new Error("ENOENT"), new Error("GO_INPUTS_INVALID")])(
+    "refuses missing/invalid inputs before any builder and never falls back: %j",
+    async (outcome) => {
+      const builds = [];
+      const messages = [];
+      const status = await runDevBuild(devGoBuildArguments([]), {
+        readInputs: async () => {
+          if (outcome instanceof Error) throw outcome;
+          return outcome;
+        },
+        run: async (args) => builds.push(args),
+        report: (line) => messages.push(line),
+      });
+      expect(status).toBe(1);
+      expect(builds).toEqual([]);
+      expect(messages).toHaveLength(1);
+      expect(messages[0]).toContain("No desktop was launched");
+    },
+  );
+
+  it("passes the declaration unchanged to the existing authenticated builder", async () => {
+    const args = devGoBuildArguments([]);
+    const seen = [];
+    const status = await runDevBuild(args, {
+      readInputs: async (selected) => {
+        seen.push(selected);
+        return { schema: "farol-go-build-inputs/1" };
+      },
+      run: async (selected) => {
+        seen.push(selected);
+        return 2;
+      },
+      report: () => {
+        throw new Error("UNEXPECTED_REPORT");
+      },
+    });
+    expect(status).toBe(2);
+    expect(seen).toEqual([args, args]);
   });
 
   it("does not mint or launch a review profile for --check", async () => {

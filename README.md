@@ -113,9 +113,16 @@ npm run check:toolchain
 task dev
 ```
 
-`task dev` builds current files, including uncommitted edits, and runs the isolated
-Farol Dev profile. **Ctrl+C** stops what it started. It does not select the optional
-Go backend recipe below or turn a development build into a package candidate.
+`task dev` uses the ordinary saved Farol Dev profile and requires the Go backend.
+Place the separately approved local [Go input declaration](#optional-declared-go-backend-build)
+at `_output/go-build-inputs.json` (ignored by Git), or select an explicit absolute
+file with `task dev -- --go-inputs=/absolute/path.json`. Missing, invalid or
+unauthenticated inputs refuse the build; Dev does not silently start without Go.
+The existing Go builder requires clean committed source. It verifies the SDK,
+modules and source instead of downloading or trusting an arbitrary local `go`.
+**Ctrl+C** stops what the launcher started. Dev is not a package candidate.
+`task dev -- --check` validates and builds without launching or changing profiles;
+`--fresh-review-profile` is a separate disposable review journey.
 
 | Existing command        | Purpose                                                                                                                        |
 | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------ |

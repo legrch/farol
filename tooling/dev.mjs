@@ -5,8 +5,8 @@
 //
 // This is deliberately not `task package` / `task run`, which build
 // and verify an exact, committed candidate and refuse a stale or dirty one.
-// This command builds whatever is on disk right now, including uncommitted
-// changes, and says so plainly. Ctrl+C stops only what it started.
+// Go-enabled Dev requires clean committed source and approved local inputs.
+// Ctrl+C stops only what it started.
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -15,6 +15,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createOwnerLaunchResultCollector } from "./owner-launch-result.mjs";
 import { ownerLaunchEnvironment } from "./launch-snapshot.mjs";
+import { readGoBuildInputs } from "./go-build-inputs.mjs";
 
 export const DECLARED_NODE_VERSIONS = Object.freeze(["24.20.0", "26.7.0"]);
 export const DECLARED_NPM_VERSION = "11.19.0";
@@ -24,6 +25,10 @@ export const OWNER_STOP_EXIT_CODE = 130;
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const vnextRoot = path.resolve(here, "..");
+export const DEFAULT_GO_INPUTS_FILE = path.join(
+  vnextRoot,
+  "_output/go-build-inputs.json",
+);
 
 // ---------------------------------------------------------------------------
 // Toolchain selection
@@ -435,7 +440,7 @@ export function devGoBuildArguments(argv) {
   const selected = argv.filter((argument) =>
     argument.startsWith("--go-inputs"),
   );
-  if (selected.length === 0) return [];
+  if (selected.length === 0) return [`--go-inputs=${DEFAULT_GO_INPUTS_FILE}`];
   const argument = selected[0];
   const file = argument.slice("--go-inputs=".length);
   if (
@@ -450,6 +455,34 @@ export function devGoBuildArguments(argv) {
   // The existing builder owns file parsing, SDK authentication and dirty-Go
   // refusal. Forward its one argument verbatim; never substitute local inputs.
   return [argument];
+}
+
+// Ordinary Dev uses the same authenticated Go producer as an explicit build.
+// Missing or invalid local declarations refuse before compilation or launch;
+// never turn an unavailable backend into a legacy-only desktop implicitly.
+export async function runDevBuild(
+  arguments_,
+  {
+    readInputs = readGoBuildInputs,
+    run = (args) =>
+      runInherited(process.execPath, ["tooling/build.mjs", ...args], {
+        cwd: vnextRoot,
+      }),
+    report = (line) => process.stderr.write(`${line}\n`),
+  } = {},
+) {
+  try {
+    if (!(await readInputs(arguments_)))
+      throw new Error("DEV_GO_INPUTS_REQUIRED");
+  } catch {
+    report(
+      "Farol Dev requires a valid approved Go input declaration. Place it at " +
+        `${DEFAULT_GO_INPUTS_FILE} or select --go-inputs=/absolute/path.json. ` +
+        "See README: Develop from source. No desktop was launched.",
+    );
+    return 1;
+  }
+  return run(arguments_);
 }
 
 function reviewDirectory(directory, privateMode) {
@@ -682,10 +715,7 @@ export async function main(argv, overrides = {}) {
     pinned = process.env[TOOLCHAIN_PINNED_ENV] === "1",
     ensureDependencies: ensureDependenciesFn = () =>
       ensureDependencies(vnextRoot, "npm", log),
-    runBuild = (arguments_) =>
-      runInherited(process.execPath, ["tooling/build.mjs", ...arguments_], {
-        cwd: vnextRoot,
-      }),
+    runBuild = runDevBuild,
     createReviewProfile = createOwnerFreshReviewProfile,
     launch = (
       acceptanceProfile,
