@@ -11,3 +11,7 @@ import (
 func withClosedInspection(context.Context, Root, port.JournalScope, func(ClosedInspection) error) error {
 	return Unavailable
 }
+
+func acquireClosedInspection(context.Context, Root, port.JournalScope) (*ClosedLease, error) {
+	return nil, Unavailable
+}

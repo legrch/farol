@@ -103,17 +103,31 @@ func closedInspectionNoStaging(d *disk) error {
 }
 
 func withClosedInspection(ctx context.Context, roots Roots, scope port.JournalScope, inspect func(ClosedInspection) error) (err error) {
-	d, err := openClosedInspectionDisk(ctx, roots)
+	l, err := acquireClosedInspection(ctx, roots, scope)
 	if err != nil {
 		return err
 	}
 	defer func() {
-		if d.close() != nil {
+		if l.Close() != nil {
+			err = fail(Unavailable, false)
+		}
+	}()
+	return closedInspectionCallback(ctx, l.value, l.Verify, inspect)
+}
+
+func acquireClosedInspection(ctx context.Context, roots Roots, scope port.JournalScope) (_ *ClosedLease, err error) {
+	d, err := openClosedInspectionDisk(ctx, roots)
+	if err != nil {
+		return nil, err
+	}
+	retained := false
+	defer func() {
+		if !retained && d.close() != nil {
 			err = fail(Unavailable, false)
 		}
 	}()
 	if err := closedInspectionNoStaging(d); err != nil {
-		return err
+		return nil, err
 	}
 	identities := make([]closedInspectionStepIdentity, 0)
 	digests := make([][32]byte, 0)
@@ -147,7 +161,7 @@ func withClosedInspection(ctx context.Context, roots Roots, scope port.JournalSc
 	}
 	value, err := closedInspectionScan(ctx, roots, scope, read)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	checking = true
 	recheck := func() error {
@@ -167,7 +181,8 @@ func withClosedInspection(ctx context.Context, roots Roots, scope port.JournalSc
 		return nil
 	}
 	if err := recheck(); err != nil {
-		return err
+		return nil, err
 	}
-	return closedInspectionCallback(ctx, value, recheck, inspect)
+	retained = true
+	return &ClosedLease{value: value, verify: recheck, close: d.close}, nil
 }

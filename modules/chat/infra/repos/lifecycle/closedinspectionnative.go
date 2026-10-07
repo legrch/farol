@@ -10,12 +10,26 @@ import (
 )
 
 func withClosedInspection(ctx context.Context, root Root, scope port.JournalScope, limits Limits, inspect func(ClosedInspection) error) (err error) {
-	d, err := openInspectionDisk(ctx, root)
+	l, err := acquireClosedInspection(ctx, root, scope, limits)
 	if err != nil {
 		return err
 	}
 	defer func() {
-		if d.close() != nil {
+		if l.Close() != nil {
+			err = failure(Unavailable, false)
+		}
+	}()
+	return closedInspectionCallback(ctx, l.value, l.Verify, inspect)
+}
+
+func acquireClosedInspection(ctx context.Context, root Root, scope port.JournalScope, limits Limits) (_ *ClosedLease, err error) {
+	d, err := openInspectionDisk(ctx, root)
+	if err != nil {
+		return nil, err
+	}
+	retained := false
+	defer func() {
+		if !retained && d.close() != nil {
 			err = failure(Unavailable, false)
 		}
 	}()
@@ -23,15 +37,15 @@ func withClosedInspection(ctx context.Context, root Root, scope port.JournalScop
 	// including replacements with identical bytes and in-place restoration.
 	var before unix.Stat_t
 	if unix.Fstatat(d.dir, snapshotName, &before, unix.AT_SYMLINK_NOFOLLOW) != nil {
-		return failure(Unavailable, false)
+		return nil, failure(Unavailable, false)
 	}
 	observed, err := inspectLockedSnapshot(ctx, d, limits)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	value, err := closedInspectionMetadata(observed, scope)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	recheck := func() error {
 		current, err := inspectLockedSnapshot(ctx, d, limits)
@@ -47,7 +61,8 @@ func withClosedInspection(ctx context.Context, root Root, scope port.JournalScop
 	}
 	// Qualify the baseline before exposing even provisional metadata.
 	if err := recheck(); err != nil {
-		return err
+		return nil, err
 	}
-	return closedInspectionCallback(ctx, value, recheck, inspect)
+	retained = true
+	return &ClosedLease{value: value, verify: recheck, close: d.close}, nil
 }
