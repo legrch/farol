@@ -191,7 +191,11 @@ describe("Go owner mutation through active Settings delivery transport", () => {
     });
     expect(f.request).toHaveBeenCalledTimes(2);
   });
-  it("sends once and observes original metadata with a distinct transport effect", async () => {
+  it("sends once and observes original metadata with a distinct transport effect", async ({
+    onTestFinished,
+  }) => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_791_360_000_000);
+    onTestFinished(() => now.mockRestore());
     const f = fixture();
     expect(await f.bridge.apply(operationId, input)).toEqual(terminal);
     await expect(f.bridge.apply(operationId, input)).rejects.toMatchObject({
