@@ -727,6 +727,10 @@ try {
     if (behavior) {
       // Only the explicit E2E picker selects our disposable tunnel executable.
       // Saving its synthetic key must not start a process or verify attachment.
+      await window
+        .locator(".setup-page summary")
+        .filter({ hasText: "Advanced connection options" })
+        .click();
       await setupAction(window, "Choose tunnel client…");
       await window
         .getByLabel("Tunnel ID", { exact: true })

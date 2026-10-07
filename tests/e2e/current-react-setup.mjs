@@ -59,7 +59,11 @@ export async function setupAction(page, name) {
     await page
       .locator('.setup-page .settings-page > p[role="status"]')
       .innerText(),
-    "Action confirmed. Check the current status below.",
+    name === "Add folder…"
+      ? "Selection received. Confirm read-only access below to add it."
+      : name === "Add selected folder read-only"
+        ? "Approval request completed. Only folders in the approved list below have saved access."
+        : "Action confirmed. Check the current status below.",
     `SETUP_ACTION_UNCONFIRMED:${name}`,
   );
 }
