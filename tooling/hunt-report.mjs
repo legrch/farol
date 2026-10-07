@@ -1,7 +1,7 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { verifyInputManifest } from "./build-contract.mjs";
+import { qualifyGoBuild } from "../tests/e2e/qualified-go-build.mjs";
 import { openEvidenceAttempt } from "./evidence-attempt.mjs";
 import { sourceIdentity } from "./source-identity.mjs";
 
@@ -384,10 +384,14 @@ const huntAttempt = await openEvidenceAttempt(
 );
 huntAttempt.installProcessHandlers();
 const vitestEvidence = await collectVitestEvidence();
-execFileSync(process.execPath, [path.join(root, "tooling/build.mjs")], {
-  cwd: root,
-  stdio: "inherit",
-});
+execFileSync(
+  process.execPath,
+  [path.join(root, "tooling/dev.mjs"), "--check"],
+  {
+    cwd: root,
+    stdio: "inherit",
+  },
+);
 
 const fixture = JSON.parse(
   await fs.readFile(
@@ -409,7 +413,7 @@ if (
   throw new Error("HUNT_REPLAY_FIXTURE_INVALID");
 }
 if (
-  build.schema !== 3 ||
+  build.schema !== 4 ||
   build.sourceMode !== "head-exact" ||
   build.product !== "Farol Next Preview" ||
   !/^[a-f0-9]{64}$/u.test(build.buildId) ||
@@ -438,10 +442,10 @@ if (
   throw new Error("HUNT_INPUT_CHANGED");
 }
 try {
-  await verifyInputManifest(path.join(root, "_output/build/app"), build);
+  await qualifyGoBuild(path.join(root, "_output/build/app"), testedSource);
 } catch (error) {
   fail(
-    "HUNT_BUILD_INPUT_MANIFEST_INVALID",
+    "HUNT_BUILD_ARTIFACT_INVALID",
     error instanceof Error ? error.message : "unknown",
   );
 }

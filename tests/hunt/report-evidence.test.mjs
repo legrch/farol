@@ -11,6 +11,15 @@ const reportScript = fileURLToPath(
 const sourceIdentityModule = fileURLToPath(
   new URL("../../tooling/source-identity.mjs", import.meta.url),
 );
+const buildIdentityModule = fileURLToPath(
+  new URL("../../tooling/build-identity-contract.mjs", import.meta.url),
+);
+const buildContractModule = fileURLToPath(
+  new URL("../../tooling/build-contract.mjs", import.meta.url),
+);
+const coreArtifactModule = fileURLToPath(
+  new URL("../../tooling/go-core-artifact.mjs", import.meta.url),
+);
 const gitEnvironment = Object.freeze({
   GIT_CONFIG_GLOBAL: "/dev/null",
   GIT_CONFIG_NOSYSTEM: "1",
@@ -51,11 +60,12 @@ const requiredMutationIds = [
   "apply_update_while_accepted_work_remains",
 ];
 
-// The stub build below writes this manifest for the fixture repository's
-// actual source identity, the way the real build does.
+// The controlled Dev producer writes real hash/identity envelopes around
+// synthetic files. Its 64-byte Mach-O header is never executed and is not
+// compiler, native backend or assembled-product evidence.
 function validBuildManifest(overrides = {}) {
   return {
-    schema: 3,
+    schema: 4,
     sourceMode: "head-exact",
     product: "Farol Next Preview",
     buildId: "c".repeat(64),
@@ -146,32 +156,60 @@ async function createFixtureRoot() {
       ].join("\n"),
     ),
     writeFile(
-      path.join(root, "tooling/build.mjs"),
+      path.join(root, "tooling/dev.mjs"),
       [
         'import { createHash } from "node:crypto";',
         'import fs from "node:fs";',
         'import path from "node:path";',
         `import { sourceIdentity } from ${JSON.stringify(sourceIdentityModule)};`,
+        `import { createBuildIdentity } from ${JSON.stringify(buildIdentityModule)};`,
+        `import { BUILD_ENTRIES } from ${JSON.stringify(buildContractModule)};`,
+        `import { GO_CORE_ENTRIES } from ${JSON.stringify(coreArtifactModule)};`,
+        'if (JSON.stringify(process.argv.slice(2)) !== JSON.stringify(["--check"])) throw new Error("HUNT_DEV_CHECK_REQUIRED");',
         "const identity = sourceIdentity(process.cwd());",
         'const ledger = JSON.stringify([{ kind: "source", path: "src/main.ts", objectId: "0".repeat(40), sha256: "1".repeat(64), exact: true }]);',
         'const overrides = JSON.parse(process.env.FAKE_BUILD_OVERRIDES ?? "{}");',
         'fs.mkdirSync("_output/build/app", { recursive: true });',
-        'if (process.env.FAKE_INPUT_MANIFEST !== "absent") {',
-        '  fs.writeFileSync("_output/build/app/input-manifest.json", process.env.FAKE_INPUT_MANIFEST === "tampered" ? ledger.replace("src/main.ts", "src/other.ts") : ledger);',
+        'const sha256 = bytes => createHash("sha256").update(bytes).digest("hex");',
+        'const outer = createBuildIdentity({ version: "0.2.0", builtAt: "2026-09-16T10:00:00.000Z", sourceCommit: identity.commit, sourceTreeDigest: identity.treeDigest, sourceDirty: identity.dirty });',
+        "const binary = Buffer.alloc(64); binary.writeUInt32LE(0xfeedfacf, 0); binary.writeUInt32LE(0x0100000c, 4); binary.writeUInt32LE(2, 12);",
+        'const core = { schema: "farol-core-artifact/1", build: { buildId: outer.buildId, sourceSHA: outer.sourceCommit, sourceTreeDigest: outer.sourceTreeDigest, platform: { goos: "darwin", goarch: "arm64" } }, binary: { path: "farol-backend", size: binary.length, sha256: sha256(binary) } };',
+        'if (process.env.FAKE_CORE === "forged-outer") core.build.buildId = "0".repeat(64);',
+        "const entries = [...BUILD_ENTRIES, ...GO_CORE_ENTRIES].sort();",
+        'const content = Object.fromEntries(entries.map(entry => [entry, Buffer.from("synthetic " + entry + "\\n")]));',
+        'content["build-identity.json"] = Buffer.from(JSON.stringify(outer));',
+        'content["core-artifact.json"] = Buffer.from(JSON.stringify(core));',
+        'content["farol-backend"] = binary;',
+        'content["input-manifest.json"] = Buffer.from(ledger);',
+        "for (const [entry, bytes] of Object.entries(content)) {",
+        '  if (entry === "input-manifest.json" && process.env.FAKE_INPUT_MANIFEST === "absent") continue;',
+        '  if (entry === "farol-backend" && process.env.FAKE_CORE === "absent") continue;',
+        '  fs.writeFileSync(path.join("_output/build/app", entry), bytes, { mode: entry === "farol-backend" ? 0o500 : 0o600 });',
         "}",
+        'if (process.env.FAKE_INPUT_MANIFEST === "tampered") fs.writeFileSync("_output/build/app/input-manifest.json", ledger.replace("src/main.ts", "src/other.ts"));',
+        'if (process.env.FAKE_CORE === "tampered") { fs.chmodSync("_output/build/app/farol-backend", 0o700); const changed = Buffer.from(binary); changed[63] = 1; fs.writeFileSync("_output/build/app/farol-backend", changed); }',
         "const manifest = {",
         `  ...${JSON.stringify(validBuildManifest())},`,
+        "  buildId: outer.buildId,",
         "  sourceCommit: identity.commit,",
         "  sourceTreeDigest: identity.treeDigest,",
         "  dirty: identity.dirty,",
         '  inputLedgerSha256: createHash("sha256").update(ledger).digest("hex"),',
         "  sourceInputCount: 1,",
         "  dependencyInputCount: 0,",
+        "  entries,",
+        "  entrySha256: Object.fromEntries(Object.entries(content).map(([entry, bytes]) => [entry, sha256(bytes)])),",
+        "  core,",
         "  ...overrides,",
         "};",
+        'if (process.env.FAKE_CORE === "missing-entry") manifest.entries = entries.filter(entry => entry !== "farol-backend");',
         'fs.writeFileSync("_output/build/app/build-manifest.json", JSON.stringify(manifest) + "\\n");',
         "",
       ].join("\n"),
+    ),
+    writeFile(
+      path.join(root, "tooling/build.mjs"),
+      'throw new Error("HUNT_LEGACY_PRODUCER_FORBIDDEN");\n',
     ),
     writeFile(
       path.join(root, "tests/hunt/fixtures/semantic-replay.json"),
@@ -388,13 +426,28 @@ describe("Hunt report Vitest evidence", () => {
   });
 
   it.each([
-    ["absent", "HUNT_BUILD_INPUT_MANIFEST_INVALID"],
-    ["tampered", "HUNT_BUILD_INPUT_MANIFEST_INVALID"],
+    ["absent", "HUNT_BUILD_ARTIFACT_INVALID"],
+    ["tampered", "HUNT_BUILD_ARTIFACT_INVALID"],
   ])(
     "EV-07 refuses a build whose retained input manifest is %s",
     async (state, code) => {
       await expectRejected((root) => validVitestReport(root), code, {
         FAKE_INPUT_MANIFEST: state,
+      });
+    },
+  );
+
+  it("refuses a schema3 result even when the selected producer exits zero", async () => {
+    await expectRejected(validVitestReport, "HUNT_BUILD_IDENTITY_INVALID", {
+      FAKE_BUILD_OVERRIDES: JSON.stringify({ schema: 3 }),
+    });
+  });
+
+  it.each(["absent", "tampered", "forged-outer", "missing-entry"])(
+    "refuses an unattested Go backend: %s",
+    async (state) => {
+      await expectRejected(validVitestReport, "HUNT_BUILD_ARTIFACT_INVALID", {
+        FAKE_CORE: state,
       });
     },
   );
