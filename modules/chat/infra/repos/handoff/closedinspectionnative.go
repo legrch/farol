@@ -116,9 +116,33 @@ func withClosedInspection(ctx context.Context, roots Roots, scope port.JournalSc
 }
 
 func acquireClosedInspection(ctx context.Context, roots Roots, scope port.JournalScope) (_ *ClosedLease, err error) {
-	d, err := openClosedInspectionDisk(ctx, roots)
+	chain, verify, close, err := acquireClosedInspectionChain(ctx, roots, func(chain closedInspectionChain) error {
+		_, err := closedInspectionValue(roots, scope, chain)
+		return err
+	})
 	if err != nil {
 		return nil, err
+	}
+	value, _ := closedInspectionValue(roots, scope, chain)
+	return &ClosedLease{value: value, verify: verify, close: close}, nil
+}
+
+func acquireAcknowledgedInspection(ctx context.Context, roots Roots, expected port.HandoffBinding, handoffID string) (*AcknowledgedLease, error) {
+	chain, verify, close, err := acquireClosedInspectionChain(ctx, roots, func(chain closedInspectionChain) error {
+		return acknowledgedInspectionQualify(chain, expected, handoffID)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &AcknowledgedLease{head: copyClosedInspectionHead(chain.head), verify: verify, close: close}, nil
+}
+
+// Retain the same read-only disk and complete canonical scanner for both exact
+// predicates. Neither predicate changes the consumed-only public API.
+func acquireClosedInspectionChain(ctx context.Context, roots Roots, qualify func(closedInspectionChain) error) (_ closedInspectionChain, verify, close func() error, err error) {
+	d, err := openClosedInspectionDisk(ctx, roots)
+	if err != nil {
+		return closedInspectionChain{}, nil, nil, err
 	}
 	retained := false
 	defer func() {
@@ -127,7 +151,7 @@ func acquireClosedInspection(ctx context.Context, roots Roots, scope port.Journa
 		}
 	}()
 	if err := closedInspectionNoStaging(d); err != nil {
-		return nil, err
+		return closedInspectionChain{}, nil, nil, err
 	}
 	identities := make([]closedInspectionStepIdentity, 0)
 	digests := make([][32]byte, 0)
@@ -159,30 +183,36 @@ func acquireClosedInspection(ctx context.Context, roots Roots, scope port.Journa
 		}
 		return raw, true, nil
 	}
-	value, err := closedInspectionScan(ctx, roots, scope, read)
+	value, err := closedInspectionEmptyChainScan(ctx, roots, read)
 	if err != nil {
-		return nil, err
+		return closedInspectionChain{}, nil, nil, err
+	}
+	if err := qualify(value); err != nil {
+		return closedInspectionChain{}, nil, nil, err
 	}
 	checking = true
 	recheck := func() error {
 		if err := closedInspectionNoStaging(d); err != nil {
 			return err
 		}
-		current, err := closedInspectionScan(ctx, roots, scope, read)
+		current, err := closedInspectionEmptyChainScan(ctx, roots, read)
 		if err != nil {
+			return err
+		}
+		if err := qualify(current); err != nil {
 			return err
 		}
 		parent, pe := stat(d.parent)
 		child, ce := stat(d.dir)
 		claim, le := stat(d.claim)
-		if current.HeadDigest != value.HeadDigest || len(current.Stages) != len(value.Stages) || pe != nil || ce != nil || le != nil || !stable(d.parentMeta, parent) || !stable(d.dirMeta, child) || !stable(d.claimMeta, claim) || d.check() != nil {
+		if current.head.Digest != value.head.Digest || len(current.stages) != len(value.stages) || pe != nil || ce != nil || le != nil || !stable(d.parentMeta, parent) || !stable(d.dirMeta, child) || !stable(d.claimMeta, claim) || d.check() != nil {
 			return fail(Unavailable, false)
 		}
 		return nil
 	}
 	if err := recheck(); err != nil {
-		return nil, err
+		return closedInspectionChain{}, nil, nil, err
 	}
 	retained = true
-	return &ClosedLease{value: value, verify: recheck, close: d.close}, nil
+	return value, recheck, d.close, nil
 }

@@ -65,7 +65,12 @@ func (closedInspectionReader) append(context.Context, int, []byte) error { retur
 func (closedInspectionReader) close() error                              { return nil }
 func (closedInspectionReader) poison() error                             { return fail(Unavailable, false) }
 
-func closedInspectionScan(ctx context.Context, roots Roots, scope port.JournalScope, read func(context.Context, int) ([]byte, bool, error)) (ClosedInspection, error) {
+type closedInspectionChain struct {
+	head   *port.HandoffHead
+	stages []ClosedInspectionStage
+}
+
+func closedInspectionEmptyChainScan(ctx context.Context, roots Roots, read func(context.Context, int) ([]byte, bool, error)) (closedInspectionChain, error) {
 	s := &owner{roots: roots, disk: closedInspectionReader{readRecord: read}}
 	stages := make([]ClosedInspectionStage, 0)
 	head, _, _, err := s.scanEach(ctx, func(r port.HandoffRecord) error {
@@ -80,15 +85,31 @@ func closedInspectionScan(ctx context.Context, roots Roots, scope port.JournalSc
 		return nil
 	})
 	if err != nil {
+		return closedInspectionChain{}, err
+	}
+	if head.Record == nil || !head.EmptyRetirementChain {
+		return closedInspectionChain{}, fail(Refused, false)
+	}
+	return closedInspectionChain{head: head, stages: stages}, nil
+}
+
+func closedInspectionScan(ctx context.Context, roots Roots, scope port.JournalScope, read func(context.Context, int) ([]byte, bool, error)) (ClosedInspection, error) {
+	chain, err := closedInspectionEmptyChainScan(ctx, roots, read)
+	if err != nil {
 		return ClosedInspection{}, err
 	}
+	return closedInspectionValue(roots, scope, chain)
+}
+
+func closedInspectionValue(roots Roots, scope port.JournalScope, chain closedInspectionChain) (ClosedInspection, error) {
+	head := chain.head
 	if head.Record == nil || !head.EmptyRetirementChain || head.Record.Stage != port.HandoffConsumed || head.Record.Consumption == nil || head.Record.Consumption.Next != scope {
 		return ClosedInspection{}, fail(Refused, false)
 	}
 	c := head.Record.Consumption
 	return ClosedInspection{Scope: scope, ParentRoot: roots.Parent.Identity, ChatRoot: roots.Chat.Identity,
 		HeadDigest: head.Digest, HeadStage: head.Record.Stage, Publication: head.Record.Publication,
-		NextBinding: c.NextBinding, AttemptID: c.AttemptID, Stages: stages, Head: copyClosedInspectionHead(head)}, nil
+		NextBinding: c.NextBinding, AttemptID: c.AttemptID, Stages: chain.stages, Head: copyClosedInspectionHead(head)}, nil
 }
 
 func copyClosedInspectionHead(head *port.HandoffHead) *port.HandoffHead {

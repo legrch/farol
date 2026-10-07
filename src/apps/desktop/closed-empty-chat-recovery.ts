@@ -7,6 +7,7 @@ import {
   prepareEmptyRecoveryChild,
   type ExactEmptyRecoverySelection,
   type EmptyRecoverySelectionInput,
+  type EmptyRecoveryChildResult,
 } from "../../../apps/desktop/bridge/empty-recovery-child";
 import type { ProfileLaunchBinding } from "../../../apps/desktop/bridge/profile";
 import { recordTerminal } from "../../../apps/desktop/bridge/terminal-recorder";
@@ -15,9 +16,12 @@ import {
   acquirePromotionLease,
   releasePromotionLease,
   verifyPromotionLease,
+  type PromotionLeaseHandle,
 } from "./promotion-lease";
 import { MAX_RUN_MARKER_BYTES } from "./run-marker";
 import type { ClosedRecoveryState } from "./closed-computer-recovery";
+import { validate } from "../../../apps/desktop/bridge/wire";
+import type { EmptyRecoveryPublication } from "../../../apps/desktop/bridge/empty-recovery-child";
 
 const FLAGS = constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK;
 const sum = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex");
@@ -291,21 +295,243 @@ export async function recoverClosedEmptyChat(
           )
         )
           throw Error("EMPTY_CHAT_RECOVERY_INTENT_CHANGED");
-        await recordTerminal(
-          input.executable,
+        return await finishEmptyRecoveryHost({
+          input,
+          child,
+          exact,
           profile,
-          child.terminal,
-          child.acknowledgement,
-        );
+          state,
+          archive,
+          run,
+          config,
+          pending,
+          intent,
+          preparedRoots,
+          lease,
+          proof,
+        });
+      },
+    );
+  } finally {
+    await releasePromotionLease(lease);
+  }
+}
+
+export interface KnownEmptyRecoveryFailure {
+  readonly sourceCommit: string;
+  readonly originalHostExitCode: number;
+  readonly originalDiagnostic: string;
+  readonly originalOperationId: string;
+  readonly originalBuildId: string;
+  readonly originalChildClose: {
+    readonly exitCode: "0";
+    readonly signal: "";
+    readonly forced: false;
+  };
+  readonly recorderStarted: false;
+  readonly receiptSha256: string;
+  readonly pendingSha256: string;
+  readonly completionOperationId: string;
+}
+
+export interface PreparedEmptyRecoveryObservation {
+  readonly publication: EmptyRecoveryPublication;
+  readonly acknowledgement: EmptyRecoveryChildResult["acknowledgement"];
+  readonly archiveDigest: string;
+}
+
+// The trusted private launcher owns original execution-receipt authentication.
+// This exception is ONLY the unique known failure in the frozen affected source,
+// never a claim supplied by IPC/MCP or a substitute for an unknown child outcome.
+export function knownEmptyRecoveryChild(
+  exact: ExactEmptyRecoverySelection,
+  failure: KnownEmptyRecoveryFailure,
+  observed: PreparedEmptyRecoveryObservation,
+  newChat: { dev: number; ino: number },
+): EmptyRecoveryChildResult {
+  const hash = (v: string) => /^[a-f0-9]{64}$/u.test(v);
+  if (
+    failure.sourceCommit !== "4dbeef4523241326c7d674a57dca1fc6e0bee30c" ||
+    failure.originalHostExitCode !== 1 ||
+    failure.originalDiagnostic !== "EMPTY_CHAT_RECOVERY_INTENT_CHANGED" ||
+    failure.originalOperationId !== exact.operationId ||
+    failure.originalBuildId !== exact.buildId ||
+    !isDeepStrictEqual(failure.originalChildClose, {
+      exitCode: "0",
+      signal: "",
+      forced: false,
+    }) ||
+    failure.recorderStarted !== false ||
+    ![
+      failure.receiptSha256,
+      failure.pendingSha256,
+      observed.archiveDigest,
+    ].every(hash) ||
+    !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/u.test(
+      failure.completionOperationId,
+    ) ||
+    failure.completionOperationId === exact.operationId ||
+    ![newChat.dev, newChat.ino].every((v) => Number.isSafeInteger(v) && v > 0)
+  )
+    throw Error("EMPTY_CHAT_KNOWN_COMPLETION_REFUSED");
+  const expectedBinding = {
+    ...exact.current,
+    BackendGeneration: exact.backendGeneration,
+    BuildID: exact.buildId,
+    HostLifetimeID: exact.hostLifetimeId,
+    ChildLaunchID: exact.childLaunchId,
+    ChatRoot: {
+      ...exact.current.ChatRoot,
+      Device: newChat.dev,
+      Inode: newChat.ino,
+    },
+  };
+  const { publication, acknowledgement } = observed;
+  if (
+    newChat.dev !== exact.current.ChatRoot.Device ||
+    newChat.ino === exact.current.ChatRoot.Inode ||
+    !isDeepStrictEqual(publication.Binding, expectedBinding) ||
+    publication.HandoffID !== exact.operationId ||
+    !Array.isArray(publication.ReceiptDigest) ||
+    publication.ReceiptDigest.length !== 32 ||
+    !publication.ReceiptDigest.every(
+      (v) => Number.isInteger(v) && v >= 0 && v <= 255,
+    ) ||
+    !publication.ReceiptDigest.some((v) => v !== 0) ||
+    !validate("CoreRetirementAcknowledged", acknowledgement) ||
+    acknowledgement.handoffId !== exact.operationId ||
+    acknowledgement.receiptDigest !==
+      Buffer.from(publication.ReceiptDigest).toString("hex")
+  )
+    throw Error("EMPTY_CHAT_KNOWN_COMPLETION_REFUSED");
+  const terminal = {
+    ...acknowledgement,
+    backendGeneration: exact.backendGeneration,
+    hostLifetimeId: exact.hostLifetimeId,
+    childLaunchId: exact.childLaunchId,
+    ...failure.originalChildClose,
+  };
+  if (!validate("CoreTerminalObservation", terminal))
+    throw Error("EMPTY_CHAT_KNOWN_COMPLETION_REFUSED");
+  return structuredClone({ publication, acknowledgement, terminal });
+}
+
+// One owner-authorized completion of the known pre-recorder comparison failure.
+// Never prepare, acknowledge, restore a Chat owner, or launch the application.
+export async function completeKnownEmptyChat(
+  input: ClosedEmptyChatRecoveryInput & {
+    readonly failure: KnownEmptyRecoveryFailure;
+    observePrepared(): Promise<PreparedEmptyRecoveryObservation>;
+  },
+): Promise<{
+  phase: "prepared_for_cold_start";
+  archive: string;
+  operationId: string;
+}> {
+  const selected = structuredClone({
+    profile: input.profile,
+    exact: input.exact,
+    selectionInput: input.selectionInput,
+    failure: input.failure,
+  });
+  const { profile, exact, selectionInput, failure } = selected;
+  const state = path.join(input.userData, "farol-next-state");
+  const archive = path.join(profile.root, `chat-retired-${exact.operationId}`);
+  const pending = path.join(state, "go-core.empty-recovery.pending");
+  const running = path.join(state, "running.json");
+  const configuration = path.join(state, "config.json");
+  if (profile.root !== path.join(state, "go-core"))
+    throw Error("EMPTY_CHAT_KNOWN_COMPLETION_REFUSED");
+  const expectedIntent = emptyRecoveryIntent(selectionInput, profile);
+  await privateRoot(input.userData);
+  await privateRoot(state);
+  const parent = await privateRoot(profile.root);
+  if (
+    String(parent.dev) !== profile.device ||
+    String(parent.ino) !== profile.inode
+  )
+    throw Error("EMPTY_CHAT_RECOVERY_ROOT_CHANGED");
+  const root = path.join(state, "secure-mcp-connector", "computer-authority");
+  await privateRoot(path.dirname(root));
+  await privateRoot(root);
+  const lease = await acquirePromotionLease(
+    input.userData,
+    `empty-chat-completion-${failure.completionOperationId}`,
+    "promotion",
+  );
+  if (!lease) throw Error("EMPTY_CHAT_RECOVERY_APP_ACTIVE");
+  try {
+    return await new PrivateExecutionFence({ root }).withClosedRecoveryDrain(
+      async () => {
+        const run = await snapshot(running, MAX_RUN_MARKER_BYTES);
+        const config = await snapshot(configuration, 256 * 1024);
+        const intent = await snapshot(pending, 65536);
+        const preparedRoots = {
+          archive: await privateRoot(archive),
+          chat: await privateRoot(path.join(profile.root, "chat")),
+        };
+        if (
+          sum(run.bytes) !== input.expectedRunSha256 ||
+          sum(config.bytes) !== input.expectedConfigSha256 ||
+          sum(intent.bytes) !== failure.pendingSha256 ||
+          !isDeepStrictEqual(
+            JSON.parse(intent.bytes.toString("utf8")),
+            expectedIntent,
+          ) ||
+          preparedRoots.archive.dev !== exact.current.ChatRoot.Device ||
+          preparedRoots.archive.ino !== exact.current.ChatRoot.Inode
+        )
+          throw Error("EMPTY_CHAT_KNOWN_COMPLETION_REFUSED");
+        const attempt = path.join(archive, "known-completion-attempt.json");
+        await absent(attempt);
+        await absent(path.join(archive, "maintenance-completed.json"));
+        await absent(path.join(archive, "failed-running.json"));
+        await absent(path.join(archive, "maintenance-intent.json"));
+        const proof = async () => {
+          if (
+            !isDeepStrictEqual(await privateRoot(profile.root), parent) ||
+            !isDeepStrictEqual(
+              await privateRoot(archive),
+              preparedRoots.archive,
+            ) ||
+            !isDeepStrictEqual(
+              await privateRoot(path.join(profile.root, "chat")),
+              preparedRoots.chat,
+            )
+          )
+            throw Error("EMPTY_CHAT_RECOVERY_ROOT_CHANGED");
+          await unchanged(running, run);
+          await unchanged(configuration, config);
+          await unchanged(pending, intent);
+          await absent(path.join(state, "last-quit.json"));
+          const desktop = await input.desktopState();
+          if (
+            desktop.changed.length ||
+            desktop.unreadable.length ||
+            !isDeepStrictEqual(desktop.obligations, ["QUIT_UNCONFIRMED:crash"])
+          )
+            throw Error("EMPTY_CHAT_RECOVERY_WORK_PENDING");
+          input.processesAbsent();
+          if (!(await verifyPromotionLease(lease)))
+            throw Error("PROMOTION_LEASE_LOST");
+        };
         await input.attest();
         await proof();
-        await unchanged(pending, intent);
-        const completion = path.join(archive, "maintenance-completed.json");
-        const receipt = Buffer.from(
-          `${JSON.stringify({ schema: "farol.closed-empty-chat-recovery/1", operationId: exact.operationId, buildId: exact.buildId, failedRunSha256: input.expectedRunSha256, configSha256: input.expectedConfigSha256, publication: child.publication, acknowledgement: child.acknowledgement, originalChildTerminal: child.terminal, recorderConfirmed: true })}\n`,
+        const observed = await input.observePrepared();
+        const child = knownEmptyRecoveryChild(
+          exact,
+          failure,
+          observed,
+          preparedRoots.chat,
+        );
+        await proof();
+        // Permanent attempt before the first recorder effect; absence is never
+        // reconstructed after a failure. An unknown recorder cannot be repeated.
+        const bytes = Buffer.from(
+          `${JSON.stringify({ schema: "farol.known-empty-completion-attempt/1", failure, observed })}\n`,
         );
         const f = await fs.open(
-          completion,
+          attempt,
           constants.O_WRONLY |
             constants.O_CREAT |
             constants.O_EXCL |
@@ -313,88 +539,182 @@ export async function recoverClosedEmptyChat(
           0o600,
         );
         try {
-          await f.writeFile(receipt);
+          await f.writeFile(bytes);
           await f.sync();
         } finally {
           await f.close();
         }
-        const retained = await snapshot(completion, 16384);
-        if (!retained.bytes.equals(receipt))
+        const retainedAttempt = await snapshot(attempt, 16384);
+        if (!retainedAttempt.bytes.equals(bytes))
           throw Error("EMPTY_CHAT_RECOVERY_COMPLETION_UNKNOWN");
         await sync(archive);
         await proof();
-        await unchanged(pending, intent);
-        // Preserve original failure and intent; NEVER manufacture a clean Quit.
-        const retainedRun = path.join(archive, "failed-running.json");
-        const retainedIntent = path.join(archive, "maintenance-intent.json");
-        await absent(retainedRun);
-        await absent(retainedIntent);
-        await fs.rename(running, retainedRun);
-        await sync(state);
-        await sync(archive);
-        await unchanged(retainedRun, run);
-        await unchanged(configuration, config);
-        await unchanged(pending, intent);
-        if (
-          !isDeepStrictEqual(
-            await privateRoot(archive),
-            preparedRoots.archive,
-          ) ||
-          !isDeepStrictEqual(
-            await privateRoot(path.join(profile.root, "chat")),
-            preparedRoots.chat,
-          )
-        )
-          throw Error("EMPTY_CHAT_RECOVERY_ARCHIVE_CHANGED");
-        input.processesAbsent();
-        if (!(await verifyPromotionLease(lease)))
-          throw Error("PROMOTION_LEASE_LOST");
-        // This is the final eligibility change. Any preceding unknown leaves the
-        // original pending inode blocking both normal Go and Electron startup.
-        try {
-          await fs.rename(pending, retainedIntent);
-          await sync(state);
-          await sync(archive);
-          await unchanged(retainedIntent, intent);
-        } catch (originalError) {
-          // A lost final durability/readback result must not leave an unfenced
-          // normal-start path. One best-effort NEW uncertainty marker; preserve
-          // both the original intent and error, never retry the transition.
-          try {
-            const fence = await fs.open(
-              pending,
-              constants.O_WRONLY |
-                constants.O_CREAT |
-                constants.O_EXCL |
-                constants.O_NOFOLLOW,
-              0o600,
-            );
-            try {
-              await fence.writeFile(
-                `${JSON.stringify({ schema: "farol.empty-recovery-unknown/1", operationId: exact.operationId, buildId: exact.buildId })}\n`,
-              );
-              await fence.sync();
-            } finally {
-              await fence.close();
-            }
-            await sync(state);
-          } catch (fenceError) {
-            if ((fenceError as NodeJS.ErrnoException).code !== "EEXIST")
-              throw new AggregateError(
-                [originalError, fenceError],
-                "EMPTY_CHAT_RECOVERY_COMPLETION_AND_FENCE_UNKNOWN",
-              );
-          }
-          throw originalError;
-        }
-        return {
-          phase: "prepared_for_cold_start",
+        return await finishEmptyRecoveryHost({
+          input,
+          child,
+          exact,
+          profile,
+          state,
           archive,
-          operationId: exact.operationId,
-        };
+          run,
+          config,
+          pending,
+          intent,
+          preparedRoots,
+          lease,
+          proof: async () => {
+            await proof();
+            await unchanged(attempt, retainedAttempt);
+          },
+          knownFailure: {
+            receiptSha256: failure.receiptSha256,
+            completionOperationId: failure.completionOperationId,
+          },
+        });
       },
     );
   } finally {
     await releasePromotionLease(lease);
   }
+}
+
+// Common final handoff mechanics: one original terminal recorder, retained
+// completion/failure/intent, and the pending move LAST. No prepare or ACK here.
+async function finishEmptyRecoveryHost({
+  input,
+  child,
+  exact,
+  profile,
+  state,
+  archive,
+  run,
+  config,
+  pending,
+  intent,
+  preparedRoots,
+  lease,
+  proof,
+  knownFailure,
+}: {
+  input: ClosedEmptyChatRecoveryInput;
+  child: EmptyRecoveryChildResult;
+  exact: ExactEmptyRecoverySelection;
+  profile: ProfileLaunchBinding;
+  state: string;
+  archive: string;
+  run: Snapshot;
+  config: Snapshot;
+  pending: string;
+  intent: Snapshot;
+  preparedRoots: {
+    archive: { dev: number; ino: number };
+    chat: { dev: number; ino: number };
+  };
+  lease: PromotionLeaseHandle;
+  proof(): Promise<void>;
+  knownFailure?: { receiptSha256: string; completionOperationId: string };
+}): Promise<{
+  phase: "prepared_for_cold_start";
+  archive: string;
+  operationId: string;
+}> {
+  const running = path.join(state, "running.json");
+  const configuration = path.join(state, "config.json");
+  await recordTerminal(
+    input.executable,
+    profile,
+    child.terminal,
+    child.acknowledgement,
+  );
+  await input.attest();
+  await proof();
+  await unchanged(pending, intent);
+  const completion = path.join(archive, "maintenance-completed.json");
+  const receipt = Buffer.from(
+    `${JSON.stringify({ schema: "farol.closed-empty-chat-recovery/1", operationId: exact.operationId, buildId: exact.buildId, failedRunSha256: input.expectedRunSha256, configSha256: input.expectedConfigSha256, publication: child.publication, acknowledgement: child.acknowledgement, originalChildTerminal: child.terminal, recorderConfirmed: true, ...(knownFailure ? { knownFailure } : {}) })}\n`,
+  );
+  const f = await fs.open(
+    completion,
+    constants.O_WRONLY |
+      constants.O_CREAT |
+      constants.O_EXCL |
+      constants.O_NOFOLLOW,
+    0o600,
+  );
+  try {
+    await f.writeFile(receipt);
+    await f.sync();
+  } finally {
+    await f.close();
+  }
+  const retained = await snapshot(completion, 16384);
+  if (!retained.bytes.equals(receipt))
+    throw Error("EMPTY_CHAT_RECOVERY_COMPLETION_UNKNOWN");
+  await sync(archive);
+  await proof();
+  await unchanged(pending, intent);
+  // Preserve original failure and intent; NEVER manufacture a clean Quit.
+  const retainedRun = path.join(archive, "failed-running.json");
+  const retainedIntent = path.join(archive, "maintenance-intent.json");
+  await absent(retainedRun);
+  await absent(retainedIntent);
+  await fs.rename(running, retainedRun);
+  await sync(state);
+  await sync(archive);
+  await unchanged(retainedRun, run);
+  await unchanged(configuration, config);
+  await unchanged(pending, intent);
+  if (
+    !isDeepStrictEqual(await privateRoot(archive), preparedRoots.archive) ||
+    !isDeepStrictEqual(
+      await privateRoot(path.join(profile.root, "chat")),
+      preparedRoots.chat,
+    )
+  )
+    throw Error("EMPTY_CHAT_RECOVERY_ARCHIVE_CHANGED");
+  input.processesAbsent();
+  if (!(await verifyPromotionLease(lease))) throw Error("PROMOTION_LEASE_LOST");
+  // This is the final eligibility change. Any preceding unknown leaves the
+  // original pending inode blocking both normal Go and Electron startup.
+  try {
+    await fs.rename(pending, retainedIntent);
+    await sync(state);
+    await sync(archive);
+    await unchanged(retainedIntent, intent);
+  } catch (originalError) {
+    // A lost final durability/readback result must not leave an unfenced
+    // normal-start path. One best-effort NEW uncertainty marker; preserve
+    // both the original intent and error, never retry the transition.
+    try {
+      const fence = await fs.open(
+        pending,
+        constants.O_WRONLY |
+          constants.O_CREAT |
+          constants.O_EXCL |
+          constants.O_NOFOLLOW,
+        0o600,
+      );
+      try {
+        await fence.writeFile(
+          `${JSON.stringify({ schema: "farol.empty-recovery-unknown/1", operationId: exact.operationId, buildId: exact.buildId })}\n`,
+        );
+        await fence.sync();
+      } finally {
+        await fence.close();
+      }
+      await sync(state);
+    } catch (fenceError) {
+      if ((fenceError as NodeJS.ErrnoException).code !== "EEXIST")
+        throw new AggregateError(
+          [originalError, fenceError],
+          "EMPTY_CHAT_RECOVERY_COMPLETION_AND_FENCE_UNKNOWN",
+        );
+    }
+    throw originalError;
+  }
+  return {
+    phase: "prepared_for_cold_start",
+    archive,
+    operationId: exact.operationId,
+  };
 }
