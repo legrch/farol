@@ -10,6 +10,14 @@ import {
   candidatePaths,
 } from "./candidate-contract.mjs";
 import { compilerProblems } from "./dependency-digests.mjs";
+import {
+  BUILD_ENTRIES,
+  verifyBuildEntries,
+  verifyInputManifest,
+} from "./build-contract.mjs";
+import { assertBuildIdentity } from "./build-identity-contract.mjs";
+import { GO_CORE_ENTRIES, verifyGoCoreArtifact } from "./go-core-artifact.mjs";
+import { assertResourceManifest } from "./resource-contract.mjs";
 import { trustedOwnerHome } from "./promotion-destination.mjs";
 import {
   activationObligations,
@@ -122,6 +130,56 @@ export function assertClosedRecoveryProcesses(
   for (const root of roots) inspect(root);
 }
 
+// Ordinary Dev maintenance is authenticated by its exact normal Go build. It
+// does not require packaging an installation candidate just to inspect/retire
+// the Dev profile. The fixed build root is never a caller-supplied executable.
+export async function verifyClosedRecoveryDevBuild(repositoryRoot, current) {
+  const directory = path.join(repositoryRoot, "_output/build/app");
+  const manifest = JSON.parse(
+    await fs.readFile(path.join(directory, "build-manifest.json"), "utf8"),
+  );
+  if (
+    manifest.schema !== 4 ||
+    manifest.sourceMode !== "head-exact" ||
+    manifest.inputExact !== true ||
+    manifest.dirty !== false
+  )
+    throw new Error("CLOSED_COMPUTER_RECOVERY_BUILD_INVALID");
+  const entries = [...BUILD_ENTRIES, ...GO_CORE_ENTRIES].sort();
+  if (
+    !Array.isArray(manifest.entries) ||
+    manifest.entries.length !== entries.length ||
+    !manifest.entries.every((entry, index) => entry === entries[index])
+  )
+    throw new Error("CLOSED_COMPUTER_RECOVERY_BUILD_INVALID");
+  await verifyBuildEntries(directory, manifest.entrySha256, entries);
+  await verifyInputManifest(directory, manifest);
+  const identity = assertBuildIdentity(
+    JSON.parse(
+      await fs.readFile(path.join(directory, "build-identity.json"), "utf8"),
+    ),
+  );
+  if (
+    identity.product !== manifest.product ||
+    identity.bundleId !== manifest.bundleId ||
+    identity.version !== manifest.version ||
+    identity.buildId !== manifest.buildId ||
+    identity.builtAt !== manifest.builtAt ||
+    identity.sourceCommit !== manifest.sourceCommit ||
+    identity.sourceTreeDigest !== manifest.sourceTreeDigest ||
+    identity.sourceDirty !== manifest.dirty
+  )
+    throw new Error("CLOSED_COMPUTER_RECOVERY_BUILD_INVALID");
+  assertExactSourceIdentity(current, identity);
+  assertResourceManifest(
+    JSON.parse(
+      await fs.readFile(path.join(directory, "resource-manifest.json"), "utf8"),
+    ),
+  );
+  await verifyGoCoreArtifact(directory, manifest.core, identity);
+  return identity;
+}
+
 async function run() {
   const { development = false, ...options } = parseClosedRecoveryOptions(
     process.argv.slice(2),
@@ -133,19 +191,22 @@ async function run() {
     compilerProblems(root).length
   )
     throw new Error("CLOSED_COMPUTER_RECOVERY_TOOLCHAIN_UNTRUSTED");
-  const artifact = await readArtifactManifest(
-    candidatePaths(root).artifactFile,
-  );
-  if (artifact.schema !== 6)
-    throw new Error("CLOSED_COMPUTER_RECOVERY_PACKAGE_INVALID");
-  assertExactSourceIdentity(sourceIdentity(root), artifact);
-  const verify = spawnSync(
-    process.execPath,
-    [path.join(root, "tooling/verify-package.mjs")],
-    { cwd: root, encoding: "utf8", timeout: 180000, maxBuffer: 65536 },
-  );
-  if (verify.error || verify.status !== 0)
-    throw new Error("CLOSED_COMPUTER_RECOVERY_PACKAGE_INVALID");
+  let artifact;
+  if (development) {
+    artifact = await verifyClosedRecoveryDevBuild(root, sourceIdentity(root));
+  } else {
+    artifact = await readArtifactManifest(candidatePaths(root).artifactFile);
+    if (artifact.schema !== 6 && artifact.schema !== 7)
+      throw new Error("CLOSED_COMPUTER_RECOVERY_PACKAGE_INVALID");
+    assertExactSourceIdentity(sourceIdentity(root), artifact);
+    const verify = spawnSync(
+      process.execPath,
+      [path.join(root, "tooling/verify-package.mjs")],
+      { cwd: root, encoding: "utf8", timeout: 180000, maxBuffer: 65536 },
+    );
+    if (verify.error || verify.status !== 0)
+      throw new Error("CLOSED_COMPUTER_RECOVERY_PACKAGE_INVALID");
+  }
   const home = trustedOwnerHome(os.userInfo(), process.geteuid());
   const userData = closedRecoveryUserData(home, development);
   // No HOME/profile/helper override, no process start/stop or provider call.
@@ -168,6 +229,8 @@ async function run() {
       logLevel: "silent",
     });
     assertExactSourceIdentity(sourceIdentity(root), artifact);
+    if (development)
+      await verifyClosedRecoveryDevBuild(root, sourceIdentity(root));
     const { recoverClosedComputer, assertClosedConnectorProcesses } =
       createRequire(import.meta.url)(output);
     const result = await recoverClosedComputer(
