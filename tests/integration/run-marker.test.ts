@@ -56,6 +56,82 @@ async function exitedChildPid(): Promise<number> {
 }
 
 describe("run marker", () => {
+  it.each(["file", "directory", "dangling symlink"])(
+    "refuses any pending recovery %s before publishing a coreless or Go run",
+    async (kind) => {
+      const root = await stateRoot();
+      await fs.mkdir(root, { recursive: true, mode: 0o700 });
+      const pending = path.join(root, "go-core.empty-recovery.pending");
+      if (kind === "file")
+        await fs.writeFile(pending, "retained unknown intent", { mode: 0o600 });
+      else if (kind === "directory") await fs.mkdir(pending);
+      else await fs.symlink(path.join(root, "absent-target"), pending);
+      const before = await fs.lstat(pending);
+      await expect(
+        writeRunMarker(root, {
+          pid: 4242,
+          now,
+          bootTime: BOOT,
+          processStart: START,
+        }),
+      ).rejects.toThrow("DESKTOP_EMPTY_RECOVERY_PENDING");
+      await expect(fs.lstat(runMarkerPath(root))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      expect(await fs.readdir(root)).toEqual([
+        "go-core.empty-recovery.pending",
+      ]);
+      const after = await fs.lstat(pending);
+      expect([after.dev, after.ino, after.size, after.mtimeMs]).toEqual([
+        before.dev,
+        before.ino,
+        before.size,
+        before.mtimeMs,
+      ]);
+    },
+  );
+
+  it("does not replace the retained failed run when recovery is pending", async () => {
+    const root = await stateRoot();
+    await writeRunMarker(root, {
+      pid: 4242,
+      now,
+      bootTime: BOOT,
+      processStart: START,
+    });
+    const original = await fs.readFile(runMarkerPath(root));
+    const before = await fs.lstat(runMarkerPath(root));
+    await fs.writeFile(
+      path.join(root, "go-core.empty-recovery.pending"),
+      "retained unknown intent",
+      { mode: 0o600 },
+    );
+    await expect(
+      writeRunMarker(root, {
+        pid: 4343,
+        now: now + 1000,
+        bootTime: BOOT,
+        processStart: REUSED_START,
+      }),
+    ).rejects.toThrow("DESKTOP_EMPTY_RECOVERY_PENDING");
+    expect(await fs.readFile(runMarkerPath(root))).toEqual(original);
+    expect((await fs.lstat(runMarkerPath(root))).ino).toBe(before.ino);
+  });
+
+  it("treats a failed pending-marker inspection as unreadable, never absent", async () => {
+    const root = await stateRoot();
+    await fs.writeFile(root, "invalid state directory", { mode: 0o600 });
+    await expect(
+      writeRunMarker(root, {
+        pid: 4242,
+        now,
+        bootTime: BOOT,
+        processStart: START,
+      }),
+    ).rejects.toMatchObject({ code: "ENOTDIR" });
+    expect(await fs.readFile(root, "utf8")).toBe("invalid state directory");
+  });
+
   it("writes a private regular marker with the documented shape and replaces the one a previous run left", async () => {
     const root = await stateRoot();
     const first = await writeRunMarker(root, {

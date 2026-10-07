@@ -320,6 +320,19 @@ export async function writeRunMarker(
   }>,
 ): Promise<RunMarker> {
   const target = runMarkerPath(stateRoot);
+  // Every desktop generation publishes this obligation, including historical
+  // coreless builds. A retained maintenance intent fences all of them before
+  // creating or replacing runtime state; unreadable is never absent.
+  const recoveryPending = await fs
+    .lstat(path.join(stateRoot, "go-core.empty-recovery.pending"))
+    .then(
+      () => true,
+      (error: unknown) => {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+        throw error;
+      },
+    );
+  if (recoveryPending) markerError("DESKTOP_EMPTY_RECOVERY_PENDING");
   const marker = RunMarkerSchema.parse({
     schema: 1,
     pid: input.pid,
