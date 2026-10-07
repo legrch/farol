@@ -447,7 +447,10 @@ import {
   desktopProfileEnvironment,
   isolatedDevMcpProofAllowed,
 } from "./desktop-environment";
-import { terminateDesktopStartup } from "./desktop-startup-failure";
+import {
+  runDesktopStartupBoundary,
+  terminateDesktopStartup,
+} from "./desktop-startup-failure";
 import { resolvePhysicalDevDataDirectoryName } from "./dev-profile-directory";
 
 const directory = __dirname;
@@ -9899,7 +9902,9 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
       },
     },
   );
-  await configuration.initialize();
+  await runDesktopStartupBoundary("configuration", () =>
+    configuration!.initialize(),
+  );
   const e2eChatGptUrl =
     process.env.FAROL_NEXT_E2E === "1"
       ? process.env.FAROL_NEXT_E2E_CHATGPT_URL
@@ -9940,66 +9945,70 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
       if (snapshot.status !== "ready") throw new Error("SETTINGS_UNAVAILABLE");
       return snapshot.settings;
     };
-    desktopGoCore = await startDesktopGoCore({
-      compiledArtifact: compiledGoCore,
-      previousHostDrainConfirmed: previousRunClean,
-      build: buildIdentity,
-      artifactRoot: directory,
-      stateRoot,
-      home: app.getPath("home"),
-      settings: currentSettings,
-      browser: (context) =>
-        createDesktopChatBrowser({
-          context,
-          partition: activeDesktopIdentity.chatGptPartition,
-          // Public control profiles still require native qualification before a
-          // production model may be admitted. The normal host owns this adapter;
-          // a missing profile cannot select the legacy browser executor instead.
-          driver: (lookup) =>
-            new GoChatBrowserDriver({
-              lookup,
-              translations: goChatStartupProfile?.snapshot.translations ?? [],
-              ...(goChatStartupProfile
-                ? { e2eOrigin: goChatStartupProfile.origin }
-                : {}),
-            }),
-          create: async (input) => {
-            const initialUrl = chatWorkerInitialUrl(
-              chatGptHomeUrl,
-              input.target.mode === "owned-saved"
-                ? input.target.conversationId
-                : undefined,
-            );
-            const route = createManagedChatGptRoute({
-              ...(goChatStartupProfile?.route ?? {}),
-              homeUrl: chatGptHomeUrl,
-              initialUrl,
-              e2eOrigin: chatGptE2eOrigin,
-              parent: () => null,
-              windowPresentation: { mode: "hidden" },
-              title: `ChatGPT · ${displayProductName}`,
-            });
-            const opened = await route.open();
-            if (opened.status !== "opened")
-              throw new BridgeError(
-                "unknown",
-                "host_chat_browser_open_unconfirmed",
+    desktopGoCore = await runDesktopStartupBoundary("go-core", () =>
+      startDesktopGoCore({
+        compiledArtifact: compiledGoCore,
+        previousHostDrainConfirmed: previousRunClean,
+        build: buildIdentity,
+        artifactRoot: directory,
+        stateRoot,
+        home: app.getPath("home"),
+        settings: currentSettings,
+        browser: (context) =>
+          createDesktopChatBrowser({
+            context,
+            partition: activeDesktopIdentity.chatGptPartition,
+            // Public control profiles still require native qualification before a
+            // production model may be admitted. The normal host owns this adapter;
+            // a missing profile cannot select the legacy browser executor instead.
+            driver: (lookup) =>
+              new GoChatBrowserDriver({
+                lookup,
+                translations: goChatStartupProfile?.snapshot.translations ?? [],
+                ...(goChatStartupProfile
+                  ? { e2eOrigin: goChatStartupProfile.origin }
+                  : {}),
+              }),
+            create: async (input) => {
+              const initialUrl = chatWorkerInitialUrl(
+                chatGptHomeUrl,
+                input.target.mode === "owned-saved"
+                  ? input.target.conversationId
+                  : undefined,
               );
-            return route.chatPhysical();
-          },
-        }),
-    });
-    configuration.attachComputerAuthority(() => desktopGoCore!.withdraw());
-    desktopGoCore.connectSettingsStore((profileId) => {
-      const store = configuration!.attachSettingsDeliveryStore({
-        profileId,
-        ownerId: "owner-desktop",
+              const route = createManagedChatGptRoute({
+                ...(goChatStartupProfile?.route ?? {}),
+                homeUrl: chatGptHomeUrl,
+                initialUrl,
+                e2eOrigin: chatGptE2eOrigin,
+                parent: () => null,
+                windowPresentation: { mode: "hidden" },
+                title: `ChatGPT · ${displayProductName}`,
+              });
+              const opened = await route.open();
+              if (opened.status !== "opened")
+                throw new BridgeError(
+                  "unknown",
+                  "host_chat_browser_open_unconfirmed",
+                );
+              return route.chatPhysical();
+            },
+          }),
+      }),
+    );
+    await runDesktopStartupBoundary("go-settings", () => {
+      configuration!.attachComputerAuthority(() => desktopGoCore!.withdraw());
+      desktopGoCore!.connectSettingsStore((profileId) => {
+        const store = configuration!.attachSettingsDeliveryStore({
+          profileId,
+          ownerId: "owner-desktop",
+        });
+        return {
+          read: (input) => store.read(input.deadlineMillis),
+          replace: (input) => store.replace(input.change, input.deadlineMillis),
+          fence: () => store.fence(),
+        };
       });
-      return {
-        read: (input) => store.read(input.deadlineMillis),
-        replace: (input) => store.replace(input.change, input.deadlineMillis),
-        fence: () => store.fence(),
-      };
     });
   }
   productAgentStore = new PrivateProductAgentStore({
@@ -10138,13 +10147,17 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
       window?.webContents.send(channels.browserRouteState, { state });
     },
   });
-  await initializeLiveTaskState();
-  await recoverProductAgentExpiry();
-  await initializeCodexContextController();
-  await reconcileContextAfterRestart();
-  await initializeCallerRelay();
-  await initializeSavedChatBridge();
-  await initializeRouteBRuntime();
+  await runDesktopStartupBoundary("task-state", async () => {
+    await initializeLiveTaskState();
+    await recoverProductAgentExpiry();
+  });
+  await runDesktopStartupBoundary("context", async () => {
+    await initializeCodexContextController();
+    await reconcileContextAfterRestart();
+    await initializeCallerRelay();
+    await initializeSavedChatBridge();
+    await initializeRouteBRuntime();
+  });
   const configured = configuration.snapshot();
   const initialSettings =
     configured.status === "ready" ? configured.settings : null;
@@ -10170,45 +10183,48 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
   installApplicationMenu();
   // Hidden tests own no visible status item. Ordinary owner launch gets one.
   if (process.env.FAROL_NEXT_E2E !== "1" && process.platform === "darwin") {
-    const disposeMenuBar = createMenuBar(
-      {
-        open: () => {
-          void reopenWindow();
+    const disposeMenuBar = await runDesktopStartupBoundary("native-menu", () =>
+      createMenuBar(
+        {
+          open: () => {
+            void reopenWindow();
+          },
+          current: () => {
+            const task = productTasksState().tasks.find(
+              (item) => item.lifecycle === "running",
+            );
+            if (task) {
+              selectedTaskId = task.taskId;
+              section = "browser";
+              shellOverlay = "none";
+              applyLayout();
+              publishLayout();
+            }
+            void reopenWindow();
+          },
+          updates: () => {
+            requestUpdates();
+          },
+          quit: () => {
+            app.quit();
+          },
         },
-        current: () => {
-          const task = productTasksState().tasks.find(
-            (item) => item.lifecycle === "running",
-          );
-          if (task) {
-            selectedTaskId = task.taskId;
-            section = "browser";
-            shellOverlay = "none";
-            applyLayout();
-            publishLayout();
-          }
-          void reopenWindow();
-        },
-        updates: () => {
-          requestUpdates();
-        },
-        quit: () => {
-          app.quit();
-        },
-      },
-      () => ({
-        label:
-          runtimeState === "ready"
-            ? "Farol · Local service available"
-            : "Farol · Service unavailable",
-        current:
-          productTasksState().tasks.find((task) => task.lifecycle === "running")
-            ?.label ?? null,
-      }),
+        () => ({
+          label:
+            runtimeState === "ready"
+              ? "Farol · Local service available"
+              : "Farol · Service unavailable",
+          current:
+            productTasksState().tasks.find(
+              (task) => task.lifecycle === "running",
+            )?.label ?? null,
+        }),
+      ),
     );
     app.once("will-quit", disposeMenuBar);
   }
-  await startRuntime();
-  await ensureWindow();
+  await runDesktopStartupBoundary("local-runtime", startRuntime);
+  await runDesktopStartupBoundary("main-window", ensureWindow);
   screen.on("display-added", reconcileVisibleTestDisplay);
   screen.on("display-removed", reconcileVisibleTestDisplay);
   screen.on("display-metrics-changed", reconcileVisibleTestDisplay);
