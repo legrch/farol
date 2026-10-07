@@ -25,11 +25,21 @@ func runEmptyRecoveryPreparation(args []string, in io.Reader, out, diagnostics i
 // Private test seam selects a shorter deadline on REAL disposable pipes. The
 // production command always uses five seconds and refuses noninterruptible I/O
 // before effects; it never abandons an outstanding read/write goroutine.
-func runEmptyRecoveryPreparationDeadline(args []string, in io.Reader, out, diagnostics io.Writer, deadline time.Time) int {
+func runEmptyRecoveryPreparationDeadline(args []string, in io.Reader, out, diagnostics io.Writer, deadline time.Time) (code int) {
 	binding, ok := nativeInspectionBinding(args)
 	if !ok {
 		return 2
 	}
+	input, output, closeStreams, err := emptyRecoveryDeadlineStreams(in, out)
+	if err != nil {
+		return 2
+	}
+	defer func() {
+		if closeStreams() != nil {
+			code = 1
+		}
+	}()
+	in, out = input, output
 	rd, readOK := in.(interface{ SetReadDeadline(time.Time) error })
 	wd, writeOK := out.(interface{ SetWriteDeadline(time.Time) error })
 	if !readOK || !writeOK || rd.SetReadDeadline(deadline) != nil || wd.SetWriteDeadline(deadline) != nil {
