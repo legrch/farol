@@ -29,6 +29,13 @@ if (
   !path.basename(userData).startsWith("retirement-boot-")
 )
   throw Error("HOST_FIXTURE_SCOPE_REFUSED");
+const phase = async (value) =>
+  fs.writeFile(
+    path.join(userData, "host-qualification-phase.json"),
+    `${JSON.stringify({ phase: value })}\n`,
+    { mode: 0o600 },
+  );
+await phase("artifact_attestation");
 const directory = path.join(root, "_output/build/app");
 const manifest = JSON.parse(
   await fs.readFile(path.join(directory, "build-manifest.json"), "utf8"),
@@ -51,6 +58,7 @@ await verifyBuildEntries(
 );
 await verifyInputManifest(directory, manifest);
 await verifyGoCoreArtifact(directory, manifest.core, identity);
+await phase("artifact_verified");
 const scratch = await fs.mkdtemp(
   path.join(os.tmpdir(), "farol-empty-recovery-qualification-"),
 );
@@ -106,10 +114,13 @@ try {
       assertClosedConnectorProcesses(fixture.Profile.Root);
     },
     attest: async () => {
+      await phase("host_attestation");
       assertExactSourceIdentity(sourceIdentity(root), identity);
       await verifyGoCoreArtifact(directory, manifest.core, identity);
+      await phase("host_attested");
     },
   });
+  await phase("host_finished");
   process.stdout.write(`${JSON.stringify(result)}\n`);
 } finally {
   await fs.rm(scratch, { recursive: true, force: true });

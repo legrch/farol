@@ -79,6 +79,10 @@ func retirementStorageFixtureAt(t *testing.T, mutations, desktopLayout bool) (Na
 	if mutations {
 		launch.Profile.ProfileID = "00000000-0000-4000-8000-000000000001"
 		launch.ComputerID = "00000000-0000-4000-8000-000000000002"
+		if desktopLayout {
+			launch.Profile.ProfileID = freshEmptyRecoveryFixtureUUID(t)
+			launch.ComputerID = freshEmptyRecoveryFixtureUUID(t)
+		}
 	}
 	runtime, err := NewNativeRuntime(context.Background(), launch, "generation-1")
 	if err != nil {

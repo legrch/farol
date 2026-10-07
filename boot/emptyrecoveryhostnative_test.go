@@ -4,9 +4,11 @@ package boot
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -38,6 +40,10 @@ func TestNativeEmptyRecoveryHostWithBuiltCore(t *testing.T) {
 	BuildID = manifest.BuildID
 	defer func() { BuildID = previous }()
 	in := emptyRecoveryFixtureAt(t, true)
+	in.Selection.OperationID = freshEmptyRecoveryFixtureUUID(t)
+	in.Selection.HostLifetimeID = freshEmptyRecoveryFixtureUUID(t)
+	in.Selection.ChildLaunchID = freshEmptyRecoveryFixtureUUID(t)
+	in.Selection.Next.BackendGeneration = "maintenance-" + freshEmptyRecoveryFixtureUUID(t)
 	state := filepath.Dir(in.Profile.Root)
 	userData := filepath.Dir(state)
 	connector := filepath.Join(state, "secure-mcp-connector", "computer-authority")
@@ -66,7 +72,9 @@ func TestNativeEmptyRecoveryHostWithBuiltCore(t *testing.T) {
 	if err := os.WriteFile(inputPath, raw, 0600); err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	// Whole-artifact SDK/input attestation has a separate bounded host budget.
+	// The production child still owns its unchanged 5s/8s pipe deadlines.
+	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
 	defer cancel()
 	node := filepath.Join(os.Getenv("HOME"), ".nvm/versions/node/v24.20.0/bin/node")
 	cmd := exec.CommandContext(ctx, node, filepath.Join(repo, "tests/e2e/closed-empty-chat-host.e2e.mjs"), inputPath)
@@ -81,6 +89,22 @@ func TestNativeEmptyRecoveryHostWithBuiltCore(t *testing.T) {
 	if json.Unmarshal(out, &result) != nil || result.Phase != "prepared_for_cold_start" {
 		t.Fatal("missing exact original host result", string(out))
 	}
+	receipt, err := os.ReadFile(filepath.Join(profile.Root, "chat-retired-"+in.Selection.OperationID, "maintenance-completed.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidenceParent := filepath.Join(repo, "_output/evidence/empty-chat-host-native")
+	if err := os.MkdirAll(evidenceParent, 0700); err != nil {
+		t.Fatal(err)
+	}
+	evidence := filepath.Join(evidenceParent, in.Selection.OperationID)
+	if err := os.Mkdir(evidence, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(evidence, "completed.json"), receipt, 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("built-core host receipt retained: %s; SHA256 %x", evidence, sha256.Sum256(receipt))
 	if _, err := os.Lstat(filepath.Join(state, "running.json")); !os.IsNotExist(err) {
 		t.Fatal("failed run not retained away from live marker", err)
 	}
@@ -98,3 +122,14 @@ func TestNativeEmptyRecoveryHostWithBuiltCore(t *testing.T) {
 }
 
 func sumFixture(raw []byte) []byte { value := sha256.Sum256(raw); return value[:] }
+
+func freshEmptyRecoveryFixtureUUID(t *testing.T) string {
+	t.Helper()
+	var value [16]byte
+	if _, err := rand.Read(value[:]); err != nil {
+		t.Fatal(err)
+	}
+	value[6] = value[6]&0x0f | 0x40
+	value[8] = value[8]&0x3f | 0x80
+	return fmt.Sprintf("%x-%x-%x-%x-%x", value[:4], value[4:6], value[6:8], value[8:10], value[10:])
+}
