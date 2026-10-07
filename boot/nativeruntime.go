@@ -66,6 +66,9 @@ func NewNativeRuntime(ctx context.Context, launch NativeLaunch, generation strin
 	if launch.SettingsMutations && launch.HostLifetimeID == "" {
 		return nil, profileFailure(ProfileInvalid)
 	}
+	if err := refusePendingEmptyRecovery(launch.Profile); err != nil {
+		return nil, err
+	}
 	qualified, err := QualifyProfile(launch.Profile)
 	if err != nil {
 		return nil, err

@@ -50,6 +50,9 @@ func serve(ctx context.Context, profileID string, launch *NativeLaunch, in io.Re
 
 // Run parses only currently implemented command modes; diagnostics never use stdout.
 func Run(args []string, in io.ReadCloser, out io.WriteCloser, diagnostics io.Writer) int {
+	if len(args) > 0 && args[0] == "prepare-empty-recovery" {
+		return runEmptyRecoveryPreparation(args[1:], in, out, diagnostics)
+	}
 	if len(args) > 0 && args[0] == "inspect-empty-recovery" {
 		return runEmptyRecoveryInspection(args[1:], in, out, diagnostics)
 	}

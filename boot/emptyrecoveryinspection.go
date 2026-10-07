@@ -41,6 +41,22 @@ func (emptyRecoveryRecordValidator) Validate(r chatport.HandoffRecord) error {
 // results -> mutation order through the visitor and every final recheck. A full
 // fixed namespace inventory is mandatory; empty snapshots alone are insufficient.
 func inspectEmptyRecovery(ctx context.Context, in emptyRecoveryInspectionInput, visit func(emptyRecoveryInspection) error) (resultErr error) {
+	if visit == nil {
+		return emptyrecovery.Refused
+	}
+	return withEmptyRecoveryClaims(ctx, in, func(v emptyRecoveryInspection, _ *emptyRecoveryChatClaims) error { return visit(v) })
+}
+
+// Only trusted maintenance composition receives the retained claims. Ordinary
+// inspection exposes observations only and always rechecks the original paths.
+type emptyRecoveryChatClaims struct {
+	h         *handoffrepo.ClosedLease
+	l         *lifecyclerepo.ClosedLease
+	r         *results.ClosedLease
+	preserved *emptyRecoveryPreservation
+}
+
+func withEmptyRecoveryClaims(ctx context.Context, in emptyRecoveryInspectionInput, visit func(emptyRecoveryInspection, *emptyRecoveryChatClaims) error) (resultErr error) {
 	if ctx == nil || ctx.Err() != nil || visit == nil || !validProfileBinding(in.Profile) || !validIngressID(in.OwnerID) || !validIngressID(in.ComputerID) || in.Selection.BuildID != BuildID || in.Selection.Current.ProfileID != in.Profile.ProfileID || in.Selection.Current.ParentRoot.Device != in.Profile.Device || in.Selection.Current.ParentRoot.Inode != in.Profile.Inode {
 		return emptyrecovery.Refused
 	}
@@ -79,6 +95,7 @@ func inspectEmptyRecovery(ctx context.Context, in emptyRecoveryInspectionInput, 
 				return err
 			}
 			defer func() { resultErr = errors.Join(resultErr, r.Close()) }()
+			claims := &emptyRecoveryChatClaims{h: h, l: l, r: r}
 			hv, err := h.Observation()
 			if err != nil {
 				return err
@@ -102,6 +119,9 @@ func inspectEmptyRecovery(ctx context.Context, in emptyRecoveryInspectionInput, 
 				if ctx.Err() != nil {
 					return emptyrecovery.Refused
 				}
+				if claims.preserved != nil {
+					return verifyEmptyRecoveryPreservation(ctx, in.Profile, computer, task, claims.preserved)
+				}
 				c, ch, e := qualified.Roots()
 				if e != nil || c != computer || ch != chat {
 					return emptyrecovery.Refused
@@ -122,7 +142,7 @@ func inspectEmptyRecovery(ctx context.Context, in emptyRecoveryInspectionInput, 
 				if err := verify(); err != nil {
 					return err
 				}
-				callbackErr := visit(emptyRecoveryInspection{Plan: *plan, Computer: computer, Chat: chat, Task: task, Access: access, Retained: retained, HandoffSteps: len(hv.Stages)})
+				callbackErr := visit(emptyRecoveryInspection{Plan: *plan, Computer: computer, Chat: chat, Task: task, Access: access, Retained: retained, HandoffSteps: len(hv.Stages)}, claims)
 				return errors.Join(callbackErr, verify())
 			})
 			return err

@@ -9833,6 +9833,19 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
         // recorder response or an unconfirmed host drain.
         throw new Error("DESKTOP_PREVIOUS_QUIT_UNCONFIRMED");
       }
+      if (compiledGoCore !== null) {
+        const recoveryPending = await lstat(
+          path.join(stateRoot, "go-core.empty-recovery.pending"),
+        ).then(
+          () => true,
+          (error: unknown) => {
+            if ((error as NodeJS.ErrnoException).code === "ENOENT")
+              return false;
+            throw error;
+          },
+        );
+        if (recoveryPending) throw new Error("DESKTOP_EMPTY_RECOVERY_PENDING");
+      }
       await updateRelaunch?.recheck();
       if (!(await verify())) {
         throw new Error("STARTUP_PROMOTION_LEASE_LOST");
