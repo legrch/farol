@@ -21,6 +21,10 @@ import { readChatHistoryView } from "../../../apps/desktop/chat-history-view";
 import { projectReadConversation } from "../../../apps/desktop/read-conversation-projection";
 import { ReadConversationPromptSchema } from "../../pkg/product-settings/chat-conversation";
 import { BridgeError } from "../../../apps/desktop/bridge/client";
+import {
+  reportComputerCheckDiagnostic,
+  refuseComputerSettingsList,
+} from "./computer-check-diagnostic";
 import { NativeViewVisibility } from "../../../apps/desktop/bridge/native-view-visibility";
 import { withSettingsEditLease } from "../../../apps/desktop/with-settings-edit-lease";
 import { readGoWorkspaceSnapshot } from "../../../apps/desktop/go-workspace-snapshot";
@@ -5046,11 +5050,21 @@ async function listOwnerWorkspace(
   workspace: ApprovedProductWorkspace,
   identity: WorkspaceRootIdentity,
   relativePath: string,
+  diagnosticAction?: string,
 ): Promise<
   | { ok: true; entries: string[]; truncated: boolean }
   | { ok: false; code: string }
 > {
-  if (!desktopGoCore) return { ok: false, code: "WORKSPACE_READ_FAILED" };
+  if (!desktopGoCore) {
+    if (diagnosticAction)
+      reportComputerCheckDiagnostic(
+        console.warn,
+        diagnosticAction,
+        "go-unavailable",
+        null,
+      );
+    return { ok: false, code: "WORKSPACE_READ_FAILED" };
+  }
   try {
     const result = await desktopGoCore.listSettingsWorkspace(
       generation,
@@ -5064,15 +5078,20 @@ async function listOwnerWorkspace(
       result.root.inode !== identity.inode ||
       current?.status !== "ready" ||
       current.settings.computer.generation !== generation
-    )
+    ) {
+      if (diagnosticAction)
+        reportComputerCheckDiagnostic(
+          console.warn,
+          diagnosticAction,
+          "root-recheck",
+          { code: "WORKSPACE_ROOT_CHANGED" },
+        );
       return { ok: false, code: "WORKSPACE_ROOT_CHANGED" };
+    }
     return { ok: true, entries: result.entries, truncated: result.truncated };
   } catch (error) {
     // A refused/unknown Go call never selects the legacy executor.
-    return {
-      ok: false,
-      code: error instanceof Error ? error.message : "WORKSPACE_READ_FAILED",
-    };
+    return refuseComputerSettingsList(error, console.warn, diagnosticAction);
   }
 }
 
@@ -5253,11 +5272,19 @@ async function configureUnfencedProduct(
     async () => {
       activeAuthorityChangeKind = command.kind;
       try {
+        let stopStage: "begin-stop" | "confirm-stop" = "begin-stop";
         try {
           const lifecycle = computerMcpLifecycle();
           await lifecycle.beginStop();
+          stopStage = "confirm-stop";
           await lifecycle.confirmStop();
-        } catch {
+        } catch (error) {
+          reportComputerCheckDiagnostic(
+            console.warn,
+            `settings:${command.kind}${"workspaceId" in command ? `:${command.workspaceId}` : ""}`,
+            stopStage,
+            error,
+          );
           return configurationFailure("CONNECTOR_STOP_UNCONFIRMED");
         }
         return await configureAdmittedProduct(command);
@@ -7655,7 +7682,11 @@ async function configureAdmittedProduct(
       return ProductConfigurationResultSchema.parse({
         ok: true,
         snapshot: configuration.snapshot(),
-        evidence: { kind: "computer.workspace-pick", selectionId },
+        evidence: {
+          kind: "computer.workspace-pick",
+          selectionId,
+          displayPath: selected.root,
+        },
       });
     }
     case "computer.add-workspace": {
@@ -7762,6 +7793,7 @@ async function configureAdmittedProduct(
         workspace,
         identity,
         ".",
+        `settings:computer.check-folder:${workspace.workspaceId}`,
       );
       const reachable = checked.ok;
       const recorded = await configuration.recordFolderAccessCheck(
@@ -7774,7 +7806,7 @@ async function configureAdmittedProduct(
       if (!recorded.ok) return ProductConfigurationResultSchema.parse(recorded);
       return reachable
         ? ProductConfigurationResultSchema.parse(recorded)
-        : configurationFailure("WORKSPACE_VERIFICATION_FAILED");
+        : workspaceReadFailure(checked.code);
     }
     case "computer.verify-workspace": {
       let snapshot = configuration.snapshot();
@@ -7836,6 +7868,7 @@ async function configureAdmittedProduct(
         workspace,
         measured,
         ".",
+        `settings:computer.verify-workspace:${workspace.workspaceId}`,
       );
       if (!result.ok) return workspaceReadFailure(result.code);
       // Preserve the measured layout for task selection. Primary metadata is

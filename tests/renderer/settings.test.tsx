@@ -173,6 +173,273 @@ async function change(
     );
   });
 }
+// DOM/facade regressions only. Native lifecycle and external acceptance are separate.
+describe("owner setup entry feedback", () => {
+  it("offers discovery without an effect on navigation or render", async () => {
+    const h = await mount(
+      "connection",
+      settings(),
+      "dev",
+      undefined,
+      "connection",
+    );
+    expect(h.calls()).toEqual([]);
+    expect(h.button("Find connection helper").disabled).toBe(false);
+    const advanced = h.host.querySelector<HTMLDetailsElement>(
+      ".connection-advanced",
+    );
+    expect(advanced?.open).toBe(false);
+    expect(h.button("Choose tunnel client…").closest("details")).toBe(advanced);
+    await h.click("Find connection helper");
+    expect(h.calls()).toEqual([{ kind: "connector.discover-client" }]);
+    expect(h.button("Start connection").disabled).toBe(true);
+  });
+  it("reports a validated helper without claiming connection or attachment readiness", async () => {
+    const h = await mount("connection");
+    const next = structuredClone(settings());
+    next.revision++;
+    next.connectors.secureMcp.tunnelClient =
+      connectionSettings().connectors.secureMcp.tunnelClient;
+    vi.mocked(h.f.api.configure).mockResolvedValueOnce({
+      ok: true,
+      snapshot: { status: "ready", settings: next },
+    });
+    await h.click("Find connection helper");
+    expect(h.host.textContent).toContain(
+      "Connection helper validated and selected",
+    );
+    expect(h.host.textContent).toContain(
+      "does not start the connection or prove ChatGPT attachment",
+    );
+    expect(h.host.textContent).toContain("Client: Selected");
+    expect(h.button("Start connection").disabled).toBe(true);
+    expect(h.calls()).toEqual([{ kind: "connector.discover-client" }]);
+  });
+  it.each([0, 2])(
+    "explains %i discovery candidates without selecting or starting them",
+    async (count) => {
+      const h = await mount("connection");
+      vi.mocked(h.f.api.configure).mockResolvedValueOnce({
+        ok: true,
+        snapshot: h.configuration,
+        evidence: {
+          kind: "connector.client-discovery",
+          candidates: Array.from({ length: count }, (_, index) => ({
+            requestedPath: `/approved/helper-${index}`,
+            path: `/approved/helper-${index}`,
+            source: "homebrew",
+            origin: "unsigned",
+            verdict: "needs-owner-choice",
+          })),
+          searched: ["/approved"],
+        },
+      });
+      await h.click("Find connection helper");
+      expect(h.host.textContent).toContain(
+        count === 0
+          ? "No connection helper found"
+          : "2 connection helper candidate(s) found, but no validated helper selected",
+      );
+      expect(h.host.textContent).toContain("Advanced connection options");
+      expect(h.host.textContent).toContain("Client: Not selected");
+      expect(h.button("Start connection").disabled).toBe(true);
+      expect(h.calls()).toEqual([{ kind: "connector.discover-client" }]);
+    },
+  );
+  it.each([
+    ["TUNNEL_CLIENT_DISCOVERY_FAILED", "Connection helper discovery failed"],
+    [
+      "TUNNEL_CLIENT_DISCOVERY_CANDIDATE_STALE",
+      "connection helper candidate changed",
+    ],
+    ["TUNNEL_CLIENT_PICKER_CANCELLED", "Action cancelled"],
+    ["TUNNEL_CLIENT_EXECUTABLE_UNSAFE", "did not pass executable validation"],
+    ["TUNNEL_CLIENT_INCOMPATIBLE", "could not be verified as compatible"],
+  ])(
+    "explains %s without claiming selection or replaying it",
+    async (error, message) => {
+      const h = await mount("connection");
+      vi.mocked(h.f.api.configure).mockResolvedValueOnce({
+        ok: false,
+        error,
+        snapshot: h.configuration,
+      });
+      await h.click("Find connection helper");
+      expect(h.host.textContent).toContain(message);
+      expect(h.host.textContent).toContain("Client: Not selected");
+      expect(h.button("Start connection").disabled).toBe(true);
+      await h.pageTo("folders");
+      await h.pageTo("connection");
+      expect(h.calls()).toEqual([{ kind: "connector.discover-client" }]);
+    },
+  );
+  it("keeps unknown discovery fenced across refresh and leaves Diagnostics navigation available", async () => {
+    const h = await mount("connection");
+    vi.mocked(h.f.api.configure).mockRejectedValueOnce(
+      new Error("private discovery failure"),
+    );
+    await h.click("Find connection helper");
+    await act(async () => h.c.refresh());
+    expect(h.button("Find connection helper").disabled).toBe(true);
+    expect(h.button("Choose tunnel client…").disabled).toBe(true);
+    expect(h.host.textContent).toContain("Helper selection is paused");
+    expect(h.host.textContent).not.toContain("private discovery failure");
+    await h.click("Connection diagnostics");
+    expect(h.c.getSnapshot().destination.page).toBe("diagnostics");
+    expect(h.calls()).toHaveLength(1);
+  });
+  it("explains invalid credentials without echoing the key", async () => {
+    const h = await mount("connection");
+    const feedback = () =>
+      h.host.querySelector(".credential-entry-feedback")?.textContent;
+    expect(feedback()).toContain("Enter the Tunnel ID");
+    await change(h.field("Tunnel ID"), "owner-tunnel");
+    await change(h.field("Runtime key"), "short");
+    expect(feedback()).toContain("20–512");
+    expect(feedback()).not.toContain("short");
+    expect(h.field("Runtime key").getAttribute("aria-invalid")).toBe("true");
+    expect(h.button("Save credentials").disabled).toBe(true);
+    await change(h.field("Runtime key"), "valid-shaped-test-key-000000");
+    expect(feedback()).toContain("Credential format is valid");
+    expect(feedback()).toContain(
+      "does not start the connection or prove ChatGPT attachment",
+    );
+    expect(h.button("Save credentials").disabled).toBe(false);
+    expect(h.calls()).toEqual([]);
+  });
+  it.each(["bad tunnel", "é", "x".repeat(161)])(
+    "explains an invalid Tunnel ID without exposing the key",
+    async (tunnelId) => {
+      const h = await mount("connection");
+      const secret = "valid-test-key-000000000000";
+      await change(h.field("Tunnel ID"), tunnelId);
+      await change(h.field("Runtime key"), secret);
+      expect(
+        h.host.querySelector(".credential-entry-feedback")?.textContent,
+      ).toContain("Enter the Tunnel ID");
+      expect(h.button("Save credentials").disabled).toBe(true);
+      expect(h.host.textContent).not.toContain(secret);
+      expect(h.calls()).toEqual([]);
+    },
+  );
+  it.each(["", "bad key-with-spaces-000000", "é".repeat(20), "x".repeat(513)])(
+    "explains an invalid runtime key without transforming or exposing it",
+    async (key) => {
+      const h = await mount("connection");
+      await change(h.field("Tunnel ID"), "owner-tunnel");
+      await change(h.field("Runtime key"), key);
+      expect(
+        h.host.querySelector(".credential-entry-feedback")?.textContent,
+      ).toContain("20–512");
+      expect(h.field("Runtime key").value).toBe(key);
+      expect(h.button("Save credentials").disabled).toBe(true);
+      if (key) expect(h.host.textContent).not.toContain(key);
+      expect(h.calls()).toEqual([]);
+    },
+  );
+  it("separates pending-operation feedback from field validity", async () => {
+    const h = await mount("connection");
+    const wait = deferred<unknown>();
+    vi.mocked(h.f.api.configure).mockReturnValueOnce(wait.promise);
+    await h.click("Find connection helper");
+    await change(h.field("Tunnel ID"), "owner-tunnel");
+    await change(h.field("Runtime key"), "valid-test-key-000000000000");
+    expect(
+      h.host.querySelector(".credential-entry-feedback")?.textContent,
+    ).toContain("Credential format is valid");
+    expect(
+      h.host.querySelector(".credential-pause-feedback")?.textContent,
+    ).toContain("dependent operation is pending");
+    expect(h.button("Save credentials").disabled).toBe(true);
+    await act(async () =>
+      wait.resolve({ ok: true, snapshot: h.configuration }),
+    );
+    expect(
+      h.host.querySelector(".credential-pause-feedback")?.textContent,
+    ).toBe("");
+    expect(h.button("Save credentials").disabled).toBe(false);
+    const references = h
+      .field("Runtime key")
+      .getAttribute("aria-describedby")!
+      .split(" ");
+    expect(references.every((id) => document.getElementById(id) !== null)).toBe(
+      true,
+    );
+    expect(h.calls()).toHaveLength(1);
+  });
+  it("explains unavailable runtime admission separately from a valid credential draft", async () => {
+    const h = await mount("connection");
+    await change(h.field("Tunnel ID"), "owner-tunnel");
+    await change(h.field("Runtime key"), "valid-test-key-000000000000");
+    await act(async () =>
+      h.f.emit("runtime", {
+        state: "offline",
+        error: null,
+        identity: null,
+        embeddedNode: null,
+        embeddedElectron: null,
+      }),
+    );
+    expect(
+      h.host.querySelector(".credential-entry-feedback")?.textContent,
+    ).toContain("Credential format is valid");
+    expect(
+      h.host.querySelector(".credential-pause-feedback")?.textContent,
+    ).toContain("runtime status is unavailable");
+    expect(h.button("Save credentials").disabled).toBe(true);
+    await h.click("Save credentials");
+    expect(h.calls()).toEqual([]);
+  });
+  it("keeps unknown replacement fenced even with a new valid draft", async () => {
+    const h = await mount("connection", connectionSettings());
+    await h.click("Replace credentials");
+    await change(h.field("Runtime key"), "test-replacement-one-000000");
+    vi.mocked(h.f.api.configure).mockRejectedValueOnce(new Error("reply lost"));
+    await h.click("Save credentials");
+    await change(h.field("Runtime key"), "test-replacement-two-000000");
+    expect(
+      h.host.querySelector(".credential-entry-feedback")?.textContent,
+    ).toContain("Credential format is valid");
+    expect(
+      h.host.querySelector(".credential-pause-feedback")?.textContent,
+    ).toContain("Saving is paused");
+    expect(
+      h.host.querySelector(".credential-pause-feedback")?.textContent,
+    ).toContain("Do not repeat it");
+    await h.click("Save credentials");
+    expect(h.calls()).toHaveLength(1);
+    expect(h.button("Save credentials").disabled).toBe(true);
+  });
+  it("does not present a chooser result as an approved workspace", async () => {
+    const h = await mount("folders");
+    vi.mocked(h.f.api.configure).mockResolvedValueOnce({
+      ok: true,
+      snapshot: h.configuration,
+      evidence: {
+        kind: "computer.workspace-pick",
+        selectionId,
+        displayPath: "/private/tmp/selected-workspace",
+      },
+    });
+    await h.click("Add folder…");
+    expect(h.host.textContent).toContain(
+      "Confirm read-only access below to add it",
+    );
+    expect(h.host.textContent).toContain("No folders approved");
+    expect(h.host.textContent).toContain(
+      "Selected workspace: /private/tmp/selected-workspace",
+    );
+    expect(h.calls()).toEqual([{ kind: "computer.choose-workspace" }]);
+    await h.click("Add selected folder read-only");
+    expect(h.host.textContent).toContain("Approval request completed");
+    expect(h.host.textContent).toContain("No folders approved");
+    expect(h.calls()).toEqual([
+      { kind: "computer.choose-workspace" },
+      { kind: "computer.add-workspace", selectionId },
+    ]);
+  });
+});
+
 function proof(value: ProductSettings) {
   return {
     profile: "farol-next",
@@ -185,7 +452,7 @@ function proof(value: ProductSettings) {
   };
 }
 function connectionSettings() {
-  const value = withFolder();
+  const value = structuredClone(withFolder());
   const timestamp = "2026-10-02T20:00:00.000Z";
   const buildId = "3".repeat(64),
     runtimeGeneration = "a".repeat(64);

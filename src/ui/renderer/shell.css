@@ -636,6 +636,23 @@ kbd {
   gap: 6px;
   margin: 14px 0;
 }
+/* Credential inputs use the form width instead of their intrinsic width. */
+.connection-credentials .setting-row {
+  display: grid;
+  grid-template-columns: minmax(7rem, 0.25fr) minmax(0, 1fr);
+}
+.connection-credentials .field {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  margin: 0;
+}
+@media (max-width: 720px) {
+  .connection-credentials .setting-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 6px;
+  }
+}
 .folder-row {
   padding: 20px 0;
   border-bottom: 1px solid var(--line);

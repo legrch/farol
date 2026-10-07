@@ -88,7 +88,9 @@ export class PrivateMcpLifecycle {
           (code !== "EAGAIN" && code !== "EWOULDBLOCK") ||
           Date.now() >= deadline
         )
-          throw new Error("COMPUTER_MCP_LIFECYCLE_UNVERIFIED");
+          throw new Error("COMPUTER_MCP_LIFECYCLE_UNVERIFIED", {
+            cause: error,
+          });
         await new Promise((resolve) => setTimeout(resolve, 25));
       }
     }

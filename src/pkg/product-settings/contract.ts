@@ -859,6 +859,8 @@ export const ProductConfigurationEvidenceSchema = z.discriminatedUnion("kind", [
   z.strictObject({
     kind: z.literal("computer.workspace-pick"),
     selectionId: IdentifierSchema,
+    // Presentation only. Add still consumes the host's sealed selection ID.
+    displayPath: CanonicalAbsolutePathSchema.optional(),
   }),
   z.strictObject({
     kind: z.literal("computer.workspace-selection"),

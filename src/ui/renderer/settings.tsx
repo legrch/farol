@@ -3,7 +3,13 @@ import {
   parseNavigationShortcuts,
   type NavigationShortcuts,
 } from "../../pkg/ipc/navigation-shortcuts";
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import {
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import type { ReactNode } from "react";
 import {
   ProductConfigurationCommandSchema,
@@ -13,7 +19,7 @@ import {
 } from "../../pkg/product-settings/contract";
 import { folderAccessChecked, folderDisplayName } from "../folder-access-state";
 import { computerSetup } from "./computer-setup";
-import { commandAllowed } from "./command-eligibility";
+import { commandAllowed, dependencyFences } from "./command-eligibility";
 import { ChatDirect } from "./chat-direct";
 import { ChatReadonly } from "./chat-readonly";
 import { ChatHistory } from "./chat-history";
@@ -31,6 +37,7 @@ export type SettingsProps = Readonly<{
 }>;
 type Actions = {
   disabled: boolean;
+  computerPauseReason: string | null;
   allowed(
     kind: ProductConfigurationCommand["kind"],
     workspaceId?: string,
@@ -115,7 +122,11 @@ export function useSettingsAttention(
     ),
   );
 }
-function actionFeedback(result: Intent): string {
+function actionFeedback(
+  result: Intent,
+  current?: WindowSnapshot,
+  evidenceReceived = false,
+): string {
   if (result.state === "pending") return "Saving or checking…";
   if (result.state === "unknown")
     return "Outcome unknown. Do not repeat this action; inspect the existing result in Diagnostics.";
@@ -123,8 +134,53 @@ function actionFeedback(result: Intent): string {
     return result.state === "applied"
       ? "Folder edit confirmed. Review the exact result in Diagnostics."
       : "Folder edit refused. Review the exact result in Diagnostics.";
+  if (
+    result.state === "applied" &&
+    result.id === intention("computer.choose-workspace")
+  )
+    return evidenceReceived &&
+      current?.evidence?.value.kind === "computer.workspace-pick"
+      ? "Selection received. Confirm read-only access below to add it."
+      : "Folder selection request completed. Review the current selection below before approving access.";
+  if (
+    result.state === "applied" &&
+    result.id === intention("computer.add-workspace")
+  )
+    return "Approval request completed. Only folders in the approved list below have saved access.";
+  if (
+    result.state === "applied" &&
+    result.id === intention("connector.discover-client")
+  ) {
+    if (
+      current?.configuration?.status === "ready" &&
+      current.configuration.settings.connectors.secureMcp.tunnelClient
+    )
+      return "Connection helper validated and selected. This does not start the connection or prove ChatGPT attachment.";
+    const discovery = evidenceReceived ? current?.evidence?.value : null;
+    if (discovery?.kind === "connector.client-discovery")
+      return discovery.candidates.length === 0
+        ? "No connection helper found. Install the helper described in the Connection guide, or choose a custom installation in Advanced connection options."
+        : `${discovery.candidates.length} connection helper candidate(s) found, but no validated helper selected. Review a custom installation in Advanced connection options; candidates do not prove readiness.`;
+    return "Discovery completed without a current validated selection. Review the client status and Advanced connection options.";
+  }
   if (result.state === "applied")
     return "Action confirmed. Check the current status below.";
+  if (result.code === "TUNNEL_CLIENT_DISCOVERY_FAILED")
+    return "Connection helper discovery failed. Review Diagnostics and the Connection guide; no usable helper is confirmed.";
+  if (result.code === "TUNNEL_CLIENT_DISCOVERY_CANDIDATE_STALE")
+    return "The connection helper candidate changed. It was not selected; review the installation in Advanced connection options.";
+  if (
+    result.code === "TUNNEL_CLIENT_SELECTION_INVALID" ||
+    result.code === "TUNNEL_CLIENT_EXECUTABLE_UNSAFE"
+  )
+    return "The connection helper did not pass executable validation. Review Diagnostics and choose a supported installation in Advanced connection options.";
+  if (
+    result.code === "TUNNEL_CLIENT_INCOMPATIBLE" ||
+    result.code === "TUNNEL_CLIENT_PROBE_FAILED"
+  )
+    return "The connection helper could not be verified as compatible. Review Diagnostics and the Connection guide before using it.";
+  if (result.code === "CONNECTOR_STOP_REQUIRED")
+    return "The connection must be stopped before changing its helper or credentials. Review the current service status.";
   if (result.code?.endsWith("_CANCELLED")) return "Action cancelled.";
   if (result.code === "CHATGPT_SIGN_IN_IN_PROGRESS")
     return "Sign-in is already open in ChatGPT. Finish there, then check sign-in.";
@@ -205,8 +261,25 @@ export function Settings({ snapshot, facade, setupStep }: SettingsProps) {
   const allowed: Actions["allowed"] = (kind, workspaceId) =>
     !feedback.unretained &&
     commandAllowed(snapshot, kind, workspaceId, retained(snapshot));
+  const computerFences = dependencyFences(
+    snapshot,
+    "computer",
+    retained(snapshot),
+  );
+  const computerPauseReason =
+    feedback.unretained || computerFences.unknown
+      ? "An operation has an unconfirmed outcome. Do not repeat it; review the existing result in Diagnostics."
+      : computerFences.pending
+        ? "A dependent operation is pending. Wait for its result before submitting another action."
+        : snapshot.status !== "current" ||
+            snapshot.runtime !== "ready" ||
+            !snapshot.buildId ||
+            configuration?.status !== "ready"
+          ? "Current configuration or runtime status is unavailable. Refresh status before submitting an action."
+          : null;
   const actions: Actions = {
     disabled: !allowed("general.update"),
+    computerPauseReason,
     allowed,
     async run(command, admit) {
       const current = facade.getSnapshot();
@@ -253,7 +326,15 @@ export function Settings({ snapshot, facade, setupStep }: SettingsProps) {
         // Keep every unresolved dependency, even when a newer independent
         // request owns the page message. Refresh/remount cannot settle it.
         feedback.intents[id] = result;
-        report(actionFeedback(result), result);
+        const after = facade.getSnapshot();
+        report(
+          actionFeedback(
+            result,
+            soleIntent(current, after, command.kind) ? after : undefined,
+            after.evidence !== current.evidence,
+          ),
+          result,
+        );
         return result;
       } catch {
         // Keep a local fence too if an adapter throws before retaining its intent.
@@ -578,6 +659,26 @@ function Folders(props: PageProps) {
             </button>
           )}
         </div>
+        {!actions.allowed("computer.choose-workspace") && (
+          <p className="description">
+            Folder selection and approval are paused.{" "}
+            {actions.computerPauseReason}
+          </p>
+        )}
+        {pickCurrent && (
+          <p className="description" role="status">
+            {picked.value.kind === "computer.workspace-pick" &&
+              picked.value.displayPath && (
+                <>
+                  Selected workspace: <code>{picked.value.displayPath}</code>
+                  .{" "}
+                </>
+              )}
+            Selection received; access is not approved yet. Confirm read-only
+            access to add the selection, then review its saved path in the
+            approved list.
+          </p>
+        )}
         {picked && !pickCurrent && (
           <p className="notice">
             The selection is no longer current. Choose the folder again before
@@ -1257,24 +1358,73 @@ function Connection({
   const replacementUnconfirmed =
     snapshot.intents[intention("connector.configure")]?.state === "unknown";
   const keyComposing = useRef(false);
+  const credentialFeedbackId = useId();
+  const credentialInput = ProductConfigurationCommandSchema.safeParse({
+    kind: "connector.configure",
+    tunnelId,
+    runtimeKey: key,
+  });
+  const tunnelInvalid =
+    !credentialInput.success &&
+    credentialInput.error.issues.some((issue) => issue.path[0] === "tunnelId");
+  const keyInvalid =
+    !credentialInput.success &&
+    credentialInput.error.issues.some(
+      (issue) => issue.path[0] === "runtimeKey",
+    );
+  const credentialFeedback = tunnelInvalid
+    ? "Enter the Tunnel ID from Tunnels: 1–160 letters, numbers, periods, underscores, colons or hyphens, without spaces or line breaks."
+    : keyInvalid
+      ? "Enter the complete runtime key: 20–512 printable ASCII characters, without spaces or line breaks."
+      : "Credential format is valid. Saving does not start the connection or prove ChatGPT attachment.";
+  const credentialPauseReason = !actions.allowed("connector.configure")
+    ? actions.computerPauseReason
+    : null;
   return (
     <>
       <h2>Connection</h2>
       <div hidden={setupStep !== undefined && setupStep !== "connection"}>
         <Group title="This Mac connection">
           <p className="badges">{setup.label}</p>
-          <p className="description">{setup.next}</p>
           <p className="description">
-            Select the tunnel client, save the tunnel, then start the
-            connection. An approved, verified folder is required for local
-            access.
+            {setup.facts.folder === "ready" &&
+            !connector.tunnelClient &&
+            actions.allowed("connector.discover-client")
+              ? "Find the installed connection helper and save your tunnel credentials before starting the connection."
+              : setup.next}
           </p>
-          <Command
-            actions={actions}
-            command={{ kind: "connector.select-client" }}
-          >
-            Choose tunnel client…
-          </Command>
+          <p className="description">
+            Save your tunnel credentials, find the installed connection helper,
+            then start the connection. A verified workspace is required for
+            local access.
+          </p>
+          {!connector.tunnelClient && (
+            <Command
+              actions={actions}
+              command={{ kind: "connector.discover-client" }}
+              className="primary"
+            >
+              Find connection helper
+            </Command>
+          )}
+          {!actions.allowed("connector.discover-client") && (
+            <p className="description">
+              Helper selection is paused. {actions.computerPauseReason}
+            </p>
+          )}
+          <details className="connection-advanced">
+            <summary>Advanced connection options</summary>
+            <p className="description">
+              Manual executable selection is only needed for a custom
+              installation. The selected helper is still verified before use.
+            </p>
+            <Command
+              actions={actions}
+              command={{ kind: "connector.select-client" }}
+            >
+              Choose tunnel client…
+            </Command>
+          </details>
           <p className="badges">
             Client: {connector.tunnelClient ? "Selected" : "Not selected"} ·
             Key: {connector.credential === "stored" ? "Saved" : "Needed"} ·
@@ -1314,6 +1464,7 @@ function Connection({
           )}
           {editing && (
             <form
+              className="connection-credentials"
               autoComplete="off"
               onCompositionStart={() => {
                 keyComposing.current = true;
@@ -1349,6 +1500,8 @@ function Connection({
                 <input
                   className="field"
                   value={tunnelId}
+                  aria-describedby={`${credentialFeedbackId} ${credentialFeedbackId}-pause`}
+                  aria-invalid={tunnelId.length > 0 && tunnelInvalid}
                   onChange={(event) => setTunnelId(event.currentTarget.value)}
                   required
                   maxLength={160}
@@ -1361,14 +1514,31 @@ function Connection({
                   type="password"
                   autoComplete="new-password"
                   value={key}
+                  aria-describedby={`${credentialFeedbackId} ${credentialFeedbackId}-pause`}
+                  aria-invalid={key.length > 0 && keyInvalid}
                   onChange={(event) => setKey(event.currentTarget.value)}
                   maxLength={512}
                   required
                 />
               </label>
+              <p
+                id={credentialFeedbackId}
+                className="description credential-entry-feedback"
+                role="status"
+              >
+                {credentialFeedback}
+              </p>
+              <p
+                id={`${credentialFeedbackId}-pause`}
+                className="description credential-pause-feedback"
+                role="status"
+              >
+                {credentialPauseReason &&
+                  `Saving is paused. ${credentialPauseReason}`}
+              </p>
               <p className="description">
-                Enter a new runtime key to save credentials. It is cleared from
-                this field when submitted.
+                The key stays private and is cleared from this field when
+                submitted.
               </p>
               <button
                 className="primary"
