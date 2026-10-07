@@ -88,6 +88,8 @@ const infoPlist = `<?xml version="1.0" encoding="UTF-8"?>
 const manifest = JSON.parse(
   await fs.readFile(path.join(builtRoot, "build-manifest.json"), "utf8"),
 );
+if (previewVersion.startsWith("0.2.") && manifest.schema !== 4)
+  throw new Error("PACKAGE_GO_CORE_REQUIRED");
 if (
   ![3, 4].includes(manifest.schema) ||
   manifest.sourceMode !== "head-exact" ||
