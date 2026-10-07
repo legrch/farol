@@ -25,6 +25,7 @@ import type {
   ReleaseManifest,
 } from "../../modules/release/domain/github-release-contract";
 import { compareReleaseVersions } from "../../modules/release/domain/github-version";
+import { legacyPredecessorRequiresStateRecovery } from "../../modules/release/domain/predecessor-state";
 import type { InstalledUpdateView } from "../../modules/release/contract/installed-update";
 import { createGithubUpdateTransport } from "../../modules/release/infra/native/github-update-transport";
 import { createUpdatePackageVerifier } from "../../modules/release/infra/native/update-package-verifier";
@@ -1840,7 +1841,14 @@ async function createRuntime(
           settled =
             predecessorName === "previous.app" &&
             TARGET_PHASES.includes(journal.phase);
-          if (settled) rollbackVersion = op.source.version;
+          if (
+            settled &&
+            !legacyPredecessorRequiresStateRecovery(
+              op.source.version,
+              op.target.version,
+            )
+          )
+            rollbackVersion = op.source.version;
         } else if (sameBuild(current, op.source)) {
           const rolledBack = ROLLED_BACK_PHASES.includes(journal.phase);
           const rejected =
@@ -2087,6 +2095,18 @@ async function createRuntime(
       if (heldAdmission)
         return { status: "unknown", code: "UPDATE_RESTORE_OUTCOME_UNKNOWN" };
       const op = restorable?.operation;
+      if (
+        action === "rollback" &&
+        op &&
+        legacyPredecessorRequiresStateRecovery(
+          op.source.version,
+          op.target.version,
+        )
+      )
+        return {
+          status: "blocked",
+          code: "UPDATE_PREDECESSOR_STATE_UNQUALIFIED",
+        };
       if (
         !op ||
         restoreKind !== action ||

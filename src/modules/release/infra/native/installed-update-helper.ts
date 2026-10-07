@@ -6,9 +6,10 @@ import os from "node:os";
 import type { Readable, Writable } from "node:stream";
 import path from "node:path";
 import { promisify } from "node:util";
+import { legacyPredecessorRequiresStateRecovery } from "../../domain/predecessor-state";
 
 const HELPER_SHA256 =
-  "72a1c96e187d22939e909aced4032f0bd0f77fe16741d88949a57acebdcf8d84";
+  "a8a2ca4eff73c0b976bf61dff08afce037adb4167607f7718da1f384a1bee5ee";
 const MAX_HELPER_BYTES = 64 * 1024;
 const APP_NAME = "Farol.app";
 const execFileAsync = promisify(execFile);
@@ -26,6 +27,7 @@ export interface InstalledUpdateInode {
 }
 
 export interface ConfirmedClosedPredecessor {
+  /** Exact current process closure: source for apply, installed target for rollback. */
   readonly kind: "confirmed_closed";
   readonly startedAt: string;
   readonly lastQuitSha256: string;
@@ -65,6 +67,11 @@ export type InstalledUpdateRequest = InstalledUpdateFields &
       }>
     | Readonly<{
         action: "apply";
+        predecessor: ConfirmedClosedPredecessor;
+      }>
+    | Readonly<{
+        action: "rollback";
+        relaunch: false;
         predecessor: ConfirmedClosedPredecessor;
       }>
   );
@@ -110,7 +117,8 @@ function assertInput(input: InstalledUpdateRequest): void {
   if (
     "predecessor" in input &&
     (!input.predecessor ||
-      input.action !== "apply" ||
+      !["apply", "rollback"].includes(input.action) ||
+      (input.action === "rollback" && input.relaunch !== false) ||
       input.predecessor.kind !== "confirmed_closed" ||
       !sha.test(input.predecessor.lastQuitSha256) ||
       typeof input.predecessor.startedAt !== "string" ||
@@ -122,6 +130,14 @@ function assertInput(input: InstalledUpdateRequest): void {
       !validInode(input.predecessor.stateIdentity))
   )
     throw new Error("INSTALLED_UPDATE_INPUT_INVALID");
+  if (
+    input.action === "rollback" &&
+    legacyPredecessorRequiresStateRecovery(
+      input.source.version,
+      input.target.version,
+    )
+  )
+    throw new Error("INSTALLED_UPDATE_PREDECESSOR_STATE_UNQUALIFIED");
 }
 
 async function helperBytes(helperPath: string): Promise<Buffer> {
@@ -239,7 +255,7 @@ export type InstalledUpdateLaunch =
     }>
   | Readonly<{ status: "ready"; operation: InstalledUpdateOperation }>
   // The transfer was released and one continue frame was written. Completion,
-  // not this result, reports whether the closed apply actually finished.
+  // not this result, reports whether the closed apply/rollback actually finished.
   | Readonly<{ status: "continued"; operation: InstalledUpdateOperation }>
   | Readonly<{
       status: "refused";
@@ -397,7 +413,7 @@ function parseTerminal(
  * Only `ready` authorizes normal Quit for apply/rollback or live recover. Every post-spawn
  * outcome retains the same child via its observation/completion handle.
  * Offline `recover` has no live-app handoff and returns a terminal result instead.
- * Closed apply uses its explicit transfer barrier and never grants live-app Quit.
+ * Closed apply/rollback use their explicit transfer barrier and never grant live-app Quit.
  */
 export async function startInstalledUpdateHelper(
   helperPath: string,
@@ -432,14 +448,24 @@ export async function startInstalledUpdateHelper(
     relaunch: input.relaunch,
   };
   const pinned: InstalledUpdateRequest = input.predecessor
-    ? {
-        ...fields,
-        action: "apply",
-        predecessor: {
-          ...input.predecessor,
-          stateIdentity: { ...input.predecessor.stateIdentity },
-        },
-      }
+    ? input.action === "rollback"
+      ? {
+          ...fields,
+          action: "rollback",
+          relaunch: false,
+          predecessor: {
+            ...input.predecessor,
+            stateIdentity: { ...input.predecessor.stateIdentity },
+          },
+        }
+      : {
+          ...fields,
+          action: "apply",
+          predecessor: {
+            ...input.predecessor,
+            stateIdentity: { ...input.predecessor.stateIdentity },
+          },
+        }
     : { ...fields, action: input.action };
   const selectedLease = options.promotionLease;
   const lease = selectedLease
@@ -597,10 +623,17 @@ export async function startInstalledUpdateHelper(
         !exit.protocolError &&
         exit.terminal &&
         exit.terminal.error === null &&
-        ["verified", "completed"].includes(exit.terminal.phase)
+        (pinned.action === "rollback"
+          ? exit.terminal.phase === "rolled_back"
+          : ["verified", "completed"].includes(exit.terminal.phase))
       )
         finish({ status: "terminal", operation, result: exit });
-      else unknown("closed_apply_terminal_unconfirmed");
+      else
+        unknown(
+          pinned.action === "rollback"
+            ? "closed_rollback_terminal_unconfirmed"
+            : "closed_apply_terminal_unconfirmed",
+        );
     } else finish({ status: "continued", operation });
   };
   const transfer = async (): Promise<void> => {

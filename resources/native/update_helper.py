@@ -533,7 +533,7 @@ def parse_request():
     if isinstance(request, dict) and "predecessor" in request:
         required.update(("predecessor", "leaseIdentity"))
         proof = request["predecessor"]
-        if request.get("action") != "apply" or not isinstance(proof, dict) or set(proof) != {"kind", "startedAt", "lastQuitSha256", "stateIdentity"} or proof["kind"] != "confirmed_closed" or not isinstance(proof["startedAt"], str) or not 1 <= len(proof["startedAt"]) <= 64 or not isinstance(proof["lastQuitSha256"], str) or len(proof["lastQuitSha256"]) != 64 or any(c not in "0123456789abcdef" for c in proof["lastQuitSha256"]) or not valid_inode(proof["stateIdentity"]) or not valid_inode(request.get("leaseIdentity")):
+        if request.get("action") not in ("apply", "rollback") or (request.get("action") == "rollback" and request.get("relaunch") is not False) or not isinstance(proof, dict) or set(proof) != {"kind", "startedAt", "lastQuitSha256", "stateIdentity"} or proof["kind"] != "confirmed_closed" or not isinstance(proof["startedAt"], str) or not 1 <= len(proof["startedAt"]) <= 64 or not isinstance(proof["lastQuitSha256"], str) or len(proof["lastQuitSha256"]) != 64 or any(c not in "0123456789abcdef" for c in proof["lastQuitSha256"]) or not valid_inode(proof["stateIdentity"]) or not valid_inode(request.get("leaseIdentity")):
             fail("input")
     if not isinstance(request, dict) or set(request) != required or request["schema"] != "farol.installed-update/1" or request["action"] not in ("apply", "recover", "rollback"):
         fail("input")
@@ -633,6 +633,14 @@ def matches_tree(parent, name, build):
         return False
 
 
+def require_predecessor_state(request):
+    # There is no qualified state downgrade from 0.2 to the strict 0.1 reader.
+    # Refuse before restoring its app; never launch it against newer settings.
+    # This is not a compatibility claim for other release transitions.
+    if request["source"]["version"].startswith("0.1.") and not request["target"]["version"].startswith("0.1."):
+        fail("predecessor_state_unqualified")
+
+
 def inspect_recovery(apps, op, request):
     """Read-only proof of an exact pair before a live-app Quit handoff."""
     phase = read_phase(op, request)
@@ -673,6 +681,7 @@ def reconcile(apps, op, request, fence):
         if phase == "rollback_started" and app is not None and previous is not None and failed is None:
             if matches_tree(apps, APP, target) and matches_tree(op, "previous.app", source):
                 # Exact pre-exchange pair: finish the journaled rollback once.
+                require_predecessor_state(request)
                 fence()
                 exchange_checked(apps, APP, op, "previous.app", identity(app), identity(previous))
             # Post-exchange pair must also match both accepted digests. A crash
@@ -686,6 +695,7 @@ def reconcile(apps, op, request, fence):
         if previous is not None and app is None and failed is not None and phase == "rollback_started":
             # An older journal may have crashed in the former two-rename gap.
             checked_tree(op, "previous.app", source["digest"], source["version"], source["buildId"])
+            require_predecessor_state(request)
             fence()
             rename_checked(op, "previous.app", apps, APP, identity(previous))
             write_record(op, "journal.json", record_for(request, "rolled_back"))
@@ -728,6 +738,7 @@ def reconcile(apps, op, request, fence):
         if phase in ("prepared", "predecessor_saved") and staged is not None:
             # Repair only a pre-existing journal from the former two-rename protocol.
             checked_tree(op, "staged.app", target["digest"], target["version"], target["buildId"])
+            require_predecessor_state(request)
             fence()
             rename_checked(op, "previous.app", apps, APP, identity(previous))
             write_record(op, "journal.json", record_for(request, "rolled_back"))
@@ -781,6 +792,44 @@ def verify_staging_route(home, update, op, request):
             os.close(fd)
 
 
+def closed_rollback_pair(apps, op, request):
+    """Pin a settled journal and exact target/previous pair; never reconcile here."""
+    before = entry(op, "journal.json")
+    phase = read_phase(op, request)
+    if phase not in ("verified", "completed"):
+        fail("rollback_phase", phase)
+    data = read_file(op, "journal.json")
+    after = entry(op, "journal.json")
+    if before is None or after is None or identity(before) != identity(after) or (before.st_size, before.st_mtime_ns, before.st_ctime_ns) != (after.st_size, after.st_mtime_ns, after.st_ctime_ns):
+        fail("closed_rollback_journal_changed")
+    try:
+        if json.loads(data) != record_for(request, phase):
+            fail("journal_mismatch")
+    except (ValueError, UnicodeError):
+        fail("journal_invalid")
+    if any(entry(op, name) is not None for name in ("staged.app", "failed.app", "rejected-target.json")):
+        fail("closed_rollback_pair")
+    pair = []
+    for parent, name, build in ((apps, APP, request["target"]), (op, "previous.app", request["source"])):
+        named = entry(parent, name)
+        checked_tree(parent, name, build["digest"], build["version"], build["buildId"])
+        current = entry(parent, name)
+        if named is None or current is None or identity(named) != identity(current):
+            fail("closed_rollback_pair_changed")
+        pair.append(identity(current))
+    current_journal = entry(op, "journal.json")
+    if current_journal is None or identity(current_journal) != identity(after) or (current_journal.st_size, current_journal.st_mtime_ns, current_journal.st_ctime_ns) != (after.st_size, after.st_mtime_ns, after.st_ctime_ns):
+        fail("closed_rollback_journal_changed")
+    if any(entry(op, name) is not None for name in ("staged.app", "failed.app", "rejected-target.json")):
+        fail("closed_rollback_pair")
+    for (parent, name), expected in zip(((apps, APP), (op, "previous.app")), pair):
+        current = entry(parent, name)
+        if current is None or identity(current) != expected:
+            fail("closed_rollback_pair_changed")
+    journal = (identity(after), after.st_size, after.st_mtime_ns, after.st_ctime_ns, hashlib.sha256(data).hexdigest())
+    return (phase, journal, *pair)
+
+
 def relaunch_arguments(request, completion):
     """Correlate this single launch while the existing owner lease remains held.
 
@@ -811,6 +860,10 @@ def relaunch_arguments(request, completion):
 
 
 def run(request):
+    if "predecessor" in request and (request["action"] not in ("apply", "rollback") or (request["action"] == "rollback" and request["relaunch"] is not False)):
+        fail("input")
+    if request["action"] == "rollback":
+        require_predecessor_state(request)
     home = open_home(request["home"])
     apps = None
     update = None
@@ -919,33 +972,59 @@ def run(request):
                 write_record(op, "journal.json", record_for(request, "rolled_back"))
                 fail("target_verification", "rolled_back")
         elif request["action"] == "rollback":
-            started_at = initial_marker(state, request)
-            if read_phase(op, request) not in ("verified", "completed", "launch_requested"):
-                fail("rollback_phase")
-            checked_tree(apps, APP, request["target"]["digest"], request["target"]["version"], request["target"]["buildId"])
-            checked_tree(op, "previous.app", request["source"]["digest"], request["source"]["version"], request["source"]["buildId"])
-            if entry(op, "failed.app") is not None:
-                fail("failed_exists")
-            if process_start(request["pid"]) != request["processStart"]:
-                fail("process_identity")
-            emit_handoff(request, "waiting_for_exit")
-            wait_exit(request["pid"], request["processStart"], request["waitSeconds"], observed=True)
-            lease_fd = owner_lease(state)
-            confirmed_quit(state, started_at)
-            assert_parent_path(request["home"], home, apps)
-            phase = reconcile(apps, op, request, fence)
-            if phase not in ("verified", "completed", "launch_requested"):
-                fail("rollback_phase", phase)
-            checked_tree(apps, APP, request["target"]["digest"], request["target"]["version"], request["target"]["buildId"])
-            checked_tree(op, "previous.app", request["source"]["digest"], request["source"]["version"], request["source"]["buildId"])
-            if entry(op, "failed.app") is not None:
-                fail("failed_exists")
+            if closed:
+                # The proof belongs to the current target process, never the old
+                # source. Admission cannot settle an uncertain launch or journal.
+                fence()
+                confirmed_closed(state, request)
+                pair = closed_rollback_pair(apps, op, request)
+                continue_channel()
+                emit_handoff(request, "closed_predecessor_ready")
+                await_continue(request)
+                fence()
+                confirmed_closed(state, request)
+                lock_fd = update_lock(update)
+                if closed_rollback_pair(apps, op, request) != pair:
+                    fail("closed_rollback_pair_changed")
+                fence()
+                confirmed_closed(state, request)
+                target_inode, predecessor_inode = pair[2:]
+            else:
+                started_at = initial_marker(state, request)
+                if read_phase(op, request) not in ("verified", "completed", "launch_requested"):
+                    fail("rollback_phase")
+                checked_tree(apps, APP, request["target"]["digest"], request["target"]["version"], request["target"]["buildId"])
+                checked_tree(op, "previous.app", request["source"]["digest"], request["source"]["version"], request["source"]["buildId"])
+                if entry(op, "failed.app") is not None:
+                    fail("failed_exists")
+                if process_start(request["pid"]) != request["processStart"]:
+                    fail("process_identity")
+                emit_handoff(request, "waiting_for_exit")
+                wait_exit(request["pid"], request["processStart"], request["waitSeconds"], observed=True)
+                lease_fd = owner_lease(state)
+                confirmed_quit(state, started_at)
+                assert_parent_path(request["home"], home, apps)
+                phase = reconcile(apps, op, request, fence)
+                if phase not in ("verified", "completed", "launch_requested"):
+                    fail("rollback_phase", phase)
+                checked_tree(apps, APP, request["target"]["digest"], request["target"]["version"], request["target"]["buildId"])
+                checked_tree(op, "previous.app", request["source"]["digest"], request["source"]["version"], request["source"]["buildId"])
+                if entry(op, "failed.app") is not None:
+                    fail("failed_exists")
             write_record(op, "journal.json", record_for(request, "rollback_started"))
-            verify_owner_lease(state, lease_fd)
-            assert_parent_path(request["home"], home, apps)
-            exchange_checked(apps, APP, op, "previous.app", identity(entry(apps, APP)), identity(entry(op, "previous.app")))
-            fence()
-            rename_checked(op, "previous.app", op, "failed.app", identity(entry(op, "previous.app")))
+            if closed:
+                fence()
+                confirmed_closed(state, request)
+                exchange_checked(apps, APP, op, "previous.app", target_inode, predecessor_inode)
+                fence()
+                confirmed_closed(state, request)
+                rename_checked(op, "previous.app", op, "failed.app", target_inode)
+            else:
+                verify_owner_lease(state, lease_fd)
+                assert_parent_path(request["home"], home, apps)
+                exchange_checked(apps, APP, op, "previous.app", identity(entry(apps, APP)), identity(entry(op, "previous.app")))
+                fence()
+                rename_checked(op, "previous.app", op, "failed.app", identity(entry(op, "previous.app")))
         elif request["action"] == "recover" and request["relaunch"]:
             started_at = initial_marker(state, request)
             assert_parent_path(request["home"], home, apps)

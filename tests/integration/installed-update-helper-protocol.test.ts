@@ -33,15 +33,15 @@ const request: InstalledUpdateRequest = {
   waitSeconds: 1,
   relaunch: false,
 };
-const event = () => ({
+const event = (selected: InstalledUpdateRequest = request) => ({
   schema: "farol.installed-update-handoff/1",
   phase: "waiting_for_exit",
-  operationId: request.operationId,
-  action: request.action,
-  source: request.source,
-  target: request.target,
-  pid: request.pid,
-  processStart: request.processStart,
+  operationId: selected.operationId,
+  action: selected.action,
+  source: selected.source,
+  target: selected.target,
+  pid: selected.pid,
+  processStart: selected.processStart,
 });
 
 // This fixture models only Node's private pipe transport and lifecycle events.
@@ -51,8 +51,12 @@ class Transport extends EventEmitter {
   readonly pid = 765432;
   readonly stdin = new Writable({ write: (_chunk, _encoding, done) => done() });
   readonly stdout = new PassThrough();
+  readonly requests: Buffer[] = [];
   readonly requestPipe = new Writable({
-    write: (_chunk, _encoding, done) => done(),
+    write: (chunk: Buffer, _encoding, done) => {
+      this.requests.push(Buffer.from(chunk));
+      done();
+    },
   });
   readonly ack = new PassThrough();
   readonly continues: Buffer[] = [];
@@ -112,6 +116,26 @@ async function launch(
 }
 
 describe("installed helper bounded readiness protocol", () => {
+  it("keeps ordinary live rollback on its correlated Quit handoff", async () => {
+    const selected: InstalledUpdateRequest = {
+      ...request,
+      action: "rollback",
+      relaunch: true,
+    };
+    const { child, pending } = await launch(1000, selected);
+    await tick();
+    child.ack.end(JSON.stringify(event(selected)));
+    const result = await pending;
+    expect(result.status).toBe("ready");
+    expect(JSON.parse(Buffer.concat(child.requests).toString())).toMatchObject({
+      action: "rollback",
+      relaunch: true,
+    });
+    expect(child.continues).toEqual([]);
+    child.finish(0, "rolled_back");
+    await result.operation.completion;
+    expect(spawn).toHaveBeenCalledOnce();
+  });
   it("persists the spawned identity before sending program/request bytes or awaiting readiness", async () => {
     let persist!: () => void;
     const recordSpawn = vi.fn(
@@ -405,7 +429,7 @@ describe("installed helper bounded readiness protocol", () => {
   });
 });
 
-const closedRequest: InstalledUpdateRequest = {
+const closedApplyRequest = {
   ...request,
   action: "apply",
   predecessor: {
@@ -414,7 +438,7 @@ const closedRequest: InstalledUpdateRequest = {
     lastQuitSha256: "5".repeat(64),
     stateIdentity: { device: "11", inode: "22" },
   },
-};
+} as const satisfies InstalledUpdateRequest;
 function leaseFixture() {
   return {
     descriptor: 17,
@@ -423,16 +447,98 @@ function leaseFixture() {
     release: vi.fn(async (): Promise<void> => undefined),
   } satisfies PromotionLeaseTransfer;
 }
-function closedEvent(lease: PromotionLeaseTransfer) {
+function closedEvent(
+  lease: PromotionLeaseTransfer,
+  selected: InstalledUpdateRequest,
+) {
   return {
-    ...event(),
+    ...event(selected),
     phase: "closed_predecessor_ready",
-    predecessor: closedRequest.predecessor,
+    predecessor: selected.predecessor,
     leaseIdentity: lease.identity,
   };
 }
 
-describe("closed predecessor transfer protocol (Node pipe doubles only)", () => {
+function closedTransferProtocol(action: "apply" | "rollback") {
+  const closedRequest = {
+    ...closedApplyRequest,
+    action,
+    relaunch: false as const,
+  } satisfies InstalledUpdateRequest;
+  const terminalPhase = action === "rollback" ? "rolled_back" : "verified";
+
+  it("pins the actual action and current-process proof before asynchronous dispatch", async () => {
+    const selected: InstalledUpdateRequest = {
+      ...closedRequest,
+      source: { ...closedRequest.source },
+      predecessor: {
+        ...closedRequest.predecessor!,
+        stateIdentity: { ...closedRequest.predecessor!.stateIdentity },
+      },
+    };
+    const lease = leaseFixture();
+    const { child, pending } = await launch(
+      1000,
+      selected,
+      async () => undefined,
+      lease,
+    );
+    Object.assign(selected, {
+      action: action === "apply" ? "rollback" : "apply",
+      relaunch: true,
+    });
+    Object.assign(selected.source, { buildId: "0".repeat(64) });
+    Object.assign(selected.predecessor!.stateIdentity, { inode: "99" });
+    await tick();
+    child.ack.end(JSON.stringify(closedEvent(lease, closedRequest)));
+    const result = await pending;
+    expect(result.status).toBe("continued");
+    const sent = JSON.parse(Buffer.concat(child.requests).toString());
+    const continued = JSON.parse(Buffer.concat(child.continues).toString());
+    for (const value of [sent, continued])
+      expect(value).toMatchObject({
+        action,
+        source: closedRequest.source,
+        predecessor: closedRequest.predecessor,
+      });
+    expect(sent.relaunch).toBe(false);
+    child.finish(0, terminalPhase);
+    await result.operation.completion;
+  });
+
+  it("keeps a possibly effective dispatch unknown when its terminal belongs to the other action", async () => {
+    const lease = leaseFixture();
+    const child = new Transport();
+    child.stdio[6] = new Writable({
+      write: (_chunk, _encoding, done) => {
+        child.finish(0, action === "rollback" ? "verified" : "rolled_back");
+        done();
+      },
+    });
+    const { pending } = await launch(
+      1000,
+      closedRequest,
+      async () => undefined,
+      lease,
+      child,
+    );
+    await tick();
+    child.ack.end(JSON.stringify(closedEvent(lease, closedRequest)));
+    const result = await pending;
+    expect(result).toMatchObject({
+      status: "outcome_unknown",
+      reason: `closed_${action}_terminal_unconfirmed`,
+    });
+    expect(result.operation.observe().protocolError).toBe(
+      `closed_${action}_terminal_unconfirmed`,
+    );
+    expect((await result.operation.completion).terminal?.phase).toBe(
+      action === "rollback" ? "verified" : "rolled_back",
+    );
+    expect(result.status).toBe("outcome_unknown");
+    expect(lease.release).toHaveBeenCalledOnce();
+    expect(spawn).toHaveBeenCalledOnce();
+  });
   it.each([
     "missing-lease",
     "bad-descriptor",
@@ -479,7 +585,12 @@ describe("closed predecessor transfer protocol (Node pipe doubles only)", () => 
     });
     expect(record).toHaveBeenCalledOnce();
     expect(child.requestPipe.writableEnded).toBe(true);
-    child.ack.write(JSON.stringify(closedEvent(lease)));
+    expect(JSON.parse(Buffer.concat(child.requests).toString())).toMatchObject({
+      action,
+      relaunch: false,
+      predecessor: closedRequest.predecessor,
+    });
+    child.ack.write(JSON.stringify(closedEvent(lease, closedRequest)));
     await tick();
     expect(lease.release).not.toHaveBeenCalled();
     child.ack.end("\n");
@@ -489,20 +600,25 @@ describe("closed predecessor transfer protocol (Node pipe doubles only)", () => 
     release();
     const result = await pending;
     expect(result.status).toBe("continued");
-    const { phase: _phase, ...expected } = closedEvent(lease);
+    const { phase: _phase, ...expected } = closedEvent(lease, closedRequest);
     expect(JSON.parse(Buffer.concat(child.continues).toString())).toEqual({
       ...expected,
       schema: "farol.installed-update-continue/1",
     });
     expect(child.continuation.writableEnded).toBe(true);
     expect(lease.verify).toHaveBeenCalledTimes(3);
-    child.finish(0);
+    child.finish(0, terminalPhase);
     expect((await result.operation.completion).terminal?.phase).toBe(
-      "verified",
+      terminalPhase,
     );
   });
 
   it.each([
+    "wrong-action",
+    "wrong-source",
+    "wrong-target",
+    "wrong-pid",
+    "wrong-start",
     "wrong-state",
     "wrong-lease",
     "wrong-quit",
@@ -519,7 +635,15 @@ describe("closed predecessor transfer protocol (Node pipe doubles only)", () => 
       lease,
     );
     await tick();
-    const frame = closedEvent(lease);
+    const frame = closedEvent(lease, closedRequest);
+    if (kind === "wrong-action")
+      frame.action = action === "apply" ? "rollback" : "apply";
+    if (kind === "wrong-source")
+      frame.source = { ...frame.source, digest: "0".repeat(64) };
+    if (kind === "wrong-target")
+      frame.target = { ...frame.target, buildId: "0".repeat(64) };
+    if (kind === "wrong-pid") frame.pid += 1;
+    if (kind === "wrong-start") frame.processStart += " changed";
     if (kind === "wrong-state")
       frame.predecessor = {
         ...closedRequest.predecessor!,
@@ -580,10 +704,10 @@ describe("closed predecessor transfer protocol (Node pipe doubles only)", () => 
       );
       await tick();
       if (kind !== "late-ack")
-        child.ack.end(JSON.stringify(closedEvent(lease)));
+        child.ack.end(JSON.stringify(closedEvent(lease, closedRequest)));
       const result = await pending;
       if (kind === "late-ack")
-        child.ack.end(JSON.stringify(closedEvent(lease)));
+        child.ack.end(JSON.stringify(closedEvent(lease, closedRequest)));
       release();
       await tick();
       expect(result.status).toBe("outcome_unknown");
@@ -609,7 +733,7 @@ describe("closed predecessor transfer protocol (Node pipe doubles only)", () => 
             done(new Error("lost write"));
             return;
           }
-          child.finish(0);
+          child.finish(0, terminalPhase);
           done();
         },
       });
@@ -623,8 +747,8 @@ describe("closed predecessor transfer protocol (Node pipe doubles only)", () => 
       await tick();
       if (kind === "exit-before-continue") {
         child.ack.end();
-        child.finish(0);
-      } else child.ack.end(JSON.stringify(closedEvent(lease)));
+        child.finish(0, terminalPhase);
+      } else child.ack.end(JSON.stringify(closedEvent(lease, closedRequest)));
       const result = await pending;
       expect(result.status).toBe(
         kind === "immediate" ? "terminal" : "outcome_unknown",
@@ -639,4 +763,9 @@ describe("closed predecessor transfer protocol (Node pipe doubles only)", () => 
       expect(spawn).toHaveBeenCalledOnce();
     },
   );
-});
+}
+
+describe.each(["apply", "rollback"] as const)(
+  "closed predecessor %s transfer protocol (Node pipe doubles only)",
+  closedTransferProtocol,
+);

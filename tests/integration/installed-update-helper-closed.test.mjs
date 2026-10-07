@@ -126,7 +126,13 @@ async function bundle(at, version, buildId, payload) {
   return { digest: await treeDigest(at), version, buildId };
 }
 
-async function fixture({ running = false, lock = "exclusive" } = {}) {
+async function fixture({
+  running = false,
+  lock = "exclusive",
+  action = "apply",
+  phase = "verified",
+  legacySource = false,
+} = {}) {
   const startedAt = new Date().toISOString();
   const root = await fs.mkdtemp(
     path.join(await fs.realpath(os.tmpdir()), "farol-closed-helper-"),
@@ -141,14 +147,31 @@ async function fixture({ running = false, lock = "exclusive" } = {}) {
   const state = path.join(profile, "farol-next-state");
   const operationId = "c".repeat(32);
   const op = path.join(profile, "installed-updates", operationId);
-  const source = await bundle(app, "0.1.0", "1".repeat(64), "N");
+  const source = await bundle(
+    action === "rollback" ? path.join(op, "previous.app") : app,
+    action === "rollback" && !legacySource ? "0.2.0" : "0.1.0",
+    "1".repeat(64),
+    "N",
+  );
   const target = await bundle(
-    path.join(op, "staged.app"),
-    "0.2.0",
+    action === "rollback" ? app : path.join(op, "staged.app"),
+    action === "rollback" ? "0.2.1" : "0.2.0",
     "2".repeat(64),
     "N+1",
   );
   await fs.chmod(home, 0o700);
+  if (action === "rollback")
+    await fs.writeFile(
+      path.join(op, "journal.json"),
+      JSON.stringify({
+        schema: "farol.installed-update-journal/1",
+        operationId,
+        source,
+        target,
+        phase,
+      }),
+      { mode: 0o600 },
+    );
   await fs.mkdir(state, { mode: 0o700 });
   const leasePath = path.join(state, "promotion.lease");
   await fs.writeFile(leasePath, "retained owner record", { mode: 0o600 });
@@ -182,7 +205,7 @@ async function fixture({ running = false, lock = "exclusive" } = {}) {
     mode: 0o600,
   });
   const request = {
-    action: "apply",
+    action,
     operationId,
     source,
     target,
@@ -524,4 +547,332 @@ describe("closed installed helper (disposable native filesystem and child fixtur
       f.request.target.digest,
     );
   });
+});
+
+// Authored for the Lead's native lane. This task does not execute these cases.
+async function rollbackSnapshot(f) {
+  const slots = {};
+  for (const [name, at] of Object.entries({
+    app: f.app,
+    previous: path.join(f.op, "previous.app"),
+    staged: path.join(f.op, "staged.app"),
+    failed: path.join(f.op, "failed.app"),
+  })) {
+    try {
+      slots[name] = {
+        identity: inode(await fs.stat(at, { bigint: true })),
+        digest: await treeDigest(at),
+      };
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+      slots[name] = null;
+    }
+  }
+  let journal = null;
+  try {
+    journal = await fs.readFile(path.join(f.op, "journal.json"), "utf8");
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
+  return { slots, journal };
+}
+
+describe("closed rollback admission (disposable native fixtures; Lead execution required)", () => {
+  it("B06 refuses an incompatible legacy app restoration before handshake or any app/state/journal mutation", async () => {
+    const f = await fixture({ action: "rollback", legacySource: true });
+    const config = path.join(f.state, "config.json");
+    // Native helper boundary only: the assembled app must supply the real save.
+    await fs.writeFile(
+      config,
+      JSON.stringify({ computer: { filePolicy: "approved-roots-v1" } }),
+      { mode: 0o600 },
+    );
+    const settings = await fs.readFile(config);
+    const before = await rollbackSnapshot(f);
+    const launched = await launch(f);
+    expect(await launched.ack).toMatchObject({
+      phase: "refused",
+      error: "predecessor_state_unqualified",
+    });
+    const terminal = await launched.exited;
+    expect(terminal.code).toBe(70);
+    expect(JSON.parse(terminal.output)).toMatchObject({
+      phase: "refused",
+      error: "predecessor_state_unqualified",
+    });
+    expect(await rollbackSnapshot(f)).toEqual(before);
+    expect(await fs.readFile(config)).toEqual(settings);
+    expect(await isLocked(f.leasePath)).toBe(true);
+  });
+  it.each(["verified", "completed"])(
+    "initiates only the settled %s pair and keeps the restored predecessor closed",
+    async (phase) => {
+      const f = await fixture({ action: "rollback", phase });
+      const before = await rollbackSnapshot(f);
+      const launched = await launch(f);
+      expect(await launched.ack).toMatchObject({
+        phase: "closed_predecessor_ready",
+        action: "rollback",
+        predecessor: f.request.predecessor,
+        source: f.request.source,
+        target: f.request.target,
+        leaseIdentity: f.leaseIdentity,
+      });
+      expect(await rollbackSnapshot(f)).toEqual(before);
+      await expect(
+        fs.lstat(path.join(f.profile, "installed-updates/lock")),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+      await close(f.lease);
+      expect(await isLocked(f.leasePath)).toBe(true);
+      launched.child.stdio[6].end(continuation(f));
+      const result = await launched.exited;
+      expect(result.code, result.error + result.output).toBe(0);
+      expect(JSON.parse(result.output).phase).toBe("rolled_back");
+      expect(await treeDigest(f.app)).toBe(f.request.source.digest);
+      expect(inode(await fs.stat(f.app, { bigint: true }))).toEqual(
+        before.slots.previous.identity,
+      );
+      expect(await treeDigest(path.join(f.op, "failed.app"))).toBe(
+        f.request.target.digest,
+      );
+      expect(
+        inode(await fs.stat(path.join(f.op, "failed.app"), { bigint: true })),
+      ).toEqual(before.slots.app.identity);
+      expect(
+        JSON.parse(await fs.readFile(path.join(f.op, "journal.json"), "utf8")),
+      ).toEqual({
+        schema: "farol.installed-update-journal/1",
+        operationId: f.request.operationId,
+        source: f.request.source,
+        target: f.request.target,
+        phase: "rolled_back",
+      });
+      await expect(
+        fs.lstat(path.join(f.state, "running.json")),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+      expect(await isLocked(f.leasePath)).toBe(false);
+      expect(
+        hash(await fs.readFile(path.join(f.state, "last-quit.json"))),
+      ).toBe(f.request.predecessor.lastQuitSha256);
+    },
+  );
+
+  it.each([
+    "prepared",
+    "predecessor_saved",
+    "new_installed",
+    "launch_requested",
+    "rollback_started",
+    "rolled_back",
+    "rollback_launch_requested",
+    "rollback_completed",
+    "cancelled",
+  ])(
+    "refuses unsettled %s without reconciling or changing its journal",
+    async (phase) => {
+      const f = await fixture({ action: "rollback", phase });
+      const before = await rollbackSnapshot(f);
+      const launched = await launch(f);
+      expect(await launched.ack).toMatchObject({
+        phase: "refused",
+        action: "rollback",
+        error: "rollback_phase",
+      });
+      expect((await launched.exited).code).toBe(70);
+      expect(await rollbackSnapshot(f)).toEqual(before);
+    },
+  );
+
+  it.each([
+    "missing-app",
+    "missing-previous",
+    "missing-journal",
+    "staged",
+    "failed",
+    "rejected-record",
+    "journal-operation",
+    "journal-source",
+    "journal-target",
+    "source-bytes",
+    "target-bytes",
+    "running-pid",
+    "occupied-pid",
+    "marker",
+    "quit",
+    "lease",
+    "state",
+  ])("refuses %s at admission without mutating the pair", async (kind) => {
+    const f = await fixture({
+      action: "rollback",
+      running: kind === "running-pid",
+    });
+    if (kind === "missing-app") await fs.rename(f.app, f.app + ".retained");
+    if (kind === "missing-previous")
+      await fs.rename(
+        path.join(f.op, "previous.app"),
+        path.join(f.op, "retained.app"),
+      );
+    if (kind === "missing-journal")
+      await fs.rename(
+        path.join(f.op, "journal.json"),
+        path.join(f.op, "retained-journal.json"),
+      );
+    if (kind === "staged" || kind === "failed")
+      await fs.mkdir(path.join(f.op, kind + ".app"));
+    if (kind === "rejected-record")
+      await fs.writeFile(path.join(f.op, "rejected-target.json"), "{}");
+    if (kind.startsWith("journal-")) {
+      const journal = JSON.parse(
+        await fs.readFile(path.join(f.op, "journal.json"), "utf8"),
+      );
+      if (kind === "journal-operation") journal.operationId = "d".repeat(32);
+      else
+        journal[kind === "journal-source" ? "source" : "target"].buildId =
+          "0".repeat(64);
+      await fs.writeFile(
+        path.join(f.op, "journal.json"),
+        JSON.stringify(journal),
+      );
+    }
+    if (kind === "source-bytes" || kind === "target-bytes")
+      await fs.writeFile(
+        path.join(
+          kind === "source-bytes" ? path.join(f.op, "previous.app") : f.app,
+          "Contents/changed",
+        ),
+        "changed",
+      );
+    if (kind === "occupied-pid") f.request.pid = process.pid;
+    if (kind === "marker")
+      await fs.writeFile(path.join(f.state, "running.json"), "{}");
+    if (kind === "quit") f.request.predecessor.lastQuitSha256 = "0".repeat(64);
+    if (kind === "lease") f.leaseIdentity.inode = "0";
+    if (kind === "state") f.request.predecessor.stateIdentity.inode = "0";
+    const before = await rollbackSnapshot(f);
+    const launched = await launch(f);
+    expect(await launched.ack).toMatchObject({
+      phase: "refused",
+      action: "rollback",
+    });
+    expect((await launched.exited).code).toBe(70);
+    expect(await rollbackSnapshot(f)).toEqual(before);
+  });
+
+  it.each([
+    "state",
+    "lease",
+    "quit",
+    "marker",
+    "crossed-pid",
+    "journal-phase",
+    "journal-inode",
+    "source-inode",
+    "target-inode",
+    "update-root",
+    "operation-root",
+    "staged",
+    "failed",
+    "wrong-action",
+    "eof",
+    "duplicate",
+  ])(
+    "rechecks %s after readiness and leaves the original pair untouched",
+    async (kind) => {
+      const f = await fixture({ action: "rollback" });
+      const launched = await launch(f);
+      expect(await launched.ack).toMatchObject({
+        phase: "closed_predecessor_ready",
+        action: "rollback",
+      });
+      await close(f.lease);
+      if (kind === "state") {
+        await fs.rename(f.state, f.state + ".old");
+        await fs.mkdir(f.state, { mode: 0o700 });
+      }
+      if (kind === "lease") {
+        await fs.rename(f.leasePath, f.leasePath + ".old");
+        await fs.writeFile(f.leasePath, "new", { mode: 0o600 });
+      }
+      if (kind === "quit")
+        await fs.appendFile(path.join(f.state, "last-quit.json"), " ");
+      if (kind === "marker" || kind === "crossed-pid") {
+        await fs.writeFile(
+          path.join(f.state, "running.json"),
+          JSON.stringify({ pid: process.pid }),
+        );
+        // A changed process identity cannot be supplied in the original continuation.
+        if (kind === "crossed-pid") f.request.pid = process.pid;
+      }
+      if (kind === "journal-phase") {
+        const journal = JSON.parse(
+          await fs.readFile(path.join(f.op, "journal.json"), "utf8"),
+        );
+        journal.phase = "completed";
+        await fs.writeFile(
+          path.join(f.op, "journal.json"),
+          JSON.stringify(journal),
+        );
+      }
+      if (kind === "journal-inode") {
+        const journal = path.join(f.op, "journal.json");
+        await fs.rename(journal, journal + ".retained");
+        await fs.copyFile(journal + ".retained", journal);
+      }
+      if (kind === "source-inode" || kind === "target-inode") {
+        const at =
+          kind === "source-inode" ? path.join(f.op, "previous.app") : f.app;
+        await fs.rename(at, at + ".retained");
+        await fs.cp(at + ".retained", at, { recursive: true });
+      }
+      if (kind === "update-root") {
+        const update = path.dirname(f.op);
+        await fs.rename(update, update + ".retained");
+        await fs.mkdir(update, { mode: 0o700 });
+        f.op = path.join(update + ".retained", f.request.operationId);
+      }
+      if (kind === "operation-root") {
+        await fs.rename(f.op, f.op + ".retained");
+        await fs.mkdir(f.op, { mode: 0o700 });
+        f.op += ".retained";
+      }
+      if (kind === "staged" || kind === "failed")
+        await fs.mkdir(path.join(f.op, kind + ".app"));
+      const before = await rollbackSnapshot(f);
+      const frame = continuation(f);
+      launched.child.stdio[6].end(
+        kind === "eof"
+          ? ""
+          : kind === "duplicate"
+            ? frame + frame
+            : kind === "wrong-action"
+              ? frame.replace('"action":"rollback"', '"action":"apply"')
+              : frame,
+      );
+      const result = await launched.exited;
+      expect(result.code, result.error + result.output).toBe(70);
+      expect(await rollbackSnapshot(f)).toEqual(before);
+    },
+  );
+
+  it.each([
+    ["recover", false],
+    ["recover", true],
+    ["rollback", true],
+  ])(
+    "refuses closed %s relaunch=%s at the Python request boundary",
+    async (action, relaunch) => {
+      const f = await fixture({ action: "rollback" });
+      Object.assign(f.request, { action, relaunch });
+      const before = await rollbackSnapshot(f);
+      const launched = await launch(f);
+      expect(await launched.ack).toBeNull();
+      const result = await launched.exited;
+      expect(result.code).toBe(70);
+      expect(JSON.parse(result.output)).toEqual({
+        phase: "refused",
+        error: "input",
+      });
+      expect(await rollbackSnapshot(f)).toEqual(before);
+    },
+  );
 });
