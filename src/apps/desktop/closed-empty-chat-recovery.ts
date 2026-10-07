@@ -112,6 +112,54 @@ export type ClosedEmptyChatRecoveryInput = Readonly<{
   attest(): Promise<void>;
 }>;
 
+// Go's private value codec materializes omitted zero-valued identity fields.
+// Only those four DTO defaults are added; every supplied value remains exact.
+// This is wire comparison, not mutation settlement or recovery authority.
+export function emptyRecoveryIntent(
+  selectionInput: EmptyRecoverySelectionInput,
+  profile: ProfileLaunchBinding,
+): unknown {
+  const selected = structuredClone(selectionInput);
+  const defaults = {
+    SessionID: "",
+    TaskID: "",
+    TaskEpoch: 0,
+    ParticipantID: "",
+  };
+  const record = (value: unknown): Record<string, unknown> => {
+    if (value === null || typeof value !== "object" || Array.isArray(value))
+      throw Error("EMPTY_CHAT_RECOVERY_SELECTION_INVALID");
+    return value as Record<string, unknown>;
+  };
+  if (!Array.isArray(selected.Mutations))
+    throw Error("EMPTY_CHAT_RECOVERY_SELECTION_INVALID");
+  const mutations = selected.Mutations.map((value) => {
+    const mutation = record(value);
+    const binding = record(mutation.Binding);
+    const identity = record(binding.Identity);
+    for (const [key, zero] of Object.entries(defaults)) {
+      if (!Object.hasOwn(identity, key)) identity[key] = zero;
+      else if (
+        typeof identity[key] !== typeof zero ||
+        (key === "TaskEpoch" &&
+          (!Number.isSafeInteger(identity[key]) || Number(identity[key]) < 0))
+      )
+        throw Error("EMPTY_CHAT_RECOVERY_SELECTION_INVALID");
+    }
+    return mutation;
+  });
+  return {
+    ...selected,
+    Mutations: mutations,
+    Profile: {
+      ProfileID: profile.profileId,
+      Root: profile.root,
+      Device: Number(profile.device),
+      Inode: Number(profile.inode),
+    },
+  };
+}
+
 export async function recoverClosedEmptyChat(
   input: ClosedEmptyChatRecoveryInput,
 ): Promise<
@@ -137,6 +185,8 @@ export async function recoverClosedEmptyChat(
     )
   )
     throw Error("EMPTY_CHAT_RECOVERY_SELECTION_INVALID");
+  // Validate the comparison shape before any lease/profile/child effect.
+  const expectedIntent = emptyRecoveryIntent(selectionInput, profile);
   await privateRoot(userData);
   await privateRoot(state);
   const parent = await privateRoot(profile.root);
@@ -234,15 +284,6 @@ export async function recoverClosedEmptyChat(
         };
         await proof();
         const intent = await snapshot(pending, 65536);
-        const expectedIntent = {
-          ...(selectionInput as object),
-          Profile: {
-            ProfileID: profile.profileId,
-            Root: profile.root,
-            Device: Number(profile.device),
-            Inode: Number(profile.inode),
-          },
-        };
         if (
           !isDeepStrictEqual(
             JSON.parse(intent.bytes.toString("utf8")),

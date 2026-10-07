@@ -23,6 +23,16 @@ const fixtureFile = process.argv[2];
 if (process.argv.length !== 3 || !fixtureFile || !path.isAbsolute(fixtureFile))
   throw Error("HOST_FIXTURE_INVALID");
 const fixture = JSON.parse(await fs.readFile(fixtureFile, "utf8"));
+// Match the real JS-selected connector records: optional task fields are
+// omitted, while the Go pending codec materializes their zero values.
+for (const mutation of fixture.Input.Mutations) {
+  for (const key of ["SessionID", "TaskID", "TaskEpoch", "ParticipantID"]) {
+    const value = mutation.Binding.Identity[key];
+    if (value !== "" && value !== 0)
+      throw Error("HOST_FIXTURE_TASK_IDENTITY_UNEXPECTED");
+    delete mutation.Binding.Identity[key];
+  }
+}
 const userData = path.dirname(path.dirname(fixture.Profile.Root));
 if (
   path.basename(userData) !== "Farol Dev" ||
