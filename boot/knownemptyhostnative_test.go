@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -34,8 +35,8 @@ func TestNativeKnownEmptyRecoveryHostWithBuiltCores(t *testing.T) {
 	}
 	previous := BuildID
 	defer func() { BuildID = previous }()
-	for _, scenario := range []string{"complete", "attempt", "archive-corrupt", "archive-late"} {
-		t.Run(scenario, func(t *testing.T) {
+	runKnownEmptyScenarios(func(scenario string) bool {
+		return t.Run(scenario, func(t *testing.T) {
 			BuildID = "eaa9c685af409f30fd96475368f7c171532ceea4b2d39873f3eabd2adb9008bb"
 			in := emptyRecoveryFixtureAt(t, true)
 			in.Selection.OperationID = freshEmptyRecoveryFixtureUUID(t)
@@ -112,5 +113,33 @@ func TestNativeKnownEmptyRecoveryHostWithBuiltCores(t *testing.T) {
 				t.Fatal(err)
 			}
 		})
+	})
+}
+
+// A failed runner does not prove descendant closure. Stop before another
+// fixture can use the native lane; the original failure remains the result.
+func runKnownEmptyScenarios(run func(string) bool) {
+	for _, scenario := range []string{"complete", "attempt", "archive-corrupt", "archive-late"} {
+		if !run(scenario) {
+			return
+		}
+	}
+}
+
+func TestKnownEmptyRecoveryScenarioSequence(t *testing.T) {
+	cases := []string{"complete", "attempt", "archive-corrupt", "archive-late"}
+	for failedAt := -1; failedAt < len(cases); failedAt++ {
+		var observed []string
+		runKnownEmptyScenarios(func(scenario string) bool {
+			observed = append(observed, scenario)
+			return failedAt < 0 || scenario != cases[failedAt]
+		})
+		expected := cases
+		if failedAt >= 0 {
+			expected = cases[:failedAt+1]
+		}
+		if !reflect.DeepEqual(observed, expected) {
+			t.Fatalf("failedAt %d: later scenarios ran after failure: got %v, want %v", failedAt, observed, expected)
+		}
 	}
 }
