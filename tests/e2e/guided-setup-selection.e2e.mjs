@@ -11,6 +11,8 @@ import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { _electron as electron } from "playwright-core";
+import { sourceIdentity } from "../../tooling/source-identity.mjs";
+import { assertBuildIdentity } from "../../tooling/build-identity-contract.mjs";
 import {
   assertNativePreviewAdmission,
   recheckNativePreviewIsolation,
@@ -53,6 +55,24 @@ const executable = packaged
 const entry = packaged
   ? path.join(appRoot, "Contents/Resources/app/main.cjs")
   : path.join(root, "_output/build/app/main.cjs");
+// The behavior journey must exercise the accepted source, never retained bytes
+// from an earlier package. Admission below still owns native/profile isolation.
+let behaviorBuild;
+if (behavior) {
+  const source = sourceIdentity(root, ".");
+  assert.equal(source.dirty, false, "GUIDED_BEHAVIOR_SOURCE_NOT_EXACT");
+  behaviorBuild = assertBuildIdentity(
+    JSON.parse(
+      await fs.readFile(
+        path.join(path.dirname(entry), "build-identity.json"),
+        "utf8",
+      ),
+    ),
+  );
+  assert.equal(behaviorBuild.sourceDirty, false);
+  assert.equal(behaviorBuild.sourceCommit, source.commit);
+  assert.equal(behaviorBuild.sourceTreeDigest, source.treeDigest);
+}
 const temporaryRoot = await fs.realpath(
   await fs.mkdtemp(path.join(os.tmpdir(), "farol-guided-setup-")),
 );
@@ -572,6 +592,12 @@ async function launch(environment, mode = "normal", profile = mode) {
     });
   });
   const bootstrap = await window.evaluate(() => window.farolNext.bootstrap());
+  if (behavior)
+    assert.deepEqual(
+      bootstrap.build,
+      behaviorBuild,
+      "GUIDED_BEHAVIOR_BUILD_CHANGED",
+    );
   assert.equal(bootstrap.environment, environment);
   assert.equal(bootstrap.legacySetupTestMode, false);
   if (freshProfile && mode === "normal")
@@ -765,11 +791,101 @@ try {
     assert.equal(saved.setup.chatgpt.verified, null);
     assert.equal(saved.setup.connect.verified, null);
     const retainedWorkspaces = saved.computer.workspaces;
+    const retainedProfile = { ...activeFixtureProfile };
+    const stateRoot = path.join(retainedProfile.userData, "farol-next-state");
+    const configFile = path.join(stateRoot, "config.json");
+    let policyConfigSha256;
+    let policyRunMarker;
+    if (behavior) {
+      // Supported current React Settings -> IPC owner save only. Reading the
+      // owned config observes publication; this test never writes policy bytes.
+      const beforePolicy = saved;
+      assert.equal(Object.hasOwn(beforePolicy.computer, "filePolicy"), false);
+      assert.equal(beforePolicy.connectors.secureMcp.runtime, null);
+      await window
+        .getByRole("navigation", { name: "Sections", exact: true })
+        .getByRole("button", { name: "Settings", exact: true })
+        .click();
+      await window
+        .getByRole("navigation", { name: "Settings navigation", exact: true })
+        .getByRole("button", { name: "This Mac", exact: true })
+        .click();
+      await window
+        .getByLabel("File access", { exact: true })
+        .selectOption("approved-roots-v1");
+      await window
+        .getByRole("button", { name: "Save file permissions", exact: true })
+        .click();
+      await window
+        .locator('.settings-page > p[role="status"]')
+        .filter({
+          hasText: /^Action confirmed\. Check the current status below\.$/u,
+        })
+        .waitFor();
+      saved = await readSetupSettings(window);
+      assert.equal(saved.computer.filePolicy, "approved-roots-v1");
+      assert.equal(saved.revision, beforePolicy.revision + 1);
+      assert.equal(
+        saved.computer.generation,
+        beforePolicy.computer.generation + 1,
+      );
+      assert.deepEqual(saved.computer.workspaces, retainedWorkspaces);
+      assert.equal(saved.computer.commands, beforePolicy.computer.commands);
+      assert.equal(saved.setup.computer.verified, null);
+      assert.equal(saved.setup.computer.reachable, "unknown");
+      assert.equal(saved.setup.computer.outcomeUnknown, false);
+      assert.equal(saved.connectors.secureMcp.runtime, null);
+      assert.equal(saved.connectors.secureMcp.attachment, null);
+      const persisted = await fs.readFile(configFile);
+      assert.deepEqual(JSON.parse(persisted).computer, saved.computer);
+      policyConfigSha256 = createHash("sha256").update(persisted).digest("hex");
+      policyRunMarker = await readOwnedStartupMarker(
+        stateRoot,
+        retainedProfile.home,
+        application.process().pid,
+      );
+      await openSetup(window);
+      observations.push({
+        kind: "new-format-file-policy-saved-through-react-settings",
+        build: behaviorBuild,
+        profile: retainedProfile,
+        configFile,
+        configSha256: policyConfigSha256,
+        computerGeneration: saved.computer.generation,
+        workspaceVerification: "invalidated",
+      });
+    }
     await assertSetupFinish(window, false);
     assert.equal(nonReadRequests, 0);
     // A known graceful quit permits reusing this SAME disposable profile.
     // Approved folders and saved credentials alone never make Computer ready.
     await closeOwned();
+    if (behavior) {
+      const cleanQuit = JSON.parse(
+        await fs.readFile(path.join(stateRoot, "last-quit.json"), "utf8"),
+      );
+      assert.equal(cleanQuit.schema, 1);
+      assert.equal(cleanQuit.drained, true);
+      assert.deepEqual(cleanQuit.unconfirmed, []);
+      assert.ok(
+        Date.parse(cleanQuit.at) >= Date.parse(policyRunMarker.startedAt),
+        "POLICY_SAVE_QUIT_RECEIPT_STALE",
+      );
+      await assert.rejects(fs.lstat(path.join(stateRoot, "running.json")), {
+        code: "ENOENT",
+      });
+      assert.equal(
+        createHash("sha256")
+          .update(await fs.readFile(configFile))
+          .digest("hex"),
+        policyConfigSha256,
+        "POLICY_CONFIG_CHANGED_ON_QUIT",
+      );
+      observations.push({
+        kind: "new-format-save-normal-clean-quit",
+        cleanQuit,
+      });
+    }
     window = await launch(environment, "normal", environment);
     await waitForResumeStage("connector-resume-skipped");
     const partial = await readSetupSettings(window);
@@ -788,6 +904,47 @@ try {
       kind: "partial-quit-reopen-and-nondestructive-review",
       environment,
     });
+    if (behavior) {
+      assert.deepEqual(
+        activeFixtureProfile,
+        retainedProfile,
+        "POLICY_REOPEN_PROFILE_CHANGED",
+      );
+      assert.deepEqual(partial.computer, saved.computer);
+      assert.equal(partial.computer.filePolicy, "approved-roots-v1");
+      assert.equal(partial.setup.computer.verified, null);
+      assert.equal(
+        createHash("sha256")
+          .update(await fs.readFile(configFile))
+          .digest("hex"),
+        policyConfigSha256,
+        "POLICY_CONFIG_CHANGED_ON_REOPEN",
+      );
+      assert.equal(fixtureVerifications, 0, "POLICY_SAVE_REPLAYED_ATTACHMENT");
+      // Readiness stayed withdrawn through Quit/reopen. Only the normal
+      // workspace command performs fresh Go inspection under the new policy.
+      await setupStep(window, "folders", "Folders & access");
+      await setupAction(window, "Verify workspace");
+      const reverified = await readSetupSettings(window);
+      assert.equal(
+        reverified.setup.computer.verified.workspaceId,
+        retainedWorkspaces[0].workspaceId,
+      );
+      assert.equal(
+        reverified.setup.computer.verified.configRevision,
+        saved.computer.generation,
+      );
+      assert.equal(reverified.setup.computer.verified.buildId, build.buildId);
+      assert.equal(reverified.computer.filePolicy, "approved-roots-v1");
+      await assertSetupFinish(window, false);
+      observations.push({
+        kind: "new-format-policy-retained-reopen-fresh-workspace-verification",
+        configSha256: policyConfigSha256,
+        readerRollback: "NOT_RUN",
+        helperRollback: "NOT_RUN",
+        postStartRollback: "NOT_RUN",
+      });
+    }
     if (!behavior) {
       await closeOwned();
       continue;
@@ -865,6 +1022,7 @@ try {
       fixtureVerifications,
     });
     const completed = await readSetupSettings(window);
+    assert.equal(completed.computer.filePolicy, "approved-roots-v1");
     await closeOwned();
     if (resumeRefusal) {
       // Preserve the existing optional changed-client refusal case. Only our
@@ -908,6 +1066,7 @@ try {
     window = await launch(environment, "normal", environment);
     await waitForResumeStage("connector-resumed");
     const resumed = await readSetupSettings(window);
+    assert.equal(resumed.computer.filePolicy, "approved-roots-v1");
     assert.equal(resumed.connectors.secureMcp.runtime.state, "ready");
     assert.notEqual(
       resumed.connectors.secureMcp.runtime.runtimeGeneration,
@@ -1091,6 +1250,7 @@ try {
           "Browser geometry, legacy/demo modal and embedded Send flows are outside this current-React Setup journey",
           "Native folder picker is replaced by the explicit E2E selection",
           "No live account, provider Send, model inference or real external attachment",
+          "Predecessor reader, helper rollback and post-start rollback NOT RUN; new-format save/reopen is not B06 recovery acceptance",
         ],
       },
       null,
