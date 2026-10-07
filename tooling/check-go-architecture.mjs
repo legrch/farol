@@ -354,7 +354,8 @@ export function checkGoArchitecture(root) {
   const add = (code, file, detail) => violations.push({ code, file, detail });
   // Go packages under tests are test-only fixtures/harnesses, even when their
   // filenames do not end in _test.go. They are not production architecture.
-  const skip = new Set([".git", "node_modules", "_output", "tests"]);
+  // Root dist preserves historical generated output; nested source dist stays scanned.
+  const skip = new Set([".git", "node_modules", "_output", "dist", "tests"]);
   function walk(directory, relative = "") {
     for (const entry of fs
       .readdirSync(directory, { withFileTypes: true })

@@ -22,7 +22,11 @@ type Report = {
 
 // These are source/import-graph fixtures, not compiler, platform-selection or
 // native-host evidence. Each runs the actual executable against a fresh root.
-function check(files: Record<string, string>, withModule = true) {
+function check(
+  files: Record<string, string>,
+  withModule = true,
+  symlinks: Record<string, string> = {},
+) {
   const directory = fs.mkdtempSync(
     path.join(os.tmpdir(), "farol-go-architecture-"),
   );
@@ -33,6 +37,11 @@ function check(files: Record<string, string>, withModule = true) {
       const destination = path.join(directory, name);
       fs.mkdirSync(path.dirname(destination), { recursive: true });
       fs.writeFileSync(destination, source);
+    }
+    for (const [name, target] of Object.entries(symlinks)) {
+      const destination = path.join(directory, name);
+      fs.mkdirSync(path.dirname(destination), { recursive: true });
+      fs.symlinkSync(target, destination);
     }
     const result = spawnSync(
       process.execPath,
@@ -534,6 +543,38 @@ var timestamp = time.Parse
       }).status,
     ).toBe(0);
   });
+  it("excludes historical root dist output including framework symlinks", () => {
+    const result = check(
+      {
+        "modules/chat/domain/turn/policy.go": source(),
+        "dist/package/go.mod": "module historical\n",
+        "dist/package/Electron.framework/Versions/A/escape.go": source("os"),
+      },
+      true,
+      { "dist/package/Electron.framework/Versions/Current": "A" },
+    );
+    expect(result.status, JSON.stringify(result.report)).toBe(0);
+    expect(result.report.violations).toEqual([]);
+    expect(result.report.productionFiles).toBe(1);
+  });
+  it("still checks authored Go in nested source directories named dist", () =>
+    denied(
+      check({ "modules/chat/domain/dist/policy.go": source("os") }),
+      "GO_PURE_IMPORT",
+      "modules/chat/domain/dist/policy.go",
+    ));
+  it.each([
+    ["modules/chat/domain/turn/linked.go", "policy.go"],
+    ["modules/chat/domain/dist", "turn"],
+  ])("still rejects source symlinks at %s", (name, target) =>
+    denied(
+      check({ "modules/chat/domain/turn/policy.go": source() }, true, {
+        [name]: target,
+      }),
+      "GO_SYMLINK",
+      name,
+    ),
+  );
   it("does not classify test-only Go packages as production", () => {
     const result = check({
       "tests/protocol/server.go": source("net/http"),
