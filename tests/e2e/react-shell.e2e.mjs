@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { createServer } from "node:http";
 import { once } from "node:events";
 import { _electron as electron } from "playwright-core";
@@ -13,12 +13,7 @@ import {
   observeElectronRuntime,
 } from "../../tooling/runtime-contract.mjs";
 import { sourceIdentity } from "../../tooling/source-identity.mjs";
-import { assertBuildIdentity } from "../../tooling/build-identity-contract.mjs";
-import {
-  BUILD_ENTRIES,
-  verifyBuildEntries,
-  verifyInputManifest,
-} from "../../tooling/build-contract.mjs";
+import { qualifyGoBuild } from "./qualified-go-build.mjs";
 
 const root = await fs.realpath(process.cwd());
 const buildRoot = path.join(root, "_output/build/app");
@@ -29,43 +24,16 @@ assert.equal(expectedSource.dirty, false, "RENDERER_SOURCE_NOT_EXACT");
 async function qualifiedBuild() {
   const source = sourceIdentity(root, ".");
   assert.deepEqual(source, expectedSource, "RENDERER_SOURCE_CHANGED");
-  const bytes = await fs.readFile(path.join(buildRoot, "build-manifest.json"));
-  const build = JSON.parse(bytes.toString("utf8"));
-  assert.equal(build.schema, 3, "RENDERER_BUILD_SCHEMA");
-  assert.equal(build.sourceMode, "head-exact", "RENDERER_BUILD_SOURCE_MODE");
-  assert.equal(build.dirty, false, "RENDERER_BUILD_DIRTY");
-  assert.equal(build.inputExact, true, "RENDERER_BUILD_INPUTS_NOT_EXACT");
-  assert.equal(build.sourceCommit, source.commit, "RENDERER_BUILD_COMMIT");
-  assert.equal(
-    build.sourceTreeDigest,
-    source.treeDigest,
-    "RENDERER_BUILD_TREE",
-  );
-  assert.deepEqual(build.entries, BUILD_ENTRIES, "RENDERER_BUILD_ENTRIES");
-  await verifyInputManifest(buildRoot, build);
-  await verifyBuildEntries(buildRoot, build.entrySha256);
-  const identity = assertBuildIdentity(
-    JSON.parse(
-      await fs.readFile(path.join(buildRoot, "build-identity.json"), "utf8"),
-    ),
-  );
-  assert.equal(identity.sourceDirty, false, "RENDERER_IDENTITY_DIRTY");
-  assert.equal(
-    identity.sourceCommit,
-    source.commit,
-    "RENDERER_IDENTITY_COMMIT",
-  );
-  assert.equal(
-    identity.sourceTreeDigest,
-    source.treeDigest,
-    "RENDERER_IDENTITY_TREE",
-  );
-  assert.equal(identity.buildId, build.buildId, "RENDERER_BUILD_ID");
+  const {
+    manifest: build,
+    identity,
+    manifestSha256,
+  } = await qualifyGoBuild(buildRoot, source);
   return {
     sourceCommit: source.commit,
     sourceTreeDigest: source.treeDigest,
     buildId: identity.buildId,
-    manifestSha256: createHash("sha256").update(bytes).digest("hex"),
+    manifestSha256,
     inputLedgerSha256: build.inputLedgerSha256,
     entrySha256: build.entrySha256,
   };

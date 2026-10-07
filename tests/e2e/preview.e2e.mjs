@@ -32,6 +32,7 @@ import { parseOwnerLaunchResult } from "../../tooling/owner-launch-result.mjs";
 import { sourceIdentity } from "../../tooling/source-identity.mjs";
 import { parseQuitReceipt } from "../../src/apps/desktop/quit-receipt.ts";
 import { runBoundedProcess } from "./bounded-process.mjs";
+import { qualifyGoBuild } from "./qualified-go-build.mjs";
 import { predecessorPackagePaths } from "./predecessor-package-path.mjs";
 import { packageLayout } from "../../tooling/package-layout.mjs";
 import {
@@ -172,19 +173,9 @@ let executable;
 let launchPrefix = [];
 if (development) {
   const buildRoot = path.join(root, "_output/build/app");
-  const build = JSON.parse(
-    await fs.readFile(path.join(buildRoot, "build-manifest.json"), "utf8"),
-  );
-  buildIdentity = assertBuildIdentity(
-    JSON.parse(
-      await fs.readFile(path.join(buildRoot, "build-identity.json"), "utf8"),
-    ),
-  );
-  assert.equal(build.schema, 3);
-  assert.equal(build.dirty, false, "E2E_DIRTY_DEVELOPMENT_BUILD");
-  assert.equal(build.inputExact, true, "E2E_DEVELOPMENT_INPUTS_NOT_EXACT");
-  assert.equal(build.sourceCommit, expectedSource.commit);
-  assert.equal(build.sourceTreeDigest, expectedSource.treeDigest);
+  const qualified = await qualifyGoBuild(buildRoot, expectedSource);
+  const build = qualified.manifest;
+  buildIdentity = qualified.identity;
   artifact = {
     artifactSha256: await treeDigest(buildRoot),
     sourceCommit: build.sourceCommit,
