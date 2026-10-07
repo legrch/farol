@@ -2103,10 +2103,11 @@ function Updates({ snapshot, facade, actions }: PageProps) {
   return (
     <>
       <h2>Updates</h2>
-      <Group title="Installed update">
+      <Group title="Update status">
         <p className="badges">
-          {update.phase}
-          {"version" in update ? ` · ${update.version}` : ""}
+          {update.phase === "ready"
+            ? `Version ${update.version} is downloaded and ready to install. It is not installed yet.`
+            : `${update.phase}${"version" in update ? ` · ${update.version}` : ""}`}
         </p>
         {"code" in update && <p className="notice">{update.code}</p>}
         {"blockedBy" in update && update.blockedBy && (
