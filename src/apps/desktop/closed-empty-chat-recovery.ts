@@ -22,6 +22,7 @@ import { MAX_RUN_MARKER_BYTES } from "./run-marker";
 import type { ClosedRecoveryState } from "./closed-computer-recovery";
 import { validate } from "../../../apps/desktop/bridge/wire";
 import type { EmptyRecoveryPublication } from "../../../apps/desktop/bridge/empty-recovery-child";
+import { retainEmptyArchive } from "./retained-empty-archive";
 
 const FLAGS = constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK;
 const sum = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex");
@@ -487,6 +488,7 @@ export async function completeKnownEmptyChat(
         await absent(path.join(archive, "maintenance-completed.json"));
         await absent(path.join(archive, "failed-running.json"));
         await absent(path.join(archive, "maintenance-intent.json"));
+        const archivePin = await retainEmptyArchive(archive);
         const proof = async () => {
           if (
             !isDeepStrictEqual(await privateRoot(profile.root), parent) ||
@@ -503,6 +505,7 @@ export async function completeKnownEmptyChat(
           await unchanged(running, run);
           await unchanged(configuration, config);
           await unchanged(pending, intent);
+          await archivePin.verify();
           await absent(path.join(state, "last-quit.json"));
           const desktop = await input.desktopState();
           if (
@@ -547,6 +550,10 @@ export async function completeKnownEmptyChat(
         const retainedAttempt = await snapshot(attempt, 16384);
         if (!retainedAttempt.bytes.equals(bytes))
           throw Error("EMPTY_CHAT_RECOVERY_COMPLETION_UNKNOWN");
+        await archivePin.include(
+          "known-completion-attempt.json",
+          retainedAttempt,
+        );
         await sync(archive);
         await proof();
         return await finishEmptyRecoveryHost({
@@ -562,6 +569,7 @@ export async function completeKnownEmptyChat(
           intent,
           preparedRoots,
           lease,
+          archivePin,
           proof: async () => {
             await proof();
             await unchanged(attempt, retainedAttempt);
@@ -595,6 +603,7 @@ async function finishEmptyRecoveryHost({
   lease,
   proof,
   knownFailure,
+  archivePin,
 }: {
   input: ClosedEmptyChatRecoveryInput;
   child: EmptyRecoveryChildResult;
@@ -613,6 +622,7 @@ async function finishEmptyRecoveryHost({
   lease: PromotionLeaseHandle;
   proof(): Promise<void>;
   knownFailure?: { receiptSha256: string; completionOperationId: string };
+  archivePin?: Awaited<ReturnType<typeof retainEmptyArchive>>;
 }): Promise<{
   phase: "prepared_for_cold_start";
   archive: string;
@@ -650,6 +660,7 @@ async function finishEmptyRecoveryHost({
   const retained = await snapshot(completion, 16384);
   if (!retained.bytes.equals(receipt))
     throw Error("EMPTY_CHAT_RECOVERY_COMPLETION_UNKNOWN");
+  await archivePin?.include("maintenance-completed.json", retained);
   await sync(archive);
   await proof();
   await unchanged(pending, intent);
@@ -662,6 +673,7 @@ async function finishEmptyRecoveryHost({
   await sync(state);
   await sync(archive);
   await unchanged(retainedRun, run);
+  await archivePin?.include("failed-running.json", run);
   await unchanged(configuration, config);
   await unchanged(pending, intent);
   if (
@@ -674,6 +686,7 @@ async function finishEmptyRecoveryHost({
     throw Error("EMPTY_CHAT_RECOVERY_ARCHIVE_CHANGED");
   input.processesAbsent();
   if (!(await verifyPromotionLease(lease))) throw Error("PROMOTION_LEASE_LOST");
+  await archivePin?.verify();
   // This is the final eligibility change. Any preceding unknown leaves the
   // original pending inode blocking both normal Go and Electron startup.
   try {
@@ -681,6 +694,8 @@ async function finishEmptyRecoveryHost({
     await sync(state);
     await sync(archive);
     await unchanged(retainedIntent, intent);
+    await archivePin?.include("maintenance-intent.json", intent);
+    await archivePin?.verify();
   } catch (originalError) {
     // A lost final durability/readback result must not leave an unfenced
     // normal-start path. One best-effort NEW uncertainty marker; preserve

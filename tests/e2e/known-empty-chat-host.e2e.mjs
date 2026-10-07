@@ -189,7 +189,7 @@ try {
     failure,
     observePrepared: async () => {
       observations++;
-      return observePreparedEmpty(
+      const result = await observePreparedEmpty(
         path.join(directory, "farol-backend"),
         profile,
         identity.buildId,
@@ -198,9 +198,31 @@ try {
         4,
         current.parseJSON,
       );
+      if (fixture.Case === "archive-late")
+        await fs.writeFile(
+          path.join(archive, "chat-handoff-0001.commit"),
+          "f".repeat(64),
+        );
+      return result;
     },
   };
-  if (fixture.Case === "archive-corrupt") {
+  if (fixture.Case === "archive-late") {
+    await assert.rejects(
+      current.completeKnownEmptyChat(input),
+      /EMPTY_CHAT_RECOVERY_ARCHIVE_CHANGED/u,
+    );
+    assert.equal(observations, 1);
+    assert.ok((await fs.readFile(pending)).equals(raw));
+    await assert.rejects(
+      fs.stat(path.join(archive, "known-completion-attempt.json")),
+    );
+    await assert.rejects(
+      fs.stat(path.join(profile.root, "chat/chat-handoff-0003.attempt")),
+    );
+    process.stdout.write(
+      `${JSON.stringify({ phase: "late_archive_change_refused", operationId: s.OperationID })}\n`,
+    );
+  } else if (fixture.Case === "archive-corrupt") {
     await fs.writeFile(
       path.join(archive, "chat-handoff-0001.commit"),
       "f".repeat(64),

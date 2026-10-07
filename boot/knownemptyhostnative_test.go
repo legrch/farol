@@ -34,7 +34,7 @@ func TestNativeKnownEmptyRecoveryHostWithBuiltCores(t *testing.T) {
 	}
 	previous := BuildID
 	defer func() { BuildID = previous }()
-	for _, scenario := range []string{"complete", "attempt", "archive-corrupt"} {
+	for _, scenario := range []string{"complete", "attempt", "archive-corrupt", "archive-late"} {
 		t.Run(scenario, func(t *testing.T) {
 			BuildID = "eaa9c685af409f30fd96475368f7c171532ceea4b2d39873f3eabd2adb9008bb"
 			in := emptyRecoveryFixtureAt(t, true)
@@ -83,8 +83,12 @@ func TestNativeKnownEmptyRecoveryHostWithBuiltCores(t *testing.T) {
 				t.Fatal(string(out))
 			}
 			t.Logf("known-completion fixture retained: %s; original operation %s; %s", userData, in.Selection.OperationID, result.Phase)
-			if scenario == "archive-corrupt" {
-				if result.Phase != "archive_corruption_refused" || refusePendingEmptyRecovery(profile) == nil {
+			if scenario == "archive-corrupt" || scenario == "archive-late" {
+				expected := "archive_corruption_refused"
+				if scenario == "archive-late" {
+					expected = "late_archive_change_refused"
+				}
+				if result.Phase != expected || refusePendingEmptyRecovery(profile) == nil {
 					t.Fatal(result.Phase, "corrupted archive cleared pending")
 				}
 				return
