@@ -277,14 +277,56 @@ export function prepareEmptyRecoveryChild(
     let ackWritten = false;
     let failed = false;
     let forced = false;
+    let closed = false;
     let settled = false;
     let cleanupDeadline: ReturnType<typeof setTimeout> | undefined;
     const deadline = setTimeout(() => fail(), 8000);
+    const complete = (): void => {
+      if (settled || !closed) return;
+      if (
+        failed ||
+        forced ||
+        messages !== 2 ||
+        pending.length !== 0 ||
+        !publication ||
+        !acknowledgement
+      ) {
+        settled = true;
+        clearTimeout(deadline);
+        clearTimeout(cleanupDeadline);
+        reject(new BridgeError("unknown", "empty_recovery_unconfirmed"));
+        return;
+      }
+      // Original close may precede the write callback. Keep the original total
+      // deadline until both observations qualify this same exchange.
+      if (!ackWritten) return;
+      settled = true;
+      clearTimeout(deadline);
+      clearTimeout(cleanupDeadline);
+      const terminal: CoreTerminalObservation = {
+        ...acknowledgement,
+        backendGeneration: expected.backendGeneration,
+        hostLifetimeId: expected.hostLifetimeId,
+        childLaunchId: expected.childLaunchId,
+        exitCode: "0",
+        signal: "",
+        forced: false,
+      };
+      if (!validate("CoreTerminalObservation", terminal)) {
+        reject(new BridgeError("unknown", "empty_recovery_unconfirmed"));
+        return;
+      }
+      resolve({ acknowledgement, terminal, publication });
+    };
     const fail = (): void => {
       if (settled || failed) return;
       failed = true;
-      forced = true;
       pending = Buffer.alloc(0);
+      if (closed) {
+        complete();
+        return;
+      }
+      forced = true;
       // One second to observe ORIGINAL close after signalling only this handle.
       cleanupDeadline = setTimeout(() => {
         if (settled) return;
@@ -301,38 +343,9 @@ export function prepareEmptyRecoveryChild(
       }
     };
     child.once("close", (code, signal) => {
-      clearTimeout(deadline);
-      clearTimeout(cleanupDeadline);
-      if (settled) return;
-      settled = true;
-      if (
-        failed ||
-        forced ||
-        code !== 0 ||
-        signal !== null ||
-        messages !== 2 ||
-        pending.length !== 0 ||
-        !ackWritten ||
-        !publication ||
-        !acknowledgement
-      ) {
-        reject(new BridgeError("unknown", "empty_recovery_unconfirmed"));
-        return;
-      }
-      const terminal: CoreTerminalObservation = {
-        ...acknowledgement,
-        backendGeneration: expected.backendGeneration,
-        hostLifetimeId: expected.hostLifetimeId,
-        childLaunchId: expected.childLaunchId,
-        exitCode: "0",
-        signal: "",
-        forced: false,
-      };
-      if (!validate("CoreTerminalObservation", terminal)) {
-        reject(new BridgeError("unknown", "empty_recovery_unconfirmed"));
-        return;
-      }
-      resolve({ acknowledgement, terminal, publication });
+      closed = true;
+      if (code !== 0 || signal !== null) failed = true;
+      complete();
     });
     child.once("error", fail);
     if (!child.stdin || !child.stdout || !child.stderr) {
@@ -383,10 +396,13 @@ export function prepareEmptyRecoveryChild(
           `${JSON.stringify({ Publication: publication })}\n`,
           (error?: Error | null) => {
             if (error) fail();
-            else if (!failed && !settled) ackWritten = true;
+            else if (!failed && !settled) {
+              ackWritten = true;
+              complete();
+            }
           },
         );
-      } else if (messages === 1 && publication && ackWritten) {
+      } else if (messages === 1 && publication) {
         const reply = object(value, ["schema", "buildId", "acknowledgement"]);
         if (
           reply.schema !== "farol-empty-recovery-acknowledged/1" ||

@@ -117,6 +117,23 @@ const run = () =>
   );
 const send = (value: unknown) =>
   child.stdout.emit("data", Buffer.from(`${JSON.stringify(value)}\n`));
+const deferAckWrite = () => {
+  let callback: ((error?: Error) => void) | undefined;
+  child.stdin.end.mockImplementation(
+    (_bytes: string, cb: (error?: Error) => void) => {
+      callback = cb;
+    },
+  );
+  return (error?: Error) => {
+    expect(callback).toBeDefined();
+    callback!(error);
+  };
+};
+const observeSettlement = (done: ReturnType<typeof run>) => {
+  const settled = vi.fn();
+  void done.then(settled, settled);
+  return settled;
+};
 
 it("writes a separate exact ACK only after actual publication, then waits for original close", async () => {
   const done = run();
@@ -402,13 +419,203 @@ it("requires ACK write completion and refuses a lost host ACK", async () => {
   await check;
   expect(child.kill).toHaveBeenCalledTimes(1);
 });
-it("rejects an acknowledgement before the host ACK write callback", async () => {
-  child.stdin.end.mockImplementation(() => {});
-  const check = expect(run()).rejects.toMatchObject({ state: "unknown" });
+it("keeps a missing host ACK write callback unknown at the original deadline", async () => {
+  const finishWrite = deferAckWrite();
+  const done = run();
+  const settled = observeSettlement(done);
+  const check = expect(done).rejects.toMatchObject({
+    state: "unknown",
+    code: "empty_recovery_unconfirmed",
+  });
+  await vi.advanceTimersByTimeAsync(3000);
   send(prepared());
   send(acknowledged());
   child.emit("close", 0, null);
+  await vi.advanceTimersByTimeAsync(4999);
+  expect(settled).not.toHaveBeenCalled();
+  expect(child.kill).not.toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(1);
   await check;
+  finishWrite();
+  await expect(done).rejects.toMatchObject({ state: "unknown" });
+  expect(child.kill).not.toHaveBeenCalled();
+  expect(vi.getTimerCount()).toBe(0);
+});
+it.each(["separate", "coalesced"])(
+  "accepts an exact ACK before the write callback in %s frames, then requires original close",
+  async (frames) => {
+    const finishWrite = deferAckWrite();
+    const done = run();
+    const settled = observeSettlement(done);
+    if (frames === "coalesced") {
+      child.stdout.emit(
+        "data",
+        Buffer.from(
+          `${JSON.stringify(prepared())}\n${JSON.stringify(acknowledged())}\n`,
+        ),
+      );
+    } else {
+      send(prepared());
+      send(acknowledged());
+    }
+    await Promise.resolve();
+    expect(settled).not.toHaveBeenCalled();
+    expect(child.kill).not.toHaveBeenCalled();
+    expect(child.stdin.end).toHaveBeenCalledExactlyOnceWith(
+      `${JSON.stringify({ Publication: publication })}\n`,
+      expect.any(Function),
+    );
+    finishWrite();
+    child.emit("exit", 0, null);
+    await Promise.resolve();
+    expect(settled).not.toHaveBeenCalled();
+    child.emit("close", 0, null);
+    await expect(done).resolves.toMatchObject({
+      publication,
+      acknowledgement,
+      terminal: { exitCode: "0", signal: "", forced: false },
+    });
+    expect(child.kill).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+  },
+);
+it("retains original normal close until a successful ACK write callback within the original deadline", async () => {
+  const finishWrite = deferAckWrite();
+  const done = run();
+  const settled = observeSettlement(done);
+  await vi.advanceTimersByTimeAsync(3000);
+  send(prepared());
+  send(acknowledged());
+  child.emit("close", 0, null);
+  await vi.advanceTimersByTimeAsync(4999);
+  expect(settled).not.toHaveBeenCalled();
+  expect(child.kill).not.toHaveBeenCalled();
+  finishWrite();
+  await expect(done).resolves.toMatchObject({
+    publication,
+    acknowledgement,
+    terminal: { exitCode: "0", signal: "", forced: false },
+  });
+  expect(child.kill).not.toHaveBeenCalled();
+  expect(vi.getTimerCount()).toBe(0);
+});
+it.each([false, true])(
+  "keeps a delayed ACK write error unknown (original close already observed: %s)",
+  async (closed) => {
+    const finishWrite = deferAckWrite();
+    const done = run();
+    const check = expect(done).rejects.toMatchObject({
+      state: "unknown",
+      code: "empty_recovery_unconfirmed",
+    });
+    send(prepared());
+    send(acknowledged());
+    if (closed) child.emit("close", 0, null);
+    finishWrite(Error("lost ACK"));
+    expect(child.kill).toHaveBeenCalledTimes(closed ? 0 : 1);
+    if (!closed) child.emit("close", 0, null);
+    await check;
+    finishWrite();
+    await expect(done).rejects.toMatchObject({ state: "unknown" });
+    expect(vi.getTimerCount()).toBe(0);
+  },
+);
+it("keeps a lost ACK callback unknown when the original child is still open", async () => {
+  const finishWrite = deferAckWrite();
+  const done = run();
+  const check = expect(done).rejects.toMatchObject({ state: "unknown" });
+  send(prepared());
+  send(acknowledged());
+  await vi.advanceTimersByTimeAsync(8000);
+  expect(child.kill).toHaveBeenCalledExactlyOnceWith("SIGKILL");
+  finishWrite();
+  child.emit("close", 0, null);
+  await check;
+});
+it.each([
+  ["handoff", { ...acknowledgement, handoffId: "wrong" }],
+  ["receipt", { ...acknowledgement, receiptDigest: "b".repeat(64) }],
+  ["digest", { ...acknowledgement, ackDigest: "not-hex" }],
+  ["zero digest", { ...acknowledgement, ackDigest: "0".repeat(64) }],
+  ["extra field", { ...acknowledgement, forced: false }],
+] as const)(
+  "rejects invalid acknowledgement %s even before the ACK write callback",
+  async (_name, ack) => {
+    const finishWrite = deferAckWrite();
+    const done = run();
+    const check = expect(done).rejects.toMatchObject({ state: "unknown" });
+    send(prepared());
+    send({ ...acknowledged(), acknowledgement: ack });
+    expect(child.kill).toHaveBeenCalledExactlyOnceWith("SIGKILL");
+    finishWrite();
+    child.emit("close", 0, null);
+    await check;
+  },
+);
+it("rejects duplicate ACK frames while the ACK write callback is pending", async () => {
+  const finishWrite = deferAckWrite();
+  const done = run();
+  const check = expect(done).rejects.toMatchObject({ state: "unknown" });
+  send(prepared());
+  send(acknowledged());
+  expect(child.kill).not.toHaveBeenCalled();
+  send(acknowledged());
+  expect(child.kill).toHaveBeenCalledExactlyOnceWith("SIGKILL");
+  child.emit("close", 0, null);
+  await check;
+  finishWrite();
+  await expect(done).rejects.toMatchObject({ state: "unknown" });
+});
+it.each([
+  [1, null],
+  [2, null],
+  [null, "SIGTERM"],
+] as const)(
+  "cannot upgrade original close %s/%s with a delayed successful write callback",
+  async (code, signal) => {
+    const finishWrite = deferAckWrite();
+    const done = run();
+    const check = expect(done).rejects.toMatchObject({ state: "unknown" });
+    send(prepared());
+    send(acknowledged());
+    child.emit("close", code, signal);
+    await check;
+    finishWrite();
+    await expect(done).rejects.toMatchObject({ state: "unknown" });
+    expect(child.kill).not.toHaveBeenCalled();
+  },
+);
+it.each(["stdin", "stdout", "stderr", "child"])(
+  "keeps %s errors after original close unknown while the write callback is pending",
+  async (stream) => {
+    const finishWrite = deferAckWrite();
+    const done = run();
+    const check = expect(done).rejects.toMatchObject({ state: "unknown" });
+    send(prepared());
+    send(acknowledged());
+    child.emit("close", 0, null);
+    (stream === "child"
+      ? child
+      : child[stream as "stdin" | "stdout" | "stderr"]
+    ).emit("error", Error("private diagnostic"));
+    await check;
+    finishWrite();
+    await expect(done).rejects.toMatchObject({ state: "unknown" });
+    expect(child.kill).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+  },
+);
+it("requires both valid frames at original close even with a later successful write callback", async () => {
+  const finishWrite = deferAckWrite();
+  const done = run();
+  const check = expect(done).rejects.toMatchObject({ state: "unknown" });
+  send(prepared());
+  child.emit("close", 0, null);
+  await check;
+  send(acknowledged());
+  finishWrite();
+  await expect(done).rejects.toMatchObject({ state: "unknown" });
+  expect(child.kill).not.toHaveBeenCalled();
 });
 it("waits for delayed publication without ending selection stdin early", async () => {
   const done = run();
