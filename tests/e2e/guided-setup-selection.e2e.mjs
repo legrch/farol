@@ -801,6 +801,7 @@ try {
     assert.equal(saved.setup.chatgpt.verified, null);
     assert.equal(saved.setup.connect.verified, null);
     const retainedWorkspaces = saved.computer.workspaces;
+    let verifiedWorkspaces = retainedWorkspaces;
     const retainedProfile = { ...activeFixtureProfile };
     const stateRoot = path.join(retainedProfile.userData, "farol-next-state");
     const configFile = path.join(stateRoot, "config.json");
@@ -935,6 +936,7 @@ try {
       // Readiness stayed withdrawn through Quit/reopen. Only the normal
       // workspace command performs fresh Go inspection under the new policy.
       await setupStep(window, "folders", "Folders & access");
+      const verificationStarted = Date.now();
       await setupAction(window, "Verify workspace");
       const reverified = await readSetupSettings(window);
       assert.equal(
@@ -947,6 +949,25 @@ try {
       );
       assert.equal(reverified.setup.computer.verified.buildId, build.buildId);
       assert.equal(reverified.computer.filePolicy, "approved-roots-v1");
+      // Rechecking publishes a new proof for this generation. It must retain
+      // every authority/configuration field and only refresh that proof.
+      assert.deepEqual(
+        reverified.computer.workspaces.map(
+          ({ accessCheck, ...workspace }) => workspace,
+        ),
+        retainedWorkspaces.map(({ accessCheck, ...workspace }) => workspace),
+      );
+      const refreshedCheck = reverified.computer.workspaces[0].accessCheck;
+      assert.deepEqual(refreshedCheck, {
+        ...retainedWorkspaces[0].accessCheck,
+        computerGeneration: saved.computer.generation,
+        verifiedAt: refreshedCheck.verifiedAt,
+      });
+      assert.ok(
+        Date.parse(refreshedCheck.verifiedAt) >= verificationStarted,
+        "POLICY_REVERIFICATION_ACCESS_PROOF_STALE",
+      );
+      verifiedWorkspaces = reverified.computer.workspaces;
       await assertSetupFinish(window, false);
       observations.push({
         kind: "new-format-policy-retained-reopen-fresh-workspace-verification",
@@ -975,7 +996,7 @@ try {
       state.connectors.secureMcp.runtime.runtimeGeneration,
       startedRuntime,
     );
-    assert.deepEqual(state.computer.workspaces, retainedWorkspaces);
+    assert.deepEqual(state.computer.workspaces, verifiedWorkspaces);
     await assertSetupFinish(window, false);
     const verifiedChallenge = await verifyDisplayedAttachment(window);
     state = await readSetupSettings(window);
@@ -1062,7 +1083,7 @@ try {
         refused.setup.connect.unavailable,
         "TUNNEL_CLIENT_DISCOVERY_CANDIDATE_STALE",
       );
-      assert.deepEqual(refused.computer.workspaces, retainedWorkspaces);
+      assert.deepEqual(refused.computer.workspaces, verifiedWorkspaces);
       await reviewSetupWithoutChanges(window, false);
       await assert.rejects(fs.stat(executed), { code: "ENOENT" });
       assert.equal(fixtureVerifications, 1);
@@ -1084,7 +1105,7 @@ try {
       completed.connectors.secureMcp.runtime.runtimeGeneration,
     );
     assert.equal(resumed.connectors.secureMcp.runtime.buildId, build.buildId);
-    assert.deepEqual(resumed.computer.workspaces, retainedWorkspaces);
+    assert.deepEqual(resumed.computer.workspaces, verifiedWorkspaces);
     assert.deepEqual(
       resumed.connectors.secureMcp.lastVerifiedAttachment,
       completed.connectors.secureMcp.lastVerifiedAttachment,
