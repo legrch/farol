@@ -16,7 +16,13 @@ import {
   verifyInputManifest,
 } from "./build-contract.mjs";
 import { assertBuildIdentity } from "./build-identity-contract.mjs";
-import { GO_CORE_ENTRIES, verifyGoCoreArtifact } from "./go-core-artifact.mjs";
+import {
+  declarationFromBuiltCore,
+  GO_CORE_ENTRIES,
+  verifyGoCoreArtifact,
+} from "./go-core-artifact.mjs";
+import { buildGoBackend } from "./go-backend-build.mjs";
+import { readGoBuildInputs } from "./go-build-inputs.mjs";
 import { assertResourceManifest } from "./resource-contract.mjs";
 import { trustedOwnerHome } from "./promotion-destination.mjs";
 import {
@@ -130,10 +136,16 @@ export function assertClosedRecoveryProcesses(
   for (const root of roots) inspect(root);
 }
 
-// Ordinary Dev maintenance is authenticated by its exact normal Go build. It
-// does not require packaging an installation candidate just to inspect/retire
-// the Dev profile. The fixed build root is never a caller-supplied executable.
-export async function verifyClosedRecoveryDevBuild(repositoryRoot, current) {
+// A build directory can assert its own hashes, but cannot authenticate its Go
+// producer. Reproduce the exact core with the existing authenticated SDK/module
+// builder and original BuildID, then compare its independent declaration before
+// maintenance. Neither core executable is run. Retain the unique producer output
+// as evidence; the builder owns cleanup of its private compilation scratch.
+export async function verifyClosedRecoveryDevBuild(
+  repositoryRoot,
+  current,
+  { readInputs = readGoBuildInputs, rebuildGo = buildGoBackend } = {},
+) {
   const directory = path.join(repositoryRoot, "_output/build/app");
   const manifest = JSON.parse(
     await fs.readFile(path.join(directory, "build-manifest.json"), "utf8"),
@@ -177,6 +189,23 @@ export async function verifyClosedRecoveryDevBuild(repositoryRoot, current) {
     ),
   );
   await verifyGoCoreArtifact(directory, manifest.core, identity);
+  const inputs = await readInputs([
+    `--go-inputs=${path.join(repositoryRoot, "_output/go-build-inputs.json")}`,
+  ]);
+  if (!inputs) throw new Error("CLOSED_COMPUTER_RECOVERY_GO_INPUTS_REQUIRED");
+  const reproduced = await rebuildGo({
+    repositoryRoot,
+    buildIdentity: identity,
+    toolchain: inputs.toolchain,
+    platform: manifest.core.build.platform,
+    moduleInputs: inputs.moduleInputs,
+  });
+  const expected = declarationFromBuiltCore(reproduced, identity);
+  await verifyGoCoreArtifact(directory, expected, identity);
+  // Reproduction can take time. Refuse an edited host, ledger or declaration
+  // instead of accepting the first read as authority for later maintenance.
+  await verifyBuildEntries(directory, manifest.entrySha256, entries);
+  await verifyInputManifest(directory, manifest);
   return identity;
 }
 

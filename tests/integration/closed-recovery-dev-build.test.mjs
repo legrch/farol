@@ -45,27 +45,24 @@ async function fixture() {
   bytes.writeUInt32LE(2, 12);
   const binary = path.join(root, "synthetic-unexecuted-core");
   await fs.writeFile(binary, bytes, { mode: 0o500 });
-  const core = await embedBuiltCore(
-    directory,
-    {
-      path: binary,
-      buildId: identity.buildId,
-      sourceCommit: identity.sourceCommit,
-      sourceTreeDigest: identity.sourceTreeDigest,
-      inputExact: true,
-      entry: "./cmd/farol",
-      goVersion: "go1.26.2",
-      goos: "darwin",
-      goarch: "arm64",
-      cgoEnabled: false,
-      trimpath: true,
-      buildvcs: false,
-      moduleMode: "readonly",
-      size: bytes.length,
-      sha256: sha(bytes),
-    },
-    identity,
-  );
+  const built = {
+    path: binary,
+    buildId: identity.buildId,
+    sourceCommit: identity.sourceCommit,
+    sourceTreeDigest: identity.sourceTreeDigest,
+    inputExact: true,
+    entry: "./cmd/farol",
+    goVersion: "go1.26.2",
+    goos: "darwin",
+    goarch: "arm64",
+    cgoEnabled: false,
+    trimpath: true,
+    buildvcs: false,
+    moduleMode: "readonly",
+    size: bytes.length,
+    sha256: sha(bytes),
+  };
+  const core = await embedBuiltCore(directory, built, identity);
   await fs.writeFile(
     path.join(directory, "build-identity.json"),
     JSON.stringify(identity),
@@ -112,6 +109,7 @@ async function fixture() {
     root,
     directory,
     identity,
+    built,
     manifest,
     save,
     current: {
@@ -122,12 +120,20 @@ async function fixture() {
   };
 }
 
+// Controlled producer ports prove the ordering/comparison contract only. The
+// production default always invokes buildGoBackend with authenticated inputs.
+function verifyFixture(f, current = f.current, extra = {}) {
+  return verifyClosedRecoveryDevBuild(f.root, current, {
+    readInputs: async () => ({ toolchain: {}, moduleInputs: [] }),
+    rebuildGo: async () => f.built,
+    ...extra,
+  });
+}
+
 describe("ordinary Dev closed maintenance build admission", () => {
-  it("authenticates the fixed current Go build without requiring an installation package", async () => {
+  it("binds an independently reproduced core without requiring an installation package", async () => {
     const f = await fixture();
-    expect(await verifyClosedRecoveryDevBuild(f.root, f.current)).toEqual(
-      f.identity,
-    );
+    expect(await verifyFixture(f)).toEqual(f.identity);
     await expect(
       fs.stat(path.join(f.root, "_output/package")),
     ).rejects.toMatchObject({ code: "ENOENT" });
@@ -137,7 +143,7 @@ describe("ordinary Dev closed maintenance build admission", () => {
     async (key) => {
       const f = await fixture();
       await expect(
-        verifyClosedRecoveryDevBuild(f.root, {
+        verifyFixture(f, {
           ...f.current,
           [key]:
             key === "dirty" ? true : "e".repeat(key === "commit" ? 40 : 64),
@@ -156,9 +162,9 @@ describe("ordinary Dev closed maintenance build admission", () => {
         sourceMode: "working-tree",
       }[key];
       await f.save();
-      await expect(
-        verifyClosedRecoveryDevBuild(f.root, f.current),
-      ).rejects.toThrow("CLOSED_COMPUTER_RECOVERY_BUILD_INVALID");
+      await expect(verifyFixture(f)).rejects.toThrow(
+        "CLOSED_COMPUTER_RECOVERY_BUILD_INVALID",
+      );
     },
   );
   it.each(["main.cjs", "farol-backend", "input-manifest.json"])(
@@ -167,23 +173,104 @@ describe("ordinary Dev closed maintenance build admission", () => {
       const f = await fixture();
       await fs.chmod(path.join(f.directory, entry), 0o600);
       await fs.appendFile(path.join(f.directory, entry), "tampered");
-      await expect(
-        verifyClosedRecoveryDevBuild(f.root, f.current),
-      ).rejects.toThrow(/BUILD_ENTRY_DIGEST_MISMATCH/);
+      await expect(verifyFixture(f)).rejects.toThrow(
+        /BUILD_ENTRY_DIGEST_MISMATCH/,
+      );
     },
   );
   it("refuses missing core and an identity that crosses the outer manifest", async () => {
     const f = await fixture();
     f.manifest.buildId = "e".repeat(64);
     await f.save();
-    await expect(
-      verifyClosedRecoveryDevBuild(f.root, f.current),
-    ).rejects.toThrow("CLOSED_COMPUTER_RECOVERY_BUILD_INVALID");
+    await expect(verifyFixture(f)).rejects.toThrow(
+      "CLOSED_COMPUTER_RECOVERY_BUILD_INVALID",
+    );
     f.manifest.buildId = f.identity.buildId;
     f.manifest.core = undefined;
     await f.save();
+    await expect(verifyFixture(f)).rejects.toThrow("GO_CORE_ARTIFACT_INVALID");
+  });
+
+  it("does not admit self-asserted metadata when approved producer inputs are absent", async () => {
+    const f = await fixture();
+    // Real default, no fake producer or SDK, no native core execution.
     await expect(
       verifyClosedRecoveryDevBuild(f.root, f.current),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("uses the fixed declaration and original exact identity in the independent producer", async () => {
+    const f = await fixture();
+    const inputs = { toolchain: { pin: "controlled" }, moduleInputs: [] };
+    const seen = [];
+    await verifyFixture(f, f.current, {
+      readInputs: async (args) => {
+        seen.push(args);
+        return inputs;
+      },
+      rebuildGo: async (request) => {
+        seen.push(request);
+        return f.built;
+      },
+    });
+    expect(seen).toEqual([
+      [`--go-inputs=${path.join(f.root, "_output/go-build-inputs.json")}`],
+      {
+        repositoryRoot: f.root,
+        buildIdentity: f.identity,
+        toolchain: inputs.toolchain,
+        platform: f.manifest.core.build.platform,
+        moduleInputs: inputs.moduleInputs,
+      },
+    ]);
+  });
+
+  it.each([
+    { sha256: "e".repeat(64) },
+    { size: 129 },
+    { goVersion: "go1.26.1" },
+    { sourceCommit: "e".repeat(40) },
+  ])("refuses an independent producer mismatch %j", async (changed) => {
+    const f = await fixture();
+    await expect(
+      verifyFixture(f, f.current, {
+        rebuildGo: async () => ({ ...f.built, ...changed }),
+      }),
     ).rejects.toThrow("GO_CORE_ARTIFACT_INVALID");
+  });
+
+  it("refuses a host change during reproduction", async () => {
+    const f = await fixture();
+    await expect(
+      verifyFixture(f, f.current, {
+        rebuildGo: async () => {
+          await fs.appendFile(path.join(f.directory, "main.cjs"), "changed");
+          return f.built;
+        },
+      }),
+    ).rejects.toThrow("BUILD_ENTRY_DIGEST_MISMATCH");
+  });
+
+  it("keeps missing inputs and an unknown producer fail-closed without a fallback", async () => {
+    const f = await fixture();
+    let calls = 0;
+    await expect(
+      verifyFixture(f, f.current, {
+        readInputs: async () => null,
+        rebuildGo: async () => {
+          calls += 1;
+        },
+      }),
+    ).rejects.toThrow("CLOSED_COMPUTER_RECOVERY_GO_INPUTS_REQUIRED");
+    const unknown = new Error("OUTCOME_UNKNOWN");
+    await expect(
+      verifyFixture(f, f.current, {
+        rebuildGo: async () => {
+          calls += 1;
+          throw unknown;
+        },
+      }),
+    ).rejects.toBe(unknown);
+    expect(calls).toBe(1);
   });
 });
