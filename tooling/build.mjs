@@ -67,9 +67,12 @@ const startupHooks = [
 ];
 for (const hook of startupHooks) {
   process.stderr.write(
-    `node startup hook present (${hook}) — this build is not a candidate\n`,
+    `node startup hook present (${hook}) — refusing to build\n`,
   );
 }
+// Refuse before importing the compiler or touching shared build outputs.
+// A non-candidate build can still destroy bytes used by a running Dev host.
+if (startupHooks.length > 0) process.exit(1);
 const compilerRefusals = compilerProblems(root);
 if (compilerRefusals.length > 0) {
   for (const problem of compilerRefusals) {

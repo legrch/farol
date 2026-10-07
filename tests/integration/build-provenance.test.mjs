@@ -240,7 +240,17 @@ describe("F3-5 build provenance", () => {
     }
   });
 
-  it("never marks a build exact when a Node startup hook was present", () => {
+  it("refuses startup hooks without replacing existing build outputs", () => {
+    const output = path.join(vnextRoot, "_output/build/app");
+    const snapshot = () =>
+      fs.existsSync(output)
+        ? {
+            identity: fs.statSync(output, { bigint: true }),
+            entries: fs.readdirSync(output).sort(),
+            manifest: fs.readFileSync(path.join(output, "build-manifest.json")),
+          }
+        : null;
+    const before = snapshot();
     const preload = path.join(
       fs.mkdtempSync(path.join(os.tmpdir(), "farol-preload-")),
       "hook.cjs",
@@ -259,17 +269,11 @@ describe("F3-5 build provenance", () => {
         env: { ...process.env, NODE_OPTIONS: `--require=${preload}` },
       },
     );
-    expect(result.status).toBe(0);
+    expect(result.status).toBe(1);
     expect(result.stderr).toContain(
-      "node startup hook present (NODE_OPTIONS) — this build is not a candidate",
+      "node startup hook present (NODE_OPTIONS) — refusing to build",
     );
-    const manifest = JSON.parse(
-      fs.readFileSync(
-        path.join(vnextRoot, "_output/build/app/build-manifest.json"),
-        "utf8",
-      ),
-    );
-    expect(manifest.inputExact).toBe(false);
+    expect(snapshot()).toEqual(before);
   }, 180_000);
 
   it("gives the clean install none of the caller's hooks or npm configuration", () => {
