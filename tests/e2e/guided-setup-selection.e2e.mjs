@@ -72,6 +72,16 @@ if (behavior) {
   assert.equal(behaviorBuild.sourceDirty, false);
   assert.equal(behaviorBuild.sourceCommit, source.commit);
   assert.equal(behaviorBuild.sourceTreeDigest, source.treeDigest);
+  const manifest = JSON.parse(
+    await fs.readFile(
+      path.join(path.dirname(entry), "build-manifest.json"),
+      "utf8",
+    ),
+  );
+  assert.equal(manifest.schema, 4, "GUIDED_BEHAVIOR_GO_BUILD_REQUIRED");
+  assert.equal(manifest.inputExact, true, "GUIDED_BEHAVIOR_GO_INPUTS_REQUIRED");
+  assert.equal(manifest.core?.build.buildId, behaviorBuild.buildId);
+  assert.equal(manifest.core?.build.sourceSHA, source.commit);
 }
 const temporaryRoot = await fs.realpath(
   await fs.mkdtemp(path.join(os.tmpdir(), "farol-guided-setup-")),
@@ -811,7 +821,8 @@ try {
         .getByRole("button", { name: "This Mac", exact: true })
         .click();
       await window
-        .getByLabel("File access", { exact: true })
+        .getByRole("region", { name: "Files in approved folders", exact: true })
+        .getByRole("combobox")
         .selectOption("approved-roots-v1");
       await window
         .getByRole("button", { name: "Save file permissions", exact: true })
