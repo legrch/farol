@@ -2,9 +2,9 @@ import { execFile, spawn } from "node:child_process";
 import fs, { type FileHandle } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { installedUpdateHelperModule } from "./fixtures/installed-update-helper-module";
 import {
   startInstalledUpdateHelper,
   type InstalledUpdateRequest,
@@ -282,6 +282,7 @@ describe("FIFO probe watchdog phases", () => {
 // FIFO for writing; only this harness may terminate its exact owned child.
 async function fifoProbe(replaceAtOpen: boolean) {
   const { root, helper } = await helperFixture();
+  const moduleURL = await installedUpdateHelperModule(root);
   if (!replaceAtOpen) {
     await fs.unlink(helper);
     await execFileAsync("/usr/bin/mkfifo", [helper]);
@@ -337,12 +338,7 @@ async function fifoProbe(replaceAtOpen: boolean) {
       "--input-type=module",
       "--eval",
       program,
-      pathToFileURL(
-        path.join(
-          process.cwd(),
-          "src/modules/release/infra/native/installed-update-helper.ts",
-        ),
-      ).href,
+      moduleURL,
       helper,
       JSON.stringify(accepted),
       String(replaceAtOpen),

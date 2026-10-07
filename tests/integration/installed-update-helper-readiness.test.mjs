@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { treeDigest } from "../../tooling/artifact-digest.mjs";
+import { installedUpdateHelperModule } from "./fixtures/installed-update-helper-module.ts";
 import {
   captureInstalledProcessStart,
   startInstalledUpdateHelper,
@@ -166,6 +167,7 @@ describe("installed update readiness handoff", () => {
 
   it("lets the exact launcher process exit naturally while helper finishes without its observer", async () => {
     const f = await fixture();
+    const moduleURL = await installedUpdateHelperModule(f.home);
     await quit(f);
     const caller = spawn(
       process.execPath,
@@ -187,7 +189,12 @@ describe("installed update readiness handoff", () => {
     });
     const deadline = setTimeout(() => caller.kill("SIGTERM"), 7000);
     caller.stdin.end(
-      JSON.stringify({ home: f.home, helperPath, request: f.request }),
+      JSON.stringify({
+        home: f.home,
+        helperPath,
+        request: f.request,
+        moduleURL,
+      }),
     );
     try {
       expect(await code, Buffer.concat(errors).toString()).toBe(0);

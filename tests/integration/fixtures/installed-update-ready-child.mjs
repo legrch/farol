@@ -2,13 +2,11 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import {
-  captureInstalledProcessStart,
-  startInstalledUpdateHelper,
-} from "../../../src/modules/release/infra/native/installed-update-helper.ts";
 let text = "";
 for await (const chunk of process.stdin) text += chunk;
-const { home, helperPath, request } = JSON.parse(text);
+const { home, helperPath, request, moduleURL } = JSON.parse(text);
+const { captureInstalledProcessStart, startInstalledUpdateHelper } =
+  await import(moduleURL);
 const user = os.userInfo();
 os.userInfo = () => ({ ...user, homedir: home });
 const state = path.join(
@@ -32,7 +30,41 @@ const launched = await startInstalledUpdateHelper(
   { ...request, pid: process.pid, processStart },
   { readinessTimeoutMs: 5000 },
 );
-if (launched.status !== "ready") {
+if (launched.status === "refused") {
+  // The launcher unrefs its child and pipes. Hold this caller only on refusal
+  // while its original observer awaits close; keep the ready exit unchanged.
+  let deadline;
+  let completion;
+  try {
+    completion = await Promise.race([
+      launched.operation.completion,
+      new Promise((resolve) => {
+        deadline = setTimeout(() => resolve(null), 1500);
+      }),
+    ]);
+  } finally {
+    clearTimeout(deadline);
+  }
+  process.stdout.write(
+    JSON.stringify(
+      completion
+        ? {
+            status: "refused",
+            completion: {
+              code: completion.code,
+              signal: completion.signal,
+              protocolError: completion.protocolError,
+              terminalPhase: completion.terminal?.phase ?? null,
+            },
+          }
+        : {
+            status: "outcome_unknown",
+            reason: "fixture_refused_helper_completion_unknown",
+          },
+    ),
+  );
+  process.exitCode = 1;
+} else if (launched.status !== "ready") {
   process.stdout.write(JSON.stringify({ status: launched.status }));
   process.exitCode = 1;
 } else {
