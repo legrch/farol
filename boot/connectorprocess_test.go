@@ -323,7 +323,12 @@ func TestConnectorProcessRootUnknownAndMutationOwnersStaySeparate(t *testing.T) 
 	}
 	native.readErr, native.terminal = nil, true
 	out, err := s.observeProcess(context.Background(), s.current, start.OperationID, processct.ReadRequest{Handle: start.Handle})
-	if err != nil || out.State != processct.Unknown {
+	if err != nil {
+		var failure *processct.Failure
+		if out != nil || !errors.As(err, &failure) || failure.Code != "PROCESS_OUTCOME_UNKNOWN" || failure.Outcome != "outcome_unknown" || failure.Retry != "never" {
+			t.Fatal("unexpected unknown outcome", out, err)
+		}
+	} else if out == nil || out.State != processct.Unknown {
 		t.Fatal("unknown was cleared", out, err)
 	}
 	if out, err := s.observeMutation(context.Background(), s.current, start.OperationID, mutationct.ConnectorObservation{WorkspaceID: "work", RelativePath: "note.md"}); out != nil || err == nil || journal.loads != 0 {
