@@ -2,6 +2,7 @@ package boot
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"testing"
 
@@ -9,6 +10,59 @@ import (
 	"github.com/legrch/farol/modules/computer/domain/authority"
 	"github.com/legrch/farol/modules/computer/domain/mutation"
 )
+
+type searchFileOwnerDouble struct {
+	fileOwnerDouble
+	calls    int
+	ctx      context.Context
+	request  port.SearchRequest
+	response *port.SearchResponse
+	err      error
+}
+
+func (d *searchFileOwnerDouble) Search(ctx context.Context, request port.SearchRequest) (*port.SearchResponse, error) {
+	d.calls++
+	d.ctx, d.request = ctx, request
+	return d.response, d.err
+}
+
+func TestComputerFileOwnersSearchPreservesSelectedProducer(t *testing.T) {
+	for _, policy := range []authority.FilePolicy{authority.LegacyProtectedFiles, authority.RootScopedFiles} {
+		t.Run(string(policy), func(t *testing.T) {
+			legacy, root := &searchFileOwnerDouble{}, &searchFileOwnerDouble{}
+			owners := &computerFileOwners{legacyRead: legacy, rootRead: root}
+			chosen, unused := legacy, root
+			if policy == authority.RootScopedFiles {
+				chosen, unused = root, legacy
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			request := port.SearchRequest{Workspace: port.Descriptor{FilePolicy: policy, Root: "/synthetic/work", ApprovedRoot: port.Root{Path: "/synthetic/work", Device: "1", Inode: "2"}, DeniedPaths: []string{"private"}, ExactFilePaths: []string{"selected"}}, RelativePath: "selected", Pattern: "Farol"}
+			chosen.response = &port.SearchResponse{}
+			result, err := owners.Search(ctx, request)
+			if err != nil || result != chosen.response || chosen.calls != 1 || unused.calls != 0 || chosen.ctx != ctx || !reflect.DeepEqual(chosen.request, request) {
+				t.Fatal("search lost policy, request, context or result")
+			}
+			chosen.err = errors.New("selected failure")
+			if _, err := owners.Search(ctx, request); err != chosen.err || unused.calls != 0 {
+				t.Fatal("search failure changed or fell back")
+			}
+		})
+	}
+}
+
+func TestComputerFileOwnersSearchRefusesMissingCapabilityAndUnknownPolicy(t *testing.T) {
+	unused := &searchFileOwnerDouble{}
+	owners := &computerFileOwners{legacyRead: &fileOwnerDouble{}, rootRead: unused}
+	for _, policy := range []authority.FilePolicy{authority.LegacyProtectedFiles, "unknown"} {
+		if _, err := owners.Search(context.Background(), port.SearchRequest{Workspace: port.Descriptor{FilePolicy: policy}}); err == nil {
+			t.Fatal("missing capability or invalid policy accepted")
+		}
+	}
+	if unused.calls != 0 {
+		t.Fatal("refused search fell back")
+	}
+}
 
 // Adapter routing doubles only; native descriptor/CAS evidence is separate.
 type fileOwnerDouble struct {

@@ -15,6 +15,8 @@ type computerFileOwners struct {
 	legacyMutation, rootMutation port.MutableWorkspace
 }
 
+var _ port.Search = (*computerFileOwners)(nil)
+
 func newComputerFileOwners(home string) (*computerFileOwners, error) {
 	legacyRead, err := filesystem.NewWithFilePolicy(home, authority.LegacyProtectedFiles)
 	if err != nil {
@@ -63,6 +65,18 @@ func (o *computerFileOwners) List(ctx context.Context, request port.ListRequest)
 		return nil, err
 	}
 	return selected.List(ctx, request)
+}
+
+func (o *computerFileOwners) Search(ctx context.Context, request port.SearchRequest) (*port.SearchResponse, error) {
+	selected, err := o.reader(request.Workspace.FilePolicy)
+	if err != nil {
+		return nil, err
+	}
+	search, ok := selected.(port.Search)
+	if !ok {
+		return nil, authority.Fail("WORKSPACE_HELPER_FAILED", "native-workspace")
+	}
+	return search.Search(ctx, request)
 }
 
 func (o *computerFileOwners) Mutate(ctx context.Context, request port.MutationRequest) (*port.MutationReceipt, error) {

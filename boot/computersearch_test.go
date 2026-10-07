@@ -63,7 +63,20 @@ func (w *settingsNativeFixture) Search(_ context.Context, in port.SearchRequest)
 	return &port.SearchResponse{Binding: &port.DirectoryBinding{Root: in.Workspace.Root, RelativePath: in.RelativePath, ApprovedRoot: in.Workspace.ApprovedRoot}, Matches: []port.SearchMatch{{Path: "note.md", Line: 1, Text: "match"}}}, nil
 }
 func TestComputerConnectorSearchUsesOriginalOwner(t *testing.T) {
+	for _, policy := range []authority.FilePolicy{authority.LegacyProtectedFiles, authority.RootScopedFiles} {
+		t.Run(string(policy), func(t *testing.T) { testComputerConnectorSearchUsesFileOwners(t, policy) })
+	}
+}
+
+func testComputerConnectorSearchUsesFileOwners(t *testing.T, policy authority.FilePolicy) {
 	s, j, native, _, in := newConnectorFixture(t)
+	unused := &settingsNativeFixture{}
+	owners := &computerFileOwners{legacyRead: native, rootRead: unused}
+	if policy == authority.RootScopedFiles {
+		owners.legacyRead, owners.rootRead = unused, native
+	}
+	s.root.native = owners
+	j.approval.FilePolicy = policy
 	j.approval.Capabilities = append(j.approval.Capabilities, authority.Search)
 	j.PutApproval(j.approval)
 	s.root.publication.approval = j.approval.Clone()
@@ -84,7 +97,7 @@ func TestComputerConnectorSearchUsesOriginalOwner(t *testing.T) {
 		t.Fatal("external endpoint omitted search")
 	}
 	result := computerInvoke(t, method, body)
-	if result.Status != "ok" || native.calls != 1 || j.publications != 1 {
+	if result.Status != "ok" || native.calls != 1 || unused.calls != 0 || j.publications != 1 {
 		t.Fatal("search bypassed original connector owner", result)
 	}
 	if s.root.chat != nil || len(s.root.tasks) != 0 || len(s.root.turns) != 0 {
