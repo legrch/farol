@@ -27,8 +27,11 @@ import (
 // Real native stores/claims and original empty Retire/Capture. The previous
 // child terminal is an explicit fixture, not host/process/maintenance proof.
 func emptyRecoveryFixture(t *testing.T) emptyRecoveryInspectionInput {
+	return emptyRecoveryFixtureAt(t, false)
+}
+func emptyRecoveryFixtureAt(t *testing.T, desktopLayout bool) emptyRecoveryInspectionInput {
 	t.Helper()
-	launch, runtime := retirementStorageFixture(t, true)
+	launch, runtime := retirementStorageFixtureAt(t, true, desktopLayout)
 	terminal := preparedTerminal(t, runtime)
 	if err := recordNativeTerminal(context.Background(), launch.Profile, terminal, func(wire.CoreRetirementAcknowledged) error { return nil }); err != nil {
 		t.Fatal(err)

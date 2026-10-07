@@ -23,6 +23,9 @@ func retirementFixture(t *testing.T) (NativeLaunch, *NativeRuntime) {
 	return retirementStorageFixture(t, false)
 }
 func retirementStorageFixture(t *testing.T, mutations bool) (NativeLaunch, *NativeRuntime) {
+	return retirementStorageFixtureAt(t, mutations, false)
+}
+func retirementStorageFixtureAt(t *testing.T, mutations, desktopLayout bool) (NativeLaunch, *NativeRuntime) {
 	t.Helper()
 	if !*ingressNative {
 		t.Skip("Requires exclusive native lane and -ingress-native")
@@ -43,13 +46,20 @@ func retirementStorageFixture(t *testing.T, mutations bool) (NativeLaunch, *Nati
 	if err != nil {
 		t.Fatal(err)
 	}
+	cleanupRoot := root
 	t.Cleanup(func() {
 		if !t.Failed() {
-			if err := os.RemoveAll(root); err != nil {
+			if err := os.RemoveAll(cleanupRoot); err != nil {
 				t.Error(err)
 			}
 		}
 	})
+	if desktopLayout {
+		root = filepath.Join(root, "farol-next-state", "go-core")
+		if err := os.MkdirAll(root, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
 	for _, child := range []string{"computer", "chat", "task"} {
 		if err := os.Mkdir(filepath.Join(root, child), 0700); err != nil {
 			t.Fatal(err)
