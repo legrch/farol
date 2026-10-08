@@ -623,6 +623,7 @@ it("offers Download only for a current available release", async () => {
     c.overlay("update");
   });
   expect(host.textContent).toContain("not downloaded or installed yet");
+  expect(document.activeElement).toBe(button(host, "Remind Me Later"));
   await act(async () => button(host, "Download Update").click());
   expect(f.api.installedUpdate).toHaveBeenCalledWith({ kind: "download" });
   await act(async () => f.emit("update", { phase: "idle", checkedAt: 10 }));

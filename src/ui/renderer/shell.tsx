@@ -473,6 +473,7 @@ function Update({
 }) {
   const update = snapshot.update;
   const intent = snapshot.intents.update;
+  const safeAction = useRef<HTMLButtonElement>(null);
   const noticeKey = "notice" in update ? update.notice?.key : undefined;
   useEffect(() => {
     if (noticeKey) acknowledgeUpdateNotice(facade);
@@ -496,6 +497,7 @@ function Update({
       onClose={() => facade.overlay("none")}
       dismissible={update.phase !== "applying"}
       className="update-sheet"
+      initialFocus={safeAction}
     >
       <p className="description">
         Review the current release state before any action.
@@ -604,6 +606,7 @@ function Update({
               Skip This Version
             </button>
             <button
+              ref={!update.deferred ? safeAction : undefined}
               disabled={disabled || update.deferred}
               onClick={() => {
                 void facade.update("later").then((result) => {
@@ -634,6 +637,7 @@ function Update({
         {update.phase === "ready" && (
           <>
             <button
+              ref={!update.deferred ? safeAction : undefined}
               disabled={disabled || update.deferred}
               onClick={() => {
                 void facade.update("later").then((result) => {
