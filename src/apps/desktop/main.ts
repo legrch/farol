@@ -753,6 +753,7 @@ if (process.platform === "darwin") {
 }
 
 let window: BrowserWindow | null = null;
+let aboutOpen = false;
 let runtimeChild: UtilityProcess | null = null;
 let runtime: RuntimeReady | null = null;
 let runtimeState: "starting" | "ready" | "offline" | "failed" = "starting";
@@ -9126,6 +9127,55 @@ function requestSidebarToggle(): void {
   publishShellAction("toggle-sidebar", "sidebar-command");
 }
 
+function desktopBrandImage() {
+  const icon = nativeImage.createFromPath(
+    path.join(
+      directory,
+      activeDesktopIdentity.environment === "dev"
+        ? "farol-dev-mark.png"
+        : "farol-mark.png",
+    ),
+  );
+  if (icon.isEmpty()) throw new Error("DESKTOP_BRAND_IMAGE_INVALID");
+  return icon;
+}
+
+function requestAbout(): void {
+  if (quitInProgress || installedUpdateAdmission || aboutOpen) return;
+  aboutOpen = true;
+  // The macOS standard About panel takes its icon from the Electron runtime
+  // bundle, independently of the selected Dock artwork. A native message sheet
+  // can use that same verified artwork without changing the runtime bundle.
+  void containWindowOpenFailure(ensureWindow, recoverWindowOpenFailure)
+    .then(async (outcome) => {
+      if (outcome !== "opened") return;
+      try {
+        if (
+          quitInProgress ||
+          installedUpdateAdmission ||
+          !window ||
+          window.isDestroyed()
+        )
+          return;
+        await dialog.showMessageBox(window, {
+          type: "none",
+          title: `About ${displayProductName}`,
+          message: displayProductName,
+          detail: `Version ${buildIdentity.version}${displayEdition ? ` (${displayEdition})` : ""}\nSource ${buildIdentity.sourceCommit.slice(0, 12)}`,
+          icon: desktopBrandImage(),
+          buttons: ["OK"],
+          defaultId: 0,
+          cancelId: 0,
+        });
+      } catch {
+        console.error("DESKTOP_ABOUT_PRESENTATION_FAILED");
+      }
+    })
+    .finally(() => {
+      aboutOpen = false;
+    });
+}
+
 function requestUpdates(): void {
   if (quitInProgress || installedUpdateAdmission) return;
   void containWindowOpenFailure(async () => {
@@ -9165,7 +9215,11 @@ function installApplicationMenu(): void {
           {
             label: displayProductName,
             submenu: [
-              { role: "about" },
+              {
+                id: "app.about",
+                label: `About ${displayProductName}`,
+                click: requestAbout,
+              },
               {
                 id: "app.updates",
                 label: "Check for Updates…",
@@ -10340,16 +10394,7 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
     },
   );
   if (process.platform === "darwin") {
-    const icon = nativeImage.createFromPath(
-      path.join(
-        directory,
-        activeDesktopIdentity.environment === "dev"
-          ? "farol-dev-mark.png"
-          : "farol-mark.png",
-      ),
-    );
-    if (icon.isEmpty()) throw new Error("DESKTOP_BRAND_IMAGE_INVALID");
-    app.dock?.setIcon(icon);
+    app.dock?.setIcon(desktopBrandImage());
   }
   // N03/D2: the run marker is this generation's first durable runtime obligation and the
   // last thing it removes — only after a quit whose drain was confirmed (see
