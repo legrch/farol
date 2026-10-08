@@ -49,6 +49,28 @@ export async function setupAction(page, name) {
     .locator(".setup-page")
     .getByRole("button", { name, exact: true })
     .click();
+  if (name === "Verify workspace") {
+    // The selected workspace owns its action receipt. Do not infer success
+    // from the old page-wide feedback, which intentionally excludes it.
+    const feedback = page.locator(
+      '.setup-page .workspace-detail .workspace-feedback p[role="status"]',
+    );
+    await feedback
+      .filter({
+        hasText:
+          "Verify workspace: Action confirmed. Check the current status below.",
+      })
+      .waitFor();
+    assert.equal(
+      await feedback
+        .filter({ hasText: "Verify workspace: " })
+        .last()
+        .innerText(),
+      "Verify workspace: Action confirmed. Check the current status below.",
+      `SETUP_ACTION_UNCONFIRMED:${name}`,
+    );
+    return;
+  }
   await page.waitForFunction(() => {
     const feedback = document.querySelector(
       '.setup-page .settings-page > p[role="status"]',
