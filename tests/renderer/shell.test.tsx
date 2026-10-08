@@ -1200,6 +1200,47 @@ it("B04 an ordinary successful target update explains restart with its available
   await act(async () => button(host, "Restart & Update").click());
   expect(f.api.installedUpdate).toHaveBeenCalledWith({ kind: "restart" });
 });
+it("B04 distinguishes installed and downloaded versions and refuses an unknown-state Check", async () => {
+  const { host, c, f } = await mount();
+  await act(async () => {
+    f.emit("update", {
+      phase: "ready",
+      version: "0.2.0-owner.beta.4",
+      deferred: false,
+      blockedBy: "UPDATE_BROWSER_STATE_UNKNOWN",
+    });
+    c.overlay("update");
+  });
+  const text = host.querySelector("dialog")!.textContent!;
+  expect(text).toContain("Installed: Farol 0.1.8-owner.beta.1 (build 10)");
+  expect(text).toContain(
+    "Farol 0.2.0-owner.beta.4 is downloaded and ready; it is not installed yet.",
+  );
+  expect(button(host, "Check for Updates").disabled).toBe(true);
+  expect(button(host, "Restart & Update").disabled).toBe(true);
+  vi.mocked(f.api.installedUpdate).mockClear();
+  await act(async () => button(host, "Check for Updates").click());
+  expect(f.api.installedUpdate).not.toHaveBeenCalled();
+});
+it("B04 rechecks current update state at click time before Check dispatch", async () => {
+  const { host, c, f } = await mount();
+  await act(async () => c.overlay("update"));
+  expect(button(host, "Check for Updates").disabled).toBe(false);
+  const current = c.getSnapshot();
+  const read = vi.spyOn(c, "getSnapshot").mockReturnValue({
+    ...current,
+    update: {
+      phase: "ready",
+      version: "0.2.0-owner.beta.4",
+      deferred: false,
+      blockedBy: "UPDATE_BROWSER_STATE_UNKNOWN",
+    },
+  });
+  vi.mocked(f.api.installedUpdate).mockClear();
+  await act(async () => button(host, "Check for Updates").click());
+  read.mockRestore();
+  expect(f.api.installedUpdate).not.toHaveBeenCalled();
+});
 const boundedUpdateActions = [
   [
     { phase: "recovery", version: "1.0", blockedBy: null },

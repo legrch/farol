@@ -18,9 +18,9 @@ import {
   type ProductSettings,
 } from "../../pkg/product-settings/contract";
 import { folderAccessChecked, folderDisplayName } from "../folder-access-state";
-import { canRecheckUpdateAdmission } from "../../modules/release/contract/installed-update";
 import { computerSetup } from "./computer-setup";
 import { commandAllowed, dependencyFences } from "./command-eligibility";
+import { updateCheckAllowed } from "./update-eligibility";
 import { ChatDirect } from "./chat-direct";
 import { ChatReadonly } from "./chat-readonly";
 import { ChatHistory } from "./chat-history";
@@ -2499,15 +2499,6 @@ function Shortcuts({ snapshot, facade }: PageProps) {
         )}
       </Group>
     </>
-  );
-}
-function updateCheckAllowed(update: WindowSnapshot["update"]): boolean {
-  return (
-    update.phase === "idle" ||
-    (update.phase === "failed" && !update.recoveryRequired) ||
-    (update.phase === "ready" &&
-      update.blockedBy !== null &&
-      canRecheckUpdateAdmission(update.blockedBy))
   );
 }
 function Updates({ snapshot, facade, actions }: PageProps) {

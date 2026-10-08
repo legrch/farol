@@ -17,6 +17,7 @@ import { Home, HomeNavigation, homeTitle } from "./home";
 import { Setup, SetupNavigation } from "./setup";
 import { setupSteps } from "./setup-navigation";
 import { designIconPath, designIconViewBox } from "./design-icons";
+import { updateCheckAllowed } from "./update-eligibility";
 const pages: readonly [SettingsPage, string][] = [
   ["general", "General"],
   ["appearance", "Appearance"],
@@ -480,10 +481,7 @@ function Update({
     (update.phase === "failed" && !update.recoveryRequired)
       ? update.rollbackVersion
       : undefined;
-  const canCheck =
-    update.phase === "idle" ||
-    (update.phase === "ready" && update.blockedBy !== null) ||
-    (update.phase === "failed" && !update.recoveryRequired);
+  const canCheck = updateCheckAllowed(update);
   return (
     <Overlay
       title="Farol updates"
@@ -493,9 +491,18 @@ function Update({
       <p className="description">
         Review the current release state before any action.
       </p>
+      {snapshot.status === "current" && snapshot.installedVersion && (
+        <p className="description">
+          Installed: Farol {snapshot.installedVersion.version}
+          {snapshot.installedVersion.buildVersion
+            ? ` (build ${snapshot.installedVersion.buildVersion})`
+            : ""}
+          .
+        </p>
+      )}
       <p className="update-state">
         {update.phase === "ready"
-          ? `Version ${update.version} is ready`
+          ? `Farol ${update.version} is downloaded and ready; it is not installed yet.`
           : update.phase === "failed"
             ? `Update failed: ${update.code}`
             : update.phase === "unavailable"
@@ -539,7 +546,17 @@ function Update({
       <div className="control-row">
         <button
           disabled={disabled || !canCheck}
-          onClick={() => void facade.update("check")}
+          onClick={() => {
+            const latest = facade.getSnapshot();
+            if (
+              latest.status !== "current" ||
+              latest.intents.update?.state === "pending" ||
+              latest.intents.update?.state === "unknown" ||
+              !updateCheckAllowed(latest.update)
+            )
+              return;
+            void facade.update("check");
+          }}
         >
           Check for Updates
         </button>
