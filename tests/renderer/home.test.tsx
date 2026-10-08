@@ -415,6 +415,43 @@ it("shows all-clear only from current Computer evidence, independently of option
   );
   noEffects(h.f);
 });
+it("shows a ready empty Home from verified Computer evidence without inventing work", async () => {
+  const h = await mount([], {
+    configuration: { status: "ready", settings: readySettings() },
+  });
+  expect(h.content().textContent).toContain("Ready when you are");
+  expect(h.content().textContent).toContain("All quiet");
+  expect(h.content().textContent).toContain("Computer ready");
+  expect(h.content().textContent).not.toContain("Your workspace starts here");
+  expect(h.content().textContent).not.toContain("Review setup status");
+  expect(h.c.getSnapshot().tasks.tasks).toEqual([]);
+  expect(h.c.getSnapshot().activity).toEqual([]);
+  await h.click("Connection & access");
+  expect(h.c.getSnapshot().destination).toMatchObject({
+    area: "home",
+    homeView: "access",
+  });
+  noEffects(h.f);
+});
+it("does not promote an empty Home to ready from stale or withdrawn Computer evidence", async () => {
+  const value = readySettings();
+  const h = await mount([], {
+    configuration: { status: "ready", settings: value },
+    status: "stale",
+  });
+  expect(h.content().textContent).not.toContain("Ready when you are");
+  expect(h.content().textContent).toContain("Your workspace starts here");
+  expect(h.content().textContent).not.toContain("All quiet");
+  value.setup.computer.outcomeUnknown = true;
+  await h.set({
+    status: "current",
+    configuration: { status: "ready", settings: value },
+  });
+  expect(h.content().textContent).not.toContain("Ready when you are");
+  expect(h.content().textContent).toContain("Your workspace starts here");
+  expect(h.content().textContent).toContain("Outcome unknown");
+  noEffects(h.f);
+});
 it("opens Setup explicitly from an empty overview without claiming folder access is optional", async () => {
   const h = await mount();
   expect(h.host.querySelector(".home-candidate-navigation h2")).toBeNull();

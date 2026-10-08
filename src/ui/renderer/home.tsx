@@ -737,7 +737,11 @@ function Overview({ snapshot, facade }: Props) {
   const focus = data.running.length
     ? data.running
     : data.work.filter((task) => taskState(task) !== "Done");
-  if (data.work.length === 0 && data.recent.length === 0)
+  if (
+    data.work.length === 0 &&
+    data.recent.length === 0 &&
+    !(current(snapshot) && data.setup.ready)
+  )
     return (
       <>
         <p className="home-candidate-intro">
