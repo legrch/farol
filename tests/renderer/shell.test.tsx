@@ -71,13 +71,13 @@ function agentTask(id = "task-1") {
 it.each([
   ["Home", "click"],
   ["Home", "Enter"],
-  ["Folders", "click"],
-  ["Folders", "Enter"],
+  ["Workspaces", "click"],
+  ["Workspaces", "Enter"],
 ] as const)(
   "R34 current %s search selection by %s closes and restores focus",
   async (label, input) => {
     const { host, c, f } = await mount();
-    if (label === "Folders")
+    if (label === "Workspaces")
       await act(async () => c.navigate({ area: "settings", page: "folders" }));
     const before = c.getSnapshot();
     const trigger = button(host, "Find a page");
@@ -714,7 +714,7 @@ it("R29 R34 Enter navigation prevents browser activation of the restored search 
     Object.getOwnPropertyDescriptor(
       HTMLInputElement.prototype,
       "value",
-    )!.set!.call(input, "Folders");
+    )!.set!.call(input, "Workspaces");
     input.dispatchEvent(new Event("input", { bubbles: true }));
   });
   const enter = new KeyboardEvent("keydown", {
@@ -851,12 +851,11 @@ it("fresh Setup navigation never writes, verifies, clears credentials or invents
   const { host, c, f } = await mount();
   const saved = c.getSnapshot().configuration;
   await act(async () => button(host, "Setup").click());
-  for (const step of [
-    "Connection",
-    "Folders & access",
-    "Add to ChatGPT",
-    "Finish",
-  ]) {
+  expect(c.getSnapshot().destination.setupStep).toBe("overview");
+  expect(
+    host.querySelector('[aria-label="Setup overview"]')?.textContent,
+  ).toContain("Workspace check needed");
+  for (const step of ["Workspaces", "Connection", "Add to ChatGPT", "Finish"]) {
     await act(async () => button(host, step).click());
     expect(c.getSnapshot().destination.area).toBe("setup");
   }
@@ -879,9 +878,9 @@ it("ready Review Setup retains saved credentials and cancels replacement without
   await act(async () => button(host, "Review Setup").click());
   expect(c.getSnapshot().destination).toMatchObject({
     area: "setup",
-    setupStep: "finish",
+    setupStep: "overview",
   });
-  expect(host.querySelector(".setup-finish h2")?.textContent).toBe(
+  expect(host.querySelector(".setup-overview h2")?.textContent).toBe(
     "Computer ready",
   );
   await act(async () => button(host, "Connection").click());
@@ -893,8 +892,8 @@ it("ready Review Setup retains saved credentials and cancels replacement without
     'input[type="password"]',
   )!;
   expect(password.value).toBe("");
-  await act(async () => button(host, "Keep saved credentials").click());
-  await act(async () => button(host, "Back to Home").click());
+  await act(async () => button(host, "Cancel").click());
+  await act(async () => button(host, "Open Home").click());
   expect(c.getSnapshot().configuration).toBe(saved);
   expect(f.api.configure).not.toHaveBeenCalled();
   expect(f.api.task).not.toHaveBeenCalled();
@@ -910,8 +909,11 @@ it("partial setup survives controller reopen with an obvious continuation and un
     await act(async () => button(host, "Continue setup").click());
     expect(c.getSnapshot().destination).toMatchObject({
       area: "setup",
-      setupStep: "connection",
+      setupStep: "overview",
     });
+    expect(
+      host.querySelector('[aria-label="Setup overview"]')?.textContent,
+    ).toContain("Connection check needed");
     expect(data.configuration.settings.general.openAtLaunch).toBe("browser");
     expect(data.configuration.settings.computer.workspaces).toHaveLength(1);
     expect(f.api.configure).not.toHaveBeenCalled();
@@ -960,8 +962,8 @@ it("Setup owns a separate guided rail destination and shares existing Settings w
   await act(async () => button(host, "Setup").click());
   expect(c.getSnapshot().destination).toMatchObject({
     area: "setup",
-    page: "connection",
-    setupStep: "connection",
+    page: "general",
+    setupStep: "overview",
   });
   expect(
     host
@@ -974,13 +976,13 @@ it("Setup owns a separate guided rail destination and shares existing Settings w
       ?.hasAttribute("aria-current"),
   ).toBe(false);
   expect(host.querySelector('[aria-label="Setup steps"]')).not.toBeNull();
-  await act(async () => button(host, "Folders & access").click());
+  await act(async () => button(host, "Workspaces").click());
   expect(c.getSnapshot().destination).toMatchObject({
     area: "setup",
     page: "folders",
   });
   expect(host.querySelector(".toolbar-title")?.textContent).toContain(
-    "Folders & access",
+    "Workspaces",
   );
   await act(async () => button(host, "Settings").click());
   expect(c.getSnapshot().destination.page).toBe("appearance");

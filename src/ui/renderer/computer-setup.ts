@@ -86,6 +86,10 @@ export function computerSetup(snapshot: WindowSnapshot) {
   return {
     facts,
     ready,
+    workspacesVerified: admissible && folderCurrent,
+    localConnectionCurrent:
+      admissible && runtimeIdentityCurrent && facts.runtimeCurrent,
+    externalAccessVerified: admissible && attachmentCurrent,
     externalChallenge,
     embeddedChatGPT:
       embedded === "ready"

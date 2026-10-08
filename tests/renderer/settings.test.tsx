@@ -173,6 +173,59 @@ async function change(
     );
   });
 }
+// Renderer regressions only; native credential storage is qualified separately.
+describe("owner-facing credential replacement", () => {
+  it("reveals only the locally entered replacement and cancels without a command", async () => {
+    const value = structuredClone(settings());
+    value.connectors.secureMcp.credential = "stored";
+    value.connectors.secureMcp.tunnelId = "tunnel_existing";
+    const h = await mount("connection", value);
+    await h.click("Replace credentials");
+    const input = h.field("Runtime key") as HTMLInputElement;
+    expect(input.type).toBe("password");
+    expect(input.value).toBe("");
+    await change(input, "disposable-replacement-key-12345");
+    await h.click("Show runtime key");
+    expect(input.type).toBe("text");
+    expect(input.value).toBe("disposable-replacement-key-12345");
+    await h.click("Hide runtime key");
+    expect(input.type).toBe("password");
+    await h.click("Cancel");
+    expect(h.calls()).toEqual([]);
+    await h.click("Replace credentials");
+    expect((h.field("Runtime key") as HTMLInputElement).value).toBe("");
+    expect((h.field("Runtime key") as HTMLInputElement).type).toBe("password");
+    expect(h.field("Tunnel ID").value).toBe("tunnel_existing");
+  });
+  it("resets the reveal state when a credential submission clears the field", async () => {
+    const h = await mount("connection");
+    await change(h.field("Tunnel ID"), "tunnel_fixture");
+    await change(h.field("Runtime key"), "disposable-replacement-key-12345");
+    await h.click("Show runtime key");
+    await h.click("Save credentials");
+    expect(h.calls()).toEqual([
+      {
+        kind: "connector.configure",
+        tunnelId: "tunnel_fixture",
+        runtimeKey: "disposable-replacement-key-12345",
+      },
+    ]);
+    expect((h.field("Runtime key") as HTMLInputElement).value).toBe("");
+    expect((h.field("Runtime key") as HTMLInputElement).type).toBe("password");
+  });
+  it("clears a first-entry draft on Cancel without sending configuration", async () => {
+    const h = await mount("connection");
+    await change(h.field("Tunnel ID"), "tunnel_draft");
+    await change(h.field("Runtime key"), "disposable-replacement-key-12345");
+    await h.click("Show runtime key");
+    await h.click("Cancel");
+    expect(h.calls()).toEqual([]);
+    expect(h.field("Tunnel ID").value).toBe("");
+    expect((h.field("Runtime key") as HTMLInputElement).value).toBe("");
+    expect((h.field("Runtime key") as HTMLInputElement).type).toBe("password");
+  });
+});
+
 // DOM/facade regressions only. Native lifecycle and external acceptance are separate.
 describe("owner setup entry feedback", () => {
   it("offers discovery without an effect on navigation or render", async () => {
@@ -523,7 +576,7 @@ describe("bounded Settings writer", () => {
       [...h.host.querySelectorAll("h2")].map((node) => node.textContent),
     ).toEqual([
       "Appearance",
-      "Folders",
+      "Workspaces",
       "This Mac",
       "Connection",
       "Shortcuts",
@@ -2148,7 +2201,7 @@ describe("owner Setup presentation checkpoint (DOM fixtures only)", () => {
     expect(h.field("Runtime key").value).toBe("");
     await change(h.field("Tunnel ID"), "unsaved-tunnel");
     await change(h.field("Runtime key"), "explicit-test-replacement-000000");
-    await h.click("Keep saved credentials");
+    await h.click("Cancel");
     expect(page.querySelector('input[type="password"]')).toBeNull();
     expect(h.calls()).toEqual([]);
     await h.click("Replace credentials");

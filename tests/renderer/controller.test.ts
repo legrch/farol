@@ -44,8 +44,8 @@ it("Setup is a separate history destination with the same Settings host surface 
   c.navigate({ area: "setup" });
   expect(c.getSnapshot().destination).toMatchObject({
     area: "setup",
-    setupStep: "connection",
-    page: "connection",
+    setupStep: "overview",
+    page: "general",
   });
   c.navigate({ area: "setup", setupStep: "folders" });
   c.navigate({ area: "setup", setupStep: "attachment" });
@@ -97,7 +97,7 @@ it.each(["browser", "computer", "settings", "activity"] as const)(
       c.travel(-1);
       expect(c.getSnapshot().destination).toBe(home);
       c.navigate({ area: "setup" });
-      expect(c.getSnapshot().destination.setupStep).toBe("connection");
+      expect(c.getSnapshot().destination.setupStep).toBe("overview");
       expect(c.getSnapshot().destination.taskId).toBe("retained");
       c.navigate({ area: "chatgpt" });
       expect(c.getSnapshot().destination.taskId).toBe("retained");

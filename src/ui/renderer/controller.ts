@@ -22,7 +22,7 @@ import {
 } from "../../pkg/ipc/chat-history";
 import { adoptReadConversation } from "./read-conversation-state";
 import { computerSetup } from "./computer-setup";
-import { nextSetupStep, setupPage } from "./setup-navigation";
+import { setupPage } from "./setup-navigation";
 import {
   ProductConfigurationSnapshotSchema,
   ProductConfigurationCommandSchema,
@@ -1264,7 +1264,7 @@ export class WindowController implements RendererFacade {
         (this.state.destination.area === "setup"
           ? this.state.destination.setupStep
           : undefined) ??
-        nextSetupStep(this.state);
+        "overview";
       Object.assign(next, { setupStep, page: setupPage(setupStep) });
     }
     if (JSON.stringify(next) === JSON.stringify(this.state.destination)) {

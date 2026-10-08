@@ -613,10 +613,11 @@ function Folders(props: PageProps) {
   }
   return (
     <>
-      <h2>Folders</h2>
+      {!props.setupStep && <h2>Workspaces</h2>}
       <p className="description">
-        Choose the folders Farol may access. Each folder has its own access
-        level and check. Removing a folder revokes access and keeps its files.
+        Choose the workspaces Farol may access. Each workspace has its own
+        access level and check. Removing a workspace revokes access and keeps
+        its files.
       </p>
       <p className="description">
         Folders start read-only. Read &amp; write allows guarded changes that
@@ -626,7 +627,7 @@ function Folders(props: PageProps) {
         Check access checks the folder. Verify workspace prepares it for
         Connection.
       </p>
-      <Group title="Approved folders">
+      <Group title="Approved workspaces">
         <div className="control-row">
           <button
             type="button"
@@ -1352,6 +1353,7 @@ function Connection({
   const externalChallenge = setup.externalChallenge;
   const [tunnelId, setTunnelId] = useState(connector.tunnelId ?? "");
   const [key, setKey] = useState("");
+  const [keyVisible, setKeyVisible] = useState(false);
   const [replacing, setReplacing] = useState(false);
   const saved = connector.credential === "stored";
   const editing = !saved || replacing;
@@ -1382,7 +1384,7 @@ function Connection({
     : null;
   return (
     <>
-      <h2>Connection</h2>
+      {!setupStep && <h2>Connection</h2>}
       <div hidden={setupStep !== undefined && setupStep !== "connection"}>
         <Group title="This Mac connection">
           <p className="badges">{setup.label}</p>
@@ -1454,6 +1456,7 @@ function Connection({
                   onClick={() => {
                     setTunnelId(connector.tunnelId ?? "");
                     setKey("");
+                    setKeyVisible(false);
                     setReplacing(true);
                   }}
                 >
@@ -1490,6 +1493,7 @@ function Connection({
                 )
                   return;
                 setKey("");
+                setKeyVisible(false);
                 void actions.run(command).then((result) => {
                   if (result?.state === "applied") setReplacing(false);
                 });
@@ -1510,17 +1514,33 @@ function Connection({
               <label className="setting-row">
                 Runtime key
                 <input
+                  id={`${credentialFeedbackId}-key`}
                   className="field"
-                  type="password"
+                  type={keyVisible ? "text" : "password"}
                   autoComplete="new-password"
+                  spellCheck={false}
                   value={key}
                   aria-describedby={`${credentialFeedbackId} ${credentialFeedbackId}-pause`}
                   aria-invalid={key.length > 0 && keyInvalid}
-                  onChange={(event) => setKey(event.currentTarget.value)}
+                  onChange={(event) => {
+                    setKey(event.currentTarget.value);
+                    if (event.currentTarget.value.length === 0)
+                      setKeyVisible(false);
+                  }}
                   maxLength={512}
                   required
                 />
               </label>
+              <button
+                type="button"
+                className="text-button"
+                aria-controls={`${credentialFeedbackId}-key`}
+                aria-pressed={keyVisible}
+                disabled={key.length === 0}
+                onClick={() => setKeyVisible((visible) => !visible)}
+              >
+                {keyVisible ? "Hide runtime key" : "Show runtime key"}
+              </button>
               <p
                 id={credentialFeedbackId}
                 className="description credential-entry-feedback"
@@ -1554,19 +1574,18 @@ function Connection({
               >
                 Save credentials
               </button>
-              {saved && (
-                <button
-                  type="button"
-                  className="subtle"
-                  onClick={() => {
-                    setKey("");
-                    setTunnelId(connector.tunnelId ?? "");
-                    setReplacing(false);
-                  }}
-                >
-                  Keep saved credentials
-                </button>
-              )}
+              <button
+                type="button"
+                className="subtle"
+                onClick={() => {
+                  setKey("");
+                  setKeyVisible(false);
+                  setTunnelId(connector.tunnelId ?? "");
+                  setReplacing(false);
+                }}
+              >
+                Cancel
+              </button>
             </form>
           )}
           {!setup.canStart &&

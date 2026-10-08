@@ -16,35 +16,21 @@ import { TaskEditor } from "./task";
 import { Home, HomeNavigation, homeTitle } from "./home";
 import { Setup, SetupNavigation } from "./setup";
 import { setupSteps } from "./setup-navigation";
+import { designIconPath, designIconViewBox } from "./design-icons";
 const pages: readonly [SettingsPage, string][] = [
   ["general", "General"],
-  ["folders", "Folders"],
+  ["appearance", "Appearance"],
+  ["folders", "Workspaces"],
   ["computer", "This Mac"],
   ["connection", "Connection"],
-  ["appearance", "Appearance"],
   ["shortcuts", "Keyboard shortcuts"],
   ["updates", "Updates"],
   ["diagnostics", "Diagnostics"],
 ];
 export function Icon({ name }: { name: string }) {
-  const paths: Record<string, string> = {
-    home: "M3 10 12 3l9 7M5 9v12h5v-7h4v7h5V9",
-    chatgpt: "M4 4h16v12H9l-5 4V4m4 4h8m-8 4h5",
-    activity: "M3 13h4l3-9 4 16 3-7h4",
-    settings:
-      "M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8m-2-5h4l1 3 3 1 3 3v4l-3 1-1 3-3 3h-4l-1-3-3-1-3-3v-4l3-1 1-3z",
-    back: "m14 5-7 7 7 7",
-    forward: "m10 5 7 7-7 7",
-    sidebar: "M3 4h18v16H3V4m5 0v16",
-    search: "M10 3a7 7 0 1 0 0 14 7 7 0 0 0 0-14m5 12 6 6",
-    close: "m5 5 14 14M19 5 5 19",
-    plus: "M12 4v16M4 12h16",
-    check: "m5 12 4 4L19 6",
-    attention: "M12 4 2 21h20L12 4m0 6v5m0 3v1",
-  };
   return (
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <path d={paths[name] ?? paths.settings} />
+    <svg viewBox={designIconViewBox} aria-hidden="true">
+      <path d={designIconPath(name)} />
     </svg>
   );
 }
@@ -723,7 +709,7 @@ export function Shell() {
             aria-label="Review update status"
             onClick={() => facade.overlay("update")}
           >
-            <Icon name="settings" />
+            <Icon name="download" />
           </button>
         )}
       </header>
@@ -757,7 +743,7 @@ export function Shell() {
           aria-current={destination.area === "setup" ? "page" : undefined}
           onClick={() => facade.navigate({ area: "setup" })}
         >
-          <Icon name="check" />
+          <Icon name="setup" />
         </button>
         {unresolved && (
           <button
@@ -814,7 +800,7 @@ export function Shell() {
                   aria-current={destination.page === page ? "page" : undefined}
                   onClick={() => facade.navigate({ area: "settings", page })}
                 >
-                  <Icon name={page === "folders" ? "sidebar" : "settings"} />
+                  <Icon name={page} />
                   <span>{label}</span>
                 </button>
               ))}

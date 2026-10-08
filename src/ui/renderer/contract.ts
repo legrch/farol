@@ -72,7 +72,8 @@ export type Destination = Readonly<{
 }>;
 export type HomeView =
   "overview" | "work" | "attention" | "activity" | "access";
-export type SetupStep = "connection" | "folders" | "attachment" | "finish";
+export type SetupStep =
+  "overview" | "folders" | "connection" | "attachment" | "finish";
 export type UpdateAction =
   "check" | "later" | "restart" | "recover" | "rollback";
 export type Intent = Readonly<{

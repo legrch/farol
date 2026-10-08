@@ -2,8 +2,9 @@ import { computerSetup } from "./computer-setup";
 import type { SettingsPage, SetupStep, WindowSnapshot } from "./contract";
 
 export const setupSteps: readonly [SetupStep, string][] = [
+  ["overview", "Overview"],
+  ["folders", "Workspaces"],
   ["connection", "Connection"],
-  ["folders", "Folders & access"],
   ["attachment", "Add to ChatGPT"],
   ["finish", "Finish"],
 ];
@@ -23,9 +24,11 @@ export function nextSetupStep(snapshot: WindowSnapshot): SetupStep {
 }
 
 export function setupPage(step: SetupStep): SettingsPage {
-  return step === "folders"
-    ? "folders"
-    : step === "finish"
-      ? "general"
-      : "connection";
+  return step === "overview"
+    ? "general"
+    : step === "folders"
+      ? "folders"
+      : step === "finish"
+        ? "general"
+        : "connection";
 }

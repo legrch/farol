@@ -385,6 +385,29 @@ kbd {
 .setup-page .settings-page {
   padding-top: 20px;
 }
+.setup-overview {
+  max-width: 900px;
+  padding: 24px 40px 0;
+}
+.setup-overview-steps {
+  margin-top: 24px;
+  border-top: 1px solid var(--line);
+}
+.setup-overview-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 0;
+  border-bottom: 1px solid var(--line);
+}
+.setup-overview-row span {
+  display: grid;
+  gap: 4px;
+}
+.setup-overview-row small {
+  color: var(--muted);
+}
 .setup-navigation {
   display: flex;
   flex-wrap: wrap;

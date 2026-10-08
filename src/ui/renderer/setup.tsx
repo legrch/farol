@@ -6,7 +6,7 @@ import { nextSetupStep, setupSteps } from "./setup-navigation";
 type Props = { snapshot: WindowSnapshot; facade: RendererFacade };
 
 export function SetupNavigation({ snapshot, facade }: Props) {
-  const selected = snapshot.destination.setupStep ?? nextSetupStep(snapshot);
+  const selected = snapshot.destination.setupStep ?? "overview";
   return (
     <nav aria-label="Setup steps">
       {setupSteps.map(([step, label], index) => (
@@ -26,7 +26,7 @@ export function SetupNavigation({ snapshot, facade }: Props) {
 
 /** Guided presentation of Settings' existing commands and retained evidence. */
 export function Setup({ snapshot, facade }: Props) {
-  const step = snapshot.destination.setupStep ?? nextSetupStep(snapshot);
+  const step = snapshot.destination.setupStep ?? "overview";
   const index = setupSteps.findIndex(([key]) => key === step);
   const setup = computerSetup(snapshot);
   return (
@@ -35,17 +35,71 @@ export function Setup({ snapshot, facade }: Props) {
         <p className="setup-eyebrow">
           Set up this Mac · {index + 1} of {setupSteps.length}
         </p>
-        <h1>{setupSteps[index]?.[1]}</h1>
         <p className="description">
-          Review your saved connection and access. Opening a step makes no
-          changes and runs no checks.
+          Review your connection and workspace access. Opening a step does not
+          change permissions or repeat a check.
         </p>
       </header>
-      <div hidden={step === "finish"}>
+      {step === "overview" && (
+        <section className="setup-overview" aria-label="Setup overview">
+          <span className="badges">{setup.label}</span>
+          <h2>{setup.ready ? "Computer ready" : "Set up Computer"}</h2>
+          <p>{setup.next}</p>
+          <p className="description">
+            Embedded ChatGPT sign-in is optional for Computer access from
+            ChatGPT.
+          </p>
+          <div className="setup-overview-steps">
+            {(
+              [
+                [
+                  "folders",
+                  "Workspaces",
+                  setup.workspacesVerified
+                    ? "Workspace verified"
+                    : "Workspace check needed",
+                ],
+                [
+                  "connection",
+                  "Connection",
+                  setup.localConnectionCurrent
+                    ? "Local connection current"
+                    : "Connection check needed",
+                ],
+                [
+                  "attachment",
+                  "Add to ChatGPT",
+                  setup.externalAccessVerified
+                    ? "External access verified"
+                    : "External verification needed",
+                ],
+              ] as const
+            ).map(([destination, label, status]) => (
+              <div className="setup-overview-row" key={destination}>
+                <span>
+                  <strong>{label}</strong>
+                  <small>{status}</small>
+                </span>
+                <button
+                  className="subtle"
+                  onClick={() =>
+                    facade.navigate({ area: "setup", setupStep: destination })
+                  }
+                >
+                  {setup.ready ? "Review" : "Open"} {label}
+                </button>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+      <div hidden={step === "finish" || step === "overview"}>
         <Settings
           snapshot={snapshot}
           facade={facade}
-          setupStep={step === "finish" ? "connection" : step}
+          setupStep={
+            step === "finish" || step === "overview" ? "connection" : step
+          }
         />
       </div>
       <section
@@ -123,7 +177,7 @@ export function Setup({ snapshot, facade }: Props) {
             })
           }
         >
-          Back to Home
+          Open Home
         </button>
       </footer>
     </div>
