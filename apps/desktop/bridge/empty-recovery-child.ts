@@ -200,7 +200,13 @@ export function prepareEmptyRecoveryChild(
       "Mutations",
       ...(fields.includes("Profile") ? ["Profile"] : []),
       ...(fields.includes("Interrupted") ? ["Interrupted"] : []),
+      ...(fields.includes("UnacknowledgedDev") ? ["UnacknowledgedDev"] : []),
     ]);
+    if (
+      fields.includes("UnacknowledgedDev") &&
+      (v.UnacknowledgedDev !== true || fields.includes("Interrupted"))
+    )
+      throw Error("invalid unacknowledged Dev selection");
     if (fields.includes("Interrupted")) {
       const interrupted = object(v.Interrupted, [
         "OriginalHandoffID",

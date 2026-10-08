@@ -191,6 +191,62 @@ it("writes a separate exact ACK only after actual publication, then waits for or
   expect(child.kill).not.toHaveBeenCalled();
 });
 
+it("passes the explicit unacknowledged Dev selection unchanged to the Go owner", async () => {
+  const input = { ...selectionInput, UnacknowledgedDev: true as const };
+  const done = prepareEmptyRecoveryChild(
+    "/attested/backend",
+    profile,
+    input,
+    expected,
+  );
+  expect(ports.spawn).toHaveBeenCalledTimes(1);
+  expect(JSON.parse(child.stdin.write.mock.calls[0]![0] as string)).toEqual(
+    input,
+  );
+  send(prepared());
+  send(acknowledged());
+  child.emit("close", 0, null);
+  await expect(done).resolves.toMatchObject({
+    publication,
+    acknowledgement,
+    terminal: { exitCode: "0", forced: false },
+  });
+  expect(child.kill).not.toHaveBeenCalled();
+});
+
+it.each([
+  { UnacknowledgedDev: false },
+  { UnacknowledgedDev: "true" },
+  { UnacknowledgedDev: null },
+  { UnacknowledgedDev: 1 },
+  {
+    UnacknowledgedDev: true,
+    Interrupted: {
+      OriginalHandoffID: "original-handoff",
+      ExpectedACKDigest: Array(32).fill(4),
+    },
+  },
+  { UnacknowledgedDev: true, unclassified: true },
+])(
+  "refuses invalid or competing recovery modes before spawn: %j",
+  async (mode) => {
+    await expect(
+      prepareEmptyRecoveryChild(
+        "/attested/backend",
+        profile,
+        { ...selectionInput, ...mode } as unknown as Parameters<
+          typeof prepareEmptyRecoveryChild
+        >[2],
+        expected,
+      ),
+    ).rejects.toMatchObject({
+      state: "refused",
+      code: "empty_recovery_selection_invalid",
+    });
+    expect(ports.spawn).not.toHaveBeenCalled();
+  },
+);
+
 it.each([
   [
     "build",
