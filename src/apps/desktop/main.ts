@@ -1570,6 +1570,14 @@ function createManagedChatGptRoute(options: ChatGptRouteOptions): ChatGptRoute {
             options.title ?? `ChatGPT · ${activeDesktopIdentity.displayName}`,
         }
       : {}),
+    onUpdateAdmissionDiagnostic: (diagnostic) => {
+      // Fixed classifications only. The browser route contains observer errors,
+      // so diagnostics cannot alter an update admission or release outcome.
+      process.stderr.write(
+        `FAROL_UPDATE_ADMISSION_DIAGNOSTIC ${diagnostic.stage}:${diagnostic.reason}\n`,
+      );
+      options.onUpdateAdmissionDiagnostic?.(diagnostic);
+    },
     onDisposed: () => managedChatGptRoutes.delete(route),
   });
   managedChatGptRoutes.add(route);
