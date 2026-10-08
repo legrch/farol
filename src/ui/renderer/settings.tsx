@@ -179,6 +179,22 @@ function actionFeedback(
         : `${discovery.candidates.length} connection helper candidate(s) found, but no validated helper selected. Review a custom installation in Advanced connection options; candidates do not prove readiness.`;
     return "Discovery completed without a current validated selection. Review the client status and Advanced connection options.";
   }
+  if (
+    result.state === "applied" &&
+    result.id === intention("connector.configure")
+  )
+    return "Connection details saved. This does not start the connection or verify access from ChatGPT.";
+  if (
+    result.state === "applied" &&
+    (result.id === intention("connector.start") ||
+      result.id === intention("connector.repair"))
+  )
+    return "Local connection started. Verify Farol in ChatGPT to confirm external access.";
+  if (
+    result.state === "applied" &&
+    result.id === intention("connector.check-health")
+  )
+    return "Local connection checked. Access from ChatGPT has a separate verification.";
   if (result.state === "applied")
     return "Action confirmed. Check the current status below.";
   if (result.code === "TUNNEL_CLIENT_DISCOVERY_FAILED")

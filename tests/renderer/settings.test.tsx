@@ -1489,6 +1489,9 @@ describe("bounded Settings writer", () => {
     await h.click("Save credentials");
     expect(h.calls()).toHaveLength(1); // Empty credentials never look like a missing saved key or resubmit.
     expect(h.button("Save credentials").disabled).toBe(true);
+    expect(h.host.textContent).toContain(
+      "Connection details saved. This does not start the connection or verify access from ChatGPT.",
+    );
     expect(JSON.stringify(h.c.getSnapshot())).not.toContain(secret);
   });
   it("does not clear or submit a composing credential", async () => {
@@ -1533,6 +1536,9 @@ describe("bounded Settings writer", () => {
     expect(badge()).toBe("Computer ready");
     await h.click("Check attachment");
     await h.click("Check connection");
+    expect(h.host.textContent).toContain(
+      "Local connection checked. Access from ChatGPT has a separate verification.",
+    );
     await h.pageTo("diagnostics");
     await h.click("Check in ChatGPT once");
     await h.click("Check in ChatGPT once");
