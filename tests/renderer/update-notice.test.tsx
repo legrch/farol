@@ -68,6 +68,38 @@ function button(host: Element, label: string): HTMLButtonElement {
   if (!found) throw new Error(`BUTTON_MISSING:${label}`);
   return found;
 }
+it("offers only confirmed automatic downloads in the update sheet", async () => {
+  const off: InstalledUpdateView = {
+    phase: "available",
+    version: available.version,
+    deferred: false,
+    automaticUpdatePreference: { status: "confirmed", enabled: false },
+  };
+  const on: InstalledUpdateView = {
+    ...off,
+    automaticUpdatePreference: { status: "confirmed", enabled: true },
+  };
+  const { host, c, f } = await mount(off);
+  await act(async () =>
+    host.querySelector<HTMLButtonElement>(".rail .update-action")!.click(),
+  );
+  expect(host.textContent).toContain(
+    "Future updates download only when you choose",
+  );
+  vi.mocked(f.api.installedUpdate).mockResolvedValueOnce(on);
+  await act(async () => button(host, "Turn on automatic downloads").click());
+  expect(f.api.installedUpdate).toHaveBeenCalledExactlyOnceWith({
+    kind: "set-automatic-update-preference",
+    enabled: true,
+  });
+  expect(c.getSnapshot().intents["update-automatic-downloads"]?.state).toBe(
+    "applied",
+  );
+  expect(host.textContent).toContain(
+    "Installation still requires Restart & Update",
+  );
+  expect(f.api.installedUpdate).not.toHaveBeenCalledWith({ kind: "restart" });
+});
 
 it.each([
   available,

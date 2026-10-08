@@ -484,6 +484,8 @@ function Update({
 }) {
   const update = snapshot.update;
   const intent = snapshot.intents.update;
+  const preference = update.automaticUpdatePreference;
+  const preferenceIntent = snapshot.intents["update-automatic-downloads"];
   const safeAction = useRef<HTMLButtonElement>(null);
   const noticeKey = "notice" in update ? update.notice?.key : undefined;
   useEffect(() => {
@@ -548,6 +550,49 @@ function Update({
             <p className="update-notes">{update.notes}</p>
           </details>
         )}
+      {(update.phase === "available" || update.phase === "ready") && (
+        <div className="update-preference">
+          <p className="description" role="status">
+            {preference?.status === "confirmed"
+              ? preference.enabled
+                ? "Future eligible updates download during scheduled checks. Installation still requires Restart & Update."
+                : "Future updates download only when you choose."
+              : "Automatic download preference cannot be confirmed in this session."}
+          </p>
+          <button
+            type="button"
+            disabled={
+              disabled ||
+              preference?.status !== "confirmed" ||
+              preferenceIntent?.state === "pending" ||
+              preferenceIntent?.state === "unknown" ||
+              (update.phase === "ready" &&
+                Boolean(update.blockedBy?.includes("UNKNOWN")))
+            }
+            onClick={() => {
+              const latest = facade.getSnapshot();
+              const choice = latest.update.automaticUpdatePreference;
+              if (
+                latest.status !== "current" ||
+                choice?.status !== "confirmed" ||
+                latest.intents["update-automatic-downloads"]?.state ===
+                  "pending" ||
+                latest.intents["update-automatic-downloads"]?.state ===
+                  "unknown"
+              )
+                return;
+              void facade.setAutomaticDownloads(!choice.enabled);
+            }}
+          >
+            {preference?.status === "confirmed" && preference.enabled
+              ? "Turn off automatic downloads"
+              : "Turn on automatic downloads"}
+          </button>
+          {preferenceIntent?.state === "unknown" && (
+            <p role="alert">Preference outcome unknown. Do not retry.</p>
+          )}
+        </div>
+      )}
       {recovery ? (
         <p className="description">
           Farol will quit to finish recovery. If recovery restores the previous
