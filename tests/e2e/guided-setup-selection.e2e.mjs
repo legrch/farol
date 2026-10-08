@@ -732,14 +732,21 @@ try {
         .locator(".setup-page")
         .getByRole("button", { name: "Find connection helper", exact: true })
         .click();
-      await window.waitForFunction(async () => {
-        const result = await window.farolNext.bootstrap();
-        return (
+      const discoveryDeadline = Date.now() + 15000;
+      for (;;) {
+        const result = await window.evaluate(() =>
+          window.farolNext.bootstrap(),
+        );
+        if (
           result.configuration.status === "ready" &&
           result.configuration.settings.connectors.secureMcp.tunnelClient !==
             null
-        );
-      });
+        )
+          break;
+        if (Date.now() >= discoveryDeadline)
+          throw new Error("GUIDED_SETUP_HELPER_DISCOVERY_TIMEOUT");
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
       await window
         .getByLabel("Tunnel ID", { exact: true })
         .fill("new_fixture_tunnel");
