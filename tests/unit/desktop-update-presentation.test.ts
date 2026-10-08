@@ -13,7 +13,12 @@ const names = [
 
 // Execute the actual small native publisher callbacks with injected window/IO
 // ports. These source fixtures prove no Electron window, updater or native focus.
-async function publishers(applying: boolean, admitWhileOpening = false) {
+async function publishers({
+  applying = false,
+  quitting = false,
+  admitWhileOpening = false,
+  quitWhileOpening = false,
+} = {}) {
   const source = await readFile(
     path.resolve(import.meta.dirname, "../../src/apps/desktop/main.ts"),
     "utf8",
@@ -30,6 +35,7 @@ async function publishers(applying: boolean, admitWhileOpening = false) {
   const publications: unknown[][] = [];
   let opening: Promise<void> | undefined;
   const context: Record<string, unknown> = {
+    quitInProgress: quitting,
     installedUpdateAdmission: applying,
     setupOpen: false,
     shellOverlay: "task-menu",
@@ -44,6 +50,7 @@ async function publishers(applying: boolean, admitWhileOpening = false) {
     ensureWindow: async () => {
       effects.push("open");
       if (admitWhileOpening) context.installedUpdateAdmission = true;
+      if (quitWhileOpening) context.quitInProgress = true;
     },
     containWindowOpenFailure: (run: () => Promise<void>) => {
       opening = run();
@@ -68,11 +75,22 @@ async function publishers(applying: boolean, admitWhileOpening = false) {
   };
 }
 
-describe("native applying-update presentation ownership", () => {
+describe("native Quit and applying-update presentation ownership", () => {
   it.each(names)(
     "refuses %s before native presentation or publication",
     async (name) => {
-      const host = await publishers(true);
+      const host = await publishers({ applying: true });
+      await host.invoke(name);
+      expect(host.effects).toEqual([]);
+      expect(host.publications).toEqual([]);
+      expect(host.context.shellOverlay).toBe("task-menu");
+      expect(host.context.sidebarMode).toBe("overlay");
+    },
+  );
+  it.each(names)(
+    "refuses %s during Quit before native presentation or publication",
+    async (name) => {
+      const host = await publishers({ quitting: true });
       await host.invoke(name);
       expect(host.effects).toEqual([]);
       expect(host.publications).toEqual([]);
@@ -81,14 +99,24 @@ describe("native applying-update presentation ownership", () => {
     },
   );
   it.each(names)("keeps %s usable before applying admission", async (name) => {
-    const host = await publishers(false);
+    const host = await publishers();
     await host.invoke(name);
     expect(host.publications).toHaveLength(1);
   });
   it("does not publish Updates when admission changes during window opening", async () => {
-    const host = await publishers(false, true);
+    const host = await publishers({ admitWhileOpening: true });
     await host.invoke("requestUpdates");
     expect(host.effects).toEqual(["open"]);
     expect(host.publications).toEqual([]);
+  });
+  it("does not publish or focus Updates when Quit starts during window opening", async () => {
+    const host = await publishers({ quitWhileOpening: true });
+    await host.invoke("requestUpdates");
+    expect(host.effects).toEqual(["open"]);
+    expect(host.publications).toEqual([]);
+    expect(host.context.quitInProgress).toBe(true);
+    expect(host.context.installedUpdateAdmission).toBe(false);
+    expect(host.context.shellOverlay).toBe("task-menu");
+    expect(host.context.sidebarMode).toBe("overlay");
   });
 });

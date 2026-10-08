@@ -246,11 +246,21 @@ if (!process.argv.includes("--pure-node-fixture")) {
           "waitForReactShell",
           "openSetup",
           "setupStep",
-          "assertSetupFinish",
+          "assertSetupOverview",
         ].map((name) => [name, () => assert.fail("unexpected UI action")]),
       ),
     };
+    const pureNodeImports = new Set([
+      "node:assert/strict",
+      "node:crypto",
+      "node:os",
+      "node:path",
+    ]);
     await module.link(async (specifier) => {
+      assert.ok(
+        Object.hasOwn(mocks, specifier) || pureNodeImports.has(specifier),
+        `unmocked harness import: ${specifier}`,
+      );
       const exports = mocks[specifier] ?? (await import(specifier));
       return new SyntheticModule(
         Object.keys(exports),
