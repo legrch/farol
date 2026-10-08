@@ -711,13 +711,13 @@ it.each([
   [
     { phase: "unavailable", code: "UPDATE_STATUS_UNAVAILABLE" },
     "Farol updates unavailable",
-    "UPDATE_STATUS_UNAVAILABLE",
+    "cannot confirm update availability",
     ["Dismiss"],
   ],
   [
     { phase: "failed", code: "UPDATE_FAILED", recoveryRequired: false },
     "The update did not finish",
-    "UPDATE_FAILED",
+    "The update did not finish",
     ["Dismiss"],
   ],
 ] satisfies [WindowSnapshot["update"], string, string, string[]][])(
@@ -740,6 +740,16 @@ it.each([
     expect(dialog.querySelector(".update-state")?.textContent).toContain(
       status,
     );
+    if (update.phase === "failed" || update.phase === "unavailable") {
+      expect(dialog.querySelector(".update-state")?.textContent).not.toContain(
+        update.code,
+      );
+      const technical = dialog.querySelector<HTMLDetailsElement>(
+        ".update-technical-code",
+      );
+      expect(technical?.open).toBe(false);
+      expect(technical?.querySelector("code")?.textContent).toBe(update.code);
+    }
     expect(dialog.querySelector(".update-installed")?.textContent).toContain(
       "Installed: Farol 0.1.8-owner.beta.1 (build 10)",
     );
@@ -770,6 +780,29 @@ it.each([
     expect(f.api.installedUpdate).not.toHaveBeenCalled();
   },
 );
+it("describes an uncertain update as requiring recovery without claiming the installed version changed", async () => {
+  const { host, c, f } = await mount();
+  vi.mocked(f.api.installedUpdate).mockClear();
+  await act(async () => {
+    f.emit("update", {
+      phase: "failed",
+      code: "UPDATE_HANDOFF_UNKNOWN",
+      recoveryRequired: true,
+    });
+    c.overlay("update");
+  });
+  const dialog = host.querySelector("dialog")!;
+  expect(dialog.querySelector(".update-state")?.textContent).toContain(
+    "The update result needs recovery",
+  );
+  expect(dialog.querySelector(".update-state")?.textContent).not.toContain(
+    "UPDATE_HANDOFF_UNKNOWN",
+  );
+  expect(dialog.querySelector(".update-technical-code code")?.textContent).toBe(
+    "UPDATE_HANDOFF_UNKNOWN",
+  );
+  expect(f.api.installedUpdate).not.toHaveBeenCalled();
+});
 it.each([
   [
     "ready",

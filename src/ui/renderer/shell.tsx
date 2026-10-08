@@ -19,7 +19,10 @@ import { setupSteps } from "./setup-navigation";
 import { designIconPath, designIconViewBox } from "./design-icons";
 import { UpdateNotice, acknowledgeUpdateNotice } from "./update-notice";
 import { updateCheckAllowed } from "./update-eligibility";
-import { updateBlockMessage } from "../update-block-message";
+import {
+  updateBlockMessage,
+  updateResultMessage,
+} from "../update-block-message";
 const pages: readonly [SettingsPage, string][] = [
   ["general", "General"],
   ["appearance", "Appearance"],
@@ -541,9 +544,9 @@ function Update({
       : update.phase === "available"
         ? `Farol ${update.version} is available; it is not downloaded or installed yet.`
         : update.phase === "failed"
-          ? `Update failed: ${update.code}`
+          ? updateResultMessage("failed", update.recoveryRequired)
           : update.phase === "unavailable"
-            ? `Update unavailable: ${update.code}`
+            ? updateResultMessage("unavailable")
             : update.phase === "recovery"
               ? `Recovery required for ${update.version}`
               : update.phase === "applying"
@@ -607,6 +610,12 @@ function Update({
             <p className="update-notes">{update.notes}</p>
           </details>
         )}
+      {(update.phase === "failed" || update.phase === "unavailable") && (
+        <details className="update-technical-code">
+          <summary>Technical code</summary>
+          <code>{update.code}</code>
+        </details>
+      )}
       {(update.phase === "available" || update.phase === "ready") && (
         <div className="update-preference">
           <div className="copy">

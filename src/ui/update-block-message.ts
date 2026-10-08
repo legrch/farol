@@ -25,3 +25,15 @@ export function updateBlockMessage(
 ): string {
   return messages[code] ?? fallback;
 }
+
+/** A failure projection is not evidence that the installed slot changed. */
+export function updateResultMessage(
+  phase: "failed" | "unavailable",
+  recoveryRequired = false,
+): string {
+  if (phase === "unavailable")
+    return "Farol cannot confirm update availability in this session. Review Diagnostics before another check.";
+  return recoveryRequired
+    ? "The update result needs recovery. Check Diagnostics and the installed version before another update action."
+    : "The update did not finish. Check Diagnostics and the installed version before trying again.";
+}
