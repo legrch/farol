@@ -17,6 +17,214 @@ import {
 import type { ProductSettings } from "../../src/pkg/product-settings/contract";
 import { bootstrap, deferred, fixture, settings } from "./fixture";
 
+const quitChoiceLabel = "Install downloaded updates when I quit Farol";
+const quitOff: WindowSnapshot["update"] = {
+  phase: "idle",
+  checkedAt: null,
+  automaticUpdatePreference: { status: "confirmed", enabled: false },
+  installOnQuitPreference: {
+    status: "confirmed",
+    scope: "install-on-normal-quit",
+    enabled: false,
+  },
+};
+function quitCheckbox(host: Element): HTMLInputElement {
+  const label = [...host.querySelectorAll("label")].find((node) =>
+    node.textContent?.includes(quitChoiceLabel),
+  );
+  const input = label?.querySelector<HTMLInputElement>(
+    'input[type="checkbox"]',
+  );
+  if (!input) throw new Error("QUIT_CHOICE_MISSING");
+  return input;
+}
+
+describe("explicit normal Quit installation choice", () => {
+  it("saves only explicit quit consent once, independently of automatic downloads", async () => {
+    const h = await mount("updates", settings(), "preview", quitOff);
+    const checkbox = quitCheckbox(h.host);
+    expect(checkbox.checked).toBe(false);
+    expect(checkbox.disabled).toBe(false);
+    expect(checkbox.closest("label")?.textContent).toContain(quitChoiceLabel);
+    expect(
+      document.getElementById(checkbox.getAttribute("aria-describedby")!),
+    ).not.toBeNull();
+    expect(h.f.api.installedUpdate).toHaveBeenCalledExactlyOnceWith({
+      kind: "status",
+    });
+    expect(h.host.textContent).toContain(
+      "Automatic downloads do not grant permission to install",
+    );
+    vi.mocked(h.f.api.installedUpdate).mockClear();
+    const pending = deferred<unknown>();
+    vi.mocked(h.f.api.installedUpdate).mockReturnValueOnce(pending.promise);
+    await act(async () => {
+      checkbox.click();
+      checkbox.click();
+    });
+    expect(h.c.getSnapshot().intents["update-install-on-quit"]).toEqual({
+      id: "update-install-on-quit",
+      state: "pending",
+      code: null,
+    });
+    expect(quitCheckbox(h.host).disabled).toBe(true);
+    expect(h.button("Turn on automatic downloads").disabled).toBe(true);
+    const on: WindowSnapshot["update"] = {
+      ...quitOff,
+      installOnQuitPreference: {
+        status: "confirmed",
+        scope: "install-on-normal-quit",
+        enabled: true,
+      },
+    };
+    await act(async () => pending.resolve(on));
+    expect(quitCheckbox(h.host).checked).toBe(true);
+    expect(h.c.getSnapshot().intents["update-install-on-quit"]?.state).toBe(
+      "applied",
+    );
+    expect(
+      h.c.getSnapshot().intents["update-automatic-downloads"],
+    ).toBeUndefined();
+    expect(h.f.api.installedUpdate).toHaveBeenCalledExactlyOnceWith({
+      kind: "set-install-on-quit-preference",
+      enabled: true,
+    });
+    expect(h.host.textContent).toContain("Farol stays closed");
+    vi.mocked(h.f.api.installedUpdate).mockResolvedValueOnce({
+      ...on,
+      automaticUpdatePreference: { status: "confirmed", enabled: true },
+    });
+    await h.click("Turn on automatic downloads");
+    expect(h.c.getSnapshot().update.installOnQuitPreference).toEqual(
+      on.installOnQuitPreference,
+    );
+    expect(h.c.getSnapshot().intents["update-install-on-quit"]?.state).toBe(
+      "applied",
+    );
+    vi.mocked(h.f.api.installedUpdate).mockResolvedValueOnce({
+      ...quitOff,
+      automaticUpdatePreference: { status: "confirmed", enabled: true },
+    });
+    await act(async () => quitCheckbox(h.host).click());
+    expect(h.f.api.installedUpdate).toHaveBeenLastCalledWith({
+      kind: "set-install-on-quit-preference",
+      enabled: false,
+    });
+    expect(quitCheckbox(h.host).checked).toBe(false);
+    expect(h.c.getSnapshot().update.automaticUpdatePreference).toEqual({
+      status: "confirmed",
+      enabled: true,
+    });
+    expect(h.f.api.installedUpdate).toHaveBeenCalledTimes(3);
+    expect(h.calls()).toEqual([]);
+  });
+
+  it("retains the original unknown choice after refresh, remount and late confirmed events", async () => {
+    const h = await mount("updates", settings(), "preview", quitOff);
+    vi.mocked(h.f.api.installedUpdate).mockClear();
+    vi.mocked(h.f.api.installedUpdate).mockRejectedValueOnce(
+      new Error("reply lost"),
+    );
+    await act(async () => quitCheckbox(h.host).click());
+    const original = h.c.getSnapshot().intents["update-install-on-quit"];
+    expect(original).toMatchObject({
+      id: "update-install-on-quit",
+      state: "unknown",
+    });
+    await act(async () => h.c.refresh());
+    await act(async () => h.f.emit("update", quitOff));
+    await h.pageTo("diagnostics");
+    await h.pageTo("updates");
+    await h.remount();
+    expect(h.c.getSnapshot().intents["update-install-on-quit"]).toBe(original);
+    expect(quitCheckbox(h.host).disabled).toBe(true);
+    expect(h.host.textContent).toContain(
+      "Do not repeat this change; review Diagnostics",
+    );
+    expect(h.button("Review update").disabled).toBe(false);
+    await h.click("Review update");
+    await act(async () => quitCheckbox(h.host).click());
+    expect(await h.c.setInstallOnQuitPreference(true)).toBe(original);
+    expect(h.f.api.installedUpdate).toHaveBeenCalledExactlyOnceWith({
+      kind: "set-install-on-quit-preference",
+      enabled: true,
+    });
+  });
+
+  it.each([
+    undefined,
+    {
+      status: "blocked",
+      enabled: false,
+      code: "UPDATE_QUIT_PREFERENCE_UNREADABLE",
+    },
+    {
+      status: "unknown",
+      enabled: false,
+      code: "UPDATE_QUIT_PREFERENCE_OUTCOME_UNKNOWN",
+    },
+  ] satisfies WindowSnapshot["update"]["installOnQuitPreference"][])(
+    "fails closed for unconfirmed quit consent %j but leaves review available",
+    async (preference) => {
+      const update = { ...quitOff };
+      delete update.installOnQuitPreference;
+      if (preference) update.installOnQuitPreference = preference;
+      const h = await mount("updates", settings(), "preview", update);
+      expect(quitCheckbox(h.host).disabled).toBe(true);
+      expect(quitCheckbox(h.host).checked).toBe(false);
+      expect(h.host.textContent).toContain(
+        "Off. Quit installation preference cannot be confirmed",
+      );
+      expect(h.button("Review update").disabled).toBe(false);
+      vi.mocked(h.f.api.installedUpdate).mockClear();
+      await act(async () => quitCheckbox(h.host).click());
+      await h.click("Review update");
+      expect(h.f.api.installedUpdate).not.toHaveBeenCalled();
+    },
+  );
+
+  it("rechecks latest quit eligibility before a rendered checkbox dispatches", async () => {
+    const h = await mount("updates", settings(), "preview", quitOff);
+    const input = quitCheckbox(h.host);
+    vi.mocked(h.f.api.installedUpdate).mockClear();
+    const read = vi
+      .spyOn(h.c, "getSnapshot")
+      .mockReturnValue({ ...h.c.getSnapshot(), environment: "dev" });
+    await act(async () => input.click());
+    read.mockRestore();
+    expect(h.f.api.installedUpdate).not.toHaveBeenCalled();
+  });
+
+  it("disables quit consent for an idle update with unknown admission while review stays available", async () => {
+    const h = await mount("updates", settings(), "preview", {
+      ...quitOff,
+      blockedBy: "UPDATE_BROWSER_STATE_UNKNOWN",
+    });
+    expect(quitCheckbox(h.host).disabled).toBe(true);
+    expect(h.button("Review update").disabled).toBe(false);
+    vi.mocked(h.f.api.installedUpdate).mockClear();
+    await act(async () => quitCheckbox(h.host).click());
+    expect(h.f.api.installedUpdate).not.toHaveBeenCalled();
+  });
+
+  it("never offers quit installation in Dev even with a confirmed enabled projection", async () => {
+    const h = await mount("updates", settings(), "dev", {
+      ...quitOff,
+      installOnQuitPreference: {
+        status: "confirmed",
+        scope: "install-on-normal-quit",
+        enabled: true,
+      },
+    });
+    expect(
+      activePage(h.host).querySelector('input[type="checkbox"]'),
+    ).toBeNull();
+    vi.mocked(h.f.api.installedUpdate).mockClear();
+    expect((await h.c.setInstallOnQuitPreference(false)).state).toBe("refused");
+    expect(h.f.api.installedUpdate).not.toHaveBeenCalled();
+  });
+});
+
 // DOM/adapter fixtures only: no native chooser, filesystem, provider or updater proof.
 (
   globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }
@@ -1859,7 +2067,7 @@ describe("bounded Settings writer", () => {
     await act(async () => h.c.refresh());
     expect(h.button("Apply reviewed configuration").disabled).toBe(true);
     await h.click("Preview model configuration");
-    const check = h.host.querySelector<HTMLInputElement>(
+    const check = activePage(h.host).querySelector<HTMLInputElement>(
       'input[type="checkbox"]',
     )!;
     await act(async () => check.click());
@@ -1880,7 +2088,7 @@ describe("bounded Settings writer", () => {
       kind: "check",
     });
   });
-  it("changes only the confirmed automatic download preference and keeps installation manual", async () => {
+  it("changes only the confirmed automatic download preference without granting installation consent", async () => {
     const off = {
       phase: "idle" as const,
       checkedAt: null,
@@ -1911,7 +2119,7 @@ describe("bounded Settings writer", () => {
       "applied",
     );
     expect(h.host.textContent).toContain(
-      "Installation still requires Review update",
+      "Installation requires Restart & Update or separate consent",
     );
     expect(h.f.api.installedUpdate).not.toHaveBeenCalledWith({
       kind: "restart",
@@ -3673,6 +3881,9 @@ describe("review regressions: retained action origins and exact edit delivery", 
     try {
       const h = await mount("connection", value, "dev");
       expect(h.host.textContent).toContain("Attach this Farol Dev connection");
+      expect(h.host.querySelector(".attachment-steps li")?.textContent).toBe(
+        "Open Tunnels in ChatGPT and attach this Farol Dev connection.",
+      );
       expect(h.host.textContent).not.toContain("Copied. Paste the request");
       await h.click("Copy verification request");
       expect(writeText).toHaveBeenCalledTimes(1);

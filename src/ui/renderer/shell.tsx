@@ -9,7 +9,11 @@ import type { CSSProperties, ReactNode, RefObject } from "react";
 import { shellGeometry } from "../../pkg/shell-layout/geometry";
 import { useRenderer } from "./services";
 import { PanelBoundary } from "./boundary";
-import { Settings, useSettingsAttention } from "./settings";
+import {
+  InstallOnQuitChoice,
+  Settings,
+  useSettingsAttention,
+} from "./settings";
 import type { RendererFacade, SettingsPage, WindowSnapshot } from "./contract";
 import { computerSetup } from "./computer-setup";
 import { TaskEditor } from "./task";
@@ -623,7 +627,7 @@ function Update({
             <p className="description" role="status">
               {preference?.status === "confirmed"
                 ? preference.enabled
-                  ? "Future eligible updates download during scheduled checks. Installation still requires Restart & Update."
+                  ? "Future eligible updates download during scheduled checks. Installation requires Restart & Update or separate consent to install on normal Quit."
                   : "Future updates download only when you choose."
                 : "Automatic download preference cannot be confirmed in this session."}
             </p>
@@ -635,6 +639,7 @@ function Update({
               preference?.status !== "confirmed" ||
               preferenceIntent?.state === "pending" ||
               preferenceIntent?.state === "unknown" ||
+              snapshot.intents["update-install-on-quit"]?.state === "pending" ||
               (update.phase === "ready" &&
                 Boolean(update.blockedBy?.includes("UNKNOWN")))
             }
@@ -660,6 +665,13 @@ function Update({
           {preferenceIntent?.state === "unknown" && (
             <p role="alert">Preference outcome unknown. Do not retry.</p>
           )}
+        </div>
+      )}
+      {(update.phase === "available" || update.phase === "ready") && (
+        <div className="update-preference">
+          <div className="copy">
+            <InstallOnQuitChoice snapshot={snapshot} facade={facade} />
+          </div>
         </div>
       )}
       {recovery ? (

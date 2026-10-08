@@ -150,6 +150,46 @@ const initial: WindowSnapshot = {
     overlayAcknowledgement: false,
   },
 };
+// This additive renderer capability stays within the controller slice while
+// transitional facades without it remain observation-only.
+type InstallOnQuitFacade = RendererFacade & {
+  setInstallOnQuitPreference(enabled: boolean): Promise<Intent>;
+};
+function installOnQuitPreferenceEligible(snapshot: WindowSnapshot): boolean {
+  const update = snapshot.update;
+  const unsettled = (key: string) =>
+    snapshot.intents[key]?.state === "pending" ||
+    snapshot.intents[key]?.state === "unknown";
+  return (
+    snapshot.environment === "preview" &&
+    snapshot.status === "current" &&
+    snapshot.runtime === "ready" &&
+    Boolean(snapshot.buildId) &&
+    update.installOnQuitPreference?.status === "confirmed" &&
+    update.installOnQuitPreference.scope === "install-on-normal-quit" &&
+    snapshot.intents["update-install-on-quit"]?.state !== "unknown" &&
+    snapshot.intents["update-automatic-downloads"]?.state !== "pending" &&
+    !unsettled("update") &&
+    !("blockedBy" in update && update.blockedBy?.includes("UNKNOWN")) &&
+    (update.phase === "idle" ||
+      update.phase === "available" ||
+      update.phase === "ready" ||
+      (update.phase === "failed" &&
+        !update.recoveryRequired &&
+        !update.code.includes("UNKNOWN")))
+  );
+}
+export function canSetInstallOnQuitPreference(
+  snapshot: WindowSnapshot,
+  facade: RendererFacade,
+): facade is InstallOnQuitFacade {
+  return (
+    "setInstallOnQuitPreference" in facade &&
+    typeof facade.setInstallOnQuitPreference === "function" &&
+    snapshot.intents["update-install-on-quit"]?.state !== "pending" &&
+    installOnQuitPreferenceEligible(snapshot)
+  );
+}
 export class WindowController implements RendererFacade {
   readonly draft = new AgentDraftStore();
   readonly conversationDraft = new ConversationDraftStore();
@@ -1332,6 +1372,7 @@ export class WindowController implements RendererFacade {
       current.status !== "current" ||
       current.runtime !== "ready" ||
       !current.buildId ||
+      current.intents["update-install-on-quit"]?.state === "pending" ||
       !preference ||
       preference.status !== "confirmed" ||
       current.intents[key]?.state === "pending" ||
@@ -1381,6 +1422,59 @@ export class WindowController implements RendererFacade {
                 result.status === "unknown"
                   ? result.code
                   : "UPDATE_AUTOMATIC_PREFERENCE_ACK_MISMATCH",
+            };
+    });
+  }
+  setInstallOnQuitPreference(enabled: boolean): Promise<Intent> {
+    const key = "update-install-on-quit";
+    const retained = this.state.intents[key];
+    if (retained?.state === "unknown") return Promise.resolve(retained);
+    if (
+      typeof enabled !== "boolean" ||
+      !canSetInstallOnQuitPreference(this.state, this)
+    )
+      return Promise.resolve({
+        id: key,
+        state: "refused",
+        code: "UPDATE_QUIT_PREFERENCE_UNAVAILABLE",
+      });
+    if (this.state.update.installOnQuitPreference?.enabled === enabled)
+      return Promise.resolve({ id: key, state: "applied", code: null });
+    return this.dispatch(key, enabled, async () => {
+      // The digest await may have delivered a new admission fence. This
+      // command's own pending intent is a latch, not an eligibility failure.
+      if (!installOnQuitPreferenceEligible(this.state))
+        return {
+          id: key,
+          state: "refused",
+          code: "UPDATE_QUIT_PREFERENCE_UNAVAILABLE",
+        };
+      const revision = this.updateRevision;
+      const parsed = InstalledUpdateViewSchema.safeParse(
+        await this.api.installedUpdate({
+          kind: "set-install-on-quit-preference",
+          enabled,
+        }),
+      );
+      if (!parsed.success || !parsed.data.installOnQuitPreference)
+        return {
+          id: key,
+          state: "unknown",
+          code: "UPDATE_QUIT_PREFERENCE_OUTCOME_UNKNOWN",
+        };
+      if (this.updateRevision === revision) this.adoptUpdate(parsed.data);
+      const result = parsed.data.installOnQuitPreference;
+      return result.status === "confirmed" && result.enabled === enabled
+        ? { id: key, state: "applied", code: null }
+        : result.status === "blocked"
+          ? { id: key, state: "refused", code: result.code }
+          : {
+              id: key,
+              state: "unknown",
+              code:
+                result.status === "unknown"
+                  ? result.code
+                  : "UPDATE_QUIT_PREFERENCE_ACK_MISMATCH",
             };
     });
   }

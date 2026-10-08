@@ -24,6 +24,7 @@ import { computerSetup } from "./computer-setup";
 import { visibleSetupSection, type SetupSection } from "./setup-checklist";
 import { commandAllowed, dependencyFences } from "./command-eligibility";
 import { updateCheckAllowed } from "./update-eligibility";
+import { canSetInstallOnQuitPreference } from "./controller";
 import {
   updateBlockMessage,
   updateResultMessage,
@@ -2170,7 +2171,7 @@ function Connection({
           <ol className="attachment-steps">
             <li>
               Open Tunnels in ChatGPT and attach this {connectorName}
-              connection.
+              {" connection."}
             </li>
             <li>
               Copy the current verification request and send it in ChatGPT.
@@ -2687,6 +2688,59 @@ function Shortcuts({ snapshot, facade }: PageProps) {
     </>
   );
 }
+export function InstallOnQuitChoice({ snapshot, facade }: SettingsProps) {
+  const preference = snapshot.update.installOnQuitPreference;
+  const intent = snapshot.intents["update-install-on-quit"];
+  const descriptionId = useId();
+  const confirmed =
+    snapshot.environment === "preview" &&
+    preference?.status === "confirmed" &&
+    preference.scope === "install-on-normal-quit";
+  return (
+    <>
+      <label className="setting-row">
+        <input
+          type="checkbox"
+          checked={confirmed && preference.enabled}
+          disabled={!canSetInstallOnQuitPreference(snapshot, facade)}
+          aria-describedby={descriptionId}
+          onChange={(event) => {
+            const enabled = event.currentTarget.checked;
+            if (!canSetInstallOnQuitPreference(facade.getSnapshot(), facade))
+              return;
+            void facade.setInstallOnQuitPreference(enabled);
+          }}
+        />
+        Install downloaded updates when I quit Farol
+      </label>
+      <p id={descriptionId} className="description" role="status">
+        {intent?.state === "unknown"
+          ? "Quit installation preference outcome is unknown. Do not repeat this change; review Diagnostics."
+          : intent?.state === "pending"
+            ? "Saving quit installation preference…"
+            : confirmed
+              ? preference.enabled
+                ? "On. Eligible downloaded updates may install when you quit Farol normally, after safety checks. Farol stays closed."
+                : "Off. Quitting Farol does not install updates. Use Restart & Update to install when you choose."
+              : "Off. Quit installation preference cannot be confirmed in this session."}
+      </p>
+      {preference?.status !== "confirmed" && preference?.code && (
+        <p className="notice" role="status">
+          {preference.code}
+        </p>
+      )}
+      {intent?.state === "refused" && (
+        <p className="notice" role="status">
+          Quit installation preference change was refused. {intent.code}
+        </p>
+      )}
+      <p className="description">
+        Automatic downloads do not grant permission to install. This separate
+        choice applies only to normal Quit, with no automatic relaunch.
+      </p>
+    </>
+  );
+}
 function Updates({ snapshot, facade, actions }: PageProps) {
   const busy = useRef(false);
   const [checked, setChecked] = useState(false);
@@ -2699,6 +2753,7 @@ function Updates({ snapshot, facade, actions }: PageProps) {
   const preferenceAvailable =
     preference?.status === "confirmed" &&
     !preferenceBusy &&
+    snapshot.intents["update-install-on-quit"]?.state !== "pending" &&
     !actions.disabled &&
     update.phase !== "checking" &&
     update.phase !== "downloading" &&
@@ -2804,7 +2859,7 @@ function Updates({ snapshot, facade, actions }: PageProps) {
         <p className="description" role="status">
           {preference?.status === "confirmed"
             ? preference.enabled
-              ? "On. Farol downloads eligible updates during scheduled checks. Installation still requires Review update and Restart & Update."
+              ? "On. Farol downloads eligible updates during scheduled checks. Installation requires Restart & Update or separate consent to install on normal Quit."
               : "Off. Farol checks for updates, but downloads only when you choose."
             : "Download preference cannot be confirmed in this session."}
         </p>
@@ -2840,6 +2895,9 @@ function Updates({ snapshot, facade, actions }: PageProps) {
             ? "Turn off automatic downloads"
             : "Turn on automatic downloads"}
         </button>
+      </Group>
+      <Group title="Installation on Quit">
+        <InstallOnQuitChoice snapshot={snapshot} facade={facade} />
       </Group>
     </>
   );

@@ -9,7 +9,7 @@ import {
   InstalledUpdateCommandSchema,
   InstalledUpdateViewSchema,
 } from "../../src/modules/release/contract/installed-update";
-import { fixture, deferred } from "./fixture";
+import { bootstrap, fixture, deferred } from "./fixture";
 
 (
   globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }
@@ -36,8 +36,12 @@ function withSeen(view: InstalledUpdateView): InstalledUpdateView {
   if (!("notice" in view) || !view.notice) throw new Error("NOTICE_MISSING");
   return { ...view, notice: { ...view.notice, seen: true } };
 }
-async function mount(update: InstalledUpdateView = available) {
+async function mount(
+  update: InstalledUpdateView = available,
+  environment: "preview" | "dev" = "preview",
+) {
   const f = fixture();
+  vi.mocked(f.api.bootstrap).mockResolvedValue({ ...bootstrap(), environment });
   vi.mocked(f.api.installedUpdate).mockResolvedValue(update);
   const c = new WindowController(f.api);
   await c.start();
@@ -96,9 +100,99 @@ it("offers only confirmed automatic downloads in the update sheet", async () => 
     "applied",
   );
   expect(host.textContent).toContain(
-    "Installation still requires Restart & Update",
+    "Installation requires Restart & Update or separate consent",
   );
   expect(f.api.installedUpdate).not.toHaveBeenCalledWith({ kind: "restart" });
+});
+
+it.each(["available", "ready"] as const)(
+  "shows a native normal Quit opt-in in the %s sheet without saving on mount",
+  async (phase) => {
+    const off: InstalledUpdateView = {
+      ...(phase === "ready" ? { phase, blockedBy: null } : { phase }),
+      version: available.version,
+      deferred: false,
+      automaticUpdatePreference: { status: "confirmed", enabled: true },
+      installOnQuitPreference: {
+        status: "confirmed",
+        scope: "install-on-normal-quit",
+        enabled: false,
+      },
+    };
+    const { host, c, f } = await mount(off);
+    await act(async () =>
+      host.querySelector<HTMLButtonElement>(".rail .update-action")!.click(),
+    );
+    const checkbox = () =>
+      host.querySelector<HTMLInputElement>('dialog input[type="checkbox"]')!;
+    expect(checkbox().closest("label")?.textContent).toContain(
+      "Install downloaded updates when I quit Farol",
+    );
+    expect(checkbox().checked).toBe(false);
+    expect(checkbox().disabled).toBe(false);
+    expect(host.textContent).toContain(
+      "Automatic downloads do not grant permission to install",
+    );
+    expect(f.api.installedUpdate).not.toHaveBeenCalled();
+    const waiting = deferred<unknown>();
+    vi.mocked(f.api.installedUpdate).mockReturnValueOnce(waiting.promise);
+    await act(async () => {
+      checkbox().click();
+      checkbox().click();
+    });
+    expect(checkbox().disabled).toBe(true);
+    expect(c.getSnapshot().intents["update-install-on-quit"]?.state).toBe(
+      "pending",
+    );
+    await act(async () => waiting.reject(new Error("reply lost")));
+    const original = c.getSnapshot().intents["update-install-on-quit"];
+    expect(original?.state).toBe("unknown");
+    await act(async () => {
+      c.overlay("none");
+      f.emit("update", off);
+    });
+    await act(async () =>
+      host.querySelector<HTMLButtonElement>(".rail .update-action")!.click(),
+    );
+    expect(checkbox().disabled).toBe(true);
+    expect(host.querySelector("dialog")?.textContent).toContain(
+      "Do not repeat this change",
+    );
+    expect(c.getSnapshot().intents["update-install-on-quit"]).toBe(original);
+    expect(button(host, "Turn off automatic downloads").disabled).toBe(false);
+    expect(button(host, "Remind Me Later").disabled).toBe(false);
+    expect(f.api.installedUpdate).toHaveBeenCalledExactlyOnceWith({
+      kind: "set-install-on-quit-preference",
+      enabled: true,
+    });
+  },
+);
+
+it("never enables or displays granted quit consent in a Dev sheet", async () => {
+  const update: InstalledUpdateView = {
+    phase: "available",
+    version: available.version,
+    deferred: false,
+    installOnQuitPreference: {
+      status: "confirmed",
+      scope: "install-on-normal-quit",
+      enabled: true,
+    },
+  };
+  const { host, f } = await mount(update, "dev");
+  await act(async () =>
+    host.querySelector<HTMLButtonElement>(".rail .update-action")!.click(),
+  );
+  const checkbox = host.querySelector<HTMLInputElement>(
+    'dialog input[type="checkbox"]',
+  )!;
+  expect(checkbox.disabled).toBe(true);
+  expect(checkbox.checked).toBe(false);
+  expect(host.textContent).toContain(
+    "Off. Quit installation preference cannot be confirmed",
+  );
+  await act(async () => checkbox.click());
+  expect(f.api.installedUpdate).not.toHaveBeenCalled();
 });
 
 it.each([

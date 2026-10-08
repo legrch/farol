@@ -1,7 +1,256 @@
 import { describe, it, expect, vi } from "vitest";
-import { WindowController } from "../../src/ui/renderer/controller";
+import {
+  canSetInstallOnQuitPreference,
+  WindowController,
+} from "../../src/ui/renderer/controller";
+import type { WindowSnapshot } from "../../src/ui/renderer/contract";
 import { bootstrap, deferred, fixture, settings, task } from "./fixture";
 import type { ConnectorSetupReceipt } from "../../src/pkg/product-settings/connector-setup-receipt";
+
+describe("normal Quit preference command provenance", () => {
+  const off: WindowSnapshot["update"] = {
+    phase: "idle",
+    checkedAt: null,
+    installOnQuitPreference: {
+      status: "confirmed",
+      scope: "install-on-normal-quit",
+      enabled: false,
+    },
+    automaticUpdatePreference: { status: "confirmed", enabled: false },
+  };
+  const on: WindowSnapshot["update"] = {
+    ...off,
+    installOnQuitPreference: {
+      status: "confirmed",
+      scope: "install-on-normal-quit",
+      enabled: true,
+    },
+  };
+  async function controller() {
+    const f = fixture();
+    vi.mocked(f.api.installedUpdate).mockResolvedValue(off);
+    const c = new WindowController(f.api);
+    await c.start();
+    vi.mocked(f.api.installedUpdate).mockClear();
+    return { f, c };
+  }
+  it.each([
+    {
+      view: {},
+      state: "unknown",
+      code: "UPDATE_QUIT_PREFERENCE_OUTCOME_UNKNOWN",
+    },
+    {
+      view: { phase: "idle", checkedAt: null },
+      state: "unknown",
+      code: "UPDATE_QUIT_PREFERENCE_OUTCOME_UNKNOWN",
+    },
+    {
+      view: off,
+      state: "unknown",
+      code: "UPDATE_QUIT_PREFERENCE_ACK_MISMATCH",
+    },
+    {
+      view: {
+        ...off,
+        installOnQuitPreference: { status: "confirmed", enabled: true },
+      },
+      state: "unknown",
+      code: "UPDATE_QUIT_PREFERENCE_OUTCOME_UNKNOWN",
+    },
+    {
+      view: {
+        ...off,
+        installOnQuitPreference: {
+          status: "confirmed",
+          scope: "install-on-crash",
+          enabled: true,
+        },
+      },
+      state: "unknown",
+      code: "UPDATE_QUIT_PREFERENCE_OUTCOME_UNKNOWN",
+    },
+    {
+      view: {
+        ...off,
+        installOnQuitPreference: {
+          status: "unknown",
+          enabled: false,
+          code: "UPDATE_QUIT_PREFERENCE_OUTCOME_UNKNOWN",
+        },
+      },
+      state: "unknown",
+      code: "UPDATE_QUIT_PREFERENCE_OUTCOME_UNKNOWN",
+    },
+    {
+      view: {
+        ...off,
+        installOnQuitPreference: {
+          status: "blocked",
+          enabled: false,
+          code: "UPDATE_QUIT_PREFERENCE_UNREADABLE",
+        },
+      },
+      state: "refused",
+      code: "UPDATE_QUIT_PREFERENCE_UNREADABLE",
+    },
+  ])(
+    "classifies exact quit preference acknowledgement $code ($state)",
+    async ({ view, state, code }) => {
+      const { f, c } = await controller();
+      vi.mocked(f.api.installedUpdate).mockResolvedValueOnce(view);
+      const result = await c.setInstallOnQuitPreference(true);
+      expect(result).toEqual({ id: "update-install-on-quit", state, code });
+      expect(c.getSnapshot().intents["update-install-on-quit"]).toBe(result);
+      if (state === "unknown") {
+        f.emit("update", on);
+        await c.refresh();
+        expect(await c.setInstallOnQuitPreference(false)).toBe(result);
+        expect(c.getSnapshot().intents["update-install-on-quit"]).toBe(result);
+      }
+      expect(f.api.installedUpdate).toHaveBeenCalledExactlyOnceWith({
+        kind: "set-install-on-quit-preference",
+        enabled: true,
+      });
+      c.dispose();
+    },
+  );
+
+  it("keeps a newer observed choice when an older command acknowledgement arrives", async () => {
+    const { f, c } = await controller();
+    const waiting = deferred<unknown>();
+    vi.mocked(f.api.installedUpdate).mockReturnValueOnce(waiting.promise);
+    const result = c.setInstallOnQuitPreference(true);
+    await vi.waitFor(() =>
+      expect(f.api.installedUpdate).toHaveBeenCalledTimes(1),
+    );
+    f.emit("update", { ...off, checkedAt: 10 });
+    waiting.resolve(on);
+    expect((await result).state).toBe("applied");
+    expect(c.getSnapshot().update).toEqual({ ...off, checkedAt: 10 });
+    c.dispose();
+  });
+
+  it.each<WindowSnapshot["update"]>([
+    { phase: "unavailable", code: "UPDATE_NOT_INSTALLED" },
+    {
+      phase: "idle",
+      checkedAt: null,
+      blockedBy: "UPDATE_BROWSER_STATE_UNKNOWN",
+    },
+    { phase: "checking" },
+    { phase: "downloading" },
+    { phase: "applying", version: "0.2.1" },
+    { phase: "recovery", version: "0.2.1", blockedBy: null },
+    {
+      phase: "ready",
+      version: "0.2.1",
+      deferred: false,
+      blockedBy: "UPDATE_BROWSER_STATE_UNKNOWN",
+    },
+    {
+      phase: "failed",
+      code: "UPDATE_HANDOFF_UNKNOWN",
+      recoveryRequired: false,
+    },
+    {
+      phase: "failed",
+      code: "UPDATE_CHECKSUM_MISMATCH",
+      recoveryRequired: true,
+    },
+  ])(
+    "refuses quit changes during unsafe update phase $phase",
+    async (update) => {
+      const { f, c } = await controller();
+      f.emit("update", {
+        ...update,
+        installOnQuitPreference: off.installOnQuitPreference,
+      });
+      expect(canSetInstallOnQuitPreference(c.getSnapshot(), c)).toBe(false);
+      expect((await c.setInstallOnQuitPreference(true)).state).toBe("refused");
+      expect(f.api.installedUpdate).not.toHaveBeenCalled();
+      c.dispose();
+    },
+  );
+
+  it.each<WindowSnapshot["update"]>([
+    {
+      phase: "applying",
+      version: "0.2.1",
+      installOnQuitPreference: {
+        status: "confirmed",
+        scope: "install-on-normal-quit",
+        enabled: false,
+      },
+    },
+    { ...off, blockedBy: "UPDATE_BROWSER_STATE_UNKNOWN" },
+    {
+      ...off,
+      installOnQuitPreference: {
+        status: "blocked",
+        enabled: false,
+        code: "UPDATE_QUIT_PREFERENCE_UNREADABLE",
+      },
+    },
+    {
+      ...off,
+      installOnQuitPreference: {
+        status: "unknown",
+        enabled: false,
+        code: "UPDATE_QUIT_PREFERENCE_OUTCOME_UNKNOWN",
+      },
+    },
+  ])(
+    "refuses a new admission fence during digest before any quit preference effect: %j",
+    async (update) => {
+      const { f, c } = await controller();
+      const digest = deferred<ArrayBuffer>();
+      const binding = vi
+        .spyOn(crypto.subtle, "digest")
+        .mockReturnValueOnce(digest.promise);
+      try {
+        const original = c.setInstallOnQuitPreference(true);
+        expect(c.getSnapshot().intents["update-install-on-quit"]?.state).toBe(
+          "pending",
+        );
+        f.emit("update", update);
+        digest.resolve(new ArrayBuffer(32));
+        expect(await original).toEqual({
+          id: "update-install-on-quit",
+          state: "refused",
+          code: "UPDATE_QUIT_PREFERENCE_UNAVAILABLE",
+        });
+        expect(f.api.installedUpdate).not.toHaveBeenCalled();
+        expect(c.getSnapshot().update).toEqual(update);
+      } finally {
+        binding.mockRestore();
+        c.dispose();
+      }
+    },
+  );
+
+  it("keeps observation and the separate download choice available after an unknown quit write", async () => {
+    const { f, c } = await controller();
+    vi.mocked(f.api.installedUpdate).mockRejectedValueOnce(
+      new Error("reply lost"),
+    );
+    const original = await c.setInstallOnQuitPreference(true);
+    expect(original.state).toBe("unknown");
+    f.emit("update", off);
+    vi.mocked(f.api.installedUpdate).mockResolvedValueOnce({
+      ...off,
+      automaticUpdatePreference: { status: "confirmed", enabled: true },
+    });
+    expect((await c.setAutomaticDownloads(true)).state).toBe("applied");
+    expect(c.getSnapshot().intents["update-install-on-quit"]).toBe(original);
+    expect(c.getSnapshot().update.installOnQuitPreference).toEqual(
+      off.installOnQuitPreference,
+    );
+    expect(f.api.installedUpdate).toHaveBeenCalledTimes(2);
+    expect(f.api.installedUpdate).not.toHaveBeenCalledWith({ kind: "restart" });
+    c.dispose();
+  });
+});
 function sectionIntent(section = "settings", sequence = 1, taskId = "") {
   return {
     action: "navigate-section",
