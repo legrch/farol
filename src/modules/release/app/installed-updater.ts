@@ -112,6 +112,7 @@ export class InstalledUpdater {
     null;
   private initialized = false;
   private busy = false;
+  private scheduledChecking = false;
   private lastCheck: number | null = null;
   private closed = false;
   private rollbackVersion: string | undefined;
@@ -414,6 +415,32 @@ export class InstalledUpdater {
       this.finish();
       if (!this.closed && this.ports.readAutomaticUpdatePreference)
         this.ports.publish(this.snapshot());
+    }
+  }
+
+  /** Timer entry point: discover, then retain an eligible update when opted in. */
+  async scheduledCheck(): Promise<void> {
+    if (this.scheduledChecking || !this.canPrepare()) return;
+    this.scheduledChecking = true;
+    const preference = this.automaticPreference;
+    const previousCandidate = this.available;
+    try {
+      await this.check();
+      // A throttled/busy check must not download an earlier manual candidate.
+      // Re-read the choice after discovery: OFF or an unsettled write fences
+      // automatic effects even if this tick began with a confirmed opt-in.
+      if (
+        preference.status === "confirmed" &&
+        preference.enabled &&
+        this.automaticPreference.status === "confirmed" &&
+        this.automaticPreference.enabled &&
+        this.available !== previousCandidate &&
+        this.view.phase === "available" &&
+        !this.view.deferred
+      )
+        await this.download();
+    } finally {
+      this.scheduledChecking = false;
     }
   }
 

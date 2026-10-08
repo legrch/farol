@@ -1175,8 +1175,316 @@ describe("automatic update preference (ports only; no automatic release acceptan
           enabled: choice,
         })),
     };
-    return { ports, updater: new InstalledUpdater(ports) };
+    return {
+      ports,
+      updater: new InstalledUpdater(ports),
+      advance: base.advance,
+    };
   }
+
+  it.each([false, true])(
+    "scheduled checks discover with automatic=%s and download only for ON",
+    async (enabled) => {
+      const { updater, ports, advance } = preferenceFixture(enabled);
+      await updater.initialize();
+      await updater.scheduledCheck();
+      expect(ports.discover).toHaveBeenCalledTimes(1);
+      expect(ports.download).toHaveBeenCalledTimes(enabled ? 1 : 0);
+      expect(ports.retain).toHaveBeenCalledTimes(enabled ? 1 : 0);
+      expect(updater.snapshot().phase).toBe(enabled ? "ready" : "available");
+      await updater.scheduledCheck();
+      advance(UPDATE_RECHECK_MS);
+      await updater.scheduledCheck();
+      expect(ports.discover).toHaveBeenCalledTimes(enabled ? 1 : 2);
+      expect(ports.download).toHaveBeenCalledTimes(enabled ? 1 : 0);
+      expect(ports.restart).not.toHaveBeenCalled();
+      expect(ports.restore).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps transitional callers without a preference port check-only", async () => {
+    const { updater, ports } = fixture();
+    await updater.initialize();
+    await updater.scheduledCheck();
+    expect(ports.discover).toHaveBeenCalledTimes(1);
+    expect(ports.download).not.toHaveBeenCalled();
+  });
+
+  it("does not download a throttled manual candidate or dispatch on opt-in alone", async () => {
+    const { updater, ports, advance } = preferenceFixture();
+    await updater.initialize();
+    await updater.check(true);
+    await updater.setAutomaticUpdatePreference(true);
+    await updater.scheduledCheck();
+    expect(ports.discover).toHaveBeenCalledTimes(1);
+    expect(ports.download).not.toHaveBeenCalled();
+    advance(UPDATE_RECHECK_MS);
+    await updater.scheduledCheck();
+    expect(ports.discover).toHaveBeenCalledTimes(2);
+    expect(ports.download).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves Later and downloads a newly discovered version", async () => {
+    const { updater, ports, advance } = preferenceFixture(true);
+    ports.discover.mockResolvedValue({
+      ok: true,
+      available: true,
+      version: staged.manifest.version,
+      buildId: staged.manifest.buildId,
+      deferred: true,
+    });
+    await updater.initialize();
+    await updater.scheduledCheck();
+    expect(updater.snapshot()).toMatchObject({
+      phase: "available",
+      deferred: true,
+    });
+    expect(ports.download).not.toHaveBeenCalled();
+    const newer = {
+      ...staged,
+      manifest: {
+        ...staged.manifest,
+        version: "0.1.0-owner.beta.3",
+        buildId: "8".repeat(64),
+      },
+    };
+    ports.discover.mockResolvedValue({
+      ok: true,
+      available: true,
+      version: newer.manifest.version,
+      buildId: newer.manifest.buildId,
+      deferred: false,
+    });
+    ports.download.mockResolvedValue({ ok: true, update: newer });
+    advance(UPDATE_RECHECK_MS);
+    await updater.scheduledCheck();
+    expect(ports.retain).toHaveBeenCalledExactlyOnceWith(newer);
+    expect(updater.snapshot()).toMatchObject({
+      phase: "ready",
+      version: newer.manifest.version,
+    });
+  });
+
+  it.each([
+    "absent",
+    "offline",
+    "known-download",
+    "unknown-download",
+    "unknown-retain",
+    "changed",
+  ])(
+    "preserves scheduled %s classification and does not overlap or retry uncertainty",
+    async (fault) => {
+      const { updater, ports, advance } = preferenceFixture(true);
+      if (fault === "absent")
+        ports.discover.mockResolvedValue({ ok: true, available: false });
+      if (fault === "offline")
+        ports.discover.mockResolvedValue({ ok: false, code: "UPDATE_OFFLINE" });
+      if (fault === "known-download")
+        ports.download.mockResolvedValue({
+          ok: false,
+          code: "UPDATE_CHECKSUM_MISMATCH",
+        });
+      if (fault === "unknown-download")
+        ports.download.mockRejectedValue(new Error("lost staging ACK"));
+      if (fault === "unknown-retain")
+        ports.retain.mockRejectedValue(new Error("lost retention ACK"));
+      if (fault === "changed")
+        ports.download.mockResolvedValue({
+          ok: true,
+          update: {
+            ...staged,
+            manifest: { ...staged.manifest, buildId: "8".repeat(64) },
+          },
+        });
+      await updater.initialize();
+      await updater.scheduledCheck();
+      const expectedCode = {
+        absent: null,
+        offline: "UPDATE_OFFLINE",
+        "known-download": "UPDATE_CHECKSUM_MISMATCH",
+        "unknown-download": "UPDATE_STAGING_OUTCOME_UNKNOWN",
+        "unknown-retain": "UPDATE_STAGING_OUTCOME_UNKNOWN",
+        changed: "UPDATE_CANDIDATE_CHANGED",
+      }[fault];
+      const fenced = ["unknown-download", "unknown-retain", "changed"].includes(
+        fault,
+      );
+      expect(updater.snapshot()).toMatchObject(
+        expectedCode === null
+          ? { phase: "idle" }
+          : { phase: "failed", code: expectedCode, recoveryRequired: fenced },
+      );
+      await updater.scheduledCheck();
+      expect(ports.discover).toHaveBeenCalledTimes(1);
+      advance(UPDATE_RECHECK_MS);
+      await updater.scheduledCheck();
+      expect(ports.discover).toHaveBeenCalledTimes(fenced ? 1 : 2);
+      expect(ports.download).toHaveBeenCalledTimes(
+        ["absent", "offline"].includes(fault) ? 0 : fenced ? 1 : 2,
+      );
+      expect(ports.restart).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["off", "writing", "unknown"])(
+    "rechecks preference %s after pending discovery",
+    async (choice) => {
+      const { updater, ports } = preferenceFixture(true);
+      const found = await ports.discover();
+      ports.discover.mockClear();
+      let complete!: (value: typeof found) => void;
+      ports.discover.mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            complete = resolve;
+          }),
+      );
+      await updater.initialize();
+      const checking = updater.scheduledCheck();
+      await vi.waitFor(() => expect(ports.discover).toHaveBeenCalledTimes(1));
+      let finishWrite!: (value: {
+        status: "confirmed";
+        enabled: boolean;
+      }) => void;
+      if (choice === "writing")
+        ports.writeAutomaticUpdatePreference.mockImplementation(
+          () =>
+            new Promise((resolve) => {
+              finishWrite = resolve;
+            }),
+        );
+      if (choice === "unknown")
+        ports.writeAutomaticUpdatePreference.mockRejectedValue(
+          new Error("lost ACK"),
+        );
+      const writing = updater.setAutomaticUpdatePreference(false);
+      if (choice !== "writing") await writing;
+      complete(found);
+      await checking;
+      expect(ports.download).not.toHaveBeenCalled();
+      if (choice === "writing") {
+        finishWrite({ status: "confirmed", enabled: false });
+        await writing;
+      }
+      await updater.close();
+    },
+  );
+
+  it("does not act on an opt-in that settles during an OFF tick", async () => {
+    const { updater, ports } = preferenceFixture();
+    await updater.initialize();
+    ports.discover.mockImplementation(async () => {
+      await updater.setAutomaticUpdatePreference(true);
+      return {
+        ok: true,
+        available: true,
+        version: staged.manifest.version,
+        buildId: staged.manifest.buildId,
+        deferred: false,
+      };
+    });
+    await updater.scheduledCheck();
+    expect(ports.download).not.toHaveBeenCalled();
+  });
+
+  it("ignores uninitialized, busy and reentrant ticks without duplicating download", async () => {
+    const { updater, ports } = preferenceFixture(true);
+    await updater.scheduledCheck();
+    expect(ports.discover).not.toHaveBeenCalled();
+    const initializing = updater.initialize();
+    await updater.scheduledCheck();
+    await initializing;
+    let complete!: (value: { ok: true; update: ReadyUpdate }) => void;
+    ports.download.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          complete = resolve;
+        }),
+    );
+    ports.publish.mockImplementation(() => {
+      void updater.scheduledCheck();
+    });
+    const checking = updater.scheduledCheck();
+    await updater.scheduledCheck();
+    await vi.waitFor(() => expect(ports.download).toHaveBeenCalledTimes(1));
+    await Promise.all([
+      updater.scheduledCheck(),
+      updater.check(true),
+      updater.download(),
+      updater.skip(),
+      updater.later(),
+    ]);
+    complete({ ok: true, update: staged });
+    await checking;
+    expect(ports.discover).toHaveBeenCalledTimes(1);
+    expect(ports.download).toHaveBeenCalledTimes(1);
+    expect(ports.retain).toHaveBeenCalledExactlyOnceWith(staged);
+    expect(ports.skip).not.toHaveBeenCalled();
+    expect(ports.defer).not.toHaveBeenCalled();
+  });
+
+  it.each(["publication", "discovery", "download", "retention"])(
+    "closes and drains scheduled %s without a late effect or publication",
+    async (stage) => {
+      const { updater, ports } = preferenceFixture(true);
+      await updater.initialize();
+      let complete!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        complete = resolve;
+      });
+      if (stage === "discovery")
+        ports.discover.mockImplementation(async () => {
+          await gate;
+          return {
+            ok: true,
+            available: true,
+            version: staged.manifest.version,
+            buildId: staged.manifest.buildId,
+            deferred: false,
+          };
+        });
+      if (stage === "download")
+        ports.download.mockImplementation(async () => {
+          await gate;
+          return { ok: true, update: staged };
+        });
+      if (stage === "retention")
+        ports.retain.mockImplementation(async () => {
+          await gate;
+        });
+      const checking = updater.scheduledCheck();
+      if (stage !== "publication")
+        await vi.waitFor(() =>
+          expect(
+            ports[
+              stage === "discovery"
+                ? "discover"
+                : stage === "download"
+                  ? "download"
+                  : "retain"
+            ],
+          ).toHaveBeenCalledTimes(1),
+        );
+      const closed = vi.fn();
+      const closing = updater.close().then(closed);
+      const publications = ports.publish.mock.calls.length;
+      await Promise.resolve();
+      expect(closed).not.toHaveBeenCalled();
+      complete();
+      await Promise.all([checking, closing]);
+      await updater.scheduledCheck();
+      expect(ports.publish).toHaveBeenCalledTimes(publications);
+      expect(ports.download).toHaveBeenCalledTimes(
+        ["download", "retention"].includes(stage) ? 1 : 0,
+      );
+      expect(ports.retain).toHaveBeenCalledTimes(
+        ["download", "retention"].includes(stage) ? 1 : 0,
+      );
+      expect(ports.cancelPending).toHaveBeenCalledTimes(1);
+      expect(ports.restart).not.toHaveBeenCalled();
+    },
+  );
 
   it("strictly parses commands, preference states and exact ACKs", () => {
     expect(

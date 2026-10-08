@@ -993,6 +993,12 @@ export type InstalledUpdateRuntimeOptions = Readonly<{
   publish(view: InstalledUpdateView): void;
 }>;
 
+/**
+ * Returns the single release owner. After initialize(), composition uses
+ * scheduledCheck() for startup/periodic checks and check(true) for explicit
+ * checks. Scheduling never applies an update or requests Quit; close() drains
+ * any download/retention already dispatched by that owner.
+ */
 export async function createInstalledUpdateRuntime(
   options: InstalledUpdateRuntimeOptions,
 ): Promise<InstalledUpdater | null> {

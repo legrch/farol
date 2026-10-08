@@ -4120,6 +4120,184 @@ describe("automatic update preference (disposable files; native/provider ports d
   });
   const confirmed = (enabled: boolean) => ({ status: "confirmed", enabled });
 
+  it("scheduled default OFF discovers without allocating a download or preference record", async () => {
+    const controller = (await createInstalledUpdateRuntime(options()))!;
+    await controller.initialize();
+    await Promise.all([
+      controller.scheduledCheck(),
+      controller.scheduledCheck(),
+    ]);
+    expect(controller.snapshot()).toMatchObject({
+      phase: "available",
+      automaticUpdatePreference: confirmed(false),
+    });
+    expect(mocks.discover).toHaveBeenCalledTimes(1);
+    expect(mocks.download).not.toHaveBeenCalled();
+    for (const file of [
+      preferenceFile(),
+      ready,
+      path.join(userData, "installed-updates/download-pending.json"),
+    ])
+      await expect(fs.lstat(file)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(mocks.helper).not.toHaveBeenCalled();
+    expect(quit).not.toHaveBeenCalled();
+    await controller.close();
+  });
+
+  it("scheduled persisted ON retains the verified archive once and restores Ready on reopen", async () => {
+    const selected = options();
+    const controller = (await createInstalledUpdateRuntime(selected))!;
+    await controller.initialize();
+    await controller.setAutomaticUpdatePreference(true);
+    await controller.close();
+    const reopened = (await createInstalledUpdateRuntime(selected))!;
+    await reopened.initialize();
+    await Promise.all([reopened.scheduledCheck(), reopened.scheduledCheck()]);
+    expect(reopened.snapshot()).toMatchObject({
+      phase: "ready",
+      version: manifest.version,
+      automaticUpdatePreference: confirmed(true),
+    });
+    expect(JSON.parse(await fs.readFile(ready, "utf8"))).toMatchObject({
+      schema: "farol.ready-update/1",
+      handle: path.join(root, "archive.zip"),
+      manifest,
+      operation: null,
+    });
+    await expect(
+      fs.lstat(path.join(userData, "installed-updates/download-pending.json")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+    await reopened.scheduledCheck();
+    await reopened.close();
+    const restored = (await createInstalledUpdateRuntime(selected))!;
+    await restored.initialize();
+    await restored.scheduledCheck();
+    expect(restored.snapshot()).toMatchObject({
+      phase: "ready",
+      deferred: true,
+    });
+    expect(mocks.discover).toHaveBeenCalledTimes(1);
+    expect(mocks.download).toHaveBeenCalledTimes(1);
+    expect(mocks.helper).not.toHaveBeenCalled();
+    expect(quit).not.toHaveBeenCalled();
+    await restored.close();
+  });
+
+  it.each(["skip", "later"] as const)(
+    "scheduled ON respects persisted %s and downloads a newer candidate",
+    async (choice) => {
+      const controller = (await createInstalledUpdateRuntime(options()))!;
+      await controller.initialize();
+      await controller.setAutomaticUpdatePreference(true);
+      await controller.check(true);
+      await controller[choice]();
+      const legacy = path.join(userData, "installed-updates/preferences.json");
+      const preferenceBytes = await fs.readFile(legacy, "utf8");
+      await controller.close();
+      const reopened = (await createInstalledUpdateRuntime(options()))!;
+      await reopened.initialize();
+      await reopened.scheduledCheck();
+      expect(reopened.snapshot()).toMatchObject(
+        choice === "skip"
+          ? { phase: "idle" }
+          : { phase: "available", deferred: true },
+      );
+      expect(mocks.download).not.toHaveBeenCalled();
+      expect(await fs.readFile(legacy, "utf8")).toBe(preferenceBytes);
+      await reopened.close();
+
+      const newer = {
+        ...manifest,
+        version: "0.1.2-owner.beta.1",
+        buildId: "8".repeat(64),
+      };
+      mocks.discover.mockResolvedValue({
+        ok: true,
+        value: { manifest: newer },
+      });
+      mocks.download.mockResolvedValue({
+        ok: true,
+        value: {
+          handle: path.join(root, "archive.zip"),
+          manifest: newer,
+          identity: { ...newer, updateChannel: "github-owner-beta" },
+          stagedAppPath: staging,
+          stagingRoot: path.dirname(staging),
+        },
+      });
+      const next = (await createInstalledUpdateRuntime(options()))!;
+      await next.initialize();
+      await next.scheduledCheck();
+      expect(next.snapshot()).toMatchObject({
+        phase: "ready",
+        version: newer.version,
+      });
+      expect(JSON.parse(await fs.readFile(ready, "utf8"))).toMatchObject({
+        manifest: newer,
+      });
+      expect(await fs.readFile(legacy, "utf8")).toBe(preferenceBytes);
+      expect(mocks.download).toHaveBeenCalledTimes(1);
+      expect(mocks.helper).not.toHaveBeenCalled();
+      expect(quit).not.toHaveBeenCalled();
+      await next.close();
+    },
+  );
+
+  it.each(["offline", "known", "unknown"])(
+    "scheduled ON preserves %s failures and durable uncertainty",
+    async (fault) => {
+      const controller = (await createInstalledUpdateRuntime(options()))!;
+      await controller.initialize();
+      await controller.setAutomaticUpdatePreference(true);
+      if (fault === "offline")
+        mocks.discover.mockResolvedValue({ ok: false, code: "offline" });
+      if (fault === "known")
+        mocks.download.mockResolvedValue({
+          ok: false,
+          code: "checksum_mismatch",
+        });
+      if (fault === "unknown")
+        mocks.download.mockRejectedValue(new Error("lost staging ACK"));
+      await controller.scheduledCheck();
+      const code =
+        fault === "offline"
+          ? "UPDATE_OFFLINE"
+          : fault === "known"
+            ? "UPDATE_CHECKSUM_MISMATCH"
+            : "UPDATE_STAGING_OUTCOME_UNKNOWN";
+      expect(controller.snapshot()).toMatchObject({
+        phase: "failed",
+        code,
+        recoveryRequired: fault === "unknown",
+      });
+      await controller.scheduledCheck();
+      const pending = path.join(
+        userData,
+        "installed-updates/download-pending.json",
+      );
+      if (fault === "unknown") await fs.access(pending);
+      else
+        await expect(fs.lstat(pending)).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+      await controller.close();
+      if (fault === "unknown") {
+        const reopened = (await createInstalledUpdateRuntime(options()))!;
+        await reopened.initialize();
+        await reopened.scheduledCheck();
+        expect(reopened.snapshot()).toMatchObject({
+          phase: "failed",
+          recoveryRequired: true,
+        });
+        await reopened.close();
+      }
+      expect(mocks.discover).toHaveBeenCalledTimes(1);
+      expect(mocks.download).toHaveBeenCalledTimes(fault === "offline" ? 0 : 1);
+      expect(mocks.helper).not.toHaveBeenCalled();
+      expect(quit).not.toHaveBeenCalled();
+    },
+  );
+
   it("defaults OFF without creating a record, persists both choices and reopens", async () => {
     const controller = (await createInstalledUpdateRuntime(options()))!;
     await controller.initialize();
