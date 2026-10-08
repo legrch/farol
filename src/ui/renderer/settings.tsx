@@ -1631,6 +1631,27 @@ function Connection({
   const connector = settings.connectors.secureMcp;
   const setup = computerSetup(snapshot);
   const externalChallenge = setup.externalChallenge;
+  const connectorName = snapshot.environment === "dev" ? "Farol Dev" : "Farol";
+  const [copiedVerification, setCopiedVerification] = useState<string | null>(
+    null,
+  );
+  const [copyError, setCopyError] = useState<string | null>(null);
+  const verificationIdentity = externalChallenge
+    ? JSON.stringify([
+        externalChallenge.tunnelId,
+        externalChallenge.workspaceId,
+        externalChallenge.value,
+      ])
+    : null;
+  const verificationRequest = externalChallenge
+    ? `Please use the ${connectorName} connector to call ` +
+      "farol_next_connector_verify exactly once with " +
+      JSON.stringify({
+        challenge: externalChallenge.value,
+        workspaceId: externalChallenge.workspaceId,
+      }) +
+      ". Report the result; do not write files."
+    : null;
   const [tunnelId, setTunnelId] = useState(connector.tunnelId ?? "");
   const [key, setKey] = useState("");
   const [keyVisible, setKeyVisible] = useState(false);
@@ -1921,9 +1942,19 @@ function Connection({
       <div hidden={setupStep !== undefined && setupStep !== "attachment"}>
         <Group title="Add to ChatGPT">
           <p className="description">
-            Attach your tunnel in ChatGPT. The runtime key stays in Farol.
-            Checking the local connection does not prove attachment.
+            Attach this {connectorName} connection in ChatGPT, then ask ChatGPT
+            to verify it. Farol never sends the request for you.
           </p>
+          <ol className="attachment-steps">
+            <li>
+              Open Tunnels in ChatGPT and attach this {connectorName}
+              connection.
+            </li>
+            <li>
+              Copy the current verification request and send it in ChatGPT.
+            </li>
+            <li>Return here to check the recorded attachment result.</li>
+          </ol>
           <div className="control-row">
             <Command
               actions={actions}
@@ -1946,31 +1977,70 @@ function Connection({
               className="connector-challenge"
               data-connector-challenge="pending"
             >
-              <strong>Verify from external ChatGPT</strong>
-              <p>
-                Attach tunnel {externalChallenge.tunnelId} in ChatGPT Settings.
-                Ask the connector to call farol_next_connector_verify once with:
-              </p>
-              <dl>
-                <div>
-                  <dt>challenge</dt>
-                  <dd>
-                    <code>{externalChallenge.value}</code>
-                  </dd>
-                </div>
-                <div>
-                  <dt>workspaceId</dt>
-                  <dd>
-                    <code>{externalChallenge.workspaceId}</code>
-                  </dd>
-                </div>
-              </dl>
-              <p>Verified folder: {externalChallenge.root}</p>
-              <small>
-                The one-time check lists only the approved workspace root and
-                returns counts, never names or file contents. Then press Check
-                attachment.
-              </small>
+              <button
+                type="button"
+                className="primary"
+                onClick={async () => {
+                  // Copy is the owner's explicit local action. It neither
+                  // submits a provider message nor changes connector state.
+                  try {
+                    if (!navigator.clipboard?.writeText)
+                      throw new Error("CLIPBOARD_UNAVAILABLE");
+                    await navigator.clipboard.writeText(verificationRequest!);
+                    setCopiedVerification(verificationIdentity);
+                    setCopyError(null);
+                  } catch {
+                    setCopiedVerification(null);
+                    setCopyError(verificationIdentity);
+                  }
+                }}
+              >
+                Copy verification request
+              </button>
+              {copiedVerification === verificationIdentity && (
+                <p className="description" role="status">
+                  Copied. Paste the request in ChatGPT; Farol has not sent it.
+                </p>
+              )}
+              {copyError === verificationIdentity && (
+                <p className="notice" role="status">
+                  Copy was unavailable. Open Technical details to select the
+                  current request manually.
+                </p>
+              )}
+              <details className="attachment-technical">
+                <summary>Technical details</summary>
+                <p>
+                  Attach tunnel {externalChallenge.tunnelId} in ChatGPT
+                  Settings.
+                </p>
+                <p>Verified workspace: {externalChallenge.root}</p>
+                <p>
+                  Ask the connector to call farol_next_connector_verify once
+                  with:
+                </p>
+                <pre className="attachment-request">
+                  <code>{verificationRequest}</code>
+                </pre>
+                <dl>
+                  <div>
+                    <dt>challenge</dt>
+                    <dd>
+                      <code>{externalChallenge.value}</code>
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>workspaceId</dt>
+                    <dd>
+                      <code>{externalChallenge.workspaceId}</code>
+                    </dd>
+                  </div>
+                </dl>
+                <small>
+                  The check lists only the approved root and returns counts,
+                  never names or file contents.
+                </small>
+              </details>
             </div>
           )}
           <p className="badges" role="status">

@@ -633,6 +633,25 @@ kbd {
   flex-wrap: wrap;
   margin: 14px 0;
 }
+.attachment-steps {
+  display: grid;
+  gap: 8px;
+  padding-inline-start: 22px;
+  margin: 18px 0;
+}
+.attachment-technical {
+  margin-top: 18px;
+  color: var(--muted);
+}
+.attachment-technical summary {
+  cursor: pointer;
+  color: var(--accent);
+}
+.attachment-request {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
 .primary {
   color: var(--sheet);
   background: var(--accent);

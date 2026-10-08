@@ -2410,10 +2410,10 @@ describe("Computer-first setup and explicit reconnect", () => {
     ProductSettingsSchema.parse(value);
     const h = await mount("diagnostics", value);
     expect(h.c.getSnapshot().configuration?.status).toBe("ready");
-    expect(h.host.textContent).toContain("Verify from external ChatGPT");
+    expect(h.host.textContent).toContain("Copy verification request");
     const card = h.host.querySelector("[data-connector-challenge]");
-    expect(card?.querySelectorAll("code")[0]?.textContent).toBe(selectionId);
-    expect(card?.querySelectorAll("code")[1]?.textContent).toBe(workspaceId);
+    expect(card?.querySelectorAll("dl code")[0]?.textContent).toBe(selectionId);
+    expect(card?.querySelectorAll("dl code")[1]?.textContent).toBe(workspaceId);
     expect(card?.textContent).toContain("/approved/project");
     expect(card?.textContent).not.toContain("/other/folder");
     for (const page of ["folders", "computer", "connection"] as const)
@@ -3046,7 +3046,10 @@ describe("review regressions: retained action origins and exact edit delivery", 
     const h = await mount("connection", value);
     const attachment = () =>
       activePage(h.host).querySelector('[aria-label="Add to ChatGPT"]')!;
-    expect(attachment().querySelector("details")).toBeNull();
+    expect(attachment().querySelector("details summary")?.textContent).toBe(
+      "Technical details",
+    );
+    expect(h.button("Copy verification request").disabled).toBe(false);
     expect(attachment().textContent).toContain("farol_next_connector_verify");
     expect(attachment().textContent).toContain(workspaceId);
     expect(attachment().textContent).toContain(selectionId);
@@ -3064,6 +3067,65 @@ describe("review regressions: retained action origins and exact edit delivery", 
     );
     expect(h.calls()).toEqual([{ kind: "connector.check-attachment" }]);
     expect(activePage(h.host).textContent).not.toContain("Check account");
+  });
+  it("copies only the current external request on a click without submitting it", async () => {
+    const value = connectionSettings();
+    value.setup.connect.verified = null;
+    value.connectors.secureMcp.attachment = null;
+    const original = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    try {
+      const h = await mount("connection", value, "dev");
+      expect(h.host.textContent).toContain("Attach this Farol Dev connection");
+      expect(h.host.textContent).not.toContain("Copied. Paste the request");
+      await h.click("Copy verification request");
+      expect(writeText).toHaveBeenCalledTimes(1);
+      const request = writeText.mock.calls[0]![0] as string;
+      expect(request).toContain("Farol Dev connector");
+      expect(request).toContain("farol_next_connector_verify exactly once");
+      expect(request).toContain(
+        JSON.stringify({
+          challenge: selectionId,
+          workspaceId,
+        }),
+      );
+      expect(request).not.toContain("owner-tunnel");
+      expect(h.host.textContent).toContain("Copied. Paste the request");
+      expect(h.calls()).toEqual([]);
+      await h.pageTo("general");
+      await h.pageTo("connection");
+      expect(writeText).toHaveBeenCalledTimes(1);
+      expect(h.calls()).toEqual([]);
+    } finally {
+      if (original) Object.defineProperty(navigator, "clipboard", original);
+      else Reflect.deleteProperty(navigator, "clipboard");
+    }
+  });
+  it("keeps a manual current request available when clipboard access fails", async () => {
+    const value = connectionSettings();
+    value.setup.connect.verified = null;
+    value.connectors.secureMcp.attachment = null;
+    const original = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: vi.fn().mockRejectedValue(new Error("denied")) },
+    });
+    try {
+      const h = await mount("connection", value, "dev");
+      await h.click("Copy verification request");
+      expect(h.host.textContent).toContain("Copy was unavailable");
+      expect(
+        h.host.querySelector(".attachment-request")?.textContent,
+      ).toContain(selectionId);
+      expect(h.calls()).toEqual([]);
+    } finally {
+      if (original) Object.defineProperty(navigator, "clipboard", original);
+      else Reflect.deleteProperty(navigator, "clipboard");
+    }
   });
 });
 
