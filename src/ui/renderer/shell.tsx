@@ -682,8 +682,8 @@ function Update({
       {(("notice" in update && update.notice?.blockedBy) ||
         snapshot.intents["update-notice"]?.state === "unknown") && (
         <p role="alert">
-          Saved update notices could not be confirmed. Update actions are
-          paused; do not retry the notice acknowledgement.
+          Saved update notices could not be confirmed. Do not retry the notice
+          acknowledgement. Update actions retain their separate safety checks.
         </p>
       )}
       {intent?.state === "unknown" && (

@@ -196,6 +196,12 @@ it("a known preference refusal keeps the notice visible and remains inspectable 
   expect(host.querySelector("dialog")?.textContent).toContain(
     "Saved update notices could not be confirmed",
   );
+  expect(host.querySelector("dialog")?.textContent).toContain(
+    "Update actions retain their separate safety checks",
+  );
+  expect(host.querySelector("dialog")?.textContent).not.toContain(
+    "Update actions are paused",
+  );
   expect(button(host, "Download Update").disabled).toBe(false);
   expect(f.api.installedUpdate).toHaveBeenCalledTimes(1);
 });
