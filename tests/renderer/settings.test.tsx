@@ -454,6 +454,9 @@ describe("compact workspace detail", () => {
       expect(h.button("Verify workspace").disabled).toBe(true);
       await act(async () => wait.reject(new Error("private lost reply")));
       expect(status(h).textContent).toContain("Outcome unknown");
+      expect(
+        activePage(h.host).querySelector(".workspace-pause")?.textContent,
+      ).toContain("Workspace changes are paused");
       expect(status(h).textContent).not.toContain("Action confirmed");
       expect(status(h).textContent).not.toContain("private lost reply");
       await refresh(h, withFolder());
@@ -820,6 +823,33 @@ describe("owner-facing credential replacement", () => {
     expect((h.field("Runtime key") as HTMLInputElement).value).toBe("");
     expect((h.field("Runtime key") as HTMLInputElement).type).toBe("password");
   });
+  it.each([
+    ["CONNECTOR_CREDENTIAL_OUTCOME_UNKNOWN", "runtime key may have changed"],
+    ["SETTINGS_WRITE_FAILED", "settings write"],
+    ["CONNECTOR_RUNTIME_OUTCOME_UNKNOWN", "connection outcome is unknown"],
+  ] as const)(
+    "explains %s at the credential action without exposing or resubmitting the key",
+    async (error, message) => {
+      const h = await mount("connection");
+      await change(h.field("Tunnel ID"), "tunnel_fixture");
+      const key = "disposable-replacement-key-12345";
+      await change(h.field("Runtime key"), key);
+      const next = structuredClone(h.configuration.settings);
+      next.revision++;
+      next.setup.connect.outcomeUnknown = true;
+      vi.mocked(h.f.api.configure).mockResolvedValueOnce({
+        ok: false,
+        error,
+        snapshot: { status: "ready", settings: next },
+      });
+      await h.click("Save credentials");
+      expect(h.host.textContent).toContain(message);
+      expect(h.host.textContent).not.toContain(key);
+      expect((h.field("Runtime key") as HTMLInputElement).value).toBe("");
+      expect(h.button("Save credentials").disabled).toBe(true);
+      expect(h.calls()).toHaveLength(1);
+    },
+  );
 });
 
 // DOM/facade regressions only. Native lifecycle and external acceptance are separate.

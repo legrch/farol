@@ -134,6 +134,12 @@ function actionFeedback(
   if (result.state === "pending") return "Saving or checking…";
   if (result.code === "CONNECTOR_STOP_UNCONFIRMED")
     return "Farol could not confirm that the connection stopped. The requested change is unconfirmed. Do not repeat this action; review the existing result in Diagnostics.";
+  if (result.code === "CONNECTOR_CREDENTIAL_OUTCOME_UNKNOWN")
+    return "The runtime key may have changed. Farol has paused connection changes; inspect the existing result in Diagnostics before entering another key.";
+  if (result.code === "SETTINGS_WRITE_FAILED")
+    return "Farol could not confirm the settings write. It may already have taken effect. Check the current state and Diagnostics before another change.";
+  if (result.code === "CONNECTOR_RUNTIME_OUTCOME_UNKNOWN")
+    return "The connection outcome is unknown. Inspect its existing result in Diagnostics; Farol will not start or change it again automatically.";
   if (result.state === "unknown")
     return "Outcome unknown. Do not repeat this action; inspect the existing result in Diagnostics.";
   if (result.id.startsWith("settings:computer.apply-workspace-edit:"))
@@ -977,6 +983,11 @@ function WorkspaceDetail({
       <p className="badges">
         {checked ? "Access checked" : "Check access needed"}
       </p>
+      {actions.computerPauseReason && (
+        <p className="notice workspace-pause" role="status">
+          Workspace changes are paused. {actions.computerPauseReason}
+        </p>
+      )}
       <p className="description">
         {current
           ? "Current workspace for Connection. Verify workspace checks access without changing its binding."
@@ -1128,11 +1139,6 @@ function WorkspaceDetail({
             {actionFeedback(intent)}
           </p>
         ))}
-        {actions.computerPauseReason && (
-          <p className="description" role="status">
-            {actions.computerPauseReason}
-          </p>
-        )}
         {stopRequired && (
           <div className="workspace-stop-review">
             <p className="description">
