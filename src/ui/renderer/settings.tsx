@@ -835,6 +835,8 @@ function WorkspaceDetail({
     scope: string | null;
   } | null>(null);
   const [removal, setRemoval] = useState<{ scope: string | null } | null>(null);
+  const [stopReview, setStopReview] = useState(false);
+  const [stopResult, setStopResult] = useState<Intent | null>(null);
   const feedback = useSettingsFeedback(facade);
   const receipts = Object.values(feedback.intents).filter(
     (intent) =>
@@ -842,6 +844,10 @@ function WorkspaceDetail({
       /^settings:computer\.(?:check-folder|verify-workspace|update-access|remove-workspace):/u.test(
         intent.id,
       ),
+  );
+  const stopRequired = receipts.some(
+    (intent) =>
+      intent.state === "refused" && intent.code === "CONNECTOR_STOP_REQUIRED",
   );
   const checked = workspaceChecked(snapshot, workspace);
   const current = workspaceCurrent(snapshot, workspace);
@@ -1054,6 +1060,60 @@ function WorkspaceDetail({
           <p className="description" role="status">
             {actions.computerPauseReason}
           </p>
+        )}
+        {stopRequired && (
+          <div className="workspace-stop-review">
+            <p className="description">
+              The last access action was refused because the connection was
+              running. If it has since stopped, review and submit the change
+              again. Farol will not repeat it automatically.
+            </p>
+            {!stopReview ? (
+              <button
+                type="button"
+                className="subtle"
+                disabled={!actions.allowed("connector.stop")}
+                onClick={() => setStopReview(true)}
+              >
+                Review stop connection
+              </button>
+            ) : (
+              <div role="group" aria-label="Confirm stop connection">
+                <p className="notice">
+                  Stopping disconnects Farol from ChatGPT. Finish current work
+                  before continuing. Your workspace draft stays here; submit it
+                  separately after the stop is confirmed.
+                </p>
+                <button
+                  type="button"
+                  className="subtle"
+                  disabled={!actions.allowed("connector.stop")}
+                  onClick={() => {
+                    setStopReview(false);
+                    void actions
+                      .run({ kind: "connector.stop" })
+                      .then(setStopResult);
+                  }}
+                >
+                  Stop connection
+                </button>
+                <button
+                  type="button"
+                  className="text-button"
+                  onClick={() => setStopReview(false)}
+                >
+                  Keep connection
+                </button>
+              </div>
+            )}
+            {stopResult && (
+              <p role="status" className="notice">
+                {stopResult.state === "applied"
+                  ? "Connection stop confirmed. Review the workspace and submit its change separately."
+                  : actionFeedback(stopResult)}
+              </p>
+            )}
+          </div>
         )}
         {receipts.some(
           (intent) => intent.state === "unknown" || intent.state === "refused",

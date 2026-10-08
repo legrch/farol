@@ -311,6 +311,28 @@ describe("compact workspace detail", () => {
       { kind: "computer.verify-workspace", workspaceId: selectionId },
     ]);
   });
+  it("requires an explicit stop decision and never replays the refused workspace check", async () => {
+    const h = await mount("folders", twoWorkspaces());
+    await select(h, "second");
+    vi.mocked(h.f.api.configure).mockResolvedValueOnce({
+      ok: false,
+      error: "CONNECTOR_STOP_REQUIRED",
+      snapshot: h.configuration,
+    });
+    await h.click("Verify workspace");
+    await h.click("Review stop connection");
+    expect(h.calls()).toHaveLength(1);
+    expect(h.host.textContent).toContain("Finish current work");
+    await h.click("Keep connection");
+    expect(h.calls()).toHaveLength(1);
+    await h.click("Review stop connection");
+    await h.click("Stop connection");
+    expect(h.calls()).toEqual([
+      { kind: "computer.verify-workspace", workspaceId: selectionId },
+      { kind: "connector.stop" },
+    ]);
+    expect(h.host.textContent).toContain("submit its change separately");
+  });
   it.each([
     [
       "CONNECTOR_STOP_UNCONFIRMED",
@@ -402,7 +424,9 @@ describe("compact workspace detail", () => {
       "no longer the folder that was approved",
     );
     await select(h, "second");
-    expect(status(h).textContent).toContain("no longer the folder that was approved");
+    expect(status(h).textContent).toContain(
+      "no longer the folder that was approved",
+    );
     expect(h.calls()).toHaveLength(1);
   });
   it("selects access as a draft, cancels without a command and suppresses no-op Save", async () => {
