@@ -1615,7 +1615,6 @@ describe("bounded Settings writer", () => {
     expect(
       [...h.host.querySelectorAll("h2")].map((node) => node.textContent),
     ).toEqual([
-      "Appearance",
       "Workspaces",
       "This Mac",
       "Connection",
@@ -1666,8 +1665,18 @@ describe("bounded Settings writer", () => {
     expect(h.button("System").getAttribute("aria-pressed")).toBe("true");
     await h.click("Graphite");
     expect(h.button("Graphite").getAttribute("aria-pressed")).toBe("true");
-    await change(h.field("Accent"), "amber");
-    await change(h.field("Font"), "system");
+    const amber = h.button("Amber");
+    amber.focus();
+    await h.click("Amber");
+    expect(document.activeElement).toBe(amber);
+    expect(amber.getAttribute("aria-label")).toBe("Amber accent");
+    expect(amber.getAttribute("aria-pressed")).toBe("true");
+    expect(h.button("Iris").getAttribute("aria-pressed")).toBe("false");
+    expect(h.button("Cobalt").getAttribute("aria-pressed")).toBe("false");
+    const typeface = h.host.querySelector<HTMLSelectElement>(
+      'select[aria-label="Typeface"]',
+    )!;
+    await change(typeface, "system");
     expect(h.c.getSnapshot().appearance).toEqual({
       theme: "graphite",
       accent: "amber",
@@ -1675,6 +1684,40 @@ describe("bounded Settings writer", () => {
     });
     expect(h.calls()).toEqual([]);
   });
+  it("presents the selected Appearance controls without duplicating the toolbar title", async () => {
+    const h = await mount("appearance");
+    const page = h.host.querySelector(".appearance-page")!;
+    expect(page.querySelector("h2")).toBeNull();
+    expect(
+      [...page.querySelectorAll("h3")].map((item) => item.textContent),
+    ).toEqual(["Theme", "Accent color", "Typeface"]);
+    expect(page.textContent).toContain(
+      "System follows the appearance of your Mac.",
+    );
+    expect(page.textContent).toContain("Status stays distinct.");
+    expect(page.textContent).toContain("Changes apply immediately.");
+    expect(
+      page.querySelectorAll('.accent-choices button[type="button"]'),
+    ).toHaveLength(3);
+    expect(page.querySelectorAll(".theme-choices .theme-preview")).toHaveLength(
+      3,
+    );
+    expect(h.calls()).toEqual([]);
+  });
+  it.each(["Iris", "Cobalt", "Amber"])(
+    "keeps theme and typeface while choosing %s",
+    async (label) => {
+      const h = await mount("appearance");
+      const before = h.c.getSnapshot().appearance;
+      await h.click(label);
+      expect(h.c.getSnapshot().appearance).toEqual({
+        ...before,
+        accent: label.toLowerCase(),
+      });
+      expect(h.button(label).getAttribute("aria-pressed")).toBe("true");
+      expect(h.calls()).toEqual([]);
+    },
+  );
   it("adds only a newly evidenced native selection and starts read-only without granting access", async () => {
     const h = await mount("folders");
     vi.mocked(h.f.api.configure).mockResolvedValueOnce({

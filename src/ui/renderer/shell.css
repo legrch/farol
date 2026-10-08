@@ -826,47 +826,167 @@ kbd {
 .folder-row p {
   overflow-wrap: anywhere;
 }
-.theme-choices {
+.appearance-page {
+  --iris-swatch: #6750b8;
+  --cobalt-swatch: #315db5;
+  --amber-swatch: #8b5b1d;
+}
+.desktop[data-theme="graphite"] .appearance-page {
+  --iris-swatch: #b3a3fa;
+  --cobalt-swatch: #9ebaf2;
+  --amber-swatch: #e4bb7f;
+}
+@media (prefers-color-scheme: dark) {
+  .desktop[data-theme="system"] .appearance-page {
+    --iris-swatch: #b3a3fa;
+    --cobalt-swatch: #9ebaf2;
+    --amber-swatch: #e4bb7f;
+  }
+}
+.appearance-intro {
+  color: var(--muted);
+  margin-bottom: 28px;
+  max-width: 66ch;
+}
+.appearance-page .settings-group {
+  border-radius: 12px;
+  padding: 0 20px;
+  margin: 0 0 24px;
+}
+.appearance-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 18px 0;
+  border-bottom: 1px solid var(--line);
+}
+.appearance-row:last-child {
+  border-bottom: 0;
+}
+.appearance-copy {
+  min-width: 0;
+  max-width: 52ch;
+}
+.appearance-copy p {
+  color: var(--muted);
+  font-size: 12px;
+  margin-top: 5px;
+}
+.appearance-theme {
+  display: block;
+  padding: 22px 0;
+}
+.appearance-row .field {
+  flex-shrink: 0;
+  margin: 0;
+}
+.appearance-page .theme-choices {
   display: flex;
   gap: 14px;
-  margin: 18px 0;
+  margin-top: 17px;
 }
-.theme-choices button {
+.appearance-page .theme-choice {
   width: 118px;
   border: 1px solid var(--line);
-  background: var(--sheet);
-  padding: 8px;
+  border-radius: 9px;
+  background: none;
+  padding: 7px 7px 9px;
+  text-align: center;
+  font-size: 12px;
+  flex-shrink: 0;
 }
-.theme-choices button[aria-pressed="true"] {
-  outline: 2px solid var(--accent);
-  outline-offset: -2px;
+.appearance-page .theme-choice[aria-pressed="true"] {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
 }
-.theme-preview {
+.appearance-page .theme-preview {
   display: block;
-  height: 56px;
-  background: #f5f5f8;
-  border: 1px solid #dedee4;
-  border-left: 24px solid #e0e1e8;
+  height: 55px;
+  background: #f7f8fa;
+  border: 1px solid #0001;
+  border-radius: 4px;
+  overflow: hidden;
   margin-bottom: 7px;
   position: relative;
 }
-.theme-preview:after {
+.appearance-page .theme-preview:before {
   content: "";
-  width: 44px;
-  height: 7px;
-  background: #b9becb;
   position: absolute;
-  left: 12px;
-  top: 14px;
-  box-shadow: 0 13px #dedee5;
+  inset: 0 auto 0 0;
+  width: 25%;
+  background: #e0e2e8;
 }
-.theme-preview.graphite {
-  background: #202124;
-  border-color: #393a40;
-  border-left-color: #191a1d;
+.appearance-page .theme-preview:after {
+  content: "";
+  width: 44%;
+  height: 7px;
+  background: #babfca;
+  position: absolute;
+  left: 37%;
+  top: 25%;
+  box-shadow: 0 13px #e0e2e8;
 }
-.theme-preview.system {
-  background: linear-gradient(90deg, #f5f5f8 50%, #202124 50%);
+.appearance-page .theme-preview.graphite {
+  background: #23252a;
+}
+.appearance-page .theme-preview.graphite:before {
+  background: #191c21;
+}
+.appearance-page .theme-preview.graphite:after {
+  background: #777c8a;
+  box-shadow: 0 13px #454952;
+}
+.appearance-page .theme-preview.system {
+  background: linear-gradient(90deg, #f7f8fa 50%, #23252a 50%);
+}
+.appearance-page .accent-choices {
+  display: flex;
+  gap: 7px;
+  flex-wrap: wrap;
+  flex-shrink: 0;
+}
+.appearance-page .accent-choice {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  border: 1px solid var(--line);
+  padding: 7px 8px;
+  border-radius: 6px;
+  font-size: 11px;
+  background: none;
+  color: var(--muted);
+}
+.appearance-page .accent-choice[aria-pressed="true"] {
+  border-color: var(--accent);
+  color: var(--fg);
+}
+.appearance-page .accent-dot {
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+}
+.appearance-page .iris .accent-dot {
+  background: var(--iris-swatch);
+}
+.appearance-page .cobalt .accent-dot {
+  background: var(--cobalt-swatch);
+}
+.appearance-page .amber .accent-dot {
+  background: var(--amber-swatch);
+}
+@media (max-width: 850px) {
+  .appearance-row {
+    flex-wrap: wrap;
+  }
+}
+@media (max-width: 550px) {
+  .appearance-page .theme-choices {
+    gap: 8px;
+  }
+  .appearance-page .theme-choice {
+    width: 90px;
+  }
 }
 .native-browser-placeholder {
   padding: 24px;
@@ -1174,12 +1294,6 @@ kbd {
   }
   .phase {
     max-width: 90px;
-  }
-  .theme-choices {
-    gap: 8px;
-  }
-  .theme-choices button {
-    width: 99px;
   }
   .work-row {
     gap: 10px;

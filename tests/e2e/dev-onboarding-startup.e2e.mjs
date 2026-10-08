@@ -446,10 +446,10 @@ try {
   await settingsPage(window, "Appearance");
   await window.getByRole("button", { name: "Graphite", exact: true }).click();
   await window
-    .getByRole("combobox", { name: /^Accent\b/u })
-    .selectOption("cobalt");
+    .getByRole("button", { name: "Cobalt accent", exact: true })
+    .click();
   await window
-    .getByRole("combobox", { name: /^Font\b/u })
+    .getByRole("combobox", { name: "Typeface", exact: true })
     .selectOption("system");
   await window.waitForFunction(() => {
     const element = document.querySelector(".desktop");

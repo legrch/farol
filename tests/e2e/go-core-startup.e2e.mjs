@@ -1777,7 +1777,7 @@ async function native(selected, inputs, report, save) {
       .getByRole("button", { name: "Appearance", exact: true })
       .click({ timeout: 5000 });
     await window
-      .getByRole("heading", { name: "Appearance", exact: true, level: 2 })
+      .getByRole("region", { name: "Interface appearance", exact: true })
       .waitFor({ timeout: 5000 });
     await window
       .getByRole("button", { name: "Graphite", exact: true })

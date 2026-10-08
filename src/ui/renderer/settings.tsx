@@ -643,49 +643,86 @@ function General({ settings, actions }: PageProps) {
 }
 function AppearancePage({ snapshot, facade }: PageProps) {
   const appearance = snapshot.appearance;
+  const typefaceId = useId();
   return (
-    <>
-      <h2>Appearance</h2>
-      <Group title="Interface">
-        <div className="setting-row">Theme</div>
-        <div className="theme-choices" role="group" aria-label="Theme">
-          {(["light", "graphite", "system"] as const).map((theme) => (
-            <button
-              type="button"
-              key={theme}
-              className="theme-choice"
-              aria-pressed={appearance.theme === theme}
-              onClick={() => facade.appearance({ ...appearance, theme })}
-            >
-              <span className={`theme-preview ${theme}`} aria-hidden="true" />
-              {theme === "light"
-                ? "Light"
-                : theme === "graphite"
-                  ? "Graphite"
-                  : "System"}
-            </button>
-          ))}
+    <div className="appearance-page">
+      <p className="appearance-intro">
+        One interface, in the light that feels right for you.
+      </p>
+      <Group title="Interface appearance" showTitle={false}>
+        <div className="appearance-row appearance-theme">
+          <div className="appearance-copy">
+            <h3>Theme</h3>
+            <p>System follows the appearance of your Mac.</p>
+          </div>
+          <div className="theme-choices" role="group" aria-label="Theme">
+            {(["light", "graphite", "system"] as const).map((theme) => (
+              <button
+                type="button"
+                key={theme}
+                className="theme-choice"
+                aria-pressed={appearance.theme === theme}
+                onClick={() => facade.appearance({ ...appearance, theme })}
+              >
+                <span className={`theme-preview ${theme}`} aria-hidden="true" />
+                {theme === "light"
+                  ? "Light"
+                  : theme === "graphite"
+                    ? "Graphite"
+                    : "System"}
+              </button>
+            ))}
+          </div>
         </div>
-        <label className="setting-row">
-          Accent
-          <select
-            className="field"
-            value={appearance.accent}
-            onChange={(event) =>
-              facade.appearance({
-                ...appearance,
-                accent: event.currentTarget.value as typeof appearance.accent,
-              })
-            }
+        <div className="appearance-row">
+          <div className="appearance-copy">
+            <h3>Accent color</h3>
+            <p>
+              Highlights selection, focus and primary actions. Status stays
+              distinct.
+            </p>
+          </div>
+          <div
+            className="accent-choices"
+            role="group"
+            aria-label="Accent color"
           >
-            <option value="iris">Iris</option>
-            <option value="cobalt">Cobalt</option>
-            <option value="amber">Amber</option>
-          </select>
-        </label>
-        <label className="setting-row">
-          Font
+            {(["iris", "cobalt", "amber"] as const).map((accent) => {
+              const label =
+                accent === "iris"
+                  ? "Iris"
+                  : accent === "cobalt"
+                    ? "Cobalt"
+                    : "Amber";
+              return (
+                <button
+                  type="button"
+                  key={accent}
+                  className={`accent-choice ${accent}`}
+                  aria-label={`${label} accent`}
+                  aria-pressed={appearance.accent === accent}
+                  onClick={() => facade.appearance({ ...appearance, accent })}
+                >
+                  <span className="accent-dot" aria-hidden="true" />
+                  {label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+        <div className="appearance-row">
+          <div className="appearance-copy">
+            <h3>
+              <label htmlFor={typefaceId}>Typeface</label>
+            </h3>
+            <p>
+              Geist gives Farol a consistent voice. System follows your
+              platform.
+            </p>
+          </div>
           <select
+            id={typefaceId}
+            aria-label="Typeface"
             className="field"
             value={appearance.font}
             onChange={(event) =>
@@ -698,13 +735,12 @@ function AppearancePage({ snapshot, facade }: PageProps) {
             <option value="geist">Geist</option>
             <option value="system">System</option>
           </select>
-        </label>
-        <p className="description">
-          System follows your Mac. Appearance changes keep the same layout;
-          status colors retain their meaning.
-        </p>
+        </div>
       </Group>
-    </>
+      <p className="description">
+        Changes apply immediately. You can change them again at any time.
+      </p>
+    </div>
   );
 }
 function Folders(props: PageProps) {
