@@ -1,4 +1,5 @@
 import { connectorSetupPresentation } from "../connector-setup-presentation";
+import { ConnectionGuide } from "./connection-guide";
 import {
   defaultNavigationShortcuts,
   parseNavigationShortcuts,
@@ -2183,16 +2184,8 @@ function Connection({
             >
               Open Tunnels
             </Command>
-            <Command
-              actions={actions}
-              command={{
-                kind: "onboarding.open-help",
-                destination: "setup-guide",
-              }}
-            >
-              Connection guide
-            </Command>
           </div>
+          <ConnectionGuide />
           {externalChallenge && (
             <div
               className="connector-challenge"
@@ -2452,16 +2445,8 @@ function ConnectionDiagnostics({
             >
               Tunnel setup help
             </Command>
-            <Command
-              actions={actions}
-              command={{
-                kind: "onboarding.open-help",
-                destination: "setup-guide",
-              }}
-            >
-              Connection guide
-            </Command>
           </div>
+          <ConnectionGuide />
         </details>
       </Group>
     </>

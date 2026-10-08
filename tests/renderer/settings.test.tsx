@@ -1007,7 +1007,13 @@ describe("combined connection partial receipts", () => {
       expect(
         activePage(h.host).querySelector('input[type="password"]'),
       ).toBeNull();
-      expect(activePage(h.host).textContent).not.toContain("Computer ready");
+      const connectionBadge = activePage(h.host).querySelector(
+        'section[aria-label="This Mac connection"] .badges',
+      );
+      expect(connectionBadge).not.toBeNull();
+      expect(connectionBadge!.textContent).toBe(
+        state === "unknown" ? "Outcome unknown" : "Connection helper needed",
+      );
       vi.mocked(h.f.api.bootstrap).mockResolvedValue({
         ...bootstrap(),
         configuration: {
@@ -3632,9 +3638,9 @@ describe("review regressions: retained action origins and exact edit delivery", 
     const h = await mount("connection", value);
     const attachment = () =>
       activePage(h.host).querySelector('[aria-label="Add to ChatGPT"]')!;
-    expect(attachment().querySelector("details summary")?.textContent).toBe(
-      "Technical details",
-    );
+    expect(
+      attachment().querySelector(".attachment-technical summary")?.textContent,
+    ).toBe("Technical details");
     expect(h.button("Copy verification request").disabled).toBe(false);
     expect(attachment().textContent).toContain("farol_next_connector_verify");
     expect(attachment().textContent).toContain(workspaceId);
@@ -3841,6 +3847,52 @@ describe("dependency-scoped Settings admission", () => {
   });
 });
 
+it("opens the Farol connection guide locally without saving a draft or sending a host command", async () => {
+  const h = await mount(
+    "connection",
+    settings(),
+    "dev",
+    { phase: "idle", checkedAt: null },
+    "connection",
+  );
+  const key = h.field("Runtime key");
+  await change(key, "local-draft-not-a-saved-key");
+  await h.stepTo("attachment");
+  const guide = h.host.querySelector<HTMLDetailsElement>(".connection-guide")!;
+  const summary = guide.querySelector<HTMLElement>("summary")!;
+  expect(guide.open).toBe(false);
+  await act(async () => summary.click());
+  expect(guide.open).toBe(true);
+  expect(guide.textContent).toContain("Sign in · optional");
+  expect(guide.textContent).toContain("send it yourself once");
+  expect(guide.textContent).toContain("observe the original action");
+  expect(guide.textContent).not.toContain(key.value);
+  await act(async () => summary.click());
+  expect(guide.open).toBe(false);
+  await h.stepTo("connection");
+  expect(h.field("Runtime key")).toBe(key);
+  expect(key.value).toBe("local-draft-not-a-saved-key");
+  expect(h.calls()).toEqual([]);
+  expect(h.f.api.task).not.toHaveBeenCalled();
+});
+it("keeps read-only connection guidance available while the original Save result is unknown", async () => {
+  const h = await mount("connection", connectionSettings(), "dev");
+  await h.click("Edit connection");
+  await change(h.field("Runtime key"), "explicit-test-replacement-000000");
+  vi.mocked(h.f.api.configure).mockRejectedValueOnce(new Error("lost reply"));
+  await h.click("Save & connect");
+  const intents = h.c.getSnapshot().intents;
+  expect(
+    Object.values(intents).some((intent) => intent.state === "unknown"),
+  ).toBe(true);
+  const guide = h.host.querySelector<HTMLDetailsElement>(".connection-guide")!;
+  await act(async () => guide.querySelector<HTMLElement>("summary")!.click());
+  expect(guide.open).toBe(true);
+  expect(h.c.getSnapshot().intents).toEqual(intents);
+  expect(h.calls()).toHaveLength(1);
+  expect(h.button("Save & connect").disabled).toBe(true);
+  expect(h.f.api.task).not.toHaveBeenCalled();
+});
 // No command capability projection is exposed to this renderer in the current beta.
 it.each(["none", "verification", "workspace"] as const)(
   "B04 saved %s permission stays distinct from unavailable beta commands with current or stale file evidence",

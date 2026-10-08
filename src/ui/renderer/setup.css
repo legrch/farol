@@ -82,6 +82,27 @@
   margin: 26px 0;
   line-height: 1.6;
 }
+.connection-guide {
+  margin: 14px 0;
+}
+.connection-guide > summary {
+  width: fit-content;
+  max-width: 100%;
+  cursor: pointer;
+  color: var(--accent);
+  padding: 8px 0;
+}
+.connection-guide-content {
+  max-width: 680px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+.connection-guide-content li {
+  margin: 10px 0;
+}
+.connection-guide-content strong {
+  color: var(--fg);
+}
 .setup-wizard .setup-panel[hidden] {
   display: none;
 }
