@@ -1,4 +1,8 @@
 import {
+  ConnectorSetupReplies,
+  runAdmittedConnectorSetup,
+} from "../../../apps/desktop/connector-setup-host";
+import {
   startDesktopGoCore,
   type DesktopGoCore,
 } from "../../../apps/desktop/go-core-host";
@@ -4125,6 +4129,45 @@ async function startSecureMcpConnector(
   repair: boolean,
   resumeAfterQuit = false,
 ): Promise<ProductConfigurationResult> {
+  if (connectorTaskAdmission)
+    return configurationFailure("CONNECTOR_ALREADY_RUNNING");
+  const transition = authorityTransitions.tryReserve("connector-start");
+  if (!transition) return transitionRefusal();
+  connectorTaskAdmission = true;
+  try {
+    return await observeConnectorStart(() =>
+      startAdmittedSecureMcpConnector(repair, resumeAfterQuit),
+    );
+  } finally {
+    connectorTaskAdmission = false;
+    transition.release();
+  }
+}
+
+// Quit observes the whole admitted sequence, including credential publication.
+async function observeConnectorStart(
+  work: () => Promise<ProductConfigurationResult>,
+): Promise<ProductConfigurationResult> {
+  let finish!: () => void;
+  connectorStartInFlight = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  try {
+    return await work();
+  } finally {
+    finish();
+    connectorStartInFlight = null;
+  }
+}
+
+// Only the existing start or credential owner may call this while retaining
+// its reservation. It never reacquires or drops authority to launch a child.
+async function startAdmittedSecureMcpConnector(
+  repair: boolean,
+  resumeAfterQuit = false,
+): Promise<ProductConfigurationResult> {
+  if (!connectorTaskAdmission || !authorityTransitions.current())
+    return transitionRefusal();
   if (quitInProgress || installedUpdateAdmission)
     return configurationFailure("CONNECTOR_START_FAILED");
   if (
@@ -4144,9 +4187,6 @@ async function startSecureMcpConnector(
       retained.settings.setup.connect.outcomeUnknown)
   )
     return configurationFailure("CONNECTOR_RUNTIME_OUTCOME_UNKNOWN");
-  if (connectorTaskAdmission) {
-    return configurationFailure("CONNECTOR_ALREADY_RUNNING");
-  }
   // A start whose fence recovery could hold no record leaves the broker
   // nothing to refuse with: the connector is not exposed at all until a
   // later start recovers.
@@ -4157,278 +4197,264 @@ async function startSecureMcpConnector(
   if (secureMcpConnectorRuntime.isRunning() && !repair) {
     return configurationFailure("CONNECTOR_ALREADY_RUNNING");
   }
-  const transition = authorityTransitions.tryReserve("connector-start");
-  if (!transition) return transitionRefusal();
-  connectorTaskAdmission = true;
-  let finishStart!: () => void;
-  connectorStartInFlight = new Promise<void>((resolve) => {
-    finishStart = resolve;
-  });
-  try {
-    if (repair) {
-      try {
-        await stopAndConfirmComputerMcp();
-      } catch {
-        return configurationFailure("CONNECTOR_STOP_UNCONFIRMED");
-      }
+  if (repair) {
+    try {
+      await stopAndConfirmComputerMcp();
+    } catch {
+      return configurationFailure("CONNECTOR_STOP_UNCONFIRMED");
     }
-    if (repair || resumeAfterQuit) {
-      // The previous process has exited. Withdraw its live proof under this
-      // start reservation before any new launch can succeed or be refused.
-      // Historical completion remains available, but is never live readiness.
-      const stopped = await configuration.recordSecureMcpStopped();
+  }
+  if (repair || resumeAfterQuit) {
+    // The previous process has exited. Withdraw its live proof under this
+    // start reservation before any new launch can succeed or be refused.
+    // Historical completion remains available, but is never live readiness.
+    const stopped = await configuration.recordSecureMcpStopped();
+    if (!stopped.ok) return ProductConfigurationResultSchema.parse(stopped);
+  }
+  // The ordinary Computer route is the selected Go backend. Its absence
+  // cannot fall back to a separate TS authority or native helper.
+  const core = desktopGoCore;
+  if (!core) return configurationFailure("CONNECTOR_START_FAILED");
+  const snapshot = configuration.snapshot();
+  if (snapshot.status !== "ready") {
+    return configurationFailure("SETTINGS_UNAVAILABLE");
+  }
+  const connector = snapshot.settings.connectors.secureMcp;
+  if (
+    connector.runtime?.state === "outcome_unknown" ||
+    snapshot.settings.setup.connect.outcomeUnknown
+  )
+    return configurationFailure("CONNECTOR_RUNTIME_OUTCOME_UNKNOWN");
+  if (!connector.tunnelClient || !connector.tunnelId) {
+    return configurationFailure("CONNECTOR_CONFIGURE_FAILED");
+  }
+  // A stored key reference alone is not a committed connector admission.
+  // Do not publish a Go open if the settings write that records the key was
+  // refused or lost before the credential state became durable.
+  if (connector.credential !== "stored")
+    return configurationFailure("CONNECTOR_CREDENTIAL_REQUIRED");
+  // Settings pin canonical bytes, not just a command pathname. Recheck
+  // before configure/doctor/start can execute the saved selection.
+  try {
+    await verifySelectedTunnelClient(connector.tunnelClient);
+  } catch (error) {
+    const refusal =
+      error instanceof Error &&
+      error.message === "TUNNEL_CLIENT_DISCOVERY_CANDIDATE_STALE"
+        ? "TUNNEL_CLIENT_DISCOVERY_CANDIDATE_STALE"
+        : "TUNNEL_CLIENT_EXECUTABLE_UNSAFE";
+    if (resumeAfterQuit) {
+      const stopped = await configuration.recordSecureMcpStopped(refusal);
       if (!stopped.ok) return ProductConfigurationResultSchema.parse(stopped);
     }
-    // The ordinary Computer route is the selected Go backend. Its absence
-    // cannot fall back to a separate TS authority or native helper.
-    const core = desktopGoCore;
-    if (!core) return configurationFailure("CONNECTOR_START_FAILED");
-    const snapshot = configuration.snapshot();
-    if (snapshot.status !== "ready") {
-      return configurationFailure("SETTINGS_UNAVAILABLE");
-    }
-    const connector = snapshot.settings.connectors.secureMcp;
-    if (
-      connector.runtime?.state === "outcome_unknown" ||
-      snapshot.settings.setup.connect.outcomeUnknown
-    )
-      return configurationFailure("CONNECTOR_RUNTIME_OUTCOME_UNKNOWN");
-    if (!connector.tunnelClient || !connector.tunnelId) {
-      return configurationFailure("CONNECTOR_CONFIGURE_FAILED");
-    }
-    // A stored key reference alone is not a committed connector admission.
-    // Do not publish a Go open if the settings write that records the key was
-    // refused or lost before the credential state became durable.
-    if (connector.credential !== "stored")
+    return configurationFailure(refusal);
+  }
+  let credentialReference: string;
+  try {
+    credentialReference = await connectorCredentialStore.reference();
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "";
+    if (code === "CONNECTOR_CREDENTIAL_MISSING") {
+      await configuration.recordSecureMcpCredential("missing");
       return configurationFailure("CONNECTOR_CREDENTIAL_REQUIRED");
-    // Settings pin canonical bytes, not just a command pathname. Recheck
-    // before configure/doctor/start can execute the saved selection.
-    try {
-      await verifySelectedTunnelClient(connector.tunnelClient);
-    } catch (error) {
-      const refusal =
-        error instanceof Error &&
-        error.message === "TUNNEL_CLIENT_DISCOVERY_CANDIDATE_STALE"
-          ? "TUNNEL_CLIENT_DISCOVERY_CANDIDATE_STALE"
-          : "TUNNEL_CLIENT_EXECUTABLE_UNSAFE";
-      if (resumeAfterQuit) {
-        const stopped = await configuration.recordSecureMcpStopped(refusal);
-        if (!stopped.ok) return ProductConfigurationResultSchema.parse(stopped);
-      }
-      return configurationFailure(refusal);
     }
-    let credentialReference: string;
-    try {
-      credentialReference = await connectorCredentialStore.reference();
-    } catch (error) {
-      const code = error instanceof Error ? error.message : "";
-      if (code === "CONNECTOR_CREDENTIAL_MISSING") {
-        await configuration.recordSecureMcpCredential("missing");
-        return configurationFailure("CONNECTOR_CREDENTIAL_REQUIRED");
-      }
-      return configurationFailure("CONNECTOR_CREDENTIAL_STORE_FAILED");
-    }
+    return configurationFailure("CONNECTOR_CREDENTIAL_STORE_FAILED");
+  }
 
-    const runtimeId = randomUUID();
-    const verificationChallenge = randomUUID();
-    const verificationChallengeSha256 = createHash("sha256")
-      .update(verificationChallenge)
+  const runtimeId = randomUUID();
+  const verificationChallenge = randomUUID();
+  const verificationChallengeSha256 = createHash("sha256")
+    .update(verificationChallenge)
+    .digest("hex");
+  let launchFile: string;
+  let launchContractSha256: string;
+  try {
+    await clearConnectorVerificationReceipt(secureMcpLaunchRoot());
+    const intentDigest = createHash("sha256")
+      .update(
+        JSON.stringify({
+          buildId: buildIdentity.buildId,
+          runtimeId,
+          computerGeneration: snapshot.settings.computer.generation,
+          connectorGeneration: connector.generation,
+          challengeSha256: verificationChallengeSha256,
+        }),
+      )
       .digest("hex");
-    let launchFile: string;
-    let launchContractSha256: string;
-    try {
-      await clearConnectorVerificationReceipt(secureMcpLaunchRoot());
-      const intentDigest = createHash("sha256")
-        .update(
-          JSON.stringify({
-            buildId: buildIdentity.buildId,
-            runtimeId,
-            computerGeneration: snapshot.settings.computer.generation,
-            connectorGeneration: connector.generation,
-            challengeSha256: verificationChallengeSha256,
-          }),
-        )
-        .digest("hex");
-      const opened = await core.openComputerConnector(
-        runtimeId,
-        intentDigest,
-        verificationChallengeSha256,
-        secureMcpLaunchRoot(),
-      );
-      if (!opened.launchFile || !opened.launchSha256)
-        throw new Error("COMPUTER_MCP_GO_LAUNCH_UNAVAILABLE");
-      launchFile = opened.launchFile;
-      launchContractSha256 = opened.launchSha256;
-      // An earlier Quit/update may have stopped admission while the contract
-      // was being written. Do not clear its stop marker with a later prepare.
-      if (quitInProgress || installedUpdateAdmission)
-        return configurationFailure("CONNECTOR_START_FAILED");
-      await computerMcpLifecycle().prepare(launchContractSha256);
-    } catch (error) {
-      if (error instanceof ConnectorHostError) {
-        const connectorAttempt = {
-          method: "computer.connector.open" as const,
-          requestId: error.requestId,
-          operationId: error.operationId,
-          outcome: error.outcome,
-        };
-        if (error.outcome === "unknown") {
-          // The Go operation may have published before its reply was lost.
-          // Retain the original IDs in the caller result and a sticky runtime
-          // generation in the existing settings owner, never another open.
-          const generation = createHash("sha256")
-            .update([error.requestId, error.operationId].join("\0"))
-            .digest("hex");
-          try {
-            const recorded = await recordConnectorRuntime(
-              "outcome_unknown",
-              generation,
-              snapshot.settings.computer.generation,
-            );
-            if (recorded && !recorded.ok)
-              return ProductConfigurationResultSchema.parse({
-                ...recorded,
-                connectorAttempt,
-              });
-          } catch {
-            return configurationFailure(
-              "SETTINGS_WRITE_FAILED",
+    const opened = await core.openComputerConnector(
+      runtimeId,
+      intentDigest,
+      verificationChallengeSha256,
+      secureMcpLaunchRoot(),
+    );
+    if (!opened.launchFile || !opened.launchSha256)
+      throw new Error("COMPUTER_MCP_GO_LAUNCH_UNAVAILABLE");
+    launchFile = opened.launchFile;
+    launchContractSha256 = opened.launchSha256;
+    // An earlier Quit/update may have stopped admission while the contract
+    // was being written. Do not clear its stop marker with a later prepare.
+    if (quitInProgress || installedUpdateAdmission)
+      return configurationFailure("CONNECTOR_START_FAILED");
+    await computerMcpLifecycle().prepare(launchContractSha256);
+  } catch (error) {
+    if (error instanceof ConnectorHostError) {
+      const connectorAttempt = {
+        method: "computer.connector.open" as const,
+        requestId: error.requestId,
+        operationId: error.operationId,
+        outcome: error.outcome,
+      };
+      if (error.outcome === "unknown") {
+        // The Go operation may have published before its reply was lost.
+        // Retain the original IDs in the caller result and a sticky runtime
+        // generation in the existing settings owner, never another open.
+        const generation = createHash("sha256")
+          .update([error.requestId, error.operationId].join("\0"))
+          .digest("hex");
+        try {
+          const recorded = await recordConnectorRuntime(
+            "outcome_unknown",
+            generation,
+            snapshot.settings.computer.generation,
+          );
+          if (recorded && !recorded.ok)
+            return ProductConfigurationResultSchema.parse({
+              ...recorded,
               connectorAttempt,
-            );
-          }
+            });
+        } catch {
           return configurationFailure(
-            "CONNECTOR_RUNTIME_OUTCOME_UNKNOWN",
+            "SETTINGS_WRITE_FAILED",
             connectorAttempt,
           );
         }
-        return configurationFailure("CONNECTOR_START_FAILED", connectorAttempt);
+        return configurationFailure(
+          "CONNECTOR_RUNTIME_OUTCOME_UNKNOWN",
+          connectorAttempt,
+        );
       }
-      const code = error instanceof Error ? error.message : "";
-      if (code.startsWith("COMPUTER_MCP_")) {
-        return configurationFailure("CONNECTOR_STOP_UNCONFIRMED");
-      }
-      if (code === "SECURE_MCP_WORKSPACE_REQUIRED") {
-        return configurationFailure("CONNECTOR_WORKSPACE_REQUIRED");
-      }
-      if (code === "SECURE_MCP_WORKSPACE_LIMIT") {
-        return configurationFailure("CONNECTOR_WORKSPACE_LIMIT");
-      }
-      return configurationFailure("CONNECTOR_START_FAILED");
+      return configurationFailure("CONNECTOR_START_FAILED", connectorAttempt);
     }
+    const code = error instanceof Error ? error.message : "";
+    if (code.startsWith("COMPUTER_MCP_")) {
+      return configurationFailure("CONNECTOR_STOP_UNCONFIRMED");
+    }
+    if (code === "SECURE_MCP_WORKSPACE_REQUIRED") {
+      return configurationFailure("CONNECTOR_WORKSPACE_REQUIRED");
+    }
+    if (code === "SECURE_MCP_WORKSPACE_LIMIT") {
+      return configurationFailure("CONNECTOR_WORKSPACE_LIMIT");
+    }
+    return configurationFailure("CONNECTOR_START_FAILED");
+  }
 
-    const attempt = (phase: string) =>
-      connectorAttemptGeneration({
-        connectorGeneration: connector.generation,
-        computerGeneration: snapshot.settings.computer.generation,
-        launchContractSha256,
-        phase,
-      });
-    try {
-      await secureMcpConnectorRuntime.configure({
-        executablePath: connector.tunnelClient.executablePath,
-        tunnelId: connector.tunnelId,
-        credentialReference,
-        mcp: {
-          electronPath: process.execPath,
-          entryPath: path.join(directory, "computer-mcp.cjs"),
-          launchContractPath: launchFile,
-        },
-      });
-    } catch (error) {
-      const unknown = error instanceof ConnectorRuntimeEffectUnknown;
-      const failed = await recordConnectorRuntime(
-        unknown ? "outcome_unknown" : "unreachable",
-        attempt("configure"),
-        snapshot.settings.computer.generation,
-      );
-      if (failed) return failed;
-      return configurationFailure(
-        unknown
-          ? "CONNECTOR_RUNTIME_OUTCOME_UNKNOWN"
-          : "CONNECTOR_CONFIGURE_FAILED",
-      );
-    }
-    try {
-      await secureMcpConnectorRuntime.doctor({
-        executablePath: connector.tunnelClient.executablePath,
-      });
-    } catch {
-      const failed = await recordConnectorRuntime(
-        "unreachable",
-        attempt("doctor"),
-        snapshot.settings.computer.generation,
-      );
-      if (failed) return failed;
-      return configurationFailure("CONNECTOR_DOCTOR_FAILED");
-    }
-
-    let started;
-    // Quit closes new admission first. If it arrived while configure or
-    // doctor was pending, do not launch a tunnel after its drain began.
-    if (quitInProgress || installedUpdateAdmission)
-      return configurationFailure("CONNECTOR_START_FAILED");
-    try {
-      started = await secureMcpConnectorRuntime.start({
-        executablePath: connector.tunnelClient.executablePath,
-        executableSha256: connector.tunnelClient.executableSha256,
-        connectorGeneration: connector.generation,
-        computerGeneration: snapshot.settings.computer.generation,
-        buildId: buildIdentity.buildId,
-        launchContractSha256,
-      });
-    } catch {
-      const failed = await recordConnectorRuntime(
-        "unreachable",
-        attempt("start"),
-        snapshot.settings.computer.generation,
-      );
-      if (failed) return failed;
-      return configurationFailure("CONNECTOR_START_FAILED");
-    }
+  const attempt = (phase: string) =>
+    connectorAttemptGeneration({
+      connectorGeneration: connector.generation,
+      computerGeneration: snapshot.settings.computer.generation,
+      launchContractSha256,
+      phase,
+    });
+  try {
+    await secureMcpConnectorRuntime.configure({
+      executablePath: connector.tunnelClient.executablePath,
+      tunnelId: connector.tunnelId,
+      credentialReference,
+      mcp: {
+        electronPath: process.execPath,
+        entryPath: path.join(directory, "computer-mcp.cjs"),
+        launchContractPath: launchFile,
+      },
+    });
+  } catch (error) {
+    const unknown = error instanceof ConnectorRuntimeEffectUnknown;
     const failed = await recordConnectorRuntime(
-      started.state,
-      started.runtimeGeneration,
+      unknown ? "outcome_unknown" : "unreachable",
+      attempt("configure"),
       snapshot.settings.computer.generation,
     );
     if (failed) return failed;
-    if (started.state === "unreachable") {
-      return configurationFailure("CONNECTOR_RUNTIME_UNREACHABLE");
+    return configurationFailure(
+      unknown
+        ? "CONNECTOR_RUNTIME_OUTCOME_UNKNOWN"
+        : "CONNECTOR_CONFIGURE_FAILED",
+    );
+  }
+  try {
+    await secureMcpConnectorRuntime.doctor({
+      executablePath: connector.tunnelClient.executablePath,
+    });
+  } catch {
+    const failed = await recordConnectorRuntime(
+      "unreachable",
+      attempt("doctor"),
+      snapshot.settings.computer.generation,
+    );
+    if (failed) return failed;
+    return configurationFailure("CONNECTOR_DOCTOR_FAILED");
+  }
+
+  let started;
+  // Quit closes new admission first. If it arrived while configure or
+  // doctor was pending, do not launch a tunnel after its drain began.
+  if (quitInProgress || installedUpdateAdmission)
+    return configurationFailure("CONNECTOR_START_FAILED");
+  try {
+    started = await secureMcpConnectorRuntime.start({
+      executablePath: connector.tunnelClient.executablePath,
+      executableSha256: connector.tunnelClient.executableSha256,
+      connectorGeneration: connector.generation,
+      computerGeneration: snapshot.settings.computer.generation,
+      buildId: buildIdentity.buildId,
+      launchContractSha256,
+    });
+  } catch {
+    const failed = await recordConnectorRuntime(
+      "unreachable",
+      attempt("start"),
+      snapshot.settings.computer.generation,
+    );
+    if (failed) return failed;
+    return configurationFailure("CONNECTOR_START_FAILED");
+  }
+  const failed = await recordConnectorRuntime(
+    started.state,
+    started.runtimeGeneration,
+    snapshot.settings.computer.generation,
+  );
+  if (failed) return failed;
+  if (started.state === "unreachable") {
+    return configurationFailure("CONNECTOR_RUNTIME_UNREACHABLE");
+  }
+  if (started.state === "outcome_unknown") {
+    return configurationFailure("CONNECTOR_RUNTIME_OUTCOME_UNKNOWN");
+  }
+  const challenged = await configuration.recordSecureMcpChallenge({
+    challenge: verificationChallenge,
+    runtimeGeneration: started.runtimeGeneration,
+    computerGeneration: snapshot.settings.computer.generation,
+    buildId: buildIdentity.buildId,
+  });
+  if (!challenged.ok) {
+    try {
+      await stopAndConfirmComputerMcp();
+    } catch {
+      return configurationFailure("CONNECTOR_STOP_UNCONFIRMED");
     }
-    if (started.state === "outcome_unknown") {
-      return configurationFailure("CONNECTOR_RUNTIME_OUTCOME_UNKNOWN");
-    }
-    const challenged = await configuration.recordSecureMcpChallenge({
-      challenge: verificationChallenge,
+    await configuration.recordSecureMcpStopped().catch(() => undefined);
+    return ProductConfigurationResultSchema.parse(challenged);
+  }
+  return ProductConfigurationResultSchema.parse({
+    ok: true,
+    snapshot: challenged.snapshot,
+    evidence: {
+      kind: "connector.runtime",
+      state: "ready",
       runtimeGeneration: started.runtimeGeneration,
       computerGeneration: snapshot.settings.computer.generation,
       buildId: buildIdentity.buildId,
-    });
-    if (!challenged.ok) {
-      try {
-        await stopAndConfirmComputerMcp();
-      } catch {
-        return configurationFailure("CONNECTOR_STOP_UNCONFIRMED");
-      }
-      await configuration.recordSecureMcpStopped().catch(() => undefined);
-      return ProductConfigurationResultSchema.parse(challenged);
-    }
-    return ProductConfigurationResultSchema.parse({
-      ok: true,
-      snapshot: challenged.snapshot,
-      evidence: {
-        kind: "connector.runtime",
-        state: "ready",
-        runtimeGeneration: started.runtimeGeneration,
-        computerGeneration: snapshot.settings.computer.generation,
-        buildId: buildIdentity.buildId,
-      },
-    });
-  } finally {
-    connectorTaskAdmission = false;
-    transition.release();
-    finishStart();
-    connectorStartInFlight = null;
-  }
+    },
+  });
 }
 
 type ConnectorAppVerificationBinding = Readonly<{
@@ -5290,10 +5316,119 @@ function goWorkspaceEditResult(
   });
 }
 
+type ConnectorSetupCommand = Extract<
+  ProductConfigurationCommand,
+  { kind: "connector.save-and-connect" }
+>;
+const connectorSetupReplies = new ConnectorSetupReplies();
+
+function connectorSetupRefusal(
+  command: ConnectorSetupCommand,
+  code: Extract<ProductConfigurationResult, { ok: false }>["error"],
+): Promise<ProductConfigurationResult> {
+  return runAdmittedConnectorSetup(
+    { operationId: command.operationId, buildId: command.buildId },
+    command.tunnelId,
+    {
+      admission: () => configurationFailure(code),
+      current: () => configurationFailure(code).snapshot,
+      save: async () => configurationFailure(code),
+      start: async () => configurationFailure(code),
+    },
+  );
+}
+
+async function configureSaveAndConnect(
+  command: ConnectorSetupCommand,
+): Promise<ProductConfigurationResult> {
+  configurationRequests += 1;
+  try {
+    const reserved = await authorityTransitions.withReservation(
+      "authority-change",
+      async () => {
+        if (connectorTaskAdmission)
+          return connectorSetupRefusal(command, "CONNECTOR_ALREADY_RUNNING");
+        connectorTaskAdmission = true;
+        activeAuthorityChangeKind = command.kind;
+        try {
+          return await observeConnectorStart(() =>
+            runAdmittedConnectorSetup(
+              { operationId: command.operationId, buildId: command.buildId },
+              command.tunnelId,
+              {
+                admission: () => {
+                  if (command.buildId !== buildIdentity.buildId)
+                    return configurationFailure(
+                      "CONNECTOR_SETUP_BINDING_CHANGED",
+                    );
+                  if (quitInProgress || installedUpdateAdmission)
+                    return configurationFailure("AUTHORITY_CHANGE_IN_PROGRESS");
+                  if (
+                    !configuration ||
+                    !connectorCredentialStore ||
+                    !secureMcpConnectorRuntime
+                  )
+                    return configurationFailure("SETTINGS_UNAVAILABLE");
+                  const current = configuration.snapshot();
+                  if (current.status !== "ready")
+                    return configurationFailure("SETTINGS_UNAVAILABLE");
+                  if (
+                    secureMcpConnectorRuntime.hasUnresolvedEffect() ||
+                    current.settings.setup.connect.outcomeUnknown ||
+                    current.settings.connectors.secureMcp.runtime?.state ===
+                      "outcome_unknown"
+                  )
+                    return configurationFailure(
+                      "CONNECTOR_RUNTIME_OUTCOME_UNKNOWN",
+                    );
+                  if (secureMcpConnectorRuntime.isRunning())
+                    return configurationFailure("CONNECTOR_STOP_REQUIRED");
+                  return { ok: true, snapshot: current };
+                },
+                current: () => configuration!.snapshot(),
+                save: () =>
+                  configureAdmittedProduct({
+                    kind: "connector.configure",
+                    tunnelId: command.tunnelId,
+                    runtimeKey: command.runtimeKey,
+                  }),
+                start: () => startAdmittedSecureMcpConnector(false),
+              },
+            ),
+          );
+        } finally {
+          connectorTaskAdmission = false;
+          activeAuthorityChangeKind = null;
+        }
+      },
+    );
+    return deliverConfigurationReply(
+      command.kind,
+      reserved.admitted
+        ? reserved.value
+        : await connectorSetupRefusal(command, "AUTHORITY_CHANGE_IN_PROGRESS"),
+    );
+  } finally {
+    configurationRequests -= 1;
+  }
+}
+
 async function configureProduct(
   value: unknown,
 ): Promise<ProductConfigurationResult> {
   const parsed = ProductConfigurationCommandSchema.safeParse(value);
+  if (parsed.success && parsed.data.kind === "connector.save-and-connect") {
+    const command = parsed.data;
+    const fingerprint = createHash("sha256")
+      .update(JSON.stringify(command))
+      .digest("hex");
+    return connectorSetupReplies.run(
+      command.operationId,
+      fingerprint,
+      () => configureSaveAndConnect(command),
+      (code) => connectorSetupRefusal(command, code),
+    );
+  }
   if (parsed.success && directChatStart) {
     const command = parsed.data;
     if (command.kind === "chatgpt.inspect-chat-account")
@@ -5744,6 +5879,9 @@ async function configureAdmittedProduct(
         sha256: candidate.sha256,
       });
     }
+    case "connector.save-and-connect":
+      // Combined requests enter only through the retained, reservation-owned route.
+      return configurationFailure("AUTHORITY_CHANGE_IN_PROGRESS");
     case "connector.configure": {
       const current = configuration.snapshot();
       if (

@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { WindowController } from "../../src/ui/renderer/controller";
 import { bootstrap, deferred, fixture, settings, task } from "./fixture";
+import type { ConnectorSetupReceipt } from "../../src/pkg/product-settings/connector-setup-receipt";
 function sectionIntent(section = "settings", sequence = 1, taskId = "") {
   return {
     action: "navigate-section",
@@ -12,6 +13,320 @@ function sectionIntent(section = "settings", sequence = 1, taskId = "") {
     sequence,
   };
 }
+// Transport fixtures only: no native credential save or provider connection.
+describe("Save & connect original Intent", () => {
+  const operationId = "66666666-6666-4666-8666-666666666666";
+  const buildId = bootstrap().build.buildId;
+  const intention = "settings:connector.save-and-connect";
+  const command = {
+    kind: "connector.save-and-connect" as const,
+    operationId,
+    buildId,
+    tunnelId: "fixture-tunnel",
+    runtimeKey: "fixture-secret-runtime-key-000000000",
+  };
+  const completed: ConnectorSetupReceipt = {
+    kind: command.kind,
+    operationId,
+    buildId,
+    state: "completed",
+    stoppedAt: "complete",
+    credentials: "saved",
+    connection: "connected",
+    code: null,
+    externalVerification: "not-proven",
+  };
+  const unknown: ConnectorSetupReceipt = {
+    ...completed,
+    state: "unknown",
+    stoppedAt: "connection",
+    connection: "unknown",
+    code: "SETTINGS_INPUT_INVALID",
+    connectorAttempt: {
+      method: "computer.connector.open",
+      requestId: "77777777-7777-4777-8777-777777777777",
+      operationId: "88888888-8888-4888-8888-888888888888",
+      outcome: "unknown",
+    },
+  };
+  const response = (
+    connectorSetup: ConnectorSetupReceipt = completed,
+    revision = 2,
+  ) => ({
+    ...(connectorSetup.state === "completed"
+      ? { ok: true }
+      : { ok: false, error: connectorSetup.code }),
+    snapshot: { status: "ready", settings: settings(revision) },
+    connectorSetup,
+  });
+
+  it("keeps a lost reply unknown across refresh/remount and never resubmits the key", async () => {
+    const f = fixture();
+    const c = new WindowController(f.api);
+    await c.start();
+    vi.mocked(f.api.configure).mockRejectedValue(new Error(command.runtimeKey));
+    const first = c.configure(command, intention);
+    const duplicate = c.configure(command, intention);
+    const result = await first;
+    expect(await duplicate).toBe(result);
+    expect(result).toEqual({
+      id: intention,
+      state: "unknown",
+      code: "CONFIGURATION_OUTCOME_UNKNOWN",
+    });
+    const newer = bootstrap();
+    newer.configuration.settings = settings(10);
+    vi.mocked(f.api.bootstrap).mockResolvedValue(newer);
+    await c.refresh();
+    const unmount = c.subscribe(() => {});
+    unmount();
+    const remount = c.subscribe(() => {});
+    expect(c.getSnapshot().intents[intention]).toBe(result);
+    expect(await c.configure(command, intention)).toBe(result);
+    expect(await c.configure(command, "remounted-label")).toBe(result);
+    expect(
+      (
+        await c.configure(
+          { ...command, operationId: "99999999-9999-4999-8999-999999999999" },
+          intention,
+        )
+      ).code,
+    ).toBe("INTENTION_PAYLOAD_CONFLICT");
+    expect(f.api.configure).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(c.getSnapshot())).not.toContain(command.runtimeKey);
+    const maps = c as unknown as {
+      commands: Map<
+        string,
+        { fingerprint: Promise<string>; promise: Promise<unknown> }
+      >;
+      connectorSetupCommands: Map<
+        string,
+        { fingerprint: Promise<string>; promise: Promise<unknown> }
+      >;
+    };
+    for (const retained of [
+      maps.commands.get(intention)!,
+      maps.connectorSetupCommands.get(operationId)!,
+    ]) {
+      expect(Object.keys(retained).sort()).toEqual(["fingerprint", "promise"]);
+      expect(await retained.fingerprint).toMatch(/^[a-f0-9]{64}$/u);
+      expect(JSON.stringify(await retained.promise)).not.toContain(
+        command.runtimeKey,
+      );
+    }
+    remount();
+    c.dispose();
+  });
+
+  it("retains pending admission after an undelivered reply without inventing a timeout or retry", async () => {
+    const f = fixture();
+    const reply = deferred<unknown>();
+    vi.mocked(f.api.configure).mockReturnValue(reply.promise);
+    const c = new WindowController(f.api);
+    await c.start();
+    const pending = c.configure(command, intention);
+    await vi.waitFor(() => expect(f.api.configure).toHaveBeenCalledTimes(1));
+    const duplicate = c.configure(command, intention);
+    await c.refresh();
+    expect(c.getSnapshot().intents[intention]?.state).toBe("pending");
+    expect(c.getSnapshot().intents[intention]?.connectorSetup).toBeUndefined();
+    expect(f.api.configure).toHaveBeenCalledTimes(1);
+    reply.reject();
+    expect((await pending).state).toBe("unknown");
+    expect((await duplicate).state).toBe("unknown");
+    c.dispose();
+  });
+
+  it.each([completed, unknown])(
+    "preserves the original $state receipt after a newer refresh and component remount",
+    async (receipt) => {
+      const f = fixture();
+      const reply = deferred<unknown>();
+      vi.mocked(f.api.configure).mockReturnValue(reply.promise);
+      const c = new WindowController(f.api);
+      await c.start();
+      const unmount = c.subscribe(() => {});
+      const pending = c.configure(command, intention);
+      await vi.waitFor(() => expect(f.api.configure).toHaveBeenCalledTimes(1));
+      unmount();
+      const newer = bootstrap();
+      newer.configuration.settings = settings(10);
+      vi.mocked(f.api.bootstrap).mockResolvedValue(newer);
+      await c.refresh();
+      const refreshConfiguration = c.getSnapshot().configuration;
+      c.navigate({ area: "settings", page: "general" });
+      reply.resolve(response(receipt, 2));
+      const result = await pending;
+      const remount = c.subscribe(() => {});
+      expect(result.state).toBe(
+        receipt.state === "completed" ? "applied" : "unknown",
+      );
+      expect(result.connectorSetup).toEqual(receipt);
+      expect(Object.isFrozen(result.connectorSetup)).toBe(true);
+      expect(c.getSnapshot().intents[intention]).toBe(result);
+      expect(c.getSnapshot().configuration).toBe(refreshConfiguration);
+      expect(c.getSnapshot().destination.page).toBe("general");
+      await c.refresh();
+      expect(c.getSnapshot().intents[intention]).toBe(result);
+      expect(await c.configure(command, intention)).toBe(result);
+      expect(await c.configure(command, "remounted-label")).toBe(result);
+      expect(f.api.configure).toHaveBeenCalledTimes(1);
+      remount();
+      c.dispose();
+    },
+  );
+
+  it.each([
+    {
+      label: "missing receipt",
+      reply: { ok: true, snapshot: bootstrap().configuration },
+    },
+    {
+      label: "failure missing receipt",
+      reply: {
+        ok: false,
+        error: "CONNECTOR_START_FAILED",
+        snapshot: bootstrap().configuration,
+      },
+    },
+    {
+      label: "malformed receipt",
+      reply: response({ ...completed, stoppedAt: "credentials" }),
+    },
+    {
+      label: "wrong operation",
+      reply: response({
+        ...completed,
+        operationId: "99999999-9999-4999-8999-999999999999",
+      }),
+    },
+    {
+      label: "wrong build",
+      reply: response({ ...completed, buildId: "b".repeat(64) }),
+    },
+    {
+      label: "secret in receipt",
+      reply: {
+        ...response(),
+        connectorSetup: { ...completed, runtimeKey: command.runtimeKey },
+      },
+    },
+    {
+      label: "nested unknown in success",
+      reply: { ...response(unknown), ok: true, error: undefined },
+    },
+  ])(
+    "keeps $label unknown, withholding both the receipt and global snapshot",
+    async ({ reply }) => {
+      const f = fixture();
+      const c = new WindowController(f.api);
+      await c.start();
+      const originalConfiguration = c.getSnapshot().configuration;
+      vi.mocked(f.api.configure).mockResolvedValue(reply);
+      const result = await c.configure(command, intention);
+      expect(result).toEqual({
+        id: intention,
+        state: "unknown",
+        code: "CONFIGURATION_OUTCOME_UNKNOWN",
+      });
+      expect(c.getSnapshot().configuration).toBe(originalConfiguration);
+      expect(await c.configure(command, intention)).toBe(result);
+      expect(f.api.configure).toHaveBeenCalledTimes(1);
+      expect(JSON.stringify(result)).not.toContain(command.runtimeKey);
+      c.dispose();
+    },
+  );
+
+  it("refuses a command for another build before dispatch", async () => {
+    const f = fixture();
+    const c = new WindowController(f.api);
+    await c.start();
+    expect(
+      await c.configure({ ...command, buildId: "b".repeat(64) }, intention),
+    ).toEqual({
+      id: intention,
+      state: "refused",
+      code: "CONNECTOR_SETUP_BINDING_CHANGED",
+    });
+    expect(f.api.configure).not.toHaveBeenCalled();
+    c.dispose();
+  });
+
+  it("does not accept a late receipt after refresh exposes another build", async () => {
+    const f = fixture();
+    const reply = deferred<unknown>();
+    vi.mocked(f.api.configure).mockReturnValue(reply.promise);
+    const c = new WindowController(f.api);
+    await c.start();
+    const pending = c.configure(command, intention);
+    await vi.waitFor(() => expect(f.api.configure).toHaveBeenCalledTimes(1));
+    const changed = bootstrap();
+    changed.build.buildId = "b".repeat(64);
+    vi.mocked(f.api.bootstrap).mockResolvedValue(changed);
+    await c.refresh();
+    expect(c.getSnapshot().status).toBe("incompatible");
+    reply.resolve(response());
+    expect((await pending).state).toBe("unknown");
+    expect(c.getSnapshot().intents[intention]?.connectorSetup).toBeUndefined();
+    expect(f.api.configure).toHaveBeenCalledTimes(1);
+    c.dispose();
+  });
+
+  it("captures original command values before asynchronous dispatch", async () => {
+    const f = fixture();
+    const c = new WindowController(f.api);
+    await c.start();
+    vi.mocked(f.api.configure).mockResolvedValue(response());
+    const mutable = { ...command };
+    const pending = c.configure(mutable, intention);
+    mutable.operationId = "99999999-9999-4999-8999-999999999999";
+    mutable.runtimeKey = "mutated-secret-key-000000000000000000";
+    expect((await pending).state).toBe("applied");
+    expect(f.api.configure).toHaveBeenCalledWith(command);
+    expect(
+      c.getSnapshot().intents[intention]?.connectorSetup?.operationId,
+    ).toBe(operationId);
+    expect(JSON.stringify(c.getSnapshot())).not.toContain(mutable.runtimeKey);
+    c.dispose();
+  });
+
+  it("keeps a known partial save receipt and permits a fresh operation while preventing replay", async () => {
+    const f = fixture();
+    const c = new WindowController(f.api);
+    await c.start();
+    const refused: ConnectorSetupReceipt = {
+      ...completed,
+      state: "refused",
+      stoppedAt: "connection-admission",
+      connection: "not-started",
+      code: "CONNECTOR_SETUP_BINDING_CHANGED",
+    };
+    vi.mocked(f.api.configure).mockResolvedValue(response(refused));
+    const result = await c.configure(command, intention);
+    expect(result.state).toBe("refused");
+    expect(result.connectorSetup).toEqual(refused);
+    expect(await c.configure(command, intention)).toBe(result);
+    expect(
+      (
+        await c.configure(
+          { ...command, runtimeKey: "replacement-fixture-key-00000000000" },
+          "remounted-label",
+        )
+      ).code,
+    ).toBe("INTENTION_PAYLOAD_CONFLICT");
+    expect(f.api.configure).toHaveBeenCalledTimes(1);
+    const nextId = "99999999-9999-4999-8999-999999999999";
+    vi.mocked(f.api.configure).mockResolvedValue(
+      response({ ...completed, operationId: nextId }),
+    );
+    expect(
+      (await c.configure({ ...command, operationId: nextId }, intention)).state,
+    ).toBe("applied");
+    expect(f.api.configure).toHaveBeenCalledTimes(2);
+    c.dispose();
+  });
+});
+
 it("Home local views and exact record identities survive Back and Forward without a command", async () => {
   const f = fixture();
   const c = new WindowController(f.api);

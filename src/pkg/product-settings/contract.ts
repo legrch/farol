@@ -6,6 +6,7 @@ import {
   ReadConversationPromptSchema,
 } from "./chat-conversation.ts";
 import { TaskModelCatalogueViewSchema } from "../owner-config/contract.ts";
+import { readConnectorSetupReceipt } from "./connector-setup-receipt.ts";
 import {
   CHATGPT_MODEL_ID,
   FAROL_PROVIDER_ID,
@@ -555,6 +556,22 @@ export const ProductConfigurationSnapshotSchema = z.discriminatedUnion(
   ],
 );
 
+const ConnectorTunnelIdSchema = z
+  .string()
+  .min(1)
+  .max(160)
+  .regex(/^[0-9A-Za-z._:-]+$/u);
+const ConnectorRuntimeKeySchema = z
+  .string()
+  .min(20)
+  .max(512)
+  .refine((value) =>
+    [...value].every((character) => {
+      const code = character.codePointAt(0);
+      return code !== undefined && code >= 33 && code <= 126;
+    }),
+  );
+
 export const ProductConfigurationCommandSchema = z.discriminatedUnion("kind", [
   ProductGeneralSettingsSchema.extend({ kind: z.literal("general.update") }),
   z.strictObject({ kind: z.literal("chatgpt.open-sign-in") }),
@@ -612,22 +629,15 @@ export const ProductConfigurationCommandSchema = z.discriminatedUnion("kind", [
   }),
   z.strictObject({
     kind: z.literal("connector.configure"),
-    tunnelId: z
-      .string()
-      .min(1)
-      .max(160)
-      .regex(/^[0-9A-Za-z._:-]+$/u),
-    runtimeKey: z
-      .string()
-      .min(20)
-      .max(512)
-      .refine((value) =>
-        [...value].every((character) => {
-          const code = character.codePointAt(0);
-          return code !== undefined && code >= 33 && code <= 126;
-        }),
-      )
-      .nullable(),
+    tunnelId: ConnectorTunnelIdSchema,
+    runtimeKey: ConnectorRuntimeKeySchema.nullable(),
+  }),
+  z.strictObject({
+    kind: z.literal("connector.save-and-connect"),
+    operationId: IdentifierSchema,
+    buildId: Sha256Schema,
+    tunnelId: ConnectorTunnelIdSchema,
+    runtimeKey: ConnectorRuntimeKeySchema,
   }),
   z.strictObject({ kind: z.literal("connector.start") }),
   z.strictObject({ kind: z.literal("connector.repair") }),
@@ -1323,204 +1333,253 @@ const ConnectorAttemptSchema = z.strictObject({
   outcome: z.enum(["known", "unknown"]),
 });
 
-export const ProductConfigurationResultSchema = z.discriminatedUnion("ok", [
-  z.strictObject({
-    ok: z.literal(true),
-    snapshot: ProductConfigurationSnapshotSchema,
-    evidence: ProductConfigurationEvidenceSchema.optional(),
-  }),
-  z.strictObject({
-    ok: z.literal(false),
-    error: z.enum([
-      "SETTINGS_UNAVAILABLE",
-      "ONBOARDING_HELP_OPEN_FAILED",
-      "SETTINGS_INPUT_INVALID",
-      "SETTINGS_WRITE_FAILED",
-      "CHATGPT_ROUTE_UNAVAILABLE",
-      "CHATGPT_CONVERSATION_UNCONFIRMED",
-      "CHATGPT_CONVERSATION_REFUSED",
-      "CHATGPT_PROMPT_TOO_LARGE",
-      "CHATGPT_ACCOUNT_UNAVAILABLE",
-      "CHATGPT_ACCOUNT_CHANGED",
-      "CHATGPT_ACCOUNT_CONFIRMATION_INVALID",
-      "CHATGPT_ACCOUNT_APPROVAL_UNCONFIRMED",
-      "CHATGPT_SIGN_IN_IN_PROGRESS",
-      "CHATGPT_PAGE_UNREACHABLE",
-      "CHATGPT_CONNECTION_NOT_VERIFIED",
-      "CHATGPT_TASK_IN_PROGRESS",
-      "CHATGPT_TASK_PREVIEW_PENDING",
-      "CHATGPT_TASK_PREVIEW_NOT_FOUND",
-      "CHATGPT_TASK_PREVIEW_EXPIRED",
-      "CHATGPT_TASK_REQUIRES_REVIEW",
-      "CHATGPT_TASK_JOURNAL_FAILED",
-      "CHATGPT_TASK_PROMOTION_PENDING",
-      "CHATGPT_TASK_RESULT_NOT_FOUND",
-      "CHATGPT_CONVERSATION_STATE_FAILED",
-      "CHATGPT_CONVERSATION_REVIEW_REQUIRED",
-      "CHATGPT_ATTACHMENT_PICKER_CANCELLED",
-      "CHATGPT_ATTACHMENT_SELECTION_INVALID",
-      "CHATGPT_ATTACHMENT_TYPE_UNSUPPORTED",
-      "CHATGPT_ATTACHMENT_TOO_LARGE",
-      "CHATGPT_ATTACHMENT_STAGING_FAILED",
-      "CHATGPT_ATTACHMENT_REFERENCE_MISSING",
-      "CHATGPT_ATTACHMENT_PREVIEW_PENDING",
-      "CHATGPT_ATTACHMENT_PREVIEW_NOT_FOUND",
-      "CHATGPT_ATTACHMENT_PREVIEW_EXPIRED",
-      "WORKSPACE_NOT_FOUND",
-      "WORKSPACE_PICKER_CANCELLED",
-      "WORKSPACE_SELECTION_INVALID",
-      "WORKSPACE_SELECTION_PROTECTED",
-      "WORKSPACE_VERIFICATION_FAILED",
-      "WORKSPACE_FILE_PICKER_CANCELLED",
-      "WORKSPACE_FILE_SELECTION_INVALID",
-      "WORKSPACE_PATH_REFUSED",
-      "WORKSPACE_ROOT_CHANGED",
-      "WORKSPACE_NOT_A_FILE",
-      "WORKSPACE_FILE_TOO_LARGE",
-      "WORKSPACE_NOT_TEXT",
-      "WORKSPACE_SEARCH_TIMEOUT",
-      "WORKSPACE_VERIFICATION_REQUIRED",
-      "WORKSPACE_READ_FAILED",
-      "WORKSPACE_COMMAND_APPROVAL_REQUIRED",
-      "WORKSPACE_COMMAND_UNAVAILABLE",
-      "WORKSPACE_COMMAND_CANCELLED",
-      "WORKSPACE_COMMAND_TIMEOUT",
-      "WORKSPACE_COMMAND_OUTPUT_TOO_LARGE",
-      "WORKSPACE_NOT_GIT_REPOSITORY",
-      "WORKSPACE_GIT_HEAD_UNBORN",
-      "WORKSPACE_GIT_METADATA_NOT_APPROVED",
-      "WORKSPACE_GIT_ALTERNATES_UNSUPPORTED",
-      "WORKSPACE_INDEX_CHANGED_DURING_SNAPSHOT",
-      "WORKSPACE_CHANGED_DURING_SNAPSHOT",
-      "WORKSPACE_TRACKED_LIST_TOO_LARGE",
-      "WORKSPACE_TRACKED_PATH_UNSUPPORTED",
-      "WORKSPACE_SNAPSHOT_TOO_LARGE",
-      "WORKSPACE_SNAPSHOT_CROSS_VOLUME",
-      "WORKSPACE_SNAPSHOT_CLONE_UNSUPPORTED",
-      "WORKSPACE_COMMAND_FAILED",
-      "WORKSPACE_WRITE_APPROVAL_REQUIRED",
-      "WORKSPACE_MUTATION_IN_PROGRESS",
-      "WORKSPACE_MUTATION_PREVIEW_NOT_FOUND",
-      "WORKSPACE_MUTATION_PREVIEW_EXPIRED",
-      "WORKSPACE_MUTATION_CONFLICT",
-      "WORKSPACE_EDIT_NO_MATCH",
-      "WORKSPACE_EDIT_NOT_UNIQUE",
-      "WORKSPACE_MUTATION_OUTCOME_UNKNOWN",
-      "WORKSPACE_MUTATION_FAILED",
-      "WORKSPACE_MUTATION_NOT_PENDING",
-      "WORKSPACE_MUTATION_NOT_ADMITTED",
-      "WORKSPACE_MUTATION_RESULT_PENDING",
-      "SUPPORT_EXPORT_CANCELLED",
-      "SUPPORT_EXPORT_FAILED",
-      "CODEX_HOST_PICKER_CANCELLED",
-      "CODEX_HOST_NOT_CONFIGURED",
-      "CODEX_TASK_ROUTE_REFUSED",
-      "CODEX_TASK_OBSERVATION_REFUSED",
-      "CODEX_TASK_ROUTE_UNAVAILABLE",
-      "CODEX_SHARED_SOCKET_NOT_FOUND",
-      "CODEX_SHARED_SOCKET_ACCESS_DENIED",
-      "CODEX_SHARED_SOCKET_ALIAS_UNSUPPORTED",
-      "CODEX_SHARED_SOCKET_INVALID_TARGET",
-      "CODEX_SHARED_SOCKET_CHECK_FAILED",
-      "CODEX_SHARED_PROXY_LAUNCH_FAILED",
-      "CODEX_SHARED_PROXY_PIPE_FAILED",
-      "CODEX_SHARED_PROXY_EXITED",
-      "CODEX_SHARED_PROXY_TIMEOUT",
-      "CODEX_SHARED_PROXY_INVALID_IDENTITY",
-      "CODEX_SHARED_PROXY_PROTOCOL_ERROR",
-      "CODEX_SHARED_PROXY_RPC_ERROR",
-      "CODEX_HOST_SELECTION_INVALID",
-      "CODEX_HOST_EXECUTABLE_UNSAFE",
-      "CODEX_HOST_INCOMPATIBLE",
-      "CODEX_HOST_PROBE_FAILED",
-      "CODEX_HOST_RECHECK_REQUIRED",
-      "CODEX_HOST_TASK_IN_PROGRESS",
-      "AUTHORITY_CHANGE_IN_PROGRESS",
-      "CODEX_HOST_DISCOVERY_FAILED",
-      "CODEX_HOST_DISCOVERY_CANDIDATE_STALE",
-      "ROUTE_B_UNAVAILABLE",
-      "ROUTE_B_HOST_START_FAILED",
-      "ROUTE_B_OUTCOME_UNKNOWN",
-      "ROUTE_B_CHECK_TOOL_USED",
-      "SUPPORT_EXPORT_TOO_LARGE",
-      "CODEX_HOST_MODEL_UNAVAILABLE",
-      "CODEX_HOST_LIVE_FAILED",
-      "CODEX_HOST_LIVE_OUTCOME_UNKNOWN",
-      "CODEX_AGENT_WORKSPACE_NOT_VERIFIED",
-      "CODEX_AGENT_STILL_RUNNING",
-      "CODEX_AGENT_LIVE_FAILED",
-      "CODEX_AGENT_LIVE_OUTCOME_UNKNOWN",
-      "TUNNEL_CLIENT_PICKER_CANCELLED",
-      "TUNNEL_CLIENT_SELECTION_INVALID",
-      "TUNNEL_CLIENT_EXECUTABLE_UNSAFE",
-      "TUNNEL_CLIENT_INCOMPATIBLE",
-      "TUNNEL_CLIENT_PROBE_FAILED",
-      "TUNNEL_CLIENT_DISCOVERY_FAILED",
-      "TUNNEL_CLIENT_DISCOVERY_CANDIDATE_STALE",
-      "CONNECTOR_CREDENTIAL_REQUIRED",
-      "CONNECTOR_CREDENTIAL_STORE_FAILED",
-      "CONNECTOR_CREDENTIAL_OUTCOME_UNKNOWN",
-      "CONNECTOR_WORKSPACE_REQUIRED",
-      "CONNECTOR_WORKSPACE_LIMIT",
-      "CONNECTOR_CONFIGURE_FAILED",
-      "CONNECTOR_DOCTOR_FAILED",
-      "CONNECTOR_START_FAILED",
-      "CONNECTOR_RUNTIME_UNREACHABLE",
-      "CONNECTOR_RUNTIME_OUTCOME_UNKNOWN",
-      "CONNECTOR_ALREADY_RUNNING",
-      "COMPUTER_FENCE_UNHELD",
-      "CONNECTOR_STOP_REQUIRED",
-      "CONNECTOR_STOP_UNCONFIRMED",
-      "CONNECTOR_CHALLENGE_UNAVAILABLE",
-      "CONNECTOR_ATTACHMENT_NOT_FOUND",
-      "CONNECTOR_ATTACHMENT_INVALID",
-      "CONNECTOR_APP_VERIFICATION_DEV_ONLY",
-      "CONNECTOR_APP_VERIFICATION_UNAVAILABLE",
-      "CONNECTOR_APP_TARGET_REQUIRED",
-      "CONNECTOR_APP_VERIFICATION_NOT_READY",
-      "CONNECTOR_APP_VERIFICATION_ALREADY_ATTEMPTED",
-      "CONNECTOR_APP_VERIFICATION_STATE_UNAVAILABLE",
-      "CONNECTOR_APP_VERIFICATION_BEFORE_SUBMIT_FAILED",
-      "CONNECTOR_APP_VERIFICATION_OUTCOME_UNKNOWN",
-      "CONNECTOR_APP_VERIFICATION_STATE_CHANGED",
-      "CHATGPT_APP_SELECTION_MISSING",
-      "CHATGPT_APP_SELECTION_AMBIGUOUS",
-      "CHATGPT_APP_SELECTION_CONFLICT",
-      "CHATGPT_APP_SELECTION_LOST",
-      "CHATGPT_COMPOSER_DRAFT_PRESENT",
-      "CHATGPT_TEMPORARY_CHAT_REQUIRED",
-      "CHATGPT_INSTANT_MODEL_REQUIRED",
-      "DEV_MCP_PROOF_DEV_ONLY",
-      "DEV_MCP_PROOF_PREPARE_FAILED",
-      "DEV_MCP_PROOF_NOT_PREPARED",
-      "DEV_MCP_PROOF_CONNECTOR_MUST_STOP",
-      "DEV_MCP_PROOF_CONNECTOR_NOT_READY",
-      "DEV_MCP_PROOF_STALE",
-      "DEV_MCP_PROOF_CHATGPT_FAILED",
-      "DEV_MCP_PROOF_ANSWER_MISMATCH",
-      "DEV_MCP_PROOF_RECEIPT_MISSING",
-      "DEV_MCP_PROOF_RECEIPT_INVALID",
-      "MODEL_ENDPOINT_UNAVAILABLE",
-      "MODEL_CONFIG_CONFLICT",
-      "MODEL_CONFIG_INSECURE_PERMISSIONS",
-      "MODEL_CONFIG_APPLY_FAILED",
-      "MODEL_CONFIG_ROLLBACK_FAILED",
-      "MODEL_CONFIG_SYMLINK",
-      "MODEL_CONFIG_MALFORMED",
-      "MODEL_TOKEN_ROTATE_FAILED",
-      // S35-H2-1: the installed Codex block could not be rewritten with
-      // the new literal, so the token was not moved (or was put back);
-      // the owner's config still authenticates.
-      "FAROL_MODEL_ROTATE_BLOCK_NOT_UPDATED",
-      // S35-H2-1R: the rewrite failed AND the previous token could not be
-      // put back, so the endpoint was left accepting nothing rather than a
-      // literal the owner's config does not carry.
-      "FAROL_MODEL_ROTATE_RESTORE_FAILED",
-    ]),
-    snapshot: ProductConfigurationSnapshotSchema,
-    connectorAttempt: ConnectorAttemptSchema.optional(),
-  }),
-]);
+// Reuse the receipt owner's strict, content-free parser. Never copy an
+// unvalidated receipt (including unknown fields or accessors) into a result.
+export const ConnectorSetupReceiptSchema = z
+  .unknown()
+  .transform((value, context) => {
+    const receipt = readConnectorSetupReceipt(value);
+    if (
+      receipt &&
+      IdentifierSchema.safeParse(receipt.operationId).success &&
+      (!receipt.connectorAttempt ||
+        ConnectorAttemptSchema.safeParse(receipt.connectorAttempt).success)
+    )
+      return receipt;
+    context.addIssue({
+      code: "custom",
+      message: "Connector setup receipt is invalid.",
+    });
+    return z.NEVER;
+  });
+
+export const ProductConfigurationResultSchema = z
+  .discriminatedUnion("ok", [
+    z.strictObject({
+      ok: z.literal(true),
+      snapshot: ProductConfigurationSnapshotSchema,
+      evidence: ProductConfigurationEvidenceSchema.optional(),
+      connectorSetup: ConnectorSetupReceiptSchema.optional(),
+    }),
+    z.strictObject({
+      ok: z.literal(false),
+      error: z.enum([
+        "SETTINGS_UNAVAILABLE",
+        "ONBOARDING_HELP_OPEN_FAILED",
+        "SETTINGS_INPUT_INVALID",
+        "SETTINGS_WRITE_FAILED",
+        "CHATGPT_ROUTE_UNAVAILABLE",
+        "CHATGPT_CONVERSATION_UNCONFIRMED",
+        "CHATGPT_CONVERSATION_REFUSED",
+        "CHATGPT_PROMPT_TOO_LARGE",
+        "CHATGPT_ACCOUNT_UNAVAILABLE",
+        "CHATGPT_ACCOUNT_CHANGED",
+        "CHATGPT_ACCOUNT_CONFIRMATION_INVALID",
+        "CHATGPT_ACCOUNT_APPROVAL_UNCONFIRMED",
+        "CHATGPT_SIGN_IN_IN_PROGRESS",
+        "CHATGPT_PAGE_UNREACHABLE",
+        "CHATGPT_CONNECTION_NOT_VERIFIED",
+        "CHATGPT_TASK_IN_PROGRESS",
+        "CHATGPT_TASK_PREVIEW_PENDING",
+        "CHATGPT_TASK_PREVIEW_NOT_FOUND",
+        "CHATGPT_TASK_PREVIEW_EXPIRED",
+        "CHATGPT_TASK_REQUIRES_REVIEW",
+        "CHATGPT_TASK_JOURNAL_FAILED",
+        "CHATGPT_TASK_PROMOTION_PENDING",
+        "CHATGPT_TASK_RESULT_NOT_FOUND",
+        "CHATGPT_CONVERSATION_STATE_FAILED",
+        "CHATGPT_CONVERSATION_REVIEW_REQUIRED",
+        "CHATGPT_ATTACHMENT_PICKER_CANCELLED",
+        "CHATGPT_ATTACHMENT_SELECTION_INVALID",
+        "CHATGPT_ATTACHMENT_TYPE_UNSUPPORTED",
+        "CHATGPT_ATTACHMENT_TOO_LARGE",
+        "CHATGPT_ATTACHMENT_STAGING_FAILED",
+        "CHATGPT_ATTACHMENT_REFERENCE_MISSING",
+        "CHATGPT_ATTACHMENT_PREVIEW_PENDING",
+        "CHATGPT_ATTACHMENT_PREVIEW_NOT_FOUND",
+        "CHATGPT_ATTACHMENT_PREVIEW_EXPIRED",
+        "WORKSPACE_NOT_FOUND",
+        "WORKSPACE_PICKER_CANCELLED",
+        "WORKSPACE_SELECTION_INVALID",
+        "WORKSPACE_SELECTION_PROTECTED",
+        "WORKSPACE_VERIFICATION_FAILED",
+        "WORKSPACE_FILE_PICKER_CANCELLED",
+        "WORKSPACE_FILE_SELECTION_INVALID",
+        "WORKSPACE_PATH_REFUSED",
+        "WORKSPACE_ROOT_CHANGED",
+        "WORKSPACE_NOT_A_FILE",
+        "WORKSPACE_FILE_TOO_LARGE",
+        "WORKSPACE_NOT_TEXT",
+        "WORKSPACE_SEARCH_TIMEOUT",
+        "WORKSPACE_VERIFICATION_REQUIRED",
+        "WORKSPACE_READ_FAILED",
+        "WORKSPACE_COMMAND_APPROVAL_REQUIRED",
+        "WORKSPACE_COMMAND_UNAVAILABLE",
+        "WORKSPACE_COMMAND_CANCELLED",
+        "WORKSPACE_COMMAND_TIMEOUT",
+        "WORKSPACE_COMMAND_OUTPUT_TOO_LARGE",
+        "WORKSPACE_NOT_GIT_REPOSITORY",
+        "WORKSPACE_GIT_HEAD_UNBORN",
+        "WORKSPACE_GIT_METADATA_NOT_APPROVED",
+        "WORKSPACE_GIT_ALTERNATES_UNSUPPORTED",
+        "WORKSPACE_INDEX_CHANGED_DURING_SNAPSHOT",
+        "WORKSPACE_CHANGED_DURING_SNAPSHOT",
+        "WORKSPACE_TRACKED_LIST_TOO_LARGE",
+        "WORKSPACE_TRACKED_PATH_UNSUPPORTED",
+        "WORKSPACE_SNAPSHOT_TOO_LARGE",
+        "WORKSPACE_SNAPSHOT_CROSS_VOLUME",
+        "WORKSPACE_SNAPSHOT_CLONE_UNSUPPORTED",
+        "WORKSPACE_COMMAND_FAILED",
+        "WORKSPACE_WRITE_APPROVAL_REQUIRED",
+        "WORKSPACE_MUTATION_IN_PROGRESS",
+        "WORKSPACE_MUTATION_PREVIEW_NOT_FOUND",
+        "WORKSPACE_MUTATION_PREVIEW_EXPIRED",
+        "WORKSPACE_MUTATION_CONFLICT",
+        "WORKSPACE_EDIT_NO_MATCH",
+        "WORKSPACE_EDIT_NOT_UNIQUE",
+        "WORKSPACE_MUTATION_OUTCOME_UNKNOWN",
+        "WORKSPACE_MUTATION_FAILED",
+        "WORKSPACE_MUTATION_NOT_PENDING",
+        "WORKSPACE_MUTATION_NOT_ADMITTED",
+        "WORKSPACE_MUTATION_RESULT_PENDING",
+        "SUPPORT_EXPORT_CANCELLED",
+        "SUPPORT_EXPORT_FAILED",
+        "CODEX_HOST_PICKER_CANCELLED",
+        "CODEX_HOST_NOT_CONFIGURED",
+        "CODEX_TASK_ROUTE_REFUSED",
+        "CODEX_TASK_OBSERVATION_REFUSED",
+        "CODEX_TASK_ROUTE_UNAVAILABLE",
+        "CODEX_SHARED_SOCKET_NOT_FOUND",
+        "CODEX_SHARED_SOCKET_ACCESS_DENIED",
+        "CODEX_SHARED_SOCKET_ALIAS_UNSUPPORTED",
+        "CODEX_SHARED_SOCKET_INVALID_TARGET",
+        "CODEX_SHARED_SOCKET_CHECK_FAILED",
+        "CODEX_SHARED_PROXY_LAUNCH_FAILED",
+        "CODEX_SHARED_PROXY_PIPE_FAILED",
+        "CODEX_SHARED_PROXY_EXITED",
+        "CODEX_SHARED_PROXY_TIMEOUT",
+        "CODEX_SHARED_PROXY_INVALID_IDENTITY",
+        "CODEX_SHARED_PROXY_PROTOCOL_ERROR",
+        "CODEX_SHARED_PROXY_RPC_ERROR",
+        "CODEX_HOST_SELECTION_INVALID",
+        "CODEX_HOST_EXECUTABLE_UNSAFE",
+        "CODEX_HOST_INCOMPATIBLE",
+        "CODEX_HOST_PROBE_FAILED",
+        "CODEX_HOST_RECHECK_REQUIRED",
+        "CODEX_HOST_TASK_IN_PROGRESS",
+        "AUTHORITY_CHANGE_IN_PROGRESS",
+        "CODEX_HOST_DISCOVERY_FAILED",
+        "CODEX_HOST_DISCOVERY_CANDIDATE_STALE",
+        "ROUTE_B_UNAVAILABLE",
+        "ROUTE_B_HOST_START_FAILED",
+        "ROUTE_B_OUTCOME_UNKNOWN",
+        "ROUTE_B_CHECK_TOOL_USED",
+        "SUPPORT_EXPORT_TOO_LARGE",
+        "CODEX_HOST_MODEL_UNAVAILABLE",
+        "CODEX_HOST_LIVE_FAILED",
+        "CODEX_HOST_LIVE_OUTCOME_UNKNOWN",
+        "CODEX_AGENT_WORKSPACE_NOT_VERIFIED",
+        "CODEX_AGENT_STILL_RUNNING",
+        "CODEX_AGENT_LIVE_FAILED",
+        "CODEX_AGENT_LIVE_OUTCOME_UNKNOWN",
+        "TUNNEL_CLIENT_PICKER_CANCELLED",
+        "TUNNEL_CLIENT_SELECTION_INVALID",
+        "TUNNEL_CLIENT_EXECUTABLE_UNSAFE",
+        "TUNNEL_CLIENT_INCOMPATIBLE",
+        "TUNNEL_CLIENT_PROBE_FAILED",
+        "TUNNEL_CLIENT_DISCOVERY_FAILED",
+        "TUNNEL_CLIENT_DISCOVERY_CANDIDATE_STALE",
+        "CONNECTOR_CREDENTIAL_REQUIRED",
+        "CONNECTOR_CREDENTIAL_STORE_FAILED",
+        "CONNECTOR_CREDENTIAL_OUTCOME_UNKNOWN",
+        "CONNECTOR_WORKSPACE_REQUIRED",
+        "CONNECTOR_WORKSPACE_LIMIT",
+        "CONNECTOR_CONFIGURE_FAILED",
+        "CONNECTOR_DOCTOR_FAILED",
+        "CONNECTOR_START_FAILED",
+        "CONNECTOR_RUNTIME_UNREACHABLE",
+        "CONNECTOR_RUNTIME_OUTCOME_UNKNOWN",
+        "CONNECTOR_ALREADY_RUNNING",
+        "COMPUTER_FENCE_UNHELD",
+        "CONNECTOR_STOP_REQUIRED",
+        "CONNECTOR_STOP_UNCONFIRMED",
+        "CONNECTOR_SETUP_BINDING_CHANGED",
+        "CONNECTOR_SETUP_STEP_UNCONFIRMED",
+        "CONNECTOR_CHALLENGE_UNAVAILABLE",
+        "CONNECTOR_ATTACHMENT_NOT_FOUND",
+        "CONNECTOR_ATTACHMENT_INVALID",
+        "CONNECTOR_APP_VERIFICATION_DEV_ONLY",
+        "CONNECTOR_APP_VERIFICATION_UNAVAILABLE",
+        "CONNECTOR_APP_TARGET_REQUIRED",
+        "CONNECTOR_APP_VERIFICATION_NOT_READY",
+        "CONNECTOR_APP_VERIFICATION_ALREADY_ATTEMPTED",
+        "CONNECTOR_APP_VERIFICATION_STATE_UNAVAILABLE",
+        "CONNECTOR_APP_VERIFICATION_BEFORE_SUBMIT_FAILED",
+        "CONNECTOR_APP_VERIFICATION_OUTCOME_UNKNOWN",
+        "CONNECTOR_APP_VERIFICATION_STATE_CHANGED",
+        "CHATGPT_APP_SELECTION_MISSING",
+        "CHATGPT_APP_SELECTION_AMBIGUOUS",
+        "CHATGPT_APP_SELECTION_CONFLICT",
+        "CHATGPT_APP_SELECTION_LOST",
+        "CHATGPT_COMPOSER_DRAFT_PRESENT",
+        "CHATGPT_TEMPORARY_CHAT_REQUIRED",
+        "CHATGPT_INSTANT_MODEL_REQUIRED",
+        "DEV_MCP_PROOF_DEV_ONLY",
+        "DEV_MCP_PROOF_PREPARE_FAILED",
+        "DEV_MCP_PROOF_NOT_PREPARED",
+        "DEV_MCP_PROOF_CONNECTOR_MUST_STOP",
+        "DEV_MCP_PROOF_CONNECTOR_NOT_READY",
+        "DEV_MCP_PROOF_STALE",
+        "DEV_MCP_PROOF_CHATGPT_FAILED",
+        "DEV_MCP_PROOF_ANSWER_MISMATCH",
+        "DEV_MCP_PROOF_RECEIPT_MISSING",
+        "DEV_MCP_PROOF_RECEIPT_INVALID",
+        "MODEL_ENDPOINT_UNAVAILABLE",
+        "MODEL_CONFIG_CONFLICT",
+        "MODEL_CONFIG_INSECURE_PERMISSIONS",
+        "MODEL_CONFIG_APPLY_FAILED",
+        "MODEL_CONFIG_ROLLBACK_FAILED",
+        "MODEL_CONFIG_SYMLINK",
+        "MODEL_CONFIG_MALFORMED",
+        "MODEL_TOKEN_ROTATE_FAILED",
+        // S35-H2-1: the installed Codex block could not be rewritten with
+        // the new literal, so the token was not moved (or was put back);
+        // the owner's config still authenticates.
+        "FAROL_MODEL_ROTATE_BLOCK_NOT_UPDATED",
+        // S35-H2-1R: the rewrite failed AND the previous token could not be
+        // put back, so the endpoint was left accepting nothing rather than a
+        // literal the owner's config does not carry.
+        "FAROL_MODEL_ROTATE_RESTORE_FAILED",
+      ]),
+      snapshot: ProductConfigurationSnapshotSchema,
+      connectorAttempt: ConnectorAttemptSchema.optional(),
+      connectorSetup: ConnectorSetupReceiptSchema.optional(),
+    }),
+  ])
+  .superRefine((result, context) => {
+    const receipt = result.connectorSetup;
+    if (!receipt) return;
+    const inconsistent = result.ok
+      ? receipt.state !== "completed"
+      : receipt.state === "completed" ||
+        result.error !== receipt.code ||
+        (result.connectorAttempt !== undefined &&
+          (receipt.connectorAttempt === undefined ||
+            result.connectorAttempt.method !==
+              receipt.connectorAttempt.method ||
+            result.connectorAttempt.requestId !==
+              receipt.connectorAttempt.requestId ||
+            result.connectorAttempt.operationId !==
+              receipt.connectorAttempt.operationId ||
+            result.connectorAttempt.outcome !==
+              receipt.connectorAttempt.outcome));
+    if (inconsistent)
+      context.addIssue({
+        code: "custom",
+        path: ["connectorSetup"],
+        message: "Connector setup result is inconsistent.",
+      });
+  });
 
 export type ProductGeneralSettings = z.infer<
   typeof ProductGeneralSettingsSchema

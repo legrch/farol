@@ -1330,8 +1330,8 @@ it("Setup keeps credential draft nodes through Overview, other steps and backgro
   expect(host.querySelectorAll(".connection-credentials input")[1]).toBe(key);
   expect(tunnel.value).toBe("draft-tunnel");
   expect(key.value).toBe("fixture-draft-key-0000000000");
-  expect(button(host, "Save credentials").disabled).toBe(false);
-  await act(async () => button(host, "Save credentials").click());
+  expect(button(host, "Save & connect").disabled).toBe(false);
+  await act(async () => button(host, "Save & connect").click());
   expect(f.api.configure).not.toHaveBeenCalled();
   await act(async () =>
     key.dispatchEvent(

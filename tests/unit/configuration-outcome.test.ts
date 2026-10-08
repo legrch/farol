@@ -90,6 +90,7 @@ it("distinguishes a settings write with failed readback from a refusal without e
     "CONNECTOR_RUNTIME_OUTCOME_UNKNOWN",
     "CONNECTOR_CREDENTIAL_OUTCOME_UNKNOWN",
     "CONNECTOR_STOP_UNCONFIRMED",
+    "CONNECTOR_SETUP_STEP_UNCONFIRMED",
     "WORKSPACE_MUTATION_OUTCOME_UNKNOWN",
     "CHATGPT_ACCOUNT_APPROVAL_UNCONFIRMED",
   ]) {
@@ -116,6 +117,75 @@ it("distinguishes a settings write with failed readback from a refusal without e
       }),
     ),
   ).toBe("refused");
+});
+
+it("honors nested setup unknown without an outer connector attempt or unknown error", () => {
+  const connectorSetup = {
+    kind: "connector.save-and-connect",
+    operationId: "11111111-1111-4111-8111-111111111111",
+    buildId: "a".repeat(64),
+    state: "unknown",
+    stoppedAt: "connection-admission",
+    credentials: "saved",
+    connection: "not-started",
+    code: "SETTINGS_INPUT_INVALID",
+    externalVerification: "not-proven",
+  };
+  const outcome = classifyConfigurationResponse({
+    settled: "fulfilled",
+    value: { ok: false, error: connectorSetup.code, snapshot, connectorSetup },
+  });
+  expect(outcome.kind).toBe("refused");
+  expect(configurationEffectOutcome(outcome)).toBe("unknown");
+});
+
+it("treats a success that downgrades nested unknown as malformed and unconfirmed", () => {
+  const outcome = classifyConfigurationResponse({
+    settled: "fulfilled",
+    value: {
+      ok: true,
+      snapshot,
+      connectorSetup: {
+        kind: "connector.save-and-connect",
+        operationId: "11111111-1111-4111-8111-111111111111",
+        buildId: "a".repeat(64),
+        state: "unknown",
+        stoppedAt: "credentials",
+        credentials: "unknown",
+        connection: "not-started",
+        code: "CONNECTOR_CREDENTIAL_OUTCOME_UNKNOWN",
+        externalVerification: "not-proven",
+      },
+    },
+  });
+  expect(outcome).toEqual({
+    kind: "unconfirmed",
+    reason: "malformed-response",
+  });
+  expect(configurationEffectOutcome(outcome)).toBe("unknown");
+});
+
+it("keeps nested uncertainty dominant even for a typed caller that bypasses the wire parser", () => {
+  expect(
+    configurationEffectOutcome({
+      kind: "applied",
+      result: {
+        ok: true,
+        snapshot,
+        connectorSetup: {
+          kind: "connector.save-and-connect",
+          operationId: "11111111-1111-4111-8111-111111111111",
+          buildId: "a".repeat(64),
+          state: "unknown",
+          stoppedAt: "credentials",
+          credentials: "unknown",
+          connection: "not-started",
+          code: "CONNECTOR_CREDENTIAL_OUTCOME_UNKNOWN",
+          externalVerification: "not-proven",
+        },
+      },
+    }),
+  ).toBe("unknown");
 });
 
 it("keeps the original Go open unknown even when recording its fence is refused", () => {

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { StrictMode, act, useSyncExternalStore } from "react";
 import { createRoot } from "react-dom/client";
 import type { Root } from "react-dom/client";
@@ -53,6 +54,7 @@ async function mount(
   update: WindowSnapshot["update"] = { phase: "idle", checkedAt: null },
   setupStep?: "connection" | "folders" | "attachment",
 ) {
+  Object.assign(globalThis.crypto, { randomUUID });
   let activeSetupStep = setupStep;
   const f = fixture();
   vi.mocked(f.api.installedUpdate).mockResolvedValue(update);
@@ -62,10 +64,25 @@ async function mount(
     environment,
     configuration,
   });
-  vi.mocked(f.api.configure).mockResolvedValue({
+  vi.mocked(f.api.configure).mockImplementation(async (command) => ({
     ok: true,
     snapshot: configuration,
-  });
+    ...(command.kind === "connector.save-and-connect"
+      ? {
+          connectorSetup: {
+            kind: "connector.save-and-connect",
+            operationId: command.operationId,
+            buildId: command.buildId,
+            state: "completed",
+            stoppedAt: "complete",
+            credentials: "saved",
+            connection: "connected",
+            code: null,
+            externalVerification: "not-proven",
+          },
+        }
+      : {}),
+  }));
   const c = new WindowController(f.api);
   await c.start();
   c.navigate({ area: "settings", page });
@@ -861,10 +878,12 @@ describe("owner-facing credential replacement", () => {
     await change(h.field("Tunnel ID"), "tunnel_fixture");
     await change(h.field("Runtime key"), "disposable-replacement-key-12345");
     await h.click("Show runtime key");
-    await h.click("Save credentials");
+    await h.click("Save & connect");
     expect(h.calls()).toEqual([
       {
-        kind: "connector.configure",
+        kind: "connector.save-and-connect",
+        operationId: expect.any(String),
+        buildId: "3".repeat(64),
         tunnelId: "tunnel_fixture",
         runtimeKey: "disposable-replacement-key-12345",
       },
@@ -884,9 +903,12 @@ describe("owner-facing credential replacement", () => {
     expect((h.field("Runtime key") as HTMLInputElement).type).toBe("password");
   });
   it.each([
-    ["CONNECTOR_CREDENTIAL_OUTCOME_UNKNOWN", "runtime key may have changed"],
-    ["SETTINGS_WRITE_FAILED", "settings write"],
-    ["CONNECTOR_RUNTIME_OUTCOME_UNKNOWN", "connection outcome is unknown"],
+    ["CONNECTOR_CREDENTIAL_OUTCOME_UNKNOWN", "Do not submit the key again"],
+    ["SETTINGS_WRITE_FAILED", "Do not submit the key again"],
+    [
+      "CONNECTOR_RUNTIME_OUTCOME_UNKNOWN",
+      "Credentials saved; connection result unconfirmed",
+    ],
   ] as const)(
     "explains %s at the credential action without exposing or resubmitting the key",
     async (error, message) => {
@@ -897,17 +919,112 @@ describe("owner-facing credential replacement", () => {
       const next = structuredClone(h.configuration.settings);
       next.revision++;
       next.setup.connect.outcomeUnknown = true;
-      vi.mocked(h.f.api.configure).mockResolvedValueOnce({
+      vi.mocked(h.f.api.configure).mockImplementationOnce(async (command) => ({
         ok: false,
         error,
         snapshot: { status: "ready", settings: next },
-      });
-      await h.click("Save credentials");
+        ...(command.kind === "connector.save-and-connect"
+          ? {
+              connectorSetup: {
+                kind: command.kind,
+                operationId: command.operationId,
+                buildId: command.buildId,
+                state: "unknown",
+                stoppedAt:
+                  error === "CONNECTOR_RUNTIME_OUTCOME_UNKNOWN"
+                    ? "connection"
+                    : "credentials",
+                credentials:
+                  error === "CONNECTOR_RUNTIME_OUTCOME_UNKNOWN"
+                    ? "saved"
+                    : "unknown",
+                connection:
+                  error === "CONNECTOR_RUNTIME_OUTCOME_UNKNOWN"
+                    ? "unknown"
+                    : "not-started",
+                code: error,
+                externalVerification: "not-proven",
+              },
+            }
+          : {}),
+      }));
+      await h.click("Save & connect");
       expect(h.host.textContent).toContain(message);
       expect(h.host.textContent).not.toContain(key);
       expect((h.field("Runtime key") as HTMLInputElement).value).toBe("");
-      expect(h.button("Save credentials").disabled).toBe(true);
+      expect(h.button("Save & connect").disabled).toBe(true);
       expect(h.calls()).toHaveLength(1);
+    },
+  );
+});
+
+describe("combined connection partial receipts", () => {
+  it.each(["refused", "unknown"] as const)(
+    "keeps saved-stage %s visible after refresh/remount without another key",
+    async (state) => {
+      const h = await mount("connection");
+      await change(h.field("Tunnel ID"), "synthetic-tunnel");
+      const secret = "disposable-combined-key-00000000";
+      await change(h.field("Runtime key"), secret);
+      const next = structuredClone(h.configuration.settings);
+      next.revision += 1;
+      next.connectors.secureMcp.generation += 1;
+      next.connectors.secureMcp.credential = "stored";
+      next.connectors.secureMcp.tunnelId = "synthetic-tunnel";
+      const error =
+        state === "unknown"
+          ? "CONNECTOR_RUNTIME_OUTCOME_UNKNOWN"
+          : "CONNECTOR_START_FAILED";
+      vi.mocked(h.f.api.configure).mockImplementationOnce(async (command) => ({
+        ok: false,
+        error,
+        snapshot: { status: "ready", settings: next },
+        ...(command.kind === "connector.save-and-connect"
+          ? {
+              connectorSetup: {
+                kind: command.kind,
+                operationId: command.operationId,
+                buildId: command.buildId,
+                state,
+                stoppedAt: "connection",
+                credentials: "saved",
+                connection: state,
+                code: error,
+                externalVerification: "not-proven",
+              },
+            }
+          : {}),
+      }));
+      await h.click("Save & connect");
+      expect(h.calls()).toHaveLength(1);
+      expect(
+        h.host.querySelector('.settings-page > [role="status"]')?.textContent,
+      ).toContain(
+        state === "unknown"
+          ? "Credentials saved; connection result unconfirmed"
+          : "The connection step did not complete",
+      );
+      expect(
+        activePage(h.host).querySelector('input[type="password"]'),
+      ).toBeNull();
+      expect(activePage(h.host).textContent).not.toContain("Computer ready");
+      vi.mocked(h.f.api.bootstrap).mockResolvedValue({
+        ...bootstrap(),
+        configuration: {
+          status: "ready",
+          settings: { ...next, revision: next.revision + 1 },
+        },
+      });
+      await act(async () => h.c.refresh());
+      await h.pageTo("folders");
+      await h.pageTo("connection");
+      expect(
+        h.host.querySelector('.settings-page > [role="status"]')?.textContent,
+      ).toContain("Credentials saved");
+      expect(h.calls()).toHaveLength(1);
+      expect(JSON.stringify(h.c.getSnapshot())).not.toContain(secret);
+      if (state === "unknown")
+        expect(h.button("Edit connection").disabled).toBe(true);
     },
   );
 });
@@ -1062,13 +1179,11 @@ describe("owner setup entry feedback", () => {
     expect(feedback()).toContain("20–512");
     expect(feedback()).not.toContain("short");
     expect(h.field("Runtime key").getAttribute("aria-invalid")).toBe("true");
-    expect(h.button("Save credentials").disabled).toBe(true);
+    expect(h.button("Save & connect").disabled).toBe(true);
     await change(h.field("Runtime key"), "valid-shaped-test-key-000000");
     expect(feedback()).toContain("Credential format is valid");
-    expect(feedback()).toContain(
-      "does not start the connection or prove ChatGPT attachment",
-    );
-    expect(h.button("Save credentials").disabled).toBe(false);
+    expect(feedback()).toContain("verification in ChatGPT is still needed");
+    expect(h.button("Save & connect").disabled).toBe(false);
     expect(h.calls()).toEqual([]);
   });
   it.each(["bad tunnel", "é", "x".repeat(161)])(
@@ -1081,7 +1196,7 @@ describe("owner setup entry feedback", () => {
       expect(
         h.host.querySelector(".credential-entry-feedback")?.textContent,
       ).toContain("Enter the Tunnel ID");
-      expect(h.button("Save credentials").disabled).toBe(true);
+      expect(h.button("Save & connect").disabled).toBe(true);
       expect(h.host.textContent).not.toContain(secret);
       expect(h.calls()).toEqual([]);
     },
@@ -1096,7 +1211,7 @@ describe("owner setup entry feedback", () => {
         h.host.querySelector(".credential-entry-feedback")?.textContent,
       ).toContain("20–512");
       expect(h.field("Runtime key").value).toBe(key);
-      expect(h.button("Save credentials").disabled).toBe(true);
+      expect(h.button("Save & connect").disabled).toBe(true);
       if (key) expect(h.host.textContent).not.toContain(key);
       expect(h.calls()).toEqual([]);
     },
@@ -1114,14 +1229,14 @@ describe("owner setup entry feedback", () => {
     expect(
       h.host.querySelector(".credential-pause-feedback")?.textContent,
     ).toContain("dependent operation is pending");
-    expect(h.button("Save credentials").disabled).toBe(true);
+    expect(h.button("Save & connect").disabled).toBe(true);
     await act(async () =>
       wait.resolve({ ok: true, snapshot: h.configuration }),
     );
     expect(
       h.host.querySelector(".credential-pause-feedback")?.textContent,
     ).toBe("");
-    expect(h.button("Save credentials").disabled).toBe(false);
+    expect(h.button("Save & connect").disabled).toBe(false);
     const references = h
       .field("Runtime key")
       .getAttribute("aria-describedby")!
@@ -1150,8 +1265,8 @@ describe("owner setup entry feedback", () => {
     expect(
       h.host.querySelector(".credential-pause-feedback")?.textContent,
     ).toContain("runtime status is unavailable");
-    expect(h.button("Save credentials").disabled).toBe(true);
-    await h.click("Save credentials");
+    expect(h.button("Save & connect").disabled).toBe(true);
+    await h.click("Save & connect");
     expect(h.calls()).toEqual([]);
   });
   it("keeps unknown replacement fenced even with a new valid draft", async () => {
@@ -1159,7 +1274,7 @@ describe("owner setup entry feedback", () => {
     await h.click("Edit connection");
     await change(h.field("Runtime key"), "test-replacement-one-000000");
     vi.mocked(h.f.api.configure).mockRejectedValueOnce(new Error("reply lost"));
-    await h.click("Save credentials");
+    await h.click("Save & connect");
     await change(h.field("Runtime key"), "test-replacement-two-000000");
     expect(
       h.host.querySelector(".credential-entry-feedback")?.textContent,
@@ -1170,9 +1285,9 @@ describe("owner setup entry feedback", () => {
     expect(
       h.host.querySelector(".credential-pause-feedback")?.textContent,
     ).toContain("Do not repeat it");
-    await h.click("Save credentials");
+    await h.click("Save & connect");
     expect(h.calls()).toHaveLength(1);
-    expect(h.button("Save credentials").disabled).toBe(true);
+    expect(h.button("Save & connect").disabled).toBe(true);
   });
   it("does not present a chooser result as an approved workspace", async () => {
     const h = await mount("folders");
@@ -1568,20 +1683,22 @@ describe("bounded Settings writer", () => {
     expect(h.field("Runtime key").value).toBe(secret);
     expect(JSON.stringify(h.c.getSnapshot())).not.toContain(secret);
     expect(h.host.textContent).not.toContain(secret);
-    await h.click("Save credentials");
+    await h.click("Save & connect");
     expect(h.calls()).toEqual([
       {
-        kind: "connector.configure",
+        kind: "connector.save-and-connect",
+        operationId: expect.any(String),
+        buildId: "3".repeat(64),
         tunnelId: "owner-tunnel",
         runtimeKey: secret,
       },
     ]);
     expect(h.field("Runtime key").value).toBe("");
-    await h.click("Save credentials");
+    await h.click("Save & connect");
     expect(h.calls()).toHaveLength(1); // Empty credentials never look like a missing saved key or resubmit.
-    expect(h.button("Save credentials").disabled).toBe(true);
+    expect(h.button("Save & connect").disabled).toBe(true);
     expect(h.host.textContent).toContain(
-      "Connection details saved. This does not start the connection or verify access from ChatGPT.",
+      "Connection started. Credentials are saved. Verify Farol in ChatGPT to finish connecting this Mac.",
     );
     expect(JSON.stringify(h.c.getSnapshot())).not.toContain(secret);
   });
@@ -1595,7 +1712,7 @@ describe("bounded Settings writer", () => {
       ),
     );
     await change(input, "explicit-test-key-000000000000");
-    await h.click("Save credentials");
+    await h.click("Save & connect");
     expect(input.value).toBe("explicit-test-key-000000000000");
     expect(h.calls()).toEqual([]);
   });
@@ -3141,32 +3258,48 @@ describe("owner Setup presentation checkpoint (DOM fixtures only)", () => {
     await h.click("Edit connection");
     expect(h.field("Tunnel ID").value).toBe("owner-tunnel");
     expect(h.field("Runtime key").value).toBe("");
-    expect(h.button("Save credentials").disabled).toBe(true);
+    expect(h.button("Save & connect").disabled).toBe(true);
   });
   it("requires a valid new key, clears it on dispatch and never reloads it from saved state", async () => {
     const value = connectionSettings();
     const h = await mount("connection", value);
     await h.click("Edit connection");
     await change(h.field("Runtime key"), "short");
-    await h.click("Save credentials");
+    await h.click("Save & connect");
     expect(h.field("Runtime key").value).toBe("short");
     expect(h.calls()).toEqual([]);
     const secret = "explicit-test-replacement-000000";
     await change(h.field("Runtime key"), secret);
     const wait = deferred<unknown>();
     vi.mocked(h.f.api.configure).mockReturnValueOnce(wait.promise);
-    await h.click("Save credentials");
+    await h.click("Save & connect");
     expect(h.field("Runtime key").value).toBe("");
-    await h.click("Save credentials");
+    await h.click("Save & connect");
     expect(h.calls()).toEqual([
       {
-        kind: "connector.configure",
+        kind: "connector.save-and-connect",
+        operationId: expect.any(String),
+        buildId: "3".repeat(64),
         tunnelId: "owner-tunnel",
         runtimeKey: secret,
       },
     ]);
     await act(async () =>
-      wait.resolve({ ok: true, snapshot: h.configuration }),
+      wait.resolve({
+        ok: true,
+        snapshot: h.configuration,
+        connectorSetup: {
+          kind: "connector.save-and-connect",
+          operationId: (h.calls()[0] as { operationId: string }).operationId,
+          buildId: "3".repeat(64),
+          state: "completed",
+          stoppedAt: "complete",
+          credentials: "saved",
+          connection: "connected",
+          code: null,
+          externalVerification: "not-proven",
+        },
+      }),
     );
     expect(
       activePage(h.host).querySelector('input[type="password"]'),
@@ -3180,8 +3313,8 @@ describe("owner Setup presentation checkpoint (DOM fixtures only)", () => {
     await h.click("Edit connection");
     await change(h.field("Runtime key"), "explicit-test-replacement-000000");
     vi.mocked(h.f.api.configure).mockRejectedValueOnce(new Error("reply lost"));
-    await h.click("Save credentials");
-    expect(h.button("Save credentials").disabled).toBe(true);
+    await h.click("Save & connect");
+    expect(h.button("Save & connect").disabled).toBe(true);
     expect(
       activePage(h.host).querySelector(".credentials-saved strong")
         ?.textContent,
@@ -3191,7 +3324,7 @@ describe("owner Setup presentation checkpoint (DOM fixtures only)", () => {
     ).toContain("Outcome unknown");
     await h.pageTo("folders");
     await h.pageTo("connection");
-    await h.click("Save credentials");
+    await h.click("Save & connect");
     expect(h.calls()).toHaveLength(1);
     expect(h.field("Runtime key").value).toBe("");
   });

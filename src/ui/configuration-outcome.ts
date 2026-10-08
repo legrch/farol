@@ -75,12 +75,14 @@ export function configurationEffectOutcome(
   outcome: ConfigurationOutcome,
 ): "applied" | "refused" | "unknown" {
   if (outcome.kind === "unconfirmed") return "unknown";
+  if (outcome.result.connectorSetup?.state === "unknown") return "unknown";
   if (outcome.kind === "applied") return "applied";
   if (outcome.result.connectorAttempt?.outcome === "unknown") return "unknown";
   return [
     "CONNECTOR_RUNTIME_OUTCOME_UNKNOWN",
     "CONNECTOR_CREDENTIAL_OUTCOME_UNKNOWN",
     "CONNECTOR_STOP_UNCONFIRMED",
+    "CONNECTOR_SETUP_STEP_UNCONFIRMED",
     "WORKSPACE_MUTATION_OUTCOME_UNKNOWN",
     "SETTINGS_WRITE_FAILED",
     "CHATGPT_ACCOUNT_APPROVAL_UNCONFIRMED",

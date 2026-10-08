@@ -1,6 +1,7 @@
 import type { NavigationShortcuts } from "../../pkg/ipc/navigation-shortcuts";
 import type { AgentDraftStore } from "../agent-draft";
 import type { ConversationDraftStore } from "./conversation-draft";
+import type { ConnectorSetupReceipt } from "../../pkg/product-settings/connector-setup-receipt";
 import type {
   ProductConfigurationCommand,
   ProductConfigurationEvidence,
@@ -90,6 +91,8 @@ export type Intent = Readonly<{
   id: string;
   state: "pending" | "applied" | "refused" | "unknown";
   code: string | null;
+  /** Original command progress, independent of ambient snapshot ordering. */
+  connectorSetup?: ConnectorSetupReceipt;
   connectorAttempt?: Readonly<{
     method: "computer.connector.open";
     requestId: string;

@@ -1,3 +1,4 @@
+import { connectorSetupPresentation } from "../connector-setup-presentation";
 import {
   defaultNavigationShortcuts,
   parseNavigationShortcuts,
@@ -135,6 +136,13 @@ function actionFeedback(
   evidenceReceived = false,
 ): string {
   if (result.state === "pending") return "Saving or checking…";
+  if (result.connectorSetup) {
+    const view = connectorSetupPresentation(result.connectorSetup, {
+      operationId: result.connectorSetup.operationId,
+      buildId: result.connectorSetup.buildId,
+    });
+    return `${view.title}. ${view.description}`;
+  }
   if (result.code === "CONNECTOR_STOP_UNCONFIRMED")
     return "Farol could not confirm that the connection stopped. The requested change is unconfirmed. Do not repeat this action; review the existing result in Diagnostics.";
   if (result.code === "CONNECTOR_CREDENTIAL_OUTCOME_UNKNOWN")
@@ -1834,8 +1842,13 @@ function Connection({
   const [replacing, setReplacing] = useState(false);
   const saved = connector.credential === "stored";
   const editing = !saved || replacing;
-  const replacementUnconfirmed =
-    snapshot.intents[intention("connector.configure")]?.state === "unknown";
+  const replacementUnconfirmed = Object.values(snapshot.intents).some(
+    (intent) =>
+      (intent.id.startsWith(intention("connector.save-and-connect")) ||
+        intent.id === intention("connector.configure")) &&
+      intent.state === "unknown" &&
+      intent.connectorSetup?.credentials !== "saved",
+  );
   const keyComposing = useRef(false);
   const credentialFeedbackId = useId();
   const credentialInput = ProductConfigurationCommandSchema.safeParse({
@@ -1855,8 +1868,8 @@ function Connection({
     ? "Enter the Tunnel ID from Tunnels: 1–160 letters, numbers, periods, underscores, colons or hyphens, without spaces or line breaks."
     : keyInvalid
       ? "Enter the complete runtime key: 20–512 printable ASCII characters, without spaces or line breaks."
-      : "Credential format is valid. Saving does not start the connection or prove ChatGPT attachment.";
-  const credentialPauseReason = !actions.allowed("connector.configure")
+      : "Credential format is valid. Save & connect starts the local connection; verification in ChatGPT is still needed.";
+  const credentialPauseReason = !actions.allowed("connector.save-and-connect")
     ? actions.computerPauseReason
     : null;
   const connectionStatus =
@@ -1916,7 +1929,7 @@ function Connection({
                 <button
                   type="button"
                   className="subtle"
-                  disabled={!actions.allowed("connector.configure")}
+                  disabled={!actions.allowed("connector.save-and-connect")}
                   onClick={() => {
                     setTunnelId(connector.tunnelId ?? "");
                     setKey("");
@@ -1943,11 +1956,13 @@ function Connection({
                 event.preventDefault();
                 if (
                   keyComposing.current ||
-                  !actions.allowed("connector.configure")
+                  !actions.allowed("connector.save-and-connect")
                 )
                   return;
                 const command: ProductConfigurationCommand = {
-                  kind: "connector.configure",
+                  kind: "connector.save-and-connect",
+                  operationId: crypto.randomUUID(),
+                  buildId: snapshot.buildId ?? "",
                   tunnelId,
                   runtimeKey: key,
                 };
@@ -1959,7 +1974,11 @@ function Connection({
                 setKey("");
                 setKeyVisible(false);
                 void actions.run(command).then((result) => {
-                  if (result?.state === "applied") setReplacing(false);
+                  if (
+                    result?.state === "applied" ||
+                    result?.connectorSetup?.credentials === "saved"
+                  )
+                    setReplacing(false);
                 });
               }}
             >
@@ -2033,10 +2052,10 @@ function Connection({
                     tunnelId,
                     runtimeKey: key,
                   }).success ||
-                  !actions.allowed("connector.configure")
+                  !actions.allowed("connector.save-and-connect")
                 }
               >
-                Save credentials
+                Save & connect
               </button>
               <button
                 type="button"
