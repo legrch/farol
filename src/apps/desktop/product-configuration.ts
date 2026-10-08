@@ -1444,51 +1444,57 @@ export class ProductConfigurationService {
     ) {
       return this.failure("SETTINGS_INPUT_INVALID");
     }
-    return this.mutate((settings) => {
-      const current = settings.connectors.secureMcp;
-      const verifiedAt = this.now();
-      const attachment = {
-        ...parsed.data,
-        tunnelId: current.tunnelId as string,
-        connectorGeneration: current.generation,
-        verifiedAt,
-      };
-      return {
-        ...settings,
-        revision: settings.revision + 1,
-        connectors: {
-          ...settings.connectors,
-          secureMcp: {
-            ...current,
-            challenge: null,
-            attachment,
-            lastVerifiedAttachment: attachment,
-          },
-        },
-        setup: {
-          ...settings.setup,
-          connect: {
-            ...settings.setup.connect,
-            visited: true,
-            skipped: false,
-            configured: true,
-            reachable: "reachable",
-            verified: {
-              profile: current.profile,
-              configRevision: current.generation,
-              workspaceId: parsed.data.workspaceId,
-              runtimeGeneration: parsed.data.runtimeGeneration,
-              buildId: parsed.data.buildId,
-              protocol: current.tunnelClient?.protocol as string,
-              verifiedAt,
+    // The exact challenge, runtime, Computer and workspace were validated
+    // above. This is a proven app-pending settlement, not generic dismissal.
+    return this.mutate(
+      (settings) => {
+        const current = settings.connectors.secureMcp;
+        const verifiedAt = this.now();
+        const attachment = {
+          ...parsed.data,
+          tunnelId: current.tunnelId as string,
+          connectorGeneration: current.generation,
+          verifiedAt,
+        };
+        return {
+          ...settings,
+          revision: settings.revision + 1,
+          connectors: {
+            ...settings.connectors,
+            secureMcp: {
+              ...current,
+              challenge: null,
+              attachment,
+              lastVerifiedAttachment: attachment,
             },
-            needsAction: null,
-            unavailable: null,
-            outcomeUnknown: false,
           },
-        },
-      };
-    });
+          setup: {
+            ...settings.setup,
+            connect: {
+              ...settings.setup.connect,
+              visited: true,
+              skipped: false,
+              configured: true,
+              reachable: "reachable",
+              verified: {
+                profile: current.profile,
+                configRevision: current.generation,
+                workspaceId: parsed.data.workspaceId,
+                runtimeGeneration: parsed.data.runtimeGeneration,
+                buildId: parsed.data.buildId,
+                protocol: current.tunnelClient?.protocol as string,
+                verifiedAt,
+              },
+              needsAction: null,
+              unavailable: null,
+              outcomeUnknown: false,
+            },
+          },
+        };
+      },
+      {},
+      true,
+    );
   }
 
   async recordSecureMcpDrainedForUpdate(): Promise<MutationResult> {
@@ -1966,19 +1972,26 @@ export class ProductConfigurationService {
         challenge.runtimeGeneration !== expected.runtimeGeneration
       )
         return this.failure("SETTINGS_INPUT_INVALID");
-      return this.commit((current) => ({
-        ...current,
-        revision: current.revision + 1,
-        setup: {
-          ...current.setup,
-          connect: {
-            ...current.setup.connect,
-            outcomeUnknown: false,
-            needsAction:
-              "The app check stopped before sending. Reconnect to prepare a new challenge.",
+      // The exact original binding and positive before-submit result were
+      // checked above; only this pending app attempt may be cleared.
+      return this.commit(
+        (current) => ({
+          ...current,
+          revision: current.revision + 1,
+          setup: {
+            ...current.setup,
+            connect: {
+              ...current.setup.connect,
+              outcomeUnknown: false,
+              needsAction:
+                "The app check stopped before sending. Reconnect to prepare a new challenge.",
+            },
           },
-        },
-      }));
+        }),
+        {},
+        false,
+        true,
+      );
     });
   }
 
@@ -2878,8 +2891,11 @@ export class ProductConfigurationService {
   private mutate(
     transform: (settings: ProductSettings) => ProductSettings,
     fence: StoreWriteFence = {},
+    allowProvenAppPendingResolution = false,
   ): Promise<MutationResult> {
-    return this.exclusive(() => this.commit(transform, fence));
+    return this.exclusive(() =>
+      this.commit(transform, fence, false, allowProvenAppPendingResolution),
+    );
   }
 
   private mutateConnector(
@@ -2972,6 +2988,7 @@ export class ProductConfigurationService {
     transform: (settings: ProductSettings) => ProductSettings,
     fence: StoreWriteFence = {},
     freshTaskSource = false,
+    allowProvenAppPendingResolution = false,
   ): Promise<MutationResult> {
     if (this.current === null) return this.failure("SETTINGS_UNAVAILABLE");
     const before = structuredClone(this.fenceTaskSource(this.current));
@@ -2999,13 +3016,18 @@ export class ProductConfigurationService {
     // authority generation change must not erase an uncertain connector write
     // as a side effect of normal stale-runtime invalidation after restart.
     const originalRuntime = before.connectors.secureMcp.runtime;
+    const runtimeChanged =
+      JSON.stringify(candidate.connectors.secureMcp.runtime) !==
+      JSON.stringify(originalRuntime);
+    const pendingCleared =
+      before.setup.connect.outcomeUnknown &&
+      !candidate.setup.connect.outcomeUnknown;
     if (
-      (originalRuntime?.state === "outcome_unknown" ||
-        before.setup.connect.outcomeUnknown) &&
-      (JSON.stringify(candidate.connectors.secureMcp.runtime) !==
-        JSON.stringify(originalRuntime) ||
-        candidate.setup.connect.outcomeUnknown !==
-          before.setup.connect.outcomeUnknown)
+      (originalRuntime?.state === "outcome_unknown" &&
+        (runtimeChanged || pendingCleared)) ||
+      (before.setup.connect.outcomeUnknown &&
+        (runtimeChanged ||
+          (pendingCleared && !allowProvenAppPendingResolution)))
     )
       return this.failure("CONNECTOR_RUNTIME_OUTCOME_UNKNOWN");
     try {

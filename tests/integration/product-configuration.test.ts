@@ -1082,6 +1082,9 @@ describe("Farol Next product configuration", () => {
         },
       },
     });
+    expect((await service.recordSecureMcpAppPending("b".repeat(64))).ok).toBe(
+      true,
+    );
     const wrongChallenge = await service.recordSecureMcpAttachment({
       workspaceId,
       runtimeGeneration: "b".repeat(64),
