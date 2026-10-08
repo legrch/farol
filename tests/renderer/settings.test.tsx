@@ -513,6 +513,9 @@ describe("compact workspace detail", () => {
     await h.click("Save");
     latest.mockRestore();
     expect(h.calls()).toEqual([]);
+    expect(h.host.textContent).toContain(
+      "Action not sent. The workspace or connection changed",
+    );
   });
   it("projects saved access from the host reply and clears only the submitted draft", async () => {
     const value = connectionSettings();
@@ -536,6 +539,9 @@ describe("compact workspace detail", () => {
     expect(h.field("Workspace access").value).toBe("write");
     expect(h.button("Save").disabled).toBe(true);
     expect(h.button("Verify workspace").disabled).toBe(false);
+    expect(status(h).textContent).toContain(
+      "Workspace access saved. Verify it again",
+    );
     expect(h.calls()).toEqual([
       { kind: "computer.update-access", workspaceId, access: "write" },
     ]);
@@ -596,6 +602,35 @@ describe("compact workspace detail", () => {
     expect(
       activePage(h.host).querySelector(".workspace-detail")?.textContent,
     ).toContain("/approved/project");
+    expect(h.calls()).toEqual([
+      { kind: "computer.remove-workspace", workspaceId },
+    ]);
+  });
+  it("shows the retained host removal result after its detail disappears", async () => {
+    const h = await mount("folders", withFolder());
+    const removed = structuredClone(h.configuration.settings);
+    removed.revision++;
+    removed.computer.generation++;
+    removed.computer.workspaces = [];
+    removed.setup.computer.configured = false;
+    removed.setup.computer.reachable = "unknown";
+    removed.setup.computer.verified = null;
+    vi.mocked(h.f.api.configure).mockResolvedValueOnce({
+      ok: true,
+      snapshot: { status: "ready", settings: removed },
+    });
+    await act(async () =>
+      activePage(h.host)
+        .querySelector<HTMLButtonElement>(
+          '[aria-label="Remove workspace project"]',
+        )!
+        .click(),
+    );
+    await h.click("Confirm removal");
+    expect(activePage(h.host).querySelector(".workspace-detail")).toBeNull();
+    expect(h.host.textContent).toContain(
+      "Workspace access removed. Files on disk were not deleted.",
+    );
     expect(h.calls()).toEqual([
       { kind: "computer.remove-workspace", workspaceId },
     ]);

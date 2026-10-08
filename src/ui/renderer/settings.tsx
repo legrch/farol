@@ -149,6 +149,16 @@ function actionFeedback(
     return "Approval request completed. Only folders in the approved list below have saved access.";
   if (
     result.state === "applied" &&
+    result.id.startsWith("settings:computer.update-access:")
+  )
+    return "Workspace access saved. Verify it again before using the new access.";
+  if (
+    result.state === "applied" &&
+    result.id.startsWith("settings:computer.remove-workspace:")
+  )
+    return "Workspace access removed. Files on disk were not deleted.";
+  if (
+    result.state === "applied" &&
     result.id === intention("connector.discover-client")
   ) {
     if (
@@ -308,8 +318,13 @@ export function Settings({ snapshot, facade, setupStep }: SettingsProps) {
           "workspaceId" in command ? command.workspaceId : undefined,
           retained(current),
         )
-      )
+      ) {
+        feedback.pages[page] = { request, text: "", result: null };
+        report(
+          "Action not sent. Current state or an unresolved operation prevents this change; refresh to observe the latest status.",
+        );
         return null;
+      }
       if (!ProductConfigurationCommandSchema.safeParse(command).success) {
         feedback.pages[page] = { request, text: "", result: null };
         report(
@@ -317,7 +332,13 @@ export function Settings({ snapshot, facade, setupStep }: SettingsProps) {
         );
         return null;
       }
-      if (admit && !admit(current)) return null;
+      if (admit && !admit(current)) {
+        feedback.pages[page] = { request, text: "", result: null };
+        report(
+          "Action not sent. The workspace or connection changed after this page opened; review its current status before trying a new change.",
+        );
+        return null;
+      }
       feedback.pages[page] = { request, text: "", result: null };
       feedback.intents[id] = { id, state: "pending", code: null };
       report("Saving or checking…", { id, state: "pending", code: null });
@@ -397,7 +418,7 @@ export function Settings({ snapshot, facade, setupStep }: SettingsProps) {
         !(
           snapshot.destination.page === "folders" &&
           pageFeedback.result?.id.match(
-            /settings:computer\.(?:check-folder|verify-workspace|update-access|remove-workspace):/u,
+            /settings:computer\.(?:check-folder|verify-workspace|update-access):/u,
           )
         ) && (
           <p className="notice" role="status">
