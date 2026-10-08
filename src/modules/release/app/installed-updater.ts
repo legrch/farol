@@ -1,8 +1,15 @@
 import type {
   AutomaticUpdatePreference,
   AutomaticUpdatePreferenceResult,
+  InstallOnQuitPreference,
+  InstallOnQuitPreferenceResult,
+  NormalQuitApplyContext,
+  NormalQuitUpdateReceipt,
+  NormalQuitUpdateRequest,
+  NormalQuitUpdateState,
   UpdateNotice,
 } from "../domain/installed-update";
+import { parseInstallOnQuitPreference } from "../domain/installed-update";
 import type { RetainedReleaseManifest } from "../domain/github-release-contract";
 
 // Keep in sync with the release contract's presentation eligibility. The
@@ -42,6 +49,12 @@ export type InstalledUpdaterPorts = Readonly<{
   writeAutomaticUpdatePreference?(
     enabled: boolean,
   ): Promise<AutomaticUpdatePreferenceResult>;
+  // Missing ports mean OFF/unsupported. The host must load a separately scoped
+  // durable choice; the existing auto-download record cannot supply this ACK.
+  readInstallOnQuitPreference?(): Promise<unknown>;
+  writeInstallOnQuitPreference?(
+    enabled: boolean,
+  ): Promise<InstallOnQuitPreferenceResult>;
 
   // Optional only for transitional callers without a notice projection. The
   // installed runtime supplies both ports through its existing preferences owner.
@@ -90,6 +103,16 @@ export type InstalledUpdaterPorts = Readonly<{
   // The composition holds existing admission fences, checks real obligations,
   // and hands off to the helper before it requests the application's normal quit.
   restart(update: ReadyUpdate): Promise<UpdateHandoff>;
+  // Adapter into the SAME restart/apply engine, called before destructive Quit
+  // drain. Acquire its original admission before stopping clients, use this
+  // absolute deadline through preparation/rechecks/helper readiness, and refuse
+  // late dispatch. Do not call quit(), relaunch, force work to stop, drop an
+  // unknown admission/lock/journal, or substitute a helper. Accepted requires
+  // the exact live helper's readiness ACK. The host's original Quit continues.
+  applyOnQuit?(
+    update: ReadyUpdate,
+    context: NormalQuitApplyContext,
+  ): Promise<UpdateHandoff>;
   restore(action: "recover" | "rollback"): Promise<UpdateHandoff>;
   publish(view: UpdateView): void;
 }>;
@@ -105,6 +128,13 @@ export class InstalledUpdater {
     status: "confirmed",
     enabled: false,
   };
+  private quitPreference: InstallOnQuitPreference = {
+    status: "confirmed",
+    scope: "install-on-normal-quit",
+    enabled: false,
+  };
+  private normalQuitState: NormalQuitUpdateState = { status: "idle" };
+  private normalQuitAttempt: Promise<NormalQuitUpdateReceipt> | null = null;
   private preferenceWriting = false;
   private preferenceDrained: Promise<void> = Promise.resolve();
   private ready: ReadyUpdate | null = null;
@@ -140,12 +170,234 @@ export class InstalledUpdater {
         code: "UPDATE_AUTOMATIC_PREFERENCE_NOT_LOADED",
       };
     }
+    if (ports.readInstallOnQuitPreference)
+      this.quitPreference = {
+        status: "blocked",
+        enabled: false,
+        code: "UPDATE_QUIT_PREFERENCE_NOT_LOADED",
+      };
   }
 
   snapshot(): UpdateView {
-    return this.ports.readAutomaticUpdatePreference
-      ? { ...this.view, automaticUpdatePreference: this.automaticPreference }
-      : this.view;
+    return {
+      ...this.view,
+      ...(this.ports.readAutomaticUpdatePreference
+        ? { automaticUpdatePreference: this.automaticPreference }
+        : {}),
+      ...(this.ports.readInstallOnQuitPreference
+        ? { installOnQuitPreference: this.quitPreference }
+        : {}),
+    };
+  }
+
+  private isClosing(): boolean {
+    return this.closed || this.normalQuitState.status !== "idle";
+  }
+
+  installOnQuitPreference(): InstallOnQuitPreference {
+    return this.quitPreference;
+  }
+
+  normalQuitUpdateState(): NormalQuitUpdateState {
+    return this.normalQuitState;
+  }
+
+  async setInstallOnQuitPreference(
+    enabled: boolean,
+  ): Promise<InstallOnQuitPreferenceResult> {
+    if (this.quitPreference.status === "unknown")
+      return { status: "unknown", code: this.quitPreference.code };
+    if (typeof enabled !== "boolean")
+      return { status: "refused", code: "UPDATE_QUIT_PREFERENCE_INVALID" };
+    if (this.isClosing() || !this.initialized || this.preferenceWriting)
+      return { status: "refused", code: "UPDATE_QUIT_PREFERENCE_UNAVAILABLE" };
+    if (!this.ports.writeInstallOnQuitPreference)
+      return { status: "refused", code: "UPDATE_QUIT_PREFERENCE_UNSUPPORTED" };
+    if (this.quitPreference.status === "blocked")
+      return { status: "refused", code: this.quitPreference.code };
+    this.preferenceWriting = true;
+    let finishPreference!: () => void;
+    this.preferenceDrained = new Promise((resolve) => {
+      finishPreference = resolve;
+    });
+    this.quitPreference = {
+      status: "blocked",
+      enabled: false,
+      code: "UPDATE_QUIT_PREFERENCE_WRITING",
+    };
+    let result: InstallOnQuitPreferenceResult;
+    try {
+      const ack = await this.ports.writeInstallOnQuitPreference(enabled);
+      const confirmed = parseInstallOnQuitPreference(ack);
+      if (confirmed?.status === "confirmed" && confirmed.enabled === enabled)
+        result = confirmed;
+      else if (
+        ack &&
+        (ack.status === "refused" || ack.status === "unknown") &&
+        typeof ack.code === "string" &&
+        /^[A-Z][A-Z0-9_]{0,100}$/u.test(ack.code) &&
+        Object.keys(ack).every((key) => ["status", "code"].includes(key))
+      )
+        result = { status: ack.status, code: ack.code };
+      else
+        result = {
+          status: "unknown",
+          code: "UPDATE_QUIT_PREFERENCE_ACK_MISMATCH",
+        };
+    } catch {
+      result = {
+        status: "unknown",
+        code: "UPDATE_QUIT_PREFERENCE_OUTCOME_UNKNOWN",
+      };
+    }
+    this.quitPreference =
+      result.status === "confirmed"
+        ? result
+        : {
+            status: result.status === "unknown" ? "unknown" : "blocked",
+            enabled: false,
+            code: result.code,
+          };
+    this.preferenceWriting = false;
+    finishPreference();
+    if (!this.isClosing()) {
+      try {
+        this.ports.publish(this.snapshot());
+      } catch {
+        /* The durable ACK remains authoritative. */
+      }
+    }
+    return result;
+  }
+
+  /** One host-only attempt per lifetime, before collect()/close()/quit flags. */
+  applyOnNormalQuit(
+    request: NormalQuitUpdateRequest,
+  ): Promise<NormalQuitUpdateReceipt> {
+    if (
+      !request ||
+      request.kind !== "ordinary-quit" ||
+      !Number.isSafeInteger(request.deadlineAt) ||
+      request.deadlineAt < 0 ||
+      !Object.keys(request).every((key) => ["kind", "deadlineAt"].includes(key))
+    )
+      return Promise.resolve({
+        status: "blocked",
+        code: "UPDATE_QUIT_REQUEST_INVALID",
+      });
+    if (this.normalQuitAttempt) return this.normalQuitAttempt;
+    const wasClosing = this.isClosing();
+    // Claim synchronously. Repeated before-quit events neither extend the
+    // original deadline nor race another release command or preference write.
+    const original = {
+      kind: "ordinary-quit" as const,
+      deadlineAt: request.deadlineAt,
+    };
+    this.normalQuitState = {
+      status: "pending",
+      deadlineAt: original.deadlineAt,
+    };
+    let settle!: (receipt: NormalQuitUpdateReceipt) => void;
+    this.normalQuitAttempt = new Promise((resolve) => {
+      settle = resolve;
+    });
+    // Publish the promise before invoking a host port: synchronous re-entry
+    // observes the same attempt even before that port returns its promise.
+    void this.applyForNormalQuit(original, wasClosing).then((receipt) => {
+      this.normalQuitState = {
+        status: "settled",
+        deadlineAt: original.deadlineAt,
+        receipt,
+      };
+      settle(receipt);
+    });
+    return this.normalQuitAttempt;
+  }
+
+  private async applyForNormalQuit(
+    request: NormalQuitUpdateRequest,
+    wasClosing: boolean,
+  ): Promise<NormalQuitUpdateReceipt> {
+    if (wasClosing || !this.initialized || this.busy || this.preferenceWriting)
+      return { status: "skipped", code: "UPDATE_QUIT_OWNER_UNAVAILABLE" };
+    const preference = this.quitPreference;
+    if (preference.status !== "confirmed")
+      return { status: preference.status, code: preference.code };
+    if (!preference.enabled)
+      return { status: "skipped", code: "UPDATE_QUIT_NOT_OPTED_IN" };
+    if (this.view.phase === "failed" && this.view.recoveryRequired)
+      return {
+        status: this.view.code.includes("UNKNOWN") ? "unknown" : "blocked",
+        code: this.view.code,
+      };
+    if (this.view.phase === "recovery")
+      return { status: "blocked", code: "UPDATE_RECOVERY_REQUIRED" };
+    if (this.view.phase !== "ready" || !this.ready)
+      return { status: "skipped", code: "UPDATE_PACKAGE_NOT_READY" };
+    if (this.view.blockedBy !== null)
+      return {
+        status: this.view.blockedBy.includes("UNKNOWN") ? "unknown" : "blocked",
+        code: this.view.blockedBy,
+      };
+    if (!this.ports.applyOnQuit)
+      return { status: "blocked", code: "UPDATE_QUIT_APPLY_UNSUPPORTED" };
+    let dispatched = false;
+    this.begin();
+    try {
+      const now = this.ports.now();
+      if (!Number.isFinite(now) || now >= request.deadlineAt)
+        return { status: "skipped", code: "UPDATE_QUIT_DEADLINE_EXPIRED" };
+      // No download, retained-record rewrite or renderer ACK belongs here.
+      // Later/restore's deferred flag postpones an explicit restart; the new
+      // confirmed Quit consent still selects this retained, verified candidate.
+      dispatched = true;
+      const outcome = await this.ports.applyOnQuit(this.ready, {
+        ...request,
+        relaunch: false,
+        requestQuit: false,
+      });
+      if (
+        outcome &&
+        outcome.status === "accepted" &&
+        Object.keys(outcome).length === 1
+      ) {
+        this.view = { phase: "applying", version: this.ready.manifest.version };
+        return { status: "accepted", relaunch: false };
+      }
+      if (
+        outcome &&
+        (outcome.status === "blocked" || outcome.status === "unknown") &&
+        typeof outcome.code === "string" &&
+        /^[A-Z][A-Z0-9_]{0,100}$/u.test(outcome.code) &&
+        Object.keys(outcome).every((key) => ["status", "code"].includes(key))
+      ) {
+        if (outcome.status === "unknown")
+          this.view = {
+            phase: "failed",
+            code: outcome.code,
+            recoveryRequired: true,
+          };
+        else
+          this.view = {
+            ...this.view,
+            phase: "ready",
+            version: this.ready.manifest.version,
+            deferred: true,
+            blockedBy: outcome.code,
+          };
+        return { status: outcome.status, code: outcome.code };
+      }
+      throw new Error("UPDATE_HANDOFF_UNKNOWN");
+    } catch {
+      const code = dispatched
+        ? "UPDATE_HANDOFF_UNKNOWN"
+        : "UPDATE_QUIT_CLOCK_UNREADABLE";
+      if (dispatched)
+        this.view = { phase: "failed", code, recoveryRequired: true };
+      return { status: dispatched ? "unknown" : "blocked", code };
+    } finally {
+      this.finish();
+    }
   }
 
   automaticUpdatePreference(): AutomaticUpdatePreference {
@@ -160,7 +412,7 @@ export class InstalledUpdater {
       return { status: "unknown", code: this.automaticPreference.code };
     if (typeof enabled !== "boolean")
       return { status: "refused", code: "UPDATE_AUTOMATIC_PREFERENCE_INVALID" };
-    if (this.closed || !this.initialized || this.preferenceWriting)
+    if (this.isClosing() || !this.initialized || this.preferenceWriting)
       return {
         status: "refused",
         code: "UPDATE_AUTOMATIC_PREFERENCE_UNAVAILABLE",
@@ -207,7 +459,7 @@ export class InstalledUpdater {
     this.preferenceWriting = false;
     finishPreference();
     // A destroyed renderer cannot change the already settled durable ACK.
-    if (!this.closed) {
+    if (!this.isClosing()) {
       try {
         this.ports.publish(this.snapshot());
       } catch {
@@ -220,7 +472,7 @@ export class InstalledUpdater {
   private async publish(view: UpdateView): Promise<void> {
     if ("version" in view) this.noticeVersion = view.version;
     this.view = view;
-    if (this.closed) return;
+    if (this.isClosing()) return;
     if (
       this.ports.notice &&
       (view.phase === "available" ||
@@ -255,13 +507,13 @@ export class InstalledUpdater {
       }
       this.view = { ...view, notice };
     }
-    if (!this.closed) this.ports.publish(this.snapshot());
+    if (!this.isClosing()) this.ports.publish(this.snapshot());
   }
 
   async acknowledgeNotice(key: string): Promise<void> {
     const current = this.view;
     if (
-      this.closed ||
+      this.isClosing() ||
       this.noticeWriting ||
       this.noticeBlocked ||
       !this.initialized ||
@@ -300,7 +552,7 @@ export class InstalledUpdater {
           ...latest,
           notice: { ...latest.notice, seen, blockedBy: this.noticeBlocked },
         };
-        if (!this.closed) this.ports.publish(this.snapshot());
+        if (!this.isClosing()) this.ports.publish(this.snapshot());
       }
       this.noticeWriting = false;
       finishNotice();
@@ -311,7 +563,7 @@ export class InstalledUpdater {
     return (
       this.initialized &&
       !this.busy &&
-      !this.closed &&
+      !this.isClosing() &&
       !this.ready &&
       this.view.phase !== "applying" &&
       this.view.phase !== "recovery" &&
@@ -347,7 +599,7 @@ export class InstalledUpdater {
       });
       return;
     }
-    if (this.closed) return;
+    if (this.isClosing()) return;
     this.ready = prepared.update;
     await this.publish({
       phase: "ready",
@@ -359,9 +611,26 @@ export class InstalledUpdater {
   }
 
   async initialize(): Promise<void> {
-    if (this.initialized || this.busy || this.closed) return;
+    if (this.initialized || this.busy || this.isClosing()) return;
     this.begin();
     try {
+      if (this.ports.readInstallOnQuitPreference) {
+        try {
+          this.quitPreference = parseInstallOnQuitPreference(
+            await this.ports.readInstallOnQuitPreference(),
+          ) ?? {
+            status: "blocked",
+            enabled: false,
+            code: "UPDATE_QUIT_PREFERENCE_INVALID",
+          };
+        } catch {
+          this.quitPreference = {
+            status: "blocked",
+            enabled: false,
+            code: "UPDATE_QUIT_PREFERENCE_UNREADABLE",
+          };
+        }
+      }
       if (this.ports.readAutomaticUpdatePreference) {
         try {
           this.automaticPreference =
@@ -413,7 +682,11 @@ export class InstalledUpdater {
     } finally {
       this.initialized = true;
       this.finish();
-      if (!this.closed && this.ports.readAutomaticUpdatePreference)
+      if (
+        !this.isClosing() &&
+        (this.ports.readAutomaticUpdatePreference ||
+          this.ports.readInstallOnQuitPreference)
+      )
         this.ports.publish(this.snapshot());
     }
   }
@@ -449,7 +722,7 @@ export class InstalledUpdater {
     // restore the restart action; restart must still acquire every live fence.
     if (
       manual &&
-      !this.closed &&
+      !this.isClosing() &&
       !this.busy &&
       this.view.phase === "ready" &&
       this.view.blockedBy !== null &&
@@ -475,9 +748,9 @@ export class InstalledUpdater {
     this.begin();
     try {
       await this.publish({ phase: "checking" });
-      if (this.closed) return;
+      if (this.isClosing()) return;
       const found = await this.ports.discover();
-      if (this.closed) return;
+      if (this.isClosing()) return;
       this.available = null;
       if (!found.ok) {
         await this.publish({
@@ -522,7 +795,7 @@ export class InstalledUpdater {
 
   async download(): Promise<void> {
     if (
-      this.closed ||
+      this.isClosing() ||
       this.busy ||
       !this.initialized ||
       this.ready ||
@@ -538,7 +811,7 @@ export class InstalledUpdater {
     let downloadStarted = false;
     try {
       await this.publish({ phase: "downloading" });
-      if (this.closed) return;
+      if (this.isClosing()) return;
       downloadStarted = true;
       const downloaded = await this.ports.download();
       if (
@@ -574,7 +847,7 @@ export class InstalledUpdater {
 
   async skip(): Promise<void> {
     if (
-      this.closed ||
+      this.isClosing() ||
       this.busy ||
       !this.initialized ||
       this.view.phase !== "available" ||
@@ -631,7 +904,7 @@ export class InstalledUpdater {
     let importStarted = false;
     try {
       await this.publish({ phase: "downloading" });
-      if (this.closed) return;
+      if (this.isClosing()) return;
       importStarted = true;
       await this.retainPrepared(await this.ports.prepareLocal());
     } catch {
@@ -654,7 +927,7 @@ export class InstalledUpdater {
   async later(): Promise<void> {
     if (
       (this.view.phase !== "ready" && this.view.phase !== "available") ||
-      this.closed ||
+      this.isClosing() ||
       this.busy
     )
       return;
@@ -694,7 +967,7 @@ export class InstalledUpdater {
 
   async restart(): Promise<void> {
     if (
-      this.closed ||
+      this.isClosing() ||
       this.busy ||
       this.view.phase !== "ready" ||
       this.view.blockedBy !== null ||
@@ -707,7 +980,7 @@ export class InstalledUpdater {
     let restartStarted = false;
     try {
       await this.publish({ phase: "applying", version });
-      if (this.closed) return;
+      if (this.isClosing()) return;
       restartStarted = true;
       const outcome = await this.ports.restart(this.ready);
       if (outcome.status === "blocked") {
@@ -750,12 +1023,12 @@ export class InstalledUpdater {
               (previous.phase === "failed" && !previous.recoveryRequired))
           ? previous.rollbackVersion
           : undefined;
-    if (this.closed || this.busy || !version) return;
+    if (this.isClosing() || this.busy || !version) return;
     this.begin();
     let restoreStarted = false;
     try {
       await this.publish({ phase: "applying", version });
-      if (this.closed) return;
+      if (this.isClosing()) return;
       restoreStarted = true;
       const outcome = await this.ports.restore(action);
       if (outcome.status === "blocked") {
