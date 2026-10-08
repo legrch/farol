@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 // @ts-expect-error Mechanical launcher module is exercised at runtime.
 import * as control from "../../tooling/dev-process-control.mjs";
-const { correlateDevCommand, devControlTimeout } = control;
+const { correlateDevCommand, devControlTimeout, readDevRunMarker } = control;
 
 const root = "/synthetic/farol";
 const scope = {
@@ -20,6 +23,31 @@ const native = { status: "present", pid: 111, uid: 501, token: "boot:123:456" };
 const command = `501 ${marker.processStart} ${executable} _output/build/app/main.cjs`;
 
 describe("exact Dev command correlation", () => {
+  it("reads the actual private run-marker owner directory without doubling the filename", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "farol-dev-marker-"));
+    try {
+      const state = path.join(root, "farol-next-state");
+      await fs.mkdir(state, { mode: 0o700 });
+      const value = {
+        schema: 1,
+        pid: 111,
+        startedAt: "2026-10-08T09:44:38.119Z",
+        bootTime: 10000,
+        processStart: marker.processStart,
+      };
+      await fs.writeFile(
+        path.join(state, "running.json"),
+        JSON.stringify(value),
+        { mode: 0o600 },
+      );
+      expect(await readDevRunMarker(root)).toEqual({
+        status: "read",
+        marker: value,
+      });
+    } finally {
+      await fs.rm(root, { recursive: true });
+    }
+  });
   it("uses positive integer subprocess budgets and refuses exhaustion before spawning", () => {
     expect(devControlTimeout(2999.75)).toBe(2999);
     expect(devControlTimeout(5000.125)).toBe(3000);

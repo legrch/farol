@@ -20,6 +20,10 @@ export function devControlTimeout(budget) {
   return Math.min(3000, Math.floor(budget));
 }
 
+export function readDevRunMarker(profilePath) {
+  return readRunMarker(path.join(profilePath, "farol-next-state"));
+}
+
 function ps(args, budget = 3000) {
   const result = spawnSync("/bin/ps", args, {
     encoding: "utf8",
@@ -108,7 +112,7 @@ export async function prepareDevBuild({
     : profileName;
   const scope = { uid: process.getuid(), writerRoot, appPath, profilePath };
   const markerFile = path.join(profilePath, "farol-next-state/running.json");
-  const marker = await readRunMarker(markerFile);
+  const marker = await readDevRunMarker(profilePath);
   if (marker.status === "unreadable") throw Error("DEV_RUN_MARKER_UNREADABLE");
   if (marker.status === "read") {
     const command = ps([
