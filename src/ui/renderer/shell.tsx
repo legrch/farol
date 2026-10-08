@@ -166,6 +166,16 @@ function ActivityRecord({
       : selected.kind === "turn.terminal" && selected.phase === "completed"
         ? "A completed result was recorded."
         : "This event does not establish successful task completion.";
+  const summary =
+    selected.phase === "outcome_unknown"
+      ? "Outcome not confirmed"
+      : selected.kind === "computer.requested"
+        ? "Computer operation requested"
+        : selected.kind === "turn.terminal" && selected.phase === "cancelled"
+          ? "Work cancelled"
+          : selected.kind === "turn.terminal" && selected.phase === "completed"
+            ? "Completed event"
+            : "Recorded event";
   return (
     <>
       <div className="activity-header">
@@ -206,7 +216,8 @@ function ActivityRecord({
       )}
       <h2>What was recorded</h2>
       <div className="activity-event">
-        <strong>{selected.kind}</strong>
+        <ActivityTime at={selected.at} compact />
+        <strong>{summary}</strong>
         <p>{outcome}</p>
       </div>
       <dl className="activity-facts">

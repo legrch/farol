@@ -1837,6 +1837,9 @@ async function filterActivity(host: Element, value: "all" | "attention") {
 }
 it("Activity contextual list filters actual unknown metadata and keeps selection stable", async () => {
   const { host, c, f } = await activityFixture();
+  expect(host.querySelector(".activity-event strong")?.textContent).toBe(
+    "Outcome not confirmed",
+  );
   expect(host.querySelectorAll("aside .activity-row")).toHaveLength(2);
   expect(host.querySelector(".activity-page")?.textContent).toContain(
     "There is no confirmed successful or failed result.",
@@ -1852,6 +1855,9 @@ it("Activity contextual list filters actual unknown metadata and keeps selection
   );
   expect(c.getSnapshot().destination.activityId).toBe(selectedId);
   await act(async () => button(host, "Show all activity").click());
+  expect(host.querySelector(".activity-event strong")?.textContent).toBe(
+    "Completed event",
+  );
   expect(host.querySelector(".activity-page")?.textContent).toContain(
     "A completed result was recorded.",
   );
@@ -1975,6 +1981,38 @@ it("Activity compact selection dismisses sidebar and focuses usable inline detai
   expect(host.querySelectorAll(".activity-page .activity-row")).toHaveLength(1);
 });
 
+it.each([
+  ["cancelled", "Work cancelled"],
+  ["failed", "Recorded event"],
+] as const)(
+  "Activity summarizes a recorded %s without inventing success or recovery",
+  async (phase, summary) => {
+    const { host, f } = await activityFixture();
+    await act(async () =>
+      f.emit("event", {
+        ownerId: "owner",
+        sessionId: "task-1",
+        taskId: "task-1",
+        turnId: "task-1",
+        generation: 1,
+        at: 400,
+        kind: "turn.terminal",
+        phase,
+        code: phase.toUpperCase(),
+      }),
+    );
+    expect(host.querySelector(".activity-event strong")?.textContent).toBe(
+      summary,
+    );
+    expect(host.querySelector(".activity-facts")?.textContent).toContain(
+      phase.toUpperCase(),
+    );
+    expect(host.querySelector(".activity-event p")?.textContent).toBe(
+      "This event does not establish successful task completion.",
+    );
+  },
+);
+
 it("Activity shows only recorded operation data and never promotes a computer event to task success", async () => {
   const { host, c, f } = await activityFixture();
   await act(async () => {
@@ -1992,6 +2030,15 @@ it("Activity shows only recorded operation data and never promotes a computer ev
   });
   await act(async () =>
     host.querySelector<HTMLButtonElement>(".activity-row")!.click(),
+  );
+  expect(host.querySelector(".activity-event strong")?.textContent).toBe(
+    "Computer operation requested",
+  );
+  expect(
+    host.querySelector(".activity-event time")?.getAttribute("datetime"),
+  ).toBe(new Date(400).toISOString());
+  expect(host.querySelector(".activity-facts")?.textContent).toContain(
+    "computer.requested",
   );
   expect(host.querySelector(".activity-page")?.textContent).toContain(
     "workspace.read",
@@ -2019,6 +2066,27 @@ it("Activity shows only recorded operation data and never promotes a computer ev
   expect(c.getSnapshot().activity).toHaveLength(before);
   expect(host.textContent).not.toContain(
     "fixture transcript excluded from activity",
+  );
+  await act(async () =>
+    f.emit("event", {
+      ownerId: "owner",
+      sessionId: "task-1",
+      taskId: "task-1",
+      turnId: "task-1",
+      generation: 1,
+      at: 402,
+      kind: "computer.completed",
+      callId: "call-1",
+    }),
+  );
+  await act(async () =>
+    host.querySelector<HTMLButtonElement>(".activity-row")!.click(),
+  );
+  expect(host.querySelector(".activity-event strong")?.textContent).toBe(
+    "Recorded event",
+  );
+  expect(host.querySelector(".activity-event p")?.textContent).toBe(
+    "This event does not establish successful task completion.",
   );
 });
 it("Activity remains usable for a recorded timestamp outside the Date range", async () => {

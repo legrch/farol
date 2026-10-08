@@ -1351,6 +1351,18 @@ kbd {
   color: var(--muted);
   font-size: 12px;
 }
+.activity-event p {
+  margin-top: 5px;
+}
+.activity-event time {
+  font-size: 11px;
+  color: var(--muted);
+  margin-right: 12px;
+}
+.activity-event strong {
+  font-size: 13px;
+  font-weight: 550;
+}
 .activity-facts {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
