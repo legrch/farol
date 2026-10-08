@@ -2,6 +2,7 @@ package connector
 
 import (
 	"context"
+	"time"
 
 	"github.com/legrch/farol/modules/computer/app/port"
 	"github.com/legrch/farol/modules/computer/domain/authority"
@@ -14,32 +15,64 @@ type verificationAttempt struct {
 	observation         *port.ConnectorVerification
 }
 
-// withVerificationCurrent uses the existing synchronous, no-IO owner/host gate.
-// The original authorization bounds this observation; it is not an execution
-// lease renewal and cannot use a restored approval to extend its lifetime.
+// withVerificationCurrent reads the sole access journal before entering the
+// retained owner and host gates: AccessSnapshot -> owner -> guard. Callers must
+// not already hold any of those gates. Current time-only approval may authorize
+// a new verification or observation; the launch seal and one-shot attempt remain
+// unchanged. Root still owns the original operation's fixed disclosure lease.
 func (s *Service) withVerificationCurrent(ctx context.Context, inspect func(*port.TaskBinding) error) error {
-	if s == nil || ctx == nil {
+	if s == nil || ctx == nil || inspect == nil {
 		return failure()
 	}
-	return s.WithCurrent(ctx, func(binding *port.TaskBinding) error {
-		if ctx.Err() != nil {
-			return authority.Fail("WORKSPACE_REQUEST_CANCELLED", "connector-owner")
+	if ctx.Err() != nil {
+		return authority.Fail("WORKSPACE_REQUEST_CANCELLED", "connector-owner")
+	}
+	// Zero challenge is unsupported, including existing source fixtures. It
+	// cannot expose proof or reserve an attempt and needs no journal observation.
+	if s.launch.VerificationChallenge == ([32]byte{}) {
+		return s.WithCurrent(ctx, inspect)
+	}
+	calls := 0
+	var result error
+	err := s.journal.WithSnapshot(ctx, s.ceiling.Participant.ParticipantID, func(snapshot port.AccessSnapshot) (callbackErr error) {
+		defer func() { result = callbackErr }()
+		calls++
+		if calls != 1 {
+			return failure()
 		}
-		if binding != nil && s.launch.VerificationChallenge != ([32]byte{}) {
-			now := s.clock.Now()
-			if now.UnixMilli() <= 0 || now.UnixMilli() > 9007199254740991 || !now.Before(s.launch.Admission.ExpiresAt) || !now.Before(s.launch.Approval.ExpiresAt) {
+		return s.WithCurrent(ctx, func(binding *port.TaskBinding) error {
+			if binding == nil {
+				return inspect(nil)
+			}
+			if snapshot.Participant == nil || !authority.SameParticipantCeiling(*snapshot.Participant, s.ceiling.Participant) {
+				return authority.Fail("AUTHORITY_TASK_MISMATCH", "connector-owner")
+			}
+			if snapshot.Approval == nil || !authority.SameApprovalPolicy(*snapshot.Approval, s.ceiling.Approval) {
+				return authority.Fail("AUTHORITY_COMPUTER_MISMATCH", "connector-owner")
+			}
+			now, expiry := s.clock.Now(), snapshot.Approval.ExpiresAt
+			if now.UnixMilli() <= 0 || now.UnixMilli() > 9007199254740991 ||
+				expiry.UnixMilli() <= 0 || expiry.UnixMilli() > 9007199254740991 ||
+				!expiry.Equal(time.UnixMilli(expiry.UnixMilli())) || !now.Before(expiry) {
 				return authority.Fail("AUTHORITY_EXPIRED", "connector-owner")
 			}
-		}
-		if ctx.Err() != nil {
-			return authority.Fail("WORKSPACE_REQUEST_CANCELLED", "connector-owner")
-		}
-		return inspect(binding)
+			if ctx.Err() != nil {
+				return authority.Fail("WORKSPACE_REQUEST_CANCELLED", "connector-owner")
+			}
+			return inspect(binding)
+		})
 	})
+	if err != nil {
+		return classify(err)
+	}
+	if calls != 1 {
+		return failure()
+	}
+	return result
 }
 
-// CheckVerificationChallenge is the no-IO preflight for trusted root before List.
-// It validates only the exact current owner and its constructor challenge. It
+// CheckVerificationChallenge is the current-journal preflight before List.
+// It validates the exact current owner, sealed policy and constructor challenge. It
 // neither reserves an attempt nor grants authority to skip Begin or disclosure.
 func (s *Service) CheckVerificationChallenge(ctx context.Context, digest [32]byte) error {
 	return s.withVerificationCurrent(ctx, func(binding *port.TaskBinding) error {
@@ -73,7 +106,8 @@ func (s *Service) BeginVerification(ctx context.Context, digest [32]byte, worksp
 // and calls after Begin and the exact reserved workspace List succeeded and its
 // disclosure passed. Root must still apply the same lease's final disclosure to
 // its response. This method does not execute or replay List, hash a
-// challenge, read the journal, publish authority, or create an execution engine.
+// challenge, publish authority, or create an execution engine. Current read
+// authority is checked through the existing journal before recording the proof.
 // An exact duplicate only observes the retained value; a different value refuses.
 func (s *Service) RecordVerification(ctx context.Context, providedChallengeDigest [32]byte, observed port.ConnectorVerification) error {
 	return s.withVerificationCurrent(ctx, func(binding *port.TaskBinding) error {
@@ -100,9 +134,11 @@ func (s *Service) RecordVerification(ctx context.Context, providedChallengeDiges
 }
 
 // CurrentVerification returns an independent value only under this retained
-// owner's current host guard. Never attempted or unsupported is nil. An attempt
+// owner's current host guard and same-policy current journal approval. Never
+// attempted or unsupported is nil. An attempt
 // without completed proof is unavailable, including pending and unknown outcomes.
-// Expired, withdrawn or unavailable owners refuse; no persisted cache is loaded.
+// Current approval expiry, withdrawal or unavailability refuses; the historical
+// launch expiry is not this read's authority. No persisted proof cache is loaded.
 func (s *Service) CurrentVerification(ctx context.Context) (*port.ConnectorVerification, error) {
 	var out *port.ConnectorVerification
 	err := s.withVerificationCurrent(ctx, func(binding *port.TaskBinding) error {

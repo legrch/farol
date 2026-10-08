@@ -118,6 +118,9 @@ describe("Go Computer host authority mapping", () => {
       ".",
     );
     expect(listed.entries).toEqual(["note.md", "folder/"]);
+    expect(f.request.mock.calls[1]![1]).toMatchObject({
+      renewableOwnerConsent: true,
+    });
     expect(f.request.mock.calls.map((call) => call[0])).toEqual([
       "computer.authority.deactivate",
       "computer.authority.publish",

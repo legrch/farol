@@ -36,6 +36,10 @@ func (a *settingsApproval) WithCurrent(ctx context.Context, inspect func(*author
 	if ctx == nil || ctx.Err() != nil || inspect == nil {
 		return computerUnavailable()
 	}
+	// A renewal publishes to the same Store, then acknowledges its current
+	// projection under this barrier. Never expose an unacknowledged new expiry.
+	a.root.approvalProjection.RLock()
+	defer a.root.approvalProjection.RUnlock()
 	fence, err := strconv.ParseUint(a.publication.receipt.Fence, 10, 64)
 	if err != nil || fence == 0 {
 		return computerUnavailable()
@@ -56,13 +60,19 @@ func (a *settingsApproval) WithCurrent(ctx context.Context, inspect func(*author
 			current.OwnerID != a.root.ownerID || current.ComputerID != a.root.computerID ||
 			status.Generation != a.publication.approval.Generation ||
 			!authority.SameApprovalPolicy(*current, a.publication.approval) ||
-			!current.ExpiresAt.Equal(a.publication.approval.ExpiresAt) || ctx.Err() != nil {
+			!current.ExpiresAt.Equal(a.root.publication.current().ExpiresAt) || ctx.Err() != nil {
 			return computerUnavailable()
 		}
-		if a.observed && a.revision != status.Revision {
+		if status.Revision < a.root.publication.refreshCount {
 			return computerUnavailable()
 		}
-		a.revision, a.observed = status.Revision, true
+		// Only acknowledged expiry-only commits are transparent to a fixed
+		// Settings lease. Every other Store revision still invalidates it.
+		revision := status.Revision - a.root.publication.refreshCount
+		if a.observed && a.revision != revision {
+			return computerUnavailable()
+		}
+		a.revision, a.observed = revision, true
 		copy := current.Clone()
 		return inspect(&copy)
 	})
@@ -105,6 +115,9 @@ func (s *ComputerIngress) settingsContract(ctx context.Context, requested wire.C
 func (s *ComputerIngress) settingsList(ctx context.Context, in wire.ComputerSettingsListRequest) (*wire.ComputerSettingsListResponse, error) {
 	if ctx == nil || ctx.Err() != nil || validateIngress("ComputerSettingsListRequest", in) != nil || s.native == nil {
 		return nil, computerUnavailable()
+	}
+	if err := s.refreshCurrentApproval(ctx); err != nil {
+		return nil, err
 	}
 	contract, err := s.settingsContract(ctx, in.Publication)
 	if err != nil {
@@ -155,6 +168,9 @@ func (s *ComputerIngress) settingsListMethod() desktop.Method {
 func (s *ComputerIngress) settingsSnapshot(ctx context.Context, in wire.ComputerSettingsSnapshotRequest) (*wire.ComputerSettingsSnapshotResponse, error) {
 	if validateIngress("ComputerSettingsSnapshotRequest", in) != nil {
 		return nil, computerUnavailable()
+	}
+	if err := s.refreshCurrentApproval(ctx); err != nil {
+		return nil, err
 	}
 	contract, err := s.settingsContract(ctx, in.Publication)
 	if err != nil {

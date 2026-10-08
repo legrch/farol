@@ -73,7 +73,7 @@ func (s *computerConnector) mutate(ctx context.Context, slot *connectorSlot, ope
 		finish(nil, err, true)
 		return nil, err
 	}
-	lease, err := slot.route.issuer.Admit(ctx, authority.Write)
+	lease, err := slot.route.admit(ctx, authority.Write)
 	if err != nil {
 		finish(nil, err, true)
 		return nil, err

@@ -59,6 +59,9 @@ type connectorSlot struct {
 	closing          bool
 	closeErr         error
 	startupUncertain bool
+	renewalCancel    context.CancelFunc
+	renewalDone      chan struct{}
+	renewalScope     *connectorRenewalScope
 }
 type connectorHostGuard struct {
 	mu          sync.Mutex
@@ -127,6 +130,15 @@ func (s *computerConnector) Open(ctx context.Context, operation string, in wire.
 		return nil, err
 	}
 	s.attempts++
+	// A genuinely new Open may follow long idle or a confirmed Close. Join the
+	// same standing Settings consent before acquiring the publication IO gate;
+	// renewal owns that gate itself. Exact publication is checked again below.
+	if _, err := s.root.settingsAuthority(ctx, in.Publication); err != nil {
+		return nil, err
+	}
+	if err := s.root.refreshCurrentApproval(ctx); err != nil {
+		return nil, err
+	}
 	// Serialize publication IO with the existing root's host admission paths.
 	s.root.effects.Lock()
 	defer s.root.effects.Unlock()
@@ -215,6 +227,8 @@ func (s *computerConnector) Open(ctx context.Context, operation string, in wire.
 	}
 	binding := wire.ComputerConnectorBinding{BuildId: host.BuildID, ProfileId: host.ProfileID, BackendGeneration: host.BackendGeneration, RuntimeId: host.RuntimeID, ConnectorGeneration: in.ConnectorGeneration}
 	methods := slot.route.Methods(s.root.peer)
+	renewal := &connectorRenewalScope{guard: guard, owner: slot.owner, seal: *ceiling}
+	slot.route.beforeAdmission = func(ctx context.Context) error { return s.root.refreshApproval(ctx, renewal) }
 	methods["computer.connector.verify"] = s.verificationMethod(slot)
 	if s.mutations != nil {
 		for name, method := range s.mutationMethods(slot) {
@@ -272,6 +286,11 @@ func (s *computerConnector) Open(ctx context.Context, operation string, in wire.
 		return nil, err
 	}
 	slot.startupUncertain = false
+	s.root.mu.Lock()
+	s.root.renewal = renewal
+	slot.renewalScope = renewal
+	s.root.mu.Unlock()
+	s.startRenewal(slot, renewal)
 	result := slot.opened
 	return &result, nil
 }
@@ -286,7 +305,20 @@ func (s *computerConnector) closeSlot(ctx context.Context) error {
 	}
 	slot.closing = true
 	slot.guard.close() // Negative authority precedes all shutdown IO.
+	s.root.mu.Lock()
+	if s.root.renewal == slot.renewalScope {
+		s.root.renewal = nil
+	}
+	s.root.mu.Unlock()
 	var failures []error
+	if slot.renewalCancel != nil {
+		slot.renewalCancel()
+		select {
+		case <-slot.renewalDone:
+		case <-ctx.Done():
+			failures = append(failures, ctx.Err())
+		}
+	}
 	if slot.startupUncertain {
 		failures = append(failures, computerUnavailable())
 	}

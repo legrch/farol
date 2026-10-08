@@ -67,6 +67,9 @@ func (s *computerConnector) verificationMethod(slot *connectorSlot) desktop.Meth
 			return ingressOutcome(nil, computerUnavailable())
 		}
 		digest := sha256.Sum256([]byte(in.Challenge))
+		if err := s.root.refreshApproval(ctx, slot.renewalScope); err != nil {
+			return ingressOutcome(nil, err)
+		}
 		if err := slot.owner.CheckVerificationChallenge(ctx, digest); err != nil {
 			return ingressOutcome(nil, err)
 		}
@@ -79,7 +82,7 @@ func (s *computerConnector) verificationMethod(slot *connectorSlot) desktop.Meth
 				return ingressOutcome(nil, err)
 			}
 		}
-		lease, err := slot.route.issuer.Admit(ctx, authority.List)
+		lease, err := slot.route.admit(ctx, authority.List)
 		if err != nil {
 			return ingressOutcome(nil, err)
 		}
@@ -135,7 +138,7 @@ func (s *computerConnector) verificationObservationMethod() desktop.Method {
 		if slot == nil || slot.closing || slot.startupUncertain || in.Binding != slot.opened.Endpoint.Binding {
 			return ingressOutcome(nil, computerUnavailable())
 		}
-		lease, err := slot.route.issuer.Admit(ctx, authority.List)
+		lease, err := slot.route.admit(ctx, authority.List)
 		if err != nil {
 			return ingressOutcome(nil, err)
 		}

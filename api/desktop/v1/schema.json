@@ -976,6 +976,10 @@
         "taskCodex": {
           "type": "TaskCodexSource",
           "optional": true
+        },
+        "renewableOwnerConsent": {
+          "type": "boolean",
+          "optional": true
         }
       }
     },

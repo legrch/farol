@@ -84,6 +84,9 @@ export class GoComputerAuthority {
             expectedStoreRevision: receipt.storeRevision,
             settingsRevision: String(settings.revision),
             approval,
+            // This producer projects persisted owner settings until their
+            // explicit withdrawal; unrelated bounded grants remain finite.
+            renewableOwnerConsent: true,
             ...(taskCodex === undefined ? {} : { taskCodex }),
           };
           if (!validate("ComputerAuthorityPublishRequest", request))

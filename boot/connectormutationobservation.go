@@ -23,7 +23,7 @@ func (s *computerConnector) mutationObservation(ctx context.Context, slot *conne
 	if s == nil || s.root == nil || slot == nil || slot.route == nil || slot.route.issuer == nil {
 		return nil, computerUnavailable()
 	}
-	lease, err := slot.route.issuer.Admit(ctx, authority.Read)
+	lease, err := slot.route.admit(ctx, authority.Read)
 	if err != nil {
 		return nil, err
 	}

@@ -29,8 +29,9 @@ import (
 // Chat admission are separate one-shot effects. The first slice admits only fresh
 // ordinary list/read intents; it performs no browser/provider dispatch.
 type ComputerIngress struct {
-	effects             sync.Mutex // serializes publication/admission IO, never current guards
-	retiring            bool       // effects-owned; permanent publication/admission closure
+	effects             sync.Mutex   // serializes publication/admission IO, never current guards
+	approvalProjection  sync.RWMutex // joins acknowledged time-only Store changes with Settings
+	retiring            bool         // effects-owned; permanent publication/admission closure
 	mu                  sync.Mutex
 	guard               activationFence
 	store               computerIngressStore
@@ -48,12 +49,18 @@ type ComputerIngress struct {
 	turns               map[string]bool
 	unknown             bool
 	publication         *knownComputerPublication
+	renewal             *connectorRenewalScope
 	route               *ComputerRoute
 }
 type knownComputerPublication struct {
 	receipt   wire.ComputerAuthorityPublication
 	approval  authority.Approval
 	taskCodex *codexclient.AuthoritySnapshot
+	// Constructor-selected standing consent, valid only while the original
+	// Settings publication/withdrawal and exact host guards remain current.
+	renewable       bool
+	currentApproval *authority.Approval
+	refreshCount    uint64
 }
 
 func NewComputerIngress(store *accessrepo.Store, chat *chatlifecycle.Service, native *filesystem.Workspace, peer wire.Context, ownerID, computerID string) (*ComputerIngress, error) {
@@ -179,7 +186,7 @@ func (s *ComputerIngress) Publish(ctx context.Context, operation string, in wire
 		return nil, fmt.Errorf("COMPUTER_PUBLICATION_UNKNOWN")
 	}
 	s.mu.Lock()
-	s.publication = &knownComputerPublication{receipt: receipt, approval: approval.Clone(), taskCodex: currentTask}
+	s.publication = &knownComputerPublication{receipt: receipt, approval: approval.Clone(), taskCodex: currentTask, renewable: in.RenewableOwnerConsent != nil && *in.RenewableOwnerConsent}
 	s.mu.Unlock()
 	return &receipt, nil
 }

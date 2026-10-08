@@ -100,7 +100,7 @@ func (s *computerConnector) startProcess(ctx context.Context, slot *connectorSlo
 		finish(err, true)
 		return nil, err
 	}
-	lease, err := slot.route.issuer.Admit(ctx, authority.Shell)
+	lease, err := slot.route.admit(ctx, authority.Shell)
 	if err != nil {
 		finish(err, true)
 		return nil, err
@@ -174,7 +174,7 @@ func (s *computerConnector) processObservation(ctx context.Context, slot *connec
 	if err != nil || generation > 9007199254740991 {
 		return nil, connectorProcessRefusal("PROCESS_INPUT_INVALID")
 	}
-	lease, err := slot.route.issuer.Admit(ctx, authority.Read)
+	lease, err := slot.route.admit(ctx, authority.Read)
 	if err != nil {
 		return nil, err
 	}

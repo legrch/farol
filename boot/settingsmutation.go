@@ -62,6 +62,9 @@ func (s *SettingsMutationIngress) edit(ctx context.Context, operation string, in
 	if s == nil || ctx == nil || ctx.Err() != nil || !validIngressID(operation) || validateIngress("ComputerSettingsEditRequest", in) != nil || len(in.Edits) < 1 || len(in.Edits) > 256 {
 		return nil, mutationInvalid()
 	}
+	if err := s.computer.refreshCurrentApproval(ctx); err != nil {
+		return nil, err
+	}
 	raw, err := json.Marshal(in)
 	if err != nil || len(raw) > 512*1024 {
 		return nil, mutationInvalid()

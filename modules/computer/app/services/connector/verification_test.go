@@ -33,9 +33,13 @@ func (g *verificationGate) Unlock() {
 type verificationJournal struct {
 	*journal
 	snapshots int
+	gate      *verificationGate
 }
 
 func (j *verificationJournal) WithSnapshot(c context.Context, id string, inspect func(port.AccessSnapshot) error) error {
+	if j.gate.held {
+		panic("fixture journal entered under owner gate")
+	}
 	j.snapshots++
 	return j.journal.WithSnapshot(c, id, inspect)
 }
@@ -61,7 +65,7 @@ func newVerificationFixture(t *testing.T) verificationFixture {
 	f.launch.Admission.Workspaces = append(f.launch.Admission.Workspaces, scope)
 	f.journal.approval = f.launch.Approval.Clone()
 	g := &verificationGate{}
-	j := &verificationJournal{journal: f.journal}
+	j := &verificationJournal{journal: f.journal, gate: g}
 	var err error
 	f.owner, err = connector.New(g, j, f.guard, f.clock, f.launch)
 	if err != nil {
@@ -162,8 +166,8 @@ func TestConnectorVerificationExactProof(t *testing.T) {
 	if err != nil || v == nil || *v != observed {
 		t.Fatal("exact Go identity changed", v, err)
 	}
-	if f.io.snapshots != snapshots || f.journal.publishes.Load() != 1 || f.journal.withdrawals.Load() != 0 || list.calls != 1 || f.gate.held {
-		t.Fatal("verification performed IO, replayed List or leaked the owner gate")
+	if f.io.snapshots != snapshots+2 || f.journal.publishes.Load() != 1 || f.journal.withdrawals.Load() != 0 || list.calls != 1 || f.gate.held {
+		t.Fatal("verification skipped current journal, replayed List or leaked the owner gate")
 	}
 }
 
@@ -200,8 +204,8 @@ func TestConnectorVerificationCrossedFields(t *testing.T) {
 			test.edit(&v)
 			refused(t, f.owner.RecordVerification(ctx, f.launch.VerificationChallenge, v))
 			verificationRefused(t, f.owner, ctx)
-			if f.io.snapshots != 0 || f.journal.publishes.Load() != 1 || f.journal.withdrawals.Load() != 0 {
-				t.Fatal("invalid observation performed IO")
+			if f.io.snapshots == 0 || f.journal.publishes.Load() != 1 || f.journal.withdrawals.Load() != 0 {
+				t.Fatal("invalid observation skipped current journal or changed publication")
 			}
 			if err := f.owner.RecordVerification(ctx, f.launch.VerificationChallenge, f.observation()); err != nil {
 				t.Fatal("consumer refusal revoked current owner", err)
@@ -282,8 +286,8 @@ func TestConnectorVerificationImmutableCopyAndDuplicate(t *testing.T) {
 		refused(t, f.owner.RecordVerification(ctx, original.ChallengeDigest, other))
 	}
 	out, err = f.owner.CurrentVerification(ctx)
-	if err != nil || out == nil || *out != original || f.io.snapshots != 0 || f.journal.publishes.Load() != 1 || f.journal.withdrawals.Load() != 0 {
-		t.Fatal("duplicate/conflict changed proof or performed IO", out, err)
+	if err != nil || out == nil || *out != original || f.io.snapshots == 0 || f.journal.publishes.Load() != 1 || f.journal.withdrawals.Load() != 0 {
+		t.Fatal("duplicate/conflict changed proof or skipped current journal", out, err)
 	}
 }
 
@@ -326,7 +330,7 @@ func TestConnectorVerificationNilAndCancellation(t *testing.T) {
 
 func TestConnectorVerificationLateWithdrawnUnavailableAndExpired(t *testing.T) {
 	for _, retained := range []bool{false, true} {
-		for _, kind := range []string{"withdrawn", "host lost", "guard unavailable", "admission expired", "approval expired"} {
+		for _, kind := range []string{"withdrawn", "host lost", "guard unavailable", "approval expired"} {
 			t.Run(kind+"/"+map[bool]string{false: "unobserved", true: "retained"}[retained], func(t *testing.T) {
 				f := verificationActive(t)
 				verificationBegin(t, f)
@@ -345,8 +349,6 @@ func TestConnectorVerificationLateWithdrawnUnavailableAndExpired(t *testing.T) {
 					f.guard.current = false
 				case "guard unavailable":
 					f.guard.err = errors.New("fixture unavailable")
-				case "admission expired":
-					f.clock.advance(time.Second) // Exact original expiry refuses.
 				case "approval expired":
 					f.clock.advance(time.Hour)
 				}
@@ -420,8 +422,8 @@ func TestConnectorVerificationChallengePreflight(t *testing.T) {
 		}
 		verificationAbsent(t, f.owner)
 	}
-	if list.calls != 0 || f.io.snapshots != 0 || f.journal.publishes.Load() != 1 || f.journal.withdrawals.Load() != 0 || f.gate.held {
-		t.Fatal("preflight recorded proof, performed IO or leaked gate")
+	if list.calls != 0 || f.io.snapshots != 6 || f.journal.publishes.Load() != 1 || f.journal.withdrawals.Load() != 0 || f.gate.held {
+		t.Fatal("preflight recorded proof, missed journal checks or leaked gate")
 	}
 	verificationBegin(t, f)
 	if err := f.owner.RecordVerification(ctx, f.launch.VerificationChallenge, f.observation()); err != nil {
@@ -451,8 +453,8 @@ func TestConnectorVerificationPublishingAndLateCompletion(t *testing.T) {
 	refused(t, f.owner.BeginVerification(ctx, v.ChallengeDigest, v.WorkspaceID, v.CallID))
 	refused(t, f.owner.CheckVerificationChallenge(ctx, v.ChallengeDigest))
 	refused(t, f.owner.RecordVerification(ctx, v.ChallengeDigest, v))
-	if f.journal.publishes.Load() != 1 || f.journal.withdrawals.Load() != 1 || f.io.snapshots != 0 {
-		t.Fatal("late completion replayed IO")
+	if f.journal.publishes.Load() != 1 || f.journal.withdrawals.Load() != 1 || f.io.snapshots == 0 {
+		t.Fatal("late completion replayed effects or skipped current journal")
 	}
 }
 
@@ -518,8 +520,8 @@ func TestConnectorVerificationBrokenGuard(t *testing.T) {
 				refused(t, s.BeginVerification(ctx, v.ChallengeDigest, v.WorkspaceID, v.CallID))
 				refused(t, s.CheckVerificationChallenge(ctx, v.ChallengeDigest))
 				refused(t, s.RecordVerification(ctx, v.ChallengeDigest, v))
-				if f.io.snapshots != 0 || f.journal.publishes.Load() != 1 || f.journal.withdrawals.Load() != 0 || f.gate.held {
-					t.Fatal("broken guard disclosed proof, replayed IO or leaked gate")
+				if f.io.snapshots == 0 || f.journal.publishes.Load() != 1 || f.journal.withdrawals.Load() != 0 || f.gate.held {
+					t.Fatal("broken guard disclosed proof, replayed effects or leaked gate")
 				}
 			})
 		}
@@ -546,8 +548,8 @@ func TestConnectorVerificationBeginRejectsWithoutConsuming(t *testing.T) {
 			verificationAbsent(t, f.owner)
 			verificationBegin(t, f)
 			verificationRefused(t, f.owner, ctx)
-			if f.io.snapshots != 0 || f.journal.publishes.Load() != 1 || f.journal.withdrawals.Load() != 0 || f.gate.held {
-				t.Fatal("Begin performed IO or leaked the owner gate")
+			if f.io.snapshots == 0 || f.journal.publishes.Load() != 1 || f.journal.withdrawals.Load() != 0 || f.gate.held {
+				t.Fatal("Begin skipped current journal or leaked the owner gate")
 			}
 		})
 	}
@@ -585,6 +587,7 @@ func TestConnectorVerificationAttemptCannotReplay(t *testing.T) {
 			if out != nil || !errors.As(err, &unavailable) || unavailable.Code != "COMPUTER_AUTHORITY_STORE_UNAVAILABLE" || unavailable.Retry != "never" {
 				t.Fatal("unfinished attempt was not classified unavailable without retry", out, err)
 			}
+			verificationRenew(f, 72*time.Hour) // Known renewal cannot clear any failed or unknown attempt.
 			calls, snapshots := list.calls, f.io.snapshots
 			for _, next := range []struct{ workspace, call string }{{v.WorkspaceID, v.CallID}, {"other", v.CallID}, {v.WorkspaceID, "next-call"}} {
 				verificationRefused(t, f.owner, ctx)
@@ -595,8 +598,8 @@ func TestConnectorVerificationAttemptCannotReplay(t *testing.T) {
 				refused(t, f.owner.BeginVerification(ctx, v.ChallengeDigest, next.workspace, next.call))
 			}
 			verificationRefused(t, f.owner, ctx)
-			if list.calls != calls || f.io.snapshots != snapshots || f.journal.publishes.Load() != 1 || f.journal.withdrawals.Load() != 0 || f.gate.held {
-				t.Fatal("pending/failed attempt replayed List or other IO")
+			if list.calls != calls || f.io.snapshots != snapshots+10 || f.journal.publishes.Load() != 1 || f.journal.withdrawals.Load() != 0 || f.gate.held {
+				t.Fatal("pending/failed attempt replayed List or missed current journal checks")
 			}
 		})
 	}
@@ -618,8 +621,8 @@ func TestConnectorVerificationRecordRequiresMatchingBegin(t *testing.T) {
 		verificationRefused(t, f.owner, ctx)
 		refused(t, f.owner.BeginVerification(ctx, other.ChallengeDigest, other.WorkspaceID, other.CallID))
 	}
-	// Only the original attempt's successful evidence may complete it. Re-observing
-	// that exact completed value has no IO and does not authorize another Begin.
+	// Only the original attempt's successful evidence may complete it. Observing
+	// it rechecks current authority and cannot authorize another Begin.
 	for i := 0; i < 2; i++ {
 		if err := f.owner.RecordVerification(ctx, v.ChallengeDigest, v); err != nil {
 			t.Fatal(err)
@@ -630,7 +633,7 @@ func TestConnectorVerificationRecordRequiresMatchingBegin(t *testing.T) {
 		}
 		refused(t, f.owner.BeginVerification(ctx, v.ChallengeDigest, v.WorkspaceID, v.CallID))
 	}
-	if f.io.snapshots != 0 || f.journal.publishes.Load() != 1 || f.journal.withdrawals.Load() != 0 || f.gate.held {
-		t.Fatal("Record or duplicate Begin performed IO")
+	if f.io.snapshots == 0 || f.journal.publishes.Load() != 1 || f.journal.withdrawals.Load() != 0 || f.gate.held {
+		t.Fatal("Record or duplicate Begin skipped current journal or replayed effects")
 	}
 }

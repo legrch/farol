@@ -22,9 +22,10 @@ import (
 // live Task/Chat owner and native Computer owner; wire IDs select neither.
 // It owns no positive admission cache and never opens, restores or repairs state.
 type ComputerRoute struct {
-	issuer    *execution.Service
-	workspace computerport.Workspace
-	clock     computerport.Clock
+	issuer          *execution.Service
+	workspace       computerport.Workspace
+	clock           computerport.Clock
+	beforeAdmission func(context.Context) error
 }
 
 // ComputerForChat takes the actual admitted handle's published facade and the
@@ -72,6 +73,9 @@ func computerUnavailable() error {
 func computerFailure(err error) error {
 	var failure *authority.Failure
 	if errors.As(err, &failure) && failure != nil {
+		if failure.Source == "approval-refresh" {
+			return &workspacect.Failure{Code: failure.Code, Source: "authority-store", Retry: "never"}
+		}
 		// Connector lifetime withdrawal is an unavailable current authority,
 		// expressed through the existing public workspace refusal vocabulary.
 		if failure.Code == "COMPUTER_AUTHORITY_STORE_UNAVAILABLE" && failure.Source == "connector-owner" {
@@ -87,7 +91,7 @@ func (r *ComputerRoute) selectContract(ctx context.Context, expected computerpor
 	}
 	// Exactly one immutable ordinary read lease for this entire parsed operation.
 	// Computer's snapshot gate encloses the existing Task/Chat no-IO owner gate.
-	lease, err := r.issuer.Admit(ctx, kind)
+	lease, err := r.admit(ctx, kind)
 	if err != nil {
 		return nil, computerFailure(err)
 	}
@@ -99,6 +103,17 @@ func (r *ComputerRoute) selectContract(ctx context.Context, expected computerpor
 		return nil, computerFailure(err)
 	}
 	return workspacect.New(service), nil
+}
+
+// Only trusted composition selects this pre-admission join. A fixed lease never
+// calls it again at disclosure, cancellation or publication.
+func (r *ComputerRoute) admit(ctx context.Context, kind authority.Capability) (*execution.Lease, error) {
+	if r.beforeAdmission != nil {
+		if err := r.beforeAdmission(ctx); err != nil {
+			return nil, err
+		}
+	}
+	return r.issuer.Admit(ctx, kind)
 }
 func operationBinding(owner, session, task string, epoch uint64, participant, turn string) computerport.TaskBinding {
 	return computerport.TaskBinding{Identity: authority.Identity{OwnerID: owner, SessionID: session, TaskID: task, TaskEpoch: epoch}, ParticipantID: participant, TurnID: turn}
