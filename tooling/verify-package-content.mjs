@@ -77,6 +77,10 @@ export async function verifyPackageContent({
   // ambiguous.  Recognize them explicitly instead of reporting a mismatch.
   requireValue(artifact.schema !== 4, "PACKAGE_TREE_DIGEST_LEGACY");
   const layout = packageLayout(artifact.schema);
+  requireValue(
+    artifact.treeDigestVersion === TREE_DIGEST_VERSION,
+    "PACKAGE_TREE_DIGEST_VERSION_INVALID",
+  );
   // Match the producer's 0.2 Go requirement before observing package bytes.
   requireValue(
     layout.core ||
@@ -90,10 +94,6 @@ export async function verifyPackageContent({
     : layout.branded
       ? BUILD_ENTRIES
       : LEGACY_BUILD_ENTRIES;
-  requireValue(
-    artifact.treeDigestVersion === TREE_DIGEST_VERSION,
-    "PACKAGE_TREE_DIGEST_VERSION_INVALID",
-  );
   assertArtifactPath?.();
   requireValue(
     artifact.product === "Farol Next Preview",

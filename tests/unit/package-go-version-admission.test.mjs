@@ -150,6 +150,18 @@ describe("shared package Go version admission", () => {
     },
   );
 
+  it.each([5, 6])(
+    "retains unknown tree-digest diagnostics before schema %s Go admission",
+    async (schema) => {
+      const input = fixture(schema);
+      input.artifact.treeDigestVersion = "farol.next.tree-digest/v9";
+      await refusesBeforeObservation(
+        input,
+        "PACKAGE_TREE_DIGEST_VERSION_INVALID",
+      );
+    },
+  );
+
   it.each([undefined, null, "7", 8])(
     "retains invalid schema rejection for %s",
     async (schema) => {
