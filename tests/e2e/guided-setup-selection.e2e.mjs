@@ -772,7 +772,7 @@ try {
     await setupAction(window, "Add selected folder read-only");
     // Settings retains hidden pages; Diagnostics projects the same folder.
     // Observe only the current guided form, not its hidden diagnostic record.
-    const folder = window.locator(".setup-page .folder-row:visible");
+    const folder = window.locator(".setup-page .workspace-detail:visible");
     await folder.waitFor();
     assert.equal(await folder.count(), 1);
     let saved = await readSetupSettings(window);
@@ -784,13 +784,12 @@ try {
     assert.equal(saved.computer.workspaces[0].access, "read");
     assert.notEqual(saved.computer.workspaces[0].gitHistoryApproved, true);
     assert.notEqual(saved.computer.commands, "workspace");
-    await setupAction(window, "Check access");
+    await setupAction(window, "Verify workspace");
     await window.waitForFunction(() =>
       document
-        .querySelector(".setup-page .folder-row .badges")
+        .querySelector(".setup-page .workspace-detail .badges")
         ?.textContent.includes("Access checked"),
     );
-    await setupAction(window, "Verify workspace");
     saved = await readSetupSettings(window);
     const build = (await window.evaluate(() => window.farolNext.bootstrap()))
       .build;
@@ -1167,7 +1166,7 @@ try {
                 feedback: document.querySelector(
                   '.setup-page .settings-page > p[role="status"]',
                 )?.textContent,
-                folders: document.querySelector(".setup-page .folder-row")
+                folders: document.querySelector(".setup-page .workspace-detail")
                   ?.textContent,
                 workspaces:
                   bootstrap.configuration.settings.computer.workspaces.map(

@@ -173,6 +173,452 @@ async function change(
     );
   });
 }
+// Current React + controller/API fixtures only; no native host/filesystem proof.
+describe("compact workspace detail", () => {
+  async function refresh(
+    h: Awaited<ReturnType<typeof mount>>,
+    value: ProductSettings,
+  ) {
+    vi.mocked(h.f.api.bootstrap).mockResolvedValue({
+      ...bootstrap(),
+      configuration: { status: "ready", settings: value },
+    });
+    await act(async () => h.c.refresh());
+  }
+  async function select(h: Awaited<ReturnType<typeof mount>>, name: string) {
+    const button = activePage(h.host).querySelector<HTMLButtonElement>(
+      `[aria-label="Select workspace ${name}"]`,
+    )!;
+    await act(async () => button.click());
+    return button;
+  }
+  function twoWorkspaces() {
+    const value = connectionSettings();
+    value.computer.workspaces.push({
+      ...structuredClone(value.computer.workspaces[0]!),
+      workspaceId: selectionId,
+      root: "/approved/second",
+      rootIdentity: { device: "1", inode: "3" },
+      excludedPaths: [],
+    });
+    return ProductSettingsSchema.parse(value);
+  }
+  const status = (h: Awaited<ReturnType<typeof mount>>) =>
+    activePage(h.host).querySelector(".workspace-feedback")!;
+  it("selects with native buttons and keeps active Computer binding unchanged across background updates", async () => {
+    const value = twoWorkspaces();
+    const h = await mount("folders", value);
+    const button = await select(h, "second");
+    button.focus();
+    expect(document.activeElement).toBe(button);
+    expect(button.type).toBe("button");
+    expect(button.getAttribute("aria-current")).toBe("true");
+    const detail = document.getElementById(
+      button.getAttribute("aria-controls")!,
+    );
+    expect(detail?.getAttribute("aria-label")).toBe("Workspace second");
+    expect(detail?.textContent).toContain("Saved access: Read-only");
+    expect(detail?.textContent).toContain("Check access needed");
+    await act(async () => h.f.emit("route", { state: "loaded" }));
+    await h.pageTo("connection");
+    await h.pageTo("folders");
+    await refresh(h, structuredClone(value));
+    expect(button.getAttribute("aria-current")).toBe("true");
+    expect(h.c.getSnapshot().configuration).toEqual(h.configuration);
+    const configuration = h.c.getSnapshot().configuration;
+    expect(
+      configuration?.status === "ready" &&
+        configuration.settings.setup.computer.verified?.workspaceId,
+    ).toBe(workspaceId);
+    expect(h.calls()).toEqual([]);
+  });
+  it("checks the current verified workspace read-only and retains its binding", async () => {
+    const value = connectionSettings();
+    const h = await mount("folders", value);
+    expect(h.button("Verify workspace").className).toBe("primary");
+    expect(() => h.button("Check access")).toThrow();
+    await h.click("Verify workspace");
+    expect(h.calls()).toEqual([{ kind: "computer.check-folder", workspaceId }]);
+    expect(h.c.getSnapshot().configuration).toEqual(h.configuration);
+    expect(status(h).textContent).toContain("Action confirmed");
+  });
+  it.each([
+    "absent",
+    "build",
+    "generation",
+    "identity",
+    "unreachable",
+  ] as const)(
+    "uses the existing guarded verification when the current witness is %s",
+    async (stale) => {
+      const value = connectionSettings();
+      if (stale === "absent") value.setup.computer.verified = null;
+      if (stale === "build")
+        value.setup.computer.verified!.buildId = "f".repeat(64);
+      if (stale === "generation") value.computer.generation++;
+      if (stale === "identity")
+        value.computer.workspaces[0]!.accessCheck = {
+          buildId: "3".repeat(64),
+          computerGeneration: value.computer.generation,
+          rootIdentity: { device: "1", inode: "999" },
+          verifiedAt: "2026-10-02T20:00:00.000Z",
+        };
+      if (stale === "unreachable")
+        value.setup.computer.reachable = "unreachable";
+      const h = await mount("folders", value);
+      await h.click("Verify workspace");
+      expect(h.calls()).toEqual([
+        { kind: "computer.verify-workspace", workspaceId },
+      ]);
+    },
+  );
+  it("shows an exact host stop refusal next to the selected detail and uses existing Diagnostics navigation", async () => {
+    const h = await mount("folders", twoWorkspaces());
+    await select(h, "second");
+    vi.mocked(h.f.api.configure).mockResolvedValueOnce({
+      ok: false,
+      error: "CONNECTOR_STOP_REQUIRED",
+      snapshot: h.configuration,
+    });
+    await h.click("Verify workspace");
+    expect(
+      h.c.getSnapshot().intents[
+        `settings:computer.verify-workspace:${selectionId}`
+      ],
+    ).toEqual({
+      id: `settings:computer.verify-workspace:${selectionId}`,
+      state: "refused",
+      code: "CONNECTOR_STOP_REQUIRED",
+    });
+    expect(status(h).textContent).toContain("choose Stop connection");
+    expect(status(h).textContent).toContain("will not stop it automatically");
+    expect(
+      activePage(h.host)
+        .querySelector(".workspace-detail")
+        ?.contains(status(h)),
+    ).toBe(true);
+    expect(
+      activePage(h.host).querySelector(".workspace-detail")?.textContent,
+    ).toContain("Check access needed");
+    await h.click("Workspace diagnostics");
+    expect(h.c.getSnapshot().destination.page).toBe("diagnostics");
+    expect(h.button("Stop connection").disabled).toBe(false);
+    expect(
+      activePage(h.host).querySelector('[aria-label="Retained actions"]')
+        ?.textContent,
+    ).toContain("CONNECTOR_STOP_REQUIRED");
+    expect(h.calls()).toEqual([
+      { kind: "computer.verify-workspace", workspaceId: selectionId },
+    ]);
+  });
+  it.each([
+    "computer.check-folder",
+    "computer.verify-workspace",
+    "computer.update-access",
+    "computer.remove-workspace",
+  ] as const)(
+    "keeps %s pending/unknown adjacent and blocks replay through refresh/remount",
+    async (kind) => {
+      const h = await mount(
+        "folders",
+        kind === "computer.check-folder" ? connectionSettings() : withFolder(),
+      );
+      const wait = deferred<unknown>();
+      vi.mocked(h.f.api.configure).mockReturnValueOnce(wait.promise);
+      if (kind === "computer.update-access") {
+        await change(h.field("Workspace access"), "write");
+        await h.click("Save");
+      } else if (kind === "computer.remove-workspace") {
+        await act(async () =>
+          activePage(h.host)
+            .querySelector<HTMLButtonElement>(
+              '[aria-label="Remove workspace project"]',
+            )!
+            .click(),
+        );
+        await h.click("Confirm removal");
+      } else await h.click("Verify workspace");
+      expect(status(h).textContent).toContain("Saving or checking");
+      expect(
+        h.c.getSnapshot().intents[`settings:${kind}:${workspaceId}`]?.state,
+      ).toBe("pending");
+      expect(h.button("Verify workspace").disabled).toBe(true);
+      await act(async () => wait.reject(new Error("private lost reply")));
+      expect(status(h).textContent).toContain("Outcome unknown");
+      expect(status(h).textContent).not.toContain("Action confirmed");
+      expect(status(h).textContent).not.toContain("private lost reply");
+      await refresh(h, withFolder());
+      await h.remount();
+      expect(status(h).textContent).toContain("Outcome unknown");
+      await h.click("Verify workspace");
+      await change(h.field("Workspace access"), "write");
+      await h.click("Save");
+      expect(h.calls()).toHaveLength(1);
+    },
+  );
+  it("keeps selection-specific receipts when switching workspaces", async () => {
+    const h = await mount("folders", twoWorkspaces());
+    await select(h, "second");
+    vi.mocked(h.f.api.configure).mockResolvedValueOnce({
+      ok: false,
+      error: "WORKSPACE_ROOT_CHANGED",
+      snapshot: h.configuration,
+    });
+    await h.click("Verify workspace");
+    expect(status(h).textContent).toContain("could not be completed");
+    await select(h, "project");
+    expect(status(h).textContent).not.toContain("could not be completed");
+    await select(h, "second");
+    expect(status(h).textContent).toContain("could not be completed");
+    expect(h.calls()).toHaveLength(1);
+  });
+  it("selects access as a draft, cancels without a command and suppresses no-op Save", async () => {
+    const h = await mount("folders", withFolder());
+    expect(h.button("Save").disabled).toBe(true);
+    await change(h.field("Workspace access"), "write");
+    expect(activePage(h.host).textContent).toContain("Saved access: Read-only");
+    expect(h.c.getSnapshot().configuration).toEqual(h.configuration);
+    await h.pageTo("connection");
+    await h.pageTo("folders");
+    expect(h.field("Workspace access").value).toBe("write");
+    await h.click("Cancel");
+    expect(h.field("Workspace access").value).toBe("read");
+    await change(h.field("Workspace access"), "write");
+    await change(h.field("Workspace access"), "read");
+    expect(h.button("Save").disabled).toBe(true);
+    await h.click("Save");
+    const form = h.field("Workspace access").closest("form")!;
+    await act(async () =>
+      form.dispatchEvent(
+        new Event("submit", { bubbles: true, cancelable: true }),
+      ),
+    );
+    expect(h.calls()).toEqual([]);
+  });
+  it("uses submit semantics for Save and Escape cancels only the draft", async () => {
+    const h = await mount("folders", withFolder());
+    await change(h.field("Workspace access"), "write");
+    expect(h.button("Save").type).toBe("submit");
+    expect(h.button("Cancel").type).toBe("button");
+    await act(async () =>
+      h.field("Workspace access").dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Escape",
+          bubbles: true,
+          cancelable: true,
+        }),
+      ),
+    );
+    expect(h.field("Workspace access").value).toBe("read");
+    expect(h.calls()).toEqual([]);
+    await change(h.field("Workspace access"), "write");
+    await act(async () =>
+      h
+        .field("Workspace access")
+        .closest("form")!
+        .dispatchEvent(
+          new Event("submit", { bubbles: true, cancelable: true }),
+        ),
+    );
+    expect(h.calls()).toEqual([
+      { kind: "computer.update-access", workspaceId, access: "write" },
+    ]);
+  });
+  it.each(["generation", "root", "identity", "access", "removed"] as const)(
+    "does not silently apply a draft after %s changes",
+    async (stale) => {
+      const value = withFolder();
+      const h = await mount("folders", value);
+      await change(h.field("Workspace access"), "write");
+      const next = structuredClone(value);
+      next.revision++;
+      if (stale === "generation") next.computer.generation++;
+      if (stale === "root") {
+        next.computer.workspaces[0]!.root = "/approved/replaced";
+        next.computer.workspaces[0]!.excludedPaths = [];
+      }
+      if (stale === "identity")
+        next.computer.workspaces[0]!.rootIdentity!.inode = "999";
+      if (stale === "access") next.computer.workspaces[0]!.access = "write";
+      if (stale === "removed") next.computer.workspaces = [];
+      await refresh(h, next);
+      if (stale === "removed")
+        expect(
+          activePage(h.host).querySelector(".workspace-detail"),
+        ).toBeNull();
+      else {
+        expect(h.button("Save").disabled).toBe(true);
+        await act(async () =>
+          h
+            .field("Workspace access")
+            .closest("form")!
+            .dispatchEvent(
+              new Event("submit", { bubbles: true, cancelable: true }),
+            ),
+        );
+        expect(activePage(h.host).textContent).toContain(
+          "changed while this draft was open",
+        );
+        await h.click("Cancel");
+        expect(h.field("Workspace access").value).toBe(
+          next.computer.workspaces[0]!.access,
+        );
+      }
+      expect(h.calls()).toEqual([]);
+    },
+  );
+  it("keeps drafts but cannot save after the host reports incompatible build bytes", async () => {
+    const h = await mount("folders", withFolder());
+    await change(h.field("Workspace access"), "write");
+    const next = bootstrap();
+    next.build.buildId = "f".repeat(64);
+    vi.mocked(h.f.api.bootstrap).mockResolvedValue({
+      ...next,
+      configuration: h.configuration,
+    });
+    await act(async () => h.c.refresh());
+    expect(h.c.getSnapshot().status).toBe("incompatible");
+    expect(h.field("Workspace access").value).toBe("write");
+    expect(h.button("Save").disabled).toBe(true);
+    await act(async () =>
+      h
+        .field("Workspace access")
+        .closest("form")!
+        .dispatchEvent(
+          new Event("submit", { bubbles: true, cancelable: true }),
+        ),
+    );
+    expect(h.calls()).toEqual([]);
+  });
+  it("rechecks scope and verification routing from the facade at click time", async () => {
+    const h = await mount("folders", withFolder());
+    const original = h.c.getSnapshot();
+    const next = structuredClone(original);
+    if (next.configuration?.status !== "ready")
+      throw new Error("fixture unavailable");
+    next.configuration.settings.setup.computer.verified = proof(
+      next.configuration.settings,
+    );
+    next.configuration.settings.setup.computer.reachable = "reachable";
+    const read = vi.spyOn(h.c, "getSnapshot").mockReturnValue(next);
+    await h.click("Verify workspace");
+    read.mockRestore();
+    await change(h.field("Workspace access"), "write");
+    const changed = structuredClone(original);
+    if (changed.configuration?.status !== "ready")
+      throw new Error("fixture unavailable");
+    changed.configuration.settings.computer.workspaces[0]!.rootIdentity!.inode =
+      "777";
+    const latest = vi.spyOn(h.c, "getSnapshot").mockReturnValue(changed);
+    await h.click("Save");
+    latest.mockRestore();
+    expect(h.calls()).toEqual([]);
+  });
+  it("projects saved access from the host reply and clears only the submitted draft", async () => {
+    const value = connectionSettings();
+    const h = await mount("folders", value);
+    await change(h.field("Workspace access"), "write");
+    const saved = structuredClone(value);
+    saved.revision++;
+    saved.computer.generation++;
+    saved.computer.workspaces[0]!.access = "write";
+    saved.computer.workspaces[0]!.accessCheck = null;
+    saved.setup.computer.verified = null;
+    vi.mocked(h.f.api.configure).mockResolvedValueOnce({
+      ok: true,
+      snapshot: { status: "ready", settings: saved },
+    });
+    await h.click("Save");
+    expect(activePage(h.host).textContent).toContain(
+      "Saved access: Read & write · approval required",
+    );
+    expect(activePage(h.host).textContent).toContain("Check access needed");
+    expect(h.field("Workspace access").value).toBe("write");
+    expect(h.button("Save").disabled).toBe(true);
+    expect(h.button("Verify workspace").disabled).toBe(false);
+    expect(h.calls()).toEqual([
+      { kind: "computer.update-access", workspaceId, access: "write" },
+    ]);
+  });
+  it("retains a refused access draft without claiming saved access", async () => {
+    const h = await mount("folders", withFolder());
+    await change(h.field("Workspace access"), "write");
+    vi.mocked(h.f.api.configure).mockResolvedValueOnce({
+      ok: false,
+      error: "CONNECTOR_STOP_REQUIRED",
+      snapshot: h.configuration,
+    });
+    await h.click("Save");
+    expect(h.field("Workspace access").value).toBe("write");
+    expect(activePage(h.host).textContent).toContain("Saved access: Read-only");
+    expect(status(h).textContent).toContain("Stop connection");
+    expect(status(h).textContent).not.toContain("Action confirmed");
+    expect(h.calls()).toEqual([
+      { kind: "computer.update-access", workspaceId, access: "write" },
+    ]);
+    await h.click("Cancel");
+    expect(h.calls()).toHaveLength(1);
+  });
+  it("requires accessible removal confirmation, retains files copy, and cancels with Escape", async () => {
+    const h = await mount("folders", withFolder());
+    const remove = activePage(h.host).querySelector<HTMLButtonElement>(
+      '[aria-label="Remove workspace project"]',
+    )!;
+    expect(remove.type).toBe("button");
+    await act(async () => remove.click());
+    const confirmation = activePage(h.host).querySelector(
+      '[aria-label="Confirm removal of project"]',
+    )!;
+    expect(confirmation.textContent).toContain("revokes Farol access");
+    expect(confirmation.textContent).toContain("keeps its files on disk");
+    expect(h.calls()).toEqual([]);
+    await act(async () =>
+      h.button("Keep workspace").dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Escape",
+          bubbles: true,
+          cancelable: true,
+        }),
+      ),
+    );
+    expect(confirmation.isConnected).toBe(false);
+    await act(async () => remove.click());
+    await h.click("Keep workspace");
+    expect(h.calls()).toEqual([]);
+    await act(async () => remove.click());
+    vi.mocked(h.f.api.configure).mockResolvedValueOnce({
+      ok: false,
+      error: "CONNECTOR_STOP_REQUIRED",
+      snapshot: h.configuration,
+    });
+    await h.click("Confirm removal");
+    expect(status(h).textContent).toContain("Stop connection");
+    expect(
+      activePage(h.host).querySelector(".workspace-detail")?.textContent,
+    ).toContain("/approved/project");
+    expect(h.calls()).toEqual([
+      { kind: "computer.remove-workspace", workspaceId },
+    ]);
+  });
+  it("refuses a stale removal confirmation", async () => {
+    const h = await mount("folders", withFolder());
+    await act(async () =>
+      activePage(h.host)
+        .querySelector<HTMLButtonElement>(
+          '[aria-label="Remove workspace project"]',
+        )!
+        .click(),
+    );
+    const next = withFolder();
+    next.computer.generation++;
+    await refresh(h, next);
+    expect(h.button("Confirm removal").disabled).toBe(true);
+    await h.click("Confirm removal");
+    expect(h.calls()).toEqual([]);
+    expect(activePage(h.host).textContent).toContain("Cancel and review");
+  });
+});
+
 // Renderer regressions only; native credential storage is qualified separately.
 describe("owner-facing credential replacement", () => {
   it("reveals only the locally entered replacement and cancels without a command", async () => {
@@ -817,16 +1263,15 @@ describe("bounded Settings writer", () => {
   });
   it("separates guarded writes, expanded Git approval and access/workspace checks", async () => {
     const h = await mount("folders", withFolder());
-    await h.click("Change access to read & write");
+    await change(h.field("Workspace access"), "write");
+    await h.click("Save");
     await h.pageTo("diagnostics");
     await h.click("Approve expanded Git access");
     await h.pageTo("folders");
-    await h.click("Check access");
     await h.click("Verify workspace");
     expect(h.calls()).toEqual([
       { kind: "computer.update-access", workspaceId, access: "write" },
       { kind: "computer.update-git-history", workspaceId, approved: true },
-      { kind: "computer.check-folder", workspaceId },
       { kind: "computer.verify-workspace", workspaceId },
     ]);
     expect(h.host.textContent).toContain("Check access needed");
@@ -2099,7 +2544,8 @@ describe("Computer-first setup and explicit reconnect", () => {
       snapshot: narrowed,
     });
     await h.pageTo("folders");
-    await h.click("Change access to read-only");
+    await change(h.field("Workspace access"), "read");
+    await h.click("Save");
     await h.pageTo("connection");
     expect(h.field("Tunnel ID")).toBe(tunnel);
     expect(tunnel.value).toBe("unsaved-tunnel");
@@ -2177,7 +2623,7 @@ describe("owner Setup presentation checkpoint (DOM fixtures only)", () => {
     expect(key.value).toBe("draft-key");
     expect(h.calls()).toEqual([]);
   });
-  it("keeps all folders visible and binds checks, access changes and removal to their own folder", async () => {
+  it("lists every workspace and binds detail commands only to the presentation selection", async () => {
     const value = withFolder();
     value.computer.workspaces.push({
       ...structuredClone(value.computer.workspaces[0]!),
@@ -2188,24 +2634,35 @@ describe("owner Setup presentation checkpoint (DOM fixtures only)", () => {
       excludedPaths: [],
     });
     const h = await mount("folders", ProductSettingsSchema.parse(value));
-    const rows = [
-      ...activePage(h.host).querySelectorAll<HTMLElement>(".folder-row"),
-    ];
-    expect(rows).toHaveLength(2);
-    expect(rows[0]?.textContent).toContain("/approved/project");
-    expect(rows[1]?.textContent).toContain("/approved/second");
-    for (const label of [
-      "Check access",
-      "Change access to read-only",
-      "Remove folder",
-    ]) {
-      const control = [
-        ...rows[1]!.querySelectorAll<HTMLButtonElement>("button"),
-      ].find((item) => item.textContent?.trim() === label)!;
-      await act(async () => control.click());
-    }
+    const picker = activePage(h.host).querySelector(
+      '[aria-label="Approved workspaces"]',
+    )!;
+    expect(picker.querySelectorAll("button")).toHaveLength(2);
+    expect(picker.textContent).toContain("/approved/project");
+    expect(picker.textContent).toContain("/approved/second");
+    const select = picker.querySelector<HTMLButtonElement>(
+      '[aria-label="Select workspace second"]',
+    )!;
+    await act(async () => select.click());
+    expect(select.getAttribute("aria-current")).toBe("true");
+    expect(
+      activePage(h.host).querySelectorAll(".workspace-detail"),
+    ).toHaveLength(1);
+    expect(
+      activePage(h.host).querySelector(".workspace-detail")?.textContent,
+    ).toContain("/approved/second");
+    expect(h.calls()).toEqual([]);
+    await h.click("Verify workspace");
+    await change(h.field("Workspace access"), "read");
+    await h.click("Save");
+    const remove = activePage(h.host).querySelector<HTMLButtonElement>(
+      '[aria-label="Remove workspace second"]',
+    )!;
+    await act(async () => remove.click());
+    expect(h.calls()).toHaveLength(2);
+    await h.click("Confirm removal");
     expect(h.calls()).toEqual([
-      { kind: "computer.check-folder", workspaceId: selectionId },
+      { kind: "computer.verify-workspace", workspaceId: selectionId },
       {
         kind: "computer.update-access",
         workspaceId: selectionId,
@@ -2380,8 +2837,10 @@ describe("owner Setup presentation checkpoint (DOM fixtures only)", () => {
 
 describe("review regressions: retained action origins and exact edit delivery", () => {
   const notice = (host: Element) =>
-    host.querySelector('.settings-page > [role="status"]')?.textContent;
-  it.each(["Check access", "Add folder…"])(
+    host.querySelector('.settings-page > [role="status"]')?.textContent ??
+    activePage(host).querySelector('.workspace-feedback [role="status"]')
+      ?.textContent;
+  it.each(["Verify workspace", "Add folder…"])(
     "retains Connection refusal after Folders %s and Settings remount",
     async (action) => {
       const h = await mount("connection", withFolder());
@@ -2628,18 +3087,18 @@ describe("dependency-scoped Settings admission", () => {
               }),
         );
       await h.pageTo("folders");
-      expect(h.button("Check access").disabled).toBe(false);
-      await h.click("Check access");
+      expect(h.button("Verify workspace").disabled).toBe(false);
+      await h.click("Verify workspace");
       expect(h.calls()).toEqual([
         { kind: "model.preview", selectAsDefault: false },
-        { kind: "computer.check-folder", workspaceId },
+        { kind: "computer.verify-workspace", workspaceId },
       ]);
       if (state === "pending")
         await act(async () => wait.reject(new Error("late old model reply")));
       if (state !== "refused") {
         await act(async () => h.c.refresh());
         await h.remount();
-        expect(h.button("Check access").disabled).toBe(false);
+        expect(h.button("Verify workspace").disabled).toBe(false);
         expect(
           h.c.getSnapshot().intents["settings:model.preview:"]?.state,
         ).toBe("unknown");
@@ -2673,12 +3132,12 @@ describe("dependency-scoped Settings admission", () => {
               }),
         );
       await h.pageTo("folders");
-      expect(h.button("Check access").disabled).toBe(false);
-      await h.click("Check access");
+      expect(h.button("Verify workspace").disabled).toBe(false);
+      await h.click("Verify workspace");
       if (state === "pending")
         await act(async () => wait.reject(new Error("late browser reply")));
       await h.remount();
-      expect(h.button("Check access").disabled).toBe(false);
+      expect(h.button("Verify workspace").disabled).toBe(false);
       if (state !== "refused") {
         await h.pageTo("connection");
         expect(h.button("Open ChatGPT").disabled).toBe(true);
@@ -2688,7 +3147,7 @@ describe("dependency-scoped Settings admission", () => {
       }
       expect(h.calls()).toEqual([
         { kind: "chatgpt.open-browser" },
-        { kind: "computer.check-folder", workspaceId },
+        { kind: "computer.verify-workspace", workspaceId },
       ]);
     },
   );
@@ -2698,10 +3157,10 @@ describe("dependency-scoped Settings admission", () => {
     const h = await mount("connection", value);
     expect(h.button("Sign in").disabled).toBe(true);
     await h.pageTo("folders");
-    await h.click("Check access");
+    await h.click("Verify workspace");
     await act(async () => h.c.refresh());
     await h.remount();
-    expect(h.button("Check access").disabled).toBe(false);
+    expect(h.button("Verify workspace").disabled).toBe(false);
     expect(h.c.getSnapshot().configuration).toEqual(h.configuration);
     await h.pageTo("connection");
     expect(h.button("Sign in").disabled).toBe(true);
@@ -2713,7 +3172,7 @@ describe("dependency-scoped Settings admission", () => {
     );
     await h.click("Sign in");
     await h.pageTo("folders");
-    expect(h.button("Check access").disabled).toBe(true);
+    expect(h.button("Verify workspace").disabled).toBe(true);
     await h.remount();
     await h.pageTo("diagnostics");
     await h.click("Refresh status");
@@ -2729,7 +3188,7 @@ describe("dependency-scoped Settings admission", () => {
     await h.click("Preview model configuration");
     await h.pageTo("folders");
     await h.remount();
-    expect(h.button("Check access").disabled).toBe(true);
+    expect(h.button("Verify workspace").disabled).toBe(true);
     expect(h.calls()).toEqual([]);
   });
 });

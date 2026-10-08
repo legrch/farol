@@ -180,7 +180,7 @@ function actionFeedback(
   )
     return "The connection helper could not be verified as compatible. Review Diagnostics and the Connection guide before using it.";
   if (result.code === "CONNECTOR_STOP_REQUIRED")
-    return "The connection must be stopped before changing its helper or credentials. Review the current service status.";
+    return "The connection must be stopped before changing workspace access, verification, its helper or credentials. Open Diagnostics, review Connection controls and choose Stop connection, then return here. Farol will not stop it automatically.";
   if (result.code?.endsWith("_CANCELLED")) return "Action cancelled.";
   if (result.code === "CHATGPT_SIGN_IN_IN_PROGRESS")
     return "Sign-in is already open in ChatGPT. Finish there, then check sign-in.";
@@ -393,11 +393,17 @@ export function Settings({ snapshot, facade, setupStep }: SettingsProps) {
           </button>
         </p>
       )}
-      {pageFeedback && (
-        <p className="notice" role="status">
-          {settled ? actionFeedback(settled) : pageFeedback.text}
-        </p>
-      )}
+      {pageFeedback &&
+        !(
+          snapshot.destination.page === "folders" &&
+          pageFeedback.result?.id.match(
+            /settings:computer\.(?:check-folder|verify-workspace|update-access|remove-workspace):/u,
+          )
+        ) && (
+          <p className="notice" role="status">
+            {settled ? actionFeedback(settled) : pageFeedback.text}
+          </p>
+        )}
       {actions.disabled && (
         <p className="notice">
           Some actions are paused while state is stale, a dependent action is
@@ -590,6 +596,12 @@ function AppearancePage({ snapshot, facade }: PageProps) {
 }
 function Folders(props: PageProps) {
   const { settings, facade, snapshot, actions } = props;
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const selected =
+    settings.computer.workspaces.find(
+      (item) => item.workspaceId === selectedId,
+    ) ?? settings.computer.workspaces[0];
+  const detailId = useId();
   const [picked, setPicked] = useState<WindowSnapshot["evidence"]>(null);
   const pickCurrent =
     picked !== null &&
@@ -619,15 +631,40 @@ function Folders(props: PageProps) {
         access level and check. Removing a workspace revokes access and keeps
         its files.
       </p>
-      <p className="description">
-        Folders start read-only. Read &amp; write allows guarded changes that
-        still require approval. Access changes require a fresh check.
-      </p>
-      <p className="description">
-        Check access checks the folder. Verify workspace prepares it for
-        Connection.
-      </p>
-      <Group title="Approved workspaces">
+      {selected && (
+        <div className="workspace-layout">
+          <nav className="workspace-picker" aria-label="Approved workspaces">
+            {settings.computer.workspaces.map((workspace) => (
+              <button
+                key={workspace.workspaceId}
+                type="button"
+                className="workspace-choice"
+                aria-label={`Select workspace ${folderDisplayName(workspace)}`}
+                aria-current={
+                  workspace.workspaceId === selected.workspaceId
+                    ? "true"
+                    : undefined
+                }
+                aria-controls={detailId}
+                onClick={() => setSelectedId(workspace.workspaceId)}
+              >
+                <strong>{folderDisplayName(workspace)}</strong>
+                <span>
+                  {workspace.access === "read" ? "Read-only" : "Read & write"}
+                </span>
+                <span className="workspace-choice-path">{workspace.root}</span>
+              </button>
+            ))}
+          </nav>
+          <WorkspaceDetail
+            key={selected.workspaceId}
+            {...props}
+            workspace={selected}
+            detailId={detailId}
+          />
+        </div>
+      )}
+      <div className="workspace-add">
         <div className="control-row">
           <button
             type="button"
@@ -691,85 +728,328 @@ function Folders(props: PageProps) {
             No folders approved. Local file access is optional.
           </p>
         )}
-        {settings.computer.workspaces.map((workspace) => (
-          <Folder
-            key={workspace.workspaceId}
-            {...props}
-            workspace={workspace}
-          />
-        ))}
-      </Group>
+      </div>
     </>
   );
 }
-function Folder({
-  workspace,
-  settings,
-  snapshot,
-  actions,
-}: PageProps & { workspace: ApprovedProductWorkspace }) {
-  const name = folderDisplayName(workspace);
-  const checked =
+// Draft admission binds presentation to the exact Computer scope. Local
+// selection is never a Computer grant or a replacement for the host guards.
+function workspaceScope(snapshot: WindowSnapshot, workspaceId: string) {
+  if (snapshot.configuration?.status !== "ready") return null;
+  const settings = snapshot.configuration.settings;
+  const workspace = settings.computer.workspaces.find(
+    (item) => item.workspaceId === workspaceId,
+  );
+  return workspace
+    ? JSON.stringify([
+        snapshot.buildId,
+        settings.computer.generation,
+        workspace.workspaceId,
+        workspace.root,
+        workspace.rootIdentity,
+        workspace.access,
+        workspace.excludedPaths,
+        workspace.gitHistoryApproved,
+        workspace.gitMetadata,
+      ])
+    : null;
+}
+function workspaceChecked(
+  snapshot: WindowSnapshot,
+  workspace: ApprovedProductWorkspace,
+) {
+  return (
     snapshot.status === "current" &&
-    !settings.setup.computer.outcomeUnknown &&
+    snapshot.runtime === "ready" &&
+    snapshot.configuration?.status === "ready" &&
+    !snapshot.configuration.settings.setup.computer.outcomeUnknown &&
     Boolean(
       snapshot.buildId &&
-      folderAccessChecked(settings, workspace, snapshot.buildId),
-    );
+      folderAccessChecked(
+        snapshot.configuration.settings,
+        workspace,
+        snapshot.buildId,
+      ),
+    )
+  );
+}
+function workspaceCurrent(
+  snapshot: WindowSnapshot,
+  workspace: ApprovedProductWorkspace,
+) {
+  const settings =
+    snapshot.configuration?.status === "ready"
+      ? snapshot.configuration.settings
+      : null;
+  const verified = settings?.setup.computer.verified;
   return (
-    <article className="folder-row">
-      <div className="setting-row">
-        <strong>{name}</strong>
-        <span className="badges">
-          {workspace.access === "read"
-            ? "Read-only"
-            : "Read & write · approval required"}{" "}
-          · {checked ? "Access checked" : "Check access needed"}
-        </span>
+    workspaceChecked(snapshot, workspace) &&
+    settings?.setup.computer.reachable === "reachable" &&
+    verified?.workspaceId === workspace.workspaceId &&
+    verified.buildId === snapshot.buildId &&
+    verified.configRevision === settings?.computer.generation
+  );
+}
+function WorkspaceDetail({
+  workspace,
+  snapshot,
+  facade,
+  actions,
+  detailId,
+}: PageProps & { workspace: ApprovedProductWorkspace; detailId: string }) {
+  const name = folderDisplayName(workspace);
+  const scope = workspaceScope(snapshot, workspace.workspaceId);
+  const [draft, setDraft] = useState<{
+    access: ApprovedProductWorkspace["access"];
+    scope: string | null;
+  } | null>(null);
+  const [removal, setRemoval] = useState<{ scope: string | null } | null>(null);
+  const feedback = useSettingsFeedback(facade);
+  const receipts = Object.values(feedback.intents).filter(
+    (intent) =>
+      intent.id.endsWith(`:${workspace.workspaceId}`) &&
+      /^settings:computer\.(?:check-folder|verify-workspace|update-access|remove-workspace):/u.test(
+        intent.id,
+      ),
+  );
+  const checked = workspaceChecked(snapshot, workspace);
+  const current = workspaceCurrent(snapshot, workspace);
+  const verifyKind = current
+    ? "computer.check-folder"
+    : "computer.verify-workspace";
+  const stale = draft !== null && (scope === null || draft.scope !== scope);
+  const removalStale =
+    removal !== null && (scope === null || removal.scope !== scope);
+  const access = draft?.access ?? workspace.access;
+  const changed = access !== workspace.access;
+  const admitScope = (latest: WindowSnapshot) =>
+    scope !== null && workspaceScope(latest, workspace.workspaceId) === scope;
+  return (
+    <section
+      id={detailId}
+      className="workspace-detail"
+      aria-label={`Workspace ${name}`}
+    >
+      <div className="workspace-heading">
+        <h3>{name}</h3>
+        <button
+          type="button"
+          className="subtle workspace-remove"
+          aria-label={`Remove workspace ${name}`}
+          disabled={
+            !actions.allowed("computer.remove-workspace", workspace.workspaceId)
+          }
+          onClick={() => setRemoval({ scope })}
+        >
+          <svg
+            aria-hidden="true"
+            width="16"
+            height="16"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.5"
+          >
+            <path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7M14 10v7" />
+          </svg>
+          Remove
+        </button>
       </div>
-      <p className="description">{workspace.root}</p>
-      <div className="control-row">
-        <Command
-          actions={actions}
-          command={{
-            kind: "computer.check-folder",
-            workspaceId: workspace.workspaceId,
+      <p className="workspace-path">
+        <code>{workspace.root}</code>
+      </p>
+      <p className="description">
+        Saved access:{" "}
+        {workspace.access === "read"
+          ? "Read-only"
+          : "Read & write · approval required"}
+        .
+      </p>
+      <p className="badges">
+        {checked ? "Access checked" : "Check access needed"}
+      </p>
+      <p className="description">
+        {current
+          ? "Current workspace for Connection. Verify workspace checks access without changing its binding."
+          : "Verify workspace checks access and prepares this workspace for Connection."}
+      </p>
+      <form
+        onKeyDown={(event) => {
+          if (event.key === "Escape") {
+            event.preventDefault();
+            setDraft(null);
+          }
+        }}
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (!draft || !changed || stale) return;
+          void actions
+            .run(
+              {
+                kind: "computer.update-access",
+                workspaceId: workspace.workspaceId,
+                access,
+              },
+              admitScope,
+            )
+            .then((result) => {
+              // A refused/unknown save retains its draft and existing fence.
+              if (result?.state === "applied")
+                setDraft((latest) => (latest === draft ? null : latest));
+            });
+        }}
+      >
+        <label className="setting-row">
+          Workspace access
+          <select
+            className="field"
+            value={access}
+            onChange={(event) =>
+              setDraft({
+                access: event.currentTarget
+                  .value as ApprovedProductWorkspace["access"],
+                scope: draft ? draft.scope : scope,
+              })
+            }
+          >
+            <option value="read">Read-only</option>
+            <option value="write">Read &amp; write</option>
+          </select>
+        </label>
+        <p className="description">
+          Read &amp; write allows guarded changes that still require approval.
+          Saving access changes requires a fresh check.
+        </p>
+        {stale && (
+          <p className="notice" role="status">
+            Workspace access or identity changed while this draft was open.
+            Cancel to review the saved access before editing again.
+          </p>
+        )}
+        <div className="control-row">
+          <button
+            type="submit"
+            className="primary"
+            disabled={
+              !changed ||
+              !draft ||
+              stale ||
+              !actions.allowed("computer.update-access", workspace.workspaceId)
+            }
+          >
+            Save
+          </button>
+          <button
+            type="button"
+            className="subtle"
+            disabled={!draft}
+            onClick={() => setDraft(null)}
+          >
+            Cancel
+          </button>
+        </div>
+      </form>
+      {removal && (
+        <div
+          className="notice workspace-removal"
+          role="group"
+          aria-label={`Confirm removal of ${name}`}
+          onKeyDown={(event) => {
+            if (event.key === "Escape") {
+              event.preventDefault();
+              setRemoval(null);
+            }
           }}
         >
-          Check access
-        </Command>
-        <Command
-          actions={actions}
-          command={{
-            kind: "computer.verify-workspace",
-            workspaceId: workspace.workspaceId,
-          }}
-        >
-          Verify workspace
-        </Command>
-        <Command
-          actions={actions}
-          command={{
-            kind: "computer.update-access",
-            workspaceId: workspace.workspaceId,
-            access: workspace.access === "read" ? "write" : "read",
-          }}
-        >
-          {workspace.access === "read"
-            ? "Change access to read & write"
-            : "Change access to read-only"}
-        </Command>
-        <Command
-          actions={actions}
-          command={{
-            kind: "computer.remove-workspace",
-            workspaceId: workspace.workspaceId,
-          }}
-        >
-          Remove folder
-        </Command>
+          <p>
+            Remove {name}? This revokes Farol access to this workspace and keeps
+            its files on disk.
+          </p>
+          {removalStale && (
+            <p role="status">
+              Workspace access or identity changed. Cancel and review the
+              workspace before removing it.
+            </p>
+          )}
+          <div className="control-row">
+            <button
+              type="button"
+              className="subtle"
+              disabled={
+                removalStale ||
+                !actions.allowed(
+                  "computer.remove-workspace",
+                  workspace.workspaceId,
+                )
+              }
+              onClick={() => {
+                void actions
+                  .run(
+                    {
+                      kind: "computer.remove-workspace",
+                      workspaceId: workspace.workspaceId,
+                    },
+                    admitScope,
+                  )
+                  .then((result) => {
+                    if (result?.state === "applied") setRemoval(null);
+                  });
+              }}
+            >
+              Confirm removal
+            </button>
+            <button
+              type="button"
+              className="subtle"
+              onClick={() => setRemoval(null)}
+            >
+              Keep workspace
+            </button>
+          </div>
+        </div>
+      )}
+      <div className="workspace-feedback" aria-label="Workspace action status">
+        {receipts.map((intent) => (
+          <p key={intent.id} className="notice" role="status">
+            {intent.id.startsWith("settings:computer.update-access:")
+              ? "Save access: "
+              : intent.id.startsWith("settings:computer.remove-workspace:")
+                ? "Remove workspace: "
+                : "Verify workspace: "}
+            {actionFeedback(intent)}
+          </p>
+        ))}
+        {actions.computerPauseReason && (
+          <p className="description" role="status">
+            {actions.computerPauseReason}
+          </p>
+        )}
+        {receipts.some(
+          (intent) => intent.state === "unknown" || intent.state === "refused",
+        ) && (
+          <button
+            type="button"
+            className="text-button"
+            onClick={() =>
+              facade.navigate({ area: "settings", page: "diagnostics" })
+            }
+          >
+            Workspace diagnostics
+          </button>
+        )}
       </div>
-    </article>
+      <Command
+        actions={actions}
+        className="primary"
+        disabled={Boolean(draft || removal)}
+        command={{ kind: verifyKind, workspaceId: workspace.workspaceId }}
+        admit={(latest) =>
+          admitScope(latest) && workspaceCurrent(latest, workspace) === current
+        }
+      >
+        Verify workspace
+      </Command>
+    </section>
   );
 }
 function FolderOptions({
