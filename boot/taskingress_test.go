@@ -35,16 +35,18 @@ type taskIngressTestRPC struct {
 }
 type taskIngressTestTurn struct{ ID, Status string }
 type taskIngressTestPipe struct {
-	selection      codexclient.Selection
-	mu             sync.Mutex
-	requests       []taskIngressTestRPC
-	replyError     string
-	turns          []taskIngressTestTurn
-	launches       atomic.Int32
-	readReplyBytes atomic.Int64
-	dropTurn       bool
-	bareRead       bool
-	notifications  func(taskIngressTestRPC) [][]byte
+	selection           codexclient.Selection
+	mu                  sync.Mutex
+	requests            []taskIngressTestRPC
+	replyError          string
+	turns               []taskIngressTestTurn
+	launches            atomic.Int32
+	readReplyBytes      atomic.Int64
+	dropTurn            bool
+	bareRead            bool
+	threadReads         int
+	lateMembershipField string
+	notifications       func(taskIngressTestRPC) [][]byte
 }
 type taskIngressTestProcess struct {
 	net.Conn
@@ -256,7 +258,11 @@ func (f *taskIngressTestPipe) reply(q taskIngressTestRPC) (any, error) {
 		if taskIngressTestString(q.Params, "threadId") != "thread-exact" {
 			return nil, errors.New("foreign thread")
 		}
+		f.threadReads++
 		thread := map[string]any{"id": "thread-exact", "projectId": b.ProjectID, "cwd": b.Writer.Path, "model": b.Model}
+		if f.threadReads == 2 && f.lateMembershipField != "" {
+			thread[f.lateMembershipField] = "foreign"
+		}
 		if !f.bareRead {
 			state := "idle"
 			if len(f.turns) > 0 && f.turns[len(f.turns)-1].Status == "inProgress" {
@@ -305,6 +311,15 @@ func (f *taskIngressTestPipe) count(method string) int {
 		}
 	}
 	return n
+}
+func (f *taskIngressTestPipe) methods() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	methods := make([]string, len(f.requests))
+	for n, request := range f.requests {
+		methods[n] = request.Method
+	}
+	return methods
 }
 func (f *taskIngressTestPipe) complete(id string) {
 	f.mu.Lock()
@@ -538,7 +553,7 @@ func TestTaskIngressBodiesCannotSupplyAuthorityAndMissingPrerequisitesClassify(t
 	taskIngressTestFailure(t, err, "TASK_UNAVAILABLE")
 }
 
-// The exact 127-byte thread/read reply crosses the 16-bit length boundary.
+// The exact 127-byte thread/read reply uses the 16-bit extended-length form.
 // Retained result reads must stay exact and cause no extra provider observation.
 func TestTaskIngressConcrete127ByteReplyRetainsExactResult(t *testing.T) {
 	f := taskIngressTestSetup(t, false)
@@ -550,6 +565,7 @@ func TestTaskIngressConcrete127ByteReplyRetainsExactResult(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	beforeObserve := len(f.pipe.methods())
 	f.pipe.mu.Lock()
 	f.pipe.bareRead = true
 	f.pipe.mu.Unlock()
@@ -561,6 +577,10 @@ func TestTaskIngressConcrete127ByteReplyRetainsExactResult(t *testing.T) {
 	if f.pipe.readReplyBytes.Load() != 127 {
 		t.Fatal("boundary witness is not exactly 127 bytes", f.pipe.readReplyBytes.Load())
 	}
+	wantMethods := []string{"thread/read", "thread/turns/list", "thread/items/list", "thread/read"}
+	if got := f.pipe.methods()[beforeObserve:]; !reflect.DeepEqual(got, wantMethods) {
+		t.Fatal("observation must check membership before and after terminal history", got)
+	}
 	reads := f.pipe.count("thread/read")
 	retained, err := f.ingress.Result(ctx, TaskIngressDispatchRequest{DispatchID: "create-1"})
 	if err != nil || !retained.Retained || retained.Pending || retained.Text != "retained turn-1" || retained.Lifecycle != controlct.Completed || retained.Reference != created.Receipt.Reference || retained.DispatchID != "create-1" || retained.ResultEvidence == "" {
@@ -570,7 +590,61 @@ func TestTaskIngressConcrete127ByteReplyRetainsExactResult(t *testing.T) {
 	if err != nil || *again != *retained || f.pipe.count("thread/read") != reads {
 		t.Fatal("retained result polled or changed", again, err)
 	}
-	if reads != 1 || f.pipe.count("turn/start") != 1 || f.pipe.count("thread/start") != 1 || f.pipe.launches.Load() != 1 || f.pipe.count("thread/turns/list") != 1 || f.pipe.count("thread/items/list") != 1 {
+	if got := f.pipe.methods()[beforeObserve:]; !reflect.DeepEqual(got, wantMethods) {
+		t.Fatal("retained result reads added provider RPCs", got)
+	}
+	// One observation checks membership twice; retained result reads add no RPCs.
+	if reads != 2 || f.pipe.count("turn/start") != 1 || f.pipe.count("thread/start") != 1 || f.pipe.launches.Load() != 1 || f.pipe.count("thread/turns/list") != 1 || f.pipe.count("thread/items/list") != 1 {
 		t.Fatal("127-byte observation added dispatch/reconnect or lost terminal reads")
+	}
+}
+
+func TestTaskIngressConcreteObserveRejectsLateMembershipChanges(t *testing.T) {
+	for _, field := range []string{"id", "projectId", "cwd", "model"} {
+		t.Run(field, func(t *testing.T) {
+			f := taskIngressTestSetup(t, false)
+			ctx := context.Background()
+			created, err := f.ingress.Create(ctx, "create-1", TaskIngressCreateRequest{Message: "bounded source task"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			before, err := f.store.Read(ctx, "task")
+			if err != nil || before == nil || before.Task.Lifecycle != task.Running || before.Task.Result != "" {
+				t.Fatal("missing running task baseline", before, err)
+			}
+			beforeOperation, err := f.store.Lookup(ctx, "create-1")
+			if err != nil || beforeOperation == nil || !beforeOperation.Settled || beforeOperation.Receipt.State != task.Known || beforeOperation.Receipt.Lifecycle != task.Running || beforeOperation.Receipt.Result != "" {
+				t.Fatal("missing known running dispatch baseline", beforeOperation, err)
+			}
+			beforeObserve := len(f.pipe.methods())
+			f.pipe.mu.Lock()
+			f.pipe.lateMembershipField = field
+			f.pipe.mu.Unlock()
+			f.pipe.complete("turn-1")
+			observed, err := f.ingress.Observe(ctx)
+			taskIngressTestFailure(t, err, "TASK_OUTCOME_UNKNOWN")
+			if observed != nil {
+				t.Fatal("late membership mismatch disclosed observation", observed)
+			}
+			after, err := f.store.Read(ctx, "task")
+			if err != nil || after == nil || *after != *before {
+				t.Fatal("late membership mismatch changed task retention", before, after, err)
+			}
+			afterOperation, err := f.store.Lookup(ctx, "create-1")
+			if err != nil || !reflect.DeepEqual(afterOperation, beforeOperation) {
+				t.Fatal("late membership mismatch retained a final receipt", beforeOperation, afterOperation, err)
+			}
+			retained, err := f.ingress.Result(ctx, TaskIngressDispatchRequest{DispatchID: "create-1"})
+			if err != nil || retained == nil || retained.Retained || retained.Pending || retained.Text != "" || retained.ResultEvidence != "" || retained.Lifecycle != controlct.Running || retained.Reference != created.Receipt.Reference || retained.DispatchID != "create-1" || retained.Delivery != "not_observed" {
+				t.Fatal("unqualified final escaped through retained result", retained, err)
+			}
+			wantMethods := []string{"thread/read", "thread/turns/list", "thread/items/list", "thread/read"}
+			if got := f.pipe.methods()[beforeObserve:]; !reflect.DeepEqual(got, wantMethods) {
+				t.Fatal("late membership mismatch retried or retained result polled provider", got)
+			}
+			if f.pipe.count("thread/read") != 2 || f.pipe.count("thread/turns/list") != 1 || f.pipe.count("thread/items/list") != 1 || f.pipe.count("turn/start") != 1 || f.pipe.count("thread/start") != 1 || f.pipe.launches.Load() != 1 {
+				t.Fatal("late membership mismatch added effects/reconnect or lost terminal reads")
+			}
+		})
 	}
 }
