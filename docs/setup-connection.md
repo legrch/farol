@@ -24,7 +24,9 @@ Select an approved workspace and review **Saved access**. Under **Workspace acce
 
 Choose **Verify workspace** with no access draft or removal confirmation open. It checks the current Connection workspace without changing its binding, or checks another selected workspace and prepares it for Connection. Selection alone does not choose the Connection workspace.
 
-Changes may be paused while another dependent action is pending or uncertain. If a coding task is using the workspace, wait for it to finish. If an action is refused because the connection is running, finish current work, choose **Review stop connection**, then explicitly choose **Stop connection** or **Keep connection**. A confirmed stop does not repeat the workspace action: review and submit the intended change separately. If stopping is unconfirmed, inspect **Workspace diagnostics** and do not repeat the stop or change. A stale draft requires cancellation and review of the saved workspace first.
+Changes may be paused while another dependent action is pending or uncertain. If a coding task is using the workspace, wait for it to finish. When the connection is running, adding a workspace, saving access or confirming removal uses one admitted action to drain that connection and apply the original change. Wait for its result; a manual Diagnostics stop or a second submission is not required. After a confirmed change, verify the selected workspace and use the offered Connection control if it needs to reconnect. The saved key remains saved.
+
+An unconfirmed drain or change is not success and does not authorize another stop or submission. Inspect the original result in **Workspace diagnostics**. A stale draft requires cancellation and review of the saved workspace first; cancelling it does not settle an already submitted action.
 
 ## Connection
 
