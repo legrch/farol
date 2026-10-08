@@ -117,6 +117,25 @@ it("distinguishes a settings write with failed readback from a refusal without e
   ).toBe("refused");
 });
 
+it("keeps the original Go open unknown even when recording its fence is refused", () => {
+  const result = classifyConfigurationResponse({
+    settled: "fulfilled",
+    value: {
+      ok: false,
+      error: "SETTINGS_INPUT_INVALID",
+      snapshot,
+      connectorAttempt: {
+        method: "computer.connector.open",
+        requestId: "44444444-4444-4444-8444-444444444444",
+        operationId: "55555555-5555-4555-8555-555555555555",
+        outcome: "unknown",
+      },
+    },
+  });
+  expect(result.kind).toBe("refused");
+  expect(configurationEffectOutcome(result)).toBe("unknown");
+});
+
 it.each([
   "CHATGPT_ACCOUNT_UNAVAILABLE",
   "CHATGPT_ACCOUNT_CHANGED",

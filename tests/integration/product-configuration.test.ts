@@ -3217,6 +3217,7 @@ describe("owner-selected embedded app binding", () => {
       }),
       await reloaded.recordSecureMcpCredential("missing"),
       await reloaded.recordSecureMcpStopped(),
+      await reloaded.renameComputer("Another name"),
     ])
       expect(result).toMatchObject({
         ok: false,
@@ -3224,11 +3225,24 @@ describe("owner-selected embedded app binding", () => {
       });
     expect(reloaded.snapshot()).toEqual(before);
     if (before.status !== "ready") throw new Error("settings missing");
+    const independent = await reloaded.updateGeneral(before.settings.general);
+    expect(independent.ok).toBe(true);
+    if (independent.snapshot.status !== "ready")
+      throw new Error("settings missing");
+    expect(independent.snapshot.settings.connectors.secureMcp.runtime).toEqual(
+      before.settings.connectors.secureMcp.runtime,
+    );
+    expect(independent.snapshot.settings.setup.connect.outcomeUnknown).toBe(
+      true,
+    );
     await store.save({
-      ...before.settings,
+      ...independent.snapshot.settings,
       connectors: {
-        ...before.settings.connectors,
-        secureMcp: { ...before.settings.connectors.secureMcp, runtime: null },
+        ...independent.snapshot.settings.connectors,
+        secureMcp: {
+          ...independent.snapshot.settings.connectors.secureMcp,
+          runtime: null,
+        },
       },
     });
     const setupOnly = new ProductConfigurationService(store, dependencies());

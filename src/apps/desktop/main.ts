@@ -4196,6 +4196,11 @@ async function startSecureMcpConnector(
     if (!connector.tunnelClient || !connector.tunnelId) {
       return configurationFailure("CONNECTOR_CONFIGURE_FAILED");
     }
+    // A stored key reference alone is not a committed connector admission.
+    // Do not publish a Go open if the settings write that records the key was
+    // refused or lost before the credential state became durable.
+    if (connector.credential !== "stored")
+      return configurationFailure("CONNECTOR_CREDENTIAL_REQUIRED");
     // Settings pin canonical bytes, not just a command pathname. Recheck
     // before configure/doctor/start can execute the saved selection.
     try {

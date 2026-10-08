@@ -2995,6 +2995,19 @@ export class ProductConfigurationService {
     } catch {
       return this.failure("SETTINGS_INPUT_INVALID");
     }
+    // Generic Computer/Settings mutations also pass through this owner. An
+    // authority generation change must not erase an uncertain connector write
+    // as a side effect of normal stale-runtime invalidation after restart.
+    const originalRuntime = before.connectors.secureMcp.runtime;
+    if (
+      (originalRuntime?.state === "outcome_unknown" ||
+        before.setup.connect.outcomeUnknown) &&
+      (JSON.stringify(candidate.connectors.secureMcp.runtime) !==
+        JSON.stringify(originalRuntime) ||
+        candidate.setup.connect.outcomeUnknown !==
+          before.setup.connect.outcomeUnknown)
+    )
+      return this.failure("CONNECTOR_RUNTIME_OUTCOME_UNKNOWN");
     try {
       // Compare every final policy projection, including indirect verification
       // invalidation. Command-name lists cannot cover all authority changes.
