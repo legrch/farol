@@ -1129,9 +1129,15 @@ export function Shell() {
           </button>
         </div>
         <div className="toolbar-title">
-          {(settings || destination.area === "setup") && (
+          {(settings ||
+            destination.area === "setup" ||
+            destination.area === "home") && (
             <span>
-              {settings ? "Settings" : "Setup"}{" "}
+              {settings
+                ? "Settings"
+                : destination.area === "setup"
+                  ? "Setup"
+                  : "Home"}{" "}
               <span className="separator">/</span>
             </span>
           )}

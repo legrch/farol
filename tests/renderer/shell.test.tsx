@@ -412,7 +412,12 @@ it("automatically uses the rail at narrow widths and opens a bounded page-list o
 
 it("R36 R39 new profile opens Home without a legacy modal and has one leaf toolbar", async () => {
   const { host, f } = await mount();
-  expect(host.querySelector(".toolbar-title")?.textContent).toBe("Overview");
+  expect(host.querySelector(".toolbar-title strong")?.textContent).toBe(
+    "Overview",
+  );
+  expect(host.querySelector(".toolbar-title")?.textContent).toBe(
+    "Home /Overview",
+  );
   expect(host.querySelector("dialog")).toBeNull();
   expect(host.textContent).toContain("Setup needed");
   expect(f.api.configure).not.toHaveBeenCalled();
