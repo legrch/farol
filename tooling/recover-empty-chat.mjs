@@ -26,6 +26,7 @@ export function parseEmptyRecoveryOptions(args) {
     "--apply",
     "--development",
     "--interrupted-retirement",
+    "--unacknowledged-dev",
   ]);
   const fields = new Set([
     "--selection",
@@ -49,7 +50,10 @@ export function parseEmptyRecoveryOptions(args) {
     !["--selection-sha", "--expected-run", "--expected-config"].every((name) =>
       /^[a-f0-9]{64}$/u.test(values[name] ?? ""),
     ) ||
-    (values["--interrupted-retirement"] === true
+    (values["--interrupted-retirement"] === true &&
+      values["--unacknowledged-dev"] === true) ||
+    (values["--interrupted-retirement"] === true ||
+    values["--unacknowledged-dev"] === true
       ? !/^[a-f0-9]{64}$/u.test(values["--expected-quit"] ?? "")
       : Object.hasOwn(values, "--expected-quit"))
   )
@@ -144,7 +148,7 @@ async function run() {
     await build({
       stdin: {
         contents:
-          'export { recoverClosedEmptyChat, recoverInterruptedEmptyChat } from "./src/apps/desktop/closed-empty-chat-recovery.ts"; export { assertClosedConnectorProcesses } from "./src/apps/desktop/closed-computer-recovery.ts"; export { parseJSON } from "./apps/desktop/bridge/frame.ts";',
+          'export { recoverClosedEmptyChat, recoverInterruptedEmptyChat, recoverUnacknowledgedEmptyDev } from "./src/apps/desktop/closed-empty-chat-recovery.ts"; export { assertClosedConnectorProcesses } from "./src/apps/desktop/closed-computer-recovery.ts"; export { parseJSON } from "./apps/desktop/bridge/frame.ts";',
         resolveDir: root,
         sourcefile: "empty-chat-host-entry.ts",
         loader: "ts",
@@ -159,14 +163,17 @@ async function run() {
     const {
       recoverClosedEmptyChat,
       recoverInterruptedEmptyChat,
+      recoverUnacknowledgedEmptyDev,
       assertClosedConnectorProcesses,
       parseJSON,
     } = createRequire(import.meta.url)(output);
     const metadata = parseJSON(marker.toString("utf8"));
     const selected = parseJSON(selection.toString("utf8"));
     if (
+      (options["--unacknowledged-dev"] === true) !==
+        (selected.UnacknowledgedDev === true) ||
       (options["--interrupted-retirement"] === true) !==
-      Object.hasOwn(selected, "Interrupted")
+        Object.hasOwn(selected, "Interrupted")
     )
       throw Error("EMPTY_CHAT_RECOVERY_SELECTION_MISMATCH");
     if (
@@ -202,9 +209,11 @@ async function run() {
         throw Error("EMPTY_CHAT_RECOVERY_ATTESTATION_CHANGED");
     };
     const recover =
-      options["--interrupted-retirement"] === true
-        ? recoverInterruptedEmptyChat
-        : recoverClosedEmptyChat;
+      options["--unacknowledged-dev"] === true
+        ? recoverUnacknowledgedEmptyDev
+        : options["--interrupted-retirement"] === true
+          ? recoverInterruptedEmptyChat
+          : recoverClosedEmptyChat;
     const result = await recover({
       userData,
       executable: path.join(root, "_output/build/app/farol-backend"),
@@ -219,7 +228,8 @@ async function run() {
       exact,
       expectedRunSha256: options["--expected-run"],
       expectedConfigSha256: options["--expected-config"],
-      ...(options["--interrupted-retirement"] === true
+      ...(options["--interrupted-retirement"] === true ||
+      options["--unacknowledged-dev"] === true
         ? { expectedQuitSha256: options["--expected-quit"] }
         : {}),
       desktopState: () => activationObligations(userData),

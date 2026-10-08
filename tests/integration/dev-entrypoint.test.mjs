@@ -403,6 +403,7 @@ describe("dev.mjs main() orchestration with an already-declared toolchain", () =
     const calls = [];
     return {
       overrides: {
+        prepareBuild: async () => {},
         currentNode: DECLARED_NODE_VERSIONS[0],
         getCurrentNpmVersion: () => DECLARED_NPM_VERSION,
         candidates: [],
@@ -434,6 +435,38 @@ describe("dev.mjs main() orchestration with an already-declared toolchain", () =
     const { overrides, calls } = baseOverrides();
     await main(["--check"], overrides);
     expect(calls).toEqual(["ensureDependencies", "runBuild"]);
+  });
+
+  it("stops the exact prior Dev before dependencies or shared build outputs", async () => {
+    const { overrides, calls } = baseOverrides({
+      prepareBuild: async ({ replace }) => {
+        calls.push(`prepare:${replace}`);
+      },
+    });
+    await main([], overrides);
+    expect(calls).toEqual([
+      "prepare:true",
+      "ensureDependencies",
+      "runBuild",
+      "launch",
+    ]);
+  });
+
+  it("does not replace the daily profile for check/review/acceptance", async () => {
+    for (const flag of [
+      "--check",
+      "--fresh-review-profile",
+      "--acceptance-profile",
+    ]) {
+      const { overrides, calls } = baseOverrides({
+        prepareBuild: async ({ replace }) => {
+          calls.push(`prepare:${replace}`);
+          throw Error("DEV_BUILD_LIVE_OUTPUTS_REFUSED");
+        },
+      });
+      await main([flag], overrides);
+      expect(calls).toEqual(["prepare:false", "exit:1"]);
+    }
   });
 
   it("builds and launches when --check is not passed", async () => {
@@ -518,6 +551,42 @@ describe("dev.mjs main() orchestration with an already-declared toolchain", () =
   });
 });
 
+describe("automatic stop of the retained launcher child (no processes)", () => {
+  it("escalates on deadlines without another owner keypress and observes close", async () => {
+    const signals = new EventEmitter();
+    const child = new EventEmitter();
+    const sent = [];
+    child.kill = (signal) => {
+      sent.push(signal);
+      if (signal === "SIGKILL") child.emit("close", null, signal);
+    };
+    const timers = [];
+    const cleared = [];
+    const result = runOwnerManagedChild({
+      spawnChild: () => child,
+      signals,
+      relayOutput: false,
+      log: () => {},
+      schedule: (callback, delay) => {
+        const timer = { callback, delay };
+        timers.push(timer);
+        return timer;
+      },
+      clearScheduled: (timer) => cleared.push(timer),
+    });
+    signals.emit("SIGINT");
+    expect(sent).toEqual(["SIGINT"]);
+    expect(timers[0].delay).toBe(30000);
+    timers[0].callback();
+    expect(sent).toEqual(["SIGINT", "SIGTERM"]);
+    expect(timers[1].delay).toBe(2000);
+    timers[1].callback();
+    expect((await result).outcome.signal).toBe("SIGKILL");
+    expect(sent).toEqual(["SIGINT", "SIGTERM", "SIGKILL"]);
+    expect(cleared).toContain(timers[1]);
+  });
+});
+
 describe("dev.mjs main() toolchain re-exec / missing", () => {
   it("re-execs under a found declared toolchain instead of running the rest here", async () => {
     const calls = [];
@@ -589,6 +658,7 @@ describe("dev opener bounded orchestration", () => {
     const calls = [];
     const logs = [];
     const overrides = {
+      prepareBuild: async () => {},
       pinned: true,
       currentNode: DECLARED_NODE_VERSIONS[0],
       getCurrentNpmVersion: () => DECLARED_NPM_VERSION,

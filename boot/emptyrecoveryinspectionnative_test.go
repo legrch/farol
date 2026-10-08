@@ -33,7 +33,8 @@ func emptyRecoveryFixture(t *testing.T) emptyRecoveryInspectionInput {
 func emptyRecoveryFixtureAt(t *testing.T, desktopLayout bool) emptyRecoveryInspectionInput {
 	return emptyRecoveryFixtureStateAt(t, desktopLayout, false)
 }
-func emptyRecoveryFixtureStateAt(t *testing.T, desktopLayout, interrupted bool) emptyRecoveryInspectionInput {
+func emptyRecoveryFixtureStateAt(t *testing.T, desktopLayout, interrupted bool, unacknowledged ...bool) emptyRecoveryInspectionInput {
+	fiveResults := interrupted || len(unacknowledged) == 1 && unacknowledged[0]
 	t.Helper()
 	launch, runtime := retirementStorageFixtureAt(t, true, desktopLayout)
 	terminal := preparedTerminal(t, runtime)
@@ -96,12 +97,12 @@ func emptyRecoveryFixtureStateAt(t *testing.T, desktopLayout, interrupted bool) 
 	}
 	expected := make([]mutationrepo.ExpectedSettledRecord, 0, 2)
 	kinds := []domain.Kind{domain.WriteKind, domain.EditKind}
-	if interrupted {
+	if fiveResults {
 		kinds = append(kinds, domain.WriteKind, domain.EditKind, domain.EditKind)
 	}
 	for index, kind := range kinds {
 		operation := string(kind) + "-fixture"
-		if interrupted {
+		if fiveResults {
 			operation += "-" + strconv.Itoa(index)
 		}
 		b := domain.Binding{Identity: domain.Identity{Scope: domain.ScopeConnector, OperationID: operation, OwnerID: launch.OwnerID, ProfileID: launch.Profile.ProfileID, ComputerID: launch.ComputerID}, WorkspaceID: "synthetic", ComputerGeneration: 1, RelativePath: operation + ".md", RequestDigest: strings.Repeat("a", 64), Connector: domain.ConnectorOrigin{BuildID: BuildID, BackendGeneration: "failed-current", RuntimeID: "synthetic-runtime", ConnectorGeneration: 1, SessionID: "synthetic-session", TaskID: "synthetic-task", ParticipantID: "synthetic-participant", TurnID: "synthetic-turn", CallID: operation, TaskEpoch: 1, Generation: 1, Operation: kind}}
@@ -119,7 +120,7 @@ func emptyRecoveryFixtureStateAt(t *testing.T, desktopLayout, interrupted bool) 
 			receipt.BeforeSHA256 = &hash
 		}
 		completed, err := prepared.Complete(receipt)
-		if interrupted && index == 4 {
+		if fiveResults && index == 4 {
 			completed, err = prepared.Refuse(domain.Failure{Code: "WORKSPACE_MUTATION_CONFLICT", Source: "native-workspace"})
 		}
 		if err != nil {
@@ -155,6 +156,7 @@ func emptyRecoveryFixtureStateAt(t *testing.T, desktopLayout, interrupted bool) 
 	if interrupted {
 		in.Interrupted = &interruptedRetirementInput{OriginalHandoffID: head.Record.Publication.HandoffID, ExpectedACKDigest: head.Digest}
 	}
+	in.UnacknowledgedDev = !interrupted && fiveResults
 	return in
 }
 

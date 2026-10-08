@@ -120,7 +120,15 @@ file with `task dev -- --go-inputs=/absolute/path.json`. Missing, invalid or
 unauthenticated inputs refuse the build; Dev does not silently start without Go.
 The existing Go builder requires clean committed source. It verifies the SDK,
 modules and source instead of downloading or trusting an arbitrary local `go`.
-**Ctrl+C** stops what the launcher started. Dev is not a package candidate.
+An ordinary `task dev` stops the previous Dev from this exact checkout/profile
+before replacing dependencies or rebuilding shared outputs. It checks the private
+run marker, executable, account, boot and precise native lifetime, allows 30 seconds
+to stop, then forces that process once if necessary. Other profiles and installed
+Farol are not stopped. A refused or uncertain lookup/signal blocks the build.
+**Ctrl+C** stops what the launcher started and escalates automatically if it hangs.
+Neither process disappearance nor forced stop means application work was drained:
+retained UNKNOWN and interrupted-profile recovery guards still apply.
+Dev is not a package candidate.
 `task dev -- --check` validates and builds without launching or changing profiles;
 `--fresh-review-profile` is a separate disposable review journey.
 

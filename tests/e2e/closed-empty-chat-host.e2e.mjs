@@ -7,6 +7,8 @@ import { createRequire } from "node:module";
 import { build } from "esbuild";
 import { sourceIdentity } from "../../tooling/source-identity.mjs";
 import { assertExactSourceIdentity } from "../../tooling/candidate-contract.mjs";
+import { activationObligations } from "../../tooling/promotion-obligations.mjs";
+import assert from "node:assert/strict";
 import {
   verifyBuildEntries,
   verifyInputManifest,
@@ -78,7 +80,7 @@ try {
   await build({
     stdin: {
       contents:
-        'export { recoverClosedEmptyChat, recoverInterruptedEmptyChat } from "./src/apps/desktop/closed-empty-chat-recovery.ts"; export { assertClosedConnectorProcesses } from "./src/apps/desktop/closed-computer-recovery.ts";',
+        'export { recoverClosedEmptyChat, recoverInterruptedEmptyChat, recoverUnacknowledgedEmptyDev } from "./src/apps/desktop/closed-empty-chat-recovery.ts"; export { assertClosedConnectorProcesses } from "./src/apps/desktop/closed-computer-recovery.ts";',
       resolveDir: root,
       loader: "ts",
     },
@@ -92,13 +94,29 @@ try {
   const {
     recoverClosedEmptyChat,
     recoverInterruptedEmptyChat,
+    recoverUnacknowledgedEmptyDev,
     assertClosedConnectorProcesses,
   } = createRequire(import.meta.url)(output);
   const s = fixture.Input.Selection;
   const interrupted = fixture.Input.Interrupted !== undefined;
-  const recover = interrupted
-    ? recoverInterruptedEmptyChat
-    : recoverClosedEmptyChat;
+  const unacknowledged = fixture.UnacknowledgedDev === true;
+  if (unacknowledged) {
+    const actual = await activationObligations(userData, {
+      isAlive: () => false,
+    });
+    assert.deepEqual(actual.unreadable, []);
+    assert.deepEqual(actual.changed, []);
+    assert.deepEqual(actual.obligations, [
+      "QUIT_UNCONFIRMED:go-core,connector",
+      "QUIT_UNCONFIRMED:crash",
+    ]);
+  }
+  if (unacknowledged && interrupted) throw Error("HOST_FIXTURE_MODE_INVALID");
+  const recover = unacknowledged
+    ? recoverUnacknowledgedEmptyDev
+    : interrupted
+      ? recoverInterruptedEmptyChat
+      : recoverClosedEmptyChat;
   const result = await recover({
     userData,
     executable: path.join(directory, "farol-backend"),
@@ -120,14 +138,25 @@ try {
     },
     expectedRunSha256: fixture.ExpectedRunSha256,
     expectedConfigSha256: fixture.ExpectedConfigSha256,
-    ...(interrupted ? { expectedQuitSha256: fixture.ExpectedQuitSha256 } : {}),
-    desktopState: async () => ({
-      obligations: interrupted
-        ? ["QUIT_UNCONFIRMED:go-core", "QUIT_UNCONFIRMED:crash"]
-        : ["QUIT_UNCONFIRMED:crash"],
-      unreadable: [],
-      changed: [],
-    }),
+    ...(interrupted || unacknowledged
+      ? { expectedQuitSha256: fixture.ExpectedQuitSha256 }
+      : {}),
+    desktopState: async () =>
+      unacknowledged
+        ? activationObligations(userData, { isAlive: () => false })
+        : {
+            obligations:
+              interrupted || unacknowledged
+                ? [
+                    unacknowledged
+                      ? "QUIT_UNCONFIRMED:go-core,connector"
+                      : "QUIT_UNCONFIRMED:go-core",
+                    "QUIT_UNCONFIRMED:crash",
+                  ]
+                : ["QUIT_UNCONFIRMED:crash"],
+            unreadable: [],
+            changed: [],
+          },
     processesAbsent: () => {
       assertClosedConnectorProcesses(
         path.join(userData, "farol-next-state/secure-mcp-connector"),

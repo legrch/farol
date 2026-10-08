@@ -40,6 +40,7 @@ export interface ExactEmptyRecoverySelection {
   readonly backendGeneration: string;
 }
 export interface EmptyRecoverySelectionInput {
+  readonly UnacknowledgedDev?: true;
   readonly Interrupted?: {
     readonly OriginalHandoffID: string;
     readonly ExpectedACKDigest: readonly number[];

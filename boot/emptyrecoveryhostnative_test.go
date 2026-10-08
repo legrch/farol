@@ -21,14 +21,18 @@ import (
 // Desktop projection is a declared crash fixture, not UI, actual saved-profile
 // process history, external MCP or installed-product acceptance.
 func TestNativeEmptyRecoveryHostWithBuiltCore(t *testing.T) {
-	testEmptyRecoveryHostWithBuiltCore(t, false)
+	testEmptyRecoveryHostWithBuiltCore(t, false, false)
 }
 
 func TestNativeInterruptedRetirementHostWithBuiltCore(t *testing.T) {
-	testEmptyRecoveryHostWithBuiltCore(t, true)
+	testEmptyRecoveryHostWithBuiltCore(t, true, false)
 }
 
-func testEmptyRecoveryHostWithBuiltCore(t *testing.T, interrupted bool) {
+func TestNativeUnacknowledgedDevHostWithBuiltCore(t *testing.T) {
+	testEmptyRecoveryHostWithBuiltCore(t, false, true)
+}
+
+func testEmptyRecoveryHostWithBuiltCore(t *testing.T, interrupted, unacknowledged bool) {
 	if !*ingressNative {
 		t.Skip("Requires exclusive native lane and -ingress-native")
 	}
@@ -47,7 +51,7 @@ func testEmptyRecoveryHostWithBuiltCore(t *testing.T, interrupted bool) {
 	previous := BuildID
 	BuildID = manifest.BuildID
 	defer func() { BuildID = previous }()
-	in := emptyRecoveryFixtureStateAt(t, true, interrupted)
+	in := emptyRecoveryFixtureStateAt(t, true, interrupted, unacknowledged)
 	in.Selection.OperationID = freshEmptyRecoveryFixtureUUID(t)
 	in.Selection.HostLifetimeID = freshEmptyRecoveryFixtureUUID(t)
 	in.Selection.ChildLaunchID = freshEmptyRecoveryFixtureUUID(t)
@@ -60,13 +64,37 @@ func testEmptyRecoveryHostWithBuiltCore(t *testing.T, interrupted bool) {
 	}
 	run := []byte("{\"syntheticFailedRun\":true}\n")
 	config := []byte("{\"syntheticRetainedSetting\":true}\n")
+	if unacknowledged {
+		// Real desktop obligation reader, with synthetic private configuration.
+		run = []byte("{\"schema\":1,\"pid\":2147483647,\"startedAt\":\"2026-10-08T09:44:38.119Z\",\"bootTime\":null,\"processStart\":null}\n")
+		ready := map[string]any{"visited": false, "skipped": false, "configured": false, "reachable": "unknown", "verified": nil, "needsAction": nil, "unavailable": nil, "outcomeUnknown": false}
+		config, err = json.Marshal(map[string]any{"schema": 1, "revision": 1,
+			"general":  map[string]any{"openAtLaunch": "home", "sidebarDefault": "full", "activityDetail": "summary"},
+			"computer": map[string]any{"computerId": in.ComputerID, "generation": 1, "name": "Synthetic", "commands": "none", "workspaces": []any{}, "pendingEdit": nil},
+			"setup":    map[string]any{"chatgpt": ready, "computer": ready, "connect": ready, "hosts": ready, "verify": ready}})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
 	for name, bytes := range map[string][]byte{"running.json": run, "config.json": config} {
 		if err := os.WriteFile(filepath.Join(state, name), bytes, 0600); err != nil {
 			t.Fatal(err)
 		}
 	}
 	quit := []byte("{\"schema\":1,\"at\":\"2026-10-07T21:13:07.697Z\",\"drained\":false,\"unconfirmed\":[\"go-core\"]}\n")
-	if interrupted {
+	if unacknowledged {
+		quit = []byte("{\"schema\":1,\"at\":\"2026-10-08T10:00:14.146Z\",\"drained\":false,\"unconfirmed\":[\"go-core\",\"connector\"]}\n")
+		lifecycle := filepath.Join(connector, "mcp-lifecycle")
+		if err := os.Mkdir(lifecycle, 0700); err != nil {
+			t.Fatal(err)
+		}
+		for _, name := range []string{"stopping", "prepared-" + fmt.Sprintf("%064x", 3)} {
+			if err := os.WriteFile(filepath.Join(lifecycle, name), []byte("1\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if interrupted || unacknowledged {
 		if err := os.WriteFile(filepath.Join(state, "last-quit.json"), quit, 0600); err != nil {
 			t.Fatal(err)
 		}
@@ -78,8 +106,10 @@ func testEmptyRecoveryHostWithBuiltCore(t *testing.T, interrupted bool) {
 		Profile                                 ProfileBinding
 		ExpectedRunSha256, ExpectedConfigSha256 string
 		ExpectedQuitSha256                      string `json:",omitempty"`
+		UnacknowledgedDev                       bool   `json:",omitempty"`
 	}{Input: in, Profile: profile, ExpectedRunSha256: hex.EncodeToString(sumFixture(run)), ExpectedConfigSha256: hex.EncodeToString(sumFixture(config))}
-	if interrupted {
+	fixture.UnacknowledgedDev = unacknowledged
+	if interrupted || unacknowledged {
 		fixture.ExpectedQuitSha256 = hex.EncodeToString(sumFixture(quit))
 	}
 	raw, err = json.Marshal(fixture)
@@ -126,13 +156,36 @@ func testEmptyRecoveryHostWithBuiltCore(t *testing.T, interrupted bool) {
 	if _, err := os.Lstat(filepath.Join(state, "running.json")); !os.IsNotExist(err) {
 		t.Fatal("failed run not retained away from live marker", err)
 	}
-	if interrupted {
+	if interrupted || unacknowledged {
 		archivedQuit, err := os.ReadFile(filepath.Join(profile.Root, "chat-retired-"+in.Selection.OperationID, "failed-last-quit.json"))
 		if err != nil || string(archivedQuit) != string(quit) {
 			t.Fatal("original failed Quit not preserved", err)
 		}
 		if _, err := os.Lstat(filepath.Join(state, "last-quit.json")); !os.IsNotExist(err) {
 			t.Fatal("live failed Quit not archived", err)
+		}
+	}
+	if unacknowledged {
+		if retained, err := os.ReadFile(filepath.Join(state, "config.json")); err != nil || string(retained) != string(config) {
+			t.Fatal("configuration changed", err)
+		}
+		var completed struct {
+			UnacknowledgedDev     struct{ OriginalRetirement, OriginalACK, OriginalTerminal, TerminalReceiptScope string }
+			InterruptedRetirement json.RawMessage
+		}
+		if err := json.Unmarshal(receipt, &completed); err != nil || completed.UnacknowledgedDev.OriginalRetirement != "absent" || completed.UnacknowledgedDev.OriginalACK != "absent" || completed.UnacknowledgedDev.OriginalTerminal != "unobserved" || completed.UnacknowledgedDev.TerminalReceiptScope != "new-maintenance-child" || len(completed.InterruptedRetirement) != 0 {
+			t.Fatal("invented original terminal/ACK", err)
+		}
+		if _, err := os.Stat(filepath.Join(connector, "mcp-lifecycle", "revoked-"+fmt.Sprintf("%064x", 3))); err != nil {
+			t.Fatal("original prepared connector not revoked", err)
+		}
+		retired, err := os.ReadFile(filepath.Join(connector, "mcp-lifecycle", "retired-"+in.Selection.OperationID, "completed.json"))
+		if err != nil {
+			t.Fatal("missing inactive connector receipt", err)
+		}
+		var reconciled struct{ Phase string }
+		if json.Unmarshal(retired, &reconciled) != nil || reconciled.Phase != "retired_unconfirmed" {
+			t.Fatal("connector falsely confirmed", string(retired))
 		}
 	}
 	if err := refusePendingEmptyRecovery(profile); err != nil {

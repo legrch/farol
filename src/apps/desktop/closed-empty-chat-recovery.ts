@@ -12,6 +12,7 @@ import {
 import type { ProfileLaunchBinding } from "../../../apps/desktop/bridge/profile";
 import { recordTerminal } from "../../../apps/desktop/bridge/terminal-recorder";
 import { PrivateExecutionFence } from "../../modules/computer/infra/mcp/execution-fence";
+import { PrivateMcpLifecycle } from "../../modules/computer/infra/mcp/private-mcp-lifecycle";
 import {
   acquirePromotionLease,
   releasePromotionLease,
@@ -177,7 +178,10 @@ export async function recoverClosedEmptyChat(
     operationId: string;
   }>
 > {
-  if (input.selectionInput.Interrupted !== undefined)
+  if (
+    input.selectionInput.Interrupted !== undefined ||
+    input.selectionInput.UnacknowledgedDev !== undefined
+  )
     throw Error("EMPTY_CHAT_RECOVERY_SELECTION_INVALID");
   return recoverSelectedEmptyChat(input);
 }
@@ -196,6 +200,7 @@ export async function recoverInterruptedEmptyChat(
   const interrupted = input.selectionInput.Interrupted;
   if (
     !interrupted ||
+    input.selectionInput.UnacknowledgedDev !== undefined ||
     !/^[a-f0-9]{64}$/u.test(input.expectedQuitSha256) ||
     !["Farol Dev", "Farol DEV"].includes(path.basename(input.userData))
   )
@@ -203,9 +208,27 @@ export async function recoverInterruptedEmptyChat(
   return recoverSelectedEmptyChat(input, input.expectedQuitSha256);
 }
 
+// Dev-only cold restart of the existing consumed, empty lifetime after an
+// unacknowledged Quit. The Go empty-recovery owner must still prove the exact
+// original scope/roots, no turns/results/writes and settled Computer records.
+// Original exit/ACK facts remain absent; only the maintenance child is retired.
+export async function recoverUnacknowledgedEmptyDev(
+  input: ClosedEmptyChatRecoveryInput & { expectedQuitSha256: string },
+) {
+  if (
+    input.selectionInput.Interrupted !== undefined ||
+    input.selectionInput.UnacknowledgedDev !== true ||
+    !/^[a-f0-9]{64}$/u.test(input.expectedQuitSha256) ||
+    !["Farol Dev", "Farol DEV"].includes(path.basename(input.userData))
+  )
+    throw Error("UNACKNOWLEDGED_DEV_RECOVERY_SELECTION_INVALID");
+  return recoverSelectedEmptyChat(input, input.expectedQuitSha256, true);
+}
+
 async function recoverSelectedEmptyChat(
   input: ClosedEmptyChatRecoveryInput,
   expectedQuitSha256?: string,
+  unacknowledgedDev = false,
 ): Promise<
   Readonly<{
     phase: "prepared_for_cold_start";
@@ -270,7 +293,10 @@ async function recoverSelectedEmptyChat(
             sum(failedQuit.bytes) !== expectedQuitSha256 ||
             quit.schema !== 1 ||
             quit.drained !== false ||
-            !isDeepStrictEqual(quit.unconfirmed, ["go-core"])
+            !isDeepStrictEqual(
+              quit.unconfirmed,
+              unacknowledgedDev ? ["go-core", "connector"] : ["go-core"],
+            )
           )
             throw Error("INTERRUPTED_CHAT_RECOVERY_QUIT_CHANGED");
         }
@@ -313,7 +339,12 @@ async function recoverSelectedEmptyChat(
             !isDeepStrictEqual(
               desktop.obligations,
               failedQuit
-                ? ["QUIT_UNCONFIRMED:go-core", "QUIT_UNCONFIRMED:crash"]
+                ? [
+                    unacknowledgedDev
+                      ? "QUIT_UNCONFIRMED:go-core,connector"
+                      : "QUIT_UNCONFIRMED:go-core",
+                    "QUIT_UNCONFIRMED:crash",
+                  ]
                 : ["QUIT_UNCONFIRMED:crash"],
             )
           )
@@ -378,6 +409,20 @@ async function recoverSelectedEmptyChat(
           proof,
           ...(failedQuit ? { failedQuit } : {}),
           ...(movedArchive ? { archivePin: await movedArchive() } : {}),
+          ...(unacknowledgedDev
+            ? {
+                reconcileConnector: async () => {
+                  const lifecycle = new PrivateMcpLifecycle(root);
+                  await lifecycle.beginClosedRecoveryStop();
+                  await lifecycle.reconcileInactive({
+                    operationId: exact.operationId,
+                    failedQuitSha256: expectedQuitSha256!,
+                    proveIdle: proof,
+                  });
+                  await proof();
+                },
+              }
+            : {}),
         });
       },
     );
@@ -673,6 +718,7 @@ async function finishEmptyRecoveryHost({
   knownFailure,
   archivePin,
   failedQuit,
+  reconcileConnector,
 }: {
   input: ClosedEmptyChatRecoveryInput;
   child: EmptyRecoveryChildResult;
@@ -693,6 +739,7 @@ async function finishEmptyRecoveryHost({
   knownFailure?: { receiptSha256: string; completionOperationId: string };
   archivePin?: Awaited<ReturnType<typeof retainEmptyArchive>>;
   failedQuit?: Snapshot;
+  reconcileConnector?(): Promise<void>;
 }): Promise<{
   phase: "prepared_for_cold_start";
   archive: string;
@@ -710,16 +757,28 @@ async function finishEmptyRecoveryHost({
   await proof();
   await unchanged(pending, intent);
   const completion = path.join(archive, "maintenance-completed.json");
-  const interruptedRetirement = failedQuit
-    ? {
-        originalHandoffId: input.selectionInput.Interrupted!.OriginalHandoffID,
-        originalTerminal: "unobserved",
-        failedQuitSha256: sum(failedQuit.bytes),
-        terminalReceiptScope: "new-maintenance-child",
-      }
-    : undefined;
+  const interruptedRetirement =
+    failedQuit && input.selectionInput.Interrupted
+      ? {
+          originalHandoffId:
+            input.selectionInput.Interrupted!.OriginalHandoffID,
+          originalTerminal: "unobserved",
+          failedQuitSha256: sum(failedQuit.bytes),
+          terminalReceiptScope: "new-maintenance-child",
+        }
+      : undefined;
+  const unacknowledgedDev =
+    failedQuit && !input.selectionInput.Interrupted
+      ? {
+          originalRetirement: "absent",
+          originalACK: "absent",
+          originalTerminal: "unobserved",
+          failedQuitSha256: sum(failedQuit.bytes),
+          terminalReceiptScope: "new-maintenance-child",
+        }
+      : undefined;
   const receipt = Buffer.from(
-    `${JSON.stringify({ schema: "farol.closed-empty-chat-recovery/1", operationId: exact.operationId, buildId: exact.buildId, failedRunSha256: input.expectedRunSha256, configSha256: input.expectedConfigSha256, publication: child.publication, acknowledgement: child.acknowledgement, originalChildTerminal: child.terminal, recorderConfirmed: true, ...(knownFailure ? { knownFailure } : {}), ...(interruptedRetirement ? { interruptedRetirement } : {}) })}\n`,
+    `${JSON.stringify({ schema: "farol.closed-empty-chat-recovery/1", operationId: exact.operationId, buildId: exact.buildId, failedRunSha256: input.expectedRunSha256, configSha256: input.expectedConfigSha256, publication: child.publication, acknowledgement: child.acknowledgement, originalChildTerminal: child.terminal, recorderConfirmed: true, ...(knownFailure ? { knownFailure } : {}), ...(interruptedRetirement ? { interruptedRetirement } : {}), ...(unacknowledgedDev ? { unacknowledgedDev } : {}) })}\n`,
   );
   const f = await fs.open(
     completion,
@@ -742,6 +801,9 @@ async function finishEmptyRecoveryHost({
   await sync(archive);
   await proof();
   await unchanged(pending, intent);
+  // The original failed run and Quit remain pinned until inactive MCP ownership
+  // is durably reconciled under the same exclusive Desktop/Computer leases.
+  await reconcileConnector?.();
   // Preserve original failure and intent; NEVER manufacture a clean Quit.
   const retainedRun = path.join(archive, "failed-running.json");
   const retainedIntent = path.join(archive, "maintenance-intent.json");

@@ -84,6 +84,26 @@ describe("one-shot empty Chat recovery preflight", () => {
       parseEmptyRecoveryOptions([...selected, "--interrupted-retirement"]),
     ).toThrow();
   });
+  it("admits only the exact Dev unacknowledged-run mode with its failed Quit digest", () => {
+    const selected = [
+      ...exact,
+      "--unacknowledged-dev",
+      "--expected-quit",
+      "e".repeat(64),
+    ];
+    expect(parseEmptyRecoveryOptions(selected)["--unacknowledged-dev"]).toBe(
+      true,
+    );
+    expect(() =>
+      parseEmptyRecoveryOptions([...exact, "--unacknowledged-dev"]),
+    ).toThrow();
+    expect(() =>
+      parseEmptyRecoveryOptions([...selected, "--interrupted-retirement"]),
+    ).toThrow();
+    expect(() =>
+      parseEmptyRecoveryOptions([...selected, "--unacknowledged-dev"]),
+    ).toThrow();
+  });
   it.each([
     "--profile",
     "--home",

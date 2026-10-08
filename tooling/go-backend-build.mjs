@@ -70,6 +70,84 @@ export async function measureGoToolchain(root) {
   return toolchainSnapshot(root);
 }
 
+// The development stop helper uses the SAME authenticated SDK/module/source
+// machinery, in private output unrelated to a live application's build. This
+// fixed entry is not a caller-selected program, package or backend replacement.
+export async function buildDevControl(repositoryRoot, inputs) {
+  const root = path.resolve(repositoryRoot);
+  if (
+    (await fs.realpath(root)) !== root ||
+    process.env.NODE_OPTIONS ||
+    process.env.NODE_PATH ||
+    process.execArgv.length
+  )
+    fail("DEV_CONTROL_INPUT_INVALID");
+  const initial = sourceSnapshot(root);
+  if (initial.dirty) fail("DEV_CONTROL_SOURCE_DIRTY");
+  const platform = { goos: "darwin", goarch: process.arch };
+  const toolchain = Object.freeze({ ...inputs.toolchain });
+  validateDeclaration(toolchain, platform);
+  const declared = declareModuleInputs(inputs.moduleInputs);
+  const scratch = await fs.mkdtemp(
+    path.join(await ownedParent(root, initial), "go-dev-control-"),
+  );
+  const source = path.join(scratch, "source");
+  const sdk = path.join(scratch, "sdk");
+  if ((await toolchainSnapshot(toolchain.root, sdk)) !== toolchain.treeSha256)
+    fail("TOOLCHAIN_DIGEST_MISMATCH");
+  await writeSources(initial, source);
+  for (const name of ["home", "tmp", "cache", "modules", "gopath"])
+    await fs.mkdir(path.join(scratch, name));
+  const modules = await authenticateModules(declared, dependencySums(initial));
+  const cache = await installModules(modules, path.join(scratch, "modules"));
+  const env = cleanEnvironment(scratch, sdk, platform);
+  const binary = path.join(scratch, "dev-control");
+  go(
+    sdk,
+    [
+      "build",
+      "-p=2",
+      "-compiler=gc",
+      "-buildmode=exe",
+      "-trimpath",
+      "-buildvcs=false",
+      "-mod=readonly",
+      "-o",
+      binary,
+      "./cmd/faroldevcontrol",
+    ],
+    source,
+    env,
+  );
+  const info = JSON.parse(
+    go(sdk, ["version", "-m", "-json", binary], source, env),
+  );
+  if (
+    info.GoVersion !== VERSION ||
+    info.Path !== "github.com/legrch/farol/cmd/faroldevcontrol"
+  )
+    fail("DEV_CONTROL_BINARY_INVALID");
+  assertBinaryDependencies(info, modules);
+  await assertModuleInputsUnchanged(modules);
+  await assertSnapshotUnchanged(
+    cache,
+    path.join(scratch, "modules"),
+    "MODULE_CACHE_MOVED",
+  );
+  await assertSnapshotUnchanged(initial, source);
+  const current = sourceSnapshot(root);
+  if (
+    current.dirty ||
+    current.commit !== initial.commit ||
+    current.treeDigest !== initial.treeDigest ||
+    (await measureGoToolchain(sdk)) !== toolchain.treeSha256 ||
+    (await measureGoToolchain(toolchain.root)) !== toolchain.treeSha256
+  )
+    fail("DEV_CONTROL_INPUT_CHANGED");
+  // Retain the exact helper/snapshot; no cleanup after a refused/unknown stop.
+  return binary;
+}
+
 function validateDeclaration(toolchain, platform) {
   if (
     !toolchain ||

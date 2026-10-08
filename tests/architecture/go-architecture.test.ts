@@ -80,6 +80,23 @@ function denied(result: ReturnType<typeof check>, code: string, file?: string) {
 }
 
 describe("the executable root Go architecture boundary", () => {
+  it("owns only the fixed Dev launcher utility and denies application imports", () => {
+    const valid = check({
+      "cmd/faroldevcontrol/main.go": source("golang.org/x/sys/unix"),
+    });
+    expect(valid.status).toBe(0);
+    for (const target of [
+      "boot",
+      "modules/computer/contracts/workspace",
+      "pkg/ipc",
+    ]) {
+      denied(edge("cmd/faroldevcontrol", target), "GO_DEV_TOOL_DEPENDENCY");
+    }
+    denied(
+      check({ "cmd/anotherhelper/main.go": source("os") }),
+      "GO_UNCLASSIFIED",
+    );
+  });
   it("checks production Go in the real checkout during the existing test gate", () => {
     const result = spawnSync(
       process.execPath,

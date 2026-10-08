@@ -143,6 +143,8 @@ const pureSelectors = new Map([
 function classify(directory) {
   const parts = directory.split("/");
   if (directory === "cmd/farol") return { kind: "cmd" };
+  // Fixed development launcher utility; it has no application-module access.
+  if (directory === "cmd/faroldevcontrol") return { kind: "devtool" };
   if (parts[0] === "boot") return { kind: "boot" };
   if (parts[0] === "transport" && parts[1] === "desktop")
     return { kind: "transport" };
@@ -335,6 +337,7 @@ function localRule(from, to, target, source) {
   if (from.kind === "generated")
     return to.kind === "generated" ? null : "GO_GENERATED_DEPENDENCY";
   if (from.kind === "cmd") return to.kind === "boot" ? null : "GO_CMD_NOT_THIN";
+  if (from.kind === "devtool") return "GO_DEV_TOOL_DEPENDENCY";
   if (from.kind === "transport")
     return ["module", "kernel", "ipc", "generated"].includes(to.kind) &&
       !(to.kind === "module" && to.layer !== "contracts") &&

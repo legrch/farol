@@ -22,6 +22,7 @@ type emptyRecoveryInspectionInput struct {
 	AccessDigest        [32]byte
 	Mutations           []mutationrepo.ExpectedSettledRecord
 	Interrupted         *interruptedRetirementInput `json:",omitempty"`
+	UnacknowledgedDev   bool                        `json:",omitempty"`
 }
 
 type interruptedRetirementInput struct {
@@ -65,6 +66,9 @@ type emptyRecoveryChatClaims struct {
 }
 
 func withEmptyRecoveryClaims(ctx context.Context, in emptyRecoveryInspectionInput, visit func(emptyRecoveryInspection, *emptyRecoveryChatClaims) error) (resultErr error) {
+	if in.UnacknowledgedDev && (in.Interrupted != nil || !emptyRecoveryDevRoot(in.Profile.Root)) {
+		return emptyrecovery.Refused
+	}
 	if ctx == nil || ctx.Err() != nil || visit == nil || !validProfileBinding(in.Profile) || !validIngressID(in.OwnerID) || !validIngressID(in.ComputerID) || in.Selection.BuildID != BuildID || in.Selection.Current.ProfileID != in.Profile.ProfileID || in.Selection.Current.ParentRoot.Device != in.Profile.Device || in.Selection.Current.ParentRoot.Inode != in.Profile.Inode {
 		return emptyrecovery.Refused
 	}
@@ -158,7 +162,9 @@ func withEmptyRecoveryClaims(ctx context.Context, in emptyRecoveryInspectionInpu
 			if err := verify(); err != nil {
 				return err
 			}
-			if in.Interrupted != nil {
+			// Explicit Dev recovery reuses the same exact known five-result guard.
+			// Ordinary exact-two Completed qualification is unchanged.
+			if in.Interrupted != nil || in.UnacknowledgedDev {
 				_, err = mutationrepo.InspectInterruptedChatSettled(ctx, mutationrepo.Root{Path: computer.Path, Device: computer.Device, Inode: computer.Inode, OwnerUID: computer.OwnerUID}, mutationrepo.SettledSelection{OwnerID: in.OwnerID, ProfileID: in.Profile.ProfileID, ComputerID: in.ComputerID}, in.Mutations, func(retained mutationrepo.InterruptedChatSettledInspection) error {
 					if err := verify(); err != nil {
 						return err

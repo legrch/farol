@@ -16,6 +16,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { createOwnerLaunchResultCollector } from "./owner-launch-result.mjs";
 import { ownerLaunchEnvironment } from "./launch-snapshot.mjs";
 import { readGoBuildInputs } from "./go-build-inputs.mjs";
+import { prepareDevBuild } from "./dev-process-control.mjs";
 
 export const DECLARED_NODE_VERSIONS = Object.freeze(["24.20.0", "26.7.0"]);
 export const DECLARED_NPM_VERSION = "11.19.0";
@@ -371,6 +372,8 @@ export async function runOwnerManagedChild({
   signals = process,
   log = (line) => process.stdout.write(`${line}\n`),
   relayOutput = true,
+  schedule = (callback, delay) => setTimeout(callback, delay),
+  clearScheduled = (timer) => clearTimeout(timer),
 }) {
   const child = spawnChild();
   if (relayOutput) {
@@ -391,6 +394,7 @@ export async function runOwnerManagedChild({
   let stopLabel = null;
   let exited = false;
   const escalation = createSignalEscalation();
+  let stopTimer;
   const onOwnerSignal = (signalName) => {
     if (!stopLabel) stopLabel = signalName === "SIGTERM" ? "SIGTERM" : "Ctrl+C";
     const toSend = escalation.next();
@@ -405,6 +409,13 @@ export async function runOwnerManagedChild({
         child.kill(toSend);
       } catch {
         // already gone
+      }
+      if (stopTimer !== undefined) clearScheduled(stopTimer);
+      if (toSend !== "SIGKILL") {
+        stopTimer = schedule(
+          () => onOwnerSignal(signalName),
+          toSend === "SIGINT" ? 30000 : 2000,
+        );
       }
     }
   };
@@ -425,6 +436,7 @@ export async function runOwnerManagedChild({
   });
   signals.removeListener("SIGINT", onSigint);
   signals.removeListener("SIGTERM", onSigterm);
+  if (stopTimer !== undefined) clearScheduled(stopTimer);
 
   return { stopLabel, outcome, protocolError, resultCollector };
 }
@@ -716,6 +728,8 @@ export async function main(argv, overrides = {}) {
     ensureDependencies: ensureDependenciesFn = () =>
       ensureDependencies(vnextRoot, "npm", log),
     runBuild = runDevBuild,
+    prepareBuild = (options) =>
+      prepareDevBuild({ root: vnextRoot, ...options, log }),
     createReviewProfile = createOwnerFreshReviewProfile,
     launch = (
       acceptanceProfile,
@@ -785,6 +799,18 @@ export async function main(argv, overrides = {}) {
     `Farol Dev toolchain: Node ${currentNode}, npm ${getCurrentNpmVersion()}.`,
   );
 
+  // Close the exact prior Dev BEFORE dependency replacement or shared builds.
+  // Check/review/acceptance do not stop the owner's ordinary profile.
+  try {
+    await prepareBuild({
+      buildArguments,
+      replace: !checkOnly && !freshReview && !acceptanceProfile,
+    });
+  } catch (error) {
+    logError(error.message);
+    exit(1);
+    return;
+  }
   const dependencyStatus = await ensureDependenciesFn();
   if (dependencyStatus !== 0) {
     exit(dependencyStatus);
