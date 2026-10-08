@@ -15,7 +15,7 @@ const blockedMessages: Readonly<Record<string, string>> = {
   UPDATE_BROWSER_DRAFT:
     "Send or clear the unsent ChatGPT draft and attachments before restarting.",
   UPDATE_BROWSER_STATE_UNKNOWN:
-    "Farol could not confirm that ChatGPT is idle. Inspect its window, then check again before restarting.",
+    "Farol could not confirm that ChatGPT is idle. Keep your current work and review this result in Diagnostics before considering another update action.",
   UPDATE_BROWSER_RELEASE_UNCONFIRMED:
     "Farol could not confirm that ChatGPT resumed. Quit Farol and reopen it before updating.",
   UPDATE_WORK_PENDING: "Finish or cancel active work before restarting.",

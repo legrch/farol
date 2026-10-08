@@ -94,6 +94,16 @@ describe("installed update view", () => {
       expect(f.onCommand).not.toHaveBeenCalled();
     },
   );
+  it("does not present a browser-state refusal as an invitation to repeat Update", () => {
+    const f = fixture();
+    f.view.render({ ...ready, blockedBy: "UPDATE_BROWSER_STATE_UNKNOWN" });
+    expect(f.node("summary").textContent).toContain(
+      "review this result in Diagnostics",
+    );
+    expect(f.node("summary").textContent).not.toContain("check again");
+    expect(f.node("restart").disabled).toBe(true);
+    expect(f.onCommand).not.toHaveBeenCalled();
+  });
   it("exposes only measured recovery or rollback and never dispatches while rendering", () => {
     const f = fixture();
     f.view.render({
