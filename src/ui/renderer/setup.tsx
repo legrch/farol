@@ -91,6 +91,17 @@ export function Setup({ snapshot, facade }: Props) {
               </div>
             ))}
           </div>
+          <button
+            className="primary"
+            onClick={() =>
+              facade.navigate({
+                area: "setup",
+                setupStep: setup.ready ? "folders" : nextSetupStep(snapshot),
+              })
+            }
+          >
+            {setup.ready ? "Review workspaces" : "Continue setup"}
+          </button>
         </section>
       )}
       <div hidden={step === "finish" || step === "overview"}>
@@ -128,18 +139,6 @@ export function Setup({ snapshot, facade }: Props) {
             Continue setup
           </button>
         )}
-        <button
-          className={setup.ready ? "primary" : "subtle"}
-          onClick={() =>
-            facade.navigate({
-              area: "home",
-              homeView: "overview",
-              homeSelection: null,
-            })
-          }
-        >
-          Open Home
-        </button>
       </section>
       <footer className="setup-navigation">
         <button
@@ -154,7 +153,7 @@ export function Setup({ snapshot, facade }: Props) {
         >
           Previous step
         </button>
-        {index < setupSteps.length - 1 && (
+        {index > 0 && index < setupSteps.length - 1 && (
           <button
             className="primary"
             onClick={() =>

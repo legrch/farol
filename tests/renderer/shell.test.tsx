@@ -923,6 +923,32 @@ it("partial setup survives controller reopen with an obvious continuation and un
   }
 });
 
+it("Setup overview resumes the first incomplete step and ready review stays nondestructive", async () => {
+  const partial = bootstrap();
+  partial.configuration.settings.computer.workspaces =
+    homeComputerSettings().computer.workspaces;
+  const first = await mount(partial);
+  await act(async () => button(first.host, "Setup").click());
+  await act(async () => button(first.host, "Continue setup").click());
+  expect(first.c.getSnapshot().destination.setupStep).toBe("connection");
+  expect(first.f.api.configure).not.toHaveBeenCalled();
+
+  const ready = bootstrap();
+  ready.configuration.settings = homeComputerSettings();
+  const review = await mount(ready);
+  await act(async () => review.c.navigate({ area: "settings", page: "general" }));
+  await act(async () => button(review.host, "Review Setup").click());
+  await act(async () => button(review.host, "Review workspaces").click());
+  expect(review.c.getSnapshot().destination.setupStep).toBe("folders");
+  await act(async () => button(review.host, "Finish").click());
+  expect(
+    [...review.host.querySelectorAll("button")].filter(
+      (item) => item.textContent?.trim() === "Open Home",
+    ),
+  ).toHaveLength(1);
+  expect(review.f.api.configure).not.toHaveBeenCalled();
+});
+
 it("Home projects Computer readiness separately from optional embedded login", async () => {
   const data = bootstrap();
   data.configuration.settings = homeComputerSettings();
