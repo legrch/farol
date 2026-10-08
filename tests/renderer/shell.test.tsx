@@ -602,6 +602,26 @@ it("offers Download only for a current available release", async () => {
       .mock.calls.filter(([command]) => command.kind === "download"),
   ).toHaveLength(1);
 });
+it("keeps the update indicator in the rail only while an update needs attention", async () => {
+  const { host, c, f } = await mount();
+  expect(host.querySelector(".rail .update-action")).toBeNull();
+  await act(async () =>
+    f.emit("update", {
+      phase: "available",
+      version: "0.2.0-owner.beta.5",
+      deferred: false,
+    }),
+  );
+  expect(host.querySelector(".toolbar .update-action")).toBeNull();
+  const rail = button(host.querySelector(".rail")!, "Update available");
+  await act(async () => rail.click());
+  expect(c.getSnapshot().overlay).toBe("update");
+  await act(async () => {
+    c.overlay("none");
+    f.emit("update", { phase: "idle", checkedAt: 42 });
+  });
+  expect(host.querySelector(".rail .update-action")).toBeNull();
+});
 it("renders release notes as text without creating provider-supplied markup", async () => {
   const { host, c, f } = await mount();
   await act(async () => {

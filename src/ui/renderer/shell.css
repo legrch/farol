@@ -308,6 +308,9 @@ kbd {
 .rail .attention-action {
   color: var(--warn);
 }
+.rail .update-action {
+  color: var(--accent);
+}
 .attention-dot {
   position: absolute;
   top: 4px;

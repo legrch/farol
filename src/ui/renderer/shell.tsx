@@ -876,6 +876,21 @@ export function Shell() {
       (step) => "outcomeUnknown" in step && step.outcomeUnknown,
     ) ||
     configuration?.connectors.secureMcp.runtime?.state === "outcome_unknown";
+  const updateRailLabel =
+    state.update.phase === "available"
+      ? state.update.deferred
+        ? "Update available, saved for later"
+        : "Update available"
+      : state.update.phase === "ready"
+        ? state.update.deferred
+          ? "Update downloaded, saved for later"
+          : "Update ready"
+        : state.update.phase === "failed" || state.update.phase === "recovery"
+          ? "Update needs attention"
+          : state.update.phase === "downloading" ||
+              state.update.phase === "applying"
+            ? "Update in progress"
+            : null;
   useEffect(() => {
     const listener = (event: KeyboardEvent) => {
       if (event.isComposing || event.repeat) return;
@@ -964,14 +979,6 @@ export function Shell() {
             <Icon name="settings" />
           </button>
         )}
-        {state.update.phase !== "unavailable" && (
-          <button
-            aria-label="Review update status"
-            onClick={() => facade.overlay("update")}
-          >
-            <Icon name="download" />
-          </button>
-        )}
       </header>
       <nav className="rail" aria-label="Sections">
         {(["home", "chatgpt", "activity"] as const).map((area) => (
@@ -1015,6 +1022,23 @@ export function Shell() {
             }
           >
             <Icon name="attention" />
+          </button>
+        )}
+        {updateRailLabel && (
+          <button
+            className="update-action"
+            aria-label={updateRailLabel}
+            title={updateRailLabel}
+            onClick={() => facade.overlay("update")}
+          >
+            <Icon
+              name={
+                state.update.phase === "failed" ||
+                state.update.phase === "recovery"
+                  ? "attention"
+                  : "download"
+              }
+            />
           </button>
         )}
         <button
