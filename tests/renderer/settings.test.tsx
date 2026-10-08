@@ -333,6 +333,31 @@ describe("compact workspace detail", () => {
     ]);
     expect(h.host.textContent).toContain("submit its change separately");
   });
+  it("keeps an unconfirmed stop fenced instead of retrying the connector or workspace change", async () => {
+    const h = await mount("folders", twoWorkspaces());
+    await select(h, "second");
+    vi.mocked(h.f.api.configure)
+      .mockResolvedValueOnce({
+        ok: false,
+        error: "CONNECTOR_STOP_REQUIRED",
+        snapshot: h.configuration,
+      })
+      .mockResolvedValueOnce({
+        ok: false,
+        error: "CONNECTOR_STOP_UNCONFIRMED",
+        snapshot: h.configuration,
+      });
+    await h.click("Verify workspace");
+    await h.click("Review stop connection");
+    await h.click("Stop connection");
+    expect(h.host.textContent).toContain("requested change is unconfirmed");
+    expect(h.button("Review stop connection").disabled).toBe(true);
+    await h.click("Verify workspace");
+    expect(h.calls()).toEqual([
+      { kind: "computer.verify-workspace", workspaceId: selectionId },
+      { kind: "connector.stop" },
+    ]);
+  });
   it.each([
     [
       "CONNECTOR_STOP_UNCONFIRMED",
