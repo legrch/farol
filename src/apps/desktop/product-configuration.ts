@@ -139,6 +139,7 @@ type MutationResult = Readonly<
       error:
         | "SETTINGS_UNAVAILABLE"
         | "SETTINGS_INPUT_INVALID"
+        | "AUTHORITY_CHANGE_IN_PROGRESS"
         | "SETTINGS_WRITE_FAILED"
         | "CONNECTOR_APP_VERIFICATION_STATE_CHANGED"
         | "CONNECTOR_APP_VERIFICATION_OUTCOME_UNKNOWN"
@@ -1599,59 +1600,69 @@ export class ProductConfigurationService {
       | "TUNNEL_CLIENT_DISCOVERY_CANDIDATE_STALE"
       | "TUNNEL_CLIENT_EXECUTABLE_UNSAFE",
     purpose: "stop" | "update" = "stop",
+    expectedRevision?: number,
   ): Promise<MutationResult> {
-    return this.mutateConnector((settings) => {
-      const connector = settings.connectors.secureMcp;
+    return this.exclusive(() => {
+      // A stopped publication must not absorb a command queued ahead of it.
+      // Check inside the same writer turn, before its original mutation.
       if (
-        connector.runtime === null &&
-        connector.challenge === null &&
-        connector.attachment === null &&
-        resumeRefusal === undefined
-      ) {
-        return settings;
-      }
-      const next = {
-        ...connector,
-        // Keep only a stopped, generation-bound resume intent after a known
-        // update drain. This is never live readiness and contains no new proof.
-        runtime:
-          purpose === "update" &&
-          resumeRefusal === undefined &&
-          connector.runtime?.state === "ready" &&
-          connector.runtime.connectorGeneration === connector.generation &&
-          connector.runtime.computerGeneration ===
-            settings.computer.generation &&
-          !settings.setup.connect.outcomeUnknown
-            ? {
-                ...connector.runtime,
-                state: "unreachable" as const,
-                observedAt: this.now(),
-              }
-            : null,
-        challenge: null,
-        attachment: null,
-      };
-      return {
-        ...settings,
-        revision: settings.revision + 1,
-        connectors: { ...settings.connectors, secureMcp: next },
-        setup: {
-          ...settings.setup,
-          connect: {
-            ...pendingConnectorReadiness(
-              settings.setup.connect,
-              next,
-              resumeRefusal === undefined
-                ? undefined
-                : "Choose the tunnel-client executable again before reconnecting.",
-            ),
-            unavailable:
-              next.runtime !== null
-                ? "CONNECTOR_UPDATE_DRAINED"
-                : (resumeRefusal ?? null),
+        expectedRevision !== undefined &&
+        this.current?.revision !== expectedRevision
+      )
+        return Promise.resolve(this.failure("AUTHORITY_CHANGE_IN_PROGRESS"));
+      return this.mutateConnector((settings) => {
+        const connector = settings.connectors.secureMcp;
+        if (
+          connector.runtime === null &&
+          connector.challenge === null &&
+          connector.attachment === null &&
+          resumeRefusal === undefined
+        ) {
+          return settings;
+        }
+        const next = {
+          ...connector,
+          // Keep only a stopped, generation-bound resume intent after a known
+          // update drain. This is never live readiness and contains no new proof.
+          runtime:
+            purpose === "update" &&
+            resumeRefusal === undefined &&
+            connector.runtime?.state === "ready" &&
+            connector.runtime.connectorGeneration === connector.generation &&
+            connector.runtime.computerGeneration ===
+              settings.computer.generation &&
+            !settings.setup.connect.outcomeUnknown
+              ? {
+                  ...connector.runtime,
+                  state: "unreachable" as const,
+                  observedAt: this.now(),
+                }
+              : null,
+          challenge: null,
+          attachment: null,
+        };
+        return {
+          ...settings,
+          revision: settings.revision + 1,
+          connectors: { ...settings.connectors, secureMcp: next },
+          setup: {
+            ...settings.setup,
+            connect: {
+              ...pendingConnectorReadiness(
+                settings.setup.connect,
+                next,
+                resumeRefusal === undefined
+                  ? undefined
+                  : "Choose the tunnel-client executable again before reconnecting.",
+              ),
+              unavailable:
+                next.runtime !== null
+                  ? "CONNECTOR_UPDATE_DRAINED"
+                  : (resumeRefusal ?? null),
+            },
           },
-        },
-      };
+        };
+      });
     });
   }
 

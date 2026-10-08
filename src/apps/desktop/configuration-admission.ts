@@ -40,14 +40,40 @@ const connectorGuardedCommands = new Set<string>([
 export type ConfigurationAdmission =
   "admitted" | "CODEX_HOST_TASK_IN_PROGRESS" | "CONNECTOR_STOP_REQUIRED";
 
+// These commands may borrow the existing host's admitted stop/change sequence.
+// This selection grants nothing; the caller must retain the authority reservation.
+export function isDrainedWorkspaceChange(kind: string): boolean {
+  return (
+    kind === "computer.add-workspace" ||
+    kind === "computer.remove-workspace" ||
+    kind === "computer.update-access"
+  );
+}
+
+// Child liveness cannot settle a retained MCP stop. Select inside the original
+// authority reservation, before either the live-drain or already-stopped path.
+export function workspaceConfigurationRoute(
+  unconfirmedStop: boolean,
+  connectorRunning: boolean,
+): "unconfirmed" | "drain" | "configure-stopped" {
+  if (unconfirmedStop) return "unconfirmed";
+  return connectorRunning ? "drain" : "configure-stopped";
+}
+
 export function configurationAdmission(
   kind: string,
-  state: Readonly<{ agentActive: boolean; connectorRunning: boolean }>,
+  state: Readonly<{
+    agentActive: boolean;
+    connectorRunning: boolean;
+    workspaceDrainAvailable?: boolean;
+  }>,
 ): ConfigurationAdmission {
   if (state.agentActive && agentGuardedCommands.has(kind)) {
     return "CODEX_HOST_TASK_IN_PROGRESS";
   }
   if (state.connectorRunning && connectorGuardedCommands.has(kind)) {
+    if (state.workspaceDrainAvailable && isDrainedWorkspaceChange(kind))
+      return "admitted";
     return "CONNECTOR_STOP_REQUIRED";
   }
   return "admitted";

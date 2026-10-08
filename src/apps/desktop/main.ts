@@ -277,7 +277,13 @@ import {
 import {
   changesComputerAuthority,
   configurationAdmission,
+  isDrainedWorkspaceChange,
+  workspaceConfigurationRoute,
 } from "./configuration-admission";
+import {
+  WorkspaceConfigurationDrain,
+  type WorkspaceConfigurationCommand,
+} from "./workspace-configuration-drain";
 import {
   connectorAppVerificationAttemptExists,
   prepareConnectorAppVerificationAttempt,
@@ -5528,6 +5534,8 @@ async function configureUnfencedProduct(
     agentActive: codexAgentOperationActive(),
     connectorRunning:
       connectorTaskAdmission || secureMcpConnectorRuntime?.isRunning() === true,
+    workspaceDrainAvailable:
+      !connectorTaskAdmission && connectorStartInFlight === null,
   });
   if (admission !== "admitted") return configurationFailure(admission);
   if (command.kind === "connector.configure") {
@@ -5565,6 +5573,23 @@ async function configureUnfencedProduct(
     async () => {
       activeAuthorityChangeKind = command.kind;
       try {
+        if (isDrainedWorkspaceChange(command.kind)) {
+          let route: ReturnType<typeof workspaceConfigurationRoute>;
+          try {
+            route = workspaceConfigurationRoute(
+              await computerMcpLifecycle().hasUnconfirmedStop(),
+              secureMcpConnectorRuntime?.isRunning() === true,
+            );
+          } catch {
+            return configurationFailure("CONNECTOR_STOP_UNCONFIRMED");
+          }
+          if (route === "unconfirmed")
+            return configurationFailure("CONNECTOR_STOP_UNCONFIRMED");
+          if (route === "drain")
+            return await configureDrainedWorkspaceChange(
+              command as WorkspaceConfigurationCommand,
+            );
+        }
         let stopStage: "begin-stop" | "confirm-stop" = "begin-stop";
         try {
           const lifecycle = computerMcpLifecycle();
@@ -5605,6 +5630,107 @@ async function configureUnfencedProduct(
     command.kind,
     reserved.admitted ? reserved.value : transitionRefusal(),
   );
+}
+
+async function configureDrainedWorkspaceChange(
+  command: WorkspaceConfigurationCommand,
+): Promise<ProductConfigurationResult> {
+  const owner = configuration;
+  const connector = secureMcpConnectorRuntime;
+  const core = desktopGoCore;
+  const original = owner?.snapshot();
+  if (
+    !owner ||
+    !connector ||
+    !core ||
+    original?.status !== "ready" ||
+    connectorTaskAdmission ||
+    connectorStartInFlight !== null
+  )
+    return transitionRefusal();
+  const computerGeneration = original.settings.computer.generation;
+  const connectorGeneration = original.settings.connectors.secureMcp.generation;
+  let revision = original.settings.revision;
+  let phaseFailure: ProductConfigurationResult | null = null;
+  connectorTaskAdmission = true;
+  try {
+    const current = () => {
+      const snapshot = owner.snapshot();
+      return (
+        configuration === owner &&
+        secureMcpConnectorRuntime === connector &&
+        desktopGoCore === core &&
+        authorityTransitions.current() === "authority-change" &&
+        activeAuthorityChangeKind === command.kind &&
+        connectorTaskAdmission &&
+        !quitInProgress &&
+        !installedUpdateAdmission &&
+        !codexAgentOperationActive() &&
+        !connector.hasUnresolvedEffect() &&
+        snapshot.status === "ready" &&
+        snapshot.settings.revision === revision &&
+        snapshot.settings.computer.generation === computerGeneration &&
+        snapshot.settings.connectors.secureMcp.generation ===
+          connectorGeneration &&
+        !snapshot.settings.setup.connect.outcomeUnknown &&
+        snapshot.settings.connectors.secureMcp.runtime?.state !==
+          "outcome_unknown"
+      );
+    };
+    const drain = new WorkspaceConfigurationDrain(command, {
+      current,
+      stop: async () => {
+        // A prior unresolved stop is observation-only, not a new stop attempt.
+        if (await computerMcpLifecycle().hasUnconfirmedStop())
+          throw new Error("CONNECTOR_STOP_UNCONFIRMED");
+        if (!current()) return false;
+        await stopAndConfirmComputerMcp(connector);
+        return true;
+      },
+      recordStopped: async () => {
+        const stopped = ProductConfigurationResultSchema.parse(
+          await owner.recordSecureMcpStopped(undefined, "stop", revision),
+        );
+        if (!stopped.ok) {
+          phaseFailure = stopped;
+          return false;
+        }
+        if (stopped.snapshot.status !== "ready") {
+          phaseFailure = configurationFailure("SETTINGS_WRITE_FAILED");
+          return "unknown";
+        }
+        // Only the original acknowledged publication can advance this phase.
+        revision = stopped.snapshot.settings.revision;
+        if (!current()) return "unknown";
+        try {
+          await clearConnectorVerificationReceipt(secureMcpLaunchRoot());
+        } catch {
+          phaseFailure = configurationFailure("CONNECTOR_ATTACHMENT_INVALID");
+          return false;
+        }
+        return true;
+      },
+      apply: configureAdmittedProduct,
+    });
+    const outcome = await drain.run();
+    // A completed configuration owns its original reply, even if a later
+    // projection/Quit won the race. No further phase borrows that reply.
+    if (
+      outcome.status === "completed" ||
+      (outcome.status === "stale" && outcome.phase === "apply")
+    )
+      return outcome.result;
+    if (phaseFailure) return phaseFailure;
+    if (outcome.status === "unknown")
+      return configurationFailure(
+        outcome.phase === "stop"
+          ? "CONNECTOR_STOP_UNCONFIRMED"
+          : "SETTINGS_WRITE_FAILED",
+      );
+    return transitionRefusal();
+  } finally {
+    connectorTaskAdmission = false;
+  }
 }
 
 // The reply's last step before Electron carries it to the renderer. The

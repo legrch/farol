@@ -28,6 +28,8 @@ export class PrivateMcpLifecycle {
   private activeHandlers = 0;
   private handlerAdmissionClosed = false;
   private stopRevision = 0;
+  private preparationRevision = 0;
+  private confirmedStopRevision: number | null = null;
 
   constructor(private readonly root: string) {
     if (!path.isAbsolute(root) || root.includes("\0"))
@@ -249,6 +251,8 @@ export class PrivateMcpLifecycle {
   async prepare(digest: string): Promise<void> {
     if (!DIGEST.test(digest))
       throw new Error("COMPUTER_MCP_LIFECYCLE_DIGEST_INVALID");
+    this.preparationRevision += 1;
+    this.confirmedStopRevision = null;
     // Desktop retains one lifecycle for its launch root. Capture before lock
     // acquisition: a concurrent Stop must not be cleared by this preparation.
     const admittedStopRevision = this.stopRevision;
@@ -319,6 +323,7 @@ export class PrivateMcpLifecycle {
   async beginStop(): Promise<void> {
     // Synchronous admission also covers a preparation suspended in filesystem IO.
     this.stopRevision += 1;
+    this.confirmedStopRevision = null;
     await this.ensure();
     await this.marker("stopping");
   }
@@ -331,6 +336,7 @@ export class PrivateMcpLifecycle {
     try {
       await this.shellGroupsGone();
       this.stopRevision += 1;
+      this.confirmedStopRevision = null;
       await this.reconciliationMarker("stopping");
     } finally {
       await lease.close();
@@ -339,6 +345,16 @@ export class PrivateMcpLifecycle {
 
   async isStopping(): Promise<boolean> {
     return this.existingMarker("stopping");
+  }
+
+  /** A marker alone is closed admission, not the original stop acknowledgement.
+   * An inherited marker has no in-lifetime confirmation and remains refused.
+   */
+  async hasUnconfirmedStop(): Promise<boolean> {
+    return (
+      (await this.existingMarker("stopping")) &&
+      this.confirmedStopRevision !== this.stopRevision
+    );
   }
 
   enterHandler(): (() => void) | null {
@@ -381,6 +397,8 @@ export class PrivateMcpLifecycle {
 
   /** Final confirmation after the tunnel parent has stopped; revoke its launch. */
   async confirmStop(timeoutMs = 5_000): Promise<void> {
+    const originalRevision = this.stopRevision;
+    const originalPreparation = this.preparationRevision;
     const lease = await this.lock(true, timeoutMs);
     try {
       await this.reconciliationComplete();
@@ -392,6 +410,12 @@ export class PrivateMcpLifecycle {
     } finally {
       await lease.close();
     }
+    if (
+      originalRevision !== this.stopRevision ||
+      originalPreparation !== this.preparationRevision
+    )
+      throw new Error("COMPUTER_MCP_LIFECYCLE_STOP_UNVERIFIED");
+    this.confirmedStopRevision = originalRevision;
   }
 
   /** Explicit closed-app maintenance only. The caller must hold the Desktop

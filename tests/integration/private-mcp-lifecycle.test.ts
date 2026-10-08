@@ -26,6 +26,128 @@ afterEach(async () => {
 describe.skipIf(process.platform !== "darwin")(
   "private Computer MCP lifetime",
   () => {
+    it("retains the original stop acknowledgement while the protective marker remains", async () => {
+      const { root, lifecycle } = await fixture();
+      await lifecycle.prepare(oldDigest);
+      await lifecycle.beginStop();
+      expect(await lifecycle.hasUnconfirmedStop()).toBe(true);
+      await lifecycle.confirmStop();
+      expect(await lifecycle.isStopping()).toBe(true);
+      expect(await lifecycle.hasUnconfirmedStop()).toBe(false);
+      // Another owner lifetime cannot invent the original acknowledgement.
+      expect(await new PrivateMcpLifecycle(root).hasUnconfirmedStop()).toBe(
+        true,
+      );
+      expect(await lifecycle.isStopping()).toBe(true);
+    });
+
+    it("invalidates an original stop acknowledgement on a newer stop or preparation", async () => {
+      const { lifecycle } = await fixture();
+      await lifecycle.prepare(oldDigest);
+      await lifecycle.beginStop();
+      await lifecycle.confirmStop();
+      await lifecycle.beginStop();
+      expect(await lifecycle.hasUnconfirmedStop()).toBe(true);
+      await lifecycle.confirmStop();
+      expect(await lifecycle.hasUnconfirmedStop()).toBe(false);
+      // Invocation invalidates the old acknowledgement before awaited IO.
+      const open = fs.open.bind(fs);
+      let arrived!: () => void;
+      let resume!: () => void;
+      const atLock = new Promise<void>((resolve) => {
+        arrived = resolve;
+      });
+      const release = new Promise<void>((resolve) => {
+        resume = resolve;
+      });
+      vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+        if (String(args[0]).endsWith("/lifetime.lock")) {
+          arrived();
+          await release;
+        }
+        return open(...args);
+      });
+      const preparing = lifecycle.prepare(newDigest);
+      await atLock;
+      expect(await lifecycle.hasUnconfirmedStop()).toBe(true);
+      resume();
+      await preparing;
+      expect(await lifecycle.isStopping()).toBe(false);
+      expect(await lifecycle.hasUnconfirmedStop()).toBe(false);
+    });
+
+    it("retains unconfirmed stop after a final confirmation failure", async () => {
+      const { lifecycle } = await fixture();
+      await lifecycle.prepare(oldDigest);
+      const live = await lifecycle.join(oldDigest);
+      await lifecycle.beginStop();
+      try {
+        await expect(lifecycle.confirmStop(0)).rejects.toThrow(
+          "COMPUTER_MCP_LIFECYCLE_UNVERIFIED",
+        );
+        expect(await lifecycle.hasUnconfirmedStop()).toBe(true);
+      } finally {
+        await live.release();
+      }
+      // Lease absence does not upgrade the original failed confirmation.
+      expect(await lifecycle.hasUnconfirmedStop()).toBe(true);
+      expect(await lifecycle.isStopping()).toBe(true);
+    });
+
+    it("refuses an original confirmation when a newer stop wins before lease release", async () => {
+      const { lifecycle } = await fixture();
+      await lifecycle.prepare(oldDigest);
+      await lifecycle.beginStop();
+      const open = fs.open.bind(fs);
+      let injected = false;
+      vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+        const handle = await open(...args);
+        if (!injected && String(args[0]).endsWith("/lifetime.lock")) {
+          injected = true;
+          const close = handle.close.bind(handle);
+          vi.spyOn(handle, "close").mockImplementationOnce(async () => {
+            await lifecycle.beginStop();
+            await close();
+          });
+        }
+        return handle;
+      });
+      await expect(lifecycle.confirmStop()).rejects.toThrow(
+        "COMPUTER_MCP_LIFECYCLE_STOP_UNVERIFIED",
+      );
+      expect(injected).toBe(true);
+      expect(await lifecycle.hasUnconfirmedStop()).toBe(true);
+      expect(await lifecycle.isStopping()).toBe(true);
+    });
+
+    it("does not reinstate an old acknowledgement after concurrent launch preparation", async () => {
+      const { lifecycle } = await fixture();
+      await lifecycle.prepare(oldDigest);
+      await lifecycle.beginStop();
+      const open = fs.open.bind(fs);
+      let preparing: Promise<void> | undefined;
+      let injected = false;
+      vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+        const handle = await open(...args);
+        if (!injected && String(args[0]).endsWith("/lifetime.lock")) {
+          injected = true;
+          const close = handle.close.bind(handle);
+          vi.spyOn(handle, "close").mockImplementationOnce(async () => {
+            preparing = lifecycle.prepare(newDigest);
+            await close();
+          });
+        }
+        return handle;
+      });
+      await expect(lifecycle.confirmStop()).rejects.toThrow(
+        "COMPUTER_MCP_LIFECYCLE_STOP_UNVERIFIED",
+      );
+      expect(injected).toBe(true);
+      await preparing;
+      // Only the distinct new preparation removed admission's old marker.
+      expect(await lifecycle.isStopping()).toBe(false);
+    });
+
     it("waits for the exact MCP lease and marker before stopping its tunnel parent", async () => {
       const { root, lifecycle } = await fixture();
       await lifecycle.prepare(oldDigest);

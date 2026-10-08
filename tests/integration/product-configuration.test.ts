@@ -19,6 +19,114 @@ import { SYNTHETIC_ROOT_IDENTITY } from "../fixtures/root-identity";
 import { taskPolicy } from "../fixtures/task-policy";
 const roots: string[] = [];
 
+describe("workspace stopped publication revision", () => {
+  async function connected() {
+    const root = await stateRoot();
+    const store = new ProductSettingsStore({ root });
+    const service = new ProductConfigurationService(store, dependencies());
+    await service.initialize();
+    await service.recordSecureMcpTunnelClient({
+      executablePath: "/opt/homebrew/bin/tunnel-client",
+      executableSha256: "a".repeat(64),
+      version: "0.0.14+0f870e50a973fa820d4c409000059e181e8d242b",
+      protocol: "openai-tunnel-client/v1",
+    });
+    await service.configureSecureMcpTunnel({ tunnelId: "synthetic" });
+    await service.recordSecureMcpCredential("stored");
+    const before = service.snapshot();
+    if (before.status !== "ready") throw new Error("settings missing");
+    await service.recordSecureMcpRuntime({
+      state: "ready",
+      runtimeGeneration: "b".repeat(64),
+      computerGeneration: before.settings.computer.generation,
+      buildId: "c".repeat(64),
+    });
+    const original = service.snapshot();
+    if (original.status !== "ready") throw new Error("settings missing");
+    return { store, service, original };
+  }
+
+  it("refuses a general write queued before the original stopped publication", async () => {
+    const { store, service, original } = await connected();
+    let entered!: () => void;
+    let release!: () => void;
+    const entering = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const pending = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const save = store.save.bind(store);
+    const writes = vi
+      .spyOn(store, "save")
+      .mockImplementationOnce(async (...args) => {
+        entered();
+        await pending;
+        return save(...args);
+      });
+    const general = service.updateGeneral({
+      ...original.settings.general,
+      openAtLaunch: "activity",
+    });
+    await entering;
+    // The old in-memory revision is still visible while the previous write
+    // owns the serialized turn. The stop must validate after it acquires it.
+    expect(service.snapshot()).toEqual(original);
+    const stopped = service.recordSecureMcpStopped(
+      undefined,
+      "stop",
+      original.settings.revision,
+    );
+    release();
+    expect((await general).ok).toBe(true);
+    const changed = service.snapshot();
+    await expect(stopped).resolves.toMatchObject({
+      ok: false,
+      error: "AUTHORITY_CHANGE_IN_PROGRESS",
+    });
+    expect(writes).toHaveBeenCalledOnce();
+    expect(service.snapshot()).toEqual(changed);
+    if (changed.status !== "ready") throw new Error("settings missing");
+    expect(changed.settings.connectors.secureMcp.runtime).toEqual(
+      original.settings.connectors.secureMcp.runtime,
+    );
+    expect(changed.settings.computer.generation).toBe(
+      original.settings.computer.generation,
+    );
+    writes.mockRestore();
+  });
+
+  it("publishes only the confirmed current revision without changing credential or authority generations", async () => {
+    const { service, original } = await connected();
+    const stopped = await service.recordSecureMcpStopped(
+      undefined,
+      "stop",
+      original.settings.revision,
+    );
+    expect(stopped.ok).toBe(true);
+    if (!stopped.ok || stopped.snapshot.status !== "ready")
+      throw new Error("stop refused");
+    const settings = stopped.snapshot.settings;
+    expect(settings.revision).toBe(original.settings.revision + 1);
+    expect(settings.connectors.secureMcp.runtime).toBeNull();
+    expect(settings.connectors.secureMcp.credential).toBe("stored");
+    expect(settings.connectors.secureMcp.generation).toBe(
+      original.settings.connectors.secureMcp.generation,
+    );
+    expect(settings.computer).toEqual(original.settings.computer);
+    const stale = await service.recordSecureMcpStopped(
+      undefined,
+      "stop",
+      original.settings.revision,
+    );
+    expect(stale).toMatchObject({
+      ok: false,
+      error: "AUTHORITY_CHANGE_IN_PROGRESS",
+    });
+    expect(service.snapshot()).toEqual(stopped.snapshot);
+  });
+});
+
 afterEach(async () => {
   await Promise.all(
     roots

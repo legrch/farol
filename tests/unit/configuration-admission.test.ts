@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import {
   changesComputerAuthority,
   configurationAdmission,
+  isDrainedWorkspaceChange,
+  workspaceConfigurationRoute,
 } from "../../src/apps/desktop/configuration-admission";
 
 const computerAuthorityCommands = [
@@ -20,6 +22,49 @@ const computerAuthorityCommands = [
 ] as const;
 
 describe("AUTH-07 Computer authority while a native Agent runs", () => {
+  it("refuses retained stop uncertainty independently of connector child liveness", () => {
+    expect(workspaceConfigurationRoute(true, true)).toBe("unconfirmed");
+    expect(workspaceConfigurationRoute(true, false)).toBe("unconfirmed");
+    expect(workspaceConfigurationRoute(false, true)).toBe("drain");
+    expect(workspaceConfigurationRoute(false, false)).toBe("configure-stopped");
+  });
+  it("selects only the three workspace changes for an existing admitted host drain", () => {
+    const changes = [
+      "computer.add-workspace",
+      "computer.remove-workspace",
+      "computer.update-access",
+    ];
+    for (const kind of changes) {
+      expect(isDrainedWorkspaceChange(kind)).toBe(true);
+      expect(
+        configurationAdmission(kind, {
+          agentActive: false,
+          connectorRunning: true,
+          workspaceDrainAvailable: true,
+        }),
+      ).toBe("admitted");
+      expect(
+        configurationAdmission(kind, {
+          agentActive: true,
+          connectorRunning: true,
+          workspaceDrainAvailable: true,
+        }),
+      ).toBe("CODEX_HOST_TASK_IN_PROGRESS");
+    }
+    for (const kind of computerAuthorityCommands.filter(
+      (candidate) => !changes.includes(candidate),
+    )) {
+      expect(isDrainedWorkspaceChange(kind)).toBe(false);
+      expect(
+        configurationAdmission(kind, {
+          agentActive: false,
+          connectorRunning: true,
+          workspaceDrainAvailable: true,
+        }),
+      ).toBe("CONNECTOR_STOP_REQUIRED");
+    }
+  });
+
   it("refuses every authority change and re-verification during a running Agent", () => {
     for (const kind of [
       ...computerAuthorityCommands,
