@@ -77,6 +77,22 @@ const allControls = [
 ] as const;
 
 describe("installed update view", () => {
+  it("shows an available candidate without claiming it was downloaded", () => {
+    const f = fixture();
+    const available = InstalledUpdateViewSchema.parse({
+      phase: "available",
+      version: "0.2.0-owner.beta.5",
+      deferred: false,
+    });
+    f.view.render(available);
+    expect(f.node("summary").textContent).toContain("available to download");
+    expect(f.node("restart").hidden).toBe(true);
+    expect(f.node("check").textContent).toBe("Download Update");
+    f.node("check").click();
+    f.node("check").click();
+    expect(f.onCommand.mock.calls).toEqual([["download"]]);
+  });
+
   it("distinguishes the measured installed build from a downloaded successor", () => {
     const f = fixture();
     f.view.render({ ...ready, version: "0.2.0-owner.beta.4" });

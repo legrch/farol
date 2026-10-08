@@ -75,7 +75,7 @@ export type HomeView =
 export type SetupStep =
   "overview" | "folders" | "connection" | "attachment" | "finish";
 export type UpdateAction =
-  "check" | "later" | "restart" | "recover" | "rollback";
+  "check" | "download" | "later" | "restart" | "recover" | "rollback";
 export type Intent = Readonly<{
   id: string;
   state: "pending" | "applied" | "refused" | "unknown";

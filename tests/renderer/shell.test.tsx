@@ -581,6 +581,27 @@ it("R16 R23 R24 distinct update controls preserve exact operations and pending f
   await act(async () => button(host, "Roll Back").click());
   expect(f.api.installedUpdate).toHaveBeenCalledWith({ kind: "rollback" });
 });
+it("offers Download only for a current available release", async () => {
+  const { host, c, f } = await mount();
+  await act(async () => {
+    f.emit("update", {
+      phase: "available",
+      version: "0.2.0-owner.beta.5",
+      deferred: false,
+    });
+    c.overlay("update");
+  });
+  expect(host.textContent).toContain("not downloaded or installed yet");
+  await act(async () => button(host, "Download Update").click());
+  expect(f.api.installedUpdate).toHaveBeenCalledWith({ kind: "download" });
+  await act(async () => f.emit("update", { phase: "idle", checkedAt: 10 }));
+  expect((await c.update("download")).state).toBe("refused");
+  expect(
+    vi
+      .mocked(f.api.installedUpdate)
+      .mock.calls.filter(([command]) => command.kind === "download"),
+  ).toHaveLength(1);
+});
 it("R13 R14 R23 disconnected and incompatible displays retain inspection and classified feedback", async () => {
   const { host, c, f } = await mount();
   await act(async () =>
@@ -936,7 +957,9 @@ it("Setup overview resumes the first incomplete step and ready review stays nond
   const ready = bootstrap();
   ready.configuration.settings = homeComputerSettings();
   const review = await mount(ready);
-  await act(async () => review.c.navigate({ area: "settings", page: "general" }));
+  await act(async () =>
+    review.c.navigate({ area: "settings", page: "general" }),
+  );
   await act(async () => button(review.host, "Review Setup").click());
   await act(async () => button(review.host, "Review workspaces").click());
   expect(review.c.getSnapshot().destination.setupStep).toBe("folders");

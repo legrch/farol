@@ -156,6 +156,8 @@ async function prepared() {
   expect(controller).not.toBeNull();
   await controller!.initialize();
   await controller!.check();
+  expect(controller!.snapshot()).toMatchObject({ phase: "available" });
+  await controller!.download();
   expect(controller!.snapshot().phase).toBe("ready");
   return controller!;
 }
@@ -441,11 +443,17 @@ describe("supervised installed updater (native files/lease, mocked package/proce
         phase: "ready",
         blockedBy: "UPDATE_SUPERVISOR_UNCONFIRMED",
       });
+      const resourceChecks = input.resources.verify.mock.calls.length;
+      const proofChecks = input.predecessor.observeClosed.mock.calls.length;
       await controller!.restart();
       expect(controller!.snapshot()).toMatchObject({
         phase: "ready",
-        blockedBy: "UPDATE_SUPERVISOR_ALREADY_USED",
+        blockedBy: "UPDATE_SUPERVISOR_UNCONFIRMED",
       });
+      expect(input.resources.verify).toHaveBeenCalledTimes(resourceChecks);
+      expect(input.predecessor.observeClosed).toHaveBeenCalledTimes(
+        proofChecks,
+      );
       expect(mocks.helper).not.toHaveBeenCalled();
       await controller!.close();
     },
@@ -569,6 +577,7 @@ describe("installed updater composition (disposable filesystem and mocked native
       });
       await controller!.initialize();
       await controller!.check();
+      await controller!.download();
       await controller!.restart();
       const code =
         boundary === "before-copy"
@@ -606,6 +615,7 @@ describe("installed updater composition (disposable filesystem and mocked native
     });
     await controller!.initialize();
     await controller!.check();
+    await controller!.download();
     await controller!.restart();
     expect(recheck).toHaveBeenCalledTimes(2);
     expect(mocks.helper).toHaveBeenCalledOnce();
@@ -694,7 +704,10 @@ describe("installed updater composition (disposable filesystem and mocked native
         },
       });
       await controller!.initialize();
-      if (action === "restart") await controller!.check();
+      if (action === "restart") {
+        await controller!.check();
+        await controller!.download();
+      }
       mocks.helper.mockClear();
       quit.mockClear();
       release.mockClear();
@@ -797,7 +810,10 @@ describe("installed updater composition (disposable filesystem and mocked native
         },
       });
       await controller!.initialize();
-      if (scenario.startsWith("apply")) await controller!.check();
+      if (scenario.startsWith("apply")) {
+        await controller!.check();
+        await controller!.download();
+      }
       if (scenario === "apply-unknown") {
         const rename = fs.rename.bind(fs);
         vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
@@ -873,6 +889,7 @@ describe("installed updater composition (disposable filesystem and mocked native
         closing = controller!.close();
     });
     await controller!.check();
+    await controller!.download();
     await closing;
     expect(mocks.download).not.toHaveBeenCalled();
     expect(mocks.helper).not.toHaveBeenCalled();
@@ -888,6 +905,7 @@ describe("installed updater composition (disposable filesystem and mocked native
       const first = await createInstalledUpdateRuntime(options());
       await first!.initialize();
       await first!.check();
+      await first!.download();
       await first!.close();
       const pending = path.join(
         userData,
@@ -975,6 +993,7 @@ describe("installed updater composition (disposable filesystem and mocked native
     const first = await createInstalledUpdateRuntime(options());
     await first!.initialize();
     await first!.check();
+    await first!.download();
     await first!.close();
     const pending = path.join(
       userData,
@@ -1009,6 +1028,7 @@ describe("installed updater composition (disposable filesystem and mocked native
       const first = await createInstalledUpdateRuntime(options());
       await first!.initialize();
       await first!.check();
+      await first!.download();
       await first!.close();
       const pending = path.join(
         userData,
@@ -1051,6 +1071,7 @@ describe("installed updater composition (disposable filesystem and mocked native
       const first = await createInstalledUpdateRuntime(options());
       await first!.initialize();
       await first!.check();
+      await first!.download();
       await first!.close();
       const pending = path.join(
         userData,
@@ -1286,6 +1307,8 @@ ${scenario === "missing" ? "" : `<key>CFBundleVersion</key><string>${scenario ==
       await controller!.initialize();
       await controller!.check();
       if (scenario === "accepted") {
+        expect(controller!.snapshot().phase).toBe("available");
+        await controller!.download();
         expect(controller!.snapshot().phase).toBe("ready");
         expect(mocks.discover).toHaveBeenCalledTimes(1);
       } else {
@@ -1419,7 +1442,8 @@ ${scenario === "missing" ? "" : `<key>CFBundleVersion</key><string>${scenario ==
       );
       const controller = await createInstalledUpdateRuntime(options());
       await controller!.initialize();
-      const checking = controller!.check();
+      await controller!.check();
+      const checking = controller!.download();
       const pending = path.join(
         userData,
         "installed-updates/download-pending.json",
@@ -1466,6 +1490,7 @@ ${scenario === "missing" ? "" : `<key>CFBundleVersion</key><string>${scenario ==
       const first = await createInstalledUpdateRuntime(options());
       await first!.initialize();
       await first!.check();
+      await first!.download();
       const state = first!.snapshot();
       vi.mocked(fs.rename).mockImplementation(rename);
       await first!.close();
@@ -1586,6 +1611,7 @@ ${scenario === "missing" ? "" : `<key>CFBundleVersion</key><string>${scenario ==
       const controller = await createInstalledUpdateRuntime(options());
       await controller!.initialize();
       await controller!.check();
+      await controller!.download();
       const handle = path.join(root, "downloaded.zip");
       expect(mocks.discardPackage).toHaveBeenCalledExactlyOnceWith(handle);
       expect(mocks.discardArchive).toHaveBeenCalledExactlyOnceWith(handle);
@@ -1615,6 +1641,7 @@ ${scenario === "missing" ? "" : `<key>CFBundleVersion</key><string>${scenario ==
     const controller = await createInstalledUpdateRuntime(options());
     await controller!.initialize();
     await controller!.check();
+    await controller!.download();
     expect(controller!.snapshot()).toMatchObject({
       phase: "failed",
       recoveryRequired: true,
@@ -1743,7 +1770,8 @@ ${scenario === "missing" ? "" : `<key>CFBundleVersion</key><string>${scenario ==
     });
     const first = await createInstalledUpdateRuntime(options());
     await first!.initialize();
-    void first!.check();
+    await first!.check();
+    void first!.download();
     await atCleanup;
     first!.close();
     const recovered = await createInstalledUpdateRuntime(options());
@@ -1857,6 +1885,7 @@ ${scenario === "missing" ? "" : `<key>CFBundleVersion</key><string>${scenario ==
     const first = await createInstalledUpdateRuntime(options());
     await first!.initialize();
     await first!.check();
+    await first!.download();
     expect(first!.snapshot()).toMatchObject({
       phase: "failed",
       recoveryRequired: true,
@@ -1934,6 +1963,7 @@ ${scenario === "missing" ? "" : `<key>CFBundleVersion</key><string>${scenario ==
     const first = await createInstalledUpdateRuntime(options());
     await first!.initialize();
     await first!.check();
+    await first!.download();
     expect(first!.snapshot()).toMatchObject({
       phase: "failed",
       recoveryRequired: true,
@@ -2013,6 +2043,7 @@ ${scenario === "missing" ? "" : `<key>CFBundleVersion</key><string>${scenario ==
     const first = await createInstalledUpdateRuntime(options());
     await first!.initialize();
     await first!.check();
+    await first!.download();
     expect(first!.snapshot()).toMatchObject({
       phase: "failed",
       recoveryRequired: true,
@@ -2101,6 +2132,7 @@ ${scenario === "missing" ? "" : `<key>CFBundleVersion</key><string>${scenario ==
     });
     await controller!.initialize();
     await controller!.check();
+    await controller!.download();
     await controller!.restart();
     expect(controller!.snapshot()).toMatchObject({
       phase: "ready",

@@ -503,19 +503,21 @@ function Update({
       <p className="update-state">
         {update.phase === "ready"
           ? `Farol ${update.version} is downloaded and ready; it is not installed yet.`
-          : update.phase === "failed"
-            ? `Update failed: ${update.code}`
-            : update.phase === "unavailable"
-              ? `Update unavailable: ${update.code}`
-              : update.phase === "recovery"
-                ? `Recovery required for ${update.version}`
-                : update.phase === "applying"
-                  ? `Applying version ${update.version}…`
-                  : update.phase === "checking"
-                    ? "Checking for updates…"
-                    : update.phase === "downloading"
-                      ? "Downloading update…"
-                      : "You can check for updates."}
+          : update.phase === "available"
+            ? `Farol ${update.version} is available; it is not downloaded or installed yet.`
+            : update.phase === "failed"
+              ? `Update failed: ${update.code}`
+              : update.phase === "unavailable"
+                ? `Update unavailable: ${update.code}`
+                : update.phase === "recovery"
+                  ? `Recovery required for ${update.version}`
+                  : update.phase === "applying"
+                    ? `Applying version ${update.version}…`
+                    : update.phase === "checking"
+                      ? "Checking for updates…"
+                      : update.phase === "downloading"
+                        ? "Downloading update…"
+                        : "You can check for updates."}
       </p>
       {recovery ? (
         <p className="description">
@@ -530,6 +532,11 @@ function Update({
           roll back, and the restored version stays closed until recovery
           completion is confirmed. Start it separately after confirmation, then
           verify that start before resuming work.
+        </p>
+      ) : update.phase === "available" ? (
+        <p className="description">
+          Download the verified package when you choose. This does not restart
+          Farol or interrupt current work.
         </p>
       ) : update.phase === "ready" ? (
         <p className="description">
@@ -560,6 +567,35 @@ function Update({
         >
           Check for Updates
         </button>
+        {update.phase === "available" && (
+          <>
+            <button
+              disabled={disabled || update.deferred}
+              onClick={() => {
+                void facade.update("later");
+                facade.overlay("none");
+              }}
+            >
+              Remind Me Later
+            </button>
+            <button
+              className="primary"
+              disabled={disabled}
+              onClick={() => {
+                const latest = facade.getSnapshot();
+                if (
+                  latest.status === "current" &&
+                  latest.intents.update?.state !== "pending" &&
+                  latest.intents.update?.state !== "unknown" &&
+                  latest.update.phase === "available"
+                )
+                  void facade.update("download");
+              }}
+            >
+              Download Update
+            </button>
+          </>
+        )}
         {update.phase === "ready" && (
           <>
             <button

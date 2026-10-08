@@ -1971,7 +1971,14 @@ async function createRuntime(
       if (!found.ok) return known(`UPDATE_${found.code.toUpperCase()}`);
       candidate =
         found.value?.manifest.buildId === declinedBuildId ? null : found.value;
-      return { ok: true, available: candidate !== null };
+      return candidate
+        ? {
+            ok: true,
+            available: true,
+            version: candidate.manifest.version,
+            buildId: candidate.manifest.buildId,
+          }
+        : { ok: true, available: false };
     },
     download: async () => {
       if (!candidate) return known("UPDATE_CANDIDATE_MISSING");

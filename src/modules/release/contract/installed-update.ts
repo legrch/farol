@@ -17,6 +17,11 @@ export const InstalledUpdateViewSchema = z.discriminatedUnion("phase", [
   z.strictObject({ phase: z.literal("checking") }),
   z.strictObject({ phase: z.literal("downloading") }),
   z.strictObject({
+    phase: z.literal("available"),
+    version: z.string().max(128),
+    deferred: z.boolean(),
+  }),
+  z.strictObject({
     phase: z.literal("ready"),
     version: z.string().max(128),
     deferred: z.boolean(),
@@ -56,5 +61,13 @@ export function canRecheckUpdateAdmission(code: string): boolean {
 }
 
 export const InstalledUpdateCommandSchema = z.strictObject({
-  kind: z.enum(["status", "check", "later", "restart", "recover", "rollback"]),
+  kind: z.enum([
+    "status",
+    "check",
+    "download",
+    "later",
+    "restart",
+    "recover",
+    "rollback",
+  ]),
 });

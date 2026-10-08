@@ -44,7 +44,14 @@ export type InstalledUpdaterPorts = Readonly<{
     | KnownFailure
   >;
   discover(): Promise<
-    Readonly<{ ok: true; available: boolean }> | KnownFailure
+    | Readonly<{ ok: true; available: false }>
+    | Readonly<{
+        ok: true;
+        available: true;
+        version: string;
+        buildId: string;
+      }>
+    | KnownFailure
   >;
   download(): Promise<
     Readonly<{ ok: true; update: ReadyUpdate }> | KnownFailure
@@ -67,6 +74,8 @@ export type InstalledUpdaterPorts = Readonly<{
 export class InstalledUpdater {
   private view: UpdateView = { phase: "idle", checkedAt: null };
   private ready: ReadyUpdate | null = null;
+  private available: Readonly<{ version: string; buildId: string }> | null =
+    null;
   private initialized = false;
   private busy = false;
   private lastCheck: number | null = null;
@@ -219,10 +228,10 @@ export class InstalledUpdater {
     this.lastCheck = now;
     this.begin();
     this.publish({ phase: "checking" });
-    let stagingStarted = false;
     try {
       const found = await this.ports.discover();
       if (this.closed) return;
+      this.available = null;
       if (!found.ok) {
         this.publish({
           phase: "failed",
@@ -246,16 +255,60 @@ export class InstalledUpdater {
         });
         return;
       }
-      this.publish({ phase: "downloading" });
-      stagingStarted = true;
-      const downloaded = await this.ports.download();
-      await this.retainPrepared(downloaded);
-      stagingStarted = false;
+      this.available = { version: found.version, buildId: found.buildId };
+      this.publish({
+        phase: "available",
+        version: found.version,
+        deferred: false,
+      });
     } catch {
       this.publish({
         phase: "failed",
         code: "UPDATE_CHECK_FAILED",
-        recoveryRequired: stagingStarted,
+        recoveryRequired: false,
+      });
+    } finally {
+      this.finish();
+    }
+  }
+
+  async download(): Promise<void> {
+    if (
+      this.closed ||
+      this.busy ||
+      !this.initialized ||
+      this.ready ||
+      this.view.phase !== "available" ||
+      !this.available ||
+      this.view.version !== this.available.version
+    )
+      return;
+    const expected = this.available;
+    this.available = null;
+    this.begin();
+    this.publish({ phase: "downloading" });
+    try {
+      const downloaded = await this.ports.download();
+      if (
+        downloaded.ok &&
+        (downloaded.update.manifest.version !== expected.version ||
+          downloaded.update.manifest.buildId !== expected.buildId)
+      ) {
+        // A staged archive with a mismatched candidate requires reconciliation.
+        // Never offer it as Ready or silently download a replacement.
+        this.publish({
+          phase: "failed",
+          code: "UPDATE_CANDIDATE_CHANGED",
+          recoveryRequired: true,
+        });
+        return;
+      }
+      await this.retainPrepared(downloaded);
+    } catch {
+      this.publish({
+        phase: "failed",
+        code: "UPDATE_STAGING_OUTCOME_UNKNOWN",
+        recoveryRequired: true,
       });
     } finally {
       this.finish();
@@ -293,7 +346,11 @@ export class InstalledUpdater {
   }
 
   later(): void {
-    if (this.view.phase !== "ready" || this.closed) return;
+    if (
+      (this.view.phase !== "ready" && this.view.phase !== "available") ||
+      this.closed
+    )
+      return;
     this.publish({ ...this.view, deferred: true });
   }
 

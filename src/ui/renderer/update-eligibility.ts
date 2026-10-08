@@ -7,6 +7,7 @@ import {
 export function updateCheckAllowed(update: InstalledUpdateView): boolean {
   return (
     update.phase === "idle" ||
+    update.phase === "available" ||
     (update.phase === "failed" && !update.recoveryRequired) ||
     (update.phase === "ready" &&
       update.blockedBy !== null &&

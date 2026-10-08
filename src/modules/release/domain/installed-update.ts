@@ -9,6 +9,11 @@ export type InstalledUpdateView =
   | Readonly<{ phase: "recovery"; version: string; blockedBy: string | null }>
   | Readonly<{ phase: "checking" | "downloading" }>
   | Readonly<{
+      phase: "available";
+      version: string;
+      deferred: boolean;
+    }>
+  | Readonly<{
       phase: "ready";
       version: string;
       deferred: boolean;

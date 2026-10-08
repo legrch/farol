@@ -2,7 +2,7 @@ import type { InstalledUpdateView } from "../modules/release/contract/installed-
 import { canRecheckUpdateAdmission } from "../modules/release/contract/installed-update";
 
 export type InstalledUpdateViewCommand =
-  "check" | "later" | "restart" | "recover" | "rollback";
+  "check" | "download" | "later" | "restart" | "recover" | "rollback";
 
 const blockedMessages: Readonly<Record<string, string>> = {
   UPDATE_CONNECTOR_ACTIVE:
@@ -52,6 +52,8 @@ function description(view: InstalledUpdateView): string {
       return "Checking for updates…";
     case "downloading":
       return "Downloading the update in the background. You can keep working.";
+    case "available":
+      return `${updateName(view.version)} is available to download. It is not installed.${view.deferred ? " Saved for later; download it when you choose." : ""}`;
     case "ready": {
       const ready = `${updateName(view.version)} is ready to install.`;
       if (view.blockedBy !== null) {
@@ -149,7 +151,9 @@ export function createInstalledUpdateView(
       } else {
         for (const control of controls) control.node.disabled = true;
       }
-      onCommand(kind);
+      onCommand(
+        kind === "check" && lastView?.phase === "available" ? "download" : kind,
+      );
     });
   }
 
@@ -165,12 +169,14 @@ export function createInstalledUpdateView(
           ? `Installed: ${installedIdentity}. ${description(view)}`
           : description(view);
       const ready = view.phase === "ready";
+      const available = view.phase === "available";
       const applying = view.phase === "applying";
       const recovery =
         view.phase === "recovery" ||
         (view.phase === "failed" && view.recoveryRequired);
       const canCheck =
         view.phase === "idle" ||
+        available ||
         (ready &&
           view.blockedBy !== null &&
           canRecheckUpdateAdmission(view.blockedBy)) ||
@@ -183,13 +189,15 @@ export function createInstalledUpdateView(
           ? "Update needs attention"
           : applying
             ? "Updating Farol"
-            : ready && view.deferred
-              ? "Update saved for later"
-              : "Update ready",
+            : available
+              ? "Update available"
+              : ready && view.deferred
+                ? "Update saved for later"
+                : "Update ready",
       );
       text(railMark, recovery ? "!" : "↑");
       rail.title = message;
-      rail.hidden = !ready && !applying && !recovery;
+      rail.hidden = !ready && !available && !applying && !recovery;
       rail.dataset.updateState = view.phase;
       for (const { node, kind } of controls) {
         if (kind === "recover" || kind === "rollback") {
@@ -210,18 +218,24 @@ export function createInstalledUpdateView(
               ? "Checking…"
               : view.phase === "downloading"
                 ? "Downloading…"
-                : ready && view.blockedBy !== null
-                  ? canRecheckUpdateAdmission(view.blockedBy)
-                    ? "Check again"
-                    : "Update blocked"
-                  : "Check for Updates…",
+                : available
+                  ? "Download Update"
+                  : ready && view.blockedBy !== null
+                    ? canRecheckUpdateAdmission(view.blockedBy)
+                      ? "Check again"
+                      : "Update blocked"
+                    : "Check for Updates…",
           );
         } else {
-          node.hidden = !ready && !applying;
+          node.hidden =
+            kind === "restart"
+              ? !ready && !applying
+              : !ready && !available && !applying;
           node.disabled =
             kind === "restart"
               ? !ready || view.blockedBy !== null
-              : !ready || view.deferred;
+              : (!ready && !available) ||
+                (ready || available ? view.deferred : false);
           node.title = node.disabled
             ? message
             : kind === "restart"

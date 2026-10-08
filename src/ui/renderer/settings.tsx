@@ -741,8 +741,8 @@ function Folders(props: PageProps) {
         )}
         {picked && !pickCurrent && (
           <p className="notice">
-            The selection is no longer current. Choose the workspace again before
-            adding it.
+            The selection is no longer current. Choose the workspace again
+            before adding it.
           </p>
         )}
         {settings.computer.workspaces.length === 0 && (
@@ -1523,9 +1523,9 @@ function ThisMac({ settings, snapshot, facade, actions }: PageProps) {
     <>
       <h2>This Mac</h2>
       <p className="description">
-        Terminal &amp; Git access is optional. After changing workspace or command
-        access, verify the workspace again in Workspaces, then open Connection to
-        start or reconnect explicitly.
+        Terminal &amp; Git access is optional. After changing workspace or
+        command access, verify the workspace again in Workspaces, then open
+        Connection to start or reconnect explicitly.
       </p>
       <button
         type="button"
@@ -2532,7 +2532,9 @@ function Updates({ snapshot, facade, actions }: PageProps) {
         <p className="badges">
           {update.phase === "ready"
             ? `Downloaded: Farol ${update.version}. Ready to install; this version is not installed yet.`
-            : `${update.phase}${"version" in update ? ` · ${update.version}` : ""}`}
+            : update.phase === "available"
+              ? `Available: Farol ${update.version}. Download it when you choose; this version is not installed.`
+              : `${update.phase}${"version" in update ? ` · ${update.version}` : ""}`}
         </p>
         {"code" in update && <p className="notice">{update.code}</p>}
         {"blockedBy" in update && update.blockedBy && (

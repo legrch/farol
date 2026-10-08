@@ -40,9 +40,12 @@ function fixture() {
     recover: vi
       .fn<InstalledUpdaterPorts["recover"]>()
       .mockResolvedValue({ ok: true, update: null }),
-    discover: vi
-      .fn<InstalledUpdaterPorts["discover"]>()
-      .mockResolvedValue({ ok: true, available: true }),
+    discover: vi.fn<InstalledUpdaterPorts["discover"]>().mockResolvedValue({
+      ok: true,
+      available: true,
+      version: staged.manifest.version,
+      buildId: staged.manifest.buildId,
+    }),
     download: vi
       .fn<InstalledUpdaterPorts["download"]>()
       .mockResolvedValue({ ok: true, update: staged }),
@@ -63,6 +66,69 @@ function fixture() {
 }
 
 describe("installed update orchestration (port fixture, no native or GitHub acceptance)", () => {
+  it("discovers without staging and downloads the same candidate only on explicit command", async () => {
+    const { updater, ports } = fixture();
+    await updater.initialize();
+    await updater.check();
+    expect(updater.snapshot()).toEqual({
+      phase: "available",
+      version: staged.manifest.version,
+      deferred: false,
+    });
+    expect(ports.download).not.toHaveBeenCalled();
+    expect(ports.retain).not.toHaveBeenCalled();
+    await updater.restart();
+    expect(ports.restart).not.toHaveBeenCalled();
+    updater.later();
+    expect(updater.snapshot()).toMatchObject({
+      phase: "available",
+      deferred: true,
+    });
+    await updater.download();
+    await updater.download();
+    expect(ports.download).toHaveBeenCalledTimes(1);
+    expect(ports.retain).toHaveBeenCalledExactlyOnceWith(staged);
+    expect(updater.snapshot()).toMatchObject({ phase: "ready" });
+  });
+
+  it("fences a changed discovered build and an uncertain staging outcome", async () => {
+    const changed = fixture();
+    await changed.updater.initialize();
+    await changed.updater.check(true);
+    changed.ports.download.mockResolvedValueOnce({
+      ok: true,
+      update: {
+        ...staged,
+        manifest: { ...staged.manifest, buildId: "f".repeat(64) },
+      },
+    });
+    await changed.updater.download();
+    expect(changed.updater.snapshot()).toEqual({
+      phase: "failed",
+      code: "UPDATE_CANDIDATE_CHANGED",
+      recoveryRequired: true,
+    });
+    expect(changed.ports.retain).not.toHaveBeenCalled();
+    await changed.updater.download();
+    expect(changed.ports.download).toHaveBeenCalledTimes(1);
+
+    const uncertain = fixture();
+    await uncertain.updater.initialize();
+    await uncertain.updater.check(true);
+    uncertain.ports.download.mockRejectedValueOnce(
+      new Error("private transport"),
+    );
+    await uncertain.updater.download();
+    await uncertain.updater.check(true);
+    await uncertain.updater.download();
+    expect(uncertain.updater.snapshot()).toEqual({
+      phase: "failed",
+      code: "UPDATE_STAGING_OUTCOME_UNKNOWN",
+      recoveryRequired: true,
+    });
+    expect(uncertain.ports.download).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps an exactly recovered old-feed archive Ready without rediscovery or download", async () => {
     const { updater, ports } = fixture();
     const historical: ReadyUpdate = {
@@ -127,7 +193,8 @@ describe("installed update orchestration (port fixture, no native or GitHub acce
         }),
     );
     await updater.initialize();
-    const checking = updater.check();
+    await updater.check();
+    const checking = updater.download();
     await Promise.resolve();
     ports.publish.mockClear();
     let drained = false;
@@ -166,7 +233,8 @@ describe("installed update orchestration (port fixture, no native or GitHub acce
       new Error("fixture persistence uncertainty"),
     );
     await updater.initialize();
-    const checking = updater.check();
+    await updater.check();
+    const checking = updater.download();
     await Promise.resolve();
     const closing = updater.close();
     finish({ ok: true, update: staged });
@@ -191,7 +259,8 @@ describe("installed update orchestration (port fixture, no native or GitHub acce
         }),
     );
     await updater.initialize();
-    const checking = updater.check();
+    await updater.check();
+    const checking = updater.download();
     await Promise.resolve();
     const receipt = await drainOwnedChildren(
       [{ name: "installed-updater", close: () => updater.close() }],
@@ -328,6 +397,7 @@ describe("installed update orchestration (port fixture, no native or GitHub acce
       });
       await updater.initialize();
       await updater.check();
+      if (failureStage === "download") await updater.download();
       await updater.restore("rollback");
       expect(ports.restore).not.toHaveBeenCalled();
       expect(updater.snapshot()).toEqual({
@@ -342,6 +412,7 @@ describe("installed update orchestration (port fixture, no native or GitHub acce
     const { updater, ports } = fixture();
     await updater.initialize();
     await updater.check();
+    await updater.download();
     updater.later();
     await updater.check(true);
     expect(updater.snapshot()).toEqual({
@@ -383,7 +454,8 @@ describe("installed update orchestration (port fixture, no native or GitHub acce
         }),
     );
     await updater.initialize();
-    const pending = updater.check();
+    await updater.check();
+    const pending = updater.download();
     await Promise.resolve();
     await updater.check(true);
     await updater.restart();
@@ -401,6 +473,7 @@ describe("installed update orchestration (port fixture, no native or GitHub acce
     });
     await updater.initialize();
     await updater.check();
+    await updater.download();
     await updater.restart();
     expect(updater.snapshot()).toMatchObject({
       phase: "ready",
@@ -416,6 +489,7 @@ describe("installed update orchestration (port fixture, no native or GitHub acce
     });
     await updater.initialize();
     await updater.check();
+    await updater.download();
     await updater.restart();
     await updater.check(true);
     expect(updater.snapshot()).toMatchObject({
@@ -437,11 +511,18 @@ describe("installed update orchestration (port fixture, no native or GitHub acce
     ports.restart.mockResolvedValueOnce({ status: "blocked", code });
     await updater.initialize();
     await updater.check();
+    await updater.download();
     await updater.restart();
-    expect(updater.snapshot()).toMatchObject({ phase: "ready", blockedBy: code });
+    expect(updater.snapshot()).toMatchObject({
+      phase: "ready",
+      blockedBy: code,
+    });
     await updater.check(true);
     await updater.restart();
-    expect(updater.snapshot()).toMatchObject({ phase: "ready", blockedBy: code });
+    expect(updater.snapshot()).toMatchObject({
+      phase: "ready",
+      blockedBy: code,
+    });
     expect(ports.restart).toHaveBeenCalledTimes(1);
     expect(ports.discover).toHaveBeenCalledTimes(1);
     expect(ports.download).toHaveBeenCalledTimes(1);
@@ -462,6 +543,7 @@ describe("installed update orchestration (port fixture, no native or GitHub acce
         );
       await updater.initialize();
       await updater.check();
+      await updater.download();
       await updater.restart();
       await updater.restart();
       await updater.check(true);
@@ -478,6 +560,7 @@ describe("installed update orchestration (port fixture, no native or GitHub acce
     ports.retain.mockRejectedValue(new Error("uncertain fsync"));
     await updater.initialize();
     await updater.check();
+    await updater.download();
     expect(updater.snapshot()).toMatchObject({
       phase: "failed",
       recoveryRequired: true,
@@ -512,6 +595,7 @@ describe("installed update orchestration (port fixture, no native or GitHub acce
     ports.recover.mockResolvedValue({ ok: true, update: staged });
     await updater.initialize();
     await updater.check();
+    await updater.download();
     await updater.restart();
     expect(ports.download).not.toHaveBeenCalled();
     expect(ports.restart).toHaveBeenCalledWith(staged);
@@ -522,6 +606,7 @@ describe("installed update orchestration (port fixture, no native or GitHub acce
     ports.retain.mockRejectedValue(new Error("disk full"));
     await updater.initialize();
     await updater.check();
+    await updater.download();
     await updater.restart();
     expect(updater.snapshot().phase).toBe("failed");
     expect(ports.restart).not.toHaveBeenCalled();
