@@ -353,6 +353,13 @@ func (c *Client) Create(parent context.Context, d port.Dispatch, progress func(t
 }
 
 func (c *Client) Observe(parent context.Context, b task.Binding, ref task.Reference) (port.Observation, error) {
+	return c.observe(parent, b, ref, nil)
+}
+
+// observe keeps an optional sealed read selection inside the original Client
+// gate/budget and carries one connection witness through the last awaited check.
+// Public Observe retains its existing producer port and binding-only authority.
+func (c *Client) observe(parent context.Context, b task.Binding, ref task.Reference, recheckSelection func(context.Context) error) (port.Observation, error) {
 	ctx, leave, err := c.enter(parent)
 	if err != nil {
 		return port.Observation{}, task.ErrUnknown
@@ -361,46 +368,99 @@ func (c *Client) Observe(parent context.Context, b task.Binding, ref task.Refere
 	if b != c.selection.Binding || !ref.Complete(task.Codex) || !providerID(ref.ThreadID) || !providerID(ref.TurnID) {
 		return port.Observation{}, task.ErrIdentity
 	}
+	if recheckSelection != nil {
+		if err := recheckSelection(ctx); err != nil {
+			return port.Observation{}, err
+		}
+	}
 	if err := c.verify(ctx); err != nil {
 		return port.Observation{}, task.ErrUnknown
 	}
 	if err := c.ensure(ctx); err != nil {
 		return port.Observation{}, task.ErrUnknown
 	}
-	epoch := c.connection.epoch.Load()
-	m, err := c.rpc(ctx, "thread/read", map[string]any{"threadId": ref.ThreadID, "includeTurns": false})
-	if err != nil {
+	qualified := qualification{connection: c.connection, epoch: c.connection.epoch.Load()}
+	read := c.rpc
+	if recheckSelection != nil {
+		read = func(ctx context.Context, method string, params any) (map[string]json.RawMessage, error) {
+			return c.rpcChecked(ctx, method, params, func() error {
+				// After binding checks, frame construction and write-lock waiting:
+				// the sealed selection must still authorize this exact history read.
+				if err := qualified.check(c); err != nil {
+					return err
+				}
+				if err := recheckSelection(ctx); err != nil {
+					return err
+				}
+				return c.readWitness(ctx, qualified)
+			})
+		}
+	}
+	if err := readThread(ctx, read, b, ref.ThreadID); err != nil {
 		return port.Observation{}, task.ErrUnknown
 	}
-	thread, ok := object(m, "thread")
-	if !ok || !equals(thread, "id", ref.ThreadID) || !equals(thread, "projectId", b.ProjectID) || !equals(thread, "cwd", b.Writer.Path) || !equals(thread, "model", b.Model) {
-		return port.Observation{}, task.ErrUnknown
-	}
-	lifecycle, err := c.readTurn(ctx, ref)
+	lifecycle, err := readTurn(ctx, read, ref)
 	if err != nil {
 		return port.Observation{}, task.ErrUnknown
 	}
 	text := ""
 	if lifecycle == task.Completed {
-		text, err = c.readFinal(ctx, ref)
+		text, err = readFinal(ctx, read, ref)
 		if err != nil {
 			return port.Observation{}, task.ErrUnknown
 		}
 	}
-	if err := c.current(ctx, epoch); err != nil {
+	// History is a non-atomic read. Check exact membership again after awaited
+	// turn/item pages; a changed project/writer/model cannot disclose the result.
+	if err := readThread(ctx, read, b, ref.ThreadID); err != nil {
 		return port.Observation{}, task.ErrUnknown
+	}
+	if err := c.current(ctx, qualified.epoch); err != nil {
+		return port.Observation{}, task.ErrUnknown
+	}
+	if recheckSelection != nil {
+		if err := recheckSelection(ctx); err != nil {
+			return port.Observation{}, err
+		}
+		if err := c.readWitness(ctx, qualified); err != nil {
+			return port.Observation{}, task.ErrUnknown
+		}
 	}
 	return port.Observation{Reference: ref, Lifecycle: lifecycle, Result: text}, nil
 }
 
-func (c *Client) readTurn(ctx context.Context, ref task.Reference) (task.Lifecycle, error) {
+// readWitness is value-only and runs after the last awaited selection check.
+// It never acquires a newer epoch or invokes a grant/native/provider callback.
+func (c *Client) readWitness(ctx context.Context, qualified qualification) error {
+	now := c.now()
+	if ctx.Err() != nil || c.lifetime.Err() != nil || c.closed.Load() || now.Before(c.selection.GrantedAt) || !now.Before(c.selection.ExpiresAt) {
+		return task.ErrUnknown
+	}
+	return qualified.check(c)
+}
+
+type historyRead func(context.Context, string, any) (map[string]json.RawMessage, error)
+
+func readThread(ctx context.Context, read historyRead, b task.Binding, id string) error {
+	m, err := read(ctx, "thread/read", map[string]any{"threadId": id, "includeTurns": false})
+	if err != nil {
+		return err
+	}
+	thread, ok := object(m, "thread")
+	if !ok || !equals(thread, "id", id) || !equals(thread, "projectId", b.ProjectID) || !equals(thread, "cwd", b.Writer.Path) || !equals(thread, "model", b.Model) {
+		return task.ErrUnknown
+	}
+	return nil
+}
+
+func readTurn(ctx context.Context, read historyRead, ref task.Reference) (task.Lifecycle, error) {
 	var cursor any
 	seen := map[string]bool{}
 	ids := map[string]bool{}
 	lifecycle := task.Unknown
 	matches := 0
 	for page := 0; page < maxPages; page++ {
-		m, err := c.rpc(ctx, "thread/turns/list", map[string]any{"threadId": ref.ThreadID, "cursor": cursor, "limit": pageSize, "itemsView": "notLoaded"})
+		m, err := read(ctx, "thread/turns/list", map[string]any{"threadId": ref.ThreadID, "cursor": cursor, "limit": pageSize, "itemsView": "notLoaded"})
 		if err != nil {
 			return task.Unknown, err
 		}
@@ -444,14 +504,14 @@ func (c *Client) readTurn(ctx context.Context, ref task.Reference) (task.Lifecyc
 	}
 	return task.Unknown, protocolError()
 }
-func (c *Client) readFinal(ctx context.Context, ref task.Reference) (string, error) {
+func readFinal(ctx context.Context, read historyRead, ref task.Reference) (string, error) {
 	var cursor any
 	seen := map[string]bool{}
 	ids := map[string]bool{}
 	matches := 0
 	text := ""
 	for page := 0; page < maxPages; page++ {
-		m, err := c.rpc(ctx, "thread/items/list", map[string]any{"threadId": ref.ThreadID, "turnId": ref.TurnID, "cursor": cursor, "limit": pageSize})
+		m, err := read(ctx, "thread/items/list", map[string]any{"threadId": ref.ThreadID, "turnId": ref.TurnID, "cursor": cursor, "limit": pageSize})
 		if err != nil {
 			return "", err
 		}
