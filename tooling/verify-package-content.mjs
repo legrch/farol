@@ -77,6 +77,14 @@ export async function verifyPackageContent({
   // ambiguous.  Recognize them explicitly instead of reporting a mismatch.
   requireValue(artifact.schema !== 4, "PACKAGE_TREE_DIGEST_LEGACY");
   const layout = packageLayout(artifact.schema);
+  // Match the producer's 0.2 Go requirement before observing package bytes.
+  requireValue(
+    layout.core ||
+      ![artifact.version, expectedVersion].some(
+        (version) => typeof version === "string" && version.startsWith("0.2."),
+      ),
+    "PACKAGE_GO_CORE_REQUIRED",
+  );
   const entries = layout.core
     ? [...BUILD_ENTRIES, ...GO_CORE_ENTRIES].sort()
     : layout.branded
