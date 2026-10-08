@@ -68,6 +68,37 @@ function agentTask(id = "task-1") {
     },
   };
 }
+it("returns an unresolved Setup workspace action to its actual Setup step", async () => {
+  const value = settings();
+  value.computer.workspaces = [
+    {
+      workspaceId: "22222222-2222-4222-8222-222222222222",
+      root: "/approved/project",
+      label: "Project",
+      access: "read",
+      excludedPaths: [],
+      rootIdentity: { device: "1", inode: "2" },
+    },
+  ];
+  const { host, c, f } = await mount({
+    ...bootstrap(),
+    configuration: {
+      status: "ready",
+      settings: ProductSettingsSchema.parse(value),
+    },
+  });
+  await act(async () => c.navigate({ area: "setup", setupStep: "folders" }));
+  vi.mocked(f.api.configure).mockRejectedValueOnce(new Error("lost reply"));
+  await act(async () => button(host, "Verify workspace").click());
+  expect(c.getSnapshot().intents).toHaveProperty(
+    "settings:computer.verify-workspace:22222222-2222-4222-8222-222222222222",
+  );
+  await act(async () => c.navigate({ area: "settings", page: "diagnostics" }));
+  await act(async () => button(host, "Return to Setup").click());
+  expect(c.getSnapshot().destination.area).toBe("setup");
+  expect(c.getSnapshot().destination.setupStep).toBe("folders");
+  expect(f.api.configure).toHaveBeenCalledTimes(1);
+});
 it.each([
   ["Home", "click"],
   ["Home", "Enter"],

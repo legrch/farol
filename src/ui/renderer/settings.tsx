@@ -26,6 +26,7 @@ import { ChatDirect } from "./chat-direct";
 import { ChatReadonly } from "./chat-readonly";
 import { ChatHistory } from "./chat-history";
 import type {
+  Destination,
   Intent,
   RendererFacade,
   SettingsPage,
@@ -59,6 +60,7 @@ type PageFeedback = Readonly<{
   request: object;
   text: string;
   result: Intent | null;
+  origin: Destination;
 }>;
 function createFeedback() {
   let revision = 0;
@@ -308,7 +310,12 @@ export function Settings({ snapshot, facade, setupStep }: SettingsProps) {
       const report = (text: string, result: Intent | null = null) => {
         // A late reply can update only its own page and request.
         if (feedback.pages[page]?.request !== request) return;
-        feedback.pages[page] = { request, text, result };
+        feedback.pages[page] = {
+          request,
+          text,
+          result,
+          origin: current.destination,
+        };
         feedback.changed();
       };
       const id = intention(
@@ -329,27 +336,47 @@ export function Settings({ snapshot, facade, setupStep }: SettingsProps) {
           retained(current),
         )
       ) {
-        feedback.pages[page] = { request, text: "", result: null };
+        feedback.pages[page] = {
+          request,
+          text: "",
+          result: null,
+          origin: current.destination,
+        };
         report(
           "Action not sent. Current state or an unresolved operation prevents this change; refresh to observe the latest status.",
         );
         return null;
       }
       if (!ProductConfigurationCommandSchema.safeParse(command).success) {
-        feedback.pages[page] = { request, text: "", result: null };
+        feedback.pages[page] = {
+          request,
+          text: "",
+          result: null,
+          origin: current.destination,
+        };
         report(
           "Check the fields. Paths must be unique relative paths without dot segments; connection fields must match their required format.",
         );
         return null;
       }
       if (admit && !admit(current)) {
-        feedback.pages[page] = { request, text: "", result: null };
+        feedback.pages[page] = {
+          request,
+          text: "",
+          result: null,
+          origin: current.destination,
+        };
         report(
           "Action not sent. The workspace or connection changed after this page opened; review its current status before trying a new change.",
         );
         return null;
       }
-      feedback.pages[page] = { request, text: "", result: null };
+      feedback.pages[page] = {
+        request,
+        text: "",
+        result: null,
+        origin: current.destination,
+      };
       feedback.intents[id] = { id, state: "pending", code: null };
       report("Saving or checking…", { id, state: "pending", code: null });
       try {
@@ -2822,14 +2849,18 @@ function Diagnostics({ snapshot, settings, facade, actions }: PageProps) {
                 type="button"
                 className="text-button"
                 onClick={() =>
-                  facade.navigate({
-                    area: "settings",
-                    page: page as SettingsPage,
-                  })
+                  facade.navigate(
+                    entry.origin.area === "setup"
+                      ? {
+                          area: "setup",
+                          setupStep: entry.origin.setupStep ?? "overview",
+                        }
+                      : { area: "settings", page: page as SettingsPage },
+                  )
                 }
               >
                 Return to{" "}
-                {page === "general"
+                {entry.origin.area === "setup"
                   ? "Setup"
                   : page === "computer"
                     ? "This Mac"
