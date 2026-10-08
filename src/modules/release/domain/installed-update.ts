@@ -4,7 +4,7 @@ export type UpdateNotice = Readonly<{
   blockedBy: string | null;
 }>;
 
-export type InstalledUpdateView =
+type UpdatePhaseView =
   | Readonly<{ phase: "unavailable"; code: string }>
   | Readonly<{
       phase: "idle";
@@ -37,3 +37,15 @@ export type InstalledUpdateView =
       notice?: UpdateNotice;
       rollbackVersion?: string;
     }>;
+
+// This is a persisted choice, not proof that any automatic release effect ran.
+export type AutomaticUpdatePreference =
+  | Readonly<{ status: "confirmed"; enabled: boolean }>
+  | Readonly<{ status: "blocked" | "unknown"; enabled: false; code: string }>;
+
+export type AutomaticUpdatePreferenceResult =
+  | Readonly<{ status: "confirmed"; enabled: boolean }>
+  | Readonly<{ status: "refused" | "unknown"; code: string }>;
+
+export type InstalledUpdateView = UpdatePhaseView &
+  Readonly<{ automaticUpdatePreference?: AutomaticUpdatePreference }>;

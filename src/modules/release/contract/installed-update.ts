@@ -1,27 +1,65 @@
 import { z } from "zod";
 
 const Code = z.string().regex(/^[A-Z][A-Z0-9_]{0,100}$/u);
+// Missing projection in a transitional caller must be treated as OFF.
+export const AutomaticUpdatePreferenceSchema = z.discriminatedUnion("status", [
+  z.strictObject({ status: z.literal("confirmed"), enabled: z.boolean() }),
+  z.strictObject({
+    status: z.enum(["blocked", "unknown"]),
+    enabled: z.literal(false),
+    code: Code,
+  }),
+]);
+export type AutomaticUpdatePreference = z.infer<
+  typeof AutomaticUpdatePreferenceSchema
+>;
+export const AutomaticUpdatePreferenceResultSchema = z.discriminatedUnion(
+  "status",
+  [
+    z.strictObject({ status: z.literal("confirmed"), enabled: z.boolean() }),
+    z.strictObject({ status: z.enum(["refused", "unknown"]), code: Code }),
+  ],
+);
+export type AutomaticUpdatePreferenceResult = z.infer<
+  typeof AutomaticUpdatePreferenceResultSchema
+>;
+const PreferenceProjection = {
+  automaticUpdatePreference: AutomaticUpdatePreferenceSchema.optional(),
+};
 export const UpdateNoticeSchema = z.strictObject({
   key: z.string().min(1).max(256),
   seen: z.boolean(),
   blockedBy: Code.nullable(),
 });
 export const InstalledUpdateViewSchema = z.discriminatedUnion("phase", [
-  z.strictObject({ phase: z.literal("unavailable"), code: Code }),
   z.strictObject({
+    ...PreferenceProjection,
+    phase: z.literal("unavailable"),
+    code: Code,
+  }),
+  z.strictObject({
+    ...PreferenceProjection,
     phase: z.literal("idle"),
     checkedAt: z.number().nonnegative().nullable(),
     rollbackVersion: z.string().max(128).optional(),
     blockedBy: Code.optional(),
   }),
   z.strictObject({
+    ...PreferenceProjection,
     phase: z.literal("recovery"),
     version: z.string().max(128),
     blockedBy: Code.nullable(),
   }),
-  z.strictObject({ phase: z.literal("checking") }),
-  z.strictObject({ phase: z.literal("downloading") }),
   z.strictObject({
+    ...PreferenceProjection,
+    phase: z.literal("checking"),
+  }),
+  z.strictObject({
+    ...PreferenceProjection,
+    phase: z.literal("downloading"),
+  }),
+  z.strictObject({
+    ...PreferenceProjection,
     phase: z.literal("available"),
     version: z.string().max(128),
     deferred: z.boolean(),
@@ -29,6 +67,7 @@ export const InstalledUpdateViewSchema = z.discriminatedUnion("phase", [
     notice: UpdateNoticeSchema.optional(),
   }),
   z.strictObject({
+    ...PreferenceProjection,
     phase: z.literal("ready"),
     version: z.string().max(128),
     deferred: z.boolean(),
@@ -37,11 +76,13 @@ export const InstalledUpdateViewSchema = z.discriminatedUnion("phase", [
     notice: UpdateNoticeSchema.optional(),
   }),
   z.strictObject({
+    ...PreferenceProjection,
     phase: z.literal("applying"),
     version: z.string().max(128),
   }),
   z
     .strictObject({
+      ...PreferenceProjection,
       phase: z.literal("failed"),
       code: Code,
       recoveryRequired: z.boolean(),
@@ -82,6 +123,10 @@ export const InstalledUpdateCommandSchema = z.discriminatedUnion("kind", [
       "recover",
       "rollback",
     ]),
+  }),
+  z.strictObject({
+    kind: z.literal("set-automatic-update-preference"),
+    enabled: z.boolean(),
   }),
   z.strictObject({
     kind: z.literal("notice-seen"),

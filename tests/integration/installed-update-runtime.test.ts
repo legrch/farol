@@ -4110,3 +4110,305 @@ describe("selected local update composition (disposable state, native ports doub
     await controller!.close();
   });
 });
+
+describe("automatic update preference (disposable files; native/provider ports doubled)", () => {
+  const preferenceFile = () =>
+    path.join(userData, "installed-updates/automatic-update-preference.json");
+  const record = (enabled: boolean) => ({
+    schema: "farol.installed-automatic-update-preference/1",
+    enabled,
+  });
+  const confirmed = (enabled: boolean) => ({ status: "confirmed", enabled });
+
+  it("defaults OFF without creating a record, persists both choices and reopens", async () => {
+    const controller = (await createInstalledUpdateRuntime(options()))!;
+    await controller.initialize();
+    expect(controller.automaticUpdatePreference()).toEqual(confirmed(false));
+    await expect(fs.lstat(preferenceFile())).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    expect(mocks.discover).not.toHaveBeenCalled();
+    expect(mocks.download).not.toHaveBeenCalled();
+    expect(await controller.setAutomaticUpdatePreference(true)).toEqual(
+      confirmed(true),
+    );
+    expect(JSON.parse(await fs.readFile(preferenceFile(), "utf8"))).toEqual(
+      record(true),
+    );
+    expect((await fs.stat(preferenceFile())).mode & 0o777).toBe(0o600);
+    expect(controller.snapshot()).toMatchObject({
+      automaticUpdatePreference: confirmed(true),
+    });
+    await controller.close();
+    const reopened = (await createInstalledUpdateRuntime(options()))!;
+    await reopened.initialize();
+    expect(reopened.automaticUpdatePreference()).toEqual(confirmed(true));
+    expect(await reopened.setAutomaticUpdatePreference(false)).toEqual(
+      confirmed(false),
+    );
+    await reopened.close();
+    const off = (await createInstalledUpdateRuntime(options()))!;
+    await off.initialize();
+    expect(off.automaticUpdatePreference()).toEqual(confirmed(false));
+    expect(mocks.discover).not.toHaveBeenCalled();
+    expect(mocks.download).not.toHaveBeenCalled();
+    expect(mocks.helper).not.toHaveBeenCalled();
+    expect(quit).not.toHaveBeenCalled();
+    await off.close();
+  });
+
+  it("isolates both legacy schemas and keeps the choice across Skip/Later/notices and a newer release", async () => {
+    const controller = (await createInstalledUpdateRuntime(options()))!;
+    await controller.initialize();
+    await controller.check(true);
+    await controller.later();
+    const view = controller.snapshot();
+    if (view.phase !== "available")
+      throw new Error("fixture must offer release");
+    await controller.acknowledgeNotice(view.notice!.key);
+    const legacyFile = path.join(
+      userData,
+      "installed-updates/preferences.json",
+    );
+    const noticeFile = path.join(
+      userData,
+      "installed-updates/notice-preferences.json",
+    );
+    const legacy = await fs.readFile(legacyFile);
+    const notice = await fs.readFile(noticeFile);
+    await controller.setAutomaticUpdatePreference(true);
+    expect(await fs.readFile(legacyFile)).toEqual(legacy);
+    expect(await fs.readFile(noticeFile)).toEqual(notice);
+    const preference = await fs.readFile(preferenceFile());
+    await controller.skip();
+    expect(await fs.readFile(preferenceFile())).toEqual(preference);
+    await controller.close();
+    const reopened = (await createInstalledUpdateRuntime(options()))!;
+    await reopened.initialize();
+    await reopened.check(true);
+    expect(reopened.snapshot()).toMatchObject({
+      phase: "idle",
+      automaticUpdatePreference: confirmed(true),
+    });
+    const newer = {
+      ...manifest,
+      version: "0.1.2-owner.beta.1",
+      buildId: "8".repeat(64),
+      buildVersion: "4",
+      archiveName: "Farol-0.1.2-owner.beta.1-darwin-arm64.zip",
+    };
+    mocks.discover.mockResolvedValue({ ok: true, value: { manifest: newer } });
+    await reopened.check(true);
+    expect(reopened.snapshot()).toMatchObject({
+      phase: "available",
+      version: newer.version,
+      deferred: false,
+      notice: { seen: false },
+      automaticUpdatePreference: confirmed(true),
+    });
+    await reopened.later();
+    const latest = reopened.snapshot();
+    if (latest.phase !== "available")
+      throw new Error("fixture must offer newer release");
+    await reopened.acknowledgeNotice(latest.notice!.key);
+    expect(await fs.readFile(preferenceFile())).toEqual(preference);
+    expect(mocks.download).not.toHaveBeenCalled();
+    expect(mocks.helper).not.toHaveBeenCalled();
+    expect(quit).not.toHaveBeenCalled();
+    await reopened.close();
+  });
+
+  it.each([
+    "null",
+    "{}",
+    JSON.stringify({
+      schema: "farol.installed-automatic-update-preference/1",
+      enabled: "true",
+    }),
+    JSON.stringify({
+      schema: "farol.installed-automatic-update-preference/2",
+      enabled: true,
+    }),
+    JSON.stringify({
+      schema: "farol.installed-automatic-update-preference/1",
+      enabled: true,
+      skipped: null,
+    }),
+  ])(
+    "refuses a malformed record without replacing it or affecting discovery: %s",
+    async (invalid) => {
+      const controller = (await createInstalledUpdateRuntime(options()))!;
+      await fs.writeFile(preferenceFile(), invalid, { mode: 0o600 });
+      await controller.initialize();
+      expect(controller.automaticUpdatePreference()).toEqual({
+        status: "blocked",
+        enabled: false,
+        code: "UPDATE_AUTOMATIC_PREFERENCE_UNREADABLE",
+      });
+      expect(await controller.setAutomaticUpdatePreference(true)).toEqual({
+        status: "refused",
+        code: "UPDATE_AUTOMATIC_PREFERENCE_UNREADABLE",
+      });
+      expect(await fs.readFile(preferenceFile(), "utf8")).toBe(invalid);
+      await controller.check(true);
+      expect(controller.snapshot()).toMatchObject({ phase: "available" });
+      expect(mocks.download).not.toHaveBeenCalled();
+      await controller.close();
+    },
+  );
+
+  it.each(["symlink", "mode", "hardlink"])(
+    "refuses unsafe preference metadata: %s",
+    async (fault) => {
+      const controller = (await createInstalledUpdateRuntime(options()))!;
+      const other = path.join(root, "foreign-preference.json");
+      await fs.writeFile(other, JSON.stringify(record(true)), { mode: 0o600 });
+      if (fault === "symlink") await fs.symlink(other, preferenceFile());
+      else if (fault === "hardlink") await fs.link(other, preferenceFile());
+      else
+        await fs.writeFile(preferenceFile(), JSON.stringify(record(true)), {
+          mode: 0o644,
+        });
+      await controller.initialize();
+      expect(
+        await controller.setAutomaticUpdatePreference(false),
+      ).toMatchObject({ status: "refused" });
+      expect(controller.automaticUpdatePreference()).toMatchObject({
+        status: "blocked",
+        enabled: false,
+      });
+      expect(JSON.parse(await fs.readFile(other, "utf8"))).toEqual(
+        record(true),
+      );
+      await controller.close();
+    },
+  );
+
+  it("refuses a changed unreadable record before attempting write", async () => {
+    const controller = (await createInstalledUpdateRuntime(options()))!;
+    await controller.initialize();
+    await fs.writeFile(preferenceFile(), "unreadable", { mode: 0o600 });
+    const rename = vi.spyOn(fs, "rename");
+    expect(await controller.setAutomaticUpdatePreference(true)).toEqual({
+      status: "refused",
+      code: "UPDATE_AUTOMATIC_PREFERENCE_UNREADABLE",
+    });
+    expect(rename).not.toHaveBeenCalled();
+    expect(await fs.readFile(preferenceFile(), "utf8")).toBe("unreadable");
+    await controller.close();
+  });
+
+  it.each(["before-rename", "after-rename", "parent-sync", "readback"])(
+    "keeps %s uncertainty sticky and permits only fresh-lifetime observation",
+    async (fault) => {
+      const controller = (await createInstalledUpdateRuntime(options()))!;
+      await controller.initialize();
+      const rename = fs.rename.bind(fs);
+      const open = fs.open.bind(fs);
+      const renames = vi
+        .spyOn(fs, "rename")
+        .mockImplementation(async (from, to) => {
+          if (String(to) !== preferenceFile()) return rename(from, to);
+          if (fault === "before-rename")
+            throw new Error("fixture pre-rename ACK loss");
+          await rename(from, to);
+          if (fault === "after-rename")
+            throw new Error("fixture post-rename ACK loss");
+          if (fault === "readback")
+            await fs.writeFile(
+              preferenceFile(),
+              JSON.stringify(record(false)),
+              { mode: 0o600 },
+            );
+        });
+      if (fault === "parent-sync")
+        vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+          const fd = await open(...args);
+          if (String(args[0]) === path.dirname(preferenceFile()))
+            vi.spyOn(fd, "sync").mockRejectedValue(
+              new Error("fixture uncertain directory durability"),
+            );
+          return fd;
+        });
+      const result = await controller.setAutomaticUpdatePreference(true);
+      expect(result).toEqual({
+        status: "unknown",
+        code: "UPDATE_AUTOMATIC_PREFERENCE_OUTCOME_UNKNOWN",
+      });
+      expect(controller.automaticUpdatePreference()).toEqual({
+        status: "unknown",
+        enabled: false,
+        code: result.status === "unknown" ? result.code : "INVALID",
+      });
+      const calls = renames.mock.calls.length;
+      expect(await controller.setAutomaticUpdatePreference(false)).toEqual(
+        result,
+      );
+      await controller.check(true);
+      await controller.initialize();
+      expect(renames).toHaveBeenCalledTimes(calls);
+      expect(controller.snapshot()).toMatchObject({
+        automaticUpdatePreference: { status: "unknown", enabled: false },
+      });
+      await controller.close();
+      renames.mockRestore();
+      vi.mocked(fs.open).mockRestore?.();
+      const reopened = (await createInstalledUpdateRuntime(options()))!;
+      await reopened.initialize();
+      expect(reopened.automaticUpdatePreference()).toEqual(
+        confirmed(fault === "after-rename" || fault === "parent-sync"),
+      );
+      expect(mocks.download).not.toHaveBeenCalled();
+      expect(mocks.helper).not.toHaveBeenCalled();
+      expect(quit).not.toHaveBeenCalled();
+      await reopened.close();
+    },
+  );
+
+  it("returns no ACK until parent sync finishes, and preserves it when publication fails", async () => {
+    const selected = options();
+    const controller = (await createInstalledUpdateRuntime(selected))!;
+    await controller.initialize();
+    const open = fs.open.bind(fs);
+    let syncReached!: () => void;
+    const reached = new Promise<void>((resolve) => {
+      syncReached = resolve;
+    });
+    let releaseSync!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      releaseSync = resolve;
+    });
+    vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      const fd = await open(...args);
+      if (String(args[0]) === path.dirname(preferenceFile())) {
+        const sync = fd.sync.bind(fd);
+        vi.spyOn(fd, "sync").mockImplementation(async () => {
+          syncReached();
+          await gate;
+          await sync();
+        });
+      }
+      return fd;
+    });
+    const ack = vi.fn();
+    const saving = controller
+      .setAutomaticUpdatePreference(true)
+      .then((result) => {
+        ack(result);
+        return result;
+      });
+    await reached;
+    expect(ack).not.toHaveBeenCalled();
+    expect(controller.automaticUpdatePreference()).toMatchObject({
+      status: "blocked",
+      enabled: false,
+    });
+    selected.publish.mockImplementation(() => {
+      throw new Error("fixture renderer closed");
+    });
+    releaseSync();
+    expect(await saving).toEqual(confirmed(true));
+    expect(controller.automaticUpdatePreference()).toEqual(confirmed(true));
+    await controller.close();
+  });
+});

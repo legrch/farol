@@ -1,4 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
+import {
+  AutomaticUpdatePreferenceResultSchema,
+  InstalledUpdateCommandSchema,
+  InstalledUpdateViewSchema,
+} from "../../src/modules/release/contract/installed-update";
 import { drainOwnedChildren } from "../../src/apps/desktop/quit-drain";
 import {
   InstalledUpdater,
@@ -1148,5 +1153,223 @@ describe("release-owned notice acknowledgement", () => {
     await marking;
     await closing;
     expect(closed).toBe(true);
+  });
+});
+
+describe("automatic update preference (ports only; no automatic release acceptance)", () => {
+  function preferenceFixture(enabled = false) {
+    const base = fixture();
+    const ports = {
+      ...base.ports,
+      readAutomaticUpdatePreference: vi
+        .fn<
+          NonNullable<InstalledUpdaterPorts["readAutomaticUpdatePreference"]>
+        >()
+        .mockResolvedValue({ status: "confirmed", enabled }),
+      writeAutomaticUpdatePreference: vi
+        .fn<
+          NonNullable<InstalledUpdaterPorts["writeAutomaticUpdatePreference"]>
+        >()
+        .mockImplementation(async (choice) => ({
+          status: "confirmed",
+          enabled: choice,
+        })),
+    };
+    return { ports, updater: new InstalledUpdater(ports) };
+  }
+
+  it("strictly parses commands, preference states and exact ACKs", () => {
+    expect(
+      InstalledUpdateCommandSchema.parse({
+        kind: "set-automatic-update-preference",
+        enabled: false,
+      }),
+    ).toEqual({ kind: "set-automatic-update-preference", enabled: false });
+    for (const invalid of [
+      { kind: "set-automatic-update-preference" },
+      { kind: "set-automatic-update-preference", enabled: "true" },
+      { kind: "set-automatic-update-preference", enabled: true, restart: true },
+    ])
+      expect(InstalledUpdateCommandSchema.safeParse(invalid).success).toBe(
+        false,
+      );
+    expect(
+      InstalledUpdateViewSchema.safeParse({
+        phase: "idle",
+        checkedAt: null,
+        automaticUpdatePreference: {
+          status: "unknown",
+          enabled: true,
+          code: "UNKNOWN",
+        },
+      }).success,
+    ).toBe(false);
+    expect(
+      AutomaticUpdatePreferenceResultSchema.safeParse({ status: "confirmed" })
+        .success,
+    ).toBe(false);
+    expect(
+      InstalledUpdateViewSchema.parse({ phase: "idle", checkedAt: null }),
+    ).toEqual({ phase: "idle", checkedAt: null });
+  });
+
+  it("loads default OFF and changes only the preference, including while Ready", async () => {
+    const { updater, ports } = preferenceFixture();
+    await updater.initialize();
+    expect(updater.automaticUpdatePreference()).toEqual({
+      status: "confirmed",
+      enabled: false,
+    });
+    expect(InstalledUpdateViewSchema.parse(updater.snapshot())).toMatchObject({
+      automaticUpdatePreference: { status: "confirmed", enabled: false },
+    });
+    expect(await updater.setAutomaticUpdatePreference(true)).toEqual({
+      status: "confirmed",
+      enabled: true,
+    });
+    expect(ports.discover).not.toHaveBeenCalled();
+    expect(ports.download).not.toHaveBeenCalled();
+    expect(ports.restart).not.toHaveBeenCalled();
+    await updater.check(true);
+    expect(ports.download).not.toHaveBeenCalled();
+    await updater.download();
+    const before = updater.snapshot();
+    await updater.setAutomaticUpdatePreference(false);
+    expect(updater.snapshot()).toEqual({
+      ...before,
+      automaticUpdatePreference: { status: "confirmed", enabled: false },
+    });
+    expect(ports.restart).not.toHaveBeenCalled();
+    expect(ports.restore).not.toHaveBeenCalled();
+    expect(ports.skip).not.toHaveBeenCalled();
+    expect(ports.defer).not.toHaveBeenCalled();
+  });
+
+  it.each(["throw", "unknown", "mismatch"])(
+    "fences %s without retry and projects OFF",
+    async (fault) => {
+      const { updater, ports } = preferenceFixture();
+      await updater.initialize();
+      if (fault === "throw")
+        ports.writeAutomaticUpdatePreference.mockRejectedValue(
+          new Error("lost ACK"),
+        );
+      else if (fault === "unknown")
+        ports.writeAutomaticUpdatePreference.mockResolvedValue({
+          status: "unknown",
+          code: "UPDATE_AUTOMATIC_PREFERENCE_OUTCOME_UNKNOWN",
+        });
+      else
+        ports.writeAutomaticUpdatePreference.mockResolvedValue({
+          status: "confirmed",
+          enabled: false,
+        });
+      expect(await updater.setAutomaticUpdatePreference(true)).toMatchObject({
+        status: "unknown",
+      });
+      expect(updater.automaticUpdatePreference()).toMatchObject({
+        status: "unknown",
+        enabled: false,
+      });
+      await updater.setAutomaticUpdatePreference(false);
+      await updater.initialize();
+      await updater.check(true);
+      expect(updater.snapshot()).toMatchObject({
+        phase: "available",
+        automaticUpdatePreference: { status: "unknown", enabled: false },
+      });
+      expect(ports.writeAutomaticUpdatePreference).toHaveBeenCalledTimes(1);
+      expect(ports.readAutomaticUpdatePreference).toHaveBeenCalledTimes(1);
+      expect(ports.download).not.toHaveBeenCalled();
+      expect(ports.restart).not.toHaveBeenCalled();
+    },
+  );
+
+  it("isolates unreadable/refused preferences from release state", async () => {
+    const { updater, ports } = preferenceFixture();
+    ports.readAutomaticUpdatePreference.mockRejectedValue(
+      new Error("unreadable"),
+    );
+    await updater.initialize();
+    expect(await updater.setAutomaticUpdatePreference(true)).toEqual({
+      status: "refused",
+      code: "UPDATE_AUTOMATIC_PREFERENCE_UNREADABLE",
+    });
+    expect(ports.writeAutomaticUpdatePreference).not.toHaveBeenCalled();
+    await updater.check(true);
+    expect(updater.snapshot()).toMatchObject({
+      phase: "available",
+      automaticUpdatePreference: { status: "blocked", enabled: false },
+    });
+
+    const refused = preferenceFixture(true);
+    await refused.updater.initialize();
+    refused.ports.writeAutomaticUpdatePreference.mockResolvedValue({
+      status: "refused",
+      code: "UPDATE_AUTOMATIC_PREFERENCE_UNREADABLE",
+    });
+    expect(
+      await refused.updater.setAutomaticUpdatePreference(false),
+    ).toMatchObject({ status: "refused" });
+    expect(refused.updater.automaticUpdatePreference()).toMatchObject({
+      status: "blocked",
+      enabled: false,
+    });
+  });
+
+  it("rejects concurrent writes, projects OFF until ACK and drains the write on close", async () => {
+    const { updater, ports } = preferenceFixture(true);
+    let complete!: (value: { status: "confirmed"; enabled: boolean }) => void;
+    ports.writeAutomaticUpdatePreference.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          complete = resolve;
+        }),
+    );
+    expect(await updater.setAutomaticUpdatePreference(false)).toMatchObject({
+      status: "refused",
+    });
+    await updater.initialize();
+    const saving = updater.setAutomaticUpdatePreference(false);
+    expect(updater.snapshot()).toMatchObject({
+      automaticUpdatePreference: {
+        status: "blocked",
+        enabled: false,
+        code: "UPDATE_AUTOMATIC_PREFERENCE_WRITING",
+      },
+    });
+    expect(await updater.setAutomaticUpdatePreference(true)).toMatchObject({
+      status: "refused",
+    });
+    const closed = vi.fn();
+    const closing = updater.close().then(closed);
+    await Promise.resolve();
+    expect(closed).not.toHaveBeenCalled();
+    const published = ports.publish.mock.calls.length;
+    complete({ status: "confirmed", enabled: false });
+    expect(await saving).toEqual({ status: "confirmed", enabled: false });
+    await closing;
+    expect(ports.publish).toHaveBeenCalledTimes(published);
+    expect(await updater.setAutomaticUpdatePreference(true)).toMatchObject({
+      status: "refused",
+    });
+    expect(ports.writeAutomaticUpdatePreference).toHaveBeenCalledTimes(1);
+  });
+
+  it("retains the durable ACK when renderer publication fails", async () => {
+    const { updater, ports } = preferenceFixture();
+    await updater.initialize();
+    ports.publish.mockImplementation(() => {
+      throw new Error("destroyed renderer");
+    });
+    expect(await updater.setAutomaticUpdatePreference(true)).toEqual({
+      status: "confirmed",
+      enabled: true,
+    });
+    expect(updater.automaticUpdatePreference()).toEqual({
+      status: "confirmed",
+      enabled: true,
+    });
+    await updater.close();
   });
 });

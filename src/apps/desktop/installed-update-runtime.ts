@@ -26,7 +26,10 @@ import type {
 } from "../../modules/release/domain/github-release-contract";
 import { compareReleaseVersions } from "../../modules/release/domain/github-version";
 import { legacyPredecessorRequiresStateRecovery } from "../../modules/release/domain/predecessor-state";
-import type { InstalledUpdateView } from "../../modules/release/contract/installed-update";
+import {
+  AutomaticUpdatePreferenceResultSchema,
+  type InstalledUpdateView,
+} from "../../modules/release/contract/installed-update";
 import { createGithubUpdateTransport } from "../../modules/release/infra/native/github-update-transport";
 import { createUpdatePackageVerifier } from "../../modules/release/infra/native/update-package-verifier";
 import {
@@ -75,6 +78,11 @@ const NoticePreferences = z.strictObject({
     })
     .nullable()
     .optional(),
+});
+// Separate file/schema: older strict Skip/Later and notice readers stay compatible.
+const AutomaticUpdatePreferences = z.strictObject({
+  schema: z.literal("farol.installed-automatic-update-preference/1"),
+  enabled: z.boolean(),
 });
 const AcceptedBuild = z.strictObject({
   digest: Digest,
@@ -1200,6 +1208,30 @@ async function createRuntime(
         }
       : UpdatePreferences.parse(raw);
   };
+  const automaticPreferenceFile = path.join(
+    root,
+    "automatic-update-preference.json",
+  );
+  const readAutomaticPreference = async () => {
+    await canonicalOwnedDirectory(root, true);
+    const raw = await readRecord(automaticPreferenceFile);
+    if (raw === null) {
+      // readRecord also returns JSON null. Only actual absence is default OFF.
+      try {
+        await fs.lstat(automaticPreferenceFile);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT")
+          return {
+            schema: "farol.installed-automatic-update-preference/1" as const,
+            enabled: false,
+          };
+        throw error;
+      }
+      throw new Error("UPDATE_AUTOMATIC_PREFERENCE_INVALID");
+    }
+    return AutomaticUpdatePreferences.parse(raw);
+  };
+  let automaticPreferenceUnknown = false;
   const noticesFile = path.join(root, "notice-preferences.json");
   const readNoticePreferences = async () => {
     const raw = await readRecord(noticesFile);
@@ -1718,6 +1750,59 @@ async function createRuntime(
     },
     now: Date.now,
     publish: options.publish,
+    readAutomaticUpdatePreference: async () => {
+      try {
+        const preference = await readAutomaticPreference();
+        return { status: "confirmed", enabled: preference.enabled };
+      } catch {
+        return {
+          status: "blocked",
+          enabled: false,
+          code: "UPDATE_AUTOMATIC_PREFERENCE_UNREADABLE",
+        };
+      }
+    },
+    writeAutomaticUpdatePreference: async (enabled) => {
+      if (automaticPreferenceUnknown)
+        return {
+          status: "unknown",
+          code: "UPDATE_AUTOMATIC_PREFERENCE_OUTCOME_UNKNOWN",
+        };
+      const record = AutomaticUpdatePreferences.safeParse({
+        schema: "farol.installed-automatic-update-preference/1",
+        enabled,
+      });
+      if (!record.success)
+        return {
+          status: "refused",
+          code: "UPDATE_AUTOMATIC_PREFERENCE_INVALID",
+        };
+      try {
+        await readAutomaticPreference();
+      } catch {
+        return {
+          status: "refused",
+          code: "UPDATE_AUTOMATIC_PREFERENCE_UNREADABLE",
+        };
+      }
+      try {
+        // ACK only after temporary-file fsync, rename, parent fsync and exact readback.
+        await writeRecord(automaticPreferenceFile, record.data);
+        const observed = await readAutomaticPreference();
+        if (observed.enabled !== enabled)
+          throw new Error("UPDATE_AUTOMATIC_PREFERENCE_CHANGED");
+        return AutomaticUpdatePreferenceResultSchema.parse({
+          status: "confirmed",
+          enabled,
+        });
+      } catch {
+        automaticPreferenceUnknown = true;
+        return {
+          status: "unknown",
+          code: "UPDATE_AUTOMATIC_PREFERENCE_OUTCOME_UNKNOWN",
+        };
+      }
+    },
     notice: (view, version, restored) =>
       serializeNotice(
         async () => {

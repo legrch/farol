@@ -1,4 +1,8 @@
-import type { UpdateNotice } from "../domain/installed-update";
+import type {
+  AutomaticUpdatePreference,
+  AutomaticUpdatePreferenceResult,
+  UpdateNotice,
+} from "../domain/installed-update";
 import type { RetainedReleaseManifest } from "../domain/github-release-contract";
 
 // Keep in sync with the release contract's presentation eligibility. The
@@ -33,6 +37,12 @@ export type UpdateHandoff =
   | Readonly<{ status: "unknown"; code: string }>;
 export type InstalledUpdaterPorts = Readonly<{
   now(): number;
+  // Optional for transitional callers. Production uses the installed release owner.
+  readAutomaticUpdatePreference?(): Promise<AutomaticUpdatePreference>;
+  writeAutomaticUpdatePreference?(
+    enabled: boolean,
+  ): Promise<AutomaticUpdatePreferenceResult>;
+
   // Optional only for transitional callers without a notice projection. The
   // installed runtime supplies both ports through its existing preferences owner.
   notice?(
@@ -91,6 +101,12 @@ export class InstalledUpdater {
   private noticeBlocked: string | null = null;
   private noticeWriting = false;
   private noticeDrained: Promise<void> = Promise.resolve();
+  private automaticPreference: AutomaticUpdatePreference = {
+    status: "confirmed",
+    enabled: false,
+  };
+  private preferenceWriting = false;
+  private preferenceDrained: Promise<void> = Promise.resolve();
   private ready: ReadyUpdate | null = null;
   private available: Readonly<{ version: string; buildId: string }> | null =
     null;
@@ -115,10 +131,89 @@ export class InstalledUpdater {
     this.finishDrain();
   }
 
-  constructor(private readonly ports: InstalledUpdaterPorts) {}
+  constructor(private readonly ports: InstalledUpdaterPorts) {
+    if (ports.readAutomaticUpdatePreference) {
+      this.automaticPreference = {
+        status: "blocked",
+        enabled: false,
+        code: "UPDATE_AUTOMATIC_PREFERENCE_NOT_LOADED",
+      };
+    }
+  }
 
   snapshot(): UpdateView {
-    return this.view;
+    return this.ports.readAutomaticUpdatePreference
+      ? { ...this.view, automaticUpdatePreference: this.automaticPreference }
+      : this.view;
+  }
+
+  automaticUpdatePreference(): AutomaticUpdatePreference {
+    return this.automaticPreference;
+  }
+
+  // Only an explicit command changes the choice. No release effect is dispatched.
+  async setAutomaticUpdatePreference(
+    enabled: boolean,
+  ): Promise<AutomaticUpdatePreferenceResult> {
+    if (this.automaticPreference.status === "unknown")
+      return { status: "unknown", code: this.automaticPreference.code };
+    if (typeof enabled !== "boolean")
+      return { status: "refused", code: "UPDATE_AUTOMATIC_PREFERENCE_INVALID" };
+    if (this.closed || !this.initialized || this.preferenceWriting)
+      return {
+        status: "refused",
+        code: "UPDATE_AUTOMATIC_PREFERENCE_UNAVAILABLE",
+      };
+    if (!this.ports.writeAutomaticUpdatePreference)
+      return {
+        status: "refused",
+        code: "UPDATE_AUTOMATIC_PREFERENCE_UNSUPPORTED",
+      };
+    if (this.automaticPreference.status === "blocked")
+      return { status: "refused", code: this.automaticPreference.code };
+    this.preferenceWriting = true;
+    let finishPreference!: () => void;
+    this.preferenceDrained = new Promise((resolve) => {
+      finishPreference = resolve;
+    });
+    this.automaticPreference = {
+      status: "blocked",
+      enabled: false,
+      code: "UPDATE_AUTOMATIC_PREFERENCE_WRITING",
+    };
+    let result: AutomaticUpdatePreferenceResult;
+    try {
+      result = await this.ports.writeAutomaticUpdatePreference(enabled);
+      if (result.status === "confirmed" && result.enabled !== enabled)
+        result = {
+          status: "unknown",
+          code: "UPDATE_AUTOMATIC_PREFERENCE_ACK_MISMATCH",
+        };
+    } catch {
+      result = {
+        status: "unknown",
+        code: "UPDATE_AUTOMATIC_PREFERENCE_OUTCOME_UNKNOWN",
+      };
+    }
+    this.automaticPreference =
+      result.status === "confirmed"
+        ? result
+        : {
+            status: result.status === "unknown" ? "unknown" : "blocked",
+            enabled: false,
+            code: result.code,
+          };
+    this.preferenceWriting = false;
+    finishPreference();
+    // A destroyed renderer cannot change the already settled durable ACK.
+    if (!this.closed) {
+      try {
+        this.ports.publish(this.snapshot());
+      } catch {
+        /* Status can be read again. */
+      }
+    }
+    return result;
   }
 
   private async publish(view: UpdateView): Promise<void> {
@@ -159,7 +254,7 @@ export class InstalledUpdater {
       }
       this.view = { ...view, notice };
     }
-    if (!this.closed) this.ports.publish(this.view);
+    if (!this.closed) this.ports.publish(this.snapshot());
   }
 
   async acknowledgeNotice(key: string): Promise<void> {
@@ -204,7 +299,7 @@ export class InstalledUpdater {
           ...latest,
           notice: { ...latest.notice, seen, blockedBy: this.noticeBlocked },
         };
-        if (!this.closed) this.ports.publish(this.view);
+        if (!this.closed) this.ports.publish(this.snapshot());
       }
       this.noticeWriting = false;
       finishNotice();
@@ -266,6 +361,18 @@ export class InstalledUpdater {
     if (this.initialized || this.busy || this.closed) return;
     this.begin();
     try {
+      if (this.ports.readAutomaticUpdatePreference) {
+        try {
+          this.automaticPreference =
+            await this.ports.readAutomaticUpdatePreference();
+        } catch {
+          this.automaticPreference = {
+            status: "blocked",
+            enabled: false,
+            code: "UPDATE_AUTOMATIC_PREFERENCE_UNREADABLE",
+          };
+        }
+      }
       const restored = await this.ports.recover();
       if (!restored.ok) {
         await this.publish({
@@ -305,6 +412,8 @@ export class InstalledUpdater {
     } finally {
       this.initialized = true;
       this.finish();
+      if (!this.closed && this.ports.readAutomaticUpdatePreference)
+        this.ports.publish(this.snapshot());
     }
   }
 
@@ -654,7 +763,11 @@ export class InstalledUpdater {
     this.closed = true;
     this.closing = (async () => {
       this.ports.cancelPending();
-      await Promise.all([this.drained, this.noticeDrained]);
+      await Promise.all([
+        this.drained,
+        this.noticeDrained,
+        this.preferenceDrained,
+      ]);
     })();
     return this.closing;
   }
