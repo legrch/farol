@@ -1210,3 +1210,41 @@ kbd {
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+.update-notice {
+  position: absolute;
+  left: 66px;
+  bottom: 16px;
+  z-index: 8;
+  display: flex;
+  gap: 16px;
+  width: min(330px, calc(100% - 96px));
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--sheet);
+  box-shadow: 0 8px 28px rgb(0 0 0 / 12%);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.update-notice p {
+  margin: 8px 0;
+  color: var(--muted);
+}
+.update-notice > button {
+  align-self: flex-start;
+  margin-left: auto;
+}
+
+.rail .update-action {
+  position: relative;
+}
+.update-dot {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+}

@@ -1,3 +1,4 @@
+import type { UpdateNotice } from "../domain/installed-update";
 import type { RetainedReleaseManifest } from "../domain/github-release-contract";
 
 // Keep in sync with the release contract's presentation eligibility. The
@@ -32,6 +33,14 @@ export type UpdateHandoff =
   | Readonly<{ status: "unknown"; code: string }>;
 export type InstalledUpdaterPorts = Readonly<{
   now(): number;
+  // Optional only for transitional callers without a notice projection. The
+  // installed runtime supplies both ports through its existing preferences owner.
+  notice?(
+    view: UpdateView,
+    version: string | null,
+    restored: boolean,
+  ): Promise<UpdateNotice>;
+  noticeSeen?(key: string): Promise<Readonly<{ ok: true }> | KnownFailure>;
   // Stop only this updater lifetime's network requests; filesystem cleanup still drains.
   cancelPending(): void;
   // Recovery must reverify the retained archive/package and reconcile any helper receipt.
@@ -78,6 +87,10 @@ export type InstalledUpdaterPorts = Readonly<{
 /** One installed updater lifetime. It owns update progress, never task truth. */
 export class InstalledUpdater {
   private view: UpdateView = { phase: "idle", checkedAt: null };
+  private noticeVersion: string | null = null;
+  private noticeBlocked: string | null = null;
+  private noticeWriting = false;
+  private noticeDrained: Promise<void> = Promise.resolve();
   private ready: ReadyUpdate | null = null;
   private available: Readonly<{ version: string; buildId: string }> | null =
     null;
@@ -108,9 +121,94 @@ export class InstalledUpdater {
     return this.view;
   }
 
-  private publish(view: UpdateView): void {
+  private async publish(view: UpdateView): Promise<void> {
+    if ("version" in view) this.noticeVersion = view.version;
     this.view = view;
-    if (!this.closed) this.ports.publish(view);
+    if (this.closed) return;
+    if (
+      this.ports.notice &&
+      (view.phase === "available" ||
+        view.phase === "ready" ||
+        view.phase === "failed")
+    ) {
+      let notice: UpdateNotice;
+      if (this.noticeBlocked) {
+        notice = {
+          key: "unconfirmed",
+          seen: false,
+          blockedBy: this.noticeBlocked,
+        };
+      } else {
+        try {
+          notice = await this.ports.notice(
+            view,
+            this.noticeVersion,
+            !this.initialized,
+          );
+          if (notice.blockedBy) this.noticeBlocked = notice.blockedBy;
+        } catch {
+          // A notice preference write may have reached disk. Preserve update
+          // truth and fence the notice command for this lifetime; never retry.
+          this.noticeBlocked = "UPDATE_NOTICE_OUTCOME_UNKNOWN";
+          notice = {
+            key: "unconfirmed",
+            seen: false,
+            blockedBy: this.noticeBlocked,
+          };
+        }
+      }
+      this.view = { ...view, notice };
+    }
+    if (!this.closed) this.ports.publish(this.view);
+  }
+
+  async acknowledgeNotice(key: string): Promise<void> {
+    const current = this.view;
+    if (
+      this.closed ||
+      this.noticeWriting ||
+      this.noticeBlocked ||
+      !this.initialized ||
+      !this.ports.noticeSeen ||
+      !(
+        current.phase === "available" ||
+        current.phase === "ready" ||
+        current.phase === "failed"
+      ) ||
+      !current.notice ||
+      current.notice.key !== key ||
+      current.notice.seen ||
+      current.notice.blockedBy ||
+      (current.phase === "failed" && current.code.includes("UNKNOWN")) ||
+      (current.phase === "ready" && current.blockedBy?.includes("UNKNOWN"))
+    )
+      return;
+    this.noticeWriting = true;
+    let finishNotice!: () => void;
+    this.noticeDrained = new Promise((resolve) => {
+      finishNotice = resolve;
+    });
+    let seen = false;
+    try {
+      const result = await this.ports.noticeSeen(key);
+      if (result.ok) seen = true;
+      else this.noticeBlocked = result.code;
+    } catch {
+      this.noticeBlocked = "UPDATE_NOTICE_OUTCOME_UNKNOWN";
+    } finally {
+      // Update commands have their own lane and may have advanced this view.
+      // Mark only the still-current notice, never restore the captured phase.
+      const latest = this.view;
+      if ("notice" in latest && latest.notice?.key === key) {
+        this.view = {
+          ...latest,
+          notice: { ...latest.notice, seen, blockedBy: this.noticeBlocked },
+        };
+        if (!this.closed) this.ports.publish(this.view);
+      }
+      this.noticeWriting = false;
+      finishNotice();
+    }
   }
 
   private canPrepare(): boolean {
@@ -129,7 +227,7 @@ export class InstalledUpdater {
     prepared: Awaited<ReturnType<InstalledUpdaterPorts["download"]>>,
   ): Promise<void> {
     if (!prepared.ok) {
-      this.publish({
+      await this.publish({
         phase: "failed",
         code: prepared.code,
         recoveryRequired: prepared.recoveryRequired ?? false,
@@ -143,7 +241,7 @@ export class InstalledUpdater {
     // archive must be retained even if its UI lifetime has already closed.
     const retention = await this.ports.retain(prepared.update);
     if (retention) {
-      this.publish({
+      await this.publish({
         phase: "failed",
         code: retention.code,
         recoveryRequired: retention.recoveryRequired ?? false,
@@ -155,7 +253,7 @@ export class InstalledUpdater {
     }
     if (this.closed) return;
     this.ready = prepared.update;
-    this.publish({
+    await this.publish({
       phase: "ready",
       version: prepared.update.manifest.version,
       deferred: false,
@@ -170,20 +268,20 @@ export class InstalledUpdater {
     try {
       const restored = await this.ports.recover();
       if (!restored.ok) {
-        this.publish({
+        await this.publish({
           phase: "failed",
           code: restored.code,
           recoveryRequired: restored.recoveryRequired ?? true,
         });
       } else if (restored.recoveryVersion) {
-        this.publish({
+        await this.publish({
           phase: "recovery",
           version: restored.recoveryVersion,
           blockedBy: null,
         });
       } else if (restored.update) {
         this.ready = restored.update;
-        this.publish({
+        await this.publish({
           phase: "ready",
           version: restored.update.manifest.version,
           deferred: true,
@@ -192,14 +290,14 @@ export class InstalledUpdater {
         });
       } else if (restored.rollbackVersion) {
         this.rollbackVersion = restored.rollbackVersion;
-        this.publish({
+        await this.publish({
           phase: "idle",
           checkedAt: null,
           rollbackVersion: this.rollbackVersion,
         });
       }
     } catch {
-      this.publish({
+      await this.publish({
         phase: "failed",
         code: "UPDATE_RECOVERY_UNAVAILABLE",
         recoveryRequired: true,
@@ -221,7 +319,12 @@ export class InstalledUpdater {
       this.view.blockedBy !== null &&
       recheckableAdmissionBlocks.has(this.view.blockedBy)
     ) {
-      this.publish({ ...this.view, blockedBy: null });
+      this.begin();
+      try {
+        await this.publish({ ...this.view, blockedBy: null });
+      } finally {
+        this.finish();
+      }
       return;
     }
     if (!this.canPrepare()) return;
@@ -234,13 +337,13 @@ export class InstalledUpdater {
       return;
     this.lastCheck = now;
     this.begin();
-    this.publish({ phase: "checking" });
+    await this.publish({ phase: "checking" });
     try {
       const found = await this.ports.discover();
       if (this.closed) return;
       this.available = null;
       if (!found.ok) {
-        this.publish({
+        await this.publish({
           phase: "failed",
           code: found.code,
           recoveryRequired: found.recoveryRequired ?? false,
@@ -253,7 +356,7 @@ export class InstalledUpdater {
         return;
       }
       if (!found.available) {
-        this.publish({
+        await this.publish({
           phase: "idle",
           checkedAt: now,
           ...(this.rollbackVersion
@@ -263,14 +366,14 @@ export class InstalledUpdater {
         return;
       }
       this.available = { version: found.version, buildId: found.buildId };
-      this.publish({
+      await this.publish({
         phase: "available",
         version: found.version,
         deferred: found.deferred,
         ...(found.notes ? { notes: found.notes } : {}),
       });
     } catch {
-      this.publish({
+      await this.publish({
         phase: "failed",
         code: "UPDATE_CHECK_FAILED",
         recoveryRequired: false,
@@ -294,7 +397,7 @@ export class InstalledUpdater {
     const expected = this.available;
     this.available = null;
     this.begin();
-    this.publish({ phase: "downloading" });
+    await this.publish({ phase: "downloading" });
     try {
       const downloaded = await this.ports.download();
       if (
@@ -304,7 +407,7 @@ export class InstalledUpdater {
       ) {
         // A staged archive with a mismatched candidate requires reconciliation.
         // Never offer it as Ready or silently download a replacement.
-        this.publish({
+        await this.publish({
           phase: "failed",
           code: "UPDATE_CANDIDATE_CHANGED",
           recoveryRequired: true,
@@ -313,7 +416,7 @@ export class InstalledUpdater {
       }
       await this.retainPrepared(downloaded);
     } catch {
-      this.publish({
+      await this.publish({
         phase: "failed",
         code: "UPDATE_STAGING_OUTCOME_UNKNOWN",
         recoveryRequired: true,
@@ -338,7 +441,7 @@ export class InstalledUpdater {
     try {
       const result = await this.ports.skip(buildId);
       if (!result.ok) {
-        this.publish({
+        await this.publish({
           phase: "failed",
           code: result.code,
           recoveryRequired: result.recoveryRequired ?? true,
@@ -346,10 +449,10 @@ export class InstalledUpdater {
         return;
       }
       this.available = null;
-      this.publish({ phase: "idle", checkedAt: this.ports.now() });
+      await this.publish({ phase: "idle", checkedAt: this.ports.now() });
     } catch {
       // The preference may have reached disk even if acknowledgment failed.
-      this.publish({
+      await this.publish({
         phase: "failed",
         code: "UPDATE_SKIP_OUTCOME_UNKNOWN",
         recoveryRequired: true,
@@ -362,24 +465,29 @@ export class InstalledUpdater {
   async prepareLocal(): Promise<void> {
     if (!this.canPrepare()) return;
     if (!this.ports.prepareLocal) {
-      this.publish({
-        phase: "failed",
-        code: "UPDATE_LOCAL_IMPORT_UNAVAILABLE",
-        recoveryRequired: false,
-        ...(this.rollbackVersion
-          ? { rollbackVersion: this.rollbackVersion }
-          : {}),
-      });
+      this.begin();
+      try {
+        await this.publish({
+          phase: "failed",
+          code: "UPDATE_LOCAL_IMPORT_UNAVAILABLE",
+          recoveryRequired: false,
+          ...(this.rollbackVersion
+            ? { rollbackVersion: this.rollbackVersion }
+            : {}),
+        });
+      } finally {
+        this.finish();
+      }
       return;
     }
     this.begin();
-    this.publish({ phase: "downloading" });
+    await this.publish({ phase: "downloading" });
     try {
       await this.retainPrepared(await this.ports.prepareLocal());
     } catch {
       // Import or retention may already have published durable bytes. The
       // original owner must reconcile them; another import is not recovery.
-      this.publish({
+      await this.publish({
         phase: "failed",
         code: "UPDATE_LOCAL_IMPORT_UNKNOWN",
         recoveryRequired: true,
@@ -392,11 +500,17 @@ export class InstalledUpdater {
   async later(): Promise<void> {
     if (
       (this.view.phase !== "ready" && this.view.phase !== "available") ||
-      this.closed
+      this.closed ||
+      this.busy
     )
       return;
     if (this.view.phase === "ready") {
-      this.publish({ ...this.view, deferred: true });
+      this.begin();
+      try {
+        await this.publish({ ...this.view, deferred: true });
+      } finally {
+        this.finish();
+      }
       return;
     }
     if (this.busy || !this.available || this.view.deferred) return;
@@ -405,16 +519,16 @@ export class InstalledUpdater {
     try {
       const result = await this.ports.defer(this.available.buildId);
       if (!result.ok) {
-        this.publish({
+        await this.publish({
           phase: "failed",
           code: result.code,
           recoveryRequired: result.recoveryRequired ?? true,
         });
         return;
       }
-      this.publish({ ...current, deferred: true });
+      await this.publish({ ...current, deferred: true });
     } catch {
-      this.publish({
+      await this.publish({
         phase: "failed",
         code: "UPDATE_LATER_OUTCOME_UNKNOWN",
         recoveryRequired: true,
@@ -435,18 +549,18 @@ export class InstalledUpdater {
       return;
     this.begin();
     const version = this.ready.manifest.version;
-    this.publish({ phase: "applying", version });
+    await this.publish({ phase: "applying", version });
     try {
       const outcome = await this.ports.restart(this.ready);
       if (outcome.status === "blocked") {
-        this.publish({
+        await this.publish({
           phase: "ready",
           version,
           deferred: true,
           blockedBy: outcome.code,
         });
       } else if (outcome.status === "unknown") {
-        this.publish({
+        await this.publish({
           phase: "failed",
           code: outcome.code,
           recoveryRequired: true,
@@ -454,7 +568,7 @@ export class InstalledUpdater {
       }
     } catch {
       // The helper may already have accepted its handoff. Never launch another.
-      this.publish({
+      await this.publish({
         phase: "failed",
         code: "UPDATE_HANDOFF_UNKNOWN",
         recoveryRequired: true,
@@ -476,23 +590,23 @@ export class InstalledUpdater {
           : undefined;
     if (this.closed || this.busy || !version) return;
     this.begin();
-    this.publish({ phase: "applying", version });
+    await this.publish({ phase: "applying", version });
     try {
       const outcome = await this.ports.restore(action);
       if (outcome.status === "blocked") {
         if (previous.phase === "recovery" || previous.phase === "idle")
-          this.publish({ ...previous, blockedBy: outcome.code });
+          await this.publish({ ...previous, blockedBy: outcome.code });
         else if (previous.phase === "failed" && !previous.recoveryRequired)
-          this.publish({ ...previous, code: outcome.code });
+          await this.publish({ ...previous, code: outcome.code });
       } else if (outcome.status === "unknown") {
-        this.publish({
+        await this.publish({
           phase: "failed",
           code: outcome.code,
           recoveryRequired: true,
         });
       }
     } catch {
-      this.publish({
+      await this.publish({
         phase: "failed",
         code: "UPDATE_HANDOFF_UNKNOWN",
         recoveryRequired: true,
@@ -507,7 +621,7 @@ export class InstalledUpdater {
     this.closed = true;
     this.closing = (async () => {
       this.ports.cancelPending();
-      await this.drained;
+      await Promise.all([this.drained, this.noticeDrained]);
     })();
     return this.closing;
   }

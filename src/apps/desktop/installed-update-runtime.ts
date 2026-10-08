@@ -61,6 +61,21 @@ const UpdatePreferences = z.strictObject({
     .nullable(),
   deferredVersion: z.string().max(128).nullable().optional(),
 });
+// Keep the strict legacy Skip/Later record readable by prior installed builds.
+// Notice preferences share this release owner, root and guarded record I/O.
+const NoticePreferences = z.strictObject({
+  schema: z.literal("farol.installed-update-notices/1"),
+  seenVersion: z.string().max(128).nullable().optional(),
+  failureNotice: z
+    .strictObject({
+      version: z.string().max(128).nullable(),
+      code: z.string().regex(/^[A-Z][A-Z0-9_]{0,100}$/u),
+      key: z.string().regex(/^failure:[a-f0-9]{24}$/u),
+      seen: z.boolean(),
+    })
+    .nullable()
+    .optional(),
+});
 const AcceptedBuild = z.strictObject({
   digest: Digest,
   version: z.string().max(128),
@@ -1185,6 +1200,40 @@ async function createRuntime(
         }
       : UpdatePreferences.parse(raw);
   };
+  const noticesFile = path.join(root, "notice-preferences.json");
+  const readNoticePreferences = async () => {
+    const raw = await readRecord(noticesFile);
+    return raw === null
+      ? {
+          schema: "farol.installed-update-notices/1" as const,
+          seenVersion: null,
+          failureNotice: null,
+        }
+      : NoticePreferences.parse(raw);
+  };
+  // One notice persistence lane inside the existing release owner. It serializes
+  // this sibling record only; update staging/handoff authority stays independent.
+  let noticeQueue: Promise<void> = Promise.resolve();
+  let noticeWriteUnknown = false;
+  const serializeNotice = <T>(
+    run: () => Promise<T>,
+    blocked: T,
+  ): Promise<T> => {
+    const result = noticeQueue.then(async () => {
+      if (noticeWriteUnknown) return blocked;
+      try {
+        return await run();
+      } catch (error) {
+        noticeWriteUnknown = true;
+        throw error;
+      }
+    });
+    noticeQueue = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
+  };
   let candidate: UpdateCandidate | null = null;
   let verified: VerifiedGithubUpdate | null = null;
   let stagingUncertain = false;
@@ -1669,6 +1718,77 @@ async function createRuntime(
     },
     now: Date.now,
     publish: options.publish,
+    notice: (view, version, restored) =>
+      serializeNotice(
+        async () => {
+          if (view.phase === "failed" && view.code.includes("UNKNOWN"))
+            return { key: "unconfirmed", seen: false, blockedBy: view.code };
+          let preferences: z.infer<typeof NoticePreferences>;
+          try {
+            preferences = await readNoticePreferences();
+          } catch {
+            return {
+              key: "unconfirmed",
+              seen: false,
+              blockedBy: "UPDATE_PREFERENCES_UNREADABLE",
+            };
+          }
+          if (view.phase === "available" || view.phase === "ready")
+            return {
+              key: `version:${view.version}`,
+              seen: preferences.seenVersion === view.version,
+              blockedBy: null,
+            };
+          if (view.phase !== "failed")
+            throw new Error("UPDATE_NOTICE_NOT_AVAILABLE");
+          // A restored failure reuses its mark. Every new failure occurrence gets
+          // a durable identity, including a repeated code for the same version.
+          const previous = preferences.failureNotice;
+          if (
+            restored &&
+            previous?.code === view.code &&
+            previous.version === version
+          )
+            return { key: previous.key, seen: previous.seen, blockedBy: null };
+          const failureNotice = {
+            version,
+            code: view.code,
+            key: `failure:${randomBytes(12).toString("hex")}`,
+            seen: false,
+          };
+          await writeRecord(noticesFile, { ...preferences, failureNotice });
+          return { key: failureNotice.key, seen: false, blockedBy: null };
+        },
+        {
+          key: "unconfirmed",
+          seen: false,
+          blockedBy: "UPDATE_NOTICE_OUTCOME_UNKNOWN",
+        },
+      ),
+    noticeSeen: (key) =>
+      serializeNotice(async () => {
+        let preferences: z.infer<typeof NoticePreferences>;
+        try {
+          preferences = await readNoticePreferences();
+        } catch {
+          return known("UPDATE_PREFERENCES_UNREADABLE");
+        }
+        if (key.startsWith("version:")) {
+          const version = key.slice("version:".length);
+          if (version.length === 0 || version.length > 128)
+            return known("UPDATE_NOTICE_CHANGED");
+          await writeRecord(noticesFile, {
+            ...preferences,
+            seenVersion: version,
+          });
+        } else if (preferences.failureNotice?.key === key) {
+          await writeRecord(noticesFile, {
+            ...preferences,
+            failureNotice: { ...preferences.failureNotice, seen: true },
+          });
+        } else return known("UPDATE_NOTICE_CHANGED");
+        return { ok: true as const };
+      }, known("UPDATE_NOTICE_OUTCOME_UNKNOWN")),
     recover: async () => {
       if ((await readRecord(cleanupFile)) !== null)
         return known("UPDATE_STAGING_OUTCOME_UNKNOWN");

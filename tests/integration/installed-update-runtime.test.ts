@@ -587,6 +587,295 @@ describe("installed updater composition (disposable filesystem and mocked native
     await second!.close();
   });
 
+  function noticeKey(
+    controller: NonNullable<
+      Awaited<ReturnType<typeof createInstalledUpdateRuntime>>
+    >,
+  ) {
+    const view = controller.snapshot();
+    if (!("notice" in view) || !view.notice) throw new Error("NOTICE_MISSING");
+    return view.notice.key;
+  }
+
+  it("persists a version notice through relaunch and Ready without Skip or Later, and surfaces a newer version", async () => {
+    const first = await createInstalledUpdateRuntime(options());
+    await first!.initialize();
+    await first!.check(true);
+    const key = noticeKey(first!);
+    await first!.acknowledgeNotice("version:stale");
+    await first!.acknowledgeNotice(key);
+    expect(first!.snapshot()).toMatchObject({
+      phase: "available",
+      deferred: false,
+      notice: { seen: true },
+    });
+    const preference = path.join(
+      userData,
+      "installed-updates/notice-preferences.json",
+    );
+    expect(JSON.parse(await fs.readFile(preference, "utf8"))).toEqual({
+      schema: "farol.installed-update-notices/1",
+      failureNotice: null,
+      seenVersion: manifest.version,
+    });
+    await expect(
+      fs.lstat(path.join(userData, "installed-updates/preferences.json")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+    expect(mocks.download).not.toHaveBeenCalled();
+    expect(mocks.helper).not.toHaveBeenCalled();
+    expect(quit).not.toHaveBeenCalled();
+    await first!.close();
+    const second = await createInstalledUpdateRuntime(options());
+    await second!.initialize();
+    await second!.check(true);
+    expect(second!.snapshot()).toMatchObject({
+      phase: "available",
+      deferred: false,
+      notice: { key, seen: true },
+    });
+    await second!.download();
+    expect(second!.snapshot()).toMatchObject({
+      phase: "ready",
+      deferred: false,
+      notice: { key, seen: true },
+    });
+    await second!.close();
+    const third = await createInstalledUpdateRuntime(options());
+    await third!.initialize();
+    expect(third!.snapshot()).toMatchObject({
+      phase: "ready",
+      notice: { key, seen: true },
+    });
+    await third!.close();
+    // Dispose only the fixture's retained records to model a different offered release.
+    await fs.rm(ready);
+    mocks.discover.mockResolvedValue({
+      ok: true,
+      value: {
+        manifest: {
+          ...manifest,
+          version: "0.1.2-owner.beta.1",
+          buildId: "8".repeat(64),
+        },
+      },
+    });
+    const fourth = await createInstalledUpdateRuntime(options());
+    await fourth!.initialize();
+    await fourth!.check(true);
+    expect(fourth!.snapshot()).toMatchObject({
+      phase: "available",
+      notice: { seen: false },
+    });
+    expect(noticeKey(fourth!)).not.toBe(key);
+    await fourth!.close();
+  });
+
+  it("persists dismissal of a Ready notice without deferring or invoking the helper", async () => {
+    const controller = await prepared();
+    await controller.acknowledgeNotice(noticeKey(controller));
+    expect(controller.snapshot()).toMatchObject({
+      phase: "ready",
+      deferred: false,
+      blockedBy: null,
+      notice: { seen: true },
+    });
+    expect(mocks.helper).not.toHaveBeenCalled();
+    expect(quit).not.toHaveBeenCalled();
+    await controller.close();
+    const next = await createInstalledUpdateRuntime(options());
+    await next!.initialize();
+    expect(next!.snapshot()).toMatchObject({
+      phase: "ready",
+      notice: { seen: true },
+    });
+    await next!.close();
+  });
+
+  it("surfaces a new failure including a repeated code for the same version independently of the version mark", async () => {
+    const controller = await createInstalledUpdateRuntime(options());
+    await controller!.initialize();
+    await controller!.check(true);
+    await controller!.acknowledgeNotice(noticeKey(controller!));
+    mocks.download.mockResolvedValue({ ok: false, code: "network" });
+    await controller!.download();
+    expect(controller!.snapshot()).toMatchObject({
+      phase: "failed",
+      notice: { seen: false },
+    });
+    const firstFailure = noticeKey(controller!);
+    await controller!.acknowledgeNotice(firstFailure);
+    const acknowledged = controller!.snapshot();
+    expect(acknowledged).toMatchObject({
+      phase: "failed",
+      recoveryRequired: false,
+      notice: { seen: true },
+    });
+    await controller!.check(true);
+    await controller!.download();
+    const secondFailure = noticeKey(controller!);
+    expect(secondFailure).not.toBe(firstFailure);
+    expect(controller!.snapshot()).toMatchObject({
+      phase: "failed",
+      notice: { seen: false },
+    });
+    await controller!.acknowledgeNotice(firstFailure);
+    expect(controller!.snapshot()).toMatchObject({ notice: { seen: false } });
+    await controller!.acknowledgeNotice(secondFailure);
+    const preference = JSON.parse(
+      await fs.readFile(
+        path.join(userData, "installed-updates/notice-preferences.json"),
+        "utf8",
+      ),
+    );
+    expect(preference).toMatchObject({
+      seenVersion: manifest.version,
+      failureNotice: {
+        version: manifest.version,
+        key: secondFailure,
+        seen: true,
+      },
+    });
+    expect(mocks.helper).not.toHaveBeenCalled();
+    await controller!.close();
+  });
+
+  it("keeps a lost notice acknowledgment fenced while a fresh lifetime reads the persisted mark", async () => {
+    const controller = await createInstalledUpdateRuntime(options());
+    await controller!.initialize();
+    await controller!.check(true);
+    const key = noticeKey(controller!);
+    const preference = path.join(
+      userData,
+      "installed-updates/notice-preferences.json",
+    );
+    const rename = fs.rename.bind(fs);
+    vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+      await rename(from, to);
+      if (to === preference)
+        throw new Error("fixture lost notice acknowledgement");
+    });
+    await controller!.acknowledgeNotice(key);
+    await controller!.acknowledgeNotice(key);
+    await controller!.download();
+    expect(controller!.snapshot()).toMatchObject({
+      phase: "ready",
+      deferred: false,
+      notice: { seen: false, blockedBy: "UPDATE_NOTICE_OUTCOME_UNKNOWN" },
+    });
+    expect(mocks.download).toHaveBeenCalledTimes(1);
+    vi.mocked(fs.rename).mockRestore();
+    await controller!.close();
+    const next = await createInstalledUpdateRuntime(options());
+    await next!.initialize();
+    await next!.check(true);
+    expect(next!.snapshot()).toMatchObject({
+      phase: "ready",
+      notice: { key, seen: true },
+    });
+    await next!.close();
+  });
+
+  it("retains acknowledgement of the same known startup failure across lifetimes without recovering it", async () => {
+    await fs.mkdir(path.dirname(ready), { mode: 0o700 });
+    await fs.writeFile(ready, JSON.stringify({ invalid: true }), {
+      mode: 0o600,
+    });
+    const first = await createInstalledUpdateRuntime(options());
+    await first!.initialize();
+    expect(first!.snapshot()).toMatchObject({
+      phase: "failed",
+      code: "UPDATE_RECOVERY_UNAVAILABLE",
+      recoveryRequired: true,
+      notice: { seen: false },
+    });
+    const key = noticeKey(first!);
+    await first!.acknowledgeNotice(key);
+    expect(first!.snapshot()).toMatchObject({
+      phase: "failed",
+      recoveryRequired: true,
+      notice: { seen: true },
+    });
+    await first!.close();
+    const second = await createInstalledUpdateRuntime(options());
+    await second!.initialize();
+    expect(second!.snapshot()).toMatchObject({
+      phase: "failed",
+      code: "UPDATE_RECOVERY_UNAVAILABLE",
+      recoveryRequired: true,
+      notice: { key, seen: true },
+    });
+    expect(mocks.discover).not.toHaveBeenCalled();
+    expect(mocks.download).not.toHaveBeenCalled();
+    expect(mocks.helper).not.toHaveBeenCalled();
+    expect(JSON.parse(await fs.readFile(ready, "utf8"))).toEqual({
+      invalid: true,
+    });
+    await second!.close();
+  });
+
+  it("fences malformed notice preferences without blocking download or rewriting preferences", async () => {
+    const controller = await createInstalledUpdateRuntime(options());
+    const noticeFile = path.join(
+      userData,
+      "installed-updates/notice-preferences.json",
+    );
+    const invalid = JSON.stringify({
+      schema: "farol.installed-update-notices/1",
+      seenVersion: true,
+    });
+    await fs.writeFile(noticeFile, invalid, { mode: 0o600 });
+    await controller!.initialize();
+    await controller!.check(true);
+    expect(controller!.snapshot()).toMatchObject({
+      phase: "available",
+      deferred: false,
+      notice: { seen: false, blockedBy: "UPDATE_PREFERENCES_UNREADABLE" },
+    });
+    await controller!.acknowledgeNotice(noticeKey(controller!));
+    await controller!.download();
+    await controller!.skip();
+    expect(mocks.download).toHaveBeenCalledTimes(1);
+    expect(await fs.readFile(noticeFile, "utf8")).toBe(invalid);
+    await expect(
+      fs.lstat(path.join(userData, "installed-updates/preferences.json")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+    await controller!.close();
+  });
+
+  it("preserves existing Later/Skip preferences and notice marks without changing the legacy preference schema", async () => {
+    const controller = await createInstalledUpdateRuntime(options());
+    await controller!.initialize();
+    await controller!.check(true);
+    await controller!.later();
+    await controller!.acknowledgeNotice(noticeKey(controller!));
+    await controller!.skip();
+    expect(
+      JSON.parse(
+        await fs.readFile(
+          path.join(userData, "installed-updates/preferences.json"),
+          "utf8",
+        ),
+      ),
+    ).toEqual({
+      schema: "farol.installed-update-preferences/1",
+      skipped: { version: manifest.version, buildId: manifest.buildId },
+      deferredVersion: null,
+    });
+    expect(
+      JSON.parse(
+        await fs.readFile(
+          path.join(userData, "installed-updates/notice-preferences.json"),
+          "utf8",
+        ),
+      ),
+    ).toEqual({
+      schema: "farol.installed-update-notices/1",
+      seenVersion: manifest.version,
+      failureNotice: null,
+    });
+    await controller!.close();
+  });
+
   it("persists Later for the available version without suppressing it or a newer release", async () => {
     const first = await createInstalledUpdateRuntime(options());
     await first!.initialize();
@@ -3772,7 +4061,7 @@ describe("selected local update composition (disposable state, native ports doub
     const controller = await createInstalledUpdateRuntime(localOptions());
     await controller!.initialize();
     await controller!.prepareLocal();
-    expect(controller!.snapshot()).toEqual({
+    expect(controller!.snapshot()).toMatchObject({
       phase: "failed",
       code: "UPDATE_STAGING_OUTCOME_UNKNOWN",
       recoveryRequired: true,
@@ -3804,7 +4093,7 @@ describe("selected local update composition (disposable state, native ports doub
     const controller = await createInstalledUpdateRuntime(localOptions());
     await controller!.initialize();
     await controller!.prepareLocal();
-    expect(controller!.snapshot()).toEqual({
+    expect(controller!.snapshot()).toMatchObject({
       phase: "failed",
       code: "UPDATE_CHECKSUM_MISMATCH",
       recoveryRequired: false,

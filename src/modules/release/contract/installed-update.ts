@@ -1,6 +1,11 @@
 import { z } from "zod";
 
 const Code = z.string().regex(/^[A-Z][A-Z0-9_]{0,100}$/u);
+export const UpdateNoticeSchema = z.strictObject({
+  key: z.string().min(1).max(256),
+  seen: z.boolean(),
+  blockedBy: Code.nullable(),
+});
 export const InstalledUpdateViewSchema = z.discriminatedUnion("phase", [
   z.strictObject({ phase: z.literal("unavailable"), code: Code }),
   z.strictObject({
@@ -21,6 +26,7 @@ export const InstalledUpdateViewSchema = z.discriminatedUnion("phase", [
     version: z.string().max(128),
     deferred: z.boolean(),
     notes: z.string().max(4096).optional(),
+    notice: UpdateNoticeSchema.optional(),
   }),
   z.strictObject({
     phase: z.literal("ready"),
@@ -28,6 +34,7 @@ export const InstalledUpdateViewSchema = z.discriminatedUnion("phase", [
     deferred: z.boolean(),
     blockedBy: Code.nullable(),
     notes: z.string().max(4096).optional(),
+    notice: UpdateNoticeSchema.optional(),
   }),
   z.strictObject({
     phase: z.literal("applying"),
@@ -38,6 +45,7 @@ export const InstalledUpdateViewSchema = z.discriminatedUnion("phase", [
       phase: z.literal("failed"),
       code: Code,
       recoveryRequired: z.boolean(),
+      notice: UpdateNoticeSchema.optional(),
       rollbackVersion: z.string().max(128).optional(),
     })
     .refine(
@@ -62,15 +70,24 @@ export function canRecheckUpdateAdmission(code: string): boolean {
   return recheckableAdmissionBlocks.has(code);
 }
 
-export const InstalledUpdateCommandSchema = z.strictObject({
-  kind: z.enum([
-    "status",
-    "check",
-    "download",
-    "skip",
-    "later",
-    "restart",
-    "recover",
-    "rollback",
-  ]),
-});
+export const InstalledUpdateCommandSchema = z.discriminatedUnion("kind", [
+  z.strictObject({
+    kind: z.enum([
+      "status",
+      "check",
+      "download",
+      "skip",
+      "later",
+      "restart",
+      "recover",
+      "rollback",
+    ]),
+  }),
+  z.strictObject({
+    kind: z.literal("notice-seen"),
+    noticeKey: z.string().min(1).max(256),
+  }),
+]);
+export type InstalledUpdateCommand = z.infer<
+  typeof InstalledUpdateCommandSchema
+>;

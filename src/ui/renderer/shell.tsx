@@ -17,6 +17,7 @@ import { Home, HomeNavigation, homeTitle } from "./home";
 import { Setup, SetupNavigation } from "./setup";
 import { setupSteps } from "./setup-navigation";
 import { designIconPath, designIconViewBox } from "./design-icons";
+import { UpdateNotice, acknowledgeUpdateNotice } from "./update-notice";
 import { updateCheckAllowed } from "./update-eligibility";
 import { updateBlockMessage } from "../update-block-message";
 const pages: readonly [SettingsPage, string][] = [
@@ -470,6 +471,10 @@ function Update({
 }) {
   const update = snapshot.update;
   const intent = snapshot.intents.update;
+  const noticeKey = "notice" in update ? update.notice?.key : undefined;
+  useEffect(() => {
+    if (noticeKey) acknowledgeUpdateNotice(facade);
+  }, [facade, noticeKey]);
   const disabled =
     snapshot.status !== "current" ||
     intent?.state === "pending" ||
@@ -674,6 +679,13 @@ function Update({
         Automatic installation and interruption are unavailable. Review current
         work before restarting or restoring the previous version.
       </p>
+      {(("notice" in update && update.notice?.blockedBy) ||
+        snapshot.intents["update-notice"]?.state === "unknown") && (
+        <p role="alert">
+          Saved update notices could not be confirmed. Update actions are
+          paused; do not retry the notice acknowledgement.
+        </p>
+      )}
       {intent?.state === "unknown" && (
         <p role="alert">
           Outcome unknown. Inspect the retained operation; do not submit another
@@ -1039,6 +1051,11 @@ export function Shell() {
                   : "download"
               }
             />
+            {"notice" in state.update &&
+              state.update.notice &&
+              !state.update.notice.seen && (
+                <span className="update-dot" aria-hidden="true" />
+              )}
           </button>
         )}
         <button
@@ -1187,6 +1204,7 @@ export function Shell() {
           )}
         </PanelBoundary>
       </main>
+      <UpdateNotice snapshot={state} facade={facade} />
       {state.overlay === "search" && (
         <Search snapshot={state} facade={facade} />
       )}{" "}

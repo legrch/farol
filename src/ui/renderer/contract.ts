@@ -10,7 +10,10 @@ import type {
   ProductTaskCommand,
   ProductTasksState,
 } from "../../modules/chat/contract/product-task";
-import type { InstalledUpdateView } from "../../modules/release/contract/installed-update";
+import type {
+  InstalledUpdateCommand,
+  InstalledUpdateView,
+} from "../../modules/release/contract/installed-update";
 import type { WindowState } from "../../pkg/ipc/shell-state";
 import type {
   ChatHistoryContext,
@@ -25,7 +28,7 @@ export type PreloadApi = Readonly<{
   configure(command: ProductConfigurationCommand): Promise<unknown>;
   chatHistory?(request: unknown): Promise<unknown>;
   task(command: ProductTaskCommand): Promise<unknown>;
-  installedUpdate(command: { kind: UpdateAction | "status" }): Promise<unknown>;
+  installedUpdate(command: InstalledUpdateCommand): Promise<unknown>;
   setNavigationShortcuts(shortcuts: unknown): Promise<unknown>;
   layout(
     section: string,
@@ -75,7 +78,14 @@ export type HomeView =
 export type SetupStep =
   "overview" | "folders" | "connection" | "attachment" | "finish";
 export type UpdateAction =
-  "check" | "download" | "skip" | "later" | "restart" | "recover" | "rollback";
+  | "check"
+  | "download"
+  | "skip"
+  | "later"
+  | "restart"
+  | "recover"
+  | "rollback"
+  | "notice-seen";
 export type Intent = Readonly<{
   id: string;
   state: "pending" | "applied" | "refused" | "unknown";
@@ -172,7 +182,7 @@ export interface RendererFacade {
     intention: string,
   ): Promise<Intent>;
   task(command: ProductTaskCommand, intention: string): Promise<Intent>;
-  update(action: UpdateAction): Promise<Intent>;
+  update(action: UpdateAction, noticeKey?: string): Promise<Intent>;
   observeWorkspaceEdit(operationId: string): Promise<Intent>;
   acknowledgeWorkspaceEdit(operationId: string): Promise<Intent>;
   shortcuts(value: NavigationShortcuts): Promise<Intent>;

@@ -907,3 +907,154 @@ describe("explicit local preparation (ports only, no archive or installed accept
     await updater.close();
   });
 });
+
+// Notice-only ports. These tests exercise owner fencing without native effects.
+describe("release-owned notice acknowledgement", () => {
+  function noticeFixture() {
+    const f = fixture();
+    const notice = vi
+      .fn<NonNullable<InstalledUpdaterPorts["notice"]>>()
+      .mockImplementation(async (view) => ({
+        key:
+          view.phase === "failed"
+            ? "failure:fixture"
+            : `version:${staged.manifest.version}`,
+        seen: false,
+        blockedBy: null,
+      }));
+    const noticeSeen = vi
+      .fn<NonNullable<InstalledUpdaterPorts["noticeSeen"]>>()
+      .mockResolvedValue({ ok: true });
+    return {
+      ...f,
+      notice,
+      noticeSeen,
+      updater: new InstalledUpdater({ ...f.ports, notice, noticeSeen }),
+    };
+  }
+  it("acknowledges only the exact available notice without Skip/Later/staging", async () => {
+    const f = noticeFixture();
+    await f.updater.initialize();
+    await f.updater.check(true);
+    await f.updater.acknowledgeNotice("version:stale");
+    expect(f.noticeSeen).not.toHaveBeenCalled();
+    const before = f.updater.snapshot();
+    expect(before.phase).toBe("available");
+    await f.updater.acknowledgeNotice(`version:${staged.manifest.version}`);
+    expect(f.updater.snapshot()).toEqual({
+      ...before,
+      notice: {
+        key: `version:${staged.manifest.version}`,
+        seen: true,
+        blockedBy: null,
+      },
+    });
+    await f.updater.acknowledgeNotice(`version:${staged.manifest.version}`);
+    expect(f.noticeSeen).toHaveBeenCalledTimes(1);
+    expect(f.ports.skip).not.toHaveBeenCalled();
+    expect(f.ports.defer).not.toHaveBeenCalled();
+    expect(f.ports.download).not.toHaveBeenCalled();
+    expect(f.ports.restart).not.toHaveBeenCalled();
+  });
+  it("keeps a known failure and recovery requirement intact after notice acknowledgement", async () => {
+    const f = noticeFixture();
+    f.ports.recover.mockResolvedValue({
+      ok: false,
+      code: "UPDATE_RECEIPT_INVALID",
+      recoveryRequired: true,
+    });
+    await f.updater.initialize();
+    await f.updater.acknowledgeNotice("failure:fixture");
+    expect(f.updater.snapshot()).toMatchObject({
+      phase: "failed",
+      code: "UPDATE_RECEIPT_INVALID",
+      recoveryRequired: true,
+      notice: { seen: true },
+    });
+    await f.updater.check(true);
+    expect(f.ports.discover).not.toHaveBeenCalled();
+    expect(f.ports.restore).not.toHaveBeenCalled();
+  });
+  it("does not acknowledge an unknown update or admission outcome", async () => {
+    const f = noticeFixture();
+    f.ports.recover.mockResolvedValue({
+      ok: false,
+      code: "UPDATE_STAGING_OUTCOME_UNKNOWN",
+      recoveryRequired: true,
+    });
+    await f.updater.initialize();
+    await f.updater.acknowledgeNotice("failure:fixture");
+    expect(f.noticeSeen).not.toHaveBeenCalled();
+    expect(f.updater.snapshot()).toMatchObject({
+      code: "UPDATE_STAGING_OUTCOME_UNKNOWN",
+      notice: { seen: false },
+    });
+    const ready = noticeFixture();
+    await ready.updater.initialize();
+    await ready.updater.check(true);
+    await ready.updater.download();
+    ready.ports.restart.mockResolvedValue({
+      status: "blocked",
+      code: "UPDATE_BROWSER_STATE_UNKNOWN",
+    });
+    await ready.updater.restart();
+    await ready.updater.acknowledgeNotice(`version:${staged.manifest.version}`);
+    expect(ready.noticeSeen).not.toHaveBeenCalled();
+    expect(ready.updater.snapshot()).toMatchObject({
+      phase: "ready",
+      blockedBy: "UPDATE_BROWSER_STATE_UNKNOWN",
+    });
+  });
+  it("fences a lost notice write acknowledgement without retrying the notice or blocking update authority", async () => {
+    const f = noticeFixture();
+    f.noticeSeen.mockRejectedValue(new Error("write reply lost"));
+    await f.updater.initialize();
+    await f.updater.check(true);
+    await f.updater.acknowledgeNotice(`version:${staged.manifest.version}`);
+    await f.updater.acknowledgeNotice(`version:${staged.manifest.version}`);
+    await f.updater.download();
+    await f.updater.skip();
+    await f.updater.later();
+    await f.updater.check(true);
+    expect(f.noticeSeen).toHaveBeenCalledTimes(1);
+    expect(f.ports.discover).toHaveBeenCalledTimes(1);
+    expect(f.ports.download).toHaveBeenCalledTimes(1);
+    expect(f.ports.skip).not.toHaveBeenCalled();
+    expect(f.ports.defer).not.toHaveBeenCalled();
+    expect(f.updater.snapshot()).toMatchObject({
+      phase: "ready",
+      deferred: true,
+      notice: { seen: false, blockedBy: "UPDATE_NOTICE_OUTCOME_UNKNOWN" },
+    });
+  });
+  it("allows Later independently and drains a pending notice write on close", async () => {
+    const f = noticeFixture();
+    let resolve!: (result: { ok: true }) => void;
+    f.noticeSeen.mockReturnValue(
+      new Promise((done) => {
+        resolve = done;
+      }),
+    );
+    await f.updater.initialize();
+    await f.updater.check(true);
+    await f.updater.download();
+    const marking = f.updater.acknowledgeNotice(
+      `version:${staged.manifest.version}`,
+    );
+    await f.updater.later();
+    expect(f.updater.snapshot()).toMatchObject({
+      phase: "ready",
+      deferred: true,
+    });
+    let closed = false;
+    const closing = f.updater.close().then(() => {
+      closed = true;
+    });
+    await Promise.resolve();
+    expect(closed).toBe(false);
+    resolve({ ok: true });
+    await marking;
+    await closing;
+    expect(closed).toBe(true);
+  });
+});

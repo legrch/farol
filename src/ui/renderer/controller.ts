@@ -1159,7 +1159,63 @@ export class WindowController implements RendererFacade {
       return { id: intention, state: "applied", code: null };
     });
   }
-  update(action: UpdateAction): Promise<Intent> {
+  update(action: UpdateAction, noticeKey?: string): Promise<Intent> {
+    if (action === "notice-seen") {
+      const current = this.state.update;
+      const notice = "notice" in current ? current.notice : undefined;
+      if (
+        !notice ||
+        notice.key !== noticeKey ||
+        notice.seen ||
+        notice.blockedBy ||
+        this.state.intents.update?.state === "pending" ||
+        this.state.intents.update?.state === "unknown" ||
+        (current.phase === "failed" && current.code.includes("UNKNOWN")) ||
+        (current.phase === "ready" && current.blockedBy?.includes("UNKNOWN"))
+      )
+        return Promise.resolve({
+          id: "update-notice",
+          state: "refused",
+          code: "UPDATE_NOTICE_NOT_AVAILABLE",
+        });
+      return this.dispatch("update-notice", { action, noticeKey }, async () => {
+        const revision = this.updateRevision;
+        const value = InstalledUpdateViewSchema.safeParse(
+          await this.api.installedUpdate({
+            kind: "notice-seen",
+            noticeKey: notice.key,
+          }),
+        );
+        if (
+          !value.success ||
+          !("notice" in value.data) ||
+          !value.data.notice ||
+          value.data.notice.key !== notice.key ||
+          JSON.stringify({ ...value.data, notice: undefined }) !==
+            JSON.stringify({ ...current, notice: undefined })
+        )
+          return {
+            id: "update-notice",
+            state: "unknown",
+            code: "UPDATE_NOTICE_OUTCOME_UNKNOWN",
+          };
+        // The reply acknowledges its bound notice, not a newer event. The
+        // command's own published event may already have supplied this state.
+        if (this.updateRevision === revision) this.adoptUpdate(value.data);
+        const blocked = value.data.notice.blockedBy;
+        return {
+          id: "update-notice",
+          state: blocked?.includes("UNKNOWN")
+            ? "unknown"
+            : blocked || !value.data.notice.seen
+              ? "refused"
+              : "applied",
+          code:
+            blocked ??
+            (value.data.notice.seen ? null : "UPDATE_NOTICE_NOT_ACKNOWLEDGED"),
+        };
+      });
+    }
     if (
       (action === "download" || action === "skip") &&
       this.state.update.phase !== "available"
