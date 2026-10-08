@@ -340,6 +340,8 @@ export function Overlay({
   dismissible = true,
   initialFocus,
   className,
+  headingIcon,
+  headingDescription,
 }: {
   title: string;
   children: ReactNode;
@@ -347,6 +349,8 @@ export function Overlay({
   dismissible?: boolean;
   initialFocus?: RefObject<HTMLElement | null>;
   className?: string;
+  headingIcon?: string;
+  headingDescription?: ReactNode;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
   const close = useRef(onClose);
@@ -382,7 +386,19 @@ export function Overlay({
     >
       <div className="sheet-content">
         <div className="section-heading">
-          <h2>{title}</h2>
+          {headingIcon ? (
+            <div className="update-heading">
+              <span className="update-symbol">
+                <Icon name={headingIcon} />
+              </span>
+              <div>
+                <h2>{title}</h2>
+                {headingDescription}
+              </div>
+            </div>
+          ) : (
+            <h2>{title}</h2>
+          )}
           {dismissible && (
             <button aria-label="Close" onClick={onClose}>
               <Icon name="close" />
@@ -487,6 +503,7 @@ function Update({
   const preference = update.automaticUpdatePreference;
   const preferenceIntent = snapshot.intents["update-automatic-downloads"];
   const safeAction = useRef<HTMLButtonElement>(null);
+  const progressStatus = useRef<HTMLParagraphElement>(null);
   const noticeKey = "notice" in update ? update.notice?.key : undefined;
   useEffect(() => {
     if (noticeKey) acknowledgeUpdateNotice(facade);
@@ -504,45 +521,74 @@ function Update({
       ? update.rollbackVersion
       : undefined;
   const canCheck = updateCheckAllowed(update);
+  const release = update.phase === "available" || update.phase === "ready";
+  const blockedBy = "blockedBy" in update ? update.blockedBy : undefined;
+  const localDismiss = !release || disabled || update.deferred;
+  const stateCopy =
+    update.phase === "ready"
+      ? `Farol ${update.version} is downloaded and ready; it is not installed yet.`
+      : update.phase === "available"
+        ? `Farol ${update.version} is available; it is not downloaded or installed yet.`
+        : update.phase === "failed"
+          ? `Update failed: ${update.code}`
+          : update.phase === "unavailable"
+            ? `Update unavailable: ${update.code}`
+            : update.phase === "recovery"
+              ? `Recovery required for ${update.version}`
+              : update.phase === "applying"
+                ? `Applying version ${update.version}…`
+                : update.phase === "checking"
+                  ? "Checking for updates…"
+                  : update.phase === "downloading"
+                    ? "Downloading update in the background. Keep working."
+                    : update.checkedAt === null
+                      ? "No update check yet."
+                      : "You can check for updates.";
+  useEffect(() => {
+    const active = document.activeElement;
+    const target = safeAction.current;
+    if (
+      localDismiss &&
+      target &&
+      (active === document.body ||
+        (active instanceof HTMLButtonElement &&
+          active.disabled &&
+          target.closest("dialog")?.contains(active)))
+    )
+      target.focus();
+  }, [localDismiss, update.phase]);
   return (
     <Overlay
       title={updateSheetTitles[update.phase]}
       onClose={() => facade.overlay("none")}
       dismissible={update.phase !== "applying"}
       className="update-sheet"
-      initialFocus={safeAction}
+      initialFocus={update.phase === "applying" ? progressStatus : safeAction}
+      headingIcon={
+        update.phase === "failed" ||
+        update.phase === "recovery" ||
+        update.phase === "unavailable"
+          ? "warning"
+          : "download"
+      }
+      headingDescription={
+        <>
+          <p
+            className="update-state"
+            role="status"
+            ref={progressStatus}
+            tabIndex={-1}
+          >
+            {stateCopy}
+          </p>
+          <p className="update-installed">
+            {snapshot.status === "current" && snapshot.installedVersion
+              ? `Installed: Farol ${snapshot.installedVersion.version}${snapshot.installedVersion.buildVersion ? ` (build ${snapshot.installedVersion.buildVersion})` : ""}.`
+              : "Installed version cannot be confirmed in this session."}
+          </p>
+        </>
+      }
     >
-      <p className="description">
-        Review the current release state before any action.
-      </p>
-      {snapshot.status === "current" && snapshot.installedVersion && (
-        <p className="description">
-          Installed: Farol {snapshot.installedVersion.version}
-          {snapshot.installedVersion.buildVersion
-            ? ` (build ${snapshot.installedVersion.buildVersion})`
-            : ""}
-          .
-        </p>
-      )}
-      <p className="update-state">
-        {update.phase === "ready"
-          ? `Farol ${update.version} is downloaded and ready; it is not installed yet.`
-          : update.phase === "available"
-            ? `Farol ${update.version} is available; it is not downloaded or installed yet.`
-            : update.phase === "failed"
-              ? `Update failed: ${update.code}`
-              : update.phase === "unavailable"
-                ? `Update unavailable: ${update.code}`
-                : update.phase === "recovery"
-                  ? `Recovery required for ${update.version}`
-                  : update.phase === "applying"
-                    ? `Applying version ${update.version}…`
-                    : update.phase === "checking"
-                      ? "Checking for updates…"
-                      : update.phase === "downloading"
-                        ? "Downloading update…"
-                        : "You can check for updates."}
-      </p>
       {(update.phase === "available" || update.phase === "ready") &&
         update.notes && (
           <details className="update-release">
@@ -552,13 +598,16 @@ function Update({
         )}
       {(update.phase === "available" || update.phase === "ready") && (
         <div className="update-preference">
-          <p className="description" role="status">
-            {preference?.status === "confirmed"
-              ? preference.enabled
-                ? "Future eligible updates download during scheduled checks. Installation still requires Restart & Update."
-                : "Future updates download only when you choose."
-              : "Automatic download preference cannot be confirmed in this session."}
-          </p>
+          <div className="copy">
+            <strong>Automatic downloads</strong>
+            <p className="description" role="status">
+              {preference?.status === "confirmed"
+                ? preference.enabled
+                  ? "Future eligible updates download during scheduled checks. Installation still requires Restart & Update."
+                  : "Future updates download only when you choose."
+                : "Automatic download preference cannot be confirmed in this session."}
+            </p>
+          </div>
           <button
             type="button"
             disabled={
@@ -618,16 +667,23 @@ function Update({
           and restart into the new version after a successful update.
         </p>
       ) : null}
-      {update.phase === "ready" && update.blockedBy && (
-        <p role="alert">{updateBlockMessage(update.blockedBy)}</p>
+      {blockedBy && (
+        <div className="update-block" role="alert">
+          <strong>
+            {recovery
+              ? "Recovery is blocked"
+              : rollbackVersion
+                ? "Roll back is blocked"
+                : "Restart is blocked"}
+          </strong>
+          <p>{updateBlockMessage(blockedBy)}</p>
+          <details>
+            <summary>Technical code</summary>
+            <code>{blockedBy}</code>
+          </details>
+        </div>
       )}
-      {update.phase === "ready" && update.blockedBy && (
-        <details>
-          <summary>Technical code</summary>
-          <code>{update.blockedBy}</code>
-        </details>
-      )}
-      <div className="control-row">
+      <div className="update-check">
         <button
           disabled={disabled || !canCheck}
           onClick={() => {
@@ -644,6 +700,21 @@ function Update({
         >
           Check for Updates
         </button>
+      </div>
+      <div
+        className={`update-actions${update.phase === "available" ? "" : " two"}`}
+      >
+        {localDismiss && update.phase !== "applying" && (
+          <button ref={safeAction} onClick={() => facade.overlay("none")}>
+            {update.phase === "idle"
+              ? "Done"
+              : recovery || rollbackVersion
+                ? "Cancel"
+                : update.phase === "failed" || update.phase === "unavailable"
+                  ? "Dismiss"
+                  : "Continue working"}
+          </button>
+        )}
         {update.phase === "available" && (
           <>
             <button
@@ -662,7 +733,7 @@ function Update({
               Skip This Version
             </button>
             <button
-              ref={!update.deferred ? safeAction : undefined}
+              ref={!localDismiss ? safeAction : undefined}
               disabled={disabled || update.deferred}
               onClick={() => {
                 void facade.update("later").then((result) => {
@@ -693,7 +764,7 @@ function Update({
         {update.phase === "ready" && (
           <>
             <button
-              ref={!update.deferred ? safeAction : undefined}
+              ref={!localDismiss ? safeAction : undefined}
               disabled={disabled || update.deferred}
               onClick={() => {
                 void facade.update("later").then((result) => {
@@ -738,7 +809,7 @@ function Update({
             </button>
           )}
       </div>
-      <p className="description">
+      <p className="update-policy-strip">
         Automatic installation and interruption are unavailable. Review current
         work before restarting or restoring the previous version.
       </p>

@@ -670,6 +670,233 @@ it("renders release notes as text without creating provider-supplied markup", as
   );
   expect(host.querySelector("dialog .update-release script")).toBeNull();
 });
+// Design parity fixtures prove renderer composition/guards, not native updates.
+it.each([
+  [
+    { phase: "available", version: "1.0", deferred: false },
+    "A new version of Farol is available",
+    "is available; it is not downloaded or installed yet",
+    ["Skip This Version", "Remind Me Later", "Download Update"],
+  ],
+  [
+    { phase: "ready", version: "1.0", deferred: false, blockedBy: null },
+    "Ready to update Farol",
+    "is downloaded and ready; it is not installed yet",
+    ["Remind Me Later", "Restart & Update"],
+  ],
+  [
+    { phase: "checking" },
+    "Checking for Farol updates",
+    "Checking for updates…",
+    ["Continue working"],
+  ],
+  [
+    { phase: "downloading" },
+    "Downloading Farol update",
+    "Downloading update in the background. Keep working.",
+    ["Continue working"],
+  ],
+  [
+    { phase: "applying", version: "1.0" },
+    "Restarting to update Farol",
+    "Applying version 1.0…",
+    [],
+  ],
+  [
+    { phase: "idle", checkedAt: null },
+    "Farol updates",
+    "No update check yet.",
+    ["Done"],
+  ],
+  [
+    { phase: "unavailable", code: "UPDATE_STATUS_UNAVAILABLE" },
+    "Farol updates unavailable",
+    "UPDATE_STATUS_UNAVAILABLE",
+    ["Dismiss"],
+  ],
+  [
+    { phase: "failed", code: "UPDATE_FAILED", recoveryRequired: false },
+    "The update did not finish",
+    "UPDATE_FAILED",
+    ["Dismiss"],
+  ],
+] satisfies [WindowSnapshot["update"], string, string, string[]][])(
+  "Updates %j shows its own heading, state and release actions",
+  async (update, heading, status, actions) => {
+    const { host, c, f } = await mount();
+    vi.mocked(f.api.installedUpdate).mockClear();
+    await act(async () => {
+      c.overlay("update");
+      f.emit("update", update);
+    });
+    const dialog = host.querySelector<HTMLDialogElement>("dialog")!;
+    expect(dialog.getAttribute("aria-label")).toBe(heading);
+    expect(dialog.querySelector(".update-heading h2")?.textContent).toBe(
+      heading,
+    );
+    expect(
+      dialog.querySelector(".update-symbol svg")?.getAttribute("aria-hidden"),
+    ).toBe("true");
+    expect(dialog.querySelector(".update-state")?.textContent).toContain(
+      status,
+    );
+    expect(dialog.querySelector(".update-installed")?.textContent).toContain(
+      "Installed: Farol 0.1.8-owner.beta.1 (build 10)",
+    );
+    expect(
+      [...dialog.querySelectorAll(".update-actions button")].map((b) =>
+        b.textContent?.trim(),
+      ),
+    ).toEqual(actions);
+    expect(dialog.querySelector(".update-check button")?.textContent).toBe(
+      "Check for Updates",
+    );
+    expect(dialog.querySelector(".update-actions .update-check")).toBeNull();
+    if (update.phase === "applying") {
+      expect(dialog.querySelector('[aria-label="Close"]')).toBeNull();
+      expect(document.activeElement).toBe(
+        dialog.querySelector(".update-state"),
+      );
+      await act(async () =>
+        dialog.dispatchEvent(new Event("cancel", { cancelable: true })),
+      );
+      expect(c.getSnapshot().overlay).toBe("update");
+    } else {
+      const safe = actions.some((label) => label === "Remind Me Later")
+        ? "Remind Me Later"
+        : actions[0]!;
+      expect(document.activeElement).toBe(button(dialog, safe));
+    }
+    expect(f.api.installedUpdate).not.toHaveBeenCalled();
+  },
+);
+it.each([
+  [
+    "ready",
+    "UPDATE_BROWSER_DRAFT",
+    "Send or clear the unsent ChatGPT draft",
+    true,
+  ],
+  [
+    "ready",
+    "UPDATE_BROWSER_STATE_UNKNOWN",
+    "Do not retry this update action",
+    false,
+  ],
+  ["recovery", "WORK_PENDING", "Farol can’t restart safely yet", false],
+] as const)(
+  "Updates %s groups the %s reason with its fenced action",
+  async (phase, code, message, canCheck) => {
+    const { host, c, f } = await mount();
+    vi.mocked(f.api.installedUpdate).mockClear();
+    await act(async () => {
+      f.emit(
+        "update",
+        phase === "ready"
+          ? { phase, version: "1.0", deferred: false, blockedBy: code }
+          : { phase, version: "1.0", blockedBy: code },
+      );
+      c.overlay("update");
+    });
+    const block = host.querySelector("dialog .update-block")!;
+    expect(block.getAttribute("role")).toBe("alert");
+    expect(block.querySelector("strong")?.textContent).toBe(
+      phase === "ready" ? "Restart is blocked" : "Recovery is blocked",
+    );
+    expect(block.querySelector("p")?.textContent).toContain(message);
+    expect(block.querySelector("details code")?.textContent).toBe(code);
+    expect(block.querySelector("details")?.hasAttribute("open")).toBe(false);
+    const action = button(
+      host,
+      phase === "ready" ? "Restart & Update" : "Recover",
+    );
+    expect(action.disabled).toBe(true);
+    expect(button(host, "Check for Updates").disabled).toBe(!canCheck);
+    expect(document.activeElement).toBe(
+      button(host, phase === "ready" ? "Remind Me Later" : "Cancel"),
+    );
+    await act(async () => action.click());
+    expect(f.api.installedUpdate).not.toHaveBeenCalled();
+  },
+);
+it.each(["available", "ready"] as const)(
+  "Updates deferred %s keeps a usable local dismiss and restores the rail trigger",
+  async (phase) => {
+    const { host, c, f } = await mount();
+    vi.mocked(f.api.installedUpdate).mockClear();
+    await act(async () =>
+      f.emit(
+        "update",
+        phase === "available"
+          ? { phase, version: "1.0", deferred: true }
+          : { phase, version: "1.0", deferred: true, blockedBy: null },
+      ),
+    );
+    const trigger = host.querySelector<HTMLButtonElement>(
+      ".rail .update-action",
+    )!;
+    trigger.focus();
+    await act(async () => trigger.click());
+    expect(button(host, "Remind Me Later").disabled).toBe(true);
+    expect(document.activeElement).toBe(button(host, "Continue working"));
+    await act(async () => button(host, "Continue working").click());
+    expect(c.getSnapshot().overlay).toBe("none");
+    expect(document.activeElement).toBe(trigger);
+    expect(f.api.installedUpdate).not.toHaveBeenCalled();
+  },
+);
+it("Updates moves focus to local dismissal when a focused release action becomes pending", async () => {
+  const { host, c, f } = await mount();
+  vi.mocked(f.api.installedUpdate).mockClear();
+  const operation = deferred<unknown>();
+  vi.mocked(f.api.installedUpdate).mockReturnValueOnce(operation.promise);
+  await act(async () => {
+    f.emit("update", { phase: "available", version: "1.0", deferred: false });
+    c.overlay("update");
+  });
+  const download = button(host, "Download Update");
+  download.focus();
+  await act(async () => download.click());
+  expect(download.disabled).toBe(true);
+  expect(document.activeElement).toBe(button(host, "Continue working"));
+  await act(async () => operation.reject(new Error("reply lost")));
+  expect(c.getSnapshot().intents.update?.state).toBe("unknown");
+  await act(async () => button(host, "Continue working").click());
+  await act(async () => c.overlay("update"));
+  expect(button(host, "Download Update").disabled).toBe(true);
+  expect(document.activeElement).toBe(button(host, "Continue working"));
+  expect(f.api.installedUpdate).toHaveBeenCalledTimes(1);
+});
+it("Updates uses only supplied notes and confirmed installed version", async () => {
+  const { host, c, f } = await mount();
+  await act(async () => {
+    f.emit("update", { phase: "available", version: "1.0", deferred: false });
+    c.overlay("update");
+  });
+  expect(host.querySelector("dialog .update-release")).toBeNull();
+  expect(
+    host.querySelector("dialog .update-preference strong")?.textContent,
+  ).toBe("Automatic downloads");
+  expect(button(host, "Turn on automatic downloads").disabled).toBe(true);
+  expect(host.querySelector("dialog")?.textContent).not.toContain(
+    "install when you quit",
+  );
+  await act(async () =>
+    f.emit("runtime", {
+      state: "offline",
+      error: null,
+      identity: null,
+      embeddedNode: null,
+      embeddedElectron: null,
+    }),
+  );
+  expect(host.querySelector("dialog .update-installed")?.textContent).toBe(
+    "Installed version cannot be confirmed in this session.",
+  );
+  expect(
+    host.querySelector("dialog .update-installed")?.textContent,
+  ).not.toContain("0.1.8");
+});
 it("offers version-scoped Skip only for an available release", async () => {
   const { host, c, f } = await mount();
   await act(async () => {
