@@ -270,6 +270,24 @@ describe("GitHub release version policy", () => {
 });
 
 describe("GitHub update discovery", () => {
+  it("carries bounded release notes as inert text and ignores oversized bodies", async () => {
+    const notes = "Navigation is clearer.\n<script>not executable</script>";
+    expect(
+      await discoverGithubUpdate(
+        "0.1.0",
+        "stable",
+        ports([release({ body: notes })]),
+      ),
+    ).toMatchObject({ ok: true, value: { notes } });
+    const oversized = await discoverGithubUpdate(
+      "0.1.0",
+      "stable",
+      ports([release({ body: "x".repeat(4097) })]),
+    );
+    expect(oversized).toMatchObject({ ok: true });
+    if (oversized.ok) expect(oversized.value?.notes).toBeUndefined();
+  });
+
   it("selects the exact newer release and manifest", async () => {
     const source = ports();
     const result = await discoverGithubUpdate("0.1.0", "stable", source);

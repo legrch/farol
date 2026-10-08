@@ -602,6 +602,22 @@ it("offers Download only for a current available release", async () => {
       .mock.calls.filter(([command]) => command.kind === "download"),
   ).toHaveLength(1);
 });
+it("renders release notes as text without creating provider-supplied markup", async () => {
+  const { host, c, f } = await mount();
+  await act(async () => {
+    f.emit("update", {
+      phase: "available",
+      version: "0.2.0-owner.beta.5",
+      deferred: false,
+      notes: "Cleaner Setup. <script>not executable</script>",
+    });
+    c.overlay("update");
+  });
+  expect(host.querySelector("dialog .update-release")?.textContent).toContain(
+    "Cleaner Setup. <script>not executable</script>",
+  );
+  expect(host.querySelector("dialog .update-release script")).toBeNull();
+});
 it("offers version-scoped Skip only for an available release", async () => {
   const { host, c, f } = await mount();
   await act(async () => {
@@ -1286,7 +1302,7 @@ it("B04 distinguishes installed and downloaded versions and refuses an unknown-s
     "Farol 0.2.0-owner.beta.4 is downloaded and ready; it is not installed yet.",
   );
   expect(text).toContain("Installation has not started");
-  expect(text).toContain("do not retry this update action");
+  expect(text).toContain("Do not retry this update action");
   expect(text).toContain("Technical code");
   expect(button(host, "Check for Updates").disabled).toBe(true);
   expect(button(host, "Restart & Update").disabled).toBe(true);

@@ -35,6 +35,7 @@ type Release = Readonly<{
   tag: string;
   version: string;
   assets: readonly ReleaseAsset[];
+  notes?: string;
 }>;
 
 function object(value: unknown): RecordValue | null {
@@ -112,7 +113,21 @@ function parseRelease(value: unknown): Outcome<Release | null> {
       return failure("wrong_provenance");
     assets.push(asset);
   }
-  return { ok: true, value: { tag: data.tag_name, version, assets } };
+  // The public release body is untrusted presentation text, never HTML or an
+  // installation authority. Ignore oversized bodies instead of truncating.
+  const notes =
+    typeof data.body === "string" && data.body.length <= 4096
+      ? data.body.trim()
+      : "";
+  return {
+    ok: true,
+    value: {
+      tag: data.tag_name,
+      version,
+      assets,
+      ...(notes ? { notes } : {}),
+    },
+  };
 }
 
 function parseManifest(value: unknown): Outcome<RetainedReleaseManifest> {
@@ -361,6 +376,7 @@ export async function discoverGithubUpdate(
       manifestAsset,
       archiveAsset,
       tag: chosen.tag,
+      ...(chosen.notes ? { notes: chosen.notes } : {}),
     },
   };
 }

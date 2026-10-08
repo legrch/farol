@@ -556,6 +556,37 @@ describe("supervised installed updater (native files/lease, mocked package/proce
 });
 
 describe("installed updater composition (disposable filesystem and mocked native/GitHub ports)", () => {
+  it("retains bounded release notes with the verified archive across a new lifetime", async () => {
+    mocks.discover.mockResolvedValue({
+      ok: true,
+      value: { manifest, notes: "A clearer Setup.\nNo automatic restart." },
+    });
+    const first = await createInstalledUpdateRuntime(options());
+    await first!.initialize();
+    await first!.check();
+    expect(first!.snapshot()).toMatchObject({
+      phase: "available",
+      notes: "A clearer Setup.\nNo automatic restart.",
+    });
+    await first!.download();
+    expect(first!.snapshot()).toMatchObject({
+      phase: "ready",
+      notes: "A clearer Setup.\nNo automatic restart.",
+    });
+    expect(JSON.parse(await fs.readFile(ready, "utf8"))).toMatchObject({
+      notes: "A clearer Setup.\nNo automatic restart.",
+    });
+    await first!.close();
+    const second = await createInstalledUpdateRuntime(options());
+    await second!.initialize();
+    expect(second!.snapshot()).toMatchObject({
+      phase: "ready",
+      notes: "A clearer Setup.\nNo automatic restart.",
+    });
+    expect(mocks.download).toHaveBeenCalledTimes(1);
+    await second!.close();
+  });
+
   it("persists Later for the available version without suppressing it or a newer release", async () => {
     const first = await createInstalledUpdateRuntime(options());
     await first!.initialize();

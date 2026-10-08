@@ -132,6 +132,7 @@ const Retained = z.strictObject({
   schema: z.literal("farol.ready-update/1"),
   handle: z.string().max(4096),
   manifest: z.unknown(),
+  notes: z.string().max(4096).optional(),
   operation: Operation.nullable(),
   downloadId: z
     .string()
@@ -1961,7 +1962,11 @@ async function createRuntime(
       if (downloadIntent) await fs.unlink(pendingDownloadFile);
       return {
         ok: true,
-        update: { handle: retained.handle, manifest: parsed.value },
+        update: {
+          handle: retained.handle,
+          manifest: parsed.value,
+          ...(retained.notes ? { notes: retained.notes } : {}),
+        },
       };
     },
     discover: async () => {
@@ -2010,18 +2015,27 @@ async function createRuntime(
             buildId: candidate.manifest.buildId,
             deferred:
               candidate.manifest.version === preferences.deferredVersion,
+            ...(candidate.notes ? { notes: candidate.notes } : {}),
           }
         : { ok: true, available: false };
     },
     download: async () => {
       if (!candidate) return known("UPDATE_CANDIDATE_MISSING");
       const selected = candidate;
-      return stageSelectedUpdate(selected.manifest, (verifyPackage) =>
-        downloadAndVerifyGithubUpdate(selected, {
-          ...checkedTransport,
-          verifyPackage,
-        }),
+      const staged = await stageSelectedUpdate(
+        selected.manifest,
+        (verifyPackage) =>
+          downloadAndVerifyGithubUpdate(selected, {
+            ...checkedTransport,
+            verifyPackage,
+          }),
       );
+      return staged.ok && selected.notes
+        ? {
+            ok: true as const,
+            update: { ...staged.update, notes: selected.notes },
+          }
+        : staged;
     },
     skip: async (buildId) => {
       if (!candidate || candidate.manifest.buildId !== buildId)

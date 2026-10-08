@@ -85,6 +85,7 @@ export type UpdateCandidate = Readonly<{
   manifestAsset: ReleaseAsset;
   archiveAsset: ReleaseAsset;
   tag: string;
+  notes?: string;
 }>;
 
 export type FetchedJson = Readonly<{

@@ -16,6 +16,7 @@ export const UPDATE_RECHECK_MS = 6 * 60 * 60 * 1_000;
 export type ReadyUpdate = Readonly<{
   handle: string;
   manifest: RetainedReleaseManifest;
+  notes?: string;
 }>;
 export type { InstalledUpdateView as UpdateView } from "../domain/installed-update";
 import type { InstalledUpdateView as UpdateView } from "../domain/installed-update";
@@ -51,6 +52,7 @@ export type InstalledUpdaterPorts = Readonly<{
         version: string;
         buildId: string;
         deferred: boolean;
+        notes?: string;
       }>
     | KnownFailure
   >;
@@ -158,6 +160,7 @@ export class InstalledUpdater {
       version: prepared.update.manifest.version,
       deferred: false,
       blockedBy: null,
+      ...(prepared.update.notes ? { notes: prepared.update.notes } : {}),
     });
   }
 
@@ -185,6 +188,7 @@ export class InstalledUpdater {
           version: restored.update.manifest.version,
           deferred: true,
           blockedBy: null,
+          ...(restored.update.notes ? { notes: restored.update.notes } : {}),
         });
       } else if (restored.rollbackVersion) {
         this.rollbackVersion = restored.rollbackVersion;
@@ -263,6 +267,7 @@ export class InstalledUpdater {
         phase: "available",
         version: found.version,
         deferred: found.deferred,
+        ...(found.notes ? { notes: found.notes } : {}),
       });
     } catch {
       this.publish({

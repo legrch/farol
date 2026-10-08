@@ -20,12 +20,14 @@ export const InstalledUpdateViewSchema = z.discriminatedUnion("phase", [
     phase: z.literal("available"),
     version: z.string().max(128),
     deferred: z.boolean(),
+    notes: z.string().max(4096).optional(),
   }),
   z.strictObject({
     phase: z.literal("ready"),
     version: z.string().max(128),
     deferred: z.boolean(),
     blockedBy: Code.nullable(),
+    notes: z.string().max(4096).optional(),
   }),
   z.strictObject({
     phase: z.literal("applying"),

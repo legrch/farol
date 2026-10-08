@@ -1607,7 +1607,7 @@ describe("bounded Settings writer", () => {
     expect(h.host.textContent).not.toContain("Installed update");
     expect(h.host.textContent).toContain("UPDATE_BROWSER_STATE_UNKNOWN");
     expect(h.host.textContent).toContain("Installation has not started");
-    expect(h.host.textContent).toContain("do not retry this update action");
+    expect(h.host.textContent).toContain("Do not retry this update action");
     expect(h.button("Check for updates once").disabled).toBe(true);
     expect(h.calls()).toEqual([]);
   });

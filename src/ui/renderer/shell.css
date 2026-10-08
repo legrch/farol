@@ -875,6 +875,15 @@ kbd {
   margin: 24px 0;
   font-size: 15px;
 }
+.update-release {
+  margin: 0 0 18px;
+}
+.update-notes {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 220px;
+  overflow: auto;
+}
 .sheet dt {
   font-size: 12px;
   color: var(--muted);

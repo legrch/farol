@@ -12,12 +12,14 @@ export type InstalledUpdateView =
       phase: "available";
       version: string;
       deferred: boolean;
+      notes?: string;
     }>
   | Readonly<{
       phase: "ready";
       version: string;
       deferred: boolean;
       blockedBy: string | null;
+      notes?: string;
     }>
   | Readonly<{ phase: "applying"; version: string }>
   | Readonly<{

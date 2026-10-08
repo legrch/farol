@@ -520,6 +520,13 @@ function Update({
                         ? "Downloading update…"
                         : "You can check for updates."}
       </p>
+      {(update.phase === "available" || update.phase === "ready") &&
+        update.notes && (
+          <details className="update-release">
+            <summary>What’s new in Farol {update.version}</summary>
+            <p className="update-notes">{update.notes}</p>
+          </details>
+        )}
       {recovery ? (
         <p className="description">
           Farol will quit to finish recovery. If recovery restores the previous
