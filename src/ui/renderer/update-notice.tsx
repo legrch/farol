@@ -1,4 +1,5 @@
 import type { RendererFacade, WindowSnapshot } from "./contract";
+import { updateBlockMessage } from "../update-block-message";
 
 export function acknowledgeUpdateNotice(facade: RendererFacade): void {
   const snapshot = facade.getSnapshot();
@@ -53,13 +54,15 @@ export function UpdateNotice({
         <strong>
           {update.phase === "failed"
             ? "The update did not finish"
-            : `Farol ${update.version} is ${update.phase === "ready" ? "ready" : "available"}`}
+            : `Farol ${update.version} is ${update.phase === "ready" ? "downloaded" : "available"}`}
         </strong>
         <p>
           {update.phase === "failed"
             ? "Review the update status when you choose."
             : update.phase === "ready"
-              ? "Restart when you choose. Your work continues."
+              ? update.blockedBy
+                ? `Installation has not started. ${updateBlockMessage(update.blockedBy)}`
+                : "Downloaded, not installed. Restart & Update when you choose; your work continues."
               : "A new version is available when you’re ready."}
         </p>
         <button onClick={() => facade.overlay("update")}>View update</button>

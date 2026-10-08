@@ -295,6 +295,27 @@ it("unknown release state remains inspectable and cannot be acknowledged", async
   );
   expect(f.api.installedUpdate).not.toHaveBeenCalled();
 });
+it("does not invite a restart when a downloaded update has unresolved browser admission", async () => {
+  const blocked: InstalledUpdateView = {
+    phase: "ready",
+    version: available.version,
+    deferred: false,
+    blockedBy: "UPDATE_BROWSER_STATE_UNKNOWN",
+    notice: available.notice,
+  };
+  const { host, f } = await mount(blocked);
+  const notice = host.querySelector('[aria-label="Update notice"]')!;
+  expect(notice.textContent).toContain("is downloaded");
+  expect(notice.textContent).toContain("Installation has not started");
+  expect(notice.textContent).toContain("Do not retry this update action");
+  expect(notice.textContent).not.toContain("Restart when you choose");
+  expect(button(notice, "Dismiss update notice").disabled).toBe(true);
+  await act(async () => button(notice, "View update").click());
+  expect(host.querySelector("dialog")?.textContent).toContain(
+    "Installation has not started",
+  );
+  expect(f.api.installedUpdate).not.toHaveBeenCalled();
+});
 it("notice contracts reject unbound or malformed commands and metadata", () => {
   expect(
     InstalledUpdateCommandSchema.safeParse({ kind: "notice-seen" }).success,
