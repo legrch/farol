@@ -15,6 +15,9 @@ export type ComputerUpdateDrainResult =
 
 export type ComputerUpdateDrainPorts = Readonly<{
   routeConfigured: boolean;
+  // Ordinary Quit cannot open a proxy whose asynchronous launch/connect path
+  // does not consume the original effect fence. Explicit updates may observe.
+  taskReaderAvailable?: boolean;
   exclusive<T>(work: () => Promise<T>): Promise<T>;
   desktopWorkSettled(): Promise<boolean>;
   mutationsSettled(): Promise<boolean>;
@@ -41,12 +44,18 @@ export async function drainInstalledComputerWork(
         return { ok: false, code: "UPDATE_WORK_PENDING" };
       const keys = await ports.taskKeys();
       if (keys.length > 0) {
-        if (!ports.routeConfigured)
+        if (!ports.routeConfigured || ports.taskReaderAvailable === false)
           return { ok: false, code: "UPDATE_TASK_ROUTE_NEEDS_DRAIN" };
+        if (!ports.stillCurrent())
+          return { ok: false, code: "UPDATE_STATE_UNREADABLE" };
         let idle = true;
         const reader = await ports.openTaskReader();
         try {
           for (const key of keys) {
+            if (!ports.stillCurrent()) {
+              idle = false;
+              break;
+            }
             const result = await reader.status(key);
             if (
               result.status !== "known" ||
@@ -79,6 +88,7 @@ export async function drainInstalledComputer(
   input: Readonly<{
     root: string;
     settings: ProductSettings;
+    deadlineAt?: number;
     desktopWorkSettled(): Promise<boolean>;
     stillCurrent(): boolean;
     stopOwnedClients(): Promise<void>;
@@ -91,6 +101,7 @@ export async function drainInstalledComputer(
   const mutations = new PrivateWorkspaceMutationStore({ root: input.root });
   return drainInstalledComputerWork({
     routeConfigured: input.settings.nativeHosts.taskRoute !== null,
+    taskReaderAvailable: input.deadlineAt === undefined,
     exclusive: (work) => fence.withUpdateDrain(work),
     desktopWorkSettled: input.desktopWorkSettled,
     mutationsSettled: () => mutations.settledForUpdate(),
@@ -98,6 +109,7 @@ export async function drainInstalledComputer(
     stillCurrent: input.stillCurrent,
     stopOwnedClients: input.stopOwnedClients,
     openTaskReader: async () => {
+      if (!input.stillCurrent()) throw new Error("UPDATE_STATE_UNREADABLE");
       const route = selectedCodexTaskRouteLaunch(input.settings, Date.now());
       if (!route) throw new Error("UPDATE_TASK_ROUTE_NEEDS_DRAIN");
       const authority = new PhysicalCodexHandoffAuthority(route.grant);
@@ -105,7 +117,11 @@ export async function drainInstalledComputer(
         ...route.host,
         cwd: input.root,
       });
-      const deadlineAt = Math.min(Date.now() + 20_000, route.grant.expiresAt);
+      const deadlineAt = Math.min(
+        Date.now() + 20_000,
+        route.grant.expiresAt,
+        input.deadlineAt ?? Number.MAX_SAFE_INTEGER,
+      );
       const handoff = new PersistentCodexHandoff(
         authority,
         host,

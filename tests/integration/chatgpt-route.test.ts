@@ -43,6 +43,7 @@ import {
   type ChatGptSignInBlockedDiagnostic,
   type ChatGptRouteOptions,
   type ChatGptUpdateAdmissionDiagnostic,
+  type ChatGptUpdateIdleEffectGuard,
 } from "../../src/apps/desktop/chatgpt-route";
 
 const prepared = {
@@ -860,6 +861,519 @@ describe("installed-update browser admission", () => {
   }
   // These fixtures classify local mock outcomes only; they exercise no native
   // debugger, provider page, browser profile, or installed application.
+  it.each([
+    null,
+    {},
+    { deadlineAt: "100", canStartEffect: () => true },
+    { deadlineAt: Number.NaN, canStartEffect: () => true },
+    { deadlineAt: Number.POSITIVE_INFINITY, canStartEffect: () => true },
+    { deadlineAt: 100, canStartEffect: true },
+  ])(
+    "rejects malformed host-only Quit guards %# before any browser effect",
+    async (guard) => {
+      const { candidate, execute, debuggerClient, diagnostics } = updatePage();
+      expect(
+        await candidate.acquireUpdateIdle(
+          guard as ChatGptUpdateIdleEffectGuard,
+        ),
+      ).toEqual({ ok: false, code: "UPDATE_BROWSER_STATE_UNKNOWN" });
+      expect(diagnostics.mock.calls).toEqual([
+        [{ stage: "admission", reason: "guard_invalid" }],
+      ]);
+      expect(execute).not.toHaveBeenCalled();
+      expect(debuggerClient.attach).not.toHaveBeenCalled();
+      expect(debuggerClient.sendCommand).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["expired", "revoked", "throws", "expires_in_callback"] as const)(
+    "honors a %s Quit guard even without an open surface",
+    async (failure) => {
+      vi.useFakeTimers();
+      try {
+        vi.setSystemTime(0);
+        const candidate = route();
+        const deadlineAt = 100;
+        const guard = {
+          deadlineAt,
+          canStartEffect: () => {
+            if (failure === "throws") throw new Error("private host state");
+            if (failure === "expires_in_callback") vi.setSystemTime(deadlineAt);
+            return failure !== "revoked";
+          },
+        };
+        if (failure === "expired") vi.setSystemTime(deadlineAt);
+        expect(await candidate.acquireUpdateIdle(guard)).toEqual({
+          ok: false,
+          code: "UPDATE_BROWSER_STATE_UNKNOWN",
+        });
+        expect(Reflect.get(candidate, "updateAdmission")).toBe(false);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it.each(["deadline", "host"] as const)(
+    "rechecks the original %s guard on an unopened reservation and allows cleanup",
+    async (failure) => {
+      vi.useFakeTimers();
+      try {
+        vi.setSystemTime(0);
+        const candidate = route();
+        let allowed = true;
+        const guard = { deadlineAt: 100, canStartEffect: () => allowed };
+        const admission = await candidate.acquireUpdateIdle(guard);
+        if (!admission.ok) throw new Error(admission.code);
+        expect(await admission.recheck()).toEqual({ ok: true });
+        // Changing the caller's object cannot renew the original budget.
+        guard.deadlineAt = 10_000;
+        if (failure === "deadline") vi.setSystemTime(100);
+        else allowed = false;
+        expect(await admission.recheck()).toEqual({
+          ok: false,
+          code: "UPDATE_BROWSER_STATE_UNKNOWN",
+        });
+        await admission.release();
+        await admission.release();
+        expect(Reflect.get(candidate, "updateAdmission")).toBe(false);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it.each(["probe", "enable", "pause"] as const)(
+    "bounds a lost %s reply by the original Quit deadline and fences its late continuation",
+    async (stage) => {
+      vi.useFakeTimers();
+      try {
+        vi.setSystemTime(0);
+        const { candidate, execute, debuggerClient, surface } = updatePage();
+        const original = debuggerClient.sendCommand.getMockImplementation()!;
+        let finish: ((value: unknown) => void) | undefined;
+        const lost = () =>
+          new Promise<unknown>((resolve) => {
+            finish = resolve;
+          });
+        if (stage === "probe") execute.mockImplementation(lost);
+        else
+          debuggerClient.sendCommand.mockImplementation(
+            async (method, parameters) => {
+              if (
+                method ===
+                (stage === "enable" ? "Debugger.enable" : "Debugger.pause")
+              )
+                return lost();
+              return original(method, parameters);
+            },
+          );
+        const pending = candidate.acquireUpdateIdle({
+          deadlineAt: 100,
+          canStartEffect: () => true,
+        });
+        await vi.advanceTimersByTimeAsync(99);
+        expect(finish).toBeDefined();
+        await vi.advanceTimersByTimeAsync(1);
+        expect(await pending).toEqual({
+          ok: false,
+          code: "UPDATE_BROWSER_STATE_UNKNOWN",
+        });
+        if (stage === "probe")
+          expect(debuggerClient.attach).not.toHaveBeenCalled();
+        else expect(debuggerClient.detach).toHaveBeenCalledOnce();
+        const commands = debuggerClient.sendCommand.mock.calls.length;
+        finish?.({ state: "idle" });
+        await vi.advanceTimersByTimeAsync(1);
+        expect(debuggerClient.sendCommand).toHaveBeenCalledTimes(commands);
+        if (stage === "enable")
+          expect(debuggerClient.sendCommand).not.toHaveBeenCalledWith(
+            "Debugger.pause",
+          );
+        expect(
+          debuggerClient.sendCommand.mock.calls.filter(
+            ([m]) => m === "Runtime.evaluate",
+          ),
+        ).toHaveLength(0);
+        expect(surface.webContents.listenerCount("before-input-event")).toBe(0);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it.each([
+    "probe",
+    "attach",
+    "enable",
+    "pause",
+    "quiet_pause",
+    "paused_probe",
+  ] as const)(
+    "rechecks expiry at the actual %s boundary without starting the next command",
+    async (stage) => {
+      vi.useFakeTimers();
+      try {
+        vi.setSystemTime(0);
+        const { candidate, execute, debuggerClient } = updatePage();
+        const original = debuggerClient.sendCommand.getMockImplementation()!;
+        const expires = () => vi.setSystemTime(100);
+        if (stage === "probe")
+          execute.mockImplementationOnce(async () => {
+            expires();
+            return { state: "idle" };
+          });
+        if (stage === "attach") {
+          const attach = debuggerClient.attach.getMockImplementation()!;
+          debuggerClient.attach.mockImplementation(() => {
+            attach();
+            expires();
+          });
+        }
+        debuggerClient.sendCommand.mockImplementation(
+          async (method, parameters) => {
+            if (stage === "quiet_pause" && method === "Debugger.pause") {
+              expires();
+              return {};
+            }
+            const reply = await original(method, parameters);
+            if (
+              (stage === "enable" && method === "Debugger.enable") ||
+              (stage === "pause" && method === "Debugger.pause") ||
+              (stage === "paused_probe" && method === "Runtime.evaluate")
+            )
+              expires();
+            return reply;
+          },
+        );
+        expect(
+          await candidate.acquireUpdateIdle({
+            deadlineAt: 100,
+            canStartEffect: () => true,
+          }),
+        ).toEqual({
+          ok: false,
+          code: "UPDATE_BROWSER_STATE_UNKNOWN",
+        });
+        const commands = debuggerClient.sendCommand.mock.calls.map(([m]) => m);
+        const expected =
+          stage === "probe" || stage === "attach"
+            ? []
+            : stage === "enable"
+              ? ["Debugger.enable"]
+              : stage === "paused_probe"
+                ? [
+                    "Debugger.enable",
+                    "Debugger.pause",
+                    "Runtime.evaluate",
+                    "Debugger.resume",
+                  ]
+                : ["Debugger.enable", "Debugger.pause"];
+        expect(commands).toEqual(expected);
+        if (stage === "probe")
+          expect(debuggerClient.attach).not.toHaveBeenCalled();
+        else expect(debuggerClient.detach).toHaveBeenCalledOnce();
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it.each(["probe", "before_attach", "attach", "enable", "pause"] as const)(
+    "fences a revoked host admission at %s before the next effect",
+    async (stage) => {
+      const { candidate, execute, debuggerClient, surface } = updatePage();
+      let allowed = true;
+      const original = debuggerClient.sendCommand.getMockImplementation()!;
+      if (stage === "probe")
+        execute.mockImplementationOnce(async () => {
+          allowed = false;
+          return { state: "idle" };
+        });
+      if (stage === "before_attach")
+        Object.assign(surface.webContents, {
+          isDevToolsOpened: () => {
+            allowed = false;
+            return false;
+          },
+        });
+      if (stage === "attach") {
+        const attach = debuggerClient.attach.getMockImplementation()!;
+        debuggerClient.attach.mockImplementation(() => {
+          attach();
+          allowed = false;
+        });
+      }
+      debuggerClient.sendCommand.mockImplementation(
+        async (method, parameters) => {
+          const reply = await original(method, parameters);
+          if (
+            (stage === "enable" && method === "Debugger.enable") ||
+            (stage === "pause" && method === "Debugger.pause")
+          )
+            allowed = false;
+          return reply;
+        },
+      );
+      expect(
+        await candidate.acquireUpdateIdle({
+          deadlineAt: Date.now() + 10_000,
+          canStartEffect: () => allowed,
+        }),
+      ).toEqual({
+        ok: false,
+        code: "UPDATE_BROWSER_STATE_UNKNOWN",
+      });
+      expect(debuggerClient.sendCommand.mock.calls.map(([m]) => m)).toEqual(
+        stage === "enable"
+          ? ["Debugger.enable"]
+          : stage === "pause"
+            ? ["Debugger.enable", "Debugger.pause"]
+            : [],
+      );
+      if (stage === "probe" || stage === "before_attach")
+        expect(debuggerClient.attach).not.toHaveBeenCalled();
+      else expect(debuggerClient.detach).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each([true, false])(
+    "invalidates a timed-out pause before failed detach, fencing a late reply (guard=%s)",
+    async (guarded) => {
+      vi.useFakeTimers();
+      try {
+        vi.setSystemTime(0);
+        const { candidate, debuggerClient, surface } = updatePage();
+        const original = debuggerClient.sendCommand.getMockImplementation()!;
+        let finish: ((value: unknown) => void) | undefined;
+        debuggerClient.sendCommand.mockImplementation(
+          async (method, parameters) =>
+            method === "Debugger.pause"
+              ? new Promise((resolve) => {
+                  finish = resolve;
+                })
+              : original(method, parameters),
+        );
+        debuggerClient.detach.mockImplementation(() => {
+          throw new Error("fixture detach failed");
+        });
+        const pending = candidate.acquireUpdateIdle(
+          guarded
+            ? { deadlineAt: 10_000, canStartEffect: () => true }
+            : undefined,
+        );
+        await vi.advanceTimersByTimeAsync(2_000);
+        expect(await pending).toEqual({
+          ok: false,
+          code: "UPDATE_BROWSER_RELEASE_UNCONFIRMED",
+        });
+        const commands = debuggerClient.sendCommand.mock.calls.length;
+        finish?.({});
+        await vi.advanceTimersByTimeAsync(1);
+        expect(debuggerClient.sendCommand).toHaveBeenCalledTimes(commands);
+        expect(debuggerClient.sendCommand.mock.calls.map(([m]) => m)).toEqual([
+          "Debugger.enable",
+          "Debugger.pause",
+        ]);
+        expect(debuggerClient.detach).toHaveBeenCalledOnce();
+        expect(surface.webContents.listenerCount("before-input-event")).toBe(1);
+        expect(await candidate.open()).toEqual({ status: "unreachable" });
+        expect(await candidate.acquireUpdateIdle()).toEqual({
+          ok: false,
+          code: "UPDATE_BROWSER_BUSY",
+        });
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it("bounds a later held recheck by the remaining original Quit deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(0);
+      const { candidate, debuggerClient } = updatePage();
+      const admission = await candidate.acquireUpdateIdle({
+        deadlineAt: 100,
+        canStartEffect: () => true,
+      });
+      if (!admission.ok) throw new Error(admission.code);
+      vi.setSystemTime(80);
+      const original = debuggerClient.sendCommand.getMockImplementation()!;
+      let finish: ((value: unknown) => void) | undefined;
+      debuggerClient.sendCommand.mockImplementation(
+        async (method, parameters) =>
+          method === "Runtime.evaluate"
+            ? new Promise((resolve) => {
+                finish = resolve;
+              })
+            : original(method, parameters),
+      );
+      let settled = false;
+      const pending = admission.recheck().then((result) => {
+        settled = true;
+        return result;
+      });
+      await vi.advanceTimersByTimeAsync(19);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(await pending).toEqual({
+        ok: false,
+        code: "UPDATE_BROWSER_STATE_UNKNOWN",
+      });
+      const commands = debuggerClient.sendCommand.mock.calls.length;
+      finish?.({ result: { type: "object", value: { state: "idle" } } });
+      await vi.advanceTimersByTimeAsync(1);
+      expect(await admission.recheck()).toEqual({
+        ok: false,
+        code: "UPDATE_BROWSER_STATE_UNKNOWN",
+      });
+      expect(debuggerClient.sendCommand).toHaveBeenCalledTimes(commands);
+      await admission.release();
+      await admission.release();
+      expect(debuggerClient.detach).toHaveBeenCalledOnce();
+      expect(
+        debuggerClient.sendCommand.mock.calls.filter(
+          ([m]) => m === "Debugger.resume",
+        ),
+      ).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("uses the remaining original budget across DOM, enable and pause stages", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(0);
+      const { candidate, execute, debuggerClient } = updatePage();
+      const original = debuggerClient.sendCommand.getMockImplementation()!;
+      execute.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            setTimeout(() => resolve({ state: "idle" }), 40);
+          }),
+      );
+      debuggerClient.sendCommand.mockImplementation(
+        async (method, parameters) => {
+          if (method === "Debugger.enable")
+            await new Promise((resolve) => setTimeout(resolve, 40));
+          if (method === "Debugger.pause") return new Promise(() => {});
+          return original(method, parameters);
+        },
+      );
+      let settled = false;
+      const pending = candidate
+        .acquireUpdateIdle({ deadlineAt: 100, canStartEffect: () => true })
+        .then((result) => {
+          settled = true;
+          return result;
+        });
+      await vi.advanceTimersByTimeAsync(99);
+      expect(settled).toBe(false);
+      expect(debuggerClient.sendCommand).toHaveBeenCalledWith("Debugger.pause");
+      await vi.advanceTimersByTimeAsync(1);
+      expect(await pending).toEqual({
+        ok: false,
+        code: "UPDATE_BROWSER_STATE_UNKNOWN",
+      });
+      expect(debuggerClient.detach).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(["deadline", "host"] as const)(
+    "refuses a held pause after %s invalidation and still resumes/detaches exactly once",
+    async (failure) => {
+      vi.useFakeTimers();
+      try {
+        vi.setSystemTime(0);
+        const { candidate, debuggerClient, surface } = updatePage();
+        let allowed = true;
+        const admission = await candidate.acquireUpdateIdle({
+          deadlineAt: 100,
+          canStartEffect: () => allowed,
+        });
+        if (!admission.ok) throw new Error(admission.code);
+        if (failure === "deadline") vi.setSystemTime(100);
+        else allowed = false;
+        debuggerClient.sendCommand.mockClear();
+        expect(await admission.recheck()).toEqual({
+          ok: false,
+          code: "UPDATE_BROWSER_STATE_UNKNOWN",
+        });
+        expect(debuggerClient.sendCommand).not.toHaveBeenCalled();
+        const original = debuggerClient.sendCommand.getMockImplementation()!;
+        debuggerClient.sendCommand.mockImplementation(
+          async (method, parameters) => {
+            if (method === "Debugger.resume")
+              await new Promise((resolve) => setTimeout(resolve, 500));
+            return original(method, parameters);
+          },
+        );
+        const first = admission.release();
+        expect(admission.release()).toBe(first);
+        await vi.advanceTimersByTimeAsync(500);
+        await first;
+        expect(debuggerClient.sendCommand.mock.calls.map(([m]) => m)).toEqual([
+          "Debugger.resume",
+        ]);
+        expect(debuggerClient.detach).toHaveBeenCalledOnce();
+        expect(surface.webContents.listenerCount("before-input-event")).toBe(0);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it("keeps a lost cleanup reply release-unconfirmed after Quit expiry without replay", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(0);
+      const { candidate, debuggerClient, surface } = updatePage();
+      const admission = await candidate.acquireUpdateIdle({
+        deadlineAt: 100,
+        canStartEffect: () => true,
+      });
+      if (!admission.ok) throw new Error(admission.code);
+      vi.setSystemTime(100);
+      debuggerClient.sendCommand.mockClear();
+      let finish: ((value: unknown) => void) | undefined;
+      debuggerClient.sendCommand.mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            finish = resolve;
+          }),
+      );
+      const first = admission.release();
+      const rejected = expect(first).rejects.toThrow(
+        "UPDATE_BROWSER_RELEASE_UNCONFIRMED",
+      );
+      expect(admission.release()).toBe(first);
+      await vi.advanceTimersByTimeAsync(2_000);
+      await rejected;
+      finish?.({});
+      debuggerClient.emit("message", {}, "Debugger.resumed");
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(admission.release()).rejects.toThrow(
+        "UPDATE_BROWSER_RELEASE_UNCONFIRMED",
+      );
+      expect(await candidate.acquireUpdateIdle()).toEqual({
+        ok: false,
+        code: "UPDATE_BROWSER_BUSY",
+      });
+      expect(await candidate.open()).toEqual({ status: "unreachable" });
+      expect(debuggerClient.sendCommand.mock.calls.map(([m]) => m)).toEqual([
+        "Debugger.resume",
+      ]);
+      expect(debuggerClient.detach).not.toHaveBeenCalled();
+      expect(surface.webContents.listenerCount("before-input-event")).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it.each(["not_embedded", "not_loaded", "url_unrecognized"] as const)(
     "reports initial surface/document refusal %s without page content",
     async (reason) => {

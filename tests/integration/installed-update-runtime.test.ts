@@ -80,6 +80,7 @@ vi.mock(
 import {
   createInstalledUpdateRuntime,
   createSupervisedInstalledUpdateRuntime,
+  type InstalledUpdateRuntimeOptions,
 } from "../../src/apps/desktop/installed-update-runtime";
 import { drainInstalledComputerWork } from "../../src/apps/desktop/installed-computer-drain";
 
@@ -4589,4 +4590,665 @@ describe("automatic update preference (disposable files; native/provider ports d
     expect(controller.automaticUpdatePreference()).toEqual(confirmed(true));
     await controller.close();
   });
+});
+
+describe("normal Quit runtime (disposable files; helper and native ports doubled)", () => {
+  const preferenceFile = () =>
+    path.join(userData, "installed-updates/install-on-quit-preference.json");
+  const unconfirmedFile = () =>
+    path.join(userData, "installed-updates/install-on-quit-unconfirmed.json");
+  const record = (enabled: boolean) => ({
+    schema: "farol.installed-install-on-quit-preference/1",
+    scope: "install-on-normal-quit",
+    enabled,
+  });
+  const request = (deadlineAt = Date.now() + 10_000) => ({
+    kind: "ordinary-quit" as const,
+    deadlineAt,
+  });
+  const unknown = {
+    status: "unknown",
+    code: "UPDATE_QUIT_PREFERENCE_OUTCOME_UNKNOWN",
+  };
+  const deferred = () => {
+    let resolve!: () => void;
+    const promise = new Promise<void>((done) => {
+      resolve = done;
+    });
+    return { promise, resolve };
+  };
+  const optedIn = async (
+    selected: InstalledUpdateRuntimeOptions = options(),
+  ) => {
+    const controller = (await createInstalledUpdateRuntime(selected))!;
+    await controller.initialize();
+    await controller.check();
+    await controller.download();
+    expect(controller.snapshot().phase).toBe("ready");
+    expect(await controller.setInstallOnQuitPreference(true)).toEqual({
+      status: "confirmed",
+      scope: "install-on-normal-quit",
+      enabled: true,
+    });
+    return controller;
+  };
+
+  it("defaults OFF with absent or legacy download consent, without allocating quit consent", async () => {
+    const first = await prepared();
+    await first.setAutomaticUpdatePreference(true);
+    expect(first.installOnQuitPreference()).toEqual({
+      status: "confirmed",
+      scope: "install-on-normal-quit",
+      enabled: false,
+    });
+    expect(await first.applyOnNormalQuit(request())).toEqual({
+      status: "skipped",
+      code: "UPDATE_QUIT_NOT_OPTED_IN",
+    });
+    await first.close();
+    const fresh = (await createInstalledUpdateRuntime(options()))!;
+    await fresh.initialize();
+    expect(fresh.installOnQuitPreference()).toEqual({
+      status: "confirmed",
+      scope: "install-on-normal-quit",
+      enabled: false,
+    });
+    expect(await fresh.applyOnNormalQuit(request())).toMatchObject({
+      status: "skipped",
+    });
+    await expect(fs.lstat(preferenceFile())).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    expect(mocks.helper).not.toHaveBeenCalled();
+    await fresh.close();
+  });
+
+  it.each([
+    "null",
+    "unreadable",
+    JSON.stringify({
+      ...record(true),
+      schema: "farol.installed-automatic-update-preference/1",
+    }),
+    JSON.stringify({ ...record(true), extra: true }),
+    JSON.stringify({ ...record(true), enabled: "true" }),
+  ])(
+    "refuses malformed separately scoped consent without replacing bytes: %s",
+    async (invalid) => {
+      const controller = (await createInstalledUpdateRuntime(options()))!;
+      await fs.writeFile(preferenceFile(), invalid, { mode: 0o600 });
+      await controller.initialize();
+      expect(controller.installOnQuitPreference()).toMatchObject({
+        status: "blocked",
+        enabled: false,
+      });
+      expect(await controller.setInstallOnQuitPreference(true)).toMatchObject({
+        status: "refused",
+      });
+      expect(await fs.readFile(preferenceFile(), "utf8")).toBe(invalid);
+      expect(mocks.helper).not.toHaveBeenCalled();
+      await controller.close();
+    },
+  );
+
+  it.each(["symlink", "hardlink", "mode"])(
+    "refuses unsafe quit consent metadata: %s",
+    async (fault) => {
+      const controller = (await createInstalledUpdateRuntime(options()))!;
+      const other = path.join(root, "quit-consent.json");
+      await fs.writeFile(other, JSON.stringify(record(true)), { mode: 0o600 });
+      if (fault === "symlink") await fs.symlink(other, preferenceFile());
+      else if (fault === "hardlink") await fs.link(other, preferenceFile());
+      else
+        await fs.writeFile(preferenceFile(), JSON.stringify(record(true)), {
+          mode: 0o644,
+        });
+      await controller.initialize();
+      expect(controller.installOnQuitPreference()).toMatchObject({
+        status: "blocked",
+        enabled: false,
+      });
+      expect(await controller.setInstallOnQuitPreference(false)).toMatchObject({
+        status: "refused",
+      });
+      expect(JSON.parse(await fs.readFile(other, "utf8"))).toEqual(
+        record(true),
+      );
+      await controller.close();
+    },
+  );
+
+  it.each([true, false])(
+    "durably acknowledges explicit %s independently of auto-download",
+    async (enabled) => {
+      const first = await prepared();
+      expect(await first.setInstallOnQuitPreference(enabled)).toEqual({
+        status: "confirmed",
+        scope: "install-on-normal-quit",
+        enabled,
+      });
+      await first.close();
+      const fresh = (await createInstalledUpdateRuntime(options()))!;
+      await fresh.initialize();
+      expect(fresh.installOnQuitPreference()).toEqual({
+        status: "confirmed",
+        scope: "install-on-normal-quit",
+        enabled,
+      });
+      expect(fresh.automaticUpdatePreference()).toEqual({
+        status: "confirmed",
+        enabled: false,
+      });
+      await expect(fs.lstat(unconfirmedFile())).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      expect(mocks.helper).not.toHaveBeenCalled();
+      expect(quit).not.toHaveBeenCalled();
+      await fresh.close();
+    },
+  );
+
+  it.each(["before-rename", "after-rename", "parent-sync", "readback"])(
+    "keeps %s UNKNOWN across fresh owners even with valid-looking consent",
+    async (fault) => {
+      const first = await prepared();
+      const rename = fs.rename.bind(fs);
+      const open = fs.open.bind(fs);
+      let preferenceRenamed = false;
+      const renameSpy = vi
+        .spyOn(fs, "rename")
+        .mockImplementation(async (from, to) => {
+          if (String(to) !== preferenceFile()) return rename(from, to);
+          if (fault === "before-rename")
+            throw new Error("fixture lost rename ACK");
+          await rename(from, to);
+          preferenceRenamed = true;
+          if (fault === "after-rename")
+            throw new Error("fixture lost postwrite ACK");
+          if (fault === "readback")
+            await fs.writeFile(
+              preferenceFile(),
+              JSON.stringify(record(false)),
+              { mode: 0o600 },
+            );
+        });
+      const openSpy = vi
+        .spyOn(fs, "open")
+        .mockImplementation(async (...args) => {
+          const fd = await open(...args);
+          if (
+            fault === "parent-sync" &&
+            preferenceRenamed &&
+            String(args[0]) === path.dirname(preferenceFile())
+          )
+            vi.spyOn(fd, "sync").mockRejectedValue(
+              new Error("fixture parent durability unknown"),
+            );
+          return fd;
+        });
+      expect(await first.setInstallOnQuitPreference(true)).toEqual(unknown);
+      const calls = renameSpy.mock.calls.length;
+      expect(await first.setInstallOnQuitPreference(false)).toEqual(unknown);
+      expect(renameSpy).toHaveBeenCalledTimes(calls);
+      await first.close();
+      renameSpy.mockRestore();
+      openSpy.mockRestore();
+      // Even external observation of a valid ON record cannot erase the original
+      // unacknowledged operation; the durable witness belongs to the Release owner.
+      await fs.writeFile(preferenceFile(), JSON.stringify(record(true)), {
+        mode: 0o600,
+      });
+      for (let lifetime = 0; lifetime < 2; lifetime++) {
+        const fresh = (await createInstalledUpdateRuntime(options()))!;
+        await fresh.initialize();
+        expect(fresh.installOnQuitPreference()).toEqual({
+          ...unknown,
+          enabled: false,
+        });
+        expect(await fresh.setInstallOnQuitPreference(true)).toEqual(unknown);
+        expect(await fresh.applyOnNormalQuit(request())).toEqual(unknown);
+        await fresh.close();
+      }
+      expect(mocks.helper).not.toHaveBeenCalled();
+      expect(quit).not.toHaveBeenCalled();
+    },
+  );
+
+  it("applies once with relaunch false and no recursive Quit, retaining admission", async () => {
+    const acquireAdmission = vi.fn(async () => ({
+      ok: true as const,
+      release,
+    }));
+    const controller = await optedIn({ ...options(), acquireAdmission });
+    const original = request();
+    const first = controller.applyOnNormalQuit(original);
+    const second = controller.applyOnNormalQuit(
+      request(original.deadlineAt + 100_000),
+    );
+    expect(second).toBe(first);
+    expect(acquireAdmission).toHaveBeenCalledWith(expect.any(Function), {
+      ...original,
+      relaunch: false,
+      requestQuit: false,
+    });
+    expect(await first).toEqual({ status: "accepted", relaunch: false });
+    expect(mocks.helper).toHaveBeenCalledOnce();
+    expect(mocks.helper.mock.calls[0]![1]).toMatchObject({
+      action: "apply",
+      relaunch: false,
+      source,
+      target,
+    });
+    const launch = mocks.helper.mock.calls[0]![2];
+    expect(launch.deadlineAt).toBe(original.deadlineAt);
+    expect(launch.canStartEffect()).toBe(true);
+    expect(launch.readinessTimeoutMs).toBeGreaterThan(0);
+    expect(launch.readinessTimeoutMs).toBeLessThanOrEqual(
+      original.deadlineAt - Date.now() + 100,
+    );
+    const saved = JSON.parse(await fs.readFile(ready, "utf8"));
+    expect(saved.operation.operationId).toBe(
+      mocks.helper.mock.calls[0]![1].operationId,
+    );
+    expect(saved.helper).toEqual({ pid: 123, processStart: "fixture-start" });
+    expect(controller.normalQuitUpdateState()).toMatchObject({
+      status: "settled",
+      deadlineAt: original.deadlineAt,
+    });
+    expect(quit).not.toHaveBeenCalled();
+    await controller.close();
+    expect(release).not.toHaveBeenCalled();
+  });
+
+  it("preserves explicit restart's relaunch true and Quit", async () => {
+    const acquireAdmission = vi.fn(async () => ({
+      ok: true as const,
+      release,
+    }));
+    const controller = await optedIn({ ...options(), acquireAdmission });
+    await controller.restart();
+    expect(acquireAdmission).toHaveBeenCalledWith(expect.any(Function));
+    expect(mocks.helper.mock.calls[0]![1]).toMatchObject({ relaunch: true });
+    expect(quit).toHaveBeenCalledOnce();
+    await controller.close();
+  });
+
+  it("does not acquire admission or copy when already expired", async () => {
+    const acquireAdmission = vi.fn(options().acquireAdmission);
+    const controller = await optedIn({ ...options(), acquireAdmission });
+    expect(
+      await controller.applyOnNormalQuit(request(Date.now() - 1)),
+    ).toMatchObject({
+      status: "skipped",
+      code: "UPDATE_QUIT_DEADLINE_EXPIRED",
+    });
+    expect(acquireAdmission).not.toHaveBeenCalled();
+    expect(mocks.copyApp).not.toHaveBeenCalled();
+    expect(mocks.helper).not.toHaveBeenCalled();
+    await controller.close();
+  });
+
+  it.each([
+    "acquire",
+    "source-read",
+    "verify",
+    "before-copy",
+    "copy",
+    "after-copy",
+    "dispatch-record",
+    "helper-ack",
+  ])(
+    "rechecks the original absolute deadline after late %s",
+    async (boundary) => {
+      let clock = Date.now();
+      const deadlineAt = clock + 10_000;
+      vi.spyOn(Date, "now").mockImplementation(() => clock);
+      const recheck = vi.fn(async () => {
+        if (
+          (boundary === "before-copy" && recheck.mock.calls.length === 1) ||
+          (boundary === "after-copy" && recheck.mock.calls.length === 2)
+        )
+          clock = deadlineAt;
+        return { ok: true as const };
+      });
+      const controller = await optedIn({
+        ...options(),
+        acquireAdmission: async () => {
+          if (boundary === "acquire") clock = deadlineAt;
+          return { ok: true as const, release, recheck };
+        },
+      });
+      if (boundary === "source-read") {
+        const exec = mocks.exec.getMockImplementation()!;
+        mocks.exec.mockImplementation(async (...args) => {
+          const value = await exec(...args);
+          if (args[1][0].endsWith("update-slot.mjs")) clock = deadlineAt;
+          return value;
+        });
+      }
+      if (boundary === "verify") {
+        const verify = mocks.verify.getMockImplementation();
+        const value = await mocks.verify();
+        mocks.verify.mockImplementation(async (...args) => {
+          clock = deadlineAt;
+          return verify ? verify(...args) : value;
+        });
+      }
+      if (boundary === "copy") {
+        const copy = mocks.copyApp.getMockImplementation()!;
+        mocks.copyApp.mockImplementation(async (...args) => {
+          await copy(...args);
+          clock = deadlineAt;
+        });
+      }
+      if (boundary === "dispatch-record") {
+        const rename = fs.rename.bind(fs);
+        vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+          await rename(from, to);
+          if (
+            String(to) === ready &&
+            JSON.parse(await fs.readFile(ready, "utf8")).operation
+          )
+            clock = deadlineAt;
+        });
+      }
+      if (boundary === "helper-ack") {
+        const helper = mocks.helper.getMockImplementation()!;
+        mocks.helper.mockImplementation(async (...args) => {
+          const value = await helper(...args);
+          clock = deadlineAt;
+          return value;
+        });
+      }
+      const receipt = await controller.applyOnNormalQuit(request(deadlineAt));
+      expect(receipt.status).toBe(
+        [
+          "acquire",
+          "verify",
+          "copy",
+          "after-copy",
+          "dispatch-record",
+          "helper-ack",
+        ].includes(boundary)
+          ? "unknown"
+          : "blocked",
+      );
+      expect(quit).not.toHaveBeenCalled();
+      expect(mocks.helper).toHaveBeenCalledTimes(
+        boundary === "helper-ack" ? 1 : 0,
+      );
+      if (
+        [
+          "acquire",
+          "verify",
+          "copy",
+          "after-copy",
+          "dispatch-record",
+          "helper-ack",
+        ].includes(boundary)
+      )
+        expect(release).not.toHaveBeenCalled();
+      else expect(release).toHaveBeenCalledOnce();
+      await controller.close();
+    },
+  );
+
+  it.each(["copy", "admission", "helper-ack"])(
+    "keeps a timed-out original %s pending without cleanup, retry or later dispatch",
+    async (boundary) => {
+      const reached = deferred();
+      const gate = deferred();
+      const finished = deferred();
+      const selected = {
+        ...options(),
+        acquireAdmission: async () => {
+          if (boundary === "admission") {
+            reached.resolve();
+            await gate.promise;
+          }
+          return { ok: true as const, release };
+        },
+      };
+      const controller = await optedIn(selected);
+      if (boundary === "copy") {
+        const copy = mocks.copyApp.getMockImplementation()!;
+        mocks.copyApp.mockImplementation(async (...args) => {
+          reached.resolve();
+          await gate.promise;
+          await copy(...args);
+          finished.resolve();
+        });
+      }
+      if (boundary === "helper-ack") {
+        const helper = mocks.helper.getMockImplementation()!;
+        mocks.helper.mockImplementation(async (...args) => {
+          const value = await helper(...args);
+          reached.resolve();
+          await gate.promise;
+          return value;
+        });
+      }
+      const original = request(Date.now() + 250);
+      const pending = controller.applyOnNormalQuit(original);
+      await reached.promise;
+      expect(release).not.toHaveBeenCalled();
+      const receipt = await pending;
+      expect(receipt.status).toBe("unknown");
+      expect(controller.applyOnNormalQuit(request(Date.now() + 100_000))).toBe(
+        pending,
+      );
+      gate.resolve();
+      if (boundary === "copy") await finished.promise;
+      for (let turn = 0; turn < 8; turn++) await nextTurn();
+      expect(mocks.helper).toHaveBeenCalledTimes(
+        boundary === "helper-ack" ? 1 : 0,
+      );
+      expect(release).not.toHaveBeenCalled();
+      expect(quit).not.toHaveBeenCalled();
+      if (boundary === "copy") {
+        const saved = JSON.parse(await fs.readFile(ready, "utf8"));
+        expect(saved.preparation).toMatchObject({ source, target });
+        expect(saved.operation).toBeNull();
+        await expect(
+          fs.lstat(
+            path.join(path.dirname(ready), saved.preparation.operationId),
+          ),
+        ).resolves.toBeDefined();
+      }
+      await controller.close();
+      if (boundary === "copy") {
+        const originalBytes = await fs.readFile(ready, "utf8");
+        const fresh = (await createInstalledUpdateRuntime(options()))!;
+        await fresh.initialize();
+        expect(fresh.snapshot()).toMatchObject({
+          phase: "failed",
+          code: "UPDATE_STAGING_OUTCOME_UNKNOWN",
+        });
+        expect(await fs.readFile(ready, "utf8")).toBe(originalBytes);
+        expect(mocks.helper).not.toHaveBeenCalled();
+        await fresh.close();
+      }
+    },
+  );
+
+  it("checks the host closure before effects even while time remains", async () => {
+    let allowed = true;
+    const controller = await optedIn({
+      ...options(),
+      canStartNormalQuitEffect: () => allowed,
+      acquireAdmission: async () => ({
+        ok: true as const,
+        release,
+        recheck: async () => {
+          allowed = false;
+          return { ok: true as const };
+        },
+      }),
+    });
+    expect(await controller.applyOnNormalQuit(request())).toMatchObject({
+      status: "blocked",
+      code: "UPDATE_QUIT_DEADLINE_EXPIRED",
+    });
+    expect(mocks.copyApp).not.toHaveBeenCalled();
+    expect(mocks.helper).not.toHaveBeenCalled();
+    expect(release).toHaveBeenCalledOnce();
+    await controller.close();
+  });
+  it.each(["unlink-ack", "fence-parent-sync"])(
+    "preserves the original consent outcome after %s during confirmation",
+    async (fault) => {
+      const first = await prepared();
+      const unlink = fs.unlink.bind(fs);
+      const open = fs.open.bind(fs);
+      let removed = false;
+      const unlinkSpy = vi
+        .spyOn(fs, "unlink")
+        .mockImplementation(async (file) => {
+          await unlink(file);
+          if (String(file) === unconfirmedFile()) {
+            removed = true;
+            if (fault === "unlink-ack")
+              throw new Error("fixture lost unlink ACK");
+          }
+        });
+      const openSpy = vi
+        .spyOn(fs, "open")
+        .mockImplementation(async (...args) => {
+          const fd = await open(...args);
+          if (
+            removed &&
+            fault === "fence-parent-sync" &&
+            String(args[0]) === path.dirname(preferenceFile())
+          ) {
+            removed = false;
+            vi.spyOn(fd, "sync").mockRejectedValue(
+              new Error("fixture finalization durability unknown"),
+            );
+          }
+          return fd;
+        });
+      expect(await first.setInstallOnQuitPreference(true)).toEqual({
+        status: "confirmed",
+        scope: "install-on-normal-quit",
+        enabled: true,
+      });
+      await first.close();
+      unlinkSpy.mockRestore();
+      openSpy.mockRestore();
+      const fresh = (await createInstalledUpdateRuntime(options()))!;
+      await fresh.initialize();
+      expect(fresh.installOnQuitPreference()).toEqual({
+        status: "confirmed",
+        scope: "install-on-normal-quit",
+        enabled: true,
+      });
+      await fresh.close();
+    },
+  );
+
+  it("publishes the original attempt before synchronous helper reentry", async () => {
+    const controller = await optedIn();
+    const helper = mocks.helper.getMockImplementation()!;
+    let reentered: ReturnType<typeof controller.applyOnNormalQuit> | undefined;
+    mocks.helper.mockImplementation(async (...args) => {
+      reentered = controller.applyOnNormalQuit(request(Date.now() + 100_000));
+      return helper(...args);
+    });
+    const original = controller.applyOnNormalQuit(request());
+    expect(await original).toEqual({ status: "accepted", relaunch: false });
+    expect(reentered).toBe(original);
+    expect(mocks.helper).toHaveBeenCalledOnce();
+    expect(release).not.toHaveBeenCalled();
+    expect(quit).not.toHaveBeenCalled();
+    await controller.close();
+  });
+  it("keeps confirmed consent conservative on reload if fence removal was refused", async () => {
+    const first = await prepared();
+    const unlink = fs.unlink.bind(fs);
+    const unlinkSpy = vi
+      .spyOn(fs, "unlink")
+      .mockImplementation(async (file) => {
+        if (String(file) === unconfirmedFile())
+          throw new Error("fixture fence removal refused");
+        return unlink(file);
+      });
+    expect(await first.setInstallOnQuitPreference(true)).toEqual({
+      status: "confirmed",
+      scope: "install-on-normal-quit",
+      enabled: true,
+    });
+    expect(unlinkSpy).toHaveBeenCalledTimes(1);
+    await first.close();
+    unlinkSpy.mockRestore();
+    const fresh = (await createInstalledUpdateRuntime(options()))!;
+    await fresh.initialize();
+    expect(fresh.installOnQuitPreference()).toEqual({
+      ...unknown,
+      enabled: false,
+    });
+    expect(await fresh.setInstallOnQuitPreference(true)).toEqual(unknown);
+    await fresh.close();
+  });
+
+  it("binds the native launch fence to both original expiry and current hook closure", async () => {
+    let allowed = true;
+    const controller = await optedIn({
+      ...options(),
+      canStartNormalQuitEffect: () => allowed,
+    });
+    const original = request();
+    expect(await controller.applyOnNormalQuit(original)).toEqual({
+      status: "accepted",
+      relaunch: false,
+    });
+    const launch = mocks.helper.mock.calls[0]![2];
+    expect(launch.deadlineAt).toBe(original.deadlineAt);
+    expect(launch.canStartEffect()).toBe(true);
+    allowed = false;
+    expect(launch.canStartEffect()).toBe(false);
+    allowed = true;
+    vi.spyOn(Date, "now").mockReturnValue(original.deadlineAt);
+    expect(launch.canStartEffect()).toBe(false);
+    expect(mocks.helper).toHaveBeenCalledOnce();
+    await controller.close();
+  });
+  it.each(["before-rename", "after-rename"])(
+    "does not dispatch a consent write when its fence ACK is lost %s",
+    async (fault) => {
+      const first = await prepared();
+      const rename = fs.rename.bind(fs);
+      const renameSpy = vi
+        .spyOn(fs, "rename")
+        .mockImplementation(async (from, to) => {
+          if (String(to) !== unconfirmedFile()) return rename(from, to);
+          if (fault === "before-rename")
+            throw new Error("fixture fence not acknowledged");
+          await rename(from, to);
+          throw new Error("fixture fence commit ACK lost");
+        });
+      expect(await first.setInstallOnQuitPreference(true)).toEqual({
+        status: "refused",
+        code: "UPDATE_QUIT_PREFERENCE_FENCE_UNCONFIRMED",
+      });
+      expect(
+        renameSpy.mock.calls.some(
+          (call) => String(call[1]) === preferenceFile(),
+        ),
+      ).toBe(false);
+      await first.close();
+      renameSpy.mockRestore();
+      const fresh = (await createInstalledUpdateRuntime(options()))!;
+      await fresh.initialize();
+      expect(fresh.installOnQuitPreference()).toEqual(
+        fault === "after-rename"
+          ? { ...unknown, enabled: false }
+          : {
+              status: "confirmed",
+              scope: "install-on-normal-quit",
+              enabled: false,
+            },
+      );
+      await fresh.close();
+    },
+  );
 });

@@ -140,7 +140,10 @@ function assertInput(input: InstalledUpdateRequest): void {
     throw new Error("INSTALLED_UPDATE_PREDECESSOR_STATE_UNQUALIFIED");
 }
 
-async function helperBytes(helperPath: string): Promise<Buffer> {
+async function helperBytes(
+  helperPath: string,
+  checkPreflight: () => void,
+): Promise<Buffer> {
   if (
     !path.isAbsolute(helperPath) ||
     path.normalize(helperPath) !== helperPath
@@ -148,6 +151,7 @@ async function helperBytes(helperPath: string): Promise<Buffer> {
     throw new Error("INSTALLED_UPDATE_HELPER_INVALID");
   }
   const expected = await fs.lstat(helperPath, { bigint: true });
+  checkPreflight();
   if (
     !expected.isFile() ||
     expected.nlink !== 1n ||
@@ -174,7 +178,10 @@ async function helperBytes(helperPath: string): Promise<Buffer> {
     constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
   );
   try {
-    if (!matches(await handle.stat({ bigint: true }))) {
+    checkPreflight();
+    const opened = await handle.stat({ bigint: true });
+    checkPreflight();
+    if (!matches(opened)) {
       throw new Error("INSTALLED_UPDATE_HELPER_INVALID");
     }
     // The extra byte detects growth without reading beyond the checked bound.
@@ -187,13 +194,16 @@ async function helperBytes(helperPath: string): Promise<Buffer> {
         buffer.length - size,
         size,
       );
+      checkPreflight();
       if (bytesRead === 0) break;
       size += bytesRead;
     }
     const bytes = buffer.subarray(0, size);
+    const final = await handle.stat({ bigint: true });
+    checkPreflight();
     if (
       size !== Number(expected.size) ||
-      !matches(await handle.stat({ bigint: true })) ||
+      !matches(final) ||
       createHash("sha256").update(bytes).digest("hex") !== HELPER_SHA256
     ) {
       throw new Error("INSTALLED_UPDATE_HELPER_INVALID");
@@ -201,6 +211,7 @@ async function helperBytes(helperPath: string): Promise<Buffer> {
     return bytes;
   } finally {
     await handle.close();
+    checkPreflight();
   }
 }
 
@@ -242,6 +253,8 @@ export interface InstalledUpdateOperation {
   }>;
 }
 
+type QuitEffectRefusal = "quit_deadline_expired" | "quit_effect_not_allowed";
+
 export type InstalledUpdateLaunch =
   | Readonly<{
       status: "not_started";
@@ -250,7 +263,8 @@ export type InstalledUpdateLaunch =
         | "helper_preflight_failed"
         | "owner_home_invalid"
         | "promotion_lease_unconfirmed"
-        | "spawn_record_required";
+        | "spawn_record_required"
+        | QuitEffectRefusal;
       operation: InstalledUpdateOperation;
     }>
   | Readonly<{ status: "ready"; operation: InstalledUpdateOperation }>
@@ -420,6 +434,9 @@ export async function startInstalledUpdateHelper(
   input: InstalledUpdateRequest,
   options: Readonly<{
     readinessTimeoutMs?: number;
+    /** Original normal-Quit budget; both options are required together. */
+    deadlineAt?: number;
+    canStartEffect?(): boolean;
     promotionLease?: PromotionLeaseTransfer;
     // The application records this actual handle before any helper program or
     // operation bytes are sent. Failure remains an observed, unknown launch.
@@ -427,6 +444,18 @@ export async function startInstalledUpdateHelper(
   }> = {},
 ): Promise<InstalledUpdateLaunch> {
   assertInput(input);
+  const deadlineAt = options.deadlineAt;
+  const selectedCanStartEffect = options.canStartEffect;
+  if (
+    (deadlineAt !== undefined) !== (selectedCanStartEffect !== undefined) ||
+    (deadlineAt !== undefined &&
+      (!Number.isSafeInteger(deadlineAt) ||
+        deadlineAt <= 0 ||
+        typeof selectedCanStartEffect !== "function" ||
+        input.relaunch))
+  )
+    throw new Error("INSTALLED_UPDATE_QUIT_CONTEXT_INVALID");
+  const canStartEffect = selectedCanStartEffect?.bind(options);
   const readinessTimeoutMs = options.readinessTimeoutMs ?? 180_000;
   if (
     !Number.isSafeInteger(readinessTimeoutMs) ||
@@ -435,6 +464,32 @@ export async function startInstalledUpdateHelper(
   ) {
     throw new Error("INSTALLED_UPDATE_READINESS_DEADLINE_INVALID");
   }
+  const readinessDeadlineAt =
+    deadlineAt === undefined
+      ? undefined
+      : Math.min(deadlineAt, Date.now() + readinessTimeoutMs);
+  const waitBudgetMs = (): number =>
+    readinessDeadlineAt === undefined
+      ? readinessTimeoutMs
+      : Math.max(0, readinessDeadlineAt - Date.now());
+  const effectRefusal = (): QuitEffectRefusal | null => {
+    if (deadlineAt === undefined || !canStartEffect) return null;
+    if (Date.now() >= deadlineAt) return "quit_deadline_expired";
+    try {
+      if (canStartEffect() !== true) return "quit_effect_not_allowed";
+    } catch {
+      return "quit_effect_not_allowed";
+    }
+    return Date.now() >= deadlineAt ? "quit_deadline_expired" : null;
+  };
+  let preflightRefusal: QuitEffectRefusal | null = null;
+  const checkPreflight = (): void => {
+    const reason = effectRefusal();
+    if (reason) {
+      preflightRefusal = reason;
+      throw new Error(reason);
+    }
+  };
   // Pin the request before asynchronous preflight; later caller mutation cannot
   // change either the bytes sent or the identity expected in the acknowledgment.
   const fields: InstalledUpdateFields = {
@@ -481,7 +536,8 @@ export async function startInstalledUpdateHelper(
       | "helper_preflight_failed"
       | "owner_home_invalid"
       | "promotion_lease_unconfirmed"
-      | "spawn_record_required",
+      | "spawn_record_required"
+      | QuitEffectRefusal,
   ): InstalledUpdateLaunch => {
     // This receipt explicitly has no process and no process exit code. It is
     // created only on the preflight side of the spawn boundary.
@@ -502,6 +558,8 @@ export async function startInstalledUpdateHelper(
       },
     };
   };
+  const initialRefusal = effectRefusal();
+  if (initialRefusal) return beforeSpawn(initialRefusal);
   if (
     Boolean(pinned.predecessor) !== Boolean(lease) ||
     (lease &&
@@ -519,21 +577,23 @@ export async function startInstalledUpdateHelper(
       const verified = await Promise.race([
         lease.verify(),
         new Promise<false>((resolve) => {
-          deadline = setTimeout(() => resolve(false), readinessTimeoutMs);
+          deadline = setTimeout(() => resolve(false), waitBudgetMs());
         }),
       ]);
+      checkPreflight();
       if (verified !== true) return beforeSpawn("promotion_lease_unconfirmed");
     } catch {
-      return beforeSpawn("promotion_lease_unconfirmed");
+      return beforeSpawn(preflightRefusal ?? "promotion_lease_unconfirmed");
     } finally {
       clearTimeout(deadline);
     }
   }
   let bytes: Buffer;
   try {
-    bytes = await helperBytes(helperPath);
+    bytes = await helperBytes(helperPath, checkPreflight);
+    checkPreflight();
   } catch {
-    return beforeSpawn("helper_preflight_failed");
+    return beforeSpawn(preflightRefusal ?? "helper_preflight_failed");
   }
   let user: os.UserInfo<string>;
   try {
@@ -553,6 +613,8 @@ export async function startInstalledUpdateHelper(
     home: user.homedir,
     ...(lease ? { leaseIdentity: lease.identity } : {}),
   };
+  const spawnRefusal = effectRefusal();
+  if (spawnRefusal) return beforeSpawn(spawnRefusal);
   const child = spawn("/usr/bin/python3", ["-I", "-S", "-B", "-"], {
     cwd: "/",
     env: { LANG: "C.UTF-8", PATH: "/usr/bin:/bin" },
@@ -614,6 +676,15 @@ export async function startInstalledUpdateHelper(
     protocolError ??= reason;
     finish({ status: "outcome_unknown", reason, operation });
   };
+  const canSendEffect = (): boolean => {
+    if (settled) return false;
+    const reason = effectRefusal();
+    if (reason) {
+      unknown(reason);
+      return false;
+    }
+    return true;
+  };
   const finishClosedTransfer = (): void => {
     if (!continueWritten || settled) return;
     if (exit) {
@@ -638,13 +709,16 @@ export async function startInstalledUpdateHelper(
   };
   const transfer = async (): Promise<void> => {
     if (settled || transferStarted || !lease) return;
+    if (!canSendEffect()) return;
     if (!requestSent) {
       unknown("readiness_before_request");
       return;
     }
     transferStarted = true;
     try {
-      if ((await lease.verify()) !== true) {
+      const verified = await lease.verify();
+      if (!canSendEffect()) return;
+      if (verified !== true) {
         unknown("promotion_lease_unconfirmed");
         return;
       }
@@ -652,7 +726,7 @@ export async function startInstalledUpdateHelper(
       unknown("promotion_lease_unconfirmed");
       return;
     }
-    if (settled) return;
+    if (!canSendEffect()) return;
     try {
       await lease.release();
     } catch {
@@ -660,7 +734,7 @@ export async function startInstalledUpdateHelper(
       return;
     }
     // A late release reply after timeout never opens the mutation barrier.
-    if (settled) return;
+    if (!canSendEffect()) return;
     if (!continuePipe) {
       unknown("continue_channel_missing");
       return;
@@ -674,6 +748,7 @@ export async function startInstalledUpdateHelper(
       unknown("continue_oversized");
       return;
     }
+    if (!canSendEffect()) return;
     continueSent = true;
     try {
       continuePipe.end(frame, (error?: Error | null) => {
@@ -690,8 +765,8 @@ export async function startInstalledUpdateHelper(
     }
   };
   const timer = setTimeout(
-    () => unknown("readiness_timeout"),
-    readinessTimeoutMs,
+    () => unknown(effectRefusal() ?? "readiness_timeout"),
+    waitBudgetMs(),
   );
   const ack = child.stdio[4] as Readable | null;
   const ackChunks: Buffer[] = [];
@@ -733,7 +808,7 @@ export async function startInstalledUpdateHelper(
     if (handoff.phase === "refused")
       finish({ status: "refused", reason: handoff.error, operation });
     else if (handoff.phase === "closed_predecessor_ready") void transfer();
-    else finish({ status: "ready", operation });
+    else if (canSendEffect()) finish({ status: "ready", operation });
   });
   ack?.on("close", () => {
     if (!ackEnded && !spawnFailed) unknown("readiness_channel_closed");
@@ -816,19 +891,23 @@ export async function startInstalledUpdateHelper(
       finish({ status: "terminal", operation, result: exit });
     } else if (!settled) unknown("helper_exited_before_readiness");
   });
-  const write = (stream: Writable | null, data: Buffer | string): void => {
+  const write = (stream: Writable | null, data: Buffer | string): boolean => {
+    if (!canSendEffect()) return false;
     if (!stream) {
       unknown("request_channel_missing");
-      return;
+      return false;
     }
     stream.once("error", () => unknown("request_channel_error"));
     stream.end(data);
+    return true;
   };
   const sendRequest = () => {
-    if (settled) return;
-    requestSent = true;
-    write(child.stdin, bytes);
-    write(child.stdio[3] as Writable | null, JSON.stringify(request));
+    if (!canSendEffect()) return;
+    if (!write(child.stdin, bytes)) return;
+    requestSent = write(
+      child.stdio[3] as Writable | null,
+      JSON.stringify(request),
+    );
   };
   child.once("spawn", () => {
     spawned = true;
@@ -843,10 +922,12 @@ export async function startInstalledUpdateHelper(
         unknown("spawn_record_failed");
         return;
       }
-      if (settled) return;
+      if (!canSendEffect()) return;
       if (lease) {
         try {
-          if ((await lease.verify()) !== true) {
+          const verified = await lease.verify();
+          if (!canSendEffect()) return;
+          if (verified !== true) {
             unknown("promotion_lease_unconfirmed");
             return;
           }

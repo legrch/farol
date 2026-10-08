@@ -99,6 +99,55 @@ describe("installed Computer drain (injected clients, no live provider)", () => 
     expect(f.reader.close).toHaveBeenCalledOnce();
     expect(f.ports.stopOwnedClients).toHaveBeenCalledOnce();
   });
+  it("refuses normal-Quit task acquisition before an unfenced proxy can launch", async () => {
+    const f = fixture();
+    vi.mocked(f.ports.taskKeys).mockResolvedValue(["original-dispatch"]);
+    await expect(
+      drainInstalledComputerWork({ ...f.ports, taskReaderAvailable: false }),
+    ).resolves.toEqual({ ok: false, code: "UPDATE_TASK_ROUTE_NEEDS_DRAIN" });
+    expect(f.ports.openTaskReader).not.toHaveBeenCalled();
+    expect(f.ports.stopOwnedClients).not.toHaveBeenCalled();
+  });
+  it("normal Quit with no retained task does not need a new proxy", async () => {
+    const f = fixture();
+    await expect(
+      drainInstalledComputerWork({ ...f.ports, taskReaderAvailable: false }),
+    ).resolves.toEqual({ ok: true });
+    expect(f.ports.openTaskReader).not.toHaveBeenCalled();
+    expect(f.ports.stopOwnedClients).toHaveBeenCalledOnce();
+  });
+  it("an expired Quit fence after journal observation never opens a task reader", async () => {
+    const f = fixture();
+    let current = true;
+    vi.mocked(f.ports.stillCurrent).mockImplementation(() => current);
+    vi.mocked(f.ports.taskKeys).mockImplementation(async () => {
+      current = false;
+      return ["original-dispatch"];
+    });
+    await expect(drainInstalledComputerWork(f.ports)).resolves.toEqual({
+      ok: false,
+      code: "UPDATE_STATE_UNREADABLE",
+    });
+    expect(f.ports.openTaskReader).not.toHaveBeenCalled();
+    expect(f.ports.stopOwnedClients).not.toHaveBeenCalled();
+  });
+  it("a reader that opens late is closed without starting another provider observation", async () => {
+    const f = fixture();
+    let current = true;
+    vi.mocked(f.ports.stillCurrent).mockImplementation(() => current);
+    vi.mocked(f.ports.taskKeys).mockResolvedValue(["original-dispatch"]);
+    vi.mocked(f.ports.openTaskReader).mockImplementation(async () => {
+      current = false;
+      return f.reader;
+    });
+    await expect(drainInstalledComputerWork(f.ports)).resolves.toEqual({
+      ok: false,
+      code: "UPDATE_TASK_ROUTE_NEEDS_DRAIN",
+    });
+    expect(f.reader.status).not.toHaveBeenCalled();
+    expect(f.reader.close).toHaveBeenCalledOnce();
+    expect(f.ports.stopOwnedClients).not.toHaveBeenCalled();
+  });
   it.each([
     "inProgress",
     "unknown",

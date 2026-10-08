@@ -50,6 +50,7 @@ import { drainInstalledComputer } from "./installed-computer-drain";
 import {
   InstalledUpdateCommandSchema,
   type InstalledUpdateView,
+  type NormalQuitApplyContext,
 } from "../../modules/release/contract/installed-update";
 import {
   UPDATE_RECHECK_MS,
@@ -297,6 +298,7 @@ import {
   type GracefulQuitSignals,
 } from "./quit-signal";
 import { writeQuitReceipt } from "./quit-receipt-store";
+import { createQuitUpdatePreparation } from "./quit-update-preparation";
 import { drainComputerConnector } from "./computer-connector-drain";
 import { isTrustedIpcSender } from "./ipc-sender";
 import {
@@ -771,6 +773,9 @@ let connectorStartInFlight: Promise<void> | null = null;
 // start with authority that a concurrent change is about to replace.
 const authorityTransitions = new AuthorityTransitionReservation();
 let installedUpdater: InstalledUpdater | null = null;
+const quitUpdatePreparation = createQuitUpdatePreparation(
+  () => installedUpdater,
+);
 let installedUpdaterInitialization: Promise<void> | null = null;
 let installedUpdateTimer: NodeJS.Timeout | null = null;
 let installedUpdateAdmission = false;
@@ -788,7 +793,8 @@ async function installedUpdateCommand(
   value: unknown,
 ): Promise<InstalledUpdateView> {
   const command = InstalledUpdateCommandSchema.safeParse(value);
-  if (!command.success || !installedUpdater) return installedUpdateView;
+  if (!command.success || !installedUpdater || quitInProgress)
+    return installedUpdateView;
   if (command.data.kind === "check") await installedUpdater.check(true);
   else if (command.data.kind === "download") await installedUpdater.download();
   else if (command.data.kind === "skip") await installedUpdater.skip();
@@ -797,6 +803,9 @@ async function installedUpdateCommand(
     await installedUpdater.acknowledgeNotice(command.data.noticeKey);
   else if (command.data.kind === "set-automatic-update-preference") {
     await installedUpdater.setAutomaticUpdatePreference(command.data.enabled);
+    return installedUpdater.snapshot();
+  } else if (command.data.kind === "set-install-on-quit-preference") {
+    await installedUpdater.setInstallOnQuitPreference(command.data.enabled);
     return installedUpdater.snapshot();
   } else if (command.data.kind === "restart") await installedUpdater.restart();
   else if (command.data.kind === "recover" || command.data.kind === "rollback")
@@ -821,10 +830,21 @@ async function initializeInstalledUpdater(): Promise<void> {
         rawFs.rm(directory, { recursive: true, force }),
       publish: publishInstalledUpdate,
       quit: () => app.quit(),
-      acquireAdmission: async (desktopWorkSettled) => {
+      canStartNormalQuitEffect: () =>
+        quitInProgress && quitUpdatePreparation.effectAllowed(),
+      acquireAdmission: async (
+        desktopWorkSettled,
+        quit?: NormalQuitApplyContext,
+      ) => {
+        // Only the host's original preparation may borrow the Quit admission.
+        // New IPC work remains fenced by quitInProgress throughout preparation.
+        const admissionCurrent = () =>
+          quit === undefined
+            ? !quitInProgress
+            : quitInProgress && quitUpdatePreparation.admissionAllowed(quit);
         if (
           installedUpdateAdmission ||
-          quitInProgress ||
+          !admissionCurrent() ||
           configurationRequests > 0 ||
           chatGptTaskAdmission ||
           pendingChatGptReadonlyTask ||
@@ -861,9 +881,13 @@ async function initializeInstalledUpdater(): Promise<void> {
           >
         > = [];
         const recheck = async () => {
+          if (!admissionCurrent())
+            return { ok: false as const, code: "UPDATE_WORK_PENDING" };
           for (const browser of browserAdmissions) {
             const result = await browser.recheck();
             if (!result.ok) return result;
+            if (!admissionCurrent())
+              return { ok: false as const, code: "UPDATE_WORK_PENDING" };
           }
           return { ok: true as const };
         };
@@ -917,14 +941,24 @@ async function initializeInstalledUpdater(): Promise<void> {
             ...(chatGptRoute ? [chatGptRoute] : []),
           ]);
           for (const route of routes) {
-            const browser = await route.acquireUpdateIdle();
+            if (!admissionCurrent()) return abort("UPDATE_WORK_PENDING");
+            const browser = await route.acquireUpdateIdle(
+              quit
+                ? {
+                    deadlineAt: quit.deadlineAt,
+                    canStartEffect: admissionCurrent,
+                  }
+                : undefined,
+            );
             if (!browser.ok) {
               browserReleaseUnconfirmed =
                 browser.code === "UPDATE_BROWSER_RELEASE_UNCONFIRMED";
               return abort(browser.code);
             }
             browserAdmissions.push(browser);
+            if (!admissionCurrent()) return abort("UPDATE_WORK_PENDING");
           }
+          if (!admissionCurrent()) return abort("UPDATE_WORK_PENDING");
           lease = await acquirePromotionLease(
             app.getPath("userData"),
             buildIdentity.buildId,
@@ -934,20 +968,26 @@ async function initializeInstalledUpdater(): Promise<void> {
             return abort("UPDATE_WORK_PENDING");
           }
           await liveTaskPersistence;
+          if (!admissionCurrent()) return abort("UPDATE_WORK_PENDING");
           const drained = await drainInstalledComputer({
             root: secureMcpLaunchRoot(),
             settings: snapshot.settings,
+            ...(quit ? { deadlineAt: quit.deadlineAt } : {}),
             desktopWorkSettled,
             stillCurrent: () => {
               const current = configuration?.snapshot();
               return (
-                !quitInProgress &&
+                admissionCurrent() &&
                 current?.status === "ready" &&
                 current.settings.revision === snapshot.settings.revision
               );
             },
             stopOwnedClients: async () => {
+              if (!admissionCurrent())
+                throw new Error("UPDATE_QUIT_DEADLINE_EXPIRED");
               await stopAndConfirmComputerMcp();
+              if (!admissionCurrent())
+                throw new Error("UPDATE_QUIT_DEADLINE_EXPIRED");
               // Preserve route, grants, selected app and credentials. Only the
               // runtime attachment becomes stopped after a verified drain.
               const recorded =
@@ -960,6 +1000,7 @@ async function initializeInstalledUpdater(): Promise<void> {
           if (!drained.ok) {
             return abort(drained.code);
           }
+          if (!admissionCurrent()) return abort("UPDATE_WORK_PENDING");
           return { ok: true, release, recheck };
         } catch {
           return abort("UPDATE_STATE_UNREADABLE");
@@ -2182,7 +2223,7 @@ async function initializeLiveTaskState(): Promise<void> {
 }
 
 async function openLiveTaskSurface(taskId: string): Promise<boolean> {
-  if (installedUpdateAdmission) return false;
+  if (quitInProgress || installedUpdateAdmission) return false;
   const route = liveTaskRoutes.get(taskId);
   if (!route) return false;
   try {
@@ -2902,6 +2943,8 @@ async function runProductTaskCommand(
 ): Promise<ProductTaskCommandResult> {
   const command = ProductTaskCommandSchema.safeParse(value);
   if (!command.success) return taskFailure("TASK_COMMAND_INVALID");
+  if (quitInProgress || installedUpdateAdmission)
+    return taskFailure("TASK_OPERATION_IN_PROGRESS");
   if (demoMode) {
     return taskFailure("TASKS_UNAVAILABLE");
   }
@@ -5464,7 +5507,7 @@ async function configureProduct(
 async function configureNewProductRequest(
   value: unknown,
 ): Promise<ProductConfigurationResult> {
-  if (installedUpdateAdmission)
+  if (quitInProgress || installedUpdateAdmission)
     return configurationFailure("AUTHORITY_CHANGE_IN_PROGRESS");
   configurationRequests += 1;
   try {
@@ -8943,7 +8986,7 @@ function focusForLayoutAfterRendererCommit(): void {
 }
 
 function requestQuickSwitcher(): void {
-  if (installedUpdateAdmission) return;
+  if (quitInProgress || installedUpdateAdmission) return;
   if (!window || setupOpen) return;
   shellOverlay = "quick-switcher";
   applyLayout();
@@ -8952,30 +8995,36 @@ function requestQuickSwitcher(): void {
 }
 
 function requestSidebarToggle(): void {
-  if (installedUpdateAdmission) return;
+  if (quitInProgress || installedUpdateAdmission) return;
   if (!window || window.isDestroyed()) return;
   publishShellAction("toggle-sidebar", "sidebar-command");
 }
 
 function requestUpdates(): void {
-  if (installedUpdateAdmission) return;
+  if (quitInProgress || installedUpdateAdmission) return;
   void containWindowOpenFailure(async () => {
     await ensureWindow();
-    if (installedUpdateAdmission || !window || window.isDestroyed()) return;
+    if (
+      quitInProgress ||
+      installedUpdateAdmission ||
+      !window ||
+      window.isDestroyed()
+    )
+      return;
     publishShellAction("open-updates", "update-command");
     window.webContents.focus();
   }, recoverWindowOpenFailure);
 }
 
 function requestSettings(): void {
-  if (installedUpdateAdmission) return;
+  if (quitInProgress || installedUpdateAdmission) return;
   if (!window) return;
   publishShellAction("open-settings", "settings-command");
   window.webContents.focus();
 }
 
 function closeShellOverlay(): void {
-  if (installedUpdateAdmission) return;
+  if (quitInProgress || installedUpdateAdmission) return;
   if (shellOverlay === "none") return;
   // Keep native input hidden until the renderer acknowledges the complete
   // dismissal, including an active resize or compact page-list overlay.
@@ -9800,6 +9849,7 @@ function installIpc(): void {
   );
   ipcMain.handle(channels.navigationShortcuts, (event, value: unknown) => {
     if (!isTrustedIpcSender(event, window)) return { ok: false };
+    if (quitInProgress || installedUpdateAdmission) return { ok: false };
     const parsed = parseNavigationShortcuts(value);
     if (!parsed) return { ok: false };
     navigationShortcuts = parsed;
@@ -9807,7 +9857,8 @@ function installIpc(): void {
     return { ok: true };
   });
   ipcMain.handle(channels.control, async (event, value: unknown) => {
-    if (installedUpdateAdmission) return { error: "UPDATE_IN_PROGRESS" };
+    if (quitInProgress || installedUpdateAdmission)
+      return { error: "UPDATE_IN_PROGRESS" };
     if (!isTrustedIpcSender(event, window))
       return { error: "IPC_SENDER_DENIED" };
     const parsed = controlSchema.safeParse(value);
@@ -9853,7 +9904,12 @@ function installIpc(): void {
     );
   });
   ipcMain.on(channels.layout, (event, value: unknown) => {
-    if (installedUpdateAdmission || !isTrustedIpcSender(event, window)) return;
+    if (
+      quitInProgress ||
+      installedUpdateAdmission ||
+      !isTrustedIpcSender(event, window)
+    )
+      return;
     applyRendererLayout(value);
   });
 }
@@ -10544,6 +10600,7 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
   // of being reported as drained.
   const quitDrain = createQuitDrain({
     deadlineMs: QUIT_DRAIN_DEADLINE_MS,
+    prepare: quitUpdatePreparation.prepare,
     // The receipt first, then — only for a confirmed drain — the run marker
     // written at start (N03/D2). An undrained quit, or a receipt that could
     // not be written, leaves the marker in place, and the next promotion

@@ -1,10 +1,13 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
+import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { PassThrough, Writable } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   startInstalledUpdateHelper,
+  type InstalledUpdateOperation,
   type InstalledUpdateRequest,
   type PromotionLeaseTransfer,
 } from "../../src/modules/release/infra/native/installed-update-helper.js";
@@ -13,7 +16,11 @@ vi.mock("node:child_process", async (original) => ({
   ...(await original<typeof import("node:child_process")>()),
   spawn: vi.fn(),
 }));
-afterEach(() => vi.clearAllMocks());
+afterEach(() => {
+  vi.clearAllMocks();
+  vi.restoreAllMocks();
+  vi.useRealTimers();
+});
 const helperPath = path.join(
   process.cwd(),
   "resources/native/update_helper.py",
@@ -76,6 +83,7 @@ class Transport extends EventEmitter {
     this.continuation,
   ];
   readonly unref = vi.fn();
+  readonly kill = vi.fn();
   finish(code: number, phase = "verified"): void {
     this.stdout.end(
       `${JSON.stringify({ phase, operationId: request.operationId })}\n`,
@@ -93,6 +101,10 @@ async function launch(
   ) => Promise<void>,
   promotionLease?: PromotionLeaseTransfer,
   transport?: Transport,
+  quitOptions: Readonly<{
+    deadlineAt?: number;
+    canStartEffect?(): boolean;
+  }> = {},
 ) {
   const child = transport ?? new Transport();
   let seen!: () => void;
@@ -110,6 +122,7 @@ async function launch(
     readinessTimeoutMs,
     ...(recordSpawn ? { recordSpawn } : {}),
     ...(promotionLease ? { promotionLease } : {}),
+    ...quitOptions,
   });
   await spawned;
   return { child, pending };
@@ -458,6 +471,428 @@ function closedEvent(
     leaseIdentity: lease.identity,
   };
 }
+
+describe("normal-Quit deadline fencing (Node transport doubles and test clocks only)", () => {
+  const now = 1_800_000_000_000;
+  const deadlineAt = now + 100;
+  const quitOptions = () => ({ deadlineAt, canStartEffect: () => true });
+  const clock = (): void => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    vi.setSystemTime(now);
+  };
+  const retainCompletion = async (
+    child: Transport,
+    operation: InstalledUpdateOperation,
+  ): Promise<void> => {
+    expect(operation.pid).toBe(child.pid);
+    expect(operation.observe().exit).toBeNull();
+    let completed = false;
+    void operation.completion.then(() => {
+      completed = true;
+    });
+    await tick();
+    expect(completed).toBe(false);
+    expect(child.kill).not.toHaveBeenCalled();
+    expect(child.unref).toHaveBeenCalledOnce();
+    expect(child.stdout.destroyed).toBe(false);
+    if (!child.ack.writableEnded) expect(child.ack.destroyed).toBe(false);
+    child.finish(70, "refused");
+    const terminal = await operation.completion;
+    expect(terminal).toMatchObject({
+      code: 70,
+      signal: null,
+      terminal: { phase: "refused", error: null },
+    });
+    expect(operation.observe().exit).toBe(terminal);
+    expect(spawn).toHaveBeenCalledOnce();
+  };
+
+  it.each([
+    { deadlineAt },
+    { canStartEffect: () => true },
+    { deadlineAt: NaN, canStartEffect: () => true },
+    { deadlineAt: Infinity, canStartEffect: () => true },
+    { deadlineAt: 0, canStartEffect: () => true },
+    { deadlineAt: -1, canStartEffect: () => true },
+    { deadlineAt: 1.5, canStartEffect: () => true },
+    { deadlineAt: Number.MAX_SAFE_INTEGER + 1, canStartEffect: () => true },
+    { deadlineAt, canStartEffect: true as unknown as () => boolean },
+  ])(
+    "rejects an invalid paired context %j before preflight",
+    async (options) => {
+      const open = vi.spyOn(fs, "open");
+      await expect(
+        startInstalledUpdateHelper(helperPath, request, options),
+      ).rejects.toThrow("INSTALLED_UPDATE_QUIT_CONTEXT_INVALID");
+      expect(open).not.toHaveBeenCalled();
+      expect(spawn).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([request, closedApplyRequest])(
+    "rejects relaunch in a normal-Quit context for $action",
+    async (input) => {
+      await expect(
+        startInstalledUpdateHelper(
+          helperPath,
+          {
+            ...input,
+            relaunch: true,
+          },
+          quitOptions(),
+        ),
+      ).rejects.toThrow("INSTALLED_UPDATE_QUIT_CONTEXT_INVALID");
+      expect(spawn).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["expired", "revoked", "throws", "non-boolean"])(
+    "keeps %s preflight known not_started without an invented process exit",
+    async (mode) => {
+      clock();
+      if (mode === "expired") vi.setSystemTime(deadlineAt);
+      const open = vi.spyOn(fs, "open");
+      const result = await startInstalledUpdateHelper(helperPath, request, {
+        deadlineAt,
+        canStartEffect: () => {
+          if (mode === "throws") throw new Error("fixture callback failure");
+          return mode === "non-boolean"
+            ? (1 as unknown as boolean)
+            : mode === "expired";
+        },
+      });
+      const reason =
+        mode === "expired"
+          ? "quit_deadline_expired"
+          : "quit_effect_not_allowed";
+      expect(result).toMatchObject({ status: "not_started", reason });
+      expect(result.operation.pid).toBeNull();
+      expect(await result.operation.completion).toEqual({
+        code: null,
+        signal: null,
+        terminal: null,
+        protocolError: reason,
+      });
+      expect(open).not.toHaveBeenCalled();
+      expect(spawn).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["open", "close", "owner-home"])(
+    "rechecks after %s preflight before spawn",
+    async (stage) => {
+      clock();
+      const originalOpen = fs.open.bind(fs);
+      const close = vi.fn();
+      if (stage === "owner-home") {
+        const originalUserInfo = os.userInfo.bind(os);
+        vi.spyOn(os, "userInfo").mockImplementationOnce(() => {
+          const user = originalUserInfo();
+          vi.setSystemTime(deadlineAt);
+          return user;
+        });
+      } else {
+        vi.spyOn(fs, "open").mockImplementationOnce(async (...args) => {
+          const handle = await originalOpen(...args);
+          const originalClose = handle.close.bind(handle);
+          vi.spyOn(handle, "close").mockImplementationOnce(async () => {
+            await originalClose();
+            close();
+            if (stage === "close") vi.setSystemTime(deadlineAt);
+          });
+          if (stage === "open") vi.setSystemTime(deadlineAt);
+          return handle;
+        });
+      }
+      const result = await startInstalledUpdateHelper(
+        helperPath,
+        request,
+        quitOptions(),
+      );
+      expect(result).toMatchObject({
+        status: "not_started",
+        reason: "quit_deadline_expired",
+      });
+      expect((await result.operation.completion).code).toBeNull();
+      expect(spawn).not.toHaveBeenCalled();
+      if (stage !== "owner-home") expect(close).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("bounds an unanswered preflight lease by the original deadline", async () => {
+    clock();
+    const lease = leaseFixture();
+    let reply!: (value: boolean) => void;
+    lease.verify.mockImplementationOnce(
+      () =>
+        new Promise<boolean>((resolve) => {
+          reply = resolve;
+        }),
+    );
+    const pending = startInstalledUpdateHelper(helperPath, closedApplyRequest, {
+      ...quitOptions(),
+      promotionLease: lease,
+      recordSpawn: async () => undefined,
+    });
+    await vi.advanceTimersByTimeAsync(100);
+    const result = await pending;
+    reply(true);
+    await tick();
+    expect(result).toMatchObject({
+      status: "not_started",
+      reason: "quit_deadline_expired",
+    });
+    expect(result.operation.pid).toBeNull();
+    expect((await result.operation.completion).code).toBeNull();
+    expect(lease.release).not.toHaveBeenCalled();
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it("rejects a late successful preflight lease before timer dispatch", async () => {
+    clock();
+    const lease = leaseFixture();
+    lease.verify.mockImplementationOnce(async () => {
+      vi.setSystemTime(deadlineAt);
+      return true;
+    });
+    const result = await startInstalledUpdateHelper(
+      helperPath,
+      closedApplyRequest,
+      {
+        ...quitOptions(),
+        promotionLease: lease,
+        recordSpawn: async () => undefined,
+      },
+    );
+    expect(result).toMatchObject({
+      status: "not_started",
+      reason: "quit_deadline_expired",
+    });
+    expect((await result.operation.completion).code).toBeNull();
+    expect(lease.release).not.toHaveBeenCalled();
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it("fences a late spawn event even without recordSpawn", async () => {
+    clock();
+    const child = new Transport();
+    vi.mocked(spawn).mockImplementationOnce(() => {
+      queueMicrotask(() => {
+        vi.setSystemTime(deadlineAt);
+        child.emit("spawn");
+      });
+      return child as unknown as ChildProcess;
+    });
+    const result = await startInstalledUpdateHelper(
+      helperPath,
+      request,
+      quitOptions(),
+    );
+    expect(result).toMatchObject({
+      status: "outcome_unknown",
+      reason: "quit_deadline_expired",
+    });
+    expect(child.stdin.writableEnded).toBe(false);
+    expect(child.requestPipe.destroyed).toBe(true);
+    expect(child.requests).toEqual([]);
+    await retainCompletion(child, result.operation);
+  });
+
+  it.each(["record", "lease", "timer", "revoked"])(
+    "retains the actual spawned operation after late %s with no program/request",
+    async (stage) => {
+      clock();
+      let recorded!: InstalledUpdateOperation;
+      let reply!: () => void;
+      let allowed = true;
+      const lease = stage === "lease" ? leaseFixture() : undefined;
+      if (lease)
+        lease.verify
+          .mockImplementationOnce(async () => true)
+          .mockImplementationOnce(
+            () =>
+              new Promise<boolean>((resolve) => {
+                reply = () => resolve(true);
+              }),
+          );
+      const record = async (
+        operation: InstalledUpdateOperation,
+      ): Promise<void> => {
+        recorded = operation;
+        if (!lease)
+          await new Promise<void>((resolve) => {
+            reply = resolve;
+          });
+      };
+      const { child, pending } = await launch(
+        1000,
+        lease ? closedApplyRequest : request,
+        record,
+        lease,
+        undefined,
+        { deadlineAt, canStartEffect: () => allowed },
+      );
+      await tick();
+      if (stage === "timer") await vi.advanceTimersByTimeAsync(100);
+      else if (stage === "revoked") allowed = false;
+      else vi.setSystemTime(deadlineAt);
+      reply();
+      const result = await pending;
+      await tick();
+      expect(result).toMatchObject({
+        status: "outcome_unknown",
+        reason:
+          stage === "revoked"
+            ? "quit_effect_not_allowed"
+            : "quit_deadline_expired",
+      });
+      expect(result.operation).toBe(recorded);
+      expect(child.stdin.destroyed).toBe(true);
+      expect(child.requestPipe.destroyed).toBe(true);
+      expect(child.stdin.writableEnded).toBe(false);
+      expect(child.requests).toEqual([]);
+      expect(child.continues).toEqual([]);
+      if (lease) expect(lease.release).not.toHaveBeenCalled();
+      await retainCompletion(child, result.operation);
+    },
+  );
+
+  it("does not send a request when the deadline expires after writing the program", async () => {
+    clock();
+    const child = new Transport();
+    // The write itself supplies a synchronous boundary before timer dispatch.
+    vi.spyOn(child.stdin, "end").mockImplementationOnce(() => {
+      vi.setSystemTime(deadlineAt);
+      return child.stdin;
+    });
+    const { pending } = await launch(
+      1000,
+      request,
+      undefined,
+      undefined,
+      child,
+      quitOptions(),
+    );
+    const result = await pending;
+    expect(result).toMatchObject({
+      status: "outcome_unknown",
+      reason: "quit_deadline_expired",
+    });
+    expect(child.requests).toEqual([]);
+    expect(child.requestPipe.destroyed).toBe(true);
+    await retainCompletion(child, result.operation);
+  });
+
+  it.each(["verify", "release", "revoked"])(
+    "never continues after late transfer %s even before timer dispatch",
+    async (stage) => {
+      clock();
+      const lease = leaseFixture();
+      let reply!: () => void;
+      let allowed = true;
+      if (stage === "verify")
+        lease.verify
+          .mockResolvedValueOnce(true)
+          .mockResolvedValueOnce(true)
+          .mockImplementationOnce(
+            () =>
+              new Promise<boolean>((resolve) => {
+                reply = () => resolve(true);
+              }),
+          );
+      else
+        lease.release.mockImplementationOnce(
+          () =>
+            new Promise<void>((resolve) => {
+              reply = resolve;
+            }),
+        );
+      const { child, pending } = await launch(
+        1000,
+        closedApplyRequest,
+        async () => undefined,
+        lease,
+        undefined,
+        { deadlineAt, canStartEffect: () => allowed },
+      );
+      await tick();
+      expect(child.requests).toHaveLength(1);
+      child.ack.end(JSON.stringify(closedEvent(lease, closedApplyRequest)));
+      await tick();
+      if (stage === "revoked") allowed = false;
+      else vi.setSystemTime(deadlineAt);
+      reply();
+      const result = await pending;
+      expect(result).toMatchObject({
+        status: "outcome_unknown",
+        reason:
+          stage === "revoked"
+            ? "quit_effect_not_allowed"
+            : "quit_deadline_expired",
+      });
+      expect(child.continues).toEqual([]);
+      expect(child.continuation.destroyed).toBe(true);
+      expect(lease.release).toHaveBeenCalledTimes(stage === "verify" ? 0 : 1);
+      await retainCompletion(child, result.operation);
+    },
+  );
+
+  it("uses the remaining absolute budget after lease preflight without resetting readiness", async () => {
+    clock();
+    const lease = leaseFixture();
+    lease.verify.mockImplementationOnce(async () => {
+      vi.setSystemTime(now + 40);
+      return true;
+    });
+    const { child, pending } = await launch(
+      1000,
+      closedApplyRequest,
+      async () => undefined,
+      lease,
+      undefined,
+      quitOptions(),
+    );
+    let settled = false;
+    void pending.then(() => {
+      settled = true;
+    });
+    await vi.advanceTimersByTimeAsync(59);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    const result = await pending;
+    expect(Date.now()).toBe(deadlineAt);
+    expect(result).toMatchObject({
+      status: "outcome_unknown",
+      reason: "quit_deadline_expired",
+    });
+    child.ack.end(JSON.stringify(closedEvent(lease, closedApplyRequest)));
+    await tick();
+    expect(lease.release).not.toHaveBeenCalled();
+    expect(child.continues).toEqual([]);
+    await retainCompletion(child, result.operation);
+  });
+
+  it("keeps the bounded normal-Quit success path at relaunch false", async () => {
+    clock();
+    const { child, pending } = await launch(
+      1000,
+      request,
+      async () => undefined,
+      undefined,
+      undefined,
+      quitOptions(),
+    );
+    await tick();
+    child.ack.end(JSON.stringify(event()));
+    const result = await pending;
+    expect(result.status).toBe("ready");
+    expect(JSON.parse(Buffer.concat(child.requests).toString())).toMatchObject({
+      relaunch: false,
+    });
+    child.finish(0);
+    await result.operation.completion;
+  });
+});
 
 function closedTransferProtocol(action: "apply" | "rollback") {
   const closedRequest = {

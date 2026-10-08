@@ -1255,7 +1255,11 @@ export function taskProbeScript(
 
 /** Fixed classifications only: never attach URLs, DOM, probe replies or errors. */
 export type ChatGptUpdateAdmissionDiagnostic =
-  | Readonly<{ stage: "admission"; reason: "busy" | "reservation_lost" }>
+  | Readonly<{
+      stage: "admission";
+      reason:
+        "busy" | "reservation_lost" | "guard_invalid" | "deadline_expired";
+    }>
   | Readonly<{
       stage: "surface";
       reason: "unavailable" | "not_embedded" | "destroyed" | "changed";
@@ -1289,6 +1293,12 @@ type DiagnosticBrowserUpdateCheck =
       code: Extract<BrowserUpdateCheck, { ok: false }>["code"];
       diagnostic: ChatGptUpdateAdmissionDiagnostic;
     }>;
+
+/** Host-only original Quit budget; never passed to a page or inspector. */
+export type ChatGptUpdateIdleEffectGuard = Readonly<{
+  deadlineAt: number;
+  canStartEffect(): boolean;
+}>;
 
 export type ChatGptRouteOptions = Readonly<{
   homeUrl: string;
@@ -1561,7 +1571,9 @@ export class ChatGptRoute {
     );
   }
 
-  async acquireUpdateIdle(): Promise<BrowserUpdateAdmission> {
+  async acquireUpdateIdle(
+    guard?: ChatGptUpdateIdleEffectGuard,
+  ): Promise<BrowserUpdateAdmission> {
     const refuse = (
       code: Extract<BrowserUpdateCheck, { ok: false }>["code"],
       diagnostic: ChatGptUpdateAdmissionDiagnostic,
@@ -1580,6 +1592,48 @@ export class ChatGptRoute {
       diagnostic: ChatGptUpdateAdmissionDiagnostic,
     ): Extract<DiagnosticBrowserUpdateCheck, { ok: false }> =>
       refuse("UPDATE_BROWSER_STATE_UNKNOWN", diagnostic);
+    // Capture the original budget once. Mutable caller state cannot extend it.
+    let deadlineAt: number | undefined;
+    let canStartEffect: (() => boolean) | undefined;
+    if (guard !== undefined) {
+      try {
+        if (guard === null || typeof guard !== "object")
+          return report(
+            unknown({ stage: "admission", reason: "guard_invalid" }),
+          );
+        const originalDeadline = guard.deadlineAt;
+        const originalAdmission = guard.canStartEffect;
+        if (
+          typeof originalDeadline !== "number" ||
+          !Number.isFinite(originalDeadline) ||
+          typeof originalAdmission !== "function"
+        )
+          return report(
+            unknown({ stage: "admission", reason: "guard_invalid" }),
+          );
+        deadlineAt = originalDeadline;
+        canStartEffect = originalAdmission.bind(guard);
+      } catch {
+        return report(unknown({ stage: "admission", reason: "guard_invalid" }));
+      }
+    }
+    const effectGuard = (): ChatGptUpdateAdmissionDiagnostic | null => {
+      if (deadlineAt === undefined) return null;
+      if (Date.now() >= deadlineAt)
+        return { stage: "admission", reason: "deadline_expired" };
+      try {
+        if (canStartEffect?.() !== true)
+          return { stage: "admission", reason: "reservation_lost" };
+      } catch {
+        return { stage: "admission", reason: "guard_invalid" };
+      }
+      // The host callback itself may consume the remaining budget.
+      return Date.now() < deadlineAt
+        ? null
+        : { stage: "admission", reason: "deadline_expired" };
+    };
+    const initialGuard = effectGuard();
+    if (initialGuard) return report(unknown(initialGuard));
     if (
       this.updateAdmission ||
       this.opening ||
@@ -1591,16 +1645,22 @@ export class ChatGptRoute {
         refuse("UPDATE_BROWSER_BUSY", { stage: "admission", reason: "busy" }),
       );
     if (!this.hasOpenUpdateSurface()) {
+      const invalid = effectGuard();
+      if (invalid) return report(unknown(invalid));
       this.updateAdmission = true;
       let released = false;
       return {
         ok: true,
-        recheck: async () =>
-          !released && this.updateAdmission && !this.hasOpenUpdateSurface()
-            ? { ok: true }
-            : report(
-                unknown({ stage: "admission", reason: "reservation_lost" }),
-              ),
+        recheck: async () => {
+          const invalid = effectGuard();
+          if (invalid) return report(unknown(invalid));
+          if (released || !this.updateAdmission || this.hasOpenUpdateSurface())
+            return report(
+              unknown({ stage: "admission", reason: "reservation_lost" }),
+            );
+          const changed = effectGuard();
+          return changed ? report(unknown(changed)) : { ok: true };
+        },
         release: async () => {
           if (released) return;
           released = true;
@@ -1646,25 +1706,49 @@ export class ChatGptRoute {
       attached = false;
       paused = false;
     };
-    // Identity-based timeout classification never inspects an exception's text.
+    let released = false;
+    let effectsStopped = false;
+    const effectError = new Error("UPDATE_BROWSER_STATE_UNKNOWN");
+    let effectDiagnostic: ChatGptUpdateAdmissionDiagnostic | null = null;
+    const assertEffectCurrent = (): void => {
+      const invalid = current();
+      if (invalid) {
+        effectsStopped = true;
+        effectDiagnostic = invalid;
+        throw effectError;
+      }
+    };
+    // Thunks fence actual invocation, including continuations after a lost reply.
+    // Cleanup keeps its own existing timeout, independent of the Quit budget.
     const deadlineError = new Error("UPDATE_BROWSER_STATE_UNKNOWN");
-    const bounded = async <T>(operation: Promise<T>): Promise<T> => {
+    const bounded = async <T>(
+      operation: () => Promise<T>,
+      cleanup = false,
+    ): Promise<T> => {
+      if (!cleanup) assertEffectCurrent();
+      const remaining =
+        cleanup || deadlineAt === undefined
+          ? ACTIVITY_PROBE_DEADLINE_MS
+          : Math.min(ACTIVITY_PROBE_DEADLINE_MS, deadlineAt - Date.now());
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
-        return await Promise.race([
-          operation,
-          new Promise<never>((_resolve, reject) => {
-            timer = setTimeout(
-              () => reject(deadlineError),
-              ACTIVITY_PROBE_DEADLINE_MS,
-            );
-          }),
-        ]);
+        const timeout = new Promise<never>((_resolve, reject) => {
+          timer = setTimeout(() => {
+            if (!cleanup) effectsStopped = true;
+            reject(deadlineError);
+          }, remaining);
+        });
+        if (!cleanup) assertEffectCurrent();
+        const result = await Promise.race([operation(), timeout]);
+        if (!cleanup) assertEffectCurrent();
+        return result;
+      } catch (error) {
+        if (!cleanup) effectsStopped = true;
+        throw error;
       } finally {
         if (timer !== undefined) clearTimeout(timer);
       }
     };
-    let released = false;
     let releasePromise: Promise<void> | null = null;
     const release = (): Promise<void> => {
       if (releasePromise) return releasePromise;
@@ -1679,10 +1763,12 @@ export class ChatGptRoute {
             });
             try {
               await bounded(
-                Promise.all([
-                  debuggerClient.sendCommand("Debugger.resume"),
-                  resumed,
-                ]),
+                () =>
+                  Promise.all([
+                    debuggerClient.sendCommand("Debugger.resume"),
+                    resumed,
+                  ]),
+                true,
               );
             } catch (error) {
               this.reportUpdateAdmissionDiagnostic({
@@ -1714,31 +1800,34 @@ export class ChatGptRoute {
       })();
       return releasePromise;
     };
+    const current = (): ChatGptUpdateAdmissionDiagnostic | null => {
+      if (effectsStopped)
+        return { stage: "admission", reason: "reservation_lost" };
+      const invalidGuard = effectGuard();
+      if (invalidGuard) return invalidGuard;
+      if (released || !this.updateAdmission)
+        return { stage: "admission", reason: "reservation_lost" };
+      if (this.routeWindow !== surface)
+        return { stage: "surface", reason: "changed" };
+      if (surface.isDestroyed() || contents.isDestroyed())
+        return { stage: "surface", reason: "destroyed" };
+      if (this.load !== "loaded")
+        return { stage: "document", reason: "not_loaded" };
+      if (this.routeDocumentGeneration !== generation)
+        return { stage: "document", reason: "changed" };
+      if (contents.getURL() !== url)
+        return { stage: "document", reason: "url_changed" };
+      if (this.taskInFlight || this.opening || this.signInMode)
+        return { stage: "admission", reason: "busy" };
+      if (pauseRequired && !(attached && paused && debuggerClient.isAttached()))
+        return { stage: "pause", reason: "unconfirmed" };
+      if ([...this.popupWindows].some((popup) => !popup.isDestroyed()))
+        return { stage: "admission", reason: "busy" };
+      return deadlineAt !== undefined && Date.now() >= deadlineAt
+        ? { stage: "admission", reason: "deadline_expired" }
+        : null;
+    };
     const recheck = async (): Promise<DiagnosticBrowserUpdateCheck> => {
-      const current = (): ChatGptUpdateAdmissionDiagnostic | null => {
-        if (released || !this.updateAdmission)
-          return { stage: "admission", reason: "reservation_lost" };
-        if (this.routeWindow !== surface)
-          return { stage: "surface", reason: "changed" };
-        if (surface.isDestroyed() || contents.isDestroyed())
-          return { stage: "surface", reason: "destroyed" };
-        if (this.load !== "loaded")
-          return { stage: "document", reason: "not_loaded" };
-        if (this.routeDocumentGeneration !== generation)
-          return { stage: "document", reason: "changed" };
-        if (contents.getURL() !== url)
-          return { stage: "document", reason: "url_changed" };
-        if (this.taskInFlight || this.opening || this.signInMode)
-          return { stage: "admission", reason: "busy" };
-        if (
-          pauseRequired &&
-          !(attached && paused && debuggerClient.isAttached())
-        )
-          return { stage: "pause", reason: "unconfirmed" };
-        if ([...this.popupWindows].some((popup) => !popup.isDestroyed()))
-          return { stage: "admission", reason: "busy" };
-        return null;
-      };
       const invalid = current();
       if (invalid) return unknown(invalid);
       const stage = pauseRequired ? "paused_probe" : "probe";
@@ -1747,7 +1836,7 @@ export class ChatGptRoute {
         if (pauseRequired) {
           // Inspector evaluation remains available while ordinary page scripts
           // are paused. Only this content-free DOM classification is evaluated.
-          const reply: unknown = await bounded(
+          const reply: unknown = await bounded(() =>
             debuggerClient.sendCommand("Runtime.evaluate", {
               expression: chatGptUpdateIdleProbe,
               returnByValue: true,
@@ -1766,7 +1855,7 @@ export class ChatGptRoute {
             return unknown({ stage, reason: "parse_failed" });
           raw = evaluated.data.result.value;
         } else {
-          raw = await bounded(
+          raw = await bounded(() =>
             contents.executeJavaScript(chatGptUpdateIdleProbe, true),
           );
         }
@@ -1782,6 +1871,8 @@ export class ChatGptRoute {
           return refuse("UPDATE_BROWSER_DRAFT", { stage, reason: "draft" });
         return { ok: true };
       } catch (error) {
+        if (error === effectError && effectDiagnostic)
+          return unknown(effectDiagnostic);
         return unknown({
           stage,
           reason: error === deadlineError ? "timeout" : "failed",
@@ -1813,33 +1904,41 @@ export class ChatGptRoute {
       }
       debuggerClient.on("message", message);
       debuggerClient.on("detach", detached);
+      assertEffectCurrent();
       debuggerClient.attach("1.3");
       attached = true;
       pauseDiagnostic = { stage: "debugger", reason: "enable_failed" };
-      await bounded(debuggerClient.sendCommand("Debugger.enable"));
+      await bounded(() => debuggerClient.sendCommand("Debugger.enable"));
+      assertEffectCurrent();
       pauseDiagnostic = { stage: "pause", reason: "failed" };
       const stopped = new Promise<void>((resolve) => {
         confirmPause = resolve;
       });
-      await bounded(
-        (async () => {
-          await debuggerClient.sendCommand("Debugger.pause");
-          if (!paused) {
-            // A quiet hidden document has no next statement to acknowledge pause.
-            // This no-op supplies one without touching DOM, credentials or tasks.
-            // Its reply may wait for resume; only the actual paused event admits.
-            void debuggerClient
-              .sendCommand("Runtime.evaluate", {
-                expression: "void 0",
-                returnByValue: true,
-              })
-              .catch(() => undefined);
-          }
-          await stopped;
-        })(),
-      );
+      await bounded(async () => {
+        assertEffectCurrent();
+        await debuggerClient.sendCommand("Debugger.pause");
+        assertEffectCurrent();
+        if (!paused) {
+          // A quiet hidden document has no next statement to acknowledge pause.
+          // This no-op supplies one without touching DOM, credentials or tasks.
+          // Its reply may wait for resume; only the actual paused event admits.
+          assertEffectCurrent();
+          void debuggerClient
+            .sendCommand("Runtime.evaluate", {
+              expression: "void 0",
+              returnByValue: true,
+            })
+            .catch(() => undefined);
+        }
+        await stopped;
+        assertEffectCurrent();
+      });
       pauseRequired = true;
     } catch (error) {
+      // Close late continuations before cleanup, including failed detach.
+      effectsStopped = true;
+      if (error === effectError && effectDiagnostic)
+        pauseDiagnostic = effectDiagnostic;
       if (error === deadlineError)
         pauseDiagnostic = {
           stage: pauseDiagnostic.stage === "pause" ? "pause" : "debugger",
@@ -1869,18 +1968,21 @@ export class ChatGptRoute {
       return report(unknown(pauseDiagnostic));
     }
     const held = await recheck();
-    if (!held.ok) {
+    const finalInvalid = current();
+    if (!held.ok || finalInvalid) {
       try {
         await release();
       } catch {
         return { ok: false, code: "UPDATE_BROWSER_RELEASE_UNCONFIRMED" };
       }
-      return report(held);
+      return report(held.ok ? unknown(finalInvalid!) : held);
     }
     return {
       ok: true,
       recheck: async () => {
         const check = await recheck();
+        const invalid = current();
+        if (check.ok && invalid) return report(unknown(invalid));
         return check.ok ? check : report(check);
       },
       release,
