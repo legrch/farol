@@ -32,7 +32,12 @@ func TestNativeUnacknowledgedDevHostWithBuiltCore(t *testing.T) {
 	testEmptyRecoveryHostWithBuiltCore(t, false, true)
 }
 
-func testEmptyRecoveryHostWithBuiltCore(t *testing.T, interrupted, unacknowledged bool) {
+func TestNativePreviousQuitDevHostWithBuiltCore(t *testing.T) {
+	testEmptyRecoveryHostWithBuiltCore(t, false, true, true)
+}
+
+func testEmptyRecoveryHostWithBuiltCore(t *testing.T, interrupted, unacknowledged bool, previousQuit ...bool) {
+	previousConfirmed := len(previousQuit) == 1 && previousQuit[0]
 	if !*ingressNative {
 		t.Skip("Requires exclusive native lane and -ingress-native")
 	}
@@ -84,6 +89,9 @@ func testEmptyRecoveryHostWithBuiltCore(t *testing.T, interrupted, unacknowledge
 	quit := []byte("{\"schema\":1,\"at\":\"2026-10-07T21:13:07.697Z\",\"drained\":false,\"unconfirmed\":[\"go-core\"]}\n")
 	if unacknowledged {
 		quit = []byte("{\"schema\":1,\"at\":\"2026-10-08T10:00:14.146Z\",\"drained\":false,\"unconfirmed\":[\"go-core\",\"connector\"]}\n")
+		if previousConfirmed {
+			quit = []byte("{\"schema\":1,\"at\":\"2026-10-08T09:39:05.070Z\",\"drained\":true,\"unconfirmed\":[]}\n")
+		}
 		lifecycle := filepath.Join(connector, "mcp-lifecycle")
 		if err := os.Mkdir(lifecycle, 0700); err != nil {
 			t.Fatal(err)
@@ -107,8 +115,10 @@ func testEmptyRecoveryHostWithBuiltCore(t *testing.T, interrupted, unacknowledge
 		ExpectedRunSha256, ExpectedConfigSha256 string
 		ExpectedQuitSha256                      string `json:",omitempty"`
 		UnacknowledgedDev                       bool   `json:",omitempty"`
+		PreviousConfirmedQuit                   bool   `json:",omitempty"`
 	}{Input: in, Profile: profile, ExpectedRunSha256: hex.EncodeToString(sumFixture(run)), ExpectedConfigSha256: hex.EncodeToString(sumFixture(config))}
 	fixture.UnacknowledgedDev = unacknowledged
+	fixture.PreviousConfirmedQuit = previousConfirmed
 	if interrupted || unacknowledged {
 		fixture.ExpectedQuitSha256 = hex.EncodeToString(sumFixture(quit))
 	}
@@ -157,7 +167,11 @@ func testEmptyRecoveryHostWithBuiltCore(t *testing.T, interrupted, unacknowledge
 		t.Fatal("failed run not retained away from live marker", err)
 	}
 	if interrupted || unacknowledged {
-		archivedQuit, err := os.ReadFile(filepath.Join(profile.Root, "chat-retired-"+in.Selection.OperationID, "failed-last-quit.json"))
+		name := "failed-last-quit.json"
+		if previousConfirmed {
+			name = "previous-last-quit.json"
+		}
+		archivedQuit, err := os.ReadFile(filepath.Join(profile.Root, "chat-retired-"+in.Selection.OperationID, name))
 		if err != nil || string(archivedQuit) != string(quit) {
 			t.Fatal("original failed Quit not preserved", err)
 		}
@@ -170,11 +184,14 @@ func testEmptyRecoveryHostWithBuiltCore(t *testing.T, interrupted, unacknowledge
 			t.Fatal("configuration changed", err)
 		}
 		var completed struct {
-			UnacknowledgedDev     struct{ OriginalRetirement, OriginalACK, OriginalTerminal, TerminalReceiptScope string }
+			UnacknowledgedDev     struct{ OriginalRetirement, OriginalACK, OriginalTerminal, TerminalReceiptScope, OriginalQuitScope, PreviousConfirmedQuitSha256, FailedQuitSha256 string }
 			InterruptedRetirement json.RawMessage
 		}
 		if err := json.Unmarshal(receipt, &completed); err != nil || completed.UnacknowledgedDev.OriginalRetirement != "absent" || completed.UnacknowledgedDev.OriginalACK != "absent" || completed.UnacknowledgedDev.OriginalTerminal != "unobserved" || completed.UnacknowledgedDev.TerminalReceiptScope != "new-maintenance-child" || len(completed.InterruptedRetirement) != 0 {
 			t.Fatal("invented original terminal/ACK", err)
+		}
+		if previousConfirmed && (completed.UnacknowledgedDev.OriginalQuitScope != "previous-lifetime" || completed.UnacknowledgedDev.PreviousConfirmedQuitSha256 != hex.EncodeToString(sumFixture(quit)) || completed.UnacknowledgedDev.FailedQuitSha256 != "") {
+			t.Fatal("previous clean Quit incorrectly attributed to interrupted lifetime")
 		}
 		if _, err := os.Stat(filepath.Join(connector, "mcp-lifecycle", "revoked-"+fmt.Sprintf("%064x", 3))); err != nil {
 			t.Fatal("original prepared connector not revoked", err)

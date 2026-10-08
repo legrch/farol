@@ -107,7 +107,9 @@ try {
     assert.deepEqual(actual.unreadable, []);
     assert.deepEqual(actual.changed, []);
     assert.deepEqual(actual.obligations, [
-      "QUIT_UNCONFIRMED:go-core,connector",
+      ...(fixture.PreviousConfirmedQuit === true
+        ? []
+        : ["QUIT_UNCONFIRMED:go-core,connector"]),
       "QUIT_UNCONFIRMED:crash",
     ]);
   }

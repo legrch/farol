@@ -22,6 +22,8 @@ import {
 import { MAX_RUN_MARKER_BYTES } from "./run-marker";
 import type { ClosedRecoveryState } from "./closed-computer-recovery";
 import { validate } from "../../../apps/desktop/bridge/wire";
+import { QuitReceiptSchema } from "./quit-receipt";
+import { RunMarkerSchema } from "./run-marker";
 import type { EmptyRecoveryPublication } from "../../../apps/desktop/bridge/empty-recovery-child";
 import {
   retainEmptyArchive,
@@ -225,6 +227,31 @@ export async function recoverUnacknowledgedEmptyDev(
   return recoverSelectedEmptyChat(input, input.expectedQuitSha256, true);
 }
 
+// A previous clean Quit does not confirm the run that followed it. This
+// selection only classifies which original bytes to preserve; absence of the
+// actual processes and empty Chat/settled Computer proof are still mandatory.
+export function unacknowledgedDevQuitScope(
+  run: unknown,
+  quit: unknown,
+): "current-unconfirmed" | "previous-confirmed" {
+  const marker = RunMarkerSchema.safeParse(run);
+  const receipt = QuitReceiptSchema.safeParse(quit);
+  if (!marker.success || !receipt.success)
+    throw Error("INTERRUPTED_CHAT_RECOVERY_QUIT_CHANGED");
+  if (
+    !receipt.data.drained &&
+    isDeepStrictEqual(receipt.data.unconfirmed, ["go-core", "connector"])
+  )
+    return "current-unconfirmed";
+  if (
+    receipt.data.drained &&
+    receipt.data.unconfirmed.length === 0 &&
+    Date.parse(receipt.data.at) < Date.parse(marker.data.startedAt)
+  )
+    return "previous-confirmed";
+  throw Error("INTERRUPTED_CHAT_RECOVERY_QUIT_CHANGED");
+}
+
 async function recoverSelectedEmptyChat(
   input: ClosedEmptyChatRecoveryInput,
   expectedQuitSha256?: string,
@@ -287,16 +314,24 @@ async function recoverSelectedEmptyChat(
           expectedQuitSha256 === undefined
             ? undefined
             : await snapshot(path.join(state, "last-quit.json"), 16384);
+        let previousConfirmedQuit = false;
         if (failedQuit) {
           const quit = JSON.parse(failedQuit.bytes.toString("utf8"));
+          if (unacknowledgedDev)
+            previousConfirmedQuit =
+              unacknowledgedDevQuitScope(
+                JSON.parse(run.bytes.toString("utf8")),
+                quit,
+              ) === "previous-confirmed";
           if (
             sum(failedQuit.bytes) !== expectedQuitSha256 ||
             quit.schema !== 1 ||
-            quit.drained !== false ||
-            !isDeepStrictEqual(
-              quit.unconfirmed,
-              unacknowledgedDev ? ["go-core", "connector"] : ["go-core"],
-            )
+            (!previousConfirmedQuit &&
+              (quit.drained !== false ||
+                !isDeepStrictEqual(
+                  quit.unconfirmed,
+                  unacknowledgedDev ? ["go-core", "connector"] : ["go-core"],
+                )))
           )
             throw Error("INTERRUPTED_CHAT_RECOVERY_QUIT_CHANGED");
         }
@@ -338,7 +373,7 @@ async function recoverSelectedEmptyChat(
             desktop.unreadable.length ||
             !isDeepStrictEqual(
               desktop.obligations,
-              failedQuit
+              failedQuit && !previousConfirmedQuit
                 ? [
                     unacknowledgedDev
                       ? "QUIT_UNCONFIRMED:go-core,connector"
@@ -408,6 +443,7 @@ async function recoverSelectedEmptyChat(
           lease,
           proof,
           ...(failedQuit ? { failedQuit } : {}),
+          ...(previousConfirmedQuit ? { previousConfirmedQuit: true } : {}),
           ...(movedArchive ? { archivePin: await movedArchive() } : {}),
           ...(unacknowledgedDev
             ? {
@@ -718,6 +754,7 @@ async function finishEmptyRecoveryHost({
   knownFailure,
   archivePin,
   failedQuit,
+  previousConfirmedQuit,
   reconcileConnector,
 }: {
   input: ClosedEmptyChatRecoveryInput;
@@ -739,6 +776,7 @@ async function finishEmptyRecoveryHost({
   knownFailure?: { receiptSha256: string; completionOperationId: string };
   archivePin?: Awaited<ReturnType<typeof retainEmptyArchive>>;
   failedQuit?: Snapshot;
+  previousConfirmedQuit?: true;
   reconcileConnector?(): Promise<void>;
 }): Promise<{
   phase: "prepared_for_cold_start";
@@ -773,7 +811,12 @@ async function finishEmptyRecoveryHost({
           originalRetirement: "absent",
           originalACK: "absent",
           originalTerminal: "unobserved",
-          failedQuitSha256: sum(failedQuit.bytes),
+          ...(previousConfirmedQuit
+            ? {
+                originalQuitScope: "previous-lifetime",
+                previousConfirmedQuitSha256: sum(failedQuit.bytes),
+              }
+            : { failedQuitSha256: sum(failedQuit.bytes) }),
           terminalReceiptScope: "new-maintenance-child",
         }
       : undefined;
@@ -816,14 +859,17 @@ async function finishEmptyRecoveryHost({
   await archivePin?.include("failed-running.json", run);
   if (failedQuit) {
     const originalQuit = path.join(state, "last-quit.json");
-    const retainedQuit = path.join(archive, "failed-last-quit.json");
+    const retainedQuitName = previousConfirmedQuit
+      ? "previous-last-quit.json"
+      : "failed-last-quit.json";
+    const retainedQuit = path.join(archive, retainedQuitName);
     await unchanged(originalQuit, failedQuit);
     await absent(retainedQuit);
     await fs.rename(originalQuit, retainedQuit);
     await sync(state);
     await sync(archive);
     await unchanged(retainedQuit, failedQuit);
-    await archivePin?.include("failed-last-quit.json", failedQuit);
+    await archivePin?.include(retainedQuitName, failedQuit);
   }
   await unchanged(configuration, config);
   await unchanged(pending, intent);

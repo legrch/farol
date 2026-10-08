@@ -137,6 +137,7 @@ describe("retained empty archive byte and physical pin", () => {
       "maintenance-completed.json",
       "failed-running.json",
       "failed-last-quit.json",
+      "previous-last-quit.json",
       "maintenance-intent.json",
     ]) {
       add(name, "retained", 100n + BigInt(files.size));

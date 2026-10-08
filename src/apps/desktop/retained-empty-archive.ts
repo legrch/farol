@@ -11,6 +11,7 @@ const additions = new Set([
   "maintenance-completed.json",
   "failed-running.json",
   "failed-last-quit.json",
+  "previous-last-quit.json",
   "maintenance-intent.json",
 ]);
 type Entry = { identity: bigint[]; bytes?: Buffer };
