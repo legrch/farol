@@ -125,6 +125,46 @@ describe("installed update orchestration (port fixture, no native or GitHub acce
     expect(restore.ports.restore).not.toHaveBeenCalled();
   });
 
+  it("drains a failed status publication without inventing a staging or helper outcome", async () => {
+    const checking = fixture();
+    await checking.updater.initialize();
+    checking.ports.publish.mockImplementationOnce(() => {
+      throw new Error("window was destroyed before status delivery");
+    });
+    await checking.updater.check(true);
+    await checking.updater.close();
+    expect(checking.ports.discover).not.toHaveBeenCalled();
+
+    const downloading = fixture();
+    await downloading.updater.initialize();
+    await downloading.updater.check(true);
+    downloading.ports.publish.mockImplementationOnce(() => {
+      throw new Error("window was destroyed before status delivery");
+    });
+    await downloading.updater.download();
+    await downloading.updater.close();
+    expect(downloading.ports.download).not.toHaveBeenCalled();
+    expect(downloading.updater.snapshot()).toMatchObject({
+      phase: "available",
+      version: staged.manifest.version,
+    });
+
+    const restarting = fixture();
+    await restarting.updater.initialize();
+    await restarting.updater.check(true);
+    await restarting.updater.download();
+    restarting.ports.publish.mockImplementationOnce(() => {
+      throw new Error("window was destroyed before status delivery");
+    });
+    await restarting.updater.restart();
+    await restarting.updater.close();
+    expect(restarting.ports.restart).not.toHaveBeenCalled();
+    expect(restarting.updater.snapshot()).toMatchObject({
+      phase: "ready",
+      version: staged.manifest.version,
+    });
+  });
+
   it("discovers without staging and downloads the same candidate only on explicit command", async () => {
     const { updater, ports } = fixture();
     await updater.initialize();

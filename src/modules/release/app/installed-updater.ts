@@ -337,8 +337,8 @@ export class InstalledUpdater {
       return;
     this.lastCheck = now;
     this.begin();
-    await this.publish({ phase: "checking" });
     try {
+      await this.publish({ phase: "checking" });
       if (this.closed) return;
       const found = await this.ports.discover();
       if (this.closed) return;
@@ -395,12 +395,15 @@ export class InstalledUpdater {
       this.view.version !== this.available.version
     )
       return;
+    const previous = this.view;
     const expected = this.available;
     this.available = null;
     this.begin();
-    await this.publish({ phase: "downloading" });
+    let downloadStarted = false;
     try {
+      await this.publish({ phase: "downloading" });
       if (this.closed) return;
+      downloadStarted = true;
       const downloaded = await this.ports.download();
       if (
         downloaded.ok &&
@@ -418,6 +421,11 @@ export class InstalledUpdater {
       }
       await this.retainPrepared(downloaded);
     } catch {
+      if (!downloadStarted) {
+        this.available = expected;
+        await this.publish(previous);
+        return;
+      }
       await this.publish({
         phase: "failed",
         code: "UPDATE_STAGING_OUTCOME_UNKNOWN",
@@ -482,12 +490,19 @@ export class InstalledUpdater {
       }
       return;
     }
+    const previous = this.view;
     this.begin();
-    await this.publish({ phase: "downloading" });
+    let importStarted = false;
     try {
+      await this.publish({ phase: "downloading" });
       if (this.closed) return;
+      importStarted = true;
       await this.retainPrepared(await this.ports.prepareLocal());
     } catch {
+      if (!importStarted) {
+        await this.publish(previous);
+        return;
+      }
       // Import or retention may already have published durable bytes. The
       // original owner must reconcile them; another import is not recovery.
       await this.publish({
@@ -550,11 +565,14 @@ export class InstalledUpdater {
       !this.ready
     )
       return;
+    const previous = this.view;
     this.begin();
     const version = this.ready.manifest.version;
-    await this.publish({ phase: "applying", version });
+    let restartStarted = false;
     try {
+      await this.publish({ phase: "applying", version });
       if (this.closed) return;
+      restartStarted = true;
       const outcome = await this.ports.restart(this.ready);
       if (outcome.status === "blocked") {
         await this.publish({
@@ -571,6 +589,10 @@ export class InstalledUpdater {
         });
       }
     } catch {
+      if (!restartStarted) {
+        await this.publish(previous);
+        return;
+      }
       // The helper may already have accepted its handoff. Never launch another.
       await this.publish({
         phase: "failed",
@@ -594,9 +616,11 @@ export class InstalledUpdater {
           : undefined;
     if (this.closed || this.busy || !version) return;
     this.begin();
-    await this.publish({ phase: "applying", version });
+    let restoreStarted = false;
     try {
+      await this.publish({ phase: "applying", version });
       if (this.closed) return;
+      restoreStarted = true;
       const outcome = await this.ports.restore(action);
       if (outcome.status === "blocked") {
         if (previous.phase === "recovery" || previous.phase === "idle")
@@ -611,6 +635,10 @@ export class InstalledUpdater {
         });
       }
     } catch {
+      if (!restoreStarted) {
+        await this.publish(previous);
+        return;
+      }
       await this.publish({
         phase: "failed",
         code: "UPDATE_HANDOFF_UNKNOWN",
