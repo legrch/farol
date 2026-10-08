@@ -172,7 +172,7 @@ func taskRuntime(in TaskRuntimeInputs, provider port.Provider) (*TaskRuntime, er
 	if taskRuntimeMissing(delivery) {
 		delivery = nil
 	}
-	service, err := tasksvc.NewOwned(in.Route, taskRuntimeAuthority{selected: in.Binding, delegate: in.Authority}, map[task.Provider]port.Provider{in.Binding.Provider: provider}, delivery, intent.Fingerprint, progress.NewProgress)
+	service, err := tasksvc.NewOwned(in.Route, taskRuntimeAuthority{selected: in.Binding, delegate: in.Authority}, map[task.Provider]port.Provider{in.Binding.Provider: taskDeadlineProvider(provider)}, delivery, intent.Fingerprint, progress.NewProgress)
 	if err != nil {
 		return nil, taskRuntimeError(err)
 	}

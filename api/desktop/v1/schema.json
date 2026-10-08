@@ -3030,6 +3030,9 @@
     "TaskRoutedCreate": {
       "type": "object",
       "fields": {
+        "deadlineMillis": {
+          "type": "decimal"
+        },
         "handleId": {
           "type": "id"
         },
@@ -3041,6 +3044,9 @@
     "TaskRoutedContinue": {
       "type": "object",
       "fields": {
+        "deadlineMillis": {
+          "type": "decimal"
+        },
         "handleId": {
           "type": "id"
         },
@@ -3052,6 +3058,9 @@
     "TaskRoutedResume": {
       "type": "object",
       "fields": {
+        "deadlineMillis": {
+          "type": "decimal"
+        },
         "handleId": {
           "type": "id"
         },

@@ -28,8 +28,10 @@ export class BridgeError extends Error {
 // A local refusal before stdin.write, not a remote outcome or a pipe error.
 // Keep this distinct from an identically named provider/protocol failure.
 export class RequestNotSentError extends BridgeError {
-  constructor() {
-    super("unavailable", "backpressure");
+  constructor(
+    code: "backpressure" | "request_deadline_expired" = "backpressure",
+  ) {
+    super(code === "backpressure" ? "unavailable" : "refused", code);
   }
 }
 type Pending = {
@@ -196,7 +198,13 @@ export class Client {
   request(
     method: string,
     body: Json,
-    options: { id?: string; operationId?: string; timeoutMs?: number } = {},
+    options: {
+      id?: string;
+      operationId?: string;
+      timeoutMs?: number;
+      // Trusted host budget only; never sent as transport or provider authority.
+      deadlineAtMillis?: number;
+    } = {},
   ): Promise<Outcome> {
     if (!this.context)
       return Promise.reject(
@@ -208,6 +216,8 @@ export class Client {
       options.id ?? randomUUID(),
       options.timeoutMs ?? 2000,
       options.operationId,
+      undefined,
+      options.deadlineAtMillis,
     );
   }
   subscribe(listener: (event: EventData, stale: boolean) => void): () => void {
@@ -231,6 +241,7 @@ export class Client {
     timeoutMs: number,
     operationId?: string,
     handshake?: Handshake,
+    deadlineAtMillis?: number,
   ): Promise<Outcome> {
     if (this.stopped)
       return Promise.reject(
@@ -263,6 +274,11 @@ export class Client {
     if (this.used.has(id))
       return Promise.reject(new BridgeError("refused", "duplicate_request_id"));
     if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || timeoutMs > 30000)
+      return Promise.reject(new BridgeError("refused", "invalid_deadline"));
+    if (
+      deadlineAtMillis !== undefined &&
+      !Number.isSafeInteger(deadlineAtMillis)
+    )
       return Promise.reject(new BridgeError("refused", "invalid_deadline"));
     if (
       !validate("id", id) ||
@@ -298,6 +314,16 @@ export class Client {
     } catch {
       return Promise.reject(new BridgeError("refused", "oversized_request"));
     }
+    // Framing consumes the original host budget. Refuse before write without
+    // consuming the caller ID or stopping this Client when no time remains.
+    const remainingMs =
+      deadlineAtMillis === undefined
+        ? timeoutMs
+        : Math.min(timeoutMs, deadlineAtMillis - Date.now());
+    if (!Number.isFinite(remainingMs) || remainingMs <= 0)
+      return Promise.reject(
+        new RequestNotSentError("request_deadline_expired"),
+      );
     if (pollLane === undefined) this.used.add(id);
     else this.polls.set(pollLane, sequence!);
     return new Promise((resolve, reject) => {
@@ -305,7 +331,7 @@ export class Client {
         this.pending.delete(wireId);
         reject(new BridgeError("unknown", "response_timeout"));
         this.fail("response_timeout");
-      }, timeoutMs);
+      }, remainingMs);
       this.pending.set(wireId, {
         callerId: id,
         resolve,

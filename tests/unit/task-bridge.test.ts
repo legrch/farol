@@ -1,7 +1,14 @@
-import { describe, expect, it, vi } from "vitest";
+import type { ChildProcessWithoutNullStreams } from "node:child_process";
+import { EventEmitter } from "node:events";
+import { PassThrough } from "node:stream";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TaskBridge, TaskBridgeError } from "../../apps/desktop/bridge/task.ts";
-import { BridgeError, type Client } from "../../apps/desktop/bridge/client.ts";
-import { frame } from "../../apps/desktop/bridge/frame.ts";
+import {
+  BridgeError,
+  Client,
+  RequestNotSentError,
+} from "../../apps/desktop/bridge/client.ts";
+import { Decoder, frame } from "../../apps/desktop/bridge/frame.ts";
 import {
   validate,
   requiresOperationID,
@@ -22,6 +29,9 @@ import {
   type TaskObservationRequest,
   type Outcome,
   type Json,
+  type Request,
+  protocolMajor,
+  protocolMinor,
 } from "../../apps/desktop/bridge/wire.ts";
 
 // Actual bridge, generated validator and frame codec; controlled Client only.
@@ -289,6 +299,634 @@ function invoke(bridge: TaskBridge, call: (typeof calls)[number]) {
   }
 }
 
+// Real desktop Client + TaskBridge + framed in-memory peer, with fake time.
+// The peer models a retained ACK/lineage; it is not Go journal/provider proof.
+async function transportFixture() {
+  const child = Object.assign(new EventEmitter(), {
+    stdin: new PassThrough(),
+    stdout: new PassThrough(),
+    stderr: new PassThrough(),
+  });
+  const sent: Request[] = [];
+  const reply = (
+    request: Request,
+    status: Outcome["status"] = "ok",
+    data: Json = payload(
+      request.method,
+      request.params.body,
+      request.params.operationId,
+      "codex",
+    ),
+  ) => {
+    child.stdout.write(
+      frame({
+        jsonrpc: "2.0",
+        id: request.id,
+        result: {
+          status,
+          requestId: request.id,
+          context: scope,
+          ...(request.params.operationId === undefined
+            ? {}
+            : { operationId: request.params.operationId }),
+          ...(status === "unknown" ? { code: "TASK_OUTCOME_UNKNOWN" } : {}),
+          data,
+        },
+      }),
+    );
+  };
+  const decoder = new Decoder();
+  child.stdin.on("data", (bytes: Buffer) => {
+    decoder.push(bytes, (value) => {
+      expect(validate("Request", value)).toBe(true);
+      const request = value as Request;
+      sent.push(request);
+      if (request.method === "core.handshake") {
+        reply(request, "ok", {
+          protocolMajor,
+          protocolMinor,
+          buildId: "controlled-build",
+          ...scope,
+          capabilities: [],
+          maxFrameBytes,
+        });
+      }
+    });
+  });
+  const client = new Client(child as unknown as ChildProcessWithoutNullStreams);
+  await client.handshake(
+    {
+      protocolMajor,
+      protocolMinor,
+      buildId: "controlled-build",
+      profileId: scope.profileId,
+    },
+    1000,
+  );
+  return {
+    client,
+    bridge: new TaskBridge(client, handle),
+    sent,
+    reply,
+    close: async () => {
+      await client.close();
+      child.stdin.destroy();
+      child.stdout.destroy();
+      child.stderr.destroy();
+    },
+  };
+}
+
+describe("Task deadline mismatch with real desktop Client (controlled transport)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1760000000000);
+  });
+  afterEach(() => {
+    vi.clearAllTimers();
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  // A timely ACK fits the original 30 s transport/29 s Go budget. Go separately
+  // verifies queue, execution and settlement using that exact wire timestamp.
+  it.each(["create", "continue"] as const)(
+    "accepts a valid original %s ACK at 17 seconds without stopping shared observation",
+    async (method) => {
+      const f = await transportFixture();
+      try {
+        const operationId = `deadline-${method}`;
+        const pending =
+          method === "create"
+            ? f.bridge.create({ message: "once" }, operationId)
+            : f.bridge.continue({ dispatchId, message: "once" }, operationId);
+        const settled = pending.then(
+          (data) => ({ data }),
+          (error: unknown) => ({ error }),
+        );
+        const original = f.sent.at(-1)!;
+        expect(original.params.operationId).toBe(operationId);
+        expect(original.params.body).toMatchObject({
+          handleId: handle.handleId,
+          deadlineMillis: "1760000029000",
+          request: {
+            ...(method === "continue" ? { dispatchId } : {}),
+            message: "once",
+          },
+        });
+        setTimeout(() => f.reply(original), 17000);
+        await vi.advanceTimersByTimeAsync(2000);
+        const observation = f.bridge.operationStatus({ operationId });
+        const read = f.sent.at(-1)!;
+        const observed = observation.then(
+          (data) => ({ data }),
+          (error: unknown) => ({ error }),
+        );
+        await vi.advanceTimersByTimeAsync(15000);
+        expect(await settled).toEqual({
+          data: { operationId, taskId, receipt: receipt() },
+        });
+        f.reply(read);
+        expect(await observed).toMatchObject({
+          data: { operationId, taskId },
+        });
+        expect(f.sent.map((request) => request.method)).toEqual([
+          "core.handshake",
+          `task.${method}`,
+          "task.operation.status",
+        ]);
+      } finally {
+        await f.close();
+      }
+    },
+  );
+
+  it("expires at the original transport deadline even when Client framing consumes time", async () => {
+    const f = await transportFixture();
+    let settled = false;
+    try {
+      const stringify = JSON.stringify;
+      let frames = 0;
+      vi.spyOn(JSON, "stringify").mockImplementation((value) => {
+        if (value?.method === "task.create" && ++frames === 2)
+          vi.advanceTimersByTime(5000);
+        return stringify(value);
+      });
+      const pending = f.bridge.create({ message: "once" }, dispatchId);
+      const outcome = pending.then(
+        (value) => {
+          settled = true;
+          return value;
+        },
+        (error: unknown) => {
+          settled = true;
+          return error;
+        },
+      );
+      expect(Date.now()).toBe(1760000005000);
+      await vi.advanceTimersByTimeAsync(25000);
+      // This assertion is the required absolute transport deadline, not a new
+      // relative wait after the Client's own framing work.
+      expect(settled).toBe(true);
+      expect(await outcome).toMatchObject({
+        state: "unknown",
+        code: "response_timeout",
+      });
+      expect(() => f.client.verifiedContext).toThrow(BridgeError);
+      expect(
+        f.sent.filter((request) => request.method === "task.create"),
+      ).toHaveLength(1);
+    } finally {
+      await vi.advanceTimersByTimeAsync(30000);
+      await f.close();
+    }
+  });
+
+  it("refuses an expired Task before write with a concrete not-sent error and preserves the Client and original unsent ID", async () => {
+    const f = await transportFixture();
+    try {
+      const stringify = JSON.stringify;
+      let frames = 0;
+      let original: Request | undefined;
+      const delayed = vi
+        .spyOn(JSON, "stringify")
+        .mockImplementation((value) => {
+          if (value?.method === "task.create" && ++frames === 2) {
+            original = value as Request;
+            vi.advanceTimersByTime(30000);
+          }
+          return stringify(value);
+        });
+      const failure = await f.bridge
+        .create({ message: "once" }, dispatchId)
+        .catch((error: unknown) => error);
+      delayed.mockRestore();
+      expect(failure).toBeInstanceOf(RequestNotSentError);
+      expect(failure).toMatchObject({
+        state: "refused",
+        code: "request_deadline_expired",
+      });
+      expect(original!.params.operationId).toBe(dispatchId);
+      expect(original!.params.body).toHaveProperty(
+        "deadlineMillis",
+        "1760000029000",
+      );
+      expect(f.sent.map((request) => request.method)).toEqual([
+        "core.handshake",
+      ]);
+      expect(f.client.verifiedContext).toEqual(scope);
+      expect(vi.getTimerCount()).toBe(0);
+      // Reusing the unsent caller ID for an explicit read proves that Client
+      // did not consume it. No Task effect or new effect budget is retried.
+      const read = f.client.request(
+        "task.operation.status",
+        { handleId: handle.handleId, request: { operationId: dispatchId } },
+        { id: original!.id },
+      );
+      expect(f.sent.at(-1)!.id).toBe(original!.id);
+      f.reply(f.sent.at(-1)!);
+      await expect(read).resolves.toMatchObject({ requestId: original!.id });
+      await expect(
+        f.bridge.create({ message: "again" }, dispatchId),
+      ).rejects.toMatchObject({ code: "task_operation_already_attempted" });
+      expect(f.sent.map((request) => request.method)).toEqual([
+        "core.handshake",
+        "task.operation.status",
+      ]);
+    } finally {
+      await f.close();
+    }
+  });
+
+  it("keeps an existing shared read usable when absolute expiry occurs during another Client frame", async () => {
+    const f = await transportFixture();
+    try {
+      const observed = f.bridge.operationStatus({ operationId: dispatchId });
+      const read = f.sent.at(-1)!;
+      const stringify = JSON.stringify;
+      const delayed = vi
+        .spyOn(JSON, "stringify")
+        .mockImplementation((value) => {
+          if (value?.id === "unsent-original") vi.advanceTimersByTime(5000);
+          return stringify(value);
+        });
+      const failure = await f.client
+        .request(
+          "task.create",
+          {
+            handleId: handle.handleId,
+            request: { message: "once" },
+            deadlineMillis: "1760000029000",
+          },
+          {
+            id: "unsent-original",
+            operationId: dispatchId,
+            timeoutMs: 30000,
+            deadlineAtMillis: 1760000002000,
+          },
+        )
+        .catch((error: unknown) => error);
+      delayed.mockRestore();
+      expect(failure).toBeInstanceOf(RequestNotSentError);
+      expect(failure).toMatchObject({
+        state: "refused",
+        code: "request_deadline_expired",
+      });
+      expect(f.sent.map((request) => request.method)).toEqual([
+        "core.handshake",
+        "task.operation.status",
+      ]);
+      expect(vi.getTimerCount()).toBe(1);
+      f.reply(read);
+      await expect(observed).resolves.toHaveProperty("operationId", dispatchId);
+      expect(f.client.verifiedContext).toEqual(scope);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      await f.close();
+    }
+  });
+
+  it.each([
+    NaN,
+    Infinity,
+    -Infinity,
+    1.5,
+    Number.MAX_SAFE_INTEGER + 1,
+    "1760000001000",
+    null,
+  ])(
+    "refuses malformed absolute host deadline %s without writing or consuming its ID",
+    async (deadlineAtMillis) => {
+      const f = await transportFixture();
+      try {
+        const body = {
+          handleId: handle.handleId,
+          request: { operationId: dispatchId },
+        };
+        await expect(
+          f.client.request("task.operation.status", body, {
+            id: "original-read",
+            deadlineAtMillis: deadlineAtMillis as number,
+          }),
+        ).rejects.toMatchObject({ state: "refused", code: "invalid_deadline" });
+        expect(f.sent.map((request) => request.method)).toEqual([
+          "core.handshake",
+        ]);
+        const pending = f.client.request("task.operation.status", body, {
+          id: "original-read",
+        });
+        f.reply(f.sent.at(-1)!);
+        await expect(pending).resolves.toMatchObject({
+          requestId: "original-read",
+        });
+        expect(f.client.verifiedContext).toEqual(scope);
+      } finally {
+        await f.close();
+      }
+    },
+  );
+
+  it.each([
+    { timeoutMs: 1000, deadlineOffset: 10000, expiresAfter: 1000 },
+    { timeoutMs: 10000, deadlineOffset: 1000, expiresAfter: 1000 },
+    { timeoutMs: undefined, deadlineOffset: undefined, expiresAfter: 2000 },
+  ])(
+    "keeps the earlier relative/absolute timer and omitted default ($expiresAfter ms)",
+    async ({ timeoutMs, deadlineOffset, expiresAfter }) => {
+      const f = await transportFixture();
+      try {
+        const pending = f.client.request(
+          "task.operation.status",
+          { handleId: handle.handleId, request: { operationId: dispatchId } },
+          {
+            id: "original-read",
+            ...(timeoutMs === undefined ? {} : { timeoutMs }),
+            ...(deadlineOffset === undefined
+              ? {}
+              : { deadlineAtMillis: Date.now() + deadlineOffset }),
+          },
+        );
+        let settled = false;
+        const failure = pending.catch((error: unknown) => {
+          settled = true;
+          return error;
+        });
+        await vi.advanceTimersByTimeAsync(expiresAfter - 1);
+        expect(settled).toBe(false);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(await failure).toMatchObject({
+          state: "unknown",
+          code: "response_timeout",
+        });
+        expect(f.sent.at(-1)!.params).not.toHaveProperty("deadlineAtMillis");
+        expect(f.sent.at(-1)!.params.body).not.toHaveProperty(
+          "deadlineAtMillis",
+        );
+        expect(() => f.client.verifiedContext).toThrow(BridgeError);
+      } finally {
+        await f.close();
+      }
+    },
+  );
+
+  it("keeps the existing relative transport cap with an absolute host deadline", async () => {
+    const f = await transportFixture();
+    try {
+      await expect(
+        f.client.request(
+          "task.operation.status",
+          { handleId: handle.handleId, request: { operationId: dispatchId } },
+          { timeoutMs: 30001, deadlineAtMillis: Date.now() + 1000 },
+        ),
+      ).rejects.toMatchObject({ state: "refused", code: "invalid_deadline" });
+      expect(f.sent.map((request) => request.method)).toEqual([
+        "core.handshake",
+      ]);
+      expect(f.client.verifiedContext).toEqual(scope);
+    } finally {
+      await f.close();
+    }
+  });
+
+  it("keeps the read-only 16-second relative timer after framing when the absolute option is omitted", async () => {
+    const f = await transportFixture();
+    try {
+      const stringify = JSON.stringify;
+      let frames = 0;
+      vi.spyOn(JSON, "stringify").mockImplementation((value) => {
+        if (value?.method === "task.resolve" && ++frames === 2)
+          vi.advanceTimersByTime(5000);
+        return stringify(value);
+      });
+      const pending = f.bridge.resolve();
+      let settled = false;
+      const failure = pending.catch((error: unknown) => {
+        settled = true;
+        return error;
+      });
+      expect(Date.now()).toBe(1760000005000);
+      expect(f.sent.at(-1)!.params.body).toEqual({ handleId: handle.handleId });
+      await vi.advanceTimersByTimeAsync(15999);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(await failure).toMatchObject({
+        state: "unknown",
+        code: "response_timeout",
+      });
+    } finally {
+      await f.close();
+    }
+  });
+
+  it("counts local preparation against the original absolute budget instead of resetting at send", async () => {
+    const f = fixture();
+    Object.defineProperty(f.client, "verifiedContext", {
+      get: () => {
+        vi.advanceTimersByTime(5000);
+        return scope;
+      },
+    });
+    await f.bridge.create({ message: "once" }, dispatchId);
+    expect(f.request.mock.calls[0]?.[1]).toEqual({
+      handleId: handle.handleId,
+      request: { message: "once" },
+      deadlineMillis: "1760000029000",
+    });
+    expect(f.request.mock.calls[0]?.[2]).toMatchObject({
+      operationId: dispatchId,
+      timeoutMs: 25000,
+      deadlineAtMillis: 1760000030000,
+    });
+  });
+
+  it.each([27000, 30000, -1])(
+    "refuses before transport when preparation consumes the execution window or the clock regresses (%s ms)",
+    async (elapsed) => {
+      const f = fixture();
+      Object.defineProperty(f.client, "verifiedContext", {
+        get: () => {
+          vi.setSystemTime(1760000000000 + elapsed);
+          return scope;
+        },
+      });
+      await expect(
+        f.bridge.create({ message: "once" }, dispatchId),
+      ).rejects.toMatchObject({
+        state: "refused",
+        code: "task_deadline_invalid",
+      });
+      expect(f.request).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["TaskRoutedCreate", "TaskRoutedContinue", "TaskRoutedResume"])(
+    "requires a closed decimal deadline only on %s",
+    (shape) => {
+      const request =
+        shape === "TaskRoutedCreate"
+          ? { message: "once" }
+          : { dispatchId, message: "once" };
+      const body = {
+        handleId: handle.handleId,
+        request,
+        deadlineMillis: "1760000029000",
+      };
+      expect(validate(shape, body)).toBe(true);
+      for (const value of [
+        undefined,
+        null,
+        1760000029000,
+        "",
+        "01",
+        "-1",
+        "1.5",
+        "NaN",
+        "Infinity",
+      ])
+        expect(validate(shape, { ...body, deadlineMillis: value })).toBe(false);
+      expect(validate(shape, { ...body, timeoutMs: 30000 })).toBe(false);
+      expect(
+        validate("TaskRoutedRequest", {
+          handleId: handle.handleId,
+          deadlineMillis: body.deadlineMillis,
+        }),
+      ).toBe(false);
+    },
+  );
+
+  it("retains the final transport acknowledgement reserve after a Go reply at 29 seconds", async () => {
+    const f = await transportFixture();
+    try {
+      const pending = f.bridge.create({ message: "once" }, dispatchId);
+      const original = f.sent.at(-1)!;
+      let settled = false;
+      void pending.then(() => {
+        settled = true;
+      });
+      await vi.advanceTimersByTimeAsync(29000);
+      expect(settled).toBe(false);
+      f.reply(original);
+      await expect(pending).resolves.toMatchObject({
+        operationId: dispatchId,
+        taskId,
+      });
+      expect(f.client.verifiedContext).toEqual(scope);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      await f.close();
+    }
+  });
+
+  it("keeps a missing ACK unknown, stops pending shared observation and never replays", async () => {
+    const f = await transportFixture();
+    try {
+      const pending = f.bridge.create({ message: "once" }, dispatchId);
+      const original = f.sent.at(-1)!;
+      const effectError = expect(pending).rejects.toMatchObject({
+        state: "unknown",
+        code: "response_timeout",
+      });
+      await vi.advanceTimersByTimeAsync(1000);
+      // Start the shared read later, with a deadline beyond every permitted
+      // effect wait (Client caps those at 30 seconds). Its rejection must come
+      // from the effect stopping the shared Client, not its own read timer.
+      const observation = f.client.request(
+        "task.operation.status",
+        { handleId: handle.handleId, request: { operationId: dispatchId } },
+        { timeoutMs: 30000 },
+      );
+      const observationError = expect(observation).rejects.toMatchObject({
+        state: "unknown",
+        code: "response_timeout",
+      });
+      await vi.advanceTimersByTimeAsync(29000);
+      await effectError;
+      await observationError;
+      // A late valid ACK is not new authority and cannot reopen this Client.
+      f.reply(original);
+      await expect(
+        f.bridge.create({ message: "again" }, dispatchId),
+      ).rejects.toMatchObject({
+        state: "unavailable",
+        code: "backend_unavailable",
+      });
+      expect(f.sent.map((request) => request.method)).toEqual([
+        "core.handshake",
+        "task.create",
+        "task.operation.status",
+      ]);
+      expect(original.params.operationId).toBe(dispatchId);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      await f.close();
+    }
+  });
+
+  it("retains a lost provider ACK as unknown with original partial lineage and explicit observation", async () => {
+    const f = await transportFixture();
+    try {
+      const pending = f.bridge.create({ message: "once" }, dispatchId);
+      const original = f.sent.at(-1)!;
+      const data: TaskMutation = {
+        operationId: dispatchId,
+        taskId,
+        receipt: {
+          state: "outcome_unknown",
+          code: "CODEX_TASK_OUTCOME_UNKNOWN",
+          reference: { threadId: "original-partial-thread" },
+          result: "",
+          cancelRequested: false,
+        },
+      };
+      const unknown = expect(pending).rejects.toMatchObject({
+        state: "unknown",
+        code: "TASK_OUTCOME_UNKNOWN",
+        data,
+      });
+      setTimeout(
+        () => f.reply(original, "unknown", data as unknown as Json),
+        15000,
+      );
+      await vi.advanceTimersByTimeAsync(15000);
+      await unknown;
+      await expect(
+        f.bridge.create({ message: "again" }, dispatchId),
+      ).rejects.toMatchObject({
+        state: "unknown",
+        code: "task_operation_already_attempted",
+      });
+      const observation = f.bridge.operationStatus({ operationId: dispatchId });
+      const read = f.sent.at(-1)!;
+      const retained = payload(
+        read.method,
+        read.params.body,
+        undefined,
+        "codex",
+      ) as unknown as TaskOperation;
+      f.reply(read, "ok", {
+        ...retained,
+        lineage: data.receipt.reference,
+        receipt: data.receipt,
+      } as unknown as Json);
+      await expect(observation).resolves.toMatchObject({
+        operationId: dispatchId,
+        taskId,
+        lineage: data.receipt.reference,
+        receipt: data.receipt,
+      });
+      expect(read.params).not.toHaveProperty("operationId");
+      expect(f.sent.map((request) => request.method)).toEqual([
+        "core.handshake",
+        "task.create",
+        "task.operation.status",
+      ]);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      await f.close();
+    }
+  });
+});
+
 describe("opaque routed Task bridge", () => {
   it.each(["provider", "modelAlias", "model", "configDigest", "writer"])(
     "fences a changed Go-selected binding %s on the same handle",
@@ -431,14 +1069,24 @@ describe("opaque routed Task bridge", () => {
       expect(sent[1]).toEqual({
         handleId: handle.handleId,
         ...(call.request === undefined ? {} : { request: call.request }),
+        ...(call.effect ? { deadlineMillis: expect.any(String) } : {}),
       });
       expect(requiresOperationID(call.wire)).toBe(call.effect);
       if (call.effect) {
+        expect(sent[2]?.timeoutMs).toBeGreaterThan(27000);
+        expect(sent[2]?.timeoutMs).toBeLessThanOrEqual(30000);
+        expect(sent[2]?.deadlineAtMillis).toBe(
+          Number((sent[1] as { deadlineMillis: string }).deadlineMillis) + 1000,
+        );
         expect(sent[2]?.operationId).toBe(
           call.method === "create" ? dispatchId : `original-${call.method}`,
         );
         expect((data as TaskMutation).operationId).toBe(sent[2]?.operationId);
-      } else expect(sent[2]).not.toHaveProperty("operationId");
+      } else {
+        expect(sent[2]).not.toHaveProperty("operationId");
+        expect(sent[2]).not.toHaveProperty("deadlineAtMillis");
+        expect(sent[2]?.timeoutMs).toBe(16000);
+      }
       expect(
         frame({
           jsonrpc: "2.0",
@@ -726,6 +1374,7 @@ describe("opaque routed Task bridge", () => {
     expect(f.request.mock.calls[0]?.[1]).toEqual({
       handleId: handle.handleId,
       request: { message: "original" },
+      deadlineMillis: expect.any(String),
     });
   });
   it.each([

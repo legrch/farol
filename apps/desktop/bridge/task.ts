@@ -150,11 +150,23 @@ export class TaskBridge {
     outputShape: string,
     operationId?: string,
   ): Promise<T> {
+    // Capture the original invocation, before validation/framing can consume
+    // time. Effects reserve 2 s inside Go's 29 s settlement deadline and 1 s
+    // after it for this transport ACK. Read bodies/budgets remain unchanged.
+    const invokedAt = Date.now();
     const effect =
       method === "create" || method === "continue" || method === "resume";
+    if (
+      effect &&
+      (!Number.isSafeInteger(invokedAt) ||
+        invokedAt <= 0 ||
+        !Number.isSafeInteger(invokedAt + 30000))
+    )
+      throw new BridgeError("refused", "task_deadline_invalid");
     const input = {
       handleId: this.handle.handleId,
       ...(request === undefined ? {} : { request }),
+      ...(effect ? { deadlineMillis: String(invokedAt + 29000) } : {}),
     };
     if (
       !validate(inputShape, input) ||
@@ -183,6 +195,10 @@ export class TaskBridge {
     } catch {
       throw new BridgeError("refused", "task_request_frame_invalid");
     }
+    const timeoutMs = effect ? invokedAt + 30000 - Date.now() : 16000;
+    // Local work or a regressed wall clock cannot renew the original budget.
+    if (effect && (timeoutMs <= 3000 || timeoutMs > 30000))
+      throw new BridgeError("refused", "task_deadline_invalid");
     if (effect) {
       if (this.attempted.has(operationId!))
         throw new BridgeError("unknown", "task_operation_already_attempted");
@@ -195,8 +211,10 @@ export class TaskBridge {
       selected as unknown as Json,
       {
         id,
-        ...(effect ? { operationId: operationId! } : {}),
-        timeoutMs: 16000,
+        ...(effect
+          ? { operationId: operationId!, deadlineAtMillis: invokedAt + 30000 }
+          : {}),
+        timeoutMs,
       },
     );
     if (

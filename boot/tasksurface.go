@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"sync"
+	"time"
 
 	wire "github.com/legrch/farol/gen/desktop/v1"
+	"github.com/legrch/farol/modules/task/domain"
 	"github.com/legrch/farol/pkg/ipc"
 	"github.com/legrch/farol/transport/desktop"
 )
@@ -81,11 +83,26 @@ func (s *TaskSurface) Methods() map[string]desktop.Method {
 				return taskWireFailure(taskIngressError(taskRuntimeUnavailable("TASK_RUNTIME_OWNER_UNAVAILABLE")))
 			}
 			var in struct {
-				HandleID string          `json:"handleId"`
-				Request  json.RawMessage `json:"request"`
+				HandleID       string          `json:"handleId"`
+				Request        json.RawMessage `json:"request"`
+				DeadlineMillis string          `json:"deadlineMillis"`
 			}
 			if json.Unmarshal(r.Body, &in) != nil {
 				return invalidIngress()
+			}
+			if wire.RequiresOperationID(name) {
+				// This absolute timestamp includes time in the desktop queue. Never
+				// start a fresh relative budget when a handler finally gets control.
+				var cancel context.CancelFunc
+				var err error
+				ctx, cancel, err = taskEffectContext(ctx, in.DeadlineMillis, time.Now())
+				if err != nil {
+					if err == task.ErrInvalid {
+						return invalidIngress()
+					}
+					return taskWireFailure(taskIngressError(err))
+				}
+				defer cancel()
 			}
 			s.mu.Lock()
 			g := s.handles[in.HandleID]
