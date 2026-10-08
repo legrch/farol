@@ -1,219 +1,182 @@
-import { computerSetup } from "./computer-setup";
-import type { RendererFacade, SetupStep, WindowSnapshot } from "./contract";
+import type { RendererFacade, WindowSnapshot } from "./contract";
 import { Settings } from "./settings";
-import { nextSetupStep, setupSteps } from "./setup-navigation";
+import { setupChecklist, setupSteps } from "./setup-navigation";
+import { adjacentSetupSection, visibleSetupSection } from "./setup-checklist";
+import type { SetupCheckState, SetupSection } from "./setup-checklist";
 
 type Props = { snapshot: WindowSnapshot; facade: RendererFacade };
-
-const stepContext: Record<SetupStep, { title: string; description: string }> = {
+const context: Record<SetupSection, { title: string; description: string }> = {
   overview: {
     title: "Setup",
     description:
       "A guided path to connect ChatGPT and decide what it can access.",
   },
+  signin: {
+    title: "Sign in",
+    description:
+      "Use your own ChatGPT account inside Farol. This step is optional for an external ChatGPT connection.",
+  },
   folders: {
     title: "Workspaces",
-    description:
-      "Choose the workspaces Farol may access, review each access level, then verify a workspace. Removing access keeps its files.",
+    description: "Choose what ChatGPT can read and change.",
   },
   connection: {
     title: "Connection",
-    description:
-      "Connect this Mac using your tunnel details. A local connection and access from ChatGPT have separate checks.",
+    description: "Connect this Mac using your tunnel details.",
   },
   attachment: {
     title: "Add to ChatGPT",
-    description:
-      "Add this connection in ChatGPT, then send the current verification request to check access.",
-  },
-  finish: {
-    title: "Finish",
-    description: "Review the recorded checks, then open Home for everyday use.",
+    description: "Add the Farol app, then check the connection from ChatGPT.",
   },
 };
-
-export function SetupNavigation({ snapshot, facade }: Props) {
-  const selected = snapshot.destination.setupStep ?? "overview";
+function CheckMark({ state }: { state: SetupCheckState | "overview" }) {
+  const path =
+    state === "verified"
+      ? "m4 10 4 4 8-8"
+      : state === "pending"
+        ? "M10 3a7 7 0 1 1-7 7"
+        : state === "unknown"
+          ? "M10 5v6m0 3v1"
+          : state === "overview"
+            ? "M3 3h5v5H3zM12 3h5v5h-5zM3 12h5v5H3zM12 12h5v5h-5z"
+            : "M10 4a6 6 0 1 0 0 12 6 6 0 0 0 0-12";
   return (
-    <nav aria-label="Setup steps">
-      {setupSteps.map(([step, label], index) => (
-        <button
-          key={step}
-          aria-label={label}
-          aria-current={step === selected ? "step" : undefined}
-          onClick={() => facade.navigate({ area: "setup", setupStep: step })}
-        >
-          <span className="setup-step-number">{index + 1}</span>
-          <span>{label}</span>
-        </button>
-      ))}
+    <span
+      className="setup-check-mark"
+      data-check-state={state}
+      aria-hidden="true"
+    >
+      <svg viewBox="0 0 20 20">
+        <path d={path} />
+      </svg>
+    </span>
+  );
+}
+export function SetupNavigation({ snapshot, facade }: Props) {
+  const selected = visibleSetupSection(snapshot.destination.setupStep);
+  const checklist = setupChecklist(snapshot);
+  return (
+    <nav className="setup-checklist-navigation" aria-label="Setup steps">
+      {setupSteps.map(([step, label]) => {
+        const entry = checklist.entries.find((item) => item.step === step);
+        return (
+          <button
+            key={step}
+            type="button"
+            aria-label={label}
+            aria-description={entry?.status}
+            aria-current={step === selected ? "step" : undefined}
+            onClick={() => facade.navigate({ area: "setup", setupStep: step })}
+          >
+            <CheckMark state={entry?.state ?? "overview"} />
+            <span>{label}</span>
+          </button>
+        );
+      })}
     </nav>
   );
 }
-
-/** Guided presentation of Settings' existing commands and retained evidence. */
+/** Presentation over existing Settings commands. No action executes on mount. */
 export function Setup({ snapshot, facade }: Props) {
-  const step = snapshot.destination.setupStep ?? "overview";
-  const index = setupSteps.findIndex(([key]) => key === step);
-  const setup = computerSetup(snapshot);
+  const step = visibleSetupSection(snapshot.destination.setupStep);
+  const checklist = setupChecklist(snapshot);
+  const previous = adjacentSetupSection(step, -1);
+  const next = adjacentSetupSection(step, 1);
   return (
-    <div className="setup-page" data-setup-step={step}>
-      <header className="setup-intro">
-        <p className="setup-eyebrow">
-          Set up this Mac · {index + 1} of {setupSteps.length}
-        </p>
-        <h1>{stepContext[step].title}</h1>
-        <p className="description">{stepContext[step].description}</p>
+    <div className="setup-page setup-wizard" data-setup-step={step}>
+      <header className="setup-wizard-intro">
+        <h1 className="setup-visually-hidden">{context[step].title}</h1>
+        <p className="description">{context[step].description}</p>
       </header>
       {step === "overview" && (
-        <section className="setup-overview" aria-label="Setup overview">
-          {!setup.ready && <span className="badges">{setup.label}</span>}
-          <h2>{setup.ready ? "Computer ready" : "Set up Computer"}</h2>
-          <p>{setup.next}</p>
-          <div className="setup-overview-steps">
-            {(
-              [
-                [
-                  "folders",
-                  "Workspaces",
-                  "Choose workspaces and access for each one.",
-                  setup.workspacesVerified
-                    ? "Workspace verified"
-                    : "Workspace check needed",
-                ],
-                [
-                  "connection",
-                  "Connection",
-                  "Connect this Mac to ChatGPT.",
-                  setup.localConnectionCurrent
-                    ? "Local connection current"
-                    : "Connection check needed",
-                ],
-                [
-                  "attachment",
-                  "Add to ChatGPT",
-                  "Add the connection and review verification.",
-                  setup.externalAccessVerified
-                    ? "External access verified"
-                    : "External verification needed",
-                ],
-              ] as const
-            ).map(([destination, label, description, status], position) => (
-              <div className="setup-overview-row" key={destination}>
-                <span className="setup-overview-number" aria-hidden="true">
-                  {position + 1}
-                </span>
-                <span className="setup-overview-copy">
-                  <strong>{label}</strong>
-                  <small>{description}</small>
-                  <small>{status}</small>
-                </span>
-                <button
-                  className="subtle"
-                  onClick={() =>
-                    facade.navigate({ area: "setup", setupStep: destination })
-                  }
+        <section className="setup-checklist" aria-label="Setup overview">
+          {checklist.entries.map((entry) => (
+            <article
+              className="setup-checklist-row"
+              key={entry.step}
+              data-setup-check={entry.step}
+            >
+              <CheckMark state={entry.state} />
+              <div className="setup-checklist-copy">
+                <h2>
+                  {entry.label}
+                  {entry.optional && (
+                    <span className="setup-optional-tag">Optional</span>
+                  )}
+                </h2>
+                <p className="description">{entry.description}</p>
+                <p
+                  className="setup-check-status"
+                  data-check-state={entry.state}
                 >
-                  {setup.ready ? "Review" : "Open"} {label}
-                </button>
+                  {entry.status}
+                </p>
               </div>
-            ))}
-          </div>
-          <button
-            className="primary"
-            onClick={() =>
-              facade.navigate({
-                area: "setup",
-                setupStep: setup.ready ? "folders" : nextSetupStep(snapshot),
-              })
-            }
-          >
-            {setup.ready ? "Review workspaces" : "Continue setup"}
-          </button>
-          <p className="description setup-optional">
-            Embedded ChatGPT sign-in is optional for Computer access from
-            ChatGPT. You can review it in Settings → Connection.
+              <button
+                type="button"
+                className="setup-review-button"
+                aria-label={`${entry.action} ${entry.label}`}
+                onClick={() =>
+                  facade.navigate({ area: "setup", setupStep: entry.step })
+                }
+              >
+                {entry.action}
+              </button>
+            </article>
+          ))}
+          <p className="description setup-checklist-note">
+            After setup, Home is your everyday starting point. Sign-in inside
+            Farol is optional when you use ChatGPT outside the app.
           </p>
+          {checklist.ready && (
+            <button
+              type="button"
+              className="primary"
+              onClick={() =>
+                facade.navigate({
+                  area: "home",
+                  homeView: "overview",
+                  homeSelection: null,
+                })
+              }
+            >
+              Open Home
+            </button>
+          )}
         </section>
       )}
-      <div hidden={step === "finish" || step === "overview"}>
+      {/* Keep the same Settings component mounted so pending drafts/receipts survive navigation. */}
+      <div className="setup-panel" hidden={step === "overview"}>
         <Settings
           snapshot={snapshot}
           facade={facade}
-          setupStep={
-            step === "finish" || step === "overview" ? "connection" : step
-          }
+          setupStep={step === "overview" ? "connection" : step}
         />
       </div>
-      <section
-        className="setup-finish"
-        hidden={step !== "finish"}
-        aria-label="Computer setup status"
-      >
-        {!setup.ready && <span className="badges">{setup.label}</span>}
-        <h2>{setup.ready ? "Computer ready" : "A few checks remain"}</h2>
-        <p>{setup.next}</p>
-        <p className="description">
-          Workspace access, the local connection and verification from ChatGPT
-          have separate checks. Embedded ChatGPT sign-in and Model configuration
-          are optional.
-        </p>
-        {!setup.ready && (
+      {step !== "overview" && (
+        <footer className="setup-wizard-footer">
+          {previous && (
+            <button
+              type="button"
+              className="subtle"
+              onClick={() =>
+                facade.navigate({ area: "setup", setupStep: previous })
+              }
+            >
+              Previous
+            </button>
+          )}
           <button
+            type="button"
             className="primary"
             onClick={() =>
-              facade.navigate({
-                area: "setup",
-                setupStep: nextSetupStep(snapshot),
-              })
+              facade.navigate({ area: "setup", setupStep: next ?? "overview" })
             }
           >
-            Continue setup
+            {next ? "Continue" : "Review setup"}
           </button>
-        )}
-      </section>
-      <footer className="setup-navigation">
-        <p className="description setup-navigation-note">
-          Opening a step does not change access or run a check.
-        </p>
-        <button
-          className="subtle"
-          disabled={index === 0}
-          onClick={() =>
-            facade.navigate({
-              area: "setup",
-              setupStep: setupSteps[index - 1]![0],
-            })
-          }
-        >
-          Previous step
-        </button>
-        {index > 0 && index < setupSteps.length - 1 && (
-          <button
-            className="primary"
-            onClick={() =>
-              facade.navigate({
-                area: "setup",
-                setupStep: setupSteps[index + 1]![0],
-              })
-            }
-          >
-            Continue
-          </button>
-        )}
-        <button
-          className="text-button"
-          onClick={() =>
-            facade.navigate({
-              area: "home",
-              homeView: "overview",
-              homeSelection: null,
-            })
-          }
-        >
-          Open Home
-        </button>
-      </footer>
+        </footer>
+      )}
     </div>
   );
 }

@@ -45,6 +45,12 @@ export function initialSetupPresentation(
   return {
     setupOpen: firstSetup && !connectionsFirst,
     setupStep,
-    section: connectionsFirst ? "computer" : input.openAtLaunch,
+    // Home is a React-owned destination using the existing non-browser native
+    // surface. Do not expose a browser while the Home renderer is starting.
+    section: connectionsFirst
+      ? "computer"
+      : input.openAtLaunch === "home"
+        ? "settings"
+        : input.openAtLaunch,
   };
 }

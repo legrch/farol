@@ -1,0 +1,122 @@
+/* Reference: home-sidebar-2026-10-06 connection-line/step-icon geometry.
+   Existing shared theme tokens remain authoritative; no native geometry changes. */
+.setup-visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+.setup-wizard {
+  container-type: inline-size;
+}
+.setup-wizard-intro {
+  margin-bottom: 30px;
+}
+.setup-wizard-intro > .description {
+  font-size: 13px;
+  line-height: 1.6;
+}
+.setup-checklist-row {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  gap: 16px;
+  align-items: center;
+  padding: 24px 0;
+  border-bottom: 1px solid var(--line);
+}
+.setup-check-mark {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: var(--button);
+  color: var(--muted);
+}
+.setup-check-mark > svg {
+  width: 18px;
+  height: 18px;
+}
+.setup-check-mark[data-check-state="verified"] {
+  color: var(--good);
+}
+.setup-check-mark[data-check-state="unknown"] {
+  color: var(--warn);
+}
+.setup-checklist-copy {
+  min-width: 0;
+}
+.setup-checklist-copy h2 {
+  font-size: 14px;
+  letter-spacing: -0.2px;
+}
+.setup-checklist-copy p {
+  margin-top: 5px;
+}
+.setup-check-status {
+  color: var(--muted);
+  font-size: 12px;
+}
+.setup-check-status[data-check-state="unknown"] {
+  color: var(--warn);
+}
+.setup-optional-tag {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--muted);
+  margin-left: 8px;
+}
+.setup-review-button {
+  border: 1px solid var(--line);
+  background: var(--button);
+  white-space: nowrap;
+}
+.setup-checklist-note {
+  margin: 26px 0;
+  line-height: 1.6;
+}
+.setup-wizard .setup-panel[hidden] {
+  display: none;
+}
+.setup-wizard-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  margin-top: 30px;
+}
+.setup-checklist-navigation .setup-check-mark {
+  width: 18px;
+  height: 18px;
+  background: transparent;
+}
+.setup-checklist-navigation button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+@container (max-width: 460px) {
+  .setup-checklist-row {
+    grid-template-columns: 28px minmax(0, 1fr);
+    gap: 12px;
+    padding: 18px 0;
+  }
+  .setup-checklist-row > .setup-check-mark {
+    width: 28px;
+    height: 28px;
+  }
+  .setup-review-button {
+    grid-column: 2;
+    justify-self: start;
+  }
+  .setup-wizard-footer {
+    flex-wrap: wrap;
+  }
+}

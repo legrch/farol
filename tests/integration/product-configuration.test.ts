@@ -957,6 +957,38 @@ describe("Farol Next product configuration", () => {
     expect(linkedApproval.workspaces[0]?.gitMetadata).toEqual(gitMetadata);
   });
 
+  it.each(["home", "browser", "computer", "activity", "settings"] as const)(
+    "defaults fresh state to Home and retains an explicit %s launch preference across restart",
+    async (openAtLaunch) => {
+      const root = await stateRoot();
+      const first = new ProductConfigurationService(
+        new ProductSettingsStore({ root }),
+        dependencies(),
+      );
+      await first.initialize();
+      const fresh = first.snapshot();
+      if (fresh.status !== "ready") throw new Error("settings unavailable");
+      expect(fresh.settings.general.openAtLaunch).toBe("home");
+      const command = ProductConfigurationCommandSchema.parse({
+        kind: "general.update",
+        ...fresh.settings.general,
+        openAtLaunch,
+      });
+      if (command.kind !== "general.update") throw new Error("wrong command");
+      const { kind: _kind, ...preferences } = command;
+      expect((await first.updateGeneral(preferences)).ok).toBe(true);
+      const restarted = new ProductConfigurationService(
+        new ProductSettingsStore({ root }),
+        dependencies(),
+      );
+      await restarted.initialize();
+      expect(restarted.snapshot()).toMatchObject({
+        status: "ready",
+        settings: { general: { openAtLaunch } },
+      });
+    },
+  );
+
   it("persists working preferences and workspace approval across restart", async () => {
     const root = await stateRoot();
     const first = new ProductConfigurationService(

@@ -10475,7 +10475,7 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
     completedPreviously:
       initialSettings?.connectors.secureMcp.lastVerifiedAttachment != null,
     currentStep: initialSettings?.setup.journey.currentStep ?? "chatgpt",
-    openAtLaunch: initialSettings?.general.openAtLaunch ?? "browser",
+    openAtLaunch: initialSettings?.general.openAtLaunch ?? "home",
   });
   section = initialSetup.section;
   setupOpen = initialSetup.setupOpen;

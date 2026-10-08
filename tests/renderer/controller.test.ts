@@ -375,7 +375,7 @@ it("Setup is a separate history destination with the same Settings host surface 
   expect(f.api.task).not.toHaveBeenCalled();
   c.dispose();
 });
-it.each(["browser", "computer", "settings", "activity"] as const)(
+it.each(["home", "browser", "computer", "settings", "activity"] as const)(
   "a returning partial profile retains its task through Home, Setup and ChatGPT with %s launch preference",
   async (launch) => {
     const f = fixture();
@@ -430,6 +430,7 @@ it.each(["browser", "computer", "settings", "activity"] as const)(
 );
 describe("F0 window owner", () => {
   it.each([
+    { launch: "home", area: "home", page: "general" },
     { launch: "browser", area: "chatgpt", page: "general" },
     { launch: "computer", area: "settings", page: "computer" },
     { launch: "settings", area: "settings", page: "general" },

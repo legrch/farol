@@ -575,7 +575,7 @@ function defaultSettings(id: () => string): ProductSettings {
     schema: 1,
     revision: 1,
     general: {
-      openAtLaunch: "browser",
+      openAtLaunch: "home",
       sidebarDefault: "full",
       activityDetail: "summary",
     },

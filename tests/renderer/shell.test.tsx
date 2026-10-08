@@ -1226,16 +1226,25 @@ it("fresh Setup navigation never writes, verifies, clears credentials or invents
   expect(c.getSnapshot().destination.setupStep).toBe("overview");
   expect(
     host.querySelector('[aria-label="Setup overview"]')?.textContent,
-  ).toContain("Workspace check needed");
-  for (const step of ["Workspaces", "Connection", "Add to ChatGPT", "Finish"]) {
+  ).toContain("Not checked");
+  for (const step of [
+    "Sign in",
+    "Workspaces",
+    "Connection",
+    "Add to ChatGPT",
+  ]) {
     await act(async () => button(host, step).click());
     expect(c.getSnapshot().destination.area).toBe("setup");
   }
-  expect(host.querySelector(".setup-finish h2")?.textContent).toBe(
-    "A few checks remain",
-  );
+  await act(async () => button(host, "Review setup").click());
+  expect(c.getSnapshot().destination.setupStep).toBe("overview");
+  expect(
+    host.querySelector(
+      '[data-setup-check="connection"] [data-check-state="verified"]',
+    ),
+  ).toBeNull();
   expect(c.getSnapshot().configuration).toBe(saved);
-  await act(async () => button(host, "Continue setup").click());
+  await act(async () => button(host, "Set up Connection").click());
   expect(c.getSnapshot().destination.setupStep).toBe("connection");
   expect(f.api.configure).not.toHaveBeenCalled();
   expect(f.api.task).not.toHaveBeenCalled();
@@ -1251,18 +1260,18 @@ it("Setup presents a guided Overview and contextual steps with navigation-only c
       .filter((node) => !node.closest("[hidden]"))
       .map((node) => node.textContent);
   expect(page.querySelector("h1")?.textContent).toBe("Setup");
-  expect(page.querySelector(".setup-intro")?.textContent).toContain(
+  expect(page.querySelector(".setup-wizard-intro")?.textContent).toContain(
     "A guided path to connect ChatGPT and decide what it can access.",
   );
-  expect(page.querySelectorAll(".setup-overview-row")).toHaveLength(3);
-  expect(page.querySelector(".setup-overview-steps")?.textContent).toContain(
-    "Choose workspaces and access for each one.",
-  );
-  expect(button(page, "Previous step").disabled).toBe(true);
-  await act(async () => button(page, "Open Workspaces").click());
+  expect(page.querySelectorAll(".setup-checklist-row")).toHaveLength(4);
+  expect(
+    page.querySelector('[data-setup-check="folders"]')?.textContent,
+  ).toContain("Choose workspaces and access for each one.");
+  expect(page.querySelector(".setup-wizard-footer")).toBeNull();
+  await act(async () => button(page, "Set up Workspaces").click());
   expect(page.querySelector("h1")?.textContent).toBe("Workspaces");
-  expect(page.querySelector(".setup-intro")?.textContent).toContain(
-    "Removing access keeps its files.",
+  expect(page.querySelector(".setup-wizard-intro")?.textContent).toContain(
+    "Choose what ChatGPT can read and change.",
   );
   expect(
     visibleHeadings().filter((title) => title === "Workspaces"),
@@ -1279,16 +1288,16 @@ it("Setup presents a guided Overview and contextual steps with navigation-only c
   await act(async () => button(page, "Continue").click());
   expect(c.getSnapshot().destination.setupStep).toBe("attachment");
   expect(visibleHeadings()).toEqual(["Add to ChatGPT"]);
-  await act(async () => button(page, "Previous step").click());
+  await act(async () => button(page, "Previous").click());
   expect(c.getSnapshot().destination.setupStep).toBe("connection");
   await act(async () => button(page, "Continue").click());
-  await act(async () => button(page, "Continue").click());
-  expect(c.getSnapshot().destination.setupStep).toBe("finish");
-  expect(page.querySelector(".setup-finish h2")?.textContent).toBe(
-    "A few checks remain",
-  );
-  await act(async () => button(page, "Open Home").click());
-  expect(c.getSnapshot().destination.area).toBe("home");
+  await act(async () => button(page, "Review setup").click());
+  expect(c.getSnapshot().destination.setupStep).toBe("overview");
+  expect(
+    [...page.querySelectorAll("button")].some(
+      (item) => item.textContent === "Open Home",
+    ),
+  ).toBe(false);
   expect(c.getSnapshot().configuration).toBe(saved);
   expect(f.api.configure).not.toHaveBeenCalled();
   expect(f.api.task).not.toHaveBeenCalled();
@@ -1317,7 +1326,13 @@ it("Setup keeps credential draft nodes through Overview, other steps and backgro
       new CompositionEvent("compositionstart", { bubbles: true }),
     );
   });
-  for (const step of ["overview", "folders", "attachment", "finish"] as const) {
+  for (const step of [
+    "overview",
+    "signin",
+    "folders",
+    "attachment",
+    "finish",
+  ] as const) {
     await act(async () => c.navigate({ area: "setup", setupStep: step }));
     expect(key.isConnected).toBe(true);
     expect(key.closest("[hidden]")).not.toBeNull();
@@ -1356,11 +1371,14 @@ it.each(["stale", "unknown"] as const)(
     const { host, c, f } = await mount(data);
     for (const step of ["overview", "finish"] as const) {
       await act(async () => c.navigate({ area: "setup", setupStep: step }));
-      const visible = [...host.querySelectorAll(".setup-page h2")].filter(
-        (node) => !node.closest("[hidden]"),
-      );
+      const connection = host.querySelector('[data-setup-check="attachment"]')!;
       expect(
-        visible.some((node) => node.textContent === "Computer ready"),
+        connection.querySelector('[data-check-state="verified"]'),
+      ).toBeNull();
+      expect(
+        [...host.querySelectorAll(".setup-checklist button")].some(
+          (item) => item.textContent === "Open Home",
+        ),
       ).toBe(false);
     }
     expect(f.api.configure).not.toHaveBeenCalled();
@@ -1379,9 +1397,11 @@ it("ready Review Setup retains saved credentials and cancels replacement without
     area: "setup",
     setupStep: "overview",
   });
-  expect(host.querySelector(".setup-overview h2")?.textContent).toBe(
-    "Computer ready",
-  );
+  expect(
+    host.querySelectorAll(
+      '.setup-checklist-row:not([data-setup-check="signin"]) .setup-check-status[data-check-state="verified"]',
+    ),
+  ).toHaveLength(3);
   await act(async () => button(host, "Connection").click());
   expect(host.querySelector(".credentials-saved")?.textContent).toContain(
     "Tunnel credentials saved",
@@ -1392,6 +1412,7 @@ it("ready Review Setup retains saved credentials and cancels replacement without
   )!;
   expect(password.value).toBe("");
   await act(async () => button(host, "Cancel").click());
+  await act(async () => button(host, "Overview").click());
   await act(async () => button(host, "Open Home").click());
   expect(c.getSnapshot().configuration).toBe(saved);
   expect(f.api.configure).not.toHaveBeenCalled();
@@ -1412,7 +1433,7 @@ it("partial setup survives controller reopen with an obvious continuation and un
     });
     expect(
       host.querySelector('[aria-label="Setup overview"]')?.textContent,
-    ).toContain("Connection check needed");
+    ).toContain("Not checked");
     expect(data.configuration.settings.general.openAtLaunch).toBe("browser");
     expect(data.configuration.settings.computer.workspaces).toHaveLength(1);
     expect(f.api.configure).not.toHaveBeenCalled();
@@ -1425,7 +1446,7 @@ it("Setup overview resumes the first incomplete step and ready review stays nond
     homeComputerSettings().computer.workspaces;
   const first = await mount(partial);
   await act(async () => button(first.host, "Setup").click());
-  await act(async () => button(first.host, "Continue setup").click());
+  await act(async () => button(first.host, "Set up Connection").click());
   expect(first.c.getSnapshot().destination.setupStep).toBe("connection");
   expect(first.f.api.configure).not.toHaveBeenCalled();
 
@@ -1436,9 +1457,9 @@ it("Setup overview resumes the first incomplete step and ready review stays nond
     review.c.navigate({ area: "settings", page: "general" }),
   );
   await act(async () => button(review.host, "Review Setup").click());
-  await act(async () => button(review.host, "Review workspaces").click());
+  await act(async () => button(review.host, "Review Workspaces").click());
   expect(review.c.getSnapshot().destination.setupStep).toBe("folders");
-  await act(async () => button(review.host, "Finish").click());
+  await act(async () => button(review.host, "Overview").click());
   expect(
     [...review.host.querySelectorAll("button")].filter(
       (item) => item.textContent?.trim() === "Open Home",

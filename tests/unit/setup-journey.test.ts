@@ -115,6 +115,27 @@ describe("setup journey", () => {
 });
 
 describe("guided Setup selection", () => {
+  it("keeps Home on the non-browser native surface without rewriting explicit launch choices", () => {
+    for (const [openAtLaunch, section] of [
+      ["home", "settings"],
+      ["browser", "browser"],
+      ["computer", "computer"],
+      ["activity", "activity"],
+      ["settings", "settings"],
+    ] as const) {
+      const input = {
+        environment: "dev",
+        dismissed: true,
+        currentStep: "verify",
+        openAtLaunch,
+      } as const;
+      expect(initialSetupPresentation(input)).toMatchObject({
+        setupOpen: false,
+        section,
+      });
+      expect(input.openAtLaunch).toBe(openAtLaunch);
+    }
+  });
   it.each(["preview", "dev"] as const)(
     "selects sidebar Setup in normal %s",
     (environment) => {

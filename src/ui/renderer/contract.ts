@@ -77,7 +77,7 @@ export type Destination = Readonly<{
 export type HomeView =
   "overview" | "work" | "attention" | "activity" | "access";
 export type SetupStep =
-  "overview" | "folders" | "connection" | "attachment" | "finish";
+  "overview" | "signin" | "folders" | "connection" | "attachment" | "finish";
 export type UpdateAction =
   | "check"
   | "download"

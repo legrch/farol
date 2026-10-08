@@ -40,7 +40,7 @@ import type {
 export type SettingsProps = Readonly<{
   snapshot: WindowSnapshot;
   facade: RendererFacade;
-  setupStep?: "connection" | "folders" | "attachment" | undefined;
+  setupStep?: "signin" | "connection" | "folders" | "attachment" | undefined;
 }>;
 type Actions = {
   disabled: boolean;
@@ -581,6 +581,7 @@ function General({ settings, actions }: PageProps) {
                 setStart(event.currentTarget.value as typeof start)
               }
             >
+              <option value="home">Home</option>
               <option value="browser">ChatGPT</option>
               <option value="computer">This Mac</option>
               <option value="activity">Activity</option>
@@ -2271,8 +2272,8 @@ function Connection({
           </Command>
         </Group>
       </div>
-      <div hidden={setupStep !== undefined}>
-        <Group title="Embedded ChatGPT · optional">
+      <div hidden={setupStep !== undefined && setupStep !== "signin"}>
+        <Group title="Embedded ChatGPT · optional" showTitle={!setupStep}>
           <p className="badges">{setup.embeddedChatGPT}</p>
           <p className="description">
             Embedded sign-in is optional for external Computer access. It has
@@ -2291,9 +2292,11 @@ function Connection({
             >
               Open ChatGPT
             </Command>
-            <Command actions={actions} command={{ kind: "chatgpt.verify" }}>
-              Check sign-in
-            </Command>
+            {setup.embeddedChatGPT !== "Ready" && (
+              <Command actions={actions} command={{ kind: "chatgpt.verify" }}>
+                Check sign-in
+              </Command>
+            )}
           </div>
         </Group>
       </div>

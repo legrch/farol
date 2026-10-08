@@ -376,13 +376,15 @@ export class WindowController implements RendererFacade {
           ) {
             const launch = settings.general.openAtLaunch;
             this.navigate(
-              launch === "browser"
-                ? { area: "chatgpt" }
-                : launch === "computer"
-                  ? { area: "settings", page: "computer" }
-                  : launch === "settings"
-                    ? { area: "settings", page: "general" }
-                    : { area: "activity" },
+              launch === "home"
+                ? { area: "home" }
+                : launch === "browser"
+                  ? { area: "chatgpt" }
+                  : launch === "computer"
+                    ? { area: "settings", page: "computer" }
+                    : launch === "settings"
+                      ? { area: "settings", page: "general" }
+                      : { area: "activity" },
             );
           }
         }
