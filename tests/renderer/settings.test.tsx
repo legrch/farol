@@ -1666,6 +1666,89 @@ describe("bounded Settings writer", () => {
       kind: "check",
     });
   });
+  it("changes only the confirmed automatic download preference and keeps installation manual", async () => {
+    const off = {
+      phase: "idle" as const,
+      checkedAt: null,
+      automaticUpdatePreference: {
+        status: "confirmed" as const,
+        enabled: false,
+      },
+    };
+    const on = {
+      ...off,
+      automaticUpdatePreference: {
+        status: "confirmed" as const,
+        enabled: true,
+      },
+    };
+    const h = await mount("updates", settings(), "preview", off);
+    expect(h.host.textContent).toContain("Off. Farol checks for updates");
+    expect(h.f.api.installedUpdate).toHaveBeenCalledExactlyOnceWith({
+      kind: "status",
+    });
+    vi.mocked(h.f.api.installedUpdate).mockResolvedValueOnce(on);
+    await h.click("Turn on automatic downloads");
+    expect(h.f.api.installedUpdate).toHaveBeenLastCalledWith({
+      kind: "set-automatic-update-preference",
+      enabled: true,
+    });
+    expect(h.c.getSnapshot().intents["update-automatic-downloads"]?.state).toBe(
+      "applied",
+    );
+    expect(h.host.textContent).toContain(
+      "Installation still requires Review update",
+    );
+    expect(h.f.api.installedUpdate).not.toHaveBeenCalledWith({
+      kind: "restart",
+    });
+    vi.mocked(h.f.api.installedUpdate).mockResolvedValueOnce(off);
+    await h.click("Turn off automatic downloads");
+    expect(h.f.api.installedUpdate).toHaveBeenLastCalledWith({
+      kind: "set-automatic-update-preference",
+      enabled: false,
+    });
+  });
+  it("keeps an uncertain automatic download choice disabled without retry", async () => {
+    const off = {
+      phase: "idle" as const,
+      checkedAt: null,
+      automaticUpdatePreference: {
+        status: "confirmed" as const,
+        enabled: false,
+      },
+    };
+    const h = await mount("updates", settings(), "preview", off);
+    vi.mocked(h.f.api.installedUpdate).mockClear();
+    vi.mocked(h.f.api.installedUpdate).mockResolvedValueOnce({
+      ...off,
+      automaticUpdatePreference: {
+        status: "unknown",
+        enabled: false,
+        code: "UPDATE_AUTOMATIC_PREFERENCE_OUTCOME_UNKNOWN",
+      },
+    });
+    await h.click("Turn on automatic downloads");
+    expect(h.c.getSnapshot().intents["update-automatic-downloads"]?.state).toBe(
+      "unknown",
+    );
+    expect(h.button("Turn on automatic downloads").disabled).toBe(true);
+    await h.click("Turn on automatic downloads");
+    expect(h.f.api.installedUpdate).toHaveBeenCalledExactlyOnceWith({
+      kind: "set-automatic-update-preference",
+      enabled: true,
+    });
+  });
+  it("does not expose automatic downloads without a confirmed installed preference", async () => {
+    const h = await mount("updates");
+    expect(h.button("Turn on automatic downloads").disabled).toBe(true);
+    expect(h.host.textContent).toContain(
+      "Download preference cannot be confirmed",
+    );
+    expect(h.f.api.installedUpdate).toHaveBeenCalledExactlyOnceWith({
+      kind: "status",
+    });
+  });
   it.each<WindowSnapshot["update"]>([
     { phase: "unavailable", code: "UPDATE_NOT_INSTALLED" },
     { phase: "idle", checkedAt: null },

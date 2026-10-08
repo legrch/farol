@@ -1263,6 +1263,66 @@ export class WindowController implements RendererFacade {
       };
     });
   }
+  setAutomaticDownloads(enabled: boolean): Promise<Intent> {
+    const key = "update-automatic-downloads";
+    const current = this.state;
+    const preference = current.update.automaticUpdatePreference;
+    if (
+      current.status !== "current" ||
+      current.runtime !== "ready" ||
+      !current.buildId ||
+      !preference ||
+      preference.status !== "confirmed" ||
+      current.intents[key]?.state === "pending" ||
+      current.intents[key]?.state === "unknown" ||
+      current.intents.update?.state === "pending" ||
+      current.intents.update?.state === "unknown" ||
+      current.update.phase === "checking" ||
+      current.update.phase === "downloading" ||
+      current.update.phase === "applying" ||
+      current.update.phase === "recovery" ||
+      (current.update.phase === "failed" &&
+        current.update.code.includes("UNKNOWN")) ||
+      (current.update.phase === "ready" &&
+        current.update.blockedBy?.includes("UNKNOWN"))
+    )
+      return Promise.resolve({
+        id: key,
+        state: "refused",
+        code: "UPDATE_AUTOMATIC_PREFERENCE_UNAVAILABLE",
+      });
+    if (preference.enabled === enabled)
+      return Promise.resolve({ id: key, state: "applied", code: null });
+    return this.dispatch(key, enabled, async () => {
+      const revision = this.updateRevision;
+      const parsed = InstalledUpdateViewSchema.safeParse(
+        await this.api.installedUpdate({
+          kind: "set-automatic-update-preference",
+          enabled,
+        }),
+      );
+      if (!parsed.success || !parsed.data.automaticUpdatePreference)
+        return {
+          id: key,
+          state: "unknown",
+          code: "UPDATE_AUTOMATIC_PREFERENCE_OUTCOME_UNKNOWN",
+        };
+      if (this.updateRevision === revision) this.adoptUpdate(parsed.data);
+      const result = parsed.data.automaticUpdatePreference;
+      return result.status === "confirmed" && result.enabled === enabled
+        ? { id: key, state: "applied", code: null }
+        : result.status === "blocked"
+          ? { id: key, state: "refused", code: result.code }
+          : {
+              id: key,
+              state: "unknown",
+              code:
+                result.status === "unknown"
+                  ? result.code
+                  : "UPDATE_AUTOMATIC_PREFERENCE_ACK_MISMATCH",
+            };
+    });
+  }
   observeWorkspaceEdit(operationId: string): Promise<Intent> {
     return this.configure(
       { kind: "computer.observe-workspace-edit", operationId },

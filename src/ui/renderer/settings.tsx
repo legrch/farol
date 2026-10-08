@@ -2664,6 +2664,21 @@ function Updates({ snapshot, facade, actions }: PageProps) {
   const busy = useRef(false);
   const [checked, setChecked] = useState(false);
   const update = snapshot.update;
+  const preference = update.automaticUpdatePreference;
+  const preferenceIntent = snapshot.intents["update-automatic-downloads"];
+  const preferenceBusy =
+    preferenceIntent?.state === "pending" ||
+    preferenceIntent?.state === "unknown";
+  const preferenceAvailable =
+    preference?.status === "confirmed" &&
+    !preferenceBusy &&
+    !actions.disabled &&
+    update.phase !== "checking" &&
+    update.phase !== "downloading" &&
+    update.phase !== "applying" &&
+    update.phase !== "recovery" &&
+    !(update.phase === "failed" && update.code.includes("UNKNOWN")) &&
+    !(update.phase === "ready" && update.blockedBy?.includes("UNKNOWN"));
   const current =
     snapshot.status === "current" ? snapshot.installedVersion : null;
   if (snapshot.environment === "dev") {
@@ -2742,9 +2757,49 @@ function Updates({ snapshot, facade, actions }: PageProps) {
         </div>
         <p className="description">
           Review opens the update sheet. Installation, recovery and rollback use
-          its existing integrity and work-admission checks. Automatic update
-          preferences are not exposed by the current facade.
+          its existing integrity and work-admission checks.
         </p>
+      </Group>
+      <Group title="Automatic downloads">
+        <p className="description" role="status">
+          {preference?.status === "confirmed"
+            ? preference.enabled
+              ? "On. Farol downloads eligible updates during scheduled checks. Installation still requires Review update and Restart & Update."
+              : "Off. Farol checks for updates, but downloads only when you choose."
+            : "Download preference cannot be confirmed in this session."}
+        </p>
+        {preference?.status !== "confirmed" && preference?.code && (
+          <p className="notice" role="status">
+            {preference.code}
+          </p>
+        )}
+        {preferenceIntent?.state === "unknown" && (
+          <p className="notice" role="status">
+            Preference outcome is unknown. Do not repeat this change; review
+            Diagnostics.
+          </p>
+        )}
+        <button
+          type="button"
+          className="subtle"
+          disabled={!preferenceAvailable}
+          onClick={() => {
+            const latest = facade.getSnapshot();
+            const choice = latest.update.automaticUpdatePreference;
+            if (
+              choice?.status !== "confirmed" ||
+              latest.intents["update-automatic-downloads"]?.state ===
+                "pending" ||
+              latest.intents["update-automatic-downloads"]?.state === "unknown"
+            )
+              return;
+            void facade.setAutomaticDownloads(!choice.enabled);
+          }}
+        >
+          {preference?.status === "confirmed" && preference.enabled
+            ? "Turn off automatic downloads"
+            : "Turn on automatic downloads"}
+        </button>
       </Group>
     </>
   );

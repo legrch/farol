@@ -183,6 +183,7 @@ export interface RendererFacade {
   ): Promise<Intent>;
   task(command: ProductTaskCommand, intention: string): Promise<Intent>;
   update(action: UpdateAction, noticeKey?: string): Promise<Intent>;
+  setAutomaticDownloads(enabled: boolean): Promise<Intent>;
   observeWorkspaceEdit(operationId: string): Promise<Intent>;
   acknowledgeWorkspaceEdit(operationId: string): Promise<Intent>;
   shortcuts(value: NavigationShortcuts): Promise<Intent>;
