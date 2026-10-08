@@ -232,6 +232,38 @@ describe("compact workspace detail", () => {
     ).toBe(workspaceId);
     expect(h.calls()).toEqual([]);
   });
+  it("opens the exact workspace returned by an approved selection, including an existing root", async () => {
+    const h = await mount("folders", twoWorkspaces());
+    vi.mocked(h.f.api.configure)
+      .mockResolvedValueOnce({
+        ok: true,
+        snapshot: h.configuration,
+        evidence: {
+          kind: "computer.workspace-pick",
+          selectionId,
+          displayPath: "/approved/second",
+        },
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        snapshot: h.configuration,
+        evidence: {
+          kind: "computer.workspace-selection",
+          workspaceId: selectionId,
+        },
+      });
+    await h.click("Add workspace…");
+    await h.click("Add selected workspace read-only");
+    expect(
+      activePage(h.host)
+        .querySelector('[aria-label="Select workspace second"]')
+        ?.getAttribute("aria-current"),
+    ).toBe("true");
+    expect(h.calls()).toEqual([
+      { kind: "computer.choose-workspace" },
+      { kind: "computer.add-workspace", selectionId },
+    ]);
+  });
   it("checks the current verified workspace read-only and retains its binding", async () => {
     const value = connectionSettings();
     const h = await mount("folders", value);

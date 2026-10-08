@@ -738,17 +738,36 @@ function Folders(props: PageProps) {
               className="primary"
               disabled={!actions.allowed("computer.add-workspace")}
               onClick={() => {
-                const evidence = facade.getSnapshot().evidence;
+                const before = facade.getSnapshot();
+                const evidence = before.evidence;
                 if (
                   evidence !== picked ||
                   evidence?.value.kind !== "computer.workspace-pick"
                 )
                   return;
                 setPicked(null);
-                void actions.run({
-                  kind: "computer.add-workspace",
-                  selectionId: evidence.value.selectionId,
-                });
+                void actions
+                  .run({
+                    kind: "computer.add-workspace",
+                    selectionId: evidence.value.selectionId,
+                  })
+                  .then((result) => {
+                    if (result?.state !== "applied") return;
+                    const after = facade.getSnapshot();
+                    const selected = after.evidence?.value;
+                    if (
+                      after.evidence !== before.evidence &&
+                      selected?.kind === "computer.workspace-selection" &&
+                      after.configuration?.status === "ready" &&
+                      after.evidence?.revision ===
+                        after.configuration.settings.revision &&
+                      soleIntent(before, after, "computer.add-workspace") &&
+                      after.configuration.settings.computer.workspaces.some(
+                        (item) => item.workspaceId === selected.workspaceId,
+                      )
+                    )
+                      setSelectedId(selected.workspaceId);
+                  });
               }}
             >
               Add selected workspace read-only
