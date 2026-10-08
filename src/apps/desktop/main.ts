@@ -21,6 +21,7 @@ import { readChatHistoryView } from "../../../apps/desktop/chat-history-view";
 import { projectReadConversation } from "../../../apps/desktop/read-conversation-projection";
 import { ReadConversationPromptSchema } from "../../pkg/product-settings/chat-conversation";
 import { BridgeError } from "../../../apps/desktop/bridge/client";
+import { ConnectorHostError } from "../../../apps/desktop/bridge/connector-host";
 import {
   reportComputerCheckDiagnostic,
   refuseComputerSettingsList,
@@ -3201,10 +3202,15 @@ async function runProductTaskCommand(
 
 function configurationFailure(
   error: Extract<ProductConfigurationResult, { ok: false }>["error"],
+  connectorAttempt?: Extract<
+    ProductConfigurationResult,
+    { ok: false }
+  >["connectorAttempt"],
 ): ProductConfigurationResult {
   return ProductConfigurationResultSchema.parse({
     ok: false,
     error,
+    ...(connectorAttempt ? { connectorAttempt } : {}),
     snapshot: configuration?.snapshot() ?? {
       status: "error",
       error: "SETTINGS_READ_FAILED",
@@ -4254,6 +4260,44 @@ async function startSecureMcpConnector(
         return configurationFailure("CONNECTOR_START_FAILED");
       await computerMcpLifecycle().prepare(launchContractSha256);
     } catch (error) {
+      if (error instanceof ConnectorHostError) {
+        const connectorAttempt = {
+          method: "computer.connector.open" as const,
+          requestId: error.requestId,
+          operationId: error.operationId,
+          outcome: error.outcome,
+        };
+        if (error.outcome === "unknown") {
+          // The Go operation may have published before its reply was lost.
+          // Retain the original IDs in the caller result and a sticky runtime
+          // generation in the existing settings owner, never another open.
+          const generation = createHash("sha256")
+            .update([error.requestId, error.operationId].join("\0"))
+            .digest("hex");
+          try {
+            const recorded = await recordConnectorRuntime(
+              "outcome_unknown",
+              generation,
+              snapshot.settings.computer.generation,
+            );
+            if (recorded && !recorded.ok)
+              return ProductConfigurationResultSchema.parse({
+                ...recorded,
+                connectorAttempt,
+              });
+          } catch {
+            return configurationFailure(
+              "SETTINGS_WRITE_FAILED",
+              connectorAttempt,
+            );
+          }
+          return configurationFailure(
+            "CONNECTOR_RUNTIME_OUTCOME_UNKNOWN",
+            connectorAttempt,
+          );
+        }
+        return configurationFailure("CONNECTOR_START_FAILED", connectorAttempt);
+      }
       const code = error instanceof Error ? error.message : "";
       if (code.startsWith("COMPUTER_MCP_")) {
         return configurationFailure("CONNECTOR_STOP_UNCONFIRMED");

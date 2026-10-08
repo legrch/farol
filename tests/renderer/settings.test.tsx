@@ -10,6 +10,7 @@ import type {
 } from "../../src/ui/renderer/contract";
 import {
   ProductConfigurationCommandSchema,
+  ProductConfigurationResultSchema,
   ProductSettingsSchema,
 } from "../../src/pkg/product-settings/contract";
 import type { ProductSettings } from "../../src/pkg/product-settings/contract";
@@ -2789,6 +2790,47 @@ describe("Computer-first setup and explicit reconnect", () => {
     expect(h.host.textContent).toContain("Outcome unknown");
     await h.pageTo("connection");
     expect(() => h.button("Connect this Mac")).toThrow();
+  });
+  it("retains the original Go open IDs in Diagnostics after an unknown reply", async () => {
+    const h = await mount("diagnostics", connectionSettings());
+    const requestId = "44444444-4444-4444-8444-444444444444";
+    const operationId = "55555555-5555-4555-8555-555555555555";
+    const reply = {
+      ok: false as const,
+      error: "CONNECTOR_RUNTIME_OUTCOME_UNKNOWN" as const,
+      snapshot: h.configuration,
+      connectorAttempt: {
+        method: "computer.connector.open" as const,
+        requestId,
+        operationId,
+        outcome: "unknown" as const,
+      },
+    };
+    expect(ProductConfigurationResultSchema.parse(reply)).toEqual(reply);
+    vi.mocked(h.f.api.configure).mockResolvedValueOnce(reply);
+    let intent: Awaited<ReturnType<typeof h.c.configure>> | undefined;
+    await act(async () => {
+      intent = await h.c.configure(
+        { kind: "connector.start" },
+        "settings:connector.start:original-go-open",
+      );
+    });
+    expect(intent?.state).toBe("unknown");
+    expect(intent?.connectorAttempt).toEqual(reply.connectorAttempt);
+    await h.remount();
+    const retained = h.host.querySelector('[aria-label="Retained actions"]');
+    expect(retained?.textContent).toContain(requestId);
+    expect(retained?.textContent).toContain(operationId);
+    expect(retained?.textContent).toContain(
+      "CONNECTOR_RUNTIME_OUTCOME_UNKNOWN",
+    );
+    expect(h.calls()).toEqual([{ kind: "connector.start" }]);
+    expect(
+      ProductConfigurationResultSchema.safeParse({
+        ...reply,
+        connectorAttempt: { ...reply.connectorAttempt, operationId: "invalid" },
+      }).success,
+    ).toBe(false);
   });
   it("explicit narrowing invalidates readiness and preserves drafts without auto reconnect", async () => {
     const value = connectionSettings();

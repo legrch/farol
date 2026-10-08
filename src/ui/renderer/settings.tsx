@@ -3037,6 +3037,15 @@ function Diagnostics({ snapshot, settings, facade, actions }: PageProps) {
                   · <code>{intent.code}</code>
                 </>
               )}
+              {intent.connectorAttempt && (
+                <span>
+                  {" "}
+                  · Original Go {intent.connectorAttempt.method}: request{" "}
+                  <code>{intent.connectorAttempt.requestId}</code>, operation{" "}
+                  <code>{intent.connectorAttempt.operationId}</code> (
+                  {intent.connectorAttempt.outcome})
+                </span>
+              )}
             </li>
           ))}
         </ul>

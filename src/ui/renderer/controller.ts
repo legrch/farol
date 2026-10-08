@@ -983,6 +983,9 @@ export class WindowController implements RendererFacade {
         id: intention,
         state: configurationEffectOutcome(outcome),
         code: outcome.result.ok ? null : outcome.result.error,
+        ...(!outcome.result.ok && outcome.result.connectorAttempt
+          ? { connectorAttempt: outcome.result.connectorAttempt }
+          : {}),
       };
       const value = outcome.result.ok ? outcome.result.evidence : undefined;
       if (

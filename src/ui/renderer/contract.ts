@@ -90,6 +90,12 @@ export type Intent = Readonly<{
   id: string;
   state: "pending" | "applied" | "refused" | "unknown";
   code: string | null;
+  connectorAttempt?: Readonly<{
+    method: "computer.connector.open";
+    requestId: string;
+    operationId: string;
+    outcome: "known" | "unknown";
+  }>;
 }>;
 export type ActivityEntry = Readonly<{
   id: string;

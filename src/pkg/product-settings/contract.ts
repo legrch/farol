@@ -1316,6 +1316,13 @@ export const ProductConfigurationEvidenceSchema = z.discriminatedUnion("kind", [
   }),
 ]);
 
+const ConnectorAttemptSchema = z.strictObject({
+  method: z.literal("computer.connector.open"),
+  requestId: IdentifierSchema,
+  operationId: IdentifierSchema,
+  outcome: z.enum(["known", "unknown"]),
+});
+
 export const ProductConfigurationResultSchema = z.discriminatedUnion("ok", [
   z.strictObject({
     ok: z.literal(true),
@@ -1510,6 +1517,7 @@ export const ProductConfigurationResultSchema = z.discriminatedUnion("ok", [
       "FAROL_MODEL_ROTATE_RESTORE_FAILED",
     ]),
     snapshot: ProductConfigurationSnapshotSchema,
+    connectorAttempt: ConnectorAttemptSchema.optional(),
   }),
 ]);
 
