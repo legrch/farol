@@ -21,7 +21,10 @@ import { folderAccessChecked, folderDisplayName } from "../folder-access-state";
 import { computerSetup } from "./computer-setup";
 import { commandAllowed, dependencyFences } from "./command-eligibility";
 import { updateCheckAllowed } from "./update-eligibility";
-import { updateBlockMessage } from "../update-block-message";
+import {
+  updateBlockMessage,
+  updateResultMessage,
+} from "../update-block-message";
 import { ChatDirect } from "./chat-direct";
 import { ChatReadonly } from "./chat-readonly";
 import { ChatHistory } from "./chat-history";
@@ -2720,7 +2723,20 @@ function Updates({ snapshot, facade, actions }: PageProps) {
               ? `Available: Farol ${update.version}. Download it when you choose; this version is not installed.`
               : `${update.phase}${"version" in update ? ` · ${update.version}` : ""}`}
         </p>
-        {"code" in update && <p className="notice">{update.code}</p>}
+        {(update.phase === "failed" || update.phase === "unavailable") && (
+          <>
+            <p className="notice" role="status">
+              {updateResultMessage(
+                update.phase,
+                update.phase === "failed" && update.recoveryRequired,
+              )}
+            </p>
+            <details>
+              <summary>Technical code</summary>
+              <code>{update.code}</code>
+            </details>
+          </>
+        )}
         {"blockedBy" in update && update.blockedBy && (
           <>
             <p className="notice" role="status">

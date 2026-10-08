@@ -1931,6 +1931,12 @@ describe("bounded Settings writer", () => {
     expect(h.host.textContent).toContain("Update status");
     expect(h.host.textContent).toContain("unavailable");
     expect(h.host.textContent).toContain("UPDATE_NOT_INSTALLED");
+    expect(
+      activePage(h.host).querySelector(".notice[role='status']")?.textContent,
+    ).toContain("cannot confirm update availability");
+    expect(activePage(h.host).querySelector("details code")?.textContent).toBe(
+      "UPDATE_NOT_INSTALLED",
+    );
     expect(h.host.textContent).not.toContain("Development app");
     expect(h.button("Check for updates once").disabled).toBe(true);
     vi.mocked(h.f.api.installedUpdate).mockClear();
