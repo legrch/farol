@@ -486,6 +486,10 @@ export function Settings({ snapshot, facade, setupStep }: SettingsProps) {
           snapshot.destination.page === "folders" &&
           pageFeedback.result?.id.match(
             /settings:computer\.(?:check-folder|verify-workspace|update-access):/u,
+          ) &&
+          // If a newer list removes the detail, keep its receipt on the page.
+          displayedSettings.computer.workspaces.some((workspace) =>
+            pageFeedback.result?.id.endsWith(`:${workspace.workspaceId}`),
           )
         ) && (
           <p className="notice" role="status">

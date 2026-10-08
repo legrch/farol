@@ -683,6 +683,66 @@ describe("compact workspace detail", () => {
     await h.click("Cancel");
     expect(h.calls()).toHaveLength(1);
   });
+  it.each(["refused", "unknown"] as const)(
+    "keeps a submitted access %s visible when a newer list removes its detail",
+    async (outcome) => {
+      const h = await mount("folders", withFolder());
+      await change(h.field("Workspace access"), "write");
+      const wait = deferred<unknown>();
+      vi.mocked(h.f.api.configure).mockReturnValueOnce(wait.promise);
+      // Form submission is the renderer path used by keyboard Save activation.
+      await act(async () =>
+        h
+          .field("Workspace access")
+          .closest("form")!
+          .dispatchEvent(
+            new Event("submit", { bubbles: true, cancelable: true }),
+          ),
+      );
+      const removed = withFolder();
+      removed.revision++;
+      removed.computer.generation++;
+      removed.computer.workspaces = [];
+      removed.setup.computer.configured = false;
+      await refresh(h, removed);
+      expect(activePage(h.host).querySelector(".workspace-detail")).toBeNull();
+      const notice = () =>
+        [...h.host.querySelectorAll('[role="status"]')]
+          .filter((element) => !element.closest("div[hidden]"))
+          .map((element) => element.textContent)
+          .join(" ");
+      const pendingVisible = notice().includes("Saving or checking");
+      await act(async () =>
+        outcome === "refused"
+          ? wait.resolve({
+              ok: false,
+              error: "WORKSPACE_NOT_FOUND",
+              snapshot: { status: "ready", settings: removed },
+            })
+          : wait.reject(new Error("private lost access reply")),
+      );
+      const message =
+        outcome === "refused"
+          ? "This workspace is no longer in the approved list."
+          : "Outcome unknown. Do not repeat this action";
+      expect(notice()).toContain(message);
+      expect(pendingVisible).toBe(true);
+      expect(notice()).not.toContain("Workspace access saved");
+      expect(notice()).not.toContain("private lost access reply");
+      await h.remount();
+      await refresh(h, removed);
+      expect(notice()).toContain(message);
+      expect(
+        h.c.getSnapshot().intents[
+          `settings:computer.update-access:${workspaceId}`
+        ]?.state,
+      ).toBe(outcome);
+      expect(h.button("Add workspace…").disabled).toBe(outcome === "unknown");
+      expect(h.calls()).toEqual([
+        { kind: "computer.update-access", workspaceId, access: "write" },
+      ]);
+    },
+  );
   it("requires accessible removal confirmation, retains files copy, and cancels with Escape", async () => {
     const h = await mount("folders", withFolder());
     const remove = activePage(h.host).querySelector<HTMLButtonElement>(
