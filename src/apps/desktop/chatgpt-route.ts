@@ -1253,6 +1253,43 @@ export function taskProbeScript(
   })()`;
 }
 
+/** Fixed classifications only: never attach URLs, DOM, probe replies or errors. */
+export type ChatGptUpdateAdmissionDiagnostic =
+  | Readonly<{ stage: "admission"; reason: "busy" | "reservation_lost" }>
+  | Readonly<{
+      stage: "surface";
+      reason: "unavailable" | "not_embedded" | "destroyed" | "changed";
+    }>
+  | Readonly<{
+      stage: "document";
+      reason: "not_loaded" | "changed" | "url_changed" | "url_unrecognized";
+    }>
+  | Readonly<{
+      stage: "probe" | "paused_probe";
+      reason:
+        "parse_failed" | "unknown" | "failed" | "timeout" | "running" | "draft";
+    }>
+  | Readonly<{
+      stage: "debugger";
+      reason:
+        | "already_attached"
+        | "devtools_open"
+        | "attach_failed"
+        | "enable_failed"
+        | "timeout";
+    }>
+  | Readonly<{ stage: "pause"; reason: "failed" | "timeout" | "unconfirmed" }>
+  | Readonly<{ stage: "resume"; reason: "failed" | "timeout" }>
+  | Readonly<{ stage: "release"; reason: "detach_failed" }>;
+
+type DiagnosticBrowserUpdateCheck =
+  | Readonly<{ ok: true }>
+  | Readonly<{
+      ok: false;
+      code: Extract<BrowserUpdateCheck, { ok: false }>["code"];
+      diagnostic: ChatGptUpdateAdmissionDiagnostic;
+    }>;
+
 export type ChatGptRouteOptions = Readonly<{
   homeUrl: string;
   initialUrl: string;
@@ -1274,6 +1311,12 @@ export type ChatGptRouteOptions = Readonly<{
   ) => void;
   onLoadStateChanged?: (state: "loading" | "loaded" | "failed") => void;
   onDisposed?: () => void;
+  // One best-effort notification per refused acquisition/recheck or failed release.
+  // Cleanup failures supersede an earlier probe refusal; repeated release shares
+  // its original promise and does not notify again. Successful operations are quiet.
+  onUpdateAdmissionDiagnostic?: (
+    diagnostic: ChatGptUpdateAdmissionDiagnostic,
+  ) => void;
   // Candidate source profile. Production composition must opt in only after
   // native DOM qualification; callbacks alone never enable unproved selectors.
   publicOutputProfile?: "message-anchors-v1";
@@ -1519,6 +1562,24 @@ export class ChatGptRoute {
   }
 
   async acquireUpdateIdle(): Promise<BrowserUpdateAdmission> {
+    const refuse = (
+      code: Extract<BrowserUpdateCheck, { ok: false }>["code"],
+      diagnostic: ChatGptUpdateAdmissionDiagnostic,
+    ): Extract<DiagnosticBrowserUpdateCheck, { ok: false }> => ({
+      ok: false,
+      code,
+      diagnostic,
+    });
+    const report = (
+      check: Extract<DiagnosticBrowserUpdateCheck, { ok: false }>,
+    ): Extract<BrowserUpdateCheck, { ok: false }> => {
+      this.reportUpdateAdmissionDiagnostic(check.diagnostic);
+      return { ok: false, code: check.code };
+    };
+    const unknown = (
+      diagnostic: ChatGptUpdateAdmissionDiagnostic,
+    ): Extract<DiagnosticBrowserUpdateCheck, { ok: false }> =>
+      refuse("UPDATE_BROWSER_STATE_UNKNOWN", diagnostic);
     if (
       this.updateAdmission ||
       this.opening ||
@@ -1526,7 +1587,9 @@ export class ChatGptRoute {
       this.signInMode ||
       [...this.popupWindows].some((popup) => !popup.isDestroyed())
     )
-      return { ok: false, code: "UPDATE_BROWSER_BUSY" };
+      return report(
+        refuse("UPDATE_BROWSER_BUSY", { stage: "admission", reason: "busy" }),
+      );
     if (!this.hasOpenUpdateSurface()) {
       this.updateAdmission = true;
       let released = false;
@@ -1535,7 +1598,9 @@ export class ChatGptRoute {
         recheck: async () =>
           !released && this.updateAdmission && !this.hasOpenUpdateSurface()
             ? { ok: true }
-            : { ok: false, code: "UPDATE_BROWSER_STATE_UNKNOWN" },
+            : report(
+                unknown({ stage: "admission", reason: "reservation_lost" }),
+              ),
         release: async () => {
           if (released) return;
           released = true;
@@ -1544,18 +1609,19 @@ export class ChatGptRoute {
       };
     }
     const surface = this.routeWindow;
-    if (
-      !surface ||
-      surface.kind !== "embedded" ||
-      surface.isDestroyed() ||
-      this.load !== "loaded"
-    )
-      return { ok: false, code: "UPDATE_BROWSER_STATE_UNKNOWN" };
+    if (!surface)
+      return report(unknown({ stage: "surface", reason: "unavailable" }));
+    if (surface.kind !== "embedded")
+      return report(unknown({ stage: "surface", reason: "not_embedded" }));
+    if (surface.isDestroyed())
+      return report(unknown({ stage: "surface", reason: "destroyed" }));
+    if (this.load !== "loaded")
+      return report(unknown({ stage: "document", reason: "not_loaded" }));
     const contents = surface.webContents;
     const generation = this.routeDocumentGeneration;
     const url = contents.getURL();
     if (!isChatGptPage(url, this.options.homeUrl))
-      return { ok: false, code: "UPDATE_BROWSER_STATE_UNKNOWN" };
+      return report(unknown({ stage: "document", reason: "url_unrecognized" }));
     this.updateAdmission = true;
     const blockInput = (event: { preventDefault(): void }): void =>
       event.preventDefault();
@@ -1580,6 +1646,8 @@ export class ChatGptRoute {
       attached = false;
       paused = false;
     };
+    // Identity-based timeout classification never inspects an exception's text.
+    const deadlineError = new Error("UPDATE_BROWSER_STATE_UNKNOWN");
     const bounded = async <T>(operation: Promise<T>): Promise<T> => {
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
@@ -1587,7 +1655,7 @@ export class ChatGptRoute {
           operation,
           new Promise<never>((_resolve, reject) => {
             timer = setTimeout(
-              () => reject(new Error("UPDATE_BROWSER_STATE_UNKNOWN")),
+              () => reject(deadlineError),
               ACTIVITY_PROBE_DEADLINE_MS,
             );
           }),
@@ -1616,7 +1684,11 @@ export class ChatGptRoute {
                   resumed,
                 ]),
               );
-            } catch {
+            } catch (error) {
+              this.reportUpdateAdmissionDiagnostic({
+                stage: "resume",
+                reason: error === deadlineError ? "timeout" : "failed",
+              });
               throw new Error("UPDATE_BROWSER_RELEASE_UNCONFIRMED");
             }
           }
@@ -1624,6 +1696,10 @@ export class ChatGptRoute {
             try {
               debuggerClient.detach();
             } catch {
+              this.reportUpdateAdmissionDiagnostic({
+                stage: "release",
+                reason: "detach_failed",
+              });
               throw new Error("UPDATE_BROWSER_RELEASE_UNCONFIRMED");
             }
             attached = false;
@@ -1638,24 +1714,34 @@ export class ChatGptRoute {
       })();
       return releasePromise;
     };
-    const recheck = async (): Promise<BrowserUpdateCheck> => {
-      const current = (): boolean =>
-        !released &&
-        this.updateAdmission &&
-        this.routeWindow === surface &&
-        !surface.isDestroyed() &&
-        !contents.isDestroyed() &&
-        this.load === "loaded" &&
-        this.routeDocumentGeneration === generation &&
-        contents.getURL() === url &&
-        !this.taskInFlight &&
-        !this.opening &&
-        !this.signInMode &&
-        (!pauseRequired ||
-          (attached && paused && debuggerClient.isAttached())) &&
-        ![...this.popupWindows].some((popup) => !popup.isDestroyed());
-      if (!current())
-        return { ok: false, code: "UPDATE_BROWSER_STATE_UNKNOWN" };
+    const recheck = async (): Promise<DiagnosticBrowserUpdateCheck> => {
+      const current = (): ChatGptUpdateAdmissionDiagnostic | null => {
+        if (released || !this.updateAdmission)
+          return { stage: "admission", reason: "reservation_lost" };
+        if (this.routeWindow !== surface)
+          return { stage: "surface", reason: "changed" };
+        if (surface.isDestroyed() || contents.isDestroyed())
+          return { stage: "surface", reason: "destroyed" };
+        if (this.load !== "loaded")
+          return { stage: "document", reason: "not_loaded" };
+        if (this.routeDocumentGeneration !== generation)
+          return { stage: "document", reason: "changed" };
+        if (contents.getURL() !== url)
+          return { stage: "document", reason: "url_changed" };
+        if (this.taskInFlight || this.opening || this.signInMode)
+          return { stage: "admission", reason: "busy" };
+        if (
+          pauseRequired &&
+          !(attached && paused && debuggerClient.isAttached())
+        )
+          return { stage: "pause", reason: "unconfirmed" };
+        if ([...this.popupWindows].some((popup) => !popup.isDestroyed()))
+          return { stage: "admission", reason: "busy" };
+        return null;
+      };
+      const invalid = current();
+      if (invalid) return unknown(invalid);
+      const stage = pauseRequired ? "paused_probe" : "probe";
       try {
         let raw: unknown;
         if (pauseRequired) {
@@ -1677,7 +1763,7 @@ export class ChatGptRoute {
             })
             .safeParse(reply);
           if (!evaluated.success)
-            return { ok: false, code: "UPDATE_BROWSER_STATE_UNKNOWN" };
+            return unknown({ stage, reason: "parse_failed" });
           raw = evaluated.data.result.value;
         } else {
           raw = await bounded(
@@ -1685,35 +1771,53 @@ export class ChatGptRoute {
           );
         }
         const parsed = ChatGptUpdateIdleSchema.safeParse(raw);
-        if (!current() || !parsed.success || parsed.data.state === "unknown")
-          return { ok: false, code: "UPDATE_BROWSER_STATE_UNKNOWN" };
+        const changed = current();
+        if (changed) return unknown(changed);
+        if (!parsed.success) return unknown({ stage, reason: "parse_failed" });
+        if (parsed.data.state === "unknown")
+          return unknown({ stage, reason: "unknown" });
         if (parsed.data.state === "running")
-          return { ok: false, code: "UPDATE_BROWSER_BUSY" };
+          return refuse("UPDATE_BROWSER_BUSY", { stage, reason: "running" });
         if (parsed.data.state === "draft")
-          return { ok: false, code: "UPDATE_BROWSER_DRAFT" };
+          return refuse("UPDATE_BROWSER_DRAFT", { stage, reason: "draft" });
         return { ok: true };
-      } catch {
-        return { ok: false, code: "UPDATE_BROWSER_STATE_UNKNOWN" };
+      } catch (error) {
+        return unknown({
+          stage,
+          reason: error === deadlineError ? "timeout" : "failed",
+        });
       }
     };
     const result = await recheck();
     if (!result.ok) {
       await release();
-      return result;
+      return report(result);
     }
+    let pauseDiagnostic: ChatGptUpdateAdmissionDiagnostic = {
+      stage: "debugger",
+      reason: "attach_failed",
+    };
     try {
       // Input fences do not stop a page timer from invoking its own handlers.
       // Pause only after initial idle proof, then inspect again under the held
       // pause. Never take over an existing debugger or use a lifecycle fallback.
-      if (debuggerClient.isAttached() || contents.isDevToolsOpened()) {
+      const alreadyAttached = debuggerClient.isAttached();
+      if (alreadyAttached || contents.isDevToolsOpened()) {
         await release();
-        return { ok: false, code: "UPDATE_BROWSER_STATE_UNKNOWN" };
+        return report(
+          unknown({
+            stage: "debugger",
+            reason: alreadyAttached ? "already_attached" : "devtools_open",
+          }),
+        );
       }
       debuggerClient.on("message", message);
       debuggerClient.on("detach", detached);
       debuggerClient.attach("1.3");
       attached = true;
+      pauseDiagnostic = { stage: "debugger", reason: "enable_failed" };
       await bounded(debuggerClient.sendCommand("Debugger.enable"));
+      pauseDiagnostic = { stage: "pause", reason: "failed" };
       const stopped = new Promise<void>((resolve) => {
         confirmPause = resolve;
       });
@@ -1735,13 +1839,22 @@ export class ChatGptRoute {
         })(),
       );
       pauseRequired = true;
-    } catch {
+    } catch (error) {
+      if (error === deadlineError)
+        pauseDiagnostic = {
+          stage: pauseDiagnostic.stage === "pause" ? "pause" : "debugger",
+          reason: "timeout",
+        };
       // Detach only this owned session when pause acquisition was unconfirmed.
       // Closing the inspector session also cancels its pending pause request.
       if (attached) {
         try {
           debuggerClient.detach();
         } catch {
+          this.reportUpdateAdmissionDiagnostic({
+            stage: "release",
+            reason: "detach_failed",
+          });
           return { ok: false, code: "UPDATE_BROWSER_RELEASE_UNCONFIRMED" };
         }
         // Native detach success is sufficient; its event may arrive later.
@@ -1753,7 +1866,7 @@ export class ChatGptRoute {
       } catch {
         return { ok: false, code: "UPDATE_BROWSER_RELEASE_UNCONFIRMED" };
       }
-      return { ok: false, code: "UPDATE_BROWSER_STATE_UNKNOWN" };
+      return report(unknown(pauseDiagnostic));
     }
     const held = await recheck();
     if (!held.ok) {
@@ -1762,9 +1875,28 @@ export class ChatGptRoute {
       } catch {
         return { ok: false, code: "UPDATE_BROWSER_RELEASE_UNCONFIRMED" };
       }
-      return held;
+      return report(held);
     }
-    return { ok: true, recheck, release };
+    return {
+      ok: true,
+      recheck: async () => {
+        const check = await recheck();
+        return check.ok ? check : report(check);
+      },
+      release,
+    };
+  }
+
+  private reportUpdateAdmissionDiagnostic(
+    diagnostic: ChatGptUpdateAdmissionDiagnostic,
+  ): void {
+    try {
+      this.options.onUpdateAdmissionDiagnostic?.(
+        Object.freeze({ ...diagnostic }),
+      );
+    } catch {
+      // Observers cannot change admission, cleanup, or public error behavior.
+    }
   }
 
   async toggleSidebar(): Promise<boolean> {

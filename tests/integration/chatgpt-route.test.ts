@@ -41,6 +41,8 @@ import {
   type ChatGptRouteSurfaceFactory,
   type ChatGptSignInOutcomeDiagnostic,
   type ChatGptSignInBlockedDiagnostic,
+  type ChatGptRouteOptions,
+  type ChatGptUpdateAdmissionDiagnostic,
 } from "../../src/apps/desktop/chatgpt-route";
 
 const prepared = {
@@ -615,12 +617,15 @@ const attachment: StagedChatGptAttachment = {
   stagedPath: "/private/tmp/evidence.md",
 };
 
-function route(): ChatGptRoute {
+function route(
+  options: Pick<ChatGptRouteOptions, "onUpdateAdmissionDiagnostic"> = {},
+): ChatGptRoute {
   return new ChatGptRoute({
     homeUrl: "https://chatgpt.com/",
     initialUrl: "https://chatgpt.com/",
     e2eOrigin: null,
     parent: () => null,
+    ...options,
   });
 }
 
@@ -767,13 +772,16 @@ describe("installed-update browser admission", () => {
   it.each(["open", "retry", "sign-in"])(
     "reserves an unopened route against %s until update admission releases",
     async (entry) => {
-      const candidate = route();
+      const diagnostics =
+        vi.fn<(diagnostic: ChatGptUpdateAdmissionDiagnostic) => void>();
+      const candidate = route({ onUpdateAdmissionDiagnostic: diagnostics });
       const createSurface = vi.fn(async () => ({ status: "opened" as const }));
       Reflect.set(candidate, "openRouteWindow", createSurface);
       const admission = await candidate.acquireUpdateIdle();
       expect(admission.ok).toBe(true);
       if (!admission.ok) throw new Error(admission.code);
       expect(await admission.recheck()).toEqual({ ok: true });
+      expect(diagnostics).not.toHaveBeenCalled();
       // Simulate the durable dispatch write yielding after its final recheck.
       await Promise.resolve();
       const open = () =>
@@ -788,20 +796,29 @@ describe("installed-update browser admission", () => {
         ok: false,
         code: "UPDATE_BROWSER_BUSY",
       });
+      expect(diagnostics.mock.calls).toEqual([
+        [{ stage: "admission", reason: "busy" }],
+      ]);
       await admission.release();
       await admission.release();
       expect(await admission.recheck()).toEqual({
         ok: false,
         code: "UPDATE_BROWSER_STATE_UNKNOWN",
       });
+      expect(diagnostics.mock.calls).toEqual([
+        [{ stage: "admission", reason: "busy" }],
+        [{ stage: "admission", reason: "reservation_lost" }],
+      ]);
       expect(await candidate.open()).toEqual({ status: "opened" });
       expect(createSurface).toHaveBeenCalledOnce();
     },
   );
   function updatePage(state = "idle") {
-    const candidate = route();
+    const diagnostics =
+      vi.fn<(diagnostic: ChatGptUpdateAdmissionDiagnostic) => void>();
+    const candidate = route({ onUpdateAdmissionDiagnostic: diagnostics });
     const surface = embeddedSurface();
-    const execute = vi.fn(async () => ({ state }));
+    const execute = vi.fn<() => Promise<unknown>>(async () => ({ state }));
     let attached = false;
     const debuggerClient = Object.assign(new EventEmitter(), {
       isAttached: () => attached,
@@ -839,10 +856,317 @@ describe("installed-update browser admission", () => {
     void surface.loadURL("https://chatgpt.com/");
     Reflect.set(candidate, "routeWindow", surface);
     Reflect.set(candidate, "load", "loaded");
-    return { candidate, surface, execute, debuggerClient };
+    return { candidate, surface, execute, debuggerClient, diagnostics };
   }
+  // These fixtures classify local mock outcomes only; they exercise no native
+  // debugger, provider page, browser profile, or installed application.
+  it.each(["not_embedded", "not_loaded", "url_unrecognized"] as const)(
+    "reports initial surface/document refusal %s without page content",
+    async (reason) => {
+      const { candidate, surface, execute, diagnostics } = updatePage();
+      if (reason === "not_embedded") Reflect.set(surface, "kind", "window");
+      if (reason === "not_loaded") Reflect.set(candidate, "load", "failed");
+      if (reason === "url_unrecognized")
+        await surface.loadURL(
+          "https://example.invalid/private-chat?token=fixture-secret#private-text",
+        );
+      expect(await candidate.acquireUpdateIdle()).toEqual({
+        ok: false,
+        code: "UPDATE_BROWSER_STATE_UNKNOWN",
+      });
+      expect(diagnostics.mock.calls).toEqual([
+        [
+          {
+            stage: reason === "not_embedded" ? "surface" : "document",
+            reason,
+          },
+        ],
+      ]);
+      expect(execute).not.toHaveBeenCalled();
+    },
+  );
+  it.each([
+    "changed",
+    "url_changed",
+    "not_loaded",
+    "surface_changed",
+    "destroyed",
+  ] as const)(
+    "reports document/surface invalidation during a probe (%s)",
+    async (reason) => {
+      const { candidate, surface, execute, diagnostics } = updatePage();
+      execute.mockImplementation(async () => {
+        if (reason === "changed")
+          Reflect.set(candidate, "routeDocumentGeneration", 1);
+        if (reason === "url_changed")
+          await surface.loadURL(
+            "https://chatgpt.com/c/private-chat?token=fixture-secret",
+          );
+        if (reason === "not_loaded") Reflect.set(candidate, "load", "loading");
+        if (reason === "surface_changed")
+          Reflect.set(candidate, "routeWindow", embeddedSurface());
+        if (reason === "destroyed") surface.isDestroyed.mockReturnValue(true);
+        return { state: "idle" };
+      });
+      expect(await candidate.acquireUpdateIdle()).toEqual({
+        ok: false,
+        code: "UPDATE_BROWSER_STATE_UNKNOWN",
+      });
+      expect(diagnostics.mock.calls).toEqual([
+        [
+          {
+            stage:
+              reason === "surface_changed" || reason === "destroyed"
+                ? "surface"
+                : "document",
+            reason: reason === "surface_changed" ? "changed" : reason,
+          },
+        ],
+      ]);
+      expect(surface.webContents.listenerCount("before-input-event")).toBe(0);
+    },
+  );
+  it.each(["probe", "paused_probe"] as const)(
+    "distinguishes parse failure, unknown state and thrown %s errors without leaking content",
+    async (stage) => {
+      for (const reason of ["parse_failed", "unknown", "failed"] as const) {
+        const { candidate, execute, debuggerClient, diagnostics } =
+          updatePage();
+        const observe = async (): Promise<unknown> => {
+          if (reason === "failed") {
+            const error = new Error("private DOM text / token=fixture-secret");
+            Object.defineProperty(error, "message", {
+              get: () => {
+                throw new Error("must not inspect error text");
+              },
+            });
+            throw error;
+          }
+          return reason === "unknown"
+            ? { state: "unknown" }
+            : {
+                state: "unexpected-private-text",
+                url: "https://chatgpt.com/c/private-chat?token=fixture-secret",
+                dom: "private DOM text",
+              };
+        };
+        if (stage === "probe") execute.mockImplementation(observe);
+        else {
+          const original = debuggerClient.sendCommand.getMockImplementation()!;
+          debuggerClient.sendCommand.mockImplementation(async (method) =>
+            method === "Runtime.evaluate"
+              ? { result: { type: "object", value: await observe() } }
+              : original(method),
+          );
+        }
+        expect(await candidate.acquireUpdateIdle()).toEqual({
+          ok: false,
+          code: "UPDATE_BROWSER_STATE_UNKNOWN",
+        });
+        expect(diagnostics.mock.calls).toEqual([[{ stage, reason }]]);
+        expect(Object.isFrozen(diagnostics.mock.calls[0]![0])).toBe(true);
+        expect(JSON.stringify(diagnostics.mock.calls)).not.toMatch(
+          /private|secret|https|DOM/u,
+        );
+        if (stage === "paused_probe")
+          expect(debuggerClient.sendCommand).toHaveBeenCalledWith(
+            "Debugger.resume",
+          );
+      }
+    },
+  );
+  it.each([
+    "already_attached",
+    "devtools_open",
+    "attach_failed",
+    "enable_failed",
+    "pause_failed",
+  ] as const)("reports debugger/pause refusal %s once", async (reason) => {
+    const { candidate, surface, debuggerClient, diagnostics } = updatePage();
+    if (reason === "already_attached") debuggerClient.attach();
+    if (reason === "devtools_open")
+      Object.assign(surface.webContents, { isDevToolsOpened: () => true });
+    if (reason === "attach_failed")
+      debuggerClient.attach.mockImplementation(() => {
+        throw new Error("fixture-secret");
+      });
+    if (reason === "enable_failed" || reason === "pause_failed") {
+      const original = debuggerClient.sendCommand.getMockImplementation()!;
+      debuggerClient.sendCommand.mockImplementation(async (method) => {
+        if (
+          method ===
+          (reason === "enable_failed" ? "Debugger.enable" : "Debugger.pause")
+        )
+          throw new Error("fixture-secret");
+        return original(method);
+      });
+    }
+    expect(await candidate.acquireUpdateIdle()).toEqual({
+      ok: false,
+      code: "UPDATE_BROWSER_STATE_UNKNOWN",
+    });
+    expect(diagnostics.mock.calls).toEqual([
+      [
+        {
+          stage: reason === "pause_failed" ? "pause" : "debugger",
+          reason: reason === "pause_failed" ? "failed" : reason,
+        },
+      ],
+    ]);
+  });
+  it.each(["probe", "paused_probe", "debugger", "pause", "resume"] as const)(
+    "classifies %s deadlines without accepting late evidence or replaying release",
+    async (stage) => {
+      vi.useFakeTimers();
+      try {
+        const { candidate, execute, debuggerClient, diagnostics, surface } =
+          updatePage();
+        const original = debuggerClient.sendCommand.getMockImplementation()!;
+        let finish: ((value: unknown) => void) | undefined;
+        const hung = (): Promise<unknown> =>
+          new Promise((resolve) => {
+            finish = resolve;
+          });
+        if (stage === "probe") execute.mockImplementation(hung);
+        else if (stage !== "resume")
+          debuggerClient.sendCommand.mockImplementation(async (method) => {
+            if (
+              method ===
+              (stage === "paused_probe"
+                ? "Runtime.evaluate"
+                : stage === "debugger"
+                  ? "Debugger.enable"
+                  : "Debugger.pause")
+            )
+              return hung();
+            return original(method);
+          });
+        if (stage === "resume") {
+          const admission = await candidate.acquireUpdateIdle();
+          if (!admission.ok) throw new Error(admission.code);
+          debuggerClient.sendCommand.mockImplementation(async (method) =>
+            method === "Debugger.resume" ? hung() : original(method),
+          );
+          const first = admission.release();
+          const rejected = expect(first).rejects.toThrow(
+            "UPDATE_BROWSER_RELEASE_UNCONFIRMED",
+          );
+          expect(admission.release()).toBe(first);
+          await vi.advanceTimersByTimeAsync(2_001);
+          await rejected;
+          expect(debuggerClient.detach).not.toHaveBeenCalled();
+          expect(surface.webContents.listenerCount("before-input-event")).toBe(
+            1,
+          );
+          expect(await candidate.open()).toEqual({ status: "unreachable" });
+        } else {
+          const pending = candidate.acquireUpdateIdle();
+          await vi.advanceTimersByTimeAsync(2_001);
+          expect(await pending).toEqual({
+            ok: false,
+            code: "UPDATE_BROWSER_STATE_UNKNOWN",
+          });
+          expect(surface.webContents.listenerCount("before-input-event")).toBe(
+            0,
+          );
+        }
+        expect(diagnostics.mock.calls).toEqual([
+          [{ stage, reason: "timeout" }],
+        ]);
+        finish?.({ state: "idle" });
+        await vi.advanceTimersByTimeAsync(1);
+        expect(diagnostics).toHaveBeenCalledOnce();
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+  it.each(["pause_detach", "held_detach", "held_resume"] as const)(
+    "reports only the final cleanup failure (%s) and preserves the input fence",
+    async (failure) => {
+      const { candidate, debuggerClient, diagnostics, surface } = updatePage();
+      const original = debuggerClient.sendCommand.getMockImplementation()!;
+      debuggerClient.sendCommand.mockImplementation(async (method) => {
+        if (failure === "pause_detach" && method === "Debugger.pause")
+          throw new Error("fixture pause failed");
+        if (failure !== "pause_detach" && method === "Runtime.evaluate")
+          return { privateText: "fixture-secret" };
+        if (failure === "held_resume" && method === "Debugger.resume")
+          throw new Error("fixture-secret");
+        return original(method);
+      });
+      if (failure !== "held_resume")
+        debuggerClient.detach.mockImplementation(() => {
+          throw new Error("fixture-secret");
+        });
+      expect(await candidate.acquireUpdateIdle()).toEqual({
+        ok: false,
+        code: "UPDATE_BROWSER_RELEASE_UNCONFIRMED",
+      });
+      expect(diagnostics.mock.calls).toEqual([
+        [
+          failure === "held_resume"
+            ? { stage: "resume", reason: "failed" }
+            : { stage: "release", reason: "detach_failed" },
+        ],
+      ]);
+      expect(surface.webContents.listenerCount("before-input-event")).toBe(1);
+      expect(await candidate.open()).toEqual({ status: "unreachable" });
+    },
+  );
+  it("keeps successful acquire/recheck/release quiet and emits one diagnostic per later refusal", async () => {
+    const { candidate, debuggerClient, diagnostics } = updatePage();
+    const admission = await candidate.acquireUpdateIdle();
+    if (!admission.ok) throw new Error(admission.code);
+    expect(await admission.recheck()).toEqual({ ok: true });
+    expect(diagnostics).not.toHaveBeenCalled();
+    debuggerClient.emit("message", {}, "Debugger.resumed");
+    expect(await admission.recheck()).toEqual({
+      ok: false,
+      code: "UPDATE_BROWSER_STATE_UNKNOWN",
+    });
+    expect(diagnostics.mock.calls).toEqual([
+      [{ stage: "pause", reason: "unconfirmed" }],
+    ]);
+    await admission.release();
+    await admission.release();
+    expect(diagnostics).toHaveBeenCalledOnce();
+    expect(await admission.recheck()).toEqual({
+      ok: false,
+      code: "UPDATE_BROWSER_STATE_UNKNOWN",
+    });
+    expect(diagnostics.mock.calls[1]).toEqual([
+      { stage: "admission", reason: "reservation_lost" },
+    ]);
+  });
+  it("isolates a throwing diagnostic observer from refusal and failed release", async () => {
+    const { candidate, execute, debuggerClient, diagnostics, surface } =
+      updatePage();
+    diagnostics.mockImplementation(() => {
+      throw new Error("observer failed");
+    });
+    execute.mockResolvedValueOnce({ state: "unknown" });
+    expect(await candidate.acquireUpdateIdle()).toEqual({
+      ok: false,
+      code: "UPDATE_BROWSER_STATE_UNKNOWN",
+    });
+    expect(surface.webContents.listenerCount("before-input-event")).toBe(0);
+    const admission = await candidate.acquireUpdateIdle();
+    if (!admission.ok) throw new Error(admission.code);
+    debuggerClient.detach.mockImplementation(() => {
+      throw new Error("fixture-secret");
+    });
+    const first = admission.release();
+    expect(admission.release()).toBe(first);
+    await expect(first).rejects.toThrow("UPDATE_BROWSER_RELEASE_UNCONFIRMED");
+    expect(diagnostics.mock.calls).toEqual([
+      [{ stage: "probe", reason: "unknown" }],
+      [{ stage: "release", reason: "detach_failed" }],
+    ]);
+    expect(surface.webContents.listenerCount("before-input-event")).toBe(1);
+  });
   it("holds an acknowledged page-script pause through update admission and resumes once", async () => {
-    const { candidate, surface, debuggerClient } = updatePage();
+    const { candidate, surface, debuggerClient, diagnostics } = updatePage();
     const admission = await candidate.acquireUpdateIdle();
     if (!admission.ok) throw new Error(admission.code);
     expect(debuggerClient.sendCommand).toHaveBeenCalledWith("Debugger.pause");
@@ -860,6 +1184,7 @@ describe("installed-update browser admission", () => {
     expect(debuggerClient.detach).toHaveBeenCalledOnce();
     expect(surface.webContents.listenerCount("before-input-event")).toBe(0);
     expect(await candidate.open()).toEqual({ status: "opened" });
+    expect(diagnostics).not.toHaveBeenCalled();
   });
   it("triggers a quiet page and waits for the actual delayed pause, not a command acknowledgment", async () => {
     vi.useFakeTimers();
@@ -1234,9 +1559,12 @@ describe("installed-update browser admission", () => {
   it.each(["running", "draft", "unknown"])(
     "refuses %s and releases its input fence",
     async (state) => {
-      const { candidate, surface } = updatePage(state);
+      const { candidate, surface, diagnostics } = updatePage(state);
       expect((await candidate.acquireUpdateIdle()).ok).toBe(false);
       expect(surface.webContents.listenerCount("before-input-event")).toBe(0);
+      expect(diagnostics.mock.calls).toEqual([
+        [{ stage: "probe", reason: state }],
+      ]);
     },
   );
   it("rejects a navigation during the fresh observation", async () => {
