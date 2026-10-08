@@ -460,6 +460,7 @@ import {
   terminateDesktopStartup,
 } from "./desktop-startup-failure";
 import { resolvePhysicalDevDataDirectoryName } from "./dev-profile-directory";
+import { observeRendererLifecycle } from "../../../apps/desktop/renderer-lifecycle-observation";
 
 const directory = __dirname;
 // A legacy build has no Go declaration; a Go build never falls back after a
@@ -9888,6 +9889,9 @@ async function createWindow(): Promise<void> {
       nodeIntegration: false,
     },
   });
+  observeRendererLifecycle(window.webContents, buildIdentity.buildId, (line) =>
+    process.stderr.write(line),
+  );
   window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   window.webContents.on("will-navigate", (event) => event.preventDefault());
   window.webContents.on("before-input-event", (event, input) => {
