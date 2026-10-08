@@ -556,6 +556,109 @@ describe("supervised installed updater (native files/lease, mocked package/proce
 });
 
 describe("installed updater composition (disposable filesystem and mocked native/GitHub ports)", () => {
+  it("persists an exact skipped build across lifetimes without downloading or hiding a newer build", async () => {
+    const first = await createInstalledUpdateRuntime(options());
+    await first!.initialize();
+    await first!.check();
+    first!.later();
+    expect(first!.snapshot()).toMatchObject({
+      phase: "available",
+      deferred: true,
+    });
+    await first!.skip();
+    expect(first!.snapshot().phase).toBe("idle");
+    const preference = path.join(
+      userData,
+      "installed-updates/preferences.json",
+    );
+    expect(JSON.parse(await fs.readFile(preference, "utf8"))).toEqual({
+      schema: "farol.installed-update-preferences/1",
+      skipped: { version: manifest.version, buildId: manifest.buildId },
+    });
+    await first!.close();
+
+    const second = await createInstalledUpdateRuntime(options());
+    await second!.initialize();
+    await second!.check(true);
+    expect(second!.snapshot().phase).toBe("idle");
+    expect(mocks.download).not.toHaveBeenCalled();
+    mocks.discover.mockResolvedValue({
+      ok: true,
+      value: { manifest: { ...manifest, buildId: "7".repeat(64) } },
+    });
+    await second!.check(true);
+    expect(second!.snapshot().phase).toBe("idle");
+    const newer = {
+      ...manifest,
+      version: "0.1.2-owner.beta.1",
+      buildId: "8".repeat(64),
+    };
+    mocks.discover.mockResolvedValue({ ok: true, value: { manifest: newer } });
+    await second!.check(true);
+    expect(second!.snapshot()).toMatchObject({
+      phase: "available",
+      version: newer.version,
+    });
+    expect(mocks.download).not.toHaveBeenCalled();
+    await second!.close();
+  });
+
+  it("refuses an unreadable skip preference before offering an update", async () => {
+    const preference = path.join(
+      userData,
+      "installed-updates/preferences.json",
+    );
+    await fs.mkdir(path.dirname(preference), { mode: 0o700 });
+    await fs.writeFile(
+      preference,
+      JSON.stringify({ skipped: manifest.buildId }),
+      { mode: 0o600 },
+    );
+    const controller = await createInstalledUpdateRuntime(options());
+    await controller!.initialize();
+    await controller!.check();
+    expect(controller!.snapshot()).toMatchObject({
+      phase: "failed",
+      code: "UPDATE_PREFERENCES_UNREADABLE",
+      recoveryRequired: true,
+    });
+    expect(mocks.download).not.toHaveBeenCalled();
+    await controller!.close();
+  });
+
+  it("keeps a lost Skip acknowledgment unknown while a new lifetime observes the exact persisted choice", async () => {
+    const preference = path.join(
+      userData,
+      "installed-updates/preferences.json",
+    );
+    const first = await createInstalledUpdateRuntime(options());
+    await first!.initialize();
+    await first!.check();
+    const rename = fs.rename.bind(fs);
+    vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+      await rename(from, to);
+      if (to === preference)
+        throw new Error("fixture lost preference acknowledgment after rename");
+    });
+    await first!.skip();
+    expect(first!.snapshot()).toMatchObject({
+      phase: "failed",
+      code: "UPDATE_SKIP_OUTCOME_UNKNOWN",
+      recoveryRequired: true,
+    });
+    expect(JSON.parse(await fs.readFile(preference, "utf8"))).toMatchObject({
+      skipped: { version: manifest.version, buildId: manifest.buildId },
+    });
+    await first!.close();
+    vi.mocked(fs.rename).mockImplementation(rename);
+    const second = await createInstalledUpdateRuntime(options());
+    await second!.initialize();
+    await second!.check(true);
+    expect(second!.snapshot().phase).toBe("idle");
+    expect(mocks.download).not.toHaveBeenCalled();
+    await second!.close();
+  });
+
   it.each(["before-copy", "after-copy", "observation-error"] as const)(
     "rechecks browser admission %s and never dispatches after a late refusal",
     async (boundary) => {

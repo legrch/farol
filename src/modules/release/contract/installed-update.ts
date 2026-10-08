@@ -65,6 +65,7 @@ export const InstalledUpdateCommandSchema = z.strictObject({
     "status",
     "check",
     "download",
+    "skip",
     "later",
     "restart",
     "recover",

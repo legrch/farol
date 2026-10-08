@@ -54,6 +54,12 @@ import type {
 
 const execute = promisify(execFile);
 const Digest = z.string().regex(/^[a-f0-9]{64}$/u);
+const UpdatePreferences = z.strictObject({
+  schema: z.literal("farol.installed-update-preferences/1"),
+  skipped: z
+    .strictObject({ version: z.string().max(128), buildId: Digest })
+    .nullable(),
+});
 const AcceptedBuild = z.strictObject({
   digest: Digest,
   version: z.string().max(128),
@@ -1166,6 +1172,16 @@ async function createRuntime(
     },
   };
   const pendingDownloadFile = path.join(root, "download-pending.json");
+  const preferencesFile = path.join(root, "preferences.json");
+  const readPreferences = async () => {
+    const raw = await readRecord(preferencesFile);
+    return raw === null
+      ? {
+          schema: "farol.installed-update-preferences/1" as const,
+          skipped: null,
+        }
+      : UpdatePreferences.parse(raw);
+  };
   let candidate: UpdateCandidate | null = null;
   let verified: VerifiedGithubUpdate | null = null;
   let stagingUncertain = false;
@@ -1969,8 +1985,21 @@ async function createRuntime(
         transport,
       );
       if (!found.ok) return known(`UPDATE_${found.code.toUpperCase()}`);
+      let skippedVersion: string | null;
+      try {
+        skippedVersion = (await readPreferences()).skipped?.version ?? null;
+      } catch {
+        return {
+          ok: false as const,
+          code: "UPDATE_PREFERENCES_UNREADABLE",
+          recoveryRequired: true,
+        };
+      }
       candidate =
-        found.value?.manifest.buildId === declinedBuildId ? null : found.value;
+        found.value?.manifest.buildId === declinedBuildId ||
+        found.value?.manifest.version === skippedVersion
+          ? null
+          : found.value;
       return candidate
         ? {
             ok: true,
@@ -1989,6 +2018,25 @@ async function createRuntime(
           verifyPackage,
         }),
       );
+    },
+    skip: async (buildId) => {
+      if (!candidate || candidate.manifest.buildId !== buildId)
+        return known("UPDATE_CANDIDATE_CHANGED");
+      try {
+        await readPreferences();
+      } catch {
+        return {
+          ok: false as const,
+          code: "UPDATE_PREFERENCES_UNREADABLE",
+          recoveryRequired: true,
+        };
+      }
+      await writeRecord(preferencesFile, {
+        schema: "farol.installed-update-preferences/1",
+        skipped: { version: candidate.manifest.version, buildId },
+      });
+      candidate = null;
+      return { ok: true as const };
     },
     ...(localArchive
       ? {

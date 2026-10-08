@@ -570,6 +570,21 @@ function Update({
         {update.phase === "available" && (
           <>
             <button
+              disabled={disabled}
+              onClick={() => {
+                const latest = facade.getSnapshot();
+                if (
+                  latest.status === "current" &&
+                  latest.intents.update?.state !== "pending" &&
+                  latest.intents.update?.state !== "unknown" &&
+                  latest.update.phase === "available"
+                )
+                  void facade.update("skip");
+              }}
+            >
+              Skip This Version
+            </button>
+            <button
               disabled={disabled || update.deferred}
               onClick={() => {
                 void facade.update("later");

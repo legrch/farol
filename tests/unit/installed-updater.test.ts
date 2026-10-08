@@ -49,6 +49,9 @@ function fixture() {
     download: vi
       .fn<InstalledUpdaterPorts["download"]>()
       .mockResolvedValue({ ok: true, update: staged }),
+    skip: vi
+      .fn<InstalledUpdaterPorts["skip"]>()
+      .mockResolvedValue({ ok: true }),
     retain: vi.fn<InstalledUpdaterPorts["retain"]>().mockResolvedValue(),
     restart: vi
       .fn<InstalledUpdaterPorts["restart"]>()
@@ -127,6 +130,38 @@ describe("installed update orchestration (port fixture, no native or GitHub acce
       recoveryRequired: true,
     });
     expect(uncertain.ports.download).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips the exact available build once without downloading or mistaking Later for Skip", async () => {
+    const { updater, ports } = fixture();
+    await updater.initialize();
+    await updater.check();
+    updater.later();
+    expect(ports.skip).not.toHaveBeenCalled();
+    await updater.skip();
+    await updater.skip();
+    expect(ports.skip).toHaveBeenCalledExactlyOnceWith(staged.manifest.buildId);
+    expect(ports.download).not.toHaveBeenCalled();
+    expect(updater.snapshot()).toMatchObject({ phase: "idle" });
+  });
+
+  it("keeps uncertain Skip fenced instead of retrying its possibly persisted effect", async () => {
+    const { updater, ports } = fixture();
+    ports.skip.mockRejectedValueOnce(
+      new Error("lost preference acknowledgment"),
+    );
+    await updater.initialize();
+    await updater.check();
+    await updater.skip();
+    await updater.skip();
+    await updater.check(true);
+    expect(updater.snapshot()).toEqual({
+      phase: "failed",
+      code: "UPDATE_SKIP_OUTCOME_UNKNOWN",
+      recoveryRequired: true,
+    });
+    expect(ports.skip).toHaveBeenCalledTimes(1);
+    expect(ports.discover).toHaveBeenCalledTimes(1);
   });
 
   it("keeps an exactly recovered old-feed archive Ready without rediscovery or download", async () => {

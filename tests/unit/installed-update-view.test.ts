@@ -68,6 +68,7 @@ const ready: InstalledUpdateView = {
 };
 const allControls = [
   "check",
+  "skip",
   "restart",
   "later",
   "notice-restart",
@@ -87,10 +88,14 @@ describe("installed update view", () => {
     f.view.render(available);
     expect(f.node("summary").textContent).toContain("available to download");
     expect(f.node("restart").hidden).toBe(true);
+    expect(f.node("skip").hidden).toBe(false);
     expect(f.node("check").textContent).toBe("Download Update");
     f.node("check").click();
     f.node("check").click();
     expect(f.onCommand.mock.calls).toEqual([["download"]]);
+    f.view.render(available);
+    f.node("skip").click();
+    expect(f.onCommand.mock.calls).toEqual([["download"], ["skip"]]);
   });
 
   it("distinguishes the measured installed build from a downloaded successor", () => {

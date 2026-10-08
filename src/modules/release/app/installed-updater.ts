@@ -56,6 +56,7 @@ export type InstalledUpdaterPorts = Readonly<{
   download(): Promise<
     Readonly<{ ok: true; update: ReadyUpdate }> | KnownFailure
   >;
+  skip(buildId: string): Promise<Readonly<{ ok: true }> | KnownFailure>;
   // A supervised transition may select one local archive in composition. This
   // port must stage and verify it through the same archive/package owner. It is
   // not a caller-supplied ReadyUpdate or an alternate persistence mechanism.
@@ -308,6 +309,42 @@ export class InstalledUpdater {
       this.publish({
         phase: "failed",
         code: "UPDATE_STAGING_OUTCOME_UNKNOWN",
+        recoveryRequired: true,
+      });
+    } finally {
+      this.finish();
+    }
+  }
+
+  async skip(): Promise<void> {
+    if (
+      this.closed ||
+      this.busy ||
+      !this.initialized ||
+      this.view.phase !== "available" ||
+      !this.available ||
+      this.view.version !== this.available.version
+    )
+      return;
+    const buildId = this.available.buildId;
+    this.begin();
+    try {
+      const result = await this.ports.skip(buildId);
+      if (!result.ok) {
+        this.publish({
+          phase: "failed",
+          code: result.code,
+          recoveryRequired: result.recoveryRequired ?? true,
+        });
+        return;
+      }
+      this.available = null;
+      this.publish({ phase: "idle", checkedAt: this.ports.now() });
+    } catch {
+      // The preference may have reached disk even if acknowledgment failed.
+      this.publish({
+        phase: "failed",
+        code: "UPDATE_SKIP_OUTCOME_UNKNOWN",
         recoveryRequired: true,
       });
     } finally {

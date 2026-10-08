@@ -1160,7 +1160,10 @@ export class WindowController implements RendererFacade {
     });
   }
   update(action: UpdateAction): Promise<Intent> {
-    if (action === "download" && this.state.update.phase !== "available")
+    if (
+      (action === "download" || action === "skip") &&
+      this.state.update.phase !== "available"
+    )
       return Promise.resolve({
         id: "update",
         state: "refused",

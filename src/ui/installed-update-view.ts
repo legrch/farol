@@ -2,7 +2,7 @@ import type { InstalledUpdateView } from "../modules/release/contract/installed-
 import { canRecheckUpdateAdmission } from "../modules/release/contract/installed-update";
 
 export type InstalledUpdateViewCommand =
-  "check" | "download" | "later" | "restart" | "recover" | "rollback";
+  "check" | "download" | "skip" | "later" | "restart" | "recover" | "rollback";
 
 const blockedMessages: Readonly<Record<string, string>> = {
   UPDATE_CONNECTOR_ACTIVE:
@@ -120,6 +120,11 @@ export function createInstalledUpdateView(
       inRail: false,
     },
     {
+      node: required<HTMLButtonElement>("installed-update-skip"),
+      kind: "skip",
+      inRail: false,
+    },
+    {
       node: required<HTMLButtonElement>("installed-update-restart"),
       kind: "restart",
       inRail: false,
@@ -226,6 +231,10 @@ export function createInstalledUpdateView(
                       : "Update blocked"
                     : "Check for Updates…",
           );
+        } else if (kind === "skip") {
+          node.hidden = !available;
+          node.disabled = !available;
+          node.title = available ? "Skip This Version" : message;
         } else {
           node.hidden =
             kind === "restart"

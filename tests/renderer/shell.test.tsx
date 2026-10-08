@@ -602,6 +602,26 @@ it("offers Download only for a current available release", async () => {
       .mock.calls.filter(([command]) => command.kind === "download"),
   ).toHaveLength(1);
 });
+it("offers version-scoped Skip only for an available release", async () => {
+  const { host, c, f } = await mount();
+  await act(async () => {
+    f.emit("update", {
+      phase: "available",
+      version: "0.2.0-owner.beta.5",
+      deferred: false,
+    });
+    c.overlay("update");
+  });
+  await act(async () => button(host, "Skip This Version").click());
+  expect(f.api.installedUpdate).toHaveBeenCalledWith({ kind: "skip" });
+  await act(async () => f.emit("update", { phase: "idle", checkedAt: 10 }));
+  expect((await c.update("skip")).state).toBe("refused");
+  expect(
+    vi
+      .mocked(f.api.installedUpdate)
+      .mock.calls.filter(([command]) => command.kind === "skip"),
+  ).toHaveLength(1);
+});
 it("R13 R14 R23 disconnected and incompatible displays retain inspection and classified feedback", async () => {
   const { host, c, f } = await mount();
   await act(async () =>
