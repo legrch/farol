@@ -1220,7 +1220,9 @@ describe("bounded Settings writer", () => {
     });
     await h.click("Add workspace…");
     expect(h.button("Add workspace…").disabled).toBe(false); // A deliberate retry may follow a known refusal; rendering never retries.
-    expect(h.host.textContent).not.toContain("Add selected workspace read-only");
+    expect(h.host.textContent).not.toContain(
+      "Add selected workspace read-only",
+    );
     expect(h.calls()).toHaveLength(1);
     const other = await mount("folders");
     vi.mocked(other.f.api.configure).mockResolvedValueOnce({
@@ -1604,9 +1606,8 @@ describe("bounded Settings writer", () => {
     );
     expect(h.host.textContent).not.toContain("Installed update");
     expect(h.host.textContent).toContain("UPDATE_BROWSER_STATE_UNKNOWN");
-    expect(h.host.textContent).toContain(
-      "this update action cannot be retried from here",
-    );
+    expect(h.host.textContent).toContain("Installation has not started");
+    expect(h.host.textContent).toContain("do not retry this update action");
     expect(h.button("Check for updates once").disabled).toBe(true);
     expect(h.calls()).toEqual([]);
   });
@@ -2845,7 +2846,9 @@ describe("owner Setup presentation checkpoint (DOM fixtures only)", () => {
         snapshot: h.configuration,
       });
       await h.click(
-        page === "diagnostics" ? "Export support diagnostics…" : "Add workspace…",
+        page === "diagnostics"
+          ? "Export support diagnostics…"
+          : "Add workspace…",
       );
       const notice = h.host.querySelector('.settings-page > [role="status"]');
       expect(notice?.textContent).toBe("Action cancelled.");

@@ -1285,6 +1285,9 @@ it("B04 distinguishes installed and downloaded versions and refuses an unknown-s
   expect(text).toContain(
     "Farol 0.2.0-owner.beta.4 is downloaded and ready; it is not installed yet.",
   );
+  expect(text).toContain("Installation has not started");
+  expect(text).toContain("do not retry this update action");
+  expect(text).toContain("Technical code");
   expect(button(host, "Check for Updates").disabled).toBe(true);
   expect(button(host, "Restart & Update").disabled).toBe(true);
   vi.mocked(f.api.installedUpdate).mockClear();

@@ -21,6 +21,7 @@ import { folderAccessChecked, folderDisplayName } from "../folder-access-state";
 import { computerSetup } from "./computer-setup";
 import { commandAllowed, dependencyFences } from "./command-eligibility";
 import { updateCheckAllowed } from "./update-eligibility";
+import { updateBlockMessage } from "../update-block-message";
 import { ChatDirect } from "./chat-direct";
 import { ChatReadonly } from "./chat-readonly";
 import { ChatHistory } from "./chat-history";
@@ -2538,15 +2539,16 @@ function Updates({ snapshot, facade, actions }: PageProps) {
         </p>
         {"code" in update && <p className="notice">{update.code}</p>}
         {"blockedBy" in update && update.blockedBy && (
-          <p className="notice">{update.blockedBy}</p>
-        )}
-        {update.phase === "ready" &&
-          update.blockedBy === "UPDATE_BROWSER_STATE_UNKNOWN" && (
-            <p className="description" role="status">
-              Farol could not confirm that ChatGPT is idle. Review current work
-              in Diagnostics; this update action cannot be retried from here.
+          <>
+            <p className="notice" role="status">
+              {updateBlockMessage(update.blockedBy)}
             </p>
-          )}
+            <details>
+              <summary>Technical code</summary>
+              <code>{update.blockedBy}</code>
+            </details>
+          </>
+        )}
         <div className="control-row">
           <button
             type="button"

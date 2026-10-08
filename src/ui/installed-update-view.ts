@@ -1,29 +1,9 @@
 import type { InstalledUpdateView } from "../modules/release/contract/installed-update";
 import { canRecheckUpdateAdmission } from "../modules/release/contract/installed-update";
+import { updateBlockMessage } from "./update-block-message";
 
 export type InstalledUpdateViewCommand =
   "check" | "download" | "skip" | "later" | "restart" | "recover" | "rollback";
-
-const blockedMessages: Readonly<Record<string, string>> = {
-  UPDATE_CONNECTOR_ACTIVE:
-    "Disconnect the active connector in Connections before restarting.",
-  UPDATE_TASK_ROUTE_NEEDS_DRAIN:
-    "Wait for the current task to finish before restarting.",
-  UPDATE_BROWSER_OPEN:
-    "Close open ChatGPT tabs before restarting so no browser work is interrupted.",
-  UPDATE_BROWSER_BUSY:
-    "Wait for the active ChatGPT response, check or voice session to finish before restarting.",
-  UPDATE_BROWSER_DRAFT:
-    "Send or clear the unsent ChatGPT draft and attachments before restarting.",
-  UPDATE_BROWSER_STATE_UNKNOWN:
-    "Farol could not confirm that ChatGPT is idle. Keep your current work and review this result in Diagnostics before considering another update action.",
-  UPDATE_BROWSER_RELEASE_UNCONFIRMED:
-    "Farol could not confirm that ChatGPT resumed. Quit Farol and reopen it before updating.",
-  UPDATE_WORK_PENDING: "Finish or cancel active work before restarting.",
-  UPDATE_WORK_DRAIN_UNCONFIRMED:
-    "Farol could not confirm that local work has finished. Review its current result before restarting.",
-  UPDATE_STATE_UNREADABLE: "Farol couldn’t read its update status.",
-};
 
 function updateName(version: string): string {
   return /^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$/u.test(version)
@@ -36,13 +16,9 @@ function description(view: InstalledUpdateView): string {
     case "unavailable":
       return "Update checks are available in the installed Farol owner beta. Install and open the owner beta to use updates.";
     case "recovery":
-      return `An interrupted update was found. Quit to finish recovery of ${updateName(view.version)}. No update will be downloaded or applied again. If recovery restores the previous version, it stays closed until completion is verified.${view.blockedBy ? ` ${blockedMessages[view.blockedBy] ?? "Finish active work before quitting."}` : ""}`;
+      return `An interrupted update was found. Quit to finish recovery of ${updateName(view.version)}. No update will be downloaded or applied again. If recovery restores the previous version, it stays closed until completion is verified.${view.blockedBy ? ` ${updateBlockMessage(view.blockedBy)}` : ""}`;
     case "idle":
-      if (view.blockedBy)
-        return (
-          blockedMessages[view.blockedBy] ??
-          "Farol can’t restart safely yet. Review active work before restoring the previous version."
-        );
+      if (view.blockedBy) return updateBlockMessage(view.blockedBy);
       if (view.rollbackVersion)
         return `The previous accepted version, ${updateName(view.rollbackVersion)}, is available to restore. Farol will quit and the restored version will stay closed until completion is verified. Your settings and folders are kept.`;
       return view.checkedAt === null
@@ -57,9 +33,7 @@ function description(view: InstalledUpdateView): string {
     case "ready": {
       const ready = `${updateName(view.version)} is ready to install.`;
       if (view.blockedBy !== null) {
-        const reason =
-          blockedMessages[view.blockedBy] ??
-          "Farol can’t restart safely yet. Review active work and Diagnostics before updating.";
+        const reason = updateBlockMessage(view.blockedBy);
         return `${ready} ${reason}${view.blockedBy === "UPDATE_STATE_UNREADABLE" ? " Review Settings → Diagnostics before updating." : ""}`;
       }
       return view.deferred
@@ -69,8 +43,10 @@ function description(view: InstalledUpdateView): string {
     case "applying":
       return "Installing the update and restarting Farol…";
     case "failed": {
-      const reason =
-        blockedMessages[view.code] ?? "Farol couldn’t complete the update.";
+      const reason = updateBlockMessage(
+        view.code,
+        "Farol couldn’t complete the update.",
+      );
       if (view.recoveryRequired)
         return `${reason} Updating is paused until recovery is complete. Review Settings → Diagnostics.`;
       return view.rollbackVersion

@@ -1,0 +1,27 @@
+const messages: Readonly<Record<string, string>> = {
+  UPDATE_CONNECTOR_ACTIVE:
+    "Disconnect the active connector in Connection before restarting.",
+  UPDATE_TASK_ROUTE_NEEDS_DRAIN:
+    "Wait for the current task to finish before restarting.",
+  UPDATE_BROWSER_OPEN:
+    "Close open ChatGPT tabs before restarting so browser work is not interrupted.",
+  UPDATE_BROWSER_BUSY:
+    "Wait for the active ChatGPT response, check or voice session to finish before restarting.",
+  UPDATE_BROWSER_DRAFT:
+    "Send or clear the unsent ChatGPT draft and attachments before restarting.",
+  UPDATE_BROWSER_STATE_UNKNOWN:
+    "Farol could not confirm that ChatGPT is idle. Installation has not started. Keep your current work and review this result in Diagnostics. Do not retry this update action until the unknown state is resolved.",
+  UPDATE_BROWSER_RELEASE_UNCONFIRMED:
+    "Farol could not confirm that ChatGPT resumed. Quit Farol and reopen it before updating.",
+  UPDATE_WORK_PENDING: "Finish or cancel active work before restarting.",
+  UPDATE_WORK_DRAIN_UNCONFIRMED:
+    "Farol could not confirm that local work has finished. Review its current result before restarting.",
+  UPDATE_STATE_UNREADABLE: "Farol couldn’t read its update status.",
+};
+
+export function updateBlockMessage(
+  code: string,
+  fallback = "Farol can’t restart safely yet. Review active work and Diagnostics before updating.",
+): string {
+  return messages[code] ?? fallback;
+}

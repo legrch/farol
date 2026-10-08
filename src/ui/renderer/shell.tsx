@@ -18,6 +18,7 @@ import { Setup, SetupNavigation } from "./setup";
 import { setupSteps } from "./setup-navigation";
 import { designIconPath, designIconViewBox } from "./design-icons";
 import { updateCheckAllowed } from "./update-eligibility";
+import { updateBlockMessage } from "../update-block-message";
 const pages: readonly [SettingsPage, string][] = [
   ["general", "General"],
   ["appearance", "Appearance"],
@@ -545,10 +546,13 @@ function Update({
         </p>
       ) : null}
       {update.phase === "ready" && update.blockedBy && (
-        <p role="alert">
-          Installation blocked: {update.blockedBy}. Current work must be
-          settled.
-        </p>
+        <p role="alert">{updateBlockMessage(update.blockedBy)}</p>
+      )}
+      {update.phase === "ready" && update.blockedBy && (
+        <details>
+          <summary>Technical code</summary>
+          <code>{update.blockedBy}</code>
+        </details>
       )}
       <div className="control-row">
         <button
