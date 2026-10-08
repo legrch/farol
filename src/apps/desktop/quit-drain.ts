@@ -24,19 +24,28 @@ export type QuitDrainReceipt = Readonly<{
 export async function drainOwnedChildren(
   closers: readonly OwnedCloser[],
   deadlineMs: number,
+  // Preparation may have spent part of Quit's original absolute budget.
+  // Omitted by existing callers, whose relative-drain semantics are retained.
+  deadlineAt?: number,
 ): Promise<QuitDrainReceipt> {
   const confirmed = new Set<string>();
   const closing = Promise.allSettled(
     closers.map(async (closer) => {
       await closer.close();
-      confirmed.add(closer.name);
+      if (deadlineAt === undefined || Date.now() < deadlineAt)
+        confirmed.add(closer.name);
     }),
   );
   let timer: NodeJS.Timeout | undefined;
   await Promise.race([
     closing,
     new Promise<void>((resolve) => {
-      timer = setTimeout(resolve, deadlineMs);
+      timer = setTimeout(
+        resolve,
+        deadlineAt === undefined
+          ? deadlineMs
+          : Math.max(0, deadlineAt - Date.now()),
+      );
       // This timer is the last-resort path to the real app.quit(). It must
       // remain referenced: a stalled closer may own no active handle, and an
       // unref'd deadline would then let Node stop servicing the drain before
@@ -50,8 +59,29 @@ export async function drainOwnedChildren(
   return { drained: unconfirmed.length === 0, unconfirmed };
 }
 
+export type QuitPreparationContext = Readonly<{
+  // The original Quit deadline, in the Date.now() clock. Never renew it.
+  deadlineAt: number;
+  // Recheck synchronously immediately before each new effect, including
+  // after every await. Closes before collection or at the deadline. This
+  // does not cancel a helper already dispatched while the fence was open.
+  canStartEffect(): boolean;
+}>;
+
+// Structurally accepts the existing normal-Quit updater receipt. Accepted
+// means preparation's ACK only, never proof that an update was installed.
+export type QuitPreparationResult = Readonly<{
+  status: "accepted" | "skipped" | "blocked" | "unknown";
+}>;
+
 export type QuitDrainPorts = Readonly<{
-  // Every owned child at the moment quit begins: one-off host checks, the
+  // Optional one-shot preparation, before collect changes closing flags.
+  // The hook and its downstream ports must honor the effect fence; a race
+  // against a timeout alone cannot prevent a late dispatch. Keep the
+  // original attempt/unknown outcome: no retry, recursive Quit or relaunch.
+  // Download preference is not consent for an install-on-Quit effect.
+  prepare?(context: QuitPreparationContext): Promise<QuitPreparationResult>;
+  // Every owned child after preparation (if present): one-off host checks, the
   // product Agent, the connector, Route B and the relay. Collected exactly
   // once; a child that unregisters itself afterwards is still drained.
   collect(): readonly OwnedCloser[];
@@ -88,31 +118,106 @@ export function createQuitDrain(ports: QuitDrainPorts): QuitDrain {
       if (state === "draining") return;
       state = "draining";
       const startedAt = Date.now();
-      let draining: Promise<QuitDrainReceipt>;
-      try {
-        draining = drainOwnedChildren([...ports.collect()], ports.deadlineMs);
-      } catch {
-        // Collection may already have disposed some handles before throwing.
-        // Their exit is unproved, so keep the run marker and still quit.
-        draining = Promise.resolve({
-          drained: false,
-          unconfirmed: ["collection"],
-        });
-      }
+      const deadlineAt = startedAt + ports.deadlineMs;
+      const remaining = () => Math.max(0, deadlineAt - Date.now());
+      const prepare = ports.prepare;
+      const collectAndDrain = (): Promise<QuitDrainReceipt> => {
+        try {
+          const closers = [...ports.collect()];
+          if (!prepare) return drainOwnedChildren(closers, ports.deadlineMs);
+          const budget = remaining();
+          if (budget === 0) {
+            // Still ask every actual closer to stop, but an exit after the
+            // deadline is not confirmed within this Quit's budget.
+            void Promise.allSettled(
+              closers.map(async (closer) => closer.close()),
+            );
+            return Promise.resolve({
+              drained: closers.length === 0,
+              unconfirmed: closers.map((closer) => closer.name),
+            });
+          }
+          return drainOwnedChildren(closers, budget, deadlineAt);
+        } catch {
+          // Collection may already have disposed some handles before throwing.
+          // Their exit is unproved, so keep the run marker and still quit.
+          return Promise.resolve({
+            drained: false,
+            unconfirmed: ["collection"],
+          });
+        }
+      };
+      const prepareAndDrain = async (): Promise<QuitDrainReceipt> => {
+        let unconfirmed = false;
+        if (prepare && remaining() > 0) {
+          let preparing = true;
+          let preparationTimer: NodeJS.Timeout | undefined;
+          const expired = new Promise<QuitPreparationResult>((resolve) => {
+            // Referenced: pending preparation must not strand normal Quit.
+            preparationTimer = setTimeout(
+              () => resolve({ status: "unknown" }),
+              remaining(),
+            );
+          });
+          try {
+            const originalAttempt = prepare(
+              Object.freeze({
+                deadlineAt,
+                canStartEffect: () => preparing && Date.now() < deadlineAt,
+              }),
+            );
+            if (remaining() === 0) {
+              // Synchronous hook work also spends the original budget.
+              // Observe late rejection without settling/cancelling its attempt.
+              void originalAttempt.catch(() => undefined);
+              unconfirmed = true;
+            } else {
+              const result = await Promise.race([originalAttempt, expired]);
+              switch (result.status) {
+                case "accepted":
+                case "skipped":
+                case "blocked":
+                  unconfirmed = remaining() === 0;
+                  break;
+                default:
+                  unconfirmed = true;
+              }
+            }
+          } catch {
+            // A throwing hook cannot prove whether it dispatched an effect.
+            unconfirmed = true;
+          } finally {
+            preparing = false;
+            clearTimeout(preparationTimer);
+          }
+        }
+        const receipt = await collectAndDrain();
+        return unconfirmed
+          ? {
+              drained: false,
+              unconfirmed: ["preparation", ...receipt.unconfirmed],
+            }
+          : receipt;
+      };
+      // Preserve synchronous collection and child-close invocation when the
+      // optional hook is absent, including reentrant before-quit behavior.
+      const draining = prepare ? prepareAndDrain() : collectAndDrain();
       let recordTimer: NodeJS.Timeout | undefined;
       void draining
         .then((receipt) => {
           // Recording is bounded by the same absolute deadline that bounds
           // the drain (the elapsed drain time counts against it): a
           // `record` that never settles must not delay quit past it.
-          const remaining = Math.max(
-            0,
-            ports.deadlineMs - (Date.now() - startedAt),
-          );
+          let budget = remaining();
+          const recorded = ports.record(receipt).catch(() => undefined);
+          if (prepare) budget = remaining();
+          // An exhausted preparation/drain has no fresh receipt budget. The
+          // diagnostic still starts, but cannot postpone the real Quit.
+          if (prepare && budget === 0) return undefined;
           return Promise.race([
-            ports.record(receipt).catch(() => undefined),
+            recorded,
             new Promise<void>((resolve) => {
-              recordTimer = setTimeout(resolve, remaining);
+              recordTimer = setTimeout(resolve, budget);
               // The diagnostic write must not be able to strand the real
               // quit. Keep its absolute-deadline timer referenced for the
               // same reason as the child-drain deadline above.
