@@ -20,3 +20,9 @@ aebe84b6a6c669d5920e8bf1e421b55bb00ee0d7:tests/integration/codex-task-mcp.test.t
 # Exact historical fingerprints only; current source and other copies still scan.
 113e3396eff34c0905838e726fb4c36b5304f60d:tests/integration/dev-review-profile.test.mjs:generic-api-key:25
 f4f24912ee7c05f1674396f7c3435e99ffa20041:tests/integration/dev-review-profile.test.mjs:generic-api-key:25
+
+# Exact historical false positives for the disposable replacement-key literal
+# in renderer-only credential draft/cancel fixtures. No real key is present.
+# Keep all-ref scanning, detection rules, other commits and copies unchanged.
+4b43b2d422b8c3c81dfe573447df7c6ac579aca0:tests/renderer/settings.test.tsx:generic-api-key:210
+8e3075cd869655f2f18a43c6d473285a5eca8682:tests/renderer/settings.test.tsx:generic-api-key:835

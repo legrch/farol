@@ -1068,10 +1068,10 @@ describe("owner-facing credential replacement", () => {
     const input = h.field("Runtime key") as HTMLInputElement;
     expect(input.type).toBe("password");
     expect(input.value).toBe("");
-    await change(input, "disposable-replacement-key-12345");
+    await change(input, "test-only-0000000000000000000000");
     await h.click("Show runtime key");
     expect(input.type).toBe("text");
-    expect(input.value).toBe("disposable-replacement-key-12345");
+    expect(input.value).toBe("test-only-0000000000000000000000");
     await h.click("Hide runtime key");
     expect(input.type).toBe("password");
     await h.click("Cancel");
@@ -1084,7 +1084,7 @@ describe("owner-facing credential replacement", () => {
   it("resets the reveal state when a credential submission clears the field", async () => {
     const h = await mount("connection");
     await change(h.field("Tunnel ID"), "tunnel_fixture");
-    await change(h.field("Runtime key"), "disposable-replacement-key-12345");
+    await change(h.field("Runtime key"), "test-only-0000000000000000000000");
     await h.click("Show runtime key");
     await h.click("Save & connect");
     expect(h.calls()).toEqual([
@@ -1093,7 +1093,7 @@ describe("owner-facing credential replacement", () => {
         operationId: expect.any(String),
         buildId: "3".repeat(64),
         tunnelId: "tunnel_fixture",
-        runtimeKey: "disposable-replacement-key-12345",
+        runtimeKey: "test-only-0000000000000000000000",
       },
     ]);
     expect((h.field("Runtime key") as HTMLInputElement).value).toBe("");
@@ -1102,7 +1102,7 @@ describe("owner-facing credential replacement", () => {
   it("clears a first-entry draft on Cancel without sending configuration", async () => {
     const h = await mount("connection");
     await change(h.field("Tunnel ID"), "tunnel_draft");
-    await change(h.field("Runtime key"), "disposable-replacement-key-12345");
+    await change(h.field("Runtime key"), "test-only-0000000000000000000000");
     await h.click("Show runtime key");
     await h.click("Cancel");
     expect(h.calls()).toEqual([]);
@@ -1122,7 +1122,7 @@ describe("owner-facing credential replacement", () => {
     async (error, message) => {
       const h = await mount("connection");
       await change(h.field("Tunnel ID"), "tunnel_fixture");
-      const key = "disposable-replacement-key-12345";
+      const key = "test-only-0000000000000000000000";
       await change(h.field("Runtime key"), key);
       const next = structuredClone(h.configuration.settings);
       next.revision++;
