@@ -339,12 +339,14 @@ export function Overlay({
   onClose,
   dismissible = true,
   initialFocus,
+  className,
 }: {
   title: string;
   children: ReactNode;
   onClose: () => void;
   dismissible?: boolean;
   initialFocus?: RefObject<HTMLElement | null>;
+  className?: string;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
   const close = useRef(onClose);
@@ -367,7 +369,7 @@ export function Overlay({
   return (
     <dialog
       ref={ref}
-      className="sheet"
+      className={className ? `sheet ${className}` : "sheet"}
       aria-label={title}
       onCancel={(event) => {
         event.preventDefault();
@@ -493,6 +495,7 @@ function Update({
       title="Farol updates"
       onClose={() => facade.overlay("none")}
       dismissible={update.phase !== "applying"}
+      className="update-sheet"
     >
       <p className="description">
         Review the current release state before any action.
