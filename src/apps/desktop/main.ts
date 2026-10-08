@@ -786,6 +786,10 @@ async function installedUpdateCommand(
   else if (command.data.kind === "later") await installedUpdater.later();
   else if (command.data.kind === "notice-seen")
     await installedUpdater.acknowledgeNotice(command.data.noticeKey);
+  else if (command.data.kind === "set-automatic-update-preference") {
+    await installedUpdater.setAutomaticUpdatePreference(command.data.enabled);
+    return installedUpdater.snapshot();
+  }
   else if (command.data.kind === "restart") await installedUpdater.restart();
   else if (command.data.kind === "recover" || command.data.kind === "rollback")
     await installedUpdater.restore(command.data.kind);
