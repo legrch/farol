@@ -107,8 +107,12 @@ it.each([
     await act(async () =>
       host.querySelector<HTMLButtonElement>(".rail .update-action")!.click(),
     );
-    expect(host.querySelector("dialog")?.textContent).toContain(
-      "Farol updates",
+    expect(host.querySelector("dialog h2")?.textContent).toBe(
+      view.phase === "available"
+        ? "A new version of Farol is available"
+        : view.phase === "ready"
+          ? "Ready to update Farol"
+          : "The update did not finish",
     );
     expect(f.api.installedUpdate).toHaveBeenCalledTimes(1);
   },
@@ -117,7 +121,9 @@ it("viewing the sheet acknowledges the exact notice once under StrictMode withou
   const { host, c, f } = await mount();
   vi.mocked(f.api.installedUpdate).mockResolvedValue(withSeen(available));
   await act(async () => button(host, "View update").click());
-  expect(host.querySelector("dialog")?.textContent).toContain("Farol updates");
+  expect(host.querySelector("dialog h2")?.textContent).toBe(
+    "A new version of Farol is available",
+  );
   expect(c.getSnapshot().update).toEqual(withSeen(available));
   expect(f.api.installedUpdate).toHaveBeenCalledExactlyOnceWith({
     kind: "notice-seen",

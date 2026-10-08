@@ -464,6 +464,17 @@ function Search({
     </Overlay>
   );
 }
+const updateSheetTitles: Record<WindowSnapshot["update"]["phase"], string> = {
+  available: "A new version of Farol is available",
+  ready: "Ready to update Farol",
+  failed: "The update did not finish",
+  recovery: "Farol update recovery",
+  checking: "Checking for Farol updates",
+  downloading: "Downloading Farol update",
+  applying: "Restarting to update Farol",
+  unavailable: "Farol updates unavailable",
+  idle: "Farol updates",
+};
 function Update({
   snapshot,
   facade,
@@ -493,7 +504,7 @@ function Update({
   const canCheck = updateCheckAllowed(update);
   return (
     <Overlay
-      title="Farol updates"
+      title={updateSheetTitles[update.phase]}
       onClose={() => facade.overlay("none")}
       dismissible={update.phase !== "applying"}
       className="update-sheet"
