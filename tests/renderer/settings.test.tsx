@@ -180,7 +180,7 @@ describe("owner-facing credential replacement", () => {
     value.connectors.secureMcp.credential = "stored";
     value.connectors.secureMcp.tunnelId = "tunnel_existing";
     const h = await mount("connection", value);
-    await h.click("Replace credentials");
+    await h.click("Edit connection");
     const input = h.field("Runtime key") as HTMLInputElement;
     expect(input.type).toBe("password");
     expect(input.value).toBe("");
@@ -192,7 +192,7 @@ describe("owner-facing credential replacement", () => {
     expect(input.type).toBe("password");
     await h.click("Cancel");
     expect(h.calls()).toEqual([]);
-    await h.click("Replace credentials");
+    await h.click("Edit connection");
     expect((h.field("Runtime key") as HTMLInputElement).value).toBe("");
     expect((h.field("Runtime key") as HTMLInputElement).type).toBe("password");
     expect(h.field("Tunnel ID").value).toBe("tunnel_existing");
@@ -228,6 +228,30 @@ describe("owner-facing credential replacement", () => {
 
 // DOM/facade regressions only. Native lifecycle and external acceptance are separate.
 describe("owner setup entry feedback", () => {
+  it("shows one state-appropriate primary connection action without dispatch on render", async () => {
+    const ready = await mount("connection", connectionSettings());
+    expect(ready.calls()).toEqual([]);
+    expect(ready.button("Check connection").className).toBe("primary");
+    expect(() => ready.button("Reconnect")).toThrow();
+    expect(() => ready.button("Stop connection")).toThrow();
+    expect(() => ready.button("Choose tunnel client…")).toThrow();
+    expect(ready.host.textContent).not.toContain("Client: Selected");
+
+    const stopped = structuredClone(connectionSettings());
+    stopped.connectors.secureMcp.runtime = null;
+    const next = await mount("connection", stopped);
+    expect(next.calls()).toEqual([]);
+    expect(next.button("Connect this Mac").className).toBe("primary");
+    expect(() => next.button("Check connection")).toThrow();
+    expect(() => next.button("Reconnect")).toThrow();
+
+    const unknown = structuredClone(stopped);
+    unknown.setup.connect.outcomeUnknown = true;
+    const fenced = await mount("connection", unknown);
+    expect(fenced.calls()).toEqual([]);
+    expect(fenced.host.textContent).toContain("Outcome unknown");
+    expect(() => fenced.button("Connect this Mac")).toThrow();
+  });
   it("offers discovery without an effect on navigation or render", async () => {
     const h = await mount(
       "connection",
@@ -238,14 +262,13 @@ describe("owner setup entry feedback", () => {
     );
     expect(h.calls()).toEqual([]);
     expect(h.button("Find connection helper").disabled).toBe(false);
-    const advanced = h.host.querySelector<HTMLDetailsElement>(
-      ".connection-advanced",
-    );
-    expect(advanced?.open).toBe(false);
-    expect(h.button("Choose tunnel client…").closest("details")).toBe(advanced);
+    expect(() => h.button("Choose tunnel client…")).toThrow();
+    await h.pageTo("diagnostics");
+    expect(h.button("Choose tunnel client…")).toBeTruthy();
+    await h.pageTo("connection");
     await h.click("Find connection helper");
     expect(h.calls()).toEqual([{ kind: "connector.discover-client" }]);
-    expect(h.button("Start connection").disabled).toBe(true);
+    expect(() => h.button("Connect this Mac")).toThrow();
   });
   it("reports a validated helper without claiming connection or attachment readiness", async () => {
     const h = await mount("connection");
@@ -264,8 +287,8 @@ describe("owner setup entry feedback", () => {
     expect(h.host.textContent).toContain(
       "does not start the connection or prove ChatGPT attachment",
     );
-    expect(h.host.textContent).toContain("Client: Selected");
-    expect(h.button("Start connection").disabled).toBe(true);
+    expect(h.host.textContent).toContain("Connection details needed");
+    expect(() => h.button("Connect this Mac")).toThrow();
     expect(h.calls()).toEqual([{ kind: "connector.discover-client" }]);
   });
   it.each([0, 2])(
@@ -293,9 +316,9 @@ describe("owner setup entry feedback", () => {
           ? "No connection helper found"
           : "2 connection helper candidate(s) found, but no validated helper selected",
       );
-      expect(h.host.textContent).toContain("Advanced connection options");
-      expect(h.host.textContent).toContain("Client: Not selected");
-      expect(h.button("Start connection").disabled).toBe(true);
+      expect(h.button("Connection diagnostics")).toBeTruthy();
+      expect(h.host.textContent).toContain("Connection details needed");
+      expect(() => h.button("Connect this Mac")).toThrow();
       expect(h.calls()).toEqual([{ kind: "connector.discover-client" }]);
     },
   );
@@ -319,8 +342,8 @@ describe("owner setup entry feedback", () => {
       });
       await h.click("Find connection helper");
       expect(h.host.textContent).toContain(message);
-      expect(h.host.textContent).toContain("Client: Not selected");
-      expect(h.button("Start connection").disabled).toBe(true);
+      expect(h.host.textContent).toContain("Connection details needed");
+      expect(() => h.button("Connect this Mac")).toThrow();
       await h.pageTo("folders");
       await h.pageTo("connection");
       expect(h.calls()).toEqual([{ kind: "connector.discover-client" }]);
@@ -334,9 +357,11 @@ describe("owner setup entry feedback", () => {
     await h.click("Find connection helper");
     await act(async () => h.c.refresh());
     expect(h.button("Find connection helper").disabled).toBe(true);
+    await h.pageTo("diagnostics");
     expect(h.button("Choose tunnel client…").disabled).toBe(true);
-    expect(h.host.textContent).toContain("Helper selection is paused");
+    expect(h.host.textContent).toContain("Outcome unknown");
     expect(h.host.textContent).not.toContain("private discovery failure");
+    await h.pageTo("connection");
     await h.click("Connection diagnostics");
     expect(h.c.getSnapshot().destination.page).toBe("diagnostics");
     expect(h.calls()).toHaveLength(1);
@@ -445,7 +470,7 @@ describe("owner setup entry feedback", () => {
   });
   it("keeps unknown replacement fenced even with a new valid draft", async () => {
     const h = await mount("connection", connectionSettings());
-    await h.click("Replace credentials");
+    await h.click("Edit connection");
     await change(h.field("Runtime key"), "test-replacement-one-000000");
     vi.mocked(h.f.api.configure).mockRejectedValueOnce(new Error("reply lost"));
     await h.click("Save credentials");
@@ -891,11 +916,12 @@ describe("bounded Settings writer", () => {
       h.host.querySelector('section[aria-label="This Mac connection"] .badges')
         ?.textContent,
     ).not.toBe("Computer ready");
-    expect(h.button("Start connection").disabled).toBe(true);
+    expect(() => h.button("Connect this Mac")).toThrow();
     await h.pageTo("diagnostics");
     expect(h.button("Check in ChatGPT once").disabled).toBe(true);
     await h.pageTo("connection");
     await h.click("Sign in");
+    await h.pageTo("diagnostics");
     await h.click("Choose tunnel client…");
     expect(h.calls()).toEqual([
       { kind: "chatgpt.open-sign-in" },
@@ -910,7 +936,7 @@ describe("bounded Settings writer", () => {
         ?.textContent;
     expect(badge()).toBe("Computer ready");
     await h.click("Check attachment");
-    await h.click("Check local connection");
+    await h.click("Check connection");
     await h.pageTo("diagnostics");
     await h.click("Check in ChatGPT once");
     await h.click("Check in ChatGPT once");
@@ -928,7 +954,7 @@ describe("bounded Settings writer", () => {
       configuration: { status: "ready", settings: next },
     });
     await act(async () => h.c.refresh());
-    expect(badge()).toBe("Connection check needed");
+    expect(badge()).toBe("Connected to this Mac · ChatGPT check needed");
     next.setup.connect.outcomeUnknown = true;
     await act(async () => h.c.refresh());
     expect(badge()).toBe("Outcome unknown");
@@ -1988,8 +2014,9 @@ describe("Computer-first setup and explicit reconnect", () => {
     const h = await mount("connection", connectionSettings());
     const pending = deferred<unknown>();
     vi.mocked(h.f.api.configure).mockReturnValueOnce(pending.promise);
+    expect(() => h.button("Reconnect")).toThrow();
+    await h.pageTo("diagnostics");
     const reconnect = h.button("Reconnect");
-    expect(h.button("Start connection").disabled).toBe(true);
     await act(async () => {
       reconnect.click();
       reconnect.click();
@@ -1997,7 +2024,7 @@ describe("Computer-first setup and explicit reconnect", () => {
     expect(h.calls()).toEqual([{ kind: "connector.repair" }]);
     expect(h.button("Reconnect").disabled).toBe(true);
     await h.pageTo("folders");
-    await h.pageTo("connection");
+    await h.pageTo("diagnostics");
     await h.click("Reconnect");
     expect(h.calls()).toHaveLength(1);
     await act(async () =>
@@ -2020,7 +2047,7 @@ describe("Computer-first setup and explicit reconnect", () => {
   ])(
     "rechecks latest facade admission before reconnect, despite an enabled old control: %s",
     async (fence) => {
-      const h = await mount("connection", connectionSettings());
+      const h = await mount("diagnostics", connectionSettings());
       const next = { ...structuredClone(h.c.getSnapshot()) };
       if (fence === "pending" || fence === "unknown")
         next.intents = {
@@ -2043,21 +2070,22 @@ describe("Computer-first setup and explicit reconnect", () => {
     },
   );
   it("lost Repair reply stays unknown through page changes and does not repeat", async () => {
-    const h = await mount("connection", connectionSettings());
+    const h = await mount("diagnostics", connectionSettings());
     vi.mocked(h.f.api.configure).mockRejectedValueOnce(new Error("reply lost"));
     await h.click("Reconnect");
     await h.pageTo("folders");
-    await h.pageTo("connection");
+    await h.pageTo("diagnostics");
     await h.click("Reconnect");
     expect(h.calls()).toEqual([{ kind: "connector.repair" }]);
     expect(h.host.textContent).toContain("Outcome unknown");
-    expect(h.button("Start connection").disabled).toBe(true);
+    await h.pageTo("connection");
+    expect(() => h.button("Connect this Mac")).toThrow();
   });
   it("explicit narrowing invalidates readiness and preserves drafts without auto reconnect", async () => {
     const value = connectionSettings();
     value.computer.workspaces[0]!.access = "write";
     const h = await mount("connection", value);
-    await h.click("Replace credentials");
+    await h.click("Edit connection");
     await change(h.field("Tunnel ID"), "unsaved-tunnel");
     const tunnel = h.field("Tunnel ID");
     const narrowed = structuredClone(h.configuration);
@@ -2078,9 +2106,9 @@ describe("Computer-first setup and explicit reconnect", () => {
     expect(
       h.host.querySelector('section[aria-label="This Mac connection"] .badges')
         ?.textContent,
-    ).toBe("Setup needed");
-    expect(h.button("Start connection").disabled).toBe(true);
-    expect(h.button("Reconnect").disabled).toBe(true);
+    ).toBe("Workspace verification needed");
+    expect(() => h.button("Connect this Mac")).toThrow();
+    expect(() => h.button("Reconnect")).toThrow();
     expect(h.calls()).toEqual([
       { kind: "computer.update-access", workspaceId, access: "read" },
     ]);
@@ -2197,14 +2225,14 @@ describe("owner Setup presentation checkpoint (DOM fixtures only)", () => {
     const page = activePage(h.host);
     expect(page.querySelector('input[type="password"]')).toBeNull();
     expect(page.textContent).toContain("Tunnel credentials saved");
-    await h.click("Replace credentials");
+    await h.click("Edit connection");
     expect(h.field("Runtime key").value).toBe("");
     await change(h.field("Tunnel ID"), "unsaved-tunnel");
     await change(h.field("Runtime key"), "explicit-test-replacement-000000");
     await h.click("Cancel");
     expect(page.querySelector('input[type="password"]')).toBeNull();
     expect(h.calls()).toEqual([]);
-    await h.click("Replace credentials");
+    await h.click("Edit connection");
     expect(h.field("Tunnel ID").value).toBe("owner-tunnel");
     expect(h.field("Runtime key").value).toBe("");
     expect(h.button("Save credentials").disabled).toBe(true);
@@ -2212,7 +2240,7 @@ describe("owner Setup presentation checkpoint (DOM fixtures only)", () => {
   it("requires a valid new key, clears it on dispatch and never reloads it from saved state", async () => {
     const value = connectionSettings();
     const h = await mount("connection", value);
-    await h.click("Replace credentials");
+    await h.click("Edit connection");
     await change(h.field("Runtime key"), "short");
     await h.click("Save credentials");
     expect(h.field("Runtime key").value).toBe("short");
@@ -2238,12 +2266,12 @@ describe("owner Setup presentation checkpoint (DOM fixtures only)", () => {
       activePage(h.host).querySelector('input[type="password"]'),
     ).toBeNull();
     expect(JSON.stringify(h.c.getSnapshot())).not.toContain(secret);
-    await h.click("Replace credentials");
+    await h.click("Edit connection");
     expect(h.field("Runtime key").value).toBe("");
   });
   it("keeps an unknown replacement fenced without reporting new credentials as saved", async () => {
     const h = await mount("connection", connectionSettings());
-    await h.click("Replace credentials");
+    await h.click("Edit connection");
     await change(h.field("Runtime key"), "explicit-test-replacement-000000");
     vi.mocked(h.f.api.configure).mockRejectedValueOnce(new Error("reply lost"));
     await h.click("Save credentials");

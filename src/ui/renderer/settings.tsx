@@ -1382,56 +1382,34 @@ function Connection({
   const credentialPauseReason = !actions.allowed("connector.configure")
     ? actions.computerPauseReason
     : null;
+  const connectionStatus =
+    setup.label === "Outcome unknown" ||
+    setup.label === "Connection check pending"
+      ? setup.label
+      : setup.ready
+        ? "Computer ready"
+        : setup.localConnectionCurrent
+          ? "Connected to this Mac · ChatGPT check needed"
+          : !saved
+            ? "Connection details needed"
+            : !connector.tunnelClient
+              ? "Connection helper needed"
+              : !setup.workspacesVerified
+                ? "Workspace verification needed"
+                : setup.canStart
+                  ? "Ready to connect"
+                  : setup.canReconnect
+                    ? "Connection needs recovery"
+                    : setup.label;
   return (
     <>
       {!setupStep && <h2>Connection</h2>}
       <div hidden={setupStep !== undefined && setupStep !== "connection"}>
         <Group title="This Mac connection">
-          <p className="badges">{setup.label}</p>
-          <p className="description">
-            {setup.facts.folder === "ready" &&
-            !connector.tunnelClient &&
-            actions.allowed("connector.discover-client")
-              ? "Find the installed connection helper and save your tunnel credentials before starting the connection."
-              : setup.next}
+          <p className="badges" role="status">
+            {connectionStatus}
           </p>
-          <p className="description">
-            Save your tunnel credentials, find the installed connection helper,
-            then start the connection. A verified workspace is required for
-            local access.
-          </p>
-          {!connector.tunnelClient && (
-            <Command
-              actions={actions}
-              command={{ kind: "connector.discover-client" }}
-              className="primary"
-            >
-              Find connection helper
-            </Command>
-          )}
-          {!actions.allowed("connector.discover-client") && (
-            <p className="description">
-              Helper selection is paused. {actions.computerPauseReason}
-            </p>
-          )}
-          <details className="connection-advanced">
-            <summary>Advanced connection options</summary>
-            <p className="description">
-              Manual executable selection is only needed for a custom
-              installation. The selected helper is still verified before use.
-            </p>
-            <Command
-              actions={actions}
-              command={{ kind: "connector.select-client" }}
-            >
-              Choose tunnel client…
-            </Command>
-          </details>
-          <p className="badges">
-            Client: {connector.tunnelClient ? "Selected" : "Not selected"} ·
-            Key: {connector.credential === "stored" ? "Saved" : "Needed"} ·
-            Service: {connector.runtime?.state ?? "Stopped"}
-          </p>
+          {saved && !setup.ready && <p className="description">{setup.next}</p>}
           {saved && (
             <div
               className="credentials-saved"
@@ -1446,7 +1424,7 @@ function Connection({
               <p className="description">
                 {replacementUnconfirmed
                   ? "Do not submit another replacement. Review the existing result in Diagnostics."
-                  : "The saved key stays private. Saving credentials and checking the connection are separate steps."}
+                  : "The saved key stays private. Edit only when these details change."}
               </p>
               {!replacing && (
                 <button
@@ -1460,7 +1438,7 @@ function Connection({
                     setReplacing(true);
                   }}
                 >
-                  Replace credentials
+                  Edit connection
                 </button>
               )}
             </div>
@@ -1588,52 +1566,67 @@ function Connection({
               </button>
             </form>
           )}
-          {!setup.canStart &&
-            !setup.canReconnect &&
-            setup.facts.folder !== "ready" && (
-              <button
-                type="button"
-                className="text-button"
-                onClick={() =>
-                  facade.navigate({ area: "settings", page: "folders" })
-                }
-              >
-                Review folder access
-              </button>
-            )}
-          <div className="control-row">
+          {!saved && !connector.tunnelClient && (
             <Command
               actions={actions}
-              disabled={!setup.canStart}
+              command={{ kind: "connector.discover-client" }}
+            >
+              Find connection helper
+            </Command>
+          )}
+          {saved && !replacing && !setup.workspacesVerified && (
+            <button
+              type="button"
+              className="text-button"
+              onClick={() =>
+                facade.navigate({ area: "settings", page: "folders" })
+              }
+            >
+              Verify a workspace
+            </button>
+          )}
+          {saved && !replacing && connector.tunnelClient && setup.canStart && (
+            <Command
+              actions={actions}
               admit={(current) => computerSetup(current).canStart}
               command={{ kind: "connector.start" }}
+              className="primary"
             >
-              Start connection
+              Connect this Mac
             </Command>
-            <Command
-              actions={actions}
-              disabled={!setup.canReconnect}
-              admit={(current) => computerSetup(current).canReconnect}
-              command={{ kind: "connector.repair" }}
-            >
-              Reconnect
-            </Command>
+          )}
+          {saved &&
+            !replacing &&
+            connector.tunnelClient &&
+            !setup.localConnectionCurrent &&
+            setup.canReconnect && (
+              <Command
+                actions={actions}
+                admit={(current) => computerSetup(current).canReconnect}
+                command={{ kind: "connector.repair" }}
+                className="primary"
+              >
+                Reconnect
+              </Command>
+            )}
+          {saved && !replacing && setup.localConnectionCurrent && (
             <Command
               actions={actions}
               command={{ kind: "connector.check-health" }}
+              className="primary"
             >
-              Check local connection
+              Check connection
             </Command>
-            <Command actions={actions} command={{ kind: "connector.stop" }}>
-              Stop connection
+          )}
+          {saved && !replacing && !connector.tunnelClient && (
+            <Command
+              actions={actions}
+              command={{ kind: "connector.discover-client" }}
+              className="primary"
+            >
+              Find connection helper
             </Command>
-          </div>
-          <p className="description">
-            Reconnect asks the host to confirm Stop before Start and creates a
-            fresh challenge. It does not resend an earlier verification.
-            Pending, unknown or stale state must be resolved before
-            reconnecting.
-          </p>
+          )}
           <button
             type="button"
             className="text-button"
@@ -1756,115 +1749,149 @@ function ConnectionDiagnostics({
   const appCheckStarted = useRef(false);
   const [appCheckAttempted, setAppCheckAttempted] = useState(false);
   return (
-    <Group title="Connection verification details">
-      <details>
-        <summary>ChatGPT app and technical options</summary>
+    <>
+      <Group title="Connection controls">
         <p className="description">
-          Select the existing ChatGPT app attached to this tunnel. Check in
-          ChatGPT sends one short message and verifies a local receipt; it is
-          available only in Dev with the selected app, Temporary Chat and
-          Instant model.
+          These controls change or stop the local connection. An uncertain
+          result must be inspected before another action.
         </p>
-        <form
-          onSubmit={(event) => {
-            event.preventDefault();
-            if (!connector.tunnelId) return;
-            void actions.run({
-              kind: "connector.select-chatgpt-app",
-              name: appName,
-              tunnelId: connector.tunnelId,
-              connectorGeneration: connector.generation,
-            });
-          }}
-        >
-          <label className="setting-row">
-            ChatGPT app name
-            <input
-              className="field"
-              value={appName}
-              onChange={(event) => setAppName(event.currentTarget.value)}
-              required
-              maxLength={64}
-            />
-          </label>
-          <button
-            className="primary"
-            disabled={
-              !connector.tunnelId ||
-              !actions.allowed("connector.select-chatgpt-app")
-            }
-          >
-            Select ChatGPT app
-          </button>
-        </form>
-        <button
-          type="button"
-          className="primary"
-          disabled={
-            appCheckAttempted ||
-            !actions.allowed("connector.verify-app") ||
-            snapshot.environment !== "dev" ||
-            !setup.canVerifyEmbeddedApp ||
-            !connector.chatgptApp ||
-            connector.chatgptApp.connectorGeneration !== connector.generation ||
-            connector.chatgptApp.tunnelId !== connector.tunnelId
-          }
-          onClick={() => {
-            if (appCheckStarted.current) return;
-            appCheckStarted.current = true;
-            setAppCheckAttempted(true);
-            void actions.run({ kind: "connector.verify-app" }, (current) => {
-              const latest = computerSetup(current);
-              return (
-                current.environment === "dev" &&
-                latest.canVerifyEmbeddedApp &&
-                current.configuration?.status === "ready" &&
-                current.configuration.settings.connectors.secureMcp.chatgptApp
-                  ?.connectorGeneration ===
-                  current.configuration.settings.connectors.secureMcp
-                    .generation &&
-                current.configuration.settings.connectors.secureMcp.chatgptApp
-                  ?.tunnelId ===
-                  current.configuration.settings.connectors.secureMcp.tunnelId
-              );
-            });
-          }}
-        >
-          Check in ChatGPT once
-        </button>
-        <p className="description">
-          External verification uses the challenge in Connection and does not
-          require embedded sign-in. Health checks do not prove ChatGPT
-          attachment.
-        </p>
-        <button
-          type="button"
-          className="text-button"
-          onClick={() =>
-            facade.navigate({ area: "settings", page: "connection" })
-          }
-        >
-          Continue attachment setup
-        </button>
         <div className="control-row">
           <Command
             actions={actions}
-            command={{ kind: "onboarding.open-help", destination: "tunnels" }}
+            command={{ kind: "connector.select-client" }}
           >
-            Tunnel setup help
+            Choose tunnel client…
           </Command>
           <Command
             actions={actions}
-            command={{
-              kind: "onboarding.open-help",
-              destination: "setup-guide",
-            }}
+            command={{ kind: "connector.check-health" }}
           >
-            Connection guide
+            Check local connection
+          </Command>
+          <Command
+            actions={actions}
+            command={{ kind: "connector.repair" }}
+            disabled={!setup.canReconnect}
+            admit={(current) => computerSetup(current).canReconnect}
+          >
+            Reconnect
+          </Command>
+          <Command actions={actions} command={{ kind: "connector.stop" }}>
+            Stop connection
           </Command>
         </div>
-      </details>
-    </Group>
+      </Group>
+      <Group title="Connection verification details">
+        <details>
+          <summary>ChatGPT app and technical options</summary>
+          <p className="description">
+            Select the existing ChatGPT app attached to this tunnel. Check in
+            ChatGPT sends one short message and verifies a local receipt; it is
+            available only in Dev with the selected app, Temporary Chat and
+            Instant model.
+          </p>
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              if (!connector.tunnelId) return;
+              void actions.run({
+                kind: "connector.select-chatgpt-app",
+                name: appName,
+                tunnelId: connector.tunnelId,
+                connectorGeneration: connector.generation,
+              });
+            }}
+          >
+            <label className="setting-row">
+              ChatGPT app name
+              <input
+                className="field"
+                value={appName}
+                onChange={(event) => setAppName(event.currentTarget.value)}
+                required
+                maxLength={64}
+              />
+            </label>
+            <button
+              className="primary"
+              disabled={
+                !connector.tunnelId ||
+                !actions.allowed("connector.select-chatgpt-app")
+              }
+            >
+              Select ChatGPT app
+            </button>
+          </form>
+          <button
+            type="button"
+            className="primary"
+            disabled={
+              appCheckAttempted ||
+              !actions.allowed("connector.verify-app") ||
+              snapshot.environment !== "dev" ||
+              !setup.canVerifyEmbeddedApp ||
+              !connector.chatgptApp ||
+              connector.chatgptApp.connectorGeneration !==
+                connector.generation ||
+              connector.chatgptApp.tunnelId !== connector.tunnelId
+            }
+            onClick={() => {
+              if (appCheckStarted.current) return;
+              appCheckStarted.current = true;
+              setAppCheckAttempted(true);
+              void actions.run({ kind: "connector.verify-app" }, (current) => {
+                const latest = computerSetup(current);
+                return (
+                  current.environment === "dev" &&
+                  latest.canVerifyEmbeddedApp &&
+                  current.configuration?.status === "ready" &&
+                  current.configuration.settings.connectors.secureMcp.chatgptApp
+                    ?.connectorGeneration ===
+                    current.configuration.settings.connectors.secureMcp
+                      .generation &&
+                  current.configuration.settings.connectors.secureMcp.chatgptApp
+                    ?.tunnelId ===
+                    current.configuration.settings.connectors.secureMcp.tunnelId
+                );
+              });
+            }}
+          >
+            Check in ChatGPT once
+          </button>
+          <p className="description">
+            External verification uses the challenge in Connection and does not
+            require embedded sign-in. Health checks do not prove ChatGPT
+            attachment.
+          </p>
+          <button
+            type="button"
+            className="text-button"
+            onClick={() =>
+              facade.navigate({ area: "settings", page: "connection" })
+            }
+          >
+            Continue attachment setup
+          </button>
+          <div className="control-row">
+            <Command
+              actions={actions}
+              command={{ kind: "onboarding.open-help", destination: "tunnels" }}
+            >
+              Tunnel setup help
+            </Command>
+            <Command
+              actions={actions}
+              command={{
+                kind: "onboarding.open-help",
+                destination: "setup-guide",
+              }}
+            >
+              Connection guide
+            </Command>
+          </div>
+        </details>
+      </Group>
+    </>
   );
 }
 function Model({ settings, snapshot, facade, actions }: PageProps) {

@@ -887,7 +887,7 @@ it("ready Review Setup retains saved credentials and cancels replacement without
   expect(host.querySelector(".credentials-saved")?.textContent).toContain(
     "Tunnel credentials saved",
   );
-  await act(async () => button(host, "Replace credentials").click());
+  await act(async () => button(host, "Edit connection").click());
   const password = host.querySelector<HTMLInputElement>(
     'input[type="password"]',
   )!;

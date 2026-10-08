@@ -723,15 +723,23 @@ try {
     let window = await launch(environment, "normal", environment);
     if (packaged && behavior) await checkBackgroundSecondary();
     await openSetup(window);
+    await setupStep(window, "connection", "Connection");
     await window.locator('.setup-page[data-setup-step="connection"]').waitFor();
     if (behavior) {
-      // Only the explicit E2E picker selects our disposable tunnel executable.
-      // Saving its synthetic key must not start a process or verify attachment.
+      // Explicit discovery selects only this run's disposable fixture through
+      // the owned E2E seam. Saving does not start or verify the connection.
       await window
-        .locator(".setup-page summary")
-        .filter({ hasText: "Advanced connection options" })
+        .locator(".setup-page")
+        .getByRole("button", { name: "Find connection helper", exact: true })
         .click();
-      await setupAction(window, "Choose tunnel client…");
+      await window.waitForFunction(async () => {
+        const result = await window.farolNext.bootstrap();
+        return (
+          result.configuration.status === "ready" &&
+          result.configuration.settings.connectors.secureMcp.tunnelClient !==
+            null
+        );
+      });
       await window
         .getByLabel("Tunnel ID", { exact: true })
         .fill("new_fixture_tunnel");
@@ -746,7 +754,7 @@ try {
       assert.equal(configured.connectors.secureMcp.runtime, null);
       assert.equal(configured.connectors.secureMcp.attachment, null);
       await window
-        .getByRole("button", { name: "Replace credentials", exact: true })
+        .getByRole("button", { name: "Edit connection", exact: true })
         .click();
       assert.equal(
         await window.getByLabel("Runtime key", { exact: true }).inputValue(),
@@ -755,18 +763,11 @@ try {
       await window
         .getByLabel("Runtime key", { exact: true })
         .fill("unused-fixture-replacement-runtime-key");
-      await window
-        .getByRole("button", { name: "Keep saved credentials", exact: true })
-        .click();
+      await window.getByRole("button", { name: "Cancel", exact: true }).click();
       assert.deepEqual(await readSetupSettings(window), configured);
     }
-    // Exercise the actual sequential Setup navigation, then the two-stage
-    // native folder selection and the separate access/workspace checks.
-    await window
-      .locator(".setup-navigation")
-      .getByRole("button", { name: "Continue", exact: true })
-      .click();
-    await window.locator('.setup-page[data-setup-step="folders"]').waitFor();
+    // The selected design keeps Workspaces directly reachable from Setup.
+    await setupStep(window, "folders", "Workspaces");
     await setupAction(window, "Add folder…");
     await setupAction(window, "Add selected folder read-only");
     // Settings retains hidden pages; Diagnostics projects the same folder.
@@ -939,7 +940,7 @@ try {
       assert.equal(fixtureVerifications, 0, "POLICY_SAVE_REPLAYED_ATTACHMENT");
       // Readiness stayed withdrawn through Quit/reopen. Only the normal
       // workspace command performs fresh Go inspection under the new policy.
-      await setupStep(window, "folders", "Folders & access");
+      await setupStep(window, "folders", "Workspaces");
       const verificationStarted = Date.now();
       await setupAction(window, "Verify workspace");
       const reverified = await readSetupSettings(window);
@@ -986,14 +987,27 @@ try {
       continue;
     }
     await setupStep(window, "connection", "Connection");
-    await setupAction(window, "Start connection");
+    await setupAction(window, "Connect this Mac");
     let state = await readSetupSettings(window);
     assert.equal(state.connectors.secureMcp.runtime.state, "ready");
     assert.equal(state.connectors.secureMcp.attachment, null);
     assert.equal(state.setup.chatgpt.verified, null);
     const startedRuntime = state.connectors.secureMcp.runtime.runtimeGeneration;
-    await setupAction(window, "Check local connection");
-    await setupAction(window, "Reconnect");
+    await setupAction(window, "Check connection");
+    await window
+      .locator(".setup-page")
+      .getByRole("button", { name: "Connection diagnostics", exact: true })
+      .click();
+    await window
+      .locator(".settings-page > div:not([hidden])")
+      .getByRole("button", { name: "Reconnect", exact: true })
+      .click();
+    await window
+      .locator('.settings-page > p[role="status"]')
+      .filter({ hasText: "Action confirmed" })
+      .waitFor();
+    await openSetup(window);
+    await setupStep(window, "connection", "Connection");
     state = await readSetupSettings(window);
     assert.equal(state.connectors.secureMcp.runtime.state, "ready");
     assert.notEqual(

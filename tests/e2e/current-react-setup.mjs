@@ -105,7 +105,7 @@ export async function reviewSetupWithoutChanges(page, ready) {
   await page.locator(".setup-page").waitFor();
   for (const [step, label] of [
     ["connection", "Connection"],
-    ["folders", "Folders & access"],
+    ["folders", "Workspaces"],
     ["attachment", "Add to ChatGPT"],
   ])
     await setupStep(page, step, label);
