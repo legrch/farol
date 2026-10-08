@@ -690,6 +690,10 @@ kbd {
   color: var(--sheet);
   background: var(--accent);
 }
+.primary:hover:not(:disabled) {
+  background: var(--accent);
+  filter: brightness(1.08);
+}
 .subtle {
   background: transparent;
   color: var(--accent);

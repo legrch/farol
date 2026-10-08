@@ -23,10 +23,10 @@
 }
 .setup-checklist-row {
   display: grid;
-  grid-template-columns: 34px minmax(0, 1fr) auto;
-  gap: 16px;
+  grid-template-columns: 35px minmax(0, 1fr) auto;
+  gap: 14px;
   align-items: center;
-  padding: 24px 0;
+  padding: 21px 0;
   border-bottom: 1px solid var(--line);
 }
 .setup-check-mark {
@@ -34,8 +34,8 @@
   flex: none;
   align-items: center;
   justify-content: center;
-  width: 34px;
-  height: 34px;
+  width: 32px;
+  height: 32px;
   border-radius: 50%;
   background: var(--button);
   color: var(--muted);
