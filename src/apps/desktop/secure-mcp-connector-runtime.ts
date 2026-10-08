@@ -97,6 +97,8 @@ function runtimeError(code: string): never {
 
 class ConnectorProcessNotStarted extends Error {}
 
+export class ConnectorRuntimeEffectUnknown extends Error {}
+
 function absolutePath(value: string): boolean {
   return path.isAbsolute(value) && !value.includes("\0");
 }
@@ -324,6 +326,7 @@ export class SecureMcpConnectorRuntime {
   private readonly readinessTimeoutMs: number;
   private child: ConnectorChild | null = null;
   private uncertainStart: ConnectorStartResult | null = null;
+  private uncertainConfigure = false;
   private healthBaseUrl: string | null = null;
 
   constructor(
@@ -351,6 +354,10 @@ export class SecureMcpConnectorRuntime {
   }
 
   async configure(input: ConfigureInput): Promise<void> {
+    if (this.uncertainConfigure)
+      throw new ConnectorRuntimeEffectUnknown(
+        "CONNECTOR_CONFIGURE_OUTCOME_UNKNOWN",
+      );
     this.validateExecutable(input.executablePath);
     if (!/^[0-9A-Za-z._:-]{1,160}$/u.test(input.tunnelId)) {
       runtimeError("CONNECTOR_TUNNEL_ID_INVALID");
@@ -362,32 +369,46 @@ export class SecureMcpConnectorRuntime {
       runtimeError("CONNECTOR_CREDENTIAL_REFERENCE_INVALID");
     }
     await this.ensureRoots();
+    const command: ConnectorCommand = {
+      ...this.commandBase(input.executablePath),
+      arguments: [
+        "init",
+        "--force",
+        "--sample",
+        "sample_mcp_stdio_local",
+        "--profile",
+        PROFILE,
+        "--profile-dir",
+        this.profileRoot(),
+        "--tunnel-id",
+        input.tunnelId,
+        "--control-plane-api-key-ref",
+        input.credentialReference,
+        "--health-listen-addr",
+        "127.0.0.1:0",
+        "--mcp-command",
+        mcpCommand(input.mcp),
+      ],
+      timeoutMs: 15_000,
+    };
     try {
-      await this.run({
-        ...this.commandBase(input.executablePath),
-        arguments: [
-          "init",
-          "--force",
-          "--sample",
-          "sample_mcp_stdio_local",
-          "--profile",
-          PROFILE,
-          "--profile-dir",
-          this.profileRoot(),
-          "--tunnel-id",
-          input.tunnelId,
-          "--control-plane-api-key-ref",
-          input.credentialReference,
-          "--health-listen-addr",
-          "127.0.0.1:0",
-          "--mcp-command",
-          mcpCommand(input.mcp),
-        ],
-        timeoutMs: 15_000,
-      });
-    } catch {
+      await this.run(command);
+    } catch (error) {
+      // ENOENT/EACCES are launch refusals. Any other failure may follow a
+      // partial --force profile write, so no second init is admissible here.
+      const code = (error as NodeJS.ErrnoException)?.code;
+      if (code !== "ENOENT" && code !== "EACCES") {
+        this.uncertainConfigure = true;
+        throw new ConnectorRuntimeEffectUnknown(
+          "CONNECTOR_CONFIGURE_OUTCOME_UNKNOWN",
+        );
+      }
       runtimeError("CONNECTOR_CONFIGURE_FAILED");
     }
+  }
+
+  hasUnresolvedEffect(): boolean {
+    return this.uncertainConfigure || this.uncertainStart !== null;
   }
 
   async doctor(input: Readonly<{ executablePath: string }>): Promise<void> {

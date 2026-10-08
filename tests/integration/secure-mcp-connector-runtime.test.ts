@@ -7,6 +7,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  ConnectorRuntimeEffectUnknown,
   SecureMcpConnectorRuntime,
   observedConnectorChild,
   type ConnectorChild,
@@ -76,6 +77,67 @@ function option(command: ConnectorCommand, name: string): string {
 }
 
 describe("secure MCP connector runtime", () => {
+  it("keeps an uncertain configure effect latched under its original invocation", async () => {
+    const selected = await fixture();
+    const run = vi.fn<ConnectorCommandRunner>(async () => {
+      throw new Error("init reply lost after profile write");
+    });
+    const runtime = new SecureMcpConnectorRuntime(
+      {
+        root: selected.runtimeRoot,
+        homePath: selected.root,
+        tempPath: selected.root,
+      },
+      { run },
+    );
+    const input = {
+      executablePath: selected.executablePath,
+      tunnelId: "tunnel_farol_next",
+      credentialReference: `file:${selected.credentialPath}`,
+      mcp: {
+        electronPath: selected.electronPath,
+        entryPath: selected.mcpEntry,
+        launchContractPath: selected.launchContract,
+      },
+    };
+    await expect(runtime.configure(input)).rejects.toBeInstanceOf(
+      ConnectorRuntimeEffectUnknown,
+    );
+    expect(runtime.hasUnresolvedEffect()).toBe(true);
+    await expect(runtime.configure(input)).rejects.toThrow(
+      "CONNECTOR_CONFIGURE_OUTCOME_UNKNOWN",
+    );
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("treats a refused executable launch as known without latching a profile write", async () => {
+    const selected = await fixture();
+    const runtime = new SecureMcpConnectorRuntime(
+      {
+        root: selected.runtimeRoot,
+        homePath: selected.root,
+        tempPath: selected.root,
+      },
+      {
+        run: async () => {
+          throw Object.assign(new Error("not launched"), { code: "ENOENT" });
+        },
+      },
+    );
+    await expect(
+      runtime.configure({
+        executablePath: selected.executablePath,
+        tunnelId: "tunnel_farol_next",
+        credentialReference: `file:${selected.credentialPath}`,
+        mcp: {
+          electronPath: selected.electronPath,
+          entryPath: selected.mcpEntry,
+          launchContractPath: selected.launchContract,
+        },
+      }),
+    ).rejects.toThrow("CONNECTOR_CONFIGURE_FAILED");
+    expect(runtime.hasUnresolvedEffect()).toBe(false);
+  });
   it("does not mistake a child error for process exit", async () => {
     const events = new EventEmitter();
     const child = Object.assign(events, {

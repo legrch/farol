@@ -423,7 +423,10 @@ import {
 } from "./connector-resume-policy";
 import { identityBoundWorkspaces } from "./identity-bound-workspaces";
 import { AuthorityTransitionReservation } from "./authority-transition";
-import { SecureMcpConnectorRuntime } from "./secure-mcp-connector-runtime";
+import {
+  ConnectorRuntimeEffectUnknown,
+  SecureMcpConnectorRuntime,
+} from "./secure-mcp-connector-runtime";
 import { clearConnectorVerificationReceipt } from "../../modules/computer/infra/mcp/connector-verification-receipt";
 import { PrivateExecutionFence } from "../../modules/computer/infra/mcp/execution-fence";
 import { PrivateMcpLifecycle } from "../../modules/computer/infra/mcp/private-mcp-lifecycle";
@@ -4125,6 +4128,8 @@ async function startSecureMcpConnector(
   ) {
     return configurationFailure("SETTINGS_UNAVAILABLE");
   }
+  if (secureMcpConnectorRuntime.hasUnresolvedEffect())
+    return configurationFailure("CONNECTOR_RUNTIME_OUTCOME_UNKNOWN");
   const retained = configuration.snapshot();
   if (
     retained.status === "ready" &&
@@ -4280,14 +4285,19 @@ async function startSecureMcpConnector(
           launchContractPath: launchFile,
         },
       });
-    } catch {
+    } catch (error) {
+      const unknown = error instanceof ConnectorRuntimeEffectUnknown;
       const failed = await recordConnectorRuntime(
-        "unreachable",
+        unknown ? "outcome_unknown" : "unreachable",
         attempt("configure"),
         snapshot.settings.computer.generation,
       );
       if (failed) return failed;
-      return configurationFailure("CONNECTOR_CONFIGURE_FAILED");
+      return configurationFailure(
+        unknown
+          ? "CONNECTOR_RUNTIME_OUTCOME_UNKNOWN"
+          : "CONNECTOR_CONFIGURE_FAILED",
+      );
     }
     try {
       await secureMcpConnectorRuntime.doctor({
@@ -5646,6 +5656,8 @@ async function configureAdmittedProduct(
       });
     }
     case "connector.configure": {
+      if (secureMcpConnectorRuntime?.hasUnresolvedEffect())
+        return configurationFailure("CONNECTOR_RUNTIME_OUTCOME_UNKNOWN");
       if (!connectorCredentialStore || secureMcpConnectorRuntime?.isRunning()) {
         return configurationFailure(
           secureMcpConnectorRuntime?.isRunning()
