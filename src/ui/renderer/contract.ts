@@ -102,6 +102,10 @@ export type WindowSnapshot = Readonly<{
   status: "starting" | "current" | "stale" | "unavailable" | "incompatible";
   environment: "preview" | "dev";
   buildId: string | null;
+  installedVersion: Readonly<{
+    version: string;
+    buildVersion: string | null;
+  }> | null;
   configuration: ProductConfigurationSnapshot | null;
   tasks: ProductTasksState;
   activity: readonly ActivityEntry[];

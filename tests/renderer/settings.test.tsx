@@ -1597,11 +1597,36 @@ describe("bounded Settings writer", () => {
     });
     expect(h.host.textContent).toContain("Update status");
     expect(h.host.textContent).toContain(
-      "Version 0.2.0-owner.beta.4 is downloaded and ready to install. It is not installed yet.",
+      "Installed: Farol 0.1.8-owner.beta.1 (build 10).",
+    );
+    expect(h.host.textContent).toContain(
+      "Downloaded: Farol 0.2.0-owner.beta.4. Ready to install; this version is not installed yet.",
     );
     expect(h.host.textContent).not.toContain("Installed update");
     expect(h.host.textContent).toContain("UPDATE_BROWSER_STATE_UNKNOWN");
+    expect(h.host.textContent).toContain(
+      "this update action cannot be retried from here",
+    );
+    expect(h.button("Check for updates once").disabled).toBe(true);
     expect(h.calls()).toEqual([]);
+  });
+  it("rechecks the latest update state before a rendered Check can dispatch", async () => {
+    const h = await mount("updates");
+    expect(h.button("Check for updates once").disabled).toBe(false);
+    vi.mocked(h.f.api.installedUpdate).mockClear();
+    const latest = {
+      ...h.c.getSnapshot(),
+      update: {
+        phase: "ready" as const,
+        version: "0.2.0-owner.beta.4",
+        deferred: false,
+        blockedBy: "UPDATE_BROWSER_STATE_UNKNOWN",
+      },
+    };
+    const read = vi.spyOn(h.c, "getSnapshot").mockReturnValue(latest);
+    await h.click("Check for updates once");
+    read.mockRestore();
+    expect(h.f.api.installedUpdate).not.toHaveBeenCalled();
   });
   it("preserves installed update diagnostics even with UPDATE_NOT_INSTALLED", async () => {
     const h = await mount("updates", settings(), "preview", {
@@ -1612,7 +1637,7 @@ describe("bounded Settings writer", () => {
     expect(h.host.textContent).toContain("unavailable");
     expect(h.host.textContent).toContain("UPDATE_NOT_INSTALLED");
     expect(h.host.textContent).not.toContain("Development app");
-    expect(h.button("Check for updates once").disabled).toBe(false);
+    expect(h.button("Check for updates once").disabled).toBe(true);
     vi.mocked(h.f.api.installedUpdate).mockClear();
     await h.click("Review update");
     expect(h.c.getSnapshot().overlay).toBe("update");

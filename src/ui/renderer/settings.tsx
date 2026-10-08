@@ -18,6 +18,7 @@ import {
   type ProductSettings,
 } from "../../pkg/product-settings/contract";
 import { folderAccessChecked, folderDisplayName } from "../folder-access-state";
+import { canRecheckUpdateAdmission } from "../../modules/release/contract/installed-update";
 import { computerSetup } from "./computer-setup";
 import { commandAllowed, dependencyFences } from "./command-eligibility";
 import { ChatDirect } from "./chat-direct";
@@ -2500,10 +2501,21 @@ function Shortcuts({ snapshot, facade }: PageProps) {
     </>
   );
 }
+function updateCheckAllowed(update: WindowSnapshot["update"]): boolean {
+  return (
+    update.phase === "idle" ||
+    (update.phase === "failed" && !update.recoveryRequired) ||
+    (update.phase === "ready" &&
+      update.blockedBy !== null &&
+      canRecheckUpdateAdmission(update.blockedBy))
+  );
+}
 function Updates({ snapshot, facade, actions }: PageProps) {
   const busy = useRef(false);
   const [checked, setChecked] = useState(false);
   const update = snapshot.update;
+  const current =
+    snapshot.status === "current" ? snapshot.installedVersion : null;
   if (snapshot.environment === "dev") {
     return (
       <>
@@ -2521,15 +2533,27 @@ function Updates({ snapshot, facade, actions }: PageProps) {
     <>
       <h2>Updates</h2>
       <Group title="Update status">
+        <p className="description">
+          {current
+            ? `Installed: Farol ${current.version}${current.buildVersion ? ` (build ${current.buildVersion})` : ""}.`
+            : "Installed version could not be confirmed from this app session."}
+        </p>
         <p className="badges">
           {update.phase === "ready"
-            ? `Version ${update.version} is downloaded and ready to install. It is not installed yet.`
+            ? `Downloaded: Farol ${update.version}. Ready to install; this version is not installed yet.`
             : `${update.phase}${"version" in update ? ` · ${update.version}` : ""}`}
         </p>
         {"code" in update && <p className="notice">{update.code}</p>}
         {"blockedBy" in update && update.blockedBy && (
           <p className="notice">{update.blockedBy}</p>
         )}
+        {update.phase === "ready" &&
+          update.blockedBy === "UPDATE_BROWSER_STATE_UNKNOWN" && (
+            <p className="description" role="status">
+              Farol could not confirm that ChatGPT is idle. Review current work
+              in Diagnostics; this update action cannot be retried from here.
+            </p>
+          )}
         <div className="control-row">
           <button
             type="button"
@@ -2543,16 +2567,16 @@ function Updates({ snapshot, facade, actions }: PageProps) {
             className="subtle"
             disabled={
               checked ||
+              !updateCheckAllowed(update) ||
               actions.disabled ||
-              !commandAllowed(snapshot, "general.update") ||
-              update.phase === "checking" ||
-              update.phase === "downloading" ||
-              update.phase === "applying"
+              !commandAllowed(snapshot, "general.update")
             }
             onClick={() => {
+              const latest = facade.getSnapshot();
               if (
                 busy.current ||
-                !commandAllowed(facade.getSnapshot(), "general.update")
+                !updateCheckAllowed(latest.update) ||
+                !commandAllowed(latest, "general.update")
               )
                 return;
               busy.current = true;

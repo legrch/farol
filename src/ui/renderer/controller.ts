@@ -118,6 +118,7 @@ const initial: WindowSnapshot = {
   status: "starting",
   environment: "preview",
   buildId: null,
+  installedVersion: null,
   configuration: null,
   tasks: { revision: 0, tasks: [] },
   activity: [],
@@ -294,6 +295,10 @@ export class WindowController implements RendererFacade {
         this.patch({
           environment: data.environment,
           buildId: data.build.buildId,
+          installedVersion: {
+            version: data.build.version,
+            buildVersion: data.build.buildVersion ?? null,
+          },
           runtime:
             this.runtimeRevision === runtimeAtStart
               ? data.runtimeState
