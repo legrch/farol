@@ -95,6 +95,8 @@ function runtimeError(code: string): never {
   throw new Error(code);
 }
 
+class ConnectorProcessNotStarted extends Error {}
+
 function absolutePath(value: string): boolean {
   return path.isAbsolute(value) && !value.includes("\0");
 }
@@ -253,8 +255,12 @@ process.stdin.resume();
 
 const startProcess: ConnectorProcessStarter = async (command) => {
   if (process.platform !== "darwin")
-    runtimeError("CONNECTOR_PROCESS_GROUP_UNSUPPORTED");
-  await fs.access(command.executablePath, fs.constants.X_OK);
+    throw new ConnectorProcessNotStarted("CONNECTOR_PROCESS_GROUP_UNSUPPORTED");
+  try {
+    await fs.access(command.executablePath, fs.constants.X_OK);
+  } catch {
+    throw new ConnectorProcessNotStarted("CONNECTOR_EXECUTABLE_UNAVAILABLE");
+  }
   const child = spawn(
     process.execPath,
     [
@@ -317,6 +323,7 @@ export class SecureMcpConnectorRuntime {
   private readonly id: () => string;
   private readonly readinessTimeoutMs: number;
   private child: ConnectorChild | null = null;
+  private uncertainStart: ConnectorStartResult | null = null;
   private healthBaseUrl: string | null = null;
 
   constructor(
@@ -406,6 +413,9 @@ export class SecureMcpConnectorRuntime {
   }
 
   async start(input: StartInput): Promise<ConnectorStartResult> {
+    // A lost spawn acknowledgement is not authority to launch another child.
+    // Return the original identity even when a later caller supplies new input.
+    if (this.uncertainStart) return this.uncertainStart;
     this.validateStartInput(input);
     if (this.child?.exitCode === null) {
       runtimeError("CONNECTOR_ALREADY_RUNNING");
@@ -449,12 +459,17 @@ export class SecureMcpConnectorRuntime {
         ],
         timeoutMs: 0,
       });
-    } catch {
-      return {
-        state: "unreachable",
+    } catch (error) {
+      const result: ConnectorStartResult = {
+        state:
+          error instanceof ConnectorProcessNotStarted
+            ? "unreachable"
+            : "outcome_unknown",
         runtimeGeneration,
         code: "CONNECTOR_START_FAILED",
       };
+      if (result.state === "outcome_unknown") this.uncertainStart = result;
+      return result;
     }
     this.child = child;
     const deadline = this.now() + this.readinessTimeoutMs;
@@ -523,6 +538,7 @@ export class SecureMcpConnectorRuntime {
   }
 
   async stop(): Promise<void> {
+    if (this.uncertainStart) runtimeError("CONNECTOR_STOP_UNCONFIRMED");
     const child = this.child;
     this.healthBaseUrl = null;
     if (!child) return;
@@ -541,7 +557,7 @@ export class SecureMcpConnectorRuntime {
   }
 
   isRunning(): boolean {
-    return this.child?.exitCode === null;
+    return this.uncertainStart !== null || this.child?.exitCode === null;
   }
 
   private commandBase(

@@ -194,6 +194,41 @@ describe("secure MCP connector runtime", () => {
     expect(runtime.isRunning()).toBe(false);
   });
 
+  it("retains the original unknown spawn outcome and refuses a second launch or clean stop", async () => {
+    const selected = await fixture();
+    const start = vi.fn<ConnectorProcessStarter>(async () => {
+      throw new Error("spawn acknowledgement lost after child creation");
+    });
+    const runtime = new SecureMcpConnectorRuntime(
+      {
+        root: selected.runtimeRoot,
+        homePath: selected.root,
+        tempPath: selected.root,
+      },
+      { start, id: () => "original-spawn" },
+    );
+    const original = {
+      executablePath: selected.executablePath,
+      executableSha256: "a".repeat(64),
+      connectorGeneration: 1,
+      computerGeneration: 1,
+      buildId: "b".repeat(64),
+      launchContractSha256: "c".repeat(64),
+    };
+    const first = await runtime.start(original);
+    expect(first).toMatchObject({
+      state: "outcome_unknown",
+      code: "CONNECTOR_START_FAILED",
+    });
+    expect(runtime.isRunning()).toBe(true);
+    expect(await runtime.start({ ...original, connectorGeneration: 2 })).toBe(
+      first,
+    );
+    expect(start).toHaveBeenCalledTimes(1);
+    await expect(runtime.stop()).rejects.toThrow("CONNECTOR_STOP_UNCONFIRMED");
+    expect(runtime.isRunning()).toBe(true);
+  });
+
   it("configures, diagnoses, starts, proves ready, and stops one owned daemon", async () => {
     const selected = await fixture();
     const run = vi.fn<ConnectorCommandRunner>(async () => ({

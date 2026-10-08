@@ -4125,6 +4125,14 @@ async function startSecureMcpConnector(
   ) {
     return configurationFailure("SETTINGS_UNAVAILABLE");
   }
+  const retained = configuration.snapshot();
+  if (
+    retained.status === "ready" &&
+    (retained.settings.connectors.secureMcp.runtime?.state ===
+      "outcome_unknown" ||
+      retained.settings.setup.connect.outcomeUnknown)
+  )
+    return configurationFailure("CONNECTOR_RUNTIME_OUTCOME_UNKNOWN");
   if (connectorTaskAdmission) {
     return configurationFailure("CONNECTOR_ALREADY_RUNNING");
   }
@@ -4169,6 +4177,11 @@ async function startSecureMcpConnector(
       return configurationFailure("SETTINGS_UNAVAILABLE");
     }
     const connector = snapshot.settings.connectors.secureMcp;
+    if (
+      connector.runtime?.state === "outcome_unknown" ||
+      snapshot.settings.setup.connect.outcomeUnknown
+    )
+      return configurationFailure("CONNECTOR_RUNTIME_OUTCOME_UNKNOWN");
     if (!connector.tunnelClient || !connector.tunnelId) {
       return configurationFailure("CONNECTOR_CONFIGURE_FAILED");
     }
