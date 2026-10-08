@@ -1,5 +1,16 @@
 import type { RetainedReleaseManifest } from "../domain/github-release-contract";
 
+// Keep in sync with the release contract's presentation eligibility. The
+// application guard remains authoritative even for callers bypassing the UI.
+const recheckableAdmissionBlocks = new Set([
+  "UPDATE_CONNECTOR_ACTIVE",
+  "UPDATE_TASK_ROUTE_NEEDS_DRAIN",
+  "UPDATE_BROWSER_OPEN",
+  "UPDATE_BROWSER_BUSY",
+  "UPDATE_BROWSER_DRAFT",
+  "UPDATE_WORK_PENDING",
+]);
+
 export const UPDATE_RECHECK_MS = 6 * 60 * 60 * 1_000;
 
 export type ReadyUpdate = Readonly<{
@@ -191,7 +202,8 @@ export class InstalledUpdater {
       !this.closed &&
       !this.busy &&
       this.view.phase === "ready" &&
-      this.view.blockedBy !== null
+      this.view.blockedBy !== null &&
+      recheckableAdmissionBlocks.has(this.view.blockedBy)
     ) {
       this.publish({ ...this.view, blockedBy: null });
       return;
@@ -286,7 +298,13 @@ export class InstalledUpdater {
   }
 
   async restart(): Promise<void> {
-    if (this.closed || this.busy || this.view.phase !== "ready" || !this.ready)
+    if (
+      this.closed ||
+      this.busy ||
+      this.view.phase !== "ready" ||
+      this.view.blockedBy !== null ||
+      !this.ready
+    )
       return;
     this.begin();
     const version = this.ready.manifest.version;

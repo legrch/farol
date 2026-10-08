@@ -427,6 +427,26 @@ describe("installed update orchestration (port fixture, no native or GitHub acce
     expect(ports.download).toHaveBeenCalledTimes(1);
   });
 
+  it.each([
+    "UPDATE_BROWSER_STATE_UNKNOWN",
+    "UPDATE_BROWSER_RELEASE_UNCONFIRMED",
+    "TASK_OUTCOME_UNKNOWN",
+    "UPDATE_UNCLASSIFIED",
+  ])("retains %s across Check and refuses another Restart", async (code) => {
+    const { updater, ports } = fixture();
+    ports.restart.mockResolvedValueOnce({ status: "blocked", code });
+    await updater.initialize();
+    await updater.check();
+    await updater.restart();
+    expect(updater.snapshot()).toMatchObject({ phase: "ready", blockedBy: code });
+    await updater.check(true);
+    await updater.restart();
+    expect(updater.snapshot()).toMatchObject({ phase: "ready", blockedBy: code });
+    expect(ports.restart).toHaveBeenCalledTimes(1);
+    expect(ports.discover).toHaveBeenCalledTimes(1);
+    expect(ports.download).toHaveBeenCalledTimes(1);
+  });
+
   it.each(["accepted", "unknown", "throw"])(
     "never repeats a helper handoff after %s",
     async (mode) => {

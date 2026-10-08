@@ -105,7 +105,10 @@ describe("installed update view", () => {
       expect(f.node("summary").textContent).toContain(reason);
       expect(f.node("notice").hidden).toBe(false);
       expect(f.node("notice-restart").disabled).toBe(true);
-      expect(f.node("check").disabled).toBe(false);
+      expect(f.node("check").disabled).toBe(
+        code === "UPDATE_BROWSER_STATE_UNKNOWN" ||
+          code === "UPDATE_BROWSER_RELEASE_UNCONFIRMED",
+      );
       expect(f.onCommand).not.toHaveBeenCalled();
     },
   );
@@ -117,6 +120,9 @@ describe("installed update view", () => {
     );
     expect(f.node("summary").textContent).not.toContain("check again");
     expect(f.node("restart").disabled).toBe(true);
+    expect(f.node("check").disabled).toBe(true);
+    expect(f.node("check").textContent).toBe("Update blocked");
+    f.node("check").click();
     expect(f.onCommand).not.toHaveBeenCalled();
   });
   it("exposes only measured recovery or rollback and never dispatches while rendering", () => {

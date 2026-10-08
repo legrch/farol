@@ -1,4 +1,5 @@
 import type { InstalledUpdateView } from "../modules/release/contract/installed-update";
+import { canRecheckUpdateAdmission } from "../modules/release/contract/installed-update";
 
 export type InstalledUpdateViewCommand =
   "check" | "later" | "restart" | "recover" | "rollback";
@@ -170,7 +171,9 @@ export function createInstalledUpdateView(
         (view.phase === "failed" && view.recoveryRequired);
       const canCheck =
         view.phase === "idle" ||
-        (ready && view.blockedBy !== null) ||
+        (ready &&
+          view.blockedBy !== null &&
+          canRecheckUpdateAdmission(view.blockedBy)) ||
         (view.phase === "failed" && !view.recoveryRequired);
       text(summary, message);
       text(railCopy, message);
@@ -208,7 +211,9 @@ export function createInstalledUpdateView(
               : view.phase === "downloading"
                 ? "Downloading…"
                 : ready && view.blockedBy !== null
-                  ? "Check again"
+                  ? canRecheckUpdateAdmission(view.blockedBy)
+                    ? "Check again"
+                    : "Update blocked"
                   : "Check for Updates…",
           );
         } else {

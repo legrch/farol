@@ -38,6 +38,23 @@ export const InstalledUpdateViewSchema = z.discriminatedUnion("phase", [
     ),
 ]);
 export type InstalledUpdateView = z.infer<typeof InstalledUpdateViewSchema>;
+
+// Only known, transient admission refusals may be cleared by an explicit
+// check. The next Restart still has to acquire every live admission fence.
+// Unknown browser/release state and unclassified codes remain fail-closed.
+const recheckableAdmissionBlocks = new Set([
+  "UPDATE_CONNECTOR_ACTIVE",
+  "UPDATE_TASK_ROUTE_NEEDS_DRAIN",
+  "UPDATE_BROWSER_OPEN",
+  "UPDATE_BROWSER_BUSY",
+  "UPDATE_BROWSER_DRAFT",
+  "UPDATE_WORK_PENDING",
+]);
+
+export function canRecheckUpdateAdmission(code: string): boolean {
+  return recheckableAdmissionBlocks.has(code);
+}
+
 export const InstalledUpdateCommandSchema = z.strictObject({
   kind: z.enum(["status", "check", "later", "restart", "recover", "rollback"]),
 });
