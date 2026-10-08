@@ -36,18 +36,28 @@ coverage suite, Hunt and source/history secret scanning. Hunt builds the product
 and requires a clean committed tree. During implementation, run the targeted
 tests and coverage first, inspect the complete diff, and make a coherent checkpoint
 commit before the final clean-tree gate. A checkpoint is not final acceptance.
+Commands that build `_output/build/app` require an exclusive build phase: Quit
+the running source Dev and confirm its original processes have finished before
+running Hunt, build-producing integration checks, CI or packaging. Do not replace
+the Go executable while the live application's terminal recorder still needs it.
 
 ```sh
-task package
+task package -- --go-inputs=/absolute/path/go-build-inputs.json
 npm run verify:package
 ```
 
 Packaging starts with an empty environment and isolated Python guard. Its fixed
 system/Homebrew PATH must resolve a declared Node version. It accepts only exact
 committed inputs, authenticated compiler/dependencies, the reviewed Electron
-runtime, and matching resource/receipt contracts. The artifact is a local
-unsigned schema 6 `_output/package/Farol.app`; creating it does not install or
-activate anything. Historical schema 5 packages used `Farol Next Preview.app`.
+runtime, and matching resource/receipt contracts. For `0.2`, packaging requires
+declared Go backend inputs and a Go-enabled build manifest (schema 4). The unsigned
+artifact uses package schema 7 at `_output/package/Farol.app`, including the real
+`farol-backend` and its `core-artifact.json`. Creating it does not install or
+activate anything. See the [approved Go input declaration](../README.md) for the
+Go 1.26.2 SDK, independently approved SDK digest and authenticated offline module
+inputs. The separately authenticated native archive helper is also required;
+backend inputs do not replace its toolchain checks. Historical schema 6 packages
+had no required Go backend, and schema 5 used `Farol Next Preview.app`.
 The hidden NEW bundle/profile identities remain compatibility boundaries;
 moving an existing preview install to the current basename requires the explicit
 [closed product cutover](product-cutover.md). `task run` is a separate owner action.
@@ -59,6 +69,19 @@ The tunnel-client version and digests required by tests are frozen separately in
 `tooling/external-dependencies.json`, without importing the V0 runtime registry.
 
 Native packaged checks remain separate:
+
+```sh
+task test:e2e:guided-setup:package -- --behavior
+task test:e2e:setup-config-error:package
+task test:e2e:update:package
+```
+
+These consume the sealed package. The guided behavior journey saves file policy,
+Quits and reopens disposable state; its local attachment fixture is not an external
+ChatGPT witness. Configuration-fault and updater tests do not prove an installed
+swap, app-and-state restoration or the first launch after helper completion.
+
+The broader preview fixture suite has separate display requirements:
 
 ```sh
 task test:e2e -- --skip-native-focus
