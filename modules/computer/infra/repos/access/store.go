@@ -169,6 +169,10 @@ func (s *Store) next(ctx context.Context, revision uint64) (state, error) {
 	return n, nil
 }
 func (s *Store) commit(ctx context.Context, n state) error {
+	return s.commitWithPublication(ctx, n, nil)
+}
+
+func (s *Store) commitWithPublication(ctx context.Context, n state, withPublication func(func() error) error) error {
 	if ctx.Err() != nil {
 		return authority.Fail("WORKSPACE_REQUEST_CANCELLED", "native-workspace")
 	}
@@ -180,8 +184,11 @@ func (s *Store) commit(ctx context.Context, n state) error {
 	if _, err = decodeState(s.binding, raw); err != nil {
 		return err
 	}
-	if err = s.disk.write(raw, s.digest); err != nil {
-		s.poisoned = true
+	if err = s.disk.writeWithPublication(raw, s.digest, withPublication); err != nil {
+		var refused *publicationRefusal
+		if !errors.As(err, &refused) {
+			s.poisoned = true
+		}
 		return err
 	}
 	s.current = n

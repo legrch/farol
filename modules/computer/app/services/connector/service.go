@@ -144,6 +144,8 @@ func (s *Service) Publish(ctx context.Context) error {
 // Pending/publishing is absent; unsettled/withdrawn is unavailable. No journal,
 // filesystem, native host or provider call is made on entry. Only one workspace-parent
 // mkdir or final file publication callback may run native IO under these locks.
+// Trusted root approval renewal may also publish one prepared Store snapshot;
+// staging, durability and readback stay outside, with no owner/Store reentry.
 func (s *Service) WithCurrent(ctx context.Context, inspect func(*port.TaskBinding) error) error {
 	if s == nil || inspect == nil {
 		return failure()

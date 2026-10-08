@@ -14,7 +14,9 @@ import (
 // Only trusted composition can activate the exact fence after known admission.
 // Computer's lock order is AccessRepository -> this fence -> optional account
 // approval -> real Chat owner. The account guard is final-Send-only.
-// Neither callback performs IO, mutation, reentry or Computer reacquisition.
+// Admission callbacks perform no IO or mutation. The private approval-renewal
+// publication may perform one final Store snapshot rename under this fence;
+// staging, durability and readback stay outside. No callback reenters Computer.
 type activationFence struct {
 	mu        sync.Mutex
 	revision  uint64

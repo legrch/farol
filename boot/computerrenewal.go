@@ -21,6 +21,10 @@ type connectorRenewalScope struct {
 	seal  port.ConnectorExecutionCeiling
 }
 
+type renewalApprovalStore interface {
+	UpdateApprovalWithPublication(context.Context, uint64, authority.Approval, func(func() error) error) error
+}
+
 func (p *knownComputerPublication) current() authority.Approval {
 	if p.currentApproval != nil {
 		return p.currentApproval.Clone()
@@ -99,8 +103,13 @@ func (s *ComputerIngress) refreshApproval(ctx context.Context, scope *connectorR
 	if err != nil || plan == nil || !plan.Publish {
 		return err
 	}
-	// Qualify the original live participant independently. Revision CAS prevents
-	// a concurrent revocation from being hidden by this time-only Store update.
+	publicationStore, ok := s.store.(renewalApprovalStore)
+	if !ok {
+		return computerUnavailable()
+	}
+	// Qualify the original live participant independently. Store CAS protects
+	// policy revocation; the final publication gate below also protects live
+	// withdrawal, which does not itself change the Store revision.
 	if scope != nil {
 		err = s.store.WithSnapshot(ctx, scope.seal.Participant.ParticipantID, func(snapshot port.AccessSnapshot) error {
 			if snapshot.Participant == nil || snapshot.Approval == nil ||
@@ -124,7 +133,17 @@ func (s *ComputerIngress) refreshApproval(ctx context.Context, scope *connectorR
 	if err = s.claim(operation); err != nil {
 		return err
 	}
-	if err = s.store.UpdateApproval(ctx, revision, plan.Approval); err != nil {
+	if err = publicationStore.UpdateApprovalWithPublication(ctx, revision, plan.Approval, func(publish func() error) error {
+		return s.withRenewalCurrent(ctx, scope, func() error {
+			if s.publication != publication || !publication.renewable {
+				return computerUnavailable()
+			}
+			if now := clock.Now(); now.Before(observedAt) || now.Sub(observedAt) > authority.ApprovalRefreshObservationAge {
+				return computerUnavailable()
+			}
+			return publish()
+		})
+	}); err != nil {
 		// Store's classified pre-write/CAS refusal is known. Disk uncertainty or
 		// an unclassified result permanently fences the root, without retry.
 		var known *authority.Failure

@@ -80,6 +80,8 @@ type ConnectorJournal interface {
 // performs no IO. It serializes host/settings fences with inspect exactly once.
 // Only MutationRequest.WithPublication may perform bounded final native file
 // publication/verification/guarded undo inside inspect; other IO stays outside.
+// Trusted root approval renewal may perform one final prepared Store snapshot
+// rename here; its staging, durability and readback stay outside these gates.
 // true requires this exact authenticated host lifetime and unchanged policy
 // seal; time-only approval renewal is permitted. No permissive default exists.
 // Lock order: AccessSnapshot -> connector owner -> guard. Fence changes release

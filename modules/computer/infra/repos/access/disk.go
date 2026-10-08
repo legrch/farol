@@ -140,6 +140,18 @@ func (d *disk) create(raw []byte) error {
 	return nil
 }
 func (d *disk) write(raw []byte, expected [32]byte) error {
+	return d.writeWithPublication(raw, expected, nil)
+}
+
+// A current-consent refusal before rename is known and leaves Store usable for
+// safe observation/retirement. This classification never covers an attempted
+// publication or an error after it.
+type publicationRefusal struct{}
+
+func (*publicationRefusal) Error() string { return unavailable().Error() }
+func (*publicationRefusal) Unwrap() error { return unavailable() }
+
+func (d *disk) writeWithPublication(raw []byte, expected [32]byte, withPublication func(func() error) error) error {
 	if d.check() != nil {
 		return unavailable()
 	}
@@ -166,9 +178,36 @@ func (d *disk) write(raw []byte, expected [32]byte) error {
 	if err != nil || digest(current) != expected {
 		return unavailable()
 	}
-	// From the publication attempt onward an error may have changed current state.
-	// The caller poisons its owner, retains the file and never retries a mutation.
-	if unix.Renameat(d.dir, name, d.dir, stateName) != nil || d.syncDirectory(d.dir) != nil || d.check() != nil {
+	// Store is already locked. Acquire any current owner gates only at final
+	// publication, in Store -> owner order; never acquire Store inside them.
+	calls, attempted, publicationClosed := 0, false, false
+	var publicationErr error
+	publish := func() error {
+		if publicationClosed {
+			return unavailable()
+		}
+		calls++
+		if calls != 1 {
+			return unavailable()
+		}
+		attempted = true
+		if unix.Renameat(d.dir, name, d.dir, stateName) != nil {
+			publicationErr = &CommitFailure{Unknown: true}
+		}
+		return publicationErr
+	}
+	if withPublication == nil {
+		err = publish()
+	} else {
+		err = withPublication(publish)
+	}
+	publicationClosed = true
+	if !attempted {
+		return &publicationRefusal{}
+	}
+	// Once rename was attempted, a lost/malformed guard acknowledgement or any
+	// durability/readback failure remains UNKNOWN, even with visible new bytes.
+	if err != nil || calls != 1 || publicationErr != nil || d.syncDirectory(d.dir) != nil || d.check() != nil {
 		return &CommitFailure{Unknown: true}
 	}
 	current, err = d.read()

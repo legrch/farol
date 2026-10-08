@@ -11,6 +11,22 @@ import (
 // input comes only from current owner consent; task/participant input comes from
 // the trusted admission owner. A caller body cannot supply either proof.
 func (s *Store) UpdateApproval(ctx context.Context, revision uint64, value authority.Approval) error {
+	return s.updateApproval(ctx, revision, value, nil)
+}
+
+// UpdateApprovalWithPublication keeps the same Store CAS and policy checks.
+// Trusted composition holds current consent around one final snapshot rename;
+// staging, durability and readback stay outside those authority gates. The
+// callback is synchronous, calls publish exactly once only if current, and must
+// not reenter Store. No wire request can supply this guard.
+func (s *Store) UpdateApprovalWithPublication(ctx context.Context, revision uint64, value authority.Approval, withPublication func(func() error) error) error {
+	if withPublication == nil {
+		return unavailable()
+	}
+	return s.updateApproval(ctx, revision, value, withPublication)
+}
+
+func (s *Store) updateApproval(ctx context.Context, revision uint64, value authority.Approval, withPublication func(func() error) error) error {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 	n, err := s.next(ctx, revision)
@@ -44,7 +60,7 @@ func (s *Store) UpdateApproval(ctx context.Context, revision uint64, value autho
 	n.Approval = &value
 	n.Generation = value.Generation
 	n.SeenApproval = true
-	return s.commit(ctx, n)
+	return s.commitWithPublication(ctx, n, withPublication)
 }
 func (s *Store) RevokeApproval(ctx context.Context, revision uint64) error {
 	s.mutex.Lock()

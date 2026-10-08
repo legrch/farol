@@ -3,7 +3,6 @@ package boot
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"reflect"
 	"sync"
 	"testing"
@@ -27,18 +26,34 @@ type renewalStoreFixture struct {
 }
 
 func (s *renewalStoreFixture) UpdateApproval(ctx context.Context, revision uint64, a authority.Approval) error {
+	return s.updateApproval(ctx, revision, a, func(publish func() error) error { return publish() })
+}
+
+func (s *renewalStoreFixture) UpdateApprovalWithPublication(ctx context.Context, revision uint64, a authority.Approval, withPublication func(func() error) error) error {
+	return s.updateApproval(ctx, revision, a, withPublication)
+}
+
+func (s *renewalStoreFixture) updateApproval(ctx context.Context, revision uint64, a authority.Approval, withPublication func(func() error) error) error {
 	s.updates++
 	if s.beforeUpdate != nil {
 		if err := s.beforeUpdate(); err != nil {
 			return err
 		}
 	}
-	if ctx.Err() != nil || revision != s.revision || !authority.SameApprovalPolicy(s.approval, a) {
-		return errors.New("renewal CAS refused")
+	if ctx.Err() != nil {
+		return authority.Fail("WORKSPACE_REQUEST_CANCELLED", "native-workspace")
 	}
-	s.approval = a.Clone()
-	s.PutApproval(a)
-	s.revision++
+	if revision != s.revision || !authority.SameApprovalPolicy(s.approval, a) {
+		return authority.Fail("COMPUTER_AUTHORITY_STORE_UNAVAILABLE", "authority-store")
+	}
+	if err := withPublication(func() error {
+		s.approval = a.Clone()
+		s.PutApproval(a)
+		s.revision++
+		return nil
+	}); err != nil {
+		return authority.Fail("COMPUTER_AUTHORITY_STORE_UNAVAILABLE", "authority-store")
+	}
 	if s.afterUpdate != nil {
 		s.afterUpdate()
 	}
@@ -365,6 +380,50 @@ func TestComputerRenewalKnownPreWriteRevocationDoesNotBecomeUnknown(t *testing.T
 	}
 	if err := s.root.freezeForRetirement(context.Background()); err != nil {
 		t.Fatal("known pre-write refusal blocked retirement", err)
+	}
+}
+
+func TestComputerRenewalWithdrawalBeforePublicationNeverExtendsConsent(t *testing.T) {
+	for _, scope := range []string{"connector", "owner-only"} {
+		for _, fault := range []string{"withdraw", "host-close", "lifetime-cancel", "caller-cancel", "stale-observation"} {
+			if scope == "owner-only" && (fault == "host-close" || fault == "lifetime-cancel") {
+				continue
+			}
+			t.Run(scope+"/"+fault, func(t *testing.T) {
+				s, store, _, _ := renewalFixture(t, true)
+				store.clock.now = store.approval.ExpiresAt
+				previous, revision := store.approval.Clone(), store.revision
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				store.beforeUpdate = func() error {
+					switch fault {
+					case "withdraw":
+						_, _ = s.root.guard.deactivate()
+					case "host-close":
+						s.current.guard.close()
+					case "lifetime-cancel":
+						s.cancel()
+					case "caller-cancel":
+						cancel()
+					case "stale-observation":
+						store.clock.now = store.clock.Now().Add(authority.ApprovalRefreshObservationAge + time.Millisecond)
+					}
+					return nil // No fabricated Store refusal: final owner gate must stop publication.
+				}
+				var selected *connectorRenewalScope
+				if scope == "connector" {
+					selected = s.current.renewalScope
+				}
+				if err := s.root.refreshApproval(ctx, selected); err == nil || s.root.unknown || store.updates != 1 ||
+					store.revision != revision || !reflect.DeepEqual(store.approval, previous) ||
+					s.root.publication.refreshCount != 0 || s.root.publication.currentApproval != nil {
+					t.Fatal("withdrawn/cancelled/stale consent published or became uncertain", err)
+				}
+				if err := s.root.freezeForRetirement(context.Background()); err != nil {
+					t.Fatal("known pre-publication refusal blocked retirement", err)
+				}
+			})
+		}
 	}
 }
 
