@@ -16,6 +16,23 @@ import {
   stopChatGptFixture,
 } from "./fixtures/chatgpt-site.mjs";
 
+import {
+  openSetup,
+  setupStep,
+  setupAction,
+  assertSetupOverview,
+} from "./current-react-setup.mjs";
+
+const uncheckedOverview = {
+  ready: false,
+  states: {
+    signin: "needed",
+    folders: "needed",
+    connection: "needed",
+    attachment: "needed",
+  },
+};
+
 const root = process.cwd();
 const useInstalledTunnelClient = process.argv.includes(
   "--installed-tunnel-client",
@@ -381,17 +398,15 @@ try {
   );
   // Current React Setup, not the retained legacy wizard selectors.
   const beforeReview = bootstrap.configuration;
-  await window.getByRole("button", { name: "Setup", exact: true }).click();
-  for (const name of [
-    "Connection",
-    "Folders & access",
-    "Add to ChatGPT",
-    "Finish",
+  await openSetup(window);
+  for (const [step, label] of [
+    ["overview", "Overview"],
+    ["signin", "Sign in"],
+    ["folders", "Workspaces"],
+    ["connection", "Connection"],
+    ["attachment", "Add to ChatGPT"],
   ]) {
-    await window
-      .getByRole("navigation", { name: "Setup steps" })
-      .getByRole("button", { name, exact: true })
-      .click();
+    await setupStep(window, step, label);
     assert.equal(
       await window
         .locator('.rail [aria-label="Setup"]')
@@ -399,10 +414,7 @@ try {
       "page",
     );
   }
-  await window
-    .locator(".setup-finish")
-    .getByRole("heading", { name: "A few checks remain", exact: true })
-    .waitFor();
+  await assertSetupOverview(window, uncheckedOverview);
   assert.equal(
     await window.locator('.rail [aria-label="New chat"]').count(),
     0,
@@ -416,12 +428,13 @@ try {
   );
   await save();
   await window
-    .getByRole("button", { name: "Back to Home", exact: true })
+    .getByRole("navigation", { name: "Sections", exact: true })
+    .getByRole("button", { name: "Home", exact: true })
     .click();
   for (const name of [
     "General",
     "Appearance",
-    "Folders",
+    "Workspaces",
     "This Mac",
     "Connection",
     "Shortcuts",
@@ -1034,37 +1047,22 @@ try {
       "synthetic pre-existing DEV profile\n",
     );
     if (launch === 0) {
-      await legacyWindow
-        .getByRole("button", { name: "Setup", exact: true })
-        .click();
-      await legacyWindow
-        .getByRole("navigation", { name: "Setup steps" })
-        .getByRole("button", { name: "Folders & access", exact: true })
-        .click();
-      await legacyWindow
-        .getByRole("button", { name: "Add folder…", exact: true })
-        .click();
-      await legacyWindow
-        .getByRole("button", {
-          name: "Add selected folder read-only",
-          exact: true,
-        })
-        .click();
-      await legacyWindow
-        .getByRole("region", { name: "Approved folders", exact: true })
-        .locator(".folder-row")
-        .waitFor();
-      await legacyWindow
-        .getByRole("button", { name: "Check access", exact: true })
-        .click();
-      await legacyWindow.waitForFunction(() =>
-        document
-          .querySelector('[aria-label="Approved folders"] .folder-row .badges')
-          ?.textContent?.includes("Access checked"),
+      await openSetup(legacyWindow);
+      await setupStep(legacyWindow, "folders", "Workspaces");
+      await setupAction(legacyWindow, "Add workspace…");
+      await setupAction(legacyWindow, "Add selected workspace read-only");
+      const detail = legacyWindow.locator(
+        ".setup-page .workspace-detail:visible",
       );
-      await legacyWindow
-        .getByRole("button", { name: "Verify workspace", exact: true })
-        .click();
+      await detail.waitFor();
+      assert.equal(await detail.count(), 1);
+      // The current Verify workspace action checks access and binds the
+      // selected workspace in one command; there is no separate Check access.
+      await setupAction(legacyWindow, "Verify workspace");
+      await detail
+        .locator(".badges")
+        .filter({ hasText: /^Access checked$/u })
+        .waitFor();
       let value;
       for (let attempt = 0; attempt < 100; attempt++) {
         value = await legacyWindow.evaluate(() => window.farolNext.bootstrap());
@@ -1080,6 +1078,7 @@ try {
           break;
         await new Promise((resolve) => setTimeout(resolve, 100));
       }
+      assert.equal(value.configuration.status, "ready");
       savedWorkspace = {
         workspaces: value.configuration.settings.computer.workspaces,
         verified: value.configuration.settings.setup.computer.verified,
@@ -1112,14 +1111,10 @@ try {
           .getAttribute("data-setup-step"),
         "connection",
       );
-      await legacyWindow
-        .getByRole("navigation", { name: "Setup steps" })
-        .getByRole("button", { name: "Finish", exact: true })
-        .click();
-      await legacyWindow
-        .locator(".setup-finish")
-        .getByRole("heading", { name: "A few checks remain", exact: true })
-        .waitFor();
+      await assertSetupOverview(legacyWindow, {
+        ready: false,
+        states: { ...uncheckedOverview.states, folders: "verified" },
+      });
       report.checks.push(
         "partial-folder-Quit-reopen-retained-obvious-continuation-no-false-ready",
       );

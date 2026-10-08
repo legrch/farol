@@ -3,6 +3,8 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Setup, SetupNavigation } from "../../src/ui/renderer/setup";
 import { WindowController } from "../../src/ui/renderer/controller";
+import { Shell } from "../../src/ui/renderer/shell";
+import { Services } from "../../src/ui/renderer/services";
 import type { SetupStep } from "../../src/ui/renderer/contract";
 import { bootstrap, fixture, settings } from "./fixture";
 // Controlled DOM/IPC fixtures only; not sign-in, native dialog or live-provider proof.
@@ -19,7 +21,7 @@ afterEach(async () => {
   document.body.replaceChildren();
   vi.restoreAllMocks();
 });
-async function mount(step: SetupStep = "overview") {
+async function mount(step: SetupStep = "overview", shell = false) {
   const f = fixture();
   const configuration = { status: "ready" as const, settings: settings() };
   vi.mocked(f.api.bootstrap).mockResolvedValue({
@@ -41,6 +43,12 @@ async function mount(step: SetupStep = "overview") {
   roots.push(root);
   function View() {
     const snapshot = useSyncExternalStore(c.subscribe, c.getSnapshot);
+    if (shell)
+      return (
+        <Services value={c}>
+          <Shell />
+        </Services>
+      );
     return (
       <>
         <SetupNavigation snapshot={snapshot} facade={c} />
@@ -76,6 +84,95 @@ async function mount(step: SetupStep = "overview") {
   return { f, c, host, button, click, visible };
 }
 describe("reference-aligned Setup wizard", () => {
+  it("retains the original unknown receipt across real Review Setup navigation without dispatching commands", async () => {
+    const h = await mount("connection", true);
+    const operationId = "11111111-2222-4333-8444-555555555555";
+    const intention = `settings:connector.save-and-connect:${operationId}`;
+    const configuration = {
+      status: "ready" as const,
+      settings: settings(),
+    };
+    vi.mocked(h.f.api.configure).mockResolvedValueOnce({
+      ok: false,
+      error: "CONNECTOR_RUNTIME_OUTCOME_UNKNOWN",
+      snapshot: configuration,
+      connectorAttempt: {
+        method: "computer.connector.open",
+        requestId: "22222222-3333-4444-8555-666666666666",
+        operationId: "33333333-4444-4555-8666-777777777777",
+        outcome: "unknown",
+      },
+      connectorSetup: {
+        kind: "connector.save-and-connect",
+        operationId,
+        buildId: "3".repeat(64),
+        state: "unknown",
+        stoppedAt: "connection",
+        credentials: "saved",
+        connection: "unknown",
+        code: "CONNECTOR_RUNTIME_OUTCOME_UNKNOWN",
+        externalVerification: "not-proven",
+        connectorAttempt: {
+          method: "computer.connector.open",
+          requestId: "22222222-3333-4444-8555-666666666666",
+          operationId: "33333333-4444-4555-8666-777777777777",
+          outcome: "unknown",
+        },
+      },
+    });
+    await act(async () => {
+      await h.c.configure(
+        {
+          kind: "connector.save-and-connect",
+          operationId,
+          buildId: "3".repeat(64),
+          tunnelId: "synthetic-tunnel",
+          runtimeKey: "synthetic-local-draft-do-not-retain",
+        },
+        intention,
+      );
+    });
+    const retained = structuredClone(h.c.getSnapshot().intents);
+    expect(retained[intention]?.state).toBe("unknown");
+    expect(retained[intention]?.connectorSetup?.operationId).toBe(operationId);
+    expect(retained[intention]?.connectorAttempt).toEqual({
+      method: "computer.connector.open",
+      requestId: "22222222-3333-4444-8555-666666666666",
+      operationId: "33333333-4444-4555-8666-777777777777",
+      outcome: "unknown",
+    });
+    expect(h.f.api.configure).toHaveBeenCalledTimes(1);
+    vi.mocked(h.f.api.configure).mockClear();
+    // Shell startup already observed update status before this review begins.
+    vi.mocked(h.f.api.installedUpdate).mockClear();
+    await h.click("Settings");
+    await h.click("General");
+    await h.click("Review Setup");
+    for (const label of [
+      "Overview",
+      "Sign in",
+      "Workspaces",
+      "Connection",
+      "Add to ChatGPT",
+    ]) {
+      const button = h.host.querySelector<HTMLButtonElement>(
+        `nav[aria-label="Setup steps"] button[aria-label="${label}"]`,
+      )!;
+      expect(button).toBeTruthy();
+      await act(async () => button.click());
+      expect(h.c.getSnapshot().intents).toEqual(retained);
+    }
+    await act(async () => h.c.refresh());
+    await h.click("Review setup");
+    expect(h.c.getSnapshot().intents).toEqual(retained);
+    expect(h.f.api.configure).not.toHaveBeenCalled();
+    expect(h.f.api.task).not.toHaveBeenCalled();
+    expect(h.f.api.installedUpdate).not.toHaveBeenCalled();
+    expect(JSON.stringify(h.c.getSnapshot())).not.toContain(
+      "synthetic-local-draft-do-not-retain",
+    );
+    expect(h.button("Open Home")).toBeUndefined();
+  });
   it("renders the same five section names without conflicting counters", async () => {
     const h = await mount();
     const nav = h.host.querySelector('nav[aria-label="Setup steps"]')!;

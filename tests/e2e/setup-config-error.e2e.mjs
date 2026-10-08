@@ -20,7 +20,7 @@ import {
   waitForReactShell,
   openSetup,
   setupStep,
-  assertSetupFinish,
+  assertSetupOverview,
 } from "./current-react-setup.mjs";
 
 const packaged = process.argv.includes("--packaged");
@@ -218,6 +218,7 @@ try {
           .getByText("Setup evidence is unavailable", { exact: true })
           .waitFor();
         await openSetup(window);
+        await setupStep(window, "connection", "Connection");
         await window
           .locator('.setup-page[data-setup-step="connection"]')
           .waitFor();
@@ -256,7 +257,8 @@ try {
           "REFRESH_RESET_CONFIGURATION_FAULT",
         );
         for (const [step, label] of [
-          ["folders", "Folders & access"],
+          ["signin", "Sign in"],
+          ["folders", "Workspaces"],
           ["attachment", "Add to ChatGPT"],
         ]) {
           await setupStep(window, step, label);
@@ -269,10 +271,18 @@ try {
             ["Refresh status"],
           );
         }
-        await assertSetupFinish(window, false);
+        await assertSetupOverview(window, {
+          ready: false,
+          states: {
+            signin: "unavailable",
+            folders: "unavailable",
+            connection: "unavailable",
+            attachment: "unavailable",
+          },
+        });
         await window
-          .getByRole("region", { name: "Computer setup status", exact: true })
-          .getByRole("button", { name: "Continue setup", exact: true })
+          .getByRole("region", { name: "Setup overview", exact: true })
+          .getByRole("button", { name: "Review Connection", exact: true })
           .click();
         await window
           .locator('.setup-page[data-setup-step="connection"]')

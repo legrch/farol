@@ -77,44 +77,157 @@ export async function setupAction(page, name) {
     );
     return feedback && feedback.textContent !== "Saving or checking…";
   });
+  const expectedFeedback =
+    {
+      "Add workspace…":
+        "Selection received. Confirm read-only access below to add it.",
+      "Add selected workspace read-only":
+        "Approval request completed. Only workspaces in the approved list below have saved access.",
+      "Save & connect":
+        "Credentials saved. The connection step did not complete. Review its status before another action; keep the saved key.",
+      "Connect this Mac":
+        "Local connection started. Verify Farol in ChatGPT to confirm external access.",
+      "Check connection":
+        "Local connection checked. Access from ChatGPT has a separate verification.",
+    }[name] ?? "Action confirmed. Check the current status below.";
   assert.equal(
     await page
       .locator('.setup-page .settings-page > p[role="status"]')
       .innerText(),
-    name === "Add workspace…"
-      ? "Selection received. Confirm read-only access below to add it."
-      : name === "Add selected workspace read-only"
-        ? "Approval request completed. Only workspaces in the approved list below have saved access."
-        : "Action confirmed. Check the current status below.",
+    expectedFeedback,
     `SETUP_ACTION_UNCONFIRMED:${name}`,
   );
 }
 
-export async function assertSetupFinish(page, ready) {
-  await setupStep(page, "finish", "Finish");
-  const finish = page.getByRole("region", {
-    name: "Computer setup status",
-    exact: true,
-  });
-  await finish
-    .getByRole("heading", {
-      name: ready ? "Computer ready" : "A few checks remain",
-      exact: true,
-    })
-    .waitFor();
-  assert.equal(
-    await finish
-      .getByRole("button", {
-        name: "Continue setup",
-        exact: true,
-      })
-      .count(),
-    ready ? 0 : 1,
+const setupSteps = [
+  ["overview", "Overview"],
+  ["signin", "Sign in"],
+  ["folders", "Workspaces"],
+  ["connection", "Connection"],
+  ["attachment", "Add to ChatGPT"],
+];
+const checkStatus = {
+  verified: "Verified",
+  needed: "Not checked",
+  pending: "Check in progress",
+  unknown: "Result needs review",
+  unavailable: "Status unavailable",
+};
+
+// Validate observed UI evidence, not a fixture's claim or an absent status.
+// The caller declares each expected row and independent Computer readiness.
+export function assertSetupOverviewEvidence(observed, expected) {
+  assert.equal(typeof expected.ready, "boolean");
+  assert.deepEqual(
+    Object.keys(expected.states).sort(),
+    setupSteps
+      .slice(1)
+      .map(([step]) => step)
+      .sort(),
+  );
+  assert.deepEqual(
+    observed.steps,
+    setupSteps.map(([, label]) => label),
+  );
+  assert.deepEqual(observed.currentSteps, ["Overview"]);
+  assert.equal(observed.obsoleteCount, 0, "OBSOLETE_SETUP_FINISH_SURFACE");
+  assert.deepEqual(
+    observed.rows,
+    setupSteps.slice(1).map(([step, label]) => {
+      const state = expected.states[step];
+      assert.ok(
+        Object.hasOwn(checkStatus, state),
+        `SETUP_STATE_INVALID:${step}`,
+      );
+      return {
+        step,
+        label,
+        optional: step === "signin",
+        state,
+        status: checkStatus[state],
+        navigationState: state,
+        navigationStatus: checkStatus[state],
+      };
+    }),
+    "SETUP_OVERVIEW_EVIDENCE_MISMATCH",
+  );
+  if (expected.ready)
+    for (const step of ["folders", "connection", "attachment"])
+      assert.equal(
+        expected.states[step],
+        "verified",
+        `COMPUTER_NOT_READY:${step}`,
+      );
+  assert.deepEqual(
+    observed.openHome,
+    expected.ready
+      ? { count: 1, visible: true, disabled: false }
+      : { count: 0, visible: false, disabled: false },
+    "SETUP_OPEN_HOME_READINESS_MISMATCH",
   );
 }
 
-export async function reviewSetupWithoutChanges(page, ready) {
+export async function assertSetupOverview(page, expected) {
+  await setupStep(page, "overview", "Overview");
+  await page
+    .getByRole("region", { name: "Setup overview", exact: true })
+    .waitFor();
+  const observed = await page.evaluate(() => {
+    const setup = document.querySelector(
+      '.setup-page[data-setup-step="overview"]',
+    );
+    const navigation = document.querySelector('[aria-label="Setup steps"]');
+    const buttons = [...navigation.querySelectorAll("button")];
+    const overview = setup.querySelector('[aria-label="Setup overview"]');
+    const home = [...overview.querySelectorAll("button")].filter(
+      (button) => button.textContent.trim() === "Open Home",
+    );
+    return {
+      steps: buttons.map((button) => button.getAttribute("aria-label")),
+      currentSteps: buttons
+        .filter((button) => button.getAttribute("aria-current") === "step")
+        .map((button) => button.getAttribute("aria-label")),
+      obsoleteCount:
+        setup.querySelectorAll(
+          '.setup-finish, [aria-label="Computer setup status"]',
+        ).length +
+        [...setup.querySelectorAll("button")].filter(
+          (button) => button.textContent.trim() === "Finish",
+        ).length,
+      rows: [...overview.querySelectorAll(".setup-checklist-row")].map(
+        (row) => {
+          const heading = row.querySelector("h2");
+          const status = row.querySelector(".setup-check-status");
+          const label = heading?.firstChild?.textContent.trim();
+          const button = buttons.find(
+            (button) => button.getAttribute("aria-label") === label,
+          );
+          return {
+            step: row.getAttribute("data-setup-check"),
+            label,
+            optional: row.querySelectorAll(".setup-optional-tag").length === 1,
+            state: status?.getAttribute("data-check-state"),
+            status: status?.textContent.trim(),
+            navigationState: button
+              ?.querySelector("[data-check-state]")
+              ?.getAttribute("data-check-state"),
+            navigationStatus: button?.getAttribute("aria-description"),
+          };
+        },
+      ),
+      openHome: {
+        count: home.length,
+        visible: home.some((button) => button.checkVisibility()),
+        disabled: home.some((button) => button.disabled),
+      },
+    };
+  });
+  assertSetupOverviewEvidence(observed, expected);
+}
+
+export async function reviewSetupWithoutChanges(page, expected) {
   const before = await readSetupSettings(page);
+  const retainedBefore = await readRetainedSetupActions(page);
   await page
     .getByRole("navigation", { name: "Sections", exact: true })
     .getByRole("button", { name: "Settings", exact: true })
@@ -125,16 +238,42 @@ export async function reviewSetupWithoutChanges(page, ready) {
     .click();
   await page.getByRole("button", { name: "Review Setup", exact: true }).click();
   await page.locator(".setup-page").waitFor();
-  for (const [step, label] of [
-    ["connection", "Connection"],
-    ["folders", "Workspaces"],
-    ["attachment", "Add to ChatGPT"],
-  ])
-    await setupStep(page, step, label);
-  await assertSetupFinish(page, ready);
+  // Visiting Sign in is navigation only; never click its account action.
+  for (const [step, label] of setupSteps) await setupStep(page, step, label);
+  await assertSetupOverview(page, expected);
   assert.deepEqual(
     await readSetupSettings(page),
     before,
     "REVIEW_SETUP_CHANGED_CONFIGURATION",
   );
+  assert.deepEqual(
+    await readRetainedSetupActions(page),
+    retainedBefore,
+    "REVIEW_SETUP_LOST_OR_CHANGED_ORIGINAL_RESULTS",
+  );
+  await openSetup(page);
+  await assertSetupOverview(page, expected);
+}
+
+// Observe the existing content-free diagnostics projection. Full typed receipt
+// retention and zero command dispatch are separately covered by the renderer
+// regression; this DOM observation is not an IPC dispatch counter.
+async function readRetainedSetupActions(page) {
+  await page
+    .getByRole("navigation", { name: "Sections", exact: true })
+    .getByRole("button", { name: "Settings", exact: true })
+    .click();
+  await page
+    .getByRole("navigation", { name: "Settings navigation", exact: true })
+    .getByRole("button", { name: "Diagnostics", exact: true })
+    .click();
+  const details = page.locator("details").filter({
+    has: page.getByText("Action details", { exact: true }),
+  });
+  if (!(await details.evaluate((element) => element.open)))
+    await details.getByText("Action details", { exact: true }).click();
+  return page
+    .getByRole("list", { name: "Retained actions", exact: true })
+    .locator("li")
+    .allTextContents();
 }

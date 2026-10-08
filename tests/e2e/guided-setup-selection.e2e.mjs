@@ -26,9 +26,31 @@ import {
   setupStep,
   readSetupSettings,
   setupAction,
-  assertSetupFinish,
+  assertSetupOverview,
   reviewSetupWithoutChanges,
 } from "./current-react-setup.mjs";
+
+const uncheckedOverview = {
+  ready: false,
+  states: {
+    signin: "needed",
+    folders: "needed",
+    connection: "needed",
+    attachment: "needed",
+  },
+};
+const workspaceOverview = {
+  ...uncheckedOverview,
+  states: { ...uncheckedOverview.states, folders: "verified" },
+};
+const connectedOverview = {
+  ...workspaceOverview,
+  states: { ...workspaceOverview.states, connection: "verified" },
+};
+const readyOverview = {
+  ready: true,
+  states: { ...connectedOverview.states, attachment: "verified" },
+};
 
 const packaged = process.argv.includes("--packaged");
 const devOnly = process.argv.includes("--dev-only");
@@ -727,7 +749,8 @@ try {
     await window.locator('.setup-page[data-setup-step="connection"]').waitFor();
     if (behavior) {
       // Explicit discovery selects only this run's disposable fixture through
-      // the owned E2E seam. Saving does not start or verify the connection.
+      // the owned E2E seam. Save & connect retains its known refused
+      // connection stage before workspace approval; it is not readiness proof.
       await window
         .locator(".setup-page")
         .getByRole("button", { name: "Find connection helper", exact: true })
@@ -753,13 +776,38 @@ try {
       await window
         .getByLabel("Runtime key", { exact: true })
         .fill("synthetic-owned-fixture-runtime-key");
-      await setupAction(window, "Save credentials");
+      await setupAction(window, "Save & connect");
       await window.locator(".credentials-saved").waitFor({ state: "visible" });
       const configured = await readSetupSettings(window);
       assert.ok(configured.connectors.secureMcp.tunnelClient);
       assert.equal(configured.connectors.secureMcp.credential, "stored");
       assert.equal(configured.connectors.secureMcp.runtime, null);
       assert.equal(configured.connectors.secureMcp.attachment, null);
+      assert.equal(configured.setup.connect.outcomeUnknown, false);
+      await window.getByText("Connection help", { exact: true }).click();
+      await window
+        .getByRole("button", { name: "Connection diagnostics", exact: true })
+        .click();
+      await window.getByText("Action details", { exact: true }).click();
+      const setupResult = window
+        .getByRole("list", { name: "Retained actions", exact: true })
+        .locator("li")
+        .filter({ hasText: "settings:connector.save-and-connect:" });
+      assert.equal(
+        await setupResult.count(),
+        1,
+        "SAVE_CONNECT_ORIGINAL_RESULT_MISSING",
+      );
+      const originalResult = await setupResult.innerText();
+      // No workspaces means no acknowledged authority publication. The host
+      // refuses before issuing Go open; never invent an original Go attempt.
+      assert.match(
+        originalResult,
+        /^settings:connector\.save-and-connect:[0-9a-f-]+: refused · CONNECTOR_START_FAILED$/u,
+        "SAVE_CONNECT_OUTCOME_UNCONFIRMED",
+      );
+      await openSetup(window);
+      await setupStep(window, "connection", "Connection");
       await window
         .getByRole("button", { name: "Edit connection", exact: true })
         .click();
@@ -833,7 +881,10 @@ try {
         .getByRole("button", { name: "This Mac", exact: true })
         .click();
       await window
-        .getByRole("region", { name: "Files in approved folders", exact: true })
+        .getByRole("region", {
+          name: "Files in approved workspaces",
+          exact: true,
+        })
         .getByRole("combobox")
         .selectOption("approved-roots-v1");
       await window
@@ -878,7 +929,10 @@ try {
         workspaceVerification: "invalidated",
       });
     }
-    await assertSetupFinish(window, false);
+    await assertSetupOverview(
+      window,
+      behavior ? uncheckedOverview : workspaceOverview,
+    );
     assert.equal(nonReadRequests, 0);
     // A known graceful quit permits reusing this SAME disposable profile.
     // Approved folders and saved credentials alone never make Computer ready.
@@ -921,7 +975,10 @@ try {
     assert.equal(partial.connectors.secureMcp.attachment, null);
     assert.equal(partial.connectors.secureMcp.lastVerifiedAttachment, null);
     assert.equal(partial.setup.connect.verified, null);
-    await reviewSetupWithoutChanges(window, false);
+    await reviewSetupWithoutChanges(
+      window,
+      behavior ? uncheckedOverview : workspaceOverview,
+    );
     assert.equal(nonReadRequests, 0);
     observations.push({
       kind: "partial-quit-reopen-and-nondestructive-review",
@@ -979,7 +1036,7 @@ try {
         "POLICY_REVERIFICATION_ACCESS_PROOF_STALE",
       );
       verifiedWorkspaces = reverified.computer.workspaces;
-      await assertSetupFinish(window, false);
+      await assertSetupOverview(window, workspaceOverview);
       observations.push({
         kind: "new-format-policy-retained-reopen-fresh-workspace-verification",
         configSha256: policyConfigSha256,
@@ -1000,6 +1057,7 @@ try {
     assert.equal(state.setup.chatgpt.verified, null);
     const startedRuntime = state.connectors.secureMcp.runtime.runtimeGeneration;
     await setupAction(window, "Check connection");
+    await window.getByText("Connection help", { exact: true }).click();
     await window
       .locator(".setup-page")
       .getByRole("button", { name: "Connection diagnostics", exact: true })
@@ -1010,7 +1068,10 @@ try {
       .click();
     await window
       .locator('.settings-page > p[role="status"]')
-      .filter({ hasText: "Action confirmed" })
+      .filter({
+        hasText:
+          /^Local connection started\. Verify Farol in ChatGPT to confirm external access\.$/u,
+      })
       .waitFor();
     await openSetup(window);
     await setupStep(window, "connection", "Connection");
@@ -1021,7 +1082,7 @@ try {
       startedRuntime,
     );
     assert.deepEqual(state.computer.workspaces, verifiedWorkspaces);
-    await assertSetupFinish(window, false);
+    await assertSetupOverview(window, connectedOverview);
     const verifiedChallenge = await verifyDisplayedAttachment(window);
     state = await readSetupSettings(window);
     const connector = state.connectors.secureMcp;
@@ -1057,8 +1118,8 @@ try {
       null,
       "EXTERNAL_FIXTURE_CREATED_EMBEDDED_SIGN_IN_PROOF",
     );
-    await assertSetupFinish(window, true);
-    await reviewSetupWithoutChanges(window, true);
+    await assertSetupOverview(window, readyOverview);
+    await reviewSetupWithoutChanges(window, readyOverview);
     assert.equal(
       fixtureVerifications,
       1,
@@ -1066,14 +1127,14 @@ try {
     );
     assert.equal(nonReadRequests, 0, "REVIEW_SETUP_SENT_TO_BROWSER_FIXTURE");
     await window
-      .getByRole("region", { name: "Computer setup status", exact: true })
+      .getByRole("region", { name: "Setup overview", exact: true })
       .getByRole("button", { name: "Open Home", exact: true })
       .click();
     await window
       .locator('.home-candidate[data-home-view="overview"]')
       .waitFor();
     observations.push({
-      kind: "current-react-setup-finished-with-owned-mcp-receipt",
+      kind: "current-react-setup-overview-ready-with-owned-mcp-receipt",
       environment,
       fixtureVerifications,
     });
@@ -1108,7 +1169,7 @@ try {
         "TUNNEL_CLIENT_DISCOVERY_CANDIDATE_STALE",
       );
       assert.deepEqual(refused.computer.workspaces, verifiedWorkspaces);
-      await reviewSetupWithoutChanges(window, false);
+      await reviewSetupWithoutChanges(window, workspaceOverview);
       await assert.rejects(fs.stat(executed), { code: "ENOENT" });
       assert.equal(fixtureVerifications, 1);
       assert.equal(nonReadRequests, 0);
@@ -1136,14 +1197,14 @@ try {
     );
     assert.equal(resumed.connectors.secureMcp.attachment, null);
     assert.equal(resumed.setup.connect.verified, null);
-    await reviewSetupWithoutChanges(window, false);
+    await reviewSetupWithoutChanges(window, connectedOverview);
     assert.equal(fixtureVerifications, 1, "REOPEN_REPLAYED_MCP_VERIFICATION");
     assert.equal(nonReadRequests, 0, "REOPEN_SENT_TO_BROWSER_FIXTURE");
     // Historical completion survives quit; current readiness requires the new
     // displayed challenge, answered once by the owned MCP peer, then Check.
     await verifyDisplayedAttachment(window);
-    await assertSetupFinish(window, true);
-    await reviewSetupWithoutChanges(window, true);
+    await assertSetupOverview(window, readyOverview);
+    await reviewSetupWithoutChanges(window, readyOverview);
     assert.equal(fixtureVerifications, 2);
     assert.equal(nonReadRequests, 0);
     observations.push({
