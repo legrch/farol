@@ -2,6 +2,10 @@ import { StrictMode, act, useSyncExternalStore } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
 import { Home, HomeNavigation, homeTitle } from "../../src/ui/renderer/home";
+import {
+  designIconPath,
+  designIconViewBox,
+} from "../../src/ui/renderer/design-icons";
 import { WindowController } from "../../src/ui/renderer/controller";
 import type {
   ActivityEntry,
@@ -624,3 +628,96 @@ it.each([
     noEffects(h.f);
   },
 );
+
+it("uses the approved icon vocabulary for Home views and explicit ChatGPT actions", async () => {
+  const h = await mount([running]);
+  const glyphs = [
+    ...h.host.querySelectorAll('nav[aria-label="Home views"] svg'),
+  ];
+  expect(glyphs).toHaveLength(5);
+  for (const [index, name] of [
+    "home",
+    "chat",
+    "attention",
+    "activity",
+    "connection",
+  ].entries()) {
+    expect(glyphs[index]?.getAttribute("viewBox")).toBe(designIconViewBox);
+    expect(glyphs[index]?.querySelector("path")?.getAttribute("d")).toBe(
+      designIconPath(name),
+    );
+  }
+  await h.click("View work");
+  await act(async () =>
+    h
+      .content()
+      .querySelector<HTMLButtonElement>(".home-candidate-record")!
+      .click(),
+  );
+  const heading = h.content().querySelector(".home-candidate-detail-heading")!;
+  expect(heading.querySelector("h2")?.textContent).toBe(running.label);
+  expect(heading.querySelector(".home-candidate-number")?.textContent).toBe(
+    "1",
+  );
+  expect(heading.querySelector(".home-candidate-badge")?.textContent).toBe(
+    "Working",
+  );
+  const open = h.button("Open ChatGPT");
+  expect(open.classList.contains("home-candidate-primary")).toBe(true);
+  expect(open.querySelector("path")?.getAttribute("d")).toBe(
+    designIconPath("chat"),
+  );
+  noEffects(h.f);
+});
+it("keeps the sidebar readiness symbol tied to current verified Computer evidence", async () => {
+  const h = await mount([completed]);
+  const symbol = () =>
+    h.host.querySelector(".home-candidate-connection-symbol")!;
+  expect(symbol().classList.contains("is-ready")).toBe(false);
+  expect(symbol().querySelector("path")?.getAttribute("d")).toBe(
+    designIconPath("connection"),
+  );
+  const configuration = { status: "ready" as const, settings: readySettings() };
+  await h.set({ configuration });
+  expect(symbol().classList.contains("is-ready")).toBe(true);
+  expect(symbol().querySelector("path")?.getAttribute("d")).toBe(
+    designIconPath("check"),
+  );
+  await h.set({ configuration, status: "stale" });
+  expect(symbol().classList.contains("is-ready")).toBe(false);
+  expect(
+    h.host.querySelector(".home-candidate-connection-link")?.textContent,
+  ).toContain("Evidence unavailable");
+  noEffects(h.f);
+});
+it("preserves the Home view and stable inspector selection across Back and Forward", async () => {
+  const h = await mount([running]);
+  await h.click("View work");
+  await act(async () =>
+    h
+      .content()
+      .querySelector<HTMLButtonElement>(".home-candidate-record")!
+      .click(),
+  );
+  const selected = h.c.getSnapshot().destination;
+  await h.click("Open ChatGPT");
+  await act(async () => h.c.travel(-1));
+  expect(h.c.getSnapshot().destination).toEqual(selected);
+  expect(
+    h.content().querySelector(".home-candidate-detail-heading h2")?.textContent,
+  ).toBe(running.label);
+  await act(async () => h.c.travel(-1));
+  expect(h.c.getSnapshot().destination).toMatchObject({
+    area: "home",
+    homeView: "work",
+    homeSelection: null,
+  });
+  await act(async () => h.c.travel(1));
+  expect(h.c.getSnapshot().destination).toEqual(selected);
+  await act(async () => h.c.travel(1));
+  expect(h.c.getSnapshot().destination).toMatchObject({
+    area: "chatgpt",
+    taskId: running.taskId,
+  });
+  noEffects(h.f);
+});

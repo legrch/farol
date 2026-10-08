@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import type { ProductTask } from "../../modules/chat/contract/product-task";
 import { folderAccessChecked, folderDisplayName } from "../folder-access-state";
 import { computerSetup } from "./computer-setup";
+import { designIconPath, designIconViewBox } from "./design-icons";
 import type {
   ActivityEntry,
   Destination,
@@ -30,19 +31,9 @@ type Issue = {
 };
 
 function Glyph({ name }: { name: string }) {
-  const paths: Record<string, string> = {
-    home: "M3 10 12 3l9 7M5 9v12h5v-7h4v7h5V9",
-    chat: "M4 4h16v12H9l-5 4V4m4 4h8m-8 4h5",
-    activity: "M3 13h4l3-9 4 16 3-7h4",
-    attention: "M12 4 2 21h20L12 4m0 6v5m0 3v1",
-    connection: "M8 3v5m8-5v5M5 8h14v3a7 7 0 0 1-7 7v4m-7-14a7 7 0 0 0 7 10",
-    check: "m5 12 4 4L19 6",
-    forward: "m10 5 7 7-7 7",
-    back: "m14 5-7 7 7 7",
-  };
   return (
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <path d={paths[name] ?? paths.attention} />
+    <svg viewBox={designIconViewBox} aria-hidden="true">
+      <path d={designIconPath(name)} />
     </svg>
   );
 }
@@ -307,7 +298,15 @@ export function HomeNavigation({ snapshot, facade }: Props) {
         className="home-candidate-connection-link"
         onClick={() => go(facade, "access")}
       >
-        <Glyph name="connection" />
+        <span
+          className={`home-candidate-connection-symbol${current(snapshot) && data.setup.ready ? " is-ready" : ""}`}
+        >
+          <Glyph
+            name={
+              current(snapshot) && data.setup.ready ? "check" : "connection"
+            }
+          />
+        </span>
         <span className="home-candidate-label">
           <strong>{data.connection}</strong>
           <small>View connection &amp; access</small>
@@ -317,10 +316,18 @@ export function HomeNavigation({ snapshot, facade }: Props) {
     </div>
   );
 }
-function Empty({ title, children }: { title: string; children: ReactNode }) {
+function Empty({
+  title,
+  children,
+  icon = "home",
+}: {
+  title: string;
+  children: ReactNode;
+  icon?: string;
+}) {
   return (
     <div className="home-candidate-empty">
-      <Glyph name="home" />
+      <Glyph name={icon} />
       <h2>{title}</h2>
       <p>{children}</p>
     </div>
@@ -406,12 +413,22 @@ function IssueRow({ issue, facade }: { issue: Issue; facade: RendererFacade }) {
   return (
     <button
       type="button"
-      className="home-candidate-record"
+      className="home-candidate-record home-candidate-issue"
       onClick={() =>
         go(facade, "attention", { kind: "attention", id: issue.id })
       }
     >
-      <Glyph name="attention" />
+      <Glyph
+        name={
+          issue.task
+            ? "chat"
+            : issue.target === "folders"
+              ? "folders"
+              : issue.target === "access"
+                ? "connection"
+                : "attention"
+        }
+      />
       <span className="home-candidate-label">
         <strong>{issue.title}</strong>
         <small>
@@ -435,10 +452,11 @@ function ChatLink({
     <div className="home-candidate-actions">
       <button
         type="button"
+        className="home-candidate-primary"
         disabled={!available}
         onClick={() => openChat(facade, id, turnId)}
       >
-        Open ChatGPT <Glyph name="forward" />
+        <Glyph name="chat" /> Open ChatGPT <Glyph name="forward" />
       </button>
       <span>
         {available
@@ -472,7 +490,16 @@ function Inspector({ snapshot, facade }: Props) {
     const task = matchingTask(snapshot, selection.id, selection.turnId);
     body = task ? (
       <section className="home-candidate-detail">
-        <h2>{task.label}</h2>
+        <div className="home-candidate-detail-heading">
+          <span className="home-candidate-number">
+            {data.work.indexOf(task) + 1}
+          </span>
+          <div>
+            <p className="home-candidate-caption">Current window</p>
+            <h2>{task.label}</h2>
+          </div>
+          <Badge>{taskState(task)}</Badge>
+        </div>
         <p className="home-candidate-copy">
           This view shows task metadata. The conversation stays in its existing
           ChatGPT window. Task completion does not verify workspace access.
@@ -497,7 +524,7 @@ function Inspector({ snapshot, facade }: Props) {
         />
       </section>
     ) : (
-      <Empty title="This window has moved on">
+      <Empty icon="chat" title="This window has moved on">
         The selected task and turn are no longer in a current window. Home will
         not open a different conversation in their place.
       </Empty>
@@ -510,7 +537,15 @@ function Inspector({ snapshot, facade }: Props) {
     );
     body = event ? (
       <section className="home-candidate-detail">
-        <h2>{event.label}</h2>
+        <div className="home-candidate-detail-heading">
+          <span className="home-candidate-mark">
+            <Glyph name="activity" />
+          </span>
+          <div>
+            <p className="home-candidate-caption">Recorded event</p>
+            <h2>{event.label}</h2>
+          </div>
+        </div>
         <Facts
           rows={[
             ["Recorded at", timestamp(event.at)],
@@ -544,7 +579,7 @@ function Inspector({ snapshot, facade }: Props) {
         </div>
       </section>
     ) : (
-      <Empty title="This event is no longer available">
+      <Empty icon="activity" title="This event is no longer available">
         The retained record is missing. Return to Recent activity to inspect
         available evidence.
       </Empty>
@@ -800,9 +835,9 @@ function Overview({ snapshot, facade }: Props) {
       <div className="home-candidate-columns">
         <section className="home-candidate-section">
           <div className="home-candidate-section-title">
-            <h2>Current work</h2>
+            <h2>{data.running.length ? "In progress" : "Current work"}</h2>
             <button type="button" onClick={() => go(facade, "work")}>
-              View work
+              View work <Glyph name="forward" />
             </button>
           </div>
           {focus.length ? (
@@ -824,7 +859,7 @@ function Overview({ snapshot, facade }: Props) {
               <div className="home-candidate-section-title">
                 <h2>Latest event</h2>
                 <button type="button" onClick={() => go(facade, "activity")}>
-                  View recent
+                  View recent <Glyph name="forward" />
                 </button>
               </div>
               <EventRow event={data.recent[0]} facade={facade} />
@@ -832,7 +867,12 @@ function Overview({ snapshot, facade }: Props) {
           )}
         </section>
         <section className="home-candidate-section">
-          <h2>Worth a look</h2>
+          <div className="home-candidate-section-title">
+            <h2>Worth a look</h2>
+            <span>
+              {data.issues.length ? "Available evidence" : "All clear"}
+            </span>
+          </div>
           {data.issues[0] ? (
             <IssueRow issue={data.issues[0]} facade={facade} />
           ) : (
@@ -841,11 +881,15 @@ function Overview({ snapshot, facade }: Props) {
             </p>
           )}
           {data.issues.length > 1 && (
-            <button type="button" onClick={() => go(facade, "attention")}>
+            <button
+              type="button"
+              className="home-candidate-link"
+              onClick={() => go(facade, "attention")}
+            >
               Review all {data.issues.length} items
             </button>
           )}
-          <p className="home-candidate-copy">
+          <p className="home-candidate-section-note">
             Select a row to inspect it inside Home.
           </p>
         </section>
@@ -897,6 +941,7 @@ export function Home({ snapshot, facade }: Props) {
             </section>
           ) : (
             <Empty
+              icon="chat"
               title={
                 current(snapshot)
                   ? "No current work"
@@ -921,7 +966,7 @@ export function Home({ snapshot, facade }: Props) {
               ))}
             </section>
           ) : (
-            <Empty title="All clear">
+            <Empty icon="check" title="All clear">
               There are no unresolved items in the available evidence.
             </Empty>
           )}
@@ -940,7 +985,7 @@ export function Home({ snapshot, facade }: Props) {
               ))}
             </section>
           ) : (
-            <Empty title="No recent events">
+            <Empty icon="activity" title="No recent events">
               Recorded events will appear here as work happens.
             </Empty>
           )}

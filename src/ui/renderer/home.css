@@ -1,4 +1,6 @@
 .home-candidate {
+  container: home / inline-size;
+  width: 100%;
   max-width: 1040px;
   margin: 0 auto;
   padding: 36px;
@@ -28,30 +30,77 @@
   min-width: 0;
 }
 .home-candidate-navigation > p {
-  margin: 0 12px;
-}
-.home-candidate-navigation > p {
+  margin: 0 8px;
   color: var(--muted);
   font-size: 12px;
-  margin-top: 8px;
-  margin-bottom: 20px;
+  margin-top: 0;
+  margin-bottom: 15px;
 }
-.home-candidate-navigation button {
+.home-candidate-navigation nav {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+.home-candidate-navigation nav button {
   display: flex;
   align-items: center;
   gap: 10px;
   width: 100%;
+  min-height: 39px;
+  margin: 0 0 3px;
+  padding: 10px 11px;
+  border-radius: 7px;
+  font-size: 13px;
+  text-align: left;
+  color: var(--muted);
+  background: transparent;
+}
+.home-candidate-navigation nav button > svg {
+  width: 16px;
+  height: 16px;
+}
+.home-candidate-navigation nav button[aria-current="page"] {
+  color: var(--fg);
+  background: var(--tint);
+  font-weight: 550;
+}
+.home-candidate-navigation .home-candidate-connection-link {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin: 13px 0 0;
+  border-top: 1px solid var(--line);
+  padding: 16px 8px 9px;
+  color: var(--fg);
   text-align: left;
   background: transparent;
 }
-.home-candidate-navigation button[aria-current="page"] {
-  color: var(--accent);
-  background: var(--tint);
+.home-candidate-connection-link .home-candidate-label strong {
+  font-size: 12px;
+  font-weight: 500;
 }
-.home-candidate-navigation .home-candidate-connection-link {
-  margin-top: auto;
-  border-top: 1px solid var(--line);
-  padding-top: 16px;
+.home-candidate-connection-link .home-candidate-label small {
+  font-size: 10px;
+  margin-top: 4px;
+}
+.home-candidate-connection-link > svg {
+  width: 13px;
+  height: 13px;
+  color: var(--muted);
+}
+.home-candidate-connection-symbol {
+  display: grid;
+  place-items: center;
+  flex: none;
+  color: var(--muted);
+}
+.home-candidate-connection-symbol.is-ready {
+  color: var(--good);
+}
+.home-candidate-connection-symbol svg {
+  width: 17px;
+  height: 17px;
 }
 .home-candidate-navigation .home-candidate-count {
   flex: none;
@@ -73,6 +122,8 @@
   overflow-wrap: anywhere;
 }
 .home-candidate-label small {
+  display: block;
+  color: var(--muted);
   margin-top: 5px;
   font-size: 11px;
   line-height: 1.65;
@@ -88,6 +139,7 @@
   letter-spacing: -0.5px;
 }
 .home-candidate-overview-heading p {
+  font-size: 13px;
   color: var(--muted);
   margin-top: 5px;
 }
@@ -101,6 +153,10 @@
   color: var(--accent);
   flex: none;
 }
+.home-candidate-mark > svg {
+  width: 22px;
+  height: 22px;
+}
 .home-candidate-summaries {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -113,6 +169,8 @@
   text-align: left;
   background: transparent;
   padding: 8px 11px;
+  margin: -4px -5px;
+  border-radius: 7px;
 }
 .home-candidate-summaries span,
 .home-candidate-summaries strong,
@@ -148,10 +206,34 @@
   font-size: 11px;
   color: var(--muted);
 }
+.home-candidate-section-title h2 {
+  font-size: 14px;
+}
 .home-candidate-section-title button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 0;
+  min-height: 24px;
   background: transparent;
   font-size: 11px;
   color: var(--accent);
+}
+.home-candidate-section-title button svg {
+  width: 13px;
+  height: 13px;
+}
+.home-candidate-link {
+  background: transparent;
+  color: var(--accent);
+  padding-left: 0;
+  font-size: 12px;
+}
+.home-candidate-section-note {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.65;
+  margin-top: 15px;
 }
 .home-candidate-record {
   display: flex;
@@ -170,7 +252,17 @@
   height: 14px;
   color: var(--muted);
 }
+.home-candidate-issue {
+  align-items: flex-start;
+}
+.home-candidate-issue > svg {
+  width: 17px;
+  height: 17px;
+  margin-top: 2px;
+  color: var(--muted);
+}
 .home-candidate-number {
+  font-size: 12px;
   display: grid;
   place-items: center;
   width: 28px;
@@ -181,6 +273,7 @@
   color: var(--accent);
 }
 .home-candidate-badge {
+  flex: none;
   padding: 3px 7px;
   border-radius: 5px;
   background: var(--button);
@@ -197,6 +290,31 @@
   font-size: 21px;
   line-height: 1.4;
   margin-bottom: 18px;
+  overflow-wrap: anywhere;
+}
+.home-candidate-detail-heading {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 22px;
+}
+.home-candidate-detail-heading > div {
+  flex: 1;
+  min-width: 0;
+}
+.home-candidate-detail-heading .home-candidate-number {
+  width: 42px;
+  height: 42px;
+  font-size: 16px;
+}
+.home-candidate-caption {
+  color: var(--muted);
+  font-size: 11px;
+}
+.home-candidate-detail-heading h2 {
+  margin-top: 4px;
+  font-size: 21px;
+  line-height: 1.4;
   overflow-wrap: anywhere;
 }
 .home-candidate-back {
@@ -239,6 +357,26 @@
   align-items: center;
   gap: 7px;
 }
+.home-candidate-actions button {
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  font-size: 12px;
+  font-weight: 500;
+}
+.home-candidate-actions button svg,
+.home-candidate-back svg {
+  width: 15px;
+  height: 15px;
+}
+.home-candidate-actions .home-candidate-primary {
+  color: var(--bg);
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.home-candidate-actions .home-candidate-primary:hover:not(:disabled) {
+  background: var(--accent);
+  filter: brightness(1.08);
+}
 .home-candidate-actions > span {
   color: var(--muted);
   font-size: 11px;
@@ -279,19 +417,33 @@
   min-width: 0;
   overflow-wrap: anywhere;
 }
-@media (max-width: 1150px) {
+@container home (max-width: 780px) {
   .home-candidate-columns {
     grid-template-columns: 1fr;
   }
 }
-@media (max-width: 620px) {
-  .home-candidate {
-    padding: 22px;
-  }
+@container home (max-width: 548px) {
   .home-candidate-summaries {
     grid-template-columns: 1fr;
     gap: 5px;
     padding: 10px 0;
+  }
+  .home-candidate-summaries button {
+    margin: 0;
+    padding: 9px;
+  }
+  .home-candidate-summaries strong {
+    font-size: 14px;
+    margin-top: 3px;
+  }
+  .home-candidate-detail-heading {
+    flex-wrap: wrap;
+  }
+  .home-candidate-detail-heading h2 {
+    font-size: 18px;
+  }
+  .home-candidate-detail-heading > .home-candidate-badge {
+    margin-left: 56px;
   }
   .home-candidate-summaries small {
     display: none;
@@ -309,8 +461,17 @@
   }
   .home-candidate-record .home-candidate-badge {
     max-width: 90px;
+    padding: 3px 5px;
+    font-size: 10px;
+    overflow-wrap: anywhere;
   }
   .home-candidate-folder {
     align-items: flex-start;
+  }
+}
+
+@media (max-width: 620px) {
+  .home-candidate {
+    padding: 22px;
   }
 }
