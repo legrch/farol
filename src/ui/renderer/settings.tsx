@@ -141,12 +141,12 @@ function actionFeedback(
     return evidenceReceived &&
       current?.evidence?.value.kind === "computer.workspace-pick"
       ? "Selection received. Confirm read-only access below to add it."
-      : "Folder selection request completed. Review the current selection below before approving access.";
+      : "Workspace selection request completed. Review the current selection below before approving access.";
   if (
     result.state === "applied" &&
     result.id === intention("computer.add-workspace")
   )
-    return "Approval request completed. Only folders in the approved list below have saved access.";
+    return "Approval request completed. Only workspaces in the approved list below have saved access.";
   if (
     result.state === "applied" &&
     result.id.startsWith("settings:computer.update-access:")
@@ -693,7 +693,7 @@ function Folders(props: PageProps) {
             disabled={!actions.allowed("computer.choose-workspace")}
             onClick={() => void choose()}
           >
-            Add folder…
+            Add workspace…
           </button>
           {pickCurrent && (
             <button
@@ -714,13 +714,13 @@ function Folders(props: PageProps) {
                 });
               }}
             >
-              Add selected folder read-only
+              Add selected workspace read-only
             </button>
           )}
         </div>
         {!actions.allowed("computer.choose-workspace") && (
           <p className="description">
-            Folder selection and approval are paused.{" "}
+            Workspace selection and approval are paused.{" "}
             {actions.computerPauseReason}
           </p>
         )}
@@ -740,13 +740,13 @@ function Folders(props: PageProps) {
         )}
         {picked && !pickCurrent && (
           <p className="notice">
-            The selection is no longer current. Choose the folder again before
+            The selection is no longer current. Choose the workspace again before
             adding it.
           </p>
         )}
         {settings.computer.workspaces.length === 0 && (
           <p className="description">
-            No folders approved. Local file access is optional.
+            No workspaces approved. Local file access is optional.
           </p>
         )}
       </div>
@@ -1522,8 +1522,8 @@ function ThisMac({ settings, snapshot, facade, actions }: PageProps) {
     <>
       <h2>This Mac</h2>
       <p className="description">
-        Terminal &amp; Git access is optional. After changing folder or command
-        access, verify the workspace again in Folders, then open Connection to
+        Terminal &amp; Git access is optional. After changing workspace or command
+        access, verify the workspace again in Workspaces, then open Connection to
         start or reconnect explicitly.
       </p>
       <button
@@ -1531,7 +1531,7 @@ function ThisMac({ settings, snapshot, facade, actions }: PageProps) {
         className="text-button"
         onClick={() => facade.navigate({ area: "settings", page: "folders" })}
       >
-        Review folder verification
+        Review workspace verification
       </button>
       <Group title="Local service">
         <div className="setting-row">

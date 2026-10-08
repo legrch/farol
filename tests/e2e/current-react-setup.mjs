@@ -81,10 +81,10 @@ export async function setupAction(page, name) {
     await page
       .locator('.setup-page .settings-page > p[role="status"]')
       .innerText(),
-    name === "Add folder…"
+    name === "Add workspace…"
       ? "Selection received. Confirm read-only access below to add it."
-      : name === "Add selected folder read-only"
-        ? "Approval request completed. Only folders in the approved list below have saved access."
+      : name === "Add selected workspace read-only"
+        ? "Approval request completed. Only workspaces in the approved list below have saved access."
         : "Action confirmed. Check the current status below.",
     `SETUP_ACTION_UNCONFIRMED:${name}`,
   );

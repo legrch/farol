@@ -980,18 +980,18 @@ describe("owner setup entry feedback", () => {
         displayPath: "/private/tmp/selected-workspace",
       },
     });
-    await h.click("Add folder…");
+    await h.click("Add workspace…");
     expect(h.host.textContent).toContain(
       "Confirm read-only access below to add it",
     );
-    expect(h.host.textContent).toContain("No folders approved");
+    expect(h.host.textContent).toContain("No workspaces approved");
     expect(h.host.textContent).toContain(
       "Selected workspace: /private/tmp/selected-workspace",
     );
     expect(h.calls()).toEqual([{ kind: "computer.choose-workspace" }]);
-    await h.click("Add selected folder read-only");
+    await h.click("Add selected workspace read-only");
     expect(h.host.textContent).toContain("Approval request completed");
-    expect(h.host.textContent).toContain("No folders approved");
+    expect(h.host.textContent).toContain("No workspaces approved");
     expect(h.calls()).toEqual([
       { kind: "computer.choose-workspace" },
       { kind: "computer.add-workspace", selectionId },
@@ -1148,9 +1148,9 @@ describe("bounded Settings writer", () => {
       snapshot: h.configuration,
       evidence: { kind: "computer.workspace-pick", selectionId },
     });
-    await h.click("Add folder…");
+    await h.click("Add workspace…");
     expect(h.calls()).toEqual([{ kind: "computer.choose-workspace" }]);
-    await h.click("Add selected folder read-only");
+    await h.click("Add selected workspace read-only");
     expect(h.calls()[1]).toEqual({
       kind: "computer.add-workspace",
       selectionId,
@@ -1186,7 +1186,7 @@ describe("bounded Settings writer", () => {
           evidence: ownEvidence,
         });
       await h.click(
-        page === "folders" ? "Add folder…" : "Preview model configuration",
+        page === "folders" ? "Add workspace…" : "Preview model configuration",
       );
       await act(async () => {
         await h.c.configure(
@@ -1205,7 +1205,7 @@ describe("bounded Settings writer", () => {
       );
       if (page === "folders")
         expect(h.host.textContent).not.toContain(
-          "Add selected folder read-only",
+          "Add selected workspace read-only",
         );
       else expect(h.button("Apply reviewed configuration").disabled).toBe(true);
       expect(h.calls()).toHaveLength(2);
@@ -1218,9 +1218,9 @@ describe("bounded Settings writer", () => {
       error: "WORKSPACE_PICKER_CANCELLED",
       snapshot: h.configuration,
     });
-    await h.click("Add folder…");
-    expect(h.button("Add folder…").disabled).toBe(false); // A deliberate retry may follow a known refusal; rendering never retries.
-    expect(h.host.textContent).not.toContain("Add selected folder read-only");
+    await h.click("Add workspace…");
+    expect(h.button("Add workspace…").disabled).toBe(false); // A deliberate retry may follow a known refusal; rendering never retries.
+    expect(h.host.textContent).not.toContain("Add selected workspace read-only");
     expect(h.calls()).toHaveLength(1);
     const other = await mount("folders");
     vi.mocked(other.f.api.configure).mockResolvedValueOnce({
@@ -1228,10 +1228,10 @@ describe("bounded Settings writer", () => {
       snapshot: other.configuration,
       evidence: { kind: "computer.workspace-pick", selectionId },
     });
-    await other.click("Add folder…");
+    await other.click("Add workspace…");
     await act(async () => other.c.refresh());
     expect(other.host.textContent).not.toContain(
-      "Add selected folder read-only",
+      "Add selected workspace read-only",
     );
     expect(other.host.textContent).toContain("selection is no longer current");
   });
@@ -1240,15 +1240,15 @@ describe("bounded Settings writer", () => {
     const wait = deferred<unknown>();
     vi.mocked(h.f.api.configure).mockReturnValueOnce(wait.promise);
     await act(async () => {
-      h.button("Add folder…").click();
-      h.button("Add folder…").click();
+      h.button("Add workspace…").click();
+      h.button("Add workspace…").click();
     });
     expect(h.calls()).toHaveLength(1);
     await act(async () => wait.reject(new Error("private failure payload")));
-    expect(h.button("Add folder…").disabled).toBe(true);
-    await h.click("Add folder…");
+    expect(h.button("Add workspace…").disabled).toBe(true);
+    await h.click("Add workspace…");
     await act(async () => h.c.refresh());
-    expect(h.button("Add folder…").disabled).toBe(true);
+    expect(h.button("Add workspace…").disabled).toBe(true);
     expect(h.calls()).toHaveLength(1);
     expect(h.host.textContent).toContain("Outcome unknown");
     expect(h.host.textContent).not.toContain("private failure payload");
@@ -1262,7 +1262,7 @@ describe("bounded Settings writer", () => {
         embeddedElectron: null,
       }),
     );
-    await stale.click("Add folder…");
+    await stale.click("Add workspace…");
     expect(stale.calls()).toHaveLength(0);
   });
   it("keeps exclusions stable during IME and validates relative paths before saving", async () => {
@@ -2820,7 +2820,7 @@ describe("owner Setup presentation checkpoint (DOM fixtures only)", () => {
         snapshot: h.configuration,
       });
       await h.click(
-        page === "diagnostics" ? "Export support diagnostics…" : "Add folder…",
+        page === "diagnostics" ? "Export support diagnostics…" : "Add workspace…",
       );
       const notice = h.host.querySelector('.settings-page > [role="status"]');
       expect(notice?.textContent).toBe("Action cancelled.");
@@ -2875,7 +2875,7 @@ describe("review regressions: retained action origins and exact edit delivery", 
     host.querySelector('.settings-page > [role="status"]')?.textContent ??
     activePage(host).querySelector('.workspace-feedback [role="status"]')
       ?.textContent;
-  it.each(["Verify workspace", "Add folder…"])(
+  it.each(["Verify workspace", "Add workspace…"])(
     "retains Connection refusal after Folders %s and Settings remount",
     async (action) => {
       const h = await mount("connection", withFolder());
@@ -2886,7 +2886,7 @@ describe("review regressions: retained action origins and exact edit delivery", 
       });
       await h.click("Sign in");
       await h.pageTo("folders");
-      if (action === "Add folder…")
+      if (action === "Add workspace…")
         vi.mocked(h.f.api.configure).mockResolvedValueOnce({
           ok: false,
           error: "WORKSPACE_PICKER_CANCELLED",
@@ -2894,7 +2894,7 @@ describe("review regressions: retained action origins and exact edit delivery", 
         });
       await h.click(action);
       expect(notice(h.host)).toContain(
-        action === "Add folder…" ? "Action cancelled" : "Action confirmed",
+        action === "Add workspace…" ? "Action cancelled" : "Action confirmed",
       );
       await act(async () => h.c.navigate({ area: "home" }));
       await act(async () =>
@@ -2903,7 +2903,7 @@ describe("review regressions: retained action origins and exact edit delivery", 
       expect(notice(h.host)).toContain("Sign-in is already open");
       await h.pageTo("folders");
       expect(notice(h.host)).toContain(
-        action === "Add folder…" ? "Action cancelled" : "Action confirmed",
+        action === "Add workspace…" ? "Action cancelled" : "Action confirmed",
       );
       expect(h.calls()).toHaveLength(2);
     },
@@ -2928,7 +2928,7 @@ describe("review regressions: retained action origins and exact edit delivery", 
       error: "WORKSPACE_PICKER_CANCELLED",
       snapshot: h.configuration,
     });
-    await h.click("Add folder…");
+    await h.click("Add workspace…");
     await h.pageTo("connection");
     expect(notice(h.host)).toContain("Sign-in is already open");
     await h.click("Sign in");
@@ -2947,7 +2947,7 @@ describe("review regressions: retained action origins and exact edit delivery", 
     expect(notice(h.host)).toContain("Outcome unknown");
     expect(h.button("Sign in").disabled).toBe(true);
     await h.pageTo("folders");
-    expect(h.button("Add folder…").disabled).toBe(true);
+    expect(h.button("Add workspace…").disabled).toBe(true);
     await h.pageTo("diagnostics");
     expect(
       activePage(h.host).querySelector(

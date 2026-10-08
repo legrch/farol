@@ -768,8 +768,8 @@ try {
     }
     // The selected design keeps Workspaces directly reachable from Setup.
     await setupStep(window, "folders", "Workspaces");
-    await setupAction(window, "Add folder…");
-    await setupAction(window, "Add selected folder read-only");
+    await setupAction(window, "Add workspace…");
+    await setupAction(window, "Add selected workspace read-only");
     // Settings retains hidden pages; Diagnostics projects the same folder.
     // Observe only the current guided form, not its hidden diagnostic record.
     const folder = window.locator(".setup-page .workspace-detail:visible");
