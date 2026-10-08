@@ -9,7 +9,7 @@ import (
 )
 
 func nativePorts() ports {
-	return ports{supported: true, inspect: nativeInspect, signal: func(q request) response {
+	return ports{supported: true, inspect: nativeInspect, command: nativeCommand, signal: func(q request) response {
 		return checkedSignal(q, nativeInspect, nativeCallerUID, nativeCommand, nativeKill)
 	}}
 }

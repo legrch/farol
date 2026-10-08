@@ -43,17 +43,20 @@ export function correlateDevCommand(line, marker, scope, native, bootTime) {
   const executable = `${scope.writerRoot}/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron`;
   if (
     !match ||
+    native.status !== "present" ||
+    native.commandVerified !== true ||
     Number(match[1]) !== scope.uid ||
     native.uid !== scope.uid ||
     native.pid !== marker.pid ||
     match[2].trim() !== marker.processStart ||
     !sameBoot(marker.bootTime, bootTime) ||
-    ![
+    (![
       executable + " _output/build/app/main.cjs",
       executable + " " + scope.appPath,
     ].some(
       (prefix) => match[3] === prefix || match[3].startsWith(prefix + " "),
-    ) ||
+    ) &&
+      match[3] !== "Farol Dev") ||
     /--(?:acceptance|user-data|profile|type)(?:[=\s-]|$)/u.test(match[3])
   )
     throw Error("DEV_PROCESS_IDENTITY_REFUSED");
@@ -132,6 +135,11 @@ export async function prepareDevBuild({
       const native = nativeCall(binary, {
         action: "inspect",
         pid: marker.marker.pid,
+        executable: path.join(
+          writerRoot,
+          "node_modules/electron/dist/Electron.app/Contents/MacOS/Electron",
+        ),
+        appPath,
       });
       if (native.status === "present") {
         const retained = correlateDevCommand(
@@ -145,7 +153,12 @@ export async function prepareDevBuild({
           const deadline = performance.now() + remaining;
           const seen = nativeCall(
             binary,
-            { action: "inspect", pid },
+            {
+              action: "inspect",
+              pid,
+              executable: retained.executable,
+              appPath,
+            },
             deadline - performance.now(),
           );
           if (seen.status === "absent") return seen;

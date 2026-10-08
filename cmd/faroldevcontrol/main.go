@@ -1,7 +1,8 @@
 // dev-control accepts one JSON request on stdin (EOF required), no arguments,
 // and emits one bounded JSON response. The caller owns its wall-clock timeout.
 //
-// Inspect: {"action":"inspect","pid":123}
+// Inspect: {"action":"inspect","pid":123}, optionally with the same exact
+// executable/appPath pair to qualify the kernel command without exposing it.
 // Signal: {"action":"signal","pid":123,"uid":501,"token":"<retained token>",
 // "signal":"SIGTERM","executable":"<writer>/node_modules/electron/dist/
 // Electron.app/Contents/MacOS/Electron","appPath":"<writer>/_output/build/app/main.cjs"}
@@ -49,8 +50,9 @@ type request struct {
 }
 
 type response struct {
-	Status string `json:"status"`
-	Reason string `json:"reason,omitempty"`
+	Status          string `json:"status"`
+	Reason          string `json:"reason,omitempty"`
+	CommandVerified bool   `json:"commandVerified,omitempty"`
 	*identity
 }
 
@@ -58,6 +60,7 @@ type response struct {
 type ports struct {
 	supported bool
 	inspect   func(int) response
+	command   func(request) response
 	signal    func(request) response
 }
 
@@ -147,6 +150,9 @@ func parseRequest(data []byte) (request, error) {
 	if q.Action == "inspect" && len(f) == 2 {
 		return q, nil
 	}
+	if q.Action == "inspect" && len(f) == 4 && json.Unmarshal(f["executable"], &q.Executable) == nil && json.Unmarshal(f["appPath"], &q.AppPath) == nil && validDevPaths(q.Executable, q.AppPath) {
+		return q, nil
+	}
 	if q.Action != "signal" || len(f) != 7 || json.Unmarshal(f["signal"], &q.Signal) != nil || !validSignal(q.Signal) {
 		return q, errInvalidRequest
 	}
@@ -212,7 +218,23 @@ func matchesProcArgs(raw []byte, q request) bool {
 		rest = rest[1:]
 	}
 	argv0, ok := readString()
-	if !ok || argv0 != q.Executable {
+	if !ok {
+		return false
+	}
+	// Node's process.title replaces argv with the exact product name and empty
+	// remaining strings on Darwin. The kernel executable above is retained.
+	// Profile/entrypoint correlation still belongs to the private run-marker
+	// owner; this renamed form cannot independently reconstruct erased argv.
+	if argv0 == "Farol Dev" {
+		for i := 1; i < argc; i++ {
+			value, ok := readString()
+			if !ok || value != "" {
+				return false
+			}
+		}
+		return true
+	}
+	if argv0 != q.Executable {
 		return false
 	}
 	app, ok := readString()
@@ -281,6 +303,18 @@ func execute(q request, p ports) response {
 	}
 	observed := p.inspect(q.PID)
 	if q.Action == "inspect" {
+		if q.Executable != "" && observed.Status == "present" {
+			if observed.identity == nil || p.command == nil || !validDevPaths(q.Executable, q.AppPath) {
+				return response{Status: "unreadable", Reason: "IDENTITY_UNREADABLE"}
+			}
+			if command := p.command(q); command.Status != "present" {
+				return command
+			}
+			if denied, ok := match(*observed.identity, p.inspect(q.PID)); !ok {
+				return denied
+			}
+			observed.CommandVerified = true
+		}
 		return observed
 	}
 	if denied, ok := match(q.expected(), observed); !ok {

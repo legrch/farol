@@ -118,6 +118,64 @@ func TestLifetimeToken(t *testing.T) {
 	}
 }
 
+func TestQualifiedCommandInspection(t *testing.T) {
+	q := fixtureRequest()
+	q.Action, q.UID, q.Token, q.Signal = "inspect", 0, "", ""
+	raw, _ := json.Marshal(map[string]any{"action": "inspect", "pid": q.PID, "executable": q.Executable, "appPath": q.AppPath})
+	if got, err := parseRequest(raw); err != nil || got != q {
+		t.Fatalf("qualified inspect: %+v %v", got, err)
+	}
+	for _, input := range []map[string]any{
+		{"action": "inspect", "pid": q.PID, "executable": q.Executable},
+		{"action": "inspect", "pid": q.PID, "appPath": q.AppPath},
+		{"action": "inspect", "pid": q.PID, "executable": "/Applications/Farol.app/Contents/MacOS/Farol", "appPath": q.AppPath},
+		{"action": "inspect", "pid": q.PID, "executable": q.Executable, "appPath": "/other/" + relativeAppPath},
+		{"action": "inspect", "pid": q.PID, "executable": q.Executable, "appPath": q.AppPath, "uid": 501},
+	} {
+		raw, _ := json.Marshal(input)
+		if _, err := parseRequest(raw); err == nil {
+			t.Fatal("accepted partial/crossed inspect")
+		}
+	}
+	for _, status := range []string{"present", "absent", "unreadable", "refused"} {
+		inspections, commands := 0, 0
+		p := ports{supported: true, inspect: func(pid int) response { inspections++; return present(fixtureRequest()) }, command: func(got request) response {
+			commands++
+			if got != q {
+				t.Fatal("changed command scope")
+			}
+			return response{Status: status}
+		}}
+		r := execute(q, p)
+		if r.Status != status || commands != 1 || r.CommandVerified != (status == "present") || inspections != 1+boolInt(status == "present") {
+			t.Fatalf("unqualified command: %+v inspections=%d", r, inspections)
+		}
+	}
+	count := 0
+	p := ports{supported: true, inspect: func(int) response {
+		count++
+		r := present(fixtureRequest())
+		if count == 2 {
+			r.Token, _ = lifetimeToken(testBoot, 1_700_000_000, 123457)
+		}
+		return r
+	}, command: func(request) response { return response{Status: "present"} }}
+	if r := execute(q, p); r.Status != "refused" || r.CommandVerified {
+		t.Fatal("accepted changed lifetime after command inspection")
+	}
+	p.command = nil
+	if r := execute(q, p); r.Status != "unreadable" || r.CommandVerified {
+		t.Fatal("qualified missing command owner")
+	}
+}
+
+func boolInt(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
+}
+
 func procArgs(executable string, argv ...string) []byte {
 	raw := make([]byte, 4)
 	binary.NativeEndian.PutUint32(raw, uint32(len(argv)))
@@ -141,6 +199,13 @@ func TestProcArgs(t *testing.T) {
 			}
 		}
 	}
+	for _, argc := range []int{2, 3, 5} {
+		argv := make([]string, argc)
+		argv[0] = "Farol Dev"
+		if !matchesProcArgs(procArgs(q.Executable, argv...), q) {
+			t.Fatal("refused exact observed renamed Dev command")
+		}
+	}
 	invalid := [][]byte{
 		nil, {1, 2, 3}, procArgs("/bin/sleep", q.Executable, q.AppPath),
 		procArgs(q.Executable, "/bin/sleep", q.AppPath), procArgs(q.Executable, q.Executable),
@@ -150,6 +215,13 @@ func TestProcArgs(t *testing.T) {
 		procArgs(q.Executable, q.Executable, q.AppPath, "--type=renderer"),
 		procArgs(q.Executable, q.Executable, q.AppPath, "--built-in-display-only", "--built-in-display-only"),
 		procArgs(q.Executable, q.Executable, q.AppPath, ""),
+		procArgs("/Applications/Farol.app/Contents/MacOS/Farol", "Farol Dev", ""),
+		procArgs(q.Executable, "Farol", ""),
+		procArgs(q.Executable, "Farol Dev --user-data-dir=/foreign", ""),
+		procArgs(q.Executable, "Farol Dev", "--type=renderer"),
+		procArgs(q.Executable, "Farol Dev", "--acceptance-profile"),
+		procArgs(q.Executable, "Farol Dev", "unexpected"),
+		procArgs(q.Executable, "Farol Dev"),
 		bytes.Repeat([]byte{0}, maxProcArgsBytes+1),
 	}
 	truncated := procArgs(q.Executable, q.Executable, q.AppPath)

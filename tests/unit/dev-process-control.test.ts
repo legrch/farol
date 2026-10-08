@@ -19,7 +19,13 @@ const marker = {
   bootTime: 10000,
   processStart: "Thu Oct  8 10:44:37 2026",
 };
-const native = { status: "present", pid: 111, uid: 501, token: "boot:123:456" };
+const native = {
+  status: "present",
+  pid: 111,
+  uid: 501,
+  token: "boot:123:456",
+  commandVerified: true,
+};
 const command = `501 ${marker.processStart} ${executable} _output/build/app/main.cjs`;
 
 describe("exact Dev command correlation", () => {
@@ -66,6 +72,35 @@ describe("exact Dev command correlation", () => {
       appPath: scope.appPath,
       installed: false,
     });
+  });
+  it("accepts the observed macOS product title only with independent kernel command verification", () => {
+    const line = `501 ${marker.processStart} Farol Dev`;
+    expect(
+      correlateDevCommand(line, marker, scope, native, 10000),
+    ).toMatchObject({ pid: marker.pid, executable });
+    for (const seen of [
+      { ...native, commandVerified: false },
+      { ...native, commandVerified: undefined },
+    ]) {
+      expect(() =>
+        correlateDevCommand(line, marker, scope, seen, 10000),
+      ).toThrow("DEV_PROCESS_IDENTITY_REFUSED");
+    }
+    for (const title of [
+      "Farol",
+      "Electron",
+      "Farol Dev --user-data-dir=/foreign",
+    ]) {
+      expect(() =>
+        correlateDevCommand(
+          `501 ${marker.processStart} ${title}`,
+          marker,
+          scope,
+          native,
+          10000,
+        ),
+      ).toThrow("DEV_PROCESS_IDENTITY_REFUSED");
+    }
   });
   it.each([
     command.replace(executable, "/Applications/Farol.app/Contents/MacOS/Farol"),
