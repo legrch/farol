@@ -81,7 +81,10 @@ function description(view: InstalledUpdateView): string {
 export function createInstalledUpdateView(
   root: Document,
   onCommand: (kind: InstalledUpdateViewCommand) => void,
-): { render(view: InstalledUpdateView): void } {
+): {
+  render(view: InstalledUpdateView): void;
+  setInstalledIdentity(version: string, buildVersion?: string): void;
+} {
   function required<T extends HTMLElement>(id: string): T {
     const node = root.getElementById(id);
     if (!node) throw new Error(`INSTALLED_UPDATE_ELEMENT_MISSING:${id}`);
@@ -92,6 +95,8 @@ export function createInstalledUpdateView(
   const railTitle = required("installed-update-notice-title");
   const railCopy = required("installed-update-notice-copy");
   const railMark = required("installed-update-notice-mark");
+  let installedIdentity: string | null = null;
+  let lastView: InstalledUpdateView | null = null;
   function text(node: HTMLElement, value: string): void {
     if (node.textContent !== value) node.textContent = value;
   }
@@ -147,9 +152,17 @@ export function createInstalledUpdateView(
     });
   }
 
-  return {
-    render(view): void {
-      const message = description(view);
+  const presenter = {
+    setInstalledIdentity(version: string, buildVersion?: string): void {
+      installedIdentity = `${updateName(version)}${buildVersion ? ` (build ${buildVersion})` : ""}`;
+      if (lastView) presenter.render(lastView);
+    },
+    render(view: InstalledUpdateView): void {
+      lastView = view;
+      const message =
+        installedIdentity && view.phase !== "unavailable"
+          ? `Installed: ${installedIdentity}. ${description(view)}`
+          : description(view);
       const ready = view.phase === "ready";
       const applying = view.phase === "applying";
       const recovery =
@@ -213,4 +226,5 @@ export function createInstalledUpdateView(
       }
     },
   };
+  return presenter;
 }

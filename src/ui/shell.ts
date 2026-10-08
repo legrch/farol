@@ -6106,6 +6106,11 @@ async function start(): Promise<void> {
   });
 
   bootstrap = bootstrapSchema.parse(await window.farolNext.bootstrap());
+  if (bootstrap.updateChannel === "github-owner-beta")
+    updaterView.setInstalledIdentity(
+      bootstrap.build.version,
+      bootstrap.build.buildVersion,
+    );
   if (bootstrap.environment === "dev" && !bootstrap.demoMode) {
     try {
       const applied =

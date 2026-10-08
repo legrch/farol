@@ -77,6 +77,21 @@ const allControls = [
 ] as const;
 
 describe("installed update view", () => {
+  it("distinguishes the measured installed build from a downloaded successor", () => {
+    const f = fixture();
+    f.view.render({ ...ready, version: "0.2.0-owner.beta.4" });
+    f.view.setInstalledIdentity("0.2.0-owner.beta.3", "17");
+    expect(f.node("summary").textContent).toContain(
+      "Installed: Farol 0.2.0-owner.beta.3 (build 17)",
+    );
+    expect(f.node("summary").textContent).toContain(
+      "Farol 0.2.0-owner.beta.4 is ready to install",
+    );
+    expect(f.node("notice-copy").textContent).toBe(
+      f.node("summary").textContent,
+    );
+    expect(f.onCommand).not.toHaveBeenCalled();
+  });
   it.each([
     ["UPDATE_BROWSER_BUSY", "active ChatGPT response"],
     ["UPDATE_BROWSER_DRAFT", "unsent ChatGPT draft"],
