@@ -116,7 +116,7 @@ function projection(snapshot: WindowSnapshot) {
       id: "configuration",
       title: "Setup evidence is unavailable",
       state: "Unavailable",
-      copy: "Folder and connection evidence could not be read. No shared-folder count or verified state can be confirmed.",
+      copy: "Workspace and connection evidence could not be read. No approved-workspace count or verified state can be confirmed.",
       target: "access",
     });
   else {
@@ -145,7 +145,7 @@ function projection(snapshot: WindowSnapshot) {
         id: `folder:${item.folder.workspaceId}`,
         title: `${item.name} needs an access check`,
         state: item.state,
-        copy: `Configured access: ${item.folder.access === "write" ? "Read and write" : "Read only"}. Sharing a folder and verifying its access are separate steps.`,
+        copy: `Configured access: ${item.folder.access === "write" ? "Read and write" : "Read only"}. Adding a workspace and verifying its access are separate steps.`,
         target: "folders",
       });
     const editIds = new Set(
@@ -157,7 +157,7 @@ function projection(snapshot: WindowSnapshot) {
     for (const operationId of editIds)
       issues.push({
         id: `folder-edit:${operationId}`,
-        title: "A folder edit needs review",
+        title: "A workspace edit needs review",
         state: "Pending review",
         copy: "Inspect the existing operation and its delivery state in Diagnostics before preparing another edit.",
         target: "diagnostics",
@@ -475,7 +475,7 @@ function Inspector({ snapshot, facade }: Props) {
         <h2>{task.label}</h2>
         <p className="home-candidate-copy">
           This view shows task metadata. The conversation stays in its existing
-          ChatGPT window. Task completion does not verify folder access.
+          ChatGPT window. Task completion does not verify workspace access.
         </p>
         <Facts
           rows={[
@@ -565,7 +565,7 @@ function Inspector({ snapshot, facade }: Props) {
                 facade.navigate({ area: "settings", page: "folders" })
               }
             >
-              Manage folder access <Glyph name="forward" />
+              Manage workspaces <Glyph name="forward" />
             </button>
           ) : issue.target === "work" && issue.task ? (
             <button
@@ -622,10 +622,10 @@ function Access({ snapshot, facade }: Props) {
         <h2>{data.connection}</h2>
         <p className="home-candidate-copy">
           {!data.settings
-            ? "Folder and connection evidence could not be read."
+            ? "Workspace and connection evidence could not be read."
             : data.folders.length
               ? data.setup.next
-              : "No folders shared. Computer access requires an approved, verified folder."}
+              : "No workspaces added. Computer access requires an approved, verified workspace."}
         </p>
         <Facts
           rows={[
@@ -648,12 +648,12 @@ function Access({ snapshot, facade }: Props) {
                 : snapshot.runtime,
             ],
             [
-              "Folder access",
+              "Workspace access",
               !data.settings
                 ? "Evidence unavailable"
                 : data.folders.length
                   ? `${data.folders.length} shared · ${data.folders.filter((item) => item.state === "Verified").length} verified`
-                  : "No folders shared",
+                  : "No workspaces added",
             ],
           ]}
         />
@@ -685,7 +685,7 @@ function Access({ snapshot, facade }: Props) {
           type="button"
           onClick={() => facade.navigate({ area: "settings", page: "folders" })}
         >
-          Manage folder access <Glyph name="forward" />
+          Manage workspaces <Glyph name="forward" />
         </button>
         <button
           type="button"
@@ -710,7 +710,7 @@ function Overview({ snapshot, facade }: Props) {
         </p>
         <Empty title="Your workspace starts here">
           Work and recent records will appear here as they become available.
-          Connection and folder checks stay independent.
+          Connection and workspace checks stay independent.
         </Empty>
         <div className="home-candidate-actions">
           <button
@@ -794,7 +794,7 @@ function Overview({ snapshot, facade }: Props) {
         <button type="button" onClick={() => go(facade, "access")}>
           <span>Connection</span>
           <strong>{data.connection}</strong>
-          <small>Folder access is checked separately</small>
+          <small>Workspace access is checked separately</small>
         </button>
       </div>
       <div className="home-candidate-columns">

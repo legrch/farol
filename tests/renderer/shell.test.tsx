@@ -522,7 +522,7 @@ it("R31 R36 Home keeps local views selected and explicit destinations use existi
   const { host, c, f } = await mount();
   for (const [label, page] of [
     ["Manage connection", "connection"],
-    ["Manage folder access", "folders"],
+    ["Manage workspaces", "folders"],
   ] as const) {
     await act(async () =>
       c.navigate({ area: "home", homeView: "access", homeSelection: null }),
@@ -996,7 +996,7 @@ it("Setup presents a guided Overview and contextual steps with navigation-only c
   );
   expect(page.querySelectorAll(".setup-overview-row")).toHaveLength(3);
   expect(page.querySelector(".setup-overview-steps")?.textContent).toContain(
-    "Choose folders and access for each one.",
+    "Choose workspaces and access for each one.",
   );
   expect(button(page, "Previous step").disabled).toBe(true);
   await act(async () => button(page, "Open Workspaces").click());

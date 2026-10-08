@@ -76,7 +76,7 @@ export function Setup({ snapshot, facade }: Props) {
                 [
                   "folders",
                   "Workspaces",
-                  "Choose folders and access for each one.",
+                  "Choose workspaces and access for each one.",
                   setup.workspacesVerified
                     ? "Workspace verified"
                     : "Workspace check needed",
@@ -154,9 +154,9 @@ export function Setup({ snapshot, facade }: Props) {
         <h2>{setup.ready ? "Computer ready" : "A few checks remain"}</h2>
         <p>{setup.next}</p>
         <p className="description">
-          Folder access, the local connection and verification from ChatGPT have
-          separate checks. Embedded ChatGPT sign-in and Model configuration are
-          optional.
+          Workspace access, the local connection and verification from ChatGPT
+          have separate checks. Embedded ChatGPT sign-in and Model configuration
+          are optional.
         </p>
         {!setup.ready && (
           <button

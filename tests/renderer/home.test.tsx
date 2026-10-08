@@ -189,7 +189,7 @@ it("defaults to Overview and projects all five sidebar views without effects", a
     ["Current work", "work", "No current work"],
     ["Needs attention", "attention", "To review"],
     ["Recent activity", "activity", "No recent events"],
-    ["Connection & access", "access", "No folders shared"],
+    ["Connection & access", "access", "No workspaces added"],
     ["Overview", "overview", "Your workspace starts here"],
   ]) {
     // Count badges are intentionally omitted by the semantic label lookup.
@@ -223,7 +223,7 @@ it("keeps task inspectors in Home and clears them when reselecting the same view
   });
   expect(homeTitle(h.c.getSnapshot())).toBe("Review Atlas");
   expect(h.content().textContent).toContain(
-    "Task completion does not verify folder access",
+    "Task completion does not verify workspace access",
   );
   await act(async () =>
     (
@@ -484,7 +484,7 @@ it("does not treat missing configuration as zero folders or verified access", as
   await act(async () => h.c.navigate({ area: "home", homeView: "overview" }));
   await h.click("Review setup status");
   expect(h.content().textContent).toContain("Evidence unavailable");
-  expect(h.content().textContent).not.toContain("No folders shared");
+  expect(h.content().textContent).not.toContain("No workspaces added");
   noEffects(h.f);
 });
 it("derives unknown and refused attention without rerunning operations", async () => {
@@ -611,7 +611,7 @@ it("shows missing attention and event inspectors without substituting another re
 });
 it.each([
   ["Manage connection", "settings", "connection"],
-  ["Manage folder access", "settings", "folders"],
+  ["Manage workspaces", "settings", "folders"],
   ["Open Setup", "setup", null],
 ] as const)(
   "leaves Home only through the named %s destination",

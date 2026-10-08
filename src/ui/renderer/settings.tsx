@@ -138,8 +138,8 @@ function actionFeedback(
     return "Outcome unknown. Do not repeat this action; inspect the existing result in Diagnostics.";
   if (result.id.startsWith("settings:computer.apply-workspace-edit:"))
     return result.state === "applied"
-      ? "Folder edit confirmed. Review the exact result in Diagnostics."
-      : "Folder edit refused. Review the exact result in Diagnostics.";
+      ? "Workspace edit confirmed. Review the exact result in Diagnostics."
+      : "Workspace edit refused. Review the exact result in Diagnostics.";
   if (
     result.state === "applied" &&
     result.id === intention("computer.choose-workspace")
@@ -216,7 +216,7 @@ function actionFeedback(
   if (result.code === "CODEX_HOST_TASK_IN_PROGRESS")
     return "A coding task is using the current workspace access. Wait for that task to finish before changing or verifying access.";
   if (result.code === "WORKSPACE_ROOT_CHANGED")
-    return "This workspace is no longer the folder that was approved. Access was not changed. Review its current path and identity before verifying it again.";
+    return "This workspace no longer has the approved root identity. Access was not changed. Review its current path and identity before verifying it again.";
   if (result.code === "WORKSPACE_NOT_FOUND")
     return "This workspace is no longer in the approved list. Refresh the list before choosing another action.";
   if (result.code?.endsWith("_CANCELLED")) return "Action cancelled.";
@@ -1282,7 +1282,7 @@ function FolderOptions({
         </p>
         {policy !== draftPolicy && (
           <p className="notice">
-            Folder access changed while this draft was open. Reload the saved
+            Workspace access changed while this draft was open. Reload the saved
             exclusions before changing them.
           </p>
         )}
@@ -1684,10 +1684,10 @@ function ThisMac({ settings, snapshot, facade, actions }: PageProps) {
         </div>
         <p className="description">
           Local service status is independent of connection verification and
-          folder access.
+          workspace access.
         </p>
       </Group>
-      <Group title="Files in approved folders">
+      <Group title="Files in approved workspaces">
         <p className="description">
           Your existing file policy stays in effect until you save a new choice.
           Allowing all names includes hidden and sensitive files inside approved
@@ -2784,7 +2784,7 @@ function WorkspaceEditResults({
     const acknowledgement = snapshot.intents[`ack:${operationId}`];
     const awaitingDelivery = snapshot.workspaceEditDelivery === operationId;
     return (
-      <Group title="Folder edit result" key={operationId}>
+      <Group title="Workspace edit result" key={operationId}>
         <p className="description">
           Operation: <code>{operationId}</code>
         </p>
@@ -2992,7 +2992,7 @@ function Diagnostics({ snapshot, settings, facade, actions }: PageProps) {
         settings={settings}
       />
       <details>
-        <summary>Folder diagnostics and guarded edits</summary>
+        <summary>Workspace diagnostics and guarded edits</summary>
         {settings.computer.workspaces.map((workspace) => (
           <article className="folder-row" key={workspace.workspaceId}>
             <h3>{folderDisplayName(workspace)}</h3>
@@ -3021,7 +3021,7 @@ function Diagnostics({ snapshot, settings, facade, actions }: PageProps) {
           The saved Git-check permission covers bounded Git status and HEAD
           commands with Apple Git; the saved workspace permission covers a
           sandboxed workspace shell. Both exclude network access; expanded Git
-          access remains a separate folder approval.
+          access remains a separate workspace approval.
         </p>
       </details>
       <details>

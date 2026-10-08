@@ -399,7 +399,7 @@ describe("compact workspace detail", () => {
       "CODEX_HOST_TASK_IN_PROGRESS",
       "A coding task is using the current workspace access",
     ],
-    ["WORKSPACE_ROOT_CHANGED", "no longer the folder that was approved"],
+    ["WORKSPACE_ROOT_CHANGED", "no longer has the approved root identity"],
     ["WORKSPACE_NOT_FOUND", "no longer in the approved list"],
   ] as const)(
     "explains %s at the attempted workspace action without claiming success",
@@ -474,15 +474,15 @@ describe("compact workspace detail", () => {
     });
     await h.click("Verify workspace");
     expect(status(h).textContent).toContain(
-      "no longer the folder that was approved",
+      "no longer has the approved root identity",
     );
     await select(h, "project");
     expect(status(h).textContent).not.toContain(
-      "no longer the folder that was approved",
+      "no longer has the approved root identity",
     );
     await select(h, "second");
     expect(status(h).textContent).toContain(
-      "no longer the folder that was approved",
+      "no longer has the approved root identity",
     );
     expect(h.calls()).toHaveLength(1);
   });
@@ -3184,7 +3184,9 @@ describe("review regressions: retained action origins and exact edit delivery", 
       });
       await h.click("Observe existing edit");
       const edit = () =>
-        activePage(h.host).querySelector('[aria-label="Folder edit result"]')!;
+        activePage(h.host).querySelector(
+          '[aria-label="Workspace edit result"]',
+        )!;
       expect(edit().textContent).toContain(editOperationId);
       expect(edit().textContent).toContain(
         "Observation: Refused. WORKSPACE_MUTATION_CONFLICT",
@@ -3222,7 +3224,7 @@ describe("review regressions: retained action origins and exact edit delivery", 
           "Result acknowledgement: Confirmed.",
         );
         expect(notice(h.host)).toBe(
-          "Folder edit refused. Review the exact result in Diagnostics.",
+          "Workspace edit refused. Review the exact result in Diagnostics.",
         );
         expect(edit().textContent).not.toContain("Outcome unknown");
         expect(h.button("Prepare edit…").disabled).toBe(false);
