@@ -556,11 +556,58 @@ describe("supervised installed updater (native files/lease, mocked package/proce
 });
 
 describe("installed updater composition (disposable filesystem and mocked native/GitHub ports)", () => {
+  it("persists Later for the available version without suppressing it or a newer release", async () => {
+    const first = await createInstalledUpdateRuntime(options());
+    await first!.initialize();
+    await first!.check();
+    await first!.later();
+    expect(first!.snapshot()).toMatchObject({
+      phase: "available",
+      deferred: true,
+    });
+    const preference = path.join(
+      userData,
+      "installed-updates/preferences.json",
+    );
+    expect(JSON.parse(await fs.readFile(preference, "utf8"))).toEqual({
+      schema: "farol.installed-update-preferences/1",
+      skipped: null,
+      deferredVersion: manifest.version,
+    });
+    expect(mocks.download).not.toHaveBeenCalled();
+    await first!.close();
+
+    const second = await createInstalledUpdateRuntime(options());
+    await second!.initialize();
+    await second!.check(true);
+    expect(second!.snapshot()).toMatchObject({
+      phase: "available",
+      deferred: true,
+    });
+    mocks.discover.mockResolvedValue({
+      ok: true,
+      value: {
+        manifest: {
+          ...manifest,
+          version: "0.1.2-owner.beta.1",
+          buildId: "8".repeat(64),
+        },
+      },
+    });
+    await second!.check(true);
+    expect(second!.snapshot()).toMatchObject({
+      phase: "available",
+      deferred: false,
+    });
+    expect(mocks.download).not.toHaveBeenCalled();
+    await second!.close();
+  });
+
   it("persists an exact skipped build across lifetimes without downloading or hiding a newer build", async () => {
     const first = await createInstalledUpdateRuntime(options());
     await first!.initialize();
     await first!.check();
-    first!.later();
+    await first!.later();
     expect(first!.snapshot()).toMatchObject({
       phase: "available",
       deferred: true,
@@ -574,6 +621,7 @@ describe("installed updater composition (disposable filesystem and mocked native
     expect(JSON.parse(await fs.readFile(preference, "utf8"))).toEqual({
       schema: "farol.installed-update-preferences/1",
       skipped: { version: manifest.version, buildId: manifest.buildId },
+      deferredVersion: null,
     });
     await first!.close();
 
@@ -1768,7 +1816,7 @@ ${scenario === "missing" ? "" : `<key>CFBundleVersion</key><string>${scenario ==
   });
   it("persists the exact archive before showing ready and restores Later without another download", async () => {
     const first = await prepared();
-    first.later();
+    await first.later();
     first.close();
     const retained = JSON.parse(await fs.readFile(ready, "utf8"));
     expect(retained.operation).toBeNull();

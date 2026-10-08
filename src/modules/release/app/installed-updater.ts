@@ -50,6 +50,7 @@ export type InstalledUpdaterPorts = Readonly<{
         available: true;
         version: string;
         buildId: string;
+        deferred: boolean;
       }>
     | KnownFailure
   >;
@@ -57,6 +58,7 @@ export type InstalledUpdaterPorts = Readonly<{
     Readonly<{ ok: true; update: ReadyUpdate }> | KnownFailure
   >;
   skip(buildId: string): Promise<Readonly<{ ok: true }> | KnownFailure>;
+  defer(buildId: string): Promise<Readonly<{ ok: true }> | KnownFailure>;
   // A supervised transition may select one local archive in composition. This
   // port must stage and verify it through the same archive/package owner. It is
   // not a caller-supplied ReadyUpdate or an alternate persistence mechanism.
@@ -260,7 +262,7 @@ export class InstalledUpdater {
       this.publish({
         phase: "available",
         version: found.version,
-        deferred: false,
+        deferred: found.deferred,
       });
     } catch {
       this.publish({
@@ -382,13 +384,39 @@ export class InstalledUpdater {
     }
   }
 
-  later(): void {
+  async later(): Promise<void> {
     if (
       (this.view.phase !== "ready" && this.view.phase !== "available") ||
       this.closed
     )
       return;
-    this.publish({ ...this.view, deferred: true });
+    if (this.view.phase === "ready") {
+      this.publish({ ...this.view, deferred: true });
+      return;
+    }
+    if (this.busy || !this.available || this.view.deferred) return;
+    const current = this.view;
+    this.begin();
+    try {
+      const result = await this.ports.defer(this.available.buildId);
+      if (!result.ok) {
+        this.publish({
+          phase: "failed",
+          code: result.code,
+          recoveryRequired: result.recoveryRequired ?? true,
+        });
+        return;
+      }
+      this.publish({ ...current, deferred: true });
+    } catch {
+      this.publish({
+        phase: "failed",
+        code: "UPDATE_LATER_OUTCOME_UNKNOWN",
+        recoveryRequired: true,
+      });
+    } finally {
+      this.finish();
+    }
   }
 
   async restart(): Promise<void> {

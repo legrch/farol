@@ -587,8 +587,9 @@ function Update({
             <button
               disabled={disabled || update.deferred}
               onClick={() => {
-                void facade.update("later");
-                facade.overlay("none");
+                void facade.update("later").then((result) => {
+                  if (result.state === "applied") facade.overlay("none");
+                });
               }}
             >
               Remind Me Later
@@ -616,8 +617,9 @@ function Update({
             <button
               disabled={disabled || update.deferred}
               onClick={() => {
-                void facade.update("later");
-                facade.overlay("none");
+                void facade.update("later").then((result) => {
+                  if (result.state === "applied") facade.overlay("none");
+                });
               }}
             >
               Remind Me Later

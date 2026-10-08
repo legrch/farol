@@ -45,12 +45,16 @@ function fixture() {
       available: true,
       version: staged.manifest.version,
       buildId: staged.manifest.buildId,
+      deferred: false,
     }),
     download: vi
       .fn<InstalledUpdaterPorts["download"]>()
       .mockResolvedValue({ ok: true, update: staged }),
     skip: vi
       .fn<InstalledUpdaterPorts["skip"]>()
+      .mockResolvedValue({ ok: true }),
+    defer: vi
+      .fn<InstalledUpdaterPorts["defer"]>()
       .mockResolvedValue({ ok: true }),
     retain: vi.fn<InstalledUpdaterPorts["retain"]>().mockResolvedValue(),
     restart: vi
@@ -82,7 +86,7 @@ describe("installed update orchestration (port fixture, no native or GitHub acce
     expect(ports.retain).not.toHaveBeenCalled();
     await updater.restart();
     expect(ports.restart).not.toHaveBeenCalled();
-    updater.later();
+    await updater.later();
     expect(updater.snapshot()).toMatchObject({
       phase: "available",
       deferred: true,
@@ -136,7 +140,7 @@ describe("installed update orchestration (port fixture, no native or GitHub acce
     const { updater, ports } = fixture();
     await updater.initialize();
     await updater.check();
-    updater.later();
+    await updater.later();
     expect(ports.skip).not.toHaveBeenCalled();
     await updater.skip();
     await updater.skip();
@@ -164,6 +168,54 @@ describe("installed update orchestration (port fixture, no native or GitHub acce
     expect(ports.discover).toHaveBeenCalledTimes(1);
   });
 
+  it("defers an available candidate through its port without skipping or downloading it", async () => {
+    const { updater, ports } = fixture();
+    await updater.initialize();
+    await updater.check();
+    await updater.later();
+    await updater.later();
+    expect(ports.defer).toHaveBeenCalledExactlyOnceWith(
+      staged.manifest.buildId,
+    );
+    expect(ports.skip).not.toHaveBeenCalled();
+    expect(ports.download).not.toHaveBeenCalled();
+    expect(updater.snapshot()).toMatchObject({
+      phase: "available",
+      deferred: true,
+    });
+    ports.discover.mockResolvedValueOnce({
+      ok: true,
+      available: true,
+      version: staged.manifest.version,
+      buildId: staged.manifest.buildId,
+      deferred: true,
+    });
+    await updater.check(true);
+    expect(updater.snapshot()).toMatchObject({
+      phase: "available",
+      deferred: true,
+    });
+  });
+
+  it("fences a lost Later acknowledgment and does not repeat the preference write", async () => {
+    const { updater, ports } = fixture();
+    ports.defer.mockRejectedValueOnce(
+      new Error("lost preference acknowledgment"),
+    );
+    await updater.initialize();
+    await updater.check();
+    await updater.later();
+    await updater.later();
+    await updater.check(true);
+    expect(updater.snapshot()).toEqual({
+      phase: "failed",
+      code: "UPDATE_LATER_OUTCOME_UNKNOWN",
+      recoveryRequired: true,
+    });
+    expect(ports.defer).toHaveBeenCalledTimes(1);
+    expect(ports.discover).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps an exactly recovered old-feed archive Ready without rediscovery or download", async () => {
     const { updater, ports } = fixture();
     const historical: ReadyUpdate = {
@@ -173,7 +225,7 @@ describe("installed update orchestration (port fixture, no native or GitHub acce
     ports.recover.mockResolvedValueOnce({ ok: true, update: historical });
     await updater.initialize();
     await updater.check(true);
-    updater.later();
+    await updater.later();
     expect(updater.snapshot()).toMatchObject({
       phase: "ready",
       version: historical.manifest.version,
@@ -448,7 +500,7 @@ describe("installed update orchestration (port fixture, no native or GitHub acce
     await updater.initialize();
     await updater.check();
     await updater.download();
-    updater.later();
+    await updater.later();
     await updater.check(true);
     expect(updater.snapshot()).toEqual({
       phase: "ready",
@@ -687,7 +739,7 @@ describe("explicit local preparation (ports only, no archive or installed accept
       phase: "ready",
       version: staged.manifest.version,
     });
-    updater.later();
+    await updater.later();
     await updater.prepareLocal();
     expect(ports.prepareLocal).toHaveBeenCalledTimes(1);
     await updater.restart();

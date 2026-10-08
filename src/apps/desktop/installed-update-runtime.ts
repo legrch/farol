@@ -59,6 +59,7 @@ const UpdatePreferences = z.strictObject({
   skipped: z
     .strictObject({ version: z.string().max(128), buildId: Digest })
     .nullable(),
+  deferredVersion: z.string().max(128).nullable().optional(),
 });
 const AcceptedBuild = z.strictObject({
   digest: Digest,
@@ -1179,6 +1180,7 @@ async function createRuntime(
       ? {
           schema: "farol.installed-update-preferences/1" as const,
           skipped: null,
+          deferredVersion: null,
         }
       : UpdatePreferences.parse(raw);
   };
@@ -1985,9 +1987,9 @@ async function createRuntime(
         transport,
       );
       if (!found.ok) return known(`UPDATE_${found.code.toUpperCase()}`);
-      let skippedVersion: string | null;
+      let preferences: z.infer<typeof UpdatePreferences>;
       try {
-        skippedVersion = (await readPreferences()).skipped?.version ?? null;
+        preferences = await readPreferences();
       } catch {
         return {
           ok: false as const,
@@ -1997,7 +1999,7 @@ async function createRuntime(
       }
       candidate =
         found.value?.manifest.buildId === declinedBuildId ||
-        found.value?.manifest.version === skippedVersion
+        found.value?.manifest.version === preferences.skipped?.version
           ? null
           : found.value;
       return candidate
@@ -2006,6 +2008,8 @@ async function createRuntime(
             available: true,
             version: candidate.manifest.version,
             buildId: candidate.manifest.buildId,
+            deferred:
+              candidate.manifest.version === preferences.deferredVersion,
           }
         : { ok: true, available: false };
     },
@@ -2034,8 +2038,28 @@ async function createRuntime(
       await writeRecord(preferencesFile, {
         schema: "farol.installed-update-preferences/1",
         skipped: { version: candidate.manifest.version, buildId },
+        deferredVersion: null,
       });
       candidate = null;
+      return { ok: true as const };
+    },
+    defer: async (buildId) => {
+      if (!candidate || candidate.manifest.buildId !== buildId)
+        return known("UPDATE_CANDIDATE_CHANGED");
+      let preferences: z.infer<typeof UpdatePreferences>;
+      try {
+        preferences = await readPreferences();
+      } catch {
+        return {
+          ok: false as const,
+          code: "UPDATE_PREFERENCES_UNREADABLE",
+          recoveryRequired: true,
+        };
+      }
+      await writeRecord(preferencesFile, {
+        ...preferences,
+        deferredVersion: candidate.manifest.version,
+      });
       return { ok: true as const };
     },
     ...(localArchive

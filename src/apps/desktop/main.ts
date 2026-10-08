@@ -783,7 +783,7 @@ async function installedUpdateCommand(
   if (command.data.kind === "check") await installedUpdater.check(true);
   else if (command.data.kind === "download") await installedUpdater.download();
   else if (command.data.kind === "skip") await installedUpdater.skip();
-  else if (command.data.kind === "later") installedUpdater.later();
+  else if (command.data.kind === "later") await installedUpdater.later();
   else if (command.data.kind === "restart") await installedUpdater.restart();
   else if (command.data.kind === "recover" || command.data.kind === "rollback")
     await installedUpdater.restore(command.data.kind);
