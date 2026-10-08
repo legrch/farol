@@ -11,6 +11,68 @@ import {
   type ComputerConnectorClosed,
 } from "./wire.ts";
 
+type ConnectorHostMethod =
+  "computer.connector.open" | "computer.connector.close";
+
+// Identity of the original attempt, never permission to replay. "known" means
+// only the exact Go refusal before publication; transport refusals stay unknown.
+export class ConnectorHostError extends BridgeError {
+  constructor(
+    state: BridgeError["state"],
+    code: string,
+    readonly method: ConnectorHostMethod,
+    readonly requestId: string,
+    readonly operationId: string,
+    readonly outcome: "known" | "unknown",
+  ) {
+    super(state, code);
+    Object.freeze(this);
+  }
+}
+
+// Preserve fixed diagnostics, never arbitrary exception text, wire error
+// messages, response data, endpoint credentials or an unsanitized cause.
+const failureCodes = new Set([
+  "connector_open_refused_before_publication",
+  "connector_open_unconfirmed",
+  "connector_open_crossed",
+  "connector_launch_unconfirmed",
+  "connector_close_unconfirmed",
+  "connector_close_crossed",
+  "response_timeout",
+  "transport_failed",
+  "transport_ended",
+  "truncated_frame",
+  "backend_unavailable",
+  "client_closed",
+  "backpressure",
+  "protocol_violation",
+  "invalid_response",
+  "crossed_response_id",
+  "crossed_response_context",
+]);
+
+function failure(
+  error: unknown,
+  method: ConnectorHostMethod,
+  requestId: string,
+  operationId: string,
+  outcome: "known" | "unknown" = "unknown",
+): ConnectorHostError {
+  return new ConnectorHostError(
+    error instanceof BridgeError ? error.state : "unknown",
+    error instanceof BridgeError && failureCodes.has(error.code)
+      ? error.code
+      : method === "computer.connector.open"
+        ? "connector_open_unconfirmed"
+        : "connector_close_unconfirmed",
+    method,
+    requestId,
+    operationId,
+    outcome,
+  );
+}
+
 // Inherited host pipe only. This adapter retains exact original replies; Go owns
 // admission, policy and endpoint lifetime. No status-based recovery or replay.
 export class ConnectorHostBridge {
@@ -112,7 +174,13 @@ export class ConnectorHostBridge {
       return this.current;
     } catch (error) {
       if (!this.refusedBeforePublication) this.blocked = true;
-      throw error;
+      throw failure(
+        error,
+        "computer.connector.open",
+        id,
+        operationId,
+        this.refusedBeforePublication ? "known" : "unknown",
+      );
     } finally {
       this.pending = false;
     }
@@ -180,7 +248,7 @@ export class ConnectorHostBridge {
       this.proof = undefined;
     } catch (error) {
       this.blocked = true;
-      throw error;
+      throw failure(error, "computer.connector.close", id, operationId);
     }
   }
 }

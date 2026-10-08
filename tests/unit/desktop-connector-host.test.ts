@@ -1,6 +1,9 @@
 import { expect, it, vi } from "vitest";
 import { BridgeError } from "../../apps/desktop/bridge/client";
-import { ConnectorHostBridge } from "../../apps/desktop/bridge/connector-host";
+import {
+  ConnectorHostBridge,
+  ConnectorHostError,
+} from "../../apps/desktop/bridge/connector-host";
 import type { Json, Outcome } from "../../apps/desktop/bridge/wire";
 const context = { profileId: "profile", backendGeneration: "backend" };
 const input = {
@@ -145,8 +148,21 @@ it.each(["unknown", "lost"])(
     const outcomes = await results;
     for (const outcome of outcomes) {
       expect(outcome.status).toBe("rejected");
-      expect((outcome as PromiseRejectedResult).reason).toBe(error);
+      expect((outcome as PromiseRejectedResult).reason).toBeInstanceOf(
+        ConnectorHostError,
+      );
+      expect((outcome as PromiseRejectedResult).reason).toMatchObject({
+        state: "unknown",
+        method: "computer.connector.close",
+        requestId: request.mock.calls[1]![2]!.id,
+        operationId: request.mock.calls[1]![2]!.operationId,
+        outcome: "unknown",
+        code: "connector_close_unconfirmed",
+      });
     }
+    expect((outcomes[1] as PromiseRejectedResult).reason).toBe(
+      (outcomes[0] as PromiseRejectedResult).reason,
+    );
     await expect(host.close()).rejects.toMatchObject({
       state: "unknown",
       code: "connector_close_unconfirmed",
@@ -219,7 +235,13 @@ it.each<readonly [string, (outcome: Outcome) => Outcome]>([
   const outcomes = await results;
   expect(outcomes[0]).toMatchObject({
     status: "rejected",
-    reason: { state: "unknown" },
+    reason: {
+      state: "unknown",
+      outcome: "unknown",
+      method: "computer.connector.close",
+      requestId: request.mock.calls[1]![2]!.id,
+      operationId: request.mock.calls[1]![2]!.operationId,
+    },
   });
   expect(outcomes[1]).toMatchObject({ status: "rejected" });
   expect((outcomes[1] as PromiseRejectedResult).reason).toBe(
@@ -252,9 +274,15 @@ function refuseOpen(
 it("retains the exact pre-publication refusal and closes without another request", async () => {
   const { request, host } = fixture();
   refuseOpen(request);
-  await expect(host.open(input)).rejects.toMatchObject({
+  const error = await host.open(input).catch((error: unknown) => error);
+  expect(error).toBeInstanceOf(ConnectorHostError);
+  expect(error).toMatchObject({
     state: "refused",
     code: refusalCode,
+    method: "computer.connector.open",
+    requestId: request.mock.calls[0]![2]!.id,
+    operationId: request.mock.calls[0]![2]!.operationId,
+    outcome: "known",
   });
   expect(request).toHaveBeenCalledTimes(1);
   await expect(host.open(input)).rejects.toMatchObject({
@@ -333,9 +361,14 @@ it.each<readonly [string, (outcome: Outcome) => unknown]>([
 ])("keeps %s unknown and close blocked", async (_name, change) => {
   const { request, host } = fixture();
   refuseOpen(request, change);
-  await expect(host.open(input)).rejects.toMatchObject({
+  const error = await host.open(input).catch((error: unknown) => error);
+  expect(error).toMatchObject({
     state: "unknown",
     code: "connector_open_unconfirmed",
+    method: "computer.connector.open",
+    requestId: request.mock.calls[0]![2]!.id,
+    operationId: request.mock.calls[0]![2]!.operationId,
+    outcome: "unknown",
   });
   await expect(host.close()).rejects.toMatchObject({
     state: "unknown",
@@ -353,7 +386,13 @@ it.each([refusalCode, "authority_refused"])(
     const { request, host } = fixture();
     const error = new BridgeError("refused", code);
     request.mockRejectedValueOnce(error);
-    await expect(host.open(input)).rejects.toBe(error);
+    await expect(host.open(input)).rejects.toMatchObject({
+      state: "refused",
+      outcome: "unknown",
+      requestId: expect.any(String),
+      operationId: expect.any(String),
+      code: code === refusalCode ? code : "connector_open_unconfirmed",
+    });
     await expect(host.close()).rejects.toMatchObject({
       state: "unknown",
       code: "connector_close_unconfirmed",
@@ -415,7 +454,14 @@ it("keeps lost open or close replies blocked and never repeats effects", async (
     request.mockRejectedValueOnce(new Error("lost response"));
     await expect(
       phase === "open" ? host.open(input) : host.close(),
-    ).rejects.toThrow("lost response");
+    ).rejects.toMatchObject({
+      state: "unknown",
+      code: `connector_${phase}_unconfirmed`,
+      outcome: "unknown",
+      method: `computer.connector.${phase}`,
+      requestId: request.mock.calls.at(-1)![2]!.id,
+      operationId: request.mock.calls.at(-1)![2]!.operationId,
+    });
     const calls = request.mock.calls.length;
     await expect(host.close()).rejects.toMatchObject({ state: "unknown" });
     await expect(host.open(input)).rejects.toMatchObject({
@@ -423,6 +469,86 @@ it("keeps lost open or close replies blocked and never repeats effects", async (
     });
     expect(request).toHaveBeenCalledTimes(calls);
   }
+});
+
+it("exposes the exact original identity when the Go-open reply is lost", async () => {
+  // Pipe fixture only: Go may have opened the connector, but no reply arrives.
+  const { request, host } = fixture();
+  const original = request.getMockImplementation()!;
+  const reply = deferredOutcome();
+  request.mockReturnValueOnce(reply.promise);
+  const opening = host.open(input).catch((error: unknown) => error);
+  const goReply = await original(...request.mock.calls[0]!);
+  reply.reject(new BridgeError("unknown", "response_timeout"));
+  const error = await opening;
+  expect(error).toBeInstanceOf(BridgeError);
+  expect(error).toBeInstanceOf(ConnectorHostError);
+  expect(Object.isFrozen(error)).toBe(true);
+  expect(error).toMatchObject({
+    state: "unknown",
+    code: "response_timeout",
+    method: "computer.connector.open",
+    requestId: goReply.requestId,
+    operationId: goReply.operationId,
+    outcome: "unknown",
+  });
+  expect(goReply.requestId).not.toBe(goReply.operationId);
+  await expect(host.open(input)).rejects.toMatchObject({
+    code: "connector_host_unavailable",
+  });
+  await expect(host.close()).rejects.toMatchObject({
+    code: "connector_close_unconfirmed",
+  });
+  expect(request).toHaveBeenCalledTimes(1);
+});
+
+it.each(["open", "close"] as const)(
+  "keeps %s failure metadata content-free even for an untrusted bridge error",
+  async (phase) => {
+    const { request, host } = fixture();
+    if (phase === "close") await host.open(input);
+    const privateContent = "private_fixture_endpoint_token_and_path";
+    const error = Object.assign(new BridgeError("unknown", privateContent), {
+      data: { endpoint: { token: privateContent } },
+      requestId: "foreign-request",
+      operationId: "foreign-operation",
+      cause: new Error(privateContent),
+    });
+    request.mockRejectedValueOnce(error);
+    const failure = await (
+      phase === "open" ? host.open(input) : host.close()
+    ).catch((error: unknown) => error);
+    if (!(failure instanceof ConnectorHostError))
+      throw new Error("missing connector host failure");
+    expect(failure.message).toBe(`connector_${phase}_unconfirmed`);
+    expect(JSON.parse(JSON.stringify(failure))).toEqual({
+      state: "unknown",
+      code: `connector_${phase}_unconfirmed`,
+      method: `computer.connector.${phase}`,
+      requestId: request.mock.calls.at(-1)![2]!.id,
+      operationId: request.mock.calls.at(-1)![2]!.operationId,
+      outcome: "unknown",
+    });
+    expect(failure.stack).not.toContain(privateContent);
+    expect(failure).not.toHaveProperty("cause");
+    expect(failure).not.toHaveProperty("data");
+  },
+);
+
+it("does not invent operation identity for local pre-request failures", async () => {
+  const { request, host } = fixture();
+  const error = await host
+    .open({ ...input, runtimeId: "" })
+    .catch((error: unknown) => error);
+  expect(error).toBeInstanceOf(BridgeError);
+  expect(error).not.toBeInstanceOf(ConnectorHostError);
+  expect(error).toMatchObject({
+    state: "refused",
+    code: "invalid_connector_open",
+  });
+  expect(error).not.toHaveProperty("requestId");
+  expect(error).not.toHaveProperty("operationId");
+  expect(request).not.toHaveBeenCalled();
 });
 
 it.each(["missing", "wrong-path", "known"])(
