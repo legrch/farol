@@ -126,6 +126,7 @@ func measureLaunchFiles(ctx context.Context, command Command, launch *confinedLa
 		add(launch.scratch, launch.scratchIdentity, true, nil, "") == nil {
 		return refuse()
 	}
+	approvedPins := map[string]directoryPin{}
 	for _, binding := range launch.roots {
 		if !absolutePolicyPath(binding.ApprovedRoot) || !absolutePolicyPath(binding.ScopeRoot) ||
 			!insidePolicy(binding.ApprovedRoot, binding.ScopeRoot) || binding.RootIdentity.Device == "" || binding.RootIdentity.Inode == "" {
@@ -135,8 +136,18 @@ func measureLaunchFiles(ctx context.Context, command Command, launch *confinedLa
 		if approved == nil {
 			return refuse()
 		}
+		approvedPins[binding.ApprovedRoot] = approved
 		relative, err := filepath.Rel(binding.ApprovedRoot, binding.ScopeRoot)
 		if err != nil || add(binding.ScopeRoot, authority.RootIdentity{}, false, approved, relative) == nil {
+			return refuse()
+		}
+	}
+	for _, binding := range launch.gitDirectories {
+		parent := approvedPins[binding.ApprovedRoot]
+		relative, err := filepath.Rel(binding.ApprovedRoot, binding.Path)
+		if parent == nil || !insidePolicy(binding.ApprovedRoot, binding.Path) || err != nil ||
+			binding.Identity.Device == "" || binding.Identity.Inode == "" ||
+			add(binding.Path, binding.Identity, false, parent, relative) == nil {
 			return refuse()
 		}
 	}

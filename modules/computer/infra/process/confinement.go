@@ -47,6 +47,7 @@ type SeatbeltSelection struct {
 	Executables                                            []ExecutablePin
 	Network                                                authority.Network
 	Git                                                    GitPolicy
+	GitRead                                                *GitReadSelection
 }
 
 // Seatbelt builds the actual restrictive launch. The injected existing native
@@ -62,6 +63,7 @@ type confinedLaunch struct {
 	command         Command
 	pins            []ExecutablePin
 	roots           []rootScopeBinding
+	gitDirectories  []gitReadDirectory
 	scratch         string
 	scratchIdentity authority.RootIdentity
 	qualification   Qualification
@@ -88,6 +90,10 @@ func NewSeatbelt(selection SeatbeltSelection, qualification Qualification) (*Sea
 	a.Capabilities = append([]authority.Capability(nil), a.Capabilities...)
 	selection.Snapshot = port.AccessSnapshot{Participant: &p, Approval: &a}
 	selection.Executables = append([]ExecutablePin(nil), selection.Executables...)
+	if selection.GitRead != nil {
+		binding := *selection.GitRead
+		selection.GitRead = &binding
+	}
 	return &Seatbelt{selection: selection, qualification: qualification}, nil
 }
 
@@ -134,7 +140,7 @@ func selectedLaunch(qualification Qualification, command Command) (*confinedLaun
 		return nil, &processsvc.NativeFailure{}
 	}
 	return &confinedLaunch{command: wrapped, pins: append([]ExecutablePin{{seatbeltExecutable, selected.selection.MechanismSHA256}}, selected.selection.Executables...),
-		roots: append([]rootScopeBinding(nil), plan.roots...), scratch: selected.selection.Scratch, scratchIdentity: selected.selection.ScratchIdentity, qualification: selected.qualification}, nil
+		roots: append([]rootScopeBinding(nil), plan.roots...), gitDirectories: append([]gitReadDirectory(nil), plan.gitDirectories...), scratch: selected.selection.Scratch, scratchIdentity: selected.selection.ScratchIdentity, qualification: selected.qualification}, nil
 }
 
 // Qualify delegates the exact wrapped invocation to the existing evidence port.
@@ -213,8 +219,10 @@ func validSelection(s SeatbeltSelection) bool {
 	if s.Snapshot.Participant == nil || s.Snapshot.Approval == nil || !bindingID(s.RuntimeID) || !bindingID(s.WorkspaceID) || !absolutePolicyPath(s.Home) || !absolutePolicyPath(s.Scratch) ||
 		!digestValue(s.MechanismSHA256) || s.ScratchIdentity.Device == "" || s.ScratchIdentity.Inode == "" || len(s.Executables) == 0 || len(s.Executables) > 16 ||
 		filepath.Dir(s.Scratch) != "/private/tmp" || !strings.HasPrefix(filepath.Base(s.Scratch), "farol-") || !s.FilePolicy.Valid() || !seatbeltNetworkAllowed(s) ||
-		(s.FilePolicy == authority.LegacyProtectedFiles && (s.Git != DenyGit && s.Git != WorkspaceGit)) ||
+		(s.FilePolicy == authority.LegacyProtectedFiles && (s.Git != DenyGit && s.Git != WorkspaceGit && s.Git != QualifiedGitRead)) ||
 		(s.FilePolicy == authority.RootScopedFiles && s.Git != RootScopedGit) ||
+		(s.Git == QualifiedGitRead && (s.GitRead == nil || !validGitReadSelection(*s.GitRead))) ||
+		(s.Git != QualifiedGitRead && s.GitRead != nil) ||
 		s.FilePolicy != s.Snapshot.Participant.Grant.FilePolicy || s.FilePolicy != s.Snapshot.Approval.FilePolicy ||
 		(s.FilePolicy == authority.LegacyProtectedFiles && protectedPath(s.Scratch, s.Home)) {
 		return false
@@ -230,10 +238,11 @@ func validSelection(s SeatbeltSelection) bool {
 }
 
 type seatbeltPlan struct {
-	source    string
-	arguments []string
-	digest    string
-	roots     []rootScopeBinding
+	source         string
+	arguments      []string
+	digest         string
+	roots          []rootScopeBinding
+	gitDirectories []gitReadDirectory
 }
 
 func compileSeatbelt(s SeatbeltSelection, command Command) (*seatbeltPlan, error) {
@@ -275,13 +284,21 @@ func compileSeatbelt(s SeatbeltSelection, command Command) (*seatbeltPlan, error
 
 	selectedScopes := []rootScopeBinding{{scope.WorkspaceID, workspace.Root, scope.Root, workspace.RootIdentity, scope.Access}}
 	var sealedRoots []rootScopeBinding
-	if s.FilePolicy == authority.RootScopedFiles {
+	if s.FilePolicy == authority.RootScopedFiles || s.Git == QualifiedGitRead {
 		var err error
 		selectedScopes, err = rootScopedScopes(s, command)
 		if err != nil {
 			return refuse()
 		}
 		sealedRoots = selectedScopes
+	}
+	var gitDirectories []gitReadDirectory
+	if s.Git == QualifiedGitRead {
+		var err error
+		gitDirectories, err = gitReadBindings(s, command, selectedScopes)
+		if err != nil {
+			return refuse()
+		}
 	}
 	var parameters, reads, writes, execs, denies, parents, executableWrites, rootAnchors []string
 	add := func(kind, path string, rules *[]string) {
@@ -294,7 +311,7 @@ func compileSeatbelt(s SeatbeltSelection, command Command) (*seatbeltPlan, error
 		if command.Write && selected.Access == authority.WriteAccess {
 			add("subpath", selected.ScopeRoot, &writes)
 		}
-		if s.FilePolicy == authority.RootScopedFiles {
+		if s.FilePolicy == authority.RootScopedFiles || s.Git == QualifiedGitRead {
 			// Runtime dependencies outside these approved roots need a grant too.
 			add("subpath", selected.ScopeRoot, &execs)
 			add("literal", selected.ScopeRoot, &rootAnchors)
@@ -327,7 +344,9 @@ func compileSeatbelt(s SeatbeltSelection, command Command) (*seatbeltPlan, error
 		// Deny credential stores regardless of a selected workspace enclosing HOME.
 		for _, store := range credentialStores {
 			add("subpath", filepath.Join(s.Home, store), &secrets)
-			add("subpath", filepath.Join(scope.Root, store), &secrets)
+			for _, selected := range selectedScopes {
+				add("subpath", filepath.Join(selected.ScopeRoot, store), &secrets)
+			}
 		}
 		for _, store := range homeOnlyCredentialStores {
 			add("subpath", filepath.Join(s.Home, store), &secrets)
@@ -381,6 +400,11 @@ func compileSeatbelt(s SeatbeltSelection, command Command) (*seatbeltPlan, error
 		source += `
 (deny file-read* file-write* (regex #"/[.]git(/|$)"))`
 	}
+	for _, anchor := range rootAnchors {
+		if s.Git == QualifiedGitRead {
+			source += "\n(deny file-write-unlink (require-all " + anchor + " (vnode-type DIRECTORY)))"
+		}
+	}
 	// Keep policy input out of the profile language: paths are only -D values.
 	arguments := append(parameters, "-p", source, "--")
 	encoded, err := json.Marshal(struct {
@@ -389,12 +413,14 @@ func compileSeatbelt(s SeatbeltSelection, command Command) (*seatbeltPlan, error
 		ScratchIdentity authority.RootIdentity
 		Pins            []ExecutablePin
 		Roots           []rootScopeBinding `json:",omitempty"`
-	}{source, arguments, s.ScratchIdentity, s.Executables, sealedRoots})
+		GitRead         *GitReadSelection  `json:",omitempty"`
+		GitDirectories  []gitReadDirectory `json:",omitempty"`
+	}{source, arguments, s.ScratchIdentity, s.Executables, sealedRoots, s.GitRead, gitDirectories})
 	if err != nil {
 		return refuse()
 	}
 	digest := sha256.Sum256(encoded)
-	return &seatbeltPlan{source: source, arguments: arguments, digest: hex.EncodeToString(digest[:]), roots: sealedRoots}, nil
+	return &seatbeltPlan{source: source, arguments: arguments, digest: hex.EncodeToString(digest[:]), roots: sealedRoots, gitDirectories: gitDirectories}, nil
 }
 
 // Environment is constructed from trusted policy, then matched exactly. Neither
@@ -414,12 +440,18 @@ func seatbeltEnvironment(s SeatbeltSelection, write bool) []string {
 	if write {
 		locks = "1"
 	}
-	if s.FilePolicy == authority.RootScopedFiles {
+	if s.FilePolicy == authority.RootScopedFiles || s.Git == QualifiedGitRead {
 		// Explicit host values, not os.Environ: no inherited tokens/loader options.
 		// Git config/hooks are not secretly disabled. Their paths/executables still
 		// need sandbox admission: pointing HOME there grants no filesystem access.
-		return []string{"HOME=" + s.Home, "TMPDIR=" + s.Scratch, "XDG_CONFIG_HOME=" + filepath.Join(s.Home, ".config"),
+		environment := []string{"HOME=" + s.Home, "TMPDIR=" + s.Scratch, "XDG_CONFIG_HOME=" + filepath.Join(s.Home, ".config"),
 			"PATH=" + strings.Join(dirs, ":"), "GIT_TERMINAL_PROMPT=0", "GIT_OPTIONAL_LOCKS=" + locks, "LANG=C", "LC_ALL=C"}
+		if s.Git == QualifiedGitRead && s.GitRead != nil {
+			// Explicit metadata selection prevents a changed commondir file from
+			// redirecting this read. This value still supplies no scope authority.
+			environment = append(environment, "GIT_COMMON_DIR="+s.GitRead.CommonDirectory)
+		}
+		return environment
 	}
 	return []string{"HOME=" + s.Scratch, "TMPDIR=" + s.Scratch, "XDG_CONFIG_HOME=" + filepath.Join(s.Scratch, ".config"), "PATH=" + strings.Join(dirs, ":"),
 		"GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null", "GIT_CONFIG_NOSYSTEM=1", "GIT_TERMINAL_PROMPT=0", "GIT_OPTIONAL_LOCKS=" + locks, "LANG=C.UTF-8", "LC_ALL=C.UTF-8"}

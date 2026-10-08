@@ -1,5 +1,86 @@
 # Selected process ownership
 
+## Bounded GS1 Git read selection — source only
+
+`SeatbeltSelection.Git = QualifiedGitRead` with its non-nil `GitReadSelection`
+adds an explicit strict read selection to the existing producer. It requires
+the SAME captured `LegacyProtectedFiles` owner/task policy; it cannot silently
+switch a saved policy or reinterpret `approved-roots-v1`. Existing `DenyGit`,
+`WorkspaceGit` and `RootScopedGit` behavior remains unchanged. The name describes
+the required native gate, not an already acquired qualification certificate.
+
+The trusted binding contains the pinned Git executable path, exact worktree,
+Git directory and common directory, and each directory's device/inode identity.
+`Command.Root`/`RootIdentity` retain the original approved root; `Command.Cwd`
+must equal the worktree and the selected task subtree. The selected approved
+workspace must have `GitHistoryApproved` and matching `GitMetadata` paths.
+External linked-worktree metadata and tool/config roots must independently
+exist in both the captured approval and task grant, with physical identity,
+subtree scope and Shell verification. Discovery, HOME, PATH and a `.git` pointer
+grant nothing. Missing or conflicting authority refuses before reservation.
+Explicit exclusions currently refuse this multi-root selection rather than
+being dropped. Broad HOME/protected-store scopes remain refused.
+
+`GitReadArguments(binding, view)` constructs exactly `GitReadStatus`,
+`GitReadDiff` or `GitReadStagedDiff`. The existing Prepare invocation carries
+that exact argv and empty stdin. Other options, an alternate executable/cwd,
+environment injection or `Write=true` refuse. Every selected root is narrowed
+to read access; only private scratch and normal output devices remain writable.
+The existing profile digest seals the Git binding and approved ancestors.
+Preflight opens all three directories relative to retained approved ancestor
+descriptors, checks the supplied identities and rechecks all named paths before
+the single existing dispatch. Partial measurement failures close every acquired
+handle. These are preflight observations, not continuous exec/object guarantees.
+
+Explicit `--git-dir`/`--work-tree` and `GIT_COMMON_DIR` prevent pointer/config
+discovery from choosing another metadata path. Optional index locks are disabled
+and the pager is suppressed for bounded output. Normal Git config/includes,
+hooks, fsmonitor, diff drivers and interpreter/toolchain execution are not
+secretly disabled or redirected to an alternate HOME. Their actual files and
+executables still need approved scopes; granting HOME's value supplies none.
+Read-only scope may refuse a tool requiring writes. Arbitrary process trees
+remain unqualified. There is no new executor, shell parser, result owner,
+admission store, journal or fallback.
+
+### Exact Lead glue and remaining gate
+
+At the requested base, `boot/nativeruntime.go` leaves `connector.processes`
+unset. `boot/computerconnector.go` requires both process and mutation producers
+before admitting Shell; `boot/connectorprocesswire.go` already owns retained
+Start/Read/Cancel. Catalogue refresh cannot fill this selection seam.
+
+Lead can map only the three closed input views to `GitReadArguments`, build the
+trusted `GitReadSelection` and `Command` from the SAME immutable lease snapshot,
+then compose `NewSeatbelt` with the actual independent `Qualification`. Use its
+`Environment(false)` on the empty-args/empty-stdin/unbound trusted template and
+the existing `NewSupervisedPreparer` or separately qualified anchored producer.
+Prepare on the SAME selected instance with the existing runtime/session/model/
+admission binding, and return that exact `processsvc.Selected` plus
+`NewObservationWorkspace` for the original root to `connectorShellSelection`.
+Keep the existing reservation/result/reconnect owner and original deadline.
+No app/contract/schema DTO extension is needed for this source selection.
+The only additive trusted composition input is `SeatbeltSelection.GitRead`.
+The string request must never be passed to a shell or arbitrary argv parser.
+
+This patch does not supply the missing production `Qualification`. Its current
+one-shot fixture implementation is restricted to disposable `/private/tmp`
+roots and cannot certify an actual writer. The historical readable protected
+hardlink remains a failing gate. Before activation Lead must provide effective
+object/alias confinement evidence for the exact roots and launch, with normal
+config/toolchain behavior, and qualify the retained process lifecycle in the
+serialized native lane. Path-only Seatbelt or a nil-returning callback is not a
+substitute. A changed policy or additional root requires normal owner authority;
+it cannot be invented to make this constructor pass.
+
+CPU regressions cover closed views, all-root read narrowing, scope/metadata/
+identity drift, descriptor retention and partial closure, existing Prepare and
+pre-reservation refusal, and retained binary reads without a second dispatch.
+The watchdog double retains a clean root exit and output as `Unknown` with
+group/descendant cleanup unverified. That is not real Git status/diff, native
+hooks/toolchain or external reconnect evidence. Host qualification, root wiring,
+aggregate/risk review and real GS1 acceptance remain Lead-owned. Historical
+refused/unknown operations are neither replayed nor replaced.
+
 The opt-in `approved-roots-v1` compiler is documented in [Root-scoped access and approvals](../../../../docs/sandbox-approvals.md). It preserves the existing process/lease/journal owners and does not activate native Shell. The strict credential-alias gate described below remains historical evidence for the legacy policy; it is not a completed qualification of the new root-scoped contract.
 
 This source slice owns one process operation in Go. It is not registered in the
