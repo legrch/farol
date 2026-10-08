@@ -1,0 +1,54 @@
+# Connect Farol to ChatGPT
+
+Open **Setup** and follow **Overview → Sign in → Workspaces → Connection → Add to ChatGPT**. Sign-in inside Farol is optional when you use external ChatGPT. Use **Continue** and **Previous**, or select a section directly. Navigation alone does not save settings or verify a step.
+
+## Overview: fresh and returning profiles
+
+For a fresh profile, review each required section below. For a returning or partially configured profile, reopen **Setup** and review the saved workspaces, connection and current checks. Keep saved credentials unless they need to change. Reviewing Setup does not reset the profile or repeat an earlier action.
+
+The overview distinguishes **Not checked**, **Check in progress**, **Result needs review**, **Status unavailable** and **Verified**. Treat each as its actual result. **Open Home** appears only when the required workspace, local connection and external attachment checks are current and Computer is ready; optional sign-in can remain unchecked.
+
+## Sign in (optional)
+
+Choose **Sign in** to use your own account inside Farol. **Open ChatGPT** opens that browser, and **Check sign-in** checks its account state when needed. You can continue without this step for external Computer access. Signing in does not approve workspaces or prove an external connection.
+
+## Workspaces
+
+Choose **Add workspace…**, select a folder, then confirm **Add selected workspace read-only**. Picking a folder alone does not approve access. Review its saved path in the approved list.
+
+Select an approved workspace and review **Saved access**. Under **Workspace access**, choose **Read-only** or **Read & write**:
+
+- **Save** submits a changed access choice. Read & write allows guarded changes that still require approval; it does not establish unrestricted execution. Verify access again after a confirmed save.
+- **Cancel** discards the unsaved access draft. A refused or unknown save retains its draft; cancelling that draft does not undo an operation already submitted or resolve uncertainty.
+- **Remove** opens a confirmation beside that workspace. **Confirm removal** revokes Farol access and keeps the files on disk. **Keep workspace** dismisses the confirmation without submitting removal.
+
+Choose **Verify workspace** with no access draft or removal confirmation open. It checks the current Connection workspace without changing its binding, or checks another selected workspace and prepares it for Connection. Selection alone does not choose the Connection workspace.
+
+Changes may be paused while another dependent action is pending or uncertain. If a coding task is using the workspace, wait for it to finish. If an action is refused because the connection is running, finish current work, choose **Review stop connection**, then explicitly choose **Stop connection** or **Keep connection**. A confirmed stop does not repeat the workspace action: review and submit the intended change separately. If stopping is unconfirmed, inspect **Workspace diagnostics** and do not repeat the stop or change. A stale draft requires cancellation and review of the saved workspace first.
+
+## Connection
+
+Use the tunnel belonging to the ChatGPT workspace you intend to connect. Keep **Farol Dev** and production **Farol** on their respective tunnels and profiles. A display name does not select an environment. Reuse the existing ChatGPT app attached to the selected tunnel; do not duplicate it or move credentials just to change a name.
+
+For an unconfigured connection, open [Organization tunnels](https://platform.openai.com/settings/organization/tunnels), create a tunnel associated with your ChatGPT workspace if needed, and obtain a Restricted runtime key scoped to **Tunnels Read and Use** only. Enter its **Tunnel ID** and **Runtime key** in Farol, then choose **Save & connect** once. Follow field validation and any pause message.
+
+The saved key is never read back into the form. **Show runtime key** and **Hide runtime key** affect only the local draft you entered. Submission clears that field; **Cancel** clears the draft and restores the saved Tunnel ID. On a returning profile, **Tunnel credentials saved** means you can keep the saved key. Use **Edit connection** only when details change.
+
+| Result                                                     | What to do                                                                                    |
+| ---------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| **Connection started**                                     | Local setup succeeded. Continue to Add to ChatGPT for external verification.                  |
+| **Credentials saved**, but the connection did not complete | Keep the saved key. Review the connection result before another action.                       |
+| Unconfirmed or unknown result                              | Inspect the original result in Diagnostics. Do not submit the key or connection action again. |
+| Refused request                                            | Review the reason and saved state. Do not assume nothing took effect or blindly repeat it.    |
+
+Use the offered control for the current state: **Find connection helper**, **Verify a workspace**, **Connect this Mac**, **Reconnect** or **Check connection**. Helper discovery must confirm a usable helper; local health checks do not establish ChatGPT attachment. For missing or incompatible helpers, review **Connection help → Connection diagnostics** rather than treating discovery as success.
+
+## Add to ChatGPT
+
+1. Use **Open Tunnels** to review the selected tunnel. In the intended external ChatGPT workspace, enable Developer mode and open [ChatGPT connectors](https://chatgpt.com/plugins). Reuse the app already attached to that tunnel; if none exists, add a connector using the Tunnel connection type and that tunnel. Select the matching Farol Dev or Farol connector in your conversation.
+2. Choose **Copy verification request** when the current request is available. Paste and send it yourself in ChatGPT, once. Copying does not send a message. If copying fails, open **Technical details** and select the current request manually. It checks the approved workspace and returns counts without file names or contents.
+3. Return to Farol and choose **Check attachment** to inspect and record the matching local verification receipt. This action does not send another ChatGPT message.
+
+**Connected to this Mac · ChatGPT check needed** confirms only the local connection. A provider reply, connector name or successful copy is insufficient. **Attachment checked · Computer ready** requires current workspace and attachment evidence for this connection. A missing request or unavailable control requires review of current status, not reuse of an old request.
+
+For pending or unknown outcomes, open **Connection help → Connection diagnostics** or **Workspace diagnostics**, review **Actions needing observation** and **Action details**, and use **Refresh status** to observe current state. Retained results survive page navigation within the window; refresh does not replay an action or settle an unknown outcome by itself. Do not resend verification, replace credentials, retarget the connection or repeat an uncertain action to obtain a green status.

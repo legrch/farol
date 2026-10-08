@@ -14,6 +14,8 @@ integration notes must not be read as current product acceptance.
 ## Use Farol
 
 - [User guide](owner-preview.md) — setup, access controls, lifecycle and diagnostics.
+- [Connection guide](setup-connection.md) — the current five-section Setup flow,
+  saved credentials, workspace access, and external Computer verification.
 - [Setup links](setup-links.md) — external tunnel and ChatGPT connector pages used
   by the in-app instructions.
 - [Workspace context](computer-workspace-context.md) — selected-folder catalogue,
