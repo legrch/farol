@@ -20,6 +20,7 @@ import {
 } from "../../pkg/product-settings/contract";
 import { folderAccessChecked, folderDisplayName } from "../folder-access-state";
 import { computerSetup } from "./computer-setup";
+import { visibleSetupSection, type SetupSection } from "./setup-checklist";
 import { commandAllowed, dependencyFences } from "./command-eligibility";
 import { updateCheckAllowed } from "./update-eligibility";
 import {
@@ -66,11 +67,17 @@ type PageFeedback = Readonly<{
   result: Intent | null;
   origin: Destination;
 }>;
+type FeedbackPage = SettingsPage | `setup:${SetupSection}`;
+function feedbackPage(destination: Destination): FeedbackPage {
+  return destination.area === "setup"
+    ? `setup:${visibleSetupSection(destination.setupStep)}`
+    : destination.page;
+}
 function createFeedback() {
   let revision = 0;
   const listeners = new Set<() => void>();
   return {
-    pages: {} as Partial<Record<SettingsPage, PageFeedback>>,
+    pages: {} as Partial<Record<FeedbackPage, PageFeedback>>,
     intents: {} as Record<string, Intent>,
     unretained: false,
     subscribe(listener: () => void) {
@@ -346,7 +353,7 @@ export function Settings({ snapshot, facade, setupStep }: SettingsProps) {
     allowed,
     async run(command, admit) {
       const current = facade.getSnapshot();
-      const page = current.destination.page;
+      const page = feedbackPage(current.destination);
       const request = {};
       const report = (text: string, result: Intent | null = null) => {
         // A late reply can update only its own page and request.
@@ -469,7 +476,7 @@ export function Settings({ snapshot, facade, setupStep }: SettingsProps) {
     actions,
     setupStep,
   };
-  const pageFeedback = feedback.pages[snapshot.destination.page];
+  const pageFeedback = feedback.pages[feedbackPage(snapshot.destination)];
   const settled = settledEdit(pageFeedback?.result ?? null, snapshot);
   // Keep each form mounted across page/background changes. No revision key or
   // snapshot effect may replace a draft or interrupt IME composition.
@@ -3021,7 +3028,7 @@ function Diagnostics({ snapshot, settings, facade, actions }: PageProps) {
                           area: "setup",
                           setupStep: entry.origin.setupStep ?? "overview",
                         }
-                      : { area: "settings", page: page as SettingsPage },
+                      : { area: "settings", page: entry.origin.page },
                   )
                 }
               >

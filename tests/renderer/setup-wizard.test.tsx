@@ -6,7 +6,8 @@ import { WindowController } from "../../src/ui/renderer/controller";
 import { Shell } from "../../src/ui/renderer/shell";
 import { Services } from "../../src/ui/renderer/services";
 import type { SetupStep } from "../../src/ui/renderer/contract";
-import { bootstrap, fixture, settings } from "./fixture";
+import { ProductSettingsSchema } from "../../src/pkg/product-settings/contract";
+import { bootstrap, deferred, fixture, settings } from "./fixture";
 // Controlled DOM/IPC fixtures only; not sign-in, native dialog or live-provider proof.
 (
   globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }
@@ -21,9 +22,75 @@ afterEach(async () => {
   document.body.replaceChildren();
   vi.restoreAllMocks();
 });
-async function mount(step: SetupStep = "overview", shell = false) {
+function attachmentSettings() {
+  const value = settings();
+  const buildId = "3".repeat(64);
+  const runtimeGeneration = "a".repeat(64);
+  const workspaceId = "22222222-2222-4222-8222-222222222222";
+  const verifiedAt = "2026-10-02T20:00:00.000Z";
+  value.computer.workspaces = [
+    {
+      workspaceId,
+      root: "/approved/project",
+      label: "Project",
+      access: "read",
+      excludedPaths: [],
+      rootIdentity: { device: "1", inode: "2" },
+      accessCheck: {
+        buildId,
+        computerGeneration: 1,
+        verifiedAt,
+        rootIdentity: { device: "1", inode: "2" },
+      },
+    },
+  ];
+  value.setup.computer.verified = {
+    profile: "farol-next",
+    configRevision: 1,
+    workspaceId,
+    runtimeGeneration,
+    buildId,
+    protocol: "secure-mcp",
+    verifiedAt,
+  };
+  // Published current workspace/runtime/challenge data; attachment and embedded
+  // sign-in remain unverified. No admission function or controller is bypassed.
+  Object.assign(value.connectors.secureMcp, {
+    tunnelId: "synthetic-tunnel",
+    credential: "stored",
+    tunnelClient: {
+      executablePath: "/approved/tunnel",
+      executableSha256: "b".repeat(64),
+      version: "1.0.0",
+      protocol: "openai-tunnel-client/v1",
+      verifiedAt,
+    },
+    runtime: {
+      state: "ready",
+      connectorGeneration: 1,
+      computerGeneration: 1,
+      runtimeGeneration,
+      buildId,
+      observedAt: verifiedAt,
+    },
+    challenge: {
+      value: "33333333-3333-4333-8333-333333333333",
+      challengeSha256: "c".repeat(64),
+      computerGeneration: 1,
+      runtimeGeneration,
+      buildId,
+      preparedAt: verifiedAt,
+    },
+  });
+  return ProductSettingsSchema.parse(value);
+}
+async function mount(
+  step: SetupStep = "overview",
+  shell = false,
+  value = settings(),
+) {
   const f = fixture();
-  const configuration = { status: "ready" as const, settings: settings() };
+  const configuration = { status: "ready" as const, settings: value };
   vi.mocked(f.api.bootstrap).mockResolvedValue({
     ...bootstrap(),
     environment: "dev",
@@ -81,9 +148,153 @@ async function mount(step: SetupStep = "overview", shell = false) {
     expect(b).toBeTruthy();
     await act(async () => b.click());
   };
-  return { f, c, host, button, click, visible };
+  return {
+    f,
+    c,
+    host,
+    button,
+    click,
+    visible,
+    configuration,
+    async remount() {
+      await act(async () => root.render(null));
+      await act(async () =>
+        root.render(
+          <StrictMode>
+            <View />
+          </StrictMode>,
+        ),
+      );
+    },
+  };
 }
 describe("reference-aligned Setup wizard", () => {
+  it.each(["refused", "unknown"] as const)(
+    "keeps pending and late attachment %s feedback on its Setup origin across Shell navigation and remount",
+    async (outcome) => {
+      const h = await mount("attachment", true, attachmentSettings());
+      const id = "settings:connector.check-attachment:";
+      const wait = deferred<unknown>();
+      const notice = () =>
+        [...h.host.querySelectorAll('.settings-page > [role="status"]')].find(
+          h.visible,
+        )?.textContent;
+      const stepTo = async (label: string) => {
+        const button = h.host.querySelector<HTMLButtonElement>(
+          `nav[aria-label="Setup steps"] button[aria-label="${label}"]`,
+        )!;
+        expect(button).toBeTruthy();
+        await act(async () => button.click());
+      };
+      expect(h.button("Check attachment").disabled).toBe(false);
+      expect(h.button("Copy verification request").disabled).toBe(false);
+      vi.mocked(h.f.api.configure).mockReturnValueOnce(wait.promise);
+      await h.click("Check attachment");
+      expect(h.f.api.configure).toHaveBeenCalledExactlyOnceWith({
+        kind: "connector.check-attachment",
+      });
+      expect(notice()).toContain("Saving or checking");
+      const pending = structuredClone(h.c.getSnapshot().intents[id]);
+      expect(pending?.state).toBe("pending");
+      await stepTo("Sign in");
+      expect(h.c.getSnapshot().destination).toMatchObject({
+        area: "setup",
+        page: "connection",
+        setupStep: "signin",
+      });
+      expect(notice()).toBeUndefined();
+      // Attachment checks are shared writers: hiding feedback must not weaken
+      // the original pending/UNKNOWN fences on optional sign-in.
+      expect(h.button("Sign in").disabled).toBe(true);
+      await h.click("Sign in");
+      await stepTo("Add to ChatGPT");
+      expect(notice()).toContain("Saving or checking");
+      await h.remount();
+      expect(notice()).toContain("Saving or checking");
+      expect(h.c.getSnapshot().intents[id]).toEqual(pending);
+      await h.click("Check attachment");
+      await stepTo("Sign in");
+      await act(async () => {
+        if (outcome === "unknown")
+          wait.reject(new Error("attachment reply lost"));
+        else
+          wait.resolve({
+            ok: false,
+            error: "CONNECTOR_ATTACHMENT_NOT_FOUND",
+            snapshot: h.configuration,
+          });
+      });
+      expect(notice()).toBeUndefined();
+      const receipt = structuredClone(h.c.getSnapshot().intents[id]);
+      expect(receipt).toMatchObject({
+        id,
+        state: outcome,
+        code:
+          outcome === "unknown"
+            ? "CONFIGURATION_OUTCOME_UNKNOWN"
+            : "CONNECTOR_ATTACHMENT_NOT_FOUND",
+      });
+      await h.remount();
+      expect(notice()).toBeUndefined();
+      expect(h.button("Sign in").disabled).toBe(outcome === "unknown");
+      await stepTo("Add to ChatGPT");
+      const originalNotice = notice();
+      expect(originalNotice).toContain(
+        outcome === "unknown"
+          ? "Outcome unknown"
+          : "This action could not be completed",
+      );
+      expect(h.host.textContent).not.toContain(
+        "Attachment checked · Computer ready",
+      );
+      expect(h.c.getSnapshot().configuration).toEqual(h.configuration);
+      await h.remount();
+      expect(notice()).toBe(originalNotice);
+      expect(h.c.getSnapshot().intents[id]).toEqual(receipt);
+      if (outcome === "unknown") {
+        expect(h.button("Check attachment").disabled).toBe(true);
+        await h.click("Check attachment");
+      }
+      // A normal Settings Connection destination shares the legacy page value,
+      // but must not inherit Setup's pending/late presentation either.
+      await h.click("Settings");
+      await h.click("Connection");
+      expect(notice()).toBeUndefined();
+      await h.click("Diagnostics");
+      const retained = h.host.querySelector('[aria-label="Retained actions"]')!;
+      expect(retained.textContent).toContain(id);
+      expect(retained.textContent).toContain(receipt!.code);
+      if (outcome === "unknown") {
+        const observation = h.host.querySelector(
+          '[aria-label="Actions needing observation"]',
+        )!;
+        expect(observation.textContent).toContain(id);
+        await h.click("Return to Setup");
+        expect(h.c.getSnapshot().destination).toMatchObject({
+          area: "setup",
+          setupStep: "attachment",
+        });
+        expect(notice()).toBe(originalNotice);
+      } else {
+        await h.click("General");
+        await h.click("Review Setup");
+        await stepTo("Sign in");
+        expect(notice()).toBeUndefined();
+        await h.click("Sign in");
+        expect(notice()).toContain("Action confirmed");
+        await stepTo("Add to ChatGPT");
+        expect(notice()).toBe(originalNotice);
+        expect(h.c.getSnapshot().intents[id]).toEqual(receipt);
+      }
+      expect(
+        vi.mocked(h.f.api.configure).mock.calls.map(([command]) => command),
+      ).toEqual([
+        { kind: "connector.check-attachment" },
+        ...(outcome === "refused" ? [{ kind: "chatgpt.open-sign-in" }] : []),
+      ]);
+      expect(h.f.api.task).not.toHaveBeenCalled();
+    },
+  );
   it("retains the original unknown receipt across real Review Setup navigation without dispatching commands", async () => {
     const h = await mount("connection", true);
     const operationId = "11111111-2222-4333-8444-555555555555";
