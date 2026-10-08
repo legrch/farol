@@ -339,6 +339,7 @@ export class InstalledUpdater {
     this.begin();
     await this.publish({ phase: "checking" });
     try {
+      if (this.closed) return;
       const found = await this.ports.discover();
       if (this.closed) return;
       this.available = null;
@@ -399,6 +400,7 @@ export class InstalledUpdater {
     this.begin();
     await this.publish({ phase: "downloading" });
     try {
+      if (this.closed) return;
       const downloaded = await this.ports.download();
       if (
         downloaded.ok &&
@@ -483,6 +485,7 @@ export class InstalledUpdater {
     this.begin();
     await this.publish({ phase: "downloading" });
     try {
+      if (this.closed) return;
       await this.retainPrepared(await this.ports.prepareLocal());
     } catch {
       // Import or retention may already have published durable bytes. The
@@ -551,6 +554,7 @@ export class InstalledUpdater {
     const version = this.ready.manifest.version;
     await this.publish({ phase: "applying", version });
     try {
+      if (this.closed) return;
       const outcome = await this.ports.restart(this.ready);
       if (outcome.status === "blocked") {
         await this.publish({
@@ -592,6 +596,7 @@ export class InstalledUpdater {
     this.begin();
     await this.publish({ phase: "applying", version });
     try {
+      if (this.closed) return;
       const outcome = await this.ports.restore(action);
       if (outcome.status === "blocked") {
         if (previous.phase === "recovery" || previous.phase === "idle")

@@ -73,6 +73,58 @@ function fixture() {
 }
 
 describe("installed update orchestration (port fixture, no native or GitHub acceptance)", () => {
+  it("does not dispatch release effects after Quit closes a pending status publication", async () => {
+    const check = fixture();
+    await check.updater.initialize();
+    const checking = check.updater.check(true);
+    const checkClose = check.updater.close();
+    await Promise.all([checking, checkClose]);
+    expect(check.ports.discover).not.toHaveBeenCalled();
+
+    const download = fixture();
+    await download.updater.initialize();
+    await download.updater.check(true);
+    const downloading = download.updater.download();
+    const downloadClose = download.updater.close();
+    await Promise.all([downloading, downloadClose]);
+    expect(download.ports.download).not.toHaveBeenCalled();
+
+    const local = fixture();
+    const prepareLocal = vi
+      .fn<NonNullable<InstalledUpdaterPorts["prepareLocal"]>>()
+      .mockResolvedValue({ ok: true, update: staged });
+    const localUpdater = new InstalledUpdater({
+      ...local.ports,
+      prepareLocal,
+    });
+    await localUpdater.initialize();
+    const preparing = localUpdater.prepareLocal();
+    const localClose = localUpdater.close();
+    await Promise.all([preparing, localClose]);
+    expect(prepareLocal).not.toHaveBeenCalled();
+
+    const restart = fixture();
+    await restart.updater.initialize();
+    await restart.updater.check(true);
+    await restart.updater.download();
+    const restarting = restart.updater.restart();
+    const restartClose = restart.updater.close();
+    await Promise.all([restarting, restartClose]);
+    expect(restart.ports.restart).not.toHaveBeenCalled();
+
+    const restore = fixture();
+    restore.ports.recover.mockResolvedValue({
+      ok: true,
+      update: null,
+      rollbackVersion: "0.1.0-owner.beta.1",
+    });
+    await restore.updater.initialize();
+    const restoring = restore.updater.restore("rollback");
+    const restoreClose = restore.updater.close();
+    await Promise.all([restoring, restoreClose]);
+    expect(restore.ports.restore).not.toHaveBeenCalled();
+  });
+
   it("discovers without staging and downloads the same candidate only on explicit command", async () => {
     const { updater, ports } = fixture();
     await updater.initialize();
