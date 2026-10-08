@@ -789,8 +789,7 @@ async function installedUpdateCommand(
   else if (command.data.kind === "set-automatic-update-preference") {
     await installedUpdater.setAutomaticUpdatePreference(command.data.enabled);
     return installedUpdater.snapshot();
-  }
-  else if (command.data.kind === "restart") await installedUpdater.restart();
+  } else if (command.data.kind === "restart") await installedUpdater.restart();
   else if (command.data.kind === "recover" || command.data.kind === "rollback")
     await installedUpdater.restore(command.data.kind);
   return installedUpdateView;
@@ -969,9 +968,9 @@ async function initializeInstalledUpdater(): Promise<void> {
       await installedUpdater.close();
       return;
     }
-    void installedUpdater.check();
+    void installedUpdater.scheduledCheck();
     installedUpdateTimer = setInterval(() => {
-      void installedUpdater?.check();
+      void installedUpdater?.scheduledCheck();
     }, UPDATE_RECHECK_MS);
     installedUpdateTimer.unref();
   } catch {
