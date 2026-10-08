@@ -3177,6 +3177,69 @@ describe("Farol Next product configuration", () => {
 });
 
 describe("owner-selected embedded app binding", () => {
+  it("preserves connector unknown state across reload against settings and stop changes", async () => {
+    const root = await stateRoot();
+    const store = new ProductSettingsStore({ root });
+    const seed = new ProductConfigurationService(store, dependencies());
+    await seed.initialize();
+    const client = {
+      executablePath: "/opt/homebrew/bin/tunnel-client",
+      executableSha256: "a".repeat(64),
+      version: "0.0.14+0f870e50a973fa820d4c409000059e181e8d242b",
+      protocol: "openai-tunnel-client/v1",
+    };
+    expect((await seed.recordSecureMcpTunnelClient(client)).ok).toBe(true);
+    expect(
+      (await seed.configureSecureMcpTunnel({ tunnelId: "tunnel_farol_next" }))
+        .ok,
+    ).toBe(true);
+    expect((await seed.recordSecureMcpCredential("stored")).ok).toBe(true);
+    const current = seed.snapshot();
+    if (current.status !== "ready") throw new Error("settings missing");
+    expect(
+      (
+        await seed.recordSecureMcpRuntime({
+          state: "outcome_unknown",
+          runtimeGeneration: "b".repeat(64),
+          computerGeneration: current.settings.computer.generation,
+          buildId: "c".repeat(64),
+        })
+      ).ok,
+    ).toBe(true);
+    const reloaded = new ProductConfigurationService(store, dependencies());
+    await reloaded.initialize();
+    const before = reloaded.snapshot();
+    for (const result of [
+      await reloaded.configureSecureMcpTunnel({ tunnelId: "replacement" }),
+      await reloaded.recordSecureMcpTunnelClient({
+        ...client,
+        executableSha256: "d".repeat(64),
+      }),
+      await reloaded.recordSecureMcpCredential("missing"),
+      await reloaded.recordSecureMcpStopped(),
+    ])
+      expect(result).toMatchObject({
+        ok: false,
+        error: "CONNECTOR_RUNTIME_OUTCOME_UNKNOWN",
+      });
+    expect(reloaded.snapshot()).toEqual(before);
+    if (before.status !== "ready") throw new Error("settings missing");
+    await store.save({
+      ...before.settings,
+      connectors: {
+        ...before.settings.connectors,
+        secureMcp: { ...before.settings.connectors.secureMcp, runtime: null },
+      },
+    });
+    const setupOnly = new ProductConfigurationService(store, dependencies());
+    await setupOnly.initialize();
+    expect(
+      await setupOnly.configureSecureMcpTunnel({ tunnelId: "replacement" }),
+    ).toMatchObject({
+      ok: false,
+      error: "CONNECTOR_RUNTIME_OUTCOME_UNKNOWN",
+    });
+  });
   it("preserves selection through reload but invalidates it after connector generation changes", async () => {
     const root = await stateRoot();
     const store = new ProductSettingsStore({ root });

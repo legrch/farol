@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
 import type { ChildProcess } from "node:child_process";
+import { rmSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -108,6 +109,7 @@ describe("secure MCP connector runtime", () => {
       "CONNECTOR_CONFIGURE_OUTCOME_UNKNOWN",
     );
     expect(run).toHaveBeenCalledTimes(1);
+    await expect(runtime.stop()).rejects.toThrow("CONNECTOR_STOP_UNCONFIRMED");
   });
 
   it("treats a refused executable launch as known without latching a profile write", async () => {
@@ -254,6 +256,37 @@ describe("secure MCP connector runtime", () => {
       code: "CONNECTOR_START_FAILED",
     });
     expect(runtime.isRunning()).toBe(false);
+  });
+
+  it("does not latch a refused child spawn before the spawn event", async () => {
+    const selected = await fixture();
+    const runtime = new SecureMcpConnectorRuntime(
+      {
+        root: selected.runtimeRoot,
+        homePath: selected.root,
+        tempPath: selected.root,
+      },
+      {
+        id: () => {
+          // Cwd disappears after preflight but before Node emits `spawn`.
+          rmSync(selected.runtimeRoot, { recursive: true, force: true });
+          return "missing-cwd";
+        },
+      },
+    );
+    const result = await runtime.start({
+      executablePath: process.execPath,
+      executableSha256: "a".repeat(64),
+      connectorGeneration: 1,
+      computerGeneration: 1,
+      buildId: "b".repeat(64),
+      launchContractSha256: "c".repeat(64),
+    });
+    expect(result).toMatchObject({
+      state: "unreachable",
+      code: "CONNECTOR_START_FAILED",
+    });
+    expect(runtime.hasUnresolvedEffect()).toBe(false);
   });
 
   it("retains the original unknown spawn outcome and refuses a second launch or clean stop", async () => {

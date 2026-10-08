@@ -142,6 +142,7 @@ type MutationResult = Readonly<
         | "SETTINGS_WRITE_FAILED"
         | "CONNECTOR_APP_VERIFICATION_STATE_CHANGED"
         | "CONNECTOR_APP_VERIFICATION_OUTCOME_UNKNOWN"
+        | "CONNECTOR_RUNTIME_OUTCOME_UNKNOWN"
         | "WORKSPACE_NOT_FOUND"
         | "WORKSPACE_SELECTION_PROTECTED"
         | "WORKSPACE_ROOT_CHANGED"
@@ -1196,7 +1197,7 @@ export class ProductConfigurationService {
   async recordSecureMcpTunnelClient(input: unknown): Promise<MutationResult> {
     const parsed = secureMcpTunnelClientInputSchema.safeParse(input);
     if (!parsed.success) return this.failure("SETTINGS_INPUT_INVALID");
-    return this.mutate((settings) => {
+    return this.mutateConnector((settings) => {
       const connector = settings.connectors.secureMcp;
       const selected = connector.tunnelClient;
       if (
@@ -1230,7 +1231,7 @@ export class ProductConfigurationService {
   async configureSecureMcpTunnel(input: unknown): Promise<MutationResult> {
     const parsed = secureMcpTunnelInputSchema.safeParse(input);
     if (!parsed.success) return this.failure("SETTINGS_INPUT_INVALID");
-    return this.mutate((settings) => {
+    return this.mutateConnector((settings) => {
       const connector = settings.connectors.secureMcp;
       if (connector.tunnelId === parsed.data.tunnelId) return settings;
       const next = {
@@ -1288,7 +1289,7 @@ export class ProductConfigurationService {
   ): Promise<MutationResult> {
     const parsed = z.enum(["missing", "stored"]).safeParse(credential);
     if (!parsed.success) return this.failure("SETTINGS_INPUT_INVALID");
-    return this.mutate((settings) => {
+    return this.mutateConnector((settings) => {
       const connector = settings.connectors.secureMcp;
       if (connector.credential === parsed.data) return settings;
       const next = {
@@ -1500,7 +1501,7 @@ export class ProductConfigurationService {
       | "TUNNEL_CLIENT_EXECUTABLE_UNSAFE",
     purpose: "stop" | "update" = "stop",
   ): Promise<MutationResult> {
-    return this.mutate((settings) => {
+    return this.mutateConnector((settings) => {
       const connector = settings.connectors.secureMcp;
       if (
         connector.runtime === null &&
@@ -2879,6 +2880,23 @@ export class ProductConfigurationService {
     fence: StoreWriteFence = {},
   ): Promise<MutationResult> {
     return this.exclusive(() => this.commit(transform, fence));
+  }
+
+  private mutateConnector(
+    transform: (settings: ProductSettings) => ProductSettings,
+  ): Promise<MutationResult> {
+    return this.exclusive(() => {
+      const current = this.current;
+      if (
+        current &&
+        (current.connectors.secureMcp.runtime?.state === "outcome_unknown" ||
+          current.setup.connect.outcomeUnknown)
+      )
+        return Promise.resolve(
+          this.failure("CONNECTOR_RUNTIME_OUTCOME_UNKNOWN"),
+        );
+      return this.commit(transform);
+    });
   }
 
   private fenceTaskSource(settings: ProductSettings): ProductSettings {

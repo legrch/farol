@@ -288,9 +288,10 @@ const startProcess: ConnectorProcessStarter = async (command) => {
       child.off("error", failed);
       resolve();
     };
-    const failed = (error: Error) => {
+    const failed = () => {
       child.off("spawn", spawned);
-      reject(error);
+      // Node emits `error` instead of `spawn` when the process never began.
+      reject(new ConnectorProcessNotStarted("CONNECTOR_START_FAILED"));
     };
     child.once("spawn", spawned);
     child.once("error", failed);
@@ -559,7 +560,7 @@ export class SecureMcpConnectorRuntime {
   }
 
   async stop(): Promise<void> {
-    if (this.uncertainStart) runtimeError("CONNECTOR_STOP_UNCONFIRMED");
+    if (this.hasUnresolvedEffect()) runtimeError("CONNECTOR_STOP_UNCONFIRMED");
     const child = this.child;
     this.healthBaseUrl = null;
     if (!child) return;

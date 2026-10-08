@@ -5589,6 +5589,14 @@ async function configureAdmittedProduct(
       }
     }
     case "connector.select-client": {
+      const current = configuration.snapshot();
+      if (
+        current.status === "ready" &&
+        (current.settings.connectors.secureMcp.runtime?.state ===
+          "outcome_unknown" ||
+          current.settings.setup.connect.outcomeUnknown)
+      )
+        return configurationFailure("CONNECTOR_RUNTIME_OUTCOME_UNKNOWN");
       const selected = await selectedTunnelClientExecutable();
       if (selected === "cancelled") {
         return configurationFailure("TUNNEL_CLIENT_PICKER_CANCELLED");
@@ -5599,6 +5607,14 @@ async function configureAdmittedProduct(
       return verifyTunnelClientExecutable(selected);
     }
     case "connector.discover-client": {
+      const current = configuration.snapshot();
+      if (
+        current.status === "ready" &&
+        (current.settings.connectors.secureMcp.runtime?.state ===
+          "outcome_unknown" ||
+          current.settings.setup.connect.outcomeUnknown)
+      )
+        return configurationFailure("CONNECTOR_RUNTIME_OUTCOME_UNKNOWN");
       try {
         // The real UI still drives discovery. This exact E2E-only seam lets
         // that button verify the synthetic CLI fixture instead of
@@ -5656,6 +5672,14 @@ async function configureAdmittedProduct(
       });
     }
     case "connector.configure": {
+      const current = configuration.snapshot();
+      if (
+        current.status === "ready" &&
+        (current.settings.connectors.secureMcp.runtime?.state ===
+          "outcome_unknown" ||
+          current.settings.setup.connect.outcomeUnknown)
+      )
+        return configurationFailure("CONNECTOR_RUNTIME_OUTCOME_UNKNOWN");
       if (secureMcpConnectorRuntime?.hasUnresolvedEffect())
         return configurationFailure("CONNECTOR_RUNTIME_OUTCOME_UNKNOWN");
       if (!connectorCredentialStore || secureMcpConnectorRuntime?.isRunning()) {
@@ -5765,6 +5789,14 @@ async function configureAdmittedProduct(
     case "dev-proof.run":
       return runDevMcpProof();
     case "connector.stop": {
+      const current = configuration.snapshot();
+      if (
+        current.status === "ready" &&
+        (current.settings.connectors.secureMcp.runtime?.state ===
+          "outcome_unknown" ||
+          current.settings.setup.connect.outcomeUnknown)
+      )
+        return configurationFailure("CONNECTOR_RUNTIME_OUTCOME_UNKNOWN");
       if (!secureMcpConnectorRuntime) {
         return configurationFailure("SETTINGS_UNAVAILABLE");
       }
