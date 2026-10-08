@@ -312,6 +312,35 @@ describe("compact workspace detail", () => {
     ]);
   });
   it.each([
+    [
+      "CONNECTOR_STOP_UNCONFIRMED",
+      "could not confirm that the connection stopped",
+    ],
+    [
+      "CODEX_HOST_TASK_IN_PROGRESS",
+      "A coding task is using the current workspace access",
+    ],
+    ["WORKSPACE_ROOT_CHANGED", "no longer the folder that was approved"],
+    ["WORKSPACE_NOT_FOUND", "no longer in the approved list"],
+  ] as const)(
+    "explains %s at the attempted workspace action without claiming success",
+    async (code, explanation) => {
+      const h = await mount("folders", twoWorkspaces());
+      await select(h, "second");
+      vi.mocked(h.f.api.configure).mockResolvedValueOnce({
+        ok: false,
+        error: code,
+        snapshot: h.configuration,
+      });
+      await h.click("Verify workspace");
+      expect(status(h).textContent).toContain(explanation);
+      expect(status(h).textContent).not.toContain("Action confirmed");
+      expect(h.calls()).toEqual([
+        { kind: "computer.verify-workspace", workspaceId: selectionId },
+      ]);
+    },
+  );
+  it.each([
     "computer.check-folder",
     "computer.verify-workspace",
     "computer.update-access",
@@ -365,11 +394,15 @@ describe("compact workspace detail", () => {
       snapshot: h.configuration,
     });
     await h.click("Verify workspace");
-    expect(status(h).textContent).toContain("could not be completed");
+    expect(status(h).textContent).toContain(
+      "no longer the folder that was approved",
+    );
     await select(h, "project");
-    expect(status(h).textContent).not.toContain("could not be completed");
+    expect(status(h).textContent).not.toContain(
+      "no longer the folder that was approved",
+    );
     await select(h, "second");
-    expect(status(h).textContent).toContain("could not be completed");
+    expect(status(h).textContent).toContain("no longer the folder that was approved");
     expect(h.calls()).toHaveLength(1);
   });
   it("selects access as a draft, cancels without a command and suppresses no-op Save", async () => {

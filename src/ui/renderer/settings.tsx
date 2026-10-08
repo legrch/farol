@@ -130,6 +130,8 @@ function actionFeedback(
   evidenceReceived = false,
 ): string {
   if (result.state === "pending") return "Saving or checking…";
+  if (result.code === "CONNECTOR_STOP_UNCONFIRMED")
+    return "Farol could not confirm that the connection stopped. The requested change is unconfirmed. Do not repeat this action; review the existing result in Diagnostics.";
   if (result.state === "unknown")
     return "Outcome unknown. Do not repeat this action; inspect the existing result in Diagnostics.";
   if (result.id.startsWith("settings:computer.apply-workspace-edit:"))
@@ -193,6 +195,12 @@ function actionFeedback(
     return "The connection helper could not be verified as compatible. Review Diagnostics and the Connection guide before using it.";
   if (result.code === "CONNECTOR_STOP_REQUIRED")
     return "The connection must be stopped before changing workspace access, verification, its helper or credentials. Open Diagnostics, review Connection controls and choose Stop connection, then return here. Farol will not stop it automatically.";
+  if (result.code === "CODEX_HOST_TASK_IN_PROGRESS")
+    return "A coding task is using the current workspace access. Wait for that task to finish before changing or verifying access.";
+  if (result.code === "WORKSPACE_ROOT_CHANGED")
+    return "This workspace is no longer the folder that was approved. Access was not changed. Review its current path and identity before verifying it again.";
+  if (result.code === "WORKSPACE_NOT_FOUND")
+    return "This workspace is no longer in the approved list. Refresh the list before choosing another action.";
   if (result.code?.endsWith("_CANCELLED")) return "Action cancelled.";
   if (result.code === "CHATGPT_SIGN_IN_IN_PROGRESS")
     return "Sign-in is already open in ChatGPT. Finish there, then check sign-in.";
