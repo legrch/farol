@@ -981,6 +981,133 @@ it("fresh Setup navigation never writes, verifies, clears credentials or invents
   expect(f.api.task).not.toHaveBeenCalled();
 });
 
+it("Setup presents a guided Overview and contextual steps with navigation-only controls", async () => {
+  const { host, c, f } = await mount();
+  const saved = c.getSnapshot().configuration;
+  await act(async () => button(host, "Setup").click());
+  const page = host.querySelector(".setup-page")!;
+  const visibleHeadings = () =>
+    [...page.querySelectorAll("h1,h2,h3")]
+      .filter((node) => !node.closest("[hidden]"))
+      .map((node) => node.textContent);
+  expect(page.querySelector("h1")?.textContent).toBe("Setup");
+  expect(page.querySelector(".setup-intro")?.textContent).toContain(
+    "A guided path to connect ChatGPT and decide what it can access.",
+  );
+  expect(page.querySelectorAll(".setup-overview-row")).toHaveLength(3);
+  expect(page.querySelector(".setup-overview-steps")?.textContent).toContain(
+    "Choose folders and access for each one.",
+  );
+  expect(button(page, "Previous step").disabled).toBe(true);
+  await act(async () => button(page, "Open Workspaces").click());
+  expect(page.querySelector("h1")?.textContent).toBe("Workspaces");
+  expect(page.querySelector(".setup-intro")?.textContent).toContain(
+    "Removing access keeps its files.",
+  );
+  expect(
+    visibleHeadings().filter((title) => title === "Workspaces"),
+  ).toHaveLength(1);
+  await act(async () => button(page, "Continue").click());
+  expect(c.getSnapshot().destination.setupStep).toBe("connection");
+  expect(visibleHeadings()).toEqual(["Connection"]);
+  const help = page.querySelector<HTMLDetailsElement>(".setup-help")!;
+  expect(help.open).toBe(false);
+  expect(help.textContent).toContain("Connection diagnostics");
+  await act(async () => {
+    help.open = true;
+  });
+  await act(async () => button(page, "Continue").click());
+  expect(c.getSnapshot().destination.setupStep).toBe("attachment");
+  expect(visibleHeadings()).toEqual(["Add to ChatGPT"]);
+  await act(async () => button(page, "Previous step").click());
+  expect(c.getSnapshot().destination.setupStep).toBe("connection");
+  await act(async () => button(page, "Continue").click());
+  await act(async () => button(page, "Continue").click());
+  expect(c.getSnapshot().destination.setupStep).toBe("finish");
+  expect(page.querySelector(".setup-finish h2")?.textContent).toBe(
+    "A few checks remain",
+  );
+  await act(async () => button(page, "Open Home").click());
+  expect(c.getSnapshot().destination.area).toBe("home");
+  expect(c.getSnapshot().configuration).toBe(saved);
+  expect(f.api.configure).not.toHaveBeenCalled();
+  expect(f.api.task).not.toHaveBeenCalled();
+  expect(f.api.bootstrap).toHaveBeenCalledTimes(1);
+  expect(f.api.installedUpdate).toHaveBeenCalledTimes(1);
+});
+
+it("Setup keeps credential draft nodes through Overview, other steps and background status", async () => {
+  const { host, c, f } = await mount();
+  await act(async () => c.navigate({ area: "setup", setupStep: "connection" }));
+  const inputs = host.querySelectorAll<HTMLInputElement>(
+    ".connection-credentials input",
+  );
+  const tunnel = inputs[0]!;
+  const key = inputs[1]!;
+  await act(async () => {
+    const setValue = Object.getOwnPropertyDescriptor(
+      HTMLInputElement.prototype,
+      "value",
+    )!.set!;
+    setValue.call(tunnel, "draft-tunnel");
+    tunnel.dispatchEvent(new Event("input", { bubbles: true }));
+    setValue.call(key, "fixture-draft-key-0000000000");
+    key.dispatchEvent(new Event("input", { bubbles: true }));
+    key.dispatchEvent(
+      new CompositionEvent("compositionstart", { bubbles: true }),
+    );
+  });
+  for (const step of ["overview", "folders", "attachment", "finish"] as const) {
+    await act(async () => c.navigate({ area: "setup", setupStep: step }));
+    expect(key.isConnected).toBe(true);
+    expect(key.closest("[hidden]")).not.toBeNull();
+  }
+  await act(async () => f.emit("route", { state: "loaded" }));
+  await act(async () => c.navigate({ area: "setup", setupStep: "connection" }));
+  expect(host.querySelectorAll(".connection-credentials input")[0]).toBe(
+    tunnel,
+  );
+  expect(host.querySelectorAll(".connection-credentials input")[1]).toBe(key);
+  expect(tunnel.value).toBe("draft-tunnel");
+  expect(key.value).toBe("fixture-draft-key-0000000000");
+  expect(button(host, "Save credentials").disabled).toBe(false);
+  await act(async () => button(host, "Save credentials").click());
+  expect(f.api.configure).not.toHaveBeenCalled();
+  await act(async () =>
+    key.dispatchEvent(
+      new CompositionEvent("compositionend", { bubbles: true }),
+    ),
+  );
+  await act(async () => button(host, "Cancel").click());
+  expect(key.value).toBe("");
+  expect(f.api.configure).not.toHaveBeenCalled();
+  expect(f.api.task).not.toHaveBeenCalled();
+});
+
+it.each(["stale", "unknown"] as const)(
+  "Setup Overview and Finish never promote %s checks to Computer ready",
+  async (state) => {
+    const data = bootstrap();
+    data.configuration.settings = homeComputerSettings();
+    if (state === "stale")
+      data.configuration.settings.setup.connect.verified!.runtimeGeneration =
+        "e".repeat(64);
+    else data.configuration.settings.setup.connect.outcomeUnknown = true;
+    const { host, c, f } = await mount(data);
+    for (const step of ["overview", "finish"] as const) {
+      await act(async () => c.navigate({ area: "setup", setupStep: step }));
+      const visible = [...host.querySelectorAll(".setup-page h2")].filter(
+        (node) => !node.closest("[hidden]"),
+      );
+      expect(
+        visible.some((node) => node.textContent === "Computer ready"),
+      ).toBe(false);
+    }
+    expect(f.api.configure).not.toHaveBeenCalled();
+    expect(f.api.task).not.toHaveBeenCalled();
+  },
+);
+
 it("ready Review Setup retains saved credentials and cancels replacement without any configuration effect", async () => {
   const data = bootstrap();
   data.configuration.settings = homeComputerSettings();

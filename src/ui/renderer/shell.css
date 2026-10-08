@@ -372,49 +372,80 @@ kbd {
 .page-list-resizer:focus-visible::after {
   background: var(--accent);
 }
-.setup-intro,
-.setup-finish,
-.setup-navigation {
-  max-width: 900px;
-  padding: 28px 40px;
+.setup-page {
+  max-width: 1040px;
+  margin: auto;
+  padding: 32px 36px;
 }
 .setup-intro {
-  padding-bottom: 0;
+  margin-bottom: 28px;
+}
+.setup-intro .description {
+  margin-top: 9px;
+  max-width: 58ch;
 }
 .setup-eyebrow {
   color: var(--muted);
   font-size: 12px;
+  margin-bottom: 8px;
 }
 .setup-page .settings-page {
-  padding-top: 20px;
+  padding: 0;
+}
+.setup-page .settings-group:first-child {
+  margin-top: 0;
 }
 .setup-overview {
-  max-width: 900px;
-  padding: 24px 40px 0;
+  padding: 0;
 }
 .setup-overview-steps {
-  margin-top: 24px;
+  margin: 24px 0;
   border-top: 1px solid var(--line);
 }
 .setup-overview-row {
-  display: flex;
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr) auto;
   align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 16px 0;
+  gap: 14px;
+  padding: 21px 0;
   border-bottom: 1px solid var(--line);
 }
-.setup-overview-row span {
+.setup-overview-copy {
   display: grid;
   gap: 4px;
+  overflow-wrap: anywhere;
+}
+.setup-overview-number {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--button);
+  color: var(--muted);
 }
 .setup-overview-row small {
   color: var(--muted);
 }
 .setup-navigation {
+  margin-top: 28px;
   display: flex;
   flex-wrap: wrap;
   gap: 12px;
+}
+.setup-navigation-note {
+  flex-basis: 100%;
+}
+.setup-optional,
+.setup-help {
+  margin-top: 18px;
+}
+.setup-help summary {
+  color: var(--accent);
+  cursor: pointer;
+}
+.setup-help .description {
+  margin: 8px 0;
 }
 .setup-step-number {
   color: var(--muted);
@@ -972,7 +1003,8 @@ kbd {
   .navigation-chrome {
     width: 216px;
   }
-  .settings-page {
+  .settings-page,
+  .setup-page {
     padding: 28px;
   }
   .toolbar {
@@ -990,8 +1022,16 @@ kbd {
   }
   .home-page,
   .settings-page,
+  .setup-page,
   .activity-page {
     padding: 22px;
+  }
+  .setup-overview-row {
+    grid-template-columns: 32px minmax(0, 1fr);
+  }
+  .setup-overview-row button {
+    grid-column: 2;
+    justify-self: start;
   }
   .setting-row {
     align-items: flex-start;

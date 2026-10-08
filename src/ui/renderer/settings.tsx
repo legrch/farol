@@ -240,10 +240,18 @@ function soleIntent(
     ([key, value]) => key === id || before.intents[key] === value,
   );
 }
-function Group({ title, children }: { title: string; children: ReactNode }) {
+function Group({
+  title,
+  children,
+  showTitle = true,
+}: {
+  title: string;
+  children: ReactNode;
+  showTitle?: boolean;
+}) {
   return (
     <section className="settings-group" aria-label={title}>
-      <h3>{title}</h3>
+      {showTitle && <h3>{title}</h3>}
       {children}
     </section>
   );
@@ -427,7 +435,7 @@ export function Settings({ snapshot, facade, setupStep }: SettingsProps) {
   if (!displayedSettings)
     return (
       <div className="settings-page">
-        <h2>Settings</h2>
+        {!setupStep && <h2>Settings</h2>}
         <p className="notice">
           Settings are unavailable. Refresh the current state before making
           changes.
@@ -700,11 +708,13 @@ function Folders(props: PageProps) {
   return (
     <>
       {!props.setupStep && <h2>Workspaces</h2>}
-      <p className="description">
-        Choose the workspaces Farol may access. Each workspace has its own
-        access level and check. Removing a workspace revokes access and keeps
-        its files.
-      </p>
+      {!props.setupStep && (
+        <p className="description">
+          Choose the workspaces Farol may access. Each workspace has its own
+          access level and check. Removing a workspace revokes access and keeps
+          its files.
+        </p>
+      )}
       {selected && (
         <div className="workspace-layout">
           <nav className="workspace-picker" aria-label="Approved workspaces">
@@ -1855,11 +1865,20 @@ function Connection({
                   : setup.canReconnect
                     ? "Connection needs recovery"
                     : setup.label;
+  const connectionDiagnostics = (
+    <button
+      type="button"
+      className="text-button"
+      onClick={() => facade.navigate({ area: "settings", page: "diagnostics" })}
+    >
+      Connection diagnostics
+    </button>
+  );
   return (
     <>
       {!setupStep && <h2>Connection</h2>}
       <div hidden={setupStep !== undefined && setupStep !== "connection"}>
-        <Group title="This Mac connection">
+        <Group title="This Mac connection" showTitle={!setupStep}>
           <p className="badges" role="status">
             {connectionStatus}
           </p>
@@ -2033,7 +2052,11 @@ function Connection({
               type="button"
               className="text-button"
               onClick={() =>
-                facade.navigate({ area: "settings", page: "folders" })
+                facade.navigate(
+                  setupStep
+                    ? { area: "setup", setupStep: "folders" }
+                    : { area: "settings", page: "folders" },
+                )
               }
             >
               Verify a workspace
@@ -2081,23 +2104,28 @@ function Connection({
               Find connection helper
             </Command>
           )}
-          <button
-            type="button"
-            className="text-button"
-            onClick={() =>
-              facade.navigate({ area: "settings", page: "diagnostics" })
-            }
-          >
-            Connection diagnostics
-          </button>
+          {setupStep ? (
+            <details className="setup-help">
+              <summary>Connection help</summary>
+              <p className="description">
+                Review detailed status or an unconfirmed result in Diagnostics.
+                Opening help does not repeat an action.
+              </p>
+              {connectionDiagnostics}
+            </details>
+          ) : (
+            connectionDiagnostics
+          )}
         </Group>
       </div>
       <div hidden={setupStep !== undefined && setupStep !== "attachment"}>
-        <Group title="Add to ChatGPT">
-          <p className="description">
-            Attach this {connectorName} connection in ChatGPT, then ask ChatGPT
-            to verify it. Farol never sends the request for you.
-          </p>
+        <Group title="Add to ChatGPT" showTitle={!setupStep}>
+          {!setupStep && (
+            <p className="description">
+              Attach this {connectorName} connection in ChatGPT, then ask
+              ChatGPT to verify it. Farol never sends the request for you.
+            </p>
+          )}
           <ol className="attachment-steps">
             <li>
               Open Tunnels in ChatGPT and attach this {connectorName}

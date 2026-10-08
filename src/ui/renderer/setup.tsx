@@ -1,9 +1,36 @@
 import { computerSetup } from "./computer-setup";
-import type { RendererFacade, WindowSnapshot } from "./contract";
+import type { RendererFacade, SetupStep, WindowSnapshot } from "./contract";
 import { Settings } from "./settings";
 import { nextSetupStep, setupSteps } from "./setup-navigation";
 
 type Props = { snapshot: WindowSnapshot; facade: RendererFacade };
+
+const stepContext: Record<SetupStep, { title: string; description: string }> = {
+  overview: {
+    title: "Setup",
+    description:
+      "A guided path to connect ChatGPT and decide what it can access.",
+  },
+  folders: {
+    title: "Workspaces",
+    description:
+      "Choose the workspaces Farol may access, review each access level, then verify a workspace. Removing access keeps its files.",
+  },
+  connection: {
+    title: "Connection",
+    description:
+      "Connect this Mac using your tunnel details. A local connection and access from ChatGPT have separate checks.",
+  },
+  attachment: {
+    title: "Add to ChatGPT",
+    description:
+      "Add this connection in ChatGPT, then send the current verification request to check access.",
+  },
+  finish: {
+    title: "Finish",
+    description: "Review the recorded checks, then open Home for everyday use.",
+  },
+};
 
 export function SetupNavigation({ snapshot, facade }: Props) {
   const selected = snapshot.destination.setupStep ?? "overview";
@@ -35,26 +62,21 @@ export function Setup({ snapshot, facade }: Props) {
         <p className="setup-eyebrow">
           Set up this Mac · {index + 1} of {setupSteps.length}
         </p>
-        <p className="description">
-          Review your connection and workspace access. Opening a step does not
-          change permissions or repeat a check.
-        </p>
+        <h1>{stepContext[step].title}</h1>
+        <p className="description">{stepContext[step].description}</p>
       </header>
       {step === "overview" && (
         <section className="setup-overview" aria-label="Setup overview">
-          <span className="badges">{setup.label}</span>
+          {!setup.ready && <span className="badges">{setup.label}</span>}
           <h2>{setup.ready ? "Computer ready" : "Set up Computer"}</h2>
           <p>{setup.next}</p>
-          <p className="description">
-            Embedded ChatGPT sign-in is optional for Computer access from
-            ChatGPT.
-          </p>
           <div className="setup-overview-steps">
             {(
               [
                 [
                   "folders",
                   "Workspaces",
+                  "Choose folders and access for each one.",
                   setup.workspacesVerified
                     ? "Workspace verified"
                     : "Workspace check needed",
@@ -62,6 +84,7 @@ export function Setup({ snapshot, facade }: Props) {
                 [
                   "connection",
                   "Connection",
+                  "Connect this Mac to ChatGPT.",
                   setup.localConnectionCurrent
                     ? "Local connection current"
                     : "Connection check needed",
@@ -69,15 +92,20 @@ export function Setup({ snapshot, facade }: Props) {
                 [
                   "attachment",
                   "Add to ChatGPT",
+                  "Add the connection and review verification.",
                   setup.externalAccessVerified
                     ? "External access verified"
                     : "External verification needed",
                 ],
               ] as const
-            ).map(([destination, label, status]) => (
+            ).map(([destination, label, description, status], position) => (
               <div className="setup-overview-row" key={destination}>
-                <span>
+                <span className="setup-overview-number" aria-hidden="true">
+                  {position + 1}
+                </span>
+                <span className="setup-overview-copy">
                   <strong>{label}</strong>
+                  <small>{description}</small>
                   <small>{status}</small>
                 </span>
                 <button
@@ -102,6 +130,10 @@ export function Setup({ snapshot, facade }: Props) {
           >
             {setup.ready ? "Review workspaces" : "Continue setup"}
           </button>
+          <p className="description setup-optional">
+            Embedded ChatGPT sign-in is optional for Computer access from
+            ChatGPT. You can review it in Settings → Connection.
+          </p>
         </section>
       )}
       <div hidden={step === "finish" || step === "overview"}>
@@ -118,7 +150,7 @@ export function Setup({ snapshot, facade }: Props) {
         hidden={step !== "finish"}
         aria-label="Computer setup status"
       >
-        <span className="badges">{setup.label}</span>
+        {!setup.ready && <span className="badges">{setup.label}</span>}
         <h2>{setup.ready ? "Computer ready" : "A few checks remain"}</h2>
         <p>{setup.next}</p>
         <p className="description">
@@ -141,6 +173,9 @@ export function Setup({ snapshot, facade }: Props) {
         )}
       </section>
       <footer className="setup-navigation">
+        <p className="description setup-navigation-note">
+          Opening a step does not change access or run a check.
+        </p>
         <button
           className="subtle"
           disabled={index === 0}

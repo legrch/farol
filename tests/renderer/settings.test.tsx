@@ -2779,9 +2779,56 @@ describe("owner Setup presentation checkpoint (DOM fixtures only)", () => {
       expect(
         group("This Mac connection").querySelector('input[type="password"]'),
       ).not.toBeNull();
+      expect(group("This Mac connection").querySelector("h3")).toBeNull();
+      expect(group("Add to ChatGPT").querySelector("h3")).toBeNull();
+      expect(
+        h.host.querySelector<HTMLDetailsElement>(".setup-help")?.open,
+      ).toBe(false);
       expect(h.calls()).toEqual([]);
     },
   );
+  it("keeps workspace prerequisites in Setup and leaves ordinary Settings routing intact", async () => {
+    const value = connectionSettings();
+    value.setup.computer.verified = null;
+    for (const step of ["connection", undefined] as const) {
+      const h = await mount(
+        "connection",
+        value,
+        "preview",
+        { phase: "idle", checkedAt: null },
+        step,
+      );
+      const navigate = vi.spyOn(h.c, "navigate");
+      await h.click("Verify a workspace");
+      expect(navigate).toHaveBeenCalledExactlyOnceWith(
+        step
+          ? { area: "setup", setupStep: "folders" }
+          : { area: "settings", page: "folders" },
+      );
+      expect(h.calls()).toEqual([]);
+    }
+  });
+  it("discloses Setup diagnostics on demand without dispatching a command", async () => {
+    const h = await mount(
+      "connection",
+      settings(),
+      "preview",
+      { phase: "idle", checkedAt: null },
+      "connection",
+    );
+    const help = h.host.querySelector<HTMLDetailsElement>(".setup-help")!;
+    expect(help.open).toBe(false);
+    await act(async () => {
+      help.open = true;
+    });
+    await h.click("Connection diagnostics");
+    expect(h.c.getSnapshot().destination).toMatchObject({
+      area: "settings",
+      page: "diagnostics",
+    });
+    expect(h.calls()).toEqual([]);
+    expect(h.f.api.task).not.toHaveBeenCalled();
+  });
   it("Setup step changes retain the same credential draft nodes without saving", async () => {
     const h = await mount(
       "connection",
