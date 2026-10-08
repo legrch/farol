@@ -4,7 +4,12 @@ import os from "node:os";
 import path from "node:path";
 // @ts-expect-error Mechanical launcher module is exercised at runtime.
 import * as control from "../../tooling/dev-process-control.mjs";
-const { correlateDevCommand, devControlTimeout, readDevRunMarker } = control;
+const {
+  correlateDevCommand,
+  devControlTimeout,
+  readDevRunMarker,
+  retainedDevMarkerMatches,
+} = control;
 
 const root = "/synthetic/farol";
 const scope = {
@@ -29,6 +34,41 @@ const native = {
 const command = `501 ${marker.processStart} ${executable} _output/build/app/main.cjs`;
 
 describe("exact Dev command correlation", () => {
+  it("continues exact-lifetime observation across normal marker removal but refuses replacement or unreadable bytes", async () => {
+    const parent = await fs.mkdtemp(
+      path.join(os.tmpdir(), "farol-dev-quit-marker-"),
+    );
+    const file = path.join(parent, "running.json");
+    try {
+      await fs.writeFile(file, JSON.stringify(marker), { mode: 0o600 });
+      expect(retainedDevMarkerMatches(file, marker)).toBe(true);
+      await fs.unlink(file); // Actual normal-Quit ordering, before process exit.
+      expect(retainedDevMarkerMatches(file, marker)).toBe(true);
+      await fs.symlink(path.join(parent, "absent-target"), file);
+      expect(retainedDevMarkerMatches(file, marker)).toBe(false);
+      await fs.unlink(file);
+      await fs.writeFile(file, JSON.stringify({ ...marker, pid: 112 }), {
+        mode: 0o600,
+      });
+      expect(retainedDevMarkerMatches(file, marker)).toBe(false);
+      await fs.writeFile(file, "{");
+      expect(retainedDevMarkerMatches(file, marker)).toBe(false);
+      await fs.unlink(file);
+      await fs.mkdir(file);
+      expect(retainedDevMarkerMatches(file, marker)).toBe(false);
+      expect(() =>
+        correlateDevCommand(
+          `501 ${marker.processStart} Farol Dev`,
+          marker,
+          scope,
+          { ...native, token: "changed", pid: 112 },
+          10000,
+        ),
+      ).toThrow("DEV_PROCESS_IDENTITY_REFUSED");
+    } finally {
+      await fs.rm(parent, { recursive: true });
+    }
+  });
   it("reads the actual private run-marker owner directory without doubling the filename", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "farol-dev-marker-"));
     try {

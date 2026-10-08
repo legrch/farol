@@ -24,6 +24,40 @@ export function readDevRunMarker(profilePath) {
   return readRunMarker(path.join(profilePath, "farol-next-state"));
 }
 
+export function retainedDevMarkerMatches(markerFile, original) {
+  let fd;
+  try {
+    fd = fs.openSync(
+      markerFile,
+      fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK,
+    );
+    const stat = fs.fstatSync(fd);
+    if (
+      !stat.isFile() ||
+      stat.nlink !== 1 ||
+      stat.uid !== process.getuid() ||
+      (stat.mode & 0o777) !== 0o600 ||
+      stat.size > 4096
+    )
+      return false;
+    const bytes = Buffer.alloc(4097);
+    const size = fs.readSync(fd, bytes, 0, bytes.length, 0);
+    if (size > 4096) return false;
+    return (
+      JSON.stringify(JSON.parse(bytes.subarray(0, size).toString("utf8"))) ===
+      JSON.stringify(original)
+    );
+  } catch (error) {
+    // Normal Quit removes its marker before Electron necessarily exits. This
+    // is only continuation of the already-correlated lifetime: every poll and
+    // signal still verifies the retained native token, UID and executable.
+    // A replacement marker or any unreadable/malformed file still refuses.
+    return error?.code === "ENOENT";
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd);
+  }
+}
+
 function ps(args, budget = 3000) {
   const result = spawnSync("/bin/ps", args, {
     encoding: "utf8",
@@ -163,10 +197,7 @@ export async function prepareDevBuild({
           );
           if (seen.status === "absent") return seen;
           if (seen.status !== "present") return { status: "unreadable" };
-          const fresh = fs.readFileSync(markerFile);
-          if (
-            JSON.stringify(JSON.parse(fresh)) !== JSON.stringify(marker.marker)
-          )
+          if (!retainedDevMarkerMatches(markerFile, marker.marker))
             return { status: "unreadable" };
           const line = ps(
             [
@@ -240,7 +271,11 @@ export async function prepareDevBuild({
   if (
     inventory.text
       .split("\n")
-      .some((line) => ownedRoots.some((prefix) => line.includes(prefix)))
+      .some(
+        (line) =>
+          /^\s*\d+\s+Farol Dev$/u.test(line) ||
+          ownedRoots.some((prefix) => line.includes(prefix)),
+      )
   )
     throw Error("DEV_BUILD_OWNED_PROCESSES_REMAIN");
   return { profilePath, marker: marker.status };
