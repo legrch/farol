@@ -531,15 +531,18 @@ it("R05 R32 R34 activity inspection displays only metadata and returns to exact 
   await act(async () =>
     host.querySelector<HTMLButtonElement>(".activity-row")!.click(),
   );
-  expect(host.querySelector("dialog")?.textContent).toContain("Not recorded");
+  expect(host.querySelector(".activity-page")?.textContent).toContain(
+    "Not recorded",
+  );
+  expect(host.querySelector("dialog")).toBeNull();
   await act(async () => button(host, "View chat").click());
   expect(c.getSnapshot().destination.taskId).toBe("task-1");
   await act(async () => c.navigate({ area: "activity" }));
   await act(async () =>
     host.querySelector<HTMLButtonElement>(".activity-row")!.click(),
   );
-  await act(async () => button(host, "Close").click());
   expect(c.getSnapshot().overlay).toBe("none");
+  expect(host.querySelector(".activity-page")?.textContent).toContain("task-1");
 });
 it("R16 R23 R24 distinct update controls preserve exact operations and pending fence", async () => {
   const { host, c, f } = await mount();
@@ -1265,3 +1268,255 @@ it.each(boundedUpdateActions)(
     ).toHaveLength(1);
   },
 );
+
+// Activity fixtures prove renderer projection only, not provider/native evidence.
+async function activityFixture() {
+  const mounted = await mount();
+  await act(async () => {
+    mounted.f.emit("tasks", { revision: 1, tasks: [task()] });
+    for (const phase of ["completed", "outcome_unknown"] as const) {
+      mounted.f.emit("event", {
+        ownerId: "owner",
+        sessionId: "task-1",
+        taskId: "task-1",
+        turnId: "task-1",
+        generation: 1,
+        at: phase === "completed" ? 100 : 200,
+        kind: "turn.terminal",
+        phase,
+        code: phase === "completed" ? "COMPLETED" : "OUTCOME_UNKNOWN",
+      });
+    }
+    mounted.c.navigate({ area: "activity", activityId: null });
+  });
+  return mounted;
+}
+async function filterActivity(host: Element, value: "all" | "attention") {
+  const select = host.querySelector<HTMLSelectElement>(
+    ".activity-filter select",
+  )!;
+  await act(async () => {
+    select.value = value;
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+}
+it("Activity contextual list filters actual unknown metadata and keeps selection stable", async () => {
+  const { host, c, f } = await activityFixture();
+  expect(host.querySelectorAll("aside .activity-row")).toHaveLength(2);
+  expect(host.querySelector(".activity-page")?.textContent).toContain(
+    "There is no confirmed successful or failed result.",
+  );
+  await act(async () =>
+    host.querySelectorAll<HTMLButtonElement>(".activity-row")[1]!.click(),
+  );
+  const selectedId = c.getSnapshot().destination.activityId;
+  await filterActivity(host, "attention");
+  expect(host.querySelectorAll(".activity-row")).toHaveLength(1);
+  expect(host.querySelector(".activity-page")?.textContent).toContain(
+    "Selected event is outside this filter",
+  );
+  expect(c.getSnapshot().destination.activityId).toBe(selectedId);
+  await act(async () => button(host, "Show all activity").click());
+  expect(host.querySelector(".activity-page")?.textContent).toContain(
+    "A completed result was recorded.",
+  );
+  expect(
+    host.querySelector(".activity-identifiers")?.hasAttribute("open"),
+  ).toBe(false);
+  expect(f.api.task).not.toHaveBeenCalled();
+  expect(f.api.configure).not.toHaveBeenCalled();
+});
+it("Activity back and forward retain exact event identity after new events arrive", async () => {
+  const { host, c, f } = await activityFixture();
+  const rows = [...host.querySelectorAll<HTMLButtonElement>(".activity-row")];
+  await act(async () => rows[1]!.click());
+  const first = c.getSnapshot().destination.activityId;
+  await act(async () => rows[0]!.click());
+  const second = c.getSnapshot().destination.activityId;
+  await act(async () =>
+    f.emit("event", {
+      ownerId: "owner",
+      sessionId: "task-1",
+      taskId: "task-1",
+      turnId: "task-1",
+      generation: 1,
+      at: 300,
+      kind: "turn.terminal",
+      phase: "completed",
+      code: "COMPLETED",
+    }),
+  );
+  expect(c.getSnapshot().destination.activityId).toBe(second);
+  await act(async () => button(host, "Back").click());
+  expect(c.getSnapshot().destination.activityId).toBe(first);
+  expect(host.querySelector(".activity-page")?.textContent).toContain(
+    "A completed result was recorded.",
+  );
+  await act(async () => button(host, "Forward").click());
+  expect(c.getSnapshot().destination.activityId).toBe(second);
+  expect(
+    host.querySelector('.activity-row[aria-current="page"] small')?.textContent,
+  ).toContain("outcome unknown");
+  expect(document.activeElement).toBe(host.querySelector(".activity-page h1"));
+});
+it("Activity distinguishes first-use, attention-empty and missing selection without substitution", async () => {
+  const { host, c, f } = await mount();
+  await act(async () => c.navigate({ area: "activity" }));
+  expect(host.querySelector(".activity-page")?.textContent).toContain(
+    "No activity yet",
+  );
+  await act(async () => {
+    f.emit("tasks", { revision: 1, tasks: [task()] });
+    f.emit("event", {
+      ownerId: "owner",
+      sessionId: "task-1",
+      taskId: "task-1",
+      turnId: "task-1",
+      generation: 1,
+      at: 100,
+      kind: "turn.terminal",
+      phase: "completed",
+      code: "COMPLETED",
+    });
+  });
+  await filterActivity(host, "attention");
+  expect(host.querySelector(".activity-page")?.textContent).toContain(
+    "No events need attention",
+  );
+  await filterActivity(host, "all");
+  await act(async () =>
+    c.navigate({ area: "activity", activityId: "expired-event" }),
+  );
+  expect(host.querySelector(".activity-page")?.textContent).toContain(
+    "Its absence does not establish an outcome.",
+  );
+  expect(host.querySelector(".activity-header")).toBeNull();
+  expect(host.querySelector('.activity-row[aria-current="page"]')).toBeNull();
+});
+it("Activity will not route a historical record into a reused turn", async () => {
+  const { host, c, f } = await activityFixture();
+  await act(async () =>
+    host.querySelector<HTMLButtonElement>(".activity-row")!.click(),
+  );
+  const selectedId = c.getSnapshot().destination.activityId;
+  await act(async () =>
+    f.emit("tasks", {
+      revision: 2,
+      tasks: [{ ...task(), turnId: "replacement-turn" }],
+    }),
+  );
+  expect(host.querySelector(".activity-page")?.textContent).toContain(
+    "Event no longer available",
+  );
+  expect(c.getSnapshot().destination.activityId).toBe(selectedId);
+  expect(
+    [...host.querySelectorAll("button")].some(
+      (item) => item.textContent === "View chat",
+    ),
+  ).toBe(false);
+});
+it("Activity retains legacy Home event inspector routing", async () => {
+  const { host, c } = await activityFixture();
+  await act(async () => c.overlay("activity"));
+  expect(host.querySelector("dialog")?.textContent).toContain(
+    "What was recorded",
+  );
+  await act(async () => button(host, "Close").click());
+  expect(c.getSnapshot().overlay).toBe("none");
+  expect(document.activeElement).toBe(host.querySelector(".activity-page h1"));
+});
+it("Activity compact selection dismisses sidebar and focuses usable inline details", async () => {
+  const { host, c } = await activityFixture();
+  await act(async () => c.toggleSidebar(true));
+  expect(host.querySelector("main")?.hasAttribute("inert")).toBe(true);
+  await act(async () =>
+    host.querySelector<HTMLButtonElement>("aside .activity-row")!.click(),
+  );
+  expect(c.getSnapshot().sidebar).toBe("rail");
+  expect(host.querySelector("main")?.hasAttribute("inert")).toBe(false);
+  expect(host.querySelectorAll(".activity-page .activity-row")).toHaveLength(2);
+  expect(document.activeElement).toBe(host.querySelector(".activity-page h1"));
+  await filterActivity(host, "attention");
+  expect(host.querySelectorAll(".activity-page .activity-row")).toHaveLength(1);
+});
+
+it("Activity shows only recorded operation data and never promotes a computer event to task success", async () => {
+  const { host, c, f } = await activityFixture();
+  await act(async () => {
+    f.emit("event", {
+      ownerId: "owner",
+      sessionId: "task-1",
+      taskId: "task-1",
+      turnId: "task-1",
+      generation: 1,
+      at: 400,
+      kind: "computer.requested",
+      callId: "call-1",
+      operation: "workspace.read",
+    });
+  });
+  await act(async () =>
+    host.querySelector<HTMLButtonElement>(".activity-row")!.click(),
+  );
+  expect(host.querySelector(".activity-page")?.textContent).toContain(
+    "workspace.read",
+  );
+  expect(host.querySelector(".activity-page")?.textContent).toContain(
+    "This event does not establish successful task completion.",
+  );
+  expect(host.querySelector(".activity-page")?.textContent).toContain(
+    "Not recorded",
+  );
+  const before = c.getSnapshot().activity.length;
+  await act(async () =>
+    f.emit("event", {
+      ownerId: "owner",
+      sessionId: "task-1",
+      taskId: "task-1",
+      turnId: "task-1",
+      generation: 1,
+      at: 401,
+      kind: "text.delta",
+      sequence: 1,
+      text: "fixture transcript excluded from activity",
+    }),
+  );
+  expect(c.getSnapshot().activity).toHaveLength(before);
+  expect(host.textContent).not.toContain(
+    "fixture transcript excluded from activity",
+  );
+});
+it("Activity remains usable for a recorded timestamp outside the Date range", async () => {
+  const { host, f } = await activityFixture();
+  await act(async () =>
+    f.emit("event", {
+      ownerId: "owner",
+      sessionId: "task-1",
+      taskId: "task-1",
+      turnId: "task-1",
+      generation: 1,
+      at: Number.MAX_VALUE,
+      kind: "turn.terminal",
+      phase: "failed",
+      code: "FAILED",
+    }),
+  );
+  await act(async () =>
+    host.querySelector<HTMLButtonElement>(".activity-row")!.click(),
+  );
+  expect(host.querySelector(".activity-page")?.textContent).toContain(
+    "Time unavailable",
+  );
+  expect(host.querySelector(".activity-page")?.textContent).toContain(
+    "This event does not establish successful task completion.",
+  );
+});
+
+it("Activity preserves search-trigger focus when an unrelated dialog is dismissed", async () => {
+  const { host } = await activityFixture();
+  const trigger = button(host, "Find a page");
+  trigger.focus();
+  await act(async () => trigger.click());
+  await act(async () => button(host, "Close").click());
+  expect(document.activeElement).toBe(trigger);
+});

@@ -53,102 +53,278 @@ function title(snapshot: WindowSnapshot) {
             )?.[1] ?? "Setup")
           : homeTitle(snapshot);
 }
-function Activity({
+type ActivityFilter = "all" | "attention";
+function activityItems(snapshot: WindowSnapshot, filter: ActivityFilter) {
+  return [...snapshot.activity]
+    .reverse()
+    .filter((event) => filter === "all" || event.phase === "outcome_unknown");
+}
+function activityPhase(event: WindowSnapshot["activity"][number]) {
+  return event.phase?.replaceAll("_", " ") ?? "Phase not recorded";
+}
+function ActivityTime({
+  at,
+  compact = false,
+}: {
+  at: number;
+  compact?: boolean;
+}) {
+  const date = new Date(at);
+  if (!Number.isFinite(date.getTime())) return <span>Time unavailable</span>;
+  return (
+    <time dateTime={date.toISOString()}>
+      {compact
+        ? date.toLocaleTimeString(undefined, {
+            hour: "2-digit",
+            minute: "2-digit",
+          })
+        : date.toLocaleString()}
+    </time>
+  );
+}
+function ActivityNavigation({
   snapshot,
   facade,
-  recent = false,
+  filter,
+  onFilter,
 }: {
   snapshot: WindowSnapshot;
   facade: RendererFacade;
-  recent?: boolean;
+  filter: ActivityFilter;
+  onFilter: (filter: ActivityFilter) => void;
 }) {
-  const selected = snapshot.activity.find(
-    (event) => event.id === snapshot.destination.activityId,
-  );
-  const items = [...snapshot.activity].reverse().slice(0, recent ? 5 : 256);
+  const items = activityItems(snapshot, filter);
+  const selectedId = snapshot.destination.activityId ?? items[0]?.id;
   return (
-    <>
-      <p className="description">
-        Recorded metadata in this window. Conversation content is not stored.
-      </p>
-      {items.length === 0 ? (
-        <p className="empty">No recorded activity in this window.</p>
-      ) : (
-        items.map((event) => (
+    <div className="activity-navigation">
+      <p className="description">Events you can inspect.</p>
+      <label className="activity-filter">
+        Activity filter
+        <select
+          value={filter}
+          onChange={(event) =>
+            onFilter(event.target.value === "attention" ? "attention" : "all")
+          }
+        >
+          <option value="all">All activity</option>
+          <option value="attention">Needs attention</option>
+        </select>
+      </label>
+      <nav aria-label="Recorded events">
+        {items.map((event) => (
           <button
+            type="button"
             className="activity-row"
             key={event.id}
-            onClick={() => {
-              facade.navigate({ area: "activity", activityId: event.id });
-              facade.overlay("activity");
-            }}
+            aria-current={selectedId === event.id ? "page" : undefined}
+            onClick={() =>
+              facade.navigate({ area: "activity", activityId: event.id })
+            }
           >
-            <time>
-              {new Date(event.at).toLocaleTimeString(undefined, {
-                hour: "2-digit",
-                minute: "2-digit",
-              })}
-            </time>
             <span>
               <strong>{event.label}</strong>
               <small>
-                {event.phase?.replaceAll("_", " ") ?? event.kind}
-                {event.operation ? ` · ${event.operation}` : ""}
+                {activityPhase(event)} · <ActivityTime at={event.at} compact />
               </small>
+              {event.operation && <small>{event.operation}</small>}
             </span>
-            <Icon name="forward" />
           </button>
-        ))
+        ))}
+      </nav>
+      {!items.length && <p className="description">No matching events.</p>}
+      <p className="description activity-retention">
+        Recorded metadata only. Up to 256 events are held in memory in this
+        window.
+      </p>
+      {snapshot.sidebar === "overlay" && (
+        <button type="button" onClick={() => facade.toggleSidebar(true)}>
+          Close Activity sidebar
+        </button>
       )}
-      {selected && snapshot.overlay === "activity" && (
-        <Overlay
-          title="Recorded event"
-          onClose={() => {
-            facade.overlay("none");
-          }}
-        >
-          <dl>
-            {[
-              ["Task", selected.label],
-              ["Event", selected.kind],
-              ["Phase", selected.phase ?? "Not recorded"],
-              ["Operation", selected.operation ?? "Not recorded"],
-              ["Code", selected.code ?? "Not recorded"],
-              ["Task identity", selected.taskId],
-              ["Turn identity", selected.turnId],
-            ].map(([key, value]) => (
-              <div key={key}>
-                <dt>{key}</dt>
-                <dd>{value}</dd>
-              </div>
-            ))}
-          </dl>
-          {snapshot.tasks.tasks.some(
-            (task) =>
-              task.taskId === selected.taskId &&
-              task.turnId === selected.turnId,
-          ) ? (
-            <button
-              className="primary"
-              onClick={() =>
-                facade.navigate({ area: "chatgpt", taskId: selected.taskId })
-              }
-            >
-              View chat
-            </button>
-          ) : (
-            <p>
-              The recorded conversation is no longer available in this slot.
-            </p>
-          )}
-        </Overlay>
-      )}
-      {!selected && snapshot.overlay === "activity" && (
-        <Overlay title="Recorded event" onClose={() => facade.overlay("none")}>
+    </div>
+  );
+}
+function ActivityRecord({
+  snapshot,
+  facade,
+  selected,
+}: {
+  snapshot: WindowSnapshot;
+  facade: RendererFacade;
+  selected: WindowSnapshot["activity"][number];
+}) {
+  const matchingChat = snapshot.tasks.tasks.some(
+    (task) =>
+      task.taskId === selected.taskId && task.turnId === selected.turnId,
+  );
+  const outcome =
+    selected.phase === "outcome_unknown"
+      ? "There is no confirmed successful or failed result."
+      : selected.kind === "turn.terminal" && selected.phase === "completed"
+        ? "A completed result was recorded."
+        : "This event does not establish successful task completion.";
+  return (
+    <>
+      <div className="activity-header">
+        <Icon name="activity" />
+        <div>
+          <strong
+            className={
+              selected.phase === "outcome_unknown"
+                ? "activity-unknown"
+                : undefined
+            }
+          >
+            {activityPhase(selected)}
+          </strong>
           <p>
-            This event is no longer available in this window. Its absence does
-            not establish an outcome.
+            <ActivityTime at={selected.at} />
           </p>
+        </div>
+        {matchingChat && (
+          <button
+            type="button"
+            onClick={() =>
+              facade.navigate({ area: "chatgpt", taskId: selected.taskId })
+            }
+          >
+            View chat
+          </button>
+        )}
+      </div>
+      {!matchingChat && (
+        <div className="activity-history-limit">
+          <h2>Chat no longer available here</h2>
+          <p>
+            The recorded conversation is no longer available in this slot. Its
+            event can still be inspected.
+          </p>
+        </div>
+      )}
+      <h2>What was recorded</h2>
+      <div className="activity-event">
+        <strong>{selected.kind}</strong>
+        <p>{outcome}</p>
+      </div>
+      <dl className="activity-facts">
+        {[
+          ["Event kind", selected.kind],
+          ["Phase", selected.phase ?? "Not recorded"],
+          ["Terminal code", selected.code ?? "Not recorded"],
+          ["Operation", selected.operation ?? "Not recorded"],
+        ].map(([key, value]) => (
+          <div key={key}>
+            <dt>{key}</dt>
+            <dd>
+              <code>{value}</code>
+            </dd>
+          </div>
+        ))}
+      </dl>
+      <details className="activity-identifiers">
+        <summary>Available technical identifiers</summary>
+        <dl className="activity-facts">
+          {[
+            ["Event identity", selected.id],
+            ["Task identity", selected.taskId],
+            ["Turn identity", selected.turnId],
+            ["Generation", selected.generation],
+          ].map(([key, value]) => (
+            <div key={key}>
+              <dt>{key}</dt>
+              <dd>{value}</dd>
+            </div>
+          ))}
+        </dl>
+      </details>
+      <p className="description">
+        Only recorded metadata is shown. Conversation text, file contents and
+        full tool payloads are excluded.
+      </p>
+    </>
+  );
+}
+function Activity({
+  snapshot,
+  facade,
+  filter,
+  onFilter,
+  showList,
+}: {
+  snapshot: WindowSnapshot;
+  facade: RendererFacade;
+  filter: ActivityFilter;
+  onFilter: (filter: ActivityFilter) => void;
+  showList: boolean;
+}) {
+  const heading = useRef<HTMLHeadingElement>(null);
+  const previousOverlay = useRef(snapshot.overlay);
+  const items = activityItems(snapshot, filter);
+  const selected = snapshot.destination.activityId
+    ? snapshot.activity.find(
+        (event) => event.id === snapshot.destination.activityId,
+      )
+    : items[0];
+  const missing = Boolean(snapshot.destination.activityId && !selected);
+  const filtered = selected && !items.some((event) => event.id === selected.id);
+  useLayoutEffect(() => {
+    const returningFrom = previousOverlay.current;
+    previousOverlay.current = snapshot.overlay;
+    if (
+      snapshot.sidebar !== "overlay" &&
+      snapshot.overlay === "none" &&
+      (returningFrom === "none" || returningFrom === "activity")
+    )
+      heading.current?.focus();
+  }, [snapshot.destination.activityId, snapshot.sidebar, snapshot.overlay]);
+  const emptyTitle = missing
+    ? "Event no longer available"
+    : !snapshot.activity.length
+      ? "No activity yet"
+      : !items.length
+        ? "No events need attention"
+        : "Selected event is outside this filter";
+  const details =
+    selected && !filtered ? (
+      <ActivityRecord snapshot={snapshot} facade={facade} selected={selected} />
+    ) : (
+      <div className="activity-empty" role="status">
+        <Icon name="activity" />
+        <h2>{emptyTitle}</h2>
+        <p>
+          {missing
+            ? "This event is no longer available in this window. Its absence does not establish an outcome."
+            : !snapshot.activity.length
+              ? "Recorded task events appear here as work happens. Only recorded metadata is shown."
+              : "Choose All activity or select a matching event to inspect recorded work."}
+        </p>
+        {filter === "attention" && (
+          <button type="button" onClick={() => onFilter("all")}>
+            Show all activity
+          </button>
+        )}
+      </div>
+    );
+  return (
+    <>
+      <h1 ref={heading} tabIndex={-1}>
+        {selected && !filtered ? selected.label : "Activity"}
+      </h1>
+      <p className="description">
+        Recorded stages and outcomes, without storing the conversation itself.
+      </p>
+      {showList && (
+        <ActivityNavigation
+          snapshot={snapshot}
+          facade={facade}
+          filter={filter}
+          onFilter={onFilter}
+        />
+      )}
+      {details}
+      {snapshot.overlay === "activity" && (
+        <Overlay title="Recorded event" onClose={() => facade.overlay("none")}>
+          {details}
         </Overlay>
       )}
     </>
@@ -573,13 +749,16 @@ export function Shell() {
   const { snapshot, facade } = useRenderer();
   const state = snapshot;
   const destination = state.destination;
+  const [activityFilter, setActivityFilter] = useState<ActivityFilter>("all");
   const stage = useRef<HTMLElement>(null);
   const pageKey =
     destination.area === "settings" || destination.area === "setup"
       ? `${destination.area}:${destination.page}:${destination.setupStep ?? ""}`
       : destination.area === "home"
         ? `home:${destination.homeView ?? "overview"}:${destination.homeSelection?.id ?? ""}`
-        : destination.area;
+        : destination.area === "activity"
+          ? `activity:${destination.activityId ?? ""}`
+          : destination.area;
   useLayoutEffect(() => {
     if (stage.current) {
       stage.current.scrollTop = 0;
@@ -848,9 +1027,12 @@ export function Shell() {
             </p>
           )}
           {destination.area === "activity" && (
-            <p className="description">
-              Recorded events in this window. Select an event for its details.
-            </p>
+            <ActivityNavigation
+              snapshot={state}
+              facade={facade}
+              filter={activityFilter}
+              onFilter={setActivityFilter}
+            />
           )}
         </aside>
       )}
@@ -887,7 +1069,13 @@ export function Shell() {
             <Settings snapshot={state} facade={facade} />
           ) : destination.area === "activity" ? (
             <div className="activity-page">
-              <Activity snapshot={state} facade={facade} />
+              <Activity
+                snapshot={state}
+                facade={facade}
+                filter={activityFilter}
+                onFilter={setActivityFilter}
+                showList={!sideVisible}
+              />
             </div>
           ) : (
             <ChatBrowser snapshot={state} facade={facade} />
