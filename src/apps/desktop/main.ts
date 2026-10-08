@@ -5351,6 +5351,30 @@ async function configureUnfencedProduct(
       connectorTaskAdmission || secureMcpConnectorRuntime?.isRunning() === true,
   });
   if (admission !== "admitted") return configurationFailure(admission);
+  if (command.kind === "connector.configure") {
+    // Credential replacement crosses the Settings and private-file writers.
+    // Serialize it with connector start and authority changes from admission
+    // through the terminal Settings result, without starting a second drain.
+    const reserved = await authorityTransitions.withReservation(
+      "authority-change",
+      async () => {
+        if (connectorTaskAdmission)
+          return configurationFailure("CONNECTOR_ALREADY_RUNNING");
+        connectorTaskAdmission = true;
+        activeAuthorityChangeKind = command.kind;
+        try {
+          return await configureAdmittedProduct(command);
+        } finally {
+          connectorTaskAdmission = false;
+          activeAuthorityChangeKind = null;
+        }
+      },
+    );
+    return deliverConfigurationReply(
+      command.kind,
+      reserved.admitted ? reserved.value : transitionRefusal(),
+    );
+  }
   if (!changesComputerAuthority(command.kind)) {
     return deliverConfigurationReply(
       command.kind,
@@ -5740,7 +5764,30 @@ async function configureAdmittedProduct(
       }
       try {
         if (command.runtimeKey !== null) {
-          await connectorCredentialStore.store(command.runtimeKey);
+          // Settings owns the admission fence before the private file can be
+          // replaced. A failed sync after rename is an uncertain effect, not
+          // a known credential refusal or permission to submit it again.
+          const pending = await configuration.beginSecureMcpCredentialChange();
+          if (!pending.ok)
+            return ProductConfigurationResultSchema.parse(pending);
+          if (pending.snapshot.status !== "ready")
+            return configurationFailure("CONNECTOR_CREDENTIAL_OUTCOME_UNKNOWN");
+          const generation =
+            pending.snapshot.settings.connectors.secureMcp.generation;
+          try {
+            await connectorCredentialStore.store(command.runtimeKey);
+          } catch {
+            return configurationFailure("CONNECTOR_CREDENTIAL_OUTCOME_UNKNOWN");
+          }
+          const completed =
+            await configuration.completeSecureMcpCredentialChange(
+              { tunnelId: command.tunnelId },
+              generation,
+            );
+          // Settings may have published the completed document even if its
+          // first readback failed. Preserve its actual recovered snapshot and
+          // error; do not claim a pending fence that was already cleared.
+          return ProductConfigurationResultSchema.parse(completed);
         }
         const credentialStatus = await connectorCredentialStore.status();
         if (credentialStatus === "missing") {

@@ -1254,6 +1254,99 @@ export class ProductConfigurationService {
     });
   }
 
+  // The credential file is a separate durable writer. Fence connector use
+  // before its replacement begins, so a crash or failed post-rename sync
+  // cannot leave an old Settings admission pointing at new secret bytes.
+  async beginSecureMcpCredentialChange(): Promise<MutationResult> {
+    return this.exclusive(() => {
+      const current = this.current;
+      if (!current)
+        return Promise.resolve(this.failure("SETTINGS_UNAVAILABLE"));
+      if (
+        current.setup.connect.outcomeUnknown ||
+        current.connectors.secureMcp.runtime?.state === "outcome_unknown"
+      )
+        return Promise.resolve(
+          this.failure("CONNECTOR_RUNTIME_OUTCOME_UNKNOWN"),
+        );
+      return this.commit((settings) => {
+        const connector = settings.connectors.secureMcp;
+        return {
+          ...settings,
+          revision: settings.revision + 1,
+          connectors: {
+            ...settings.connectors,
+            secureMcp: {
+              ...connector,
+              generation: connector.generation + 1,
+              runtime: null,
+              challenge: null,
+              attachment: null,
+            },
+          },
+          setup: {
+            ...settings.setup,
+            connect: {
+              ...settings.setup.connect,
+              reachable: "unknown",
+              verified: null,
+              needsAction: "Inspect the credential change before reconnecting.",
+              unavailable: null,
+              outcomeUnknown: true,
+            },
+          },
+        };
+      });
+    });
+  }
+
+  // Only the host that has completed the exact credential write may clear
+  // this pending fence. An unrelated Settings mutation cannot settle it.
+  async completeSecureMcpCredentialChange(
+    input: unknown,
+    expectedGeneration: number,
+  ): Promise<MutationResult> {
+    const parsed = secureMcpTunnelInputSchema.safeParse(input);
+    if (!parsed.success || !Number.isSafeInteger(expectedGeneration))
+      return this.failure("SETTINGS_INPUT_INVALID");
+    return this.exclusive(() => {
+      const current = this.current;
+      if (
+        !current ||
+        !current.setup.connect.outcomeUnknown ||
+        current.connectors.secureMcp.generation !== expectedGeneration ||
+        current.connectors.secureMcp.runtime?.state === "outcome_unknown"
+      )
+        return Promise.resolve(
+          this.failure("CONNECTOR_RUNTIME_OUTCOME_UNKNOWN"),
+        );
+      return this.commit(
+        (settings) => {
+          const next = {
+            ...settings.connectors.secureMcp,
+            tunnelId: parsed.data.tunnelId,
+            credential: "stored" as const,
+            runtime: null,
+            challenge: null,
+            attachment: null,
+          };
+          return {
+            ...settings,
+            revision: settings.revision + 1,
+            connectors: { ...settings.connectors, secureMcp: next },
+            setup: {
+              ...settings.setup,
+              connect: pendingConnectorReadiness(settings.setup.connect, next),
+            },
+          };
+        },
+        {},
+        false,
+        true,
+      );
+    });
+  }
+
   async selectSecureMcpChatGptApp(input: unknown): Promise<MutationResult> {
     const parsed = SecureMcpAppSelectionSchema.safeParse(input);
     if (!parsed.success) return this.failure("SETTINGS_INPUT_INVALID");

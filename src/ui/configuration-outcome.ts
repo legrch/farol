@@ -79,6 +79,7 @@ export function configurationEffectOutcome(
   if (outcome.result.connectorAttempt?.outcome === "unknown") return "unknown";
   return [
     "CONNECTOR_RUNTIME_OUTCOME_UNKNOWN",
+    "CONNECTOR_CREDENTIAL_OUTCOME_UNKNOWN",
     "CONNECTOR_STOP_UNCONFIRMED",
     "WORKSPACE_MUTATION_OUTCOME_UNKNOWN",
     "SETTINGS_WRITE_FAILED",

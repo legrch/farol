@@ -3304,6 +3304,14 @@ async function configureProduct(
                                                                                               parsed.error,
                                                                                             ) ??
                                                                                             `Not applied · ${parsed.error}`);
+    if (parsed.error === "CONNECTOR_CREDENTIAL_OUTCOME_UNKNOWN") {
+      settingsFeedback =
+        "The credential change may have reached the private store. The connection is fenced; inspect the original result before submitting another key.";
+    }
+    if (parsed.error === "SETTINGS_WRITE_FAILED") {
+      settingsFeedback =
+        "The settings write could not be confirmed. Check the current state before another change; it may already have taken effect.";
+    }
     settingsFeedbackError =
       !cancellation && parsed.error !== "CODEX_AGENT_STILL_RUNNING";
     if (command.kind === "connector.verify-app") {

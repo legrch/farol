@@ -88,6 +88,7 @@ it("distinguishes a settings write with failed readback from a refusal without e
   for (const error of [
     "SETTINGS_WRITE_FAILED",
     "CONNECTOR_RUNTIME_OUTCOME_UNKNOWN",
+    "CONNECTOR_CREDENTIAL_OUTCOME_UNKNOWN",
     "CONNECTOR_STOP_UNCONFIRMED",
     "WORKSPACE_MUTATION_OUTCOME_UNKNOWN",
     "CHATGPT_ACCOUNT_APPROVAL_UNCONFIRMED",

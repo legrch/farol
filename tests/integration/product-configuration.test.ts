@@ -7,6 +7,7 @@ import {
   ProductConfigurationService,
   ProductSettingsStore,
 } from "../../src/apps/desktop/product-configuration";
+import { PrivateConnectorKeyStore } from "../../src/apps/desktop/connector-key-store";
 import {
   ProductConfigurationCommandSchema,
   ProductConfigurationEvidenceSchema,
@@ -24,6 +25,133 @@ afterEach(async () => {
       .splice(0)
       .map((root) => fs.rm(root, { recursive: true, force: true })),
   );
+});
+
+describe("connector credential publication fence", () => {
+  it("retains an uncertain replacement across restart after the key file changed", async () => {
+    const root = await stateRoot();
+    const settings = new ProductSettingsStore({ root });
+    const credentials = new PrivateConnectorKeyStore({
+      root: path.join(path.dirname(root), "private-key"),
+    });
+    const service = new ProductConfigurationService(settings, dependencies());
+    await service.initialize();
+    await service.configureSecureMcpTunnel({ tunnelId: "original" });
+    await credentials.store("synthetic-original-key-1234567890");
+    await service.recordSecureMcpCredential("stored");
+
+    const begun = await service.beginSecureMcpCredentialChange();
+    expect(begun.ok).toBe(true);
+    vi.spyOn(fs, "chmod").mockRejectedValueOnce(
+      new Error("synthetic post-rename failure"),
+    );
+    await expect(
+      credentials.store("synthetic-replacement-key-1234567890"),
+    ).rejects.toThrow("synthetic post-rename failure");
+    vi.restoreAllMocks();
+    expect(
+      await fs.readFile(
+        path.join(path.dirname(root), "private-key", "control-plane-api-key"),
+        "utf8",
+      ),
+    ).toBe("synthetic-replacement-key-1234567890");
+
+    const restarted = new ProductConfigurationService(settings, dependencies());
+    await restarted.initialize();
+    const retained = restarted.snapshot();
+    if (retained.status !== "ready") throw new Error("settings missing");
+    expect(retained.settings.setup.connect.outcomeUnknown).toBe(true);
+    expect(retained.settings.connectors.secureMcp.tunnelId).toBe("original");
+    expect(await credentials.status()).toBe("stored");
+    expect(await restarted.recordSecureMcpCredential("stored")).toMatchObject({
+      ok: false,
+      error: "CONNECTOR_RUNTIME_OUTCOME_UNKNOWN",
+    });
+    expect(await restarted.beginSecureMcpCredentialChange()).toMatchObject({
+      ok: false,
+      error: "CONNECTOR_RUNTIME_OUTCOME_UNKNOWN",
+    });
+    expect(
+      await restarted.configureSecureMcpTunnel({ tunnelId: "replacement" }),
+    ).toMatchObject({
+      ok: false,
+      error: "CONNECTOR_RUNTIME_OUTCOME_UNKNOWN",
+    });
+    expect(restarted.snapshot()).toEqual(retained);
+  });
+
+  it("clears the pending fence only after the exact known write", async () => {
+    const root = await stateRoot();
+    const settings = new ProductSettingsStore({ root });
+    const credentials = new PrivateConnectorKeyStore({
+      root: path.join(path.dirname(root), "private-key"),
+    });
+    const service = new ProductConfigurationService(settings, dependencies());
+    await service.initialize();
+    const begun = await service.beginSecureMcpCredentialChange();
+    if (!begun.ok || begun.snapshot.status !== "ready")
+      throw new Error("begin failed");
+    const generation = begun.snapshot.settings.connectors.secureMcp.generation;
+    expect(
+      await service.completeSecureMcpCredentialChange(
+        { tunnelId: "synthetic" },
+        generation + 1,
+      ),
+    ).toMatchObject({
+      ok: false,
+      error: "CONNECTOR_RUNTIME_OUTCOME_UNKNOWN",
+    });
+    await credentials.store("synthetic-new-key-1234567890");
+    const completed = await service.completeSecureMcpCredentialChange(
+      { tunnelId: "synthetic" },
+      generation,
+    );
+    expect(completed.ok).toBe(true);
+    const restarted = new ProductConfigurationService(settings, dependencies());
+    await restarted.initialize();
+    const retained = restarted.snapshot();
+    if (retained.status !== "ready") throw new Error("settings missing");
+    expect(retained.settings.setup.connect.outcomeUnknown).toBe(false);
+    expect(retained.settings.connectors.secureMcp.tunnelId).toBe("synthetic");
+    expect(retained.settings.connectors.secureMcp.credential).toBe("stored");
+  });
+
+  it("reports a failed completion readback with the recovered unfenced snapshot", async () => {
+    const root = await stateRoot();
+    const settings = new ProductSettingsStore({ root });
+    const service = new ProductConfigurationService(settings, dependencies());
+    await service.initialize();
+    const begun = await service.beginSecureMcpCredentialChange();
+    if (!begun.ok || begun.snapshot.status !== "ready")
+      throw new Error("begin failed");
+    const generation = begun.snapshot.settings.connectors.secureMcp.generation;
+    // The trusted host's credential store has already returned known success.
+    // Inject only the first Settings readback failure, after the Settings save.
+    vi.spyOn(settings, "load").mockRejectedValueOnce(
+      new Error("synthetic first readback failure"),
+    );
+    const completed = await service.completeSecureMcpCredentialChange(
+      { tunnelId: "synthetic" },
+      generation,
+    );
+    expect(completed).toMatchObject({
+      ok: false,
+      error: "SETTINGS_WRITE_FAILED",
+      snapshot: {
+        status: "ready",
+        settings: {
+          setup: { connect: { outcomeUnknown: false } },
+          connectors: {
+            secureMcp: { tunnelId: "synthetic", credential: "stored" },
+          },
+        },
+      },
+    });
+    const restarted = new ProductConfigurationService(settings, dependencies());
+    await restarted.initialize();
+    expect(restarted.snapshot()).toEqual(completed.snapshot);
+    expect((await restarted.beginSecureMcpCredentialChange()).ok).toBe(true);
+  });
 });
 
 async function stateRoot(): Promise<string> {
