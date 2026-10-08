@@ -47,11 +47,20 @@ export const chatGptUpdateIdleProbe = `(() => {
     return { state: "unknown" };
   const sends = controls('[data-testid="send-button"],button[aria-label="Send prompt"],button[aria-label="Send message"]').filter(visible);
   const voice = [...form.querySelectorAll('button[aria-label="Start Voice"],button[aria-label="Start voice mode"],button[aria-label="Start Voice Mode"]')].filter(visible);
+  // Exact structural identities only, scoped to this composer form. These
+  // controls do not prove idle; expanded/pressed or duplicate entries are unknown.
+  const structural = ['Add files', 'Select ChatGPT model', 'Dictate'].flatMap(label =>
+    [...form.querySelectorAll('button')].filter(e => e.getAttribute('aria-label') === label && visible(e)));
+  if (structural.some(e => !(e instanceof HTMLButtonElement) || e.type !== 'button' || e.form !== form ||
+      structural.filter(other => other.getAttribute('aria-label') === e.getAttribute('aria-label')).length !== 1 ||
+      ['aria-expanded', 'aria-pressed'].some(attribute =>
+        e.getAttribute(attribute) !== null && e.getAttribute(attribute) !== 'false')))
+    return { state: "unknown" };
   // Any unknown enabled native button or action input can submit through an
   // application handler, including controls associated outside the form.
-  // Only the known non-submit voice entry is excluded from that uncertainty.
+  // Exclude only the known non-submit voice entry and structural controls.
   const actions = controls('button,input[type="button"],input[type="reset"],input[type="submit"],input[type="image"]').filter(visible);
-  if (actions.some(e => !sends.includes(e) && e.disabled !== true &&
+  if (actions.some(e => !sends.includes(e) && !structural.includes(e) && e.disabled !== true &&
       !(voice.includes(e) && e instanceof HTMLButtonElement && e.type === "button")))
     return { state: "unknown" };
   // Disabled Send alone does not prove that a voice session has ended. Require

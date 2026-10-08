@@ -129,6 +129,150 @@ function fixture() {
 }
 
 describe("update idle observation on synthetic public DOM", () => {
+  const structuralLabels = ["Add files", "Select ChatGPT model", "Dictate"];
+  const addStructuralControl = (
+    f: ReturnType<typeof fixture>,
+    label: string,
+  ) => {
+    const control = new ButtonFixture({ type: "button", "aria-label": label });
+    control.form = f.form;
+    f.form.children.push(control);
+    return control;
+  };
+  it.each(structuralLabels)(
+    "allows the exact non-submit %s control while retaining positive idle proof",
+    (label) => {
+      const f = fixture();
+      addStructuralControl(f, label);
+      expect(f.run()).toEqual({ state: "idle" });
+    },
+  );
+  it("allows all three ordinary structural controls together", () => {
+    const f = fixture();
+    structuralLabels.forEach((label) => addStructuralControl(f, label));
+    expect(f.run()).toEqual({ state: "idle" });
+  });
+  describe.each(structuralLabels)("exact %s structural identity", (label) => {
+    it.each(["absent", "submit", "reset", "invalid"])(
+      "refuses a %s native button type",
+      (type) => {
+        const f = fixture();
+        const control = addStructuralControl(f, label);
+        if (type === "absent") delete control.attributes.type;
+        else control.attributes.type = type;
+        expect(f.run()).toEqual({ state: "unknown" });
+      },
+    );
+    it.each(["div", "span", "input"])(
+      "refuses a %s with the same label",
+      (tag) => {
+        const f = fixture();
+        f.form.children.push(
+          new ElementFixture(tag, {
+            type: "button",
+            role: "button",
+            "aria-label": label,
+          }),
+        );
+        expect(f.run()).toEqual({ state: "unknown" });
+      },
+    );
+    it.each([`${label} now`, label.toLowerCase(), ` ${label} `])(
+      "refuses the nonexact label %s",
+      (otherLabel) => {
+        const f = fixture();
+        addStructuralControl(f, otherLabel);
+        expect(f.run()).toEqual({ state: "unknown" });
+      },
+    );
+    it("refuses duplicate visible identities, including a disabled duplicate", () => {
+      const f = fixture();
+      addStructuralControl(f, label);
+      const duplicate = addStructuralControl(f, label);
+      expect(f.run()).toEqual({ state: "unknown" });
+      duplicate.disabled = true;
+      expect(f.run()).toEqual({ state: "unknown" });
+      duplicate.visible = false;
+      expect(f.run()).toEqual({ state: "idle" });
+    });
+    it.each(["aria-expanded", "aria-pressed"])(
+      "refuses an active or ambiguous %s state",
+      (attribute) => {
+        const f = fixture();
+        const control = addStructuralControl(f, label);
+        for (const value of ["true", "mixed", "unrecognized", ""]) {
+          control.attributes[attribute] = value;
+          expect(f.run()).toEqual({ state: "unknown" });
+        }
+        control.attributes[attribute] = "false";
+        expect(f.run()).toEqual({ state: "idle" });
+      },
+    );
+    it("refuses external form-owned and differently owned descendant controls", () => {
+      const f = fixture();
+      const control = addStructuralControl(f, label);
+      control.form = new ElementFixture("form");
+      expect(f.run()).toEqual({ state: "unknown" });
+      control.form = null;
+      expect(f.run()).toEqual({ state: "unknown" });
+      control.form = f.form;
+      f.form.children.pop();
+      f.nodes.push(control);
+      expect(f.run()).toEqual({ state: "unknown" });
+    });
+  });
+  it.each([
+    "draft",
+    "files",
+    "attachment",
+    "stream",
+    "voice",
+    "dictation",
+    "unknown-action",
+    "ambiguous-composer",
+    "missing-composer-form",
+    "missing-voice",
+    "occluded-voice",
+    "enabled-send",
+  ])("retains the %s refusal with all structural controls present", (state) => {
+    const f = fixture();
+    structuralLabels.forEach((label) => addStructuralControl(f, label));
+    let expected = "unknown";
+    if (state === "draft") {
+      f.composer.value = "opaque fixture draft";
+      expected = "draft";
+    }
+    if (state === "files") {
+      const input = new ElementFixture("input", { type: "file" });
+      input.files = ["opaque fixture file"];
+      f.form.children.push(input);
+      expected = "draft";
+    }
+    if (state === "attachment") {
+      f.form.children.push(
+        new ElementFixture("div", { "data-testid": "composer-attachment" }),
+      );
+      expected = "draft";
+    }
+    if (state === "stream" || state === "voice" || state === "dictation") {
+      f.nodes.push(
+        state === "stream"
+          ? new ElementFixture("div", { "data-is-streaming": "true" })
+          : new ButtonFixture({
+              "aria-label":
+                state === "voice" ? "End voice chat" : "Stop dictation",
+            }),
+      );
+      expected = "running";
+    }
+    if (state === "unknown-action") addStructuralControl(f, "Other action");
+    if (state === "ambiguous-composer") f.nodes.push(new TextAreaFixture());
+    if (state === "missing-composer-form") f.composer.form = null;
+    if (state === "missing-voice") f.voice.visible = false;
+    if (state === "occluded-voice") f.paint.hit = f.form;
+    if (state === "enabled-send") f.send.disabled = false;
+    expect(f.run()).toEqual({ state: expected });
+  });
   it.each(["div", "span"])(
     "refuses a custom %s button even when it claims to be disabled",
     (tag) => {
