@@ -13,7 +13,6 @@ import (
 
 	wire "github.com/legrch/farol/gen/desktop/v1"
 	delivery "github.com/legrch/farol/modules/computer/app/services/settingsdelivery"
-	"github.com/legrch/farol/transport/desktop"
 	"golang.org/x/sys/unix"
 )
 
@@ -97,19 +96,6 @@ func retirementStorageFixtureAt(t *testing.T, mutations, desktopLayout bool) (Na
 		}
 	})
 	return launch, runtime
-}
-func retirementCall(t *testing.T, runtime *NativeRuntime, name string, body any) *desktop.Outcome {
-	t.Helper()
-	raw, err := json.Marshal(body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	method := runtime.retirementMethods()[name]
-	result, err := method.Handle(context.Background(), desktop.Request{OperationID: "effect-" + name, Body: raw})
-	if err != nil || result == nil {
-		t.Fatal(result, err)
-	}
-	return result
 }
 func preparedTerminal(t *testing.T, runtime *NativeRuntime) wire.CoreTerminalObservation {
 	t.Helper()
