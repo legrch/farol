@@ -62,6 +62,9 @@ func Run(args []string, in io.ReadCloser, out io.WriteCloser, diagnostics io.Wri
 	if len(args) > 0 && args[0] == "inspect-native-state" {
 		return runNativeStateInspection(args[1:], out, diagnostics, inspectNativeState)
 	}
+	if len(args) > 0 && args[0] == "inspect-terminated-profile" {
+		return runTerminatedProfileInspection(args[1:], in, out, diagnostics, inspectTerminatedProfile)
+	}
 	if len(args) > 0 && args[0] == "record-native-terminal" {
 		return runNativeTerminal(args[1:], in, out, diagnostics)
 	}
