@@ -55,61 +55,78 @@ const accepted: InstalledUpdateRequest = {
 };
 
 describe("installed update launcher", () => {
-  it("B06 refuses legacy app-only rollback after a real new-format settings save without changing the state", async () => {
-    // Real module/file publication, not the later assembled app journey.
-    const root = await fs.mkdtemp(
-      path.join(os.tmpdir(), "farol-rollback-settings-"),
-    );
-    roots.push(root);
-    const store = new ProductSettingsStore({ root });
-    const service = new ProductConfigurationService(store);
-    await service.initialize();
-    expect(
-      (await service.updateComputerFilePolicy("approved-roots-v1")).ok,
-    ).toBe(true);
-    const file = path.join(root, "config.json");
-    const saved = await fs.readFile(file);
-    expect((await store.load())!.computer.filePolicy).toBe("approved-roots-v1");
-    for (const closed of [false, true]) {
-      const input = {
-        ...accepted,
-        action: "rollback" as const,
-        source: { ...source, version: "0.1.11-owner.beta.1" },
-        target: { ...target, version: "0.2.0-owner.beta.2" },
-        relaunch: false as const,
-        ...(closed
-          ? {
-              predecessor: {
-                kind: "confirmed_closed" as const,
-                startedAt: new Date().toISOString(),
-                lastQuitSha256: "5".repeat(64),
-                stateIdentity: { device: "1", inode: "2" },
+  it.each([
+    ["0.1.11-owner.beta.1", "0.2.0-owner.beta.2"],
+    ["0.2.0-owner.beta.3", "0.2.0-owner.beta.5"],
+  ])(
+    "B06 refuses app-only rollback to %s after a real incompatible settings save",
+    async (sourceVersion, targetVersion) => {
+      // Real module/file publication, not the later assembled app journey.
+      const root = await fs.mkdtemp(
+        path.join(os.tmpdir(), "farol-rollback-settings-"),
+      );
+      roots.push(root);
+      const store = new ProductSettingsStore({ root });
+      const service = new ProductConfigurationService(store);
+      await service.initialize();
+      expect(
+        (await service.updateComputerFilePolicy("approved-roots-v1")).ok,
+      ).toBe(true);
+      expect(
+        (
+          await service.updateGeneral({
+            ...(await store.load())!.general,
+            openAtLaunch: "home",
+          })
+        ).ok,
+      ).toBe(true);
+      const file = path.join(root, "config.json");
+      const saved = await fs.readFile(file);
+      expect((await store.load())!.computer.filePolicy).toBe(
+        "approved-roots-v1",
+      );
+      expect((await store.load())!.general.openAtLaunch).toBe("home");
+      for (const closed of [false, true]) {
+        const input = {
+          ...accepted,
+          action: "rollback" as const,
+          source: { ...source, version: sourceVersion },
+          target: { ...target, version: targetVersion },
+          relaunch: false as const,
+          ...(closed
+            ? {
+                predecessor: {
+                  kind: "confirmed_closed" as const,
+                  startedAt: new Date().toISOString(),
+                  lastQuitSha256: "5".repeat(64),
+                  stateIdentity: { device: "1", inode: "2" },
+                },
+              }
+            : {}),
+        };
+        const release = vi.fn();
+        const verify = vi.fn();
+        await expect(
+          startInstalledUpdateHelper(
+            path.join(root, "not-read-helper.py"),
+            input,
+            {
+              promotionLease: {
+                descriptor: 99,
+                identity: { device: "1", inode: "3" },
+                verify,
+                release,
               },
-            }
-          : {}),
-      };
-      const release = vi.fn();
-      const verify = vi.fn();
-      await expect(
-        startInstalledUpdateHelper(
-          path.join(root, "not-read-helper.py"),
-          input,
-          {
-            promotionLease: {
-              descriptor: 99,
-              identity: { device: "1", inode: "3" },
-              verify,
-              release,
             },
-          },
-        ),
-      ).rejects.toThrow("INSTALLED_UPDATE_PREDECESSOR_STATE_UNQUALIFIED");
-      expect(spawn).not.toHaveBeenCalled();
-      expect(verify).not.toHaveBeenCalled();
-      expect(release).not.toHaveBeenCalled();
-      expect(await fs.readFile(file)).toEqual(saved);
-    }
-  });
+          ),
+        ).rejects.toThrow("INSTALLED_UPDATE_PREDECESSOR_STATE_UNQUALIFIED");
+        expect(spawn).not.toHaveBeenCalled();
+        expect(verify).not.toHaveBeenCalled();
+        expect(release).not.toHaveBeenCalled();
+        expect(await fs.readFile(file)).toEqual(saved);
+      }
+    },
+  );
   it("rejects a changed helper before spawning it", async () => {
     const root = await fs.mkdtemp(
       path.join(await fs.realpath(os.tmpdir()), "farol-update-launcher-"),

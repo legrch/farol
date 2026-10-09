@@ -152,8 +152,11 @@ function options() {
     publish: vi.fn(),
   };
 }
-async function prepared() {
-  const controller = await createInstalledUpdateRuntime(options());
+async function prepared(selectedBuild = build) {
+  const controller = await createInstalledUpdateRuntime({
+    ...options(),
+    build: selectedBuild,
+  });
   expect(controller).not.toBeNull();
   await controller!.initialize();
   await controller!.check();
@@ -3844,91 +3847,117 @@ ${scenario === "missing" ? "" : `<key>CFBundleVersion</key><string>${scenario ==
       fs.stat(path.join(userData, "installed-updates/restore-pending.json")),
     ).rejects.toMatchObject({ code: "ENOENT" });
   });
-  it("B06 offers no app-only rollback across the legacy state boundary and does not dispatch a restore", async () => {
-    // Real retained records with mocked native/app ports; no installed witness.
-    const selected = {
-      ...manifest,
-      version: "0.2.0-owner.beta.2",
-      buildVersion: "16",
-      archiveName: "Farol-0.2.0-owner.beta.2-darwin-arm64.zip",
-    };
-    const identity = { ...selected, updateChannel: "github-owner-beta" };
-    mocks.discover.mockResolvedValue({
-      ok: true,
-      value: { manifest: selected },
-    });
-    mocks.download.mockResolvedValue({
-      ok: true,
-      value: {
-        handle: path.join(root, "archive.zip"),
-        manifest: selected,
-        identity,
-        stagedAppPath: staging,
-        stagingRoot: path.dirname(staging),
-      },
-    });
-    mocks.verify.mockResolvedValue({
-      ok: true,
-      value: {
-        identity,
-        stagedAppPath: staging,
-        stagingRoot: path.dirname(staging),
-      },
-    });
-    const original = await prepared();
-    await original.restart();
-    const retained = JSON.parse(await fs.readFile(ready, "utf8"));
-    const op = retained.operation;
-    const opRoot = path.join(userData, "installed-updates", op.operationId);
-    await fs.writeFile(
-      path.join(opRoot, "journal.json"),
-      JSON.stringify({
-        schema: "farol.installed-update-journal/1",
-        ...op,
-        phase: "completed",
-      }),
-      { mode: 0o600 },
-    );
-    await fs.mkdir(path.join(opRoot, "previous.app"));
-    const journal = await fs.readFile(path.join(opRoot, "journal.json"));
-    mocks.exec.mockImplementation(async (_file: unknown, args: string[]) => ({
-      stdout: JSON.stringify(
-        args[1]!.endsWith("previous.app") ? op.source : op.target,
-      ),
-    }));
-    const current = await createInstalledUpdateRuntime({
-      ...options(),
-      build: {
-        ...build,
-        version: selected.version,
-        buildVersion: selected.buildVersion,
-        buildId: selected.buildId,
-      },
-    });
-    await current!.initialize();
-    expect(
-      current!.snapshot(),
-      JSON.stringify(current!.snapshot()),
-    ).toMatchObject({ phase: "idle" });
-    expect(current!.snapshot()).not.toHaveProperty("rollbackVersion");
-    const receipt = await fs.readFile(
-      path.join(userData, "installed-updates/last-update.json"),
-    );
-    await current!.restore("rollback");
-    expect(mocks.helper).toHaveBeenCalledTimes(1);
-    expect(quit).toHaveBeenCalledTimes(1);
-    expect(await fs.readFile(path.join(opRoot, "journal.json"))).toEqual(
-      journal,
-    );
-    expect(
-      await fs.readFile(
+  it.each([
+    ["0.1.0-owner.beta.1", "0.2.0-owner.beta.2", "16"],
+    ["0.2.0-owner.beta.3", "0.2.0-owner.beta.5", "19"],
+  ])(
+    "B06 offers no app-only rollback to %s and does not dispatch a restore",
+    async (sourceVersion, targetVersion, targetBuild) => {
+      // Real retained records with mocked native/app ports; no installed witness.
+      const selected = {
+        ...manifest,
+        version: targetVersion,
+        buildVersion: targetBuild,
+        archiveName: `Farol-${targetVersion}-darwin-arm64.zip`,
+      };
+      const identity = { ...selected, updateChannel: "github-owner-beta" };
+      mocks.discover.mockResolvedValue({
+        ok: true,
+        value: { manifest: selected },
+      });
+      mocks.download.mockResolvedValue({
+        ok: true,
+        value: {
+          handle: path.join(root, "archive.zip"),
+          manifest: selected,
+          identity,
+          stagedAppPath: staging,
+          stagingRoot: path.dirname(staging),
+        },
+      });
+      mocks.verify.mockResolvedValue({
+        ok: true,
+        value: {
+          identity,
+          stagedAppPath: staging,
+          stagingRoot: path.dirname(staging),
+        },
+      });
+      const selectedSource = { ...build, version: sourceVersion };
+      const promotion = JSON.parse(
+        await fs.readFile(slot + ".receipt.json", "utf8"),
+      );
+      promotion.version = sourceVersion;
+      await fs.writeFile(slot + ".receipt.json", JSON.stringify(promotion), {
+        mode: 0o600,
+      });
+      mocks.exec.mockImplementation(async (_file: unknown, args: string[]) => ({
+        stdout: JSON.stringify(
+          args[0]!.endsWith("update-obligations.mjs")
+            ? {
+                drained: true,
+                obligationCount: 0,
+                unreadableCount: 0,
+                changedCount: 0,
+              }
+            : { ...source, version: sourceVersion },
+        ),
+      }));
+      const original = await prepared(selectedSource);
+      await original.restart();
+      const retained = JSON.parse(await fs.readFile(ready, "utf8"));
+      const op = retained.operation;
+      const opRoot = path.join(userData, "installed-updates", op.operationId);
+      await fs.writeFile(
+        path.join(opRoot, "journal.json"),
+        JSON.stringify({
+          schema: "farol.installed-update-journal/1",
+          ...op,
+          phase: "completed",
+        }),
+        { mode: 0o600 },
+      );
+      await fs.mkdir(path.join(opRoot, "previous.app"));
+      const journal = await fs.readFile(path.join(opRoot, "journal.json"));
+      mocks.exec.mockImplementation(async (_file: unknown, args: string[]) => ({
+        stdout: JSON.stringify(
+          args[1]!.endsWith("previous.app") ? op.source : op.target,
+        ),
+      }));
+      const current = await createInstalledUpdateRuntime({
+        ...options(),
+        build: {
+          ...build,
+          version: selected.version,
+          buildVersion: selected.buildVersion,
+          buildId: selected.buildId,
+        },
+      });
+      await current!.initialize();
+      expect(
+        current!.snapshot(),
+        JSON.stringify(current!.snapshot()),
+      ).toMatchObject({ phase: "idle" });
+      expect(current!.snapshot()).not.toHaveProperty("rollbackVersion");
+      const receipt = await fs.readFile(
         path.join(userData, "installed-updates/last-update.json"),
-      ),
-    ).toEqual(receipt);
-    await expect(
-      fs.lstat(path.join(userData, "installed-updates/restore-pending.json")),
-    ).rejects.toMatchObject({ code: "ENOENT" });
-  });
+      );
+      await current!.restore("rollback");
+      expect(mocks.helper).toHaveBeenCalledTimes(1);
+      expect(quit).toHaveBeenCalledTimes(1);
+      expect(await fs.readFile(path.join(opRoot, "journal.json"))).toEqual(
+        journal,
+      );
+      expect(
+        await fs.readFile(
+          path.join(userData, "installed-updates/last-update.json"),
+        ),
+      ).toEqual(receipt);
+      await expect(
+        fs.lstat(path.join(userData, "installed-updates/restore-pending.json")),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+    },
+  );
 });
 
 describe("selected local update composition (disposable state, native ports doubled)", () => {

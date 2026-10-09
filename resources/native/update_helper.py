@@ -634,10 +634,14 @@ def matches_tree(parent, name, build):
 
 
 def require_predecessor_state(request):
-    # There is no qualified state downgrade from 0.2 to the strict 0.1 reader.
+    # Strict 0.1 and beta3 readers reject current settings/retained records.
+    # No app+state downgrade is qualified for either predecessor.
     # Refuse before restoring its app; never launch it against newer settings.
     # This is not a compatibility claim for other release transitions.
-    if request["source"]["version"].startswith("0.1.") and not request["target"]["version"].startswith("0.1."):
+    source = request["source"]["version"]
+    target = request["target"]["version"]
+    if ((source.startswith("0.1.") and not target.startswith("0.1."))
+            or source == "0.2.0-owner.beta.3"):
         fail("predecessor_state_unqualified")
 
 
