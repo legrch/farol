@@ -1703,6 +1703,33 @@ describe("bounded Settings writer", () => {
     });
     expect(h.calls()).toEqual([]);
   });
+  it.each(["theme", "accent", "typeface"] as const)(
+    "preserves earlier appearance choices before React rerenders when selecting %s",
+    async (choice) => {
+      const h = await mount("appearance");
+      await act(async () => {
+        h.button(choice === "theme" ? "Amber" : "Graphite").click();
+        if (choice === "typeface") {
+          const typeface = h.host.querySelector<HTMLSelectElement>(
+            'select[aria-label="Typeface"]',
+          )!;
+          Object.getOwnPropertyDescriptor(
+            HTMLSelectElement.prototype,
+            "value",
+          )?.set?.call(typeface, "system");
+          typeface.dispatchEvent(new Event("change", { bubbles: true }));
+        } else {
+          h.button(choice === "theme" ? "Graphite" : "Amber").click();
+        }
+      });
+      expect(h.c.getSnapshot().appearance).toEqual({
+        theme: "graphite",
+        accent: choice === "typeface" ? "iris" : "amber",
+        font: choice === "typeface" ? "system" : "geist",
+      });
+      expect(h.calls()).toEqual([]);
+    },
+  );
   it("presents the selected Appearance controls without duplicating the toolbar title", async () => {
     const h = await mount("appearance");
     const page = h.host.querySelector(".appearance-page")!;

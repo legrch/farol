@@ -712,7 +712,12 @@ function AppearancePage({ snapshot, facade }: PageProps) {
                 key={theme}
                 className="theme-choice"
                 aria-pressed={appearance.theme === theme}
-                onClick={() => facade.appearance({ ...appearance, theme })}
+                onClick={() =>
+                  facade.appearance({
+                    ...facade.getSnapshot().appearance,
+                    theme,
+                  })
+                }
               >
                 <span className={`theme-preview ${theme}`} aria-hidden="true" />
                 {theme === "light"
@@ -751,7 +756,12 @@ function AppearancePage({ snapshot, facade }: PageProps) {
                   className={`accent-choice ${accent}`}
                   aria-label={`${label} accent`}
                   aria-pressed={appearance.accent === accent}
-                  onClick={() => facade.appearance({ ...appearance, accent })}
+                  onClick={() =>
+                    facade.appearance({
+                      ...facade.getSnapshot().appearance,
+                      accent,
+                    })
+                  }
                 >
                   <span className="accent-dot" aria-hidden="true" />
                   {label}
@@ -777,7 +787,7 @@ function AppearancePage({ snapshot, facade }: PageProps) {
             value={appearance.font}
             onChange={(event) =>
               facade.appearance({
-                ...appearance,
+                ...facade.getSnapshot().appearance,
                 font: event.currentTarget.value as typeof appearance.font,
               })
             }
