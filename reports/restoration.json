@@ -1,0 +1,13 @@
+{
+  "at": "2026-10-09T19:48:25.698365+00:00",
+  "freshGitRestoration": "PASS",
+  "all140CurrentBranchRefs": "exact OID match",
+  "nineTipObjects": "9 imported commit objects; retained in refs/preservation/nine",
+  "fullFsck": "PASS",
+  "H": "3034ed3911173a19cf56f4d28d780f42e2c5fcf2",
+  "tree": "05ba41ad93162103ef5633965bbf12e6907a12ed",
+  "workingFileBytesAndModes": 138,
+  "schemaFiles": 440,
+  "originalVerificationFailure": "authored manifest included POSIX file-type bits in mode; source/archive bytes intact; manifest corrected to permission bits and all138 files rechecked",
+  "limits": "Input restoration only; no source/native/provider/install/update acceptance; Cloud current F untouched"
+}

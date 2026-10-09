@@ -1,0 +1,58 @@
+{
+  "manifestVerified": true,
+  "manifestEntryCount": 35,
+  "privateDirectoriesVerified": true,
+  "restorePackMatchesExport": true,
+  "restoreModes": {
+    ".": "0o700",
+    "restored.git": "0o700",
+    "restored.git/objects/pack/pack-b0ab8726458f883657eb61118fee66ffb698d524.pack": "0o400",
+    "restored.git/objects/pack/pack-b0ab8726458f883657eb61118fee66ffb698d524.idx": "0o400"
+  },
+  "gitPackSHA1": "b0ab8726458f883657eb61118fee66ffb698d524",
+  "restoreIndexSHA256": "77e54d2de94308d59bed4229ac90c5bd6643e6297acbf60b55a0f5234afe22d0",
+  "packSHA256": "78e9728f52d4f2da85894a485c0fb373cd1c2ef533130f7d7309b68048aefa93",
+  "receiptSHA256": "02beda47af40a2c041139d61d8be8c2209dbb4c76fa6576f0679539eee438b72",
+  "manifestSHA256": "1c9b82acce18edbdf1c1d115049f3f824996260ecf8744e31a9bb6370c293ddd",
+  "scriptSHA256": "3f78578a723627383ead2f44aea907107ef1d3e38f818a6ab8f3a40a0c6948bf",
+  "sourceBefore": {
+    "identity": [
+      "<MAC_HOME>/code/farol",
+      "<MAC_HOME>/code/farol/.git",
+      "0a86da832fcd40f89287b710eca0a23dabec4cfc",
+      "0a86da832fcd40f89287b710eca0a23dabec4cfc"
+    ],
+    "branch": "refs/heads/main",
+    "refsSHA256": "8d6c58eddd29be3c166c9df391dc13b232f68c0c36c4d873c6cc141529500307",
+    "indexSHA256": "0b09971ffd9aac4399d4ec123cb6b0cafd3d94df497647a3972672715bbd30d8"
+  },
+  "sourceAfter": {
+    "identity": [
+      "<MAC_HOME>/code/farol",
+      "<MAC_HOME>/code/farol/.git",
+      "0a86da832fcd40f89287b710eca0a23dabec4cfc",
+      "0a86da832fcd40f89287b710eca0a23dabec4cfc"
+    ],
+    "branch": "refs/heads/main",
+    "refsSHA256": "8d6c58eddd29be3c166c9df391dc13b232f68c0c36c4d873c6cc141529500307",
+    "indexSHA256": "0b09971ffd9aac4399d4ec123cb6b0cafd3d94df497647a3972672715bbd30d8"
+  },
+  "sourceRefCount": 253,
+  "originalReceiptUnchanged": true,
+  "priorBlockedReceiptSHA256": "d6d0333fcd27818e48063657d707f08108398512e12c649804005be82e6544a0",
+  "gitCommandCount": 15,
+  "allGitCommandsExitZero": true,
+  "allGitCommandStderrEmpty": true,
+  "exportAttempts": 1,
+  "importAttempts": 1,
+  "requestedTipCount": 9,
+  "restoredTipCount": 9,
+  "reachableObjectCount": 19914,
+  "restoredObjectCounts": {
+    "blob": 7746,
+    "commit": 1527,
+    "tree": 10641
+  },
+  "closureSHA256": "28b6955a69024a537bf295435ad6af11b2f44eca838a8d850fc69dbfa5a24d80",
+  "complete": true
+}

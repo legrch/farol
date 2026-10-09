@@ -1,0 +1,411 @@
+{
+  "schema": "farol.exact-tip-pack-preservation/1",
+  "startedAt": "2026-10-08T15:54:52.728788+00:00",
+  "source": "<MAC_HOME>/code/farol",
+  "selectedBase": "0a86da832fcd40f89287b710eca0a23dabec4cfc",
+  "requestedTips": [
+    "814538a80d155048ad4be49771163d8e365daef2",
+    "2547d4a0983dc66a62860a99464bdee31fa41cec",
+    "dd55622297746e03e22f9ac1dc960bcad17219f6",
+    "0ca57b2d262512166ea253fc561158c00618c1ff",
+    "b1ad6bfb934fc0647bee7fc3b40c906739557f5c",
+    "2eb182219c134a7ce5d485c6a225276138dcbc5c",
+    "4cb90e4ecc640ea02ccf83b9073828703df10e2f",
+    "b3ccb1c6865276524e1a86d903a0a43e121e3f27",
+    "c4cd8c3a92b8962fe5919f3925c5d710f3f11156"
+  ],
+  "requestedTipCount": 9,
+  "exportAttempts": 1,
+  "importAttempts": 1,
+  "complete": true,
+  "status": "VERIFIED_PRESERVATION",
+  "commands": [
+    {
+      "label": "source-before-identity",
+      "argv": [
+        "/usr/bin/git",
+        "-C",
+        "<MAC_HOME>/code/farol",
+        "rev-parse",
+        "--show-toplevel",
+        "--absolute-git-dir",
+        "HEAD",
+        "refs/heads/main"
+      ],
+      "stdinFile": null,
+      "exit": 0,
+      "outcome": "known",
+      "elapsedSeconds": 0.011,
+      "stdoutFile": "source-before-identity.stdout",
+      "stdoutBytes": 129,
+      "stdoutSHA256": "ae921f0cf80bfd45f5c434f6656d5176ae38cdb0bbc18f6cff6e3352a0d5a30b",
+      "stderrFile": "source-before-identity.stderr",
+      "stderrBytes": 0,
+      "stderrSHA256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "label": "source-before-branch",
+      "argv": [
+        "/usr/bin/git",
+        "-C",
+        "<MAC_HOME>/code/farol",
+        "symbolic-ref",
+        "--quiet",
+        "HEAD"
+      ],
+      "stdinFile": null,
+      "exit": 0,
+      "outcome": "known",
+      "elapsedSeconds": 0.01,
+      "stdoutFile": "source-before-branch.stdout",
+      "stdoutBytes": 16,
+      "stdoutSHA256": "599bbcd7b7f94b50d9b83318ba0dd4b8e1ba9e39d1d3ee73d1fbbd70496d0f93",
+      "stderrFile": "source-before-branch.stderr",
+      "stderrBytes": 0,
+      "stderrSHA256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "label": "source-before-refs",
+      "argv": [
+        "/usr/bin/git",
+        "-C",
+        "<MAC_HOME>/code/farol",
+        "for-each-ref",
+        "--format=%(refname) %(objectname)"
+      ],
+      "stdinFile": null,
+      "exit": 0,
+      "outcome": "known",
+      "elapsedSeconds": 0.01,
+      "stdoutFile": "source-before-refs.stdout",
+      "stdoutBytes": 23935,
+      "stdoutSHA256": "8d6c58eddd29be3c166c9df391dc13b232f68c0c36c4d873c6cc141529500307",
+      "stderrFile": "source-before-refs.stderr",
+      "stderrBytes": 0,
+      "stderrSHA256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "label": "source-tip-types",
+      "argv": [
+        "/usr/bin/git",
+        "-C",
+        "<MAC_HOME>/code/farol",
+        "cat-file",
+        "--batch-check=%(objectname) %(objecttype) %(objectsize)"
+      ],
+      "stdinFile": "<MAC_HOME>/code/farol/_output/evidence/unreachable-preservation-20261008-0a86da83/pack-export-20261008-7b0c1ed9/requested-tips.txt",
+      "exit": 0,
+      "outcome": "known",
+      "elapsedSeconds": 0.021,
+      "stdoutFile": "source-tip-types.stdout",
+      "stdoutBytes": 468,
+      "stdoutSHA256": "c0af12c0e5e2721ce16172d46f671753200ceea50293c77199134f6bbf3f58aa",
+      "stderrFile": "source-tip-types.stderr",
+      "stderrBytes": 0,
+      "stderrSHA256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "label": "source-closure",
+      "argv": [
+        "/usr/bin/git",
+        "-C",
+        "<MAC_HOME>/code/farol",
+        "rev-list",
+        "--objects",
+        "--no-object-names",
+        "--stdin"
+      ],
+      "stdinFile": "<MAC_HOME>/code/farol/_output/evidence/unreachable-preservation-20261008-0a86da83/pack-export-20261008-7b0c1ed9/requested-tips.txt",
+      "exit": 0,
+      "outcome": "known",
+      "elapsedSeconds": 0.187,
+      "stdoutFile": "source-closure.stdout",
+      "stdoutBytes": 816474,
+      "stdoutSHA256": "24dbe966131e22ad5ed00f84c9fe64eecad8120d81d88a9d937ea0f1863fa63b",
+      "stderrFile": "source-closure.stderr",
+      "stderrBytes": 0,
+      "stderrSHA256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "label": "pack-export",
+      "argv": [
+        "/usr/bin/git",
+        "-C",
+        "<MAC_HOME>/code/farol",
+        "pack-objects",
+        "--revs",
+        "--stdout",
+        "--no-reuse-object",
+        "--no-reuse-delta",
+        "--no-use-bitmap-index",
+        "--threads=1"
+      ],
+      "stdinFile": "<MAC_HOME>/code/farol/_output/evidence/unreachable-preservation-20261008-0a86da83/pack-export-20261008-7b0c1ed9/requested-tips.txt",
+      "exit": 0,
+      "outcome": "known",
+      "elapsedSeconds": 3.348,
+      "stdoutFile": "exact-nine-reachable.pack",
+      "stdoutBytes": 38324928,
+      "stdoutSHA256": "78e9728f52d4f2da85894a485c0fb373cd1c2ef533130f7d7309b68048aefa93",
+      "stderrFile": "pack-export.stderr",
+      "stderrBytes": 0,
+      "stderrSHA256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "label": "restore-init",
+      "argv": [
+        "/usr/bin/git",
+        "-C",
+        "<MAC_TEMP_PATH>",
+        "init",
+        "--bare",
+        "--template=",
+        "--initial-branch=preservation",
+        "<MAC_TEMP_PATH>"
+      ],
+      "stdinFile": null,
+      "exit": 0,
+      "outcome": "known",
+      "elapsedSeconds": 0.021,
+      "stdoutFile": "restore-init.stdout",
+      "stdoutBytes": 102,
+      "stdoutSHA256": "666cadb87182c3d39cd5924e8771f20ae2daf843f83f88aee83e6f9411728806",
+      "stderrFile": "restore-init.stderr",
+      "stderrBytes": 0,
+      "stderrSHA256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "label": "restore-index-pack",
+      "argv": [
+        "/usr/bin/git",
+        "-C",
+        "<MAC_TEMP_PATH>",
+        "index-pack",
+        "--stdin",
+        "--strict"
+      ],
+      "stdinFile": "<MAC_HOME>/code/farol/_output/evidence/unreachable-preservation-20261008-0a86da83/pack-export-20261008-7b0c1ed9/exact-nine-reachable.pack",
+      "exit": 0,
+      "outcome": "known",
+      "elapsedSeconds": 0.456,
+      "stdoutFile": "restore-index-pack.stdout",
+      "stdoutBytes": 46,
+      "stdoutSHA256": "ce192ce851b6c3d46913bc1ad65337428630f4787b25cad73dfa9e68163251ca",
+      "stderrFile": "restore-index-pack.stderr",
+      "stderrBytes": 0,
+      "stderrSHA256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "label": "restore-tip-types",
+      "argv": [
+        "/usr/bin/git",
+        "-C",
+        "<MAC_TEMP_PATH>",
+        "cat-file",
+        "--batch-check=%(objectname) %(objecttype) %(objectsize)"
+      ],
+      "stdinFile": "<MAC_HOME>/code/farol/_output/evidence/unreachable-preservation-20261008-0a86da83/pack-export-20261008-7b0c1ed9/requested-tips.txt",
+      "exit": 0,
+      "outcome": "known",
+      "elapsedSeconds": 0.02,
+      "stdoutFile": "restore-tip-types.stdout",
+      "stdoutBytes": 468,
+      "stdoutSHA256": "c0af12c0e5e2721ce16172d46f671753200ceea50293c77199134f6bbf3f58aa",
+      "stderrFile": "restore-tip-types.stderr",
+      "stderrBytes": 0,
+      "stderrSHA256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "label": "restore-closure",
+      "argv": [
+        "/usr/bin/git",
+        "-C",
+        "<MAC_TEMP_PATH>",
+        "rev-list",
+        "--objects",
+        "--no-object-names",
+        "--stdin"
+      ],
+      "stdinFile": "<MAC_HOME>/code/farol/_output/evidence/unreachable-preservation-20261008-0a86da83/pack-export-20261008-7b0c1ed9/requested-tips.txt",
+      "exit": 0,
+      "outcome": "known",
+      "elapsedSeconds": 0.041,
+      "stdoutFile": "restore-closure.stdout",
+      "stdoutBytes": 816474,
+      "stdoutSHA256": "24dbe966131e22ad5ed00f84c9fe64eecad8120d81d88a9d937ea0f1863fa63b",
+      "stderrFile": "restore-closure.stderr",
+      "stderrBytes": 0,
+      "stderrSHA256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "label": "restore-all-object-types",
+      "argv": [
+        "/usr/bin/git",
+        "-C",
+        "<MAC_TEMP_PATH>",
+        "cat-file",
+        "--batch-all-objects",
+        "--batch-check=%(objectname) %(objecttype) %(objectsize)"
+      ],
+      "stdinFile": null,
+      "exit": 0,
+      "outcome": "known",
+      "elapsedSeconds": 0.041,
+      "stdoutFile": "restore-all-object-types.stdout",
+      "stdoutBytes": 1012784,
+      "stdoutSHA256": "6f03e1f29deff2649c65da89086247496f44e8187f1a95f9a037d968ee6b8c4a",
+      "stderrFile": "restore-all-object-types.stderr",
+      "stderrBytes": 0,
+      "stderrSHA256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "label": "restore-fsck",
+      "argv": [
+        "/usr/bin/git",
+        "-C",
+        "<MAC_TEMP_PATH>",
+        "fsck",
+        "--full",
+        "--strict",
+        "--no-reflogs",
+        "--no-progress",
+        "814538a80d155048ad4be49771163d8e365daef2",
+        "2547d4a0983dc66a62860a99464bdee31fa41cec",
+        "dd55622297746e03e22f9ac1dc960bcad17219f6",
+        "0ca57b2d262512166ea253fc561158c00618c1ff",
+        "b1ad6bfb934fc0647bee7fc3b40c906739557f5c",
+        "2eb182219c134a7ce5d485c6a225276138dcbc5c",
+        "4cb90e4ecc640ea02ccf83b9073828703df10e2f",
+        "b3ccb1c6865276524e1a86d903a0a43e121e3f27",
+        "c4cd8c3a92b8962fe5919f3925c5d710f3f11156"
+      ],
+      "stdinFile": null,
+      "exit": 0,
+      "outcome": "known",
+      "elapsedSeconds": 0.778,
+      "stdoutFile": "restore-fsck.stdout",
+      "stdoutBytes": 0,
+      "stdoutSHA256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderrFile": "restore-fsck.stderr",
+      "stderrBytes": 0,
+      "stderrSHA256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "label": "source-after-identity",
+      "argv": [
+        "/usr/bin/git",
+        "-C",
+        "<MAC_HOME>/code/farol",
+        "rev-parse",
+        "--show-toplevel",
+        "--absolute-git-dir",
+        "HEAD",
+        "refs/heads/main"
+      ],
+      "stdinFile": null,
+      "exit": 0,
+      "outcome": "known",
+      "elapsedSeconds": 0.011,
+      "stdoutFile": "source-after-identity.stdout",
+      "stdoutBytes": 129,
+      "stdoutSHA256": "ae921f0cf80bfd45f5c434f6656d5176ae38cdb0bbc18f6cff6e3352a0d5a30b",
+      "stderrFile": "source-after-identity.stderr",
+      "stderrBytes": 0,
+      "stderrSHA256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "label": "source-after-branch",
+      "argv": [
+        "/usr/bin/git",
+        "-C",
+        "<MAC_HOME>/code/farol",
+        "symbolic-ref",
+        "--quiet",
+        "HEAD"
+      ],
+      "stdinFile": null,
+      "exit": 0,
+      "outcome": "known",
+      "elapsedSeconds": 0.011,
+      "stdoutFile": "source-after-branch.stdout",
+      "stdoutBytes": 16,
+      "stdoutSHA256": "599bbcd7b7f94b50d9b83318ba0dd4b8e1ba9e39d1d3ee73d1fbbd70496d0f93",
+      "stderrFile": "source-after-branch.stderr",
+      "stderrBytes": 0,
+      "stderrSHA256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "label": "source-after-refs",
+      "argv": [
+        "/usr/bin/git",
+        "-C",
+        "<MAC_HOME>/code/farol",
+        "for-each-ref",
+        "--format=%(refname) %(objectname)"
+      ],
+      "stdinFile": null,
+      "exit": 0,
+      "outcome": "known",
+      "elapsedSeconds": 0.021,
+      "stdoutFile": "source-after-refs.stdout",
+      "stdoutBytes": 23935,
+      "stdoutSHA256": "8d6c58eddd29be3c166c9df391dc13b232f68c0c36c4d873c6cc141529500307",
+      "stderrFile": "source-after-refs.stderr",
+      "stderrBytes": 0,
+      "stderrSHA256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ],
+  "restoreLocation": "<MAC_TEMP_PATH>",
+  "limits": [
+    "Exact nine tip reachable Git objects only; no working or ignored files.",
+    "No canonical refs/index/objects/reflog/worktree metadata writes.",
+    "No canonical fsck, clone, network, credentials, cleanup, or retry.",
+    "No Dev/build/profile/native/package/provider calls.",
+    "Original failed clone and blocked receipt remain unchanged.",
+    "Snapshots establish observed identities, not exclusive source ownership."
+  ],
+  "originalReceiptSHA256Before": "c3a4a8a957d7e5495585ce7493d375fc4d62fc1c689efc91377427a632fe0a7e",
+  "sourceBefore": {
+    "identity": [
+      "<MAC_HOME>/code/farol",
+      "<MAC_HOME>/code/farol/.git",
+      "0a86da832fcd40f89287b710eca0a23dabec4cfc",
+      "0a86da832fcd40f89287b710eca0a23dabec4cfc"
+    ],
+    "branch": "refs/heads/main",
+    "refsSHA256": "8d6c58eddd29be3c166c9df391dc13b232f68c0c36c4d873c6cc141529500307",
+    "indexSHA256": "0b09971ffd9aac4399d4ec123cb6b0cafd3d94df497647a3972672715bbd30d8"
+  },
+  "pack": {
+    "file": "exact-nine-reachable.pack",
+    "bytes": 38324928,
+    "sha256": "78e9728f52d4f2da85894a485c0fb373cd1c2ef533130f7d7309b68048aefa93",
+    "version": 2,
+    "objectCount": 19914
+  },
+  "indexPackResult": "pack\tb0ab8726458f883657eb61118fee66ffb698d524",
+  "restoredTipCount": 9,
+  "restoredObjectCounts": {
+    "blob": 7746,
+    "commit": 1527,
+    "tree": 10641
+  },
+  "reachableObjectCount": 19914,
+  "closureSHA256": "28b6955a69024a537bf295435ad6af11b2f44eca838a8d850fc69dbfa5a24d80",
+  "restoreFsckPassed": true,
+  "sourceAfter": {
+    "identity": [
+      "<MAC_HOME>/code/farol",
+      "<MAC_HOME>/code/farol/.git",
+      "0a86da832fcd40f89287b710eca0a23dabec4cfc",
+      "0a86da832fcd40f89287b710eca0a23dabec4cfc"
+    ],
+    "branch": "refs/heads/main",
+    "refsSHA256": "8d6c58eddd29be3c166c9df391dc13b232f68c0c36c4d873c6cc141529500307",
+    "indexSHA256": "0b09971ffd9aac4399d4ec123cb6b0cafd3d94df497647a3972672715bbd30d8"
+  },
+  "sourceSnapshotsStable": true,
+  "originalReceiptSHA256After": "c3a4a8a957d7e5495585ce7493d375fc4d62fc1c689efc91377427a632fe0a7e",
+  "originalReceiptUnchanged": true,
+  "finishedAt": "2026-10-08T15:54:57.773015+00:00"
+}

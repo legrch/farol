@@ -1,0 +1,1259 @@
+{
+  "sourceReport": "repository-audit.json",
+  "complete": false,
+  "exitCode": 2,
+  "baseCommit": "50a14df873834fbaf6ec8e606ecb373633b3e3d7",
+  "expectedBaseMatches": true,
+  "topologyStable": true,
+  "counts": {
+    "localBranches": 140,
+    "registeredWorktrees": 54,
+    "branchDispositions": {
+      "hold": 140
+    },
+    "worktreeDispositions": {
+      "hold": 54
+    }
+  },
+  "historyCategoryDefinitions": {
+    "A": "Contained in pinned main history, including protected or linked refs; not deletion authority",
+    "B": "Patch-equivalent history needing review",
+    "C": "Unique or reworked history; patch comparison is not semantic analysis",
+    "D": "History unknown or not inspected"
+  },
+  "historyCategoryCounts": {
+    "branches": {
+      "A": 46,
+      "B": 69,
+      "C": 25,
+      "D": 0
+    },
+    "worktrees": {
+      "A": 16,
+      "B": 12,
+      "C": 6,
+      "D": 20
+    }
+  },
+  "holdReasonCounts": {
+    "branches": {
+      "global_snapshot_incomplete": 140,
+      "patch_equivalent_needs_review": 69,
+      "checked_out_in_worktree": 33,
+      "unique_or_reworked_history": 25,
+      "protected_ref": 1
+    },
+    "worktrees": {
+      "active_owner": 1,
+      "ignored_data": 21,
+      "global_snapshot_incomplete": 54,
+      "head_not_in_main_history": 38,
+      "untracked_data": 8,
+      "tracked_changes": 9,
+      "incomplete_inspection": 20,
+      "worktree_changed_or_unverified": 20
+    }
+  },
+  "inspectedWorktrees": 34,
+  "stateTotals": {
+    "trackedChanges": 20,
+    "untracked": 37,
+    "ignored": 38
+  },
+  "knownActiveWriters": [
+    {
+      "worktree": "<MAC_HOME>/code/farol",
+      "owner": "Lead canonical writer",
+      "authority": "Current user request"
+    }
+  ],
+  "ownershipCaveat": "active:false in original report means not declared active, NOT verified inactive. Historical owners remain unknown. No agent/process inventory was performed.",
+  "unknownOwnerWorktrees": [
+    "<MAC_HOME>/.codex/worktrees/activity-reference-alignment/farol",
+    "<MAC_HOME>/.codex/worktrees/clean-retirement-handoff/farol",
+    "<MAC_HOME>/.codex/worktrees/computer-repository-config/farol",
+    "<MAC_HOME>/.codex/worktrees/computer-shell-agent-scope/farol",
+    "<MAC_HOME>/.codex/worktrees/controlled-generation/farol",
+    "<MAC_HOME>/.codex/worktrees/coordinator-claude-startup/farol",
+    "<MAC_HOME>/.codex/worktrees/coordinator-git-environment/farol",
+    "<MAC_HOME>/.codex/worktrees/coordinator-model-discovery/farol",
+    "<MAC_HOME>/.codex/worktrees/coordinator-owner-message-hardening/farol",
+    "<MAC_HOME>/.codex/worktrees/coordinator-parity-contract/farol",
+    "<MAC_HOME>/.codex/worktrees/coordinator-task-control/farol",
+    "<MAC_HOME>/.codex/worktrees/dev-settings-updates/farol",
+    "<MAC_HOME>/.codex/worktrees/farol-startup-recovery/farol",
+    "<MAC_HOME>/.codex/worktrees/farol-ui-candidate/farol",
+    "<MAC_HOME>/.codex/worktrees/farol-verification-policy/farol",
+    "<MAC_HOME>/.codex/worktrees/go-chat-computer-harness/farol",
+    "<MAC_HOME>/.codex/worktrees/go-chat-normal-harness/farol",
+    "<MAC_HOME>/.codex/worktrees/go-chat-physical-driver/farol",
+    "<MAC_HOME>/.codex/worktrees/go-chat-physical/farol",
+    "<MAC_HOME>/.codex/worktrees/go-core-reopen-harness/farol",
+    "<MAC_HOME>/.codex/worktrees/go-core-startup-harness/farol",
+    "<MAC_HOME>/.codex/worktrees/go-cutover-integration/farol",
+    "<MAC_HOME>/.codex/worktrees/integration-fixture-repair/farol",
+    "<MAC_HOME>/.codex/worktrees/known-completion-original-core/farol",
+    "<MAC_HOME>/.codex/worktrees/owner-ui-refresh/farol",
+    "<MAC_HOME>/.codex/worktrees/release-auto-update-preference/farol",
+    "<MAC_HOME>/.codex/worktrees/release-explicit-download/farol",
+    "<MAC_HOME>/.codex/worktrees/setup-native-isolation/farol",
+    "<MAC_HOME>/.codex/worktrees/task-native-integration/farol",
+    "<MAC_HOME>/.codex/worktrees/update-admission-diagnostics/farol",
+    "<MAC_HOME>/.codex/worktrees/update-idle-controls/farol",
+    "<MAC_HOME>/.codex/worktrees/watchdog-native-transport/farol",
+    "<MAC_HOME>/.codex/worktrees/workspace-detail/farol",
+    "<MAC_HOME>/code/worktrees/20260928-farol-loopback-ci-gate",
+    "<MAC_HOME>/code/worktrees/20261002-1739__farol__desktop-shell-design-handoff",
+    "<MAC_HOME>/code/worktrees/20261002-2103__farol__core-foundation",
+    "<MAC_HOME>/code/worktrees/20261002-2104__farol__computer-go",
+    "<MAC_HOME>/code/worktrees/20261002-2104__farol__desktop-shell",
+    "<MAC_HOME>/code/worktrees/20261002-2105__farol__identity-cutover",
+    "<MAC_HOME>/code/worktrees/20261002-2105__farol__release-go",
+    "<MAC_HOME>/code/worktrees/20261002-2105__farol__signal-color-assets",
+    "<MAC_HOME>/code/worktrees/20261002-2106__farol__distribution-dmg",
+    "<MAC_HOME>/code/worktrees/20261002-2114__farol__chat-state",
+    "<MAC_HOME>/code/worktrees/20261002-2114__farol__tasks-go",
+    "<MAC_HOME>/code/worktrees/20261002-2147__farol__core-read",
+    "<MAC_HOME>/code/worktrees/20261003-0047__farol__computer-grant-renewal",
+    "<MAC_HOME>/code/worktrees/20261003-0105__farol__identity-physical",
+    "<MAC_HOME>/code/worktrees/20261003-0203__farol__identity-native",
+    "<MAC_HOME>/code/worktrees/20261003-0215__farol__release-claim",
+    "<MAC_HOME>/code/worktrees/20261005-farol-agent-store-access",
+    "<MAC_HOME>/code/worktrees/20261006-farol-sandbox-approvals",
+    "<MAC_HOME>/code/worktrees/20261006-farol-sunrise-pair",
+    "<MAC_HOME>/code/worktrees/farol-post-split-native-acceptance"
+  ],
+  "priorityWorktrees": [
+    {
+      "worktree": "<MAC_HOME>/.codex/worktrees/farol-startup-recovery/farol",
+      "HEAD": "40b9b17aefb552aab1403610f3c760644f59d8c6",
+      "branch": "refs/heads/daily-driver-cutover",
+      "inspection": "complete",
+      "active": false,
+      "state": {
+        "trackedChanges": 0,
+        "untracked": 0,
+        "ignored": 2,
+        "records": [
+          {
+            "xy": "!!",
+            "path": "_output/"
+          },
+          {
+            "xy": "!!",
+            "path": "node_modules/"
+          }
+        ],
+        "statusDigest": "4a514ae10e9a65c80f98f07646baf4922baa15b336c0b35f778928b6492d6ddd"
+      },
+      "inProgress": [],
+      "submodules": false,
+      "history": {
+        "inMainHistory": true,
+        "ahead": 0,
+        "behind": 95,
+        "classification": "contained_in_main_history"
+      },
+      "stable": true,
+      "holdReasons": [
+        "ignored_data",
+        "global_snapshot_incomplete"
+      ],
+      "disposition": "hold"
+    },
+    {
+      "worktree": "<MAC_HOME>/.codex/worktrees/go-core-startup-harness/farol",
+      "HEAD": "319014d28fcb90110619289c72709d394c9244c5",
+      "branch": "refs/heads/codex/computer-setup-connection",
+      "inspection": "complete",
+      "active": false,
+      "state": {
+        "trackedChanges": 4,
+        "untracked": 2,
+        "ignored": 1,
+        "records": [
+          {
+            "xy": " M",
+            "path": "src/ui/renderer/settings.tsx"
+          },
+          {
+            "xy": " M",
+            "path": "src/ui/renderer/shell.tsx"
+          },
+          {
+            "xy": " M",
+            "path": "tests/renderer/settings.test.tsx"
+          },
+          {
+            "xy": " M",
+            "path": "tests/renderer/shell.test.tsx"
+          },
+          {
+            "xy": "??",
+            "path": "src/ui/renderer/computer-setup.ts"
+          },
+          {
+            "xy": "??",
+            "path": "tests/renderer/computer-setup.test.ts"
+          },
+          {
+            "xy": "!!",
+            "path": "_output/"
+          }
+        ],
+        "statusDigest": "9ea7c5e9129095714552eb85fee0ae06274649aa60315376e68fc646f37c8fe3"
+      },
+      "inProgress": [],
+      "submodules": false,
+      "history": {
+        "inMainHistory": true,
+        "ahead": 0,
+        "behind": 254,
+        "classification": "contained_in_main_history"
+      },
+      "stable": true,
+      "holdReasons": [
+        "tracked_changes",
+        "untracked_data",
+        "ignored_data",
+        "global_snapshot_incomplete"
+      ],
+      "disposition": "hold"
+    }
+  ],
+  "uniqueOrReworkedBranches": [
+    {
+      "ref": "refs/heads/codex/coordinator-execution-lanes-proposal",
+      "oid": "ce91353d5d1c7f114ca9f276cdd44cdfa86d2f08",
+      "type": "commit",
+      "linkedWorktrees": [],
+      "history": {
+        "inMainHistory": false,
+        "ahead": 1,
+        "behind": 719,
+        "uniqueMergeCommits": 0,
+        "classification": "unique_or_reworked_history",
+        "nonEquivalentPatches": 1,
+        "equivalentPatches": 0
+      },
+      "holdReasons": [
+        "unique_or_reworked_history",
+        "global_snapshot_incomplete"
+      ],
+      "disposition": "hold"
+    },
+    {
+      "ref": "refs/heads/codex/coordinator-model-discovery",
+      "oid": "4f44f05c52efb09b95fcfed11795cb20658642c0",
+      "type": "commit",
+      "linkedWorktrees": [
+        "<MAC_HOME>/.codex/worktrees/coordinator-model-discovery/farol"
+      ],
+      "history": {
+        "inMainHistory": false,
+        "ahead": 2,
+        "behind": 719,
+        "uniqueMergeCommits": 0,
+        "classification": "unique_or_reworked_history",
+        "nonEquivalentPatches": 2,
+        "equivalentPatches": 0
+      },
+      "holdReasons": [
+        "checked_out_in_worktree",
+        "unique_or_reworked_history",
+        "global_snapshot_incomplete"
+      ],
+      "disposition": "hold"
+    },
+    {
+      "ref": "refs/heads/codex/coordinator-owner-message-hardening",
+      "oid": "c3b0c7ea147aad7871d6bfc88ba5112889528348",
+      "type": "commit",
+      "linkedWorktrees": [
+        "<MAC_HOME>/.codex/worktrees/coordinator-owner-message-hardening/farol"
+      ],
+      "history": {
+        "inMainHistory": false,
+        "ahead": 4,
+        "behind": 719,
+        "uniqueMergeCommits": 0,
+        "classification": "unique_or_reworked_history",
+        "nonEquivalentPatches": 4,
+        "equivalentPatches": 0
+      },
+      "holdReasons": [
+        "checked_out_in_worktree",
+        "unique_or_reworked_history",
+        "global_snapshot_incomplete"
+      ],
+      "disposition": "hold"
+    },
+    {
+      "ref": "refs/heads/codex/coordinator-parity-contract",
+      "oid": "3c823c1b590a48baa31dcc5c8dd58109e81e96f8",
+      "type": "commit",
+      "linkedWorktrees": [
+        "<MAC_HOME>/.codex/worktrees/coordinator-parity-contract/farol"
+      ],
+      "history": {
+        "inMainHistory": false,
+        "ahead": 1,
+        "behind": 753,
+        "uniqueMergeCommits": 0,
+        "classification": "unique_or_reworked_history",
+        "nonEquivalentPatches": 1,
+        "equivalentPatches": 0
+      },
+      "holdReasons": [
+        "checked_out_in_worktree",
+        "unique_or_reworked_history",
+        "global_snapshot_incomplete"
+      ],
+      "disposition": "hold"
+    },
+    {
+      "ref": "refs/heads/codex/coordinator-task-control",
+      "oid": "2f1cbaccd008d6d04be1d299870d531acdee5e1e",
+      "type": "commit",
+      "linkedWorktrees": [
+        "<MAC_HOME>/.codex/worktrees/coordinator-task-control/farol"
+      ],
+      "history": {
+        "inMainHistory": false,
+        "ahead": 6,
+        "behind": 840,
+        "uniqueMergeCommits": 0,
+        "classification": "unique_or_reworked_history",
+        "nonEquivalentPatches": 6,
+        "equivalentPatches": 0
+      },
+      "holdReasons": [
+        "checked_out_in_worktree",
+        "unique_or_reworked_history",
+        "global_snapshot_incomplete"
+      ],
+      "disposition": "hold"
+    },
+    {
+      "ref": "refs/heads/codex/owner-session-message-prototype",
+      "oid": "f6efaba3bed7da6d26a6c1b7234872398e5f02e4",
+      "type": "commit",
+      "linkedWorktrees": [],
+      "history": {
+        "inMainHistory": false,
+        "ahead": 1,
+        "behind": 719,
+        "uniqueMergeCommits": 0,
+        "classification": "unique_or_reworked_history",
+        "nonEquivalentPatches": 1,
+        "equivalentPatches": 0
+      },
+      "holdReasons": [
+        "unique_or_reworked_history",
+        "global_snapshot_incomplete"
+      ],
+      "disposition": "hold"
+    },
+    {
+      "ref": "refs/heads/codex/release-archive",
+      "oid": "e896b652e58d3c078b310ccfb43187259c49e792",
+      "type": "commit",
+      "linkedWorktrees": [],
+      "history": {
+        "inMainHistory": false,
+        "ahead": 1,
+        "behind": 635,
+        "uniqueMergeCommits": 0,
+        "classification": "unique_or_reworked_history",
+        "nonEquivalentPatches": 1,
+        "equivalentPatches": 0
+      },
+      "holdReasons": [
+        "unique_or_reworked_history",
+        "global_snapshot_incomplete"
+      ],
+      "disposition": "hold"
+    },
+    {
+      "ref": "refs/heads/codex/task-active-message",
+      "oid": "973dad807de31c26e3d850c07bd162fdd431c980",
+      "type": "commit",
+      "linkedWorktrees": [],
+      "history": {
+        "inMainHistory": false,
+        "ahead": 1,
+        "behind": 839,
+        "uniqueMergeCommits": 0,
+        "classification": "unique_or_reworked_history",
+        "nonEquivalentPatches": 1,
+        "equivalentPatches": 0
+      },
+      "holdReasons": [
+        "unique_or_reworked_history",
+        "global_snapshot_incomplete"
+      ],
+      "disposition": "hold"
+    },
+    {
+      "ref": "refs/heads/computer-authority",
+      "oid": "a3614e454e789220a0f539b0b06df7a44297be42",
+      "type": "commit",
+      "linkedWorktrees": [],
+      "history": {
+        "inMainHistory": false,
+        "ahead": 2,
+        "behind": 551,
+        "uniqueMergeCommits": 0,
+        "classification": "unique_or_reworked_history",
+        "nonEquivalentPatches": 2,
+        "equivalentPatches": 0
+      },
+      "holdReasons": [
+        "unique_or_reworked_history",
+        "global_snapshot_incomplete"
+      ],
+      "disposition": "hold"
+    },
+    {
+      "ref": "refs/heads/computer-go",
+      "oid": "9e49f59c169b97e492a6e86972344547fe21926e",
+      "type": "commit",
+      "linkedWorktrees": [
+        "<MAC_HOME>/code/worktrees/20261002-2104__farol__computer-go"
+      ],
+      "history": {
+        "inMainHistory": false,
+        "ahead": 8,
+        "behind": 551,
+        "uniqueMergeCommits": 0,
+        "classification": "unique_or_reworked_history",
+        "nonEquivalentPatches": 8,
+        "equivalentPatches": 0
+      },
+      "holdReasons": [
+        "checked_out_in_worktree",
+        "unique_or_reworked_history",
+        "global_snapshot_incomplete"
+      ],
+      "disposition": "hold"
+    },
+    {
+      "ref": "refs/heads/core-read",
+      "oid": "10e8a7a597c67b77852f45f4267f4aef5da93f1c",
+      "type": "commit",
+      "linkedWorktrees": [
+        "<MAC_HOME>/code/worktrees/20261002-2147__farol__core-read"
+      ],
+      "history": {
+        "inMainHistory": false,
+        "ahead": 35,
+        "behind": 551,
+        "uniqueMergeCommits": 0,
+        "classification": "unique_or_reworked_history",
+        "nonEquivalentPatches": 18,
+        "equivalentPatches": 17
+      },
+      "holdReasons": [
+        "checked_out_in_worktree",
+        "unique_or_reworked_history",
+        "global_snapshot_incomplete"
+      ],
+      "disposition": "hold"
+    },
+    {
+      "ref": "refs/heads/desktop-bootstrap-order",
+      "oid": "e5d488075f46151bc34759afdadcad2fdcdb2fa2",
+      "type": "commit",
+      "linkedWorktrees": [],
+      "history": {
+        "inMainHistory": false,
+        "ahead": 13,
+        "behind": 525,
+        "uniqueMergeCommits": 0,
+        "classification": "unique_or_reworked_history",
+        "nonEquivalentPatches": 13,
+        "equivalentPatches": 0
+      },
+      "holdReasons": [
+        "unique_or_reworked_history",
+        "global_snapshot_incomplete"
+      ],
+      "disposition": "hold"
+    },
+    {
+      "ref": "refs/heads/desktop-native-navigation",
+      "oid": "578ac983679a28806f42e9abd1a00149988adc72",
+      "type": "commit",
+      "linkedWorktrees": [],
+      "history": {
+        "inMainHistory": false,
+        "ahead": 15,
+        "behind": 525,
+        "uniqueMergeCommits": 0,
+        "classification": "unique_or_reworked_history",
+        "nonEquivalentPatches": 15,
+        "equivalentPatches": 0
+      },
+      "holdReasons": [
+        "unique_or_reworked_history",
+        "global_snapshot_incomplete"
+      ],
+      "disposition": "hold"
+    },
+    {
+      "ref": "refs/heads/desktop-native-shortcut-e2e",
+      "oid": "313b536ced3b803be895d5cafbeab3009c753c8c",
+      "type": "commit",
+      "linkedWorktrees": [],
+      "history": {
+        "inMainHistory": false,
+        "ahead": 16,
+        "behind": 525,
+        "uniqueMergeCommits": 0,
+        "classification": "unique_or_reworked_history",
+        "nonEquivalentPatches": 16,
+        "equivalentPatches": 0
+      },
+      "holdReasons": [
+        "unique_or_reworked_history",
+        "global_snapshot_incomplete"
+      ],
+      "disposition": "hold"
+    },
+    {
+      "ref": "refs/heads/desktop-renderer-harness",
+      "oid": "e5d488075f46151bc34759afdadcad2fdcdb2fa2",
+      "type": "commit",
+      "linkedWorktrees": [],
+      "history": {
+        "inMainHistory": false,
+        "ahead": 13,
+        "behind": 525,
+        "uniqueMergeCommits": 0,
+        "classification": "unique_or_reworked_history",
+        "nonEquivalentPatches": 13,
+        "equivalentPatches": 0
+      },
+      "holdReasons": [
+        "unique_or_reworked_history",
+        "global_snapshot_incomplete"
+      ],
+      "disposition": "hold"
+    },
+    {
+      "ref": "refs/heads/desktop-settings",
+      "oid": "daa9b6344b2673b1205a773fcdde29edea050381",
+      "type": "commit",
+      "linkedWorktrees": [],
+      "history": {
+        "inMainHistory": false,
+        "ahead": 2,
+        "behind": 551,
+        "uniqueMergeCommits": 0,
+        "classification": "unique_or_reworked_history",
+        "nonEquivalentPatches": 2,
+        "equivalentPatches": 0
+      },
+      "holdReasons": [
+        "unique_or_reworked_history",
+        "global_snapshot_incomplete"
+      ],
+      "disposition": "hold"
+    },
+    {
+      "ref": "refs/heads/desktop-shell",
+      "oid": "8281310b5192d8976bf9735d6909d5d243d8a399",
+      "type": "commit",
+      "linkedWorktrees": [
+        "<MAC_HOME>/code/worktrees/20261002-2104__farol__desktop-shell"
+      ],
+      "history": {
+        "inMainHistory": false,
+        "ahead": 12,
+        "behind": 551,
+        "uniqueMergeCommits": 0,
+        "classification": "unique_or_reworked_history",
+        "nonEquivalentPatches": 12,
+        "equivalentPatches": 0
+      },
+      "holdReasons": [
+        "checked_out_in_worktree",
+        "unique_or_reworked_history",
+        "global_snapshot_incomplete"
+      ],
+      "disposition": "hold"
+    },
+    {
+      "ref": "refs/heads/desktop-shell-design-handoff",
+      "oid": "920ab197fa74af10db8df1ce61c83940441fc773",
+      "type": "commit",
+      "linkedWorktrees": [
+        "<MAC_HOME>/code/worktrees/20261002-1739__farol__desktop-shell-design-handoff"
+      ],
+      "history": {
+        "inMainHistory": false,
+        "ahead": 1,
+        "behind": 551,
+        "uniqueMergeCommits": 0,
+        "classification": "unique_or_reworked_history",
+        "nonEquivalentPatches": 1,
+        "equivalentPatches": 0
+      },
+      "holdReasons": [
+        "checked_out_in_worktree",
+        "unique_or_reworked_history",
+        "global_snapshot_incomplete"
+      ],
+      "disposition": "hold"
+    },
+    {
+      "ref": "refs/heads/desktop-u1-navigation",
+      "oid": "73f8cbaa39a6af8639ea158368bcbc6969040d54",
+      "type": "commit",
+      "linkedWorktrees": [],
+      "history": {
+        "inMainHistory": false,
+        "ahead": 12,
+        "behind": 525,
+        "uniqueMergeCommits": 0,
+        "classification": "unique_or_reworked_history",
+        "nonEquivalentPatches": 12,
+        "equivalentPatches": 0
+      },
+      "holdReasons": [
+        "unique_or_reworked_history",
+        "global_snapshot_incomplete"
+      ],
+      "disposition": "hold"
+    },
+    {
+      "ref": "refs/heads/distribution-dmg",
+      "oid": "4f711036188e6dd421733456dabc4681c2c93f1c",
+      "type": "commit",
+      "linkedWorktrees": [
+        "<MAC_HOME>/code/worktrees/20261002-2106__farol__distribution-dmg"
+      ],
+      "history": {
+        "inMainHistory": false,
+        "ahead": 4,
+        "behind": 551,
+        "uniqueMergeCommits": 0,
+        "classification": "unique_or_reworked_history",
+        "nonEquivalentPatches": 4,
+        "equivalentPatches": 0
+      },
+      "holdReasons": [
+        "checked_out_in_worktree",
+        "unique_or_reworked_history",
+        "global_snapshot_incomplete"
+      ],
+      "disposition": "hold"
+    },
+    {
+      "ref": "refs/heads/docs/github-guide",
+      "oid": "1b2643cfc01c5adf3ae98c20483d7fe239baadfc",
+      "type": "commit",
+      "linkedWorktrees": [],
+      "history": {
+        "inMainHistory": false,
+        "ahead": 6,
+        "behind": 525,
+        "uniqueMergeCommits": 0,
+        "classification": "unique_or_reworked_history",
+        "nonEquivalentPatches": 6,
+        "equivalentPatches": 0
+      },
+      "holdReasons": [
+        "unique_or_reworked_history",
+        "global_snapshot_incomplete"
+      ],
+      "disposition": "hold"
+    },
+    {
+      "ref": "refs/heads/farol-verification-policy",
+      "oid": "c7a30931e5285a53709c546cf73967a18b28c148",
+      "type": "commit",
+      "linkedWorktrees": [
+        "<MAC_HOME>/.codex/worktrees/farol-verification-policy/farol"
+      ],
+      "history": {
+        "inMainHistory": false,
+        "ahead": 2,
+        "behind": 525,
+        "uniqueMergeCommits": 0,
+        "classification": "unique_or_reworked_history",
+        "nonEquivalentPatches": 2,
+        "equivalentPatches": 0
+      },
+      "holdReasons": [
+        "checked_out_in_worktree",
+        "unique_or_reworked_history",
+        "global_snapshot_incomplete"
+      ],
+      "disposition": "hold"
+    },
+    {
+      "ref": "refs/heads/go-host-tests",
+      "oid": "2c3e1801bc30f2e56d69c0531d2185724b516513",
+      "type": "commit",
+      "linkedWorktrees": [],
+      "history": {
+        "inMainHistory": false,
+        "ahead": 1,
+        "behind": 445,
+        "uniqueMergeCommits": 0,
+        "classification": "unique_or_reworked_history",
+        "nonEquivalentPatches": 1,
+        "equivalentPatches": 0
+      },
+      "holdReasons": [
+        "unique_or_reworked_history",
+        "global_snapshot_incomplete"
+      ],
+      "disposition": "hold"
+    },
+    {
+      "ref": "refs/heads/signal-color-assets",
+      "oid": "87295d959cdc8056e2a26bbede78560680f95a3a",
+      "type": "commit",
+      "linkedWorktrees": [
+        "<MAC_HOME>/code/worktrees/20261002-2105__farol__signal-color-assets"
+      ],
+      "history": {
+        "inMainHistory": false,
+        "ahead": 1,
+        "behind": 551,
+        "uniqueMergeCommits": 0,
+        "classification": "unique_or_reworked_history",
+        "nonEquivalentPatches": 1,
+        "equivalentPatches": 0
+      },
+      "holdReasons": [
+        "checked_out_in_worktree",
+        "unique_or_reworked_history",
+        "global_snapshot_incomplete"
+      ],
+      "disposition": "hold"
+    },
+    {
+      "ref": "refs/heads/ui-clickable-candidate",
+      "oid": "4540988326978deb2d41aa8a7af9f66719107167",
+      "type": "commit",
+      "linkedWorktrees": [
+        "<MAC_HOME>/.codex/worktrees/farol-ui-candidate/farol"
+      ],
+      "history": {
+        "inMainHistory": false,
+        "ahead": 19,
+        "behind": 525,
+        "uniqueMergeCommits": 0,
+        "classification": "unique_or_reworked_history",
+        "nonEquivalentPatches": 18,
+        "equivalentPatches": 1
+      },
+      "holdReasons": [
+        "checked_out_in_worktree",
+        "unique_or_reworked_history",
+        "global_snapshot_incomplete"
+      ],
+      "disposition": "hold"
+    }
+  ],
+  "detachedTips": [
+    {
+      "worktree": "<MAC_HOME>/.codex/worktrees/activity-reference-alignment/farol",
+      "HEAD": "3c3081bb32fd6f2e94759cad5b11be9d0e0ae132",
+      "detached": "",
+      "history": {
+        "inMainHistory": false,
+        "ahead": 1,
+        "behind": 50,
+        "uniqueMergeCommits": 0,
+        "classification": "patch_equivalent_needs_review",
+        "nonEquivalentPatches": 0,
+        "equivalentPatches": 1
+      },
+      "holdReasons": [
+        "head_not_in_main_history",
+        "global_snapshot_incomplete"
+      ]
+    },
+    {
+      "worktree": "<MAC_HOME>/.codex/worktrees/computer-repository-config/farol",
+      "HEAD": "c412eb1e70c4e26f102462b2dbf22c3f32213aff",
+      "detached": "",
+      "history": {
+        "inMainHistory": true,
+        "ahead": 0,
+        "behind": 223,
+        "classification": "contained_in_main_history"
+      },
+      "holdReasons": [
+        "global_snapshot_incomplete"
+      ]
+    },
+    {
+      "worktree": "<MAC_HOME>/.codex/worktrees/computer-shell-agent-scope/farol",
+      "HEAD": "80f23baafbc61d134ee6e8e3a854629a21b789e2",
+      "detached": "",
+      "history": {
+        "inMainHistory": false,
+        "ahead": 6,
+        "behind": 196,
+        "uniqueMergeCommits": 0,
+        "classification": "patch_equivalent_needs_review",
+        "nonEquivalentPatches": 0,
+        "equivalentPatches": 6
+      },
+      "holdReasons": [
+        "ignored_data",
+        "head_not_in_main_history",
+        "global_snapshot_incomplete"
+      ]
+    },
+    {
+      "worktree": "<MAC_HOME>/.codex/worktrees/dev-settings-updates/farol",
+      "HEAD": "44e0884133492e0199016f09bc469173eecb2ddc",
+      "detached": "",
+      "history": {
+        "inMainHistory": false,
+        "ahead": 1,
+        "behind": 184,
+        "uniqueMergeCommits": 0,
+        "classification": "patch_equivalent_needs_review",
+        "nonEquivalentPatches": 0,
+        "equivalentPatches": 1
+      },
+      "holdReasons": [
+        "head_not_in_main_history",
+        "global_snapshot_incomplete"
+      ]
+    },
+    {
+      "worktree": "<MAC_HOME>/.codex/worktrees/go-chat-computer-harness/farol",
+      "HEAD": "55fc0f00b38a7bfc6af13339c09e591fcf626a8a",
+      "detached": "",
+      "history": {
+        "inMainHistory": true,
+        "ahead": 0,
+        "behind": 415,
+        "classification": "contained_in_main_history"
+      },
+      "holdReasons": [
+        "tracked_changes",
+        "global_snapshot_incomplete"
+      ]
+    },
+    {
+      "worktree": "<MAC_HOME>/.codex/worktrees/go-chat-normal-harness/farol",
+      "HEAD": "e5003fa8357c5b013a7b34a651ec3ca8966f17d8",
+      "detached": "",
+      "history": {
+        "inMainHistory": true,
+        "ahead": 0,
+        "behind": 425,
+        "classification": "contained_in_main_history"
+      },
+      "holdReasons": [
+        "tracked_changes",
+        "untracked_data",
+        "global_snapshot_incomplete"
+      ]
+    },
+    {
+      "worktree": "<MAC_HOME>/.codex/worktrees/go-chat-physical-driver/farol",
+      "HEAD": "3b12f2c947a957ba1c55c22d64101207761f1301",
+      "detached": "",
+      "history": {
+        "inMainHistory": true,
+        "ahead": 0,
+        "behind": 427,
+        "classification": "contained_in_main_history"
+      },
+      "holdReasons": [
+        "tracked_changes",
+        "untracked_data",
+        "ignored_data",
+        "global_snapshot_incomplete"
+      ]
+    },
+    {
+      "worktree": "<MAC_HOME>/.codex/worktrees/go-chat-physical/farol",
+      "HEAD": "b0d259156c49ca764cda1cd576ad016ad36b7ba9",
+      "detached": "",
+      "history": {
+        "inMainHistory": true,
+        "ahead": 0,
+        "behind": 436,
+        "classification": "contained_in_main_history"
+      },
+      "holdReasons": [
+        "tracked_changes",
+        "untracked_data",
+        "ignored_data",
+        "global_snapshot_incomplete"
+      ]
+    },
+    {
+      "worktree": "<MAC_HOME>/.codex/worktrees/integration-fixture-repair/farol",
+      "HEAD": "60185993c40ac39b00cd7f0aea220e844d9fd6b7",
+      "detached": "",
+      "history": {
+        "inMainHistory": true,
+        "ahead": 0,
+        "behind": 445,
+        "classification": "contained_in_main_history"
+      },
+      "holdReasons": [
+        "tracked_changes",
+        "global_snapshot_incomplete"
+      ]
+    },
+    {
+      "worktree": "<MAC_HOME>/.codex/worktrees/known-completion-original-core/farol",
+      "HEAD": "4dbeef4523241326c7d674a57dca1fc6e0bee30c",
+      "detached": "",
+      "history": {
+        "inMainHistory": true,
+        "ahead": 0,
+        "behind": 81,
+        "classification": "contained_in_main_history"
+      },
+      "holdReasons": [
+        "ignored_data",
+        "global_snapshot_incomplete"
+      ]
+    },
+    {
+      "worktree": "<MAC_HOME>/.codex/worktrees/owner-ui-refresh/farol",
+      "HEAD": "28eaea5f43b846031c853f95221bdbb4f04a5316",
+      "detached": "",
+      "history": {
+        "inMainHistory": false,
+        "ahead": 3,
+        "behind": 196,
+        "uniqueMergeCommits": 0,
+        "classification": "patch_equivalent_needs_review",
+        "nonEquivalentPatches": 0,
+        "equivalentPatches": 3
+      },
+      "holdReasons": [
+        "head_not_in_main_history",
+        "global_snapshot_incomplete"
+      ]
+    },
+    {
+      "worktree": "<MAC_HOME>/.codex/worktrees/release-auto-update-preference/farol",
+      "HEAD": "8e86c268a9d7a06c59394aa9467badaaf36d4477",
+      "detached": "",
+      "history": {
+        "inMainHistory": false,
+        "ahead": 1,
+        "behind": 28,
+        "uniqueMergeCommits": 0,
+        "classification": "patch_equivalent_needs_review",
+        "nonEquivalentPatches": 0,
+        "equivalentPatches": 1
+      },
+      "holdReasons": [
+        "head_not_in_main_history",
+        "global_snapshot_incomplete"
+      ]
+    },
+    {
+      "worktree": "<MAC_HOME>/.codex/worktrees/release-explicit-download/farol",
+      "HEAD": "fe010bfb0aa9828077ef28c68471a41e6be721e8",
+      "detached": "",
+      "history": {
+        "inMainHistory": true,
+        "ahead": 0,
+        "behind": 45,
+        "classification": "contained_in_main_history"
+      },
+      "holdReasons": [
+        "global_snapshot_incomplete"
+      ]
+    },
+    {
+      "worktree": "<MAC_HOME>/.codex/worktrees/setup-native-isolation/farol",
+      "HEAD": "d38cc636a37dbbdbaffb4071866cb69a21c5e11e",
+      "detached": "",
+      "history": {
+        "inMainHistory": false,
+        "ahead": 1,
+        "behind": 127,
+        "uniqueMergeCommits": 0,
+        "classification": "patch_equivalent_needs_review",
+        "nonEquivalentPatches": 0,
+        "equivalentPatches": 1
+      },
+      "holdReasons": [
+        "ignored_data",
+        "head_not_in_main_history",
+        "global_snapshot_incomplete"
+      ]
+    },
+    {
+      "worktree": "<MAC_HOME>/.codex/worktrees/update-admission-diagnostics/farol",
+      "HEAD": "4513d99a283dedd149d8683ebc51565821f82f63",
+      "detached": "",
+      "history": {
+        "inMainHistory": false,
+        "ahead": 1,
+        "behind": 53,
+        "uniqueMergeCommits": 0,
+        "classification": "patch_equivalent_needs_review",
+        "nonEquivalentPatches": 0,
+        "equivalentPatches": 1
+      },
+      "holdReasons": [
+        "ignored_data",
+        "head_not_in_main_history",
+        "global_snapshot_incomplete"
+      ]
+    },
+    {
+      "worktree": "<MAC_HOME>/.codex/worktrees/update-idle-controls/farol",
+      "HEAD": "d53489200d2c8ca4dec4ca295f58281b37e47bb4",
+      "detached": "",
+      "history": {
+        "inMainHistory": true,
+        "ahead": 0,
+        "behind": 59,
+        "classification": "contained_in_main_history"
+      },
+      "holdReasons": [
+        "ignored_data",
+        "global_snapshot_incomplete"
+      ]
+    },
+    {
+      "worktree": "<MAC_HOME>/.codex/worktrees/watchdog-native-transport/farol",
+      "HEAD": "492bfe3c1fc7c9a4aa4acc31451c507440210b60",
+      "detached": "",
+      "history": {
+        "inMainHistory": false,
+        "ahead": 1,
+        "behind": 172,
+        "uniqueMergeCommits": 0,
+        "classification": "patch_equivalent_needs_review",
+        "nonEquivalentPatches": 0,
+        "equivalentPatches": 1
+      },
+      "holdReasons": [
+        "head_not_in_main_history",
+        "global_snapshot_incomplete"
+      ]
+    },
+    {
+      "worktree": "<MAC_HOME>/.codex/worktrees/workspace-detail/farol",
+      "HEAD": "e45ea40ad66463c7d80551329b72e3ac69b5cb07",
+      "detached": "",
+      "history": {
+        "inMainHistory": false,
+        "ahead": 1,
+        "behind": 58,
+        "uniqueMergeCommits": 0,
+        "classification": "patch_equivalent_needs_review",
+        "nonEquivalentPatches": 0,
+        "equivalentPatches": 1
+      },
+      "holdReasons": [
+        "head_not_in_main_history",
+        "global_snapshot_incomplete"
+      ]
+    },
+    {
+      "worktree": "<MAC_HOME>/code/worktrees/20261005-farol-agent-store-access",
+      "HEAD": "ea3725e3cccfbe7fa71485d471eecc7a18359609",
+      "detached": "",
+      "holdReasons": [
+        "incomplete_inspection",
+        "worktree_changed_or_unverified",
+        "head_not_in_main_history",
+        "global_snapshot_incomplete"
+      ],
+      "error": "worktree_out_of_scope"
+    },
+    {
+      "worktree": "<MAC_HOME>/code/worktrees/20261006-farol-sandbox-approvals",
+      "HEAD": "65dac62e02198d092c21fe7211967691724a2765",
+      "detached": "",
+      "holdReasons": [
+        "incomplete_inspection",
+        "worktree_changed_or_unverified",
+        "head_not_in_main_history",
+        "global_snapshot_incomplete"
+      ],
+      "error": "worktree_out_of_scope"
+    },
+    {
+      "worktree": "<MAC_HOME>/code/worktrees/20261006-farol-sunrise-pair",
+      "HEAD": "ca84296b64ea7a03affa955a2a30f797f6e52fb7",
+      "detached": "",
+      "holdReasons": [
+        "incomplete_inspection",
+        "worktree_changed_or_unverified",
+        "head_not_in_main_history",
+        "global_snapshot_incomplete"
+      ],
+      "error": "worktree_out_of_scope"
+    }
+  ],
+  "scopeExcluded": [
+    {
+      "worktree": "<MAC_HOME>/code/worktrees/20260928-farol-loopback-ci-gate",
+      "reason": "worktree_out_of_scope"
+    },
+    {
+      "worktree": "<MAC_HOME>/code/worktrees/20261002-1739__farol__desktop-shell-design-handoff",
+      "reason": "worktree_out_of_scope"
+    },
+    {
+      "worktree": "<MAC_HOME>/code/worktrees/20261002-2103__farol__core-foundation",
+      "reason": "worktree_out_of_scope"
+    },
+    {
+      "worktree": "<MAC_HOME>/code/worktrees/20261002-2104__farol__computer-go",
+      "reason": "worktree_out_of_scope"
+    },
+    {
+      "worktree": "<MAC_HOME>/code/worktrees/20261002-2104__farol__desktop-shell",
+      "reason": "worktree_out_of_scope"
+    },
+    {
+      "worktree": "<MAC_HOME>/code/worktrees/20261002-2105__farol__identity-cutover",
+      "reason": "worktree_out_of_scope"
+    },
+    {
+      "worktree": "<MAC_HOME>/code/worktrees/20261002-2105__farol__release-go",
+      "reason": "worktree_out_of_scope"
+    },
+    {
+      "worktree": "<MAC_HOME>/code/worktrees/20261002-2105__farol__signal-color-assets",
+      "reason": "worktree_out_of_scope"
+    },
+    {
+      "worktree": "<MAC_HOME>/code/worktrees/20261002-2106__farol__distribution-dmg",
+      "reason": "worktree_out_of_scope"
+    },
+    {
+      "worktree": "<MAC_HOME>/code/worktrees/20261002-2114__farol__chat-state",
+      "reason": "worktree_out_of_scope"
+    },
+    {
+      "worktree": "<MAC_HOME>/code/worktrees/20261002-2114__farol__tasks-go",
+      "reason": "worktree_out_of_scope"
+    },
+    {
+      "worktree": "<MAC_HOME>/code/worktrees/20261002-2147__farol__core-read",
+      "reason": "worktree_out_of_scope"
+    },
+    {
+      "worktree": "<MAC_HOME>/code/worktrees/20261003-0047__farol__computer-grant-renewal",
+      "reason": "worktree_out_of_scope"
+    },
+    {
+      "worktree": "<MAC_HOME>/code/worktrees/20261003-0105__farol__identity-physical",
+      "reason": "worktree_out_of_scope"
+    },
+    {
+      "worktree": "<MAC_HOME>/code/worktrees/20261003-0203__farol__identity-native",
+      "reason": "worktree_out_of_scope"
+    },
+    {
+      "worktree": "<MAC_HOME>/code/worktrees/20261003-0215__farol__release-claim",
+      "reason": "worktree_out_of_scope"
+    },
+    {
+      "worktree": "<MAC_HOME>/code/worktrees/20261005-farol-agent-store-access",
+      "reason": "worktree_out_of_scope"
+    },
+    {
+      "worktree": "<MAC_HOME>/code/worktrees/20261006-farol-sandbox-approvals",
+      "reason": "worktree_out_of_scope"
+    },
+    {
+      "worktree": "<MAC_HOME>/code/worktrees/20261006-farol-sunrise-pair",
+      "reason": "worktree_out_of_scope"
+    },
+    {
+      "worktree": "<MAC_HOME>/code/worktrees/farol-post-split-native-acceptance",
+      "reason": "worktree_out_of_scope"
+    }
+  ],
+  "otherRefs": {
+    "tags": 2,
+    "remotes": 3,
+    "stashPresent": true
+  },
+  "containedUnlinkedUnprotectedProposalCount": 36,
+  "smallReviewProposals": [
+    {
+      "ref": "refs/heads/access-hotfix",
+      "oid": "569bd4dd764e0d4478ba33d2b20fb8074881cbad",
+      "type": "commit",
+      "linkedWorktrees": [],
+      "history": {
+        "inMainHistory": true,
+        "ahead": 0,
+        "behind": 516,
+        "classification": "contained_in_main_history"
+      },
+      "holdReasons": [
+        "global_snapshot_incomplete"
+      ],
+      "disposition": "hold"
+    },
+    {
+      "ref": "refs/heads/chat-browser-bridge",
+      "oid": "60185993c40ac39b00cd7f0aea220e844d9fd6b7",
+      "type": "commit",
+      "linkedWorktrees": [],
+      "history": {
+        "inMainHistory": true,
+        "ahead": 0,
+        "behind": 445,
+        "classification": "contained_in_main_history"
+      },
+      "holdReasons": [
+        "global_snapshot_incomplete"
+      ],
+      "disposition": "hold"
+    },
+    {
+      "ref": "refs/heads/chat-conversation",
+      "oid": "4dd637e2b25ed9cf06ac63e424316395bdbf9417",
+      "type": "commit",
+      "linkedWorktrees": [],
+      "history": {
+        "inMainHistory": true,
+        "ahead": 0,
+        "behind": 452,
+        "classification": "contained_in_main_history"
+      },
+      "holdReasons": [
+        "global_snapshot_incomplete"
+      ],
+      "disposition": "hold"
+    }
+  ],
+  "proposalStatus": "Review only; all remain HOLD due global incompleteness; no cleanup or deletion permission.",
+  "limits": [
+    "Observed metadata is not an atomic snapshot or active-agent lease.",
+    "No reflog-only/unreachable object sweep; protect those before pruning or GC.",
+    "Patch equivalence ignores merge topology and is never deletion proof.",
+    "No file contents, diffs, credentials, provider messages or remote URLs are emitted.",
+    "Ignored entries are data to preserve until explicitly classified, not automatic trash.",
+    "No fetch, prune, gc, checkout, stash, commit, branch deletion or worktree removal.",
+    "Candidates require a separate preservation plan and fresh owner-approved recheck.",
+    "Only registered worktrees inventoried; unregistered directories were not discovered or inspected.",
+    "20 registered paths outside allowed roots were recorded from topology metadata and not Git-inspected.",
+    "Other ref categories are counts only; stash/tag/remote content was not inspected.",
+    "Ignored=matching may represent whole ignored directories; counts are entries, not recursive file counts.",
+    "No atomic snapshot or active/inactive owner lease."
+  ],
+  "attempts": 1,
+  "canonicalAndBrainWrites": 0,
+  "revokedPatchDecoded": false
+}

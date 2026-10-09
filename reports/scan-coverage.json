@@ -1,0 +1,33 @@
+{
+  "gitleaksVersion": "8.30.1",
+  "rules": "built-in default rules via explicit trusted extend config; no baseline/ignore suppressions; allow comments ignored",
+  "restoredHistory": {
+    "refCount": 283,
+    "commitCount": 2028,
+    "scannerExit": 1,
+    "findings": 13,
+    "review": "11 UUID operation identities and two identical fixed Runtime key literals confined to mocked renderer test history; all adjudicated test data"
+  },
+  "originalExtractedText": {
+    "scannerExit": 0,
+    "findings": 0,
+    "fileCount": 767,
+    "limits": "binary pixels are outside text detector coverage"
+  },
+  "currentWorkingSource": {
+    "scannerExit": 1,
+    "findings": 2,
+    "review": "same reviewed fixed Runtime key in mocked renderer tests"
+  },
+  "imageOCR": {
+    "attemptedImages": 216,
+    "failures": 216,
+    "error": "nilError",
+    "coverage": "NOT_ESTABLISHED; no retry; all images excluded from public payload"
+  },
+  "limits": [
+    "Automated patterns and fixture adjudication do not prove mathematical absence of every secret",
+    "Original screenshots, logs and raw native test records are not published",
+    "Historical native/provider/unknown/refused outcomes remain separate"
+  ]
+}

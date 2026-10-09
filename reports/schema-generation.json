@@ -1,0 +1,22 @@
+{
+  "at": "2026-10-09T19:36:37.796944+00:00",
+  "executable": {
+    "path": "<MAC_HOME>/.nvm/versions/node/v22.19.0/lib/node_modules/@openai/codex/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/bin/codex",
+    "sha256": "09fa44fdc37a5fc70dc1ace31235f90468a2e193d0e85f7552eab068ea2582be",
+    "bytes": 241556032,
+    "version": "codex-cli 0.160.1"
+  },
+  "argv": [
+    "<MAC_HOME>/.nvm/versions/node/v22.19.0/lib/node_modules/@openai/codex/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/bin/codex",
+    "app-server",
+    "generate-json-schema",
+    "--out",
+    "<MAC_TEMP_PATH>",
+    "--experimental"
+  ],
+  "exit": 0,
+  "fileCount": 440,
+  "binaryUnchanged": true,
+  "scope": "offline schema generation; no app server listener, auth, endpoint, model or provider request",
+  "limits": "CLI-selected executable; Farol Settings-selected serving identity and live provider acceptance remain separate"
+}

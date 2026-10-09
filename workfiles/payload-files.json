@@ -1,0 +1,834 @@
+{
+  "historical": [
+    {
+      "path": "missing-worktree-source-and-evidence/worktree-00/src/modules/agent/app/port/execution-authority.ts",
+      "bytes": 3929,
+      "mode": 420,
+      "sha256": "ed883bd2e202d3519f4de68ee12202818bdfb5be4a0843af7b92c0bb998f9c83"
+    },
+    {
+      "path": "missing-worktree-source-and-evidence/worktree-00/src/modules/agent/app/service/run-agent-assignment.ts",
+      "bytes": 20655,
+      "mode": 420,
+      "sha256": "95a0742d411f1164e47eac5be4c28d036a903c880a113a50c5363b3e24695bce"
+    },
+    {
+      "path": "missing-worktree-source-and-evidence/worktree-00/src/modules/computer/contract/execution-authority-contract.ts",
+      "bytes": 5890,
+      "mode": 420,
+      "sha256": "37279e3620aac17d40ab6ea74b1dd4deaf569a4a43ca68b4cd92dcfc9f4eb909"
+    },
+    {
+      "path": "missing-worktree-source-and-evidence/worktree-00/src/modules/computer/domain/execution-authority.ts",
+      "bytes": 26178,
+      "mode": 420,
+      "sha256": "9a1e9632d86f1e7c5e3d0aa552a8821ded03ccc862283c30ead9809eac2f3ac1"
+    },
+    {
+      "path": "missing-worktree-source-and-evidence/worktree-00/src/modules/computer/infra/native/sandboxed-workspace-shell.ts",
+      "bytes": 35629,
+      "mode": 420,
+      "sha256": "df482c8cb0a1d20327ab1fb796c5cf7871f17f52b33ee45d80e8168296629abe"
+    },
+    {
+      "path": "missing-worktree-source-and-evidence/worktree-00/staged.patch",
+      "bytes": 0,
+      "mode": 420,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "missing-worktree-source-and-evidence/worktree-00/tests/integration/sandboxed-workspace-shell.test.ts",
+      "bytes": 76506,
+      "mode": 420,
+      "sha256": "5a1e09a71fe976144a0108b7e1d2e7381138b5588c41645947a0df4f875cbe71"
+    },
+    {
+      "path": "missing-worktree-source-and-evidence/worktree-00/tests/unit/authority-contract-handler.test.ts",
+      "bytes": 6511,
+      "mode": 420,
+      "sha256": "cc27c98e8032a3b0e90e847115a80a98919ca8309fa4e847f738e7e7bcb9ffb2"
+    },
+    {
+      "path": "missing-worktree-source-and-evidence/worktree-00/tests/unit/execution-authority.test.ts",
+      "bytes": 30523,
+      "mode": 420,
+      "sha256": "62ad11fc0f6d500726e8c9b3b8f7c7521aa36f8fbf0dc83ccce6dd881a285d3c"
+    },
+    {
+      "path": "missing-worktree-source-and-evidence/worktree-00/unstaged.patch",
+      "bytes": 20271,
+      "mode": 420,
+      "sha256": "430781c24e8b5df46520f32f9e2487dd8ccd3c4f0dd82ba9afb83605e66a9366"
+    },
+    {
+      "path": "missing-worktree-source-and-evidence/worktree-01/staged.patch",
+      "bytes": 0,
+      "mode": 420,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "missing-worktree-source-and-evidence/worktree-01/unstaged.patch",
+      "bytes": 0,
+      "mode": 420,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "missing-worktree-source-and-evidence/worktree-02/staged.patch",
+      "bytes": 0,
+      "mode": 420,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "missing-worktree-source-and-evidence/worktree-02/unstaged.patch",
+      "bytes": 0,
+      "mode": 420,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "missing-worktree-source-and-evidence/worktree-03/staged.patch",
+      "bytes": 0,
+      "mode": 420,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "missing-worktree-source-and-evidence/worktree-03/unstaged.patch",
+      "bytes": 0,
+      "mode": 420,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "missing-worktree-source-and-evidence/worktree-04/staged.patch",
+      "bytes": 0,
+      "mode": 420,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "missing-worktree-source-and-evidence/worktree-04/unstaged.patch",
+      "bytes": 0,
+      "mode": 420,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "missing-worktree-source-and-evidence/worktree-05/staged.patch",
+      "bytes": 0,
+      "mode": 420,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "missing-worktree-source-and-evidence/worktree-05/unstaged.patch",
+      "bytes": 0,
+      "mode": 420,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "missing-worktree-source-and-evidence/worktree-06/staged.patch",
+      "bytes": 0,
+      "mode": 420,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "missing-worktree-source-and-evidence/worktree-06/unstaged.patch",
+      "bytes": 0,
+      "mode": 420,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "missing-worktree-source-and-evidence/worktree-07/staged.patch",
+      "bytes": 0,
+      "mode": 420,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "missing-worktree-source-and-evidence/worktree-07/unstaged.patch",
+      "bytes": 0,
+      "mode": 420,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "missing-worktree-source-and-evidence/worktree-08/staged.patch",
+      "bytes": 0,
+      "mode": 420,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "missing-worktree-source-and-evidence/worktree-08/unstaged.patch",
+      "bytes": 0,
+      "mode": 420,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "missing-worktree-source-and-evidence/worktree-09/staged.patch",
+      "bytes": 0,
+      "mode": 420,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "missing-worktree-source-and-evidence/worktree-09/unstaged.patch",
+      "bytes": 0,
+      "mode": 420,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "missing-worktree-source-and-evidence/worktree-10/staged.patch",
+      "bytes": 0,
+      "mode": 420,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "missing-worktree-source-and-evidence/worktree-10/unstaged.patch",
+      "bytes": 0,
+      "mode": 420,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "missing-worktree-source-and-evidence/worktree-11/staged.patch",
+      "bytes": 0,
+      "mode": 420,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "missing-worktree-source-and-evidence/worktree-11/unstaged.patch",
+      "bytes": 0,
+      "mode": 420,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "missing-worktree-source-and-evidence/worktree-12/staged.patch",
+      "bytes": 0,
+      "mode": 420,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "missing-worktree-source-and-evidence/worktree-12/unstaged.patch",
+      "bytes": 0,
+      "mode": 420,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "missing-worktree-source-and-evidence/worktree-13/docs/identity-physical.md",
+      "bytes": 7946,
+      "mode": 420,
+      "sha256": "312859359f2fa690a5aab9e0ccbc5cef65735adf22588ff39898dbe67a1e1d9c"
+    },
+    {
+      "path": "missing-worktree-source-and-evidence/worktree-13/modules/release/infra/native/migration/darwin.go",
+      "bytes": 4615,
+      "mode": 420,
+      "sha256": "776e1c21723ad36acc258c1ac23dcc7a935ea78274224ad7e1cb1cb798a8cf23"
+    },
+    {
+      "path": "missing-worktree-source-and-evidence/worktree-13/modules/release/infra/native/migration/darwin_test.go",
+      "bytes": 6499,
+      "mode": 420,
+      "sha256": "93a0a60f87427f9fe76a9fd904be263ec19b06ac8e7a709b8edff22a7b3a00ad"
+    },
+    {
+      "path": "missing-worktree-source-and-evidence/worktree-13/modules/release/infra/native/migration/filesystem.go",
+      "bytes": 13080,
+      "mode": 420,
+      "sha256": "6c64e82df1a7a30f12402a66dc3ffb7d49ae922ef5914815d73d1404b732f646"
+    },
+    {
+      "path": "missing-worktree-source-and-evidence/worktree-13/modules/release/infra/native/migration/filesystem_test.go",
+      "bytes": 20194,
+      "mode": 420,
+      "sha256": "6ea100941982712e885bf40883c9e169603b0ee23d1227479592627c238d3311"
+    },
+    {
+      "path": "missing-worktree-source-and-evidence/worktree-13/staged.patch",
+      "bytes": 0,
+      "mode": 420,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "missing-worktree-source-and-evidence/worktree-13/unstaged.patch",
+      "bytes": 0,
+      "mode": 420,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "missing-worktree-source-and-evidence/worktree-14/staged.patch",
+      "bytes": 0,
+      "mode": 420,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "missing-worktree-source-and-evidence/worktree-14/unstaged.patch",
+      "bytes": 0,
+      "mode": 420,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "missing-worktree-source-and-evidence/worktree-15/staged.patch",
+      "bytes": 0,
+      "mode": 420,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "missing-worktree-source-and-evidence/worktree-15/unstaged.patch",
+      "bytes": 0,
+      "mode": 420,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "missing-worktree-source-and-evidence/worktree-16/staged.patch",
+      "bytes": 0,
+      "mode": 420,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "missing-worktree-source-and-evidence/worktree-16/unstaged.patch",
+      "bytes": 0,
+      "mode": 420,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "missing-worktree-source-and-evidence/worktree-17/staged.patch",
+      "bytes": 0,
+      "mode": 420,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "missing-worktree-source-and-evidence/worktree-17/unstaged.patch",
+      "bytes": 0,
+      "mode": 420,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "missing-worktree-source-and-evidence/worktree-18/staged.patch",
+      "bytes": 0,
+      "mode": 420,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "missing-worktree-source-and-evidence/worktree-18/unstaged.patch",
+      "bytes": 0,
+      "mode": 420,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "missing-worktree-source-and-evidence/worktree-19/docs/persistent-chat-handoff-parity.md",
+      "bytes": 9358,
+      "mode": 420,
+      "sha256": "efe5ff2ae4a0e060cc1eddfed195777bbd38c44882ba2170fbf19ae785601794"
+    },
+    {
+      "path": "missing-worktree-source-and-evidence/worktree-19/src/apps/desktop/codex-host-contract.ts",
+      "bytes": 23055,
+      "mode": 420,
+      "sha256": "e0ed3f554eb68902d1606a9305b7ac6402ae2b7434c4a49227c62a24e829e11e"
+    },
+    {
+      "path": "missing-worktree-source-and-evidence/worktree-19/src/modules/chat/app/service/persistent-codex-handoff.ts",
+      "bytes": 22003,
+      "mode": 420,
+      "sha256": "fa9913dc7c73e873896b89130c12fe1636c2c3c5a6714cb4430f9ec49dd9f381"
+    },
+    {
+      "path": "missing-worktree-source-and-evidence/worktree-19/src/modules/chat/contract/codex-task-route.ts",
+      "bytes": 1701,
+      "mode": 420,
+      "sha256": "a9c1de7045b43d7a451b09b377846674e8a9aa000e4812891a6071586edaec6b"
+    },
+    {
+      "path": "missing-worktree-source-and-evidence/worktree-19/src/modules/chat/infra/native/admitted-codex-task-route.ts",
+      "bytes": 1650,
+      "mode": 420,
+      "sha256": "f6854f533d34edf27839d8602922e0eeae69f93292e2d50edc8fd00f016956c1"
+    },
+    {
+      "path": "missing-worktree-source-and-evidence/worktree-19/src/modules/chat/infra/native/shared-codex-proxy-host.ts",
+      "bytes": 9691,
+      "mode": 420,
+      "sha256": "39ce44393f26d88892ff165568aa0aff426c02b0ed4abb18d42eebd53d328f59"
+    },
+    {
+      "path": "missing-worktree-source-and-evidence/worktree-19/src/modules/chat/infra/repo/private-codex-handoff-journal.ts",
+      "bytes": 9336,
+      "mode": 420,
+      "sha256": "e850290d7b13f063b639efebedac9842e87a01053064c9b692e5794de1f73f2c"
+    },
+    {
+      "path": "missing-worktree-source-and-evidence/worktree-19/src/modules/computer/infra/mcp/create-readonly-computer-mcp.ts",
+      "bytes": 30555,
+      "mode": 420,
+      "sha256": "16cae2ae5ffea56c61e188bce74aca65fca923fe72ad2b0dddc4f4780fa2c474"
+    },
+    {
+      "path": "missing-worktree-source-and-evidence/worktree-19/staged.patch",
+      "bytes": 0,
+      "mode": 420,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "missing-worktree-source-and-evidence/worktree-19/tests/e2e/codex-task-mcp.e2e.mjs",
+      "bytes": 12887,
+      "mode": 420,
+      "sha256": "369bb264a5294cc274da3bd8ac99443287a7d85e7b9604200ccd2e3aa8d88a2f"
+    },
+    {
+      "path": "missing-worktree-source-and-evidence/worktree-19/tests/integration/admitted-codex-task-route.test.ts",
+      "bytes": 2631,
+      "mode": 420,
+      "sha256": "9c20d111931c8c979b0abb4caf1dc8a774480c0d506dd9719faa92130c30fa6e"
+    },
+    {
+      "path": "missing-worktree-source-and-evidence/worktree-19/tests/integration/codex-handoff-host-contract.test.ts",
+      "bytes": 22774,
+      "mode": 420,
+      "sha256": "78366b93f41b20b7a765e65f23d555d0ed0501f18db3f4fff3b50d4cd376710f"
+    },
+    {
+      "path": "missing-worktree-source-and-evidence/worktree-19/tests/integration/codex-task-mcp.test.ts",
+      "bytes": 6336,
+      "mode": 420,
+      "sha256": "10af22a5bb53429db11431092392903fc89110b2b62547955b11043bd78d86b6"
+    },
+    {
+      "path": "missing-worktree-source-and-evidence/worktree-19/tests/integration/persistent-codex-handoff.test.ts",
+      "bytes": 31879,
+      "mode": 420,
+      "sha256": "f83c738e1f3a3a6939ee11377f735a82864da62e6bb762326c3a8328008b09a8"
+    },
+    {
+      "path": "missing-worktree-source-and-evidence/worktree-19/unstaged.patch",
+      "bytes": 27440,
+      "mode": 420,
+      "sha256": "ec4772440b4afdee69e54c15f6a14c2b5826ec212776e3cb53bcc459a3305137"
+    },
+    {
+      "path": "startup-harness-six-source-files/src/ui/renderer/computer-setup.ts",
+      "bytes": 5503,
+      "mode": 420,
+      "sha256": "dee4bd87e442bf97236ff76361ea9e407ef65750ef4a86a898f1df9349e366af"
+    },
+    {
+      "path": "startup-harness-six-source-files/src/ui/renderer/settings.tsx",
+      "bytes": 59718,
+      "mode": 420,
+      "sha256": "073601586e1517127df773a612a7e5d868f3c39fa02eea0d63f64052b68157cf"
+    },
+    {
+      "path": "startup-harness-six-source-files/src/ui/renderer/shell.tsx",
+      "bytes": 27444,
+      "mode": 420,
+      "sha256": "a28bba0936b2a361ca4aafcbfece0feb5c84e167e16c36b98d0f5bcedbff0772"
+    },
+    {
+      "path": "startup-harness-six-source-files/tests/renderer/computer-setup.test.ts",
+      "bytes": 8856,
+      "mode": 420,
+      "sha256": "4bcbe7f7b23d14c016909ea0abdf53ca21d23795ad30a8ede720a0730ce7fb18"
+    },
+    {
+      "path": "startup-harness-six-source-files/tests/renderer/settings.test.tsx",
+      "bytes": 61015,
+      "mode": 420,
+      "sha256": "69030fc7c5f086e0fd597ad9f8f97179906f6d4bed1150981a4737268440c132"
+    },
+    {
+      "path": "startup-harness-six-source-files/tests/renderer/shell.test.tsx",
+      "bytes": 23201,
+      "mode": 420,
+      "sha256": "408281816cb378c9766c0ef785f7bfac33747d12b99a552a1bf5e7adcc2ec35c"
+    }
+  ],
+  "current": [
+    {
+      "path": "worktree-06/src/modules/chat/infra/native/shared-codex-proxy-host.ts",
+      "bytes": 11991,
+      "mode": 384,
+      "sha256": "8b0c85f04266651b92e3a83c8897e6313c9adeaa5ba41901bbe32bbbfdd58e68"
+    },
+    {
+      "path": "worktree-06/staged.patch",
+      "bytes": 0,
+      "mode": 420,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "worktree-06/tests/integration/shared-codex-experimental-negotiation.test.ts",
+      "bytes": 3283,
+      "mode": 420,
+      "sha256": "133689f0ce6a51be822373fb779382660926d0313d071efc87217a66f767ab75"
+    },
+    {
+      "path": "worktree-06/tests/unit/shared-codex-handshake.test.ts",
+      "bytes": 4332,
+      "mode": 420,
+      "sha256": "b23a8f38596c0f0452dcb39ee562bc83f2c85df255e117ef31e9364fdcf89b22"
+    },
+    {
+      "path": "worktree-06/unstaged.patch",
+      "bytes": 807,
+      "mode": 420,
+      "sha256": "28c96e13d96936d41610c110d75c2e358179dcfd1767c3081421894cfab65eb0"
+    },
+    {
+      "path": "worktree-08/staged.patch",
+      "bytes": 0,
+      "mode": 420,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "worktree-08/tests/e2e/setup-config-error-child.test.mjs",
+      "bytes": 12206,
+      "mode": 420,
+      "sha256": "dd64a2e8f6494cc2037630828dbed05eab3fb009e17f7d896395e7eda345665f"
+    },
+    {
+      "path": "worktree-08/tests/unit/desktop-update-presentation.test.ts",
+      "bytes": 4366,
+      "mode": 420,
+      "sha256": "66effcda1051a5f07b1ace800ef5abbb6ed4f9ed8e14c344bf8abea04c8a5d28"
+    },
+    {
+      "path": "worktree-08/unstaged.patch",
+      "bytes": 4758,
+      "mode": 420,
+      "sha256": "cb727b46093e0e049936c0b50c69bc3ba519b57497c0de6b4bd9bd5d1dca0df6"
+    },
+    {
+      "path": "worktree-12/src/apps/desktop/installed-update-runtime.ts",
+      "bytes": 113851,
+      "mode": 420,
+      "sha256": "754ffa51f1c05d05eaf85c7e0d6c028e4c720bd7ed5656d8009c233f0cee4bf1"
+    },
+    {
+      "path": "worktree-12/staged.patch",
+      "bytes": 0,
+      "mode": 420,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "worktree-12/tests/integration/installed-update-runtime.test.ts",
+      "bytes": 191391,
+      "mode": 420,
+      "sha256": "a124f2826bc41f0d365869c79cbeee49eba14fe36bb5f5984951da187944ef08"
+    },
+    {
+      "path": "worktree-12/unstaged.patch",
+      "bytes": 63256,
+      "mode": 420,
+      "sha256": "185b13efedceabaeed1f55a5dd33672efcda115efdb5068d5b7fcdbbeee4507e"
+    },
+    {
+      "path": "worktree-14/api/desktop/v1/schema.json",
+      "bytes": 107475,
+      "mode": 420,
+      "sha256": "87ba74cc628e8756a7a1b1052e5d551f5636325acc6f181f6b7519f54f392588"
+    },
+    {
+      "path": "worktree-14/apps/desktop/bridge/client.ts",
+      "bytes": 23374,
+      "mode": 420,
+      "sha256": "9f388fff2bc5be13f337593adc116e229f2377bb8617fdbb36b0a0c240e0a91f"
+    },
+    {
+      "path": "worktree-14/apps/desktop/bridge/task.ts",
+      "bytes": 10001,
+      "mode": 420,
+      "sha256": "dce5650e79dfa01df1be174d61ce078c0a96922a20b002ab2cf0740b20779ee5"
+    },
+    {
+      "path": "worktree-14/apps/desktop/bridge/wire.ts",
+      "bytes": 136700,
+      "mode": 420,
+      "sha256": "1ff3c05ffc56a33c0d409a6060239c3df07995f1fde8380c1541f8b080166416"
+    },
+    {
+      "path": "worktree-14/boot/taskrequestbudget.go",
+      "bytes": 4734,
+      "mode": 420,
+      "sha256": "421198a4e0f07858b73bc84e7cc87d4898912fd15101ededd0606d35a3329410"
+    },
+    {
+      "path": "worktree-14/boot/taskrequestbudget_test.go",
+      "bytes": 7822,
+      "mode": 420,
+      "sha256": "ce31a61b853bc51a0ea3e52350c7dcd72bbaabbf8607630d0c4fe0625af15efd"
+    },
+    {
+      "path": "worktree-14/boot/taskruntime.go",
+      "bytes": 8657,
+      "mode": 420,
+      "sha256": "1302536a87c8c0b316c0c4af3a3bc4808a8eedcfc4559ff25c9d812db1022f7b"
+    },
+    {
+      "path": "worktree-14/boot/tasksurface.go",
+      "bytes": 4509,
+      "mode": 420,
+      "sha256": "1ea5c7b0882f6d5a427f4af70892db044b6cf02af781bbf7228106dc8ec6bf6d"
+    },
+    {
+      "path": "worktree-14/boot/tasksurface_test.go",
+      "bytes": 23537,
+      "mode": 420,
+      "sha256": "37d86c3c1fb1c7318c5478c7476b0f167407295ef97464e58e48608d2d075262"
+    },
+    {
+      "path": "worktree-14/gen/desktop/v1/wire.go",
+      "bytes": 201533,
+      "mode": 420,
+      "sha256": "0d96bced79693b67c628497fd7bc663c680577772792508ed0b6ce3c81af663b"
+    },
+    {
+      "path": "worktree-14/staged.patch",
+      "bytes": 0,
+      "mode": 420,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "worktree-14/tests/unit/task-bridge.test.ts",
+      "bytes": 56623,
+      "mode": 420,
+      "sha256": "459f0a24464863821be5730a9e1df48d61339115863680edce0943ea8e61a1ef"
+    },
+    {
+      "path": "worktree-14/unstaged.patch",
+      "bytes": 301602,
+      "mode": 420,
+      "sha256": "e9db4d300e5b9431d9d609c149775263b4362c538f9578b0c3689f9ca9a2062d"
+    },
+    {
+      "path": "worktree-18/src/ui/renderer/controller.ts",
+      "bytes": 66569,
+      "mode": 420,
+      "sha256": "30a7e29c38e8e2c7164ea431ea46da500be1a0caaa31d2a0449566c8f770fc6e"
+    },
+    {
+      "path": "worktree-18/src/ui/renderer/settings.tsx",
+      "bytes": 116102,
+      "mode": 420,
+      "sha256": "d514d99054b89e8681aa9ca14cfdec6282d09ccd19240093aee8c816f645f2d8"
+    },
+    {
+      "path": "worktree-18/src/ui/renderer/shell.tsx",
+      "bytes": 47530,
+      "mode": 420,
+      "sha256": "46b5e2a934e247e59211759d4766e424085295323c1cc2566792b403f9f1c825"
+    },
+    {
+      "path": "worktree-18/staged.patch",
+      "bytes": 0,
+      "mode": 420,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "worktree-18/tests/renderer/controller.test.ts",
+      "bytes": 95435,
+      "mode": 420,
+      "sha256": "c1902743bafa59ce5912a8fcc980055f726a722e5fe584a297d93c1176813c1e"
+    },
+    {
+      "path": "worktree-18/tests/renderer/settings.test.tsx",
+      "bytes": 162257,
+      "mode": 420,
+      "sha256": "581ba954b969c5124a2ec0a2fd31afca59ccdbce10c9eb40e2d50ac01b94cae3"
+    },
+    {
+      "path": "worktree-18/tests/renderer/update-notice.test.tsx",
+      "bytes": 17546,
+      "mode": 420,
+      "sha256": "094c921286aefde332fae5a6f28f2e259ced8926fb71f5d9a9a3b492cf0ca28b"
+    },
+    {
+      "path": "worktree-18/unstaged.patch",
+      "bytes": 36033,
+      "mode": 420,
+      "sha256": "1b474ec49fdcf52c33d6f8f625ae803abc43ecc70de4ca9b739501b8df0f1fb0"
+    },
+    {
+      "path": "worktree-21/src/modules/agent/app/port/execution-authority.ts",
+      "bytes": 3929,
+      "mode": 384,
+      "sha256": "ed883bd2e202d3519f4de68ee12202818bdfb5be4a0843af7b92c0bb998f9c83"
+    },
+    {
+      "path": "worktree-21/src/modules/agent/app/service/run-agent-assignment.ts",
+      "bytes": 20655,
+      "mode": 384,
+      "sha256": "95a0742d411f1164e47eac5be4c28d036a903c880a113a50c5363b3e24695bce"
+    },
+    {
+      "path": "worktree-21/src/modules/computer/contract/execution-authority-contract.ts",
+      "bytes": 5890,
+      "mode": 384,
+      "sha256": "37279e3620aac17d40ab6ea74b1dd4deaf569a4a43ca68b4cd92dcfc9f4eb909"
+    },
+    {
+      "path": "worktree-21/src/modules/computer/domain/execution-authority.ts",
+      "bytes": 26178,
+      "mode": 384,
+      "sha256": "9a1e9632d86f1e7c5e3d0aa552a8821ded03ccc862283c30ead9809eac2f3ac1"
+    },
+    {
+      "path": "worktree-21/src/modules/computer/infra/native/sandboxed-workspace-shell.ts",
+      "bytes": 35629,
+      "mode": 384,
+      "sha256": "df482c8cb0a1d20327ab1fb796c5cf7871f17f52b33ee45d80e8168296629abe"
+    },
+    {
+      "path": "worktree-21/staged.patch",
+      "bytes": 0,
+      "mode": 420,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "worktree-21/tests/integration/sandboxed-workspace-shell.test.ts",
+      "bytes": 76506,
+      "mode": 384,
+      "sha256": "5a1e09a71fe976144a0108b7e1d2e7381138b5588c41645947a0df4f875cbe71"
+    },
+    {
+      "path": "worktree-21/tests/unit/authority-contract-handler.test.ts",
+      "bytes": 6511,
+      "mode": 384,
+      "sha256": "cc27c98e8032a3b0e90e847115a80a98919ca8309fa4e847f738e7e7bcb9ffb2"
+    },
+    {
+      "path": "worktree-21/tests/unit/execution-authority.test.ts",
+      "bytes": 30523,
+      "mode": 384,
+      "sha256": "62ad11fc0f6d500726e8c9b3b8f7c7521aa36f8fbf0dc83ccce6dd881a285d3c"
+    },
+    {
+      "path": "worktree-21/unstaged.patch",
+      "bytes": 20271,
+      "mode": 420,
+      "sha256": "430781c24e8b5df46520f32f9e2487dd8ccd3c4f0dd82ba9afb83605e66a9366"
+    },
+    {
+      "path": "worktree-34/docs/identity-physical.md",
+      "bytes": 7946,
+      "mode": 420,
+      "sha256": "312859359f2fa690a5aab9e0ccbc5cef65735adf22588ff39898dbe67a1e1d9c"
+    },
+    {
+      "path": "worktree-34/modules/release/infra/native/migration/darwin.go",
+      "bytes": 4615,
+      "mode": 420,
+      "sha256": "776e1c21723ad36acc258c1ac23dcc7a935ea78274224ad7e1cb1cb798a8cf23"
+    },
+    {
+      "path": "worktree-34/modules/release/infra/native/migration/darwin_test.go",
+      "bytes": 6499,
+      "mode": 420,
+      "sha256": "93a0a60f87427f9fe76a9fd904be263ec19b06ac8e7a709b8edff22a7b3a00ad"
+    },
+    {
+      "path": "worktree-34/modules/release/infra/native/migration/filesystem.go",
+      "bytes": 13080,
+      "mode": 420,
+      "sha256": "6c64e82df1a7a30f12402a66dc3ffb7d49ae922ef5914815d73d1404b732f646"
+    },
+    {
+      "path": "worktree-34/modules/release/infra/native/migration/filesystem_test.go",
+      "bytes": 20194,
+      "mode": 420,
+      "sha256": "6ea100941982712e885bf40883c9e169603b0ee23d1227479592627c238d3311"
+    },
+    {
+      "path": "worktree-34/staged.patch",
+      "bytes": 0,
+      "mode": 420,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "worktree-34/unstaged.patch",
+      "bytes": 0,
+      "mode": 420,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "worktree-40/docs/persistent-chat-handoff-parity.md",
+      "bytes": 9358,
+      "mode": 384,
+      "sha256": "efe5ff2ae4a0e060cc1eddfed195777bbd38c44882ba2170fbf19ae785601794"
+    },
+    {
+      "path": "worktree-40/src/apps/desktop/codex-host-contract.ts",
+      "bytes": 23055,
+      "mode": 384,
+      "sha256": "e0ed3f554eb68902d1606a9305b7ac6402ae2b7434c4a49227c62a24e829e11e"
+    },
+    {
+      "path": "worktree-40/src/modules/chat/app/service/persistent-codex-handoff.ts",
+      "bytes": 22003,
+      "mode": 420,
+      "sha256": "fa9913dc7c73e873896b89130c12fe1636c2c3c5a6714cb4430f9ec49dd9f381"
+    },
+    {
+      "path": "worktree-40/src/modules/chat/contract/codex-task-route.ts",
+      "bytes": 1701,
+      "mode": 420,
+      "sha256": "a9c1de7045b43d7a451b09b377846674e8a9aa000e4812891a6071586edaec6b"
+    },
+    {
+      "path": "worktree-40/src/modules/chat/infra/native/admitted-codex-task-route.ts",
+      "bytes": 1650,
+      "mode": 420,
+      "sha256": "f6854f533d34edf27839d8602922e0eeae69f93292e2d50edc8fd00f016956c1"
+    },
+    {
+      "path": "worktree-40/src/modules/chat/infra/native/shared-codex-proxy-host.ts",
+      "bytes": 9691,
+      "mode": 420,
+      "sha256": "39ce44393f26d88892ff165568aa0aff426c02b0ed4abb18d42eebd53d328f59"
+    },
+    {
+      "path": "worktree-40/src/modules/chat/infra/repo/private-codex-handoff-journal.ts",
+      "bytes": 9336,
+      "mode": 420,
+      "sha256": "e850290d7b13f063b639efebedac9842e87a01053064c9b692e5794de1f73f2c"
+    },
+    {
+      "path": "worktree-40/src/modules/computer/infra/mcp/create-readonly-computer-mcp.ts",
+      "bytes": 30555,
+      "mode": 384,
+      "sha256": "16cae2ae5ffea56c61e188bce74aca65fca923fe72ad2b0dddc4f4780fa2c474"
+    },
+    {
+      "path": "worktree-40/staged.patch",
+      "bytes": 0,
+      "mode": 420,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "worktree-40/tests/e2e/codex-task-mcp.e2e.mjs",
+      "bytes": 12887,
+      "mode": 420,
+      "sha256": "369bb264a5294cc274da3bd8ac99443287a7d85e7b9604200ccd2e3aa8d88a2f"
+    },
+    {
+      "path": "worktree-40/tests/integration/admitted-codex-task-route.test.ts",
+      "bytes": 2631,
+      "mode": 420,
+      "sha256": "9c20d111931c8c979b0abb4caf1dc8a774480c0d506dd9719faa92130c30fa6e"
+    },
+    {
+      "path": "worktree-40/tests/integration/codex-handoff-host-contract.test.ts",
+      "bytes": 22774,
+      "mode": 420,
+      "sha256": "78366b93f41b20b7a765e65f23d555d0ed0501f18db3f4fff3b50d4cd376710f"
+    },
+    {
+      "path": "worktree-40/tests/integration/codex-task-mcp.test.ts",
+      "bytes": 6336,
+      "mode": 420,
+      "sha256": "10af22a5bb53429db11431092392903fc89110b2b62547955b11043bd78d86b6"
+    },
+    {
+      "path": "worktree-40/tests/integration/persistent-codex-handoff.test.ts",
+      "bytes": 31879,
+      "mode": 420,
+      "sha256": "f83c738e1f3a3a6939ee11377f735a82864da62e6bb762326c3a8328008b09a8"
+    },
+    {
+      "path": "worktree-40/unstaged.patch",
+      "bytes": 27440,
+      "mode": 420,
+      "sha256": "ec4772440b4afdee69e54c15f6a14c2b5826ec212776e3cb53bcc459a3305137"
+    }
+  ]
+}

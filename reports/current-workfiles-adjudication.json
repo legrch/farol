@@ -1,0 +1,14 @@
+[
+  {
+    "file": "current-workfiles/worktree-18/tests/renderer/settings.test.tsx",
+    "line": 1096,
+    "classification": "same fixed synthetic Runtime key as reviewed historical mocked renderer fixture",
+    "literalSha256": "1b603bb2bfbbb8702166d5d562241468c4ca2bf42f999c7dedd77a312f3a0f16"
+  },
+  {
+    "file": "current-workfiles/worktree-18/tests/renderer/settings.test.tsx",
+    "line": 1125,
+    "classification": "same fixed synthetic Runtime key as reviewed historical mocked renderer fixture",
+    "literalSha256": "1b603bb2bfbbb8702166d5d562241468c4ca2bf42f999c7dedd77a312f3a0f16"
+  }
+]

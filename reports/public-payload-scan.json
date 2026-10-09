@@ -1,0 +1,11 @@
+{
+  "scannerExit": 1,
+  "findings": 2,
+  "unresolved": 0,
+  "classification": "same two fixed synthetic Runtime key literals from fully mocked renderer tests; exact source value digest and test-only history checked",
+  "gitObjectCoverage": "all restored refs including72-commit main delta;13 test-only findings reviewed separately",
+  "archiveCoverage": "all selected source archives recursively scanned",
+  "binaryImageCoverage": "NOT_ESTABLISHED; all original images excluded",
+  "version": "gitleaks8.30.1",
+  "config": "default rules; empty ignore; no baseline; ignore inline allow comments"
+}

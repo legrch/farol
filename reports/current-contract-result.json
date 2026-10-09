@@ -1,0 +1,57 @@
+{
+  "sourceCommit": "3034ed3911173a19cf56f4d28d780f42e2c5fcf2",
+  "sourceSha256": "96d8e304070527b1e9dd96e5f161229838d20f40fb964e7010cfece8c68f7089",
+  "executable": {
+    "path": "<MAC_HOME>/.nvm/versions/node/v22.19.0/lib/node_modules/@openai/codex/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/bin/codex",
+    "sha256": "09fa44fdc37a5fc70dc1ace31235f90468a2e193d0e85f7552eab068ea2582be",
+    "bytes": 241556032,
+    "version": "codex-cli 0.160.1"
+  },
+  "results": {
+    "inspectCodexHostContract": {
+      "status": "accepted",
+      "contract": {
+        "version": "0.160.1",
+        "protocol": "codex-app-server/v2",
+        "schemaSha256": "82b529f15bfd02403cc3d92c376c57d2575a1780cafb969c77fc9a2ec17ffd0a",
+        "capabilities": {
+          "dynamicTools": true,
+          "correlatedToolCalls": true,
+          "descendantObservation": true,
+          "collabObservation": true,
+          "compaction": true
+        }
+      }
+    },
+    "inspectCodexHandoffHostContract": {
+      "status": "accepted",
+      "contract": {
+        "version": "0.160.1",
+        "protocol": "codex-app-server/v2",
+        "schemaSha256": "424f1f35d1709bb18e73041685a7ffd1974e28efa441c15edaf2fea6f9745e53",
+        "projectBoundCreateStatus": true
+      }
+    },
+    "inspectCodexProjectTasksHostContract": {
+      "status": "accepted",
+      "contract": {
+        "version": "0.160.1",
+        "protocol": "codex-app-server/v2",
+        "schemaSha256": "f852cc020005c5925fe256110c9306aff51497412aab40988b2bda46908144a7",
+        "projectBoundCreateStatus": true,
+        "projectTaskMetadata": true
+      }
+    },
+    "inspectCodexFollowupHostContract": {
+      "status": "accepted",
+      "contract": {
+        "kind": "codex-followup-schema/v1",
+        "protocol": "codex-app-server/v2",
+        "baseSchemaSha256": "424f1f35d1709bb18e73041685a7ffd1974e28efa441c15edaf2fea6f9745e53",
+        "schemaSha256": "674a6e31414e8f81ea0a9297c10b76998998fa607827a8caf190ae657f591306"
+      }
+    }
+  },
+  "scope": "offline current production inspector against exactly generated installed CLI schemas; no serving endpoint/account/project/model/provider effects",
+  "limits": "This is not qualification of a Farol Settings-selected serving instance, native Task runtime, product MCP activation or live Create/Continue/steer"
+}

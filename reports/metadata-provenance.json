@@ -1,0 +1,44 @@
+[
+  {
+    "file": "reports/inventory-summary.json",
+    "originalSha256": "f4c5b443e1719fb56dbcabdef7a938d111a8f73d1f78c9189e78402eef32370d",
+    "exportSha256": "aed79651286ca599b8aa30822c9926eb60bcb5fa0bc29a8ca905c9ec1a7cfac9",
+    "transform": "Mac home/temp paths replaced; original SHA retained; metadata export is not an unchanged original receipt"
+  },
+  {
+    "file": "reports/repository-audit.json",
+    "originalSha256": "43b624ef47ec6bc865866519830681af4c2a107ac788181774d80fe1d866aa30",
+    "exportSha256": "aa5a03a14b2c5015575c059260bb4457f63471fabe9571b4dfe9a5d6d9b3de92",
+    "transform": "Mac home/temp paths replaced; original SHA retained; metadata export is not an unchanged original receipt"
+  },
+  {
+    "file": "reports/preservation-receipt.json",
+    "originalSha256": "8c6042561137ffc4d428bf8b66a356fb46856543235112ee1737dee404a6e10c",
+    "exportSha256": "6fbf045b8f86d732f0cfbca16f75225094fbc0962743cce7ae388578d5908d1d",
+    "transform": "Mac home/temp paths replaced; original SHA retained; metadata export is not an unchanged original receipt"
+  },
+  {
+    "file": "reports/workfiles-preservation-receipt.json",
+    "originalSha256": "3d0c30ab4f4e9d81794a0bf01e6a526ba4aabafd0259168fc2471e62c7f2c1fe",
+    "exportSha256": "e543d41a1a587e28d9b132c16c104288059ea620f38f6a8aa1b66efd1e25ee80",
+    "transform": "Mac home/temp paths replaced; original SHA retained; metadata export is not an unchanged original receipt"
+  },
+  {
+    "file": "reports/missing-scope-workfiles-preservation-receipt.json",
+    "originalSha256": "a5aeb4fa5dccbb99c5ed644a6a8e5d6136e42a16623f0a9d90450351643bf005",
+    "exportSha256": "ce5ff0c0093934544fa083816c0e952bc19293a3b3e68c1b5001e1cef886852c",
+    "transform": "Mac home/temp paths replaced; original SHA retained; metadata export is not an unchanged original receipt"
+  },
+  {
+    "file": "reports/nine-tip-preservation-receipt.json",
+    "originalSha256": "02beda47af40a2c041139d61d8be8c2209dbb4c76fa6576f0679539eee438b72",
+    "exportSha256": "136900a43c4fb05c3e0bf7b4f42ff83d62d3ae474681177d4f01cdb240ce8c5e",
+    "transform": "Mac home/temp paths replaced; metadata only"
+  },
+  {
+    "file": "reports/nine-tip-saved-artifact-verification.json",
+    "originalSha256": "ecc5ceded0be956e2931044ce1ec8176c8206c79c6768f4ef0dd34a40f356a69",
+    "exportSha256": "a7dea667410faffe31d23f323e42f87e6eec95b80a16a2a08dc156d94236610f",
+    "transform": "Mac home/temp paths replaced; metadata only"
+  }
+]

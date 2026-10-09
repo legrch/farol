@@ -1,0 +1,937 @@
+[
+  {
+    "slot": 0,
+    "root": "<MAC_HOME>/code/farol",
+    "head": "3034ed3911173a19cf56f4d28d780f42e2c5fcf2",
+    "stable": true,
+    "entries": [],
+    "copied": [],
+    "excluded": []
+  },
+  {
+    "slot": 1,
+    "root": "<MAC_HOME>/.codex/worktrees/165c/farol",
+    "head": "3034ed3911173a19cf56f4d28d780f42e2c5fcf2",
+    "stable": true,
+    "entries": [],
+    "copied": [],
+    "excluded": []
+  },
+  {
+    "slot": 2,
+    "root": "<MAC_HOME>/.codex/worktrees/coordinator-claude-startup/farol",
+    "head": "7032dfddefccac3dbb9fa23f6dd526b2c7901f64",
+    "stable": true,
+    "entries": [],
+    "copied": [],
+    "excluded": []
+  },
+  {
+    "slot": 3,
+    "root": "<MAC_HOME>/.codex/worktrees/coordinator-git-environment/farol",
+    "head": "3fc43947504bf919f731945477c7c666168338fd",
+    "stable": true,
+    "entries": [],
+    "copied": [],
+    "excluded": []
+  },
+  {
+    "slot": 4,
+    "root": "<MAC_HOME>/.codex/worktrees/coordinator-model-discovery/farol",
+    "head": "4f44f05c52efb09b95fcfed11795cb20658642c0",
+    "stable": true,
+    "entries": [],
+    "copied": [],
+    "excluded": []
+  },
+  {
+    "slot": 5,
+    "root": "<MAC_HOME>/.codex/worktrees/coordinator-owner-message-hardening/farol",
+    "head": "c3b0c7ea147aad7871d6bfc88ba5112889528348",
+    "stable": true,
+    "entries": [],
+    "copied": [],
+    "excluded": []
+  },
+  {
+    "slot": 6,
+    "root": "<MAC_HOME>/.codex/worktrees/coordinator-parity-contract/farol",
+    "head": "3c823c1b590a48baa31dcc5c8dd58109e81e96f8",
+    "stable": true,
+    "entries": [
+      {
+        "xy": " M",
+        "path": "src/modules/chat/infra/native/shared-codex-proxy-host.ts",
+        "originalPath": null
+      },
+      {
+        "xy": "??",
+        "path": "tests/integration/shared-codex-experimental-negotiation.test.ts",
+        "originalPath": null
+      },
+      {
+        "xy": "??",
+        "path": "tests/unit/shared-codex-handshake.test.ts",
+        "originalPath": null
+      }
+    ],
+    "copied": [
+      {
+        "path": "src/modules/chat/infra/native/shared-codex-proxy-host.ts",
+        "bytes": 11991,
+        "mode": 384,
+        "sha256": "8b0c85f04266651b92e3a83c8897e6313c9adeaa5ba41901bbe32bbbfdd58e68"
+      },
+      {
+        "path": "tests/integration/shared-codex-experimental-negotiation.test.ts",
+        "bytes": 3283,
+        "mode": 420,
+        "sha256": "133689f0ce6a51be822373fb779382660926d0313d071efc87217a66f767ab75"
+      },
+      {
+        "path": "tests/unit/shared-codex-handshake.test.ts",
+        "bytes": 4332,
+        "mode": 420,
+        "sha256": "b23a8f38596c0f0452dcb39ee562bc83f2c85df255e117ef31e9364fdcf89b22"
+      }
+    ],
+    "excluded": []
+  },
+  {
+    "slot": 7,
+    "root": "<MAC_HOME>/.codex/worktrees/coordinator-task-control/farol",
+    "head": "2f1cbaccd008d6d04be1d299870d531acdee5e1e",
+    "stable": true,
+    "entries": [],
+    "copied": [],
+    "excluded": []
+  },
+  {
+    "slot": 8,
+    "root": "<MAC_HOME>/.codex/worktrees/quit-test-fixtures/farol",
+    "head": "554d7aac2004f911b9421ba97f44a846ed77d512",
+    "stable": true,
+    "entries": [
+      {
+        "xy": " M",
+        "path": "tests/e2e/setup-config-error-child.test.mjs",
+        "originalPath": null
+      },
+      {
+        "xy": " M",
+        "path": "tests/unit/desktop-update-presentation.test.ts",
+        "originalPath": null
+      }
+    ],
+    "copied": [
+      {
+        "path": "tests/e2e/setup-config-error-child.test.mjs",
+        "bytes": 12206,
+        "mode": 420,
+        "sha256": "dd64a2e8f6494cc2037630828dbed05eab3fb009e17f7d896395e7eda345665f"
+      },
+      {
+        "path": "tests/unit/desktop-update-presentation.test.ts",
+        "bytes": 4366,
+        "mode": 420,
+        "sha256": "66effcda1051a5f07b1ace800ef5abbb6ed4f9ed8e14c344bf8abea04c8a5d28"
+      }
+    ],
+    "excluded": []
+  },
+  {
+    "slot": 9,
+    "root": "<MAC_HOME>/.codex/worktrees/release-auto-update-preference/farol",
+    "head": "8e86c268a9d7a06c59394aa9467badaaf36d4477",
+    "stable": true,
+    "entries": [],
+    "copied": [],
+    "excluded": []
+  },
+  {
+    "slot": 10,
+    "root": "<MAC_HOME>/.codex/worktrees/release-explicit-download/farol",
+    "head": "fe010bfb0aa9828077ef28c68471a41e6be721e8",
+    "stable": true,
+    "entries": [],
+    "copied": [],
+    "excluded": []
+  },
+  {
+    "slot": 11,
+    "root": "<MAC_HOME>/.codex/worktrees/release-normal-quit/farol",
+    "head": "7160b57055e1aca3372224ab61555cb1a58613eb",
+    "stable": true,
+    "entries": [],
+    "copied": [],
+    "excluded": []
+  },
+  {
+    "slot": 12,
+    "root": "<MAC_HOME>/.codex/worktrees/release-quit-runtime/farol",
+    "head": "17d35f84f6f77abc3d9017df2993007d6ea828eb",
+    "stable": true,
+    "entries": [
+      {
+        "xy": " M",
+        "path": "src/apps/desktop/installed-update-runtime.ts",
+        "originalPath": null
+      },
+      {
+        "xy": " M",
+        "path": "tests/integration/installed-update-runtime.test.ts",
+        "originalPath": null
+      }
+    ],
+    "copied": [
+      {
+        "path": "src/apps/desktop/installed-update-runtime.ts",
+        "bytes": 113851,
+        "mode": 420,
+        "sha256": "754ffa51f1c05d05eaf85c7e0d6c028e4c720bd7ed5656d8009c233f0cee4bf1"
+      },
+      {
+        "path": "tests/integration/installed-update-runtime.test.ts",
+        "bytes": 191391,
+        "mode": 420,
+        "sha256": "a124f2826bc41f0d365869c79cbeee49eba14fe36bb5f5984951da187944ef08"
+      }
+    ],
+    "excluded": []
+  },
+  {
+    "slot": 13,
+    "root": "<MAC_HOME>/.codex/worktrees/setup-native-isolation/farol",
+    "head": "d38cc636a37dbbdbaffb4071866cb69a21c5e11e",
+    "stable": true,
+    "entries": [],
+    "copied": [],
+    "excluded": []
+  },
+  {
+    "slot": 14,
+    "root": "<MAC_HOME>/.codex/worktrees/task-request-deadline/farol",
+    "head": "79253fabff03acfc749ac196b9e8bc394fd28ce7",
+    "stable": true,
+    "entries": [
+      {
+        "xy": " M",
+        "path": "api/desktop/v1/schema.json",
+        "originalPath": null
+      },
+      {
+        "xy": " M",
+        "path": "apps/desktop/bridge/client.ts",
+        "originalPath": null
+      },
+      {
+        "xy": " M",
+        "path": "apps/desktop/bridge/task.ts",
+        "originalPath": null
+      },
+      {
+        "xy": " M",
+        "path": "apps/desktop/bridge/wire.ts",
+        "originalPath": null
+      },
+      {
+        "xy": " M",
+        "path": "boot/taskruntime.go",
+        "originalPath": null
+      },
+      {
+        "xy": " M",
+        "path": "boot/tasksurface.go",
+        "originalPath": null
+      },
+      {
+        "xy": " M",
+        "path": "boot/tasksurface_test.go",
+        "originalPath": null
+      },
+      {
+        "xy": " M",
+        "path": "gen/desktop/v1/wire.go",
+        "originalPath": null
+      },
+      {
+        "xy": " M",
+        "path": "tests/unit/task-bridge.test.ts",
+        "originalPath": null
+      },
+      {
+        "xy": "??",
+        "path": "boot/taskrequestbudget.go",
+        "originalPath": null
+      },
+      {
+        "xy": "??",
+        "path": "boot/taskrequestbudget_test.go",
+        "originalPath": null
+      }
+    ],
+    "copied": [
+      {
+        "path": "api/desktop/v1/schema.json",
+        "bytes": 107475,
+        "mode": 420,
+        "sha256": "87ba74cc628e8756a7a1b1052e5d551f5636325acc6f181f6b7519f54f392588"
+      },
+      {
+        "path": "apps/desktop/bridge/client.ts",
+        "bytes": 23374,
+        "mode": 420,
+        "sha256": "9f388fff2bc5be13f337593adc116e229f2377bb8617fdbb36b0a0c240e0a91f"
+      },
+      {
+        "path": "apps/desktop/bridge/task.ts",
+        "bytes": 10001,
+        "mode": 420,
+        "sha256": "dce5650e79dfa01df1be174d61ce078c0a96922a20b002ab2cf0740b20779ee5"
+      },
+      {
+        "path": "apps/desktop/bridge/wire.ts",
+        "bytes": 136700,
+        "mode": 420,
+        "sha256": "1ff3c05ffc56a33c0d409a6060239c3df07995f1fde8380c1541f8b080166416"
+      },
+      {
+        "path": "boot/taskruntime.go",
+        "bytes": 8657,
+        "mode": 420,
+        "sha256": "1302536a87c8c0b316c0c4af3a3bc4808a8eedcfc4559ff25c9d812db1022f7b"
+      },
+      {
+        "path": "boot/tasksurface.go",
+        "bytes": 4509,
+        "mode": 420,
+        "sha256": "1ea5c7b0882f6d5a427f4af70892db044b6cf02af781bbf7228106dc8ec6bf6d"
+      },
+      {
+        "path": "boot/tasksurface_test.go",
+        "bytes": 23537,
+        "mode": 420,
+        "sha256": "37d86c3c1fb1c7318c5478c7476b0f167407295ef97464e58e48608d2d075262"
+      },
+      {
+        "path": "gen/desktop/v1/wire.go",
+        "bytes": 201533,
+        "mode": 420,
+        "sha256": "0d96bced79693b67c628497fd7bc663c680577772792508ed0b6ce3c81af663b"
+      },
+      {
+        "path": "tests/unit/task-bridge.test.ts",
+        "bytes": 56623,
+        "mode": 420,
+        "sha256": "459f0a24464863821be5730a9e1df48d61339115863680edce0943ea8e61a1ef"
+      },
+      {
+        "path": "boot/taskrequestbudget.go",
+        "bytes": 4734,
+        "mode": 420,
+        "sha256": "421198a4e0f07858b73bc84e7cc87d4898912fd15101ededd0606d35a3329410"
+      },
+      {
+        "path": "boot/taskrequestbudget_test.go",
+        "bytes": 7822,
+        "mode": 420,
+        "sha256": "ce31a61b853bc51a0ea3e52350c7dcd72bbaabbf8607630d0c4fe0625af15efd"
+      }
+    ],
+    "excluded": []
+  },
+  {
+    "slot": 15,
+    "root": "<MAC_HOME>/.codex/worktrees/task-selected-thread/farol",
+    "head": "d4212c03f2f6cba5f6c31a5e829dcda7db9a9b46",
+    "stable": true,
+    "entries": [],
+    "copied": [],
+    "excluded": []
+  },
+  {
+    "slot": 16,
+    "root": "<MAC_HOME>/.codex/worktrees/update-admission-diagnostics/farol",
+    "head": "4513d99a283dedd149d8683ebc51565821f82f63",
+    "stable": true,
+    "entries": [],
+    "copied": [],
+    "excluded": []
+  },
+  {
+    "slot": 17,
+    "root": "<MAC_HOME>/.codex/worktrees/update-idle-controls/farol",
+    "head": "d53489200d2c8ca4dec4ca295f58281b37e47bb4",
+    "stable": true,
+    "entries": [],
+    "copied": [],
+    "excluded": []
+  },
+  {
+    "slot": 18,
+    "root": "<MAC_HOME>/.codex/worktrees/update-quit-choice-ui/farol",
+    "head": "17d35f84f6f77abc3d9017df2993007d6ea828eb",
+    "stable": true,
+    "entries": [
+      {
+        "xy": " M",
+        "path": "src/ui/renderer/controller.ts",
+        "originalPath": null
+      },
+      {
+        "xy": " M",
+        "path": "src/ui/renderer/settings.tsx",
+        "originalPath": null
+      },
+      {
+        "xy": " M",
+        "path": "src/ui/renderer/shell.tsx",
+        "originalPath": null
+      },
+      {
+        "xy": " M",
+        "path": "tests/renderer/controller.test.ts",
+        "originalPath": null
+      },
+      {
+        "xy": " M",
+        "path": "tests/renderer/settings.test.tsx",
+        "originalPath": null
+      },
+      {
+        "xy": " M",
+        "path": "tests/renderer/update-notice.test.tsx",
+        "originalPath": null
+      }
+    ],
+    "copied": [
+      {
+        "path": "src/ui/renderer/controller.ts",
+        "bytes": 66569,
+        "mode": 420,
+        "sha256": "30a7e29c38e8e2c7164ea431ea46da500be1a0caaa31d2a0449566c8f770fc6e"
+      },
+      {
+        "path": "src/ui/renderer/settings.tsx",
+        "bytes": 116102,
+        "mode": 420,
+        "sha256": "d514d99054b89e8681aa9ca14cfdec6282d09ccd19240093aee8c816f645f2d8"
+      },
+      {
+        "path": "src/ui/renderer/shell.tsx",
+        "bytes": 47530,
+        "mode": 420,
+        "sha256": "46b5e2a934e247e59211759d4766e424085295323c1cc2566792b403f9f1c825"
+      },
+      {
+        "path": "tests/renderer/controller.test.ts",
+        "bytes": 95435,
+        "mode": 420,
+        "sha256": "c1902743bafa59ce5912a8fcc980055f726a722e5fe584a297d93c1176813c1e"
+      },
+      {
+        "path": "tests/renderer/settings.test.tsx",
+        "bytes": 162257,
+        "mode": 420,
+        "sha256": "581ba954b969c5124a2ec0a2fd31afca59ccdbce10c9eb40e2d50ac01b94cae3"
+      },
+      {
+        "path": "tests/renderer/update-notice.test.tsx",
+        "bytes": 17546,
+        "mode": 420,
+        "sha256": "094c921286aefde332fae5a6f28f2e259ced8926fb71f5d9a9a3b492cf0ca28b"
+      }
+    ],
+    "excluded": []
+  },
+  {
+    "slot": 19,
+    "root": "<MAC_HOME>/.codex/worktrees/watchdog-native-transport/farol",
+    "head": "492bfe3c1fc7c9a4aa4acc31451c507440210b60",
+    "stable": true,
+    "entries": [],
+    "copied": [],
+    "excluded": []
+  },
+  {
+    "slot": 20,
+    "root": "<MAC_HOME>/.codex/worktrees/workspace-detail/farol",
+    "head": "e45ea40ad66463c7d80551329b72e3ac69b5cb07",
+    "stable": true,
+    "entries": [],
+    "copied": [],
+    "excluded": []
+  },
+  {
+    "slot": 21,
+    "root": "<MAC_HOME>/code/worktrees/20260928-farol-loopback-ci-gate",
+    "head": "3de61e796f5033bb5ffb36a5d60a97ff248c22e4",
+    "stable": true,
+    "entries": [
+      {
+        "xy": " M",
+        "path": "src/modules/agent/app/port/execution-authority.ts",
+        "originalPath": null
+      },
+      {
+        "xy": " M",
+        "path": "src/modules/agent/app/service/run-agent-assignment.ts",
+        "originalPath": null
+      },
+      {
+        "xy": " M",
+        "path": "src/modules/computer/contract/execution-authority-contract.ts",
+        "originalPath": null
+      },
+      {
+        "xy": " M",
+        "path": "src/modules/computer/domain/execution-authority.ts",
+        "originalPath": null
+      },
+      {
+        "xy": " M",
+        "path": "src/modules/computer/infra/native/sandboxed-workspace-shell.ts",
+        "originalPath": null
+      },
+      {
+        "xy": " M",
+        "path": "tests/integration/sandboxed-workspace-shell.test.ts",
+        "originalPath": null
+      },
+      {
+        "xy": " M",
+        "path": "tests/unit/authority-contract-handler.test.ts",
+        "originalPath": null
+      },
+      {
+        "xy": " M",
+        "path": "tests/unit/execution-authority.test.ts",
+        "originalPath": null
+      }
+    ],
+    "copied": [
+      {
+        "path": "src/modules/agent/app/service/run-agent-assignment.ts",
+        "bytes": 20655,
+        "mode": 384,
+        "sha256": "95a0742d411f1164e47eac5be4c28d036a903c880a113a50c5363b3e24695bce"
+      },
+      {
+        "path": "src/modules/computer/infra/native/sandboxed-workspace-shell.ts",
+        "bytes": 35629,
+        "mode": 384,
+        "sha256": "df482c8cb0a1d20327ab1fb796c5cf7871f17f52b33ee45d80e8168296629abe"
+      },
+      {
+        "path": "tests/integration/sandboxed-workspace-shell.test.ts",
+        "bytes": 76506,
+        "mode": 384,
+        "sha256": "5a1e09a71fe976144a0108b7e1d2e7381138b5588c41645947a0df4f875cbe71"
+      },
+      {
+        "path": "src/modules/agent/app/port/execution-authority.ts",
+        "bytes": 3929,
+        "mode": 384,
+        "sha256": "ed883bd2e202d3519f4de68ee12202818bdfb5be4a0843af7b92c0bb998f9c83"
+      },
+      {
+        "path": "src/modules/computer/contract/execution-authority-contract.ts",
+        "bytes": 5890,
+        "mode": 384,
+        "sha256": "37279e3620aac17d40ab6ea74b1dd4deaf569a4a43ca68b4cd92dcfc9f4eb909"
+      },
+      {
+        "path": "src/modules/computer/domain/execution-authority.ts",
+        "bytes": 26178,
+        "mode": 384,
+        "sha256": "9a1e9632d86f1e7c5e3d0aa552a8821ded03ccc862283c30ead9809eac2f3ac1"
+      },
+      {
+        "path": "tests/unit/authority-contract-handler.test.ts",
+        "bytes": 6511,
+        "mode": 384,
+        "sha256": "cc27c98e8032a3b0e90e847115a80a98919ca8309fa4e847f738e7e7bcb9ffb2"
+      },
+      {
+        "path": "tests/unit/execution-authority.test.ts",
+        "bytes": 30523,
+        "mode": 384,
+        "sha256": "62ad11fc0f6d500726e8c9b3b8f7c7521aa36f8fbf0dc83ccce6dd881a285d3c"
+      }
+    ],
+    "excluded": []
+  },
+  {
+    "slot": 22,
+    "root": "<MAC_HOME>/code/worktrees/20261002-1739__farol__desktop-shell-design-handoff",
+    "head": "920ab197fa74af10db8df1ce61c83940441fc773",
+    "stable": true,
+    "entries": [],
+    "copied": [],
+    "excluded": []
+  },
+  {
+    "slot": 23,
+    "root": "<MAC_HOME>/code/worktrees/20261002-2103__farol__core-foundation",
+    "head": "510b8a5a3e7ec69e827ef837cda4de0121660414",
+    "stable": true,
+    "entries": [],
+    "copied": [],
+    "excluded": []
+  },
+  {
+    "slot": 24,
+    "root": "<MAC_HOME>/code/worktrees/20261002-2104__farol__computer-go",
+    "head": "9e49f59c169b97e492a6e86972344547fe21926e",
+    "stable": true,
+    "entries": [],
+    "copied": [],
+    "excluded": []
+  },
+  {
+    "slot": 25,
+    "root": "<MAC_HOME>/code/worktrees/20261002-2104__farol__desktop-shell",
+    "head": "8281310b5192d8976bf9735d6909d5d243d8a399",
+    "stable": true,
+    "entries": [],
+    "copied": [],
+    "excluded": []
+  },
+  {
+    "slot": 26,
+    "root": "<MAC_HOME>/code/worktrees/20261002-2105__farol__identity-cutover",
+    "head": "bffc2031c2f67509c3ce7797a44c74115f8cccb3",
+    "stable": true,
+    "entries": [],
+    "copied": [],
+    "excluded": []
+  },
+  {
+    "slot": 27,
+    "root": "<MAC_HOME>/code/worktrees/20261002-2105__farol__release-go",
+    "head": "9520caae2e7cfdb96b9863b6a4b38eaf9d7be750",
+    "stable": true,
+    "entries": [],
+    "copied": [],
+    "excluded": []
+  },
+  {
+    "slot": 28,
+    "root": "<MAC_HOME>/code/worktrees/20261002-2105__farol__signal-color-assets",
+    "head": "87295d959cdc8056e2a26bbede78560680f95a3a",
+    "stable": true,
+    "entries": [],
+    "copied": [],
+    "excluded": []
+  },
+  {
+    "slot": 29,
+    "root": "<MAC_HOME>/code/worktrees/20261002-2106__farol__distribution-dmg",
+    "head": "4f711036188e6dd421733456dabc4681c2c93f1c",
+    "stable": true,
+    "entries": [],
+    "copied": [],
+    "excluded": []
+  },
+  {
+    "slot": 30,
+    "root": "<MAC_HOME>/code/worktrees/20261002-2114__farol__chat-state",
+    "head": "06e8c22c048c9bf92f6152c5056d3476e0a8045e",
+    "stable": true,
+    "entries": [],
+    "copied": [],
+    "excluded": []
+  },
+  {
+    "slot": 31,
+    "root": "<MAC_HOME>/code/worktrees/20261002-2114__farol__tasks-go",
+    "head": "e0addf2ad28d1b92723cf7b8ef86dabcff8cb40b",
+    "stable": true,
+    "entries": [],
+    "copied": [],
+    "excluded": []
+  },
+  {
+    "slot": 32,
+    "root": "<MAC_HOME>/code/worktrees/20261002-2147__farol__core-read",
+    "head": "10e8a7a597c67b77852f45f4267f4aef5da93f1c",
+    "stable": true,
+    "entries": [],
+    "copied": [],
+    "excluded": []
+  },
+  {
+    "slot": 33,
+    "root": "<MAC_HOME>/code/worktrees/20261003-0047__farol__computer-grant-renewal",
+    "head": "24be563456c8570025542da4234bce2c1eb8626d",
+    "stable": true,
+    "entries": [],
+    "copied": [],
+    "excluded": []
+  },
+  {
+    "slot": 34,
+    "root": "<MAC_HOME>/code/worktrees/20261003-0105__farol__identity-physical",
+    "head": "5d61bf3f5af4a3d35f359b41ddde363f951a1fc6",
+    "stable": true,
+    "entries": [
+      {
+        "xy": "??",
+        "path": "docs/identity-physical.md",
+        "originalPath": null
+      },
+      {
+        "xy": "??",
+        "path": "modules/release/infra/native/migration/darwin.go",
+        "originalPath": null
+      },
+      {
+        "xy": "??",
+        "path": "modules/release/infra/native/migration/darwin_test.go",
+        "originalPath": null
+      },
+      {
+        "xy": "??",
+        "path": "modules/release/infra/native/migration/filesystem.go",
+        "originalPath": null
+      },
+      {
+        "xy": "??",
+        "path": "modules/release/infra/native/migration/filesystem_test.go",
+        "originalPath": null
+      }
+    ],
+    "copied": [
+      {
+        "path": "docs/identity-physical.md",
+        "bytes": 7946,
+        "mode": 420,
+        "sha256": "312859359f2fa690a5aab9e0ccbc5cef65735adf22588ff39898dbe67a1e1d9c"
+      },
+      {
+        "path": "modules/release/infra/native/migration/darwin.go",
+        "bytes": 4615,
+        "mode": 420,
+        "sha256": "776e1c21723ad36acc258c1ac23dcc7a935ea78274224ad7e1cb1cb798a8cf23"
+      },
+      {
+        "path": "modules/release/infra/native/migration/darwin_test.go",
+        "bytes": 6499,
+        "mode": 420,
+        "sha256": "93a0a60f87427f9fe76a9fd904be263ec19b06ac8e7a709b8edff22a7b3a00ad"
+      },
+      {
+        "path": "modules/release/infra/native/migration/filesystem.go",
+        "bytes": 13080,
+        "mode": 420,
+        "sha256": "6c64e82df1a7a30f12402a66dc3ffb7d49ae922ef5914815d73d1404b732f646"
+      },
+      {
+        "path": "modules/release/infra/native/migration/filesystem_test.go",
+        "bytes": 20194,
+        "mode": 420,
+        "sha256": "6ea100941982712e885bf40883c9e169603b0ee23d1227479592627c238d3311"
+      }
+    ],
+    "excluded": []
+  },
+  {
+    "slot": 35,
+    "root": "<MAC_HOME>/code/worktrees/20261003-0203__farol__identity-native",
+    "head": "8f8da74a4ea79802507dc829f11b20356efa9282",
+    "stable": true,
+    "entries": [],
+    "copied": [],
+    "excluded": []
+  },
+  {
+    "slot": 36,
+    "root": "<MAC_HOME>/code/worktrees/20261003-0215__farol__release-claim",
+    "head": "2c5a0286c22e78e513ce9de345322d1f19d3245c",
+    "stable": true,
+    "entries": [],
+    "copied": [],
+    "excluded": []
+  },
+  {
+    "slot": 37,
+    "root": "<MAC_HOME>/code/worktrees/20261005-farol-agent-store-access",
+    "head": "ea3725e3cccfbe7fa71485d471eecc7a18359609",
+    "stable": true,
+    "entries": [],
+    "copied": [],
+    "excluded": []
+  },
+  {
+    "slot": 38,
+    "root": "<MAC_HOME>/code/worktrees/20261006-farol-sandbox-approvals",
+    "head": "65dac62e02198d092c21fe7211967691724a2765",
+    "stable": true,
+    "entries": [],
+    "copied": [],
+    "excluded": []
+  },
+  {
+    "slot": 39,
+    "root": "<MAC_HOME>/code/worktrees/20261006-farol-sunrise-pair",
+    "head": "ca84296b64ea7a03affa955a2a30f797f6e52fb7",
+    "stable": true,
+    "entries": [],
+    "copied": [],
+    "excluded": []
+  },
+  {
+    "slot": 40,
+    "root": "<MAC_HOME>/code/worktrees/farol-post-split-native-acceptance",
+    "head": "5037052f6422d200a58f1ffbdf9f086bc6e6c76b",
+    "stable": true,
+    "entries": [
+      {
+        "xy": " M",
+        "path": "docs/persistent-chat-handoff-parity.md",
+        "originalPath": null
+      },
+      {
+        "xy": " M",
+        "path": "src/apps/desktop/codex-host-contract.ts",
+        "originalPath": null
+      },
+      {
+        "xy": " M",
+        "path": "src/modules/chat/app/service/persistent-codex-handoff.ts",
+        "originalPath": null
+      },
+      {
+        "xy": " M",
+        "path": "src/modules/chat/contract/codex-task-route.ts",
+        "originalPath": null
+      },
+      {
+        "xy": " M",
+        "path": "src/modules/chat/infra/native/admitted-codex-task-route.ts",
+        "originalPath": null
+      },
+      {
+        "xy": " M",
+        "path": "src/modules/chat/infra/native/shared-codex-proxy-host.ts",
+        "originalPath": null
+      },
+      {
+        "xy": " M",
+        "path": "src/modules/chat/infra/repo/private-codex-handoff-journal.ts",
+        "originalPath": null
+      },
+      {
+        "xy": " M",
+        "path": "src/modules/computer/infra/mcp/create-readonly-computer-mcp.ts",
+        "originalPath": null
+      },
+      {
+        "xy": " M",
+        "path": "tests/e2e/codex-task-mcp.e2e.mjs",
+        "originalPath": null
+      },
+      {
+        "xy": " M",
+        "path": "tests/integration/admitted-codex-task-route.test.ts",
+        "originalPath": null
+      },
+      {
+        "xy": " M",
+        "path": "tests/integration/codex-handoff-host-contract.test.ts",
+        "originalPath": null
+      },
+      {
+        "xy": " M",
+        "path": "tests/integration/codex-task-mcp.test.ts",
+        "originalPath": null
+      },
+      {
+        "xy": " M",
+        "path": "tests/integration/persistent-codex-handoff.test.ts",
+        "originalPath": null
+      }
+    ],
+    "copied": [
+      {
+        "path": "docs/persistent-chat-handoff-parity.md",
+        "bytes": 9358,
+        "mode": 384,
+        "sha256": "efe5ff2ae4a0e060cc1eddfed195777bbd38c44882ba2170fbf19ae785601794"
+      },
+      {
+        "path": "src/apps/desktop/codex-host-contract.ts",
+        "bytes": 23055,
+        "mode": 384,
+        "sha256": "e0ed3f554eb68902d1606a9305b7ac6402ae2b7434c4a49227c62a24e829e11e"
+      },
+      {
+        "path": "src/modules/chat/app/service/persistent-codex-handoff.ts",
+        "bytes": 22003,
+        "mode": 420,
+        "sha256": "fa9913dc7c73e873896b89130c12fe1636c2c3c5a6714cb4430f9ec49dd9f381"
+      },
+      {
+        "path": "src/modules/chat/contract/codex-task-route.ts",
+        "bytes": 1701,
+        "mode": 420,
+        "sha256": "a9c1de7045b43d7a451b09b377846674e8a9aa000e4812891a6071586edaec6b"
+      },
+      {
+        "path": "src/modules/chat/infra/native/admitted-codex-task-route.ts",
+        "bytes": 1650,
+        "mode": 420,
+        "sha256": "f6854f533d34edf27839d8602922e0eeae69f93292e2d50edc8fd00f016956c1"
+      },
+      {
+        "path": "src/modules/chat/infra/native/shared-codex-proxy-host.ts",
+        "bytes": 9691,
+        "mode": 420,
+        "sha256": "39ce44393f26d88892ff165568aa0aff426c02b0ed4abb18d42eebd53d328f59"
+      },
+      {
+        "path": "src/modules/chat/infra/repo/private-codex-handoff-journal.ts",
+        "bytes": 9336,
+        "mode": 420,
+        "sha256": "e850290d7b13f063b639efebedac9842e87a01053064c9b692e5794de1f73f2c"
+      },
+      {
+        "path": "src/modules/computer/infra/mcp/create-readonly-computer-mcp.ts",
+        "bytes": 30555,
+        "mode": 384,
+        "sha256": "16cae2ae5ffea56c61e188bce74aca65fca923fe72ad2b0dddc4f4780fa2c474"
+      },
+      {
+        "path": "tests/e2e/codex-task-mcp.e2e.mjs",
+        "bytes": 12887,
+        "mode": 420,
+        "sha256": "369bb264a5294cc274da3bd8ac99443287a7d85e7b9604200ccd2e3aa8d88a2f"
+      },
+      {
+        "path": "tests/integration/admitted-codex-task-route.test.ts",
+        "bytes": 2631,
+        "mode": 420,
+        "sha256": "9c20d111931c8c979b0abb4caf1dc8a774480c0d506dd9719faa92130c30fa6e"
+      },
+      {
+        "path": "tests/integration/codex-handoff-host-contract.test.ts",
+        "bytes": 22774,
+        "mode": 420,
+        "sha256": "78366b93f41b20b7a765e65f23d555d0ed0501f18db3f4fff3b50d4cd376710f"
+      },
+      {
+        "path": "tests/integration/codex-task-mcp.test.ts",
+        "bytes": 6336,
+        "mode": 420,
+        "sha256": "10af22a5bb53429db11431092392903fc89110b2b62547955b11043bd78d86b6"
+      },
+      {
+        "path": "tests/integration/persistent-codex-handoff.test.ts",
+        "bytes": 31879,
+        "mode": 420,
+        "sha256": "f83c738e1f3a3a6939ee11377f735a82864da62e6bb762326c3a8328008b09a8"
+      }
+    ],
+    "excluded": []
+  }
+]

@@ -1,0 +1,147 @@
+[
+  {
+    "file": "tests/renderer/settings.test.tsx",
+    "commit": "8e3075cd869655f2f18a43c6d473285a5eca8682",
+    "line": 835,
+    "fingerprint": "8e3075cd869655f2f18a43c6d473285a5eca8682:tests/renderer/settings.test.tsx:generic-api-key:835",
+    "literalShape": "synthetic-literal",
+    "literalLength": 32,
+    "uniqueChars": 22,
+    "classification": "false_positive_fixed_runtime_key_in_mocked_renderer_tests",
+    "context": "checked-in test fixture; no real credential lookup",
+    "evidence": "exact literal history occurs only under tests; mocked renderer mount and mocked APIs; same synthetic literal at both findings; no production credential source"
+  },
+  {
+    "file": "tests/renderer/settings.test.tsx",
+    "commit": "4b43b2d422b8c3c81dfe573447df7c6ac579aca0",
+    "line": 210,
+    "fingerprint": "4b43b2d422b8c3c81dfe573447df7c6ac579aca0:tests/renderer/settings.test.tsx:generic-api-key:210",
+    "literalShape": "synthetic-literal",
+    "literalLength": 32,
+    "uniqueChars": 22,
+    "classification": "false_positive_fixed_runtime_key_in_mocked_renderer_tests",
+    "context": "checked-in test fixture; no real credential lookup",
+    "evidence": "exact literal history occurs only under tests; mocked renderer mount and mocked APIs; same synthetic literal at both findings; no production credential source"
+  },
+  {
+    "file": "tests/integration/dev-review-profile.test.mjs",
+    "commit": "113e3396eff34c0905838e726fb4c36b5304f60d",
+    "line": 25,
+    "fingerprint": "113e3396eff34c0905838e726fb4c36b5304f60d:tests/integration/dev-review-profile.test.mjs:generic-api-key:25",
+    "literalShape": "uuid",
+    "literalLength": 36,
+    "uniqueChars": 16,
+    "classification": "false_positive_test_operation_uuid",
+    "context": "checked-in test fixture; no real credential lookup"
+  },
+  {
+    "file": "tests/integration/dev-review-profile.test.mjs",
+    "commit": "f4f24912ee7c05f1674396f7c3435e99ffa20041",
+    "line": 25,
+    "fingerprint": "f4f24912ee7c05f1674396f7c3435e99ffa20041:tests/integration/dev-review-profile.test.mjs:generic-api-key:25",
+    "literalShape": "uuid",
+    "literalLength": 36,
+    "uniqueChars": 16,
+    "classification": "false_positive_test_operation_uuid",
+    "context": "checked-in test fixture; no real credential lookup"
+  },
+  {
+    "file": "tests/integration/codex-project-preference-mcp.test.ts",
+    "commit": "06bc6e49dc26562502ab995fd200a0a3d4dcf380",
+    "line": 7,
+    "fingerprint": "06bc6e49dc26562502ab995fd200a0a3d4dcf380:tests/integration/codex-project-preference-mcp.test.ts:generic-api-key:7",
+    "literalShape": "uuid",
+    "literalLength": 36,
+    "uniqueChars": 15,
+    "classification": "false_positive_test_operation_uuid",
+    "context": "checked-in test fixture; no real credential lookup"
+  },
+  {
+    "file": "tests/integration/codex-project-preference-journal.test.ts",
+    "commit": "06bc6e49dc26562502ab995fd200a0a3d4dcf380",
+    "line": 9,
+    "fingerprint": "06bc6e49dc26562502ab995fd200a0a3d4dcf380:tests/integration/codex-project-preference-journal.test.ts:generic-api-key:9",
+    "literalShape": "uuid",
+    "literalLength": 36,
+    "uniqueChars": 15,
+    "classification": "false_positive_test_operation_uuid",
+    "context": "checked-in test fixture; no real credential lookup"
+  },
+  {
+    "file": "tests/integration/codex-project-preference.test.ts",
+    "commit": "06bc6e49dc26562502ab995fd200a0a3d4dcf380",
+    "line": 7,
+    "fingerprint": "06bc6e49dc26562502ab995fd200a0a3d4dcf380:tests/integration/codex-project-preference.test.ts:generic-api-key:7",
+    "literalShape": "uuid",
+    "literalLength": 36,
+    "uniqueChars": 15,
+    "classification": "false_positive_test_operation_uuid",
+    "context": "checked-in test fixture; no real credential lookup"
+  },
+  {
+    "file": "tests/integration/admitted-codex-task-route.test.ts",
+    "commit": "aebe84b6a6c669d5920e8bf1e421b55bb00ee0d7",
+    "line": 64,
+    "fingerprint": "aebe84b6a6c669d5920e8bf1e421b55bb00ee0d7:tests/integration/admitted-codex-task-route.test.ts:generic-api-key:64",
+    "literalShape": "uuid",
+    "literalLength": 36,
+    "uniqueChars": 15,
+    "classification": "false_positive_test_operation_uuid",
+    "context": "checked-in test fixture; no real credential lookup"
+  },
+  {
+    "file": "tests/e2e/codex-task-mcp.e2e.mjs",
+    "commit": "aebe84b6a6c669d5920e8bf1e421b55bb00ee0d7",
+    "line": 326,
+    "fingerprint": "aebe84b6a6c669d5920e8bf1e421b55bb00ee0d7:tests/e2e/codex-task-mcp.e2e.mjs:generic-api-key:326",
+    "literalShape": "uuid",
+    "literalLength": 36,
+    "uniqueChars": 15,
+    "classification": "false_positive_test_operation_uuid",
+    "context": "checked-in test fixture; no real credential lookup"
+  },
+  {
+    "file": "tests/integration/codex-task-mcp.test.ts",
+    "commit": "aebe84b6a6c669d5920e8bf1e421b55bb00ee0d7",
+    "line": 73,
+    "fingerprint": "aebe84b6a6c669d5920e8bf1e421b55bb00ee0d7:tests/integration/codex-task-mcp.test.ts:generic-api-key:73",
+    "literalShape": "uuid",
+    "literalLength": 36,
+    "uniqueChars": 15,
+    "classification": "false_positive_test_operation_uuid",
+    "context": "checked-in test fixture; no real credential lookup"
+  },
+  {
+    "file": "tests/integration/admitted-codex-task-route.test.ts",
+    "commit": "973dad807de31c26e3d850c07bd162fdd431c980",
+    "line": 64,
+    "fingerprint": "973dad807de31c26e3d850c07bd162fdd431c980:tests/integration/admitted-codex-task-route.test.ts:generic-api-key:64",
+    "literalShape": "uuid",
+    "literalLength": 36,
+    "uniqueChars": 15,
+    "classification": "false_positive_test_operation_uuid",
+    "context": "checked-in test fixture; no real credential lookup"
+  },
+  {
+    "file": "tests/e2e/codex-task-mcp.e2e.mjs",
+    "commit": "973dad807de31c26e3d850c07bd162fdd431c980",
+    "line": 324,
+    "fingerprint": "973dad807de31c26e3d850c07bd162fdd431c980:tests/e2e/codex-task-mcp.e2e.mjs:generic-api-key:324",
+    "literalShape": "uuid",
+    "literalLength": 36,
+    "uniqueChars": 15,
+    "classification": "false_positive_test_operation_uuid",
+    "context": "checked-in test fixture; no real credential lookup"
+  },
+  {
+    "file": "tests/integration/codex-task-mcp.test.ts",
+    "commit": "973dad807de31c26e3d850c07bd162fdd431c980",
+    "line": 73,
+    "fingerprint": "973dad807de31c26e3d850c07bd162fdd431c980:tests/integration/codex-task-mcp.test.ts:generic-api-key:73",
+    "literalShape": "uuid",
+    "literalLength": 36,
+    "uniqueChars": 15,
+    "classification": "false_positive_test_operation_uuid",
+    "context": "checked-in test fixture; no real credential lookup"
+  }
+]

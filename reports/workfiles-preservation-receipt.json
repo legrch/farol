@@ -1,0 +1,51 @@
+{
+  "schema": "farol.private-workfiles-preservation/1",
+  "sourceRoot": "<MAC_HOME>/.codex/worktrees/go-core-startup-harness/farol",
+  "sourceHEAD": "319014d28fcb90110619289c72709d394c9244c5",
+  "sourceStatusDigest": "9ea7c5e9129095714552eb85fee0ae06274649aa60315376e68fc646f37c8fe3",
+  "preservedFiles": {
+    "src/ui/renderer/settings.tsx": {
+      "sha256": "073601586e1517127df773a612a7e5d868f3c39fa02eea0d63f64052b68157cf",
+      "bytes": 59718,
+      "mode": 420
+    },
+    "src/ui/renderer/shell.tsx": {
+      "sha256": "a28bba0936b2a361ca4aafcbfece0feb5c84e167e16c36b98d0f5bcedbff0772",
+      "bytes": 27444,
+      "mode": 420
+    },
+    "tests/renderer/settings.test.tsx": {
+      "sha256": "69030fc7c5f086e0fd597ad9f8f97179906f6d4bed1150981a4737268440c132",
+      "bytes": 61015,
+      "mode": 420
+    },
+    "tests/renderer/shell.test.tsx": {
+      "sha256": "408281816cb378c9766c0ef785f7bfac33747d12b99a552a1bf5e7adcc2ec35c",
+      "bytes": 23201,
+      "mode": 420
+    },
+    "src/ui/renderer/computer-setup.ts": {
+      "sha256": "dee4bd87e442bf97236ff76361ea9e407ef65750ef4a86a898f1df9349e366af",
+      "bytes": 5503,
+      "mode": 420
+    },
+    "tests/renderer/computer-setup.test.ts": {
+      "sha256": "4bcbe7f7b23d14c016909ea0abdf53ca21d23795ad30a8ede720a0730ce7fb18",
+      "bytes": 8856,
+      "mode": 420
+    }
+  },
+  "archive": {
+    "path": "<MAC_HOME>/code/farol/_output/evidence/repository-preservation-20261008-50a14df8/startup-harness-six-source-files.tar.gz",
+    "sha256": "2765f1b01aceb00a1faa9d06298f54df698db25bc43f84a1d0f1f78b39ca75a0",
+    "bytes": 37671
+  },
+  "restoreDirectory": "<MAC_TEMP_PATH>",
+  "restoreVerified": "all six exact bytes and modes",
+  "sourceUnchanged": true,
+  "stagedPatchBytes": 0,
+  "unstagedPatchBytes": 32802,
+  "ignoredOutput": "NOT PRESERVED; HOLD",
+  "otherWorktrees": "NOT PRESERVED; HOLD",
+  "deletionAuthorized": false
+}

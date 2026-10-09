@@ -1,0 +1,133 @@
+{
+  "schema": "farol.private-repository-preservation/1",
+  "sourceMain": "50a14df873834fbaf6ec8e606ecb373633b3e3d7",
+  "sourceRefsDigest": "eb9ff1e0af489f1af7cb8f089c600a8e208620529bda6668003c3c43ac0067b2",
+  "sourceWorktreesDigest": "b06e1d8ea931a40841645e9e464095f9e532c1a53252bc0f0f227666c35e9510",
+  "canonicalRefsUnchanged": true,
+  "canonicalWorktreesUnchanged": true,
+  "refsPreserved": 253,
+  "localBranchesPreserved": 140,
+  "detachedTipsPreserved": [
+    {
+      "ref": "refs/preservation/detached/001",
+      "oid": "3c3081bb32fd6f2e94759cad5b11be9d0e0ae132",
+      "sourceWorktree": "<MAC_HOME>/.codex/worktrees/activity-reference-alignment/farol"
+    },
+    {
+      "ref": "refs/preservation/detached/003",
+      "oid": "c412eb1e70c4e26f102462b2dbf22c3f32213aff",
+      "sourceWorktree": "<MAC_HOME>/.codex/worktrees/computer-repository-config/farol"
+    },
+    {
+      "ref": "refs/preservation/detached/004",
+      "oid": "80f23baafbc61d134ee6e8e3a854629a21b789e2",
+      "sourceWorktree": "<MAC_HOME>/.codex/worktrees/computer-shell-agent-scope/farol"
+    },
+    {
+      "ref": "refs/preservation/detached/012",
+      "oid": "44e0884133492e0199016f09bc469173eecb2ddc",
+      "sourceWorktree": "<MAC_HOME>/.codex/worktrees/dev-settings-updates/farol"
+    },
+    {
+      "ref": "refs/preservation/detached/016",
+      "oid": "55fc0f00b38a7bfc6af13339c09e591fcf626a8a",
+      "sourceWorktree": "<MAC_HOME>/.codex/worktrees/go-chat-computer-harness/farol"
+    },
+    {
+      "ref": "refs/preservation/detached/017",
+      "oid": "e5003fa8357c5b013a7b34a651ec3ca8966f17d8",
+      "sourceWorktree": "<MAC_HOME>/.codex/worktrees/go-chat-normal-harness/farol"
+    },
+    {
+      "ref": "refs/preservation/detached/018",
+      "oid": "3b12f2c947a957ba1c55c22d64101207761f1301",
+      "sourceWorktree": "<MAC_HOME>/.codex/worktrees/go-chat-physical-driver/farol"
+    },
+    {
+      "ref": "refs/preservation/detached/019",
+      "oid": "b0d259156c49ca764cda1cd576ad016ad36b7ba9",
+      "sourceWorktree": "<MAC_HOME>/.codex/worktrees/go-chat-physical/farol"
+    },
+    {
+      "ref": "refs/preservation/detached/023",
+      "oid": "60185993c40ac39b00cd7f0aea220e844d9fd6b7",
+      "sourceWorktree": "<MAC_HOME>/.codex/worktrees/integration-fixture-repair/farol"
+    },
+    {
+      "ref": "refs/preservation/detached/024",
+      "oid": "4dbeef4523241326c7d674a57dca1fc6e0bee30c",
+      "sourceWorktree": "<MAC_HOME>/.codex/worktrees/known-completion-original-core/farol"
+    },
+    {
+      "ref": "refs/preservation/detached/025",
+      "oid": "28eaea5f43b846031c853f95221bdbb4f04a5316",
+      "sourceWorktree": "<MAC_HOME>/.codex/worktrees/owner-ui-refresh/farol"
+    },
+    {
+      "ref": "refs/preservation/detached/026",
+      "oid": "8e86c268a9d7a06c59394aa9467badaaf36d4477",
+      "sourceWorktree": "<MAC_HOME>/.codex/worktrees/release-auto-update-preference/farol"
+    },
+    {
+      "ref": "refs/preservation/detached/027",
+      "oid": "fe010bfb0aa9828077ef28c68471a41e6be721e8",
+      "sourceWorktree": "<MAC_HOME>/.codex/worktrees/release-explicit-download/farol"
+    },
+    {
+      "ref": "refs/preservation/detached/028",
+      "oid": "d38cc636a37dbbdbaffb4071866cb69a21c5e11e",
+      "sourceWorktree": "<MAC_HOME>/.codex/worktrees/setup-native-isolation/farol"
+    },
+    {
+      "ref": "refs/preservation/detached/030",
+      "oid": "4513d99a283dedd149d8683ebc51565821f82f63",
+      "sourceWorktree": "<MAC_HOME>/.codex/worktrees/update-admission-diagnostics/farol"
+    },
+    {
+      "ref": "refs/preservation/detached/031",
+      "oid": "d53489200d2c8ca4dec4ca295f58281b37e47bb4",
+      "sourceWorktree": "<MAC_HOME>/.codex/worktrees/update-idle-controls/farol"
+    },
+    {
+      "ref": "refs/preservation/detached/032",
+      "oid": "492bfe3c1fc7c9a4aa4acc31451c507440210b60",
+      "sourceWorktree": "<MAC_HOME>/.codex/worktrees/watchdog-native-transport/farol"
+    },
+    {
+      "ref": "refs/preservation/detached/033",
+      "oid": "e45ea40ad66463c7d80551329b72e3ac69b5cb07",
+      "sourceWorktree": "<MAC_HOME>/.codex/worktrees/workspace-detail/farol"
+    },
+    {
+      "ref": "refs/preservation/detached/050",
+      "oid": "ea3725e3cccfbe7fa71485d471eecc7a18359609",
+      "sourceWorktree": "<MAC_HOME>/code/worktrees/20261005-farol-agent-store-access"
+    },
+    {
+      "ref": "refs/preservation/detached/051",
+      "oid": "65dac62e02198d092c21fe7211967691724a2765",
+      "sourceWorktree": "<MAC_HOME>/code/worktrees/20261006-farol-sandbox-approvals"
+    },
+    {
+      "ref": "refs/preservation/detached/052",
+      "oid": "ca84296b64ea7a03affa955a2a30f797f6e52fb7",
+      "sourceWorktree": "<MAC_HOME>/code/worktrees/20261006-farol-sunrise-pair"
+    }
+  ],
+  "restoreDirectory": "<MAC_TEMP_PATH>",
+  "restoreVerified": "exact refs/object ids from independently imported bundle",
+  "files": {
+    "original-refs.bundle": {
+      "bytes": 62663393,
+      "sha256": "5e579dac42f876460b73cbf6d6f0f206ad24f36450268d6bfc366dfdbc38aba2"
+    },
+    "refs-and-detached.bundle": {
+      "bytes": 62659571,
+      "sha256": "a24dc2c95df2ceacd0e0dfe8d11d173e010a8c3df485e71f5d5e6c194e6eacad"
+    }
+  },
+  "workfiles": "NOT YET PRESERVED",
+  "reflogOnly": "NOT INSPECTED/PRESERVED",
+  "unreachable": "NOT INSPECTED/PRESERVED",
+  "deletionAuthorized": false
+}
