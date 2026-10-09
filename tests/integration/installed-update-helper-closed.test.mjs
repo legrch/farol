@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { treeDigest } from "../../tooling/artifact-digest.mjs";
+import { originalPredecessorSettingsReadable } from "../../src/apps/desktop/beta3-state-readability.ts";
 import {
   captureInstalledProcessStart,
   startInstalledUpdateHelper,
@@ -17,42 +18,77 @@ const helper = path.join(process.cwd(), "resources/native/update_helper.py");
 const roots = [];
 const children = [];
 const handles = new Set();
+const retainedChildren = new Set();
+const retainedHandles = new Set();
+// Small disposable trees only. These deadlines are observation/cleanup budgets,
+// never cancellation proof or permission to replace an uncertain helper.
+const CHILD_TIMEOUT_MS = 8000;
+const CLEANUP_TIMEOUT_MS = 2000;
 const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const inode = (stat) => ({ device: String(stat.dev), inode: String(stat.ino) });
 
 function observe(child) {
-  let output = "";
-  let error = "";
-  let failure = null;
+  const entry = {
+    child,
+    exited: null,
+    output: "",
+    error: "",
+    handoff: "",
+    failure: null,
+    terminal: null,
+  };
+  const stop = (failure) => {
+    entry.failure ??= failure;
+    child.kill("SIGKILL");
+  };
   const exited = new Promise((resolve) => {
     child.once("error", (value) => {
-      failure = value;
+      entry.failure ??= value;
     });
     child.stdout?.on("data", (data) => {
-      output += data.toString();
-      if (output.length > 8192) {
-        failure = new Error("OUTPUT_LIMIT");
-        child.kill("SIGKILL");
-      }
+      entry.output = (entry.output + data.toString()).slice(0, 8193);
+      if (entry.output.length > 8192) stop(new Error("OUTPUT_LIMIT"));
     });
     child.stderr?.on("data", (data) => {
-      error += data.toString();
-      if (error.length > 8192) {
-        failure = new Error("ERROR_LIMIT");
-        child.kill("SIGKILL");
-      }
+      entry.error = (entry.error + data.toString()).slice(0, 8193);
+      if (entry.error.length > 8192) stop(new Error("ERROR_LIMIT"));
     });
     child.once("close", (code, signal) => {
       clearTimeout(deadline);
-      resolve({ code, signal, output, error, failure });
+      entry.terminal = {
+        code,
+        signal,
+        output: entry.output,
+        error: entry.error,
+        failure: entry.failure,
+      };
+      resolve(entry.terminal);
     });
   });
   const deadline = setTimeout(() => {
-    failure = new Error("CHILD_DEADLINE");
-    child.kill("SIGKILL");
-  }, 8000);
-  children.push({ child, exited });
+    stop(new Error("CHILD_DEADLINE"));
+  }, CHILD_TIMEOUT_MS);
+  entry.exited = exited;
+  entry.clearDeadline = () => clearTimeout(deadline);
+  children.push(entry);
   return exited;
+}
+
+async function boundedCleanup(work) {
+  let timer;
+  try {
+    return await Promise.race([
+      Promise.resolve(work).then(
+        () => true,
+        () => false,
+      ),
+      new Promise((resolve) => {
+        timer = setTimeout(() => resolve(false), CLEANUP_TIMEOUT_MS);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 async function python(script, args = [], descriptor) {
@@ -77,7 +113,10 @@ async function opened(file) {
   return handle;
 }
 async function close(handle) {
-  if (handles.delete(handle)) await handle.close();
+  if (handles.has(handle)) {
+    await handle.close();
+    handles.delete(handle);
+  }
 }
 async function locked(file, shared = false) {
   const handle = await opened(file);
@@ -100,23 +139,108 @@ async function isLocked(file) {
   return result.code === 23;
 }
 
-afterEach(async () => {
+afterEach(async (context) => {
   vi.restoreAllMocks();
-  for (const { child, exited } of children.splice(0)) {
-    if (child.exitCode === null && child.signalCode === null)
-      child.kill("SIGKILL");
-    await exited;
+  const ownedChildren = children.splice(0);
+  let retain =
+    context.task.result?.state !== "pass" ||
+    (context.task.result?.errors?.length ?? 0) !== 0;
+  for (const entry of ownedChildren) {
+    if (!entry.terminal) {
+      retain = true;
+      entry.failure ??= new Error("CLEANUP_REQUIRED");
+      // Only this test's original ChildProcess handle, never a PID lookup,
+      // process-name kill, another helper or a historical unknown operation.
+      entry.child.kill("SIGKILL");
+    }
   }
-  for (const handle of [...handles]) await close(handle);
-  for (const root of roots.splice(0))
-    await fs.rm(root, { recursive: true, force: true });
+  const closedChildren = await boundedCleanup(
+    Promise.all(ownedChildren.map((entry) => entry.exited)),
+  );
+  if (!closedChildren) retain = true;
+  for (const entry of ownedChildren) {
+    entry.clearDeadline();
+    if (!entry.terminal) retainedChildren.add(entry);
+    if (
+      !entry.terminal ||
+      entry.failure ||
+      entry.terminal.signal !== null ||
+      !Number.isInteger(entry.terminal.code) ||
+      entry.terminal.code === 79
+    )
+      retain = true;
+  }
+  const ownedHandles = [...handles];
+  const closedHandles = await boundedCleanup(
+    Promise.all(ownedHandles.map(close)),
+  );
+  for (const handle of ownedHandles) {
+    if (handles.has(handle)) {
+      // Retain an uncertain close, without attempting it again in another test.
+      handles.delete(handle);
+      retainedHandles.add(handle);
+      retain = true;
+    }
+  }
+  if (!closedHandles) retain = true;
+  const ownedRoots = roots.splice(0);
+  // Inspect every root before deleting any: one unknown identity retains ALL
+  // roots from this test, including fixtures created before a later failure.
+  const rootChecks = [];
+  for (const root of ownedRoots) {
+    let sameRoot = false;
+    try {
+      const current = await fs.lstat(root.path, { bigint: true });
+      sameRoot =
+        current.isDirectory() &&
+        !current.isSymbolicLink() &&
+        JSON.stringify(inode(current)) === JSON.stringify(root.identity) &&
+        (await fs.realpath(root.path)) === root.path;
+    } catch {
+      retain = true;
+    }
+    if (!sameRoot) retain = true;
+    rootChecks.push({ root, sameRoot });
+  }
+  for (const { root, sameRoot } of rootChecks) {
+    if (retain) {
+      console.error(
+        "CLOSED_HELPER_FIXTURE_RETAINED",
+        JSON.stringify({
+          root: root.path,
+          identity: root.identity,
+          sameRoot,
+          closedChildren,
+          closedHandles,
+          children: ownedChildren.map((entry) => ({
+            pid: entry.child.pid ?? null,
+            closed: entry.terminal !== null,
+            code: entry.terminal?.code ?? null,
+            signal: entry.terminal?.signal ?? null,
+            failure: entry.failure?.message ?? null,
+            stdout: entry.output,
+            stderr: entry.error,
+            handoff: entry.handoff,
+          })),
+        }),
+      );
+      continue;
+    }
+    await fs.rm(root.path, { recursive: true, force: false });
+  }
+  if (
+    !closedChildren ||
+    !closedHandles ||
+    rootChecks.some(({ sameRoot }) => !sameRoot)
+  )
+    throw new Error("CLOSED_HELPER_CLEANUP_UNCONFIRMED");
 });
 
 async function bundle(at, version, buildId, payload) {
   await fs.mkdir(path.join(at, "Contents/Resources/app"), { recursive: true });
   await fs.writeFile(
     path.join(at, "Contents/Info.plist"),
-    `<?xml version="1.0"?><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>local.farol.next.preview</string><key>CFBundleShortVersionString</key><string>${version}</string></dict></plist>`,
+    `<?xml version="1.0"?><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>local.farol.next.preview</string><key>CFBundleShortVersionString</key><string>${version.split("-", 1)[0]}</string></dict></plist>`,
   );
   await fs.writeFile(
     path.join(at, "Contents/Resources/app/build-identity.json"),
@@ -132,12 +256,15 @@ async function fixture({
   action = "apply",
   phase = "verified",
   legacySource = false,
+  beta3Source = false,
 } = {}) {
   const startedAt = new Date().toISOString();
   const root = await fs.mkdtemp(
     path.join(await fs.realpath(os.tmpdir()), "farol-closed-helper-"),
   );
-  roots.push(root);
+  const retainedRoot = { path: root, identity: null };
+  roots.push(retainedRoot);
+  retainedRoot.identity = inode(await fs.lstat(root, { bigint: true }));
   const home = path.join(root, "home");
   const app = path.join(home, "Applications/Farol.app");
   const profile = path.join(
@@ -149,13 +276,21 @@ async function fixture({
   const op = path.join(profile, "installed-updates", operationId);
   const source = await bundle(
     action === "rollback" ? path.join(op, "previous.app") : app,
-    action === "rollback" && !legacySource ? "0.2.0" : "0.1.0",
+    beta3Source
+      ? "0.2.0-owner.beta.3"
+      : action === "rollback" && !legacySource
+        ? "0.2.0"
+        : "0.1.0",
     "1".repeat(64),
     "N",
   );
   const target = await bundle(
     action === "rollback" ? app : path.join(op, "staged.app"),
-    action === "rollback" ? "0.2.1" : "0.2.0",
+    beta3Source
+      ? "0.2.0-owner.beta.4"
+      : action === "rollback"
+        ? "0.2.1"
+        : "0.2.0",
     "2".repeat(64),
     "N+1",
   );
@@ -264,15 +399,23 @@ function continuation(f) {
     }) + "\n"
   );
 }
-async function launch(f, descriptor = f.lease.fd) {
-  const child = spawn("/usr/bin/python3", ["-I", "-S", "-B", helper], {
-    stdio: ["ignore", "pipe", "pipe", "pipe", "pipe", descriptor, "pipe"],
-  });
+async function launch(f, descriptor = f.lease.fd, injectedProgram) {
+  const child = spawn(
+    "/usr/bin/python3",
+    injectedProgram
+      ? ["-I", "-S", "-B", "-c", injectedProgram, helper, f.home]
+      : ["-I", "-S", "-B", helper],
+    {
+      stdio: ["ignore", "pipe", "pipe", "pipe", "pipe", descriptor, "pipe"],
+    },
+  );
   const exited = observe(child);
+  const observation = children.at(-1);
   const ack = new Promise((resolve, reject) => {
     let data = "";
     child.stdio[4].on("data", (chunk) => {
-      data += chunk.toString();
+      data = (data + chunk.toString()).slice(0, 4097);
+      observation.handoff = data;
       if (data.length > 4096) reject(new Error("ACK_LIMIT"));
     });
     child.stdio[4].on("error", reject);
@@ -383,12 +526,238 @@ describe("closed installed helper (disposable native filesystem and child fixtur
         release,
       },
     });
-    expect(["continued", "terminal"]).toContain(result.status);
+    expect(["continued", "terminal"], result.reason).toContain(result.status);
     const completed = await result.operation.completion;
     expect(completed.code).toBe(0);
     expect(completed.protocolError).toBeNull();
     expect(completed.terminal?.phase).toBe("verified");
     expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("restores the closed beta3 source after post-swap target corruption without launch", async () => {
+    const f = await fixture({ beta3Source: true });
+    const sourceIdentity = inode(await fs.stat(f.app, { bigint: true }));
+    const targetIdentity = inode(
+      await fs.stat(path.join(f.op, "staged.app"), { bigint: true }),
+    );
+    const stateIdentity = inode(await fs.stat(f.state, { bigint: true }));
+    const readiness = {
+      visited: false,
+      skipped: false,
+      configured: false,
+      reachable: "unknown",
+      verified: null,
+      needsAction: null,
+      unavailable: null,
+      outcomeUnknown: false,
+    };
+    // Complete synthetic stored Settings, not an owner profile or a migration.
+    // The existing audited predicate checks ORIGINAL beta3 readability only.
+    const settings = {
+      schema: 1,
+      revision: 1,
+      general: {
+        openAtLaunch: "settings",
+        sidebarDefault: "full",
+        activityDetail: "summary",
+      },
+      tasks: {},
+      computer: {
+        computerId: "00000000-0000-4000-8000-000000000001",
+        generation: 1,
+        name: "Closed helper fixture",
+        commands: "none",
+        filePolicy: "",
+        workspaces: [],
+        pendingEdit: null,
+      },
+      nativeHosts: { generation: 1, codex: null, taskRoute: null },
+      connectors: {
+        secureMcp: {
+          generation: 1,
+          profile: "farol-next",
+          tunnelId: null,
+          tunnelClient: null,
+          credential: "missing",
+          runtime: null,
+          challenge: null,
+          attachment: null,
+          lastVerifiedAttachment: null,
+        },
+      },
+      setup: {
+        journey: { currentStep: "chatgpt", dismissed: false },
+        ...Object.fromEntries(
+          ["chatgpt", "computer", "connect", "hosts", "verify"].map((step) => [
+            step,
+            { ...readiness },
+          ]),
+        ),
+      },
+    };
+    expect(
+      originalPredecessorSettingsReadable(
+        {
+          version: f.request.source.version,
+          sourceCommit: "24cc7c32f12f2633156efef40c91ea0817109a4c",
+        },
+        settings,
+      ),
+    ).toBe(true);
+    const config = path.join(f.state, "config.json");
+    await fs.writeFile(config, JSON.stringify(settings) + "\n", {
+      mode: 0o600,
+    });
+    const ready = path.join(f.profile, "installed-updates/ready.json");
+    const readyRecord = {
+      schema: "farol.ready-update/1",
+      handle: path.join(f.root, "synthetic-retained.zip"),
+      // Metadata fixture only: no archive verification, package or feed claim.
+      manifest: {
+        schema: "farol.github-release/1",
+        repository: "legrch/farol",
+        channel: "owner-beta",
+        product: "Farol Next Preview",
+        bundleId: "local.farol.next.preview",
+        version: f.request.target.version,
+        buildVersion: "18",
+        sourceCommit: "3".repeat(40),
+        sourceTreeDigest: "4".repeat(64),
+        buildId: f.request.target.buildId,
+        artifactSha256: f.request.target.digest,
+        archiveSha256: "5".repeat(64),
+        archiveName: `Farol-${f.request.target.version}-darwin-arm64.zip`,
+        archiveSize: 1,
+        platform: "darwin",
+        arch: "arm64",
+        signing: "unsigned",
+        notarized: false,
+        sourceDirty: false,
+      },
+      operation: null,
+    };
+    expect(Object.hasOwn(readyRecord, "notes")).toBe(false);
+    await fs.writeFile(ready, JSON.stringify(readyRecord) + "\n", {
+      mode: 0o600,
+    });
+    const unchangedFiles = new Map();
+    for (const file of [
+      config,
+      ready,
+      path.join(f.state, "last-quit.json"),
+      f.leasePath,
+    ])
+      unchangedFiles.set(file, {
+        bytes: await fs.readFile(file),
+        identity: inode(await fs.lstat(file, { bigint: true })),
+      });
+
+    // Same injection seam as the existing live-PID corruption test, applied to
+    // the real closed request/lease/continuation protocol and helper.main().
+    const program = `
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("update_helper", sys.argv[1])
+helper = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(helper)
+original = helper.write_record
+def corrupt_after_move(parent, name, record):
+    original(parent, name, record)
+    if name == "journal.json" and record["phase"] == "new_installed":
+        with open(sys.argv[2] + "/Applications/Farol.app/Contents/payload", "wb") as file:
+            file.write(b"corrupt")
+helper.write_record = corrupt_after_move
+run = helper.subprocess.run
+def refuse_launch(command, *args, **kwargs):
+    if command[0] == "/usr/bin/open":
+        with open(sys.argv[2] + "/../launch-attempt", "wb") as file:
+            file.write(b"unexpected")
+        raise AssertionError("UNEXPECTED_LAUNCH")
+    return run(command, *args, **kwargs)
+helper.subprocess.run = refuse_launch
+helper.main()
+`;
+    const launched = await launch(f, f.lease.fd, program);
+    expect(await launched.ack).toMatchObject({
+      schema: "farol.installed-update-handoff/1",
+      phase: "closed_predecessor_ready",
+      action: "apply",
+      operationId: f.request.operationId,
+      source: f.request.source,
+      target: f.request.target,
+      predecessor: f.request.predecessor,
+      leaseIdentity: f.leaseIdentity,
+    });
+    await unchanged(f);
+    await close(f.lease);
+    expect(await isLocked(f.leasePath)).toBe(true);
+    launched.child.stdio[6].end(continuation(f));
+    // First missing native observation: the ORIGINAL child restores before any
+    // startup. Exit 70 is the expected integrity refusal, never install success.
+    const result = await launched.exited;
+    expect(result).toMatchObject({
+      code: 70,
+      signal: null,
+      failure: null,
+      error: "",
+    });
+    expect(JSON.parse(result.output)).toEqual({
+      phase: "rolled_back",
+      error: "target_verification",
+      operationId: f.request.operationId,
+    });
+    expect(await treeDigest(f.app)).toBe(f.request.source.digest);
+    expect(inode(await fs.stat(f.app, { bigint: true }))).toEqual(
+      sourceIdentity,
+    );
+    const failed = path.join(f.op, "failed.app");
+    expect(inode(await fs.stat(failed, { bigint: true }))).toEqual(
+      targetIdentity,
+    );
+    expect(
+      await fs.readFile(path.join(failed, "Contents/payload"), "utf8"),
+    ).toBe("corrupt");
+    expect(await treeDigest(failed)).not.toBe(f.request.target.digest);
+    expect(
+      JSON.parse(
+        await fs.readFile(path.join(f.op, "rejected-target.json"), "utf8"),
+      ),
+    ).toEqual({
+      schema: "farol.rejected-update-target/1",
+      operationId: f.request.operationId,
+      source: f.request.source,
+      target: f.request.target,
+      directoryIdentity: targetIdentity,
+    });
+    expect(
+      JSON.parse(await fs.readFile(path.join(f.op, "journal.json"), "utf8")),
+    ).toEqual({
+      schema: "farol.installed-update-journal/1",
+      operationId: f.request.operationId,
+      source: f.request.source,
+      target: f.request.target,
+      phase: "rolled_back",
+    });
+    for (const name of ["previous.app", "staged.app"])
+      await expect(fs.lstat(path.join(f.op, name))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    await expect(
+      fs.lstat(path.join(f.root, "launch-attempt")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(
+      fs.lstat(path.join(f.state, "running.json")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+    expect(inode(await fs.stat(f.state, { bigint: true }))).toEqual(
+      stateIdentity,
+    );
+    for (const [file, before] of unchangedFiles) {
+      expect(await fs.readFile(file)).toEqual(before.bytes);
+      expect(inode(await fs.lstat(file, { bigint: true }))).toEqual(
+        before.identity,
+      );
+    }
+    // Probe only after close: the helper released the SAME kernel lease inode.
+    expect(await isLocked(f.leasePath)).toBe(false);
   });
 
   it.each([
