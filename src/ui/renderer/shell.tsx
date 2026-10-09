@@ -204,9 +204,28 @@ function ActivityRecord({
         {matchingChat && (
           <button
             type="button"
-            onClick={() =>
-              facade.navigate({ area: "chatgpt", taskId: selected.taskId })
-            }
+            onClick={() => {
+              const latest = facade.getSnapshot();
+              const recorded = latest.activity.some(
+                (event) =>
+                  event.id === selected.id &&
+                  event.taskId === selected.taskId &&
+                  event.turnId === selected.turnId,
+              );
+              const task = latest.tasks.tasks.find(
+                (item) =>
+                  item.taskId === selected.taskId &&
+                  item.turnId === selected.turnId,
+              );
+              if (
+                latest.status === "current" &&
+                latest.runtime === "ready" &&
+                recorded &&
+                task &&
+                task.agent?.observation !== "unavailable"
+              )
+                facade.navigate({ area: "chatgpt", taskId: task.taskId });
+            }}
           >
             View chat
           </button>

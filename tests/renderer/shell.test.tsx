@@ -2388,6 +2388,84 @@ it.each(["page", "dialog"] as const)(
     expect(f.api.configure).not.toHaveBeenCalled();
   },
 );
+it.each([
+  "turn-reused",
+  "task-replaced",
+  "task-removed",
+  "event-removed",
+  "event-rebound",
+  "stale",
+  "offline",
+  "observation-unavailable",
+] as const)(
+  "Activity rechecks View chat identity before rerender after %s",
+  async (change) => {
+    const { host, c, f } = await activityFixture();
+    const captured = button(host, "View chat");
+    const before = c.getSnapshot();
+    const selected = before.activity.at(-1)!;
+    let latest: WindowSnapshot = before;
+    if (change === "stale") latest = { ...before, status: "stale" };
+    else if (change === "offline") latest = { ...before, runtime: "offline" };
+    else if (change === "event-removed") latest = { ...before, activity: [] };
+    else if (change === "event-rebound")
+      latest = {
+        ...before,
+        activity: before.activity.map((event) =>
+          event.id === selected.id
+            ? { ...event, turnId: "another-turn" }
+            : event,
+        ),
+      };
+    else
+      latest = {
+        ...before,
+        tasks: {
+          revision: before.tasks.revision + 1,
+          tasks:
+            change === "task-removed"
+              ? []
+              : [
+                  {
+                    ...before.tasks.tasks[0]!,
+                    ...(change === "task-replaced"
+                      ? { taskId: "replacement-task" }
+                      : change === "turn-reused"
+                        ? { turnId: "replacement-turn" }
+                        : {
+                            agent: {
+                              phase: "running",
+                              workspaceId: "approved",
+                              parentDelivery: "not_applicable",
+                              workspaceEnforcement: "verified",
+                              resultAvailable: false,
+                              observation: "unavailable",
+                            },
+                          }),
+                  },
+                ],
+        },
+      };
+    const navigate = vi.spyOn(c, "navigate");
+    const read = vi.spyOn(c, "getSnapshot").mockReturnValue(latest);
+    await act(async () => captured.click());
+    read.mockRestore();
+    expect(navigate).not.toHaveBeenCalled();
+    expect(c.getSnapshot().destination.area).toBe("activity");
+    expect(f.api.task).not.toHaveBeenCalled();
+    expect(f.api.configure).not.toHaveBeenCalled();
+  },
+);
+it("Activity View chat opens the same currently observed task without dispatching work", async () => {
+  const { host, c, f } = await activityFixture();
+  await act(async () => button(host, "View chat").click());
+  expect(c.getSnapshot().destination).toMatchObject({
+    area: "chatgpt",
+    taskId: "task-1",
+  });
+  expect(f.api.task).not.toHaveBeenCalled();
+  expect(f.api.configure).not.toHaveBeenCalled();
+});
 it("Activity will not route a historical record into a reused turn", async () => {
   const { host, c, f } = await activityFixture();
   await act(async () =>
