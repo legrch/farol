@@ -664,7 +664,10 @@ func (c *Client) scheduleCleanup() {
 		terminationErr := conn.process.Close()
 		exitErr := conn.process.Wait(ctx)
 		c.mu.Lock()
-		if launchErr != nil || terminationErr != nil || exitErr != nil || ctx.Err() != nil {
+		deadline, bounded := ctx.Deadline()
+		// Timer cancellation delivery may lag the deadline. A late proof is
+		// still late even when the original context has not notified us yet.
+		if launchErr != nil || terminationErr != nil || exitErr != nil || ctx.Err() != nil || bounded && !time.Now().Before(deadline) {
 			c.closeErr = task.ErrUnknown
 		}
 		// A caller's earlier unproved timeout/cancellation remains unknown even

@@ -170,7 +170,9 @@ private listener is introduced. JSON rejects duplicate keys, invalid UTF-8,
 excessive nesting and trailing values. Messages are bounded to 8 MiB; calls share
 one 20-second absolute budget capped by grant expiry. Proxy stderr is discarded
 with a 64 KiB bound. Close signals only its exact proxy once and requires exit
-proof within a two-second cleanup budget; it never claims cancellation of the provider task. Signal refusal or
+proof within a two-second cleanup budget; it never claims cancellation of the provider task. The deadline bounds proof even before a delayed context timer
+notification arrives. A late exit leaves the original UNKNOWN result retained.
+Signal refusal or
 missing exit proof is unknown, with no escalation, fallback or relaunch.
 
 Hermetic tests inject a source-only pipe peer and OS boundary. They exercise the

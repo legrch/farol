@@ -338,6 +338,40 @@ func TestClientCloseFirstOwnerDeadlineBoundsLateKnownCleanup(t *testing.T) {
 	assertClientCloseNoReplacement(t, c, b, p, task.ErrUnknown)
 }
 
+// Models deadline expiry before delivery of the context timer notification.
+// The deadline still bounds proof; Err/Done delivery is not an extension.
+type delayedDeadlineContext struct {
+	context.Context
+	deadline time.Time
+}
+
+func (c delayedDeadlineContext) Deadline() (time.Time, bool) { return c.deadline, true }
+
+func TestClientCleanupLateExitBeforeTimerDeliveryRemainsUnknown(t *testing.T) {
+	p := newClientCloseProcess()
+	p.autoExit, p.knownExit = true, true
+	c, b := newClientCloseFixture(t, p)
+	// Use the original lazy launch and retained proxy; no replacement process.
+	b.releaseLaunch()
+	if _, err := c.Observe(context.Background(), c.selection.Binding, completeRef()); err == nil {
+		t.Fatal("controlled failed proxy disclosed a result")
+	}
+	c.mu.Lock()
+	c.closed.Store(true)
+	c.closeStarted = true
+	c.closeCtx = delayedDeadlineContext{Context: context.Background(), deadline: time.Now().Add(-time.Second)}
+	c.closeCancel = func() {}
+	c.mu.Unlock()
+	c.scheduleCleanup()
+	clientCloseAwait(t, c.closeDone)
+	if err := c.Close(context.Background()); !errors.Is(err, task.ErrUnknown) {
+		t.Fatal("late exit used pending timer delivery to pass the original deadline", err)
+	}
+	if b.launches.Load() != 1 || p.closes.Load() != 1 || p.waits.Load() != 1 {
+		t.Fatal("deadline check repeated original launch or cleanup")
+	}
+}
+
 func TestClientCloseRetainsRefusedTerminationEvenWithProvedExit(t *testing.T) {
 	p := newClientCloseProcess()
 	p.closeErr, p.autoExit = errors.New("controlled termination refusal"), true
