@@ -1,4 +1,4 @@
-import { StrictMode, act } from "react";
+import { StrictMode, act, useLayoutEffect, useRef } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
 import { isCompactShell } from "../../src/pkg/shell-layout/geometry";
@@ -69,6 +69,224 @@ function agentTask(id = "task-1") {
     },
   };
 }
+// jsdom scroll properties/events only; Chromium layout/clamping remains unqualified.
+function scrollStage(host: Element, top: number, left: number) {
+  const stage = host.querySelector<HTMLElement>("main.stage")!;
+  stage.scrollTop = top;
+  stage.scrollLeft = left;
+  stage.dispatchEvent(new Event("scroll"));
+  return stage;
+}
+function stageOffset(host: Element) {
+  const stage = host.querySelector<HTMLElement>("main.stage")!;
+  return [stage.scrollTop, stage.scrollLeft];
+}
+it("history stage scroll restores both offsets using the exact immutable entry", async () => {
+  const { host, c, f } = await mount();
+  const configuration = c.getSnapshot().configuration;
+  await act(async () => c.navigate({ area: "settings", page: "appearance" }));
+  const first = c.getSnapshot().destination;
+  expect(Object.isFrozen(first)).toBe(true);
+  await act(async () => scrollStage(host, 180, 17));
+  await act(async () => c.navigate({ area: "settings", page: "connection" }));
+  expect(stageOffset(host)).toEqual([0, 0]);
+  const second = c.getSnapshot().destination;
+  const stage = scrollStage(host, 290, 29);
+  await act(async () => {
+    c.navigate({ area: "home", homeView: "work" });
+    // Simulate content clamping before the navigation commit. Cleanup must not
+    // overwrite the earlier observed offset with this changed DOM value.
+    stage.scrollTop = 0;
+    stage.scrollLeft = 0;
+  });
+  await act(async () => button(host, "Back").click());
+  expect(c.getSnapshot().destination).toBe(second);
+  expect(stageOffset(host)).toEqual([290, 29]);
+  await act(async () => button(host, "Back").click());
+  expect(c.getSnapshot().destination).toBe(first);
+  expect(stageOffset(host)).toEqual([180, 17]);
+  await act(async () => button(host, "Forward").click());
+  expect(c.getSnapshot().destination).toBe(second);
+  expect(stageOffset(host)).toEqual([290, 29]);
+  expect(c.getSnapshot().configuration).toBe(configuration);
+  expect(f.api.configure).not.toHaveBeenCalled();
+  expect(f.api.task).not.toHaveBeenCalled();
+});
+it("history stage scroll separates identical-route visits and a truncated forward branch", async () => {
+  const { host, c, f } = await mount();
+  await act(async () => c.navigate({ area: "settings", page: "appearance" }));
+  const original = c.getSnapshot().destination;
+  scrollStage(host, 180, 17);
+  await act(async () => c.navigate({ area: "settings", page: "connection" }));
+  scrollStage(host, 290, 29);
+  await act(async () => c.navigate({ area: "settings", page: "appearance" }));
+  const discarded = c.getSnapshot().destination;
+  expect(discarded).not.toBe(original);
+  expect(stageOffset(host)).toEqual([0, 0]);
+  scrollStage(host, 440, 44);
+  await act(async () => button(host, "Back").click());
+  expect(stageOffset(host)).toEqual([290, 29]);
+  await act(async () => c.navigate({ area: "settings", page: "appearance" }));
+  expect(c.getSnapshot().destination).not.toBe(discarded);
+  expect(c.getSnapshot().forward).toBe(false);
+  expect(button(host, "Forward").disabled).toBe(true);
+  expect(stageOffset(host)).toEqual([0, 0]);
+  scrollStage(host, 660, 66);
+  await act(async () => button(host, "Back").click());
+  expect(stageOffset(host)).toEqual([290, 29]);
+  await act(async () => button(host, "Back").click());
+  expect(c.getSnapshot().destination).toBe(original);
+  expect(stageOffset(host)).toEqual([180, 17]);
+  await act(async () => button(host, "Forward").click());
+  await act(async () => button(host, "Forward").click());
+  expect(stageOffset(host)).toEqual([660, 66]);
+  expect(f.api.configure).not.toHaveBeenCalled();
+  expect(f.api.task).not.toHaveBeenCalled();
+});
+it("history stage scroll preserves the current offset during same-route updates", async () => {
+  const { host, c, f } = await mount();
+  await act(async () => c.navigate({ area: "settings", page: "appearance" }));
+  const entry = c.getSnapshot().destination;
+  scrollStage(host, 150, 15);
+  await act(async () => f.emit("route", { state: "loaded" }));
+  expect(c.getSnapshot().destination).toBe(entry);
+  expect(stageOffset(host)).toEqual([150, 15]);
+  await act(async () => c.navigate({ area: "settings", page: "appearance" }));
+  expect(c.getSnapshot().destination).toBe(entry);
+  expect(stageOffset(host)).toEqual([150, 15]);
+  expect(f.api.configure).not.toHaveBeenCalled();
+  expect(f.api.task).not.toHaveBeenCalled();
+});
+it("history stage scroll distinguishes workspace entries with the same former page key", async () => {
+  const value = settings();
+  value.computer.workspaces = ["A", "B"].map((name, index) => ({
+    workspaceId:
+      index === 0
+        ? "22222222-2222-4222-8222-222222222222"
+        : "33333333-3333-4333-8333-333333333333",
+    root: `/work/${name}`,
+    label: name,
+    access: "read" as const,
+    excludedPaths: [],
+    rootIdentity: { device: "1", inode: String(index + 2) },
+  }));
+  const { host, c, f } = await mount({
+    ...bootstrap(),
+    configuration: {
+      status: "ready",
+      settings: ProductSettingsSchema.parse(value),
+    },
+  });
+  await act(async () =>
+    c.navigate({
+      area: "settings",
+      page: "folders",
+      workspaceId: value.computer.workspaces[0]!.workspaceId,
+    }),
+  );
+  scrollStage(host, 160, 16);
+  await act(async () =>
+    c.navigate({
+      area: "settings",
+      page: "folders",
+      workspaceId: value.computer.workspaces[1]!.workspaceId,
+    }),
+  );
+  expect(
+    host.querySelector(".workspace-detail")?.getAttribute("aria-label"),
+  ).toBe("Workspace B");
+  expect(stageOffset(host)).toEqual([0, 0]);
+  scrollStage(host, 280, 28);
+  await act(async () => button(host, "Back").click());
+  expect(
+    host.querySelector(".workspace-detail")?.getAttribute("aria-label"),
+  ).toBe("Workspace A");
+  expect(stageOffset(host)).toEqual([160, 16]);
+  await act(async () => button(host, "Forward").click());
+  expect(stageOffset(host)).toEqual([280, 28]);
+  expect(f.api.configure).not.toHaveBeenCalled();
+  expect(f.api.task).not.toHaveBeenCalled();
+});
+it("history stage scroll restores Activity offsets while preserving inspector focus", async () => {
+  const { host } = await activityFixture();
+  const focus = vi.spyOn(
+    host.querySelector<HTMLElement>(".toolbar-title h1")!,
+    "focus",
+  );
+  cleanups.push(async () => {
+    focus.mockRestore();
+  });
+  await act(async () =>
+    host.querySelectorAll<HTMLButtonElement>(".activity-row")[1]!.click(),
+  );
+  expect(focus).toHaveBeenLastCalledWith({ preventScroll: true });
+  scrollStage(host, 50, 5);
+  await act(async () =>
+    host.querySelectorAll<HTMLButtonElement>(".activity-row")[0]!.click(),
+  );
+  expect(stageOffset(host)).toEqual([0, 0]);
+  scrollStage(host, 80, 8);
+  await act(async () => button(host, "Back").click());
+  expect(stageOffset(host)).toEqual([50, 5]);
+  expect(document.activeElement).toBe(host.querySelector(".toolbar-title h1"));
+  expect(focus).toHaveBeenLastCalledWith({ preventScroll: true });
+  await act(async () => button(host, "Forward").click());
+  expect(stageOffset(host)).toEqual([80, 8]);
+  expect(document.activeElement).toBe(host.querySelector(".toolbar-title h1"));
+  expect(focus).toHaveBeenLastCalledWith({ preventScroll: true });
+});
+it("history stage scroll ignores nested scroll notifications", async () => {
+  const { host, c } = await mount();
+  await act(async () => c.navigate({ area: "settings", page: "appearance" }));
+  const stage = scrollStage(host, 120, 12);
+  // A nested notification must not save an unobserved/clamped stage value.
+  stage.scrollTop = 1;
+  stage.scrollLeft = 1;
+  stage
+    .querySelector("button")!
+    .dispatchEvent(new Event("scroll", { bubbles: true }));
+  await act(async () => c.navigate({ area: "settings", page: "connection" }));
+  await act(async () => button(host, "Back").click());
+  expect(stageOffset(host)).toEqual([120, 12]);
+});
+it("history stage scroll retains observed offsets through StrictMode layout replay", async () => {
+  const { host, c, root } = await mount();
+  function ScrolledShell() {
+    const initialized = useRef(false);
+    useLayoutEffect(() => {
+      if (!initialized.current) {
+        initialized.current = true;
+        scrollStage(host, 120, 12);
+      }
+    }, [host]);
+    return <Shell />;
+  }
+  await act(async () =>
+    root.render(
+      <StrictMode>
+        <Services value={c}>
+          <ScrolledShell />
+        </Services>
+      </StrictMode>,
+    ),
+  );
+  expect(stageOffset(host)).toEqual([120, 12]);
+});
+it("history stage scroll starts fresh when the Shell is actually unmounted", async () => {
+  const { host, c, root } = await mount();
+  scrollStage(host, 120, 12);
+  await act(async () => root.render(null));
+  await act(async () =>
+    root.render(
+      <StrictMode>
+        <Services value={c}>
+          <Shell />
+        </Services>
+      </StrictMode>,
+    ),
+  );
+  expect(stageOffset(host)).toEqual([0, 0]);
+});
 it("returns an unresolved Setup workspace action to its actual Setup step", async () => {
   const value = settings();
   value.computer.workspaces = [

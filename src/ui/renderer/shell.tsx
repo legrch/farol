@@ -333,7 +333,7 @@ function Activity({
       snapshot.overlay === "none" &&
       (returningFrom === "none" || returningFrom === "activity")
     )
-      heading.current?.focus();
+      heading.current?.focus({ preventScroll: true });
   }, [
     heading,
     snapshot.destination.activityId,
@@ -1067,20 +1067,16 @@ export function Shell() {
   const sidebarTrigger = useRef<HTMLButtonElement>(null);
   const sidebarPanel = useRef<HTMLElement>(null);
   const previousSidebar = useRef({ open: false, destination });
-  const pageKey =
-    destination.area === "settings" || destination.area === "setup"
-      ? `${destination.area}:${destination.page}:${destination.setupStep ?? ""}`
-      : destination.area === "home"
-        ? `home:${destination.homeView ?? "overview"}:${destination.homeSelection?.id ?? ""}`
-        : destination.area === "activity"
-          ? `activity:${destination.activityId ?? ""}`
-          : destination.area;
+  const scrollPositions = useRef(
+    new WeakMap<WindowSnapshot["destination"], { top: number; left: number }>(),
+  );
   useLayoutEffect(() => {
     if (stage.current) {
-      stage.current.scrollTop = 0;
-      stage.current.scrollLeft = 0;
+      const saved = scrollPositions.current.get(destination);
+      stage.current.scrollTop = saved?.top ?? 0;
+      stage.current.scrollLeft = saved?.left ?? 0;
     }
-  }, [pageKey]);
+  }, [destination]);
   const [compactWindow, setCompactWindow] = useState(() =>
     isCompactShell(window.innerWidth),
   );
@@ -1424,6 +1420,14 @@ export function Shell() {
         ref={stage}
         className="stage"
         inert={state.overlay !== "none" || sidebarOverlay}
+        onScrollCapture={(event) => {
+          if (event.target !== event.currentTarget) return;
+          // Save the displayed entry before navigation changes or clamps its DOM.
+          scrollPositions.current.set(destination, {
+            top: event.currentTarget.scrollTop,
+            left: event.currentTarget.scrollLeft,
+          });
+        }}
       >
         {state.status !== "current" && (
           <div className="notice" role="status">
