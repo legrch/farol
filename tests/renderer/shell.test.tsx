@@ -1,6 +1,7 @@
 import { StrictMode, act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
+import { isCompactShell } from "../../src/pkg/shell-layout/geometry";
 import { Shell } from "../../src/ui/renderer/shell";
 import type { WindowSnapshot } from "../../src/ui/renderer/contract";
 import { Services } from "../../src/ui/renderer/services";
@@ -23,10 +24,10 @@ afterEach(async () => {
   for (const cleanup of cleanups.splice(0)) await cleanup();
   document.body.replaceChildren();
 });
-async function mount(data = bootstrap()) {
+async function mount(data = bootstrap(), compactViewport = () => false) {
   const f = fixture();
   vi.mocked(f.api.bootstrap).mockResolvedValue(data);
-  const c = new WindowController(f.api);
+  const c = new WindowController(f.api, undefined, undefined, compactViewport);
   await c.start();
   const host = document.createElement("div");
   document.body.append(host);
@@ -172,7 +173,7 @@ it("Home retains the approved rail and context sidebar and compact overlays keep
     false,
     "overlay",
     "sidebar",
-    180,
+    232,
   );
   await act(async () => button(host, "Close sidebar").click());
   expect(host.querySelector("main")?.hasAttribute("inert")).toBe(false);
@@ -185,7 +186,7 @@ it("Home retains the approved rail and context sidebar and compact overlays keep
     false,
     "overlay",
     "sidebar",
-    180,
+    232,
   );
   await act(async () =>
     host.dispatchEvent(
@@ -195,6 +196,56 @@ it("Home retains the approved rail and context sidebar and compact overlays keep
   expect(host.querySelector(".sidebar-scrim")).toBeNull();
   expect(host.querySelector("main")?.hasAttribute("inert")).toBe(false);
 });
+it.each([
+  [849, "58px", false],
+  [850, "58px", false],
+  [851, "62px", true],
+] as const)(
+  "approved geometry projects rail and context at %ipx",
+  async (width, rail, context) => {
+    const previous = window.innerWidth;
+    cleanups.push(async () => {
+      await act(async () => {
+        window.innerWidth = previous;
+        window.dispatchEvent(new Event("resize"));
+      });
+    });
+    window.innerWidth = width;
+    const { host, c, f } = await mount(bootstrap(), () =>
+      isCompactShell(window.innerWidth),
+    );
+    const desktop = host.querySelector<HTMLElement>(".desktop")!;
+    expect(desktop.style.getPropertyValue("--rail-width")).toBe(rail);
+    expect(desktop.style.getPropertyValue("--page-list-width")).toBe("232px");
+    expect(Boolean(host.querySelector("aside"))).toBe(context);
+    await act(async () => button(host, "Toggle sidebar").click());
+    expect(c.getSnapshot().sidebar).toBe(context ? "rail" : "overlay");
+    expect(Boolean(host.querySelector(".sidebar-overlay"))).toBe(!context);
+    expect(host.querySelector("main")?.hasAttribute("inert")).toBe(!context);
+    expect(desktop.style.getPropertyValue("--rail-width")).toBe(rail);
+    await act(async () =>
+      f.emit("action", {
+        action: "toggle-sidebar",
+        source: "sidebar-command",
+        eventId: "11111111-1111-4111-8111-111111111178",
+        authWindowGeneration: null,
+      }),
+    );
+    expect(c.getSnapshot().sidebar).toBe(context ? "full" : "rail");
+    expect(host.querySelector("main")?.hasAttribute("inert")).toBe(false);
+    await act(async () =>
+      f.emit("action", {
+        action: "toggle-sidebar",
+        source: "sidebar-command",
+        eventId: "11111111-1111-4111-8111-111111111179",
+        authWindowGeneration: null,
+      }),
+    );
+    expect(c.getSnapshot().sidebar).toBe(context ? "rail" : "overlay");
+    expect(f.api.configure).not.toHaveBeenCalled();
+    expect(f.api.task).not.toHaveBeenCalled();
+  },
+);
 async function compactSettingsShell() {
   const originalWidth = window.innerWidth;
   cleanups.push(async () => {
@@ -309,14 +360,14 @@ it("resizes the page list with keyboard bounds and remembers its width only in t
         }),
       );
     });
-  expect(divider.getAttribute("aria-valuenow")).toBe("180");
+  expect(divider.getAttribute("aria-valuenow")).toBe("232");
   await key("ArrowRight");
-  expect(c.getSnapshot().sidebarWidth).toBe(188);
+  expect(c.getSnapshot().sidebarWidth).toBe(240);
   expect(
     host
       .querySelector<HTMLElement>(".desktop")!
       .style.getPropertyValue("--side-width"),
-  ).toBe("188px");
+  ).toBe("240px");
   expect(f.api.layout).toHaveBeenLastCalledWith(
     "activity",
     "",
@@ -324,7 +375,7 @@ it("resizes the page list with keyboard bounds and remembers its width only in t
     false,
     "full",
     "none",
-    188,
+    240,
   );
   await key("End");
   await key("ArrowRight");
@@ -379,10 +430,10 @@ it.each([
       false,
       "full",
       "sidebar",
-      180,
+      232,
     );
     await pointer("pointermove", 275);
-    expect(c.getSnapshot().sidebarWidth).toBe(220);
+    expect(c.getSnapshot().sidebarWidth).toBe(272);
     if (ending === "blur")
       await act(async () => window.dispatchEvent(new Event("blur")));
     else if (ending === "native-escape")
@@ -405,7 +456,7 @@ it.each([
     else await pointer(ending, 275);
     expect(c.getSnapshot().sidebarResizing).toBe(false);
     const cancelled = ending === "escape" || ending === "native-escape";
-    expect(c.getSnapshot().sidebarWidth).toBe(cancelled ? 180 : 220);
+    expect(c.getSnapshot().sidebarWidth).toBe(cancelled ? 232 : 272);
     expect(f.api.layout).toHaveBeenLastCalledWith(
       "browser",
       "",
@@ -413,7 +464,7 @@ it.each([
       false,
       ending === "collapse" ? "rail" : "full",
       "none",
-      cancelled ? 180 : 220,
+      cancelled ? 232 : 272,
     );
     // A still-held pointer cannot restart a drag cancelled by the native action.
     if (cancelled) {
@@ -425,7 +476,7 @@ it.each([
       expect(c.getSnapshot().sidebarResizing).toBe(false);
       await pointer("pointermove", 290);
       expect(c.getSnapshot().sidebarResizing).toBe(false);
-      expect(c.getSnapshot().sidebarWidth).toBe(188);
+      expect(c.getSnapshot().sidebarWidth).toBe(240);
     }
     expect(f.api.task).not.toHaveBeenCalled();
     expect(f.api.configure).not.toHaveBeenCalled();
@@ -479,6 +530,11 @@ it("automatically uses the rail at narrow widths and opens a bounded page-list o
       window.innerWidth = 979;
       window.dispatchEvent(new Event("resize"));
     });
+    expect(host.querySelector(".contextual-sidebar")).not.toBeNull();
+    await act(async () => {
+      window.innerWidth = 850;
+      window.dispatchEvent(new Event("resize"));
+    });
     expect(host.querySelector(".contextual-sidebar")).toBeNull();
     expect(button(host, "Toggle sidebar").getAttribute("aria-expanded")).toBe(
       "false",
@@ -492,7 +548,7 @@ it("automatically uses the rail at narrow widths and opens a bounded page-list o
       false,
       "overlay",
       "sidebar",
-      180,
+      232,
     );
     await act(async () => button(host, "Close sidebar").click());
     await act(async () => {

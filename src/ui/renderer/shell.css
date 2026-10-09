@@ -215,7 +215,7 @@ code {
   display: flex;
   align-items: center;
   width: calc(var(--rail-width) + var(--side-width));
-  min-width: 216px;
+  min-width: 218px;
   gap: 2px;
   height: 100%;
   border-right: 1px solid var(--line);
@@ -1238,7 +1238,7 @@ kbd {
   border: 2px solid var(--bg);
   border-radius: 6px;
 }
-@media (max-width: 979px) {
+@media (max-width: 850px) {
   .home-columns {
     grid-template-columns: minmax(0, 1fr) 210px;
     gap: 24px;
@@ -1247,7 +1247,8 @@ kbd {
     padding: 28px;
   }
   .navigation-chrome {
-    width: 216px;
+    width: 205px;
+    min-width: 205px;
   }
   .settings-page,
   .setup-page {

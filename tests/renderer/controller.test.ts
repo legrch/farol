@@ -1420,7 +1420,7 @@ describe("F0 window owner", () => {
       false,
       "full",
       "none",
-      180,
+      232,
     );
     c.travel(1);
     expect(c.getSnapshot().destination.page).toBe("appearance");

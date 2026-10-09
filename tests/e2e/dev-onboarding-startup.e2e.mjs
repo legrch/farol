@@ -10,7 +10,10 @@ import { runBoundedProcess } from "./bounded-process.mjs";
 import { sourceIdentity } from "../../tooling/source-identity.mjs";
 import { verifyInputManifest } from "../../tooling/build-contract.mjs";
 import { verifyGoCoreArtifact } from "../../tooling/go-core-artifact.mjs";
-import { shellGeometry } from "../../src/pkg/shell-layout/geometry.ts";
+import {
+  shellGeometry,
+  shellRailWidth,
+} from "../../src/pkg/shell-layout/geometry.ts";
 import {
   startChatGptFixture,
   stopChatGptFixture,
@@ -710,7 +713,8 @@ try {
         };
       }, originalWindow.id);
       const x =
-        shellGeometry.sidebarRail + (sidebar === "full" ? pageListWidth : 0);
+        shellRailWidth(native.size[0]) +
+        (sidebar === "full" ? pageListWidth : 0);
       expected = {
         x,
         y: shellGeometry.windowBar,
@@ -776,11 +780,11 @@ try {
       expected,
       "RENDERER_NATIVE_BROWSER_BOUNDS_DRIFT",
     );
-    assert.equal(dom.rail.width, shellGeometry.sidebarRail);
+    assert.equal(dom.rail.width, shellRailWidth(native.size[0]));
     assert.equal(dom.toolbar.height, shellGeometry.windowBar);
     if (sidebar === "full") {
       assert.deepEqual(dom.sidebar, {
-        x: shellGeometry.sidebarRail,
+        x: shellRailWidth(native.size[0]),
         y: expected.y,
         width: pageListWidth,
         height: expected.height,
@@ -867,7 +871,7 @@ try {
     const geometry = (sidebar, width = originalShell.width) =>
       assertBrowserGeometry(theme.toLowerCase(), sidebar, width);
     await setContentSize(
-      shellGeometry.autoRailBelow + shellGeometry.pageListDefault,
+      shellGeometry.compactMaxWidth + shellGeometry.pageListDefault,
     );
     if (
       (await reopenedWindow
@@ -920,7 +924,10 @@ try {
     await button("Toggle sidebar").click();
     await geometry("full");
     await setContentSize(
-      shellGeometry.autoRailBelow - shellGeometry.pageListDefault,
+      Math.max(
+        640,
+        shellGeometry.compactMaxWidth - shellGeometry.pageListDefault,
+      ),
     );
     const compact = await geometry("rail");
     await button("Toggle sidebar").click();
@@ -943,7 +950,7 @@ try {
     "LIGHT_GRAPHITE_WIDTH_DRIFT",
   );
   await setContentSize(
-    shellGeometry.autoRailBelow + shellGeometry.pageListDefault,
+    shellGeometry.compactMaxWidth + shellGeometry.pageListDefault,
   );
   await button("Toggle sidebar").click();
   await settingsPage(reopenedWindow, "Appearance");

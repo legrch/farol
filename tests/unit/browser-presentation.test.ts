@@ -7,7 +7,7 @@ import { deriveSurfaceLayout } from "../../src/apps/desktop/surface-layout";
 
 describe("Browser presentation selection", () => {
   it.each(["preview", "dev"] as const)(
-    "uses the 56px rail and 180px page list in normal %s",
+    "uses the 62px rail and 232px page list in normal %s",
     (environment) => {
       const selected = compactBrowserSelected({ environment });
       expect(selected).toBe(true);
@@ -23,7 +23,7 @@ describe("Browser presentation selection", () => {
           selectedTaskPresent: true,
           compactBrowser: selected,
         }).pageBounds,
-      ).toEqual({ x: 236, y: 58, width: 944, height: 702 });
+      ).toEqual({ x: 294, y: 58, width: 886, height: 702 });
     },
   );
   it.each(["preview", "dev"] as const)(

@@ -14,27 +14,52 @@ const base = {
 };
 
 describe("native Browser surface layout", () => {
+  it.each([
+    [640, 58, true],
+    [849, 58, true],
+    [850, 58, true],
+    [851, 294, false],
+  ] as const)(
+    "approved geometry keeps native full-page bounds at %ipx",
+    (width, x, autoRail) => {
+      expect(deriveSurfaceLayout({ ...base, width })).toMatchObject({
+        autoRail,
+        sidebarWidth: x,
+        pageBounds: { x, y: 58, width: width - x, height: 702 },
+      });
+    },
+  );
+  it.each(["rail", "overlay"] as const)(
+    "approved geometry uses the desktop rail for wide %s mode",
+    (sidebar) => {
+      expect(deriveSurfaceLayout({ ...base, sidebar })).toMatchObject({
+        autoRail: false,
+        sidebarWidth: 62,
+        pageBounds: { x: 62, y: 58, width: 1118, height: 702 },
+      });
+    },
+  );
   it("places the page below the single toolbar beside a full sidebar", () => {
     expect(deriveSurfaceLayout(base)).toEqual({
-      sidebarWidth: 236,
+      sidebarWidth: 294,
       autoRail: false,
       pageVisible: true,
-      pageBounds: { x: 236, y: 58, width: 944, height: 702 },
+      pageBounds: { x: 294, y: 58, width: 886, height: 702 },
     });
   });
 
-  it("uses a 56 px rail by preference and automatically below 980 px", () => {
+  it("uses the desktop rail by preference and full context at 940 px", () => {
     expect(deriveSurfaceLayout({ ...base, sidebar: "rail" })).toMatchObject({
-      sidebarWidth: 56,
+      sidebarWidth: 62,
       autoRail: false,
-      pageBounds: { x: 56, y: 58, width: 1_124, height: 702 },
+      pageBounds: { x: 62, y: 58, width: 1_118, height: 702 },
     });
     expect(
       deriveSurfaceLayout({ ...base, width: 940, sidebar: "full" }),
     ).toMatchObject({
-      sidebarWidth: 56,
-      autoRail: true,
-      pageBounds: { x: 56, y: 58, width: 884, height: 702 },
+      sidebarWidth: 294,
+      autoRail: false,
+      pageBounds: { x: 294, y: 58, width: 646, height: 702 },
     });
   });
 
@@ -43,7 +68,7 @@ describe("native Browser surface layout", () => {
       deriveSurfaceLayout({ ...base, browserChromeVisible: false }),
     ).toMatchObject({
       pageVisible: true,
-      pageBounds: { x: 236, y: 58, width: 944, height: 702 },
+      pageBounds: { x: 294, y: 58, width: 886, height: 702 },
     });
   });
 
@@ -51,7 +76,7 @@ describe("native Browser surface layout", () => {
     expect(
       deriveSurfaceLayout({ ...base, compactBrowser: true }),
     ).toMatchObject({
-      pageBounds: { x: 236, y: 58, width: 944, height: 702 },
+      pageBounds: { x: 294, y: 58, width: 886, height: 702 },
     });
     expect(
       deriveSurfaceLayout({
@@ -60,7 +85,7 @@ describe("native Browser surface layout", () => {
         browserChromeVisible: false,
       }),
     ).toMatchObject({
-      pageBounds: { x: 236, y: 58, width: 944, height: 702 },
+      pageBounds: { x: 294, y: 58, width: 886, height: 702 },
     });
   });
 
@@ -72,7 +97,7 @@ describe("native Browser surface layout", () => {
         checkFeedbackVisible: true,
       }),
     ).toMatchObject({
-      pageBounds: { x: 236, y: 58, width: 944, height: 702 },
+      pageBounds: { x: 294, y: 58, width: 886, height: 702 },
     });
   });
 
@@ -80,20 +105,20 @@ describe("native Browser surface layout", () => {
     expect(
       deriveSurfaceLayout({ ...base, sidebarWidth: 240 }).pageBounds,
     ).toEqual({
-      x: 296,
+      x: 302,
       y: 58,
-      width: 884,
+      width: 878,
       height: 702,
     });
     expect(
       deriveSurfaceLayout({ ...base, sidebarWidth: 900 }).pageBounds.x,
-    ).toBe(344);
+    ).toBe(350);
     expect(
       deriveSurfaceLayout({ ...base, sidebarWidth: -10 }).pageBounds.x,
-    ).toBe(208);
+    ).toBe(214);
     expect(
       deriveSurfaceLayout({ ...base, sidebarWidth: NaN }).pageBounds.x,
-    ).toBe(236);
+    ).toBe(294);
     expect(
       deriveSurfaceLayout({
         ...base,
@@ -103,7 +128,7 @@ describe("native Browser surface layout", () => {
       }),
     ).toMatchObject({
       pageVisible: false,
-      sidebarWidth: 56,
+      sidebarWidth: 62,
     });
   });
 
@@ -115,7 +140,7 @@ describe("native Browser surface layout", () => {
       sidebar: "full",
       overlay: "none",
     };
-    expect(ShellLayoutSchema.parse(layout).sidebarWidth).toBe(180);
+    expect(ShellLayoutSchema.parse(layout).sidebarWidth).toBe(232);
     expect(
       ShellLayoutSchema.parse({ ...layout, sidebarWidth: 240 }).sidebarWidth,
     ).toBe(240);

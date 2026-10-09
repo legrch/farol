@@ -6,7 +6,11 @@ import {
   useState,
 } from "react";
 import type { CSSProperties, ReactNode, RefObject } from "react";
-import { shellGeometry } from "../../pkg/shell-layout/geometry";
+import {
+  isCompactShell,
+  shellGeometry,
+  shellRailWidth,
+} from "../../pkg/shell-layout/geometry";
 import { useRenderer } from "./services";
 import { PanelBoundary } from "./boundary";
 import {
@@ -1077,12 +1081,11 @@ export function Shell() {
       stage.current.scrollLeft = 0;
     }
   }, [pageKey]);
-  const [compactWindow, setCompactWindow] = useState(
-    () => window.innerWidth < shellGeometry.autoRailBelow,
+  const [compactWindow, setCompactWindow] = useState(() =>
+    isCompactShell(window.innerWidth),
   );
   useEffect(() => {
-    const resize = () =>
-      setCompactWindow(window.innerWidth < shellGeometry.autoRailBelow);
+    const resize = () => setCompactWindow(isCompactShell(window.innerWidth));
     window.addEventListener("resize", resize);
     return () => window.removeEventListener("resize", resize);
   }, []);
@@ -1167,7 +1170,7 @@ export function Shell() {
       data-sidebar-resizing={state.sidebarResizing}
       style={
         {
-          "--rail-width": `${shellGeometry.sidebarRail}px`,
+          "--rail-width": `${shellRailWidth(window.innerWidth)}px`,
           "--toolbar-height": `${shellGeometry.windowBar}px`,
           "--page-list-width": `${state.sidebarWidth}px`,
           "--side-width": `${sideVisible && !sidebarOverlay ? state.sidebarWidth : 0}px`,
