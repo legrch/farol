@@ -1229,6 +1229,79 @@ kbd {
   width: var(--page-list-width);
   z-index: 5;
 }
+/* Keep the active shell scroll surfaces consistent across appearance themes. */
+.desktop
+  :is(
+    .stage,
+    .contextual-sidebar,
+    .home-candidate-navigation nav,
+    .sheet-content,
+    .update-notes
+  ) {
+  --scroll-thumb: color-mix(in srgb, var(--fg) 28%, transparent);
+  scrollbar-width: thin;
+  scrollbar-color: var(--scroll-thumb) transparent;
+  scrollbar-gutter: stable;
+}
+/* Chromium uses pseudo-element styling only when the standard values are auto. */
+@supports selector(::-webkit-scrollbar) {
+  .desktop
+    :is(
+      .stage,
+      .contextual-sidebar,
+      .home-candidate-navigation nav,
+      .sheet-content,
+      .update-notes
+    ) {
+    scrollbar-width: auto;
+    scrollbar-color: auto;
+  }
+  .desktop
+    :is(
+      .stage,
+      .contextual-sidebar,
+      .home-candidate-navigation nav,
+      .sheet-content,
+      .update-notes
+    )::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  .desktop
+    :is(
+      .stage,
+      .contextual-sidebar,
+      .home-candidate-navigation nav,
+      .sheet-content,
+      .update-notes
+    )::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .desktop
+    :is(
+      .stage,
+      .contextual-sidebar,
+      .home-candidate-navigation nav,
+      .sheet-content,
+      .update-notes
+    )::-webkit-scrollbar-thumb {
+    background: var(--scroll-thumb);
+    background-clip: padding-box;
+    border: 3px solid transparent;
+    border-radius: 20px;
+  }
+  .desktop
+    :is(
+      .stage,
+      .contextual-sidebar,
+      .home-candidate-navigation nav,
+      .sheet-content,
+      .update-notes
+    )::-webkit-scrollbar-thumb:hover {
+    background: color-mix(in srgb, var(--fg) 45%, transparent);
+    background-clip: padding-box;
+  }
+}
 ::-webkit-scrollbar {
   width: 7px;
   height: 7px;
