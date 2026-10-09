@@ -195,6 +195,107 @@ it("Home retains the approved rail and context sidebar and compact overlays keep
   expect(host.querySelector(".sidebar-scrim")).toBeNull();
   expect(host.querySelector("main")?.hasAttribute("inert")).toBe(false);
 });
+async function compactSettingsShell() {
+  const originalWidth = window.innerWidth;
+  cleanups.push(async () => {
+    await act(async () => {
+      window.innerWidth = originalWidth;
+      window.dispatchEvent(new Event("resize"));
+    });
+  });
+  window.innerWidth = 758;
+  const mounted = await mount();
+  await act(async () =>
+    mounted.c.navigate({ area: "settings", page: "general" }),
+  );
+  return mounted;
+}
+it.each(["toolbar", "controller"] as const)(
+  "compact sidebar focus enters a page control when opened by %s",
+  async (source) => {
+    const { host, c, f } = await compactSettingsShell();
+    const trigger = button(host, "Toggle sidebar");
+    trigger.focus();
+    await act(async () => {
+      if (source === "toolbar") trigger.click();
+      else c.toggleSidebar(true);
+    });
+    expect(
+      document.activeElement ===
+        button(host.querySelector("aside")!, "General"),
+    ).toBe(true);
+    expect(document.activeElement?.getAttribute("role")).not.toBe("separator");
+    expect(host.querySelector("main")?.hasAttribute("inert")).toBe(true);
+    expect(f.api.configure).not.toHaveBeenCalled();
+    expect(f.api.task).not.toHaveBeenCalled();
+  },
+);
+it.each(["Escape", "scrim", "toggle", "host-dismiss", "current-page"] as const)(
+  "compact sidebar focus returns to its toggle after %s dismissal",
+  async (dismissal) => {
+    const { host, f } = await compactSettingsShell();
+    const trigger = button(host, "Toggle sidebar");
+    await act(async () => trigger.click());
+    const current = button(host.querySelector("aside")!, "General");
+    current.focus();
+    await act(async () => {
+      if (dismissal === "Escape")
+        current.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+        );
+      else if (dismissal === "scrim") button(host, "Close sidebar").click();
+      else if (dismissal === "toggle") trigger.click();
+      else if (dismissal === "current-page") current.click();
+      else
+        f.emit("action", {
+          action: "close-overlay",
+          source: "overlay-dismissed",
+          eventId: "11111111-1111-4111-8111-111111111177",
+          authWindowGeneration: null,
+        });
+    });
+    expect(host.querySelector(".sidebar-overlay")).toBeNull();
+    expect(host.querySelector("main")?.hasAttribute("inert")).toBe(false);
+    expect(document.activeElement === trigger).toBe(true);
+    expect(f.api.configure).not.toHaveBeenCalled();
+    expect(f.api.task).not.toHaveBeenCalled();
+  },
+);
+it.each(["search", "update"] as const)(
+  "compact sidebar focus does not displace the %s dialog",
+  async (overlay) => {
+    const { host, c, f } = await compactSettingsShell();
+    await act(async () => c.overlay(overlay));
+    const dialogTarget = document.activeElement;
+    expect(host.querySelector("dialog")?.contains(dialogTarget)).toBe(true);
+    await act(async () => c.toggleSidebar(true));
+    expect(document.activeElement).toBe(dialogTarget);
+    await act(async () => c.toggleSidebar(true));
+    expect(document.activeElement).toBe(dialogTarget);
+    expect(f.api.configure).not.toHaveBeenCalled();
+    expect(f.api.task).not.toHaveBeenCalled();
+  },
+);
+it("compact sidebar focus does not restore its toggle after destination navigation", async () => {
+  const { host, c } = await compactSettingsShell();
+  const trigger = button(host, "Toggle sidebar");
+  await act(async () => trigger.click());
+  const target = button(host.querySelector("aside")!, "Appearance");
+  target.focus();
+  await act(async () => target.click());
+  expect(c.getSnapshot().destination.page).toBe("appearance");
+  expect(host.querySelector(".sidebar-overlay")).toBeNull();
+  expect(document.activeElement).not.toBe(trigger);
+});
+it("compact sidebar focus leaves desktop toggle focus unchanged", async () => {
+  const { host, c } = await mount();
+  const trigger = button(host, "Toggle sidebar");
+  trigger.focus();
+  await act(async () => c.toggleSidebar(false));
+  expect(document.activeElement).toBe(trigger);
+  await act(async () => c.toggleSidebar(false));
+  expect(document.activeElement).toBe(trigger);
+});
 it("resizes the page list with keyboard bounds and remembers its width only in this window", async () => {
   const { host, c, f } = await mount();
   const divider = host.querySelector<HTMLElement>('[role="separator"]')!;

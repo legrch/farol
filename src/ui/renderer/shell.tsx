@@ -1024,6 +1024,9 @@ export function Shell() {
   const destination = state.destination;
   const [activityFilter, setActivityFilter] = useState<ActivityFilter>("all");
   const stage = useRef<HTMLElement>(null);
+  const sidebarTrigger = useRef<HTMLButtonElement>(null);
+  const sidebarPanel = useRef<HTMLElement>(null);
+  const previousSidebar = useRef({ open: false, destination });
   const pageKey =
     destination.area === "settings" || destination.area === "setup"
       ? `${destination.area}:${destination.page}:${destination.setupStep ?? ""}`
@@ -1050,6 +1053,25 @@ export function Shell() {
   const sideVisible =
     state.sidebar === "overlay" || (state.sidebar === "full" && !compactWindow);
   const sidebarOverlay = sideVisible && state.sidebar === "overlay";
+  useLayoutEffect(() => {
+    const previous = previousSidebar.current;
+    previousSidebar.current = { open: sidebarOverlay, destination };
+    // Modal dialogs and destination views own their own focus transitions.
+    if (state.overlay !== "none") return;
+    if (sidebarOverlay && !previous.open) {
+      sidebarPanel.current
+        ?.querySelector<HTMLElement>(
+          "button:not(:disabled), select:not(:disabled), input:not(:disabled)",
+        )
+        ?.focus();
+    } else if (
+      !sidebarOverlay &&
+      previous.open &&
+      destination === previous.destination
+    ) {
+      sidebarTrigger.current?.focus();
+    }
+  }, [sidebarOverlay, destination, state.overlay]);
   const settings = destination.area === "settings";
   const settingsAttention = useSettingsAttention(facade, state);
   const configuration =
@@ -1134,6 +1156,7 @@ export function Shell() {
             <Icon name="forward" />
           </button>
           <button
+            ref={sidebarTrigger}
             title="Show or hide page list"
             aria-label="Toggle sidebar"
             aria-expanded={sideVisible}
@@ -1258,6 +1281,7 @@ export function Shell() {
       </nav>
       {sideVisible && (
         <aside
+          ref={sidebarPanel}
           className={`sidebar contextual-sidebar ${sidebarOverlay ? "sidebar-overlay" : ""}`}
           aria-label={settings ? "Settings pages" : "Page list"}
         >
