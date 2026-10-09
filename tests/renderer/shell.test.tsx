@@ -2253,6 +2253,92 @@ async function filterActivity(host: Element, value: "all" | "attention") {
     select.dispatchEvent(new Event("change", { bubbles: true }));
   });
 }
+it("Activity uses one focused toolbar leaf with the recorded event label across history", async () => {
+  const { host, c, f } = await activityFixture();
+  const leaf = () =>
+    host.querySelector<HTMLHeadingElement>(".toolbar-title h1");
+  expect(leaf()?.textContent).toBe("Task 1");
+  expect(leaf()?.tabIndex).toBe(-1);
+  expect(document.activeElement).toBe(leaf());
+  expect(host.querySelector(".activity-page h1")).toBeNull();
+  await act(async () => {
+    f.emit("tasks", {
+      revision: 2,
+      tasks: [{ ...task(), label: "New recorded work" }],
+    });
+    f.emit("event", {
+      ownerId: "owner",
+      sessionId: "task-1",
+      taskId: "task-1",
+      turnId: "task-1",
+      generation: 1,
+      at: 300,
+      kind: "turn.terminal",
+      phase: "completed",
+      code: "COMPLETED",
+    });
+  });
+  await act(async () =>
+    host.querySelector<HTMLButtonElement>(".activity-row")!.click(),
+  );
+  const newer = c.getSnapshot().destination.activityId;
+  expect(leaf()?.textContent).toBe("New recorded work");
+  await act(async () =>
+    host.querySelectorAll<HTMLButtonElement>(".activity-row")[1]!.click(),
+  );
+  const older = c.getSnapshot().destination.activityId;
+  expect(older).not.toBe(newer);
+  expect(leaf()?.textContent).toBe("Task 1");
+  await act(async () => button(host, "Back").click());
+  expect(c.getSnapshot().destination.activityId).toBe(newer);
+  expect(leaf()?.textContent).toBe("New recorded work");
+  await act(async () => button(host, "Forward").click());
+  expect(c.getSnapshot().destination.activityId).toBe(older);
+  expect(leaf()?.textContent).toBe("Task 1");
+  expect(f.api.task).not.toHaveBeenCalled();
+  expect(f.api.configure).not.toHaveBeenCalled();
+});
+it("Activity toolbar leaf follows the visible filter rather than an excluded selected event", async () => {
+  const { host, f } = await activityFixture();
+  await act(async () =>
+    host.querySelectorAll<HTMLButtonElement>(".activity-row")[1]!.click(),
+  );
+  expect(host.querySelector(".toolbar-title h1")?.textContent).toBe("Task 1");
+  await filterActivity(host, "attention");
+  expect(host.querySelector(".toolbar-title h1")?.textContent).toBe("Activity");
+  expect(host.querySelector(".activity-empty h2")?.textContent).toBe(
+    "Selected event is outside this filter",
+  );
+  await act(async () => button(host, "Show all activity").click());
+  expect(host.querySelector(".toolbar-title h1")?.textContent).toBe("Task 1");
+  expect(document.activeElement).toBe(host.querySelector(".toolbar-title h1"));
+  expect(f.api.task).not.toHaveBeenCalled();
+});
+it("Activity toolbar leaf does not invent a label for a missing event", async () => {
+  const { host, c } = await activityFixture();
+  await act(async () =>
+    c.navigate({ area: "activity", activityId: "missing" }),
+  );
+  expect(host.querySelector(".toolbar-title h1")?.textContent).toBe("Activity");
+  expect(host.querySelector(".activity-empty h2")?.textContent).toBe(
+    "Event no longer available",
+  );
+  expect(host.querySelector(".activity-page h1")).toBeNull();
+});
+it("Activity toolbar leaf names an empty view without a duplicated content heading", async () => {
+  const { host, c } = await mount();
+  await act(async () => c.navigate({ area: "activity", activityId: null }));
+  expect(host.querySelector(".toolbar-title h1")?.textContent).toBe("Activity");
+  expect(host.querySelector(".activity-empty h2")?.textContent).toBe(
+    "No activity yet",
+  );
+  expect(host.querySelector(".activity-page h1")).toBeNull();
+  await filterActivity(host, "attention");
+  expect(host.querySelector(".toolbar-title h1")?.textContent).toBe("Activity");
+  expect(host.querySelector(".activity-empty h2")?.textContent).toBe(
+    "No events need attention",
+  );
+});
 it("Activity contextual list filters actual unknown metadata and keeps selection stable", async () => {
   const { host, c, f } = await activityFixture();
   expect(host.querySelector(".activity-event strong")?.textContent).toBe(
@@ -2316,7 +2402,7 @@ it("Activity back and forward retain exact event identity after new events arriv
   expect(
     host.querySelector('.activity-row[aria-current="page"] small')?.textContent,
   ).toContain("outcome unknown");
-  expect(document.activeElement).toBe(host.querySelector(".activity-page h1"));
+  expect(document.activeElement).toBe(host.querySelector(".toolbar-title h1"));
 });
 it("Activity distinguishes first-use, attention-empty and missing selection without substitution", async () => {
   const { host, c, f } = await mount();
@@ -2374,7 +2460,7 @@ it.each(["page", "dialog"] as const)(
     const target =
       surface === "dialog"
         ? container.querySelector('button[aria-label="Close"]')
-        : container.querySelector("h1");
+        : host.querySelector(".toolbar-title h1");
     const trigger = button(container, "Show all activity");
     trigger.focus();
     expect(document.activeElement).toBe(trigger);
@@ -2496,7 +2582,7 @@ it("Activity retains legacy Home event inspector routing", async () => {
   );
   await act(async () => button(host, "Close").click());
   expect(c.getSnapshot().overlay).toBe("none");
-  expect(document.activeElement).toBe(host.querySelector(".activity-page h1"));
+  expect(document.activeElement).toBe(host.querySelector(".toolbar-title h1"));
 });
 it("Activity compact selection dismisses sidebar and focuses usable inline details", async () => {
   const { host, c } = await activityFixture();
@@ -2508,7 +2594,7 @@ it("Activity compact selection dismisses sidebar and focuses usable inline detai
   expect(c.getSnapshot().sidebar).toBe("rail");
   expect(host.querySelector("main")?.hasAttribute("inert")).toBe(false);
   expect(host.querySelectorAll(".activity-page .activity-row")).toHaveLength(2);
-  expect(document.activeElement).toBe(host.querySelector(".activity-page h1"));
+  expect(document.activeElement).toBe(host.querySelector(".toolbar-title h1"));
   await filterActivity(host, "attention");
   expect(host.querySelectorAll(".activity-page .activity-row")).toHaveLength(1);
 });

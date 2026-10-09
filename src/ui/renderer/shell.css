@@ -238,11 +238,18 @@ code {
   overflow: hidden;
   white-space: nowrap;
 }
-.toolbar-title strong {
+.toolbar-title strong,
+.toolbar-title h1 {
+  margin: 0;
   font-size: 12px;
   font-weight: 600;
+  letter-spacing: normal;
+  line-height: inherit;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+.toolbar-title:focus-within {
+  overflow: visible;
 }
 .toolbar-title span {
   color: var(--muted);
@@ -1496,7 +1503,6 @@ kbd {
   margin: 4px 0 0;
 }
 .activity-facts dd,
-.activity-page h1,
 .activity-event strong {
   overflow-wrap: anywhere;
 }
@@ -1511,7 +1517,7 @@ kbd {
   text-align: center;
   color: var(--muted);
 }
-.activity-page h1:focus-visible,
+.toolbar-title h1:focus-visible,
 .activity-navigation button:focus-visible,
 .activity-filter select:focus-visible,
 .activity-identifiers summary:focus-visible {

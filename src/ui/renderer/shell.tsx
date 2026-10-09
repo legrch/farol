@@ -47,7 +47,7 @@ export function Icon({ name }: { name: string }) {
 export function connection(snapshot: WindowSnapshot) {
   return computerSetup(snapshot).label;
 }
-function title(snapshot: WindowSnapshot) {
+function title(snapshot: WindowSnapshot, filter: ActivityFilter) {
   return snapshot.destination.area === "settings"
     ? (pages.find(([id]) => id === snapshot.destination.page)?.[1] ??
         "Settings")
@@ -56,7 +56,7 @@ function title(snapshot: WindowSnapshot) {
           (task) => task.taskId === snapshot.destination.taskId && task.agent,
         )?.label ?? "ChatGPT")
       : snapshot.destination.area === "activity"
-        ? "Activity"
+        ? activityTitle(snapshot, filter)
         : snapshot.destination.area === "setup"
           ? (setupSteps.find(
               ([step]) => step === snapshot.destination.setupStep,
@@ -68,6 +68,23 @@ function activityItems(snapshot: WindowSnapshot, filter: ActivityFilter) {
   return [...snapshot.activity]
     .reverse()
     .filter((event) => filter === "all" || event.phase === "outcome_unknown");
+}
+function activitySelection(snapshot: WindowSnapshot, filter: ActivityFilter) {
+  const items = activityItems(snapshot, filter);
+  const selected = snapshot.destination.activityId
+    ? snapshot.activity.find(
+        (event) => event.id === snapshot.destination.activityId,
+      )
+    : items[0];
+  const missing = Boolean(snapshot.destination.activityId && !selected);
+  const filtered = Boolean(
+    selected && !items.some((event) => event.id === selected.id),
+  );
+  return { items, selected, missing, filtered };
+}
+function activityTitle(snapshot: WindowSnapshot, filter: ActivityFilter) {
+  const { selected, filtered } = activitySelection(snapshot, filter);
+  return selected && !filtered ? selected.label : "Activity";
 }
 function activityPhase(event: WindowSnapshot["activity"][number]) {
   return event.phase?.replaceAll("_", " ") ?? "Phase not recorded";
@@ -290,23 +307,20 @@ function Activity({
   filter,
   onFilter,
   showList,
+  heading,
 }: {
   snapshot: WindowSnapshot;
   facade: RendererFacade;
   filter: ActivityFilter;
   onFilter: (filter: ActivityFilter) => void;
   showList: boolean;
+  heading: RefObject<HTMLHeadingElement | null>;
 }) {
-  const heading = useRef<HTMLHeadingElement>(null);
   const previousOverlay = useRef(snapshot.overlay);
-  const items = activityItems(snapshot, filter);
-  const selected = snapshot.destination.activityId
-    ? snapshot.activity.find(
-        (event) => event.id === snapshot.destination.activityId,
-      )
-    : items[0];
-  const missing = Boolean(snapshot.destination.activityId && !selected);
-  const filtered = selected && !items.some((event) => event.id === selected.id);
+  const { items, selected, missing, filtered } = activitySelection(
+    snapshot,
+    filter,
+  );
   useLayoutEffect(() => {
     const returningFrom = previousOverlay.current;
     previousOverlay.current = snapshot.overlay;
@@ -316,7 +330,12 @@ function Activity({
       (returningFrom === "none" || returningFrom === "activity")
     )
       heading.current?.focus();
-  }, [snapshot.destination.activityId, snapshot.sidebar, snapshot.overlay]);
+  }, [
+    heading,
+    snapshot.destination.activityId,
+    snapshot.sidebar,
+    snapshot.overlay,
+  ]);
   const emptyTitle = missing
     ? "Event no longer available"
     : filter === "all" && !snapshot.activity.length
@@ -359,9 +378,6 @@ function Activity({
     );
   return (
     <>
-      <h1 ref={heading} tabIndex={-1}>
-        {selected && !filtered ? selected.label : "Activity"}
-      </h1>
       <p className="description">
         Recorded stages and outcomes, without storing the conversation itself.
       </p>
@@ -1043,6 +1059,7 @@ export function Shell() {
   const destination = state.destination;
   const [activityFilter, setActivityFilter] = useState<ActivityFilter>("all");
   const stage = useRef<HTMLElement>(null);
+  const activityHeading = useRef<HTMLHeadingElement>(null);
   const sidebarTrigger = useRef<HTMLButtonElement>(null);
   const sidebarPanel = useRef<HTMLElement>(null);
   const previousSidebar = useRef({ open: false, destination });
@@ -1197,7 +1214,13 @@ export function Shell() {
               <span className="separator">/</span>
             </span>
           )}
-          <strong>{title(state)}</strong>
+          {destination.area === "activity" ? (
+            <h1 ref={activityHeading} tabIndex={-1}>
+              {title(state, activityFilter)}
+            </h1>
+          ) : (
+            <strong>{title(state, activityFilter)}</strong>
+          )}
           {state.environment === "dev" && <small>Development</small>}
         </div>
         <button
@@ -1426,6 +1449,7 @@ export function Shell() {
                 filter={activityFilter}
                 onFilter={setActivityFilter}
                 showList={!sideVisible}
+                heading={activityHeading}
               />
             </div>
           ) : (
