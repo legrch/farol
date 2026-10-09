@@ -61,6 +61,18 @@ malformed data, cursor cycles, partial results and changed grant/connection epoc
 are unknown. Observation never settles a pending mutation or issues admission.
 Provider terminal evidence and parent delivery acknowledgement remain separate.
 
+Root's `TaskProfile.SelectPublishedCodexRead` composes this same lazy client with
+the exact thread and turn from the existing Computer authority publication. It
+retains one reader/client for the profile lifetime, without selecting a Chat
+parent, admitting a Task, or writing either journal. Fresh current-source and
+exact-reference checks surround physical verification and later disclosure.
+Changed or withdrawn authority, a failed claim, and a lost connection cannot
+retarget or replace that lifetime. Its dispatch hook always refuses effects.
+Completed result text is opt-in provider-history evidence, not a retained Task
+journal result. This source composition does not register a native runtime or
+external tool; trusted profile/host qualification and real provider membership
+remain separate gates.
+
 Completed-parent follow-up uses `Task.Continue`, never `Message`. Trusted boot
 must supply `Options.Followup` with a `codex-followup-schema/v1` witness from
 `inspectCodexFollowupHostContract`. Its independent digest covers the descending

@@ -29,6 +29,7 @@ type TaskProfile struct {
 	closeJournal func() error
 	tasks        map[string]*taskProfileOwner
 	clients      map[*codexclient.Client]string
+	read         *taskReadSlot
 	routes       []*taskrepo.Route
 	closed       atomic.Bool
 	closeDone    chan struct{}
