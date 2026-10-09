@@ -872,45 +872,42 @@ function ChatBrowser({
   const relevant = intentions
     .map((kind) => snapshot.intents[`settings:${kind}:`])
     .filter((intent) => intent && intent.state !== "applied");
+  // Load status does not establish absence. Navigation presents the retained
+  // native view; opening and sign-in keep their explicit Connection intentions.
+  if (snapshot.route === "loaded" && relevant.length === 0) return null;
+  const unknown = relevant.some((intent) => intent?.state === "unknown");
+  const pending = relevant.some((intent) => intent?.state === "pending");
+  const failed = snapshot.route === "failed" || relevant.length > 0;
   return (
     <div className="native-browser-placeholder">
-      <p>
-        ChatGPT opens in its own browser view. Existing conversations belong to
-        ChatGPT.
+      <p
+        className="notice"
+        role={unknown || (failed && !pending) ? "alert" : "status"}
+      >
+        {unknown
+          ? "Opening ChatGPT is unconfirmed. See Diagnostics before repeating this action."
+          : pending
+            ? "Opening ChatGPT…"
+            : relevant.some(
+                  (intent) => intent?.code === "CHATGPT_SIGN_IN_IN_PROGRESS",
+                )
+              ? "Sign-in is already open in ChatGPT. Finish there, then check sign-in in Connection."
+              : failed
+                ? "ChatGPT could not be opened. Check Connection or see Diagnostics for details."
+                : "ChatGPT page status has not been confirmed. Check Connection for details."}
       </p>
       <div className="control-row">
-        {intentions.map((kind) => {
-          const intent = snapshot.intents[`settings:${kind}:`];
-          return (
-            <button
-              key={kind}
-              disabled={
-                snapshot.status !== "current" ||
-                intent?.state === "pending" ||
-                intent?.state === "unknown"
-              }
-              onClick={() =>
-                void facade.configure({ kind }, `settings:${kind}:`)
-              }
-            >
-              {kind === "chatgpt.open-browser" ? "Open ChatGPT" : "Sign in"}
-            </button>
-          );
-        })}
+        <button
+          onClick={() =>
+            facade.navigate({
+              area: "settings",
+              page: unknown ? "diagnostics" : "connection",
+            })
+          }
+        >
+          {unknown ? "Diagnostics" : "Connection"}
+        </button>
       </div>
-      {relevant.length > 0 && (
-        <p className="notice" role="status">
-          {relevant.some((intent) => intent?.state === "unknown")
-            ? "Opening ChatGPT is unconfirmed. See Diagnostics before repeating this action."
-            : relevant.some((intent) => intent?.state === "pending")
-              ? "Opening ChatGPT…"
-              : relevant.some(
-                    (intent) => intent?.code === "CHATGPT_SIGN_IN_IN_PROGRESS",
-                  )
-                ? "Sign-in is already open in ChatGPT. Finish there, then check sign-in in Connection."
-                : "ChatGPT could not be opened. Check Connection or see Diagnostics for details."}
-        </p>
-      )}
     </div>
   );
 }

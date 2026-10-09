@@ -7,6 +7,95 @@ import type { WindowSnapshot } from "../../src/ui/renderer/contract";
 import { bootstrap, deferred, fixture, settings, task } from "./fixture";
 import type { ConnectorSetupReceipt } from "../../src/pkg/product-settings/connector-setup-receipt";
 
+describe("Goal17 explicit ChatGPT presentation", () => {
+  // Projection-only: this fixture proves neither native placement nor provider state.
+  it.each(["loading", "loaded", "failed"] as const)(
+    "presents the retained %s route and returns to Setup without opening or selecting another task",
+    async (route) => {
+      const f = fixture();
+      const data = bootstrap();
+      vi.mocked(f.api.bootstrap).mockResolvedValue({
+        ...data,
+        taskRevision: 1,
+        tasks: [task("retained")],
+        selectedTaskId: "retained",
+      });
+      const c = new WindowController(f.api);
+      await c.start();
+      f.emit("route", { state: route });
+      c.navigate({ area: "setup", setupStep: "folders" });
+      const configuration = c.getSnapshot().configuration;
+      for (let entry = 0; entry < 2; entry++) {
+        c.navigate({ area: "chatgpt" });
+        expect(vi.mocked(f.api.layout).mock.calls.at(-1)?.slice(0, 3)).toEqual([
+          "browser",
+          "retained",
+          false,
+        ]);
+        expect(c.getSnapshot().route).toBe(route);
+        c.travel(-1);
+        expect(c.getSnapshot().destination).toMatchObject({
+          area: "setup",
+          setupStep: "folders",
+          taskId: "retained",
+        });
+        expect(vi.mocked(f.api.layout).mock.calls.at(-1)?.[0]).toBe("settings");
+        c.travel(1);
+        expect(c.getSnapshot().destination.area).toBe("chatgpt");
+        c.navigate({ area: "setup", setupStep: "folders" });
+      }
+      expect(c.getSnapshot().configuration).toBe(configuration);
+      expect(f.api.configure).not.toHaveBeenCalled();
+      expect(f.api.task).not.toHaveBeenCalled();
+      c.dispose();
+    },
+  );
+
+  it("does not infer page absence from the initial loading placeholder or an invalid route event", async () => {
+    const f = fixture();
+    const c = new WindowController(f.api);
+    await c.start();
+    expect(c.getSnapshot().route).toBe("loading");
+    f.emit("route", { state: "absent" });
+    c.navigate({ area: "chatgpt" });
+    expect(c.getSnapshot().route).toBe("loading");
+    expect(f.api.configure).not.toHaveBeenCalled();
+    expect(f.api.task).not.toHaveBeenCalled();
+    c.dispose();
+  });
+
+  it("keeps update applying and stale-state presentation guards on explicit ChatGPT entry", async () => {
+    const f = fixture();
+    const c = new WindowController(f.api);
+    await c.start();
+    c.navigate({ area: "setup", setupStep: "folders" });
+    f.emit("update", { phase: "applying", version: "1.0" });
+    const held = c.getSnapshot();
+    vi.mocked(f.api.layout).mockClear();
+    c.navigate({ area: "chatgpt" });
+    expect(c.getSnapshot()).toBe(held);
+    expect(f.api.layout).not.toHaveBeenCalled();
+    f.emit("update", { phase: "idle", checkedAt: null });
+    f.emit("runtime", {
+      state: "offline",
+      error: null,
+      identity: null,
+      embeddedNode: null,
+      embeddedElectron: null,
+    });
+    c.navigate({ area: "chatgpt" });
+    expect(c.getSnapshot().status).toBe("stale");
+    expect(vi.mocked(f.api.layout).mock.calls.at(-1)?.slice(0, 3)).toEqual([
+      "browser",
+      "",
+      true,
+    ]);
+    expect(f.api.configure).not.toHaveBeenCalled();
+    expect(f.api.task).not.toHaveBeenCalled();
+    c.dispose();
+  });
+});
+
 describe("normal Quit preference command provenance", () => {
   const off: WindowSnapshot["update"] = {
     phase: "idle",
