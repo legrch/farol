@@ -36,8 +36,10 @@ they do not qualify a native adapter.
 
 - Recovery observes retained state; it never downloads or dispatches a helper.
 - Ready requires verified bytes and confirmed durable retention. Later changes
-  presentation only. An explicit check clears a known admission blocker without
-  another download, and every subsequent apply must reacquire native admission.
+  presentation only. Apply stays blocked until an explicit check clears one of
+  the active updater's six known transient admission blockers without another
+  download. Unknown and unclassified blockers remain retained. Every subsequent
+  apply must reacquire native admission.
 - Readiness ACK is not installed success. Accepted/unknown handoff prevents
   further dispatch in that lifetime; malformed results are unknown.
 - A known discovery failure preserves independently measured local rollback.
