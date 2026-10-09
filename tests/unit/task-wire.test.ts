@@ -28,6 +28,7 @@ describe("selected Task common wire", () => {
     expect(methodKinds["task.create"]).toBe("effect");
     expect(methodKinds["task.continue"]).toBe("effect");
     expect(methodKinds["task.resume"]).toBe("effect");
+    expect(methodKinds["task.message"]).toBe("effect");
     for (const method of [
       "task.resolve",
       "task.observe",
@@ -37,7 +38,7 @@ describe("selected Task common wire", () => {
       "task.observation.read",
     ] as const)
       expect(methodKinds[method]).toBe("read");
-    for (const method of ["task.message", "task.cancel", "task.invoke"])
+    for (const method of ["task.cancel", "task.invoke"])
       expect(knownMethod(method)).toBe(false);
   });
   it("does not let a create body supply selection or authority", () => {
@@ -57,6 +58,35 @@ describe("selected Task common wire", () => {
       );
     expect(validate("TaskCreate", { message: "" })).toBe(false);
     expect(validate("TaskCreate", { message: "x".repeat(65537) })).toBe(false);
+  });
+  it("bounds active Message and leaves target selection with the Task owner", () => {
+    const message = { dispatchId: "create-1", message: "🍐".repeat(2048) };
+    expect(validate("TaskMessage", message)).toBe(true);
+    expect(
+      validate("TaskMessage", { ...message, message: "🍐".repeat(2049) }),
+    ).toBe(false);
+    expect(validate("TaskMessage", { message: "current task" })).toBe(false);
+    for (const field of [
+      "threadId",
+      "expectedTurnId",
+      "model",
+      "cwd",
+      "sandboxPolicy",
+      "taskEpoch",
+    ])
+      expect(
+        validate("TaskMessage", { ...message, [field]: "caller-selected" }),
+      ).toBe(false);
+    expect(
+      validate("TaskRoutedMessage", { handleId: "opaque", request: message }),
+    ).toBe(false);
+    expect(
+      validate("TaskRoutedMessage", {
+        handleId: "opaque",
+        request: message,
+        deadlineMillis: "1760000029000",
+      }),
+    ).toBe(true);
   });
   it("requires an exact parent dispatch and bounds retained observations", () => {
     expect(

@@ -128,6 +128,7 @@ function payload(
     case "task.create":
     case "task.continue":
     case "task.resume":
+    case "task.message":
       data = { operationId: operationId!, taskId, receipt: receipt(provider) };
       break;
     case "task.observe":
@@ -241,6 +242,13 @@ const calls = [
     effect: true,
   },
   {
+    method: "message",
+    wire: "task.message",
+    shape: "TaskMutation",
+    request: { dispatchId, message: "adjust active task" },
+    effect: true,
+  },
+  {
     method: "observe",
     wire: "task.observe",
     shape: "TaskStatus",
@@ -286,6 +294,8 @@ function invoke(bridge: TaskBridge, call: (typeof calls)[number]) {
       return bridge.continue(call.request, "original-continue");
     case "resume":
       return bridge.resume(call.request, "original-resume");
+    case "message":
+      return bridge.message(call.request, "original-message");
     case "observe":
       return bridge.observe();
     case "status":
@@ -390,7 +400,7 @@ describe("Task deadline mismatch with real desktop Client (controlled transport)
 
   // A timely ACK fits the original 30 s transport/29 s Go budget. Go separately
   // verifies queue, execution and settlement using that exact wire timestamp.
-  it.each(["create", "continue"] as const)(
+  it.each(["create", "continue", "message"] as const)(
     "accepts a valid original %s ACK at 17 seconds without stopping shared observation",
     async (method) => {
       const f = await transportFixture();
@@ -399,7 +409,7 @@ describe("Task deadline mismatch with real desktop Client (controlled transport)
         const pending =
           method === "create"
             ? f.bridge.create({ message: "once" }, operationId)
-            : f.bridge.continue({ dispatchId, message: "once" }, operationId);
+            : f.bridge[method]({ dispatchId, message: "once" }, operationId);
         const settled = pending.then(
           (data) => ({ data }),
           (error: unknown) => ({ error }),
@@ -410,7 +420,7 @@ describe("Task deadline mismatch with real desktop Client (controlled transport)
           handleId: handle.handleId,
           deadlineMillis: "1760000029000",
           request: {
-            ...(method === "continue" ? { dispatchId } : {}),
+            ...(method !== "create" ? { dispatchId } : {}),
             message: "once",
           },
         });
@@ -1123,14 +1133,9 @@ describe("opaque routed Task bridge", () => {
         "task.resolve",
         "task.create",
       ]);
-      for (const name of [
-        "select",
-        "message",
-        "cancel",
-        "deliver",
-        "reconnect",
-      ])
+      for (const name of ["select", "cancel", "deliver", "reconnect"])
         expect(Object.hasOwn(TaskBridge.prototype, name)).toBe(false);
+      expect(Object.hasOwn(TaskBridge.prototype, "message")).toBe(true);
     },
   );
   it.each(["requestId", "operationId", "profileId", "backendGeneration"])(
@@ -1236,6 +1241,68 @@ describe("opaque routed Task bridge", () => {
     ).rejects.toMatchObject({ code: "task_operation_already_attempted" });
     expect(f.request).toHaveBeenCalledTimes(1);
   });
+  it("does not replay Message after a lost ACK or a retained operation read", async () => {
+    const f = fixture();
+    const lost = new BridgeError("unknown", "response_timeout");
+    f.request.mockRejectedValueOnce(lost);
+    const request = { dispatchId, message: "one active adjustment" };
+    await expect(f.bridge.message(request, "steer-once")).rejects.toBe(lost);
+    await f.bridge.operationStatus({ operationId: "steer-once" });
+    await expect(f.bridge.message(request, "steer-once")).rejects.toMatchObject(
+      { code: "task_operation_already_attempted" },
+    );
+    await expect(
+      f.bridge.create({ message: "replacement" }, "steer-once"),
+    ).rejects.toMatchObject({ code: "task_operation_already_attempted" });
+    expect(f.request.mock.calls.map((c) => c[0])).toEqual([
+      "task.message",
+      "task.operation.status",
+    ]);
+  });
+  it.each([
+    { lifecycle: "completed" },
+    { result: "invented completion" },
+    { cancelRequested: true },
+    { reference: { threadId: "thread@provider" } },
+    { reference: { sessionId: "claude@provider", invocationId: "invocation" } },
+  ])(
+    "rejects a known Message ACK that claims other semantics: %j",
+    async (changed) => {
+      const f = fixture((_method, out) => ({
+        ...out,
+        data: {
+          ...(out.data as unknown as TaskMutation),
+          receipt: { ...receipt(), ...changed },
+        } as unknown as Json,
+      }));
+      await expect(
+        f.bridge.message({ dispatchId, message: "adjust" }, "steer"),
+      ).rejects.toMatchObject({
+        state: "unknown",
+        code: "task_response_crossed",
+      });
+      await expect(
+        f.bridge.message({ dispatchId, message: "adjust" }, "steer"),
+      ).rejects.toMatchObject({ code: "task_operation_already_attempted" });
+      expect(f.request).toHaveBeenCalledTimes(1);
+    },
+  );
+  it.each(["a".repeat(8193), "🍐".repeat(2049), ""])(
+    "rejects unbounded active input before consuming an operation",
+    async (message) => {
+      const f = fixture();
+      await expect(
+        f.bridge.message({ dispatchId, message }, "bounded-steer"),
+      ).rejects.toMatchObject({ state: "refused" });
+      expect(f.request).not.toHaveBeenCalled();
+      await expect(
+        f.bridge.message(
+          { dispatchId, message: "corrected bounded input" },
+          "bounded-steer",
+        ),
+      ).resolves.toHaveProperty("receipt");
+    },
+  );
   it("does not turn a lost reply or explicit retained observation into a second effect", async () => {
     const f = fixture();
     const lost = new BridgeError("unknown", "response_timeout");
@@ -1422,7 +1489,7 @@ describe("opaque routed Task bridge", () => {
       expect(f.request).toHaveBeenCalledTimes(1);
     },
   );
-  it.each(["continue", "resume"] as const)(
+  it.each(["continue", "resume", "message"] as const)(
     "validates the original %s body without new authority fields",
     async (method) => {
       const f = fixture();

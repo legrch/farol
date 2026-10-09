@@ -38,6 +38,7 @@
     "task.observation.read": "read",
     "task.codex.selected.read": "read",
     "task.resume": "effect",
+    "task.message": "effect",
     "chat.computer.read": "effect",
     "chat.computer.return": "effect",
     "chat.caller.begin": "effect",
@@ -2052,6 +2053,19 @@
         }
       }
     },
+    "TaskMessage": {
+      "type": "object",
+      "fields": {
+        "dispatchId": {
+          "type": "id"
+        },
+        "message": {
+          "type": "string",
+          "minBytes": 1,
+          "maxBytes": 8192
+        }
+      }
+    },
     "TaskDispatchRequest": {
       "type": "object",
       "fields": {
@@ -3143,6 +3157,20 @@
         },
         "request": {
           "type": "TaskResume"
+        }
+      }
+    },
+    "TaskRoutedMessage": {
+      "type": "object",
+      "fields": {
+        "deadlineMillis": {
+          "type": "decimal"
+        },
+        "handleId": {
+          "type": "id"
+        },
+        "request": {
+          "type": "TaskMessage"
         }
       }
     },

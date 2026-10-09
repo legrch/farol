@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"strconv"
 	"testing"
 	"time"
@@ -28,7 +29,7 @@ func taskSurfaceBody(t *testing.T, h *wire.TaskHandle, request any) string {
 		body["request"] = request
 	}
 	switch request.(type) {
-	case wire.TaskCreate, wire.TaskContinue, wire.TaskResume:
+	case wire.TaskCreate, wire.TaskContinue, wire.TaskResume, wire.TaskMessage:
 		body["deadlineMillis"] = strconv.FormatInt(time.Now().Add(29*time.Second).UnixMilli(), 10)
 	}
 	raw, err := json.Marshal(body)
@@ -183,7 +184,7 @@ func TestTaskSurfaceDeadlineRejectsBeforeQualificationOrAdmission(t *testing.T) 
 		t.Fatal(err)
 	}
 	now := time.Now()
-	for _, method := range []string{"task.create", "task.continue", "task.resume"} {
+	for _, method := range []string{"task.create", "task.continue", "task.resume", "task.message"} {
 		for _, value := range []any{nil, 1790000000000, "", "0", "-1", "01", "1.5", "NaN", "9223372036854775808", strconv.FormatInt(now.Add(-time.Second).UnixMilli(), 10), strconv.FormatInt(now.Add(time.Second).UnixMilli(), 10), strconv.FormatInt(now.Add(31*time.Second).UnixMilli(), 10)} {
 			r := desktop.Request{RequestID: "deadline-request", OperationID: "create-1", Body: taskDeadlineBody(t, h.HandleId, value)}
 			if method != "task.create" {
@@ -405,61 +406,83 @@ func TestTaskSurfaceDeadlineSettlementAndLostACKRetainOriginalOwner(t *testing.T
 
 // Hermetic deadline coverage: controlled CPU ports and in-memory framing only.
 func TestTaskSurfaceQueuedEffectCannotRenewItsOriginalDeadline(t *testing.T) {
-	f := taskProfileTestSetup(t, false)
-	s, err := NewTaskSurface(f.profile)
-	if err != nil {
-		t.Fatal(err)
-	}
-	h, err := s.SelectCodex(context.Background(), f.input)
-	if err != nil {
-		t.Fatal(err)
-	}
-	methods := s.Methods()
-	entered, release := make(chan struct{}), make(chan struct{})
-	methods["task.resolve"] = desktop.Method{Handle: func(context.Context, desktop.Request) (*desktop.Outcome, error) {
-		close(entered)
-		<-release
-		return &desktop.Outcome{Status: "unavailable", Code: "controlled_queue_holder"}, nil
-	}}
-	peer := taskWireTestConnectMethods(t, methods, f.profile.peer)
-	write := func(request wire.Request) error {
-		raw, err := json.Marshal(request)
-		if err != nil {
-			return err
-		}
-		return ipc.WriteFrame(peer.in, raw)
-	}
-	first := wire.Request{Jsonrpc: "2.0", Id: "queue-holder", Method: "task.resolve", Params: wire.Call{Context: &peer.scope, Body: json.RawMessage(taskSurfaceBody(t, h, nil))}}
-	if err := write(first); err != nil {
-		t.Fatal(err)
-	}
-	<-entered
-	// Only 50 ms of the execution window remains. While the original framed
-	// request waits behind the selected serialized owner, that window expires.
-	deadline := time.Now().Add(2050 * time.Millisecond).Truncate(time.Millisecond)
-	op := "original-queued-operation"
-	queued := wire.Request{Jsonrpc: "2.0", Id: "original-queued-request", Method: "task.create", Params: wire.Call{Context: &peer.scope, OperationId: &op, Body: taskDeadlineBody(t, h.HandleId, strconv.FormatInt(deadline.UnixMilli(), 10))}}
-	writeDone := make(chan error, 1)
-	go func() { writeDone <- write(queued) }()
-	timer := time.NewTimer(time.Until(deadline.Add(-2*time.Second)) + 10*time.Millisecond)
-	<-timer.C
-	close(release)
-	if _, err := ipc.ReadFrame(peer.out); err != nil {
-		t.Fatal(err)
-	}
-	if err := <-writeDone; err != nil {
-		t.Fatal(err)
-	}
-	raw, err := ipc.ReadFrame(peer.out)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var response wire.Response
-	if json.Unmarshal(raw, &response) != nil || response.Id == nil || *response.Id != queued.Id || response.Result == nil || response.Result.Status != "refused" || response.Result.OperationId == nil || *response.Result.OperationId != op {
-		t.Fatal("queue renewed deadline/identity", string(raw))
-	}
-	if f.task.store.snapshot != nil || f.task.pipe.launches.Load() != 0 {
-		t.Fatal("expired queued operation reached admission/provider")
+	for _, method := range []string{"task.create", "task.message"} {
+		t.Run(method, func(t *testing.T) {
+			f := taskProfileTestSetup(t, false)
+			s, err := NewTaskSurface(f.profile)
+			if err != nil {
+				t.Fatal(err)
+			}
+			h, err := s.SelectCodex(context.Background(), f.input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			methods := s.Methods()
+			if method == "task.message" {
+				if _, err := s.handles[h.HandleId].Create(context.Background(), "create", TaskIngressCreateRequest{Message: "original active task"}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			before, err := f.task.store.Read(context.Background(), "task")
+			if err != nil {
+				t.Fatal(err)
+			}
+			entered, release := make(chan struct{}), make(chan struct{})
+			methods["task.resolve"] = desktop.Method{Handle: func(context.Context, desktop.Request) (*desktop.Outcome, error) {
+				close(entered)
+				<-release
+				return &desktop.Outcome{Status: "unavailable", Code: "controlled_queue_holder"}, nil
+			}}
+			peer := taskWireTestConnectMethods(t, methods, f.profile.peer)
+			write := func(request wire.Request) error {
+				raw, err := json.Marshal(request)
+				if err != nil {
+					return err
+				}
+				return ipc.WriteFrame(peer.in, raw)
+			}
+			first := wire.Request{Jsonrpc: "2.0", Id: "queue-holder", Method: "task.resolve", Params: wire.Call{Context: &peer.scope, Body: json.RawMessage(taskSurfaceBody(t, h, nil))}}
+			if err := write(first); err != nil {
+				t.Fatal(err)
+			}
+			<-entered
+			// Only 50 ms of the execution window remains. While the original framed
+			// request waits behind the selected serialized owner, that window expires.
+			deadline := time.Now().Add(2050 * time.Millisecond).Truncate(time.Millisecond)
+			op := "original-queued-operation"
+			body := taskDeadlineBody(t, h.HandleId, strconv.FormatInt(deadline.UnixMilli(), 10))
+			if method == "task.message" {
+				body, err = json.Marshal(map[string]any{"handleId": h.HandleId, "deadlineMillis": strconv.FormatInt(deadline.UnixMilli(), 10), "request": map[string]any{"dispatchId": "create", "message": "must expire in the original queue"}})
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			queued := wire.Request{Jsonrpc: "2.0", Id: "original-queued-request", Method: method, Params: wire.Call{Context: &peer.scope, OperationId: &op, Body: body}}
+			writeDone := make(chan error, 1)
+			go func() { writeDone <- write(queued) }()
+			timer := time.NewTimer(time.Until(deadline.Add(-2*time.Second)) + 10*time.Millisecond)
+			<-timer.C
+			close(release)
+			if _, err := ipc.ReadFrame(peer.out); err != nil {
+				t.Fatal(err)
+			}
+			if err := <-writeDone; err != nil {
+				t.Fatal(err)
+			}
+			raw, err := ipc.ReadFrame(peer.out)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var response wire.Response
+			if json.Unmarshal(raw, &response) != nil || response.Id == nil || *response.Id != queued.Id || response.Result == nil || response.Result.Status != "refused" || response.Result.OperationId == nil || *response.Result.OperationId != op {
+				t.Fatal("queue renewed deadline/identity", string(raw))
+			}
+			after, err := f.task.store.Read(context.Background(), "task")
+			admitted, opErr := f.task.store.Lookup(context.Background(), op)
+			if err != nil || opErr != nil || !reflect.DeepEqual(after, before) || admitted != nil || f.task.pipe.count("turn/steer") != 0 || (method == "task.create" && f.task.pipe.launches.Load() != 0) {
+				t.Fatal("expired queued operation reached admission/provider", after, admitted, err, opErr)
+			}
+		})
 	}
 }
 
