@@ -230,6 +230,7 @@ func (s *computerConnector) Open(ctx context.Context, operation string, in wire.
 	renewal := &connectorRenewalScope{guard: guard, owner: slot.owner, seal: *ceiling}
 	slot.route.beforeAdmission = func(ctx context.Context) error { return s.root.refreshApproval(ctx, renewal) }
 	methods["computer.connector.verify"] = s.verificationMethod(slot)
+	methods["computer.connector.verification"] = s.verificationObservationMethodFor(slot)
 	if s.mutations != nil {
 		for name, method := range s.mutationMethods(slot) {
 			methods[name] = method

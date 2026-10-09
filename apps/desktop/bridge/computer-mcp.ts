@@ -3,6 +3,7 @@ import { McpServer, type CallToolResult } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import { BridgeError } from "./client.ts";
 import { ComputerBridge, type ComputerCall } from "./computer.ts";
+import { observeConnectionStatus } from "./connection-status.ts";
 import type { ConnectorMutationBridge } from "./connector-mutation.ts";
 import type { ConnectorProcessBridge } from "./connector-process.ts";
 import type { ConnectorVerificationBridge } from "./connector-verification.ts";
@@ -27,6 +28,7 @@ export type GoComputerMcpOptions = Readonly<{
   fence: GoComputerMcpFence;
   lifecycle?: GoComputerMcpLifecycle;
   verification?: Pick<ConnectorVerificationBridge, "verify">;
+  connectionStatus?: Pick<ConnectorVerificationBridge, "observe">;
   mutations?: Pick<ConnectorMutationBridge, "write" | "edit" | "read">;
   processes?: Pick<ConnectorProcessBridge, "start" | "read" | "cancel">;
 }>;
@@ -360,6 +362,32 @@ export function createGoComputerMcpServer(
     callId: call.requestId,
   });
 
+  if (options.connectionStatus) {
+    const observation = Object.freeze({
+      observe: options.connectionStatus.observe.bind(options.connectionStatus),
+    });
+    const exposure = Object.freeze({
+      workspaceMutations: Boolean(options.mutations),
+      processes: Boolean(options.processes),
+    });
+    server.registerTool(
+      "computer_connection_status",
+      {
+        title: "Check the current Farol connection",
+        description:
+          "Use for a general Farol test or connection check. No challenge is needed. Observes current Go authorization and its retained attachment proof, without another verification List, workspace file read, command or credential change. Registered tools are not proof that their operations were tested. A refusal must not be treated as a healthy connection.",
+        inputSchema: z.strictObject({}),
+        annotations,
+      },
+      async (_input, ctx) =>
+        run(ctx.mcpReq.signal, async (call) => ({
+          status: "ok",
+          requestId: call.requestId,
+          context: call.context,
+          data: await observeConnectionStatus(observation, exposure),
+        })),
+    );
+  }
   if (options.verification) {
     const verification = options.verification;
     server.registerTool(
@@ -367,7 +395,7 @@ export function createGoComputerMcpServer(
       {
         title: "Verify the current Go Computer connector",
         description:
-          "Use the owner-visible challenge and exact approved workspace ID. The current Go owner lists that workspace and retains a content-free observation. Repeated observation returns its original receipt without another List. This grants no authority and does not prove writes, shell or provider tasks.",
+          "Setup verification only: use the current owner-visible request with its exact challenge and workspace ID. Never invent a challenge or reuse one from a different connection. For a general test, use computer_connection_status if listed, otherwise catalogue; do not guess verification inputs. A matching completed verification returns its original receipt without another List. After refusal or UNKNOWN, do not resend. This grants no authority and proves no write, Shell or provider task.",
         inputSchema: z.strictObject({
           challenge: z.string().regex(/^[!-~]{1,160}$/u),
           workspaceId: IdentifierSchema,

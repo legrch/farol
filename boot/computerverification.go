@@ -122,6 +122,12 @@ func (s *computerConnector) verificationMethod(slot *connectorSlot) desktop.Meth
 }
 
 func (s *computerConnector) verificationObservationMethod() desktop.Method {
+	return s.verificationObservationMethodFor(nil)
+}
+
+// The trusted desktop host observes its current slot. A connector socket must
+// remain bound to the exact retained slot that originally published that socket.
+func (s *computerConnector) verificationObservationMethodFor(expected *connectorSlot) desktop.Method {
 	return desktop.Method{Handle: func(ctx context.Context, request desktop.Request) (*desktop.Outcome, error) {
 		if request.OperationID != "" || ipc.ValidateJSON(request.Body) != nil || wire.Validate("ComputerConnectorVerificationQuery", request.Body) != nil {
 			return invalidIngress()
@@ -135,7 +141,7 @@ func (s *computerConnector) verificationObservationMethod() desktop.Method {
 		}
 		defer func() { <-s.effects }()
 		slot := s.current
-		if slot == nil || slot.closing || slot.startupUncertain || in.Binding != slot.opened.Endpoint.Binding {
+		if slot == nil || expected != nil && slot != expected || slot.closing || slot.startupUncertain || in.Binding != slot.opened.Endpoint.Binding {
 			return ingressOutcome(nil, computerUnavailable())
 		}
 		lease, err := slot.route.admit(ctx, authority.List)

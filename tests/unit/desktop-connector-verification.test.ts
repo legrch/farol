@@ -146,6 +146,19 @@ it("refuses malformed input before any backend request", async () => {
   ).rejects.toMatchObject({ state: "refused" });
   expect(f.request).not.toHaveBeenCalled();
 });
+it.each(["old-runtime-challenge", "invented-challenge"])(
+  "refuses %s as a challenge mismatch before backend IO",
+  async (challenge) => {
+    const f = fixture();
+    await expect(
+      f.bridge.verify(challenge, "workspace", "new-call"),
+    ).rejects.toMatchObject({
+      state: "refused",
+      code: "CONNECTOR_VERIFICATION_CHALLENGE_MISMATCH",
+    });
+    expect(f.request).not.toHaveBeenCalled();
+  },
+);
 it("preserves a backend refusal and never fabricates a receipt", async () => {
   const f = fixture();
   f.request.mockImplementation(async (_m, _b, options) => ({

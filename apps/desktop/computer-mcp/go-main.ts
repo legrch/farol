@@ -24,8 +24,14 @@ export async function runGoComputerMcp(file: string): Promise<void> {
   const client = new SocketConnectorClient(launch.opened.endpoint);
   let mutations: ConnectorMutationBridge | undefined;
   let processes: ConnectorProcessBridge | undefined;
+  let connectionStatusAvailable = false;
   try {
     const identity = await client.connect();
+    // connect() has validated the actual endpoint handshake. An old backend
+    // without this method must not advertise a status tool that cannot work.
+    connectionStatusAvailable = identity.capabilities.includes(
+      "computer.connector.verification",
+    );
     if (connectorSupportsMutations(identity)) {
       mutations = new ConnectorMutationBridge(
         client,
@@ -63,6 +69,9 @@ export async function runGoComputerMcp(file: string): Promise<void> {
           lifecycle,
           fence,
           verification,
+          ...(connectionStatusAvailable
+            ? { connectionStatus: verification }
+            : {}),
           ...(mutations ? { mutations } : {}),
           ...(processes ? { processes } : {}),
         },

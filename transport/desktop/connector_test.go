@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"io"
 	"net"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -17,7 +18,7 @@ import (
 
 // In-memory pipes qualify framing/authentication only, not filesystem modes,
 // OS peer credentials, native sockets, module authority or app/MCP composition.
-func connectorFixture(t *testing.T) (net.Conn, ConnectorConfig, *atomic.Int32, <-chan error) {
+func connectorFixture(t *testing.T, readMethods ...string) (net.Conn, ConnectorConfig, *atomic.Int32, <-chan error) {
 	t.Helper()
 	client, server := net.Pipe()
 	binding := wire.ComputerConnectorBinding{BuildId: "build", ProfileId: "profile", BackendGeneration: "backend", RuntimeId: "connector-runtime", ConnectorGeneration: "9007199254740993"}
@@ -26,6 +27,9 @@ func connectorFixture(t *testing.T) (net.Conn, ConnectorConfig, *atomic.Int32, <
 		calls.Add(1)
 		return &Outcome{Status: "ok", Data: json.RawMessage(`{}`)}, nil
 	}}}}
+	for _, name := range readMethods {
+		config.Methods[name] = config.Methods["computer.workspace.list"]
+	}
 	done := make(chan error, 1)
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() { done <- serveConnectorConnection(ctx, server, config) }()
@@ -34,6 +38,45 @@ func connectorFixture(t *testing.T) (net.Conn, ConnectorConfig, *atomic.Int32, <
 		t.Fatal(err)
 	}
 	return client, config, calls, done
+}
+
+func TestConnectionVerificationObservationHandshakeAndReadOnlyDispatch(t *testing.T) {
+	client, config, calls, done := connectorFixture(t, "computer.connector.verification")
+	writeConnectorJSON(t, client, wire.ComputerConnectorHello{Binding: config.Endpoint.Binding, Token: config.Endpoint.Token})
+	var authenticated wire.ComputerConnectorBinding
+	readConnectorJSON(t, client, &authenticated)
+	writeConnectorJSON(t, client, map[string]any{"jsonrpc": "2.0", "id": "hello", "method": "core.handshake", "params": map[string]any{"body": wire.Handshake{ProtocolMajor: wire.ProtocolMajor, ProtocolMinor: wire.ProtocolMinor, BuildId: "build", ProfileId: "profile"}}})
+	var reply wire.Response
+	readConnectorJSON(t, client, &reply)
+	if reply.Result == nil || reply.Result.Status != "ok" {
+		t.Fatal("observation config failed handshake")
+	}
+	var identity wire.Identity
+	if json.Unmarshal(reply.Result.Data, &identity) != nil || !slices.Contains(identity.Capabilities, "computer.connector.verification") {
+		t.Fatal("missing observation capability")
+	}
+	ctx := reply.Result.Context
+	for i, operation := range []string{"", "forbidden-effect"} {
+		params := map[string]any{"context": ctx, "body": map[string]any{}}
+		if operation != "" {
+			params["operationId"] = operation
+		}
+		writeConnectorJSON(t, client, map[string]any{"jsonrpc": "2.0", "id": []string{"observe", "forbidden-effect"}[i], "method": "computer.connector.verification", "params": params})
+		readConnectorJSON(t, client, &reply)
+		if i == 0 && (reply.Result == nil || reply.Result.Status != "ok") {
+			t.Fatalf("read-only observation failed: %+v", reply)
+		}
+		if i == 1 && reply.Error == nil && (reply.Result == nil || reply.Result.Status == "ok") {
+			t.Fatalf("effect-like observation accepted: %+v", reply)
+		}
+	}
+	if calls.Load() != 1 {
+		t.Fatal("effect-like observation reached handler")
+	}
+	_ = client.Close()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
 }
 func writeConnectorJSON(t *testing.T, w io.Writer, value any) {
 	t.Helper()

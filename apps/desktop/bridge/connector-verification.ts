@@ -38,6 +38,16 @@ export class ConnectorVerificationBridge {
     const body = { challenge, workspaceId, callId };
     if (!validate("ComputerConnectorVerify", body))
       throw new BridgeError("refused", "invalid_connector_verification");
+    // A stale or invented setup phrase is not an unavailable authority store.
+    // Reject it before IO; Go still owns all actual admission and observation.
+    if (
+      createHash("sha256").update(challenge).digest("hex") !==
+      this.challengeSha256
+    )
+      throw new BridgeError(
+        "refused",
+        "CONNECTOR_VERIFICATION_CHALLENGE_MISMATCH",
+      );
     const result = await this.request("computer.connector.verify", body);
     if (
       !result.receipt ||
