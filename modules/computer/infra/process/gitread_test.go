@@ -39,6 +39,27 @@ func gitReadFixture(t *testing.T) (SeatbeltSelection, Command) {
 	return s, c
 }
 
+func TestGitReadArgumentsPreserveExactClosedView(t *testing.T) {
+	s, _ := gitReadFixture(t)
+	// Literal expectations keep view identity independent of the helper used by
+	// both command construction and the compiler's closed-argv validation.
+	for _, test := range []struct {
+		view GitReadView
+		want []string
+	}{
+		{GitReadStatus, []string{"--no-pager", "--git-dir=/approved/metadata/worktrees/writer", "--work-tree=/approved/work/project", "status", "--porcelain=v1", "-z"}},
+		{GitReadDiff, []string{"--no-pager", "--git-dir=/approved/metadata/worktrees/writer", "--work-tree=/approved/work/project", "diff", "--no-color", "--"}},
+		{GitReadStagedDiff, []string{"--no-pager", "--git-dir=/approved/metadata/worktrees/writer", "--work-tree=/approved/work/project", "diff", "--cached", "--no-color", "--"}},
+	} {
+		t.Run(string(test.view), func(t *testing.T) {
+			got, err := GitReadArguments(*s.GitRead, test.view)
+			if err != nil || !slices.Equal(got, test.want) {
+				t.Fatalf("closed view arguments = %v, error = %v; want %v", got, err, test.want)
+			}
+		})
+	}
+}
+
 func TestGitReadClosedViewsAndStrictReadOnlyProfile(t *testing.T) {
 	for _, view := range []GitReadView{GitReadStatus, GitReadDiff, GitReadStagedDiff} {
 		s, c := gitReadFixture(t)
