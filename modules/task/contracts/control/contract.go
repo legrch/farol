@@ -94,6 +94,12 @@ type ContinueExactRequest struct {
 type ResumeExactRequest struct {
 	OperationID, TaskID, Message, ExpectedDispatchID string
 }
+
+// MessageExactRequest guards the existing active dispatch inside the owner;
+// it supplies neither a new provider target nor a new admission epoch.
+type MessageExactRequest struct {
+	OperationID, TaskID, Message, ExpectedDispatchID string
+}
 type CancelRequest struct{ OperationID, TaskID string }
 type TaskRequest struct{ TaskID string }
 type OperationRequest struct{ OperationID string }
@@ -303,6 +309,16 @@ func (c *Contract) Resume(ctx context.Context, req FollowupRequest) (*MutationRe
 }
 func (c *Contract) Message(ctx context.Context, req FollowupRequest) (*MutationResponse, error) {
 	return c.followup(ctx, req, task.Message)
+}
+func (c *Contract) MessageExact(ctx context.Context, req MessageExactRequest) (*MutationResponse, error) {
+	if err := c.ready(ctx); err != nil {
+		return nil, err
+	}
+	out, err := c.service.MessageExact(ctx, tasksvc.MessageExactRequest{OperationID: req.OperationID, TaskID: req.TaskID, Message: req.Message, ExpectedDispatchID: req.ExpectedDispatchID})
+	if err != nil {
+		return nil, classify(err)
+	}
+	return mutation(out), nil
 }
 func (c *Contract) Cancel(ctx context.Context, req CancelRequest) (*MutationResponse, error) {
 	return c.followup(ctx, FollowupRequest{OperationID: req.OperationID, TaskID: req.TaskID}, task.Cancel)

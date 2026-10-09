@@ -43,6 +43,7 @@ type taskIngressTestPipe struct {
 	launches            atomic.Int32
 	readReplyBytes      atomic.Int64
 	dropTurn            bool
+	dropSteer           bool
 	bareRead            bool
 	threadReads         int
 	lateMembershipField string
@@ -126,7 +127,7 @@ func (f *taskIngressTestPipe) Launch(ctx context.Context, s codexclient.Selectio
 			if err != nil {
 				f.replyError = req.Method + ": " + err.Error()
 			}
-			drop := req.Method == "turn/start" && f.dropTurn
+			drop := (req.Method == "turn/start" && f.dropTurn) || (req.Method == "turn/steer" && f.dropSteer)
 			notifications := f.notifications
 			f.mu.Unlock()
 			if err != nil || drop {
@@ -271,6 +272,19 @@ func (f *taskIngressTestPipe) reply(q taskIngressTestRPC) (any, error) {
 			thread["status"] = map[string]any{"type": state, "activeFlags": []string{}}
 		}
 		return map[string]any{"thread": thread}, nil
+	case "turn/steer":
+		if len(q.Params) != 3 || taskIngressTestString(q.Params, "threadId") != "thread-exact" {
+			return nil, errors.New("steer selected another thread or policy")
+		}
+		id := taskIngressTestString(q.Params, "expectedTurnId")
+		if len(f.turns) == 0 || f.turns[len(f.turns)-1] != (taskIngressTestTurn{id, "inProgress"}) {
+			return nil, errors.New("steer selected another active turn")
+		}
+		var input []map[string]json.RawMessage
+		if json.Unmarshal(q.Params["input"], &input) != nil || len(input) != 1 || taskIngressTestString(input[0], "type") != "text" || taskIngressTestString(input[0], "text") == "" {
+			return nil, errors.New("steer input changed")
+		}
+		return map[string]any{"turnId": id}, nil
 	case "thread/turns/list":
 		if taskIngressTestString(q.Params, "threadId") != "thread-exact" {
 			return nil, errors.New("foreign turns")
@@ -403,7 +417,7 @@ func TestTaskIngressConcreteCodexCreateObserveResultFollowup(t *testing.T) {
 		t.Fatal("constructor connected")
 	}
 	resolved, err := f.ingress.Resolve(ctx)
-	if err != nil || !resolved.Capabilities.Create || !resolved.Capabilities.Continue || resolved.Capabilities.Message || resolved.Capabilities.Cancel || resolved.Binding.Model != "fixture-model" {
+	if err != nil || !resolved.Capabilities.Create || !resolved.Capabilities.Continue || !resolved.Capabilities.Message || resolved.Capabilities.Cancel || resolved.Binding.Model != "fixture-model" {
 		t.Fatal(resolved, err)
 	}
 	created, err := f.ingress.Create(ctx, "create-1", TaskIngressCreateRequest{Message: "bounded source task"})

@@ -23,6 +23,10 @@ type TaskIngressResumeRequest struct {
 	DispatchID string `json:"dispatchId"`
 	Message    string `json:"message"`
 }
+type TaskIngressMessageRequest struct {
+	DispatchID string `json:"dispatchId"`
+	Message    string `json:"message"`
+}
 type TaskIngressDispatchRequest struct {
 	DispatchID string `json:"dispatchId"`
 }
@@ -194,6 +198,22 @@ func (g *TaskIngress) Resume(ctx context.Context, operationID string, req TaskIn
 		return nil, err
 	}
 	out, err := g.runtime.Control().ResumeExact(ctx, controlct.ResumeExactRequest{OperationID: operationID, TaskID: g.scope.TaskID, Message: req.Message, ExpectedDispatchID: req.DispatchID})
+	if err != nil {
+		return nil, taskIngressError(err)
+	}
+	return out, nil
+}
+
+// Message targets this selected active dispatch through the original owner.
+// The service owns replay/UNKNOWN fences; no read refreshes admission here.
+func (g *TaskIngress) Message(ctx context.Context, operationID string, req TaskIngressMessageRequest) (*controlct.MutationResponse, error) {
+	if err := g.ready(ctx); err != nil {
+		return nil, err
+	}
+	if err := g.selectedAdmission(ctx, false); err != nil {
+		return nil, err
+	}
+	out, err := g.runtime.Control().MessageExact(ctx, controlct.MessageExactRequest{OperationID: operationID, TaskID: g.scope.TaskID, Message: req.Message, ExpectedDispatchID: req.DispatchID})
 	if err != nil {
 		return nil, taskIngressError(err)
 	}

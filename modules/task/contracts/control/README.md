@@ -23,6 +23,7 @@ executor, model registry, Chat Turn or browser slot.
 | Continue            | Service.Control(Continue)               | Codex same thread, distinct turn, settled predecessor and fresh trusted admission route.                               |
 | Resume              | Service.Control(Resume)                 | Claude exact session, new Farol invocation, settled predecessor and fresh trusted admission route; never active input. |
 | Message             | Service.Control(Message)                | Only declared active-input capability and exact current issued reference.                                              |
+| MessageExact        | Service.MessageExact                    | Existing active dispatch guarded in the original snapshot/journal CAS and replay fingerprint; no new turn or epoch.    |
 | Cancel              | Service.Control(Cancel)                 | Only declared capability; requested ACK stays separate from terminal cleanup.                                          |
 | Operation/reconnect | Service.Operation                       | Retained exact operation/lineage/receipt; no provider calls or replay effects.                                         |
 | Observe metadata    | existing observation.Contract.Read      | Bounded retained events/result/delivery facts on the SAME service; no parallel facade here.                            |

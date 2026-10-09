@@ -37,6 +37,19 @@ func (s *Service) ResumeExact(ctx context.Context, req ResumeExactRequest) (*Mut
 	return s.control(ctx, MutationRequest{OperationID: req.OperationID, TaskID: req.TaskID, Message: req.Message, Action: task.Resume}, req.ExpectedDispatchID)
 }
 
+// MessageExactRequest selects the existing active dispatch, not a new turn.
+// The owner captures its provider reference in the same snapshot/journal CAS.
+type MessageExactRequest struct {
+	OperationID, TaskID, Message, ExpectedDispatchID string
+}
+
+func (s *Service) MessageExact(ctx context.Context, req MessageExactRequest) (*MutationResponse, error) {
+	if !task.ID(req.ExpectedDispatchID) {
+		return nil, task.ErrInvalid
+	}
+	return s.control(ctx, MutationRequest{OperationID: req.OperationID, TaskID: req.TaskID, Message: req.Message, Action: task.Message}, req.ExpectedDispatchID)
+}
+
 // Control distinguishes active Message/Cancel from terminal Continue/Resume.
 func (s *Service) Control(ctx context.Context, req MutationRequest) (*MutationResponse, error) {
 	return s.control(ctx, req, "")
