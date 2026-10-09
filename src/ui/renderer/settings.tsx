@@ -805,18 +805,40 @@ function AppearancePage({ snapshot, facade }: PageProps) {
 }
 function Folders(props: PageProps) {
   const { settings, facade, snapshot, actions } = props;
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const requestedId = snapshot.destination.workspaceId ?? null;
+  const [selection, setSelection] = useState({
+    requestedId,
+    id: requestedId,
+  });
+  // Honor a new destination immediately, while retaining ordinary local selection.
+  const selectedId =
+    selection.requestedId === requestedId
+      ? selection.id
+      : (requestedId ?? selection.id);
+  useEffect(() => {
+    setSelection((previous) =>
+      previous.requestedId === requestedId
+        ? previous
+        : { requestedId, id: requestedId ?? previous.id },
+    );
+  }, [requestedId]);
+  const selectWorkspace = (id: string) => setSelection({ requestedId, id });
+  const explicitSelection = requestedId !== null && selectedId === requestedId;
   const selected =
     settings.computer.workspaces.find(
       (item) => item.workspaceId === selectedId,
     ) ??
-    (props.setupStep
-      ? settings.computer.workspaces.find(
-          (item) =>
-            item.workspaceId === settings.setup.computer.verified?.workspaceId,
-        )
-      : undefined) ??
-    settings.computer.workspaces[0];
+    (explicitSelection
+      ? undefined
+      : props.setupStep
+        ? settings.computer.workspaces.find(
+            (item) =>
+              item.workspaceId ===
+              settings.setup.computer.verified?.workspaceId,
+          )
+        : undefined) ??
+    (explicitSelection ? undefined : settings.computer.workspaces[0]);
+  const unavailableSelection = explicitSelection && !selected;
   const detailId = useId();
   const [picked, setPicked] = useState<WindowSnapshot["evidence"]>(null);
   const pickCurrent =
@@ -849,7 +871,7 @@ function Folders(props: PageProps) {
           its files.
         </p>
       )}
-      {selected && (
+      {(selected || unavailableSelection) && (
         <div className="workspace-layout">
           <nav className="workspace-picker" aria-label="Approved workspaces">
             {settings.computer.workspaces.map((workspace) => (
@@ -859,12 +881,12 @@ function Folders(props: PageProps) {
                 className="workspace-choice"
                 aria-label={`Select workspace ${folderDisplayName(workspace)}`}
                 aria-current={
-                  workspace.workspaceId === selected.workspaceId
+                  workspace.workspaceId === selected?.workspaceId
                     ? "true"
                     : undefined
                 }
                 aria-controls={detailId}
-                onClick={() => setSelectedId(workspace.workspaceId)}
+                onClick={() => selectWorkspace(workspace.workspaceId)}
               >
                 <strong>{folderDisplayName(workspace)}</strong>
                 <span>
@@ -874,12 +896,19 @@ function Folders(props: PageProps) {
               </button>
             ))}
           </nav>
-          <WorkspaceDetail
-            key={selected.workspaceId}
-            {...props}
-            workspace={selected}
-            detailId={detailId}
-          />
+          {selected ? (
+            <WorkspaceDetail
+              key={selected.workspaceId}
+              {...props}
+              workspace={selected}
+              detailId={detailId}
+            />
+          ) : (
+            <p id={detailId} className="notice" role="status">
+              Selected workspace is no longer available. Choose an available
+              workspace to inspect its access.
+            </p>
+          )}
         </div>
       )}
       <div className="workspace-add">
@@ -926,7 +955,7 @@ function Folders(props: PageProps) {
                         (item) => item.workspaceId === selected.workspaceId,
                       )
                     )
-                      setSelectedId(selected.workspaceId);
+                      selectWorkspace(selected.workspaceId);
                   });
               }}
             >

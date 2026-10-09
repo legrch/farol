@@ -1605,6 +1605,17 @@ export class WindowController implements RendererFacade {
       ? destination.activityId
       : this.state.destination.activityId;
     if (activityId !== undefined) Object.assign(next, { activityId });
+    const workspaceId = Object.hasOwn(destination, "workspaceId")
+      ? destination.workspaceId
+      : destination.area === undefined && destination.page === undefined
+        ? this.state.destination.workspaceId
+        : undefined;
+    if (
+      next.area === "settings" &&
+      next.page === "folders" &&
+      workspaceId !== undefined
+    )
+      Object.assign(next, { workspaceId });
     if (homeView) Object.assign(next, { homeView });
     const homeSelection = Object.hasOwn(destination, "homeSelection")
       ? destination.homeSelection

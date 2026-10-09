@@ -73,6 +73,8 @@ export type Destination = Readonly<{
   }> | null;
   setupStep?: SetupStep;
   activityId?: string | null;
+  /** Workspace presentation selection only; never an active Computer binding. */
+  workspaceId?: string | null;
 }>;
 export type HomeView =
   "overview" | "work" | "attention" | "activity" | "access";

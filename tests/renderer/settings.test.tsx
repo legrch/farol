@@ -4,6 +4,7 @@ import { createRoot } from "react-dom/client";
 import type { Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Settings } from "../../src/ui/renderer/settings";
+import { Home } from "../../src/ui/renderer/home";
 import { Setup } from "../../src/ui/renderer/setup";
 import { WindowController } from "../../src/ui/renderer/controller";
 import type {
@@ -264,6 +265,7 @@ async function mount(
   setupStep?: "signin" | "connection" | "folders" | "attachment",
   wizard = false,
   signInState: "authenticated" | "signed_out" | "unknown" = "signed_out",
+  home = false,
 ) {
   Object.assign(globalThis.crypto, { randomUUID });
   let activeSetupStep = setupStep;
@@ -314,6 +316,8 @@ async function mount(
     const snapshot = useSyncExternalStore(c.subscribe, c.getSnapshot);
     if (wizard && snapshot.destination.area === "setup")
       return <Setup snapshot={snapshot} facade={c} />;
+    if (home && snapshot.destination.area === "home")
+      return <Home snapshot={snapshot} facade={c} />;
     return snapshot.destination.area === "settings" ? (
       <Settings snapshot={snapshot} facade={c} setupStep={activeSetupStep} />
     ) : null;
@@ -448,6 +452,120 @@ describe("compact workspace detail", () => {
   }
   const status = (h: Awaited<ReturnType<typeof mount>>) =>
     activePage(h.host).querySelector(".workspace-feedback")!;
+  it("opens Home's exact second workspace through history, refresh and removal without changing access", async () => {
+    const value = twoWorkspaces();
+    const h = await mount(
+      "folders",
+      value,
+      "preview",
+      undefined,
+      undefined,
+      false,
+      "signed_out",
+      true,
+    );
+    const configuration = h.c.getSnapshot().configuration;
+    const binding = value.setup.computer.verified;
+    await act(async () =>
+      h.c.navigate({
+        area: "home",
+        homeView: "attention",
+        homeSelection: { kind: "attention", id: `folder:${selectionId}` },
+      }),
+    );
+    expect(h.host.textContent).toContain("second needs an access check");
+    await act(async () =>
+      h.host
+        .querySelector<HTMLButtonElement>(".home-candidate-actions button")!
+        .click(),
+    );
+    const selected = () =>
+      activePage(h.host).querySelector(
+        '.workspace-choice[aria-current="true"]',
+      );
+    expect(selected()?.getAttribute("aria-label")).toBe(
+      "Select workspace second",
+    );
+    expect(
+      activePage(h.host)
+        .querySelector(".workspace-detail")
+        ?.getAttribute("aria-label"),
+    ).toBe("Workspace second");
+    expect(h.c.getSnapshot().configuration).toBe(configuration);
+    await act(async () => h.c.travel(-1));
+    expect(h.host.textContent).toContain("second needs an access check");
+    await act(async () => h.c.travel(1));
+    expect(selected()?.getAttribute("aria-label")).toBe(
+      "Select workspace second",
+    );
+    await refresh(h, structuredClone(value));
+    expect(selected()?.getAttribute("aria-label")).toBe(
+      "Select workspace second",
+    );
+    const removed = structuredClone(value);
+    removed.revision++;
+    removed.computer.workspaces = removed.computer.workspaces.filter(
+      (workspace) => workspace.workspaceId !== selectionId,
+    );
+    await refresh(h, removed);
+    expect(activePage(h.host).textContent).toContain(
+      "Selected workspace is no longer available",
+    );
+    expect(selected()).toBeNull();
+    expect(activePage(h.host).querySelector(".workspace-detail")).toBeNull();
+    const remaining = activePage(h.host).querySelector(
+      '[aria-label="Select workspace project"]',
+    )!;
+    expect(
+      document.getElementById(remaining.getAttribute("aria-controls")!)
+        ?.textContent,
+    ).toContain("Selected workspace is no longer available");
+    expect(h.c.getSnapshot().destination.workspaceId).toBe(selectionId);
+    const current = h.c.getSnapshot().configuration;
+    expect(
+      current?.status === "ready" && current.settings.setup.computer.verified,
+    ).toEqual(binding);
+    expect(h.calls()).toEqual([]);
+    expect(h.f.api.task).not.toHaveBeenCalled();
+    expect(h.f.api.snapshot).not.toHaveBeenCalled();
+    await select(h, "project");
+    expect(selected()?.getAttribute("aria-label")).toBe(
+      "Select workspace project",
+    );
+    expect(h.calls()).toEqual([]);
+  });
+  it("keeps an unavailable explicit workspace separate from a generic Workspace entry", async () => {
+    const h = await mount(
+      "folders",
+      twoWorkspaces(),
+      "preview",
+      undefined,
+      undefined,
+      false,
+      "signed_out",
+      true,
+    );
+    await act(async () =>
+      h.c.navigate({
+        area: "settings",
+        page: "folders",
+        workspaceId: "removed",
+      }),
+    );
+    expect(activePage(h.host).textContent).toContain(
+      "Selected workspace is no longer available",
+    );
+    expect(activePage(h.host).querySelector(".workspace-detail")).toBeNull();
+    await act(async () => h.c.navigate({ area: "home" }));
+    await act(async () => h.c.navigate({ area: "settings", page: "folders" }));
+    expect(
+      activePage(h.host)
+        .querySelector('.workspace-choice[aria-current="true"]')
+        ?.getAttribute("aria-label"),
+    ).toBe("Select workspace project");
+    expect(h.calls()).toEqual([]);
+    expect(h.f.api.task).not.toHaveBeenCalled();
+  });
   it("selects with native buttons and keeps active Computer binding unchanged across background updates", async () => {
     const value = twoWorkspaces();
     const h = await mount("folders", value);

@@ -962,6 +962,35 @@ it("Home local views and exact record identities survive Back and Forward withou
   expect(f.api.task).not.toHaveBeenCalled();
   c.dispose();
 });
+it("workspace presentation identity belongs to the exact Settings history entry and generic entry clears it", async () => {
+  const f = fixture();
+  const c = new WindowController(f.api);
+  await c.start();
+  const configuration = c.getSnapshot().configuration;
+  c.navigate({
+    area: "home",
+    homeView: "attention",
+    homeSelection: { kind: "attention", id: "folder:second" },
+  });
+  const home = c.getSnapshot().destination;
+  c.navigate({ area: "settings", page: "folders", workspaceId: "second" });
+  expect(c.getSnapshot().destination.workspaceId).toBe("second");
+  c.travel(-1);
+  expect(c.getSnapshot().destination).toEqual(home);
+  c.travel(1);
+  expect(c.getSnapshot().destination.workspaceId).toBe("second");
+  c.navigate({ area: "home" });
+  c.navigate({ area: "settings", page: "folders" });
+  expect(c.getSnapshot().destination.workspaceId).toBeUndefined();
+  c.travel(-1);
+  c.travel(-1);
+  expect(c.getSnapshot().destination.workspaceId).toBe("second");
+  expect(c.getSnapshot().configuration).toBe(configuration);
+  expect(f.api.configure).not.toHaveBeenCalled();
+  expect(f.api.task).not.toHaveBeenCalled();
+  expect(f.api.snapshot).not.toHaveBeenCalled();
+  c.dispose();
+});
 it("Setup is a separate history destination with the same Settings host surface and no automatic effects", async () => {
   const f = fixture();
   const c = new WindowController(f.api);
