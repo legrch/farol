@@ -2221,6 +2221,15 @@ function Connection({
             >
               Open Tunnels
             </Command>
+            <Command
+              actions={actions}
+              command={{
+                kind: "onboarding.open-help",
+                destination: "setup-guide",
+              }}
+            >
+              Open connection guide
+            </Command>
           </div>
           <ConnectionGuide />
           {externalChallenge && (

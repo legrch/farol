@@ -5958,7 +5958,87 @@ async function configureAdmittedProduct(
     }
     case "onboarding.open-help": {
       try {
-        await shell.openExternal(onboardingHelpUrl(command.destination));
+        if (command.destination === "setup-guide") {
+          const parent = window;
+          if (!parent || parent.isDestroyed()) {
+            throw new Error("ONBOARDING_GUIDE_PARENT_UNAVAILABLE");
+          }
+          const size = { width: 800, height: 680 };
+          const placement =
+            windowMode === "secondary-visible"
+              ? selectedVisibleTestPlacement(size)
+              : null;
+          const guide = new BrowserWindow({
+            title: "Farol connection guide",
+            ...size,
+            ...(placement?.bounds ?? {}),
+            parent,
+            show: false,
+            webPreferences: {
+              sandbox: true,
+              contextIsolation: true,
+              nodeIntegration: false,
+              partition: "farol-connection-guide",
+            },
+          });
+          // No preload, host bridge or persistent browser profile is attached.
+          guide.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+          guide.webContents.on("will-navigate", (event) =>
+            event.preventDefault(),
+          );
+          guide.webContents.on("will-redirect", (event) =>
+            event.preventDefault(),
+          );
+          let guideLoaded = false;
+          const reconcileGuide = () => {
+            if (guide.isDestroyed() || parent.isDestroyed()) return false;
+            guide.hide();
+            try {
+              guide.setBounds(selectedVisibleTestPlacement(size).bounds);
+              if (guideLoaded) guide.showInactive();
+              return true;
+            } catch {
+              // A lost test display never authorizes an OS-selected fallback.
+              return false;
+            }
+          };
+          if (windowMode === "secondary-visible") {
+            screen.on("display-added", reconcileGuide);
+            screen.on("display-removed", reconcileGuide);
+            screen.on("display-metrics-changed", reconcileGuide);
+          }
+          const closeGuide = () => {
+            if (!guide.isDestroyed()) guide.destroy();
+          };
+          parent.once("closed", closeGuide);
+          guide.once("closed", () => {
+            parent.removeListener("closed", closeGuide);
+            screen.removeListener("display-added", reconcileGuide);
+            screen.removeListener("display-removed", reconcileGuide);
+            screen.removeListener("display-metrics-changed", reconcileGuide);
+          });
+          try {
+            await guide.loadURL(
+              onboardingHelpUrl(command.destination, directory),
+            );
+            if (guide.isDestroyed() || parent.isDestroyed()) {
+              throw new Error("ONBOARDING_GUIDE_CLOSED");
+            }
+            guideLoaded = true;
+            const action = presentationAction(windowMode);
+            if (action === "show-inactive") {
+              if (!reconcileGuide())
+                throw new Error("ONBOARDING_GUIDE_PLACEMENT_UNAVAILABLE");
+            } else if (action === "show-and-focus") {
+              guide.show();
+            }
+          } catch (error) {
+            closeGuide();
+            throw error;
+          }
+        } else {
+          await shell.openExternal(onboardingHelpUrl(command.destination));
+        }
         return ProductConfigurationResultSchema.parse({
           ok: true,
           snapshot: configuration.snapshot(),

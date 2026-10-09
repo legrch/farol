@@ -4101,6 +4101,20 @@ describe("dependency-scoped Settings admission", () => {
   });
 });
 
+it("opens the dedicated connection guide once without saving the connection draft", async () => {
+  const h = await mount("connection", settings(), "dev", quitOff, "connection");
+  await change(h.field("Runtime key"), "local-draft-not-a-saved-key");
+  await h.stepTo("attachment");
+  expect(h.calls()).toEqual([]);
+  await h.click("Open connection guide");
+  expect(h.calls()).toEqual([
+    { kind: "onboarding.open-help", destination: "setup-guide" },
+  ]);
+  expect(h.f.api.task).not.toHaveBeenCalled();
+  await h.stepTo("connection");
+  expect(h.field("Runtime key").value).toBe("local-draft-not-a-saved-key");
+});
+
 it("opens the Farol connection guide locally without saving a draft or sending a host command", async () => {
   const h = await mount(
     "connection",

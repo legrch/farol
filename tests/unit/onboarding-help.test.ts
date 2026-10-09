@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { onboardingHelpUrl } from "../../src/apps/desktop/onboarding-help";
+import { fileURLToPath } from "node:url";
+import path from "node:path";
+import {
+  onboardingHelpUrl,
+  openOnboardingHelp,
+} from "../../src/apps/desktop/onboarding-help";
 import {
   ProductConfigurationCommandSchema,
   ProductConfigurationEvidenceSchema,
@@ -13,7 +18,7 @@ describe("fixed onboarding help destinations", () => {
     );
     expect(onboardingHelpUrl("chatgpt")).toBe("https://chatgpt.com/plugins");
   });
-  it.each(["tunnels", "chatgpt"])(
+  it.each(["tunnels", "api-keys", "chatgpt", "setup-guide"])(
     "accepts the named %s action",
     (destination) => {
       expect(
@@ -42,6 +47,46 @@ describe("fixed onboarding help destinations", () => {
     expect(() => onboardingHelpUrl("file:///etc/passwd" as "tunnels")).toThrow(
       "ONBOARDING_HELP_DESTINATION_INVALID",
     );
+  });
+  it.each([
+    "/controlled/dev/_output/build/app",
+    "/controlled/Farol Dev.app/Contents/Resources/app",
+  ])("resolves the guide inside the host bundle at %s", (directory) => {
+    const url = new URL(onboardingHelpUrl("setup-guide", directory));
+    expect(url.protocol).toBe("file:");
+    expect(fileURLToPath(url)).toBe(path.join(directory, "shell.html"));
+    expect(url.hash).toBe("#farol-connection-guide");
+    expect(url.search).toBe("");
+  });
+  it.each([undefined, "", "relative/app"])(
+    "refuses a guide without an absolute host bundle: %s",
+    (directory) => {
+      expect(() => onboardingHelpUrl("setup-guide", directory)).toThrow(
+        "ONBOARDING_GUIDE_BUNDLE_INVALID",
+      );
+    },
+  );
+  it("opens the guide only through the dedicated local handler", async () => {
+    const external: string[] = [];
+    let guides = 0;
+    const open = async (url: string) => {
+      external.push(url);
+    };
+    expect(await openOnboardingHelp("setup-guide", open)).toBe(false);
+    expect(
+      await openOnboardingHelp("setup-guide", open, async () => {
+        guides++;
+      }),
+    ).toBe(true);
+    expect(guides).toBe(1);
+    expect(external).toEqual([]);
+    expect(
+      await openOnboardingHelp("setup-guide", open, async () => {
+        throw new Error("local load failed");
+      }),
+    ).toBe(false);
+    expect(await openOnboardingHelp("tunnels", open)).toBe(true);
+    expect(external).toEqual([onboardingHelpUrl("tunnels")]);
   });
 });
 
