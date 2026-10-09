@@ -10,6 +10,7 @@ import {
   verifyPromotionLease,
 } from "../../src/apps/desktop/promotion-lease.ts";
 import { preserveClosedInstalledPair } from "../../tooling/supervised-update-backup.mjs";
+import { ProductSettingsStore } from "../../src/apps/desktop/product-configuration.ts";
 
 // Real disposable filesystem copies, with fixed installed roots redirected only
 // through os.userInfo. The slot observer, lease and predecessor are mocked: no
@@ -268,6 +269,83 @@ describe("closed installed pair preservation (disposable FS, mocked authority)",
     expect(await fs.readdir(f.destinationParent)).toHaveLength(2);
     expect(await first.verify()).toBe(true);
   });
+
+  it.each(["Computer.filePolicy", "Home startup"])(
+    "retains exact original Settings after the source Store saves %s",
+    async (change) => {
+      const f = await fixture();
+      // Use the desktop's owning state root, not the enclosing profile root.
+      // Original values stay within the already-audited beta3 Settings surface;
+      // this case composes real storage and backup, without an old parser/app.
+      const store = new ProductSettingsStore({ root: f.state });
+      await store.save({
+        schema: 1,
+        revision: 7,
+        general: {
+          openAtLaunch: "browser",
+          sidebarDefault: "full",
+          activityDetail: "summary",
+        },
+        computer: {
+          computerId: "00000000-0000-4000-8000-000000000c01",
+          generation: 3,
+          name: "Fixture Mac",
+          commands: "none",
+          workspaces: [],
+          pendingEdit: null,
+        },
+        setup: Object.fromEntries(
+          ["chatgpt", "computer", "connect", "hosts", "verify"].map((step) => [
+            step,
+            {
+              visited: false,
+              skipped: false,
+              configured: false,
+              reachable: "unknown",
+              verified: null,
+              needsAction: null,
+              unavailable: null,
+              outcomeUnknown: false,
+            },
+          ]),
+        ),
+      });
+      const original = await store.load();
+      expect(original.computer).not.toHaveProperty("filePolicy");
+      expect(original.general.openAtLaunch).toBe("browser");
+      const sourceFile = path.join(f.state, "config.json");
+      const originalBytes = await fs.readFile(sourceFile);
+      const backup = await preserve(f);
+      const preservedState = path.join(backup.profile, "farol-next-state");
+      const preservedFile = path.join(preservedState, "config.json");
+      const preservedStore = new ProductSettingsStore({ root: preservedState });
+      const preservedIdentity = await fs.lstat(preservedFile, { bigint: true });
+      expect(await preservedStore.load()).toEqual(original);
+      expect(await fs.readFile(preservedFile)).toEqual(originalBytes);
+      expect(await backup.verify()).toBe(true);
+
+      const next = structuredClone(original);
+      next.revision += 1;
+      if (change === "Computer.filePolicy")
+        next.computer.filePolicy = "approved-roots-v1";
+      else next.general.openAtLaunch = "home";
+      await store.save(next);
+      expect(await store.load()).toEqual(next);
+      expect(await fs.readFile(sourceFile)).not.toEqual(originalBytes);
+      expect(await preservedStore.load()).toEqual(original);
+      expect(await fs.readFile(preservedFile)).toEqual(originalBytes);
+      expect(await fs.lstat(preservedFile, { bigint: true })).toMatchObject({
+        dev: preservedIdentity.dev,
+        ino: preservedIdentity.ino,
+        nlink: 1n,
+      });
+      expect(backup.source).toEqual(f.source);
+      expect(await treeDigest(backup.app)).toBe(f.source.digest);
+      // Only capture pins live contents. A later source Store save leaves the
+      // original pair verifiable under its unchanged roots, closure and lease.
+      expect(await backup.verify()).toBe(true);
+    },
+  );
 
   it.each(["bytes", "mode", "literal-link"])(
     "binds profileDigest to preserved %s",
