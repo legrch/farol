@@ -300,7 +300,7 @@ function Activity({
   }, [snapshot.destination.activityId, snapshot.sidebar, snapshot.overlay]);
   const emptyTitle = missing
     ? "Event no longer available"
-    : !snapshot.activity.length
+    : filter === "all" && !snapshot.activity.length
       ? "No activity yet"
       : !items.length
         ? "No events need attention"
@@ -315,12 +315,24 @@ function Activity({
         <p>
           {missing
             ? "This event is no longer available in this window. Its absence does not establish an outcome."
-            : !snapshot.activity.length
+            : filter === "all" && !snapshot.activity.length
               ? "Recorded task events appear here as work happens. Only recorded metadata is shown."
               : "Choose All activity or select a matching event to inspect recorded work."}
         </p>
         {filter === "attention" && (
-          <button type="button" onClick={() => onFilter("all")}>
+          <button
+            type="button"
+            onClick={(event) => {
+              const dialog = event.currentTarget.closest("dialog");
+              const target = dialog
+                ? dialog.querySelector<HTMLButtonElement>(
+                    'button[aria-label="Close"]',
+                  )
+                : heading.current;
+              onFilter("all");
+              target?.focus();
+            }}
+          >
             Show all activity
           </button>
         )}

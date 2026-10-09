@@ -2223,6 +2223,14 @@ it("Activity distinguishes first-use, attention-empty and missing selection with
   expect(host.querySelector(".activity-page")?.textContent).toContain(
     "No activity yet",
   );
+  await filterActivity(host, "attention");
+  expect(host.querySelector(".activity-empty h2")?.textContent).toBe(
+    "No events need attention",
+  );
+  expect(host.querySelector(".activity-empty p")?.textContent).toContain(
+    "Choose All activity",
+  );
+  await filterActivity(host, "all");
   await act(async () => {
     f.emit("tasks", { revision: 1, tasks: [task()] });
     f.emit("event", {
@@ -2251,6 +2259,34 @@ it("Activity distinguishes first-use, attention-empty and missing selection with
   expect(host.querySelector(".activity-header")).toBeNull();
   expect(host.querySelector('.activity-row[aria-current="page"]')).toBeNull();
 });
+it.each(["page", "dialog"] as const)(
+  "Activity Show all preserves %s focus when its button disappears",
+  async (surface) => {
+    const { host, c, f } = await mount();
+    await act(async () => c.navigate({ area: "activity" }));
+    await filterActivity(host, "attention");
+    if (surface === "dialog") await act(async () => c.overlay("activity"));
+    const container =
+      surface === "dialog"
+        ? host.querySelector("dialog")!
+        : host.querySelector(".activity-page")!;
+    const target =
+      surface === "dialog"
+        ? container.querySelector('button[aria-label="Close"]')
+        : container.querySelector("h1");
+    const trigger = button(container, "Show all activity");
+    trigger.focus();
+    expect(document.activeElement).toBe(trigger);
+    await act(async () => trigger.click());
+    expect(host.contains(trigger)).toBe(false);
+    expect(document.activeElement).toBe(target);
+    expect(host.querySelector(".activity-empty h2")?.textContent).toBe(
+      "No activity yet",
+    );
+    expect(f.api.task).not.toHaveBeenCalled();
+    expect(f.api.configure).not.toHaveBeenCalled();
+  },
+);
 it("Activity will not route a historical record into a reused turn", async () => {
   const { host, c, f } = await activityFixture();
   await act(async () =>
