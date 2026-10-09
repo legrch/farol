@@ -136,6 +136,11 @@ func (r *NativeRuntime) retirementMethods() map[string]desktop.Method {
 				return retirementOutcome("", nil, handoff.Refused)
 			}
 			state.attempted = true
+			// Task's original selected read/client and every read handler must be
+			// joined before Chat retirement can snapshot or publish any receipt.
+			if err := r.closeCodexRead(); err != nil {
+				return retirementOutcome("", nil, err)
+			}
 			// Join all original publication/admission IO, then permanently close
 			// that existing owner before any retirement snapshot. Later negative
 			// withdrawal for the Settings pump remains possible, never publication.
@@ -186,6 +191,11 @@ func (r *NativeRuntime) retirementMethods() map[string]desktop.Method {
 			digest, err := retirementDigest(in.ReceiptDigest)
 			if err != nil || state.publication == nil || state.publication.HandoffID != in.HandoffId || state.publication.ReceiptDigest != digest {
 				return retirementOutcome("", nil, handoff.Refused)
+			}
+			// Missing/unknown cleanup never becomes an ACK, including when a
+			// late original process supplies exit proof after the first deadline.
+			if err := r.closeCodexRead(); err != nil {
+				return retirementOutcome("", nil, err)
 			}
 			ack, err := state.service.Acknowledge(ctx, chatport.HandoffACK{Publication: *state.publication})
 			if err != nil {

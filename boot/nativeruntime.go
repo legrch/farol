@@ -8,6 +8,8 @@ import (
 	"github.com/legrch/farol/modules/chat/infra/intent"
 	"github.com/legrch/farol/modules/chat/infra/results"
 	"github.com/legrch/farol/transport/desktop"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	wire "github.com/legrch/farol/gen/desktop/v1"
@@ -32,6 +34,7 @@ type NativeLaunch struct {
 	HostLifetimeID, ChildLaunchID string
 	PreviousHostDrainConfirmed    bool
 	SettingsMutations             bool
+	CodexRead                     *NativeCodexReadSelection
 }
 type NativeRuntime struct {
 	cancel           context.CancelFunc
@@ -49,14 +52,19 @@ type NativeRuntime struct {
 	settingsDelivery *SettingsDeliveryIngress
 	settingsStore    *SettingsStoreExchange
 	mutationStore    *mutationrepo.Repository
-	closed           bool
+	closed           atomic.Bool
+	closeOnce        sync.Once
 	closeErr         error
 	retirement       *nativeRetirement
 	historyAuthority *historyReadAuthority
 	history          *chathandoff.HistoryReader
+	codexRead        *nativeCodexRead
 }
 
 func NewNativeRuntime(ctx context.Context, launch NativeLaunch, generation string) (*NativeRuntime, error) {
+	if launch.CodexRead != nil && !launch.CodexRead.valid() {
+		return nil, profileFailure(ProfileInvalid)
+	}
 	if ctx == nil || ctx.Err() != nil || !validIngressID(launch.OwnerID) || !validIngressID(launch.ComputerID) || !validIngressID(generation) || !validProfilePath(launch.Home) || (launch.StoreMode != "create" && launch.StoreMode != "open") {
 		return nil, profileFailure(ProfileInvalid)
 	}
@@ -193,6 +201,9 @@ func NewNativeRuntime(ctx context.Context, launch NativeLaunch, generation strin
 			return fail(err)
 		}
 	}
+	if launch.CodexRead != nil {
+		runtime.selectNativeCodexRead(lifetime, *launch.CodexRead)
+	}
 	return runtime, nil
 }
 
@@ -205,15 +216,20 @@ func (r *NativeRuntime) Close() error {
 	if r == nil {
 		return nil
 	}
-	if r.closed {
-		return r.closeErr
-	}
-	r.closed = true
+	r.closeOnce.Do(func() {
+		r.closed.Store(true)
+		r.closeErr = r.closeResources()
+	})
+	return r.closeErr
+}
+
+func (r *NativeRuntime) closeResources() error {
 	r.historyAuthority.close()
 	if r.cancel != nil {
 		r.cancel()
 	}
 	var failures []error
+	failures = append(failures, r.closeCodexRead())
 	if r.ingress != nil {
 		_, err := r.ingress.guard.deactivate()
 		failures = append(failures, err)
@@ -242,8 +258,7 @@ func (r *NativeRuntime) Close() error {
 	if r.profile != nil {
 		failures = append(failures, r.profile.Close())
 	}
-	r.closeErr = errors.Join(failures...)
-	return r.closeErr
+	return errors.Join(failures...)
 }
 
 // Real time is read only in composition; the Chat application receives a port.
@@ -251,7 +266,7 @@ type browserClock struct{}
 
 func (browserClock) NowMillis() uint64 { return uint64(time.Now().UnixMilli()) }
 func (r *NativeRuntime) Methods() (map[string]desktop.Method, error) {
-	if r == nil || r.closed || r.ingress == nil || r.browser == nil || r.conversations == nil || r.chatComputer == nil {
+	if r == nil || r.closed.Load() || r.ingress == nil || r.browser == nil || r.conversations == nil || r.chatComputer == nil {
 		return nil, errors.New("native_runtime_unavailable")
 	}
 	merged := make(map[string]desktop.Method)
