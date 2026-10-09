@@ -18,7 +18,7 @@ func TestSourceOnlySelectedCreateAndObserve(t *testing.T) {
 		t.Fatal("constructor performed host operations")
 	}
 	caps, err := c.Supports(context.Background(), c.selection.Binding)
-	if err != nil || caps != (task.Capabilities{Create: true}) {
+	if err != nil || caps != (task.Capabilities{Create: true, Message: true}) {
 		t.Fatalf("capabilities: %+v %v", caps, err)
 	}
 	var refs []task.Reference
@@ -60,14 +60,12 @@ func TestSourceOnlySelectedCreateAndObserve(t *testing.T) {
 func TestSourceOnlyUnsupportedControlsDoNotLaunch(t *testing.T) {
 	c, f := newFixture(t)
 	d := dispatch(c.selection, "unsupported")
-	for _, method := range []task.Action{task.Continue, task.Message, task.Cancel} {
+	for _, method := range []task.Action{task.Continue, task.Cancel} {
 		var r task.Receipt
 		var err error
 		switch method {
 		case task.Continue:
 			r, err = c.Continue(context.Background(), d, nil)
-		case task.Message:
-			r, err = c.Message(context.Background(), d, nil)
 		case task.Cancel:
 			r, err = c.Cancel(context.Background(), d, nil)
 		}

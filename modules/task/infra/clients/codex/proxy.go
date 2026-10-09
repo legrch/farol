@@ -67,12 +67,14 @@ func (p *proxy) connect(ctx context.Context, home string) error {
 }
 func allowed(method string) bool {
 	switch method {
-	case "initialize", "model/list", "project/list", "thread/start", "turn/start", "thread/read", "thread/turns/list", "thread/items/list":
+	case "initialize", "model/list", "project/list", "thread/start", "turn/start", "turn/steer", "thread/read", "thread/turns/list", "thread/items/list":
 		return true
 	}
 	return false
 }
-func mutationMethod(method string) bool { return method == "thread/start" || method == "turn/start" }
+func mutationMethod(method string) bool {
+	return method == "thread/start" || method == "turn/start" || method == "turn/steer"
+}
 
 func (p *proxy) request(ctx context.Context, method string, params any) (map[string]json.RawMessage, error) {
 	return p.requestChecked(ctx, method, params, nil)

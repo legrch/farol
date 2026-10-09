@@ -11,7 +11,7 @@ model/effort, grant lifetime, and a mandatory current-grant recheck. `New` is in
 `Options.RecheckDispatch` is immutable, mutation-only trusted Root wiring. Root
 must create the original retained Client with the exact initiating Parent peer
 and owning Task/journal intention check already connected. It receives the
-actual `task.Intent` before each `thread/start` / `turn/start` write, after all
+actual `task.Intent` before each `thread/start` / `turn/start` / `turn/steer` write, after all
 awaited qualification/history, write-lock waiting and frame construction. It
 checks current original Parent and exact selected Task/binding/intent; it does
 not issue admission. Its owner-gate callback performs value checks only and
@@ -38,7 +38,7 @@ Schema evidence and initialize home/platform checks do not identify an account
 or prove Codex Desktop visibility. No live installed capability is claimed here.
 
 With a dispatch hook present, `Supports` performs fresh project/model catalogue
-checks on one connection and advertises create. Continue additionally requires the independent bound witness
+checks on one connection and advertises create and active Message. Continue additionally requires the independent bound witness
 described below; an ordinary create/status selection leaves it unsupported.
 An effort-capable model requires the resolved binding's explicit effort; the client never rewrites the binding with a guessed default.
 Create reserves its bounded local operation fence before qualification, sends
@@ -132,8 +132,30 @@ a concurrent mutation or contradictory post-effect history becomes sticky unknow
 Partial/lost ACKs, persistence callback failure and post-effect grant/epoch changes
 retain available lineage and fence all later mutations. No reconnect is attempted.
 
-Message and cancel explicitly return unsupported. No turn interrupt,
-active steering or consent ownership is qualified by this slice. Consent requests
+Message uses the existing Task owner's durable intent and active admission, the
+same binding/account epoch and original dispatch hook, and the existing handoff
+schema witness. The transferred actual CLI 0.160.1 schemas confirm the covered
+`turn/steer` fields; no extra follow-up witness or new engine is needed. The
+producer verifies exact project/writer/model-bound thread membership and one
+unique active turn through bounded pages, then sends one `turn/steer` with
+`threadId`, `expectedTurnId` and one bounded text input. The vendor's required
+active-turn precondition prevents substituting a completed or replacement turn.
+An exact completion notice during qualification/write-lock/owner-hook waiting
+also prevents the write. No thread, turn, reconnect or replacement is started.
+
+Only an ACK naming the same exact turn publishes the existing reference once.
+Missing, crossed or malformed ACKs, failed persistence callbacks and post-effect
+grant/account changes retain that reference and fence all later mutations.
+Running is a nonterminal control acknowledgement, not fresh lifecycle or result
+evidence: completion after the ACK does not invent cancellation, rollback or
+retry. Steering preserves the original execution dispatch's event sink, including
+when called through `DispatchObserved`; its ACK does not reassign terminal facts
+to the Message operation. Cancel and turn interrupt remain unsupported.
+
+The source producer and controlled-peer tests do not activate product control or
+qualify the serving instance, account, provider or native host. Trusted Root must
+join Message through the existing exact Task admission and active-reference owner.
+Consent requests
 on the shared connection are left unanswered, without retaining their payload.
 Other server requests receive only the existing unsupported-method response.
 RPC errors do not attest that a mutation had no effect. Account-change notices
@@ -151,8 +173,8 @@ missing exit proof is unknown, with no escalation, fallback or relaunch.
 Hermetic tests inject a source-only pipe peer and OS boundary. They exercise the
 production client and WebSocket/RPC implementation but prove no actual host,
 socket, subscription, installed catalogue, process cleanup or provider operation.
-Boot/MCP registration, accepted integration, schema/host qualification, native
-tests and bounded live create/follow-up acceptance remain with Lead.
+Product/MCP registration, accepted integration, serving schema/host qualification,
+native tests and bounded live create/follow-up/steer acceptance remain with Lead.
 
 The follow-up slice is source-only and unaccepted on its delegated base. Its
 hermetic tests do not qualify installed schema, real parent delivery, lost-ACK

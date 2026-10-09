@@ -16,6 +16,7 @@ import (
 type Client struct {
 	eventMu         sync.Mutex
 	events          *eventRoute
+	steer           atomic.Pointer[steerWitness] // transient exact-target completion fence
 	selection       Selection
 	followup        FollowupQualification
 	boundary        Boundary
@@ -181,6 +182,11 @@ func (c *Client) mutationRPC(ctx context.Context, method string, params any, int
 		}
 		// Account notifications are consumed independently while either guard
 		// awaits. Match the same connection/epoch again, just before writing.
+		if method == "turn/steer" {
+			if err := c.steerCurrent(intent.Expected); err != nil {
+				return err
+			}
+		}
 		return qualified.check(c)
 	})
 }
@@ -278,7 +284,7 @@ func (c *Client) Supports(parent context.Context, b task.Binding) (task.Capabili
 	if _, err := c.qualify(ctx); err != nil {
 		return task.Capabilities{}, err
 	}
-	return task.Capabilities{Create: true, Continue: c.followup.valid(c.selection)}, nil
+	return task.Capabilities{Create: true, Continue: c.followup.valid(c.selection), Message: true}, nil
 }
 
 func refused(code string) task.Receipt {
@@ -589,15 +595,12 @@ func readFinal(ctx context.Context, read historyRead, ref task.Reference) (strin
 	return "", protocolError()
 }
 
-func (*Client) Message(context.Context, port.Dispatch, func(task.Reference) error) (task.Receipt, error) {
-	return refused("TASK_CONTROL_NOT_QUALIFIED"), task.ErrUnsupported
-}
 func (*Client) Cancel(context.Context, port.Dispatch, func(task.Reference) error) (task.Receipt, error) {
 	return refused("TASK_CONTROL_NOT_QUALIFIED"), task.ErrUnsupported
 }
 
 // The same producer can be injected into the Task Provider port without a
-// second dispatch/journal owner. Active controls remain explicitly unsupported.
+// second dispatch/journal owner. Cancel remains explicitly unsupported.
 func (c *Client) Dispatch(ctx context.Context, d port.Dispatch, progress func(task.Reference) error) (task.Receipt, error) {
 	switch d.Intent.Action {
 	case task.Create:

@@ -28,6 +28,11 @@ func (c *Client) DispatchObserved(ctx context.Context, d port.Dispatch, progress
 	if progress == nil || record == nil {
 		return refused("CODEX_TASK_INVALID"), nil
 	}
+	if d.Intent.Action == task.Message {
+		// Steering does not create a new execution dispatch. Preserve the
+		// original active turn's event sink and acknowledge only its exact ref.
+		return c.Message(ctx, d, progress)
+	}
 	var route *eventRoute
 	// Callers hold eventMu; installation happens under the existing dispatch
 	// gate, after operation ownership and before the one follow-up effect.
@@ -98,6 +103,9 @@ func (c *Client) DispatchObserved(ctx context.Context, d port.Dispatch, progress
 func (c *Client) notification(m map[string]json.RawMessage) error {
 	c.eventMu.Lock()
 	defer c.eventMu.Unlock()
+	if err := c.steerNotification(m); err != nil {
+		return err
+	}
 	route := c.events
 	if route == nil {
 		return nil
@@ -189,4 +197,29 @@ func (c *Client) notification(m map[string]json.RawMessage) error {
 		return err
 	}
 	return mapper.Record(c.lifetime, route.sequence, raw)
+}
+
+// Caller holds eventMu. This transient value-only check does not replace or
+// retarget the original execution-event stream when Message acknowledges.
+func (c *Client) steerNotification(m map[string]json.RawMessage) error {
+	witness := c.steer.Load()
+	if witness == nil || !equals(m, "method", "turn/completed") {
+		return nil
+	}
+	params, ok := object(m, "params")
+	if !ok {
+		return protocolError()
+	}
+	if !equals(params, "threadId", witness.ref.ThreadID) {
+		return nil
+	}
+	turn, ok := object(params, "turn")
+	id, haveID := str(turn, "id")
+	if !ok || !haveID || !providerID(id) {
+		return protocolError()
+	}
+	if id == witness.ref.TurnID {
+		witness.closed.Store(true)
+	}
+	return nil
 }
