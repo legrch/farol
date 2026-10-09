@@ -14,6 +14,12 @@ const SAFE_PATH = [
 const PROFILE = "farol-next";
 const HEALTH_URL_FILE = "health.url";
 const PID_FILE = "tunnel-client.pid";
+const TUNNEL_EXITED = "farol-tunnel-exited-v1";
+const TUNNEL_UNKNOWN = "farol-tunnel-unknown-v1";
+
+export type ConnectorTunnelObservation = Readonly<{
+  state: "exited" | "outcome_unknown";
+}>;
 
 export type ConnectorCommand = Readonly<{
   executablePath: string;
@@ -31,6 +37,8 @@ export type ConnectorCommandRunner = (
 export type ConnectorChild = Readonly<{
   pid: number | undefined;
   exitCode: number | null;
+  // Separate from confirmation that the entire owned group has closed.
+  tunnelObservation?: ConnectorTunnelObservation | null;
   kill: (signal: NodeJS.Signals) => boolean;
   waitForExit: (timeoutMs: number) => Promise<boolean>;
 }>;
@@ -87,6 +95,7 @@ export type ConnectorStartResult = Readonly<
       code:
         | "CONNECTOR_START_FAILED"
         | "CONNECTOR_EXITED_BEFORE_READY"
+        | "CONNECTOR_TUNNEL_OBSERVATION_UNKNOWN"
         | "CONNECTOR_READINESS_TIMEOUT";
     }
 >;
@@ -153,9 +162,25 @@ const runCommand: ConnectorCommandRunner = async (command) =>
 export function observedConnectorChild(
   child: ChildProcess,
   ownsProcessGroup = false,
+  observesTunnel = false,
 ): ConnectorChild {
+  let tunnelObservation: ConnectorTunnelObservation | null = null;
+  const observe = (state: ConnectorTunnelObservation["state"]) => {
+    tunnelObservation ??= Object.freeze({ state });
+  };
   // A failed signal can emit `error` without `exit`. Never treat it as exit.
-  child.on("error", () => undefined);
+  child.on("error", () => {
+    if (observesTunnel) observe("outcome_unknown");
+  });
+  if (observesTunnel) {
+    // This channel belongs to the exact spawned anchor. Accept only fixed,
+    // content-free tokens: no coercion, parsing, logging or retained payload.
+    child.on("message", (message: unknown) => {
+      observe(message === TUNNEL_EXITED ? "exited" : "outcome_unknown");
+    });
+    child.once("disconnect", () => observe("outcome_unknown"));
+    child.once("exit", () => observe("outcome_unknown"));
+  }
   const groupPid = ownsProcessGroup ? child.pid : undefined;
   let groupGone = false;
   let signalRefused = false;
@@ -179,6 +204,9 @@ export function observedConnectorChild(
   };
   return {
     pid: child.pid,
+    get tunnelObservation() {
+      return tunnelObservation;
+    },
     get exitCode() {
       const code = directExitCode();
       return code !== null && groupExitConfirmed() ? code : null;
@@ -249,8 +277,18 @@ delete environment.ELECTRON_RUN_AS_NODE;
 const child = spawn(process.argv[1], process.argv.slice(2), {
   env: environment, stdio: "ignore", windowsHide: true
 });
+let observed = false;
+const report = (message) => {
+  if (observed) return;
+  observed = true;
+  if (process.connected) process.send(message, () => {});
+};
 const terminate = () => process.kill(-process.pid, "SIGKILL");
-child.once("error", terminate);
+child.once("exit", () => report(${JSON.stringify(TUNNEL_EXITED)}));
+child.once("error", () => {
+  report(${JSON.stringify(TUNNEL_UNKNOWN)});
+  terminate();
+});
 process.stdin.once("end", terminate);
 process.stdin.resume();
 `;
@@ -275,14 +313,15 @@ const startProcess: ConnectorProcessStarter = async (command) => {
     {
       cwd: command.cwd,
       env: { ...command.environment, ELECTRON_RUN_AS_NODE: "1" },
-      stdio: ["pipe", "ignore", "ignore"],
+      stdio: ["pipe", "ignore", "ignore", "ipc"],
+      serialization: "json",
       windowsHide: true,
       detached: true,
     },
   );
   // A broken pipe is not a terminal observation for the owned process group.
   child.stdin?.on("error", () => undefined);
-  const observed = observedConnectorChild(child, true);
+  const observed = observedConnectorChild(child, true, true);
   await new Promise<void>((resolve, reject) => {
     const spawned = () => {
       child.off("error", failed);
@@ -329,6 +368,7 @@ export class SecureMcpConnectorRuntime {
   private uncertainStart: ConnectorStartResult | null = null;
   private uncertainConfigure = false;
   private healthBaseUrl: string | null = null;
+  private runtimeGeneration: string | null = null;
 
   constructor(
     private readonly options: Options,
@@ -494,11 +534,38 @@ export class SecureMcpConnectorRuntime {
       return result;
     }
     this.child = child;
+    this.runtimeGeneration = runtimeGeneration;
+    const supersededResult = (): ConnectorStartResult | null =>
+      this.child === child
+        ? null
+        : {
+            state: "unreachable",
+            runtimeGeneration,
+            code: "CONNECTOR_EXITED_BEFORE_READY",
+          };
+    const terminalResult = (): ConnectorStartResult | null => {
+      const superseded = supersededResult();
+      if (superseded) return superseded;
+      const observation = child.tunnelObservation;
+      if (!observation) return null;
+      return {
+        state:
+          observation.state === "exited" ? "unreachable" : "outcome_unknown",
+        runtimeGeneration,
+        code:
+          observation.state === "exited"
+            ? "CONNECTOR_EXITED_BEFORE_READY"
+            : "CONNECTOR_TUNNEL_OBSERVATION_UNKNOWN",
+      };
+    };
     const deadline = this.now() + this.readinessTimeoutMs;
     let healthObserved = false;
     while (this.now() <= deadline) {
+      // A terminal tunnel does not release the anchor or group ownership.
+      const terminal = terminalResult();
+      if (terminal) return terminal;
       if (child.exitCode !== null) {
-        this.child = null;
+        if (this.child === child) this.child = null;
         return {
           state: "unreachable",
           runtimeGeneration,
@@ -506,9 +573,14 @@ export class SecureMcpConnectorRuntime {
         };
       }
       const healthBaseUrl = await this.readHealthBaseUrl();
+      const afterRead = terminalResult();
+      if (afterRead) return afterRead;
       if (healthBaseUrl !== null) {
         healthObserved = true;
-        if (await this.get(`${healthBaseUrl}/readyz`)) {
+        const ready = await this.get(`${healthBaseUrl}/readyz`);
+        const afterProbe = terminalResult();
+        if (afterProbe) return afterProbe;
+        if (ready && this.child === child && child.exitCode === null) {
           this.healthBaseUrl = healthBaseUrl;
           return { state: "ready", runtimeGeneration, healthBaseUrl };
         }
@@ -517,15 +589,22 @@ export class SecureMcpConnectorRuntime {
       if (remaining <= 0) break;
       await this.wait(Math.min(50, remaining));
     }
+    const beforeCleanup = supersededResult();
+    if (beforeCleanup) return beforeCleanup;
     if (!healthObserved) {
       child.kill("SIGTERM");
       let exited = await child.waitForExit(1_000);
+      const afterTerm = supersededResult();
+      if (afterTerm) return afterTerm;
       if (!exited) {
         child.kill("SIGKILL");
         exited = await child.waitForExit(1_000);
+        const afterKill = supersededResult();
+        if (afterKill) return afterKill;
       }
-      if (exited) this.child = null;
-      else {
+      if (exited) {
+        if (this.child === child) this.child = null;
+      } else {
         return {
           state: "outcome_unknown",
           runtimeGeneration,
@@ -545,18 +624,42 @@ export class SecureMcpConnectorRuntime {
   async checkHealth(): Promise<boolean> {
     const child = this.child;
     const base = this.healthBaseUrl;
-    if (!child || child.exitCode !== null || base === null) return false;
+    if (
+      !child ||
+      child.exitCode !== null ||
+      child.tunnelObservation != null ||
+      base === null
+    )
+      return false;
     try {
       const ready = await this.get(`${base}/readyz`);
       return (
         ready &&
         this.child === child &&
         child.exitCode === null &&
+        child.tunnelObservation == null &&
         this.healthBaseUrl === base
       );
     } catch {
       return false;
     }
+  }
+
+  // Host composition must correlate this with its current runtime generation;
+  // it is neither a group-closure receipt nor authority to start another child.
+  getTunnelObservation():
+    | (ConnectorTunnelObservation &
+        Readonly<{
+          runtimeGeneration: string;
+        }>)
+    | null {
+    const observation = this.child?.tunnelObservation;
+    return observation && this.runtimeGeneration
+      ? Object.freeze({
+          ...observation,
+          runtimeGeneration: this.runtimeGeneration,
+        })
+      : null;
   }
 
   async stop(): Promise<void> {

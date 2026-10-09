@@ -6248,14 +6248,35 @@ async function configureAdmittedProduct(
           return configurationFailure(
             "CONNECTOR_APP_VERIFICATION_STATE_CHANGED",
           );
-        if (!healthy) {
+        const terminal = secureMcpConnectorRuntime.getTunnelObservation();
+        if (
+          terminal &&
+          terminal.runtimeGeneration !== current.runtimeGeneration
+        )
+          return configurationFailure(
+            "CONNECTOR_APP_VERIFICATION_STATE_CHANGED",
+          );
+        if (terminal?.state === "outcome_unknown") {
+          const failure = await recordConnectorRuntime(
+            "outcome_unknown",
+            current.runtimeGeneration,
+            current.computerGeneration,
+          );
+          if (failure) return failure;
+          return configurationFailure("CONNECTOR_RUNTIME_OUTCOME_UNKNOWN");
+        }
+        if (!healthy || terminal?.state === "exited") {
           const failure = await recordConnectorRuntime(
             "unreachable",
             current.runtimeGeneration,
             current.computerGeneration,
           );
           if (failure) return failure;
-          return configurationFailure("CONNECTOR_DOCTOR_FAILED");
+          return configurationFailure(
+            terminal?.state === "exited"
+              ? "CONNECTOR_TUNNEL_EXITED"
+              : "CONNECTOR_DOCTOR_FAILED",
+          );
         }
         return ProductConfigurationResultSchema.parse({
           ok: true,
