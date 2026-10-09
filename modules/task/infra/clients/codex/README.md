@@ -69,9 +69,27 @@ exact-reference checks surround physical verification and later disclosure.
 Changed or withdrawn authority, a failed claim, and a lost connection cannot
 retarget or replace that lifetime. Its dispatch hook always refuses effects.
 Completed result text is opt-in provider-history evidence, not a retained Task
-journal result. This source composition does not register a native runtime or
-external tool; trusted profile/host qualification and real provider membership
-remain separate gates.
+journal result.
+
+The optional trusted `NativeLaunch.CodexRead` input now composes that reader in
+`NativeRuntime`. It names the existing `codex` host slot and the canonical temp
+parent supplied by the native launcher. Construction is inert; the first read
+retains one profile, one qualified empty scratch, one reader and its original
+client. A nil selection preserves ordinary startup. `ReadSelectedCodex` accepts
+only the result opt-in; it cannot choose another thread or turn.
+
+Quit and retirement join the original client and read handlers before publishing
+an ACK, using one fixed cleanup budget. Invalid or mismatched ACKs refuse before
+closing this reader. A proved metadata refusal before any client claim remains
+sticky for reads but does not itself prevent known resource cleanup. Opening,
+claimed-client, physical release and late-exit uncertainty still block cleanup.
+Scratch closure releases only original descriptors and retains every directory.
+
+This composition has controlled CPU/race tests and bounded independent source
+review. It has no desktop Method, socket registration or handshake advertisement.
+Native scratch/runtime/client joins, trusted launcher wiring, current account/
+host qualification and a real external T0 read remain separate gates. It does
+not activate create, Continue, active steer or Shell.
 
 Completed-parent follow-up uses `Task.Continue`, never `Message`. Trusted boot
 must supply `Options.Followup` with a `codex-followup-schema/v1` witness from
