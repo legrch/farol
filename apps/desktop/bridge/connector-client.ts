@@ -46,6 +46,45 @@ type Connection = {
   submitted: boolean;
 };
 type Phase = "new" | "opening" | "binding" | "handshake" | "ready" | "stopped";
+export type ConnectorTerminal = Readonly<{
+  reason:
+    | "closed"
+    | "transport_ended"
+    | "transport_closed"
+    | "transport_failed"
+    | "timeout"
+    | "refused"
+    | "unavailable"
+    | "protocol_violation";
+  phase: Exclude<Phase, "stopped">;
+  submittedPendingCount: number;
+  submittedEffectCount: number;
+  binding: Readonly<ComputerConnectorBinding>;
+}>;
+
+// Fixed classifications only: never retain peer text or an exception message.
+function terminalReason(code: string): ConnectorTerminal["reason"] {
+  switch (code) {
+    case "connector_closed":
+      return "closed";
+    case "connector_transport_ended":
+      return "transport_ended";
+    case "connector_transport_closed":
+      return "transport_closed";
+    case "connector_transport_failed":
+      return "transport_failed";
+    case "connector_timeout":
+    case "response_timeout":
+      return "timeout";
+    case "connector_protocol_refused":
+      return "refused";
+    case "connector_unavailable":
+    case "backpressure":
+      return "unavailable";
+    default:
+      return "protocol_violation";
+  }
+}
 
 const workspaceMethods = new Set([
   "computer.workspace.read",
@@ -79,6 +118,8 @@ export class SocketConnectorClient {
   private context: Readonly<Context> | undefined;
   private identity: Readonly<Identity> | undefined;
   private writerBusy = false;
+  #terminal: ConnectorTerminal | undefined;
+  #terminalObservers = new Set<(terminal: ConnectorTerminal) => void>();
 
   constructor(
     endpoint: ComputerConnectorEndpoint,
@@ -142,6 +183,27 @@ export class SocketConnectorClient {
     if (this.phase !== "ready" || !this.context)
       throw new BridgeError("unavailable", "handshake_required");
     return this.context;
+  }
+
+  get terminal(): ConnectorTerminal | undefined {
+    return this.#terminal;
+  }
+
+  // One content-free observation of this exact stream, including late callers.
+  // Observers cannot alter request settlement or interrupt stream cleanup.
+  onTerminal(observer: (terminal: ConnectorTerminal) => void): () => void {
+    const notify = (terminal: ConnectorTerminal): void => {
+      try {
+        observer(terminal);
+      } catch {
+        /* Observation has no authority over transport cleanup. */
+      }
+    };
+    if (this.#terminal) notify(this.#terminal);
+    else this.#terminalObservers.add(notify);
+    return () => {
+      this.#terminalObservers.delete(notify);
+    };
   }
 
   // Structurally compatible with Pick<Client, "request"> for ComputerBridge.
@@ -443,6 +505,16 @@ export class SocketConnectorClient {
 
   private fail(code: string, connectionState?: "refused"): void {
     if (this.phase === "stopped") return;
+    const submitted = [...this.pending.values()].filter((p) => p.submitted);
+    const terminal: ConnectorTerminal = Object.freeze({
+      reason: terminalReason(code),
+      phase: this.phase,
+      submittedPendingCount: submitted.length,
+      submittedEffectCount: submitted.filter((p) => p.operationId !== undefined)
+        .length,
+      binding: this.#endpoint.binding,
+    });
+    this.#terminal = terminal;
     this.phase = "stopped";
     if (this.connection) {
       clearTimeout(this.connection.timer);
@@ -468,18 +540,23 @@ export class SocketConnectorClient {
     this.identity = undefined;
     this.decoder = new Decoder();
     const socket = this.#socket;
-    if (!socket) return;
-    socket.off("connect", this.onConnect);
-    socket.off("data", this.onData);
-    socket.off("end", this.onEnd);
-    socket.off("drain", this.onDrain);
-    // Keep the non-diagnostic error guard until close: destroy may queue an error.
-    if (!socket.destroyed) {
-      try {
-        socket.destroy();
-      } catch {
-        /* No reconnect or cleanup retry. */
+    if (socket) {
+      socket.off("connect", this.onConnect);
+      socket.off("data", this.onData);
+      socket.off("end", this.onEnd);
+      socket.off("drain", this.onDrain);
+      // Keep the non-diagnostic error guard until close: destroy may queue an error.
+      if (!socket.destroyed) {
+        try {
+          socket.destroy();
+        } catch {
+          /* No reconnect or cleanup retry. */
+        }
       }
+    }
+    for (const notify of this.#terminalObservers) {
+      this.#terminalObservers.delete(notify);
+      notify(terminal);
     }
   }
 }

@@ -1077,3 +1077,169 @@ it("sanitizes a handshake fault and closes the exact stream once", async () => {
   for (const event of ["connect", "data", "error", "drain", "end", "close"])
     expect(f.socket.listenerCount(event)).toBe(0);
 });
+
+it("observes idle EOF once, retaining the same frozen content-free record for late subscribers", async () => {
+  const f = await ready();
+  const destroy = vi.spyOn(f.socket, "destroy");
+  const observed = vi.fn();
+  const off = f.client.onTerminal(observed);
+  expect(f.client.terminal).toBeUndefined();
+  f.socket.emit("end");
+  const first = f.client.terminal;
+  expect(first).toEqual({
+    reason: "transport_ended",
+    phase: "ready",
+    submittedPendingCount: 0,
+    submittedEffectCount: 0,
+    binding: endpoint().binding,
+  });
+  expect(Object.isFrozen(first)).toBe(true);
+  expect(Object.isFrozen(first!.binding)).toBe(true);
+  expect(() => Object.assign(first!, { reason: "closed" })).toThrow();
+  expect(() =>
+    Object.assign(first!.binding, { runtimeId: "changed" }),
+  ).toThrow();
+  off();
+  off();
+  await f.client.close();
+  f.socket.emit("close");
+  expect(observed).toHaveBeenCalledExactlyOnceWith(first);
+  const late = vi.fn();
+  f.client.onTerminal(late)();
+  expect(late).toHaveBeenCalledExactlyOnceWith(first);
+  expect(late.mock.calls[0]![0]).toBe(first);
+  expect(f.client.terminal).toBe(first);
+  expect(destroy).toHaveBeenCalledTimes(1);
+  await expect(f.client.request(methods[0]!, {})).rejects.toMatchObject(
+    error("unavailable", "connector_unavailable"),
+  );
+  await expect(f.client.connect()).rejects.toMatchObject(
+    error("refused", "connector_already_used"),
+  );
+  expect(f.factory).toHaveBeenCalledTimes(1);
+});
+
+it.each(["end", "error", "close"])(
+  "counts submitted effects on %s before settling unknown without retaining content or raw errors",
+  async (event) => {
+    const f = await ready();
+    const observed = vi.fn();
+    f.client.onTerminal(observed);
+    const read = f.client.request(
+      methods[0]!,
+      { private: "read body" },
+      { id: "read" },
+    );
+    const effect = f.client.request(
+      effectMethods[0]!,
+      { content: "secret body" },
+      {
+        id: "effect",
+        operationId: "private-operation",
+      },
+    );
+    const code = {
+      end: "connector_transport_ended",
+      error: "connector_transport_failed",
+      close: "connector_transport_closed",
+    }[event]!;
+    const reason = {
+      end: "transport_ended",
+      error: "transport_failed",
+      close: "transport_closed",
+    }[event]!;
+    const rejected = Promise.all([
+      expect(read).rejects.toMatchObject(error("unknown", code)),
+      expect(effect).rejects.toMatchObject(error("unknown", code)),
+    ]);
+    f.socket.emit(
+      event,
+      Error(`${endpoint().token} ${endpoint().socketPath} raw-private-error`),
+    );
+    await rejected;
+    expect(f.client.terminal).toEqual({
+      reason,
+      phase: "ready",
+      submittedPendingCount: 2,
+      submittedEffectCount: 1,
+      binding: endpoint().binding,
+    });
+    await f.client.close();
+    expect(observed).toHaveBeenCalledTimes(1);
+    const text = JSON.stringify(f.client.terminal);
+    for (const secret of [
+      endpoint().token,
+      endpoint().socketPath,
+      "secret body",
+      "read body",
+      "raw-private-error",
+      "private-operation",
+    ])
+      expect(text).not.toContain(secret);
+    expect(f.socket.destroyed).toBe(true);
+    expect(f.socket.writes).toHaveLength(4);
+  },
+);
+
+it("allows unsubscribe before and during notification and isolates throwing or reentrant observers", async () => {
+  const f = await ready();
+  const removed = vi.fn();
+  const off = f.client.onTerminal(removed);
+  off();
+  off();
+  const skipped = vi.fn();
+  let skip = () => {};
+  f.client.onTerminal(() => {
+    skip();
+    void f.client.close();
+    throw Error("private observer detail");
+  });
+  skip = f.client.onTerminal(skipped);
+  const observed = vi.fn();
+  f.client.onTerminal(observed);
+  const pending = f.client.request(methods[0]!, {}, { id: "pending" });
+  const rejected = expect(pending).rejects.toMatchObject({ state: "unknown" });
+  f.socket.emit("end");
+  await rejected;
+  expect(removed).not.toHaveBeenCalled();
+  expect(skipped).not.toHaveBeenCalled();
+  expect(observed).toHaveBeenCalledTimes(1);
+  expect(f.socket.destroyed).toBe(true);
+  expect(vi.getTimerCount()).toBe(0);
+  expect(() =>
+    f.client.onTerminal(() => {
+      throw Error("late observer");
+    })(),
+  ).not.toThrow();
+});
+
+it("classifies a local close and a truncated frame without replacing the first terminal", async () => {
+  const local = await ready();
+  await local.client.close();
+  expect(local.client.terminal?.reason).toBe("closed");
+  const truncated = await ready();
+  truncated.socket.emit("data", Buffer.from([0, 0]));
+  truncated.socket.emit("end");
+  await truncated.client.close();
+  expect(truncated.client.terminal?.reason).toBe("protocol_violation");
+});
+
+it("retains the pre-ready phase and handshake pending count without exposing malformed identity", async () => {
+  const f = opening();
+  f.socket.receive(endpoint().binding);
+  const rejected = expect(f.connected).rejects.toMatchObject(
+    error("refused", "invalid_backend_identity"),
+  );
+  f.socket.receive(
+    response(requestAt(f.socket).id, { private: endpoint().token }),
+  );
+  await rejected;
+  expect(f.client.terminal).toEqual({
+    reason: "protocol_violation",
+    phase: "handshake",
+    submittedPendingCount: 1,
+    submittedEffectCount: 0,
+    binding: endpoint().binding,
+  });
+  expect(() => f.client.verifiedContext).toThrow("connector_unavailable");
+});

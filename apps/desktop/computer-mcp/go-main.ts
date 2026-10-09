@@ -85,24 +85,33 @@ export async function runGoComputerMcp(file: string): Promise<void> {
   );
   let closing: Promise<void> | undefined;
   let poll: NodeJS.Timeout;
+  let unsubscribeTerminal: (() => void) | undefined;
+  let transportFailed = false;
   const close = (): Promise<void> => {
     if (closing) return closing;
-    lifecycle.closeHandlers();
-    clearInterval(poll);
-    closing = (async () => {
+    // Publish the one drain before invoking cleanup ports that may reenter close.
+    closing = Promise.resolve().then(async () => {
       const results = await Promise.allSettled([
         handle.close(),
         lifecycle.waitForHandlers(),
       ]);
       await client.close();
+      if (client.terminal && client.terminal.reason !== "closed")
+        transportFailed = true;
       if (results.some((result) => result.status !== "fulfilled"))
         throw new Error("COMPUTER_MCP_GO_DRAIN_UNCONFIRMED");
       // This settles this adapter, not native Go handlers. The desktop then
       // closes its exact Go owner before confirming the overall connector drain.
       await lease.release();
-    })();
+    });
+    lifecycle.closeHandlers();
+    clearInterval(poll);
+    unsubscribeTerminal?.();
+    unsubscribeTerminal = undefined;
     void closing.then(
-      () => process.exit(0),
+      // A settled adapter drain cannot turn unexpected connector EOF into
+      // clean lifecycle shutdown or prove native Go work was cancelled.
+      () => process.exit(transportFailed ? 1 : 0),
       () => {
         process.stderr.write("Farol Go Computer MCP shutdown unverified.\n");
         process.exit(1);
@@ -124,4 +133,12 @@ export async function runGoComputerMcp(file: string): Promise<void> {
   process.once("SIGINT", requestClose);
   process.once("SIGTERM", requestClose);
   process.stdin.once("end", requestClose);
+  // Subscribe only after the handshake, handle and close path are ready. A
+  // terminal between setup and subscription is delivered synchronously once.
+  const unsubscribe = client.onTerminal((terminal) => {
+    if (terminal.reason !== "closed") transportFailed = true;
+    requestClose();
+  });
+  if (closing) unsubscribe();
+  else unsubscribeTerminal = unsubscribe;
 }
