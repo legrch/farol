@@ -71,7 +71,12 @@ func (s *ComputerIngress) refreshApproval(ctx context.Context, scope *connectorR
 	err := store.WithOwnerApproval(ctx, func(status accessrepo.Status, stored *authority.Approval) error {
 		return s.withRenewalCurrent(ctx, scope, func() error {
 			p := s.publication
-			if stored == nil || !status.ApprovalPresent || status.Generation != p.approval.Generation ||
+			// Known Store observation and current owner precede any claim/write.
+			// Absence here is a refusal, unlike missing post-commit readback below.
+			if stored == nil || !status.ApprovalPresent {
+				return authority.Fail("COMPUTER_AUTHORITY_STORE_UNAVAILABLE", "authority-store")
+			}
+			if status.Generation != p.approval.Generation ||
 				!authority.SameApprovalPolicy(*stored, p.approval) || !stored.ExpiresAt.Equal(p.current().ExpiresAt) {
 				return computerUnavailable()
 			}

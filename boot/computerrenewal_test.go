@@ -3,6 +3,7 @@ package boot
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"reflect"
 	"sync"
 	"testing"
@@ -23,6 +24,58 @@ type renewalStoreFixture struct {
 	commitFailure error
 	beforeUpdate  func() error
 	afterUpdate   func()
+}
+
+// A controlled pre-publication observation, not a native revocation receipt.
+type renewalApprovalObservationFixture struct {
+	*renewalStoreFixture
+	failure error
+}
+
+func (s *renewalApprovalObservationFixture) WithOwnerApproval(ctx context.Context, inspect func(accessrepo.Status, *authority.Approval) error) error {
+	if s.failure != nil {
+		return s.failure
+	}
+	return inspect(accessrepo.Status{Revision: s.revision, Generation: s.approval.Generation, ApprovalPresent: false}, nil)
+}
+
+func TestComputerRenewalMissingOwnerApprovalVerificationIsKnownPreWriteRefusal(t *testing.T) {
+	for _, mode := range []string{"missing", "unreadable", "already-unknown"} {
+		t.Run(mode, func(t *testing.T) {
+			s, store, _, _ := renewalFixture(t, true)
+			store.clock.now = store.approval.ExpiresAt.Add(time.Millisecond)
+			observed := &renewalApprovalObservationFixture{renewalStoreFixture: store}
+			if mode == "unreadable" {
+				observed.failure = errors.New("owner approval observation unavailable")
+			}
+			if mode == "already-unknown" {
+				s.root.unknown = true
+			}
+			s.root.store = observed
+			publication := s.root.publication
+			approval := publication.approval.Clone()
+			receipt, current, refreshes, revision, unknown := publication.receipt, publication.currentApproval, publication.refreshCount, store.revision, s.root.unknown
+			used := make(map[string]bool, len(s.root.used))
+			for id, value := range s.root.used {
+				used[id] = value
+			}
+			native := s.root.native.(*settingsNativeFixture)
+			calls := native.calls
+			out, err := verificationInvoke(t, s.verificationMethod(s.current), wire.ComputerConnectorVerify{Challenge: "visible-challenge", WorkspaceId: "work", CallId: "original-missing-approval-check"})
+			if mode == "missing" || mode == "already-unknown" {
+				if err != nil || out == nil || out.Status != "refused" || out.Code != "COMPUTER_AUTHORITY_STORE_UNAVAILABLE" || len(out.Data) != 0 {
+					t.Fatalf("known missing approval became unknown or authorized: %+v %v", out, err)
+				}
+			} else if err == nil || out != nil {
+				t.Fatal("unreadable owner became a known result", out, err)
+			}
+			if store.updates != 0 || native.calls != calls || s.root.publication != publication || !reflect.DeepEqual(publication.approval, approval) ||
+				publication.receipt != receipt || publication.currentApproval != current || publication.refreshCount != refreshes || store.revision != revision ||
+				s.root.unknown != unknown || !reflect.DeepEqual(s.root.used, used) {
+				t.Fatal("pre-write refusal changed authority, claimed an operation or dispatched native IO")
+			}
+		})
+	}
 }
 
 func (s *renewalStoreFixture) UpdateApproval(ctx context.Context, revision uint64, a authority.Approval) error {
