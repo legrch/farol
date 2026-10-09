@@ -34,6 +34,11 @@ admitted. Invalid clocks, durations and safe-millisecond overflow refuse.
 Reissue and lease policy are pure; the wall clock is injected through the existing
 consumer `port.Clock` and supplied by native composition.
 
+When the admission clock includes a monotonic reading, the fixed execution
+deadline retains it even when persisted owner expiry caps the budget. The cap
+keeps the same wall instant; a later wall-clock rollback cannot extend the
+original elapsed execution budget. Current owner checks can still refuse early.
+
 ## Current trusted task admission
 
 `port.CurrentTaskAdmission` is a consumer-owned projection port, not an owner of
