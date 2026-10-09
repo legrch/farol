@@ -31,6 +31,7 @@ export const propertyUnitFiles = Object.freeze([
 // Reviewed pure policies, source contracts and single adapters with fake ports.
 // Their legacy integration-directory names do not establish a real boundary.
 export const unitIntegrationFiles = Object.freeze([
+  "tests/e2e/current-react-setup-action.test.mjs",
   "tests/e2e/setup-config-error-child.test.mjs",
   "tests/integration/build-identity-contract.test.mjs",
   "tests/integration/candidate-contract.test.mjs",

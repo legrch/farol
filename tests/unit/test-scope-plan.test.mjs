@@ -30,6 +30,15 @@ const selectedFiles = (plan) =>
   plan.suites.flatMap((suite) => suite.files ?? []);
 
 describe("source test scopes", () => {
+  it("includes the pure current-React Setup observer in unit and fast without claiming native E2E", () => {
+    const observer = "tests/e2e/current-react-setup-action.test.mjs";
+    expect(classified.nodeUnit).toContain(observer);
+    for (const scope of ["unit", "fast"])
+      expect(selectedFiles(planTests(scope, files))).toContain(observer);
+    expect(selectedFiles(planTests("integration", files))).not.toContain(
+      observer,
+    );
+  });
   it("keeps repository config native helpers outside unit and fast scopes", () => {
     const pure = "tests/unit/repository-config-access.test.ts";
     const native = "tests/integration/repository-config-access.test.ts";
