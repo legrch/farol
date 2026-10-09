@@ -547,15 +547,8 @@ export class WindowController implements RendererFacade {
       return false;
     }
     this.tasksInitialized = true;
-    const ids = new Set(
-      value.tasks.map((task) => `${task.taskId}:${task.turnId}`),
-    );
-    this.patch({
-      tasks: value,
-      activity: this.state.activity.filter((event) =>
-        ids.has(`${event.taskId}:${event.turnId}`),
-      ),
-    });
+    // Admitted metadata remains inspectable after its turn moves on.
+    this.patch({ tasks: value });
     return true;
   }
   private record(value: unknown): void {

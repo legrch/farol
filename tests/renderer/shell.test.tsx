@@ -2552,28 +2552,61 @@ it("Activity View chat opens the same currently observed task without dispatchin
   expect(f.api.task).not.toHaveBeenCalled();
   expect(f.api.configure).not.toHaveBeenCalled();
 });
-it("Activity will not route a historical record into a reused turn", async () => {
-  const { host, c, f } = await activityFixture();
-  await act(async () =>
-    host.querySelector<HTMLButtonElement>(".activity-row")!.click(),
-  );
-  const selectedId = c.getSnapshot().destination.activityId;
-  await act(async () =>
-    f.emit("tasks", {
-      revision: 2,
-      tasks: [{ ...task(), turnId: "replacement-turn" }],
-    }),
-  );
-  expect(host.querySelector(".activity-page")?.textContent).toContain(
-    "Event no longer available",
-  );
-  expect(c.getSnapshot().destination.activityId).toBe(selectedId);
-  expect(
-    [...host.querySelectorAll("button")].some(
-      (item) => item.textContent === "View chat",
-    ),
-  ).toBe(false);
-});
+it.each(["turn reuse", "task removal", "task replacement"] as const)(
+  "Activity retains historical inspection without opening another chat after %s",
+  async (change) => {
+    const { host, c, f } = await activityFixture();
+    await act(async () =>
+      host.querySelector<HTMLButtonElement>(".activity-row")!.click(),
+    );
+    const selectedId = c.getSnapshot().destination.activityId;
+    const recorded = c
+      .getSnapshot()
+      .activity.find((event) => event.id === selectedId)!;
+    await act(async () =>
+      f.emit("tasks", {
+        revision: 2,
+        tasks:
+          change === "task removal"
+            ? []
+            : [
+                {
+                  ...task(
+                    change === "task replacement"
+                      ? "replacement-task"
+                      : "task-1",
+                  ),
+                  turnId: "replacement-turn",
+                  label: "Different work",
+                },
+              ],
+      }),
+    );
+    expect(
+      c.getSnapshot().activity.find((event) => event.id === selectedId),
+    ).toBe(recorded);
+    expect(host.querySelector(".toolbar-title h1")?.textContent).toBe(
+      recorded.label,
+    );
+    expect(host.querySelector(".activity-page")?.textContent).toContain(
+      "Outcome not confirmed",
+    );
+    expect(host.querySelector(".activity-page")?.textContent).toContain(
+      "There is no confirmed successful or failed result.",
+    );
+    expect(host.querySelector(".activity-page")?.textContent).toContain(
+      "Chat no longer available here",
+    );
+    expect(c.getSnapshot().destination.activityId).toBe(selectedId);
+    expect(
+      [...host.querySelectorAll("button")].some(
+        (item) => item.textContent === "View chat",
+      ),
+    ).toBe(false);
+    expect(f.api.task).not.toHaveBeenCalled();
+    expect(f.api.configure).not.toHaveBeenCalled();
+  },
+);
 it("Activity retains legacy Home event inspector routing", async () => {
   const { host, c } = await activityFixture();
   await act(async () => c.overlay("activity"));
