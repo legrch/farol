@@ -44,59 +44,116 @@ export async function readSetupSettings(page) {
 
 // One click only. A refusal, unknown result or timeout fails this journey;
 // observation never resubmits the command or chooses another executor.
-export async function setupAction(page, name) {
-  await page
-    .locator(".setup-page")
-    .getByRole("button", { name, exact: true })
-    .click();
-  if (name === "Verify workspace") {
-    // The selected workspace owns its action receipt. Do not infer success
-    // from the old page-wide feedback, which intentionally excludes it.
-    const feedback = page.locator(
-      '.setup-page .workspace-detail .workspace-feedback p[role="status"]',
-    );
-    await feedback
-      .filter({
-        hasText:
-          "Verify workspace: Action confirmed. Check the current status below.",
-      })
-      .waitFor();
-    assert.equal(
-      await feedback
-        .filter({ hasText: "Verify workspace: " })
-        .last()
-        .innerText(),
-      "Verify workspace: Action confirmed. Check the current status below.",
-      `SETUP_ACTION_UNCONFIRMED:${name}`,
-    );
-    return;
-  }
-  await page.waitForFunction(() => {
-    const feedback = document.querySelector(
-      '.setup-page .settings-page > p[role="status"]',
-    );
-    return feedback && feedback.textContent !== "Saving or checking…";
-  });
-  const expectedFeedback =
-    {
-      "Add workspace…":
-        "Selection received. Confirm read-only access below to add it.",
-      "Add selected workspace read-only":
-        "Approval request completed. Only workspaces in the approved list below have saved access.",
-      "Save & connect":
-        "Credentials saved. The connection step did not complete. Review its status before another action; keep the saved key.",
-      "Connect this Mac":
-        "Local connection started. Verify Farol in ChatGPT to confirm external access.",
-      "Check connection":
-        "Local connection checked. Access from ChatGPT has a separate verification.",
-    }[name] ?? "Action confirmed. Check the current status below.";
-  assert.equal(
-    await page
-      .locator('.setup-page .settings-page > p[role="status"]')
-      .innerText(),
-    expectedFeedback,
-    `SETUP_ACTION_UNCONFIRMED:${name}`,
+export async function setupAction(page, name, { scope = ".setup-page" } = {}) {
+  const messages = {
+    "Add workspace…":
+      "Selection received. Confirm read-only access below to add it.",
+    "Save & connect":
+      "Credentials saved. The connection step did not complete. Review its status before another action; keep the saved key.",
+    "Connect this Mac":
+      "Local connection started. Verify Farol in ChatGPT to confirm external access.",
+    "Check connection":
+      "Local connection checked. Access from ChatGPT has a separate verification.",
+    "Check attachment":
+      "Attachment checked. The current workspace and connection checks passed.",
+    "Save file permissions":
+      "Request completed. Review its recorded result in Diagnostics and the current status below.",
+  };
+  const verify = name === "Verify workspace";
+  const add = name === "Add selected workspace read-only";
+  assert.ok(
+    verify || add || Object.hasOwn(messages, name),
+    `SETUP_ACTION_UNSUPPORTED:${name}`,
   );
+  let expected = messages[name];
+  let before;
+  if (verify || add) before = await readSetupSettings(page);
+  if (verify) {
+    const root = await page
+      .locator(`${scope} .workspace-detail:visible .workspace-path code`)
+      .innerText();
+    const workspace = before.computer.workspaces.find(
+      (item) => item.root === root,
+    );
+    assert.ok(workspace, "SETUP_WORKSPACE_NOT_SAVED");
+    assert.ok(
+      ["read", "write"].includes(workspace.access),
+      "SETUP_WORKSPACE_ACCESS_INVALID",
+    );
+    expected = `Verify workspace: Workspace access checked: ${workspace.root}. Saved access: ${workspace.access === "read" ? "Read-only" : "Read & write"}.`;
+  }
+  // Arm before the original click. Retained feedback is not a new result, and
+  // a later refresh must not erase the first observed refusal/unknown outcome.
+  // This watches presentation only; it does not query or replay an operation.
+  const observation = await page.evaluateHandle(
+    ({ scope, verify }) => {
+      const container = document.querySelector(scope);
+      if (!container) throw new Error("SETUP_ACTION_SURFACE_MISSING");
+      const read = () =>
+        [
+          ...container.querySelectorAll(
+            verify
+              ? '.workspace-detail .workspace-feedback p[role="status"]'
+              : '.settings-page > p[role="status"]',
+          ),
+        ]
+          .filter((node) => node.checkVisibility())
+          .map((node) => node.textContent)
+          .filter((text) => !verify || text.startsWith("Verify workspace: "));
+      const pending = verify
+        ? "Verify workspace: Saving or checking…"
+        : "Saving or checking…";
+      const previous = JSON.stringify(read());
+      const observation = { result: null, observer: null };
+      let changed = false;
+      observation.observer = new MutationObserver(() => {
+        if (observation.result !== null) return;
+        if (!container.isConnected) {
+          observation.result = ["SETUP_ACTION_SURFACE_LOST"];
+          return;
+        }
+        const current = read();
+        changed ||= JSON.stringify(current) !== previous;
+        if (changed && current.length && !current.includes(pending))
+          observation.result = current;
+      });
+      observation.observer.observe(container, {
+        subtree: true,
+        childList: true,
+        characterData: true,
+      });
+      return observation;
+    },
+    { scope, verify },
+  );
+  try {
+    await page
+      .locator(scope)
+      .getByRole("button", { name, exact: true })
+      .click();
+    await page.waitForFunction((value) => value.result !== null, observation);
+    const observed = await observation.evaluate((value) => value.result);
+    if (add) {
+      const after = await readSetupSettings(page);
+      const added = after.computer.workspaces.filter(
+        (item) =>
+          !before.computer.workspaces.some(
+            (prior) => prior.workspaceId === item.workspaceId,
+          ),
+      );
+      assert.equal(added.length, 1, "SETUP_ADDED_WORKSPACE_UNCONFIRMED");
+      assert.equal(
+        added[0].access,
+        "read",
+        "SETUP_ADDED_WORKSPACE_NOT_READ_ONLY",
+      );
+      expected = `Workspace access saved: ${added[0].root}. Saved access: Read-only. Check access before using it.`;
+    }
+    assert.deepEqual(observed, [expected], `SETUP_ACTION_UNCONFIRMED:${name}`);
+  } finally {
+    await observation.evaluate((value) => value.observer.disconnect());
+    await observation.dispose();
+  }
 }
 
 const setupSteps = [

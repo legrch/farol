@@ -887,15 +887,9 @@ try {
         })
         .getByRole("combobox")
         .selectOption("approved-roots-v1");
-      await window
-        .getByRole("button", { name: "Save file permissions", exact: true })
-        .click();
-      await window
-        .locator('.settings-page > p[role="status"]')
-        .filter({
-          hasText: /^Action confirmed\. Check the current status below\.$/u,
-        })
-        .waitFor();
+      await setupAction(window, "Save file permissions", {
+        scope: ".settings-page",
+      });
       saved = await readSetupSettings(window);
       assert.equal(saved.computer.filePolicy, "approved-roots-v1");
       assert.equal(saved.revision, beforePolicy.revision + 1);
