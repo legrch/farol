@@ -29,14 +29,18 @@ source fixtures are not proof of a live task route.
 
 ## Installation and updates
 
-The existing published baseline is
-[0.1.11-owner.beta.1](https://github.com/legrch/farol-releases/releases/tag/v0.1.11-owner.beta.1),
-unsigned macOS ARM64 build `13`, source `8c09f4c7`. The separately preserved
-React/Go `0.2.0-owner.beta.1` Dev and package candidates do not establish an
-installed 0.2 release. New binary publication and updater discovery select
-`legrch/farol`; [historical feed records](github-release-contract.md) remain
-valid only in their retained recovery context. No new 0.2 publication or
-successful ordinary next update is claimed here.
+The observed 9 October installed slot is unsigned macOS ARM64
+`0.2.0-owner.beta.3`, build `17`, source `24cc7c32`. Binary releases
+[beta3](https://github.com/legrch/farol/releases/tag/v0.2.0-owner.beta.3) and
+[beta4](https://github.com/legrch/farol/releases/tag/v0.2.0-owner.beta.4) are published
+in `legrch/farol`; beta4 download readiness does not mean beta4 is installed.
+The installed beta3 predates current source renewal/transport fixes. No successful
+ordinary next update or current-source installed reliability is claimed here.
+The earlier
+[0.1.11-owner.beta.1](https://github.com/legrch/farol-releases/releases/tag/v0.1.11-owner.beta.1)
+and [historical feed records](github-release-contract.md) remain valid only in
+their retained recovery context. Publication and updater discovery select
+`legrch/farol`; existing assets are immutable.
 
 **First installation by an external recipient from the published ZIP remains
 unqualified as a supported end-to-end workflow.** A manual app copy is not an

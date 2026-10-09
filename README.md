@@ -10,18 +10,20 @@ Computer access controls and operation status keep workspace access explicit.
 
 ## Status and scope
 
-Farol is an **owner beta for macOS on Apple Silicon**. This page describes the current source
-integration tree. Accepted `main`
-is `8c09f4c7fd9fc82f23a30ad42e701d041189aeea`; integrating source does not
-update the installed product.
+Farol is an **owner beta for macOS on Apple Silicon**. This page describes the
+current source integration tree. Local `main` contains the React/Go cutover and
+later reliability and UI checkpoints; source integration does not update the
+installed product or complete final release acceptance. The following observations
+are dated **9 October 2026**.
 
-| State                        | Scope                                                                                                                                                                                                                                                                                                                                                                                                               |
-| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Published baseline           | [0.1.11-owner.beta.1](https://github.com/legrch/farol-releases/releases/tag/v0.1.11-owner.beta.1), build `13`, source `8c09f4c7fd9fc82f23a30ad42e701d041189aeea`. The existing beta is unsigned and not notarized. New releases target `legrch/farol`; historical assets remain unchanged.                                                                                                                          |
-| Accepted main                | K0/K1 Go foundation plus the separately accepted access hotfix. It does not establish the shipping React/Go cutover.                                                                                                                                                                                                                                                                                                |
-| Ordinary Dev evidence        | The preserved `0a651651` React/Go Dev opens with its ordinary isolated profile and serves actual external catalogue, bootstrap, read and search requests. External create/edit/readback also pass in a checkout beneath `.codex`, covered by the enclosing HOME grant. Earlier `426f36d6` passed stale-digest conflict checks; its edited file survives normal Quit and subsequent builds without another mutation. |
-| UI evidence                  | Home, guided Setup, saved-credential cancellation, Appearance, sidebar sizing, native browser overlay focus and the Dev Updates explanation have native witnesses. The compact sidebar navigation correction at `0455aa3b` passed on `0a651651`: new/current destination and Back dismiss the narrow-window overlay. Hidden browser accessibility-tree exposure remains unqualified.                                |
-| Remaining daily-driver gates | Go shell/Git, complete process cleanup and authority qualification, accepted main/package, supported installed replacement and the next ordinary update remain open. Dev readiness does not complete those gates.                                                                                                                                                                                                   |
+| State                        | Scope                                                                                                                                                                                                                                                                                                                                             |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Installed slot               | `0.2.0-owner.beta.3`, ARM64 build `17`, source `24cc7c32`, at `$HOME/Applications/Farol.app`. Its on-disk manifest is Go-enabled schema 4. The unsigned beta predates current renewal/transport changes. Slot metadata does not prove a new installed runtime or reliability acceptance.                                                          |
+| Published binaries           | beta3/build17 and beta4/build18 are published in `legrch/farol`. Published bytes remain immutable. A downloaded beta4 is distinct from the installed beta3; the normal N→N+1 update remains unqualified. Historical assets remain in their recovery context.                                                                                      |
+| Source checkpoints           | Local `main` integrates the selected Home/wizard, retained ChatGPT presentation, current-authority renewal, bounded transport recovery and exact Task read-selection publication. Scoped tests/reviews apply to their exact ranges. Full-range source, native, package and installed acceptance remain separate gates.                            |
+| Ordinary Dev evidence        | Saved-profile source `09d3d6c9`, Go build `6fb6b8cc…`, serves actual external catalogue/bootstrap/list/read/search, guarded file changes and original durable outcome observation across normal Quit/reopen. Its existing connection is held for the real twelve-hour renewal witness. Later source changes are not loaded into that running Dev. |
+| UI evidence                  | Native Home/navigation, Review Setup, workspace/credential draft cancellation, Sunrise DEV About and browser overlay/focus have bounded witnesses. Later Appearance, Activity and Sign-in changes have scoped renderer evidence; current-source normal/compact/theme parity still needs native acceptance.                                        |
+| Remaining daily-driver gates | Actual elapsed renewal and current-source transport recovery, remaining native UI/Setup journeys, external Go Git/Shell/Task, final source/package acceptance, compatible app+state recovery and a real successor update remain open.                                                                                                             |
 
 The Go cutover is incomplete. The `56ed3941` normal-entrypoint Dev candidate passed
 a controlled React/Go two-turn Chat journey from the ordinary first-message form,
@@ -36,21 +38,24 @@ installed, cross-build recovery or full cutover qualification. Earlier failed
 profiles remain quarantined. See
 the [controlled Chat witness](docs/desktop-core.md#controlled-normal-desktop-chat).
 
-The installed predecessor was observed on 6 October as `0.1.11-owner.beta.1`,
+The earlier installed predecessor was observed on 6 October as `0.1.11-owner.beta.1`,
 build `13`, source `8c09f4c7`, separately from the React/Go Dev. Its retained
 completed `0.1.10` → `0.1.11` update is a distinct operation; it does not settle
-an older outcome-unknown update. Fresh installed lifetime, active-operation,
-state and recovery checks are still required before replacement. The earlier
+an older outcome-unknown update. The installed slot has since advanced to beta3;
+that transition does not qualify the next in-app update. Fresh installed lifetime,
+active-operation, state and recovery checks are still required before another
+replacement. The earlier
 [packaged Go Settings delivery witness](docs/desktop-core.md#go-owned-settings-delivery)
 remains evidence for its exact package, not for the installed predecessor.
 
 ## Use and installation
 
-The published TypeScript Computer route supports approved workspace instructions, guidance,
-list/search/read and explicitly enabled guarded file changes. Workspace shell
-and full Git/history require separate approval and verification. Shell network
-access remains denied; full Git can expose older excluded content and approved
-user Git settings. Activity and support export retain content-free diagnostics.
+The Go-enabled owner beta exposes workspace catalogue/bootstrap, list/search/read,
+explicitly enabled guarded file changes and retained mutation observation. Shell,
+ordinary Git and coding tasks are not exposed by that route. Their source adapters
+need separate authority and native qualification; Git history can expose older
+excluded content and approved user Git settings. Activity and support export
+retain content-free diagnostics.
 The Farol Model route and Product Agent remain disabled.
 
 The current Go integration selects the same backend through a private socket
@@ -65,7 +70,17 @@ remain separate, and a failed Go launch never falls back to them. See the
 [current Computer evidence](docs/computer-parity.md#current-go-dev-evidence)
 and [connector contract](modules/computer/connector.md).
 
-The published beta includes a ZIP, release manifest and checksum file. **First
+Current source uses the existing authority Store and Settings publication for
+automatic renewal under unchanged owner consent. Bounded transport recovery
+requires confirmed original lifecycle closure, current consent and settled
+operation evidence; pending/unknown effects are never replayed. These source
+checks do not establish real sleep/network recovery. The held Dev's elapsed
+twelve-hour external test and a later installed witness remain open. The
+owner-reported 9 October outage has no retained first refusal identifying its
+cause, so it is not attributed to approval expiry.
+
+The published 0.2 betas include an app ZIP and a release manifest carrying its
+checksum. **First
 installation by an external recipient from that ZIP is not currently documented
 and qualified as a supported end-to-end workflow.** The first-recipient install
 and adoption mechanism remains product implementation work. A manual app copy
@@ -239,6 +254,11 @@ output before terminal, historical results and lost-ACK no-repeat behavior.
 The Claude execution lease is selected only after Task admission. `NativeRuntime`
 does not yet register these Task routes: trusted selection, native qualification
 and real Codex/Claude journeys remain separate acceptance work.
+Settings now retain the exact selected Codex thread and turn; legacy absent or
+thread-only selections remain readable but cannot produce an exact read selection.
+The same Computer publication carries that pair with its current Task source, and
+Go copies both under the original withdrawal/unknown fence. This metadata performs
+no provider read, issues no admission and does not activate an external Task tool.
 
 | Location                                                                                 | Ownership at this checkpoint                                                                                                                                                                                                               |
 | ---------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
