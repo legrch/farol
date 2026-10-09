@@ -177,8 +177,19 @@ function actionFeedback(
   if (
     result.state === "applied" &&
     result.id === intention("computer.add-workspace")
-  )
-    return "Approval request completed. Only workspaces in the approved list below have saved access.";
+  ) {
+    const evidence = evidenceReceived ? current?.evidence?.value : null;
+    const workspace =
+      evidence?.kind === "computer.workspace-selection" &&
+      current?.configuration?.status === "ready"
+        ? current.configuration.settings.computer.workspaces.find(
+            (item) => item.workspaceId === evidence.workspaceId,
+          )
+        : null;
+    return workspace
+      ? `Workspace access saved: ${workspace.root}. Saved access: ${workspace.access === "read" ? "Read-only" : "Read & write"}. Check access before using it.`
+      : "Approval request completed. Only workspaces in the approved list below have saved access.";
+  }
   if (
     result.state === "applied" &&
     result.id.startsWith("settings:computer.update-access:")
@@ -221,8 +232,38 @@ function actionFeedback(
     result.id === intention("connector.check-health")
   )
     return "Local connection checked. Access from ChatGPT has a separate verification.";
-  if (result.state === "applied")
-    return "Action confirmed. Check the current status below.";
+  if (result.state === "applied") {
+    const kind = result.id.split(":")[1];
+    if (
+      kind === "computer.verify-workspace" ||
+      kind === "computer.check-folder"
+    ) {
+      const workspace =
+        current?.configuration?.status === "ready"
+          ? current.configuration.settings.computer.workspaces.find(
+              (item) => result.id === intention(kind, item.workspaceId),
+            )
+          : null;
+      return workspace && current && workspaceChecked(current, workspace)
+        ? `Workspace access checked: ${workspace.root}. Saved access: ${workspace.access === "read" ? "Read-only" : "Read & write"}.`
+        : "Workspace check request completed. A current access check is not confirmed; review the saved workspace and Diagnostics.";
+    }
+    if (kind === "connector.check-attachment")
+      return current && computerSetup(current).ready
+        ? "Attachment checked. The current workspace and connection checks passed."
+        : "Attachment check request completed. Current attachment is not confirmed; review the connection status and Diagnostics.";
+    if (kind === "chatgpt.open-sign-in")
+      return "Sign-in request opened. Finish in ChatGPT, then check sign-in; opening it does not confirm an authenticated account.";
+    if (kind === "chatgpt.open-browser")
+      return "ChatGPT open request completed. Opening it does not confirm sign-in.";
+    if (kind === "chatgpt.verify")
+      return current && computerSetup(current).embeddedChatGPT === "Ready"
+        ? "Sign-in checked for this build."
+        : "Sign-in check request completed. Current sign-in is not confirmed.";
+    if (kind === "onboarding.open-help")
+      return "Connection help open request completed.";
+    return "Request completed. Review its recorded result in Diagnostics and the current status below.";
+  }
   if (result.code === "TUNNEL_CLIENT_DISCOVERY_FAILED")
     return "Connection helper discovery failed. Review Diagnostics and the Connection guide; no usable helper is confirmed.";
   if (result.code === "TUNNEL_CLIENT_DISCOVERY_CANDIDATE_STALE")
@@ -260,8 +301,8 @@ function soleIntent(
   before: WindowSnapshot,
   after: WindowSnapshot,
   kind: string,
+  id = intention(kind),
 ): boolean {
-  const id = intention(kind);
   return Object.entries(after.intents).every(
     ([key, value]) => key === id || before.intents[key] === value,
   );
@@ -438,7 +479,7 @@ export function Settings({ snapshot, facade, setupStep }: SettingsProps) {
         report(
           actionFeedback(
             result,
-            soleIntent(current, after, command.kind) ? after : undefined,
+            soleIntent(current, after, command.kind, id) ? after : undefined,
             after.evidence !== current.evidence,
           ),
           result,
@@ -749,7 +790,14 @@ function Folders(props: PageProps) {
   const selected =
     settings.computer.workspaces.find(
       (item) => item.workspaceId === selectedId,
-    ) ?? settings.computer.workspaces[0];
+    ) ??
+    (props.setupStep
+      ? settings.computer.workspaces.find(
+          (item) =>
+            item.workspaceId === settings.setup.computer.verified?.workspaceId,
+        )
+      : undefined) ??
+    settings.computer.workspaces[0];
   const detailId = useId();
   const [picked, setPicked] = useState<WindowSnapshot["evidence"]>(null);
   const pickCurrent =
@@ -966,6 +1014,7 @@ function WorkspaceDetail({
   facade,
   actions,
   detailId,
+  setupStep,
 }: PageProps & { workspace: ApprovedProductWorkspace; detailId: string }) {
   const name = folderDisplayName(workspace);
   const scope = workspaceScope(snapshot, workspace.workspaceId);
@@ -974,6 +1023,8 @@ function WorkspaceDetail({
     scope: string | null;
   } | null>(null);
   const [removal, setRemoval] = useState<{ scope: string | null } | null>(null);
+  const [editOpen, setEditOpen] = useState(false);
+  const editing = !setupStep || editOpen || draft !== null || removal !== null;
   const [stopReview, setStopReview] = useState(false);
   const [stopResult, setStopResult] = useState<Intent | null>(null);
   const feedback = useSettingsFeedback(facade);
@@ -988,8 +1039,11 @@ function WorkspaceDetail({
     (intent) =>
       intent.state === "refused" && intent.code === "CONNECTOR_STOP_REQUIRED",
   );
-  const checked = workspaceChecked(snapshot, workspace);
+  const checked =
+    workspaceChecked(snapshot, workspace) &&
+    (!setupStep || !actions.computerPauseReason);
   const current = workspaceCurrent(snapshot, workspace);
+  const setupCurrent = current && !actions.computerPauseReason;
   const verifyKind = current
     ? "computer.check-folder"
     : "computer.verify-workspace";
@@ -1008,7 +1062,17 @@ function WorkspaceDetail({
     >
       <div className="workspace-heading">
         <h3>{name}</h3>
+        {setupStep && !editing && (
+          <button
+            type="button"
+            className="subtle"
+            onClick={() => setEditOpen(true)}
+          >
+            Edit
+          </button>
+        )}
         <button
+          hidden={!editing}
           type="button"
           className="subtle workspace-remove"
           aria-label={`Remove workspace ${name}`}
@@ -1050,15 +1114,19 @@ function WorkspaceDetail({
         </p>
       )}
       <p className="description">
-        {current
-          ? "Current workspace for Connection. Verify workspace checks access without changing its binding."
-          : "Verify workspace checks access and prepares this workspace for Connection."}
+        {setupStep && setupCurrent
+          ? "Current workspace for Connection. Access is checked for this build and saved scope. Continue when ready."
+          : current
+            ? "Current workspace for Connection. Verify workspace checks access without changing its binding."
+            : "Verify workspace checks access and prepares this workspace for Connection."}
       </p>
       <form
+        hidden={!editing}
         onKeyDown={(event) => {
           if (event.key === "Escape") {
             event.preventDefault();
             setDraft(null);
+            setEditOpen(false);
           }
         }}
         onSubmit={(event) => {
@@ -1075,8 +1143,10 @@ function WorkspaceDetail({
             )
             .then((result) => {
               // A refused/unknown save retains its draft and existing fence.
-              if (result?.state === "applied")
+              if (result?.state === "applied") {
                 setDraft((latest) => (latest === draft ? null : latest));
+                setEditOpen(false);
+              }
             });
         }}
       >
@@ -1123,8 +1193,11 @@ function WorkspaceDetail({
           <button
             type="button"
             className="subtle"
-            disabled={!draft}
-            onClick={() => setDraft(null)}
+            disabled={!draft && !setupStep}
+            onClick={() => {
+              setDraft(null);
+              setEditOpen(false);
+            }}
           >
             Cancel
           </button>
@@ -1197,7 +1270,9 @@ function WorkspaceDetail({
               : intent.id.startsWith("settings:computer.remove-workspace:")
                 ? "Remove workspace: "
                 : "Verify workspace: "}
-            {actionFeedback(intent)}
+            {Object.values(feedback.pages).find(
+              (entry) => entry.result === intent,
+            )?.text ?? actionFeedback(intent)}
           </p>
         ))}
         {stopRequired && (
@@ -1268,17 +1343,20 @@ function WorkspaceDetail({
           </button>
         )}
       </div>
-      <Command
-        actions={actions}
-        className="primary"
-        disabled={Boolean(draft || removal)}
-        command={{ kind: verifyKind, workspaceId: workspace.workspaceId }}
-        admit={(latest) =>
-          admitScope(latest) && workspaceCurrent(latest, workspace) === current
-        }
-      >
-        Verify workspace
-      </Command>
+      {(!setupStep || !setupCurrent) && (
+        <Command
+          actions={actions}
+          className="primary"
+          disabled={Boolean(draft || removal)}
+          command={{ kind: verifyKind, workspaceId: workspace.workspaceId }}
+          admit={(latest) =>
+            admitScope(latest) &&
+            workspaceCurrent(latest, workspace) === current
+          }
+        >
+          Verify workspace
+        </Command>
+      )}
     </section>
   );
 }
@@ -1860,7 +1938,24 @@ function Connection({
 }: PageProps) {
   const connector = settings.connectors.secureMcp;
   const setup = computerSetup(snapshot);
-  const externalChallenge = setup.externalChallenge;
+  const feedback = useSettingsFeedback(facade);
+  const signInFences = dependencyFences(
+    snapshot,
+    "chat",
+    Object.values(feedback.intents).map(
+      (intent) => settledEdit(intent, snapshot) ?? intent,
+    ),
+  );
+  const embeddedStatus =
+    feedback.unretained || signInFences.unknown
+      ? "Outcome unknown"
+      : signInFences.pending
+        ? "Sign-in check pending"
+        : setup.embeddedChatGPT;
+  const attachmentReady = setup.ready && !actions.computerPauseReason;
+  const externalChallenge = actions.computerPauseReason
+    ? null
+    : setup.externalChallenge;
   const connectorName = snapshot.environment === "dev" ? "Farol Dev" : "Farol";
   const [copiedVerification, setCopiedVerification] = useState<string | null>(
     null,
@@ -2204,16 +2299,43 @@ function Connection({
               ChatGPT to verify it. Farol never sends the request for you.
             </p>
           )}
-          <ol className="attachment-steps">
-            <li>
-              Open Tunnels in ChatGPT and attach this {connectorName}
-              {" connection."}
-            </li>
-            <li>
-              Copy the current verification request and send it in ChatGPT.
-            </li>
-            <li>Return here to check the recorded attachment result.</li>
-          </ol>
+          {(!setupStep || !attachmentReady) && (
+            <ol className="attachment-steps">
+              <li>
+                {actions.computerPauseReason ? (
+                  "Review the existing attachment result in Connection diagnostics before changing the connection."
+                ) : (
+                  <>
+                    Open Tunnels in ChatGPT and attach this {connectorName}
+                    {" connection."}
+                  </>
+                )}
+              </li>
+              {externalChallenge && (
+                <li>
+                  Copy the current verification request and send it in ChatGPT.
+                </li>
+              )}
+              <li>Return here to check the recorded attachment result.</li>
+            </ol>
+          )}
+          {setupStep && !attachmentReady && !externalChallenge && (
+            <p className="notice" role="status">
+              No current verification request is available.{" "}
+              {actions.computerPauseReason ??
+                (!setup.workspacesVerified || !setup.localConnectionCurrent
+                  ? setup.next
+                  : connector.challenge
+                    ? "The saved request no longer matches this build or connection. Review Connection diagnostics before requesting new verification."
+                    : "The local connection has no current request. Check attachment to observe a retained result; review Connection diagnostics if none is confirmed.")}
+            </p>
+          )}
+          {setupStep && attachmentReady && (
+            <p className="description">
+              The retained attachment check matches this build, connection and
+              workspace. Continue to review setup.
+            </p>
+          )}
           <div className="control-row">
             <Command
               actions={actions}
@@ -2232,7 +2354,7 @@ function Connection({
             </Command>
           </div>
           <ConnectionGuide />
-          {externalChallenge && (
+          {externalChallenge && (!setupStep || !attachmentReady) && (
             <div
               className="connector-challenge"
               data-connector-challenge="pending"
@@ -2304,46 +2426,72 @@ function Connection({
             </div>
           )}
           <p className="badges" role="status">
-            {setup.ready
+            {attachmentReady
               ? "Attachment checked · Computer ready"
               : "Attachment check needed"}
           </p>
-          <Command
-            actions={actions}
-            command={{ kind: "connector.check-attachment" }}
-            disabled={!setup.canCheckAttachment}
-            admit={(current) => computerSetup(current).canCheckAttachment}
-          >
-            Check attachment
-          </Command>
+          {(!setupStep || !attachmentReady) && (
+            <Command
+              actions={actions}
+              command={{ kind: "connector.check-attachment" }}
+              disabled={!setup.canCheckAttachment}
+              admit={(current) => computerSetup(current).canCheckAttachment}
+            >
+              Check attachment
+            </Command>
+          )}
         </Group>
       </div>
       <div hidden={setupStep !== undefined && setupStep !== "signin"}>
         <Group title="Embedded ChatGPT · optional" showTitle={!setupStep}>
-          <p className="badges">{setup.embeddedChatGPT}</p>
+          <p className="badges">{embeddedStatus}</p>
           <p className="description">
             Embedded sign-in is optional for external Computer access. It has
             its own check.
           </p>
-          <div className="control-row">
-            <Command
-              actions={actions}
-              command={{ kind: "chatgpt.open-sign-in" }}
-            >
-              Sign in
-            </Command>
-            <Command
-              actions={actions}
-              command={{ kind: "chatgpt.open-browser" }}
-            >
-              Open ChatGPT
-            </Command>
-            {setup.embeddedChatGPT !== "Ready" && (
-              <Command actions={actions} command={{ kind: "chatgpt.verify" }}>
-                Check sign-in
+          {setupStep === "signin" && embeddedStatus === "Ready" && (
+            <p className="description">
+              Sign-in is checked for this build. Continue when ready.
+            </p>
+          )}
+          {setupStep === "signin" && embeddedStatus === "Outcome unknown" && (
+            <p className="notice" role="status">
+              Outcome unknown. Review the existing result in Diagnostics; do not
+              repeat sign-in.
+            </p>
+          )}
+          {(!setupStep || embeddedStatus !== "Ready") && (
+            <div className="control-row">
+              <Command
+                actions={actions}
+                command={{ kind: "chatgpt.open-sign-in" }}
+              >
+                Sign in
               </Command>
-            )}
-          </div>
+              <Command
+                actions={actions}
+                command={{ kind: "chatgpt.open-browser" }}
+              >
+                Open ChatGPT
+              </Command>
+              {embeddedStatus !== "Ready" && (
+                <Command actions={actions} command={{ kind: "chatgpt.verify" }}>
+                  Check sign-in
+                </Command>
+              )}
+              {setupStep === "signin" && (
+                <button
+                  type="button"
+                  className="subtle"
+                  onClick={() =>
+                    facade.navigate({ area: "setup", setupStep: "folders" })
+                  }
+                >
+                  Skip for now
+                </button>
+              )}
+            </div>
+          )}
         </Group>
       </div>
     </>

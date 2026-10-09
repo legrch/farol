@@ -4,6 +4,7 @@ import { createRoot } from "react-dom/client";
 import type { Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Settings } from "../../src/ui/renderer/settings";
+import { Setup } from "../../src/ui/renderer/setup";
 import { WindowController } from "../../src/ui/renderer/controller";
 import type {
   SettingsPage,
@@ -260,7 +261,8 @@ async function mount(
   value: ProductSettings = settings(),
   environment: "preview" | "dev" = "preview",
   update: WindowSnapshot["update"] = { phase: "idle", checkedAt: null },
-  setupStep?: "connection" | "folders" | "attachment",
+  setupStep?: "signin" | "connection" | "folders" | "attachment",
+  wizard = false,
 ) {
   Object.assign(globalThis.crypto, { randomUUID });
   let activeSetupStep = setupStep;
@@ -293,7 +295,11 @@ async function mount(
   }));
   const c = new WindowController(f.api);
   await c.start();
-  c.navigate({ area: "settings", page });
+  c.navigate(
+    wizard
+      ? { area: "setup", setupStep: setupStep ?? "overview" }
+      : { area: "settings", page },
+  );
   controllers.push(c);
   const host = document.createElement("div");
   document.body.append(host);
@@ -301,6 +307,8 @@ async function mount(
   roots.push(root);
   function View() {
     const snapshot = useSyncExternalStore(c.subscribe, c.getSnapshot);
+    if (wizard && snapshot.destination.area === "setup")
+      return <Setup snapshot={snapshot} facade={c} />;
     return snapshot.destination.area === "settings" ? (
       <Settings snapshot={snapshot} facade={c} setupStep={activeSetupStep} />
     ) : null;
@@ -312,7 +320,7 @@ async function mount(
       </StrictMode>,
     ),
   );
-  const visible = (element: Element) => !element.closest("div[hidden]");
+  const visible = (element: Element) => !element.closest("[hidden]");
   const button = (text: string) => {
     const found = [...host.querySelectorAll("button")].find(
       (item) => visible(item) && item.textContent === text,
@@ -355,7 +363,11 @@ async function mount(
     pageTo,
     calls,
     configuration,
-    async stepTo(step: "connection" | "folders" | "attachment") {
+    async stepTo(step: "signin" | "connection" | "folders" | "attachment") {
+      if (wizard) {
+        await act(async () => c.navigate({ area: "setup", setupStep: step }));
+        return;
+      }
       activeSetupStep = step;
       await act(async () =>
         root.render(
@@ -498,7 +510,9 @@ describe("compact workspace detail", () => {
     await h.click("Verify workspace");
     expect(h.calls()).toEqual([{ kind: "computer.check-folder", workspaceId }]);
     expect(h.c.getSnapshot().configuration).toEqual(h.configuration);
-    expect(status(h).textContent).toContain("Action confirmed");
+    expect(status(h).textContent).toContain(
+      "Workspace access checked: /approved/project",
+    );
   });
   it.each([
     "absent",
@@ -3057,6 +3071,10 @@ it.each([false, true])(
     expect(h.button("Prepare edit…").disabled).toBe(true);
     await h.click("Prepare edit…");
     expect(h.calls()).toHaveLength(3); // Observation alone does not retire the intent.
+    const signInBadge = () =>
+      h.host.querySelector('[aria-label="Embedded ChatGPT · optional"] .badges')
+        ?.textContent;
+    expect(signInBadge()).toBe("Outcome unknown");
 
     const settled = structuredClone(pending);
     settled.settings.revision++;
@@ -3073,6 +3091,9 @@ it.each([false, true])(
         `settings:computer.apply-workspace-edit:${editOperationId}`
       ]?.state,
     ).toBe("applied");
+    // Only the exact Observe+ACK settlement may clear the retained shared fence.
+    // Sign-in presentation must agree with the existing command admission.
+    expect(signInBadge()).not.toBe("Outcome unknown");
     expect(h.button("Prepare edit…").disabled).toBe(false);
     vi.mocked(h.f.api.configure).mockResolvedValueOnce({
       ok: true,
@@ -3700,7 +3721,9 @@ describe("review regressions: retained action origins and exact edit delivery", 
         });
       await h.click(action);
       expect(notice(h.host)).toContain(
-        action === "Add workspace…" ? "Action cancelled" : "Action confirmed",
+        action === "Add workspace…"
+          ? "Action cancelled"
+          : "Workspace check request completed",
       );
       await act(async () => h.c.navigate({ area: "home" }));
       await act(async () =>
@@ -3709,7 +3732,9 @@ describe("review regressions: retained action origins and exact edit delivery", 
       expect(notice(h.host)).toContain("Sign-in is already open");
       await h.pageTo("folders");
       expect(notice(h.host)).toContain(
-        action === "Add workspace…" ? "Action cancelled" : "Action confirmed",
+        action === "Add workspace…"
+          ? "Action cancelled"
+          : "Workspace check request completed",
       );
       expect(h.calls()).toHaveLength(2);
     },
@@ -3738,7 +3763,7 @@ describe("review regressions: retained action origins and exact edit delivery", 
     await h.pageTo("connection");
     expect(notice(h.host)).toContain("Sign-in is already open");
     await h.click("Sign in");
-    expect(notice(h.host)).toContain("Action confirmed");
+    expect(notice(h.host)).toContain("Sign-in request opened");
     await h.pageTo("folders");
     expect(notice(h.host)).toBe("Action cancelled.");
     expect(h.calls()).toHaveLength(3);
@@ -4208,3 +4233,373 @@ it.each(["none", "verification", "workspace"] as const)(
     }
   },
 );
+
+// Exact Setup/controller DOM fixtures. These do not observe accounts or native state.
+describe("fresh and returning Setup journey", () => {
+  const mountSetup = (
+    step: "signin" | "folders" | "attachment",
+    value = connectionSettings(),
+  ) =>
+    mount(
+      "connection",
+      value,
+      "dev",
+      { phase: "idle", checkedAt: null },
+      step,
+      true,
+    );
+  const visibleText = (host: Element) =>
+    [...host.querySelectorAll("p,li")]
+      .filter(
+        (element) =>
+          !element.closest("[hidden]") &&
+          !element.closest("details:not([open])"),
+      )
+      .map((element) => element.textContent)
+      .join(" ");
+  async function refreshSetup(
+    h: Awaited<ReturnType<typeof mount>>,
+    value: ProductSettings,
+  ) {
+    vi.mocked(h.f.api.bootstrap).mockResolvedValue({
+      ...bootstrap(),
+      environment: "dev",
+      configuration: {
+        status: "ready",
+        settings: ProductSettingsSchema.parse(value),
+      },
+    });
+    await act(async () => h.c.refresh());
+  }
+
+  it("summarizes the verified workspace instead of the first grant and continues without a recheck", async () => {
+    const value = connectionSettings();
+    value.computer.workspaces.unshift({
+      ...structuredClone(value.computer.workspaces[0]!),
+      workspaceId: selectionId,
+      root: "/approved/other",
+      excludedPaths: [],
+      rootIdentity: { device: "1", inode: "3" },
+    });
+    const h = await mountSetup("folders", value);
+    const detail = h.host.querySelector(".workspace-detail")!;
+    expect(detail.textContent).toContain("/approved/project");
+    expect(visibleText(h.host)).toContain("Saved access: Read-only");
+    expect(visibleText(h.host)).toContain(
+      "Access is checked for this build and saved scope",
+    );
+    for (const text of ["Save", "Cancel", "Verify workspace"])
+      expect(() => h.button(text)).toThrow();
+    expect(() => h.field("Workspace access")).toThrow();
+    expect(h.button("Edit").disabled).toBe(false);
+    await h.click("Continue");
+    expect(h.c.getSnapshot().destination).toMatchObject({
+      area: "setup",
+      setupStep: "connection",
+    });
+    expect(h.calls()).toEqual([]);
+  });
+
+  it.each([
+    "build",
+    "generation",
+    "identity",
+    "missing",
+    "unknown",
+    "stale",
+  ] as const)(
+    "does not present a %s workspace witness as currently checked",
+    async (condition) => {
+      const value = connectionSettings();
+      if (condition === "build")
+        value.setup.computer.verified!.buildId = "f".repeat(64);
+      if (condition === "generation") value.computer.generation++;
+      if (condition === "identity")
+        value.computer.workspaces[0]!.accessCheck = {
+          buildId: "3".repeat(64),
+          computerGeneration: value.computer.generation,
+          rootIdentity: { device: "1", inode: "999" },
+          verifiedAt: "2026-10-02T20:00:00.000Z",
+        };
+      if (condition === "missing") value.setup.computer.verified = null;
+      if (condition === "unknown") value.setup.computer.outcomeUnknown = true;
+      const h = await mountSetup("folders", value);
+      if (condition === "stale") {
+        vi.mocked(h.f.api.bootstrap).mockRejectedValueOnce(
+          new Error("observation unavailable"),
+        );
+        await act(async () => h.c.refresh());
+      }
+      expect(visibleText(h.host)).not.toContain(
+        "Access is checked for this build and saved scope",
+      );
+      expect(visibleText(h.host)).not.toMatch(/\bAccess checked\b/);
+      expect(h.button("Verify workspace").disabled).toBe(
+        condition === "unknown" || condition === "stale",
+      );
+      if (condition === "unknown")
+        expect(visibleText(h.host)).toContain("unconfirmed outcome");
+      expect(h.calls()).toEqual([]);
+    },
+  );
+
+  it("Edit reveals the same guarded form, Cancel restores saved access, and navigation retains the draft", async () => {
+    const h = await mountSetup("folders");
+    const select = h.host.querySelector<HTMLSelectElement>(
+      ".workspace-detail select",
+    )!;
+    await h.click("Edit");
+    expect(h.field("Workspace access")).toBe(select);
+    expect(h.button("Cancel").disabled).toBe(false);
+    await change(select, "write");
+    await h.click("Continue");
+    expect(select.isConnected).toBe(true);
+    await act(async () =>
+      h.c.navigate({ area: "setup", setupStep: "folders" }),
+    );
+    expect(h.field("Workspace access")).toBe(select);
+    expect(select.value).toBe("write");
+    await h.click("Cancel");
+    expect(select.value).toBe("read");
+    expect(() => h.field("Workspace access")).toThrow();
+    await h.click("Edit");
+    expect(h.field("Workspace access")).toBe(select);
+    expect(h.button("Save").disabled).toBe(true);
+    expect(
+      h.host
+        .querySelector('[aria-label="Remove workspace project"]')
+        ?.closest("div[hidden]"),
+    ).toBeNull();
+    expect(h.calls()).toEqual([]);
+  });
+
+  it("retains a stale Edit draft across navigation and refuses saving it until Cancel", async () => {
+    const h = await mountSetup("folders");
+    await h.click("Edit");
+    await change(h.field("Workspace access"), "write");
+    const changed = connectionSettings();
+    changed.computer.generation++;
+    await h.click("Continue");
+    await refreshSetup(h, changed);
+    await h.stepTo("folders");
+    expect(h.field("Workspace access").value).toBe("write");
+    expect(visibleText(h.host)).toContain(
+      "Workspace access or identity changed while this draft was open",
+    );
+    expect(h.button("Save").disabled).toBe(true);
+    await h.click("Save");
+    await h.click("Cancel");
+    await h.click("Edit");
+    expect(h.field("Workspace access").value).toBe("read");
+    expect(h.calls()).toEqual([]);
+  });
+
+  it("fences a retained UNKNOWN save through Cancel, refresh and return without replay", async () => {
+    const h = await mountSetup("folders");
+    await h.click("Edit");
+    await change(h.field("Workspace access"), "write");
+    vi.mocked(h.f.api.configure).mockRejectedValueOnce(new Error("reply lost"));
+    await h.click("Save");
+    const receipt =
+      h.c.getSnapshot().intents[
+        `settings:computer.update-access:${workspaceId}`
+      ];
+    expect(receipt?.state).toBe("unknown");
+    expect(h.field("Workspace access").value).toBe("write");
+    await h.click("Cancel");
+    await h.click("Continue");
+    await refreshSetup(h, connectionSettings());
+    await h.stepTo("folders");
+    await h.remount();
+    expect(
+      h.c.getSnapshot().intents[
+        `settings:computer.update-access:${workspaceId}`
+      ],
+    ).toBe(receipt);
+    expect(visibleText(h.host)).toContain("unconfirmed outcome");
+    expect(visibleText(h.host)).not.toContain(
+      "Access is checked for this build and saved scope",
+    );
+    expect(h.button("Verify workspace").disabled).toBe(true);
+    await h.click("Edit");
+    await change(h.field("Workspace access"), "write");
+    expect(h.button("Save").disabled).toBe(true);
+    await h.click("Save");
+    expect(h.calls()).toEqual([
+      { kind: "computer.update-access", workspaceId, access: "write" },
+    ]);
+  });
+
+  it("keeps choose, approval and saved/check results explicit for a fresh workspace", async () => {
+    const h = await mountSetup("folders", settings());
+    const saved = withFolder();
+    vi.mocked(h.f.api.configure)
+      .mockResolvedValueOnce({
+        ok: true,
+        snapshot: h.configuration,
+        evidence: {
+          kind: "computer.workspace-pick",
+          selectionId,
+          displayPath: "/approved/project",
+        },
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        snapshot: { status: "ready", settings: saved },
+        evidence: { kind: "computer.workspace-selection", workspaceId },
+      });
+    await h.click("Add workspace…");
+    expect(visibleText(h.host)).toContain("access is not approved yet");
+    expect(h.c.getSnapshot().configuration).toEqual(h.configuration);
+    await h.click("Add selected workspace read-only");
+    expect(visibleText(h.host)).toContain(
+      "Workspace access saved: /approved/project. Saved access: Read-only",
+    );
+    expect(visibleText(h.host)).toContain("Check access needed");
+    const checked = connectionSettings();
+    vi.mocked(h.f.api.configure).mockResolvedValueOnce({
+      ok: true,
+      snapshot: { status: "ready", settings: checked },
+    });
+    await h.click("Verify workspace");
+    expect(visibleText(h.host)).toContain(
+      "Workspace access checked: /approved/project. Saved access: Read-only",
+    );
+    expect(() => h.button("Verify workspace")).toThrow();
+    expect(h.calls()).toEqual([
+      { kind: "computer.choose-workspace" },
+      { kind: "computer.add-workspace", selectionId },
+      { kind: "computer.verify-workspace", workspaceId },
+    ]);
+  });
+
+  it("shows a retained checked attachment with Continue and no first-time copy ritual", async () => {
+    const value = connectionSettings();
+    value.connectors.secureMcp.challenge = null;
+    const h = await mountSetup("attachment", value);
+    expect(visibleText(h.host)).toContain(
+      "Attachment checked · Computer ready",
+    );
+    expect(visibleText(h.host)).toContain(
+      "retained attachment check matches this build",
+    );
+    expect(h.host.querySelector(".attachment-steps")).toBeNull();
+    expect(() => h.button("Copy verification request")).toThrow();
+    expect(() => h.button("Check attachment")).toThrow();
+    expect(h.button("Open connection guide")).toBeTruthy();
+    await h.click("Review setup");
+    expect(h.c.getSnapshot().destination).toMatchObject({
+      area: "setup",
+      setupStep: "overview",
+    });
+    expect(h.calls()).toEqual([]);
+  });
+
+  it.each(["missing", "stale", "unknown"] as const)(
+    "keeps unfinished attachment steps useful with a %s challenge and no unavailable copy instruction",
+    async (condition) => {
+      const value = connectionSettings();
+      value.connectors.secureMcp.attachment = null;
+      value.setup.connect.verified = null;
+      if (condition === "missing") value.connectors.secureMcp.challenge = null;
+      if (condition === "stale")
+        value.connectors.secureMcp.challenge!.buildId = "f".repeat(64);
+      if (condition === "unknown") value.setup.connect.outcomeUnknown = true;
+      const h = await mountSetup("attachment", value);
+      expect(visibleText(h.host)).toContain(
+        "No current verification request is available",
+      );
+      expect(visibleText(h.host)).not.toContain(
+        "Copy the current verification request",
+      );
+      expect(visibleText(h.host)).not.toContain("Computer ready");
+      expect(() => h.button("Copy verification request")).toThrow();
+      expect(h.button("Open Tunnels")).toBeTruthy();
+      expect(h.button("Check attachment").disabled).toBe(
+        condition === "unknown",
+      );
+      if (condition === "unknown")
+        expect(visibleText(h.host)).toContain("Do not repeat");
+      await h.stepTo("folders");
+      await h.stepTo("attachment");
+      expect(h.calls()).toEqual([]);
+    },
+  );
+
+  it("offers Copy only for the unfinished current challenge and keeps the existing footer", async () => {
+    const value = connectionSettings();
+    value.connectors.secureMcp.attachment = null;
+    value.setup.connect.verified = null;
+    const h = await mountSetup("attachment", value);
+    expect(visibleText(h.host)).toContain(
+      "Copy the current verification request",
+    );
+    expect(h.button("Copy verification request").disabled).toBe(false);
+    expect(h.button("Review setup")).toBeTruthy();
+    expect(h.calls()).toEqual([]);
+  });
+
+  it("ready sign-in uses Continue without Sign in, launcher or Check actions", async () => {
+    const h = await mountSetup("signin");
+    expect(visibleText(h.host)).toContain("Sign-in is checked for this build");
+    for (const label of [
+      "Sign in",
+      "Open ChatGPT",
+      "Check sign-in",
+      "Skip for now",
+    ])
+      expect(() => h.button(label)).toThrow();
+    await h.click("Continue");
+    expect(h.c.getSnapshot().destination).toMatchObject({
+      area: "setup",
+      setupStep: "folders",
+    });
+    await h.stepTo("signin");
+    expect(() => h.button("Sign in")).toThrow();
+    expect(h.calls()).toEqual([]);
+  });
+
+  it("signed-out Skip uses facade navigation and preserves unchecked account and grants on return", async () => {
+    const value = connectionSettings();
+    value.setup.chatgpt.verified = null;
+    const h = await mountSetup("signin", value);
+    const navigate = vi.spyOn(h.c, "navigate");
+    expect(h.button("Sign in").disabled).toBe(false);
+    expect(visibleText(h.host)).not.toContain("Sign-in is checked");
+    await h.click("Skip for now");
+    expect(navigate).toHaveBeenCalledExactlyOnceWith({
+      area: "setup",
+      setupStep: "folders",
+    });
+    expect(h.c.getSnapshot().configuration).toEqual(h.configuration);
+    await h.stepTo("signin");
+    expect(h.button("Sign in").disabled).toBe(false);
+    expect(h.button("Skip for now")).toBeTruthy();
+    expect(h.calls()).toEqual([]);
+  });
+
+  it("opening sign-in reports only that command result and UNKNOWN stays visible on return", async () => {
+    const value = connectionSettings();
+    value.setup.chatgpt.verified = null;
+    const h = await mountSetup("signin", value);
+    await h.click("Sign in");
+    expect(visibleText(h.host)).toContain("Sign-in request opened");
+    expect(visibleText(h.host)).not.toContain("Sign-in is checked");
+    vi.mocked(h.f.api.configure).mockRejectedValueOnce(new Error("reply lost"));
+    await h.click("Check sign-in");
+    const receipt = h.c.getSnapshot().intents["settings:chatgpt.verify:"];
+    await h.click("Skip for now");
+    await refreshSetup(h, connectionSettings());
+    await h.stepTo("signin");
+    expect(h.c.getSnapshot().intents["settings:chatgpt.verify:"]).toBe(receipt);
+    expect(visibleText(h.host)).toContain("Outcome unknown");
+    expect(visibleText(h.host)).not.toContain("Sign-in is checked");
+    expect(h.button("Sign in").disabled).toBe(true);
+    expect(h.button("Check sign-in").disabled).toBe(true);
+    await h.click("Check sign-in");
+    expect(h.calls()).toEqual([
+      { kind: "chatgpt.open-sign-in" },
+      { kind: "chatgpt.verify" },
+    ]);
+  });
+});

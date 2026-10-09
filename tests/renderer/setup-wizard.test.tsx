@@ -281,7 +281,10 @@ describe("reference-aligned Setup wizard", () => {
         await stepTo("Sign in");
         expect(notice()).toBeUndefined();
         await h.click("Sign in");
-        expect(notice()).toContain("Action confirmed");
+        expect(notice()).toContain("Sign-in request opened");
+        expect(notice()).toContain(
+          "opening it does not confirm an authenticated account",
+        );
         await stepTo("Add to ChatGPT");
         expect(notice()).toBe(originalNotice);
         expect(h.c.getSnapshot().intents[id]).toEqual(receipt);
