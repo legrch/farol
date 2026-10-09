@@ -3,6 +3,9 @@ import vm from "node:vm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { StagedChatGptAttachment } from "../../src/apps/desktop/chatgpt-attachment-staging";
+import { channels } from "../../src/pkg/ipc/channels";
+import { WindowController } from "../../src/ui/renderer/controller";
+import type { PreloadApi } from "../../src/ui/renderer/contract";
 
 const electronMock = vi.hoisted(() => ({
   fromPartition: vi.fn(),
@@ -2257,7 +2260,11 @@ describe("readiness ordering and document identity (local surface fixtures)", ()
     });
     const surface = {
       isDestroyed: () => false,
-      webContents: { getURL: () => currentUrl, executeJavaScript: execute },
+      webContents: {
+        getURL: () => currentUrl,
+        isDestroyed: () => false,
+        executeJavaScript: execute,
+      },
     };
     Reflect.set(candidate, "routeWindow", surface);
     Reflect.set(candidate, "load", "loaded");
@@ -2271,6 +2278,270 @@ describe("readiness ordering and document identity (local surface fixtures)", ()
       },
     };
   }
+  describe("bounded sign-in status (local page-readiness fixtures only)", () => {
+    beforeEach(() => vi.useFakeTimers());
+    afterEach(() => vi.useRealTimers());
+
+    it.each([
+      [ready, "authenticated"],
+      [signedOut, "signed_out"],
+      [{ composerVisible: true, signInVisible: true }, "signed_out"],
+    ] as const)(
+      "binds only the current page classification %j",
+      async (page, state) => {
+        const { candidate, pending, execute } = readinessRoute();
+        const open = vi.spyOn(candidate, "open");
+        const openForSignIn = vi.spyOn(candidate, "openForSignIn");
+        const observation = candidate.observeSignInStatus();
+        pending[0]!(page);
+        const result = await observation;
+        expect(result).toEqual({
+          state,
+          binding: { documentGeneration: 0, sequence: 1 },
+        });
+        expect(candidate.isCurrentSignInStatus(result)).toBe(true);
+        expect(execute).toHaveBeenCalledTimes(1);
+        expect(execute.mock.calls[0]![1]).toBe(false);
+        expect(open).not.toHaveBeenCalled();
+        expect(openForSignIn).not.toHaveBeenCalled();
+        expect(Reflect.get(candidate, "latestReadiness")).toBeNull();
+      },
+    );
+
+    it.each([
+      {},
+      { composerVisible: false, signInVisible: false },
+      { composerVisible: true, signInVisible: false, accountKey: "private" },
+    ])("returns unbound unknown for an unrecognized page %j", async (page) => {
+      const { candidate, pending } = readinessRoute();
+      const observation = candidate.observeSignInStatus();
+      pending[0]!(page);
+      const result = await observation;
+      expect(result).toEqual({ state: "unknown", binding: null });
+      expect(candidate.isCurrentSignInStatus(result)).toBe(false);
+    });
+
+    it.each([
+      "absent",
+      "failed",
+      "destroyed",
+      "contents destroyed",
+      "opening",
+      "task",
+      "update",
+      "disposed",
+    ])(
+      "does not probe an unavailable %s surface or open a replacement",
+      async (condition) => {
+        const { candidate, surface, execute } = readinessRoute();
+        if (condition === "absent") Reflect.set(candidate, "routeWindow", null);
+        if (condition === "failed") Reflect.set(candidate, "load", "failed");
+        if (condition === "destroyed") surface.isDestroyed = () => true;
+        if (condition === "contents destroyed")
+          surface.webContents.isDestroyed = () => true;
+        if (condition === "opening")
+          Reflect.set(candidate, "opening", Promise.resolve());
+        if (condition === "task") Reflect.set(candidate, "taskInFlight", true);
+        if (condition === "update")
+          Reflect.set(candidate, "updateAdmission", true);
+        if (condition === "disposed") Reflect.set(candidate, "disposing", true);
+        const result = await candidate.observeSignInStatus();
+        expect(result).toEqual({ state: "unknown", binding: null });
+        expect(execute).not.toHaveBeenCalled();
+        expect(candidate.isCurrentSignInStatus(result)).toBe(false);
+      },
+    );
+
+    it("contains thrown native probes and unsupported URLs without returning their content", async () => {
+      const { candidate, execute, setUrl } = readinessRoute();
+      execute.mockRejectedValueOnce(new Error("private native details"));
+      expect(await candidate.observeSignInStatus()).toEqual({
+        state: "unknown",
+        binding: null,
+      });
+      setUrl("https://example.invalid/private");
+      expect(await candidate.observeSignInStatus()).toEqual({
+        state: "unknown",
+        binding: null,
+      });
+      expect(execute).toHaveBeenCalledTimes(1);
+    });
+
+    it.each([
+      "generation",
+      "URL",
+      "replacement",
+      "destroyed",
+      "contents destroyed",
+      "failed",
+      "disposed",
+      "task",
+      "update",
+    ])(
+      "rejects %s changes during the read and during transport",
+      async (condition) => {
+        for (const duringRead of [true, false]) {
+          const { candidate, pending, surface, setUrl } = readinessRoute();
+          const observation = candidate.observeSignInStatus();
+          const change = () => {
+            if (condition === "generation")
+              Reflect.set(candidate, "routeDocumentGeneration", 1);
+            if (condition === "URL")
+              setUrl("https://chatgpt.com/c/replacement");
+            if (condition === "replacement")
+              Reflect.set(candidate, "routeWindow", { ...surface });
+            if (condition === "destroyed") surface.isDestroyed = () => true;
+            if (condition === "contents destroyed")
+              surface.webContents.isDestroyed = () => true;
+            if (condition === "failed")
+              Reflect.set(candidate, "load", "failed");
+            if (condition === "disposed")
+              Reflect.set(candidate, "disposing", true);
+            if (condition === "task")
+              Reflect.set(candidate, "taskInFlight", true);
+            if (condition === "update")
+              Reflect.set(candidate, "updateAdmission", true);
+          };
+          if (duringRead) change();
+          pending[0]!(ready);
+          const result = await observation;
+          if (duringRead)
+            expect(result).toEqual({ state: "unknown", binding: null });
+          else {
+            expect(candidate.isCurrentSignInStatus(result)).toBe(true);
+            change();
+          }
+          expect(candidate.isCurrentSignInStatus(result)).toBe(false);
+        }
+      },
+    );
+
+    it("rejects old ordinals while a newer bounded or legacy read is pending", async () => {
+      const { candidate, pending } = readinessRoute();
+      const first = candidate.observeSignInStatus();
+      pending[0]!(ready);
+      const original = await first;
+      const older = candidate.observeSignInStatus();
+      expect(candidate.isCurrentSignInStatus(original)).toBe(false);
+      const newer = candidate.observeSignInStatus();
+      pending[1]!(ready);
+      expect(await older).toEqual({ state: "unknown", binding: null });
+      pending[2]!(signedOut);
+      const current = await newer;
+      expect(current.state).toBe("signed_out");
+      expect(candidate.isCurrentSignInStatus(current)).toBe(true);
+      const legacy = candidate.observe();
+      expect(candidate.isCurrentSignInStatus(current)).toBe(false);
+      pending[3]!(ready);
+      expect(await legacy).toMatchObject({ state: "authenticated" });
+    });
+
+    it("keeps timeout unknown and never promotes a late ready answer into latestReadiness", async () => {
+      const { candidate, pending } = readinessRoute();
+      const legacy = candidate.observe();
+      pending[0]!(signedOut);
+      await legacy;
+      const retained = Reflect.get(candidate, "latestReadiness");
+      const observation = candidate.observeSignInStatus();
+      await vi.advanceTimersByTimeAsync(1_999);
+      let settled = false;
+      void observation.then(() => {
+        settled = true;
+      });
+      await Promise.resolve();
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      const result = await observation;
+      expect(result).toEqual({ state: "unknown", binding: null });
+      pending[1]!(ready);
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(candidate.isCurrentSignInStatus(result)).toBe(false);
+      expect(Reflect.get(candidate, "latestReadiness")).toBe(retained);
+      const next = candidate.observe();
+      pending[2]!({ unexpected: true });
+      expect(await next).toMatchObject({ state: "signed_out" });
+    });
+
+    it("does not let a timed-out older probe replace a newer valid observation", async () => {
+      const { candidate, pending } = readinessRoute();
+      const older = candidate.observeSignInStatus();
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(await older).toEqual({ state: "unknown", binding: null });
+      const newer = candidate.observeSignInStatus();
+      pending[1]!(signedOut);
+      const current = await newer;
+      pending[0]!(ready);
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(candidate.isCurrentSignInStatus(current)).toBe(true);
+      expect(current.state).toBe("signed_out");
+      expect(Reflect.get(candidate, "latestReadiness")).toBeNull();
+    });
+
+    it("does not promote an older legacy ready answer after the bounded read times out", async () => {
+      const { candidate, pending } = readinessRoute();
+      const legacy = candidate.observe();
+      const bounded = candidate.observeSignInStatus();
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(await bounded).toEqual({ state: "unknown", binding: null });
+      pending[0]!(ready);
+      expect(await legacy).toMatchObject({ state: "unsupported" });
+      pending[1]!(ready);
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(Reflect.get(candidate, "latestReadiness")).toBeNull();
+    });
+
+    it("rejects an answer at the deadline even before the timer callback runs", async () => {
+      const { candidate, pending } = readinessRoute();
+      let now = 100;
+      const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
+      try {
+        const observation = candidate.observeSignInStatus();
+        now = 2_100;
+        pending[0]!(ready);
+        expect(await observation).toEqual({ state: "unknown", binding: null });
+        expect(Reflect.get(candidate, "latestReadiness")).toBeNull();
+      } finally {
+        clock.mockRestore();
+      }
+    });
+
+    it("expires transport currency at the original deadline without renewing the read budget", async () => {
+      const { candidate, pending } = readinessRoute();
+      const observation = candidate.observeSignInStatus();
+      await vi.advanceTimersByTimeAsync(1_900);
+      pending[0]!(ready);
+      const result = await observation;
+      expect(candidate.isCurrentSignInStatus(result)).toBe(true);
+      await vi.advanceTimersByTimeAsync(99);
+      expect(candidate.isCurrentSignInStatus(result)).toBe(true);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(candidate.isCurrentSignInStatus(result)).toBe(false);
+      expect(candidate.isCurrentSignInStatus(result)).toBe(false);
+      expect(Reflect.get(candidate, "latestReadiness")).toBeNull();
+    });
+
+    it("rejects cloned and foreign-route bindings even with identical ordinals", async () => {
+      const first = readinessRoute();
+      const second = readinessRoute();
+      const a = first.candidate.observeSignInStatus();
+      const b = second.candidate.observeSignInStatus();
+      first.pending[0]!(ready);
+      second.pending[0]!(ready);
+      const original = await a;
+      const foreign = await b;
+      expect(original).toEqual(foreign);
+      expect(
+        first.candidate.isCurrentSignInStatus(structuredClone(original)),
+      ).toBe(false);
+      expect(first.candidate.isCurrentSignInStatus(foreign)).toBe(false);
+      expect(first.candidate.isCurrentSignInStatus(original)).toBe(true);
+      expect(Object.isFrozen(original)).toBe(true);
+      expect(Object.isFrozen(original.binding)).toBe(true);
+    });
+  });
   it("does not let an older ready answer overwrite a newer sign-in requirement", async () => {
     const { candidate, pending } = readinessRoute();
     const older = candidate.observe();
@@ -4571,6 +4842,215 @@ describe("ChatGPT route streaming observation", () => {
 });
 
 describe("ChatGPT embedded task surface", () => {
+  describe("document invalidation notification (mock Electron/IPC only)", () => {
+    async function notificationRoute() {
+      const messages = new EventEmitter();
+      const noopSubscription = () => () => {};
+      const renderer = new WindowController({
+        bootstrap: async () => null,
+        layout: vi.fn(),
+        onConfigurationChanged: noopSubscription,
+        onTasksState: noopSubscription,
+        onRuntimeEvent: noopSubscription,
+        onRuntimeState: noopSubscription,
+        onInstalledUpdateState: noopSubscription,
+        onTaskSurfaceState: noopSubscription,
+        onLayout: noopSubscription,
+        onShellAction: noopSubscription,
+        onWindowState: noopSubscription,
+        onBrowserRouteState: (listener: (value: unknown) => void) => {
+          messages.on(channels.browserRouteState, listener);
+          return () => messages.off(channels.browserRouteState, listener);
+        },
+      } as unknown as PreloadApi);
+      await renderer.start();
+      const send = vi.fn((channel: string, value: unknown) =>
+        messages.emit(channel, value),
+      );
+      const surface = embeddedSurface();
+      const executeJavaScript = vi.fn(async () => ({
+        composerVisible: true,
+        signInVisible: false,
+      }));
+      Object.assign(surface.webContents, { executeJavaScript });
+      const candidate = new ChatGptRoute({
+        homeUrl: "https://chatgpt.com/",
+        initialUrl: "https://chatgpt.com/",
+        e2eOrigin: null,
+        parent: () => null,
+        surfaceFactory: (() =>
+          surface) as unknown as ChatGptRouteSurfaceFactory,
+        // Same content-free payload as the host's browserRouteState sender.
+        onLoadStateChanged: (state) =>
+          send(channels.browserRouteState, { state }),
+      });
+      await candidate.open();
+      const sample = await candidate.observeSignInStatus();
+      expect(sample.state).toBe("authenticated");
+      expect(candidate.isCurrentSignInStatus(sample)).toBe(true);
+      // Seed only a settled sample; the production renderer subscription above
+      // performs its invalidation. Bootstrap, UI and native IPC are not tested.
+      Reflect.set(renderer, "state", {
+        ...renderer.getSnapshot(),
+        signInObservation: {
+          ...sample,
+          observationId: "fixture-sign-in",
+          buildId: "a".repeat(64),
+          counter: 1,
+          pending: false,
+        },
+      });
+      expect(renderer.getSnapshot().signInObservation?.state).toBe(
+        "authenticated",
+      );
+      send.mockClear();
+      executeJavaScript.mockClear();
+      return { candidate, surface, renderer, sample, send, executeJavaScript };
+    }
+
+    it.each(["in-place start", "in-page commit"] as const)(
+      "invalidates a settled renderer sample through the route callback after %s",
+      async (event) => {
+        const f = await notificationRoute();
+        try {
+          if (event === "in-place start")
+            f.surface.webContents.emit(
+              "did-start-navigation",
+              {},
+              "https://chatgpt.com/",
+              true,
+              true,
+            );
+          else
+            f.surface.webContents.emit(
+              "did-navigate-in-page",
+              {},
+              "https://chatgpt.com/",
+              true,
+            );
+          expect(f.candidate.isCurrentSignInStatus(f.sample)).toBe(false);
+          expect(f.renderer.getSnapshot().signInObservation).toBeNull();
+          expect(f.send).toHaveBeenCalledExactlyOnceWith(
+            channels.browserRouteState,
+            { state: "loaded" },
+          );
+          await Promise.resolve();
+          expect(f.executeJavaScript).not.toHaveBeenCalled();
+          expect(f.surface.loadURL).toHaveBeenCalledTimes(1);
+          expect(f.surface.reveal).toHaveBeenCalledTimes(1);
+        } finally {
+          f.candidate.dispose();
+          f.renderer.dispose();
+        }
+      },
+    );
+
+    it.each(["in-place start", "in-page commit"] as const)(
+      "ignores subframe and unowned %s events",
+      async (event) => {
+        for (const unowned of [false, true]) {
+          const f = await notificationRoute();
+          try {
+            if (unowned)
+              Reflect.set(f.candidate, "routeWindow", {
+                ...f.surface,
+                webContents: new EventEmitter(),
+              });
+            const generation = Reflect.get(
+              f.candidate,
+              "routeDocumentGeneration",
+            );
+            if (event === "in-place start")
+              f.surface.webContents.emit(
+                "did-start-navigation",
+                {},
+                "https://chatgpt.com/",
+                true,
+                unowned,
+              );
+            else
+              f.surface.webContents.emit(
+                "did-navigate-in-page",
+                {},
+                "https://chatgpt.com/",
+                unowned,
+              );
+            expect(Reflect.get(f.candidate, "routeDocumentGeneration")).toBe(
+              generation,
+            );
+            expect(f.send).not.toHaveBeenCalled();
+            expect(f.renderer.getSnapshot().signInObservation?.state).toBe(
+              "authenticated",
+            );
+            if (!unowned)
+              expect(f.candidate.isCurrentSignInStatus(f.sample)).toBe(true);
+            await Promise.resolve();
+            expect(f.executeJavaScript).not.toHaveBeenCalled();
+          } finally {
+            f.candidate.dispose();
+            f.renderer.dispose();
+          }
+        }
+      },
+    );
+
+    it("keeps the current sample when an unsupported in-place start is refused", async () => {
+      const f = await notificationRoute();
+      try {
+        const generation = Reflect.get(f.candidate, "routeDocumentGeneration");
+        const preventDefault = vi.fn();
+        f.surface.webContents.emit(
+          "will-navigate",
+          { preventDefault },
+          "https://example.invalid/",
+        );
+        expect(preventDefault).toHaveBeenCalledOnce();
+        f.surface.webContents.emit(
+          "did-start-navigation",
+          {},
+          "https://example.invalid/",
+          true,
+          true,
+        );
+        expect(Reflect.get(f.candidate, "routeDocumentGeneration")).toBe(
+          generation,
+        );
+        expect(f.candidate.isCurrentSignInStatus(f.sample)).toBe(true);
+        expect(f.send).not.toHaveBeenCalled();
+        expect(f.renderer.getSnapshot().signInObservation?.state).toBe(
+          "authenticated",
+        );
+        expect(f.executeJavaScript).not.toHaveBeenCalled();
+      } finally {
+        f.candidate.dispose();
+        f.renderer.dispose();
+      }
+    });
+
+    it("notifies an actual in-page commit even at an unsupported URL without promoting failed load", async () => {
+      const f = await notificationRoute();
+      try {
+        Reflect.set(f.candidate, "load", "failed");
+        f.surface.webContents.emit(
+          "did-navigate-in-page",
+          {},
+          "https://example.invalid/",
+          true,
+        );
+        expect(f.renderer.getSnapshot().signInObservation).toBeNull();
+        expect(f.send).toHaveBeenCalledExactlyOnceWith(
+          channels.browserRouteState,
+          { state: "failed" },
+        );
+        expect(Reflect.get(f.candidate, "load")).toBe("failed");
+        await Promise.resolve();
+        expect(f.executeJavaScript).not.toHaveBeenCalled();
+      } finally {
+        f.candidate.dispose();
+        f.renderer.dispose();
+      }
+    });
+  });
   it("OBS-F7 reports a hung activity probe as unknown without piling up probes or trusting its late answer", async () => {
     vi.useFakeTimers();
     try {

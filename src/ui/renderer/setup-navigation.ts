@@ -1,3 +1,4 @@
+import { signInPresentation } from "./sign-in-presentation";
 import { computerSetup } from "./computer-setup";
 import { dependencyFences } from "./command-eligibility";
 import {
@@ -14,27 +15,45 @@ export const setupSteps = setupSections;
 export function setupChecklist(snapshot: WindowSnapshot) {
   const setup = computerSetup(snapshot);
   const computer = dependencyFences(snapshot, "computer");
-  const chat = dependencyFences(snapshot, "chat");
+  const signIn = signInPresentation(snapshot);
   const activity = (fence: {
     unknown: boolean;
     pending: boolean;
   }): SetupActivity =>
     fence.unknown ? "unknown" : fence.pending ? "pending" : "settled";
-  return projectSetupChecklist({
+  const checklist = projectSetupChecklist({
     current:
       snapshot.status === "current" &&
       snapshot.runtime === "ready" &&
       Boolean(snapshot.buildId) &&
       snapshot.configuration?.status === "ready",
-    signedIn: setup.embeddedChatGPT === "Ready",
+    signedIn: signIn.signedIn,
     workspacesVerified: setup.workspacesVerified,
     localConnectionCurrent: setup.localConnectionCurrent,
     externalAccessVerified: setup.externalAccessVerified,
     computerReady: setup.ready,
-    signInActivity:
-      setup.embeddedChatGPT === "Outcome unknown" ? "unknown" : activity(chat),
+    signInActivity: signIn.unknown
+      ? "unknown"
+      : signIn.pending
+        ? "pending"
+        : "settled",
     computerActivity: activity(computer),
   });
+  return {
+    ...checklist,
+    entries: checklist.entries.map((entry) =>
+      entry.step === "signin"
+        ? {
+            ...entry,
+            status: signIn.label,
+            action:
+              signIn.signedIn || signIn.outcomeUnknown
+                ? ("Review" as const)
+                : ("Set up" as const),
+          }
+        : entry,
+    ),
+  };
 }
 
 /** Preserve the existing required-Computer routing. Sign-in stays optional. */

@@ -1,6 +1,6 @@
 # Connect Farol to ChatGPT
 
-Open **Setup** and follow **Overview → Sign in → Workspaces → Connection → Add to ChatGPT**. Sign-in inside Farol is optional when you use external ChatGPT. Use **Continue** and **Previous**, or select a section directly; the last section offers **Review setup** to return to Overview. Navigation alone does not save settings, change access or connection bindings, verify a step, or replay an action. Opening **Connection guide** or **Open connection guide** is read-only help.
+Open **Setup** and follow **Overview → Sign in → Workspaces → Connection → Add to ChatGPT**. Sign-in inside Farol is optional when you use external ChatGPT. Use **Continue** and **Previous**, or select a section directly; the last section offers **Review setup** to return to Overview. Entering Sign in may observe its existing page. Navigation does not save settings, change access or connection bindings, verify a step, or replay an action. Opening **Connection guide** or **Open connection guide** is read-only help.
 
 ## Overview: fresh and returning profiles
 
@@ -12,9 +12,9 @@ The overview distinguishes **Not checked**, **Check in progress**, **Result need
 
 ## Sign in (optional)
 
-For fresh or unchecked embedded sign-in, choose **Sign in** to use your own account inside Farol. **Open ChatGPT** opens that browser, and **Check sign-in** checks its account state when needed. Use **Skip for now** or **Continue** to proceed without this optional step for external Computer access. Opening sign-in does not confirm an authenticated account; signing in does not approve workspaces or prove an external connection.
+Entering this step observes the existing embedded page without opening it or changing settings. **Signed in** means the current page was observed; choose **Continue**. Otherwise, choose **Sign in** to use your own account inside Farol, or **Skip for now** to proceed without this optional step for external Computer access. Returning from the sign-in window observes the page again. Opening sign-in alone does not confirm authentication; signing in does not approve workspaces or prove an external connection.
 
-For a returning profile whose embedded status is **Ready**, Setup says **Sign-in is checked for this build. Continue when ready.** Use **Continue**; the **Sign in**, **Open ChatGPT**, **Check sign-in** and **Skip for now** controls are hidden for this checked step. A saved account alone does not establish a current check. For **Outcome unknown**, review the existing result in Diagnostics; do not repeat sign-in.
+**Checking sign-in…** is a bounded read. **Signed out** or **Current sign-in is unknown** is not an authenticated result. Saved account settings alone do not establish a current check. The normal wizard offers one Sign in action rather than a separate Open/Check sequence. Original **Outcome unknown** remains unresolved even after a page observation: review the existing result in Diagnostics and do not repeat sign-in. Leaving and returning to this step obtains a new page observation; a refresh or renderer remount does not replay an action.
 
 ## Workspaces
 

@@ -4,7 +4,18 @@ import {
   WindowController,
 } from "../../src/ui/renderer/controller";
 import type { WindowSnapshot } from "../../src/ui/renderer/contract";
-import { bootstrap, deferred, fixture, settings, task } from "./fixture";
+import {
+  bootstrap,
+  deferred,
+  fixture,
+  settings,
+  task,
+  signInReply,
+} from "./fixture";
+import { signInPresentation } from "../../src/ui/renderer/sign-in-presentation";
+import { setupChecklist } from "../../src/ui/renderer/setup-navigation";
+import { commandAllowed } from "../../src/ui/renderer/command-eligibility";
+import { ProductConfigurationCommandSchema } from "../../src/pkg/product-settings/contract";
 import type { ConnectorSetupReceipt } from "../../src/pkg/product-settings/connector-setup-receipt";
 
 describe("Goal17 explicit ChatGPT presentation", () => {
@@ -3097,3 +3108,502 @@ it.each(["relativePath", "beforeSha256", "bytes", "expiresAt"] as const)(
     h.c.dispose();
   },
 );
+
+// Content-free renderer/IPC doubles only. No native account/provider evidence.
+describe("bounded Setup sign-in observation", () => {
+  function savedReady() {
+    const data = bootstrap();
+    const step = data.configuration.settings.setup.chatgpt;
+    Object.assign(step, {
+      visited: true,
+      configured: true,
+      reachable: "reachable",
+      verified: {
+        profile: "chatgpt",
+        configRevision: 1,
+        workspaceId: null,
+        runtimeGeneration: "existing-document",
+        buildId: data.build.buildId,
+        protocol: "chatgpt-page-readiness/1",
+        verifiedAt: "2026-10-09T00:00:00.000Z",
+      },
+    });
+    return data;
+  }
+  function observationCommand(f: ReturnType<typeof fixture>, index = 0) {
+    const raw = vi
+      .mocked(f.api.configure)
+      .mock.calls.filter(
+        ([command]) => command.kind === "chatgpt.observe-sign-in",
+      )[index]?.[0];
+    const command = ProductConfigurationCommandSchema.parse(raw);
+    if (command.kind !== "chatgpt.observe-sign-in")
+      throw new Error("Expected observation");
+    return command;
+  }
+  function returned(generation = 1, eventId = crypto.randomUUID()) {
+    return {
+      action: "sign-in-returned",
+      source: "auth-window-closed",
+      authWindowGeneration: generation,
+      eventId,
+    };
+  }
+  async function pending() {
+    const f = fixture();
+    const data = savedReady();
+    vi.mocked(f.api.bootstrap).mockResolvedValue(data);
+    const wait = deferred<unknown>();
+    vi.mocked(f.api.configure).mockReturnValue(wait.promise);
+    const c = new WindowController(f.api);
+    await c.start();
+    c.navigate({ area: "setup", setupStep: "signin" });
+    return { f, c, wait, data, command: observationCommand(f) };
+  }
+  it.each(["authenticated", "signed_out", "unknown"] as const)(
+    "uses current %s evidence over exact fresh saved readiness without changing publication or intent eligibility",
+    async (state) => {
+      const h = await pending();
+      try {
+        const before = h.c.getSnapshot();
+        const eligible = commandAllowed(before, "chatgpt.open-sign-in");
+        h.wait.resolve(
+          signInReply(h.command, state, {
+            status: "ready",
+            settings: settings(99),
+          }),
+        );
+        await Promise.resolve();
+        const after = h.c.getSnapshot();
+        expect(after.configuration).toBe(before.configuration);
+        expect(after.evidence).toBe(before.evidence);
+        expect(after.intents).toBe(before.intents);
+        expect(commandAllowed(after, "chatgpt.open-sign-in")).toBe(eligible);
+        expect(signInPresentation(after).label).toBe(
+          state === "authenticated"
+            ? "Signed in"
+            : state === "signed_out"
+              ? "Signed out"
+              : "Current sign-in is unknown",
+        );
+        expect(setupChecklist(after).entries[0]?.status).toBe(
+          signInPresentation(after).label,
+        );
+        expect(after.route).toBe("loading");
+      } finally {
+        h.c.dispose();
+      }
+    },
+  );
+  it("observes only explicit Sign in entry; same entry, subscription/remount, refresh and Settings never resubmit", async () => {
+    const f = fixture();
+    vi.mocked(f.api.bootstrap).mockResolvedValue(savedReady());
+    const c = new WindowController(f.api);
+    try {
+      await c.start();
+      c.navigate({ area: "setup", setupStep: "overview" });
+      c.navigate({ area: "setup", setupStep: "folders" });
+      c.navigate({ area: "settings", page: "connection" });
+      await c.refresh();
+      expect(f.api.configure).not.toHaveBeenCalled();
+      c.navigate({ area: "setup", setupStep: "signin" });
+      c.navigate({ area: "setup", setupStep: "signin" });
+      const off = c.subscribe(() => {});
+      off();
+      c.subscribe(() => {})();
+      await c.refresh();
+      expect(f.api.configure).toHaveBeenCalledTimes(1);
+      expect(observationCommand(f).observationId).toMatch(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
+      );
+      c.navigate({ area: "setup", setupStep: "overview" });
+      expect(c.getSnapshot().signInObservation?.state).toBe("unknown");
+      c.travel(-1);
+      expect(f.api.configure).toHaveBeenCalledTimes(2);
+    } finally {
+      c.dispose();
+    }
+  });
+  it.each([
+    "lost",
+    "malformed",
+    "wrong-id",
+    "wrong-build",
+    "missing-binding",
+    "negative-document",
+    "zero-sequence",
+    "extra-content",
+    "refused",
+  ])(
+    "keeps %s observation honest and separate from effect receipts",
+    async (failure) => {
+      const h = await pending();
+      try {
+        const before = h.c.getSnapshot();
+        const response = signInReply(h.command, "authenticated");
+        if (failure === "lost") h.wait.reject(new Error("private read error"));
+        else {
+          if (failure === "wrong-id")
+            response.evidence.observationId = crypto.randomUUID();
+          if (failure === "wrong-build")
+            response.evidence.buildId = "a".repeat(64);
+          if (failure === "missing-binding") response.evidence.binding = null;
+          if (failure === "negative-document")
+            response.evidence.binding!.documentGeneration = -1;
+          if (failure === "zero-sequence")
+            response.evidence.binding!.sequence = 0;
+          if (failure === "extra-content")
+            Object.assign(response.evidence, { text: "excluded" });
+          h.wait.resolve(
+            failure === "malformed"
+              ? {}
+              : failure === "refused"
+                ? {
+                    ok: false,
+                    error: "CHATGPT_PAGE_UNREACHABLE",
+                    snapshot: response.snapshot,
+                  }
+                : response,
+          );
+        }
+        await Promise.resolve();
+        expect(h.c.getSnapshot().signInObservation).toMatchObject({
+          pending: false,
+          state: "unknown",
+          binding: null,
+        });
+        expect(h.c.getSnapshot().intents).toBe(before.intents);
+        expect(h.c.getSnapshot().configuration).toBe(before.configuration);
+        expect(JSON.stringify(h.c.getSnapshot())).not.toContain(
+          "private read error",
+        );
+      } finally {
+        h.c.dispose();
+      }
+    },
+  );
+  it.each([2_600, 2_601, 0, Number.NaN, Number.POSITIVE_INFINITY])(
+    "refuses a sign-in reply at monotonic time %s before an overdue timer callback runs",
+    async (now) => {
+      const clock = vi.spyOn(performance, "now").mockReturnValue(100);
+      const h = await pending();
+      try {
+        clock.mockReturnValue(now);
+        h.wait.resolve(signInReply(h.command, "authenticated"));
+        await Promise.resolve();
+        expect(h.c.getSnapshot().signInObservation).toMatchObject({
+          pending: false,
+          state: "unknown",
+          binding: null,
+        });
+        expect(signInPresentation(h.c.getSnapshot()).signedIn).toBe(false);
+        expect(h.f.api.configure).toHaveBeenCalledTimes(1);
+      } finally {
+        h.c.dispose();
+        clock.mockRestore();
+      }
+    },
+  );
+  it("expires a lost read and ignores its late authenticated result without retry", async () => {
+    vi.useFakeTimers();
+    const h = await pending();
+    try {
+      await vi.advanceTimersByTimeAsync(2_500);
+      const unknown = h.c.getSnapshot().signInObservation;
+      expect(unknown).toMatchObject({ pending: false, state: "unknown" });
+      h.wait.resolve(signInReply(h.command, "authenticated"));
+      await Promise.resolve();
+      expect(h.c.getSnapshot().signInObservation).toBe(unknown);
+      await h.c.refresh();
+      h.c.navigate({ area: "setup", setupStep: "signin" });
+      expect(h.c.getSnapshot().signInObservation).toBe(unknown);
+      expect(h.f.api.configure).toHaveBeenCalledTimes(1);
+    } finally {
+      h.c.dispose();
+      vi.useRealTimers();
+    }
+  });
+  it.each([
+    "navigation",
+    "route",
+    "document",
+    "runtime",
+    "malformed-runtime",
+    "stale",
+    "incarnation",
+    "applying",
+    "dispose",
+  ])(
+    "invalidates pending reads on %s and ignores late delivery",
+    async (reason) => {
+      const h = await pending();
+      try {
+        if (reason === "navigation")
+          h.c.navigate({ area: "setup", setupStep: "folders" });
+        if (reason === "route") h.f.emit("route", { state: "loaded" });
+        if (reason === "document") h.f.emit("route", { state: "loading" });
+        if (reason === "runtime")
+          h.f.emit("runtime", {
+            state: "ready",
+            identity: "new",
+            error: null,
+            embeddedNode: null,
+            embeddedElectron: null,
+          });
+        if (reason === "malformed-runtime") h.f.emit("runtime", {});
+        if (reason === "stale") h.f.emit("tasks", {});
+        if (reason === "applying")
+          h.f.emit("update", { phase: "applying", version: "1.0" });
+        if (reason === "incarnation") {
+          vi.mocked(h.f.api.bootstrap).mockResolvedValue({
+            ...h.data,
+            chatHistoryContext: {
+              profileId: "profile",
+              backendGeneration: "new",
+            },
+          });
+          await h.c.refresh();
+        }
+        if (reason === "dispose") h.c.dispose();
+        const after = h.c.getSnapshot();
+        h.wait.resolve(signInReply(h.command, "authenticated"));
+        await Promise.resolve();
+        expect(h.c.getSnapshot()).toBe(after);
+        expect(after.signInObservation).toBeNull();
+        expect(signInPresentation(after).signedIn).toBe(false);
+        expect(h.f.api.configure).toHaveBeenCalledTimes(1);
+      } finally {
+        h.c.dispose();
+      }
+    },
+  );
+  it("ignores a crossed late reply from an earlier entry after a newer entry has won", async () => {
+    const h = await pending();
+    try {
+      h.c.navigate({ area: "setup", setupStep: "folders" });
+      vi.mocked(h.f.api.configure).mockImplementation(async (command) =>
+        command.kind === "chatgpt.observe-sign-in"
+          ? signInReply(command, "signed_out")
+          : {},
+      );
+      h.c.navigate({ area: "setup", setupStep: "signin" });
+      await Promise.resolve();
+      const current = h.c.getSnapshot().signInObservation;
+      expect(current?.state).toBe("signed_out");
+      expect(current?.observationId).not.toBe(h.command.observationId);
+      h.wait.resolve(signInReply(h.command, "authenticated"));
+      await Promise.resolve();
+      expect(h.c.getSnapshot().signInObservation).toBe(current);
+    } finally {
+      h.c.dispose();
+    }
+  });
+  it("native returned event observes once without navigation and dedupes event/generation while refresh wins publication", async () => {
+    const h = await pending();
+    try {
+      const second = deferred<unknown>();
+      vi.mocked(h.f.api.configure).mockReturnValue(second.promise);
+      const destination = h.c.getSnapshot().destination;
+      const event = returned();
+      h.f.emit("action", event);
+      h.f.emit("action", event);
+      h.f.emit("action", returned(1));
+      h.f.emit("action", returned(0));
+      expect(h.c.getSnapshot().destination).toBe(destination);
+      expect(h.f.api.configure).toHaveBeenCalledTimes(2);
+      const command = observationCommand(h.f, 1);
+      vi.mocked(h.f.api.bootstrap).mockResolvedValue({
+        ...h.data,
+        configuration: { status: "ready", settings: settings(10) },
+      });
+      await h.c.refresh();
+      const publication = h.c.getSnapshot().configuration;
+      second.resolve(signInReply(command, "signed_out"));
+      h.wait.resolve(signInReply(h.command, "authenticated"));
+      await Promise.resolve();
+      expect(h.c.getSnapshot().configuration).toBe(publication);
+      expect(h.c.getSnapshot().signInObservation?.state).toBe("signed_out");
+      expect(h.c.getSnapshot().intents).toEqual({});
+      h.c.navigate({ area: "settings", page: "connection" });
+      h.f.emit("action", returned(2));
+      expect(h.f.api.configure).toHaveBeenCalledTimes(2);
+    } finally {
+      h.c.dispose();
+    }
+  });
+  it.each(["pending", "unknown"] as const)(
+    "safe observation never settles original shared writer %s",
+    async (state) => {
+      const f = fixture();
+      const wait = deferred<unknown>();
+      vi.mocked(f.api.configure).mockReturnValueOnce(wait.promise);
+      const c = new WindowController(f.api);
+      try {
+        await c.start();
+        const result = c.configure(
+          { kind: "chatgpt.open-sign-in" },
+          "settings:chatgpt.open-sign-in:",
+        );
+        await Promise.resolve();
+        await Promise.resolve();
+        if (state === "unknown") {
+          wait.reject(new Error("reply lost"));
+          await result;
+        }
+        const original =
+          c.getSnapshot().intents["settings:chatgpt.open-sign-in:"];
+        expect(original?.state).toBe(state);
+        vi.mocked(f.api.configure).mockImplementation(async (command) =>
+          command.kind === "chatgpt.observe-sign-in"
+            ? signInReply(command, "authenticated")
+            : {},
+        );
+        c.navigate({ area: "setup", setupStep: "signin" });
+        await Promise.resolve();
+        expect(c.getSnapshot().signInObservation?.state).toBe("authenticated");
+        expect(c.getSnapshot().intents[original!.id]).toBe(original);
+        expect(commandAllowed(c.getSnapshot(), "chatgpt.open-sign-in")).toBe(
+          false,
+        );
+        expect(signInPresentation(c.getSnapshot()).signedIn).toBe(false);
+        if (state === "pending") {
+          wait.resolve({
+            ok: false,
+            error: "CHATGPT_PAGE_UNREACHABLE",
+            snapshot: bootstrap().configuration,
+          });
+          await result;
+        }
+      } finally {
+        c.dispose();
+      }
+    },
+  );
+  it("withdraws authenticated presentation after document loss and saved-ready refresh cannot promote it", async () => {
+    const f = fixture();
+    vi.mocked(f.api.bootstrap).mockResolvedValue(savedReady());
+    vi.mocked(f.api.configure).mockImplementation(async (command) =>
+      command.kind === "chatgpt.observe-sign-in"
+        ? signInReply(command, "authenticated")
+        : {},
+    );
+    const c = new WindowController(f.api);
+    try {
+      await c.start();
+      c.navigate({ area: "setup", setupStep: "signin" });
+      await Promise.resolve();
+      expect(signInPresentation(c.getSnapshot()).signedIn).toBe(true);
+      f.emit("route", { state: "loaded" });
+      expect(c.getSnapshot().route).toBe("loaded");
+      expect(signInPresentation(c.getSnapshot()).signedIn).toBe(false);
+      await c.refresh();
+      expect(c.getSnapshot().configuration?.status).toBe("ready");
+      expect(signInPresentation(c.getSnapshot()).label).toBe(
+        "Current sign-in is unknown",
+      );
+      expect(f.api.configure).toHaveBeenCalledTimes(1);
+    } finally {
+      c.dispose();
+    }
+  });
+  it("ignores uncorrelated returns and prevents observation from entering effect dispatch", async () => {
+    const f = fixture();
+    const c = new WindowController(f.api);
+    try {
+      await c.start();
+      c.navigate({ area: "setup", setupStep: "signin" });
+      await Promise.resolve();
+      vi.mocked(f.api.configure).mockClear();
+      const before = c.getSnapshot();
+      for (const event of [
+        { ...returned(), eventId: "invalid" },
+        { ...returned(), authWindowGeneration: null },
+        { ...returned(), source: "verification-completed" },
+        { ...returned(), authWindowGeneration: -1 },
+        { ...returned(), extra: true },
+      ])
+        f.emit("action", event);
+      await c.refresh();
+      expect(f.api.configure).not.toHaveBeenCalled();
+      const result = await c.configure(
+        {
+          kind: "chatgpt.observe-sign-in",
+          observationId: crypto.randomUUID(),
+          buildId: "3".repeat(64),
+        },
+        "effect-attempt",
+      );
+      expect(result.state).toBe("refused");
+      expect(c.getSnapshot().intents).toBe(before.intents);
+      expect(f.api.configure).not.toHaveBeenCalled();
+    } finally {
+      c.dispose();
+    }
+  });
+  it("build mismatch and failed general reads withdraw a pending observation without effect UNKNOWN", async () => {
+    for (const failure of ["build", "read"] as const) {
+      const h = await pending();
+      try {
+        if (failure === "read")
+          vi.mocked(h.f.api.bootstrap).mockRejectedValue(
+            new Error("read lost"),
+          );
+        else
+          vi.mocked(h.f.api.bootstrap).mockResolvedValue({
+            ...h.data,
+            build: { ...h.data.build, buildId: "a".repeat(64) },
+          });
+        await h.c.refresh();
+        expect(h.c.getSnapshot().status).toBe(
+          failure === "build" ? "incompatible" : "stale",
+        );
+        const snapshot = h.c.getSnapshot();
+        h.wait.resolve(signInReply(h.command, "authenticated"));
+        await Promise.resolve();
+        expect(h.c.getSnapshot()).toBe(snapshot);
+        expect(snapshot.signInObservation).toBeNull();
+        expect(snapshot.intents).toEqual({});
+      } finally {
+        h.c.dispose();
+      }
+    }
+  });
+  it.each(["authenticated", "signed_out", "unknown"] as const)(
+    "retains settled %s sample across Continue, Overview and Settings with a fresh read only on returning entry",
+    async (state) => {
+      const h = await pending();
+      try {
+        h.wait.resolve(signInReply(h.command, state));
+        await Promise.resolve();
+        const sample = h.c.getSnapshot().signInObservation;
+        const label = signInPresentation(h.c.getSnapshot()).label;
+        h.c.navigate({ area: "setup", setupStep: "folders" });
+        h.c.navigate({ area: "setup", setupStep: "overview" });
+        expect(h.c.getSnapshot().signInObservation).toBe(sample);
+        expect(setupChecklist(h.c.getSnapshot()).entries[0]?.status).toBe(
+          label,
+        );
+        h.c.navigate({ area: "settings", page: "connection" });
+        expect(h.c.getSnapshot().signInObservation).toBe(sample);
+        expect(signInPresentation(h.c.getSnapshot()).label).toBe(label);
+        await h.c.refresh();
+        expect(h.c.getSnapshot().signInObservation).toBe(sample);
+        expect(h.f.api.configure).toHaveBeenCalledTimes(1);
+        vi.mocked(h.f.api.configure).mockImplementation(async (command) =>
+          command.kind === "chatgpt.observe-sign-in"
+            ? signInReply(command, "signed_out")
+            : {},
+        );
+        h.c.navigate({ area: "setup", setupStep: "signin" });
+        await Promise.resolve();
+        expect(h.f.api.configure).toHaveBeenCalledTimes(2);
+        expect(h.c.getSnapshot().signInObservation?.observationId).not.toBe(
+          sample?.observationId,
+        );
+        expect(signInPresentation(h.c.getSnapshot()).signedIn).toBe(false);
+      } finally {
+        h.c.dispose();
+      }
+    },
+  );
+});

@@ -20,6 +20,7 @@ import {
   type ProductSettings,
 } from "../../pkg/product-settings/contract";
 import { folderAccessChecked, folderDisplayName } from "../folder-access-state";
+import { signInPresentation } from "./sign-in-presentation";
 import { computerSetup } from "./computer-setup";
 import { visibleSetupSection, type SetupSection } from "./setup-checklist";
 import { commandAllowed, dependencyFences } from "./command-eligibility";
@@ -253,13 +254,21 @@ function actionFeedback(
         ? "Attachment checked. The current workspace and connection checks passed."
         : "Attachment check request completed. Current attachment is not confirmed; review the connection status and Diagnostics.";
     if (kind === "chatgpt.open-sign-in")
-      return "Sign-in request opened. Finish in ChatGPT, then check sign-in; opening it does not confirm an authenticated account.";
+      return "Sign-in request opened. Finish in ChatGPT; opening it does not confirm an authenticated account.";
     if (kind === "chatgpt.open-browser")
       return "ChatGPT open request completed. Opening it does not confirm sign-in.";
-    if (kind === "chatgpt.verify")
-      return current && computerSetup(current).embeddedChatGPT === "Ready"
-        ? "Sign-in checked for this build."
-        : "Sign-in check request completed. Current sign-in is not confirmed.";
+    if (kind === "chatgpt.verify") {
+      const state = result.chatGptReadiness?.state;
+      return state === "authenticated"
+        ? "This check observed a signed-in ChatGPT page."
+        : state === "signed_out"
+          ? "This check observed a signed-out ChatGPT page."
+          : state === "unsupported"
+            ? "This check could not recognize the ChatGPT page."
+            : state === "unreachable"
+              ? "This check could not reach the ChatGPT page."
+              : "Sign-in check request completed. This result did not confirm a signed-in page.";
+    }
     if (kind === "onboarding.open-help")
       return "Connection help open request completed.";
     return "Request completed. Review its recorded result in Diagnostics and the current status below.";
@@ -288,7 +297,7 @@ function actionFeedback(
     return "This workspace is no longer in the approved list. Refresh the list before choosing another action.";
   if (result.code?.endsWith("_CANCELLED")) return "Action cancelled.";
   if (result.code === "CHATGPT_SIGN_IN_IN_PROGRESS")
-    return "Sign-in is already open in ChatGPT. Finish there, then check sign-in.";
+    return "Sign-in is already open in ChatGPT. Finish there, then return to Setup.";
   if (result.code === "TASK_OPERATION_IN_PROGRESS")
     return "Wait for the current task action to finish.";
   if (result.code === "MODEL_ENDPOINT_UNAVAILABLE")
@@ -1939,19 +1948,14 @@ function Connection({
   const connector = settings.connectors.secureMcp;
   const setup = computerSetup(snapshot);
   const feedback = useSettingsFeedback(facade);
-  const signInFences = dependencyFences(
+  const signIn = signInPresentation(
     snapshot,
-    "chat",
     Object.values(feedback.intents).map(
       (intent) => settledEdit(intent, snapshot) ?? intent,
     ),
   );
-  const embeddedStatus =
-    feedback.unretained || signInFences.unknown
-      ? "Outcome unknown"
-      : signInFences.pending
-        ? "Sign-in check pending"
-        : setup.embeddedChatGPT;
+  const embeddedStatus = feedback.unretained ? "Outcome unknown" : signIn.label;
+  const embeddedSignedIn = signIn.signedIn && !feedback.unretained;
   const attachmentReady = setup.ready && !actions.computerPauseReason;
   const externalChallenge = actions.computerPauseReason
     ? null
@@ -2449,9 +2453,9 @@ function Connection({
             Embedded sign-in is optional for external Computer access. It has
             its own check.
           </p>
-          {setupStep === "signin" && embeddedStatus === "Ready" && (
+          {setupStep === "signin" && embeddedSignedIn && (
             <p className="description">
-              Sign-in is checked for this build. Continue when ready.
+              Current sign-in was observed. Continue when ready.
             </p>
           )}
           {setupStep === "signin" && embeddedStatus === "Outcome unknown" && (
@@ -2460,24 +2464,30 @@ function Connection({
               repeat sign-in.
             </p>
           )}
-          {(!setupStep || embeddedStatus !== "Ready") && (
+          {(!setupStep || !embeddedSignedIn) && (
             <div className="control-row">
               <Command
                 actions={actions}
+                className={setupStep === "signin" ? "primary" : "subtle"}
                 command={{ kind: "chatgpt.open-sign-in" }}
               >
                 Sign in
               </Command>
-              <Command
-                actions={actions}
-                command={{ kind: "chatgpt.open-browser" }}
-              >
-                Open ChatGPT
-              </Command>
-              {embeddedStatus !== "Ready" && (
-                <Command actions={actions} command={{ kind: "chatgpt.verify" }}>
-                  Check sign-in
-                </Command>
+              {!setupStep && (
+                <>
+                  <Command
+                    actions={actions}
+                    command={{ kind: "chatgpt.open-browser" }}
+                  >
+                    Open ChatGPT
+                  </Command>
+                  <Command
+                    actions={actions}
+                    command={{ kind: "chatgpt.verify" }}
+                  >
+                    Check sign-in
+                  </Command>
+                </>
               )}
               {setupStep === "signin" && (
                 <button

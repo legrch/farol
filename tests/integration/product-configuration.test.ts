@@ -3009,6 +3009,68 @@ describe("Farol Next product configuration", () => {
     expect(restarted.snapshot()).toMatchObject(result.snapshot);
   });
 
+  it.each(["authenticated", "signed_out"] as const)(
+    "automatic sign-in return preserves queued task uncertainty for %s",
+    async (state) => {
+      const root = await stateRoot();
+      const store = new ProductSettingsStore({ root });
+      const service = new ProductConfigurationService(store, dependencies());
+      await service.initialize();
+      const before = service.snapshot();
+      if (before.status !== "ready") throw new Error("settings missing");
+      let entered!: () => void;
+      let release!: () => void;
+      const entering = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      const waiting = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const save = store.save.bind(store);
+      vi.spyOn(store, "save").mockImplementationOnce(async (...args) => {
+        entered();
+        await waiting;
+        return save(...args);
+      });
+      const original = service.recordChatGptObservation({
+        state: "outcome_unknown",
+      });
+      await entering;
+      // The returning window sees the prior snapshot while the original writer
+      // is still pending. Preservation must read inside the serialized turn.
+      expect(service.snapshot()).toEqual(before);
+      const returned = service.recordChatGptObservation(
+        state === "authenticated"
+          ? {
+              state,
+              profile: "chatgpt.next-partition/1",
+              runtimeGeneration: "synthetic",
+              buildId: "a".repeat(64),
+              protocol: "chatgpt-page-readiness/1",
+            }
+          : { state },
+        true,
+      );
+      release();
+      expect((await original).ok).toBe(true);
+      expect((await returned).ok).toBe(true);
+      const after = service.snapshot();
+      expect(after).toMatchObject({
+        status: "ready",
+        settings: { setup: { chatgpt: { outcomeUnknown: true } } },
+      });
+      if (after.status !== "ready") throw new Error("settings missing");
+      expect(after.settings.computer).toEqual(before.settings.computer);
+      expect(after.settings.connectors).toEqual(before.settings.connectors);
+      const reopened = new ProductConfigurationService(
+        new ProductSettingsStore({ root }),
+        dependencies(),
+      );
+      await reopened.initialize();
+      expect(reopened.snapshot()).toEqual(after);
+    },
+  );
+
   it("admits bounded workspace list and search actions through the product contract", () => {
     const workspaceId = "00000000-0000-4000-8000-000000000001";
 

@@ -2369,7 +2369,10 @@ export class ProductConfigurationService {
     }));
   }
 
-  async recordChatGptObservation(input: unknown): Promise<MutationResult> {
+  async recordChatGptObservation(
+    input: unknown,
+    preserveOutcomeUnknown = false,
+  ): Promise<MutationResult> {
     const parsed = chatGptObservationSchema.safeParse(input);
     if (!parsed.success) return this.failure("SETTINGS_INPUT_INVALID");
     return this.mutate((settings) => {
@@ -2378,7 +2381,11 @@ export class ProductConfigurationService {
         ...settings.setup.chatgpt,
         visited: true,
         skipped: false,
-        outcomeUnknown: false,
+        // A sign-in window returning cannot settle an unrelated task/write.
+        // Read the flag inside the existing serialized writer, not before it.
+        outcomeUnknown: preserveOutcomeUnknown
+          ? settings.setup.chatgpt.outcomeUnknown
+          : false,
       };
       let chatgpt: ProductSettings["setup"]["chatgpt"];
       switch (parsed.data.state) {

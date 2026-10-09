@@ -3,7 +3,7 @@ import { commandAllowed } from "../../src/ui/renderer/command-eligibility";
 import { computerSetup } from "../../src/ui/renderer/computer-setup";
 import { WindowController } from "../../src/ui/renderer/controller";
 import { ProductSettingsSchema } from "../../src/pkg/product-settings/contract";
-import { bootstrap, fixture, settings } from "./fixture";
+import { bootstrap, fixture, settings, signInReply } from "./fixture";
 
 // Pure projections over real controller doubles. No host/provider acceptance.
 const buildId = "3".repeat(64);
@@ -99,7 +99,7 @@ describe("current Computer setup projection", () => {
     const setup = computerSetup(await snapshot());
     expect(setup.ready).toBe(true);
     expect(setup.label).toBe("Computer ready");
-    expect(setup.embeddedChatGPT).toBe("Sign-in check needed");
+    expect(setup.embeddedChatGPT).toBe("Current sign-in is unknown");
     expect(setup.canStart).toBe(false);
     expect(setup.canReconnect).toBe(true);
   });
@@ -108,7 +108,7 @@ describe("current Computer setup projection", () => {
     value.setup.chatgpt.verified = configured().setup.computer.verified;
     const setup = computerSetup(await snapshot(value));
     expect(setup.ready).toBe(false);
-    expect(setup.embeddedChatGPT).toBe("Ready");
+    expect(setup.embeddedChatGPT).toBe("Current sign-in is unknown");
   });
   it.each([
     "folder-build",
@@ -371,6 +371,51 @@ describe("external verification challenge provenance", () => {
         value.setup.computer.verified!.workspaceId =
           "44444444-4444-4444-8444-444444444444";
       expect(computerSetup(await snapshot(value)).externalChallenge).toBeNull();
+    },
+  );
+});
+
+// Account status is a window read; external Computer evidence has its own fence.
+describe("embedded sign-in and external Computer are independent", () => {
+  it.each(["authenticated", "signed_out", "unknown"] as const)(
+    "%s current account state supersedes saved Ready without changing external readiness or command eligibility",
+    async (state) => {
+      const value = configured();
+      value.setup.chatgpt.verified = {
+        ...value.setup.computer.verified!,
+        workspaceId: null,
+      };
+      const f = fixture();
+      vi.mocked(f.api.bootstrap).mockResolvedValue({
+        ...bootstrap(),
+        configuration: { status: "ready", settings: value },
+      });
+      vi.mocked(f.api.configure).mockImplementation(async (command) =>
+        command.kind === "chatgpt.observe-sign-in"
+          ? signInReply(command, state)
+          : {},
+      );
+      const c = new WindowController(f.api);
+      try {
+        await c.start();
+        const before = computerSetup(c.getSnapshot());
+        c.navigate({ area: "setup", setupStep: "signin" });
+        await Promise.resolve();
+        const after = computerSetup(c.getSnapshot());
+        expect(after.embeddedChatGPT).toBe(
+          state === "authenticated"
+            ? "Signed in"
+            : state === "signed_out"
+              ? "Signed out"
+              : "Current sign-in is unknown",
+        );
+        expect(after.ready).toBe(true);
+        expect(after.externalAccessVerified).toBe(true);
+        expect(after.canVerifyEmbeddedApp).toBe(before.canVerifyEmbeddedApp);
+        expect(commandAllowed(c.getSnapshot(), "connector.repair")).toBe(true);
+      } finally {
+        c.dispose();
+      }
     },
   );
 });

@@ -1775,6 +1775,7 @@ async function recordChatGptSignInOutcome(
               protocol: "chatgpt-page-readiness/1",
             }
           : { state: "signed_out" },
+        true,
       );
     } catch {
       // Not a request a renderer is blocked on; the next explicit "Check
@@ -7604,6 +7605,36 @@ async function configureAdmittedProduct(
               },
             }
           : {}),
+      });
+    }
+    case "chatgpt.observe-sign-in": {
+      const original = chatGptRoute;
+      let observation: Awaited<
+        ReturnType<ChatGptRoute["observeSignInStatus"]>
+      > = { state: "unknown", binding: null };
+      if (original && command.buildId === buildIdentity.buildId) {
+        try {
+          observation = await original.observeSignInStatus();
+          if (
+            quitInProgress ||
+            installedUpdateAdmission ||
+            chatGptRoute !== original ||
+            !original.isCurrentSignInStatus(observation)
+          )
+            observation = { state: "unknown", binding: null };
+        } catch {
+          observation = { state: "unknown", binding: null };
+        }
+      }
+      return ProductConfigurationResultSchema.parse({
+        ok: true,
+        snapshot: configuration.snapshot(),
+        evidence: {
+          kind: "chatgpt.sign-in-status",
+          observationId: command.observationId,
+          buildId: command.buildId,
+          ...observation,
+        },
       });
     }
     case "chatgpt.present-browser": {

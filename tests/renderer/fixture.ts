@@ -1,10 +1,15 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { vi } from "vitest";
 import { ProductSettingsSchema } from "../../src/pkg/product-settings/contract";
+import type {
+  ProductConfigurationCommand,
+  ProductConfigurationSnapshot,
+} from "../../src/pkg/product-settings/contract";
 import type { PreloadApi } from "../../src/ui/renderer/contract";
 // Synchronous Node SHA computation behind the async Web Crypto contract.
 // The production native test exercises Chromium's actual crypto.subtle.
 vi.stubGlobal("crypto", {
+  randomUUID,
   subtle: {
     digest: async (_algorithm: string, bytes: Uint8Array) =>
       new Uint8Array(createHash("sha256").update(bytes).digest()).buffer,
@@ -97,6 +102,31 @@ export function deferred<T>() {
   });
   return { promise, resolve, reject };
 }
+// Content-free scripted response. It does not inspect a browser/account.
+export function signInReply(
+  command: Extract<
+    ProductConfigurationCommand,
+    { kind: "chatgpt.observe-sign-in" }
+  >,
+  state: "authenticated" | "signed_out" | "unknown" = "unknown",
+  snapshot: ProductConfigurationSnapshot = {
+    status: "ready",
+    settings: settings(),
+  },
+) {
+  return {
+    ok: true,
+    snapshot,
+    evidence: {
+      kind: "chatgpt.sign-in-status",
+      observationId: command.observationId,
+      buildId: command.buildId,
+      state,
+      binding:
+        state === "unknown" ? null : { documentGeneration: 0, sequence: 1 },
+    },
+  };
+}
 export function fixture() {
   const listeners = new Map<string, (value: unknown) => void>();
   const disposers: (() => void)[] = [];
@@ -110,10 +140,11 @@ export function fixture() {
   const api: PreloadApi = {
     bootstrap: vi.fn(async () => bootstrap()),
     snapshot: vi.fn(async () => ({})),
-    configure: vi.fn(async () => ({
-      ok: true,
-      snapshot: bootstrap().configuration,
-    })),
+    configure: vi.fn(async (command) =>
+      command.kind === "chatgpt.observe-sign-in"
+        ? signInReply(command)
+        : { ok: true, snapshot: bootstrap().configuration },
+    ),
     task: vi.fn(async () => ({
       ok: true,
       state: { revision: 0, tasks: [] },

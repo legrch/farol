@@ -156,6 +156,27 @@ function appBindingFailureCode(
 // How long one page activity probe may take before activity is unknown.
 const ACTIVITY_PROBE_DEADLINE_MS = 2_000;
 const ROUTE_OPEN_DEADLINE_MS = 30_000;
+const READINESS_OBSERVATION_MS = 2_000;
+
+// Page readiness only: no account identity, settings witness or Send authority.
+// The host retains the original result and rechecks it immediately before
+// publication. A copied/serialized binding is not an independently valid proof.
+export type ChatGptSignInStatusBinding = Readonly<{
+  sequence: number;
+  documentGeneration: number;
+}>;
+
+export type ChatGptSignInStatusObservation = Readonly<{
+  state: "authenticated" | "signed_out" | "unknown";
+  binding: ChatGptSignInStatusBinding | null;
+}>;
+
+type ReadinessRead = Readonly<{
+  surface: ChatGptRouteSurface | null;
+  documentGeneration: number;
+  url: string | null;
+  sequence: number;
+}>;
 
 class RouteOpenTimedOut extends Error {}
 
@@ -1533,6 +1554,12 @@ export class ChatGptRoute {
   private signInReported = false;
   private pendingSignInObservation: Promise<SignInObservation> | null = null;
   private readinessReadSequence = 0;
+  private currentReadinessObservation: Readonly<{
+    result: ChatGptSignInStatusObservation;
+    read: ReadinessRead;
+    startedAt: number;
+    deadlineAt: number;
+  }> | null = null;
   private latestReadiness: Readonly<{
     surface: ChatGptRouteSurface;
     documentGeneration: number;
@@ -2455,12 +2482,9 @@ export class ChatGptRoute {
   }
 
   async observe(): Promise<ChatGptPageObservation> {
-    const sequence = ++this.readinessReadSequence;
-    const surface = this.routeWindow;
-    const documentGeneration = this.routeDocumentGeneration;
-    const url =
-      surface && !surface.isDestroyed() ? surface.webContents.getURL() : null;
-    const read = await this.observeForSignIn();
+    const document = this.captureReadinessRead();
+    const { sequence, surface, documentGeneration, url } = document;
+    const read = await this.readReadinessPage(true);
     const unknown: ChatGptPageObservation = {
       state: "unsupported",
       code: "CHATGPT_UI_UNRECOGNIZED",
@@ -2468,15 +2492,7 @@ export class ChatGptRoute {
     if (!surface || url === null) return read.observation;
     // A page answer is readiness only for the exact document it read. Closing
     // diagnostics intentionally retain their separate pre-close snapshot path.
-    if (
-      this.disposing ||
-      this.routeWindow !== surface ||
-      surface.isDestroyed() ||
-      this.routeDocumentGeneration !== documentGeneration ||
-      surface.webContents.getURL() !== url ||
-      this.load !== "loaded"
-    )
-      return unknown;
+    if (!this.isReadinessDocumentCurrent(document)) return unknown;
     const latest = this.latestReadiness;
     const current =
       latest &&
@@ -2510,11 +2526,131 @@ export class ChatGptRoute {
     return observation;
   }
 
+  // Observe only an existing loaded document. Both the read and transport
+  // currency share this original monotonic budget. Unlike observe(), this
+  // method never publishes into latestReadiness: even a late positive probe
+  // cannot become readiness for a subsequent task or settle an unknown effect.
+  async observeSignInStatus(): Promise<ChatGptSignInStatusObservation> {
+    this.currentReadinessObservation = null;
+    const unknown = (): ChatGptSignInStatusObservation =>
+      Object.freeze({
+        state: "unknown" as const,
+        binding: null,
+      });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      if (!this.readinessObservationAvailable()) return unknown();
+      const startedAt = performance.now();
+      const deadlineAt = startedAt + READINESS_OBSERVATION_MS;
+      const read = this.captureReadinessRead();
+      if (!this.isReadinessDocumentCurrent(read)) return unknown();
+      const answer = await Promise.race([
+        this.readReadinessPage(false),
+        new Promise<null>((resolve) => {
+          timer = setTimeout(() => resolve(null), READINESS_OBSERVATION_MS);
+        }),
+      ]);
+      const now = performance.now();
+      if (
+        !answer ||
+        answer.reason !== "answered" ||
+        (answer.observation.state !== "authenticated" &&
+          answer.observation.state !== "signed_out") ||
+        !Number.isFinite(now) ||
+        now < startedAt ||
+        now >= deadlineAt ||
+        !this.readinessObservationAvailable() ||
+        read.sequence !== this.readinessReadSequence ||
+        !this.isReadinessDocumentCurrent(read)
+      )
+        return unknown();
+      const result: ChatGptSignInStatusObservation = Object.freeze({
+        state: answer.observation.state,
+        binding: Object.freeze({
+          sequence: read.sequence,
+          documentGeneration: read.documentGeneration,
+        }),
+      });
+      this.currentReadinessObservation = {
+        result,
+        read,
+        startedAt,
+        deadlineAt,
+      };
+      return result;
+    } catch {
+      // Native exceptions never escape as page content or positive evidence.
+      return unknown();
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+    }
+  }
+
+  isCurrentSignInStatus(result: ChatGptSignInStatusObservation): boolean {
+    const retained = this.currentReadinessObservation;
+    if (!retained || retained.result !== result) return false;
+    try {
+      const now = performance.now();
+      if (
+        Number.isFinite(now) &&
+        now >= retained.startedAt &&
+        now < retained.deadlineAt &&
+        this.readinessObservationAvailable() &&
+        retained.read.sequence === this.readinessReadSequence &&
+        this.isReadinessDocumentCurrent(retained.read)
+      )
+        return true;
+    } catch {
+      // A lost native document is unknown, never a reusable binding.
+    }
+    this.currentReadinessObservation = null;
+    return false;
+  }
+
+  private readinessObservationAvailable(): boolean {
+    return (
+      !this.disposing &&
+      !this.opening &&
+      !this.taskInFlight &&
+      !this.updateAdmission &&
+      !this.routeWindow?.webContents.isDestroyed()
+    );
+  }
+
+  private captureReadinessRead(): ReadinessRead {
+    const sequence = ++this.readinessReadSequence;
+    const surface = this.routeWindow;
+    return {
+      sequence,
+      surface,
+      documentGeneration: this.routeDocumentGeneration,
+      url:
+        surface && !surface.isDestroyed() ? surface.webContents.getURL() : null,
+    };
+  }
+
+  private isReadinessDocumentCurrent(read: ReadinessRead): boolean {
+    return (
+      read.surface !== null &&
+      read.url !== null &&
+      !this.disposing &&
+      this.routeWindow === read.surface &&
+      !read.surface.isDestroyed() &&
+      this.routeDocumentGeneration === read.documentGeneration &&
+      read.surface.webContents.getURL() === read.url &&
+      this.load === "loaded"
+    );
+  }
+
   /**
    * Diagnostic page snapshot for a sign-in close. Public observe() adds current
    * identity/order checks; a pre-close diagnostic is never Send authority.
    */
-  private async observeForSignIn(): Promise<SignInRead> {
+  private observeForSignIn(): Promise<SignInRead> {
+    return this.readReadinessPage(true);
+  }
+
+  private async readReadinessPage(userGesture: boolean): Promise<SignInRead> {
     const unreachable = classifyChatGptPage({
       load: "failed",
       composerVisible: false,
@@ -2539,7 +2675,7 @@ export class ChatGptRoute {
     try {
       answer = await candidate.webContents.executeJavaScript(
         readinessProbe,
-        true,
+        userGesture,
       );
     } catch {
       return { observation: unrecognized, reason: "probe-threw" };
@@ -4512,7 +4648,7 @@ export class ChatGptRoute {
             this.routeWindow?.hide();
           }
           this.load = inPlace ? "loaded" : "failed";
-          if (!inPlace) this.options.onLoadStateChanged?.("loading");
+          this.options.onLoadStateChanged?.(inPlace ? "loaded" : "loading");
         },
       );
       contents.on(
@@ -4584,15 +4720,15 @@ export class ChatGptRoute {
         }
       });
       contents.on("did-navigate-in-page", (_event, _url, isMainFrame) => {
-        if (isMainFrame) {
-          this.routeDocumentGeneration += 1;
-          this.reportConversationUrl(contents);
-          void this.installCurrentRouteAppSubmissionGate(contents).then(
-            (gate) => {
-              if (gate === "failed") this.blockUnsafeManualSurface(contents);
-            },
-          );
-        }
+        if (!isMainFrame || !this.ownsRouteContents(contents)) return;
+        this.routeDocumentGeneration += 1;
+        this.options.onLoadStateChanged?.(this.load);
+        this.reportConversationUrl(contents);
+        void this.installCurrentRouteAppSubmissionGate(contents).then(
+          (gate) => {
+            if (gate === "failed") this.blockUnsafeManualSurface(contents);
+          },
+        );
       });
       contents.on("render-process-gone", () => {
         if (!this.ownsRouteContents(contents)) return;

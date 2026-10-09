@@ -26,6 +26,7 @@ import { setupPage } from "./setup-navigation";
 import {
   ProductConfigurationSnapshotSchema,
   ProductConfigurationCommandSchema,
+  ProductConfigurationResultSchema,
 } from "../../pkg/product-settings/contract";
 import {
   ProductTaskCommandSchema,
@@ -124,6 +125,7 @@ const initial: WindowSnapshot = {
   activity: [],
   runtime: "starting",
   route: "loading",
+  signInObservation: null,
   update: { phase: "unavailable", code: "UPDATE_STATUS_PENDING" },
   intents: {},
   evidence: null,
@@ -211,6 +213,9 @@ export class WindowController implements RendererFacade {
   private overflow = false;
   private refreshPending = false;
   private eventOrdinal = 0;
+  private signInCounter = 0;
+  private signInTimer: ReturnType<typeof setTimeout> | null = null;
+  private authWindowGeneration = -1;
   private history: Destination[] = [home];
   private cursor = 0;
   private navigationRevision = 0;
@@ -260,6 +265,24 @@ export class WindowController implements RendererFacade {
   };
   private patch(value: Partial<WindowSnapshot>): void {
     if (this.disposed) return;
+    // General configuration publication cannot overwrite this independent read.
+    // Navigation retires pending reads. A settled document sample remains visible
+    // across Setup/Settings until loss of its document/runtime context.
+    if (
+      (value.destination !== undefined &&
+        this.state.signInObservation?.pending === true &&
+        JSON.stringify(value.destination) !==
+          JSON.stringify(this.state.destination)) ||
+      (value.status !== undefined && value.status !== "current") ||
+      (value.configuration !== undefined &&
+        value.configuration?.status !== "ready") ||
+      (value.buildId !== undefined && value.buildId !== this.state.buildId) ||
+      (value.runtime !== undefined && value.runtime !== this.state.runtime) ||
+      value.update?.phase === "applying"
+    ) {
+      this.retireSignInObservation();
+      value = { ...value, signInObservation: null };
+    }
     if (
       Object.entries(value).every(
         ([key, item]) => this.state[key as keyof WindowSnapshot] === item,
@@ -295,6 +318,7 @@ export class WindowController implements RendererFacade {
       }),
       this.api.onRuntimeEvent((value) => this.record(value)),
       this.api.onRuntimeState((value) => {
+        this.invalidateSignInObservation();
         const parsed = RuntimeStatusSchema.safeParse(value);
         if (parsed.success) {
           this.runtimeRevision++;
@@ -310,6 +334,7 @@ export class WindowController implements RendererFacade {
       }),
       this.api.onInstalledUpdateState((value) => this.adoptUpdate(value)),
       this.api.onBrowserRouteState((value) => {
+        this.invalidateSignInObservation();
         const parsed = BrowserRouteStatusSchema.safeParse(value);
         if (parsed.success) this.patch({ route: parsed.data.state });
       }),
@@ -466,6 +491,8 @@ export class WindowController implements RendererFacade {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
+    this.retireSignInObservation();
+    this.state = immutable({ ...this.state, signInObservation: null });
     this.conversationDraft.dispose();
     this.pendingSectionNavigation = null;
     for (const dispose of this.disposers) dispose();
@@ -685,6 +712,7 @@ export class WindowController implements RendererFacade {
     )
       return;
     this.invalidateHistory();
+    this.invalidateSignInObservation();
     this.patch({ chatHistoryContext: context });
   }
   private invalidateHistory(): void {
@@ -803,10 +831,17 @@ export class WindowController implements RendererFacade {
     // Capture validated values before digest/transport awaits. Caller mutation
     // must not change the original operation or its receipt correlation.
     const command = parsed.data;
+    if (command.kind === "chatgpt.observe-sign-in")
+      return Promise.resolve({
+        id: intention,
+        state: "refused",
+        code: "SIGN_IN_OBSERVATION_WINDOW_OWNED",
+      });
     // Presentation has one window-owned intention across clicks and remounts,
     // including known refusals. A new label must not release that latch.
     if (command.kind === "chatgpt.present-browser")
       intention = "settings:chatgpt.present-browser:";
+    if (command.kind === "chatgpt.verify") this.invalidateSignInObservation();
     return this.dispatch(
       intention,
       command,
@@ -1104,6 +1139,11 @@ export class WindowController implements RendererFacade {
           code: outcome.result.ok ? null : outcome.result.error,
           ...(outcome.result.connectorSetup
             ? { connectorSetup: outcome.result.connectorSetup }
+            : {}),
+          ...(command.kind === "chatgpt.verify" &&
+          outcome.result.ok &&
+          outcome.result.evidence?.kind === "chatgpt.readiness"
+            ? { chatGptReadiness: outcome.result.evidence }
             : {}),
           ...(!outcome.result.ok && outcome.result.connectorAttempt
             ? { connectorAttempt: outcome.result.connectorAttempt }
@@ -1554,6 +1594,7 @@ export class WindowController implements RendererFacade {
     if (this.disposed || this.state.update.phase === "applying") return;
     if (destination.taskId !== undefined) this.taskSelectionRevision++;
     this.presentationRevision++;
+    const wasSignIn = this.isSignInEntry();
     const next: Destination = {
       area: destination.area ?? this.state.destination.area,
       page: destination.page ?? this.state.destination.page,
@@ -1609,9 +1650,14 @@ export class WindowController implements RendererFacade {
     });
     this.presentation();
     this.presentBrowserOnNavigation();
+    if (!wasSignIn && this.isSignInEntry()) {
+      this.invalidateSignInObservation();
+      this.observeSignIn();
+    }
   }
   travel(direction: -1 | 1): void {
     if (this.disposed || this.state.update.phase === "applying") return;
+    const wasSignIn = this.isSignInEntry();
     const cursor = this.cursor + direction;
     if (cursor < 0 || cursor >= this.history.length) return;
     this.presentationRevision++;
@@ -1629,6 +1675,108 @@ export class WindowController implements RendererFacade {
     });
     this.presentation();
     this.presentBrowserOnNavigation();
+    if (!wasSignIn && this.isSignInEntry()) {
+      this.invalidateSignInObservation();
+      this.observeSignIn();
+    }
+  }
+  private isSignInEntry(): boolean {
+    return (
+      this.state.destination.area === "setup" &&
+      this.state.destination.setupStep === "signin"
+    );
+  }
+  private retireSignInObservation(): void {
+    this.signInCounter++;
+    if (this.signInTimer !== null) clearTimeout(this.signInTimer);
+    this.signInTimer = null;
+  }
+  private invalidateSignInObservation(): void {
+    this.retireSignInObservation();
+    this.patch({ signInObservation: null });
+  }
+  private observeSignIn(): void {
+    const current = this.state;
+    if (
+      this.disposed ||
+      this.booting ||
+      !this.isSignInEntry() ||
+      current.status !== "current" ||
+      current.runtime !== "ready" ||
+      current.update.phase === "applying" ||
+      current.configuration?.status !== "ready" ||
+      !current.buildId ||
+      current.signInObservation?.pending === true
+    )
+      return;
+    const command = ProductConfigurationCommandSchema.safeParse({
+      kind: "chatgpt.observe-sign-in",
+      observationId: crypto.randomUUID(),
+      buildId: current.buildId,
+    });
+    if (!command.success || command.data.kind !== "chatgpt.observe-sign-in")
+      return;
+    const request = command.data;
+    const startedAt = performance.now();
+    const deadlineAt = startedAt + 2_500;
+    if (!Number.isFinite(startedAt) || !Number.isFinite(deadlineAt)) return;
+    const counter = ++this.signInCounter;
+    const pending = {
+      observationId: request.observationId,
+      buildId: request.buildId,
+      counter,
+      pending: true,
+      state: "unknown" as const,
+      binding: null,
+    };
+    // Publish the latch before transport; subscriptions/remounts cannot submit it.
+    this.patch({ signInObservation: pending });
+    const active = () =>
+      !this.disposed &&
+      this.signInCounter === counter &&
+      this.state.signInObservation === pending &&
+      this.isSignInEntry() &&
+      this.state.status === "current" &&
+      this.state.runtime === "ready" &&
+      this.state.update.phase !== "applying" &&
+      this.state.configuration?.status === "ready" &&
+      this.state.buildId === request.buildId;
+    const settle = (raw?: unknown) => {
+      if (!active()) return;
+      if (this.signInTimer !== null) clearTimeout(this.signInTimer);
+      this.signInTimer = null;
+      const parsed = ProductConfigurationResultSchema.safeParse(raw);
+      const evidence =
+        parsed.success && parsed.data.ok ? parsed.data.evidence : null;
+      const now = performance.now();
+      const exact =
+        Number.isFinite(now) &&
+        now >= startedAt &&
+        now < deadlineAt &&
+        evidence?.kind === "chatgpt.sign-in-status" &&
+        evidence.observationId === request.observationId &&
+        evidence.buildId === request.buildId;
+      // Never adopt the response's settings snapshot, effect intent or evidence cache.
+      this.patch({
+        signInObservation: {
+          ...pending,
+          pending: false,
+          state: exact ? evidence.state : "unknown",
+          binding: exact ? evidence.binding : null,
+        },
+      });
+    };
+    // Host observation is bounded to two seconds. A lost IPC reply also expires;
+    // its later delivery cannot revive or settle any original effect UNKNOWN.
+    if (!active()) return;
+    this.signInTimer = setTimeout(() => settle(), 2_500);
+    void (async () => {
+      try {
+        settle(await this.api.configure(request));
+      } catch {
+        settle();
+      }
+    })();
   }
   private presentBrowserOnNavigation(): void {
     const state = this.state;
@@ -1823,6 +1971,17 @@ export class WindowController implements RendererFacade {
       if (this.booting) this.pendingUpdateCheck = true;
       else void this.update("check");
     } else {
+      if (
+        action.source === "auth-window-closed" &&
+        (action.action === "sign-in-returned" ||
+          action.action === "open-settings") &&
+        action.authWindowGeneration !== null
+      ) {
+        if (action.authWindowGeneration <= this.authWindowGeneration) return;
+        this.authWindowGeneration = action.authWindowGeneration;
+        this.invalidateSignInObservation();
+        this.observeSignIn();
+      }
       if (
         action.source === "settings-command" ||
         action.source === "sign-in-return-command"

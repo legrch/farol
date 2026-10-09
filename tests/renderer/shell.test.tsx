@@ -1502,7 +1502,10 @@ it("fresh Setup navigation never writes, verifies, clears credentials or invents
   expect(c.getSnapshot().configuration).toBe(saved);
   await act(async () => button(host, "Set up Connection").click());
   expect(c.getSnapshot().destination.setupStep).toBe("connection");
-  expect(f.api.configure).not.toHaveBeenCalled();
+  expect(f.api.configure).toHaveBeenCalledTimes(1);
+  expect(f.api.configure).toHaveBeenCalledWith(
+    expect.objectContaining({ kind: "chatgpt.observe-sign-in" }),
+  );
   expect(f.api.task).not.toHaveBeenCalled();
 });
 
@@ -1603,7 +1606,10 @@ it("Setup keeps credential draft nodes through Overview, other steps and backgro
   expect(key.value).toBe("fixture-draft-key-0000000000");
   expect(button(host, "Save & connect").disabled).toBe(false);
   await act(async () => button(host, "Save & connect").click());
-  expect(f.api.configure).not.toHaveBeenCalled();
+  expect(f.api.configure).toHaveBeenCalledTimes(1);
+  expect(f.api.configure).toHaveBeenCalledWith(
+    expect.objectContaining({ kind: "chatgpt.observe-sign-in" }),
+  );
   await act(async () =>
     key.dispatchEvent(
       new CompositionEvent("compositionend", { bubbles: true }),
@@ -1611,7 +1617,7 @@ it("Setup keeps credential draft nodes through Overview, other steps and backgro
   );
   await act(async () => button(host, "Cancel").click());
   expect(key.value).toBe("");
-  expect(f.api.configure).not.toHaveBeenCalled();
+  expect(f.api.configure).toHaveBeenCalledTimes(1);
   expect(f.api.task).not.toHaveBeenCalled();
 });
 
@@ -1731,7 +1737,7 @@ it("Home projects Computer readiness separately from optional embedded login", a
   await act(async () => c.navigate({ area: "home", homeView: "access" }));
   expect(host.querySelector("main")?.textContent).toContain("Computer ready");
   expect(host.querySelector("main")?.textContent).toContain(
-    "Sign-in check needed",
+    "Current sign-in is unknown",
   );
   for (const page of ["folders", "computer", "connection"] as const) {
     await act(async () => c.navigate({ area: "settings", page }));

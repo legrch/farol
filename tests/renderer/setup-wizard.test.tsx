@@ -7,7 +7,7 @@ import { Shell } from "../../src/ui/renderer/shell";
 import { Services } from "../../src/ui/renderer/services";
 import type { SetupStep } from "../../src/ui/renderer/contract";
 import { ProductSettingsSchema } from "../../src/pkg/product-settings/contract";
-import { bootstrap, deferred, fixture, settings } from "./fixture";
+import { bootstrap, deferred, fixture, settings, signInReply } from "./fixture";
 // Controlled DOM/IPC fixtures only; not sign-in, native dialog or live-provider proof.
 (
   globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }
@@ -96,10 +96,11 @@ async function mount(
     environment: "dev",
     configuration,
   });
-  vi.mocked(f.api.configure).mockResolvedValue({
-    ok: true,
-    snapshot: configuration,
-  });
+  vi.mocked(f.api.configure).mockImplementation(async (command) =>
+    command.kind === "chatgpt.observe-sign-in"
+      ? signInReply(command, "signed_out", configuration)
+      : { ok: true, snapshot: configuration },
+  );
   const c = new WindowController(f.api);
   controllers.push(c);
   await c.start();
@@ -290,7 +291,10 @@ describe("reference-aligned Setup wizard", () => {
         expect(h.c.getSnapshot().intents[id]).toEqual(receipt);
       }
       expect(
-        vi.mocked(h.f.api.configure).mock.calls.map(([command]) => command),
+        vi
+          .mocked(h.f.api.configure)
+          .mock.calls.map(([command]) => command)
+          .filter((command) => command.kind !== "chatgpt.observe-sign-in"),
       ).toEqual([
         { kind: "connector.check-attachment" },
         ...(outcome === "refused" ? [{ kind: "chatgpt.open-sign-in" }] : []),
@@ -379,7 +383,9 @@ describe("reference-aligned Setup wizard", () => {
     await act(async () => h.c.refresh());
     await h.click("Review setup");
     expect(h.c.getSnapshot().intents).toEqual(retained);
-    expect(h.f.api.configure).not.toHaveBeenCalled();
+    expect(
+      vi.mocked(h.f.api.configure).mock.calls.map(([command]) => command.kind),
+    ).toEqual(["chatgpt.observe-sign-in"]);
     expect(h.f.api.task).not.toHaveBeenCalled();
     expect(h.f.api.installedUpdate).not.toHaveBeenCalled();
     expect(JSON.stringify(h.c.getSnapshot())).not.toContain(
@@ -422,12 +428,16 @@ describe("reference-aligned Setup wizard", () => {
       page: "connection",
     });
     expect(h.button("Sign in")).toBeTruthy();
-    expect(h.f.api.configure).not.toHaveBeenCalled();
+    expect(h.f.api.configure).toHaveBeenCalledExactlyOnceWith({
+      kind: "chatgpt.observe-sign-in",
+      observationId: expect.any(String),
+      buildId: "3".repeat(64),
+    });
   });
   it("opens sign-in only on the owner's explicit click", async () => {
     const h = await mount("signin");
     await h.click("Sign in");
-    expect(h.f.api.configure).toHaveBeenCalledTimes(1);
+    expect(h.f.api.configure).toHaveBeenCalledTimes(2);
     expect(h.f.api.configure).toHaveBeenLastCalledWith({
       kind: "chatgpt.open-sign-in",
     });
@@ -437,7 +447,9 @@ describe("reference-aligned Setup wizard", () => {
     const h = await mount("signin");
     await h.click("Continue");
     expect(h.c.getSnapshot().destination.setupStep).toBe("folders");
-    expect(h.f.api.configure).not.toHaveBeenCalled();
+    expect(
+      vi.mocked(h.f.api.configure).mock.calls.map(([command]) => command.kind),
+    ).toEqual(["chatgpt.observe-sign-in"]);
     await h.click("Previous");
     expect(h.c.getSnapshot().destination.setupStep).toBe("signin");
   });
@@ -468,5 +480,92 @@ describe("reference-aligned Setup wizard", () => {
         ?.getAttribute("aria-current"),
     ).toBe("step");
     expect(h.f.api.configure).not.toHaveBeenCalled();
+  });
+  it("Continue retains the settled current document sample on real Overview and sidebar until a document event", async () => {
+    const h = await mount("signin");
+    vi.mocked(h.f.api.configure).mockImplementation(async (command) =>
+      command.kind === "chatgpt.observe-sign-in"
+        ? signInReply(command, "authenticated", h.configuration)
+        : {},
+    );
+    await act(async () =>
+      h.f.emit("action", {
+        action: "sign-in-returned",
+        source: "auth-window-closed",
+        eventId: crypto.randomUUID(),
+        authWindowGeneration: 1,
+      }),
+    );
+    const sample = h.c.getSnapshot().signInObservation;
+    const calls = vi.mocked(h.f.api.configure).mock.calls.length;
+    await h.click("Continue");
+    expect(h.c.getSnapshot().signInObservation).toBe(sample);
+    expect(
+      h.host
+        .querySelector('[aria-label="Sign in"]')
+        ?.getAttribute("aria-description"),
+    ).toBe("Signed in");
+    await act(async () =>
+      h.c.navigate({ area: "setup", setupStep: "overview" }),
+    );
+    expect(
+      h.host.querySelector('[data-setup-check="signin"] .setup-check-status')
+        ?.textContent,
+    ).toBe("Signed in");
+    await h.remount();
+    expect(h.c.getSnapshot().signInObservation).toBe(sample);
+    expect(h.f.api.configure).toHaveBeenCalledTimes(calls);
+    await act(async () => h.f.emit("route", { state: "loading" }));
+    expect(
+      h.host.querySelector('[data-setup-check="signin"] .setup-check-status')
+        ?.textContent,
+    ).toBe("Current sign-in is unknown");
+    expect(
+      h.host.querySelector(
+        '[aria-label="Sign in"] [data-check-state="verified"]',
+      ),
+    ).toBeNull();
+  });
+  it("a real authenticated leave and signed-out return observes fresh once per entry without an effect retry", async () => {
+    const h = await mount("signin");
+    vi.mocked(h.f.api.configure).mockImplementation(async (command) =>
+      command.kind === "chatgpt.observe-sign-in"
+        ? signInReply(command, "authenticated", h.configuration)
+        : {},
+    );
+    await act(async () =>
+      h.f.emit("action", {
+        action: "sign-in-returned",
+        source: "auth-window-closed",
+        eventId: crypto.randomUUID(),
+        authWindowGeneration: 1,
+      }),
+    );
+    const authenticated = h.c.getSnapshot().signInObservation;
+    await h.click("Continue");
+    expect(h.c.getSnapshot().signInObservation).toBe(authenticated);
+    vi.mocked(h.f.api.configure).mockImplementation(async (command) =>
+      command.kind === "chatgpt.observe-sign-in"
+        ? signInReply(command, "signed_out", h.configuration)
+        : {},
+    );
+    await h.click("Previous");
+    const signedOut = h.c.getSnapshot().signInObservation;
+    expect(signedOut?.state).toBe("signed_out");
+    expect(signedOut?.observationId).not.toBe(authenticated?.observationId);
+    expect(h.button("Sign in").disabled).toBe(false);
+    expect(h.button("Skip for now")).toBeTruthy();
+    await h.remount();
+    await act(async () => h.c.navigate({ area: "setup", setupStep: "signin" }));
+    expect(h.c.getSnapshot().signInObservation).toBe(signedOut);
+    expect(
+      vi.mocked(h.f.api.configure).mock.calls.map(([command]) => command.kind),
+    ).toEqual([
+      "chatgpt.observe-sign-in",
+      "chatgpt.observe-sign-in",
+      "chatgpt.observe-sign-in",
+    ]);
+    expect(h.c.getSnapshot().intents).toEqual({});
+    expect(h.f.api.task).not.toHaveBeenCalled();
   });
 });

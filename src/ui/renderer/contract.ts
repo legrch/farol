@@ -93,6 +93,11 @@ export type Intent = Readonly<{
   code: string | null;
   /** Original command progress, independent of ambient snapshot ordering. */
   connectorSetup?: ConnectorSetupReceipt;
+  /** This explicit check's result, never a current-document or account grant. */
+  chatGptReadiness?: Extract<
+    ProductConfigurationEvidence,
+    { kind: "chatgpt.readiness" }
+  >;
   connectorAttempt?: Readonly<{
     method: "computer.connector.open";
     requestId: string;
@@ -117,6 +122,18 @@ export type Appearance = Readonly<{
   accent: "iris" | "cobalt" | "amber";
   font: "geist" | "system";
 }>;
+/** Transient content-free read; never an effect receipt or saved readiness. */
+export type SignInObservation = Readonly<{
+  observationId: string;
+  buildId: string;
+  counter: number;
+  pending: boolean;
+  state: "authenticated" | "signed_out" | "unknown";
+  binding: Extract<
+    ProductConfigurationEvidence,
+    { kind: "chatgpt.sign-in-status" }
+  >["binding"];
+}>;
 export type WindowSnapshot = Readonly<{
   status: "starting" | "current" | "stale" | "unavailable" | "incompatible";
   environment: "preview" | "dev";
@@ -130,6 +147,7 @@ export type WindowSnapshot = Readonly<{
   activity: readonly ActivityEntry[];
   runtime: "starting" | "ready" | "offline" | "failed";
   route: "loading" | "loaded" | "failed";
+  signInObservation: SignInObservation | null;
   update: InstalledUpdateView;
   intents: Readonly<Record<string, Intent>>;
   shortcuts: NavigationShortcuts;

@@ -4,6 +4,7 @@ import {
 } from "../guided-onboarding";
 import { routeReadiness } from "../setup-presentation";
 import type { WindowSnapshot } from "./contract";
+import { signInPresentation } from "./sign-in-presentation";
 import { dependencyFences } from "./command-eligibility";
 
 /** Read-only presentation of existing authority and receipts; never a grant. */
@@ -91,12 +92,7 @@ export function computerSetup(snapshot: WindowSnapshot) {
       admissible && runtimeIdentityCurrent && facts.runtimeCurrent,
     externalAccessVerified: admissible && attachmentCurrent,
     externalChallenge,
-    embeddedChatGPT:
-      embedded === "ready"
-        ? "Ready"
-        : embedded === "outcome-unknown"
-          ? "Outcome unknown"
-          : "Sign-in check needed",
+    embeddedChatGPT: signInPresentation(snapshot).label,
     label: unknown
       ? "Outcome unknown"
       : pending

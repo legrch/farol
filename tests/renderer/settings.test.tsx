@@ -16,7 +16,7 @@ import {
   ProductSettingsSchema,
 } from "../../src/pkg/product-settings/contract";
 import type { ProductSettings } from "../../src/pkg/product-settings/contract";
-import { bootstrap, deferred, fixture, settings } from "./fixture";
+import { bootstrap, deferred, fixture, settings, signInReply } from "./fixture";
 
 const quitChoiceLabel = "Install downloaded updates when I quit Farol";
 const quitOff: WindowSnapshot["update"] = {
@@ -263,6 +263,7 @@ async function mount(
   update: WindowSnapshot["update"] = { phase: "idle", checkedAt: null },
   setupStep?: "signin" | "connection" | "folders" | "attachment",
   wizard = false,
+  signInState: "authenticated" | "signed_out" | "unknown" = "signed_out",
 ) {
   Object.assign(globalThis.crypto, { randomUUID });
   let activeSetupStep = setupStep;
@@ -274,25 +275,29 @@ async function mount(
     environment,
     configuration,
   });
-  vi.mocked(f.api.configure).mockImplementation(async (command) => ({
-    ok: true,
-    snapshot: configuration,
-    ...(command.kind === "connector.save-and-connect"
-      ? {
-          connectorSetup: {
-            kind: "connector.save-and-connect",
-            operationId: command.operationId,
-            buildId: command.buildId,
-            state: "completed",
-            stoppedAt: "complete",
-            credentials: "saved",
-            connection: "connected",
-            code: null,
-            externalVerification: "not-proven",
-          },
-        }
-      : {}),
-  }));
+  vi.mocked(f.api.configure).mockImplementation(async (command) =>
+    command.kind === "chatgpt.observe-sign-in"
+      ? signInReply(command, signInState, configuration)
+      : {
+          ok: true,
+          snapshot: configuration,
+          ...(command.kind === "connector.save-and-connect"
+            ? {
+                connectorSetup: {
+                  kind: "connector.save-and-connect",
+                  operationId: command.operationId,
+                  buildId: command.buildId,
+                  state: "completed",
+                  stoppedAt: "complete",
+                  credentials: "saved",
+                  connection: "connected",
+                  code: null,
+                  externalVerification: "not-proven",
+                },
+              }
+            : {}),
+        },
+  );
   const c = new WindowController(f.api);
   await c.start();
   c.navigate(
@@ -1795,9 +1800,7 @@ describe("bounded Settings writer", () => {
         }),
       );
       if (page === "folders")
-        expect(h.host.textContent).not.toContain(
-          "Add selected workspace read-only",
-        );
+        expect(() => h.button("Add selected workspace read-only")).toThrow();
       else expect(h.button("Apply reviewed configuration").disabled).toBe(true);
       expect(h.calls()).toHaveLength(2);
     },
@@ -1811,9 +1814,11 @@ describe("bounded Settings writer", () => {
     });
     await h.click("Add workspace…");
     expect(h.button("Add workspace…").disabled).toBe(false); // A deliberate retry may follow a known refusal; rendering never retries.
-    expect(h.host.textContent).not.toContain(
-      "Add selected workspace read-only",
-    );
+    expect(
+      [...h.host.querySelectorAll("button")].some(
+        (button) => button.textContent === "Add selected workspace read-only",
+      ),
+    ).toBe(false);
     expect(h.calls()).toHaveLength(1);
     const other = await mount("folders");
     vi.mocked(other.f.api.configure).mockResolvedValueOnce({
@@ -1823,9 +1828,7 @@ describe("bounded Settings writer", () => {
     });
     await other.click("Add workspace…");
     await act(async () => other.c.refresh());
-    expect(other.host.textContent).not.toContain(
-      "Add selected workspace read-only",
-    );
+    expect(() => other.button("Add selected workspace read-only")).toThrow();
     expect(other.host.textContent).toContain("selection is no longer current");
   });
   it("fences duplicate, unknown and stale actions without a retry", async () => {
@@ -4239,6 +4242,7 @@ describe("fresh and returning Setup journey", () => {
   const mountSetup = (
     step: "signin" | "folders" | "attachment",
     value = connectionSettings(),
+    signInState: "authenticated" | "signed_out" | "unknown" = "signed_out",
   ) =>
     mount(
       "connection",
@@ -4247,6 +4251,7 @@ describe("fresh and returning Setup journey", () => {
       { phase: "idle", checkedAt: null },
       step,
       true,
+      signInState,
     );
   const visibleText = (host: Element) =>
     [...host.querySelectorAll("p,li")]
@@ -4539,9 +4544,165 @@ describe("fresh and returning Setup journey", () => {
     expect(h.calls()).toEqual([]);
   });
 
+  it.each(["authenticated", "signed_out", "unsupported"] as const)(
+    "Settings reports its own %s verification after retiring an older authenticated sample",
+    async (state) => {
+      const h = await mount("connection", connectionSettings());
+      const wait = deferred<unknown>();
+      vi.mocked(h.f.api.configure).mockImplementation((command) =>
+        command.kind === "chatgpt.observe-sign-in"
+          ? Promise.resolve(
+              signInReply(command, "authenticated", h.configuration),
+            )
+          : wait.promise,
+      );
+      await act(async () =>
+        h.c.navigate({ area: "setup", setupStep: "signin" }),
+      );
+      expect(h.c.getSnapshot().signInObservation?.state).toBe("authenticated");
+      await act(async () =>
+        h.c.navigate({ area: "settings", page: "connection" }),
+      );
+      await h.click("Check sign-in");
+      expect(h.c.getSnapshot().signInObservation).toBeNull();
+      const readiness = {
+        kind: "chatgpt.readiness",
+        state,
+        code:
+          state === "authenticated"
+            ? null
+            : state === "signed_out"
+              ? "CHATGPT_SIGN_IN_REQUIRED"
+              : "CHATGPT_UI_UNRECOGNIZED",
+      };
+      await act(async () =>
+        wait.resolve({
+          ok: true,
+          snapshot: h.configuration,
+          evidence: readiness,
+        }),
+      );
+      expect(
+        h.c.getSnapshot().intents["settings:chatgpt.verify:"],
+      ).toMatchObject({
+        state: "applied",
+        chatGptReadiness: readiness,
+      });
+      expect(visibleText(h.host)).toContain(
+        state === "authenticated"
+          ? "This check observed a signed-in ChatGPT page."
+          : state === "signed_out"
+            ? "This check observed a signed-out ChatGPT page."
+            : "This check could not recognize the ChatGPT page.",
+      );
+      expect(h.c.getSnapshot().signInObservation).toBeNull();
+      expect(
+        h.calls().filter((command) => command.kind === "chatgpt.verify"),
+      ).toHaveLength(1);
+      await h.remount();
+      expect(
+        h.calls().filter((command) => command.kind === "chatgpt.verify"),
+      ).toHaveLength(1);
+    },
+  );
+
+  it("Settings reports authenticated verification from its own receipt with no previous sample", async () => {
+    const h = await mount("connection", connectionSettings());
+    vi.mocked(h.f.api.configure).mockResolvedValueOnce({
+      ok: true,
+      snapshot: h.configuration,
+      evidence: {
+        kind: "chatgpt.readiness",
+        state: "authenticated",
+        code: null,
+      },
+    });
+    await h.click("Check sign-in");
+    expect(visibleText(h.host)).toContain(
+      "This check observed a signed-in ChatGPT page.",
+    );
+    expect(h.c.getSnapshot().signInObservation).toBeNull();
+    expect(h.calls()).toEqual([{ kind: "chatgpt.verify" }]);
+  });
+
+  it("Settings retains its original check result after refresh wins publication and remount", async () => {
+    const h = await mount("connection", connectionSettings());
+    const wait = deferred<unknown>();
+    vi.mocked(h.f.api.configure).mockReturnValueOnce(wait.promise);
+    await h.click("Check sign-in");
+    vi.mocked(h.f.api.bootstrap).mockResolvedValue({
+      ...bootstrap(),
+      configuration: { status: "ready", settings: settings(99) },
+    });
+    await act(async () => h.c.refresh());
+    await h.remount();
+    const readiness = {
+      kind: "chatgpt.readiness",
+      state: "signed_out",
+      code: "CHATGPT_SIGN_IN_REQUIRED",
+    };
+    await act(async () =>
+      wait.resolve({
+        ok: true,
+        snapshot: h.configuration,
+        evidence: readiness,
+      }),
+    );
+    expect(h.c.getSnapshot().configuration).toMatchObject({
+      settings: { revision: 99 },
+    });
+    expect(h.c.getSnapshot().intents["settings:chatgpt.verify:"]).toMatchObject(
+      { chatGptReadiness: readiness },
+    );
+    expect(visibleText(h.host)).toContain(
+      "This check observed a signed-out ChatGPT page.",
+    );
+    expect(h.c.getSnapshot().signInObservation).toBeNull();
+    expect(h.calls()).toEqual([{ kind: "chatgpt.verify" }]);
+  });
+
+  it.each(["missing", "wrong-kind", "malformed"])(
+    "Settings cannot promote %s evidence into this check's sign-in result",
+    async (kind) => {
+      const h = await mount("connection", connectionSettings());
+      const evidence =
+        kind === "missing"
+          ? undefined
+          : kind === "wrong-kind"
+            ? {
+                kind: "chatgpt.sign-in-status",
+                observationId: randomUUID(),
+                buildId: "3".repeat(64),
+                state: "authenticated",
+                binding: { documentGeneration: 1, sequence: 1 },
+              }
+            : {
+                kind: "chatgpt.readiness",
+                state: "authenticated",
+                code: null,
+                content: "excluded",
+              };
+      vi.mocked(h.f.api.configure).mockResolvedValueOnce({
+        ok: true,
+        snapshot: h.configuration,
+        ...(evidence ? { evidence } : {}),
+      });
+      await h.click("Check sign-in");
+      expect(
+        h.c.getSnapshot().intents["settings:chatgpt.verify:"]?.chatGptReadiness,
+      ).toBeUndefined();
+      expect(visibleText(h.host)).not.toContain(
+        "This check observed a signed-in ChatGPT page.",
+      );
+      expect(h.c.getSnapshot().signInObservation).toBeNull();
+      await h.remount();
+      expect(h.calls()).toEqual([{ kind: "chatgpt.verify" }]);
+    },
+  );
+
   it("ready sign-in uses Continue without Sign in, launcher or Check actions", async () => {
-    const h = await mountSetup("signin");
-    expect(visibleText(h.host)).toContain("Sign-in is checked for this build");
+    const h = await mountSetup("signin", connectionSettings(), "authenticated");
+    expect(visibleText(h.host)).toContain("Current sign-in was observed");
     for (const label of [
       "Sign in",
       "Open ChatGPT",
@@ -4556,7 +4717,10 @@ describe("fresh and returning Setup journey", () => {
     });
     await h.stepTo("signin");
     expect(() => h.button("Sign in")).toThrow();
-    expect(h.calls()).toEqual([]);
+    expect(h.calls().map((command) => command.kind)).toEqual([
+      "chatgpt.observe-sign-in",
+      "chatgpt.observe-sign-in",
+    ]);
   });
 
   it("signed-out Skip uses facade navigation and preserves unchecked account and grants on return", async () => {
@@ -4575,31 +4739,157 @@ describe("fresh and returning Setup journey", () => {
     await h.stepTo("signin");
     expect(h.button("Sign in").disabled).toBe(false);
     expect(h.button("Skip for now")).toBeTruthy();
-    expect(h.calls()).toEqual([]);
+    expect(h.calls().map((command) => command.kind)).toEqual([
+      "chatgpt.observe-sign-in",
+      "chatgpt.observe-sign-in",
+    ]);
   });
 
-  it("opening sign-in reports only that command result and UNKNOWN stays visible on return", async () => {
+  it("opening sign-in keeps its original UNKNOWN visible after a fresh entry observation", async () => {
     const value = connectionSettings();
     value.setup.chatgpt.verified = null;
     const h = await mountSetup("signin", value);
-    await h.click("Sign in");
-    expect(visibleText(h.host)).toContain("Sign-in request opened");
-    expect(visibleText(h.host)).not.toContain("Sign-in is checked");
     vi.mocked(h.f.api.configure).mockRejectedValueOnce(new Error("reply lost"));
-    await h.click("Check sign-in");
-    const receipt = h.c.getSnapshot().intents["settings:chatgpt.verify:"];
+    await h.click("Sign in");
+    const receipt = h.c.getSnapshot().intents["settings:chatgpt.open-sign-in:"];
     await h.click("Skip for now");
     await refreshSetup(h, connectionSettings());
     await h.stepTo("signin");
-    expect(h.c.getSnapshot().intents["settings:chatgpt.verify:"]).toBe(receipt);
+    expect(h.c.getSnapshot().intents["settings:chatgpt.open-sign-in:"]).toBe(
+      receipt,
+    );
     expect(visibleText(h.host)).toContain("Outcome unknown");
-    expect(visibleText(h.host)).not.toContain("Sign-in is checked");
+    expect(visibleText(h.host)).not.toContain("Current sign-in was observed");
     expect(h.button("Sign in").disabled).toBe(true);
-    expect(h.button("Check sign-in").disabled).toBe(true);
-    await h.click("Check sign-in");
-    expect(h.calls()).toEqual([
-      { kind: "chatgpt.open-sign-in" },
-      { kind: "chatgpt.verify" },
+    for (const label of ["Check sign-in", "Open ChatGPT"])
+      expect(() => h.button(label)).toThrow();
+    await h.click("Sign in");
+    expect(h.calls().map((command) => command.kind)).toEqual([
+      "chatgpt.observe-sign-in",
+      "chatgpt.open-sign-in",
+      "chatgpt.observe-sign-in",
     ]);
+  });
+  it.each(["signed_out", "unknown"] as const)(
+    "exact saved Ready plus current %s keeps honest status, Skip and no Open/Check ritual across refresh/remount",
+    async (state) => {
+      const value = connectionSettings();
+      const h = await mountSetup("signin", value, state);
+      expect(h.c.getSnapshot().configuration).toEqual(h.configuration);
+      const label =
+        state === "signed_out" ? "Signed out" : "Current sign-in is unknown";
+      expect(visibleText(h.host)).toContain(label);
+      expect(visibleText(h.host)).not.toContain("Current sign-in was observed");
+      expect(h.button("Skip for now")).toBeTruthy();
+      if (state === "signed_out")
+        expect(h.button("Sign in").disabled).toBe(false);
+      else expect(h.button("Sign in").disabled).toBe(false);
+      for (const control of ["Open ChatGPT", "Check sign-in"])
+        expect(() => h.button(control)).toThrow();
+      const read = h.c.getSnapshot().signInObservation;
+      await refreshSetup(h, connectionSettings());
+      await h.remount();
+      expect(h.c.getSnapshot().signInObservation).toBe(read);
+      expect(visibleText(h.host)).toContain(label);
+      expect(h.calls().map((command) => command.kind)).toEqual([
+        "chatgpt.observe-sign-in",
+      ]);
+    },
+  );
+  it("native return updates the mounted step once with Signed in + Continue and does not navigate or dispatch a writer", async () => {
+    const h = await mountSetup("signin");
+    const destination = h.c.getSnapshot().destination;
+    vi.mocked(h.f.api.configure).mockImplementation(async (command) =>
+      command.kind === "chatgpt.observe-sign-in"
+        ? signInReply(command, "authenticated", h.configuration)
+        : {},
+    );
+    const event = {
+      action: "sign-in-returned",
+      source: "auth-window-closed",
+      eventId: randomUUID(),
+      authWindowGeneration: 1,
+    };
+    await act(async () => {
+      h.f.emit("action", event);
+      h.f.emit("action", event);
+    });
+    expect(h.c.getSnapshot().destination).toBe(destination);
+    expect(visibleText(h.host)).toContain("Signed in");
+    expect(h.button("Continue")).toBeTruthy();
+    for (const control of [
+      "Sign in",
+      "Open ChatGPT",
+      "Check sign-in",
+      "Skip for now",
+    ])
+      expect(() => h.button(control)).toThrow();
+    await h.remount();
+    expect(h.calls().map((command) => command.kind)).toEqual([
+      "chatgpt.observe-sign-in",
+      "chatgpt.observe-sign-in",
+    ]);
+    expect(h.c.getSnapshot().intents).toEqual({});
+  });
+  it("actual React remount shares a pending observation and reports an unknown read honestly", async () => {
+    const h = await mountSetup("signin");
+    const wait = deferred<unknown>();
+    vi.mocked(h.f.api.configure).mockReturnValue(wait.promise);
+    await act(async () =>
+      h.f.emit("action", {
+        action: "sign-in-returned",
+        source: "auth-window-closed",
+        eventId: randomUUID(),
+        authWindowGeneration: 1,
+      }),
+    );
+    const pending = h.c.getSnapshot().signInObservation;
+    expect(pending?.pending).toBe(true);
+    await h.remount();
+    expect(h.c.getSnapshot().signInObservation).toBe(pending);
+    expect(h.calls()).toHaveLength(2);
+    const command = h.calls()[1]!;
+    if (command.kind !== "chatgpt.observe-sign-in")
+      throw new Error("Expected read");
+    await act(async () =>
+      wait.resolve(signInReply(command, "unknown", h.configuration)),
+    );
+    expect(visibleText(h.host)).toContain("Current sign-in is unknown");
+    expect(h.button("Skip for now")).toBeTruthy();
+    expect(h.calls()).toHaveLength(2);
+  });
+  it("fresh profile without a retained document offers the first explicit Sign in and Skip without any automatic effect", async () => {
+    const h = await mountSetup("signin", settings(), "unknown");
+    expect(h.c.getSnapshot().configuration).toEqual(h.configuration);
+    expect(h.c.getSnapshot().signInObservation).toMatchObject({
+      state: "unknown",
+      binding: null,
+      pending: false,
+    });
+    expect(visibleText(h.host)).toContain("Current sign-in is unknown");
+    expect(h.button("Sign in").disabled).toBe(false);
+    expect(h.button("Sign in").classList.contains("primary")).toBe(true);
+    expect(
+      [...h.host.querySelectorAll("button.primary")].filter(
+        (button) =>
+          button.textContent === "Sign in" && !button.closest("[hidden]"),
+      ).length,
+    ).toBe(1);
+    expect(h.button("Skip for now").disabled).toBe(false);
+    for (const control of ["Open ChatGPT", "Check sign-in"])
+      expect(() => h.button(control)).toThrow();
+    await h.remount();
+    expect(h.calls().map((command) => command.kind)).toEqual([
+      "chatgpt.observe-sign-in",
+    ]);
+    expect(h.c.getSnapshot().intents).toEqual({});
+    await h.click("Sign in");
+    expect(h.calls().map((command) => command.kind)).toEqual([
+      "chatgpt.observe-sign-in",
+      "chatgpt.open-sign-in",
+    ]);
+    expect(h.c.getSnapshot().signInObservation?.state).toBe("unknown");
+    await h.click("Skip for now");
+    expect(h.c.getSnapshot().destination.setupStep).toBe("folders");
   });
 });

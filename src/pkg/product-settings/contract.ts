@@ -577,6 +577,11 @@ export const ProductConfigurationCommandSchema = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("chatgpt.open-sign-in") }),
   z.strictObject({ kind: z.literal("chatgpt.open-browser") }),
   z.strictObject({ kind: z.literal("chatgpt.present-browser") }),
+  z.strictObject({
+    kind: z.literal("chatgpt.observe-sign-in"),
+    observationId: IdentifierSchema,
+    buildId: Sha256Schema,
+  }),
   z.strictObject({ kind: z.literal("chatgpt.toggle-sidebar") }),
 
   // Fixed public destinations only; the renderer cannot supply a URL.
@@ -856,6 +861,20 @@ const DiscoveryCandidateSchema = z.strictObject({
 
 export const ProductConfigurationEvidenceSchema = z.discriminatedUnion("kind", [
   ReadConversationViewSchema,
+  z
+    .strictObject({
+      kind: z.literal("chatgpt.sign-in-status"),
+      observationId: IdentifierSchema,
+      buildId: Sha256Schema,
+      state: z.enum(["authenticated", "signed_out", "unknown"]),
+      binding: z
+        .strictObject({
+          documentGeneration: z.number().int().nonnegative(),
+          sequence: z.number().int().positive(),
+        })
+        .nullable(),
+    })
+    .refine((value) => value.state === "unknown" || value.binding !== null),
   z.strictObject({
     kind: z.literal("chatgpt.chat-account-preview"),
     operationId: IdentifierSchema,

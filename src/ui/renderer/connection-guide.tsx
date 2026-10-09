@@ -16,11 +16,12 @@ export function ConnectionGuide() {
           <li>
             <strong>Sign in · optional.</strong> Embedded ChatGPT sign-in is
             separate from external Computer access. You can continue without it.
-            For an unchecked account, use Sign in, Open ChatGPT and Check
-            sign-in when needed, or Skip for now. Opening sign-in does not
-            confirm an authenticated account. When Setup says Sign-in is checked
-            for this build, use Continue; the launcher and check controls are
-            hidden.
+            Entering this step observes the existing page without opening it or
+            changing settings. If Signed in is shown, use Continue. Otherwise,
+            choose Sign in or Skip for now. Returning from sign-in observes the
+            page again; opening sign-in alone does not confirm authentication.
+            An Outcome unknown needs review in Diagnostics, not another sign-in
+            action.
           </li>
           <li>
             <strong>Workspaces.</strong> For fresh setup, use Add workspace… and
