@@ -567,7 +567,11 @@ async function readTree(
               );
               record(child, item, content.digest);
               if (output)
-                copied.set(child, { kind: "file", info: content.info });
+                copied.set(child, {
+                  kind: "file",
+                  info: content.info,
+                  digest: content.digest,
+                });
             }
             await checkFrames(frames);
           }
@@ -894,6 +898,8 @@ export async function preserveClosedInstalledPair({
       profile,
       source,
       profileDigest,
+      settingsSha256:
+        savedProfile.get("farol-next-state/config.json")?.digest ?? null,
       verify() {
         if (refused) return Promise.resolve(false);
         if (inFlight) return inFlight;

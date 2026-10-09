@@ -15,12 +15,14 @@ const ports = vi.hoisted(() => ({
   backup: vi.fn(),
   slot: vi.fn(),
   observe: vi.fn(),
+  ready: vi.fn(),
 }));
 vi.mock("../../src/apps/desktop/installed-predecessor.ts", () => ({
   captureInstalledPredecessor: ports.capture,
 }));
 vi.mock("../../src/apps/desktop/installed-update-runtime.ts", () => ({
   createSupervisedInstalledUpdateRuntime: ports.create,
+  observeSupervisedReadyUpdate: ports.ready,
 }));
 vi.mock("../../src/apps/desktop/promotion-lease.ts", () => ({
   acquirePromotionLease: ports.acquire,
@@ -201,6 +203,43 @@ afterEach(async () => {
 });
 
 describe("supervised update composition (mocked lifecycle)", () => {
+  it("admits only the exact observed Ready and preserves it before local replacement", async () => {
+    input.replaceReady = {
+      recordSha256: "a".repeat(64),
+      buildId: "b".repeat(64),
+    };
+    ports.ready.mockResolvedValue(true);
+    runtime.snapshot.mockReturnValueOnce({
+      phase: "ready",
+      version: "old",
+      blockedBy: null,
+    });
+    expect((await runSupervisedUpdate(input)).status).toBe("verified_closed");
+    expect(ports.ready).toHaveBeenCalledWith(
+      path.join(root, "Library/Application Support/Farol Next Preview"),
+      input.replaceReady,
+    );
+    expect(selected.replaceReady).toEqual(input.replaceReady);
+    expect(runtime.prepareLocal).toHaveBeenCalledExactlyOnceWith(
+      input.replaceReady.buildId,
+    );
+    expect(events.indexOf("backup")).toBeLessThan(events.indexOf("stage"));
+  });
+
+  it("refuses an unconfirmed original Ready before Quit or staging", async () => {
+    input.replaceReady = {
+      recordSha256: "a".repeat(64),
+      buildId: "b".repeat(64),
+    };
+    ports.ready.mockResolvedValue(false);
+    expect(await runSupervisedUpdate(input)).toMatchObject({
+      status: "blocked",
+      code: "UPDATE_ORIGINAL_READY_UNCONFIRMED",
+    });
+    expect(predecessor.requestQuit).not.toHaveBeenCalled();
+    expect(ports.create).not.toHaveBeenCalled();
+  });
+
   it("preserves the closed pair before staging and observes the original terminal before slot success", async () => {
     ports.obligations.mockResolvedValueOnce({
       obligations: ["APP_RUNNING:4321"],
@@ -239,7 +278,10 @@ describe("supervised update composition (mocked lifecycle)", () => {
       path: input.archivePath,
       manifest: input.manifest,
     });
-    expect(selected.resources).toBe(resource);
+    expect(selected.resources.app).toBe(resource.app);
+    expect(await selected.resources.verify()).toBe(true);
+    backup.verify.mockResolvedValueOnce(false);
+    expect(await selected.resources.verify()).toBe(false);
     expect(predecessor.requestQuit).toHaveBeenCalledTimes(1);
     expect(runtime.restart).toHaveBeenCalledTimes(1);
     expect(ports.release).not.toHaveBeenCalled();

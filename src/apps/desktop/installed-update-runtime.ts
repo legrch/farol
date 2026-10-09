@@ -56,6 +56,7 @@ import type {
   ClosedInstalledPredecessor,
   InstalledPredecessorControl,
 } from "./installed-predecessor";
+import { originalPredecessorSettingsReadable } from "./beta3-state-readability";
 
 const execute = promisify(execFile);
 const Digest = z.string().regex(/^[a-f0-9]{64}$/u);
@@ -847,8 +848,12 @@ async function privateDirectory(directory: string): Promise<void> {
 async function readRecord(
   file: string,
   privateMode = true,
+  observeDigest?: (digest: string) => void,
+  maximumBytes = MAX_RECORD_BYTES,
 ): Promise<unknown | null> {
   let before;
+  let value: unknown;
+  let digest: string;
   try {
     before = await fs.lstat(file);
   } catch (error) {
@@ -861,7 +866,7 @@ async function readRecord(
     before.nlink !== 1 ||
     before.uid !== process.getuid?.() ||
     (before.mode & (privateMode ? 0o077 : 0o022)) !== 0 ||
-    before.size > MAX_RECORD_BYTES
+    before.size > maximumBytes
   )
     throw new Error("UPDATE_RECORD_INVALID");
   const fd = await fs.open(
@@ -876,7 +881,7 @@ async function readRecord(
       opened.ino !== before.ino
     )
       throw new Error("UPDATE_RECORD_CHANGED");
-    const buffer = Buffer.alloc(MAX_RECORD_BYTES + 1);
+    const buffer = Buffer.alloc(maximumBytes + 1);
     let bytesRead = 0;
     while (bytesRead < buffer.length) {
       const chunk = await fd.read(
@@ -896,12 +901,26 @@ async function readRecord(
       after.ctimeMs !== before.ctimeMs
     )
       throw new Error("UPDATE_RECORD_CHANGED");
-    return JSON.parse(
-      buffer.subarray(0, bytesRead).toString("utf8"),
-    ) as unknown;
+    const bytes = buffer.subarray(0, bytesRead);
+    value = JSON.parse(bytes.toString("utf8")) as unknown;
+    digest = createHash("sha256").update(bytes).digest("hex");
   } finally {
     await fd.close();
   }
+  const named = await fs.lstat(file);
+  if (
+    named.dev !== before.dev ||
+    named.ino !== before.ino ||
+    named.size !== before.size ||
+    named.mtimeMs !== before.mtimeMs ||
+    named.ctimeMs !== before.ctimeMs ||
+    named.mode !== before.mode ||
+    named.uid !== before.uid ||
+    named.nlink !== 1
+  )
+    throw new Error("UPDATE_RECORD_CHANGED");
+  observeDigest?.(digest!);
+  return value;
 }
 async function writeRecord(
   file: string,
@@ -1040,6 +1059,9 @@ export type SupervisedInstalledUpdateOptions = Omit<
   Readonly<{
     predecessor: InstalledPredecessorControl;
     lease: PromotionLeaseHandle;
+    // Exact original bytes copied by the existing closed-pair preservation owner.
+    preservedSettingsSha256?: string | null;
+    replaceReady?: Readonly<{ recordSha256: string; buildId: string }>;
     observeHelper(operation: InstalledUpdateOperation): void;
     resources: Readonly<{
       app: string;
@@ -1055,7 +1077,47 @@ type SupervisedExecution = Readonly<{
   transfer: PromotionLeaseTransfer;
   verifyResources(): Promise<boolean>;
   observeHelper(operation: InstalledUpdateOperation): void;
+  replaceReady?: Readonly<{ recordSha256: string; buildId: string }>;
 }>;
+
+/** Read-only existing Release record inspection; this grants no update authority. */
+export async function observeSupervisedReadyUpdate(
+  userData: string,
+  expected: Readonly<{ recordSha256: string; buildId: string }>,
+): Promise<boolean> {
+  try {
+    Digest.parse(expected.recordSha256);
+    Digest.parse(expected.buildId);
+    const root = path.join(userData, "installed-updates");
+    await canonicalOwnedDirectory(userData, false);
+    await canonicalOwnedDirectory(root, true);
+    let digest: string | null = null;
+    const raw = await readRecord(
+      path.join(root, "ready.json"),
+      true,
+      (value) => {
+        digest = value;
+      },
+    );
+    const ready = Retained.parse(raw);
+    const manifest = parseRetainedGithubReleaseManifest(ready);
+    return (
+      digest === expected.recordSha256 &&
+      manifest.ok &&
+      manifest.value.buildId === expected.buildId &&
+      ready.operation === null &&
+      ready.preparation === undefined &&
+      (ready.helper === undefined || ready.helper === null) &&
+      ready.archiveReleased !== true &&
+      ready.downloadId !== undefined &&
+      ready.handle.startsWith(
+        path.join(root, `download-${ready.downloadId}`) + path.sep,
+      )
+    );
+  } catch {
+    return false;
+  }
+}
 
 /** Explicit external control after a captured predecessor's confirmed Quit. */
 export async function createSupervisedInstalledUpdateRuntime(
@@ -1078,6 +1140,11 @@ export async function createSupervisedInstalledUpdateRuntime(
     options.directory !== path.join(resources.app, "Contents/Resources/app")
   )
     return null;
+  if (
+    options.replaceReady &&
+    !(await observeSupervisedReadyUpdate(profile, options.replaceReady))
+  )
+    return null;
   await canonicalOwnedDirectory(slot, false);
   await canonicalOwnedDirectory(resources.app, false);
   await canonicalOwnedDirectory(options.directory, false);
@@ -1095,6 +1162,43 @@ export async function createSupervisedInstalledUpdateRuntime(
       .digest("hex") !== build.buildId
   )
     return null;
+  const verifyOriginalState = async () => {
+    if (build.version !== "0.2.0-owner.beta.3") return true;
+    if (!Digest.safeParse(options.preservedSettingsSha256).success)
+      return false;
+    await canonicalOwnedDirectory(path.join(profile, "farol-next-state"), true);
+    let digest: string | null = null;
+    const config = await readRecord(
+      path.join(profile, "farol-next-state/config.json"),
+      true,
+      (value) => {
+        digest = value;
+      },
+      256 * 1024, // Existing ProductSettingsStore byte bound, not updater-record size.
+    );
+    if (
+      digest !== options.preservedSettingsSha256 ||
+      !originalPredecessorSettingsReadable(
+        { version: build.version, sourceCommit: build.sourceCommit },
+        config,
+      )
+    )
+      return false;
+    // Beta3's strict Retained/SavedReceipt readers do not accept notes. Local
+    // preparation adds none; inspect actual records again before dispatch.
+    for (const name of ["ready.json", "last-update.json"]) {
+      const raw = await readRecord(
+        path.join(profile, "installed-updates", name),
+      );
+      if (raw === null) continue;
+      const record =
+        name === "ready.json" ? Retained.parse(raw) : SavedReceipt.parse(raw);
+      if (record.notes !== undefined) return false;
+    }
+    await canonicalOwnedDirectory(path.join(profile, "farol-next-state"), true);
+    return true;
+  };
+  if (!(await verifyOriginalState())) return null;
   const transfer = await createPromotionLeaseTransfer(options.lease);
   const expectedProof = JSON.stringify(predecessor);
   let admitted = false;
@@ -1103,6 +1207,7 @@ export async function createSupervisedInstalledUpdateRuntime(
       if (
         (await transfer.verify()) !== true ||
         (await resources.verify()) !== true ||
+        !(await verifyOriginalState()) ||
         JSON.stringify(await options.predecessor.observeClosed()) !==
           expectedProof
       ) {
@@ -1137,6 +1242,7 @@ export async function createSupervisedInstalledUpdateRuntime(
       transfer,
       verifyResources: resources.verify,
       observeHelper: options.observeHelper,
+      ...(options.replaceReady ? { replaceReady: options.replaceReady } : {}),
     },
   );
 }
@@ -2482,6 +2588,14 @@ async function createRuntime(
     ...(localArchive
       ? {
           prepareLocal: async () => {
+            if (
+              supervised?.replaceReady &&
+              !(await observeSupervisedReadyUpdate(
+                options.userData,
+                supervised.replaceReady,
+              ))
+            )
+              return known("UPDATE_ORIGINAL_READY_CHANGED");
             const manifest = localArchive.manifest;
             if (!manifest || manifest.channel !== "owner-beta")
               return known("UPDATE_LOCAL_MANIFEST_INVALID");
@@ -2539,6 +2653,14 @@ async function createRuntime(
         }
       : {}),
     retain: async (update: ReadyUpdate) => {
+      if (
+        supervised?.replaceReady &&
+        !(await observeSupervisedReadyUpdate(
+          options.userData,
+          supervised.replaceReady,
+        ))
+      )
+        throw new Error("UPDATE_ORIGINAL_READY_CHANGED");
       // Later retains the archive, not an extra expanded application. Restart
       // re-verifies the same archive before copying it to the helper's stage.
       retained = {

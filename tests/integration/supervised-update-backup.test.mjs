@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import { constants } from "node:fs";
+import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -316,6 +317,9 @@ describe("closed installed pair preservation (disposable FS, mocked authority)",
       const sourceFile = path.join(f.state, "config.json");
       const originalBytes = await fs.readFile(sourceFile);
       const backup = await preserve(f);
+      expect(backup.settingsSha256).toBe(
+        createHash("sha256").update(originalBytes).digest("hex"),
+      );
       const preservedState = path.join(backup.profile, "farol-next-state");
       const preservedFile = path.join(preservedState, "config.json");
       const preservedStore = new ProductSettingsStore({ root: preservedState });

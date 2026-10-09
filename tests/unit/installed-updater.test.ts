@@ -809,6 +809,376 @@ describe("explicit local preparation (ports only, no archive or installed accept
     return { ports: selected, updater: new InstalledUpdater(selected) };
   }
 
+  const replacement: ReadyUpdate = {
+    handle: "owned-new-stage",
+    manifest: {
+      ...staged.manifest,
+      version: "0.1.0-owner.beta.3",
+      buildVersion: "4",
+      buildId: "1".repeat(64),
+      archiveSha256: "2".repeat(64),
+      artifactSha256: "3".repeat(64),
+    },
+  };
+
+  function replacementFixture() {
+    const f = localFixture();
+    f.ports.recover.mockResolvedValue({ ok: true, update: staged });
+    f.ports.prepareLocal.mockResolvedValue({ ok: true, update: replacement });
+    return f;
+  }
+
+  it("replaces only the admitted Ready after verified retention and restarts the new identity", async () => {
+    const { updater, ports } = replacementFixture();
+    let saved!: () => void;
+    ports.retain.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          saved = resolve;
+        }),
+    );
+    await updater.initialize();
+    const preparing = updater.prepareLocal(staged.manifest.buildId);
+    await vi.waitFor(() =>
+      expect(ports.retain).toHaveBeenCalledExactlyOnceWith(replacement),
+    );
+    expect(updater.snapshot()).toEqual({ phase: "downloading" });
+    await Promise.all([
+      updater.prepareLocal(staged.manifest.buildId),
+      updater.prepareLocal(),
+      updater.check(true),
+      updater.download(),
+      updater.restart(),
+      updater.later(),
+    ]);
+    expect(ports.prepareLocal).toHaveBeenCalledTimes(1);
+    expect(ports.restart).not.toHaveBeenCalled();
+    saved();
+    await preparing;
+    expect(updater.snapshot()).toEqual({
+      phase: "ready",
+      version: replacement.manifest.version,
+      deferred: false,
+      blockedBy: null,
+    });
+    await updater.prepareLocal(staged.manifest.buildId);
+    expect(ports.prepareLocal).toHaveBeenCalledTimes(1);
+    await updater.restart();
+    expect(ports.restart).toHaveBeenCalledExactlyOnceWith(replacement);
+    expect(ports.discover).not.toHaveBeenCalled();
+    expect(ports.download).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    "wrong-build",
+    "no-argument",
+    "missing-ready",
+    "recovery",
+    "unknown",
+    "uninitialized",
+    "busy",
+    "applying",
+    "closed",
+    "normal-quit",
+    "blocked-ready",
+    "unknown-ready",
+  ])("does not dispatch a replacement from %s", async (state) => {
+    const { updater, ports } = replacementFixture();
+    if (state === "missing-ready")
+      ports.recover.mockResolvedValue({ ok: true, update: null });
+    if (state === "recovery")
+      ports.recover.mockResolvedValue({
+        ok: true,
+        update: staged,
+        recoveryVersion: staged.manifest.version,
+      });
+    if (state === "unknown")
+      ports.recover.mockResolvedValue({
+        ok: false,
+        code: "UPDATE_RECOVERY_UNKNOWN",
+        recoveryRequired: true,
+      });
+    if (state !== "uninitialized") await updater.initialize();
+    let applied!: () => void;
+    let restarting: Promise<void> | undefined;
+    if (state === "busy" || state === "applying") {
+      ports.restart.mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            applied = () => resolve({ status: "accepted" });
+          }),
+      );
+      restarting = updater.restart();
+      if (state === "applying")
+        await vi.waitFor(() => expect(ports.restart).toHaveBeenCalledTimes(1));
+    }
+    if (state === "closed") await updater.close();
+    if (state === "normal-quit")
+      await updater.applyOnNormalQuit({
+        kind: "ordinary-quit",
+        deadlineAt: 2_000,
+      });
+    if (state === "blocked-ready" || state === "unknown-ready") {
+      ports.restart.mockResolvedValue({
+        status: "blocked",
+        code:
+          state === "unknown-ready"
+            ? "UPDATE_ADMISSION_UNKNOWN"
+            : "UPDATE_BROWSER_OPEN",
+      });
+      await updater.restart();
+    }
+    const before = updater.snapshot();
+    await updater.prepareLocal(
+      state === "no-argument"
+        ? undefined
+        : state === "wrong-build"
+          ? "4".repeat(64)
+          : staged.manifest.buildId,
+    );
+    expect(updater.snapshot()).toEqual(before);
+    expect(ports.prepareLocal).not.toHaveBeenCalled();
+    expect(ports.retain).not.toHaveBeenCalled();
+    if (restarting) {
+      await vi.waitFor(() => expect(ports.restart).toHaveBeenCalledTimes(1));
+      applied();
+      await restarting;
+    }
+    await updater.close();
+  });
+
+  it.each(["available", "failed"])(
+    "keeps no-argument preparation Idle-only from %s",
+    async (state) => {
+      const { updater, ports } = localFixture();
+      await updater.initialize();
+      if (state === "failed")
+        ports.discover.mockResolvedValue({ ok: false, code: "UPDATE_OFFLINE" });
+      await updater.check(true);
+      const before = updater.snapshot();
+      await updater.prepareLocal();
+      expect(updater.snapshot()).toEqual(before);
+      expect(ports.prepareLocal).not.toHaveBeenCalled();
+      expect(ports.retain).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["build", "handle", "archive", "artifact"])(
+    "fences a replacement aliasing the original %s identity",
+    async (identity) => {
+      const { updater, ports } = replacementFixture();
+      const candidate: ReadyUpdate = {
+        ...replacement,
+        ...(identity === "handle" ? { handle: staged.handle } : {}),
+        manifest: {
+          ...replacement.manifest,
+          ...(identity === "build" ? { buildId: staged.manifest.buildId } : {}),
+          ...(identity === "archive"
+            ? { archiveSha256: staged.manifest.archiveSha256 }
+            : {}),
+          ...(identity === "artifact"
+            ? { artifactSha256: staged.manifest.artifactSha256 }
+            : {}),
+        },
+      };
+      ports.prepareLocal.mockResolvedValue({ ok: true, update: candidate });
+      await updater.initialize();
+      await updater.prepareLocal(staged.manifest.buildId);
+      expect(updater.snapshot()).toEqual({
+        phase: "failed",
+        code: "UPDATE_LOCAL_CANDIDATE_NOT_NEW",
+        recoveryRequired: true,
+      });
+      await updater.prepareLocal(staged.manifest.buildId);
+      await updater.prepareLocal();
+      await updater.restart();
+      expect(ports.prepareLocal).toHaveBeenCalledTimes(1);
+      expect(ports.retain).not.toHaveBeenCalled();
+      expect(ports.restart).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["refused", "unavailable", "publication"])(
+    "keeps the original owned before retention on %s",
+    async (fault) => {
+      const f = replacementFixture();
+      const { ports } = f;
+      const updater =
+        fault === "unavailable"
+          ? new InstalledUpdater(
+              (({ prepareLocal: _local, ...ordinary }) => ordinary)(ports),
+            )
+          : f.updater;
+      await updater.initialize();
+      const original = updater.snapshot();
+      if (fault === "refused")
+        ports.prepareLocal.mockResolvedValue({
+          ok: false,
+          code: "UPDATE_LOCAL_MANIFEST_INVALID",
+          recoveryRequired: false,
+        });
+      if (fault === "publication")
+        ports.publish.mockImplementationOnce(() => {
+          throw new Error("status unavailable");
+        });
+      await updater.prepareLocal(staged.manifest.buildId);
+      expect(updater.snapshot()).toEqual(
+        fault === "publication"
+          ? original
+          : {
+              ...original,
+              blockedBy:
+                fault === "refused"
+                  ? "UPDATE_LOCAL_MANIFEST_INVALID"
+                  : "UPDATE_LOCAL_IMPORT_UNAVAILABLE",
+            },
+      );
+      expect(ports.retain).not.toHaveBeenCalled();
+      if (fault === "publication") {
+        await updater.restart();
+        expect(ports.restart).toHaveBeenCalledExactlyOnceWith(staged);
+      } else {
+        await updater.prepareLocal(staged.manifest.buildId);
+        await updater.restart();
+        expect(ports.prepareLocal).toHaveBeenCalledTimes(
+          fault === "refused" ? 1 : 0,
+        );
+        expect(ports.restart).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it.each([
+    "producer-throw",
+    "producer-recovery",
+    "producer-unknown",
+    "retain-refused",
+    "retain-unknown",
+    "retain-throw",
+    "post-retain-publication",
+  ])(
+    "keeps %s sticky without asserting the original is unaffected",
+    async (fault) => {
+      const { updater, ports } = replacementFixture();
+      if (fault === "producer-throw")
+        ports.prepareLocal.mockRejectedValue(new Error("lost producer ACK"));
+      if (fault === "producer-recovery")
+        ports.prepareLocal.mockResolvedValue({
+          ok: false,
+          code: "UPDATE_STAGING_FAILED",
+          recoveryRequired: true,
+        });
+      if (fault === "producer-unknown")
+        ports.prepareLocal.mockResolvedValue({
+          ok: false,
+          code: "UPDATE_STAGING_OUTCOME_UNKNOWN",
+          recoveryRequired: false,
+        });
+      if (fault === "retain-refused")
+        ports.retain.mockResolvedValue({
+          ok: false,
+          code: "UPDATE_READY_PERSIST_FAILED",
+          recoveryRequired: false,
+        });
+      if (fault === "retain-unknown")
+        ports.retain.mockResolvedValue({
+          ok: false,
+          code: "UPDATE_READY_COMMIT_UNKNOWN",
+          recoveryRequired: false,
+        });
+      if (fault === "retain-throw")
+        ports.retain.mockRejectedValue(new Error("lost retention ACK"));
+      await updater.initialize();
+      if (fault === "post-retain-publication")
+        ports.publish
+          .mockImplementationOnce(() => undefined)
+          .mockImplementationOnce(() => {
+            throw new Error("lost Ready publication");
+          });
+      await updater.prepareLocal(staged.manifest.buildId);
+      expect(updater.snapshot()).toMatchObject({
+        phase: "failed",
+        recoveryRequired: true,
+      });
+      const failed = updater.snapshot();
+      await updater.prepareLocal(staged.manifest.buildId);
+      await updater.prepareLocal(replacement.manifest.buildId);
+      await updater.prepareLocal();
+      await updater.check(true);
+      await updater.download();
+      await updater.restart();
+      await updater.restore("rollback");
+      await updater.initialize();
+      expect(updater.snapshot()).toEqual(failed);
+      expect(ports.prepareLocal).toHaveBeenCalledTimes(1);
+      expect(ports.retain).toHaveBeenCalledTimes(
+        fault.startsWith("producer-") ? 0 : 1,
+      );
+      expect(ports.discover).not.toHaveBeenCalled();
+      expect(ports.download).not.toHaveBeenCalled();
+      expect(ports.restart).not.toHaveBeenCalled();
+      expect(ports.restore).not.toHaveBeenCalled();
+    },
+  );
+
+  it("does not dispatch replacement after Quit closes the initial publication", async () => {
+    const { updater, ports } = replacementFixture();
+    await updater.initialize();
+    const preparing = updater.prepareLocal(staged.manifest.buildId);
+    await Promise.all([preparing, updater.close()]);
+    expect(ports.prepareLocal).not.toHaveBeenCalled();
+    expect(ports.retain).not.toHaveBeenCalled();
+  });
+
+  it.each(["producer", "retention", "retention-unknown"])(
+    "drains replacement during Quit at %s without late publication or replay",
+    async (boundary) => {
+      const { updater, ports } = replacementFixture();
+      let complete!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        complete = resolve;
+      });
+      if (boundary === "producer")
+        ports.prepareLocal.mockImplementation(async () => {
+          await gate;
+          return { ok: true, update: replacement };
+        });
+      else
+        ports.retain.mockImplementation(async () => {
+          await gate;
+          if (boundary === "retention-unknown")
+            throw new Error("lost retain ACK after Quit");
+        });
+      await updater.initialize();
+      const preparing = updater.prepareLocal(staged.manifest.buildId);
+      await vi.waitFor(() =>
+        expect(
+          boundary === "producer" ? ports.prepareLocal : ports.retain,
+        ).toHaveBeenCalledTimes(1),
+      );
+      const closed = vi.fn();
+      const closing = updater.close().then(closed);
+      const publications = ports.publish.mock.calls.length;
+      await Promise.resolve();
+      expect(closed).not.toHaveBeenCalled();
+      complete();
+      await Promise.all([preparing, closing]);
+      if (boundary === "retention-unknown")
+        expect(updater.snapshot()).toEqual({
+          phase: "failed",
+          code: "UPDATE_LOCAL_IMPORT_UNKNOWN",
+          recoveryRequired: true,
+        });
+      await updater.prepareLocal(staged.manifest.buildId);
+      await updater.restart();
+      expect(ports.prepareLocal).toHaveBeenCalledTimes(1);
+      expect(ports.retain).toHaveBeenCalledExactlyOnceWith(replacement);
+      expect(ports.publish).toHaveBeenCalledTimes(publications);
+      expect(ports.restart).not.toHaveBeenCalled();
+      expect(ports.cancelPending).toHaveBeenCalledTimes(1);
+    },
+  );
+
   it("uses the selected importer and durable retention before offering restart", async () => {
     const { updater, ports } = localFixture();
     let saved!: () => void;

@@ -5,7 +5,10 @@ import os from "node:os";
 import path from "node:path";
 import { z } from "zod";
 import { captureInstalledPredecessor } from "../src/apps/desktop/installed-predecessor.ts";
-import { createSupervisedInstalledUpdateRuntime } from "../src/apps/desktop/installed-update-runtime.ts";
+import {
+  createSupervisedInstalledUpdateRuntime,
+  observeSupervisedReadyUpdate,
+} from "../src/apps/desktop/installed-update-runtime.ts";
 import {
   acquirePromotionLease,
   releasePromotionLease,
@@ -53,6 +56,9 @@ const Input = z.strictObject({
   archivePath: Absolute,
   manifest: z.unknown(),
   recoveryParent: Absolute,
+  replaceReady: z
+    .strictObject({ recordSha256: Digest, buildId: Digest })
+    .optional(),
 });
 
 function requireValue(condition, code) {
@@ -121,7 +127,7 @@ async function verifyArchive(file, manifest) {
   }
 }
 
-async function assertNoPendingUpdate(userData, slot) {
+async function assertNoPendingUpdate(userData, slot, replaceReady) {
   const root = path.join(userData, "installed-updates");
   try {
     const info = await fs.lstat(root);
@@ -147,6 +153,7 @@ async function assertNoPendingUpdate(userData, slot) {
     slot + ".repair.json",
     path.join(path.dirname(slot), ".farol-closed-repair.json"),
   ]) {
+    if (replaceReady && file === path.join(root, "ready.json")) continue;
     try {
       await fs.lstat(file);
       throw new Error("UPDATE_EXISTING_OPERATION_REQUIRES_REVIEW");
@@ -154,6 +161,11 @@ async function assertNoPendingUpdate(userData, slot) {
       if (error?.code !== "ENOENT") throw error;
     }
   }
+  if (replaceReady)
+    requireValue(
+      await observeSupervisedReadyUpdate(userData, replaceReady),
+      "UPDATE_ORIGINAL_READY_UNCONFIRMED",
+    );
 }
 
 async function waitForClosure(predecessor) {
@@ -301,7 +313,7 @@ export async function runSupervisedUpdate(raw, publish = () => {}) {
       "promotion",
     );
     requireValue(lease !== null, "UPDATE_PROMOTION_BUSY");
-    await assertNoPendingUpdate(userData, slot);
+    await assertNoPendingUpdate(userData, slot, input.replaceReady);
     const obligations = await activationObligations(userData);
     assertActivationDrained({
       ...obligations,
@@ -333,7 +345,13 @@ export async function runSupervisedUpdate(raw, publish = () => {}) {
       userData,
       predecessor,
       lease,
-      resources,
+      resources: {
+        app: resources.app,
+        verify: async () =>
+          (await resources.verify()) && (await backup.verify()),
+      },
+      preservedSettingsSha256: backup.settingsSha256,
+      ...(input.replaceReady ? { replaceReady: input.replaceReady } : {}),
       localArchive: { path: input.archivePath, manifest },
       copyApp: (source, destination) =>
         fs.cp(source, destination, {
@@ -356,12 +374,15 @@ export async function runSupervisedUpdate(raw, publish = () => {}) {
     });
     requireValue(runtime !== null, "UPDATE_RUNTIME_NOT_ADMITTED");
     await runtime.initialize();
+    const baseline = runtime.snapshot();
     requireValue(
-      runtime.snapshot().phase === "idle",
+      input.replaceReady
+        ? baseline.phase === "ready" && baseline.blockedBy === null
+        : baseline.phase === "idle",
       "UPDATE_BASELINE_NOT_ADMITTED",
     );
     requireReporting();
-    await runtime.prepareLocal();
+    await runtime.prepareLocal(input.replaceReady?.buildId);
     requireValue(
       runtime.snapshot().phase === "ready" &&
         runtime.snapshot().version === target.version,

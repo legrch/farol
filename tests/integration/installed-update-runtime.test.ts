@@ -80,9 +80,12 @@ vi.mock(
 import {
   createInstalledUpdateRuntime,
   createSupervisedInstalledUpdateRuntime,
+  observeSupervisedReadyUpdate,
   type InstalledUpdateRuntimeOptions,
 } from "../../src/apps/desktop/installed-update-runtime";
 import { drainInstalledComputerWork } from "../../src/apps/desktop/installed-computer-drain";
+import { ProductSettingsStore } from "../../src/apps/desktop/product-configuration";
+import { ProductSettingsSchema } from "../../src/pkg/product-settings/contract";
 
 const manifest: ReleaseManifest = {
   schema: "farol.github-release/1",
@@ -273,13 +276,84 @@ afterEach(async () => {
   await fs.rm(root, { recursive: true, force: true });
 });
 
+describe("original Ready observation (disposable files, no package/process effects)", () => {
+  async function original(extra: Record<string, unknown> = {}) {
+    const downloadId = "1".repeat(32);
+    const record = {
+      schema: "farol.ready-update/1",
+      manifest,
+      handle: path.join(
+        userData,
+        `installed-updates/download-${downloadId}/github-updates/original.zip`,
+      ),
+      operation: null,
+      downloadId,
+      ...extra,
+    };
+    const bytes = JSON.stringify(record) + "\n";
+    await fs.mkdir(path.dirname(ready), { recursive: true, mode: 0o700 });
+    await fs.writeFile(ready, bytes, { mode: 0o600 });
+    return {
+      recordSha256: createHash("sha256").update(bytes).digest("hex"),
+      buildId: manifest.buildId,
+    };
+  }
+  it("observes exact original bytes/build without package verification or mutation", async () => {
+    const expected = await original();
+    expect(await observeSupervisedReadyUpdate(userData, expected)).toBe(true);
+    expect(mocks.verify).not.toHaveBeenCalled();
+    expect(mocks.helper).not.toHaveBeenCalled();
+    expect(mocks.importLocal).not.toHaveBeenCalled();
+  });
+  it.each(["digest", "build", "changed-bytes"])(
+    "refuses %s without settling it",
+    async (kind) => {
+      const expected = await original();
+      if (kind === "digest") expected.recordSha256 = "2".repeat(64);
+      if (kind === "build") expected.buildId = "2".repeat(64);
+      if (kind === "changed-bytes") await fs.appendFile(ready, " ");
+      expect(await observeSupervisedReadyUpdate(userData, expected)).toBe(
+        false,
+      );
+      expect(mocks.helper).not.toHaveBeenCalled();
+    },
+  );
+  it.each([
+    { operation: { operationId: "a".repeat(32), source, target } },
+    { preparation: { operationId: "a".repeat(32), source, target } },
+    { helper: { pid: 4001, processStart: "fixture" } },
+    { archiveReleased: true },
+    { handle: "/private/unselected.zip" },
+    { downloadId: undefined },
+  ])("refuses non-archive-only or unbound Ready %#", async (extra) => {
+    const expected = await original(extra);
+    expect(await observeSupervisedReadyUpdate(userData, expected)).toBe(false);
+    expect(mocks.helper).not.toHaveBeenCalled();
+  });
+  it.each(["symlink", "hardlink", "absent"])(
+    "refuses %s original record",
+    async (kind) => {
+      const expected = await original();
+      if (kind === "symlink") {
+        await fs.rename(ready, ready + ".original");
+        await fs.symlink(ready + ".original", ready);
+      } else if (kind === "hardlink") await fs.link(ready, ready + ".alias");
+      else await fs.unlink(ready);
+      expect(await observeSupervisedReadyUpdate(userData, expected)).toBe(
+        false,
+      );
+      expect(mocks.helper).not.toHaveBeenCalled();
+    },
+  );
+});
+
 describe("supervised installed updater (native files/lease, mocked package/process ports)", () => {
   let held: PromotionLeaseHandle | null;
   afterEach(async () => {
     if (held) await releasePromotionLease(held);
     held = null;
   });
-  async function selected() {
+  async function selected(originalBuild = build) {
     const app = path.join(root, "accepted-controller/Farol.app");
     const directory = path.join(app, "Contents/Resources/app");
     await fs.mkdir(directory, { recursive: true });
@@ -288,7 +362,7 @@ describe("supervised installed updater (native files/lease, mocked package/proce
     });
     await fs.writeFile(
       path.join(slot, "Contents/Resources/app/build-identity.json"),
-      JSON.stringify(build),
+      JSON.stringify(originalBuild),
       { mode: 0o644 },
     );
     held = await acquirePromotionLease(
@@ -328,6 +402,179 @@ describe("supervised installed updater (native files/lease, mocked package/proce
       observeHelper: vi.fn(),
     };
   }
+  async function beta3Selected() {
+    const predecessorBuild = {
+      ...build,
+      version: "0.2.0-owner.beta.3",
+      buildVersion: "17",
+      sourceCommit: "24cc7c32f12f2633156efef40c91ea0817109a4c",
+    };
+    predecessorBuild.buildId = createHash("sha256")
+      .update(canonicalBuildIdentityPayload(predecessorBuild))
+      .digest("hex");
+    const input = await selected(predecessorBuild);
+    const store = new ProductSettingsStore({
+      root: path.join(userData, "farol-next-state"),
+    });
+    const readiness = {
+      visited: false,
+      skipped: false,
+      configured: false,
+      reachable: "unknown",
+      verified: null,
+      needsAction: null,
+      unavailable: null,
+      outcomeUnknown: false,
+    };
+    const settings = ProductSettingsSchema.parse({
+      schema: 1,
+      revision: 1,
+      general: {
+        openAtLaunch: "settings",
+        sidebarDefault: "full",
+        activityDetail: "summary",
+      },
+      computer: {
+        computerId: "00000000-0000-4000-8000-000000000001",
+        generation: 1,
+        name: "Fixture",
+        workspaces: [],
+      },
+      setup: Object.fromEntries(
+        ["chatgpt", "computer", "connect", "hosts", "verify"].map((key) => [
+          key,
+          readiness,
+        ]),
+      ),
+    });
+    await store.save(settings);
+    const file = path.join(userData, "farol-next-state/config.json");
+    return {
+      input: {
+        ...input,
+        preservedSettingsSha256: createHash("sha256")
+          .update(await fs.readFile(file))
+          .digest("hex"),
+      },
+      store,
+      settings,
+      file,
+      predecessorBuild,
+    };
+  }
+
+  it("binds the exact compatible beta3 Settings bytes preserved by the closed-pair owner", async () => {
+    const f = await beta3Selected();
+    const before = await fs.readFile(f.file);
+    const controller = await createSupervisedInstalledUpdateRuntime(f.input);
+    expect(controller).not.toBeNull();
+    expect(await fs.readFile(f.file)).toEqual(before);
+    expect(mocks.helper).not.toHaveBeenCalled();
+    await controller!.close();
+  });
+
+  it.each(["Home", "changed-bytes", "missing-preservation", "notes"])(
+    "refuses original beta3 state %s without helper dispatch",
+    async (kind) => {
+      const f = await beta3Selected();
+      if (kind === "Home") {
+        f.settings.general.openAtLaunch = "home";
+        await f.store.save(f.settings);
+        f.input.preservedSettingsSha256 = createHash("sha256")
+          .update(await fs.readFile(f.file))
+          .digest("hex");
+      }
+      if (kind === "changed-bytes") await fs.appendFile(f.file, " ");
+      if (kind === "missing-preservation") f.input.preservedSettingsSha256 = "";
+      if (kind === "notes") {
+        await fs.mkdir(path.dirname(ready), { mode: 0o700 });
+        await fs.writeFile(
+          ready,
+          JSON.stringify({
+            schema: "farol.ready-update/1",
+            handle: path.join(root, "retained.zip"),
+            manifest,
+            operation: null,
+            notes: "new-reader-only",
+          }),
+          { mode: 0o600 },
+        );
+      }
+      expect(await createSupervisedInstalledUpdateRuntime(f.input)).toBeNull();
+      expect(mocks.helper).not.toHaveBeenCalled();
+      expect(mocks.importLocal).not.toHaveBeenCalled();
+    },
+  );
+
+  it("refuses changed Settings at final admission without dispatching the helper", async () => {
+    const f = await beta3Selected();
+    const measured = {
+      ...source,
+      version: f.predecessorBuild.version,
+      buildId: f.predecessorBuild.buildId,
+    };
+    const oldReceipt = JSON.parse(
+      await fs.readFile(slot + ".receipt.json", "utf8"),
+    );
+    await fs.writeFile(
+      slot + ".receipt.json",
+      JSON.stringify({
+        ...oldReceipt,
+        version: measured.version,
+        sourceCommit: f.predecessorBuild.sourceCommit,
+      }),
+      { mode: 0o600 },
+    );
+    mocks.exec.mockImplementation(async (_file: unknown, args: string[]) => ({
+      stdout: JSON.stringify(
+        args[0]!.endsWith("update-obligations.mjs")
+          ? {
+              drained: true,
+              obligationCount: 0,
+              unreadableCount: 0,
+              changedCount: 0,
+            }
+          : measured,
+      ),
+    }));
+    const next = {
+      ...manifest,
+      version: "0.2.0-owner.beta.5",
+      buildVersion: "19",
+      archiveName: "Farol-0.2.0-owner.beta.5-darwin-arm64.zip",
+    };
+    f.input.localArchive.manifest = next;
+    mocks.verify.mockResolvedValue({
+      ok: true,
+      value: {
+        identity: { ...next, updateChannel: "github-owner-beta" },
+        stagedAppPath: staging,
+        stagingRoot: path.dirname(staging),
+      },
+    });
+    const controller = await createSupervisedInstalledUpdateRuntime(f.input);
+    expect(controller).not.toBeNull();
+    await controller!.initialize();
+    await controller!.prepareLocal();
+    expect(controller!.snapshot().phase).toBe("ready");
+    const changed = {
+      ...f.settings,
+      revision: f.settings.revision + 1,
+      general: { ...f.settings.general, openAtLaunch: "home" as const },
+    };
+    await f.store.save(changed);
+    const refusedBytes = await fs.readFile(f.file);
+    await controller!.restart();
+    expect(controller!.snapshot()).toMatchObject({
+      phase: "ready",
+      blockedBy: "UPDATE_SUPERVISOR_UNCONFIRMED",
+    });
+    expect(mocks.helper).not.toHaveBeenCalled();
+    expect(JSON.parse(await fs.readFile(ready, "utf8")).operation).toBeNull();
+    expect(await fs.readFile(f.file)).toEqual(refusedBytes);
+    await controller!.close();
+  });
+
   it("uses the measured installed build, retained archive and original closed lifetime", async () => {
     const input = await selected();
     const originalOperation = {

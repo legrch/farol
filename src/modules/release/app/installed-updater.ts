@@ -573,13 +573,26 @@ export class InstalledUpdater {
 
   private async retainPrepared(
     prepared: Awaited<ReturnType<InstalledUpdaterPorts["download"]>>,
+    knownReady?: Extract<UpdateView, { phase: "ready" }>,
   ): Promise<void> {
     if (!prepared.ok) {
+      // Only a known producer refusal before retention can preserve the
+      // admitted original. Keep the refusal visible and do not replay it.
+      if (
+        knownReady &&
+        !prepared.recoveryRequired &&
+        !prepared.code.includes("UNKNOWN")
+      ) {
+        await this.publish({ ...knownReady, blockedBy: prepared.code });
+        return;
+      }
       await this.publish({
         phase: "failed",
         code: prepared.code,
-        recoveryRequired: prepared.recoveryRequired ?? false,
-        ...(!prepared.recoveryRequired && this.rollbackVersion
+        recoveryRequired: knownReady
+          ? true
+          : (prepared.recoveryRequired ?? false),
+        ...(!knownReady && !prepared.recoveryRequired && this.rollbackVersion
           ? { rollbackVersion: this.rollbackVersion }
           : {}),
       });
@@ -592,15 +605,19 @@ export class InstalledUpdater {
       await this.publish({
         phase: "failed",
         code: retention.code,
-        recoveryRequired: retention.recoveryRequired ?? false,
-        ...(!retention.recoveryRequired && this.rollbackVersion
+        // A replacement retain was dispatched: even a known failure cannot
+        // prove the original retained record is still authoritative.
+        recoveryRequired: knownReady
+          ? true
+          : (retention.recoveryRequired ?? false),
+        ...(!knownReady && !retention.recoveryRequired && this.rollbackVersion
           ? { rollbackVersion: this.rollbackVersion }
           : {}),
       });
       return;
     }
-    if (this.isClosing()) return;
     this.ready = prepared.update;
+    if (this.isClosing()) return;
     await this.publish({
       phase: "ready",
       version: prepared.update.manifest.version,
@@ -881,32 +898,82 @@ export class InstalledUpdater {
     }
   }
 
-  async prepareLocal(): Promise<void> {
-    if (!this.canPrepare()) return;
+  /**
+   * Host-only replacement requires the supervisor's exact admitted Ready build.
+   * The caller owns disk validation, its existing lease and original backup;
+   * this argument supplies no admission authority and is not a renderer command.
+   * Without it, local preparation remains Idle-only.
+   */
+  async prepareLocal(expectedReadyBuildId?: string): Promise<void> {
+    const previous = this.view;
+    const original = this.ready;
+    const replacing = expectedReadyBuildId !== undefined;
+    if (replacing) {
+      if (
+        !this.initialized ||
+        this.busy ||
+        this.isClosing() ||
+        previous.phase !== "ready" ||
+        previous.blockedBy !== null ||
+        !original ||
+        original.manifest.buildId !== expectedReadyBuildId ||
+        original.manifest.version !== previous.version
+      )
+        return;
+    } else if (!this.canPrepare() || previous.phase !== "idle") return;
+    const knownReady =
+      replacing && previous.phase === "ready" ? previous : undefined;
     if (!this.ports.prepareLocal) {
       this.begin();
       try {
-        await this.publish({
-          phase: "failed",
-          code: "UPDATE_LOCAL_IMPORT_UNAVAILABLE",
-          recoveryRequired: false,
-          ...(this.rollbackVersion
-            ? { rollbackVersion: this.rollbackVersion }
-            : {}),
-        });
+        await this.publish(
+          knownReady
+            ? {
+                ...knownReady,
+                blockedBy: "UPDATE_LOCAL_IMPORT_UNAVAILABLE",
+              }
+            : {
+                phase: "failed",
+                code: "UPDATE_LOCAL_IMPORT_UNAVAILABLE",
+                recoveryRequired: false,
+                ...(this.rollbackVersion
+                  ? { rollbackVersion: this.rollbackVersion }
+                  : {}),
+              },
+        );
       } finally {
         this.finish();
       }
       return;
     }
-    const previous = this.view;
     this.begin();
     let importStarted = false;
     try {
       await this.publish({ phase: "downloading" });
       if (this.isClosing()) return;
       importStarted = true;
-      await this.retainPrepared(await this.ports.prepareLocal());
+      const prepared = await this.ports.prepareLocal();
+      if (
+        prepared.ok &&
+        knownReady &&
+        original &&
+        (prepared.update.manifest.buildId === original.manifest.buildId ||
+          prepared.update.handle === original.handle ||
+          prepared.update.manifest.archiveSha256 ===
+            original.manifest.archiveSha256 ||
+          prepared.update.manifest.artifactSha256 ===
+            original.manifest.artifactSha256)
+      ) {
+        // The producer may have staged an intent, but has not selected a new
+        // package. Leave both archives to their owner for reconciliation.
+        await this.publish({
+          phase: "failed",
+          code: "UPDATE_LOCAL_CANDIDATE_NOT_NEW",
+          recoveryRequired: true,
+        });
+        return;
+      }
+      await this.retainPrepared(prepared, knownReady);
     } catch {
       if (!importStarted) {
         await this.publish(previous);
