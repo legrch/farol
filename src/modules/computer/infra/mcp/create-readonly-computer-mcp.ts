@@ -39,6 +39,12 @@ import {
   parseTaskHistory,
   parseTaskTitle,
   parseThreadRuntime,
+  parseTaskCreate,
+  parseTaskMessage,
+  parseTaskStatus,
+  parseTaskResult,
+  parseTaskObserve,
+  parseTaskAdopt,
   type CodexTaskRoutePeer,
 } from "../peer/codex-task-route-peer";
 import { bootstrapWorkspace } from "./workspace-bootstrap";
@@ -1124,9 +1130,12 @@ export function createReadonlyComputerMcpServer(
         guarded(
           async (request, context) => {
             try {
-              const result = await codexTasks.observe!(request, {
-                signal: context.mcpReq.signal,
-              });
+              const result = parseTaskObserve(
+                await codexTasks.observe!(request, {
+                  signal: context.mcpReq.signal,
+                }),
+                request.threadId,
+              );
               if (result.status !== "observed")
                 return taskResponse(result, true);
               const threadRuntime = parseThreadRuntime(result.threadRuntime);
@@ -1196,7 +1205,10 @@ export function createReadonlyComputerMcpServer(
         },
         guarded(async (request) => {
           try {
-            const result = await codexTasks.adopt!(request);
+            const result = parseTaskAdopt(
+              await codexTasks.adopt!(request),
+              request.turnId,
+            );
             return taskResponse(result, result.status !== "adopted");
           } catch {
             return taskResponse(
@@ -1281,9 +1293,10 @@ export function createReadonlyComputerMcpServer(
       },
       guarded(async (request, context) => {
         try {
-          const result = await codexTasks.create(request, {
-            signal: context.mcpReq.signal,
-          });
+          const result = parseTaskCreate(
+            await codexTasks.create(request, { signal: context.mcpReq.signal }),
+            request.key,
+          );
           const publicResult =
             result.status === "dispatched"
               ? { status: "dispatched", dispatchId: result.dispatchId }
@@ -1342,7 +1355,10 @@ export function createReadonlyComputerMcpServer(
         },
         guarded(async (request) => {
           try {
-            const result = await codexTasks.message(request);
+            const result = parseTaskMessage(
+              await codexTasks.message(request),
+              request.dispatchId,
+            );
             return taskResponse(
               result.status === "steered"
                 ? { status: "steered", dispatchId: result.dispatchId }
@@ -1373,9 +1389,12 @@ export function createReadonlyComputerMcpServer(
         },
         guarded(async (request, context) => {
           try {
-            const result = await codexTasks.continue!(request, {
-              signal: context.mcpReq.signal,
-            });
+            const result = parseTaskCreate(
+              await codexTasks.continue!(request, {
+                signal: context.mcpReq.signal,
+              }),
+              request.key,
+            );
             return taskResponse(
               result.status === "dispatched"
                 ? { status: "dispatched", dispatchId: result.dispatchId }
@@ -1403,9 +1422,12 @@ export function createReadonlyComputerMcpServer(
       guarded(
         async ({ dispatchId }, context) => {
           try {
-            const result = await codexTasks.status(dispatchId, {
-              signal: context.mcpReq.signal,
-            });
+            const result = parseTaskStatus(
+              await codexTasks.status(dispatchId, {
+                signal: context.mcpReq.signal,
+              }),
+              dispatchId,
+            );
             const threadRuntime =
               result.status === "known"
                 ? parseThreadRuntime(result.threadRuntime)
@@ -1453,9 +1475,12 @@ export function createReadonlyComputerMcpServer(
       guarded(
         async ({ dispatchId }, context) => {
           try {
-            const result = await codexTasks.result(dispatchId, {
-              signal: context.mcpReq.signal,
-            });
+            const result = parseTaskResult(
+              await codexTasks.result(dispatchId, {
+                signal: context.mcpReq.signal,
+              }),
+              dispatchId,
+            );
             const threadRuntime =
               result.status === "running"
                 ? parseThreadRuntime(result.threadRuntime)

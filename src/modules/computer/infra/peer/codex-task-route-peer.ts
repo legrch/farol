@@ -7,7 +7,61 @@ import {
   CodexProjectTasksSchema,
   CodexProjectPreferenceSchema,
   CodexProjectPreferenceLookupSchema,
+  CodexTaskCreateSchema,
+  CodexTaskMessageSchema,
+  CodexTaskStatusSchema,
+  CodexTaskResultSchema,
+  CodexTaskObserveSchema,
+  CodexTaskAdoptSchema,
 } from "../../../chat/contract/codex-task-route";
+
+export function parseTaskCreate(value: unknown, key: string) {
+  const parsed = CodexTaskCreateSchema.safeParse(value);
+  return parsed.success &&
+    (parsed.data.status === "refused" || parsed.data.dispatchId === key)
+    ? parsed.data
+    : { status: "outcome_unknown" as const, dispatchId: key };
+}
+
+export function parseTaskMessage(value: unknown, dispatchId: string) {
+  const parsed = CodexTaskMessageSchema.safeParse(value);
+  return parsed.success &&
+    (parsed.data.status === "refused" || parsed.data.dispatchId === dispatchId)
+    ? parsed.data
+    : { status: "outcome_unknown" as const, dispatchId };
+}
+
+export function parseTaskStatus(value: unknown, dispatchId: string) {
+  const parsed = CodexTaskStatusSchema.safeParse(value);
+  return parsed.success &&
+    (parsed.data.status === "unknown" || parsed.data.dispatchId === dispatchId)
+    ? parsed.data
+    : { status: "outcome_unknown" as const, dispatchId };
+}
+
+export function parseTaskResult(value: unknown, dispatchId: string) {
+  const parsed = CodexTaskResultSchema.safeParse(value);
+  return parsed.success &&
+    (parsed.data.status === "unknown" || parsed.data.dispatchId === dispatchId)
+    ? parsed.data
+    : { status: "outcome_unknown" as const, dispatchId };
+}
+
+export function parseTaskObserve(value: unknown, threadId: string) {
+  const parsed = CodexTaskObserveSchema.safeParse(value);
+  return parsed.success &&
+    (parsed.data.status === "refused" || parsed.data.threadId === threadId)
+    ? parsed.data
+    : { status: "outcome_unknown" as const, threadId };
+}
+
+export function parseTaskAdopt(value: unknown, turnId: string) {
+  const parsed = CodexTaskAdoptSchema.safeParse(value);
+  return parsed.success &&
+    (parsed.data.status === "refused" || parsed.data.dispatchId === turnId)
+    ? parsed.data
+    : { status: "outcome_unknown" as const, dispatchId: turnId };
+}
 
 export function parseTaskHistory(
   value: unknown,

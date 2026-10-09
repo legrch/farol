@@ -34,6 +34,100 @@ export const CodexThreadRuntimeSchema = z.union([
 export type CodexThreadRuntime = z.infer<typeof CodexThreadRuntimeSchema>;
 
 const Identifier = z.string().regex(/^[A-Za-z0-9_-]{1,120}$/u);
+const DispatchId = z.string().uuid();
+const UnknownTask = z.strictObject({
+  status: z.literal("outcome_unknown"),
+  dispatchId: DispatchId,
+});
+const RefusedTask = z.strictObject({
+  status: z.literal("refused"),
+  code: Identifier,
+});
+const TaskReference = {
+  dispatchId: DispatchId,
+  threadId: Identifier,
+  turnId: Identifier,
+};
+const TurnStatus = z.enum(["inProgress", "completed", "failed", "interrupted"]);
+
+/** Closed published receipts; a caller's key never repairs crossed lineage. */
+export const CodexTaskCreateSchema = z.union([
+  UnknownTask,
+  RefusedTask,
+  z.strictObject({ status: z.literal("dispatched"), ...TaskReference }),
+]);
+export const CodexTaskMessageSchema = z.union([
+  UnknownTask,
+  RefusedTask,
+  z.strictObject({
+    status: z.literal("steered"),
+    dispatchId: DispatchId,
+    turnId: Identifier,
+  }),
+]);
+export const CodexTaskStatusSchema = z.union([
+  z.strictObject({ status: z.literal("unknown") }),
+  UnknownTask,
+  z.strictObject({
+    status: z.literal("known"),
+    ...TaskReference,
+    turnStatus: TurnStatus,
+    // Legacy ports may omit runtime. Omission remains unavailable, never idle.
+    threadRuntime: CodexThreadRuntimeSchema.optional(),
+  }),
+]);
+export const CodexTaskResultSchema = z.union([
+  z.strictObject({ status: z.literal("unknown") }),
+  UnknownTask,
+  z.strictObject({
+    status: z.enum(["running", "failed", "interrupted"]),
+    ...TaskReference,
+    threadRuntime: CodexThreadRuntimeSchema.optional(),
+  }),
+  z.strictObject({
+    status: z.literal("completed"),
+    ...TaskReference,
+    finalItemId: Identifier,
+    // Retain the existing producer's UTF-16 limit (at most 768 KiB UTF-8).
+    text: z
+      .string()
+      .min(1)
+      .max(256 * 1024)
+      .refine((value) => !value.includes("\0")),
+  }),
+]);
+export const CodexTaskObserveSchema = z.union([
+  RefusedTask,
+  z.strictObject({
+    status: z.literal("outcome_unknown"),
+    threadId: DispatchId,
+  }),
+  z.strictObject({
+    status: z.literal("observed"),
+    threadId: DispatchId,
+    title: z
+      .string()
+      .max(1000)
+      .refine((value) => !value.includes("\0"))
+      .nullable(),
+    model: z
+      .string()
+      .max(120)
+      .refine((value) => !value.includes("\0"))
+      .nullable(),
+    turns: z
+      .array(z.strictObject({ id: Identifier, status: TurnStatus }))
+      .max(100)
+      .readonly(),
+    hasMoreTurns: z.boolean(),
+    threadRuntime: CodexThreadRuntimeSchema.optional(),
+  }),
+]);
+export const CodexTaskAdoptSchema = z.union([
+  RefusedTask,
+  UnknownTask,
+  z.strictObject({ status: z.literal("adopted"), dispatchId: DispatchId }),
+]);
 const AbsolutePath = z
   .string()
   .min(2)
