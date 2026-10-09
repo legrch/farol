@@ -135,8 +135,16 @@ function fixture() {
   );
   const entry = {
     ...actual,
-    recoverConnectorTransport: (original, observationCurrent = () => true) =>
-      actual.recoverConnectorTransport(original, observationCurrent),
+    recoverConnectorTransport: (
+      original,
+      observationCurrent = () => true,
+      afterKnownClosure,
+    ) =>
+      actual.recoverConnectorTransport(
+        original,
+        observationCurrent,
+        afterKnownClosure,
+      ),
   };
   const original = entry.captureConnectorTransport();
   return {
@@ -363,6 +371,179 @@ it.each(["explicit-stop", "suspend", "quit"])(
     expect(f.reservation.current()).toBeNull();
     expect(f.context.connectorTaskAdmission).toBe(false);
     await watch.check();
+    expect(recover).toHaveBeenCalledTimes(1);
+  },
+);
+
+async function pausedKnownClosure() {
+  const f = fixture();
+  const entered = Promise.withResolvers();
+  const drain = Promise.withResolvers();
+  const originalDrain =
+    f.context.stopAndConfirmComputerMcp.getMockImplementation();
+  f.context.stopAndConfirmComputerMcp.mockImplementation(async (...args) => {
+    entered.resolve();
+    await drain.promise;
+    await originalDrain(...args);
+  });
+  const recover = vi.fn(
+    async (original, observationCurrent, afterKnownClosure) =>
+      f.entry.recoverConnectorTransport(
+        original,
+        observationCurrent,
+        afterKnownClosure,
+      ),
+  );
+  const watch = new ConnectorTransportWatch({
+    capture: () => f.original,
+    current: () => true,
+    observe: async () => "exited",
+    recover,
+    unknown: async () => {},
+    wait: async () => {},
+  });
+  const pending = watch.check();
+  await entered.promise;
+  watch.suspend();
+  return { f, watch, recover, pending, drain };
+}
+
+async function untilStopped(f) {
+  for (let n = 0; n < 50; n += 1) {
+    if (f.owner.recordSecureMcpStopped.mock.calls.length) {
+      // Settle the known publication and enter the post-closure wake wait.
+      await Promise.resolve();
+      await Promise.resolve();
+      return;
+    }
+    await Promise.resolve();
+  }
+  throw Error("CONTROLLED_CLOSE_DID_NOT_REACH_STOPPED_PUBLICATION");
+}
+
+it.each(["before-close", "after-stopped-ack", "resume-then-suspend"])(
+  "continues the original known closure once when resume arrives %s",
+  async (timing) => {
+    const { f, watch, recover, pending, drain } = await pausedKnownClosure();
+    if (timing === "before-close") watch.resume();
+    drain.resolve();
+    if (timing !== "before-close") {
+      await untilStopped(f);
+      expect(f.reservation.current()).toBe("connector-start");
+      expect(f.context.connectorTaskAdmission).toBe(true);
+      expect(f.context.startAdmittedSecureMcpConnector).not.toHaveBeenCalled();
+      expect(watch.check()).toBe(pending);
+      watch.resume();
+      if (timing === "resume-then-suspend") {
+        watch.suspend();
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(
+          f.context.startAdmittedSecureMcpConnector,
+        ).not.toHaveBeenCalled();
+        expect(f.reservation.current()).toBe("connector-start");
+        watch.resume();
+      }
+    }
+    await pending;
+    expect(await recover.mock.results[0].value).toMatchObject({ ok: true });
+    expect(f.context.stopAndConfirmComputerMcp).toHaveBeenCalledTimes(1);
+    expect(f.owner.recordSecureMcpStopped).toHaveBeenCalledExactlyOnceWith(
+      undefined,
+      "stop",
+      10,
+    );
+    expect(f.context.startAdmittedSecureMcpConnector).toHaveBeenCalledTimes(1);
+    expect(f.closure().operationId).toBe("original-close-operation");
+    expect(f.reservation.current()).toBeNull();
+    expect(f.context.connectorTaskAdmission).toBe(false);
+    await watch.check();
+    expect(recover).toHaveBeenCalledTimes(1);
+    expect(f.context.startAdmittedSecureMcpConnector).toHaveBeenCalledTimes(1);
+  },
+);
+
+it.each([
+  "explicit-stop",
+  "quit",
+  "manual-start",
+  "revoked",
+  "computer-generation",
+  "connector-generation",
+  "revision",
+  "unknown",
+  "pending",
+  "shared-fence",
+  "changed-owner",
+  "changed-slot",
+])(
+  "refuses post-sleep continuation after %s without repeating the known closure",
+  async (fault) => {
+    const { f, watch, recover, pending, drain } = await pausedKnownClosure();
+    drain.resolve();
+    await untilStopped(f);
+    const settings = f.snapshot.settings;
+    if (fault === "explicit-stop") watch.suppressCurrent();
+    if (fault === "quit") {
+      f.context.quitInProgress = true;
+      watch.close();
+    }
+    if (fault === "manual-start") watch.invalidate();
+    if (fault === "revoked")
+      settings.connectors.secureMcp.credential = "missing";
+    if (fault === "computer-generation") settings.computer.generation += 1;
+    if (fault === "connector-generation")
+      settings.connectors.secureMcp.generation += 1;
+    if (fault === "revision") settings.revision += 1;
+    if (fault === "unknown") settings.setup.connect.outcomeUnknown = true;
+    if (fault === "pending") settings.computer.pendingEdit = {};
+    if (fault === "shared-fence")
+      f.context.computerConnectorAdmission.mockReturnValue({
+        admissible: false,
+      });
+    if (fault === "changed-owner") f.context.configuration = {};
+    if (fault === "changed-slot") f.setBinding({ ...f.original.binding });
+    const permanentlyCancelled = [
+      "explicit-stop",
+      "quit",
+      "manual-start",
+    ].includes(fault);
+    if (!permanentlyCancelled) watch.resume();
+    await pending;
+    expect(await recover.mock.results[0].value).toMatchObject({ ok: false });
+    expect(f.context.stopAndConfirmComputerMcp).toHaveBeenCalledTimes(1);
+    expect(f.owner.recordSecureMcpStopped).toHaveBeenCalledTimes(1);
+    expect(f.context.startAdmittedSecureMcpConnector).not.toHaveBeenCalled();
+    expect(f.reservation.current()).toBeNull();
+    expect(f.context.connectorTaskAdmission).toBe(false);
+    // Permanent cancellation alone must release the pending operation; a later
+    // wake cannot be needed for Quit/Stop or revive its original attempt.
+    if (permanentlyCancelled) watch.resume();
+    await watch.check();
+    expect(recover).toHaveBeenCalledTimes(1);
+  },
+);
+
+it.each(["pending_operation", "operation_unknown", "authority_unknown"])(
+  "does not wait for resume or continue an original %s closure",
+  async (disposition) => {
+    const { f, watch, recover, pending, drain } = await pausedKnownClosure();
+    // This port was already entered: alter only the retained original receipt
+    // as the known stopped publication returns, never call the drain twice.
+    const publish = f.owner.recordSecureMcpStopped.getMockImplementation();
+    f.owner.recordSecureMcpStopped.mockImplementation(async (...args) => {
+      f.closure().result.recovery = disposition;
+      return publish(...args);
+    });
+    drain.resolve();
+    await pending;
+    expect(await recover.mock.results[0].value).toMatchObject({ ok: false });
+    expect(f.reservation.current()).toBeNull();
+    watch.resume();
+    await watch.check();
+    expect(f.context.startAdmittedSecureMcpConnector).not.toHaveBeenCalled();
+    expect(f.context.stopAndConfirmComputerMcp).toHaveBeenCalledTimes(1);
+    expect(f.owner.recordSecureMcpStopped).toHaveBeenCalledTimes(1);
     expect(recover).toHaveBeenCalledTimes(1);
   },
 );

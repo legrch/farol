@@ -4281,6 +4281,7 @@ function connectorTransportCurrent(
 async function recoverConnectorTransport(
   original: ConnectorTransportCapture,
   observationCurrent: () => boolean,
+  afterKnownClosure?: () => Promise<(() => boolean) | null>,
 ): Promise<ProductConfigurationResult> {
   if (!observationCurrent() || !connectorTransportCurrent(original))
     return transitionRefusal();
@@ -4291,8 +4292,9 @@ async function recoverConnectorTransport(
     return await observeConnectorStart(async () => {
       let revision = original.revision;
       let stopped = false;
+      let continuationCurrent = observationCurrent;
       const current = () =>
-        observationCurrent() &&
+        continuationCurrent() &&
         connectorTransportCurrent(original, revision, stopped, true);
       if (!current()) return transitionRefusal();
       try {
@@ -4312,6 +4314,7 @@ async function recoverConnectorTransport(
       const closure = original.core.computerConnectorClosureReceipt();
       if (
         !closure ||
+        closure.result.closed !== true ||
         Object.entries(original.binding).some(
           ([key, value]) =>
             closure.result.binding[key as keyof ComputerConnectorBinding] !==
@@ -4347,7 +4350,8 @@ async function recoverConnectorTransport(
         return configurationFailure("SETTINGS_WRITE_FAILED");
       revision = result.snapshot.settings.revision;
       stopped = true;
-      if (!current()) return transitionRefusal();
+      if (!connectorTransportCurrent(original, revision, stopped, true))
+        return transitionRefusal();
       if (closure.result.recovery !== "settled")
         return configurationFailure(
           closure.result.recovery === "pending_operation"
@@ -4358,13 +4362,23 @@ async function recoverConnectorTransport(
                 ? "CONNECTOR_RECOVERY_AUTHORITY_UNAVAILABLE"
                 : "CONNECTOR_RECOVERY_UNAVAILABLE",
         );
+      if (!continuationCurrent()) {
+        // Only ordinary sleep may pause this SAME original operation here:
+        // exact settled Close and stopped publication are known, and successor
+        // Open/Prepare/Start have not been dispatched. Permanent invalidation
+        // returns null; no phase, ACK, lease or operation deadline is renewed.
+        const resumed = await afterKnownClosure?.();
+        if (!resumed) return transitionRefusal();
+        continuationCurrent = resumed;
+      }
+      if (!current()) return transitionRefusal();
       // The existing owner handles executable/credential rechecks, Go admission,
       // new challenge and original result. No Verify or provider prompt is sent.
       return startAdmittedSecureMcpConnector(
         false,
         false,
         original.binding,
-        observationCurrent,
+        continuationCurrent,
       );
     });
   } finally {
@@ -4411,10 +4425,11 @@ function startConnectorTransportWatch(): void {
         transition.release();
       }
     },
-    recover: async (original, observationCurrent) => {
+    recover: async (original, observationCurrent, afterKnownClosure) => {
       const result = await recoverConnectorTransport(
         original,
         observationCurrent,
+        afterKnownClosure,
       );
       reportConnectorTransport(
         original,
@@ -4433,8 +4448,11 @@ function startConnectorTransportWatch(): void {
   };
   connectorTransportTimer = setInterval(check, 30_000);
   connectorTransportTimer.unref();
-  powerMonitor.on("suspend", () => connectorTransportWatch?.invalidate());
-  powerMonitor.on("resume", check);
+  powerMonitor.on("suspend", () => connectorTransportWatch?.suspend());
+  powerMonitor.on("resume", () => {
+    connectorTransportWatch?.resume();
+    check();
+  });
 }
 
 function reportConnectorTransport(
