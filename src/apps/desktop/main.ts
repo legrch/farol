@@ -6928,6 +6928,9 @@ async function configureAdmittedProduct(
             ...(command.observeThreadId === undefined
               ? {}
               : { observeThreadId: command.observeThreadId }),
+            ...(command.observeTurnId === undefined
+              ? {}
+              : { observeTurnId: command.observeTurnId }),
             projectRoot: command.projectRoot,
             projectIdentity: {
               device: String(projectStat.dev),

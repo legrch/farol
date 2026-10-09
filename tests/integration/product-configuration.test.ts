@@ -554,9 +554,10 @@ describe("Computer evidence approval generations", () => {
 });
 
 describe("Farol Next product configuration", () => {
-  it("keeps Codex task admission separate, revocable and generation-bound", async () => {
+  it("roundtrips exact Codex read selection through the Settings command and save with generation guards", async () => {
     const root = await stateRoot();
     const store = new ProductSettingsStore({ root });
+    const saves = vi.spyOn(store, "save");
     const seed = new ProductConfigurationService(store, dependencies());
     await seed.initialize();
     const snapshot = seed.snapshot();
@@ -646,6 +647,69 @@ describe("Farol Next product configuration", () => {
       ok: true,
       snapshot: { settings: { nativeHosts: { taskRoute: selection } } },
     });
+    const command = ProductConfigurationCommandSchema.parse({
+      kind: "host.configure-codex-tasks",
+      socketPath: selection.socketPath,
+      expectedCodexHome: selection.expectedCodexHome,
+      workspaceId,
+      projectId: selection.projectId,
+      observeThreadId: selection.observeThreadId,
+      observeTurnId: "turn-exact_1",
+      projectRoot: selection.projectRoot,
+      sandbox: "read-only",
+      approvalPolicy: "on-request",
+    });
+    if (command.kind !== "host.configure-codex-tasks")
+      throw new Error("fixture command missing");
+    const exact = {
+      ...selection,
+      observeThreadId: command.observeThreadId,
+      observeTurnId: command.observeTurnId,
+    };
+    await expect(service.recordCodexTaskRoute(exact)).resolves.toMatchObject({
+      ok: true,
+      snapshot: { settings: { nativeHosts: { taskRoute: exact } } },
+    });
+    const restarted = new ProductConfigurationService(store, dependencies());
+    await restarted.initialize();
+    expect(restarted.snapshot()).toEqual(service.snapshot());
+    const publish = vi.fn(async () => {});
+    const withdraw = vi.fn(async () => ({ publish }));
+    service.attachComputerAuthority(withdraw);
+    const beforeInvalid = service.snapshot();
+    const saveCount = saves.mock.calls.length;
+    for (const invalid of [
+      { ...exact, observeThreadId: undefined },
+      { ...exact, observeTurnId: "" },
+      { ...exact, observeTurnId: "foreign/path" },
+      { ...exact, observeTurnId: null },
+    ]) {
+      await expect(
+        service.recordCodexTaskRoute(invalid),
+      ).resolves.toMatchObject({ ok: false, error: "SETTINGS_INPUT_INVALID" });
+      expect(service.snapshot()).toEqual(beforeInvalid);
+    }
+    expect(saves.mock.calls.length).toBe(saveCount);
+    expect(withdraw).not.toHaveBeenCalled();
+    await expect(
+      service.recordCodexTaskRoute({ ...exact, observeTurnId: "turn-later" }),
+    ).resolves.toMatchObject({
+      ok: true,
+      snapshot: {
+        settings: {
+          nativeHosts: { taskRoute: { ...exact, observeTurnId: "turn-later" } },
+        },
+      },
+    });
+    expect(withdraw).toHaveBeenCalledOnce();
+    expect(publish).toHaveBeenCalledOnce();
+    expect(publish).toHaveBeenCalledWith(
+      expect.objectContaining({
+        nativeHosts: expect.objectContaining({
+          taskRoute: { ...exact, observeTurnId: "turn-later" },
+        }),
+      }),
+    );
     await expect(
       service.recordCodexTaskRoute({ ...selection, hostGeneration: 1 }),
     ).resolves.toMatchObject({ ok: false });

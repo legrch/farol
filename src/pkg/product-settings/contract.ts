@@ -369,27 +369,59 @@ export const WorkspaceGitMetadataSchema = z.strictObject({
 
 export type WorkspaceGitMetadata = z.infer<typeof WorkspaceGitMetadataSchema>;
 
-export const CodexTaskSelectionSchema = z.strictObject({
-  transport: z.literal("codex-shared-proxy/v1"),
-  socketPath: CanonicalAbsolutePathSchema,
-  expectedCodexHome: CanonicalAbsolutePathSchema,
-  workspaceId: IdentifierSchema,
-  projectId: IdentifierSchema,
+const CodexReadSelectionShape = {
   /** One thread explicitly selected in Settings for read-only observation. */
   observeThreadId: z.string().uuid().optional(),
-  projectRoot: CanonicalAbsolutePathSchema,
-  projectIdentity: WorkspaceRootIdentitySchema,
-  gitCommonDirectory: CanonicalAbsolutePathSchema,
-  execution: z.strictObject({
-    sandbox: z.enum(["read-only", "workspace-write"]),
-    approvalPolicy: z.enum(["untrusted", "on-request"]),
-  }),
-  harness: z.literal("codex"),
-  computerGeneration: z.number().int().positive(),
-  hostGeneration: z.number().int().positive(),
-  approvedAt: CanonicalTimestampSchema,
-  expiresAt: z.number().int().positive().safe(),
-});
+  /** Exact native turn; never inferred from thread history or a request. */
+  observeTurnId: z
+    .string()
+    .min(1)
+    .max(120)
+    .regex(/^[A-Za-z0-9_-]+$/u)
+    .optional(),
+};
+
+function validateCodexReadSelection(
+  selection: {
+    observeThreadId?: string | undefined;
+    observeTurnId?: string | undefined;
+  },
+  context: z.RefinementCtx,
+): void {
+  if (
+    selection.observeTurnId !== undefined &&
+    selection.observeThreadId === undefined
+  )
+    context.addIssue({
+      code: "custom",
+      path: ["observeTurnId"],
+      message:
+        "An exact observation turn requires an explicitly selected thread.",
+    });
+}
+
+export const CodexTaskSelectionSchema = z
+  .strictObject({
+    transport: z.literal("codex-shared-proxy/v1"),
+    socketPath: CanonicalAbsolutePathSchema,
+    expectedCodexHome: CanonicalAbsolutePathSchema,
+    workspaceId: IdentifierSchema,
+    projectId: IdentifierSchema,
+    ...CodexReadSelectionShape,
+    projectRoot: CanonicalAbsolutePathSchema,
+    projectIdentity: WorkspaceRootIdentitySchema,
+    gitCommonDirectory: CanonicalAbsolutePathSchema,
+    execution: z.strictObject({
+      sandbox: z.enum(["read-only", "workspace-write"]),
+      approvalPolicy: z.enum(["untrusted", "on-request"]),
+    }),
+    harness: z.literal("codex"),
+    computerGeneration: z.number().int().positive(),
+    hostGeneration: z.number().int().positive(),
+    approvedAt: CanonicalTimestampSchema,
+    expiresAt: z.number().int().positive().safe(),
+  })
+  .superRefine(validateCodexReadSelection);
 export type CodexTaskSelection = z.infer<typeof CodexTaskSelectionSchema>;
 
 export const ApprovedProductWorkspaceSchema = z
@@ -610,18 +642,20 @@ export const ProductConfigurationCommandSchema = z.discriminatedUnion("kind", [
   }),
   z.strictObject({ kind: z.literal("host.verify-codex") }),
   z.strictObject({ kind: z.literal("host.refresh-codex-task-models") }),
-  z.strictObject({
-    kind: z.literal("host.configure-codex-tasks"),
-    socketPath: CanonicalAbsolutePathSchema,
-    expectedCodexHome: CanonicalAbsolutePathSchema,
-    workspaceId: IdentifierSchema,
-    projectId: IdentifierSchema,
-    observeThreadId: z.string().uuid().optional(),
-    projectRoot: CanonicalAbsolutePathSchema,
-    sandbox: CodexTaskSelectionSchema.shape.execution.shape.sandbox,
-    approvalPolicy:
-      CodexTaskSelectionSchema.shape.execution.shape.approvalPolicy,
-  }),
+  z
+    .strictObject({
+      kind: z.literal("host.configure-codex-tasks"),
+      socketPath: CanonicalAbsolutePathSchema,
+      expectedCodexHome: CanonicalAbsolutePathSchema,
+      workspaceId: IdentifierSchema,
+      projectId: IdentifierSchema,
+      ...CodexReadSelectionShape,
+      projectRoot: CanonicalAbsolutePathSchema,
+      sandbox: CodexTaskSelectionSchema.shape.execution.shape.sandbox,
+      approvalPolicy:
+        CodexTaskSelectionSchema.shape.execution.shape.approvalPolicy,
+    })
+    .superRefine(validateCodexReadSelection),
   z.strictObject({ kind: z.literal("host.clear-codex-tasks") }),
   z.strictObject({ kind: z.literal("host.remove-codex") }),
   z.strictObject({ kind: z.literal("host.run-codex-smoke") }),

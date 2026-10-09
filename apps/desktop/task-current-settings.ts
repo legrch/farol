@@ -16,6 +16,37 @@ const maximumGrantMs = 12 * 60 * 60 * 1000;
 const positiveGeneration = (value: number): boolean =>
   Number.isSafeInteger(value) && value > 0;
 
+export interface CodexTaskReadSource {
+  readonly reference: { readonly threadId: string; readonly turnId: string };
+  readonly source: TaskCodexSource;
+  readonly settingsProjection: unknown;
+}
+
+/** Exact read selection and current value metadata only; no read or admission. */
+export function codexTaskReadCurrentSource(
+  settings: ProductSettings,
+  nowMs: number,
+): CodexTaskReadSource | undefined {
+  const parsed = ProductSettingsSchema.safeParse(settings);
+  if (!parsed.success) return undefined;
+  const s = parsed.data;
+  const route = s.nativeHosts.taskRoute;
+  if (
+    route?.observeThreadId === undefined ||
+    route.observeTurnId === undefined ||
+    s.setup.computer.reachable !== "reachable" ||
+    s.setup.computer.outcomeUnknown
+  )
+    return undefined;
+  const source = codexTaskCurrentSource(s, nowMs);
+  if (source === undefined) return undefined;
+  return {
+    reference: { threadId: route.observeThreadId, turnId: route.observeTurnId },
+    source,
+    settingsProjection: taskSettingsProjection(s),
+  };
+}
+
 /** Complete Task-relevant input for a pre-write comparison, with no clock. */
 export function taskSettingsProjection(settings: ProductSettings): unknown {
   const parsed = ProductSettingsSchema.safeParse(settings);

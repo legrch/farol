@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   codexTaskCurrentSource,
+  codexTaskReadCurrentSource,
   taskSettingsProjection,
 } from "../../apps/desktop/task-current-settings.ts";
 import { validate } from "../../apps/desktop/bridge/wire.ts";
@@ -691,6 +692,13 @@ const projectedChanges: Array<[string, Edit]> = [
     },
   ],
   [
+    "route exact observation turn",
+    (s) => {
+      route(s).observeThreadId = projectId;
+      route(s).observeTurnId = "turn-exact";
+    },
+  ],
+  [
     "route original approval",
     (s) => {
       route(s).approvedAt = verifiedAt;
@@ -903,5 +911,147 @@ describe("clock-free Task pre-write metadata", () => {
     expect(taskSettingsProjection(null as unknown as ProductSettings)).toEqual({
       status: "settings-invalid",
     });
+  });
+});
+
+describe("exact Codex read current source", () => {
+  const threadId = "10000000-0000-4000-8000-000000000004";
+  function selected(): ProductSettings {
+    const s = fixture();
+    route(s).observeThreadId = threadId;
+    route(s).observeTurnId = "turn-exact";
+    return s;
+  }
+
+  it("binds the exact reference to the existing current source and policy metadata", () => {
+    const s = selected();
+    route(s).execution.sandbox = "read-only";
+    workspace(s).access = "read";
+    const out = codexTaskReadCurrentSource(s, now);
+    expect(out).toEqual({
+      reference: { threadId, turnId: "turn-exact" },
+      source: codexTaskCurrentSource(s, now),
+      settingsProjection: taskSettingsProjection(s),
+    });
+    expect(out?.source).toMatchObject({
+      sandbox: "read-only",
+      access: "read",
+      model: "fixture-model-v4",
+      effort: "high",
+      hostGeneration: "7",
+      computerGeneration: "11",
+    });
+    for (const key of [
+      "lifecycle",
+      "retained",
+      "resultEvidence",
+      "profileId",
+      "hostId",
+    ])
+      expect(out).not.toHaveProperty(key);
+  });
+
+  it.each(refused)(
+    "refuses existing current-source failure: %s",
+    (_name, edit) => {
+      const s = selected();
+      edit(s);
+      expect(codexTaskReadCurrentSource(s, now)).toBeUndefined();
+    },
+  );
+
+  it("keeps legacy absent/thread-only selection readable without inventing an exact turn", () => {
+    const s = fixture();
+    expect(ProductSettingsSchema.safeParse(s).success).toBe(true);
+    expect(codexTaskCurrentSource(s, now)).toBeDefined();
+    expect(codexTaskReadCurrentSource(s, now)).toBeUndefined();
+    route(s).observeThreadId = threadId;
+    expect(ProductSettingsSchema.safeParse(s).success).toBe(true);
+    expect(codexTaskCurrentSource(s, now)).toBeDefined();
+    expect(codexTaskReadCurrentSource(s, now)).toBeUndefined();
+  });
+
+  it.each([
+    { observeThreadId: undefined, observeTurnId: "turn-exact" },
+    { observeThreadId: "not-a-thread", observeTurnId: "turn-exact" },
+    { observeThreadId: threadId, observeTurnId: "" },
+    { observeThreadId: threadId, observeTurnId: "latest turn" },
+    { observeThreadId: threadId, observeTurnId: "foreign/path" },
+    { observeThreadId: threadId, observeTurnId: null },
+  ])("refuses malformed/partial saved reference %j", (reference) => {
+    const s = selected();
+    Object.assign(route(s), reference);
+    expect(codexTaskReadCurrentSource(s, now)).toBeUndefined();
+  });
+
+  it.each(["unknown", "unreachable"] as const)(
+    "refuses %s current reachability",
+    (reachable) => {
+      const s = selected();
+      s.setup.computer.reachable = reachable;
+      expect(codexTaskReadCurrentSource(s, now)).toBeUndefined();
+    },
+  );
+
+  it("refuses unknown outcome, expired grant and invalid clocks", () => {
+    const s = selected();
+    s.setup.computer.outcomeUnknown = true;
+    expect(codexTaskReadCurrentSource(s, now)).toBeUndefined();
+    s.setup.computer.outcomeUnknown = false;
+    for (const clock of [route(s).expiresAt, NaN, Infinity, now + 0.5])
+      expect(codexTaskReadCurrentSource(s, clock)).toBeUndefined();
+  });
+
+  it.each(["observeThreadId", "observeTurnId"] as const)(
+    "detects changed %s without changing the old snapshot",
+    (key) => {
+      const before = selected();
+      const snapshot = codexTaskReadCurrentSource(before, now);
+      const after = structuredClone(before);
+      route(after)[key] = key === "observeThreadId" ? projectId : "turn-later";
+      expect(codexTaskCurrentSource(after, now)).toEqual(
+        codexTaskCurrentSource(before, now),
+      );
+      expect(taskSettingsProjection(after)).not.toEqual(
+        taskSettingsProjection(before),
+      );
+      expect(codexTaskReadCurrentSource(after, now)).not.toEqual(snapshot);
+      expect(snapshot?.reference).toEqual({ threadId, turnId: "turn-exact" });
+    },
+  );
+
+  it("keeps changed exact selection visible while both current sources are unavailable", () => {
+    const before = selected();
+    host(before).taskSource = null;
+    const after = structuredClone(before);
+    route(after).observeTurnId = "turn-later";
+    expect(codexTaskReadCurrentSource(before, now)).toBeUndefined();
+    expect(codexTaskReadCurrentSource(after, now)).toBeUndefined();
+    expect(taskSettingsProjection(after)).not.toEqual(
+      taskSettingsProjection(before),
+    );
+  });
+
+  it("binds policy changes and never reads ambient time, mutates or aliases settings", () => {
+    const s = selected();
+    const original = structuredClone(s);
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => {
+      throw new Error("ambient_clock_forbidden");
+    });
+    try {
+      const out = codexTaskReadCurrentSource(s, now);
+      const copy = structuredClone(out);
+      expect(s).toEqual(original);
+      const p = policy(s);
+      p.harnesses.codex!.models.preferred!.model = "changed-model";
+      s.tasks = p;
+      expect(out).toEqual(copy);
+      expect(codexTaskReadCurrentSource(s, now)).not.toEqual(out);
+      expect(
+        codexTaskReadCurrentSource(s, now)?.source.configDigest,
+      ).not.toEqual(out?.source.configDigest);
+    } finally {
+      clock.mockRestore();
+    }
   });
 });
