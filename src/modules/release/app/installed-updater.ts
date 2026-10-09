@@ -544,18 +544,27 @@ export class InstalledUpdater {
     } catch {
       this.noticeBlocked = "UPDATE_NOTICE_OUTCOME_UNKNOWN";
     } finally {
-      // Update commands have their own lane and may have advanced this view.
-      // Mark only the still-current notice, never restore the captured phase.
-      const latest = this.view;
-      if ("notice" in latest && latest.notice?.key === key) {
-        this.view = {
-          ...latest,
-          notice: { ...latest.notice, seen, blockedBy: this.noticeBlocked },
-        };
-        if (!this.isClosing()) this.ports.publish(this.snapshot());
+      try {
+        // Update commands have their own lane and may have advanced this view.
+        // Mark only the still-current notice, never restore the captured phase.
+        const latest = this.view;
+        if ("notice" in latest && latest.notice?.key === key) {
+          this.view = {
+            ...latest,
+            notice: { ...latest.notice, seen, blockedBy: this.noticeBlocked },
+          };
+          if (!this.isClosing()) {
+            try {
+              this.ports.publish(this.snapshot());
+            } catch {
+              /* Presentation cannot change the original notice write outcome. */
+            }
+          }
+        }
+      } finally {
+        this.noticeWriting = false;
+        finishNotice();
       }
-      this.noticeWriting = false;
-      finishNotice();
     }
   }
 

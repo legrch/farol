@@ -1524,6 +1524,86 @@ describe("release-owned notice acknowledgement", () => {
     await closing;
     expect(closed).toBe(true);
   });
+  it.each(["confirmed", "unknown"] as const)(
+    "drains a settled %s notice write even when presentation publication throws",
+    async (outcome) => {
+      const f = noticeFixture();
+      if (outcome === "unknown")
+        f.noticeSeen.mockRejectedValue(new Error("original notice ACK lost"));
+      await f.updater.initialize();
+      await f.updater.check(true);
+      f.ports.publish.mockImplementation(() => {
+        throw new Error("renderer publication unavailable");
+      });
+      const acknowledgement = await f.updater
+        .acknowledgeNotice(`version:${staged.manifest.version}`)
+        .then(
+          () => ({ status: "resolved" as const }),
+          () => ({ status: "rejected" as const }),
+        );
+      expect(f.updater.snapshot()).toMatchObject({
+        phase: "available",
+        notice: {
+          seen: outcome === "confirmed",
+          blockedBy:
+            outcome === "confirmed" ? null : "UPDATE_NOTICE_OUTCOME_UNKNOWN",
+        },
+      });
+      await f.updater.acknowledgeNotice(`version:${staged.manifest.version}`);
+      expect(f.noticeSeen).toHaveBeenCalledTimes(1);
+      let closed = false;
+      const closing = f.updater.close().then(() => {
+        closed = true;
+      });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(closed).toBe(true);
+      await closing;
+      expect(acknowledgement.status).toBe("resolved");
+      expect(f.ports.cancelPending).toHaveBeenCalledTimes(1);
+      expect(f.ports.restart).not.toHaveBeenCalled();
+      expect(f.ports.restore).not.toHaveBeenCalled();
+      expect(f.ports.download).not.toHaveBeenCalled();
+    },
+  );
+  it("retains an unknown notice write after failed publication while update authority stays independent", async () => {
+    const f = noticeFixture();
+    f.noticeSeen.mockRejectedValue(new Error("original notice ACK lost"));
+    await f.updater.initialize();
+    await f.updater.check(true);
+    f.ports.publish.mockImplementation(() => {
+      throw new Error("renderer publication unavailable");
+    });
+    await f.updater.acknowledgeNotice(`version:${staged.manifest.version}`);
+    f.ports.publish.mockReset();
+    await f.updater.download();
+    await f.updater.acknowledgeNotice("unconfirmed");
+    await f.updater.acknowledgeNotice(`version:${staged.manifest.version}`);
+    expect(f.updater.snapshot()).toMatchObject({
+      phase: "ready",
+      blockedBy: null,
+      notice: { seen: false, blockedBy: "UPDATE_NOTICE_OUTCOME_UNKNOWN" },
+    });
+    expect(f.noticeSeen).toHaveBeenCalledTimes(1);
+    expect(f.ports.download).toHaveBeenCalledTimes(1);
+    expect(f.ports.retain).toHaveBeenCalledTimes(1);
+    expect(f.ports.restart).not.toHaveBeenCalled();
+    await f.updater.close();
+  });
+  it("settles the original notice lane when failed publication synchronously starts Close", async () => {
+    const f = noticeFixture();
+    await f.updater.initialize();
+    await f.updater.check(true);
+    let closing: Promise<void> | undefined;
+    f.ports.publish.mockImplementation(() => {
+      closing = f.updater.close();
+      throw new Error("renderer closed during publication");
+    });
+    await f.updater.acknowledgeNotice(`version:${staged.manifest.version}`);
+    await closing;
+    expect(f.updater.snapshot()).toMatchObject({ notice: { seen: true } });
+    expect(f.noticeSeen).toHaveBeenCalledTimes(1);
+    expect(f.ports.cancelPending).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("automatic update preference (ports only; no automatic release acceptance)", () => {
