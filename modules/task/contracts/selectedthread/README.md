@@ -60,8 +60,11 @@ Instantiate the read adapter only with those already selected values, then map
 `Reader.Read` through the canonical wire/MCP registry. Preserve independent
 provider-history and Task-journal evidence in the response. If Root has only a
 thread ID, an exact-turn selection or a separately bounded turn-list contract
-is required before using this slice. No boot, schema or registry code changes
-are included. Never construct a replacement Client to recover unknown work.
+is required before using this slice. The portable boot/schema/socket/MCP adapter
+now carries this exact selection through an explicitly selected, admitted
+connector; normal startup omits the route. Real launcher activation and native
+qualification remain open. Never construct a replacement Client to recover
+unknown work.
 
 - **T1 create:** reuse the original `TaskIngress`/Task service, journal and Codex
   `Create` engine; real current Parent/intent dispatch recheck and host/schema
@@ -78,5 +81,5 @@ are included. Never construct a replacement Client to recover unknown work.
 
 Hermetic tests qualify source behavior only. They do not qualify serving vendor
 schema, a saved native selection, account, host filesystem/process, installed
-Desktop visibility, native provider operation, Root wire/catalogue, independent
-review or accepted integration. No Claude or other-provider parity is claimed.
+Desktop visibility, native provider operation, final independent review or
+accepted integration. No Claude or other-provider parity is claimed.

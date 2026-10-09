@@ -228,9 +228,20 @@ export class SocketConnectorClient {
         new BridgeError("unavailable", "handshake_required"),
       );
     const effect = effectMethods.has(method);
-    if (!workspaceMethods.has(method) && !effect)
+    const selectedRead = method === "task.codex.selected.read";
+    if (
+      (!workspaceMethods.has(method) && !effect && !selectedRead) ||
+      (selectedRead &&
+        this.identity?.capabilities.filter(
+          (capability) => capability === method,
+        ).length !== 1)
+    )
       return Promise.reject(
         new BridgeError("unsupported", "connector_method_unsupported"),
+      );
+    if (selectedRead && !validate("TaskSelectedCodexReadRequest", body))
+      return Promise.reject(
+        new BridgeError("refused", "selected_codex_read_input_invalid"),
       );
     if (effect && !validate("id", options.operationId))
       return Promise.reject(

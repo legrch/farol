@@ -7,6 +7,7 @@ import { observeConnectionStatus } from "./connection-status.ts";
 import type { ConnectorMutationBridge } from "./connector-mutation.ts";
 import type { ConnectorProcessBridge } from "./connector-process.ts";
 import type { ConnectorVerificationBridge } from "./connector-verification.ts";
+import type { SelectedCodexReadBridge } from "./selected-codex-read.ts";
 import {
   validate,
   validUnicode,
@@ -31,6 +32,7 @@ export type GoComputerMcpOptions = Readonly<{
   connectionStatus?: Pick<ConnectorVerificationBridge, "observe">;
   mutations?: Pick<ConnectorMutationBridge, "write" | "edit" | "read">;
   processes?: Pick<ConnectorProcessBridge, "start" | "read" | "cancel">;
+  codexRead?: Pick<SelectedCodexReadBridge, "read">;
   onEffectUnknown?: () => void;
 }>;
 
@@ -586,11 +588,34 @@ export function createGoComputerMcpServer(
     );
   }
 
+  if (options.codexRead) {
+    const reader = options.codexRead;
+    server.registerTool(
+      "codex_selected_thread_read",
+      {
+        title: "Read the selected Codex turn",
+        description:
+          "Read stored provider history for the exact owner-selected Codex thread and turn. No target IDs are accepted. Result text is opt-in and bounded to 64 KiB; provider history is non-atomic and is not a retained Farol Task result. This read grants no create, continue, adoption or active control.",
+        inputSchema: z.strictObject({ includeResult: z.boolean().optional() }),
+        annotations,
+      },
+      async (input, ctx) =>
+        run(ctx.mcpReq.signal, async () => ({
+          status: "ok",
+          data: await reader.read(
+            input.includeResult === undefined
+              ? {}
+              : { includeResult: input.includeResult },
+          ),
+        })),
+    );
+  }
+
   server.registerTool(
     "computer_workspace_catalogue",
     {
       title: "Find available workspaces",
-      description: `Find exact task-accessible workspace IDs and approved roots in one Go catalogue operation. Call without arguments; do not guess IDs or roots. This bounded catalogue does not read file contents or grant authority. ${options.mutations ? "This connector supports catalogue, bootstrap, list, read, search and bounded mutations." : "This connector supports catalogue, bootstrap, list, read and search; writes are unavailable."} ${options.processes ? "Shell start/read/cancel uses the same Go owner." : "Shell tools are unavailable."} Task tools are unavailable.`,
+      description: `Find exact task-accessible workspace IDs and approved roots in one Go catalogue operation. Call without arguments; do not guess IDs or roots. This bounded catalogue does not read file contents or grant authority. ${options.mutations ? "This connector supports catalogue, bootstrap, list, read, search and bounded mutations." : "This connector supports catalogue, bootstrap, list, read and search; writes are unavailable."} ${options.processes ? "Shell start/read/cancel uses the same Go owner." : "Shell tools are unavailable."} ${options.codexRead ? "The selected Codex turn has a read-only history tool." : "Task tools are unavailable."}`,
       inputSchema: z.strictObject({}),
       annotations,
     },

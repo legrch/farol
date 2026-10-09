@@ -85,11 +85,22 @@ sticky for reads but does not itself prevent known resource cleanup. Opening,
 claimed-client, physical release and late-exit uncertainty still block cleanup.
 Scratch closure releases only original descriptors and retains every directory.
 
-This composition has controlled CPU/race tests and bounded independent source
-review. It has no desktop Method, socket registration or handshake advertisement.
-Native scratch/runtime/client joins, trusted launcher wiring, current account/
-host qualification and a real external T0 read remain separate gates. It does
-not activate create, Continue, active steer or Shell.
+The portable `task.codex.selected.read` method is registered only on an admitted
+connector when trusted composition explicitly selects `NativeLaunch.CodexRead`
+and the same current publication contains the complete source and exact pair.
+Its private launch receipt carries that selection witness. The validated socket
+handshake and witness jointly gate the `codex_selected_thread_read` MCP tool;
+ordinary backends omit both. Requests accept only the result opt-in. The adapter
+holds one Computer read lease, checks the original publication around provider
+IO, and rejects crossed selections, oversized text or invented retention.
+
+Portable tests exercise real Go transport/Task adapters with a controlled proxy,
+and real TS socket/bridge/MCP adapters with controlled backend replies. These are
+separate in-memory segments, not a live native or installed end-to-end proof.
+The real launcher does not select this source. Native scratch/runtime/client
+joins, trusted launcher wiring, current account/host qualification, final review
+and one real external T0 read remain separate gates. No create, Continue, active
+steer or Shell authority follows from this read.
 
 Completed-parent follow-up uses `Task.Continue`, never `Message`. Trusted boot
 must supply `Options.Followup` with a `codex-followup-schema/v1` witness from

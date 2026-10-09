@@ -47,6 +47,7 @@ type computerConnector struct {
 	start     connectorStart
 	mutations *SettingsMutationIngress
 	processes connectorShellSelection
+	codexRead *connectorCodexRead
 	current   *connectorSlot
 	attempts  uint64
 	closed    *connectorRecoveryOrigin // effects-owned, exact successful Close only
@@ -255,6 +256,10 @@ func (s *computerConnector) Open(ctx context.Context, operation string, in wire.
 	slot.route.beforeAdmission = func(ctx context.Context) error { return s.root.refreshApproval(ctx, renewal) }
 	methods["computer.connector.verify"] = s.verificationMethod(slot)
 	methods["computer.connector.verification"] = s.verificationObservationMethodFor(slot)
+	readSeal := s.codexReadSeal(slot)
+	if readSeal != nil {
+		methods[selectedCodexReadMethod] = s.selectedCodexReadRoute(slot, readSeal)
+	}
 	if s.mutations != nil {
 		for name, method := range s.mutationMethods(slot) {
 			methods[name] = method
@@ -283,6 +288,10 @@ func (s *computerConnector) Open(ctx context.Context, operation string, in wire.
 	}
 	slot.opened = wire.ComputerConnectorOpened{Endpoint: endpoint, AdmissionOperationId: operation,
 		Execution: wire.ComputerConnectorExecution{OwnerId: approval.OwnerID, SessionId: ids[0], TaskId: ids[1], TaskEpoch: "1", ParticipantId: ids[3], TurnId: ids[4], Generation: "1"}}
+	if readSeal != nil {
+		value := readSeal.selection
+		slot.opened.CodexRead = &value
+	}
 	if in.LifecycleRoot != nil {
 		if origin != nil {
 			if err = s.checkRecovery(ctx, origin); err != nil {
