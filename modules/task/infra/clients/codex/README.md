@@ -128,3 +128,72 @@ tests and bounded live create/follow-up acceptance remain with Lead.
 The follow-up slice is source-only and unaccepted on its delegated base. Its
 hermetic tests do not qualify installed schema, real parent delivery, lost-ACK
 recovery or a production tool catalogue. Those gates and integration remain Lead-owned.
+
+## Opt-in original proxy lifetime qualification
+
+`nativeclose_test.go` authors one macOS-only target for the original
+`NativeBoundary.Verify`/`Launch`, real `nativeProcess.Close`/`Wait`, and current
+Client late original registration. Lead qualified the six selected cases on
+macOS with Go 1.26.2 on 9 October 2026; the original terminal and retained
+unknown diagnostics are recorded under
+`_output/evidence/connection-reliability-20261009/task-native-proxy-26f1e19e/`.
+This is bounded adapter evidence, not provider or product acceptance.
+Native execution and integration belong to Lead. Ordinary test collection has
+no fixture effects. Without `FAROL_TASK_NATIVE_PROXY_QUALIFICATION=1`, this
+target explicitly skips; a skip is not native qualification.
+
+After freezing the source, Lead runs only this target from the repository root,
+upfront in the host-native lane, with the local Go toolchain/dependencies:
+
+```sh
+GOTOOLCHAIN=local GOPROXY=off GOSUMDB=off FAROL_TASK_NATIVE_PROXY_QUALIFICATION=1 go test ./modules/task/infra/clients/codex -run '^TestNativeOriginalProxyLifetimeQualification$' -count=1 -timeout=60s -v
+```
+
+The cases cover selected original Close/Wait and exact child exit; changed
+executable bytes, socket inode and physical project/writer root rejected by
+original Verify without launching; and an original Client closed while the
+real Launch return is delayed. A counting wrapper delegates unchanged to that
+same child. Late registration must close/wait once, perform no protocol IO,
+retain the exact original connection, and never renew the two-second cleanup
+budget. The final case lets that budget expire before registration and requires
+the original unknown result to remain unknown after same-child exit observation.
+Both registration cases require an actual Wait deadline equal to the first
+Client Close's original deadline; a missing or substituted deadline fails even
+if the child exits promptly.
+Real signal refusal is not deliberately induced; existing hermetic refusal
+tests remain separate evidence, not native refusal qualification.
+
+Every case creates a fresh private `/private/tmp/farol-proxy-*` root, disposable
+Git repository, owned Unix socket and fixed synthetic executable bytes. The
+helper accepts exactly `app-server proxy --sock <owned socket>`; `/bin/bash`
+builtins alone install a TERM trap, write PID markers and self-exit after a
+ten-second deadline (a pending builtin read is bounded to one second). It has
+no descendants or provider protocol and never connects the socket. Verify uses
+normal host UID, executable, Git and filesystem semantics. Project and writer
+share this one fixture Git root; separate-worktree topology is not covered.
+The Client grant clock and authority callback remain controlled test ports;
+this does not qualify current owner consent or real host/provider selection.
+
+The suite has a 45-second shared context, three-second fixture Git init,
+two-second readiness and unchanged original two-second Client cleanup budgets.
+Same-child exit observation is bounded to 12 seconds; final cleanup can observe
+for at most 12 seconds outside the suite context, keeping work plus cleanup
+within 57 seconds under the 60-second test-binary timeout. No test is parallel.
+Failure stops subsequent cases. The fixture self-exit is independent of cleanup
+and cannot turn missing exit proof into successful Close.
+
+`qualification.log` records only synthetic selection/physical identities and
+original launch/cleanup facts; `child.pid` and `term.pid` come from the same
+owned child. These are test diagnostics, not production receipt/schema evidence.
+Deletion requires successful assertions, known original child exit, closed exact
+socket handles and the unchanged outer root identity. Unknown launch,
+termination, exit, evidence or socket closure retains the root. The expired
+registration case intentionally retains its root/error even after exit is
+observed. Cleanup only observes the original `cmd.Wait` collector; it never
+signals again, calls another Process.Wait, looks up a PID, escalates, falls back
+or relaunches. Failed/partial deletion is not retried. A hard test timeout leaves
+the root for Lead. Fresh cases do not retry any old unknown operation.
+
+This lane qualifies only exact owned proxy lifetime and physical selection.
+It does not qualify provider/schema/live T0, account/authentication, process
+groups/descendants, packaging, installed Farol, Dev or live outputs.
