@@ -7,6 +7,12 @@ import {
 
 // CPU-only node metadata doubles. No real fs/child/provider/auth operation is
 // invoked. Descriptor numbers and native flags are synthetic, not kernel proof.
+// The mocked host selects macOS explicitly; restoration below preserves the
+// actual runner platform. This cannot qualify a real Linux or macOS profile.
+const platformDescriptor = Object.getOwnPropertyDescriptor(
+  process,
+  "platform",
+)!;
 const fixture = vi.hoisted(() => {
   interface Node {
     dev: unknown;
@@ -125,10 +131,18 @@ const selection = {
 let uid: ReturnType<typeof vi.spyOn>;
 beforeEach(() => {
   fixture.reset();
+  Object.defineProperty(process, "platform", {
+    ...platformDescriptor,
+    value: "darwin",
+  });
   uid = vi.spyOn(process, "geteuid").mockReturnValue(501);
 });
 afterEach(() => {
+  Object.defineProperty(process, "platform", platformDescriptor);
   vi.restoreAllMocks();
+  expect(Object.getOwnPropertyDescriptor(process, "platform")).toEqual(
+    platformDescriptor,
+  );
 });
 function qualified(value: unknown = selection): QualifiedProfileLaunch {
   const result = qualifyProfileLaunch(value);
@@ -147,6 +161,22 @@ function rejected(
 function nativeError(code: string): object {
   return Object.assign(new Error("private diagnostic /secret/path"), { code });
 }
+
+it.each(["linux", "win32"] as const)(
+  "refuses the unsupported %s host before opening a mocked descriptor",
+  (platform) => {
+    Object.defineProperty(process, "platform", {
+      ...platformDescriptor,
+      value: platform,
+    });
+    rejected(selection, "refused", "PROFILE_NATIVE_UNSUPPORTED");
+    expect(fixture.calls.filter((call) => call.startsWith("open:"))).toEqual(
+      [],
+    );
+    expect(fixture.opened).toEqual([]);
+    expect(fixture.closed).toEqual([]);
+  },
+);
 
 it("returns literal selection and exact canonical uint64 decimals mapped to Go ProfileBinding", () => {
   const device = 9007199254740993n;
