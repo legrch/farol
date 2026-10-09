@@ -195,6 +195,7 @@ describe("current Computer setup projection", () => {
         "model.rotate-token",
         "model.status",
         "chatgpt.open-browser",
+        "chatgpt.present-browser",
         "chatgpt.toggle-sidebar",
       ]) {
         const id = `settings:${kind}:`;

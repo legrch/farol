@@ -51,7 +51,7 @@ describe("Goal17 explicit ChatGPT presentation", () => {
     },
   );
 
-  it("does not infer page absence from the initial loading placeholder or an invalid route event", async () => {
+  it("asks the host to present loading without inferring absence from an invalid route event", async () => {
     const f = fixture();
     const c = new WindowController(f.api);
     await c.start();
@@ -59,7 +59,13 @@ describe("Goal17 explicit ChatGPT presentation", () => {
     f.emit("route", { state: "absent" });
     c.navigate({ area: "chatgpt" });
     expect(c.getSnapshot().route).toBe("loading");
-    expect(f.api.configure).not.toHaveBeenCalled();
+    await c.configure(
+      { kind: "chatgpt.present-browser" },
+      "settings:chatgpt.present-browser:",
+    );
+    expect(f.api.configure).toHaveBeenCalledExactlyOnceWith({
+      kind: "chatgpt.present-browser",
+    });
     expect(f.api.task).not.toHaveBeenCalled();
     c.dispose();
   });
@@ -94,6 +100,261 @@ describe("Goal17 explicit ChatGPT presentation", () => {
     expect(f.api.task).not.toHaveBeenCalled();
     c.dispose();
   });
+});
+
+describe("Goal18 explicit ChatGPT host presentation", () => {
+  const intention = "settings:chatgpt.present-browser:";
+  const command = { kind: "chatgpt.present-browser" } as const;
+  // Renderer transport fixtures only; the host owns absence and native identity.
+  it.each(["applied", "refused", "unknown"] as const)(
+    "retains one %s intention across duplicate clicks, refresh, travel and late replies",
+    async (state) => {
+      const f = fixture();
+      const waiting = deferred<unknown>();
+      const entered = deferred<void>();
+      vi.mocked(f.api.configure).mockImplementationOnce(() => {
+        entered.resolve();
+        return waiting.promise;
+      });
+      const c = new WindowController(f.api);
+      await c.start();
+      expect(f.api.configure).not.toHaveBeenCalled();
+      c.navigate({ area: "setup", setupStep: "folders" });
+      c.conversationDraft.capture("conversation", "Unsent draft", 1, 4);
+      const draft = c.conversationDraft.read("conversation");
+      const historyEpoch = c.getSnapshot().chatHistoryEpoch;
+      c.navigate({ area: "chatgpt" });
+      expect(c.getSnapshot().intents[intention]?.state).toBe("pending");
+      c.navigate({ area: "chatgpt" });
+      const result = c.configure(command, intention);
+      await entered.promise;
+      expect(f.api.configure).toHaveBeenCalledExactlyOnceWith(command);
+      c.travel(-1);
+      const destination = c.getSnapshot().destination;
+      await c.refresh();
+      const stop = c.subscribe(() => {});
+      stop();
+      if (state === "unknown") waiting.reject(new Error("reply lost"));
+      else
+        waiting.resolve({
+          ok: state === "applied",
+          ...(state === "refused" ? { error: "CHATGPT_PAGE_UNREACHABLE" } : {}),
+          snapshot: bootstrap().configuration,
+        });
+      const settled = await result;
+      expect(settled.state).toBe(state);
+      expect(c.getSnapshot().destination).toBe(destination);
+      expect(c.getSnapshot().intents[intention]).toBe(settled);
+      c.travel(1);
+      c.navigate({ area: "home" });
+      c.travel(-1);
+      expect(await c.configure(command, "remounted-label")).toBe(settled);
+      expect(c.conversationDraft.read("conversation")).toBe(draft);
+      expect(c.getSnapshot().chatHistoryEpoch).toBe(historyEpoch);
+      expect(c.getSnapshot().destination.taskId).toBe("");
+      expect(f.api.configure).toHaveBeenCalledExactlyOnceWith(command);
+      expect(f.api.task).not.toHaveBeenCalled();
+      c.dispose();
+    },
+  );
+
+  it.each(["loaded", "task"] as const)(
+    "reveals the retained %s surface without issuing Open or presentation",
+    async (surface) => {
+      const f = fixture();
+      const c = new WindowController(f.api);
+      await c.start();
+      if (surface === "loaded") f.emit("route", { state: "loaded" });
+      else f.emit("tasks", { revision: 1, tasks: [task("retained")] });
+      c.navigate({ area: "setup", setupStep: "folders" });
+      c.overlay("search");
+      c.navigate({
+        area: "chatgpt",
+        ...(surface === "task" ? { taskId: "retained" } : {}),
+      });
+      expect(c.getSnapshot().overlay).toBe("none");
+      expect(vi.mocked(f.api.layout).mock.calls.at(-1)?.slice(0, 3)).toEqual([
+        "browser",
+        surface === "task" ? "retained" : "",
+        false,
+      ]);
+      c.travel(-1);
+      c.travel(1);
+      expect(f.api.configure).not.toHaveBeenCalled();
+      expect(f.api.task).not.toHaveBeenCalled();
+      c.dispose();
+    },
+  );
+
+  it("does not open at startup, refresh, or presentation, including browser launch preference", async () => {
+    const f = fixture();
+    const data = bootstrap();
+    data.configuration.settings.setup.journey.dismissed = true;
+    vi.mocked(f.api.bootstrap).mockResolvedValue(data);
+    const c = new WindowController(f.api);
+    await c.start();
+    expect(c.getSnapshot().destination.area).toBe("chatgpt");
+    c.presentation();
+    await c.refresh();
+    expect(f.api.configure).not.toHaveBeenCalled();
+    c.navigate({ area: "chatgpt" });
+    await c.configure(command, intention);
+    expect(f.api.configure).toHaveBeenCalledExactlyOnceWith(command);
+    c.dispose();
+  });
+
+  it("presents once from an explicit browser shortcut, including a duplicate event", async () => {
+    const f = fixture();
+    const c = new WindowController(f.api);
+    await c.start();
+    const action = sectionIntent("browser");
+    f.emit("action", action);
+    f.emit("action", action);
+    f.emit("action", sectionIntent("browser", 2));
+    await c.configure(command, intention);
+    expect(c.getSnapshot().destination.area).toBe("chatgpt");
+    expect(f.api.configure).toHaveBeenCalledExactlyOnceWith(command);
+    c.dispose();
+  });
+
+  it("can request its first presentation on Back after a retained route becomes loading", async () => {
+    const f = fixture();
+    const c = new WindowController(f.api);
+    await c.start();
+    f.emit("route", { state: "loaded" });
+    c.navigate({ area: "chatgpt" });
+    c.navigate({ area: "setup", setupStep: "folders" });
+    f.emit("route", { state: "loading" });
+    expect(f.api.configure).not.toHaveBeenCalled();
+    c.travel(-1);
+    await c.configure(command, intention);
+    c.travel(1);
+    c.travel(-1);
+    expect(f.api.configure).toHaveBeenCalledExactlyOnceWith(command);
+    c.dispose();
+  });
+
+  it("keeps a malformed presentation reply unknown despite a later loaded projection", async () => {
+    const f = fixture();
+    const c = new WindowController(f.api);
+    await c.start();
+    vi.mocked(f.api.configure).mockResolvedValueOnce({ ok: true });
+    c.navigate({ area: "chatgpt" });
+    const result = await c.configure(command, intention);
+    expect(result.state).toBe("unknown");
+    f.emit("route", { state: "loaded" });
+    await c.refresh();
+    c.navigate({ area: "setup" });
+    c.travel(-1);
+    expect(await c.configure(command, intention)).toBe(result);
+    expect(f.api.configure).toHaveBeenCalledExactlyOnceWith(command);
+    c.dispose();
+  });
+
+  it("does not open home for an unselected retained Task or a retained task destination", async () => {
+    const f = fixture();
+    const c = new WindowController(f.api);
+    await c.start();
+    f.emit("tasks", { revision: 1, tasks: [task("retained")] });
+    c.navigate({ area: "chatgpt" });
+    expect(c.getSnapshot().destination.taskId).toBe("");
+    c.navigate({ taskId: "retained" });
+    f.emit("tasks", { revision: 2, tasks: [] });
+    c.navigate({ area: "setup" });
+    c.travel(-1);
+    expect(c.getSnapshot().destination.taskId).toBe("retained");
+    expect(f.api.configure).not.toHaveBeenCalled();
+    expect(f.api.task).not.toHaveBeenCalled();
+    c.dispose();
+  });
+
+  it.each(["stale", "incompatible", "applying"] as const)(
+    "does not admit presentation from %s state",
+    async (fence) => {
+      const f = fixture();
+      const c = new WindowController(f.api);
+      await c.start();
+      if (fence === "stale") f.emit("tasks", {});
+      if (fence === "incompatible") {
+        vi.mocked(f.api.bootstrap).mockResolvedValue({});
+        await c.refresh();
+      }
+      if (fence === "applying")
+        f.emit("update", { phase: "applying", version: "1.0" });
+      c.navigate({ area: "chatgpt" });
+      c.travel(-1);
+      c.travel(1);
+      f.emit("action", sectionIntent("browser"));
+      expect(c.getSnapshot().intents[intention]).toBeUndefined();
+      expect(f.api.configure).not.toHaveBeenCalled();
+      c.dispose();
+    },
+  );
+
+  it.each(["applying", "stale", "navigate", "loaded", "task"] as const)(
+    "rechecks the %s fence after the pending latch and before the host effect",
+    async (fence) => {
+      const f = fixture();
+      const c = new WindowController(f.api);
+      await c.start();
+      const digest = deferred<ArrayBuffer>();
+      const binding = vi
+        .spyOn(crypto.subtle, "digest")
+        .mockReturnValue(digest.promise);
+      try {
+        c.navigate({ area: "chatgpt" });
+        if (fence === "applying")
+          f.emit("update", { phase: "applying", version: "1.0" });
+        if (fence === "stale") f.emit("tasks", {});
+        if (fence === "navigate")
+          c.navigate({ area: "setup", setupStep: "folders" });
+        if (fence === "loaded") f.emit("route", { state: "loaded" });
+        if (fence === "task") f.emit("tasks", { revision: 1, tasks: [task()] });
+        digest.resolve(new ArrayBuffer(32));
+        const result = await c.configure(command, intention);
+        expect(result.state).toBe(
+          fence === "loaded" || fence === "task" ? "applied" : "refused",
+        );
+        expect(f.api.configure).not.toHaveBeenCalled();
+      } finally {
+        binding.mockRestore();
+        c.dispose();
+      }
+    },
+  );
+
+  it.each(["pending", "refused", "unknown"] as const)(
+    "does not add presentation to an existing %s Connection Open",
+    async (state) => {
+      const f = fixture();
+      const c = new WindowController(f.api);
+      await c.start();
+      const waiting = deferred<unknown>();
+      vi.mocked(f.api.configure).mockReturnValueOnce(waiting.promise);
+      const original = c.configure(
+        { kind: "chatgpt.open-browser" },
+        "settings:chatgpt.open-browser:",
+      );
+      if (state === "unknown") waiting.reject(new Error("lost reply"));
+      if (state === "refused")
+        waiting.resolve({
+          ok: false,
+          error: "CHATGPT_PAGE_UNREACHABLE",
+          snapshot: bootstrap().configuration,
+        });
+      if (state !== "pending") await original;
+      c.navigate({ area: "chatgpt" });
+      if (state === "pending") {
+        waiting.resolve({ ok: true, snapshot: bootstrap().configuration });
+        await original;
+      }
+      expect(c.getSnapshot().intents[intention]).toBeUndefined();
+      expect(f.api.configure).toHaveBeenCalledExactlyOnceWith({
+        kind: "chatgpt.open-browser",
+      });
+      c.dispose();
+    },
+  );
 });
 
 describe("normal Quit preference command provenance", () => {

@@ -576,6 +576,7 @@ export const ProductConfigurationCommandSchema = z.discriminatedUnion("kind", [
   ProductGeneralSettingsSchema.extend({ kind: z.literal("general.update") }),
   z.strictObject({ kind: z.literal("chatgpt.open-sign-in") }),
   z.strictObject({ kind: z.literal("chatgpt.open-browser") }),
+  z.strictObject({ kind: z.literal("chatgpt.present-browser") }),
   z.strictObject({ kind: z.literal("chatgpt.toggle-sidebar") }),
 
   // Fixed public destinations only; the renderer cannot supply a URL.

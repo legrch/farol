@@ -34,6 +34,7 @@ class Contents {
     this.focused = true;
   }
   on() {}
+  send() {}
   setWindowOpenHandler() {}
   async loadURL() {}
   once(_event: string, listener: () => void) {
@@ -299,6 +300,26 @@ const source = readFileSync(
 );
 const nodes = parse(source, { sourceType: "module", plugins: ["typescript"] })
   .program.body;
+let routeLoadCallback = "";
+function findRouteLoadCallback(node: unknown): void {
+  if (typeof node !== "object" || node === null) return;
+  const value = node as Record<string, unknown>;
+  if (
+    value.type === "ObjectProperty" &&
+    (value.key as { name?: string } | undefined)?.name === "onLoadStateChanged"
+  ) {
+    const callback = value.value as { start: number; end: number };
+    routeLoadCallback = stripTypeScriptTypes(
+      source.slice(callback.start, callback.end),
+    );
+  }
+  for (const child of Object.values(value)) {
+    if (Array.isArray(child)) child.forEach(findRouteLoadCallback);
+    else if (typeof child === "object") findRouteLoadCallback(child);
+  }
+}
+nodes.forEach(findRouteLoadCallback);
+if (!routeLoadCallback) throw Error("MISSING_ROUTE_LOAD_CALLBACK");
 const callbacks = callbackNames
   .map((name) => {
     const node = nodes.find(
@@ -373,6 +394,8 @@ function desktopFixture() {
     windowPresentationReady: true,
     stopStreams: () => f.events.push("stop-streams"),
     SIGN_IN_SURFACE_ID: "sign-in",
+    channels: { browserRouteState: "fixture-route" },
+    embeddedBrowserEnabled: () => true,
     deriveSurfaceLayout,
     ShellLayoutSchema,
     focusForLayoutAfterRendererCommit: () => f.events.push("deferred-focus"),
@@ -388,10 +411,11 @@ function desktopFixture() {
     handleShortcut: () => false,
   };
   const api = vm.runInNewContext(
-    `${callbacks}\n({${callbackNames.join(",")}})`,
+    `${callbacks}\n({${callbackNames.join(",")}, onLoadStateChanged: ${routeLoadCallback}})`,
     context,
   ) as {
     applyLayout(): void;
+    onLoadStateChanged(state: "loading" | "loaded" | "failed"): void;
     applyRendererLayout(value: unknown): void;
     attachTaskViews(): void;
     detachTaskViews(): void;
@@ -418,6 +442,58 @@ function desktopFixture() {
 // Integration of the actual main.ts callbacks with the shared layout function.
 // No Electron module, native process, window, filesystem profile, or provider runs.
 describe("desktop layout attachment integration (source callbacks + fake host)", () => {
+  it.each(["computer", "activity", "settings"])(
+    "retains a late first load while %s conceals it and shows the same view on return",
+    (section) => {
+      const f = desktopFixture();
+      f.taskViews.clear();
+      f.taskViewKinds.clear();
+      f.context.selectedTaskId = "";
+      f.context.productTasksState = () => ({ tasks: [] });
+      const surface = f.api.liveChatGptSurfaceFactory("sign-in")({
+        webPreferences: {},
+      });
+      const view = f.taskViews.get("sign-in")!;
+      f.api.onLoadStateChanged("loading");
+      f.context.section = section;
+      f.context.setupOpen = section === "settings";
+      f.api.applyLayout();
+      f.events.length = 0;
+      f.api.onLoadStateChanged("loaded");
+      surface.reveal();
+      surface.focus();
+      expect(f.context.section).toBe(section);
+      expect(f.host.children).toEqual([]);
+      expect(f.events.filter((event) => event.endsWith(":focus"))).toEqual([]);
+      expect(f.context.browserHomeSurfaceOpen).toBe(true);
+      f.api.applyRendererLayout({
+        section: "browser",
+        taskId: "",
+        setupOpen: false,
+        checkFeedbackVisible: false,
+        sidebar: "full",
+        sidebarWidth: 180,
+        overlay: "none",
+      });
+      expect(f.host.children).toEqual([view]);
+      expect(view.webContents).toBe(surface.webContents);
+      expect(view.visible).toBe(true);
+      expect(view.webContents.destroyed).toBe(false);
+    },
+  );
+  it.each(["loading", "failed"] as const)(
+    "concealed %s clears readiness without destroying or exposing the retained view",
+    (state) => {
+      const f = desktopFixture();
+      f.context.browserHomeSurfaceOpen = true;
+      f.context.section = "settings";
+      f.context.productTasksState = () => ({ tasks: [] });
+      f.api.onLoadStateChanged(state);
+      expect(f.context.browserHomeSurfaceOpen).toBe(false);
+      expect(f.view.webContents.destroyed).toBe(false);
+      expect(f.host.children).toEqual([]);
+    },
+  );
   it.each([
     { section: "activity" },
     { section: "settings" },

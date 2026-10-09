@@ -868,12 +868,17 @@ function ChatBrowser({
   snapshot: WindowSnapshot;
   facade: RendererFacade;
 }) {
-  const intentions = ["chatgpt.open-browser", "chatgpt.open-sign-in"] as const;
+  const intentions = [
+    "chatgpt.present-browser",
+    "chatgpt.open-browser",
+    "chatgpt.open-sign-in",
+  ] as const;
   const relevant = intentions
     .map((kind) => snapshot.intents[`settings:${kind}:`])
     .filter((intent) => intent && intent.state !== "applied");
-  // Load status does not establish absence. Navigation presents the retained
-  // native view; opening and sign-in keep their explicit Connection intentions.
+  // Explicit navigation owns presentation; mounting this placeholder never
+  // opens a browser. Retain pending and uncertain command outcomes separately
+  // from the ambient route status.
   if (snapshot.route === "loaded" && relevant.length === 0) return null;
   const unknown = relevant.some((intent) => intent?.state === "unknown");
   const pending = relevant.some((intent) => intent?.state === "pending");

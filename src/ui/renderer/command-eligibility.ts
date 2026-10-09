@@ -18,12 +18,13 @@ const modelCommands = new Set<Kind>([
 ]);
 const browserCommands = new Set<Kind>([
   "chatgpt.open-browser",
+  "chatgpt.present-browser",
   "chatgpt.toggle-sidebar",
 ]);
 
 // This is presentation admission, never owner authority. Dependency proof:
 // main.ts configureAdmittedProduct's model cases touch the model endpoint or
-// Codex config only; open-browser/toggle-sidebar do not save ProductSettings.
+// Codex config only; browser presentation/toggle do not save ProductSettings.
 // Sign-in/verify DO call markSetupVisited/recordChatGptObservation -> commit,
 // so their uncertain replies stay shared, even though ChatGPT is optional.
 function intentDependency(id: string): Dependency {

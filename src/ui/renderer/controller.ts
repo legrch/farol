@@ -696,6 +696,7 @@ export class WindowController implements RendererFacade {
     payload: unknown,
     run: () => Promise<Intent>,
     setupOperationId?: string,
+    retainSettlement = false,
   ): Promise<Intent> {
     // Only a digest survives an uncertain result; never retain credentials or
     // private command bodies in the intention map.
@@ -764,7 +765,7 @@ export class WindowController implements RendererFacade {
           state: "refused",
           code: "COMMAND_BINDING_UNAVAILABLE",
         };
-        this.commands.delete(key);
+        if (!retainSettlement) this.commands.delete(key);
         this.patch({ intents: { ...this.state.intents, [key]: result } });
         resolve(result);
         return;
@@ -781,7 +782,8 @@ export class WindowController implements RendererFacade {
         ...result,
         code: result.code === null ? null : displayCode(result.code),
       };
-      if (result.state !== "unknown") this.commands.delete(key);
+      if (result.state !== "unknown" && !retainSettlement)
+        this.commands.delete(key);
       this.patch({ intents: { ...this.state.intents, [key]: result } });
       resolve(result);
     })();
@@ -801,11 +803,37 @@ export class WindowController implements RendererFacade {
     // Capture validated values before digest/transport awaits. Caller mutation
     // must not change the original operation or its receipt correlation.
     const command = parsed.data;
+    // Presentation has one window-owned intention across clicks and remounts,
+    // including known refusals. A new label must not release that latch.
+    if (command.kind === "chatgpt.present-browser")
+      intention = "settings:chatgpt.present-browser:";
     return this.dispatch(
       intention,
       command,
       async () => {
         const before = this.state;
+        if (command.kind === "chatgpt.present-browser") {
+          // Recheck after the digest await; navigation or admission may have
+          // changed while the synchronous pending latch was being published.
+          if (
+            before.runtime !== "ready" ||
+            before.update.phase === "applying" ||
+            before.destination.area !== "chatgpt"
+          )
+            return {
+              id: intention,
+              state: "refused",
+              code: "CHATGPT_PRESENTATION_UNAVAILABLE",
+            };
+          if (
+            before.route === "loaded" ||
+            before.tasks.tasks.length > 0 ||
+            before.destination.taskId !== "" ||
+            before.intents["settings:chatgpt.open-browser:"] ||
+            before.intents["settings:chatgpt.open-sign-in:"]
+          )
+            return { id: intention, state: "applied", code: null };
+        }
         if (
           command.kind === "connector.save-and-connect" &&
           command.buildId !== before.buildId
@@ -1190,6 +1218,7 @@ export class WindowController implements RendererFacade {
       command.kind === "connector.save-and-connect"
         ? command.operationId
         : undefined,
+      command.kind === "chatgpt.present-browser",
     );
   }
   private sameEditOwner(
@@ -1561,6 +1590,7 @@ export class WindowController implements RendererFacade {
         });
         this.presentation();
       }
+      this.presentBrowserOnNavigation();
       return;
     }
     if (next.taskId !== this.state.destination.taskId)
@@ -1578,6 +1608,7 @@ export class WindowController implements RendererFacade {
       sidebar: this.state.sidebar === "overlay" ? "rail" : this.state.sidebar,
     });
     this.presentation();
+    this.presentBrowserOnNavigation();
   }
   travel(direction: -1 | 1): void {
     if (this.disposed || this.state.update.phase === "applying") return;
@@ -1597,6 +1628,31 @@ export class WindowController implements RendererFacade {
       sidebar: this.state.sidebar === "overlay" ? "rail" : this.state.sidebar,
     });
     this.presentation();
+    this.presentBrowserOnNavigation();
+  }
+  private presentBrowserOnNavigation(): void {
+    const state = this.state;
+    if (
+      this.disposed ||
+      this.booting ||
+      state.status !== "current" ||
+      state.runtime !== "ready" ||
+      state.update.phase === "applying" ||
+      state.destination.area !== "chatgpt" ||
+      state.route === "loaded" ||
+      state.tasks.tasks.length > 0 ||
+      state.destination.taskId !== "" ||
+      state.intents["settings:chatgpt.present-browser:"] ||
+      state.intents["settings:chatgpt.open-browser:"] ||
+      state.intents["settings:chatgpt.open-sign-in:"]
+    )
+      return;
+    // Loading is not absence: only the host may decide whether open() needs
+    // to create a surface, join an open, or retain the existing document.
+    void this.configure(
+      { kind: "chatgpt.present-browser" },
+      "settings:chatgpt.present-browser:",
+    );
   }
   toggleSidebar(compact: boolean): void {
     if (this.disposed || this.state.update.phase === "applying") return;

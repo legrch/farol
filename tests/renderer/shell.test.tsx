@@ -44,7 +44,7 @@ async function mount(data = bootstrap()) {
     await act(async () => root.unmount());
     c.dispose();
   });
-  return { f, c, host };
+  return { f, c, host, root };
 }
 function button(host: Element, label: string) {
   const found = [...host.querySelectorAll<HTMLButtonElement>("button")].find(
@@ -253,6 +253,7 @@ it.each([
   "hides native browser input during resizing and releases it after %s",
   async (ending) => {
     const { host, c, f } = await mount();
+    await act(async () => f.emit("route", { state: "loaded" }));
     await act(async () => c.navigate({ area: "chatgpt" }));
     const divider = host.querySelector<HTMLElement>('[role="separator"]')!;
     divider.setPointerCapture = vi.fn();
@@ -1175,7 +1176,7 @@ it("Goal17 retained ChatGPT navigation has no shell launcher and preserves draft
 });
 
 it.each(["loading", "failed"] as const)(
-  "Goal17 %s projection is never treated as an absent page on navigation or remount",
+  "Goal18 %s projection asks the host once without an extra launcher click",
   async (route) => {
     const { host, c, f } = await mount();
     await act(async () => f.emit("route", { state: route }));
@@ -1198,10 +1199,120 @@ it.each(["loading", "failed"] as const)(
         page: "connection",
       });
     }
-    expect(f.api.configure).not.toHaveBeenCalled();
+    expect(f.api.configure).toHaveBeenCalledExactlyOnceWith({
+      kind: "chatgpt.present-browser",
+    });
     expect(f.api.task).not.toHaveBeenCalled();
   },
 );
+
+it.each(["applied", "refused", "unknown"] as const)(
+  "Goal18 shows and retains the %s presentation intent across actual remount and late reply",
+  async (outcome) => {
+    const { host, c, f, root } = await mount();
+    expect(f.api.configure).not.toHaveBeenCalled();
+    const waiting = deferred<unknown>();
+    vi.mocked(f.api.configure).mockReturnValueOnce(waiting.promise);
+    c.conversationDraft.capture("retained", "Unsent text", 1, 3);
+    const draft = c.conversationDraft.read("retained");
+    await act(async () => {
+      button(host, "ChatGPT").click();
+      button(host, "ChatGPT").click();
+    });
+    expect(host.querySelector("main [role=status]")?.textContent).toBe(
+      "Opening ChatGPT…",
+    );
+    expect(host.querySelector("main")?.textContent).not.toContain(
+      "Open ChatGPT",
+    );
+    expect(f.api.configure).toHaveBeenCalledExactlyOnceWith({
+      kind: "chatgpt.present-browser",
+    });
+    await act(async () => root.render(null));
+    await act(async () =>
+      root.render(
+        <StrictMode>
+          <Services value={c}>
+            <Shell />
+          </Services>
+        </StrictMode>,
+      ),
+    );
+    expect(host.querySelector("main [role=status]")?.textContent).toBe(
+      "Opening ChatGPT…",
+    );
+    await act(async () => c.navigate({ area: "setup", setupStep: "folders" }));
+    const destination = c.getSnapshot().destination;
+    await act(async () => {
+      if (outcome === "unknown") waiting.reject(new Error("reply lost"));
+      else
+        waiting.resolve({
+          ok: outcome === "applied",
+          ...(outcome === "refused"
+            ? { error: "CHATGPT_PAGE_UNREACHABLE" }
+            : {}),
+          snapshot: bootstrap().configuration,
+        });
+    });
+    expect(c.getSnapshot().destination).toBe(destination);
+    expect(
+      c.getSnapshot().intents["settings:chatgpt.present-browser:"]?.state,
+    ).toBe(outcome);
+    await act(async () => c.refresh());
+    await act(async () => {
+      c.travel(-1);
+      f.emit("route", { state: "loaded" });
+    });
+    if (outcome === "applied")
+      expect(host.querySelector(".native-browser-placeholder")).toBeNull();
+    else
+      expect(host.querySelector("main [role=alert]")?.textContent).toContain(
+        outcome === "unknown"
+          ? "Opening ChatGPT is unconfirmed"
+          : "ChatGPT could not be opened",
+      );
+    await act(async () => c.travel(1));
+    expect(c.getSnapshot().destination).toBe(destination);
+    await act(async () => button(host, "ChatGPT").click());
+    expect(c.conversationDraft.read("retained")).toBe(draft);
+    expect(f.api.configure).toHaveBeenCalledExactlyOnceWith({
+      kind: "chatgpt.present-browser",
+    });
+    expect(f.api.task).not.toHaveBeenCalled();
+  },
+);
+
+it("Goal18 an actual loaded home route is revealed without Open, reload, or automatic mount work", async () => {
+  const { host, c, f, root } = await mount();
+  await act(async () => f.emit("route", { state: "loaded" }));
+  c.conversationDraft.capture("retained", "Unsent text", 2, 5);
+  const draft = c.conversationDraft.read("retained");
+  for (let entry = 0; entry < 2; entry++) {
+    await act(async () => button(host, "ChatGPT").click());
+    expect(host.querySelector(".native-browser-placeholder")).toBeNull();
+    expect(vi.mocked(f.api.layout).mock.calls.at(-1)?.slice(0, 3)).toEqual([
+      "browser",
+      "",
+      false,
+    ]);
+    await act(async () => c.navigate({ area: "setup", setupStep: "folders" }));
+    await act(async () => c.travel(-1));
+    await act(async () => c.travel(1));
+  }
+  await act(async () => root.render(null));
+  await act(async () =>
+    root.render(
+      <StrictMode>
+        <Services value={c}>
+          <Shell />
+        </Services>
+      </StrictMode>,
+    ),
+  );
+  expect(c.conversationDraft.read("retained")).toBe(draft);
+  expect(f.api.configure).not.toHaveBeenCalled();
+  expect(f.api.task).not.toHaveBeenCalled();
+});
 
 it.each(["applied", "refused", "unknown"] as const)(
   "Goal17 a late %s open result cannot steal Setup navigation or trigger another open",
@@ -1709,6 +1820,7 @@ it.each([
   "SUPPORT_EXPORT_CANCELLED",
 ])("does not broadcast %s across unrelated pages", async (code) => {
   const { host, c, f } = await mount();
+  await act(async () => f.emit("route", { state: "loaded" }));
   if (code === "TASK_OPERATION_IN_PROGRESS") {
     vi.mocked(f.api.task).mockResolvedValueOnce({
       ok: false,

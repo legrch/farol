@@ -7568,7 +7568,6 @@ async function configureAdmittedProduct(
       chatGptSignInGeneration += 1;
       chatGptSignInOpenGeneration = chatGptSignInGeneration;
       if (embeddedBrowserEnabled()) {
-        browserHomeSurfaceOpen = false;
         if (!signInSurfaceOpen || section !== "browser" || setupOpen) {
           signInReturnLayout = { section, setupOpen, taskId: selectedTaskId };
         }
@@ -7605,6 +7604,40 @@ async function configureAdmittedProduct(
               },
             }
           : {}),
+      });
+    }
+    case "chatgpt.present-browser": {
+      if (!embeddedBrowserEnabled() || !chatGptRoute)
+        return configurationFailure("CHATGPT_ROUTE_UNAVAILABLE");
+      if (chatGptTaskAdmission || connectorTaskAdmission)
+        return configurationFailure("CHATGPT_TASK_IN_PROGRESS");
+      // Task and sign-in surfaces already have their own retained identities.
+      // Navigation must reveal them, never replace them with the home route.
+      if (
+        chatGptSignInOpenGeneration !== null ||
+        productTasksState().tasks.length
+      )
+        return ProductConfigurationResultSchema.parse({
+          ok: true,
+          snapshot: configuration.snapshot(),
+        });
+      section = "browser";
+      setupOpen = false;
+      applyLayout();
+      publishLayout();
+      let opened: Awaited<ReturnType<ChatGptRoute["open"]>>;
+      try {
+        // open() joins an in-flight open or retains the existing document. It
+        // creates only an absent surface and never discards a failed one.
+        opened = await chatGptRoute.open();
+      } catch {
+        opened = { status: "unreachable" };
+      }
+      if (opened.status !== "opened")
+        return configurationFailure("CHATGPT_PAGE_UNREACHABLE");
+      return ProductConfigurationResultSchema.parse({
+        ok: true,
+        snapshot: configuration.snapshot(),
       });
     }
     case "chatgpt.open-browser": {
@@ -11100,14 +11133,14 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
     },
     onLoadStateChanged: (state) => {
       if (!embeddedBrowserEnabled()) return;
+      // Retained document readiness survives concealment and sign-in. Current
+      // layout alone decides whether its native surface is visible or focused.
+      browserHomeSurfaceOpen = state === "loaded";
       if (
         !signInSurfaceOpen &&
         section === "browser" &&
         productTasksState().tasks.length === 0
       ) {
-        if (state === "loading" || state === "failed")
-          browserHomeSurfaceOpen = false;
-        if (state === "loaded") browserHomeSurfaceOpen = true;
         applyLayout();
       }
       window?.webContents.send(channels.browserRouteState, { state });
