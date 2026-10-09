@@ -4,7 +4,11 @@ import {
   ProductConfigurationService,
   ProductSettingsStore,
 } from "../../src/apps/desktop/product-configuration";
-import type { ProductSettings } from "../../src/pkg/product-settings/contract";
+import {
+  ProductSettingsSchema,
+  type ProductSettings,
+} from "../../src/pkg/product-settings/contract";
+import { taskPolicy } from "../fixtures/task-policy";
 import type { Client } from "../../apps/desktop/bridge/client";
 import type { Json, Outcome } from "../../apps/desktop/bridge/wire";
 
@@ -105,6 +109,179 @@ const intent = {
   turnId: "turn",
   workspaceIds: ["work"],
 };
+
+function selectedTaskSettings(original: ProductSettings): ProductSettings {
+  const settings = structuredClone(original);
+  const now = 1791040000000;
+  const workspace = settings.computer.workspaces[0]!;
+  workspace.gitHistoryApproved = true;
+  workspace.gitMetadata = {
+    gitDirectory: "/synthetic/project/.git/worktrees/work",
+    commonDirectory: "/synthetic/project/.git",
+  };
+  settings.tasks = taskPolicy();
+  const verifiedAt = new Date(now - 60_000).toISOString();
+  const localVerification = {
+    executableSha256: "a".repeat(64),
+    schemaSha256: "b".repeat(64),
+    buildId: "c".repeat(64),
+    verifiedAt,
+  };
+  const host = {
+    executablePath: "/synthetic/codex",
+    executableSha256: "a".repeat(64),
+    baseSchemaSha256: "b".repeat(64),
+  };
+  settings.nativeHosts.codex = {
+    executablePath: host.executablePath,
+    executableSha256: host.executableSha256,
+    version: "1.0.0",
+    protocol: "codex-app-server/v2",
+    schemaSha256: host.baseSchemaSha256,
+    verifiedAt,
+    localVerification,
+    liveVerification: null,
+    agentVerification: null,
+    taskSource: {
+      hostGeneration: settings.nativeHosts.generation,
+      localVerification,
+      evidence: {
+        handoff: {
+          ...host,
+          status: "supported",
+          contract: {
+            version: "1.0.0",
+            protocol: "codex-app-server/v2",
+            schemaSha256: "d".repeat(64),
+            projectBoundCreateStatus: true,
+          },
+        },
+        followup: {
+          ...host,
+          status: "unavailable",
+          code: "CODEX_HOST_FOLLOWUP_UNAVAILABLE",
+        },
+      },
+    },
+  };
+  settings.nativeHosts.taskRoute = {
+    transport: "codex-shared-proxy/v1",
+    harness: "codex",
+    socketPath: "/synthetic/proxy.sock",
+    expectedCodexHome: "/synthetic/home/.codex",
+    workspaceId: workspace.workspaceId,
+    projectId: "00000000-0000-4000-8000-000000000c01",
+    observeThreadId: "00000000-0000-4000-8000-000000000c02",
+    observeTurnId: "turn-exact_1",
+    projectRoot: "/synthetic/project",
+    projectIdentity: { device: "1", inode: "3" },
+    gitCommonDirectory: workspace.gitMetadata.commonDirectory,
+    execution: { sandbox: "read-only", approvalPolicy: "on-request" },
+    computerGeneration: settings.computer.generation,
+    hostGeneration: settings.nativeHosts.generation,
+    approvedAt: verifiedAt,
+    expiresAt: now + 60_000,
+  };
+  settings.setup.computer.reachable = "reachable";
+  settings.setup.computer.outcomeUnknown = false;
+  settings.setup.computer.verified = {
+    profile: "fixture",
+    workspaceId: workspace.workspaceId,
+    configRevision: settings.computer.generation,
+    runtimeGeneration: "fixture",
+    buildId: "e".repeat(64),
+    protocol: "fixture",
+    verifiedAt,
+  };
+  return ProductSettingsSchema.parse(settings);
+}
+
+describe("exact selected Task read metadata in the original Computer publication", () => {
+  it("publishes the exact reference with its source without a Task or provider read", async () => {
+    const f = await fixture();
+    const added = await f.add();
+    if (!added.ok || added.snapshot.status !== "ready") throw Error("fixture");
+    const settings = selectedTaskSettings(added.snapshot.settings);
+    f.request.mockClear();
+    const original = await f.bridge.withdraw();
+    await original.publish(settings);
+    expect(f.request.mock.calls.map(([method]) => method)).toEqual([
+      "computer.authority.deactivate",
+      "computer.authority.publish",
+    ]);
+    expect(f.request.mock.calls[1]![1]).toMatchObject({
+      taskCodexRead: {
+        threadId: "00000000-0000-4000-8000-000000000c02",
+        turnId: "turn-exact_1",
+      },
+      taskCodex: {
+        workspaceId: settings.nativeHosts.taskRoute!.workspaceId,
+        hostGeneration: String(settings.nativeHosts.generation),
+        computerGeneration: String(settings.computer.generation),
+      },
+    });
+  });
+
+  it.each(["thread-only", "unknown", "stale-generation"])(
+    "does not invent an exact read selection from %s settings",
+    async (loss) => {
+      const f = await fixture();
+      const added = await f.add();
+      if (!added.ok || added.snapshot.status !== "ready")
+        throw Error("fixture");
+      const settings = selectedTaskSettings(added.snapshot.settings);
+      if (loss === "thread-only")
+        delete settings.nativeHosts.taskRoute!.observeTurnId;
+      if (loss === "unknown") settings.setup.computer.outcomeUnknown = true;
+      if (loss === "stale-generation")
+        settings.nativeHosts.taskRoute!.hostGeneration += 1;
+      f.request.mockClear();
+      const original = await f.bridge.withdraw();
+      await original.publish(settings);
+      const body = f.request.mock.calls[1]![1];
+      expect(body).not.toHaveProperty("taskCodexRead");
+      if (loss === "thread-only") expect(body).toHaveProperty("taskCodex");
+      if (loss === "stale-generation")
+        expect(body).not.toHaveProperty("taskCodex");
+      expect(f.request.mock.calls.map(([method]) => method)).toEqual([
+        "computer.authority.deactivate",
+        "computer.authority.publish",
+      ]);
+    },
+  );
+
+  it("retains a lost exact publication response without another dispatch or withdrawal", async () => {
+    const f = await fixture();
+    const added = await f.add();
+    if (!added.ok || added.snapshot.status !== "ready") throw Error("fixture");
+    const settings = selectedTaskSettings(added.snapshot.settings);
+    f.request.mockClear();
+    const request = f.request.getMockImplementation()!;
+    f.request.mockImplementation(async (...args) => {
+      if (args[0] === "computer.authority.publish")
+        throw Error("lost original response");
+      return request(...args);
+    });
+    const original = await f.bridge.withdraw();
+    await expect(original.publish(settings)).rejects.toThrow(
+      "lost original response",
+    );
+    await expect(original.publish(settings)).rejects.toMatchObject({
+      code: "computer_publication_consumed",
+    });
+    await expect(f.bridge.withdraw()).rejects.toMatchObject({
+      code: "computer_publication_unavailable",
+    });
+    expect(f.request.mock.calls.map(([method]) => method)).toEqual([
+      "computer.authority.deactivate",
+      "computer.authority.publish",
+    ]);
+    expect(f.request.mock.calls[1]![1]).toHaveProperty(
+      "taskCodexRead.turnId",
+      "turn-exact_1",
+    );
+  });
+});
 
 describe("Go Computer host authority mapping", () => {
   it("lists for Settings under the exact publication without creating a Chat owner", async () => {

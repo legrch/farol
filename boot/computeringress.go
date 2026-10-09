@@ -53,9 +53,10 @@ type ComputerIngress struct {
 	route               *ComputerRoute
 }
 type knownComputerPublication struct {
-	receipt   wire.ComputerAuthorityPublication
-	approval  authority.Approval
-	taskCodex *codexclient.AuthoritySnapshot
+	receipt       wire.ComputerAuthorityPublication
+	approval      authority.Approval
+	taskCodex     *codexclient.AuthoritySnapshot
+	taskCodexRead *wire.TaskCodexReadSelection
 	// Constructor-selected standing consent, valid only while the original
 	// Settings publication/withdrawal and exact host guards remain current.
 	renewable       bool
@@ -139,6 +140,10 @@ func (s *ComputerIngress) Publish(ctx context.Context, operation string, in wire
 	if e != nil {
 		return nil, e
 	}
+	currentTaskRead, e := s.parsePublishedCodexRead(in.TaskCodexRead, currentTask)
+	if e != nil {
+		return nil, e
+	}
 	fence, e := strconv.ParseUint(in.Fence, 10, 64)
 	if e != nil {
 		return nil, e
@@ -186,7 +191,7 @@ func (s *ComputerIngress) Publish(ctx context.Context, operation string, in wire
 		return nil, fmt.Errorf("COMPUTER_PUBLICATION_UNKNOWN")
 	}
 	s.mu.Lock()
-	s.publication = &knownComputerPublication{receipt: receipt, approval: approval.Clone(), taskCodex: currentTask, renewable: in.RenewableOwnerConsent != nil && *in.RenewableOwnerConsent}
+	s.publication = &knownComputerPublication{receipt: receipt, approval: approval.Clone(), taskCodex: currentTask, taskCodexRead: currentTaskRead, renewable: in.RenewableOwnerConsent != nil && *in.RenewableOwnerConsent}
 	s.mu.Unlock()
 	return &receipt, nil
 }

@@ -107,26 +107,38 @@ func (s *ComputerIngress) parsePublishedCodex(in *wire.TaskCodexSource, approval
 // are NOT the Task selection identity. Known identical metadata may be republished
 // without replacing a retained Task client; a withdrawn/unknown owner cannot.
 func (s *ComputerIngress) currentCodexAuthority(ctx context.Context, hostID, scratch string) (codexclient.AuthoritySnapshot, error) {
+	a, _, err := s.currentCodexPublication(ctx, hostID, scratch)
+	return a, err
+}
+
+// currentCodexPublication copies both projections under the same negative fence.
+// No caller retains the publication's selection pointer after the locks release.
+func (s *ComputerIngress) currentCodexPublication(ctx context.Context, hostID, scratch string) (codexclient.AuthoritySnapshot, *wire.TaskCodexReadSelection, error) {
 	if s == nil || ctx == nil || ctx.Err() != nil || !validIngressID(hostID) || !task.Text(scratch, 4096) || strings.TrimSpace(scratch) != scratch || !filepath.IsAbs(scratch) || scratch == string(filepath.Separator) || filepath.Clean(scratch) != scratch {
-		return codexclient.AuthoritySnapshot{}, task.ErrUnavailable
+		return codexclient.AuthoritySnapshot{}, nil, task.ErrUnavailable
 	}
 	s.guard.mu.Lock()
 	defer s.guard.mu.Unlock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.unknown {
-		return codexclient.AuthoritySnapshot{}, task.ErrUnknown
+		return codexclient.AuthoritySnapshot{}, nil, task.ErrUnknown
 	}
 	p := s.publication
 	if s.guard.exhausted || p == nil || p.taskCodex == nil || p.receipt.Fence != strconv.FormatUint(s.guard.revision, 10) || s.guard.revision == 0 {
-		return codexclient.AuthoritySnapshot{}, task.ErrUnavailable
+		return codexclient.AuthoritySnapshot{}, nil, task.ErrUnavailable
 	}
 	a := *p.taskCodex
 	a.Selection.Binding.HostID, a.Selection.ScratchRoot = hostID, scratch
 	if a.Followup != (codexclient.FollowupQualification{}) {
 		a.Followup.Selection = a.Selection
 	}
-	return a, nil
+	var read *wire.TaskCodexReadSelection
+	if p.taskCodexRead != nil {
+		copy := *p.taskCodexRead
+		read = &copy
+	}
+	return a, read, nil
 }
 
 // PublishedCodexTaskSource contains trusted Root-held lifetime inputs, not wire

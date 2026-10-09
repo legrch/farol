@@ -1,5 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { codexTaskCurrentSource } from "./task-current-settings";
+import {
+  codexTaskCurrentSource,
+  codexTaskReadCurrentSource,
+} from "./task-current-settings";
 import { BridgeError, type Client } from "./bridge/client";
 import {
   validate,
@@ -78,7 +81,9 @@ export class GoComputerAuthority {
             this.pending = false;
             return;
           }
-          const taskCodex = codexTaskCurrentSource(settings, now);
+          const taskRead = codexTaskReadCurrentSource(settings, now);
+          const taskCodex =
+            taskRead?.source ?? codexTaskCurrentSource(settings, now);
           const request = {
             fence: receipt.fence,
             expectedStoreRevision: receipt.storeRevision,
@@ -88,6 +93,9 @@ export class GoComputerAuthority {
             // explicit withdrawal; unrelated bounded grants remain finite.
             renewableOwnerConsent: true,
             ...(taskCodex === undefined ? {} : { taskCodex }),
+            ...(taskRead === undefined
+              ? {}
+              : { taskCodexRead: taskRead.reference }),
           };
           if (!validate("ComputerAuthorityPublishRequest", request))
             throw new BridgeError("refused", "invalid_computer_publication");

@@ -958,6 +958,21 @@
         }
       }
     },
+    "TaskCodexReadSelection": {
+      "type": "object",
+      "fields": {
+        "threadId": {
+          "type": "string",
+          "minBytes": 1,
+          "maxBytes": 120
+        },
+        "turnId": {
+          "type": "string",
+          "minBytes": 1,
+          "maxBytes": 120
+        }
+      }
+    },
     "ComputerAuthorityPublishRequest": {
       "type": "object",
       "fields": {
@@ -975,6 +990,10 @@
         },
         "taskCodex": {
           "type": "TaskCodexSource",
+          "optional": true
+        },
+        "taskCodexRead": {
+          "type": "TaskCodexReadSelection",
           "optional": true
         },
         "renewableOwnerConsent": {
