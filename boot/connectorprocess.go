@@ -81,7 +81,7 @@ func (s *computerConnector) startProcess(ctx context.Context, slot *connectorSlo
 	}
 	ledger := s.mutations
 	ledger.mu.Lock()
-	if ledger.frozen || ledger.processDraining || ledger.operations[operation] != nil || len(ledger.operations) >= 4096 {
+	if ledger.frozen || ledger.processDraining || ledger.recoveryReserved || ledger.operations[operation] != nil || len(ledger.operations) >= 4096 {
 		ledger.mu.Unlock()
 		return nil, connectorProcessUnknown()
 	}
@@ -139,7 +139,7 @@ func (s *computerConnector) startProcess(ctx context.Context, slot *connectorSlo
 	record.process.contract, record.process.service, record.process.workspace = contract, service, workspace
 	// A concurrent retirement that saw pending has already permanently refused.
 	// A freeze already visible after selection also prevents entering Start.
-	frozen := ledger.frozen || ledger.processDraining
+	frozen := ledger.frozen || ledger.processDraining || ledger.recoveryReserved
 	ledger.mu.Unlock()
 	if frozen {
 		err = connectorProcessRefusal("PROCESS_UNAVAILABLE")

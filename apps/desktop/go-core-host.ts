@@ -30,6 +30,7 @@ import {
   type ChatReadIntentAccountApprove,
   type ChatReadIntentAccountRevoke,
   type SettingsStorePending,
+  type ComputerConnectorBinding,
 } from "./bridge/wire.ts";
 import { qualifyProfileLaunch } from "./bridge/profile.ts";
 import { openNativeProfileStorage } from "./bridge/profile-storage.ts";
@@ -238,6 +239,7 @@ export class DesktopGoCore {
     launchDigest: string,
     challengeSha256: string,
     lifecycleRoot: string,
+    recoveryFrom?: ComputerConnectorBinding,
   ) {
     if (this.closeResult || !this.connector)
       throw new BridgeError("unavailable", "host_connector_unavailable");
@@ -251,7 +253,14 @@ export class DesktopGoCore {
       launchDigest,
       challengeSha256,
       lifecycleRoot,
+      ...(recoveryFrom ? { recoveryFrom } : {}),
     });
+  }
+  currentComputerConnectorBinding() {
+    return this.connector?.currentBinding;
+  }
+  computerConnectorClosureReceipt() {
+    return this.connector?.closureReceipt;
   }
   closeComputerConnector(): Promise<void> {
     return this.connector?.close() ?? Promise.resolve();

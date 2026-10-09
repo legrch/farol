@@ -49,6 +49,7 @@ type computerConnector struct {
 	processes connectorShellSelection
 	current   *connectorSlot
 	attempts  uint64
+	closed    *connectorRecoveryOrigin // effects-owned, exact successful Close only
 }
 type connectorSlot struct {
 	guard            *connectorHostGuard
@@ -117,6 +118,12 @@ func (s *computerConnector) Open(ctx context.Context, operation string, in wire.
 		return nil, err
 	}
 	defer func() { <-s.effects }()
+	// Consume an automatic attempt before any refusal; another operation ID or
+	// a later ledger observation cannot reopen the same recovery opportunity.
+	origin, recoveryErr := s.consumeRecovery(in)
+	if recoveryErr != nil {
+		return nil, recoveryErr
+	}
 	if ctx == nil || ctx.Err() != nil || s.lifetime.Err() != nil || validateIngress("ComputerConnectorOpen", in) != nil || s.current != nil || s.attempts >= 32 {
 		return nil, computerUnavailable()
 	}
@@ -155,6 +162,12 @@ func (s *computerConnector) Open(ctx context.Context, operation string, in wire.
 		return nil
 	}); err != nil {
 		return nil, err
+	}
+	if origin != nil {
+		if err = s.reserveRecovery(ctx, origin); err != nil {
+			return nil, err
+		}
+		defer s.releaseRecovery(origin)
 	}
 	generation, err := strconv.ParseUint(in.ConnectorGeneration, 10, 64)
 	if err != nil || generation == 0 {
@@ -210,6 +223,17 @@ func (s *computerConnector) Open(ctx context.Context, operation string, in wire.
 		guard.close()
 		return nil, &connectorOpenBeforePublication{cause: err}
 	}
+	if origin != nil {
+		if err = s.checkRecovery(ctx, origin); err != nil {
+			guard.close()
+			return nil, err
+		}
+	}
+	// A manual Open also retires the old recovery opportunity. It still uses
+	// the ordinary retained-observation route, even with an unsettled ledger.
+	if origin == nil {
+		s.closed = nil
+	}
 	s.current = slot // Retain the slot before the first possible publication.
 	if err = slot.owner.Publish(ctx); err != nil {
 		guard.close()
@@ -241,6 +265,12 @@ func (s *computerConnector) Open(ctx context.Context, operation string, in wire.
 			}
 		}
 	}
+	if origin != nil {
+		if err = s.checkRecovery(ctx, origin); err != nil {
+			guard.close()
+			return nil, err
+		}
+	}
 	slot.endpoint, err = s.start(s.lifetime, binding, methods)
 	if err != nil || slot.endpoint == nil {
 		guard.close()
@@ -254,6 +284,12 @@ func (s *computerConnector) Open(ctx context.Context, operation string, in wire.
 	slot.opened = wire.ComputerConnectorOpened{Endpoint: endpoint, AdmissionOperationId: operation,
 		Execution: wire.ComputerConnectorExecution{OwnerId: approval.OwnerID, SessionId: ids[0], TaskId: ids[1], TaskEpoch: "1", ParticipantId: ids[3], TurnId: ids[4], Generation: "1"}}
 	if in.LifecycleRoot != nil {
+		if origin != nil {
+			if err = s.checkRecovery(ctx, origin); err != nil {
+				guard.close()
+				return nil, err
+			}
+		}
 		publisher, ok := slot.endpoint.(connectorLaunchPublisher)
 		if !ok {
 			guard.close()
@@ -285,6 +321,12 @@ func (s *computerConnector) Open(ctx context.Context, operation string, in wire.
 	if _, err = slot.owner.Reconnect(ctx); err != nil {
 		guard.close()
 		return nil, err
+	}
+	if origin != nil {
+		if err = s.checkRecovery(ctx, origin); err != nil {
+			guard.close()
+			return nil, err
+		}
 	}
 	slot.startupUncertain = false
 	s.root.mu.Lock()
@@ -346,10 +388,14 @@ func (s *computerConnector) Close(ctx context.Context, operation string, in wire
 	if err := s.root.claim(operation); err != nil {
 		return nil, err
 	}
+	slot := s.current
 	if err := s.closeSlot(ctx); err != nil {
 		return nil, err
 	}
-	return &wire.ComputerConnectorClosed{Binding: in.Binding, Closed: true}, nil
+	s.closed = &connectorRecoveryOrigin{binding: in.Binding, publication: slot.guard.publication,
+		owner: s.root.ownerID, computer: s.root.computerID, ledger: s.mutations}
+	disposition := s.recoveryDisposition(ctx, s.closed, false)
+	return &wire.ComputerConnectorClosed{Binding: in.Binding, Closed: true, Recovery: &disposition}, nil
 }
 func (s *computerConnector) Shutdown() error {
 	if s == nil {

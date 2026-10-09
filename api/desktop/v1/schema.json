@@ -4212,6 +4212,10 @@
     "ComputerConnectorOpen": {
       "type": "object",
       "fields": {
+        "recoveryFrom": {
+          "type": "ComputerConnectorBinding",
+          "optional": true
+        },
         "publication": {
           "type": "ComputerAuthorityPublication"
         },
@@ -4296,6 +4300,17 @@
     "ComputerConnectorClosed": {
       "type": "object",
       "fields": {
+        "recovery": {
+          "type": "text",
+          "values": [
+            "settled",
+            "pending_operation",
+            "operation_unknown",
+            "authority_unknown",
+            "unavailable"
+          ],
+          "optional": true
+        },
         "binding": {
           "type": "ComputerConnectorBinding"
         },

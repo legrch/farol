@@ -30,6 +30,9 @@ type SettingsMutationIngress struct {
 	frozen          bool
 	processDraining bool
 	retirementErr   error
+	// Temporary admission exclusion for the existing connector's recovery Open.
+	// Unlike retirement this never freezes the ledger or discards its records.
+	recoveryReserved bool
 }
 type settingsMutationOperation struct {
 	workspace, path string
@@ -62,6 +65,14 @@ func (s *SettingsMutationIngress) edit(ctx context.Context, operation string, in
 	if s == nil || ctx == nil || ctx.Err() != nil || !validIngressID(operation) || validateIngress("ComputerSettingsEditRequest", in) != nil || len(in.Edits) < 1 || len(in.Edits) > 256 {
 		return nil, mutationInvalid()
 	}
+	// Refuse before renewal can wait on root.effects held by recovery Open.
+	// Recheck atomically with inserting the operation below.
+	s.mu.Lock()
+	reserved := s.recoveryReserved
+	s.mu.Unlock()
+	if reserved {
+		return nil, errors.New("settings_mutation_attempt_consumed")
+	}
 	if err := s.computer.refreshCurrentApproval(ctx); err != nil {
 		return nil, err
 	}
@@ -74,7 +85,7 @@ func (s *SettingsMutationIngress) edit(ctx context.Context, operation string, in
 		return nil, mutationInvalid()
 	}
 	s.mu.Lock()
-	if s.frozen || s.operations[operation] != nil || len(s.operations) >= 4096 {
+	if s.frozen || s.recoveryReserved || s.operations[operation] != nil || len(s.operations) >= 4096 {
 		s.mu.Unlock()
 		return nil, errors.New("settings_mutation_attempt_consumed")
 	}

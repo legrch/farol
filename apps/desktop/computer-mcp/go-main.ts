@@ -59,6 +59,7 @@ export async function runGoComputerMcp(file: string): Promise<void> {
     launch.opened,
     launch.challengeSha256,
   );
+  let effectOutcomeUnknown = false;
   const handle = serveStdio(
     () =>
       createGoComputerMcpServer(
@@ -69,6 +70,9 @@ export async function runGoComputerMcp(file: string): Promise<void> {
           lifecycle,
           fence,
           verification,
+          onEffectUnknown: () => {
+            effectOutcomeUnknown = true;
+          },
           ...(connectionStatusAvailable
             ? { connectionStatus: verification }
             : {}),
@@ -100,6 +104,15 @@ export async function runGoComputerMcp(file: string): Promise<void> {
         transportFailed = true;
       if (results.some((result) => result.status !== "fulfilled"))
         throw new Error("COMPUTER_MCP_GO_DRAIN_UNCONFIRMED");
+      // Handler drain and backend result retention cannot exclude a caller's
+      // lost reply or earlier UNKNOWN. Keep the original active marker intact.
+      // Missing observation from this selected adapter also fails closed.
+      if (
+        client.hasUnresolvedEffect !== false ||
+        effectOutcomeUnknown ||
+        client.terminal?.submittedEffectCount !== 0
+      )
+        throw new Error("COMPUTER_MCP_GO_EFFECT_UNRESOLVED");
       // This settles this adapter, not native Go handlers. The desktop then
       // closes its exact Go owner before confirming the overall connector drain.
       await lease.release();

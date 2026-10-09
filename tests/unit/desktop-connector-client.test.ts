@@ -455,6 +455,7 @@ it.each(effectMethods)(
   "sends and correlates the outer operation ID on every %s outcome",
   async (method) => {
     const f = await ready();
+    let unknownSeen = false;
     for (const status of [
       "ok",
       "refused",
@@ -475,6 +476,8 @@ it.each(effectMethods)(
       const ack = effectResponse(id, operationId, status);
       f.socket.receive(ack);
       await expect(pending).resolves.toEqual(ack.result);
+      unknownSeen ||= status === "unknown";
+      expect(f.client.hasUnresolvedEffect).toBe(unknownSeen);
       const count = f.socket.writes.length;
       await expect(
         f.client.request(method, body, { id: `new-${id}`, operationId }),
@@ -483,6 +486,95 @@ it.each(effectMethods)(
     }
   },
 );
+
+it.each(["ok", "refused", "unknown", "unavailable", "unsupported"] as const)(
+  "observes only an unresolved original effect for returned %s",
+  async (status) => {
+    const f = await ready();
+    const pending = f.client.request(
+      effectMethods[0]!,
+      {},
+      {
+        id: "effect",
+        operationId: "original",
+      },
+    );
+    f.socket.receive(effectResponse("effect", "original", status));
+    await pending;
+    expect(f.client.hasUnresolvedEffect).toBe(status === "unknown");
+    await f.client.close();
+    expect(f.client.terminal?.submittedEffectCount).toBe(0);
+    expect(f.client.hasUnresolvedEffect).toBe(status === "unknown");
+    expect(f.socket.writes).toHaveLength(3);
+  },
+);
+
+it("keeps backend outcome_unknown sticky after pending removal and later known result bytes", async () => {
+  const f = await ready();
+  const pending = f.client.request(
+    effectMethods[0]!,
+    {},
+    {
+      id: "effect",
+      operationId: "original",
+    },
+  );
+  f.socket.receive({
+    ...effectResponse("effect", "original"),
+    result: {
+      ...effectResponse("effect", "original").result,
+      data: { phase: "outcome_unknown" },
+    },
+  });
+  await pending;
+  expect(f.client.hasUnresolvedEffect).toBe(true);
+  const read = f.client.request(
+    "computer.workspace.mutation.read",
+    {},
+    { id: "known-read" },
+  );
+  f.socket.receive(response("known-read", { phase: "completed" }));
+  await read;
+  // Read-only reconciliation cannot clear the original caller's UNKNOWN.
+  expect(f.client.hasUnresolvedEffect).toBe(true);
+  await f.client.close();
+  expect(f.client.terminal).toMatchObject({
+    submittedPendingCount: 0,
+    submittedEffectCount: 0,
+  });
+  expect(f.client.hasUnresolvedEffect).toBe(true);
+  expect(f.socket.writes).toHaveLength(4);
+});
+
+it("does not turn a read-only UNKNOWN or unsent effect into an unresolved submitted effect", async () => {
+  const f = await ready();
+  const read = f.client.request(methods[0]!, {}, { id: "read" });
+  f.socket.receive({
+    ...response("read"),
+    result: {
+      status: "unknown",
+      requestId: "read",
+      context,
+      code: "READ_UNKNOWN",
+    },
+  });
+  await read;
+  f.socket.writableLength = maxFrameBytes + 4;
+  await expect(
+    f.client.request(
+      effectMethods[0]!,
+      {},
+      {
+        id: "unsent",
+        operationId: "original",
+      },
+    ),
+  ).rejects.toBeInstanceOf(RequestNotSentError);
+  await f.client.close();
+  expect(f.client.hasUnresolvedEffect).toBe(false);
+  expect(f.client.terminal?.submittedEffectCount).toBe(0);
+  expect(f.socket.writes).toHaveLength(3);
+});
 
 it("never resubmits a pending operation under another request ID or effect method", async () => {
   const f = await ready();
@@ -581,6 +673,11 @@ it.each([
   );
   await rejectedA;
   await rejectedB;
+  expect(f.client.hasUnresolvedEffect).toBe(true);
+  expect(f.client.terminal).toMatchObject({
+    submittedPendingCount: 2,
+    submittedEffectCount: 2,
+  });
   expect(f.socket.destroyed).toBe(true);
   await expect(f.client.connect()).rejects.toMatchObject(
     error("refused", "connector_already_used"),
@@ -661,7 +758,14 @@ it.each(["error", "end", "close", "write-throw", "timeout", "client-close"])(
     else if (event === "client-close") await f.client.close();
     else if (event !== "write-throw") f.socket.emit(event);
     await rejected;
+    expect(f.client.hasUnresolvedEffect).toBe(true);
+    expect(f.client.terminal).toMatchObject({
+      submittedPendingCount: 1,
+      submittedEffectCount: 1,
+    });
     f.socket.receive(effectResponse("write", "op")); // A late ACK cannot recover the stream.
+    await f.client.close();
+    expect(f.client.hasUnresolvedEffect).toBe(true);
     await expect(
       f.client.request(
         effectMethods[1]!,
@@ -1084,6 +1188,7 @@ it("observes idle EOF once, retaining the same frozen content-free record for la
   const observed = vi.fn();
   const off = f.client.onTerminal(observed);
   expect(f.client.terminal).toBeUndefined();
+  expect(f.client.hasUnresolvedEffect).toBe(false);
   f.socket.emit("end");
   const first = f.client.terminal;
   expect(first).toEqual({
@@ -1109,6 +1214,7 @@ it("observes idle EOF once, retaining the same frozen content-free record for la
   expect(late).toHaveBeenCalledExactlyOnceWith(first);
   expect(late.mock.calls[0]![0]).toBe(first);
   expect(f.client.terminal).toBe(first);
+  expect(f.client.hasUnresolvedEffect).toBe(false);
   expect(destroy).toHaveBeenCalledTimes(1);
   await expect(f.client.request(methods[0]!, {})).rejects.toMatchObject(
     error("unavailable", "connector_unavailable"),
@@ -1124,7 +1230,10 @@ it.each(["end", "error", "close"])(
   async (event) => {
     const f = await ready();
     const observed = vi.fn();
-    f.client.onTerminal(observed);
+    f.client.onTerminal((terminal) => {
+      expect(f.client.hasUnresolvedEffect).toBe(true);
+      observed(terminal);
+    });
     const read = f.client.request(
       methods[0]!,
       { private: "read body" },

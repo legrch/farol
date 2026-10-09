@@ -14,6 +14,12 @@ import {
 type ConnectorHostMethod =
   "computer.connector.open" | "computer.connector.close";
 
+export type ConnectorClosureReceipt = Readonly<{
+  requestId: string;
+  operationId: string;
+  result: Readonly<ComputerConnectorClosed>;
+}>;
+
 // Identity of the original attempt, never permission to replay. "known" means
 // only the exact Go refusal before publication; transport refusals stay unknown.
 export class ConnectorHostError extends BridgeError {
@@ -82,6 +88,8 @@ export class ConnectorHostBridge {
   private blocked = false;
   private refusedBeforePublication = false;
   private proof: ConnectorVerificationBridge | undefined;
+  private closure: ConnectorClosureReceipt | undefined;
+  private closureConsumed = false;
   constructor(
     private readonly client: Pick<Client, "request">,
     private readonly context: Context,
@@ -101,10 +109,27 @@ export class ConnectorHostBridge {
       throw new BridgeError("unavailable", "connector_host_unavailable");
     if (!validate("ComputerConnectorOpen", input))
       throw new BridgeError("refused", "invalid_connector_open");
+    if (
+      input.recoveryFrom &&
+      (this.closureConsumed ||
+        this.closure?.result.recovery !== "settled" ||
+        Object.entries(this.closure.result.binding).some(
+          ([key, value]) =>
+            input.recoveryFrom![key as keyof typeof input.recoveryFrom] !==
+            value,
+        ))
+    )
+      throw new BridgeError("refused", "connector_recovery_unavailable");
     const body = Object.freeze({
       ...input,
       publication: Object.freeze({ ...input.publication }),
+      ...(input.recoveryFrom
+        ? { recoveryFrom: Object.freeze({ ...input.recoveryFrom }) }
+        : {}),
     });
+    // Keep the original acknowledgement observable, but never reuse it for
+    // another admission after an Open attempt, including a lost reply.
+    if (this.closure) this.closureConsumed = true;
     this.pending = true;
     const id = randomUUID();
     const operationId = randomUUID();
@@ -200,6 +225,12 @@ export class ConnectorHostBridge {
       );
     return result;
   }
+  get currentBinding() {
+    return this.current?.endpoint.binding;
+  }
+  get closureReceipt(): ConnectorClosureReceipt | undefined {
+    return this.closure;
+  }
   close(): Promise<void> {
     // Join the original request, including its exact failure, before checking
     // pending: an in-flight open still has no close promise and remains fenced.
@@ -246,6 +277,15 @@ export class ConnectorHostBridge {
         throw new BridgeError("unknown", "connector_close_crossed");
       this.current = undefined;
       this.proof = undefined;
+      this.closure = Object.freeze({
+        requestId: id,
+        operationId,
+        result: Object.freeze({
+          ...closed,
+          binding: Object.freeze({ ...closed.binding }),
+        }),
+      });
+      this.closureConsumed = false;
     } catch (error) {
       this.blocked = true;
       throw failure(error, "computer.connector.close", id, operationId);

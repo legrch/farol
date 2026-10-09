@@ -119,6 +119,7 @@ export class SocketConnectorClient {
   private identity: Readonly<Identity> | undefined;
   private writerBusy = false;
   #terminal: ConnectorTerminal | undefined;
+  #hasUnresolvedEffect = false;
   #terminalObservers = new Set<(terminal: ConnectorTerminal) => void>();
 
   constructor(
@@ -187,6 +188,12 @@ export class SocketConnectorClient {
 
   get terminal(): ConnectorTerminal | undefined {
     return this.#terminal;
+  }
+
+  // Sticky for this original stream's lifetime. Later results and cleanup cannot
+  // prove what its caller observed; retain no operation IDs or effect content.
+  get hasUnresolvedEffect(): boolean {
+    return this.#hasUnresolvedEffect;
   }
 
   // One content-free observation of this exact stream, including late callers.
@@ -498,6 +505,17 @@ export class SocketConnectorClient {
         this.connection = undefined;
       }
     }
+    if (
+      pending.submitted &&
+      pending.operationId !== undefined &&
+      (result.status === "unknown" ||
+        (result.data !== null &&
+          typeof result.data === "object" &&
+          !Array.isArray(result.data) &&
+          "phase" in result.data &&
+          result.data.phase === "outcome_unknown"))
+    )
+      this.#hasUnresolvedEffect = true;
     clearTimeout(pending.timer);
     this.pending.delete(response.id!);
     pending.resolve(result);
@@ -506,12 +524,15 @@ export class SocketConnectorClient {
   private fail(code: string, connectionState?: "refused"): void {
     if (this.phase === "stopped") return;
     const submitted = [...this.pending.values()].filter((p) => p.submitted);
+    const submittedEffectCount = submitted.filter(
+      (p) => p.operationId !== undefined,
+    ).length;
+    if (submittedEffectCount > 0) this.#hasUnresolvedEffect = true;
     const terminal: ConnectorTerminal = Object.freeze({
       reason: terminalReason(code),
       phase: this.phase,
       submittedPendingCount: submitted.length,
-      submittedEffectCount: submitted.filter((p) => p.operationId !== undefined)
-        .length,
+      submittedEffectCount,
       binding: this.#endpoint.binding,
     });
     this.#terminal = terminal;

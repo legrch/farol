@@ -10,7 +10,9 @@ import type {
   ChatComputerAdmissionResponse,
   SettingsDeliveryResult,
   ComputerConnectorVerificationReceipt,
+  ComputerConnectorBinding,
 } from "../../../apps/desktop/bridge/wire";
+import { ConnectorTransportWatch } from "../../../apps/desktop/connector-transport-watch";
 import { createDesktopChatBrowser } from "../../../apps/desktop/go-chat-host";
 import { GoChatBrowserDriver } from "../../../apps/desktop/go-chat-browser";
 import {
@@ -68,6 +70,7 @@ import {
   ipcMain,
   Menu,
   nativeImage,
+  powerMonitor,
   screen,
   session,
   shell,
@@ -774,6 +777,9 @@ let secureMcpConnectorRuntime: SecureMcpConnectorRuntime | null = null;
 let modelLifecycle: FarolModelLifecycle | null = null;
 let connectorTaskAdmission = false;
 let connectorStartInFlight: Promise<void> | null = null;
+let connectorTransportWatch: ConnectorTransportWatch<ConnectorTransportCapture> | null =
+  null;
+let connectorTransportTimer: NodeJS.Timeout | null = null;
 // F3-1b: one authority transition at a time. A command that changes Computer
 // authority holds it through its commit; a connector start and an Agent
 // admission hold it from reading the settings until they run, so neither can
@@ -3529,6 +3535,7 @@ function computerMcpLifecycle(): PrivateMcpLifecycle {
 async function stopAndConfirmComputerMcp(
   connector = secureMcpConnectorRuntime,
   inFlightStart: Promise<void> | null = null,
+  core = desktopGoCore,
 ): Promise<void> {
   if (!connector) throw new Error("CONNECTOR_STOP_UNCONFIRMED");
   const lifecycle = computerMcpLifecycle();
@@ -3549,7 +3556,7 @@ async function stopAndConfirmComputerMcp(
       } finally {
         // Withdraw the original Go owner even when the old adapter drain fails.
         // A failure remains unconfirmed; it cannot authorize a new launch.
-        await desktopGoCore?.closeComputerConnector();
+        await core?.closeComputerConnector();
       }
     },
     confirmStop: () => lifecycle.confirmStop(),
@@ -4161,6 +4168,297 @@ function connectorAttemptGeneration(
     .digest("hex");
 }
 
+type ConnectorTransportCapture = Readonly<{
+  key: string;
+  owner: ProductConfigurationService;
+  connector: SecureMcpConnectorRuntime;
+  core: DesktopGoCore;
+  binding: Readonly<ComputerConnectorBinding>;
+  revision: number;
+  computerGeneration: number;
+  connectorGeneration: number;
+  runtimeGeneration: string;
+}>;
+
+function captureConnectorTransport(): ConnectorTransportCapture | null {
+  const owner = configuration;
+  const connector = secureMcpConnectorRuntime;
+  const core = desktopGoCore;
+  const snapshot = owner?.snapshot();
+  const binding = core?.currentComputerConnectorBinding();
+  if (!owner || !connector || !core || !binding || snapshot?.status !== "ready")
+    return null;
+  const settings = snapshot.settings;
+  const selected = settings.connectors.secureMcp;
+  const runtime = selected.runtime;
+  if (
+    quitInProgress ||
+    installedUpdateAdmission ||
+    connectorTaskAdmission ||
+    connectorStartInFlight ||
+    configurationRequests ||
+    authorityTransitions.current() ||
+    codexAgentOperationActive() ||
+    connector.hasUnresolvedEffect() ||
+    settings.computer.pendingEdit ||
+    settings.setup.computer.outcomeUnknown ||
+    settings.setup.connect.outcomeUnknown ||
+    selected.credential !== "stored" ||
+    !runtime ||
+    runtime.state === "outcome_unknown" ||
+    runtime.buildId !== buildIdentity.buildId ||
+    binding.buildId !== buildIdentity.buildId ||
+    runtime.computerGeneration !== settings.computer.generation ||
+    runtime.connectorGeneration !== selected.generation ||
+    binding.connectorGeneration !== String(selected.generation) ||
+    !computerConnectorAdmission(summaryFenceRecovery).admissible
+  )
+    return null;
+  return Object.freeze({
+    key: [
+      binding.profileId,
+      binding.backendGeneration,
+      binding.runtimeId,
+      runtime.runtimeGeneration,
+    ].join("/"),
+    owner,
+    connector,
+    core,
+    binding,
+    revision: settings.revision,
+    computerGeneration: settings.computer.generation,
+    connectorGeneration: selected.generation,
+    runtimeGeneration: runtime.runtimeGeneration,
+  });
+}
+
+function connectorTransportCurrent(
+  original: ConnectorTransportCapture,
+  revision = original.revision,
+  stopped = false,
+  admitted = false,
+): boolean {
+  const snapshot = original.owner.snapshot();
+  if (
+    configuration !== original.owner ||
+    secureMcpConnectorRuntime !== original.connector ||
+    desktopGoCore !== original.core ||
+    snapshot.status !== "ready" ||
+    quitInProgress ||
+    installedUpdateAdmission ||
+    configurationRequests ||
+    codexAgentOperationActive() ||
+    original.connector.hasUnresolvedEffect() ||
+    snapshot.settings.revision !== revision ||
+    snapshot.settings.computer.generation !== original.computerGeneration ||
+    snapshot.settings.connectors.secureMcp.generation !==
+      original.connectorGeneration ||
+    snapshot.settings.computer.pendingEdit ||
+    snapshot.settings.setup.computer.outcomeUnknown ||
+    snapshot.settings.setup.connect.outcomeUnknown ||
+    snapshot.settings.connectors.secureMcp.credential !== "stored" ||
+    !computerConnectorAdmission(summaryFenceRecovery).admissible ||
+    (admitted
+      ? !connectorTaskAdmission ||
+        authorityTransitions.current() !== "connector-start"
+      : connectorTaskAdmission ||
+        connectorStartInFlight !== null ||
+        authorityTransitions.current() !== null)
+  )
+    return false;
+  const runtime = snapshot.settings.connectors.secureMcp.runtime;
+  return stopped
+    ? runtime === null &&
+        original.core.currentComputerConnectorBinding() === undefined
+    : runtime !== null &&
+        runtime.state !== "outcome_unknown" &&
+        runtime.runtimeGeneration === original.runtimeGeneration &&
+        runtime.buildId === buildIdentity.buildId &&
+        original.core.currentComputerConnectorBinding() === original.binding;
+}
+
+async function recoverConnectorTransport(
+  original: ConnectorTransportCapture,
+  observationCurrent: () => boolean,
+): Promise<ProductConfigurationResult> {
+  if (!observationCurrent() || !connectorTransportCurrent(original))
+    return transitionRefusal();
+  const transition = authorityTransitions.tryReserve("connector-start");
+  if (!transition) return transitionRefusal();
+  connectorTaskAdmission = true;
+  try {
+    return await observeConnectorStart(async () => {
+      let revision = original.revision;
+      let stopped = false;
+      const current = () =>
+        observationCurrent() &&
+        connectorTransportCurrent(original, revision, stopped, true);
+      if (!current()) return transitionRefusal();
+      try {
+        if (await computerMcpLifecycle().hasUnconfirmedStop())
+          return configurationFailure("CONNECTOR_STOP_UNCONFIRMED");
+        if (!current()) return transitionRefusal();
+        // All original MCP leases, tunnel group and this exact Go slot must
+        // acknowledge closure. A missing/no-op Close is not recovery evidence.
+        await stopAndConfirmComputerMcp(
+          original.connector,
+          null,
+          original.core,
+        );
+      } catch {
+        return configurationFailure("CONNECTOR_STOP_UNCONFIRMED");
+      }
+      const closure = original.core.computerConnectorClosureReceipt();
+      if (
+        !closure ||
+        Object.entries(original.binding).some(
+          ([key, value]) =>
+            closure.result.binding[key as keyof ComputerConnectorBinding] !==
+            value,
+        )
+      )
+        return configurationFailure("CONNECTOR_STOP_UNCONFIRMED");
+      // Close cleared the exact slot. Recheck the unchanged Settings owner
+      // before its stopped publication, then advance only from that original ACK.
+      const snapshot = original.owner.snapshot();
+      if (
+        configuration !== original.owner ||
+        secureMcpConnectorRuntime !== original.connector ||
+        desktopGoCore !== original.core ||
+        quitInProgress ||
+        installedUpdateAdmission ||
+        snapshot.status !== "ready" ||
+        snapshot.settings.revision !== revision ||
+        snapshot.settings.computer.generation !== original.computerGeneration ||
+        snapshot.settings.connectors.secureMcp.generation !==
+          original.connectorGeneration
+      )
+        return transitionRefusal();
+      const result = ProductConfigurationResultSchema.parse(
+        await original.owner.recordSecureMcpStopped(
+          undefined,
+          "stop",
+          revision,
+        ),
+      );
+      if (!result.ok) return result;
+      if (result.snapshot.status !== "ready")
+        return configurationFailure("SETTINGS_WRITE_FAILED");
+      revision = result.snapshot.settings.revision;
+      stopped = true;
+      if (!current()) return transitionRefusal();
+      if (closure.result.recovery !== "settled")
+        return configurationFailure(
+          closure.result.recovery === "pending_operation"
+            ? "CONNECTOR_RECOVERY_PENDING_OPERATION"
+            : closure.result.recovery === "operation_unknown"
+              ? "CONNECTOR_RUNTIME_OUTCOME_UNKNOWN"
+              : closure.result.recovery === "authority_unknown"
+                ? "CONNECTOR_RECOVERY_AUTHORITY_UNAVAILABLE"
+                : "CONNECTOR_RECOVERY_UNAVAILABLE",
+        );
+      // The existing owner handles executable/credential rechecks, Go admission,
+      // new challenge and original result. No Verify or provider prompt is sent.
+      return startAdmittedSecureMcpConnector(
+        false,
+        false,
+        original.binding,
+        observationCurrent,
+      );
+    });
+  } finally {
+    connectorTaskAdmission = false;
+    transition.release();
+  }
+}
+
+function startConnectorTransportWatch(): void {
+  if (connectorTransportWatch || quitInProgress) return;
+  connectorTransportWatch = new ConnectorTransportWatch({
+    capture: captureConnectorTransport,
+    current: connectorTransportCurrent,
+    observe: async (original) => {
+      const healthy = await original.connector.checkHealth();
+      const terminal = original.connector.getTunnelObservation();
+      if (terminal && terminal.runtimeGeneration !== original.runtimeGeneration)
+        return "unknown";
+      return terminal?.state === "outcome_unknown"
+        ? "unknown"
+        : terminal?.state === "exited"
+          ? "exited"
+          : healthy
+            ? "healthy"
+            : "unreachable";
+    },
+    unknown: async (original) => {
+      if (!connectorTransportCurrent(original)) return;
+      const transition = authorityTransitions.tryReserve("connector-start");
+      if (!transition) return;
+      connectorTaskAdmission = true;
+      try {
+        if (
+          !connectorTransportCurrent(original, original.revision, false, true)
+        )
+          return;
+        await recordConnectorRuntime(
+          "outcome_unknown",
+          original.runtimeGeneration,
+          original.computerGeneration,
+        );
+      } finally {
+        connectorTaskAdmission = false;
+        transition.release();
+      }
+    },
+    recover: async (original, observationCurrent) => {
+      const result = await recoverConnectorTransport(
+        original,
+        observationCurrent,
+      );
+      reportConnectorTransport(
+        original,
+        result.ok ? "recovered_attachment_check_needed" : result.error,
+      );
+      if (!quitInProgress && window && !window.isDestroyed())
+        window.webContents.send(channels.configurationChanged);
+    },
+    wait: (milliseconds) =>
+      new Promise((resolve) => setTimeout(resolve, milliseconds)),
+  });
+  const check = () => {
+    void connectorTransportWatch?.check().catch(() => {
+      console.warn("FAROL_CONNECTOR_TRANSPORT_OBSERVATION_FAILED");
+    });
+  };
+  connectorTransportTimer = setInterval(check, 30_000);
+  connectorTransportTimer.unref();
+  powerMonitor.on("suspend", () => connectorTransportWatch?.invalidate());
+  powerMonitor.on("resume", check);
+}
+
+function reportConnectorTransport(
+  original: ConnectorTransportCapture,
+  code: string,
+): void {
+  // Caller supplies only a fixed classification; no endpoint, key, request body
+  // or exception text enters this content-free lifecycle diagnostic.
+  console.warn(
+    "FAROL_CONNECTOR_TRANSPORT:" +
+      JSON.stringify({
+        at: new Date().toISOString(),
+        code,
+        profileId: original.binding.profileId,
+        backendGeneration: original.binding.backendGeneration,
+        runtimeId: original.binding.runtimeId,
+        recoveryDisposition:
+          original.core.computerConnectorClosureReceipt()?.result.recovery,
+        computerGeneration: original.computerGeneration,
+        connectorGeneration: original.connectorGeneration,
+        buildId: original.binding.buildId,
+      }),
+  );
+}
+
 async function recordConnectorRuntime(
   state: "ready" | "unreachable" | "outcome_unknown",
   runtimeGeneration: string,
@@ -4216,7 +4514,14 @@ async function observeConnectorStart(
 async function startAdmittedSecureMcpConnector(
   repair: boolean,
   resumeAfterQuit = false,
+  recoveryFrom?: ComputerConnectorBinding,
+  recoveryCurrent?: () => boolean,
 ): Promise<ProductConfigurationResult> {
+  // This only invalidates a recovery observation. The existing admitted owner
+  // and Go authority still decide every launch; a missing guard refuses recovery.
+  const recoveryPermitted = () =>
+    recoveryFrom === undefined || recoveryCurrent?.() === true;
+  if (!recoveryPermitted()) return transitionRefusal();
   if (!connectorTaskAdmission || !authorityTransitions.current())
     return transitionRefusal();
   if (quitInProgress || installedUpdateAdmission)
@@ -4301,6 +4606,7 @@ async function startAdmittedSecureMcpConnector(
     return configurationFailure(refusal);
   }
   let credentialReference: string;
+  if (!recoveryPermitted()) return transitionRefusal();
   try {
     credentialReference = await connectorCredentialStore.reference();
   } catch (error) {
@@ -4312,6 +4618,7 @@ async function startAdmittedSecureMcpConnector(
     return configurationFailure("CONNECTOR_CREDENTIAL_STORE_FAILED");
   }
 
+  if (!recoveryPermitted()) return transitionRefusal();
   const runtimeId = randomUUID();
   const verificationChallenge = randomUUID();
   const verificationChallengeSha256 = createHash("sha256")
@@ -4321,6 +4628,7 @@ async function startAdmittedSecureMcpConnector(
   let launchContractSha256: string;
   try {
     await clearConnectorVerificationReceipt(secureMcpLaunchRoot());
+    if (!recoveryPermitted()) return transitionRefusal();
     const intentDigest = createHash("sha256")
       .update(
         JSON.stringify({
@@ -4337,6 +4645,7 @@ async function startAdmittedSecureMcpConnector(
       intentDigest,
       verificationChallengeSha256,
       secureMcpLaunchRoot(),
+      recoveryFrom,
     );
     if (!opened.launchFile || !opened.launchSha256)
       throw new Error("COMPUTER_MCP_GO_LAUNCH_UNAVAILABLE");
@@ -4344,7 +4653,7 @@ async function startAdmittedSecureMcpConnector(
     launchContractSha256 = opened.launchSha256;
     // An earlier Quit/update may have stopped admission while the contract
     // was being written. Do not clear its stop marker with a later prepare.
-    if (quitInProgress || installedUpdateAdmission)
+    if (quitInProgress || installedUpdateAdmission || !recoveryPermitted())
       return configurationFailure("CONNECTOR_START_FAILED");
     await computerMcpLifecycle().prepare(launchContractSha256);
   } catch (error) {
@@ -4406,6 +4715,7 @@ async function startAdmittedSecureMcpConnector(
       launchContractSha256,
       phase,
     });
+  if (!recoveryPermitted()) return transitionRefusal();
   try {
     await secureMcpConnectorRuntime.configure({
       executablePath: connector.tunnelClient.executablePath,
@@ -4431,6 +4741,7 @@ async function startAdmittedSecureMcpConnector(
         : "CONNECTOR_CONFIGURE_FAILED",
     );
   }
+  if (!recoveryPermitted()) return transitionRefusal();
   try {
     await secureMcpConnectorRuntime.doctor({
       executablePath: connector.tunnelClient.executablePath,
@@ -4448,7 +4759,7 @@ async function startAdmittedSecureMcpConnector(
   let started;
   // Quit closes new admission first. If it arrived while configure or
   // doctor was pending, do not launch a tunnel after its drain began.
-  if (quitInProgress || installedUpdateAdmission)
+  if (quitInProgress || installedUpdateAdmission || !recoveryPermitted())
     return configurationFailure("CONNECTOR_START_FAILED");
   try {
     started = await secureMcpConnectorRuntime.start({
@@ -4480,6 +4791,9 @@ async function startAdmittedSecureMcpConnector(
   if (started.state === "outcome_unknown") {
     return configurationFailure("CONNECTOR_RUNTIME_OUTCOME_UNKNOWN");
   }
+  // Retain an already-issued Start's real result even when its observation was
+  // invalidated. That completion cannot authorize a new challenge publication.
+  if (!recoveryPermitted()) return transitionRefusal();
   const challenged = await configuration.recordSecureMcpChallenge({
     challenge: verificationChallenge,
     runtimeGeneration: started.runtimeGeneration,
@@ -5468,6 +5782,20 @@ async function configureProduct(
   value: unknown,
 ): Promise<ProductConfigurationResult> {
   const parsed = ProductConfigurationCommandSchema.safeParse(value);
+  // Capture the original runtime before the request counter closes background
+  // admission. An explicit Stop must never be undone by a later timer tick.
+  if (
+    parsed.success &&
+    (changesComputerAuthority(parsed.data.kind) ||
+      parsed.data.kind === "connector.stop")
+  )
+    connectorTransportWatch?.suppressCurrent();
+  else if (
+    parsed.success &&
+    (parsed.data.kind === "connector.start" ||
+      parsed.data.kind === "connector.repair")
+  )
+    connectorTransportWatch?.invalidate();
   if (parsed.success && parsed.data.kind === "connector.save-and-connect") {
     const command = parsed.data;
     const fingerprint = createHash("sha256")
@@ -10988,6 +11316,8 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
   });
   app.on("before-quit", (event) => {
     quitInProgress = true;
+    connectorTransportWatch?.close();
+    if (connectorTransportTimer) clearInterval(connectorTransportTimer);
     if (installedUpdateTimer) clearInterval(installedUpdateTimer);
     quitDrain.onBeforeQuit(event);
   });
@@ -11023,8 +11353,12 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
       );
       if (!quitInProgress && window && !window.isDestroyed())
         window.webContents.send(channels.configurationChanged);
+      startConnectorTransportWatch();
     },
-    () => startupStage("connector-resume-failed"),
+    () => {
+      startupStage("connector-resume-failed");
+      startConnectorTransportWatch();
+    },
   );
 }
 

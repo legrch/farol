@@ -57,7 +57,7 @@ func (s *computerConnector) mutate(ctx context.Context, slot *connectorSlot, ope
 	}
 	ledger := s.mutations
 	ledger.mu.Lock()
-	if ledger.frozen || ledger.operations[operation] != nil || len(ledger.operations) >= 4096 {
+	if ledger.frozen || ledger.recoveryReserved || ledger.operations[operation] != nil || len(ledger.operations) >= 4096 {
 		ledger.mu.Unlock()
 		return nil, &mutationct.Failure{Code: "WORKSPACE_MUTATION_OUTCOME_UNKNOWN", Source: "operation-store", Retry: "never"}
 	}

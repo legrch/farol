@@ -133,7 +133,7 @@ func (s *computerConnector) cancelProcess(ctx context.Context, slot *connectorSl
 	ledger := s.mutations
 	ledger.mu.Lock()
 	record := ledger.operations[operation]
-	if ledger.frozen || record == nil || record.pending || record.process == nil || record.process.contract == nil {
+	if ledger.frozen || ledger.recoveryReserved || record == nil || record.pending || record.process == nil || record.process.contract == nil {
 		ledger.mu.Unlock()
 		return nil, connectorProcessRefusal("PROCESS_UNAVAILABLE")
 	}

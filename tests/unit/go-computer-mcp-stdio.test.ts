@@ -293,8 +293,8 @@ it("serves legacy initialize, strict tool schemas and catalogue through the real
       "stopping",
       "bridge",
       "release",
-      "leave",
       "stopping",
+      "leave",
     ]);
     const denied = await wire.request(4, "tools/call", {
       name: "computer_workspace_catalogue",

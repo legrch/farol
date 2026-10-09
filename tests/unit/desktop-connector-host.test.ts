@@ -87,6 +87,126 @@ it("retains the exact Go reply and closes once without granting or reminting", a
     "computer.connector.close",
   ]);
 });
+
+it.each([
+  undefined,
+  "pending_operation",
+  "operation_unknown",
+  "authority_unknown",
+  "unavailable",
+] as const)(
+  "requires a settled original close receipt before recovery: %s",
+  async (recovery) => {
+    const { host, request } = fixture();
+    const original = request.getMockImplementation()!;
+    request.mockImplementation(async (...args) => {
+      const response = await original(...args);
+      return args[0].endsWith("close") && recovery !== undefined
+        ? { ...response, data: { ...(response.data as object), recovery } }
+        : response;
+    });
+    await host.open(input);
+    expect(host.currentBinding).toEqual(binding);
+    await host.close();
+    const receipt = host.closureReceipt!;
+    expect(receipt.result).toEqual({
+      binding,
+      closed: true,
+      ...(recovery ? { recovery } : {}),
+    });
+    expect(receipt.requestId).toBe(request.mock.calls[1]![2]!.id);
+    expect(receipt.operationId).toBe(request.mock.calls[1]![2]!.operationId);
+    expect(Object.isFrozen(receipt.result.binding)).toBe(true);
+    expect(host.currentBinding).toBeUndefined();
+    await expect(
+      host.open({ ...input, runtimeId: "successor", recoveryFrom: binding }),
+    ).rejects.toMatchObject({ code: "connector_recovery_unavailable" });
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(host.closureReceipt).toBe(receipt);
+  },
+);
+
+it("does not mint recovery from no close or a crossed original binding", async () => {
+  const { host, request } = fixture();
+  await expect(
+    host.open({ ...input, recoveryFrom: binding }),
+  ).rejects.toMatchObject({ code: "connector_recovery_unavailable" });
+  expect(request).not.toHaveBeenCalled();
+  const original = request.getMockImplementation()!;
+  request.mockImplementation(async (...args) => {
+    const response = await original(...args);
+    return args[0].endsWith("close")
+      ? {
+          ...response,
+          data: { ...(response.data as object), recovery: "settled" },
+        }
+      : response;
+  });
+  await host.open(input);
+  await host.close();
+  await expect(
+    host.open({
+      ...input,
+      recoveryFrom: { ...binding, backendGeneration: "foreign" },
+    }),
+  ).rejects.toMatchObject({ code: "connector_recovery_unavailable" });
+  expect(request).toHaveBeenCalledTimes(2);
+});
+
+it.each(["lost", "known"] as const)(
+  "retains the original closure but never repeats a %s recovery Open",
+  async (outcome) => {
+    const { host, request } = fixture();
+    const original = request.getMockImplementation()!;
+    request.mockImplementation(async (...args) => {
+      const response = await original(...args);
+      return args[0].endsWith("close")
+        ? {
+            ...response,
+            data: { ...(response.data as object), recovery: "settled" },
+          }
+        : response;
+    });
+    await host.open(input);
+    await host.close();
+    const receipt = host.closureReceipt!;
+    if (outcome === "lost")
+      request.mockRejectedValueOnce(new Error("original successor reply lost"));
+    else
+      request.mockImplementationOnce(async (method, body, options) => {
+        const response = await original(method, body, options);
+        return {
+          ...response,
+          data: {
+            ...(response.data as object),
+            endpoint: {
+              ...((response.data as Record<string, Json>).endpoint as object),
+              binding: { ...binding, runtimeId: "successor" },
+            },
+          },
+        };
+      });
+    const next = { ...input, runtimeId: "successor", recoveryFrom: binding };
+    const started = host.open(next);
+    if (outcome === "lost")
+      await expect(started).rejects.toMatchObject({
+        outcome: "unknown",
+        method: "computer.connector.open",
+      });
+    else expect((await started).endpoint.binding.runtimeId).toBe("successor");
+    await expect(host.open(next)).rejects.toMatchObject({
+      code: "connector_host_unavailable",
+    });
+    expect(request).toHaveBeenCalledTimes(3);
+    expect(host.closureReceipt).toBe(receipt);
+    expect(request.mock.calls[2]![1]).toMatchObject({ recoveryFrom: binding });
+    expect(
+      Object.isFrozen(
+        (request.mock.calls[2]![1] as { recoveryFrom: object }).recoveryFrom,
+      ),
+    ).toBe(true);
+  },
+);
 it("joins the original overlapping close until its exact ACK confirms closure", async () => {
   const { request, host } = fixture();
   const original = request.getMockImplementation()!;

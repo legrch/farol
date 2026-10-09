@@ -129,6 +129,7 @@ async function setup(
     verification?: GoComputerMcpOptions["verification"];
     mutations?: GoComputerMcpOptions["mutations"];
     processes?: GoComputerMcpOptions["processes"];
+    onEffectUnknown?: () => void;
     respond?: (method: string, params: Json, id: string) => unknown;
   } = {},
 ) {
@@ -153,6 +154,9 @@ async function setup(
       ...(options.verification ? { verification: options.verification } : {}),
       ...(options.mutations ? { mutations: options.mutations } : {}),
       ...(options.processes ? { processes: options.processes } : {}),
+      ...(options.onEffectUnknown
+        ? { onEffectUnknown: options.onEffectUnknown }
+        : {}),
     },
   );
   const tools = new Map<string, RegisteredTool>();
@@ -727,8 +731,8 @@ describe("Go Computer MCP codec (pure/in-memory only)", () => {
         "stopping",
         "Go operation",
         "release",
-        "leave",
         "stopping",
+        "leave",
       ]);
     },
   );
@@ -1578,6 +1582,47 @@ describe("Go Computer mutation MCP (pure/in-memory only)", () => {
       operationId: target.operationId,
       code: "COMPUTER_EXECUTION_FENCE_RELEASE_FAILED",
     });
+  });
+  it("retains an effect aborted during the final stopping await before releasing its handler", async () => {
+    const controller = new AbortController();
+    const finalCheck = deferred<boolean>();
+    const enteredFinalCheck = deferred<void>();
+    const events: string[] = [];
+    let checks = 0;
+    const write = vi.fn<
+      NonNullable<GoComputerMcpOptions["mutations"]>["write"]
+    >(async (_input, operationId, call) => ({
+      status: "ok",
+      operationId,
+      requestId: call.requestId,
+      context: call.context,
+    }));
+    const { tools } = await setup({
+      mutations: { ...mutations(), write },
+      lifecycle: {
+        enterHandler: () => () => events.push("leave"),
+        isStopping: async () => {
+          if (++checks !== 3) return false;
+          enteredFinalCheck.resolve();
+          return finalCheck.promise;
+        },
+      },
+      onEffectUnknown: () => events.push("unknown"),
+    });
+    const pending = tools
+      .get("computer_workspace_write")!
+      .executor(writeInput, handlerContext(controller.signal));
+    await enteredFinalCheck.promise;
+    controller.abort();
+    finalCheck.resolve(false);
+    expect((await pending).structuredContent).toMatchObject({
+      status: "unknown",
+      operationId: target.operationId,
+      code: "computer_mcp_aborted_after_dispatch",
+      retry: "never",
+    });
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(events).toEqual(["unknown", "leave"]);
   });
   it("blocks stopping/denied-fence effects without replay or dropping the caller ID", async () => {
     const selected = mutations();

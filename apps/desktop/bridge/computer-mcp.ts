@@ -31,6 +31,7 @@ export type GoComputerMcpOptions = Readonly<{
   connectionStatus?: Pick<ConnectorVerificationBridge, "observe">;
   mutations?: Pick<ConnectorMutationBridge, "write" | "edit" | "read">;
   processes?: Pick<ConnectorProcessBridge, "start" | "read" | "cancel">;
+  onEffectUnknown?: () => void;
 }>;
 
 const IdentifierSchema = z.string().min(1).max(120);
@@ -233,6 +234,7 @@ export function createGoComputerMcpServer(
     operation: (call: ComputerCall) => Promise<{ readonly status: string }>,
     operationId?: string,
     cancelOperationId?: string,
+    effect = false,
   ): Promise<CallToolResult> => {
     const call = Object.freeze({
       requestId: randomUUID(),
@@ -327,6 +329,31 @@ export function createGoComputerMcpServer(
           "COMPUTER_EXECUTION_FENCE_RELEASE_FAILED",
         );
       }
+      // The original handler remains active through final outcome classification.
+      // A returned wire reply can still become UNKNOWN at this adapter boundary.
+      const finalStopping = await stopping();
+      if (signal.aborted || finalStopping)
+        result = failure(
+          dispatched ? "unknown" : "refused",
+          signal.aborted
+            ? dispatched
+              ? "computer_mcp_aborted_after_dispatch"
+              : "computer_mcp_aborted_before_dispatch"
+            : "COMPUTER_MCP_STOPPING",
+        );
+      const retainUnknown = () => {
+        const content = result.structuredContent;
+        if (
+          effect &&
+          dispatched &&
+          content !== null &&
+          typeof content === "object" &&
+          "status" in content &&
+          content.status === "unknown"
+        )
+          options.onEffectUnknown?.();
+      };
+      retainUnknown();
       try {
         release?.();
       } catch {
@@ -334,27 +361,9 @@ export function createGoComputerMcpServer(
           dispatched ? "unknown" : "refused",
           "COMPUTER_MCP_STOPPING",
         );
+        retainUnknown();
       }
     }
-    if (signal.aborted)
-      return failure(
-        dispatched ? "unknown" : "refused",
-        dispatched
-          ? "computer_mcp_aborted_after_dispatch"
-          : "computer_mcp_aborted_before_dispatch",
-      );
-    if (await stopping())
-      return failure(
-        dispatched ? "unknown" : "refused",
-        "COMPUTER_MCP_STOPPING",
-      );
-    if (signal.aborted)
-      return failure(
-        dispatched ? "unknown" : "refused",
-        dispatched
-          ? "computer_mcp_aborted_after_dispatch"
-          : "computer_mcp_aborted_before_dispatch",
-      );
     return result;
   };
   const identity = (call: ComputerCall) => ({
@@ -448,6 +457,8 @@ export function createGoComputerMcpServer(
               call,
             ),
           operationId,
+          undefined,
+          true,
         ),
     );
     server.registerTool(
@@ -469,6 +480,8 @@ export function createGoComputerMcpServer(
               call,
             ),
           operationId,
+          undefined,
+          true,
         ),
     );
     server.registerTool(
@@ -516,6 +529,8 @@ export function createGoComputerMcpServer(
               call,
             ),
           operationId,
+          undefined,
+          true,
         ),
     );
     server.registerTool(
@@ -566,6 +581,7 @@ export function createGoComputerMcpServer(
           (call) => processes.cancel(input, cancelOperationId, call),
           input.operationId,
           cancelOperationId,
+          true,
         ),
     );
   }
