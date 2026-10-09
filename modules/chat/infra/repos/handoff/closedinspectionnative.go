@@ -139,6 +139,18 @@ func acquireInterruptedRetirementInspection(ctx context.Context, roots Roots, sc
 	return &ClosedLease{value: value, verify: verify, close: close}, nil
 }
 
+func acquireTerminatedRetirementInspection(ctx context.Context, roots Roots, scope port.JournalScope) (*ClosedLease, error) {
+	chain, verify, close, err := acquireClosedInspectionChain(ctx, roots, func(chain closedInspectionChain) error {
+		_, err := terminatedRetirementInspectionValue(roots, scope, chain)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	value, _ := terminatedRetirementInspectionValue(roots, scope, chain)
+	return &ClosedLease{value: value, verify: verify, close: close}, nil
+}
+
 func acquireAcknowledgedInspection(ctx context.Context, roots Roots, expected port.HandoffBinding, handoffID string) (*AcknowledgedLease, error) {
 	chain, verify, close, err := acquireClosedInspectionChain(ctx, roots, func(chain closedInspectionChain) error {
 		return acknowledgedInspectionQualify(chain, expected, handoffID)
