@@ -72,6 +72,12 @@ func (c *Client) Message(parent context.Context, d port.Dispatch, progress func(
 	if !c.activeTurn(ctx, i.Expected) || witness.closed.Load() {
 		return refused("CODEX_ACTIVE_TURN_REQUIRED"), nil
 	}
+	// History pages await provider IO. Recheck the same thread's selected
+	// membership after them, within the original budget and account witness.
+	// This is a point-in-time check; the vendor offers no remote project CAS.
+	if err := readThread(ctx, c.rpc, i.Binding, i.Expected.ThreadID); err != nil {
+		return refused("CODEX_PARENT_MISMATCH"), nil
+	}
 	if err := c.current(ctx, qualified.epoch); err != nil {
 		return refused("CODEX_SELECTION_CHANGED"), nil
 	}

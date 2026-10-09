@@ -390,8 +390,14 @@ func TestSourceOnlyMessageInvalidationWhileWriteLockQueued(t *testing.T) {
 			}
 			locked := make(chan heldWrite, 1)
 			var armed atomic.Bool
+			historySeen := false
 			f.beforeReply = func(q fixtureRequest, peer net.Conn, _ *bufio.Reader) error {
-				if q.method == "thread/turns/list" && armed.CompareAndSwap(false, true) {
+				if q.method == "thread/turns/list" {
+					historySeen = true
+				}
+				// Hold the final membership reply, so the next queued frame is
+				// the actual steer rather than an earlier read-only RPC.
+				if q.method == "thread/read" && historySeen && armed.CompareAndSwap(false, true) {
 					var prior uint64
 					if err := json.Unmarshal(q.id, &prior); err != nil {
 						return err
@@ -611,5 +617,54 @@ func TestSourceOnlyMessageCannotBypassMutationWriteGuard(t *testing.T) {
 	_, err := c.connection.request(context.Background(), "turn/steer", map[string]any{"threadId": completeRef().ThreadID, "expectedTurnId": completeRef().TurnID, "input": []any{}})
 	if !errors.Is(err, task.ErrUnsupported) || len(f.seen("turn/steer")) != 0 {
 		t.Fatal("unguarded raw steer permitted", err)
+	}
+}
+
+func TestSourceOnlyMessageRechecksThreadMembershipAfterAwaitedHistory(t *testing.T) {
+	for _, mode := range []string{"unchanged", "thread", "project", "writer", "model"} {
+		t.Run(mode, func(t *testing.T) {
+			c, f := newMessageFixture(t)
+			historyRead, threadReads := false, 0
+			f.handle = func(q fixtureRequest) (any, bool) {
+				v, drop := messageResponse(f, q)
+				if q.method == "thread/turns/list" {
+					// The same peer changes membership while the producer awaits
+					// its active-turn page. Earlier thread evidence is now stale.
+					historyRead = true
+				}
+				if q.method == "thread/read" {
+					threadReads++
+					if historyRead {
+						thread := v.(map[string]any)["thread"].(map[string]any)
+						switch mode {
+						case "thread":
+							thread["id"] = "another-thread"
+						case "project":
+							thread["projectId"] = "another-project"
+						case "writer":
+							thread["cwd"] = "/another/writer"
+						case "model":
+							thread["model"] = "another-model"
+						}
+					}
+				}
+				return v, drop
+			}
+			progress := 0
+			r, err := c.Message(context.Background(), messageDispatch(c.selection, "membership-after-history"), func(ref task.Reference) error { progress++; return nil })
+			if err != nil {
+				t.Fatal(err)
+			}
+			if mode == "unchanged" {
+				if r.State != task.Known || r.Reference != completeRef() || progress != 1 || len(f.seen("turn/steer")) != 1 {
+					t.Fatal("unchanged exact membership refused", r, progress)
+				}
+			} else if r.State != task.Rejected || r.Code != "CODEX_PARENT_MISMATCH" || progress != 0 || len(f.seen("turn/steer")) != 0 {
+				t.Fatal("late membership change permitted steer", r, progress)
+			}
+			if threadReads != 2 || !historyRead || f.launches.Load() != 1 || len(f.seen("thread/start")) != 0 || len(f.seen("turn/start")) != 0 {
+				t.Fatal("missing membership witness or new route", threadReads)
+			}
+		})
 	}
 }

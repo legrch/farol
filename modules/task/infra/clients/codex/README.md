@@ -137,9 +137,12 @@ same binding/account epoch and original dispatch hook, and the existing handoff
 schema witness. The transferred actual CLI 0.160.1 schemas confirm the covered
 `turn/steer` fields; no extra follow-up witness or new engine is needed. The
 producer verifies exact project/writer/model-bound thread membership and one
-unique active turn through bounded pages, then sends one `turn/steer` with
+unique active turn through bounded pages, rereads the same thread's membership
+after those awaited pages, then sends one `turn/steer` with
 `threadId`, `expectedTurnId` and one bounded text input. The vendor's required
 active-turn precondition prevents substituting a completed or replacement turn.
+The membership reread shares the original deadline/epoch and is a point-in-time
+witness; the vendor supplies no remote project/writer/model membership CAS.
 An exact completion notice during qualification/write-lock/owner-hook waiting
 also prevents the write. No thread, turn, reconnect or replacement is started.
 
