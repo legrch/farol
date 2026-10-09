@@ -28,6 +28,14 @@ type Client struct {
 	attempted       bool
 	mu              sync.Mutex
 	connection      *proxy
+	launching       bool
+	launchErr       error
+	closeStarted    bool
+	cleanupStarted  bool
+	closeDone       chan struct{}
+	closeErr        error
+	closeCtx        context.Context
+	closeCancel     context.CancelFunc
 	closed          atomic.Bool
 	lifetime        context.Context
 	cancel          context.CancelFunc
@@ -41,7 +49,7 @@ func New(o Options) (*Client, error) {
 		return nil, task.ErrInvalid
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	return &Client{selection: o.Selection, followup: o.Followup, boundary: o.Boundary, now: o.Now, recheck: o.Recheck, dispatchRecheck: o.RecheckDispatch, gate: make(chan struct{}, 1), used: make(map[string][32]byte), lifetime: ctx, cancel: cancel}, nil
+	return &Client{selection: o.Selection, followup: o.Followup, boundary: o.Boundary, now: o.Now, recheck: o.Recheck, dispatchRecheck: o.RecheckDispatch, gate: make(chan struct{}, 1), used: make(map[string][32]byte), closeDone: make(chan struct{}), lifetime: ctx, cancel: cancel}, nil
 }
 
 func (c *Client) enter(parent context.Context) (context.Context, func(), error) {
@@ -88,28 +96,51 @@ func (c *Client) verify(ctx context.Context) error {
 	return c.guard(ctx)
 }
 func (c *Client) ensure(ctx context.Context) error {
-	if c.connection != nil {
-		if c.connection.lost.Load() {
+	c.mu.Lock()
+	if c.closed.Load() || ctx.Err() != nil {
+		c.mu.Unlock()
+		return task.ErrUnavailable
+	}
+	if conn := c.connection; conn != nil {
+		c.mu.Unlock()
+		if conn.lost.Load() {
 			return task.ErrUnknown
 		}
 		return nil
 	}
 	if c.attempted {
+		c.mu.Unlock()
 		return task.ErrUnavailable
 	}
 	c.attempted = true
+	c.launching = true
+	c.mu.Unlock()
 	p, err := c.boundary.Launch(ctx, c.selection)
-	if err != nil || p == nil {
-		return task.ErrUnavailable
+	var conn *proxy
+	if p != nil {
+		conn = newProxy(&clientProcess{Process: p})
+		conn.notification = c.notification
 	}
-	conn := newProxy(p)
-	conn.notification = c.notification
 	c.mu.Lock()
 	c.connection = conn
+	c.launching = false
+	if err != nil || p == nil {
+		// A failed launch supplies no complete child/exit proof. Keep the
+		// original attempt terminal, including a child returned with an error.
+		c.launchErr = task.ErrUnknown
+	}
 	closed := c.closed.Load()
 	c.mu.Unlock()
 	if closed {
-		conn.fail()
+		// Close may already have returned unknown after its bounded wait. The
+		// late original still belongs to this lifetime and is cleaned once.
+		c.scheduleCleanup()
+		return task.ErrUnavailable
+	}
+	if err != nil || conn == nil || ctx.Err() != nil || c.closed.Load() {
+		if conn != nil {
+			conn.fail()
+		}
 		return task.ErrUnavailable
 	}
 	if err := conn.connect(ctx, c.selection.ExpectedCodexHome); err != nil {
@@ -589,22 +620,105 @@ func publish(callback func(task.Reference) error, ref task.Reference) (err error
 	return callback(ref)
 }
 
-// Close is exact proxy cleanup only. It never interrupts the provider turn.
-// A refused signal or missing exit proof is returned as unknown, without retry.
+// clientProcess retains the original termination result even when proxy.fail
+// discards it. Every proxy failure and Close shares this one termination attempt.
+type clientProcess struct {
+	Process
+	once sync.Once
+	err  error
+}
+
+func (p *clientProcess) Close() error {
+	p.once.Do(func() { p.err = p.Process.Close() })
+	return p.err
+}
+
+// scheduleCleanup starts only after the original Launch has registered its
+// result. It never waits on the read gate or holds the mutex during process IO.
+// The first Close's budget is fixed; late registration cannot renew it.
+func (c *Client) scheduleCleanup() {
+	c.mu.Lock()
+	if !c.closeStarted || c.launching || c.cleanupStarted {
+		c.mu.Unlock()
+		return
+	}
+	c.cleanupStarted = true
+	conn, launchErr, ctx, cancel := c.connection, c.launchErr, c.closeCtx, c.closeCancel
+	if conn == nil {
+		if launchErr != nil {
+			c.closeErr = task.ErrUnknown
+		}
+		close(c.closeDone)
+		c.mu.Unlock()
+		cancel()
+		return
+	}
+	c.mu.Unlock()
+	go func() {
+		defer cancel()
+		conn.fail()
+		// This reads the wrapper's retained result, never another termination.
+		terminationErr := conn.process.Close()
+		exitErr := conn.process.Wait(ctx)
+		c.mu.Lock()
+		if launchErr != nil || terminationErr != nil || exitErr != nil {
+			c.closeErr = task.ErrUnknown
+		}
+		// A caller's earlier unproved timeout/cancellation remains unknown even
+		// if the original child supplies exit proof after that caller returned.
+		close(c.closeDone)
+		c.mu.Unlock()
+	}()
+}
+
+// Close fences both an in-flight Launch and the retained original proxy. It
+// never interrupts a provider turn or repeats termination/exit collection. Its
+// bounded wait runs outside the read gate, including from authority callbacks.
 func (c *Client) Close(ctx context.Context) error {
+	if ctx == nil {
+		return task.ErrUnavailable
+	}
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
-	c.closed.Store(true)
-	c.cancel()
 	c.mu.Lock()
-	conn := c.connection
+	if !c.closeStarted {
+		c.closed.Store(true)
+		c.closeStarted = true
+		// Cleanup stays owned when a caller is cancelled, including by closing
+		// this same Client lifetime from its own authority callback.
+		c.closeCtx, c.closeCancel = context.WithTimeout(context.Background(), 2*time.Second)
+	}
 	c.mu.Unlock()
-	if conn == nil {
-		return nil
+	c.cancel()
+	c.scheduleCleanup()
+	// Completed cleanup wins over a later caller cancellation.
+	select {
+	case <-c.closeDone:
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		return c.closeErr
+	default:
 	}
-	conn.fail()
-	if conn.process.Wait(ctx) != nil {
-		return task.ErrUnknown
+	c.mu.Lock()
+	retained := c.closeErr
+	c.mu.Unlock()
+	if retained != nil {
+		return retained
 	}
-	return nil
+	select {
+	case <-c.closeDone:
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		return c.closeErr
+	case <-ctx.Done():
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		select {
+		case <-c.closeDone:
+			return c.closeErr
+		default:
+			c.closeErr = task.ErrUnknown
+			return c.closeErr
+		}
+	}
 }
