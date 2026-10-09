@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createBuildIdentity } from "../../tooling/build-identity-contract.mjs";
 import { BUILD_ENTRIES } from "../../tooling/build-contract.mjs";
 import { GO_CORE_ENTRIES } from "../../tooling/go-core-artifact.mjs";
@@ -166,9 +166,14 @@ it.each([
     await main(producer[1].split(" "), {
       pinned: true,
       getCurrentNpmVersion: () => "11.19.0",
-      ensureDependencies: async () => 0,
+      // Observe lifecycle admission without inspecting or stopping a real Dev.
+      prepareBuild: async (options) => calls.push(["prepare", options]),
+      ensureDependencies: async () => {
+        calls.push(["dependencies"]);
+        return 0;
+      },
       runBuild: async (args) => {
-        calls.push(args);
+        calls.push(["build", args]);
         return 0;
       },
       createReviewProfile: () => {
@@ -183,7 +188,51 @@ it.each([
       log: () => {},
       logError: () => {},
     });
-    expect(calls).toEqual([[`--go-inputs=${DEFAULT_GO_INPUTS_FILE}`]]);
+    expect(calls).toEqual([
+      [
+        "prepare",
+        {
+          buildArguments: [`--go-inputs=${DEFAULT_GO_INPUTS_FILE}`],
+          replace: false,
+        },
+      ],
+      ["dependencies"],
+      ["build", [`--go-inputs=${DEFAULT_GO_INPUTS_FILE}`]],
+    ]);
     expect(stages[1]).toMatch(/^node tests\/e2e\//u);
   },
 );
+
+it("refuses check-only dependency replacement and Go build when lifecycle admission refuses", async () => {
+  const prepareBuild = vi.fn(async () => {
+    throw new Error("DEV_BUILD_LIVE_OUTPUTS_REFUSED");
+  });
+  const mustNotRun = vi.fn(() => {
+    throw new Error("MUST_NOT_RUN_AFTER_LIFECYCLE_REFUSAL");
+  });
+  const exit = vi.fn();
+  const logError = vi.fn();
+  await main(["--check"], {
+    pinned: true,
+    getCurrentNpmVersion: () => "11.19.0",
+    prepareBuild,
+    ensureDependencies: mustNotRun,
+    runBuild: mustNotRun,
+    createReviewProfile: mustNotRun,
+    launch: mustNotRun,
+    exit,
+    log: () => {},
+    logError,
+  });
+  expect(prepareBuild.mock.calls).toEqual([
+    [
+      {
+        buildArguments: [`--go-inputs=${DEFAULT_GO_INPUTS_FILE}`],
+        replace: false,
+      },
+    ],
+  ]);
+  expect(logError.mock.calls).toEqual([["DEV_BUILD_LIVE_OUTPUTS_REFUSED"]]);
+  expect(exit.mock.calls).toEqual([[1]]);
+  expect(mustNotRun).not.toHaveBeenCalled();
+});
