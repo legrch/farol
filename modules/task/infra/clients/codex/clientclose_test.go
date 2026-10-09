@@ -26,6 +26,8 @@ type clientCloseProcess struct {
 	closeErr    error
 	waitErr     error
 	autoExit    bool
+	waitContext chan context.Context
+	knownExit   bool
 	signalOnce  sync.Once
 	exitOnce    sync.Once
 }
@@ -60,6 +62,15 @@ func (p *clientCloseProcess) exit() { p.exitOnce.Do(func() { close(p.exited) }) 
 
 func (p *clientCloseProcess) Wait(ctx context.Context) error {
 	p.waits.Add(1)
+	if p.waitContext != nil {
+		p.waitContext <- ctx
+	}
+	if p.knownExit {
+		// A retained exit proof can be returned even after the caller's budget.
+		// It cannot retroactively qualify timely cleanup of this owner.
+		<-p.exited
+		return nil
+	}
 	if p.waitErr != nil {
 		return p.waitErr
 	}
@@ -204,6 +215,11 @@ func TestClientCloseWaitsForOriginalLaunchRegistrationAndExit(t *testing.T) {
 	if err := clientCloseError(t, closed); err != nil {
 		t.Fatal("proved original cleanup failed", err)
 	}
+	later, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := c.Close(later); err != nil {
+		t.Fatal("completed original cleanup lost to later cancellation", err)
+	}
 	if err := clientCloseError(t, read); err == nil {
 		t.Fatal("closed read succeeded")
 	}
@@ -292,6 +308,33 @@ func TestClientCloseTwoSecondBudgetDoesNotRenewAfterLateRegistration(t *testing.
 	// receive the expired original budget, not another two-second allowance.
 	clientCloseAwait(t, c.closeDone)
 	_ = clientCloseError(t, read)
+	assertClientCloseNoReplacement(t, c, b, p, task.ErrUnknown)
+}
+
+func TestClientCloseFirstOwnerDeadlineBoundsLateKnownCleanup(t *testing.T) {
+	p := newClientCloseProcess()
+	p.autoExit, p.knownExit = true, true
+	p.waitContext = make(chan context.Context, 1)
+	c, b := newClientCloseFixture(t, p)
+	read := clientCloseStartRead(t, c, b)
+	ownerDeadline := time.Now().Add(-time.Second)
+	ctx, cancel := context.WithDeadline(context.Background(), ownerDeadline)
+	defer cancel()
+	if err := c.Close(ctx); !errors.Is(err, task.ErrUnknown) {
+		t.Fatal("expired first owner reported timely original cleanup", err)
+	}
+	b.releaseLaunch()
+	clientCloseAwait(t, c.closeDone)
+	_ = clientCloseError(t, read)
+	var waitCtx context.Context
+	select {
+	case waitCtx = <-p.waitContext:
+	case <-time.After(3 * time.Second):
+		t.Fatal("original exit collection was not observed")
+	}
+	if deadline, ok := waitCtx.Deadline(); !ok || deadline.After(ownerDeadline) {
+		t.Error("original exit collection renewed the expired owner deadline", deadline, ownerDeadline)
+	}
 	assertClientCloseNoReplacement(t, c, b, p, task.ErrUnknown)
 }
 

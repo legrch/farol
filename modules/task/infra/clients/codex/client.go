@@ -661,7 +661,7 @@ func (c *Client) scheduleCleanup() {
 		terminationErr := conn.process.Close()
 		exitErr := conn.process.Wait(ctx)
 		c.mu.Lock()
-		if launchErr != nil || terminationErr != nil || exitErr != nil {
+		if launchErr != nil || terminationErr != nil || exitErr != nil || ctx.Err() != nil {
 			c.closeErr = task.ErrUnknown
 		}
 		// A caller's earlier unproved timeout/cancellation remains unknown even
@@ -685,8 +685,15 @@ func (c *Client) Close(ctx context.Context) error {
 		c.closed.Store(true)
 		c.closeStarted = true
 		// Cleanup stays owned when a caller is cancelled, including by closing
-		// this same Client lifetime from its own authority callback.
-		c.closeCtx, c.closeCancel = context.WithTimeout(context.Background(), 2*time.Second)
+		// this same Client lifetime from its own authority callback. Detach its
+		// cancellation, but retain the first owner's already capped deadline.
+		deadline, _ := ctx.Deadline()
+		c.closeCtx, c.closeCancel = context.WithDeadline(context.Background(), deadline)
+		// Retain an expired first owner's uncertainty before fast cleanup can
+		// publish a late exit proof. An inert client has no original to join.
+		if c.attempted && ctx.Err() != nil {
+			c.closeErr = task.ErrUnknown
+		}
 	}
 	c.mu.Unlock()
 	c.cancel()
