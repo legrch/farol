@@ -4708,6 +4708,143 @@ describe("fresh and returning Setup journey", () => {
     ]);
   });
 
+  it.each(["composition", "eligibility"] as const)(
+    "does not fence Add when a late add reply's automatic check is blocked before dispatch by %s",
+    async (guard) => {
+      const h = await mount("folders", settings());
+      const saved = withFolder();
+      saved.computer.workspaces[0]!.access = "write";
+      const pendingAdd = deferred<unknown>();
+      vi.mocked(h.f.api.configure)
+        .mockResolvedValueOnce({
+          ok: true,
+          snapshot: h.configuration,
+          evidence: { kind: "computer.workspace-pick", selectionId },
+        })
+        .mockReturnValueOnce(pendingAdd.promise);
+      await h.click("Add workspace…");
+      expect(h.calls()).toHaveLength(2);
+      await h.pageTo("general");
+      const field = h.field("Start page");
+      if (guard === "composition")
+        await act(async () =>
+          field.dispatchEvent(
+            new CompositionEvent("compositionstart", { bubbles: true }),
+          ),
+        );
+      else
+        await act(async () =>
+          h.f.emit("runtime", {
+            state: "offline",
+            error: null,
+            identity: null,
+            embeddedNode: null,
+            embeddedElectron: null,
+          }),
+        );
+      await act(async () =>
+        pendingAdd.resolve({
+          ok: true,
+          snapshot: { status: "ready", settings: saved },
+          evidence: { kind: "computer.workspace-selection", workspaceId },
+        }),
+      );
+      expect(h.calls()).toEqual([
+        { kind: "computer.choose-workspace" },
+        { kind: "computer.add-workspace", selectionId, access: "write" },
+      ]);
+      expect(
+        h.c.getSnapshot().intents[
+          `settings:computer.verify-workspace:${workspaceId}`
+        ],
+      ).toBeUndefined();
+      if (guard === "composition")
+        await act(async () =>
+          field.dispatchEvent(
+            new CompositionEvent("compositionend", { bubbles: true }),
+          ),
+        );
+      vi.mocked(h.f.api.bootstrap).mockResolvedValue({
+        ...bootstrap(),
+        configuration: { status: "ready", settings: saved },
+      });
+      await act(async () => h.c.refresh());
+      await h.pageTo("folders");
+      await h.remount();
+      expect(h.button("Add workspace…").disabled).toBe(false);
+      await h.click("Add workspace…");
+      expect(h.calls()).toHaveLength(3);
+      expect(h.calls()[2]).toEqual({ kind: "computer.choose-workspace" });
+    },
+  );
+
+  it.each(["transport", "malformed", "facade"] as const)(
+    "keeps an uncertain automatic check fenced after %s failure through cached remount and background refresh",
+    async (failure) => {
+      const h = await mount("folders", settings());
+      const saved = withFolder();
+      saved.computer.workspaces[0]!.access = "write";
+      vi.mocked(h.f.api.configure)
+        .mockResolvedValueOnce({
+          ok: true,
+          snapshot: h.configuration,
+          evidence: { kind: "computer.workspace-pick", selectionId },
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          snapshot: { status: "ready", settings: saved },
+          evidence: { kind: "computer.workspace-selection", workspaceId },
+        });
+      if (failure === "transport")
+        vi.mocked(h.f.api.configure).mockRejectedValueOnce(
+          new Error("reply lost"),
+        );
+      if (failure === "malformed")
+        vi.mocked(h.f.api.configure).mockResolvedValueOnce({ ok: true });
+      if (failure === "facade") {
+        vi.mocked(h.f.api.configure).mockResolvedValueOnce({
+          ok: true,
+          snapshot: { status: "ready", settings: saved },
+        });
+        const configure = h.c.configure.bind(h.c);
+        vi.spyOn(h.c, "configure").mockImplementation(async (command, id) => {
+          const result = await configure(command, id);
+          if (command.kind === "computer.verify-workspace")
+            throw new Error("adapter failed after dispatch");
+          return result;
+        });
+      }
+      await h.click("Add workspace…");
+      const calls = h.calls().length;
+      expect(h.button("Add workspace…").disabled).toBe(true);
+      await h.remount();
+      expect(h.button("Add workspace…").disabled).toBe(true);
+      // Even a matching checked projection is observation, not an explicit
+      // request-owned native readback receipt for the guided controller.
+      const checked = structuredClone(saved);
+      checked.setup.computer.reachable = "reachable";
+      checked.setup.computer.verified = proof(checked);
+      checked.computer.workspaces[0]!.accessCheck = {
+        rootIdentity: checked.computer.workspaces[0]!.rootIdentity!,
+        buildId: "3".repeat(64),
+        computerGeneration: checked.computer.generation,
+        verifiedAt: "2026-10-02T20:00:00.000Z",
+      };
+      vi.mocked(h.f.api.bootstrap).mockResolvedValue({
+        ...bootstrap(),
+        configuration: { status: "ready", settings: checked },
+      });
+      await act(async () => h.f.emit("configuration", undefined));
+      await h.pageTo("general");
+      await h.pageTo("folders");
+      await h.remount();
+      expect(h.button("Add workspace…").disabled).toBe(true);
+      await h.click("Add workspace…");
+      expect(h.calls()).toHaveLength(calls);
+      expect(visibleText(h.host)).toContain("unconfirmed outcome");
+    },
+  );
+
   it("adds and checks a fresh workspace in one user action without a manual Verify step", async () => {
     const h = await mountSetup("folders", settings());
     const saved = withFolder();

@@ -48,6 +48,9 @@ export type SettingsProps = Readonly<{
   facade: RendererFacade;
   setupStep?: "signin" | "connection" | "folders" | "attachment" | undefined;
 }>;
+type ActionDispatch =
+  | Readonly<{ state: "not-sent" }>
+  | Readonly<{ state: "attempted"; result: Intent | null }>;
 type Actions = {
   disabled: boolean;
   computerPauseReason: string | null;
@@ -59,6 +62,10 @@ type Actions = {
     command: ProductConfigurationCommand,
     admit?: (current: WindowSnapshot) => boolean,
   ): Promise<Intent | null>;
+  runClassified(
+    command: ProductConfigurationCommand,
+    admit?: (current: WindowSnapshot) => boolean,
+  ): Promise<ActionDispatch>;
 };
 type PageProps = SettingsProps & {
   settings: ProductSettings;
@@ -406,6 +413,10 @@ export function Settings({ snapshot, facade, setupStep }: SettingsProps) {
     computerPauseReason,
     allowed,
     async run(command, admit) {
+      const outcome = await actions.runClassified(command, admit);
+      return outcome.state === "attempted" ? outcome.result : null;
+    },
+    async runClassified(command, admit) {
       const current = facade.getSnapshot();
       const page = feedbackPage(current.destination);
       const request = {};
@@ -447,7 +458,7 @@ export function Settings({ snapshot, facade, setupStep }: SettingsProps) {
         report(
           "Action not sent. Current state or an unresolved operation prevents this change; refresh to observe the latest status.",
         );
-        return null;
+        return { state: "not-sent" };
       }
       if (!ProductConfigurationCommandSchema.safeParse(command).success) {
         feedback.pages[page] = {
@@ -459,7 +470,7 @@ export function Settings({ snapshot, facade, setupStep }: SettingsProps) {
         report(
           "Check the fields. Paths must be unique relative paths without dot segments; connection fields must match their required format.",
         );
-        return null;
+        return { state: "not-sent" };
       }
       if (admit && !admit(current)) {
         feedback.pages[page] = {
@@ -471,7 +482,7 @@ export function Settings({ snapshot, facade, setupStep }: SettingsProps) {
         report(
           "Action not sent. The workspace or connection changed after this page opened; review its current status before trying a new change.",
         );
-        return null;
+        return { state: "not-sent" };
       }
       feedback.pages[page] = {
         request,
@@ -495,7 +506,7 @@ export function Settings({ snapshot, facade, setupStep }: SettingsProps) {
           ),
           result,
         );
-        return result;
+        return { state: "attempted", result };
       } catch {
         // Keep a local fence too if an adapter throws before retaining its intent.
         feedback.unretained = true;
@@ -504,7 +515,7 @@ export function Settings({ snapshot, facade, setupStep }: SettingsProps) {
           "Outcome unknown. Do not repeat this action; inspect the existing result.",
           { id, state: "unknown", code: null },
         );
-        return null;
+        return { state: "attempted", result: null };
       } finally {
         feedback.changed();
       }
@@ -915,7 +926,11 @@ function Folders(props: PageProps) {
           },
           buildId: () => facade.getSnapshot().buildId ?? "",
           run: async (command) => {
-            const intent = await actions.run(command);
+            const outcome = await actions.runClassified(command);
+            // Only the local guards prove no dispatch. A null result after
+            // entering the facade can hide an effect and must stay unknown.
+            if (outcome.state === "not-sent") return "refused";
+            const intent = outcome.result;
             return intent?.state === "applied"
               ? "applied"
               : intent?.state === "refused"
