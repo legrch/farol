@@ -59,6 +59,9 @@ func Run(args []string, in io.ReadCloser, out io.WriteCloser, diagnostics io.Wri
 	if len(args) > 0 && args[0] == "inspect-prepared-empty-recovery" {
 		return runPreparedEmptyInspection(args[1:], in, out, diagnostics)
 	}
+	if len(args) > 0 && args[0] == "prepare-installed-empty-recovery" {
+		return runInstalledEmptyRecoveryPreparation(args[1:], in, out, diagnostics)
+	}
 	if len(args) > 0 && args[0] == "inspect-native-state" {
 		return runNativeStateInspection(args[1:], out, diagnostics, inspectNativeState)
 	}

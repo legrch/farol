@@ -34,9 +34,12 @@ func emptyRecoveryFixtureAt(t *testing.T, desktopLayout bool) emptyRecoveryInspe
 	return emptyRecoveryFixtureStateAt(t, desktopLayout, false)
 }
 func emptyRecoveryFixtureStateAt(t *testing.T, desktopLayout, interrupted bool, unacknowledged ...bool) emptyRecoveryInspectionInput {
+	return emptyRecoveryFixtureNamed(t, desktopLayout, interrupted, "Farol Dev", unacknowledged...)
+}
+func emptyRecoveryFixtureNamed(t *testing.T, desktopLayout, interrupted bool, name string, unacknowledged ...bool) emptyRecoveryInspectionInput {
 	fiveResults := interrupted || len(unacknowledged) == 1 && unacknowledged[0]
 	t.Helper()
-	launch, runtime := retirementStorageFixtureAt(t, true, desktopLayout)
+	launch, runtime := retirementStorageFixtureAt(t, true, desktopLayout, name)
 	terminal := preparedTerminal(t, runtime)
 	if err := recordNativeTerminal(context.Background(), launch.Profile, terminal, func(wire.CoreRetirementAcknowledged) error { return nil }); err != nil {
 		t.Fatal(err)

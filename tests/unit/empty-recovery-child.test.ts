@@ -723,3 +723,58 @@ it("refuses crossed input before spawning and never retries a launch exception",
   });
   expect(ports.spawn).toHaveBeenCalledTimes(1);
 });
+
+it("selects a distinct installed empty command from the captured request", async () => {
+  const input = { ...selectionInput, InstalledEmpty: true as const };
+  const done = prepareEmptyRecoveryChild(
+    "/attested/backend",
+    profile,
+    input,
+    expected,
+  );
+  expect(ports.spawn.mock.calls[0]![1][0]).toBe(
+    "prepare-installed-empty-recovery",
+  );
+  expect(JSON.parse(child.stdin.write.mock.calls[0]![0] as string)).toEqual(
+    input,
+  );
+  send(prepared());
+  send(acknowledged());
+  child.emit("close", 0, null);
+  await expect(done).resolves.toMatchObject({
+    terminal: { exitCode: "0", forced: false },
+  });
+});
+
+it.each([
+  { InstalledEmpty: false },
+  { InstalledEmpty: "true" },
+  { InstalledEmpty: null },
+  { InstalledEmpty: true, UnacknowledgedDev: true },
+  {
+    InstalledEmpty: true,
+    Interrupted: {
+      OriginalHandoffID: "original",
+      ExpectedACKDigest: Array(32).fill(1),
+    },
+  },
+  { InstalledEmpty: true, Mutations: [{}] },
+])(
+  "refuses ambiguous or nonempty installed mode before spawn %#",
+  async (mode) => {
+    await expect(
+      prepareEmptyRecoveryChild(
+        "/attested/backend",
+        profile,
+        { ...selectionInput, ...mode } as unknown as Parameters<
+          typeof prepareEmptyRecoveryChild
+        >[2],
+        expected,
+      ),
+    ).rejects.toMatchObject({
+      state: "refused",
+      code: "empty_recovery_selection_invalid",
+    });
+    expect(ports.spawn).not.toHaveBeenCalled();
+  },
+);

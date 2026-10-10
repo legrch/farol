@@ -55,3 +55,23 @@ func (panicEmptyRecoveryIO) SetReadDeadline(time.Time) error {
 func (panicEmptyRecoveryIO) SetWriteDeadline(time.Time) error {
 	panic("output deadline touched before scope admission")
 }
+
+func TestInstalledEmptyRecoveryPreparationScopeBeforeIO(t *testing.T) {
+	for _, root := range []string{
+		"/private/tmp/Farol Dev/farol-next-state/go-core",
+		"/private/tmp/Farol DEV/farol-next-state/go-core",
+		"/private/tmp/Farol/farol-next-state/go-core",
+		"/private/tmp/Farol Next Preview copy/farol-next-state/go-core",
+		"/private/tmp/Farol Next Preview/go-core",
+		"/private/tmp/Farol Next Preview/farol-next-state/../farol-next-state/go-core",
+	} {
+		args := []string{"--profile", "synthetic", "--profile-root", root, "--profile-device", "1", "--profile-inode", "2", "--expected-build", BuildID}
+		var diagnostics bytes.Buffer
+		if emptyRecoveryInstalledRoot(root) || runInstalledEmptyRecoveryPreparation(args, panicEmptyRecoveryIO{}, panicEmptyRecoveryIO{}, &diagnostics) != 2 {
+			t.Fatal("non-installed namespace reached IO", root)
+		}
+	}
+	if !emptyRecoveryInstalledRoot("/private/tmp/Farol Next Preview/farol-next-state/go-core") {
+		t.Fatal("fixed installed namespace refused")
+	}
+}

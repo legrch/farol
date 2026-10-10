@@ -182,7 +182,8 @@ export async function recoverClosedEmptyChat(
 > {
   if (
     input.selectionInput.Interrupted !== undefined ||
-    input.selectionInput.UnacknowledgedDev !== undefined
+    input.selectionInput.UnacknowledgedDev !== undefined ||
+    input.selectionInput.InstalledEmpty !== undefined
   )
     throw Error("EMPTY_CHAT_RECOVERY_SELECTION_INVALID");
   return recoverSelectedEmptyChat(input);
@@ -203,6 +204,7 @@ export async function recoverInterruptedEmptyChat(
   if (
     !interrupted ||
     input.selectionInput.UnacknowledgedDev !== undefined ||
+    input.selectionInput.InstalledEmpty !== undefined ||
     !/^[a-f0-9]{64}$/u.test(input.expectedQuitSha256) ||
     !["Farol Dev", "Farol DEV"].includes(path.basename(input.userData))
   )
@@ -220,11 +222,46 @@ export async function recoverUnacknowledgedEmptyDev(
   if (
     input.selectionInput.Interrupted !== undefined ||
     input.selectionInput.UnacknowledgedDev !== true ||
+    input.selectionInput.InstalledEmpty !== undefined ||
     !/^[a-f0-9]{64}$/u.test(input.expectedQuitSha256) ||
     !["Farol Dev", "Farol DEV"].includes(path.basename(input.userData))
   )
     throw Error("UNACKNOWLEDGED_DEV_RECOVERY_SELECTION_INVALID");
   return recoverSelectedEmptyChat(input, input.expectedQuitSha256, true);
+}
+
+// Installed recovery preserves only a fully qualified consumed empty chain.
+// The combined failed Quit remains failed; only a distinct maintenance owner
+// receives a new original ACK and observed terminal. Go owns empty selection.
+export async function recoverInstalledEmptyChat(
+  input: ClosedEmptyChatRecoveryInput & { expectedQuitSha256: string },
+) {
+  if (
+    input.selectionInput.InstalledEmpty !== true ||
+    input.selectionInput.UnacknowledgedDev !== undefined ||
+    input.selectionInput.Interrupted !== undefined ||
+    input.selectionInput.Mutations.length !== 0 ||
+    !/^[a-f0-9]{64}$/u.test(input.expectedQuitSha256) ||
+    path.basename(input.userData) !== "Farol Next Preview"
+  )
+    throw Error("INSTALLED_EMPTY_RECOVERY_SELECTION_INVALID");
+  return recoverSelectedEmptyChat(input, input.expectedQuitSha256, false, true);
+}
+
+export function installedEmptyQuitScope(run: unknown, quit: unknown): void {
+  const marker = RunMarkerSchema.safeParse(run);
+  const receipt = QuitReceiptSchema.safeParse(quit);
+  if (
+    !marker.success ||
+    !receipt.success ||
+    receipt.data.drained ||
+    Date.parse(receipt.data.at) < Date.parse(marker.data.startedAt) ||
+    receipt.data.unconfirmed.length !== 2 ||
+    new Set(receipt.data.unconfirmed).size !== 2 ||
+    !receipt.data.unconfirmed.includes("connector") ||
+    !receipt.data.unconfirmed.includes("go-core")
+  )
+    throw Error("INSTALLED_EMPTY_RECOVERY_QUIT_CHANGED");
 }
 
 // A previous clean Quit does not confirm the run that followed it. This
@@ -256,6 +293,7 @@ async function recoverSelectedEmptyChat(
   input: ClosedEmptyChatRecoveryInput,
   expectedQuitSha256?: string,
   unacknowledgedDev = false,
+  installedEmpty = false,
 ): Promise<
   Readonly<{
     phase: "prepared_for_cold_start";
@@ -315,8 +353,16 @@ async function recoverSelectedEmptyChat(
             ? undefined
             : await snapshot(path.join(state, "last-quit.json"), 16384);
         let previousConfirmedQuit = false;
+        let failedComponents: readonly string[] | undefined;
         if (failedQuit) {
           const quit = JSON.parse(failedQuit.bytes.toString("utf8"));
+          if (installedEmpty) {
+            installedEmptyQuitScope(
+              JSON.parse(run.bytes.toString("utf8")),
+              quit,
+            );
+            failedComponents = quit.unconfirmed;
+          }
           if (unacknowledgedDev)
             previousConfirmedQuit =
               unacknowledgedDevQuitScope(
@@ -330,7 +376,11 @@ async function recoverSelectedEmptyChat(
               (quit.drained !== false ||
                 !isDeepStrictEqual(
                   quit.unconfirmed,
-                  unacknowledgedDev ? ["go-core", "connector"] : ["go-core"],
+                  installedEmpty
+                    ? failedComponents
+                    : unacknowledgedDev
+                      ? ["go-core", "connector"]
+                      : ["go-core"],
                 )))
           )
             throw Error("INTERRUPTED_CHAT_RECOVERY_QUIT_CHANGED");
@@ -375,9 +425,11 @@ async function recoverSelectedEmptyChat(
               desktop.obligations,
               failedQuit && !previousConfirmedQuit
                 ? [
-                    unacknowledgedDev
-                      ? "QUIT_UNCONFIRMED:go-core,connector"
-                      : "QUIT_UNCONFIRMED:go-core",
+                    installedEmpty
+                      ? `QUIT_UNCONFIRMED:${failedComponents!.join(",")}`
+                      : unacknowledgedDev
+                        ? "QUIT_UNCONFIRMED:go-core,connector"
+                        : "QUIT_UNCONFIRMED:go-core",
                     "QUIT_UNCONFIRMED:crash",
                   ]
                 : ["QUIT_UNCONFIRMED:crash"],
@@ -445,7 +497,7 @@ async function recoverSelectedEmptyChat(
           ...(failedQuit ? { failedQuit } : {}),
           ...(previousConfirmedQuit ? { previousConfirmedQuit: true } : {}),
           ...(movedArchive ? { archivePin: await movedArchive() } : {}),
-          ...(unacknowledgedDev
+          ...(unacknowledgedDev || installedEmpty
             ? {
                 reconcileConnector: async () => {
                   const lifecycle = new PrivateMcpLifecycle(root);
@@ -821,7 +873,7 @@ async function finishEmptyRecoveryHost({
         }
       : undefined;
   const receipt = Buffer.from(
-    `${JSON.stringify({ schema: "farol.closed-empty-chat-recovery/1", operationId: exact.operationId, buildId: exact.buildId, failedRunSha256: input.expectedRunSha256, configSha256: input.expectedConfigSha256, publication: child.publication, acknowledgement: child.acknowledgement, originalChildTerminal: child.terminal, recorderConfirmed: true, ...(knownFailure ? { knownFailure } : {}), ...(interruptedRetirement ? { interruptedRetirement } : {}), ...(unacknowledgedDev ? { unacknowledgedDev } : {}) })}\n`,
+    `${JSON.stringify({ schema: "farol.closed-empty-chat-recovery/1", operationId: exact.operationId, buildId: exact.buildId, failedRunSha256: input.expectedRunSha256, configSha256: input.expectedConfigSha256, publication: child.publication, acknowledgement: child.acknowledgement, originalChildTerminal: child.terminal, recorderConfirmed: true, ...(knownFailure ? { knownFailure } : {}), ...(interruptedRetirement ? { interruptedRetirement } : {}), ...(unacknowledgedDev ? (input.selectionInput.InstalledEmpty ? { installedEmptyLifetime: unacknowledgedDev } : { unacknowledgedDev }) : {}) })}\n`,
   );
   const f = await fs.open(
     completion,

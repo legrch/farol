@@ -36,8 +36,13 @@ func TestNativePreviousQuitDevHostWithBuiltCore(t *testing.T) {
 	testEmptyRecoveryHostWithBuiltCore(t, false, true, true)
 }
 
+func TestNativeInstalledEmptyHostWithBuiltCore(t *testing.T) {
+	testEmptyRecoveryHostWithBuiltCore(t, false, false, false, true)
+}
+
 func testEmptyRecoveryHostWithBuiltCore(t *testing.T, interrupted, unacknowledged bool, previousQuit ...bool) {
 	previousConfirmed := len(previousQuit) == 1 && previousQuit[0]
+	installed := len(previousQuit) == 2 && previousQuit[1]
 	if !*ingressNative {
 		t.Skip("Requires exclusive native lane and -ingress-native")
 	}
@@ -56,7 +61,12 @@ func testEmptyRecoveryHostWithBuiltCore(t *testing.T, interrupted, unacknowledge
 	previous := BuildID
 	BuildID = manifest.BuildID
 	defer func() { BuildID = previous }()
-	in := emptyRecoveryFixtureStateAt(t, true, interrupted, unacknowledged)
+	var in emptyRecoveryInspectionInput
+	if installed {
+		in = installedEmptyRecoveryFixture(t)
+	} else {
+		in = emptyRecoveryFixtureStateAt(t, true, interrupted, unacknowledged)
+	}
 	in.Selection.OperationID = freshEmptyRecoveryFixtureUUID(t)
 	in.Selection.HostLifetimeID = freshEmptyRecoveryFixtureUUID(t)
 	in.Selection.ChildLaunchID = freshEmptyRecoveryFixtureUUID(t)
@@ -69,7 +79,7 @@ func testEmptyRecoveryHostWithBuiltCore(t *testing.T, interrupted, unacknowledge
 	}
 	run := []byte("{\"syntheticFailedRun\":true}\n")
 	config := []byte("{\"syntheticRetainedSetting\":true}\n")
-	if unacknowledged {
+	if unacknowledged || installed {
 		// Real desktop obligation reader, with synthetic private configuration.
 		run = []byte("{\"schema\":1,\"pid\":2147483647,\"startedAt\":\"2026-10-08T09:44:38.119Z\",\"bootTime\":null,\"processStart\":null}\n")
 		ready := map[string]any{"visited": false, "skipped": false, "configured": false, "reachable": "unknown", "verified": nil, "needsAction": nil, "unavailable": nil, "outcomeUnknown": false}
@@ -87,8 +97,11 @@ func testEmptyRecoveryHostWithBuiltCore(t *testing.T, interrupted, unacknowledge
 		}
 	}
 	quit := []byte("{\"schema\":1,\"at\":\"2026-10-07T21:13:07.697Z\",\"drained\":false,\"unconfirmed\":[\"go-core\"]}\n")
-	if unacknowledged {
+	if unacknowledged || installed {
 		quit = []byte("{\"schema\":1,\"at\":\"2026-10-08T10:00:14.146Z\",\"drained\":false,\"unconfirmed\":[\"go-core\",\"connector\"]}\n")
+		if installed {
+			quit = []byte("{\"schema\":1,\"at\":\"2026-10-08T10:00:14.146Z\",\"drained\":false,\"unconfirmed\":[\"connector\",\"go-core\"]}\n")
+		}
 		if previousConfirmed {
 			quit = []byte("{\"schema\":1,\"at\":\"2026-10-08T09:39:05.070Z\",\"drained\":true,\"unconfirmed\":[]}\n")
 		}
@@ -102,7 +115,7 @@ func testEmptyRecoveryHostWithBuiltCore(t *testing.T, interrupted, unacknowledge
 			}
 		}
 	}
-	if interrupted || unacknowledged {
+	if interrupted || unacknowledged || installed {
 		if err := os.WriteFile(filepath.Join(state, "last-quit.json"), quit, 0600); err != nil {
 			t.Fatal(err)
 		}
@@ -119,7 +132,7 @@ func testEmptyRecoveryHostWithBuiltCore(t *testing.T, interrupted, unacknowledge
 	}{Input: in, Profile: profile, ExpectedRunSha256: hex.EncodeToString(sumFixture(run)), ExpectedConfigSha256: hex.EncodeToString(sumFixture(config))}
 	fixture.UnacknowledgedDev = unacknowledged
 	fixture.PreviousConfirmedQuit = previousConfirmed
-	if interrupted || unacknowledged {
+	if interrupted || unacknowledged || installed {
 		fixture.ExpectedQuitSha256 = hex.EncodeToString(sumFixture(quit))
 	}
 	raw, err = json.Marshal(fixture)
@@ -166,7 +179,7 @@ func testEmptyRecoveryHostWithBuiltCore(t *testing.T, interrupted, unacknowledge
 	if _, err := os.Lstat(filepath.Join(state, "running.json")); !os.IsNotExist(err) {
 		t.Fatal("failed run not retained away from live marker", err)
 	}
-	if interrupted || unacknowledged {
+	if interrupted || unacknowledged || installed {
 		name := "failed-last-quit.json"
 		if previousConfirmed {
 			name = "previous-last-quit.json"
@@ -179,16 +192,26 @@ func testEmptyRecoveryHostWithBuiltCore(t *testing.T, interrupted, unacknowledge
 			t.Fatal("live failed Quit not archived", err)
 		}
 	}
-	if unacknowledged {
+	if unacknowledged || installed {
 		if retained, err := os.ReadFile(filepath.Join(state, "config.json")); err != nil || string(retained) != string(config) {
 			t.Fatal("configuration changed", err)
 		}
 		var completed struct {
-			UnacknowledgedDev     struct{ OriginalRetirement, OriginalACK, OriginalTerminal, TerminalReceiptScope, OriginalQuitScope, PreviousConfirmedQuitSha256, FailedQuitSha256 string }
-			InterruptedRetirement json.RawMessage
+			UnacknowledgedDev      struct{ OriginalRetirement, OriginalACK, OriginalTerminal, TerminalReceiptScope, OriginalQuitScope, PreviousConfirmedQuitSha256, FailedQuitSha256 string }
+			InstalledEmptyLifetime struct{ OriginalRetirement, OriginalACK, OriginalTerminal, TerminalReceiptScope, OriginalQuitScope, PreviousConfirmedQuitSha256, FailedQuitSha256 string }
+			InterruptedRetirement  json.RawMessage
 		}
-		if err := json.Unmarshal(receipt, &completed); err != nil || completed.UnacknowledgedDev.OriginalRetirement != "absent" || completed.UnacknowledgedDev.OriginalACK != "absent" || completed.UnacknowledgedDev.OriginalTerminal != "unobserved" || completed.UnacknowledgedDev.TerminalReceiptScope != "new-maintenance-child" || len(completed.InterruptedRetirement) != 0 {
-			t.Fatal("invented original terminal/ACK", err)
+		if err := json.Unmarshal(receipt, &completed); err != nil {
+			t.Fatal(err)
+		}
+		if installed {
+			if completed.UnacknowledgedDev.OriginalRetirement != "" {
+				t.Fatal("installed maintenance relabeled Dev")
+			}
+			completed.UnacknowledgedDev = completed.InstalledEmptyLifetime
+		}
+		if completed.UnacknowledgedDev.OriginalRetirement != "absent" || completed.UnacknowledgedDev.OriginalACK != "absent" || completed.UnacknowledgedDev.OriginalTerminal != "unobserved" || completed.UnacknowledgedDev.TerminalReceiptScope != "new-maintenance-child" || len(completed.InterruptedRetirement) != 0 {
+			t.Fatal("invented original terminal/ACK")
 		}
 		if previousConfirmed && (completed.UnacknowledgedDev.OriginalQuitScope != "previous-lifetime" || completed.UnacknowledgedDev.PreviousConfirmedQuitSha256 != hex.EncodeToString(sumFixture(quit)) || completed.UnacknowledgedDev.FailedQuitSha256 != "") {
 			t.Fatal("previous clean Quit incorrectly attributed to interrupted lifetime")

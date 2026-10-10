@@ -41,6 +41,7 @@ export interface ExactEmptyRecoverySelection {
 }
 export interface EmptyRecoverySelectionInput {
   readonly UnacknowledgedDev?: true;
+  readonly InstalledEmpty?: true;
   readonly Interrupted?: {
     readonly OriginalHandoffID: string;
     readonly ExpectedACKDigest: readonly number[];
@@ -149,6 +150,8 @@ export function prepareEmptyRecoveryChild(
   let expected: ExactEmptyRecoverySelection;
   let selectedProfile: ProfileLaunchBinding;
   let payload: string;
+  let preparationMode:
+    "prepare-empty-recovery" | "prepare-installed-empty-recovery";
   try {
     selectedProfile = structuredClone(profile);
     expected = structuredClone(exactSelectionCorrelation);
@@ -201,12 +204,22 @@ export function prepareEmptyRecoveryChild(
       ...(fields.includes("Profile") ? ["Profile"] : []),
       ...(fields.includes("Interrupted") ? ["Interrupted"] : []),
       ...(fields.includes("UnacknowledgedDev") ? ["UnacknowledgedDev"] : []),
+      ...(fields.includes("InstalledEmpty") ? ["InstalledEmpty"] : []),
     ]);
     if (
       fields.includes("UnacknowledgedDev") &&
       (v.UnacknowledgedDev !== true || fields.includes("Interrupted"))
     )
       throw Error("invalid unacknowledged Dev selection");
+    if (
+      fields.includes("InstalledEmpty") &&
+      (v.InstalledEmpty !== true ||
+        fields.includes("Interrupted") ||
+        fields.includes("UnacknowledgedDev") ||
+        !Array.isArray(v.Mutations) ||
+        v.Mutations.length !== 0)
+    )
+      throw Error("invalid installed empty selection");
     if (fields.includes("Interrupted")) {
       const interrupted = object(v.Interrupted, [
         "OriginalHandoffID",
@@ -256,6 +269,10 @@ export function prepareEmptyRecoveryChild(
       !Array.isArray(v.Mutations)
     )
       throw Error("input correlation mismatch");
+    preparationMode =
+      v.InstalledEmpty === true
+        ? "prepare-installed-empty-recovery"
+        : "prepare-empty-recovery";
   } catch {
     return Promise.reject(
       new BridgeError("refused", "empty_recovery_selection_invalid"),
@@ -268,7 +285,7 @@ export function prepareEmptyRecoveryChild(
       child = spawn(
         executable,
         [
-          "prepare-empty-recovery",
+          preparationMode,
           "--profile",
           selectedProfile.profileId,
           "--profile-root",

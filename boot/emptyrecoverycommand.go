@@ -57,6 +57,8 @@ func runEmptyRecoveryInspection(args []string, in io.Reader, out io.Writer, diag
 			for _, r := range v.InterruptedRetained.Retained {
 				observed.Retained = append(observed.Retained, retained{r.Key, r.SHA256})
 			}
+		} else if v.EmptyRetained != nil {
+			observed.Retained = []retained{}
 		} else {
 			for _, r := range v.Retained.Retained {
 				observed.Retained = append(observed.Retained, retained{r.Key, r.SHA256})

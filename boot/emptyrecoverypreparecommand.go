@@ -17,7 +17,8 @@ import (
 )
 
 // No public runtime method exposes this mode. The Go entry also confines its
-// physical profile to the two Dev namespaces; production roots are refused.
+// physical profile to its selected Dev or installed namespace. The commands
+// cannot substitute for each other or grant ordinary runtime authority.
 // The exact, independently verified
 // native host owns profile lease/process closure before starting this child.
 // ACK is a separate initiating-host message, not a recorded journal projection.
@@ -28,9 +29,23 @@ func runEmptyRecoveryPreparation(args []string, in io.Reader, out, diagnostics i
 // Private test seam selects a shorter deadline on REAL disposable pipes. The
 // production command always uses five seconds and refuses noninterruptible I/O
 // before effects; it never abandons an outstanding read/write goroutine.
-func runEmptyRecoveryPreparationDeadline(args []string, in io.Reader, out, diagnostics io.Writer, deadline time.Time) (code int) {
+func runEmptyRecoveryPreparationDeadline(args []string, in io.Reader, out, diagnostics io.Writer, deadline time.Time) int {
+	return runSelectedEmptyRecoveryPreparationDeadline(args, in, out, diagnostics, deadline, false)
+}
+
+// Installed maintenance has its own exact namespace and selection. It never
+// weakens the Dev command or supplies normal runtime/replay authority.
+func runInstalledEmptyRecoveryPreparation(args []string, in io.Reader, out, diagnostics io.Writer) int {
+	return runSelectedEmptyRecoveryPreparationDeadline(args, in, out, diagnostics, time.Now().Add(5*time.Second), true)
+}
+
+func runSelectedEmptyRecoveryPreparationDeadline(args []string, in io.Reader, out, diagnostics io.Writer, deadline time.Time, installed bool) (code int) {
 	binding, ok := nativeInspectionBinding(args)
-	if !ok || !emptyRecoveryDevRoot(binding.Root) {
+	allowedRoot := emptyRecoveryDevRoot(binding.Root)
+	if installed {
+		allowedRoot = emptyRecoveryInstalledRoot(binding.Root)
+	}
+	if !ok || !allowedRoot {
 		return 2
 	}
 	input, output, closeStreams, err := emptyRecoveryDeadlineStreams(in, out)
@@ -57,6 +72,9 @@ func runEmptyRecoveryPreparationDeadline(args []string, in io.Reader, out, diagn
 	d := json.NewDecoder(bytes.NewReader(raw))
 	d.DisallowUnknownFields()
 	if d.Decode(&selected) != nil || d.Decode(new(any)) != io.EOF || selected.Profile != (ProfileBinding{}) {
+		return 2
+	}
+	if selected.InstalledEmpty != installed || installed && (selected.UnacknowledgedDev || selected.Interrupted != nil || len(selected.Mutations) != 0) {
 		return 2
 	}
 	selected.Profile = binding
@@ -119,4 +137,14 @@ func emptyRecoveryDevRoot(root string) bool {
 	}
 	name := filepath.Base(filepath.Dir(state))
 	return name == "Farol Dev" || name == "Farol DEV"
+}
+
+// Same physical layout as production startup; the trusted host still pins the
+// owner HOME, executable, original records, leases and process absence.
+func emptyRecoveryInstalledRoot(root string) bool {
+	if !validProfilePath(root) || filepath.Base(root) != "go-core" {
+		return false
+	}
+	state := filepath.Dir(root)
+	return filepath.Base(state) == "farol-next-state" && filepath.Base(filepath.Dir(state)) == "Farol Next Preview"
 }

@@ -37,7 +37,10 @@ for (const mutation of fixture.Input.Mutations) {
 }
 const userData = path.dirname(path.dirname(fixture.Profile.Root));
 if (
-  path.basename(userData) !== "Farol Dev" ||
+  path.basename(userData) !==
+    (fixture.Input.InstalledEmpty === true
+      ? "Farol Next Preview"
+      : "Farol Dev") ||
   path.dirname(path.dirname(userData)) !== path.join(root, "_output/tmp") ||
   !path.basename(path.dirname(userData)).startsWith("retirement-boot-")
 )
@@ -80,7 +83,7 @@ try {
   await build({
     stdin: {
       contents:
-        'export { recoverClosedEmptyChat, recoverInterruptedEmptyChat, recoverUnacknowledgedEmptyDev } from "./src/apps/desktop/closed-empty-chat-recovery.ts"; export { assertClosedConnectorProcesses } from "./src/apps/desktop/closed-computer-recovery.ts";',
+        'export { recoverClosedEmptyChat, recoverInterruptedEmptyChat, recoverUnacknowledgedEmptyDev, recoverInstalledEmptyChat } from "./src/apps/desktop/closed-empty-chat-recovery.ts"; export { assertClosedConnectorProcesses } from "./src/apps/desktop/closed-computer-recovery.ts";',
       resolveDir: root,
       loader: "ts",
     },
@@ -95,12 +98,14 @@ try {
     recoverClosedEmptyChat,
     recoverInterruptedEmptyChat,
     recoverUnacknowledgedEmptyDev,
+    recoverInstalledEmptyChat,
     assertClosedConnectorProcesses,
   } = createRequire(import.meta.url)(output);
   const s = fixture.Input.Selection;
   const interrupted = fixture.Input.Interrupted !== undefined;
   const unacknowledged = fixture.UnacknowledgedDev === true;
-  if (unacknowledged) {
+  const installed = fixture.Input.InstalledEmpty === true;
+  if (unacknowledged || installed) {
     const actual = await activationObligations(userData, {
       isAlive: () => false,
     });
@@ -109,16 +114,26 @@ try {
     assert.deepEqual(actual.obligations, [
       ...(fixture.PreviousConfirmedQuit === true
         ? []
-        : ["QUIT_UNCONFIRMED:go-core,connector"]),
+        : [
+            installed
+              ? "QUIT_UNCONFIRMED:connector,go-core"
+              : "QUIT_UNCONFIRMED:go-core,connector",
+          ]),
       "QUIT_UNCONFIRMED:crash",
     ]);
   }
-  if (unacknowledged && interrupted) throw Error("HOST_FIXTURE_MODE_INVALID");
-  const recover = unacknowledged
-    ? recoverUnacknowledgedEmptyDev
-    : interrupted
-      ? recoverInterruptedEmptyChat
-      : recoverClosedEmptyChat;
+  if (
+    (installed && (unacknowledged || interrupted)) ||
+    (unacknowledged && interrupted)
+  )
+    throw Error("HOST_FIXTURE_MODE_INVALID");
+  const recover = installed
+    ? recoverInstalledEmptyChat
+    : unacknowledged
+      ? recoverUnacknowledgedEmptyDev
+      : interrupted
+        ? recoverInterruptedEmptyChat
+        : recoverClosedEmptyChat;
   const result = await recover({
     userData,
     executable: path.join(directory, "farol-backend"),
@@ -140,11 +155,11 @@ try {
     },
     expectedRunSha256: fixture.ExpectedRunSha256,
     expectedConfigSha256: fixture.ExpectedConfigSha256,
-    ...(interrupted || unacknowledged
+    ...(interrupted || unacknowledged || installed
       ? { expectedQuitSha256: fixture.ExpectedQuitSha256 }
       : {}),
     desktopState: async () =>
-      unacknowledged
+      unacknowledged || installed
         ? activationObligations(userData, { isAlive: () => false })
         : {
             obligations:

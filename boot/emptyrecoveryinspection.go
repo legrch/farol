@@ -23,6 +23,7 @@ type emptyRecoveryInspectionInput struct {
 	Mutations           []mutationrepo.ExpectedSettledRecord
 	Interrupted         *interruptedRetirementInput `json:",omitempty"`
 	UnacknowledgedDev   bool                        `json:",omitempty"`
+	InstalledEmpty      bool                        `json:",omitempty"`
 }
 
 type interruptedRetirementInput struct {
@@ -36,6 +37,7 @@ type emptyRecoveryInspection struct {
 	Access               accessrepo.ClosedInspection
 	Retained             mutationrepo.SettledInspection
 	InterruptedRetained  *mutationrepo.InterruptedChatSettledInspection
+	EmptyRetained        *mutationrepo.EmptyInspection
 	HandoffSteps         int
 }
 
@@ -66,6 +68,9 @@ type emptyRecoveryChatClaims struct {
 }
 
 func withEmptyRecoveryClaims(ctx context.Context, in emptyRecoveryInspectionInput, visit func(emptyRecoveryInspection, *emptyRecoveryChatClaims) error) (resultErr error) {
+	if in.InstalledEmpty && (in.UnacknowledgedDev || in.Interrupted != nil || !emptyRecoveryInstalledRoot(in.Profile.Root) || len(in.Mutations) != 0) {
+		return emptyrecovery.Refused
+	}
 	if in.UnacknowledgedDev && (in.Interrupted != nil || !emptyRecoveryDevRoot(in.Profile.Root)) {
 		return emptyrecovery.Refused
 	}
@@ -161,6 +166,15 @@ func withEmptyRecoveryClaims(ctx context.Context, in emptyRecoveryInspectionInpu
 			}
 			if err := verify(); err != nil {
 				return err
+			}
+			if in.InstalledEmpty {
+				return mutationrepo.WithClosedEmptyInspection(ctx, mutationrepo.Root{Path: computer.Path, Device: computer.Device, Inode: computer.Inode, OwnerUID: computer.OwnerUID}, func(retained mutationrepo.EmptyInspection) error {
+					if err := verify(); err != nil {
+						return err
+					}
+					callbackErr := visit(emptyRecoveryInspection{Plan: *plan, Computer: computer, Chat: chat, Task: task, Access: access, EmptyRetained: &retained, HandoffSteps: len(hv.Stages)}, claims)
+					return errors.Join(callbackErr, verify())
+				})
 			}
 			// Explicit Dev recovery reuses the same exact known five-result guard.
 			// Ordinary exact-two Completed qualification is unchanged.
