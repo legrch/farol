@@ -28,9 +28,11 @@ context. Existing result reads/stream replay do not reconstruct those originals.
 
 `WithCurrent(ctx, fullSourceRef, callback)` holds the actual lifecycle source gate
 around a synchronous no-IO callback. It is a source fence, not an account or Send
-grant. Composition nests the same account owner guard inside it in source-to-
-account order. Do not reenter source Read/Check, Context/View, models/cache or
-either owner in that callback. Native/provider/durable operations occur outside
+grant. Composition enters the same account owner guard first, then this source/
+Chat gate, matching the existing Browser Send order. Source-to-account inversion
+can deadlock with that route. Do not reacquire an earlier guard or reenter source
+Read/Check, Context/View, models/cache or either owner in that callback.
+Native/provider/durable operations occur outside
 these guarded callbacks with original pre/post fences and UNKNOWN semantics.
 
 Tests run actual lifecycle admission, original journal CAS transitions, output,

@@ -140,8 +140,9 @@ func (s *Source) Check(ctx context.Context, reference contextbudget.SourceRef) e
 // WithCurrent holds the exact original lifecycle source gate around a no-IO
 // callback. It verifies the complete immutable source reference, not InputHash.
 // This is a source fence only, not disclosure/dispatch authority. Composition
-// must nest the SAME selected account's guard inside it (source -> account),
-// and must not reenter Read/Check, context/model services or either owner.
+// must enter the SAME selected account's guard FIRST, then this source/Chat
+// gate, matching existing Browser Send. It must not reacquire an earlier guard
+// or reenter Read/Check, context/model services or either owner.
 func (s *Source) WithCurrent(ctx context.Context, reference contextbudget.SourceRef, inspect func() error) error {
 	if s == nil || ctx == nil || ctx.Err() != nil || s.original == nil || inspect == nil || reference != s.reference {
 		return contextbudget.Stale
