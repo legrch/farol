@@ -76,6 +76,14 @@ func (s *Service) Deliver(ctx context.Context, req DeliverRequest) (*DeliverResp
 		if admitted.Operation.Intent != intent {
 			return nil, task.ErrConflict
 		}
+		// A competing caller may finish the same operation while Admit waits.
+		// Its retained receipt is evidence, not authority for this disclosure.
+		if err := s.recheck(ctx, current.Binding); err != nil {
+			return nil, err
+		}
+		if err := s.authority.RecheckParent(ctx, current.Parent); err != nil {
+			return nil, err
+		}
 		if admitted.Operation.Settled {
 			return &DeliverResponse{req.OperationID, req.TaskID, admitted.Operation.Receipt}, nil
 		}
