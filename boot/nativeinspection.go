@@ -28,6 +28,7 @@ type nativeStateInspection struct {
 	ChatVersion        int            `json:"chatVersion"`
 	ChatWriteCount     int            `json:"chatWriteCount"`
 	ChatTurnCount      int            `json:"chatTurnCount"`
+	ChatPlanCount      int            `json:"chatPlanCount,omitempty"`
 	ChatIncarnations   int            `json:"chatIncarnationCount"`
 	ChatRetirement     bool           `json:"chatRetirementRecorded"`
 	ComputerRoot       inspectionRoot `json:"computerRoot"`
@@ -77,7 +78,8 @@ func inspectNativeState(ctx context.Context, binding ProfileBinding) (result *na
 		ProfileRoot: inspectionPhysical(binding.Device, binding.Inode), ChatRoot: inspectionPhysical(chat.Device, chat.Inode),
 		BackendGeneration: c.Scope.BackendGeneration, ChatSnapshotSHA256: hex.EncodeToString(c.SnapshotDigest[:]), ChatVersion: c.Version,
 		ChatWriteCount: c.WriteCount, ChatTurnCount: c.TurnCount, ChatIncarnations: len(c.Incarnations), ChatRetirement: c.Retirement != nil,
-		ComputerRoot: inspectionPhysical(computer.Device, computer.Inode), MutationRoot: inspectionPhysical(m.MutationsDevice, m.MutationsInode), MutationLock: inspectionPhysical(m.LockDevice, m.LockInode),
+		ChatPlanCount: c.PlanCount,
+		ComputerRoot:  inspectionPhysical(computer.Device, computer.Inode), MutationRoot: inspectionPhysical(m.MutationsDevice, m.MutationsInode), MutationLock: inspectionPhysical(m.LockDevice, m.LockInode),
 		RecoveryAuthorized: false,
 	}, nil
 }
