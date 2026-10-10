@@ -10316,33 +10316,63 @@ async function createTaskViews(): Promise<void> {
   if (startupIsCurrent()) applyLayout();
 }
 
-async function consumeSse(task: RuntimeReady["tasks"][number]): Promise<void> {
-  if (!runtime || !window) return;
-  const controller = new AbortController();
+async function consumeSse(
+  task: RuntimeReady["tasks"][number],
+  controller = new AbortController(),
+): Promise<void> {
+  const activeRuntime = runtime;
+  const taskViewHost = window;
+  if (
+    !activeRuntime ||
+    !taskViewHost ||
+    taskViewHost.isDestroyed() ||
+    runtimeState !== "ready" ||
+    quitInProgress ||
+    installedUpdateAdmission
+  )
+    return;
   streamControllers.get(task.taskId)?.abort();
   streamControllers.set(task.taskId, controller);
+  const streamIsCurrent = () =>
+    !controller.signal.aborted &&
+    streamControllers.get(task.taskId) === controller &&
+    runtime === activeRuntime &&
+    runtimeState === "ready" &&
+    window === taskViewHost &&
+    !taskViewHost.isDestroyed() &&
+    !quitInProgress &&
+    !installedUpdateAdmission;
   const response = await fetch(
-    `http://127.0.0.1:${runtime.port}/events/${encodeURIComponent(task.taskId)}`,
+    `http://127.0.0.1:${activeRuntime.port}/events/${encodeURIComponent(task.taskId)}`,
     {
       headers: { authorization: `Bearer ${task.readToken}` },
       signal: controller.signal,
     },
   );
+  if (!streamIsCurrent()) {
+    if (streamControllers.get(task.taskId) === controller) {
+      streamControllers.delete(task.taskId);
+    }
+    return;
+  }
   if (!response.ok || !response.body)
     throw new Error("RUNTIME_STREAM_UNAVAILABLE");
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let carry = "";
-  while (!controller.signal.aborted) {
+  while (streamIsCurrent()) {
     const part = await reader.read();
+    // A dispatched read may still settle after its controller or host was
+    // replaced. Its bytes cannot update the replacement's projection.
+    if (!streamIsCurrent()) break;
     if (part.done) {
-      if (!controller.signal.aborted) throw new Error("RUNTIME_STREAM_ENDED");
-      break;
+      throw new Error("RUNTIME_STREAM_ENDED");
     }
     carry += decoder.decode(part.value, { stream: true });
     const frames = carry.split("\n\n");
     carry = frames.pop() ?? "";
     for (const frame of frames) {
+      if (!streamIsCurrent()) break;
       const data = frame
         .split("\n")
         .find((line) => line.startsWith("data: "))
@@ -10367,7 +10397,7 @@ async function consumeSse(task: RuntimeReady["tasks"][number]): Promise<void> {
       ) {
         pendingComputer.delete(task.taskId);
       }
-      window?.webContents.send(channels.runtimeEvent, parsed.data);
+      taskViewHost.webContents.send(channels.runtimeEvent, parsed.data);
     }
   }
   if (streamControllers.get(task.taskId) === controller) {
@@ -10722,9 +10752,18 @@ async function createWindow(): Promise<void> {
   }
   for (const task of runtime?.tasks ?? []) {
     if (!startupIsCurrent()) return;
-    void consumeSse(task).catch((error: unknown) => {
+    const activeRuntime = runtime;
+    const controller = new AbortController();
+    void consumeSse(task, controller).catch((error: unknown) => {
       if (error instanceof Error && error.name === "AbortError") return;
-      if (!startupIsCurrent() || runtimeState !== "ready") return;
+      if (
+        !startupIsCurrent() ||
+        runtimeState !== "ready" ||
+        runtime !== activeRuntime ||
+        controller.signal.aborted ||
+        streamControllers.get(task.taskId) !== controller
+      )
+        return;
       failTaskSurface(task.taskId);
     });
   }
