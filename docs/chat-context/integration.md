@@ -2,7 +2,8 @@
 
 Base: `99aca15ffe16b435e59b19c20ff48e06bd56960d` (tree
 `92047a064fede82658c37cf0f0a76004f6ce291c`). Policy/source-map commit:
-`4846414ccdfdf04ee06fbf98ae711e8cfa9afaec`. Branch:
+`4846414ccdfdf04ee06fbf98ae711e8cfa9afaec`. App/composition commit:
+`426e4213f2fee2a3ddfb0d6e08c978c54c9848df`. Branch:
 `feature/chat-context-checkpoints`. This feature does not change shipping boot,
 wire schemas, contracts, existing journals, authority or release behavior.
 
@@ -59,6 +60,9 @@ a new standalone provider client or live entitlement claim.
    Observing lost-ACK content does not acknowledge publication, delivery or
    compaction and does not permit another publish. Keep source originals or an
    exact owner-qualified reconstruction path; do not silently prune journals.
+   A nil observation must prove the original operation absent, including durable
+   admission and UNKNOWN bookkeeping; an inconclusive observation is an error,
+   never permission to redispatch. Restart preparation observes before admission.
 3. INFERENCE should consume `Materialized.JSON` and its identity sidecar through
    an owner-controlled mapped seam, verifying the complete selected binding and
    original consent immediately before send. No cross-service import, published
