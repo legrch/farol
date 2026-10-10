@@ -828,3 +828,24 @@ func TestRuntimePreservesOriginalInstructionWithoutInventingTurn(t *testing.T) {
 		t.Fatalf("original instruction lost: %+v", got)
 	}
 }
+
+func TestRuntimeFinalGateRollbackAfterNewerOperationSample(t *testing.T) {
+	f := newFixture(t)
+	original := f.clock.NowMillis()
+	calls := 0
+	f.ledger.afterSettle = func() {
+		f.source.beforeGate = func() {
+			calls++
+			switch calls {
+			case 1:
+				f.clock.change(original + 10)
+			case 2:
+				f.clock.change(original + 5)
+			}
+		}
+	}
+	got := f.runtime.Infer(context.Background(), f.prepared)
+	if got.State != inference.Suppressed || got.RemoteState != inference.Completed || got.Text != "" || f.publication.calls != 0 || f.writer.calls != 1 || f.ledger.settles != 1 {
+		t.Fatalf("rollback after newer operation sample exposed completed output: outcome=%+v publish=%d http=%d settles=%d sourceFinalCalls=%d", got, f.publication.calls, f.writer.calls, f.ledger.settles, calls)
+	}
+}

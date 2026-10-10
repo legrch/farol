@@ -68,20 +68,30 @@ type operation struct {
 	last     uint64
 }
 
+// Service and authority share ONE original clock high-water, including the
+// sample after entering the final source callback. A rollback cannot be noticed
+// only by the account's post-publication check after output already escaped.
+func (o *operation) currentTime() (uint64, bool) {
+	o.clockMu.Lock()
+	defer o.clockMu.Unlock()
+	now := o.runtime.options.Clock.NowMillis()
+	if now == 0 || now < o.last || now >= o.prepared.reference.Binding.DeadlineMillis {
+		return now, false
+	}
+	o.last = now
+	return now, true
+}
+
 func (o *operation) WithCurrent(ctx context.Context, b inference.Binding, f func() error) error {
 	if ctx == nil || ctx.Err() != nil || f == nil || b != o.prepared.reference.Binding {
 		return inference.Withdrawn
 	}
 	// Producer budget evaluation is outside the gates and invokes no owner
 	// services. The original service's final callback uses only the bounded clock.
-	o.clockMu.Lock()
-	now := o.runtime.options.Clock.NowMillis()
-	if now == 0 || now < o.last || now >= b.DeadlineMillis {
-		o.clockMu.Unlock()
+	now, valid := o.currentTime()
+	if !valid {
 		return inference.Withdrawn
 	}
-	o.last = now
-	o.clockMu.Unlock()
 	ref := o.prepared.reference
 	if ms.CheckCurrentBudget(o.prepared.estimate, ms.EstimateContext{Selection: o.prepared.resolved, InputDigest: ref.Receipt.InputHash, Source: ref.EstimatorSource, Version: ref.EstimatorVersion, NowMillis: now}, ref.Budget) != nil {
 		return inference.Withdrawn
@@ -156,13 +166,13 @@ type transport struct {
 // Existing service deadline checks also refuse expired estimate validity, even
 // after waiting to enter the final source/account publication callback.
 type estimateClock struct {
-	original                        inference.Clock
+	operation                       *operation
 	estimateExpiry, requestDeadline uint64
 }
 
 func (c estimateClock) NowMillis() uint64 {
-	now := c.original.NowMillis()
-	if now >= c.estimateExpiry {
+	now, valid := c.operation.currentTime()
+	if !valid || now >= c.estimateExpiry {
 		return c.requestDeadline
 	}
 	return now
@@ -212,7 +222,7 @@ func (r *Runtime) Infer(ctx context.Context, p *Prepared) inference.Outcome {
 	if op.check(ctx) != nil {
 		return inference.Outcome{State: inference.NotSent, Code: inference.Withdrawn}
 	}
-	service, err := inference.New(inference.Options{Clock: estimateClock{r.options.Clock, p.reference.Estimate.Observation.ExpiresAtMillis, p.reference.Binding.DeadlineMillis}, Deadline: r.options.Deadline, Digester: r.options.Digester, Authority: op, Ledger: ledger{op}, Credentials: credentials{op}, Publication: publication{op}, Transport: transport{op, planresponses.New(r.options.HTTP)}})
+	service, err := inference.New(inference.Options{Clock: estimateClock{op, p.reference.Estimate.Observation.ExpiresAtMillis, p.reference.Binding.DeadlineMillis}, Deadline: r.options.Deadline, Digester: r.options.Digester, Authority: op, Ledger: ledger{op}, Credentials: credentials{op}, Publication: publication{op}, Transport: transport{op, planresponses.New(r.options.HTTP)}})
 	if err != nil {
 		return inference.Outcome{State: inference.NotSent, Code: inference.Invalid}
 	}
