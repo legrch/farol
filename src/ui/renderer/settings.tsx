@@ -810,19 +810,25 @@ function Folders(props: PageProps) {
     requestedId,
     id: requestedId,
   });
+  const selectionRevision = useRef(0);
   // Honor a new destination immediately, while retaining ordinary local selection.
   const selectedId =
     selection.requestedId === requestedId
       ? selection.id
       : (requestedId ?? selection.id);
   useEffect(() => {
+    // History may restore the same destination object after another inspection.
+    selectionRevision.current += 1;
     setSelection((previous) =>
       previous.requestedId === requestedId
         ? previous
         : { requestedId, id: requestedId ?? previous.id },
     );
   }, [requestedId]);
-  const selectWorkspace = (id: string) => setSelection({ requestedId, id });
+  const selectWorkspace = (id: string) => {
+    selectionRevision.current += 1;
+    setSelection({ requestedId, id });
+  };
   const explicitSelection = requestedId !== null && selectedId === requestedId;
   const selected =
     settings.computer.workspaces.find(
@@ -934,6 +940,7 @@ function Folders(props: PageProps) {
                   evidence?.value.kind !== "computer.workspace-pick"
                 )
                   return;
+                const selectionAtDispatch = selectionRevision.current;
                 setPicked(null);
                 void actions
                   .run({
@@ -945,6 +952,8 @@ function Folders(props: PageProps) {
                     const after = facade.getSnapshot();
                     const selected = after.evidence?.value;
                     if (
+                      selectionAtDispatch === selectionRevision.current &&
+                      after.destination === before.destination &&
                       after.evidence !== before.evidence &&
                       selected?.kind === "computer.workspace-selection" &&
                       after.configuration?.status === "ready" &&

@@ -625,6 +625,142 @@ describe("compact workspace detail", () => {
       { kind: "computer.add-workspace", selectionId },
     ]);
   });
+  it.each([
+    { inspect: "second", approved: workspaceId },
+    { inspect: "project", approved: selectionId },
+  ])(
+    "keeps a newer $inspect inspection when an earlier approval finishes",
+    async ({ inspect, approved }) => {
+      const h = await mount("folders", twoWorkspaces());
+      const approval = deferred<unknown>();
+      vi.mocked(h.f.api.configure)
+        .mockResolvedValueOnce({
+          ok: true,
+          snapshot: h.configuration,
+          evidence: {
+            kind: "computer.workspace-pick",
+            selectionId,
+            displayPath: "/approved/project",
+          },
+        })
+        .mockReturnValueOnce(approval.promise);
+      await h.click("Add workspace…");
+      await h.click("Add selected workspace read-only");
+      await select(h, inspect);
+      await act(async () =>
+        approval.resolve({
+          ok: true,
+          snapshot: h.configuration,
+          evidence: {
+            kind: "computer.workspace-selection",
+            workspaceId: approved,
+          },
+        }),
+      );
+      expect(
+        h.c.getSnapshot().intents["settings:computer.add-workspace:"],
+      ).toMatchObject({ state: "applied" });
+      expect(
+        activePage(h.host)
+          .querySelector('.workspace-choice[aria-current="true"]')
+          ?.getAttribute("aria-label"),
+      ).toBe(`Select workspace ${inspect}`);
+      expect(h.c.getSnapshot().configuration).toEqual(h.configuration);
+      expect(h.calls()).toEqual([
+        { kind: "computer.choose-workspace" },
+        { kind: "computer.add-workspace", selectionId },
+      ]);
+    },
+  );
+  it("retains a newer workspace destination after a late approval and generic reentry", async () => {
+    const h = await mount("folders", twoWorkspaces());
+    const approval = deferred<unknown>();
+    vi.mocked(h.f.api.configure)
+      .mockResolvedValueOnce({
+        ok: true,
+        snapshot: h.configuration,
+        evidence: {
+          kind: "computer.workspace-pick",
+          selectionId,
+          displayPath: "/approved/project",
+        },
+      })
+      .mockReturnValueOnce(approval.promise);
+    await h.click("Add workspace…");
+    await h.click("Add selected workspace read-only");
+    await act(async () =>
+      h.c.navigate({
+        area: "settings",
+        page: "folders",
+        workspaceId: selectionId,
+      }),
+    );
+    await act(async () =>
+      approval.resolve({
+        ok: true,
+        snapshot: h.configuration,
+        evidence: { kind: "computer.workspace-selection", workspaceId },
+      }),
+    );
+    expect(
+      activePage(h.host)
+        .querySelector('.workspace-choice[aria-current="true"]')
+        ?.getAttribute("aria-label"),
+    ).toBe("Select workspace second");
+    await act(async () => h.c.navigate({ workspaceId: null }));
+    expect(
+      activePage(h.host)
+        .querySelector('.workspace-choice[aria-current="true"]')
+        ?.getAttribute("aria-label"),
+    ).toBe("Select workspace second");
+    expect(
+      h.c.getSnapshot().intents["settings:computer.add-workspace:"],
+    ).toMatchObject({ state: "applied" });
+    expect(h.calls()).toHaveLength(2);
+  });
+  it("retains a newer workspace inspection after history restores the approval origin", async () => {
+    const h = await mount("folders", twoWorkspaces());
+    const approval = deferred<unknown>();
+    vi.mocked(h.f.api.configure)
+      .mockResolvedValueOnce({
+        ok: true,
+        snapshot: h.configuration,
+        evidence: {
+          kind: "computer.workspace-pick",
+          selectionId,
+          displayPath: "/approved/project",
+        },
+      })
+      .mockReturnValueOnce(approval.promise);
+    await h.click("Add workspace…");
+    await h.click("Add selected workspace read-only");
+    const origin = h.c.getSnapshot().destination;
+    await act(async () =>
+      h.c.navigate({
+        area: "settings",
+        page: "folders",
+        workspaceId: selectionId,
+      }),
+    );
+    await act(async () => h.c.travel(-1));
+    expect(h.c.getSnapshot().destination).toBe(origin);
+    await act(async () =>
+      approval.resolve({
+        ok: true,
+        snapshot: h.configuration,
+        evidence: { kind: "computer.workspace-selection", workspaceId },
+      }),
+    );
+    expect(
+      activePage(h.host)
+        .querySelector('.workspace-choice[aria-current="true"]')
+        ?.getAttribute("aria-label"),
+    ).toBe("Select workspace second");
+    expect(
+      h.c.getSnapshot().intents["settings:computer.add-workspace:"],
+    ).toMatchObject({ state: "applied" });
+    expect(h.calls()).toHaveLength(2);
+  });
   it("checks the current verified workspace read-only and retains its binding", async () => {
     const value = connectionSettings();
     const h = await mount("folders", value);
