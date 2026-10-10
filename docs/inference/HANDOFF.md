@@ -10,7 +10,7 @@ authority, release or installed application was changed.
 
 - B0: `99aca15ffe16b435e59b19c20ff48e06bd56960d`;
   tree `92047a064fede82658c37cf0f0a76004f6ce291c`.
-- Application/credential checkpoint:
+- Application policy checkpoint:
   `a9855f9fb22d28583f78ba5eb5b3859e4f2e075d`.
 - Production transport/composition checkpoint:
   `37a76f39d7ad94a3e1f27b438fa84d87fb985c3a`;
@@ -20,21 +20,24 @@ authority, release or installed application was changed.
   preserves all test bytes; its failed static check is retained below).
 - Filename correction: `02654e0b851766eafdc207ae80204fd55004f9ef`;
   tree `10f969406999106481e0191c4bb94951b204c3dd`.
-- The commit containing this handoff changes documentation only. Its parent is
-  the filename-corrected test checkpoint; production code remains exactly the
-  implementation checkpoint above. Inspect the branch HEAD for the final handoff commit.
+- Initial final handoff: `e2824968b72fb891774a4cdda7f0beaa2c893842`;
+  tree `ea403e2c9439024cfa1d34706874d44e0a7b9694`.
+- The subsequent pinned-consumer witness is confined to this documentation root;
+  its script copies the test fixture into a disposable external adapter assembly.
+  Production code remains exactly the implementation checkpoint above. Inspect
+  the branch HEAD and export manifest for the final witness commit/tree.
 
 ## Seven-package result
 
-| Package                         | Source result                                                                                                                                                                                    | Boundary still requiring its owner                                        |
-| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------- |
-| I1 spike mapping                | Existing Browser/inbound SSE/account grant/model settings/Task paths classified KEEP or ADAPT in README.                                                                                         | No replacement of accepted foundations.                                   |
-| I2 SIWC credentials and consent | Explicit issuer/subject/issued client/host/epoch, requested **and** granted direct scopes, complete atomic rotating credential, private Grant fence, one-shot uncertainty and revocation policy. | Trusted OAuth/OIDC/registration and actual selected secret-store adapter. |
-| I3 public Responses             | Fixed public endpoint, redirects refused, `store:false`, `stream:true`, explicit ordered no-tools history, bounded strict SSE and safe diagnostics.                                              | Separately authorized one-shot live subscription/model entitlement check. |
-| I4 cancellation/post-IO         | Original deadline bounds all IO; original selection rechecked around IO and final publication; remote completion survives delivery withdrawal; entered publication errors remain UNKNOWN.        | Real journal extension and physical delivery writer fence.                |
-| I5 actual composition           | Real Service + private account Grant + ConsentFence + HTTP builder/parser; additional real CredentialManager rotation/lost-reply/deadline composition.                                           | Shipping boot wiring, real owner ports and host qualification.            |
-| I6 model/context consumption    | Detached account catalogue/model/effort and immutable checkpoint/input-hash/budget values; required prior call/result history retained; no silent model fallback or truncation.                  | Map accepted MODELS/CONTEXT values when those source interfaces exist.    |
-| I7 App Server follow-on         | Inert public-plan stdio configuration and bounded renewal/clean original stop/new initialize/same-thread resume contract; stale/unknown lifetimes fenced.                                        | Separately owned Task/process composition; no process or RPC launched.    |
+| Package                         | Source result                                                                                                                                                                                              | Boundary still requiring its owner                                         |
+| ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| I1 spike mapping                | Existing Browser/inbound SSE/account grant/model settings/Task paths classified KEEP or ADAPT in README.                                                                                                   | No replacement of accepted foundations.                                    |
+| I2 SIWC credentials and consent | Explicit issuer/subject/issued client/host/epoch, requested **and** granted direct scopes, complete atomic rotating credential, private Grant fence, one-shot uncertainty and revocation policy.           | Trusted OAuth/OIDC/registration and actual selected secret-store adapter.  |
+| I3 public Responses             | Fixed public endpoint, redirects refused, `store:false`, `stream:true`, explicit ordered no-tools history, bounded strict SSE and safe diagnostics.                                                        | Separately authorized one-shot live subscription/model entitlement check.  |
+| I4 cancellation/post-IO         | Original deadline bounds all IO; original selection rechecked around IO and final publication; remote completion survives delivery withdrawal; entered publication errors remain UNKNOWN.                  | Real journal extension and physical delivery writer fence.                 |
+| I5 actual composition           | Real Service + private account Grant + ConsentFence + HTTP builder/parser; additional real CredentialManager rotation/lost-reply/deadline composition.                                                     | Shipping boot wiring, real owner ports and host qualification.             |
+| I6 model/context consumption    | Actual pinned MODELS Resolve and CONTEXT Prepare/Materialize reach the real Service + public builder/parser in a reproducible disposable assembly; exact history/hash, lifetime and no-replay checks pass. | Shipping mapped seam and explicit incompatible role/effort/wire decisions. |
+| I7 App Server follow-on         | Inert public-plan stdio configuration and bounded renewal/clean original stop/new initialize/same-thread resume contract; stale/unknown lifetimes fenced.                                                  | Separately owned Task/process composition; no process or RPC launched.     |
 
 The additional shipping-advertisement acceptance boundary is closed at source:
 static inspection found zero inference imports/route identifiers in boot,
@@ -43,7 +46,11 @@ not qualification or activation. The actual lane source has seven packages;
 unrelated workflow/compaction capabilities remain with their respective owners.
 
 SOURCE is implemented. COMPOSED is demonstrated through controlled synthetic
-ports and production service/adapter code. PORTABLE targeted checks pass.
+ports and production service/adapter code, including exact public producer sources
+for I6. See [CONSUMER-WITNESS.md](CONSUMER-WITNESS.md) for pins, executable
+reproduction, actual nine-test/33-subcase results and mapping limits. This is
+controlled composition; shipping producer imports/boot are not included.
+PORTABLE targeted checks pass.
 Aggregate acceptance is open; PUSHED must be established from the actual remote
 branch receipt, independently of these source/test claims.
 
@@ -136,14 +143,21 @@ billing change was made to obtain it.
 4. **MODELS owner:** map an accepted account-scoped selection into
    `ModelSelection{Slug, Effort, CapabilityEvidence, CatalogueEpoch}` together with
    exact `Selection.Account`. Confirm model and effort for that selected account;
-   a cached catalogue is not entitlement. No accepted seam commit is consumed by
-   this branch, and a later selection cannot rewrite a reserved intent.
+   a cached catalogue is not entitlement. The disposable I6 witness consumes exact
+   published source `3b8aaff57ae3599e01e8edad1a7a71cd6daf5cd9` without merging it
+   into this branch. Preserve the full pin/capabilities beside the mapped digest;
+   a later selection cannot rewrite a reserved intent. Exact unsupported efforts
+   and account/route/billing mismatches are refused, never substituted.
 5. **CONTEXT owner:** supply immutable ordered `[]InputItem` plus
    `ContextSelection{CheckpointID, InputHash, EstimatedTokens, TokenLimit}`.
    Compute the digest over the same canonical ordered input; preserve complete
    required prior function call/results and refuse unresolved rounds. Do not
-   infer a guaranteed token count from the bounded estimate. No accepted seam
-   commit is consumed by this branch.
+   infer a guaranteed token count from the bounded estimate. The disposable I6
+   witness consumes exact published source
+   `6d459925fc02c14b761fa3d1001038cf007be402` without merging it into this branch.
+   Retain the complete original SourceRef and UNKNOWN sidecar under the same
+   captured Binding authority. Instruction role, absent effort and strict wire
+   incompatibilities remain explicit owner decisions in CONSUMER-WITNESS.
 6. **Task/process owner, future only:** map verified registration identity and
    account/model capability to `AppServerConfig`; own process creation,
    `ACCESS_TOKEN` injection, ambient tool/config isolation, original stop/join,
@@ -153,8 +167,11 @@ billing change was made to obtain it.
 
 ## Remaining gates
 
-Production boot/secret/journal/physical writer composition; accepted MODELS and
-CONTEXT seams; aggregate generator/CI failures; formal review; authorized LIVE
+Production boot/secret/journal/physical writer composition; shipping MODELS and
+CONTEXT mapped seams; aggregate generator/CI failures; formal review; authorized LIVE
 SIWC registration/OIDC/direct inference and failure semantics; MAC secret
 storage/process cleanup/resume; package/install/shipping qualification. No main
 merge, release, native acceptance or live provider success is claimed.
+
+The original GraphQL PR attempt returned `Forbidden` and remains held. No PR ID
+is verified; [MANUAL-PR.md](MANUAL-PR.md) contains a source-only title/body.
