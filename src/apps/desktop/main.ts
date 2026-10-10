@@ -10296,7 +10296,7 @@ async function createTaskViews(): Promise<void> {
       if (
         !startupIsCurrent() ||
         taskViews.get(task.taskId) !== view ||
-        view.webContents.isDestroyed()
+        view.webContents?.isDestroyed() !== false
       )
         return;
       taskSurfaceFailures.delete(task.taskId);

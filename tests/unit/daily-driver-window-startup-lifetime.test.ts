@@ -405,6 +405,26 @@ it("keeps healthy retained runtime views without creating replacements", async (
   expect(h.count("show")).toBe(1);
 });
 
+it("retains fulfilled load outcome when the admitted view's contents disappear", async () => {
+  const h = host({ stage: "view" });
+  const creating = h.create();
+  await h.reached;
+  const admitted = h.context.taskViews.get("runtime-1");
+  expect(admitted).toBeDefined();
+  // The load was already dispatched. The native contents can disappear
+  // before its destroyed callback has removed the retained map entry.
+  Object.defineProperty(admitted, "webContents", { value: undefined });
+  h.finish();
+  await expect(creating).resolves.toBeUndefined();
+  expect(h.context.taskViews.get("runtime-1")).toBe(admitted);
+  expect(
+    h.events.some(
+      (event) => event.kind === "publish-task" && event.detail === "runtime-1",
+    ),
+  ).toBe(false);
+  expect(h.count("view-load")).toBe(1);
+});
+
 it("rechecks after window-state publication before creating views", async () => {
   const h = host({ reentrant: { event: "publish-window", action: "close" } });
   const creating = h.create();
