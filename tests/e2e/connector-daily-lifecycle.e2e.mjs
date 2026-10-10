@@ -988,6 +988,25 @@ async function dispose(run) {
   if (run.application && run.isolated && !run.quitAttempted)
     await attempt(() => normalQuit(run));
   await attempt(() => originalClose(run));
+  // The original endpoint remains owned and listening while its admission
+  // witness is consumed. Close it only after the exact child terminal recheck.
+  if (
+    run.cleanQuit &&
+    run.closeAttempted &&
+    errors.length === 0 &&
+    !run.evidence.failure
+  )
+    await attempt(async () => {
+      run.admission = await recheckNativePreviewIsolation(
+        run.admission,
+        run.nativePaths,
+        run.child,
+      );
+      run.evidence.disposal.push({
+        kind: "post-quit-native-admission-recheck",
+        status: "confirmed",
+      });
+    });
   if (run.server)
     await attempt(async () => {
       await bounded(
@@ -1003,7 +1022,7 @@ async function dispose(run) {
         status: "returned",
       });
     });
-  // Reuse the original admission witness for post-exit singleton/root proof.
+  // The endpoint is now closed; use the completed recheck for root disposal.
   if (
     run.cleanQuit &&
     run.closeAttempted &&
@@ -1011,11 +1030,6 @@ async function dispose(run) {
     !run.evidence.failure
   )
     await attempt(async () => {
-      run.admission = await recheckNativePreviewIsolation(
-        run.admission,
-        run.nativePaths,
-        run.child,
-      );
       await sameRoot(run.home);
       await sameRoot(run.auxiliary);
       assert.equal(
