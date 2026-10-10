@@ -324,6 +324,7 @@ func (a *controlledAdmission) Do(ctx context.Context, parent wf.Parent, _ string
 }
 
 type composition struct {
+	trace     *traceEffectProbe
 	t         *testing.T
 	root      repo.FilesystemRoot
 	journal   *repo.Filesystem
@@ -405,7 +406,11 @@ func (f *composition) install(taskID string, epoch uint64) {
 	if err != nil {
 		f.t.Fatal(err)
 	}
-	service, err := tasksvc.NewOwned(route, f.authority, map[task.Provider]port.Provider{f.authority.binding.Provider: f.provider}, f.delivery, intent.Fingerprint, providerclient.NewProgress)
+	provider := port.Provider(f.provider)
+	if f.trace != nil {
+		provider = &traceProbeProvider{Provider: provider, journal: f.journal, probe: f.trace}
+	}
+	service, err := tasksvc.NewOwned(route, f.authority, map[task.Provider]port.Provider{f.authority.binding.Provider: provider}, f.delivery, intent.Fingerprint, providerclient.NewProgress)
 	if err != nil {
 		f.t.Fatal(err)
 	}

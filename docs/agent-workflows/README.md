@@ -34,6 +34,8 @@ synchronous capture returns. Subsequent caller/port mutations cannot change the
 in-call identity or policy. This value snapshot does not replace trusted durable
 plan retention. The additional [acceptance audit](audit.md) records the reproduced
 mutation defects and their regression coverage.
+The bounded [restart traces](traces.md) add partial-settlement/revocation and
+shared controlled admission combinations through the actual Task journal.
 
 `AdmitNew` explicitly allows new known-missing operations under runtime admission.
 `Reconnect` is observation only: even a missing child stays unknown and cannot

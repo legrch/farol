@@ -9,15 +9,15 @@ to the tested implementation; its final commit is recorded by the export manifes
 
 ## Package coverage
 
-| Package                | Implemented behavior and evidence                                                                                                                                                  |
-| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| W1 finite plan         | Bounded IDs, unique operations, acyclic dependencies, capability/output expectations; pure validation tests.                                                                       |
-| W2 policy              | Caller budget, declaration-order fairness, pause/closed parent, unknown occupancy, independent progress around blocked input/provider; pure scheduling tests.                      |
-| W3 durable dispatch    | Original-operation reads before Create, controlled runtime admission, existing Task intention-before-effect; real service composition and lost-ACK witnesses.                      |
-| W4 result and delivery | Exact retained dispatch/reference correlation, bounded accepted dependency output, independent parent ACK receipt; real filesystem/reconstructed-service tests.                    |
-| W5 cancellation/resume | Request versus terminal observation, unknown cancellation ACK fence, explicit exact Continue/Claude Resume with fresh upstream route; actual Task composition tests.               |
-| W6 composed acceptance | Existing filesystem repository, selected Owner/Route, NewOwned Task service and control DTO facade; controlled provider/authority/admission, corruption/restart and failure cases. |
-| W7 projection          | Content-free completion/output/cancellation/delivery states, documented offline plan executed by the real composition fixture; no shipping UI registration.                        |
+| Package                | Implemented behavior and evidence                                                                                                                                                                                                                              |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| W1 finite plan         | Bounded IDs, unique operations, acyclic dependencies, capability/output expectations; pure validation tests.                                                                                                                                                   |
+| W2 policy              | Caller budget, declaration-order fairness, pause/closed parent, unknown occupancy, independent progress around blocked input/provider; pure scheduling tests.                                                                                                  |
+| W3 durable dispatch    | Original-operation reads and Task intention-before-effect; controlled Original-plan input on reconstruction and lost-ACK traces. Production durable original-plan activation remains an owner seam.                                                            |
+| W4 result and delivery | Exact retained dispatch/reference correlation, bounded accepted dependency output, independent parent ACK receipt; real filesystem/reconstructed-service tests.                                                                                                |
+| W5 cancellation/resume | Request versus terminal observation, unknown cancellation ACK fence, explicit exact Continue/Claude Resume with fresh upstream route; actual Task composition tests.                                                                                           |
+| W6 composed acceptance | Real Task filesystem/Owner/Route/service/DTO composition; controlled provider, explicit Original-plan input, exclusive exact adapter and test-only atomic reservation. Production restart activation, atomic controls and global admission remain unqualified. |
+| W7 projection          | Content-free completion/output/cancellation/delivery states, documented offline plan executed by the real composition fixture; no shipping UI registration.                                                                                                    |
 
 ## Portable verification
 
@@ -34,6 +34,10 @@ On Linux with Go 1.26.2, Node 24.20.0 and npm 11.19.0:
   manifests unchanged.
 - Owned documentation formatting, staged ownership audit, complete diff
   whitespace check and gitleaks scan of the owned diff: PASS.
+
+The later bounded [restart traces](traces.md) extend W3/W6 consumer evidence
+without qualifying the deferred owners. Their separate exact checkpoint and
+source-only export retain the earlier failures below.
 
 The first portable baseline Task race command failed because the default Go
 build cache was read-only. Using an explicit writable workspace cache passed.
