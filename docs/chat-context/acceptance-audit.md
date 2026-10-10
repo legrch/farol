@@ -41,3 +41,8 @@ The finite independent queue is complete. Remaining work is the four precise
 shared-owner seams in [integration.md](integration.md), aggregate CI diagnosis,
 formal review and live/Mac qualification. Source/portable/controlled composition
 delivery does not close those gates or authorize unresolved-operation replay.
+
+The subsequent materialization-boundary supplement is documented separately in
+[plan-compatibility.md](plan-compatibility.md): exact pinned INFERENCE fixture
+consumption and detached producer receipts extend C7 evidence without changing
+the earlier audit's source identity or closing shipping authority/store gates.

@@ -16,6 +16,12 @@ Coherent source commits:
   import correction and exact serialized-budget edge regressions. Source tree:
   `f11bc469deb100b5cafefbaf1fd9916595e9792f`. See
   [acceptance-audit.md](acceptance-audit.md) for the C1–C7 audit.
+- `71c0ec8dee9fa5482f891ed483caf1d2f46ef15c`: detached plan projection,
+  source/policy/byte receipts and producer conformance tests, with the committed
+  disposable exact-pin consumer fixture. See
+  [plan-compatibility.md](plan-compatibility.md). C7 now has fixture consumption
+  through actual pinned INFERENCE service/client bytes; shipping integration
+  and complete durable identity/authority mapping remain deferred.
 
 SOURCE and PORTABLE are delivered. Controlled COMPOSED means the actual Go
 ResultsSource/service/gate/materializer with injected source/store ports and

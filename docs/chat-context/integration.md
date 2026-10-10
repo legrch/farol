@@ -42,6 +42,14 @@ The provider body intentionally contains only model, explicit input and
 limits, tools/consent and transport. This is a tested context consumer seam, not
 a new standalone provider client or live entitlement claim.
 
+The continuation adds `MaterializePlan` and a detached source/policy-bound
+receipt for the pinned flat INFERENCE input and HTTP envelope. See
+[plan-compatibility.md](plan-compatibility.md) for actual fixture readback,
+canonical hashes, reservation tests and precise consumer-side identity limits.
+C7 has fixture consumption; shipping boot/store/authority integration remains
+open. Original Materialized.JSON and the pinned application InputHash are
+different representations and must not be substituted for one another.
+
 ## Exact shared-change requests
 
 1. The existing Chat/context source owner should implement `OriginalResults`
@@ -67,6 +75,11 @@ a new standalone provider client or live entitlement claim.
    an owner-controlled mapped seam, verifying the complete selected binding and
    original consent immediately before send. No cross-service import, published
    contract or boot edit is included in this branch.
+   For the inspected plan client, explicitly map `PlanView.Items` and retain
+   `PlanReceipt`/Window: its ordered InputHash is not the original wire hash.
+   Bind full source/UNKNOWN identity and all reservations to the admitted
+   operation; the current ContextSelection fields alone do not express these.
+   Check the actual emitted bytes against ProviderHash/policy before IO.
 4. Keep `src/apps/desktop/codex-host-compaction.ts` under its current owner.
    Its current one-shot RPC waits beyond immediate ACK. Any future Go adapter
    needs transferred schema qualification and explicit event/operation binding;
