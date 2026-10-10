@@ -52,6 +52,40 @@ type Plan struct {
 	Steps  []Step
 }
 
+// Clone separates step metadata from consumer callbacks. Strings and the other
+// fields are values; only dependencies and capabilities need independent slices.
+func (s Step) Clone() Step {
+	s.Dependencies = append([]string(nil), s.Dependencies...)
+	s.Required = append([]Capability(nil), s.Required...)
+	return s
+}
+
+// Capture takes a bounded, validated snapshot before calling any external port.
+// The caller must synchronize access until this synchronous capture returns;
+// later caller/port mutations cannot change the captured identity or policy.
+// It is an in-call value snapshot, not durable workflow state or activation.
+func Capture(plan Plan) (Plan, error) {
+	if len(plan.Steps) == 0 || len(plan.Steps) > MaxSteps {
+		return Plan{}, fmt.Errorf("workflow: step count must be 1..%d", MaxSteps)
+	}
+	edges := 0
+	for _, step := range plan.Steps {
+		if len(step.Dependencies) > MaxEdges-edges || len(step.Required) > 5 {
+			return Plan{}, fmt.Errorf("workflow: capture exceeds metadata bounds")
+		}
+		edges += len(step.Dependencies)
+	}
+	out := plan
+	out.Steps = make([]Step, len(plan.Steps))
+	for i, step := range plan.Steps {
+		out.Steps[i] = step.Clone()
+	}
+	if err := Validate(out); err != nil {
+		return Plan{}, err
+	}
+	return out, nil
+}
+
 // ID accepts short ASCII identity metadata, never prompts or transcripts.
 func ID(s string) bool {
 	if len(s) == 0 || len(s) > MaxIDBytes {

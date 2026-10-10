@@ -27,6 +27,14 @@ consumer `Tasks` port and runtime `Admission`. The Task owner remains responsibl
 for immutable selection, authority, durable intent before execution, exact
 lineage, retained results, control and initiating-parent delivery.
 
+Each public operation captures a bounded validated plan before calling a port.
+Tick also captures the recognized capability budget, and the composer receives
+independent step slices. The caller must synchronize input access until this
+synchronous capture returns. Subsequent caller/port mutations cannot change the
+in-call identity or policy. This value snapshot does not replace trusted durable
+plan retention. The additional [acceptance audit](audit.md) records the reproduced
+mutation defects and their regression coverage.
+
 `AdmitNew` explicitly allows new known-missing operations under runtime admission.
 `Reconnect` is observation only: even a missing child stays unknown and cannot
 be launched. Existing operation IDs are read before any launch. Unknown launch,

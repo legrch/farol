@@ -13,6 +13,9 @@ Base: `99aca15ffe16b435e59b19c20ff48e06bd56960d`, tree
    with `Reconnect`; activate eligible new steps explicitly. Do not infer a
    dispatch is absent from a summary, missing child, or changed plan. There is no
    new workflow journal implementation or schema change in this branch.
+   The consumer's bounded `Capture` isolates one call before external ports;
+   synchronize caller input during that capture. It does not persist or approve
+   a new plan and cannot recover the owner's original plan by itself.
 2. **Boot / Task DTO adapter:** map the workflow `Tasks` consumer to the SAME
    selected `task.Service.NewOwned`, `control.New`, and selected `Owner/Route`
    already used by admission and observation. One existing Task owner per

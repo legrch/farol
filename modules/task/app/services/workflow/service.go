@@ -199,32 +199,40 @@ func (s *Service) report(ctx context.Context, p wf.Plan, v view) Report {
 	}
 	return out
 }
-func (s *Service) check(ctx context.Context, p wf.Plan) error {
+func (s *Service) capture(ctx context.Context, p wf.Plan) (wf.Plan, error) {
 	if ctx == nil {
-		return ErrInvalid
+		return wf.Plan{}, ErrInvalid
 	}
 	if s == nil || s.tasks == nil || s.composer == nil || s.admission == nil {
-		return ErrUnavailable
+		return wf.Plan{}, ErrUnavailable
 	}
 	if err := ctx.Err(); err != nil {
-		return err
+		return wf.Plan{}, err
 	}
-	if wf.Validate(p) != nil {
-		return ErrInvalid
+	captured, err := wf.Capture(p)
+	if err != nil {
+		return wf.Plan{}, ErrInvalid
 	}
-	return nil
+	return captured, nil
 }
 
 // Tick performs one finite scheduling round. There are no goroutines, waits,
 // timers, retries, persistence maps or automatic parent delivery in this service.
 // Caller-owned activation controls whether new known-missing work is admitted.
 func (s *Service) Tick(ctx context.Context, p wf.Plan, budget wf.Budget, mode Mode) (Report, error) {
-	if err := s.check(ctx, p); err != nil {
+	p, err := s.capture(ctx, p)
+	if err != nil {
 		return Report{}, err
 	}
 	if mode != Reconnect && mode != AdmitNew || budget.Slots < 0 {
 		return Report{}, ErrInvalid
 	}
+	// Capture only recognized capabilities, before any port can mutate caller data.
+	available := make(map[wf.Capability]bool, 5)
+	for _, capability := range []wf.Capability{wf.CapabilityCreate, wf.CapabilityCancel, wf.CapabilityContinue, wf.CapabilityResume, wf.CapabilityMessage} {
+		available[capability] = budget.Available[capability]
+	}
+	budget.Available = available
 	v := s.read(ctx, p, mode)
 	remaining := budget.Slots
 	for _, o := range v.outcomes {
@@ -257,7 +265,7 @@ func (s *Service) Tick(ctx context.Context, p wf.Plan, budget wf.Budget, mode Mo
 			for _, dep := range step.Dependencies {
 				deps[dep] = v.outputs[dep]
 			}
-			selection, message, err := s.composer.Compose(ctx, step, deps)
+			selection, message, err := s.composer.Compose(ctx, step.Clone(), deps)
 			if err != nil {
 				v.outcomes[id] = wf.Outcome{State: wf.NeedsInput}
 				continue
@@ -311,7 +319,8 @@ func (s *Service) Tick(ctx context.Context, p wf.Plan, budget wf.Budget, mode Mo
 // Cancel requests supported cancellation of known running children. Closed-parent
 // admission still belongs to Task; failure never becomes terminal evidence.
 func (s *Service) Cancel(ctx context.Context, p wf.Plan) (Report, error) {
-	if err := s.check(ctx, p); err != nil {
+	p, err := s.capture(ctx, p)
+	if err != nil {
 		return Report{}, err
 	}
 	v := s.read(ctx, p, Reconnect)
@@ -338,7 +347,8 @@ func (s *Service) Cancel(ctx context.Context, p wf.Plan) (Report, error) {
 // Deliver sends accepted completions and known failed/interrupted/needs-input
 // outcomes through Task's original durable parent route. Merely reading progress never sends or acknowledges a result.
 func (s *Service) Deliver(ctx context.Context, p wf.Plan) (Report, error) {
-	if err := s.check(ctx, p); err != nil {
+	p, err := s.capture(ctx, p)
+	if err != nil {
 		return Report{}, err
 	}
 	v := s.read(ctx, p, Reconnect)
@@ -361,7 +371,8 @@ func (s *Service) Deliver(ctx context.Context, p wf.Plan) (Report, error) {
 // The caller must retain this operation ID and obtain a fresh upstream selected
 // Task route. It cannot change the immutable workflow's original dispatch.
 func (s *Service) Follow(ctx context.Context, p wf.Plan, stepID string, request Followup) (Record, error) {
-	if err := s.check(ctx, p); err != nil {
+	p, err := s.capture(ctx, p)
+	if err != nil {
 		return Record{}, err
 	}
 	var step wf.Step
@@ -422,7 +433,8 @@ func (s *Service) Follow(ctx context.Context, p wf.Plan, stepID string, request 
 // ReadFollowup returns only original evidence, without accepting a new message,
 // dispatching, restoring admission or silently validating changed content.
 func (s *Service) ReadFollowup(ctx context.Context, p wf.Plan, stepID, operationID string, resume bool) (Record, error) {
-	if err := s.check(ctx, p); err != nil {
+	p, err := s.capture(ctx, p)
+	if err != nil {
 		return Record{}, err
 	}
 	if !wf.ID(operationID) {
