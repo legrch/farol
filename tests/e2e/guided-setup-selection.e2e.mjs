@@ -49,6 +49,7 @@ const connectedOverview = {
   states: { ...workspaceOverview.states, connection: "verified" },
 };
 const readyOverview = {
+  ...connectedOverview,
   ready: true,
   states: { ...connectedOverview.states, attachment: "verified" },
 };
