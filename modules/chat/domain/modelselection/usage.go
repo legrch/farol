@@ -53,8 +53,9 @@ func ValidateEstimate(e Estimate) error {
 	return nil
 }
 
-// CheckBudget fails closed when a configured bound cannot be proved by supplied
-// estimates. It has no prices, quota-reset logic, or credit-purchase side effects.
+// CheckBudget compares supplied numeric values only. It cannot establish input,
+// selection or time applicability. Admission must use CheckCurrentBudget instead.
+// It has no prices, quota-reset logic, or credit-purchase side effects.
 func CheckBudget(e Estimate, b Budget) error {
 	if err := ValidateEstimate(e); err != nil {
 		return err
