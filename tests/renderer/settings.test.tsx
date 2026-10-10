@@ -496,7 +496,6 @@ describe("compact workspace detail", () => {
         },
       });
     await h.click("Add workspace…");
-    await h.click("Add selected workspace read-only");
     expect(
       activePage(h.host)
         .querySelector('[aria-label="Select workspace second"]')
@@ -504,7 +503,8 @@ describe("compact workspace detail", () => {
     ).toBe("true");
     expect(h.calls()).toEqual([
       { kind: "computer.choose-workspace" },
-      { kind: "computer.add-workspace", selectionId },
+      { kind: "computer.add-workspace", selectionId, access: "write" },
+      { kind: "connector.stop" },
     ]);
   });
   it("checks the current verified workspace read-only and retains its binding", async () => {
@@ -1534,20 +1534,11 @@ describe("owner setup entry feedback", () => {
       },
     });
     await h.click("Add workspace…");
-    expect(h.host.textContent).toContain(
-      "Confirm read-only access below to add it",
-    );
     expect(h.host.textContent).toContain("No workspaces approved");
-    expect(h.host.textContent).toContain(
-      "Selected workspace: /private/tmp/selected-workspace",
-    );
-    expect(h.calls()).toEqual([{ kind: "computer.choose-workspace" }]);
-    await h.click("Add selected workspace read-only");
     expect(h.host.textContent).toContain("Approval request completed");
-    expect(h.host.textContent).toContain("No workspaces approved");
     expect(h.calls()).toEqual([
       { kind: "computer.choose-workspace" },
-      { kind: "computer.add-workspace", selectionId },
+      { kind: "computer.add-workspace", selectionId, access: "write" },
     ]);
   });
 });
@@ -1737,7 +1728,7 @@ describe("bounded Settings writer", () => {
       expect(h.calls()).toEqual([]);
     },
   );
-  it("adds only a newly evidenced native selection and starts read-only without granting access", async () => {
+  it("adds a fresh native selection with explicit default write access in one user action", async () => {
     const h = await mount("folders");
     vi.mocked(h.f.api.configure).mockResolvedValueOnce({
       ok: true,
@@ -1745,11 +1736,11 @@ describe("bounded Settings writer", () => {
       evidence: { kind: "computer.workspace-pick", selectionId },
     });
     await h.click("Add workspace…");
-    expect(h.calls()).toEqual([{ kind: "computer.choose-workspace" }]);
-    await h.click("Add selected workspace read-only");
+    expect(h.calls()).toHaveLength(2);
     expect(h.calls()[1]).toEqual({
       kind: "computer.add-workspace",
       selectionId,
+      access: "write",
     });
     expect(
       h
@@ -1829,7 +1820,10 @@ describe("bounded Settings writer", () => {
     await other.click("Add workspace…");
     await act(async () => other.c.refresh());
     expect(() => other.button("Add selected workspace read-only")).toThrow();
-    expect(other.host.textContent).toContain("selection is no longer current");
+    expect(other.calls()).toEqual([
+      { kind: "computer.choose-workspace" },
+      { kind: "computer.add-workspace", selectionId, access: "write" },
+    ]);
   });
   it("fences duplicate, unknown and stale actions without a retry", async () => {
     const h = await mount("folders");
@@ -4435,9 +4429,19 @@ describe("fresh and returning Setup journey", () => {
     ]);
   });
 
-  it("keeps choose, approval and saved/check results explicit for a fresh workspace", async () => {
+  it("adds and checks a fresh workspace in one user action without a manual Verify step", async () => {
     const h = await mountSetup("folders", settings());
     const saved = withFolder();
+    saved.computer.workspaces[0]!.access = "write";
+    const checked = structuredClone(saved);
+    checked.setup.computer.reachable = "reachable";
+    checked.setup.computer.verified = proof(checked);
+    checked.computer.workspaces[0]!.accessCheck = {
+      rootIdentity: checked.computer.workspaces[0]!.rootIdentity!,
+      buildId: "3".repeat(64),
+      computerGeneration: checked.computer.generation,
+      verifiedAt: "2026-10-02T20:00:00.000Z",
+    };
     vi.mocked(h.f.api.configure)
       .mockResolvedValueOnce({
         ok: true,
@@ -4452,28 +4456,19 @@ describe("fresh and returning Setup journey", () => {
         ok: true,
         snapshot: { status: "ready", settings: saved },
         evidence: { kind: "computer.workspace-selection", workspaceId },
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        snapshot: { status: "ready", settings: checked },
       });
     await h.click("Add workspace…");
-    expect(visibleText(h.host)).toContain("access is not approved yet");
-    expect(h.c.getSnapshot().configuration).toEqual(h.configuration);
-    await h.click("Add selected workspace read-only");
     expect(visibleText(h.host)).toContain(
-      "Workspace access saved: /approved/project. Saved access: Read-only",
-    );
-    expect(visibleText(h.host)).toContain("Check access needed");
-    const checked = connectionSettings();
-    vi.mocked(h.f.api.configure).mockResolvedValueOnce({
-      ok: true,
-      snapshot: { status: "ready", settings: checked },
-    });
-    await h.click("Verify workspace");
-    expect(visibleText(h.host)).toContain(
-      "Workspace access checked: /approved/project. Saved access: Read-only",
+      "Workspace access checked: /approved/project. Saved access: Read & write",
     );
     expect(() => h.button("Verify workspace")).toThrow();
     expect(h.calls()).toEqual([
       { kind: "computer.choose-workspace" },
-      { kind: "computer.add-workspace", selectionId },
+      { kind: "computer.add-workspace", selectionId, access: "write" },
       { kind: "computer.verify-workspace", workspaceId },
     ]);
   });

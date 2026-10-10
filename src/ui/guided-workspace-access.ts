@@ -10,6 +10,7 @@ export interface WorkspaceAccessPlan {
   readonly access?: "read" | "write";
   readonly commands?: "none" | "verification" | "workspace";
   readonly gitHistoryApproved?: boolean;
+  readonly connectWhenConfigured?: boolean;
 }
 export type WorkspaceCommandOutcome = "applied" | "refused" | "unknown";
 
@@ -328,7 +329,14 @@ export class GuidedWorkspaceAccess {
             workspaceId: workspace.workspaceId,
           };
       }
-      if (facts.runtime === "ready") {
+      if (
+        facts.runtime === "ready" ||
+        (plan.connectWhenConfigured === true &&
+          after.nativeHosts.taskRoute === null &&
+          facts.client &&
+          facts.credentialStored &&
+          facts.tunnelId !== null)
+      ) {
         if (!(await run({ kind: "connector.start" })))
           return { ok: false, reason: this.unconfirmed ? "unknown" : "failed" };
         const reconnected = current();

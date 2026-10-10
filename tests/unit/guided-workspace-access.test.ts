@@ -197,6 +197,37 @@ describe("one explicit Setup workspace access transition", () => {
     ]);
   });
 
+  it("checks a newly added folder and starts its already configured connection without another user action", async () => {
+    const f = fixture();
+    f.settings.connectors.secureMcp.runtime = null;
+    const result = await f.controller.run(
+      f.port,
+      { workspaceId: fixtureWorkspaceId, connectWhenConfigured: true },
+      onboardingFacts(f.settings, fixtureBuildId),
+    );
+    expect(result).toEqual({ ok: true, reconnected: true });
+    expect(f.run.mock.calls.map(([command]) => command.kind)).toEqual([
+      "computer.verify-workspace",
+      "connector.start",
+    ]);
+  });
+
+  it("does not start an unconfigured connection after automatic folder checking", async () => {
+    const f = fixture();
+    f.settings.connectors.secureMcp.runtime = null;
+    f.settings.connectors.secureMcp.credential = "missing";
+    expect(
+      await f.controller.run(
+        f.port,
+        { workspaceId: fixtureWorkspaceId, connectWhenConfigured: true },
+        onboardingFacts(f.settings, fixtureBuildId),
+      ),
+    ).toEqual({ ok: true, reconnected: false });
+    expect(f.run.mock.calls.map(([command]) => command.kind)).toEqual([
+      "computer.verify-workspace",
+    ]);
+  });
+
   it("revokes full Git with read-only access without changing command rights for other folders", async () => {
     const f = fixture();
     f.settings.computer.workspaces[0]!.access = "write";

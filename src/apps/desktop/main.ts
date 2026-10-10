@@ -8710,7 +8710,10 @@ async function configureAdmittedProduct(
       ) {
         return configurationFailure("WORKSPACE_ROOT_CHANGED");
       }
-      const added = await configuration.addReadonlyWorkspace(selected);
+      const added = await configuration.addWorkspace(
+        selected,
+        command.access ?? "read",
+      );
       if (!added.ok || added.snapshot.status !== "ready")
         return ProductConfigurationResultSchema.parse(added);
       // Report the native pick even when it is an already approved folder.

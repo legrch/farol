@@ -20,6 +20,8 @@ import {
   type ProductSettings,
 } from "../../pkg/product-settings/contract";
 import { folderAccessChecked, folderDisplayName } from "../folder-access-state";
+import { GuidedWorkspaceAccess } from "../guided-workspace-access";
+import { onboardingFacts } from "../guided-onboarding";
 import { signInPresentation } from "./sign-in-presentation";
 import { computerSetup } from "./computer-setup";
 import { visibleSetupSection, type SetupSection } from "./setup-checklist";
@@ -793,8 +795,12 @@ function AppearancePage({ snapshot, facade }: PageProps) {
     </div>
   );
 }
+const folderSetupByWindow = new WeakMap<
+  RendererFacade,
+  { access: GuidedWorkspaceAccess; busy: boolean }
+>();
 function Folders(props: PageProps) {
-  const { settings, facade, snapshot, actions } = props;
+  const { settings, facade, actions } = props;
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const selected =
     settings.computer.workspaces.find(
@@ -808,26 +814,79 @@ function Folders(props: PageProps) {
       : undefined) ??
     settings.computer.workspaces[0];
   const detailId = useId();
-  const [picked, setPicked] = useState<WindowSnapshot["evidence"]>(null);
-  const pickCurrent =
-    picked !== null &&
-    snapshot.evidence === picked &&
-    picked.revision === settings.revision &&
-    picked.value.kind === "computer.workspace-pick";
+  const [adding, setAdding] = useState(false);
+  let flow = folderSetupByWindow.get(facade);
+  if (!flow) {
+    flow = { access: new GuidedWorkspaceAccess(), busy: false };
+    folderSetupByWindow.set(facade, flow);
+  }
+  const folderFlow = flow;
   async function choose() {
-    setPicked(null);
-    const before = facade.getSnapshot();
-    const result = await actions.run({ kind: "computer.choose-workspace" });
-    const current = facade.getSnapshot();
-    if (
-      result?.state === "applied" &&
-      current.evidence !== before.evidence &&
-      soleIntent(before, current, "computer.choose-workspace") &&
-      current.evidence?.value.kind === "computer.workspace-pick" &&
-      current.configuration?.status === "ready" &&
-      current.evidence.revision === current.configuration.settings.revision
-    )
-      setPicked(current.evidence);
+    if (folderFlow.busy || folderFlow.access.requiresReadback()) return;
+    folderFlow.busy = true;
+    setAdding(true);
+    try {
+      const picking = facade.getSnapshot();
+      const picked = await actions.run({ kind: "computer.choose-workspace" });
+      const before = facade.getSnapshot();
+      const evidence = before.evidence;
+      if (
+        picked?.state !== "applied" ||
+        evidence === picking.evidence ||
+        !soleIntent(picking, before, "computer.choose-workspace") ||
+        evidence?.value.kind !== "computer.workspace-pick" ||
+        before.configuration?.status !== "ready" ||
+        evidence.revision !== before.configuration.settings.revision ||
+        before.buildId !== picking.buildId
+      )
+        return;
+      const result = await actions.run({
+        kind: "computer.add-workspace",
+        selectionId: evidence.value.selectionId,
+        access: "write",
+      });
+      const current = facade.getSnapshot();
+      const selection = current.evidence?.value;
+      if (
+        result?.state !== "applied" ||
+        current.evidence === before.evidence ||
+        !soleIntent(before, current, "computer.add-workspace") ||
+        selection?.kind !== "computer.workspace-selection" ||
+        current.configuration?.status !== "ready" ||
+        current.evidence?.revision !==
+          current.configuration.settings.revision ||
+        current.buildId !== before.buildId ||
+        !current.configuration.settings.computer.workspaces.some(
+          (item) => item.workspaceId === selection.workspaceId,
+        )
+      )
+        return;
+      setSelectedId(selection.workspaceId);
+      await folderFlow.access.run(
+        {
+          settings: () => {
+            const configuration = facade.getSnapshot().configuration;
+            return configuration?.status === "ready"
+              ? configuration.settings
+              : null;
+          },
+          buildId: () => facade.getSnapshot().buildId ?? "",
+          run: async (command) => {
+            const intent = await actions.run(command);
+            return intent?.state === "applied"
+              ? "applied"
+              : intent?.state === "refused"
+                ? "refused"
+                : "unknown";
+          },
+        },
+        { workspaceId: selection.workspaceId, connectWhenConfigured: true },
+        onboardingFacts(current.configuration.settings, current.buildId ?? ""),
+      );
+    } finally {
+      folderFlow.busy = false;
+      setAdding(false);
+    }
   }
   return (
     <>
@@ -877,77 +936,26 @@ function Folders(props: PageProps) {
           <button
             type="button"
             className="primary"
-            disabled={!actions.allowed("computer.choose-workspace")}
+            disabled={
+              adding ||
+              folderFlow.busy ||
+              folderFlow.access.requiresReadback() ||
+              !actions.allowed("computer.choose-workspace")
+            }
             onClick={() => void choose()}
           >
-            Add workspace…
+            {adding ? "Connecting workspace…" : "Add workspace…"}
           </button>
-          {pickCurrent && (
-            <button
-              type="button"
-              className="primary"
-              disabled={!actions.allowed("computer.add-workspace")}
-              onClick={() => {
-                const before = facade.getSnapshot();
-                const evidence = before.evidence;
-                if (
-                  evidence !== picked ||
-                  evidence?.value.kind !== "computer.workspace-pick"
-                )
-                  return;
-                setPicked(null);
-                void actions
-                  .run({
-                    kind: "computer.add-workspace",
-                    selectionId: evidence.value.selectionId,
-                  })
-                  .then((result) => {
-                    if (result?.state !== "applied") return;
-                    const after = facade.getSnapshot();
-                    const selected = after.evidence?.value;
-                    if (
-                      after.evidence !== before.evidence &&
-                      selected?.kind === "computer.workspace-selection" &&
-                      after.configuration?.status === "ready" &&
-                      after.evidence?.revision ===
-                        after.configuration.settings.revision &&
-                      soleIntent(before, after, "computer.add-workspace") &&
-                      after.configuration.settings.computer.workspaces.some(
-                        (item) => item.workspaceId === selected.workspaceId,
-                      )
-                    )
-                      setSelectedId(selected.workspaceId);
-                  });
-              }}
-            >
-              Add selected workspace read-only
-            </button>
-          )}
         </div>
-        {!actions.allowed("computer.choose-workspace") && (
+        <p className="description">
+          Added workspaces use Read &amp; write. Farol checks access and
+          connects automatically. Change access or enable commands in workspace
+          settings.
+        </p>
+        {!actions.allowed("computer.add-workspace") && (
           <p className="description">
             Workspace selection and approval are paused.{" "}
             {actions.computerPauseReason}
-          </p>
-        )}
-        {pickCurrent && (
-          <p className="description" role="status">
-            {picked.value.kind === "computer.workspace-pick" &&
-              picked.value.displayPath && (
-                <>
-                  Selected workspace: <code>{picked.value.displayPath}</code>
-                  .{" "}
-                </>
-              )}
-            Selection received; access is not approved yet. Confirm read-only
-            access to add the selection, then review its saved path in the
-            approved list.
-          </p>
-        )}
-        {picked && !pickCurrent && (
-          <p className="notice">
-            The selection is no longer current. Choose the workspace again
-            before adding it.
           </p>
         )}
         {settings.computer.workspaces.length === 0 && (

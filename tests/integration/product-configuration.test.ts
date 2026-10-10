@@ -856,6 +856,64 @@ describe("Farol Next product configuration", () => {
     expect(restarted.snapshot()).toEqual(added.snapshot);
   });
 
+  it("persists the selected write default without granting shell or full Git access", async () => {
+    const root = await stateRoot();
+    const service = new ProductConfigurationService(
+      new ProductSettingsStore({ root }),
+      dependencies(),
+    );
+    await service.initialize();
+    const before = service.snapshot();
+    if (before.status !== "ready") throw new Error("settings missing");
+    const added = await service.addWorkspace(
+      {
+        root: "/Users/example/project",
+        label: "Project",
+        rootIdentity: SYNTHETIC_ROOT_IDENTITY,
+      },
+      "write",
+    );
+    expect(added).toMatchObject({
+      ok: true,
+      snapshot: {
+        settings: {
+          computer: {
+            commands: before.settings.computer.commands,
+            workspaces: [
+              { access: "write", rootIdentity: SYNTHETIC_ROOT_IDENTITY },
+            ],
+          },
+        },
+      },
+    });
+    if (added.snapshot.status !== "ready") throw new Error("settings missing");
+    expect(
+      added.snapshot.settings.computer.workspaces[0]!.gitHistoryApproved,
+    ).not.toBe(true);
+    const restarted = new ProductConfigurationService(
+      new ProductSettingsStore({ root }),
+      dependencies(),
+    );
+    await restarted.initialize();
+    expect(restarted.snapshot()).toEqual(added.snapshot);
+  });
+
+  it("does not broaden an existing read-only workspace when the same root is selected again", async () => {
+    const root = await stateRoot();
+    const service = new ProductConfigurationService(
+      new ProductSettingsStore({ root }),
+      dependencies(),
+    );
+    await service.initialize();
+    const input = {
+      root: "/Users/example/project",
+      label: "Project",
+      rootIdentity: SYNTHETIC_ROOT_IDENTITY,
+    };
+    const original = await service.addReadonlyWorkspace(input);
+    expect(await service.addWorkspace(input, "write")).toEqual(original);
+  });
+
   it("F1-1 withdraws a persisted verification of a workspace that has no folder identity", async () => {
     const root = await stateRoot();
     const store = new ProductSettingsStore({ root });

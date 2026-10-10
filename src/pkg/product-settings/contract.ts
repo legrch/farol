@@ -762,6 +762,7 @@ export const ProductConfigurationCommandSchema = z.discriminatedUnion("kind", [
   z.strictObject({
     kind: z.literal("computer.add-workspace"),
     selectionId: IdentifierSchema.optional(),
+    access: z.enum(["read", "write"]).optional(),
   }),
   z.strictObject({
     kind: z.literal("computer.remove-workspace"),

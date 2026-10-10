@@ -1667,6 +1667,15 @@ export class ProductConfigurationService {
   }
 
   async addReadonlyWorkspace(input: unknown): Promise<MutationResult> {
+    return this.addWorkspace(input, "read");
+  }
+
+  async addWorkspace(
+    input: unknown,
+    access: "read" | "write",
+  ): Promise<MutationResult> {
+    if (access !== "read" && access !== "write")
+      return this.failure("SETTINGS_INPUT_INVALID");
     const parsed = workspaceInputSchema.safeParse(input);
     if (!parsed.success) return this.failure("SETTINGS_INPUT_INVALID");
     if (
@@ -1689,7 +1698,7 @@ export class ProductConfigurationService {
           workspaceId: this.id(),
           root: parsed.data.root,
           label: parsed.data.label,
-          access: "read" as const,
+          access,
           excludedPaths: [],
           ...(parsed.data.rootIdentity
             ? { rootIdentity: parsed.data.rootIdentity }
@@ -1711,7 +1720,7 @@ export class ProductConfigurationService {
             configured: true,
             reachable: "unknown" as const,
             verified: null,
-            needsAction: "Verify read access to this workspace.",
+            needsAction: "Check access to this workspace.",
             outcomeUnknown: false,
           },
         },
