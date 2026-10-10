@@ -4824,7 +4824,11 @@ describe("fresh and returning Setup journey", () => {
       const checked = structuredClone(saved);
       checked.setup.computer.reachable = "reachable";
       checked.setup.computer.verified = proof(checked);
+      const issued = h.calls()[2]!;
+      if (issued.kind !== "computer.verify-workspace")
+        throw new Error("wrong fixture check");
       checked.computer.workspaces[0]!.accessCheck = {
+        checkId: issued.checkId,
         rootIdentity: checked.computer.workspaces[0]!.rootIdentity!,
         buildId: "3".repeat(64),
         computerGeneration: checked.computer.generation,
@@ -4857,6 +4861,67 @@ describe("fresh and returning Setup journey", () => {
     },
   );
 
+  it("keeps a lost-before-native check fenced on an already checked workspace until its exact issued result is read", async () => {
+    const saved = withFolder();
+    saved.computer.workspaces[0]!.access = "write";
+    saved.setup.computer.reachable = "reachable";
+    saved.setup.computer.verified = proof(saved);
+    saved.computer.workspaces[0]!.accessCheck = {
+      checkId: "55555555-5555-4555-8555-555555555555",
+      rootIdentity: saved.computer.workspaces[0]!.rootIdentity!,
+      buildId: "3".repeat(64),
+      computerGeneration: saved.computer.generation,
+      verifiedAt: "2026-10-02T20:00:00.000Z",
+    };
+    const h = await mount("folders", saved);
+    vi.mocked(h.f.api.configure)
+      .mockResolvedValueOnce({
+        ok: true,
+        snapshot: h.configuration,
+        evidence: { kind: "computer.workspace-pick", selectionId },
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        snapshot: h.configuration,
+        evidence: { kind: "computer.workspace-selection", workspaceId },
+      })
+      .mockRejectedValueOnce(
+        new Error("request lost before native inspection"),
+      );
+    await h.click("Add workspace…");
+    const issued = h.calls()[2]!;
+    if (issued.kind !== "computer.verify-workspace" || !issued.checkId)
+      throw new Error("missing issued fixture check");
+    expect(issued.checkId).not.toBe(
+      saved.computer.workspaces[0]!.accessCheck!.checkId,
+    );
+    await h.click("Refresh status");
+    await h.remount();
+    expect(h.button("Add workspace…").disabled).toBe(true);
+    const other = structuredClone(saved);
+    other.revision++;
+    other.computer.workspaces[0]!.accessCheck!.checkId =
+      "66666666-6666-4666-8666-666666666666";
+    vi.mocked(h.f.api.bootstrap).mockResolvedValue({
+      ...bootstrap(),
+      configuration: { status: "ready", settings: other },
+    });
+    await h.click("Refresh status");
+    expect(h.button("Add workspace…").disabled).toBe(true);
+    const exact = structuredClone(other);
+    exact.revision++;
+    // Adapter fixture of the actual producer echo after the issued check lands;
+    // the durable producer path is exercised in onboarding-evidence.test.ts.
+    exact.computer.workspaces[0]!.accessCheck!.checkId = issued.checkId;
+    vi.mocked(h.f.api.bootstrap).mockResolvedValue({
+      ...bootstrap(),
+      configuration: { status: "ready", settings: exact },
+    });
+    await h.click("Refresh status");
+    expect(h.button("Add workspace…").disabled).toBe(false);
+    expect(h.calls()).toHaveLength(3);
+  });
+
   it.each(["superseded", "remount", "navigation"] as const)(
     "does not reconcile a late explicit Settings refresh after %s",
     async (condition) => {
@@ -4879,6 +4944,16 @@ describe("fresh and returning Setup journey", () => {
       const checked = structuredClone(saved);
       checked.setup.computer.reachable = "reachable";
       checked.setup.computer.verified = proof(checked);
+      const issued = h.calls()[2]!;
+      if (issued.kind !== "computer.verify-workspace")
+        throw new Error("wrong fixture check");
+      checked.computer.workspaces[0]!.accessCheck = {
+        checkId: issued.checkId,
+        rootIdentity: checked.computer.workspaces[0]!.rootIdentity!,
+        buildId: "3".repeat(64),
+        computerGeneration: checked.computer.generation,
+        verifiedAt: "2026-10-02T20:00:00.000Z",
+      };
       const response = {
         ...bootstrap(),
         configuration: { status: "ready", settings: checked },
@@ -4945,7 +5020,11 @@ describe("fresh and returning Setup journey", () => {
     expect(h.calls()).toEqual([
       { kind: "computer.choose-workspace" },
       { kind: "computer.add-workspace", selectionId, access: "write" },
-      { kind: "computer.verify-workspace", workspaceId },
+      {
+        kind: "computer.verify-workspace",
+        workspaceId,
+        checkId: expect.any(String),
+      },
     ]);
   });
 

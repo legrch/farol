@@ -3817,7 +3817,9 @@ describe("request-owned native workspace readback", () => {
   // Parsed adapter fixtures only; no native host or filesystem qualification.
   const workspaceId = "22222222-2222-4222-8222-222222222222";
   const buildId = "3".repeat(64);
-  function workspace(checked = false) {
+  const issuedCheckId = "44444444-4444-4444-8444-444444444444";
+  const priorCheckId = "55555555-5555-4555-8555-555555555555";
+  function workspace(checked = false, checkId = issuedCheckId) {
     const value = settings();
     value.computer.workspaces = [
       {
@@ -3830,6 +3832,13 @@ describe("request-owned native workspace readback", () => {
       },
     ];
     if (checked) {
+      value.computer.workspaces[0]!.accessCheck = {
+        checkId,
+        rootIdentity: { device: "1", inode: "2" },
+        buildId,
+        computerGeneration: value.computer.generation,
+        verifiedAt: "2026-10-02T20:00:00.000Z",
+      };
       value.setup.computer.reachable = "reachable";
       value.setup.computer.verified = {
         profile: "farol-next",
@@ -3864,6 +3873,10 @@ describe("request-owned native workspace readback", () => {
   });
   it.each([
     "matching",
+    "unchanged-prior",
+    "other-result",
+    "reused-id",
+    "unidentified",
     "previous-runtime",
     "wrong-target",
     "wrong-build",
@@ -3878,7 +3891,11 @@ describe("request-owned native workspace readback", () => {
     "resolves only an exact check from %s evidence, preserving an unrelated unknown",
     async (condition) => {
       const f = fixture();
-      const initial = workspace();
+      const initial = ["unchanged-prior", "other-result", "reused-id"].includes(
+        condition,
+      )
+        ? workspace(true, priorCheckId)
+        : workspace();
       vi.mocked(f.api.bootstrap).mockResolvedValue({
         ...bootstrap(),
         configuration: { status: "ready", settings: initial },
@@ -3888,6 +3905,11 @@ describe("request-owned native workspace readback", () => {
       const command = {
         kind: "computer.verify-workspace",
         workspaceId,
+        ...(condition === "unidentified"
+          ? {}
+          : {
+              checkId: condition === "reused-id" ? priorCheckId : issuedCheckId,
+            }),
       } as const;
       const id = `settings:${command.kind}:${workspaceId}`;
       let pending = workspaceReadbackBinding(initial, buildId, command);
@@ -3899,7 +3921,14 @@ describe("request-owned native workspace readback", () => {
         { kind: "model.rotate-token" },
         "settings:model.rotate-token:",
       );
-      const checked = workspace(true);
+      const checked = workspace(
+        true,
+        condition === "unchanged-prior" || condition === "reused-id"
+          ? priorCheckId
+          : condition === "other-result"
+            ? "66666666-6666-4666-8666-666666666666"
+            : issuedCheckId,
+      );
       if (condition === "wrong-generation") checked.computer.generation++;
       if (condition === "wrong-scope")
         checked.computer.workspaces[0]!.rootIdentity = {

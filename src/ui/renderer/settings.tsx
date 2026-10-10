@@ -987,6 +987,7 @@ function Folders(props: PageProps) {
               : null;
           },
           buildId: () => facade.getSnapshot().buildId ?? "",
+          issueCheckId: () => crypto.randomUUID(),
           run: async (command) => {
             const outcome = await actions.runClassified(command);
             // Only the local guards prove no dispatch. A null result after

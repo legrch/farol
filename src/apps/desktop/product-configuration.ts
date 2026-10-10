@@ -15,6 +15,7 @@ import {
   SetupStepIdSchema,
   WorkspaceGitMetadataSchema,
   WorkspaceRootIdentitySchema,
+  WorkspaceAccessCheckIdSchema,
   CodexTaskSelectionSchema,
   type ProductConfigurationSnapshot,
   type ProductSettings,
@@ -2116,8 +2117,12 @@ export class ProductConfigurationService {
     buildId: string,
     rootIdentity: WorkspaceRootIdentity,
     success: boolean,
+    issuedCheckId?: string,
   ): Promise<MutationResult> {
+    const checkId =
+      WorkspaceAccessCheckIdSchema.optional().safeParse(issuedCheckId);
     if (
+      !checkId.success ||
       !/^[a-f0-9]{64}$/u.test(buildId) ||
       !WorkspaceRootIdentitySchema.safeParse(rootIdentity).success
     )
@@ -2146,6 +2151,9 @@ export class ProductConfigurationService {
                   ...item,
                   accessCheck: success
                     ? {
+                        ...(checkId.data === undefined
+                          ? {}
+                          : { checkId: checkId.data }),
                         buildId,
                         computerGeneration: expectedGeneration,
                         verifiedAt: this.now(),
@@ -2207,19 +2215,28 @@ export class ProductConfigurationService {
     input: unknown,
     observed: Readonly<{
       rootIdentity: WorkspaceRootIdentity;
+      checkId?: string;
       gitMetadata?: WorkspaceGitMetadata | null;
       expectedGeneration?: number;
       expectedRoot?: string;
     }>,
   ): Promise<MutationResult> {
     const parsed = verificationInputSchema.safeParse(input);
+    const checkId = WorkspaceAccessCheckIdSchema.optional().safeParse(
+      observed.checkId,
+    );
     const identity = WorkspaceRootIdentitySchema.safeParse(
       observed.rootIdentity,
     );
     const gitMetadata = WorkspaceGitMetadataSchema.nullable()
       .optional()
       .safeParse(observed.gitMetadata);
-    if (!parsed.success || !identity.success || !gitMetadata.success) {
+    if (
+      !parsed.success ||
+      !identity.success ||
+      !gitMetadata.success ||
+      !checkId.success
+    ) {
       return this.failure("SETTINGS_INPUT_INVALID");
     }
     // The comparison with the bound identity and the commit share one turn, so
@@ -2274,6 +2291,7 @@ export class ProductConfigurationService {
             ? { gitHistoryApproved: false }
             : {}),
           accessCheck: {
+            ...(checkId.data === undefined ? {} : { checkId: checkId.data }),
             buildId: parsed.data.buildId,
             computerGeneration: this.current!.computer.generation,
             verifiedAt: this.now(),

@@ -58,6 +58,7 @@ function fixture() {
       target
     ) {
       target.accessCheck = {
+        ...(command.checkId === undefined ? {} : { checkId: command.checkId }),
         rootIdentity: target.rootIdentity!,
         buildId: fixtureBuildId,
         computerGeneration: computer.generation,
@@ -73,7 +74,14 @@ function fixture() {
     }
     return "applied" as const;
   });
-  const port = { settings: () => settings, buildId: () => fixtureBuildId, run };
+  let checkCounter = 0;
+  const port = {
+    settings: () => settings,
+    buildId: () => fixtureBuildId,
+    issueCheckId: () =>
+      `00000000-0000-4000-8000-${String(++checkCounter).padStart(12, "0")}`,
+    run,
+  };
   const consent = onboardingFacts(settings, fixtureBuildId);
   const controller = new GuidedWorkspaceAccess();
   const plan = {
@@ -381,6 +389,36 @@ describe("one explicit Setup workspace access transition", () => {
 });
 
 describe("access acknowledgement and revocation boundaries", () => {
+  it("requires the exact issued check even when a prior or another check is already green", async () => {
+    const f = fixture();
+    f.settings.connectors.secureMcp.runtime = null;
+    const target = f.settings.computer.workspaces[0]!;
+    target.accessCheck = {
+      ...target.accessCheck!,
+      checkId: "00000000-0000-4000-8000-000000000099",
+    };
+    const before = structuredClone(f.settings);
+    f.run.mockResolvedValueOnce("unknown");
+    await f.controller.run(
+      f.port,
+      { workspaceId: fixtureWorkspaceId },
+      onboardingFacts(f.settings, fixtureBuildId),
+    );
+    const issued = f.run.mock.calls[0]![0];
+    if (issued.kind !== "computer.verify-workspace")
+      throw new Error("wrong fixture check");
+    expect(f.controller.reconcileReadback(before, fixtureBuildId)).toBe(false);
+    target.accessCheck!.checkId = "00000000-0000-4000-8000-000000000098";
+    expect(f.controller.reconcileReadback(f.settings, fixtureBuildId)).toBe(
+      false,
+    );
+    target.accessCheck!.checkId = issued.checkId;
+    expect(f.controller.reconcileReadback(f.settings, fixtureBuildId)).toBe(
+      true,
+    );
+    expect(f.run).toHaveBeenCalledTimes(1);
+  });
+
   it("requires the pending build for a matching native readback", async () => {
     const f = fixture();
     f.run.mockResolvedValueOnce("unknown");
@@ -478,6 +516,16 @@ describe("access acknowledgement and revocation boundaries", () => {
       runtimeGeneration: "b".repeat(64),
       protocol: "readonly-workspace/1",
       verifiedAt: "2026-01-01T00:00:00.000Z",
+    };
+    const issued = f.run.mock.calls[0]![0];
+    if (issued.kind !== "computer.verify-workspace")
+      throw new Error("wrong fixture check");
+    f.settings.computer.workspaces[0]!.accessCheck = {
+      rootIdentity: f.settings.computer.workspaces[0]!.rootIdentity!,
+      buildId: fixtureBuildId,
+      computerGeneration: f.settings.computer.generation,
+      verifiedAt: "2026-01-01T00:00:00.000Z",
+      checkId: issued.checkId,
     };
     expect(f.controller.reconcileReadback(f.settings, fixtureBuildId)).toBe(
       true,

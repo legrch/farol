@@ -740,6 +740,7 @@ export class WindowController implements RendererFacade {
       command.buildId !== pending.buildId ||
       command.generation !== pending.generation ||
       command.scope !== pending.scope ||
+      command.previousCheckId !== pending.previousCheckId ||
       command.connectionIdentity !== pending.connectionIdentity ||
       JSON.stringify(command.command) !== JSON.stringify(pending.command) ||
       Boolean(receipt.configuration.settings.computer.pendingEdit) ||

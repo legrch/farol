@@ -1,3 +1,7 @@
+import {
+  workspaceReadbackBinding,
+  workspaceReadbackConfirms,
+} from "../../src/ui/guided-workspace-access";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -45,6 +49,88 @@ async function fixture() {
 }
 
 describe("durable setup evidence, without changing workspace authority", () => {
+  it.each(["computer.verify-workspace", "computer.check-folder"] as const)(
+    "persists only the issued %s identity and never attributes an old or another check to it",
+    async (kind) => {
+      const { service, settings, store } = await fixture();
+      const target = settings.computer.workspaces[0]!;
+      const priorId = "00000000-0000-4000-8000-000000000090";
+      const issuedId = "00000000-0000-4000-8000-000000000091";
+      const otherId = "00000000-0000-4000-8000-000000000092";
+      const prior = await service.recordFolderAccessCheck(
+        target.workspaceId,
+        settings.computer.generation,
+        fixtureBuildId,
+        target.rootIdentity!,
+        true,
+        priorId,
+      );
+      if (!prior.ok || prior.snapshot.status !== "ready")
+        throw new Error("fixture prior check failed");
+      const before = prior.snapshot.settings;
+      const command = {
+        kind,
+        workspaceId: target.workspaceId,
+        checkId: issuedId,
+      };
+      const pending = workspaceReadbackBinding(before, fixtureBuildId, command);
+      // This request never reaches the native check. Reopening unchanged
+      // durable settings must not turn the prior success into its receipt.
+      const unchanged = await store.load();
+      expect(
+        workspaceReadbackConfirms(pending, unchanged!, fixtureBuildId),
+      ).toBe(false);
+      const record = (checkId: string) =>
+        kind === "computer.check-folder"
+          ? service.recordFolderAccessCheck(
+              target.workspaceId,
+              before.computer.generation,
+              fixtureBuildId,
+              target.rootIdentity!,
+              true,
+              checkId,
+            )
+          : service.recordComputerVerification(
+              target.workspaceId,
+              {
+                profile: "computer.local.read/1",
+                runtimeGeneration: "fixture-runtime",
+                buildId: fixtureBuildId,
+                protocol: "readonly-workspace/1",
+              },
+              {
+                rootIdentity: target.rootIdentity!,
+                expectedGeneration: before.computer.generation,
+                expectedRoot: target.root,
+                checkId,
+              },
+            );
+      expect((await record(otherId)).ok).toBe(true);
+      const other = await store.load();
+      expect(other!.computer.workspaces[0]!.accessCheck?.checkId).toBe(otherId);
+      expect(workspaceReadbackConfirms(pending, other!, fixtureBuildId)).toBe(
+        false,
+      );
+      expect((await record(issuedId)).ok).toBe(true);
+      const issued = await store.load();
+      expect(issued!.computer.workspaces[0]!.accessCheck?.checkId).toBe(
+        issuedId,
+      );
+      expect(workspaceReadbackConfirms(pending, issued!, fixtureBuildId)).toBe(
+        true,
+      );
+      const restarted = new ProductConfigurationService(store);
+      await restarted.initialize();
+      expect(restarted.snapshot()).toMatchObject({
+        status: "ready",
+        settings: issued,
+      });
+      const frozen = service.snapshot();
+      expect((await record("not-a-check-id")).ok).toBe(false);
+      expect(service.snapshot()).toEqual(frozen);
+    },
+  );
+
   it("checks another folder without changing the selected witness or grant generation", async () => {
     const { service, settings, store } = await fixture();
     const other = settings.computer.workspaces[1]!;

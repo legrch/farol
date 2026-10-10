@@ -33,6 +33,9 @@ const IdentifierSchema = z
     /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
   );
 
+// Correlates one issued folder check with its persisted access witness.
+export const WorkspaceAccessCheckIdSchema = IdentifierSchema;
+
 const Sha256Schema = z.string().regex(/^[a-f0-9]{64}$/u);
 
 const CodexHostCapabilitiesSchema = z.strictObject({
@@ -438,6 +441,7 @@ export const ApprovedProductWorkspaceSchema = z
     // The descriptor and existing authority checks still admit every read.
     accessCheck: z
       .strictObject({
+        checkId: WorkspaceAccessCheckIdSchema.optional(),
         buildId: z.string().regex(/^[a-f0-9]{64}$/u),
         computerGeneration: z.number().int().positive(),
         verifiedAt: CanonicalTimestampSchema,
@@ -797,10 +801,12 @@ export const ProductConfigurationCommandSchema = z.discriminatedUnion("kind", [
   z.strictObject({
     kind: z.literal("computer.check-folder"),
     workspaceId: IdentifierSchema,
+    checkId: WorkspaceAccessCheckIdSchema.optional(),
   }),
   z.strictObject({
     kind: z.literal("computer.verify-workspace"),
     workspaceId: IdentifierSchema,
+    checkId: WorkspaceAccessCheckIdSchema.optional(),
   }),
   z.strictObject({
     kind: z.literal("computer.list-workspace"),

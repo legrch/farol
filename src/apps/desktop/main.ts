@@ -8890,6 +8890,7 @@ async function configureAdmittedProduct(
         buildIdentity.buildId,
         identity,
         reachable,
+        command.checkId,
       );
       if (!recorded.ok) return ProductConfigurationResultSchema.parse(recorded);
       return reachable
@@ -8988,6 +8989,9 @@ async function configureAdmittedProduct(
         },
         {
           rootIdentity: measured,
+          ...(command.checkId === undefined
+            ? {}
+            : { checkId: command.checkId }),
           gitMetadata,
           expectedGeneration: generation,
           expectedRoot: workspace.root,

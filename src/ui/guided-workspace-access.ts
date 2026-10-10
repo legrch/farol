@@ -17,6 +17,8 @@ export type WorkspaceCommandOutcome = "applied" | "refused" | "unknown";
 export interface WorkspaceAccessPort {
   readonly settings: () => ProductSettings | null;
   readonly buildId: () => string;
+  /** Supplied by the active UI adapter; absent legacy ports cannot recover unknown checks. */
+  readonly issueCheckId?: () => string;
   readonly run: (
     command: ProductConfigurationCommand,
   ) => Promise<WorkspaceCommandOutcome>;
@@ -61,6 +63,7 @@ export type WorkspaceReadbackBinding = Readonly<{
   scope: string;
   connectionIdentity: string;
   previousRuntimeGeneration: string | null;
+  previousCheckId: string | null;
 }>;
 export function workspaceReadbackBinding(
   settings: ProductSettings,
@@ -75,6 +78,12 @@ export function workspaceReadbackBinding(
     connectionIdentity: onboardingFacts(settings, buildId).connectionIdentity,
     previousRuntimeGeneration:
       settings.connectors.secureMcp.runtime?.runtimeGeneration ?? null,
+    previousCheckId:
+      "workspaceId" in command
+        ? (settings.computer.workspaces.find(
+            (workspace) => workspace.workspaceId === command.workspaceId,
+          )?.accessCheck?.checkId ?? null)
+        : null,
   };
 }
 export function workspaceReadbackConfirms(
@@ -122,6 +131,9 @@ export function workspaceReadbackConfirms(
   )
     confirmed =
       target !== undefined &&
+      command.checkId !== undefined &&
+      command.checkId !== pending.previousCheckId &&
+      target.accessCheck?.checkId === command.checkId &&
       folderAccessChecked(settings, target, buildId) &&
       (command.kind === "computer.check-folder" ||
         (settings.setup.computer.verified?.workspaceId ===
@@ -199,7 +211,14 @@ export class GuidedWorkspaceAccess {
       command: ProductConfigurationCommand,
       delta = 0,
     ): Promise<boolean> => {
-      if (!current()) return false;
+      const before = current();
+      if (!before) return false;
+      if (
+        (command.kind === "computer.verify-workspace" ||
+          command.kind === "computer.check-folder") &&
+        port.issueCheckId
+      )
+        command = { ...command, checkId: port.issueCheckId() };
       const pending = {
         command,
         buildId: port.buildId(),
@@ -207,6 +226,12 @@ export class GuidedWorkspaceAccess {
         scope,
         connectionIdentity: consent.connectionIdentity,
         previousRuntimeGeneration,
+        previousCheckId:
+          "workspaceId" in command
+            ? (before.computer.workspaces.find(
+                (workspace) => workspace.workspaceId === command.workspaceId,
+              )?.accessCheck?.checkId ?? null)
+            : null,
       };
       let outcome: WorkspaceCommandOutcome;
       try {
