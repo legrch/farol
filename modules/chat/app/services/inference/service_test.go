@@ -66,10 +66,18 @@ func (c *credentials) Acquire(context.Context, inference.Selection) (inference.C
 }
 
 type transport struct {
-	outcome inference.Outcome
-	after   func()
-	calls   int
-	request inference.Request
+	outcome   inference.Outcome
+	preflight func(inference.Request) error
+	after     func()
+	calls     int
+	request   inference.Request
+}
+
+func (t *transport) Preflight(r inference.Request) error {
+	if t.preflight != nil {
+		return t.preflight(r)
+	}
+	return inference.ValidateRequest(r)
 }
 
 func (t *transport) Infer(ctx context.Context, c inference.Credential, r inference.Request) inference.Outcome {
@@ -353,9 +361,9 @@ func TestZeroAndRollbackClockAfterCredentialsRefuseDispatch(t *testing.T) {
 
 func TestCredentialExpirySampleParticipatesInClockFence(t *testing.T) {
 	f := newFixture(t)
-	f.c.samples = []uint64{10, 10, 20, 19}
+	f.c.samples = []uint64{10, 10, 10, 20, 19}
 	got := f.service.Infer(context.Background(), f.binding, f.input)
-	if got.State != inference.NotSent || f.transport.calls != 0 || f.publication.calls != 0 {
+	if got.State != inference.NotSent || f.credentials.calls != 1 || f.transport.calls != 0 || f.publication.calls != 0 {
 		t.Fatal("rollback from credential expiry sample authorized dispatch")
 	}
 }

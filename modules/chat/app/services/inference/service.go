@@ -125,6 +125,11 @@ func (s *Service) Infer(ctx context.Context, b Binding, input []InputItem) Outco
 	if err := s.usable(ctx, b, &last); err != nil {
 		return Outcome{State: NotSent, Code: Withdrawn}
 	}
+	preflight := r
+	preflight.Input = append([]InputItem(nil), r.Input...)
+	if s.options.Transport.Preflight(preflight) != nil {
+		return Outcome{State: NotSent, Code: Invalid}
+	}
 	raw, err := json.Marshal(struct {
 		Binding Binding
 		Request Request
@@ -135,6 +140,11 @@ func (s *Service) Infer(ctx context.Context, b Binding, input []InputItem) Outco
 	intent, err := s.options.Digester.Digest(raw)
 	if err != nil || !digestValue(intent) {
 		return Outcome{State: NotSent, Code: Invalid}
+	}
+	// Validation and digest ports cannot extend the original lifetime or replace
+	// its authority. Recheck immediately before the first journal/secret IO.
+	if s.usable(ctx, b, &last) != nil {
+		return Outcome{State: NotSent, Code: Withdrawn}
 	}
 	reserved, err := s.options.Ledger.Reserve(ctx, b, intent)
 	if err != nil {

@@ -47,6 +47,19 @@ func New(client *http.Client) *Client {
 	return &Client{http: copied}
 }
 
+// Preflight shares the actual builder, including strict JSON and final wire
+// size checks. It depends only on request values and performs no provider or
+// credential work. Infer retains the same validation as a defensive boundary.
+func (c *Client) Preflight(request inference.Request) error {
+	if c == nil {
+		return inference.Invalid
+	}
+	if _, ok := requestBody(request); !ok {
+		return inference.Invalid
+	}
+	return nil
+}
+
 func (c *Client) Infer(ctx context.Context, credential inference.Credential, request inference.Request) inference.Outcome {
 	if ctx == nil || c == nil {
 		return refused(inference.Invalid)

@@ -117,6 +117,10 @@ type Credentials interface {
 	Acquire(context.Context, Selection) (Credential, error)
 }
 type Transport interface {
+	// Preflight performs bounded, deterministic wire validation without IO,
+	// credentials, clock reads or owner reentry. It must use the same immutable
+	// request grammar as Infer. Service supplies a detached copy of Input.
+	Preflight(Request) error
 	Infer(context.Context, Credential, Request) Outcome
 }
 
