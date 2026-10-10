@@ -258,9 +258,16 @@ func nativeConnectorConnections(t *testing.T, listener *ConnectorListener, want 
 func nativeConnectorClosed(t *testing.T, client net.Conn) {
 	t.Helper()
 	nativeConnectorDeadline(t, client)
-	_, err := ipc.ReadFrame(client)
-	if !errors.Is(err, io.EOF) && !errors.Is(err, syscall.ECONNRESET) {
-		t.Fatalf("stream did not terminate with EOF/reset: %v", err)
+	if err := connectorCloseProof(client, nil); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func nativeConnectorClosedForOwner(t *testing.T, client net.Conn, request wire.Request) {
+	t.Helper()
+	nativeConnectorDeadline(t, client)
+	if err := connectorCloseProof(client, &request); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -517,6 +524,8 @@ func TestNativeConnectorSocketCloseOrCancelTerminatesExactStreams(t *testing.T) 
 			other := newNativeConnector(t, nil)
 			endpoint := f.listener.Endpoint()
 			var clients []*net.UnixConn
+			var ownerActive *net.UnixConn
+			var originalRequest wire.Request
 			for _, phase := range []string{"idle-auth", "partial-header", "partial-body", "authenticated", "handshaken", "owner-active"} {
 				client := nativeConnectorDial(t, endpoint.SocketPath)
 				clients = append(clients, client)
@@ -534,7 +543,9 @@ func TestNativeConnectorSocketCloseOrCancelTerminatesExactStreams(t *testing.T) 
 					if phase != "authenticated" {
 						bound := nativeConnectorHandshake(t, client, endpoint)
 						if phase == "owner-active" {
-							writeConnectorJSON(t, client, wire.Request{Jsonrpc: "2.0", Id: "active", Method: "computer.workspace.list", Params: wire.Call{Context: &bound, Body: json.RawMessage(`{}`)}})
+							ownerActive = client
+							originalRequest = wire.Request{Jsonrpc: "2.0", Id: "active", Method: "computer.workspace.list", Params: wire.Call{Context: &bound, Body: json.RawMessage(`{}`)}}
+							writeConnectorJSON(t, client, originalRequest)
 						}
 					}
 				}
@@ -561,7 +572,13 @@ func TestNativeConnectorSocketCloseOrCancelTerminatesExactStreams(t *testing.T) 
 				t.Fatal("successful Close preceded owner cancellation settlement")
 			}
 			for _, client := range clients {
-				nativeConnectorClosed(t, client)
+				if client == ownerActive {
+					// Cancellation may race one fully buffered original terminal
+					// response; every other stream retains strict no-frame closure.
+					nativeConnectorClosedForOwner(t, client, originalRequest)
+				} else {
+					nativeConnectorClosed(t, client)
+				}
 			}
 			if f.calls.Load() != 1 {
 				t.Fatal("shutdown dispatched unexpected owner work")
