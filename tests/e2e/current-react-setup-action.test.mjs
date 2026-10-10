@@ -426,6 +426,33 @@ test("file policy caller observes current completion within Settings", async () 
   });
 });
 
+test("advanced-policy stop observes its original result within Settings", async () => {
+  await journey({
+    name: "Stop connection",
+    scope: ".settings-page",
+    previous: "Prior feedback",
+    events: [
+      pending,
+      "Request completed. Review its recorded result in Diagnostics and the current status below.",
+    ],
+  });
+});
+
+test("unknown stop is retained through a later successful refresh", async () => {
+  await journey(
+    {
+      name: "Stop connection",
+      scope: ".settings-page",
+      events: [
+        pending,
+        unknown,
+        "Request completed. Review its recorded result in Diagnostics and the current status below.",
+      ],
+    },
+    /SETUP_ACTION_UNCONFIRMED:Stop connection/,
+  );
+});
+
 test("unsupported action has no generic-success fallback or click", async () => {
   const fake = fakePage({ name: "Unmapped command" });
   try {

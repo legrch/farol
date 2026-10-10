@@ -877,11 +877,27 @@ try {
     let policyConfigSha256;
     let policyRunMarker;
     if (behavior) {
+      // Add has already connected. This separate advanced-policy journey
+      // explicitly stops the original connection and observes its result;
+      // never replay an uncertain stop or infer closure from navigation.
+      await setupStep(window, "connection", "Connection");
+      await window.getByText("Connection help", { exact: true }).click();
+      await window
+        .getByRole("button", { name: "Connection diagnostics", exact: true })
+        .click();
+      await setupAction(window, "Stop connection", {
+        scope: ".settings-page",
+      });
+      saved = await readSetupSettings(window);
+      assert.equal(saved.connectors.secureMcp.runtime, null);
+      assert.equal(saved.connectors.secureMcp.attachment, null);
+      assert.equal(saved.setup.connect.outcomeUnknown, false);
+      assert.deepEqual(saved.computer.workspaces, retainedWorkspaces);
       // Supported current React Settings -> IPC owner save only. Reading the
       // owned config observes publication; this test never writes policy bytes.
       const beforePolicy = saved;
       assert.equal(Object.hasOwn(beforePolicy.computer, "filePolicy"), false);
-      assert.equal(beforePolicy.connectors.secureMcp.runtime.state, "ready");
+      assert.equal(beforePolicy.connectors.secureMcp.runtime, null);
       await window
         .getByRole("navigation", { name: "Sections", exact: true })
         .getByRole("button", { name: "Settings", exact: true })

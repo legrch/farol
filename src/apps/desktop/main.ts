@@ -3921,7 +3921,7 @@ async function selectedWorkspace(): Promise<
   } else {
     if (!window) return "invalid";
     const result = await dialog.showOpenDialog(window, {
-      title: "Add a read-only workspace",
+      title: "Choose a workspace",
       buttonLabel: "Add Workspace",
       properties: ["openDirectory"],
       securityScopedBookmarks: false,

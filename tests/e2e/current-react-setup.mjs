@@ -56,6 +56,8 @@ export async function setupAction(page, name, { scope = ".setup-page" } = {}) {
       "Attachment checked. The current workspace and connection checks passed.",
     "Save file permissions":
       "Request completed. Review its recorded result in Diagnostics and the current status below.",
+    "Stop connection":
+      "Request completed. Review its recorded result in Diagnostics and the current status below.",
   };
   const verify = name === "Verify workspace";
   const add = name === "Add workspace…";
