@@ -10793,7 +10793,7 @@ let quitInProgress = false;
 
 function isPrimaryReady(): boolean {
   return primaryStartupReady({
-    stopping: quitInProgress || runtimeStopping,
+    stopping: quitInProgress || runtimeStopping || installedUpdateAdmission,
     runtimeState,
     windowReady: window !== null && !window.isDestroyed(),
     taskViewCount: [...taskViewKinds.values()].filter(
@@ -10807,17 +10807,20 @@ async function handleSecondInstance(candidate: unknown): Promise<void> {
   const decision = decideSecondInstance(launchIdentity, candidate);
   if (!decision) return;
   let status = decision.status;
-  if (status === "reopened" && (quitInProgress || runtimeStopping)) {
-    // The primary is quitting: acknowledge that it cannot take this launch
+  if (
+    status === "reopened" &&
+    (quitInProgress || runtimeStopping || installedUpdateAdmission)
+  ) {
+    // Quit/update owns admission: acknowledge that it cannot take this launch
     // instead of reopening a window that is about to close.
     status = "reopen-failed";
   }
   if (status === "reopened") {
     try {
       await primaryStartup.whenReady();
-      // Quit may have begun while this launch waited for startup: check
+      // Quit/update may have begun while this launch waited for startup: check
       // again before opening a window that is about to close.
-      if (quitInProgress || runtimeStopping) {
+      if (quitInProgress || runtimeStopping || installedUpdateAdmission) {
         status = "reopen-failed";
       } else {
         const outcome = await containWindowOpenFailure(
