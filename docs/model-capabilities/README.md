@@ -1,9 +1,9 @@
 # Account-scoped model capabilities
 
 Implementation base: `99aca15ffe16b435e59b19c20ff48e06bd56960d`.
-Published code checkpoint: `2b137f497ca541212b5c4a9672e0b0b021327c31`.
-Equivalent local checkpoint: `a73b7de5c7f17b010a3df77dc07f0f58798a5a64`.
-Exact source tree: `e7ffa7ed2d11b1a94717d136e4b47cacde787c90`.
+Published code checkpoint: `7212f92adf5fe851438458ed629fbb19fe06b7d8`.
+Equivalent local checkpoint: `245270f6857ea34471521a08fc9968da574f49d5`.
+Exact source tree: `6fd9d3ba637b86815510579a9683459bc2de71b3`.
 Publication preserves B0 ancestry and equal source trees; the supported connector
 generates new commit identities. See [acceptance evidence](ACCEPTANCE.md).
 
@@ -77,13 +77,19 @@ catalogue/capability revisions. It cannot settle, replay or retarget an admitted
 refused or outcome-unknown operation. The owning application must perform its
 last account/authority check at its own intent/effect boundary.
 
-`CheckBudget` compares advisory values without adding quantities, so unsigned
-maximum values cannot wrap an aggregate. Unknown values cannot satisfy configured
-limits. A known zero can satisfy a zero limit. Estimates carry source and version,
-but no account, input identity or validity interval. The consumer must correlate
-them with its captured selection/input and establish freshness before using them
-for admission. These functions cannot reject a stale estimate on their own.
-Reported usage stays separate from estimates; neither implies entitlement or price.
+`CaptureEstimate` retains the full immutable model pin, estimator source/version,
+original SHA-256 input digest and an explicitly qualified observation/expiry.
+`AssessEstimate` distinguishes known, unknown, stale, mismatched and unqualified.
+`CheckCurrentBudget` rejects stale, mismatched or unqualified captures before
+comparing configured bounds. Unknown quantities cannot satisfy their own limit;
+known zero can satisfy zero. No quantities are added or prices converted.
+
+`CheckBudget` remains an arithmetic comparator and cannot establish applicability.
+Admission uses `CheckCurrentBudget`, together with the owner's current catalogue,
+account and authority fences. The qualified capture is correlation, not authority.
+Reported provider usage remains a separate type and provenance. See
+[estimate semantics](ESTIMATES.md) and the
+[pinned INFERENCE mapping](INFERENCE-MAPPING.md).
 
 ## Public reproduction and review
 

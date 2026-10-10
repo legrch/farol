@@ -4,10 +4,10 @@ The MODELS branch changes only its domain, catalogue adapter and documentation
 roots. It does not modify boot, shared contracts, generated wire, admission,
 journals, authority or renderer shipping composition.
 
-Published source dependency: `2b137f497ca541212b5c4a9672e0b0b021327c31`, based on
+Published source dependency: `7212f92adf5fe851438458ed629fbb19fe06b7d8`, based on
 `99aca15ffe16b435e59b19c20ff48e06bd56960d`. The equivalent local checkpoint is
-`a73b7de5c7f17b010a3df77dc07f0f58798a5a64`; both have source tree
-`e7ffa7ed2d11b1a94717d136e4b47cacde787c90`. The branch is
+`245270f6857ea34471521a08fc9968da574f49d5`; both have source tree
+`6fd9d3ba637b86815510579a9683459bc2de71b3`. The branch is
 `feature/model-capability-routing`. See `ACCEPTANCE.md` for the earlier checkpoint
 mapping. Do not copy a private development registry into runtime.
 
@@ -37,8 +37,12 @@ No existing B0 inference service is claimed here.
 The actual effect owner must preserve refused and outcome-unknown dispatch states
 without retry or route/model/billing fallback. The MODELS no-effect preparer does
 not dispatch and cannot establish that property for an uncomposed service. Budget
-consumers must bind advisory estimate source/version to their actual captured
-input/selection and validity interval; `CheckBudget` proves only numeric bounds.
+consumers must use `CaptureEstimate` and `CheckCurrentBudget` for their captured
+input/selection and qualified interval; `CheckBudget` proves only numeric bounds.
+The exact read-only comparison with INFERENCE commit
+`e2824968b72fb891774a4cdda7f0beaa2c893842`, including field conversions and minimal
+incompatibilities, is in `INFERENCE-MAPPING.md`. That owner retains the disposable
+actual cross-feature witness; no INFERENCE source is imported into this branch.
 
 The WORKFLOW owner should map its chosen resolved value into `TaskMapping`
 semantics, keeping UI alias distinct from exact runtime model and explicit effort.
