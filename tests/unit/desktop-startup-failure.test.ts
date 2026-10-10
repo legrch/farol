@@ -9,6 +9,36 @@ import {
 import { BridgeError } from "../../apps/desktop/bridge/client";
 
 describe("desktop startup failure boundary", () => {
+  it.each(["dev", "preview"] as const)(
+    "classifies an unconfirmed previous shutdown in %s as profile recovery",
+    (environment) => {
+      for (const failure of [
+        new Error("DESKTOP_PREVIOUS_QUIT_UNCONFIRMED"),
+        new BridgeError("refused", "previous_host_drain_unconfirmed"),
+      ]) {
+        const write = vi.fn<(message: string) => void>();
+        const exit = vi.fn<(code: number) => void>();
+        terminateDesktopStartup(failure, environment, { write, exit });
+        const report = write.mock.calls[0]?.[0];
+        expect(report).toContain("previous session did not confirm shutdown");
+        expect(report).toContain("Preserve the existing profile");
+        expect(report).toContain(
+          "rebuilding the app does not settle this state",
+        );
+        expect(report).not.toContain("Rebuild the exact candidate");
+        expect(report).not.toContain("run 'task dev' again");
+        expect(report).toContain(
+          `${DESKTOP_STARTUP_FAILURE_PREFIX}${desktopStartupFailureCode(failure)}`,
+        );
+        expect(report).toContain(
+          `${DESKTOP_LAUNCH_RESULT_PREFIX}startup-failed`,
+        );
+        expect(write).toHaveBeenCalledOnce();
+        expect(exit).toHaveBeenCalledExactlyOnceWith(1);
+      }
+    },
+  );
+
   it("reports a failed Go boundary exactly once without retrying its effect", async () => {
     const effect = vi.fn(async () => {
       throw new BridgeError("refused", "invalid_computer_publication");

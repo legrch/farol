@@ -64,6 +64,10 @@ const DISPLAY_PRECONDITION_CODES = new Set([
   "WINDOW_DISPLAY_GEOMETRY_INVALID",
   "VISIBLE_TEST_VIEWPORT_UNAVAILABLE",
 ]);
+const PREVIOUS_DRAIN_FAILURE_CODES = new Set([
+  "DESKTOP_PREVIOUS_QUIT_UNCONFIRMED",
+  "GO_CORE_PREVIOUS_HOST_DRAIN_UNCONFIRMED",
+]);
 
 export function desktopStartupFailureCode(error: unknown): string {
   if (error instanceof BridgeError) {
@@ -92,13 +96,15 @@ export function desktopStartupFailureReport(
 ): string {
   const code = desktopStartupFailureCode(error);
   const product = environment === "dev" ? "Farol Dev" : "Farol Next Preview";
-  const remedy = DISPLAY_PRECONDITION_CODES.has(code)
-    ? "The visible-test display requirements are not met. Check available displays and the requested viewport before launching again. Use hidden mode only for an equivalent check."
-    : environment === "dev" && code === "DEV_PROFILE_DIRECTORY_AMBIGUOUS"
-      ? "Two distinct Dev profiles exist. Stop here and choose a profile explicitly; neither was moved or merged."
-      : environment === "dev"
-        ? "Fix the reported local build or configuration issue, then run 'task dev' again."
-        : "Rebuild the exact candidate, then launch it again.";
+  const remedy = PREVIOUS_DRAIN_FAILURE_CODES.has(code)
+    ? "The previous session did not confirm shutdown. Preserve the existing profile and its recovery records; rebuilding the app does not settle this state. Use a qualified recovery procedure before reopening that profile."
+    : DISPLAY_PRECONDITION_CODES.has(code)
+      ? "The visible-test display requirements are not met. Check available displays and the requested viewport before launching again. Use hidden mode only for an equivalent check."
+      : environment === "dev" && code === "DEV_PROFILE_DIRECTORY_AMBIGUOUS"
+        ? "Two distinct Dev profiles exist. Stop here and choose a profile explicitly; neither was moved or merged."
+        : environment === "dev"
+          ? "Fix the reported local build or configuration issue, then run 'task dev' again."
+          : "Rebuild the exact candidate, then launch it again.";
   return (
     `${product} main-process startup failed before the app became ready (${code}). ${remedy}\n` +
     (error instanceof StartupBoundaryFailure
