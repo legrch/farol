@@ -51,13 +51,22 @@ func New(client *http.Client) *Client {
 // size checks. It depends only on request values and performs no provider or
 // credential work. Infer retains the same validation as a defensive boundary.
 func (c *Client) Preflight(request inference.Request) error {
+	_, err := c.PrepareRequest(request)
+	return err
+}
+
+// PrepareRequest returns the exact bounded wire bytes used by Infer. Composition
+// owners can compare original context receipts before journal or credential IO.
+// It performs no IO and returns no authority or credential material.
+func (c *Client) PrepareRequest(request inference.Request) ([]byte, error) {
 	if c == nil {
-		return inference.Invalid
+		return nil, inference.Invalid
 	}
-	if _, ok := requestBody(request); !ok {
-		return inference.Invalid
+	raw, ok := requestBody(request)
+	if !ok {
+		return nil, inference.Invalid
 	}
-	return nil
+	return append([]byte(nil), raw...), nil
 }
 
 func (c *Client) Infer(ctx context.Context, credential inference.Credential, request inference.Request) inference.Outcome {
