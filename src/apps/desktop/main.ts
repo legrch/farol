@@ -10755,7 +10755,8 @@ async function createWindow(): Promise<void> {
     void consumeSse(task, controller).catch((error: unknown) => {
       if (error instanceof Error && error.name === "AbortError") return;
       if (
-        !startupIsCurrent() ||
+        window !== taskViewHost ||
+        taskViewHost.isDestroyed() ||
         runtimeState !== "ready" ||
         runtime !== activeRuntime ||
         controller.signal.aborted ||

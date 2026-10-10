@@ -577,3 +577,55 @@ it("retains current generic read failure classification", async () => {
     channel: "controlled-status",
   });
 });
+
+it.each(
+  (["none", "quitInProgress", "installedUpdateAdmission"] as const).flatMap(
+    (flag) => (["fetch", "read"] as const).map((stage) => ({ flag, stage })),
+  ),
+)(
+  "classifies the admitted current $stage failure while $flag holds new admission",
+  async ({ flag, stage }) => {
+    const h = host();
+    const current = h.startCaller();
+    if (stage === "read") {
+      await h.toRead(current);
+      current.channel.reads[0]!.resolve(
+        packet(requested(task, "current-call")),
+      );
+      await flush();
+    }
+    if (flag !== "none") h.context[flag] = true;
+    const failure = new Error("CONTROLLED_CURRENT_FAILURE_DURING_ADMISSION");
+    if (stage === "fetch") current.channel.fetched.reject(failure);
+    else current.channel.reads.at(-1)!.reject(failure);
+    const outcome = await current.outcome;
+    expect(outcome.status).toBe("rejected");
+    if (outcome.status === "rejected") expect(outcome.error).toBe(failure);
+    await flush();
+    const snapshot = () => ({
+      sameController:
+        h.context.streamControllers.get(task.taskId) === current.controller,
+      aborted: current.controller.signal.aborted,
+      pendingCall: h.context.pendingComputer.get(task.taskId)?.callId ?? null,
+      failure: h.context.taskSurfaceFailures.get(task.taskId) ?? null,
+      statuses: h.sends
+        .filter((send) => send.channel === "controlled-status")
+        .map((send) => send.value),
+    });
+    const duringHold = snapshot();
+    if (flag !== "none") h.context[flag] = false;
+    await flush();
+    const afterRelease = snapshot();
+    h.api.stop();
+    expect(duringHold).toEqual({
+      sameController: false,
+      aborted: true,
+      pendingCall: null,
+      failure: "TASK_STREAM_FAILED",
+      statuses: [
+        { taskId: task.taskId, state: "failed", error: "TASK_STREAM_FAILED" },
+      ],
+    });
+    expect(afterRelease).toEqual(duringHold);
+  },
+);
