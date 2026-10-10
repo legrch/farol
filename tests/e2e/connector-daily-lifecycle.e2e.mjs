@@ -768,6 +768,12 @@ async function exercise(run) {
       after.connectors.secureMcp.lastVerifiedAttachment,
       run.baseline.connectors.secureMcp.lastVerifiedAttachment,
     );
+    const challenge = after.connectors.secureMcp.challenge;
+    const runtime = after.connectors.secureMcp.runtime;
+    assert.equal(challenge.runtimeGeneration, runtime.runtimeGeneration);
+    assert.equal(challenge.computerGeneration, runtime.computerGeneration);
+    assert.equal(challenge.buildId, build.buildId);
+    assert.equal(challenge.challengeSha256, hash(challenge.value));
     const next = await captureLaunch(run, after);
     assert.notDeepEqual(
       next.launch.opened.endpoint.binding,
@@ -822,7 +828,6 @@ async function exercise(run) {
 }
 async function normalQuit(run) {
   assert.equal(run.quitAttempted, false, "DAILY_QUIT_CANNOT_BE_RETRIED");
-  run.quitAttempted = true;
   assert.ok(run.isolated, "DAILY_QUIT_PROFILE_UNCONFIRMED");
   await hidden(run);
   const configHash = hash(
@@ -832,6 +837,7 @@ async function normalQuit(run) {
   run.evidence.quit = { requestedAt, dispatch: "pending", terminal: null };
   // Keep the original evaluate and child terminal; a transport closing during
   // Quit cannot prove success or justify a replacement Quit.
+  run.quitAttempted = true;
   run.quitRequest = run.application
     .evaluate(({ app }) => {
       app.quit();
@@ -927,6 +933,18 @@ async function originalClose(run) {
       status: run.pendingLaunch ? "launch-handle-unconfirmed" : "not-launched",
     });
     if (run.pendingLaunch) run.evidence.cleanupUnknown = true;
+    return;
+  }
+  if (
+    !run.isolated &&
+    run.child.exitCode === null &&
+    run.child.signalCode === null
+  ) {
+    run.evidence.disposal.push({
+      kind: "original-electron-close",
+      status: "held-native-isolation-unconfirmed",
+    });
+    run.evidence.cleanupUnknown = true;
     return;
   }
   // No second Quit after an unknown request. Close Playwright's original handle
