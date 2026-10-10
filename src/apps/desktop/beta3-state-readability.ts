@@ -46,11 +46,15 @@ function isStoredJson(value: unknown, ancestors = new Set<object>()): boolean {
 }
 
 /** Readability by the ORIGINAL beta3 reader only, never arbitrary history.
- * Audited against 24cc7c32f12f2633156efef40c91ea0817109a4c at base 27c091e5:
- * the complete stored-schema dependency closure has two incompatible additions:
- * general.openAtLaunch="home" and nativeHosts.taskRoute.observeTurnId. The
- * commands/results changes are not stored Settings. tasks was already unknown;
- * all stored defaults and remaining validators have the same old semantics.
+ * Audited against 24cc7c32f12f2633156efef40c91ea0817109a4c at base
+ * d32626257a2f790682bb915e656cc75e88b648d3. The complete stored-schema
+ * dependency closure has three incompatible additions: general.openAtLaunch=
+ * "home", nativeHosts.taskRoute.observeTurnId and workspace accessCheck.checkId.
+ * Refuse their presence rather than removing them for the old strict reader.
+ * Commands/results changes are not stored Settings; their checkId fields are
+ * outside this closure. tasks was already unknown. Stored defaults and all
+ * remaining validators are unchanged; the Zod version and locked integrity
+ * match the original reader. The added receipt import is result-only.
  *
  * ON TOUCH: any stored-schema, reachable validator/default or parser dependency
  * change requires a fresh complete comparison against that exact reader and
@@ -85,7 +89,12 @@ export function originalPredecessorSettingsReadable(
       return false;
     const route = parsed.data.nativeHosts.taskRoute;
     // Presence is incompatible, not just a nonempty value. Never remove it.
-    return route === null || !Object.hasOwn(route, "observeTurnId");
+    if (route !== null && Object.hasOwn(route, "observeTurnId")) return false;
+    return parsed.data.computer.workspaces.every(
+      (workspace) =>
+        workspace.accessCheck == null ||
+        !Object.hasOwn(workspace.accessCheck, "checkId"),
+    );
   } catch {
     return false;
   }

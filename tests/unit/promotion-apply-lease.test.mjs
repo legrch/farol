@@ -90,6 +90,7 @@ beforeEach(() => {
       sink(),
       sink(),
       null,
+      null,
     ];
     child.kill = vi.fn(() => true);
     resolveSpawned(child);
@@ -127,7 +128,7 @@ function close(code = 0, signal = null) {
 
 describe("promotion inherits the original lease and owns the original child lifetime", () => {
   it.each([false, true])(
-    "inherits exact fd6 and preserves fd0..5 (test hook %s)",
+    "inherits exact fd6 and preserves fd0..5 with fd7 ignored (test hook %s)",
     async (testHook) => {
       let closed;
       const operation = runPromotionApply(
@@ -150,6 +151,7 @@ describe("promotion inherits the original lease and owns the original child life
         testHook ? "pipe" : "ignore",
         testHook ? "pipe" : "ignore",
         31,
+        "ignore",
       ]);
       expect(JSON.parse(Buffer.concat(requestBytes).toString())).toMatchObject({
         lease: { file: lease.file, ...transfer.identity },
@@ -167,6 +169,45 @@ describe("promotion inherits the original lease and owns the original child life
       await operation;
       await expect(closed).resolves.toEqual({ code: 0, signal: null });
       expect(transfer.release).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([false, true])(
+    "inherits the original updater descriptor at fd7 without moving fd0..6 (test hook %s)",
+    async (testHook) => {
+      const originalUpdaterDescriptor = 47;
+      const operation = runPromotionApply(
+        request({
+          updaterLockDescriptor: originalUpdaterDescriptor,
+          ...(testHook ? { afterParentOpened: async () => undefined } : {}),
+        }),
+      );
+      await started();
+      expect(fake.spawn.mock.calls[0][2].stdio).toEqual([
+        "pipe",
+        "pipe",
+        "pipe",
+        "pipe",
+        testHook ? "pipe" : "ignore",
+        testHook ? "pipe" : "ignore",
+        transfer.descriptor,
+        originalUpdaterDescriptor,
+      ]);
+      child.stdout.write("FAROL_PROMOTION_OK\n");
+      close();
+      await operation;
+      expect(transfer.release).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([-1, 1.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1, "47", null])(
+    "refuses an invalid updater descriptor %j before lease transfer or spawn",
+    async (updaterLockDescriptor) => {
+      await expect(
+        runPromotionApply(request({ updaterLockDescriptor })),
+      ).rejects.toThrow("PROMOTION_APPLY_INPUT_INVALID");
+      expect(fake.transfer).not.toHaveBeenCalled();
+      expect(fake.spawn).not.toHaveBeenCalled();
     },
   );
 

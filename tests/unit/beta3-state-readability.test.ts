@@ -169,12 +169,21 @@ describe("originalPredecessorSettingsReadable", () => {
     );
     expect(sections).toHaveLength(2);
     expect(createHash("sha256").update(sections[0]!).digest("hex")).toBe(
-      "49ee127e309d3af3130e05365da502b29eec2cf9d72286ff6155b2f62a9ea62b",
+      "1d69d58746c6a25ab16dca8ac6f37de472bbc3f03ebdeae27c7d398aee8c9b31",
     );
     const packageJson = JSON.parse(
       readFileSync(new URL("../../package.json", import.meta.url), "utf8"),
     );
     expect(packageJson.dependencies.zod).toBe("4.6.5");
+    const packageLock = JSON.parse(
+      readFileSync(new URL("../../package-lock.json", import.meta.url), "utf8"),
+    );
+    expect(packageLock.packages["node_modules/zod"]).toMatchObject({
+      version: "4.6.5",
+      resolved: "https://registry.npmjs.org/zod/-/zod-4.6.5.tgz",
+      integrity:
+        "sha512-v5l/aFXZQeai4awLbOpSoHecE9UiMrnfx75tEXLjNonXVARxQ5mOeipTjROUchszUNCqnE+hqAMujRsRHsut2Q==",
+    });
   });
 
   it.each(["browser", "computer", "activity", "settings"])(
@@ -207,6 +216,57 @@ describe("originalPredecessorSettingsReadable", () => {
       if (observeTurnId === "turn-exact_1" || observeTurnId === undefined)
         expect(ProductSettingsSchema.safeParse(value).success).toBe(true);
       expect(originalPredecessorSettingsReadable(source, value)).toBe(false);
+      expect(value).toStrictEqual(before);
+    },
+  );
+
+  it.each([
+    "00000000-0000-4000-8000-000000000006",
+    "",
+    null,
+    undefined,
+    false,
+    {},
+  ])("refuses any stored accessCheck.checkId presence: %j", (checkId) => {
+    const value = fixture();
+    Object.assign(value.computer.workspaces[0]!.accessCheck, { checkId });
+    const before = structuredClone(value);
+    if (typeof checkId === "string" && checkId.length > 0)
+      expect(ProductSettingsSchema.safeParse(value).success).toBe(true);
+    expect(originalPredecessorSettingsReadable(source, value)).toBe(false);
+    expect(value).toStrictEqual(before);
+  });
+
+  it("refuses an issued-check witness on a later workspace without mutating either", () => {
+    const value = fixture();
+    const later = structuredClone(value.computer.workspaces[0]!);
+    later.workspaceId = "00000000-0000-4000-8000-000000000007";
+    Object.assign(later.accessCheck, {
+      checkId: "00000000-0000-4000-8000-000000000006",
+    });
+    value.computer.workspaces.push(later);
+    const before = structuredClone(value);
+    expect(ProductSettingsSchema.safeParse(value).success).toBe(true);
+    expect(originalPredecessorSettingsReadable(source, value)).toBe(false);
+    expect(value).toStrictEqual(before);
+  });
+
+  it.each(["absent", "null", "legacy"] as const)(
+    "retains the old %s accessCheck state without inserting a checkId default",
+    (kind) => {
+      const value = fixture();
+      const workspace = value.computer.workspaces[0]!;
+      if (kind === "absent") Reflect.deleteProperty(workspace, "accessCheck");
+      if (kind === "null") Object.assign(workspace, { accessCheck: null });
+      const before = structuredClone(value);
+      const parsed = ProductSettingsSchema.parse(value).computer.workspaces[0]!;
+      if (kind === "absent") expect(parsed).not.toHaveProperty("accessCheck");
+      if (kind === "null") expect(parsed.accessCheck).toBeNull();
+      if (kind === "legacy") {
+        expect(parsed.accessCheck).toStrictEqual(workspace.accessCheck);
+        expect(parsed.accessCheck).not.toHaveProperty("checkId");
+      }
+      expect(originalPredecessorSettingsReadable(source, value)).toBe(true);
       expect(value).toStrictEqual(before);
     },
   );
