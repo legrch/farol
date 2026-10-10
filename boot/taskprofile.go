@@ -47,8 +47,10 @@ type taskProfileOwner struct {
 }
 
 type taskProfileTurn struct {
-	route     *taskrepo.Route
-	authority taskProfileAuthority
+	route      *taskrepo.Route
+	authority  taskProfileAuthority
+	control    *controlct.Contract
+	chatHandle string
 }
 
 // OpenTaskProfile uses only the selected profile's already qualified fixed Task
@@ -170,7 +172,7 @@ func (p *TaskProfile) SelectCodex(ctx context.Context, input CodexTaskTurn) (*Ta
 	}
 	p.tasks[b.TaskID] = record
 	p.clients[record.client] = b.TaskID
-	record.turns[b] = taskProfileTurn{route: route, authority: authority}
+	record.turns[b] = taskProfileTurn{route: route, authority: authority, control: ingress.runtime.control, chatHandle: input.ChatHandle}
 	p.routes = append(p.routes, route)
 	return ingress, nil
 }
