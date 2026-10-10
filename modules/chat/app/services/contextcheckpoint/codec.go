@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"github.com/legrch/farol/modules/chat/domain/contextbudget"
+	"unicode/utf8"
 )
 
 const MaxCheckpointBytes = 8 * 1024 * 1024
@@ -58,7 +59,7 @@ func boundedWindow(w contextbudget.Window) bool {
 // rejects invented permission/instruction fields instead of interpreting them.
 // Semantic acceptance still requires Recover against the current original source.
 func DecodeCheckpoint(raw []byte) (contextbudget.Checkpoint, error) {
-	if len(raw) == 0 || len(raw) > MaxCheckpointBytes || !json.Valid(raw) {
+	if len(raw) == 0 || len(raw) > MaxCheckpointBytes || !utf8.Valid(raw) || !json.Valid(raw) {
 		return contextbudget.Checkpoint{}, Invalid
 	}
 	decoder := json.NewDecoder(bytes.NewReader(raw))

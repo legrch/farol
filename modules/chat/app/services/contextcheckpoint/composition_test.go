@@ -1,6 +1,7 @@
 package contextcheckpoint_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -579,6 +580,60 @@ func TestImportedCheckpointCannotAddPermissionFields(t *testing.T) {
 	}
 	if _, err := cp.DecodeCheckpoint(make([]byte, cp.MaxCheckpointBytes+1)); err != cp.Invalid {
 		t.Fatal("unbounded import")
+	}
+}
+
+func TestImportedCheckpointRejectsMalformedUTF8WithoutRepair(t *testing.T) {
+	f := compose(t, 1)
+	p := prepare(t, f)
+	if _, err := f.service.Publish(context.Background(), p); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(f.store.saved.Checkpoint)
+	bad := bytes.Replace(raw, []byte("Preserve permissions"), []byte{'P', 0xff}, 1)
+	if utf8.Valid(bad) || !json.Valid(bad) {
+		t.Fatal("fixture must exercise JSON decoder's invalid UTF-8 repair")
+	}
+	if _, err := cp.DecodeCheckpoint(bad); err != cp.Invalid {
+		t.Fatal("malformed original bytes silently repaired on import", err)
+	}
+}
+
+func TestActualRequestExactLimitsAndSingleUnitOverflow(t *testing.T) {
+	f := compose(t, 1)
+	for i, e := range f.original.snapshot.Source.Events {
+		if e.Kind == cb.Result {
+			f.original.snapshot.Source.Events[i].Text = strings.Repeat("\"\\🙂", 1000)
+		}
+	}
+	m, err := f.service.Materialize(context.Background(), prepare(t, f), binding())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, dimension := range []string{"exact", "bytes", "code-points", "estimated-tokens"} {
+		t.Run(dimension, func(t *testing.T) {
+			limits := m.Usage
+			switch dimension {
+			case "bytes":
+				limits.Bytes--
+			case "code-points":
+				limits.CodePoints--
+			case "estimated-tokens":
+				limits.EstimatedTokens--
+			}
+			p, err := f.service.Prepare(context.Background(), binding(), fmt.Sprintf("edge-c-%d", i), fmt.Sprintf("edge-o-%d", i), cb.Policy{Limit: limits})
+			if err != nil {
+				t.Fatal("selection should fit before final wire measurement", err)
+			}
+			got, err := f.service.Materialize(context.Background(), p, binding())
+			if dimension == "exact" {
+				if err != nil || got.Usage != m.Usage || !bytes.Equal(got.JSON, m.JSON) {
+					t.Fatal("exact budget rejected or changed the request", err)
+				}
+			} else if err != cb.RequiredTooLarge || len(got.JSON) != 0 {
+				t.Fatal("single-unit overflow exposed a request", err)
+			}
+		})
 	}
 }
 
