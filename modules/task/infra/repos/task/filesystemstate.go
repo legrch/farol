@@ -24,6 +24,8 @@ type filesystemImage struct {
 	Revision   uint64
 	Tasks      map[string]port.Snapshot
 	Operations map[string]port.Operation
+	// Omitted for byte-identical old v1 images. Old binaries refuse enriched state.
+	Workflows *workflowImage `json:",omitempty"`
 }
 type filesystemEnvelope struct {
 	Image  filesystemImage
@@ -146,7 +148,7 @@ func filesystemReceipt(i task.Intent, lineage task.Reference, r task.Receipt) bo
 	return r.Lifecycle.Valid() && r.Lifecycle != task.Unknown && r.Lifecycle != task.Refused && filesystemText(r.Result) && !r.CancelRequested
 }
 func filesystemImageValid(image *filesystemImage) bool {
-	if image == nil || !task.ID(image.ProfileID) || image.Version != 1 || image.Tasks == nil || image.Operations == nil || len(image.Tasks) > filesystemMaxTasks || len(image.Operations) > filesystemMaxOperations {
+	if image == nil || !filesystemWorkflowsValid(image) || !task.ID(image.ProfileID) || image.Version != 1 || image.Tasks == nil || image.Operations == nil || len(image.Tasks) > filesystemMaxTasks || len(image.Operations) > filesystemMaxOperations {
 		return false
 	}
 	creates := map[string]int{}
