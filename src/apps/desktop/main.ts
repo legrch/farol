@@ -10246,11 +10246,20 @@ function applyLayout(): void {
 
 async function createTaskViews(): Promise<void> {
   if (!window || !runtime) return;
+  const taskViewHost = window;
   const activeRuntime = runtime;
+  const startupIsCurrent = () =>
+    window === taskViewHost &&
+    !taskViewHost.isDestroyed() &&
+    !quitInProgress &&
+    !installedUpdateAdmission &&
+    runtimeState === "ready" &&
+    runtime === activeRuntime;
+  if (!startupIsCurrent()) return;
   const base = runtimeBase();
   if (!base || !installNetworkFence()) return;
   for (const task of activeRuntime.tasks) {
-    if (runtimeState !== "ready" || runtime !== activeRuntime) return;
+    if (!startupIsCurrent()) return;
     const retained = taskViews.get(task.taskId);
     if (retained && !retained.webContents.isDestroyed()) {
       continue;
@@ -10284,6 +10293,12 @@ async function createTaskViews(): Promise<void> {
           extraHeaders: `Authorization: Bearer ${task.readToken}\n`,
         },
       );
+      if (
+        !startupIsCurrent() ||
+        taskViews.get(task.taskId) !== view ||
+        view.webContents.isDestroyed()
+      )
+        return;
       taskSurfaceFailures.delete(task.taskId);
       publishTaskSurfaceStatus({
         taskId: task.taskId,
@@ -10298,7 +10313,7 @@ async function createTaskViews(): Promise<void> {
       throw error;
     }
   }
-  if (runtimeState === "ready" && runtime === activeRuntime) applyLayout();
+  if (startupIsCurrent()) applyLayout();
 }
 
 async function consumeSse(task: RuntimeReady["tasks"][number]): Promise<void> {
@@ -10609,6 +10624,7 @@ function installIpc(): void {
 }
 
 async function createWindow(): Promise<void> {
+  if (quitInProgress || installedUpdateAdmission) return;
   const testPlacement =
     windowMode === "secondary-visible"
       ? selectPreviewWindowPlacement(
@@ -10665,6 +10681,11 @@ async function createWindow(): Promise<void> {
     publishWindowState();
   });
   const taskViewHost = window;
+  const startupIsCurrent = () =>
+    window === taskViewHost &&
+    !taskViewHost.isDestroyed() &&
+    !quitInProgress &&
+    !installedUpdateAdmission;
   window.on("close", () => nativeViewVisibility.detachHost(taskViewHost));
   window.on("closed", () => {
     nativeViewVisibility.detachHost(taskViewHost);
@@ -10673,28 +10694,41 @@ async function createWindow(): Promise<void> {
     window = null;
     windowPresentationReady = false;
   });
-  await window.loadFile(path.join(directory, "shell.html"));
+  if (!startupIsCurrent()) return;
+  await taskViewHost.loadFile(path.join(directory, "shell.html"));
+  // Keep the admitted load's outcome, but a withdrawn host cannot dispatch
+  // another startup stage or publish readiness for its replacement.
+  if (!startupIsCurrent()) return;
   publishWindowState();
+  if (!startupIsCurrent()) return;
   attachTaskViews();
+  if (!startupIsCurrent()) return;
   await createTaskViews();
+  if (!startupIsCurrent()) return;
   if (!demoMode && selectedTaskId) {
     await openLiveTaskSurface(selectedTaskId);
+    if (!startupIsCurrent()) return;
     // Restore the other retained ChatGPT views behind the selected one. A
     // tab switch can then show its already loaded page in the same frame;
     // embedded surfaces only focus when they are actually visible.
     void Promise.allSettled(
       [...liveTaskRoutes.entries()]
         .filter(([taskId]) => taskId !== selectedTaskId)
-        .map(([, route]) => route.open()),
+        .map(([, route]) => {
+          if (!startupIsCurrent()) return;
+          return route.open();
+        }),
     );
   }
   for (const task of runtime?.tasks ?? []) {
+    if (!startupIsCurrent()) return;
     void consumeSse(task).catch((error: unknown) => {
       if (error instanceof Error && error.name === "AbortError") return;
-      if (runtimeState !== "ready") return;
+      if (!startupIsCurrent() || runtimeState !== "ready") return;
       failTaskSurface(task.taskId);
     });
   }
+  if (!startupIsCurrent()) return;
   windowPresentationReady = true;
   revealWindow();
 }

@@ -377,6 +377,7 @@ function desktopFixture() {
     sidebarMode: "full",
     sidebarWidth: 180,
     shellOverlay: "none",
+    quitInProgress: false,
     installedUpdateAdmission: false,
     runtimeState: "ready",
     runtime: { tasks: [{ taskId: "runtime", readToken: "fixture-only" }] },
