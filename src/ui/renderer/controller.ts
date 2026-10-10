@@ -1295,6 +1295,9 @@ export class WindowController implements RendererFacade {
     const command = parsed.data;
     const nav = this.navigationRevision;
     return this.dispatch(intention, command, async () => {
+      const build = this.state.buildId;
+      const runtimeRevision = this.runtimeRevision;
+      const staleRevision = this.staleRevision;
       const result = ProductTaskCommandResultSchema.safeParse(
         await this.api.task(command),
       );
@@ -1304,7 +1307,13 @@ export class WindowController implements RendererFacade {
           state: "unknown",
           code: "TASK_OUTCOME_UNKNOWN",
         };
-      this.adoptTasks(result.data.state);
+      const sameContext = () =>
+        !this.disposed &&
+        build === this.state.buildId &&
+        runtimeRevision === this.runtimeRevision &&
+        staleRevision === this.staleRevision;
+      // The operation receipt can settle without replacing a newer owner view.
+      if (sameContext()) this.adoptTasks(result.data.state);
       if (!result.data.ok)
         return {
           id: intention,
@@ -1315,13 +1324,25 @@ export class WindowController implements RendererFacade {
               : "refused",
           code: result.data.error,
         };
+      const selectedTaskId = result.data.selectedTaskId;
+      const selected = result.data.state.tasks.find(
+        (task) => task.taskId === selectedTaskId,
+      );
       if (
-        !this.disposed &&
-        result.data.selectedTaskId &&
+        sameContext() &&
+        this.state.status === "current" &&
+        this.state.runtime === "ready" &&
+        selected &&
+        this.state.tasks.tasks.some(
+          (task) =>
+            task.taskId === selected.taskId &&
+            task.sessionId === selected.sessionId &&
+            task.turnId === selected.turnId,
+        ) &&
         nav === this.navigationRevision &&
         this.state.overlay === "none"
       )
-        this.navigate({ area: "chatgpt", taskId: result.data.selectedTaskId });
+        this.navigate({ area: "chatgpt", taskId: selected.taskId });
       return { id: intention, state: "applied", code: null };
     });
   }
