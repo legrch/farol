@@ -28,7 +28,7 @@ func interruptedRetirementInspectionMetadata(raw []byte, root Root, scope port.J
 	if err != nil {
 		return ClosedInspection{}, err
 	}
-	if value.Scope != scope || value.WriteCount != 0 || value.TurnCount != 0 || value.Retirement == nil || value.Retirement.TurnCount != 0 {
+	if value.Scope != scope || value.WriteCount != 0 || value.TurnCount != 0 || value.PlanCount != 0 || value.Retirement == nil || value.Retirement.TurnCount != 0 {
 		return ClosedInspection{}, failure(Refused, false)
 	}
 	record, err := decode(raw, limits)
@@ -70,7 +70,7 @@ func WithClosedInspection(ctx context.Context, root Root, scope port.JournalScop
 }
 
 func closedInspectionMetadata(value *Inspection, scope port.JournalScope) (ClosedInspection, error) {
-	if value == nil || value.Scope != scope || value.WriteCount != 0 || value.TurnCount != 0 || value.Retirement != nil {
+	if value == nil || value.Scope != scope || value.WriteCount != 0 || value.TurnCount != 0 || value.PlanCount != 0 || value.Retirement != nil {
 		return ClosedInspection{}, failure(Refused, false)
 	}
 	return ClosedInspection{Scope: value.Scope, Root: value.Root, SnapshotDigest: value.SnapshotDigest,

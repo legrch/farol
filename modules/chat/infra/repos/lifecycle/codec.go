@@ -20,6 +20,7 @@ type record struct {
 	Version      int                   `json:"version"`
 	Scope        port.JournalScope     `json:"scope"`
 	Writes       []port.JournalWrite   `json:"writes"`
+	Plans        []planRecord          `json:"plans,omitempty"`
 }
 
 func encode(value record, limits Limits) ([]byte, error) {
@@ -159,6 +160,9 @@ func validate(value record, limits Limits) error {
 		} else {
 			pending = port.JournalEntry{}
 		}
+	}
+	if err := validatePlans(value, limits, bindings); err != nil {
+		return err
 	}
 	return validateRetirement(value, limits, proofs, pending.Effect != "" || len(unresolvedCalls) != 0)
 }

@@ -20,12 +20,15 @@ type Inspection struct {
 	// separate retirement record; TurnCount counts unique recorded admissions.
 	WriteCount int
 	TurnCount  int
+	// PlanCount includes consumed original plan operations, never prompt/result bodies.
+	PlanCount int
 	// Incarnations preserves the exact recorded generation history, ending in
 	// Scope.BackendGeneration. It inventories no other profile resources.
 	Incarnations []string
 	Retirement   *InspectionRetirement
 	// EmptyFirstIncarnation means exactly one recorded incarnation, no writes
-	// and no retirement in this snapshot. It does NOT mean an unused profile:
+	// no consumed plan operation and no retirement in this snapshot. It does NOT
+	// mean an unused profile:
 	// original unknown Start, hidden staging and external effects remain unknown.
 	EmptyFirstIncarnation bool
 }
@@ -73,9 +76,9 @@ func inspectRecord(raw []byte, root Root, limits Limits) (*Inspection, error) {
 	}
 	inspection := &Inspection{
 		Scope: value.Scope, Root: value.Root, SnapshotDigest: sha256.Sum256(raw),
-		Version: value.Version, WriteCount: len(value.Writes), TurnCount: turns,
+		Version: value.Version, WriteCount: len(value.Writes), TurnCount: turns, PlanCount: len(value.Plans),
 		Incarnations:          append([]string(nil), value.Incarnations...),
-		EmptyFirstIncarnation: len(value.Incarnations) == 1 && len(value.Writes) == 0 && value.Retirement == nil,
+		EmptyFirstIncarnation: len(value.Incarnations) == 1 && len(value.Writes) == 0 && len(value.Plans) == 0 && value.Retirement == nil,
 	}
 	if w := value.Retirement; w != nil {
 		inspection.Retirement = &InspectionRetirement{
