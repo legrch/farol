@@ -636,6 +636,16 @@ export class InstalledUpdater {
     });
   }
 
+  private async publishInitializationState(view: UpdateView): Promise<void> {
+    try {
+      await this.publish(view);
+    } catch {
+      // Initialization has recorded the recovery result or its classified failure.
+      // A destroyed renderer cannot replace it. The snapshot remains available
+      // when the renderer reopens.
+    }
+  }
+
   async initialize(): Promise<void> {
     if (this.initialized || this.busy || this.isClosing()) return;
     this.begin();
@@ -671,20 +681,20 @@ export class InstalledUpdater {
       }
       const restored = await this.ports.recover();
       if (!restored.ok) {
-        await this.publish({
+        await this.publishInitializationState({
           phase: "failed",
           code: restored.code,
           recoveryRequired: restored.recoveryRequired ?? true,
         });
       } else if (restored.recoveryVersion) {
-        await this.publish({
+        await this.publishInitializationState({
           phase: "recovery",
           version: restored.recoveryVersion,
           blockedBy: null,
         });
       } else if (restored.update) {
         this.ready = restored.update;
-        await this.publish({
+        await this.publishInitializationState({
           phase: "ready",
           version: restored.update.manifest.version,
           deferred: true,
@@ -693,14 +703,14 @@ export class InstalledUpdater {
         });
       } else if (restored.rollbackVersion) {
         this.rollbackVersion = restored.rollbackVersion;
-        await this.publish({
+        await this.publishInitializationState({
           phase: "idle",
           checkedAt: null,
           rollbackVersion: this.rollbackVersion,
         });
       }
     } catch {
-      await this.publish({
+      await this.publishInitializationState({
         phase: "failed",
         code: "UPDATE_RECOVERY_UNAVAILABLE",
         recoveryRequired: true,
@@ -712,8 +722,13 @@ export class InstalledUpdater {
         !this.isClosing() &&
         (this.ports.readAutomaticUpdatePreference ||
           this.ports.readInstallOnQuitPreference)
-      )
-        this.ports.publish(this.snapshot());
+      ) {
+        try {
+          this.ports.publish(this.snapshot());
+        } catch {
+          // Initialization truth remains available when the renderer reopens.
+        }
+      }
     }
   }
 

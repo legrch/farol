@@ -170,6 +170,112 @@ describe("installed update orchestration (port fixture, no native or GitHub acce
     });
   });
 
+  it.each(["ready", "recovery", "rollback"] as const)(
+    "preserves reconciled %s truth when the restored renderer publication throws",
+    async (restoredState) => {
+      const { updater, ports } = fixture();
+      const recovered =
+        restoredState === "ready"
+          ? { ok: true as const, update: staged }
+          : restoredState === "recovery"
+            ? {
+                ok: true as const,
+                update: null,
+                recoveryVersion: staged.manifest.version,
+              }
+            : {
+                ok: true as const,
+                update: null,
+                rollbackVersion: "0.1.0-owner.beta.1",
+              };
+      ports.recover.mockResolvedValue(recovered);
+      ports.publish.mockImplementationOnce(() => {
+        throw new Error("renderer destroyed after recovery completed");
+      });
+
+      await updater.initialize();
+      expect(updater.snapshot()).toMatchObject(
+        restoredState === "ready"
+          ? {
+              phase: "ready",
+              version: staged.manifest.version,
+              deferred: true,
+              blockedBy: null,
+            }
+          : restoredState === "recovery"
+            ? {
+                phase: "recovery",
+                version: staged.manifest.version,
+                blockedBy: null,
+              }
+            : {
+                phase: "idle",
+                rollbackVersion: "0.1.0-owner.beta.1",
+              },
+      );
+      expect(ports.recover).toHaveBeenCalledTimes(1);
+      expect(ports.retain).not.toHaveBeenCalled();
+      expect(ports.restart).not.toHaveBeenCalled();
+      expect(ports.restore).not.toHaveBeenCalled();
+      await updater.close();
+    },
+  );
+
+  it("settles loaded preferences when their final initialization publication throws", async () => {
+    const { ports } = fixture();
+    const updater = new InstalledUpdater({
+      ...ports,
+      readAutomaticUpdatePreference: async () => ({
+        status: "confirmed",
+        enabled: false,
+      }),
+    });
+    ports.publish.mockImplementation(() => {
+      throw new Error("renderer destroyed before loaded preferences arrived");
+    });
+
+    await expect(updater.initialize()).resolves.toBeUndefined();
+    expect(updater.snapshot()).toMatchObject({
+      phase: "idle",
+      automaticUpdatePreference: { status: "confirmed", enabled: false },
+    });
+    await updater.initialize();
+    await updater.close();
+    expect(ports.recover).toHaveBeenCalledTimes(1);
+    expect(ports.cancelPending).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["UPDATE_STATE_UNREADABLE", "UPDATE_HANDOFF_UNRECONCILED"])(
+    "retains the original %s recovery failure when its renderer publication throws",
+    async (code) => {
+      const { updater, ports } = fixture();
+      ports.recover.mockResolvedValue({
+        ok: false,
+        code,
+        recoveryRequired: true,
+      });
+      ports.publish.mockImplementation(() => {
+        throw new Error("renderer destroyed after recovery failure");
+      });
+
+      await expect(updater.initialize()).resolves.toBeUndefined();
+      expect(updater.snapshot()).toEqual({
+        phase: "failed",
+        code,
+        recoveryRequired: true,
+      });
+      await updater.initialize();
+      await updater.check(true);
+      await updater.download();
+      await updater.restart();
+      await updater.close();
+      expect(ports.recover).toHaveBeenCalledTimes(1);
+      expect(ports.discover).not.toHaveBeenCalled();
+      expect(ports.download).not.toHaveBeenCalled();
+      expect(ports.restart).not.toHaveBeenCalled();
+    },
+  );
+
   it("discovers without staging and downloads the same candidate only on explicit command", async () => {
     const { updater, ports } = fixture();
     await updater.initialize();
