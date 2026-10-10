@@ -255,7 +255,7 @@ export function installedEmptyQuitScope(run: unknown, quit: unknown): void {
     !marker.success ||
     !receipt.success ||
     receipt.data.drained ||
-    Date.parse(receipt.data.at) < Date.parse(marker.data.startedAt) ||
+    Date.parse(receipt.data.at) <= Date.parse(marker.data.startedAt) ||
     receipt.data.unconfirmed.length !== 2 ||
     new Set(receipt.data.unconfirmed).size !== 2 ||
     !receipt.data.unconfirmed.includes("connector") ||

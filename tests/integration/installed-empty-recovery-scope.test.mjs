@@ -65,6 +65,7 @@ describe("installed consumed-empty maintenance scope", () => {
     for (const receipt of [
       { ...quit, drained: true },
       { ...quit, at: "2026-10-10T09:59:59.999Z" },
+      { ...quit, at: run.startedAt },
       { ...quit, at: "invalid" },
       { ...quit, unknown: true },
     ])
