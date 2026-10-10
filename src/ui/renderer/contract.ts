@@ -93,6 +93,11 @@ export type Intent = Readonly<{
   id: string;
   state: "pending" | "applied" | "refused" | "unknown";
   code: string | null;
+  /** UI access observation; the original transport outcome is preserved. */
+  workspaceReadback?: Readonly<{
+    requestId: number;
+    originalCode: string | null;
+  }>;
   /** Original command progress, independent of ambient snapshot ordering. */
   connectorSetup?: ConnectorSetupReceipt;
   /** This explicit check's result, never a current-document or account grant. */
@@ -201,6 +206,28 @@ export type WindowSnapshot = Readonly<{
     overlayAcknowledgement: false;
   }>;
 }>;
+/** Request-owned native bootstrap result; cached presentation never creates one. */
+export type NativeRefreshResult =
+  | Readonly<{
+      status: "adopted";
+      requestId: number;
+      buildId: string;
+      computerId: string;
+      generation: number;
+      configuration: Extract<ProductConfigurationSnapshot, { status: "ready" }>;
+      evidence: null;
+    }>
+  | Readonly<{
+      status: "unqualified";
+      reason:
+        | "superseded"
+        | "disposed"
+        | "malformed"
+        | "transport-unknown"
+        | "incompatible"
+        | "not-current"
+        | "not-adopted";
+    }>;
 export interface RendererFacade {
   readonly draft: AgentDraftStore;
   readonly conversationDraft: ConversationDraftStore;
@@ -217,6 +244,12 @@ export interface RendererFacade {
   acknowledgeWorkspaceEdit(operationId: string): Promise<Intent>;
   shortcuts(value: NavigationShortcuts): Promise<Intent>;
   refresh(): Promise<void>;
+  refreshReadback?(): Promise<NativeRefreshResult>;
+  reconcileWorkspaceReadback?(
+    receipt: NativeRefreshResult,
+    intention: string,
+    pending: import("../guided-workspace-access").WorkspaceReadbackBinding,
+  ): Intent | null;
   readChatHistory(query: ChatHistoryQuery): Promise<ChatHistoryReply>;
   navigate(destination: Partial<Destination>): void;
   travel(direction: -1 | 1): void;

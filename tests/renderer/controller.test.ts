@@ -1,3 +1,4 @@
+import { workspaceReadbackBinding } from "../../src/ui/guided-workspace-access";
 import { describe, it, expect, vi } from "vitest";
 import {
   canSetInstallOnQuitPreference,
@@ -3808,6 +3809,145 @@ describe("bounded Setup sign-in observation", () => {
       } finally {
         h.c.dispose();
       }
+    },
+  );
+});
+
+describe("request-owned native workspace readback", () => {
+  // Parsed adapter fixtures only; no native host or filesystem qualification.
+  const workspaceId = "22222222-2222-4222-8222-222222222222";
+  const buildId = "3".repeat(64);
+  function workspace(checked = false) {
+    const value = settings();
+    value.computer.workspaces = [
+      {
+        workspaceId,
+        root: "/approved/project",
+        label: "Project",
+        access: "write",
+        excludedPaths: [],
+        rootIdentity: { device: "1", inode: "2" },
+      },
+    ];
+    if (checked) {
+      value.setup.computer.reachable = "reachable";
+      value.setup.computer.verified = {
+        profile: "farol-next",
+        configRevision: value.computer.generation,
+        workspaceId,
+        runtimeGeneration: "a".repeat(64),
+        buildId,
+        protocol: "secure-mcp",
+        verifiedAt: "2026-10-02T20:00:00.000Z",
+      };
+    }
+    return value;
+  }
+  it.each([
+    "superseded",
+    "disposed",
+    "malformed",
+    "transport-unknown",
+  ] as const)("does not qualify a %s native read", async (reason) => {
+    const f = fixture();
+    const c = new WindowController(f.api);
+    await c.start();
+    const late = deferred<unknown>();
+    vi.mocked(f.api.bootstrap).mockReturnValueOnce(late.promise);
+    const read = c.refreshReadback();
+    if (reason === "superseded") await c.refresh();
+    if (reason === "disposed") c.dispose();
+    if (reason === "transport-unknown") late.reject(new Error("reply lost"));
+    else late.resolve(reason === "malformed" ? {} : bootstrap());
+    expect(await read).toEqual({ status: "unqualified", reason });
+    c.dispose();
+  });
+  it.each([
+    "matching",
+    "previous-runtime",
+    "wrong-target",
+    "wrong-build",
+    "wrong-generation",
+    "wrong-scope",
+    "wrong-connection",
+    "backend-unknown",
+    "forged",
+    "late",
+    "disposed",
+  ] as const)(
+    "resolves only an exact check from %s evidence, preserving an unrelated unknown",
+    async (condition) => {
+      const f = fixture();
+      const initial = workspace();
+      vi.mocked(f.api.bootstrap).mockResolvedValue({
+        ...bootstrap(),
+        configuration: { status: "ready", settings: initial },
+      });
+      const c = new WindowController(f.api);
+      await c.start();
+      const command = {
+        kind: "computer.verify-workspace",
+        workspaceId,
+      } as const;
+      const id = `settings:${command.kind}:${workspaceId}`;
+      let pending = workspaceReadbackBinding(initial, buildId, command);
+      if (condition === "previous-runtime")
+        pending = { ...pending, previousRuntimeGeneration: "a".repeat(64) };
+      vi.mocked(f.api.configure).mockRejectedValue(new Error("reply lost"));
+      const original = await c.configure(command, id);
+      const unrelated = await c.configure(
+        { kind: "model.rotate-token" },
+        "settings:model.rotate-token:",
+      );
+      const checked = workspace(true);
+      if (condition === "wrong-generation") checked.computer.generation++;
+      if (condition === "wrong-scope")
+        checked.computer.workspaces[0]!.rootIdentity = {
+          device: "1",
+          inode: "999",
+        };
+      if (condition === "wrong-connection")
+        checked.connectors.secureMcp.generation++;
+      if (condition === "backend-unknown")
+        checked.setup.computer.outcomeUnknown = true;
+      vi.mocked(f.api.bootstrap).mockResolvedValue({
+        ...bootstrap(),
+        configuration: { status: "ready", settings: checked },
+      });
+      const receipt = await c.refreshReadback();
+      expect(receipt.status).toBe("adopted");
+      if (condition === "late") await c.refresh();
+      if (condition === "disposed") c.dispose();
+      const result = c.reconcileWorkspaceReadback(
+        condition === "forged" ? { ...receipt } : receipt,
+        id,
+        condition === "wrong-target"
+          ? {
+              ...pending,
+              command: {
+                ...command,
+                workspaceId: "33333333-3333-4333-8333-333333333333",
+              },
+            }
+          : condition === "wrong-build"
+            ? { ...pending, buildId: "f".repeat(64) }
+            : pending,
+      );
+      expect(result !== null).toBe(
+        condition === "matching" || condition === "previous-runtime",
+      );
+      expect(c.getSnapshot().intents[unrelated.id]).toBe(unrelated);
+      expect(original.state).toBe("unknown");
+      if (condition === "matching" || condition === "previous-runtime") {
+        expect(result).toMatchObject({
+          state: "applied",
+          code: "WORKSPACE_READBACK_CONFIRMED",
+          workspaceReadback: { originalCode: original.code },
+        });
+        expect(c.reconcileWorkspaceReadback(receipt, id, pending)).toBeNull();
+      } else expect(c.getSnapshot().intents[id]).toBe(original);
+      expect(f.api.configure).toHaveBeenCalledTimes(2);
+      c.dispose();
     },
   );
 });

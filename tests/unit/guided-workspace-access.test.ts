@@ -381,6 +381,21 @@ describe("one explicit Setup workspace access transition", () => {
 });
 
 describe("access acknowledgement and revocation boundaries", () => {
+  it("requires the pending build for a matching native readback", async () => {
+    const f = fixture();
+    f.run.mockResolvedValueOnce("unknown");
+    await f.controller.run(f.port, f.plan, f.consent);
+    f.settings.connectors.secureMcp.runtime = null;
+    expect(f.controller.reconcileReadback(f.settings, "f".repeat(64))).toBe(
+      false,
+    );
+    expect(f.controller.requiresReadback()).toBe(true);
+    expect(f.controller.reconcileReadback(f.settings, fixtureBuildId)).toBe(
+      true,
+    );
+    expect(f.run).toHaveBeenCalledTimes(1);
+  });
+
   it("fences a lost acknowledgement across later approvals until a matching explicit read", async () => {
     const f = fixture();
     const original = f.run.getMockImplementation()!;

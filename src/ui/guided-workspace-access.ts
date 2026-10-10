@@ -54,74 +54,107 @@ function reconnectedRuntimeCurrent(
   );
 }
 
+export type WorkspaceReadbackBinding = Readonly<{
+  command: ProductConfigurationCommand;
+  buildId: string;
+  generation: number;
+  scope: string;
+  connectionIdentity: string;
+  previousRuntimeGeneration: string | null;
+}>;
+export function workspaceReadbackBinding(
+  settings: ProductSettings,
+  buildId: string,
+  command: ProductConfigurationCommand,
+): WorkspaceReadbackBinding {
+  return {
+    command,
+    buildId,
+    generation: settings.computer.generation,
+    scope: scopeIdentity(settings),
+    connectionIdentity: onboardingFacts(settings, buildId).connectionIdentity,
+    previousRuntimeGeneration:
+      settings.connectors.secureMcp.runtime?.runtimeGeneration ?? null,
+  };
+}
+export function workspaceReadbackConfirms(
+  pending: WorkspaceReadbackBinding | null,
+  settings: ProductSettings,
+  buildId: string,
+): boolean {
+  if (
+    !pending ||
+    buildId !== pending.buildId ||
+    settings.computer.generation !== pending.generation ||
+    scopeIdentity(settings) !== pending.scope ||
+    onboardingFacts(settings, buildId).connectionIdentity !==
+      pending.connectionIdentity ||
+    onboardingFacts(settings, buildId).outcomeUnknown
+  )
+    return false;
+  const command = pending.command;
+  const target =
+    "workspaceId" in command
+      ? settings.computer.workspaces.find(
+          (workspace) => workspace.workspaceId === command.workspaceId,
+        )
+      : undefined;
+  let confirmed = false;
+  if (command.kind === "connector.stop")
+    confirmed = onboardingFacts(settings, buildId).runtime === "stopped";
+  if (command.kind === "connector.start")
+    confirmed = reconnectedRuntimeCurrent(
+      settings,
+      buildId,
+      pending.previousRuntimeGeneration,
+    );
+  if (command.kind === "computer.update-access")
+    confirmed = target?.access === command.access;
+  if (command.kind === "computer.update-commands")
+    confirmed = settings.computer.commands === command.commands;
+  if (command.kind === "computer.update-git-history")
+    confirmed =
+      target !== undefined &&
+      (target.gitHistoryApproved === true) === command.approved;
+  if (
+    command.kind === "computer.verify-workspace" ||
+    command.kind === "computer.check-folder"
+  )
+    confirmed =
+      target !== undefined &&
+      folderAccessChecked(settings, target, buildId) &&
+      (command.kind === "computer.check-folder" ||
+        (settings.setup.computer.verified?.workspaceId ===
+          command.workspaceId &&
+          settings.setup.computer.verified.configRevision ===
+            settings.computer.generation &&
+          settings.setup.computer.verified.buildId === buildId &&
+          settings.setup.computer.reachable === "reachable" &&
+          !settings.setup.computer.outcomeUnknown));
+  return confirmed;
+}
+
 // An explicit UI approval is a plan, not a grant. Every effect still goes
 // through the existing backend admission, verification and settings owner.
 export class GuidedWorkspaceAccess {
   private busy = false;
-  private unconfirmed: Readonly<{
-    command: ProductConfigurationCommand;
-    generation: number;
-    scope: string;
-    connectionIdentity: string;
-    previousRuntimeGeneration: string | null;
-  }> | null = null;
+  private unconfirmed: WorkspaceReadbackBinding | null = null;
 
   requiresReadback(): boolean {
     return this.unconfirmed !== null;
   }
 
-  // Called only after an explicit native snapshot read, never after a cached
-  // render or a timer. A mismatch stays unknown and performs no new effect.
+  pendingReadback(): WorkspaceReadbackBinding | null {
+    return this.unconfirmed;
+  }
+
+  // Only an explicit request-owned native read may supply this snapshot.
   reconcileReadback(settings: ProductSettings, buildId: string): boolean {
-    const pending = this.unconfirmed;
-    if (
-      !pending ||
-      settings.computer.generation !== pending.generation ||
-      scopeIdentity(settings) !== pending.scope ||
-      onboardingFacts(settings, buildId).connectionIdentity !==
-        pending.connectionIdentity ||
-      onboardingFacts(settings, buildId).outcomeUnknown
-    )
-      return false;
-    const command = pending.command;
-    const target =
-      "workspaceId" in command
-        ? settings.computer.workspaces.find(
-            (workspace) => workspace.workspaceId === command.workspaceId,
-          )
-        : undefined;
-    let confirmed = false;
-    if (command.kind === "connector.stop")
-      confirmed = onboardingFacts(settings, buildId).runtime === "stopped";
-    if (command.kind === "connector.start")
-      confirmed = reconnectedRuntimeCurrent(
-        settings,
-        buildId,
-        pending.previousRuntimeGeneration,
-      );
-    if (command.kind === "computer.update-access")
-      confirmed = target?.access === command.access;
-    if (command.kind === "computer.update-commands")
-      confirmed = settings.computer.commands === command.commands;
-    if (command.kind === "computer.update-git-history")
-      confirmed =
-        target !== undefined &&
-        (target.gitHistoryApproved === true) === command.approved;
-    if (
-      command.kind === "computer.verify-workspace" ||
-      command.kind === "computer.check-folder"
-    )
-      confirmed =
-        target !== undefined &&
-        folderAccessChecked(settings, target, buildId) &&
-        (command.kind === "computer.check-folder" ||
-          (settings.setup.computer.verified?.workspaceId ===
-            command.workspaceId &&
-            settings.setup.computer.verified.configRevision ===
-              settings.computer.generation &&
-            settings.setup.computer.verified.buildId === buildId &&
-            settings.setup.computer.reachable === "reachable" &&
-            !settings.setup.computer.outcomeUnknown));
+    const confirmed = workspaceReadbackConfirms(
+      this.unconfirmed,
+      settings,
+      buildId,
+    );
     if (confirmed) this.unconfirmed = null;
     return confirmed;
   }
@@ -169,6 +202,7 @@ export class GuidedWorkspaceAccess {
       if (!current()) return false;
       const pending = {
         command,
+        buildId: port.buildId(),
         generation: generation + delta,
         scope,
         connectionIdentity: consent.connectionIdentity,

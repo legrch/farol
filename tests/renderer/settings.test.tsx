@@ -4842,6 +4842,66 @@ describe("fresh and returning Setup journey", () => {
       await h.click("Add workspace…");
       expect(h.calls()).toHaveLength(calls);
       expect(visibleText(h.host)).toContain("unconfirmed outcome");
+      await h.click("Refresh status");
+      expect(h.button("Add workspace…").disabled).toBe(failure === "facade");
+      expect(h.calls()).toHaveLength(calls);
+      if (failure !== "facade")
+        expect(
+          h.c.getSnapshot().intents[
+            `settings:computer.verify-workspace:${workspaceId}`
+          ],
+        ).toMatchObject({
+          state: "applied",
+          code: "WORKSPACE_READBACK_CONFIRMED",
+        });
+    },
+  );
+
+  it.each(["superseded", "remount", "navigation"] as const)(
+    "does not reconcile a late explicit Settings refresh after %s",
+    async (condition) => {
+      const h = await mount("folders", settings());
+      const saved = withFolder();
+      saved.computer.workspaces[0]!.access = "write";
+      vi.mocked(h.f.api.configure)
+        .mockResolvedValueOnce({
+          ok: true,
+          snapshot: h.configuration,
+          evidence: { kind: "computer.workspace-pick", selectionId },
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          snapshot: { status: "ready", settings: saved },
+          evidence: { kind: "computer.workspace-selection", workspaceId },
+        })
+        .mockRejectedValueOnce(new Error("reply lost"));
+      await h.click("Add workspace…");
+      const checked = structuredClone(saved);
+      checked.setup.computer.reachable = "reachable";
+      checked.setup.computer.verified = proof(checked);
+      const response = {
+        ...bootstrap(),
+        configuration: { status: "ready", settings: checked },
+      };
+      const late = deferred<unknown>();
+      vi.mocked(h.f.api.bootstrap)
+        .mockReturnValueOnce(late.promise)
+        .mockResolvedValue(response);
+      await h.click("Refresh status");
+      if (condition === "superseded") await act(async () => h.c.refresh());
+      if (condition === "remount") await h.remount();
+      if (condition === "navigation") await h.pageTo("general");
+      await act(async () => late.resolve(response));
+      if (condition === "navigation") await h.pageTo("folders");
+      expect(h.button("Add workspace…").disabled).toBe(true);
+      expect(
+        h.c.getSnapshot().intents[
+          `settings:computer.verify-workspace:${workspaceId}`
+        ]?.state,
+      ).toBe("unknown");
+      await h.click("Refresh status");
+      expect(h.button("Add workspace…").disabled).toBe(false);
+      expect(h.calls()).toHaveLength(3);
     },
   );
 

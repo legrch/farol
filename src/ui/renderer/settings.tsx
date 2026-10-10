@@ -52,6 +52,7 @@ type ActionDispatch =
   | Readonly<{ state: "not-sent" }>
   | Readonly<{ state: "attempted"; result: Intent | null }>;
 type Actions = {
+  refresh(): Promise<void>;
   disabled: boolean;
   computerPauseReason: string | null;
   allowed(
@@ -155,6 +156,8 @@ function actionFeedback(
   evidenceReceived = false,
 ): string {
   if (result.state === "pending") return "Saving or checking…";
+  if (result.code === "WORKSPACE_READBACK_CONFIRMED")
+    return "Workspace access confirmed by fresh status. The original action was not repeated.";
   if (result.connectorSetup) {
     const view = connectorSetupPresentation(result.connectorSetup, {
       operationId: result.connectorSetup.operationId,
@@ -385,6 +388,15 @@ export function Settings({ snapshot, facade, setupStep }: SettingsProps) {
     configuration?.status === "ready" ? configuration.settings : lastReady;
   const feedback = useSettingsFeedback(facade);
   const composing = useRef(false);
+  const refreshOwner = useRef({ mounted: true, generation: 0 });
+  useEffect(() => {
+    const owner = refreshOwner.current;
+    owner.mounted = true;
+    return () => {
+      owner.mounted = false;
+      owner.generation++;
+    };
+  }, []);
   const retained = (current: WindowSnapshot) =>
     Object.values(feedback.intents).map(
       (intent) => settledEdit(intent, current) ?? intent,
@@ -409,6 +421,56 @@ export function Settings({ snapshot, facade, setupStep }: SettingsProps) {
           ? "Current configuration or runtime status is unavailable. Refresh status before submitting an action."
           : null;
   const actions: Actions = {
+    async refresh() {
+      const owner = refreshOwner.current;
+      const generation = ++owner.generation;
+      const destination = facade.getSnapshot().destination;
+      const flow = folderSetupByWindow.get(facade);
+      const pending = flow?.access.pendingReadback();
+      if (
+        !flow ||
+        !pending ||
+        !facade.refreshReadback ||
+        !facade.reconcileWorkspaceReadback
+      ) {
+        await facade.refresh();
+        return;
+      }
+      const receipt = await facade.refreshReadback();
+      if (
+        !owner.mounted ||
+        owner.generation !== generation ||
+        facade.getSnapshot().destination !== destination ||
+        receipt.status !== "adopted" ||
+        flow.access.pendingReadback() !== pending
+      )
+        return;
+      const id = intention(
+        pending.command.kind,
+        "workspaceId" in pending.command
+          ? pending.command.workspaceId
+          : undefined,
+      );
+      const resolved = facade.reconcileWorkspaceReadback(receipt, id, pending);
+      if (!resolved) return;
+      if (
+        flow.access.reconcileReadback(
+          receipt.configuration.settings,
+          receipt.buildId,
+        )
+      ) {
+        feedback.intents[id] = resolved;
+        for (const [page, entry] of Object.entries(feedback.pages)) {
+          if (entry?.result?.id === id && entry.result.state === "unknown")
+            feedback.pages[page as FeedbackPage] = {
+              ...entry,
+              result: resolved,
+              text: actionFeedback(resolved),
+            };
+        }
+        feedback.changed();
+      }
+    },
     disabled: !allowed("general.update"),
     computerPauseReason,
     allowed,
@@ -529,7 +591,7 @@ export function Settings({ snapshot, facade, setupStep }: SettingsProps) {
           Settings are unavailable. Refresh the current state before making
           changes.
         </p>
-        <button className="subtle" onClick={() => void facade.refresh()}>
+        <button className="subtle" onClick={() => void actions.refresh()}>
           Refresh status
         </button>
       </div>
@@ -559,7 +621,7 @@ export function Settings({ snapshot, facade, setupStep }: SettingsProps) {
         <p className="notice" role="status">
           Settings are temporarily unavailable. Your drafts are retained; saved
           settings and access must be checked before making changes.
-          <button className="subtle" onClick={() => void facade.refresh()}>
+          <button className="subtle" onClick={() => void actions.refresh()}>
             Refresh status
           </button>
         </p>
@@ -1011,6 +1073,15 @@ function Folders(props: PageProps) {
           >
             {adding ? "Connecting workspace…" : "Add workspace…"}
           </button>
+          {folderFlow.access.requiresReadback() && (
+            <button
+              type="button"
+              className="subtle"
+              onClick={() => void actions.refresh()}
+            >
+              Refresh status
+            </button>
+          )}
         </div>
         <p className="description">
           Added workspaces use Read &amp; write. Farol checks access and
@@ -3378,7 +3449,7 @@ function Diagnostics({ snapshot, settings, facade, actions }: PageProps) {
         <button
           className="subtle"
           type="button"
-          onClick={() => void facade.refresh()}
+          onClick={() => void actions.refresh()}
         >
           Refresh status
         </button>

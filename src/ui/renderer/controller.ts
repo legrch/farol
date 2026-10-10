@@ -3,6 +3,11 @@ import {
   parseNavigationShortcuts,
   type NavigationShortcuts,
 } from "../../pkg/ipc/navigation-shortcuts";
+import {
+  workspaceReadbackBinding,
+  workspaceReadbackConfirms,
+  type WorkspaceReadbackBinding,
+} from "../guided-workspace-access";
 import { workspaceEditToAcknowledge } from "../workspace-edit-delivery";
 import {
   clampPageListWidth,
@@ -67,6 +72,7 @@ import type {
   Appearance,
   Destination,
   Intent,
+  NativeRefreshResult,
   PreloadApi,
   RendererFacade,
   UpdateAction,
@@ -229,6 +235,20 @@ export class WindowController implements RendererFacade {
     action: SectionNavigationAction;
     presentationRevision: number;
   } | null = null;
+  private readonly workspaceReadbackCommands = new Map<
+    string,
+    WorkspaceReadbackBinding
+  >();
+  private readonly nativeReadbacks = new WeakMap<
+    object,
+    Readonly<{
+      order: number;
+      runtimeRevision: number;
+      staleRevision: number;
+      configuration: WindowSnapshot["configuration"];
+      intents: WindowSnapshot["intents"];
+    }>
+  >();
   private readonly commands = new Map<
     string,
     { fingerprint: Promise<string>; promise: Promise<Intent> }
@@ -601,18 +621,23 @@ export class WindowController implements RendererFacade {
     // Keep deferred presentation until a valid settlement arrives.
   }
   async refresh(): Promise<void> {
-    if (this.disposed) return;
+    await this.refreshReadback();
+  }
+  async refreshReadback(): Promise<NativeRefreshResult> {
+    if (this.disposed) return { status: "unqualified", reason: "disposed" };
     const order = this.configOrder.begin();
     const runtimeRevision = this.runtimeRevision;
     const staleRevision = this.staleRevision;
     try {
       const value = await this.api.bootstrap();
-      if (this.disposed || !this.configOrder.isLatest(order)) return;
+      if (this.disposed) return { status: "unqualified", reason: "disposed" };
+      if (!this.configOrder.isLatest(order))
+        return { status: "unqualified", reason: "superseded" };
       const parsed = BootstrapProjectionSchema.safeParse(value);
       if (!parsed.success) {
         this.invalidateHistory();
         this.patch({ status: "incompatible" });
-        return;
+        return { status: "unqualified", reason: "malformed" };
       }
       // Legacy bootstrap has no authenticated generation; never present one.
       if (
@@ -621,9 +646,11 @@ export class WindowController implements RendererFacade {
       ) {
         this.invalidateHistory();
         this.patch({ status: "incompatible" });
-        return;
+        return { status: "unqualified", reason: "incompatible" };
       }
+      const previousConfiguration = this.state.configuration;
       this.adoptConfiguration(parsed.data.configuration, order);
+      const adoptedConfiguration = this.state.configuration;
       const tasksAccepted = this.adoptTasks({
         revision: parsed.data.taskRevision,
         tasks: parsed.data.tasks,
@@ -647,9 +674,99 @@ export class WindowController implements RendererFacade {
         status,
         runtime,
       });
+      if (this.disposed) return { status: "unqualified", reason: "disposed" };
+      if (!this.configOrder.isLatest(order))
+        return { status: "unqualified", reason: "superseded" };
+      if (
+        adoptedConfiguration === previousConfiguration ||
+        this.state.configuration !== adoptedConfiguration
+      )
+        return { status: "unqualified", reason: "not-adopted" };
+      if (
+        status !== "current" ||
+        runtimeRevision !== this.runtimeRevision ||
+        adoptedConfiguration?.status !== "ready" ||
+        this.state.evidence !== null
+      )
+        return { status: "unqualified", reason: "not-current" };
+      const receipt: NativeRefreshResult = Object.freeze({
+        status: "adopted",
+        requestId: order,
+        buildId: parsed.data.build.buildId,
+        computerId: adoptedConfiguration.settings.computer.computerId,
+        generation: adoptedConfiguration.settings.computer.generation,
+        configuration: adoptedConfiguration,
+        evidence: null,
+      });
+      this.nativeReadbacks.set(receipt, {
+        order,
+        runtimeRevision,
+        staleRevision,
+        configuration: adoptedConfiguration,
+        intents: this.state.intents,
+      });
+      return receipt;
     } catch {
-      if (this.configOrder.isLatest(order)) this.stale();
+      if (this.disposed) return { status: "unqualified", reason: "disposed" };
+      if (!this.configOrder.isLatest(order))
+        return { status: "unqualified", reason: "superseded" };
+      this.stale();
+      return { status: "unqualified", reason: "transport-unknown" };
     }
+  }
+  reconcileWorkspaceReadback(
+    receipt: NativeRefreshResult,
+    intention: string,
+    pending: WorkspaceReadbackBinding,
+  ): Intent | null {
+    const source = this.nativeReadbacks.get(receipt);
+    const command = this.workspaceReadbackCommands.get(intention);
+    const original = this.state.intents[intention];
+    if (
+      this.disposed ||
+      receipt.status !== "adopted" ||
+      !source ||
+      !command ||
+      !this.configOrder.isLatest(source.order) ||
+      this.runtimeRevision !== source.runtimeRevision ||
+      this.staleRevision !== source.staleRevision ||
+      this.state.status !== "current" ||
+      this.state.runtime !== "ready" ||
+      this.state.configuration !== source.configuration ||
+      this.state.evidence !== null ||
+      this.state.intents !== source.intents ||
+      this.state.buildId !== receipt.buildId ||
+      original?.state !== "unknown" ||
+      command.buildId !== pending.buildId ||
+      command.generation !== pending.generation ||
+      command.scope !== pending.scope ||
+      command.connectionIdentity !== pending.connectionIdentity ||
+      JSON.stringify(command.command) !== JSON.stringify(pending.command) ||
+      Boolean(receipt.configuration.settings.computer.pendingEdit) ||
+      receipt.configuration.settings.setup.computer.outcomeUnknown ||
+      !workspaceReadbackConfirms(
+        command,
+        receipt.configuration.settings,
+        receipt.buildId,
+      )
+    )
+      return null;
+    // These read-only checks have an exact native access witness. Mutation,
+    // connection and backend outcome-unknown recovery remain fail closed.
+    const resolved: Intent = {
+      id: intention,
+      state: "applied",
+      code: "WORKSPACE_READBACK_CONFIRMED",
+      workspaceReadback: {
+        requestId: receipt.requestId,
+        originalCode: original.code,
+      },
+    };
+    this.nativeReadbacks.delete(receipt);
+    this.workspaceReadbackCommands.delete(intention);
+    this.commands.delete(intention);
+    this.patch({ intents: { ...this.state.intents, [intention]: resolved } });
+    return resolved;
   }
   async readChatHistory(query: ChatHistoryQuery): Promise<ChatHistoryReply> {
     const before = this.state;
@@ -896,6 +1013,20 @@ export class WindowController implements RendererFacade {
           command.kind === "computer.ack-workspace-edit"
             ? this.observedEdits.get(command.operationId)
             : undefined;
+        if (
+          (command.kind === "computer.verify-workspace" ||
+            command.kind === "computer.check-folder") &&
+          before.configuration?.status === "ready" &&
+          before.buildId
+        )
+          this.workspaceReadbackCommands.set(
+            intention,
+            workspaceReadbackBinding(
+              before.configuration.settings,
+              before.buildId,
+              command,
+            ),
+          );
         const order = this.configOrder.begin();
         let transport: Parameters<typeof classifyConfigurationResponse>[0];
         try {
