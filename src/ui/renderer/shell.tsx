@@ -1392,9 +1392,26 @@ export function Shell() {
                           area: "chatgpt",
                           taskId: currentTask.taskId,
                         });
+                        const afterNavigation = facade.getSnapshot();
+                        const activationTask = afterNavigation.tasks.tasks.find(
+                          (item) =>
+                            item.taskId === currentTask.taskId &&
+                            item.sessionId === currentTask.sessionId &&
+                            item.turnId === currentTask.turnId,
+                        );
+                        if (
+                          afterNavigation.status !== "current" ||
+                          afterNavigation.runtime !== "ready" ||
+                          !activationTask?.agent ||
+                          activationTask.agent.observation === "unavailable"
+                        )
+                          return;
                         void facade.task(
-                          { kind: "task.activate", taskId: currentTask.taskId },
-                          `activate:${currentTask.taskId}`,
+                          {
+                            kind: "task.activate",
+                            taskId: activationTask.taskId,
+                          },
+                          `activate:${activationTask.taskId}`,
                         );
                       }}
                     >

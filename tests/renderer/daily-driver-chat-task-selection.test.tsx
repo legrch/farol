@@ -146,3 +146,76 @@ it.each(["unchanged", "metadata-update"] as const)(
     expect(f.api.configure).not.toHaveBeenCalled();
   },
 );
+
+it.each([
+  "session-rebound",
+  "turn-rebound",
+  "observation-unavailable",
+] as const)(
+  "Farol work activation refuses %s published by a navigation subscriber",
+  async (change) => {
+    const { f, c, captured } = await mount();
+    const activate = vi.spyOn(c, "task");
+    let published = false;
+    const unsubscribe = c.subscribe(() => {
+      if (published || c.getSnapshot().destination.taskId !== target.taskId)
+        return;
+      published = true;
+      const changed =
+        change === "session-rebound"
+          ? { ...target, sessionId: "replacement-session" }
+          : change === "turn-rebound"
+            ? { ...target, turnId: "replacement-turn" }
+            : {
+                ...target,
+                agent: { ...target.agent, observation: "unavailable" },
+              };
+      f.emit("tasks", { revision: 2, tasks: [other, changed] });
+    });
+    try {
+      await act(async () => captured.click());
+      expect(published).toBe(true);
+      expect(c.getSnapshot()).toMatchObject({
+        status: "current",
+        runtime: "ready",
+      });
+      expect(c.getSnapshot().tasks.revision).toBe(2);
+      expect(activate).not.toHaveBeenCalled();
+      expect(f.api.task).not.toHaveBeenCalled();
+      expect(f.api.configure).not.toHaveBeenCalled();
+    } finally {
+      unsubscribe();
+    }
+  },
+);
+it("Farol work activation preserves same-identity metadata published by a navigation subscriber", async () => {
+  const { f, c, captured } = await mount();
+  const current = { ...target, label: "Renamed current work", pinned: true };
+  vi.mocked(f.api.task).mockResolvedValue({
+    ok: true,
+    state: { revision: 2, tasks: [other, current] },
+    selectedTaskId: target.taskId,
+  });
+  let published = false;
+  const unsubscribe = c.subscribe(() => {
+    if (published || c.getSnapshot().destination.taskId !== target.taskId)
+      return;
+    published = true;
+    f.emit("tasks", { revision: 2, tasks: [other, current] });
+  });
+  try {
+    await act(async () => captured.click());
+    expect(published).toBe(true);
+    expect(f.api.task).toHaveBeenCalledExactlyOnceWith({
+      kind: "task.activate",
+      taskId: target.taskId,
+    });
+    expect(c.getSnapshot().destination).toMatchObject({
+      area: "chatgpt",
+      taskId: target.taskId,
+    });
+    expect(f.api.configure).not.toHaveBeenCalled();
+  } finally {
+    unsubscribe();
+  }
+});
