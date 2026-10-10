@@ -859,7 +859,8 @@ try {
     assert.equal(saved.setup.chatgpt.verified, null);
     if (behavior) {
       assert.equal(saved.connectors.secureMcp.runtime.state, "ready");
-      assert.equal(saved.setup.connect.verified.buildId, build.buildId);
+      // Local readiness does not mint the separate external attachment witness.
+      assert.equal(saved.setup.connect.verified, null);
       assert.equal(saved.connectors.secureMcp.attachment, null);
       observations.push({
         kind: "one-add-saved-checked-and-connected",

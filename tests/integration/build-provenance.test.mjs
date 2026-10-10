@@ -242,14 +242,28 @@ describe("F3-5 build provenance", () => {
 
   it("refuses startup hooks without replacing existing build outputs", () => {
     const output = path.join(vnextRoot, "_output/build/app");
-    const snapshot = () =>
-      fs.existsSync(output)
-        ? {
-            identity: fs.statSync(output, { bigint: true }),
-            entries: fs.readdirSync(output).sort(),
-            manifest: fs.readFileSync(path.join(output, "build-manifest.json")),
-          }
-        : null;
+    const snapshot = () => {
+      if (!fs.existsSync(output)) return null;
+      const info = fs.statSync(output, { bigint: true });
+      return {
+        // Reading the directory may advance atime on the native host.
+        // Replacement and mutation still change these stable fields.
+        identity: {
+          dev: info.dev,
+          ino: info.ino,
+          mode: info.mode,
+          uid: info.uid,
+          gid: info.gid,
+          nlink: info.nlink,
+          size: info.size,
+          mtimeNs: info.mtimeNs,
+          ctimeNs: info.ctimeNs,
+          birthtimeNs: info.birthtimeNs,
+        },
+        entries: fs.readdirSync(output).sort(),
+        manifest: fs.readFileSync(path.join(output, "build-manifest.json")),
+      };
+    };
     const before = snapshot();
     const preload = path.join(
       fs.mkdtempSync(path.join(os.tmpdir(), "farol-preload-")),
