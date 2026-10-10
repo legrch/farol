@@ -2,6 +2,7 @@
 // source verification. No Electron package, owner profile or provider qualifies.
 import { spawn, spawnSync } from "node:child_process";
 import { constants as C } from "node:fs";
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -194,6 +195,158 @@ async function fixture() {
 }
 
 describe("one-shot installed replacement", () => {
+  it("keeps the complete local normal receipt schema identical to its runtime owner", async () => {
+    const owner = await fs.readFile(
+      new URL(
+        "../../src/apps/desktop/installed-update-runtime.ts",
+        import.meta.url,
+      ),
+      "utf8",
+    );
+    const tooling = await fs.readFile(
+      new URL("../../tooling/replace-installed-preview.mjs", import.meta.url),
+      "utf8",
+    );
+    const ownerShape = owner.match(
+      /^const PromotionReceipt = z\.strictObject\(\{[\s\S]*?^\}\);/mu,
+    );
+    const toolingShape = tooling.match(
+      /^const NormalPromotionReceipt = z\.strictObject\(\{[\s\S]*?^\}\);/mu,
+    );
+    expect(ownerShape).not.toBeNull();
+    expect(toolingShape).not.toBeNull();
+    expect(
+      toolingShape[0].replace("NormalPromotionReceipt", "PromotionReceipt"),
+    ).toBe(ownerShape[0]);
+    expect(tooling.match(/^const Digest = .*;$/mu)?.[0]).toBe(
+      owner.match(/^const Digest = .*;$/mu)?.[0],
+    );
+  });
+
+  describe.each([false, true])(
+    "normal receipt admission in apply=%s",
+    (apply) => {
+      it.each([
+        [
+          "missing product",
+          (r) => {
+            delete r.product;
+          },
+        ],
+        [
+          "foreign product",
+          (r) => {
+            r.product = "Foreign Preview";
+          },
+        ],
+        [
+          "unknown outer field",
+          (r) => {
+            r.repairAuthority = true;
+          },
+        ],
+        [
+          "unknown nested field",
+          (r) => {
+            r.activation.recovery = true;
+          },
+        ],
+        [
+          "invalid source type",
+          (r) => {
+            r.source = { path: r.source };
+          },
+        ],
+        [
+          "oversized source",
+          (r) => {
+            r.source = "x".repeat(4097);
+          },
+        ],
+        [
+          "missing source",
+          (r) => {
+            delete r.source;
+          },
+        ],
+        [
+          "missing required activation",
+          (r) => {
+            delete r.activation.drained;
+          },
+        ],
+        [
+          "nonempty obligations",
+          (r) => {
+            r.activation.obligations = ["unknown"];
+          },
+        ],
+        ["malformed JSON", () => "{"],
+        ["null receipt", () => "null"],
+      ])(
+        "refuses %s before custody or placement and preserves every original byte",
+        async (_name, change) => {
+          const f = await fixture();
+          const receipt = JSON.parse(f.oldReceipt);
+          const replacement = change(receipt);
+          const raw = Buffer.from(
+            replacement ?? JSON.stringify(receipt, null, 2) + "\n",
+          );
+          await fs.writeFile(f.oldApp + ".receipt.json", raw);
+          // Bind the selected bytes too: refusal must be strict receipt admission,
+          // not merely the older receipt digest becoming stale.
+          f.selection.snapshot.receiptSha256 = createHash("sha256")
+            .update(raw)
+            .digest("hex");
+          const appsDigest = await treeDigest(f.apps);
+          const updatesDigest = await treeDigest(f.updates);
+          let nativeCalls = 0,
+            placementCalls = 0;
+          f.deps.native = async () => {
+            nativeCalls++;
+            throw Error("unexpected native effect");
+          };
+          f.deps.promotion = async () => {
+            placementCalls++;
+            throw Error("unexpected placement effect");
+          };
+          await expect(snapshotInstalledReplacement(f.home)).rejects.toThrow(
+            "REPLACEMENT_NORMAL_RECEIPT_UNCONFIRMED",
+          );
+          await expect(
+            replaceInstalledPreview(f.selection, apply, f.deps),
+          ).rejects.toThrow("REPLACEMENT_NORMAL_RECEIPT_UNCONFIRMED");
+          expect(nativeCalls).toBe(0);
+          expect(placementCalls).toBe(0);
+          expect(await fs.readFile(f.oldApp + ".receipt.json")).toEqual(raw);
+          expect(await treeDigest(f.apps)).toBe(appsDigest);
+          expect(await treeDigest(f.updates)).toBe(updatesDigest);
+          await expect(fs.lstat(f.custody)).rejects.toMatchObject({
+            code: "ENOENT",
+          });
+          await expect(
+            fs.lstat(
+              path.join(
+                f.userData,
+                "farol-next-state/installed-replacement.pending",
+              ),
+            ),
+          ).rejects.toMatchObject({ code: "ENOENT" });
+          expect(await isPromotionLeaseHeld(f.userData)).toBe(false);
+          expect(await kernelLockHeld(path.join(f.updates, "lock"))).toBe(
+            false,
+          );
+          if (!apply)
+            await expect(
+              fs.lstat(
+                path.join(f.userData, "farol-next-state/promotion.lease"),
+              ),
+            ).rejects.toMatchObject({ code: "ENOENT" });
+        },
+      );
+    },
+  );
+
   it("plans without intent, custody, lock creation or app mutation", async () => {
     const f = await fixture();
     const result = await replaceInstalledPreview(f.selection, false, f.deps);

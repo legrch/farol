@@ -37,6 +37,28 @@ const LIBRARY_SHA256 =
   "53eee38236103b140d95ab27342c522b7a9a1f4fc8fe8442b2cdd44f07be32db";
 const sha = (raw) => createHash("sha256").update(raw).digest("hex");
 const Digest = z.string().regex(/^[a-f0-9]{64}$/u);
+// Same normal receipt DTO as the installed-update owner; keep strict shape parity.
+const NormalPromotionReceipt = z.strictObject({
+  schema: z.literal("farol.next.promotion-plan/1"),
+  operation: z.literal("applied"),
+  product: z.literal("Farol Next Preview"),
+  version: z.string().max(128),
+  sourceCommit: z.string().regex(/^[a-f0-9]{40}$/u),
+  sourceTreeDigest: Digest,
+  sourceDirty: z.literal(false),
+  artifactSha256: Digest,
+  source: z.string().max(4096),
+  destination: z.string().max(4096),
+  receipt: z.string().max(4096),
+  overwrite: z.literal(false),
+  legacyMutation: z.literal(false),
+  activation: z.strictObject({
+    userData: z.string().max(4096),
+    drained: z.literal(true),
+    obligations: z.array(z.never()).length(0),
+  }),
+  verifiedDestinationSha256: Digest,
+});
 const Selection = z.strictObject({
   schema: z.literal("farol.installed-replacement-selection/1"),
   sourceCommit: z.string().regex(/^[a-f0-9]{40}$/u),
@@ -174,7 +196,15 @@ export async function snapshotInstalledReplacement(home) {
   await absent(path.join(apps, "Farol.app.repair.json"));
   await absent(path.join(apps, ".farol-closed-repair.json"));
   const receipt = await bytes(app + ".receipt.json");
-  const r = JSON.parse(receipt);
+  let r;
+  try {
+    r = JSON.parse(receipt);
+  } catch {
+    fail("REPLACEMENT_NORMAL_RECEIPT_UNCONFIRMED");
+  }
+  // Validate only; retain the original JSON value and exact stored bytes.
+  if (!NormalPromotionReceipt.safeParse(r).success)
+    fail("REPLACEMENT_NORMAL_RECEIPT_UNCONFIRMED");
   const build = assertBuildIdentity(
     JSON.parse(
       await bytes(
@@ -186,16 +216,9 @@ export async function snapshotInstalledReplacement(home) {
   );
   const appSha256 = await treeDigest(app);
   if (
-    r.schema !== "farol.next.promotion-plan/1" ||
-    r.operation !== "applied" ||
-    r.sourceDirty !== false ||
-    r.overwrite !== false ||
-    r.legacyMutation !== false ||
     r.destination !== app ||
     r.receipt !== app + ".receipt.json" ||
-    r.activation?.userData !== userData ||
-    r.activation?.drained !== true ||
-    !same(r.activation.obligations, []) ||
+    r.activation.userData !== userData ||
     r.artifactSha256 !== appSha256 ||
     r.verifiedDestinationSha256 !== appSha256 ||
     r.sourceCommit !== build.sourceCommit ||
