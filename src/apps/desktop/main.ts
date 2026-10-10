@@ -10261,7 +10261,7 @@ async function createTaskViews(): Promise<void> {
   for (const task of activeRuntime.tasks) {
     if (!startupIsCurrent()) return;
     const retained = taskViews.get(task.taskId);
-    if (retained && !retained.webContents.isDestroyed()) {
+    if (retained && retained.webContents?.isDestroyed() === false) {
       continue;
     }
     const view = new WebContentsView({

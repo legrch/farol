@@ -60,6 +60,7 @@ function host({
   const reached = deferred();
   const pending = deferred();
   const events: Event[] = [];
+  const destroyedViews = new Map<number, () => void>();
   let interrupted = false;
   let reentered = false;
   let ordinal = 0;
@@ -161,7 +162,7 @@ function host({
   class FakeView {
     webContents: {
       isDestroyed(): boolean;
-      once(): void;
+      once(name: string, callback: () => void): void;
       on(): void;
       setWindowOpenHandler(): void;
       loadURL(): Promise<void>;
@@ -173,7 +174,9 @@ function host({
       record("view-create", id);
       this.webContents = {
         isDestroyed: () => destroyed,
-        once() {},
+        once(name, callback) {
+          if (name === "destroyed") destroyedViews.set(id, callback);
+        },
         on() {},
         setWindowOpenHandler() {},
         loadURL: () => {
@@ -279,6 +282,11 @@ function host({
     finish: pending.resolve,
     reject: pending.reject,
     captured: () => captured,
+    fireViewDestroyed: (id: number) => {
+      const callback = destroyedViews.get(id);
+      if (!callback) throw new Error("CONTROLLED_DESTROYED_CALLBACK_MISSING");
+      callback();
+    },
   };
 }
 
@@ -423,6 +431,26 @@ it("retains fulfilled load outcome when the admitted view's contents disappear",
     ),
   ).toBe(false);
   expect(h.count("view-load")).toBe(1);
+});
+
+it("replaces a cleared retained view on the next host without stale callback deletion", async () => {
+  const h = host({ stage: "view" });
+  const creating = h.create();
+  await h.reached;
+  const stale = h.context.taskViews.get("runtime-1");
+  expect(stale).toBeDefined();
+  Object.defineProperty(stale, "webContents", { value: undefined });
+  h.finish();
+  await creating;
+  h.withdraw("replace");
+  await expect(h.views()).resolves.toBeUndefined();
+  const replacement = h.context.taskViews.get("runtime-1");
+  expect(replacement).toBeDefined();
+  expect(replacement).not.toBe(stale);
+  expect(h.count("view-load")).toBe(3);
+  h.fireViewDestroyed(1);
+  expect(h.context.taskViews.get("runtime-1")).toBe(replacement);
+  expect(h.count("view-close")).toBe(0);
 });
 
 it("rechecks after window-state publication before creating views", async () => {
