@@ -1,0 +1,60 @@
+{
+  "context": {
+    "commit": "817b7dff8ab79320a02d5321e6686d0891f3b11c",
+    "files_sha256": {
+      "docs/chat-context/handoff.md": "e62516d7f1157334e0001a47dfe8fcb953d348f92e785c4eb3c6a9d4de83b1ba",
+      "docs/chat-context/plan-compatibility.md": "9eb6c094c957998270084f1dcb1b298f7c0a253c887781eb5ef93812d03b1437",
+      "modules/chat/app/services/contextcheckpoint/codec.go": "5634507d9d73620e12535a420acc74c4fe97720dc1bf9c70b04a14bef5e02c30",
+      "modules/chat/app/services/contextcheckpoint/composition_test.go": "4cdaceea84bc095fac72adeb12e7adb3f99c205132ea7922083b32eee003d901",
+      "modules/chat/app/services/contextcheckpoint/materialize.go": "9e584ff1c84e80c6211e23b256e01f9b3916507fb0f502d0103b92de94b198b8",
+      "modules/chat/app/services/contextcheckpoint/plan.go": "d9069f8abda9b74e938c2dc5de4608001b70654178d9a9812143798a6a42a9ad",
+      "modules/chat/app/services/contextcheckpoint/plan_test.go": "a2e64d9c8a8e34aa9cf5c55687753459d466b1504e7f733f6af5ccb77458a665",
+      "modules/chat/app/services/contextcheckpoint/port.go": "d7937ab2a4be102609b750080c74732fe45b8000a7b09b30b1557cb9f56ef6e3",
+      "modules/chat/app/services/contextcheckpoint/results.go": "57c6f1e23ec3aef039e3bb5eb787e0def62330d9962efba3e590041473e2f0d9",
+      "modules/chat/app/services/contextcheckpoint/service.go": "02aae51621dd2af6e41b51ed81fa15da46bdfe05e5ba4b5477c8b0147d2fabaa",
+      "modules/chat/domain/contextbudget/group.go": "12c20e9f739c7e99405f80da56e58b202e60067d3d51ca67b55694bc57611960",
+      "modules/chat/domain/contextbudget/policy_test.go": "c84d9022a6344fdf32dde92cd27b45b31530c1c791a9661543947e0d50423ded",
+      "modules/chat/domain/contextbudget/select.go": "b6ab42957496b47e6b0a5a78c3e2220c9ec26dc94f4fc993cb6e7197d4f15bad",
+      "modules/chat/domain/contextbudget/value.go": "ad1119bcc70648b8b100e6ad0eb46f4d0aa9dedbe29c55cbd5ee773ac562cb72"
+    },
+    "paths": [
+      "modules/chat/domain/contextbudget",
+      "modules/chat/app/services/contextcheckpoint"
+    ],
+    "tree": "edcb8ff430c101b460b06b56cbee9142354c56fd"
+  },
+  "models": {
+    "commit": "8f6a0f2491af8d6674c72c82f1f611e3e3f8627b",
+    "files_sha256": {
+      "docs/model-capabilities/ESTIMATES.md": "050b747d18afa53dde4a7dea791a5e085c915d52d7c24d1d404c678fab251179",
+      "docs/model-capabilities/INFERENCE-MAPPING.md": "3a6afa3fa197772a54526ebc998db703b5ceba7a810022398fdbfe1fe1cf6d7c",
+      "docs/model-capabilities/INTEGRATION.md": "a5c874f92dfbeb0b13be18b4b6f8a7ff1390aac8aec8dd9b0da88dcbaa5b3823",
+      "modules/chat/domain/modelselection/availability.go": "1ab4bcaa1bc22af79388c5f9982c4ddac1bf8df225623dfa2d2dadb962f3b29b",
+      "modules/chat/domain/modelselection/boundaries_test.go": "2f991220b9462eec6704fd1b337f2145390e11ee05295bf7748f26e4bf70f012",
+      "modules/chat/domain/modelselection/estimate.go": "e391fa8ba6f175c1abe52f551d7baee6b26b8ca2be03198d07b67d7c3c72d317",
+      "modules/chat/domain/modelselection/estimateprovenance_test.go": "f786741ef6987ceb5d4cf1b5807e12faa7f3dd0f341843647d9210bf00cd0cba",
+      "modules/chat/domain/modelselection/resolve.go": "b9234d42b165461cbaa156042cf5e0275370eb5ef6b5647143f0196e57776ab2",
+      "modules/chat/domain/modelselection/selection_test.go": "4b8762623bb1a8f883da4bb14a9786cfe4054c4f04dfb501e865c73f87d2d730",
+      "modules/chat/domain/modelselection/types.go": "5567f2cf0b5f9d77c3c6db157b0c63b2e5cc99537bb5c7b0948cf4756020476b",
+      "modules/chat/domain/modelselection/usage.go": "5e3049aefebc434860248a60aafbef5734deed4e186b585be7be387bebae9b38",
+      "modules/chat/domain/modelselection/usage_test.go": "f0e583ffcf29f804716b913c936441ee7bc7db7aa45a2c1f59862d89afad0d51",
+      "modules/chat/domain/modelselection/usageboundaries_test.go": "bb35bab4f35a5df5c619c7d963c7d45d3d11b32453f6b100b9a1e5af775528a7",
+      "modules/chat/infra/catalogue/boundaries_test.go": "bcb554b9344d0cb032c2e38a42e945ec16360f24302b674b7f476d36921b55c1",
+      "modules/chat/infra/catalogue/boundary.go": "710e5754231d887a614bde3ab20a598526cc629d4501d375db35788067e4847f",
+      "modules/chat/infra/catalogue/cache.go": "a61585c913377f983f248142651e18100b8f262bdcab4dbddfe431807e2786f9",
+      "modules/chat/infra/catalogue/cache_test.go": "71281849f8b8f61027dc0b4363ef13d7b0c86923edba01a9f2217a14225cf783",
+      "modules/chat/infra/catalogue/consumers.go": "ed115454d8d1c1e0cdee56b2d0599ca34e5a7ffa39ccbd95d555741926915d7e",
+      "modules/chat/infra/catalogue/consumers_test.go": "99896debcb7fc850211010b4435f59da549d39bf514a7f93f836828bcd29d510",
+      "modules/chat/infra/catalogue/estimate_test.go": "abdc7e7510fd48f8447bdb3fc805fd406beed8097fda8086a0d0da233cf691e5",
+      "modules/chat/infra/catalogue/evidence.go": "78a078dbe914fd767801a8334f057a46e0df48b69127fcde71319b5c6c70491f",
+      "modules/chat/infra/catalogue/parser.go": "49061a03a1b5ef35d80349090f3172667e3be4492d3e4eef2722f70755a846b7",
+      "modules/chat/infra/catalogue/parser_test.go": "b106a941afbf134ac04bc56fe8ceddffba82fa4544a776d228b3ef54722c3a1c",
+      "modules/chat/infra/catalogue/reader.go": "6f0e11836b89f6514df5a1c8c465aa1ba1eb55ca53d9a603b485f1cb48743bd5"
+    },
+    "paths": [
+      "modules/chat/domain/modelselection",
+      "modules/chat/infra/catalogue"
+    ],
+    "tree": "b29881c32a95bcd70b1e812c29b9d4ab6968809d"
+  }
+}

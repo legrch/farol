@@ -4,7 +4,8 @@ Title: `feat(chat): add bounded ChatGPT-plan inference with controlled compositi
 
 Source branch: `feature/chatgpt-plan-inference`
 
-Base: the owner's integration target; no main merge is included.
+Base: `integration/daily-driver-hardening`, under the owner's current Final Sync
+integration grant. No main or release merge is included.
 
 ## Body
 
@@ -22,9 +23,12 @@ service and Responses builder/parser. Producer code is assembled outside the
 product checkout; shipping boot and shared owner paths are unchanged.
 
 Validation: owned race tests and vet, bounded lifetime/SSE fuzzing, strict wire and
-deadline regressions, and the pinned cross-feature witness's nine tests / 33
-subcases pass. Exact source checkpoints, original failures, mapping restrictions
-and reproducible manifests are documented in HANDOFF and CONSUMER-WITNESS.
+deadline regressions, pure actual wire preflight before reserve/credentials, and
+current pinned producer composition pass. The latter calls actual model estimate
+admission and detached context plan projection, and checks complete source,
+reservation receipts and UNKNOWN sidecars even with identical input hashes.
+Exact tests, original strict-wire failing counters, source pins and reproducible
+manifests are documented in HANDOFF, PREFLIGHT and CURRENT-CONSUMER-WITNESS.
 
 Open gates: actual shipping owner ports/boot/physical writer, provider subscription
 entitlement and live SIWC, native/Mac qualification, formal review and aggregate

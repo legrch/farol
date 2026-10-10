@@ -1,6 +1,11 @@
-# Pinned model/context consumer witness
+# Historical v3 model/context consumer witness
 
-This closes the missing **controlled I6 composition** witness. It does not wire
+This retains the original v3 **controlled I6 composition** evidence. For the
+current producer receipts and strict preflight result, see
+[CURRENT-CONSUMER-WITNESS.md](CURRENT-CONSUMER-WITNESS.md). The source and
+side effects below are historical; preflight changes their admission order.
+
+This closed the original missing controlled I6 witness. It does not wire
 shipping boot or import another feature into the inference branch. All producer
 code is assembled in a new disposable directory outside the product checkout.
 
@@ -32,7 +37,9 @@ a new directory outside all three inputs; an existing receipt is never overwritt
 ```sh
 python3 docs/inference/consumerwitness.py \
   --inference-root /path/to/inference \
-  --inference-ref FULL_TESTED_INFERENCE_COMMIT \
+  --inference-ref bc7f3ee6bd401aad30b6948a572869314ab770ec \
+  --pins consumerpins.json \
+  --fixture consumerwitness.go.txt \
   --models-root /path/to/models \
   --context-root /path/to/context \
   --output /path/to/new-disposable-witness

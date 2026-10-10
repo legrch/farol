@@ -59,12 +59,19 @@ def main():
     parser.add_argument("--inference-root", type=Path, required=True)
     parser.add_argument("--models-root", type=Path, required=True)
     parser.add_argument("--context-root", type=Path, required=True)
-    parser.add_argument("--inference-ref", default="e2824968b72fb891774a4cdda7f0beaa2c893842")
+    parser.add_argument("--inference-ref", required=True)
+    parser.add_argument("--pins", default="currentconsumerpins.json",
+                        help="Pin asset filename beside this script")
+    parser.add_argument("--fixture", default="currentconsumerwitness.go.txt",
+                        help="Fixture asset filename beside this script")
     parser.add_argument("--output", type=Path, required=True,
                         help="New disposable directory outside all three input checkouts")
     args = parser.parse_args()
     asset_root = Path(__file__).resolve().parent
-    pins = json.loads((asset_root / "consumerpins.json").read_text())
+    if any(Path(name).name != name for name in (args.pins, args.fixture)):
+        raise SystemExit("Use asset filenames, not external paths")
+    pin_path = asset_root / args.pins
+    pins = json.loads(pin_path.read_text())
     roots = {"inference": args.inference_root.resolve(),
              "models": args.models_root.resolve(), "context": args.context_root.resolve()}
     output = args.output.resolve()
@@ -96,14 +103,15 @@ def main():
             if (assembly / name).exists():
                 raise SystemExit("Producer overlay would replace inference source: " + name)
         unpack(roots[lane], expected["commit"], assembly, expected["paths"])
-    fixture = asset_root / "consumerwitness.go.txt"
+    fixture = asset_root / args.fixture
     fixture_bytes = fixture.read_bytes()
     test_path = assembly / "modules/chat/infra/clients/planresponses/consumerwitness_test.go"
     test_path.write_bytes(fixture_bytes)
     manifest = {"kind": "offline-controlled-composition-only", "inference_commit": args.inference_ref,
                 "inference_tree": git(roots["inference"], "rev-parse", args.inference_ref + "^{tree}").decode().strip(),
                 "producers": pins, "script_sha256": digest(Path(__file__).read_bytes()),
-                "fixture_sha256": digest(fixture_bytes), "commands": []}
+                "fixture_sha256": digest(fixture_bytes), "pins_sha256": digest(pin_path.read_bytes()),
+                "fixture_asset": args.fixture, "pins_asset": args.pins, "commands": []}
     # Hash all exact assembled Go inputs, not only the displayed producer types.
     manifest["assembled_files_sha256"] = {
         str(path.relative_to(assembly)): digest(path.read_bytes())
