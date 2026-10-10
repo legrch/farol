@@ -53,9 +53,14 @@ and hash match the real producer exactly; actual HTTP bytes equal its complete
 input and provider envelope fit the actual reserved policy. No billed usage or
 live entitlement is inferred from advisory estimates.
 
-The pre-commit current run passed eight top-level tests and 57 subcases under
-race checking, plus targeted vet. The frozen committed source and original log
-hashes are recorded in `CURRENT-WITNESS-RECEIPT.json`.
+The frozen committed source `491f64b3a3610162512413ef6fa50896cb1516e0`, tree
+`97dfb4192f209d8f4c1a3a50aeee798286ce0e59`, passed eight top-level tests and
+57 subcases under race checking, plus targeted vet. All 873 assembled Go/module
+input hashes and the executable asset bytes were reverified. Frozen manifest
+SHA-256: `35044ba51d89b71bf8e61c44f82faedc34a009885ef387cb87978853e4753f55`.
+`CURRENT-WITNESS-RECEIPT.json` records exact source, assets, inputs, named test
+events and original log hashes. The final receipt commit changes only docs;
+these tested production and executable witness bytes remain identical.
 
 The focused witness exercises:
 

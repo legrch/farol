@@ -32,7 +32,10 @@ authority, release or installed application was changed.
   [PREFLIGHT.md](PREFLIGHT.md) records the original failing counters and exact
   integration obligation. Subsequent current-producer witness code is confined
   to this docs root and copied only into an external disposable assembly.
-  Inspect the branch HEAD/export manifest for the final exact witness source.
+- Frozen current-producer witness: `491f64b3a3610162512413ef6fa50896cb1516e0`;
+  tree `97dfb4192f209d8f4c1a3a50aeee798286ce0e59`. The docs-only final receipt
+  retains this exact tested executable source; branch HEAD/export manifest
+  identify the final handoff commit.
 
 The existing Final Sync owner is authorized to compose verified commits into
 `integration/daily-driver-hardening`. INFERENCE remains the sole writer of its
@@ -122,6 +125,19 @@ scripts disabled; no manifest or lock was changed.
   static result was inspected after that checkpoint commit. The files were
   renamed to `lifetimefuzz_test.go` and `streamfuzz_test.go` with unchanged bytes;
   corrected architecture and focused race seeds passed before the follow-up commit.
+
+The current-producer/strict-preflight continuation additionally proves the
+original v3 strict-wire admission gap: ten controlled failures each reserved and
+acquired credentials; expired records also refreshed once and wrote twice.
+`08fc551` fixes it using the same actual builder before reserve/credentials.
+Refined owned race/vet/import checks pass, including all twelve strict wire/cap
+ready/expired cases. The frozen current producer witness passes eight tests and
+57 subcases; its actual complete source/reservation/UNKNOWN/estimate gates are
+recorded in CURRENT-CONSUMER-WITNESS and CURRENT-WITNESS-RECEIPT. Bounded
+independent inspection verified producer functions, hashes and source claims.
+One fixture formatting check omitted the declared Go PATH and failed to find
+`gofmt`; the corrected declared-toolchain check passed. No code was changed by
+that failed check. Original broad failures/timeouts were not repeated.
 
 Bounded independent review found and regression-checked protocol case/Unicode
 aliases, contradictory final item statuses, refreshed-ready restart admission,
