@@ -32,6 +32,13 @@ describe("quit drain process lifetime", () => {
         'RECEIPT {"drained":false,"unconfirmed":["stalled-child"]}',
       );
       expect(stdout).toContain("QUIT\n");
+      const receiptFile = path.join(temporary, "receipt.json");
+      const reserved = await run(process.execPath, [bundled, receiptFile]);
+      expect(reserved.stdout).toContain("QUIT\n");
+      expect(JSON.parse(await fs.readFile(receiptFile, "utf8"))).toEqual({
+        drained: false,
+        unconfirmed: ["preparation", "stalled-child"],
+      });
     } finally {
       await fs.rm(temporary, { recursive: true, force: true });
     }

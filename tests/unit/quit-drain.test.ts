@@ -269,6 +269,69 @@ describe("normal Quit preparation shares the original absolute drain budget", ()
     return { drain, receipts, close, collect, record, quit };
   }
 
+  it("reserves recording time even when preparation and child drain time out", async () => {
+    const recorded = deferred<void>();
+    const collect = vi.fn(() => [
+      { name: "stalled-child", close: () => new Promise<void>(() => {}) },
+    ]);
+    let context!: QuitPreparationContext;
+    const h = harness({
+      preparationMs: 3_000,
+      recordReserveMs: 1_000,
+      prepare: (value) => {
+        context = value;
+        return new Promise(() => {});
+      },
+      collect,
+      record: () => recorded.promise,
+    });
+    h.drain.onBeforeQuit(event());
+    expect(context.deadlineAt).toBe(startedAt + 3_000);
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(context.canStartEffect()).toBe(false);
+    expect(collect).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(6_000);
+    expect(h.quit).not.toHaveBeenCalled();
+    expect(h.drain.state()).toBe("draining");
+    await vi.advanceTimersByTimeAsync(500);
+    recorded.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.quit).toHaveBeenCalledTimes(1);
+    expect(Date.now()).toBe(startedAt + 9_500);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("bounds a stalled recorder at the original deadline without confirming late child completion", async () => {
+    const child = deferred<void>();
+    const record = vi.fn(() => new Promise<void>(() => {}));
+    const h = harness({
+      recordReserveMs: 1_000,
+      collect: () => [{ name: "late-child", close: () => child.promise }],
+      record,
+    });
+    h.drain.onBeforeQuit(event());
+    await vi.advanceTimersByTimeAsync(9_000);
+    expect(record).toHaveBeenCalledWith({
+      drained: false,
+      unconfirmed: ["late-child"],
+    });
+    expect(h.quit).not.toHaveBeenCalled();
+    child.resolve();
+    await vi.advanceTimersByTimeAsync(999);
+    expect(h.quit).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(h.quit).toHaveBeenCalledTimes(1);
+    expect(record).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each([-1, 10_001, NaN, Infinity])(
+    "rejects invalid receipt reserve %s",
+    (recordReserveMs) => {
+      expect(() => harness({ recordReserveMs })).toThrow("QUIT_BUDGET_INVALID");
+    },
+  );
+
   it.each(["accepted", "skipped", "blocked"] as const)(
     "collects after %s preparation and closes the effect fence before collection",
     async (status) => {
