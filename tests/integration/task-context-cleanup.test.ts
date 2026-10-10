@@ -52,11 +52,12 @@ describe("CCR-11 closing a task deletes its private context state", () => {
     expect(released).toEqual([binding.taskId]);
   });
 
-  it("deletes a transition an earlier run left behind, and reports a failed deletion", async () => {
+  it("retains a pending original transition and reports a failed deletion", async () => {
     root = await fs.mkdtemp(path.join(os.tmpdir(), "farol-next-task-close-"));
     const store = new PrivateContextStore({ root });
-    // Nothing resumes a summary that was cut off by a quit or a crash, so its
-    // phase must not keep the task from closing forever.
+    // checkpoint_requested/not_observed is persisted before the original
+    // summarizer.request awaits a response. A crash here is not proof that
+    // dispatch did not occur; cleanup must retain the original operation.
     const begun = beginCompaction(createContextSession(binding), {
       operationId: "compact-cut-off",
       source: "retained_agent",
@@ -70,8 +71,14 @@ describe("CCR-11 closing a task deletes its private context state", () => {
       phase: "checkpoint_requested",
     });
 
-    await expect(deleteTaskContext(store, binding)).resolves.toBe("deleted");
-    await expect(store.load(binding)).resolves.toBeNull();
+    const retainedFence: string[] = [];
+    await expect(
+      deleteTaskContext(store, binding, {
+        release: async (taskId) => void retainedFence.push(taskId),
+      }),
+    ).resolves.toBe("failed");
+    await expect(store.load(binding)).resolves.toEqual(requested.value);
+    expect(retainedFence).toEqual([]);
 
     // A deletion that fails leaves the task's context, and its fence, alone.
     const released: string[] = [];
@@ -88,9 +95,15 @@ describe("CCR-11 closing a task deletes its private context state", () => {
     ).resolves.toBe("failed");
     expect(released).toEqual([]);
     // A release that fails does not undo a deletion that succeeded.
-    await store.save(createContextSession(binding));
+    const completed = {
+      ...binding,
+      taskId: "task-no-operation",
+      hostThreadId: "task-no-operation",
+      sessionId: "task-no-operation",
+    };
+    await store.save(createContextSession(completed));
     await expect(
-      deleteTaskContext(store, binding, {
+      deleteTaskContext(store, completed, {
         release: async () => {
           throw new Error("EACCES");
         },

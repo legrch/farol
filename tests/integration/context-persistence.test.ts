@@ -6,8 +6,14 @@ import os from "node:os";
 import path from "node:path";
 import { build } from "esbuild";
 import {
+  activateNextEpoch,
   beginCompaction,
+  confirmHostContext,
   createContextSession,
+  markCheckpointStored,
+  markOldEpochRetired,
+  offerCheckpointHandoff,
+  recordValidatedCheckpoint,
   requestCheckpoint,
   type ContextBinding,
   type ContextSession,
@@ -901,10 +907,56 @@ describe("private context persistence", () => {
       root: stateRoot,
       maxCheckpointsPerTask: 2,
     });
-    await store.save(createContextSession(binding));
-    await store.put(checkpoint("checkpoint-1", 1_000));
-    await store.put(checkpoint("checkpoint-2", 2_000));
-    await store.put(checkpoint("checkpoint-3", 3_000));
+    let current = createContextSession(binding);
+    await store.save(current);
+    for (const [index, checkpointId] of [
+      "checkpoint-1",
+      "checkpoint-2",
+      "checkpoint-3",
+    ].entries()) {
+      const requested = value(
+        requestCheckpoint(
+          value(
+            beginCompaction(current, {
+              operationId: `operation-${checkpointId}`,
+              source: "retained_agent",
+              sourceBoundary: `message-operation-${checkpointId}`,
+            }),
+          ),
+        ),
+      );
+      const original = createCheckpointEnvelope(requested, content, {
+        checkpointId,
+        providerOperationId: `provider-${checkpointId}`,
+        parentCheckpointId: current.lastCheckpointId,
+        sourceCursor: `cursor-${checkpointId}`,
+        createdAt: (index + 1) * 1000,
+      });
+      await store.put(original);
+      current = value(
+        activateNextEpoch(
+          value(
+            markOldEpochRetired(
+              value(
+                confirmHostContext(
+                  value(
+                    offerCheckpointHandoff(
+                      value(
+                        markCheckpointStored(
+                          value(recordValidatedCheckpoint(requested, original)),
+                        ),
+                      ),
+                    ),
+                  ),
+                  `confirmed-${checkpointId}`,
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await store.save(current);
+    }
     await expect(store.get(binding, "checkpoint-1")).resolves.toBeNull();
     await expect(store.get(binding, "checkpoint-2")).resolves.toMatchObject({
       checkpointId: "checkpoint-2",
