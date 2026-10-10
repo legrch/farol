@@ -9,7 +9,7 @@ import { FarolModelRuntimeState } from "../../src/apps/desktop/farol-model-runti
 // Real loopback endpoint with a disposable private state root and controlled
 // handlers. No Electron, account, Codex host, or external provider is exercised.
 it.each(["/responses", "/responses/compact"])(
-  "refuses %s when a seal lands after authentication but before the body finishes",
+  "drains authenticated %s intake after a mid-body seal while refusing new intake",
   async (route) => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "farol-sealed-body-"));
     const state = new FarolModelRuntimeState(path.join(root, "endpoint"));
@@ -77,20 +77,142 @@ it.each(["/responses", "/responses/compact"])(
       // The remaining bytes are deliberately withheld, with no timing sleep.
       await new Promise<void>((resolve) => setImmediate(resolve));
       endpoint.seal();
-      request!.end(body.slice(1));
-      const refused = await response;
-      expect(refused).toEqual({
-        status: 401,
-        body: JSON.stringify({ error: { code: "unauthorized" } }),
+      // Authentication is the existing intake admission point (f54148f4).
+      // A NEW request must fail anonymously while the admitted body drains.
+      const fresh = await fetch(`http://127.0.0.1:${port}${route}`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${token}`,
+          "content-type": "application/json",
+        },
+        body,
       });
+      expect(fresh.status).toBe(401);
+      expect(fresh.headers.get("www-authenticate")).toBe("Bearer");
+      expect(await fresh.text()).toBe(
+        JSON.stringify({ error: { code: "unauthorized" } }),
+      );
       expect(dispatches).toEqual([]);
+      request!.end(body.slice(1));
+      const retained = await response;
+      expect(retained).toEqual({
+        status: 200,
+        body: route === "/responses/compact" ? "{}" : "",
+      });
+      expect(dispatches).toEqual([
+        route === "/responses/compact" ? "compaction" : "turn",
+      ]);
       expect(endpoint.evidence()).toMatchObject({
-        requestsAccepted: 0,
+        requestsAccepted: 1,
         requestsRejected: 1,
         lastRejectedReason: "FAROL_MODEL_SEALED",
       });
     } finally {
       request?.destroy();
+      await endpoint.stop();
+      await fs.rm(root, { recursive: true });
+    }
+  },
+);
+
+it.each(["/responses", "/responses/compact"])(
+  "waits for authenticated %s intake to finish before sealed stop resolves",
+  async (route) => {
+    const root = await fs.mkdtemp(
+      path.join(os.tmpdir(), "farol-sealed-drain-"),
+    );
+    const state = new FarolModelRuntimeState(path.join(root, "endpoint"));
+    const dispatches: string[] = [];
+    const endpoint = new FarolModelEndpoint({
+      state,
+      model: "farol-next/mind",
+      handler: async () => {
+        dispatches.push("turn");
+        return { ok: true, events: [] };
+      },
+      compactionHandler: async () => {
+        dispatches.push("compaction");
+        return { ok: true, status: 200, body: "{}" };
+      },
+    });
+    let request: http.ClientRequest | undefined;
+    let stopping: Promise<void> | undefined;
+    try {
+      const { port } = await endpoint.start();
+      const token = await state.currentToken();
+      let tokenRead!: () => void;
+      const readingToken = new Promise<void>((resolve) => {
+        tokenRead = resolve;
+      });
+      const originalRead = state.currentToken.bind(state);
+      state.currentToken = async () => {
+        const current = await originalRead();
+        tokenRead();
+        return current;
+      };
+      const body = JSON.stringify({ model: "farol-next/mind", input: [] });
+      const response = new Promise<{
+        status: number | undefined;
+        body: string;
+      }>((resolve, reject) => {
+        request = http.request(
+          {
+            host: "127.0.0.1",
+            port,
+            method: "POST",
+            path: route,
+            headers: {
+              authorization: `Bearer ${token}`,
+              "content-type": "application/json",
+              "content-length": Buffer.byteLength(body),
+            },
+          },
+          (reply) => {
+            let text = "";
+            reply.setEncoding("utf8");
+            reply.on("data", (chunk: string) => {
+              text += chunk;
+            });
+            reply.once("end", () =>
+              resolve({ status: reply.statusCode, body: text }),
+            );
+            reply.once("error", reject);
+          },
+        );
+        request.once("error", reject);
+        request.write(body.slice(0, 1));
+      });
+      await readingToken;
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(dispatches).toEqual([]);
+      endpoint.seal();
+      let stopped = false;
+      stopping = endpoint.stop().then(() => {
+        stopped = true;
+      });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      // An active authenticated upload is part of the server's drain. The
+      // controlled client must finish it; stop cannot claim it disappeared.
+      expect(stopped).toBe(false);
+      request!.end(body.slice(1));
+      expect(await response).toEqual({
+        status: 200,
+        body: route === "/responses/compact" ? "{}" : "",
+      });
+      await stopping;
+      expect(stopped).toBe(true);
+      expect(endpoint.port).toBeUndefined();
+      expect(endpoint.isSealed).toBe(true);
+      expect(dispatches).toEqual([
+        route === "/responses/compact" ? "compaction" : "turn",
+      ]);
+      expect(endpoint.evidence()).toMatchObject({
+        requestsAccepted: 1,
+        requestsRejected: 0,
+      });
+    } finally {
+      request?.destroy();
+      await stopping;
       await endpoint.stop();
       await fs.rm(root, { recursive: true });
     }
