@@ -12,6 +12,10 @@ Coherent source commits:
   recovery, untrusted optional summary, existing result-port adapter and actual
   provider request materialization/composition tests. Source tree:
   `c5fca555d2ed9dbf10c9f9883663450161af9786`.
+- `8462ce80cb9d0c17e0409210dc3382d1547ae800`: demonstrated malformed UTF-8
+  import correction and exact serialized-budget edge regressions. Source tree:
+  `f11bc469deb100b5cafefbaf1fd9916595e9792f`. See
+  [acceptance-audit.md](acceptance-audit.md) for the C1–C7 audit.
 
 SOURCE and PORTABLE are delivered. Controlled COMPOSED means the actual Go
 ResultsSource/service/gate/materializer with injected source/store ports and
