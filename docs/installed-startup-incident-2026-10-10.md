@@ -42,6 +42,78 @@ handoff. The prior local Lead was not the active counterpart. Source repair,
 local installation, normal connected Quit/reopen, and real cloud catalogue
 verification must each be reported with their own evidence.
 
+## Installed repair and live verification
+
+The owner-authorized local repair installed `0.2.0-owner.beta.5`, build 19,
+from clean source `ed4cb0c801e9613d5bdd8e389f098f00e9bcbb26`. `task package`
+completed with schema-7 Go attestation, build ID
+`e2d3f7fd464b9476d7cf432fa61249a619a8b8f7ec33ed4e0ef2d3d2b4c00296`
+and app digest
+`88da4cc03a45148e4639c606d8bdeba6db661838fdc8f701b787fc45e84fee45`.
+The predecessor app and its receipt remain in a private retained application
+directory. The failed beta.3 state remains closed under recovery operation
+`c44ff949-2368-44c2-8aef-01aae869774a`; its unconfirmed Quit and unknown effects
+were not rewritten as clean or resumed. The fresh state retains all five
+workspace policies, host selections, tunnel selection and credential/browser
+objects. Startup can refresh workspace verification generations; that refresh
+does not change the preserved scope/access/root policies.
+
+Installed, hidden native observations exercised the ordinary `app.quit()` path
+with the actual selected tunnel, without an explicit connector Stop. Confirmed
+connected Quit receipts at `2026-10-10T04:58:29.440Z` and
+`2026-10-10T05:02:02.727Z` have `drained: true`, no unconfirmed components,
+exit 0 without a signal, and no remaining run marker. A subsequent clean
+restart started a fresh connector runtime generation automatically, passed its
+actual health check without a manual Start, and recorded the same clean Quit
+at `2026-10-10T05:02:43.115Z`. An earlier probe incorrectly compared refreshed
+verification metadata as access policy and quit during resume; its failed
+observations remain retained. After that confirmed closure, a distinct ordinary
+Start/Quit and corrected policy/runtime-generation probe supplied the accepted
+observations above. No outcome-unknown effect was replayed.
+
+The repaired app was then opened normally and left running. Process observation
+confirmed its own Go backend and tunnel-client. One live cloud
+`farol_computer_workspace_catalogue` invocation returned `status: ok` and five
+workspaces through the actual Secure MCP Tunnel, request
+`39300866-d453-4662-98b3-4e7d70a6d5ff`, backend generation
+`1e57e0d5d087a66cea64c87f9b2a5bdd`. The catalogue read no workspace file contents;
+it proves this connection lifetime, not provider Send, mutations or an hour-long
+soak. Browser and credential storage were preserved; no new sign-in or provider
+conversation was performed for this repair.
+
+Final evidence is deliberately separated from acceptance of the whole alpha:
+
+- Root coverage passed 11,787 tests in 500 files; 12 existing skips and two todos
+  remain. Renderer coverage passed 910 tests in 17 files. Type checks, lint,
+  formatting, architecture and the exact-source Hunt report completed.
+- The original `task ci:fast` reached Go race but failed the cancellation branch
+  of `TestNativeConnectorSocketCloseOrCancelTerminatesExactStreams`. Its helper
+  requires immediate EOF and can encounter a buffered original owner terminal
+  response. That is a possible explanation, not captured-frame proof. The exact
+  unchanged isolated test passed 100 race repetitions; the full `task test:core`
+  recheck then passed root/nested race and vet, generated/import checks, 169
+  protocol tests and strict bridge compilation. The failed aggregate receipt is
+  retained rather than relabelled as a passed invocation.
+- Sealed-package read-only MCP passed with a disposable workspace. The additional
+  packaged guided-Setup behavior journey failed its optional Sign in expectation:
+  actual `unknown / Current sign-in is unknown`, expected `needed / Not checked`.
+  Its owned exits settled, with no cleanup uncertainty. It is not a passing
+  Setup or external-attachment qualification.
+- Output layout checks passed. The repair commit range and current working tree
+  secret scans passed. The all-ref history scan failed with five generic-key
+  matches in two other commits; only fully redacted metadata was retained and
+  prepared for the Lead. It remains a separate history gate requiring disposition.
+- Installed updater status still reports `UPDATE_RETAINED_PACKAGE_INVALID` with
+  recovery required. No retained update was activated, discarded or retried.
+  The unknown beta.3 backend exit and stale readiness also require independent
+  failure diagnosis and regression coverage in the cloud development candidate.
+
+The selected cloud `Farol · Final Sync` received the exact production patch and
+the additional native/Setup findings under the owner's explicit handoff grant.
+Local commits, package, installed repair and this one live transport success do
+not constitute a release, remote push, or whole-alpha acceptance. Documentation
+commits after the installed source SHA do not change the installed build identity.
+
 ## Confirmed incident
 
 On 2026-10-10, one hidden launch of the owner's installed Farol exited with
@@ -225,7 +297,7 @@ This document is a prepared handoff; no message to another task is implied.
 Source tests, installed launch, working connector and live provider use require
 separate evidence.
 
-## Diagnostic-fix verification
+## Earlier diagnostic-only verification
 
 At the inspected source base plus this document's companion change, Node
 `24.20.0` ran 72 passing tests across `desktop-startup-failure.test.ts`,
@@ -234,6 +306,8 @@ production lint, owned-file Prettier check and `git diff --check` passed.
 The source change has R0 scope: error-remedy text with regression coverage;
 it changes no profile storage, admission, retirement, retry or execution policy.
 Those checks do not establish full CI, a new package or installation. The
-installed working-profile restart and Stop-before-Quit workaround have the
-separate, bounded witnesses above. Shutdown recurrence prevention and current
-source native qualification remain open.
+installed working-profile restart and Stop-before-Quit workaround had the
+separate, bounded witnesses above. At that earlier stage, shutdown recurrence
+prevention and current source native qualification were still open. The later
+normal-Quit repair and its separate installed/live evidence are recorded first
+in this document.
