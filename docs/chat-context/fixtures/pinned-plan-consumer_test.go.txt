@@ -1,0 +1,179 @@
+// Disposable fixture only. Copy alongside the owned composition_test.go in an
+// isolated checkout of INFERENCE e2824968b72fb891774a4cdda7f0beaa2c893842.
+// Never add that checkout's INFERENCE files to the CONTEXT product branch.
+package contextcheckpoint_test
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"io"
+	"net/http"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/legrch/farol/modules/chat/app/services/inference"
+	cb "github.com/legrch/farol/modules/chat/domain/contextbudget"
+	"github.com/legrch/farol/modules/chat/infra/clients/planresponses"
+	"github.com/legrch/farol/modules/chat/infra/intent"
+)
+
+type pinnedRoundTrip func(*http.Request) (*http.Response, error)
+
+func (f pinnedRoundTrip) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+type pinnedPorts struct {
+	now                                     uint64
+	original                                inference.Binding
+	reservations, credentials, publications int
+}
+
+func (p *pinnedPorts) NowMillis() uint64 { return p.now }
+func (p *pinnedPorts) Limit(ctx context.Context, _ uint64) (context.Context, context.CancelFunc, error) {
+	c, cancel := context.WithCancel(ctx)
+	return c, cancel, nil
+}
+func (p *pinnedPorts) WithCurrent(_ context.Context, b inference.Binding, fn func() error) error {
+	if b != p.original {
+		return inference.Withdrawn
+	}
+	return fn()
+}
+func (p *pinnedPorts) Reserve(_ context.Context, _ inference.Binding, _ string) (bool, error) {
+	p.reservations++
+	return true, nil
+}
+func (p *pinnedPorts) Settle(context.Context, inference.Binding, inference.Outcome) error { return nil }
+func (p *pinnedPorts) Publish(inference.Binding, inference.Outcome) error {
+	p.publications++
+	return nil
+}
+func (p *pinnedPorts) Acquire(_ context.Context, s inference.Selection) (inference.Credential, error) {
+	p.credentials++
+	return inference.Credential{Account: s.Account, AccessToken: "controlled-fixture-token", Generation: 1, ExpiresAtMillis: p.now + 120000, RequestedScopes: []string{"resource.invoke", "chatgpt.tokens.use.direct"}, GrantedScopes: []string{"resource.invoke", "chatgpt.tokens.use.direct"}}, nil
+}
+
+func TestPinnedActualPlanConsumerReadback(t *testing.T) {
+	f := compose(t, 1000)
+	p := prepare(t, f)
+	_, v := planView(t, f, p)
+	items := make([]inference.InputItem, len(v.Items))
+	for n, i := range v.Items {
+		items[n] = inference.InputItem{Kind: i.Kind, Role: i.Role, Content: i.Content, CallID: i.CallID, Name: i.Name, Arguments: i.Arguments}
+	}
+	hash, err := inference.InputHash(intent.SHA256{}, items)
+	if err != nil || hash != v.Receipt.InputHash {
+		t.Fatal("actual ordered InputHash mismatch", hash, err)
+	}
+	now := uint64(time.Now().UnixMilli())
+	b := inference.Binding{OperationID: "fixture-inference-operation", ProfileID: v.Receipt.Source.Binding.ProfileID, BackendGeneration: v.Receipt.Source.Binding.BackendGeneration, OwnerID: v.Receipt.Source.Binding.OwnerID, SessionID: "session", Selection: inference.Selection{Backend: inference.PlanBackend, Account: inference.AccountIdentity{Issuer: "https://auth.openai.com", Subject: "account", ClientID: "fixture-client", HostID: "urn:uuid:fixture-host", Epoch: 1}, ConsentID: "fixture-consent", ConsentRevision: 1, Model: inference.ModelSelection{Slug: "model", Effort: "high", CapabilityEvidence: "fixture-capability", CatalogueEpoch: 1}}, Context: inference.ContextSelection{CheckpointID: v.Receipt.CheckpointID, InputHash: v.Receipt.InputHash, EstimatedTokens: v.Receipt.EstimatedTokens, TokenLimit: v.Receipt.TokenLimit}, DeadlineMillis: now + 60000}
+	calls := 0
+	client := planresponses.New(&http.Client{Transport: pinnedRoundTrip(func(r *http.Request) (*http.Response, error) {
+		calls++
+		raw, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(raw, v.ProviderJSON) {
+			t.Fatal("actual HTTP body differs from producer budgeted bytes")
+		}
+		hash, _ := intent.SHA256{}.Digest(raw)
+		if hash != v.Receipt.ProviderHash {
+			t.Fatal("actual provider digest differs")
+		}
+		var body struct {
+			Input []struct {
+				Type   string `json:"type"`
+				CallID string `json:"call_id"`
+				Output string `json:"output"`
+			} `json:"input"`
+		}
+		if json.Unmarshal(raw, &body) != nil {
+			t.Fatal("wire decoding")
+		}
+		found := false
+		for _, i := range body.Input {
+			if i.Type == "function_call_output" && i.CallID == v.Window.Unresolved[0].CallID {
+				var data struct {
+					SourceOutcome   cb.Outcome `json:"source_outcome"`
+					ToolOperationID string     `json:"tool_operation_id"`
+					ResultEventID   string     `json:"result_event_id"`
+					Turn            cb.Turn    `json:"original_turn"`
+				}
+				u := v.Window.Unresolved[0]
+				if json.Unmarshal([]byte(i.Output), &data) != nil || data.SourceOutcome != cb.Unknown || data.ToolOperationID != u.ToolOperationID || data.ResultEventID != u.ResultEventID || data.Turn != u.Turn {
+					t.Fatal("actual provider lost exact UNKNOWN correlation")
+				}
+				found = true
+			}
+		}
+		if !found {
+			t.Fatal("actual request became tool-free")
+		}
+		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: io.NopCloser(strings.NewReader("data: {\"type\":\"response.created\",\"response\":{\"id\":\"fixture-response\",\"status\":\"in_progress\"}}\n\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"fixture-response\",\"status\":\"completed\"}}\n\n"))}, nil
+	})})
+	ports := &pinnedPorts{now: now, original: b}
+	svc, err := inference.New(inference.Options{Clock: ports, Deadline: ports, Digester: intent.SHA256{}, Credentials: ports, Transport: client, Authority: ports, Ledger: ports, Publication: ports})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A reordered but complete input cannot use the original accepted hash.
+	reordered := append([]inference.InputItem{}, items...)
+	reordered[0], reordered[1] = reordered[1], reordered[0]
+	if got := svc.Infer(context.Background(), b, reordered); got.State != inference.NotSent || got.Code != inference.Invalid || ports.reservations != 0 || calls != 0 {
+		t.Fatal("reordered request consumed original receipt", got)
+	}
+	changed := append([]inference.InputItem{}, items...)
+	changed[1].Content = "caller mutation"
+	if got := svc.Infer(context.Background(), b, changed); got.State != inference.NotSent || ports.reservations != 0 || calls != 0 {
+		t.Fatal("changed bytes consumed receipt", got)
+	}
+	if got := svc.Infer(context.Background(), b, items); got.State != inference.Completed || calls != 1 || ports.reservations != 1 || ports.publications != 1 {
+		t.Fatal("actual producer/consumer fixture failed", got, calls)
+	}
+	if len(v.Window.Unresolved) != 1 || v.Window.Unresolved[0].ToolOperationID != "tool-1" {
+		t.Fatal("lost exact UNKNOWN identity")
+	}
+	// Correlated UNKNOWN is historical data, not a tool execution capability.
+	var decoded map[string]json.RawMessage
+	if json.Unmarshal(v.ProviderJSON, &decoded) != nil || decoded["tools"] != nil || decoded["previous_response_id"] != nil {
+		t.Fatal("unexpected execution/storage dependency")
+	}
+	t.Logf("fixture consumption: %d items, %d input bytes, %d HTTP bytes, InputHash=%s, ProviderHash=%s, exact UNKNOWN tool-1; token limit %d after reservation %d", len(items), len(v.InputJSON), len(v.ProviderJSON), v.Receipt.InputHash, v.Receipt.ProviderHash, v.Receipt.TokenLimit, v.Receipt.Policy.Reserve.EstimatedTokens)
+}
+
+func TestPinnedMinimalIncompatibilityRefusesWithoutToolFreeFallback(t *testing.T) {
+	f := compose(t, 3)
+	p := prepare(t, f)
+	raw, err := f.service.Materialize(context.Background(), p, binding())
+	if err != nil {
+		t.Fatal(err)
+	}
+	unmapped := []inference.InputItem{{Kind: "message", Role: raw.Body.Input[0].Role, Content: raw.Body.Input[0].Content[0].Text}}
+	model := inference.ModelSelection{Slug: "model", Effort: "high", CapabilityEvidence: "fixture-capability", CatalogueEpoch: 1}
+	if inference.ValidateRequest(inference.Request{Model: model, Input: unmapped}) != inference.Invalid {
+		t.Fatal("system role unexpectedly compatible")
+	}
+	f2 := compose(t, 1)
+	for i, e := range f2.original.snapshot.Source.Events {
+		if e.Kind == "function_call" {
+			f2.original.snapshot.Source.Events[i].Text = `{"x":1,"x":2}`
+		}
+	}
+	_, v := planView(t, f2, prepare(t, f2))
+	items := make([]inference.InputItem, len(v.Items))
+	for n, i := range v.Items {
+		items[n] = inference.InputItem{Kind: i.Kind, Role: i.Role, Content: i.Content, CallID: i.CallID, Name: i.Name, Arguments: i.Arguments}
+	}
+	calls := 0
+	client := planresponses.New(&http.Client{Transport: pinnedRoundTrip(func(*http.Request) (*http.Response, error) {
+		calls++
+		t.Fatal("ambiguous argument reached HTTP")
+		return nil, nil
+	})})
+	got := client.Infer(context.Background(), inference.Credential{AccessToken: "controlled-fixture-token"}, inference.Request{Model: model, Input: items, DeadlineMillis: uint64(time.Now().Add(time.Minute).UnixMilli())})
+	if got.State != inference.NotSent || got.Code != inference.Invalid || calls != 0 {
+		t.Fatal("ambiguous call became tool-free success", got)
+	}
+}

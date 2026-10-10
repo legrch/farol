@@ -66,6 +66,17 @@ func (g *TaskIngress) Methods() map[string]desktop.Method {
 		}
 		return taskWireMutation(value)
 	})
+	add("task.message", "TaskMessage", func(ctx context.Context, r desktop.Request) (*desktop.Outcome, error) {
+		var in wire.TaskMessage
+		if json.Unmarshal(r.Body, &in) != nil {
+			return invalidIngress()
+		}
+		value, err := g.Message(ctx, r.OperationID, TaskIngressMessageRequest{DispatchID: in.DispatchId, Message: in.Message})
+		if err != nil {
+			return taskWireFailure(err)
+		}
+		return taskWireMutation(value)
+	})
 	// Explicit provider observation is a read: it cannot issue a new provider turn.
 	// Its selected owner may retain observed state; unknown never becomes dispatch.
 	add("task.observe", "Empty", func(ctx context.Context, _ desktop.Request) (*desktop.Outcome, error) {

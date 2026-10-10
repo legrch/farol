@@ -223,6 +223,9 @@ func (j *Filesystem) Admit(ctx context.Context, i task.Intent, revision uint64, 
 		if before.Revision == ^uint64(0) {
 			return false, task.ErrUnavailable
 		}
+		if err := filesystemWorkflowCapacity(image, i); err != nil {
+			return false, err
+		}
 		op := port.Operation{Intent: i, Receipt: task.Receipt{State: task.Uncertain}}
 		before.Task, before.Pending = prepared, i.OperationID
 		before.Revision++

@@ -1,7 +1,9 @@
 """Descriptor-bound Farol Next preview promotion helper.
 
 The reviewed Node launcher sends these exact bytes to ``/usr/bin/python3 -``
-and one bounded JSON request on descriptor 3.  The helper opens the owner's
+and one bounded JSON request on descriptor 3. Descriptor 6 inherits the original
+exclusive kernel lease and stays open through cleanup and process exit, including
+when its parent dies. The helper opens the owner's
 home and Applications directories component by component, changes directory
 through the verified Applications descriptor, and performs every mutation
 relative to that pinned directory.  Failures are content-free exit statuses.
@@ -39,6 +41,7 @@ EXIT_EXISTS = 72
 EXIT_COPY = 73
 EXIT_DIGEST = 74
 EXIT_RECEIPT = 75
+EXIT_LEASE = 76
 EXIT_INTERNAL = 79
 
 DIRECTORY_FLAGS = (
@@ -89,12 +92,31 @@ def read_request():
         "artifactSha256",
         "receiptText",
         "testHook",
+        "lease",
     }:
         refuse(EXIT_INVALID)
     if request.get("schema") != "farol.next.promotion-apply/1":
         refuse(EXIT_INVALID)
     if not isinstance(request.get("testHook"), bool):
         refuse(EXIT_INVALID)
+    lease = request.get("lease")
+    if not isinstance(lease, dict) or set(lease) != {"file", "device", "inode"}:
+        refuse(EXIT_INVALID)
+    components(lease.get("file"))
+    if (
+        os.path.basename(lease["file"]) != "promotion.lease"
+        or os.path.basename(os.path.dirname(lease["file"])) != "farol-next-state"
+    ):
+        refuse(EXIT_INVALID)
+    for key in ("device", "inode"):
+        value = lease.get(key)
+        if (
+            not isinstance(value, str)
+            or not value
+            or len(value) > 32
+            or any(character not in "0123456789" for character in value)
+        ):
+            refuse(EXIT_INVALID)
     digest = request.get("artifactSha256")
     if (
         not isinstance(digest, str)
@@ -139,6 +161,35 @@ def components(value):
 
 def identity(info):
     return (info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_gid)
+
+
+def verify_inherited_lease(request):
+    """Fence the inherited original descriptor without reopening or unlocking it."""
+    lease = request["lease"]
+    try:
+        opened = os.fstat(6)
+        named = os.stat(lease["file"], follow_symlinks=False)
+        parent = os.stat(os.path.dirname(lease["file"]), follow_symlinks=False)
+        expected = (int(lease["device"]), int(lease["inode"]))
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or not stat.S_ISREG(named.st_mode)
+            or opened.st_nlink != 1
+            or named.st_nlink != 1
+            or opened.st_uid != os.geteuid()
+            or named.st_uid != os.geteuid()
+            or (opened.st_mode & 0o077) != 0
+            or (named.st_mode & 0o077) != 0
+            or (opened.st_dev, opened.st_ino) != expected
+            or (named.st_dev, named.st_ino) != expected
+            or not stat.S_ISDIR(parent.st_mode)
+            or parent.st_uid != os.geteuid()
+            or (parent.st_mode & 0o077) != 0
+            or os.path.realpath(lease["file"]) != lease["file"]
+        ):
+            refuse(EXIT_LEASE)
+    except OSError:
+        refuse(EXIT_LEASE)
 
 
 def open_directory(parent_fd, name):
@@ -477,6 +528,7 @@ def test_hook(enabled):
 
 
 def run(request):
+    verify_inherited_lease(request)
     home_fd = open_absolute_directory(request["home"])
     parent_fd = None
     source_fd = None
@@ -485,6 +537,7 @@ def run(request):
     destination_created = False
     completed = False
     try:
+        verify_inherited_lease(request)
         try:
             os.mkdir("Applications", 0o755, dir_fd=home_fd)
         except OSError as error:
@@ -503,6 +556,7 @@ def run(request):
                 refuse(EXIT_PATH)
             refuse(EXIT_EXISTS)
         source_fd = open_absolute_directory(request["source"])
+        verify_inherited_lease(request)
         try:
             os.mkdir(APP_NAME, 0o700, dir_fd=parent_fd)
         except OSError as error:
@@ -512,12 +566,14 @@ def run(request):
         destination_created = True
         destination_fd = open_directory(parent_fd, APP_NAME)
         destination_identity = identity(os.fstat(destination_fd))
+        verify_inherited_lease(request)
         copy_tree(source_fd, destination_fd, {"entries": 0, "bytes": 0})
         os.fchmod(destination_fd, 0o755)
         destination_identity = identity(os.fstat(destination_fd))
         if digest_tree(destination_fd) != request["artifactSha256"]:
             refuse(EXIT_DIGEST)
         os.fsync(destination_fd)
+        verify_inherited_lease(request)
         write_receipt(parent_fd, request["receiptBytes"])
         completed = True
         os.write(1, MAGIC)

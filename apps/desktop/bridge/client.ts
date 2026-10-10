@@ -52,6 +52,81 @@ export type ChildTerminalObservation = Readonly<{
   forced: boolean;
 }>;
 
+export type BackendLifecycleObservation = Readonly<{
+  source: "go-backend";
+  phase: "startup" | "active" | "closing";
+  event: "failure" | "child-close" | "cleanup-unknown";
+  code: BackendLifecycleCode;
+  state: "observed" | "outcome_unknown" | "unavailable";
+  exitCode: number | null;
+  signal: NodeJS.Signals | null;
+  forced: boolean;
+  hostLifetimeId: string | null;
+  childLaunchId: string | null;
+}>;
+const lifecycleCodeValues = [
+  "protocol_violation",
+  "transport_ended",
+  "truncated_frame",
+  "transport_failed",
+  "backend_unavailable",
+  "response_timeout",
+  "stale_event_context",
+  "event_stream_budget",
+  "event_sequence_regression",
+  "invalid_response",
+  "crossed_response_id",
+  "crossed_response_context",
+  "invalid_backend_identity",
+  "wrong_backend_identity",
+  "handshake_refused",
+  "client_closed",
+] as const;
+type BackendLifecycleCode =
+  | (typeof lifecycleCodeValues)[number]
+  | "backend_unclassified_failure"
+  | "backend_child_closed"
+  | "backend_cleanup_unconfirmed";
+const lifecycleCodes = new Set<string>(lifecycleCodeValues);
+const lifecycleSignals = new Set([
+  "SIGHUP",
+  "SIGINT",
+  "SIGQUIT",
+  "SIGILL",
+  "SIGTRAP",
+  "SIGABRT",
+  "SIGIOT",
+  "SIGBUS",
+  "SIGFPE",
+  "SIGKILL",
+  "SIGUSR1",
+  "SIGSEGV",
+  "SIGUSR2",
+  "SIGPIPE",
+  "SIGALRM",
+  "SIGTERM",
+  "SIGSTKFLT",
+  "SIGCHLD",
+  "SIGCONT",
+  "SIGSTOP",
+  "SIGTSTP",
+  "SIGTTIN",
+  "SIGTTOU",
+  "SIGURG",
+  "SIGXCPU",
+  "SIGXFSZ",
+  "SIGVTALRM",
+  "SIGPROF",
+  "SIGWINCH",
+  "SIGIO",
+  "SIGPOLL",
+  "SIGPWR",
+  "SIGSYS",
+  "SIGINFO",
+  "SIGEMT",
+  "SIGBREAK",
+]);
+
 // Trusted Electron host only. No renderer IPC, endpoint discovery or automatic restart.
 export class Client {
   private decoder = new Decoder();
@@ -83,11 +158,45 @@ export class Client {
   private resourceError: BridgeError | undefined;
   private cleanup: "none" | "pending" | "confirmed" | "unknown" = "none";
   private retirementPrepared = false;
+  private closeRequested = false;
+  private readonly lifecycle = new Map<
+    BackendLifecycleObservation["event"],
+    BackendLifecycleObservation
+  >();
+  private readonly lifecycleIdentity:
+    Readonly<{ hostLifetimeId: string; childLaunchId: string }> | undefined;
   constructor(
     private child: ChildProcessWithoutNullStreams,
     private owned = false,
     private releaseResource?: () => void,
+    private readonly onLifecycleObservation?: (
+      observation: BackendLifecycleObservation,
+    ) => void,
+    lifecycleIdentity?: Readonly<{
+      hostLifetimeId: string;
+      childLaunchId: string;
+    }>,
   ) {
+    const safeIdentity = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/u;
+    try {
+      const fields: PropertyDescriptorMap = lifecycleIdentity
+        ? Object.getOwnPropertyDescriptors(lifecycleIdentity)
+        : {};
+      const host = fields.hostLifetimeId?.value;
+      const child = fields.childLaunchId?.value;
+      if (
+        typeof host === "string" &&
+        typeof child === "string" &&
+        safeIdentity.test(host) &&
+        safeIdentity.test(child)
+      )
+        this.lifecycleIdentity = Object.freeze({
+          hostLifetimeId: host,
+          childLaunchId: child,
+        });
+    } catch {
+      /* Missing diagnostic identity must not change launch behavior. */
+    }
     const onData = (data: Buffer): void => {
       try {
         this.decoder.push(data, (value) => this.receive(value));
@@ -125,6 +234,13 @@ export class Client {
         forced: this.forcedTermination,
       });
       this.childClosed = true;
+      this.observeLifecycle(
+        "child-close",
+        "backend_child_closed",
+        "observed",
+        exitCode,
+        signal,
+      );
       this.fail("backend_unavailable");
     };
     child.stdout.on("data", onData);
@@ -233,6 +349,55 @@ export class Client {
   }
   get diagnosticByteCount(): number {
     return this.diagnosticBytes;
+  }
+  get lifecycleObservations(): readonly BackendLifecycleObservation[] {
+    return Object.freeze([...this.lifecycle.values()]);
+  }
+  private observeLifecycle(
+    event: BackendLifecycleObservation["event"],
+    code: BackendLifecycleCode,
+    state: BackendLifecycleObservation["state"],
+    exitCode: unknown = null,
+    signal: unknown = null,
+  ): void {
+    if (this.lifecycle.has(event)) return;
+    const safeExitCode =
+      typeof exitCode === "number" &&
+      Number.isInteger(exitCode) &&
+      exitCode >= -2147483648 &&
+      exitCode <= 2147483647
+        ? exitCode
+        : null;
+    const safeSignal =
+      typeof signal === "string" && lifecycleSignals.has(signal)
+        ? (signal as NodeJS.Signals)
+        : null;
+    const terminalKnown = (safeExitCode === null) !== (safeSignal === null);
+    const observation: BackendLifecycleObservation = Object.freeze({
+      source: "go-backend",
+      phase: this.closeRequested
+        ? "closing"
+        : this.context
+          ? "active"
+          : "startup",
+      event,
+      code,
+      state:
+        event === "child-close" && !terminalKnown ? "outcome_unknown" : state,
+      exitCode: terminalKnown ? safeExitCode : null,
+      signal: terminalKnown ? safeSignal : null,
+      forced: this.forcedTermination,
+      hostLifetimeId: this.lifecycleIdentity?.hostLifetimeId ?? null,
+      childLaunchId: this.lifecycleIdentity?.childLaunchId ?? null,
+    });
+    this.lifecycle.set(event, observation);
+    try {
+      void Promise.resolve(this.onLifecycleObservation?.(observation)).catch(
+        () => undefined,
+      );
+    } catch {
+      // Diagnostics cannot alter original cleanup, admission or UNKNOWN.
+    }
   }
   private send(
     method: string,
@@ -482,6 +647,13 @@ export class Client {
   ): void {
     if (this.stopped) return;
     this.stopped = true;
+    this.observeLifecycle(
+      "failure",
+      lifecycleCodes.has(code)
+        ? (code as BackendLifecycleCode)
+        : "backend_unclassified_failure",
+      state === "unavailable" ? "unavailable" : "outcome_unknown",
+    );
     for (const pending of this.pending.values()) {
       clearTimeout(pending.timer);
       pending.reject(new BridgeError(state, code));
@@ -521,6 +693,11 @@ export class Client {
       const deadline = setTimeout(() => {
         clearTimeout(kill);
         this.cleanup = "unknown";
+        this.observeLifecycle(
+          "cleanup-unknown",
+          "backend_cleanup_unconfirmed",
+          "outcome_unknown",
+        );
         reject(new BridgeError("unknown", "backend_cleanup_unconfirmed"));
       }, 2000);
       this.child.once("close", () => {
@@ -551,6 +728,7 @@ export class Client {
     if (this.resourceError) throw this.resourceError;
   }
   async close(): Promise<void> {
+    this.closeRequested = true;
     this.fail("client_closed");
     this.listeners.clear();
     await this.cleanupOwned();
@@ -584,6 +762,9 @@ export interface NativeCoreLaunch {
   readonly previousHostDrainConfirmed?: boolean;
   readonly hostLifetimeId?: string;
   readonly childLaunchId?: string;
+  readonly onLifecycleObservation?: (
+    observation: BackendLifecycleObservation,
+  ) => void;
 }
 
 export async function spawnCore(
@@ -680,7 +861,18 @@ export async function spawnCore(
     release();
     throw error;
   }
-  const client = new Client(child, true, release);
+  const client = new Client(
+    child,
+    true,
+    release,
+    native?.onLifecycleObservation,
+    native?.hostLifetimeId !== undefined && native.childLaunchId !== undefined
+      ? {
+          hostLifetimeId: native.hostLifetimeId,
+          childLaunchId: native.childLaunchId,
+        }
+      : undefined,
+  );
   try {
     await client.handshake(
       { protocolMajor, protocolMinor, buildId, profileId },

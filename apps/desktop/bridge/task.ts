@@ -11,6 +11,7 @@ import {
   type TaskCreate,
   type TaskContinue,
   type TaskResume,
+  type TaskMessage,
   type TaskDispatchRequest,
   type TaskOperationRequest,
   type TaskObservationRequest,
@@ -33,6 +34,7 @@ type TaskRequest =
   | TaskCreate
   | TaskContinue
   | TaskResume
+  | TaskMessage
   | TaskDispatchRequest
   | TaskOperationRequest
   | TaskObservationRequest;
@@ -107,6 +109,15 @@ export class TaskBridge {
       operationId,
     );
   }
+  message(request: TaskMessage, operationId: string): Promise<TaskMutation> {
+    return this.call(
+      "message",
+      "TaskRoutedMessage",
+      request,
+      "TaskMutation",
+      operationId,
+    );
+  }
   observe(): Promise<TaskStatus> {
     return this.call("observe", "TaskRoutedRequest", undefined, "TaskStatus");
   }
@@ -155,7 +166,10 @@ export class TaskBridge {
     // after it for this transport ACK. Read bodies/budgets remain unchanged.
     const invokedAt = Date.now();
     const effect =
-      method === "create" || method === "continue" || method === "resume";
+      method === "create" ||
+      method === "continue" ||
+      method === "resume" ||
+      method === "message";
     if (
       effect &&
       (!Number.isSafeInteger(invokedAt) ||
@@ -270,8 +284,27 @@ export class TaskBridge {
       data.taskId !== this.taskId
     )
       crossed();
-    if (method === "create" || method === "continue" || method === "resume") {
+    if (
+      method === "create" ||
+      method === "continue" ||
+      method === "resume" ||
+      method === "message"
+    ) {
       if ((data as TaskMutation).operationId !== operationId) crossed();
+      if (method === "message") {
+        const receipt = (data as TaskMutation).receipt;
+        if (
+          receipt.state === "known" &&
+          (receipt.lifecycle !== "running" ||
+            receipt.result !== "" ||
+            receipt.cancelRequested ||
+            receipt.reference.threadId === undefined ||
+            receipt.reference.turnId === undefined ||
+            receipt.reference.sessionId !== undefined ||
+            receipt.reference.invocationId !== undefined)
+        )
+          crossed();
+      }
     } else if (method === "status" || method === "result") {
       const out = data as TaskDispatch;
       if (

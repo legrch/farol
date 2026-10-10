@@ -203,6 +203,7 @@ func NewNativeRuntime(ctx context.Context, launch NativeLaunch, generation strin
 	}
 	if launch.CodexRead != nil {
 		runtime.selectNativeCodexRead(lifetime, *launch.CodexRead)
+		runtime.connector.codexRead = &connectorCodexRead{hostID: launch.CodexRead.HostID, reader: selectedCodexReadFunc(runtime.ReadSelectedCodex)}
 	}
 	return runtime, nil
 }

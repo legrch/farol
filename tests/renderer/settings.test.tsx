@@ -4,6 +4,7 @@ import { createRoot } from "react-dom/client";
 import type { Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Settings } from "../../src/ui/renderer/settings";
+import { Home } from "../../src/ui/renderer/home";
 import { Setup } from "../../src/ui/renderer/setup";
 import { WindowController } from "../../src/ui/renderer/controller";
 import type {
@@ -264,6 +265,7 @@ async function mount(
   setupStep?: "signin" | "connection" | "folders" | "attachment",
   wizard = false,
   signInState: "authenticated" | "signed_out" | "unknown" = "signed_out",
+  home = false,
 ) {
   Object.assign(globalThis.crypto, { randomUUID });
   let activeSetupStep = setupStep;
@@ -314,6 +316,8 @@ async function mount(
     const snapshot = useSyncExternalStore(c.subscribe, c.getSnapshot);
     if (wizard && snapshot.destination.area === "setup")
       return <Setup snapshot={snapshot} facade={c} />;
+    if (home && snapshot.destination.area === "home")
+      return <Home snapshot={snapshot} facade={c} />;
     return snapshot.destination.area === "settings" ? (
       <Settings snapshot={snapshot} facade={c} setupStep={activeSetupStep} />
     ) : null;
@@ -448,6 +452,120 @@ describe("compact workspace detail", () => {
   }
   const status = (h: Awaited<ReturnType<typeof mount>>) =>
     activePage(h.host).querySelector(".workspace-feedback")!;
+  it("opens Home's exact second workspace through history, refresh and removal without changing access", async () => {
+    const value = twoWorkspaces();
+    const h = await mount(
+      "folders",
+      value,
+      "preview",
+      undefined,
+      undefined,
+      false,
+      "signed_out",
+      true,
+    );
+    const configuration = h.c.getSnapshot().configuration;
+    const binding = value.setup.computer.verified;
+    await act(async () =>
+      h.c.navigate({
+        area: "home",
+        homeView: "attention",
+        homeSelection: { kind: "attention", id: `folder:${selectionId}` },
+      }),
+    );
+    expect(h.host.textContent).toContain("second needs an access check");
+    await act(async () =>
+      h.host
+        .querySelector<HTMLButtonElement>(".home-candidate-actions button")!
+        .click(),
+    );
+    const selected = () =>
+      activePage(h.host).querySelector(
+        '.workspace-choice[aria-current="true"]',
+      );
+    expect(selected()?.getAttribute("aria-label")).toBe(
+      "Select workspace second",
+    );
+    expect(
+      activePage(h.host)
+        .querySelector(".workspace-detail")
+        ?.getAttribute("aria-label"),
+    ).toBe("Workspace second");
+    expect(h.c.getSnapshot().configuration).toBe(configuration);
+    await act(async () => h.c.travel(-1));
+    expect(h.host.textContent).toContain("second needs an access check");
+    await act(async () => h.c.travel(1));
+    expect(selected()?.getAttribute("aria-label")).toBe(
+      "Select workspace second",
+    );
+    await refresh(h, structuredClone(value));
+    expect(selected()?.getAttribute("aria-label")).toBe(
+      "Select workspace second",
+    );
+    const removed = structuredClone(value);
+    removed.revision++;
+    removed.computer.workspaces = removed.computer.workspaces.filter(
+      (workspace) => workspace.workspaceId !== selectionId,
+    );
+    await refresh(h, removed);
+    expect(activePage(h.host).textContent).toContain(
+      "Selected workspace is no longer available",
+    );
+    expect(selected()).toBeNull();
+    expect(activePage(h.host).querySelector(".workspace-detail")).toBeNull();
+    const remaining = activePage(h.host).querySelector(
+      '[aria-label="Select workspace project"]',
+    )!;
+    expect(
+      document.getElementById(remaining.getAttribute("aria-controls")!)
+        ?.textContent,
+    ).toContain("Selected workspace is no longer available");
+    expect(h.c.getSnapshot().destination.workspaceId).toBe(selectionId);
+    const current = h.c.getSnapshot().configuration;
+    expect(
+      current?.status === "ready" && current.settings.setup.computer.verified,
+    ).toEqual(binding);
+    expect(h.calls()).toEqual([]);
+    expect(h.f.api.task).not.toHaveBeenCalled();
+    expect(h.f.api.snapshot).not.toHaveBeenCalled();
+    await select(h, "project");
+    expect(selected()?.getAttribute("aria-label")).toBe(
+      "Select workspace project",
+    );
+    expect(h.calls()).toEqual([]);
+  });
+  it("keeps an unavailable explicit workspace separate from a generic Workspace entry", async () => {
+    const h = await mount(
+      "folders",
+      twoWorkspaces(),
+      "preview",
+      undefined,
+      undefined,
+      false,
+      "signed_out",
+      true,
+    );
+    await act(async () =>
+      h.c.navigate({
+        area: "settings",
+        page: "folders",
+        workspaceId: "removed",
+      }),
+    );
+    expect(activePage(h.host).textContent).toContain(
+      "Selected workspace is no longer available",
+    );
+    expect(activePage(h.host).querySelector(".workspace-detail")).toBeNull();
+    await act(async () => h.c.navigate({ area: "home" }));
+    await act(async () => h.c.navigate({ area: "settings", page: "folders" }));
+    expect(
+      activePage(h.host)
+        .querySelector('.workspace-choice[aria-current="true"]')
+        ?.getAttribute("aria-label"),
+    ).toBe("Select workspace project");
+    expect(h.calls()).toEqual([]);
+    expect(h.f.api.task).not.toHaveBeenCalled();
+  });
   it("selects with native buttons and keeps active Computer binding unchanged across background updates", async () => {
     const value = twoWorkspaces();
     const h = await mount("folders", value);
@@ -506,6 +624,140 @@ describe("compact workspace detail", () => {
       { kind: "computer.add-workspace", selectionId, access: "write" },
       { kind: "connector.stop" },
     ]);
+  });
+  it.each([
+    { inspect: "second", approved: workspaceId },
+    { inspect: "project", approved: selectionId },
+  ])(
+    "keeps a newer $inspect inspection when an earlier approval finishes",
+    async ({ inspect, approved }) => {
+      const h = await mount("folders", twoWorkspaces());
+      const approval = deferred<unknown>();
+      vi.mocked(h.f.api.configure)
+        .mockResolvedValueOnce({
+          ok: true,
+          snapshot: h.configuration,
+          evidence: {
+            kind: "computer.workspace-pick",
+            selectionId,
+            displayPath: "/approved/project",
+          },
+        })
+        .mockReturnValueOnce(approval.promise);
+      await h.click("Add workspace…");
+      await select(h, inspect);
+      await act(async () =>
+        approval.resolve({
+          ok: true,
+          snapshot: h.configuration,
+          evidence: {
+            kind: "computer.workspace-selection",
+            workspaceId: approved,
+          },
+        }),
+      );
+      expect(
+        h.c.getSnapshot().intents["settings:computer.add-workspace:"],
+      ).toMatchObject({ state: "applied" });
+      expect(
+        activePage(h.host)
+          .querySelector('.workspace-choice[aria-current="true"]')
+          ?.getAttribute("aria-label"),
+      ).toBe(`Select workspace ${inspect}`);
+      expect(h.c.getSnapshot().configuration).toEqual(h.configuration);
+      expect(h.calls()).toEqual([
+        { kind: "computer.choose-workspace" },
+        { kind: "computer.add-workspace", selectionId, access: "write" },
+        { kind: "connector.stop" },
+      ]);
+    },
+  );
+  it("retains a newer workspace destination after a late approval and generic reentry", async () => {
+    const h = await mount("folders", twoWorkspaces());
+    const approval = deferred<unknown>();
+    vi.mocked(h.f.api.configure)
+      .mockResolvedValueOnce({
+        ok: true,
+        snapshot: h.configuration,
+        evidence: {
+          kind: "computer.workspace-pick",
+          selectionId,
+          displayPath: "/approved/project",
+        },
+      })
+      .mockReturnValueOnce(approval.promise);
+    await h.click("Add workspace…");
+    await act(async () =>
+      h.c.navigate({
+        area: "settings",
+        page: "folders",
+        workspaceId: selectionId,
+      }),
+    );
+    await act(async () =>
+      approval.resolve({
+        ok: true,
+        snapshot: h.configuration,
+        evidence: { kind: "computer.workspace-selection", workspaceId },
+      }),
+    );
+    expect(
+      activePage(h.host)
+        .querySelector('.workspace-choice[aria-current="true"]')
+        ?.getAttribute("aria-label"),
+    ).toBe("Select workspace second");
+    await act(async () => h.c.navigate({ workspaceId: null }));
+    expect(
+      activePage(h.host)
+        .querySelector('.workspace-choice[aria-current="true"]')
+        ?.getAttribute("aria-label"),
+    ).toBe("Select workspace second");
+    expect(
+      h.c.getSnapshot().intents["settings:computer.add-workspace:"],
+    ).toMatchObject({ state: "applied" });
+    expect(h.calls()).toHaveLength(3);
+  });
+  it("retains a newer workspace inspection after history restores the approval origin", async () => {
+    const h = await mount("folders", twoWorkspaces());
+    const approval = deferred<unknown>();
+    vi.mocked(h.f.api.configure)
+      .mockResolvedValueOnce({
+        ok: true,
+        snapshot: h.configuration,
+        evidence: {
+          kind: "computer.workspace-pick",
+          selectionId,
+          displayPath: "/approved/project",
+        },
+      })
+      .mockReturnValueOnce(approval.promise);
+    await h.click("Add workspace…");
+    const origin = h.c.getSnapshot().destination;
+    await act(async () =>
+      h.c.navigate({
+        area: "settings",
+        page: "folders",
+        workspaceId: selectionId,
+      }),
+    );
+    await act(async () => h.c.travel(-1));
+    expect(h.c.getSnapshot().destination).toBe(origin);
+    await act(async () =>
+      approval.resolve({
+        ok: true,
+        snapshot: h.configuration,
+        evidence: { kind: "computer.workspace-selection", workspaceId },
+      }),
+    );
+    expect(
+      activePage(h.host)
+        .querySelector('.workspace-choice[aria-current="true"]')
+        ?.getAttribute("aria-label"),
+    ).toBe("Select workspace second");
+    expect(
+      h.c.getSnapshot().intents["settings:computer.add-workspace:"],
+    ).toMatchObject({ state: "applied" });
+    expect(h.calls()).toHaveLength(3);
   });
   it("checks the current verified workspace read-only and retains its binding", async () => {
     const value = connectionSettings();
@@ -1694,6 +1946,33 @@ describe("bounded Settings writer", () => {
     });
     expect(h.calls()).toEqual([]);
   });
+  it.each(["theme", "accent", "typeface"] as const)(
+    "preserves earlier appearance choices before React rerenders when selecting %s",
+    async (choice) => {
+      const h = await mount("appearance");
+      await act(async () => {
+        h.button(choice === "theme" ? "Amber" : "Graphite").click();
+        if (choice === "typeface") {
+          const typeface = h.host.querySelector<HTMLSelectElement>(
+            'select[aria-label="Typeface"]',
+          )!;
+          Object.getOwnPropertyDescriptor(
+            HTMLSelectElement.prototype,
+            "value",
+          )?.set?.call(typeface, "system");
+          typeface.dispatchEvent(new Event("change", { bubbles: true }));
+        } else {
+          h.button(choice === "theme" ? "Graphite" : "Amber").click();
+        }
+      });
+      expect(h.c.getSnapshot().appearance).toEqual({
+        theme: "graphite",
+        accent: choice === "typeface" ? "iris" : "amber",
+        font: choice === "typeface" ? "system" : "geist",
+      });
+      expect(h.calls()).toEqual([]);
+    },
+  );
   it("presents the selected Appearance controls without duplicating the toolbar title", async () => {
     const h = await mount("appearance");
     const page = h.host.querySelector(".appearance-page")!;

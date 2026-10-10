@@ -6,7 +6,9 @@ import {
   Client,
   spawnCore,
   type NativeCoreLaunch,
+  type BackendLifecycleObservation,
 } from "../../apps/desktop/bridge/client.ts";
+import { Decoder, frame } from "../../apps/desktop/bridge/frame.ts";
 
 vi.mock("node:child_process", () => ({ spawn: vi.fn() }));
 
@@ -64,6 +66,172 @@ afterEach(() => {
 });
 
 describe("native backend launch binding", () => {
+  it("reports spontaneous original backend death immediately with retained phase and safe facts", async () => {
+    const { child } = fixture(false);
+    const diagnostic = vi.fn();
+    const identity = { hostLifetimeId: "host-one", childLaunchId: "child-one" };
+    const client = new Client(
+      child as unknown as ChildProcessWithoutNullStreams,
+      true,
+      undefined,
+      diagnostic,
+      identity,
+    );
+    const decoder = new Decoder();
+    child.stdin.on("data", (bytes: Buffer) =>
+      decoder.push(bytes, (request: unknown) => {
+        const original = request as { id: string };
+        child.stdout.write(
+          frame({
+            jsonrpc: "2.0",
+            id: original.id,
+            result: {
+              status: "ok",
+              requestId: original.id,
+              context: { profileId: "profile", backendGeneration: "backend" },
+              data: {
+                protocolMajor: 1,
+                protocolMinor: 0,
+                buildId: "build",
+                profileId: "profile",
+                backendGeneration: "backend",
+                capabilities: [],
+                maxFrameBytes: 1048576,
+              },
+            },
+          }),
+        );
+      }),
+    );
+    vi.mocked(Client.prototype.handshake).mockRestore();
+    await client.handshake(
+      {
+        protocolMajor: 1,
+        protocolMinor: 0,
+        buildId: "build",
+        profileId: "profile",
+      },
+      1000,
+    );
+    identity.hostLifetimeId = "mutated-host";
+    child.stderr.write("private account transcript secret path");
+    child.emit("close", null, "SIGTERM");
+    expect(diagnostic.mock.calls[0]?.[0]).toEqual({
+      source: "go-backend",
+      phase: "active",
+      event: "child-close",
+      code: "backend_child_closed",
+      state: "observed",
+      exitCode: null,
+      signal: "SIGTERM",
+      forced: false,
+      hostLifetimeId: "host-one",
+      childLaunchId: "child-one",
+    });
+    expect(client.lifecycleObservations).toHaveLength(2);
+    expect(Object.isFrozen(client.lifecycleObservations[0])).toBe(true);
+    expect(JSON.stringify(diagnostic.mock.calls)).not.toMatch(
+      /private|account|transcript|secret|path|mutated/,
+    );
+    await client.close();
+    expect(child.kill).not.toHaveBeenCalled();
+  });
+  it("preserves requested-close and cleanup UNKNOWN evidence through late close and throwing sink", async () => {
+    vi.useFakeTimers();
+    const { child, native } = fixture(false);
+    const diagnostic = vi.fn<
+      (observation: BackendLifecycleObservation) => void
+    >(() => {
+      throw new Error("private diagnostic failure");
+    });
+    const client = await spawnCore("/owned/backend", "profile", "test", 1000, {
+      ...native,
+      hostLifetimeId: "host-one",
+      childLaunchId: "child-one",
+      onLifecycleObservation: diagnostic,
+    });
+    const closing = expect(client.closeAndObserve()).rejects.toMatchObject({
+      code: "backend_cleanup_unconfirmed",
+    });
+    await vi.advanceTimersByTimeAsync(2001);
+    await closing;
+    expect(
+      diagnostic.mock.calls.map(([value]) => [
+        value.phase,
+        value.event,
+        value.code,
+      ]),
+    ).toEqual([
+      ["closing", "failure", "client_closed"],
+      ["closing", "cleanup-unknown", "backend_cleanup_unconfirmed"],
+    ]);
+    child.emit("close", 0, null);
+    expect(diagnostic.mock.calls[2]?.[0]).toMatchObject({
+      phase: "closing",
+      event: "child-close",
+      exitCode: 0,
+      signal: null,
+      forced: true,
+    });
+    await expect(client.closeAndObserve()).rejects.toMatchObject({
+      code: "backend_cleanup_unconfirmed",
+    });
+    expect(diagnostic).toHaveBeenCalledTimes(3);
+    expect(child.kill).toHaveBeenCalledExactlyOnceWith("SIGKILL");
+  });
+  it("retains startup failure and sanitizes malformed terminal diagnostic facts", async () => {
+    const { child } = fixture(false);
+    const diagnostic = vi.fn();
+    const client = new Client(
+      child as unknown as ChildProcessWithoutNullStreams,
+      true,
+      undefined,
+      diagnostic,
+    );
+    child.emit("error", new Error("private credential content"));
+    expect(diagnostic.mock.calls[0]?.[0]).toMatchObject({
+      phase: "startup",
+      event: "failure",
+      code: "backend_unavailable",
+      state: "outcome_unknown",
+    });
+    child.emit("close", Number.NaN, "private signal content");
+    expect(diagnostic.mock.calls[1]?.[0]).toMatchObject({
+      phase: "startup",
+      event: "child-close",
+      state: "outcome_unknown",
+      exitCode: null,
+      signal: null,
+    });
+    expect(JSON.stringify(diagnostic.mock.calls)).not.toMatch(
+      /private|credential/,
+    );
+    await client.close();
+    expect(child.kill).not.toHaveBeenCalled();
+  });
+  it("isolates rejected async lifecycle diagnostics from original backend closure", async () => {
+    const { child } = fixture(false);
+    const diagnostic = vi.fn(async () => {
+      throw new Error("private async diagnostic failure");
+    });
+    const client = new Client(
+      child as unknown as ChildProcessWithoutNullStreams,
+      true,
+      undefined,
+      diagnostic,
+    );
+    child.emit("close", 17, null);
+    await client.close();
+    await Promise.resolve();
+    expect(diagnostic).toHaveBeenCalledTimes(2);
+    expect(client.lifecycleObservations[0]).toMatchObject({
+      phase: "startup",
+      event: "child-close",
+      exitCode: 17,
+      signal: null,
+    });
+    expect(child.kill).not.toHaveBeenCalled();
+  });
   it("retains the exact close event independently of mutable child status fields", async () => {
     const { child, native } = fixture();
     const client = await spawnCore(

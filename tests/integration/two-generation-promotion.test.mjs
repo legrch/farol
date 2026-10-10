@@ -4,6 +4,10 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { treeDigest } from "../../tooling/artifact-digest.mjs";
 import { runPromotionApply } from "../../tooling/promotion-apply.mjs";
+import {
+  acquirePromotionLease,
+  releasePromotionLease,
+} from "../../tooling/promotion-lease.mjs";
 import { assertPromotionDestination } from "../../tooling/promotion-destination.mjs";
 import {
   PRODUCT_APP_NAME,
@@ -26,8 +30,13 @@ import { latestPredecessorDirectory } from "../e2e/predecessor-package-path.mjs"
 const nextRoot = path.resolve(import.meta.dirname, "../..");
 const enabled = process.env.FAROL_NEXT_TWO_GENERATION === "1";
 const roots = [];
+const unclosedChildren = new Set();
 
 afterEach(async () => {
+  if (unclosedChildren.size !== 0)
+    throw new Error(
+      `PROMOTION_FIXTURE_CHILD_CLOSE_UNCONFIRMED:${roots.join(",")}`,
+    );
   await Promise.all(
     roots
       .splice(0)
@@ -80,17 +89,39 @@ describe("Q-07/Q-08 two identified generations", () => {
         source: a.app,
         destination: path.join(home, "Applications", PRODUCT_APP_NAME),
       });
-      const promote = (generation_) =>
-        runPromotionApply({
-          home,
-          source: generation_.app,
-          artifactSha256: generation_.artifactSha256,
-          receiptText: `${JSON.stringify({
-            operation: "applied",
-            buildId: generation_.buildId,
+      const promote = async (generation_) => {
+        const lease = await acquirePromotionLease(
+          path.join(home, "promotion-userdata"),
+          generation_.buildId,
+          "promotion",
+        );
+        if (!lease) throw new Error("PROMOTION_LEASE_HELD");
+        let originalClose;
+        try {
+          return await runPromotionApply({
+            lease,
+            onChildStarted: (closed) => {
+              originalClose = closed;
+              unclosedChildren.add(closed);
+              void closed.then(() => {
+                unclosedChildren.delete(closed);
+              });
+            },
+            home,
+            source: generation_.app,
             artifactSha256: generation_.artifactSha256,
-          })}\n`,
-        });
+            receiptText: `${JSON.stringify({
+              operation: "applied",
+              buildId: generation_.buildId,
+              artifactSha256: generation_.artifactSha256,
+            })}\n`,
+          });
+        } finally {
+          if (originalClose && unclosedChildren.has(originalClose))
+            void originalClose.then(() => releasePromotionLease(lease));
+          else await releasePromotionLease(lease);
+        }
+      };
 
       // A is placed and verified as itself.
       await promote(a);

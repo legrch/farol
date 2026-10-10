@@ -16,9 +16,197 @@ const HEALTH_URL_FILE = "health.url";
 const PID_FILE = "tunnel-client.pid";
 const TUNNEL_EXITED = "farol-tunnel-exited-v1";
 const TUNNEL_UNKNOWN = "farol-tunnel-unknown-v1";
+const TUNNEL_TERMINAL = "farol-tunnel-terminal-v1";
+
+export type ConnectorChildLifecycleObservation = Readonly<{
+  source: "connector-tunnel" | "connector-anchor";
+  event:
+    | "exit"
+    | "close"
+    | "error"
+    | "disconnect"
+    | "invalid-receipt"
+    | "cleanup-unknown";
+  code:
+    | "CONNECTOR_TUNNEL_EXIT"
+    | "CONNECTOR_TUNNEL_ERROR"
+    | "CONNECTOR_TUNNEL_RECEIPT_INVALID"
+    | "CONNECTOR_ANCHOR_EXIT"
+    | "CONNECTOR_ANCHOR_CLOSE"
+    | "CONNECTOR_ANCHOR_ERROR"
+    | "CONNECTOR_IPC_DISCONNECTED"
+    | "CONNECTOR_STOP_UNCONFIRMED";
+  state: "observed" | "outcome_unknown";
+  exitCode: number | null;
+  signal: NodeJS.Signals | null;
+  forced: boolean;
+}>;
+export type ConnectorRuntimeLifecycleObservation =
+  ConnectorChildLifecycleObservation &
+    Readonly<{
+      phase: "startup" | "active" | "closing";
+      runtimeGeneration: string;
+    }>;
+const terminalSignals = new Set([
+  "SIGHUP",
+  "SIGINT",
+  "SIGQUIT",
+  "SIGILL",
+  "SIGTRAP",
+  "SIGABRT",
+  "SIGIOT",
+  "SIGBUS",
+  "SIGFPE",
+  "SIGKILL",
+  "SIGUSR1",
+  "SIGSEGV",
+  "SIGUSR2",
+  "SIGPIPE",
+  "SIGALRM",
+  "SIGTERM",
+  "SIGSTKFLT",
+  "SIGCHLD",
+  "SIGCONT",
+  "SIGSTOP",
+  "SIGTSTP",
+  "SIGTTIN",
+  "SIGTTOU",
+  "SIGURG",
+  "SIGXCPU",
+  "SIGXFSZ",
+  "SIGVTALRM",
+  "SIGPROF",
+  "SIGWINCH",
+  "SIGIO",
+  "SIGPOLL",
+  "SIGPWR",
+  "SIGSYS",
+  "SIGINFO",
+  "SIGEMT",
+  "SIGBREAK",
+]);
+function terminalCode(value: unknown): number | null {
+  return typeof value === "number" &&
+    Number.isInteger(value) &&
+    value >= -2147483648 &&
+    value <= 2147483647
+    ? value
+    : null;
+}
+function terminalSignal(value: unknown): NodeJS.Signals | null {
+  return typeof value === "string" && terminalSignals.has(value)
+    ? (value as NodeJS.Signals)
+    : null;
+}
+function terminalReceipt(
+  value: unknown,
+): Readonly<{ exitCode: number | null; signal: NodeJS.Signals | null }> | null {
+  try {
+    if (!value || typeof value !== "object" || Array.isArray(value))
+      return null;
+    const fields = Object.getOwnPropertyDescriptors(value);
+    const keys = Reflect.ownKeys(fields);
+    if (
+      keys.length !== 5 ||
+      !["kind", "source", "event", "exitCode", "signal"].every(
+        (key) => fields[key] && "value" in fields[key],
+      )
+    )
+      return null;
+    const kind = fields.kind!.value,
+      source = fields.source!.value,
+      event = fields.event!.value;
+    const code = fields.exitCode!.value,
+      signal = fields.signal!.value;
+    if (
+      kind !== TUNNEL_TERMINAL ||
+      source !== "connector-tunnel" ||
+      event !== "exit" ||
+      (code !== null && terminalCode(code) !== code) ||
+      (signal !== null && terminalSignal(signal) !== signal) ||
+      (code === null && signal === null) ||
+      (code !== null && signal !== null)
+    )
+      return null;
+    return Object.freeze({ exitCode: code, signal });
+  } catch {
+    return null;
+  }
+}
+
+function childLifecycleRecord(
+  value: unknown,
+): ConnectorChildLifecycleObservation | null {
+  try {
+    if (!value || typeof value !== "object" || Array.isArray(value))
+      return null;
+    const fields = Object.getOwnPropertyDescriptors(value);
+    if (
+      Reflect.ownKeys(fields).length !== 7 ||
+      ![
+        "source",
+        "event",
+        "code",
+        "state",
+        "exitCode",
+        "signal",
+        "forced",
+      ].every((key) => fields[key] && "value" in fields[key])
+    )
+      return null;
+    const source = fields.source!.value,
+      event = fields.event!.value,
+      code = fields.code!.value,
+      state = fields.state!.value,
+      exitCode = fields.exitCode!.value,
+      signal = fields.signal!.value,
+      forced = fields.forced!.value;
+    const allowed = [
+      ["connector-tunnel", "exit", "CONNECTOR_TUNNEL_EXIT"],
+      ["connector-tunnel", "error", "CONNECTOR_TUNNEL_ERROR"],
+      [
+        "connector-tunnel",
+        "invalid-receipt",
+        "CONNECTOR_TUNNEL_RECEIPT_INVALID",
+      ],
+      ["connector-anchor", "exit", "CONNECTOR_ANCHOR_EXIT"],
+      ["connector-anchor", "close", "CONNECTOR_ANCHOR_CLOSE"],
+      ["connector-anchor", "error", "CONNECTOR_ANCHOR_ERROR"],
+      ["connector-anchor", "disconnect", "CONNECTOR_IPC_DISCONNECTED"],
+      ["connector-anchor", "cleanup-unknown", "CONNECTOR_STOP_UNCONFIRMED"],
+    ] as const;
+    if (
+      !allowed.some(([s, e, c]) => source === s && event === e && code === c) ||
+      (state !== "observed" && state !== "outcome_unknown") ||
+      typeof forced !== "boolean" ||
+      (exitCode !== null && terminalCode(exitCode) !== exitCode) ||
+      (signal !== null && terminalSignal(signal) !== signal) ||
+      (exitCode !== null && signal !== null) ||
+      (event !== "exit" &&
+        event !== "close" &&
+        (state !== "outcome_unknown" ||
+          exitCode !== null ||
+          signal !== null)) ||
+      (state === "observed" && exitCode === null && signal === null)
+    )
+      return null;
+    return Object.freeze({
+      source,
+      event,
+      code,
+      state,
+      exitCode,
+      signal,
+      forced,
+    });
+  } catch {
+    return null;
+  }
+}
 
 export type ConnectorTunnelObservation = Readonly<{
   state: "exited" | "outcome_unknown";
+  terminal?: ConnectorChildLifecycleObservation;
 }>;
 
 export type ConnectorCommand = Readonly<{
@@ -41,6 +229,9 @@ export type ConnectorChild = Readonly<{
   tunnelObservation?: ConnectorTunnelObservation | null;
   kill: (signal: NodeJS.Signals) => boolean;
   waitForExit: (timeoutMs: number) => Promise<boolean>;
+  observeLifecycle?: (
+    observer: (observation: ConnectorChildLifecycleObservation) => void,
+  ) => () => void;
 }>;
 
 export type ConnectorProcessStarter = (
@@ -61,6 +252,9 @@ type Dependencies = Readonly<{
   wait?: (milliseconds: number) => Promise<void>;
   now?: () => number;
   id?: () => string;
+  onLifecycleObservation?: (
+    observation: ConnectorRuntimeLifecycleObservation,
+  ) => void;
 }>;
 
 type ConfigureInput = Readonly<{
@@ -165,21 +359,138 @@ export function observedConnectorChild(
   observesTunnel = false,
 ): ConnectorChild {
   let tunnelObservation: ConnectorTunnelObservation | null = null;
-  const observe = (state: ConnectorTunnelObservation["state"]) => {
-    tunnelObservation ??= Object.freeze({ state });
+  const retained = new Map<string, ConnectorChildLifecycleObservation>();
+  const observers = new Set<
+    (observation: ConnectorChildLifecycleObservation) => void
+  >();
+  let forced = false;
+  const diagnostic = (
+    source: ConnectorChildLifecycleObservation["source"],
+    event: ConnectorChildLifecycleObservation["event"],
+    code: ConnectorChildLifecycleObservation["code"],
+    state: ConnectorChildLifecycleObservation["state"],
+    exitCode: unknown = null,
+    signal: unknown = null,
+  ) => {
+    const key = `${source}:${event}`;
+    if (retained.has(key)) return retained.get(key)!;
+    const safeCode = terminalCode(exitCode),
+      safeSignal = terminalSignal(signal);
+    const terminalKnown = (safeCode === null) !== (safeSignal === null);
+    const observation = Object.freeze({
+      source,
+      event,
+      code,
+      state: state === "observed" && !terminalKnown ? "outcome_unknown" : state,
+      exitCode: terminalKnown ? safeCode : null,
+      signal: terminalKnown ? safeSignal : null,
+      forced,
+    });
+    retained.set(key, observation);
+    for (const observer of observers) {
+      try {
+        void Promise.resolve(observer(observation)).catch(() => undefined);
+      } catch {
+        /* Diagnostics never change cleanup. */
+      }
+    }
+    return observation;
+  };
+  const observe = (
+    state: ConnectorTunnelObservation["state"],
+    terminal?: ConnectorChildLifecycleObservation,
+  ) => {
+    tunnelObservation ??= Object.freeze({
+      state,
+      ...(terminal ? { terminal } : {}),
+    });
   };
   // A failed signal can emit `error` without `exit`. Never treat it as exit.
   child.on("error", () => {
     if (observesTunnel) observe("outcome_unknown");
+    diagnostic(
+      "connector-anchor",
+      "error",
+      "CONNECTOR_ANCHOR_ERROR",
+      "outcome_unknown",
+    );
   });
   if (observesTunnel) {
-    // This channel belongs to the exact spawned anchor. Accept only fixed,
-    // content-free tokens: no coercion, parsing, logging or retained payload.
+    // This channel belongs to the exact spawned anchor. Accept only closed,
+    // content-free receipts; no coercion, getters or retained raw payload.
     child.on("message", (message: unknown) => {
-      observe(message === TUNNEL_EXITED ? "exited" : "outcome_unknown");
+      if (tunnelObservation) return;
+      if (message === TUNNEL_EXITED) {
+        observe("exited");
+        // Legacy exit tokens prove no exit-code/signal detail.
+        diagnostic(
+          "connector-tunnel",
+          "exit",
+          "CONNECTOR_TUNNEL_EXIT",
+          "outcome_unknown",
+        );
+      } else if (message === TUNNEL_UNKNOWN) {
+        observe("outcome_unknown");
+        diagnostic(
+          "connector-tunnel",
+          "error",
+          "CONNECTOR_TUNNEL_ERROR",
+          "outcome_unknown",
+        );
+      } else {
+        const receipt = terminalReceipt(message);
+        if (receipt) {
+          observe("exited");
+          const terminal = diagnostic(
+            "connector-tunnel",
+            "exit",
+            "CONNECTOR_TUNNEL_EXIT",
+            "observed",
+            receipt.exitCode,
+            receipt.signal,
+          );
+          tunnelObservation = Object.freeze({ state: "exited", terminal });
+        } else {
+          observe("outcome_unknown");
+          diagnostic(
+            "connector-tunnel",
+            "invalid-receipt",
+            "CONNECTOR_TUNNEL_RECEIPT_INVALID",
+            "outcome_unknown",
+          );
+        }
+      }
     });
-    child.once("disconnect", () => observe("outcome_unknown"));
-    child.once("exit", () => observe("outcome_unknown"));
+    child.once("disconnect", () => {
+      observe("outcome_unknown");
+      diagnostic(
+        "connector-anchor",
+        "disconnect",
+        "CONNECTOR_IPC_DISCONNECTED",
+        "outcome_unknown",
+      );
+    });
+    child.once("exit", (code, signal) => {
+      observe("outcome_unknown");
+      diagnostic(
+        "connector-anchor",
+        "exit",
+        "CONNECTOR_ANCHOR_EXIT",
+        "observed",
+        code,
+        signal,
+      );
+    });
+    child.once("close", (code, signal) =>
+      diagnostic(
+        "connector-anchor",
+        "close",
+        "CONNECTOR_ANCHOR_CLOSE",
+        "observed",
+        code,
+        signal,
+      ),
+    );
   }
   const groupPid = ownsProcessGroup ? child.pid : undefined;
   let groupGone = false;
@@ -211,7 +522,23 @@ export function observedConnectorChild(
       const code = directExitCode();
       return code !== null && groupExitConfirmed() ? code : null;
     },
+    observeLifecycle: (observer) => {
+      if (observers.size < 4) {
+        observers.add(observer);
+        for (const observation of retained.values()) {
+          try {
+            void Promise.resolve(observer(observation)).catch(() => undefined);
+          } catch {
+            /* Diagnostics remain optional. */
+          }
+        }
+      }
+      return () => {
+        observers.delete(observer);
+      };
+    },
     kill: (signal) => {
+      if (signal === "SIGKILL") forced = true;
       if (!ownsProcessGroup) return child.kill(signal);
       // Only the exact detached spawn owns this group. Once its leader exited,
       // ownership cannot be re-established from a numeric PID; do not escalate
@@ -284,7 +611,9 @@ const report = (message) => {
   if (process.connected) process.send(message, () => {});
 };
 const terminate = () => process.kill(-process.pid, "SIGKILL");
-child.once("exit", () => report(${JSON.stringify(TUNNEL_EXITED)}));
+child.once("exit", (exitCode, signal) => report({
+  kind: ${JSON.stringify(TUNNEL_TERMINAL)}, source: "connector-tunnel", event: "exit", exitCode, signal
+}));
 child.once("error", () => {
   report(${JSON.stringify(TUNNEL_UNKNOWN)});
   terminate();
@@ -369,6 +698,13 @@ export class SecureMcpConnectorRuntime {
   private uncertainConfigure = false;
   private healthBaseUrl: string | null = null;
   private runtimeGeneration: string | null = null;
+  private readonly onLifecycleObservation: Dependencies["onLifecycleObservation"];
+  private childLifecycle: Readonly<{
+    child: ConnectorChild;
+    phase: { value: ConnectorRuntimeLifecycleObservation["phase"] };
+    runtimeGeneration: string;
+    reported: Set<string>;
+  }> | null = null;
 
   constructor(
     private readonly options: Options,
@@ -391,6 +727,7 @@ export class SecureMcpConnectorRuntime {
     this.wait = dependencies.wait ?? wait;
     this.now = dependencies.now ?? Date.now;
     this.id = dependencies.id ?? randomUUID;
+    this.onLifecycleObservation = dependencies.onLifecycleObservation;
     this.readinessTimeoutMs = options.readinessTimeoutMs ?? 10_000;
   }
 
@@ -535,6 +872,37 @@ export class SecureMcpConnectorRuntime {
     }
     this.child = child;
     this.runtimeGeneration = runtimeGeneration;
+    const phase = {
+      value: "startup" as ConnectorRuntimeLifecycleObservation["phase"],
+    };
+    const reported = new Set<string>();
+    this.childLifecycle = { child, phase, runtimeGeneration, reported };
+    if (this.onLifecycleObservation)
+      try {
+        child.observeLifecycle?.((observation) => {
+          // The observer closes over this original lifetime, never the mutable slot.
+          try {
+            const record = childLifecycleRecord(observation);
+            if (!record) return;
+            const key = `${record.source}:${record.event}`;
+            if (reported.has(key)) return;
+            reported.add(key);
+            void Promise.resolve(
+              this.onLifecycleObservation?.(
+                Object.freeze({
+                  ...record,
+                  phase: phase.value,
+                  runtimeGeneration,
+                }),
+              ),
+            ).catch(() => undefined);
+          } catch {
+            /* Diagnostics cannot alter Start, stop or group ownership. */
+          }
+        });
+      } catch {
+        /* A missing diagnostic port cannot change original Start. */
+      }
     const supersededResult = (): ConnectorStartResult | null =>
       this.child === child
         ? null
@@ -582,6 +950,7 @@ export class SecureMcpConnectorRuntime {
         if (afterProbe) return afterProbe;
         if (ready && this.child === child && child.exitCode === null) {
           this.healthBaseUrl = healthBaseUrl;
+          phase.value = "active";
           return { state: "ready", runtimeGeneration, healthBaseUrl };
         }
       }
@@ -592,6 +961,7 @@ export class SecureMcpConnectorRuntime {
     const beforeCleanup = supersededResult();
     if (beforeCleanup) return beforeCleanup;
     if (!healthObserved) {
+      phase.value = "closing";
       child.kill("SIGTERM");
       let exited = await child.waitForExit(1_000);
       const afterTerm = supersededResult();
@@ -667,6 +1037,9 @@ export class SecureMcpConnectorRuntime {
     const child = this.child;
     this.healthBaseUrl = null;
     if (!child) return;
+    const lifetime =
+      this.childLifecycle?.child === child ? this.childLifecycle : null;
+    if (lifetime) lifetime.phase.value = "closing";
     if (child.exitCode === null) {
       child.kill("SIGTERM");
       // The anchor retains group ownership after TERM. Leave time inside the
@@ -674,6 +1047,29 @@ export class SecureMcpConnectorRuntime {
       if (!(await child.waitForExit(500))) {
         child.kill("SIGKILL");
         if (!(await child.waitForExit(1_000))) {
+          try {
+            const key = "connector-anchor:cleanup-unknown";
+            if (lifetime && !lifetime.reported.has(key)) {
+              lifetime.reported.add(key);
+              void Promise.resolve(
+                this.onLifecycleObservation?.(
+                  Object.freeze({
+                    source: "connector-anchor",
+                    phase: "closing",
+                    event: "cleanup-unknown",
+                    code: "CONNECTOR_STOP_UNCONFIRMED",
+                    state: "outcome_unknown",
+                    exitCode: null,
+                    signal: null,
+                    forced: true,
+                    runtimeGeneration: lifetime.runtimeGeneration,
+                  }),
+                ),
+              ).catch(() => undefined);
+            }
+          } catch {
+            /* Diagnostic failure does not change original UNKNOWN. */
+          }
           throw new Error("CONNECTOR_STOP_UNCONFIRMED");
         }
       }

@@ -714,7 +714,12 @@ function AppearancePage({ snapshot, facade }: PageProps) {
                 key={theme}
                 className="theme-choice"
                 aria-pressed={appearance.theme === theme}
-                onClick={() => facade.appearance({ ...appearance, theme })}
+                onClick={() =>
+                  facade.appearance({
+                    ...facade.getSnapshot().appearance,
+                    theme,
+                  })
+                }
               >
                 <span className={`theme-preview ${theme}`} aria-hidden="true" />
                 {theme === "light"
@@ -753,7 +758,12 @@ function AppearancePage({ snapshot, facade }: PageProps) {
                   className={`accent-choice ${accent}`}
                   aria-label={`${label} accent`}
                   aria-pressed={appearance.accent === accent}
-                  onClick={() => facade.appearance({ ...appearance, accent })}
+                  onClick={() =>
+                    facade.appearance({
+                      ...facade.getSnapshot().appearance,
+                      accent,
+                    })
+                  }
                 >
                   <span className="accent-dot" aria-hidden="true" />
                   {label}
@@ -779,7 +789,7 @@ function AppearancePage({ snapshot, facade }: PageProps) {
             value={appearance.font}
             onChange={(event) =>
               facade.appearance({
-                ...appearance,
+                ...facade.getSnapshot().appearance,
                 font: event.currentTarget.value as typeof appearance.font,
               })
             }
@@ -800,19 +810,47 @@ const folderSetupByWindow = new WeakMap<
   { access: GuidedWorkspaceAccess; busy: boolean }
 >();
 function Folders(props: PageProps) {
-  const { settings, facade, actions } = props;
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const { settings, facade, snapshot, actions } = props;
+  const requestedId = snapshot.destination.workspaceId ?? null;
+  const [selection, setSelection] = useState({
+    requestedId,
+    id: requestedId,
+  });
+  const selectionRevision = useRef(0);
+  // Honor a new destination immediately, while retaining ordinary local selection.
+  const selectedId =
+    selection.requestedId === requestedId
+      ? selection.id
+      : (requestedId ?? selection.id);
+  useEffect(() => {
+    // History may restore the same destination object after another inspection.
+    selectionRevision.current += 1;
+    setSelection((previous) =>
+      previous.requestedId === requestedId
+        ? previous
+        : { requestedId, id: requestedId ?? previous.id },
+    );
+  }, [requestedId]);
+  const selectWorkspace = (id: string) => {
+    selectionRevision.current += 1;
+    setSelection({ requestedId, id });
+  };
+  const explicitSelection = requestedId !== null && selectedId === requestedId;
   const selected =
     settings.computer.workspaces.find(
       (item) => item.workspaceId === selectedId,
     ) ??
-    (props.setupStep
-      ? settings.computer.workspaces.find(
-          (item) =>
-            item.workspaceId === settings.setup.computer.verified?.workspaceId,
-        )
-      : undefined) ??
-    settings.computer.workspaces[0];
+    (explicitSelection
+      ? undefined
+      : props.setupStep
+        ? settings.computer.workspaces.find(
+            (item) =>
+              item.workspaceId ===
+              settings.setup.computer.verified?.workspaceId,
+          )
+        : undefined) ??
+    (explicitSelection ? undefined : settings.computer.workspaces[0]);
+  const unavailableSelection = explicitSelection && !selected;
   const detailId = useId();
   const [adding, setAdding] = useState(false);
   let flow = folderSetupByWindow.get(facade);
@@ -826,6 +864,7 @@ function Folders(props: PageProps) {
     folderFlow.busy = true;
     setAdding(true);
     try {
+      const selectionAtDispatch = selectionRevision.current;
       const picking = facade.getSnapshot();
       const picked = await actions.run({ kind: "computer.choose-workspace" });
       const before = facade.getSnapshot();
@@ -861,7 +900,11 @@ function Folders(props: PageProps) {
         )
       )
         return;
-      setSelectedId(selection.workspaceId);
+      if (
+        selectionAtDispatch === selectionRevision.current &&
+        current.destination === picking.destination
+      )
+        selectWorkspace(selection.workspaceId);
       await folderFlow.access.run(
         {
           settings: () => {
@@ -898,7 +941,7 @@ function Folders(props: PageProps) {
           its files.
         </p>
       )}
-      {selected && (
+      {(selected || unavailableSelection) && (
         <div className="workspace-layout">
           <nav className="workspace-picker" aria-label="Approved workspaces">
             {settings.computer.workspaces.map((workspace) => (
@@ -908,12 +951,12 @@ function Folders(props: PageProps) {
                 className="workspace-choice"
                 aria-label={`Select workspace ${folderDisplayName(workspace)}`}
                 aria-current={
-                  workspace.workspaceId === selected.workspaceId
+                  workspace.workspaceId === selected?.workspaceId
                     ? "true"
                     : undefined
                 }
                 aria-controls={detailId}
-                onClick={() => setSelectedId(workspace.workspaceId)}
+                onClick={() => selectWorkspace(workspace.workspaceId)}
               >
                 <strong>{folderDisplayName(workspace)}</strong>
                 <span>
@@ -923,12 +966,19 @@ function Folders(props: PageProps) {
               </button>
             ))}
           </nav>
-          <WorkspaceDetail
-            key={selected.workspaceId}
-            {...props}
-            workspace={selected}
-            detailId={detailId}
-          />
+          {selected ? (
+            <WorkspaceDetail
+              key={selected.workspaceId}
+              {...props}
+              workspace={selected}
+              detailId={detailId}
+            />
+          ) : (
+            <p id={detailId} className="notice" role="status">
+              Selected workspace is no longer available. Choose an available
+              workspace to inspect its access.
+            </p>
+          )}
         </div>
       )}
       <div className="workspace-add">

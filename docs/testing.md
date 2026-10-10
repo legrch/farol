@@ -1,5 +1,21 @@
 # Farol Next GUI test policy
 
+## Portable Linux checkpoint
+
+Activate the pinned local toolchain and use the verified source checkout. With
+already-cached modules, this bounded read-only contract test needs no provider:
+
+```sh
+GOPROXY=off GOSUMDB=off GOTOOLCHAIN=local go test -mod=readonly ./modules/computer/contracts/mutation -run '^TestMutationContractReadCannotDispatchOrAcknowledge$' -count=1 -v
+```
+
+Record the actual source SHA/tree, command, platform and terminal result. This
+test and `npm run typecheck` provide source evidence only. Native Electron UI,
+Seatbelt/process confinement, Keychain, canonical macOS packaging, installed
+File Computer and a real N-to-N+1 update remain `MAC_REQUIRED` until tested on
+the exact Mac candidate. A skipped native case or a Linux shell command does
+not establish those capabilities. Keep original failures and unknown effects.
+
 ## Source test scopes
 
 `task test:unit`, `task test:integration` and `task test:fast` use

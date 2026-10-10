@@ -8,8 +8,9 @@ const { assertSetupOverviewEvidence } = await import(
 );
 const expected = {
   ready: true,
+  signIn: "unknown",
   states: {
-    signin: "needed",
+    signin: "unknown",
     folders: "verified",
     connection: "verified",
     attachment: "verified",
@@ -31,10 +32,10 @@ function readyEvidence() {
         step: "signin",
         label: "Sign in",
         optional: true,
-        state: "needed",
-        status: "Not checked",
-        navigationState: "needed",
-        navigationStatus: "Not checked",
+        state: "unknown",
+        status: "Current sign-in is unknown",
+        navigationState: "unknown",
+        navigationStatus: "Current sign-in is unknown",
       },
       ...[
         ["folders", "Workspaces"],
@@ -54,21 +55,97 @@ function readyEvidence() {
   };
 }
 describe("native Setup overview observation guards (synthetic records only)", () => {
-  it("accepts externally ready Computer with optional sign-in still unchecked", () => {
+  it("accepts externally ready Computer with optional sign-in currently unknown", () => {
     assertSetupOverviewEvidence(readyEvidence(), expected);
   });
-  it("excludes an explicitly unknown optional sign-in from Computer readiness", () => {
+  it("distinguishes original operation UNKNOWN from unknown current sign-in", () => {
     const observed = readyEvidence();
     Object.assign(observed.rows[0]!, {
       state: "unknown",
-      status: "Result needs review",
+      status: "Outcome unknown",
       navigationState: "unknown",
-      navigationStatus: "Result needs review",
+      navigationStatus: "Outcome unknown",
     });
     assertSetupOverviewEvidence(observed, {
       ...expected,
+      signIn: "outcome_unknown",
       states: { ...expected.states, signin: "unknown" },
     });
+  });
+  it.each([
+    ["authenticated", "verified", "Signed in"],
+    ["signed_out", "needed", "Signed out"],
+    ["pending", "pending", "Checking sign-in…"],
+    ["unknown", "unknown", "Current sign-in is unknown"],
+    ["outcome_unknown", "unknown", "Outcome unknown"],
+  ])(
+    "requires the exact %s Sign in state and caption",
+    (signIn, state, status) => {
+      const observed = readyEvidence();
+      Object.assign(observed.rows[0]!, {
+        state,
+        status,
+        navigationState: state,
+        navigationStatus: status,
+      });
+      assertSetupOverviewEvidence(observed, {
+        ...expected,
+        signIn,
+        states: { ...expected.states, signin: state },
+      });
+      observed.rows[0]!.navigationStatus = "Not checked";
+      assert.throws(
+        () =>
+          assertSetupOverviewEvidence(observed, {
+            ...expected,
+            signIn,
+            states: { ...expected.states, signin: state },
+          }),
+        /SETUP_OVERVIEW_EVIDENCE_MISMATCH/,
+      );
+    },
+  );
+  it("rejects missing, invalid or contradictory Sign in expectations", () => {
+    assert.throws(
+      () =>
+        assertSetupOverviewEvidence(readyEvidence(), {
+          ready: true,
+          states: expected.states,
+        }),
+      /SETUP_SIGNIN_STATUS_MISSING/,
+    );
+    for (const signIn of ["unchecked", "__proto__", "any"])
+      assert.throws(
+        () =>
+          assertSetupOverviewEvidence(readyEvidence(), {
+            ...expected,
+            signIn,
+          }),
+        /SETUP_SIGNIN_STATUS_INVALID/,
+      );
+    assert.throws(
+      () =>
+        assertSetupOverviewEvidence(readyEvidence(), {
+          ...expected,
+          states: { ...expected.states, signin: "needed" },
+        }),
+      /SETUP_SIGNIN_STATE_MISMATCH/,
+    );
+  });
+  it("rejects generic captions and an authenticated claim for unknown optional evidence", () => {
+    for (const status of [
+      "Not checked",
+      "Result needs review",
+      "Status unavailable",
+      "Signed in",
+    ]) {
+      const observed = readyEvidence();
+      Object.assign(observed.rows[0]!, { status, navigationStatus: status });
+      assert.throws(
+        () => assertSetupOverviewEvidence(observed, expected),
+        /SETUP_OVERVIEW_EVIDENCE_MISMATCH/,
+      );
+    }
   });
   for (const state of ["needed", "pending", "unknown", "unavailable"]) {
     for (const step of ["folders", "connection", "attachment"]) {
@@ -107,8 +184,9 @@ describe("native Setup overview observation guards (synthetic records only)", ()
     assert.throws(() =>
       assertSetupOverviewEvidence(readyEvidence(), {
         ready: true,
+        signIn: expected.signIn,
         states: {
-          signin: "needed",
+          signin: "unknown",
           folders: "verified",
           connection: "verified",
         },
@@ -148,7 +226,7 @@ describe("native Setup overview observation guards (synthetic records only)", ()
   });
   it("accepts explicit unavailable evidence only with Open Home absent", () => {
     const observed = readyEvidence();
-    for (const row of observed.rows)
+    for (const row of observed.rows.filter((item) => item.step !== "signin"))
       Object.assign(row, {
         state: "unavailable",
         status: "Status unavailable",
@@ -158,8 +236,9 @@ describe("native Setup overview observation guards (synthetic records only)", ()
     observed.openHome = { count: 0, visible: false, disabled: false };
     assertSetupOverviewEvidence(observed, {
       ready: false,
+      signIn: "unknown",
       states: {
-        signin: "unavailable",
+        signin: "unknown",
         folders: "unavailable",
         connection: "unavailable",
         attachment: "unavailable",

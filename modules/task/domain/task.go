@@ -149,6 +149,9 @@ type Intent struct {
 	Binding                     Binding
 	Parent                      Parent
 	Expected                    Reference
+	// ExactDispatchID is opt-in Cancel/Deliver scope. Expected already retains
+	// its full provider reference. Omit zero preserves all legacy journal bytes.
+	ExactDispatchID string `json:",omitzero"`
 }
 type ReceiptState string
 

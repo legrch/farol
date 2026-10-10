@@ -57,9 +57,11 @@ remain Lead-owned.
 The production build entry is `src/ui/renderer/entry.tsx`, with one React root,
 one controller and exclusive ownership of its descendants. The old `shell.ts`
 entry and old HTML/CSS are not loaded by this build. The shared geometry in
-`src/pkg/shell-layout/geometry.ts` supplies a 58px toolbar, 56px icon rail and
-180px default contextual sidebar (resizable from 152px to 288px). React and
-the native host consume these values. The page-list resizer draws its single
+`src/pkg/shell-layout/geometry.ts` supplies a 58px toolbar, a 62px desktop icon
+rail and a 232px default contextual sidebar (resizable from 152px to 288px).
+At widths of 850px or less, the rail is 58px and the contextual sidebar uses
+an overlay when opened. React, native browser bounds and native sidebar actions share
+the same compact-width predicate. The page-list resizer draws its single
 boundary; it does not add another sidebar border. Theme changes preserve geometry.
 Home, settings pages, work slots, Activity inspection, search, task assignment,
 update review and toolbar task options use the same facade. Native browser pages

@@ -213,6 +213,34 @@ it("defaults to Overview and projects all five sidebar views without effects", a
   }
   noEffects(h.f);
 });
+it("routes the inspected workspace identity to its explicit Settings destination", async () => {
+  const value = readySettings();
+  const second = {
+    ...folder,
+    workspaceId: "33333333-3333-4333-8333-333333333333",
+    root: "/work/Second",
+    rootIdentity: { device: "1", inode: "3" },
+  };
+  value.computer.workspaces.push(second);
+  const h = await mount([], {
+    configuration: { status: "ready", settings: value },
+  });
+  await act(async () =>
+    h.c.navigate({
+      area: "home",
+      homeView: "attention",
+      homeSelection: { kind: "attention", id: `folder:${second.workspaceId}` },
+    }),
+  );
+  expect(h.content().textContent).toContain("Second needs an access check");
+  await h.click("Manage workspaces");
+  expect(h.c.getSnapshot().destination).toMatchObject({
+    area: "settings",
+    page: "folders",
+    workspaceId: second.workspaceId,
+  });
+  noEffects(h.f);
+});
 it("keeps task inspectors in Home and clears them when reselecting the same view", async () => {
   const h = await mount([running]);
   await h.click("View work");

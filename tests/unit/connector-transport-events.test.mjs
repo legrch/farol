@@ -37,7 +37,11 @@ function fixture() {
   const power = new EventEmitter();
   const timeouts = [];
   const intervals = [];
+  const owner = {};
+  const core = {};
   const original = Object.freeze({
+    owner,
+    core,
     key: "original-runtime",
     revision: 10,
     runtimeGeneration: "original-health",
@@ -54,6 +58,10 @@ function fixture() {
     connectorTransportTimer: null,
     connectorTaskAdmission: false,
     quitInProgress: false,
+    installedUpdateAdmission: false,
+    configuration: owner,
+    desktopGoCore: core,
+    secureMcpConnectorRuntime: original.connector,
     captureConnectorTransport: vi.fn(() => (eligible ? original : null)),
     connectorTransportCurrent: vi.fn(
       (selected, _revision, _stopped, admitted = false) =>
@@ -66,7 +74,10 @@ function fixture() {
     recoverConnectorTransport: vi.fn(async () => ({ ok: true })),
     reportConnectorTransport: vi.fn(),
     window: {
-      isDestroyed: () => false,
+      destroyed: false,
+      isDestroyed() {
+        return this.destroyed;
+      },
       webContents: { send: vi.fn() },
     },
     channels: { configurationChanged: "fixture.configuration-changed" },
@@ -228,8 +239,88 @@ it.each(["outcome_unknown", "foreign-runtime"])(
     expect(f.context.authorityTransitions.current()).toBeNull();
     expect(f.context.connectorTaskAdmission).toBe(false);
     expect(f.original.connector.checkHealth).toHaveBeenCalledTimes(1);
+    expect(f.context.window.webContents.send).toHaveBeenCalledExactlyOnceWith(
+      f.context.channels.configurationChanged,
+    );
   },
 );
+
+it("does not notify the renderer when terminal UNKNOWN persistence fails", async () => {
+  const f = fixture();
+  f.original.connector.getTunnelObservation.mockReturnValue({
+    state: "outcome_unknown",
+    runtimeGeneration: f.original.runtimeGeneration,
+  });
+  f.context.recordConnectorRuntime.mockResolvedValue({
+    ok: false,
+    error: "SETTINGS_WRITE_FAILED",
+  });
+  f.tick();
+  await f.finish();
+  expect(f.context.recordConnectorRuntime).toHaveBeenCalledOnce();
+  expect(f.context.window.webContents.send).not.toHaveBeenCalled();
+  expect(f.context.recoverConnectorTransport).not.toHaveBeenCalled();
+  expect(f.context.connectorTaskAdmission).toBe(false);
+});
+
+it.each(["owner", "connector", "core", "window", "destroyed-window", "quit"])(
+  "preserves UNKNOWN recording without notifying after late %s withdrawal",
+  async (change) => {
+    const f = fixture();
+    const recorded = Promise.withResolvers();
+    const originalWindow = f.context.window;
+    f.original.connector.getTunnelObservation.mockReturnValue({
+      state: "outcome_unknown",
+      runtimeGeneration: f.original.runtimeGeneration,
+    });
+    f.context.recordConnectorRuntime.mockReturnValue(recorded.promise);
+    f.tick();
+    const pending = f.finish();
+    await until(() => f.context.recordConnectorRuntime.mock.calls.length === 1);
+    if (change === "owner") f.context.configuration = {};
+    if (change === "connector") f.context.secureMcpConnectorRuntime = {};
+    if (change === "core") f.context.desktopGoCore = {};
+    if (change === "window")
+      f.context.window = {
+        isDestroyed: () => false,
+        webContents: { send: vi.fn() },
+      };
+    if (change === "destroyed-window") originalWindow.destroyed = true;
+    if (change === "quit") f.context.quitInProgress = true;
+    recorded.resolve(null);
+    await pending;
+    expect(f.context.recordConnectorRuntime).toHaveBeenCalledOnce();
+    expect(originalWindow.webContents.send).not.toHaveBeenCalled();
+    expect(f.context.window.webContents.send).not.toHaveBeenCalled();
+    expect(f.context.recoverConnectorTransport).not.toHaveBeenCalled();
+    expect(f.context.connectorTaskAdmission).toBe(false);
+    expect(f.context.authorityTransitions.current()).toBeNull();
+  },
+);
+
+it("does not discard a successful UNKNOWN publication because the saved state closes transport observation", async () => {
+  const f = fixture();
+  const current = f.context.connectorTransportCurrent.getMockImplementation();
+  let persisted = false;
+  f.context.connectorTransportCurrent.mockImplementation(
+    (...args) => !persisted && current(...args),
+  );
+  f.original.connector.getTunnelObservation.mockReturnValue({
+    state: "outcome_unknown",
+    runtimeGeneration: f.original.runtimeGeneration,
+  });
+  f.context.recordConnectorRuntime.mockImplementation(async () => {
+    persisted = true;
+    return null;
+  });
+  f.tick();
+  await f.finish();
+  expect(persisted).toBe(true);
+  expect(f.context.window.webContents.send).toHaveBeenCalledExactlyOnceWith(
+    f.context.channels.configurationChanged,
+  );
+  expect(f.context.recoverConnectorTransport).not.toHaveBeenCalled();
+});
 
 it("does not admit another observation or recovery from resume after Quit closes the watcher", async () => {
   const f = fixture();

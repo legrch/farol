@@ -100,7 +100,7 @@ func TestSourceOnlyContinueStartsNewTurnOnExactCompletedThread(t *testing.T) {
 		t.Fatal("constructor reached host")
 	}
 	caps, err := c.Supports(context.Background(), before.Binding)
-	if err != nil || caps != (task.Capabilities{Create: true, Continue: true}) {
+	if err != nil || caps != (task.Capabilities{Create: true, Continue: true, Message: true}) {
 		t.Fatalf("caps: %+v %v", caps, err)
 	}
 	var refs []task.Reference

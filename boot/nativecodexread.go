@@ -85,7 +85,8 @@ func nativeCodexReadFailure(err error) error {
 
 // ReadSelectedCodex exposes only IncludeResult. Selection remains sealed by the
 // original TaskProfile reader, which rechecks exact current authority around IO.
-// There is deliberately no desktop Method/socket/handshake registration here.
+// Only the explicitly selected, admitted connector registers the read method.
+// The ordinary host-pipe registry and real launcher do not activate this source.
 func (r *NativeRuntime) ReadSelectedCodex(ctx context.Context, request selectedthread.Request) (*selectedthread.Response, error) {
 	if ctx == nil {
 		return nil, nativeCodexReadFailure(task.ErrInvalid)

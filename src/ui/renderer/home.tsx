@@ -25,10 +25,12 @@ type Issue = {
   title: string;
   state: string;
   copy: string;
-  target: "access" | "folders" | "work" | "diagnostics";
   task?: ProductTask;
   details?: [string, ReactNode][];
-};
+} & (
+  | { target: "folders"; workspaceId: string }
+  | { target: "access" | "work" | "diagnostics" }
+);
 
 function Glyph({ name }: { name: string }) {
   return (
@@ -138,6 +140,7 @@ function projection(snapshot: WindowSnapshot) {
         state: item.state,
         copy: `Configured access: ${item.folder.access === "write" ? "Read and write" : "Read only"}. Adding a workspace and verifying its access are separate steps.`,
         target: "folders",
+        workspaceId: item.folder.workspaceId,
       });
     const editIds = new Set(
       [
@@ -597,7 +600,11 @@ function Inspector({ snapshot, facade }: Props) {
             <button
               type="button"
               onClick={() =>
-                facade.navigate({ area: "settings", page: "folders" })
+                facade.navigate({
+                  area: "settings",
+                  page: "folders",
+                  workspaceId: issue.workspaceId,
+                })
               }
             >
               Manage workspaces <Glyph name="forward" />

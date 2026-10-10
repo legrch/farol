@@ -47,8 +47,10 @@ type taskProfileOwner struct {
 }
 
 type taskProfileTurn struct {
-	route     *taskrepo.Route
-	authority taskProfileAuthority
+	route      *taskrepo.Route
+	authority  taskProfileAuthority
+	control    *controlct.Contract
+	chatHandle string
 }
 
 // OpenTaskProfile uses only the selected profile's already qualified fixed Task
@@ -170,7 +172,7 @@ func (p *TaskProfile) SelectCodex(ctx context.Context, input CodexTaskTurn) (*Ta
 	}
 	p.tasks[b.TaskID] = record
 	p.clients[record.client] = b.TaskID
-	record.turns[b] = taskProfileTurn{route: route, authority: authority}
+	record.turns[b] = taskProfileTurn{route: route, authority: authority, control: ingress.runtime.control, chatHandle: input.ChatHandle}
 	p.routes = append(p.routes, route)
 	return ingress, nil
 }
@@ -186,7 +188,7 @@ func (p *TaskProfile) recheckDispatch(ctx context.Context, intent task.Intent) e
 	scope := port.CurrentBinding{OwnerID: a.OwnerID, SessionID: a.SessionID, TaskID: a.TaskID, TaskEpoch: a.TaskEpoch, ParticipantID: a.ParticipantID, TurnID: a.TurnID}
 	p.mu.Lock()
 	record := p.tasks[intent.TaskID]
-	if record == nil || record.selection.Binding != intent.Binding || record.parent.ThreadID != intent.Parent.ThreadID || record.parent.TurnID != intent.Parent.TurnID || !a.Valid() || a.TaskID != intent.TaskID || (intent.Action != task.Create && intent.Action != task.Continue) {
+	if record == nil || record.selection.Binding != intent.Binding || record.parent.ThreadID != intent.Parent.ThreadID || record.parent.TurnID != intent.Parent.TurnID || !a.Valid() || a.TaskID != intent.TaskID || (intent.Action != task.Create && intent.Action != task.Continue && intent.Action != task.Message) {
 		p.mu.Unlock()
 		return task.ErrIdentity
 	}
@@ -201,6 +203,17 @@ func (p *TaskProfile) recheckDispatch(ctx context.Context, intent task.Intent) e
 	}
 	if operation == nil || operation.Settled || operation.Intent != intent {
 		return task.ErrUnknown
+	}
+	if intent.Action == task.Message {
+		// Steer controls the existing running dispatch, never a newly selected
+		// turn. A matching pending intent alone cannot refresh its active target.
+		snapshot, readErr := turn.route.Read(ctx, intent.TaskID)
+		if readErr != nil {
+			return readErr
+		}
+		if snapshot == nil || snapshot.Pending != intent.OperationID || snapshot.Task.ID != intent.TaskID || snapshot.Task.Binding != intent.Binding || snapshot.Task.Parent != intent.Parent || snapshot.Task.Reference != intent.Expected || !intent.Expected.Complete(task.Codex) || snapshot.Task.Lifecycle != task.Running || snapshot.Task.CancelRequested || snapshot.Task.Admission.Binding != a || snapshot.Task.Admission.State != task.AdmissionActive {
+			return task.ErrState
+		}
 	}
 	if err = turn.authority.Recheck(ctx, intent.Binding); err != nil {
 		return err

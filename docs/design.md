@@ -1,5 +1,13 @@
 # Farol Next preview design
 
+> [!NOTE]
+> The Watch Rail layout and interaction details below describe the historical
+> desktop presentation. Current source builds the React shell with Home navigation
+> and shared compact geometry. Read the
+> [current desktop renderer contract](desktop/renderer.md#current-shell-implementation)
+> for its source behavior and evidence limits. Source and component checks do not
+> establish current native UI, packaged, or installed acceptance.
+
 ## Product intent
 
 The preview is a focused desktop bridge for one owner supervising a small number of

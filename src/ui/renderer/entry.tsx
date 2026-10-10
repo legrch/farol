@@ -1,3 +1,4 @@
+import { isCompactShell } from "../../pkg/shell-layout/geometry";
 import { parseNavigationShortcuts } from "../../pkg/ipc/navigation-shortcuts";
 import { StrictMode, useLayoutEffect, useRef } from "react";
 import { ConnectionGuide } from "./connection-guide";
@@ -64,7 +65,7 @@ function startApplication(): void {
         /* Retain active preference. */
       }
     },
-    () => window.matchMedia("(max-width: 979px)").matches,
+    () => isCompactShell(window.innerWidth),
   );
   try {
     const stored: unknown = JSON.parse(

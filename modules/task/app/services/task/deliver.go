@@ -12,7 +12,24 @@ type DeliverResponse struct {
 	Receipt             task.Receipt
 }
 
+type DeliverExactRequest struct {
+	OperationID, TaskID, ExpectedDispatchID string
+	ExpectedReference                       task.Reference
+}
+
+// DeliverExact admits the same terminal snapshot checked against both target
+// identities. It never substitutes a newer dispatch after a separate read.
+func (s *Service) DeliverExact(ctx context.Context, req DeliverExactRequest) (*DeliverResponse, error) {
+	if !exactTargetValid(req.ExpectedDispatchID, req.ExpectedReference) {
+		return nil, task.ErrInvalid
+	}
+	return s.deliver(ctx, DeliverRequest{req.OperationID, req.TaskID}, req.ExpectedDispatchID, &req.ExpectedReference)
+}
+
 func (s *Service) Deliver(ctx context.Context, req DeliverRequest) (*DeliverResponse, error) {
+	return s.deliver(ctx, req, "", nil)
+}
+func (s *Service) deliver(ctx context.Context, req DeliverRequest, expectedDispatchID string, expectedReference *task.Reference) (*DeliverResponse, error) {
 	if !task.ID(req.OperationID) || !task.ID(req.TaskID) {
 		return nil, task.ErrInvalid
 	}
@@ -20,7 +37,7 @@ func (s *Service) Deliver(ctx context.Context, req DeliverRequest) (*DeliverResp
 	if op, err := s.journal.Lookup(ctx, req.OperationID); err != nil {
 		return nil, task.ErrUnknown
 	} else if op != nil {
-		if op.Intent.Action != task.Deliver || op.Intent.TaskID != req.TaskID {
+		if op.Intent.Action != task.Deliver || op.Intent.TaskID != req.TaskID || !exactTargetMatches(op.Intent, expectedDispatchID, expectedReference) {
 			return nil, task.ErrConflict
 		}
 		if err := s.recheck(ctx, op.Intent.Binding); err != nil {
@@ -42,6 +59,9 @@ func (s *Service) Deliver(ctx context.Context, req DeliverRequest) (*DeliverResp
 	if before == nil {
 		return nil, task.ErrNotFound
 	}
+	if expectedReference != nil && (before.Task.DispatchID != expectedDispatchID || before.Task.Reference != *expectedReference) {
+		return nil, task.ErrIdentity
+	}
 	current := before.Task
 	if before.Pending != "" {
 		return nil, task.ErrUnknown
@@ -62,6 +82,9 @@ func (s *Service) Deliver(ctx context.Context, req DeliverRequest) (*DeliverResp
 		return nil, err
 	}
 	intent := task.Intent{OperationID: req.OperationID, TaskID: req.TaskID, Action: task.Deliver, Binding: current.Binding, Parent: current.Parent, Expected: current.Reference}
+	if expectedReference != nil {
+		intent.ExactDispatchID = expectedDispatchID
+	}
 	current, err = s.prepareAdmission(current, &intent)
 	if err != nil {
 		return nil, err
@@ -69,12 +92,20 @@ func (s *Service) Deliver(ctx context.Context, req DeliverRequest) (*DeliverResp
 	intent.Digest = s.digest(intent, current.Result)
 	admitted, err := s.journal.Admit(ctx, intent, before.Revision, current)
 	if err != nil {
-		return nil, task.ErrUnknown
+		return nil, s.admissionFailure(ctx, intent, err)
 	}
 	unknown := &DeliverResponse{req.OperationID, req.TaskID, task.Receipt{State: task.Uncertain}}
 	if !admitted.Claimed {
 		if admitted.Operation.Intent != intent {
 			return nil, task.ErrConflict
+		}
+		// A competing caller may finish the same operation while Admit waits.
+		// Its retained receipt is evidence, not authority for this disclosure.
+		if err := s.recheck(ctx, current.Binding); err != nil {
+			return nil, err
+		}
+		if err := s.authority.RecheckParent(ctx, current.Parent); err != nil {
+			return nil, err
 		}
 		if admitted.Operation.Settled {
 			return &DeliverResponse{req.OperationID, req.TaskID, admitted.Operation.Receipt}, nil

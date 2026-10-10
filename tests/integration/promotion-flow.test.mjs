@@ -27,8 +27,13 @@ const roleChildScript = fileURLToPath(
 // evidence — a controlled A -> B -> A promotion into a throwaway
 // destination — plus the two refusals the lease exists for.
 const roots = [];
+const unclosedChildren = new Set();
 
 afterEach(async () => {
+  if (unclosedChildren.size !== 0)
+    throw new Error(
+      `PROMOTION_FIXTURE_CHILD_CLOSE_UNCONFIRMED:${roots.join(",")}`,
+    );
   await Promise.all(
     roots
       .splice(0)
@@ -79,6 +84,7 @@ async function promote(homeRoot, source, generation) {
   const userData = userDataOf(homeRoot);
   const lease = await acquirePromotionLease(userData, generation, "promotion");
   if (!lease) throw new Error("PROMOTION_LEASE_HELD");
+  let originalClose;
   try {
     const obligations = await activationObligations(userData);
     assertActivationDrained(obligations);
@@ -99,10 +105,20 @@ async function promote(homeRoot, source, generation) {
       source,
       artifactSha256,
       receiptText,
+      lease,
+      onChildStarted: (closed) => {
+        originalClose = closed;
+        unclosedChildren.add(closed);
+        void closed.then(() => {
+          unclosedChildren.delete(closed);
+        });
+      },
     });
     return { destination, receipt, artifactSha256 };
   } finally {
-    await releasePromotionLease(lease);
+    if (originalClose && unclosedChildren.has(originalClose))
+      void originalClose.then(() => releasePromotionLease(lease));
+    else await releasePromotionLease(lease);
   }
 }
 

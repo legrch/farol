@@ -28,7 +28,9 @@ func lifetimeDeadline(a Approval, now time.Time, lifetime time.Duration) (time.T
 	}
 	deadline := now.Add(lifetime)
 	if a.ExpiresAt.Before(deadline) {
-		deadline = a.ExpiresAt
+		// Persisted expiry has wall time only. Keep the admission clock's
+		// monotonic reading so wall-clock rollback cannot extend this budget.
+		deadline = now.Add(a.ExpiresAt.Sub(now))
 	}
 	if !now.Before(deadline) {
 		return time.Time{}, fail("AUTHORITY_EXPIRED", TaskAdmissionSource)

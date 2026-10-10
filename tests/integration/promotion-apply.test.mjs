@@ -5,10 +5,20 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { treeDigest } from "../../tooling/artifact-digest.mjs";
 import { runPromotionApply } from "../../tooling/promotion-apply.mjs";
+import {
+  acquirePromotionLease,
+  createPromotionLeaseTransfer,
+  releasePromotionLease,
+} from "../../tooling/promotion-lease.mjs";
 
 const roots = [];
+const unclosedChildren = new Set();
 
 afterEach(async () => {
+  if (unclosedChildren.size !== 0)
+    throw new Error(
+      `PROMOTION_FIXTURE_CHILD_CLOSE_UNCONFIRMED:${roots.join(",")}`,
+    );
   await Promise.all(
     roots
       .splice(0)
@@ -32,10 +42,46 @@ async function fixture() {
   return { root, source, home, applications };
 }
 
-async function runWithReceiptFailure({ home, source, artifactSha256 }) {
+async function applyWithLease(options, apply = runPromotionApply) {
+  const lease = await acquirePromotionLease(
+    path.join(path.dirname(options.source), "promotion-userdata"),
+    "disposable-promotion-fixture",
+    "promotion",
+  );
+  if (!lease) throw new Error("PROMOTION_LEASE_HELD");
+  let originalClose;
+  try {
+    return await apply({
+      ...options,
+      lease,
+      onChildStarted: (closed) => {
+        originalClose = closed;
+        unclosedChildren.add(closed);
+        void closed.then(() => {
+          unclosedChildren.delete(closed);
+        });
+      },
+    });
+  } finally {
+    if (originalClose && unclosedChildren.has(originalClose))
+      void originalClose.then(() => releasePromotionLease(lease));
+    else await releasePromotionLease(lease);
+  }
+}
+
+async function runWithReceiptFailure({
+  home,
+  source,
+  artifactSha256,
+  lease,
+  onChildStarted,
+}) {
+  const transfer = await createPromotionLeaseTransfer(lease);
+  if (!(await transfer.verify())) throw new Error("PROMOTION_LEASE_LOST");
   const helperPath = path.join(process.cwd(), "tooling", "promotion-apply.py");
   const program = `
 import importlib.util
+import json
 import sys
 
 spec = importlib.util.spec_from_file_location("farol_promotion_apply", sys.argv[1])
@@ -52,6 +98,7 @@ request = {
     "artifactSha256": sys.argv[4],
     "receiptBytes": b'{"operation":"applied"}\\n',
     "testHook": False,
+    "lease": json.loads(sys.argv[5]),
 }
 try:
     helper.run(request)
@@ -59,29 +106,47 @@ except helper.Refusal as error:
     raise SystemExit(error.status)
 raise SystemExit(0)
 `;
-  return new Promise((resolve, reject) => {
-    const child = spawn(
-      "/usr/bin/python3",
-      [
-        "-I",
-        "-S",
-        "-B",
-        "-c",
-        program,
-        helperPath,
-        home,
-        source,
-        artifactSha256,
+  const child = spawn(
+    "/usr/bin/python3",
+    [
+      "-I",
+      "-S",
+      "-B",
+      "-c",
+      program,
+      helperPath,
+      home,
+      source,
+      artifactSha256,
+      JSON.stringify({ file: lease.file, ...transfer.identity }),
+    ],
+    {
+      stdio: [
+        "ignore",
+        "pipe",
+        "pipe",
+        "ignore",
+        "ignore",
+        "ignore",
+        transfer.descriptor,
       ],
-      { stdio: ["ignore", "pipe", "pipe"] },
-    );
-    const stderr = [];
-    child.stderr.on("data", (chunk) => stderr.push(chunk));
-    child.once("error", reject);
-    child.once("close", (code, signal) => {
-      resolve({ code, signal, stderr: Buffer.concat(stderr).toString("utf8") });
-    });
+    },
+  );
+  const stderr = [];
+  child.stderr.on("data", (chunk) => stderr.push(chunk));
+  let failure;
+  child.once("error", (error) => {
+    failure = error;
   });
+  const closed = new Promise((resolve) => {
+    child.once("close", (code, signal) =>
+      resolve({ code, signal, stderr: Buffer.concat(stderr).toString("utf8") }),
+    );
+  });
+  onChildStarted?.(closed);
+  const outcome = await closed;
+  if (failure) throw failure;
+  return outcome;
 }
 
 describe("descriptor-bound promotion apply", () => {
@@ -91,7 +156,7 @@ describe("descriptor-bound promotion apply", () => {
     const legacy = path.join(root, "legacy");
     await fs.mkdir(legacy, { mode: 0o700 });
 
-    await runPromotionApply({
+    await applyWithLease({
       home,
       source,
       artifactSha256: await treeDigest(source),
@@ -122,7 +187,7 @@ describe("descriptor-bound promotion apply", () => {
     await fs.mkdir(destination);
     await fs.writeFile(path.join(destination, "sentinel"), "keep");
     await expect(
-      runPromotionApply({
+      applyWithLease({
         home,
         source,
         artifactSha256: await treeDigest(source),
@@ -135,9 +200,9 @@ describe("descriptor-bound promotion apply", () => {
   });
 
   // S35-H1R. Placement is one durable helper operation: the copy, the
-  // digest and the receipt all happen inside `promotion-apply.py` before it
-  // prints its success line, so `promote-preview.mjs` cannot fence between
-  // them (see the note at its `verifyPromotionLease` call). What keeps a
+  // digest and the receipt all happen inside `promotion-apply.py` under the
+  // inherited original lease before its success line. The helper checks that
+  // descriptor before copy and publication. What keeps a
   // second placement from landing on top of the first is the helper itself,
   // and that is what this proves against real bytes on disk.
   it("refuses a second placement into the destination a first placement made, leaving its bytes and receipt intact", async () => {
@@ -146,7 +211,7 @@ describe("descriptor-bound promotion apply", () => {
     const receipt = `${destination}.receipt.json`;
     const firstReceipt = '{"operation":"applied","generation":"A"}\n';
 
-    await runPromotionApply({
+    await applyWithLease({
       home,
       source,
       artifactSha256: await treeDigest(source),
@@ -166,7 +231,7 @@ describe("descriptor-bound promotion apply", () => {
     });
 
     await expect(
-      runPromotionApply({
+      applyWithLease({
         home,
         source: second,
         artifactSha256: await treeDigest(second),
@@ -187,7 +252,7 @@ describe("descriptor-bound promotion apply", () => {
     const receipt = `${destination}.receipt.json`;
 
     await expect(
-      runPromotionApply({
+      applyWithLease({
         home,
         source,
         artifactSha256: "0".repeat(64),
@@ -204,11 +269,14 @@ describe("descriptor-bound promotion apply", () => {
     const { source, home, applications } = await fixture();
     const destination = path.join(applications, "Farol.app");
     const receipt = `${destination}.receipt.json`;
-    const outcome = await runWithReceiptFailure({
-      home,
-      source,
-      artifactSha256: await treeDigest(source),
-    });
+    const outcome = await applyWithLease(
+      {
+        home,
+        source,
+        artifactSha256: await treeDigest(source),
+      },
+      runWithReceiptFailure,
+    );
 
     expect(outcome).toEqual({ code: 75, signal: null, stderr: "" });
     await expect(fs.lstat(destination)).rejects.toMatchObject({
@@ -226,7 +294,7 @@ describe("descriptor-bound promotion apply", () => {
     );
     await fs.appendFile(helperPath, "\n# tampered\n");
     await expect(
-      runPromotionApply({
+      applyWithLease({
         home,
         source,
         artifactSha256: await treeDigest(source),
@@ -246,7 +314,7 @@ describe("descriptor-bound promotion apply", () => {
     await fs.mkdir(actualHome, { mode: 0o700 });
     await fs.symlink(actualHome, linkedHome);
     await expect(
-      runPromotionApply({
+      applyWithLease({
         home: linkedHome,
         source,
         artifactSha256: await treeDigest(source),

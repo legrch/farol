@@ -255,6 +255,9 @@ export class ChatGptPhysical implements ChatGptPhysicalApi {
         !surface ||
         !surface.handle ||
         typeof surface.handle !== "object" ||
+        // Attempted destruction fences this exact handle even if the host
+        // remains visible. Late read callbacks cannot mint or revive authority.
+        this.disposed.has(surface.handle) ||
         surface.isDestroyed()
       )
         return null;

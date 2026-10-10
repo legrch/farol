@@ -109,7 +109,7 @@ func (s *State) Reconciled(r Restored, failure *Failure) {
 }
 
 func (s *State) BeginCheck(manual bool, now int64) bool {
-	if manual && !s.closed && !s.busy && s.view.Phase == Ready && s.view.BlockedBy != "" {
+	if manual && !s.closed && !s.busy && s.view.Phase == Ready && recheckableAdmissionBlock(s.view.BlockedBy) {
 		s.view.BlockedBy = ""
 		return false
 	}
@@ -173,7 +173,7 @@ func (s *State) BeginHandoff(action Action) (Archive, bool) {
 	var version string
 	switch action {
 	case Apply:
-		if s.view.Phase != Ready || s.archive == nil {
+		if s.view.Phase != Ready || s.view.BlockedBy != "" || s.archive == nil {
 			return Archive{}, false
 		}
 		version = s.archive.Version
@@ -231,4 +231,15 @@ func (s *State) Close() bool {
 
 func (s *State) fail(f Failure) {
 	s.view = Snapshot{Phase: Failed, Code: f.Code, RecoveryRequired: f.RecoveryRequired}
+}
+
+// Match the active updater's closed list. Observation cannot clear an unknown
+// or unclassified admission result; a later Apply still reacquires admission.
+func recheckableAdmissionBlock(code string) bool {
+	switch code {
+	case "UPDATE_CONNECTOR_ACTIVE", "UPDATE_TASK_ROUTE_NEEDS_DRAIN", "UPDATE_BROWSER_OPEN", "UPDATE_BROWSER_BUSY", "UPDATE_BROWSER_DRAFT", "UPDATE_WORK_PENDING":
+		return true
+	default:
+		return false
+	}
 }

@@ -1,4 +1,13 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import fs from "node:fs/promises";
+
+// Filesystem/descriptor doubles select macOS as a controlled host value only.
+// Restore the actual runner platform after each case; this is policy evidence,
+// not native lock, descriptor transfer or Linux/macOS qualification.
+const platformDescriptor = Object.getOwnPropertyDescriptor(
+  process,
+  "platform",
+)!;
 
 const fake = vi.hoisted(() => ({
   directoryInode: 20n,
@@ -58,12 +67,23 @@ import * as desktop from "../../src/apps/desktop/promotion-lease";
 import * as tooling from "../../tooling/promotion-lease.mjs";
 
 beforeEach(() => {
+  Object.defineProperty(process, "platform", {
+    ...platformDescriptor,
+    value: "darwin",
+  });
   fake.directoryInode = 20n;
   fake.fileInode = 30n;
   fake.mode = 0o600;
   fake.links = 1n;
   fake.canonical = "/private/fixture/farol-next-state/promotion.lease";
   fake.closeError = false;
+});
+afterEach(() => {
+  Object.defineProperty(process, "platform", platformDescriptor);
+  vi.restoreAllMocks();
+  expect(Object.getOwnPropertyDescriptor(process, "platform")).toEqual(
+    platformDescriptor,
+  );
 });
 
 describe.each([
@@ -77,6 +97,24 @@ describe.each([
       "promotion",
     ))!;
   }
+
+  it.each(["linux", "win32"] as const)(
+    "refuses the unsupported %s host before mocked lease IO",
+    async (platform) => {
+      Object.defineProperty(process, "platform", {
+        ...platformDescriptor,
+        value: platform,
+      });
+      vi.clearAllMocks();
+      await expect(
+        api.acquirePromotionLease("/private/fixture", "selected", "promotion"),
+      ).rejects.toThrow("PROMOTION_LEASE_PLATFORM_UNSUPPORTED");
+      expect(fs.mkdir).not.toHaveBeenCalled();
+      expect(fs.lstat).not.toHaveBeenCalled();
+      expect(fs.realpath).not.toHaveBeenCalled();
+      expect(fs.open).not.toHaveBeenCalled();
+    },
+  );
 
   it("selects the existing identity once and closes once without rewriting its record", async () => {
     const lease = await held();

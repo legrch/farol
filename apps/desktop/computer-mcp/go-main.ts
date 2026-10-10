@@ -12,6 +12,10 @@ import { loadConnectorLaunch } from "../bridge/connector-launch";
 import { ComputerBridge } from "../bridge/computer";
 import { ConnectorVerificationBridge } from "../bridge/connector-verification";
 import { createGoComputerMcpServer } from "../bridge/computer-mcp";
+import {
+  selectedCodexReadBridge,
+  type SelectedCodexReadBridge,
+} from "../bridge/selected-codex-read";
 import { PrivateMcpLifecycle } from "../../../src/modules/computer/infra/mcp/private-mcp-lifecycle";
 import { PrivateExecutionFence } from "../../../src/modules/computer/infra/mcp/execution-fence";
 
@@ -24,9 +28,11 @@ export async function runGoComputerMcp(file: string): Promise<void> {
   const client = new SocketConnectorClient(launch.opened.endpoint);
   let mutations: ConnectorMutationBridge | undefined;
   let processes: ConnectorProcessBridge | undefined;
+  let codexRead: SelectedCodexReadBridge | undefined;
   let connectionStatusAvailable = false;
   try {
     const identity = await client.connect();
+    codexRead = selectedCodexReadBridge(client, launch.opened, identity);
     // connect() has validated the actual endpoint handshake. An old backend
     // without this method must not advertise a status tool that cannot work.
     connectionStatusAvailable = identity.capabilities.includes(
@@ -78,6 +84,7 @@ export async function runGoComputerMcp(file: string): Promise<void> {
             : {}),
           ...(mutations ? { mutations } : {}),
           ...(processes ? { processes } : {}),
+          ...(codexRead ? { codexRead } : {}),
         },
       ),
     {

@@ -5,6 +5,9 @@ import (
 )
 
 func filesystemPrepare(image *filesystemImage, before, prepared task.Task, i task.Intent) error {
+	if i.ExactDispatchID != "" && i.ExactDispatchID != before.DispatchID {
+		return task.ErrIdentity
+	}
 	expected := before
 	expected.Admission = prepared.Admission
 	if prepared != expected || i.Binding != before.Binding || i.Parent != before.Parent || i.Expected != before.Reference || !filesystemAdmission(prepared.Admission, before.ID) {

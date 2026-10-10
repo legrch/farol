@@ -11,7 +11,7 @@ model/effort, grant lifetime, and a mandatory current-grant recheck. `New` is in
 `Options.RecheckDispatch` is immutable, mutation-only trusted Root wiring. Root
 must create the original retained Client with the exact initiating Parent peer
 and owning Task/journal intention check already connected. It receives the
-actual `task.Intent` before each `thread/start` / `turn/start` write, after all
+actual `task.Intent` before each `thread/start` / `turn/start` / `turn/steer` write, after all
 awaited qualification/history, write-lock waiting and frame construction. It
 checks current original Parent and exact selected Task/binding/intent; it does
 not issue admission. Its owner-gate callback performs value checks only and
@@ -38,7 +38,7 @@ Schema evidence and initialize home/platform checks do not identify an account
 or prove Codex Desktop visibility. No live installed capability is claimed here.
 
 With a dispatch hook present, `Supports` performs fresh project/model catalogue
-checks on one connection and advertises create. Continue additionally requires the independent bound witness
+checks on one connection and advertises create and active Message. Continue additionally requires the independent bound witness
 described below; an ordinary create/status selection leaves it unsupported.
 An effort-capable model requires the resolved binding's explicit effort; the client never rewrites the binding with a guessed default.
 Create reserves its bounded local operation fence before qualification, sends
@@ -85,11 +85,22 @@ sticky for reads but does not itself prevent known resource cleanup. Opening,
 claimed-client, physical release and late-exit uncertainty still block cleanup.
 Scratch closure releases only original descriptors and retains every directory.
 
-This composition has controlled CPU/race tests and bounded independent source
-review. It has no desktop Method, socket registration or handshake advertisement.
-Native scratch/runtime/client joins, trusted launcher wiring, current account/
-host qualification and a real external T0 read remain separate gates. It does
-not activate create, Continue, active steer or Shell.
+The portable `task.codex.selected.read` method is registered only on an admitted
+connector when trusted composition explicitly selects `NativeLaunch.CodexRead`
+and the same current publication contains the complete source and exact pair.
+Its private launch receipt carries that selection witness. The validated socket
+handshake and witness jointly gate the `codex_selected_thread_read` MCP tool;
+ordinary backends omit both. Requests accept only the result opt-in. The adapter
+holds one Computer read lease, checks the original publication around provider
+IO, and rejects crossed selections, oversized text or invented retention.
+
+Portable tests exercise real Go transport/Task adapters with a controlled proxy,
+and real TS socket/bridge/MCP adapters with controlled backend replies. These are
+separate in-memory segments, not a live native or installed end-to-end proof.
+The real launcher does not select this source. Native scratch/runtime/client
+joins, trusted launcher wiring, current account/host qualification, final review
+and one real external T0 read remain separate gates. No create, Continue, active
+steer or Shell authority follows from this read.
 
 Completed-parent follow-up uses `Task.Continue`, never `Message`. Trusted boot
 must supply `Options.Followup` with a `codex-followup-schema/v1` witness from
@@ -121,8 +132,33 @@ a concurrent mutation or contradictory post-effect history becomes sticky unknow
 Partial/lost ACKs, persistence callback failure and post-effect grant/epoch changes
 retain available lineage and fence all later mutations. No reconnect is attempted.
 
-Message and cancel explicitly return unsupported. No turn interrupt,
-active steering or consent ownership is qualified by this slice. Consent requests
+Message uses the existing Task owner's durable intent and active admission, the
+same binding/account epoch and original dispatch hook, and the existing handoff
+schema witness. The transferred actual CLI 0.160.1 schemas confirm the covered
+`turn/steer` fields; no extra follow-up witness or new engine is needed. The
+producer verifies exact project/writer/model-bound thread membership and one
+unique active turn through bounded pages, rereads the same thread's membership
+after those awaited pages, then sends one `turn/steer` with
+`threadId`, `expectedTurnId` and one bounded text input. The vendor's required
+active-turn precondition prevents substituting a completed or replacement turn.
+The membership reread shares the original deadline/epoch and is a point-in-time
+witness; the vendor supplies no remote project/writer/model membership CAS.
+An exact completion notice during qualification/write-lock/owner-hook waiting
+also prevents the write. No thread, turn, reconnect or replacement is started.
+
+Only an ACK naming the same exact turn publishes the existing reference once.
+Missing, crossed or malformed ACKs, failed persistence callbacks and post-effect
+grant/account changes retain that reference and fence all later mutations.
+Running is a nonterminal control acknowledgement, not fresh lifecycle or result
+evidence: completion after the ACK does not invent cancellation, rollback or
+retry. Steering preserves the original execution dispatch's event sink, including
+when called through `DispatchObserved`; its ACK does not reassign terminal facts
+to the Message operation. Cancel and turn interrupt remain unsupported.
+
+The source producer and controlled-peer tests do not activate product control or
+qualify the serving instance, account, provider or native host. Trusted Root must
+join Message through the existing exact Task admission and active-reference owner.
+Consent requests
 on the shared connection are left unanswered, without retaining their payload.
 Other server requests receive only the existing unsupported-method response.
 RPC errors do not attest that a mutation had no effect. Account-change notices
@@ -134,14 +170,16 @@ private listener is introduced. JSON rejects duplicate keys, invalid UTF-8,
 excessive nesting and trailing values. Messages are bounded to 8 MiB; calls share
 one 20-second absolute budget capped by grant expiry. Proxy stderr is discarded
 with a 64 KiB bound. Close signals only its exact proxy once and requires exit
-proof within a two-second cleanup budget; it never claims cancellation of the provider task. Signal refusal or
+proof within a two-second cleanup budget; it never claims cancellation of the provider task. The deadline bounds proof even before a delayed context timer
+notification arrives. A late exit leaves the original UNKNOWN result retained.
+Signal refusal or
 missing exit proof is unknown, with no escalation, fallback or relaunch.
 
 Hermetic tests inject a source-only pipe peer and OS boundary. They exercise the
 production client and WebSocket/RPC implementation but prove no actual host,
 socket, subscription, installed catalogue, process cleanup or provider operation.
-Boot/MCP registration, accepted integration, schema/host qualification, native
-tests and bounded live create/follow-up acceptance remain with Lead.
+Product/MCP registration, accepted integration, serving schema/host qualification,
+native tests and bounded live create/follow-up/steer acceptance remain with Lead.
 
 The follow-up slice is source-only and unaccepted on its delegated base. Its
 hermetic tests do not qualify installed schema, real parent delivery, lost-ACK

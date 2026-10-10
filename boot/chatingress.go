@@ -22,6 +22,7 @@ type chatHandle struct {
 	handle       *conversation.Handle
 	beforeSend   func(context.Context) error
 	accountOwner *accountapproval.Service
+	browserModel *chatBrowserModel
 }
 
 func (h chatHandle) send(ctx context.Context, deadline uint64) error {
@@ -104,6 +105,7 @@ func (s *ChatIngress) createLocked(ctx context.Context, operation string, input 
 	binding := conversation.Binding{ProfileID: s.peer.ProfileId, BackendGeneration: s.peer.BackendGeneration, OwnerID: s.owner, SessionID: input.SessionId, TaskID: task, TaskEpoch: 1, ParticipantID: participant, TurnID: turn, OperationID: operation, TurnGeneration: 1}
 	var previous *conversation.Handle
 	var accountOwner *accountapproval.Service
+	var browserModel *chatBrowserModel
 	if input.PreviousHandle != nil {
 		if account != nil {
 			return nil, errors.New("chat_previous_account_refused")
@@ -118,6 +120,7 @@ func (s *ChatIngress) createLocked(ctx context.Context, operation string, input 
 		binding.TurnGeneration++
 		previous = old.handle
 		accountOwner = old.accountOwner
+		browserModel = old.browserModel
 	}
 	in := conversation.Input{Required: conversation.RequiredControls{Model: input.Required.Model, Effort: input.Required.Effort, Mode: input.Required.Mode, Connector: input.Required.Connector}, Binding: binding, Selection: chatSelection(input.Selection), Resolution: chatResolution(input.Resolution), Prompt: input.Prompt}
 	var handle *conversation.Handle
@@ -130,13 +133,15 @@ func (s *ChatIngress) createLocked(ctx context.Context, operation string, input 
 				return nil, e
 			}
 			accountOwner = account.owner
+			browserModel = account.model
+			authorization.model = browserModel
 			handle, err = s.facade.CreateAuthorized(ctx, in, authorization.Authorize)
 		}
 	} else {
 		handle, err = s.facade.Follow(ctx, previous, in)
 	}
 	if handle != nil {
-		s.handles[id] = chatHandle{id: id, binding: binding, handle: handle, accountOwner: accountOwner}
+		s.handles[id] = chatHandle{id: id, binding: binding, handle: handle, accountOwner: accountOwner, browserModel: browserModel}
 	}
 	if err != nil {
 		return nil, err

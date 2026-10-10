@@ -3,6 +3,12 @@ import { openNativeProfileStorage } from "../../apps/desktop/bridge/profile-stor
 
 // CPU-only provisioning double: no real files, fsync, descriptors or native
 // profile are used. This does not attest crash durability or installed startup.
+// macOS is an explicit mocked host value, restored after each case. Neither
+// successful doubles nor platform refusals qualify native Linux/macOS storage.
+const platformDescriptor = Object.getOwnPropertyDescriptor(
+  process,
+  "platform",
+)!;
 const fixture = vi.hoisted(() => {
   type Node = {
     kind: "directory" | "file" | "symlink";
@@ -178,11 +184,42 @@ vi.mock("node:fs", () => ({ default: fixture.fs }));
 vi.mock("node:crypto", () => ({ randomUUID: () => "new-profile" }));
 beforeEach(() => {
   fixture.reset();
+  Object.defineProperty(process, "platform", {
+    ...platformDescriptor,
+    value: "darwin",
+  });
   vi.spyOn(process, "getuid").mockReturnValue(501);
 });
 afterEach(() => {
+  Object.defineProperty(process, "platform", platformDescriptor);
   vi.restoreAllMocks();
+  expect(Object.getOwnPropertyDescriptor(process, "platform")).toEqual(
+    platformDescriptor,
+  );
 });
+
+it.each(["linux", "win32"] as const)(
+  "refuses the unsupported %s host without provisioning mocked storage",
+  (platform) => {
+    Object.defineProperty(process, "platform", {
+      ...platformDescriptor,
+      value: platform,
+    });
+    expect(() =>
+      openNativeProfileStorage("/fixture/state", "computer"),
+    ).toThrow(
+      expect.objectContaining({
+        state: "refused",
+        code: "native_profile_storage_invalid",
+      }),
+    );
+    expect(fixture.mkdirs).toEqual([]);
+    expect(fixture.opened).toEqual([]);
+    expect(fixture.closed).toEqual([]);
+    expect(fixture.writes).toEqual([]);
+    expect([...fixture.nodes.keys()]).toEqual(["/fixture/state"]);
+  },
+);
 
 it("creates the version 2 mutation child only in known first provisioning", () => {
   const out = openNativeProfileStorage("/fixture/state", "computer");

@@ -547,15 +547,8 @@ export class WindowController implements RendererFacade {
       return false;
     }
     this.tasksInitialized = true;
-    const ids = new Set(
-      value.tasks.map((task) => `${task.taskId}:${task.turnId}`),
-    );
-    this.patch({
-      tasks: value,
-      activity: this.state.activity.filter((event) =>
-        ids.has(`${event.taskId}:${event.turnId}`),
-      ),
-    });
+    // Admitted metadata remains inspectable after its turn moves on.
+    this.patch({ tasks: value });
     return true;
   }
   private record(value: unknown): void {
@@ -1290,15 +1283,21 @@ export class WindowController implements RendererFacade {
       pending.computerGeneration === receipt.generation
     );
   }
-  task(command: ProductTaskCommand, intention: string): Promise<Intent> {
-    if (!ProductTaskCommandSchema.safeParse(command).success)
+  task(value: ProductTaskCommand, intention: string): Promise<Intent> {
+    const parsed = ProductTaskCommandSchema.safeParse(value);
+    if (!parsed.success)
       return Promise.resolve({
         id: intention,
         state: "refused",
         code: "TASK_COMMAND_INVALID",
       });
+    // Bind validation, fingerprint and transport to the same owned values.
+    const command = parsed.data;
     const nav = this.navigationRevision;
     return this.dispatch(intention, command, async () => {
+      const build = this.state.buildId;
+      const runtimeRevision = this.runtimeRevision;
+      const staleRevision = this.staleRevision;
       const result = ProductTaskCommandResultSchema.safeParse(
         await this.api.task(command),
       );
@@ -1308,7 +1307,13 @@ export class WindowController implements RendererFacade {
           state: "unknown",
           code: "TASK_OUTCOME_UNKNOWN",
         };
-      this.adoptTasks(result.data.state);
+      const sameContext = () =>
+        !this.disposed &&
+        build === this.state.buildId &&
+        runtimeRevision === this.runtimeRevision &&
+        staleRevision === this.staleRevision;
+      // The operation receipt can settle without replacing a newer owner view.
+      if (sameContext()) this.adoptTasks(result.data.state);
       if (!result.data.ok)
         return {
           id: intention,
@@ -1319,13 +1324,25 @@ export class WindowController implements RendererFacade {
               : "refused",
           code: result.data.error,
         };
+      const selectedTaskId = result.data.selectedTaskId;
+      const selected = result.data.state.tasks.find(
+        (task) => task.taskId === selectedTaskId,
+      );
       if (
-        !this.disposed &&
-        result.data.selectedTaskId &&
+        sameContext() &&
+        this.state.status === "current" &&
+        this.state.runtime === "ready" &&
+        selected &&
+        this.state.tasks.tasks.some(
+          (task) =>
+            task.taskId === selected.taskId &&
+            task.sessionId === selected.sessionId &&
+            task.turnId === selected.turnId,
+        ) &&
         nav === this.navigationRevision &&
         this.state.overlay === "none"
       )
-        this.navigate({ area: "chatgpt", taskId: result.data.selectedTaskId });
+        this.navigate({ area: "chatgpt", taskId: selected.taskId });
       return { id: intention, state: "applied", code: null };
     });
   }
@@ -1605,6 +1622,17 @@ export class WindowController implements RendererFacade {
       ? destination.activityId
       : this.state.destination.activityId;
     if (activityId !== undefined) Object.assign(next, { activityId });
+    const workspaceId = Object.hasOwn(destination, "workspaceId")
+      ? destination.workspaceId
+      : destination.area === undefined && destination.page === undefined
+        ? this.state.destination.workspaceId
+        : undefined;
+    if (
+      next.area === "settings" &&
+      next.page === "folders" &&
+      workspaceId !== undefined
+    )
+      Object.assign(next, { workspaceId });
     if (homeView) Object.assign(next, { homeView });
     const homeSelection = Object.hasOwn(destination, "homeSelection")
       ? destination.homeSelection

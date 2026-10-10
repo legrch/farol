@@ -1,0 +1,48 @@
+{
+  "ID": "finite-example",
+  "Parent": {
+    "ThreadID": "parent",
+    "TurnID": "parent-turn"
+  },
+  "Steps": [
+    {
+      "ID": "a",
+      "TaskID": "task-a",
+      "OperationID": "create-a",
+      "CancelOperationID": "cancel-a",
+      "DeliveryOperationID": "deliver-a",
+      "Dependencies": [],
+      "Required": ["create"],
+      "Output": {
+        "Kind": "text",
+        "MaxBytes": 1024
+      }
+    },
+    {
+      "ID": "b",
+      "TaskID": "task-b",
+      "OperationID": "create-b",
+      "CancelOperationID": "cancel-b",
+      "DeliveryOperationID": "deliver-b",
+      "Dependencies": [],
+      "Required": ["create"],
+      "Output": {
+        "Kind": "text",
+        "MaxBytes": 1024
+      }
+    },
+    {
+      "ID": "c",
+      "TaskID": "task-c",
+      "OperationID": "create-c",
+      "CancelOperationID": "cancel-c",
+      "DeliveryOperationID": "deliver-c",
+      "Dependencies": ["a", "b"],
+      "Required": ["create"],
+      "Output": {
+        "Kind": "text",
+        "MaxBytes": 1024
+      }
+    }
+  ]
+}

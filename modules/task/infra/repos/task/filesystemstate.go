@@ -24,6 +24,8 @@ type filesystemImage struct {
 	Revision   uint64
 	Tasks      map[string]port.Snapshot
 	Operations map[string]port.Operation
+	// Omitted for byte-identical old v1 images. Old binaries refuse enriched state.
+	Workflows *workflowImage `json:",omitempty"`
 }
 type filesystemEnvelope struct {
 	Image  filesystemImage
@@ -98,6 +100,9 @@ func filesystemIntent(i task.Intent) bool {
 	if i.Admission != (task.AdmissionBinding{}) && (!i.Admission.Valid() || i.Admission.TaskID != i.TaskID) {
 		return false
 	}
+	if i.ExactDispatchID != "" && (!task.ID(i.ExactDispatchID) || i.Action != task.Cancel && i.Action != task.Deliver) {
+		return false
+	}
 	if i.Action == task.Create {
 		return i.Expected == (task.Reference{})
 	}
@@ -143,7 +148,7 @@ func filesystemReceipt(i task.Intent, lineage task.Reference, r task.Receipt) bo
 	return r.Lifecycle.Valid() && r.Lifecycle != task.Unknown && r.Lifecycle != task.Refused && filesystemText(r.Result) && !r.CancelRequested
 }
 func filesystemImageValid(image *filesystemImage) bool {
-	if image == nil || !task.ID(image.ProfileID) || image.Version != 1 || image.Tasks == nil || image.Operations == nil || len(image.Tasks) > filesystemMaxTasks || len(image.Operations) > filesystemMaxOperations {
+	if image == nil || !filesystemWorkflowsValid(image) || !task.ID(image.ProfileID) || image.Version != 1 || image.Tasks == nil || image.Operations == nil || len(image.Tasks) > filesystemMaxTasks || len(image.Operations) > filesystemMaxOperations {
 		return false
 	}
 	creates := map[string]int{}
@@ -154,6 +159,12 @@ func filesystemImageValid(image *filesystemImage) bool {
 		snapshot, found := image.Tasks[i.TaskID]
 		if !found || id != i.OperationID || !filesystemIntent(i) || i.Binding.ProfileID != image.ProfileID || i.Binding != snapshot.Task.Binding || i.Parent != snapshot.Task.Parent {
 			return false
+		}
+		if i.ExactDispatchID != "" {
+			original, exists := image.Operations[i.ExactDispatchID]
+			if !exists || original.Intent.TaskID != i.TaskID || (original.Intent.Action != task.Create && original.Intent.Action != task.Continue && original.Intent.Action != task.Resume) || !original.Settled || original.Receipt.State != task.Known || original.Receipt.Reference != i.Expected {
+				return false
+			}
 		}
 		if i.Admission == (task.AdmissionBinding{}) {
 			if snapshot.Task.Admission != (task.ExecutionAdmission{}) {

@@ -6,7 +6,11 @@ import {
   useState,
 } from "react";
 import type { CSSProperties, ReactNode, RefObject } from "react";
-import { shellGeometry } from "../../pkg/shell-layout/geometry";
+import {
+  isCompactShell,
+  shellGeometry,
+  shellRailWidth,
+} from "../../pkg/shell-layout/geometry";
 import { useRenderer } from "./services";
 import { PanelBoundary } from "./boundary";
 import {
@@ -47,7 +51,7 @@ export function Icon({ name }: { name: string }) {
 export function connection(snapshot: WindowSnapshot) {
   return computerSetup(snapshot).label;
 }
-function title(snapshot: WindowSnapshot) {
+function title(snapshot: WindowSnapshot, filter: ActivityFilter) {
   return snapshot.destination.area === "settings"
     ? (pages.find(([id]) => id === snapshot.destination.page)?.[1] ??
         "Settings")
@@ -56,7 +60,7 @@ function title(snapshot: WindowSnapshot) {
           (task) => task.taskId === snapshot.destination.taskId && task.agent,
         )?.label ?? "ChatGPT")
       : snapshot.destination.area === "activity"
-        ? "Activity"
+        ? activityTitle(snapshot, filter)
         : snapshot.destination.area === "setup"
           ? (setupSteps.find(
               ([step]) => step === snapshot.destination.setupStep,
@@ -68,6 +72,23 @@ function activityItems(snapshot: WindowSnapshot, filter: ActivityFilter) {
   return [...snapshot.activity]
     .reverse()
     .filter((event) => filter === "all" || event.phase === "outcome_unknown");
+}
+function activitySelection(snapshot: WindowSnapshot, filter: ActivityFilter) {
+  const items = activityItems(snapshot, filter);
+  const selected = snapshot.destination.activityId
+    ? snapshot.activity.find(
+        (event) => event.id === snapshot.destination.activityId,
+      )
+    : items[0];
+  const missing = Boolean(snapshot.destination.activityId && !selected);
+  const filtered = Boolean(
+    selected && !items.some((event) => event.id === selected.id),
+  );
+  return { items, selected, missing, filtered };
+}
+function activityTitle(snapshot: WindowSnapshot, filter: ActivityFilter) {
+  const { selected, filtered } = activitySelection(snapshot, filter);
+  return selected && !filtered ? selected.label : "Activity";
 }
 function activityPhase(event: WindowSnapshot["activity"][number]) {
   return event.phase?.replaceAll("_", " ") ?? "Phase not recorded";
@@ -204,9 +225,28 @@ function ActivityRecord({
         {matchingChat && (
           <button
             type="button"
-            onClick={() =>
-              facade.navigate({ area: "chatgpt", taskId: selected.taskId })
-            }
+            onClick={() => {
+              const latest = facade.getSnapshot();
+              const recorded = latest.activity.some(
+                (event) =>
+                  event.id === selected.id &&
+                  event.taskId === selected.taskId &&
+                  event.turnId === selected.turnId,
+              );
+              const task = latest.tasks.tasks.find(
+                (item) =>
+                  item.taskId === selected.taskId &&
+                  item.turnId === selected.turnId,
+              );
+              if (
+                latest.status === "current" &&
+                latest.runtime === "ready" &&
+                recorded &&
+                task &&
+                task.agent?.observation !== "unavailable"
+              )
+                facade.navigate({ area: "chatgpt", taskId: task.taskId });
+            }}
           >
             View chat
           </button>
@@ -271,23 +311,20 @@ function Activity({
   filter,
   onFilter,
   showList,
+  heading,
 }: {
   snapshot: WindowSnapshot;
   facade: RendererFacade;
   filter: ActivityFilter;
   onFilter: (filter: ActivityFilter) => void;
   showList: boolean;
+  heading: RefObject<HTMLHeadingElement | null>;
 }) {
-  const heading = useRef<HTMLHeadingElement>(null);
   const previousOverlay = useRef(snapshot.overlay);
-  const items = activityItems(snapshot, filter);
-  const selected = snapshot.destination.activityId
-    ? snapshot.activity.find(
-        (event) => event.id === snapshot.destination.activityId,
-      )
-    : items[0];
-  const missing = Boolean(snapshot.destination.activityId && !selected);
-  const filtered = selected && !items.some((event) => event.id === selected.id);
+  const { items, selected, missing, filtered } = activitySelection(
+    snapshot,
+    filter,
+  );
   useLayoutEffect(() => {
     const returningFrom = previousOverlay.current;
     previousOverlay.current = snapshot.overlay;
@@ -296,8 +333,13 @@ function Activity({
       snapshot.overlay === "none" &&
       (returningFrom === "none" || returningFrom === "activity")
     )
-      heading.current?.focus();
-  }, [snapshot.destination.activityId, snapshot.sidebar, snapshot.overlay]);
+      heading.current?.focus({ preventScroll: true });
+  }, [
+    heading,
+    snapshot.destination.activityId,
+    snapshot.sidebar,
+    snapshot.overlay,
+  ]);
   const emptyTitle = missing
     ? "Event no longer available"
     : filter === "all" && !snapshot.activity.length
@@ -340,9 +382,6 @@ function Activity({
     );
   return (
     <>
-      <h1 ref={heading} tabIndex={-1}>
-        {selected && !filtered ? selected.label : "Activity"}
-      </h1>
       <p className="description">
         Recorded stages and outcomes, without storing the conversation itself.
       </p>
@@ -1024,32 +1063,50 @@ export function Shell() {
   const destination = state.destination;
   const [activityFilter, setActivityFilter] = useState<ActivityFilter>("all");
   const stage = useRef<HTMLElement>(null);
-  const pageKey =
-    destination.area === "settings" || destination.area === "setup"
-      ? `${destination.area}:${destination.page}:${destination.setupStep ?? ""}`
-      : destination.area === "home"
-        ? `home:${destination.homeView ?? "overview"}:${destination.homeSelection?.id ?? ""}`
-        : destination.area === "activity"
-          ? `activity:${destination.activityId ?? ""}`
-          : destination.area;
+  const activityHeading = useRef<HTMLHeadingElement>(null);
+  const sidebarTrigger = useRef<HTMLButtonElement>(null);
+  const sidebarPanel = useRef<HTMLElement>(null);
+  const previousSidebar = useRef({ open: false, destination });
+  const scrollPositions = useRef(
+    new WeakMap<WindowSnapshot["destination"], { top: number; left: number }>(),
+  );
   useLayoutEffect(() => {
     if (stage.current) {
-      stage.current.scrollTop = 0;
-      stage.current.scrollLeft = 0;
+      const saved = scrollPositions.current.get(destination);
+      stage.current.scrollTop = saved?.top ?? 0;
+      stage.current.scrollLeft = saved?.left ?? 0;
     }
-  }, [pageKey]);
-  const [compactWindow, setCompactWindow] = useState(
-    () => window.innerWidth < shellGeometry.autoRailBelow,
+  }, [destination]);
+  const [compactWindow, setCompactWindow] = useState(() =>
+    isCompactShell(window.innerWidth),
   );
   useEffect(() => {
-    const resize = () =>
-      setCompactWindow(window.innerWidth < shellGeometry.autoRailBelow);
+    const resize = () => setCompactWindow(isCompactShell(window.innerWidth));
     window.addEventListener("resize", resize);
     return () => window.removeEventListener("resize", resize);
   }, []);
   const sideVisible =
     state.sidebar === "overlay" || (state.sidebar === "full" && !compactWindow);
   const sidebarOverlay = sideVisible && state.sidebar === "overlay";
+  useLayoutEffect(() => {
+    const previous = previousSidebar.current;
+    previousSidebar.current = { open: sidebarOverlay, destination };
+    // Modal dialogs and destination views own their own focus transitions.
+    if (state.overlay !== "none") return;
+    if (sidebarOverlay && !previous.open) {
+      sidebarPanel.current
+        ?.querySelector<HTMLElement>(
+          "button:not(:disabled), select:not(:disabled), input:not(:disabled)",
+        )
+        ?.focus();
+    } else if (
+      !sidebarOverlay &&
+      previous.open &&
+      destination === previous.destination
+    ) {
+      sidebarTrigger.current?.focus();
+    }
+  }, [sidebarOverlay, destination, state.overlay]);
   const settings = destination.area === "settings";
   const settingsAttention = useSettingsAttention(facade, state);
   const configuration =
@@ -1109,7 +1166,7 @@ export function Shell() {
       data-sidebar-resizing={state.sidebarResizing}
       style={
         {
-          "--rail-width": `${shellGeometry.sidebarRail}px`,
+          "--rail-width": `${shellRailWidth(window.innerWidth)}px`,
           "--toolbar-height": `${shellGeometry.windowBar}px`,
           "--page-list-width": `${state.sidebarWidth}px`,
           "--side-width": `${sideVisible && !sidebarOverlay ? state.sidebarWidth : 0}px`,
@@ -1134,6 +1191,7 @@ export function Shell() {
             <Icon name="forward" />
           </button>
           <button
+            ref={sidebarTrigger}
             title="Show or hide page list"
             aria-label="Toggle sidebar"
             aria-expanded={sideVisible}
@@ -1155,7 +1213,13 @@ export function Shell() {
               <span className="separator">/</span>
             </span>
           )}
-          <strong>{title(state)}</strong>
+          {destination.area === "activity" ? (
+            <h1 ref={activityHeading} tabIndex={-1}>
+              {title(state, activityFilter)}
+            </h1>
+          ) : (
+            <strong>{title(state, activityFilter)}</strong>
+          )}
           {state.environment === "dev" && <small>Development</small>}
         </div>
         <button
@@ -1258,6 +1322,7 @@ export function Shell() {
       </nav>
       {sideVisible && (
         <aside
+          ref={sidebarPanel}
           className={`sidebar contextual-sidebar ${sidebarOverlay ? "sidebar-overlay" : ""}`}
           aria-label={settings ? "Settings pages" : "Page list"}
         >
@@ -1309,13 +1374,44 @@ export function Shell() {
                           : undefined
                       }
                       onClick={() => {
+                        const latest = facade.getSnapshot();
+                        const currentTask = latest.tasks.tasks.find(
+                          (item) =>
+                            item.taskId === task.taskId &&
+                            item.sessionId === task.sessionId &&
+                            item.turnId === task.turnId,
+                        );
+                        if (
+                          latest.status !== "current" ||
+                          latest.runtime !== "ready" ||
+                          !currentTask?.agent ||
+                          currentTask.agent.observation === "unavailable"
+                        )
+                          return;
                         facade.navigate({
                           area: "chatgpt",
-                          taskId: task.taskId,
+                          taskId: currentTask.taskId,
                         });
+                        const afterNavigation = facade.getSnapshot();
+                        const activationTask = afterNavigation.tasks.tasks.find(
+                          (item) =>
+                            item.taskId === currentTask.taskId &&
+                            item.sessionId === currentTask.sessionId &&
+                            item.turnId === currentTask.turnId,
+                        );
+                        if (
+                          afterNavigation.status !== "current" ||
+                          afterNavigation.runtime !== "ready" ||
+                          !activationTask?.agent ||
+                          activationTask.agent.observation === "unavailable"
+                        )
+                          return;
                         void facade.task(
-                          { kind: "task.activate", taskId: task.taskId },
-                          `activate:${task.taskId}`,
+                          {
+                            kind: "task.activate",
+                            taskId: activationTask.taskId,
+                          },
+                          `activate:${activationTask.taskId}`,
                         );
                       }}
                     >
@@ -1355,6 +1451,14 @@ export function Shell() {
         ref={stage}
         className="stage"
         inert={state.overlay !== "none" || sidebarOverlay}
+        onScrollCapture={(event) => {
+          if (event.target !== event.currentTarget) return;
+          // Save the displayed entry before navigation changes or clamps its DOM.
+          scrollPositions.current.set(destination, {
+            top: event.currentTarget.scrollTop,
+            left: event.currentTarget.scrollLeft,
+          });
+        }}
       >
         {state.status !== "current" && (
           <div className="notice" role="status">
@@ -1383,6 +1487,7 @@ export function Shell() {
                 filter={activityFilter}
                 onFilter={setActivityFilter}
                 showList={!sideVisible}
+                heading={activityHeading}
               />
             </div>
           ) : (

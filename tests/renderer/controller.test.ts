@@ -962,6 +962,35 @@ it("Home local views and exact record identities survive Back and Forward withou
   expect(f.api.task).not.toHaveBeenCalled();
   c.dispose();
 });
+it("workspace presentation identity belongs to the exact Settings history entry and generic entry clears it", async () => {
+  const f = fixture();
+  const c = new WindowController(f.api);
+  await c.start();
+  const configuration = c.getSnapshot().configuration;
+  c.navigate({
+    area: "home",
+    homeView: "attention",
+    homeSelection: { kind: "attention", id: "folder:second" },
+  });
+  const home = c.getSnapshot().destination;
+  c.navigate({ area: "settings", page: "folders", workspaceId: "second" });
+  expect(c.getSnapshot().destination.workspaceId).toBe("second");
+  c.travel(-1);
+  expect(c.getSnapshot().destination).toEqual(home);
+  c.travel(1);
+  expect(c.getSnapshot().destination.workspaceId).toBe("second");
+  c.navigate({ area: "home" });
+  c.navigate({ area: "settings", page: "folders" });
+  expect(c.getSnapshot().destination.workspaceId).toBeUndefined();
+  c.travel(-1);
+  c.travel(-1);
+  expect(c.getSnapshot().destination.workspaceId).toBe("second");
+  expect(c.getSnapshot().configuration).toBe(configuration);
+  expect(f.api.configure).not.toHaveBeenCalled();
+  expect(f.api.task).not.toHaveBeenCalled();
+  expect(f.api.snapshot).not.toHaveBeenCalled();
+  c.dispose();
+});
 it("Setup is a separate history destination with the same Settings host surface and no automatic effects", async () => {
   const f = fixture();
   const c = new WindowController(f.api);
@@ -1391,7 +1420,7 @@ describe("F0 window owner", () => {
       false,
       "full",
       "none",
-      180,
+      232,
     );
     c.travel(1);
     expect(c.getSnapshot().destination.page).toBe("appearance");
@@ -1516,7 +1545,172 @@ describe("F0 window owner", () => {
     expect(f.api.task).toHaveBeenCalledTimes(1);
     c.dispose();
   });
-  it("R05 excludes transcript text and obsolete task activity", async () => {
+  it.each([
+    {
+      name: "turn reuse",
+      tasks: [
+        { ...task(), turnId: "replacement-turn", label: "Different work" },
+      ],
+    },
+    { name: "task removal", tasks: [] },
+    { name: "task replacement", tasks: [task("replacement-task")] },
+  ])(
+    "retains admitted Activity metadata after $name while rejecting late obsolete events",
+    async (replacement) => {
+      const f = fixture();
+      const c = new WindowController(f.api);
+      await c.start();
+      f.emit("tasks", {
+        revision: 1,
+        tasks: [{ ...task(), label: "Original work" }],
+      });
+      const identity = {
+        ownerId: "private-owner",
+        sessionId: "private-session",
+        taskId: "task-1",
+        turnId: "task-1",
+        generation: 1,
+        at: 100,
+      };
+      f.emit("event", {
+        ...identity,
+        kind: "turn.terminal",
+        phase: "outcome_unknown",
+        code: "UNKNOWN",
+      });
+      const admitted = c.getSnapshot().activity[0]!;
+      expect(admitted).toEqual({
+        id: "task-1:task-1:1:1",
+        taskId: "task-1",
+        turnId: "task-1",
+        generation: 1,
+        label: "Original work",
+        kind: "turn.terminal",
+        at: 100,
+        phase: "outcome_unknown",
+        operation: null,
+        code: "UNKNOWN",
+      });
+      c.navigate({ area: "activity", activityId: admitted.id });
+      f.emit("tasks", { revision: 2, tasks: replacement.tasks });
+      expect(c.getSnapshot().activity).toEqual([admitted]);
+      expect(c.getSnapshot().activity[0]).toBe(admitted);
+      expect(c.getSnapshot().destination.activityId).toBe(admitted.id);
+      for (const late of [
+        {
+          ...identity,
+          at: 101,
+          kind: "turn.terminal",
+          phase: "completed",
+          code: "COMPLETED",
+        },
+        {
+          ...identity,
+          taskId: "never-admitted",
+          turnId: "unknown-turn",
+          at: 102,
+          kind: "turn.terminal",
+          phase: "failed",
+          code: "FAILED",
+        },
+        {
+          ...identity,
+          at: 103,
+          kind: "text.delta",
+          sequence: 1,
+          text: "private transcript",
+        },
+      ])
+        f.emit("event", late);
+      expect(c.getSnapshot().activity).toEqual([admitted]);
+      expect(c.getSnapshot().status).toBe("current");
+      const metadata = JSON.stringify(c.getSnapshot().activity);
+      for (const privateValue of [
+        "private-owner",
+        "private-session",
+        "private transcript",
+      ])
+        expect(metadata).not.toContain(privateValue);
+      expect(f.api.configure).not.toHaveBeenCalled();
+      expect(f.api.task).not.toHaveBeenCalled();
+      expect(f.api.snapshot).not.toHaveBeenCalled();
+      c.dispose();
+    },
+  );
+  it("evicts retained historical Activity only at the existing 256-record bound", async () => {
+    const f = fixture();
+    const c = new WindowController(f.api);
+    await c.start();
+    const emit = (id: string, at: number) =>
+      f.emit("event", {
+        ownerId: "owner",
+        sessionId: id,
+        taskId: id,
+        turnId: id,
+        generation: 1,
+        at,
+        kind: "turn.terminal",
+        phase: "outcome_unknown",
+        code: "UNKNOWN",
+      });
+    f.emit("tasks", { revision: 1, tasks: [task()] });
+    for (let at = 0; at < 4; at++) emit("task-1", at);
+    const historical = c.getSnapshot().activity;
+    f.emit("tasks", { revision: 2, tasks: [] });
+    expect(c.getSnapshot().activity).toEqual(historical);
+    f.emit("tasks", { revision: 3, tasks: [task("current-task")] });
+    for (let index = 0; index < 300; index++)
+      emit("current-task", 1000 + index);
+    const retained = c.getSnapshot().activity;
+    expect(retained).toHaveLength(256);
+    expect(retained[0]?.at).toBe(1044);
+    expect(retained.at(-1)?.at).toBe(1299);
+    expect(retained.every((event) => event.taskId === "current-task")).toBe(
+      true,
+    );
+    expect(new Set(retained.map((event) => event.id)).size).toBe(256);
+    expect(f.api.configure).not.toHaveBeenCalled();
+    expect(f.api.task).not.toHaveBeenCalled();
+    c.dispose();
+  });
+  it("keeps bootstrap Activity filtering bound to the final admitted task and turn", async () => {
+    const f = fixture();
+    const wait = deferred<unknown>();
+    vi.mocked(f.api.bootstrap).mockReturnValueOnce(wait.promise);
+    const c = new WindowController(f.api);
+    const started = c.start();
+    const identity = {
+      ownerId: "owner",
+      sessionId: "task-1",
+      taskId: "task-1",
+      generation: 1,
+      kind: "turn.terminal",
+      phase: "outcome_unknown",
+      code: "UNKNOWN",
+    };
+    f.emit("event", { ...identity, turnId: "obsolete-turn", at: 1 });
+    const current = {
+      ...task(),
+      turnId: "current-turn",
+      label: "Current work",
+    };
+    f.emit("tasks", { revision: 1, tasks: [current] });
+    f.emit("event", { ...identity, turnId: current.turnId, at: 2 });
+    wait.resolve({ ...bootstrap(), taskRevision: 1, tasks: [current] });
+    await started;
+    expect(c.getSnapshot().status).toBe("current");
+    expect(c.getSnapshot().activity).toHaveLength(1);
+    expect(c.getSnapshot().activity[0]).toMatchObject({
+      taskId: current.taskId,
+      turnId: current.turnId,
+      label: "Task",
+      at: 2,
+    });
+    expect(f.api.configure).not.toHaveBeenCalled();
+    expect(f.api.task).not.toHaveBeenCalled();
+    c.dispose();
+  });
+  it("R05 excludes transcript text and newly arriving obsolete task activity", async () => {
     const f = fixture();
     const c = new WindowController(f.api);
     await c.start();
@@ -1542,9 +1736,19 @@ describe("F0 window owner", () => {
       code: "UNKNOWN",
     });
     expect(c.getSnapshot().activity).toHaveLength(1);
+    const admitted = c.getSnapshot().activity;
     expect(JSON.stringify(c.getSnapshot())).not.toContain("private body");
     f.emit("tasks", { revision: 2, tasks: [] });
-    expect(c.getSnapshot().activity).toHaveLength(0);
+    // The selected design retains admitted metadata; obsolete arrivals stay ignored.
+    expect(c.getSnapshot().activity).toEqual(admitted);
+    f.emit("event", {
+      ...identity,
+      at: 101,
+      kind: "turn.terminal",
+      phase: "completed",
+      code: "COMPLETED",
+    });
+    expect(c.getSnapshot().activity).toEqual(admitted);
     c.dispose();
   });
   it("R25 R26 ignores identical layout and stale overlay mirror", async () => {

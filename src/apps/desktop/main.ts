@@ -6,6 +6,7 @@ import {
   startDesktopGoCore,
   type DesktopGoCore,
 } from "../../../apps/desktop/go-core-host";
+import { goCoreQuitClosers } from "../../../apps/desktop/go-core-quit-closers";
 import type {
   ChatComputerAdmissionResponse,
   SettingsDeliveryResult,
@@ -26,7 +27,10 @@ import {
 import { readChatHistoryView } from "../../../apps/desktop/chat-history-view";
 import { projectReadConversation } from "../../../apps/desktop/read-conversation-projection";
 import { ReadConversationPromptSchema } from "../../pkg/product-settings/chat-conversation";
-import { BridgeError } from "../../../apps/desktop/bridge/client";
+import {
+  BridgeError,
+  type BackendLifecycleObservation,
+} from "../../../apps/desktop/bridge/client";
 import { ConnectorHostError } from "../../../apps/desktop/bridge/connector-host";
 import {
   reportComputerCheckDiagnostic,
@@ -309,7 +313,6 @@ import {
 import { writeQuitReceipt } from "./quit-receipt-store";
 import { createQuitUpdatePreparation } from "./quit-update-preparation";
 import { drainComputerConnector } from "./computer-connector-drain";
-import { goCoreQuitClosers } from "../../../apps/desktop/go-core-quit-closers";
 import { isTrustedIpcSender } from "./ipc-sender";
 import {
   currentBootTimeMs,
@@ -443,6 +446,7 @@ import { AuthorityTransitionReservation } from "./authority-transition";
 import {
   ConnectorRuntimeEffectUnknown,
   SecureMcpConnectorRuntime,
+  type ConnectorRuntimeLifecycleObservation,
 } from "./secure-mcp-connector-runtime";
 import { clearConnectorVerificationReceipt } from "../../modules/computer/infra/mcp/connector-verification-receipt";
 import { PrivateExecutionFence } from "../../modules/computer/infra/mcp/execution-fence";
@@ -2242,26 +2246,65 @@ async function initializeLiveTaskState(): Promise<void> {
 async function openLiveTaskSurface(taskId: string): Promise<boolean> {
   if (quitInProgress || installedUpdateAdmission) return false;
   const route = liveTaskRoutes.get(taskId);
-  if (!route) return false;
+  const task = liveTaskRegistry.get(taskId);
+  if (!route || !task) return false;
+  const currentTask = () => {
+    const current = liveTaskRegistry.get(taskId);
+    return liveTaskRoutes.get(taskId) === route &&
+      current?.sessionId === task.sessionId &&
+      current.turnId === task.turnId
+      ? current
+      : null;
+  };
+  const recordSurfaceFailure = () => {
+    if (!currentTask()) return;
+    const error = "TASK_SURFACE_UNREACHABLE";
+    taskSurfaceFailures.set(taskId, error);
+    try {
+      publishTaskSurfaceStatus({ taskId, state: "failed", error });
+    } catch {
+      // An unavailable observer cannot replace the classified load failure.
+    }
+    const current = currentTask();
+    // Loading a surface does not resolve an existing Task obligation or
+    // replace a completion already observed by the activity owner.
+    if (
+      !current ||
+      current.lifecycle === "running" ||
+      current.lifecycle === "outcome_unknown" ||
+      current.lifecycle === "completed"
+    )
+      return;
+    try {
+      setLiveTaskLifecycle(taskId, "failed");
+    } catch {
+      // Keep the original route outcome and recorded surface failure when
+      // the existing lifecycle owner's synchronous publication cannot finish.
+    }
+  };
   try {
     const opened = await route.open();
+    if (!currentTask()) return false;
     if (opened.status !== "opened") {
-      setLiveTaskLifecycle(taskId, "failed");
+      recordSurfaceFailure();
       return false;
     }
     // Live ChatGPT surfaces also publish their observed load result. Without
     // this, renderer controls requiring a ready selected page never appear.
     taskSurfaceFailures.delete(taskId);
     publishTaskSurfaceStatus({ taskId, state: "ready", error: null });
-    const current = liveTaskRegistry.get(taskId);
-    if (current?.lifecycle === "failed") {
+    const current = currentTask();
+    if (!current) return false;
+    if (current.lifecycle === "failed") {
       setLiveTaskLifecycle(taskId, "idle");
     }
+    if (!currentTask()) return false;
     applyLayout();
+    if (!currentTask()) return false;
     focusForLayoutAfterRendererCommit();
-    return true;
+    return currentTask() !== null;
   } catch {
-    setLiveTaskLifecycle(taskId, "failed");
+    recordSurfaceFailure();
     return false;
   }
 }
@@ -3540,6 +3583,7 @@ async function stopAndConfirmComputerMcp(
   connector = secureMcpConnectorRuntime,
   inFlightStart: Promise<void> | null = null,
   core = desktopGoCore,
+  savedChat = savedChatBridgeRuntime,
 ): Promise<void> {
   if (!connector) throw new Error("CONNECTOR_STOP_UNCONFIRMED");
   const lifecycle = computerMcpLifecycle();
@@ -3550,7 +3594,6 @@ async function stopAndConfirmComputerMcp(
     stopConnector: () => connector.stop(),
     closeSavedChat: async () => {
       // Wait for admitted account work before closing its Browser endpoint.
-      const savedChat = savedChatBridgeRuntime;
       try {
         if (savedChat) {
           await savedChat.close();
@@ -4418,11 +4461,24 @@ function startConnectorTransportWatch(): void {
           !connectorTransportCurrent(original, original.revision, false, true)
         )
           return;
-        await recordConnectorRuntime(
+        const observationWindow = window;
+        const failure = await recordConnectorRuntime(
           "outcome_unknown",
           original.runtimeGeneration,
           original.computerGeneration,
         );
+        if (
+          !failure &&
+          !quitInProgress &&
+          !installedUpdateAdmission &&
+          configuration === original.owner &&
+          secureMcpConnectorRuntime === original.connector &&
+          desktopGoCore === original.core &&
+          window === observationWindow &&
+          observationWindow &&
+          !observationWindow.isDestroyed()
+        )
+          observationWindow.webContents.send(channels.configurationChanged);
       } finally {
         connectorTaskAdmission = false;
         transition.release();
@@ -4456,6 +4512,38 @@ function startConnectorTransportWatch(): void {
     connectorTransportWatch?.resume();
     check();
   });
+}
+
+function reportOwnedBackendLifecycle(
+  observation:
+    BackendLifecycleObservation | ConnectorRuntimeLifecycleObservation,
+): void {
+  // Project only the original producer's closed terminal facts. This sink never
+  // looks up mutable host state or changes admission, recovery or drain results.
+  try {
+    console.warn(
+      "FAROL_BACKEND_LIFECYCLE:" +
+        JSON.stringify({
+          at: new Date().toISOString(),
+          source: observation.source,
+          phase: observation.phase,
+          event: observation.event,
+          code: observation.code,
+          state: observation.state,
+          exitCode: observation.exitCode,
+          signal: observation.signal,
+          forced: observation.forced,
+          ...(observation.source === "go-backend"
+            ? {
+                hostLifetimeId: observation.hostLifetimeId,
+                childLaunchId: observation.childLaunchId,
+              }
+            : { runtimeGeneration: observation.runtimeGeneration }),
+        }),
+    );
+  } catch {
+    // A closed diagnostic output cannot replace the original lifetime outcome.
+  }
 }
 
 function reportConnectorTransport(
@@ -10252,13 +10340,22 @@ function applyLayout(): void {
 
 async function createTaskViews(): Promise<void> {
   if (!window || !runtime) return;
+  const taskViewHost = window;
   const activeRuntime = runtime;
+  const startupIsCurrent = () =>
+    window === taskViewHost &&
+    !taskViewHost.isDestroyed() &&
+    !quitInProgress &&
+    !installedUpdateAdmission &&
+    runtimeState === "ready" &&
+    runtime === activeRuntime;
+  if (!startupIsCurrent()) return;
   const base = runtimeBase();
   if (!base || !installNetworkFence()) return;
   for (const task of activeRuntime.tasks) {
-    if (runtimeState !== "ready" || runtime !== activeRuntime) return;
+    if (!startupIsCurrent()) return;
     const retained = taskViews.get(task.taskId);
-    if (retained && !retained.webContents.isDestroyed()) {
+    if (retained && retained.webContents?.isDestroyed() === false) {
       continue;
     }
     const view = new WebContentsView({
@@ -10290,6 +10387,12 @@ async function createTaskViews(): Promise<void> {
           extraHeaders: `Authorization: Bearer ${task.readToken}\n`,
         },
       );
+      if (
+        !startupIsCurrent() ||
+        taskViews.get(task.taskId) !== view ||
+        view.webContents?.isDestroyed() !== false
+      )
+        return;
       taskSurfaceFailures.delete(task.taskId);
       publishTaskSurfaceStatus({
         taskId: task.taskId,
@@ -10304,36 +10407,64 @@ async function createTaskViews(): Promise<void> {
       throw error;
     }
   }
-  if (runtimeState === "ready" && runtime === activeRuntime) applyLayout();
+  if (startupIsCurrent()) applyLayout();
 }
 
-async function consumeSse(task: RuntimeReady["tasks"][number]): Promise<void> {
-  if (!runtime || !window) return;
-  const controller = new AbortController();
+async function consumeSse(
+  task: RuntimeReady["tasks"][number],
+  controller = new AbortController(),
+): Promise<void> {
+  const activeRuntime = runtime;
+  const taskViewHost = window;
+  if (
+    !activeRuntime ||
+    !taskViewHost ||
+    taskViewHost.isDestroyed() ||
+    runtimeState !== "ready" ||
+    quitInProgress ||
+    installedUpdateAdmission
+  )
+    return;
   streamControllers.get(task.taskId)?.abort();
   streamControllers.set(task.taskId, controller);
+  const streamIsCurrent = () =>
+    !controller.signal.aborted &&
+    streamControllers.get(task.taskId) === controller &&
+    runtime === activeRuntime &&
+    runtimeState === "ready" &&
+    window === taskViewHost &&
+    !taskViewHost.isDestroyed();
   const response = await fetch(
-    `http://127.0.0.1:${runtime.port}/events/${encodeURIComponent(task.taskId)}`,
+    `http://127.0.0.1:${activeRuntime.port}/events/${encodeURIComponent(task.taskId)}`,
     {
       headers: { authorization: `Bearer ${task.readToken}` },
       signal: controller.signal,
     },
   );
+  if (!streamIsCurrent()) {
+    if (streamControllers.get(task.taskId) === controller) {
+      streamControllers.delete(task.taskId);
+    }
+    return;
+  }
   if (!response.ok || !response.body)
     throw new Error("RUNTIME_STREAM_UNAVAILABLE");
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let carry = "";
-  while (!controller.signal.aborted) {
+  while (streamIsCurrent()) {
     const part = await reader.read();
+    // A dispatched read may still settle after its controller or host was
+    // replaced. Its bytes cannot update the replacement's projection.
+    if (!streamIsCurrent()) break;
     if (part.done) {
-      if (!controller.signal.aborted) throw new Error("RUNTIME_STREAM_ENDED");
-      break;
+      throw new Error("RUNTIME_STREAM_ENDED");
     }
     carry += decoder.decode(part.value, { stream: true });
     const frames = carry.split("\n\n");
     carry = frames.pop() ?? "";
     for (const frame of frames) {
+      if (!streamIsCurrent()) break;
       const data = frame
         .split("\n")
         .find((line) => line.startsWith("data: "))
@@ -10358,7 +10489,7 @@ async function consumeSse(task: RuntimeReady["tasks"][number]): Promise<void> {
       ) {
         pendingComputer.delete(task.taskId);
       }
-      window?.webContents.send(channels.runtimeEvent, parsed.data);
+      taskViewHost.webContents.send(channels.runtimeEvent, parsed.data);
     }
   }
   if (streamControllers.get(task.taskId) === controller) {
@@ -10615,6 +10746,7 @@ function installIpc(): void {
 }
 
 async function createWindow(): Promise<void> {
+  if (quitInProgress || installedUpdateAdmission) return;
   const testPlacement =
     windowMode === "secondary-visible"
       ? selectPreviewWindowPlacement(
@@ -10671,6 +10803,11 @@ async function createWindow(): Promise<void> {
     publishWindowState();
   });
   const taskViewHost = window;
+  const startupIsCurrent = () =>
+    window === taskViewHost &&
+    !taskViewHost.isDestroyed() &&
+    !quitInProgress &&
+    !installedUpdateAdmission;
   window.on("close", () => nativeViewVisibility.detachHost(taskViewHost));
   window.on("closed", () => {
     nativeViewVisibility.detachHost(taskViewHost);
@@ -10679,28 +10816,51 @@ async function createWindow(): Promise<void> {
     window = null;
     windowPresentationReady = false;
   });
-  await window.loadFile(path.join(directory, "shell.html"));
+  if (!startupIsCurrent()) return;
+  await taskViewHost.loadFile(path.join(directory, "shell.html"));
+  // Keep the admitted load's outcome, but a withdrawn host cannot dispatch
+  // another startup stage or publish readiness for its replacement.
+  if (!startupIsCurrent()) return;
   publishWindowState();
+  if (!startupIsCurrent()) return;
   attachTaskViews();
+  if (!startupIsCurrent()) return;
   await createTaskViews();
+  if (!startupIsCurrent()) return;
   if (!demoMode && selectedTaskId) {
     await openLiveTaskSurface(selectedTaskId);
+    if (!startupIsCurrent()) return;
     // Restore the other retained ChatGPT views behind the selected one. A
     // tab switch can then show its already loaded page in the same frame;
     // embedded surfaces only focus when they are actually visible.
     void Promise.allSettled(
       [...liveTaskRoutes.entries()]
         .filter(([taskId]) => taskId !== selectedTaskId)
-        .map(([, route]) => route.open()),
+        .map(([, route]) => {
+          if (!startupIsCurrent()) return;
+          return route.open();
+        }),
     );
   }
   for (const task of runtime?.tasks ?? []) {
-    void consumeSse(task).catch((error: unknown) => {
+    if (!startupIsCurrent()) return;
+    const activeRuntime = runtime;
+    const controller = new AbortController();
+    void consumeSse(task, controller).catch((error: unknown) => {
       if (error instanceof Error && error.name === "AbortError") return;
-      if (runtimeState !== "ready") return;
+      if (
+        window !== taskViewHost ||
+        taskViewHost.isDestroyed() ||
+        runtimeState !== "ready" ||
+        runtime !== activeRuntime ||
+        controller.signal.aborted ||
+        streamControllers.get(task.taskId) !== controller
+      )
+        return;
       failTaskSurface(task.taskId);
     });
   }
+  if (!startupIsCurrent()) return;
   windowPresentationReady = true;
   revealWindow();
 }
@@ -10763,10 +10923,19 @@ function reconcileVisibleTestDisplay(): void {
 }
 
 function ensureWindow(): Promise<void> {
+  if (quitInProgress || installedUpdateAdmission) return Promise.resolve();
   return windowOpenCoordinator.ensure({
     hasWindow: () => window !== null && !window.isDestroyed(),
-    reveal: revealWindow,
-    open: createWindow,
+    reveal: () => {
+      if (quitInProgress || installedUpdateAdmission) return;
+      revealWindow();
+    },
+    open: () => {
+      // The coordinator defers creation. Quit/update may close admission
+      // after this request was queued, before the native callback runs.
+      if (quitInProgress || installedUpdateAdmission) return Promise.resolve();
+      return createWindow();
+    },
   });
 }
 
@@ -10790,7 +10959,7 @@ let quitInProgress = false;
 
 function isPrimaryReady(): boolean {
   return primaryStartupReady({
-    stopping: quitInProgress || runtimeStopping,
+    stopping: quitInProgress || runtimeStopping || installedUpdateAdmission,
     runtimeState,
     windowReady: window !== null && !window.isDestroyed(),
     taskViewCount: [...taskViewKinds.values()].filter(
@@ -10804,17 +10973,20 @@ async function handleSecondInstance(candidate: unknown): Promise<void> {
   const decision = decideSecondInstance(launchIdentity, candidate);
   if (!decision) return;
   let status = decision.status;
-  if (status === "reopened" && (quitInProgress || runtimeStopping)) {
-    // The primary is quitting: acknowledge that it cannot take this launch
+  if (
+    status === "reopened" &&
+    (quitInProgress || runtimeStopping || installedUpdateAdmission)
+  ) {
+    // Quit/update owns admission: acknowledge that it cannot take this launch
     // instead of reopening a window that is about to close.
     status = "reopen-failed";
   }
   if (status === "reopened") {
     try {
       await primaryStartup.whenReady();
-      // Quit may have begun while this launch waited for startup: check
+      // Quit/update may have begun while this launch waited for startup: check
       // again before opening a window that is about to close.
-      if (quitInProgress || runtimeStopping) {
+      if (quitInProgress || runtimeStopping || installedUpdateAdmission) {
         status = "reopen-failed";
       } else {
         const outcome = await containWindowOpenFailure(
@@ -11011,6 +11183,7 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
         stateRoot,
         home: app.getPath("home"),
         settings: currentSettings,
+        onLifecycleObservation: reportOwnedBackendLifecycle,
         browser: (context) =>
           createDesktopChatBrowser({
             context,
@@ -11054,16 +11227,39 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
       }),
     );
     await runDesktopStartupBoundary("go-settings", () => {
-      configuration!.attachComputerAuthority(() => desktopGoCore!.withdraw());
-      desktopGoCore!.connectSettingsStore((profileId) => {
-        const store = configuration!.attachSettingsDeliveryStore({
+      const settingsOwner = configuration!;
+      const settingsCore = desktopGoCore!;
+      settingsOwner.attachComputerAuthority(() => settingsCore.withdraw());
+      settingsCore.connectSettingsStore((profileId) => {
+        const store = settingsOwner.attachSettingsDeliveryStore({
           profileId,
           ownerId: "owner-desktop",
         });
         return {
           read: (input) => store.read(input.deadlineMillis),
           replace: (input) => store.replace(input.change, input.deadlineMillis),
-          fence: () => store.fence(),
+          fence: () => {
+            const observationWindow = window;
+            const outcome = store.fence();
+            if (
+              configuration === settingsOwner &&
+              desktopGoCore === settingsCore &&
+              !quitInProgress &&
+              !installedUpdateAdmission &&
+              window === observationWindow &&
+              observationWindow &&
+              !observationWindow.isDestroyed()
+            ) {
+              try {
+                observationWindow.webContents.send(
+                  channels.configurationChanged,
+                );
+              } catch {
+                // Renderer delivery must not replace the original fence outcome.
+              }
+            }
+            return outcome;
+          },
         };
       });
     });
@@ -11074,11 +11270,14 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
   connectorCredentialStore = new PrivateConnectorKeyStore({
     root: secureMcpCredentialRoot(),
   });
-  secureMcpConnectorRuntime = new SecureMcpConnectorRuntime({
-    root: secureMcpConnectorRoot(),
-    homePath: await codexHostProcessHomePath(),
-    tempPath: app.getPath("temp"),
-  });
+  secureMcpConnectorRuntime = new SecureMcpConnectorRuntime(
+    {
+      root: secureMcpConnectorRoot(),
+      homePath: await codexHostProcessHomePath(),
+      tempPath: app.getPath("temp"),
+    },
+    { onLifecycleObservation: reportOwnedBackendLifecycle },
+  );
   // Starts with the app, on the persisted port, and never autospawns a
   // host: see Decisions.md N04, item 1. The real chat-turn route (packet
   // N04c) is the already-running Route B provider: `routeBModelTurnHandler`
@@ -11365,7 +11564,12 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
           name: "connector",
           close: async () => {
             try {
-              await stopAndConfirmComputerMcp(connector, inFlightStart, core);
+              await stopAndConfirmComputerMcp(
+                connector,
+                inFlightStart,
+                core,
+                savedChat,
+              );
             } finally {
               // Even an unconfirmed MCP drain must close account admission.
               // close() waits for already admitted work; it does not cancel Send

@@ -1,5 +1,7 @@
 import {
   clampPageListWidth,
+  isCompactShell,
+  shellRailWidth,
   shellGeometry,
 } from "../../pkg/shell-layout/geometry";
 export { shellGeometry } from "../../pkg/shell-layout/geometry";
@@ -25,11 +27,12 @@ export function deriveSurfaceLayout(input: {
   compactBrowser?: boolean;
   checkFeedbackVisible?: boolean;
 }) {
-  const autoRail = input.width < shellGeometry.autoRailBelow;
+  const autoRail = isCompactShell(input.width);
+  const railWidth = shellRailWidth(input.width);
   const sidebarWidth =
     autoRail || input.sidebar !== "full"
-      ? shellGeometry.sidebarRail
-      : shellGeometry.sidebarRail +
+      ? railWidth
+      : railWidth +
         clampPageListWidth(input.sidebarWidth ?? shellGeometry.pageListDefault);
   const pageTop = shellGeometry.windowBar;
   return {

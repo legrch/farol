@@ -200,11 +200,31 @@ const checkStatus = {
   unknown: "Result needs review",
   unavailable: "Status unavailable",
 };
+// Optional Sign in reports the current page sample or its original operation
+// outcome. Generic Computer captions cannot stand in for that evidence.
+const signInStatus = {
+  authenticated: { state: "verified", status: "Signed in" },
+  signed_out: { state: "needed", status: "Signed out" },
+  pending: { state: "pending", status: "Checking sign-in…" },
+  unknown: { state: "unknown", status: "Current sign-in is unknown" },
+  outcome_unknown: { state: "unknown", status: "Outcome unknown" },
+};
 
 // Validate observed UI evidence, not a fixture's claim or an absent status.
 // The caller declares each expected row and independent Computer readiness.
 export function assertSetupOverviewEvidence(observed, expected) {
   assert.equal(typeof expected.ready, "boolean");
+  assert.equal(typeof expected.signIn, "string", "SETUP_SIGNIN_STATUS_MISSING");
+  assert.ok(
+    Object.hasOwn(signInStatus, expected.signIn),
+    "SETUP_SIGNIN_STATUS_INVALID",
+  );
+  const signIn = signInStatus[expected.signIn];
+  assert.equal(
+    expected.states.signin,
+    signIn.state,
+    "SETUP_SIGNIN_STATE_MISMATCH",
+  );
   assert.deepEqual(
     Object.keys(expected.states).sort(),
     setupSteps
@@ -226,20 +246,15 @@ export function assertSetupOverviewEvidence(observed, expected) {
         Object.hasOwn(checkStatus, state),
         `SETUP_STATE_INVALID:${step}`,
       );
+      const status = step === "signin" ? signIn.status : checkStatus[state];
       return {
         step,
         label,
         optional: step === "signin",
         state,
-        status:
-          step === "signin" && expected.signInStatus
-            ? expected.signInStatus
-            : checkStatus[state],
+        status,
         navigationState: state,
-        navigationStatus:
-          step === "signin" && expected.signInStatus
-            ? expected.signInStatus
-            : checkStatus[state],
+        navigationStatus: status,
       };
     }),
     "SETUP_OVERVIEW_EVIDENCE_MISMATCH",

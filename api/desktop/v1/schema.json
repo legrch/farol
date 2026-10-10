@@ -36,7 +36,9 @@
     "task.continue": "effect",
     "task.operation.status": "read",
     "task.observation.read": "read",
+    "task.codex.selected.read": "read",
     "task.resume": "effect",
+    "task.message": "effect",
     "chat.computer.read": "effect",
     "chat.computer.return": "effect",
     "chat.caller.begin": "effect",
@@ -955,6 +957,63 @@
         },
         "projectBoundCreateStatus": {
           "type": "boolean"
+        }
+      }
+    },
+    "TaskSelectedCodexReadSelection": {
+      "type": "object",
+      "fields": {
+        "binding": {
+          "type": "TaskBinding"
+        },
+        "reference": {
+          "type": "TaskCodexReadSelection"
+        }
+      }
+    },
+    "TaskSelectedCodexReadRequest": {
+      "type": "object",
+      "fields": {
+        "includeResult": {
+          "type": "boolean",
+          "optional": true
+        }
+      }
+    },
+    "TaskSelectedCodexReadResponse": {
+      "type": "object",
+      "fields": {
+        "selection": {
+          "type": "TaskSelectedCodexReadSelection"
+        },
+        "lifecycle": {
+          "type": "text",
+          "values": [
+            "running",
+            "completed",
+            "failed",
+            "interrupted",
+            "needs_input"
+          ]
+        },
+        "text": {
+          "type": "string",
+          "maxBytes": 65536
+        },
+        "source": {
+          "type": "text",
+          "values": ["stored"]
+        },
+        "snapshot": {
+          "type": "text",
+          "values": ["non_atomic"]
+        },
+        "retained": {
+          "type": "boolean"
+        },
+        "resultEvidence": {
+          "type": "text",
+          "values": ["", "provider_history"]
         }
       }
     },
@@ -1991,6 +2050,19 @@
           "type": "string",
           "minBytes": 1,
           "maxBytes": 65536
+        }
+      }
+    },
+    "TaskMessage": {
+      "type": "object",
+      "fields": {
+        "dispatchId": {
+          "type": "id"
+        },
+        "message": {
+          "type": "string",
+          "minBytes": 1,
+          "maxBytes": 8192
         }
       }
     },
@@ -3085,6 +3157,20 @@
         },
         "request": {
           "type": "TaskResume"
+        }
+      }
+    },
+    "TaskRoutedMessage": {
+      "type": "object",
+      "fields": {
+        "deadlineMillis": {
+          "type": "decimal"
+        },
+        "handleId": {
+          "type": "id"
+        },
+        "request": {
+          "type": "TaskMessage"
         }
       }
     },
@@ -4296,6 +4382,10 @@
         },
         "admissionOperationId": {
           "type": "id"
+        },
+        "codexRead": {
+          "type": "TaskSelectedCodexReadSelection",
+          "optional": true
         },
         "launchFile": {
           "type": "text",

@@ -377,6 +377,7 @@ function desktopFixture() {
     sidebarMode: "full",
     sidebarWidth: 180,
     shellOverlay: "none",
+    quitInProgress: false,
     installedUpdateAdmission: false,
     runtimeState: "ready",
     runtime: { tasks: [{ taskId: "runtime", readToken: "fixture-only" }] },
@@ -653,7 +654,7 @@ describe("desktop layout attachment integration (source callbacks + fake host)",
     f.events.length = 0;
     f.context.sidebarWidth = 240;
     f.api.applyLayout();
-    expect(f.view.bounds).toEqual({ x: 296, y: 58, width: 884, height: 702 });
+    expect(f.view.bounds).toEqual({ x: 302, y: 58, width: 878, height: 702 });
     expect(f.events).toEqual(["page:bounds"]);
   });
   it("retains the page through close/detach and reattaches only the visible page to a new window", () => {

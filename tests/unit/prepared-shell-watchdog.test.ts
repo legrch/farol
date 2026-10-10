@@ -1,6 +1,7 @@
 import { EventEmitter } from "node:events";
 import vm from "node:vm";
 import { describe, expect, it, vi } from "vitest";
+import { SandboxedWorkspaceShell } from "../../src/modules/computer/infra/native/sandboxed-workspace-shell";
 import { SHELL_WATCHDOG_SOURCE } from "../../src/modules/computer/infra/native/shell-watchdog-source";
 
 // Pure VM: synthetic IPC, child, clock and self-group signals. This proves no
@@ -19,7 +20,10 @@ function fixture(mode: string | null = "go-prepared-v1", selected = true) {
   });
   const messages: Record<string, unknown>[] = [];
   const signals: [number, string][] = [];
-  const timers = new Map<number, { callback: () => void; delay: number }>();
+  const timers = new Map<
+    number,
+    { callback: () => void; delay: number; at: number }
+  >();
   let nextTimer = 0;
   let now = 1000;
   let fault: "none" | "backpressure" | "callback" | "throw" = "none";
@@ -65,7 +69,7 @@ function fixture(mode: string | null = "go-prepared-v1", selected = true) {
     Date: { now: () => now },
     setTimeout(callback: () => void, delay: number) {
       const id = ++nextTimer;
-      timers.set(id, { callback, delay });
+      timers.set(id, { callback, delay, at: now + delay });
       return id;
     },
     clearTimeout(id: number) {
@@ -93,7 +97,7 @@ function fixture(mode: string | null = "go-prepared-v1", selected = true) {
   const tick = (time: number) => {
     now = time;
     for (const [key, timer] of [...timers]) {
-      if (timer.delay > time - 1000 || !timers.delete(key)) continue;
+      if (timer.at > time || !timers.delete(key)) continue;
       timer.callback();
     }
   };
@@ -808,4 +812,219 @@ describe("explicitly selected prepared watchdog without native effects", () => {
       ]);
     },
   );
+});
+
+describe("legacy synchronous spawn refusal without native effects", () => {
+  const start = {
+    type: "start",
+    executable: "/synthetic/executor",
+    args: ["-c", "synthetic command"],
+    cwd: "/synthetic/workspace",
+    environment: {},
+    stdin: "",
+    authorityDeadlineAt: 16000,
+    commandDeadlineAt: 17000,
+  };
+  function refuseSpawn() {
+    const f = fixture(null, false);
+    f.spawn.mockImplementation(() => {
+      throw Error("PRIVATE_SYNCHRONOUS_SPAWN_ERROR");
+    });
+    return f;
+  }
+
+  it("flushes the original generic error before the same controller exits", () => {
+    const f = refuseSpawn();
+    f.hold("error");
+    f.message(start);
+    expect(f.messages).toEqual([{ type: "error" }]);
+    expect(f.process.exit).not.toHaveBeenCalled();
+    expect(f.spawn).toHaveBeenCalledTimes(1);
+    f.deliver();
+    expect(f.process.exit).toHaveBeenCalledExactlyOnceWith(1);
+    expect(f.timers.size).toBe(0);
+    expect(f.signals).toEqual([]);
+    expect(f.messages).toEqual([{ type: "error" }]);
+    expect(JSON.stringify(f.messages)).not.toContain("PRIVATE");
+  });
+
+  it("bounds lost error ACK by the original earliest absolute deadline", () => {
+    const f = refuseSpawn();
+    f.hold("error");
+    f.setNow(15000);
+    f.message(start);
+    expect([...f.timers.values()].map((timer) => timer.delay)).toEqual([1000]);
+    f.tick(15999);
+    expect(f.process.exit).not.toHaveBeenCalled();
+    f.tick(16000);
+    expect(f.process.exit).toHaveBeenCalledExactlyOnceWith(1);
+    f.deliver();
+    f.message(start);
+    f.stop();
+    f.process.emit("disconnect");
+    expect(f.spawn).toHaveBeenCalledTimes(1);
+    expect(f.process.exit).toHaveBeenCalledTimes(1);
+    expect(f.messages).toEqual([{ type: "error" }]);
+    expect(f.signals).toEqual([]);
+  });
+
+  it.each(["throw", "callback"] as const)(
+    "settles the same controller on an original error-frame %s failure",
+    (fault) => {
+      const f = refuseSpawn();
+      f.fail("error", fault);
+      f.message(start);
+      expect(f.process.exit).toHaveBeenCalledExactlyOnceWith(1);
+      expect(f.messages).toEqual([{ type: "error" }]);
+      expect(f.timers.size).toBe(0);
+      expect(f.signals).toEqual([]);
+      f.message(start);
+      expect(f.spawn).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("waits for the original callback during IPC backpressure", () => {
+    const f = refuseSpawn();
+    f.hold("error");
+    f.fail("error", "backpressure");
+    f.message(start);
+    expect(f.process.exit).not.toHaveBeenCalled();
+    f.deliver();
+    expect(f.process.exit).toHaveBeenCalledExactlyOnceWith(1);
+    expect(f.messages).toEqual([{ type: "error" }]);
+    expect(f.signals).toEqual([]);
+  });
+
+  it.each(["stop", "SIGTERM", "SIGINT"])(
+    "honors original %s while the error callback is held",
+    (trigger) => {
+      const f = refuseSpawn();
+      f.hold("error");
+      f.message(start);
+      if (trigger === "stop") f.stop();
+      else f.process.emit(trigger);
+      expect(f.process.exit).toHaveBeenCalledExactlyOnceWith(1);
+      expect(f.timers.size).toBe(0);
+      f.deliver();
+      f.message(start);
+      expect(f.process.exit).toHaveBeenCalledTimes(1);
+      expect(f.spawn).toHaveBeenCalledTimes(1);
+      expect(f.messages).toEqual([{ type: "error" }]);
+      expect(f.signals).toEqual([]);
+    },
+  );
+
+  it.each(["disconnect", "error"])(
+    "settles the original controller on %s without inventing a command close",
+    (event) => {
+      const f = refuseSpawn();
+      f.hold("error");
+      f.message(start);
+      if (event === "disconnect") f.process.connected = false;
+      f.process.emit(event);
+      expect(f.process.exit).toHaveBeenCalledExactlyOnceWith(1);
+      expect(f.timers.size).toBe(0);
+      f.deliver();
+      f.message(start);
+      expect(f.spawn).toHaveBeenCalledTimes(1);
+      expect(f.process.exit).toHaveBeenCalledTimes(1);
+      expect(f.messages).toEqual([{ type: "error" }]);
+      expect(f.signals).toEqual([]);
+    },
+  );
+
+  it("does not start a fresh budget when the synchronous attempt spends its deadline", () => {
+    const f = refuseSpawn();
+    f.spawn.mockImplementation(() => {
+      f.setNow(16000);
+      throw Error("PRIVATE_SYNCHRONOUS_SPAWN_ERROR");
+    });
+    f.message(start);
+    expect(f.process.exit).toHaveBeenCalledExactlyOnceWith(1);
+    expect(f.messages).toEqual([]);
+    expect(f.timers.size).toBe(0);
+    expect(f.signals).toEqual([]);
+  });
+
+  it("refuses a NUL command before execution admission or dispatch reservation", async () => {
+    const admitExecution = vi.fn(async () => {
+      throw Error("UNEXPECTED_ADMISSION");
+    });
+    const reserve = vi.fn();
+    const dispatch = vi.fn();
+    type Args = ConstructorParameters<typeof SandboxedWorkspaceShell>;
+    // These unused values cannot qualify authority: this fixture proves only
+    // refusal before the authority or any workspace/native effect is accessed.
+    const shell = new SandboxedWorkspaceShell(
+      {} as Args[0],
+      {} as Args[1],
+      {} as Args[2],
+      "/unused/private",
+      () => 1000,
+      "/unused/home",
+      { admitExecution },
+    );
+    const input = {
+      operationId: "synthetic-nul-command",
+      workspaceId: "unused-workspace",
+      relativeCwd: ".",
+      command: "synthetic\0command",
+      stdin: "permitted\0stdin",
+      timeoutMs: 1000,
+      write: false,
+    };
+    expect(
+      await shell.start(input, undefined, dispatch, undefined, reserve),
+    ).toEqual({
+      ok: false,
+      error: { code: "SHELL_INPUT_INVALID", retry: "never" },
+    });
+    expect(admitExecution).not.toHaveBeenCalled();
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(reserve).not.toHaveBeenCalled();
+    expect(
+      await shell.start({ ...input, command: "synthetic command" }),
+    ).toEqual({
+      ok: false,
+      error: { code: "SHELL_AUTHORITY_REVOKED", retry: "never" },
+    });
+    expect(admitExecution).toHaveBeenCalledTimes(1);
+  });
+
+  it("revalidates a command changed during the original execution admission", async () => {
+    type Args = ConstructorParameters<typeof SandboxedWorkspaceShell>;
+    const input = {
+      operationId: "synthetic-changed-command",
+      workspaceId: "unused-workspace",
+      relativeCwd: ".",
+      command: "synthetic command",
+      timeoutMs: 1000,
+      write: false,
+    };
+    const approval = {} as Args[0];
+    const participant = {} as Args[1];
+    const admitExecution = vi.fn(async () => {
+      input.command = "synthetic\0command";
+      return {
+        approval,
+        participant,
+        deadlineAt: 16000,
+        current: async () => true,
+      };
+    });
+    const shell = new SandboxedWorkspaceShell(
+      approval,
+      participant,
+      {} as Args[2],
+      "/unused/private",
+      () => 1000,
+      "/unused/home",
+      { admitExecution },
+    );
+    expect(await shell.start(input)).toEqual({
+      ok: false,
+      error: { code: "SHELL_INPUT_INVALID", retry: "never" },
+    });
+    expect(admitExecution).toHaveBeenCalledTimes(1);
+  });
 });

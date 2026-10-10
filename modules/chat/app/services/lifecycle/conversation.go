@@ -52,7 +52,7 @@ func (s *Service) FollowConversation(ctx context.Context, previous *Conversation
 	}
 	old := h.fixed
 	b := input.Binding
-	if old.ProfileID != b.ProfileID || old.BackendGeneration != b.BackendGeneration || old.OwnerID != b.OwnerID || old.SessionID != b.SessionID || old.TaskID != b.TaskID || old.TaskEpoch != b.TaskEpoch || old.ParticipantID != b.ParticipantID || input.Selection != h.target.Selection || input.Required != h.target.Required || b.OperationID == old.OperationID || b.TurnID == old.TurnID || b.TurnGeneration <= old.TurnGeneration {
+	if old.ProfileID != b.ProfileID || old.BackendGeneration != b.BackendGeneration || old.OwnerID != b.OwnerID || old.SessionID != b.SessionID || old.TaskID != b.TaskID || old.TaskEpoch != b.TaskEpoch || old.ParticipantID != b.ParticipantID || input.Selection != h.target.Selection || input.Required != h.target.Required || input.Resolution != h.target.Resolution || b.OperationID == old.OperationID || b.TurnID == old.TurnID || b.TurnGeneration <= old.TurnGeneration {
 		s.deps.Gate.Unlock()
 		return nil, Mismatch
 	}

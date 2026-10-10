@@ -1,5 +1,9 @@
 import { z } from "zod";
-import type { TaskModelCatalogueView } from "../../../pkg/owner-config/contract";
+import {
+  RuntimeTaskModelSchema,
+  TaskEffortSchema,
+  type TaskModelCatalogueView,
+} from "../../../pkg/owner-config/contract";
 
 /** Trusted request lifetime; never accepted as a connector tool argument. */
 export type CodexTaskRequestContext = Readonly<{
@@ -34,6 +38,141 @@ export const CodexThreadRuntimeSchema = z.union([
 export type CodexThreadRuntime = z.infer<typeof CodexThreadRuntimeSchema>;
 
 const Identifier = z.string().regex(/^[A-Za-z0-9_-]{1,120}$/u);
+const DispatchId = z.string().uuid();
+const UnknownTask = z.strictObject({
+  status: z.literal("outcome_unknown"),
+  dispatchId: DispatchId,
+});
+const RefusedTask = z.strictObject({
+  status: z.literal("refused"),
+  code: Identifier,
+});
+const TaskReference = {
+  dispatchId: DispatchId,
+  threadId: Identifier,
+  turnId: Identifier,
+};
+const TurnStatus = z.enum(["inProgress", "completed", "failed", "interrupted"]);
+const CatalogueModel = RuntimeTaskModelSchema.refine(
+  (model) =>
+    !/[\u0000-\u0020\u007f]/u.test(model.id) &&
+    !/[\u0000-\u001f\u007f]/u.test(model.displayName) &&
+    new Set(model.supportedEfforts).size === model.supportedEfforts.length &&
+    (model.defaultEffort === undefined ||
+      model.supportedEfforts.includes(model.defaultEffort)),
+);
+// The existing producer includes fresh, bounded model/list evidence on a
+// known pre-effect model refusal. Keep that explicit extension closed too.
+export const CodexTaskModelAvailabilitySchema = z
+  .strictObject({
+    status: z.literal("refused"),
+    code: Identifier,
+    configuredModel: RuntimeTaskModelSchema.shape.model,
+    configuredEffort: TaskEffortSchema.optional(),
+    available: z.enum(["yes", "no", "unknown"]),
+    availableModels: z.array(CatalogueModel).max(2000).readonly(),
+  })
+  .refine((value) => {
+    const models = value.availableModels;
+    const selected = models.some(
+      (model) => model.model === value.configuredModel,
+    );
+    return (
+      new Set(models.map((model) => model.id)).size === models.length &&
+      new Set(models.map((model) => model.model)).size === models.length &&
+      (value.available === "unknown"
+        ? models.length === 0
+        : value.available === "yes"
+          ? selected
+          : !selected)
+    );
+  });
+const RefusedTaskCreate = RefusedTask.extend({
+  modelAvailability: CodexTaskModelAvailabilitySchema.optional(),
+}).refine(
+  (value) =>
+    value.modelAvailability === undefined ||
+    value.code === value.modelAvailability.code,
+);
+
+/** Closed published receipts; a caller's key never repairs crossed lineage. */
+export const CodexTaskCreateSchema = z.union([
+  UnknownTask,
+  RefusedTaskCreate,
+  z.strictObject({ status: z.literal("dispatched"), ...TaskReference }),
+]);
+export const CodexTaskMessageSchema = z.union([
+  UnknownTask,
+  RefusedTask,
+  z.strictObject({
+    status: z.literal("steered"),
+    dispatchId: DispatchId,
+    turnId: Identifier,
+  }),
+]);
+export const CodexTaskStatusSchema = z.union([
+  z.strictObject({ status: z.literal("unknown") }),
+  UnknownTask,
+  z.strictObject({
+    status: z.literal("known"),
+    ...TaskReference,
+    turnStatus: TurnStatus,
+    // Legacy ports may omit runtime. Omission remains unavailable, never idle.
+    threadRuntime: CodexThreadRuntimeSchema.optional(),
+  }),
+]);
+export const CodexTaskResultSchema = z.union([
+  z.strictObject({ status: z.literal("unknown") }),
+  UnknownTask,
+  z.strictObject({
+    status: z.enum(["running", "failed", "interrupted"]),
+    ...TaskReference,
+    threadRuntime: CodexThreadRuntimeSchema.optional(),
+  }),
+  z.strictObject({
+    status: z.literal("completed"),
+    ...TaskReference,
+    finalItemId: Identifier,
+    // Retain the existing producer's UTF-16 limit (at most 768 KiB UTF-8).
+    text: z
+      .string()
+      .min(1)
+      .max(256 * 1024)
+      .refine((value) => !value.includes("\0")),
+  }),
+]);
+export const CodexTaskObserveSchema = z.union([
+  RefusedTask,
+  z.strictObject({
+    status: z.literal("outcome_unknown"),
+    threadId: DispatchId,
+  }),
+  z.strictObject({
+    status: z.literal("observed"),
+    threadId: DispatchId,
+    title: z
+      .string()
+      .max(1000)
+      .refine((value) => !value.includes("\0"))
+      .nullable(),
+    model: z
+      .string()
+      .max(120)
+      .refine((value) => !value.includes("\0"))
+      .nullable(),
+    turns: z
+      .array(z.strictObject({ id: Identifier, status: TurnStatus }))
+      .max(100)
+      .readonly(),
+    hasMoreTurns: z.boolean(),
+    threadRuntime: CodexThreadRuntimeSchema.optional(),
+  }),
+]);
+export const CodexTaskAdoptSchema = z.union([
+  RefusedTask,
+  UnknownTask,
+  z.strictObject({ status: z.literal("adopted"), dispatchId: DispatchId }),
+]);
 const AbsolutePath = z
   .string()
   .min(2)
@@ -464,7 +603,12 @@ export interface CodexTaskRoute {
         turnId: string;
       }>
     | Readonly<{ status: "outcome_unknown"; dispatchId: string }>
-    | Readonly<{ status: "refused"; code: string }>
+    | Readonly<{
+        status: "refused";
+        code: string;
+        modelAvailability?:
+          z.infer<typeof CodexTaskModelAvailabilitySchema> | undefined;
+      }>
   >;
   /** Synchronous trusted reply check after Computer fence release; no provider I/O. */
   isReadAdmitted?(context?: CodexTaskReadContext): boolean;

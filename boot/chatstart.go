@@ -16,6 +16,7 @@ import (
 type chatStartAccount struct {
 	captured capturedChatAccount
 	owner    *accountapproval.Service
+	model    *chatBrowserModel
 }
 
 // The trusted host calls start only after the owner explicitly confirms its
@@ -62,6 +63,10 @@ func (s *ChatIngress) start(ctx context.Context, operation string, in wire.ChatS
 		return nil, err
 	}
 	account := &chatStartAccount{captured: capturedChatAccount{grant: grant, approvalID: id}, owner: owner}
+	account.model, err = captureChatBrowserModel(ctx, &account.captured, *capture, chatport.AccountScope{ProfileID: s.peer.ProfileId, BackendGeneration: s.peer.BackendGeneration, OwnerID: s.owner, SessionID: in.SessionId}, chatport.AccountObservation{State: o.State, Source: o.Source, PrincipalKey: o.PrincipalKey, ObservedAtMillis: wireUint(o.ObservedAtMillis), ExpiresAtMillis: wireUint(o.ExpiresAtMillis)}, clock)
+	if err != nil {
+		return nil, readAccountRefusal("chat_start_model_capture_invalid")
+	}
 	s.withdrawals[owner] = true
 	selection := capture.Selection
 	resolved := wire.BrowserSelection{Provider: selection.Provider, Alias: selection.Alias, AccountId: selection.AccountID, ModelId: selection.ModelID, Effort: selection.Effort, Mode: selection.Mode, ToolsEnabled: selection.ToolsEnabled, ConnectorId: selection.ConnectorID, ConnectorGrantId: selection.ConnectorGrantID}

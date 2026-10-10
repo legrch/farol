@@ -1,6 +1,7 @@
-import { StrictMode, act } from "react";
+import { StrictMode, act, useLayoutEffect, useRef } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
+import { isCompactShell } from "../../src/pkg/shell-layout/geometry";
 import { Shell } from "../../src/ui/renderer/shell";
 import type { WindowSnapshot } from "../../src/ui/renderer/contract";
 import { Services } from "../../src/ui/renderer/services";
@@ -23,10 +24,10 @@ afterEach(async () => {
   for (const cleanup of cleanups.splice(0)) await cleanup();
   document.body.replaceChildren();
 });
-async function mount(data = bootstrap()) {
+async function mount(data = bootstrap(), compactViewport = () => false) {
   const f = fixture();
   vi.mocked(f.api.bootstrap).mockResolvedValue(data);
-  const c = new WindowController(f.api);
+  const c = new WindowController(f.api, undefined, undefined, compactViewport);
   await c.start();
   const host = document.createElement("div");
   document.body.append(host);
@@ -68,6 +69,224 @@ function agentTask(id = "task-1") {
     },
   };
 }
+// jsdom scroll properties/events only; Chromium layout/clamping remains unqualified.
+function scrollStage(host: Element, top: number, left: number) {
+  const stage = host.querySelector<HTMLElement>("main.stage")!;
+  stage.scrollTop = top;
+  stage.scrollLeft = left;
+  stage.dispatchEvent(new Event("scroll"));
+  return stage;
+}
+function stageOffset(host: Element) {
+  const stage = host.querySelector<HTMLElement>("main.stage")!;
+  return [stage.scrollTop, stage.scrollLeft];
+}
+it("history stage scroll restores both offsets using the exact immutable entry", async () => {
+  const { host, c, f } = await mount();
+  const configuration = c.getSnapshot().configuration;
+  await act(async () => c.navigate({ area: "settings", page: "appearance" }));
+  const first = c.getSnapshot().destination;
+  expect(Object.isFrozen(first)).toBe(true);
+  await act(async () => scrollStage(host, 180, 17));
+  await act(async () => c.navigate({ area: "settings", page: "connection" }));
+  expect(stageOffset(host)).toEqual([0, 0]);
+  const second = c.getSnapshot().destination;
+  const stage = scrollStage(host, 290, 29);
+  await act(async () => {
+    c.navigate({ area: "home", homeView: "work" });
+    // Simulate content clamping before the navigation commit. Cleanup must not
+    // overwrite the earlier observed offset with this changed DOM value.
+    stage.scrollTop = 0;
+    stage.scrollLeft = 0;
+  });
+  await act(async () => button(host, "Back").click());
+  expect(c.getSnapshot().destination).toBe(second);
+  expect(stageOffset(host)).toEqual([290, 29]);
+  await act(async () => button(host, "Back").click());
+  expect(c.getSnapshot().destination).toBe(first);
+  expect(stageOffset(host)).toEqual([180, 17]);
+  await act(async () => button(host, "Forward").click());
+  expect(c.getSnapshot().destination).toBe(second);
+  expect(stageOffset(host)).toEqual([290, 29]);
+  expect(c.getSnapshot().configuration).toBe(configuration);
+  expect(f.api.configure).not.toHaveBeenCalled();
+  expect(f.api.task).not.toHaveBeenCalled();
+});
+it("history stage scroll separates identical-route visits and a truncated forward branch", async () => {
+  const { host, c, f } = await mount();
+  await act(async () => c.navigate({ area: "settings", page: "appearance" }));
+  const original = c.getSnapshot().destination;
+  scrollStage(host, 180, 17);
+  await act(async () => c.navigate({ area: "settings", page: "connection" }));
+  scrollStage(host, 290, 29);
+  await act(async () => c.navigate({ area: "settings", page: "appearance" }));
+  const discarded = c.getSnapshot().destination;
+  expect(discarded).not.toBe(original);
+  expect(stageOffset(host)).toEqual([0, 0]);
+  scrollStage(host, 440, 44);
+  await act(async () => button(host, "Back").click());
+  expect(stageOffset(host)).toEqual([290, 29]);
+  await act(async () => c.navigate({ area: "settings", page: "appearance" }));
+  expect(c.getSnapshot().destination).not.toBe(discarded);
+  expect(c.getSnapshot().forward).toBe(false);
+  expect(button(host, "Forward").disabled).toBe(true);
+  expect(stageOffset(host)).toEqual([0, 0]);
+  scrollStage(host, 660, 66);
+  await act(async () => button(host, "Back").click());
+  expect(stageOffset(host)).toEqual([290, 29]);
+  await act(async () => button(host, "Back").click());
+  expect(c.getSnapshot().destination).toBe(original);
+  expect(stageOffset(host)).toEqual([180, 17]);
+  await act(async () => button(host, "Forward").click());
+  await act(async () => button(host, "Forward").click());
+  expect(stageOffset(host)).toEqual([660, 66]);
+  expect(f.api.configure).not.toHaveBeenCalled();
+  expect(f.api.task).not.toHaveBeenCalled();
+});
+it("history stage scroll preserves the current offset during same-route updates", async () => {
+  const { host, c, f } = await mount();
+  await act(async () => c.navigate({ area: "settings", page: "appearance" }));
+  const entry = c.getSnapshot().destination;
+  scrollStage(host, 150, 15);
+  await act(async () => f.emit("route", { state: "loaded" }));
+  expect(c.getSnapshot().destination).toBe(entry);
+  expect(stageOffset(host)).toEqual([150, 15]);
+  await act(async () => c.navigate({ area: "settings", page: "appearance" }));
+  expect(c.getSnapshot().destination).toBe(entry);
+  expect(stageOffset(host)).toEqual([150, 15]);
+  expect(f.api.configure).not.toHaveBeenCalled();
+  expect(f.api.task).not.toHaveBeenCalled();
+});
+it("history stage scroll distinguishes workspace entries with the same former page key", async () => {
+  const value = settings();
+  value.computer.workspaces = ["A", "B"].map((name, index) => ({
+    workspaceId:
+      index === 0
+        ? "22222222-2222-4222-8222-222222222222"
+        : "33333333-3333-4333-8333-333333333333",
+    root: `/work/${name}`,
+    label: name,
+    access: "read" as const,
+    excludedPaths: [],
+    rootIdentity: { device: "1", inode: String(index + 2) },
+  }));
+  const { host, c, f } = await mount({
+    ...bootstrap(),
+    configuration: {
+      status: "ready",
+      settings: ProductSettingsSchema.parse(value),
+    },
+  });
+  await act(async () =>
+    c.navigate({
+      area: "settings",
+      page: "folders",
+      workspaceId: value.computer.workspaces[0]!.workspaceId,
+    }),
+  );
+  scrollStage(host, 160, 16);
+  await act(async () =>
+    c.navigate({
+      area: "settings",
+      page: "folders",
+      workspaceId: value.computer.workspaces[1]!.workspaceId,
+    }),
+  );
+  expect(
+    host.querySelector(".workspace-detail")?.getAttribute("aria-label"),
+  ).toBe("Workspace B");
+  expect(stageOffset(host)).toEqual([0, 0]);
+  scrollStage(host, 280, 28);
+  await act(async () => button(host, "Back").click());
+  expect(
+    host.querySelector(".workspace-detail")?.getAttribute("aria-label"),
+  ).toBe("Workspace A");
+  expect(stageOffset(host)).toEqual([160, 16]);
+  await act(async () => button(host, "Forward").click());
+  expect(stageOffset(host)).toEqual([280, 28]);
+  expect(f.api.configure).not.toHaveBeenCalled();
+  expect(f.api.task).not.toHaveBeenCalled();
+});
+it("history stage scroll restores Activity offsets while preserving inspector focus", async () => {
+  const { host } = await activityFixture();
+  const focus = vi.spyOn(
+    host.querySelector<HTMLElement>(".toolbar-title h1")!,
+    "focus",
+  );
+  cleanups.push(async () => {
+    focus.mockRestore();
+  });
+  await act(async () =>
+    host.querySelectorAll<HTMLButtonElement>(".activity-row")[1]!.click(),
+  );
+  expect(focus).toHaveBeenLastCalledWith({ preventScroll: true });
+  scrollStage(host, 50, 5);
+  await act(async () =>
+    host.querySelectorAll<HTMLButtonElement>(".activity-row")[0]!.click(),
+  );
+  expect(stageOffset(host)).toEqual([0, 0]);
+  scrollStage(host, 80, 8);
+  await act(async () => button(host, "Back").click());
+  expect(stageOffset(host)).toEqual([50, 5]);
+  expect(document.activeElement).toBe(host.querySelector(".toolbar-title h1"));
+  expect(focus).toHaveBeenLastCalledWith({ preventScroll: true });
+  await act(async () => button(host, "Forward").click());
+  expect(stageOffset(host)).toEqual([80, 8]);
+  expect(document.activeElement).toBe(host.querySelector(".toolbar-title h1"));
+  expect(focus).toHaveBeenLastCalledWith({ preventScroll: true });
+});
+it("history stage scroll ignores nested scroll notifications", async () => {
+  const { host, c } = await mount();
+  await act(async () => c.navigate({ area: "settings", page: "appearance" }));
+  const stage = scrollStage(host, 120, 12);
+  // A nested notification must not save an unobserved/clamped stage value.
+  stage.scrollTop = 1;
+  stage.scrollLeft = 1;
+  stage
+    .querySelector("button")!
+    .dispatchEvent(new Event("scroll", { bubbles: true }));
+  await act(async () => c.navigate({ area: "settings", page: "connection" }));
+  await act(async () => button(host, "Back").click());
+  expect(stageOffset(host)).toEqual([120, 12]);
+});
+it("history stage scroll retains observed offsets through StrictMode layout replay", async () => {
+  const { host, c, root } = await mount();
+  function ScrolledShell() {
+    const initialized = useRef(false);
+    useLayoutEffect(() => {
+      if (!initialized.current) {
+        initialized.current = true;
+        scrollStage(host, 120, 12);
+      }
+    }, [host]);
+    return <Shell />;
+  }
+  await act(async () =>
+    root.render(
+      <StrictMode>
+        <Services value={c}>
+          <ScrolledShell />
+        </Services>
+      </StrictMode>,
+    ),
+  );
+  expect(stageOffset(host)).toEqual([120, 12]);
+});
+it("history stage scroll starts fresh when the Shell is actually unmounted", async () => {
+  const { host, c, root } = await mount();
+  scrollStage(host, 120, 12);
+  await act(async () => root.render(null));
+  await act(async () =>
+    root.render(
+      <StrictMode>
+        <Services value={c}>
+          <Shell />
+        </Services>
+      </StrictMode>,
+    ),
+  );
+  expect(stageOffset(host)).toEqual([0, 0]);
+});
 it("returns an unresolved Setup workspace action to its actual Setup step", async () => {
   const value = settings();
   value.computer.workspaces = [
@@ -172,7 +391,7 @@ it("Home retains the approved rail and context sidebar and compact overlays keep
     false,
     "overlay",
     "sidebar",
-    180,
+    232,
   );
   await act(async () => button(host, "Close sidebar").click());
   expect(host.querySelector("main")?.hasAttribute("inert")).toBe(false);
@@ -185,7 +404,7 @@ it("Home retains the approved rail and context sidebar and compact overlays keep
     false,
     "overlay",
     "sidebar",
-    180,
+    232,
   );
   await act(async () =>
     host.dispatchEvent(
@@ -194,6 +413,157 @@ it("Home retains the approved rail and context sidebar and compact overlays keep
   );
   expect(host.querySelector(".sidebar-scrim")).toBeNull();
   expect(host.querySelector("main")?.hasAttribute("inert")).toBe(false);
+});
+it.each([
+  [849, "58px", false],
+  [850, "58px", false],
+  [851, "62px", true],
+] as const)(
+  "approved geometry projects rail and context at %ipx",
+  async (width, rail, context) => {
+    const previous = window.innerWidth;
+    cleanups.push(async () => {
+      await act(async () => {
+        window.innerWidth = previous;
+        window.dispatchEvent(new Event("resize"));
+      });
+    });
+    window.innerWidth = width;
+    const { host, c, f } = await mount(bootstrap(), () =>
+      isCompactShell(window.innerWidth),
+    );
+    const desktop = host.querySelector<HTMLElement>(".desktop")!;
+    expect(desktop.style.getPropertyValue("--rail-width")).toBe(rail);
+    expect(desktop.style.getPropertyValue("--page-list-width")).toBe("232px");
+    expect(Boolean(host.querySelector("aside"))).toBe(context);
+    await act(async () => button(host, "Toggle sidebar").click());
+    expect(c.getSnapshot().sidebar).toBe(context ? "rail" : "overlay");
+    expect(Boolean(host.querySelector(".sidebar-overlay"))).toBe(!context);
+    expect(host.querySelector("main")?.hasAttribute("inert")).toBe(!context);
+    expect(desktop.style.getPropertyValue("--rail-width")).toBe(rail);
+    await act(async () =>
+      f.emit("action", {
+        action: "toggle-sidebar",
+        source: "sidebar-command",
+        eventId: "11111111-1111-4111-8111-111111111178",
+        authWindowGeneration: null,
+      }),
+    );
+    expect(c.getSnapshot().sidebar).toBe(context ? "full" : "rail");
+    expect(host.querySelector("main")?.hasAttribute("inert")).toBe(false);
+    await act(async () =>
+      f.emit("action", {
+        action: "toggle-sidebar",
+        source: "sidebar-command",
+        eventId: "11111111-1111-4111-8111-111111111179",
+        authWindowGeneration: null,
+      }),
+    );
+    expect(c.getSnapshot().sidebar).toBe(context ? "rail" : "overlay");
+    expect(f.api.configure).not.toHaveBeenCalled();
+    expect(f.api.task).not.toHaveBeenCalled();
+  },
+);
+async function compactSettingsShell() {
+  const originalWidth = window.innerWidth;
+  cleanups.push(async () => {
+    await act(async () => {
+      window.innerWidth = originalWidth;
+      window.dispatchEvent(new Event("resize"));
+    });
+  });
+  window.innerWidth = 758;
+  const mounted = await mount();
+  await act(async () =>
+    mounted.c.navigate({ area: "settings", page: "general" }),
+  );
+  return mounted;
+}
+it.each(["toolbar", "controller"] as const)(
+  "compact sidebar focus enters a page control when opened by %s",
+  async (source) => {
+    const { host, c, f } = await compactSettingsShell();
+    const trigger = button(host, "Toggle sidebar");
+    trigger.focus();
+    await act(async () => {
+      if (source === "toolbar") trigger.click();
+      else c.toggleSidebar(true);
+    });
+    expect(
+      document.activeElement ===
+        button(host.querySelector("aside")!, "General"),
+    ).toBe(true);
+    expect(document.activeElement?.getAttribute("role")).not.toBe("separator");
+    expect(host.querySelector("main")?.hasAttribute("inert")).toBe(true);
+    expect(f.api.configure).not.toHaveBeenCalled();
+    expect(f.api.task).not.toHaveBeenCalled();
+  },
+);
+it.each(["Escape", "scrim", "toggle", "host-dismiss", "current-page"] as const)(
+  "compact sidebar focus returns to its toggle after %s dismissal",
+  async (dismissal) => {
+    const { host, f } = await compactSettingsShell();
+    const trigger = button(host, "Toggle sidebar");
+    await act(async () => trigger.click());
+    const current = button(host.querySelector("aside")!, "General");
+    current.focus();
+    await act(async () => {
+      if (dismissal === "Escape")
+        current.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+        );
+      else if (dismissal === "scrim") button(host, "Close sidebar").click();
+      else if (dismissal === "toggle") trigger.click();
+      else if (dismissal === "current-page") current.click();
+      else
+        f.emit("action", {
+          action: "close-overlay",
+          source: "overlay-dismissed",
+          eventId: "11111111-1111-4111-8111-111111111177",
+          authWindowGeneration: null,
+        });
+    });
+    expect(host.querySelector(".sidebar-overlay")).toBeNull();
+    expect(host.querySelector("main")?.hasAttribute("inert")).toBe(false);
+    expect(document.activeElement === trigger).toBe(true);
+    expect(f.api.configure).not.toHaveBeenCalled();
+    expect(f.api.task).not.toHaveBeenCalled();
+  },
+);
+it.each(["search", "update"] as const)(
+  "compact sidebar focus does not displace the %s dialog",
+  async (overlay) => {
+    const { host, c, f } = await compactSettingsShell();
+    await act(async () => c.overlay(overlay));
+    const dialogTarget = document.activeElement;
+    expect(host.querySelector("dialog")?.contains(dialogTarget)).toBe(true);
+    await act(async () => c.toggleSidebar(true));
+    expect(document.activeElement).toBe(dialogTarget);
+    await act(async () => c.toggleSidebar(true));
+    expect(document.activeElement).toBe(dialogTarget);
+    expect(f.api.configure).not.toHaveBeenCalled();
+    expect(f.api.task).not.toHaveBeenCalled();
+  },
+);
+it("compact sidebar focus does not restore its toggle after destination navigation", async () => {
+  const { host, c } = await compactSettingsShell();
+  const trigger = button(host, "Toggle sidebar");
+  await act(async () => trigger.click());
+  const target = button(host.querySelector("aside")!, "Appearance");
+  target.focus();
+  await act(async () => target.click());
+  expect(c.getSnapshot().destination.page).toBe("appearance");
+  expect(host.querySelector(".sidebar-overlay")).toBeNull();
+  expect(document.activeElement).not.toBe(trigger);
+});
+it("compact sidebar focus leaves desktop toggle focus unchanged", async () => {
+  const { host, c } = await mount();
+  const trigger = button(host, "Toggle sidebar");
+  trigger.focus();
+  await act(async () => c.toggleSidebar(false));
+  expect(document.activeElement).toBe(trigger);
+  await act(async () => c.toggleSidebar(false));
+  expect(document.activeElement).toBe(trigger);
 });
 it("resizes the page list with keyboard bounds and remembers its width only in this window", async () => {
   const { host, c, f } = await mount();
@@ -208,14 +578,14 @@ it("resizes the page list with keyboard bounds and remembers its width only in t
         }),
       );
     });
-  expect(divider.getAttribute("aria-valuenow")).toBe("180");
+  expect(divider.getAttribute("aria-valuenow")).toBe("232");
   await key("ArrowRight");
-  expect(c.getSnapshot().sidebarWidth).toBe(188);
+  expect(c.getSnapshot().sidebarWidth).toBe(240);
   expect(
     host
       .querySelector<HTMLElement>(".desktop")!
       .style.getPropertyValue("--side-width"),
-  ).toBe("188px");
+  ).toBe("240px");
   expect(f.api.layout).toHaveBeenLastCalledWith(
     "activity",
     "",
@@ -223,7 +593,7 @@ it("resizes the page list with keyboard bounds and remembers its width only in t
     false,
     "full",
     "none",
-    188,
+    240,
   );
   await key("End");
   await key("ArrowRight");
@@ -278,10 +648,10 @@ it.each([
       false,
       "full",
       "sidebar",
-      180,
+      232,
     );
     await pointer("pointermove", 275);
-    expect(c.getSnapshot().sidebarWidth).toBe(220);
+    expect(c.getSnapshot().sidebarWidth).toBe(272);
     if (ending === "blur")
       await act(async () => window.dispatchEvent(new Event("blur")));
     else if (ending === "native-escape")
@@ -304,7 +674,7 @@ it.each([
     else await pointer(ending, 275);
     expect(c.getSnapshot().sidebarResizing).toBe(false);
     const cancelled = ending === "escape" || ending === "native-escape";
-    expect(c.getSnapshot().sidebarWidth).toBe(cancelled ? 180 : 220);
+    expect(c.getSnapshot().sidebarWidth).toBe(cancelled ? 232 : 272);
     expect(f.api.layout).toHaveBeenLastCalledWith(
       "browser",
       "",
@@ -312,7 +682,7 @@ it.each([
       false,
       ending === "collapse" ? "rail" : "full",
       "none",
-      cancelled ? 180 : 220,
+      cancelled ? 232 : 272,
     );
     // A still-held pointer cannot restart a drag cancelled by the native action.
     if (cancelled) {
@@ -324,7 +694,7 @@ it.each([
       expect(c.getSnapshot().sidebarResizing).toBe(false);
       await pointer("pointermove", 290);
       expect(c.getSnapshot().sidebarResizing).toBe(false);
-      expect(c.getSnapshot().sidebarWidth).toBe(188);
+      expect(c.getSnapshot().sidebarWidth).toBe(240);
     }
     expect(f.api.task).not.toHaveBeenCalled();
     expect(f.api.configure).not.toHaveBeenCalled();
@@ -378,6 +748,11 @@ it("automatically uses the rail at narrow widths and opens a bounded page-list o
       window.innerWidth = 979;
       window.dispatchEvent(new Event("resize"));
     });
+    expect(host.querySelector(".contextual-sidebar")).not.toBeNull();
+    await act(async () => {
+      window.innerWidth = 850;
+      window.dispatchEvent(new Event("resize"));
+    });
     expect(host.querySelector(".contextual-sidebar")).toBeNull();
     expect(button(host, "Toggle sidebar").getAttribute("aria-expanded")).toBe(
       "false",
@@ -391,7 +766,7 @@ it("automatically uses the rail at narrow widths and opens a bounded page-list o
       false,
       "overlay",
       "sidebar",
-      180,
+      232,
     );
     await act(async () => button(host, "Close sidebar").click());
     await act(async () => {
@@ -2162,6 +2537,92 @@ async function filterActivity(host: Element, value: "all" | "attention") {
     select.dispatchEvent(new Event("change", { bubbles: true }));
   });
 }
+it("Activity uses one focused toolbar leaf with the recorded event label across history", async () => {
+  const { host, c, f } = await activityFixture();
+  const leaf = () =>
+    host.querySelector<HTMLHeadingElement>(".toolbar-title h1");
+  expect(leaf()?.textContent).toBe("Task 1");
+  expect(leaf()?.tabIndex).toBe(-1);
+  expect(document.activeElement).toBe(leaf());
+  expect(host.querySelector(".activity-page h1")).toBeNull();
+  await act(async () => {
+    f.emit("tasks", {
+      revision: 2,
+      tasks: [{ ...task(), label: "New recorded work" }],
+    });
+    f.emit("event", {
+      ownerId: "owner",
+      sessionId: "task-1",
+      taskId: "task-1",
+      turnId: "task-1",
+      generation: 1,
+      at: 300,
+      kind: "turn.terminal",
+      phase: "completed",
+      code: "COMPLETED",
+    });
+  });
+  await act(async () =>
+    host.querySelector<HTMLButtonElement>(".activity-row")!.click(),
+  );
+  const newer = c.getSnapshot().destination.activityId;
+  expect(leaf()?.textContent).toBe("New recorded work");
+  await act(async () =>
+    host.querySelectorAll<HTMLButtonElement>(".activity-row")[1]!.click(),
+  );
+  const older = c.getSnapshot().destination.activityId;
+  expect(older).not.toBe(newer);
+  expect(leaf()?.textContent).toBe("Task 1");
+  await act(async () => button(host, "Back").click());
+  expect(c.getSnapshot().destination.activityId).toBe(newer);
+  expect(leaf()?.textContent).toBe("New recorded work");
+  await act(async () => button(host, "Forward").click());
+  expect(c.getSnapshot().destination.activityId).toBe(older);
+  expect(leaf()?.textContent).toBe("Task 1");
+  expect(f.api.task).not.toHaveBeenCalled();
+  expect(f.api.configure).not.toHaveBeenCalled();
+});
+it("Activity toolbar leaf follows the visible filter rather than an excluded selected event", async () => {
+  const { host, f } = await activityFixture();
+  await act(async () =>
+    host.querySelectorAll<HTMLButtonElement>(".activity-row")[1]!.click(),
+  );
+  expect(host.querySelector(".toolbar-title h1")?.textContent).toBe("Task 1");
+  await filterActivity(host, "attention");
+  expect(host.querySelector(".toolbar-title h1")?.textContent).toBe("Activity");
+  expect(host.querySelector(".activity-empty h2")?.textContent).toBe(
+    "Selected event is outside this filter",
+  );
+  await act(async () => button(host, "Show all activity").click());
+  expect(host.querySelector(".toolbar-title h1")?.textContent).toBe("Task 1");
+  expect(document.activeElement).toBe(host.querySelector(".toolbar-title h1"));
+  expect(f.api.task).not.toHaveBeenCalled();
+});
+it("Activity toolbar leaf does not invent a label for a missing event", async () => {
+  const { host, c } = await activityFixture();
+  await act(async () =>
+    c.navigate({ area: "activity", activityId: "missing" }),
+  );
+  expect(host.querySelector(".toolbar-title h1")?.textContent).toBe("Activity");
+  expect(host.querySelector(".activity-empty h2")?.textContent).toBe(
+    "Event no longer available",
+  );
+  expect(host.querySelector(".activity-page h1")).toBeNull();
+});
+it("Activity toolbar leaf names an empty view without a duplicated content heading", async () => {
+  const { host, c } = await mount();
+  await act(async () => c.navigate({ area: "activity", activityId: null }));
+  expect(host.querySelector(".toolbar-title h1")?.textContent).toBe("Activity");
+  expect(host.querySelector(".activity-empty h2")?.textContent).toBe(
+    "No activity yet",
+  );
+  expect(host.querySelector(".activity-page h1")).toBeNull();
+  await filterActivity(host, "attention");
+  expect(host.querySelector(".toolbar-title h1")?.textContent).toBe("Activity");
+  expect(host.querySelector(".activity-empty h2")?.textContent).toBe(
+    "No events need attention",
+  );
+});
 it("Activity contextual list filters actual unknown metadata and keeps selection stable", async () => {
   const { host, c, f } = await activityFixture();
   expect(host.querySelector(".activity-event strong")?.textContent).toBe(
@@ -2225,7 +2686,7 @@ it("Activity back and forward retain exact event identity after new events arriv
   expect(
     host.querySelector('.activity-row[aria-current="page"] small')?.textContent,
   ).toContain("outcome unknown");
-  expect(document.activeElement).toBe(host.querySelector(".activity-page h1"));
+  expect(document.activeElement).toBe(host.querySelector(".toolbar-title h1"));
 });
 it("Activity distinguishes first-use, attention-empty and missing selection without substitution", async () => {
   const { host, c, f } = await mount();
@@ -2283,7 +2744,7 @@ it.each(["page", "dialog"] as const)(
     const target =
       surface === "dialog"
         ? container.querySelector('button[aria-label="Close"]')
-        : container.querySelector("h1");
+        : host.querySelector(".toolbar-title h1");
     const trigger = button(container, "Show all activity");
     trigger.focus();
     expect(document.activeElement).toBe(trigger);
@@ -2297,28 +2758,139 @@ it.each(["page", "dialog"] as const)(
     expect(f.api.configure).not.toHaveBeenCalled();
   },
 );
-it("Activity will not route a historical record into a reused turn", async () => {
+it.each([
+  "turn-reused",
+  "task-replaced",
+  "task-removed",
+  "event-removed",
+  "event-rebound",
+  "stale",
+  "offline",
+  "observation-unavailable",
+] as const)(
+  "Activity rechecks View chat identity before rerender after %s",
+  async (change) => {
+    const { host, c, f } = await activityFixture();
+    const captured = button(host, "View chat");
+    const before = c.getSnapshot();
+    const selected = before.activity.at(-1)!;
+    let latest: WindowSnapshot = before;
+    if (change === "stale") latest = { ...before, status: "stale" };
+    else if (change === "offline") latest = { ...before, runtime: "offline" };
+    else if (change === "event-removed") latest = { ...before, activity: [] };
+    else if (change === "event-rebound")
+      latest = {
+        ...before,
+        activity: before.activity.map((event) =>
+          event.id === selected.id
+            ? { ...event, turnId: "another-turn" }
+            : event,
+        ),
+      };
+    else
+      latest = {
+        ...before,
+        tasks: {
+          revision: before.tasks.revision + 1,
+          tasks:
+            change === "task-removed"
+              ? []
+              : [
+                  {
+                    ...before.tasks.tasks[0]!,
+                    ...(change === "task-replaced"
+                      ? { taskId: "replacement-task" }
+                      : change === "turn-reused"
+                        ? { turnId: "replacement-turn" }
+                        : {
+                            agent: {
+                              phase: "running",
+                              workspaceId: "approved",
+                              parentDelivery: "not_applicable",
+                              workspaceEnforcement: "verified",
+                              resultAvailable: false,
+                              observation: "unavailable",
+                            },
+                          }),
+                  },
+                ],
+        },
+      };
+    const navigate = vi.spyOn(c, "navigate");
+    const read = vi.spyOn(c, "getSnapshot").mockReturnValue(latest);
+    await act(async () => captured.click());
+    read.mockRestore();
+    expect(navigate).not.toHaveBeenCalled();
+    expect(c.getSnapshot().destination.area).toBe("activity");
+    expect(f.api.task).not.toHaveBeenCalled();
+    expect(f.api.configure).not.toHaveBeenCalled();
+  },
+);
+it("Activity View chat opens the same currently observed task without dispatching work", async () => {
   const { host, c, f } = await activityFixture();
-  await act(async () =>
-    host.querySelector<HTMLButtonElement>(".activity-row")!.click(),
-  );
-  const selectedId = c.getSnapshot().destination.activityId;
-  await act(async () =>
-    f.emit("tasks", {
-      revision: 2,
-      tasks: [{ ...task(), turnId: "replacement-turn" }],
-    }),
-  );
-  expect(host.querySelector(".activity-page")?.textContent).toContain(
-    "Event no longer available",
-  );
-  expect(c.getSnapshot().destination.activityId).toBe(selectedId);
-  expect(
-    [...host.querySelectorAll("button")].some(
-      (item) => item.textContent === "View chat",
-    ),
-  ).toBe(false);
+  await act(async () => button(host, "View chat").click());
+  expect(c.getSnapshot().destination).toMatchObject({
+    area: "chatgpt",
+    taskId: "task-1",
+  });
+  expect(f.api.task).not.toHaveBeenCalled();
+  expect(f.api.configure).not.toHaveBeenCalled();
 });
+it.each(["turn reuse", "task removal", "task replacement"] as const)(
+  "Activity retains historical inspection without opening another chat after %s",
+  async (change) => {
+    const { host, c, f } = await activityFixture();
+    await act(async () =>
+      host.querySelector<HTMLButtonElement>(".activity-row")!.click(),
+    );
+    const selectedId = c.getSnapshot().destination.activityId;
+    const recorded = c
+      .getSnapshot()
+      .activity.find((event) => event.id === selectedId)!;
+    await act(async () =>
+      f.emit("tasks", {
+        revision: 2,
+        tasks:
+          change === "task removal"
+            ? []
+            : [
+                {
+                  ...task(
+                    change === "task replacement"
+                      ? "replacement-task"
+                      : "task-1",
+                  ),
+                  turnId: "replacement-turn",
+                  label: "Different work",
+                },
+              ],
+      }),
+    );
+    expect(
+      c.getSnapshot().activity.find((event) => event.id === selectedId),
+    ).toBe(recorded);
+    expect(host.querySelector(".toolbar-title h1")?.textContent).toBe(
+      recorded.label,
+    );
+    expect(host.querySelector(".activity-page")?.textContent).toContain(
+      "Outcome not confirmed",
+    );
+    expect(host.querySelector(".activity-page")?.textContent).toContain(
+      "There is no confirmed successful or failed result.",
+    );
+    expect(host.querySelector(".activity-page")?.textContent).toContain(
+      "Chat no longer available here",
+    );
+    expect(c.getSnapshot().destination.activityId).toBe(selectedId);
+    expect(
+      [...host.querySelectorAll("button")].some(
+        (item) => item.textContent === "View chat",
+      ),
+    ).toBe(false);
+    expect(f.api.task).not.toHaveBeenCalled();
+    expect(f.api.configure).not.toHaveBeenCalled();
+  },
+);
 it("Activity retains legacy Home event inspector routing", async () => {
   const { host, c } = await activityFixture();
   await act(async () => c.overlay("activity"));
@@ -2327,7 +2899,7 @@ it("Activity retains legacy Home event inspector routing", async () => {
   );
   await act(async () => button(host, "Close").click());
   expect(c.getSnapshot().overlay).toBe("none");
-  expect(document.activeElement).toBe(host.querySelector(".activity-page h1"));
+  expect(document.activeElement).toBe(host.querySelector(".toolbar-title h1"));
 });
 it("Activity compact selection dismisses sidebar and focuses usable inline details", async () => {
   const { host, c } = await activityFixture();
@@ -2339,7 +2911,7 @@ it("Activity compact selection dismisses sidebar and focuses usable inline detai
   expect(c.getSnapshot().sidebar).toBe("rail");
   expect(host.querySelector("main")?.hasAttribute("inert")).toBe(false);
   expect(host.querySelectorAll(".activity-page .activity-row")).toHaveLength(2);
-  expect(document.activeElement).toBe(host.querySelector(".activity-page h1"));
+  expect(document.activeElement).toBe(host.querySelector(".toolbar-title h1"));
   await filterActivity(host, "attention");
   expect(host.querySelectorAll(".activity-page .activity-row")).toHaveLength(1);
 });

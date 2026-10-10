@@ -15,7 +15,8 @@ import (
 
 // Selection is supplied by the trusted composition from the current selected
 // route and qualified host schema. Paths are never discovered by this adapter.
-// Its baseline schema digest does not identify an account or qualify follow-up.
+// Its trusted handoff schema digest covers create/status/steer, but does not
+// identify an account or qualify the independent descending-history follow-up.
 type Selection struct {
 	Binding                                                                      task.Binding
 	ExecutablePath, ExecutableSHA256, SocketPath, ExpectedCodexHome, ScratchRoot string
@@ -74,7 +75,7 @@ type Options struct {
 	// It must verify the original Task/journal intent and actual current Parent
 	// through the selected owner, without IO inside the owner's gate callback.
 	// Called after qualification and transport write-lock acquisition, before
-	// the first byte of each thread/start or turn/start. Nil keeps only reads:
+	// the first byte of each thread/start, turn/start or turn/steer. Nil keeps only reads:
 	// Supports advertises no effects and mutations become sticky unknown.
 	RecheckDispatch func(context.Context, task.Intent) error
 }

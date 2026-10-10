@@ -60,7 +60,8 @@ export async function drainOwnedChildren(
 }
 
 export type QuitPreparationContext = Readonly<{
-  // The original Quit deadline, in the Date.now() clock. Never renew it.
+  // Preparation's absolute deadline within the original Quit budget, in the
+  // Date.now() clock. Never renew it or spend the reserved recording time.
   deadlineAt: number;
   // Recheck synchronously immediately before each new effect, including
   // after every await. Closes before collection or at the deadline. This

@@ -67,6 +67,7 @@ func (s *TaskSurface) Methods() map[string]desktop.Method {
 		"task.create":           "TaskRoutedCreate",
 		"task.continue":         "TaskRoutedContinue",
 		"task.resume":           "TaskRoutedResume",
+		"task.message":          "TaskRoutedMessage",
 		"task.observe":          "TaskRoutedRequest",
 		"task.status":           "TaskRoutedDispatchRequest",
 		"task.result":           "TaskRoutedDispatchRequest",

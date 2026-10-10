@@ -227,6 +227,220 @@ describe("LIF-09 quit drains owned children before claiming they stopped", () =>
   });
 });
 
+describe("Quit reserves recording inside one absolute budget", () => {
+  const startedAt = 1_000_000;
+  const overallDeadline = startedAt + 60_000;
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(startedAt);
+  });
+  afterEach(() => vi.useRealTimers());
+
+  function deferred<T>() {
+    let resolve!: (value: T) => void;
+    let reject!: (reason: Error) => void;
+    const promise = new Promise<T>((yes, no) => {
+      resolve = yes;
+      reject = no;
+    });
+    return { promise, resolve, reject };
+  }
+
+  function harness(overrides: Partial<QuitDrainPorts> = {}) {
+    const receipts: QuitDrainReceipt[] = [];
+    const close = vi.fn(async () => undefined);
+    const collect = vi.fn(() => [{ name: "original-child", close }]);
+    const record = vi.fn(async (receipt: QuitDrainReceipt) => {
+      receipts.push(receipt);
+    });
+    const quit = vi.fn();
+    const drain = createQuitDrain({
+      deadlineMs: 60_000,
+      preparationMs: 10_000,
+      recordReserveMs: 2_000,
+      collect,
+      record,
+      quit,
+      ...overrides,
+    });
+    return { drain, receipts, close, collect, record, quit };
+  }
+
+  it("caps pending preparation and drains before the original overall deadline", async () => {
+    const preparation = deferred<QuitPreparationResult>();
+    let context!: QuitPreparationContext;
+    const h = harness({
+      prepare: (value) => {
+        context = value;
+        return preparation.promise;
+      },
+    });
+    h.drain.onBeforeQuit({ preventDefault() {} });
+    expect(context.deadlineAt).toBe(startedAt + 10_000);
+    await vi.advanceTimersByTimeAsync(9_999);
+    expect(h.collect).not.toHaveBeenCalled();
+    expect(context.canStartEffect()).toBe(true);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(context.canStartEffect()).toBe(false);
+    expect(h.collect).toHaveBeenCalledWith({
+      deadlineAt: overallDeadline - 2_000,
+    });
+    expect(h.close).toHaveBeenCalledTimes(1);
+    expect(h.receipts).toEqual([
+      { drained: false, unconfirmed: ["preparation"] },
+    ]);
+    expect(h.quit).toHaveBeenCalledTimes(1);
+    preparation.resolve({ status: "accepted" });
+    await expect(preparation.promise).resolves.toEqual({ status: "accepted" });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.record).toHaveBeenCalledTimes(1);
+    expect(h.quit).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([false, true])(
+    "reserves an asynchronous record after a stalled closer (prepare=%s)",
+    async (prepare) => {
+      const child = deferred<void>();
+      const recorded = deferred<void>();
+      const close = vi.fn(() => child.promise);
+      const records: { at: number; receipt: QuitDrainReceipt }[] = [];
+      const h = harness({
+        ...(prepare
+          ? { prepare: async () => ({ status: "skipped" as const }) }
+          : {}),
+        collect: () => [{ name: "original-child", close }],
+        record: (receipt) => {
+          records.push({ at: Date.now(), receipt });
+          return recorded.promise;
+        },
+      });
+      h.drain.onBeforeQuit({ preventDefault() {} });
+      await vi.advanceTimersByTimeAsync(58_000);
+      expect(records).toEqual([
+        {
+          at: overallDeadline - 2_000,
+          receipt: { drained: false, unconfirmed: ["original-child"] },
+        },
+      ]);
+      expect(h.quit).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1_000);
+      recorded.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(h.quit).toHaveBeenCalledTimes(1);
+      expect(Date.now()).toBe(overallDeadline - 1_000);
+      child.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(records[0]?.receipt.drained).toBe(false);
+    },
+  );
+
+  it("retains the overall deadline when the reserved write itself stalls", async () => {
+    const h = harness({
+      collect: () => [
+        {
+          name: "stalled-child",
+          close: () => new Promise<void>(() => undefined),
+        },
+      ],
+      record: () => new Promise<void>(() => undefined),
+    });
+    h.drain.onBeforeQuit({ preventDefault() {} });
+    await vi.advanceTimersByTimeAsync(58_000);
+    expect(h.quit).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1_999);
+    expect(h.quit).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(Date.now()).toBe(overallDeadline);
+    expect(h.quit).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("fences late preparation work without cancelling its original rejected Promise", async () => {
+    const resumed = deferred<void>();
+    const dispatch = vi.fn();
+    const originalError = new Error("ORIGINAL_PREPARATION_UNKNOWN");
+    let original!: Promise<QuitPreparationResult>;
+    const h = harness({
+      prepare: (context) => {
+        if (context.canStartEffect()) dispatch();
+        original = (async () => {
+          await resumed.promise;
+          if (context.canStartEffect()) dispatch();
+          throw originalError;
+        })();
+        return original;
+      },
+    });
+    h.drain.onBeforeQuit({ preventDefault() {} });
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(h.quit).toHaveBeenCalledTimes(1);
+    resumed.resolve();
+    await expect(original).rejects.toBe(originalError);
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(h.receipts).toEqual([
+      { drained: false, unconfirmed: ["preparation"] },
+    ]);
+  });
+
+  it("charges synchronous collection to the reserved drain deadline without renewing it", async () => {
+    const child = deferred<void>();
+    const recorded = deferred<void>();
+    const h = harness({
+      collect: (context) => {
+        expect(Object.isFrozen(context)).toBe(true);
+        expect(context.deadlineAt).toBe(overallDeadline - 2_000);
+        vi.setSystemTime(context.deadlineAt);
+        return [{ name: "original-child", close: () => child.promise }];
+      },
+      record: () => recorded.promise,
+    });
+    h.drain.onBeforeQuit({ preventDefault() {} });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.quit).not.toHaveBeenCalled();
+    child.resolve();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(h.quit).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(h.quit).toHaveBeenCalledTimes(1);
+    expect(Date.now()).toBe(overallDeadline);
+  });
+
+  it("bounds preparation by the earlier drain deadline when the preparation cap is longer", async () => {
+    let context!: QuitPreparationContext;
+    const h = harness({
+      preparationMs: 120_000,
+      prepare: (value) => {
+        context = value;
+        return new Promise<QuitPreparationResult>(() => undefined);
+      },
+    });
+    h.drain.onBeforeQuit({ preventDefault() {} });
+    expect(context.deadlineAt).toBe(overallDeadline - 2_000);
+    await vi.advanceTimersByTimeAsync(58_000);
+    expect(context.canStartEffect()).toBe(false);
+    expect(h.receipts).toEqual([
+      { drained: false, unconfirmed: ["preparation", "original-child"] },
+    ]);
+    expect(h.quit).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    { deadlineMs: -1 },
+    { deadlineMs: Number.NaN },
+    { deadlineMs: Infinity },
+    { recordReserveMs: -1 },
+    { recordReserveMs: Number.NaN },
+    { recordReserveMs: Infinity },
+    { recordReserveMs: 60_001 },
+    { preparationMs: -1 },
+    { preparationMs: Number.NaN },
+    { preparationMs: Infinity },
+  ])("refuses invalid budgets before any Quit effect: %j", (overrides) => {
+    expect(() => harness(overrides)).toThrow("QUIT_BUDGET_INVALID");
+  });
+});
+
 describe("normal Quit preparation shares the original absolute drain budget", () => {
   const startedAt = 1_000_000;
   const deadlineAt = startedAt + 10_000;
