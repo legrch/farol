@@ -550,6 +550,9 @@ export class SandboxedWorkspaceShell {
     reserveBeforeDispatch?: () => Promise<void>,
     absoluteDeadlineAt?: number,
   ): Promise<ShellResponse> {
+    // A command becomes one spawn argv entry. Reject NUL before authority
+    // admission; stdin remains pipe bytes and can legitimately contain NUL.
+    if (input.command.includes("\0")) return refusal("SHELL_INPUT_INVALID");
     if (!this.authority)
       return this.startAdmitted(
         input,
@@ -591,6 +594,7 @@ export class SandboxedWorkspaceShell {
       !/^[A-Za-z0-9._:-]{1,160}$/u.test(input.operationId) ||
       !exactRelative(input.relativeCwd) ||
       input.command.length === 0 ||
+      input.command.includes("\0") ||
       Buffer.byteLength(input.command) > 16 * 1024 ||
       Buffer.byteLength(input.stdin ?? "") > 1024 * 1024 ||
       !Number.isSafeInteger(input.timeoutMs) ||

@@ -290,8 +290,40 @@ process.on("message", (message) => {
       stdio: ["pipe", "pipe", "pipe"],
     });
   } catch {
-    report({ type: "error" });
-    process.exitCode = 1;
+    // No command handle was returned; only this controller has a known close.
+    // Flush its generic error before exit, bounded by the original deadline.
+    // Never invent a command-close receipt or retry a synchronous rejection.
+    stopped = true;
+    let finished = false;
+    const finish = () => {
+      if (finished) return;
+      finished = true;
+      if (deadline) clearTimeout(deadline);
+      process.removeListener("disconnect", finish);
+      process.removeListener("error", finish);
+      process.removeListener("message", onStop);
+      process.removeListener("SIGTERM", finish);
+      process.removeListener("SIGINT", finish);
+      process.exit(1);
+    };
+    // Cancellation can abandon an unacknowledged diagnostic frame; it still
+    // closes only this controller, with command outcome/cleanup unproved.
+    const onStop = (message) => {
+      if (message?.type === "stop") finish();
+    };
+    const remaining = firstDeadline - Date.now();
+    if (remaining <= 0 || !process.connected) {
+      finish();
+      return;
+    }
+    deadline = setTimeout(finish, remaining);
+    process.once("disconnect", finish);
+    process.once("error", finish);
+    process.on("message", onStop);
+    process.once("SIGTERM", finish);
+    process.once("SIGINT", finish);
+    try { process.send({ type: "error" }, finish); }
+    catch { finish(); }
     return;
   }
   command.stdout.on("data", (chunk) => output("stdout", chunk));
