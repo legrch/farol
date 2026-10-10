@@ -1,9 +1,11 @@
 # Account-scoped model capabilities
 
 Implementation base: `99aca15ffe16b435e59b19c20ff48e06bd56960d`.
-Domain commit: `a05e5af852a88d96f70f5a9b0573ad03b43ddf2a`.
-Adapter/consumer commit: `8fd1aa8f16e1ff5abc9492470d11d71dd0152807`.
-Source tree after those commits: `1aa84dc0ac336a37f75a98e55e38ea06bd2e01af`.
+Published code checkpoint: `2b137f497ca541212b5c4a9672e0b0b021327c31`.
+Equivalent local checkpoint: `a73b7de5c7f17b010a3df77dc07f0f58798a5a64`.
+Exact source tree: `e7ffa7ed2d11b1a94717d136e4b47cacde787c90`.
+Publication preserves B0 ancestry and equal source trees; the supported connector
+generates new commit identities. See [acceptance evidence](ACCEPTANCE.md).
 
 This additive source feature has no shipping registration, token access, account
 discovery, live provider calls, global configuration migration or native changes.
@@ -46,7 +48,8 @@ list and never includes raw transport errors in classified failures.
 Each consumer gets its own `Cache`. `Activate(scope)` invalidates pending work,
 including switching A to B and back to A. `Begin()` produces one opaque refresh
 ticket. The reader's `Stamp.Epoch` must equal that ticket's epoch. `Complete`
-accepts only the latest ticket, once. Failure makes current availability unknown;
+accepts only its own latest ticket, once. A partial refresh is rejected. Failure
+makes current availability unknown;
 late older responses do not restore it. Snapshot input/output slices are detached.
 
 Raw catalogue capabilities are unknown. `WithEvidence` accepts separately supplied
@@ -73,6 +76,14 @@ suppression; it is not evidence of an integrated inference runtime.
 catalogue/capability revisions. It cannot settle, replay or retarget an admitted,
 refused or outcome-unknown operation. The owning application must perform its
 last account/authority check at its own intent/effect boundary.
+
+`CheckBudget` compares advisory values without adding quantities, so unsigned
+maximum values cannot wrap an aggregate. Unknown values cannot satisfy configured
+limits. A known zero can satisfy a zero limit. Estimates carry source and version,
+but no account, input identity or validity interval. The consumer must correlate
+them with its captured selection/input and establish freshness before using them
+for admission. These functions cannot reject a stale estimate on their own.
+Reported usage stays separate from estimates; neither implies entitlement or price.
 
 ## Public reproduction and review
 

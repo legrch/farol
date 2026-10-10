@@ -4,10 +4,12 @@ The MODELS branch changes only its domain, catalogue adapter and documentation
 roots. It does not modify boot, shared contracts, generated wire, admission,
 journals, authority or renderer shipping composition.
 
-Source dependency: `8fd1aa8f16e1ff5abc9492470d11d71dd0152807`, including the
-domain ancestor `a05e5af852a88d96f70f5a9b0573ad03b43ddf2a`, based on
-`99aca15ffe16b435e59b19c20ff48e06bd56960d`. Use the exported commits if no published
-feature ref is available. Do not copy a private development registry into runtime.
+Published source dependency: `2b137f497ca541212b5c4a9672e0b0b021327c31`, based on
+`99aca15ffe16b435e59b19c20ff48e06bd56960d`. The equivalent local checkpoint is
+`a73b7de5c7f17b010a3df77dc07f0f58798a5a64`; both have source tree
+`e7ffa7ed2d11b1a94717d136e4b47cacde787c90`. The branch is
+`feature/model-capability-routing`. See `ACCEPTANCE.md` for the earlier checkpoint
+mapping. Do not copy a private development registry into runtime.
 
 ## Narrow requests to the shared source owner
 
@@ -32,6 +34,12 @@ mismatch, and recheck account/authority immediately before the first request.
 composition test in the INFERENCE-owned root after that service is available.
 No existing B0 inference service is claimed here.
 
+The actual effect owner must preserve refused and outcome-unknown dispatch states
+without retry or route/model/billing fallback. The MODELS no-effect preparer does
+not dispatch and cannot establish that property for an uncomposed service. Budget
+consumers must bind advisory estimate source/version to their actual captured
+input/selection and validity interval; `CheckBudget` proves only numeric bounds.
+
 The WORKFLOW owner should map its chosen resolved value into `TaskMapping`
 semantics, keeping UI alias distinct from exact runtime model and explicit effort.
 The existing Task facade composition test shows the actual Task `Resolve` path
@@ -51,7 +59,8 @@ without fallback. They do not advertise a shipping provider.
 - Shared-owner boot/account/authority composition and minimal published seam.
 - Actual provider catalogue/entitlement and no-tools request qualification.
 - Aggregate project gates, formal required review and Mac/native qualification.
-- Source branch publication if blocked; no main, tag, release or activation.
+- Non-force source branch publication is separate from promotion; no main, tag,
+  release or activation is included.
 
 Private packets, account evidence, tokens, request dumps and provider state are
 excluded from source commits and exports.
