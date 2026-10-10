@@ -249,6 +249,8 @@ async function promote(arguments_, dependencies, stdout) {
       )
     : null;
   if (apply && !lease) throw new Error("PROMOTION_LEASE_HELD");
+  let originalChildClose;
+  let originalChildClosed = false;
   try {
     const verify = dependencies.verify ?? verifyPackage;
     const sourceVerification = await verify(artifactFile, source);
@@ -308,20 +310,9 @@ async function promote(arguments_, dependencies, stdout) {
     // the moment the durable step begins; a holder that proceeded without
     // that check would be one of two.
     //
-    // S35-H1R: this is the last place the JS side can fence, and that is by
-    // design. `runPromotionApply` drives `promotion-apply.py`, which copies
-    // the bundle, digests it, publishes the receipt and only then prints its
-    // MAGIC success line — one durable helper operation with no observable
-    // point in between, so there is nothing here to check again halfway
-    // through. Adding a mid-placement handshake would mean a second
-    // protocol round trip the helper would have to trust, which is a larger
-    // surface than the residual it closes. A same-UID process replacing the
-    // lease file while the helper runs is outside this product's local
-    // integrity model anyway (see the note in `promotion-lease.ts`): a
-    // process with that reach can rewrite the app's private state directly.
-    // What still protects the placement itself is the helper: a destination
-    // that already exists is refused (EXIT_EXISTS) without being touched, so
-    // a second placement cannot overwrite the first one's bytes or receipt.
+    // The helper inherits this same kernel lock and validates its identity
+    // before placement and receipt publication. Parent death must not admit
+    // another generation while the original helper is still mutating.
     if (!(await verifyPromotionLease(lease))) {
       throw new Error("PROMOTION_LEASE_LOST");
     }
@@ -330,10 +321,26 @@ async function promote(arguments_, dependencies, stdout) {
       source,
       artifactSha256: artifact.artifactSha256,
       receiptText,
+      lease,
+      onChildStarted: (closed) => {
+        originalChildClose = closed;
+        void closed.then(() => {
+          originalChildClosed = true;
+        });
+      },
     });
     stdout.write(receiptText);
   } finally {
-    if (lease) await releasePromotionLease(lease);
+    if (lease) {
+      if (originalChildClose && !originalChildClosed) {
+        // The bounded call has refused with an unconfirmed child lifetime.
+        // Reconcile only that original close; never retry placement or clear
+        // the original kernel lease while the worker may still be alive.
+        void originalChildClose.then(() => releasePromotionLease(lease));
+      } else {
+        await releasePromotionLease(lease);
+      }
+    }
   }
 }
 
