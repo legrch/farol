@@ -141,6 +141,12 @@ const target = {
   version: manifest.version,
   buildId: manifest.buildId,
 };
+const ineligibleTargets = [
+  { version: "0.0.9-owner.beta.1", buildVersion: manifest.buildVersion },
+  { version: build.version, buildVersion: manifest.buildVersion },
+  { version: manifest.version, buildVersion: build.buildVersion! },
+  { version: manifest.version, buildVersion: "1" },
+];
 const repos = ["legrch/farol", "legrch/farol-releases"] as const;
 function options() {
   return {
@@ -2402,6 +2408,124 @@ ${scenario === "missing" ? "" : `<key>CFBundleVersion</key><string>${scenario ==
     expect(mocks.download).toHaveBeenCalledTimes(1);
     expect(quit).not.toHaveBeenCalled();
   });
+
+  it.each(ineligibleTargets)(
+    "refuses an ineligible retained target before restoring Ready: %j",
+    async (change) => {
+      const first = await prepared();
+      await first.close();
+      const record = JSON.parse(await fs.readFile(ready, "utf8"));
+      record.manifest = {
+        ...record.manifest,
+        ...change,
+        archiveName: `Farol-${change.version}-darwin-arm64.zip`,
+      };
+      await fs.writeFile(ready, JSON.stringify(record), { mode: 0o600 });
+      await fs.writeFile(record.handle, "retained archive fixture");
+      const originalReady = await fs.readFile(ready);
+      const originalArchive = await fs.readFile(record.handle);
+      mocks.discardPackage.mockClear();
+      const second = await createInstalledUpdateRuntime(options());
+      await second!.initialize();
+      expect(second!.snapshot()).toMatchObject({
+        phase: "failed",
+        recoveryRequired: true,
+        code: "UPDATE_RETAINED_VERSION_MISMATCH",
+      });
+      await second!.restart();
+      await second!.close();
+      expect(await fs.readFile(ready)).toEqual(originalReady);
+      expect(await fs.readFile(record.handle)).toEqual(originalArchive);
+      expect(mocks.verify).not.toHaveBeenCalled();
+      expect(mocks.discardPackage).not.toHaveBeenCalled();
+      expect(mocks.discardArchive).not.toHaveBeenCalled();
+      expect(mocks.reclaimArchive).not.toHaveBeenCalled();
+      expect(mocks.copyApp).not.toHaveBeenCalled();
+      expect(mocks.helper).not.toHaveBeenCalled();
+      expect(quit).not.toHaveBeenCalled();
+      expect(mocks.download).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each(ineligibleTargets)(
+    "refuses an ineligible Ready target again before handoff: %j",
+    async (change) => {
+      const selected = {
+        ...manifest,
+        ...change,
+        archiveName: `Farol-${change.version}-darwin-arm64.zip`,
+      };
+      // Discovery/download are doubled so an already-Ready ineligible target
+      // reaches the independent handoff guard without a startup refusal.
+      mocks.discover.mockResolvedValue({
+        ok: true,
+        value: { manifest: selected },
+      });
+      mocks.download.mockResolvedValue({
+        ok: true,
+        value: {
+          handle: path.join(root, "archive.zip"),
+          manifest: selected,
+          identity: { ...selected, updateChannel: "github-owner-beta" },
+          stagedAppPath: staging,
+          stagingRoot: path.dirname(staging),
+        },
+      });
+      const controller = await prepared();
+      const record = JSON.parse(await fs.readFile(ready, "utf8"));
+      await fs.writeFile(record.handle, "retained archive fixture");
+      const originalReady = await fs.readFile(ready);
+      const originalArchive = await fs.readFile(record.handle);
+      mocks.discardPackage.mockClear();
+      mocks.captureStart.mockClear();
+      await controller.restart();
+      expect(controller.snapshot()).toMatchObject({
+        phase: "ready",
+        blockedBy: "UPDATE_RETAINED_VERSION_MISMATCH",
+      });
+      expect(release).toHaveBeenCalledTimes(1);
+      await controller.close();
+      expect(await fs.readFile(ready)).toEqual(originalReady);
+      expect(await fs.readFile(record.handle)).toEqual(originalArchive);
+      expect(mocks.verify).not.toHaveBeenCalled();
+      expect(mocks.discardPackage).not.toHaveBeenCalled();
+      expect(mocks.discardArchive).not.toHaveBeenCalled();
+      expect(mocks.reclaimArchive).not.toHaveBeenCalled();
+      expect(mocks.captureStart).not.toHaveBeenCalled();
+      expect(mocks.copyApp).not.toHaveBeenCalled();
+      expect(mocks.helper).not.toHaveBeenCalled();
+      expect(quit).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["missing-anchor", "changed-source"] as const)(
+    "qualifies the accepted source before rejecting a retained version: %s",
+    async (scenario) => {
+      const first = await prepared();
+      await first.close();
+      const record = JSON.parse(await fs.readFile(ready, "utf8"));
+      record.manifest.buildVersion = build.buildVersion;
+      await fs.writeFile(ready, JSON.stringify(record), { mode: 0o600 });
+      const originalReady = await fs.readFile(ready);
+      if (scenario === "missing-anchor")
+        await fs.unlink(slot + ".receipt.json");
+      else
+        mocks.exec.mockResolvedValue({
+          stdout: JSON.stringify({ ...source, digest: "0".repeat(64) }),
+        });
+      const second = await createInstalledUpdateRuntime(options());
+      await second!.initialize();
+      expect(second!.snapshot()).toMatchObject({
+        phase: "failed",
+        recoveryRequired: true,
+        code: "UPDATE_SOURCE_IDENTITY_UNCONFIRMED",
+      });
+      expect(await fs.readFile(ready)).toEqual(originalReady);
+      expect(mocks.verify).not.toHaveBeenCalled();
+      expect(mocks.helper).not.toHaveBeenCalled();
+      await second!.close();
+    },
+  );
 
   it.each([
     ["stage_capacity", "known", "UPDATE_VERIFICATION_RECOVERY_REQUIRED"],

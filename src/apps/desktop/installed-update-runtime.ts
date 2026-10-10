@@ -277,6 +277,19 @@ function sameBuild(
   );
 }
 
+function isIncreasingUpdate(
+  manifest: Pick<ReleaseManifest, "version" | "buildVersion">,
+  currentVersion: string,
+  currentBuildVersion: string,
+): boolean {
+  const order = compareReleaseVersions(manifest.version, currentVersion);
+  return (
+    order !== null &&
+    order > 0 &&
+    BigInt(manifest.buildVersion) > BigInt(currentBuildVersion)
+  );
+}
+
 function sameOperation(
   a: z.infer<typeof Operation>,
   b: z.infer<typeof Operation>,
@@ -2453,7 +2466,24 @@ async function createRuntime(
         };
       }
       if (pending) return known("UPDATE_RESTORE_OUTCOME_UNKNOWN");
-      if (parsed.value.version === options.build.version)
+      let current: z.infer<typeof AcceptedBuild>;
+      try {
+        current = await readAcceptedSource();
+      } catch {
+        return known("UPDATE_SOURCE_IDENTITY_UNCONFIRMED");
+      }
+      if (
+        current.buildId !== options.build.buildId ||
+        current.version !== options.build.version
+      )
+        return known("UPDATE_SOURCE_IDENTITY_MISMATCH");
+      if (
+        !isIncreasingUpdate(
+          parsed.value,
+          current.version,
+          options.build.buildVersion!,
+        )
+      )
         return known("UPDATE_RETAINED_VERSION_MISMATCH");
       const check = await transport.verifyPackage(
         retained.handle,
@@ -2614,15 +2644,12 @@ async function createRuntime(
               current.version !== options.build.version
             )
               return known("UPDATE_SOURCE_IDENTITY_MISMATCH");
-            const order = compareReleaseVersions(
-              manifest.version,
-              current.version,
-            );
             if (
-              order === null ||
-              order <= 0 ||
-              BigInt(manifest.buildVersion) <=
-                BigInt(options.build.buildVersion!)
+              !isIncreasingUpdate(
+                manifest,
+                current.version,
+                options.build.buildVersion!,
+              )
             )
               return known("UPDATE_LOCAL_VERSION_MISMATCH");
             if (manifest.buildId === declinedBuildId)
@@ -2952,6 +2979,17 @@ async function createRuntime(
           return {
             status: "blocked",
             code: "UPDATE_SOURCE_IDENTITY_MISMATCH",
+          };
+        if (
+          !isIncreasingUpdate(
+            update.manifest,
+            source.version,
+            options.build.buildVersion!,
+          )
+        )
+          return {
+            status: "blocked",
+            code: "UPDATE_RETAINED_VERSION_MISMATCH",
           };
         const processStart =
           supervised?.predecessor.processStart ??
