@@ -4454,11 +4454,24 @@ function startConnectorTransportWatch(): void {
           !connectorTransportCurrent(original, original.revision, false, true)
         )
           return;
-        await recordConnectorRuntime(
+        const observationWindow = window;
+        const failure = await recordConnectorRuntime(
           "outcome_unknown",
           original.runtimeGeneration,
           original.computerGeneration,
         );
+        if (
+          !failure &&
+          !quitInProgress &&
+          !installedUpdateAdmission &&
+          configuration === original.owner &&
+          secureMcpConnectorRuntime === original.connector &&
+          desktopGoCore === original.core &&
+          window === observationWindow &&
+          observationWindow &&
+          !observationWindow.isDestroyed()
+        )
+          observationWindow.webContents.send(channels.configurationChanged);
       } finally {
         connectorTaskAdmission = false;
         transition.release();
