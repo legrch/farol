@@ -3,6 +3,7 @@ package planledger
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -165,5 +166,40 @@ func TestBoundedCaptureRejectsMalformedBindingBeforeCaptureOrJournal(t *testing.
 		if fresh, err := l.Reserve(context.Background(), b, strings.Repeat("d", 64)); fresh || !errors.Is(err, inference.Invalid) || *calls != 0 || r.reserves != 0 {
 			t.Fatal("unbounded/malformed capture entered IO", fresh, err)
 		}
+	}
+}
+
+func TestSettlementRequiresThisAdaptersOriginalKnownFreshReceipt(t *testing.T) {
+	for _, uncertain := range []bool{false, true} {
+		t.Run(fmt.Sprint(uncertain), func(t *testing.T) {
+			l, r, _ := fixtureLedger()
+			b := originalBinding()
+			if uncertain {
+				r.reserveErr = &lifecycle.Failure{Code: lifecycle.Unknown, OutcomeUnknown: true}
+			} else {
+				r.reserves = 1
+			}
+			if fresh, _ := l.Reserve(context.Background(), b, strings.Repeat("d", 64)); fresh {
+				t.Fatal("control unexpectedly fresh")
+			}
+			if err := l.Settle(context.Background(), b, inference.Outcome{State: inference.Completed, ResponseID: "invented-response"}); !errors.Is(err, inference.Conflict) || r.settles != 0 {
+				t.Fatal("historical/uncertain capture fabricated remote completion", err, r.settles)
+			}
+		})
+	}
+}
+
+func TestDuplicateNotFreshReplyDoesNotEraseOriginalActiveSettlementReceipt(t *testing.T) {
+	l, r, _ := fixtureLedger()
+	b := originalBinding()
+	intent := strings.Repeat("d", 64)
+	if fresh, err := l.Reserve(context.Background(), b, intent); !fresh || err != nil {
+		t.Fatal(fresh, err)
+	}
+	if fresh, err := l.Reserve(context.Background(), b, intent); fresh || err != nil {
+		t.Fatal(fresh, err)
+	}
+	if err := l.Settle(context.Background(), b, inference.Outcome{State: inference.Completed, ResponseID: "original-active-response"}); err != nil || r.settles != 1 {
+		t.Fatal("duplicate erased original active receipt", err)
 	}
 }

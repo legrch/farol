@@ -33,6 +33,7 @@ type planRepository interface {
 }
 
 type original struct {
+	fresh       bool
 	binding     inference.Binding
 	reservation lifecycle.PlanReservation
 }
@@ -101,7 +102,9 @@ func (l *Ledger) Reserve(ctx context.Context, b inference.Binding, intent string
 	// Retain the original capture even if publication is uncertain. A later call
 	// reaches the SAME poisoned owner and cannot ask Capture for a newer source.
 	l.original = &original{binding: b, reservation: reservation}
-	return l.repository.ReservePlan(ctx, reservation)
+	fresh, err := l.repository.ReservePlan(ctx, reservation)
+	l.original.fresh = fresh && err == nil
+	return fresh, err
 }
 
 func (l *Ledger) Settle(ctx context.Context, b inference.Binding, o inference.Outcome) error {
@@ -110,11 +113,13 @@ func (l *Ledger) Settle(ctx context.Context, b inference.Binding, o inference.Ou
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if l.original == nil || l.original.binding != b {
+	if l.original == nil || !l.original.fresh || l.original.binding != b {
 		return inference.Conflict
 	}
 	// Text is refused, not persisted or silently stripped; Service supplies
-	// metadata only. Local suppression/publication never rewrites remote facts.
+	// metadata only. Settlement also requires this adapter's original known-fresh
+	// receipt; historical bytes or a lost ACK cannot fabricate remote facts.
+	// Local suppression/publication never rewrites remote facts.
 	if o.Text != "" || o.RemoteState != "" || (o.ResponseID != "" && !boundedID(o.ResponseID)) {
 		return inference.Invalid
 	}
