@@ -5,11 +5,11 @@ const PACKAGE_LAYOUTS = new Set(["dist/package", "_output/package"]);
 
 export function predecessorPackagePaths(artifactFile, manifest) {
   // Predecessor generations are historical constants, not the target's
-  // package acceptance policy. Both generations keep the same launcher.
+  // package acceptance policy. All generations keep the same launcher.
   const appName =
     manifest?.schema === 5
       ? "Farol Next Preview.app"
-      : manifest?.schema === 6
+      : manifest?.schema === 6 || manifest?.schema === 7
         ? "Farol.app"
         : null;
   if (appName === null) {

@@ -143,6 +143,8 @@ describe("predecessor package path", () => {
     ["_output/package", 5],
     ["dist/package", 6],
     ["_output/package", 6],
+    ["dist/package", 7],
+    ["_output/package", 7],
   ])(
     "accepts the %s layout for schema %s only for a predecessor's own pinned verifier",
     (layout, schema) => {
@@ -173,6 +175,12 @@ describe("predecessor package path", () => {
     ).toThrow("E2E_PREDECESSOR_PATH_NOT_CANONICAL");
     expect(() =>
       predecessorPackagePaths(
+        path.join(packageRoot, "artifact.json"),
+        manifestAt(path.join(root, "elsewhere"), 7),
+      ),
+    ).toThrow("E2E_PREDECESSOR_PATH_NOT_CANONICAL");
+    expect(() =>
+      predecessorPackagePaths(
         path.join(root, "elsewhere/artifact.json"),
         manifestAt(packageRoot),
       ),
@@ -190,7 +198,7 @@ describe("predecessor package path", () => {
     });
   });
 
-  it.each([4, 7, "6", undefined])("refuses unsupported schema %s", (schema) => {
+  it.each([4, 8, "7", undefined])("refuses unsupported schema %s", (schema) => {
     expect(() =>
       predecessorPackagePaths(acceptedArtifact, { ...accepted, schema }),
     ).toThrow("E2E_PREDECESSOR_MANIFEST_SCHEMA");
@@ -199,9 +207,13 @@ describe("predecessor package path", () => {
   it.each([
     [5, "Farol.app"],
     [6, "Farol Next Preview.app"],
+    [7, "Farol Next Preview.app"],
     [6, "Other.app"],
+    [7, "Other.app"],
     [6, "Farol.app/Contents/MacOS/Farol Next Preview"],
+    [7, "Farol.app/Contents/MacOS/Farol Next Preview"],
     [6, "Farol.app/Contents/Frameworks/Electron Runtime.app"],
+    [7, "Farol.app/Contents/Frameworks/Electron Runtime.app"],
   ])(
     "refuses schema %s with mismatched brand or executable path %s",
     (schema, name) => {
@@ -233,7 +245,7 @@ describe("predecessor package path", () => {
     ).toThrow("E2E_PREDECESSOR_PATH_NOT_CANONICAL");
   });
 
-  it.each([5, 6])(
+  it.each([5, 6, 7])(
     "resolves schema %s through its pinned verifier with exact artifact/app arguments",
     async (schema) => {
       const manifest = manifestAt(path.dirname(acceptedArtifact), schema);
