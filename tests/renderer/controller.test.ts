@@ -3979,4 +3979,43 @@ describe("request-owned native workspace readback", () => {
       c.dispose();
     },
   );
+  it.each(["computer.verify-workspace", "computer.check-folder"] as const)(
+    "retains typed backend write uncertainty for %s despite an exact visible check",
+    async (kind) => {
+      const f = fixture();
+      const initial = workspace();
+      vi.mocked(f.api.bootstrap).mockResolvedValue({
+        ...bootstrap(),
+        configuration: { status: "ready", settings: initial },
+      });
+      const c = new WindowController(f.api);
+      await c.start();
+      const command = { kind, workspaceId, checkId: issuedCheckId };
+      const id = `settings:${kind}:${workspaceId}`;
+      const pending = workspaceReadbackBinding(initial, buildId, command);
+      const checked = workspace(true, issuedCheckId);
+      expect(checked.setup.computer.outcomeUnknown).toBe(false);
+      vi.mocked(f.api.configure).mockResolvedValueOnce({
+        ok: false,
+        error: "SETTINGS_WRITE_FAILED",
+        snapshot: { status: "ready", settings: checked },
+      });
+      const original = await c.configure(command, id);
+      expect(original).toMatchObject({
+        state: "unknown",
+        code: "SETTINGS_WRITE_FAILED",
+      });
+      vi.mocked(f.api.bootstrap).mockResolvedValue({
+        ...bootstrap(),
+        configuration: { status: "ready", settings: checked },
+      });
+      const receipt = await c.refreshReadback();
+      expect(receipt.status).toBe("adopted");
+      expect(c.reconcileWorkspaceReadback(receipt, id, pending)).toBeNull();
+      expect(c.getSnapshot().intents[id]).toBe(original);
+      expect(await c.configure(command, id)).toBe(original);
+      expect(f.api.configure).toHaveBeenCalledTimes(1);
+      c.dispose();
+    },
+  );
 });

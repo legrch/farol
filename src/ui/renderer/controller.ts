@@ -737,6 +737,7 @@ export class WindowController implements RendererFacade {
       this.state.intents !== source.intents ||
       this.state.buildId !== receipt.buildId ||
       original?.state !== "unknown" ||
+      original.code !== "CONFIGURATION_OUTCOME_UNKNOWN" ||
       command.buildId !== pending.buildId ||
       command.generation !== pending.generation ||
       command.scope !== pending.scope ||
@@ -752,8 +753,8 @@ export class WindowController implements RendererFacade {
       )
     )
       return null;
-    // These read-only checks have an exact native access witness. Mutation,
-    // connection and backend outcome-unknown recovery remain fail closed.
+    // Only an unconfirmed response to a read-only check can use its exact
+    // native witness. Typed backend uncertainty retains the original fence.
     const resolved: Intent = {
       id: intention,
       state: "applied",
