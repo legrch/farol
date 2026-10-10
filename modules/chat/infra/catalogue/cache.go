@@ -18,6 +18,7 @@ type Cache struct {
 }
 
 type Ticket struct {
+	owner                     *Cache
 	scope                     selection.Scope
 	generation, serial, epoch uint64
 }
@@ -39,12 +40,12 @@ func (c *Cache) Begin() Ticket {
 	defer c.mu.Unlock()
 	c.serial++
 	c.epoch++
-	return Ticket{c.scope, c.generation, c.serial, c.epoch}
+	return Ticket{owner: c, scope: c.scope, generation: c.generation, serial: c.serial, epoch: c.epoch}
 }
 func (c *Cache) Complete(t Ticket, snapshot selection.Snapshot, err error) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if t.generation != c.generation || t.serial != c.serial || t.scope != c.scope || t.epoch != c.epoch || t.serial == c.settled {
+	if t.owner != c || t.generation != c.generation || t.serial != c.serial || t.scope != c.scope || t.epoch != c.epoch || t.serial == c.settled {
 		return Superseded
 	}
 	c.settled = t.serial
@@ -57,11 +58,13 @@ func (c *Cache) Complete(t Ticket, snapshot selection.Snapshot, err error) error
 	if snapshot.Scope != t.scope || snapshot.Epoch != t.epoch {
 		c.have = false
 		c.failure = ScopeMismatch
+		c.snapshot = selection.Snapshot{}
 		return ScopeMismatch
 	}
-	if selection.ValidateSnapshot(snapshot) != nil {
+	if !snapshot.Complete || selection.ValidateSnapshot(snapshot) != nil {
 		c.have = false
 		c.failure = Invalid
+		c.snapshot = selection.Snapshot{}
 		return Invalid
 	}
 	c.snapshot = clone(snapshot)

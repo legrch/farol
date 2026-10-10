@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"io"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -110,11 +111,11 @@ func value(d *json.Decoder, depth int) (any, error) {
 
 func text(m map[string]any, k string, max int, empty bool) (string, bool) {
 	s, ok := m[k].(string)
-	if !ok || len(s) > max || (!empty && strings.TrimSpace(s) == "") {
+	if !ok || len(s) > max || strings.TrimSpace(s) != s || (!empty && s == "") {
 		return "", false
 	}
 	for _, c := range s {
-		if c < 32 || c == 127 {
+		if unicode.IsControl(c) {
 			return "", false
 		}
 	}
