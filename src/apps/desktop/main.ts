@@ -11187,16 +11187,39 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
       }),
     );
     await runDesktopStartupBoundary("go-settings", () => {
-      configuration!.attachComputerAuthority(() => desktopGoCore!.withdraw());
-      desktopGoCore!.connectSettingsStore((profileId) => {
-        const store = configuration!.attachSettingsDeliveryStore({
+      const settingsOwner = configuration!;
+      const settingsCore = desktopGoCore!;
+      settingsOwner.attachComputerAuthority(() => settingsCore.withdraw());
+      settingsCore.connectSettingsStore((profileId) => {
+        const store = settingsOwner.attachSettingsDeliveryStore({
           profileId,
           ownerId: "owner-desktop",
         });
         return {
           read: (input) => store.read(input.deadlineMillis),
           replace: (input) => store.replace(input.change, input.deadlineMillis),
-          fence: () => store.fence(),
+          fence: () => {
+            const observationWindow = window;
+            const outcome = store.fence();
+            if (
+              configuration === settingsOwner &&
+              desktopGoCore === settingsCore &&
+              !quitInProgress &&
+              !installedUpdateAdmission &&
+              window === observationWindow &&
+              observationWindow &&
+              !observationWindow.isDestroyed()
+            ) {
+              try {
+                observationWindow.webContents.send(
+                  channels.configurationChanged,
+                );
+              } catch {
+                // Renderer delivery must not replace the original fence outcome.
+              }
+            }
+            return outcome;
+          },
         };
       });
     });
