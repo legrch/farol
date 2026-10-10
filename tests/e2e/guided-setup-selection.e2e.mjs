@@ -1048,10 +1048,18 @@ try {
         retainedWorkspaces.map(({ accessCheck, ...workspace }) => workspace),
       );
       const refreshedCheck = reverified.computer.workspaces[0].accessCheck;
+      // The known Verify workspace command issues no checkId. Its fresh proof
+      // preserves the physical/build fields without reusing an older issued ID.
+      assert.equal(
+        Object.hasOwn(refreshedCheck, "checkId"),
+        false,
+        "POLICY_REVERIFICATION_REUSED_ISSUED_CHECK_ID",
+      );
       assert.deepEqual(refreshedCheck, {
-        ...retainedWorkspaces[0].accessCheck,
+        buildId: retainedWorkspaces[0].accessCheck.buildId,
         computerGeneration: saved.computer.generation,
         verifiedAt: refreshedCheck.verifiedAt,
+        rootIdentity: retainedWorkspaces[0].accessCheck.rootIdentity,
       });
       assert.ok(
         Date.parse(refreshedCheck.verifiedAt) >= verificationStarted,

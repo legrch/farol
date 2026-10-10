@@ -656,9 +656,13 @@ if (development) {
       rewrittenIdentityApp,
     );
     assert.notEqual(rewrittenIdentityResult.status, 0);
+    // Core-enabled layouts audit the unchanged core build ID before comparing
+    // the rewritten identity with the outer package metadata.
     assert.match(
       `${rewrittenIdentityResult.stdout}${rewrittenIdentityResult.stderr}`,
-      /PACKAGE_BUILD_IDENTITY_MISMATCH/u,
+      packageLayout(artifact.schema).core
+        ? /GO_CORE_ARTIFACT_INVALID/u
+        : /PACKAGE_BUILD_IDENTITY_MISMATCH/u,
     );
     cases.push("rewritten-build-identity-rejected");
 
