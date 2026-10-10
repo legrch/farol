@@ -4,6 +4,8 @@ import { onboardingFacts } from "../../src/ui/guided-onboarding";
 import {
   GuidedWorkspaceAccess,
   workspaceAccessConfirmation,
+  workspaceReadbackBinding,
+  workspaceReadbackConfirms,
   type WorkspaceCommandOutcome,
 } from "../../src/ui/guided-workspace-access";
 import {
@@ -146,7 +148,7 @@ describe("one explicit Setup workspace access transition", () => {
   );
 
   it.each(["connector", "instance"] as const)(
-    "keeps an unknown reconnect fenced until a fresh matching %s witness is read",
+    "keeps an unknown reconnect fenced even after a fresh matching %s witness is read",
     async (stale) => {
       const f = fixture();
       const previous = f.settings.connectors.secureMcp.runtime!;
@@ -183,8 +185,9 @@ describe("one explicit Setup workspace access transition", () => {
       runtime.connectorGeneration = 1;
       runtime.runtimeGeneration = "f".repeat(64);
       expect(f.controller.reconcileReadback(f.settings, fixtureBuildId)).toBe(
-        true,
+        false,
       );
+      expect(f.controller.requiresReadback()).toBe(true);
       expect(f.run).toHaveBeenCalledTimes(calls);
     },
   );
@@ -389,6 +392,44 @@ describe("one explicit Setup workspace access transition", () => {
 });
 
 describe("access acknowledgement and revocation boundaries", () => {
+  it.each<ProductConfigurationCommand>([
+    { kind: "connector.start" },
+    { kind: "connector.stop" },
+    {
+      kind: "computer.update-access",
+      workspaceId: fixtureWorkspaceId,
+      access: "write",
+    },
+    { kind: "computer.update-commands", commands: "workspace" },
+    {
+      kind: "computer.update-git-history",
+      workspaceId: fixtureWorkspaceId,
+      approved: true,
+    },
+  ])("does not settle $kind from matching saved state", (command) => {
+    const f = fixture();
+    const pending = workspaceReadbackBinding(
+      f.settings,
+      fixtureBuildId,
+      command,
+    );
+    const saved = structuredClone(f.settings);
+    if (command.kind === "connector.start")
+      saved.connectors.secureMcp.runtime!.runtimeGeneration = "f".repeat(64);
+    if (command.kind === "connector.stop")
+      saved.connectors.secureMcp.runtime = null;
+    if (command.kind === "computer.update-access")
+      saved.computer.workspaces[0]!.access = command.access;
+    if (command.kind === "computer.update-commands")
+      saved.computer.commands = command.commands;
+    if (command.kind === "computer.update-git-history")
+      saved.computer.workspaces[0]!.gitHistoryApproved = command.approved;
+    expect(workspaceReadbackConfirms(pending, saved, fixtureBuildId)).toBe(
+      false,
+    );
+    expect(f.run).not.toHaveBeenCalled();
+  });
+
   it("requires the exact issued check even when a prior or another check is already green", async () => {
     const f = fixture();
     f.settings.connectors.secureMcp.runtime = null;
@@ -421,9 +462,17 @@ describe("access acknowledgement and revocation boundaries", () => {
 
   it("requires the pending build for a matching native readback", async () => {
     const f = fixture();
-    f.run.mockResolvedValueOnce("unknown");
-    await f.controller.run(f.port, f.plan, f.consent);
     f.settings.connectors.secureMcp.runtime = null;
+    const original = f.run.getMockImplementation()!;
+    f.run.mockImplementationOnce(async (command) => {
+      await original(command);
+      return "unknown";
+    });
+    await f.controller.run(
+      f.port,
+      { workspaceId: fixtureWorkspaceId },
+      onboardingFacts(f.settings, fixtureBuildId),
+    );
     expect(f.controller.reconcileReadback(f.settings, "f".repeat(64))).toBe(
       false,
     );
@@ -434,7 +483,7 @@ describe("access acknowledgement and revocation boundaries", () => {
     expect(f.run).toHaveBeenCalledTimes(1);
   });
 
-  it("fences a lost acknowledgement across later approvals until a matching explicit read", async () => {
+  it("keeps a lost stop acknowledgement fenced across later approvals and matching reads", async () => {
     const f = fixture();
     const original = f.run.getMockImplementation()!;
     f.run.mockImplementationOnce(async (command) => {
@@ -449,8 +498,9 @@ describe("access acknowledgement and revocation boundaries", () => {
     });
     expect(f.run).toHaveBeenCalledTimes(1);
     expect(f.controller.reconcileReadback(f.settings, fixtureBuildId)).toBe(
-      true,
+      false,
     );
+    expect(f.controller.requiresReadback()).toBe(true);
     expect(f.run).toHaveBeenCalledTimes(1);
     expect(f.settings.computer.workspaces[0]!.access).toBe("read");
     expect(f.settings.connectors.secureMcp.runtime).toBeNull();
@@ -489,8 +539,9 @@ describe("access acknowledgement and revocation boundaries", () => {
     );
     f.settings.computer.generation += 1;
     expect(f.controller.reconcileReadback(f.settings, fixtureBuildId)).toBe(
-      true,
+      false,
     );
+    expect(f.controller.requiresReadback()).toBe(true);
     expect(f.run).toHaveBeenCalledTimes(1);
     expect(f.settings.computer.commands).not.toBe("workspace");
   });

@@ -108,42 +108,27 @@ export function workspaceReadbackConfirms(
           (workspace) => workspace.workspaceId === command.workspaceId,
         )
       : undefined;
-  let confirmed = false;
-  if (command.kind === "connector.stop")
-    confirmed = onboardingFacts(settings, buildId).runtime === "stopped";
-  if (command.kind === "connector.start")
-    confirmed = reconnectedRuntimeCurrent(
-      settings,
-      buildId,
-      pending.previousRuntimeGeneration,
-    );
-  if (command.kind === "computer.update-access")
-    confirmed = target?.access === command.access;
-  if (command.kind === "computer.update-commands")
-    confirmed = settings.computer.commands === command.commands;
-  if (command.kind === "computer.update-git-history")
-    confirmed =
-      target !== undefined &&
-      (target.gitHistoryApproved === true) === command.approved;
+  // All consumers, including the retained onboarding adapter, share this
+  // restriction. Matching state cannot settle a mutation or connection effect.
   if (
-    command.kind === "computer.verify-workspace" ||
-    command.kind === "computer.check-folder"
+    command.kind !== "computer.verify-workspace" &&
+    command.kind !== "computer.check-folder"
   )
-    confirmed =
-      target !== undefined &&
-      command.checkId !== undefined &&
-      command.checkId !== pending.previousCheckId &&
-      target.accessCheck?.checkId === command.checkId &&
-      folderAccessChecked(settings, target, buildId) &&
-      (command.kind === "computer.check-folder" ||
-        (settings.setup.computer.verified?.workspaceId ===
-          command.workspaceId &&
-          settings.setup.computer.verified.configRevision ===
-            settings.computer.generation &&
-          settings.setup.computer.verified.buildId === buildId &&
-          settings.setup.computer.reachable === "reachable" &&
-          !settings.setup.computer.outcomeUnknown));
-  return confirmed;
+    return false;
+  return (
+    target !== undefined &&
+    command.checkId !== undefined &&
+    command.checkId !== pending.previousCheckId &&
+    target.accessCheck?.checkId === command.checkId &&
+    folderAccessChecked(settings, target, buildId) &&
+    (command.kind === "computer.check-folder" ||
+      (settings.setup.computer.verified?.workspaceId === command.workspaceId &&
+        settings.setup.computer.verified.configRevision ===
+          settings.computer.generation &&
+        settings.setup.computer.verified.buildId === buildId &&
+        settings.setup.computer.reachable === "reachable" &&
+        !settings.setup.computer.outcomeUnknown))
+  );
 }
 
 // An explicit UI approval is a plan, not a grant. Every effect still goes
