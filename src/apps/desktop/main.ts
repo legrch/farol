@@ -10339,9 +10339,7 @@ async function consumeSse(
     runtime === activeRuntime &&
     runtimeState === "ready" &&
     window === taskViewHost &&
-    !taskViewHost.isDestroyed() &&
-    !quitInProgress &&
-    !installedUpdateAdmission;
+    !taskViewHost.isDestroyed();
   const response = await fetch(
     `http://127.0.0.1:${activeRuntime.port}/events/${encodeURIComponent(task.taskId)}`,
     {

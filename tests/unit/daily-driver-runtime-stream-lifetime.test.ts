@@ -282,6 +282,81 @@ it("retains current correlated frames and cleans only their own controller", asy
   expect(h.context.streamControllers.size).toBe(0);
 });
 
+it.each(["quitInProgress", "installedUpdateAdmission"] as const)(
+  "refuses new stream dispatch while %s holds admission",
+  async (flag) => {
+    const h = host();
+    h.context[flag] = true;
+    await expect(h.api.consume(task)).resolves.toBeUndefined();
+    expect(h.channels).toHaveLength(0);
+    expect(h.context.streamControllers.size).toBe(0);
+    expect(h.sends).toHaveLength(0);
+  },
+);
+
+it.each(
+  (["quitInProgress", "installedUpdateAdmission"] as const).flatMap((flag) =>
+    (["fetch", "read"] as const).map((stage) => ({ flag, stage })),
+  ),
+)(
+  "retains an admitted $stage observation while $flag temporarily holds new admission",
+  async ({ flag, stage }) => {
+    const h = host();
+    const current = h.start();
+    let settled = false;
+    void current.outcome.then(() => {
+      settled = true;
+    });
+    if (stage === "read") await h.toRead(current);
+    h.context[flag] = true;
+    if (stage === "fetch") {
+      current.channel.fetched.resolve(current.channel.response);
+      await flush();
+    }
+    current.channel.reads[0]?.resolve(
+      packet(requested(task, "during-admission-hold")),
+    );
+    await flush();
+    const snapshot = () => ({
+      settled,
+      sameController:
+        h.context.streamControllers.get(task.taskId) === current.controller,
+      aborted: current.controller.signal.aborted,
+      callId: h.context.pendingComputer.get(task.taskId)?.callId,
+      reads: current.channel.reads.length,
+      sends: h.sends.length,
+    });
+    const held = snapshot();
+    h.context[flag] = false;
+    if (!settled) {
+      current.channel.reads
+        .at(-1)
+        ?.resolve(packet(requested(task, "after-admission-release")));
+      await flush();
+    }
+    const released = snapshot();
+    // A held admission is not StopStreams, abort, runtime/window replacement
+    // or task withdrawal. Explicitly end this controlled reader after capture.
+    expect(await h.finish(current)).toEqual({ status: "fulfilled" });
+    expect(held).toEqual({
+      settled: false,
+      sameController: true,
+      aborted: false,
+      callId: "during-admission-hold",
+      reads: 2,
+      sends: 1,
+    });
+    expect(released).toEqual({
+      settled: false,
+      sameController: true,
+      aborted: false,
+      callId: "after-admission-release",
+      reads: 3,
+      sends: 2,
+    });
+  },
+);
+
 it.each(["ownerId", "sessionId", "taskId", "turnId", "generation"] as const)(
   "retains current %s correlation rejection",
   async (field) => {
