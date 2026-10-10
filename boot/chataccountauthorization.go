@@ -17,6 +17,7 @@ type chatAccountAuthorization struct {
 	account         capturedChatAccount
 	original        conversation.Binding
 	selectedAccount string
+	model           *chatBrowserModel
 }
 
 func newChatAccountAuthorization(account *capturedChatAccount, original conversation.Binding, selectedAccount string) (*chatAccountAuthorization, error) {
@@ -46,9 +47,22 @@ func (a *chatAccountAuthorization) Authorize(ctx context.Context, current *conve
 		if approval.PrincipalKey != a.selectedAccount {
 			return errors.New("chat_account_selection_crossed")
 		}
+		// Each explicit turn uses fresh VerifySend facts with the SAME approval
+		// and immutable model mapping. A fresh observation never renews the grant.
+		var checkModel func() error
+		if a.model != nil {
+			var err error
+			checkModel, err = a.model.forDispatch(approval, observed)
+			if err != nil {
+				return err
+			}
+		}
 		return current.WithCurrent(ctx, func(live *conversation.Binding) error {
 			if live == nil || !chatAccountConversation(b, *live) {
 				return errors.New("chat_account_conversation_crossed")
+			}
+			if checkModel != nil {
+				return checkModel()
 			}
 			return nil
 		})
