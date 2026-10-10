@@ -60,7 +60,8 @@ export async function drainOwnedChildren(
 }
 
 export type QuitPreparationContext = Readonly<{
-  // The original Quit deadline, in the Date.now() clock. Never renew it.
+  // Preparation's absolute deadline within the original Quit budget, in the
+  // Date.now() clock. Never renew it or spend the reserved recording time.
   deadlineAt: number;
   // Recheck synchronously immediately before each new effect, including
   // after every await. Closes before collection or at the deadline. This
@@ -84,8 +85,10 @@ export type QuitDrainPorts = Readonly<{
   // Every owned child after preparation (if present): one-off host checks, the
   // product Agent, the connector, Route B and the relay. Collected exactly
   // once; a child that unregisters itself afterwards is still drained.
-  collect(): readonly OwnedCloser[];
+  collect(context: Readonly<{ deadlineAt: number }>): readonly OwnedCloser[];
   deadlineMs: number;
+  preparationMs?: number;
+  recordReserveMs?: number;
   // The private diagnostic receipt. Its failure changes nothing about the
   // drain's outcome or the quit.
   record(receipt: QuitDrainReceipt): Promise<void>;
@@ -109,6 +112,18 @@ export type QuitDrain = Readonly<{
  * restarts the drain nor skips it; after the drain, quit is not intercepted.
  */
 export function createQuitDrain(ports: QuitDrainPorts): QuitDrain {
+  const reserve = ports.recordReserveMs ?? 0;
+  const preparationMs = ports.preparationMs ?? ports.deadlineMs;
+  if (
+    !Number.isFinite(ports.deadlineMs) ||
+    ports.deadlineMs < 0 ||
+    !Number.isFinite(reserve) ||
+    reserve < 0 ||
+    reserve > ports.deadlineMs ||
+    !Number.isFinite(preparationMs) ||
+    preparationMs < 0
+  )
+    throw new Error("QUIT_BUDGET_INVALID");
   let state: QuitDrainState = "idle";
   return {
     state: () => state,
@@ -120,12 +135,21 @@ export function createQuitDrain(ports: QuitDrainPorts): QuitDrain {
       const startedAt = Date.now();
       const deadlineAt = startedAt + ports.deadlineMs;
       const remaining = () => Math.max(0, deadlineAt - Date.now());
+      const drainDeadlineAt = deadlineAt - reserve;
+      const drainRemaining = () => Math.max(0, drainDeadlineAt - Date.now());
+      const preparationDeadlineAt = Math.min(
+        drainDeadlineAt,
+        startedAt + preparationMs,
+      );
+      const preparationRemaining = () =>
+        Math.max(0, preparationDeadlineAt - Date.now());
       const prepare = ports.prepare;
       const collectAndDrain = (): Promise<QuitDrainReceipt> => {
         try {
-          const closers = [...ports.collect()];
-          if (!prepare) return drainOwnedChildren(closers, ports.deadlineMs);
-          const budget = remaining();
+          const closers = [
+            ...ports.collect(Object.freeze({ deadlineAt: drainDeadlineAt })),
+          ];
+          const budget = drainRemaining();
           if (budget === 0) {
             // Still ask every actual closer to stop, but an exit after the
             // deadline is not confirmed within this Quit's budget.
@@ -137,7 +161,7 @@ export function createQuitDrain(ports: QuitDrainPorts): QuitDrain {
               unconfirmed: closers.map((closer) => closer.name),
             });
           }
-          return drainOwnedChildren(closers, budget, deadlineAt);
+          return drainOwnedChildren(closers, budget, drainDeadlineAt);
         } catch {
           // Collection may already have disposed some handles before throwing.
           // Their exit is unproved, so keep the run marker and still quit.
@@ -149,24 +173,25 @@ export function createQuitDrain(ports: QuitDrainPorts): QuitDrain {
       };
       const prepareAndDrain = async (): Promise<QuitDrainReceipt> => {
         let unconfirmed = false;
-        if (prepare && remaining() > 0) {
+        if (prepare && preparationRemaining() > 0) {
           let preparing = true;
           let preparationTimer: NodeJS.Timeout | undefined;
           const expired = new Promise<QuitPreparationResult>((resolve) => {
             // Referenced: pending preparation must not strand normal Quit.
             preparationTimer = setTimeout(
               () => resolve({ status: "unknown" }),
-              remaining(),
+              preparationRemaining(),
             );
           });
           try {
             const originalAttempt = prepare(
               Object.freeze({
-                deadlineAt,
-                canStartEffect: () => preparing && Date.now() < deadlineAt,
+                deadlineAt: preparationDeadlineAt,
+                canStartEffect: () =>
+                  preparing && Date.now() < preparationDeadlineAt,
               }),
             );
-            if (remaining() === 0) {
+            if (preparationRemaining() === 0) {
               // Synchronous hook work also spends the original budget.
               // Observe late rejection without settling/cancelling its attempt.
               void originalAttempt.catch(() => undefined);
@@ -177,7 +202,7 @@ export function createQuitDrain(ports: QuitDrainPorts): QuitDrain {
                 case "accepted":
                 case "skipped":
                 case "blocked":
-                  unconfirmed = remaining() === 0;
+                  unconfirmed = preparationRemaining() === 0;
                   break;
                 default:
                   unconfirmed = true;
@@ -208,12 +233,11 @@ export function createQuitDrain(ports: QuitDrainPorts): QuitDrain {
           // Recording is bounded by the same absolute deadline that bounds
           // the drain (the elapsed drain time counts against it): a
           // `record` that never settles must not delay quit past it.
-          let budget = remaining();
           const recorded = ports.record(receipt).catch(() => undefined);
-          if (prepare) budget = remaining();
+          const budget = remaining();
           // An exhausted preparation/drain has no fresh receipt budget. The
           // diagnostic still starts, but cannot postpone the real Quit.
-          if (prepare && budget === 0) return undefined;
+          if (budget === 0) return undefined;
           return Promise.race([
             recorded,
             new Promise<void>((resolve) => {

@@ -6,6 +6,7 @@ import {
   startDesktopGoCore,
   type DesktopGoCore,
 } from "../../../apps/desktop/go-core-host";
+import { goCoreQuitClosers } from "../../../apps/desktop/go-core-quit-closers";
 import type {
   ChatComputerAdmissionResponse,
   SettingsDeliveryResult,
@@ -1896,7 +1897,9 @@ const routeBTaskSurfaces: RouteBTaskSurfaces = {
 };
 
 // Includes the bounded Go retirement/ACK, exact child exit and terminal recorder.
-const QUIT_DRAIN_DEADLINE_MS = 10_000;
+const QUIT_DRAIN_DEADLINE_MS = 60_000;
+const QUIT_PREPARATION_MS = 10_000;
+const QUIT_RECORD_RESERVE_MS = 2_000;
 
 // What the start did with the connector's execution fence, kept privately
 // for diagnostics: whether the store was read and how many summaries it
@@ -11421,6 +11424,8 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
   // of being reported as drained.
   const quitDrain = createQuitDrain({
     deadlineMs: QUIT_DRAIN_DEADLINE_MS,
+    preparationMs: QUIT_PREPARATION_MS,
+    recordReserveMs: QUIT_RECORD_RESERVE_MS,
     prepare: quitUpdatePreparation.prepare,
     // The receipt first, then — only for a confirmed drain — the run marker
     // written at start (N03/D2). An undrained quit, or a receipt that could
@@ -11436,11 +11441,8 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
       }
     },
     quit: () => app.quit(),
-    collect: () => {
+    collect: (context) => {
       const closers: OwnedCloser[] = [
-        ...(desktopGoCore
-          ? [{ name: "go-core", close: () => desktopGoCore!.close() }]
-          : []),
         {
           name: "installed-updater",
           close: async () => {
@@ -11487,18 +11489,20 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
         closers.push({ name: "host-check", close: () => client.close() });
       }
       const connector = secureMcpConnectorRuntime;
+      const core = desktopGoCore;
+      const savedChat = savedChatBridgeRuntime;
+      let beforeCore: OwnedCloser | null = null;
       if (connector) {
         const inFlightStart = connectorStartInFlight;
-        closers.push({
+        beforeCore = {
           name: "connector",
           close: async () => {
             try {
-              await stopAndConfirmComputerMcp(connector, inFlightStart);
+              await stopAndConfirmComputerMcp(connector, inFlightStart, core);
             } finally {
               // Even an unconfirmed MCP drain must close account admission.
               // close() waits for already admitted work; it does not cancel Send
               // or turn the rejected connector close into a confirmed drain.
-              const savedChat = savedChatBridgeRuntime;
               if (savedChat) {
                 await savedChat.close();
                 if (savedChatBridgeRuntime === savedChat)
@@ -11506,8 +11510,21 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
               }
             }
           },
-        });
+        };
+      } else if (savedChat) {
+        savedChatBridgeRuntime = null;
+        beforeCore = {
+          name: "saved-chat-bridge",
+          close: () => savedChat.close(),
+        };
       }
+      closers.push(
+        ...goCoreQuitClosers(
+          beforeCore,
+          core ? () => core.close() : null,
+          () => Date.now() < context.deadlineAt,
+        ),
+      );
       const model = modelLifecycle;
       modelLifecycle = null;
       if (model) {
@@ -11521,14 +11538,6 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
       callerRelayRuntime = null;
       if (relay)
         closers.push({ name: "caller-relay", close: () => relay.close() });
-      const savedChat = connector ? null : savedChatBridgeRuntime;
-      if (savedChat) {
-        savedChatBridgeRuntime = null;
-        closers.push({
-          name: "saved-chat-bridge",
-          close: () => savedChat.close(),
-        });
-      }
       disposeChatGptRoutes();
       disposeTaskViews("runtime");
       stopRuntime();
