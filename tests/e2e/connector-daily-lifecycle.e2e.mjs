@@ -458,9 +458,16 @@ async function captureLaunch(run, current) {
 }
 async function initialVerify(run, current, selected) {
   assert.equal(
-    current.connectors.secureMcp.challenge.workspaceId,
-    current.setup.computer.verified.workspaceId,
-    "DAILY_CHALLENGE_WORKSPACE_CHANGED",
+    current.connectors.secureMcp.challenge.runtimeGeneration,
+    current.connectors.secureMcp.runtime.runtimeGeneration,
+    "DAILY_CHALLENGE_RUNTIME_CHANGED",
+  );
+  assert.ok(
+    current.computer.workspaces.some(
+      (workspace) =>
+        workspace.workspaceId === current.setup.computer.verified.workspaceId,
+    ),
+    "DAILY_VERIFIED_WORKSPACE_MISSING",
   );
   const transport = new StdioClientTransport({
     command: path.join(
