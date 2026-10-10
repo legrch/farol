@@ -22,6 +22,8 @@ authority, release or installed application was changed.
   tree `10f969406999106481e0191c4bb94951b204c3dd`.
 - Initial final handoff: `e2824968b72fb891774a4cdda7f0beaa2c893842`;
   tree `ea403e2c9439024cfa1d34706874d44e0a7b9694`.
+- Pinned consumer witness: `bc7f3ee6bd401aad30b6948a572869314ab770ec`;
+  tree `4d1d1e33d4baaaffe02a144635a4ddaa86d2895b`.
 - The subsequent pinned-consumer witness is confined to this documentation root;
   its script copies the test fixture into a disposable external adapter assembly.
   Production code remains exactly the implementation checkpoint above. Inspect
@@ -50,6 +52,7 @@ ports and production service/adapter code, including exact public producer sourc
 for I6. See [CONSUMER-WITNESS.md](CONSUMER-WITNESS.md) for pins, executable
 reproduction, actual nine-test/33-subcase results and mapping limits. This is
 controlled composition; shipping producer imports/boot are not included.
+The frozen source receipt is [WITNESS-RECEIPT.json](WITNESS-RECEIPT.json).
 PORTABLE targeted checks pass.
 Aggregate acceptance is open; PUSHED must be established from the actual remote
 branch receipt, independently of these source/test claims.

@@ -61,6 +61,15 @@ and reasoning fields. Canonical consumer input SHA-256:
 `841a075477288cfaa99e2b722de89aa458ca48abd49c1c069030574c902f661c`.
 The producer estimate is advisory; no provider token usage is claimed.
 
+The exact committed witness source is
+`bc7f3ee6bd401aad30b6948a572869314ab770ec`, tree
+`4d1d1e33d4baaaffe02a144635a4ddaa86d2895b`. A frozen offline run against this
+commit passed the same nine tests and 33 subcases. Its complete manifest SHA-256
+is `1ac1abb27ed0bbd4aac90d68dda75852af1f8b8e0f08671d59403c42db055e61`.
+[WITNESS-RECEIPT.json](WITNESS-RECEIPT.json) records the exact source, asset/input
+hashes, original log hashes and tool settings. The final receipt commit changes
+documentation only and preserves these tested executable bytes.
+
 Tests establish:
 
 - Exact chosen model and effort reach the actual builder; the ordered input
