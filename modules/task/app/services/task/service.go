@@ -95,10 +95,38 @@ func (s *Service) digestWithDispatch(intent task.Intent, message, expectedDispat
 func validRequest(req MutationRequest) bool {
 	return task.ID(req.OperationID) && task.ID(req.TaskID) && ((req.Action == task.Cancel && req.Message == "") || (req.Action != task.Cancel && task.Text(req.Message, 32768)))
 }
+
+func exactTargetValid(dispatchID string, reference task.Reference) bool {
+	return task.ID(dispatchID) && (reference.Complete(task.Codex) || reference.Complete(task.Claude))
+}
+
+// Exact targets cannot be supplied to legacy replay, or changed after an
+// original operation is published. Reference is already part of that intent.
+func exactTargetMatches(intent task.Intent, dispatchID string, reference *task.Reference) bool {
+	if reference == nil {
+		return intent.ExactDispatchID == ""
+	}
+	return intent.ExactDispatchID == dispatchID && intent.Expected == *reference
+}
+
+// A CAS conflict alone is uncertainty. For an exact mutation, only a retained
+// different intent proves an operation-key conflict; no receipt is disclosed,
+// no absent read authorizes retry, and legacy error behavior stays unchanged.
+func (s *Service) admissionFailure(ctx context.Context, intent task.Intent, err error) error {
+	if intent.ExactDispatchID != "" && errors.Is(err, task.ErrConflict) {
+		if original, lookupErr := s.journal.Lookup(ctx, intent.OperationID); lookupErr == nil && original != nil && original.Intent != intent {
+			return task.ErrConflict
+		}
+	}
+	return task.ErrUnknown
+}
 func (s *Service) replay(ctx context.Context, req MutationRequest, binding *task.Binding, parent *task.Parent) (*MutationResponse, bool, error) {
 	return s.replayWithDispatch(ctx, req, binding, parent, "")
 }
 func (s *Service) replayWithDispatch(ctx context.Context, req MutationRequest, binding *task.Binding, parent *task.Parent, expectedDispatchID string) (*MutationResponse, bool, error) {
+	return s.replayWithTarget(ctx, req, binding, parent, expectedDispatchID, nil)
+}
+func (s *Service) replayWithTarget(ctx context.Context, req MutationRequest, binding *task.Binding, parent *task.Parent, expectedDispatchID string, expectedReference *task.Reference) (*MutationResponse, bool, error) {
 	op, err := s.journal.Lookup(ctx, req.OperationID)
 	if err != nil {
 		return nil, true, task.ErrUnknown
@@ -109,7 +137,7 @@ func (s *Service) replayWithDispatch(ctx context.Context, req MutationRequest, b
 	intent := op.Intent
 	original := intent.Digest
 	intent.Digest = ""
-	if intent.TaskID != req.TaskID || intent.Action != req.Action || s.digestWithDispatch(intent, req.Message, expectedDispatchID) != original || (binding != nil && intent.Binding != *binding) || (parent != nil && intent.Parent != *parent) {
+	if intent.TaskID != req.TaskID || intent.Action != req.Action || !exactTargetMatches(intent, expectedDispatchID, expectedReference) || s.digestWithDispatch(intent, req.Message, expectedDispatchID) != original || (binding != nil && intent.Binding != *binding) || (parent != nil && intent.Parent != *parent) {
 		return nil, true, task.ErrConflict
 	}
 	if err := s.recheck(ctx, op.Intent.Binding); err != nil {
@@ -143,7 +171,7 @@ func (s *Service) executeWithDispatch(ctx context.Context, req MutationRequest, 
 	intent.Digest = s.digestWithDispatch(intent, req.Message, expectedDispatchID)
 	admitted, err := s.journal.Admit(ctx, intent, before.Revision, prepared)
 	if err != nil {
-		return nil, task.ErrUnknown
+		return nil, s.admissionFailure(ctx, intent, err)
 	}
 	if !admitted.Claimed { // Race with the same operation: compare the entire intent.
 		if admitted.Operation.Intent != intent {

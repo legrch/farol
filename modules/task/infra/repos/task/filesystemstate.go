@@ -98,6 +98,9 @@ func filesystemIntent(i task.Intent) bool {
 	if i.Admission != (task.AdmissionBinding{}) && (!i.Admission.Valid() || i.Admission.TaskID != i.TaskID) {
 		return false
 	}
+	if i.ExactDispatchID != "" && (!task.ID(i.ExactDispatchID) || i.Action != task.Cancel && i.Action != task.Deliver) {
+		return false
+	}
 	if i.Action == task.Create {
 		return i.Expected == (task.Reference{})
 	}
@@ -154,6 +157,12 @@ func filesystemImageValid(image *filesystemImage) bool {
 		snapshot, found := image.Tasks[i.TaskID]
 		if !found || id != i.OperationID || !filesystemIntent(i) || i.Binding.ProfileID != image.ProfileID || i.Binding != snapshot.Task.Binding || i.Parent != snapshot.Task.Parent {
 			return false
+		}
+		if i.ExactDispatchID != "" {
+			original, exists := image.Operations[i.ExactDispatchID]
+			if !exists || original.Intent.TaskID != i.TaskID || (original.Intent.Action != task.Create && original.Intent.Action != task.Continue && original.Intent.Action != task.Resume) || !original.Settled || original.Receipt.State != task.Known || original.Receipt.Reference != i.Expected {
+				return false
+			}
 		}
 		if i.Admission == (task.AdmissionBinding{}) {
 			if snapshot.Task.Admission != (task.ExecutionAdmission{}) {

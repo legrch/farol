@@ -101,6 +101,16 @@ type MessageExactRequest struct {
 	OperationID, TaskID, Message, ExpectedDispatchID string
 }
 type CancelRequest struct{ OperationID, TaskID string }
+
+// Exact control bodies contain scope, never an authority or admission grant.
+type CancelExactRequest struct {
+	OperationID, TaskID, ExpectedDispatchID string
+	ExpectedReference                       Reference
+}
+type DeliverExactRequest struct {
+	OperationID, TaskID, ExpectedDispatchID string
+	ExpectedReference                       Reference
+}
 type TaskRequest struct{ TaskID string }
 type OperationRequest struct{ OperationID string }
 type MutationResponse struct {
@@ -322,6 +332,30 @@ func (c *Contract) MessageExact(ctx context.Context, req MessageExactRequest) (*
 }
 func (c *Contract) Cancel(ctx context.Context, req CancelRequest) (*MutationResponse, error) {
 	return c.followup(ctx, FollowupRequest{OperationID: req.OperationID, TaskID: req.TaskID}, task.Cancel)
+}
+
+func (c *Contract) CancelExact(ctx context.Context, req CancelExactRequest) (*MutationResponse, error) {
+	if err := c.ready(ctx); err != nil {
+		return nil, err
+	}
+	out, err := c.service.CancelExact(ctx, tasksvc.CancelExactRequest{OperationID: req.OperationID, TaskID: req.TaskID, ExpectedDispatchID: req.ExpectedDispatchID, ExpectedReference: task.Reference(req.ExpectedReference)})
+	if err != nil {
+		return nil, classify(err)
+	}
+	return mutation(out), nil
+}
+
+// DeliverExact publishes only the existing Task delivery owner; it does not
+// acknowledge a child completion or restore parent authority by reading it.
+func (c *Contract) DeliverExact(ctx context.Context, req DeliverExactRequest) (*MutationResponse, error) {
+	if err := c.ready(ctx); err != nil {
+		return nil, err
+	}
+	out, err := c.service.DeliverExact(ctx, tasksvc.DeliverExactRequest{OperationID: req.OperationID, TaskID: req.TaskID, ExpectedDispatchID: req.ExpectedDispatchID, ExpectedReference: task.Reference(req.ExpectedReference)})
+	if err != nil {
+		return nil, classify(err)
+	}
+	return &MutationResponse{OperationID: out.OperationID, TaskID: out.TaskID, Receipt: receipt(out.Receipt)}, nil
 }
 
 // Operation is the existing read-only reconnect query: no Resolve, Supports,

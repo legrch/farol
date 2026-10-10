@@ -50,15 +50,32 @@ func (s *Service) MessageExact(ctx context.Context, req MessageExactRequest) (*M
 	return s.control(ctx, MutationRequest{OperationID: req.OperationID, TaskID: req.TaskID, Message: req.Message, Action: task.Message}, req.ExpectedDispatchID)
 }
 
+// CancelExactRequest binds cancellation to the original dispatch and complete
+// provider reference. It cannot select authority or a new admission epoch.
+type CancelExactRequest struct {
+	OperationID, TaskID, ExpectedDispatchID string
+	ExpectedReference                       task.Reference
+}
+
+func (s *Service) CancelExact(ctx context.Context, req CancelExactRequest) (*MutationResponse, error) {
+	if !exactTargetValid(req.ExpectedDispatchID, req.ExpectedReference) {
+		return nil, task.ErrInvalid
+	}
+	return s.controlTarget(ctx, MutationRequest{OperationID: req.OperationID, TaskID: req.TaskID, Action: task.Cancel}, req.ExpectedDispatchID, &req.ExpectedReference)
+}
+
 // Control distinguishes active Message/Cancel from terminal Continue/Resume.
 func (s *Service) Control(ctx context.Context, req MutationRequest) (*MutationResponse, error) {
 	return s.control(ctx, req, "")
 }
 func (s *Service) control(ctx context.Context, req MutationRequest, expectedDispatchID string) (*MutationResponse, error) {
+	return s.controlTarget(ctx, req, expectedDispatchID, nil)
+}
+func (s *Service) controlTarget(ctx context.Context, req MutationRequest, expectedDispatchID string, expectedReference *task.Reference) (*MutationResponse, error) {
 	if !validRequest(req) || (req.Action != task.Continue && req.Action != task.Resume && req.Action != task.Message && req.Action != task.Cancel) {
 		return nil, task.ErrInvalid
 	}
-	if replay, found, err := s.replayWithDispatch(ctx, req, nil, nil, expectedDispatchID); found {
+	if replay, found, err := s.replayWithTarget(ctx, req, nil, nil, expectedDispatchID, expectedReference); found {
 		return replay, err
 	}
 	before, err := s.journal.Read(ctx, req.TaskID)
@@ -69,6 +86,9 @@ func (s *Service) control(ctx context.Context, req MutationRequest, expectedDisp
 		return nil, task.ErrNotFound
 	}
 	if expectedDispatchID != "" && before.Task.DispatchID != expectedDispatchID {
+		return nil, task.ErrIdentity
+	}
+	if expectedReference != nil && before.Task.Reference != *expectedReference {
 		return nil, task.ErrIdentity
 	}
 	if before.Pending != "" {
@@ -95,5 +115,8 @@ func (s *Service) control(ctx context.Context, req MutationRequest, expectedDisp
 		return nil, task.ErrState
 	}
 	intent := task.Intent{OperationID: req.OperationID, TaskID: req.TaskID, Action: req.Action, Binding: before.Task.Binding, Parent: before.Task.Parent, Expected: before.Task.Reference}
+	if expectedReference != nil {
+		intent.ExactDispatchID = expectedDispatchID
+	}
 	return s.executeWithDispatch(ctx, req, intent, *before, expectedDispatchID)
 }
