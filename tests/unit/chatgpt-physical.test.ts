@@ -500,6 +500,91 @@ describe("dedicated physical host facade", () => {
       state: "refused",
     });
   });
+  it("fences a retained Send witness after unconfirmed native destruction", async () => {
+    const h = harness();
+    const witness = await h.witness();
+    vi.mocked(h.port.destroy).mockResolvedValue(undefined);
+    expect(await h.api.dispose(h.operation, h.guard)).toMatchObject({
+      state: "unconfirmed",
+      code: "PHYSICAL_DESTRUCTION_UNCONFIRMED",
+    });
+    expect(
+      await h.api.send(
+        {
+          ...h.operation,
+          witness,
+          intentDigest: h.verify.intentDigest,
+          prompt: "Synthetic prompt",
+        },
+        h.guard,
+      ),
+    ).toMatchObject({ state: "not-sent" });
+    expect(h.port.send).not.toHaveBeenCalled();
+    expect(h.port.destroy).toHaveBeenCalledOnce();
+  });
+  it("does not mint a late witness on a handle with unconfirmed destruction", async () => {
+    const h = harness();
+    const original = vi.mocked(h.port.verifySend).getMockImplementation()!;
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    vi.mocked(h.port.verifySend).mockImplementation(async (surface, input) => {
+      await pending;
+      return original(surface, input);
+    });
+    const verifying = h.api.verifySend(h.verify, h.guard);
+    expect(h.port.verifySend).toHaveBeenCalledOnce();
+    vi.mocked(h.port.destroy).mockResolvedValue(undefined);
+    expect(await h.api.dispose(h.operation, h.guard)).toMatchObject({
+      state: "unconfirmed",
+    });
+    release();
+    expect(await verifying).toMatchObject({ state: "refused" });
+    expect(h.port.destroy).toHaveBeenCalledOnce();
+    expect(h.port.send).not.toHaveBeenCalled();
+  });
+  it("does not revive a disposed handle with late terminal observation or new preparation", async () => {
+    const h = harness(bound);
+    await h.send();
+    const original = vi.mocked(h.port.observe).getMockImplementation()!;
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    vi.mocked(h.port.observe).mockImplementation(async (surface, input) => {
+      await pending;
+      return original(surface, input);
+    });
+    const observing = h.api.observe(h.operation, h.guard);
+    expect(h.port.observe).toHaveBeenCalledOnce();
+    vi.mocked(h.port.destroy).mockResolvedValue(undefined);
+    expect(await h.api.dispose(h.operation, h.guard)).toMatchObject({
+      state: "unconfirmed",
+    });
+    release();
+    expect(await observing).toMatchObject({
+      state: "unknown",
+      code: "PHYSICAL_OBSERVATION_BINDING_LOST",
+    });
+    expect(
+      await h.api.prepare(
+        {
+          operationId: "operation-two",
+          target: { kind: "new-saved" },
+          deadlineMillis: 10_000,
+        },
+        h.guard,
+      ),
+    ).toMatchObject({ state: "refused" });
+    expect(await h.api.verifySend(h.verify, h.guard)).toMatchObject({
+      state: "refused",
+    });
+    expect(h.port.send).toHaveBeenCalledOnce();
+    expect(h.port.destroy).toHaveBeenCalledOnce();
+    expect(h.port.load).not.toHaveBeenCalled();
+    expect(h.port.prepareProbe).not.toHaveBeenCalled();
+  });
   it("rejects expired deadlines and secret-bearing malformed page receipts", async () => {
     const h = harness();
     h.expire();
