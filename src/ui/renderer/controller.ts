@@ -1283,13 +1283,16 @@ export class WindowController implements RendererFacade {
       pending.computerGeneration === receipt.generation
     );
   }
-  task(command: ProductTaskCommand, intention: string): Promise<Intent> {
-    if (!ProductTaskCommandSchema.safeParse(command).success)
+  task(value: ProductTaskCommand, intention: string): Promise<Intent> {
+    const parsed = ProductTaskCommandSchema.safeParse(value);
+    if (!parsed.success)
       return Promise.resolve({
         id: intention,
         state: "refused",
         code: "TASK_COMMAND_INVALID",
       });
+    // Bind validation, fingerprint and transport to the same owned values.
+    const command = parsed.data;
     const nav = this.navigationRevision;
     return this.dispatch(intention, command, async () => {
       const result = ProductTaskCommandResultSchema.safeParse(
