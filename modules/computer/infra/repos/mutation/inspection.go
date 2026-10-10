@@ -21,3 +21,22 @@ func InspectEmpty(ctx context.Context, root Root) (*EmptyInspection, error) {
 	}
 	return inspectEmptyExisting(ctx, root)
 }
+
+// WithClosedEmptyInspection keeps the existing nonblocking writer lock and
+// pinned path identities through one synchronous trusted visitor and a final
+// empty-store recheck, including when the visitor returns an error or cancels
+// ctx. It opens only existing state and passes values, never descriptors or
+// writer/recovery authority. A failed recheck or cancellation takes precedence
+// over the visitor's error; otherwise that error is returned unchanged.
+//
+// Cancellation cannot interrupt an arbitrary stuck visitor: no background
+// visitor is launched and the lock stays held until it returns. This excludes
+// cooperating writers only; namespace observations are not an atomic filesystem
+// snapshot and cannot prevent hostile changes or effects already made by the
+// visitor. The caller still owns maintenance exclusion and all other journals.
+func WithClosedEmptyInspection(ctx context.Context, root Root, visit func(EmptyInspection) error) error {
+	if ctx == nil || ctx.Err() != nil || !validRoot(root) || visit == nil {
+		return unavailable()
+	}
+	return withClosedEmptyInspection(ctx, root, visit)
+}

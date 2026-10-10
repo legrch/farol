@@ -20,6 +20,12 @@ func TestNativeMutationInspectionExistingClosedStore(t *testing.T) {
 	if got, err := repository.InspectEmpty(context.Background(), root); err == nil || got != nil {
 		t.Fatal("inspection accepted a live writer", got)
 	}
+	if err := repository.WithClosedEmptyInspection(context.Background(), root, func(repository.EmptyInspection) error {
+		t.Fatal("live writer reached visitor")
+		return nil
+	}); err == nil {
+		t.Fatal("closed inspection accepted a live writer")
+	}
 	if err := r.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -99,6 +105,12 @@ func TestNativeMutationInspectionNeverCreatesOrRepairs(t *testing.T) {
 			}
 			if out, err := repository.InspectEmpty(context.Background(), root); err == nil || out != nil {
 				t.Fatal("unsafe or nonempty store inspected", out)
+			}
+			if err := repository.WithClosedEmptyInspection(context.Background(), root, func(repository.EmptyInspection) error {
+				t.Fatal("unsafe or nonempty store reached visitor")
+				return nil
+			}); err == nil {
+				t.Fatal("unsafe or nonempty store accepted by closed inspection")
 			}
 			after, err := os.ReadDir(filepath.Join(root.Path, "mutations"))
 			if err != nil || len(before) != len(after) {
