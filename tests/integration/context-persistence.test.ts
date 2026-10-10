@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs/promises";
@@ -23,6 +24,9 @@ import {
   type CheckpointContent,
   type CheckpointEnvelope,
 } from "../../src/modules/chat/domain/checkpoint";
+import { sweepOrphanTaskContexts } from "../../src/apps/desktop/task-context-cleanup";
+import { CompactContext } from "../../src/modules/chat/app/service/compact-context";
+import type { HostContextReceipt } from "../../src/modules/chat/app/port/host-context-bridge";
 import { PrivateContextStore } from "../../src/modules/chat/infra/repo/private-context-store";
 import {
   CodexContextContinuity,
@@ -900,6 +904,245 @@ describe("private context persistence", () => {
       "CONTEXT_STATE_UNSUPPORTED",
     );
   });
+
+  // Actual CompactContext FSM and admissions on disposable filesystem bytes.
+  // Host/source acknowledgements are fixtures, not live or saved-profile proof.
+  async function compactCycles(stateRoot: string, finalState = "completed") {
+    const store = new PrivateContextStore({
+      root: stateRoot,
+      maxCheckpointsPerTask: 2,
+    });
+    for (let index = 1; index <= 3; index += 1) {
+      const operationId = `retention-operation-${index}`;
+      const source = {
+        schemaVersion: 1 as const,
+        operationId,
+        binding,
+        source: "retained_agent" as const,
+        sourceBoundary: `retention-boundary-${index}`,
+        variant: "unary_replacement_history" as const,
+        history: [
+          { type: "message", role: "user", content: `original-${index}` },
+        ],
+      };
+      await store.putSource(source);
+      const summary = async () =>
+        index === 3 && finalState === "unknown"
+          ? { status: "outcome_unknown" as const, code: "FIXTURE_UNKNOWN" }
+          : {
+              status: "completed" as const,
+              providerOperationId: `provider-${index}`,
+              sourceCursor: `cursor-${index}`,
+              content,
+            };
+      const ack = async (
+        checkpoint: CheckpointEnvelope,
+      ): Promise<HostContextReceipt> => {
+        expect(checkpoint).toMatchObject({
+          binding,
+          operationId,
+          epoch: index,
+          source: source.source,
+          sourceBoundary: source.sourceBoundary,
+          checkpointId: `retention-checkpoint-${index}`,
+        });
+        return index === 3 && finalState === "withheld"
+          ? { status: "awaiting_confirmation" }
+          : { status: "confirmed", hostContextRef: `exact-host-${index}` };
+      };
+      const service = new CompactContext(
+        { request: summary, observe: summary },
+        store,
+        store,
+        {
+          preflight: async () => ({ status: "ready" }),
+          offer: ack,
+          reconcile: ack,
+        },
+        {
+          retire: async (retirement) => {
+            expect(retirement).toEqual({ binding, epoch: index, operationId });
+            return { status: "retired" };
+          },
+        },
+        { now: () => index * 1000 },
+        { nextCheckpointId: () => `retention-checkpoint-${index}` },
+        16_384,
+      );
+      const result = value(
+        await service.execute({
+          binding,
+          operationId,
+          source: source.source,
+          sourceBoundary: source.sourceBoundary,
+        }),
+      );
+      await expect(store.getSource(binding, operationId)).resolves.toEqual(
+        source,
+      );
+      if (result.session.phase === "active") {
+        const recordPath = (await descendants(stateRoot)).find(
+          (file) =>
+            path.basename(file) ===
+            `completion-${createHash("sha256")
+              .update(JSON.stringify([operationId]))
+              .digest("hex")}.json`,
+        );
+        if (!recordPath || !result.checkpoint)
+          throw new Error("FIXTURE_COMPLETION_MISSING");
+        const recordBytes = await fs.readFile(recordPath, "utf8");
+        expect(Buffer.byteLength(recordBytes)).toBeLessThanOrEqual(8 * 1_024);
+        expect(JSON.parse(recordBytes)).toEqual({
+          schemaVersion: 1,
+          kind: "context_completion",
+          admission: {
+            binding,
+            sourceEpoch: index,
+            request: {
+              operationId,
+              source: source.source,
+              sourceBoundary: source.sourceBoundary,
+            },
+          },
+          checkpointId: result.checkpoint.checkpointId,
+          checkpointSHA256: createHash("sha256")
+            .update(JSON.stringify(result.checkpoint))
+            .digest("hex"),
+        });
+      }
+      expect(result.session.phase).toBe(
+        index === 3 && finalState === "unknown"
+          ? "outcome_unknown"
+          : index === 3 && finalState === "withheld"
+            ? "handoff_offered"
+            : "active",
+      );
+    }
+    return new PrivateContextStore({
+      root: stateRoot,
+      maxCheckpointsPerTask: 2,
+    });
+  }
+
+  it.each(["close", "orphan"])(
+    "cleans three fully acknowledged admitted compactions after checkpoint retention via %s",
+    async (method) => {
+      const stateRoot = await root();
+      const store = await compactCycles(stateRoot);
+      await expect(
+        store.get(binding, "retention-checkpoint-1"),
+      ).resolves.toBeNull();
+      const files = await descendants(stateRoot);
+      expect(
+        files.filter((file) => /checkpoints\/[a-f0-9]{64}\.json$/u.test(file)),
+      ).toHaveLength(2);
+      expect(
+        files.filter((file) => /completion-[a-f0-9]{64}\.json$/u.test(file)),
+      ).toHaveLength(3);
+      expect(files.some((file) => file.endsWith("admission.lock"))).toBe(false);
+      await expect(store.load(binding)).resolves.toMatchObject({
+        phase: "active",
+        epoch: 4,
+      });
+      const other = {
+        ...binding,
+        taskId: "retention-other",
+        sessionId: "retention-other",
+      };
+      await store.save(createContextSession(other));
+      if (method === "close") await store.deleteTask(binding);
+      else
+        await expect(
+          sweepOrphanTaskContexts(
+            store,
+            { status: "loaded", taskIds: [other.taskId] },
+            (taskId) => (taskId === binding.taskId ? binding : other),
+          ),
+        ).resolves.toEqual({
+          swept: [binding.taskId],
+          unreadable: 0,
+          failed: [],
+        });
+      await expect(store.load(binding)).resolves.toBeNull();
+      for (let index = 1; index <= 3; index += 1)
+        await expect(
+          store.getSource(binding, `retention-operation-${index}`),
+        ).resolves.toBeNull();
+      await expect(store.load(other)).resolves.toMatchObject({
+        binding: other,
+      });
+    },
+  );
+
+  it.each([
+    "unknown",
+    "withheld",
+    "unreleased",
+    "fence_changed",
+    "admission_changed",
+    "missing_proof",
+  ])(
+    "preserves every source and private record after retention when %s",
+    async (state) => {
+      const stateRoot = await root();
+      const store = await compactCycles(stateRoot, state);
+      if (state === "unreleased") {
+        const admission = await store.acquireCompactionAdmission(binding, 3, {
+          operationId: "retention-operation-3",
+          source: "retained_agent",
+          sourceBoundary: "retention-boundary-3",
+        });
+        expect(admission.status).toBe("acquired");
+      }
+      if (state === "fence_changed") {
+        const session = await store.load(binding);
+        if (!session) throw new Error("FIXTURE_SESSION_MISSING");
+        await store.save({ ...session, epoch: session.epoch + 1 });
+      }
+      if (state === "admission_changed") {
+        for (const target of await descendants(stateRoot)) {
+          if (!target.includes("admissions/boundaries/")) continue;
+          const record = JSON.parse(await fs.readFile(target, "utf8"));
+          if (record.admission.request.operationId !== "retention-operation-1")
+            continue;
+          record.admission.sourceEpoch += 1;
+          await fs.writeFile(target, JSON.stringify(record), { mode: 0o600 });
+        }
+      }
+      if (state === "missing_proof") {
+        // Remove only the fixture's first completion; no historical backfill.
+        for (const target of await descendants(stateRoot)) {
+          if (!/completion-[a-f0-9]{64}\.json$/u.test(target)) continue;
+          if (
+            (await fs.readFile(target, "utf8")).includes(
+              "retention-operation-1",
+            )
+          )
+            await fs.unlink(target);
+        }
+      }
+      const files = (await descendants(stateRoot)).filter(
+        (file) => file.endsWith(".json") || file.endsWith("admission.lock"),
+      );
+      const before = await Promise.all(
+        files.map((file) => fs.readFile(file, "utf8")),
+      );
+      await expect(store.deleteTask(binding)).rejects.toThrow(
+        state === "admission_changed"
+          ? "CONTEXT_COMPLETION_ADMISSION_MISMATCH"
+          : "CONTEXT_PUBLICATION_TASK_RETAINED",
+      );
+      expect(
+        await Promise.all(files.map((file) => fs.readFile(file, "utf8"))),
+      ).toEqual(before);
+      for (let index = 1; index <= 3; index += 1)
+        await expect(
+          store.getSource(binding, `retention-operation-${index}`),
+        ).resolves.toMatchObject({
+          operationId: `retention-operation-${index}`,
+        });
+    },
+  );
 
   it("bounds checkpoint retention and deletes only the exact task", async () => {
     const stateRoot = await root();

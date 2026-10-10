@@ -177,6 +177,17 @@ const admissionRecordSchema = z.strictObject({
   admission: admissionSchema,
 });
 
+// Bounded metadata per admitted operation; checkpoint payload retention is separate.
+// Written only on the exact durable retired -> active transition, never backfilled.
+const completionRecordSchema = z.strictObject({
+  schemaVersion: z.literal(1),
+  kind: z.literal("context_completion"),
+  admission: admissionSchema,
+  checkpointId: z.string().min(1).max(160),
+  checkpointSHA256: z.string().regex(/^[a-f0-9]{64}$/u),
+});
+const MAXIMUM_COMPLETION_RECORD_BYTES = 8 * 1_024;
+
 const admissionLeaseRecordSchema = z.strictObject({
   schemaVersion: z.literal(1),
   kind: z.literal("context_admission_lease"),
@@ -480,6 +491,109 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
       "CONTEXT_STATE_OVERSIZED",
       () => this.assertAdmissionLease(session.binding, lease),
     );
+    if (
+      lease &&
+      existing?.phase === "old_epoch_retired" &&
+      existing.operation &&
+      existing.operation.summaryDispatch === "result_received" &&
+      existing.operation.hostContextRef !== null &&
+      existing.operation.sourceEpoch === existing.epoch &&
+      session.phase === "active" &&
+      !session.operation &&
+      session.epoch === existing.epoch + 1 &&
+      session.lastCompletedRequest &&
+      sameCompactionRequest(existing.operation, session.lastCompletedRequest) &&
+      session.lastCompletedOperationId === existing.operation.operationId &&
+      session.lastCheckpointId === existing.operation.checkpointId
+    ) {
+      const checkpoint = session.lastCheckpointId
+        ? await this.get(session.binding, session.lastCheckpointId)
+        : null;
+      if (
+        !checkpoint ||
+        checkpoint.epoch !== existing.epoch ||
+        !sameCompactionRequest(checkpoint, session.lastCompletedRequest)
+      )
+        throw new Error("CONTEXT_COMPLETION_CHECKPOINT_MISMATCH");
+      const admission = {
+        binding: session.binding,
+        sourceEpoch: checkpoint.epoch,
+        request: session.lastCompletedRequest,
+      };
+      await this.assertCompletionAdmission(admission);
+      const record = {
+        schemaVersion: 1,
+        kind: "context_completion",
+        admission,
+        checkpointId: checkpoint.checkpointId,
+        checkpointSHA256: digest(checkpoint),
+      } as const;
+      const file = this.completionFile(session.binding, checkpoint.operationId);
+      const created = await this.exclusiveWrite(
+        file,
+        record,
+        MAXIMUM_COMPLETION_RECORD_BYTES,
+        "CONTEXT_COMPLETION_OVERSIZED",
+        () => this.assertAdmissionLease(session.binding, lease),
+      );
+      if (
+        !created &&
+        JSON.stringify(
+          await this.readCompletion(session.binding, checkpoint.operationId),
+        ) !== JSON.stringify(record)
+      )
+        throw new Error("CONTEXT_COMPLETION_CONFLICT");
+    }
+  }
+
+  private completionFile(binding: ContextBinding, operationId: string): string {
+    return path.join(
+      this.taskDirectory(binding),
+      `completion-${checkpointKey(operationId)}.json`,
+    );
+  }
+
+  private async assertCompletionAdmission(
+    admission: ContextAdmission,
+  ): Promise<void> {
+    for (const relative of [
+      `admissions/epochs/${admission.sourceEpoch}.json`,
+      `admissions/boundaries/${boundaryKey(admission.request)}.json`,
+    ]) {
+      const original = await this.readAdmission(
+        path.join(this.taskDirectory(admission.binding), relative),
+      );
+      if (
+        !original ||
+        admissionConflict(
+          original,
+          admission.binding,
+          admission.sourceEpoch,
+          admission.request,
+        )
+      )
+        throw new Error("CONTEXT_COMPLETION_ADMISSION_MISMATCH");
+    }
+  }
+
+  private async readCompletion(binding: ContextBinding, operationId: string) {
+    const record = await this.readRecord(
+      this.completionFile(binding, operationId),
+      MAXIMUM_COMPLETION_RECORD_BYTES,
+      "CONTEXT_COMPLETION",
+      true,
+    );
+    if (!record) return null;
+    const parsed = completionRecordSchema.safeParse(record.value);
+    if (!parsed.success)
+      throw this.schemaError(record.value, "CONTEXT_COMPLETION");
+    if (
+      !sameContextBinding(parsed.data.admission.binding, binding) ||
+      parsed.data.admission.request.operationId !== operationId
+    )
+      throw new Error("CONTEXT_COMPLETION_BINDING_MISMATCH");
+    await this.assertCompletionAdmission(parsed.data.admission);
+    return parsed.data;
   }
 
   async acquireCompactionAdmission(
@@ -911,9 +1025,17 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
       !sameCompactionRequest(head, session.lastCompletedRequest)
     )
       return false;
-    if (head.operationId === operationId) return true;
-    // Earlier completed epochs can be cleaned only when their original exact
-    // checkpoint remains, and the same owner's FSM proves a later active head.
+    const completion = await this.readCompletion(binding, operationId);
+    if (head.operationId === operationId) {
+      return (
+        !completion ||
+        (completion.admission.sourceEpoch === head.epoch &&
+          completion.checkpointId === head.checkpointId &&
+          completion.checkpointSHA256 === digest(head))
+      );
+    }
+    // Earlier epochs require their original checkpoint or the exact completion
+    // evidence recorded before pruning, plus the same owner's later active head.
     const originals: CheckpointEnvelope[] = [];
     for (const name of (
       await fs.readdir(this.checkpointDirectory(binding))
@@ -924,6 +1046,18 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
       );
       if (checkpoint?.operationId === operationId) originals.push(checkpoint);
     }
+    if (completion) {
+      if (completion.admission.sourceEpoch >= head.epoch) return false;
+      if (
+        originals.length > 0 &&
+        (originals.length !== 1 ||
+          originals[0]!.checkpointId !== completion.checkpointId ||
+          digest(originals[0]) !== completion.checkpointSHA256)
+      )
+        return false;
+      return true;
+    }
+    // Historical stores without completion evidence still require the original.
     return originals.length === 1 && originals[0]!.epoch < head.epoch;
   }
 
@@ -939,6 +1073,29 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
       ids.add(session.lastCompletedOperationId);
     const retirement = await this.getRetirement(binding);
     if (retirement) ids.add(retirement.operationId);
+    const taskNames = await fs
+      .readdir(this.taskDirectory(binding))
+      .catch((error: NodeJS.ErrnoException) => {
+        if (error.code === "ENOENT") return [];
+        throw error;
+      });
+    for (const name of taskNames.filter((name) =>
+      /^completion-[a-f0-9]{64}\.json$/u.test(name),
+    )) {
+      const record = await this.readRecord(
+        path.join(this.taskDirectory(binding), name),
+        MAXIMUM_COMPLETION_RECORD_BYTES,
+        "CONTEXT_COMPLETION",
+        true,
+      );
+      const parsed = completionRecordSchema.safeParse(record?.value);
+      if (!parsed.success) throw new Error("CONTEXT_COMPLETION_CORRUPT");
+      const operationId = parsed.data.admission.request.operationId;
+      if (name !== path.basename(this.completionFile(binding, operationId)))
+        throw new Error("CONTEXT_COMPLETION_BINDING_MISMATCH");
+      await this.readCompletion(binding, operationId);
+      ids.add(operationId);
+    }
     for (const attempt of await this.listSummaryAttempts(binding))
       ids.add(attempt.operationId);
     for (const relative of [
@@ -1810,6 +1967,7 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
     code:
       | "CHECKPOINT_STATE"
       | "CONTEXT_PUBLICATION"
+      | "CONTEXT_COMPLETION"
       | "CONTEXT_ADMISSION"
       | "CONTEXT_LEASE"
       | "CONTEXT_SOURCE"
