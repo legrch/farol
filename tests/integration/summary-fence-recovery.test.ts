@@ -25,9 +25,20 @@ import {
   deleteTaskContext,
   sweepOrphanTaskContexts,
 } from "../../src/apps/desktop/task-context-cleanup";
-import type { CheckpointContent } from "../../src/modules/chat/domain/checkpoint";
 import {
+  createCheckpointEnvelope,
+  type CheckpointContent,
+} from "../../src/modules/chat/domain/checkpoint";
+import {
+  activateNextEpoch,
+  beginCompaction,
+  confirmHostContext,
   createContextSession,
+  markCheckpointStored,
+  markOldEpochRetired,
+  offerCheckpointHandoff,
+  recordValidatedCheckpoint,
+  requestCheckpoint,
   type ContextBinding,
 } from "../../src/modules/chat/domain/context-continuity";
 import { PrivateContextStore } from "../../src/modules/chat/infra/repo/private-context-store";
@@ -72,6 +83,59 @@ const checkpoint: CheckpointContent = {
   nextSafeStep: "Continue the task.",
 };
 const checkpointJson = JSON.stringify(checkpoint);
+
+function value<T>(result: { ok: boolean; value?: T }): T {
+  if (!result.ok || result.value === undefined)
+    throw new Error("FIXTURE_TRANSITION_FAILED");
+  return result.value;
+}
+
+async function completedSummary(store: PrivateContextStore, taskId: string) {
+  // Controlled original-owner completion through the FSM, with real private
+  // store bytes. This is a separate positive fixture, never a reconstruction
+  // or replay of the crashed operation below, nor live provider/host proof.
+  const requested = value(
+    requestCheckpoint(
+      value(
+        beginCompaction(createContextSession(binding(taskId)), {
+          operationId: `compact-${taskId}`,
+          source: "retained_agent",
+          sourceBoundary: `boundary-${taskId}`,
+        }),
+      ),
+    ),
+  );
+  const original = createCheckpointEnvelope(requested, checkpoint, {
+    checkpointId: `checkpoint-${taskId}`,
+    providerOperationId: `provider-${taskId}`,
+    sourceCursor: `cursor-${taskId}`,
+    parentCheckpointId: null,
+    createdAt: 1000,
+  });
+  await store.put(original);
+  let session = value(recordValidatedCheckpoint(requested, original));
+  session = value(markCheckpointStored(session));
+  session = value(offerCheckpointHandoff(session));
+  session = value(confirmHostContext(session, `confirmed-${taskId}`));
+  session = value(markOldEpochRetired(session));
+  session = value(activateNextEpoch(session));
+  await store.save(session);
+  // The completed head proves this exact original operation over even if
+  // its summary-attempt bookkeeping and raised fence outlived completion.
+  const attempt = {
+    schemaVersion: 1 as const,
+    operationId: original.operationId,
+    binding: original.binding,
+    source: original.source,
+    sourceBoundary: original.sourceBoundary,
+    phase: "possible_send" as const,
+    conversationUrl: "https://chatgpt.com/c/fixture-completed",
+    turnUserId: `user-${taskId}`,
+    turnAssistantId: null,
+  };
+  await store.putSummaryAttempt(attempt);
+  return { session, original, attempt };
+}
 
 function initialRequest(thread: string, turnId: string, text: string) {
   return {
@@ -161,7 +225,7 @@ describe("HR-011/F1 a restart during a possibly submitted summary keeps the Comp
     );
   });
 
-  it("keeps the fence a crash left up until the store proves the summary over, then admits the connector again without a second submission", async () => {
+  it("keeps a crashed original summary and its fence when task cleanup cannot prove completion, without a second submission", async () => {
     const root = await fs.realpath(
       await fs.mkdtemp(path.join(os.tmpdir(), "farol-next-fence-recovery-")),
     );
@@ -398,24 +462,47 @@ describe("HR-011/F1 a restart during a possibly submitted summary keeps the Comp
       });
       expect(contractCalls).toBe(1);
 
-      // The owner ends the task: its context and, with it, the fence its
-      // summary raised go together, and the connector serves again.
+      // Closing the task proves neither publication nor completion of its
+      // original operation. Quarantine retains both private evidence and fence.
+      const retainedSession = await second.store.load(binding(threadId));
+      if (!retainedSession?.operation)
+        throw new Error("FIXTURE_OPERATION_MISSING");
+      const operationId = retainedSession.operation.operationId;
+      const retainedAttempts = await second.store.listSummaryAttempts(
+        binding(threadId),
+      );
+      const retainedSource = await second.store.getSource(
+        binding(threadId),
+        operationId,
+      );
+      expect(retainedAttempts).toHaveLength(1);
+      expect(retainedSource).not.toBeNull();
       await expect(
         deleteTaskContext(second.store, binding(threadId), secondFence),
-      ).resolves.toBe("deleted");
-      await expect(recordEntries(fenceDirectory)).resolves.toEqual([]);
+      ).resolves.toBe("failed");
+      await expect(second.store.load(binding(threadId))).resolves.toEqual(
+        retainedSession,
+      );
+      await expect(
+        second.store.listSummaryAttempts(binding(threadId)),
+      ).resolves.toEqual(retainedAttempts);
+      await expect(
+        second.store.getSource(binding(threadId), operationId),
+      ).resolves.toEqual(retainedSource);
+      await expect(recordEntries(fenceDirectory)).resolves.toHaveLength(1);
       expect(await computerRead()).toMatchObject({
         ok: false,
-        error: { code: "AUTHORITY_PATH_DENIED" },
+        error: { code: "COMPUTER_SUMMARY_PHASE_ACTIVE" },
       });
-      expect(contractCalls).toBe(2);
-      // A later start finds nothing possibly running.
+      expect(contractCalls).toBe(1);
+      expect(summaries).toBe(1);
+      // A later start still finds the same possibly running original.
       await expect(
         recoverSummaryExecutionFence({
           fence: new PrivateExecutionFence({ root: launchRoot }),
           store: second.store,
         }),
-      ).resolves.toEqual({ status: "reconciled", unresolved: 0 });
+      ).resolves.toEqual({ status: "reconciled", unresolved: 1 });
     } finally {
       await client.close();
       await server.close();
@@ -524,8 +611,15 @@ describe("HR-011/F1 a restart during a possibly submitted summary keeps the Comp
       admitted: false,
       code: "COMPUTER_SUMMARY_PHASE_ACTIVE",
     });
-    // A start whose registry no longer lists task-b sweeps its context and
-    // releases its fence with it; task-a, still live, is untouched.
+    // Registry absence does not settle B's original unknown summary. A
+    // separate completed original is sweepable, while live A stays untouched.
+    const retainedB = await store.listSummaryAttempts(binding("task-b"));
+    const liveA = await store.load(binding("task-a"));
+    const settled = await completedSummary(store, "task-settled");
+    await fence.raise({
+      operationId: settled.original.operationId,
+      taskId: "task-settled",
+    });
     await expect(
       sweepOrphanTaskContexts(
         store,
@@ -533,13 +627,149 @@ describe("HR-011/F1 a restart during a possibly submitted summary keeps the Comp
         binding,
         fence,
       ),
-    ).resolves.toEqual({ swept: ["task-b"], unreadable: 0, failed: [] });
+    ).resolves.toEqual({
+      swept: ["task-settled"],
+      unreadable: 0,
+      failed: ["task-b"],
+    });
+    await expect(store.load(binding("task-settled"))).resolves.toBeNull();
+    await expect(store.load(binding("task-a"))).resolves.toEqual(liveA);
+    await expect(store.listSummaryAttempts(binding("task-b"))).resolves.toEqual(
+      retainedB,
+    );
     await expect(
       recoverSummaryExecutionFence({ fence, store }),
-    ).resolves.toEqual({ status: "reconciled", unresolved: 0 });
-    await expect(recordEntries(fenceDirectory)).resolves.toEqual([]);
-    await expect(fence.admits()).resolves.toEqual({ admitted: true });
+    ).resolves.toEqual({ status: "reconciled", unresolved: 1 });
+    await expect(recordEntries(fenceDirectory)).resolves.toHaveLength(1);
+    await expect(fence.admits()).resolves.toEqual({
+      admitted: false,
+      code: "COMPUTER_SUMMARY_PHASE_ACTIVE",
+    });
   });
+  describe.each(["close", "sweep"] as const)(
+    "%s cleanup with an original completed head",
+    (cleanup) => {
+      it.each(["completed", "withheld", "outcome_unknown", "unsafe"] as const)(
+        "%s deletion releases only a confirmed task and preserves other tasks",
+        async (outcome) => {
+          const root = await fs.realpath(
+            await fs.mkdtemp(
+              path.join(os.tmpdir(), "farol-next-fence-cleanup-"),
+            ),
+          );
+          roots.push(root);
+          const launchRoot = path.join(root, "computer-authority");
+          await fs.mkdir(launchRoot, { mode: 0o700 });
+          const stateRoot = path.join(root, "context-continuity");
+          const store = new PrivateContextStore({ root: stateRoot });
+          const { session, original, attempt } = await completedSummary(
+            store,
+            "task-completed",
+          );
+          const live = createContextSession(binding("task-live"));
+          await store.save(live);
+          const fence = new PrivateExecutionFence({ root: launchRoot });
+          await fence.raise({
+            operationId: original.operationId,
+            taskId: session.binding.taskId,
+          });
+          const fenceDirectory = path.join(
+            launchRoot,
+            EXECUTION_FENCE_DIRECTORY,
+          );
+          const records = await recordEntries(fenceDirectory);
+          const fenceFile = path.join(fenceDirectory, records[0]!);
+          const fenceBytes = await fs.readFile(fenceFile);
+          const release = vi.fn((taskId: string) => fence.release(taskId));
+          const deletion = vi.fn(async (target: ContextBinding) => {
+            // Inject acknowledgement faults at the cleanup port. This proves
+            // fence ordering, not a native filesystem durability failure.
+            if (outcome === "withheld")
+              throw new Error("FIXTURE_DELETION_WITHHELD");
+            await store.deleteTask(target);
+            if (outcome === "outcome_unknown")
+              throw new Error("FIXTURE_DELETION_ACK_UNKNOWN");
+          });
+          if (outcome === "unsafe") {
+            // Real unsafe task-directory permissions must refuse deletion.
+            for (const key of await fs.readdir(path.join(stateRoot, "tasks"))) {
+              const directory = path.join(stateRoot, "tasks", key);
+              if (
+                (
+                  await fs.readFile(
+                    path.join(directory, "session.json"),
+                    "utf8",
+                  )
+                ).includes('"task-completed"')
+              )
+                await fs.chmod(directory, 0o755);
+            }
+          }
+          const ports = {
+            deleteTask: deletion,
+            listTaskBindings: () => store.listTaskBindings(),
+          };
+          if (cleanup === "close") {
+            await expect(
+              deleteTaskContext(ports, session.binding, { release }),
+            ).resolves.toBe(outcome === "completed" ? "deleted" : "failed");
+          } else {
+            await expect(
+              sweepOrphanTaskContexts(
+                ports,
+                { status: "loaded", taskIds: ["task-live"] },
+                binding,
+                { release },
+              ),
+            ).resolves.toEqual({
+              swept: outcome === "completed" ? ["task-completed"] : [],
+              unreadable: 0,
+              failed: outcome === "completed" ? [] : ["task-completed"],
+            });
+          }
+          expect(deletion).toHaveBeenCalledExactlyOnceWith(session.binding);
+          await expect(store.load(live.binding)).resolves.toEqual(live);
+          if (outcome === "completed") {
+            expect(release).toHaveBeenCalledExactlyOnceWith("task-completed");
+            await expect(store.load(session.binding)).resolves.toBeNull();
+            await expect(
+              store.get(session.binding, original.checkpointId),
+            ).resolves.toBeNull();
+            await expect(
+              store.listSummaryAttempts(session.binding),
+            ).resolves.toEqual([]);
+            await expect(recordEntries(fenceDirectory)).resolves.toEqual([]);
+            await expect(fence.admits()).resolves.toEqual({ admitted: true });
+            await expect(
+              recoverSummaryExecutionFence({ fence, store }),
+            ).resolves.toEqual({ status: "reconciled", unresolved: 0 });
+          } else {
+            expect(release).not.toHaveBeenCalled();
+            await expect(fs.readFile(fenceFile)).resolves.toEqual(fenceBytes);
+            await expect(fence.admits()).resolves.toEqual({
+              admitted: false,
+              code: "COMPUTER_SUMMARY_PHASE_ACTIVE",
+            });
+            if (outcome === "outcome_unknown") {
+              // The deletion took effect before the acknowledgement was lost;
+              // cleanup still may not discharge the fence or repeat the effect.
+              await expect(store.load(session.binding)).resolves.toBeNull();
+            } else {
+              await expect(store.load(session.binding)).resolves.toEqual(
+                session,
+              );
+              await expect(
+                store.get(session.binding, original.checkpointId),
+              ).resolves.toEqual(original);
+              await expect(
+                store.listSummaryAttempts(session.binding),
+              ).resolves.toEqual([attempt]);
+            }
+          }
+        },
+      );
+    },
+  );
   it("holds the connector closed when a required fence record cannot be materialized, until a later start reconciles for real", async () => {
     const launchRoot = await fs.realpath(
       await fs.mkdtemp(path.join(os.tmpdir(), "farol-next-fence-recovery-")),

@@ -72,6 +72,15 @@ it.skipIf(process.platform !== "darwin")(
       expect(runtime.getTunnelObservation()).toEqual({
         state: "exited",
         runtimeGeneration: started.runtimeGeneration,
+        terminal: {
+          state: "observed",
+          source: "connector-tunnel",
+          event: "exit",
+          code: "CONNECTOR_TUNNEL_EXIT",
+          exitCode: 0,
+          signal: null,
+          forced: false,
+        },
       });
       expect(anchor?.exitCode).toBeNull();
       expect(anchor?.signalCode).toBeNull();
