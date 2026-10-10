@@ -676,6 +676,13 @@ export class FarolModelEndpoint {
       }
       return;
     }
+    // Authentication preceded this asynchronous upload. A fail-closed seal
+    // may have landed while the body was pending; do not start a new turn or
+    // compaction afterwards. Work already dispatched keeps its own outcome.
+    if (this.sealed) {
+      this.refuseAnonymously(response, 401, "FAROL_MODEL_SEALED");
+      return;
+    }
     let parsed: unknown;
     try {
       parsed = body.raw.length === 0 ? undefined : JSON.parse(body.raw);
