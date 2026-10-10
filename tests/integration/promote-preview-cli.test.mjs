@@ -11,6 +11,7 @@ import { serializeQuitReceipt } from "../../src/apps/desktop/quit-receipt.ts";
 import { writeRunMarker } from "../../src/apps/desktop/run-marker.ts";
 import { treeDigest } from "../../tooling/artifact-digest.mjs";
 import { promotionUserData } from "../../tooling/promotion-obligations.mjs";
+import { observeOwnedLineChild } from "../fixtures/owned-line-child.mjs";
 
 // The promotion CLI end to end, as processes. Two entry points are spawned:
 //
@@ -259,25 +260,6 @@ async function absent(target) {
   );
 }
 
-function waitForLine(child, needle) {
-  return new Promise((resolve, reject) => {
-    let buffer = "";
-    const onData = (chunk) => {
-      buffer += chunk.toString("utf8");
-      if (buffer.includes(needle)) {
-        child.stdout.off("data", onData);
-        resolve();
-      }
-    };
-    child.stdout.on("data", onData);
-    child.once("error", reject);
-    setTimeout(
-      () => reject(new Error(`timed out waiting for ${needle}`)),
-      10_000,
-    ).unref();
-  });
-}
-
 describe("promote-preview CLI as a process: the composition around a seeded profile", () => {
   it("(a) plans, then places a drained profile's candidate with a receipt, and refuses to place over it again", async () => {
     const f = await fixture();
@@ -339,8 +321,9 @@ describe("promote-preview CLI as a process: the composition around a seeded prof
       [leaseChild, f.userData, "hold", "held-generation"],
       { stdio: ["ignore", "pipe", "pipe"] },
     );
+    const holderObservation = observeOwnedLineChild(holder);
     try {
-      await waitForLine(holder, "ACQUIRED");
+      await holderObservation.waitForLine("ACQUIRED");
       const result = await f.cli("--apply", "--destination", f.destination);
       expect(result.code).toBe(1);
       expect(result.stderr).toContain("PROMOTION_LEASE_HELD");
@@ -348,7 +331,7 @@ describe("promote-preview CLI as a process: the composition around a seeded prof
       expect(await absent(f.receipt)).toBe(true);
     } finally {
       holder.kill("SIGKILL");
-      await new Promise((resolve) => holder.once("close", resolve));
+      await holderObservation.closed;
     }
     // With the holder gone, the same profile promotes.
     const after = await f.cli("--apply", "--destination", f.destination);
