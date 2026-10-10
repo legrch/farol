@@ -1,0 +1,54 @@
+{
+  "context": {
+    "commit": "6d459925fc02c14b761fa3d1001038cf007be402",
+    "files_sha256": {
+      "docs/chat-context/handoff.md": "7c9830550fdb7b4b6725fe90a9cde8996379d51e0518ca3f34a1c975b15b97cd",
+      "docs/chat-context/integration.md": "776867dda55667c6e02f956a06b4a9397a9855bfb72b13f33a9a87207ed73209",
+      "modules/chat/app/services/contextcheckpoint/codec.go": "5634507d9d73620e12535a420acc74c4fe97720dc1bf9c70b04a14bef5e02c30",
+      "modules/chat/app/services/contextcheckpoint/composition_test.go": "4cdaceea84bc095fac72adeb12e7adb3f99c205132ea7922083b32eee003d901",
+      "modules/chat/app/services/contextcheckpoint/materialize.go": "9e584ff1c84e80c6211e23b256e01f9b3916507fb0f502d0103b92de94b198b8",
+      "modules/chat/app/services/contextcheckpoint/port.go": "d7937ab2a4be102609b750080c74732fe45b8000a7b09b30b1557cb9f56ef6e3",
+      "modules/chat/app/services/contextcheckpoint/results.go": "57c6f1e23ec3aef039e3bb5eb787e0def62330d9962efba3e590041473e2f0d9",
+      "modules/chat/app/services/contextcheckpoint/service.go": "02aae51621dd2af6e41b51ed81fa15da46bdfe05e5ba4b5477c8b0147d2fabaa",
+      "modules/chat/domain/contextbudget/group.go": "12c20e9f739c7e99405f80da56e58b202e60067d3d51ca67b55694bc57611960",
+      "modules/chat/domain/contextbudget/policy_test.go": "c84d9022a6344fdf32dde92cd27b45b31530c1c791a9661543947e0d50423ded",
+      "modules/chat/domain/contextbudget/select.go": "b6ab42957496b47e6b0a5a78c3e2220c9ec26dc94f4fc993cb6e7197d4f15bad",
+      "modules/chat/domain/contextbudget/value.go": "ad1119bcc70648b8b100e6ad0eb46f4d0aa9dedbe29c55cbd5ee773ac562cb72"
+    },
+    "paths": [
+      "modules/chat/domain/contextbudget",
+      "modules/chat/app/services/contextcheckpoint"
+    ],
+    "tree": "901ce3477f1f60e5002e9d3eff21c38a048ace60"
+  },
+  "models": {
+    "commit": "3b8aaff57ae3599e01e8edad1a7a71cd6daf5cd9",
+    "files_sha256": {
+      "docs/model-capabilities/ACCEPTANCE.md": "8db2f336aec4d3a6c7256f87efeb4ee5a285b286c2ef18b69d4774494b45ee6f",
+      "docs/model-capabilities/INTEGRATION.md": "0e4212bc2cccfeb64f1eb2e430127918104958474c8a775e4f02284c0cc2c14f",
+      "modules/chat/domain/modelselection/availability.go": "1ab4bcaa1bc22af79388c5f9982c4ddac1bf8df225623dfa2d2dadb962f3b29b",
+      "modules/chat/domain/modelselection/boundaries_test.go": "2f991220b9462eec6704fd1b337f2145390e11ee05295bf7748f26e4bf70f012",
+      "modules/chat/domain/modelselection/resolve.go": "b9234d42b165461cbaa156042cf5e0275370eb5ef6b5647143f0196e57776ab2",
+      "modules/chat/domain/modelselection/selection_test.go": "4b8762623bb1a8f883da4bb14a9786cfe4054c4f04dfb501e865c73f87d2d730",
+      "modules/chat/domain/modelselection/types.go": "5567f2cf0b5f9d77c3c6db157b0c63b2e5cc99537bb5c7b0948cf4756020476b",
+      "modules/chat/domain/modelselection/usage.go": "fc98eb8e1123b3724db6eabc53e40d0784b53d14f41f755ff05207e93fc236f7",
+      "modules/chat/domain/modelselection/usage_test.go": "f0e583ffcf29f804716b913c936441ee7bc7db7aa45a2c1f59862d89afad0d51",
+      "modules/chat/domain/modelselection/usageboundaries_test.go": "bb35bab4f35a5df5c619c7d963c7d45d3d11b32453f6b100b9a1e5af775528a7",
+      "modules/chat/infra/catalogue/boundaries_test.go": "bcb554b9344d0cb032c2e38a42e945ec16360f24302b674b7f476d36921b55c1",
+      "modules/chat/infra/catalogue/boundary.go": "710e5754231d887a614bde3ab20a598526cc629d4501d375db35788067e4847f",
+      "modules/chat/infra/catalogue/cache.go": "a61585c913377f983f248142651e18100b8f262bdcab4dbddfe431807e2786f9",
+      "modules/chat/infra/catalogue/cache_test.go": "71281849f8b8f61027dc0b4363ef13d7b0c86923edba01a9f2217a14225cf783",
+      "modules/chat/infra/catalogue/consumers.go": "ed115454d8d1c1e0cdee56b2d0599ca34e5a7ffa39ccbd95d555741926915d7e",
+      "modules/chat/infra/catalogue/consumers_test.go": "99896debcb7fc850211010b4435f59da549d39bf514a7f93f836828bcd29d510",
+      "modules/chat/infra/catalogue/evidence.go": "78a078dbe914fd767801a8334f057a46e0df48b69127fcde71319b5c6c70491f",
+      "modules/chat/infra/catalogue/parser.go": "49061a03a1b5ef35d80349090f3172667e3be4492d3e4eef2722f70755a846b7",
+      "modules/chat/infra/catalogue/parser_test.go": "b106a941afbf134ac04bc56fe8ceddffba82fa4544a776d228b3ef54722c3a1c",
+      "modules/chat/infra/catalogue/reader.go": "6f0e11836b89f6514df5a1c8c465aa1ba1eb55ca53d9a603b485f1cb48743bd5"
+    },
+    "paths": [
+      "modules/chat/domain/modelselection",
+      "modules/chat/infra/catalogue"
+    ],
+    "tree": "2a4923dafc4b4dacf21d079651843ee28d861a09"
+  }
+}

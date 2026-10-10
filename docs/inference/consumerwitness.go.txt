@@ -1,0 +1,692 @@
+// Disposable external adapter test. This file is not compiled in the product.
+// consumerwitness.py copies exact public producer pins into a separate assembly.
+package planresponses_test
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"sync"
+	"testing"
+	"unicode/utf8"
+
+	chatport "github.com/legrch/farol/modules/chat/app/port"
+	cp "github.com/legrch/farol/modules/chat/app/services/contextcheckpoint"
+	"github.com/legrch/farol/modules/chat/app/services/inference"
+	cb "github.com/legrch/farol/modules/chat/domain/contextbudget"
+	ms "github.com/legrch/farol/modules/chat/domain/modelselection"
+	"github.com/legrch/farol/modules/chat/infra/catalogue"
+	"github.com/legrch/farol/modules/chat/infra/clients/planresponses"
+	"github.com/legrch/farol/modules/chat/infra/gate"
+	"github.com/legrch/farol/modules/chat/infra/intent"
+)
+
+type witnessEstimator struct{}
+
+func (witnessEstimator) EstimateTokens(text string) (int, error) {
+	return (utf8.RuneCountInString(text) + 2) / 3, nil
+}
+
+func witnessDigest(t *testing.T, value any) string {
+	t.Helper()
+	raw, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hash, err := (intent.SHA256{}).Digest(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return hash
+}
+
+// Test-only trusted owner. One lock serializes the complete publication callback
+// with account, catalogue and original context withdrawal. No IO occurs inside.
+// The private account Grant remains required; cache/digests mint no entitlement.
+type witnessOwner struct {
+	sync.Mutex
+	t             *testing.T
+	selection     inference.Selection
+	observation   chatport.AccountObservation
+	scope         ms.Scope
+	cache         *catalogue.Cache
+	resolved      ms.Resolved
+	source        cb.Source
+	expected      cb.SourceRef
+	now           uint64
+	checks, reads int
+}
+
+func (o *witnessOwner) sourceCurrent(ctx context.Context, want cb.SourceRef) error {
+	if ctx.Err() != nil || want != o.expected || want.Binding != o.source.Binding || want.Revision != o.source.Revision {
+		return cb.Stale
+	}
+	raw, err := cb.CanonicalSource(o.source)
+	if err != nil {
+		return err
+	}
+	hash, err := (intent.SHA256{}).Digest(raw)
+	first, last := o.source.Events[0], o.source.Events[len(o.source.Events)-1]
+	if err != nil || hash != want.SHA256 || want.FirstEventID != first.ID || want.LastEventID != last.ID || want.FirstSequence != first.Sequence || want.LastSequence != last.Sequence {
+		return cb.Stale
+	}
+	return nil
+}
+
+func (o *witnessOwner) WithSelected(ctx context.Context, want inference.Selection, inspect func(chatport.AccountObservation) error) error {
+	o.Lock()
+	defer o.Unlock()
+	o.checks++
+	current, err := o.cache.Current()
+	// The producer recheck is a conservative correlation predicate, including
+	// after IO. It grants no retry, re-resolution, account grant or entitlement.
+	if err != nil || want != o.selection || ms.RecheckBeforeStart(o.resolved, current, o.scope, o.now) != nil || o.sourceCurrent(ctx, o.expected) != nil {
+		return inference.Withdrawn
+	}
+	return inspect(o.observation)
+}
+
+type witnessSource struct{ owner *witnessOwner }
+
+func (s witnessSource) Read(ctx context.Context, binding cb.Binding) (cb.Source, error) {
+	s.owner.Lock()
+	defer s.owner.Unlock()
+	s.owner.reads++
+	if ctx.Err() != nil || binding != s.owner.source.Binding {
+		return cb.Source{}, cb.Stale
+	}
+	value := s.owner.source
+	value.Events = append([]cb.Event(nil), value.Events...)
+	return value, nil
+}
+func (s witnessSource) Check(ctx context.Context, ref cb.SourceRef) error {
+	s.owner.Lock()
+	defer s.owner.Unlock()
+	// First Prepare check accepts only the independently recomputed exact source.
+	if s.owner.expected == (cb.SourceRef{}) {
+		s.owner.expected = ref
+	}
+	return s.owner.sourceCurrent(ctx, ref)
+}
+
+// The production ConsentFence owns account consent. This controlled owner also
+// pins the original context/operation; neither a different input hash nor a new
+// checkpoint may be authorized by an otherwise identical account selection.
+type witnessAuthority struct {
+	account  *planresponses.ConsentFence
+	original inference.Binding
+}
+
+func (a witnessAuthority) WithCurrent(ctx context.Context, b inference.Binding, inspect func() error) error {
+	if b != a.original {
+		return inference.Withdrawn
+	}
+	return a.account.WithCurrent(ctx, b, inspect)
+}
+
+type witnessLedger struct {
+	*compositionLedger
+	afterReserve func()
+	bindings     []inference.Binding
+}
+
+func (l *witnessLedger) Reserve(ctx context.Context, b inference.Binding, hash string) (bool, error) {
+	l.bindings = append(l.bindings, b)
+	ok, err := l.compositionLedger.Reserve(ctx, b, hash)
+	if ok && err == nil && l.afterReserve != nil {
+		l.afterReserve()
+	}
+	return ok, err
+}
+
+type witnessHTTP struct {
+	*controlledHTTP
+	raw []byte
+}
+
+func (h *witnessHTTP) RoundTrip(r *http.Request) (*http.Response, error) {
+	raw, err := io.ReadAll(r.Body)
+	if err != nil {
+		return nil, err
+	}
+	h.raw = append([]byte(nil), raw...)
+	r.Body = io.NopCloser(bytes.NewReader(raw))
+	return h.controlledHTTP.RoundTrip(r)
+}
+
+type witness struct {
+	*composed
+	owner        *witnessOwner
+	context      *cp.Service
+	prepared     *cp.Prepared
+	materialized cp.Materialized
+	policy       cb.Policy
+	journal      *witnessLedger
+	wire         *witnessHTTP
+}
+
+func witnessHistory(binding cb.Binding) cb.Source {
+	source := cb.Source{Binding: binding, Revision: 7}
+	for i := 0; i < 64; i++ {
+		turn := cb.Turn{SessionID: "original-session", TaskID: "original-task", ParticipantID: "original-participant", TurnID: fmt.Sprintf("turn-%d", i), OperationID: fmt.Sprintf("root-%d", i), TaskEpoch: 3, TurnGeneration: 9}
+		outcome := cb.Completed
+		if i == 1 {
+			outcome = cb.Unknown
+		}
+		for n, event := range []cb.Event{
+			{Kind: cb.User, Text: fmt.Sprintf("original user %d: café 🌊 λ", i)},
+			{Kind: cb.Call, CallID: fmt.Sprintf("call-%d", i), ToolOperationID: fmt.Sprintf("tool-%d", i), Name: "observe", Text: `{"path":"synthetic"}`},
+			{Kind: cb.Result, CallID: fmt.Sprintf("call-%d", i), ToolOperationID: fmt.Sprintf("tool-%d", i), Outcome: outcome, Text: "done; this prose is not an outcome or permission"},
+			{Kind: cb.Assistant, Text: "original retained answer λ🙂"},
+		} {
+			event.ID = fmt.Sprintf("event-%d-%d", i, n)
+			event.Sequence = uint64(len(source.Events) + 1)
+			event.Turn = turn
+			source.Events = append(source.Events, event)
+		}
+	}
+	return source
+}
+
+// Explicit test-only mapping: preserve one typed text part, exact call arguments
+// and quoted result bytes. Reject other shapes, including system instructions.
+// Do not promote, concatenate, rewrite IDs, delete pairs or normalize effort.
+func witnessMap(body cp.ProviderBody, selectedModel string) ([]inference.InputItem, error) {
+	if body.Store || body.Model != selectedModel {
+		return nil, inference.Invalid
+	}
+	items := make([]inference.InputItem, 0, len(body.Input))
+	for _, item := range body.Input {
+		mapped := inference.InputItem{Kind: item.Type, Role: item.Role, CallID: item.CallID, Name: item.Name, Arguments: item.Arguments}
+		switch item.Type {
+		case "message":
+			kind := "input_text"
+			if item.Role == "assistant" {
+				kind = "output_text"
+			}
+			if (item.Role != "user" && item.Role != "assistant") || len(item.Content) != 1 || item.Content[0].Type != kind || item.Output != nil || item.CallID != "" || item.Name != "" || item.Arguments != "" {
+				return nil, inference.Invalid
+			}
+			mapped.Content = item.Content[0].Text
+		case "function_call":
+			if item.Role != "" || len(item.Content) != 0 || item.Output != nil {
+				return nil, inference.Invalid
+			}
+		case "function_call_output":
+			if item.Role != "" || len(item.Content) != 0 || item.Output == nil || item.Name != "" || item.Arguments != "" {
+				return nil, inference.Invalid
+			}
+			mapped.Content = *item.Output
+		default:
+			return nil, inference.Invalid
+		}
+		items = append(items, mapped)
+	}
+	return items, nil
+}
+
+func newWitness(t *testing.T) *witness {
+	t.Helper()
+	f := &witness{composed: newComposed(t)}
+	identity := witnessDigest(t, f.binding.Selection.Account)
+	scope := ms.Scope{Route: ms.Route{Provider: "openai", Backend: ms.PlanInference, Billing: ms.Plan}, AccountID: identity}
+	cache := &catalogue.Cache{}
+	cache.Activate(scope)
+	ticket := cache.Begin()
+	snapshot := ms.Snapshot{Scope: scope, Epoch: ticket.Epoch(), Revision: "original-catalogue-revision", ObservedAtMillis: f.clock.now - 1, ExpiresAtMillis: f.clock.now + 60000, Source: ms.SIWC, Complete: true, Entries: []ms.Entry{{Slug: "controlled-model", DisplayName: "Controlled model", Efforts: []string{"high"}, DefaultEffort: "high", Capabilities: ms.Capabilities{Text: ms.Yes, Image: ms.No, Tools: ms.No, Revision: "original-capability-revision", Provenance: "synthetic-independent-product-evidence"}}}}
+	if err := cache.Complete(ticket, snapshot, nil); err != nil {
+		t.Fatal(err)
+	}
+	current, err := cache.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := ms.Resolve(current, scope, f.clock.now, ms.Request{Slug: "controlled-model", Effort: "high", Requirements: ms.Requirements{Text: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pin := resolved.Pin()
+	evidence := witnessDigest(t, struct {
+		Pin          ms.Pin
+		Capabilities ms.Capabilities
+	}{pin, resolved.Capabilities()})
+	selection := f.binding.Selection
+	selection.ConsentID, selection.ConsentRevision = "witness-consent", 2
+	selection.Model = inference.ModelSelection{Slug: pin.Model, Effort: pin.Effort, CatalogueEpoch: pin.Epoch, CapabilityEvidence: evidence}
+	contextBinding := cb.Binding{ProfileID: f.binding.ProfileID, BackendGeneration: f.binding.BackendGeneration, OwnerID: f.binding.OwnerID, AccountID: identity, Provider: pin.Route.Provider, ModelID: pin.Model, Effort: pin.Effort, CapabilityEpoch: evidence}
+	f.owner = &witnessOwner{t: t, selection: selection, observation: f.selected.observation, scope: scope, cache: cache, resolved: resolved, now: f.clock.now, source: witnessHistory(contextBinding)}
+	f.context, err = cp.New(cp.Dependencies{Gate: gate.New(), Source: witnessSource{f.owner}, Digests: intent.SHA256{}, Estimator: witnessEstimator{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.policy = cb.Policy{Limit: cb.Metrics{Bytes: 14000, CodePoints: 12000, EstimatedTokens: 8000}, Reserve: cb.Metrics{Bytes: 2000, CodePoints: 2000, EstimatedTokens: 1000}}
+	f.prepared, err = f.context.Prepare(context.Background(), contextBinding, "witness-checkpoint", "witness-context-operation", f.policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.materialized, err = f.context.Materialize(context.Background(), f.prepared, contextBinding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.input, err = witnessMap(f.materialized.Body, pin.Model)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hash, err := inference.InputHash(intent.SHA256{}, f.input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.binding.Selection = selection
+	f.binding.Context = inference.ContextSelection{CheckpointID: "witness-checkpoint", InputHash: hash, EstimatedTokens: uint64(f.materialized.Usage.EstimatedTokens), TokenLimit: uint64(f.policy.Limit.EstimatedTokens - f.policy.Reserve.EstimatedTokens)}
+	grant, err := f.composed.owner.Approve(context.Background(), selection.ConsentID, 1, f.owner.observation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	accountScope := chatport.AccountScope{ProfileID: f.binding.ProfileID, BackendGeneration: f.binding.BackendGeneration, OwnerID: f.binding.OwnerID, SessionID: f.binding.SessionID}
+	f.authority, err = planresponses.NewConsentFence(grant, accountScope, selection, f.owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.journal = &witnessLedger{compositionLedger: f.ledger}
+	f.wire = &witnessHTTP{controlledHTTP: f.http}
+	f.service, err = inference.New(inference.Options{Clock: f.clock, Deadline: planresponses.OperationDeadline{}, Digester: intent.SHA256{}, Credentials: f.credentials, Authority: witnessAuthority{f.authority, f.binding}, Ledger: f.journal, Publication: f.publication, Transport: planresponses.New(&http.Client{Transport: f.wire})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return f
+}
+
+func TestConsumerWitnessBoundedOriginalHistoryReachesProductionWire(t *testing.T) {
+	f := newWitness(t)
+	originalBinding := f.binding
+	got := f.service.Infer(context.Background(), f.binding, f.input)
+	if got.State != inference.Completed || f.http.calls != 1 || f.publication.count != 1 || f.owner.reads != 1 || f.owner.checks == 0 {
+		t.Fatalf("actual composition: %+v", got)
+	}
+	if f.materialized.Window.OmittedEvents == 0 || len(f.materialized.Window.Events) >= len(f.owner.source.Events) || len(f.materialized.Window.Unresolved) != 1 {
+		t.Fatal("real bounded selection not exercised")
+	}
+	unknown := f.materialized.Window.Unresolved[0]
+	if unknown.CallID != "call-1" || unknown.ToolOperationID != "tool-1" || unknown.CallEventID != "event-1-1" || unknown.ResultEventID != "event-1-2" || unknown.Outcome != cb.Unknown || unknown.Turn != f.owner.source.Events[4].Turn {
+		t.Fatal("original UNKNOWN sidecar changed")
+	}
+	var wire struct {
+		Model string `json:"model"`
+		Input []struct {
+			Type, Role, Content     string
+			CallID                  string `json:"call_id"`
+			Name, Arguments, Output string
+		} `json:"input"`
+		Store     bool `json:"store"`
+		Stream    bool `json:"stream"`
+		Reasoning struct {
+			Effort string `json:"effort"`
+		} `json:"reasoning"`
+	}
+	if err := json.Unmarshal(f.wire.raw, &wire); err != nil {
+		t.Fatal(err)
+	}
+	if wire.Model != f.owner.resolved.Pin().Model || wire.Reasoning.Effort != f.owner.resolved.Pin().Effort || wire.Store || !wire.Stream || len(wire.Input) != len(f.materialized.Body.Input) {
+		t.Fatal("exact model/effort/history did not reach real builder")
+	}
+	if len(f.http.seen) != 5 {
+		t.Fatal("unexpected request field, including tools")
+	}
+	fromWire := make([]inference.InputItem, 0, len(wire.Input))
+	for i, value := range wire.Input {
+		source := f.materialized.Body.Input[i]
+		content := value.Content
+		if value.Type == "function_call_output" {
+			content = value.Output
+			if source.Output == nil || value.Output != *source.Output {
+				t.Fatal("quoted original result bytes changed")
+			}
+		}
+		item := inference.InputItem{Kind: value.Type, Role: value.Role, Content: content, CallID: value.CallID, Name: value.Name, Arguments: value.Arguments}
+		if item != f.input[i] || value.CallID != source.CallID {
+			t.Fatal("ordered producer input changed at HTTP boundary")
+		}
+		fromWire = append(fromWire, item)
+	}
+	hash, err := inference.InputHash(intent.SHA256{}, fromWire)
+	if err != nil || hash != originalBinding.Context.InputHash {
+		t.Fatal("wire round-trip changed canonical consumer input hash")
+	}
+	for _, event := range f.materialized.Window.Events {
+		original := f.owner.source.Events[event.Sequence-1]
+		if event != original {
+			t.Fatal("bounded selector rewrote an original event")
+		}
+	}
+	if !bytes.Contains(f.wire.raw, []byte(`\"source_outcome\":\"UNKNOWN\"`)) {
+		t.Fatal("misleading result prose erased UNKNOWN")
+	}
+	tokens, _ := (witnessEstimator{}).EstimateTokens(string(f.wire.raw))
+	metrics := cb.Metrics{Bytes: len(f.wire.raw), CodePoints: utf8.RuneCount(f.wire.raw), EstimatedTokens: tokens}
+	if !f.policy.Fits(metrics) {
+		t.Fatalf("actual stream/reasoning envelope exceeds context policy: %+v", metrics)
+	}
+	_ = f.service.Infer(context.Background(), f.binding, f.input)
+	if f.http.calls != 1 || f.publication.count != 1 || f.binding != originalBinding || f.journal.bindings[0] != originalBinding {
+		t.Fatal("original operation retargeted or replayed")
+	}
+	t.Logf("source_events=%d selected_events=%d omitted=%d wire_bytes=%d code_points=%d estimated_tokens=%d canonical_input_sha256=%s", len(f.owner.source.Events), len(f.materialized.Window.Events), f.materialized.Window.OmittedEvents, metrics.Bytes, metrics.CodePoints, metrics.EstimatedTokens, hash)
+}
+
+func (f *witness) change(kind string) {
+	f.owner.Lock()
+	defer f.owner.Unlock()
+	switch kind {
+	case "account":
+		f.owner.selection.Account.Epoch++
+	case "context revision":
+		f.owner.source.Revision++
+	case "context same revision":
+		f.owner.source.Events[0].Text += " changed"
+	case "catalogue":
+		current, err := f.owner.cache.Current()
+		if err != nil {
+			f.owner.t.Fatal(err)
+		}
+		ticket := f.owner.cache.Begin()
+		current.Epoch, current.Revision = ticket.Epoch(), "changed-catalogue"
+		current.Entries[0].Slug = "different-model"
+		if err := f.owner.cache.Complete(ticket, current, nil); err != nil {
+			f.owner.t.Fatal(err)
+		}
+	default:
+		f.owner.t.Fatal("unrecognized controlled mutation")
+	}
+}
+
+func TestConsumerWitnessProducerChangesCannotRetargetOrPublish(t *testing.T) {
+	for _, kind := range []string{"account", "catalogue", "context revision", "context same revision"} {
+		for _, stage := range []string{"before reserve", "after reserve", "after credential", "during HTTP", "before publication"} {
+			t.Run(kind+"/"+stage, func(t *testing.T) {
+				f := newWitness(t)
+				original := f.binding
+				mutate := func() { f.change(kind) }
+				switch stage {
+				case "before reserve":
+					mutate()
+				case "after reserve":
+					f.journal.afterReserve = mutate
+				case "after credential":
+					f.credentials.after = mutate
+				case "during HTTP":
+					f.http.before = mutate
+				case "before publication":
+					f.ledger.after = mutate
+				}
+				got := f.service.Infer(context.Background(), f.binding, f.input)
+				if got.Text != "" || f.publication.count != 0 || f.binding != original || f.owner.resolved.Pin().Model != original.Selection.Model.Slug {
+					t.Fatal("original authority was retargeted")
+				}
+				if stage == "during HTTP" || stage == "before publication" {
+					if f.http.calls != 1 || got.State != inference.Suppressed || got.RemoteState != inference.Completed {
+						t.Fatalf("original completion lost: %+v", got)
+					}
+				} else if f.http.calls != 0 || got.State != inference.NotSent {
+					t.Fatalf("pre-IO refusal lost: %+v", got)
+				}
+				_ = f.service.Infer(context.Background(), f.binding, f.input)
+				if f.http.calls > 1 || f.publication.count != 0 {
+					t.Fatal("withdrawn operation replayed")
+				}
+			})
+		}
+	}
+}
+
+func TestConsumerWitnessMissingOriginalResultFailsBeforeInference(t *testing.T) {
+	f := newWitness(t)
+	f.owner.source.Events = f.owner.source.Events[:len(f.owner.source.Events)-2]
+	f.owner.expected = cb.SourceRef{}
+	_, err := f.context.Prepare(context.Background(), f.owner.source.Binding, "missing-checkpoint", "missing-operation", f.policy)
+	var failure *cb.Failure
+	if !errors.As(err, &failure) || !errors.Is(err, cb.Incomplete) || len(failure.Unresolved) != 2 {
+		t.Fatalf("original unanswered reference lost: %v", err)
+	}
+	pending := failure.Unresolved[1]
+	if pending.CallID != "call-63" || pending.ToolOperationID != "tool-63" || pending.CallEventID != "event-63-1" || pending.ResultEventID != "" || pending.Outcome != cb.Pending {
+		t.Fatal("fabricated or misclassified missing result")
+	}
+	if f.http.calls != 0 || f.publication.count != 0 || len(f.journal.bindings) != 0 {
+		t.Fatal("incomplete source reached inference")
+	}
+}
+
+func TestConsumerWitnessCatalogueCacheIsNotEntitlementAndNeverFallback(t *testing.T) {
+	for _, kind := range []string{"model denied", "usage refused", "unknown transport"} {
+		t.Run(kind, func(t *testing.T) {
+			f := newWitness(t)
+			switch kind {
+			case "model denied":
+				f.http.status, f.http.body = 403, `{"error":{"code":"model_access_denied"}}`
+			case "usage refused":
+				f.http.status, f.http.body = 429, `{"error":{"code":"subscription_sharing_usage_limit_exceeded"}}`
+			case "unknown transport":
+				f.http.body = "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_unknown\",\"status\":\"in_progress\"}}\n\n"
+			}
+			got := f.service.Infer(context.Background(), f.binding, f.input)
+			if got.State == inference.Completed || got.Text != "" || f.http.calls != 1 || f.publication.count != 0 {
+				t.Fatalf("cache was treated as entitlement: %+v", got)
+			}
+			if kind == "unknown transport" && got.State != inference.Unknown {
+				t.Fatal("lost terminal became known refusal")
+			}
+			_ = f.service.Infer(context.Background(), f.binding, f.input)
+			if f.http.calls != 1 || f.publication.count != 0 {
+				t.Fatal("effect replay or API fallback")
+			}
+		})
+	}
+	f := newWitness(t)
+	current, _ := f.owner.cache.Current()
+	current.Entries = nil
+	_, err := ms.Resolve(current, f.owner.scope, f.clock.now, ms.Request{Slug: "controlled-model", Preferences: []ms.Preference{{Slug: "other-model", Effort: "high"}}, Requirements: ms.Requirements{Text: true}})
+	var refusal *ms.PolicyError
+	if !errors.As(err, &refusal) || refusal.Code != ms.Unavailable || f.http.calls != 0 {
+		t.Fatal("missing explicit model fell back")
+	}
+	current, _ = f.owner.cache.Current()
+	current.Entries[0].Capabilities.Text = ms.Unknown
+	_, err = ms.Resolve(current, f.owner.scope, f.clock.now, ms.Request{Slug: "controlled-model", Requirements: ms.Requirements{Text: true}})
+	if !errors.As(err, &refusal) || refusal.Code != ms.Unsupported {
+		t.Fatal("catalogue replaced independent capability evidence")
+	}
+}
+
+func TestConsumerWitnessExactIncompatibleProducerShapesRefused(t *testing.T) {
+	f := newWitness(t)
+	// Real producer materializes system. Preserve its bytes and reject mapping;
+	// no silent system->developer reinterpretation is authorized here.
+	source := cb.Source{Binding: f.owner.source.Binding, Revision: 8, Events: []cb.Event{
+		{ID: "pinned-instruction", Sequence: 1, Kind: cb.Instruction, Text: "Original pinned instruction"},
+		{ID: "original-user", Sequence: 2, Kind: cb.User, Text: "Original selected text", Turn: f.owner.source.Events[0].Turn},
+	}}
+	f.owner.source, f.owner.expected = source, cb.SourceRef{}
+	p, err := f.context.Prepare(context.Background(), source.Binding, "instruction-checkpoint", "instruction-operation", f.policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	materialized, err := f.context.Materialize(context.Background(), p, source.Binding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if materialized.Body.Input[0].Role != "system" {
+		t.Fatal("counterexample did not use actual producer")
+	}
+	if _, err := witnessMap(materialized.Body, f.owner.resolved.Pin().Model); !errors.Is(err, inference.Invalid) {
+		t.Fatal("system role silently promoted")
+	}
+	t.Logf("instruction_counterexample_producer=%s consumer_error=%s", materialized.JSON, inference.Invalid)
+	current, _ := f.owner.cache.Current()
+	current.Entries[0].Efforts, current.Entries[0].DefaultEffort = []string{"deliberate"}, "deliberate"
+	resolved, err := ms.Resolve(current, f.owner.scope, f.clock.now, ms.Request{Slug: "controlled-model", Requirements: ms.Requirements{Text: true}})
+	if err != nil || resolved.Pin().Effort != "deliberate" {
+		t.Fatal("counterexample did not invoke real selection")
+	}
+	raw, _ := json.Marshal(resolved.Pin())
+	t.Logf("effort_counterexample_producer=%s consumer_error=%s", raw, inference.Invalid)
+	bad := f.binding
+	bad.Selection.Model.Effort = resolved.Pin().Effort
+	if got := f.service.Infer(context.Background(), bad, f.input); got.State != inference.NotSent || got.Code != inference.Invalid {
+		t.Fatalf("unsupported effort normalized: %+v", got)
+	}
+	current.Entries[0].Efforts, current.Entries[0].DefaultEffort = nil, ""
+	resolved, err = ms.Resolve(current, f.owner.scope, f.clock.now, ms.Request{Slug: "controlled-model", Requirements: ms.Requirements{Text: true}})
+	if err != nil || resolved.Pin().Effort != "" {
+		t.Fatal("real absent-effort selection failed")
+	}
+	blank := source.Binding
+	blank.Effort = resolved.Pin().Effort
+	if _, err := f.context.Prepare(context.Background(), blank, "blank-checkpoint", "blank-operation", f.policy); !errors.Is(err, cp.Invalid) {
+		t.Fatal("blank effort incompatibility disappeared")
+	}
+	if f.http.calls != 0 || f.publication.count != 0 || len(f.journal.bindings) != 0 {
+		t.Fatal("incompatible values caused inference IO")
+	}
+}
+
+func TestConsumerWitnessProducerFitDoesNotOverrideConsumerItemLimit(t *testing.T) {
+	f := newWitness(t)
+	large := cb.Policy{Limit: cb.Metrics{Bytes: cb.MaxWindowBytes, CodePoints: cb.MaxWindowBytes, EstimatedTokens: cb.MaxWindowBytes}}
+	p, err := f.context.Prepare(context.Background(), f.owner.source.Binding, "large-checkpoint", "large-operation", large)
+	if err != nil {
+		t.Fatal(err)
+	}
+	materialized, err := f.context.Materialize(context.Background(), p, f.owner.source.Binding)
+	if err != nil || !large.Fits(materialized.Usage) {
+		t.Fatal("real context did not fit producer bounds")
+	}
+	input, err := witnessMap(materialized.Body, f.owner.resolved.Pin().Model)
+	if err != nil || len(input) <= inference.MaxInputItems {
+		t.Fatal("item-limit counterexample missing")
+	}
+	bad := f.binding
+	bad.Context.InputHash, err = inference.InputHash(intent.SHA256{}, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := f.service.Infer(context.Background(), bad, input)
+	if got.State != inference.NotSent || got.Code != inference.Invalid || f.http.calls != 0 || len(f.journal.bindings) != 0 {
+		t.Fatal("producer-fit history trimmed to consumer limit")
+	}
+}
+
+func TestConsumerWitnessCapturedContextAndModelCannotBeRewritten(t *testing.T) {
+	for _, kind := range []string{"checkpoint", "input and hash", "producer model"} {
+		t.Run(kind, func(t *testing.T) {
+			f := newWitness(t)
+			binding := f.binding
+			input := append([]inference.InputItem(nil), f.input...)
+			switch kind {
+			case "checkpoint":
+				binding.Context.CheckpointID = "different-checkpoint"
+			case "input and hash":
+				input[len(input)-1].Content += " changed after materialization"
+				var err error
+				binding.Context.InputHash, err = inference.InputHash(intent.SHA256{}, input)
+				if err != nil {
+					t.Fatal(err)
+				}
+			case "producer model":
+				body := f.materialized.Body
+				body.Model = "different-model"
+				if _, err := witnessMap(body, f.owner.resolved.Pin().Model); !errors.Is(err, inference.Invalid) {
+					t.Fatal("crossed producer model hidden by mapping")
+				}
+				return
+			}
+			got := f.service.Infer(context.Background(), binding, input)
+			if got.State != inference.NotSent || got.Code != inference.Withdrawn || f.http.calls != 0 || f.publication.count != 0 || len(f.journal.bindings) != 0 {
+				t.Fatalf("different captured context admitted: %+v", got)
+			}
+		})
+	}
+}
+
+func TestConsumerWitnessRouteBillingAndAccountMismatchCannotFallback(t *testing.T) {
+	for _, kind := range []string{"account", "API billing", "Task route"} {
+		t.Run(kind, func(t *testing.T) {
+			f := newWitness(t)
+			snapshot, _ := f.owner.cache.Current()
+			current := f.owner.scope
+			switch kind {
+			case "account":
+				current.AccountID = "different-account"
+			case "API billing":
+				current.Route.Billing = ms.API
+			case "Task route":
+				current.Route.Provider, current.Route.Backend = "codex", ms.CodexTask
+			}
+			_, err := ms.Resolve(snapshot, current, f.clock.now, ms.Request{Slug: "controlled-model", Requirements: ms.Requirements{Text: true}})
+			var failure *ms.PolicyError
+			if !errors.As(err, &failure) || failure.Code != ms.WrongScope || f.http.calls != 0 || len(f.journal.bindings) != 0 {
+				t.Fatalf("route/account changed silently: %v", err)
+			}
+		})
+	}
+}
+
+func TestConsumerWitnessExactProducerCallBytesRejectedByActualAdapter(t *testing.T) {
+	for _, kind := range []string{"call ID", "tool name", "duplicate arguments", "surrogate arguments"} {
+		t.Run(kind, func(t *testing.T) {
+			f := newWitness(t)
+			last := len(f.owner.source.Events)
+			call, result := &f.owner.source.Events[last-3], &f.owner.source.Events[last-2]
+			switch kind {
+			case "call ID":
+				call.CallID, result.CallID = "call:63", "call:63"
+			case "tool name":
+				call.Name = "observe/selected"
+			case "duplicate arguments":
+				call.Text = `{"a":1,"a":2}`
+			case "surrogate arguments":
+				call.Text = `{"x":"\ud800"}`
+			}
+			f.owner.source.Revision++
+			f.owner.expected = cb.SourceRef{}
+			p, err := f.context.Prepare(context.Background(), f.owner.source.Binding, "wire-checkpoint", "wire-context-operation", f.policy)
+			if err != nil {
+				t.Fatal(err)
+			}
+			materialized, err := f.context.Materialize(context.Background(), p, f.owner.source.Binding)
+			if err != nil {
+				t.Fatal(err)
+			}
+			input, err := witnessMap(materialized.Body, f.owner.resolved.Pin().Model)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := inference.ValidateRequest(inference.Request{Model: f.binding.Selection.Model, Input: input}); err != nil {
+				t.Fatal("counterexample must reach actual stricter adapter")
+			}
+			f.binding.Context.CheckpointID = "wire-checkpoint"
+			f.binding.Context.InputHash, err = inference.InputHash(intent.SHA256{}, input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			acquired := 0
+			f.credentials.after = func() { acquired++ }
+			service, err := inference.New(inference.Options{Clock: f.clock, Deadline: planresponses.OperationDeadline{}, Digester: intent.SHA256{}, Credentials: f.credentials, Authority: witnessAuthority{f.authority, f.binding}, Ledger: f.journal, Publication: f.publication, Transport: planresponses.New(&http.Client{Transport: f.wire})})
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := service.Infer(context.Background(), f.binding, input)
+			if got.State != inference.NotSent || got.Code != inference.Invalid || f.http.calls != 0 || f.publication.count != 0 || acquired != 1 || len(f.journal.bindings) != 1 {
+				t.Fatalf("incompatible exact bytes not refused: %+v", got)
+			}
+			_ = service.Infer(context.Background(), f.binding, input)
+			if f.http.calls != 0 || acquired != 1 {
+				t.Fatal("known adapter refusal replayed credentials or HTTP")
+			}
+			t.Logf("producer_call=%s name=%s arguments=%s adapter_error=%s credential_acquisitions=%d HTTP_requests=%d", call.CallID, call.Name, call.Text, got.Code, acquired, f.http.calls)
+		})
+	}
+}
