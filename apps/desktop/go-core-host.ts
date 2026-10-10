@@ -5,7 +5,11 @@ import {
   AttestedCore,
   parseCoreArtifactDeclaration,
 } from "./bridge/attested-core.ts";
-import { BridgeError, type Client } from "./bridge/client.ts";
+import {
+  BridgeError,
+  type BackendLifecycleObservation,
+  type Client,
+} from "./bridge/client.ts";
 import { ComputerBridge } from "./bridge/computer.ts";
 import { ConnectorHostBridge } from "./bridge/connector-host.ts";
 import { BrowserPump, type BrowserDriver } from "./bridge/browser.ts";
@@ -58,6 +62,7 @@ export type DesktopCoreSelection = Readonly<{
   home: string;
   settings: () => ProductSettings;
   browser: (context: Readonly<Context>) => DesktopBrowserConnection;
+  onLifecycleObservation?: (observation: BackendLifecycleObservation) => void;
 }>;
 function readDeclaration(root: string): unknown {
   const fd = fs.openSync(
@@ -521,6 +526,9 @@ export async function startDesktopGoCore(
       previousHostDrainConfirmed: selection.previousHostDrainConfirmed,
       hostLifetimeId: randomUUID(),
       childLaunchId: randomUUID(),
+      ...(selection.onLifecycleObservation
+        ? { onLifecycleObservation: selection.onLifecycleObservation }
+        : {}),
     });
   } catch (error) {
     if (!handedToClient && !released) {

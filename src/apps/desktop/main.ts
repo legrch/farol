@@ -27,7 +27,10 @@ import {
 import { readChatHistoryView } from "../../../apps/desktop/chat-history-view";
 import { projectReadConversation } from "../../../apps/desktop/read-conversation-projection";
 import { ReadConversationPromptSchema } from "../../pkg/product-settings/chat-conversation";
-import { BridgeError } from "../../../apps/desktop/bridge/client";
+import {
+  BridgeError,
+  type BackendLifecycleObservation,
+} from "../../../apps/desktop/bridge/client";
 import { ConnectorHostError } from "../../../apps/desktop/bridge/connector-host";
 import {
   reportComputerCheckDiagnostic,
@@ -443,6 +446,7 @@ import { AuthorityTransitionReservation } from "./authority-transition";
 import {
   ConnectorRuntimeEffectUnknown,
   SecureMcpConnectorRuntime,
+  type ConnectorRuntimeLifecycleObservation,
 } from "./secure-mcp-connector-runtime";
 import { clearConnectorVerificationReceipt } from "../../modules/computer/infra/mcp/connector-verification-receipt";
 import { PrivateExecutionFence } from "../../modules/computer/infra/mcp/execution-fence";
@@ -4508,6 +4512,38 @@ function startConnectorTransportWatch(): void {
     connectorTransportWatch?.resume();
     check();
   });
+}
+
+function reportOwnedBackendLifecycle(
+  observation:
+    BackendLifecycleObservation | ConnectorRuntimeLifecycleObservation,
+): void {
+  // Project only the original producer's closed terminal facts. This sink never
+  // looks up mutable host state or changes admission, recovery or drain results.
+  try {
+    console.warn(
+      "FAROL_BACKEND_LIFECYCLE:" +
+        JSON.stringify({
+          at: new Date().toISOString(),
+          source: observation.source,
+          phase: observation.phase,
+          event: observation.event,
+          code: observation.code,
+          state: observation.state,
+          exitCode: observation.exitCode,
+          signal: observation.signal,
+          forced: observation.forced,
+          ...(observation.source === "go-backend"
+            ? {
+                hostLifetimeId: observation.hostLifetimeId,
+                childLaunchId: observation.childLaunchId,
+              }
+            : { runtimeGeneration: observation.runtimeGeneration }),
+        }),
+    );
+  } catch {
+    // A closed diagnostic output cannot replace the original lifetime outcome.
+  }
 }
 
 function reportConnectorTransport(
@@ -11144,6 +11180,7 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
         stateRoot,
         home: app.getPath("home"),
         settings: currentSettings,
+        onLifecycleObservation: reportOwnedBackendLifecycle,
         browser: (context) =>
           createDesktopChatBrowser({
             context,
@@ -11230,11 +11267,14 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
   connectorCredentialStore = new PrivateConnectorKeyStore({
     root: secureMcpCredentialRoot(),
   });
-  secureMcpConnectorRuntime = new SecureMcpConnectorRuntime({
-    root: secureMcpConnectorRoot(),
-    homePath: await codexHostProcessHomePath(),
-    tempPath: app.getPath("temp"),
-  });
+  secureMcpConnectorRuntime = new SecureMcpConnectorRuntime(
+    {
+      root: secureMcpConnectorRoot(),
+      homePath: await codexHostProcessHomePath(),
+      tempPath: app.getPath("temp"),
+    },
+    { onLifecycleObservation: reportOwnedBackendLifecycle },
+  );
   // Starts with the app, on the persisted port, and never autospawns a
   // host: see Decisions.md N04, item 1. The real chat-turn route (packet
   // N04c) is the already-running Route B provider: `routeBModelTurnHandler`
