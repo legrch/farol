@@ -354,7 +354,7 @@ def add_member(archive, path, name, info):
                 # Scan bytes, including native executables, without buffering
                 # the bundle. Fixed system sandbox literals are not owner data.
                 require(not owned or (str(ROOT).encode() not in inspected and not re.search(
-                    rb"(?:/Users/[^/\s\x00\"']+/|/home/[^/\s\x00\"']+/|/private/var/folders/|/var/folders/|[A-Za-z]:\\Users\\)",
+                    rb"(?:/Users/[^/\s\x00\"']+|/home/[^/\s\x00\"']+|/private/var/folders/|/var/folders/|[A-Za-z]:\\Users\\)",
                     inspected)), "PRIVATE_PATH_IN_APP")
                 tail = inspected[-max(512, len(str(ROOT).encode())):]
                 target.write(chunk)

@@ -725,6 +725,28 @@ print('refused')
       expect(await fs.readdir(f.output)).toEqual(["private"]);
   });
 
+  it.each([
+    ["macOS home at EOF", "/Users/example", false],
+    ["Linux home at EOF", "/home/example", false],
+    ["macOS home before NUL", "/Users/example\0", false],
+    ["Linux home before NUL", "/home/example\0", false],
+    ["home before whitespace", "/Users/example ", false],
+    ["home before quote", '/home/example"', false],
+    ["macOS home across chunks", "/Users/example\0", true],
+    ["Linux home across chunks", "/home/example", true],
+  ])("refuses %s in owned app bytes", async (_label, leakedPath, split) => {
+    const f = await fixture();
+    await fs.writeFile(
+      path.join(f.resource, "payload"),
+      Buffer.concat([
+        split ? Buffer.alloc(1024 * 1024 - 5, 0x61) : Buffer.from([0, 1, 2]),
+        Buffer.from(leakedPath),
+      ]),
+    );
+    expect(prepare(f).stderr).toContain("PRIVATE_PATH_IN_APP");
+    expect(await fs.readdir(f.output)).toEqual(["private"]);
+  });
+
   it("refuses a mode mismatch hidden by core.filemode=false", async () => {
     const f = await fixture();
     git(f.root, "config", "core.filemode", "false");
