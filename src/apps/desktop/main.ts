@@ -2239,26 +2239,52 @@ async function initializeLiveTaskState(): Promise<void> {
 async function openLiveTaskSurface(taskId: string): Promise<boolean> {
   if (quitInProgress || installedUpdateAdmission) return false;
   const route = liveTaskRoutes.get(taskId);
-  if (!route) return false;
+  const task = liveTaskRegistry.get(taskId);
+  if (!route || !task) return false;
+  const currentTask = () => {
+    const current = liveTaskRegistry.get(taskId);
+    return liveTaskRoutes.get(taskId) === route &&
+      current?.sessionId === task.sessionId &&
+      current.turnId === task.turnId
+      ? current
+      : null;
+  };
+  const recordSurfaceFailure = () => {
+    const current = currentTask();
+    // Loading a surface does not resolve an existing Task obligation or
+    // replace a completion already observed by the activity owner.
+    if (
+      !current ||
+      current.lifecycle === "running" ||
+      current.lifecycle === "outcome_unknown" ||
+      current.lifecycle === "completed"
+    )
+      return;
+    setLiveTaskLifecycle(taskId, "failed");
+  };
   try {
     const opened = await route.open();
+    if (!currentTask()) return false;
     if (opened.status !== "opened") {
-      setLiveTaskLifecycle(taskId, "failed");
+      recordSurfaceFailure();
       return false;
     }
     // Live ChatGPT surfaces also publish their observed load result. Without
     // this, renderer controls requiring a ready selected page never appear.
     taskSurfaceFailures.delete(taskId);
     publishTaskSurfaceStatus({ taskId, state: "ready", error: null });
-    const current = liveTaskRegistry.get(taskId);
-    if (current?.lifecycle === "failed") {
+    const current = currentTask();
+    if (!current) return false;
+    if (current.lifecycle === "failed") {
       setLiveTaskLifecycle(taskId, "idle");
     }
+    if (!currentTask()) return false;
     applyLayout();
+    if (!currentTask()) return false;
     focusForLayoutAfterRendererCommit();
-    return true;
+    return currentTask() !== null;
   } catch {
-    setLiveTaskLifecycle(taskId, "failed");
+    recordSurfaceFailure();
     return false;
   }
 }
