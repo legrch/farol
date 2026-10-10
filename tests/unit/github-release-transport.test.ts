@@ -615,6 +615,28 @@ describe("GitHub HTTPS transport", () => {
     });
     expect(await readFile(result.value.handle, "utf8")).toBe("ZIP");
   });
+  it("reports retained verification capacity without claiming a bad archive", async () => {
+    const root = await privateRoot();
+    const { instance, verifyPackage } = transport(
+      root,
+      scripted(response(200, [Buffer.from("ZIP")])),
+    );
+    const result = await instance.download(asset, 3);
+    if (!result.ok) throw new Error("fixture download failed");
+    verifyPackage.mockRejectedValue(
+      new PackageVerificationError("stage_capacity"),
+    );
+    expect(await instance.verifyPackage(result.value.handle, manifest)).toEqual(
+      {
+        ok: false,
+        kind: "interrupted",
+        reason: "stage_capacity",
+        certainty: "known",
+      },
+    );
+    expect(await readFile(result.value.handle, "utf8")).toBe("ZIP");
+    expect(verifyPackage).toHaveBeenCalledTimes(1);
+  });
   it("fetches bounded pinned API JSON without credentials", async () => {
     const root = await privateRoot();
     const openHttps = scripted(

@@ -2459,6 +2459,10 @@ async function createRuntime(
         retained.handle,
         parsed.value,
       );
+      if (!check.ok && "certainty" in check && check.certainty === "unknown")
+        return known("UPDATE_STAGING_OUTCOME_UNKNOWN");
+      if (!check.ok && "reason" in check && check.reason === "stage_capacity")
+        return known("UPDATE_VERIFICATION_RECOVERY_REQUIRED");
       if (
         !check.ok ||
         !packageMatchesRelease(check.value.identity, parsed.value)
@@ -2984,7 +2988,14 @@ async function createRuntime(
               !check.ok && "certainty" in check && check.certainty === "unknown"
                 ? "unknown"
                 : "blocked",
-            code: "UPDATE_RETAINED_PACKAGE_INVALID",
+            code:
+              !check.ok && "certainty" in check && check.certainty === "unknown"
+                ? "UPDATE_STAGING_OUTCOME_UNKNOWN"
+                : !check.ok &&
+                    "reason" in check &&
+                    check.reason === "stage_capacity"
+                  ? "UPDATE_VERIFICATION_RECOVERY_REQUIRED"
+                  : "UPDATE_RETAINED_PACKAGE_INVALID",
           };
         }
         if (quitContext) {

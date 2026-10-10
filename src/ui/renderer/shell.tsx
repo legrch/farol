@@ -560,7 +560,7 @@ function Update({
       : update.phase === "available"
         ? `Farol ${update.version} is available; it is not downloaded or installed yet.`
         : update.phase === "failed"
-          ? updateResultMessage("failed", update.recoveryRequired)
+          ? updateResultMessage("failed", update.recoveryRequired, update.code)
           : update.phase === "unavailable"
             ? updateResultMessage("unavailable")
             : update.phase === "recovery"

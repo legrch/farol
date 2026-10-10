@@ -17,6 +17,8 @@ const messages: Readonly<Record<string, string>> = {
   UPDATE_WORK_DRAIN_UNCONFIRMED:
     "Farol could not confirm that local work has finished. Review its current result before restarting.",
   UPDATE_STATE_UNREADABLE: "Farol couldn’t read its update status.",
+  UPDATE_VERIFICATION_RECOVERY_REQUIRED:
+    "An earlier package check did not finish. Its files are saved. Review Diagnostics to recover that check before updating.",
 };
 
 export function updateBlockMessage(
@@ -30,9 +32,11 @@ export function updateBlockMessage(
 export function updateResultMessage(
   phase: "failed" | "unavailable",
   recoveryRequired = false,
+  code?: string,
 ): string {
   if (phase === "unavailable")
     return "Farol cannot confirm update availability in this session. Review Diagnostics before another check.";
+  if (code === "UPDATE_VERIFICATION_RECOVERY_REQUIRED") return messages[code]!;
   return recoveryRequired
     ? "The update result needs recovery. Check Diagnostics and the installed version before another update action."
     : "The update did not finish. Check Diagnostics and the installed version before trying again.";

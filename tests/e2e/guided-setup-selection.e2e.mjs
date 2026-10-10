@@ -32,8 +32,9 @@ import {
 
 const uncheckedOverview = {
   ready: false,
+  signInStatus: "Current sign-in is unknown",
   states: {
-    signin: "needed",
+    signin: "unknown",
     folders: "needed",
     connection: "needed",
     attachment: "needed",
@@ -824,7 +825,6 @@ try {
     // The selected design keeps Workspaces directly reachable from Setup.
     await setupStep(window, "folders", "Workspaces");
     await setupAction(window, "Add workspace…");
-    await setupAction(window, "Add selected workspace read-only");
     // Settings retains hidden pages; Diagnostics projects the same folder.
     // Observe only the current guided form, not its hidden diagnostic record.
     const folder = window.locator(".setup-page .workspace-detail:visible");
@@ -836,10 +836,9 @@ try {
       saved.computer.workspaces[0].root,
       await fs.realpath(workspace),
     );
-    assert.equal(saved.computer.workspaces[0].access, "read");
+    assert.equal(saved.computer.workspaces[0].access, "write");
     assert.notEqual(saved.computer.workspaces[0].gitHistoryApproved, true);
     assert.notEqual(saved.computer.commands, "workspace");
-    await setupAction(window, "Verify workspace");
     await window.waitForFunction(() =>
       document
         .querySelector(".setup-page .workspace-detail .badges")
@@ -858,7 +857,17 @@ try {
       saved.computer.generation,
     );
     assert.equal(saved.setup.chatgpt.verified, null);
-    assert.equal(saved.setup.connect.verified, null);
+    if (behavior) {
+      assert.equal(saved.connectors.secureMcp.runtime.state, "ready");
+      assert.equal(saved.setup.connect.verified.buildId, build.buildId);
+      assert.equal(saved.connectors.secureMcp.attachment, null);
+      observations.push({
+        kind: "one-add-saved-checked-and-connected",
+        build,
+        access: saved.computer.workspaces[0].access,
+        externalAttachment: "not-verified",
+      });
+    } else assert.equal(saved.setup.connect.verified, null);
     const retainedWorkspaces = saved.computer.workspaces;
     let verifiedWorkspaces = retainedWorkspaces;
     const retainedProfile = { ...activeFixtureProfile };
@@ -871,7 +880,7 @@ try {
       // owned config observes publication; this test never writes policy bytes.
       const beforePolicy = saved;
       assert.equal(Object.hasOwn(beforePolicy.computer, "filePolicy"), false);
-      assert.equal(beforePolicy.connectors.secureMcp.runtime, null);
+      assert.equal(beforePolicy.connectors.secureMcp.runtime.state, "ready");
       await window
         .getByRole("navigation", { name: "Sections", exact: true })
         .getByRole("button", { name: "Settings", exact: true })

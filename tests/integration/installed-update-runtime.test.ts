@@ -2403,6 +2403,72 @@ ${scenario === "missing" ? "" : `<key>CFBundleVersion</key><string>${scenario ==
     expect(quit).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["stage_capacity", "known", "UPDATE_VERIFICATION_RECOVERY_REQUIRED"],
+    ["stage_cleanup", "unknown", "UPDATE_STAGING_OUTCOME_UNKNOWN"],
+  ])(
+    "retains an archive after startup verification reports %s",
+    async (reason, certainty, code) => {
+      const first = await prepared();
+      await first.close();
+      const original = await fs.readFile(ready);
+      mocks.verify.mockResolvedValue({
+        ok: false,
+        kind: "interrupted",
+        reason,
+        certainty,
+      });
+      mocks.discardPackage.mockClear();
+      mocks.discardArchive.mockClear();
+      mocks.download.mockClear();
+      const second = await createInstalledUpdateRuntime(options());
+      await second!.initialize();
+      expect(second!.snapshot()).toMatchObject({
+        phase: "failed",
+        recoveryRequired: true,
+        code,
+      });
+      expect(await fs.readFile(ready)).toEqual(original);
+      expect(mocks.verify).toHaveBeenCalledTimes(1);
+      expect(mocks.discardPackage).not.toHaveBeenCalled();
+      expect(mocks.discardArchive).not.toHaveBeenCalled();
+      expect(mocks.download).not.toHaveBeenCalled();
+      await second!.close();
+    },
+  );
+
+  it.each([
+    [
+      "stage_capacity",
+      "known",
+      "blocked",
+      "UPDATE_VERIFICATION_RECOVERY_REQUIRED",
+    ],
+    ["stage_cleanup", "unknown", "unknown", "UPDATE_STAGING_OUTCOME_UNKNOWN"],
+  ])(
+    "does not dispatch an update helper after handoff verification reports %s",
+    async (reason, certainty, status, code) => {
+      const controller = await prepared();
+      const original = await fs.readFile(ready);
+      mocks.verify.mockResolvedValue({
+        ok: false,
+        kind: "interrupted",
+        reason,
+        certainty,
+      });
+      await controller.restart();
+      expect(controller.snapshot()).toMatchObject(
+        status === "unknown"
+          ? { phase: "failed", code, recoveryRequired: true }
+          : { phase: "ready", blockedBy: code },
+      );
+      expect(mocks.helper).not.toHaveBeenCalled();
+      expect(await fs.readFile(ready)).toEqual(original);
+      expect(mocks.verify).toHaveBeenCalledTimes(1);
+      await controller.close();
+    },
+  );
+
   it("reverifies an existing old-feed Ready archive without fetching or rewriting its manifest", async () => {
     const first = await prepared();
     await first.close();

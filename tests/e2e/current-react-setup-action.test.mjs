@@ -31,9 +31,11 @@ function fakePage({
   after = before,
   scope = ".setup-page",
   extraWorkspaceFeedback,
+  verified = true,
+  connected = false,
 } = {}) {
   const dom = new JSDOM(
-    '<main class="setup-page"><div class="settings-page"><section class="workspace-detail"><p class="workspace-path"><code></code></p><div class="workspace-feedback"></div></section></div></main>',
+    '<main class="setup-page"><div class="settings-page"><section class="workspace-detail"><p class="workspace-path"><code></code></p><div class="workspace-feedback"></div></section><div class="workspace-add"><button>Add workspace…</button></div></div></main>',
     { runScripts: "outside-only" },
   );
   const { document } = dom.window;
@@ -46,7 +48,25 @@ function fakePage({
     bootstrap: () => ({
       configuration: {
         status: "ready",
-        settings: { computer: { workspaces: currentWorkspaces } },
+        settings: {
+          computer: { workspaces: currentWorkspaces, generation: 1 },
+          setup: {
+            computer: {
+              verified:
+                verified && currentWorkspaces.length
+                  ? {
+                      workspaceId: currentWorkspaces[0].workspaceId,
+                      configRevision: 1,
+                    }
+                  : null,
+              reachable: "reachable",
+              outcomeUnknown: false,
+            },
+          },
+          connectors: {
+            secureMcp: { runtime: connected ? { state: "ready" } : null },
+          },
+        },
       },
     }),
   };
@@ -110,6 +130,9 @@ function fakePage({
             "observer must be armed before the original click",
           );
           clicks++;
+          if (name === "Add workspace…")
+            document.querySelector(".workspace-add button").textContent =
+              "Connecting workspace…";
           if (clickError) throw clickError;
         },
       }),
@@ -117,7 +140,10 @@ function fakePage({
     waitForFunction: async (callback, handle) => {
       // Deliver every scripted mutation, even a late refresh after unknown.
       // The browser observer must retain the first terminal, not the last.
-      for (const event of events) {
+      for (const [index, event] of events.entries()) {
+        if (index === events.length - 1)
+          document.querySelector(".workspace-add button").textContent =
+            "Add workspace…";
         if (typeof event === "string") addFeedback(event);
         else addFeedback(event.text, event.target);
         currentWorkspaces = after;
@@ -287,10 +313,6 @@ test("pending attachment command times out without another click", async () => {
 
 for (const [name, message] of [
   [
-    "Add workspace…",
-    "Selection received. Confirm read-only access below to add it.",
-  ],
-  [
     "Connect this Mac",
     "Local connection started. Verify Farol in ChatGPT to confirm external access.",
   ],
@@ -319,29 +341,77 @@ test("platform-refused original click is propagated without retry", async () => 
   await journey({ clickError: refused }, (error) => error === refused);
 });
 
-test("new workspace approval requires the exact newly saved read-only root", async () => {
+test("one Add action requires saved read-write access and a current access check", async () => {
   await journey({
-    name: "Add selected workspace read-only",
+    name: "Add workspace…",
     before: [],
-    after: [workspace],
+    after: [{ ...workspace, access: "write" }],
     events: [
       pending,
-      `Workspace access saved: ${root}. Saved access: Read-only. Check access before using it.`,
+      "Workspace selected. Saving access…",
+      `Workspace access saved: ${root}. Saved access: Read & write. Check access before using it.`,
+      `Workspace access checked: ${root}. Saved access: Read & write.`,
     ],
   });
+});
+
+test("one Add action observes the configured connection result", async () => {
+  await journey({
+    name: "Add workspace…",
+    before: [],
+    after: [{ ...workspace, access: "write" }],
+    connected: true,
+    events: [
+      pending,
+      `Workspace access checked: ${root}. Saved access: Read & write.`,
+      "Local connection started. Verify Farol in ChatGPT to confirm external access.",
+    ],
+  });
+});
+
+test("saved access without its current check cannot confirm Add", async () => {
+  await journey(
+    {
+      name: "Add workspace…",
+      before: [],
+      after: [{ ...workspace, access: "write" }],
+      verified: false,
+      events: [
+        pending,
+        `Workspace access checked: ${root}. Saved access: Read & write.`,
+      ],
+    },
+    /SETUP_ADDED_WORKSPACE_NOT_VERIFIED/,
+  );
+});
+
+test("a later workspace success does not overwrite the first unknown Add result", async () => {
+  await journey(
+    {
+      name: "Add workspace…",
+      before: [],
+      after: [{ ...workspace, access: "write" }],
+      events: [
+        pending,
+        unknown,
+        `Workspace access checked: ${root}. Saved access: Read & write.`,
+      ],
+    },
+    /SETUP_ACTION_UNCONFIRMED:Add workspace/,
+  );
 });
 
 test("old generic workspace approval cannot replace the specific result", async () => {
   await journey(
     {
-      name: "Add selected workspace read-only",
+      name: "Add workspace…",
       before: [],
-      after: [workspace],
+      after: [{ ...workspace, access: "write" }],
       events: [
         "Approval request completed. Only workspaces in the approved list below have saved access.",
       ],
     },
-    /SETUP_ACTION_UNCONFIRMED:Add selected workspace read-only/,
+    /SETUP_ACTION_UNCONFIRMED:Add workspace/,
   );
 });
 

@@ -46,8 +46,6 @@ export async function readSetupSettings(page) {
 // observation never resubmits the command or chooses another executor.
 export async function setupAction(page, name, { scope = ".setup-page" } = {}) {
   const messages = {
-    "Add workspace…":
-      "Selection received. Confirm read-only access below to add it.",
     "Save & connect":
       "Credentials saved. The connection step did not complete. Review its status before another action; keep the saved key.",
     "Connect this Mac":
@@ -60,7 +58,7 @@ export async function setupAction(page, name, { scope = ".setup-page" } = {}) {
       "Request completed. Review its recorded result in Diagnostics and the current status below.",
   };
   const verify = name === "Verify workspace";
-  const add = name === "Add selected workspace read-only";
+  const add = name === "Add workspace…";
   assert.ok(
     verify || add || Object.hasOwn(messages, name),
     `SETUP_ACTION_UNSUPPORTED:${name}`,
@@ -86,7 +84,7 @@ export async function setupAction(page, name, { scope = ".setup-page" } = {}) {
   // a later refresh must not erase the first observed refusal/unknown outcome.
   // This watches presentation only; it does not query or replay an operation.
   const observation = await page.evaluateHandle(
-    ({ scope, verify }) => {
+    ({ scope, verify, add }) => {
       const container = document.querySelector(scope);
       if (!container) throw new Error("SETUP_ACTION_SURFACE_MISSING");
       const read = () =>
@@ -114,8 +112,26 @@ export async function setupAction(page, name, { scope = ".setup-page" } = {}) {
         }
         const current = read();
         changed ||= JSON.stringify(current) !== previous;
-        if (changed && current.length && !current.includes(pending))
-          observation.result = current;
+        if (changed && current.length && !current.includes(pending)) {
+          // Adding composes pick, save, access checks and optional connection.
+          // Keep the first refusal/unknown; only known intermediate successes
+          // may wait for the original composed button to become idle.
+          const intermediate =
+            add &&
+            current.every(
+              (text) =>
+                text === "Workspace selected. Saving access…" ||
+                /^Workspace access (?:saved|checked): /u.test(text) ||
+                text ===
+                  "Local connection started. Verify Farol in ChatGPT to confirm external access.",
+            );
+          if (
+            !intermediate ||
+            container.querySelector(".workspace-add button")?.textContent ===
+              "Add workspace…"
+          )
+            observation.result = current;
+        }
       });
       observation.observer.observe(container, {
         subtree: true,
@@ -124,7 +140,7 @@ export async function setupAction(page, name, { scope = ".setup-page" } = {}) {
       });
       return observation;
     },
-    { scope, verify },
+    { scope, verify, add },
   );
   try {
     await page
@@ -144,10 +160,22 @@ export async function setupAction(page, name, { scope = ".setup-page" } = {}) {
       assert.equal(added.length, 1, "SETUP_ADDED_WORKSPACE_UNCONFIRMED");
       assert.equal(
         added[0].access,
-        "read",
-        "SETUP_ADDED_WORKSPACE_NOT_READ_ONLY",
+        "write",
+        "SETUP_ADDED_WORKSPACE_NOT_READ_WRITE",
       );
-      expected = `Workspace access saved: ${added[0].root}. Saved access: Read-only. Check access before using it.`;
+      const check = after.setup.computer;
+      assert.equal(
+        check.verified?.workspaceId,
+        added[0].workspaceId,
+        "SETUP_ADDED_WORKSPACE_NOT_VERIFIED",
+      );
+      assert.equal(check.verified.configRevision, after.computer.generation);
+      assert.equal(check.reachable, "reachable");
+      assert.equal(check.outcomeUnknown, false);
+      expected =
+        after.connectors.secureMcp.runtime?.state === "ready"
+          ? messages["Connect this Mac"]
+          : `Workspace access checked: ${added[0].root}. Saved access: Read & write.`;
     }
     assert.deepEqual(observed, [expected], `SETUP_ACTION_UNCONFIRMED:${name}`);
   } finally {
@@ -201,9 +229,15 @@ export function assertSetupOverviewEvidence(observed, expected) {
         label,
         optional: step === "signin",
         state,
-        status: checkStatus[state],
+        status:
+          step === "signin" && expected.signInStatus
+            ? expected.signInStatus
+            : checkStatus[state],
         navigationState: state,
-        navigationStatus: checkStatus[state],
+        navigationStatus:
+          step === "signin" && expected.signInStatus
+            ? expected.signInStatus
+            : checkStatus[state],
       };
     }),
     "SETUP_OVERVIEW_EVIDENCE_MISMATCH",

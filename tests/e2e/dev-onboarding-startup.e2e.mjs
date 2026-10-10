@@ -1050,15 +1050,12 @@ try {
       await openSetup(legacyWindow);
       await setupStep(legacyWindow, "folders", "Workspaces");
       await setupAction(legacyWindow, "Add workspace…");
-      await setupAction(legacyWindow, "Add selected workspace read-only");
       const detail = legacyWindow.locator(
         ".setup-page .workspace-detail:visible",
       );
       await detail.waitFor();
       assert.equal(await detail.count(), 1);
-      // The current Verify workspace action checks access and binds the
-      // selected workspace in one command; there is no separate Check access.
-      await setupAction(legacyWindow, "Verify workspace");
+      // The original Add action saves and checks the selected workspace.
       await detail
         .locator(".badges")
         .filter({ hasText: /^Access checked$/u })

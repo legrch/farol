@@ -54,6 +54,7 @@ export type TransportFailure = PortFailure &
       | "private_state"
       | "stage_cleanup"
       | "invalid_handle"
+      | "stage_capacity"
       | "verification";
   }>;
 export type TransportResult<T> =
@@ -956,6 +957,11 @@ export function createGithubUpdateTransport(
           error.code === "cleanup_unknown"
         )
           return fail("interrupted", "stage_cleanup", "unknown");
+        if (
+          error instanceof PackageVerificationError &&
+          error.code === "stage_capacity"
+        )
+          return fail("interrupted", "stage_capacity");
         return fail("package_mismatch", "verification");
       }
     },

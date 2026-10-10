@@ -175,7 +175,7 @@ function actionFeedback(
   )
     return evidenceReceived &&
       current?.evidence?.value.kind === "computer.workspace-pick"
-      ? "Selection received. Confirm read-only access below to add it."
+      ? "Workspace selected. Saving access…"
       : "Workspace selection request completed. Review the current selection below before approving access.";
   if (
     result.state === "applied" &&
@@ -949,8 +949,8 @@ function Folders(props: PageProps) {
         </div>
         <p className="description">
           Added workspaces use Read &amp; write. Farol checks access and
-          connects automatically. Change access or enable commands in workspace
-          settings.
+          connects automatically when the connection is configured. Change
+          access or enable commands in workspace settings.
         </p>
         {!actions.allowed("computer.add-workspace") && (
           <p className="description">
@@ -3009,6 +3009,7 @@ function Updates({ snapshot, facade, actions }: PageProps) {
               {updateResultMessage(
                 update.phase,
                 update.phase === "failed" && update.recoveryRequired,
+                update.code,
               )}
             </p>
             <details>

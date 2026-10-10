@@ -726,6 +726,16 @@ it.each([
     "The update did not finish",
     ["Dismiss"],
   ],
+  [
+    {
+      phase: "failed",
+      code: "UPDATE_VERIFICATION_RECOVERY_REQUIRED",
+      recoveryRequired: true,
+    },
+    "The update did not finish",
+    "An earlier package check did not finish. Its files are saved.",
+    ["Cancel", "Recover"],
+  ],
 ] satisfies [WindowSnapshot["update"], string, string, string[]][])(
   "Updates %j shows its own heading, state and release actions",
   async (update, heading, status, actions) => {
