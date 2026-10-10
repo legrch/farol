@@ -4,6 +4,7 @@ import { stripTypeScriptTypes } from "node:module";
 import { parse } from "@babel/parser";
 import { expect, it } from "vitest";
 import { LiveTaskRegistry } from "../../src/apps/desktop/live-task-registry";
+import { TaskSurfaceStatusSchema } from "../../src/pkg/ipc/task-surface-status";
 import type {
   ProductTask,
   ProductTaskLifecycle,
@@ -105,11 +106,15 @@ function host(lifecycle: ProductTaskLifecycle = "idle") {
   const sends: { channel: string; value: unknown }[] = [];
   const persisted: ProductTasksState[] = [];
   const presentation: string[] = [];
+  const streamController = new AbortController();
+  const pendingCall = { callId: "CONTROLLED_EXISTING_COMPUTER_OBLIGATION" };
   const context = {
     taskId,
     liveTaskRegistry: registry,
     liveTaskRoutes: new Map<string, Route>([[taskId, route]]),
     taskSurfaceFailures: new Map([[taskId, "CONTROLLED_SURFACE_FAILURE"]]),
+    streamControllers: new Map([[taskId, streamController]]),
+    pendingComputer: new Map([[taskId, pendingCall]]),
     quitInProgress: false,
     installedUpdateAdmission: false,
     demoMode: false,
@@ -168,6 +173,8 @@ function host(lifecycle: ProductTaskLifecycle = "idle") {
     sends,
     persisted,
     presentation,
+    streamController,
+    pendingCall,
     opens: () => opens,
     onSend: (callback: (channel: string) => void) => {
       onSend = callback;
@@ -187,6 +194,22 @@ async function expectOriginal(h: ReturnType<typeof host>, outcome: Outcome) {
       value: { status: outcome },
     });
   expect(h.opens()).toBe(1);
+}
+
+function surfaceStatuses(h: ReturnType<typeof host>) {
+  return h.sends
+    .filter((send) => send.channel === "controlled-surface")
+    .map((send) => TaskSurfaceStatusSchema.parse(send.value));
+}
+const failedSurface = {
+  taskId,
+  state: "failed",
+  error: "TASK_SURFACE_UNREACHABLE",
+};
+function expectPreservedStream(h: ReturnType<typeof host>) {
+  expect(h.context.streamControllers.get(taskId)).toBe(h.streamController);
+  expect(h.streamController.signal.aborted).toBe(false);
+  expect(h.context.pendingComputer.get(taskId)).toBe(h.pendingCall);
 }
 
 it.each(
@@ -223,12 +246,17 @@ it.each(
     await flush();
     expect(h.registry.get(taskId)?.lifecycle).toBe(lifecycle);
     expect(h.persisted).toHaveLength(0);
-    expect(h.sends).toHaveLength(0);
+    expect(surfaceStatuses(h)).toEqual([failedSurface]);
+    expect(h.context.taskSurfaceFailures.get(taskId)).toBe(
+      "TASK_SURFACE_UNREACHABLE",
+    );
+    expectPreservedStream(h);
     // A later explicit controlled load result is separate surface observation,
     // not replay of an UNKNOWN task or a native/provider retry.
     h.route.open = () => Promise.resolve({ status: "opened" });
     expect(await h.api.open(taskId)).toBe(true);
     expect(h.registry.get(taskId)?.lifecycle).toBe(lifecycle);
+    expect(h.context.taskSurfaceFailures.has(taskId)).toBe(false);
   },
 );
 
@@ -247,6 +275,11 @@ it.each(["opened", "unreachable", "rejected"] as const)(
     await expectOriginal(h, outcome);
     expect(h.registry.get(taskId)?.lifecycle).toBe("completed");
     expect(h.persisted).toHaveLength(0);
+    expect(surfaceStatuses(h)).toEqual(
+      outcome === "opened"
+        ? [{ taskId, state: "ready", error: null }]
+        : [failedSurface],
+    );
   },
 );
 
@@ -375,3 +408,129 @@ it("rechecks current route after a synchronous ready publication replaces it", a
   expect(h.presentation).toHaveLength(0);
   expect(h.sends).toHaveLength(1);
 });
+
+it.each(
+  (["running", "outcome_unknown", "completed"] as const).flatMap((lifecycle) =>
+    (["unreachable", "rejected"] as const).map((outcome) => ({
+      lifecycle,
+      outcome,
+    })),
+  ),
+)(
+  "publishes a separate $outcome surface failure after ready with current $lifecycle",
+  async ({ lifecycle, outcome }) => {
+    const h = host();
+    const first = h.api.open(taskId);
+    h.settle("opened");
+    expect(await first).toBe(true);
+    expect(surfaceStatuses(h)).toEqual([
+      { taskId, state: "ready", error: null },
+    ]);
+    h.api.activity("running");
+    if (lifecycle === "outcome_unknown") h.api.activity("outcome_unknown");
+    if (lifecycle === "completed") h.api.activity("idle");
+    await flush();
+    expect(h.registry.get(taskId)?.lifecycle).toBe(lifecycle);
+    const next = deferred<OpenResult>();
+    const originalError = new Error("CONTROLLED_NEXT_SURFACE_REJECTION");
+    let nextOpens = 0;
+    h.route.open = () => {
+      nextOpens++;
+      return next.promise;
+    };
+    const original = next.promise.then(
+      (value) => ({ status: "fulfilled" as const, value }),
+      (error: unknown) => ({ status: "rejected" as const, error }),
+    );
+    h.clearObservations();
+    const opening = h.api.open(taskId);
+    if (outcome === "rejected") next.reject(originalError);
+    else next.resolve({ status: outcome });
+    expect(await opening).toBe(false);
+    const result = await original;
+    if (result.status === "rejected") expect(result.error).toBe(originalError);
+    else expect(result.value.status).toBe("unreachable");
+    expect(nextOpens).toBe(1);
+    expect(h.registry.get(taskId)?.lifecycle).toBe(lifecycle);
+    expect(surfaceStatuses(h)).toEqual([failedSurface]);
+    expect(h.context.taskSurfaceFailures.get(taskId)).toBe(
+      "TASK_SURFACE_UNREACHABLE",
+    );
+    expect(h.persisted).toHaveLength(0);
+    expect(h.presentation).toHaveLength(0);
+    expectPreservedStream(h);
+  },
+);
+
+it("rechecks current binding after a failed surface publication withdraws its route", async () => {
+  const h = host();
+  const opening = h.api.open(taskId);
+  h.onSend((channel) => {
+    if (channel === "controlled-surface")
+      h.context.liveTaskRoutes.delete(taskId);
+  });
+  h.settle("unreachable");
+  expect(await opening).toBe(false);
+  expect(h.registry.get(taskId)?.lifecycle).toBe("idle");
+  expect(h.persisted).toHaveLength(0);
+  expect(surfaceStatuses(h)).toEqual([failedSurface]);
+  expect(h.context.taskSurfaceFailures.get(taskId)).toBe(
+    "TASK_SURFACE_UNREACHABLE",
+  );
+  expectPreservedStream(h);
+});
+
+it.each(
+  (["idle", "running", "outcome_unknown", "completed"] as const).flatMap(
+    (lifecycle) =>
+      (["unreachable", "rejected"] as const).map((outcome) => ({
+        lifecycle,
+        outcome,
+      })),
+  ),
+)(
+  "contains a throwing failed-surface observer for $lifecycle/$outcome",
+  async ({ lifecycle, outcome }) => {
+    const h = host(lifecycle);
+    const opening = h.api.open(taskId);
+    const observerError = new Error("CONTROLLED_SURFACE_OBSERVER_FAILURE");
+    h.onSend((channel) => {
+      if (channel === "controlled-surface") throw observerError;
+    });
+    h.settle(outcome);
+    await expect(opening).resolves.toBe(false);
+    await expectOriginal(h, outcome);
+    expect(h.context.taskSurfaceFailures.get(taskId)).toBe(
+      "TASK_SURFACE_UNREACHABLE",
+    );
+    expect(surfaceStatuses(h)).toEqual([failedSurface]);
+    expect(h.registry.get(taskId)?.lifecycle).toBe(
+      lifecycle === "idle" ? "failed" : lifecycle,
+    );
+    expectPreservedStream(h);
+  },
+);
+
+it.each(["unreachable", "rejected"] as const)(
+  "contains a throwing Task projection after classifying %s surface failure",
+  async (outcome) => {
+    const h = host();
+    const opening = h.api.open(taskId);
+    h.onSend((channel) => {
+      if (channel === "controlled-tasks")
+        throw new Error("CONTROLLED_TASK_OBSERVER_FAILURE");
+    });
+    h.settle(outcome);
+    await expect(opening).resolves.toBe(false);
+    await expectOriginal(h, outcome);
+    expect(surfaceStatuses(h)).toEqual([failedSurface]);
+    expect(h.context.taskSurfaceFailures.get(taskId)).toBe(
+      "TASK_SURFACE_UNREACHABLE",
+    );
+    expect(h.registry.get(taskId)?.lifecycle).toBe("failed");
+    // This controlled observer fault interrupts the existing owner before its
+    // persist port. No durable persistence acceptance is inferred from failure.
+    expect(h.persisted).toHaveLength(0);
+    expectPreservedStream(h);
+  },
+);

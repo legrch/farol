@@ -2250,6 +2250,14 @@ async function openLiveTaskSurface(taskId: string): Promise<boolean> {
       : null;
   };
   const recordSurfaceFailure = () => {
+    if (!currentTask()) return;
+    const error = "TASK_SURFACE_UNREACHABLE";
+    taskSurfaceFailures.set(taskId, error);
+    try {
+      publishTaskSurfaceStatus({ taskId, state: "failed", error });
+    } catch {
+      // An unavailable observer cannot replace the classified load failure.
+    }
     const current = currentTask();
     // Loading a surface does not resolve an existing Task obligation or
     // replace a completion already observed by the activity owner.
@@ -2260,7 +2268,12 @@ async function openLiveTaskSurface(taskId: string): Promise<boolean> {
       current.lifecycle === "completed"
     )
       return;
-    setLiveTaskLifecycle(taskId, "failed");
+    try {
+      setLiveTaskLifecycle(taskId, "failed");
+    } catch {
+      // Keep the original route outcome and recorded surface failure when
+      // the existing lifecycle owner's synchronous publication cannot finish.
+    }
   };
   try {
     const opened = await route.open();
