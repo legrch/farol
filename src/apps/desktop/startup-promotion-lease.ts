@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import {
   acquirePromotionLease,
   releasePromotionLease,
@@ -15,6 +17,29 @@ const defaultPorts: StartupPromotionLeasePorts = {
   verify: verifyPromotionLease,
   release: releasePromotionLease,
 };
+
+// Maintenance owns publication and durable retirement of this fixed intent.
+// Startup never decodes it: valid-looking terminal bytes cannot settle a lost
+// completion response. Symlinks, directories and unreadable entries also fence
+// startup. Only confirmed absence admits the generation under its existing lock.
+async function assertInstalledReplacementAbsent(
+  userData: string,
+): Promise<void> {
+  const pending = path.join(
+    userData,
+    "farol-next-state",
+    "installed-replacement.pending",
+  );
+  try {
+    await fs.lstat(pending);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw new Error("STARTUP_INSTALLED_REPLACEMENT_UNCONFIRMED", {
+      cause: error,
+    });
+  }
+  throw new Error("STARTUP_INSTALLED_REPLACEMENT_PENDING");
+}
 
 export class StartupPromotionLeaseReleaseError extends AggregateError {
   readonly releaseFailure: unknown;
@@ -54,10 +79,15 @@ export async function withStartupPromotionLease<T>(
 
   let primaryFailure: Readonly<{ error: unknown }> | undefined;
   try {
-    if (!(await ports.verify(lease))) {
+    const verify = async (): Promise<boolean> => {
+      if (!(await ports.verify(lease))) return false;
+      await assertInstalledReplacementAbsent(userData);
+      return true;
+    };
+    if (!(await verify())) {
       throw new Error("STARTUP_PROMOTION_LEASE_LOST");
     }
-    return await critical(() => ports.verify(lease));
+    return await critical(verify);
   } catch (error) {
     primaryFailure = { error };
     throw error;
