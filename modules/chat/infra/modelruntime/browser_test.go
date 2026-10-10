@@ -306,3 +306,34 @@ func TestDetachedCopiesAndParallelRechecksDoNotRetargetCapture(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+func TestOriginalBrowserResolverRefusesAbsentEffortInsteadOfManufacturingDefault(t *testing.T) {
+	// Models' generic catalogue can represent a no-effort model, but the actual
+	// current Browser app/port cannot produce such a capture. Keep that boundary
+	// explicit rather than widening the old producer through a consumer adapter.
+	policy := port.ModelPolicy{DefaultHarness: "browser", Harnesses: map[string]port.ModelHarnessPolicy{
+		"browser": {DefaultModel: "chatgpt", Models: map[string]port.ConfiguredModel{
+			"chatgpt": {Model: "controlled-model"},
+		}},
+	}}
+	profile := port.BrowserModelProfile{ID: "no-effort-profile", Executor: "browser", RuntimeModel: "controlled-model",
+		ModelID: "controlled-model", Required: port.RequiredControls{Model: true}}
+	for _, efforts := range [][]port.BrowserModelEffort{nil, {}} {
+		profile.Efforts = efforts
+		capture, err := appmodel.Resolve(intent.SHA256{}, policy, port.ModelRequest{}, []port.BrowserModelProfile{profile}, strings.Repeat("a", 64))
+		if capture != nil || err != appmodel.ProfileInvalid {
+			t.Fatalf("original Browser app manufactured an absent effort: capture=%v, error=%v", capture, err)
+		}
+	}
+	f := existingOwners(t)
+	f.capture.Selection.Effort = ""
+	f.capture.Resolution.Resolved = f.capture.Selection
+	f.capture.Resolution.RequestedEffort = ""
+	f.capture.Required.Effort = false
+	if f.capture.Selection.Valid() {
+		t.Fatal("existing Browser port unexpectedly accepted an absent effort")
+	}
+	if _, err := modelruntime.CaptureBrowser(f.capture, f.source, 100); err != modelruntime.Invalid {
+		t.Fatal("adapter manufactured a default for a capture the old producer cannot create")
+	}
+}

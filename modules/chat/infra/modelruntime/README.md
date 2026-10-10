@@ -41,6 +41,11 @@ They do not qualify production profiles, current provider controls, live account
 entitlement, native startup or any provider effect. Missing qualified production
 profiles stay a separate activation gate.
 
+The generic Models catalogue supports models with no effort. The current Browser
+producer requires nonempty compiled effort mappings and an already resolved
+nonempty effort. This adapter preserves that existing boundary: it does not
+manufacture a default or broaden the producer/port to accept a no-effort model.
+
 ```sh
 go test -race -count=1 ./modules/chat/infra/modelruntime
 go vet ./modules/chat/infra/modelruntime
