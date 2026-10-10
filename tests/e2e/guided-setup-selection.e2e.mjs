@@ -32,8 +32,9 @@ import {
 
 const uncheckedOverview = {
   ready: false,
+  signIn: "unknown",
   states: {
-    signin: "needed",
+    signin: "unknown",
     folders: "needed",
     connection: "needed",
     attachment: "needed",
@@ -49,6 +50,7 @@ const connectedOverview = {
 };
 const readyOverview = {
   ready: true,
+  signIn: uncheckedOverview.signIn,
   states: { ...connectedOverview.states, attachment: "verified" },
 };
 

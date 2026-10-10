@@ -28,8 +28,9 @@ import {
 
 const uncheckedOverview = {
   ready: false,
+  signIn: "unknown",
   states: {
-    signin: "needed",
+    signin: "unknown",
     folders: "needed",
     connection: "needed",
     attachment: "needed",
@@ -1120,6 +1121,7 @@ try {
       );
       await assertSetupOverview(legacyWindow, {
         ready: false,
+        signIn: uncheckedOverview.signIn,
         states: { ...uncheckedOverview.states, folders: "verified" },
       });
       report.checks.push(

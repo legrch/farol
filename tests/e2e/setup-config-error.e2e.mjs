@@ -273,8 +273,9 @@ try {
         }
         await assertSetupOverview(window, {
           ready: false,
+          signIn: "unknown",
           states: {
-            signin: "unavailable",
+            signin: "unknown",
             folders: "unavailable",
             connection: "unavailable",
             attachment: "unavailable",
