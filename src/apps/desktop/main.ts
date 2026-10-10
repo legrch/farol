@@ -3579,6 +3579,7 @@ async function stopAndConfirmComputerMcp(
   connector = secureMcpConnectorRuntime,
   inFlightStart: Promise<void> | null = null,
   core = desktopGoCore,
+  savedChat = savedChatBridgeRuntime,
 ): Promise<void> {
   if (!connector) throw new Error("CONNECTOR_STOP_UNCONFIRMED");
   const lifecycle = computerMcpLifecycle();
@@ -3589,7 +3590,6 @@ async function stopAndConfirmComputerMcp(
     stopConnector: () => connector.stop(),
     closeSavedChat: async () => {
       // Wait for admitted account work before closing its Browser endpoint.
-      const savedChat = savedChatBridgeRuntime;
       try {
         if (savedChat) {
           await savedChat.close();
@@ -11498,7 +11498,12 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
           name: "connector",
           close: async () => {
             try {
-              await stopAndConfirmComputerMcp(connector, inFlightStart, core);
+              await stopAndConfirmComputerMcp(
+                connector,
+                inFlightStart,
+                core,
+                savedChat,
+              );
             } finally {
               // Even an unconfirmed MCP drain must close account admission.
               // close() waits for already admitted work; it does not cancel Send
