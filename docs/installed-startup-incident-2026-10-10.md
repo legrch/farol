@@ -1,5 +1,47 @@
 # Installed startup blocked after unconfirmed shutdown
 
+## Normal Quit repair, 2026-10-10
+
+Source checkpoint `561900153bb620b3037a05d44c541119c7a7510a` fixes two
+concrete shutdown defects. Generic Quit previously invoked Go-core and connector
+closure concurrently, although MCP drain and admitted account work still needed
+the Go endpoint. The new desktop closer composition joins the original connector
+and saved-chat cleanup before starting the original Go retirement. A rejected
+dependent remains a separately named unconfirmed outcome; host cleanup does not
+convert it into success. Reentrant Quit never creates another cleanup attempt,
+and a dependency that settles after the original drain deadline cannot start a
+late Go retirement.
+
+The desktop now has one 60-second absolute Quit budget, with preparation capped
+at 10 seconds and 2 seconds reserved for its terminal receipt. Collection and
+cleanup spend that same budget. Timeout remains unconfirmed, retains the startup
+marker, and does not authorize replay. Healthy closure returns immediately after
+the actual children and receipt settle. Regression coverage includes a real child
+process whose delayed failure receipt must survive before process exit.
+
+Eight focused suites passed 179 tests; strict root TypeScript, production lint,
+owned-file formatting and diff checks passed. A fresh host-native R3 source review
+of `fc527f4b7fcbb7e29e34349765b3b5c530016a6d..561900153bb620b3037a05d44c541119c7a7510a`
+completed General, concurrency/reliability Specialists and Strong with ACCEPT,
+no findings and no reported limitations. Review certifies only its source scope.
+The first full native CI reported 11,785 passing tests and two release-resource
+failures: the previously reserved beta.5 package identity still had a beta.4
+resource version. The resource declaration is aligned without changing namespace
+or update channel; final CI and packaged/native/live evidence remain separate.
+
+The owner's later beta.3 working lifetime also lost its local Go backend and
+owned tunnel while the main window stayed open. Persisted connection readiness
+was not evidence of cloud polling. Its actual menu Quit retained a fresh
+`drained: false` receipt naming `go-core` and `connector` at
+`2026-10-10T03:46:28.972Z`. The two owner-reported catalogue failures are transport
+observations, not proof of a specific backend-exit cause. Old sessions and unknown
+operations must remain quarantined rather than resumed or retried.
+
+The owner selected the cloud task `Farol · Final Sync` for the development
+handoff. The prior local Lead was not the active counterpart. Source repair,
+local installation, normal connected Quit/reopen, and real cloud catalogue
+verification must each be reported with their own evidence.
+
 ## Confirmed incident
 
 On 2026-10-10, one hidden launch of the owner's installed Farol exited with
