@@ -40,11 +40,13 @@ const FIXTURE_BOOT = 1_758_000_000_000;
 // The opaque `ps -o lstart=` token this fixture's markers record.
 const FIXTURE_PROCESS_START = "Sat Sep 20 10:00:00 2026";
 const roots = [];
+const rootsWithUnconfirmedChildren = new Set();
 
 afterEach(async () => {
   await Promise.all(
     roots
       .splice(0)
+      .filter((root) => !rootsWithUnconfirmedChildren.has(root))
       .map((root) => fs.rm(root, { recursive: true, force: true })),
   );
 });
@@ -322,6 +324,13 @@ describe("promote-preview CLI as a process: the composition around a seeded prof
       { stdio: ["ignore", "pipe", "pipe"] },
     );
     const holderObservation = observeOwnedLineChild(holder);
+    rootsWithUnconfirmedChildren.add(f.root);
+    // Only this original child's confirmed close permits fixture deletion.
+    // A deadline or failed kill retains the disposable root for diagnosis.
+    void holderObservation.closed.then(
+      () => rootsWithUnconfirmedChildren.delete(f.root),
+      () => undefined,
+    );
     try {
       await holderObservation.waitForLine("ACQUIRED");
       const result = await f.cli("--apply", "--destination", f.destination);
@@ -330,8 +339,11 @@ describe("promote-preview CLI as a process: the composition around a seeded prof
       expect(await absent(f.destination)).toBe(true);
       expect(await absent(f.receipt)).toBe(true);
     } finally {
-      holder.kill("SIGKILL");
-      await holderObservation.closed;
+      try {
+        holder.kill("SIGKILL");
+      } finally {
+        await holderObservation.closed;
+      }
     }
     // With the holder gone, the same profile promotes.
     const after = await f.cli("--apply", "--destination", f.destination);
