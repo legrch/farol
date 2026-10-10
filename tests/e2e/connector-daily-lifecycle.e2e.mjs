@@ -43,7 +43,11 @@ const build = assertBuildIdentity(
     await fs.readFile(path.join(resources, "build-identity.json"), "utf8"),
   ),
 );
-assert.match(build.version, /-owner\.beta\.[0-9]+$/u, "DAILY_OWNER_BETA_REQUIRED");
+assert.match(
+  build.version,
+  /-owner\.beta\.[0-9]+$/u,
+  "DAILY_OWNER_BETA_REQUIRED",
+);
 assertExactSourceIdentity(sourceIdentity(root), build);
 assertExactSourceIdentity(sourceIdentity(root), artifact);
 assert.equal(artifact.buildId, build.buildId);
