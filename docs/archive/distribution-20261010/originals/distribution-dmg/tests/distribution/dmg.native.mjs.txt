@@ -1,0 +1,81 @@
+// A real macOS disk-image/copy test using tiny synthetic app bytes. It does
+// not launch Farol, verify an accepted candidate, or prove recipient/update UX.
+import assert from "node:assert/strict";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { treeDigest } from "../../tooling/artifact-digest.mjs";
+import {
+  writeImage,
+  withMountedImage,
+  assertVolume,
+  runSystem,
+} from "../../tooling/distribution/dmg.mjs";
+
+assert.equal(process.platform, "darwin");
+const root = await fs.realpath(
+  await fs.mkdtemp(path.join(os.tmpdir(), "farol-dmg-native-")),
+);
+try {
+  const app = path.join(root, "Farol.app");
+  await fs.mkdir(path.join(app, "Contents/MacOS"), { recursive: true });
+  await fs.mkdir(path.join(app, "Contents/Resources"));
+  await fs.writeFile(
+    path.join(app, "Contents/MacOS/fixture"),
+    "#!/bin/sh\nexit 0\n",
+    { mode: 0o755 },
+  );
+  await fs.writeFile(
+    path.join(app, "Contents/Resources/fixture.txt"),
+    "synthetic fixture, no release/runtime proof\n",
+  );
+  await fs.symlink(
+    "fixture.txt",
+    path.join(app, "Contents/Resources/relative-link"),
+  );
+  const expected = {
+    version: "0.1.8-owner.beta.1",
+    buildVersion: "10",
+    channel: "github-owner-beta",
+    arch: "arm64",
+    bundleId: "local.farol.next.preview",
+    appSha256: await treeDigest(app),
+  };
+  const result = await writeImage({
+    app,
+    expected,
+    output: path.join(root, "image"),
+  });
+  const copy = path.join(root, "disposable-applications/Farol.app");
+  let mountPath;
+  await withMountedImage(result.image, async (mount) => {
+    mountPath = mount;
+    await assertVolume(mount, expected.appSha256);
+    runSystem("/usr/bin/ditto", [path.join(mount, "Farol.app"), copy]);
+    assert.equal(await treeDigest(copy), expected.appSha256);
+    assert.equal(
+      (await fs.stat(path.join(copy, "Contents/MacOS/fixture"))).mode & 0o777,
+      0o755,
+    );
+    assert.equal(
+      await fs.readlink(path.join(copy, "Contents/Resources/relative-link")),
+      "fixture.txt",
+    );
+  });
+  await assert.rejects(fs.lstat(mountPath), { code: "ENOENT" });
+  assert.equal(await treeDigest(app), expected.appSha256);
+  console.log(
+    JSON.stringify({
+      result: "PASS",
+      scope: "native disposable DMG mount/list/copy/unmount",
+      appSha256: expected.appSha256,
+      dmgSha256: result.sha256,
+      size: result.size,
+      acceptedCandidate: false,
+      firstLaunchBaseline: "NOT_RUN",
+      recipientAccount: "NOT_RUN",
+    }),
+  );
+} finally {
+  await fs.rm(root, { recursive: true });
+}

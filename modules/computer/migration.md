@@ -1,5 +1,35 @@
 # Computer migration evidence
 
+> Historical preparation checkpoint. The evidence below records the original
+> Computer preparation slice based on
+> `1eb30bd23df22c9581d277280f8e0699612786b5`, including its subsequent read/list
+> safety fixes. References to "current" owners, installed status, pending gates
+> and provider exclusions describe that checkpoint, not the latest source or
+> installed state. Semantic reconciliation against accepted source
+> `aa242b08f755618db8081b638e013b24ec1e28bb` retains these original safety
+> obligations and evidence limits; it does not establish fresh execution,
+> packaging, installation or live-provider acceptance.
+
+For current source ownership, follow [Go authority](domain/authority/),
+[workspace application services](app/services/workspace/),
+[published workspace contracts](contracts/workspace/),
+[native filesystem guards](infra/filesystem/), the
+[durable authority owner](infra/repos/access/), and
+[trusted operation composition](../../boot/computer.go).
+
+Current [file-policy meanings](domain/authority/filepolicy.go) distinguish
+trusted root-scoped `approved-roots-v1` from legacy protected-file policy.
+[Native policy](infra/filesystem/workspace.go) and
+[boot selection](../../boot/computerfilepolicy.go) must match the approved mode.
+Root-scoped policy removes implicit filename bans while retaining explicit
+exclusions, exact scope, physical-root/no-follow guards, byte bounds and race
+checks. The mandatory-name description below records the historical policy.
+
+Use [AGENTS.md](../../AGENTS.md) for current review timing and the
+General/Specialists -> Strong/R3 -> Frontier/R4 ladder. The unavailable-provider
+paragraph below preserves a preparation-era constraint and does not replace
+the current review policy.
+
 Base: `1eb30bd23df22c9581d277280f8e0699612786b5`.
 This is a preparation slice. No installed capability or active executor has
 switched to Go. Shared wire schemas, composition and the root module belong to

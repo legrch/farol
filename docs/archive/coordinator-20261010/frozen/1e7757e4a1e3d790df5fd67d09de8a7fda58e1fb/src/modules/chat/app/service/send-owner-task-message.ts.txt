@@ -1,0 +1,325 @@
+import type {
+  OwnerTaskMessageDependencies,
+  OwnerTaskMessageLifetime,
+  OwnerTaskMessageOperation,
+  OwnerTaskMessageOutcome,
+  OwnerTaskMessageRequest,
+  OwnerTaskMessageResult,
+  OwnerTaskMessageSelection,
+  OwnerTaskNativeMessage,
+} from "../port/owner-task-messages";
+import { HandoffNotSubmittedError } from "./persistent-codex-handoff";
+
+const uuid =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+const reference = /^[A-Za-z0-9_-]{1,200}$/u;
+
+function parse(input: unknown): OwnerTaskMessageRequest | null {
+  if (typeof input !== "object" || input === null || Array.isArray(input))
+    return null;
+  const value = input as Record<string, unknown>;
+  const keys = ["key", "selectionRef", "message", "mode"];
+  if (value.mode === "steer-current") keys.push("expectedTurnRef");
+  else if (value.mode !== "native-queue") return null;
+  if (
+    Object.keys(value).length !== keys.length ||
+    !keys.every((key) => Object.hasOwn(value, key)) ||
+    typeof value.key !== "string" ||
+    !uuid.test(value.key) ||
+    typeof value.selectionRef !== "string" ||
+    !reference.test(value.selectionRef) ||
+    typeof value.message !== "string" ||
+    !value.message.trim() ||
+    value.message.includes("\0") ||
+    new TextEncoder().encode(value.message).byteLength > 8_192
+  )
+    return null;
+  const common = {
+    key: value.key.toLowerCase(),
+    selectionRef: value.selectionRef,
+    message: value.message,
+  };
+  if (value.mode === "native-queue") return { ...common, mode: value.mode };
+  if (
+    typeof value.expectedTurnRef !== "string" ||
+    !reference.test(value.expectedTurnRef)
+  )
+    return null;
+  return {
+    ...common,
+    mode: value.mode,
+    expectedTurnRef: value.expectedTurnRef,
+  };
+}
+
+function snapshot(
+  selection: OwnerTaskMessageSelection,
+): OwnerTaskMessageSelection {
+  return {
+    ...selection,
+    capabilities: [...selection.capabilities],
+    state: { ...selection.state },
+  };
+}
+
+function identity(selection: OwnerTaskMessageSelection): readonly string[] {
+  return [
+    selection.ownerScope,
+    selection.threadId,
+    selection.projectId,
+    selection.workspaceId,
+    selection.physicalBinding,
+  ];
+}
+
+function sameSelection(
+  before: OwnerTaskMessageSelection,
+  after: OwnerTaskMessageSelection,
+): boolean {
+  return (
+    identity(before).every((part, index) => part === identity(after)[index]) &&
+    before.runtimeBinding === after.runtimeBinding &&
+    before.selectionRevision === after.selectionRevision
+  );
+}
+
+function eligibility(
+  selection: OwnerTaskMessageSelection,
+  request: OwnerTaskMessageRequest,
+): string | null {
+  if (!selection.capabilities.includes(request.mode))
+    return "capability_unavailable";
+  if (selection.state.kind === "unavailable") return "state_unavailable";
+  // Native enqueue is not a resume or an approval decision. Unloaded/paused
+  // tasks may retain the item until the native owner makes them runnable.
+  if (request.mode === "native-queue") return null;
+  if (
+    selection.state.kind === "interrupted" ||
+    (selection.state.kind === "active" && selection.state.needsNativeInput)
+  )
+    return "needs_native_input";
+  if (selection.state.kind === "not-loaded") return "thread_not_loaded";
+  if (selection.state.kind !== "active") return "turn_not_active";
+  if (selection.state.turnRef !== request.expectedTurnRef)
+    return "turn_changed";
+  return null;
+}
+
+/**
+ * Branch-only application slice. Not composed into the production catalogue.
+ * No implicit target, resume, next-turn fallback, sender loop, or local queue.
+ */
+export class SendOwnerTaskMessage {
+  constructor(private readonly dependencies: OwnerTaskMessageDependencies) {}
+
+  private lifetimeReason(
+    lifetime: OwnerTaskMessageLifetime,
+    expiresAt: number = lifetime.deadlineAt,
+  ): string | null {
+    if (lifetime.signal.aborted) return "cancelled";
+    const now = this.dependencies.now();
+    if (
+      !Number.isSafeInteger(now) ||
+      now < 0 ||
+      !Number.isSafeInteger(lifetime.deadlineAt) ||
+      lifetime.deadlineAt < 0 ||
+      !Number.isSafeInteger(expiresAt) ||
+      expiresAt < 0 ||
+      now >= Math.min(lifetime.deadlineAt, expiresAt)
+    )
+      return "admission_expired";
+    return null;
+  }
+
+  private async fresh(
+    request: OwnerTaskMessageRequest,
+    initial: OwnerTaskMessageSelection,
+    lifetime: OwnerTaskMessageLifetime,
+  ): Promise<OwnerTaskMessageSelection> {
+    const before = this.lifetimeReason(lifetime, initial.expiresAt);
+    if (before) throw new HandoffNotSubmittedError(before);
+    const observed = await this.dependencies.access.inspect(
+      request.selectionRef,
+      lifetime,
+    );
+    if (!observed) throw new HandoffNotSubmittedError("selection_unavailable");
+    const current = snapshot(observed);
+    const after = this.lifetimeReason(
+      lifetime,
+      Math.min(initial.expiresAt, current.expiresAt),
+    );
+    if (after) throw new HandoffNotSubmittedError(after);
+    if (!sameSelection(initial, current))
+      throw new HandoffNotSubmittedError("selection_changed");
+    if (!current.capabilities.includes(request.mode))
+      throw new HandoffNotSubmittedError("capability_unavailable");
+    return current;
+  }
+
+  private async replay(
+    operation: OwnerTaskMessageOperation,
+    digest: string,
+    request: OwnerTaskMessageRequest,
+    selection: OwnerTaskMessageSelection,
+    lifetime: OwnerTaskMessageLifetime,
+  ): Promise<OwnerTaskMessageResult> {
+    if (operation.digest !== digest)
+      return { status: "refused", reason: "key_conflict" };
+    try {
+      await this.fresh(request, selection, lifetime);
+    } catch {
+      return { status: "refused", reason: "selection_unavailable" };
+    }
+    return {
+      ...(operation.outcome ?? { status: "outcome-unknown" }),
+      operationId: request.key,
+      historical: true,
+    };
+  }
+
+  async send(
+    input: unknown,
+    lifetime: OwnerTaskMessageLifetime,
+  ): Promise<OwnerTaskMessageResult> {
+    // Copy the request and fixed budget before any await. Cancellation remains
+    // live, but mutation of a caller object cannot retarget or extend admission.
+    lifetime = { deadlineAt: lifetime.deadlineAt, signal: lifetime.signal };
+    const request = parse(input);
+    if (!request) return { status: "refused", reason: "input_invalid" };
+    const expired = this.lifetimeReason(lifetime);
+    if (expired) return { status: "refused", reason: expired };
+    let selection: OwnerTaskMessageSelection | null;
+    try {
+      const observed = await this.dependencies.access.inspect(
+        request.selectionRef,
+        lifetime,
+      );
+      selection = observed ? snapshot(observed) : null;
+    } catch {
+      return { status: "refused", reason: "selection_unavailable" };
+    }
+    if (!selection)
+      return { status: "refused", reason: "selection_unavailable" };
+    const afterInspection = this.lifetimeReason(lifetime, selection.expiresAt);
+    if (afterInspection) return { status: "refused", reason: afterInspection };
+    let digest: string;
+    let prior: OwnerTaskMessageOperation | null;
+    try {
+      digest = this.dependencies.digest(
+        JSON.stringify([
+          "owner-task-message-v1",
+          ...identity(selection),
+          request.mode,
+          request.mode === "steer-current" ? request.expectedTurnRef : null,
+          request.message,
+        ]),
+      );
+      if (!/^[a-f0-9]{64}$/u.test(digest))
+        return { status: "refused", reason: "digest_invalid" };
+      prior = await this.dependencies.journal.read(request.key);
+    } catch {
+      return { status: "refused", reason: "journal_unavailable" };
+    }
+    if (prior) return this.replay(prior, digest, request, selection, lifetime);
+    const reason =
+      this.lifetimeReason(lifetime, selection.expiresAt) ??
+      eligibility(selection, request);
+    if (reason) return { status: "refused", reason };
+    try {
+      const claim = await this.dependencies.journal.claim(request.key, digest);
+      if (claim.status === "existing")
+        return this.replay(
+          claim.operation,
+          digest,
+          request,
+          selection,
+          lifetime,
+        );
+    } catch {
+      // This invocation did not send, but an unclassified claim failure can
+      // hide another concurrent claimant. Do not assert logical non-submission
+      // or replace that claimant's receipt. Reconcile the same operation key.
+      return {
+        status: "outcome-unknown",
+        operationId: request.key,
+        historical: false,
+      };
+    }
+
+    let submitted = false;
+    const delivery: { response: OwnerTaskMessageOutcome | null } = {
+      response: null,
+    };
+    let outcome: OwnerTaskMessageOutcome;
+    let current = selection;
+    try {
+      outcome = await this.dependencies.gate.run(
+        async () => {
+          current = await this.fresh(request, selection, lifetime);
+          const denied = eligibility(current, request);
+          if (denied) throw new HandoffNotSubmittedError(denied);
+        },
+        async () => {
+          const denied = this.lifetimeReason(
+            lifetime,
+            Math.min(selection.expiresAt, current.expiresAt),
+          );
+          if (denied) throw new HandoffNotSubmittedError(denied);
+          const common = {
+            threadId: current.threadId,
+            key: request.key,
+            message: request.message,
+            deadlineAt: Math.min(
+              lifetime.deadlineAt,
+              selection.expiresAt,
+              current.expiresAt,
+            ),
+          };
+          let native: OwnerTaskNativeMessage;
+          if (request.mode === "steer-current") {
+            if (
+              current.state.kind !== "active" ||
+              selection.state.kind !== "active" ||
+              current.state.turnId !== selection.state.turnId ||
+              current.state.turnRef !== request.expectedTurnRef
+            )
+              throw new HandoffNotSubmittedError("turn_changed");
+            native = {
+              ...common,
+              mode: "steer-current",
+              expectedTurnId: current.state.turnId,
+            };
+          } else native = { ...common, mode: "native-queue" };
+          // No asynchronous work between the final check and the sole send.
+          submitted = true;
+          delivery.response = await this.dependencies.sender.send(native);
+          if (delivery.response.status === "not-submitted")
+            throw new HandoffNotSubmittedError(delivery.response.reason);
+          if (delivery.response.status === "outcome-unknown")
+            throw new Error("OWNER_MESSAGE_DELIVERY_UNKNOWN");
+          return delivery.response;
+        },
+        (error) => error instanceof HandoffNotSubmittedError,
+      );
+    } catch (error) {
+      if (!submitted)
+        outcome = {
+          status: "not-submitted",
+          reason:
+            error instanceof HandoffNotSubmittedError
+              ? error.message
+              : "control_preflight_unavailable",
+        };
+      else if (delivery.response?.status === "not-submitted")
+        outcome = delivery.response;
+      else outcome = { status: "outcome-unknown" };
+    }
+    try {
+      await this.dependencies.journal.finish(request.key, digest, outcome);
+    } catch {
+      if (outcome.status !== "not-submitted")
+        outcome = { status: "outcome-unknown" };
+    }
+    return { ...outcome, operationId: request.key, historical: false };
+  }
+}

@@ -1,0 +1,177 @@
+export const REPOSITORY = "legrch/farol-releases";
+export const DIGEST = /^[a-f0-9]{64}$/u;
+export const BETA_VERSION =
+  /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-owner\.beta\.(0|[1-9][0-9]*)$/u;
+
+export function requireValue(condition, code) {
+  if (!condition) throw new Error(code);
+}
+
+// This alpha channel is already owned by Release. Final bundle identity is
+// supplied explicitly; this tool never renames a sealed package.
+export function releaseSelection(value) {
+  requireValue(
+    value && typeof value === "object",
+    "DISTRIBUTION_BINDING_INVALID",
+  );
+  requireValue(
+    ["version", "buildVersion", "channel", "arch", "bundleId"].every(
+      (key) => typeof value[key] === "string",
+    ),
+    "DISTRIBUTION_BINDING_INVALID",
+  );
+  requireValue(
+    BETA_VERSION.test(value.version),
+    "DISTRIBUTION_VERSION_INVALID",
+  );
+  requireValue(
+    /^[1-9][0-9]{0,8}$/u.test(value.buildVersion),
+    "DISTRIBUTION_BUILD_INVALID",
+  );
+  requireValue(
+    value.channel === "github-owner-beta",
+    "DISTRIBUTION_CHANNEL_INVALID",
+  );
+  requireValue(value.arch === "arm64", "DISTRIBUTION_ARCH_UNSUPPORTED");
+  requireValue(
+    ["local.farol.next.preview", "io.github.legrch.farol"].includes(
+      value.bundleId,
+    ),
+    "DISTRIBUTION_BUNDLE_INVALID",
+  );
+  return Object.freeze({
+    version: value.version,
+    buildVersion: value.buildVersion,
+    channel: value.channel,
+    arch: value.arch,
+    bundleId: value.bundleId,
+  });
+}
+
+export function binding(value) {
+  const selected = releaseSelection(value);
+  requireValue(
+    typeof value.appSha256 === "string" && DIGEST.test(value.appSha256),
+    "DISTRIBUTION_APP_DIGEST_INVALID",
+  );
+  return Object.freeze({ ...selected, appSha256: value.appSha256 });
+}
+
+// Preparation pins the image and script bytes. It does not measure an app
+// tree or accept the Release first-install/update descriptor.
+export function bootstrapSelection(value) {
+  const selected = releaseSelection(value);
+  requireValue(
+    Object.keys(value).every((key) => Object.hasOwn(selected, key)),
+    "DISTRIBUTION_BOOTSTRAP_SELECTION_INVALID",
+  );
+  return selected;
+}
+
+// The maintainer selects accepted clean source independently of the descriptor.
+// A source selection binds inputs; it does not grant release/integration approval.
+export function sourceSelection(value) {
+  requireValue(
+    value &&
+      typeof value === "object" &&
+      Object.keys(value).length === 2 &&
+      Object.keys(value).every((key) =>
+        ["commit", "treeDigest"].includes(key),
+      ) &&
+      typeof value.commit === "string" &&
+      value.commit.length === 40 &&
+      /^[a-f0-9]{40}$/u.test(value.commit) &&
+      typeof value.treeDigest === "string" &&
+      value.treeDigest.length === 64 &&
+      DIGEST.test(value.treeDigest),
+    "DISTRIBUTION_SOURCE_SELECTION_INVALID",
+  );
+  return Object.freeze({
+    commit: value.commit,
+    treeDigest: value.treeDigest,
+    dirty: false,
+  });
+}
+
+export function assertArtifact(artifact, expected) {
+  binding(expected);
+  requireValue(artifact?.sourceDirty === false, "DISTRIBUTION_DIRTY_PACKAGE");
+  requireValue(
+    artifact?.version === expected.version &&
+      artifact.buildVersion === expected.buildVersion &&
+      artifact.updateChannel === expected.channel &&
+      artifact.bundleId === expected.bundleId &&
+      artifact.artifactSha256 === expected.appSha256,
+    "DISTRIBUTION_PACKAGE_MISMATCH",
+  );
+  requireValue(
+    artifact.runtime?.platform === "darwin" &&
+      artifact.runtime?.arch === expected.arch,
+    "DISTRIBUTION_PACKAGE_ARCH_MISMATCH",
+  );
+  requireValue(
+    artifact.signing?.kind === "unsigned" && artifact.notarized === false,
+    "DISTRIBUTION_SIGNING_MISMATCH",
+  );
+}
+
+export function imageName(expected) {
+  releaseSelection(expected);
+  return `Farol-${expected.version}-macos-${expected.arch}.dmg`;
+}
+
+export function releaseUrl(expected, name) {
+  releaseSelection(expected);
+  requireValue(
+    name === imageName(expected) || name === "install-alpha.sh",
+    "DISTRIBUTION_ASSET_INVALID",
+  );
+  return `https://github.com/${REPOSITORY}/releases/download/v${expected.version}/${name}`;
+}
+
+export function parseOptions(args, required) {
+  const result = {};
+  for (let index = 0; index < args.length; index += 2) {
+    const key = args[index];
+    requireValue(
+      key?.startsWith("--") &&
+        required.includes(key.slice(2)) &&
+        typeof args[index + 1] === "string" &&
+        !args[index + 1].startsWith("--") &&
+        !Object.hasOwn(result, key.slice(2)),
+      "DISTRIBUTION_ARGUMENTS_INVALID",
+    );
+    result[key.slice(2)] = args[index + 1];
+  }
+  requireValue(
+    required.every((key) => Object.hasOwn(result, key)),
+    "DISTRIBUTION_ARGUMENTS_INVALID",
+  );
+  return result;
+}
+
+export function optionReleaseSelection(options) {
+  return releaseSelection({
+    version: options.version,
+    buildVersion: options["build-version"],
+    channel: options.channel,
+    arch: options.arch,
+    bundleId: options["bundle-id"],
+  });
+}
+
+export function optionBinding(options) {
+  return binding({
+    ...optionReleaseSelection(options),
+    appSha256: options["app-sha256"],
+  });
+}
+
+export const RELEASE_OPTIONS = [
+  "version",
+  "build-version",
+  "channel",
+  "arch",
+  "bundle-id",
+];
+export const BINDING_OPTIONS = [...RELEASE_OPTIONS, "app-sha256"];

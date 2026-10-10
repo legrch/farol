@@ -1,0 +1,369 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; base-uri 'none'; connect-src 'none'"
+    />
+    <title>Farol · Revision 4 review gallery</title>
+    <style>
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        padding: 32px;
+        background: #e9ebef;
+        font:
+          14px/1.5 -apple-system,
+          BlinkMacSystemFont,
+          sans-serif;
+        color: #30343d;
+      }
+      header {
+        display: flex;
+        gap: 24px;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 28px;
+      }
+      header h1 {
+        font-size: 24px;
+        letter-spacing: -0.6px;
+        margin: 0;
+      }
+      p {
+        color: #606978;
+        font-size: 13px;
+      }
+      header p {
+        margin: 6px 0;
+      }
+      a {
+        color: #5b49a6;
+      }
+      nav {
+        display: flex;
+        gap: 20px;
+      }
+      section {
+        margin: 26px 0 34px;
+      }
+      section > h2 {
+        font-size: 17px;
+        margin: 0 0 16px;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 22px;
+      }
+      .settings {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+      article {
+        min-width: 0;
+      }
+      img {
+        display: block;
+        width: 100%;
+        border: 1px solid #c6cad3;
+        border-radius: 8px;
+        box-shadow: 0 6px 22px #0001;
+      }
+      h3 {
+        font-size: 14px;
+        margin: 12px 0 4px;
+      }
+      article p {
+        margin: 0 0 12px;
+      }
+      a:focus-visible {
+        outline: 2px solid #6750b8;
+        outline-offset: 4px;
+      }
+      .caption {
+        max-width: 90ch;
+      }
+      @media (max-width: 760px) {
+        body {
+          padding: 18px;
+        }
+        .grid {
+          grid-template-columns: 1fr;
+        }
+        header {
+          flex-wrap: wrap;
+        }
+        nav {
+          flex-wrap: wrap;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div>
+        <h1>Farol / Revision 4</h1>
+        <p>
+          UI approved. One composition. Clear settings. Quiet updates. Dock icon
+          pending.
+        </p>
+      </div>
+      <nav>
+        <a href="index.html?revision=4">Interactive prototype</a
+        ><a href="brand.html">Dock icons</a><a href="menu-bar.html">Menu bar</a>
+      </nav>
+    </header>
+    <section>
+      <h2>One layout in either theme</h2>
+      <div class="grid">
+        <article>
+          <a
+            href="index.html?revision=4&theme=light&page=settings&sub=appearance"
+            ><img
+              src="screenshots-v4/light-appearance.png"
+              alt="Light / Appearance"
+              loading="lazy"
+          /></a>
+          <h3>Light / Appearance</h3>
+          <p>Exactly the same layout and controls in both appearances.</p>
+        </article>
+        <article>
+          <a
+            href="index.html?revision=4&theme=dark&page=settings&sub=appearance"
+            ><img
+              src="screenshots-v4/dark-appearance.png"
+              alt="Graphite / Appearance"
+              loading="lazy"
+          /></a>
+          <h3>Graphite / Appearance</h3>
+          <p>Iris remains changeable independently of the Dock identity.</p>
+        </article>
+        <article>
+          <a href="index.html?revision=4&theme=light&page=settings&sub=general"
+            ><img
+              src="screenshots-v4/general.png"
+              alt="General, in plain language"
+              loading="lazy"
+          /></a>
+          <h3>General, in plain language</h3>
+          <p>
+            Start page and Sidebar. Extra Activity fields belong inside an
+            event.
+          </p>
+        </article>
+        <article>
+          <a href="index.html?revision=4&theme=light&page=settings&sub=folders"
+            ><img
+              src="screenshots-v4/folders.png"
+              alt="Folders / Read-only or Read & write"
+              loading="lazy"
+          /></a>
+          <h3>Folders / Read-only or Read & write</h3>
+          <p>
+            Native folder selection; approval still applies to file changes.
+          </p>
+        </article>
+      </div>
+    </section>
+    <section>
+      <h2>Know what is ready</h2>
+      <div class="grid">
+        <article>
+          <a href="index.html?revision=4&theme=light&state=ready"
+            ><img
+              src="screenshots-v4/home-ready.png"
+              alt="Home / Connection ready"
+              loading="lazy"
+          /></a>
+          <h3>Home / Connection ready</h3>
+          <p>
+            Connection verified; a folder that needs a check remains separately
+            visible.
+          </p>
+        </article>
+        <article>
+          <a href="index.html?revision=4&theme=light&state=attention"
+            ><img
+              src="screenshots-v4/home-unconfirmed.png"
+              alt="Home / Unconfirmed check"
+              loading="lazy"
+          /></a>
+          <h3>Home / Unconfirmed check</h3>
+          <p>A local service does not turn an unknown result into success.</p>
+        </article>
+      </div>
+    </section>
+    <section>
+      <h2>Updates, when you choose</h2>
+      <div class="grid">
+        <article>
+          <a
+            href="index.html?revision=4&theme=light&state=ready&update=available&auto=off"
+            ><img
+              src="screenshots-v4/update-notice.png"
+              alt="One quiet notice"
+              loading="lazy"
+          /></a>
+          <h3>One quiet notice</h3>
+          <p>
+            No forced modal. After acknowledgement, manual update review remains
+            available.
+          </p>
+        </article>
+        <article>
+          <a
+            href="index.html?revision=4&theme=light&state=ready&update=available&dialog=update&auto=off"
+            ><img
+              src="screenshots-v4/update-available.png"
+              alt="Manual update review"
+              loading="lazy"
+          /></a>
+          <h3>Manual update review</h3>
+          <p>
+            Version comparison, release notes and one compact automatic
+            preference.
+          </p>
+        </article>
+        <article>
+          <a
+            href="index.html?revision=4&theme=light&state=working&page=settings&sub=updates&update=ready&auto=on"
+            ><img
+              src="screenshots-v4/updates-settings.png"
+              alt="A remembered preference"
+              loading="lazy"
+          /></a>
+          <h3>A remembered preference</h3>
+          <p>Download in the background; install on a normal app quit.</p>
+        </article>
+        <article>
+          <a
+            href="index.html?revision=4&theme=dark&state=working&update=ready&dialog=update&auto=on"
+            ><img
+              src="screenshots-v4/update-auto-ready.png"
+              alt="Downloaded with work open"
+              loading="lazy"
+          /></a>
+          <h3>Downloaded with work open</h3>
+          <p>
+            Click reviews the downloaded update. It does not immediately
+            restart.
+          </p>
+        </article>
+        <article>
+          <a
+            href="index.html?revision=4&theme=dark&state=working&update=ready&dialog=update&auto=on"
+            ><img
+              src="screenshots-v4/update-interrupt-confirm.png"
+              alt="Interrupt & Update"
+              loading="lazy"
+          /></a>
+          <h3>Interrupt & Update</h3>
+          <p>
+            An explicit confirmation permits interruption. Cancel receives
+            initial focus.
+          </p>
+        </article>
+        <article>
+          <a
+            href="index.html?revision=4&theme=light&state=ready&update=failed&dialog=update&auto=off"
+            ><img
+              src="screenshots-v4/update-failed.png"
+              alt="Failure without a permanent alarm"
+              loading="lazy"
+          /></a>
+          <h3>Failure without a permanent alarm</h3>
+          <p>
+            After review, the warning becomes a neutral update-status entry.
+          </p>
+        </article>
+      </div>
+    </section>
+    <section>
+      <h2>Menu-bar reference and rejected Dock materials</h2>
+      <p>
+        <strong>Dock icon pending:</strong> the three glossy material studies
+        below were rejected. Preserve the current production icon and explore a
+        simpler replacement separately.
+        <a href="DECISIONS.md">Read the owner decision</a>.
+      </p>
+      <div class="grid">
+        <article>
+          <a href="brand.html"
+            ><img
+              src="screenshots-v4/signal-lens-dock-concepts.png"
+              alt="Three Dock materials"
+              loading="lazy"
+          /></a>
+          <h3>Rejected Dock materials</h3>
+          <p>Iris Glass, Prism and Aurora Enamel. No yellow center.</p>
+        </article>
+        <article>
+          <a href="brand.html"
+            ><img
+              src="screenshots-v4/signal-lens-dock-context.png"
+              alt="In the Dock"
+              loading="lazy"
+          /></a>
+          <h3>Rejected studies in Dock context</h3>
+          <p>Switch the selected icon and desktop backdrop.</p>
+        </article>
+        <article>
+          <a href="menu-bar.html?mark=lens"
+            ><img
+              src="screenshots-v4/menu-bar-running.png"
+              alt="A brief menu-bar presence"
+              loading="lazy"
+          /></a>
+          <h3>A brief menu-bar presence</h3>
+          <p>
+            Status and one-click access back to Farol. Full control stays in the
+            app.
+          </p>
+        </article>
+      </div>
+    </section>
+    <section>
+      <h2>Compact windows</h2>
+      <div class="grid">
+        <article>
+          <a
+            href="index.html?revision=4&theme=dark&page=settings&sub=appearance"
+            ><img
+              src="screenshots-v4/compact-appearance.png"
+              alt="Appearance at 500px"
+              loading="lazy"
+          /></a>
+          <h3>Appearance at 500px</h3>
+          <p>The page list becomes a sidebar overlay.</p>
+        </article>
+        <article>
+          <a
+            href="index.html?revision=4&theme=light&state=working&update=ready&dialog=update&auto=off"
+            ><img
+              src="screenshots-v4/compact-update-confirm.png"
+              alt="Clear interruption warning"
+              loading="lazy"
+          /></a>
+          <h3>Clear interruption warning</h3>
+          <p>Cancel and Interrupt & Update stay visible.</p>
+        </article>
+      </div>
+    </section>
+    <p class="caption">
+      Synthetic data and design behavior only. No live ChatGPT, download,
+      installation or native menu is connected. Update preferences persist only
+      within the preview browser origin. Opening a confirmation example requires
+      clicking Restart & Update in its review sheet.
+    </p>
+    <p class="caption">
+      <a href="design-notes.md">Implementation contract and verification</a> ·
+      <a href="v3/gallery.html">Revision 3</a> ·
+      <a href="v2/index.html">Revision 2</a> ·
+      <a href="gallery-v1.html">Revision 1</a>
+    </p>
+  </body>
+</html>

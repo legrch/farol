@@ -1,0 +1,286 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; base-uri 'none'; connect-src 'none'"
+    />
+    <title>Farol · Revision 3 review gallery</title>
+    <style>
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        padding: 32px;
+        background: #e9ebef;
+        font:
+          14px/1.5 -apple-system,
+          BlinkMacSystemFont,
+          sans-serif;
+        color: #30343d;
+      }
+      header {
+        display: flex;
+        gap: 24px;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 28px;
+      }
+      header h1 {
+        font-size: 24px;
+        letter-spacing: -0.6px;
+        margin: 0;
+      }
+      p {
+        color: #606978;
+        font-size: 13px;
+      }
+      header p {
+        margin: 6px 0;
+      }
+      a {
+        color: #5b49a6;
+      }
+      nav {
+        display: flex;
+        gap: 20px;
+      }
+      section {
+        margin: 26px 0 34px;
+      }
+      section > h2 {
+        font-size: 17px;
+        margin: 0 0 16px;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 22px;
+      }
+      .settings {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+      article {
+        min-width: 0;
+      }
+      img {
+        display: block;
+        width: 100%;
+        border: 1px solid #c6cad3;
+        border-radius: 8px;
+        box-shadow: 0 6px 22px #0001;
+      }
+      h3 {
+        font-size: 14px;
+        margin: 12px 0 4px;
+      }
+      article p {
+        margin: 0 0 12px;
+      }
+      a:focus-visible {
+        outline: 2px solid #6750b8;
+        outline-offset: 4px;
+      }
+      .caption {
+        max-width: 90ch;
+      }
+      @media (max-width: 760px) {
+        body {
+          padding: 18px;
+        }
+        .grid {
+          grid-template-columns: 1fr;
+        }
+        header {
+          flex-wrap: wrap;
+        }
+        nav {
+          flex-wrap: wrap;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div>
+        <h1>Farol / Revision 3</h1>
+        <p>
+          One toolbar. Home first. Iris as the starting accent. Synthetic data.
+        </p>
+      </div>
+      <nav>
+        <a href="index.html?revision=3">Interactive prototype</a
+        ><a href="brand.html">Abstract marks</a
+        ><a href="menu-bar.html">Menu bar</a>
+      </nav>
+    </header>
+    <section>
+      <h2>One layout, two themes</h2>
+      <div class="grid">
+        <article>
+          <a href="index.html?theme=light&page=home"
+            ><img
+              src="../screenshots-v3/light-home.png"
+              alt="Light / Home"
+              loading="lazy"
+          /></a>
+          <h3>Light / Home</h3>
+          <p>
+            Current work, connection and recent activity. Home is the first rail
+            item.
+          </p>
+        </article>
+        <article>
+          <a href="index.html?theme=dark&page=home"
+            ><img
+              src="../screenshots-v3/dark-home.png"
+              alt="Graphite / Home"
+              loading="lazy"
+          /></a>
+          <h3>Graphite / Home</h3>
+          <p>
+            The same information and hierarchy, with restrained Iris selection.
+          </p>
+        </article>
+      </div>
+    </section>
+    <section>
+      <h2>The title belongs in the toolbar</h2>
+      <div class="grid">
+        <article>
+          <a href="index.html?theme=light&page=settings&sub=appearance"
+            ><img
+              src="../screenshots-v3/light-appearance.png"
+              alt="Settings / Appearance"
+              loading="lazy"
+          /></a>
+          <h3>Settings / Appearance</h3>
+          <p>
+            Navigation, sidebar collapse, active page and search share one upper
+            bar.
+          </p>
+        </article>
+        <article>
+          <a href="index.html?theme=dark&page=activity"
+            ><img
+              src="../screenshots-v3/activity-leaf-title.png"
+              alt="Folder inventory"
+              loading="lazy"
+          /></a>
+          <h3>Folder inventory</h3>
+          <p>
+            The selected event is the title. No repeated Activity prefix or
+            second page heading.
+          </p>
+        </article>
+        <article>
+          <a href="index.html?theme=dark&page=chat"
+            ><img
+              src="../screenshots-v3/chat-five-windows.png"
+              alt="Five numbered work windows"
+              loading="lazy"
+          /></a>
+          <h3>Five numbered work windows</h3>
+          <p>
+            The actual ChatGPT page will occupy the content surface; this is a
+            labeled placeholder.
+          </p>
+        </article>
+        <article>
+          <a href="index.html?theme=dark&page=settings&sub=appearance"
+            ><img
+              src="../screenshots-v3/appearance-collapsed.png"
+              alt="More room when the list is hidden"
+              loading="lazy"
+          /></a>
+          <h3>More room when the list is hidden</h3>
+          <p>
+            Collapse the contextual list from the toolbar; the page title
+            remains visible.
+          </p>
+        </article>
+      </div>
+    </section>
+    <section>
+      <h2>Updates stay over the current page</h2>
+      <div class="grid">
+        <article>
+          <a
+            href="index.html?theme=light&state=ready&update=available&dialog=update"
+            ><img
+              src="../screenshots-v3/update-available.png"
+              alt="Available update"
+              loading="lazy"
+          /></a>
+          <h3>Available update</h3>
+          <p>
+            Version comparison, release notes, an opt-in preference, Skip and
+            Later.
+          </p>
+        </article>
+        <article>
+          <a
+            href="index.html?theme=dark&state=working&update=ready&dialog=update"
+            ><img
+              src="../screenshots-v3/update-running.png"
+              alt="Restart waits for work"
+              loading="lazy"
+          /></a>
+          <h3>Restart waits for work</h3>
+          <p>
+            A named reason and a relevant destination replace an unsafe restart
+            action.
+          </p>
+        </article>
+      </div>
+    </section>
+    <section>
+      <h2>A small menu in the macOS menu bar</h2>
+      <div class="grid">
+        <article>
+          <a href="menu-bar.html"
+            ><img
+              src="../screenshots-v3/menu-bar-ready.png"
+              alt="Ready"
+              loading="lazy"
+          /></a>
+          <h3>Ready</h3>
+          <p>
+            A monochrome symbol and a brief menu: Open Farol, Check for Updates
+            and Quit.
+          </p>
+        </article>
+        <article>
+          <a href="menu-bar.html"
+            ><img
+              src="../screenshots-v3/menu-bar-running.png"
+              alt="Work running"
+              loading="lazy"
+          /></a>
+          <h3>Work running</h3>
+          <p>
+            A task count links back to the main application. No second Settings
+            interface.
+          </p>
+        </article>
+      </div>
+    </section>
+    <p class="caption">
+      Interactive links show design examples only. Downloads, installation,
+      restart, native menus and live ChatGPT are not connected. Automatic update
+      preferences, version skipping and reminder scheduling are proposed
+      additions to the existing updater.
+    </p>
+    <p class="caption">
+      Updated 2 October 2026. Earlier explorations remain available:
+      <a href="../v2/index.html">revision 2</a> and
+      <a href="../gallery-v1.html">revision 1</a>.
+      <a href="design-notes.md"
+        >Implementation contract and verification notes</a
+      >.
+    </p>
+  </body>
+</html>

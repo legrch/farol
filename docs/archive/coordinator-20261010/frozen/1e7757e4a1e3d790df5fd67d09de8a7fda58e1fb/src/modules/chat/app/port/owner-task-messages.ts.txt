@@ -1,0 +1,125 @@
+import type { HandoffMutationGate } from "../service/persistent-codex-handoff";
+
+/** ChatGPT chooses a concrete verb. There is no transport-side `auto` mode. */
+export type OwnerTaskMessageRequest = Readonly<{
+  key: string;
+  selectionRef: string;
+  message: string;
+}> &
+  (
+    | Readonly<{ mode: "steer-current"; expectedTurnRef: string }>
+    | Readonly<{ mode: "native-queue" }>
+  );
+
+export type OwnerTaskMessageLifetime = Readonly<{
+  deadlineAt: number;
+  signal: AbortSignal;
+}>;
+
+/**
+ * A fresh, trusted observation, not a caller-supplied authority object.
+ * physicalBinding seals saved project + physical cwd/common-Git identity.
+ * runtimeBinding seals the qualified existing native route and its generation.
+ * selectionRef is conversation-selected; it never means a globally saved Lead.
+ */
+export type OwnerTaskMessageSelection = Readonly<{
+  ownerScope: string;
+  threadId: string;
+  projectId: string;
+  workspaceId: string;
+  physicalBinding: string;
+  runtimeBinding: string;
+  selectionRevision: string;
+  expiresAt: number;
+  capabilities: readonly ("steer-current" | "native-queue")[];
+  state:
+    | Readonly<{
+        kind: "active";
+        turnId: string;
+        turnRef: string;
+        needsNativeInput: boolean;
+      }>
+    | Readonly<{ kind: "idle" }>
+    | Readonly<{ kind: "not-loaded" | "interrupted" | "unavailable" }>;
+}>;
+
+export interface OwnerTaskMessageAccess {
+  /**
+   * Reuse existing owner/workspace admission and native read-only observation.
+   * Must verify exact project/thread/physical cwd and non-interfering shared
+   * runtime control; no resume, fork, approval reply, or settings mutation.
+   * A stored selection/receipt alone never grants control.
+   */
+  inspect(
+    selectionRef: string,
+    lifetime: OwnerTaskMessageLifetime,
+  ): Promise<OwnerTaskMessageSelection | null>;
+}
+
+export type OwnerTaskMessageReceipt =
+  | Readonly<{ kind: "steered"; turnId: string }>
+  | Readonly<{ kind: "native-queue-accepted"; queuedSubmissionId: string }>;
+
+export type OwnerTaskMessageOutcome =
+  | Readonly<{ status: "accepted"; receipt: OwnerTaskMessageReceipt }>
+  | Readonly<{ status: "not-submitted"; reason: string }>
+  | Readonly<{ status: "outcome-unknown" }>;
+
+export type OwnerTaskMessageOperation = Readonly<{
+  digest: string;
+  outcome: OwnerTaskMessageOutcome | null;
+}>;
+
+/**
+ * Bound to one authenticated owner scope at composition. Implement with the
+ * existing private journal, not a global Lead registry or a new outbound queue.
+ * claim is atomic across clients/processes; terminal records are immutable.
+ * A reserved operation is never re-executed, even after a process restart.
+ */
+export interface OwnerTaskMessageJournal {
+  read(key: string): Promise<OwnerTaskMessageOperation | null>;
+  claim(
+    key: string,
+    digest: string,
+  ): Promise<
+    | Readonly<{ status: "claimed" }>
+    | Readonly<{ status: "existing"; operation: OwnerTaskMessageOperation }>
+  >;
+  finish(
+    key: string,
+    digest: string,
+    outcome: OwnerTaskMessageOutcome,
+  ): Promise<void>;
+}
+
+export type OwnerTaskNativeMessage = Readonly<{
+  threadId: string;
+  key: string;
+  message: string;
+  deadlineAt: number;
+}> &
+  (
+    | Readonly<{ mode: "steer-current"; expectedTurnId: string }>
+    | Readonly<{ mode: "native-queue" }>
+  );
+
+export interface OwnerTaskMessageSender {
+  /** Exactly one supported RPC on the already qualified native/shared host. */
+  send(message: OwnerTaskNativeMessage): Promise<OwnerTaskMessageOutcome>;
+}
+
+export type OwnerTaskMessageResult =
+  | Readonly<{ status: "refused"; reason: string }>
+  | (OwnerTaskMessageOutcome &
+      Readonly<{ operationId: string; historical: boolean }>);
+
+export type OwnerTaskMessageDependencies = Readonly<{
+  access: OwnerTaskMessageAccess;
+  journal: OwnerTaskMessageJournal;
+  sender: OwnerTaskMessageSender;
+  /** Retain the existing Computer fence; never weaken it for this feature. */
+  gate: HandoffMutationGate;
+  now: () => number;
+  /** SHA-256 of deterministic input. Never persist plaintext in the journal. */
+  digest: (canonicalInput: string) => string;
+}>;

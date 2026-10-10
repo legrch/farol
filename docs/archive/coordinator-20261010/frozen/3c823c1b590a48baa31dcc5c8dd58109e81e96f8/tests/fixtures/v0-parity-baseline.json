@@ -1,0 +1,293 @@
+{
+  "schema": "farol.parity-inventory/1",
+  "purpose": "Source inventory only. Complete accounting is not product or live acceptance.",
+  "baseline": {
+    "generation": "Farol V0",
+    "commit": "eb146dc085277386f45c4e017fcfa60cb225001d",
+    "source": "src/hub/catalog.mjs#HUB_IMPLEMENTED_TOOL_NAMES",
+    "tools": [
+      "open_workspace",
+      "read",
+      "write",
+      "edit",
+      "grep",
+      "glob",
+      "ls",
+      "bash",
+      "guidance_search",
+      "guidance_fetch",
+      "codex_task_create",
+      "codex_task_status",
+      "claude_task_create",
+      "claude_task_status",
+      "request_access",
+      "farol_session_search",
+      "farol_session_read",
+      "farol_session_tail",
+      "farol_caller_tools",
+      "farol_agent_sessions_list",
+      "farol_agent_history_search",
+      "farol_agent_session_read",
+      "farol_agent_session_tail",
+      "chatgpt_chat_create",
+      "chatgpt_chat_status",
+      "codex_task_resolve",
+      "codex_project_ensure",
+      "codex_task_message",
+      "codex_task_title",
+      "codex_task_continue",
+      "codex_task_preference"
+    ]
+  },
+  "subject": {
+    "generation": "Farol",
+    "commit": "f072ebbd79458e4c67ab595fc62d3696347fe55b",
+    "registrationSource": "src/modules/computer/infra/mcp/create-readonly-computer-mcp.ts"
+  },
+  "groups": [
+    {
+      "key": "workspace-bootstrap",
+      "v0Tools": ["open_workspace", "request_access"],
+      "sourceState": "partial",
+      "targetTools": ["computer_workspace_list"],
+      "priority": "P0",
+      "evidence": [
+        "src/apps/desktop/product-configuration.ts",
+        "src/modules/computer/infra/mcp/create-readonly-computer-mcp.ts"
+      ],
+      "gap": "Settings grant/verification exists; a model-visible request and root/nested instruction bootstrap are not equivalent merely because a folder is selected.",
+      "nextTest": "Approved workspace discovers root and applicable nested AGENTS files; missing approval returns one actionable owner request without granting it."
+    },
+    {
+      "key": "file-read-list",
+      "v0Tools": ["read", "ls"],
+      "sourceState": "replacement-present",
+      "targetTools": ["computer_workspace_read", "computer_workspace_list"],
+      "priority": "P0",
+      "evidence": [
+        "src/modules/computer/infra/mcp/create-readonly-computer-mcp.ts"
+      ],
+      "gap": "Typed replacement exists; actual new-connector catalogue and owner workflow still require independent qualification.",
+      "nextTest": "List and bounded Unicode/binary/ranged reads through the exact candidate connector with truthful completeness."
+    },
+    {
+      "key": "file-write-edit",
+      "v0Tools": ["write", "edit"],
+      "sourceState": "replacement-present",
+      "targetTools": ["computer_workspace_write", "computer_workspace_edit"],
+      "priority": "P0",
+      "evidence": [
+        "src/modules/computer/infra/mcp/create-readonly-computer-mcp.ts"
+      ],
+      "gap": "Source and native fixtures are not installed owner proof; rename/delete through ordinary shell remain separate scenarios.",
+      "nextTest": "Exact edit conflict, lost acknowledgement, task-owned rename/delete and revoked write preserve unrelated files."
+    },
+    {
+      "key": "search-and-glob",
+      "v0Tools": ["grep", "glob"],
+      "sourceState": "partial",
+      "targetTools": ["computer_workspace_search", "computer_workspace_list"],
+      "priority": "P0",
+      "evidence": [
+        "src/modules/computer/infra/mcp/create-readonly-computer-mcp.ts",
+        "docs/computer-parity.md"
+      ],
+      "gap": "Content search and list exist; filename-glob/include semantics and complete traversal are not automatically equivalent.",
+      "nextTest": "Large excluded tree plus *.ts filename request returns a bounded continuation or explicit incomplete result, never false absence."
+    },
+    {
+      "key": "ordinary-shell-git",
+      "v0Tools": ["bash"],
+      "sourceState": "partial",
+      "targetTools": [
+        "computer_shell_start",
+        "computer_shell_read",
+        "computer_shell_cancel"
+      ],
+      "priority": "P0",
+      "evidence": [
+        "src/modules/computer/infra/native/sandboxed-workspace-shell.ts",
+        "docs/computer-parity.md"
+      ],
+      "gap": "Ordinary approved Git HOME/config is implemented; process inspection, detached cleanup, network prerequisites and live command/reconnect remain separate gaps.",
+      "nextTest": "Real approved Git includes/hooks/linked metadata, foreign staged file preservation and long-command cancellation through new Computer."
+    },
+    {
+      "key": "guidance",
+      "v0Tools": ["guidance_search", "guidance_fetch"],
+      "sourceState": "missing",
+      "targetTools": [],
+      "priority": "P0",
+      "evidence": ["docs/computer-parity.md"],
+      "gap": "No equivalent model-visible guidance catalogue in the current Computer tool registrations.",
+      "nextTest": "Package-owned manifest search/fetch and listed references work offline; unknown reference cannot read an arbitrary path."
+    },
+    {
+      "key": "codex-create-status",
+      "v0Tools": ["codex_task_create", "codex_task_status"],
+      "sourceState": "replacement-present",
+      "targetTools": [
+        "codex_task_create",
+        "codex_task_status",
+        "codex_task_result"
+      ],
+      "priority": "P0",
+      "evidence": [
+        "src/modules/chat/app/service/persistent-codex-handoff.ts",
+        "src/modules/chat/infra/native/shared-codex-proxy-host.ts"
+      ],
+      "gap": "Implemented behind explicit selected host/task authority; compatible socket is not proof of native Desktop shared ownership.",
+      "nextTest": "One issued thread/turn, exact result, config-only model update, no replay after unknown start, then bounded shared-client canary."
+    },
+    {
+      "key": "codex-message-continue",
+      "v0Tools": ["codex_task_message", "codex_task_continue"],
+      "sourceState": "partial",
+      "targetTools": ["codex_task_message", "codex_task_continue"],
+      "priority": "P0",
+      "evidence": [
+        "src/modules/chat/app/service/persistent-codex-handoff.ts",
+        "src/modules/chat/infra/native/admitted-codex-task-route.ts"
+      ],
+      "gap": "Source exists but host-qualified control remains off; observe/adopt is not permission to steer an arbitrary owner task.",
+      "nextTest": "Expected active turn, native concurrent input, unknown publication replay and exact original model binding survive reconnect."
+    },
+    {
+      "key": "codex-project-resolution",
+      "v0Tools": [
+        "codex_task_resolve",
+        "codex_project_ensure",
+        "codex_task_preference"
+      ],
+      "sourceState": "partial",
+      "targetTools": [],
+      "priority": "P0",
+      "evidence": [
+        "src/apps/desktop/product-configuration.ts",
+        "src/modules/chat/app/service/persistent-codex-handoff.ts"
+      ],
+      "gap": "Explicit saved project selection exists; model-visible resolve/ensure/preference and safe no-project bootstrap are not delivered equivalents.",
+      "nextTest": "Zero/one/multiple saved-project matches, stale preference and same repo with multiple worktrees never select a different project silently."
+    },
+    {
+      "key": "codex-title",
+      "v0Tools": ["codex_task_title"],
+      "sourceState": "missing",
+      "targetTools": [],
+      "priority": "P1",
+      "evidence": ["src/modules/chat/contract/codex-task-route.ts"],
+      "gap": "No public exact task-title update/readback route.",
+      "nextTest": "Rename a verified task and read back; concurrent native rename or lost response is reported without overwriting again."
+    },
+    {
+      "key": "claude-handoff",
+      "v0Tools": ["claude_task_create", "claude_task_status"],
+      "sourceState": "missing",
+      "targetTools": [],
+      "priority": "P1",
+      "evidence": [
+        "docs/computer-parity.md",
+        "src/pkg/owner-config/contract.ts"
+      ],
+      "gap": "Future harness configuration does not implement Claude transport, native session visibility or lifecycle. Required V0 parity, not dropped.",
+      "nextTest": "Existing approved writer, current supported Claude capability negotiation, exactly one session, native visibility and honest needs-input/terminal status."
+    },
+    {
+      "key": "farol-session-history",
+      "v0Tools": [
+        "farol_session_search",
+        "farol_session_read",
+        "farol_session_tail"
+      ],
+      "sourceState": "partial",
+      "targetTools": ["codex_task_status", "codex_task_result"],
+      "priority": "P1",
+      "evidence": ["docs/computer-parity.md"],
+      "gap": "Exact dispatch result is not search/read/tail of authorized Farol session history.",
+      "nextTest": "Exact selected session, bounded ranges/cursor and historical-not-live label; no broad provider-store scrape."
+    },
+    {
+      "key": "agent-session-history",
+      "v0Tools": [
+        "farol_agent_sessions_list",
+        "farol_agent_history_search",
+        "farol_agent_session_read",
+        "farol_agent_session_tail"
+      ],
+      "sourceState": "partial",
+      "targetTools": ["codex_task_observe", "codex_task_adopt"],
+      "priority": "P1",
+      "evidence": [
+        "src/modules/chat/contract/codex-task-route.ts",
+        "docs/computer-parity.md"
+      ],
+      "gap": "Explicit selected Codex turn observation exists; general scoped Codex/Claude history discovery and account-safe search are not equivalent.",
+      "nextTest": "Explicitly authorized provider/project session listing and selected tail can diagnose a Lead without resuming or changing it."
+    },
+    {
+      "key": "caller-tools",
+      "v0Tools": ["farol_caller_tools"],
+      "sourceState": "partial",
+      "targetTools": ["farol_next_caller_tools"],
+      "priority": "P1",
+      "evidence": [
+        "src/apps/desktop/route-b-runtime.ts",
+        "docs/computer-parity.md"
+      ],
+      "gap": "Current-turn capability-bound relay exists; no claim of working live Farol Model or generic control of other sessions.",
+      "nextTest": "Exact tool catalogue/current-turn binding, permission denial and tool-result return to the same logical turn; unrelated caller refused."
+    },
+    {
+      "key": "saved-chatgpt-handoff",
+      "v0Tools": ["chatgpt_chat_create", "chatgpt_chat_status"],
+      "sourceState": "partial",
+      "targetTools": ["chatgpt_chat_create", "chatgpt_chat_status"],
+      "priority": "P1",
+      "evidence": [
+        "src/apps/desktop/saved-chat-browser.ts",
+        "src/apps/desktop/saved-chat-bridge.ts",
+        "docs/persistent-chat-handoff-parity.md"
+      ],
+      "gap": "Preview opt-in plus native one-message confirmation; source fixtures do not prove real account, send, persistence or reopen.",
+      "nextTest": "Correct owner account and exact message, one accepted Send, canonical private URL, fresh reopen; stop drains the operation and unknown never resends."
+    }
+  ],
+  "additionalWorkflows": [
+    {
+      "key": "consult",
+      "priority": "P1",
+      "state": "open",
+      "requirement": "Preserve direct bounded native-host-to-ChatGPT Consult separately from saved-chat creation and Product Agent; not a Work task."
+    },
+    {
+      "key": "agent-and-model",
+      "priority": "P2",
+      "state": "open",
+      "requirement": "Keep imported Agent/Model source and scoped later queue; paused Mind/Drive labels need not be resurrected. Real runtime proof is still required."
+    },
+    {
+      "key": "review-workflow",
+      "priority": "P0",
+      "state": "open",
+      "requirement": "Ordinary independent native review remains allowed fallback, not canonical Critic Panel restoration; do not make separate Critic stabilization block Computer."
+    },
+    {
+      "key": "install-update-recovery",
+      "priority": "P1",
+      "state": "open",
+      "requirement": "Fresh install/start/stop/config/save, restart, support diagnostics, update/rollback and uninstall must have explicit successor disposition before full V0 retirement; no V0 lifecycle import."
+    },
+    {
+      "key": "attachments-context",
+      "priority": "P1",
+      "state": "open",
+      "requirement": "Preserve exact text/images/documents, private staging cleanup and context continuity where V0 was useful; qualify source and live transfer separately."
+    },
+    {
+      "key": "paused-mind-drive",
+      "priority": "P2",
+      "state": "paused-baseline",
+      "requirement": "V0 itself pauses these routes. Keep their useful model/tool behavior in the future unified Farol Model, not the retired profile split."
+    }
+  ]
+}

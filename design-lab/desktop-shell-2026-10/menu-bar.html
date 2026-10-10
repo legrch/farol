@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; base-uri 'none'; connect-src 'none'"
+    />
+    <title>Farol · Menu bar study</title>
+    <link rel="stylesheet" href="menu-bar.css" />
+  </head>
+  <body>
+    <header class="study-header">
+      <div>
+        <h1>Farol / A quiet presence in the menu bar</h1>
+        <p>
+          Interactive macOS concept. No native menu or running application is
+          controlled.
+        </p>
+      </div>
+      <a href="index.html">Back to the interface</a>
+    </header>
+    <div class="study-controls">
+      <label
+        >State<select id="menu-state">
+          <option value="ready">Ready</option>
+          <option value="running">Work running</option>
+          <option value="attention">Needs attention</option>
+          <option value="offline">Disconnected</option>
+          <option value="update">Update ready</option>
+        </select></label
+      ><label
+        >Mark<select id="menu-mark">
+          <option value="lens">Signal lens</option>
+          <option value="aperture">Open aperture</option>
+          <option value="relay">Relay</option>
+        </select></label
+      ><label
+        >Menu bar appearance<select id="bar-theme">
+          <option value="light">Light</option>
+          <option value="dark">Dark</option>
+        </select></label
+      >
+    </div>
+    <div class="desktop" id="desktop">
+      <div class="mac-menu-bar">
+        <span class="apple-symbol" aria-hidden="true">●</span
+        ><strong>Farol</strong><span class="app-menu-label">File</span
+        ><span class="app-menu-label">Edit</span
+        ><span class="app-menu-label">View</span
+        ><span class="app-menu-label">Window</span
+        ><span class="menu-spacer"></span
+        ><button
+          id="status-trigger"
+          aria-label="Farol — Ready"
+          aria-haspopup="menu"
+          aria-expanded="false"
+        ></button
+        ><span class="system-example">◉</span
+        ><span class="menu-clock">Fri 13:05</span>
+      </div>
+      <div id="status-menu" role="menu" aria-label="Farol menu" hidden></div>
+      <div class="desktop-caption">
+        <span class="caption-line"></span>
+        <h2>One click to return to your work</h2>
+        <p>
+          Click the Farol symbol above. Status is brief; controls and task
+          details live in the main application.
+        </p>
+      </div>
+      <div class="demo-feedback" id="menu-feedback" role="status" hidden></div>
+    </div>
+    <section class="states">
+      <h2>State is a shape, not a flashing color</h2>
+      <div id="state-strip"></div>
+      <p>
+        Ready uses the plain mark. Running changes the center. Attention uses an
+        exclamation; disconnected uses a cross. An available update uses a
+        download arrow. The tooltip and open menu explain each state in words.
+      </p>
+    </section>
+    <section class="policy">
+      <h2>Keep this menu small</h2>
+      <p>
+        Status, Open Farol, Check for Updates… and Quit Farol. A running-task
+        count or attention reason can open the relevant screen. No folder
+        permissions, model selectors or second Settings interface.
+      </p>
+      <p>
+        Show a menu-bar icon can be an option in General. The native
+        implementation should use one shared command router for menu items and
+        the main app, and respect the existing quit/update gates.
+      </p>
+      <a href="brand.html">Compare the Signal Lens Dock icons</a>
+    </section>
+    <script src="mark-library.js"></script>
+    <script src="menu-bar.js"></script>
+  </body>
+</html>

@@ -1,0 +1,353 @@
+import { execFileSync, spawnSync } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  classifyDelta,
+  inspectDelta,
+  parseRawDelta,
+} from "../../tooling/verification-scope.mjs";
+
+const roots = [];
+const checker = fileURLToPath(
+  new URL("../../tooling/verification-scope.mjs", import.meta.url),
+);
+const change = (
+  file,
+  status = "M",
+  oldMode = "100644",
+  newMode = "100644",
+) => ({
+  path: file,
+  status,
+  oldMode,
+  newMode,
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  for (const root of roots.splice(0))
+    fs.rmSync(root, { recursive: true, force: true });
+});
+
+describe("delta classification (policy fixtures, not package/native acceptance)", () => {
+  it("allows only known non-attested prose with explicit attestation evidence", () => {
+    expect(classifyDelta([change("docs/testing.md")], new Set())).toEqual({
+      scope: "docs-only",
+      reason: "KNOWN_NON_ATTESTED_DOCUMENTS",
+      aggregateRequired: false,
+    });
+    expect(classifyDelta([change("README.md")], new Set()).scope).toBe(
+      "docs-only",
+    );
+  });
+  it("refuses attested docs and missing attestation evidence", () => {
+    expect(classifyDelta([change("docs/testing.md")]).reason).toBe(
+      "ATTESTATION_UNKNOWN",
+    );
+    expect(
+      classifyDelta([change("docs/testing.md")], new Set(["docs/testing.md"]))
+        .reason,
+    ).toBe("BUILD_ATTESTED_DOCUMENT");
+  });
+  it("permits known domain source checkpoints while retaining aggregate acceptance", () => {
+    for (const file of [
+      "modules/chat/app/service.go",
+      "src/modules/chat/domain/turn.ts",
+      "apps/desktop/ui/Panel.tsx",
+    ]) {
+      expect(classifyDelta([change(file)])).toMatchObject({
+        scope: "source",
+        aggregateRequired: true,
+      });
+    }
+  });
+  it.each([
+    "AGENTS.md",
+    "Taskfile.yml",
+    ".githooks/pre-commit",
+    ".githooks/pre-push",
+    "tooling/verification-scope.mjs",
+    "tests/unit/verification-scope.test.mjs",
+    "package.json",
+    "package-lock.json",
+    "vitest.config.ts",
+    "docs/new-document.md",
+    "docs/assets/chart.png",
+    "docs/assets/chart.svg",
+    "docs/assets/chart.html",
+    "docs/assets/chart.js",
+    "docs/assets/style.css",
+    "docs/assets/script.sh",
+    "docs/manifest.json",
+    "docs/generated/contract.md",
+    ".github/workflows/docs.yml",
+    "scripts/guide.md",
+    "resources/fonts/OFL.md",
+    "README.mdx",
+    "README.MD",
+    "src/pkg/shared.ts",
+    "boot/start.go",
+    "modules/chat/contracts/turn.go",
+    "apps/desktop/bridge/wire.ts",
+    "apps/desktop/main.ts",
+    "modules/chat/generated/schema.go",
+    "schema/wire.json",
+    "unknown/file.md",
+  ])("keeps %s in full checks", (file) => {
+    expect(classifyDelta([change(file)], new Set())).toMatchObject({
+      scope: "full",
+      aggregateRequired: true,
+    });
+  });
+  it("does not let prose hide a shared source or policy change", () => {
+    for (const file of ["src/pkg/shared.ts", "AGENTS.md", "Taskfile.yml"]) {
+      expect(
+        classifyDelta([change("README.md"), change(file)], new Set()).scope,
+      ).toBe("full");
+    }
+  });
+  it.each([
+    "../README.md",
+    "/README.md",
+    "docs/../README.md",
+    "docs//testing.md",
+    "docs/./testing.md",
+    "docs\\testing.md",
+    "docs/a\nb.md",
+    "docs/a\0b.md",
+  ])("refuses ambiguous path %j", (file) => {
+    expect(classifyDelta([change(file)], new Set()).scope).toBe("full");
+  });
+  it.each([
+    null,
+    [],
+    {},
+    [null],
+    [change("README.md"), change("README.md")],
+    [change("README.md", "M", "100644", "100755")],
+    [change("README.md", "M", "120000", "100644")],
+    [change("README.md", "M", "100644", "120000")],
+    [change("README.md", "M", "160000", "100644")],
+    [change("README.md", "R", "100644", "100644")],
+    [change("README.md", "U", "100644", "100644")],
+    [change("README.md", "A", "100644", "100644")],
+    [change("README.md", "D", "100644", "100644")],
+  ])("defaults malformed/mode/status evidence to full: %j", (records) => {
+    expect(classifyDelta(records, new Set()).scope).toBe("full");
+  });
+  it("validates added and removed docs on both sides", () => {
+    expect(
+      classifyDelta([change("README.md", "A", "000000", "100644")], new Set())
+        .scope,
+    ).toBe("docs-only");
+    expect(
+      classifyDelta([change("README.md", "D", "100644", "000000")], new Set())
+        .scope,
+    ).toBe("docs-only");
+    expect(
+      classifyDelta([change("README.md", "D", "100755", "000000")], new Set())
+        .scope,
+    ).toBe("full");
+  });
+  it("parses NUL raw records and rejects truncated or rename records", () => {
+    const hash = "a".repeat(40);
+    expect(
+      parseRawDelta(
+        Buffer.from(`:100644 100644 ${hash} ${hash} M\0README.md\0`),
+      ),
+    ).toEqual([change("README.md")]);
+    expect(parseRawDelta(Buffer.alloc(0))).toEqual([]);
+    for (const raw of [
+      ":100644",
+      `:100644 100644 ${hash} ${hash} R100\0old\0new\0`,
+      `:100644 100644 ${hash} ${hash} M\0`,
+    ]) {
+      expect(() => parseRawDelta(Buffer.from(raw))).toThrow();
+    }
+  });
+});
+
+// Real disposable Git tests exercise discovery, rename sides, modes and CLI
+// refusal without touching Farol refs, hooks, build output or any provider.
+function fixture() {
+  const root = fs.realpathSync(
+    fs.mkdtempSync(path.join(os.tmpdir(), "farol-verification-")),
+  );
+  roots.push(root);
+  const git = (...args) =>
+    execFileSync("/usr/bin/git", ["-C", root, ...args], {
+      encoding: "utf8",
+      env: {
+        PATH: "/usr/bin:/bin",
+        HOME: "/var/empty",
+        TMPDIR: os.tmpdir(),
+        GIT_CONFIG_GLOBAL: "/dev/null",
+        GIT_CONFIG_NOSYSTEM: "1",
+        GIT_AUTHOR_NAME: "Fixture",
+        GIT_AUTHOR_EMAIL: "fixture@example.invalid",
+        GIT_COMMITTER_NAME: "Fixture",
+        GIT_COMMITTER_EMAIL: "fixture@example.invalid",
+      },
+    }).trim();
+  git("init", "-q");
+  fs.writeFileSync(path.join(root, "README.md"), "Fixture documentation.\n");
+  fs.mkdirSync(path.join(root, "docs"));
+  fs.writeFileSync(path.join(root, "docs/testing.md"), "Fixture tests.\n");
+  git("add", "README.md", "docs/testing.md");
+  git("commit", "-qm", "fixture base");
+  return { root, git, base: git("rev-parse", "HEAD") };
+}
+
+describe("read-only Git inspection", () => {
+  it("conservatively keeps real docs full under current whole-tree attestation", () => {
+    const { root, git, base } = fixture();
+    fs.appendFileSync(path.join(root, "README.md"), "More prose.\n");
+    git("add", "README.md");
+    git("commit", "-qm", "fixture prose");
+    const head = git("rev-parse", "HEAD");
+    expect(
+      inspectDelta(root, [`--base=${base}`, `--head=${head}`]),
+    ).toMatchObject({
+      base,
+      head,
+      scope: "full",
+      reason: "BUILD_ATTESTED_DOCUMENT",
+      observation: "clean-committed-range",
+      paths: ["README.md"],
+    });
+  });
+  it("includes untracked source/policy and both sides of renames", () => {
+    const { root, base } = fixture();
+    fs.renameSync(
+      path.join(root, "README.md"),
+      path.join(root, "docs/new-document.md"),
+    );
+    fs.writeFileSync(path.join(root, "script.sh"), "#!/bin/sh\nexit 0\n");
+    fs.chmodSync(path.join(root, "script.sh"), 0o755);
+    expect(inspectDelta(root, [`--base=${base}`, "--worktree"])).toMatchObject({
+      scope: "full",
+      observation: "working-tree-not-sealed",
+      paths: ["README.md", "docs/new-document.md", "script.sh"],
+    });
+  });
+  it("cannot hide tracked executable content renamed into known prose", () => {
+    const { root, git, base } = fixture();
+    fs.unlinkSync(path.join(root, "README.md"));
+    fs.writeFileSync(path.join(root, "script.sh"), "#!/bin/sh\nexit 0\n");
+    fs.chmodSync(path.join(root, "script.sh"), 0o755);
+    git("add", "README.md", "script.sh");
+    git("commit", "-qm", "fixture executable");
+    const from = git("rev-parse", "HEAD");
+    fs.renameSync(path.join(root, "script.sh"), path.join(root, "README.md"));
+    git("add", "README.md", "script.sh");
+    git("commit", "-qm", "fixture rename");
+    expect(
+      inspectDelta(root, [
+        `--base=${from}`,
+        `--head=${git("rev-parse", "HEAD")}`,
+      ]),
+    ).toMatchObject({
+      scope: "full",
+      reason: "AMBIGUOUS_DELTA",
+      paths: ["README.md", "script.sh"],
+    });
+    expect(inspectDelta(root, [`--base=${base}`, "--worktree"]).scope).toBe(
+      "full",
+    );
+  });
+  it("keeps a symlink to outside data full without reading its target", () => {
+    const { root, base } = fixture();
+    fs.unlinkSync(path.join(root, "README.md"));
+    fs.symlinkSync("/outside/must-not-read", path.join(root, "README.md"));
+    expect(inspectDelta(root, [`--base=${base}`, "--worktree"]).scope).toBe(
+      "full",
+    );
+  });
+  it("does not seal dirty work or accept stale HEAD/base aliases", () => {
+    const { root, git, base } = fixture();
+    fs.appendFileSync(path.join(root, "README.md"), "Dirty.\n");
+    expect(() =>
+      inspectDelta(root, [`--base=${base}`, `--head=${base}`]),
+    ).toThrow("FROZEN_RANGE_REQUIRES_CLEAN_TREE");
+    expect(() => inspectDelta(root, ["--base=HEAD", "--worktree"])).toThrow(
+      "full SHA",
+    );
+    expect(() =>
+      inspectDelta(root, [`--base=${base}`, "--head=" + "0".repeat(40)]),
+    ).toThrow("HEAD_MISMATCH");
+    git("add", "README.md");
+    git("commit", "-qm", "fixture advance");
+    expect(() =>
+      inspectDelta(root, [`--base=${base}`, `--head=${base}`]),
+    ).toThrow("HEAD_MISMATCH");
+  });
+  it("refuses index flags that can hide changes from Git", () => {
+    const { root, git, base } = fixture();
+    git("update-index", "--assume-unchanged", "README.md");
+    expect(() => inspectDelta(root, [`--base=${base}`, "--worktree"])).toThrow(
+      "INDEX_FLAGS_AMBIGUOUS",
+    );
+  });
+  it("checks physical executable bits even with core.filemode=false", () => {
+    const { root, git, base } = fixture();
+    git("config", "core.filemode", "false");
+    fs.mkdirSync(path.join(root, "modules/chat/app"), { recursive: true });
+    fs.writeFileSync(
+      path.join(root, "modules/chat/app/service.go"),
+      "package app\n",
+    );
+    git("add", "modules/chat/app/service.go");
+    git("commit", "-qm", "fixture domain");
+    const from = git("rev-parse", "HEAD");
+    fs.appendFileSync(
+      path.join(root, "modules/chat/app/service.go"),
+      "// changed\n",
+    );
+    fs.chmodSync(path.join(root, "modules/chat/app/service.go"), 0o755);
+    expect(inspectDelta(root, [`--base=${from}`, "--worktree"])).toMatchObject({
+      scope: "full",
+      reason: "AMBIGUOUS_DELTA",
+    });
+    expect(inspectDelta(root, [`--base=${base}`, "--worktree"]).scope).toBe(
+      "full",
+    );
+  });
+  it("refuses source/status movement during a WIP observation", () => {
+    const { root, base } = fixture();
+    const extra = path.join(root, "extra.md");
+    fs.writeFileSync(extra, "Fixture.\n");
+    const original = fs.lstatSync;
+    vi.spyOn(fs, "lstatSync").mockImplementation((file, ...args) => {
+      const stat = original(file, ...args);
+      if (file === extra)
+        fs.appendFileSync(path.join(root, "README.md"), "Concurrent change.\n");
+      return stat;
+    });
+    expect(() => inspectDelta(root, [`--base=${base}`, "--worktree"])).toThrow(
+      "DELTA_MOVED_DURING_INSPECTION",
+    );
+  });
+  it("refuses switches that could narrow scope and emits full with nonzero status", () => {
+    const { root, base } = fixture();
+    for (const args of [
+      [],
+      [`--base=${base}`, "--worktree", "--docs-only"],
+      [`--base=${base}`, "--worktree", "--staged"],
+      [`--base=${base}`, "--worktree", "--no-verify"],
+    ]) {
+      const run = spawnSync(process.execPath, [checker, ...args], {
+        cwd: root,
+        encoding: "utf8",
+      });
+      expect(run.status).toBe(2);
+      expect(JSON.parse(run.stdout)).toMatchObject({
+        scope: "full",
+        aggregateRequired: true,
+        reason: "INSPECTION_REFUSED",
+      });
+    }
+  });
+});

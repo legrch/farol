@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; base-uri 'none'; connect-src 'none'"
+    />
+    <title>Farol · Theme and accent comparison</title>
+    <style>
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        padding: 32px;
+        background: #e9ebef;
+        font:
+          14px/1.5 -apple-system,
+          BlinkMacSystemFont,
+          sans-serif;
+        color: #30343d;
+      }
+      header {
+        display: flex;
+        gap: 24px;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 28px;
+      }
+      header h1 {
+        font-size: 24px;
+        letter-spacing: -0.6px;
+        margin: 0;
+      }
+      p {
+        color: #606978;
+        font-size: 13px;
+      }
+      header p {
+        margin: 6px 0;
+      }
+      a {
+        color: #5b49a6;
+      }
+      nav {
+        display: flex;
+        gap: 20px;
+      }
+      section {
+        margin: 26px 0 34px;
+      }
+      section > h2 {
+        font-size: 17px;
+        margin: 0 0 16px;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 22px;
+      }
+      .settings {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+      article {
+        min-width: 0;
+      }
+      img {
+        display: block;
+        width: 100%;
+        border: 1px solid #c6cad3;
+        border-radius: 8px;
+        box-shadow: 0 6px 22px #0001;
+      }
+      h3 {
+        font-size: 14px;
+        margin: 12px 0 4px;
+      }
+      article p {
+        margin: 0 0 12px;
+      }
+      a:focus-visible {
+        outline: 2px solid #6750b8;
+        outline-offset: 4px;
+      }
+      .caption {
+        max-width: 90ch;
+      }
+      @media (max-width: 760px) {
+        body {
+          padding: 18px;
+        }
+        .grid {
+          grid-template-columns: 1fr;
+        }
+        header {
+          flex-wrap: wrap;
+        }
+        nav {
+          flex-wrap: wrap;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div>
+        <h1>Farol / One interface, two themes</h1>
+        <p>
+          Same composition, task state and viewport. Three independent accents.
+          Sample data.
+        </p>
+      </div>
+      <nav>
+        <a href="index.html">Interactive prototype</a
+        ><a href="brand.html">Brand study</a>
+      </nav>
+    </header>
+    <section>
+      <h2>Light</h2>
+      <div class="grid">
+        <article>
+          <a href="index.html?theme=light&accent=iris&page=home"
+            ><img
+              src="../screenshots-v2/light-iris-home.png"
+              alt="Light theme with Iris accent"
+          /></a>
+          <h3>Iris</h3>
+          <p>Quiet, familiar selection with a warm lamp.</p>
+        </article>
+        <article>
+          <a href="index.html?theme=light&accent=cobalt&page=home"
+            ><img
+              src="../screenshots-v2/light-cobalt-home.png"
+              alt="Light theme with Cobalt accent"
+          /></a>
+          <h3>Cobalt</h3>
+          <p>A clearer instrument-like accent beside the warm mark.</p>
+        </article>
+        <article>
+          <a href="index.html?theme=light&accent=amber&page=home"
+            ><img
+              src="../screenshots-v2/light-amber-home.png"
+              alt="Light theme with Amber accent"
+          /></a>
+          <h3>Amber</h3>
+          <p>One warm family for mark and selection.</p>
+        </article>
+      </div>
+    </section>
+    <section>
+      <h2>Graphite</h2>
+      <div class="grid">
+        <article>
+          <a href="index.html?theme=dark&accent=iris&page=home"
+            ><img
+              src="../screenshots-v2/dark-iris-home.png"
+              alt="Graphite theme with Iris accent"
+          /></a>
+          <h3>Iris</h3>
+          <p>Soft violet selection in a neutral workspace.</p>
+        </article>
+        <article>
+          <a href="index.html?theme=dark&accent=cobalt&page=home"
+            ><img
+              src="../screenshots-v2/dark-cobalt-home.png"
+              alt="Graphite theme with Cobalt accent"
+          /></a>
+          <h3>Cobalt</h3>
+          <p>Cool blue selection with an amber brand core.</p>
+        </article>
+        <article>
+          <a href="index.html?theme=dark&accent=amber&page=home"
+            ><img
+              src="../screenshots-v2/dark-amber-home.png"
+              alt="Graphite theme with Amber accent"
+          /></a>
+          <h3>Amber</h3>
+          <p>Warmer character; review its distinction from attention states.</p>
+        </article>
+      </div>
+    </section>
+    <section>
+      <h2>Appearance lives in Settings</h2>
+      <div class="grid settings">
+        <article>
+          <a href="index.html?theme=light&page=settings&sub=appearance"
+            ><img
+              src="../screenshots-v2/light-appearance.png"
+              alt="Appearance settings in the light theme"
+          /></a>
+          <h3>Light</h3>
+          <p>
+            System, Light or Dark. Accent and typeface are separate choices.
+          </p>
+        </article>
+        <article>
+          <a href="index.html?theme=dark&page=settings&sub=appearance"
+            ><img
+              src="../screenshots-v2/dark-appearance.png"
+              alt="Appearance settings in the graphite theme"
+          /></a>
+          <h3>Graphite</h3>
+          <p>The same settings page and hierarchy.</p>
+        </article>
+      </div>
+    </section>
+    <p class="caption">
+      Updated 2 October 2026. The original three-direction comparison is
+      preserved in <a href="../gallery-v1.html">the first exploration</a>. No
+      installed application or production source was changed.
+    </p>
+  </body>
+</html>

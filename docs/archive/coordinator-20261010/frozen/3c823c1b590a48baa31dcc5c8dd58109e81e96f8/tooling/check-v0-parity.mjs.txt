@@ -1,0 +1,146 @@
+import fs from "node:fs/promises";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const sourceStates = new Set(["replacement-present", "partial", "missing"]);
+const priorities = new Set(["P0", "P1", "P2"]);
+const name = /^[a-z][a-z0-9_]*$/u;
+const sha = /^[a-f0-9]{40}$/u;
+const own = (value, key) => Object.hasOwn(value, key);
+const record = (value) =>
+  value !== null && typeof value === "object" && !Array.isArray(value);
+const text = (value) => typeof value === "string" && value.trim().length > 0;
+
+/**
+ * Validate a frozen research inventory, not product behavior. No V0 checkout,
+ * provider, filesystem permission, tool-count or source inspection grants parity.
+ */
+export function inspectParityInventory(input) {
+  const errors = [];
+  if (!record(input) || input.schema !== "farol.parity-inventory/1") {
+    return { inventoryValid: false, errors: ["invalid inventory schema"] };
+  }
+  for (const key of ["baseline", "subject"]) {
+    if (!record(input[key]) || !sha.test(input[key].commit ?? "")) {
+      errors.push(`invalid ${key} source pin`);
+    }
+  }
+  const tools = input.baseline?.tools;
+  const groups = input.groups;
+  if (
+    !Array.isArray(tools) ||
+    !tools.length ||
+    tools.some((tool) => !name.test(tool))
+  ) {
+    errors.push("invalid frozen baseline tools");
+  }
+  if (!Array.isArray(groups)) errors.push("groups must be an array");
+  if (errors.length) return { inventoryValid: false, errors };
+  const baseline = new Set(tools);
+  if (baseline.size !== tools.length) errors.push("duplicate baseline tool");
+  const covered = new Map();
+  const keys = new Set();
+  const counts = Object.fromEntries(
+    [...sourceStates].map((state) => [state, 0]),
+  );
+  for (const group of groups) {
+    if (!record(group) || !text(group.key)) {
+      errors.push("invalid group");
+      continue;
+    }
+    if (keys.has(group.key)) errors.push(`duplicate group: ${group.key}`);
+    keys.add(group.key);
+    if (!sourceStates.has(group.sourceState))
+      errors.push(`invalid source state: ${group.key}`);
+    else counts[group.sourceState] += 1;
+    if (!priorities.has(group.priority))
+      errors.push(`invalid priority: ${group.key}`);
+    if (!text(group.gap) || !text(group.nextTest))
+      errors.push(`missing gap or next test: ${group.key}`);
+    if (
+      !Array.isArray(group.evidence) ||
+      !group.evidence.length ||
+      group.evidence.some((value) => !text(value))
+    ) {
+      errors.push(`missing evidence: ${group.key}`);
+    }
+    if (
+      !Array.isArray(group.targetTools) ||
+      group.targetTools.some((tool) => !name.test(tool))
+    ) {
+      errors.push(`invalid replacement tools: ${group.key}`);
+    }
+    if (!Array.isArray(group.v0Tools) || !group.v0Tools.length) {
+      errors.push(`empty baseline group: ${group.key}`);
+      continue;
+    }
+    for (const tool of group.v0Tools) {
+      if (!baseline.has(tool)) errors.push(`invented baseline tool: ${tool}`);
+      if (covered.has(tool)) errors.push(`duplicate disposition: ${tool}`);
+      covered.set(tool, group.key);
+    }
+    // An inventory describes source status. It has no authority to assert or
+    // discard a live acceptance row, even if somebody adds a convenient flag.
+    for (const forbidden of ["livePass", "accepted", "intentionallyDropped"]) {
+      if (own(group, forbidden))
+        errors.push(`unsupported acceptance claim: ${group.key}.${forbidden}`);
+    }
+  }
+  for (const tool of baseline) {
+    if (!covered.has(tool)) errors.push(`missing disposition: ${tool}`);
+  }
+  const extra = input.additionalWorkflows;
+  if (!Array.isArray(extra) || !extra.length)
+    errors.push("additional workflows must remain explicit");
+  else {
+    const seen = new Set();
+    for (const workflow of extra) {
+      if (
+        !record(workflow) ||
+        !text(workflow.key) ||
+        !text(workflow.requirement) ||
+        !priorities.has(workflow.priority)
+      ) {
+        errors.push("invalid additional workflow");
+        continue;
+      }
+      if (seen.has(workflow.key))
+        errors.push(`duplicate workflow: ${workflow.key}`);
+      seen.add(workflow.key);
+      if (!["open", "paused-baseline"].includes(workflow.state))
+        errors.push(`invalid workflow state: ${workflow.key}`);
+    }
+  }
+  return {
+    inventoryValid: errors.length === 0,
+    baselineToolCount: baseline.size,
+    accountedToolCount: [...baseline].filter((tool) => covered.has(tool))
+      .length,
+    groupCount: groups.length,
+    sourceDispositionCounts: counts,
+    sourceParityComplete: false,
+    liveParityQualified: false,
+    qualification: "NOT_EVALUATED_BY_INVENTORY",
+    errors,
+  };
+}
+
+const invokedFile = process.argv[1] ? path.resolve(process.argv[1]) : null;
+if (invokedFile === fileURLToPath(import.meta.url)) {
+  try {
+    const source = new URL(
+      "../tests/fixtures/v0-parity-baseline.json",
+      import.meta.url,
+    );
+    const result = inspectParityInventory(
+      JSON.parse(await fs.readFile(source, "utf8")),
+    );
+    process.stdout.write(JSON.stringify(result, null, 2) + "\n");
+    if (!result.inventoryValid) process.exitCode = 1;
+  } catch (error) {
+    process.stderr.write(
+      `Parity inventory could not be read: ${error.message}\n`,
+    );
+    process.exitCode = 1;
+  }
+}

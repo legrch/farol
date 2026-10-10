@@ -1,0 +1,404 @@
+import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { afterEach, describe, expect, it } from "vitest";
+
+const repository = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "../..",
+);
+const producer = path.join(repository, "tooling/prepare-release-archive.py");
+const owned = [];
+const version = "1.2.3-owner.beta.1";
+const appName = "Farol Next Preview.app";
+
+function run(command, args, cwd, timeout = 15_000) {
+  const result = spawnSync(command, args, {
+    cwd,
+    encoding: "utf8",
+    timeout,
+    env: { PATH: "/usr/bin:/bin", HOME: cwd, TMPDIR: os.tmpdir() },
+  });
+  if (result.error) throw result.error;
+  return result;
+}
+
+function git(root, ...args) {
+  const result = run("/usr/bin/git", args, root);
+  if (result.status !== 0) throw new Error(result.stderr);
+  return result.stdout.trim();
+}
+
+async function temporaryRoot() {
+  const root = await fs.realpath(
+    await fs.mkdtemp(path.join(os.tmpdir(), "farol-release-test-")),
+  );
+  owned.push(root);
+  return root;
+}
+
+async function fixture({ rejected = false } = {}) {
+  const root = await temporaryRoot();
+  await fs.mkdir(path.join(root, "tooling"));
+  await fs.copyFile(
+    producer,
+    path.join(root, "tooling/prepare-release-archive.py"),
+  );
+  await fs.writeFile(
+    path.join(root, "tooling/verify-package.mjs"),
+    'process.stdout.write("fixture verified\\n");\n',
+  );
+  await fs.writeFile(path.join(root, ".gitignore"), "_output/\n");
+  git(root, "init", "-q");
+  git(root, "config", "user.name", "Fixture");
+  git(root, "config", "user.email", "fixture@example.invalid");
+  git(root, "add", ".");
+  git(root, "commit", "-qm", "fixture");
+  const head = git(root, "rev-parse", "HEAD");
+  const tree = run(
+    "/usr/bin/git",
+    ["ls-tree", "-r", "-z", "--full-tree", head, "--", "."],
+    root,
+  ).stdout;
+  const sourceTreeDigest = createHash("sha256")
+    .update(Buffer.from("git-ls-tree-v1\0"))
+    .update(tree)
+    .digest("hex");
+  const app = path.join(root, "_output/package", appName);
+  const resource = path.join(app, "Contents/Resources/app");
+  const executable = path.join(
+    app,
+    "Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron",
+  );
+  await fs.mkdir(resource, { recursive: true });
+  await fs.mkdir(path.dirname(executable), { recursive: true });
+  await fs.writeFile(path.join(resource, "payload"), "fixture bytes");
+  await fs.chmod(path.join(resource, "payload"), 0o755);
+  await fs.writeFile(
+    path.join(resource, "update-archive.py"),
+    `import json, pathlib, sys, zipfile
+archive, stage = sys.argv[1:3]
+with zipfile.ZipFile(archive) as z:
+    names = z.namelist()
+    assert "artifact.json" in names and "Farol Next Preview.app/" in names
+    pathlib.Path(stage, "artifact.json").write_bytes(z.read("artifact.json"))
+print(json.dumps({"appPath": str(pathlib.Path(stage, "Farol Next Preview.app")), "artifactPath": str(pathlib.Path(stage, "artifact.json"))}))
+`,
+  );
+  await fs.writeFile(
+    path.join(resource, "update-package.mjs"),
+    "fixture entry",
+  );
+  await fs.writeFile(
+    executable,
+    rejected
+      ? "#!/usr/bin/python3\nimport sys\nsys.exit(7)\n"
+      : `#!/usr/bin/python3
+import json, sys
+a = json.load(open(sys.argv[2]))
+print(json.dumps({k: a[k] for k in ["product", "bundleId", "version", "buildVersion", "sourceCommit", "sourceTreeDigest", "buildId", "artifactSha256"]} | {"updateChannel": a["updateChannel"], "signing": a["signing"]["kind"], "notarized": a["notarized"]}))
+`,
+  );
+  await fs.chmod(executable, 0o755);
+  const artifact = {
+    schema: 5,
+    treeDigestVersion: "farol.next.tree-digest/v2",
+    product: "Farol Next Preview",
+    version,
+    buildVersion: "12",
+    bundleId: "local.farol.next.preview",
+    buildId: "a".repeat(64),
+    builtAt: "2026-09-30T00:00:00Z",
+    sourceCommit: head,
+    sourceTreeDigest,
+    sourceDirty: false,
+    artifactPath: app,
+    artifactSha256: "b".repeat(64),
+    electronSourceSha256: "c".repeat(64),
+    runtime: {},
+    signing: {
+      kind: "unsigned",
+      reason: "owner-beta-distribution",
+      runtimeBytes: "unmodified-vendor-bundle",
+    },
+    notarized: false,
+    updateChannel: "github-owner-beta",
+  };
+  const artifactFile = path.join(root, "_output/package/artifact.json");
+  await fs.writeFile(artifactFile, JSON.stringify(artifact));
+  const output = path.join(root, "_output", "release");
+  return { root, app, resource, head, artifact, artifactFile, output };
+}
+
+function prepare(f, output = f.output, head = f.head) {
+  return run(
+    "/usr/bin/python3",
+    [
+      "-I",
+      "-S",
+      "-B",
+      path.join(f.root, "tooling/prepare-release-archive.py"),
+      head,
+      output,
+    ],
+    f.root,
+  );
+}
+
+afterEach(async () => {
+  for (const root of owned.splice(0))
+    await fs.rm(root, { recursive: true, force: true });
+});
+
+describe("release archive CLI fixture contract", () => {
+  // The fixture fakes the trusted extractor and verifier. It checks CLI
+  // orchestration only; a real accepted package needs the bundled native tools.
+  it("binds a clean source, sanitizes public artifact, and emits exactly three public assets", async () => {
+    const f = await fixture();
+    await fs.symlink("payload", path.join(f.resource, "payload-link"));
+    const result = prepare(f);
+    expect(result.status, result.stderr).toBe(0);
+    const names = (await fs.readdir(f.output)).sort();
+    const archiveName = `Farol-${version}-darwin-arm64.zip`;
+    expect(names).toEqual([
+      archiveName,
+      "SHA256SUMS.txt",
+      "farol-release.json",
+      "private",
+    ]);
+    const manifest = JSON.parse(
+      await fs.readFile(path.join(f.output, "farol-release.json")),
+    );
+    expect(manifest.archiveName).toBe(archiveName);
+    expect(manifest.sourceCommit).toBe(f.head);
+    expect(
+      await fs.readFile(path.join(f.output, "SHA256SUMS.txt"), "utf8"),
+    ).toBe(`${manifest.archiveSha256}  ${archiveName}\n`);
+    const inspected = run(
+      "/usr/bin/python3",
+      [
+        "-c",
+        `import json,sys,zipfile,stat
+z=zipfile.ZipFile(sys.argv[1])
+a=json.loads(z.read("artifact.json"))
+l=z.getinfo("Farol Next Preview.app/Contents/Resources/app/payload-link")
+f=z.getinfo("Farol Next Preview.app/Contents/Resources/app/payload")
+assert a["artifactPath"] == "Farol Next Preview.app"
+assert stat.S_ISLNK(l.external_attr >> 16) and z.read(l) == b"payload"
+assert (f.external_attr >> 16) & 0o111
+print(json.dumps(sorted({n.split("/")[0] for n in z.namelist()})))
+`,
+        path.join(f.output, archiveName),
+      ],
+      f.root,
+    );
+    expect(inspected.status, inspected.stderr).toBe(0);
+    expect(JSON.parse(inspected.stdout)).toEqual([appName, "artifact.json"]);
+    expect(
+      await fs.readFile(
+        path.join(f.output, "private/artifact.local.json"),
+        "utf8",
+      ),
+    ).toContain(f.app);
+    expect(await fs.readFile(path.join(f.output, archiveName))).toBeTruthy();
+  });
+
+  it("refuses stale, dirty, and existing destinations", async () => {
+    const f = await fixture();
+    expect(prepare(f, f.output, "0".repeat(40)).stderr).toContain(
+      "HEAD_MISMATCH",
+    );
+    await fs.writeFile(path.join(f.root, "dirty"), "dirty");
+    expect(prepare(f).stderr).toContain("SOURCE_DIRTY");
+    await fs.rm(path.join(f.root, "dirty"));
+    await fs.mkdir(f.output);
+    expect(prepare(f).stderr).toContain("OUTPUT_EXISTS");
+  });
+
+  it("refuses stale artifact identity and private fields", async () => {
+    const f = await fixture();
+    f.artifact.sourceTreeDigest = "d".repeat(64);
+    await fs.writeFile(f.artifactFile, JSON.stringify(f.artifact));
+    expect(prepare(f).stderr).toContain("CANDIDATE_SOURCE_MISMATCH");
+    f.artifact.sourceTreeDigest = "e".repeat(64);
+    f.artifact.runtime = { path: "/Users/owner/private" };
+    await fs.writeFile(f.artifactFile, JSON.stringify(f.artifact));
+    expect(prepare(f).stderr).toContain("PRIVATE_PATH_IN_ARTIFACT");
+  });
+
+  it("refuses unsafe symlinks and special entries", async () => {
+    const f = await fixture();
+    const link = path.join(f.resource, "escape");
+    await fs.symlink("/tmp", link);
+    expect(prepare(f).stderr).toContain("APP_LINK_INVALID");
+    await fs.rm(link);
+    const fifo = path.join(f.resource, "fifo");
+    const made = run("/usr/bin/mkfifo", [fifo], f.root);
+    expect(made.status, made.stderr).toBe(0);
+    expect(prepare(f).stderr).toContain("APP_SPECIAL_ENTRY");
+  });
+
+  it("refuses a package rejected by its verifier", async () => {
+    const f = await fixture({ rejected: true });
+    const result = prepare(f);
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("VERIFICATION_REJECTED");
+    expect(await fs.readdir(f.output)).toEqual(
+      expect.arrayContaining(["private"]),
+    );
+    expect(await fs.readdir(f.output)).not.toContain("farol-release.json");
+  });
+
+  it.each(
+    ["artifact", "member"].flatMap((kind) =>
+      ["symlink", "fifo", "replacement", "growth", "shrink"].map((fault) => [
+        kind,
+        fault,
+      ]),
+    ),
+  )(
+    "refuses %s %s substitution with bounded descriptor reads",
+    async (kind, fault) => {
+      const root = await temporaryRoot();
+      const result = run(
+        "/usr/bin/python3",
+        [
+          "-I",
+          "-S",
+          "-B",
+          "-c",
+          `
+import errno, io, os, pathlib, runpy, sys, zipfile
+from unittest.mock import patch
+m = runpy.run_path(sys.argv[1])
+root, kind, fault = pathlib.Path(sys.argv[2]), sys.argv[3], sys.argv[4]
+package = root / "_output/package"
+package.mkdir(parents=True)
+candidate = package / "artifact.json"
+candidate.write_bytes(b"fixture")
+before = candidate.lstat()
+g = m["read_artifact"].__globals__
+g.update(ROOT=root, PACKAGE=package, ARTIFACT=candidate)
+real_open, real_read = os.open, os.read
+changed, delivered = False, 0
+
+def substitute():
+    global changed
+    candidate.rename(package / "original")
+    if fault == "symlink":
+        candidate.symlink_to("original")
+    elif fault == "fifo":
+        os.mkfifo(candidate)
+    else:
+        candidate.write_bytes(b"changed")
+    changed = True
+
+def opening(path, flags, *args, **kwargs):
+    if pathlib.Path(path) == candidate and fault in ("symlink", "fifo", "replacement"):
+        assert flags & os.O_NOFOLLOW and flags & os.O_NONBLOCK
+        substitute()
+    return real_open(path, flags, *args, **kwargs)
+
+def reading(fd, count):
+    global changed, delivered
+    if fault in ("growth", "shrink"):
+        with candidate.open("ab" if fault == "growth" else "wb") as f:
+            f.write(b"x" * 4096 if fault == "growth" else b"")
+        changed = True
+    data = real_read(fd, count)
+    delivered += len(data)
+    assert delivered <= before.st_size + 1
+    return data
+
+with patch.object(os, "open", opening), patch.object(os, "read", reading):
+    try:
+        if kind == "artifact":
+            m["read_artifact"]()
+        else:
+            with zipfile.ZipFile(io.BytesIO(), "w") as z:
+                m["add_member"](z, candidate, "payload", before)
+    except (ValueError, OSError) as error:
+        assert changed, str(error)
+        if isinstance(error, OSError):
+            assert fault == "symlink" and error.errno == errno.ELOOP, str(error)
+        else:
+            assert str(error) in ("INPUT_FILE_INVALID", "INPUT_CHANGED", "INPUT_SIZE_CHANGED"), str(error)
+    else:
+        raise AssertionError("substitution was accepted")
+print("refused")
+`,
+          producer,
+          root,
+          kind,
+          fault,
+        ],
+        root,
+        3_000,
+      );
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout.trim()).toBe("refused");
+    },
+  );
+
+  it.each(
+    ["directory", "symlink"].flatMap((kind) =>
+      ["before", "during"].map((timing) => [kind, timing]),
+    ),
+  )("checks %s identity %s archive entry writing", async (kind, timing) => {
+    const root = await temporaryRoot();
+    const result = run(
+      "/usr/bin/python3",
+      [
+        "-I",
+        "-S",
+        "-B",
+        "-c",
+        `
+import io, pathlib, runpy, sys, zipfile
+m = runpy.run_path(sys.argv[1])
+root, kind, timing = pathlib.Path(sys.argv[2]), sys.argv[3], sys.argv[4]
+entry = root / "entry"
+(root / "payload").write_bytes(b"fixture")
+if kind == "directory":
+    entry.mkdir()
+else:
+    entry.symlink_to("payload")
+before = entry.lstat()
+def replace():
+    entry.rename(root / "original")
+    if kind == "directory":
+        entry.mkdir()
+    else:
+        entry.symlink_to("payload")
+with zipfile.ZipFile(io.BytesIO(), "w") as z:
+    write = z.writestr
+    def writing(*args, **kwargs):
+        replace()
+        return write(*args, **kwargs)
+    if timing == "before":
+        replace()
+    else:
+        z.writestr = writing
+    try:
+        m["add_member"](z, entry, "entry/" if kind == "directory" else "entry", before)
+    except ValueError as error:
+        assert str(error) == "INPUT_CHANGED", str(error)
+    else:
+        raise AssertionError("changed entry was accepted")
+print("refused")
+`,
+        producer,
+        root,
+        kind,
+        timing,
+      ],
+      root,
+      3_000,
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout.trim()).toBe("refused");
+  });
+});

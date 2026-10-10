@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; img-src 'self'; font-src 'self'; style-src 'unsafe-inline'; connect-src 'none'; base-uri 'none'"
+    />
+    <title>Farol · Approved design handoff</title>
+    <style>
+      @font-face {
+        font-family: Geist;
+        src: url("assets/Geist-Variable.woff2") format("woff2");
+        font-weight: 100 900;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: #eceef2;
+        color: #24252d;
+        font:
+          15px/1.65 Geist,
+          -apple-system,
+          sans-serif;
+      }
+      main {
+        max-width: 1100px;
+        margin: auto;
+        padding: 56px 32px;
+      }
+      small {
+        font-size: 12px;
+        letter-spacing: 0.1em;
+        color: #675888;
+      }
+      h1 {
+        font-size: 38px;
+        line-height: 1.15;
+        letter-spacing: -1.4px;
+        margin: 12px 0;
+      }
+      p {
+        max-width: 76ch;
+        color: #626574;
+      }
+      .status {
+        display: inline-flex;
+        padding: 5px 12px;
+        border: 1px solid #bdd5c8;
+        border-radius: 99px;
+        background: #e4efe9;
+        color: #35644b;
+        font-size: 12px;
+      }
+      nav {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 16px;
+        margin: 32px 0;
+      }
+      nav a {
+        background: #fff;
+        border: 1px solid #d5d6df;
+        border-radius: 14px;
+        padding: 24px;
+        text-decoration: none;
+        color: #2a2932;
+      }
+      nav strong {
+        display: block;
+        font-size: 18px;
+        margin-bottom: 8px;
+      }
+      nav span {
+        font-size: 13px;
+        color: #777581;
+      }
+      a {
+        color: #6555a3;
+      }
+      a:focus-visible {
+        outline: 3px solid #705def;
+        outline-offset: 4px;
+      }
+      .pending {
+        border-left: 3px solid #927953;
+        padding: 8px 20px;
+        background: #f4f0e9;
+        margin: 28px 0;
+      }
+      figure {
+        margin: 32px 0;
+      }
+      img {
+        width: 100%;
+        display: block;
+        border: 1px solid #d0d3dd;
+        border-radius: 12px;
+      }
+      figcaption {
+        font-size: 12px;
+        color: #777581;
+        margin-top: 8px;
+      }
+      .links {
+        display: flex;
+        gap: 20px;
+        flex-wrap: wrap;
+        font-size: 13px;
+      }
+      @media (max-width: 700px) {
+        main {
+          padding: 28px 20px;
+        }
+        h1 {
+          font-size: 28px;
+        }
+        nav {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <small>FAROL / DESIGN HANDOFF / 02 OCT 2026</small>
+      <h1>One interface. Ready to build.</h1>
+      <p>
+        A narrow rail, a contextual sidebar and one upper toolbar. Light and
+        Graphite share the same layout. The saved prototype is the
+        implementation reference.
+      </p>
+      <div class="status">UI approved · Dock icon pending</div>
+      <nav aria-label="Handoff entry points">
+        <a href="index.html?revision=4"
+          ><strong>Interactive prototype ↗</strong
+          ><span
+            >Explore navigation, settings, state and update behavior.</span
+          ></a
+        ><a href="gallery.html"
+          ><strong>Review gallery ↗</strong
+          ><span>Compare themes and preserved visual examples.</span></a
+        ><a href="HANDOFF.md"
+          ><strong>Development handoff ↗</strong
+          ><span
+            >Read implementation slices, source gaps and acceptance.</span
+          ></a
+        >
+      </nav>
+      <div class="pending">
+        <strong>Dock icon: separate design iteration</strong>
+        <p>
+          The current Iris Glass, Prism and Aurora Enamel studies were rejected
+          as too glossy and plastic. Keep the existing production icon. Signal
+          Lens remains an abstract direction to simplify later.
+        </p>
+      </div>
+      <figure>
+        <a href="index.html?revision=4&theme=light&page=settings&sub=appearance"
+          ><img
+            src="screenshots-v4/light-appearance.png"
+            alt="Approved Farol settings composition, light appearance"
+        /></a>
+        <figcaption>
+          Current revision 4 · synthetic data · no production runtime connected.
+        </figcaption>
+      </figure>
+      <div class="links">
+        <a href="README.md">Package guide</a
+        ><a href="DECISIONS.md">Owner decision</a
+        ><a href="design-notes.md">Interaction contract</a
+        ><a href="menu-bar.html?mark=lens">Menu-bar study</a
+        ><a href="brand.html">Rejected Dock studies</a
+        ><a href="v3/gallery.html">Earlier comparison</a>
+      </div>
+    </main>
+  </body>
+</html>

@@ -1,0 +1,53 @@
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import {
+  DIGEST,
+  requireValue,
+  bootstrapSelection,
+  releaseUrl,
+  parseOptions,
+  RELEASE_OPTIONS,
+  optionReleaseSelection,
+} from "./contract.mjs";
+
+function quote(value) {
+  return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+export function bootstrapCommand(expected, dmgSha256, installerSha256) {
+  bootstrapSelection(expected);
+  requireValue(
+    DIGEST.test(dmgSha256) && DIGEST.test(installerSha256),
+    "DISTRIBUTION_DOWNLOAD_DIGEST_INVALID",
+  );
+  const args = [
+    "--version",
+    expected.version,
+    "--build-version",
+    expected.buildVersion,
+    "--channel",
+    expected.channel,
+    "--arch",
+    expected.arch,
+    "--bundle-id",
+    expected.bundleId,
+    "--dmg-sha256",
+    dmgSha256,
+  ];
+  const script = `set -eu; umask 077; d=$(/usr/bin/mktemp -d /tmp/farol-bootstrap.XXXXXXXX); trap '/bin/rm -rf "$d"' EXIT; /usr/bin/curl -q --proto '=https' --proto-redir '=https' --fail --location --silent --show-error --max-time 180 --retry 0 --output "$d/install-alpha.sh" ${quote(releaseUrl(expected, "install-alpha.sh"))}; printf '%s  %s\\n' ${quote(installerSha256)} "$d/install-alpha.sh" | /usr/bin/shasum -a 256 -c -; /bin/sh "$d/install-alpha.sh" ${args.map(quote).join(" ")}`;
+  return `/bin/sh -c ${quote(script)}`;
+}
+
+if (
+  process.argv[1] &&
+  path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+) {
+  const options = parseOptions(process.argv.slice(2), [
+    ...RELEASE_OPTIONS,
+    "dmg-sha256",
+    "installer-sha256",
+  ]);
+  process.stdout.write(
+    `${bootstrapCommand(optionReleaseSelection(options), options["dmg-sha256"], options["installer-sha256"])}\n`,
+  );
+}

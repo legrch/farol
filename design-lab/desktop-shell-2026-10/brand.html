@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self'; base-uri 'none'; connect-src 'none'"
+    />
+    <title>Farol · Rejected Dock studies</title>
+    <link rel="stylesheet" href="brand.css" />
+  </head>
+  <body>
+    <header>
+      <div>
+        <p class="eyebrow">FAROL · SIGNAL LENS</p>
+        <h1>A little color. A clear signal.</h1>
+        <p>One abstract mark. Three materials for the Dock.</p>
+      </div>
+      <a href="index.html?revision=4">Back to the design room ↗</a>
+    </header>
+    <aside
+      role="note"
+      style="
+        margin: 0 auto 28px;
+        max-width: 1160px;
+        padding: 18px 22px;
+        background: #f4f0e9;
+        border-left: 3px solid #927953;
+        color: #554b3d;
+      "
+    >
+      <strong>Dock icon pending — these materials were rejected.</strong>
+      <p>
+        The UI is approved. Iris Glass, Prism and Aurora Enamel are historical
+        comparison only; do not ship them. Explore a simpler Signal Lens icon
+        separately.
+      </p>
+      <a href="DECISIONS.md">Owner decision ↗</a>
+    </aside>
+    <main id="concepts"></main>
+    <section class="dock-preview">
+      <div class="dock-heading">
+        <div>
+          <p class="eyebrow">IN CONTEXT</p>
+          <h2 id="selected-title">Iris Glass</h2>
+          <p>
+            The icon keeps its own identity when the interface accent changes.
+          </p>
+        </div>
+        <nav aria-label="Dock preview background">
+          <button data-desktop="light" aria-pressed="true">Light desktop</button
+          ><button data-desktop="dark" aria-pressed="false">
+            Dark desktop
+          </button>
+        </nav>
+      </div>
+      <div id="desktop" class="desktop">
+        <div class="dock">
+          <span class="neighbor files" aria-label="Files illustration"
+            ><svg viewBox="0 0 64 64">
+              <path d="M12 18h16l6 7h19v27H12Z" fill="#d4eaff" />
+              <path
+                d="M12 18h16l6 7"
+                fill="none"
+                stroke="#fff"
+                stroke-width="3"
+              /></svg></span
+          ><span class="neighbor calendar" aria-label="Calendar illustration"
+            ><small>OCT</small><b>2</b></span
+          >
+          <div class="dock-chosen">
+            <img
+              id="selected-icon"
+              src="assets/dock-v4/iris-glass.png"
+              alt="Signal Lens / Iris Glass"
+            /><i></i>
+          </div>
+          <span class="neighbor notes" aria-label="Notes illustration"
+            ><svg viewBox="0 0 64 64">
+              <path
+                d="M19 22h26M19 32h26M19 42h18"
+                stroke="white"
+                stroke-width="4"
+                stroke-linecap="round"
+              /></svg
+          ></span>
+          <div class="dock-divider"></div>
+          <span class="neighbor terminal" aria-label="Terminal illustration"
+            ><span>›_</span></span
+          >
+        </div>
+      </div>
+    </section>
+    <section class="family">
+      <div>
+        <p class="eyebrow">ONE MARK, THREE USES</p>
+        <h2>Color in the Dock.<br />A quiet symbol in the menu bar.</h2>
+        <p>
+          The abstract emblem stays simple. The Dock icon adds material, depth
+          and color. The menu-bar template uses the same open arcs with
+          monochrome ink.
+        </p>
+        <p>
+          Home remains the first item in the app sidebar. The Dock tile does not
+          appear inside the app.
+        </p>
+        <a href="menu-bar.html?mark=lens">Try the menu bar ↗</a>
+      </div>
+      <div class="family-forms">
+        <figure class="emblem">
+          <div id="emblem"></div>
+          <figcaption>Emblem · no tile</figcaption>
+        </figure>
+        <figure class="menu light">
+          <div id="menu-light"></div>
+          <figcaption>Menu bar · light</figcaption>
+        </figure>
+        <figure class="menu dark">
+          <div id="menu-dark"></div>
+          <figcaption>Menu bar · dark</figcaption>
+        </figure>
+      </div>
+    </section>
+    <footer>
+      <p>
+        Rejected material studies · do not ship. No installed icon has changed.
+        These raster concepts need final optical cleanup and native size checks
+        before packaging.
+      </p>
+      <a href="gallery.html">Revision 4 gallery</a> ·
+      <a href="v3/brand.html">Previous study</a> ·
+      <a href="design-notes.md">Implementation notes</a>
+    </footer>
+    <script src="mark-library.js"></script>
+    <script src="brand.js"></script>
+  </body>
+</html>

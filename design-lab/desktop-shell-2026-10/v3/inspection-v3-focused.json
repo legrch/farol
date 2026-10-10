@@ -1,0 +1,11 @@
+{
+  "mode": "Headless Chromium; disposable context; local-only; focused checks after visual CSP fix and gallery update",
+  "results": [
+    "Menu SVG outlines render correctly under CSP and inherit light/dark template ink",
+    "All three accents apply and preserve focus without adding app history",
+    "System theme follows operating-system appearance",
+    "System typeface applies without adding a route",
+    "Revision 3 gallery images and local links resolve"
+  ],
+  "errors": []
+}

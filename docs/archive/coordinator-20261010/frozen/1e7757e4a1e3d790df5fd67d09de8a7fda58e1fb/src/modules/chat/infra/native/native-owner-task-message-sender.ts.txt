@@ -1,0 +1,90 @@
+import type {
+  OwnerTaskMessageOutcome,
+  OwnerTaskMessageSender,
+  OwnerTaskNativeMessage,
+} from "../../app/port/owner-task-messages";
+import {
+  HandoffNotSubmittedError,
+  type HandoffHost,
+} from "../../app/service/persistent-codex-handoff";
+
+function object(value: unknown): Record<string, unknown> | null {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+/**
+ * A typed two-method adapter over an ALREADY qualified shared host. It does
+ * not connect, start another server, handle approvals, or qualify that host.
+ * The experimental queue must be explicitly admitted by the composition root.
+ */
+export class NativeOwnerTaskMessageSender implements OwnerTaskMessageSender {
+  constructor(private readonly host: HandoffHost) {}
+
+  async send(
+    message: OwnerTaskNativeMessage,
+  ): Promise<OwnerTaskMessageOutcome> {
+    const input = [{ type: "text", text: message.message }];
+    try {
+      if (message.mode === "steer-current") {
+        const response = object(
+          await this.host.request(
+            "turn/steer",
+            {
+              threadId: message.threadId,
+              expectedTurnId: message.expectedTurnId,
+              clientUserMessageId: message.key,
+              input,
+            },
+            message.deadlineAt,
+          ),
+        );
+        return response?.turnId === message.expectedTurnId
+          ? {
+              status: "accepted",
+              receipt: { kind: "steered", turnId: message.expectedTurnId },
+            }
+          : { status: "outcome-unknown" };
+      }
+      const response = object(
+        await this.host.request(
+          "thread/queue/add",
+          {
+            threadId: message.threadId,
+            clientUserMessageId: message.key,
+            input,
+          },
+          message.deadlineAt,
+        ),
+      );
+      const queued = object(response?.queuedSubmission);
+      const echoed = Array.isArray(queued?.input) ? queued.input : [];
+      const text = object(echoed[0]);
+      if (
+        typeof queued?.id !== "string" ||
+        !queued.id.trim() ||
+        queued.id.length > 200 ||
+        queued.id.includes("\0") ||
+        queued.clientUserMessageId !== message.key ||
+        echoed.length !== 1 ||
+        text?.type !== "text" ||
+        text.text !== message.message
+      )
+        return { status: "outcome-unknown" };
+      // The native runtime may already have consumed this item. This proves
+      // acceptance, not that it is still waiting, started, or completed.
+      return {
+        status: "accepted",
+        receipt: {
+          kind: "native-queue-accepted",
+          queuedSubmissionId: queued.id,
+        },
+      };
+    } catch (error) {
+      return error instanceof HandoffNotSubmittedError
+        ? { status: "not-submitted", reason: "native_not_submitted" }
+        : { status: "outcome-unknown" };
+    }
+  }
+}

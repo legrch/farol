@@ -1,0 +1,266 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { describe, expect, it } from "vitest";
+import { treeDigest } from "../../tooling/artifact-digest.mjs";
+import {
+  buildDmg,
+  writeImage,
+  assertVolume,
+  withMountedImage,
+} from "../../tooling/distribution/dmg.mjs";
+
+async function fixture(observe) {
+  const root = await fs.realpath(
+    await fs.mkdtemp(path.join(os.tmpdir(), "farol-dmg-policy-")),
+  );
+  const app = path.join(root, "Farol.app");
+  try {
+    await fs.mkdir(path.join(app, "Contents/MacOS"), { recursive: true });
+    await fs.writeFile(
+      path.join(app, "Contents/MacOS/fixture"),
+      "synthetic, never a runnable release\n",
+      { mode: 0o755 },
+    );
+    const expected = {
+      version: "0.1.8-owner.beta.1",
+      buildVersion: "10",
+      channel: "github-owner-beta",
+      arch: "arm64",
+      bundleId: "local.farol.next.preview",
+      appSha256: await treeDigest(app),
+    };
+    return await observe({ root, app, expected });
+  } finally {
+    await fs.rm(root, { recursive: true });
+  }
+}
+
+describe("DMG accepted source binding", () => {
+  const selected = { commit: "c".repeat(40), treeDigest: "d".repeat(64) };
+  it.each([
+    { sourceCommit: "e".repeat(40) },
+    { sourceTreeDigest: "f".repeat(64) },
+    { sourceDirty: true },
+  ])(
+    "refuses descriptor provenance outside the independently selected source %j",
+    async (delta) =>
+      fixture(async ({ root, app, expected }) => {
+        const artifact = path.join(root, "artifact.json");
+        const output = path.join(root, "output");
+        await fs.writeFile(
+          artifact,
+          JSON.stringify({
+            version: expected.version,
+            buildVersion: expected.buildVersion,
+            updateChannel: expected.channel,
+            bundleId: expected.bundleId,
+            artifactSha256: expected.appSha256,
+            runtime: { platform: "darwin", arch: "arm64" },
+            signing: { kind: "unsigned" },
+            notarized: false,
+            sourceDirty: false,
+            sourceCommit: selected.commit,
+            sourceTreeDigest: selected.treeDigest,
+            ...delta,
+          }),
+        );
+        await expect(
+          buildDmg({
+            app,
+            artifact,
+            output,
+            expected,
+            source: selected,
+          }),
+        ).rejects.toThrow(
+          delta.sourceDirty
+            ? "DISTRIBUTION_DIRTY_PACKAGE"
+            : "DISTRIBUTION_SOURCE_MISMATCH",
+        );
+        await expect(fs.lstat(output)).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+        expect(await treeDigest(app)).toBe(expected.appSha256);
+      }),
+  );
+  it("keeps Release content verification when selected source matches", async () =>
+    fixture(async ({ root, app, expected }) => {
+      const artifact = path.join(root, "artifact.json");
+      const output = path.join(root, "output");
+      // Intentionally incomplete synthetic descriptor: a matching source claim
+      // must not turn the physical fixture into a Release-accepted package.
+      await fs.writeFile(
+        artifact,
+        JSON.stringify({
+          version: expected.version,
+          buildVersion: expected.buildVersion,
+          updateChannel: expected.channel,
+          bundleId: expected.bundleId,
+          artifactSha256: expected.appSha256,
+          runtime: { platform: "darwin", arch: "arm64" },
+          signing: { kind: "unsigned" },
+          notarized: false,
+          sourceDirty: false,
+          sourceCommit: selected.commit,
+          sourceTreeDigest: selected.treeDigest,
+        }),
+      );
+      await expect(
+        buildDmg({ app, artifact, output, expected, source: selected }),
+      ).rejects.toThrow("PACKAGE_MANIFEST_SCHEMA_INVALID");
+      await expect(fs.lstat(output)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(await treeDigest(app)).toBe(expected.appSha256);
+    }));
+  it.each([
+    undefined,
+    { commit: "c".repeat(40) },
+    { commit: "c".repeat(40), treeDigest: "d".repeat(63) },
+    { commit: "c".repeat(39), treeDigest: "d".repeat(64) },
+    { commit: "c".repeat(40) + "\n", treeDigest: "d".repeat(64) },
+    { commit: "c".repeat(40), treeDigest: "d".repeat(64), dirty: false },
+  ])(
+    "refuses missing, malformed or ambiguous source selection %j",
+    async (source) =>
+      fixture(async ({ root, app, expected }) => {
+        const output = path.join(root, "output");
+        await expect(
+          buildDmg({
+            app,
+            artifact: path.join(root, "missing-artifact.json"),
+            output,
+            expected,
+            source,
+          }),
+        ).rejects.toThrow("DISTRIBUTION_SOURCE_SELECTION_INVALID");
+        await expect(fs.lstat(output)).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+      }),
+  );
+});
+
+describe("DMG physical packaging policy", () => {
+  it("refuses wrong app bytes before creating output or native dispatch", async () =>
+    fixture(async ({ root, app, expected }) => {
+      const output = path.join(root, "output");
+      await expect(
+        writeImage({
+          app,
+          expected: { ...expected, appSha256: "b".repeat(64) },
+          output,
+          run: () => {
+            throw new Error("unexpected dispatch");
+          },
+        }),
+      ).rejects.toThrow("DISTRIBUTION_INPUT_APP_MISMATCH");
+      await expect(fs.lstat(output)).rejects.toMatchObject({ code: "ENOENT" });
+    }));
+  it("refuses output nested inside accepted app bytes before creating it", async () =>
+    fixture(async ({ app, expected }) => {
+      const output = path.join(app, "Contents/output");
+      await expect(
+        writeImage({
+          app,
+          expected,
+          output,
+          run: () => {
+            throw new Error("unexpected dispatch");
+          },
+        }),
+      ).rejects.toThrow("DISTRIBUTION_OUTPUT_OVERLAPS_APP");
+      expect(await treeDigest(app)).toBe(expected.appSha256);
+      await expect(fs.lstat(output)).rejects.toMatchObject({ code: "ENOENT" });
+    }));
+  it("refuses an existing output directory, including empty directories", async () =>
+    fixture(async ({ root, app, expected }) => {
+      const output = path.join(root, "output");
+      await fs.mkdir(output);
+      await expect(
+        writeImage({
+          app,
+          expected,
+          output,
+          run: () => {
+            throw new Error("unexpected dispatch");
+          },
+        }),
+      ).rejects.toMatchObject({ code: "EEXIST" });
+    }));
+  it("checks exact layout, Applications target and mounted app digest", async () =>
+    fixture(async ({ root, app, expected }) => {
+      const mount = path.join(root, "volume");
+      await fs.mkdir(mount);
+      await fs.cp(app, path.join(mount, "Farol.app"), { recursive: true });
+      await fs.symlink("/Applications", path.join(mount, "Applications"));
+      await fs.writeFile(path.join(mount, "Install.txt"), "fixture guide");
+      await assertVolume(mount, expected.appSha256);
+      await fs.unlink(path.join(mount, "Applications"));
+      await fs.symlink("/tmp", path.join(mount, "Applications"));
+      await expect(assertVolume(mount, expected.appSha256)).rejects.toThrow(
+        "DISTRIBUTION_APPLICATIONS_LINK_INVALID",
+      );
+      await fs.unlink(path.join(mount, "Applications"));
+      await fs.symlink("/Applications", path.join(mount, "Applications"));
+      await fs.writeFile(path.join(mount, "unexpected.sh"), "x");
+      await expect(assertVolume(mount, expected.appSha256)).rejects.toThrow(
+        "DISTRIBUTION_VOLUME_LAYOUT_INVALID",
+      );
+    }));
+  it("detaches exactly its mount even when observation fails", async () => {
+    const calls = [];
+    let mount;
+    const run = (command, args) => {
+      calls.push([command, args]);
+      if (args[0] === "attach") {
+        mount = args[args.indexOf("-mountpoint") + 1];
+        return "plist fixture";
+      }
+      if (command.endsWith("plutil"))
+        return JSON.stringify({
+          "system-entities": [
+            { "mount-point": mount, "dev-entry": "/dev/disk42s1" },
+          ],
+        });
+      return "";
+    };
+    await expect(
+      withMountedImage(
+        "/tmp/fixture.dmg",
+        () => {
+          throw new Error("observation failed");
+        },
+        run,
+      ),
+    ).rejects.toThrow("observation failed");
+    expect(calls.at(-1)).toEqual(["/usr/bin/hdiutil", ["detach", mount]]);
+    expect(calls[0][1]).toEqual(
+      expect.arrayContaining(["-readonly", "-nobrowse", "-noautoopen"]),
+    );
+    await expect(fs.lstat(path.dirname(mount))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+  it("does not retry attach or remove potentially mounted bytes after lost acknowledgement", async () => {
+    let mount;
+    let calls = 0;
+    try {
+      await expect(
+        withMountedImage(
+          "/tmp/fixture.dmg",
+          () => {},
+          (_command, args) => {
+            calls += 1;
+            mount = args[args.indexOf("-mountpoint") + 1];
+            throw new Error("lost ACK");
+          },
+        ),
+      ).rejects.toThrow("DISTRIBUTION_MOUNT_OUTCOME_UNKNOWN");
+      expect(calls).toBe(1);
+      expect((await fs.lstat(mount)).isDirectory()).toBe(true);
+    } finally {
+      // Mock never mounted a filesystem; this cleanup is not a live retry.
+      await fs.rm(path.dirname(mount), { recursive: true });
+    }
+  });
+});

@@ -1,0 +1,469 @@
+{
+  "schema": "farol.distribution-archive/1",
+  "recordedAt": "2026-10-10T20:17:53.343593+00:00",
+  "acceptedBaseline": "aa242b08f755618db8081b638e013b24ec1e28bb",
+  "observedHead": "aa242b08f755618db8081b638e013b24ec1e28bb",
+  "state": "preserved-nonshipping",
+  "branches": [
+    {
+      "branch": "codex/release-archive",
+      "pin": "e896b652e58d3c078b310ccfb43187259c49e792",
+      "decision": "Frozen original reference; current-schema7 OTA adaptation is assigned to a separate writer, with acceptance pending.",
+      "tree": "ea03e54cc595ba8994b1b643ee73b286f3693227",
+      "selection": [
+        "tooling/prepare-release-archive.py",
+        "tests/integration/release-archive.test.mjs",
+        "docs/release-publication.md"
+      ],
+      "files": 3
+    },
+    {
+      "branch": "distribution-dmg",
+      "pin": "4f711036188e6dd421733456dabc4681c2c93f1c",
+      "decision": "Preserve complete final DMG tooling, tests and docs as nonshipping preparation; no activation or first-install qualification.",
+      "tree": "44a983aa510df20ef68d56ede98c2ee815dafb0a",
+      "selection": [
+        "tooling/distribution",
+        "tests/distribution",
+        "docs/distribution"
+      ],
+      "files": 11
+    },
+    {
+      "branch": "docs/github-guide",
+      "pin": "1b2643cfc01c5adf3ae98c20483d7fe239baadfc",
+      "decision": "Preserve missing reader journeys, documentation checker and dated beta1 metadata as historical drafts; current guides and contracts remain authoritative.",
+      "tree": "c38e874986087ce3312d02979a537e5ebbfe2640",
+      "selection": [
+        "docs/start",
+        "docs/guides",
+        "docs/development",
+        "docs/tools",
+        "docs/reference/updates/evidence",
+        "docs/reference/profiles.md",
+        "docs/reference/shortcuts.md",
+        "docs/reference/glossary.md",
+        "docs/reference/protocols/browser-adapter.md"
+      ],
+      "files": 27
+    },
+    {
+      "branch": "farol-verification-policy",
+      "pin": "c7a30931e5285a53709c546cf73967a18b28c148",
+      "decision": "Freeze optional scope inspector and tests as an unaccepted historical proposal; current checkpoint/stable/final policy supersedes branch policy.",
+      "tree": "00bc46b0392dfb7a4bd64effe2cc9a393f113c4a",
+      "selection": [
+        "tooling/verification-scope.mjs",
+        "tests/unit/verification-scope.test.mjs"
+      ],
+      "files": 2
+    }
+  ],
+  "mapping": [
+    {
+      "branch": "codex/release-archive",
+      "sourcePath": "docs/release-publication.md",
+      "archivePath": "docs/archive/distribution-20261010/originals/release-archive/docs/release-publication.md",
+      "gitBlob": "6ef82fb457c4834f9e5572faf681d9b9fb5244c0",
+      "sourceMode": "100644",
+      "sha256": "341d4aac87d3bb08538d3bfe5e70559c86d1f0cd61957836baea6b925ff628fb",
+      "bytes": 3177
+    },
+    {
+      "branch": "codex/release-archive",
+      "sourcePath": "tests/integration/release-archive.test.mjs",
+      "archivePath": "docs/archive/distribution-20261010/originals/release-archive/tests/integration/release-archive.test.mjs.txt",
+      "gitBlob": "76321028d4eea8fc12133de1b3099de122df447a",
+      "sourceMode": "100644",
+      "sha256": "a493d4c65009814e223700ad7fcf80f493f0e0bea8ac44c1879fd13d1f550513",
+      "bytes": 13356
+    },
+    {
+      "branch": "codex/release-archive",
+      "sourcePath": "tooling/prepare-release-archive.py",
+      "archivePath": "docs/archive/distribution-20261010/originals/release-archive/tooling/prepare-release-archive.py.txt",
+      "gitBlob": "e023ebb3f22eccc635ebb705a8ed8de321d5ac56",
+      "sourceMode": "100644",
+      "sha256": "cfb837166aa6787db292c3ff142beade1e9ae3e5024f2c4d705ebce3ba5812d7",
+      "bytes": 13984
+    },
+    {
+      "branch": "distribution-dmg",
+      "sourcePath": "docs/distribution/README.md",
+      "archivePath": "docs/archive/distribution-20261010/originals/distribution-dmg/docs/distribution/README.md",
+      "gitBlob": "f6ea0dfbab2492cb14066e90261dad41fd8b3aa9",
+      "sourceMode": "100644",
+      "sha256": "867649d5ebf309f06be16a1c78e5e5df3845a02a03f7cb49b28705a9ae4958fe",
+      "bytes": 9121
+    },
+    {
+      "branch": "distribution-dmg",
+      "sourcePath": "docs/distribution/alpha-install.md",
+      "archivePath": "docs/archive/distribution-20261010/originals/distribution-dmg/docs/distribution/alpha-install.md",
+      "gitBlob": "3551bbbcf43860ded3ecdac42c57d0213772aea5",
+      "sourceMode": "100644",
+      "sha256": "797dcffef3e227af724b607265b47df53fa741eb859c9e30623ac53d0f478432",
+      "bytes": 2854
+    },
+    {
+      "branch": "distribution-dmg",
+      "sourcePath": "docs/distribution/recipient-qualification.md",
+      "archivePath": "docs/archive/distribution-20261010/originals/distribution-dmg/docs/distribution/recipient-qualification.md",
+      "gitBlob": "f7ef49f2ca787b329642a248709d4b804569a27f",
+      "sourceMode": "100644",
+      "sha256": "4fee843d888f5c34d7ac240f86ddcc1fe44a09895b88f9c5c4317adb45decb67",
+      "bytes": 9749
+    },
+    {
+      "branch": "distribution-dmg",
+      "sourcePath": "tests/distribution/bootstrap.test.mjs",
+      "archivePath": "docs/archive/distribution-20261010/originals/distribution-dmg/tests/distribution/bootstrap.test.mjs.txt",
+      "gitBlob": "df85a65617ce158e6748c90eac693fe55e47c8dc",
+      "sourceMode": "100644",
+      "sha256": "df93e65bc77c61a9e9c197e34122212b55167516490140da74ebb84e5355c7ff",
+      "bytes": 17240
+    },
+    {
+      "branch": "distribution-dmg",
+      "sourcePath": "tests/distribution/contract.test.mjs",
+      "archivePath": "docs/archive/distribution-20261010/originals/distribution-dmg/tests/distribution/contract.test.mjs.txt",
+      "gitBlob": "e3d92f46caf1abe0db53b480c0e321acc8e41bf8",
+      "sourceMode": "100644",
+      "sha256": "1e9f9a099dae4eb0ab9e572208252018cb7bce40552d7740a07bbabb1c2f65a3",
+      "bytes": 3746
+    },
+    {
+      "branch": "distribution-dmg",
+      "sourcePath": "tests/distribution/dmg.native.mjs",
+      "archivePath": "docs/archive/distribution-20261010/originals/distribution-dmg/tests/distribution/dmg.native.mjs.txt",
+      "gitBlob": "611febe98edbb2516e61ddebc187231da446d3be",
+      "sourceMode": "100644",
+      "sha256": "5441f47265a5c01cb07435853ca2c6e386777a04acd758f6cfbee7bdf6310b54",
+      "bytes": 2580
+    },
+    {
+      "branch": "distribution-dmg",
+      "sourcePath": "tests/distribution/dmg.test.mjs",
+      "archivePath": "docs/archive/distribution-20261010/originals/distribution-dmg/tests/distribution/dmg.test.mjs.txt",
+      "gitBlob": "0a04204ce9af054c3a54aaf6f81ebfdcc4b42fd9",
+      "sourceMode": "100644",
+      "sha256": "e004c08b8585a3c15772f2d7f5642fe7ad6762b45b55cd46a43dda1c578d5bf5",
+      "bytes": 9415
+    },
+    {
+      "branch": "distribution-dmg",
+      "sourcePath": "tooling/distribution/command.mjs",
+      "archivePath": "docs/archive/distribution-20261010/originals/distribution-dmg/tooling/distribution/command.mjs.txt",
+      "gitBlob": "0923e82af946f04a800477165e82f42bed86782e",
+      "sourceMode": "100644",
+      "sha256": "a8793d7cb38b1121ab89887d7f7d8833ddb446413f917f05cd68ef448c6b814b",
+      "bytes": 1695
+    },
+    {
+      "branch": "distribution-dmg",
+      "sourcePath": "tooling/distribution/contract.mjs",
+      "archivePath": "docs/archive/distribution-20261010/originals/distribution-dmg/tooling/distribution/contract.mjs.txt",
+      "gitBlob": "afd63ed15aac60c2a5eb7c1ddba926aa809b65d8",
+      "sourceMode": "100644",
+      "sha256": "81a7ac326079c394c798e64c1d1a0c87d810a2538511610a4bb657fe6f079dfd",
+      "bytes": 5333
+    },
+    {
+      "branch": "distribution-dmg",
+      "sourcePath": "tooling/distribution/dmg.mjs",
+      "archivePath": "docs/archive/distribution-20261010/originals/distribution-dmg/tooling/distribution/dmg.mjs.txt",
+      "gitBlob": "752b92b6f80221d719d106bf4512806c21522756",
+      "sourceMode": "100644",
+      "sha256": "b978d2ea059862a916238a4a2c04b36b118e2c27d4ed6df8014a7ff3ca7dcc81",
+      "bytes": 9291
+    },
+    {
+      "branch": "distribution-dmg",
+      "sourcePath": "tooling/distribution/install-alpha.sh",
+      "archivePath": "docs/archive/distribution-20261010/originals/distribution-dmg/tooling/distribution/install-alpha.sh.txt",
+      "gitBlob": "76c2f5be4e513f7038fcd6b2ad23e2168285b14a",
+      "sourceMode": "100644",
+      "sha256": "441783ceb13fe48d4242d59025824ec8d38c21764daf575d37e3355ce3fa2eba",
+      "bytes": 5013
+    },
+    {
+      "branch": "docs/github-guide",
+      "sourcePath": "docs/development/README.md",
+      "archivePath": "docs/archive/distribution-20261010/originals/github-guide/docs/development/README.md",
+      "gitBlob": "70e83020b3f8c9e6786453b7ba05ee837702f960",
+      "sourceMode": "100644",
+      "sha256": "80dadc516e65156c3428d705e30c830099d5f98e559f7dd3a9146fd7a9137c3d",
+      "bytes": 1367
+    },
+    {
+      "branch": "docs/github-guide",
+      "sourcePath": "docs/development/contributing.md",
+      "archivePath": "docs/archive/distribution-20261010/originals/github-guide/docs/development/contributing.md",
+      "gitBlob": "e6c46bb4a387b45b5859599d16162a092072eb82",
+      "sourceMode": "100644",
+      "sha256": "c510e809c6ee3f2b38e27f3b9a0e257616ee2eecbf3ff2973b5bcc7f493f8187",
+      "bytes": 2612
+    },
+    {
+      "branch": "docs/github-guide",
+      "sourcePath": "docs/development/dependencies.md",
+      "archivePath": "docs/archive/distribution-20261010/originals/github-guide/docs/development/dependencies.md",
+      "gitBlob": "c575aa817c7b4b314f7a71b967bf474cc0efcffc",
+      "sourceMode": "100644",
+      "sha256": "2f4ff0a1f06490d628ad336828221a967404b6af438163c65c80e670ec30d229",
+      "bytes": 3937
+    },
+    {
+      "branch": "docs/github-guide",
+      "sourcePath": "docs/development/documentation.md",
+      "archivePath": "docs/archive/distribution-20261010/originals/github-guide/docs/development/documentation.md",
+      "gitBlob": "67b94226662ead968fca04cc8b49ae6aae65ea62",
+      "sourceMode": "100644",
+      "sha256": "76c8f152d05e69469743238846a73868e8208a72706d90ccd7a144b734831dbf",
+      "bytes": 6734
+    },
+    {
+      "branch": "docs/github-guide",
+      "sourcePath": "docs/development/git-fixture.md",
+      "archivePath": "docs/archive/distribution-20261010/originals/github-guide/docs/development/git-fixture.md",
+      "gitBlob": "3cba89f510414d731d5512c33cd59408a9381a16",
+      "sourceMode": "100644",
+      "sha256": "f22dbe15727140e31958aab45e5e2eb6eea14a5b22afe4c260ef3ef595d7f6e0",
+      "bytes": 3806
+    },
+    {
+      "branch": "docs/github-guide",
+      "sourcePath": "docs/development/packaging.md",
+      "archivePath": "docs/archive/distribution-20261010/originals/github-guide/docs/development/packaging.md",
+      "gitBlob": "2d0f8c2550ac71bf079e3f35f58e5621a1c0834c",
+      "sourceMode": "100644",
+      "sha256": "d124a6960feccfaf9c728d2b305cd41f18b12c313528ce9ca860fe25566c31d2",
+      "bytes": 4089
+    },
+    {
+      "branch": "docs/github-guide",
+      "sourcePath": "docs/development/setup.md",
+      "archivePath": "docs/archive/distribution-20261010/originals/github-guide/docs/development/setup.md",
+      "gitBlob": "196e90c262a3eb44b5a23da8eac5c40da10516f1",
+      "sourceMode": "100644",
+      "sha256": "b6b0ca03e93a904cab4481b3a790c62cccc9f6ed4f71df29d2f71b4763e2ce7e",
+      "bytes": 3925
+    },
+    {
+      "branch": "docs/github-guide",
+      "sourcePath": "docs/development/testing.md",
+      "archivePath": "docs/archive/distribution-20261010/originals/github-guide/docs/development/testing.md",
+      "gitBlob": "ef3b62c25a14be35703c0c7ea8fc8cc018e40ddb",
+      "sourceMode": "100644",
+      "sha256": "e23c60f9520f9284f51b57ac5908e70700ce44f938bccca1a6f26317b1c48850",
+      "bytes": 8400
+    },
+    {
+      "branch": "docs/github-guide",
+      "sourcePath": "docs/guides/README.md",
+      "archivePath": "docs/archive/distribution-20261010/originals/github-guide/docs/guides/README.md",
+      "gitBlob": "e146c4b1182970f9d5c0ceb957c6040e8e305b64",
+      "sourceMode": "100644",
+      "sha256": "fa2133c6ef044b9b7b5f930a215bcc6e2e5ecc8f5daf653d68b8d70eb74467b0",
+      "bytes": 950
+    },
+    {
+      "branch": "docs/github-guide",
+      "sourcePath": "docs/guides/folder-access.md",
+      "archivePath": "docs/archive/distribution-20261010/originals/github-guide/docs/guides/folder-access.md",
+      "gitBlob": "719df8a5314efe2555356b7ca8de3bfb33cad861",
+      "sourceMode": "100644",
+      "sha256": "5afdd5f3a01dbb1233b66cadc70a2d0633356c9d32fe91f0e7d7bef09b53290a",
+      "bytes": 2780
+    },
+    {
+      "branch": "docs/github-guide",
+      "sourcePath": "docs/guides/troubleshooting.md",
+      "archivePath": "docs/archive/distribution-20261010/originals/github-guide/docs/guides/troubleshooting.md",
+      "gitBlob": "928270d8da5c208cdbf79bd9d41ceb485b44ff61",
+      "sourceMode": "100644",
+      "sha256": "6f8c81d1f508a0b8bce8ebf5c95b66f6c47057975646af76b93bb6f5434bf943",
+      "bytes": 6051
+    },
+    {
+      "branch": "docs/github-guide",
+      "sourcePath": "docs/guides/updates.md",
+      "archivePath": "docs/archive/distribution-20261010/originals/github-guide/docs/guides/updates.md",
+      "gitBlob": "a30987e0f43a47af5ee3fb947a552327d743ab3c",
+      "sourceMode": "100644",
+      "sha256": "e40cc897a9137d73d4ceb8e4f72d3b8d5cdf70057a8290c1791cb3b925ba92af",
+      "bytes": 2823
+    },
+    {
+      "branch": "docs/github-guide",
+      "sourcePath": "docs/reference/glossary.md",
+      "archivePath": "docs/archive/distribution-20261010/originals/github-guide/docs/reference/glossary.md",
+      "gitBlob": "8b648f98709719ccdb17084a3cb52bc1c4658561",
+      "sourceMode": "100644",
+      "sha256": "093503be7cd65c6d4d939cd22ff7176cf06a14d7a03955500d3b8cc907fbd3f9",
+      "bytes": 3584
+    },
+    {
+      "branch": "docs/github-guide",
+      "sourcePath": "docs/reference/profiles.md",
+      "archivePath": "docs/archive/distribution-20261010/originals/github-guide/docs/reference/profiles.md",
+      "gitBlob": "7082965514cfe2a7595c2cd12df6c7e75ab17f80",
+      "sourceMode": "100644",
+      "sha256": "eaa0ec3ed7060f3a01d72f53669cd09e7c62578d08dbcfa659e78b959dfa27e4",
+      "bytes": 2476
+    },
+    {
+      "branch": "docs/github-guide",
+      "sourcePath": "docs/reference/protocols/browser-adapter.md",
+      "archivePath": "docs/archive/distribution-20261010/originals/github-guide/docs/reference/protocols/browser-adapter.md",
+      "gitBlob": "511b37819dee2832804c68f3512d2f459aabc1c1",
+      "sourceMode": "100644",
+      "sha256": "7ea8fb3932250288a063bbb4859c0192e50472a59034c56864d9125bf5206129",
+      "bytes": 4057
+    },
+    {
+      "branch": "docs/github-guide",
+      "sourcePath": "docs/reference/shortcuts.md",
+      "archivePath": "docs/archive/distribution-20261010/originals/github-guide/docs/reference/shortcuts.md",
+      "gitBlob": "53f8f1e95b6642e8998659c565d82334cb7363be",
+      "sourceMode": "100644",
+      "sha256": "2b40deed84bb25a25ef68f15a01f928076fcf67dd95e4b23792189f448612c15",
+      "bytes": 1253
+    },
+    {
+      "branch": "docs/github-guide",
+      "sourcePath": "docs/reference/updates/evidence/README.md",
+      "archivePath": "docs/archive/distribution-20261010/originals/github-guide/docs/reference/updates/evidence/README.md",
+      "gitBlob": "083414d8f5af6c4db8563b0dfdfbdb74dfded0a5",
+      "sourceMode": "100644",
+      "sha256": "d799bce5974dee61637cf2bea66a970b990ca7f6a7a1c084208bf494aad9e95f",
+      "bytes": 3144
+    },
+    {
+      "branch": "docs/github-guide",
+      "sourcePath": "docs/reference/updates/evidence/SHA256SUMS.txt",
+      "archivePath": "docs/archive/distribution-20261010/originals/github-guide/docs/reference/updates/evidence/SHA256SUMS.txt",
+      "gitBlob": "6c8f698a07a6819285bdca188c602e94f4804b0d",
+      "sourceMode": "100644",
+      "sha256": "fd08dd6ea2ed6933705b863a20ab4932fa86da33b4e7dd6bd406a754040c7592",
+      "bytes": 193
+    },
+    {
+      "branch": "docs/github-guide",
+      "sourcePath": "docs/reference/updates/evidence/farol-release.json",
+      "archivePath": "docs/archive/distribution-20261010/originals/github-guide/docs/reference/updates/evidence/farol-release.json",
+      "gitBlob": "9e554727dc4f92a18adea146efa31f5fb575df68",
+      "sourceMode": "100644",
+      "sha256": "c6b2d92486230026d54c831a7f2b52eb77cff7db3d422108dd66caecfb5cbaad",
+      "bytes": 857
+    },
+    {
+      "branch": "docs/github-guide",
+      "sourcePath": "docs/reference/updates/evidence/release-api.json",
+      "archivePath": "docs/archive/distribution-20261010/originals/github-guide/docs/reference/updates/evidence/release-api.json",
+      "gitBlob": "0dfc553f10e788b298b85a4662b1890e2bb1b51e",
+      "sourceMode": "100644",
+      "sha256": "9ab72d406c7e25dbc79a6b423efaddaf60f87938b5c7d74f2b9308e43baf5b90",
+      "bytes": 1789
+    },
+    {
+      "branch": "docs/github-guide",
+      "sourcePath": "docs/start/README.md",
+      "archivePath": "docs/archive/distribution-20261010/originals/github-guide/docs/start/README.md",
+      "gitBlob": "f7dce716eff012fe926a2e0662d456b29c108b97",
+      "sourceMode": "100644",
+      "sha256": "e71bb787bd797158a6cd12a1f1b62aed50788d1bdd8459ac0abf080ee0fd822f",
+      "bytes": 976
+    },
+    {
+      "branch": "docs/github-guide",
+      "sourcePath": "docs/start/first-connection.md",
+      "archivePath": "docs/archive/distribution-20261010/originals/github-guide/docs/start/first-connection.md",
+      "gitBlob": "f49cc07c9dda292ed51b4009f300cfca81ae96ed",
+      "sourceMode": "100644",
+      "sha256": "f51de8b88acc837380e1e58ae33ec9ac90b19b64ecf05f447b366fd1e0108478",
+      "bytes": 2745
+    },
+    {
+      "branch": "docs/github-guide",
+      "sourcePath": "docs/start/first-workspace.md",
+      "archivePath": "docs/archive/distribution-20261010/originals/github-guide/docs/start/first-workspace.md",
+      "gitBlob": "4090db41b1edd5883ebb8c2f6489dfdade35c1bd",
+      "sourceMode": "100644",
+      "sha256": "80854fa80f8dfedaf9d6f3f19459315615e642ee0bcf2c3f04e4c6125b349a4c",
+      "bytes": 3006
+    },
+    {
+      "branch": "docs/github-guide",
+      "sourcePath": "docs/start/installation.md",
+      "archivePath": "docs/archive/distribution-20261010/originals/github-guide/docs/start/installation.md",
+      "gitBlob": "62c1b1aa0d05399cf930e2d1b026415732c20f3d",
+      "sourceMode": "100644",
+      "sha256": "c580aa94ef20d992fdb0c431bb90d54e7cf22115e29d9f70649ce6bd428dd8c4",
+      "bytes": 3003
+    },
+    {
+      "branch": "docs/github-guide",
+      "sourcePath": "docs/tools/README.md",
+      "archivePath": "docs/archive/distribution-20261010/originals/github-guide/docs/tools/README.md",
+      "gitBlob": "3a75c4053a4bc329dee44e9077a6fe02980b899d",
+      "sourceMode": "100644",
+      "sha256": "b26e1ac996e7df24d5ab866d2de1c47c234b3bb3ac83bc76a0793d7ed9b1de0f",
+      "bytes": 1507
+    },
+    {
+      "branch": "docs/github-guide",
+      "sourcePath": "docs/tools/check.py",
+      "archivePath": "docs/archive/distribution-20261010/originals/github-guide/docs/tools/check.py.txt",
+      "gitBlob": "e2498454a2718c5c0dbb963de3cb951dc6ae7223",
+      "sourceMode": "100644",
+      "sha256": "bac5bcec18005cd017925c60693eb9be29710d427a5f27ccda67466bc397b756",
+      "bytes": 10717
+    },
+    {
+      "branch": "docs/github-guide",
+      "sourcePath": "docs/tools/redirects.json",
+      "archivePath": "docs/archive/distribution-20261010/originals/github-guide/docs/tools/redirects.json",
+      "gitBlob": "25b7e50f79574461f34e4c77c6767f169ee16410",
+      "sourceMode": "100644",
+      "sha256": "52c5063e978114fb0784b018fea4126036da4dda6ce300f0f418d037ed24d596",
+      "bytes": 29423
+    },
+    {
+      "branch": "farol-verification-policy",
+      "sourcePath": "tests/unit/verification-scope.test.mjs",
+      "archivePath": "docs/archive/distribution-20261010/originals/verification-policy/tests/unit/verification-scope.test.mjs.txt",
+      "gitBlob": "1a7f4a6943f289761c6d68f77205695c4d6163ce",
+      "sourceMode": "100644",
+      "sha256": "af5c34dc97f9631924f19f0d25f573677d44788016cfc4d5292d388bcf6f9f1b",
+      "bytes": 12125
+    },
+    {
+      "branch": "farol-verification-policy",
+      "sourcePath": "tooling/verification-scope.mjs",
+      "archivePath": "docs/archive/distribution-20261010/originals/verification-policy/tooling/verification-scope.mjs.txt",
+      "gitBlob": "4eeb35baa47e3d7178b76e5c2ada2e9c3051b327",
+      "sourceMode": "100644",
+      "sha256": "ca826a027756186e55b9103f574975d469c538b2eb7f7b786b6117bf5380720c",
+      "bytes": 8635
+    }
+  ],
+  "limits": [
+    "Nonshipping archive only. Preservation disposition closes the scoped archive queue, not source, package, OTA, install or live acceptance.",
+    "Original bytes are unchanged. All executable-source names gain .txt and all copied files have mode 0644. Never execute, import, register, build, install or publish these frozen sources.",
+    "Historical docs are drafts, not current guides. Internal links and commands are preserved verbatim and may be unresolved or obsolete; the archived checker is not runnable from this subset.",
+    "Original release producer requires package schema5 and Farol Next Preview.app; current 0.2 candidate requires schema7 and Farol.app. Do not downgrade schemas or replace the current package verifier.",
+    "The original producer invokes update-archive.py through Python; current compatibility filename contains the pinned Go executable and must be dispatched directly by the separately owned adaptation.",
+    "Historical legrch/farol-releases feed is obsolete for new releases; current new-release contract pins legrch/farol. Historical metadata is recovery/reference evidence only, never a fallback feed.",
+    "Distribution permits proposed io.github.legrch.farol identity and /Applications/Farol.app destination. These are not accepted current install identities; preserve local.farol.next.preview compatibility and current Release-owned slot/adoption contracts.",
+    "Bootstrap success is PREPARED only: script/image checksum and selected labels, not measured installed app acceptance, installation, launch, adoption, update baseline or OTA. DMG sidecars do not replace farol.github-release/1.",
+    "Old TypeScript-only/React-absent/Go-inactive, dirty-source Dev and Python-dependency statements apply only to their historical snapshot; no current runtime or recipient qualification follows.",
+    "Verification-scope is an unaccepted advisory proposal, not policy activation or a cheaper gate. Current AGENTS.md, docs/checkpoints.md and whole-tree build attestation govern.",
+    "Beta1 evidence files are dated 2026-10-03 publication metadata for 0.1.8-owner.beta.1/build10. Matching copied metadata does not verify ZIP contents, installed behavior or latest release.",
+    "Private source main stays private. No active Taskfile/package changes, tests, native/profile actions, commits, publication, pushes or independent chat coordination are authorized by this archive."
+  ],
+  "verification": {
+    "method": "Every copy compared byte-for-byte with its original pinned Git blob and git show pin:path; SHA-256 and size recorded; filesystem mode 0644. No tests executed.",
+    "result": "all-copied-bytes-match-pinned-originals"
+  }
+}

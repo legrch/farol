@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; img-src 'self' data:; font-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'none'; base-uri 'none'; form-action 'none'"
+    />
+    <title>Farol · Design room</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="board">
+      <div class="board-title">
+        <strong>Farol / Design room</strong>
+        <p>One interface. Light and dark. Sample data only.</p>
+      </div>
+      <nav class="directions" aria-label="Preview theme">
+        <button data-theme="light">Light</button
+        ><button data-theme="dark">Dark</button
+        ><button data-theme="system">System</button>
+      </nav>
+      <nav class="accent-controls" aria-label="Preview accent">
+        <button data-accent="iris">
+          <i style="background: #a99bea"></i>Iris</button
+        ><button data-accent="cobalt">
+          <i style="background: #91acf0"></i>Cobalt</button
+        ><button data-accent="amber">
+          <i style="background: #d6aa6c"></i>Amber
+        </button>
+      </nav>
+      <div class="lab-controls">
+        <select id="fixture" aria-label="Demo state">
+          <option value="working">Working</option>
+          <option value="ready">All quiet</option>
+          <option value="attention">Needs attention</option>
+          <option value="offline">Disconnected</option>
+          <option value="empty">First launch</option>
+          <option value="reused">Window reused</option></select
+        ><select id="update-fixture" aria-label="Update demo">
+          <option value="none">No update</option>
+          <option value="available">Update available</option>
+          <option value="ready">Update downloaded</option>
+          <option value="failed">Update failed</option>
+        </select>
+      </div>
+    </header>
+    <div class="window" id="window">
+      <header class="titlebar" id="window-header"></header>
+      <div class="workspace" id="workspace">
+        <nav class="rail" id="rail" aria-label="Main navigation"></nav>
+        <aside
+          class="context"
+          id="context"
+          aria-label="Section navigation"
+        ></aside>
+        <button
+          class="scrim"
+          aria-label="Close section navigation"
+          data-action="close-context"
+        ></button>
+        <main class="pane" id="pane"></main>
+      </div>
+      <div
+        class="toast"
+        id="toast"
+        role="status"
+        aria-live="polite"
+        hidden
+      ></div>
+      <dialog class="dialog" id="dialog"></dialog>
+    </div>
+    <footer class="footer">
+      <p class="thesis" id="thesis"></p>
+      <a href="gallery.html">Theme comparison ↗</a
+      ><a href="brand.html">Brand study ↗</a
+      ><a href="menu-bar.html">Menu bar study ↗</a
+      ><a href="design-notes.md" target="_blank">Design notes ↗</a
+      ><a href="../v1.html">First exploration ↗</a>
+    </footer>
+    <script src="mark-library.js"></script>
+    <script src="update-ui.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>

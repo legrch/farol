@@ -1,0 +1,106 @@
+{
+  "schema": "farol.coordinator-archive-path-map/1",
+  "accepted_baseline": "aa242b08f755618db8081b638e013b24ec1e28bb",
+  "content": "Exact Git blob bytes; filenames alone change for frozen executable sources.",
+  "files": [
+    {
+      "id": "execution-proposal",
+      "source_commit": "ce91353d5d1c7f114ca9f276cdd44cdfa86d2f08",
+      "original_path": "docs/proposals/verification-execution-contract.md",
+      "archive_path": "docs/archive/coordinator-20261010/frozen/ce91353d5d1c7f114ca9f276cdd44cdfa86d2f08/docs/proposals/verification-execution-contract.md",
+      "git_blob_oid": "b9981b8441a8712e3643e34d30585494f0281839",
+      "bytes": 24245,
+      "sha256": "f9c34497b5d72bb4381e5018c602006195fe170d79d6e92337de3ffd65497421"
+    },
+    {
+      "id": "integration-sequence",
+      "source_commit": "c3b0c7ea147aad7871d6bfc88ba5112889528348",
+      "original_path": "docs/proposals/coordinator-integration-sequence.md",
+      "archive_path": "docs/archive/coordinator-20261010/frozen/c3b0c7ea147aad7871d6bfc88ba5112889528348/docs/proposals/coordinator-integration-sequence.md",
+      "git_blob_oid": "614e00b16b748e9e2b1d7c4cc82a439962b7e053",
+      "bytes": 20475,
+      "sha256": "542826bef7c22b614f50db8e8de4aacb9a74b1e269f64154aa0177f5a2dd6ae0"
+    },
+    {
+      "id": "parity-ledger",
+      "source_commit": "3c823c1b590a48baa31dcc5c8dd58109e81e96f8",
+      "original_path": "docs/v0-parity-ledger.md",
+      "archive_path": "docs/archive/coordinator-20261010/frozen/3c823c1b590a48baa31dcc5c8dd58109e81e96f8/docs/v0-parity-ledger.md",
+      "git_blob_oid": "c6daef78146ce87971d002dc1054c969376be0dd",
+      "bytes": 4780,
+      "sha256": "97ec34ce46516c067e5e8ee2e2d79a08700a791943ccd80e6e1eb2685d81a7c4"
+    },
+    {
+      "id": "parity-fixture",
+      "source_commit": "3c823c1b590a48baa31dcc5c8dd58109e81e96f8",
+      "original_path": "tests/fixtures/v0-parity-baseline.json",
+      "archive_path": "docs/archive/coordinator-20261010/frozen/3c823c1b590a48baa31dcc5c8dd58109e81e96f8/tests/fixtures/v0-parity-baseline.json",
+      "git_blob_oid": "ad31aacd2804c972360f74d6eb6705cf1b6d3205",
+      "bytes": 12569,
+      "sha256": "59038f163b8aa366664e1ec32322bd349b60a2890d51496438c3d45015a9b8f4"
+    },
+    {
+      "id": "parity-selftest",
+      "source_commit": "3c823c1b590a48baa31dcc5c8dd58109e81e96f8",
+      "original_path": "tests/fixtures/v0-parity.selftest.mjs",
+      "archive_path": "docs/archive/coordinator-20261010/frozen/3c823c1b590a48baa31dcc5c8dd58109e81e96f8/tests/fixtures/v0-parity.selftest.mjs.txt",
+      "git_blob_oid": "f8a4d77cc4154802fb2fda83ef7571487a69dee9",
+      "bytes": 2994,
+      "sha256": "f383ec5090cec6e70cc69c03729508b55416192f788762f54ab149b8e3d93916"
+    },
+    {
+      "id": "parity-checker",
+      "source_commit": "3c823c1b590a48baa31dcc5c8dd58109e81e96f8",
+      "original_path": "tooling/check-v0-parity.mjs",
+      "archive_path": "docs/archive/coordinator-20261010/frozen/3c823c1b590a48baa31dcc5c8dd58109e81e96f8/tooling/check-v0-parity.mjs.txt",
+      "git_blob_oid": "c145eda2a182e6d648ce39b037d135d75efa75fd",
+      "bytes": 5268,
+      "sha256": "a4cb3a1b331e0aa8a077b22f17342e905371420e46b399c4f565910d1ede86f4"
+    },
+    {
+      "id": "task-control-candidate",
+      "source_commit": "2a7ce30f81db4637e7ff130463648a4c7773b5ed",
+      "original_path": "docs/task-control-candidate.md",
+      "archive_path": "docs/archive/coordinator-20261010/frozen/2a7ce30f81db4637e7ff130463648a4c7773b5ed/docs/task-control-candidate.md",
+      "git_blob_oid": "cbe59c948183ac4b7ca9b51b73963f4b9d2d3eb7",
+      "bytes": 5091,
+      "sha256": "0b4f04c28f028739468e1cb9aa040d52f26d3255dd22598320e8333d2709eb39"
+    },
+    {
+      "id": "owner-message-port",
+      "source_commit": "1e7757e4a1e3d790df5fd67d09de8a7fda58e1fb",
+      "original_path": "src/modules/chat/app/port/owner-task-messages.ts",
+      "archive_path": "docs/archive/coordinator-20261010/frozen/1e7757e4a1e3d790df5fd67d09de8a7fda58e1fb/src/modules/chat/app/port/owner-task-messages.ts.txt",
+      "git_blob_oid": "cc8b40f1f443f4f17331d5c329556022c0698989",
+      "bytes": 4098,
+      "sha256": "0e1aec6799624464ab6aa9908730d479a32f90d7614ecaeaf40c02b28940ddc2"
+    },
+    {
+      "id": "owner-message-service",
+      "source_commit": "1e7757e4a1e3d790df5fd67d09de8a7fda58e1fb",
+      "original_path": "src/modules/chat/app/service/send-owner-task-message.ts",
+      "archive_path": "docs/archive/coordinator-20261010/frozen/1e7757e4a1e3d790df5fd67d09de8a7fda58e1fb/src/modules/chat/app/service/send-owner-task-message.ts.txt",
+      "git_blob_oid": "2b7f86537e50cb61a0b3b9c1cd42a55cc8f5a0f9",
+      "bytes": 11432,
+      "sha256": "b8db1d20a7d175ceb4616162b4da2454ab1890a67967327649506d28359c97cc"
+    },
+    {
+      "id": "owner-message-sender",
+      "source_commit": "1e7757e4a1e3d790df5fd67d09de8a7fda58e1fb",
+      "original_path": "src/modules/chat/infra/native/native-owner-task-message-sender.ts",
+      "archive_path": "docs/archive/coordinator-20261010/frozen/1e7757e4a1e3d790df5fd67d09de8a7fda58e1fb/src/modules/chat/infra/native/native-owner-task-message-sender.ts.txt",
+      "git_blob_oid": "a922a677cd304bb70c16aef3338658d695265f4b",
+      "bytes": 2940,
+      "sha256": "27bca2e45dfad6dfce70b5b25ea3736aba879385769c2dd5448c81f00ea27143"
+    },
+    {
+      "id": "owner-message-tests",
+      "source_commit": "1e7757e4a1e3d790df5fd67d09de8a7fda58e1fb",
+      "original_path": "tests/integration/owner-task-messages.test.ts",
+      "archive_path": "docs/archive/coordinator-20261010/frozen/1e7757e4a1e3d790df5fd67d09de8a7fda58e1fb/tests/integration/owner-task-messages.test.ts.txt",
+      "git_blob_oid": "570391db1a3c0029c609d27f5b236e7da8b9c249",
+      "bytes": 27039,
+      "sha256": "2624303a2d55ca5749cb93236cd03f10529690ba972754f4306d333f920037f1"
+    }
+  ]
+}

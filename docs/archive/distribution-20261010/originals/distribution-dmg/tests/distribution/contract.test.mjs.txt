@@ -1,0 +1,106 @@
+import { describe, expect, it } from "vitest";
+import {
+  binding,
+  assertArtifact,
+  imageName,
+  releaseUrl,
+  parseOptions,
+  RELEASE_OPTIONS,
+} from "../../tooling/distribution/contract.mjs";
+import { bootstrapCommand } from "../../tooling/distribution/command.mjs";
+const expected = {
+  version: "0.1.8-owner.beta.1",
+  buildVersion: "10",
+  channel: "github-owner-beta",
+  arch: "arm64",
+  bundleId: "local.farol.next.preview",
+  appSha256: "a".repeat(64),
+};
+const { appSha256: _appSha256, ...release } = expected;
+const artifact = {
+  sourceDirty: false,
+  version: expected.version,
+  buildVersion: expected.buildVersion,
+  updateChannel: expected.channel,
+  bundleId: expected.bundleId,
+  artifactSha256: expected.appSha256,
+  runtime: { platform: "darwin", arch: "arm64" },
+  signing: { kind: "unsigned" },
+  notarized: false,
+};
+describe("alpha distribution binding", () => {
+  it("pins immutable release URLs and architecture", () => {
+    expect(releaseUrl(expected, imageName(expected))).toBe(
+      "https://github.com/legrch/farol-releases/releases/download/v0.1.8-owner.beta.1/Farol-0.1.8-owner.beta.1-macos-arm64.dmg",
+    );
+    expect(assertArtifact(artifact, expected)).toBeUndefined();
+  });
+  it.each([
+    { arch: "x64" },
+    { channel: "github-stable" },
+    { bundleId: "io.github.legrch.farol.dev" },
+    { version: "latest" },
+    { version: "0.1.8-owner.beta.01" },
+    { buildVersion: "0" },
+    { version: "0.1.8;touch /tmp/pwned" },
+    { appSha256: "a".repeat(63) },
+  ])("refuses unsupported or injectable binding %j", (delta) => {
+    expect(() => binding({ ...expected, ...delta })).toThrow(/DISTRIBUTION_/u);
+  });
+  it.each([
+    { sourceDirty: true },
+    { artifactSha256: "b".repeat(64) },
+    { buildVersion: "11" },
+    { runtime: { platform: "darwin", arch: "x64" } },
+    { notarized: true },
+    { updateChannel: "github-stable" },
+  ])("refuses package claims differing from accepted input %j", (delta) => {
+    expect(() => assertArtifact({ ...artifact, ...delta }, expected)).toThrow(
+      /DISTRIBUTION_/u,
+    );
+  });
+  it("refuses caller-chosen asset paths and ambiguous CLI options", () => {
+    expect(() => releaseUrl(expected, "../../other.sh")).toThrow(
+      "DISTRIBUTION_ASSET_INVALID",
+    );
+    for (const args of [
+      ["--app"],
+      ["--app", "a", "--app", "b"],
+      ["--unknown", "a"],
+      [],
+    ])
+      expect(() => parseOptions(args, ["app"])).toThrow(
+        "DISTRIBUTION_ARGUMENTS_INVALID",
+      );
+  });
+  it("rejects an app-tree digest as a bootstrap input instead of silently ignoring it", () => {
+    for (const appSha256 of ["a".repeat(64), "b".repeat(64)]) {
+      expect(() =>
+        bootstrapCommand(
+          { ...release, appSha256 },
+          "b".repeat(64),
+          "c".repeat(64),
+        ),
+      ).toThrow("DISTRIBUTION_BOOTSTRAP_SELECTION_INVALID");
+    }
+    expect(() =>
+      parseOptions(
+        ["--app-sha256", "a".repeat(64)],
+        [...RELEASE_OPTIONS, "dmg-sha256", "installer-sha256"],
+      ),
+    ).toThrow("DISTRIBUTION_ARGUMENTS_INVALID");
+  });
+  it("checks both downloaded script and DMG, without latest lookup", () => {
+    const command = bootstrapCommand(release, "b".repeat(64), "c".repeat(64));
+    expect(command).toContain("/usr/bin/shasum -a 256 -c -");
+    expect(command).toContain("--proto-redir");
+    expect(command).toContain("--retry 0");
+    expect(command).toContain("v0.1.8-owner.beta.1/install-alpha.sh");
+    expect(command).toContain("b".repeat(64));
+    expect(command).toContain("c".repeat(64));
+    expect(command).not.toMatch(/latest|sudo|xattr|spctl/u);
+    expect(() => bootstrapCommand(release, "x", "c".repeat(64))).toThrow(
+      "DISTRIBUTION_DOWNLOAD_DIGEST_INVALID",
+    );
+  });
+});

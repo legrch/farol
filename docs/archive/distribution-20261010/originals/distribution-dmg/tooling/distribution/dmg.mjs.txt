@@ -1,0 +1,285 @@
+import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import fs from "node:fs/promises";
+import { createReadStream } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { treeDigest, TREE_DIGEST_VERSION } from "../artifact-digest.mjs";
+import { verifyPackageContent } from "../verify-package-content.mjs";
+import { assertExactSourceIdentity } from "../candidate-contract.mjs";
+import {
+  assertArtifact,
+  sourceSelection,
+  binding,
+  imageName,
+  requireValue,
+  parseOptions,
+  optionBinding,
+  BINDING_OPTIONS,
+} from "./contract.mjs";
+
+export function runSystem(command, args, input) {
+  return execFileSync(command, args, {
+    encoding: "utf8",
+    input,
+    timeout: 180_000,
+    maxBuffer: 2 * 1024 * 1024,
+    env: {
+      PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
+      LANG: "C",
+      HOME: process.env.HOME,
+      TMPDIR: os.tmpdir(),
+    },
+  });
+}
+
+export async function withMountedImage(image, observe, run = runSystem) {
+  const root = await fs.realpath(
+    await fs.mkdtemp(path.join(os.tmpdir(), "farol-dmg-mount-")),
+  );
+  const mount = path.join(root, "volume");
+  await fs.mkdir(mount);
+  let output;
+  try {
+    output = run("/usr/bin/hdiutil", [
+      "attach",
+      image,
+      "-readonly",
+      "-nobrowse",
+      "-noautoopen",
+      "-owners",
+      "on",
+      "-mountpoint",
+      mount,
+      "-plist",
+    ]);
+  } catch (cause) {
+    // Attach may have taken effect. Do not attach again, delete a potentially
+    // mounted tree, or guess a device from global machine state.
+    throw new Error(`DISTRIBUTION_MOUNT_OUTCOME_UNKNOWN:${mount}`, { cause });
+  }
+  try {
+    const receipt = JSON.parse(
+      run("/usr/bin/plutil", ["-convert", "json", "-o", "-", "-"], output),
+    );
+    const mounted = receipt["system-entities"]?.filter(
+      (entry) => entry["mount-point"],
+    );
+    requireValue(
+      mounted?.length === 1 &&
+        mounted[0]["mount-point"] === mount &&
+        /^\/dev\/disk[0-9]+s[0-9]+$/u.test(mounted[0]["dev-entry"]),
+      "DISTRIBUTION_MOUNT_IDENTITY_INVALID",
+    );
+    return await observe(mount);
+  } finally {
+    try {
+      run("/usr/bin/hdiutil", ["detach", mount]);
+    } catch (cause) {
+      throw new Error(`DISTRIBUTION_UNMOUNT_OUTCOME_UNKNOWN:${mount}`, {
+        cause,
+      });
+    }
+    await fs.rm(root, { recursive: true });
+  }
+}
+
+export async function assertVolume(mount, expectedDigest) {
+  const names = (await fs.readdir(mount))
+    .filter(
+      (name) =>
+        ![".fseventsd", ".Trashes", ".HFS+ Private Directory Data\r"].includes(
+          name,
+        ),
+    )
+    .sort();
+  requireValue(
+    names.join("\0") ===
+      ["Applications", "Farol.app", "Install.txt"].join("\0"),
+    "DISTRIBUTION_VOLUME_LAYOUT_INVALID",
+  );
+  const applications = path.join(mount, "Applications");
+  requireValue(
+    (await fs.lstat(applications)).isSymbolicLink() &&
+      (await fs.readlink(applications)) === "/Applications",
+    "DISTRIBUTION_APPLICATIONS_LINK_INVALID",
+  );
+  requireValue(
+    (await fs.lstat(path.join(mount, "Install.txt"))).isFile(),
+    "DISTRIBUTION_GUIDE_TYPE_INVALID",
+  );
+  requireValue(
+    (await treeDigest(path.join(mount, "Farol.app"))) === expectedDigest,
+    "DISTRIBUTION_MOUNTED_APP_MISMATCH",
+  );
+}
+
+function installText(expected) {
+  return `Farol technical alpha\n\nRelease: ${expected.version} (build ${expected.buildVersion})\nChannel: ${expected.channel}; macOS Apple silicon (arm64)\nApp tree SHA-256 (${TREE_DIGEST_VERSION}): ${expected.appSha256}\n\nThis app is unsigned and not notarized.\nQuit if Farol is already installed; do not replace it using Finder.\nDrag Farol.app to Applications only for a release qualified for first install.\nEject this disk before opening the copied app.\nAfter a blocked first open, review System Settings > Privacy & Security > Open Anyway.\nDo not change global security settings or remove quarantine as an installation step.\n\nFirst-launch verification/baseline and later updates belong to Release.\nDrag install does not itself prove baseline/update eligibility.\nSee the release's alpha install guide and recipient acceptance record.\n`;
+}
+
+// Only the CLI below establishes Release package verification. This physical
+// packaging primitive is also exercised with a tiny, explicitly synthetic app.
+export async function writeImage({ app, expected, output, run = runSystem }) {
+  binding(expected);
+  requireValue(
+    process.platform === "darwin",
+    "DISTRIBUTION_PLATFORM_UNSUPPORTED",
+  );
+  requireValue(
+    path.basename(app) === "Farol.app",
+    "DISTRIBUTION_APP_NAME_INVALID",
+  );
+  requireValue(
+    (await treeDigest(app)) === expected.appSha256,
+    "DISTRIBUTION_INPUT_APP_MISMATCH",
+  );
+  const physicalApp = await fs.realpath(app);
+  const physicalOutput = path.join(
+    await fs.realpath(path.dirname(output)),
+    path.basename(output),
+  );
+  const relative = path.relative(physicalApp, physicalOutput);
+  requireValue(
+    relative === ".." ||
+      relative.startsWith(`..${path.sep}`) ||
+      path.isAbsolute(relative),
+    "DISTRIBUTION_OUTPUT_OVERLAPS_APP",
+  );
+  // No overwrite flag: even an empty pre-existing output directory is refused.
+  await fs.mkdir(output, { mode: 0o700 });
+  const stage = await fs.realpath(
+    await fs.mkdtemp(path.join(os.tmpdir(), "farol-dmg-stage-")),
+  );
+  const image = path.join(output, imageName(expected));
+  try {
+    run("/usr/bin/ditto", [app, path.join(stage, "Farol.app")]);
+    requireValue(
+      (await treeDigest(path.join(stage, "Farol.app"))) === expected.appSha256,
+      "DISTRIBUTION_STAGED_APP_MISMATCH",
+    );
+    await fs.symlink("/Applications", path.join(stage, "Applications"));
+    await fs.writeFile(path.join(stage, "Install.txt"), installText(expected), {
+      mode: 0o644,
+    });
+    run("/usr/bin/hdiutil", [
+      "create",
+      "-srcfolder",
+      stage,
+      "-volname",
+      `Farol ${expected.version}`,
+      "-fs",
+      "HFS+",
+      "-format",
+      "UDZO",
+      "-imagekey",
+      "zlib-level=9",
+      image,
+    ]);
+    run("/usr/bin/hdiutil", ["verify", image]);
+    await withMountedImage(
+      image,
+      (mount) => assertVolume(mount, expected.appSha256),
+      run,
+    );
+    requireValue(
+      (await treeDigest(app)) === expected.appSha256,
+      "DISTRIBUTION_SOURCE_CHANGED",
+    );
+    const hash = createHash("sha256");
+    for await (const chunk of createReadStream(image)) hash.update(chunk);
+    const sha256 = hash.digest("hex");
+    return { image, sha256, size: (await fs.stat(image)).size };
+  } finally {
+    await fs.rm(stage, { recursive: true });
+  }
+}
+
+export async function buildDmg(options) {
+  const expected = binding(options.expected);
+  const source = sourceSelection(options.source);
+  const artifact = JSON.parse(await fs.readFile(options.artifact, "utf8"));
+  assertArtifact(artifact, expected);
+  assertExactSourceIdentity(source, artifact, "DISTRIBUTION_SOURCE_MISMATCH");
+  // Reuse the existing Release-owned content/attestation verifier. No DMG
+  // flag disables it or turns a fixture into an accepted release.
+  await verifyPackageContent({
+    artifact,
+    appPath: options.app,
+    expectedVersion: expected.version,
+    expectedBuildVersion: expected.buildVersion,
+    expectedChannel: expected.channel,
+  });
+  const result = await writeImage({
+    app: options.app,
+    expected,
+    output: options.output,
+  });
+  const metadata = {
+    schema: "farol.distribution-dmg/1",
+    repository: "legrch/farol-releases",
+    platform: "darwin",
+    arch: expected.arch,
+    channel: expected.channel,
+    version: expected.version,
+    buildVersion: expected.buildVersion,
+    bundleId: expected.bundleId,
+    buildId: artifact.buildId,
+    sourceCommit: source.commit,
+    sourceTreeDigest: source.treeDigest,
+    sourceDirty: false,
+    signing: "unsigned",
+    notarized: false,
+    app: {
+      name: "Farol.app",
+      treeDigestVersion: TREE_DIGEST_VERSION,
+      sha256: expected.appSha256,
+    },
+    dmg: {
+      name: imageName(expected),
+      sha256: result.sha256,
+      size: result.size,
+      format: "UDZO",
+      filesystem: "HFS+",
+      volumeName: `Farol ${expected.version}`,
+    },
+    applicationsTarget: "/Applications",
+  };
+  await fs.writeFile(
+    path.join(options.output, `${imageName(expected)}.json`),
+    `${JSON.stringify(metadata, null, 2)}\n`,
+    { flag: "wx", mode: 0o644 },
+  );
+  await fs.writeFile(
+    path.join(options.output, "SHA256SUMS"),
+    `${result.sha256}  ${imageName(expected)}\n`,
+    { flag: "wx", mode: 0o644 },
+  );
+  return metadata;
+}
+
+if (
+  process.argv[1] &&
+  path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+) {
+  const options = parseOptions(process.argv.slice(2), [
+    ...BINDING_OPTIONS,
+    "app",
+    "artifact",
+    "source-commit",
+    "source-tree-digest",
+    "output",
+  ]);
+  const result = await buildDmg({
+    app: path.resolve(options.app),
+    artifact: path.resolve(options.artifact),
+    output: path.resolve(options.output),
+    expected: optionBinding(options),
+    source: {
+      commit: options["source-commit"],
+      treeDigest: options["source-tree-digest"],
+    },
+  });
+  process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+}

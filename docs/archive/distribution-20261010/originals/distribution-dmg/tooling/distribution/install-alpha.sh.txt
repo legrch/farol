@@ -1,0 +1,106 @@
+#!/bin/sh
+# Preparation skeleton. Release must supply the first-install entrypoint before
+# this can copy an app or publish its installation baseline.
+set -eu
+PATH=/usr/bin:/bin:/usr/sbin:/sbin
+export PATH
+umask 077
+fail() { printf '%s\n' "$1" >&2; exit 1; }
+version= build= channel= arch= bundle= digest=
+seen=' '
+while [ "$#" -gt 0 ]; do
+  [ "$#" -ge 2 ] || fail DISTRIBUTION_ARGUMENTS_INVALID
+  # grep validates lines; control bytes must never form extra URL/checksum records.
+  case "$2" in *[[:cntrl:]]*) fail DISTRIBUTION_ARGUMENTS_INVALID;; esac
+  case "$seen" in *" $1 "*) fail DISTRIBUTION_ARGUMENTS_INVALID;; esac
+  seen="$seen$1 "
+  case "$1" in
+    --version) version=$2;;
+    --build-version) build=$2;;
+    --channel) channel=$2;;
+    --arch) arch=$2;;
+    --bundle-id) bundle=$2;;
+    --dmg-sha256) digest=$2;;
+    *) fail DISTRIBUTION_ARGUMENTS_INVALID;;
+  esac
+  shift 2
+done
+printf '%s\n' "$version" | /usr/bin/grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-owner\.beta\.(0|[1-9][0-9]*)$' || fail DISTRIBUTION_VERSION_INVALID
+printf '%s\n' "$build" | /usr/bin/grep -Eq '^[1-9][0-9]{0,8}$' || fail DISTRIBUTION_BUILD_INVALID
+printf '%s\n' "$digest" | /usr/bin/grep -Eq '^[a-f0-9]{64}$' || fail DISTRIBUTION_DOWNLOAD_DIGEST_INVALID
+[ "$channel" = github-owner-beta ] || fail DISTRIBUTION_CHANNEL_INVALID
+[ "$arch" = arm64 ] || fail DISTRIBUTION_ARCH_UNSUPPORTED
+case "$bundle" in local.farol.next.preview|io.github.legrch.farol) ;; *) fail DISTRIBUTION_BUNDLE_INVALID;; esac
+[ "$(/usr/bin/uname -s)" = Darwin ] || fail DISTRIBUTION_PLATFORM_UNSUPPORTED
+# Reports hardware capability even when Terminal itself runs under Rosetta.
+[ "$(/usr/sbin/sysctl -n hw.optional.arm64 2>/dev/null)" = 1 ] || fail DISTRIBUTION_ARCH_UNSUPPORTED
+[ -n "${HOME:-}" ] && [ -d "$HOME/Downloads" ] || fail DISTRIBUTION_DOWNLOADS_UNAVAILABLE
+refuse_existing() {
+  for slot in /Applications/Farol.app "$HOME/Applications/Farol.app" "$HOME/Applications/Farol Next Preview.app"; do
+    if [ -e "$slot" ] || [ -L "$slot" ]; then fail DISTRIBUTION_EXISTING_INSTALL; fi
+  done
+}
+refuse_existing
+root=$(/usr/bin/mktemp -d "$HOME/Downloads/farol-alpha.XXXXXXXX")
+mount=$root/volume
+mounted=0
+prepared=0
+cleanup() {
+  result=$?
+  trap - 0
+  if [ "$mounted" = unknown ]; then
+    printf 'DISTRIBUTION_UNMOUNT_OUTCOME_UNKNOWN:%s\n' "$mount" >&2
+    exit 1
+  fi
+  if [ "$mounted" = 1 ]; then
+    mounted=unknown
+    if ! /usr/bin/hdiutil detach "$mount" >/dev/null; then
+      printf 'DISTRIBUTION_UNMOUNT_OUTCOME_UNKNOWN:%s\n' "$mount" >&2
+      exit 1
+    fi
+    mounted=0
+  fi
+  if [ "$prepared" = 1 ]; then
+    /bin/rmdir "$mount"
+    /bin/rm "$root/attach.plist"
+  else
+    /bin/rm -rf "$root"
+  fi
+  exit "$result"
+}
+trap cleanup 0
+trap 'exit 130' INT
+trap 'exit 143' HUP TERM
+name=Farol-$version-macos-$arch.dmg
+image=$root/$name
+url=https://github.com/legrch/farol-releases/releases/download/v$version/$name
+/usr/bin/curl -q --proto '=https' --proto-redir '=https' --fail --location --silent --show-error --max-time 180 --retry 0 --output "$image" "$url"
+printf '%s  %s\n' "$digest" "$image" | /usr/bin/shasum -a 256 -c -
+/usr/bin/hdiutil verify "$image" >/dev/null
+/bin/mkdir "$mount"
+# Once dispatched, attach may have taken effect even if acknowledgement is
+# missing. Cleanup detaches only this private mountpoint once; no new attach.
+mounted=1
+/usr/bin/hdiutil attach "$image" -readonly -nobrowse -noautoopen -mountpoint "$mount" -plist > "$root/attach.plist"
+[ -d "$mount/Farol.app" ] && [ ! -L "$mount/Farol.app" ] || fail DISTRIBUTION_APP_TYPE_INVALID
+[ -L "$mount/Applications" ] && [ "$(/usr/bin/readlink "$mount/Applications")" = /Applications ] || fail DISTRIBUTION_APPLICATIONS_LINK_INVALID
+plist=$mount/Farol.app/Contents/Info.plist
+[ "$(/usr/bin/plutil -extract CFBundleIdentifier raw -o - "$plist")" = "$bundle" ] || fail DISTRIBUTION_BUNDLE_MISMATCH
+[ "$(/usr/bin/plutil -extract CFBundleShortVersionString raw -o - "$plist")" = "${version%%-*}" ] || fail DISTRIBUTION_VERSION_MISMATCH
+[ "$(/usr/bin/plutil -extract CFBundleVersion raw -o - "$plist")" = "$build" ] || fail DISTRIBUTION_BUILD_MISMATCH
+identity=$mount/Farol.app/Contents/Resources/app/build-identity.json
+[ "$(/usr/bin/plutil -extract version raw -o - "$identity")" = "$version" ] || fail DISTRIBUTION_VERSION_MISMATCH
+resources=$mount/Farol.app/Contents/Resources/app/resource-manifest.json
+[ "$(/usr/bin/plutil -extract product.updateChannel raw -o - "$resources")" = "$channel" ] || fail DISTRIBUTION_CHANNEL_MISMATCH
+refuse_existing
+/bin/chmod 400 "$image"
+# Mark the detach as possibly effective before dispatch. A failed or interrupted
+# detach retains evidence and never re-enters that command from the exit trap.
+mounted=unknown
+if ! /usr/bin/hdiutil detach "$mount" >/dev/null; then
+  fail "DISTRIBUTION_UNMOUNT_OUTCOME_UNKNOWN:$mount"
+fi
+mounted=0
+prepared=1
+printf 'PREPARED: %s\n' "$image"
+printf '%s\n' 'Release first-install binding is pending. No app was installed or launched; no baseline receipt was written.'

@@ -1,0 +1,418 @@
+import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { describe, expect, it } from "vitest";
+import { bootstrapCommand } from "../../tooling/distribution/command.mjs";
+
+// Runs the real POSIX skeleton with fixture HTTPS/download/mount/hardware
+// boundaries. shasum/plutil/shell and on-disk refusal are real; this is not
+// network, Gatekeeper, native mount, recipient or baseline evidence.
+const source = await fs.readFile(
+  new URL("../../tooling/distribution/install-alpha.sh", import.meta.url),
+  "utf8",
+);
+const payload = "synthetic disk image transport\n";
+const digest = createHash("sha256").update(payload).digest("hex");
+const baseArgs = [
+  "--version",
+  "0.1.8-owner.beta.1",
+  "--build-version",
+  "10",
+  "--channel",
+  "github-owner-beta",
+  "--arch",
+  "arm64",
+  "--bundle-id",
+  "local.farol.next.preview",
+  "--dmg-sha256",
+  digest,
+];
+
+async function fixture(options, observe) {
+  const root = await fs.realpath(
+    await fs.mkdtemp(path.join(os.tmpdir(), "farol-bootstrap-test-")),
+  );
+  try {
+    const home = path.join(root, "test home with spaces");
+    const systemSlot = path.join(root, "Applications/Farol.app");
+    const slots = {
+      system: systemSlot,
+      user: path.join(home, "Applications/Farol.app"),
+      preview: path.join(home, "Applications/Farol Next Preview.app"),
+    };
+    const devSlots = [
+      path.join(root, "Applications/Farol Dev.app"),
+      path.join(home, "Applications/Farol Dev.app"),
+    ];
+    const scriptPath = path.join(root, "install-alpha.sh");
+    const argumentLog = path.join(root, "arguments");
+    await fs.mkdir(path.join(home, "Downloads"), { recursive: true });
+    await fs.mkdir(path.join(root, "bin"));
+    const quote = (value) => `'${value.replaceAll("'", "'\\''")}'`;
+    const log = path.join(root, "calls");
+    const executable = async (name, body) => {
+      const target = path.join(root, "bin", name);
+      await fs.writeFile(
+        target,
+        `#!/bin/sh\nset -eu\nprintf '%s\\n' ${quote(name)} >> ${quote(log)}\nprintf '%s\\n' "$@" >> ${quote(argumentLog)}\n${body}`,
+        { mode: 0o755 },
+      );
+      return target;
+    };
+    const uname = await executable("uname", "printf 'Darwin\\n'\n");
+    const sysctl = await executable(
+      "sysctl",
+      `printf '${options.intel ? "0" : "1"}\\n'\n`,
+    );
+    const curl = await executable(
+      "curl",
+      `url=; for arg in "$@"; do url=$arg; done\nwhile [ "$1" != --output ]; do shift; done\n${options.downloadFailure ? "exit 22" : ""}\ncase "$url" in\n*/install-alpha.sh) /bin/cp ${quote(scriptPath)} "$2"; ${options.corruptScript ? "printf '\n# changed fixture bytes\n' >> \"$2\"" : ":"};;\n*.dmg) printf '%s' ${quote(payload)} > "$2";;\n*) exit 1;;\nesac\n`,
+    );
+    const fixtureApp = path.join(root, "fixture/Farol.app");
+    await fs.mkdir(path.join(fixtureApp, "Contents/Resources/app"), {
+      recursive: true,
+    });
+    await fs.writeFile(
+      path.join(fixtureApp, "Contents/Info.plist"),
+      JSON.stringify({
+        CFBundleIdentifier: options.bundle ?? "local.farol.next.preview",
+        CFBundleShortVersionString: "0.1.8",
+        CFBundleVersion: "10",
+      }),
+    );
+    await fs.writeFile(
+      path.join(fixtureApp, "Contents/Resources/app/build-identity.json"),
+      JSON.stringify({ version: options.version ?? "0.1.8-owner.beta.1" }),
+    );
+    await fs.writeFile(
+      path.join(fixtureApp, "Contents/Resources/app/resource-manifest.json"),
+      JSON.stringify({
+        product: { updateChannel: options.channel ?? "github-owner-beta" },
+      }),
+    );
+    const attachApp = options.appSymlink
+      ? `/bin/ln -s ${quote(fixtureApp)} "$mount/Farol.app"`
+      : `/bin/cp -R ${quote(fixtureApp)} "$mount/Farol.app"`;
+    const slotAfterMount = options.slotAfterMount
+      ? `/bin/mkdir -p ${quote(systemSlot)}; printf 'owner app\n' > ${quote(path.join(systemSlot, "owner.txt"))};`
+      : "";
+    const hdiutil = await executable(
+      "hdiutil",
+      `case "$1" in\nattach) while [ "$1" != -mountpoint ]; do shift; done; mount=$2; ${attachApp}; /bin/ln -s ${quote(options.wrongLink ? "/tmp/not-applications" : "/Applications")} "$mount/Applications"; ${slotAfterMount} ${options.attachFailure ? "exit 1" : ":"};;\ndetach) ${options.detachFailure ? "exit 1" : '/bin/rm -rf "$2/Farol.app"; /bin/rm "$2/Applications"'};;\nverify) ${options.verifyFailure ? "exit 1" : ":"};;\n*) exit 1;;\nesac\n`,
+    );
+    let script = source
+      .replaceAll("/usr/bin/uname", uname)
+      .replaceAll("/usr/sbin/sysctl", sysctl)
+      .replaceAll("/usr/bin/curl", curl)
+      .replaceAll("/usr/bin/hdiutil", hdiutil)
+      .replace(
+        "for slot in /Applications/Farol.app",
+        `for slot in ${quote(systemSlot)}`,
+      );
+    await fs.writeFile(scriptPath, script);
+    if (options.existing) {
+      const slot = slots[options.existing];
+      await fs.mkdir(path.dirname(slot), { recursive: true });
+      if (options.dangling) await fs.symlink(path.join(root, "absent"), slot);
+      else if (options.existingFile) await fs.writeFile(slot, "owner app\n");
+      else {
+        await fs.mkdir(slot);
+        await fs.writeFile(path.join(slot, "owner.txt"), "owner app\n");
+      }
+    }
+    if (options.dev) {
+      for (const slot of devSlots) {
+        await fs.mkdir(slot, { recursive: true });
+        await fs.writeFile(path.join(slot, "owner.txt"), "separate dev\n");
+      }
+    }
+    const args = [...baseArgs];
+    for (const [key, value] of Object.entries(options.arguments ?? {})) {
+      args[args.indexOf(key) + 1] = value;
+    }
+    if (options.badHash) args[args.length - 1] = "f".repeat(64);
+    const invocation = options.generated
+      ? [
+          "-c",
+          bootstrapCommand(
+            {
+              version: "0.1.8-owner.beta.1",
+              buildVersion: "10",
+              channel: "github-owner-beta",
+              arch: "arm64",
+              bundleId: "local.farol.next.preview",
+            },
+            digest,
+            createHash("sha256").update(script).digest("hex"),
+          ).replaceAll("/usr/bin/curl", curl),
+        ]
+      : [scriptPath, ...args];
+    const result = spawnSync("/bin/sh", invocation, {
+      encoding: "utf8",
+      timeout: 10_000,
+      env: { HOME: home, PATH: "/usr/bin:/bin", TMPDIR: root },
+    });
+    expect(result.error).toBeUndefined();
+    const calls = await fs.readFile(log, "utf8").catch(() => "");
+    const argumentsUsed = await fs
+      .readFile(argumentLog, "utf8")
+      .catch(() => "");
+    await observe({
+      result,
+      calls,
+      home,
+      root,
+      systemSlot,
+      slots,
+      devSlots,
+      argumentsUsed,
+    });
+  } finally {
+    await fs.rm(root, { recursive: true });
+  }
+}
+
+describe("verified alpha preparation skeleton", () => {
+  it("runs with stock-only PATH, verifies exact hash and leaves only prepared DMG", async () =>
+    fixture({}, async ({ result, calls, home }) => {
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toContain("PREPARED:");
+      expect(result.stdout).toContain("No app was installed");
+      expect(calls.match(/curl/gu)).toHaveLength(1);
+      expect(calls.match(/hdiutil/gu)).toHaveLength(3); // verify, attach, detach
+      const prepared = (await fs.readdir(path.join(home, "Downloads")))[0];
+      expect(await fs.readdir(path.join(home, "Downloads", prepared))).toEqual([
+        "Farol-0.1.8-owner.beta.1-macos-arm64.dmg",
+      ]);
+      await expect(
+        fs.lstat(path.join(home, "Applications")),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+    }));
+  it.each([
+    { existing: "system" },
+    { existing: "user" },
+    { existing: "user", dangling: true },
+    { existing: "system", dangling: true },
+    { existing: "system", existingFile: true },
+    { existing: "preview" },
+  ])("refuses existing slot before download %j", async (options) =>
+    fixture(options, async ({ result, calls, slots, root }) => {
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("DISTRIBUTION_EXISTING_INSTALL");
+      expect(calls).not.toContain("curl");
+      expect(calls).not.toContain("hdiutil");
+      const slot = slots[options.existing];
+      if (options.dangling)
+        expect(await fs.readlink(slot)).toBe(path.join(root, "absent"));
+      else
+        expect(
+          await fs.readFile(
+            options.existingFile ? slot : path.join(slot, "owner.txt"),
+            "utf8",
+          ),
+        ).toBe("owner app\n");
+    }),
+  );
+  it.each(["--version", "--build-version", "--dmg-sha256"])(
+    "rejects multiline %s before any download or mount",
+    async (key) => {
+      const value = baseArgs[baseArgs.indexOf(key) + 1];
+      await fixture(
+        { arguments: { [key]: `${value}\n${value}` } },
+        async ({ result, calls, home }) => {
+          expect(result.status).toBe(1);
+          expect(result.stderr).toContain("DISTRIBUTION_ARGUMENTS_INVALID");
+          expect(calls).not.toContain("curl");
+          expect(calls).not.toContain("hdiutil");
+          expect(await fs.readdir(path.join(home, "Downloads"))).toEqual([]);
+        },
+      );
+    },
+  );
+  it("runs the actual preparation script through the checksum-pinned one-liner while preserving Dev", async () =>
+    fixture(
+      { generated: true, dev: true },
+      async ({ result, calls, devSlots, argumentsUsed }) => {
+        expect(result.status, result.stderr).toBe(0);
+        expect(result.stdout).toContain("PREPARED:");
+        expect(calls.match(/curl/gu)).toHaveLength(2);
+        expect(calls.match(/hdiutil/gu)).toHaveLength(3);
+        for (const slot of devSlots)
+          expect(await fs.readFile(path.join(slot, "owner.txt"), "utf8")).toBe(
+            "separate dev\n",
+          );
+        expect(argumentsUsed).toContain("v0.1.8-owner.beta.1/install-alpha.sh");
+        expect(argumentsUsed).toContain(
+          "v0.1.8-owner.beta.1/Farol-0.1.8-owner.beta.1-macos-arm64.dmg",
+        );
+        expect(argumentsUsed).toContain("-readonly\n-nobrowse\n-noautoopen");
+        expect(calls).not.toMatch(/python|node|go|brew|xcrun|open/u);
+      },
+    ));
+  it("refuses modified downloaded script before the preparation script runs", async () =>
+    fixture(
+      { generated: true, corruptScript: true },
+      async ({ result, calls, home }) => {
+        expect(result.status).toBe(1);
+        expect(result.stdout).not.toContain("PREPARED:");
+        expect(calls.match(/curl/gu)).toHaveLength(1);
+        expect(calls).not.toContain("hdiutil");
+        expect(await fs.readdir(path.join(home, "Downloads"))).toEqual([]);
+      },
+    ));
+  it.each([{ downloadFailure: true }, { verifyFailure: true }])(
+    "cleans a pre-mount failure without attach or retry %j",
+    async (options) =>
+      fixture(options, async ({ result, calls, home }) => {
+        expect(result.status).not.toBe(0);
+        expect(result.stdout).not.toContain("PREPARED:");
+        expect(calls.match(/curl/gu)).toHaveLength(1);
+        expect(calls.match(/hdiutil/gu) ?? []).toHaveLength(
+          options.verifyFailure ? 1 : 0,
+        );
+        expect(await fs.readdir(path.join(home, "Downloads"))).toEqual([]);
+      }),
+  );
+  it.each([{ appSymlink: true }, { wrongLink: true }])(
+    "refuses wrong mounted payload and detaches once %j",
+    async (options) =>
+      fixture(options, async ({ result, calls, home }) => {
+        expect(result.status).toBe(1);
+        expect(result.stderr).toMatch(
+          /DISTRIBUTION_(APP_TYPE|APPLICATIONS_LINK)_INVALID/u,
+        );
+        expect(calls.match(/hdiutil/gu)).toHaveLength(3);
+        expect(await fs.readdir(path.join(home, "Downloads"))).toEqual([]);
+      }),
+  );
+  it("preserves a production install that appears during download/mount", async () =>
+    fixture({ slotAfterMount: true }, async ({ result, calls, systemSlot }) => {
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("DISTRIBUTION_EXISTING_INSTALL");
+      expect(calls.match(/hdiutil/gu)).toHaveLength(3);
+      expect(
+        await fs.readFile(path.join(systemSlot, "owner.txt"), "utf8"),
+      ).toBe("owner app\n");
+    }));
+  it("settles a lost attach acknowledgement by detaching the owned mount once", async () =>
+    fixture({ attachFailure: true }, async ({ result, calls, home }) => {
+      expect(result.status).not.toBe(0);
+      expect(result.stdout).not.toContain("PREPARED:");
+      expect(calls.match(/hdiutil/gu)).toHaveLength(3);
+      expect(await fs.readdir(path.join(home, "Downloads"))).toEqual([]);
+    }));
+  it("retains the owned mount evidence if attach and its one detach are unacknowledged", async () =>
+    fixture(
+      { attachFailure: true, detachFailure: true },
+      async ({ result, calls, home }) => {
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain("DISTRIBUTION_UNMOUNT_OUTCOME_UNKNOWN");
+        expect(result.stdout).not.toContain("PREPARED:");
+        expect(calls.match(/hdiutil/gu)).toHaveLength(3);
+        expect(await fs.readdir(path.join(home, "Downloads"))).toHaveLength(1);
+      },
+    ));
+  it("refuses unsupported hardware before download", async () =>
+    fixture({ intel: true }, async ({ result, calls }) => {
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("DISTRIBUTION_ARCH_UNSUPPORTED");
+      expect(calls).not.toContain("curl");
+    }));
+  it("rejects checksum before mounting and removes its failed download", async () =>
+    fixture({ badHash: true }, async ({ result, calls, home }) => {
+      expect(result.status).toBe(1);
+      expect(calls).not.toContain("hdiutil");
+      expect(await fs.readdir(path.join(home, "Downloads"))).toEqual([]);
+    }));
+  it.each([
+    { bundle: "io.github.legrch.farol.dev" },
+    { version: "0.1.9-owner.beta.1" },
+    { channel: "github-stable" },
+  ])("rejects mounted release mismatch and detaches once %j", async (options) =>
+    fixture(options, async ({ result, calls, home }) => {
+      expect(result.status).toBe(1);
+      expect(result.stderr).toMatch(
+        /DISTRIBUTION_(BUNDLE|VERSION|CHANNEL)_MISMATCH/u,
+      );
+      expect(calls.match(/hdiutil/gu)).toHaveLength(3);
+      expect(await fs.readdir(path.join(home, "Downloads"))).toEqual([]);
+    }),
+  );
+  it("retains potentially mounted evidence on failed detach, with no replay", async () =>
+    fixture({ detachFailure: true }, async ({ result, calls, home }) => {
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("DISTRIBUTION_UNMOUNT_OUTCOME_UNKNOWN");
+      expect(result.stdout).not.toContain("PREPARED:");
+      expect(calls.match(/hdiutil/gu)).toHaveLength(3);
+      expect(await fs.readdir(path.join(home, "Downloads"))).toHaveLength(1);
+    }));
+  it.each([false, true])(
+    "generated one-liner verifies script bytes before dispatch (corrupt=%s)",
+    async (corrupt) => {
+      const root = await fs.realpath(
+        await fs.mkdtemp(path.join(os.tmpdir(), "farol-command-test-")),
+      );
+      try {
+        const marker = path.join(root, "executed");
+        const payload = path.join(root, "fixture.sh");
+        const bytes = `#!/bin/sh\nprintf '%s\\n' "$@" > '${marker}'\n`;
+        await fs.writeFile(payload, bytes);
+        const curl = path.join(root, "curl");
+        await fs.writeFile(
+          curl,
+          `#!/bin/sh\nwhile [ "$1" != --output ]; do shift; done\n/bin/cp '${payload}' "$2"\n`,
+          { mode: 0o755 },
+        );
+        const expected = {
+          version: "0.1.8-owner.beta.1",
+          buildVersion: "10",
+          channel: "github-owner-beta",
+          arch: "arm64",
+          bundleId: "local.farol.next.preview",
+        };
+        const scriptSha = corrupt
+          ? "f".repeat(64)
+          : createHash("sha256").update(bytes).digest("hex");
+        // Only HTTPS is doubled; execute the actual emitted /bin/sh command,
+        // including stock shasum and all generated quoting/argument forwarding.
+        const command = bootstrapCommand(
+          expected,
+          digest,
+          scriptSha,
+        ).replaceAll("/usr/bin/curl", curl);
+        const result = spawnSync("/bin/sh", ["-c", command], {
+          encoding: "utf8",
+          timeout: 10_000,
+        });
+        expect(result.status, result.stderr).toBe(corrupt ? 1 : 0);
+        if (corrupt)
+          await expect(fs.lstat(marker)).rejects.toMatchObject({
+            code: "ENOENT",
+          });
+        else
+          expect(await fs.readFile(marker, "utf8")).toBe(
+            `${baseArgs.join("\n")}\n`,
+          );
+      } finally {
+        await fs.rm(root, { recursive: true });
+      }
+    },
+  );
+  it("generated one-liner passes POSIX syntax validation without executing it", () => {
+    const expected = {
+      version: "0.1.8-owner.beta.1",
+      buildVersion: "10",
+      channel: "github-owner-beta",
+      arch: "arm64",
+      bundleId: "local.farol.next.preview",
+    };
+    const command = bootstrapCommand(expected, digest, "a".repeat(64));
+    const result = spawnSync("/bin/sh", ["-n"], {
+      input: command,
+      encoding: "utf8",
+    });
+    expect(result.status, result.stderr).toBe(0);
+  });
+});

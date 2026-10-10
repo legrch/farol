@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="en">
+  <meta charset="utf-8" /><meta
+    name="viewport"
+    content="width=device-width,initial-scale=1"
+  /><title>Farol · Direction comparison</title
+  ><style>
+    * {
+      box-sizing: border-box;
+    }
+    body {
+      margin: 0;
+      padding: 34px;
+      background: #e8e9ec;
+      font:
+        14px/1.5 -apple-system,
+        BlinkMacSystemFont,
+        sans-serif;
+      color: #30333b;
+    }
+    header {
+      display: flex;
+      gap: 20px;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 28px;
+    }
+    header strong {
+      font-size: 23px;
+      letter-spacing: -0.6px;
+    }
+    p {
+      color: #626772;
+      font-size: 13px;
+    }
+    header p {
+      margin: 5px 0;
+    }
+    a {
+      color: #6650b9;
+    }
+    section {
+      margin: 30px 0 40px;
+    }
+    h1 {
+      font-size: 18px;
+      margin: 0 0 16px;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 22px;
+    }
+    article {
+      min-width: 0;
+    }
+    img {
+      display: block;
+      width: 100%;
+      border: 1px solid #c5c8d0;
+      border-radius: 8px;
+      box-shadow: 0 8px 25px #0001;
+    }
+    h2 {
+      font-size: 16px;
+      margin: 15px 0 5px;
+    }
+    article p {
+      margin: 0 0 13px;
+      min-height: 40px;
+    }
+    .open {
+      font-size: 12px;
+      text-decoration: none;
+      background: white;
+      padding: 8px 12px;
+      border-radius: 6px;
+      display: inline-block;
+    }
+    a:focus-visible {
+      outline: 2px solid #6750b8;
+      outline-offset: 4px;
+    }
+    @media (max-width: 850px) {
+      body {
+        padding: 20px;
+      }
+      .grid {
+        grid-template-columns: 1fr;
+      }
+      article {
+        margin-bottom: 15px;
+      }
+      header {
+        flex-wrap: wrap;
+      }
+      article p {
+        min-height: 0;
+      }
+    }
+  </style>
+  <header>
+    <div>
+      <strong>Farol / Three directions</strong>
+      <p>
+        The same work, state and viewport. Interactive concepts with sample
+        data.
+      </p>
+    </div>
+    <a href="v1.html">Open the design room</a>
+  </header>
+  <section>
+    <h1>Home</h1>
+    <div class="grid">
+      <article>
+        <a href="v1.html?direction=mac&page=home&sub=general"
+          ><img src="screenshots/mac-home.png" alt="A / Mac Quiet, Home"
+        /></a>
+        <h2>A / Mac Quiet</h2>
+        <p>Light system surfaces. Readiness above current work.</p>
+        <a class="open" href="v1.html?direction=mac&page=home&sub=general"
+          >Explore this direction</a
+        >
+      </article>
+      <article>
+        <a href="v1.html?direction=graphite&page=home&sub=general"
+          ><img
+            src="screenshots/graphite-home.png"
+            alt="B / Graphite Focus, Home"
+        /></a>
+        <h2>B / Graphite Focus</h2>
+        <p>
+          Graphite, Iris and work beside readiness. Recommended starting point.
+        </p>
+        <a class="open" href="v1.html?direction=graphite&page=home&sub=general"
+          >Explore this direction</a
+        >
+      </article>
+      <article>
+        <a href="v1.html?direction=studio&page=home&sub=general"
+          ><img
+            src="screenshots/studio-home.png"
+            alt="C / Studio Compact, Home"
+        /></a>
+        <h2>C / Studio Compact</h2>
+        <p>Dark rail, light work surface and a denser rhythm.</p>
+        <a class="open" href="v1.html?direction=studio&page=home&sub=general"
+          >Explore this direction</a
+        >
+      </article>
+    </div>
+  </section>
+  <section>
+    <h1>Settings</h1>
+    <div class="grid">
+      <article>
+        <a href="v1.html?direction=mac&page=settings&sub=general"
+          ><img
+            src="screenshots/mac-settings.png"
+            alt="A / Mac Quiet, Settings"
+        /></a>
+        <h2>A / Mac Quiet</h2>
+        <p>Light system surfaces. Readiness above current work.</p>
+        <a class="open" href="v1.html?direction=mac&page=settings&sub=general"
+          >Explore this direction</a
+        >
+      </article>
+      <article>
+        <a href="v1.html?direction=graphite&page=settings&sub=general"
+          ><img
+            src="screenshots/graphite-settings.png"
+            alt="B / Graphite Focus, Settings"
+        /></a>
+        <h2>B / Graphite Focus</h2>
+        <p>
+          Graphite, Iris and work beside readiness. Recommended starting point.
+        </p>
+        <a
+          class="open"
+          href="v1.html?direction=graphite&page=settings&sub=general"
+          >Explore this direction</a
+        >
+      </article>
+      <article>
+        <a href="v1.html?direction=studio&page=settings&sub=general"
+          ><img
+            src="screenshots/studio-settings.png"
+            alt="C / Studio Compact, Settings"
+        /></a>
+        <h2>C / Studio Compact</h2>
+        <p>Dark rail, light work surface and a denser rhythm.</p>
+        <a
+          class="open"
+          href="v1.html?direction=studio&page=settings&sub=general"
+          >Explore this direction</a
+        >
+      </article>
+    </div>
+  </section>
+  <p>
+    Created 2 October 2026. No product source or installed runtime was changed.
+    Home, the two-level navigation and the settings structure are proposals for
+    review.
+  </p>
+</html>

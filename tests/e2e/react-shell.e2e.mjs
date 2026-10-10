@@ -14,6 +14,11 @@ import {
 } from "../../tooling/runtime-contract.mjs";
 import { sourceIdentity } from "../../tooling/source-identity.mjs";
 import { qualifyGoBuild } from "./qualified-go-build.mjs";
+import { waitForReactShell } from "./current-react-setup.mjs";
+import {
+  shellGeometry,
+  shellRailWidth,
+} from "../../src/pkg/shell-layout/geometry.ts";
 
 const root = await fs.realpath(process.cwd());
 const buildRoot = path.join(root, "_output/build/app");
@@ -231,7 +236,7 @@ try {
     10000,
     "OWNED_WINDOW_UNCONFIRMED",
   );
-  await page.waitForSelector(".toolbar-title");
+  await waitForReactShell(page);
   const initialProjection = await page.evaluate(() =>
     window.farolNext.bootstrap(),
   );
@@ -266,12 +271,12 @@ try {
   await page.getByRole("button", { name: "Find a page", exact: true }).click();
   await page
     .getByRole("textbox", { name: "Find a page", exact: true })
-    .fill("Folders");
+    .fill("Workspaces");
   await page.keyboard.press("Enter");
   await page.waitForSelector(".toolbar-title strong");
   assert.equal(
     await page.locator(".toolbar-title strong").textContent(),
-    "Folders",
+    "Workspaces",
   );
   assert.equal(await page.locator("dialog[open]").count(), 0);
   await page.getByRole("button", { name: "Home", exact: true }).click();
@@ -281,11 +286,12 @@ try {
     "NEW_PROFILE_LEGACY_MODAL",
   );
   await page.screenshot({ path: path.join(output, "home.png") });
+  // Explicit current rail navigation owns browser presentation. The retired
+  // placeholder launcher must not submit another open command.
   await page
+    .getByRole("navigation", { name: "Sections", exact: true })
     .getByRole("button", { name: "ChatGPT", exact: true })
-    .first()
     .click();
-  await page.getByRole("button", { name: "Open ChatGPT", exact: true }).click();
   const surfaces = async () => {
     await assertHiddenWindows();
     return app.evaluate(({ BrowserWindow }) =>
@@ -314,7 +320,7 @@ try {
     .find((view) => view.url === fixtureUrl);
   assert.ok(view, "NATIVE_BROWSER_VIEW_MISSING");
   assert.equal(view.visible, true);
-  assert.equal(view.bounds.y, 58);
+  assert.equal(view.bounds.y, shellGeometry.windowBar);
   const browserId = view.id;
   assert.equal(
     await app.evaluate(
@@ -329,7 +335,10 @@ try {
     attemptId,
     "NATIVE_DOCUMENT_ATTEMPT_MISMATCH",
   );
-  for (const x of [62, 294]) {
+  for (const x of [
+    shellGeometry.sidebarRail,
+    shellGeometry.sidebarRail + shellGeometry.pageListDefault,
+  ]) {
     await app.evaluate(({ Menu }) =>
       Menu.getApplicationMenu().getMenuItemById("view.toggle-sidebar").click(),
     );
@@ -342,7 +351,7 @@ try {
     );
     assert.equal(
       await page.locator(".contextual-sidebar").count(),
-      x === 62 ? 0 : 1,
+      x === shellGeometry.sidebarRail ? 0 : 1,
       "NATIVE_MENU_RENDERER_SIDEBAR",
     );
   }
@@ -401,7 +410,7 @@ try {
   assert.equal(
     compactState.flatMap((w) => w.views).find((v) => v.id === browserId)?.bounds
       .x,
-    62,
+    shellRailWidth(740),
     "COMPACT_NATIVE_BOUNDS",
   );
   assert.equal(
@@ -454,15 +463,15 @@ try {
         },
       ],
     });
-    contents.send("farol-next:layout", {
-      section: "browser",
-      taskId,
-      setupOpen: false,
-      sidebar: "full",
-      overlay: "none",
-    });
   }, taskId);
-  await page.getByRole("button", { name: "Task options", exact: true }).click();
+  // Layout events are mirrors, not selection authority. Select this synthetic
+  // projection through the current search UI before opening its draft editor.
+  await page.getByRole("button", { name: "Find a page", exact: true }).click();
+  await page
+    .getByRole("dialog", { name: "Find a page", exact: true })
+    .getByRole("button", { name: "Composition fixture", exact: true })
+    .click();
+  await page.getByRole("button", { name: "Chat options", exact: true }).click();
   const field = page.locator("#agent-objective");
   await field.fill("folder inventory");
   await field.focus();

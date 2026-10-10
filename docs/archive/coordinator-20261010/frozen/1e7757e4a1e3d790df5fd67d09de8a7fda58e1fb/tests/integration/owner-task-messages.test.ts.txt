@@ -1,0 +1,822 @@
+import { createHash, randomUUID } from "node:crypto";
+import { describe, expect, it, vi } from "vitest";
+import type {
+  OwnerTaskMessageJournal,
+  OwnerTaskMessageOperation,
+  OwnerTaskMessageSelection,
+} from "../../src/modules/chat/app/port/owner-task-messages";
+import {
+  HandoffNotSubmittedError,
+  type HandoffMutationGate,
+} from "../../src/modules/chat/app/service/persistent-codex-handoff";
+import { SendOwnerTaskMessage } from "../../src/modules/chat/app/service/send-owner-task-message";
+import { NativeOwnerTaskMessageSender } from "../../src/modules/chat/infra/native/native-owner-task-message-sender";
+
+// Application + real typed RPC adapter, with explicitly IN-MEMORY authority,
+// journal and fence fixtures. No durable filesystem, MCP/native-host, queue
+// execution, Desktop co-control, policy inheritance, or release qualification.
+function fixture() {
+  const abort = new AbortController();
+  const operations = new Map<string, OwnerTaskMessageOperation>();
+  const environment = {
+    now: 100,
+    selection: {
+      ownerScope: "owner-one",
+      threadId: "native-thread-one",
+      projectId: "saved-project-one",
+      workspaceId: "approved-writer-one",
+      physicalBinding: "verified-physical-one",
+      runtimeBinding: "qualified-native-generation-one",
+      selectionRevision: "selection-one",
+      expiresAt: 1_000,
+      capabilities: ["steer-current", "native-queue"],
+      state: {
+        kind: "active",
+        turnId: "native-turn-one",
+        turnRef: "exact_turn_one",
+        needsNativeInput: false,
+      },
+    } as OwnerTaskMessageSelection | null,
+    beforeEffect: () => {},
+    afterEffect: () => {},
+    safeRelease: null as boolean | null,
+  };
+  const lifetime = { deadlineAt: 900, signal: abort.signal };
+  const request = {
+    key: randomUUID(),
+    selectionRef: "conversation_selection_one",
+    mode: "steer-current" as const,
+    expectedTurnRef: "exact_turn_one",
+    message: "Add a regression for the new edge case.",
+  };
+  const inspect = vi.fn(async () => environment.selection);
+  const read = vi.fn(async (key: string) => operations.get(key) ?? null);
+  const claim = vi.fn(async (key: string, digest: string) => {
+    const prior = operations.get(key);
+    if (prior) return { status: "existing" as const, operation: prior };
+    operations.set(key, { digest, outcome: null });
+    return { status: "claimed" as const };
+  });
+  const finish = vi.fn<OwnerTaskMessageJournal["finish"]>(
+    async (key, digest, outcome) => {
+      const prior = operations.get(key);
+      if (prior?.digest !== digest || prior.outcome !== null)
+        throw new Error("fixture immutable record conflict");
+      operations.set(key, { digest, outcome });
+    },
+  );
+  const rpc = vi.fn(
+    async (method: string, input: unknown): Promise<unknown> => {
+      const params = input as Record<string, unknown>;
+      if (method === "turn/steer") return { turnId: params.expectedTurnId };
+      if (method === "thread/queue/add")
+        return {
+          queuedSubmission: {
+            id: "native-queued-item",
+            clientUserMessageId: params.clientUserMessageId,
+            input: params.input,
+          },
+        };
+      throw new Error("unexpected RPC");
+    },
+  );
+  const gate: HandoffMutationGate = {
+    async run(preflight, effect, safeToReleaseError) {
+      try {
+        await preflight();
+        environment.beforeEffect();
+        const result = await effect();
+        environment.afterEffect();
+        environment.safeRelease = true;
+        return result;
+      } catch (error) {
+        environment.safeRelease = safeToReleaseError(error);
+        throw error;
+      }
+    },
+  };
+  const dependencies = {
+    access: { inspect },
+    journal: { read, claim, finish },
+    sender: new NativeOwnerTaskMessageSender({ request: rpc }),
+    gate,
+    now: () => environment.now,
+    digest: (value: string) => createHash("sha256").update(value).digest("hex"),
+  };
+  return {
+    environment,
+    dependencies,
+    abort,
+    lifetime,
+    request,
+    inspect,
+    operations,
+    read,
+    claim,
+    finish,
+    rpc,
+    service: new SendOwnerTaskMessage(dependencies),
+    queue: {
+      key: randomUUID(),
+      selectionRef: request.selectionRef,
+      mode: "native-queue" as const,
+      message: "After the current work, check the documentation.",
+    },
+  };
+}
+
+function change(
+  f: ReturnType<typeof fixture>,
+  update: Partial<OwnerTaskMessageSelection>,
+) {
+  f.environment.selection = { ...f.environment.selection!, ...update };
+}
+
+async function noSend(
+  f: ReturnType<typeof fixture>,
+  input: unknown = f.request,
+) {
+  const result = await f.service.send(input, f.lifetime);
+  expect(result.status).not.toBe("accepted");
+  expect(f.rpc).not.toHaveBeenCalled();
+  return result;
+}
+
+describe("conversation-selected native task messages", () => {
+  it("steers the exact selected active turn with no settings overrides", async () => {
+    const f = fixture();
+    expect(await f.service.send(f.request, f.lifetime)).toMatchObject({
+      status: "accepted",
+      historical: false,
+      receipt: { kind: "steered", turnId: "native-turn-one" },
+    });
+    expect(f.rpc).toHaveBeenCalledExactlyOnceWith(
+      "turn/steer",
+      {
+        threadId: "native-thread-one",
+        expectedTurnId: "native-turn-one",
+        clientUserMessageId: f.request.key,
+        input: [{ type: "text", text: f.request.message }],
+      },
+      900,
+    );
+    expect(f.environment.safeRelease).toBe(true);
+  });
+
+  it.each(["active", "idle", "not-loaded", "interrupted"] as const)(
+    "delegates native queue from %s without a local scheduler or turn/start",
+    async (kind) => {
+      const f = fixture();
+      if (kind !== "active") change(f, { state: { kind } });
+      expect(await f.service.send(f.queue, f.lifetime)).toMatchObject({
+        status: "accepted",
+        receipt: {
+          kind: "native-queue-accepted",
+          queuedSubmissionId: "native-queued-item",
+        },
+      });
+      expect(f.rpc).toHaveBeenCalledExactlyOnceWith(
+        "thread/queue/add",
+        {
+          threadId: "native-thread-one",
+          clientUserMessageId: f.queue.key,
+          input: [{ type: "text", text: f.queue.message }],
+        },
+        900,
+      );
+    },
+  );
+
+  it("permits repeated acknowledged messages, including identical text", async () => {
+    const f = fixture();
+    await f.service.send(f.request, f.lifetime);
+    await f.service.send({ ...f.request, key: randomUUID() }, f.lifetime);
+    expect(f.rpc).toHaveBeenCalledTimes(2);
+    expect(f.operations.size).toBe(2);
+  });
+
+  it("has no global Lead destination across two selections", async () => {
+    const f = fixture();
+    await f.service.send(f.queue, f.lifetime);
+    change(f, { threadId: "another-lead-in-the-same-project" });
+    await f.service.send(
+      { ...f.queue, selectionRef: "another_selection", key: randomUUID() },
+      f.lifetime,
+    );
+    expect(f.rpc.mock.calls[1]?.[1]).toMatchObject({
+      threadId: "another-lead-in-the-same-project",
+    });
+  });
+
+  it("copies caller input before an awaited inspection", async () => {
+    const f = fixture();
+    const original = f.request.message;
+    f.inspect.mockImplementationOnce(async () => {
+      f.request.message = "altered after invocation";
+      f.request.selectionRef = "other_selection";
+      return f.environment.selection;
+    });
+    await f.service.send(f.request, f.lifetime);
+    expect(f.rpc.mock.calls[0]?.[1]).toMatchObject({
+      input: [{ type: "text", text: original }],
+    });
+  });
+
+  it("accepts exactly the UTF-8 budget and canonicalizes UUID case", async () => {
+    const f = fixture();
+    const result = await f.service.send(
+      {
+        ...f.request,
+        message: "é".repeat(4096),
+        key: f.request.key.toUpperCase(),
+      },
+      f.lifetime,
+    );
+    expect(result.status).toBe("accepted");
+    expect(f.rpc.mock.calls[0]?.[1]).toMatchObject({
+      clientUserMessageId: f.request.key,
+    });
+  });
+
+  it.each([
+    null,
+    [],
+    "text",
+    {},
+    { mode: "auto" },
+    { key: "not-a-uuid" },
+    { key: 1 },
+    { selectionRef: "" },
+    { selectionRef: "../private" },
+    { expectedTurnRef: "" },
+    { expectedTurnRef: 1 },
+    { message: " " },
+    { message: "unsafe\0text" },
+    { message: "é".repeat(4096) + "x" },
+    { message: 5 },
+    { threadId: "raw-thread" },
+    { cwd: "/other" },
+    { model: "override" },
+    { method: "turn/start" },
+  ])("refuses malformed/extra input %# before an RPC", async (input) => {
+    const f = fixture();
+    const value =
+      input !== null && typeof input === "object" && !Array.isArray(input)
+        ? Object.keys(input).length === 0
+          ? input
+          : { ...f.request, ...input }
+        : input;
+    expect(await noSend(f, value)).toMatchObject({
+      status: "refused",
+      reason: "input_invalid",
+    });
+    expect(f.claim).not.toHaveBeenCalled();
+  });
+
+  it("does not accept a current-turn constraint on native queue", async () => {
+    const f = fixture();
+    await noSend(f, { ...f.queue, expectedTurnRef: "a_turn" });
+  });
+
+  it.each(["idle", "not-loaded", "interrupted", "unavailable"] as const)(
+    "refuses steer in %s without queue/start fallback",
+    async (kind) => {
+      const f = fixture();
+      change(f, { state: { kind } });
+      await noSend(f);
+    },
+  );
+
+  it("refuses a queue target whose observed state is unavailable", async () => {
+    const f = fixture();
+    change(f, { state: { kind: "unavailable" } });
+    await noSend(f, f.queue);
+  });
+
+  it("leaves a native approval with the native owner", async () => {
+    const f = fixture();
+    change(f, {
+      state: {
+        kind: "active",
+        turnId: "native-turn-one",
+        turnRef: "exact_turn_one",
+        needsNativeInput: true,
+      },
+    });
+    expect(await noSend(f)).toMatchObject({ reason: "needs_native_input" });
+    expect(await f.service.send(f.queue, f.lifetime)).toMatchObject({
+      status: "accepted",
+      receipt: { kind: "native-queue-accepted" },
+    });
+    expect(f.rpc.mock.calls.map(([method]) => method)).toEqual([
+      "thread/queue/add",
+    ]);
+  });
+
+  it("requires an independently qualified capability", async () => {
+    const f = fixture();
+    change(f, { capabilities: [] });
+    expect(await noSend(f)).toMatchObject({ reason: "capability_unavailable" });
+  });
+
+  it("requires exact active-turn proof", async () => {
+    const f = fixture();
+    expect(
+      await noSend(f, { ...f.request, expectedTurnRef: "old_turn" }),
+    ).toMatchObject({ reason: "turn_changed" });
+  });
+});
+
+describe("operation receipts, not a remembered Lead or automatic retry", () => {
+  it("returns historical acceptance on same-key replay after completion", async () => {
+    const f = fixture();
+    await f.service.send(f.request, f.lifetime);
+    change(f, {
+      state: { kind: "idle" },
+      runtimeBinding: "new-native-generation",
+    });
+    expect(
+      await f.service.send(
+        { ...f.request, selectionRef: "selected_again_in_a_different_chat" },
+        f.lifetime,
+      ),
+    ).toMatchObject({ status: "accepted", historical: true });
+    expect(f.rpc).toHaveBeenCalledTimes(1);
+  });
+
+  it("claims one concurrent same-key operation across fixture clients", async () => {
+    const f = fixture();
+    const other = new SendOwnerTaskMessage(f.dependencies);
+    const results = await Promise.all([
+      f.service.send(f.request, f.lifetime),
+      other.send(f.request, f.lifetime),
+    ]);
+    expect(f.rpc).toHaveBeenCalledTimes(1);
+    expect(results.some((result) => result.status === "accepted")).toBe(true);
+  });
+
+  it("rejects same-key changed text", async () => {
+    const f = fixture();
+    await f.service.send(f.request, f.lifetime);
+    expect(
+      await f.service.send(
+        { ...f.request, message: "different instruction" },
+        f.lifetime,
+      ),
+    ).toMatchObject({ status: "refused", reason: "key_conflict" });
+    expect(f.rpc).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    "threadId",
+    "projectId",
+    "workspaceId",
+    "ownerScope",
+    "physicalBinding",
+  ] as const)("does not replay a receipt for another %s", async (field) => {
+    const f = fixture();
+    await f.service.send(f.request, f.lifetime);
+    change(f, { [field]: "different" });
+    expect(await f.service.send(f.request, f.lifetime)).toMatchObject({
+      status: "refused",
+      reason: "key_conflict",
+    });
+    expect(f.rpc).toHaveBeenCalledTimes(1);
+  });
+
+  it("retains uncertain delivery and never resends after service reconstruction", async () => {
+    const f = fixture();
+    f.rpc.mockRejectedValueOnce(new Error("lost response after acceptance"));
+    expect(await f.service.send(f.request, f.lifetime)).toMatchObject({
+      status: "outcome-unknown",
+      historical: false,
+    });
+    expect(f.environment.safeRelease).toBe(false);
+    const reconstructed = new SendOwnerTaskMessage(f.dependencies);
+    expect(await reconstructed.send(f.request, f.lifetime)).toMatchObject({
+      status: "outcome-unknown",
+      historical: true,
+    });
+    expect(f.rpc).toHaveBeenCalledTimes(1);
+  });
+
+  it("adds no permanent thread lock for a separate explicit operation", async () => {
+    const f = fixture();
+    f.rpc.mockRejectedValueOnce(new Error("lost response"));
+    await f.service.send(f.request, f.lifetime);
+    expect(
+      await f.service.send(
+        {
+          ...f.request,
+          key: randomUUID(),
+          message: "Independent new instruction.",
+        },
+        f.lifetime,
+      ),
+    ).toMatchObject({ status: "accepted" });
+    expect(f.rpc).toHaveBeenCalledTimes(2);
+    // The fake gate admits this call. Production may keep its existing wider
+    // fence; this service does not clear, weaken or bypass that fence.
+  });
+
+  it("returns unknown for a crash-retained reservation without sending", async () => {
+    const f = fixture();
+    f.claim.mockImplementationOnce(async (key, digest) => {
+      const operation = { digest, outcome: null };
+      f.operations.set(key, operation);
+      return { status: "existing", operation };
+    });
+    expect(await noSend(f)).toMatchObject({
+      status: "outcome-unknown",
+      historical: true,
+    });
+  });
+
+  it("does not expose even a historical receipt after access revocation", async () => {
+    const f = fixture();
+    await f.service.send(f.request, f.lifetime);
+    f.inspect
+      .mockResolvedValueOnce(f.environment.selection)
+      .mockResolvedValueOnce(null);
+    expect(await f.service.send(f.request, f.lifetime)).toMatchObject({
+      status: "refused",
+      reason: "selection_unavailable",
+    });
+    expect(f.rpc).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("fresh authority and lifetime at every owned await", () => {
+  it.each([
+    "threadId",
+    "projectId",
+    "workspaceId",
+    "ownerScope",
+    "physicalBinding",
+    "runtimeBinding",
+    "selectionRevision",
+  ] as const)("refuses %s drift after reservation", async (field) => {
+    const f = fixture();
+    f.inspect.mockImplementationOnce(async () => ({
+      ...f.environment.selection!,
+    }));
+    f.inspect.mockImplementationOnce(async () => ({
+      ...f.environment.selection!,
+      [field]: "changed",
+    }));
+    expect(await noSend(f)).toMatchObject({ status: "not-submitted" });
+    expect(f.environment.safeRelease).toBe(true);
+  });
+
+  it("detects a mutable observation object being changed during a journal await", async () => {
+    const f = fixture();
+    f.read.mockImplementationOnce(async () => {
+      Object.assign(f.environment.selection!, {
+        threadId: "unexpected-target",
+      });
+      return null;
+    });
+    expect(await noSend(f)).toMatchObject({ reason: "selection_changed" });
+  });
+
+  it("does not reinterpret a completed steer as a native queue", async () => {
+    const f = fixture();
+    f.inspect
+      .mockResolvedValueOnce(f.environment.selection)
+      .mockResolvedValueOnce({
+        ...f.environment.selection!,
+        state: { kind: "idle" },
+      });
+    expect(await noSend(f)).toMatchObject({ reason: "turn_not_active" });
+  });
+
+  it("rejects a changed native turn even if a broken resolver reuses its turn ref", async () => {
+    const f = fixture();
+    f.inspect
+      .mockResolvedValueOnce(f.environment.selection)
+      .mockResolvedValueOnce({
+        ...f.environment.selection!,
+        state: {
+          kind: "active",
+          turnId: "next-turn",
+          turnRef: "exact_turn_one",
+          needsNativeInput: false,
+        },
+      });
+    expect(await noSend(f)).toMatchObject({ reason: "turn_changed" });
+  });
+
+  it("rejects capability revocation during preflight", async () => {
+    const f = fixture();
+    f.inspect
+      .mockResolvedValueOnce(f.environment.selection)
+      .mockResolvedValueOnce({
+        ...f.environment.selection!,
+        capabilities: [],
+      });
+    expect(await noSend(f)).toMatchObject({ reason: "capability_unavailable" });
+  });
+
+  it.each(["initial", "inspect", "read", "claim", "preflight", "effect"])(
+    "honors cancellation at %s",
+    async (stage) => {
+      const f = fixture();
+      if (stage === "initial") f.abort.abort();
+      if (stage === "inspect")
+        f.inspect.mockImplementationOnce(async () => {
+          f.abort.abort();
+          return f.environment.selection;
+        });
+      if (stage === "read")
+        f.read.mockImplementationOnce(async () => {
+          f.abort.abort();
+          return null;
+        });
+      if (stage === "claim")
+        f.claim.mockImplementationOnce(async (key, digest) => {
+          f.operations.set(key, { digest, outcome: null });
+          f.abort.abort();
+          return { status: "claimed" };
+        });
+      if (stage === "preflight")
+        f.inspect
+          .mockResolvedValueOnce(f.environment.selection)
+          .mockImplementationOnce(async () => {
+            f.abort.abort();
+            return f.environment.selection;
+          });
+      if (stage === "effect")
+        f.environment.beforeEffect = () => f.abort.abort();
+      expect(await noSend(f)).toMatchObject({ reason: "cancelled" });
+    },
+  );
+
+  it.each([900, 1000, Number.NaN, Number.POSITIVE_INFINITY])(
+    "refuses invalid/expired time %s",
+    async (now) => {
+      const f = fixture();
+      f.environment.now = now;
+      expect(await noSend(f)).toMatchObject({ reason: "admission_expired" });
+    },
+  );
+
+  it("never renews the original deadline from a mutable caller budget", async () => {
+    const f = fixture();
+    f.environment.beforeEffect = () => {
+      f.lifetime.deadlineAt = 5_000;
+      f.environment.now = 950;
+    };
+    expect(await noSend(f)).toMatchObject({ reason: "admission_expired" });
+  });
+
+  it("does not extend initial admission when a later observation renews it", async () => {
+    const f = fixture();
+    change(f, { expiresAt: 150 });
+    f.inspect
+      .mockResolvedValueOnce(f.environment.selection)
+      .mockImplementationOnce(async () => {
+        f.environment.now = 151;
+        return { ...f.environment.selection!, expiresAt: 500 };
+      });
+    expect(await noSend(f)).toMatchObject({ reason: "admission_expired" });
+  });
+
+  it("reports a proven acceptance after late cancellation without resubmission", async () => {
+    const f = fixture();
+    f.environment.afterEffect = () => {
+      f.abort.abort();
+      f.environment.now = 2_000;
+    };
+    expect(await f.service.send(f.request, f.lifetime)).toMatchObject({
+      status: "accepted",
+    });
+    expect(f.rpc).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("classified failures and native acknowledgements", () => {
+  it.each(["missing", "throws"])(
+    "refuses %s observation without an effect",
+    async (kind) => {
+      const f = fixture();
+      if (kind === "missing") f.environment.selection = null;
+      else f.inspect.mockRejectedValueOnce(new Error("unavailable"));
+      expect(await noSend(f)).toMatchObject({
+        reason: "selection_unavailable",
+      });
+    },
+  );
+
+  it("refuses an invalid digester", async () => {
+    const f = fixture();
+    f.dependencies.digest = () => "bad";
+    expect(await noSend(f)).toMatchObject({ reason: "digest_invalid" });
+  });
+
+  it("does not send after a journal read failure", async () => {
+    const f = fixture();
+    f.read.mockRejectedValueOnce(new Error("storage"));
+    expect(await noSend(f)).toMatchObject({ reason: "journal_unavailable" });
+  });
+
+  it.each([1000.5, Number.MAX_SAFE_INTEGER + 1, -1, Number.NaN])(
+    "rejects invalid deadline %s before reading selection",
+    async (deadlineAt) => {
+      const f = fixture();
+      f.lifetime.deadlineAt = deadlineAt;
+      expect(await noSend(f)).toMatchObject({ status: "refused" });
+      expect(f.inspect).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([1000.5, Number.MAX_SAFE_INTEGER + 1, -1, Number.NaN])(
+    "rejects invalid selection expiry %s before reserving an operation",
+    async (expiresAt) => {
+      const f = fixture();
+      change(f, { expiresAt });
+      expect(await noSend(f)).toMatchObject({ status: "refused" });
+      expect(f.claim).not.toHaveBeenCalled();
+    },
+  );
+
+  it("never reports logical non-submission when another claimant can deliver", async () => {
+    const f = fixture();
+    let releaseReads!: () => void;
+    let releaseWinner!: () => void;
+    const bothRead = new Promise<void>((resolve) => {
+      releaseReads = resolve;
+    });
+    const winnerAllowed = new Promise<void>((resolve) => {
+      releaseWinner = resolve;
+    });
+    let reads = 0;
+    f.read.mockImplementation(async (key) => {
+      const observed = f.operations.get(key) ?? null;
+      if (++reads === 2) releaseReads();
+      await bothRead;
+      return observed;
+    });
+    f.claim.mockImplementationOnce(async (key, digest) => {
+      f.operations.set(key, { digest, outcome: null });
+      await winnerAllowed;
+      return { status: "claimed" };
+    });
+    f.claim.mockRejectedValueOnce(
+      new Error("failed to read concurrent reservation"),
+    );
+    const winner = f.service.send(f.request, f.lifetime);
+    const loser = f.service.send(f.request, f.lifetime);
+    try {
+      expect(await loser).toMatchObject({
+        status: "outcome-unknown",
+        operationId: f.request.key,
+      });
+      expect(f.rpc).not.toHaveBeenCalled();
+    } finally {
+      releaseWinner();
+    }
+    expect(await winner).toMatchObject({ status: "accepted" });
+    expect(f.rpc).toHaveBeenCalledTimes(1);
+    expect(await f.service.send(f.request, f.lifetime)).toMatchObject({
+      status: "accepted",
+      historical: true,
+    });
+    expect(f.rpc).toHaveBeenCalledTimes(1);
+  });
+
+  it("retains logical uncertainty after an unclassified claim failure", async () => {
+    const f = fixture();
+    f.claim.mockRejectedValueOnce(new Error("reservation publication failed"));
+    expect(await noSend(f)).toMatchObject({
+      status: "outcome-unknown",
+      operationId: f.request.key,
+    });
+  });
+
+  it("keeps accepted-but-unpublished receipt unknown and does not resend", async () => {
+    const f = fixture();
+    f.finish.mockRejectedValueOnce(new Error("disk"));
+    expect(await f.service.send(f.request, f.lifetime)).toMatchObject({
+      status: "outcome-unknown",
+    });
+    expect(await f.service.send(f.request, f.lifetime)).toMatchObject({
+      status: "outcome-unknown",
+      historical: true,
+    });
+    expect(f.rpc).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps known pre-effect refusal even when its publication fails", async () => {
+    const f = fixture();
+    f.environment.beforeEffect = () => f.abort.abort();
+    f.finish.mockRejectedValueOnce(new Error("disk"));
+    expect(await noSend(f)).toMatchObject({
+      status: "not-submitted",
+      reason: "cancelled",
+    });
+  });
+
+  it("distinguishes a preflight infrastructure failure", async () => {
+    const f = fixture();
+    f.inspect
+      .mockResolvedValueOnce(f.environment.selection)
+      .mockRejectedValueOnce(new Error("read unavailable"));
+    expect(await noSend(f)).toMatchObject({
+      status: "not-submitted",
+      reason: "control_preflight_unavailable",
+    });
+  });
+
+  it("keeps a post-send fence cleanup failure unknown", async () => {
+    const f = fixture();
+    f.environment.afterEffect = () => {
+      throw new Error("release failed");
+    };
+    expect(await f.service.send(f.request, f.lifetime)).toMatchObject({
+      status: "outcome-unknown",
+    });
+    expect(f.rpc).toHaveBeenCalledTimes(1);
+    expect(f.environment.safeRelease).toBe(false);
+  });
+
+  it("uses only positively typed native not-submitted errors", async () => {
+    const f = fixture();
+    f.rpc.mockRejectedValueOnce(
+      new HandoffNotSubmittedError("private native detail"),
+    );
+    expect(await f.service.send(f.request, f.lifetime)).toMatchObject({
+      status: "not-submitted",
+      reason: "native_not_submitted",
+    });
+    expect(f.environment.safeRelease).toBe(true);
+    expect(JSON.stringify([...f.operations.values()])).not.toContain(
+      "private native detail",
+    );
+  });
+
+  it.each([
+    null,
+    [],
+    {},
+    { turnId: "wrong-turn" },
+    { error: "looks like a rejection" },
+  ])(
+    "does not invent delivery from malformed/wrong steer acknowledgement %#",
+    async (response) => {
+      const f = fixture();
+      f.rpc.mockResolvedValueOnce(response);
+      expect(await f.service.send(f.request, f.lifetime)).toMatchObject({
+        status: "outcome-unknown",
+      });
+      expect(f.environment.safeRelease).toBe(false);
+      expect(f.rpc).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each([
+    null,
+    [],
+    {},
+    { queuedSubmission: null },
+    { queuedSubmission: { id: "" } },
+    { queuedSubmission: { id: "q", clientUserMessageId: "wrong", input: [] } },
+  ])("rejects malformed queue acknowledgement %#", async (response) => {
+    const f = fixture();
+    f.rpc.mockResolvedValueOnce(response);
+    expect(await f.service.send(f.queue, f.lifetime)).toMatchObject({
+      status: "outcome-unknown",
+    });
+    expect(f.rpc).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["wrong-text", "extra-input", "wrong-type", "huge-id", "nul-id"])(
+    "rejects correlated queue acknowledgement with %s",
+    async (kind) => {
+      const f = fixture();
+      const item = { type: "text", text: f.queue.message };
+      f.rpc.mockResolvedValueOnce({
+        queuedSubmission: {
+          id:
+            kind === "huge-id"
+              ? "a".repeat(201)
+              : kind === "nul-id"
+                ? "bad\0id"
+                : "queue-id",
+          clientUserMessageId: f.queue.key,
+          input:
+            kind === "extra-input"
+              ? [item, item]
+              : [
+                  {
+                    type: kind === "wrong-type" ? "image" : "text",
+                    text: kind === "wrong-text" ? "other" : f.queue.message,
+                  },
+                ],
+        },
+      });
+      expect(await f.service.send(f.queue, f.lifetime)).toMatchObject({
+        status: "outcome-unknown",
+      });
+    },
+  );
+});

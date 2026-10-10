@@ -1,0 +1,80 @@
+import assert from "node:assert/strict";
+import fs from "node:fs/promises";
+import { test } from "node:test";
+import { inspectParityInventory } from "../../tooling/check-v0-parity.mjs";
+
+const baseline = JSON.parse(
+  await fs.readFile(
+    new URL("./v0-parity-baseline.json", import.meta.url),
+    "utf8",
+  ),
+);
+
+test("all 31 pinned implemented V0 tools have exactly one explicit disposition", () => {
+  assert.equal(
+    baseline.baseline.commit,
+    "eb146dc085277386f45c4e017fcfa60cb225001d",
+  );
+  assert.equal(baseline.baseline.tools.length, 31);
+  const result = inspectParityInventory(baseline);
+  assert.equal(result.inventoryValid, true, result.errors.join("\n"));
+  assert.equal(result.accountedToolCount, 31);
+  assert.equal(result.groupCount, 15);
+});
+
+test("a forgotten tool is a failure, not an implicit dropped capability", () => {
+  const modified = structuredClone(baseline);
+  modified.groups.find((group) => group.key === "guidance").v0Tools.pop();
+  const result = inspectParityInventory(modified);
+  assert.equal(result.inventoryValid, false);
+  assert.ok(result.errors.includes("missing disposition: guidance_fetch"));
+});
+
+test("duplicates do not inflate coverage", () => {
+  const modified = structuredClone(baseline);
+  modified.groups[0].v0Tools.push("read");
+  const result = inspectParityInventory(modified);
+  assert.equal(result.inventoryValid, false);
+  assert.ok(result.errors.includes("duplicate disposition: read"));
+});
+
+test("invented baseline tools and evidence-free rows are rejected", () => {
+  const modified = structuredClone(baseline);
+  modified.groups[0].v0Tools.push("imaginary_v0_operation");
+  modified.groups[0].evidence = [];
+  const result = inspectParityInventory(modified);
+  assert.equal(result.inventoryValid, false);
+  assert.ok(result.errors.some((value) => value.includes("invented baseline")));
+  assert.ok(result.errors.some((value) => value.includes("missing evidence")));
+});
+
+test("inventory PASS never means source, package or live acceptance", () => {
+  const result = inspectParityInventory(baseline);
+  assert.equal(result.inventoryValid, true);
+  assert.equal(result.sourceParityComplete, false);
+  assert.equal(result.liveParityQualified, false);
+  assert.equal(result.qualification, "NOT_EVALUATED_BY_INVENTORY");
+  const modified = structuredClone(baseline);
+  modified.groups[0].livePass = true;
+  assert.equal(inspectParityInventory(modified).inventoryValid, false);
+});
+
+test("additional non-MCP workflows cannot disappear from the inventory", () => {
+  const modified = structuredClone(baseline);
+  delete modified.additionalWorkflows;
+  assert.equal(inspectParityInventory(modified).inventoryValid, false);
+  for (const required of [
+    "consult",
+    "agent-and-model",
+    "review-workflow",
+    "install-update-recovery",
+    "attachments-context",
+    "paused-mind-drive",
+  ]) {
+    assert.ok(
+      baseline.additionalWorkflows.some(
+        (workflow) => workflow.key === required,
+      ),
+    );
+  }
+});

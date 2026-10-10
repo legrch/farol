@@ -1,0 +1,29 @@
+{
+  "mode": "headless Chromium, disposable browser context, local file only",
+  "limits": "DOM prototype, no native Electron or live provider evidence",
+  "results": [
+    "mac-home",
+    "mac-settings",
+    "graphite-home",
+    "graphite-settings",
+    "studio-home",
+    "studio-settings",
+    "graphite-folders",
+    "folder selection and local sample addition",
+    "graphite-activity",
+    "activity attention filter and matching detail",
+    "graphite-chat",
+    "stable chat selection",
+    "graphite-home-attention",
+    "graphite-home-empty",
+    "graphite-home-ready",
+    "graphite-home-offline",
+    "graphite-compact",
+    "compact menu, route selection, dialog Escape and focus return",
+    "page search and dialog dismissal",
+    "all remaining settings and setup pages render",
+    "narrow-home",
+    "narrow-folders"
+  ],
+  "errors": []
+}

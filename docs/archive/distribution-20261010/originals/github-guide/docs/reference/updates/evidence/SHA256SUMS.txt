@@ -1,0 +1,2 @@
+f3c19f858c9678fa4f1be4d7ce14252150a6c9fb11fc96e526eb8e99e95fee6b  Farol-0.1.8-owner.beta.1-darwin-arm64.zip
+c6b2d92486230026d54c831a7f2b52eb77cff7db3d422108dd66caecfb5cbaad  farol-release.json

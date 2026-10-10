@@ -1,0 +1,22 @@
+{
+  "mode": "Headless Chromium, temporary context; local files and existing loopback server only; no production mutation",
+  "results": [
+    "All 17 gallery images and linked review/archive files resolve",
+    "Current and revision-3 source, assets and archive navigation links resolve",
+    "Existing loopback server serves revision 4; saved preference works on its actual browser origin; explicit review override is scoped to its URL",
+    "Unchecked optional folder uses an attention label, separate from connection Ready",
+    "Expanded folder details scroll with a valid themed thumb color and stable thin gutter",
+    "Compact Dock layer visibly rendered after decode and settled frames"
+  ],
+  "errors": [],
+  "repositoryCheck": {
+    "path": "/Users/ac/code/farol",
+    "status": "Independent changes observed at final readback; left untouched",
+    "observedPaths": [
+      "resources/native/go/internal/releasearchive/directory_test.go",
+      "resources/native/go/internal/releasearchive/plan.go"
+    ],
+    "diffCheck": "Passed at the earlier readback",
+    "changesMadeByDesignTask": false
+  }
+}

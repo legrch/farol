@@ -1,0 +1,5 @@
+# Preserve dated source and design handoffs byte-for-byte. Their wrapper docs
+# remain formatted; these snapshots are not active source or current policy.
+design-lab/desktop-shell-2026-10/
+docs/archive/coordinator-20261010/frozen/
+docs/archive/distribution-20261010/originals/

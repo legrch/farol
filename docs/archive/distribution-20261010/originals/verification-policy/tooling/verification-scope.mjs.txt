@@ -1,0 +1,257 @@
+import { execFileSync } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+// Exact prose inventory at the accepted base. New documents/assets need a
+// reviewed inventory update; an extension or a docs/ prefix is not permission.
+// There are no approved documentation raster assets at this base.
+const DOCUMENTS = new Set([
+  "README.md",
+  "docs/computer-parity.md",
+  "docs/installed-update-runtime.md",
+  "docs/standalone-build.md",
+  "docs/computer-workspace-context.md",
+  "docs/config-model-discovery.md",
+  "docs/design.md",
+  "docs/claude-handoff-candidate.md",
+  "docs/desktop-core.md",
+  "docs/github-release-contract.md",
+  "docs/model-routing.md",
+  "docs/installed-update-helper.md",
+  "docs/ordinary-git-environment-fixture.md",
+  "docs/testing.md",
+  "docs/owner-preview.md",
+  "docs/persistent-chat-handoff-parity.md",
+  "docs/dependencies.md",
+  "docs/update-package-verifier.md",
+  "docs/owner-guard-startup-recovery.md",
+  "docs/product-cutover.md",
+  "docs/architecture.md",
+  "docs/setup-links.md",
+]);
+
+const SOURCE =
+  /^(?:src\/modules\/(?:computer|task|agent|chat|release|identity|distribution)\/|modules\/(?:computer|task|chat|release)\/|apps\/desktop\/ui\/).+\.(?:ts|tsx|go)$/u;
+// Shared composition/contracts, generators and tests remain conservative.
+// A removed test cannot reduce required acceptance or hide lost discovery.
+const SHARED =
+  /(?:^|\/)(?:boot|pkg|kernel|contracts?|generated|bridge|schema|schemas)(?:\/|$)/u;
+const SAFE_PATH = /^[A-Za-z0-9_-]+(?:[./][A-Za-z0-9_-]+)*$/u;
+
+/** @typedef {{path: string, status: string, oldMode: string, newMode: string}} DeltaChange */
+
+/**
+ * @param {unknown} changes
+ * @param {Set<string> | null} attestedPaths
+ */
+export function classifyDelta(changes, attestedPaths = null) {
+  /** @param {"full" | "source" | "docs-only"} scope @param {string} reason */
+  const result = (scope, reason) => ({
+    scope,
+    reason,
+    aggregateRequired: scope !== "docs-only",
+  });
+  if (!Array.isArray(changes) || changes.length === 0)
+    return result("full", "EMPTY_OR_UNKNOWN_DELTA");
+  const seen = new Set();
+  for (const change of changes) {
+    if (
+      !change ||
+      typeof change.path !== "string" ||
+      !SAFE_PATH.test(change.path) ||
+      seen.has(change.path) ||
+      !["A", "M", "D"].includes(change.status) ||
+      (change.status === "A"
+        ? change.oldMode !== "000000" || change.newMode !== "100644"
+        : change.status === "D"
+          ? change.oldMode !== "100644" || change.newMode !== "000000"
+          : change.oldMode !== "100644" || change.newMode !== "100644")
+    )
+      return result("full", "AMBIGUOUS_DELTA");
+    seen.add(change.path);
+  }
+  if (changes.every((change) => DOCUMENTS.has(change.path))) {
+    if (!(attestedPaths instanceof Set))
+      return result("full", "ATTESTATION_UNKNOWN");
+    if (changes.some((change) => attestedPaths.has(change.path)))
+      return result("full", "BUILD_ATTESTED_DOCUMENT");
+    return result("docs-only", "KNOWN_NON_ATTESTED_DOCUMENTS");
+  }
+  if (
+    changes.every(
+      (change) => SOURCE.test(change.path) && !SHARED.test(change.path),
+    )
+  )
+    return result("source", "KNOWN_DOMAIN_SOURCE");
+  return result("full", "UNKNOWN_SHARED_OR_POLICY_PATH");
+}
+
+// --no-renames represents a rename as deletion plus addition, so neither side
+// can disappear behind a safe-looking destination. NUL framing avoids quoting.
+/** @param {Buffer} bytes @returns {DeltaChange[]} */
+export function parseRawDelta(bytes) {
+  const records = bytes.toString("utf8").split("\0");
+  if (records.pop() !== "") throw new Error("DELTA_FRAMING_INVALID");
+  const changes = [];
+  for (let index = 0; index < records.length; index += 2) {
+    const match = /^:(\d{6}) (\d{6}) [a-f0-9]{40} [a-f0-9]{40} ([A-Z])$/u.exec(
+      records[index],
+    );
+    if (!match || !records[index + 1]) throw new Error("DELTA_RECORD_INVALID");
+    changes.push({
+      path: records[index + 1],
+      oldMode: match[1],
+      newMode: match[2],
+      status: match[3],
+    });
+  }
+  return changes;
+}
+
+const SHA = /^[a-f0-9]{40}$/u;
+const gitEnvironment = {
+  PATH: "/usr/bin:/bin",
+  HOME: "/var/empty",
+  GIT_CONFIG_GLOBAL: "/dev/null",
+  GIT_CONFIG_NOSYSTEM: "1",
+  GIT_OPTIONAL_LOCKS: "0",
+  LC_ALL: "C",
+};
+/** @param {string} root @param {string[]} args */
+function git(root, args) {
+  return execFileSync(
+    "/usr/bin/git",
+    ["-c", "core.fsmonitor=false", "-C", root, ...args],
+    {
+      env: gitEnvironment,
+      maxBuffer: 16 * 1024 * 1024,
+      stdio: ["ignore", "pipe", "pipe"],
+    },
+  );
+}
+
+/** @param {string} root @param {string[]} args */
+export function inspectDelta(root, args) {
+  const base = args.find((arg) => arg.startsWith("--base="))?.slice(7) ?? "";
+  const head = args.find((arg) => arg.startsWith("--head="))?.slice(7);
+  const worktree = args.includes("--worktree");
+  if (
+    !SHA.test(base ?? "") ||
+    (!worktree && !SHA.test(head ?? "")) ||
+    (worktree && head !== undefined) ||
+    args.length !== 2 ||
+    new Set(args).size !== 2
+  )
+    throw new Error(
+      "Use --base=<full SHA> with --head=<full SHA> or --worktree",
+    );
+  /** @param {string[]} arguments_ */
+  const text = (arguments_) => git(root, arguments_).toString("utf8").trim();
+  if (text(["rev-parse", "--show-toplevel"]) !== fs.realpathSync(root))
+    throw new Error("REPOSITORY_ROOT_REQUIRED");
+  if (text(["rev-parse", "--verify", `${base}^{commit}`]) !== base)
+    throw new Error("BASE_COMMIT_INVALID");
+  const observedHead = text(["rev-parse", "--verify", "HEAD"]);
+  if (!worktree && observedHead !== head) throw new Error("HEAD_MISMATCH");
+  git(root, ["merge-base", "--is-ancestor", base, observedHead]);
+  const status = () =>
+    git(root, ["status", "--porcelain=v1", "-z", "--untracked-files=all"]);
+  const indexFlags = git(root, ["ls-files", "-v", "-z"])
+    .toString("utf8")
+    .split("\0");
+  if (
+    indexFlags.pop() !== "" ||
+    indexFlags.some((record) => !record.startsWith("H "))
+  )
+    throw new Error("INDEX_FLAGS_AMBIGUOUS");
+  const before = status();
+  if (!worktree && before.length !== 0)
+    throw new Error("FROZEN_RANGE_REQUIRES_CLEAN_TREE");
+  const changes = parseRawDelta(
+    git(root, [
+      "diff",
+      "--raw",
+      "-z",
+      "--no-abbrev",
+      "--no-renames",
+      "--no-ext-diff",
+      "--no-textconv",
+      base,
+      ...(worktree ? [] : [head ?? observedHead]),
+      "--",
+    ]),
+  );
+  if (worktree) {
+    for (const change of changes) {
+      if (change.newMode === "000000") continue;
+      const stat = fs.lstatSync(path.join(root, change.path));
+      if (!stat.isFile() || (stat.mode & 0o111) !== 0)
+        change.newMode = "120000";
+    }
+    const untracked = git(root, [
+      "ls-files",
+      "--others",
+      "--exclude-standard",
+      "-z",
+    ])
+      .toString("utf8")
+      .split("\0");
+    if (untracked.pop() !== "") throw new Error("UNTRACKED_FRAMING_INVALID");
+    for (const relative of untracked) {
+      const stat = fs.lstatSync(path.join(root, relative));
+      changes.push({
+        path: relative,
+        status: "A",
+        oldMode: "000000",
+        newMode:
+          stat.isFile() && (stat.mode & 0o111) === 0 ? "100644" : "120000",
+      });
+    }
+  }
+  if (
+    text(["rev-parse", "--verify", "HEAD"]) !== observedHead ||
+    !status().equals(before)
+  )
+    throw new Error("DELTA_MOVED_DURING_INSPECTION");
+  // build.mjs sourceSnapshot(scope=".") and package.mjs sourceIdentity(scope=".")
+  // attest the whole repository. No user option or generated manifest can
+  // narrow this boundary. A future narrower build needs a reviewed checker
+  // change too; until then even prose-only deltas stay full.
+  const classification = classifyDelta(
+    changes,
+    new Set(changes.map((change) => change.path)),
+  );
+  return {
+    ...classification,
+    base,
+    head: observedHead,
+    observation: worktree ? "working-tree-not-sealed" : "clean-committed-range",
+    paths: changes.map((change) => change.path).sort(),
+  };
+}
+
+if (
+  process.argv[1] &&
+  path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+) {
+  try {
+    process.stdout.write(
+      `${JSON.stringify(inspectDelta(process.cwd(), process.argv.slice(2)), null, 2)}\n`,
+    );
+  } catch (error) {
+    process.stdout.write(
+      `${JSON.stringify(
+        {
+          scope: "full",
+          reason: "INSPECTION_REFUSED",
+          aggregateRequired: true,
+          error: error instanceof Error ? error.message : "UNKNOWN_ERROR",
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    process.exitCode = 2;
+  }
+}

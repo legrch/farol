@@ -1,0 +1,2338 @@
+<!doctype html>
+<html lang="en">
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta
+    http-equiv="Content-Security-Policy"
+    content="default-src 'none'; img-src 'self' data:; font-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'none'; base-uri 'none'; form-action 'none'"
+  />
+  <title>Farol · Design room</title>
+  <style>
+    @font-face {
+      font-family: Geist;
+      src: url("assets/Geist-Variable.woff2") format("woff2");
+      font-weight: 100 900;
+      font-display: swap;
+    }
+    * {
+      box-sizing: border-box;
+    }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #e8e9ec;
+      color: #25252a;
+      font-size: 14px;
+      line-height: 1.45;
+    }
+    button,
+    input,
+    select {
+      font: inherit;
+    }
+    button {
+      cursor: pointer;
+    }
+    button:disabled {
+      cursor: not-allowed;
+      opacity: 0.5;
+    }
+    button,
+    select,
+    input {
+      color: inherit;
+    }
+    button {
+      border: 0;
+    }
+    svg {
+      width: 19px;
+      height: 19px;
+      fill: none;
+      stroke: currentColor;
+      stroke-width: 1.65;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      flex-shrink: 0;
+    }
+    button:focus-visible,
+    a:focus-visible,
+    input:focus-visible,
+    select:focus-visible,
+    summary:focus-visible {
+      outline: 2px solid var(--accent, #7560ce);
+      outline-offset: 3px;
+    }
+    button:active {
+      transform: translateY(1px);
+    }
+    a {
+      color: inherit;
+    }
+    h1,
+    h2,
+    h3,
+    p {
+      margin: 0;
+    }
+    h1 {
+      font-size: 28px;
+      font-weight: 650;
+      letter-spacing: -0.8px;
+      line-height: 1.2;
+    }
+    h2 {
+      font-size: 16px;
+      font-weight: 600;
+      letter-spacing: -0.15px;
+    }
+    h3 {
+      font-size: 14px;
+      font-weight: 600;
+    }
+    small,
+    .small {
+      font-size: 12px;
+    }
+    code {
+      font-family: ui-monospace, SFMono-Regular, monospace;
+      font-size: 12px;
+      overflow-wrap: anywhere;
+    }
+    .board {
+      max-width: 1320px;
+      margin: auto;
+      padding: 24px 28px 16px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 18px;
+    }
+    .board-title strong {
+      font-size: 18px;
+      letter-spacing: -0.5px;
+    }
+    .board-title p {
+      color: #686871;
+      font-size: 12px;
+      margin-top: 3px;
+    }
+    .directions {
+      display: flex;
+      padding: 4px;
+      border-radius: 10px;
+      background: #dadde3;
+      gap: 3px;
+    }
+    .directions button {
+      background: none;
+      padding: 9px 13px;
+      border-radius: 7px;
+      color: #5d6069;
+      font-size: 12px;
+      font-weight: 550;
+    }
+    .directions button[aria-pressed="true"] {
+      background: white;
+      box-shadow: 0 1px 4px #0000000e;
+      color: #25252a;
+    }
+    .lab-controls {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+    .lab-controls select,
+    .lab-controls button {
+      background: #f7f8fa;
+      border: 1px solid #ced0d6;
+      padding: 8px;
+      border-radius: 7px;
+      font-size: 12px;
+    }
+    .window {
+      --accent: #b0a2fb;
+      --tint: #342f4b;
+      --bg: #202124;
+      --sheet: #26272b;
+      --rail: #191a1d;
+      --side: #212225;
+      --line: #393a40;
+      --fg: #ededf0;
+      --muted: #b1b2ba;
+      --hover: #2f3035;
+      --good: #8bd0af;
+      --warn: #ecc185;
+      --bad: #ef9c9c;
+      --button: #33343a;
+      --radius: 10px;
+      --secondary: 232px;
+      color: var(--fg);
+      background: var(--bg);
+      margin: 0 auto;
+      border: 1px solid #393940;
+      border-radius: 13px;
+      overflow: hidden;
+      width: calc(100% - 56px);
+      max-width: 1264px;
+      height: 780px;
+      box-shadow: 0 20px 65px #0002;
+      display: grid;
+      grid-template-rows: 46px minmax(0, 1fr);
+      position: relative;
+    }
+    .window.mac {
+      --accent: #6750b8;
+      --tint: #e9e5f6;
+      --bg: #fafafa;
+      --sheet: #fff;
+      --rail: #e9e9ed;
+      --side: #f0f0f3;
+      --line: #dedee4;
+      --fg: #29292f;
+      --muted: #676771;
+      --hover: #e7e7ed;
+      --good: #2f7555;
+      --warn: #8c581b;
+      --bad: #a24141;
+      --button: #f0f0f4;
+      --radius: 11px;
+      --secondary: 236px;
+      border-color: #cacbd2;
+    }
+    .window.studio {
+      --accent: #355bb2;
+      --tint: #e7edf9;
+      --bg: #f7f8fa;
+      --sheet: #fff;
+      --rail: #252b36;
+      --side: #ebedf1;
+      --line: #d8dce5;
+      --fg: #282f3d;
+      --muted: #636d7e;
+      --hover: #e0e5ee;
+      --good: #2f7657;
+      --warn: #925c20;
+      --bad: #a34646;
+      --button: #ebeff5;
+      --radius: 5px;
+      --secondary: 208px;
+      border-color: #c5cbd5;
+    }
+    .window.geist {
+      font-family:
+        Geist,
+        -apple-system,
+        sans-serif;
+    }
+    .titlebar {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 0 16px;
+      border-bottom: 1px solid var(--line);
+      background: var(--rail);
+    }
+    .lights {
+      display: flex;
+      gap: 7px;
+      margin-right: 16px;
+    }
+    .lights i {
+      width: 11px;
+      height: 11px;
+      border-radius: 50%;
+      background: #fa6056;
+    }
+    .lights i:nth-child(2) {
+      background: #f5bb3c;
+    }
+    .lights i:nth-child(3) {
+      background: #39be4e;
+    }
+    .titlebar .wordmark {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      font-weight: 600;
+      font-size: 12px;
+    }
+    .wordmark img {
+      width: 20px;
+      height: 20px;
+    }
+    .titlebar .disclosure {
+      margin-left: auto;
+      font-size: 11px;
+      color: var(--muted);
+    }
+    .studio .titlebar {
+      color: #e6eaf2;
+    }
+    .studio .titlebar .disclosure {
+      color: #b1bacb;
+    }
+    .workspace {
+      display: grid;
+      grid-template-columns: 62px var(--secondary) minmax(0, 1fr);
+      min-height: 0;
+    }
+    .workspace.no-context {
+      grid-template-columns: 62px minmax(0, 1fr);
+    }
+    .rail {
+      padding: 17px 9px 12px;
+      background: var(--rail);
+      border-right: 1px solid var(--line);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 10px;
+      z-index: 3;
+    }
+    .rail button {
+      position: relative;
+      background: transparent;
+      color: var(--muted);
+      width: 42px;
+      height: 42px;
+      border-radius: 9px;
+      display: grid;
+      place-items: center;
+    }
+    .rail button:hover {
+      background: var(--hover);
+      color: var(--fg);
+    }
+    .rail button[aria-current="page"] {
+      color: var(--accent);
+      background: var(--tint);
+    }
+    .rail button[aria-current="page"]:before {
+      content: "";
+      position: absolute;
+      left: -10px;
+      top: 12px;
+      height: 18px;
+      width: 3px;
+      background: var(--accent);
+      border-radius: 0 3px 3px 0;
+    }
+    .rail button .tip {
+      position: absolute;
+      left: 52px;
+      background: var(--fg);
+      color: var(--bg);
+      padding: 6px 10px;
+      border-radius: 6px;
+      white-space: nowrap;
+      pointer-events: none;
+      display: none;
+      z-index: 20;
+      font-size: 12px;
+    }
+    .rail button:hover .tip,
+    .rail button:focus-visible .tip {
+      display: block;
+    }
+    .rail-spacer {
+      flex: 1;
+    }
+    .rail .rail-lamp {
+      height: 32px;
+      width: 32px;
+      border: 1px solid var(--line);
+      border-radius: 50%;
+      display: grid;
+      place-items: center;
+    }
+    .rail-lamp:before {
+      content: "";
+      width: 7px;
+      height: 7px;
+      background: var(--good);
+      border-radius: 50%;
+    }
+    .rail-lamp.offline:before {
+      background: var(--warn);
+    }
+    .studio .rail {
+      --fg: #edf1fa;
+      --muted: #b0bacb;
+      --hover: #354051;
+      --tint: #415574;
+      --accent: #c4d7ff;
+      border: 0;
+    }
+    .context {
+      background: var(--side);
+      border-right: 1px solid var(--line);
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+    }
+    .context-head {
+      padding: 23px 18px 15px;
+    }
+    .context-head h2 {
+      font-size: 16px;
+    }
+    .context-head p {
+      margin-top: 5px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .context-list {
+      padding: 0 10px;
+      overflow: auto;
+      flex: 1;
+    }
+    .context button.item {
+      display: flex;
+      text-align: left;
+      align-items: center;
+      gap: 10px;
+      width: 100%;
+      padding: 10px 11px;
+      margin-bottom: 3px;
+      border-radius: 7px;
+      background: transparent;
+      color: var(--muted);
+      font-size: 13px;
+      position: relative;
+      min-height: 39px;
+    }
+    .context button.item svg {
+      width: 16px;
+      height: 16px;
+    }
+    .context button.item:hover {
+      background: var(--hover);
+      color: var(--fg);
+    }
+    .context button.item[aria-current="page"] {
+      background: var(--tint);
+      color: var(--fg);
+      font-weight: 550;
+    }
+    .context .item .label {
+      flex: 1;
+      min-width: 0;
+    }
+    .context .item .label small {
+      display: block;
+      font-size: 11px;
+      color: var(--muted);
+      font-weight: 400;
+      margin-top: 4px;
+    }
+    .context .item .end {
+      font-size: 11px;
+      color: var(--muted);
+    }
+    .context .item[aria-current="page"] .end {
+      color: var(--accent);
+    }
+    .context .divider {
+      border-top: 1px solid var(--line);
+      margin: 16px 10px;
+    }
+    .context .subheading {
+      padding: 14px 11px 8px;
+      font-size: 11px;
+      color: var(--muted);
+    }
+    .context-foot {
+      padding: 16px 20px;
+      color: var(--muted);
+      font-size: 11px;
+      border-top: 1px solid var(--line);
+    }
+    .pane {
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    .toolbar {
+      height: 54px;
+      flex-shrink: 0;
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      padding: 0 26px;
+      border-bottom: 1px solid var(--line);
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .toolbar .crumb {
+      color: var(--fg);
+      font-weight: 550;
+    }
+    .toolbar .spacer {
+      flex: 1;
+    }
+    .toolbar button {
+      background: none;
+      color: var(--muted);
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      padding: 6px;
+      border-radius: 5px;
+    }
+    .toolbar button:hover {
+      background: var(--hover);
+    }
+    .toolbar kbd {
+      font: 11px inherit;
+      border: 1px solid var(--line);
+      padding: 1px 4px;
+      border-radius: 4px;
+    }
+    .context-toggle {
+      display: flex !important;
+    }
+    .content {
+      overflow: auto;
+      min-height: 0;
+      flex: 1;
+      padding: 35px 38px 32px;
+    }
+    .page-head {
+      margin-bottom: 28px;
+    }
+    .page-head p {
+      color: var(--muted);
+      margin-top: 9px;
+      max-width: 58ch;
+      font-size: 13px;
+    }
+    .section-title {
+      display: flex;
+      justify-content: space-between;
+      gap: 14px;
+      align-items: center;
+      margin: 0 0 15px;
+    }
+    .muted {
+      color: var(--muted);
+    }
+    .badge {
+      display: inline-flex;
+      gap: 6px;
+      align-items: center;
+      font-size: 11px;
+      font-weight: 500;
+      color: var(--good);
+      white-space: nowrap;
+    }
+    .badge:before {
+      content: "✓";
+      font-size: 12px;
+    }
+    .badge.working {
+      color: var(--fg);
+    }
+    .badge.working:before {
+      content: "◌";
+      font-size: 15px;
+    }
+    .badge.attention {
+      color: var(--warn);
+    }
+    .badge.attention:before {
+      content: "!";
+      border: 1px solid currentColor;
+      border-radius: 50%;
+      height: 13px;
+      width: 13px;
+      text-align: center;
+      font-size: 10px;
+      line-height: 12px;
+    }
+    .badge.unknown {
+      color: var(--warn);
+    }
+    .badge.unknown:before {
+      content: "?";
+      border: 1px solid currentColor;
+      border-radius: 50%;
+      width: 13px;
+      height: 13px;
+      text-align: center;
+      font-size: 10px;
+      line-height: 12px;
+    }
+    .badge.offline,
+    .badge.failed {
+      color: var(--bad);
+    }
+    .badge.offline:before,
+    .badge.failed:before {
+      content: "×";
+    }
+    .btn {
+      background: var(--button);
+      color: var(--fg);
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      padding: 8px 12px;
+      font-size: 12px;
+      font-weight: 500;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+      white-space: nowrap;
+    }
+    .btn:hover {
+      filter: brightness(1.08);
+    }
+    .btn.primary {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #201939;
+    }
+    .mac .btn.primary {
+      color: white;
+    }
+    .studio .btn.primary {
+      color: white;
+    }
+    .btn.link {
+      background: none;
+      border-color: transparent;
+      color: var(--accent);
+      padding-left: 0;
+    }
+    .btn.icon {
+      padding: 7px;
+    }
+    .btn.icon svg {
+      width: 16px;
+      height: 16px;
+    }
+    .form-group {
+      margin-bottom: 28px;
+    }
+    .row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 24px;
+      padding: 19px 0;
+      border-bottom: 1px solid var(--line);
+    }
+    .row:last-child {
+      border-bottom: 0;
+    }
+    .row-copy {
+      min-width: 0;
+      max-width: 52ch;
+    }
+    .row-copy p {
+      font-size: 12px;
+      color: var(--muted);
+      margin-top: 5px;
+    }
+    .row-copy h3 {
+      font-size: 13px;
+    }
+    .row select,
+    .row input,
+    .input {
+      border: 1px solid var(--line);
+      background: var(--button);
+      border-radius: 7px;
+      padding: 8px 10px;
+      font-size: 12px;
+      min-width: 164px;
+      max-width: 100%;
+    }
+    .switch {
+      width: 34px;
+      height: 20px;
+      border-radius: 12px;
+      background: var(--line);
+      border: 0;
+      padding: 3px;
+      display: flex;
+      align-items: center;
+      flex-shrink: 0;
+    }
+    .switch:before {
+      content: "";
+      height: 14px;
+      width: 14px;
+      background: white;
+      border-radius: 50%;
+      box-shadow: 0 1px 2px #0003;
+    }
+    .switch[aria-checked="true"] {
+      background: var(--accent);
+      justify-content: flex-end;
+    }
+    .form-foot {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 18px;
+      padding-top: 21px;
+      border-top: 1px solid var(--line);
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .note {
+      font-size: 12px;
+      color: var(--muted);
+      padding: 16px 0;
+      line-height: 1.65;
+      max-width: 64ch;
+    }
+    .mac .form-group {
+      background: var(--sheet);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 0 18px;
+    }
+    .studio .row {
+      padding: 13px 0;
+    }
+    .studio .content {
+      padding: 28px 28px;
+    }
+    .studio h1 {
+      font-size: 25px;
+    }
+    .studio .form-group {
+      border-top: 1px solid var(--line);
+    }
+    .status-hero {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      border-bottom: 1px solid var(--line);
+      padding-bottom: 25px;
+      margin-bottom: 27px;
+    }
+    .status-emblem {
+      width: 46px;
+      height: 46px;
+      border-radius: 50%;
+      background: var(--tint);
+      display: grid;
+      place-items: center;
+      color: var(--accent);
+    }
+    .status-emblem svg {
+      width: 24px;
+      height: 24px;
+    }
+    .status-hero h1 {
+      font-size: 24px;
+    }
+    .status-hero p {
+      font-size: 13px;
+      color: var(--muted);
+      margin-top: 6px;
+    }
+    .status-hero .btn {
+      margin-left: auto;
+    }
+    .home-layout {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 242px;
+      gap: 36px;
+    }
+    .health {
+      border-left: 1px solid var(--line);
+      padding-left: 24px;
+    }
+    .health-item {
+      padding: 17px 0;
+      border-bottom: 1px solid var(--line);
+    }
+    .health-item h3 {
+      font-size: 12px;
+      margin-bottom: 6px;
+    }
+    .health-item p {
+      color: var(--muted);
+      font-size: 11px;
+      margin-top: 7px;
+    }
+    .health-item button {
+      margin-top: 9px;
+      font-size: 11px;
+    }
+    .task-row {
+      display: flex;
+      width: 100%;
+      align-items: center;
+      gap: 15px;
+      padding: 17px 0;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      color: var(--fg);
+      background: none;
+    }
+    .task-row:hover {
+      background: var(--hover);
+    }
+    .task-number {
+      height: 34px;
+      width: 34px;
+      display: grid;
+      place-items: center;
+      background: var(--button);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 550;
+      flex-shrink: 0;
+    }
+    .task-copy {
+      flex: 1;
+      min-width: 0;
+    }
+    .task-copy strong {
+      font-size: 13px;
+      font-weight: 550;
+    }
+    .task-copy p {
+      font-size: 12px;
+      color: var(--muted);
+      margin-top: 4px;
+    }
+    .task-row .arrow {
+      color: var(--muted);
+    }
+    .task-row .badge {
+      font-size: 10px;
+    }
+    .attention-banner {
+      display: flex;
+      gap: 12px;
+      align-items: flex-start;
+      background: var(--sheet);
+      border: 1px solid var(--line);
+      border-radius: 9px;
+      padding: 18px;
+      margin-top: 23px;
+    }
+    .attention-banner svg {
+      color: var(--warn);
+    }
+    .attention-banner p {
+      font-size: 12px;
+      color: var(--muted);
+      margin-top: 5px;
+    }
+    .attention-banner .btn {
+      margin-top: 12px;
+    }
+    .quiet {
+      border-top: 1px solid var(--line);
+      padding-top: 20px;
+      margin-top: 23px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .mac .home-layout {
+      grid-template-columns: 1fr;
+    }
+    .mac .health {
+      grid-row: 1;
+      border: 0;
+      padding: 0;
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 20px;
+      background: var(--sheet);
+      border-radius: 10px;
+      border: 1px solid var(--line);
+      padding: 15px 20px;
+    }
+    .mac .health > .section-title {
+      grid-column: 1/-1;
+      margin: 0;
+    }
+    .mac .health-item {
+      border: 0;
+      padding: 0;
+    }
+    .mac .home-tasks {
+      margin-top: 5px;
+    }
+    .mac .status-hero {
+      border: 0;
+      margin-bottom: 16px;
+    }
+    .studio .home-layout {
+      grid-template-columns: minmax(0, 1fr) 214px;
+      gap: 28px;
+    }
+    .studio .task-row {
+      padding: 11px 0;
+    }
+    .studio .task-number {
+      border: 0;
+      background: none;
+      width: 23px;
+    }
+    .studio .status-hero {
+      padding-bottom: 19px;
+      margin-bottom: 23px;
+    }
+    .folder-layout {
+      display: grid;
+      grid-template-columns: 210px minmax(0, 1fr);
+      gap: 25px;
+    }
+    .folder-picker {
+      border-right: 1px solid var(--line);
+      padding-right: 16px;
+    }
+    .folder-button {
+      background: none;
+      display: flex;
+      gap: 11px;
+      text-align: left;
+      width: 100%;
+      color: var(--muted);
+      padding: 13px 11px;
+      border-radius: 7px;
+      margin-bottom: 4px;
+    }
+    .folder-button[aria-current="page"] {
+      background: var(--tint);
+      color: var(--fg);
+    }
+    .folder-button p {
+      font-size: 11px;
+      margin-top: 4px;
+      color: var(--muted);
+    }
+    .folder-title {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 15px;
+    }
+    .folder-title h2 {
+      font-size: 18px;
+    }
+    .folder-detail code {
+      display: block;
+      color: var(--muted);
+      margin: 6px 0 14px;
+    }
+    .folder-detail .row {
+      gap: 15px;
+    }
+    .folder-detail .row select {
+      min-width: 125px;
+    }
+    .folder-detail .section-title {
+      margin-top: 25px;
+    }
+    .folder-detail details {
+      font-size: 12px;
+      line-height: 1.65;
+      color: var(--muted);
+      border-top: 1px solid var(--line);
+      padding: 15px 0;
+      margin-top: 15px;
+    }
+    .folder-detail summary {
+      cursor: pointer;
+      color: var(--fg);
+    }
+    .folder-detail details p {
+      margin-top: 12px;
+    }
+    .mac .folder-layout {
+      grid-template-columns: 1fr;
+    }
+    .mac .folder-picker {
+      border: 0;
+      padding: 0;
+      display: flex;
+      gap: 6px;
+      border-bottom: 1px solid var(--line);
+      padding-bottom: 15px;
+    }
+    .mac .folder-button {
+      padding: 10px;
+      flex: 1;
+    }
+    .studio .folder-layout {
+      grid-template-columns: 170px minmax(0, 1fr);
+      gap: 20px;
+    }
+    .activity-event {
+      padding: 12px 16px 17px 22px;
+      position: relative;
+      border-left: 1px solid var(--line);
+      margin-left: 6px;
+    }
+    .activity-event:before {
+      content: "";
+      position: absolute;
+      left: -4px;
+      top: 17px;
+      width: 7px;
+      height: 7px;
+      background: var(--muted);
+      border-radius: 50%;
+    }
+    .activity-event p {
+      margin-top: 5px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .activity-event time {
+      font-size: 11px;
+      color: var(--muted);
+      margin-right: 12px;
+    }
+    .activity-event strong {
+      font-size: 13px;
+      font-weight: 550;
+    }
+    .activity-header {
+      padding: 18px;
+      background: var(--sheet);
+      border: 1px solid var(--line);
+      border-radius: 9px;
+      margin-bottom: 26px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .activity-header p {
+      font-size: 12px;
+      color: var(--muted);
+      margin-top: 5px;
+    }
+    .activity-header .btn {
+      margin-left: auto;
+    }
+    .facts {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+      margin: 18px 0;
+    }
+    .facts dt {
+      font-size: 11px;
+      color: var(--muted);
+    }
+    .facts dd {
+      margin: 4px 0 0;
+      font-size: 12px;
+    }
+    .empty {
+      padding: 40px 0;
+      text-align: center;
+      color: var(--muted);
+    }
+    .empty svg {
+      width: 29px;
+      height: 29px;
+      margin-bottom: 12px;
+    }
+    .empty h2 {
+      color: var(--fg);
+      margin-bottom: 9px;
+    }
+    .empty p {
+      font-size: 13px;
+      max-width: 45ch;
+      margin: auto;
+    }
+    .empty .btn {
+      margin-top: 20px;
+    }
+    .connection-line {
+      display: grid;
+      grid-template-columns: 35px minmax(0, 1fr) auto;
+      gap: 14px;
+      align-items: center;
+      padding: 21px 0;
+      border-bottom: 1px solid var(--line);
+    }
+    .step-icon {
+      background: var(--button);
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      display: grid;
+      place-items: center;
+      color: var(--muted);
+    }
+    .connection-line p {
+      font-size: 12px;
+      color: var(--muted);
+      margin-top: 5px;
+    }
+    .feature-split {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 28px;
+    }
+    .check-block {
+      border-top: 1px solid var(--line);
+      padding: 20px 0;
+    }
+    .check-block p {
+      color: var(--muted);
+      font-size: 12px;
+      margin-top: 7px;
+    }
+    .version-mark {
+      display: flex;
+      gap: 18px;
+      align-items: center;
+      margin: 25px 0 35px;
+    }
+    .version-mark img {
+      height: 58px;
+      width: 58px;
+    }
+    .version-mark strong {
+      font-size: 20px;
+      font-weight: 600;
+    }
+    .version-mark p {
+      font-size: 12px;
+      color: var(--muted);
+      margin-top: 5px;
+    }
+    .release-note {
+      border-left: 2px solid var(--accent);
+      padding: 2px 0 2px 18px;
+      margin: 23px 0;
+    }
+    .release-note p {
+      font-size: 12px;
+      color: var(--muted);
+      margin-top: 7px;
+    }
+    .browser-surface {
+      display: flex;
+      flex-direction: column;
+      height: 100%;
+      background: #fafafa;
+      color: #222;
+    }
+    .browser-top {
+      border-bottom: 1px solid #e5e5e5;
+      padding: 19px 26px;
+      display: flex;
+      gap: 12px;
+      align-items: center;
+    }
+    .browser-top strong {
+      font-size: 15px;
+    }
+    .browser-top .small {
+      margin-left: auto;
+      color: #767676;
+    }
+    .browser-demo {
+      max-width: 610px;
+      width: calc(100% - 60px);
+      margin: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 25px;
+    }
+    .browser-demo h2 {
+      font-size: 25px;
+      font-weight: 550;
+    }
+    .browser-demo p {
+      color: #777;
+      font-size: 13px;
+      line-height: 1.7;
+    }
+    .browser-message {
+      font-size: 14px;
+      line-height: 1.8;
+      border-left: 2px solid #dadada;
+      padding-left: 20px;
+    }
+    .browser-bottom {
+      border: 1px solid #e1e1e1;
+      border-radius: 24px;
+      color: #888;
+      margin: 0 30px 24px;
+      padding: 15px 22px;
+      font-size: 13px;
+    }
+    .footer {
+      padding: 12px 28px 30px;
+      max-width: 1320px;
+      margin: auto;
+      display: flex;
+      gap: 30px;
+      font-size: 12px;
+      color: #626570;
+    }
+    .footer .thesis {
+      flex: 1;
+      max-width: 75ch;
+    }
+    .footer a {
+      white-space: nowrap;
+      text-decoration: none;
+    }
+    .footer a:hover {
+      text-decoration: underline;
+    }
+    .dialog {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: var(--sheet);
+      color: var(--fg);
+      padding: 28px;
+      max-width: 480px;
+      width: calc(100% - 44px);
+      box-shadow: 0 20px 80px #0006;
+    }
+    .dialog::backdrop {
+      background: #0006;
+    }
+    .dialog h2 {
+      font-size: 20px;
+      margin-bottom: 10px;
+    }
+    .dialog p {
+      font-size: 13px;
+      color: var(--muted);
+      margin-bottom: 16px;
+    }
+    .dialog label {
+      display: block;
+      font-size: 12px;
+      margin: 16px 0;
+    }
+    .dialog .input {
+      width: 100%;
+      margin-top: 7px;
+    }
+    .dialog-actions {
+      display: flex;
+      gap: 9px;
+      justify-content: flex-end;
+      margin-top: 23px;
+    }
+    .toast {
+      position: absolute;
+      bottom: 23px;
+      right: 24px;
+      max-width: 380px;
+      background: var(--fg);
+      color: var(--bg);
+      border-radius: 8px;
+      padding: 13px 18px;
+      font-size: 12px;
+      z-index: 9;
+      box-shadow: 0 5px 20px #0003;
+    }
+    .toast[hidden] {
+      display: none;
+    }
+    .scrim {
+      display: none;
+    }
+    .presentation .board,
+    .presentation .footer {
+      display: none;
+    }
+    .presentation .window {
+      width: 100%;
+      height: 100vh;
+      max-width: none;
+      margin: 0;
+      border: 0;
+      border-radius: 0;
+      box-shadow: none;
+    }
+    .mobile-close {
+      display: none;
+    }
+    .lab-info {
+      font-size: 11px;
+      color: var(--muted);
+      margin-top: 25px;
+      border-top: 1px solid var(--line);
+      padding-top: 12px;
+    }
+    .studio .page-head {
+      margin-bottom: 22px;
+    }
+    .studio .toolbar {
+      height: 45px;
+      padding: 0 28px;
+    }
+    .studio .context-head {
+      padding-top: 18px;
+    }
+    .studio .context button.item {
+      min-height: 34px;
+      padding: 8px 9px;
+    }
+    .studio .btn {
+      border-radius: 5px;
+    }
+    .studio .activity-header {
+      border-radius: 5px;
+    }
+    .studio .folder-detail .row {
+      padding: 13px 0;
+    }
+    @media (min-width: 1360px) {
+      .content {
+        padding-left: 48px;
+        padding-right: 48px;
+      }
+    }
+    @media (max-width: 1100px) {
+      .board {
+        flex-wrap: wrap;
+        gap: 12px;
+        padding: 16px 22px;
+      }
+      .board-title {
+        flex: 1;
+      }
+      .window {
+        width: calc(100% - 36px);
+      }
+      .content {
+        padding: 28px;
+      }
+      .home-layout,
+      .studio .home-layout {
+        grid-template-columns: 1fr;
+      }
+      .health {
+        padding: 0;
+        border: 0;
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 14px;
+        margin-top: 8px;
+      }
+      .health > .section-title {
+        grid-column: 1/-1;
+        margin: 0;
+      }
+      .health-item {
+        padding: 0;
+        border: 0;
+      }
+      .folder-layout,
+      .studio .folder-layout {
+        grid-template-columns: 1fr;
+      }
+      .folder-picker {
+        border: 0;
+        padding: 0;
+        display: flex;
+        gap: 5px;
+      }
+      .folder-button {
+        flex: 1;
+        padding: 9px;
+      }
+      .footer {
+        padding: 14px 22px;
+        flex-wrap: wrap;
+      }
+    }
+    @media (max-width: 850px) {
+      .window {
+        --secondary: 232px;
+        height: 760px;
+      }
+      .workspace {
+        grid-template-columns: 58px minmax(0, 1fr);
+      }
+      .rail {
+        padding: 15px 7px;
+      }
+      .context {
+        display: none;
+      }
+      .context-toggle {
+        display: flex !important;
+      }
+      .workspace.context-open .context {
+        display: flex;
+        position: absolute;
+        top: 46px;
+        bottom: 0;
+        left: 58px;
+        width: 232px;
+        z-index: 6;
+        box-shadow: 10px 0 25px #0002;
+      }
+      .workspace.context-open .scrim {
+        display: block;
+        position: absolute;
+        inset: 46px 0 0 58px;
+        background: #0005;
+        z-index: 5;
+        border-radius: 0;
+      }
+      .mobile-close {
+        display: block;
+        background: none;
+        color: var(--muted);
+        position: absolute;
+        top: 18px;
+        right: 14px;
+      }
+      .content,
+      .studio .content {
+        padding: 26px;
+      }
+      .toolbar,
+      .studio .toolbar {
+        padding: 0 20px;
+      }
+      .status-hero {
+        align-items: flex-start;
+        flex-wrap: wrap;
+      }
+      .status-hero .btn {
+        margin-left: 60px;
+      }
+      .status-hero h1 {
+        font-size: 23px;
+      }
+      .feature-split {
+        grid-template-columns: 1fr;
+        gap: 0;
+      }
+      .footer {
+        font-size: 11px;
+      }
+      .row {
+        gap: 14px;
+      }
+      .lab-controls {
+        flex-wrap: wrap;
+      }
+      .titlebar .disclosure {
+        font-size: 10px;
+      }
+      .directions button {
+        padding: 8px 10px;
+      }
+    }
+    @media (max-width: 550px) {
+      .board {
+        padding: 12px;
+      }
+      .window {
+        width: calc(100% - 16px);
+      }
+      .directions {
+        width: 100%;
+      }
+      .directions button {
+        flex: 1;
+      }
+      .board-title p {
+        max-width: 30ch;
+      }
+      .titlebar {
+        padding: 0 12px;
+      }
+      .lights {
+        margin-right: 2px;
+      }
+      .titlebar .disclosure {
+        max-width: 140px;
+        text-align: right;
+      }
+      .content,
+      .studio .content {
+        padding: 22px 18px;
+      }
+      .health,
+      .mac .health {
+        grid-template-columns: 1fr;
+        gap: 16px;
+      }
+      .mac .health {
+        padding: 18px;
+      }
+      .home-layout {
+        gap: 20px;
+      }
+      .row {
+        align-items: flex-start;
+        flex-wrap: wrap;
+      }
+      .row select,
+      .row input {
+        width: 100%;
+      }
+      .task-row {
+        gap: 10px;
+      }
+      .task-row .badge {
+        font-size: 10px;
+      }
+      .task-copy p {
+        font-size: 11px;
+      }
+      .task-number {
+        height: 28px;
+        width: 28px;
+      }
+      .folder-picker,
+      .mac .folder-picker {
+        overflow: auto;
+      }
+      .folder-button {
+        min-width: 115px;
+      }
+      .facts {
+        grid-template-columns: 1fr;
+      }
+      .activity-header {
+        flex-wrap: wrap;
+      }
+      .activity-header .btn {
+        margin: 0;
+      }
+      .form-foot {
+        flex-wrap: wrap;
+      }
+      .toolbar kbd {
+        display: none;
+      }
+      .page-head h1 {
+        font-size: 25px;
+      }
+    }
+    .workspace.context-collapsed {
+      grid-template-columns: 62px minmax(0, 1fr);
+    }
+    .context[hidden] {
+      display: none;
+    }
+    .pane h1:focus,
+    .pane h2:focus {
+      outline: none;
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *,
+      *:before,
+      *:after {
+        scroll-behavior: auto !important;
+        animation: none !important;
+        transition: none !important;
+      }
+    }
+  </style>
+  <header class="board">
+    <div class="board-title">
+      <strong>Farol / Design room</strong>
+      <p>Compare the same product in three directions.</p>
+    </div>
+    <nav class="directions" aria-label="Design direction">
+      <button data-direction="mac">A · Mac Quiet</button
+      ><button data-direction="graphite">B · Graphite Focus</button
+      ><button data-direction="studio">C · Studio Compact</button>
+    </nav>
+    <div class="lab-controls">
+      <select id="fixture" aria-label="Demo state">
+        <option value="working">Working</option>
+        <option value="ready">All quiet</option>
+        <option value="attention">Needs attention</option>
+        <option value="offline">Disconnected</option>
+        <option value="empty">First launch</option></select
+      ><select id="font" aria-label="Prototype typeface">
+        <option value="system">System font</option>
+        <option value="geist">Geist</option>
+      </select>
+    </div>
+  </header>
+  <div class="window" id="window">
+    <header class="titlebar">
+      <span class="lights" aria-hidden="true"><i></i><i></i><i></i></span
+      ><span class="wordmark"
+        ><img src="assets/farol-mark.png" alt="" />Farol</span
+      ><span class="disclosure"
+        >Interactive concept · Sample data · No live actions</span
+      >
+    </header>
+    <div class="workspace" id="workspace">
+      <nav class="rail" id="rail" aria-label="Main navigation"></nav>
+      <aside
+        class="context"
+        id="context"
+        aria-label="Section navigation"
+      ></aside>
+      <button
+        class="scrim"
+        aria-label="Close section navigation"
+        data-action="close-context"
+      ></button>
+      <main class="pane" id="pane"></main>
+    </div>
+    <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+    <dialog class="dialog" id="dialog"></dialog>
+  </div>
+  <footer class="footer">
+    <p class="thesis" id="thesis"></p>
+    <a
+      href="https://linear.app/now/behind-the-latest-design-refresh"
+      target="_blank"
+      rel="noreferrer"
+      >Reference: Linear ↗</a
+    ><a
+      href="https://developer.apple.com/design/human-interface-guidelines/sidebars"
+      target="_blank"
+      rel="noreferrer"
+      >Reference: Apple ↗</a
+    ><a href="design-notes.md" target="_blank">Design notes ↗</a>
+  </footer>
+  <script>
+    const paths = {
+      home: "M3 10 10 4l7 6M5 9v8h4v-5h3v5h3V9",
+      chat: "M4 4h12v10H8l-4 3V4M7 7h6M7 10h4",
+      setup: "M3 6h14M3 14h14M7 3v6M13 11v6",
+      activity: "M3 15h3l3-10 4 12 2-6h3",
+      settings:
+        "M10 7a3 3 0 1 0 0 6 3 3 0 0 0 0-6M10 2v2M10 16v2M2 10h2M16 10h2M4.3 4.3l1.4 1.4M14.3 14.3l1.4 1.4M4.3 15.7l1.4-1.4M14.3 5.7l1.4-1.4",
+      general: "M3 5h14M3 10h14M3 15h14M7 3v4M13 8v4M8 13v4",
+      folders: "M2 6V4h6l2 2h8v10H2V6",
+      mac: "M3 3h14v10H3V3M7 17h6M10 13v4",
+      connection:
+        "M7 7 5 9a3 3 0 0 0 4 4l2-2M13 13l2-2a3 3 0 0 0-4-4L9 9M7 13l6-6",
+      model: "M10 2 17 6v8l-7 4-7-4V6l7-4M3 6l7 4 7-4M10 10v8",
+      updates: "M16 6a7 7 0 1 0 1 7M16 2v5h-5",
+      diagnostics: "M6 2h8M8 2v6l-5 7v3h14v-3l-5-7V2M6 12h8",
+      shortcuts: "M2 5h16v11H2V5M5 8h1M9 8h1M13 8h1M5 12h10",
+      chevron: "m7 4 6 6-6 6",
+      menu: "M3 4h14M3 10h14M3 16h14",
+      check: "m4 10 4 4 8-8",
+      search: "M8 3a5 5 0 1 0 0 10 5 5 0 0 0 0-10M12 12l5 5",
+      close: "m5 5 10 10M15 5 5 15",
+      shield: "M10 2 17 5v5c0 4-7 8-7 8s-7-4-7-8V5l7-3",
+      clock: "M10 2a8 8 0 1 0 0 16 8 8 0 0 0 0-16M10 5v5l3 2",
+      warning: "m10 2 8 15H2l8-15M10 7v5M10 14v1",
+    };
+    const icon = (n) =>
+      `<svg viewBox="0 0 20 20" aria-hidden="true"><path d="${paths[n] || paths.general}"/></svg>`;
+    const esc = (s) =>
+      String(s).replace(
+        /[&<>"']/g,
+        (c) =>
+          ({
+            "&": "&amp;",
+            "<": "&lt;",
+            ">": "&gt;",
+            '"': "&quot;",
+            "'": "&#39;",
+          })[c],
+      );
+    const params = new URLSearchParams(location.search);
+    const state = {
+      menuHidden: false,
+      direction: params.get("direction") || "graphite",
+      root: params.get("page") || "home",
+      page: params.get("sub") || "general",
+      fixture: params.get("state") || "working",
+      font: "system",
+      chat: 1,
+      event: 0,
+      folder: 0,
+      contextOpen: false,
+      filter: "all",
+      saved: false,
+      updateChecked: false,
+    };
+    const sectionNames = {
+      home: "Home",
+      chat: "ChatGPT",
+      setup: "Setup",
+      activity: "Activity",
+      settings: "Settings",
+    };
+    const settingPages = [
+      ["general", "General"],
+      ["folders", "Folders"],
+      ["mac", "This Mac"],
+      ["connection", "Connection"],
+      ["model", "Model"],
+      ["shortcuts", "Keyboard shortcuts"],
+      ["updates", "Updates"],
+      ["diagnostics", "Diagnostics"],
+    ];
+    const steps = [
+      ["overview", "Overview"],
+      ["signin", "Sign in"],
+      ["folders", "Folders"],
+      ["connection", "Connection"],
+      ["add", "Add to ChatGPT"],
+    ];
+    const folders = [
+      {
+        name: "Project Atlas",
+        path: "/demo/projects/atlas",
+        mode: "Guarded edits",
+        verified: true,
+      },
+      { name: "Notes", path: "/demo/notes", mode: "Read-only", verified: true },
+      {
+        name: "Design files",
+        path: "/demo/design",
+        mode: "Read-only",
+        verified: false,
+      },
+    ];
+    const baseEvents = [
+      {
+        title: "Atlas workspace check",
+        time: "10:42",
+        phase: "Completed",
+        badge: "",
+        chat: 1,
+        kind: "turn.terminal",
+        code: "completed",
+        operation: "workspace.list",
+        seq: 18,
+      },
+      {
+        title: "Design review",
+        time: "10:39",
+        phase: "Working",
+        badge: "working",
+        chat: 2,
+        kind: "computer.requested",
+        code: "Not terminal",
+        operation: "workspace.search",
+        seq: 12,
+      },
+      {
+        title: "Connection check",
+        time: "10:32",
+        phase: "Outcome unknown",
+        badge: "unknown",
+        chat: null,
+        kind: "setup.check",
+        code: "outcome_unknown",
+        operation: "connector.verify-app",
+        seq: null,
+      },
+    ];
+    function eventsFor() {
+      return baseEvents.map((e, i) => {
+        if (i === 1) {
+          const c = chats()[1];
+          return {
+            ...e,
+            phase: c?.phase || "Completed",
+            badge: c?.class || "",
+            code: ["Working", "Disconnected"].includes(c?.phase)
+              ? "Not terminal"
+              : c?.phase === "Outcome unknown"
+                ? "outcome_unknown"
+                : "completed",
+            kind: ["Working", "Disconnected"].includes(c?.phase)
+              ? "computer.requested"
+              : "turn.terminal",
+          };
+        }
+        if (i === 2 && state.fixture !== "attention")
+          return {
+            ...e,
+            phase: state.fixture === "offline" ? "Unavailable" : "Completed",
+            badge: state.fixture === "offline" ? "offline" : "",
+            code: state.fixture === "offline" ? "unavailable" : "completed",
+          };
+        return { ...e };
+      });
+    }
+    const label = (text, cls = "") =>
+      `<span class="badge ${cls}">${text}</span>`;
+    const btn = (text, action, cls = "", extra = "") =>
+      `<button class="btn ${cls}" data-action="${action}" ${extra}>${text}</button>`;
+    const nav = (root, page) =>
+      `data-root="${root}"${page ? ` data-page="${page}"` : ""}`;
+    const link = (text, root, page) =>
+      `<button class="btn link" ${nav(root, page)}>${text}</button>`;
+    const head = (title, copy) =>
+      `<header class="page-head"><h1>${title}</h1><p>${copy}</p></header>`;
+    const row = (title, copy, control) =>
+      `<div class="row"><div class="row-copy"><h3>${title}</h3><p>${copy}</p></div>${control}</div>`;
+    const drafts = {};
+    const select = (name, options, chosen) =>
+      `<select aria-label="${name}" data-draft="${name}">${options.map((o) => `<option ${o === ((name === "Folder access" ? folders[state.folder].mode : drafts[name]) ?? chosen) ? "selected" : ""}>${o}</option>`).join("")}</select>`;
+    const toggle = (name, on) =>
+      `<button class="switch" role="switch" aria-label="${name}" aria-checked="${on}" data-action="toggle"></button>`;
+    function chats() {
+      if (state.fixture === "empty") return [];
+      return [
+        { number: 1, title: "Atlas workspace check", phase: "Done", class: "" },
+        {
+          number: 2,
+          title: "Design review",
+          phase:
+            state.fixture === "ready"
+              ? "Done"
+              : state.fixture === "attention"
+                ? "Outcome unknown"
+                : state.fixture === "offline"
+                  ? "Disconnected"
+                  : "Working",
+          class:
+            state.fixture === "ready"
+              ? ""
+              : state.fixture === "attention"
+                ? "unknown"
+                : state.fixture === "offline"
+                  ? "offline"
+                  : "working",
+        },
+        { number: 3, title: "Folder summary", phase: "Done", class: "" },
+      ];
+    }
+    function toast(message) {
+      const t = document.querySelector("#toast");
+      t.textContent = message;
+      t.hidden = false;
+      clearTimeout(window.toastTimer);
+      window.toastTimer = setTimeout(() => (t.hidden = true), 3800);
+    }
+    function home() {
+      const attention = ["attention", "offline"].includes(state.fixture);
+      const empty = state.fixture === "empty";
+      const title = empty
+        ? "Make yourself at home"
+        : state.fixture === "offline"
+          ? "Your connection needs attention"
+          : state.fixture === "attention"
+            ? "One task needs a closer look"
+            : state.fixture === "working"
+              ? "Farol is working in the background"
+              : "Everything is quiet";
+      const copy = empty
+        ? "Connect ChatGPT, then choose what it can access."
+        : state.fixture === "working"
+          ? "Your Mac is connected. One task is in progress."
+          : state.fixture === "ready"
+            ? "Your Mac is connected. No tasks need your attention."
+            : state.fixture === "offline"
+              ? "The local service is available, but ChatGPT is disconnected."
+              : "A check ended without a confirmed outcome. Inspect it before taking another action.";
+      return `<div class="status-hero"><div class="status-emblem">${icon(attention ? "warning" : empty ? "home" : state.fixture === "working" ? "clock" : "check")}</div><div><h1>${title}</h1><p>${copy}</p></div>${empty ? `<button class="btn primary" ${nav("setup", "overview")}>Set up Farol</button>` : ""}</div><div class="home-layout"><section class="home-tasks"><div class="section-title"><h2>${empty ? "Your workspace" : "Current work"}</h2>${link("View activity", "activity")}</div>${
+        empty
+          ? `<div class="empty">${icon("chat")}<h2>No chats yet</h2><p>Work started from your connected tools will appear here. Farol lets you watch it and manage access to your Mac.</p></div>`
+          : chats()
+              .map(
+                (c) =>
+                  `<button class="task-row" ${nav("chat")} data-chat="${c.number}"><span class="task-number">${c.number}</span><span class="task-copy"><strong>${c.title}</strong><p>ChatGPT ${c.number}${c.number === 1 ? " · Workspace check" : c.number === 2 ? ` · ${c.phase === "Working" ? "In progress" : c.phase === "Done" ? "Finished" : c.phase === "Outcome unknown" ? "Inspect outcome" : "Connection unavailable"}` : " · Finished"}</p></span>${label(c.phase, c.class)}<span class="arrow">${icon("chevron")}</span></button>`,
+              )
+              .join("")
+      }${attention ? `<div class="attention-banner">${icon("warning")}<div><h3>${state.fixture === "offline" ? "Reconnect ChatGPT" : "Connection check has an unknown outcome"}</h3><p>${state.fixture === "offline" ? "Open Connection to inspect the current state and available recovery steps." : "The last check has no confirmed result. This does not mean it failed."}</p><button class="btn" ${nav(state.fixture === "offline" ? "settings" : "activity", state.fixture === "offline" ? "connection" : null)} ${state.fixture === "attention" ? 'data-event="2"' : ""}>${state.fixture === "offline" ? "Open Connection" : "Inspect event"}</button></div></div>` : !empty ? '<div class="quiet">No action needed. Background work stays available when you switch sections.</div>' : ""}</section><aside class="health" aria-label="Readiness summary"><div class="section-title"><h2>Connection & access</h2></div><div class="health-item"><h3>ChatGPT</h3>${label(empty ? "Not connected" : state.fixture === "offline" ? "Disconnected" : "Connected", empty ? "attention" : state.fixture === "offline" ? "offline" : "")}<p>${empty ? "Sign in to your own account." : state.fixture === "offline" ? "Current connection unavailable." : "Account signed in. Connection confirmed in this sample."}</p>${link("Manage connection", "settings", "connection")}</div><div class="health-item"><h3>This Mac</h3>${label(empty ? "Not checked" : "Available", empty ? "attention" : "")}<p>Controls what ChatGPT can do on this computer.</p>${link("Review access", "settings", "mac")}</div><div class="health-item"><h3>Shared folders</h3>${label(empty ? "None shared" : "3 folders approved", empty ? "attention" : "")}<p>Folder access is separate from the ChatGPT connection.</p>${link("Manage folders", "settings", "folders")}</div></aside></div>`;
+    }
+    function general() {
+      return (
+        head(
+          "General",
+          "Choose how Farol opens and how much activity you see.",
+        ) +
+        `<section class="form-group">${row("Open at launch", "Choose your starting point when no work is active.", select("Open at launch", ["Home", "Last used section", "ChatGPT"], "Home"))}${row("Section menu", "Keep section navigation open on larger windows.", select("Section menu", ["Always visible", "Remember last state"], "Always visible"))}${row("Activity detail", "Show meaningful steps or the available technical fields.", select("Activity detail", ["Meaningful steps", "Technical details"], "Meaningful steps"))}</section><div class="form-foot"><span>These preferences apply to Farol.</span>${btn("Save changes", "save", "primary")}</div><p class="lab-info">Design proposal: Home and the new menu behavior need implementation. Saving here changes this preview only.</p>`
+      );
+    }
+    function folderPage() {
+      const f = folders[state.folder];
+      return (
+        head(
+          "Folders",
+          "Choose which folders ChatGPT can access, and what it can do in each one.",
+        ) +
+        `<div class="folder-layout"><aside class="folder-picker" aria-label="Approved folders">${folders.map((f, i) => `<button class="folder-button" data-action="folder" data-index="${i}" aria-current="${state.folder === i ? "page" : "false"}">${icon("folders")}<div><h3>${f.name}</h3><p>${f.mode}</p></div></button>`).join("")}</aside><section class="folder-detail"><div class="folder-title">${icon("folders")}<h2>${f.name}</h2></div><code>${f.path}</code>${label(f.verified ? "Folder check passed" : "Folder check needed", f.verified ? "" : "attention")}<div class="form-group">${row("Access", "Read files, or allow edits that require a review.", select("Folder access", ["Read-only", "Guarded edits"], f.mode))}${row("Git history & user settings", "A separate permission, beyond ordinary folder access.", btn("Review access", "git-access"))}</div><div class="section-title"><h3>Excluded paths</h3></div><p class="note" style="padding-top:0">These paths stay outside the folder access you approve.</p><input class="input" aria-label="Excluded paths" value="private, build/secrets.txt" style="width:100%"><details><summary>What does Git access include?</summary><p>Git metadata, previous versions of files, hooks and your Git user settings can contain information outside the current folder. Review this scope separately before allowing access. Folder verification must be repeated after changing this permission.</p></details><div class="form-foot">${btn("Remove folder", "remove-folder")}${btn("Save changes", "save", "primary")}</div></section></div><p class="note">${btn("Add folder…", "add-folder")} New folders start with read-only access.</p>`
+      );
+    }
+    function macPage() {
+      return (
+        head(
+          "This Mac",
+          "See what this computer can do for ChatGPT. Each capability has its own access rules.",
+        ) +
+        `<section class="form-group">${row("Computer name", "Used to identify this Mac in your connections.", '<input aria-label="Computer name" value="This Mac">')}${row("Computer commands", "Choose the permitted command environment.", select("Computer commands", ["Disabled", "Workspace shell"], "Workspace shell"))}</section><div class="section-title"><h2>Access & readiness</h2></div><div class="connection-line"><span class="step-icon">${icon("mac")}</span><div><h3>Local service</h3><p>Available on this Mac. This alone does not verify ChatGPT access.</p></div>${label("Available")}</div><div class="connection-line"><span class="step-icon">${icon("folders")}</span><div><h3>Folder access</h3><p>Three approved folders. Permissions are managed per folder.</p></div>${link("Review folders", "settings", "folders")}</div><div class="connection-line"><span class="step-icon">${icon("shield")}</span><div><h3>Workspace shell</h3><p>Runs inside an approved folder. Network access is not included.</p></div>${label("Configured")}</div><p class="note">A saved configuration is different from a verified operation. Folder and connection checks remain separate.</p><div class="form-foot"><span>Sample configuration, not live device evidence.</span>${btn("Save changes", "save", "primary")}</div>`
+      );
+    }
+    function connectionPage() {
+      const off = state.fixture === "offline" || state.fixture === "empty";
+      return (
+        head(
+          "Connection",
+          "Your ChatGPT account, the local connection and verification in one place.",
+        ) +
+        `<div class="connection-line"><span class="step-icon">${icon("chat")}</span><div><h3>ChatGPT sign-in</h3><p>${state.fixture === "empty" ? "Your account is not connected." : "Signed in to your own ChatGPT account."}</p></div>${label(state.fixture === "empty" ? "Not signed in" : "Signed in", state.fixture === "empty" ? "attention" : "")}</div><div class="connection-line"><span class="step-icon">${icon("connection")}</span><div><h3>Local connection</h3><p>${off ? "ChatGPT access is not currently confirmed." : "Local service and ChatGPT are connected in this sample."}</p></div>${label(off ? "Not confirmed" : "Connected", off ? "attention" : "")}</div><div class="connection-line"><span class="step-icon">${icon("check")}</span><div><h3>Check from ChatGPT</h3><p>${state.fixture === "attention" ? "Last attempt ended with an unknown outcome." : off ? "No current verification available." : "Sample verification completed at 10:32."}</p></div>${label(state.fixture === "attention" ? "Outcome unknown" : off ? "Not verified" : "Verified", state.fixture === "attention" ? "unknown" : off ? "attention" : "")}</div><p class="note">These checks are independent. A connected local service does not prove that ChatGPT can access an approved folder.</p><div class="form-foot">${link("Open setup guide", "setup", "add")}${btn("Review connection check", "connection-check", "primary")}</div>`
+      );
+    }
+    function modelPage() {
+      return (
+        head(
+          "Model",
+          "The model connection used by your tools through Farol.",
+        ) +
+        `<section class="form-group">${row("Provider", "The permanent route exposed to connected tools.", "<code>farol</code>")}${row("Model", "The stable model name for the ChatGPT route.", "<code>chatgpt</code>")}${row("Model selection", "The actual ChatGPT model depends on the supported request and account.", '<span class="small muted">Managed by ChatGPT</span>')}</section><p class="note">This page describes the model route. It does not claim a particular underlying model, subscription entitlement or model response.</p>${link("Manage ChatGPT connection", "settings", "connection")}`
+      );
+    }
+    function updatesPage() {
+      return (
+        head(
+          "Updates",
+          "Keep Farol current, and see the previous version available to restore.",
+        ) +
+        `<div class="version-mark"><img src="assets/farol-mark.png" alt=""><div><strong>Farol 0.1.8</strong><p>Owner beta · Sample version information</p></div></div><div class="form-group">${row("Update status", state.updateChecked ? "Sample state: no newer version is available. No live check was made." : "Check the installed update channel for a newer version.", btn(state.updateChecked ? "Check again" : "Check for updates", "check-update", "primary"))}${row("Previous version", "Farol 0.1.7 · Available to restore in this example.", btn("Review restore…", "restore"))}</div><div class="release-note"><h3>Updates wait for active work</h3><p>Restarting must respect running work and uncertain outcomes. The final product must use its actual update readiness state.</p></div><details class="note"><summary>Version details</summary><p>Channel: Owner beta<br>Current: 0.1.8 (sample)<br>Previous: 0.1.7 (sample)</p></details>`
+      );
+    }
+    function diagnostics() {
+      return (
+        head(
+          "Diagnostics",
+          "Inspect available evidence when something needs investigation.",
+        ) +
+        `<section class="form-group">${row("Local service", "The service on this Mac is available in the sample.", label("Available"))}${row("ChatGPT connection", "See independent sign-in and connection checks.", link("Open Connection", "settings", "connection"))}${row("Recent activity", "Inspect task stages, operation names and result codes.", link("Open Activity", "activity"))}</section><details class="note"><summary>What is included in Activity?</summary><p>The current product projects time, task/turn linkage, event kind, phase, operation and terminal code. Prompt and answer text, file contents and full tool payloads are excluded. A detailed event view can explain only what was actually recorded.</p></details>${btn("View sample report", "report")}`
+      );
+    }
+    function shortcuts() {
+      return (
+        head(
+          "Keyboard shortcuts",
+          "A proposed keyboard map for the new navigation.",
+        ) +
+        `<section class="form-group">${["Home", "ChatGPT", "Activity", "Setup"].map((s, i) => row(s, "Switch section without restarting work.", `<code>⌘ ${i + 1}</code>`)).join("")}${row("Settings", "Open the Settings section.", "<code>⌘ ,</code>")}${row("Find a page", "Search section names and settings.", "<code>⌘ K</code>")}${row("Section menu", "Open or close the contextual navigation.", "<code>⌃ ⌘ S</code>")}</section><p class="note">Shortcuts here are a design proposal. Search and section navigation work in this prototype; the installed application keeps its existing keyboard map.</p>`
+      );
+    }
+    function settings() {
+      return (
+        {
+          general,
+          folders: folderPage,
+          mac: macPage,
+          connection: connectionPage,
+          model: modelPage,
+          updates: updatesPage,
+          diagnostics,
+          shortcuts,
+        }[state.page] || general
+      )();
+    }
+    function activity() {
+      if (state.fixture === "empty")
+        return (
+          head("Activity", "A clear record of the work Farol has observed.") +
+          `<div class="empty">${icon("activity")}<h2>No activity yet</h2><p>Task stages and connection checks appear here as work happens. Only recorded metadata is shown.</p></div>`
+        );
+      const e = eventsFor()[state.event];
+      return (
+        head(
+          e.title,
+          "A sample event, shown using the fields the current activity projection can retain.",
+        ) +
+        `<div class="activity-header">${icon("activity")}<div>${label(e.phase, e.badge)}<p>${e.chat ? `ChatGPT ${e.chat} · ` : ""}Today at ${e.time}</p></div>${e.chat ? `<button class="btn" ${nav("chat")} data-chat="${e.chat}">View chat</button>` : ""}</div><div class="section-title"><h2>Recorded event</h2></div><div class="activity-event"><time>${e.time}</time><strong>${e.kind}</strong><p>${e.phase === "Outcome unknown" ? "There is no confirmed terminal result. Inspect the connection before deciding what to do next." : ["Working", "Disconnected"].includes(e.phase) ? "A Computer operation was requested. Completion has not been recorded for this sample event." : "The turn reached its recorded terminal state."}</p></div><dl class="facts"><div><dt>Event kind</dt><dd><code>${e.kind}</code></dd></div><div><dt>Phase / terminal code</dt><dd><code>${e.code}</code></dd></div><div><dt>Operation ${state.event === 0 ? "(separate request event)" : ""}</dt><dd><code>${e.operation}</code></dd></div><div><dt>Sequence</dt><dd>${e.seq ?? "Not recorded"}</dd></div></dl><details class="note"><summary>Available technical identifiers</summary><p>Task: <code>${e.chat ? "sample-task-" + e.chat : "setup"}</code><br>Turn: <code>sample-turn-${state.event + 1}</code><br>Generation: ${e.chat ? 1 : 0}<br>Computer call: ${e.chat ? "sample-call-" + (state.event + 1) : "Not recorded"}</p></details><div class="release-note"><h3>Only recorded evidence</h3><p>Conversation text, file contents and tool payloads are not in this log. Missing evidence is shown as missing. This is not a transcript archive.</p></div>${e.phase === "Outcome unknown" ? link("Inspect connection", "settings", "connection") : ""}`
+      );
+    }
+    function setup() {
+      if (
+        state.page === "overview" ||
+        !steps.some((s) => s[0] === state.page)
+      ) {
+        return (
+          head(
+            "Setup",
+            "A guided path to connect ChatGPT and decide what it can access.",
+          ) +
+          steps
+            .slice(1)
+            .map(
+              ([id, name], i) =>
+                `<div class="connection-line"><span class="step-icon">${state.fixture === "empty" ? i + 1 : "✓"}</span><div><h3>${name}</h3><p>${["Use your own ChatGPT account.", "Choose folders and access for each one.", "Connect this Mac to ChatGPT.", "Add the app and review verification."][i]}</p></div><button class="btn" ${nav("setup", id)}>${state.fixture === "empty" ? "Set up" : "Review"}</button></div>`,
+            )
+            .join("") +
+          `<p class="note">After setup, Home is your everyday starting point. Optional folder access stays optional.</p>`
+        );
+      }
+      if (state.page === "folders") return folderPage();
+      if (state.page === "connection") return connectionPage();
+      if (state.page === "signin")
+        return (
+          head("Sign in", "Use your own ChatGPT account inside Farol.") +
+          `<div class="check-block">${label(state.fixture === "empty" ? "Not signed in" : "Signed in", state.fixture === "empty" ? "attention" : "")}<p>This concept uses sample account status. Sign-in itself happens in the embedded ChatGPT surface.</p></div>${btn("Preview sign-in step", "signin", "primary")}`
+        );
+      return (
+        head(
+          "Add to ChatGPT",
+          "Connect the Farol app, then review a check from ChatGPT.",
+        ) +
+        `<div class="check-block"><h2>1. Add the app in ChatGPT</h2><p>Open the relevant ChatGPT app settings and connect this Farol using the supported connection flow.</p></div><div class="check-block"><h2>2. Select the connected app</h2><p>The selected app must match the current Farol connection.</p><label class="small">App name <input class="input" aria-label="ChatGPT app name" value="Farol" style="margin:14px 0 0 10px"></label></div><div class="check-block"><h2>3. Review the verification</h2><p>A verification action sends a short check through ChatGPT. Opening a settings page or saving an app name alone does not verify access.</p></div>${btn("Review connection check", "connection-check", "primary")}<p class="note">Detailed service instructions belong in the setup guide, separate from everyday Settings.</p>`
+      );
+    }
+    function browser() {
+      const c = chats().find((c) => c.number === state.chat);
+      return `<div class="browser-surface"><div class="browser-top">${icon("chat")}<strong>ChatGPT ${state.chat}</strong><span class="small">Sample embedded view</span></div><div class="browser-demo"><h2>${c?.title || "No active chats"}</h2>${c ? `<div class="browser-message">${c.phase === "Working" ? "Working on the workspace review…" : c.phase === "Outcome unknown" ? "This task has no confirmed outcome. Open Activity to inspect the available event." : c.phase === "Disconnected" ? "The connection is unavailable. Open Connection to inspect its state." : "Workspace check completed. The approved workspace was listed successfully."}</div><p>This is a static sample conversation surface. The final app shows the existing ChatGPT view here. Switching views does not send a message, reload the page or cancel work.</p>` : "<p>Work from your connected tools appears here. Views are created only when work arrives.</p>"}</div><div class="browser-bottom">Sample conversation · No message will be sent</div></div>`;
+    }
+    function context() {
+      let items = "",
+        title = sectionNames[state.root],
+        copy = "";
+      if (state.root === "settings") {
+        copy = "A place for every preference.";
+        items = settingPages
+          .map(
+            ([id, name], i) =>
+              `${i === 6 ? '<div class="divider"></div>' : ""}<button class="item" ${nav("settings", id)} aria-current="${state.page === id ? "page" : "false"}">${icon(id)}<span class="label">${name}</span></button>`,
+          )
+          .join("");
+      }
+      if (state.root === "setup") {
+        copy = "Connect once. Stay in control.";
+        items = steps
+          .map(
+            ([id, name]) =>
+              `<button class="item" ${nav("setup", id)} aria-current="${state.page === id ? "page" : "false"}"><span class="end">${state.fixture === "empty" ? "○" : "✓"}</span><span class="label">${name}</span></button>`,
+          )
+          .join("");
+      }
+      if (state.root === "chat") {
+        copy = "Your current views.";
+        items =
+          chats()
+            .map(
+              (c) =>
+                `<button class="item" ${nav("chat")} data-chat="${c.number}" aria-current="${state.chat === c.number ? "page" : "false"}"><span class="task-number">${c.number}</span><span class="label">ChatGPT ${c.number}<small>${c.title}</small><small>${c.phase}</small></span></button>`,
+            )
+            .join("") || '<p class="note">No active views.</p>';
+        items +=
+          '<div class="divider"></div><p class="note" style="padding:0 11px">Work started from connected tools appears here.</p>';
+      }
+      if (state.root === "activity") {
+        copy = "Recorded work & checks.";
+        items = `<select class="input" id="activity-filter" aria-label="Activity filter" style="width:100%;min-width:0;margin-bottom:13px"><option value="all">All activity</option><option value="attention" ${state.filter === "attention" ? "selected" : ""}>Needs attention</option></select>${
+          state.fixture === "empty"
+            ? '<p class="note">No events yet.</p>'
+            : eventsFor()
+                .map((e, i) =>
+                  state.filter === "attention" && e.phase !== "Outcome unknown"
+                    ? ""
+                    : `<button class="item" ${nav("activity")} data-event="${i}" aria-current="${state.event === i ? "page" : "false"}"><span class="label">${e.title}<small>${e.phase} · ${e.time}</small></span></button>`,
+                )
+                .join("")
+        }`;
+      }
+      return `<div class="context-head"><h2>${title}</h2><p>${copy}</p><button class="mobile-close" data-action="close-context" aria-label="Close section menu">${icon("close")}</button></div><div class="context-list">${items}</div><div class="context-foot">${state.root === "settings" ? "Changes in this lab stay local." : state.root === "activity" ? "Sample metadata · No transcripts." : state.root === "chat" ? "Stable view numbers · No close buttons." : "Setup does not run checks on its own."}</div>`;
+    }
+    function render() {
+      if (!sectionNames[state.root]) state.root = "home";
+      if (!["mac", "graphite", "studio"].includes(state.direction))
+        state.direction = "graphite";
+      const w = document.querySelector("#window");
+      w.className = `window ${state.direction} ${state.font === "geist" ? "geist" : ""}`;
+      document.body.classList.toggle("presentation", params.has("present"));
+      document.querySelector("#fixture").value = state.fixture;
+      document
+        .querySelectorAll("[data-direction]")
+        .forEach((b) =>
+          b.setAttribute(
+            "aria-pressed",
+            b.dataset.direction === state.direction,
+          ),
+        );
+      document.querySelector("#workspace").className =
+        `workspace ${state.root === "home" ? "no-context" : ""} ${state.contextOpen ? "context-open" : ""} ${state.menuHidden ? "context-collapsed" : ""}`;
+      document.querySelector("#context").hidden =
+        state.root === "home" || state.menuHidden;
+      document.querySelector("#context").innerHTML = context();
+      document.querySelector("#rail").innerHTML =
+        ["home", "chat", "activity", "setup"]
+          .map(
+            (id, i) =>
+              `<button ${nav(id, id === "setup" ? "overview" : null)} aria-label="${sectionNames[id]}" aria-current="${state.root === id ? "page" : "false"}">${icon(id)}<span class="tip">${sectionNames[id]} · ⌘${i + 1}</span></button>`,
+          )
+          .join("") +
+        `<div class="rail-spacer"></div><button ${nav("settings", "general")} aria-label="Settings" aria-current="${state.root === "settings" ? "page" : "false"}">${icon("settings")}<span class="tip">Settings · ⌘,</span></button><span class="rail-lamp ${state.fixture === "offline" ? "offline" : ""}" role="img" aria-label="Sample local service status"></span>`;
+      const sub =
+        state.root === "settings"
+          ? settingPages.find((p) => p[0] === state.page)?.[1]
+          : state.root === "setup"
+            ? steps.find((p) => p[0] === state.page)?.[1]
+            : state.root === "chat"
+              ? `ChatGPT ${state.chat}`
+              : state.root === "activity"
+                ? "Event details"
+                : null;
+      document.querySelector("#pane").innerHTML =
+        `<header class="toolbar">${state.root === "home" ? "" : `<button class="context-toggle" data-action="context" aria-label="Toggle section menu" aria-expanded="${state.contextOpen}">${icon("menu")}</button>`}<span>${sectionNames[state.root]}</span>${sub ? `<span aria-hidden="true">/</span><span class="crumb">${sub}</span>` : ""}<span class="spacer"></span><button data-action="search" aria-label="Find a page">${icon("search")}<span>Find a page</span><kbd>⌘ K</kbd></button></header>${state.root === "chat" ? browser() : `<div class="content">${{ home, settings, setup, activity }[state.root]()}</div>`}`;
+      document.querySelector("#pane").inert =
+        state.contextOpen && innerWidth <= 850;
+      document.querySelector("#thesis").textContent = {
+        mac: "A · Mac Quiet — familiar system typography, light surfaces and grouped controls. Home puts readiness above current work. Calm and easy to learn; uses more vertical space.",
+        graphite:
+          "B · Graphite Focus — a quiet graphite shell, an Iris selection light and a separate readiness column. Home prioritizes current work. Recommended starting point; dark chrome needs a careful transition to ChatGPT.",
+        studio:
+          "C · Studio Compact — a dark navigation rail, a light work surface and tighter rows. Less chrome and more visible evidence. Efficient for frequent use; denser for first-time users.",
+      }[state.direction];
+    }
+    let dialogReturn;
+    function openDialog(html) {
+      dialogReturn = document.activeElement;
+      const d = document.querySelector("#dialog");
+      d.innerHTML = html;
+      d.showModal();
+      d.querySelector("input,button")?.focus();
+    }
+    function messageDialog(title, copy, actionLabel = "Close") {
+      openDialog(
+        `<h2>${title}</h2><p>${copy}</p><div class="dialog-actions">${btn(actionLabel, "dialog-close", "primary")}</div>`,
+      );
+    }
+    document.querySelector("#dialog").addEventListener("close", () => {
+      if (dialogReturn?.isConnected) dialogReturn.focus();
+    });
+    document.addEventListener("click", (e) => {
+      const b = e.target.closest("button");
+      if (!b) return;
+      if (b.dataset.direction) {
+        state.direction = b.dataset.direction;
+        render();
+        document.querySelector(`[data-direction="${state.direction}"]`).focus();
+        return;
+      }
+      if (b.dataset.root) {
+        state.root = b.dataset.root;
+        state.page =
+          b.dataset.page || (state.root === "setup" ? "overview" : state.page);
+        if (b.dataset.chat) state.chat = Number(b.dataset.chat);
+        if (b.dataset.event) state.event = Number(b.dataset.event);
+        state.contextOpen = false;
+        render();
+        document
+          .querySelector("#pane h1,#pane h2")
+          ?.setAttribute("tabindex", "-1");
+        document
+          .querySelector("#pane h1,#pane h2")
+          ?.focus({ preventScroll: true });
+        return;
+      }
+      const a = b.dataset.action;
+      if (a === "toggle") {
+        b.setAttribute(
+          "aria-checked",
+          b.getAttribute("aria-checked") !== "true",
+        );
+        return;
+      }
+      if (a === "context") {
+        if (innerWidth > 850) {
+          state.menuHidden = !state.menuHidden;
+        } else {
+          state.menuHidden = false;
+          state.contextOpen = !state.contextOpen;
+        }
+        render();
+        if (state.contextOpen)
+          document.querySelector(".context .item")?.focus();
+        return;
+      }
+      if (a === "close-context") {
+        state.contextOpen = false;
+        render();
+        document.querySelector(".context-toggle")?.focus();
+        return;
+      }
+      if (a === "folder") {
+        state.folder = Number(b.dataset.index);
+        render();
+        return;
+      }
+      if (a === "save") {
+        toast(
+          "Changes saved in this prototype only. Farol settings were not changed.",
+        );
+        return;
+      }
+      if (a === "check-update") {
+        state.updateChecked = true;
+        render();
+        toast("Sample update state displayed. No server was contacted.");
+        return;
+      }
+      if (a === "git-access") {
+        messageDialog(
+          "Git history & user settings",
+          "This permission includes Git metadata, past file versions, hooks and your Git user settings. These can include information beyond the current folder. In the final app, review this scope before allowing it, then verify the folder again. This prototype cannot grant access.",
+        );
+        return;
+      }
+      if (a === "connection-check") {
+        messageDialog(
+          "Review a connection check",
+          "A live check would send a short message through ChatGPT using the selected Farol app. Its result can be verified, failed or unknown. This prototype previews the review step only; it cannot send a check.",
+        );
+        return;
+      }
+      if (a === "restore") {
+        messageDialog(
+          "Restore Farol 0.1.7?",
+          "The final application would review update readiness and restart into the previously accepted version. Active work and unknown outcomes must be resolved by the existing update flow. This preview does not restart or restore anything.",
+          "Back to Updates",
+        );
+        return;
+      }
+      if (a === "remove-folder") {
+        messageDialog(
+          "Remove this folder?",
+          "In the final app, removing a folder revokes future access without deleting its files. This is a preview of that review step; no folder access will change.",
+        );
+        return;
+      }
+      if (a === "add-folder") {
+        openDialog(
+          `<h2>Add a folder</h2><p>In the final app, choose a folder using the Mac file picker. New folders start read-only. This field previews the naming step only.</p><label>Folder label<input class="input" aria-label="Folder label" placeholder="Project name"></label><div class="dialog-actions">${btn("Cancel", "dialog-close")}${btn("Preview addition", "demo-add", "primary")}</div>`,
+        );
+        return;
+      }
+      if (a === "demo-add") {
+        const name = document.querySelector("#dialog input").value.trim();
+        if (!name) {
+          document.querySelector("#dialog input").focus();
+          return;
+        }
+        folders.push({
+          name,
+          path: "/demo/selected-folder",
+          mode: "Read-only",
+          verified: false,
+        });
+        state.folder = folders.length - 1;
+        document.querySelector("#dialog").close();
+        render();
+        toast("Sample folder added to this preview only.");
+        return;
+      }
+      if (a === "signin") {
+        messageDialog(
+          "Sign in to ChatGPT",
+          "The final app opens its isolated embedded ChatGPT surface. This design room does not open an account, read a session or change authentication.",
+        );
+        return;
+      }
+      if (a === "report") {
+        messageDialog(
+          "Sample diagnostic report",
+          "Local service: available. ChatGPT: sample connection. Activity: projected metadata only. No live system information was collected.",
+        );
+        return;
+      }
+      if (a === "dialog-close") {
+        document.querySelector("#dialog").close();
+        return;
+      }
+      if (a === "search") {
+        openDialog(
+          `<h2>Find a page</h2><label>Page name<input class="input" id="page-search" aria-label="Page name" placeholder="Try Updates or Folders"></label><div id="search-results"></div><div class="dialog-actions">${btn("Close", "dialog-close")}</div>`,
+        );
+        searchPages("");
+        return;
+      }
+    });
+    function searchPages(q) {
+      const candidates = [
+        ["home", null, "Home"],
+        ["chat", null, "ChatGPT"],
+        ["activity", null, "Activity"],
+        ["setup", "overview", "Setup"],
+        ...settingPages.map(([id, title]) => ["settings", id, title]),
+      ].filter((p) => p[2].toLowerCase().includes(q.toLowerCase()));
+      document.querySelector("#search-results").innerHTML = candidates.length
+        ? candidates
+            .map(
+              ([root, page, title]) =>
+                `<button class="folder-button" ${nav(root, page)}>${esc(title)}</button>`,
+            )
+            .join("")
+        : '<p class="note">No matching page. Try another name.</p>';
+    }
+    document.addEventListener("input", (e) => {
+      if (e.target.id === "page-search") searchPages(e.target.value);
+    });
+    document.addEventListener("change", (e) => {
+      if (e.target.dataset.draft) {
+        drafts[e.target.dataset.draft] = e.target.value;
+        if (e.target.dataset.draft === "Folder access")
+          folders[state.folder].mode = e.target.value;
+      }
+      if (e.target.id === "fixture") {
+        state.fixture = e.target.value;
+        state.updateChecked = false;
+        render();
+      }
+      if (e.target.id === "font") {
+        state.font = e.target.value;
+        render();
+      }
+      if (e.target.id === "activity-filter") {
+        state.filter = e.target.value;
+        if (state.filter === "attention") state.event = 2;
+        render();
+      }
+    });
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && state.contextOpen) {
+        e.preventDefault();
+        state.contextOpen = false;
+        render();
+        document.querySelector(".context-toggle")?.focus();
+      }
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        document.querySelector('[data-action="search"]').click();
+      }
+      if (e.metaKey && e.ctrlKey && e.key.toLowerCase() === "s") {
+        e.preventDefault();
+        if (state.root !== "home") {
+          document.querySelector('[data-action="context"]')?.click();
+        }
+      }
+      if (
+        e.metaKey &&
+        ["1", "2", "3", "4", ","].includes(e.key) &&
+        !document.querySelector("#dialog").open
+      ) {
+        e.preventDefault();
+        state.root = {
+          1: "home",
+          2: "chat",
+          3: "activity",
+          4: "setup",
+          ",": "settings",
+        }[e.key];
+        state.page = state.root === "setup" ? "overview" : "general";
+        state.contextOpen = false;
+        render();
+      }
+    });
+    document.addEventListener("click", (e) => {
+      if (e.target.closest("#search-results button[data-root]"))
+        document.querySelector("#dialog").close();
+    });
+    render();
+  </script>
+</html>
