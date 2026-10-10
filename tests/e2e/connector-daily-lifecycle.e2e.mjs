@@ -107,12 +107,18 @@ async function bounded(promise, label, ms = 15000) {
 async function poll(read, accept, label, ms = 15000) {
   const deadline = Date.now() + ms;
   do {
-    const value = await bounded(
-      read(),
-      label,
-      Math.max(1, Math.min(5000, deadline - Date.now())),
-    );
-    if (accept(value)) return value;
+    try {
+      const value = await bounded(
+        read(),
+        label,
+        Math.max(1, Math.min(5000, deadline - Date.now())),
+      );
+      if (accept(value)) return value;
+    } catch (error) {
+      // A fixture publishes observations by atomic rename. Reobserve only a
+      // replaced record; never replay a command or accept its old descriptor.
+      if (error?.message !== "DAILY_PRIVATE_RECORD_REPLACED") throw error;
+    }
     await delay(50);
   } while (Date.now() < deadline);
   throw new Error(label);
@@ -126,15 +132,29 @@ async function privateJson(file, maximum = 16384) {
     const info = await handle.stat();
     assert.ok(
       info.isFile() &&
-        info.nlink === 1 &&
         info.uid === process.getuid() &&
         (info.mode & 0o077) === 0 &&
         info.size <= maximum,
       "DAILY_PRIVATE_RECORD_UNSAFE",
     );
+    if (info.nlink === 0) throw new Error("DAILY_PRIVATE_RECORD_REPLACED");
+    assert.equal(info.nlink, 1, "DAILY_PRIVATE_RECORD_UNSAFE");
     const bytes = Buffer.alloc(maximum + 1);
     const { bytesRead } = await handle.read(bytes, 0, bytes.length, 0);
     assert.ok(bytesRead <= maximum, "DAILY_RECORD_OVERSIZED");
+    const after = await handle.stat();
+    const named = await fs.lstat(file);
+    if (after.nlink === 0 || named.dev !== info.dev || named.ino !== info.ino)
+      throw new Error("DAILY_PRIVATE_RECORD_REPLACED");
+    assert.ok(
+      after.nlink === 1 &&
+        named.nlink === 1 &&
+        after.size === info.size &&
+        bytesRead === info.size &&
+        after.mtimeMs === info.mtimeMs &&
+        after.ctimeMs === info.ctimeMs,
+      "DAILY_PRIVATE_RECORD_CHANGED",
+    );
     return JSON.parse(bytes.subarray(0, bytesRead).toString("utf8"));
   } finally {
     await handle.close();
