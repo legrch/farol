@@ -179,6 +179,7 @@ func validIntentDigest(digest string) bool {
 func (m *mutation) publishPromotion() {
 	c, h := m.conversation, m.handle
 	h.conversation, h.target, h.digest = c, c.target, m.entry.IntentDigest
+	h.contextPrompt = c.input.Prompt
 	h.prompt, c.input.Prompt = c.input.Prompt, ""
 	h.frames, h.output = m.frames, output.New(OutputBytesLimit, c.target.PreviousUserTurnID, c.target.PreviousReplyID)
 	h.readPromoted = true

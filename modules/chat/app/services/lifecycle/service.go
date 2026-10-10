@@ -80,6 +80,10 @@ type Handle struct {
 	readPromoted                                   bool // known promotion receipt; ordinary Create is not promotion replay
 	sendAuthorization                              port.SendAuthorization
 	retained                                       *port.RetainReceipt
+
+	// Bounded original source is separate from cleared one-shot Send input.
+	contextPrompt    string
+	contextToolRound bool
 }
 
 var _ port.BoundTurn = (*Handle)(nil)
@@ -197,6 +201,7 @@ func (s *Service) admit(ctx context.Context, binding port.TurnBinding, digest st
 	h := &Handle{owner: s, fixed: binding, digest: digest}
 	if conversation != nil {
 		h.conversation, h.target, h.prompt = conversation, conversation.target, conversation.input.Prompt
+		h.contextPrompt = conversation.input.Prompt
 		h.sendAuthorization = conversation.sendAuthorization
 		conversation.input.Prompt = ""
 		conversation.handle = h
@@ -489,6 +494,7 @@ func (s *Service) commit(ctx context.Context, m *mutation, publish bool) error {
 				}
 			}
 		case "request-computer":
+			m.handle.contextToolRound = true
 			m.handle.unresolvedCallID = m.entry.CallID
 			if m.caller != nil {
 				m.handle.caller, m.handle.frames = m.caller, m.frames
