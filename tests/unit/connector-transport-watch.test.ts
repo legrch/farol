@@ -96,6 +96,53 @@ it("observes afresh after sleep without borrowing a late pre-sleep result", asyn
   expect(f.ports.recover).not.toHaveBeenCalled();
 });
 
+it("runs the resumed check immediately after a stale in-flight observation settles", async () => {
+  const f = fixture(["healthy"]);
+  let release!: (value: ConnectorTransportObservation) => void;
+  f.ports.observe.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        release = resolve;
+      }),
+  );
+  const original = f.watch.check();
+  await Promise.resolve();
+  f.watch.suspend();
+  f.watch.resume();
+  expect(f.watch.check()).toBe(original);
+  expect(f.watch.check()).toBe(original);
+  expect(f.ports.observe).toHaveBeenCalledTimes(1);
+  release("exited");
+  await original;
+  expect(f.ports.observe).toHaveBeenCalledTimes(2);
+  expect(f.ports.wait).not.toHaveBeenCalled();
+  expect(f.ports.recover).not.toHaveBeenCalled();
+});
+
+it.each(["invalidate", "suspend", "close"] as const)(
+  "cancels a queued resume check after %s",
+  async (action) => {
+    const f = fixture(["exited"]);
+    let release!: (value: ConnectorTransportObservation) => void;
+    f.ports.observe.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          release = resolve;
+        }),
+    );
+    const original = f.watch.check();
+    await Promise.resolve();
+    f.watch.suspend();
+    f.watch.resume();
+    f.watch.check();
+    f.watch[action]();
+    release("exited");
+    await original;
+    expect(f.ports.observe).toHaveBeenCalledTimes(1);
+    expect(f.ports.recover).not.toHaveBeenCalled();
+  },
+);
+
 it("refuses new effects at the finite fence budget without evicting old identities", async () => {
   const f = fixture(["exited"]);
   let id = 0;

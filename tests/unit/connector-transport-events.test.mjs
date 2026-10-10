@@ -38,7 +38,7 @@ function fixture() {
   const timeouts = [];
   const intervals = [];
   const owner = {};
-  const core = {};
+  const core = { backendAvailable: true };
   const original = Object.freeze({
     owner,
     core,
@@ -170,7 +170,7 @@ it("coalesces resume and timer events while observing the same original health r
   );
 });
 
-it("invalidates a pre-sleep exit result and observes afresh through the next actual timer", async () => {
+it("invalidates a pre-sleep exit result and observes afresh immediately after resume", async () => {
   const f = fixture();
   const health = Promise.withResolvers();
   f.original.connector.checkHealth.mockReturnValueOnce(health.promise);
@@ -186,11 +186,36 @@ it("invalidates a pre-sleep exit result and observes afresh through the next act
   health.resolve(false);
   await pending;
   expect(f.context.recoverConnectorTransport).not.toHaveBeenCalled();
-  f.tick();
-  await f.finish();
   expect(f.original.connector.checkHealth).toHaveBeenCalledTimes(2);
   expect(f.context.recoverConnectorTransport).not.toHaveBeenCalled();
 });
+
+it.each(["before-probe", "during-probe"])(
+  "withdraws healthy tunnel readiness after backend loss %s without recovery",
+  async (phase) => {
+    const f = fixture();
+    if (phase === "before-probe") f.original.core.backendAvailable = false;
+    else
+      f.original.connector.checkHealth.mockImplementationOnce(async () => {
+        f.original.core.backendAvailable = false;
+        return true;
+      });
+    f.power.emit("resume");
+    await f.finish();
+    f.power.emit("resume");
+    f.tick();
+    await f.finish();
+    expect(f.context.recordConnectorRuntime).toHaveBeenCalledExactlyOnceWith(
+      "outcome_unknown",
+      f.original.runtimeGeneration,
+      f.original.computerGeneration,
+    );
+    expect(f.context.recoverConnectorTransport).not.toHaveBeenCalled();
+    expect(f.original.connector.checkHealth).toHaveBeenCalledTimes(
+      phase === "before-probe" ? 0 : 1,
+    );
+  },
+);
 
 it("does not revive withdrawn authority on resume or consume a late pre-withdrawal result", async () => {
   const f = fixture();

@@ -4439,7 +4439,11 @@ function startConnectorTransportWatch(): void {
     capture: captureConnectorTransport,
     current: connectorTransportCurrent,
     observe: async (original) => {
+      // Tunnel HTTP readiness cannot stand in for the original Go owner.
+      // Lost backend settlement fences recovery; never respawn it here.
+      if (!original.core.backendAvailable) return "unknown";
       const healthy = await original.connector.checkHealth();
+      if (!original.core.backendAvailable) return "unknown";
       const terminal = original.connector.getTunnelObservation();
       if (terminal && terminal.runtimeGeneration !== original.runtimeGeneration)
         return "unknown";

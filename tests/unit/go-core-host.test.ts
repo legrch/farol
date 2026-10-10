@@ -389,6 +389,21 @@ afterEach(() => {
 });
 
 describe("normal Go host startup", () => {
+  it("withdraws backend availability when the original verified pipe ends without a new request", async () => {
+    const f = transport();
+    const host = new DesktopGoCore(f.client, () => settings);
+    expect(host.backendAvailable).toBe(true);
+    Object.defineProperty(f.client, "verifiedContext", {
+      get: () => {
+        throw new BridgeError("unavailable", "backend_unavailable");
+      },
+    });
+    expect(host.backendAvailable).toBe(false);
+    expect(host.backendAvailable).toBe(false);
+    expect(f.request).not.toHaveBeenCalled();
+    await host.close();
+    expect(host.backendAvailable).toBe(false);
+  });
   it.each([
     { sourceDirty: true },
     { buildId: "1".repeat(64) },

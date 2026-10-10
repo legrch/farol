@@ -264,6 +264,17 @@ export class DesktopGoCore {
   currentComputerConnectorBinding() {
     return this.connector?.currentBinding;
   }
+  get backendAvailable(): boolean {
+    if (this.closeResult) return false;
+    try {
+      // This is the original verified pipe's liveness, not a new handshake or
+      // a claim that its pending operations completed or may be replayed.
+      void this.client.verifiedContext;
+      return true;
+    } catch {
+      return false;
+    }
+  }
   computerConnectorClosureReceipt() {
     return this.connector?.closureReceipt;
   }

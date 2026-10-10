@@ -10,6 +10,8 @@ export class ConnectorTransportWatch<T extends { readonly key: string }> {
   private suspended = false;
   private closed = false;
   private inFlight: Promise<void> | null = null;
+  private inFlightRevision: number | null = null;
+  private freshCheckRequested = false;
   private attempted = new Set<string>();
   private wakeWaiters = new Set<() => void>();
 
@@ -34,6 +36,7 @@ export class ConnectorTransportWatch<T extends { readonly key: string }> {
   invalidate(): void {
     this.revision += 1;
     this.cancellation += 1;
+    this.freshCheckRequested = false;
     this.releaseWakeWaiters();
   }
 
@@ -42,6 +45,7 @@ export class ConnectorTransportWatch<T extends { readonly key: string }> {
   suspend(): void {
     this.suspended = true;
     this.revision += 1;
+    this.freshCheckRequested = false;
   }
 
   resume(): void {
@@ -67,7 +71,14 @@ export class ConnectorTransportWatch<T extends { readonly key: string }> {
 
   check(): Promise<void> {
     if (this.closed) return Promise.resolve();
-    if (this.inFlight) return this.inFlight;
+    if (this.inFlight) {
+      // Resume must not consume its check by joining a pre-sleep observation.
+      // Keep one fresh observation behind the original work; no parallel drain
+      // or replacement effect may start while that work is still unsettled.
+      if (!this.suspended && this.inFlightRevision !== this.revision)
+        this.freshCheckRequested = true;
+      return this.inFlight;
+    }
     if (this.suspended) return Promise.resolve();
     const revision = this.revision;
     const cancellation = this.cancellation;
@@ -116,10 +127,16 @@ export class ConnectorTransportWatch<T extends { readonly key: string }> {
       this.attempted.add(original.key);
       await this.ports.recover(original, observationCurrent, afterKnownClosure);
     };
+    this.inFlightRevision = revision;
     this.inFlight = Promise.resolve()
       .then(work)
-      .finally(() => {
+      .finally(async () => {
         this.inFlight = null;
+        this.inFlightRevision = null;
+        if (this.freshCheckRequested) {
+          this.freshCheckRequested = false;
+          await this.check();
+        }
       });
     return this.inFlight;
   }
