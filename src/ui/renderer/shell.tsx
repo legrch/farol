@@ -1374,13 +1374,27 @@ export function Shell() {
                           : undefined
                       }
                       onClick={() => {
+                        const latest = facade.getSnapshot();
+                        const currentTask = latest.tasks.tasks.find(
+                          (item) =>
+                            item.taskId === task.taskId &&
+                            item.sessionId === task.sessionId &&
+                            item.turnId === task.turnId,
+                        );
+                        if (
+                          latest.status !== "current" ||
+                          latest.runtime !== "ready" ||
+                          !currentTask?.agent ||
+                          currentTask.agent.observation === "unavailable"
+                        )
+                          return;
                         facade.navigate({
                           area: "chatgpt",
-                          taskId: task.taskId,
+                          taskId: currentTask.taskId,
                         });
                         void facade.task(
-                          { kind: "task.activate", taskId: task.taskId },
-                          `activate:${task.taskId}`,
+                          { kind: "task.activate", taskId: currentTask.taskId },
+                          `activate:${currentTask.taskId}`,
                         );
                       }}
                     >
