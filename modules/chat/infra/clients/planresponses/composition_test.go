@@ -88,11 +88,15 @@ func (l *compositionLedger) Settle(ctx context.Context, b inference.Binding, o i
 type compositionPublication struct {
 	count int
 	text  string
+	after func()
 }
 
 func (p *compositionPublication) Publish(b inference.Binding, o inference.Outcome) error {
 	p.count++
 	p.text = o.Text
+	if p.after != nil {
+		p.after()
+	}
 	return nil
 }
 
@@ -427,5 +431,28 @@ func TestProductionCompositionDeadlineBoundsSecretOwnerIO(t *testing.T) {
 	got := f.service.Infer(context.Background(), f.binding, f.input)
 	if got.State != inference.NotSent || provider.calls != 0 || f.http.calls != 0 || f.publication.count != 0 {
 		t.Fatal("expired secret read authorized IO")
+	}
+}
+
+func TestProductionCompositionPublicationClosesOrExpiresOperation(t *testing.T) {
+	for _, stage := range []string{"caller closes", "deadline expires"} {
+		t.Run(stage, func(t *testing.T) {
+			f := newComposed(t)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if stage == "caller closes" {
+				f.publication.after = cancel
+			} else {
+				f.publication.after = func() { f.clock.now = f.binding.DeadlineMillis }
+			}
+			got := f.service.Infer(ctx, f.binding, f.input)
+			if got.State != inference.Unknown || got.RemoteState != inference.Completed || got.Code != inference.PublicationUnknown || got.Text != "" || f.publication.count != 1 || f.http.calls != 1 {
+				t.Fatalf("publication lifetime uncertainty lost: %+v", got)
+			}
+			_ = f.service.Infer(ctx, f.binding, f.input)
+			if f.publication.count != 1 || f.http.calls != 1 {
+				t.Fatal("late publication replayed")
+			}
+		})
 	}
 }
