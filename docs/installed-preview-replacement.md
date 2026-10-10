@@ -48,9 +48,13 @@ receipt and any exact named install journal, retaining original bytes and
 metadata. Do not copy browser/profile/authentication partitions.
 
 Invoke the existing ordinary promotion helper with that same held lease and
-its normal receipt schema. Register the original child-close promise before
-effect dispatch; retain exclusion until that original close is confirmed when
-the bounded call returns unknown. Placement success alone does not complete
+its normal receipt schema. Its placement child inherits the same original
+updater lock descriptor on fd 7 alongside the promotion lease on fd 6. Neither
+lock is reacquired. Ordinary promotion callers omit fd 7 and retain their
+existing behavior and receipt schema. Register the original child-close promise
+before effect dispatch; the registration also reports that original child's PID
+for bounded observation. Both inherited lock references survive Node owner death
+until that original effect child exits. Placement success alone does not complete
 maintenance. Verify placed candidate bytes, normal receipt, custody identities
 and retained updater state before completion.
 
@@ -93,6 +97,9 @@ shape for the parent: app/receipt digests and inodes, build metadata, pinned
 directory/lock identities, root and immediate child metadata, and exact JSON
 record digests. Archive and stage contents are not scanned. The CLI has no home,
 candidate, process, helper or force overrides. Module-only seams are fixtures.
+Plan and apply reject serialized intent of 64 KiB or more before marking effects
+started or creating a native effect child; the check counts UTF-8 bytes against
+the native record reader's cap.
 
 Custody is `/Users/ac/Applications/.farol-replacement-<operationId>`. A completed
 operation retains `previous.app`, `previous.receipt.json`, the entire
@@ -100,11 +107,35 @@ operation retains `previous.app`, `previous.receipt.json`, the entire
 entry is provided. The candidate must be clean exact schema 7, with increasing
 release and build versions. The new receipt is the ordinary promotion schema.
 
-If final intent retirement is unknown and a durable uncertainty fence cannot
-be confirmed, the owner retains both original locks and stays alive with
-`REPLACEMENT_UNKNOWN_RETAINS_LOCKS_OWNER_REQUIRED`. Conductor reconciliation is
-required. This is a live-owner exclusion limit, not universal crash/power-loss
-protection. No automatic recovery or retry follows.
+After effect dispatch, only confirmed completion permits release. Every effect
+failure, timeout, killed helper or lost result retains both original locks and
+keeps the owner alive with
+`REPLACEMENT_UNKNOWN_RETAINS_LOCKS_OWNER_REQUIRED`, including after the registered
+original children have closed. Presence of a pending inode is never accepted as
+durable-fence proof: initial publication or uncertainty publication may have
+failed fsync or readback. Conductor reconciliation is required. This conservative
+live-owner exclusion ends if the owner is externally killed after its effect
+children exit; it does not establish universal crash/power-loss protection. No
+automatic recovery or retry follows.
+
+The disposable owner-death regression runs the genuine producer and hash-pinned
+ordinary placement helper, stops that exact child at its existing pre-effect
+hook, kills only its Node owner, and probes both unchanged lock inodes. A native
+`NOTE_EXIT` observer registered while the child is alive supplies terminal proof
+before checking that the inherited locks release. This test does not inject a
+copy fault or exercise a packaged application.
+
+Additional code-attested fixture programs execute the exact pinned replacement
+helper with local fsync faults. They cover partial initial intent publication,
+successful pending retirement followed by directory-fsync failure and uncertainty
+publication directory-fsync failure, and loss of placement or final completion
+results. The final-completion lost-result fixture also proves owner retention
+when the pending slot is absent. The fixtures confirm both locks remain held by
+the live owner after the original child closes, even when pending presence is
+observable. These fixture faults have no CLI
+selector and qualify neither real filesystem durability nor installed runtime
+acceptance. Failed fixture generations without original-child terminal proof
+are retained rather than cleaned.
 
 Native subprocess tests must run in host execution. The filesystem sandbox on
 this Mac makes `/usr/bin/python3` emit a `DARWIN_USER_TEMP_DIR` confstr warning;

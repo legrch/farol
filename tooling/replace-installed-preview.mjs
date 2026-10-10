@@ -412,19 +412,16 @@ export async function replaceInstalledPreview(
   };
   const settle = async () => {
     if (effectsStarted && !completed) {
-      try {
-        await fs.lstat(
-          path.join(userData, "farol-next-state/installed-replacement.pending"),
-        );
-      } catch {
-        // Unknown final retirement and unavailable durable fence: retain both
-        // original locks and this owner lifetime. No automatic retry/rollback.
-        setInterval(() => {}, 60000);
-        process.stderr.write(
-          "REPLACEMENT_UNKNOWN_RETAINS_LOCKS_OWNER_REQUIRED\n",
-        );
-        return;
-      }
+      // Presence is not durable publication proof. A killed/lost helper or a
+      // failed fsync/readback can leave an inode without a durable fence. Keep
+      // both original locks and this owner alive after EVERY effect failure,
+      // even after every registered original child has closed. Only confirmed
+      // complete permits release; conductor reconciliation owns this limit.
+      setInterval(() => {}, 60000);
+      process.stderr.write(
+        "REPLACEMENT_UNKNOWN_RETAINS_LOCKS_OWNER_REQUIRED\n",
+      );
+      return;
     }
     await release();
   };
@@ -505,15 +502,19 @@ export async function replaceInstalledPreview(
       snapshot: fresh,
       historicalOperationsReconciled: false,
     };
-    if (!apply) return plan;
-    if (!(await verifyPromotionLease(lease))) fail("REPLACEMENT_LEASE_LOST");
-    const leaseInfo = await fs.lstat(lease.file, { bigint: true });
     const intentText =
       JSON.stringify({
         ...plan,
         operation: "intent",
         operationId: selection.operationId,
       }) + "\n";
+    // The native record reader caps intent at 64 KiB. Refuse before marking
+    // effects started or spawning an effect child, including during planning.
+    if (Buffer.byteLength(intentText, "utf8") >= 64 * 1024)
+      fail("REPLACEMENT_INTENT_TOO_LARGE");
+    if (!apply) return plan;
+    if (!(await verifyPromotionLease(lease))) fail("REPLACEMENT_LEASE_LOST");
+    const leaseInfo = await fs.lstat(lease.file, { bigint: true });
     const request = {
       schema: "farol.installed-replacement-native/1",
       action: "custody",
@@ -525,7 +526,7 @@ export async function replaceInstalledPreview(
       intentText,
     };
     effectsStarted = true;
-    const retained = await runReplacementNative(
+    const retained = await (dependencies.native ?? runReplacementNative)(
       request,
       lease,
       updaterLock,
@@ -582,6 +583,7 @@ export async function replaceInstalledPreview(
       artifactSha256: artifact.artifactSha256,
       receiptText,
       lease,
+      updaterLockDescriptor: updaterLock.fd,
       onChildStarted: register,
       afterParentOpened: assertParents,
     });
@@ -593,7 +595,7 @@ export async function replaceInstalledPreview(
     assertExactSourceIdentity(current(), artifact);
     if (!(await bytes(receipt.receipt)).equals(Buffer.from(receiptText)))
       fail("REPLACEMENT_NEW_RECEIPT_CHANGED");
-    await runReplacementNative(
+    const completion = await (dependencies.native ?? runReplacementNative)(
       {
         ...request,
         action: "complete",
@@ -613,6 +615,8 @@ export async function replaceInstalledPreview(
       updaterLock,
       register,
     );
+    if (!same(completion, { completed: true }))
+      fail("REPLACEMENT_COMPLETION_UNCONFIRMED");
     completed = true;
     return { ...plan, operation: "completed", receipt };
   } finally {

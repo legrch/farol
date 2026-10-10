@@ -66,6 +66,7 @@ export async function runPromotionApply({
   artifactSha256,
   receiptText,
   lease,
+  updaterLockDescriptor,
   onChildStarted,
   afterParentOpened,
   helperPath = DEFAULT_HELPER,
@@ -77,6 +78,9 @@ export async function runPromotionApply({
     !/^[a-f0-9]{64}$/u.test(artifactSha256 ?? "") ||
     typeof receiptText !== "string" ||
     Buffer.byteLength(receiptText) > 64 * 1024 ||
+    (updaterLockDescriptor !== undefined &&
+      (!Number.isSafeInteger(updaterLockDescriptor) ||
+        updaterLockDescriptor < 0)) ||
     (onChildStarted !== undefined && typeof onChildStarted !== "function") ||
     !Number.isSafeInteger(timeoutMs) ||
     timeoutMs < 1 ||
@@ -100,6 +104,11 @@ export async function runPromotionApply({
       afterParentOpened ? "pipe" : "ignore",
       afterParentOpened ? "pipe" : "ignore",
       transfer.descriptor,
+      // Maintenance retains its already-held updater lock in this original
+      // effect child too. Python leaves fd 7 open until process exit, so owner
+      // death cannot release updater exclusion while placement still runs.
+      // Ordinary promotion callers omit it; no lock is opened or reacquired.
+      updaterLockDescriptor ?? "ignore",
     ],
   });
   const stdout = [];
@@ -185,7 +194,7 @@ export async function runPromotionApply({
   try {
     // Register the original child's lifetime before sending any executable or
     // effect request. Registration failure terminates that same child, once.
-    const registration = onChildStarted?.(closed);
+    const registration = onChildStarted?.(closed, { pid: child.pid });
     if (registration !== undefined) {
       // The owner registers synchronously. An asynchronous sink must not let
       // effect bytes escape while registration or its failure is still pending.
