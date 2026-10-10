@@ -82,6 +82,7 @@ async function fixture({
   mutateSource = false,
   mutatePackage = false,
   restoreFault = null,
+  verifierFlood = null,
 } = {}) {
   const root = await temporaryRoot();
   const tooling = path.join(root, "tooling");
@@ -139,6 +140,27 @@ export const NATIVE_ARCHIVE_MAX_BYTES = 8 * 1024 * 1024;
       ? "throw new Error('fixture source refusal');\n"
       : 'process.stdout.write("fixture verified\\n");\n',
   );
+  await fs.writeFile(
+    path.join(tooling, "verify-package-standalone.mjs"),
+    `import fs from 'node:fs';
+import path from 'node:path';
+const root = path.dirname(import.meta.dirname);
+const a = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+${rejected ? "throw new Error('fixture restored-package refusal');" : ""}
+${
+  verifierFlood
+    ? `fs.writeFileSync(path.join(root, '_output/verifier-pid'), String(process.pid));
+while (true) fs.writeSync(${verifierFlood === "stdout" ? 1 : 2}, Buffer.alloc(4096, 0x61));`
+    : ""
+}
+const actual = Object.fromEntries(['product', 'bundleId', 'version', 'buildVersion', 'sourceCommit', 'sourceTreeDigest', 'buildId', 'artifactSha256'].map(k => [k, a[k]]));
+Object.assign(actual, {updateChannel: a.updateChannel, signing: a.signing.kind, notarized: a.notarized});
+${mismatch ? `actual[${JSON.stringify(mismatch)}] = 'crossed physical identity';` : ""}
+${mutateSource ? "fs.writeFileSync(path.join(root, '.gitignore'), '_output/\\n# changed during verification\\n');" : ""}
+${mutatePackage ? "fs.writeFileSync(path.join(root, '_output/package/Farol.app/Contents/Resources/app/payload'), 'changed during verification');" : ""}
+process.stdout.write(JSON.stringify(actual));
+`,
+  );
   await fs.writeFile(path.join(root, ".gitignore"), "_output/\n");
   git(root, "init", "-q");
   git(root, "config", "user.name", "Fixture");
@@ -174,18 +196,7 @@ export const NATIVE_ARCHIVE_MAX_BYTES = 8 * 1024 * 1024;
   );
   await fs.writeFile(
     executable,
-    rejected
-      ? "#!/usr/bin/python3\nimport sys\nsys.exit(7)\n"
-      : `#!/usr/bin/python3
-import json, os, pathlib, sys
-assert os.environ["ELECTRON_RUN_AS_NODE"] == "1" and os.environ["ELECTRON_NO_ASAR"] == "1"
-a = json.load(open(sys.argv[2]))
-actual = {k: a[k] for k in ["product", "bundleId", "version", "buildVersion", "sourceCommit", "sourceTreeDigest", "buildId", "artifactSha256"]} | {"updateChannel": a["updateChannel"], "signing": a["signing"]["kind"], "notarized": a["notarized"]}
-${mismatch ? `actual[${JSON.stringify(mismatch)}] = "crossed physical identity"` : ""}
-${mutateSource ? 'pathlib.Path(sys.argv[1]).parents[6].joinpath(".gitignore").write_text("_output/\\n# changed during verification\\n")' : ""}
-${mutatePackage ? 'pathlib.Path(sys.argv[1]).parent.joinpath("payload").write_text("changed during verification")' : ""}
-print(json.dumps(actual))
-`,
+    "#!/usr/bin/python3\nraise RuntimeError('PACKAGED_ELECTRON_DISPATCH_FORBIDDEN')\n",
   );
   await fs.chmod(executable, 0o755);
   const artifact = {
@@ -438,6 +449,37 @@ print(json.dumps(sorted({n.split("/")[0] for n in z.namelist()})))
     expect(await fs.readdir(f.output)).not.toContain("farol-release.json");
     expect(await fs.readdir(f.output)).toEqual(["private"]);
   });
+
+  it("never executes candidate-owned JavaScript or Electron during restored verification", async () => {
+    const f = await fixture();
+    // The source verifier deliberately accepts self-consistent fixture bytes.
+    // The producer must still avoid dispatching these candidate-owned entries.
+    await fs.writeFile(
+      path.join(f.resource, "update-package.mjs"),
+      "import fs from 'node:fs'; fs.writeFileSync('untrusted-verifier-ran', 'yes'); throw Error('UNTRUSTED_PACKAGE_JS');\n",
+    );
+    const result = prepare(f);
+    expect(result.status, result.stderr).toBe(0);
+    await expect(
+      fs.lstat(path.join(f.root, "untrusted-verifier-ran")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it.each(["stdout", "stderr"])(
+    "caps %s while the original restored verifier is still writing",
+    async (verifierFlood) => {
+      const f = await fixture({ verifierFlood });
+      const result = prepare(f);
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("VERIFICATION_OUTPUT_OVERSIZE");
+      expect(await fs.readdir(f.output)).toEqual(["private"]);
+      const pid = Number(
+        await fs.readFile(path.join(f.root, "_output/verifier-pid"), "utf8"),
+      );
+      expect(Number.isSafeInteger(pid) && pid > 0).toBe(true);
+      expect(() => process.kill(pid, 0)).toThrow();
+    },
+  );
 
   it("requires the source package verifier before executing packaged helpers", async () => {
     const f = await fixture({ sourceRejected: true });

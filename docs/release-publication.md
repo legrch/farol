@@ -35,8 +35,8 @@ The preparation gates are:
    Git blob identities, and check executable modes even when Git ignores modes.
    Then call current `sourceIdentity(root, ".")` and
    `assertExactSourceIdentity`; repeat these source gates after the roundtrip.
-2. Invoke the checkout's `tooling/verify-package.mjs` before executing any
-   packaged helper. This verifier owns the complete package, build/input ledger,
+2. Invoke the checkout's `tooling/verify-package.mjs` before executing the
+   independently pinned native extractor. This verifier owns the complete package, build/input ledger,
    runtime, resource, signing, and embedded Go checks. The producer also binds the
    schema-4 embedded manifest and core declaration to this release's source/build
    identity and exact `darwin/arm64` target, verifies the declaration hash and the
@@ -66,10 +66,16 @@ The preparation gates are:
    with current `native-archive-build.mjs`. Despite its compatibility filename,
    it is an attested native Go executable: invoke the private copy **directly**,
    without Python. Require exact extraction paths and unchanged public metadata.
-   Run the candidate's bundled `update-package.mjs` with its verified Electron
-   executable in `ELECTRON_RUN_AS_NODE=1` mode against the restored app. The restored
-   app is never launched. Require every measured source/build/package identity,
+   Run the independently checked checkout's `tooling/verify-package-standalone.mjs`
+   with the declared host Node against the restored app. Candidate-owned manifest
+   hashes establish internal consistency, not permission to execute its JavaScript.
+   Neither the packaged verifier nor Electron nor the restored app is executed.
+   Require every measured source/build/package identity,
    build version, channel and unsigned claim to match the canonical candidate.
+   Verifier stdout/stderr are capped while the original child writes, with a
+   180-second deadline; an oversized or timed-out invocation is terminated once
+   and its original terminal is awaited. No temporary capture file can grow
+   without a bound.
 6. Recheck the source, candidate and archive identities before making the three
    public assets available at the output root. Derive release identity from the
    physical verifier result, not only from candidate claims.
@@ -103,10 +109,11 @@ Treat any incomplete filesystem finalization as private failed output.
 
 The co-located integration tests use actual source/candidate/layout contracts in
 an isolated Git repository, synthetic Go declarations and Mach-O headers, and
-substitute extractor, Electron and package verifier programs. They cover current
+substitute extractor and checkout package verifier programs. They cover current
 schema/repository/layout, before/after source gates, physical mismatches, core
-proof refusal, private leakage, resource limits, unsafe links, and bounded
-no-follow substitution reads. The emitted manifest is checked with the actual
+proof refusal, private leakage, resource limits, unsafe links, bounded capture,
+refusal to dispatch candidate-owned JavaScript/Electron, and bounded no-follow
+substitution reads. The emitted manifest is checked with the actual
 `parseGithubReleaseManifest` consumer. The substitutes do not prove a Go compiler
 build, an attested production extractor, a real Electron/vendor runtime, native
 package acceptance, installed upgrade, GitHub publication or Gatekeeper behavior.

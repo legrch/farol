@@ -7,11 +7,12 @@ import json
 import os
 from pathlib import Path
 import re
+import selectors
 import shutil
 import stat
 import subprocess
 import sys
-import tempfile
+import time
 import unicodedata
 import zipfile
 
@@ -362,17 +363,42 @@ def add_member(archive, path, name, info):
 
 
 def trusted_run(argv, env=None, code="VERIFICATION_REJECTED", json_output=True):
-    # Output remains private and cannot make the parent's capture unbounded.
-    with tempfile.TemporaryFile() as stdout, tempfile.TemporaryFile() as stderr:
-        result = subprocess.run(argv, cwd=ROOT, stdout=stdout, stderr=stderr,
-                                timeout=180, env=env or VERIFY_ENV)
-        require(stdout.tell() <= 16 * 1024 and stderr.tell() <= 64 * 1024,
-                "VERIFICATION_OUTPUT_OVERSIZE")
-        stderr.seek(0)
-        require(result.returncode == 0,
-                f"{code}:{stderr.read(300).decode('utf8', errors='replace').strip()}")
-        stdout.seek(0)
-        output = stdout.read(16 * 1024)
+    # Bound capture while the original child writes. A temporary file with a
+    # post-exit size check would still allow unbounded disk consumption.
+    child = subprocess.Popen(argv, cwd=ROOT, stdout=subprocess.PIPE,
+                             stderr=subprocess.PIPE, env=env or VERIFY_ENV)
+    deadline = time.monotonic() + 180
+    stdout, stderr = bytearray(), bytearray()
+    try:
+        with selectors.DefaultSelector() as selector:
+            selector.register(child.stdout, selectors.EVENT_READ, (stdout, 16 * 1024))
+            selector.register(child.stderr, selectors.EVENT_READ, (stderr, 64 * 1024))
+            while selector.get_map():
+                remaining = deadline - time.monotonic()
+                require(remaining > 0, "VERIFICATION_TIMEOUT")
+                for key, _ in selector.select(min(remaining, 1)):
+                    chunk = os.read(key.fd, 4096)
+                    if not chunk:
+                        selector.unregister(key.fileobj)
+                        continue
+                    capture, maximum = key.data
+                    require(len(capture) + len(chunk) <= maximum,
+                            "VERIFICATION_OUTPUT_OVERSIZE")
+                    capture.extend(chunk)
+        remaining = deadline - time.monotonic()
+        require(remaining > 0, "VERIFICATION_TIMEOUT")
+        result = child.wait(timeout=remaining)
+        require(result == 0,
+                f"{code}:{bytes(stderr[:300]).decode('utf8', errors='replace').strip()}")
+        output = bytes(stdout)
+    finally:
+        if child.poll() is None:
+            # Terminate only this original read-only verifier, once. Never
+            # replay its invocation or adopt another PID as its terminal proof.
+            child.kill()
+            child.wait(timeout=10)
+        child.stdout.close()
+        child.stderr.close()
     return json.loads(output) if json_output else output.decode("utf8")
 
 
@@ -447,8 +473,6 @@ def prepare(expected, destination):
     digest = sha256_file(archive_path, archive_info)
     stage = private / "restore"
     stage.mkdir(mode=0o700)
-    verifier = APP / "Contents/Resources/app/update-package.mjs"
-    electron = APP / "Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron"
     # update-archive.py is the attested native Go binary, not Python source.
     extractor_copy = private / "update-archive.py"
     with extractor_copy.open("xb") as target:
@@ -466,10 +490,12 @@ def prepare(expected, destination):
     core_after = verify_core(stage / APP_NAME, artifact)
     require(core_after == core_before, "GO_CORE_ROUNDTRIP_MISMATCH")
     actual = trusted_run(
-        [str(electron), str(verifier), str(stage / "artifact.json"),
+        # Candidate-owned manifest/hash consistency does not authenticate its
+        # JavaScript for execution. Use the independently checked checkout's
+        # verifier and declared host Node; never execute the packaged JS entry.
+        [node_executable(), str(ROOT / "tooling/verify-package-standalone.mjs"), str(stage / "artifact.json"),
          str(stage / APP_NAME), artifact["version"], artifact["buildVersion"],
          "github-owner-beta"],
-        env={**VERIFY_ENV, "ELECTRON_RUN_AS_NODE": "1", "ELECTRON_NO_ASAR": "1"},
     )
     require(type(actual) is dict and all(actual.get(field) == artifact[field] for field in FIELDS),
             "PHYSICAL_IDENTITY_MISMATCH")
