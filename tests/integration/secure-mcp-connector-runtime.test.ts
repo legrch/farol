@@ -16,6 +16,8 @@ import {
   type ConnectorCommand,
   type ConnectorCommandRunner,
   type ConnectorProcessStarter,
+  type ConnectorRuntimeLifecycleObservation,
+  type ConnectorChildLifecycleObservation,
 } from "../../src/apps/desktop/secure-mcp-connector-runtime";
 
 const roots: string[] = [];
@@ -88,7 +90,11 @@ const startInput = {
   launchContractSha256: "c".repeat(64),
 };
 
-async function observedRuntime() {
+async function observedRuntime(
+  onLifecycleObservation?: (
+    observation: ConnectorRuntimeLifecycleObservation,
+  ) => void,
+) {
   const selected = await fixture();
   const anchor = Object.assign(new EventEmitter(), {
     pid: 4330,
@@ -116,9 +122,61 @@ async function observedRuntime() {
       homePath: selected.root,
       tempPath: selected.root,
     },
-    { start, get },
+    {
+      start,
+      get,
+      ...(onLifecycleObservation ? { onLifecycleObservation } : {}),
+    },
   );
   return { runtime, anchor, child, start, get };
+}
+
+async function controlledLifecycleRuntime(
+  onLifecycleObservation: (
+    observation: ConnectorRuntimeLifecycleObservation,
+  ) => void,
+) {
+  const selected = await fixture();
+  const children = [1, 2].map((pid) => {
+    let observer:
+      ((observation: ConnectorChildLifecycleObservation) => void) | null = null;
+    return {
+      pid,
+      exitCode: null as number | null,
+      kill: vi.fn(() => true),
+      waitForExit: vi.fn(async (_timeout: number) => false),
+      observeLifecycle: (callback: typeof observer) => {
+        observer = callback;
+        return () => {
+          observer = null;
+        };
+      },
+      emit: (value: unknown) =>
+        observer?.(value as ConnectorChildLifecycleObservation),
+    };
+  });
+  let nextChild = 0;
+  const runtime = new SecureMcpConnectorRuntime(
+    {
+      root: selected.runtimeRoot,
+      homePath: selected.root,
+      tempPath: selected.root,
+    },
+    {
+      start: async (command) => {
+        await fs.writeFile(
+          option(command, "--health.url-file"),
+          "http://127.0.0.1:43128\n",
+          { mode: 0o600 },
+        );
+        return children[nextChild++]!;
+      },
+      id: () => `fixture-lifetime-${nextChild}`,
+      get: async () => true,
+      onLifecycleObservation,
+    },
+  );
+  return { runtime, children };
 }
 
 describe("secure MCP connector runtime", () => {
@@ -137,6 +195,7 @@ describe("secure MCP connector runtime", () => {
     const script = runInNewContext(`${declaration}\nCONNECTOR_GROUP_ANCHOR`, {
       TUNNEL_EXITED: "farol-tunnel-exited-v1",
       TUNNEL_UNKNOWN: "farol-tunnel-unknown-v1",
+      TUNNEL_TERMINAL: "farol-tunnel-terminal-v1",
     }) as string;
     const tunnel = new EventEmitter();
     const stdin = Object.assign(new EventEmitter(), { resume: vi.fn() });
@@ -162,10 +221,16 @@ describe("secure MCP connector runtime", () => {
       stdio: "ignore",
       windowsHide: true,
     });
-    tunnel.emit("exit", 137, "SIGKILL");
+    tunnel.emit("exit", 137, null);
     tunnel.emit("exit", 0, null);
     expect(anchor.send).toHaveBeenCalledExactlyOnceWith(
-      "farol-tunnel-exited-v1",
+      {
+        kind: "farol-tunnel-terminal-v1",
+        source: "connector-tunnel",
+        event: "exit",
+        exitCode: 137,
+        signal: null,
+      },
       expect.any(Function),
     );
     expect(anchor.kill).not.toHaveBeenCalled();
@@ -191,6 +256,329 @@ describe("secure MCP connector runtime", () => {
       expect.any(Function),
     );
     expect(errorAnchor.kill).toHaveBeenCalledExactlyOnceWith(-4331, "SIGKILL");
+  });
+
+  it.each([
+    { exitCode: 17, signal: null },
+    { exitCode: null, signal: "SIGTERM" },
+  ])(
+    "retains exact tunnel terminal facts without closing the owned group (%j)",
+    async (terminal) => {
+      const diagnostic = vi.fn();
+      const { runtime, anchor, child } = await observedRuntime(diagnostic);
+      const ready = await runtime.start(startInput);
+      anchor.emit("message", {
+        kind: "farol-tunnel-terminal-v1",
+        source: "connector-tunnel",
+        event: "exit",
+        ...terminal,
+      });
+      expect(runtime.getTunnelObservation()).toMatchObject({
+        state: "exited",
+        runtimeGeneration: ready.runtimeGeneration,
+        terminal: {
+          source: "connector-tunnel",
+          event: "exit",
+          code: "CONNECTOR_TUNNEL_EXIT",
+          state: "observed",
+          ...terminal,
+          forced: false,
+        },
+      });
+      expect(diagnostic).toHaveBeenCalledExactlyOnceWith({
+        source: "connector-tunnel",
+        phase: "active",
+        event: "exit",
+        code: "CONNECTOR_TUNNEL_EXIT",
+        state: "observed",
+        ...terminal,
+        forced: false,
+        runtimeGeneration: ready.runtimeGeneration,
+      });
+      anchor.emit("message", {
+        kind: "farol-tunnel-terminal-v1",
+        source: "connector-tunnel",
+        event: "exit",
+        exitCode: 0,
+        signal: null,
+      });
+      expect(diagnostic).toHaveBeenCalledTimes(1);
+      expect(child.exitCode).toBeNull();
+      expect(runtime.isRunning()).toBe(true);
+      expect(anchor.kill).not.toHaveBeenCalled();
+    },
+  );
+  it.each([
+    { source: "connector-anchor" },
+    { event: "close" },
+    { exitCode: null, signal: null },
+    { exitCode: 0, signal: "SIGTERM" },
+    { exitCode: Number.NaN },
+    { exitCode: 2147483648 },
+    { signal: "private signal" },
+    { extra: "private account payload" },
+    { kind: "x".repeat(65536) },
+  ])(
+    "rejects crossed, malformed or oversized tunnel receipt without exposing its content (%#)",
+    async (fault) => {
+      const diagnostic = vi.fn();
+      const { runtime, anchor } = await observedRuntime(diagnostic);
+      await runtime.start(startInput);
+      anchor.emit("message", {
+        kind: "farol-tunnel-terminal-v1",
+        source: "connector-tunnel",
+        event: "exit",
+        exitCode: 17,
+        signal: null,
+        ...fault,
+      });
+      anchor.emit("message", {
+        kind: "farol-tunnel-terminal-v1",
+        source: "connector-tunnel",
+        event: "exit",
+        exitCode: 0,
+        signal: null,
+      });
+      expect(runtime.getTunnelObservation()?.state).toBe("outcome_unknown");
+      expect(diagnostic).toHaveBeenCalledOnce();
+      expect(diagnostic.mock.calls[0]?.[0]).toMatchObject({
+        state: "outcome_unknown",
+        exitCode: null,
+        signal: null,
+        code: "CONNECTOR_TUNNEL_RECEIPT_INVALID",
+      });
+      expect(JSON.stringify(diagnostic.mock.calls)).not.toMatch(
+        /private|account|payload/,
+      );
+    },
+  );
+  it("does not invoke IPC accessors while classifying missing terminal evidence", async () => {
+    const diagnostic = vi.fn();
+    const { runtime, anchor } = await observedRuntime(diagnostic);
+    await runtime.start(startInput);
+    const getter = vi.fn(() => "private credential");
+    const message = {
+      kind: "farol-tunnel-terminal-v1",
+      source: "connector-tunnel",
+      event: "exit",
+      exitCode: 17,
+    };
+    Object.defineProperty(message, "signal", { get: getter, enumerable: true });
+    anchor.emit("message", message);
+    expect(getter).not.toHaveBeenCalled();
+    expect(runtime.getTunnelObservation()?.state).toBe("outcome_unknown");
+    expect(JSON.stringify(diagnostic.mock.calls)).not.toContain("private");
+  });
+  it("retains original startup and closing observations after lost IPC and cleanup timeout", async () => {
+    const diagnostic = vi.fn<
+      (observation: ConnectorRuntimeLifecycleObservation) => void
+    >(() => {
+      throw new Error("private sink failure");
+    });
+    const { runtime, anchor, child, get } = await observedRuntime(diagnostic);
+    let release!: (ready: boolean) => void;
+    get.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          release = resolve;
+        }),
+    );
+    const starting = runtime.start(startInput);
+    await vi.waitFor(() => expect(get).toHaveBeenCalledOnce());
+    anchor.emit("disconnect");
+    release(true);
+    expect(await starting).toMatchObject({ state: "outcome_unknown" });
+    expect(diagnostic.mock.calls[0]?.[0]).toMatchObject({
+      phase: "startup",
+      event: "disconnect",
+      code: "CONNECTOR_IPC_DISCONNECTED",
+      exitCode: null,
+      signal: null,
+    });
+    vi.spyOn(process, "kill").mockImplementation(() => true);
+    vi.spyOn(child, "waitForExit").mockResolvedValue(false);
+    await expect(runtime.stop()).rejects.toThrow("CONNECTOR_STOP_UNCONFIRMED");
+    anchor.emit("close", null, "SIGKILL");
+    expect(diagnostic.mock.calls[1]?.[0]).toMatchObject({
+      phase: "closing",
+      event: "cleanup-unknown",
+      code: "CONNECTOR_STOP_UNCONFIRMED",
+      state: "outcome_unknown",
+      exitCode: null,
+      signal: null,
+      forced: true,
+    });
+    expect(diagnostic.mock.calls[2]?.[0]).toMatchObject({
+      phase: "closing",
+      event: "close",
+      code: "CONNECTOR_ANCHOR_CLOSE",
+      exitCode: null,
+      signal: "SIGKILL",
+      forced: true,
+    });
+    expect(runtime.getTunnelObservation()?.state).toBe("outcome_unknown");
+    expect(runtime.isRunning()).toBe(true);
+  });
+  it("labels legacy tunnel tokens as unknown terminal detail without changing exited state", async () => {
+    const diagnostic = vi.fn();
+    const { runtime, anchor } = await observedRuntime(diagnostic);
+    await runtime.start(startInput);
+    anchor.emit("message", "farol-tunnel-exited-v1");
+    expect(runtime.getTunnelObservation()?.state).toBe("exited");
+    expect(diagnostic.mock.calls[0]?.[0]).toMatchObject({
+      source: "connector-tunnel",
+      event: "exit",
+      state: "outcome_unknown",
+      exitCode: null,
+      signal: null,
+    });
+  });
+  it("isolates async diagnostics for immediate, retained and runtime observers", async () => {
+    const rejected = vi.fn(async () => {
+      throw new Error("private async sink failure");
+    });
+    const { runtime, anchor, child } = await observedRuntime(rejected);
+    await runtime.start(startInput);
+    child.observeLifecycle?.(rejected);
+    anchor.emit("message", {
+      kind: "farol-tunnel-terminal-v1",
+      source: "connector-tunnel",
+      event: "exit",
+      exitCode: 17,
+      signal: null,
+    });
+    child.observeLifecycle?.(rejected);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(rejected).toHaveBeenCalledTimes(3);
+    expect(runtime.getTunnelObservation()?.state).toBe("exited");
+    expect(runtime.isRunning()).toBe(true);
+    expect(anchor.kill).not.toHaveBeenCalled();
+  });
+  it("replays an early original tunnel exit as startup evidence before readiness", async () => {
+    const diagnostic = vi.fn();
+    const { runtime, anchor, start, get } = await observedRuntime(diagnostic);
+    const originalStart = start.getMockImplementation()!;
+    start.mockImplementationOnce(async (command) => {
+      const child = await originalStart(command);
+      anchor.emit("message", {
+        kind: "farol-tunnel-terminal-v1",
+        source: "connector-tunnel",
+        event: "exit",
+        exitCode: null,
+        signal: "SIGTERM",
+      });
+      return child;
+    });
+    const result = await runtime.start(startInput);
+    expect(result).toMatchObject({
+      state: "unreachable",
+      code: "CONNECTOR_EXITED_BEFORE_READY",
+    });
+    expect(diagnostic).toHaveBeenCalledExactlyOnceWith({
+      source: "connector-tunnel",
+      phase: "startup",
+      event: "exit",
+      code: "CONNECTOR_TUNNEL_EXIT",
+      state: "observed",
+      exitCode: null,
+      signal: "SIGTERM",
+      forced: false,
+      runtimeGeneration: result.runtimeGeneration,
+    });
+    expect(get).not.toHaveBeenCalled();
+    expect(anchor.kill).not.toHaveBeenCalled();
+    expect(runtime.isRunning()).toBe(true);
+  });
+  it("rejects private, crossed and accessor records from an optional child observer port", async () => {
+    const diagnostic = vi.fn();
+    const { runtime, children } = await controlledLifecycleRuntime(diagnostic);
+    const ready = await runtime.start(startInput);
+    const child = children[0]!;
+    const record = {
+      source: "connector-tunnel",
+      event: "exit",
+      code: "CONNECTOR_TUNNEL_EXIT",
+      state: "observed",
+      exitCode: 17,
+      signal: null,
+      forced: false,
+    };
+    child.emit({ ...record, raw: "private account path" });
+    child.emit({ ...record, source: "connector-anchor" });
+    const getter = vi.fn(() => "private signal");
+    const accessor = { ...record };
+    Object.defineProperty(accessor, "signal", {
+      get: getter,
+      enumerable: true,
+    });
+    child.emit(accessor);
+    expect(diagnostic).not.toHaveBeenCalled();
+    expect(getter).not.toHaveBeenCalled();
+    child.emit(record);
+    child.emit(record);
+    expect(diagnostic).toHaveBeenCalledExactlyOnceWith({
+      ...record,
+      phase: "active",
+      runtimeGeneration: ready.runtimeGeneration,
+    });
+    expect(Object.isFrozen(diagnostic.mock.calls[0]?.[0])).toBe(true);
+    expect(JSON.stringify(diagnostic.mock.calls)).not.toContain("private");
+    expect(child.kill).not.toHaveBeenCalled();
+  });
+  it("keeps a late stop timeout and close attached to the original lifetime after replacement", async () => {
+    const diagnostic = vi.fn();
+    const { runtime, children } = await controlledLifecycleRuntime(diagnostic);
+    const first = await runtime.start(startInput);
+    const original = children[0]!,
+      current = children[1]!;
+    let release!: (confirmed: boolean) => void;
+    original.waitForExit.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          release = resolve;
+        }),
+    );
+    const stopping = expect(runtime.stop()).rejects.toThrow(
+      "CONNECTOR_STOP_UNCONFIRMED",
+    );
+    await vi.waitFor(() => expect(original.waitForExit).toHaveBeenCalledOnce());
+    original.exitCode = 0;
+    const second = await runtime.start(startInput);
+    expect(first.runtimeGeneration).not.toBe(second.runtimeGeneration);
+    release(false);
+    await stopping;
+    original.emit({
+      source: "connector-anchor",
+      event: "close",
+      code: "CONNECTOR_ANCHOR_CLOSE",
+      state: "observed",
+      exitCode: 0,
+      signal: null,
+      forced: true,
+    });
+    current.emit({
+      source: "connector-tunnel",
+      event: "exit",
+      code: "CONNECTOR_TUNNEL_EXIT",
+      state: "observed",
+      exitCode: null,
+      signal: "SIGTERM",
+      forced: false,
+    });
+    expect(
+      diagnostic.mock.calls.map(([record]) => [
+        record.phase,
+        record.event,
+        record.runtimeGeneration,
+      ]),
+    ).toEqual([
+      ["closing", "cleanup-unknown", first.runtimeGeneration],
+      ["closing", "close", first.runtimeGeneration],
+      ["active", "exit", second.runtimeGeneration],
+    ]);
+    expect(current.kill).not.toHaveBeenCalled();
+    expect(runtime.isRunning()).toBe(true);
   });
 
   it("retains group ownership after tunnel exit and performs the original group cleanup", async () => {
