@@ -10757,10 +10757,19 @@ function reconcileVisibleTestDisplay(): void {
 }
 
 function ensureWindow(): Promise<void> {
+  if (quitInProgress || installedUpdateAdmission) return Promise.resolve();
   return windowOpenCoordinator.ensure({
     hasWindow: () => window !== null && !window.isDestroyed(),
-    reveal: revealWindow,
-    open: createWindow,
+    reveal: () => {
+      if (quitInProgress || installedUpdateAdmission) return;
+      revealWindow();
+    },
+    open: () => {
+      // The coordinator defers creation. Quit/update may close admission
+      // after this request was queued, before the native callback runs.
+      if (quitInProgress || installedUpdateAdmission) return Promise.resolve();
+      return createWindow();
+    },
   });
 }
 
