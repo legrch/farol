@@ -4,11 +4,11 @@ Open **Setup** and follow **Overview → Sign in → Connection → Workspaces �
 
 ## Overview: fresh and returning profiles
 
-For a fresh profile, use the fresh setup instructions below to approve and verify a workspace, configure the local connection, and check its attachment in ChatGPT. Embedded sign-in is optional.
+For a fresh profile, configure the local connection, optionally add a workspace, and check the connection in ChatGPT. Embedded sign-in and workspace access are optional. An empty workspace selection grants no file or command access.
 
 For a returning or partially configured profile, review the saved workspace, connection and current checks. Keep saved credentials unless they need to change. Continue through sections whose checks are current; complete only the unfinished steps. Reviewing Setup does not reset the profile or repeat an earlier action.
 
-The overview distinguishes **Not checked**, **Check in progress**, **Result needs review**, **Status unavailable** and **Verified**. Treat each as its actual result. **Open Home** appears only when the required workspace, local connection and external attachment checks are current and Computer is ready; optional sign-in can remain unchecked.
+The overview distinguishes **Not checked**, **Check in progress**, **Result needs review**, **Status unavailable** and **Verified**. Treat each as its actual result. **Open Home** requires current local connection and external attachment checks, plus current access verification when a workspace is selected. A verified connection with no workspace keeps file and command access disabled; optional sign-in can remain unchecked.
 
 ## Sign in (optional)
 
@@ -18,7 +18,7 @@ Entering this step observes the existing embedded page without opening it or cha
 
 ## Workspaces
 
-Choose **Add workspace…** and select a folder. This action saves **Read & write** access, checks the selected folder and connects when tunnel credentials and a helper are configured. Review its saved path and result. File changes still require approval; command access is separate. Computer currently requires at least one workspace; a folder-free connection is not yet supported.
+Choose **Add workspace…** and select a folder if you want file access. This action saves **Read & write** access, checks the selected folder and connects when tunnel credentials and a helper are configured. Review its saved path and result. File changes still require approval; command access is separate. You can continue without adding a workspace and verify the connection with an empty catalogue.
 
 For a returning profile with a current verified workspace, Setup shows its path, **Saved access** and **Access checked**. It says **Current workspace for Connection. Access is checked for this build and saved scope. Continue when ready.** Use **Continue** without re-verifying. **Verify workspace** is hidden while that workspace is current and no action is paused. The **Workspace access** selector remains visible for changing saved access.
 
@@ -30,7 +30,7 @@ Select an approved workspace and review **Saved access**. In Setup, use **Worksp
 
 When a workspace check is needed, choose the offered **Verify workspace** with no access draft or removal confirmation open. It checks the current Connection workspace without changing its binding, or checks another selected workspace and prepares it for Connection. Selection alone does not choose the Connection workspace. A saved workspace or stale check alone is insufficient for **Access checked**.
 
-Changes may be paused while another dependent action is pending or uncertain. If a coding task is using the workspace, wait for it to finish. When the connection is running, adding a workspace, saving access or confirming removal uses one admitted action to drain that connection and apply the original change. Wait for its result; a manual Diagnostics stop or a second submission is not required. After a confirmed change, Farol checks the remaining workspace access and restores the configured connection. Removing the last workspace revokes the final grant and leaves Computer disconnected. The saved key remains saved. Unknown results are never retried automatically.
+Changes may be paused while another dependent action is pending or uncertain. If a coding task is using the workspace, wait for it to finish. When the connection is running, adding a workspace, saving access or confirming removal uses one admitted action to drain that connection and apply the original change. Wait for its result; a manual Diagnostics stop or a second submission is not required. After a confirmed change, Farol checks the remaining workspace access and restores the configured connection. Removing the last workspace revokes the final grant and restores the configured connection with no workspace access. Files stay on disk and the saved key remains saved. Unknown results are never retried automatically.
 
 An unconfirmed drain or change is not success and does not authorize another stop or submission. Inspect the original result in **Workspace diagnostics**. A stale draft requires cancellation and review of the saved workspace first; cancelling it does not settle an already submitted action.
 
@@ -61,8 +61,8 @@ For a manual check, follow the current instructions and use only the request ava
 2. Choose **Copy verification request** when the current request is available. Paste and send it yourself in ChatGPT, once. Copying does not send a message. If copying fails, open **Technical details** and select the current request manually. It checks the approved workspace and returns counts without file names or contents.
 3. Return to Farol and choose **Check attachment** to inspect and record the matching local verification receipt. This action does not send another ChatGPT message.
 
-For a returning profile with **Attachment checked · Computer ready**, the retained attachment check matches this build, connection and workspace. Choose **Back to overview** to return to Overview. The first-time attachment instructions, **Copy verification request** and **Check attachment** are hidden for this current checked state; do not resend verification or repeat the check simply to advance. **Open Tunnels** and **Open connection guide** remain available as help.
+For a returning profile with **Attachment checked · Computer ready**, the retained attachment check matches this build, connection and selected workspace, or the explicit no-workspace selection. Choose **Back to overview** to return to Overview. The first-time attachment instructions, **Copy verification request** and **Check attachment** are hidden for this current checked state; do not resend verification or repeat the check simply to advance. **Open Tunnels** and **Open connection guide** remain available as help.
 
-**Connected to this Mac · ChatGPT check needed** confirms only the local connection. A provider reply, connector name or successful copy is insufficient. **Attachment checked · Computer ready** requires current workspace and attachment evidence for this connection. A missing request or unavailable control requires review of current status, not reuse of an old request.
+**Connected to this Mac · ChatGPT check needed** confirms only the local connection. A provider reply, connector name or successful copy is insufficient. **Attachment checked · Computer ready** requires current attachment evidence and, when a workspace is selected, current workspace evidence. With no workspace, verification confirms the connection without granting file access. A missing request or unavailable control requires review of current status, not reuse of an old request.
 
 For pending or unknown outcomes, open **Connection help → Connection diagnostics** or **Workspace diagnostics**, review **Actions needing observation** and **Action details**, and use **Refresh status** to observe current state. Retained results survive page navigation within the window; refresh does not replay an action or settle an unknown outcome by itself. Do not resend verification, replace credentials, retarget the connection or repeat an uncertain action to obtain a green status.

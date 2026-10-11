@@ -634,8 +634,15 @@ operation stops this route; do not retry or reroute it:
 GOCACHE=/private/tmp/farol-shell-lifecycle-go-cache go test -tags farol_native_process ./modules/computer/infra/process -run '^TestNativeOwnedLeafDrain$' -count=1 -v
 ```
 
-Native execution is pending lane coordination for this checkpoint. Root-owned
-activation, effective confinement, real held exec/kernel no-fork trace, exact
+On 11 October 2026, the exact selector above passed once on source
+`52085c1d88039a618c7450c1acb2a177aea5fa9a`, Darwin ARM64 with Go 1.26.2,
+after the serialized OTA lane completed. Both synthetic leaf cases retained
+one original Wait and both output EOF/copy witnesses; quick nonzero exit used
+no stop, and the signal case used one original-handle stop. The test image
+SHA-256 was `bbc84089c7846d406b947fc7bc5e301f4bd9be2bef235377fbf99094a8701dd5`.
+Group/descendant cleanup and stdin acceptance remain unverified by this test.
+
+Root-owned activation, effective confinement, real held exec/kernel no-fork trace, exact
 anchor result/ACK/Wait, descendant/unknown cases, independent review, aggregate
 checks, package/installed/live and release gates remain open. `connector.processes`
 remains unset; no shared contract, authority, boot/schema or desktop change is

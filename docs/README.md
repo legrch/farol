@@ -29,6 +29,23 @@ source fixtures are not proof of a live task route.
 
 ## Installation and updates
 
+On 11 October, the installed beta.10 instance completed a real OTA to
+[beta.11](https://github.com/legrch/farol/releases/tag/v0.2.0-owner.beta.11),
+build `25`, source `3d71feccc3b13912c0f1e464e348801bf37c21cf`.
+Farol discovered and downloaded the published archive automatically. One restart
+completed with the original process exiting normally, the installed application
+and retained predecessor matching their expected digests, and Computer becoming
+ready. Existing workspace grants, connection credentials and update preferences
+were preserved. External catalogue, instruction bootstrap, create, edit and read
+then succeeded; independent local readback matched the returned file hash.
+
+Beta.11 supports connecting with no workspace access and fixes workspace changes
+after a normal Quit and reopen. Package checks also covered empty catalogue,
+denied file access without a workspace, known tunnel-termination recovery and
+beta.10 reading the retained settings. Actual hardware sleep, live clipboard,
+external Shell/Git and broader Chat/model/Agent activation remain unqualified.
+Injected sleep events are not hardware-sleep evidence.
+
 On 11 October, one installed unsigned macOS ARM64 beta.8 instance completed a
 real OTA to [beta.9](https://github.com/legrch/farol/releases/tag/v0.2.0-owner.beta.9),
 version `0.2.0-owner.beta.9`, build `23`, source
