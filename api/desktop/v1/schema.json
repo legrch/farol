@@ -4924,7 +4924,12 @@
         },
         "state": {
           "type": "string",
-          "values": ["running", "terminal", "unknown"]
+          "values": ["running", "terminal", "exited", "unknown"]
+        },
+        "supervisorState": {
+          "type": "string",
+          "values": ["running", "exited", "unknown"],
+          "optional": true
         },
         "rootState": {
           "type": "string",

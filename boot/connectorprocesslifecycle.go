@@ -33,8 +33,10 @@ func (s *computerConnector) collectProcess(record *settingsMutationOperation, op
 
 // Drain stops further process admissions, then awaits existing preservation
 // attempts before the journal's final freeze verdict. It neither retries a
-// publication nor signals a process. A running/unconfirmed child or lost ACK
-// remains a failed retirement, even if later disk bytes look complete.
+// publication nor signals a process. A running/unknown execution owner or lost
+// ACK remains a failed retirement, even if later disk bytes look complete.
+// Known supervisor exit can settle that owner with descendant cleanup explicitly
+// unverified; this gate does not attest arbitrary detached-process termination.
 func (s *computerConnector) drainProcessesForRetirement(ctx context.Context) error {
 	if s == nil || s.mutations == nil {
 		return nil

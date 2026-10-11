@@ -9,7 +9,9 @@ import (
 	"github.com/legrch/farol/modules/computer/domain/authority"
 )
 
-// TerminalResult is the owning service's complete bounded terminal observation.
+// TerminalResult is the owning service's complete bounded execution result.
+// Its state may be Terminal (cohort confirmed) or Exited (supervisor exited,
+// descendant cleanup unverified). These facts must never be conflated.
 // Its original correlation is not current READ authority, liveness proof, or
 // permission to restore, restart, renew admission, or retry an operation.
 type TerminalResult struct {
@@ -70,7 +72,8 @@ func ValidTerminalResult(v TerminalResult) bool {
 		return false
 	}
 	if !identifier(o.Handle) || o.Root != RootExited || !o.Waited ||
-		o.GroupCleanup != CleanupConfirmed || o.DescendantCleanup != CleanupConfirmed || !o.OutputDrained ||
+		completedState(o) == Unknown ||
+		(o.Supervisor != "" && o.Supervisor != SupervisorExited) ||
 		o.StdoutOffset != 0 || o.StderrOffset != 0 || len(o.Stdout) > MaximumOutput || len(o.Stderr) > MaximumOutput ||
 		len(o.Stdout)+len(o.Stderr) > MaximumOutput || o.StdoutNext != uint64(len(o.Stdout)) || o.StderrNext != uint64(len(o.Stderr)) ||
 		o.StdoutBytes != o.StdoutNext || o.StderrBytes != o.StderrNext {
@@ -78,4 +81,12 @@ func ValidTerminalResult(v TerminalResult) bool {
 	}
 	return o.ExitCode != nil && *o.ExitCode >= 0 && *o.ExitCode <= 255 && o.ExitSignal == 0 ||
 		o.ExitCode == nil && o.ExitSignal > 0 && o.ExitSignal <= 128
+}
+
+// ResultState classifies a validated retained value without native IO/authority.
+func ResultState(v TerminalResult) State {
+	if !ValidTerminalResult(v) {
+		return Unknown
+	}
+	return completedState(v.Observation)
 }

@@ -34,7 +34,7 @@ func (s *Service) CaptureTerminal(ctx context.Context, current ConnectorObservat
 		if out.State == Unknown {
 			return nil, fail("PROCESS_OUTCOME_UNKNOWN", true)
 		}
-		if out.State != Terminal {
+		if out.State != Terminal && out.State != Exited {
 			if captured != nil {
 				return nil, s.terminalCaptureUnknown()
 			}
@@ -91,7 +91,7 @@ func (s *Service) terminalCaptureUnknown() error {
 
 func sameTerminalFacts(a, b Observation) bool {
 	sameCode := a.ExitCode == nil && b.ExitCode == nil || a.ExitCode != nil && b.ExitCode != nil && *a.ExitCode == *b.ExitCode
-	return a.Handle == b.Handle && a.Root == b.Root && a.Waited == b.Waited && sameCode && a.ExitSignal == b.ExitSignal &&
+	return a.Supervisor == b.Supervisor && a.Handle == b.Handle && a.Root == b.Root && a.Waited == b.Waited && sameCode && a.ExitSignal == b.ExitSignal &&
 		a.GroupCleanup == b.GroupCleanup && a.DescendantCleanup == b.DescendantCleanup && a.OutputDrained == b.OutputDrained &&
 		a.StdoutBytes == b.StdoutBytes && a.StderrBytes == b.StderrBytes && a.OutputLimitReached == b.OutputLimitReached &&
 		a.CancelRequested == b.CancelRequested && a.TimedOut == b.TimedOut && a.AuthorityLost == b.AuthorityLost

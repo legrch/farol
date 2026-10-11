@@ -98,6 +98,15 @@ function terminal(): ComputerConnectorProcessResult {
     outputDrained: true,
   };
 }
+function exited(): ComputerConnectorProcessResult {
+  return {
+    ...terminal(),
+    state: "exited",
+    supervisorState: "exited",
+    groupCleanup: "unverified",
+    descendantCleanup: "unverified",
+  };
+}
 function data(kind: Kind): Record<string, unknown> {
   if (kind === "read") return { ...observation() };
   return {
@@ -802,6 +811,184 @@ it("unknown does not excuse an invalid root observation", async () => {
   expect(out.status).toBe("unknown");
   expect(out.data).toBeUndefined();
 });
+
+it.each([observation(), terminal()])(
+  "accepts legacy $state without a supervisor witness",
+  async (selected) => {
+    const out = await setup("read", outcome("read", selected)).bridge.read(
+      readInput,
+      call,
+    );
+    expect(out.status).toBe("ok");
+    expect(out.data).toEqual(selected);
+    expect(out.data).not.toHaveProperty("supervisorState");
+  },
+);
+it.each([
+  { ...observation(), supervisorState: "running" },
+  { ...terminal(), supervisorState: "exited" },
+])("accepts a consistent supervisor for $state", async (selected) => {
+  const out = await setup("read", outcome("read", selected)).bridge.read(
+    readInput,
+    call,
+  );
+  expect(out.status).toBe("ok");
+  expect(out.data).toEqual(selected);
+});
+it.each([
+  { groupCleanup: "unverified", descendantCleanup: "confirmed" },
+  { groupCleanup: "confirmed", descendantCleanup: "unverified" },
+  { groupCleanup: "unverified", descendantCleanup: "unverified" },
+] as const)("accepts exited without claiming cleanup (%j)", async (cleanup) => {
+  const selected = { ...exited(), ...cleanup };
+  const { bridge, request } = setup("read", outcome("read", selected));
+  const out = await bridge.read(readInput, call);
+  expect(out.status).toBe("ok");
+  expect(out.data).toEqual(selected);
+  expect(out.data?.state).toBe("exited");
+  expect(out.data).not.toHaveProperty("retention");
+  expect(request).toHaveBeenCalledTimes(1);
+});
+it.each([
+  { exitCode: 0 },
+  { exitCode: 255 },
+  { exitSignal: 1 },
+  { exitSignal: 128 },
+])(
+  "accepts a supervised exit with valid code or signal (%j)",
+  async (patch) => {
+    const selected = { ...exited(), ...patch };
+    if (patch.exitSignal !== undefined) delete selected.exitCode;
+    const out = await setup("read", outcome("read", selected)).bridge.read(
+      readInput,
+      call,
+    );
+    expect(out.status).toBe("ok");
+    expect(out.data).toEqual(selected);
+  },
+);
+
+const invalidExited: [string, Record<string, unknown>][] = [
+  ["running root", { rootState: "running", rootWaited: false }],
+  ["root not waited", { rootWaited: false }],
+  ["code out of range", { exitCode: 256 }],
+  ["negative code", { exitCode: -1 }],
+  ["fractional code", { exitCode: 1.5 }],
+  ["code and signal", { exitCode: 0, exitSignal: 1 }],
+  ["group pending", { groupCleanup: "pending" }],
+  ["descendant pending", { descendantCleanup: "pending" }],
+  [
+    "both cleanups confirmed",
+    { groupCleanup: "confirmed", descendantCleanup: "confirmed" },
+  ],
+  ["output undrained", { outputDrained: false }],
+  ["supervisor still running", { supervisorState: "running" }],
+  ["supervisor unknown", { supervisorState: "unknown" }],
+];
+it.each(invalidExited)("rejects exited with %s", async (_name, patch) => {
+  const { bridge, request } = setup(
+    "read",
+    outcome("read", { ...exited(), ...patch }),
+  );
+  const out = await bridge.read(readInput, call);
+  expect(out).toMatchObject({
+    status: "unknown",
+    code: "invalid_connector_process_response",
+    retry: "never",
+  });
+  expect(out.data).toBeUndefined();
+  expect(request).toHaveBeenCalledTimes(1);
+});
+it.each([0, 129])(
+  "rejects exited with invalid signal %s",
+  async (exitSignal) => {
+    const selected = { ...exited(), exitSignal };
+    delete selected.exitCode;
+    const out = await setup("read", outcome("read", selected)).bridge.read(
+      readInput,
+      call,
+    );
+    expect(out.code).toBe("invalid_connector_process_response");
+    expect(out.data).toBeUndefined();
+  },
+);
+it("requires a supervisor witness for exited", async () => {
+  const selected = { ...exited() };
+  delete selected.supervisorState;
+  const out = await setup("read", outcome("read", selected)).bridge.read(
+    readInput,
+    call,
+  );
+  expect(out.code).toBe("invalid_connector_process_response");
+  expect(out.data).toBeUndefined();
+});
+it.each([
+  { ...observation(), supervisorState: "unknown" },
+  { ...observation(), supervisorState: "exited" },
+  { ...observation(), supervisorState: "exited", outputDrained: true },
+  { ...terminal(), supervisorState: "running" },
+  { ...terminal(), supervisorState: "unknown" },
+  { ...exited(), state: "terminal" },
+])("rejects inconsistent supervisor classification (%j)", async (selected) => {
+  const out = await setup("read", outcome("read", selected)).bridge.read(
+    readInput,
+    call,
+  );
+  expect(out.code).toBe("invalid_connector_process_response");
+  expect(out.data).toBeUndefined();
+});
+it.each([
+  { ...observation(), supervisorState: "running" },
+  { ...observation(), supervisorState: "unknown" },
+  { ...observation(), supervisorState: "unknown", groupCleanup: "unverified" },
+  { ...terminal(), supervisorState: "running" },
+  { ...terminal(), supervisorState: "unknown" },
+  { ...terminal(), supervisorState: "exited" },
+  { ...exited() },
+  { ...terminal(), supervisorState: "unknown", outputDrained: false },
+])(
+  "preserves sticky unknown with valid supervisor facts (%j)",
+  async (facts) => {
+    const selected = { ...facts, state: "unknown" };
+    const out = await setup("read", outcome("read", selected)).bridge.read(
+      readInput,
+      call,
+    );
+    expect(out).toMatchObject({
+      status: "unknown",
+      code: "PROCESS_OBSERVATION_UNKNOWN",
+      data: selected,
+      retry: "never",
+    });
+  },
+);
+it.each([
+  { ...observation(), supervisorState: "exited" },
+  { ...observation(), supervisorState: "exited", outputDrained: true },
+  { ...terminal(), supervisorState: "exited", outputDrained: false },
+  { ...exited(), rootWaited: false },
+  { ...exited(), groupCleanup: "pending" },
+  { ...exited(), descendantCleanup: "pending" },
+  { ...exited(), exitCode: 256 },
+])("unknown does not excuse invalid supervised facts (%j)", async (facts) => {
+  const out = await setup(
+    "read",
+    outcome("read", { ...facts, state: "unknown" }),
+  ).bridge.read(readInput, call);
+  expect(out.code).toBe("invalid_connector_process_response");
+  expect(out.data).toBeUndefined();
+});
+it.each([null, "finished", "", 0])(
+  "rejects invalid optional supervisorState %j",
+  async (supervisorState) => {
+    const out = await setup(
+      "read",
+      outcome("read", { ...terminal(), state: "unknown", supervisorState }),
+    ).bridge.read(readInput, call);
+    expect(out.code).toBe("invalid_connector_process_response");
+    expect(out.data).toBeUndefined();
+  },
+);
 
 it("never invokes getters in opened, call, input, identity or response", async () => {
   const getter = vi.fn(() => {

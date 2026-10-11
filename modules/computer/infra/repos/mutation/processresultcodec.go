@@ -13,27 +13,29 @@ import (
 
 const processOutputChunkBytes = 32 * 1024
 
-// v5 is separate from the unchanged content-free v4 reservation. The original
-// scope/intent retain their exact v4 representation, including uint64 strings.
+// v5/v6 results are separate from the unchanged content-free v4 reservation.
+// v6 adds explicit supervisor evidence without changing v5 cleanup semantics.
+// Original scope/intent retain their exact v4 representation, including uint64 strings.
 type processTerminalObservation struct {
-	Handle             string               `json:"handle"`
-	Root               processsvc.RootState `json:"root"`
-	Waited             bool                 `json:"waited"`
-	ExitCode           *int                 `json:"exitCode"`
-	ExitSignal         int                  `json:"exitSignal"`
-	GroupCleanup       processsvc.Cleanup   `json:"groupCleanup"`
-	DescendantCleanup  processsvc.Cleanup   `json:"descendantCleanup"`
-	StdoutOffset       uint64               `json:"stdoutOffset"`
-	StderrOffset       uint64               `json:"stderrOffset"`
-	StdoutNext         uint64               `json:"stdoutNext"`
-	StderrNext         uint64               `json:"stderrNext"`
-	StdoutBytes        uint64               `json:"stdoutBytes"`
-	StderrBytes        uint64               `json:"stderrBytes"`
-	OutputLimitReached bool                 `json:"outputLimitReached"`
-	OutputDrained      bool                 `json:"outputDrained"`
-	CancelRequested    bool                 `json:"cancelRequested"`
-	TimedOut           bool                 `json:"timedOut"`
-	AuthorityLost      bool                 `json:"authorityLost"`
+	Supervisor         processsvc.SupervisorState `json:"supervisorState,omitempty"`
+	Handle             string                     `json:"handle"`
+	Root               processsvc.RootState       `json:"root"`
+	Waited             bool                       `json:"waited"`
+	ExitCode           *int                       `json:"exitCode"`
+	ExitSignal         int                        `json:"exitSignal"`
+	GroupCleanup       processsvc.Cleanup         `json:"groupCleanup"`
+	DescendantCleanup  processsvc.Cleanup         `json:"descendantCleanup"`
+	StdoutOffset       uint64                     `json:"stdoutOffset"`
+	StderrOffset       uint64                     `json:"stderrOffset"`
+	StdoutNext         uint64                     `json:"stdoutNext"`
+	StderrNext         uint64                     `json:"stderrNext"`
+	StdoutBytes        uint64                     `json:"stdoutBytes"`
+	StderrBytes        uint64                     `json:"stderrBytes"`
+	OutputLimitReached bool                       `json:"outputLimitReached"`
+	OutputDrained      bool                       `json:"outputDrained"`
+	CancelRequested    bool                       `json:"cancelRequested"`
+	TimedOut           bool                       `json:"timedOut"`
+	AuthorityLost      bool                       `json:"authorityLost"`
 }
 type processOutputDigest struct {
 	Offset uint64 `json:"offset"`
@@ -101,12 +103,12 @@ func validProcessParent(parent string) bool {
 	return len(parent) == 69 && parent[64:] == ".json" && domain.SHA256(parent[:64])
 }
 func terminalMetadata(o processsvc.Observation) processTerminalObservation {
-	return processTerminalObservation{o.Handle, o.Root, o.Waited, o.ExitCode, o.ExitSignal, o.GroupCleanup, o.DescendantCleanup,
+	return processTerminalObservation{o.Supervisor, o.Handle, o.Root, o.Waited, o.ExitCode, o.ExitSignal, o.GroupCleanup, o.DescendantCleanup,
 		o.StdoutOffset, o.StderrOffset, o.StdoutNext, o.StderrNext, o.StdoutBytes, o.StderrBytes,
 		o.OutputLimitReached, o.OutputDrained, o.CancelRequested, o.TimedOut, o.AuthorityLost}
 }
 func (o processTerminalObservation) observation() processsvc.Observation {
-	return processsvc.Observation{Handle: o.Handle, Root: o.Root, Waited: o.Waited, ExitCode: o.ExitCode, ExitSignal: o.ExitSignal,
+	return processsvc.Observation{Supervisor: o.Supervisor, Handle: o.Handle, Root: o.Root, Waited: o.Waited, ExitCode: o.ExitCode, ExitSignal: o.ExitSignal,
 		GroupCleanup: o.GroupCleanup, DescendantCleanup: o.DescendantCleanup,
 		StdoutOffset: o.StdoutOffset, StderrOffset: o.StderrOffset, StdoutNext: o.StdoutNext, StderrNext: o.StderrNext,
 		StdoutBytes: o.StdoutBytes, StderrBytes: o.StderrBytes, OutputLimitReached: o.OutputLimitReached, OutputDrained: o.OutputDrained,
@@ -130,6 +132,10 @@ func encodeProcessTerminal(v processsvc.TerminalResult) ([]byte, []processOutput
 	}
 	e := processTerminalEnvelope{Version: 5, Kind: "workspace_connector_process_terminal", Record: processTerminalRecord{
 		Scope: original.Record.Scope, Intent: original.Record.Intent, Phase: "terminal", Observation: terminalMetadata(v.Observation)}}
+	if v.Observation.Supervisor != "" {
+		e.Version = 6
+		e.Record.Phase = string(processsvc.ResultState(v))
+	}
 	var chunks []processOutputPublication
 	for _, stream := range []struct {
 		name string
@@ -175,7 +181,13 @@ func decodeProcessTerminal(raw []byte) (*processsvc.TerminalResult, *processTerm
 		return corrupt()
 	}
 	var e processTerminalEnvelope
-	if decodeStrict(raw, &e) != nil || e.Version != 5 || e.Kind != "workspace_connector_process_terminal" || e.Record.Phase != "terminal" {
+	if decodeStrict(raw, &e) != nil || (e.Version != 5 && e.Version != 6) || e.Kind != "workspace_connector_process_terminal" {
+		return corrupt()
+	}
+	// v5 keeps its exact old meaning/bytes. Only v6 can carry the explicit
+	// supervisor witness; neither version may silently upgrade an old unknown.
+	if e.Version == 5 && (e.Record.Observation.Supervisor != "" || e.Record.Phase != "terminal") ||
+		e.Version == 6 && e.Record.Observation.Supervisor != processsvc.SupervisorExited {
 		return corrupt()
 	}
 	original, err := processCanonical(processEnvelope{4, "workspace_connector_process", processRecord{e.Record.Scope, e.Record.Intent, "reserved"}})
@@ -197,7 +209,7 @@ func decodeProcessTerminal(raw []byte) (*processsvc.TerminalResult, *processTerm
 	}
 	o.Stdout, o.Stderr = make([]byte, int(o.StdoutBytes)), make([]byte, int(o.StderrBytes))
 	v := &processsvc.TerminalResult{Scope: scope, Intent: intent, Observation: o}
-	if !processsvc.ValidTerminalResult(*v) {
+	if !processsvc.ValidTerminalResult(*v) || e.Record.Phase != string(processsvc.ResultState(*v)) {
 		return corrupt()
 	}
 	return v, &e, nil

@@ -8,6 +8,7 @@ import (
 )
 
 type Child struct {
+	supervisor                                                                            processsvc.SupervisorState
 	mutex                                                                                 sync.Mutex
 	handle                                                                                string
 	process                                                                               owned
@@ -62,6 +63,13 @@ func (c *Child) wait() {
 	}
 	// os.Process.Wait is EXACT root evidence only. Unsupported descendant tracking
 	// and anchor-less group cleanup remain unverified even for a clean exit 0.
+	if c.supervisor != "" {
+		previous := c.supervisor
+		c.supervisor = processsvc.SupervisorUnknown
+		if previous == processsvc.SupervisorRunning && err == nil && observed.supervisorExited && observed.Waited && observed.Drained && !c.signalAttempted {
+			c.supervisor = processsvc.SupervisorExited
+		}
+	}
 	c.finished = true
 	c.group = processsvc.CleanupUnverified
 	c.descendants = processsvc.CleanupUnverified
@@ -107,7 +115,7 @@ func (c *Child) Read(ctx context.Context, request processsvc.Window) (*processsv
 		copy := *c.code
 		code = &copy
 	}
-	return &processsvc.Observation{Handle: c.handle, Root: c.root, Waited: c.waited, ExitCode: code, ExitSignal: c.signal,
+	return &processsvc.Observation{Supervisor: c.supervisor, Handle: c.handle, Root: c.root, Waited: c.waited, ExitCode: code, ExitSignal: c.signal,
 		GroupCleanup: c.group, DescendantCleanup: c.descendants, Stdout: out, Stderr: diagnostic,
 		StdoutOffset: request.StdoutOffset, StderrOffset: request.StderrOffset,
 		StdoutNext: request.StdoutOffset + uint64(len(out)), StderrNext: request.StderrOffset + uint64(len(diagnostic)),

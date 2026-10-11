@@ -50,10 +50,11 @@ type Qualification interface {
 type timer interface{ Stop() bool }
 type schedule func(time.Duration, func()) timer
 type exit struct {
-	Code            *int
-	Signal          int
-	Waited, Drained bool
-	cohort          bool
+	Code             *int
+	Signal           int
+	Waited, Drained  bool
+	cohort           bool
+	supervisorExited bool
 }
 type owned interface {
 	Wait() (exit, error)

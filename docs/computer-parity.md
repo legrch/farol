@@ -80,6 +80,32 @@ no child to restore, execution lease to renew, or retirement state to settle.
 Both paths recheck the original physical workspace and current authority; root
 also reconciles the shared operation ledger before disclosing output.
 
+The explicitly selected root-scoped watchdog separates original supervisor
+completion from descendant cleanup. A result can now be `exited`: the original
+command exit code or signal and complete bounded output are known, and the
+original helper's one Wait and unfenced IPC closure have completed. Its group
+and descendant cleanup remain `unverified`. `terminal` retains the stricter
+meaning of positively confirmed cleanup. Neither state means command success;
+callers must inspect the command exit code or signal. Legacy observations with
+no supervisor witness retain their existing unknown/terminal classification.
+
+These new results use a v6 manifest with explicit `supervisorState` and an exact
+`exited` or `terminal` phase. Existing v4 reservations, v5 terminal manifests and
+output blocks keep their previous representations. A known v6 publication can
+settle the original execution owner's lifecycle; this permits retirement without
+asserting that arbitrary detached descendants have stopped. This is a scoped
+execution-result contract, not proof of process-tree revocation. Unknown helper
+Wait, IPC failure, uncertain cancellation or publication ACK still fence the
+operation and retirement. Stored bytes cannot clear those fences. Production
+Shell activation and any stronger descendant-lifetime guarantee remain separate
+qualification gates; this change does not register a normal-startup producer.
+
+Controlled regressions in `process/supervision_test.go`,
+`mutation/processsupervision_test.go` and
+`boot/connectorprocesssupervision_test.go` cover independent cleanup facts,
+version compatibility, original collection, current-authority cold reads and
+unknown-result refusal. They do not establish native process-tree cleanup.
+
 The prepared lifecycle now starts one internal completion waiter with the original
 process operation. It listens to the retained child's existing completion signal,
 then validates and preserves the complete terminal result through that same

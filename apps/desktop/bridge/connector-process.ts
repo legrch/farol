@@ -218,21 +218,44 @@ function observation(
       : data.exitSignal >= 1 && data.exitSignal <= 128)
   )
     return false;
-  const uncertain =
+  // A supervisor exit witnesses root exit and drained output, not cleanup.
+  if (
+    data.supervisorState === "exited" &&
+    (data.rootState !== "exited" || !data.outputDrained)
+  )
+    return false;
+  const cleanupUnverified =
     data.groupCleanup === "unverified" ||
-    data.descendantCleanup === "unverified" ||
-    (data.rootState === "exited" && !data.outputDrained);
+    data.descendantCleanup === "unverified";
   const terminal =
     data.rootState === "exited" &&
     data.groupCleanup === "confirmed" &&
     data.descendantCleanup === "confirmed" &&
     data.outputDrained;
-  return (
-    data.state === "unknown" ||
-    (data.state === "terminal"
-      ? terminal
-      : data.rootState === "running" && !uncertain)
-  );
+  switch (data.state) {
+    case "unknown":
+      return true;
+    case "terminal":
+      return (
+        terminal &&
+        (data.supervisorState === undefined ||
+          data.supervisorState === "exited")
+      );
+    case "exited":
+      return (
+        data.rootState === "exited" &&
+        data.outputDrained &&
+        data.supervisorState === "exited" &&
+        cleanupUnverified
+      );
+    case "running":
+      return (
+        data.rootState === "running" &&
+        !cleanupUnverified &&
+        (data.supervisorState === undefined ||
+          data.supervisorState === "running")
+      );
+  }
 }
 
 // Pure one-shot codec. No engine, store, process, discovery, replay or fallback.

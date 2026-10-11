@@ -156,7 +156,8 @@ func (s *Service) ownedCaptureCurrentLocked(ctx context.Context, selected *owned
 // CaptureOwnedTerminal is INTERNAL retention of an already-owned connector
 // result, never a public read/disclosure API. Completion notification is required
 // before bounded reads of the SAME child. Expired/closed execution does not lose
-// terminal facts, but no admission, renewal, workspace probe or effect is allowed.
+// result facts, including unverified cleanup after known supervisor exit, but no
+// admission, renewal, workspace probe or effect is allowed.
 // Root must serialize publication/cancel and retain its single publication attempt.
 func (s *Service) CaptureOwnedTerminal(ctx context.Context) (*TerminalResult, error) {
 	if s == nil || ctx == nil {
@@ -195,7 +196,7 @@ func (s *Service) CaptureOwnedTerminal(ctx context.Context) (*TerminalResult, er
 			return nil, err
 		}
 		if !validObservation(observed, selected.handle, w) || observed.Root != RootExited ||
-			!observed.OutputDrained || observed.GroupCleanup != CleanupConfirmed || observed.DescendantCleanup != CleanupConfirmed {
+			completedState(*observed) == Unknown {
 			return nil, s.terminalCaptureUnknown()
 		}
 		if captured == nil {

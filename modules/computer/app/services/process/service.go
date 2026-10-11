@@ -26,7 +26,10 @@ type State string
 const (
 	Running  State = "running"
 	Terminal State = "terminal"
-	Unknown  State = "unknown"
+	// Exited preserves a known supervised command result without claiming that
+	// all descendants have stopped. Unknown native operations remain Unknown.
+	Exited  State = "exited"
+	Unknown State = "unknown"
 )
 
 type Service struct {

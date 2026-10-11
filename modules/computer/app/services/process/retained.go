@@ -8,7 +8,7 @@ import (
 	"github.com/legrch/farol/modules/computer/domain/authority"
 )
 
-// RetainedObserver reads one immutable, complete bounded terminal VALUE. It has
+// RetainedObserver reads one immutable, complete bounded execution VALUE. It has
 // no Service or Child and cannot probe an old process, execute, admit, renew,
 // settle, publish, acknowledge, cancel or retry anything.
 type RetainedObserver struct {
@@ -60,7 +60,7 @@ func NewRetainedObserver(result TerminalResult, current ConnectorObservationAuth
 	return &RetainedObserver{result: result, current: guard, workspace: workspace}, nil
 }
 
-// Read returns only the existing bounded windows and terminal metadata, after
+// Read returns only the existing bounded windows and completion metadata, after
 // current READ preflight, fresh physical observation outside owner gates, and
 // current-authority recheck before disclosure. It never consults native state.
 func (o *RetainedObserver) Read(ctx context.Context, request ReadRequest) (*ReadResponse, error) {
@@ -88,7 +88,7 @@ func (o *RetainedObserver) Read(ctx context.Context, request ReadRequest) (*Read
 			code := *observed.ExitCode
 			out.ExitCode = &code
 		}
-		response = &ReadResponse{State: Terminal, Observation: out}
+		response = &ReadResponse{State: ResultState(o.result), Observation: out}
 		return nil
 	})
 	if err != nil {

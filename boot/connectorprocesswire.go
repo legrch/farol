@@ -92,6 +92,19 @@ func processReadWire(slot *connectorSlot, in wire.ComputerConnectorProcessRead, 
 		StdoutBase64: out.StdoutBase64, StderrBase64: out.StderrBase64, StdoutOffset: decimal(out.StdoutOffset), StderrOffset: decimal(out.StderrOffset),
 		StdoutNext: decimal(out.StdoutNext), StderrNext: decimal(out.StderrNext), StdoutBytes: decimal(out.StdoutBytes), StderrBytes: decimal(out.StderrBytes),
 		OutputLimitReached: out.OutputLimitReached, OutputDrained: out.OutputDrained, CancelRequested: out.CancelRequested, TimedOut: out.TimedOut, AuthorityLost: out.AuthorityLost}
+	if out.Supervisor != "" {
+		supervisor := string(out.Supervisor)
+		result.SupervisorState = &supervisor
+	}
+	if out.Supervisor == processct.SupervisorExited && (out.RootState != processct.RootExited || !out.RootWaited || !out.OutputDrained) {
+		return invalid()
+	}
+	if out.State != processct.Unknown && out.Supervisor == processct.SupervisorUnknown {
+		return invalid()
+	}
+	if out.State == processct.Running && (out.GroupCleanup == processct.CleanupUnverified || out.DescendantCleanup == processct.CleanupUnverified) {
+		return invalid()
+	}
 	if out.ExitCode != nil {
 		if *out.ExitCode < 0 || *out.ExitCode > 255 {
 			return invalid()
@@ -100,7 +113,7 @@ func processReadWire(slot *connectorSlot, in wire.ComputerConnectorProcessRead, 
 		result.ExitCode = &code
 	}
 	if out.RootState == processct.RootRunning {
-		if out.RootWaited || out.ExitCode != nil || out.ExitSignal != 0 || out.GroupCleanup == processct.CleanupConfirmed || out.DescendantCleanup == processct.CleanupConfirmed || out.State == processct.Terminal {
+		if out.RootWaited || out.ExitCode != nil || out.ExitSignal != 0 || out.GroupCleanup == processct.CleanupConfirmed || out.DescendantCleanup == processct.CleanupConfirmed || (out.State == processct.Terminal || out.State == processct.Exited) {
 			return invalid()
 		}
 	} else if out.RootState == processct.RootExited {
@@ -108,7 +121,11 @@ func processReadWire(slot *connectorSlot, in wire.ComputerConnectorProcessRead, 
 			return invalid()
 		}
 	}
-	if out.State == processct.Terminal && (out.GroupCleanup != processct.CleanupConfirmed || out.DescendantCleanup != processct.CleanupConfirmed || !out.OutputDrained) {
+	if out.State == processct.Terminal && (out.Supervisor == processct.SupervisorRunning || out.GroupCleanup != processct.CleanupConfirmed || out.DescendantCleanup != processct.CleanupConfirmed || !out.OutputDrained) {
+		return invalid()
+	}
+	if out.State == processct.Exited && (out.RootState != processct.RootExited || out.Supervisor != processct.SupervisorExited || !out.OutputDrained ||
+		(out.GroupCleanup != processct.CleanupUnverified && out.DescendantCleanup != processct.CleanupUnverified)) {
 		return invalid()
 	}
 	if validateIngress("ComputerConnectorProcessResult", result) != nil {

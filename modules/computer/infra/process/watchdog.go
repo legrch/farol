@@ -15,6 +15,7 @@ import (
 
 	"github.com/legrch/farol/modules/computer/app/port"
 	processsvc "github.com/legrch/farol/modules/computer/app/services/process"
+	"github.com/legrch/farol/modules/computer/domain/authority"
 )
 
 const watchdogMode = "go-prepared-v1"
@@ -203,6 +204,11 @@ func (b *watchdogBoundary) StartLease(ctx context.Context, command Command, requ
 		return nil, &processsvc.NativeFailure{Unknown: true}
 	}
 	child := newWatchdogChild(process, channel, request.Deadline, b.clock, stdout, stderr)
+	if writer, ok := stdout.(output); ok && b.policy.selection.FilePolicy == authority.RootScopedFiles {
+		writer.child.mutex.Lock()
+		writer.child.supervisor = processsvc.SupervisorRunning
+		writer.child.mutex.Unlock()
+	}
 	child.cancel = cancel
 	if startErr != nil || channel == nil {
 		child.fence()
@@ -214,6 +220,13 @@ func (b *watchdogBoundary) StartLease(ctx context.Context, command Command, requ
 	go func() {
 		select {
 		case <-bounded.Done():
+			// Wait releases its context only after the original receiver ended.
+			// Do not turn that ordinary resource close into a late IPC failure.
+			select {
+			case <-child.done:
+				return
+			default:
+			}
 			child.fence() // Closing this exact IPC requests the helper's one stop.
 		case <-child.done:
 		}

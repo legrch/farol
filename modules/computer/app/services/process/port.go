@@ -85,8 +85,20 @@ const (
 	CleanupUnverified Cleanup = "unverified"
 )
 
+// SupervisorState describes the original execution owner, not its descendants.
+// Empty retains the legacy route without a supervisor witness. Exited requires
+// the original helper Wait and its complete, unfenced root/output report.
+type SupervisorState string
+
+const (
+	SupervisorRunning SupervisorState = "running"
+	SupervisorExited  SupervisorState = "exited"
+	SupervisorUnknown SupervisorState = "unknown"
+)
+
 type Window struct{ StdoutOffset, StderrOffset uint64 }
 type Observation struct {
+	Supervisor                                                                  SupervisorState
 	Handle                                                                      string
 	Root                                                                        RootState
 	Waited                                                                      bool

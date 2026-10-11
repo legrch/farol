@@ -11,6 +11,7 @@ type ReadRequest struct {
 	StdoutOffset, StderrOffset uint64
 }
 type ReadResponse struct {
+	Supervisor                                                                   SupervisorState
 	Handle                                                                       string
 	State                                                                        State
 	RootState                                                                    RootState
@@ -44,7 +45,7 @@ func readResponse(out *processsvc.ReadResponse, err error) (*ReadResponse, error
 		copy := *o.ExitCode
 		code = &copy
 	}
-	return &ReadResponse{Handle: o.Handle, State: State(out.State), RootState: RootState(o.Root), RootWaited: o.Waited,
+	return &ReadResponse{Supervisor: SupervisorState(o.Supervisor), Handle: o.Handle, State: State(out.State), RootState: RootState(o.Root), RootWaited: o.Waited,
 		ExitCode: code, ExitSignal: o.ExitSignal, GroupCleanup: Cleanup(o.GroupCleanup), DescendantCleanup: Cleanup(o.DescendantCleanup),
 		StdoutBase64: base64.StdEncoding.EncodeToString(o.Stdout), StderrBase64: base64.StdEncoding.EncodeToString(o.Stderr),
 		StdoutOffset: o.StdoutOffset, StderrOffset: o.StderrOffset, StdoutNext: o.StdoutNext, StderrNext: o.StderrNext,

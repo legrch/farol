@@ -83,6 +83,9 @@ func (c *watchdogChild) fence() {
 		child := writer.child
 		child.mutex.Lock()
 		child.group, child.descendants = processsvc.CleanupUnverified, processsvc.CleanupUnverified
+		if child.supervisor != "" {
+			child.supervisor = processsvc.SupervisorUnknown
+		}
 		child.mutex.Unlock()
 	}
 	c.failOnce.Do(func() { close(c.failed) })
@@ -319,7 +322,7 @@ func (c *watchdogChild) Wait() (exit, error) {
 	if c.cancel != nil {
 		defer c.cancel()
 	}
-	_ = c.process.Wait() // Exact Go-owned helper, once; never a reconstructed PID.
+	helperErr := c.process.Wait() // Exact Go-owned helper, once; never a reconstructed PID.
 	if c.channel != nil {
 		<-c.done
 	}
@@ -331,9 +334,10 @@ func (c *watchdogChild) Wait() (exit, error) {
 	result := c.root
 	result.Code = copyCode(result.Code)
 	result.Drained = result.Drained && !c.uncertain
+	result.supervisorExited = helperErr == nil && c.rootClosed && result.Drained && !c.uncertain
 	// Retain known root exit even when helper/IPC/cleanup is uncertain. The
-	// existing Child and service mark both cleanup facts unverified and aggregate
-	// Unknown; this adapter NEVER supplies cohort=true, even for exit 0.
+	// existing Child keeps cleanup unverified. Only the separate supervisor fact
+	// can preserve a known root result; this NEVER supplies cohort=true.
 	return result, nil
 }
 

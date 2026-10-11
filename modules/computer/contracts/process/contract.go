@@ -43,7 +43,16 @@ type State string
 const (
 	Running  State = "running"
 	Terminal State = "terminal"
+	Exited   State = "exited"
 	Unknown  State = "unknown"
+)
+
+type SupervisorState string
+
+const (
+	SupervisorRunning SupervisorState = "running"
+	SupervisorExited  SupervisorState = "exited"
+	SupervisorUnknown SupervisorState = "unknown"
 )
 
 type RootState string

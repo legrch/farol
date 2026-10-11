@@ -18,6 +18,12 @@ func validObservation(o *Observation, handle string, w Window) bool {
 		o.StdoutNext > o.StdoutBytes || o.StderrNext > o.StderrBytes {
 		return false
 	}
+	if o.Supervisor != "" && o.Supervisor != SupervisorRunning && o.Supervisor != SupervisorExited && o.Supervisor != SupervisorUnknown {
+		return false
+	}
+	if o.Supervisor == SupervisorExited && (o.Root != RootExited || !o.Waited || !o.OutputDrained) {
+		return false
+	}
 	validCleanup := func(v Cleanup) bool { return v == CleanupPending || v == CleanupConfirmed || v == CleanupUnverified }
 	if !validCleanup(o.GroupCleanup) || !validCleanup(o.DescendantCleanup) {
 		return false
@@ -85,7 +91,12 @@ func (s *Service) read(ctx context.Context, request ReadRequest, current func(co
 	}
 	// Native observations and sticky uncertainty are recorded outside owner gates.
 	s.gate.Lock()
-	if out.GroupCleanup == CleanupUnverified || out.DescendantCleanup == CleanupUnverified || out.Root == RootExited && !out.OutputDrained {
+	// Missing descendant proof on an explicitly selected live supervisor is
+	// not an unknown dispatch. Its final Wait may still establish root result
+	// preservation. Legacy and actual unknown observations retain sticky fences.
+	if out.Supervisor == SupervisorUnknown ||
+		out.Supervisor == "" && (out.GroupCleanup == CleanupUnverified || out.DescendantCleanup == CleanupUnverified) ||
+		out.Root == RootExited && !out.OutputDrained && out.Supervisor != SupervisorRunning {
 		s.uncertain = true
 	}
 	s.gate.Unlock()
@@ -97,8 +108,10 @@ func (s *Service) read(ctx context.Context, request ReadRequest, current func(co
 		state := Running
 		if s.uncertain {
 			state = Unknown
-		} else if out.Root == RootExited && out.GroupCleanup == CleanupConfirmed && out.DescendantCleanup == CleanupConfirmed && out.OutputDrained {
-			state = Terminal
+		} else if completedState(out) != Unknown {
+			state = completedState(out)
+		} else if out.Root == RootExited || out.GroupCleanup == CleanupUnverified || out.DescendantCleanup == CleanupUnverified {
+			state = Unknown
 		}
 		response = &ReadResponse{State: state, Observation: out}
 		s.gate.Unlock()
@@ -108,9 +121,27 @@ func (s *Service) read(ctx context.Context, request ReadRequest, current func(co
 		return nil, err
 	}
 	s.gate.Lock()
-	if response.State == Terminal && !s.uncertain {
+	if (response.State == Terminal || response.State == Exited) && !s.uncertain {
 		s.terminal = true
 	}
 	s.gate.Unlock()
 	return response, nil
+}
+
+// Completion of the execution owner and cleanup of descendants are independent.
+// Only the old positive cohort witness yields Terminal. Exited preserves actual
+// code/output after known supervisor exit, leaving cleanup explicitly unverified.
+func completedState(o Observation) State {
+	if o.Root != RootExited || !o.Waited || !o.OutputDrained ||
+		o.Supervisor == SupervisorRunning || o.Supervisor == SupervisorUnknown {
+		return Unknown
+	}
+	if o.GroupCleanup == CleanupConfirmed && o.DescendantCleanup == CleanupConfirmed {
+		return Terminal
+	}
+	final := func(c Cleanup) bool { return c == CleanupConfirmed || c == CleanupUnverified }
+	if o.Supervisor == SupervisorExited && final(o.GroupCleanup) && final(o.DescendantCleanup) {
+		return Exited
+	}
+	return Unknown
 }
