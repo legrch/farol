@@ -33,7 +33,8 @@ func (s *Store) updateApproval(ctx context.Context, revision uint64, value autho
 	if err != nil {
 		return err
 	}
-	if !validApproval(value, s.binding) {
+	// Retained readers accept no-access snapshots; this bridge keeps writers unchanged.
+	if len(value.Workspaces) == 0 || !validApproval(value, s.binding) {
 		return invalid()
 	}
 	now, err := s.now()
@@ -82,7 +83,7 @@ func (s *Store) Admit(ctx context.Context, revision uint64, input authority.Admi
 	if err != nil {
 		return nil, err
 	}
-	if input.OwnerID != s.binding.OwnerID || input.ComputerID != s.binding.ComputerID || !identifier(input.SessionID, 120) || !identifier(input.TaskID, 120) || !identifier(input.AuthorityID, 120) || !identifier(identity.ParticipantID, 120) || !validPolicy(input.Policy) {
+	if input.OwnerID != s.binding.OwnerID || input.ComputerID != s.binding.ComputerID || !identifier(input.SessionID, 120) || !identifier(input.TaskID, 120) || !identifier(input.AuthorityID, 120) || !identifier(identity.ParticipantID, 120) || len(input.Workspaces) == 0 || !validPolicy(input.Policy) {
 		return nil, invalid()
 	}
 	if n.Approval == nil {
@@ -145,7 +146,7 @@ func (s *Store) Delegate(ctx context.Context, revision uint64, parentID string, 
 	if err != nil {
 		return nil, err
 	}
-	if !validParticipant(*p, s.binding) {
+	if len(p.Grant.Workspaces) == 0 || !validParticipant(*p, s.binding) {
 		return nil, invalid()
 	}
 	if existing, ok := n.Participants[p.ParticipantID]; ok {
