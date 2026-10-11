@@ -27,7 +27,7 @@ import (
 func TestNativeRootScopedSeatbelt(t *testing.T) {
 	for _, write := range []bool{false, true} {
 		if !t.Run("write="+strconv.FormatBool(write), func(t *testing.T) {
-			nativeRootScopedSeatbelt(t, write)
+			nativeRootScopedSeatbelt(t, write, false)
 		}) {
 			return // Preserve a failed/unknown attempt; never launch its successor.
 		}
@@ -37,10 +37,12 @@ func TestNativeRootScopedSeatbelt(t *testing.T) {
 type rootScopedProbe struct {
 	Reads, Writes map[string]string
 	Listeners     map[string]string
+	Renames       map[string][2]string
 }
 
 type rootScopedProbeResult struct {
 	Reads, Writes, Network map[string]string
+	Renames                map[string]string
 }
 
 func probeFailure(err error) string {
@@ -62,7 +64,7 @@ func TestNativeRootScopedProbeHelper(t *testing.T) {
 	if json.Unmarshal([]byte(os.Args[len(os.Args)-1]), &probe) != nil {
 		os.Exit(90)
 	}
-	out := rootScopedProbeResult{Reads: map[string]string{}, Writes: map[string]string{}, Network: map[string]string{}}
+	out := rootScopedProbeResult{Reads: map[string]string{}, Writes: map[string]string{}, Network: map[string]string{}, Renames: map[string]string{}}
 	for name, path := range probe.Reads {
 		data, err := os.ReadFile(path)
 		out.Reads[name] = probeFailure(err)
@@ -73,6 +75,9 @@ func TestNativeRootScopedProbeHelper(t *testing.T) {
 	}
 	for name, path := range probe.Writes {
 		out.Writes[name] = probeFailure(os.WriteFile(path, []byte("synthetic replacement\n"), 0600))
+	}
+	for name, paths := range probe.Renames {
+		out.Renames[name] = probeFailure(os.Rename(paths[0], paths[1]))
 	}
 	for network, address := range probe.Listeners {
 		connection, err := net.DialTimeout(network, address, time.Second)
@@ -87,7 +92,7 @@ func TestNativeRootScopedProbeHelper(t *testing.T) {
 	os.Exit(0)
 }
 
-func nativeRootScopedSeatbelt(t *testing.T, write bool) {
+func nativeRootScopedSeatbelt(t *testing.T, write bool, protectImages bool) {
 	t.Helper()
 	base, err := os.MkdirTemp("/private/tmp", "farol-root-policy-")
 	if err != nil {
@@ -175,6 +180,21 @@ func nativeRootScopedSeatbelt(t *testing.T, write bool) {
 	s.Home, s.Scratch, s.ScratchIdentity = home, scratch, identity(scratch)
 	s.MechanismSHA256 = hash(seatbeltExecutable)
 	s.Executables = []ExecutablePin{{Path: image, SHA256: hash(image)}}
+	if protectImages {
+		// Synthetic owner-owned app-shaped image inside the writable root.
+		container := filepath.Join(root, "Applications")
+		app := filepath.Join(container, "Farol.app")
+		must(os.Mkdir(container, 0700))
+		must(os.Mkdir(app, 0700))
+		protected := filepath.Join(app, "backend")
+		must(os.WriteFile(protected, []byte("synthetic baseline\n"), 0700))
+		s.ProtectedImages = []ExecutablePin{{protected, hash(protected)}}
+		probe.Writes["protected-image"] = protected
+		probe.Renames = map[string][2]string{
+			"app-parent":  {app, app + "-moved"},
+			"apps-parent": {container, container + "-moved"},
+		}
+	}
 	s.Snapshot.Participant.Grant.Workspaces[0].Root = root
 	s.Snapshot.Approval.Workspaces[0].Root = root
 	s.Snapshot.Approval.Workspaces[0].RootIdentity = identity(root)
@@ -238,6 +258,17 @@ func nativeRootScopedSeatbelt(t *testing.T, write bool) {
 			t.Fatalf("network %s not denied by permission: %q", network, out.Network[network])
 		}
 	}
+	for name := range probe.Renames {
+		if out.Renames[name] != "denied" {
+			t.Fatalf("protected image ancestor rename %s: %q", name, out.Renames[name])
+		}
+	}
 	accepted = true
 	t.Log("native path reads/writes and IPv4/IPv6 denial verified; allowed hardlink exposes the same outside inode; no object secrecy or process-tree claim")
+}
+
+// A fresh writable-root fixture also protects an owner-owned app image and its
+// namespace. Ordinary workspace writes remain allowed. No production activation.
+func TestNativeRootScopedProtectedImages(t *testing.T) {
+	nativeRootScopedSeatbelt(t, true, true)
 }

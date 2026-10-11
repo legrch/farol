@@ -45,9 +45,11 @@ type SeatbeltSelection struct {
 	RuntimeID, WorkspaceID, Home, Scratch, MechanismSHA256 string
 	ScratchIdentity                                        authority.RootIdentity
 	Executables                                            []ExecutablePin
-	Network                                                authority.Network
-	Git                                                    GitPolicy
-	GitRead                                                *GitReadSelection
+	// ProtectedImages are measured and write-protected without read/exec grants.
+	ProtectedImages []ExecutablePin
+	Network         authority.Network
+	Git             GitPolicy
+	GitRead         *GitReadSelection
 }
 
 // Seatbelt builds the actual restrictive launch. The injected existing native
@@ -90,6 +92,7 @@ func NewSeatbelt(selection SeatbeltSelection, qualification Qualification) (*Sea
 	a.Capabilities = append([]authority.Capability(nil), a.Capabilities...)
 	selection.Snapshot = port.AccessSnapshot{Participant: &p, Approval: &a}
 	selection.Executables = append([]ExecutablePin(nil), selection.Executables...)
+	selection.ProtectedImages = append([]ExecutablePin(nil), selection.ProtectedImages...)
 	if selection.GitRead != nil {
 		binding := *selection.GitRead
 		selection.GitRead = &binding
@@ -139,7 +142,7 @@ func selectedLaunch(qualification Qualification, command Command) (*confinedLaun
 	if !validCommand(wrapped) {
 		return nil, &processsvc.NativeFailure{}
 	}
-	return &confinedLaunch{command: wrapped, pins: append([]ExecutablePin{{seatbeltExecutable, selected.selection.MechanismSHA256}}, selected.selection.Executables...),
+	return &confinedLaunch{command: wrapped, pins: slices.Concat([]ExecutablePin{{seatbeltExecutable, selected.selection.MechanismSHA256}}, selected.selection.Executables, selected.selection.ProtectedImages),
 		roots: append([]rootScopeBinding(nil), plan.roots...), gitDirectories: append([]gitReadDirectory(nil), plan.gitDirectories...), scratch: selected.selection.Scratch, scratchIdentity: selected.selection.ScratchIdentity, qualification: selected.qualification}, nil
 }
 
@@ -217,7 +220,8 @@ func protectedScope(root, home string) bool {
 
 func validSelection(s SeatbeltSelection) bool {
 	if s.Snapshot.Participant == nil || s.Snapshot.Approval == nil || !bindingID(s.RuntimeID) || !bindingID(s.WorkspaceID) || !absolutePolicyPath(s.Home) || !absolutePolicyPath(s.Scratch) ||
-		!digestValue(s.MechanismSHA256) || s.ScratchIdentity.Device == "" || s.ScratchIdentity.Inode == "" || len(s.Executables) == 0 || len(s.Executables) > 16 ||
+		!digestValue(s.MechanismSHA256) || s.ScratchIdentity.Device == "" || s.ScratchIdentity.Inode == "" || len(s.Executables) == 0 || len(s.Executables) > 16 || len(s.ProtectedImages) > 16 ||
+		(s.FilePolicy != authority.RootScopedFiles && len(s.ProtectedImages) != 0) ||
 		filepath.Dir(s.Scratch) != "/private/tmp" || !strings.HasPrefix(filepath.Base(s.Scratch), "farol-") || !s.FilePolicy.Valid() || !seatbeltNetworkAllowed(s) ||
 		(s.FilePolicy == authority.LegacyProtectedFiles && (s.Git != DenyGit && s.Git != WorkspaceGit && s.Git != QualifiedGitRead)) ||
 		(s.FilePolicy == authority.RootScopedFiles && s.Git != RootScopedGit) ||
@@ -228,7 +232,7 @@ func validSelection(s SeatbeltSelection) bool {
 		return false
 	}
 	seen := map[string]bool{}
-	for _, pin := range s.Executables {
+	for _, pin := range slices.Concat(s.Executables, s.ProtectedImages) {
 		if !absolutePolicyPath(pin.Path) || !digestValue(pin.SHA256) || seen[pin.Path] || strings.Contains(pin.Path, ":") || pin.Path == seatbeltExecutable || (s.FilePolicy == authority.LegacyProtectedFiles && protectedPath(pin.Path, s.Home)) {
 			return false
 		}
@@ -262,6 +266,11 @@ func compileSeatbelt(s SeatbeltSelection, command Command) (*seatbeltPlan, error
 		return refuse()
 	}
 	matched := false
+	for _, pin := range s.ProtectedImages {
+		if comparableOverlap(pin.Path, s.Scratch) {
+			return refuse()
+		}
+	}
 	for _, pin := range s.Executables {
 		if pin.Path == command.Executable && pin.SHA256 == command.ExecutableSHA256 {
 			matched = true
@@ -323,6 +332,25 @@ func compileSeatbelt(s SeatbeltSelection, command Command) (*seatbeltPlan, error
 		add("literal", pin.Path, &execs)
 		add("literal", pin.Path, &reads)
 		add("literal", pin.Path, &executableWrites) // Executable bytes cannot be written.
+	}
+	for _, pin := range s.ProtectedImages {
+		add("literal", pin.Path, &executableWrites)
+	}
+	if s.FilePolicy == authority.RootScopedFiles {
+		// Protect the selected image namespace within writable approved roots.
+		// This only denies ancestor removal/rename; ordinary sibling files retain
+		// their granted access. Images outside scope confer no new read/exec access.
+		seen := map[string]bool{}
+		for _, pin := range slices.Concat(s.Executables, s.ProtectedImages) {
+			for ancestor := filepath.Dir(pin.Path); ancestor != "/"; ancestor = filepath.Dir(ancestor) {
+				for _, scope := range selectedScopes {
+					if command.Write && scope.Access == authority.WriteAccess && insidePolicy(scope.ScopeRoot, ancestor) && !seen[ancestor] {
+						seen[ancestor] = true
+						add("literal", ancestor, &rootAnchors)
+					}
+				}
+			}
+		}
 	}
 	for _, exclusion := range append(append([]authority.Exclusion(nil), a.ExcludedPaths...), p.Grant.ExcludedPaths...) {
 		if exclusion.WorkspaceID != s.WorkspaceID {
@@ -418,10 +446,11 @@ func compileSeatbelt(s SeatbeltSelection, command Command) (*seatbeltPlan, error
 		Arguments       []string
 		ScratchIdentity authority.RootIdentity
 		Pins            []ExecutablePin
+		ProtectedImages []ExecutablePin    `json:",omitempty"`
 		Roots           []rootScopeBinding `json:",omitempty"`
 		GitRead         *GitReadSelection  `json:",omitempty"`
 		GitDirectories  []gitReadDirectory `json:",omitempty"`
-	}{source, arguments, s.ScratchIdentity, s.Executables, sealedRoots, s.GitRead, gitDirectories})
+	}{source, arguments, s.ScratchIdentity, s.Executables, s.ProtectedImages, sealedRoots, s.GitRead, gitDirectories})
 	if err != nil {
 		return refuse()
 	}
