@@ -9,10 +9,11 @@ import (
 )
 
 // A nil attempt means never attempted. Once reserved, a nil observation means
-// pending, failed or outcome-unknown; none of those states permits another List.
+// pending, failed or outcome-unknown; none permits another verification operation.
 type verificationAttempt struct {
 	workspaceID, callID string
 	observation         *port.ConnectorVerification
+	catalogue           bool
 }
 
 // withVerificationCurrent reads the sole access journal before entering the
@@ -71,7 +72,7 @@ func (s *Service) withVerificationCurrent(ctx context.Context, inspect func(*por
 	return result
 }
 
-// CheckVerificationChallenge is the current-journal preflight before List.
+// CheckVerificationChallenge is the current-journal preflight before verification.
 // It validates the exact current owner, sealed policy and constructor challenge. It
 // neither reserves an attempt nor grants authority to skip Begin or disclosure.
 func (s *Service) CheckVerificationChallenge(ctx context.Context, digest [32]byte) error {
@@ -87,25 +88,45 @@ func (s *Service) CheckVerificationChallenge(ctx context.Context, digest [32]byt
 // dispatches List. Invalid challenge, scope or IDs do not consume the attempt.
 // After reservation, even failed or uncertain IO stays fenced: no reset or replay.
 func (s *Service) BeginVerification(ctx context.Context, digest [32]byte, workspaceID, callID string) error {
+	return s.beginVerification(ctx, digest, workspaceID, callID, false)
+}
+
+// BeginCatalogueVerification reserves the same single attempt for an explicitly
+// empty approval. It must not be used as a fallback after a failed workspace test.
+func (s *Service) BeginCatalogueVerification(ctx context.Context, digest [32]byte, callID string) error {
+	return s.beginVerification(ctx, digest, "", callID, true)
+}
+
+func (s *Service) verificationScope(workspaceID string, catalogue bool) bool {
+	if catalogue {
+		return workspaceID == "" && s.ceiling.Approval.NoAccess() &&
+			s.ceiling.Participant.Grant.Policy.NoAccess() && s.ceiling.Participant.MutationOwnership == authority.NoOwnership
+	}
+	if workspaceID == "" {
+		return false
+	}
+	_, scope := authority.FindScope(s.ceiling.Participant.Grant, workspaceID)
+	_, approved := authority.FindApproved(s.ceiling.Approval, workspaceID)
+	return scope && approved
+}
+
+func (s *Service) beginVerification(ctx context.Context, digest [32]byte, workspaceID, callID string, catalogue bool) error {
 	return s.withVerificationCurrent(ctx, func(binding *port.TaskBinding) error {
-		if binding == nil || s.launch.VerificationChallenge == ([32]byte{}) || digest != s.launch.VerificationChallenge || workspaceID == "" || callID == "" || s.verification != nil {
+		if binding == nil || s.launch.VerificationChallenge == ([32]byte{}) || digest != s.launch.VerificationChallenge || callID == "" || s.verification != nil {
 			return failure()
 		}
-		if _, ok := authority.FindScope(s.ceiling.Participant.Grant, workspaceID); !ok {
+		if !s.verificationScope(workspaceID, catalogue) {
 			return failure()
 		}
-		if _, ok := authority.FindApproved(s.ceiling.Approval, workspaceID); !ok {
-			return failure()
-		}
-		s.verification = &verificationAttempt{workspaceID: workspaceID, callID: callID}
+		s.verification = &verificationAttempt{workspaceID: workspaceID, callID: callID, catalogue: catalogue}
 		return nil
 	})
 }
 
 // RecordVerification is trusted-root-only. Root computes the challenge digest
-// and calls after Begin and the exact reserved workspace List succeeded and its
-// disclosure passed. Root must still apply the same lease's final disclosure to
-// its response. This method does not execute or replay List, hash a
+// and calls after Begin and the exact reserved List or empty Catalogue succeeded
+// and its disclosure passed. Root must still apply the same lease's final disclosure
+// to its response. This method does not execute or replay either operation, hash a
 // challenge, publish authority, or create an execution engine. Current read
 // authority is checked through the existing journal before recording the proof.
 // An exact duplicate only observes the retained value; a different value refuses.
@@ -115,10 +136,10 @@ func (s *Service) RecordVerification(ctx context.Context, providedChallengeDiges
 		if binding == nil || challenge == ([32]byte{}) || providedChallengeDigest != challenge || observed.ChallengeDigest != challenge || observed.Host != s.launch.Host || observed.Binding != *binding || s.verification == nil || observed.WorkspaceID != s.verification.workspaceID || observed.CallID != s.verification.callID || observed.EntryCount > 500 {
 			return failure()
 		}
-		if _, ok := authority.FindScope(s.ceiling.Participant.Grant, observed.WorkspaceID); !ok {
+		if observed.Catalogue != s.verification.catalogue || !s.verificationScope(observed.WorkspaceID, observed.Catalogue) {
 			return failure()
 		}
-		if _, ok := authority.FindApproved(s.ceiling.Approval, observed.WorkspaceID); !ok {
+		if observed.Catalogue && (observed.EntryCount != 0 || observed.Truncated) {
 			return failure()
 		}
 		if s.verification.observation != nil {

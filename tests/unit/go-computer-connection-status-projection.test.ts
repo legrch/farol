@@ -177,3 +177,26 @@ it("freezes generated status and registration metadata", async () => {
   assert.ok(Object.isFrozen(out));
   assert.ok(Object.isFrozen(out.capabilities));
 });
+
+it("recognizes empty catalogue attachment without claiming file tests", async () => {
+  const observed = {
+    binding,
+    catalogueReceipt: {
+      binding,
+      execution,
+      challengeSha256: "a".repeat(64),
+      callIdSha256: "b".repeat(64),
+      workspaceCount: 0,
+    },
+    receiptSha256: "c".repeat(64),
+  };
+  const out = await observeConnectionStatus(
+    { observe: async () => observed },
+    { workspaceMutations: true, processes: false },
+  );
+  assert.equal(out.attachment, "verified");
+  assert.equal(out.verification, observed);
+  assert.equal("receipt" in out.verification, false);
+  assert.equal(out.capabilities.fileReads, "registered_not_tested");
+  assert.equal(out.newFileOrCommandTests, false);
+});

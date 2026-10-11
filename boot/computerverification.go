@@ -25,16 +25,28 @@ func connectorVerificationState(ctx context.Context, slot *connectorSlot, lease 
 	state := &wire.ComputerConnectorVerificationState{Binding: slot.opened.Endpoint.Binding}
 	if proof != nil {
 		call := sha256.Sum256([]byte(proof.CallID))
+		var receiptValue any
 		receipt := &wire.ComputerConnectorVerificationReceipt{Binding: state.Binding, Execution: slot.opened.Execution,
 			ChallengeSha256: hex.EncodeToString(proof.ChallengeDigest[:]), WorkspaceId: proof.WorkspaceID,
 			CallIdSha256: hex.EncodeToString(call[:]), EntryCount: proof.EntryCount, Truncated: proof.Truncated}
-		data, encodeErr := json.Marshal(receipt)
-		if encodeErr != nil || wire.Validate("ComputerConnectorVerificationReceipt", data) != nil {
+		state.Receipt, receiptValue = receipt, receipt
+		receiptType := "ComputerConnectorVerificationReceipt"
+		if proof.Catalogue {
+			if proof.WorkspaceID != "" || proof.EntryCount != 0 || proof.Truncated {
+				return nil, computerUnavailable()
+			}
+			state.Receipt = nil
+			state.CatalogueReceipt = &wire.ComputerConnectorCatalogueVerificationReceipt{Binding: state.Binding, Execution: slot.opened.Execution,
+				ChallengeSha256: hex.EncodeToString(proof.ChallengeDigest[:]), CallIdSha256: hex.EncodeToString(call[:]), WorkspaceCount: 0}
+			receiptValue, receiptType = state.CatalogueReceipt, "ComputerConnectorCatalogueVerificationReceipt"
+		}
+		data, encodeErr := json.Marshal(receiptValue)
+		if encodeErr != nil || wire.Validate(receiptType, data) != nil {
 			return nil, computerUnavailable()
 		}
 		digest := sha256.Sum256(data)
 		value := hex.EncodeToString(digest[:])
-		state.Receipt, state.ReceiptSha256 = receipt, &value
+		state.ReceiptSha256 = &value
 	}
 	// One operation lease encloses final disclosure after the owner observation.
 	// Do not reenter the connector owner from this snapshot callback.
@@ -51,8 +63,20 @@ func connectorVerificationState(ctx context.Context, slot *connectorSlot, lease 
 }
 
 func (s *computerConnector) verificationMethod(slot *connectorSlot) desktop.Method {
+	return s.verificationMethodFor(slot, false)
+}
+
+func (s *computerConnector) catalogueVerificationMethod(slot *connectorSlot) desktop.Method {
+	return s.verificationMethodFor(slot, true)
+}
+
+func (s *computerConnector) verificationMethodFor(slot *connectorSlot, catalogue bool) desktop.Method {
 	return desktop.Method{Handle: func(ctx context.Context, request desktop.Request) (*desktop.Outcome, error) {
-		if request.OperationID != "" || ipc.ValidateJSON(request.Body) != nil || wire.Validate("ComputerConnectorVerify", request.Body) != nil {
+		inputType := "ComputerConnectorVerify"
+		if catalogue {
+			inputType = "ComputerConnectorCatalogueVerify"
+		}
+		if request.OperationID != "" || ipc.ValidateJSON(request.Body) != nil || wire.Validate(inputType, request.Body) != nil {
 			return invalidIngress()
 		}
 		var in wire.ComputerConnectorVerify
@@ -78,16 +102,27 @@ func (s *computerConnector) verificationMethod(slot *connectorSlot) desktop.Meth
 			return ingressOutcome(nil, err)
 		}
 		if previous == nil {
-			if err := slot.owner.BeginVerification(ctx, digest, in.WorkspaceId, in.CallId); err != nil {
+			var err error
+			if catalogue {
+				err = slot.owner.BeginCatalogueVerification(ctx, digest, in.CallId)
+			} else {
+				err = slot.owner.BeginVerification(ctx, digest, in.WorkspaceId, in.CallId)
+			}
+			if err != nil {
 				return ingressOutcome(nil, err)
 			}
 		}
-		lease, err := slot.route.admit(ctx, authority.List)
+		var lease *execution.Lease
+		if catalogue {
+			lease, err = slot.route.admitCatalogue(ctx)
+		} else {
+			lease, err = slot.route.admit(ctx, authority.List)
+		}
 		if err != nil {
 			return ingressOutcome(nil, err)
 		}
 		if previous != nil {
-			if previous.WorkspaceID != in.WorkspaceId || previous.ChallengeDigest != digest {
+			if previous.Catalogue != catalogue || previous.WorkspaceID != in.WorkspaceId || previous.ChallengeDigest != digest {
 				return ingressOutcome(nil, computerUnavailable())
 			}
 			state, err := connectorVerificationState(ctx, slot, lease)
@@ -100,6 +135,24 @@ func (s *computerConnector) verificationMethod(slot *connectorSlot) desktop.Meth
 		e := slot.opened.Execution
 		epoch, _ := strconv.ParseUint(e.TaskEpoch, 10, 64)
 		generation, _ := strconv.ParseUint(e.Generation, 10, 64)
+		if catalogue {
+			input := workspacect.CatalogueRequest{OwnerID: e.OwnerId, SessionID: e.SessionId, TaskID: e.TaskId, TaskEpoch: epoch,
+				ParticipantID: e.ParticipantId, TurnID: e.TurnId, Generation: generation, CallID: in.CallId}
+			out, err := workspacect.New(service).Catalogue(ctx, input)
+			if err != nil {
+				return ingressOutcome(nil, err)
+			}
+			if out == nil || out.OwnerID != input.OwnerID || out.SessionID != input.SessionID || out.TaskID != input.TaskID || out.TaskEpoch != input.TaskEpoch ||
+				out.ParticipantID != input.ParticipantID || out.TurnID != input.TurnID || out.Generation != input.Generation || out.CallID != input.CallID || out.Workspaces == nil || len(out.Workspaces) != 0 {
+				return ingressOutcome(nil, computerUnavailable())
+			}
+			observed := port.ConnectorVerification{Host: slot.guard.host, Binding: lease.Binding(), ChallengeDigest: digest, CallID: out.CallID, Catalogue: true}
+			if err := slot.owner.RecordVerification(ctx, digest, observed); err != nil {
+				return ingressOutcome(nil, err)
+			}
+			state, err := connectorVerificationState(ctx, slot, lease)
+			return ingressOutcome(state, err)
+		}
 		input := workspacect.ListRequest{OwnerID: e.OwnerId, SessionID: e.SessionId, TaskID: e.TaskId, TaskEpoch: epoch,
 			ParticipantID: e.ParticipantId, TurnID: e.TurnId, Generation: generation, CallID: in.CallId, WorkspaceID: in.WorkspaceId, RelativePath: "."}
 		out, err := workspacect.New(service).List(ctx, input)
@@ -144,7 +197,7 @@ func (s *computerConnector) verificationObservationMethodFor(expected *connector
 		if slot == nil || expected != nil && slot != expected || slot.closing || slot.startupUncertain || in.Binding != slot.opened.Endpoint.Binding {
 			return ingressOutcome(nil, computerUnavailable())
 		}
-		lease, err := slot.route.admit(ctx, authority.List)
+		lease, err := slot.route.admitCatalogue(ctx)
 		if err != nil {
 			return ingressOutcome(nil, err)
 		}

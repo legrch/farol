@@ -382,7 +382,12 @@ it("registers verification only for the selected Go port and keeps it inside the
     },
   );
   const { client, request } = await setup({
-    verification: { verify },
+    verification: {
+      verify,
+      verifyCatalogue: vi.fn(async () => {
+        throw new Error("unexpected catalogue verification");
+      }),
+    },
     fence: {
       acquireAdmission: async () => {
         events.push("enter");
@@ -1666,4 +1671,46 @@ describe("Go Computer mutation MCP (pure/in-memory only)", () => {
     });
     expect(selected.edit).not.toHaveBeenCalled();
   });
+});
+
+it("routes explicit empty catalogue verification through the same admission fence", async () => {
+  const events: string[] = [];
+  const verify = vi.fn(async () => {
+    throw new Error("must not list a workspace");
+  });
+  const verifyCatalogue = vi.fn(async (_challenge: string, _call: string) => {
+    events.push("catalogue");
+    return {
+      binding: {
+        buildId: "build",
+        profileId: "profile",
+        backendGeneration: "backend",
+        runtimeId: "runtime",
+        connectorGeneration: "1",
+      },
+    };
+  });
+  const { client, request } = await setup({
+    verification: { verify, verifyCatalogue },
+    fence: {
+      acquireAdmission: async () => {
+        events.push("enter");
+        return {
+          admitted: true,
+          release: async () => {
+            events.push("release");
+          },
+        };
+      },
+    },
+  });
+  const out = await client.callTool({
+    name: "farol_next_connector_verify_catalogue",
+    arguments: { challenge: "challenge" },
+  });
+  expect(out.isError).not.toBe(true);
+  expect(events).toEqual(["enter", "catalogue", "release"]);
+  expect(verifyCatalogue).toHaveBeenCalledWith("challenge", expect.any(String));
+  expect(verify).not.toHaveBeenCalled();
+  expect(request).not.toHaveBeenCalled();
 });

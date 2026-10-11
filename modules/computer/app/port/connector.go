@@ -45,8 +45,9 @@ type ConnectorLaunch struct {
 }
 
 // ConnectorVerification is one content-free observation from this exact live
-// owner. Root records it only after the existing workspace List contract succeeds
-// and its final disclosure guard passes. It contains no entries or restored proof.
+// owner. Root records it only after List, or an explicitly empty Catalogue,
+// succeeds and its final disclosure guard passes. Catalogue proves no file access.
+// It contains no entries or restored proof.
 type ConnectorVerification struct {
 	Host            ConnectorHost
 	Binding         TaskBinding
@@ -55,6 +56,7 @@ type ConnectorVerification struct {
 	CallID          string
 	EntryCount      uint32
 	Truncated       bool
+	Catalogue       bool
 }
 
 // ConnectorPublication contains known readback of a NEW original participant

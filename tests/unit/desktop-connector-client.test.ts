@@ -72,6 +72,7 @@ const methods = [
   "computer.workspace.bootstrap",
   "computer.workspace.mutation.read",
   "computer.connector.verify",
+  "computer.connector.catalogueverify",
   "computer.connector.verification",
 ];
 const effectMethods = ["computer.workspace.write", "computer.workspace.edit"];

@@ -94,6 +94,7 @@ const workspaceMethods = new Set([
   "computer.workspace.bootstrap",
   "computer.workspace.mutation.read",
   "computer.connector.verify",
+  "computer.connector.catalogueverify",
   "computer.connector.verification",
 ]);
 const effectMethods = new Set([

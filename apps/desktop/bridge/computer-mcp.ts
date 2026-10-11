@@ -28,7 +28,10 @@ export type GoComputerMcpFence = Readonly<{
 export type GoComputerMcpOptions = Readonly<{
   fence: GoComputerMcpFence;
   lifecycle?: GoComputerMcpLifecycle;
-  verification?: Pick<ConnectorVerificationBridge, "verify">;
+  verification?: Pick<
+    ConnectorVerificationBridge,
+    "verify" | "verifyCatalogue"
+  >;
   connectionStatus?: Pick<ConnectorVerificationBridge, "observe">;
   mutations?: Pick<ConnectorMutationBridge, "write" | "edit" | "read">;
   processes?: Pick<ConnectorProcessBridge, "start" | "read" | "cancel">;
@@ -401,6 +404,25 @@ export function createGoComputerMcpServer(
   }
   if (options.verification) {
     const verification = options.verification;
+    server.registerTool(
+      "farol_next_connector_verify_catalogue",
+      {
+        title: "Verify Farol without workspace access",
+        description:
+          "Setup verification only when no workspace is configured. Use the exact current owner-visible challenge. Go checks an explicitly empty catalogue without file or command access. A completed attempt returns its original receipt. Never invent a challenge, use as a fallback, or resend after refusal or UNKNOWN. For a general connection test use computer_connection_status.",
+        inputSchema: z.strictObject({
+          challenge: z.string().regex(/^[!-~]{1,160}$/u),
+        }),
+        annotations,
+      },
+      async ({ challenge }, ctx) =>
+        run(ctx.mcpReq.signal, async (call) => ({
+          status: "ok",
+          requestId: call.requestId,
+          context: call.context,
+          data: await verification.verifyCatalogue(challenge, call.requestId),
+        })),
+    );
     server.registerTool(
       "farol_next_connector_verify",
       {

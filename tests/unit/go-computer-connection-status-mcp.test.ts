@@ -76,7 +76,10 @@ async function connect(options: Partial<GoComputerMcpOptions> = {}) {
 }
 it("does not advertise status merely because verification exists", async () => {
   const f = await connect({
-    verification: { verify: vi.fn(async () => ({ binding })) },
+    verification: {
+      verify: vi.fn(async () => ({ binding })),
+      verifyCatalogue: vi.fn(async () => ({ binding })),
+    },
   });
   const tools = (await f.client.listTools()).tools;
   expect(tools.some((x) => x.name === "farol_next_connector_verify")).toBe(
@@ -93,7 +96,12 @@ it("registers a no-argument read-only status and observes without verification",
   });
   const f = await connect({
     connectionStatus: { observe },
-    verification: { verify },
+    verification: {
+      verify,
+      verifyCatalogue: vi.fn(async () => {
+        throw new Error("unexpected catalogue verification");
+      }),
+    },
   });
   const tool = (await f.client.listTools()).tools.find(
     (x) => x.name === "computer_connection_status",

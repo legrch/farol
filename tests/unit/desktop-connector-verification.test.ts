@@ -173,3 +173,87 @@ it("preserves a backend refusal and never fabricates a receipt", async () => {
   });
   expect(f.request).toHaveBeenCalledTimes(1);
 });
+
+function catalogueFixture() {
+  const f = fixture();
+  const catalogueReceipt = {
+    binding,
+    execution,
+    challengeSha256: hash("challenge"),
+    callIdSha256: hash("original-catalogue"),
+    workspaceCount: 0,
+  };
+  const state = {
+    binding,
+    catalogueReceipt,
+    receiptSha256: hash(JSON.stringify(catalogueReceipt)),
+  };
+  f.request.mockImplementation(async (_m, _b, options) => ({
+    status: "ok",
+    requestId: options!.id!,
+    context,
+    data: state as unknown as Json,
+  }));
+  return { ...f, state };
+}
+
+it("validates a distinct empty catalogue proof without workspace authority", async () => {
+  const f = catalogueFixture();
+  const result = await f.bridge.verifyCatalogue("challenge", "later-call");
+  expect(result.catalogueReceipt?.callIdSha256).toBe(
+    hash("original-catalogue"),
+  );
+  expect(result.receipt).toBeUndefined();
+  expect(Object.isFrozen(result.catalogueReceipt?.execution)).toBe(true);
+  expect(f.request.mock.calls[0]![0]).toBe(
+    "computer.connector.catalogueverify",
+  );
+  await expect(
+    f.bridge.verify("challenge", "invented", "later"),
+  ).rejects.toMatchObject({ state: "unknown" });
+});
+
+it.each([
+  "count",
+  "binding",
+  "execution",
+  "challenge",
+  "digest",
+  "both",
+  "missing-digest",
+])("rejects crossed empty catalogue %s without retry", async (mode) => {
+  const f = catalogueFixture();
+  const original = f.request.getMockImplementation()!;
+  f.request.mockImplementation(async (...args) => {
+    const response = structuredClone(await original(...args));
+    const data = response.data as unknown as typeof f.state & {
+      receipt?: ComputerConnectorVerificationReceipt;
+    };
+    if (mode === "count") data.catalogueReceipt.workspaceCount = 1;
+    if (mode === "binding")
+      data.catalogueReceipt.binding = { ...binding, runtimeId: "other" };
+    if (mode === "execution")
+      data.catalogueReceipt.execution = { ...execution, turnId: "other" };
+    if (mode === "challenge")
+      data.catalogueReceipt.challengeSha256 = hash("other");
+    if (mode === "digest") data.receiptSha256 = hash("other");
+    if (mode === "both") data.receipt = f.receipt;
+    if (mode === "missing-digest")
+      delete (data as Partial<typeof data>).receiptSha256;
+    return response;
+  });
+  await expect(f.bridge.observe()).rejects.toMatchObject({ state: "unknown" });
+  expect(f.request).toHaveBeenCalledTimes(1);
+});
+it("refuses invalid or stale catalogue challenges before IO", async () => {
+  const f = catalogueFixture();
+  await expect(
+    f.bridge.verifyCatalogue("wrong challenge", "call"),
+  ).rejects.toMatchObject({ state: "refused" });
+  await expect(
+    f.bridge.verifyCatalogue("old-challenge", "call"),
+  ).rejects.toMatchObject({
+    code: "CONNECTOR_VERIFICATION_CHALLENGE_MISMATCH",
+  });
+  expect(f.request).not.toHaveBeenCalled();
+});

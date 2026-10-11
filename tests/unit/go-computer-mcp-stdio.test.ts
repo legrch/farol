@@ -180,7 +180,12 @@ it("serves legacy initialize, strict tool schemas and catalogue through the real
       context,
       {
         mutations,
-        verification: { verify },
+        verification: {
+          verify,
+          verifyCatalogue: vi.fn(async () => {
+            throw new Error("unexpected catalogue verification");
+          }),
+        },
         lifecycle: {
           isStopping: async () => {
             events.push("stopping");
@@ -235,6 +240,7 @@ it("serves legacy initialize, strict tool schemas and catalogue through the real
       "computer_workspace_search",
       "computer_workspace_write",
       "farol_next_connector_verify",
+      "farol_next_connector_verify_catalogue",
     ]);
     for (const tool of tools) {
       expect(tool.inputSchema, tool.name).toMatchObject({

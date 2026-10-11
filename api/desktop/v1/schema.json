@@ -85,7 +85,8 @@
     "computer.process.held.release": "effect",
     "computer.process.start": "effect",
     "computer.process.read": "read",
-    "computer.process.cancel": "effect"
+    "computer.process.cancel": "effect",
+    "computer.connector.catalogueverify": "read"
   },
   "definitions": {
     "Context": {
@@ -4493,6 +4494,10 @@
           "type": "string",
           "pattern": "^[a-f0-9]{64}$",
           "optional": true
+        },
+        "catalogueReceipt": {
+          "type": "ComputerConnectorCatalogueVerificationReceipt",
+          "optional": true
         }
       }
     },
@@ -5026,6 +5031,40 @@
         "status": {
           "type": "string",
           "values": ["requested", "already_terminal", "unknown"]
+        }
+      }
+    },
+    "ComputerConnectorCatalogueVerify": {
+      "type": "object",
+      "fields": {
+        "challenge": {
+          "type": "string",
+          "pattern": "^[!-~]{1,160}$"
+        },
+        "callId": {
+          "type": "id"
+        }
+      }
+    },
+    "ComputerConnectorCatalogueVerificationReceipt": {
+      "type": "object",
+      "fields": {
+        "binding": {
+          "type": "ComputerConnectorBinding"
+        },
+        "execution": {
+          "type": "ComputerConnectorExecution"
+        },
+        "challengeSha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "callIdSha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "workspaceCount": {
+          "type": "uint32"
         }
       }
     }

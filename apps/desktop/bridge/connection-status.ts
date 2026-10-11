@@ -28,9 +28,10 @@ export async function observeConnectionStatus(
   const state = await verification.observe();
   return Object.freeze({
     connection: "responding" as const,
-    attachment: state.receipt
-      ? ("verified" as const)
-      : ("not_checked" as const),
+    attachment:
+      state.receipt || state.catalogueReceipt
+        ? ("verified" as const)
+        : ("not_checked" as const),
     verification: state,
     capabilities,
     newFileOrCommandTests: false as const,

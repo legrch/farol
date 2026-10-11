@@ -7,7 +7,7 @@ import {
   type Json,
 } from "./wire.ts";
 
-// Wire codec only. Go owns challenge admission, the actual List and retained
+// Wire codec only. Go owns challenge admission, List/empty Catalogue and retained
 // observation. This adapter cannot synthesize a successful receipt from IDs.
 export class ConnectorVerificationBridge {
   private readonly binding;
@@ -58,6 +58,29 @@ export class ConnectorVerificationBridge {
       throw new BridgeError("unknown", "crossed_connector_verification");
     return result;
   }
+  async verifyCatalogue(
+    challenge: string,
+    callId: string,
+  ): Promise<ComputerConnectorVerificationState> {
+    const body = { challenge, callId };
+    if (!validate("ComputerConnectorCatalogueVerify", body))
+      throw new BridgeError("refused", "invalid_connector_verification");
+    if (
+      createHash("sha256").update(challenge).digest("hex") !==
+      this.challengeSha256
+    )
+      throw new BridgeError(
+        "refused",
+        "CONNECTOR_VERIFICATION_CHALLENGE_MISMATCH",
+      );
+    const result = await this.request(
+      "computer.connector.catalogueverify",
+      body,
+    );
+    if (!result.catalogueReceipt || result.receipt)
+      throw new BridgeError("unknown", "crossed_connector_verification");
+    return result;
+  }
   private async request(
     method: string,
     body: Json,
@@ -92,7 +115,9 @@ export class ConnectorVerificationBridge {
       );
     if (
       !same(this.binding, state.binding) ||
-      (state.receipt === undefined) !== (state.receiptSha256 === undefined)
+      (state.receipt !== undefined && state.catalogueReceipt !== undefined) ||
+      (state.receipt === undefined && state.catalogueReceipt === undefined) !==
+        (state.receiptSha256 === undefined)
     )
       throw new BridgeError("unknown", "crossed_connector_verification");
     const receipt = state.receipt;
@@ -106,6 +131,18 @@ export class ConnectorVerificationBridge {
           state.receiptSha256)
     )
       throw new BridgeError("unknown", "crossed_connector_verification");
+    const catalogueReceipt = state.catalogueReceipt;
+    if (
+      catalogueReceipt &&
+      (!same(this.binding, catalogueReceipt.binding) ||
+        !same(this.execution, catalogueReceipt.execution) ||
+        catalogueReceipt.challengeSha256 !== this.challengeSha256 ||
+        catalogueReceipt.workspaceCount !== 0 ||
+        createHash("sha256")
+          .update(JSON.stringify(catalogueReceipt))
+          .digest("hex") !== state.receiptSha256)
+    )
+      throw new BridgeError("unknown", "crossed_connector_verification");
     return Object.freeze({
       ...state,
       binding: Object.freeze({ ...state.binding }),
@@ -115,6 +152,15 @@ export class ConnectorVerificationBridge {
               ...receipt,
               binding: Object.freeze({ ...receipt.binding }),
               execution: Object.freeze({ ...receipt.execution }),
+            }),
+          }
+        : {}),
+      ...(catalogueReceipt
+        ? {
+            catalogueReceipt: Object.freeze({
+              ...catalogueReceipt,
+              binding: Object.freeze({ ...catalogueReceipt.binding }),
+              execution: Object.freeze({ ...catalogueReceipt.execution }),
             }),
           }
         : {}),

@@ -41,7 +41,14 @@ func connectorFixture(t *testing.T, readMethods ...string) (net.Conn, ConnectorC
 }
 
 func TestConnectionVerificationObservationHandshakeAndReadOnlyDispatch(t *testing.T) {
-	client, config, calls, done := connectorFixture(t, "computer.connector.verification")
+	testConnectionVerificationReadOnly(t, "computer.connector.verification")
+}
+func TestConnectionCatalogueVerificationHandshakeAndReadOnlyDispatch(t *testing.T) {
+	testConnectionVerificationReadOnly(t, "computer.connector.catalogueverify")
+}
+func testConnectionVerificationReadOnly(t *testing.T, method string) {
+	t.Helper()
+	client, config, calls, done := connectorFixture(t, method)
 	writeConnectorJSON(t, client, wire.ComputerConnectorHello{Binding: config.Endpoint.Binding, Token: config.Endpoint.Token})
 	var authenticated wire.ComputerConnectorBinding
 	readConnectorJSON(t, client, &authenticated)
@@ -52,7 +59,7 @@ func TestConnectionVerificationObservationHandshakeAndReadOnlyDispatch(t *testin
 		t.Fatal("observation config failed handshake")
 	}
 	var identity wire.Identity
-	if json.Unmarshal(reply.Result.Data, &identity) != nil || !slices.Contains(identity.Capabilities, "computer.connector.verification") {
+	if json.Unmarshal(reply.Result.Data, &identity) != nil || !slices.Contains(identity.Capabilities, method) {
 		t.Fatal("missing observation capability")
 	}
 	ctx := reply.Result.Context
@@ -61,7 +68,7 @@ func TestConnectionVerificationObservationHandshakeAndReadOnlyDispatch(t *testin
 		if operation != "" {
 			params["operationId"] = operation
 		}
-		writeConnectorJSON(t, client, map[string]any{"jsonrpc": "2.0", "id": []string{"observe", "forbidden-effect"}[i], "method": "computer.connector.verification", "params": params})
+		writeConnectorJSON(t, client, map[string]any{"jsonrpc": "2.0", "id": []string{"observe", "forbidden-effect"}[i], "method": method, "params": params})
 		readConnectorJSON(t, client, &reply)
 		if i == 0 && (reply.Result == nil || reply.Result.Status != "ok") {
 			t.Fatalf("read-only observation failed: %+v", reply)

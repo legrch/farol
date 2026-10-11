@@ -32,7 +32,7 @@ func validateConnectorConfig(config ConnectorConfig) error {
 	}
 	for name, method := range config.Methods {
 		switch name {
-		case "computer.workspace.search", "computer.workspace.read", "computer.workspace.list", "computer.workspace.catalogue", "computer.workspace.bootstrap", "computer.connector.verify", "computer.connector.verification", "computer.workspace.write", "computer.workspace.edit", "computer.workspace.mutation.read":
+		case "computer.workspace.search", "computer.workspace.read", "computer.workspace.list", "computer.workspace.catalogue", "computer.workspace.bootstrap", "computer.connector.verify", "computer.connector.catalogueverify", "computer.connector.verification", "computer.workspace.write", "computer.workspace.edit", "computer.workspace.mutation.read":
 			if method.Handle == nil {
 				return ErrConnectorUnavailable
 			}
