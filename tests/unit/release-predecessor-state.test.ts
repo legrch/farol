@@ -10,6 +10,16 @@ const pairs = [
   ["0.2.0-owner.beta.3", "0.2.0-owner.beta.5", true],
   ["0.2.0-owner.beta.3", "0.2.0-owner.beta.3", true],
   ["0.2.0-owner.beta.5", "0.2.0-owner.beta.6", false],
+  ["0.2.0-owner.beta.8", "0.2.0-owner.beta.9", false],
+  ["0.2.0-owner.beta.9", "0.2.0-owner.beta.9", false],
+  ["0.2.0-owner.beta.9", "0.2.0-owner.beta.10", true],
+  ["0.2.0-owner.beta.8", "0.2.0-owner.beta.10", true],
+  ["0.2.0-owner.beta.4", "0.2.0-owner.beta.11", true],
+  ["0.2.0-owner.beta.9", "0.2.0", true],
+  ["0.2.0-owner.beta.9", "0.3.0", true],
+  // These pairs are outside this known legacy refusal, not qualified rollback.
+  ["0.2.0-owner.beta.10", "0.2.0-owner.beta.11", false],
+  ["0.2.0-owner.beta.19", "0.2.0-owner.beta.20", false],
 ] as const;
 
 describe("predecessor state compatibility refusal", () => {
@@ -19,7 +29,7 @@ describe("predecessor state compatibility refusal", () => {
     );
   });
 
-  it("the actual Python helper refuses beta3 before rollback or recovery mutation", () => {
+  it("the actual Python helper refuses old readers before rollback or recovery mutation", () => {
     // Import only: no helper launch, app/profile IO or native rename. The real
     // admission/reconcile functions run against explicit process/file doubles.
     const script = `
@@ -59,15 +69,20 @@ def refuses(call):
         raise AssertionError("UNEXPECTED_ACCEPTANCE")
     assert effects == []
 
-refuses(lambda: helper.run(request))
-for phase, entries in [
-    ("rollback_started", {helper.APP: "app", "previous.app": "previous"}),
-    ("rollback_started", {"previous.app": "previous", "failed.app": "failed"}),
-    ("predecessor_saved", {"previous.app": "previous", "staged.app": "staged"}),
-]:
-    helper.read_phase = lambda *args: phase
-    helper.entry = lambda parent, name: entries.get(name)
-    refuses(lambda: helper.reconcile("apps", "operation", request, forbidden))
+for source, target, refused in json.loads(sys.argv[2]):
+    if not refused:
+        continue
+    request["source"]["version"] = source
+    request["target"]["version"] = target
+    refuses(lambda: helper.run(request))
+    for phase, entries in [
+        ("rollback_started", {helper.APP: "app", "previous.app": "previous"}),
+        ("rollback_started", {"previous.app": "previous", "failed.app": "failed"}),
+        ("predecessor_saved", {"previous.app": "previous", "staged.app": "staged"}),
+    ]:
+        helper.read_phase = lambda *args: phase
+        helper.entry = lambda parent, name: entries.get(name)
+        refuses(lambda: helper.reconcile("apps", "operation", request, forbidden))
 print("guard + rollback + three recovery paths refused before effects")
 `;
     const result = spawnSync(

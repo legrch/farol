@@ -4287,6 +4287,7 @@ ${scenario === "missing" ? "" : `<key>CFBundleVersion</key><string>${scenario ==
   it.each([
     ["0.1.0-owner.beta.1", "0.2.0-owner.beta.2", "16"],
     ["0.2.0-owner.beta.3", "0.2.0-owner.beta.5", "19"],
+    ["0.2.0-owner.beta.9", "0.2.0-owner.beta.10", "24"],
   ])(
     "B06 offers no app-only rollback to %s and does not dispatch a restore",
     async (sourceVersion, targetVersion, targetBuild) => {

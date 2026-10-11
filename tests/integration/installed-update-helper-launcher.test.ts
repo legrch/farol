@@ -58,6 +58,7 @@ describe("installed update launcher", () => {
   it.each([
     ["0.1.11-owner.beta.1", "0.2.0-owner.beta.2"],
     ["0.2.0-owner.beta.3", "0.2.0-owner.beta.5"],
+    ["0.2.0-owner.beta.9", "0.2.0-owner.beta.10"],
   ])(
     "B06 refuses app-only rollback to %s after a real incompatible settings save",
     async (sourceVersion, targetVersion) => {
@@ -80,6 +81,36 @@ describe("installed update launcher", () => {
           })
         ).ok,
       ).toBe(true);
+      if (sourceVersion === "0.2.0-owner.beta.9") {
+        const current = (await store.load())!;
+        const proof = {
+          tunnelId: "synthetic-catalogue",
+          workspaceId: null,
+          connectorGeneration: current.connectors.secureMcp.generation,
+          runtimeGeneration: "a".repeat(64),
+          computerGeneration: current.computer.generation,
+          buildId: "b".repeat(64),
+          challengeSha256: "c".repeat(64),
+          receiptSha256: "d".repeat(64),
+          verifiedAt: "2026-10-11T10:00:00.000Z",
+        };
+        await store.save({
+          ...current,
+          revision: current.revision + 1,
+          connectors: {
+            ...current.connectors,
+            secureMcp: {
+              ...current.connectors.secureMcp,
+              attachment: proof,
+              lastVerifiedAttachment: proof,
+            },
+          },
+        });
+        expect(
+          (await store.load())!.connectors.secureMcp.lastVerifiedAttachment
+            ?.workspaceId,
+        ).toBeNull();
+      }
       const file = path.join(root, "config.json");
       const saved = await fs.readFile(file);
       expect((await store.load())!.computer.filePolicy).toBe(
