@@ -214,7 +214,7 @@ const SecureMcpChallengeSchema = z.strictObject({
 
 const SecureMcpAttachmentSchema = z.strictObject({
   tunnelId: z.string().min(1).max(160),
-  workspaceId: IdentifierSchema,
+  workspaceId: IdentifierSchema.nullable(),
   connectorGeneration: z.number().int().positive(),
   runtimeGeneration: Sha256Schema,
   computerGeneration: z.number().int().positive(),

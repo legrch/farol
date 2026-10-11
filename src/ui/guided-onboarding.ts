@@ -117,6 +117,7 @@ export function onboardingFacts(
       attachment.runtimeGeneration === runtime?.runtimeGeneration &&
       attachment.workspaceId ===
         settings.setup.computer.verified?.workspaceId &&
+      attachment.workspaceId !== null &&
       workspaceIds.includes(attachment.workspaceId),
     outcomeUnknown:
       settings.setup.connect.outcomeUnknown ||
@@ -245,6 +246,7 @@ export function onboardingCompletedSteps(
     previouslyVerified.connectorGeneration === connector.generation &&
     previouslyVerified.computerGeneration === settings.computer.generation &&
     previouslyVerified.workspaceId === witness?.workspaceId &&
+    previouslyVerified.workspaceId !== null &&
     workspaceIds.has(previouslyVerified.workspaceId);
   const currentConnection =
     configuredConnection &&
