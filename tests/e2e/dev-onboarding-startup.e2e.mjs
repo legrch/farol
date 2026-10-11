@@ -407,9 +407,9 @@ try {
   for (const [step, label] of [
     ["overview", "Overview"],
     ["signin", "Sign in"],
-    ["folders", "Workspaces"],
     ["connection", "Connection"],
-    ["attachment", "Add to ChatGPT"],
+    ["folders", "Workspaces"],
+    ["attachment", "Check"],
   ]) {
     await setupStep(window, step, label);
     assert.equal(
