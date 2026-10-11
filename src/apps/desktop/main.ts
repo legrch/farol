@@ -11083,6 +11083,12 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
         // recorder response or an unconfirmed host drain.
         throw new Error("DESKTOP_PREVIOUS_QUIT_UNCONFIRMED");
       }
+      if (compiledGoCore !== null) {
+        // The previous host removed its run marker only after a confirmed Quit.
+        // Recheck its retained MCP stop under this existing startup exclusion;
+        // an unconfigured connector must not require Start to permit Settings.
+        await computerMcpLifecycle().confirmCleanHostStop(clean);
+      }
       await updateRelaunch?.recheck();
       if (!(await verify())) {
         throw new Error("STARTUP_PROMOTION_LEASE_LOST");

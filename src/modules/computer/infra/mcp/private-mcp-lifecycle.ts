@@ -357,6 +357,27 @@ export class PrivateMcpLifecycle {
     );
   }
 
+  /** Startup only, under the primary host's promotion exclusion, before IPC
+   * admission. The host supplies the same clean predecessor proof used by Go
+   * boot. Recheck native obligations without replaying Stop or opening admission.
+   */
+  async confirmCleanHostStop(
+    previousHostDrainConfirmed: boolean,
+  ): Promise<void> {
+    const current = () =>
+      previousHostDrainConfirmed === true &&
+      this.stopRevision === 0 &&
+      this.preparationRevision === 0;
+    if (!current()) throw new Error("COMPUTER_MCP_CLEAN_HOST_STOP_UNVERIFIED");
+    const stopping = await this.isStopping();
+    if (!current()) throw new Error("COMPUTER_MCP_CLEAN_HOST_STOP_UNVERIFIED");
+    if (!stopping) return;
+    // confirmStop retains the marker and checks reconciliation, exclusive
+    // lifetime ownership, MCP instances, shell groups and concurrent revisions.
+    await this.confirmStop();
+    if (!current()) throw new Error("COMPUTER_MCP_CLEAN_HOST_STOP_UNVERIFIED");
+  }
+
   enterHandler(): (() => void) | null {
     if (this.handlerAdmissionClosed) return null;
     this.activeHandlers += 1;

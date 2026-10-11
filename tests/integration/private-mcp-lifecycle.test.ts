@@ -26,6 +26,103 @@ afterEach(async () => {
 describe.skipIf(process.platform !== "darwin")(
   "private Computer MCP lifetime",
   () => {
+    it("rechecks a clean prior host stop without clearing its protective marker", async () => {
+      const { root, lifecycle } = await fixture();
+      await lifecycle.prepare(oldDigest);
+      await lifecycle.beginStop();
+      await lifecycle.confirmStop();
+      const next = new PrivateMcpLifecycle(root);
+      expect(await next.hasUnconfirmedStop()).toBe(true);
+      await next.confirmCleanHostStop(true);
+      expect(await next.hasUnconfirmedStop()).toBe(false);
+      expect(await next.isStopping()).toBe(true);
+      await expect(next.join(oldDigest)).rejects.toThrow(
+        "COMPUTER_MCP_LIFECYCLE_REVOKED",
+      );
+    });
+
+    it("keeps a clean markerless first startup free of stop side effects", async () => {
+      const { root, lifecycle } = await fixture();
+      await lifecycle.confirmCleanHostStop(true);
+      expect(await lifecycle.isStopping()).toBe(false);
+      expect(await fs.readdir(root)).toEqual([]);
+    });
+
+    it("refuses adoption without trusted clean host evidence", async () => {
+      const { root, lifecycle } = await fixture();
+      await lifecycle.beginStop();
+      const next = new PrivateMcpLifecycle(root);
+      await expect(next.confirmCleanHostStop(false)).rejects.toThrow(
+        "COMPUTER_MCP_CLEAN_HOST_STOP_UNVERIFIED",
+      );
+      expect(await next.hasUnconfirmedStop()).toBe(true);
+    });
+
+    it("never adopts a stop issued in the current host lifetime", async () => {
+      const { lifecycle } = await fixture();
+      await lifecycle.beginStop();
+      await expect(lifecycle.confirmCleanHostStop(true)).rejects.toThrow(
+        "COMPUTER_MCP_CLEAN_HOST_STOP_UNVERIFIED",
+      );
+      expect(await lifecycle.hasUnconfirmedStop()).toBe(true);
+    });
+
+    it("retains unresolved shell obligations despite clean host input", async () => {
+      const { root, lifecycle } = await fixture();
+      await lifecycle.beginStop();
+      const shellRoot = path.join(root, "execution-fence");
+      await fs.mkdir(shellRoot, { mode: 0o700 });
+      await fs.writeFile(path.join(shellRoot, "shell-unconfirmed"), "1\n", {
+        mode: 0o600,
+      });
+      const next = new PrivateMcpLifecycle(root);
+      await expect(next.confirmCleanHostStop(true)).rejects.toThrow(
+        "COMPUTER_MCP_SHELL_CLEANUP_UNVERIFIED",
+      );
+      expect(await next.hasUnconfirmedStop()).toBe(true);
+    });
+
+    it("refuses a newer stop during startup marker observation", async () => {
+      const { root, lifecycle } = await fixture();
+      await lifecycle.beginStop();
+      await lifecycle.confirmStop();
+      const next = new PrivateMcpLifecycle(root);
+      vi.spyOn(next, "isStopping").mockImplementationOnce(async () => {
+        await next.beginStop();
+        return true;
+      });
+      await expect(next.confirmCleanHostStop(true)).rejects.toThrow(
+        "COMPUTER_MCP_CLEAN_HOST_STOP_UNVERIFIED",
+      );
+      expect(await next.hasUnconfirmedStop()).toBe(true);
+    });
+
+    it("refuses a newer stop while releasing the startup lifetime lease", async () => {
+      const { root, lifecycle } = await fixture();
+      await lifecycle.beginStop();
+      await lifecycle.confirmStop();
+      const next = new PrivateMcpLifecycle(root);
+      const open = fs.open.bind(fs);
+      let injected = false;
+      vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+        const handle = await open(...args);
+        if (!injected && String(args[0]).endsWith("/lifetime.lock")) {
+          injected = true;
+          const close = handle.close.bind(handle);
+          vi.spyOn(handle, "close").mockImplementationOnce(async () => {
+            await next.beginStop();
+            await close();
+          });
+        }
+        return handle;
+      });
+      await expect(next.confirmCleanHostStop(true)).rejects.toThrow(
+        "COMPUTER_MCP_LIFECYCLE_STOP_UNVERIFIED",
+      );
+      expect(injected).toBe(true);
+      expect(await next.hasUnconfirmedStop()).toBe(true);
+    });
+
     it("retains the original stop acknowledgement while the protective marker remains", async () => {
       const { root, lifecycle } = await fixture();
       await lifecycle.prepare(oldDigest);
