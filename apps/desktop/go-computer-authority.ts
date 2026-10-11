@@ -74,10 +74,12 @@ export class GoComputerAuthority {
         try {
           const now = this.now();
           const approval = ownerSettingsComputerApproval(settings, now);
-          // Fresh setup (or removing the last bound workspace) has no grant to
-          // publish. The acknowledged withdrawal above keeps Go inactive; do
-          // not submit an invalid empty approval or retain an admission receipt.
-          if (approval.workspaces.length === 0) {
+          // Configured but unbound folders are not an explicit empty selection.
+          // Keep them inactive until their physical identities are verified.
+          if (
+            settings.computer.workspaces.length > 0 &&
+            approval.workspaces.length === 0
+          ) {
             this.pending = false;
             return;
           }
@@ -115,8 +117,12 @@ export class GoComputerAuthority {
             published.publishOperationId !== operation
           )
             throw new BridgeError("unknown", "crossed_computer_publication");
-          this.publication = Object.freeze({ ...published });
-          this.ownerPublication = this.publication;
+          const known = Object.freeze({ ...published });
+          // An explicit empty approval may connect and verify its catalogue,
+          // but cannot become a Chat file-read admission in this adapter.
+          this.publication =
+            approval.workspaces.length === 0 ? undefined : known;
+          this.ownerPublication = known;
           this.pending = false;
         } catch (error) {
           this.blocked = true;

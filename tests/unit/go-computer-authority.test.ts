@@ -503,7 +503,7 @@ describe("Go Computer host authority mapping", () => {
     expect(f.request).not.toHaveBeenCalled();
   });
 
-  it("keeps fresh settings inactive without publishing an empty grant, then accepts setup", async () => {
+  it("publishes explicit empty consent for connection without admitting file reads", async () => {
     const f = await fixture();
     const publication = await f.bridge.withdraw();
     const snapshot = f.service.snapshot();
@@ -514,14 +514,31 @@ describe("Go Computer host authority mapping", () => {
     });
     expect(f.request.mock.calls.map((call) => call[0])).toEqual([
       "computer.authority.deactivate",
+      "computer.authority.publish",
     ]);
+    expect(f.request.mock.calls[1]![1]).toMatchObject({
+      approval: {
+        workspaces: [],
+        capabilities: [],
+        excludedPaths: [],
+        commands: "none",
+        network: "none",
+      },
+    });
+    expect(
+      f.bridge.settingsMutationPublication(
+        snapshot.settings.computer.generation,
+      ),
+    ).toMatchObject({
+      generation: String(snapshot.settings.computer.generation),
+    });
     expect((await f.add()).ok).toBe(true);
     expect((await f.bridge.admitRead(intent)).participantId).toBe(
       "minted-by-go",
     );
   });
 
-  it("withdraws the last workspace without retaining the previous admission receipt", async () => {
+  it("replaces the last workspace with no-access consent and no file admission", async () => {
     const f = await fixture();
     const added = await f.add();
     if (!added.ok || added.snapshot.status !== "ready")
@@ -532,6 +549,7 @@ describe("Go Computer host authority mapping", () => {
     expect((await f.service.removeWorkspace(workspaceId)).ok).toBe(true);
     expect(f.request.mock.calls.map((call) => call[0])).toEqual([
       "computer.authority.deactivate",
+      "computer.authority.publish",
     ]);
     await expect(f.bridge.admitRead(intent)).rejects.toMatchObject({
       code: "computer_publication_unavailable",
@@ -616,7 +634,7 @@ describe("Go Computer host authority mapping", () => {
       ).rejects.toMatchObject({
         code: "computer_publication_consumed",
       });
-      expect(f.request).toHaveBeenCalledTimes(configured ? 2 : 1);
+      expect(f.request).toHaveBeenCalledTimes(2);
     },
   );
 });
@@ -766,4 +784,71 @@ it("selects an immutable acknowledged mutation publication without transport or 
   expect(() => f.bridge.settingsMutationPublication(generation)).toThrow(
     "computer_publication_unavailable",
   );
+});
+
+it.each(["none", "verification", "workspace"] as const)(
+  "empty approval drops saved %s command policy and keeps exact publication",
+  async (commands) => {
+    const f = await fixture();
+    const state = f.service.snapshot();
+    if (state.status !== "ready") throw new Error("fixture");
+    const settings = structuredClone(state.settings);
+    settings.computer.commands = commands;
+    const publication = await f.bridge.withdraw();
+    await publication.publish(settings);
+    expect(f.request.mock.calls[1]![1]).toMatchObject({
+      approval: {
+        generation: settings.computer.generation,
+        workspaces: [],
+        capabilities: [],
+        excludedPaths: [],
+        commands: "none",
+        network: "none",
+      },
+    });
+    expect(
+      f.bridge.settingsMutationPublication(settings.computer.generation)
+        .generation,
+    ).toBe(String(settings.computer.generation));
+    await expect(f.bridge.admitRead(intent)).rejects.toMatchObject({
+      code: "computer_publication_unavailable",
+    });
+  },
+);
+it("does not convert a configured unbound folder into empty connection consent", async () => {
+  const f = await fixture();
+  const added = await f.add();
+  if (!added.ok || added.snapshot.status !== "ready")
+    throw new Error("fixture");
+  const settings = structuredClone(added.snapshot.settings);
+  delete settings.computer.workspaces[0]!.rootIdentity;
+  f.request.mockClear();
+  const publication = await f.bridge.withdraw();
+  await publication.publish(settings);
+  expect(f.request.mock.calls.map(([method]) => method)).toEqual([
+    "computer.authority.deactivate",
+  ]);
+  expect(() =>
+    f.bridge.settingsMutationPublication(settings.computer.generation),
+  ).toThrow();
+});
+it("retains unknown empty publication without a retry or file admission", async () => {
+  const f = await fixture((method, result) => {
+    if (method !== "computer.authority.publish") return result;
+    const { data: _data, ...envelope } = result;
+    return { ...envelope, status: "unknown" };
+  });
+  const state = f.service.snapshot();
+  if (state.status !== "ready") throw new Error("fixture");
+  const publication = await f.bridge.withdraw();
+  await expect(publication.publish(state.settings)).rejects.toMatchObject({
+    state: "unknown",
+  });
+  await expect(publication.publish(state.settings)).rejects.toMatchObject({
+    code: "computer_publication_consumed",
+  });
+  await expect(f.bridge.withdraw()).rejects.toMatchObject({
+    code: "computer_publication_unavailable",
+  });
+  expect(f.request).toHaveBeenCalledTimes(2);
 });

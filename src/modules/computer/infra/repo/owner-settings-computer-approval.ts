@@ -26,17 +26,24 @@ export function ownerSettingsComputerApproval(
     workspace.accessCheck.rootIdentity.inode === workspace.rootIdentity.inode;
   const shellEnabled = workspaces.some(freshShellWorkspace);
   const effectiveCommands =
-    settings.computer.commands === "workspace" && !shellEnabled
-      ? "verification"
-      : settings.computer.commands;
-  const capabilities = [
-    "workspace.list" as const,
-    "workspace.read" as const,
-    "workspace.search" as const,
-    ...(effectiveCommands !== "none" ? (["verification.run"] as const) : []),
-    ...(shellEnabled ? (["workspace.shell"] as const) : []),
-    ...(writeEnabled ? (["workspace.write"] as const) : []),
-  ];
+    workspaces.length === 0
+      ? "none"
+      : settings.computer.commands === "workspace" && !shellEnabled
+        ? "verification"
+        : settings.computer.commands;
+  const capabilities =
+    workspaces.length === 0
+      ? []
+      : [
+          "workspace.list" as const,
+          "workspace.read" as const,
+          "workspace.search" as const,
+          ...(effectiveCommands !== "none"
+            ? (["verification.run"] as const)
+            : []),
+          ...(shellEnabled ? (["workspace.shell"] as const) : []),
+          ...(writeEnabled ? (["workspace.write"] as const) : []),
+        ];
   const excludedPaths = workspaces.flatMap((workspace) =>
     workspace.excludedPaths.map((excluded) => ({
       workspaceId: workspace.workspaceId,
