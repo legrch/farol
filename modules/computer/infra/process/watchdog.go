@@ -87,10 +87,21 @@ func (p *SupervisedPreparer) Prepare(ctx context.Context, invocation processsvc.
 			return nil, &processsvc.NativeFailure{}
 		}
 	}
+	var platform *RootScopedPlatformSelection
+	var platformBinding *PlatformStrategyBinding
+	if p.boundary.strategy != nil {
+		platform, err = p.boundary.strategy.Select(ctx, p.boundary.policy.selection, native.command, p.boundary.selection)
+		if err != nil {
+			return nil, err
+		}
+		binding := platform.Binding()
+		platformBinding = &binding
+	}
 	encoded, err := json.Marshal(struct {
 		CommandSHA256, Mode, SourceSHA256 string
 		Executable                        ExecutablePin
-	}{native.Seal().Digest, watchdogMode, p.boundary.selection.SourceSHA256, p.boundary.selection.Executable})
+		Platform                          *PlatformStrategyBinding `json:",omitempty"`
+	}{native.Seal().Digest, watchdogMode, p.boundary.selection.SourceSHA256, p.boundary.selection.Executable, platformBinding})
 	if err != nil {
 		return nil, &processsvc.NativeFailure{}
 	}
@@ -103,6 +114,7 @@ func (p *SupervisedPreparer) Prepare(ctx context.Context, invocation processsvc.
 		}
 		return p.selected, nil
 	}
+	p.boundary.platform = platform
 	native.boundary, native.execution = p.boundary, p.boundary.execution
 	p.selected = &watchdogSelected{Prepared: native, policy: p.boundary.policy, seal: seal}
 	return p.selected, nil
@@ -151,6 +163,8 @@ func startWatchdogHelper(ctx context.Context, check func() error, start func() (
 type watchdogBoundary struct {
 	policy    *Seatbelt
 	selection WatchdogSelection
+	strategy  *RootScopedPlatformStrategy
+	platform  *RootScopedPlatformSelection
 	execution context.Context
 	clock     port.Clock
 	measure   func(context.Context, Command, *confinedLaunch) (launchMeasurement, error)
@@ -174,6 +188,14 @@ func (b *watchdogBoundary) StartLease(ctx context.Context, command Command, requ
 		return nil, &processsvc.NativeFailure{}
 	}
 	bounded, cancel := context.WithDeadline(b.execution, request.Deadline)
+	if b.strategy != nil {
+		qualification, err := b.platform.BindInvocation(bounded, command, launch.command, request.Deadline)
+		if err != nil {
+			cancel()
+			return nil, err
+		}
+		launch.qualification = qualification
+	}
 	check := func() error {
 		if ctx.Err() != nil || bounded.Err() != nil || !b.clock.Now().Before(request.Deadline) || request.Check(bounded) != nil {
 			return &processsvc.NativeFailure{}

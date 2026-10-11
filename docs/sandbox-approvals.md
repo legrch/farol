@@ -87,6 +87,53 @@ qualify the new, explicitly described contract separately. Do not call the old
 hardlink test PASS, infer a data boundary from pathname containment, or claim
 Full Access/TCC approvals are implemented by these constructors.
 
+## Trusted platform and retained invocation binding
+
+The root-scoped production direction is qualified macOS enforcement plus fresh
+measurement of each invocation. The legacy exact-guest `NativeQualification`
+continues to protect its original contract. Routine commands must not run
+synthetic writes in user folders to establish eligibility, especially when the
+owner granted read-only access.
+
+`RootScopedPlatformSupport` is trusted composition data for an exact release,
+compiler, macOS build and architecture, mechanism/import bytes, backend, helper
+and selected executables. Its public constructor reads actual native facts;
+there is no public success callback, inferred support from current hashes or
+default support entry. Boot must authenticate the release issuer separately.
+The first supported class is local APFS without nested mounts and `NoNetwork`.
+The strategy does not itself provide authenticated metadata or activate Shell.
+
+`NewRootScopedSupervisedPreparer` seals the support and selected-command binding
+into the existing process intent. Only the original `StartLease` can bind the
+qualification to its existing deadline. Before the helper starts and again
+before its one command release, the join checks the exact wrapper, platform and
+image facts, roots, and original deadline. The same retained executable and
+directory measurements are rechecked after helper preparation. Current lease
+authority remains mandatory at release. No second executor, reservation owner,
+approval store or deadline is introduced.
+
+An explicitly approved writable HOME remains eligible. Owner-owned installed
+backend/helper images are pinned and protected just like their system-owned
+counterparts; an administrator-owned installation is not required. Additional
+`ProtectedImages` are measured and denied writes without adding read, execution
+or PATH permissions. The compiler protects their ancestor directories against
+unlink/rename within writable scopes while retaining ordinary sibling writes.
+APFS Data firmlinks do not have to share a textual mount prefix with `/Users`.
+
+This assurance relies on trusted host pathnames and the qualified OS mechanism.
+It is not an atomic filesystem snapshot or protection against a privileged or
+same-user host attacker changing files outside the sandbox. Path grants retain
+the documented hardlink limits. Known root exit, drained output and helper exit
+remain distinct from descendant cleanup and Task completion.
+
+Source tests cover descriptor drift, fixed-deadline binding, sealed metadata,
+pre-release rechecks and refusal without replay. The opt-in
+`TestNativeRootScopedProtectedImages` additionally checks kernel-enforced image
+write/ancestor-rename denial while ordinary synthetic workspace writes succeed.
+Neither establishes production boot, packaged bytes, installed Shell or the
+complete supported platform matrix. Authenticated release metadata, production
+composition and qualification through that complete join remain required.
+
 ## Watchdog fix: EPIPE is not a process outcome
 
 The prepared watchdog used to turn any child-stdin error into a fatal transport
