@@ -338,6 +338,47 @@ describe("Setup action DOM receipt observer (in-memory only)", () => {
     },
   );
 
+  it("ignores the previous Save receipt throughout a new Add action", async () => {
+    mount("Save access: Workspace access saved. Current access is checked.");
+    const adapter = pageAdapter(async () => {
+      const pending = document.createElement("p");
+      pending.setAttribute("role", "status");
+      pending.textContent = "Saving or checking…";
+      element(".workspace-feedback").append(pending);
+      element(".workspace-add button").textContent = "Connecting workspace…";
+      await Promise.resolve();
+      expect(adapter.result).toBeNull();
+      pending.textContent = verified;
+      element(".workspace-technical").append(pending);
+      adapter.setSettings(settings());
+      await Promise.resolve();
+      expect(adapter.result).toBeNull();
+      element(".workspace-add button").textContent = "Add workspace…";
+      await Promise.resolve();
+    }, settings(false));
+    await setupAction(adapter.page, "Add workspace…");
+    expect(adapter.result).toEqual([checked]);
+    expect(adapter.clicks).toEqual(["Add workspace…"]);
+    expect(element(".workspace-technical").textContent).toContain(
+      "Save access:",
+    );
+  });
+
+  it("accepts the original receipt node changing from old success through pending to success", async () => {
+    mount(verified);
+    const adapter = pageAdapter(async () => {
+      const receipt = element(".workspace-technical p");
+      receipt.textContent = "Verify workspace: Saving or checking…";
+      await Promise.resolve();
+      expect(adapter.result).toBeNull();
+      receipt.textContent = verified;
+      await Promise.resolve();
+    });
+    await setupAction(adapter.page, "Verify workspace");
+    expect(adapter.result).toEqual([verified]);
+    expect(adapter.clicks).toEqual(["Verify workspace"]);
+  });
+
   it("ignores dormant Add page activity while accepting the active exact result", async () => {
     mount();
     const adapter = pageAdapter(async () => {
