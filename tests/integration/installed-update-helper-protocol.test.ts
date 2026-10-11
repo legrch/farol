@@ -18,6 +18,9 @@ vi.mock("node:child_process", async (original) => ({
 }));
 afterEach(() => {
   vi.clearAllMocks();
+  // A preflight refusal can leave an unused mockImplementationOnce queued.
+  // That transport belongs to this fixture, never the next test's launch.
+  vi.mocked(spawn).mockReset();
   vi.restoreAllMocks();
   vi.useRealTimers();
 });
@@ -124,11 +127,26 @@ async function launch(
     ...(promotionLease ? { promotionLease } : {}),
     ...quitOptions,
   });
-  await spawned;
+  // The real byte/permission preflight may refuse before invoking our spawn
+  // double. Surface that result instead of leaving the fixture waiting forever.
+  await Promise.race([
+    spawned,
+    pending.then(() => {
+      throw new Error("HELPER_FIXTURE_DID_NOT_SPAWN");
+    }),
+  ]);
   return { child, pending };
 }
 
 describe("installed helper bounded readiness protocol", () => {
+  it("ends the fixture when helper preflight refuses before spawn", async () => {
+    vi.spyOn(fs, "open").mockRejectedValueOnce(
+      new Error("fixture read refused"),
+    );
+    await expect(launch()).rejects.toThrow("HELPER_FIXTURE_DID_NOT_SPAWN");
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
   it("keeps ordinary live rollback on its correlated Quit handoff", async () => {
     const selected: InstalledUpdateRequest = {
       ...request,

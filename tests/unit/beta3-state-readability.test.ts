@@ -169,7 +169,7 @@ describe("originalPredecessorSettingsReadable", () => {
     );
     expect(sections).toHaveLength(2);
     expect(createHash("sha256").update(sections[0]!).digest("hex")).toBe(
-      "1d69d58746c6a25ab16dca8ac6f37de472bbc3f03ebdeae27c7d398aee8c9b31",
+      "f6162b68ceb2b358f8b414dc54049a5e6d8af8d5787cc6c733c980b01ad792d9",
     );
     const packageJson = JSON.parse(
       readFileSync(new URL("../../package.json", import.meta.url), "utf8"),
@@ -197,6 +197,83 @@ describe("originalPredecessorSettingsReadable", () => {
       expect(value).toStrictEqual(before);
     },
   );
+
+  it.each(["attachment", "lastVerifiedAttachment"] as const)(
+    "refuses retained %s with a null workspace without stripping proof",
+    (field) => {
+      const value = fixture();
+      Object.assign(value.connectors.secureMcp, {
+        [field]: {
+          tunnelId: "fixture-tunnel",
+          workspaceId: null,
+          connectorGeneration: 2,
+          runtimeGeneration: "c".repeat(64),
+          computerGeneration: 3,
+          buildId: "b".repeat(64),
+          challengeSha256: "d".repeat(64),
+          receiptSha256: "e".repeat(64),
+          verifiedAt: "2026-10-08T09:00:00.000Z",
+        },
+      });
+      const before = structuredClone(value);
+      expect(ProductSettingsSchema.safeParse(value).success).toBe(true);
+      expect(originalPredecessorSettingsReadable(source, value)).toBe(false);
+      expect(value).toStrictEqual(before);
+    },
+  );
+
+  it.each(["attachment", "lastVerifiedAttachment"] as const)(
+    "accepts the original workspace-bound retained %s unchanged",
+    (field) => {
+      const value = fixture();
+      Object.assign(value.connectors.secureMcp, {
+        [field]: {
+          tunnelId: "fixture-tunnel",
+          workspaceId: "00000000-0000-4000-8000-000000000002",
+          connectorGeneration: 2,
+          runtimeGeneration: "c".repeat(64),
+          computerGeneration: 3,
+          buildId: "b".repeat(64),
+          challengeSha256: "d".repeat(64),
+          receiptSha256: "e".repeat(64),
+          verifiedAt: "2026-10-08T09:00:00.000Z",
+        },
+      });
+      const before = structuredClone(value);
+      expect(originalPredecessorSettingsReadable(source, value)).toBe(true);
+      expect(value).toStrictEqual(before);
+    },
+  );
+
+  it.each(["absent", "null"])(
+    "retains the original %s historical attachment default without mutation",
+    (kind) => {
+      const value = fixture();
+      if (kind === "null")
+        Object.assign(value.connectors.secureMcp, {
+          lastVerifiedAttachment: null,
+        });
+      const before = structuredClone(value);
+      const parsed = ProductSettingsSchema.parse(value);
+      expect(parsed.connectors.secureMcp.attachment).toBeNull();
+      expect(parsed.connectors.secureMcp.lastVerifiedAttachment).toBeNull();
+      expect(originalPredecessorSettingsReadable(source, value)).toBe(true);
+      expect(value).toStrictEqual(before);
+      if (kind === "absent")
+        expect(value.connectors.secureMcp).not.toHaveProperty(
+          "lastVerifiedAttachment",
+        );
+    },
+  );
+
+  it("refuses a missing required current attachment without inserting it", () => {
+    const value = fixture();
+    Reflect.deleteProperty(value.connectors.secureMcp, "attachment");
+    const before = structuredClone(value);
+    expect(ProductSettingsSchema.safeParse(value).success).toBe(false);
+    expect(originalPredecessorSettingsReadable(source, value)).toBe(false);
+    expect(value).toStrictEqual(before);
+  });
 
   it("refuses Home although the current owner parser accepts it", () => {
     const value = fixture();
