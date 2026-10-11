@@ -117,7 +117,7 @@ func (a *Anchor) Run(ctx context.Context, command Command, deadline time.Time, c
 	if check(bounded) != nil {
 		return nil, &processsvc.NativeFailure{}
 	}
-	cmd, gate, err := a.bootstrap.StartHeld(bounded, copyCommand(command), stdout, stderr)
+	cmd, gate, err := a.bootstrap.StartHeld(bounded, copyCommand(command), &drainWitness{writer: stdout}, &drainWitness{writer: stderr})
 	if gate != nil {
 		defer gate.Close()
 	}

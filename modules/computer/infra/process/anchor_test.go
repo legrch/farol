@@ -37,14 +37,16 @@ func (g *heldGateDouble) Release(context.Context) error {
 func (g *heldGateDouble) Close() error { g.closes++; return nil }
 
 type bootstrapDouble struct {
-	gate   *heldGateDouble
-	events *[]string
-	calls  int
-	err    error
-	before func()
+	stdout, stderr io.Writer
+	gate           *heldGateDouble
+	events         *[]string
+	calls          int
+	err            error
+	before         func()
 }
 
-func (b *bootstrapDouble) StartHeld(context.Context, Command, io.Writer, io.Writer) (*exec.Cmd, HeldGate, error) {
+func (b *bootstrapDouble) StartHeld(_ context.Context, _ Command, out, diagnostic io.Writer) (*exec.Cmd, HeldGate, error) {
+	b.stdout, b.stderr = out, diagnostic
 	b.calls++
 	*b.events = append(*b.events, "bootstrap")
 	if b.before != nil {

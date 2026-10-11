@@ -498,11 +498,17 @@ incomplete drain, no observed exec/exit, owner loss and deadline do the same.
 
 For a qualified no-fork trace only, kernel exit followed by ONE exact child Wait,
 valid exit details and bounded pipe drain can publish `GuestCohortClosed`. The
-anchor is still alive at publication. The current native producer sets successful
-drain only when `Cmd.Wait` returns
-nil: Go may hide drain errors behind a non-zero `ExitError`. Non-zero/signal exits
-therefore remain unverified here and require independently retained EOF evidence
-before any later positive classification. Root may map whole-operation cleanup
+anchor is still alive at publication. The direct and held-leaf producers now pass
+independent private stdout/stderr witnesses through their existing writer inputs.
+Each witness must observe pipe EOF and successfully copy through the SAME bounded
+collector. Existing output truncation/overflow facts remain separate.
+`Cmd.Wait` returning nil or `ExitError` alone proves no drain: Go can mask a pipe
+copy error or `WaitDelay` behind nonzero/signal exit. A forced pipe close, collector
+error, missing/replaced witness or optimization that bypasses EOF remains
+unverified. Nonzero/signal exits may supply drain evidence only with BOTH actual
+EOF/copy witnesses; all existing kernel exec/exit, no-fork, owner and deadline
+requirements still apply. This adds no broader containment claim. Root may map
+whole-operation cleanup
 only after a known correlated result/ACK AND independently waiting/draining the
 exact
 anchor with the expected clean exit. A root-only Wait, report alone, killed anchor,
@@ -583,3 +589,54 @@ lost ACK, raw-peer attempts to correct a rejected release, and both serialized
 and concurrent local delivery callbacks. This adapter is not registered on the
 ordinary backend or external MCP. Root CLI/FD provenance, bootstrap selection,
 native qualification/Prepared wiring and an actual held exec remain required.
+
+### Independent output EOF checkpoint
+
+The focused CPU regression first reproduced the direct producer's incorrect
+`ExitError => drained` classification. Memory-stream tests now cover both EOFs,
+last bytes accompanying EOF, binary retention, missing/reused/shared witnesses,
+forced-close/read/collector errors and short writes. Direct leaf wait/drain still
+leaves group and descendant cleanup unverified. Anchor parser doubles retain the
+existing no-fork requirements for nonzero/signal reports. These are CPU evidence,
+not native process, kqueue, confinement or production qualification.
+
+Go 1.26.2's Darwin `os/exec` copier uses `io.Copy` from an `os.File` pipe; that
+file's `WriteTo` delegates to the witness's `ReadFrom`. The witness strips further
+copy optimizations to observe actual EOF and successful retention. If a different
+copier bypasses the witness, classification fails closed. Collectors keep the
+existing bounded nonblocking requirement. Input acceptance is a separate fact:
+a quick-exit stdin EPIPE is not output EOF or command-input acceptance.
+
+`TestNativeOwnedLeafDrain` is prepared behind `farol_native_process`. It uses the
+exact built Go test image as a disposable synthetic leaf, large unread stdin,
+binary stdout/stderr, nonzero exit and one original-handle signal exit. It retains
+one original `Cmd`/`os.Process`, waits once, bounds drain and self-expiry, and keeps
+unknown evidence rather than retrying or selecting another launcher. This is a
+lower-boundary lifecycle fixture without a Qualification callback, shell, legacy
+watchdog, connector, held role or kqueue/no-fork certificate. It cannot qualify an
+arbitrary process tree or the production route. On failure its remaining cases
+stop; an unknown wait/drain/stop retains the exact disposable directory.
+
+CPU and compile-only checks:
+
+```sh
+GOCACHE=/private/tmp/farol-shell-lifecycle-go-cache go test ./modules/computer/infra/process -count=1
+GOCACHE=/private/tmp/farol-shell-lifecycle-go-cache go test -race ./modules/computer/infra/process -count=1
+GOCACHE=/private/tmp/farol-shell-lifecycle-go-cache go vet ./modules/computer/infra/process
+GOCACHE=/private/tmp/farol-shell-lifecycle-go-cache go test -tags farol_native_process ./modules/computer/infra/process -run '^$' -count=1
+```
+
+After Lead confirms exclusive serialized native-lane access, run the following
+exact selector once with normal local tooling permissions. A denied/unknown
+operation stops this route; do not retry or reroute it:
+
+```sh
+GOCACHE=/private/tmp/farol-shell-lifecycle-go-cache go test -tags farol_native_process ./modules/computer/infra/process -run '^TestNativeOwnedLeafDrain$' -count=1 -v
+```
+
+Native execution is pending lane coordination for this checkpoint. Root-owned
+activation, effective confinement, real held exec/kernel no-fork trace, exact
+anchor result/ACK/Wait, descendant/unknown cases, independent review, aggregate
+checks, package/installed/live and release gates remain open. `connector.processes`
+remains unset; no shared contract, authority, boot/schema or desktop change is
+included here.

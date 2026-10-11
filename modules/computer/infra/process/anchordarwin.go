@@ -148,10 +148,9 @@ func (g *darwinTrackedGuest) Wait() (AnchorReport, error) {
 	}
 	details := exitDetails(g.command.ProcessState)
 	report.RootWaited, report.ExitCode, report.ExitSignal = details.Waited, details.Code, details.Signal
-	// os/exec may prefer ExitError over an IO/WaitDelay error. Never infer
-	// successful drain from that class. Nonzero/signal exit needs independent
-	// EOF evidence from root before it could qualify, and stays unknown here.
-	report.OutputDrained = err == nil
+	// Root Wait and both pipe EOF/copy observations are independent. The SAME
+	// kernel exec/exit and no-fork requirements still govern closedGuest.
+	report.OutputDrained = commandOutputDrained(g.command, err)
 	return report, nil
 }
 

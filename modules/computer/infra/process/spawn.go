@@ -39,7 +39,7 @@ func (n nativeBoundary) Start(ctx context.Context, command Command, check func(c
 	cmd.Env = append([]string{}, command.Environment...)
 	cmd.Dir = command.Cwd
 	cmd.Stdin = bytes.NewReader(command.Input)
-	cmd.Stdout, cmd.Stderr = stdout, stderr
+	cmd.Stdout, cmd.Stderr = &drainWitness{writer: stdout}, &drainWitness{writer: stderr}
 	// A root can exit while descendants keep pipes open. Bounded drain is not
 	// descendant/group termination proof and cannot turn into terminal-complete.
 	cmd.WaitDelay = time.Second
@@ -62,10 +62,7 @@ func (n *nativeChild) Wait() (exit, error) {
 		return exit{}, &processsvc.NativeFailure{Unknown: true}
 	}
 	result := exitDetails(n.command.ProcessState)
-	result.Drained = err == nil
-	if _, exited := err.(*exec.ExitError); exited {
-		result.Drained = true
-	}
+	result.Drained = commandOutputDrained(n.command, err)
 	return result, nil
 }
 func (n *nativeChild) Kill() error { return n.command.Process.Kill() }
