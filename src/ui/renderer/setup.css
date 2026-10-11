@@ -141,3 +141,61 @@
     flex-wrap: wrap;
   }
 }
+
+/* The setup workspace uses the approved single-detail composition. Existing
+   grants remain selectable; the picker wraps instead of adding another sidebar. */
+.setup-wizard .workspace-layout {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+.setup-wizard .workspace-picker {
+  flex-direction: row;
+  flex-wrap: wrap;
+  width: 100%;
+  gap: 12px;
+}
+.setup-wizard .workspace-picker:has(> :only-child) {
+  display: none;
+}
+.setup-wizard .workspace-choice {
+  flex: 1 1 160px;
+  border-radius: 8px;
+}
+.setup-wizard .workspace-choice-path {
+  display: none;
+}
+.setup-wizard .workspace-detail {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  width: 100%;
+}
+.setup-wizard .workspace-heading {
+  margin-bottom: 20px;
+}
+.setup-wizard .workspace-heading h3 {
+  font-size: 18px;
+}
+.setup-wizard .workspace-detail > form {
+  padding: 18px 20px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--sheet);
+  margin: 18px 0 24px;
+}
+.setup-wizard .workspace-detail .badges {
+  color: var(--muted);
+}
+.setup-wizard .workspace-detail > details {
+  padding: 20px 0;
+  border-block: 1px solid var(--line);
+}
+.setup-wizard .workspace-add {
+  padding-top: 12px;
+}
+
+.setup-wizard .control-row[hidden] {
+  display: none;
+}

@@ -33,9 +33,9 @@ describe("Setup checklist presentation", () => {
     assert.deepEqual(setupSections, [
       ["overview", "Overview"],
       ["signin", "Sign in"],
-      ["folders", "Workspaces"],
       ["connection", "Connection"],
-      ["attachment", "Add to ChatGPT"],
+      ["folders", "Workspaces"],
+      ["attachment", "Check"],
     ]);
     assert.deepEqual(
       projectSetupChecklist(baseline).entries.map((x) => x.step),

@@ -22,11 +22,12 @@ const context: Record<SetupSection, { title: string; description: string }> = {
   },
   connection: {
     title: "Connection",
-    description: "Connect this Mac using your tunnel details.",
+    description: "Connect this Mac and add Farol to ChatGPT.",
   },
   attachment: {
-    title: "Add to ChatGPT",
-    description: "Add the Farol app, then check the connection from ChatGPT.",
+    title: "Check",
+    description:
+      "Check that ChatGPT can reach this Mac. A local connection alone is not a complete test.",
   },
 };
 function CheckMark({ state }: { state: SetupCheckState | "overview" }) {
@@ -173,7 +174,7 @@ export function Setup({ snapshot, facade }: Props) {
               facade.navigate({ area: "setup", setupStep: next ?? "overview" })
             }
           >
-            {next ? "Continue" : "Review setup"}
+            {next ? "Continue" : "Back to overview"}
           </button>
         </footer>
       )}

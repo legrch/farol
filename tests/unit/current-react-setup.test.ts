@@ -18,13 +18,7 @@ const expected = {
 };
 function readyEvidence() {
   return {
-    steps: [
-      "Overview",
-      "Sign in",
-      "Workspaces",
-      "Connection",
-      "Add to ChatGPT",
-    ],
+    steps: ["Overview", "Sign in", "Connection", "Workspaces", "Check"],
     currentSteps: ["Overview"],
     obsoleteCount: 0,
     rows: [
@@ -38,9 +32,9 @@ function readyEvidence() {
         navigationStatus: "Current sign-in is unknown",
       },
       ...[
-        ["folders", "Workspaces"],
         ["connection", "Connection"],
-        ["attachment", "Add to ChatGPT"],
+        ["folders", "Workspaces"],
+        ["attachment", "Check"],
       ].map(([step, label]) => ({
         step,
         label,

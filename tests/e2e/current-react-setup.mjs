@@ -189,9 +189,9 @@ export async function setupAction(page, name, { scope = ".setup-page" } = {}) {
 const setupSteps = [
   ["overview", "Overview"],
   ["signin", "Sign in"],
-  ["folders", "Workspaces"],
   ["connection", "Connection"],
-  ["attachment", "Add to ChatGPT"],
+  ["folders", "Workspaces"],
+  ["attachment", "Check"],
 ];
 const checkStatus = {
   verified: "Verified",

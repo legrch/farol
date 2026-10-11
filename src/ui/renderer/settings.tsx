@@ -1266,8 +1266,6 @@ function WorkspaceDetail({
     scope: string | null;
   } | null>(null);
   const [removal, setRemoval] = useState<{ scope: string | null } | null>(null);
-  const [editOpen, setEditOpen] = useState(false);
-  const editing = !setupStep || editOpen || draft !== null || removal !== null;
   const [stopReview, setStopReview] = useState(false);
   const [stopResult, setStopResult] = useState<Intent | null>(null);
   const feedback = useSettingsFeedback(facade);
@@ -1305,17 +1303,7 @@ function WorkspaceDetail({
     >
       <div className="workspace-heading">
         <h3>{name}</h3>
-        {setupStep && !editing && (
-          <button
-            type="button"
-            className="subtle"
-            onClick={() => setEditOpen(true)}
-          >
-            Edit
-          </button>
-        )}
         <button
-          hidden={!editing}
           type="button"
           className="subtle workspace-remove"
           aria-label={`Remove workspace ${name}`}
@@ -1364,12 +1352,10 @@ function WorkspaceDetail({
             : "Verify workspace checks access and prepares this workspace for Connection."}
       </p>
       <form
-        hidden={!editing}
         onKeyDown={(event) => {
           if (event.key === "Escape") {
             event.preventDefault();
             setDraft(null);
-            setEditOpen(false);
           }
         }}
         onSubmit={(event) => {
@@ -1388,7 +1374,6 @@ function WorkspaceDetail({
               // A refused/unknown save retains its draft and existing fence.
               if (result?.state === "applied") {
                 setDraft((latest) => (latest === draft ? null : latest));
-                setEditOpen(false);
               }
             });
         }}
@@ -1412,7 +1397,7 @@ function WorkspaceDetail({
         </label>
         <p className="description">
           Read &amp; write allows guarded changes that still require approval.
-          Saving access changes requires a fresh check.
+          Farol checks access and restores the connection after saving.
         </p>
         {stale && (
           <p className="notice" role="status">
@@ -1420,7 +1405,7 @@ function WorkspaceDetail({
             Cancel to review the saved access before editing again.
           </p>
         )}
-        <div className="control-row">
+        <div className="control-row" hidden={Boolean(setupStep && !draft)}>
           <button
             type="submit"
             className="primary"
@@ -1439,7 +1424,6 @@ function WorkspaceDetail({
             disabled={!draft && !setupStep}
             onClick={() => {
               setDraft(null);
-              setEditOpen(false);
             }}
           >
             Cancel
@@ -2052,9 +2036,9 @@ function ThisMac({ settings, snapshot, facade, actions }: PageProps) {
     <>
       <h2>This Mac</h2>
       <p className="description">
-        Terminal &amp; Git access is optional. After changing workspace or
-        command access, verify the workspace again in Workspaces, then open
-        Connection to start or reconnect explicitly.
+        Terminal &amp; Git access is optional. Farol checks workspace access
+        again after you save a workspace change and restores a configured
+        connection. Command access has its own verification.
       </p>
       <button
         type="button"
@@ -2529,7 +2513,13 @@ function Connection({
           )}
         </Group>
       </div>
-      <div hidden={setupStep !== undefined && setupStep !== "attachment"}>
+      <div
+        hidden={
+          setupStep !== undefined &&
+          setupStep !== "attachment" &&
+          setupStep !== "connection"
+        }
+      >
         <Group title="Add to ChatGPT" showTitle={!setupStep}>
           {!setupStep && (
             <p className="description">
@@ -2571,7 +2561,7 @@ function Connection({
           {setupStep && attachmentReady && (
             <p className="description">
               The retained attachment check matches this build, connection and
-              workspace. Continue to review setup.
+              workspace. Return to Overview to see the current checks.
             </p>
           )}
           <div className="control-row">
@@ -2592,6 +2582,15 @@ function Connection({
             </Command>
           </div>
           <ConnectionGuide />
+          {setupStep === "attachment" && (
+            <EmbeddedConnectionCheck
+              settings={settings}
+              snapshot={snapshot}
+              facade={facade}
+              actions={actions}
+              setupStep={setupStep}
+            />
+          )}
           {externalChallenge && (!setupStep || !attachmentReady) && (
             <div
               className="connector-challenge"
@@ -2728,7 +2727,7 @@ function Connection({
                   type="button"
                   className="subtle"
                   onClick={() =>
-                    facade.navigate({ area: "setup", setupStep: "folders" })
+                    facade.navigate({ area: "setup", setupStep: "connection" })
                   }
                 >
                   Skip for now
@@ -2747,11 +2746,7 @@ function ConnectionDiagnostics({
   facade,
   actions,
 }: PageProps) {
-  const connector = settings.connectors.secureMcp;
   const setup = computerSetup(snapshot);
-  const [appName, setAppName] = useState(connector.chatgptApp?.name ?? "");
-  const appCheckStarted = useRef(false);
-  const [appCheckAttempted, setAppCheckAttempted] = useState(false);
   return (
     <>
       <Group title="Connection controls">
@@ -2785,109 +2780,127 @@ function ConnectionDiagnostics({
           </Command>
         </div>
       </Group>
-      <Group title="Connection verification details">
-        <details>
-          <summary>ChatGPT app and technical options</summary>
-          <p className="description">
-            Select the existing ChatGPT app attached to this tunnel. Check in
-            ChatGPT sends one short message and verifies a local receipt; it is
-            available only in Dev with the selected app, Temporary Chat and
-            Instant model.
-          </p>
-          <form
-            onSubmit={(event) => {
-              event.preventDefault();
-              if (!connector.tunnelId) return;
-              void actions.run({
-                kind: "connector.select-chatgpt-app",
-                name: appName,
-                tunnelId: connector.tunnelId,
-                connectorGeneration: connector.generation,
-              });
-            }}
-          >
-            <label className="setting-row">
-              ChatGPT app name
-              <input
-                className="field"
-                value={appName}
-                onChange={(event) => setAppName(event.currentTarget.value)}
-                required
-                maxLength={64}
-              />
-            </label>
-            <button
-              className="primary"
-              disabled={
-                !connector.tunnelId ||
-                !actions.allowed("connector.select-chatgpt-app")
-              }
-            >
-              Select ChatGPT app
-            </button>
-          </form>
+      <EmbeddedConnectionCheck
+        settings={settings}
+        snapshot={snapshot}
+        facade={facade}
+        actions={actions}
+      />
+    </>
+  );
+}
+function EmbeddedConnectionCheck({
+  settings,
+  snapshot,
+  facade,
+  actions,
+  setupStep,
+}: PageProps) {
+  const connector = settings.connectors.secureMcp;
+  const setup = computerSetup(snapshot);
+  const [appName, setAppName] = useState(connector.chatgptApp?.name ?? "");
+  const appCheckStarted = useRef(false);
+  const [appCheckAttempted, setAppCheckAttempted] = useState(false);
+  return (
+    <Group title="Connection verification details" showTitle={!setupStep}>
+      <details open={setupStep === "attachment"}>
+        <summary>ChatGPT app and technical options</summary>
+        <p className="description">
+          Select the existing ChatGPT app attached to this tunnel. Check in
+          ChatGPT sends one short message and verifies a local receipt; use the
+          selected app in a Temporary Chat with the Instant model. The test
+          reads no file contents.
+        </p>
+        <form
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (!connector.tunnelId) return;
+            void actions.run({
+              kind: "connector.select-chatgpt-app",
+              name: appName,
+              tunnelId: connector.tunnelId,
+              connectorGeneration: connector.generation,
+            });
+          }}
+        >
+          <label className="setting-row">
+            ChatGPT app name
+            <input
+              className="field"
+              value={appName}
+              onChange={(event) => setAppName(event.currentTarget.value)}
+              required
+              maxLength={64}
+            />
+          </label>
           <button
-            type="button"
             className="primary"
             disabled={
-              appCheckAttempted ||
-              !actions.allowed("connector.verify-app") ||
-              snapshot.environment !== "dev" ||
-              !setup.canVerifyEmbeddedApp ||
-              !connector.chatgptApp ||
-              connector.chatgptApp.connectorGeneration !==
-                connector.generation ||
-              connector.chatgptApp.tunnelId !== connector.tunnelId
-            }
-            onClick={() => {
-              if (appCheckStarted.current) return;
-              appCheckStarted.current = true;
-              setAppCheckAttempted(true);
-              void actions.run({ kind: "connector.verify-app" }, (current) => {
-                const latest = computerSetup(current);
-                return (
-                  current.environment === "dev" &&
-                  latest.canVerifyEmbeddedApp &&
-                  current.configuration?.status === "ready" &&
-                  current.configuration.settings.connectors.secureMcp.chatgptApp
-                    ?.connectorGeneration ===
-                    current.configuration.settings.connectors.secureMcp
-                      .generation &&
-                  current.configuration.settings.connectors.secureMcp.chatgptApp
-                    ?.tunnelId ===
-                    current.configuration.settings.connectors.secureMcp.tunnelId
-                );
-              });
-            }}
-          >
-            Check in ChatGPT once
-          </button>
-          <p className="description">
-            External verification uses the challenge in Connection and does not
-            require embedded sign-in. Health checks do not prove ChatGPT
-            attachment.
-          </p>
-          <button
-            type="button"
-            className="text-button"
-            onClick={() =>
-              facade.navigate({ area: "settings", page: "connection" })
+              !connector.tunnelId ||
+              !actions.allowed("connector.select-chatgpt-app")
             }
           >
-            Continue attachment setup
+            Select ChatGPT app
           </button>
-          <div className="control-row">
-            <Command
-              actions={actions}
-              command={{ kind: "onboarding.open-help", destination: "tunnels" }}
-            >
-              Tunnel setup help
-            </Command>
-          </div>
-          <ConnectionGuide />
-        </details>
-      </Group>
-    </>
+        </form>
+        <button
+          type="button"
+          className="primary"
+          disabled={
+            appCheckAttempted ||
+            !actions.allowed("connector.verify-app") ||
+            !setup.canVerifyEmbeddedApp ||
+            !connector.chatgptApp ||
+            connector.chatgptApp.connectorGeneration !== connector.generation ||
+            connector.chatgptApp.tunnelId !== connector.tunnelId
+          }
+          onClick={() => {
+            if (appCheckStarted.current) return;
+            appCheckStarted.current = true;
+            setAppCheckAttempted(true);
+            void actions.run({ kind: "connector.verify-app" }, (current) => {
+              const latest = computerSetup(current);
+              return (
+                latest.canVerifyEmbeddedApp &&
+                current.configuration?.status === "ready" &&
+                current.configuration.settings.connectors.secureMcp.chatgptApp
+                  ?.connectorGeneration ===
+                  current.configuration.settings.connectors.secureMcp
+                    .generation &&
+                current.configuration.settings.connectors.secureMcp.chatgptApp
+                  ?.tunnelId ===
+                  current.configuration.settings.connectors.secureMcp.tunnelId
+              );
+            });
+          }}
+        >
+          Check in ChatGPT once
+        </button>
+        <p className="description">
+          External verification uses the challenge in Connection and does not
+          require embedded sign-in. Health checks do not prove ChatGPT
+          attachment.
+        </p>
+        <button
+          type="button"
+          className="text-button"
+          onClick={() =>
+            facade.navigate({ area: "settings", page: "connection" })
+          }
+        >
+          Continue attachment setup
+        </button>
+        <div className="control-row">
+          <Command
+            actions={actions}
+            command={{ kind: "onboarding.open-help", destination: "tunnels" }}
+          >
+            Tunnel setup help
+          </Command>
+        </div>
+        <ConnectionGuide />
+      </details>
+    </Group>
   );
 }
 function Model({ settings, snapshot, facade, actions }: PageProps) {

@@ -1868,16 +1868,11 @@ it("fresh Setup navigation never writes, verifies, clears credentials or invents
   expect(
     host.querySelector('[aria-label="Setup overview"]')?.textContent,
   ).toContain("Not checked");
-  for (const step of [
-    "Sign in",
-    "Workspaces",
-    "Connection",
-    "Add to ChatGPT",
-  ]) {
+  for (const step of ["Sign in", "Workspaces", "Connection", "Check"]) {
     await act(async () => button(host, step).click());
     expect(c.getSnapshot().destination.area).toBe("setup");
   }
-  await act(async () => button(host, "Review setup").click());
+  await act(async () => button(host, "Back to overview").click());
   expect(c.getSnapshot().destination.setupStep).toBe("overview");
   expect(
     host.querySelector(
@@ -1920,7 +1915,7 @@ it("Setup presents a guided Overview and contextual steps with navigation-only c
   expect(
     visibleHeadings().filter((title) => title === "Workspaces"),
   ).toHaveLength(1);
-  await act(async () => button(page, "Continue").click());
+  await act(async () => button(page, "Previous").click());
   expect(c.getSnapshot().destination.setupStep).toBe("connection");
   expect(visibleHeadings()).toEqual(["Connection"]);
   const help = page.querySelector<HTMLDetailsElement>(".setup-help")!;
@@ -1930,12 +1925,14 @@ it("Setup presents a guided Overview and contextual steps with navigation-only c
     help.open = true;
   });
   await act(async () => button(page, "Continue").click());
-  expect(c.getSnapshot().destination.setupStep).toBe("attachment");
-  expect(visibleHeadings()).toEqual(["Add to ChatGPT"]);
-  await act(async () => button(page, "Previous").click());
-  expect(c.getSnapshot().destination.setupStep).toBe("connection");
+  expect(c.getSnapshot().destination.setupStep).toBe("folders");
   await act(async () => button(page, "Continue").click());
-  await act(async () => button(page, "Review setup").click());
+  expect(c.getSnapshot().destination.setupStep).toBe("attachment");
+  expect(visibleHeadings()).toEqual(["Check"]);
+  await act(async () => button(page, "Previous").click());
+  expect(c.getSnapshot().destination.setupStep).toBe("folders");
+  await act(async () => button(page, "Continue").click());
+  await act(async () => button(page, "Back to overview").click());
   expect(c.getSnapshot().destination.setupStep).toBe("overview");
   expect(
     [...page.querySelectorAll("button")].some(

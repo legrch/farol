@@ -2,9 +2,9 @@
 export const setupSections = [
   ["overview", "Overview"],
   ["signin", "Sign in"],
-  ["folders", "Workspaces"],
   ["connection", "Connection"],
-  ["attachment", "Add to ChatGPT"],
+  ["folders", "Workspaces"],
+  ["attachment", "Check"],
 ] as const;
 export type SetupSection = (typeof setupSections)[number][0];
 export type SetupCheckpoint = Exclude<SetupSection, "overview">;
@@ -60,14 +60,6 @@ export function projectSetupChecklist(input: SetupChecklistInput) {
         input.signInActivity,
       ],
       [
-        "folders",
-        "Workspaces",
-        "Choose workspaces and access for each one.",
-        false,
-        input.workspacesVerified,
-        input.computerActivity,
-      ],
-      [
         "connection",
         "Connection",
         "Connect this Mac to ChatGPT.",
@@ -76,9 +68,17 @@ export function projectSetupChecklist(input: SetupChecklistInput) {
         input.computerActivity,
       ],
       [
+        "folders",
+        "Workspaces",
+        "Choose workspaces and access for each one.",
+        false,
+        input.workspacesVerified,
+        input.computerActivity,
+      ],
+      [
         "attachment",
-        "Add to ChatGPT",
-        "Add the app and review verification.",
+        "Check",
+        "Check the complete connection from ChatGPT.",
         false,
         input.externalAccessVerified,
         input.computerActivity,

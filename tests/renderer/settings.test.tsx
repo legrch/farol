@@ -2365,47 +2365,51 @@ describe("bounded Settings writer", () => {
       { kind: "connector.select-client" },
     ]);
   });
-  it("requires current correlated attachment for Ready and sends a Dev app check once", async () => {
-    const value = connectionSettings();
-    const h = await mount("connection", value, "dev");
-    const badge = () =>
-      h.host.querySelector('section[aria-label="This Mac connection"] .badges')
-        ?.textContent;
-    expect(badge()).toBe("Computer ready");
-    await h.click("Check attachment");
-    await h.click("Check connection");
-    expect(h.host.textContent).toContain(
-      "Local connection checked. Access from ChatGPT has a separate verification.",
-    );
-    await h.pageTo("diagnostics");
-    await h.click("Check in ChatGPT once");
-    await h.click("Check in ChatGPT once");
-    expect(h.calls()).toEqual([
-      { kind: "connector.check-attachment" },
-      { kind: "connector.check-health" },
-      { kind: "connector.verify-app" },
-    ]);
-    const next = structuredClone(value);
-    next.revision++;
-    next.connectors.secureMcp.runtime!.runtimeGeneration = "e".repeat(64);
-    vi.mocked(h.f.api.bootstrap).mockResolvedValue({
-      ...bootstrap(),
-      environment: "dev",
-      configuration: { status: "ready", settings: next },
-    });
-    await act(async () => h.c.refresh());
-    expect(badge()).toBe("Connected to this Mac · ChatGPT check needed");
-    next.setup.connect.outcomeUnknown = true;
-    await act(async () => h.c.refresh());
-    expect(badge()).toBe("Outcome unknown");
-    await h.pageTo("connection");
-    expect(h.button("Check attachment").disabled).toBe(true);
-    expect(h.calls().some((command) => command.kind.startsWith("host."))).toBe(
-      false,
-    );
-  });
+  it.each(["dev", "preview"] as const)(
+    "requires current correlated attachment for Ready and sends a %s app check once",
+    async (environment) => {
+      const value = connectionSettings();
+      const h = await mount("connection", value, environment);
+      const badge = () =>
+        h.host.querySelector(
+          'section[aria-label="This Mac connection"] .badges',
+        )?.textContent;
+      expect(badge()).toBe("Computer ready");
+      await h.click("Check attachment");
+      await h.click("Check connection");
+      expect(h.host.textContent).toContain(
+        "Local connection checked. Access from ChatGPT has a separate verification.",
+      );
+      await h.pageTo("diagnostics");
+      await h.click("Check in ChatGPT once");
+      await h.click("Check in ChatGPT once");
+      expect(h.calls()).toEqual([
+        { kind: "connector.check-attachment" },
+        { kind: "connector.check-health" },
+        { kind: "connector.verify-app" },
+      ]);
+      const next = structuredClone(value);
+      next.revision++;
+      next.connectors.secureMcp.runtime!.runtimeGeneration = "e".repeat(64);
+      vi.mocked(h.f.api.bootstrap).mockResolvedValue({
+        ...bootstrap(),
+        environment: "dev",
+        configuration: { status: "ready", settings: next },
+      });
+      await act(async () => h.c.refresh());
+      expect(badge()).toBe("Connected to this Mac · ChatGPT check needed");
+      next.setup.connect.outcomeUnknown = true;
+      await act(async () => h.c.refresh());
+      expect(badge()).toBe("Outcome unknown");
+      await h.pageTo("connection");
+      expect(h.button("Check attachment").disabled).toBe(true);
+      expect(
+        h.calls().some((command) => command.kind.startsWith("host.")),
+      ).toBe(false);
+    },
+  );
 
-  it("binds app selection to exact current tunnel/generation and checks only Dev", async () => {
+  it("binds app selection to exact current tunnel/generation without admitting an unverified connection", async () => {
     const value = withFolder();
     value.connectors.secureMcp.tunnelId = "owner-tunnel";
     const h = await mount("diagnostics", value, "dev");
@@ -3746,7 +3750,7 @@ describe("owner Setup presentation checkpoint (DOM fixtures only)", () => {
         step !== "connection",
       );
       expect(group("Add to ChatGPT").closest("div[hidden]") !== null).toBe(
-        step !== "attachment",
+        step !== "attachment" && step !== "connection",
       );
       expect(
         group("Embedded ChatGPT · optional").closest("div[hidden]"),
@@ -4515,9 +4519,9 @@ it("opens the Farol connection guide locally without saving a draft or sending a
   expect(guide.open).toBe(false);
   await act(async () => summary.click());
   expect(guide.open).toBe(true);
-  expect(guide.textContent).toContain("Sign in · optional");
-  expect(guide.textContent).toContain("send it yourself once");
-  expect(guide.textContent).toContain("observe the original action");
+  expect(guide.textContent).toContain("Sign in.");
+  expect(guide.textContent).toContain("sends one small verification request");
+  expect(guide.textContent).toContain("inspect it before trying again");
   expect(guide.textContent).not.toContain(key.value);
   await act(async () => summary.click());
   expect(guide.open).toBe(false);
@@ -4651,12 +4655,11 @@ describe("fresh and returning Setup journey", () => {
     );
     for (const text of ["Save", "Cancel", "Verify workspace"])
       expect(() => h.button(text)).toThrow();
-    expect(() => h.field("Workspace access")).toThrow();
-    expect(h.button("Edit").disabled).toBe(false);
+    expect(h.field("Workspace access").value).toBe("read");
     await h.click("Continue");
     expect(h.c.getSnapshot().destination).toMatchObject({
       area: "setup",
-      setupStep: "connection",
+      setupStep: "attachment",
     });
     expect(h.calls()).toEqual([]);
   });
@@ -4704,14 +4707,13 @@ describe("fresh and returning Setup journey", () => {
     },
   );
 
-  it("Edit reveals the same guarded form, Cancel restores saved access, and navigation retains the draft", async () => {
+  it("Access is directly editable in the guarded form, Cancel restores saved access, and navigation retains the draft", async () => {
     const h = await mountSetup("folders");
     const select = h.host.querySelector<HTMLSelectElement>(
       ".workspace-detail select",
     )!;
-    await h.click("Edit");
     expect(h.field("Workspace access")).toBe(select);
-    expect(h.button("Cancel").disabled).toBe(false);
+    expect(() => h.button("Cancel")).toThrow();
     await change(select, "write");
     await h.click("Continue");
     expect(select.isConnected).toBe(true);
@@ -4722,10 +4724,9 @@ describe("fresh and returning Setup journey", () => {
     expect(select.value).toBe("write");
     await h.click("Cancel");
     expect(select.value).toBe("read");
-    expect(() => h.field("Workspace access")).toThrow();
-    await h.click("Edit");
+    expect(h.field("Workspace access").value).toBe("read");
     expect(h.field("Workspace access")).toBe(select);
-    expect(h.button("Save").disabled).toBe(true);
+    expect(() => h.button("Save")).toThrow();
     expect(
       h.host
         .querySelector('[aria-label="Remove workspace project"]')
@@ -4734,9 +4735,8 @@ describe("fresh and returning Setup journey", () => {
     expect(h.calls()).toEqual([]);
   });
 
-  it("retains a stale Edit draft across navigation and refuses saving it until Cancel", async () => {
+  it("retains a stale access draft across navigation and refuses saving it until Cancel", async () => {
     const h = await mountSetup("folders");
-    await h.click("Edit");
     await change(h.field("Workspace access"), "write");
     const changed = connectionSettings();
     changed.computer.generation++;
@@ -4750,14 +4750,12 @@ describe("fresh and returning Setup journey", () => {
     expect(h.button("Save").disabled).toBe(true);
     await h.click("Save");
     await h.click("Cancel");
-    await h.click("Edit");
     expect(h.field("Workspace access").value).toBe("read");
     expect(h.calls()).toEqual([]);
   });
 
   it("fences a retained UNKNOWN save through Cancel, refresh and return without replay", async () => {
     const h = await mountSetup("folders");
-    await h.click("Edit");
     await change(h.field("Workspace access"), "write");
     vi.mocked(h.f.api.configure).mockRejectedValueOnce(new Error("reply lost"));
     await h.click("Save");
@@ -4782,7 +4780,6 @@ describe("fresh and returning Setup journey", () => {
       "Access is checked for this build and saved scope",
     );
     expect(h.button("Verify workspace").disabled).toBe(true);
-    await h.click("Edit");
     await change(h.field("Workspace access"), "write");
     expect(h.button("Save").disabled).toBe(true);
     await h.click("Save");
@@ -5125,7 +5122,7 @@ describe("fresh and returning Setup journey", () => {
     expect(() => h.button("Copy verification request")).toThrow();
     expect(() => h.button("Check attachment")).toThrow();
     expect(h.button("Open connection guide")).toBeTruthy();
-    await h.click("Review setup");
+    await h.click("Back to overview");
     expect(h.c.getSnapshot().destination).toMatchObject({
       area: "setup",
       setupStep: "overview",
@@ -5173,7 +5170,7 @@ describe("fresh and returning Setup journey", () => {
       "Copy the current verification request",
     );
     expect(h.button("Copy verification request").disabled).toBe(false);
-    expect(h.button("Review setup")).toBeTruthy();
+    expect(h.button("Back to overview")).toBeTruthy();
     expect(h.calls()).toEqual([]);
   });
 
@@ -5346,7 +5343,7 @@ describe("fresh and returning Setup journey", () => {
     await h.click("Continue");
     expect(h.c.getSnapshot().destination).toMatchObject({
       area: "setup",
-      setupStep: "folders",
+      setupStep: "connection",
     });
     await h.stepTo("signin");
     expect(() => h.button("Sign in")).toThrow();
@@ -5366,7 +5363,7 @@ describe("fresh and returning Setup journey", () => {
     await h.click("Skip for now");
     expect(navigate).toHaveBeenCalledExactlyOnceWith({
       area: "setup",
-      setupStep: "folders",
+      setupStep: "connection",
     });
     expect(h.c.getSnapshot().configuration).toEqual(h.configuration);
     await h.stepTo("signin");
@@ -5523,6 +5520,6 @@ describe("fresh and returning Setup journey", () => {
     ]);
     expect(h.c.getSnapshot().signInObservation?.state).toBe("unknown");
     await h.click("Skip for now");
-    expect(h.c.getSnapshot().destination.setupStep).toBe("folders");
+    expect(h.c.getSnapshot().destination.setupStep).toBe("connection");
   });
 });

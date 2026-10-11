@@ -208,7 +208,7 @@ describe("reference-aligned Setup wizard", () => {
       // the original pending/UNKNOWN fences on optional sign-in.
       expect(h.button("Sign in").disabled).toBe(true);
       await h.click("Sign in");
-      await stepTo("Add to ChatGPT");
+      await stepTo("Check");
       expect(notice()).toContain("Saving or checking");
       await h.remount();
       expect(notice()).toContain("Saving or checking");
@@ -238,7 +238,7 @@ describe("reference-aligned Setup wizard", () => {
       await h.remount();
       expect(notice()).toBeUndefined();
       expect(h.button("Sign in").disabled).toBe(outcome === "unknown");
-      await stepTo("Add to ChatGPT");
+      await stepTo("Check");
       const originalNotice = notice();
       expect(originalNotice).toContain(
         outcome === "unknown"
@@ -286,7 +286,7 @@ describe("reference-aligned Setup wizard", () => {
         expect(notice()).toContain(
           "opening it does not confirm an authenticated account",
         );
-        await stepTo("Add to ChatGPT");
+        await stepTo("Check");
         expect(notice()).toBe(originalNotice);
         expect(h.c.getSnapshot().intents[id]).toEqual(receipt);
       }
@@ -369,9 +369,9 @@ describe("reference-aligned Setup wizard", () => {
     for (const label of [
       "Overview",
       "Sign in",
-      "Workspaces",
       "Connection",
-      "Add to ChatGPT",
+      "Workspaces",
+      "Check",
     ]) {
       const button = h.host.querySelector<HTMLButtonElement>(
         `nav[aria-label="Setup steps"] button[aria-label="${label}"]`,
@@ -381,7 +381,7 @@ describe("reference-aligned Setup wizard", () => {
       expect(h.c.getSnapshot().intents).toEqual(retained);
     }
     await act(async () => h.c.refresh());
-    await h.click("Review setup");
+    await h.click("Back to overview");
     expect(h.c.getSnapshot().intents).toEqual(retained);
     expect(
       vi.mocked(h.f.api.configure).mock.calls.map(([command]) => command.kind),
@@ -400,13 +400,7 @@ describe("reference-aligned Setup wizard", () => {
       [...nav.querySelectorAll("button")].map((x) =>
         x.getAttribute("aria-label"),
       ),
-    ).toEqual([
-      "Overview",
-      "Sign in",
-      "Workspaces",
-      "Connection",
-      "Add to ChatGPT",
-    ]);
+    ).toEqual(["Overview", "Sign in", "Connection", "Workspaces", "Check"]);
     expect(
       h.host.querySelectorAll(
         ".setup-step-number,.setup-overview-number,.setup-eyebrow",
@@ -416,7 +410,7 @@ describe("reference-aligned Setup wizard", () => {
       [...h.host.querySelectorAll("[data-setup-check]")].map((x) =>
         x.getAttribute("data-setup-check"),
       ),
-    ).toEqual(["signin", "folders", "connection", "attachment"]);
+    ).toEqual(["signin", "connection", "folders", "attachment"]);
     expect(h.f.api.configure).not.toHaveBeenCalled();
   });
   it("shows Sign in as a real Setup route, not a Settings or ChatGPT redirect", async () => {
@@ -446,7 +440,7 @@ describe("reference-aligned Setup wizard", () => {
   it("leaves embedded sign-in optional and navigation effect-free", async () => {
     const h = await mount("signin");
     await h.click("Continue");
-    expect(h.c.getSnapshot().destination.setupStep).toBe("folders");
+    expect(h.c.getSnapshot().destination.setupStep).toBe("connection");
     expect(
       vi.mocked(h.f.api.configure).mock.calls.map(([command]) => command.kind),
     ).toEqual(["chatgpt.observe-sign-in"]);
@@ -464,9 +458,9 @@ describe("reference-aligned Setup wizard", () => {
     }
     expect(h.button("Stop connection")).toBeUndefined();
   });
-  it("returns to Overview after Add to ChatGPT rather than another numbered Finish", async () => {
+  it("returns to Overview after Check rather than another numbered Finish", async () => {
     const h = await mount("attachment");
-    await h.click("Review setup");
+    await h.click("Back to overview");
     expect(h.c.getSnapshot().destination.setupStep).toBe("overview");
     expect(h.f.api.configure).not.toHaveBeenCalled();
   });

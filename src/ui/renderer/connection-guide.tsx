@@ -1,74 +1,50 @@
-/** Read-only help: opening it never saves, connects, verifies or sends a message. */
+/** Read-only help. Opening it never changes access or sends a message. */
 export function ConnectionGuide() {
   return (
     <details className="connection-guide">
-      <summary>Connection guide</summary>
+      <summary>How to connect</summary>
       <div className="connection-guide-content">
         <ol>
           <li>
-            <strong>Overview.</strong> Fresh profiles complete the required
-            workspace, connection and attachment checks. Returning profiles
-            review current checks and keep saved workspaces and credentials.
-            Continue advances through sections; Review setup returns to
-            Overview. Navigation does not save, verify, change access or
-            connection bindings, or replay an action.
+            <strong>Sign in.</strong> Use your ChatGPT account in Farol for the
+            built-in check. You can skip this when using ChatGPT in another
+            browser.
           </li>
           <li>
-            <strong>Sign in · optional.</strong> Embedded ChatGPT sign-in is
-            separate from external Computer access. You can continue without it.
-            Entering this step observes the existing page without opening it or
-            changing settings. If Signed in is shown, use Continue. Otherwise,
-            choose Sign in or Skip for now. Returning from sign-in observes the
-            page again; opening sign-in alone does not confirm authentication.
-            An Outcome unknown needs review in Diagnostics, not another sign-in
-            action.
+            <strong>Connect this Mac.</strong> Open Tunnels in ChatGPT, create
+            or select your tunnel, and paste its Tunnel ID and runtime key into
+            Farol. Choose Save &amp; connect. Keep the saved key unless the
+            tunnel details change.
           </li>
           <li>
-            <strong>Workspaces.</strong> For fresh setup, use Add workspace… and
-            Add selected workspace read-only, then Verify workspace when
-            offered. For a current verified workspace, review Saved access and
-            Access checked, then Continue without re-verifying. Edit opens
-            access controls only when you intend to change them. Save submits
-            changed access; Cancel discards the draft. Removing a workspace
-            keeps its files. A saved workspace or stale check alone is
-            insufficient.
+            <strong>Add Farol to ChatGPT.</strong> In ChatGPT, create or select
+            the app attached to this tunnel. Use that app when checking the
+            connection. The tunnel and the ChatGPT app must belong to the same
+            connection.
           </li>
           <li>
-            <strong>Connection.</strong> For fresh setup, enter the Tunnel ID
-            and Runtime key for this environment, then choose Save &amp; connect
-            once. For a returning profile, Tunnel credentials saved means you
-            can keep the saved key. Use Edit connection only when details change
-            and Continue when the connection check is current. Check connection
-            is an explicit local health check. Show runtime key and Hide runtime
-            key reveal only your current input, never the saved key. Submission
-            clears that field. Saved credentials do not establish transport
-            recovery.
+            <strong>Workspace.</strong> Add a folder for Computer file access.
+            Farol checks it and restores a configured connection automatically.
+            Removing a workspace only removes access; your files stay on disk.
+            ChatGPT itself can be used without a workspace; this version's
+            Computer check requires one.
           </li>
           <li>
-            <strong>Add to ChatGPT.</strong> For fresh or unfinished attachment,
-            attach this Farol connection in ChatGPT. Use Copy verification
-            request only when available and send it yourself once. Return here
-            and choose Check attachment to observe its result; this does not
-            send another message. For a current retained attachment check that
-            matches this build, connection and workspace, choose Review setup.
-            Setup hides the first-time instructions, copy and check controls; do
-            not resend verification to advance.
+            <strong>Check.</strong> Select the exact ChatGPT app name. In a
+            Temporary Chat using Instant, choose Check in ChatGPT once. Farol
+            sends one small verification request; only a matching receipt from
+            this Mac confirms success. Alternatively, copy the request into your
+            own ChatGPT chat and return to Check attachment.
           </li>
         </ol>
         <p>
-          If no compatible helper is confirmed, use Find connection helper or
-          review Connection diagnostics. Discovery must verify the helper before
-          connection can start.
+          Continue only moves to the next page. Overview shows the checks that
+          actually passed. A local connection alone does not confirm that
+          ChatGPT can reach this Mac.
         </p>
         <p>
-          A local connection still needs the external ChatGPT check. Computer
-          ready requires current workspace and attachment evidence.
-        </p>
-        <p>
-          If credentials are saved but connection did not finish, keep the key
-          and review the result. For a pending or unknown result, use
-          Diagnostics to observe the original action. Refresh and reopening this
-          guide do not settle uncertainty or repeat an action.
+          If a result is unconfirmed, open Connection diagnostics to inspect it
+          before trying again. Opening Setup never repeats a request.
         </p>
       </div>
     </details>
