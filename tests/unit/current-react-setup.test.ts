@@ -40,9 +40,19 @@ function readyEvidence() {
         label,
         optional: false,
         state: "verified",
-        status: "Verified",
+        status:
+          step === "connection"
+            ? "Local connection ready"
+            : step === "attachment"
+              ? "Verified from ChatGPT"
+              : "Verified",
         navigationState: "verified",
-        navigationStatus: "Verified",
+        navigationStatus:
+          step === "connection"
+            ? "Local connection ready"
+            : step === "attachment"
+              ? "Verified from ChatGPT"
+              : "Verified",
       })),
     ],
     openHome: { count: 1, visible: true, disabled: false },

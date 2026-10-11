@@ -95,11 +95,26 @@ export async function setupAction(page, name, { scope = ".setup-page" } = {}) {
             verify
               ? '.workspace-detail .workspace-feedback p[role="status"]'
               : add
-                ? '.workspace-detail .workspace-feedback p[role="status"], .settings-page > p[role="status"]'
+                ? '.workspace-detail .workspace-feedback p[role="status"], .settings-page > p[role="status"], .settings-page > .workspace-activity > p[role="status"]'
                 : '.settings-page > p[role="status"]',
           ),
         ]
-          .filter((node) => node.checkVisibility())
+          .filter((node) => {
+            const surface = node.closest(".workspace-detail, .settings-page");
+            if (!surface?.checkVisibility()) return false;
+            if (node.checkVisibility()) return true;
+            // Successful receipts live inside closed disclosures. Observe only
+            // their direct receipt children on an otherwise visible surface;
+            // dormant Settings pages and hidden workspace cards stay excluded.
+            const disclosure = node.parentElement;
+            return (
+              disclosure?.matches(
+                "details.workspace-technical, details.workspace-activity",
+              ) &&
+              !disclosure.open &&
+              disclosure.checkVisibility()
+            );
+          })
           .map((node) => node.textContent)
           .filter((text) => !verify || text.startsWith("Verify workspace: "))
           .map((text) =>

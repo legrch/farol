@@ -1066,7 +1066,7 @@ try {
       // The original Add action saves and checks the selected workspace.
       await detail
         .locator(".badges")
-        .filter({ hasText: /^Access checked$/u })
+        .filter({ hasText: /^Access checked(?: · Current workspace)?$/u })
         .waitFor();
       let value;
       for (let attempt = 0; attempt < 100; attempt++) {
