@@ -109,15 +109,17 @@ export function shouldResumeComputerConnector(
     connector.runtime.computerGeneration === settings.computer.generation &&
     !settings.setup.connect.outcomeUnknown &&
     !settings.setup.computer.outcomeUnknown &&
-    settings.setup.computer.reachable === "reachable" &&
-    verification?.configRevision === settings.computer.generation &&
-    identityBoundWorkspaces(settings.computer.workspaces).some(
-      (workspace) => workspace.workspaceId === verification.workspaceId,
-    )
+    (settings.computer.workspaces.length === 0 ||
+      (settings.setup.computer.reachable === "reachable" &&
+        verification?.configRevision === settings.computer.generation &&
+        identityBoundWorkspaces(settings.computer.workspaces).some(
+          (workspace) => workspace.workspaceId === verification.workspaceId,
+        )))
   );
 }
 
 /** Compose the existing workspace check before a new-build connector start.
+ * Exactly empty workspace configuration needs no file verification.
  * The check must return a known success; readback cannot repair a lost reply.
  * It may refresh only the already bound workspace selected by clean resume.
  */
@@ -134,18 +136,34 @@ export async function resumeComputerConnector(
   if (!shouldResumeComputerConnector(input)) return "skipped";
   if (input.snapshot.status !== "ready") return "skipped";
   const settings = input.snapshot.settings;
-  const verified = settings.setup.computer.verified!;
-  if (verified.buildId !== input.buildId) {
-    const result = await ports.verifyWorkspace(verified.workspaceId!);
+  const verified = settings.setup.computer.verified;
+  if (
+    settings.computer.workspaces.length > 0 &&
+    verified?.buildId !== input.buildId
+  ) {
+    if (!verified || verified.workspaceId === null) return "skipped";
+    const workspaceId = verified.workspaceId;
+    const computerGeneration = settings.computer.generation;
+    const connectorGeneration = settings.connectors.secureMcp.generation;
+    const runtimeGeneration =
+      settings.connectors.secureMcp.runtime?.runtimeGeneration;
+    const runtimeBuildId = settings.connectors.secureMcp.runtime?.buildId;
+    const result = await ports.verifyWorkspace(workspaceId);
     if (!result.ok) return "verification-refused";
     const current = ports.current();
     if (
       !shouldResumeComputerConnector({ ...input, snapshot: current }) ||
       current.status !== "ready" ||
-      current.settings.computer.generation !== settings.computer.generation ||
-      current.settings.setup.computer.verified?.workspaceId !==
-        verified.workspaceId ||
-      current.settings.setup.computer.verified.buildId !== input.buildId
+      current.settings.computer.generation !== computerGeneration ||
+      current.settings.connectors.secureMcp.generation !==
+        connectorGeneration ||
+      current.settings.connectors.secureMcp.runtime?.runtimeGeneration !==
+        runtimeGeneration ||
+      current.settings.connectors.secureMcp.runtime?.buildId !==
+        runtimeBuildId ||
+      current.settings.computer.workspaces.length === 0 ||
+      current.settings.setup.computer.verified?.workspaceId !== workspaceId ||
+      current.settings.setup.computer.verified?.buildId !== input.buildId
     )
       return "verification-refused";
   }
