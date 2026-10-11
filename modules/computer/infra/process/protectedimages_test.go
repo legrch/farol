@@ -110,3 +110,33 @@ func TestRootScopedProtectedImageInvalidSelectionRefuses(t *testing.T) {
 		})
 	}
 }
+
+func TestRootScopedProtectedImageAncestorsAcrossAPFSAliases(t *testing.T) {
+	for _, physicalRoot := range []bool{true, false} {
+		s, c := rootScopedFixture(t)
+		logical := "/Users/owner"
+		physical := "/System/Volumes/Data" + logical
+		root, imageRoot := logical, physical
+		if physicalRoot {
+			root, imageRoot = physical, logical
+		}
+		s.Home = logical
+		s.Snapshot.Participant.Grant.Workspaces[0].Root = root
+		s.Snapshot.Approval.Workspaces[0].Root = root
+		c.Root, c.Cwd, c.Write = root, root, true
+		c.Environment = seatbeltEnvironment(s, true)
+		s.ProtectedImages = []ExecutablePin{{imageRoot + "/Applications/Farol.app/backend", strings.Repeat("e", 64)}}
+		plan, err := compileSeatbelt(s, c)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, ancestor := range []string{imageRoot, imageRoot + "/Applications", imageRoot + "/Applications/Farol.app"} {
+			if !hasParameterRule(plan, "deny file-write-unlink", "literal", ancestor) {
+				t.Fatalf("missing alias-independent ancestor protection for %s", ancestor)
+			}
+		}
+		if !hasParameterRule(plan, "allow file-write*", "subpath", root) {
+			t.Fatal("ordinary approved writes lost")
+		}
+	}
+}

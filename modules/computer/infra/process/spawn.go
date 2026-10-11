@@ -69,7 +69,7 @@ func (n *nativeChild) Kill() error { return n.command.Process.Kill() }
 
 // No startup cache, symlink, writable group/world executable or inherited lookup.
 func pinnedExecutable(pin ExecutablePin) (*os.File, error) {
-	file, err := os.OpenFile(pin.Path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	file, err := os.OpenFile(pin.Path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return nil, &processsvc.NativeFailure{}
 	}

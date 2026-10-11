@@ -45,7 +45,7 @@ func (darwinLaunchFilesystem) pinExecutable(ctx context.Context, pin ExecutableP
 	if ctx == nil || ctx.Err() != nil || !absolutePolicyPath(pin.Path) {
 		return nil, &processsvc.NativeFailure{}
 	}
-	file, err := os.OpenFile(pin.Path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	file, err := os.OpenFile(pin.Path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return nil, &processsvc.NativeFailure{}
 	}

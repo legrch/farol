@@ -92,7 +92,7 @@ func TestNativeRootScopedProbeHelper(t *testing.T) {
 	os.Exit(0)
 }
 
-func nativeRootScopedSeatbelt(t *testing.T, write bool, protectImages bool) {
+func nativeRootScopedSeatbelt(t *testing.T, write bool, protectImages bool, aliases ...string) {
 	t.Helper()
 	base, err := os.MkdirTemp("/private/tmp", "farol-root-policy-")
 	if err != nil {
@@ -195,12 +195,36 @@ func nativeRootScopedSeatbelt(t *testing.T, write bool, protectImages bool) {
 			"apps-parent": {container, container + "-moved"},
 		}
 	}
-	s.Snapshot.Participant.Grant.Workspaces[0].Root = root
-	s.Snapshot.Approval.Workspaces[0].Root = root
+	policyRoot := root
+	if len(aliases) != 0 {
+		if len(aliases) != 1 || !protectImages {
+			t.Fatal("invalid native alias fixture")
+		}
+		logical, err := os.Stat(root)
+		must(err)
+		physical, err := os.Stat(dataVolumePath + root)
+		must(err)
+		if !os.SameFile(logical, physical) {
+			t.Fatal("selected APFS spellings are not the same physical root")
+		}
+		switch aliases[0] {
+		case "physical-root":
+			policyRoot = dataVolumePath + root
+			for name, paths := range probe.Renames {
+				probe.Renames[name] = [2]string{dataVolumePath + paths[0], dataVolumePath + paths[1]}
+			}
+		case "physical-image":
+			s.ProtectedImages[0].Path = dataVolumePath + s.ProtectedImages[0].Path
+		default:
+			t.Fatal("unknown native alias fixture")
+		}
+	}
+	s.Snapshot.Participant.Grant.Workspaces[0].Root = policyRoot
+	s.Snapshot.Approval.Workspaces[0].Root = policyRoot
 	s.Snapshot.Approval.Workspaces[0].RootIdentity = identity(root)
 	addRootScope(&s, "secondary", secondary, authority.ReadAccess)
 	s.Snapshot.Approval.Workspaces[1].RootIdentity = identity(secondary)
-	command.Root, command.Cwd, command.RootIdentity = root, root, identity(root)
+	command.Root, command.Cwd, command.RootIdentity = policyRoot, policyRoot, identity(root)
 	command.Executable, command.ExecutableSHA256 = image, s.Executables[0].SHA256
 	payload, err := json.Marshal(probe)
 	must(err)
@@ -210,7 +234,7 @@ func nativeRootScopedSeatbelt(t *testing.T, write bool, protectImages bool) {
 	must(err)
 	arguments := append(append(append([]string(nil), plan.arguments...), image), command.Args...)
 	child := exec.Command(seatbeltExecutable, arguments...)
-	child.Env, child.Dir, child.WaitDelay = command.Environment, root, time.Second
+	child.Env, child.Dir, child.WaitDelay = command.Environment, command.Cwd, time.Second
 	var stdout, stderr bytes.Buffer
 	child.Stdout, child.Stderr = &stdout, &stderr
 	must(child.Start())
@@ -271,4 +295,12 @@ func nativeRootScopedSeatbelt(t *testing.T, write bool, protectImages bool) {
 // namespace. Ordinary workspace writes remain allowed. No production activation.
 func TestNativeRootScopedProtectedImages(t *testing.T) {
 	nativeRootScopedSeatbelt(t, true, true)
+}
+
+func TestNativeRootScopedProtectedImageAPFSAliases(t *testing.T) {
+	for _, spelling := range []string{"physical-root", "physical-image"} {
+		if !t.Run(spelling, func(t *testing.T) { nativeRootScopedSeatbelt(t, true, true, spelling) }) {
+			return // Preserve any failed or unknown original attempt, without a successor.
+		}
+	}
 }

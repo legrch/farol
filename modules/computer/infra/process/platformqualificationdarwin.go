@@ -200,19 +200,13 @@ func (nativePlatformFacts) directory(ctx context.Context, path string) (platform
 		return refuse()
 	}
 	nested := false
-	// APFS Data firmlinks expose /Users, /private and owner installations through
-	// a mount named /System/Volumes/Data. Check both namespace spellings; do not
-	// require the physical mount name to be a lexical ancestor of the user path.
-	dataPath := path
-	if mount == "/System/Volumes/Data" && !insidePolicy(mount, path) {
-		dataPath = mount + path
-	}
+	// Compare both APFS namespace spellings without broadening root grants.
 	for _, candidate := range mounts[:n] {
 		p := text(candidate.Mntonname[:])
 		if p != "/" && !absolutePolicyPath(p) {
 			return refuse()
 		}
-		if (p != path && insidePolicy(path, p)) || (p != dataPath && insidePolicy(dataPath, p)) {
+		if platformNestedMount(path, mount, p) {
 			nested = true
 		}
 	}

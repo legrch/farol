@@ -337,17 +337,15 @@ func compileSeatbelt(s SeatbeltSelection, command Command) (*seatbeltPlan, error
 		add("literal", pin.Path, &executableWrites)
 	}
 	if s.FilePolicy == authority.RootScopedFiles {
-		// Protect the selected image namespace within writable approved roots.
-		// This only denies ancestor removal/rename; ordinary sibling files retain
-		// their granted access. Images outside scope confer no new read/exec access.
+		// Protect image ancestors regardless of textual root membership: APFS
+		// firmlinks can give the approved root another spelling. These literal
+		// unlink denials grant no access and preserve ordinary sibling writes.
 		seen := map[string]bool{}
 		for _, pin := range slices.Concat(s.Executables, s.ProtectedImages) {
 			for ancestor := filepath.Dir(pin.Path); ancestor != "/"; ancestor = filepath.Dir(ancestor) {
-				for _, scope := range selectedScopes {
-					if command.Write && scope.Access == authority.WriteAccess && insidePolicy(scope.ScopeRoot, ancestor) && !seen[ancestor] {
-						seen[ancestor] = true
-						add("literal", ancestor, &rootAnchors)
-					}
+				if !seen[ancestor] {
+					seen[ancestor] = true
+					add("literal", ancestor, &rootAnchors)
 				}
 			}
 		}
