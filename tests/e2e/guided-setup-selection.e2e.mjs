@@ -899,6 +899,11 @@ try {
             throw new Error("WORKSPACE_ACCESS_RECOVERY_TIMEOUT");
           await new Promise((resolve) => setTimeout(resolve, 50));
         }
+        // Runtime readiness precedes settlement of the original Save promise.
+        // Wait for that form to finish before starting the next access edit.
+        await window
+          .locator(".workspace-detail form .control-row")
+          .waitFor({ state: "hidden" });
         observations.push({
           kind: "workspace-access-restored-connection",
           access,
