@@ -89,10 +89,19 @@ func TestComputerRootListUsesCurrentSelectedOwner(t *testing.T) {
 }
 func computerFixture(t *testing.T, capabilities ...authority.Capability) (*ComputerRoute, *accessrepo.Repository, *computerCurrentFixture, *computerWorkspaceFixture, *computerClockFixture, wire.ComputerReadRequest) {
 	t.Helper()
+	return computerFixtureWithScopes(t, false, capabilities...)
+}
+func computerFixtureWithScopes(t *testing.T, empty bool, capabilities ...authority.Capability) (*ComputerRoute, *accessrepo.Repository, *computerCurrentFixture, *computerWorkspaceFixture, *computerClockFixture, wire.ComputerReadRequest) {
+	t.Helper()
 	clock := &computerClockFixture{now: time.UnixMilli(1700000000000)}
 	binding := port.TaskBinding{Identity: authority.Identity{OwnerID: "owner", SessionID: "session", TaskID: "task", TaskEpoch: 9007199254740993}, ParticipantID: "participant", TurnID: "turn"}
 	approval := authority.Approval{OwnerID: binding.OwnerID, ComputerID: "computer", Generation: 3, Workspaces: []authority.ApprovedWorkspace{{WorkspaceID: "work", Root: "/disposable", Access: authority.ReadAccess, RootIdentity: authority.RootIdentity{Device: "1", Inode: "2"}}}, Capabilities: capabilities, Network: authority.NoNetwork, Commands: authority.NoCommands, ExpiresAt: clock.Now().Add(time.Hour)}
-	grant, err := authority.Derive(approval, authority.Admission{Identity: binding.Identity, AuthorityID: "authority", ComputerID: approval.ComputerID, ComputerGeneration: approval.Generation, Policy: authority.Policy{Workspaces: []authority.Scope{{WorkspaceID: "work", Root: "/disposable", Mode: authority.Subtree, Access: authority.ReadAccess}}, Capabilities: capabilities, Network: authority.NoNetwork, Commands: authority.NoCommands, ExpiresAt: clock.Now().Add(time.Hour)}}, clock.Now())
+	scopes := []authority.Scope{{WorkspaceID: "work", Root: "/disposable", Mode: authority.Subtree, Access: authority.ReadAccess}}
+	if empty {
+		approval.Workspaces = nil
+		scopes = nil
+	}
+	grant, err := authority.Derive(approval, authority.Admission{Identity: binding.Identity, AuthorityID: "authority", ComputerID: approval.ComputerID, ComputerGeneration: approval.Generation, Policy: authority.Policy{Workspaces: scopes, Capabilities: capabilities, Network: authority.NoNetwork, Commands: authority.NoCommands, ExpiresAt: clock.Now().Add(time.Hour)}}, clock.Now())
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -92,6 +92,18 @@ func (r *ComputerRoute) selectContract(ctx context.Context, expected computerpor
 	// Exactly one immutable ordinary read lease for this entire parsed operation.
 	// Computer's snapshot gate encloses the existing Task/Chat no-IO owner gate.
 	lease, err := r.admit(ctx, kind)
+	return r.contractForLease(lease, err, expected)
+}
+
+func (r *ComputerRoute) selectCatalogueContract(ctx context.Context, expected computerport.TaskBinding) (*workspacect.Contract, error) {
+	if r == nil || r.issuer == nil {
+		return nil, computerUnavailable()
+	}
+	lease, err := r.admitCatalogue(ctx)
+	return r.contractForLease(lease, err, expected)
+}
+
+func (r *ComputerRoute) contractForLease(lease *execution.Lease, err error, expected computerport.TaskBinding) (*workspacect.Contract, error) {
 	if err != nil {
 		return nil, computerFailure(err)
 	}
@@ -115,6 +127,15 @@ func (r *ComputerRoute) admit(ctx context.Context, kind authority.Capability) (*
 	}
 	return r.issuer.Admit(ctx, kind)
 }
+
+func (r *ComputerRoute) admitCatalogue(ctx context.Context) (*execution.Lease, error) {
+	if r.beforeAdmission != nil {
+		if err := r.beforeAdmission(ctx); err != nil {
+			return nil, err
+		}
+	}
+	return r.issuer.AdmitCatalogue(ctx)
+}
 func operationBinding(owner, session, task string, epoch uint64, participant, turn string) computerport.TaskBinding {
 	return computerport.TaskBinding{Identity: authority.Identity{OwnerID: owner, SessionID: session, TaskID: task, TaskEpoch: epoch}, ParticipantID: participant, TurnID: turn}
 }
@@ -135,7 +156,7 @@ func (r *ComputerRoute) Methods(peer wire.Context) map[string]desktop.Method {
 			return r.selectContract(ctx, operationBinding(in.OwnerID, in.SessionID, in.TaskID, in.TaskEpoch, in.ParticipantID, in.TurnID), authority.Read)
 		}, peer),
 		"computer.workspace.catalogue": desktop.CatalogueMethod(func(ctx context.Context, in workspacect.CatalogueRequest) (*workspacect.Contract, error) {
-			return r.selectContract(ctx, operationBinding(in.OwnerID, in.SessionID, in.TaskID, in.TaskEpoch, in.ParticipantID, in.TurnID), authority.List)
+			return r.selectCatalogueContract(ctx, operationBinding(in.OwnerID, in.SessionID, in.TaskID, in.TaskEpoch, in.ParticipantID, in.TurnID))
 		}, peer),
 		"computer.workspace.bootstrap": desktop.BootstrapMethod(func(ctx context.Context, in workspacect.BootstrapRequest) (*workspacect.Contract, error) {
 			return r.selectContract(ctx, operationBinding(in.OwnerID, in.SessionID, in.TaskID, in.TaskEpoch, in.ParticipantID, in.TurnID), authority.Read)

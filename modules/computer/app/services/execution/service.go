@@ -120,10 +120,22 @@ func (s *Service) withCurrent(ctx context.Context, expected *port.TaskBinding, i
 // dispatch work or replay any operation. The owning parsed operation selects the
 // budget; verification's composite budget is 120s, ordinary/mutable work 15s.
 func (s *Service) Admit(ctx context.Context, kind authority.Capability) (*Lease, error) {
+	return s.admit(ctx, kind, false)
+}
+
+// AdmitCatalogue permits observing an explicitly empty Computer approval without
+// granting file access. Nonempty catalogues still require List. Both paths keep
+// the same current-owner checks, immutable ceiling and fixed operation deadline.
+func (s *Service) AdmitCatalogue(ctx context.Context) (*Lease, error) {
+	return s.admit(ctx, authority.List, true)
+}
+
+func (s *Service) admit(ctx context.Context, kind authority.Capability, catalogue bool) (*Lease, error) {
 	var out *Lease
 	err := s.withCurrent(ctx, nil, func(binding port.TaskBinding, snapshot port.AccessSnapshot) error {
 		p, a := snapshot.Participant.Clone(), snapshot.Approval.Clone()
-		if !slices.Contains(p.Grant.Capabilities, kind) || kind == authority.NetworkUse {
+		emptyCatalogue := catalogue && a.NoAccess() && p.Grant.Policy.NoAccess() && p.MutationOwnership == authority.NoOwnership
+		if !emptyCatalogue && (!slices.Contains(p.Grant.Capabilities, kind) || kind == authority.NetworkUse) {
 			return authority.Fail("AUTHORITY_CAPABILITY_DENIED", "task-grant")
 		}
 		now := s.clock.Now()
