@@ -13,6 +13,7 @@ import type {
 const baseline: SetupChecklistInput = {
   current: true,
   signedIn: false,
+  hasWorkspaces: true,
   workspacesVerified: false,
   localConnectionCurrent: false,
   externalAccessVerified: false,
@@ -59,6 +60,41 @@ describe("Setup checklist presentation", () => {
       ["signin"],
     );
   });
+  for (const workspacesVerified of [false, true]) {
+    it(`keeps absent workspaces optional without a file badge when workspacesVerified is ${workspacesVerified}`, () => {
+      const p = projectSetupChecklist({
+        ...allReady,
+        hasWorkspaces: false,
+        workspacesVerified,
+      });
+      assert.equal(p.ready, true);
+      const folders = p.entries.find((x) => x.step === "folders")!;
+      assert.equal(folders.optional, true);
+      assert.equal(folders.state, "needed");
+      assert.equal(folders.status, "No workspace access enabled");
+    });
+  }
+  it("keeps configured but unverified workspaces required", () => {
+    const p = projectSetupChecklist({ ...allReady, workspacesVerified: false });
+    assert.equal(p.ready, false);
+    assert.equal(p.entries.find((x) => x.step === "folders")!.optional, false);
+  });
+  for (const computerActivity of ["pending", "unknown"] as const) {
+    it(`blocks empty-workspace readiness during ${computerActivity} proof checks`, () => {
+      const p = projectSetupChecklist({
+        ...allReady,
+        hasWorkspaces: false,
+        workspacesVerified: false,
+        computerActivity,
+      });
+      assert.equal(p.ready, false);
+      assert(
+        p.entries
+          .filter((x) => x.step !== "signin")
+          .every((x) => x.state === computerActivity),
+      );
+    });
+  }
   it("does not replace final Computer readiness with three local checkmarks", () => {
     assert.equal(
       projectSetupChecklist({ ...allReady, computerReady: false }).ready,
@@ -178,13 +214,14 @@ describe("Setup checklist presentation", () => {
   it("checks every bounded Boolean/activity state combination", () => {
     let cases = 0;
     const activities: SetupActivity[] = ["settled", "pending", "unknown"];
-    for (let mask = 0; mask < 64; mask++)
+    for (let mask = 0; mask < 128; mask++)
       for (const signInActivity of activities)
         for (const computerActivity of activities) {
           const bit = (i: number) => Boolean(mask & (1 << i));
           const x: SetupChecklistInput = {
             current: bit(0),
             signedIn: bit(1),
+            hasWorkspaces: bit(6),
             workspacesVerified: bit(2),
             localConnectionCurrent: bit(3),
             externalAccessVerified: bit(4),
@@ -197,7 +234,7 @@ describe("Setup checklist presentation", () => {
             p.ready,
             x.current &&
               x.computerReady &&
-              x.workspacesVerified &&
+              (!x.hasWorkspaces || x.workspacesVerified) &&
               x.localConnectionCurrent &&
               x.externalAccessVerified &&
               computerActivity === "settled",
@@ -206,13 +243,13 @@ describe("Setup checklist presentation", () => {
             if (e.state === "verified")
               assert(
                 x.current &&
-                  (e.optional ? signInActivity : computerActivity) ===
+                  (e.step === "signin" ? signInActivity : computerActivity) ===
                     "settled",
               );
             assert(!/[0-9]/u.test(e.label));
           }
           cases++;
         }
-    assert.equal(cases, 576);
+    assert.equal(cases, 1152);
   });
 });

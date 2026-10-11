@@ -84,6 +84,35 @@ function attachmentSettings() {
   });
   return ProductSettingsSchema.parse(value);
 }
+function verifiedAttachmentSettings(empty = false) {
+  const value = attachmentSettings();
+  const connector = value.connectors.secureMcp;
+  const runtime = connector.runtime!;
+  value.setup.connect.verified = {
+    ...value.setup.computer.verified!,
+    configRevision: connector.generation,
+    workspaceId: empty ? null : value.setup.computer.verified!.workspaceId,
+  };
+  value.setup.connect.reachable = "reachable";
+  connector.attachment = {
+    tunnelId: connector.tunnelId!,
+    workspaceId: value.setup.connect.verified.workspaceId,
+    connectorGeneration: connector.generation,
+    computerGeneration: value.computer.generation,
+    runtimeGeneration: runtime.runtimeGeneration,
+    buildId: runtime.buildId,
+    challengeSha256: connector.challenge!.challengeSha256,
+    receiptSha256: "d".repeat(64),
+    verifiedAt: runtime.observedAt,
+  };
+  connector.challenge = null;
+  if (empty) {
+    value.computer.workspaces = [];
+    value.setup.computer.verified = null;
+    value.setup.computer.reachable = "unknown";
+  }
+  return ProductSettingsSchema.parse(value);
+}
 async function mount(
   step: SetupStep = "overview",
   shell = false,
@@ -170,6 +199,123 @@ async function mount(
   };
 }
 describe("reference-aligned Setup wizard", () => {
+  it("opens Home with valid empty-catalogue proof and optional unverified workspaces", async () => {
+    const value = verifiedAttachmentSettings(true);
+    const before = structuredClone(value);
+    const h = await mount("overview", false, value);
+    const folders = h.host.querySelector('[data-setup-check="folders"]')!;
+    expect(folders.querySelector(".setup-optional-tag")?.textContent).toBe(
+      "Optional",
+    );
+    expect(folders.textContent).toContain("No workspace access enabled");
+    expect(folders.querySelector('[data-check-state="verified"]')).toBeNull();
+    expect(
+      h
+        .button("Workspaces")
+        .querySelector("[data-check-state]")
+        ?.getAttribute("data-check-state"),
+    ).toBe("needed");
+    expect(h.button("Open Home").disabled).toBe(false);
+    expect(h.host.textContent).not.toContain("Verify a workspace");
+    expect(h.f.api.configure).not.toHaveBeenCalled();
+    expect(h.c.getSnapshot().configuration).toEqual({
+      status: "ready",
+      settings: before,
+    });
+    await h.click("Open Home");
+    expect(h.c.getSnapshot().destination.area).toBe("home");
+    expect(h.f.api.configure).not.toHaveBeenCalled();
+  });
+  it("retains verified file badges for configured workspaces with current proof", async () => {
+    const h = await mount("overview", false, verifiedAttachmentSettings());
+    const folders = h.host.querySelector('[data-setup-check="folders"]')!;
+    expect(folders.querySelector(".setup-optional-tag")).toBeNull();
+    expect(
+      folders.querySelector('[data-check-state="verified"]'),
+    ).not.toBeNull();
+    expect(h.button("Open Home").disabled).toBe(false);
+    expect(h.f.api.configure).not.toHaveBeenCalled();
+  });
+  it.each(["missing", "stale", "unbound"] as const)(
+    "keeps configured workspaces required with %s file proof",
+    async (proof) => {
+      const value = verifiedAttachmentSettings();
+      if (proof === "missing") value.setup.computer.verified = null;
+      else if (proof === "stale")
+        value.setup.computer.verified!.buildId = "4".repeat(64);
+      else delete value.computer.workspaces[0]!.rootIdentity;
+      const h = await mount("overview", false, value);
+      const folders = h.host.querySelector('[data-setup-check="folders"]')!;
+      expect(folders.querySelector(".setup-optional-tag")).toBeNull();
+      expect(folders.querySelector('[data-check-state="verified"]')).toBeNull();
+      expect(h.button("Open Home")).toBeUndefined();
+      expect(h.f.api.configure).not.toHaveBeenCalled();
+    },
+  );
+  it.each(["pending", "unknown"] as const)(
+    "keeps Open Home gated by %s checks even with valid empty proof",
+    async (state) => {
+      const h = await mount(
+        "overview",
+        false,
+        verifiedAttachmentSettings(true),
+      );
+      const wait = deferred<unknown>();
+      vi.mocked(h.f.api.configure).mockReturnValueOnce(wait.promise);
+      await act(async () => {
+        void h.c.configure(
+          { kind: "connector.check-health" },
+          "settings:connector.check-health:",
+        );
+      });
+      if (state === "unknown")
+        await act(async () => {
+          wait.reject(new Error("fixture reply lost"));
+        });
+      expect(h.button("Open Home")).toBeUndefined();
+      const folders = h.host.querySelector('[data-setup-check="folders"]')!;
+      expect(folders.querySelector(".setup-optional-tag")?.textContent).toBe(
+        "Optional",
+      );
+      expect(
+        h
+          .button("Workspaces")
+          .querySelector("[data-check-state]")
+          ?.getAttribute("data-check-state"),
+      ).toBe(state);
+      expect(folders.querySelector('[data-check-state="verified"]')).toBeNull();
+      expect(h.f.api.configure).toHaveBeenCalledExactlyOnceWith({
+        kind: "connector.check-health",
+      });
+      if (state === "pending")
+        await act(async () => {
+          wait.resolve({ ok: true, snapshot: h.configuration });
+        });
+    },
+  );
+  it.each(["missing", "stale", "generation", "unknown"] as const)(
+    "does not admit %s empty-catalogue proof",
+    async (proof) => {
+      const value = verifiedAttachmentSettings(true);
+      if (proof === "missing") value.connectors.secureMcp.attachment = null;
+      else if (proof === "stale")
+        value.connectors.secureMcp.attachment!.buildId = "4".repeat(64);
+      else if (proof === "generation") value.computer.generation++;
+      else value.setup.connect.outcomeUnknown = true;
+      const h = await mount("overview", false, value);
+      expect(h.button("Open Home")).toBeUndefined();
+      expect(
+        h.host.querySelector('[data-setup-check="folders"] .setup-optional-tag')
+          ?.textContent,
+      ).toBe("Optional");
+      expect(
+        h.host.querySelector(
+          '[data-setup-check="folders"] [data-check-state="verified"]',
+        ),
+      ).toBeNull();
+      expect(h.f.api.configure).not.toHaveBeenCalled();
+    },
+  );
   it("offers the empty-catalogue request without a fabricated workspace or sign-in", async () => {
     const value = attachmentSettings();
     value.computer.workspaces = [];

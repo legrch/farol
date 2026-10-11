@@ -28,6 +28,7 @@ export function setupChecklist(snapshot: WindowSnapshot) {
       Boolean(snapshot.buildId) &&
       snapshot.configuration?.status === "ready",
     signedIn: signIn.signedIn,
+    hasWorkspaces: setup.facts.hasFolder,
     workspacesVerified: setup.workspacesVerified,
     localConnectionCurrent: setup.localConnectionCurrent,
     externalAccessVerified: setup.externalAccessVerified,

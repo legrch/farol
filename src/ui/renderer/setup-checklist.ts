@@ -14,6 +14,7 @@ export type SetupActivity = "settled" | "pending" | "unknown";
 export type SetupChecklistInput = Readonly<{
   current: boolean;
   signedIn: boolean;
+  hasWorkspaces: boolean;
   workspacesVerified: boolean;
   localConnectionCurrent: boolean;
   externalAccessVerified: boolean;
@@ -71,8 +72,8 @@ export function projectSetupChecklist(input: SetupChecklistInput) {
         "folders",
         "Workspaces",
         "Choose workspaces and access for each one.",
-        false,
-        input.workspacesVerified,
+        !input.hasWorkspaces,
+        input.hasWorkspaces && input.workspacesVerified,
         input.computerActivity,
       ],
       [
@@ -97,11 +98,13 @@ export function projectSetupChecklist(input: SetupChecklistInput) {
           ? "Local connection ready"
           : state === "verified" && step === "attachment"
             ? "Verified from ChatGPT"
-            : status[state],
+            : state === "needed" && step === "folders" && optional
+              ? "No workspace access enabled"
+              : status[state],
       action: state === "needed" ? "Set up" : "Review",
     };
   });
-  // Embedded sign-in is offered in the wizard but never gates external Computer.
+  // Embedded sign-in is optional; configured workspaces still require file proof.
   const ready =
     input.current &&
     input.computerReady &&
