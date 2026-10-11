@@ -380,6 +380,11 @@ func compileSeatbelt(s SeatbeltSelection, command Command) (*seatbeltPlan, error
 (deny file-read* file-write* (regex #"` + credentialRegex() + `"))`
 	} else {
 		source += "\n; approved-roots-v1: path grants, not object-level exclusions"
+		// Darwin Go startup needs the page size before it can allocate a heap.
+		// CPU count sizes the scheduler. These read-only machine constants do
+		// not grant arbitrary sysctl reads/writes or relax file/network policy.
+		source += `
+(allow sysctl-read (sysctl-name "hw.pagesize") (sysctl-name "hw.ncpu"))`
 		for _, anchor := range rootAnchors {
 			// Preserve the named root across operations; this is not a filename ban.
 			source += "\n(deny file-write-unlink (require-all " + anchor + " (vnode-type DIRECTORY)))"

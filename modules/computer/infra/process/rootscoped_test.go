@@ -66,6 +66,23 @@ func TestRootScopedSeatbeltHasNoImplicitCredentialOrGitNames(t *testing.T) {
 	}
 }
 
+func TestRootScopedSeatbeltAllowsOnlyRuntimeSizingSysctls(t *testing.T) {
+	s, command := rootScopedFixture(t)
+	plan, err := compileSeatbelt(s, command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const sizing = `(allow sysctl-read (sysctl-name "hw.pagesize") (sysctl-name "hw.ncpu"))`
+	if !strings.Contains(plan.source, sizing) || strings.Count(plan.source, "sysctl") != 3 {
+		t.Fatal("runtime sizing reads missing or broader sysctl permission emitted")
+	}
+	_, legacy, legacyCommand, _ := confinementFixture(t)
+	old, err := compileSeatbelt(legacy, legacyCommand)
+	if err != nil || strings.Contains(old.source, "sysctl") {
+		t.Fatal("root-scoped runtime policy changed the retained legacy profile", err)
+	}
+}
+
 func TestRootScopedSeatbeltHonorsExplicitWholeHomeRatherThanFilenameHeuristics(t *testing.T) {
 	for _, root := range []string{"/owner/home", "/owner/home/.ssh", "/approved/work/.env.private"} {
 		t.Run(root, func(t *testing.T) {
