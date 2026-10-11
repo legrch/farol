@@ -91,7 +91,13 @@ schemas are compatibility boundaries. Do not rename them as a source-layout fix.
   a gate. It must not import or invoke a V0 implementation.
 - Never commit credentials, tokens, authentication state, browser profiles,
   private prompts/transcripts, caches, or vendor runtime state.
-- Keep this repository private. GitHub rename/create/push, remote changes,
-  installation, activation, release, signing, licensing, and public visibility
-  require a separate explicit owner decision during pre-cutover preparation.
+- The owner approved public source/history delivery to the existing
+  `legrch/farol` repository on 11 October 2026 and maintaining its `main`.
+  Verified ordinary non-force fast-forward pushes to that exact destination
+  are authorized. Inspect the outgoing range and scan source/history for
+  credentials, authentication state, private prompts/transcripts, browser
+  profiles, caches, vendor runtime state and unrelated personal data before
+  public delivery. Preserve local evidence and recovery bundles privately.
+  New or changed remotes, GitHub rename/create, visibility changes, installation,
+  activation, release, signing and licensing require an explicit owner decision.
 - Live calls are one-shot. Never retry outcome-unknown or platform-refused work.
