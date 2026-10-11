@@ -72,7 +72,7 @@ func TestRootScopedSeatbeltAllowsOnlyRuntimeSizingSysctls(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const sizing = `(allow sysctl-read (sysctl-name "hw.pagesize") (sysctl-name "hw.ncpu"))`
+	const sizing = `(allow sysctl-read (sysctl-name "hw.pagesize_compat") (sysctl-name "hw.ncpu"))`
 	if !strings.Contains(plan.source, sizing) || strings.Count(plan.source, "sysctl") != 3 {
 		t.Fatal("runtime sizing reads missing or broader sysctl permission emitted")
 	}
