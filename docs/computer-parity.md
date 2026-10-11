@@ -32,6 +32,18 @@ checkout files remain readable. No symlink target or credential was read to
 override that guard. The exact bounded operation evidence is retained in
 `external-dev-0a651651-agent-store.json`.
 
+## Installed beta.9 evidence
+
+On 11 October, one real OTA installed unsigned macOS ARM64 beta.9, build `23`,
+from source `299f823e56bbfbecb1b70d2e7ee97b6a63403a8f`. External Computer
+catalogue and read succeeded after installation. After one exact installed
+tunnel TERM and automatic successor recovery, fresh catalogue, read and durable
+edit calls succeeded; the grants and credential reference were preserved. This is one
+installed file-route and recovery cycle. The receipt does not identify a separate
+root-scoped policy grant, and it does not establish hardware sleep, soak, Copy
+response, Shell, Git, Model, Agent, or broad installed parity. The beta.8
+outcome-unknown request remains historical and was not replayed.
+
 The Go route does not advertise shell/Git or coding-task tools. Its process
 reservation, anchored measurement, held control, watchdog and retained observation
 remain separate implementation/qualification slices. The actual native Seatbelt

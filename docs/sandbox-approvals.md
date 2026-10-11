@@ -1,6 +1,8 @@
 # Root-scoped access, approvals, and watchdog stdin closure
 
-Status: implementation handoff, not an activated external Shell or release acceptance.
+Status: 6 October implementation handoff, superseded in part by later source wiring
+and beta.9 installed Computer evidence. It is not Shell, broad approval or release
+acceptance.
 Base: `1a1c6d8f75a5006716aef938bd4055893999e524`, 6 October 2026.
 
 ## Product direction and the actual Codex reference
@@ -112,25 +114,31 @@ source/test delta, rerun its VM suite, then perform a new bounded native run of
 the corrected bytes in the authorized host lane. Do not replay any old unknown
 operation, query its historic PID/PGID or erase its evidence.
 
-For the policy slice, the remaining integration is explicit, not already done:
+The current source now persists the owner-selected File policy through the
+existing configuration owner and generation transition in
+[`product-configuration.ts`](../src/apps/desktop/product-configuration.ts).
+The Go Computer composition selects matching legacy or root-scoped read and
+mutation owners in [`computerfilepolicy.go`](../boot/computerfilepolicy.go),
+assembled by [`nativeruntime.go`](../boot/nativeruntime.go). The selected policy
+is carried by trusted Computer authority; it is not accepted from an MCP request.
+Existing admitted operations retain their captured policy, and a mode change is
+not a retrospective grant or retry permit. These source changes wire File API
+policy selection; they do not qualify a live root-scoped grant.
 
-1. Persist the owner-selected policy meaning through the existing configuration
-   owner and generation transition. Existing admitted operations retain their
-   captured policy; a mode change is not a retrospective grant or retry permit.
-2. At `boot/nativeruntime.go` (base lines 130/153), select **both** File API
-   constructors from that same accepted policy. Do not globally switch defaults
-   or accept `FilePolicy` from an untrusted tool body.
-3. Select the same mode in the existing native shell producer, using an immutable
-   current owner/task snapshot. Qualify every selected root, executable, scratch,
-   network choice and process boundary before exposing the MCP tool. The old
+Remaining qualification and integration:
+
+1. The normal native Shell producer remains withheld. Before exposing it, select
+   the same policy from an immutable current owner/task snapshot and qualify each
+   root, executable, scratch area, network choice and process boundary. The old
    fixture-only qualifier is not a certificate for arbitrary owner HOME access.
-4. Present scope escalation through the existing owner-facing settings/approval
-   machinery: exact requested roots/read-write/network and operation identity.
-   Seatbelt itself is enforcement, not an approval dialog. A denial is not
-   automatically distinguishable from all other EPERM failures by stderr text.
-5. After assembly, use the normal Dev lifecycle and actual external caller to
-   qualify Shell/Git, cancel/deadline, reconnect, retained results and ordinary
-   hooks. Only then proceed with candidate/release/installation acceptance.
+2. Present any scope escalation through the existing owner-facing settings and
+   approval machinery, with exact requested roots, read/write/network scope and
+   operation identity. Seatbelt is enforcement, not an approval dialog. A denial
+   is not automatically distinguishable from all other EPERM failures by stderr.
+3. Use the normal Dev lifecycle and actual external caller to qualify Shell/Git,
+   cancel/deadline, reconnect, retained results and ordinary hooks before broader
+   candidate, release or installation acceptance. Beta.9's one installed file
+   read/edit and tunnel-recovery cycle does not close these gates.
 
 Within an accepted scope, routine calls should not require a new prompt. A
 broader-root/network request is a request, not permission. Missing approval
@@ -148,7 +156,8 @@ Go race tests for the compiler and pure filesystem/modeled mutations, Computer
 and boot build-only validation, vet, Go architecture, TypeScript and the watchdog
 VM regressions. Build-only validation runs zero tests and is not native evidence.
 
-Three actual host limitations were observed under the currently installed Farol:
+At the 6 October checkpoint, three actual host limitations were observed under
+the then-installed Farol:
 
 - the pre-existing process package's descriptor-retention test could not enumerate
   `/dev/fd`;
@@ -160,9 +169,12 @@ Three actual host limitations were observed under the currently installed Farol:
 Those failures are retained. They were not evaded by changing executor, granting
 this task more access, moving the denied native attempt or suppressing assertions.
 Separate pure tests are labelled as such and do not replace the native ones.
-The two new File API descriptor tests still need their authorized host run.
+At that checkpoint, the two new File API descriptor tests still needed their
+authorized host run. This is the recorded status of that test run, not a claim
+about the later beta.9 qualification run.
 
-No external Shell, root-scoped live grant, Full Access, native Git commit through
-new Shell, installed application, release, full-range review or owner acceptance
-is claimed. The value delivered here is test-backed implementation and a concrete
-integration seam, not another already-working-product assertion.
+No external Shell, root-scoped live grant, Full Access, or native Git commit
+through new Shell is claimed. Beta.9's installed file-route/recovery evidence
+and release are separate from this 6 October source handoff; it does not establish
+those remaining behaviors, full-range review or owner acceptance. The hardlink
+alias finding also remains open: beta.9 did not qualify inode-level secrecy.

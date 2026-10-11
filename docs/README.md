@@ -29,13 +29,18 @@ source fixtures are not proof of a live task route.
 
 ## Installation and updates
 
-The observed 9 October installed slot is unsigned macOS ARM64
-`0.2.0-owner.beta.3`, build `17`, source `24cc7c32`. Binary releases
-[beta3](https://github.com/legrch/farol/releases/tag/v0.2.0-owner.beta.3) and
-[beta4](https://github.com/legrch/farol/releases/tag/v0.2.0-owner.beta.4) are published
-in `legrch/farol`; beta4 download readiness does not mean beta4 is installed.
-The installed beta3 predates current source renewal/transport fixes. No successful
-ordinary next update or current-source installed reliability is claimed here.
+On 11 October, one installed unsigned macOS ARM64 beta.8 instance completed a
+real OTA to [beta.9](https://github.com/legrch/farol/releases/tag/v0.2.0-owner.beta.9),
+version `0.2.0-owner.beta.9`, build `23`, source
+`299f823e56bbfbecb1b70d2e7ee97b6a63403a8f`. After installation, external
+Computer catalogue and read calls succeeded. One installed tunnel TERM
+recovery then preserved the grants and credential reference; fresh catalogue,
+read and durable edit calls succeeded after recovery. This is one observed OTA and recovery
+cycle, not general installed reliability, hardware-sleep, or long-duration
+qualification. The release is published in `legrch/farol`.
+
+Earlier beta3 and beta4 release records remain useful in their historical
+context; beta4 download readiness did not establish installation.
 The earlier
 [0.1.11-owner.beta.1](https://github.com/legrch/farol-releases/releases/tag/v0.1.11-owner.beta.1)
 and [historical feed records](github-release-contract.md) remain valid only in
