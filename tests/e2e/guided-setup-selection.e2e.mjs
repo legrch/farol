@@ -408,7 +408,7 @@ async function waitForResumeStage(expected) {
 }
 
 async function verifyDisplayedAttachment(window) {
-  await setupStep(window, "attachment", "Add to ChatGPT");
+  await setupStep(window, "attachment", "Check");
   const card = window.locator(
     '.setup-page [data-connector-challenge="pending"]',
   );
@@ -871,6 +871,45 @@ try {
         externalAttachment: "not-verified",
       });
     } else assert.equal(saved.setup.connect.verified, null);
+    if (behavior) {
+      for (const access of ["read", "write"]) {
+        const original = await readSetupSettings(window);
+        await window
+          .locator(".workspace-detail")
+          .getByRole("combobox")
+          .selectOption(access);
+        await window
+          .locator(".workspace-detail")
+          .getByRole("button", { name: "Save", exact: true })
+          .click();
+        await window.waitForFunction(
+          async ({ generation, access, runtime }) => {
+            const { settings } = (await window.farolNext.bootstrap())
+              .configuration;
+            return (
+              settings.computer.generation === generation + 1 &&
+              settings.computer.workspaces[0].access === access &&
+              settings.setup.computer.verified?.configRevision ===
+                settings.computer.generation &&
+              settings.connectors.secureMcp.runtime?.state === "ready" &&
+              settings.connectors.secureMcp.runtime.runtimeGeneration !==
+                runtime
+            );
+          },
+          {
+            generation: original.computer.generation,
+            access,
+            runtime: original.connectors.secureMcp.runtime.runtimeGeneration,
+          },
+        );
+        observations.push({
+          kind: "workspace-access-restored-connection",
+          access,
+          environment,
+        });
+      }
+      saved = await readSetupSettings(window);
+    }
     const retainedWorkspaces = saved.computer.workspaces;
     let verifiedWorkspaces = retainedWorkspaces;
     const retainedProfile = { ...activeFixtureProfile };
