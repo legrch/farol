@@ -75,6 +75,7 @@ func TestNativeRootScopedBashGit(t *testing.T) {
 		must(os.WriteFile(path, []byte(content), mode))
 	}
 	write(filepath.Join(home, ".gitconfig"), "[user]\n\tname = Farol fixture\n\temail = fixture@example.invalid\n[init]\n\ttemplateDir = "+filepath.Join(root, "template")+"\n", 0600)
+	write(filepath.Join(home, "system.gitconfig"), "[advice]\n\tdetachedHead = false\n", 0600)
 	write(filepath.Join(root, "template/hooks/pre-commit"), "#!/bin/sh\nset -eu\nproof=$(git rev-parse --git-path hook-proof)\nprintf 'hook-ran\\n' > \"$proof\"\n", 0700)
 	write(filepath.Join(root, "source.txt"), "before\n", 0600)
 	write(filepath.Join(root, ".env"), "SYNTHETIC_PROJECT_VALUE=local\n", 0600)
@@ -99,6 +100,7 @@ func TestNativeRootScopedBashGit(t *testing.T) {
 	command.Root, command.Cwd, command.RootIdentity = root, root, identity(root)
 	command.Executable, command.ExecutableSHA256 = "/bin/bash", s.Executables[0].SHA256
 	const script = `set -eu
+export GIT_CONFIG_SYSTEM="$HOME/system.gitconfig"
 git="$1"
 linked="$2"
 "$git" init -q --initial-branch=fixture
