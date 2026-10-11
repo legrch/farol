@@ -2,6 +2,7 @@ package process
 
 import (
 	"context"
+	"slices"
 
 	"github.com/legrch/farol/modules/computer/app/port"
 	processsvc "github.com/legrch/farol/modules/computer/app/services/process"
@@ -20,6 +21,14 @@ func NewRootScopedSupervisedPreparer(runtimeID string, template Command, selecti
 	if err != nil {
 		return nil, err
 	}
+	// The producer owns the explicit environment. An omitted template selects
+	// that environment; a supplied template must match it exactly. Neither path
+	// inherits host variables or lets boot duplicate the confinement policy.
+	environment := policy.Environment(template.Write)
+	if template.Environment != nil && !slices.Equal(template.Environment, environment) {
+		return nil, &processsvc.NativeFailure{}
+	}
+	template.Environment = environment
 	preparer, err := NewSupervisedPreparer(runtimeID, template, policy, watchdog, execution, clock)
 	if err != nil {
 		return nil, err

@@ -2,6 +2,7 @@ package process
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -9,6 +10,67 @@ import (
 	processsvc "github.com/legrch/farol/modules/computer/app/services/process"
 	processcontract "github.com/legrch/farol/modules/computer/contracts/process"
 )
+
+func TestRootScopedSupervisedEnvironmentComesFromFrozenPolicy(t *testing.T) {
+	// CPU-only constructor evidence: no child, filesystem or host qualification.
+	t.Setenv("FAROL_TEST_AMBIENT", "must-not-be-inherited")
+	for _, write := range []bool{false, true} {
+		for _, explicit := range []bool{false, true} {
+			f := platformFixtureCPU(t)
+			template := copyCommand(f.original)
+			template.Binding, template.Confinement = nil, nil
+			template.Args, template.Input = nil, nil
+			template.Write = write
+			expected := seatbeltEnvironment(f.policy, write)
+			template.Environment = nil
+			if explicit {
+				template.Environment = slices.Clone(expected)
+			}
+			preparer, err := NewRootScopedSupervisedPreparer("cli", template, f.policy, f.strategy(t), f.watchdog, context.Background(), f.clock)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if explicit {
+				template.Environment[0] = "HOME=/changed"
+			}
+			f.policy.Executables[0].Path = "/changed/bash"
+			f.policy.Home, f.policy.Scratch = "/changed/home", "/changed/scratch"
+			if !slices.Equal(preparer.base.template.Environment, expected) ||
+				!slices.Equal(preparer.boundary.policy.Environment(write), expected) {
+				t.Fatalf("environment changed after selection (write=%v, explicit=%v)", write, explicit)
+			}
+		}
+	}
+}
+
+func TestRootScopedSupervisedEnvironmentRejectsCallerOverrides(t *testing.T) {
+	for _, name := range []string{"empty", "ambient", "loader", "path", "home", "write-mode"} {
+		t.Run(name, func(t *testing.T) {
+			f := platformFixtureCPU(t)
+			template := copyCommand(f.original)
+			template.Binding, template.Confinement = nil, nil
+			template.Args, template.Input = nil, nil
+			switch name {
+			case "empty":
+				template.Environment = []string{}
+			case "ambient":
+				template.Environment = append(template.Environment, "PRIVATE_TOKEN=synthetic")
+			case "loader":
+				template.Environment = append(template.Environment, "DYLD_INSERT_LIBRARIES=/untrusted.dylib")
+			case "path":
+				template.Environment[3] = "PATH=/untrusted/bin"
+			case "home":
+				template.Environment[0] = "HOME=/untrusted"
+			case "write-mode":
+				template.Environment = seatbeltEnvironment(f.policy, !template.Write)
+			}
+			preparer, err := NewRootScopedSupervisedPreparer("cli", template, f.policy, f.strategy(t), f.watchdog, context.Background(), f.clock)
+			if err == nil || preparer != nil {
+				t.Fatal("caller environment override accepted")
+			}
+		})
+	}
+}
 
 // Full service sequencing with fake platform facts, measurement and helper IPC.
 // This exercises the production join but proves no native platform or release.
