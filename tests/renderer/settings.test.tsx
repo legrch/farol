@@ -1860,6 +1860,89 @@ function connectionSettings() {
   return value;
 }
 describe("bounded Settings writer", () => {
+  it.each(["success", "unknown-check", "refused-edit"] as const)(
+    "continues a workspace removal through one fresh check and reconnect only after acknowledged phases: %s",
+    async (outcome) => {
+      let value = connectionSettings();
+      value.computer.workspaces.push({
+        ...value.computer.workspaces[0]!,
+        workspaceId: selectionId,
+        root: "/approved/remaining",
+        label: "Remaining",
+        excludedPaths: [],
+        rootIdentity: { device: "1", inode: "3" },
+      });
+      const h = await mount("folders", value);
+      vi.mocked(h.f.api.configure).mockImplementation(async (command) => {
+        if (
+          command.kind === "computer.remove-workspace" &&
+          outcome === "refused-edit"
+        )
+          return {
+            ok: false,
+            error: "CONNECTOR_STOP_UNCONFIRMED",
+            snapshot: { status: "ready", settings: value },
+          };
+        if (
+          command.kind === "computer.verify-workspace" &&
+          outcome === "unknown-check"
+        )
+          throw new Error("check reply lost");
+        value = structuredClone(value);
+        value.revision++;
+        if (command.kind === "computer.remove-workspace") {
+          value.computer.generation++;
+          value.computer.workspaces = value.computer.workspaces.filter(
+            (item) => item.workspaceId !== command.workspaceId,
+          );
+          value.connectors.secureMcp.runtime = null;
+          value.connectors.secureMcp.attachment = null;
+          value.connectors.secureMcp.challenge = null;
+          value.setup.computer.verified = null;
+          value.setup.computer.reachable = "unknown";
+          value.setup.connect.verified = null;
+        } else if (command.kind === "computer.verify-workspace") {
+          expect(command.workspaceId).toBe(selectionId);
+          value.setup.computer.verified = {
+            ...proof(value),
+            workspaceId: selectionId,
+          };
+          value.setup.computer.reachable = "reachable";
+          value.computer.workspaces[0]!.accessCheck = {
+            checkId: command.checkId,
+            buildId: "3".repeat(64),
+            computerGeneration: value.computer.generation,
+            rootIdentity: value.computer.workspaces[0]!.rootIdentity!,
+            verifiedAt: "2026-10-11T08:00:00.000Z",
+          };
+        } else if (command.kind === "connector.start") {
+          value.connectors.secureMcp.runtime = {
+            ...connectionSettings().connectors.secureMcp.runtime!,
+            computerGeneration: value.computer.generation,
+            runtimeGeneration: "e".repeat(64),
+          };
+        } else throw new Error(`Unexpected command: ${command.kind}`);
+        return { ok: true, snapshot: { status: "ready", settings: value } };
+      });
+      await h.click("Remove");
+      await h.click("Confirm removal");
+      expect(h.calls().map((command) => command.kind)).toEqual(
+        outcome === "refused-edit"
+          ? ["computer.remove-workspace"]
+          : outcome === "unknown-check"
+            ? ["computer.remove-workspace", "computer.verify-workspace"]
+            : [
+                "computer.remove-workspace",
+                "computer.verify-workspace",
+                "connector.start",
+              ],
+      );
+      const dispatched = h.calls().length;
+      await h.remount();
+      expect(h.calls()).toHaveLength(dispatched);
+    },
+  );
+
   it("renders all nine approved pages in StrictMode without effects or saves", async () => {
     const h = await mount();
     for (const page of [

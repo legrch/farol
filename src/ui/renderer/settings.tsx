@@ -568,6 +568,24 @@ export function Settings({ snapshot, facade, setupStep }: SettingsProps) {
           ),
           result,
         );
+        if (
+          result.state === "applied" &&
+          (command.kind === "computer.remove-workspace" ||
+            command.kind === "computer.update-access") &&
+          soleIntent(current, after, command.kind, id)
+        ) {
+          // Continue only this acknowledged edit. Observation, remount and a
+          // lost edit reply never acquire permission to restart a connection.
+          await continueWorkspaceSetup(
+            facade,
+            actions,
+            current,
+            after,
+            command,
+          ).catch(() =>
+            report("Workspace saved. Connection setup needs review.", result),
+          );
+        }
         return { state: "attempted", result };
       } catch {
         // Keep a local fence too if an adapter throws before retaining its intent.
@@ -882,6 +900,77 @@ const folderSetupByWindow = new WeakMap<
   RendererFacade,
   { access: GuidedWorkspaceAccess; busy: boolean }
 >();
+
+async function continueWorkspaceSetup(
+  facade: RendererFacade,
+  actions: Actions,
+  before: WindowSnapshot,
+  after: WindowSnapshot,
+  command: Extract<
+    ProductConfigurationCommand,
+    { kind: "computer.remove-workspace" | "computer.update-access" }
+  >,
+): Promise<void> {
+  if (
+    facade.getSnapshot() !== after ||
+    before.configuration?.status !== "ready" ||
+    after.configuration?.status !== "ready" ||
+    before.buildId !== after.buildId ||
+    !after.buildId
+  )
+    return;
+  const prior = before.configuration.settings;
+  const settings = after.configuration.settings;
+  if (
+    settings.computer.generation !== prior.computer.generation + 1 ||
+    settings.connectors.secureMcp.generation !==
+      prior.connectors.secureMcp.generation ||
+    settings.computer.pendingEdit !== null ||
+    settings.connectors.secureMcp.runtime !== null
+  )
+    return;
+  const workspaces = settings.computer.workspaces;
+  const workspace =
+    workspaces.find((item) => item.workspaceId === command.workspaceId) ??
+    workspaces.find(
+      (item) => item.workspaceId === prior.setup.computer.verified?.workspaceId,
+    ) ??
+    workspaces[0];
+  // Removing the last grant must never recreate it or broaden local access.
+  if (!workspace?.rootIdentity) return;
+  let flow = folderSetupByWindow.get(facade);
+  if (!flow) {
+    flow = { access: new GuidedWorkspaceAccess(), busy: false };
+    folderSetupByWindow.set(facade, flow);
+  }
+  if (flow.busy || flow.access.requiresReadback()) return;
+  flow.busy = true;
+  try {
+    await flow.access.run(
+      {
+        settings: () => {
+          const current = facade.getSnapshot().configuration;
+          return current?.status === "ready" ? current.settings : null;
+        },
+        buildId: () => facade.getSnapshot().buildId ?? "",
+        issueCheckId: () => crypto.randomUUID(),
+        run: async (next) => {
+          const dispatch = await actions.runClassified(next);
+          return dispatch.state === "not-sent" ||
+            dispatch.result?.state === "refused"
+            ? "refused"
+            : dispatch.result?.state === "applied"
+              ? "applied"
+              : "unknown";
+        },
+      },
+      { workspaceId: workspace.workspaceId, connectWhenConfigured: true },
+      onboardingFacts(settings, after.buildId),
+    );
+  } finally {
+    flow.busy = false;
+  }
+}
 function Folders(props: PageProps) {
   const { settings, facade, snapshot, actions } = props;
   const requestedId = snapshot.destination.workspaceId ?? null;
