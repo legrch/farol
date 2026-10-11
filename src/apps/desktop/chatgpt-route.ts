@@ -192,6 +192,26 @@ export function classifyChatGptProviderError(
 }
 
 const hardenedRouteSessions = new WeakSet<Session>();
+const clipboardRouteOwners = new WeakMap<WebContents, () => boolean>();
+
+function routeClipboardWriteAllowed(
+  contents: WebContents | null,
+  permission: string,
+  requestingUrl: string,
+  isMainFrame: boolean,
+): boolean {
+  if (permission !== "clipboard-sanitized-write" || !contents || !isMainFrame)
+    return false;
+  try {
+    return (
+      !contents.isDestroyed() &&
+      clipboardRouteOwners.get(contents)?.() === true &&
+      new URL(requestingUrl).origin === new URL(contents.getURL()).origin
+    );
+  } catch {
+    return false;
+  }
+}
 
 // A dedicated sign-in surface (see `openForSignIn`) is distinct from the
 // same route being reused to run a task: it carries a title of its own, a
@@ -4568,7 +4588,18 @@ export class ChatGptRoute {
   private hardenSession(routeSession: Session): void {
     if (hardenedRouteSessions.has(routeSession)) return;
     routeSession.setPermissionRequestHandler(
-      (_webContents, permission, callback) => {
+      (contents, permission, callback, details) => {
+        if (
+          routeClipboardWriteAllowed(
+            contents,
+            permission,
+            details?.requestingUrl ?? "",
+            details?.isMainFrame === true,
+          )
+        ) {
+          callback(true);
+          return;
+        }
         activeSignInRoute?.reportSignInBlocked({
           kind: "permission-denied",
           permission,
@@ -4576,7 +4607,15 @@ export class ChatGptRoute {
         callback(false);
       },
     );
-    routeSession.setPermissionCheckHandler(() => false);
+    routeSession.setPermissionCheckHandler(
+      (contents, permission, requestingOrigin, details) =>
+        routeClipboardWriteAllowed(
+          contents,
+          permission,
+          requestingOrigin,
+          details?.isMainFrame === true,
+        ),
+    );
     routeSession.on("will-download", (event) => event.preventDefault());
     hardenedRouteSessions.add(routeSession);
   }
@@ -4610,6 +4649,14 @@ export class ChatGptRoute {
     contents: WebContents,
     tracksRouteReadiness: boolean,
   ): void {
+    if (tracksRouteReadiness)
+      clipboardRouteOwners.set(
+        contents,
+        () =>
+          this.ownsRouteContents(contents) &&
+          new URL(contents.getURL()).origin ===
+            new URL(this.options.homeUrl).origin,
+      );
     const allowed = (url: string) =>
       allowedChatGptPageUrl(url, this.options.e2eOrigin);
     contents.on("will-navigate", (event, url) => {

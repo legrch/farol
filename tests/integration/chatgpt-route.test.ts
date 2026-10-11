@@ -5304,6 +5304,113 @@ describe("ChatGPT embedded task surface", () => {
 });
 
 describe("ChatGPT shared partition lifecycle", () => {
+  it("allows Copy response on the current ChatGPT page across route replacement without a focus gate", () => {
+    const sharedSession = Object.assign(new EventEmitter(), {
+      setPermissionRequestHandler: vi.fn(),
+      setPermissionCheckHandler: vi.fn(),
+    });
+    for (let cycle = 0; cycle < 2; cycle++) {
+      const candidate = route();
+      const surface = embeddedSurface();
+      vi.spyOn(surface.webContents, "getURL").mockReturnValue(
+        "https://chatgpt.com/c/test",
+      );
+      Reflect.set(candidate, "routeWindow", surface);
+      const hardenContents = Reflect.get(candidate, "hardenContents") as (
+        contents: typeof surface.webContents,
+        tracks: boolean,
+      ) => void;
+      hardenContents.call(candidate, surface.webContents, true);
+      harden(candidate, sharedSession);
+      const check = sharedSession.setPermissionCheckHandler.mock.calls[0]![0];
+      const request =
+        sharedSession.setPermissionRequestHandler.mock.calls[0]![0];
+      const details = {
+        isMainFrame: true,
+        requestingUrl: "https://chatgpt.com/c/test",
+      };
+      const callback = vi.fn();
+      expect(
+        check(
+          surface.webContents,
+          "clipboard-sanitized-write",
+          "https://chatgpt.com",
+          details,
+        ),
+      ).toBe(true);
+      request(
+        surface.webContents,
+        "clipboard-sanitized-write",
+        callback,
+        details,
+      );
+      expect(callback).toHaveBeenCalledWith(true);
+      for (const permission of ["clipboard-read", "media", "fileSystem"]) {
+        expect(
+          check(
+            surface.webContents,
+            permission,
+            "https://chatgpt.com",
+            details,
+          ),
+        ).toBe(false);
+      }
+      expect(
+        check(
+          surface.webContents,
+          "clipboard-sanitized-write",
+          "https://other.example",
+          details,
+        ),
+      ).toBe(false);
+      expect(
+        check(
+          surface.webContents,
+          "clipboard-sanitized-write",
+          "https://chatgpt.com",
+          { ...details, isMainFrame: false },
+        ),
+      ).toBe(false);
+      expect(
+        check(
+          null,
+          "clipboard-sanitized-write",
+          "https://chatgpt.com",
+          details,
+        ),
+      ).toBe(false);
+      expect(
+        check(
+          embeddedSurface().webContents,
+          "clipboard-sanitized-write",
+          "https://chatgpt.com",
+          details,
+        ),
+      ).toBe(false);
+      vi.spyOn(surface.webContents, "getURL").mockReturnValue(
+        "https://auth.openai.com/",
+      );
+      expect(
+        check(
+          surface.webContents,
+          "clipboard-sanitized-write",
+          "https://auth.openai.com",
+          details,
+        ),
+      ).toBe(false);
+      candidate.dispose();
+      expect(
+        check(
+          surface.webContents,
+          "clipboard-sanitized-write",
+          "https://chatgpt.com",
+          details,
+        ),
+      ).toBe(false);
+    }
+    expect(sharedSession.setPermissionCheckHandler).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps one download guard across repeated route disposal", () => {
     const sharedSession = new EventEmitter() as EventEmitter & {
       setPermissionRequestHandler: ReturnType<typeof vi.fn>;
