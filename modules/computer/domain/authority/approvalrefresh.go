@@ -84,7 +84,7 @@ func planApprovalRefresh(pinned, stored Approval, expected ApprovalRefreshBindin
 		return nil, Fail("AUTHORITY_EXPIRED", "approval-refresh")
 	}
 	if pinned.OwnerID == "" || pinned.ComputerID == "" || pinned.Generation == 0 ||
-		len(pinned.Workspaces) == 0 || len(pinned.Capabilities) == 0 || !pinned.FilePolicy.Valid() ||
+		((len(pinned.Workspaces) == 0 || len(pinned.Capabilities) == 0) && !pinned.NoAccess()) || !pinned.FilePolicy.Valid() ||
 		pinned.Generation != expected.ComputerGeneration ||
 		!SameApprovalPolicy(pinned, stored) || !SameApprovalPolicy(pinned, witness.Approval) {
 		return nil, Fail("AUTHORITY_COMPUTER_MISMATCH", "approval-refresh")

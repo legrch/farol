@@ -369,7 +369,13 @@ func permissions(c []authority.Capability, n authority.Network, cmd authority.Co
 	return true
 }
 func validPolicy(p authority.Policy) bool {
-	if !p.FilePolicy.Valid() || len(p.Workspaces) == 0 || len(p.Workspaces) > 32 || !exclusions(p.ExcludedPaths) || !permissions(p.Capabilities, p.Network, p.Commands) || !expiry(p.ExpiresAt) {
+	if !p.FilePolicy.Valid() || len(p.Workspaces) > 32 || !exclusions(p.ExcludedPaths) || !expiry(p.ExpiresAt) {
+		return false
+	}
+	if len(p.Workspaces) == 0 {
+		return p.NoAccess()
+	}
+	if !permissions(p.Capabilities, p.Network, p.Commands) {
 		return false
 	}
 	seen := map[string]bool{}
@@ -400,7 +406,13 @@ func validPolicy(p authority.Policy) bool {
 	return err == nil
 }
 func validApproval(a authority.Approval, b Binding) bool {
-	if !a.FilePolicy.Valid() || a.OwnerID != b.OwnerID || a.ComputerID != b.ComputerID || len(a.Workspaces) == 0 || len(a.Workspaces) > 32 || !exclusions(a.ExcludedPaths) || !permissions(a.Capabilities, a.Network, a.Commands) || !expiry(a.ExpiresAt) {
+	if !a.FilePolicy.Valid() || a.OwnerID != b.OwnerID || a.ComputerID != b.ComputerID || len(a.Workspaces) > 32 || !exclusions(a.ExcludedPaths) || !expiry(a.ExpiresAt) {
+		return false
+	}
+	if len(a.Workspaces) == 0 {
+		return a.Generation > 0 && a.NoAccess()
+	}
+	if !permissions(a.Capabilities, a.Network, a.Commands) {
 		return false
 	}
 	seen := map[string]bool{}

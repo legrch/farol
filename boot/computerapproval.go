@@ -103,7 +103,15 @@ func parseDesktopApproval(raw json.RawMessage, ownerID, computerID string) (auth
 	if decoder.Decode(&extra) != io.EOF {
 		return invalid()
 	}
-	if input.OwnerID != ownerID || input.ComputerID != computerID || !validIngressID(input.OwnerID) || !validIngressID(input.ComputerID) || len(input.Workspaces) < 1 || len(input.Workspaces) > 32 || len(input.ExcludedPaths) > 32 || len(input.Capabilities) < 1 || len(input.Capabilities) > 6 {
+	if input.OwnerID != ownerID || input.ComputerID != computerID || !validIngressID(input.OwnerID) || !validIngressID(input.ComputerID) || len(input.Workspaces) > 32 || len(input.ExcludedPaths) > 32 || len(input.Capabilities) > 6 {
+		return invalid()
+	}
+	// Empty access is explicit owner intent. Omitted arrays must not make an
+	// incomplete publication look like a valid connection-only approval.
+	if len(input.Workspaces) == 0 && (input.Workspaces == nil || input.ExcludedPaths == nil || input.Capabilities == nil || len(input.ExcludedPaths) != 0 || len(input.Capabilities) != 0 || input.Network != authority.NoNetwork || input.Commands != authority.NoCommands) {
+		return invalid()
+	}
+	if len(input.Workspaces) != 0 && len(input.Capabilities) == 0 {
 		return invalid()
 	}
 	generation, e := safePositiveInteger(input.Generation)

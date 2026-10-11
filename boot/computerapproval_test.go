@@ -11,6 +11,39 @@ import (
 
 const desktopApprovalFixture = `{"ownerId":"owner","computerId":"computer","generation":7,"workspaces":[{"workspaceId":"work","root":"/selected/work","access":"write","rootIdentity":{"device":"18446744073709551615","inode":"9007199254740993"},"gitMetadata":{"gitDirectory":"/selected/git","commonDirectory":"/selected/common"},"gitHistoryApproved":true,"shellVerified":true}],"excludedPaths":[{"workspaceId":"work","path":"/selected/work/private"}],"capabilities":["workspace.list","workspace.read","workspace.shell"],"network":"none","commands":"workspace","expiresAt":1791050000000}`
 
+func TestDesktopEmptyApprovalRequiresExplicitNoAccess(t *testing.T) {
+	const raw = `{"ownerId":"owner","computerId":"computer","generation":7,"workspaces":[],"excludedPaths":[],"capabilities":[],"network":"none","commands":"none","expiresAt":1791050000000}`
+	a, err := parseDesktopApproval(json.RawMessage(raw), "owner", "computer")
+	if err != nil || !a.NoAccess() || a.Generation != 7 {
+		t.Fatal("explicit connection-only approval refused", err)
+	}
+	for _, field := range []string{"workspaces", "excludedPaths", "capabilities"} {
+		for _, value := range []string{"missing", "null", "true", `{}`} {
+			t.Run(field+"/"+value, func(t *testing.T) {
+				replacement := `"` + field + `":` + value + `,`
+				if value == "missing" {
+					replacement = ""
+				}
+				body := strings.Replace(raw, `"`+field+`":[],`, replacement, 1)
+				if _, err := parseDesktopApproval(json.RawMessage(body), "owner", "computer"); err == nil {
+					t.Fatal("incomplete empty approval accepted")
+				}
+			})
+		}
+	}
+	for _, pair := range [][2]string{
+		{`"capabilities":[]`, `"capabilities":["workspace.list"]`},
+		{`"network":"none"`, `"network":"approved"`},
+		{`"commands":"none"`, `"commands":"verification"`},
+		{`"excludedPaths":[]`, `"excludedPaths":[{"workspaceId":"old","path":"/old"}]`},
+		{`"generation":7`, `"generation":0`},
+	} {
+		if _, err := parseDesktopApproval(json.RawMessage(strings.Replace(raw, pair[0], pair[1], 1)), "owner", "computer"); err == nil {
+			t.Fatal("empty approval retained authority or lost identity")
+		}
+	}
+}
+
 func TestDesktopApprovalPreservesExistingQualifiedProjection(t *testing.T) {
 	approval, err := parseDesktopApproval(json.RawMessage(desktopApprovalFixture), "owner", "computer")
 	if err != nil {
