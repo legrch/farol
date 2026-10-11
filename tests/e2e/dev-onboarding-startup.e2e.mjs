@@ -406,9 +406,9 @@ try {
   for (const [step, label] of [
     ["overview", "Overview"],
     ["signin", "Sign in"],
-    ["folders", "Workspaces"],
     ["connection", "Connection"],
-    ["attachment", "Add to ChatGPT"],
+    ["folders", "Workspaces"],
+    ["attachment", "Check"],
   ]) {
     await setupStep(window, step, label);
     assert.equal(
@@ -1109,6 +1109,18 @@ try {
         .waitFor();
       await legacyWindow
         .getByRole("button", { name: "Continue setup", exact: true })
+        .click();
+      await legacyWindow
+        .locator('.setup-page[data-setup-step="overview"]')
+        .waitFor();
+      await assertSetupOverview(legacyWindow, {
+        ready: false,
+        signIn: uncheckedOverview.signIn,
+        states: { ...uncheckedOverview.states, folders: "verified" },
+      });
+      await legacyWindow
+        .getByRole("region", { name: "Setup overview", exact: true })
+        .getByRole("button", { name: "Set up Connection", exact: true })
         .click();
       assert.equal(
         await legacyWindow

@@ -4397,6 +4397,95 @@ ${scenario === "missing" ? "" : `<key>CFBundleVersion</key><string>${scenario ==
   );
 });
 
+describe("retained rollback selection (disposable records, native ports doubled)", () => {
+  it.each(["ready", "receipt", "missing", "corrupt-ready", "corrupt-receipt"])(
+    "does not rediscover an older operation after rollback (%s)",
+    async (selection) => {
+      const first = await prepared();
+      await first.restart();
+      await first.close();
+      const retained = JSON.parse(await fs.readFile(ready, "utf8"));
+      const op = retained.operation;
+      const updates = path.join(userData, "installed-updates");
+      const receipt = path.join(updates, "last-update.json");
+      const opRoot = path.join(updates, op.operationId);
+      await fs.rename(
+        path.join(opRoot, "staged.app"),
+        path.join(opRoot, "failed.app"),
+      );
+      await fs.writeFile(
+        path.join(opRoot, "journal.json"),
+        JSON.stringify({
+          schema: "farol.installed-update-journal/1",
+          ...op,
+          phase: "rolled_back",
+        }),
+        { mode: 0o600 },
+      );
+      // Older operation directories are retained evidence, never discovery input.
+      const older = path.join(updates, "0".repeat(32));
+      await fs.mkdir(older);
+      const oldJournal = JSON.stringify({
+        schema: "farol.installed-update-journal/1",
+        ...op,
+        operationId: "0".repeat(32),
+        phase: "completed",
+      });
+      await fs.writeFile(path.join(older, "journal.json"), oldJournal, {
+        mode: 0o600,
+      });
+      const saved = {
+        ...retained,
+        observedAt: new Date().toISOString(),
+        phase: "rolled_back",
+        runningBuildId: source.buildId,
+      };
+      if (selection === "ready") {
+        // A surviving ready record takes precedence across receipt replacement.
+        await fs.writeFile(receipt, "unreadable predecessor receipt", {
+          mode: 0o600,
+        });
+      } else {
+        await fs.unlink(ready);
+        if (selection !== "missing")
+          await fs.writeFile(receipt, JSON.stringify(saved), { mode: 0o600 });
+        if (selection === "corrupt-ready")
+          await fs.writeFile(ready, "corrupt latest ready", { mode: 0o600 });
+        if (selection === "corrupt-receipt")
+          await fs.writeFile(receipt, "corrupt latest receipt", {
+            mode: 0o600,
+          });
+      }
+      mocks.exec.mockImplementation(async (_file: unknown, args: string[]) => ({
+        stdout: JSON.stringify(
+          args[1]?.endsWith("failed.app") ? target : source,
+        ),
+      }));
+      const beforeCalls = mocks.helper.mock.calls.length;
+      for (let lifetime = 0; lifetime < 2; lifetime += 1) {
+        const current = await createInstalledUpdateRuntime(options());
+        await current!.initialize();
+        expect(current!.snapshot()).toMatchObject({
+          phase: selection.startsWith("corrupt") ? "failed" : "idle",
+        });
+        expect(current!.snapshot()).not.toHaveProperty("rollbackVersion");
+        // Observation and an unavailable rollback never dispatch another effect.
+        await current!.restore("rollback");
+        expect(mocks.helper).toHaveBeenCalledTimes(beforeCalls);
+        expect(
+          await fs.readFile(path.join(older, "journal.json"), "utf8"),
+        ).toBe(oldJournal);
+        await current!.close();
+      }
+      if (selection === "ready" || selection === "receipt") {
+        const final = JSON.parse(await fs.readFile(receipt, "utf8"));
+        expect(final.operation.operationId).toBe(op.operationId);
+        expect(final.phase).toBe("rolled_back");
+      }
+    },
+  );
+});
+
 describe("selected local update composition (disposable state, native ports doubled)", () => {
   function localOptions(selected = manifest) {
     return {

@@ -356,8 +356,10 @@ kbd {
   min-width: 0;
 }
 .page-list-resizer {
-  position: absolute;
-  inset: 0 0 0 auto;
+  /* The scroll gutter belongs to the content, not the panel boundary. */
+  position: fixed;
+  inset: var(--toolbar-height) auto 0
+    calc(var(--rail-width) + var(--page-list-width) - 6px);
   width: 6px;
   cursor: col-resize;
   touch-action: none;
