@@ -1860,10 +1860,17 @@ function connectionSettings() {
   return value;
 }
 describe("bounded Settings writer", () => {
-  it.each(["success", "unknown-check", "refused-edit"] as const)(
+  it.each([
+    "success",
+    "workspace-commands",
+    "unknown-check",
+    "refused-edit",
+  ] as const)(
     "continues a workspace removal through one fresh check and reconnect only after acknowledged phases: %s",
     async (outcome) => {
       let value = connectionSettings();
+      if (outcome === "workspace-commands")
+        value.computer.commands = "workspace";
       value.computer.workspaces.push({
         ...value.computer.workspaces[0]!,
         workspaceId: selectionId,
@@ -1903,6 +1910,7 @@ describe("bounded Settings writer", () => {
           value.setup.connect.verified = null;
         } else if (command.kind === "computer.verify-workspace") {
           expect(command.workspaceId).toBe(selectionId);
+          if (outcome === "workspace-commands") value.computer.generation++;
           value.setup.computer.verified = {
             ...proof(value),
             workspaceId: selectionId,

@@ -369,6 +369,18 @@ test("one Add action observes the configured connection result", async () => {
   });
 });
 
+test("Add accepts its current workspace receipt when the page notice is absent", async () => {
+  await journey({
+    name: "Add workspace…",
+    before: [],
+    after: [{ ...workspace, access: "write" }],
+    events: [
+      { target: "workspace", text: `Verify workspace: ${pending}` },
+      { target: "workspace", text: checked("write") },
+    ],
+  });
+});
+
 test("saved access without its current check cannot confirm Add", async () => {
   await journey(
     {

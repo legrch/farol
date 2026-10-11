@@ -96,6 +96,47 @@ function fixture() {
 }
 
 describe("one explicit Setup workspace access transition", () => {
+  it.each([
+    "receipt",
+    "missing-receipt",
+    "changed-grant",
+    "generation-jump",
+    "unknown",
+  ] as const)(
+    "admits a verification policy generation only with its acknowledged receipt: %s",
+    async (scenario) => {
+      const f = fixture();
+      f.settings.computer.commands = "workspace";
+      f.settings.setup.computer.verified = null;
+      const original = f.run.getMockImplementation()!;
+      f.run.mockImplementation(async (command) => {
+        if (command.kind === "computer.verify-workspace") {
+          f.settings.computer.generation +=
+            scenario === "generation-jump" ? 2 : 1;
+          if (scenario === "changed-grant")
+            f.settings.computer.commands = "none";
+        }
+        const result = await original(command);
+        if (command.kind === "computer.verify-workspace") {
+          if (scenario === "missing-receipt")
+            delete f.settings.computer.workspaces[0]!.accessCheck!.checkId;
+          if (scenario === "unknown") return "unknown";
+        }
+        return result;
+      });
+      const result = await f.controller.run(
+        f.port,
+        { workspaceId: fixtureWorkspaceId },
+        onboardingFacts(f.settings, fixtureBuildId),
+      );
+      expect(result.ok).toBe(scenario === "receipt");
+      expect(
+        f.run.mock.calls.filter(([c]) => c.kind === "connector.start"),
+      ).toHaveLength(scenario === "receipt" ? 1 : 0);
+      expect(f.controller.requiresReadback()).toBe(scenario === "unknown");
+    },
+  );
+
   it("pauses before enabling local work and verifies full Git before reconnecting", async () => {
     const f = fixture();
     expect(await f.controller.run(f.port, f.plan, f.consent)).toEqual({

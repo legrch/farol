@@ -43,6 +43,19 @@ function scopeIdentity(settings: ProductSettings): string {
   ]);
 }
 
+function savedAccessIdentity(settings: ProductSettings): string {
+  return JSON.stringify([
+    settings.computer.commands,
+    settings.computer.filePolicy,
+    settings.computer.workspaces.map((workspace) => [
+      workspace.workspaceId,
+      workspace.access,
+      workspace.gitHistoryApproved,
+      workspace.gitMetadata,
+    ]),
+  ]);
+}
+
 function reconnectedRuntimeCurrent(
   settings: ProductSettings,
   buildId: string,
@@ -198,6 +211,7 @@ export class GuidedWorkspaceAccess {
     ): Promise<boolean> => {
       const before = current();
       if (!before) return false;
+      const savedAccess = savedAccessIdentity(before);
       if (
         (command.kind === "computer.verify-workspace" ||
           command.kind === "computer.check-folder") &&
@@ -227,6 +241,21 @@ export class GuidedWorkspaceAccess {
       if (outcome === "unknown") this.unconfirmed = pending;
       if (outcome !== "applied") return false;
       generation += delta;
+      const checked = port.settings();
+      // A fresh check can reactivate already selected command access. The
+      // owner seals that effective policy with one additional generation.
+      // Admit only this acknowledged check's receipt and unchanged saved grants.
+      if (
+        delta === 0 &&
+        checked?.computer.generation === generation + 1 &&
+        savedAccessIdentity(checked) === savedAccess &&
+        workspaceReadbackConfirms(
+          { ...pending, generation: generation + 1 },
+          checked,
+          port.buildId(),
+        )
+      )
+        generation += 1;
       return current() !== null;
     };
     this.busy = true;

@@ -17,6 +17,8 @@ import { ownerSettingsComputerApproval } from "../../src/modules/computer/infra/
 import { SYNTHETIC_ROOT_IDENTITY } from "../fixtures/root-identity";
 
 import { taskPolicy } from "../fixtures/task-policy";
+import { GuidedWorkspaceAccess } from "../../src/ui/guided-workspace-access";
+import { onboardingFacts } from "../../src/ui/guided-onboarding";
 const roots: string[] = [];
 
 describe("workspace stopped publication revision", () => {
@@ -323,6 +325,47 @@ async function computerEvidenceFixture(
 }
 
 describe("Computer evidence approval generations", () => {
+  it("continues guided workspace recovery across the real owner's verification seal", async () => {
+    const { service, workspaceId, rootIdentity, verification } =
+      await computerEvidenceFixture();
+    const settings = () => {
+      const snapshot = service.snapshot();
+      if (snapshot.status !== "ready") throw new Error("settings missing");
+      return snapshot.settings;
+    };
+    const generation = settings().computer.generation;
+    const run = vi.fn(
+      async (
+        command: import("../../src/pkg/product-settings/contract").ProductConfigurationCommand,
+      ) => {
+        if (command.kind !== "computer.verify-workspace" || !command.checkId)
+          throw new Error("unexpected command");
+        const result = await service.recordComputerVerification(
+          workspaceId,
+          verification,
+          { rootIdentity, checkId: command.checkId },
+        );
+        return result.ok ? ("applied" as const) : ("refused" as const);
+      },
+    );
+    const result = await new GuidedWorkspaceAccess().run(
+      {
+        settings,
+        buildId: () => verification.buildId,
+        issueCheckId: () => "00000000-0000-4000-8000-000000000099",
+        run,
+      },
+      { workspaceId },
+      onboardingFacts(settings(), verification.buildId),
+    );
+    expect(result).toEqual({ ok: true, reconnected: false });
+    expect(settings().computer.generation).toBe(generation + 1);
+    expect(run).toHaveBeenCalledOnce();
+    expect(approval(service.snapshot()).capabilities).toContain(
+      "workspace.shell",
+    );
+  });
+
   it.each(["none", "verification", "workspace"] as const)(
     "advances %s verification only when the projected policy changes",
     async (commands) => {

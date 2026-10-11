@@ -94,12 +94,17 @@ export async function setupAction(page, name, { scope = ".setup-page" } = {}) {
           ...container.querySelectorAll(
             verify
               ? '.workspace-detail .workspace-feedback p[role="status"]'
-              : '.settings-page > p[role="status"]',
+              : add
+                ? '.workspace-detail .workspace-feedback p[role="status"], .settings-page > p[role="status"]'
+                : '.settings-page > p[role="status"]',
           ),
         ]
           .filter((node) => node.checkVisibility())
           .map((node) => node.textContent)
-          .filter((text) => !verify || text.startsWith("Verify workspace: "));
+          .filter((text) => !verify || text.startsWith("Verify workspace: "))
+          .map((text) =>
+            add ? text.replace(/^Verify workspace: /u, "") : text,
+          );
       const pending = verify
         ? "Verify workspace: Saving or checking…"
         : "Saving or checking…";
