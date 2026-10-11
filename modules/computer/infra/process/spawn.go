@@ -74,6 +74,10 @@ func pinnedExecutable(pin ExecutablePin) (*os.File, error) {
 		return nil, &processsvc.NativeFailure{}
 	}
 	refuse := func() (*os.File, error) { file.Close(); return nil, &processsvc.NativeFailure{} }
+	physical, err := platformDescriptorPath(file.Fd())
+	if err != nil || physical != pin.Path {
+		return refuse()
+	}
 	before, err := file.Stat()
 	if err != nil || !before.Mode().IsRegular() || before.Mode().Perm()&0111 == 0 || before.Mode().Perm()&0022 != 0 || before.Size() > 128*1024*1024 {
 		return refuse()

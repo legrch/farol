@@ -50,6 +50,57 @@ func measurementFixture(t *testing.T) (Command, *confinedLaunch) {
 	return command, launch
 }
 
+// This is a native pathname admission check, not sandbox execution evidence.
+// Both spellings identify the same synthetic inode; only the kernel pathname
+// may supply a profile grant. No child or executable fixture is started.
+func TestNativePlatformCanonicalNamesRefuseAPFSAliases(t *testing.T) {
+	command, launch := measurementFixture(t)
+	ctx := context.Background()
+	for _, path := range []string{command.Root, launch.pins[0].Path} {
+		original, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		alias, err := os.Stat(dataVolumePath + path)
+		if err != nil {
+			t.Fatal("APFS alias fixture unavailable", err)
+		}
+		if !os.SameFile(original, alias) {
+			t.Fatal("APFS spellings identify different inodes")
+		}
+	}
+	for _, alias := range []bool{false, true} {
+		pin := launch.pins[0]
+		root := command.Root
+		if alias {
+			pin.Path = dataVolumePath + pin.Path
+			root = dataVolumePath + root
+		}
+		held, err := (darwinLaunchFilesystem{}).pinExecutable(ctx, pin)
+		if held != nil {
+			if closeErr := held.Close(); closeErr != nil {
+				t.Fatal(closeErr)
+			}
+		}
+		if (err != nil) != alias {
+			t.Fatalf("measurement alias=%v: %v", alias, err)
+		}
+		file, err := pinnedExecutable(pin)
+		if file != nil {
+			if closeErr := file.Close(); closeErr != nil {
+				t.Fatal(closeErr)
+			}
+		}
+		if (err != nil) != alias {
+			t.Fatalf("watchdog pin alias=%v: %v", alias, err)
+		}
+		_, err = (nativePlatformFacts{}).directory(ctx, root)
+		if (err != nil) != alias {
+			t.Fatalf("platform directory alias=%v: %v", alias, err)
+		}
+	}
+}
+
 // Real disposable filesystem drift between capture and release; the synthetic
 // image is text, never executed. No sandbox/process qualification is inferred.
 func TestNativeRetainedMeasurementRejectsBetweenCheckDrift(t *testing.T) {

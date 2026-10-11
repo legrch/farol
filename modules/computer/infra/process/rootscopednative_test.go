@@ -92,7 +92,7 @@ func TestNativeRootScopedProbeHelper(t *testing.T) {
 	os.Exit(0)
 }
 
-func nativeRootScopedSeatbelt(t *testing.T, write bool, protectImages bool, aliases ...string) {
+func nativeRootScopedSeatbelt(t *testing.T, write bool, protectImages bool) {
 	t.Helper()
 	base, err := os.MkdirTemp("/private/tmp", "farol-root-policy-")
 	if err != nil {
@@ -195,48 +195,12 @@ func nativeRootScopedSeatbelt(t *testing.T, write bool, protectImages bool, alia
 			"apps-parent": {container, container + "-moved"},
 		}
 	}
-	policyRoot := root
-	if len(aliases) != 0 {
-		if len(aliases) != 1 || !protectImages {
-			t.Fatal("invalid native alias fixture")
-		}
-		logical, err := os.Stat(root)
-		must(err)
-		physical, err := os.Stat(dataVolumePath + root)
-		must(err)
-		if !os.SameFile(logical, physical) {
-			t.Fatal("selected APFS spellings are not the same physical root")
-		}
-		switch aliases[0] {
-		case "physical-root":
-			policyRoot = dataVolumePath + root
-			// Exercise the spelling actually granted to this command. A path
-			// alias is not an additional read/write grant for the other spelling.
-			for name, path := range probe.Reads {
-				if insidePolicy(root, path) {
-					probe.Reads[name] = dataVolumePath + path
-				}
-			}
-			for name, path := range probe.Writes {
-				if insidePolicy(root, path) {
-					probe.Writes[name] = dataVolumePath + path
-				}
-			}
-			for name, paths := range probe.Renames {
-				probe.Renames[name] = [2]string{dataVolumePath + paths[0], dataVolumePath + paths[1]}
-			}
-		case "physical-image":
-			s.ProtectedImages[0].Path = dataVolumePath + s.ProtectedImages[0].Path
-		default:
-			t.Fatal("unknown native alias fixture")
-		}
-	}
-	s.Snapshot.Participant.Grant.Workspaces[0].Root = policyRoot
-	s.Snapshot.Approval.Workspaces[0].Root = policyRoot
+	s.Snapshot.Participant.Grant.Workspaces[0].Root = root
+	s.Snapshot.Approval.Workspaces[0].Root = root
 	s.Snapshot.Approval.Workspaces[0].RootIdentity = identity(root)
 	addRootScope(&s, "secondary", secondary, authority.ReadAccess)
 	s.Snapshot.Approval.Workspaces[1].RootIdentity = identity(secondary)
-	command.Root, command.Cwd, command.RootIdentity = policyRoot, policyRoot, identity(root)
+	command.Root, command.Cwd, command.RootIdentity = root, root, identity(root)
 	command.Executable, command.ExecutableSHA256 = image, s.Executables[0].SHA256
 	payload, err := json.Marshal(probe)
 	must(err)
@@ -246,7 +210,7 @@ func nativeRootScopedSeatbelt(t *testing.T, write bool, protectImages bool, alia
 	must(err)
 	arguments := append(append(append([]string(nil), plan.arguments...), image), command.Args...)
 	child := exec.Command(seatbeltExecutable, arguments...)
-	child.Env, child.Dir, child.WaitDelay = command.Environment, command.Cwd, time.Second
+	child.Env, child.Dir, child.WaitDelay = command.Environment, root, time.Second
 	var stdout, stderr bytes.Buffer
 	child.Stdout, child.Stderr = &stdout, &stderr
 	must(child.Start())
@@ -269,8 +233,6 @@ func nativeRootScopedSeatbelt(t *testing.T, write bool, protectImages bool, alia
 	}
 	var out rootScopedProbeResult
 	must(json.Unmarshal(stdout.Bytes(), &out))
-	// Preserve the complete synthetic observation before assertions, including
-	// known permission refusals that differ from a fixture's expected result.
 	must(os.WriteFile(filepath.Join(base, "probe-observation.json"), stdout.Bytes(), 0600))
 	for name, expected := range baseline {
 		if name == "outside" || name == "outside-symlink" || name == "home" {
@@ -310,12 +272,4 @@ func nativeRootScopedSeatbelt(t *testing.T, write bool, protectImages bool, alia
 // namespace. Ordinary workspace writes remain allowed. No production activation.
 func TestNativeRootScopedProtectedImages(t *testing.T) {
 	nativeRootScopedSeatbelt(t, true, true)
-}
-
-func TestNativeRootScopedProtectedImageAPFSAliases(t *testing.T) {
-	for _, spelling := range []string{"physical-root", "physical-image"} {
-		if !t.Run(spelling, func(t *testing.T) { nativeRootScopedSeatbelt(t, true, true, spelling) }) {
-			return // Preserve any failed or unknown original attempt, without a successor.
-		}
-	}
 }

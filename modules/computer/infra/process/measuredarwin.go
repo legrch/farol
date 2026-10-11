@@ -51,6 +51,10 @@ func (darwinLaunchFilesystem) pinExecutable(ctx context.Context, pin ExecutableP
 	}
 	before, err := file.Stat()
 	held := &darwinExecutableMeasurement{file: file, selected: pin, original: before, ownerUID: os.Geteuid(), named: func(path string) (os.FileInfo, error) {
+		physical, err := platformDescriptorPath(file.Fd())
+		if err != nil || physical != path {
+			return nil, &processsvc.NativeFailure{}
+		}
 		resolved, err := filepath.EvalSymlinks(path)
 		if err != nil || resolved != path {
 			return nil, &processsvc.NativeFailure{}

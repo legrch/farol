@@ -126,6 +126,10 @@ func (nativePlatformFacts) file(ctx context.Context, path string) (platformFileF
 	}
 	file := os.NewFile(uintptr(fd), path)
 	defer file.Close()
+	physical, err := platformDescriptorPath(file.Fd())
+	if err != nil || physical != path {
+		return refuse()
+	}
 	before, err := file.Stat()
 	if err != nil || !before.Mode().IsRegular() || before.Size() <= 0 || before.Size() > 128*1024*1024 {
 		return refuse()
@@ -178,6 +182,10 @@ func (nativePlatformFacts) directory(ctx context.Context, path string) (platform
 	defer pin.Close()
 	dir, ok := pin.(*darwinDirectoryPin)
 	if !ok {
+		return refuse()
+	}
+	physical, err := platformDescriptorPath(dir.Fd())
+	if err != nil || physical != path {
 		return refuse()
 	}
 	measured, err := dir.inspect(path)

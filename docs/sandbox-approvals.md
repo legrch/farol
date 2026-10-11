@@ -119,6 +119,13 @@ counterparts; an administrator-owned installation is not required. Additional
 or PATH permissions. The compiler protects their ancestor directories against
 unlink/rename within writable scopes while retaining ordinary sibling writes.
 APFS Data firmlinks do not have to share a textual mount prefix with `/Users`.
+The qualified launch requires the kernel's exact pathname from `F_GETPATH` for
+directories and images. Alternative `/System/Volumes/Data/...`, case or Unicode
+spellings refuse before dispatch; they are not silently normalized into an
+approved scope. Native experiments showed that Data-prefixed root rules did not
+grant the expected workspace access on the tested host. Such a refusal is not
+evidence of successful sandbox confinement. Mount detection still considers both
+APFS spellings so alternate mount-table names cannot hide nested volumes.
 
 This assurance relies on trusted host pathnames and the qualified OS mechanism.
 It is not an atomic filesystem snapshot or protection against a privileged or
