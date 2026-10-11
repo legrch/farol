@@ -133,13 +133,17 @@ type nativeConnectorFixture struct {
 	preserve bool
 }
 
+func nativeConnectorBinding() wire.ComputerConnectorBinding {
+	return wire.ComputerConnectorBinding{BuildId: "native-build", ProfileId: "native-profile", BackendGeneration: "native-backend", RuntimeId: "native-connector", ConnectorGeneration: "9007199254740993"}
+}
+
 func newNativeConnector(t *testing.T, handle func(context.Context, Request) (*Outcome, error)) *nativeConnectorFixture {
 	t.Helper()
 	f := &nativeConnectorFixture{owned: make(map[string]os.FileInfo)}
 	ctx, cancel := context.WithCancel(context.Background())
 	f.cancel = cancel
-	binding := wire.ComputerConnectorBinding{BuildId: "native-build", ProfileId: "native-profile", BackendGeneration: "native-backend", RuntimeId: "native-connector", ConnectorGeneration: "9007199254740993"}
-	listener, err := StartConnector(ctx, binding, map[string]Method{"computer.workspace.list": {Handle: func(ctx context.Context, req Request) (*Outcome, error) {
+	binding := nativeConnectorBinding()
+	listener, stage, err := startConnector(ctx, binding, map[string]Method{"computer.workspace.list": {Handle: func(ctx context.Context, req Request) (*Outcome, error) {
 		f.calls.Add(1)
 		if handle != nil {
 			return handle(ctx, req)
@@ -150,7 +154,7 @@ func newNativeConnector(t *testing.T, handle func(context.Context, Request) (*Ou
 		cancel()
 		// StartConnector does not report a partially created root. Do not search
 		// for or reclaim paths whose ownership cannot be established.
-		t.Fatal("StartConnector failed; any partial endpoint is preserved:", err)
+		t.Fatalf("StartConnector failed at %s; any partial endpoint is preserved: COMPUTER_CONNECTOR_UNAVAILABLE", stage)
 	}
 	f.listener = listener
 	f.owned[listener.root] = listener.rootInfo

@@ -127,12 +127,59 @@ func (s *ConnectorListener) PublishLaunch(ctx context.Context, data []byte) (pub
 // A startup failure preserves any partially created path, with no replacement
 // listener, stale-path unlink, fallback port or retry.
 func StartConnector(ctx context.Context, binding wire.ComputerConnectorBinding, methods map[string]Method) (*ConnectorListener, error) {
+	listener, _, err := startConnector(ctx, binding, methods)
+	return listener, err
+}
+
+type connectorStartStage uint8
+
+const (
+	connectorStartReady connectorStartStage = iota
+	connectorStartContext
+	connectorStartEntropy
+	connectorStartConfigPreflight
+	connectorStartRootCreate
+	connectorStartRootQualify
+	connectorStartEndpointConfig
+	connectorStartSocketListen
+	connectorStartSocketQualify
+)
+
+// String exposes only fixed diagnostic labels, never startup inputs or OS errors.
+func (stage connectorStartStage) String() string {
+	switch stage {
+	case connectorStartReady:
+		return "ready"
+	case connectorStartContext:
+		return "context"
+	case connectorStartEntropy:
+		return "entropy"
+	case connectorStartConfigPreflight:
+		return "config-preflight"
+	case connectorStartRootCreate:
+		return "root-create"
+	case connectorStartRootQualify:
+		return "root-qualify"
+	case connectorStartEndpointConfig:
+		return "endpoint-config"
+	case connectorStartSocketListen:
+		return "socket-listen"
+	case connectorStartSocketQualify:
+		return "socket-qualify"
+	default:
+		return "unknown"
+	}
+}
+
+// startConnector preserves the public error while identifying the failing stage
+// for package-local diagnostics. A stage never proves endpoint creation or cleanup.
+func startConnector(ctx context.Context, binding wire.ComputerConnectorBinding, methods map[string]Method) (*ConnectorListener, connectorStartStage, error) {
 	if ctx == nil || ctx.Err() != nil {
-		return nil, ErrConnectorUnavailable
+		return nil, connectorStartContext, ErrConnectorUnavailable
 	}
 	var secret [32]byte
 	if _, err := rand.Read(secret[:]); err != nil {
-		return nil, ErrConnectorUnavailable
+		return nil, connectorStartEntropy, ErrConnectorUnavailable
 	}
 	endpoint := wire.ComputerConnectorEndpoint{Binding: binding, SocketPath: "/private/tmp/pending.sock", Token: hex.EncodeToString(secret[:])}
 	selected := make(map[string]Method, len(methods))
@@ -141,24 +188,24 @@ func StartConnector(ctx context.Context, binding wire.ComputerConnectorBinding, 
 	}
 	config := ConnectorConfig{Endpoint: endpoint, Methods: selected}
 	if validateConnectorConfig(config) != nil {
-		return nil, ErrConnectorUnavailable
+		return nil, connectorStartConfigPreflight, ErrConnectorUnavailable
 	}
 	root, err := os.MkdirTemp("/private/tmp", "farol-mcp-")
 	if err != nil {
-		return nil, ErrConnectorUnavailable
+		return nil, connectorStartRootCreate, ErrConnectorUnavailable
 	}
 	info, err := os.Lstat(root)
 	if err != nil || !safeConnectorRoot(root, info) {
-		return nil, ErrConnectorUnavailable
+		return nil, connectorStartRootQualify, ErrConnectorUnavailable
 	}
 	endpoint.SocketPath = filepath.Join(root, "computer.sock")
 	config.Endpoint = endpoint
 	if validateConnectorConfig(config) != nil {
-		return nil, ErrConnectorUnavailable
+		return nil, connectorStartEndpointConfig, ErrConnectorUnavailable
 	}
 	listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: endpoint.SocketPath, Net: "unix"})
 	if err != nil {
-		return nil, ErrConnectorUnavailable
+		return nil, connectorStartSocketListen, ErrConnectorUnavailable
 	}
 	listener.SetUnlinkOnClose(false)
 	// The private 0700 directory controls endpoint access. Preserve the socket's
@@ -166,13 +213,13 @@ func StartConnector(ctx context.Context, binding wire.ComputerConnectorBinding, 
 	socketInfo, err := os.Lstat(endpoint.SocketPath)
 	if err != nil || !safeConnectorSocket(socketInfo) {
 		_ = listener.Close()
-		return nil, ErrConnectorUnavailable
+		return nil, connectorStartSocketQualify, ErrConnectorUnavailable
 	}
 	selectedCtx, cancel := context.WithCancel(ctx)
 	owned := &ConnectorListener{endpoint: endpoint, config: config, root: root, rootInfo: info, socketInfo: socketInfo, listener: listener, ctx: selectedCtx, cancel: cancel, connections: make(map[*net.UnixConn]bool), acceptDone: make(chan struct{}), closeDone: make(chan struct{})}
 	go owned.accept()
 	go func() { <-selectedCtx.Done(); owned.beginClose() }()
-	return owned, nil
+	return owned, connectorStartReady, nil
 }
 func (s *ConnectorListener) Endpoint() wire.ComputerConnectorEndpoint { return s.endpoint }
 func safeConnectorRoot(path string, info os.FileInfo) bool {
