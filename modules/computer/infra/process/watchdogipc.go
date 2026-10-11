@@ -168,7 +168,12 @@ func (c *watchdogChild) receive() {
 		return
 	}
 	reader := bufio.NewReaderSize(c.channel, watchdogFrameLimit)
-	for frames := 0; frames < 4096; frames++ {
+	// Bound output by decoded bytes, independent of pipe fragmentation. Every
+	// accepted output frame consumes at least one byte of MaximumOutput; each
+	// control transition is single-use. Frame size and the original read deadline
+	// remain bounded. A fixed frame count could discard a small valid output
+	// stream before its exit/close observations arrived.
+	for {
 		raw, err := reader.ReadSlice('\n')
 		if err != nil {
 			c.mutex.Lock()
@@ -184,7 +189,6 @@ func (c *watchdogChild) receive() {
 			return
 		}
 	}
-	c.fence()
 }
 
 func (c *watchdogChild) event(raw []byte) error {
