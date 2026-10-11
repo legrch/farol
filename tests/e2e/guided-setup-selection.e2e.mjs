@@ -882,26 +882,23 @@ try {
           .locator(".workspace-detail")
           .getByRole("button", { name: "Save", exact: true })
           .click();
-        await window.waitForFunction(
-          async ({ generation, access, runtime }) => {
-            const { settings } = (await window.farolNext.bootstrap())
-              .configuration;
-            return (
-              settings.computer.generation === generation + 1 &&
-              settings.computer.workspaces[0].access === access &&
-              settings.setup.computer.verified?.configRevision ===
-                settings.computer.generation &&
-              settings.connectors.secureMcp.runtime?.state === "ready" &&
-              settings.connectors.secureMcp.runtime.runtimeGeneration !==
-                runtime
-            );
-          },
-          {
-            generation: original.computer.generation,
-            access,
-            runtime: original.connectors.secureMcp.runtime.runtimeGeneration,
-          },
-        );
+        const recoveryDeadline = Date.now() + 15000;
+        for (;;) {
+          const settings = await readSetupSettings(window);
+          if (
+            settings.computer.generation === original.computer.generation + 1 &&
+            settings.computer.workspaces[0].access === access &&
+            settings.setup.computer.verified?.configRevision ===
+              settings.computer.generation &&
+            settings.connectors.secureMcp.runtime?.state === "ready" &&
+            settings.connectors.secureMcp.runtime.runtimeGeneration !==
+              original.connectors.secureMcp.runtime.runtimeGeneration
+          )
+            break;
+          if (Date.now() >= recoveryDeadline)
+            throw new Error("WORKSPACE_ACCESS_RECOVERY_TIMEOUT");
+          await new Promise((resolve) => setTimeout(resolve, 50));
+        }
         observations.push({
           kind: "workspace-access-restored-connection",
           access,

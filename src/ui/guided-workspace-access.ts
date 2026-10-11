@@ -43,7 +43,11 @@ function scopeIdentity(settings: ProductSettings): string {
   ]);
 }
 
-function savedAccessIdentity(settings: ProductSettings): string {
+function savedAccessIdentity(
+  settings: ProductSettings,
+  clearRevokedMetadataFor?: string,
+  bindApprovedPrimaryFor?: string,
+): string {
   return JSON.stringify([
     settings.computer.commands,
     settings.computer.filePolicy,
@@ -51,7 +55,17 @@ function savedAccessIdentity(settings: ProductSettings): string {
       workspace.workspaceId,
       workspace.access,
       workspace.gitHistoryApproved,
-      workspace.gitMetadata,
+      workspace.workspaceId === clearRevokedMetadataFor &&
+      workspace.gitHistoryApproved !== true
+        ? undefined
+        : workspace.workspaceId === bindApprovedPrimaryFor &&
+            workspace.gitHistoryApproved === true &&
+            workspace.gitMetadata === undefined
+          ? {
+              gitDirectory: `${workspace.root.replace(/\/$/u, "")}/.git`,
+              commonDirectory: `${workspace.root.replace(/\/$/u, "")}/.git`,
+            }
+          : workspace.gitMetadata,
     ]),
   ]);
 }
@@ -212,6 +226,21 @@ export class GuidedWorkspaceAccess {
       const before = current();
       if (!before) return false;
       const savedAccess = savedAccessIdentity(before);
+      const clearedRevokedMetadata = savedAccessIdentity(
+        before,
+        command.kind === "computer.verify-workspace" ||
+          command.kind === "computer.check-folder"
+          ? command.workspaceId
+          : undefined,
+      );
+      const boundApprovedPrimary = savedAccessIdentity(
+        before,
+        undefined,
+        command.kind === "computer.verify-workspace" ||
+          command.kind === "computer.check-folder"
+          ? command.workspaceId
+          : undefined,
+      );
       if (
         (command.kind === "computer.verify-workspace" ||
           command.kind === "computer.check-folder") &&
@@ -248,7 +277,9 @@ export class GuidedWorkspaceAccess {
       if (
         delta === 0 &&
         checked?.computer.generation === generation + 1 &&
-        savedAccessIdentity(checked) === savedAccess &&
+        (savedAccessIdentity(checked) === savedAccess ||
+          savedAccessIdentity(checked) === clearedRevokedMetadata ||
+          savedAccessIdentity(checked) === boundApprovedPrimary) &&
         workspaceReadbackConfirms(
           { ...pending, generation: generation + 1 },
           checked,

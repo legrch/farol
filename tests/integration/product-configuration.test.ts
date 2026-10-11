@@ -325,46 +325,103 @@ async function computerEvidenceFixture(
 }
 
 describe("Computer evidence approval generations", () => {
-  it("continues guided workspace recovery across the real owner's verification seal", async () => {
-    const { service, workspaceId, rootIdentity, verification } =
-      await computerEvidenceFixture();
-    const settings = () => {
-      const snapshot = service.snapshot();
-      if (snapshot.status !== "ready") throw new Error("settings missing");
-      return snapshot.settings;
-    };
-    const generation = settings().computer.generation;
-    const run = vi.fn(
-      async (
-        command: import("../../src/pkg/product-settings/contract").ProductConfigurationCommand,
-      ) => {
-        if (command.kind !== "computer.verify-workspace" || !command.checkId)
-          throw new Error("unexpected command");
-        const result = await service.recordComputerVerification(
-          workspaceId,
-          verification,
-          { rootIdentity, checkId: command.checkId },
+  it.each([false, true])(
+    "continues guided recovery across the real owner's seal (revoked Git: %s)",
+    async (revokedGit) => {
+      const { service, workspaceId, rootIdentity, verification } =
+        await computerEvidenceFixture();
+      if (revokedGit) {
+        expect(
+          (
+            await service.recordComputerVerification(
+              workspaceId,
+              verification,
+              { rootIdentity },
+            )
+          ).ok,
+        ).toBe(true);
+        expect(
+          (await service.updateWorkspaceGitHistory(workspaceId, true)).ok,
+        ).toBe(true);
+        expect(
+          (
+            await service.recordComputerVerification(
+              workspaceId,
+              verification,
+              {
+                rootIdentity,
+                gitMetadata: {
+                  gitDirectory: "/Users/example/project/.git",
+                  commonDirectory: "/Users/example/project/.git",
+                },
+              },
+            )
+          ).ok,
+        ).toBe(true);
+        expect(
+          (await service.updateWorkspaceAccess(workspaceId, "write")).ok,
+        ).toBe(true);
+        expect(service.snapshot()).toMatchObject({
+          settings: {
+            computer: {
+              workspaces: [
+                {
+                  gitHistoryApproved: false,
+                  gitMetadata: { gitDirectory: "/Users/example/project/.git" },
+                },
+              ],
+            },
+          },
+        });
+      }
+      const settings = () => {
+        const snapshot = service.snapshot();
+        if (snapshot.status !== "ready") throw new Error("settings missing");
+        return snapshot.settings;
+      };
+      const generation = settings().computer.generation;
+      const run = vi.fn(
+        async (
+          command: import("../../src/pkg/product-settings/contract").ProductConfigurationCommand,
+        ) => {
+          if (command.kind !== "computer.verify-workspace" || !command.checkId)
+            throw new Error("unexpected command");
+          const result = await service.recordComputerVerification(
+            workspaceId,
+            verification,
+            {
+              rootIdentity,
+              checkId: command.checkId,
+              ...(revokedGit ? { gitMetadata: null } : {}),
+            },
+          );
+          return result.ok ? ("applied" as const) : ("refused" as const);
+        },
+      );
+      const result = await new GuidedWorkspaceAccess().run(
+        {
+          settings,
+          buildId: () => verification.buildId,
+          issueCheckId: () => "00000000-0000-4000-8000-000000000099",
+          run,
+        },
+        { workspaceId },
+        onboardingFacts(settings(), verification.buildId),
+      );
+      expect(result).toEqual({ ok: true, reconnected: false });
+      expect(settings().computer.generation).toBe(generation + 1);
+      expect(run).toHaveBeenCalledOnce();
+      expect(approval(service.snapshot()).capabilities).toContain(
+        "workspace.shell",
+      );
+      if (revokedGit) {
+        expect(settings().computer.workspaces[0]!.gitMetadata).toBeUndefined();
+        expect(settings().computer.workspaces[0]!.gitHistoryApproved).toBe(
+          false,
         );
-        return result.ok ? ("applied" as const) : ("refused" as const);
-      },
-    );
-    const result = await new GuidedWorkspaceAccess().run(
-      {
-        settings,
-        buildId: () => verification.buildId,
-        issueCheckId: () => "00000000-0000-4000-8000-000000000099",
-        run,
-      },
-      { workspaceId },
-      onboardingFacts(settings(), verification.buildId),
-    );
-    expect(result).toEqual({ ok: true, reconnected: false });
-    expect(settings().computer.generation).toBe(generation + 1);
-    expect(run).toHaveBeenCalledOnce();
-    expect(approval(service.snapshot()).capabilities).toContain(
-      "workspace.shell",
-    );
-  });
+      }
+    },
+  );
 
   it.each(["none", "verification", "workspace"] as const)(
     "advances %s verification only when the projected policy changes",

@@ -97,6 +97,58 @@ function fixture() {
 
 describe("one explicit Setup workspace access transition", () => {
   it.each([
+    "revoked",
+    "still-approved",
+    "replaced",
+    "initial-primary",
+    "outside-primary",
+  ] as const)(
+    "only admits grant-preserving metadata renewal for the checked workspace: %s",
+    async (scenario) => {
+      const f = fixture();
+      const target = f.settings.computer.workspaces[0]!;
+      target.gitHistoryApproved =
+        scenario === "still-approved" ||
+        scenario === "initial-primary" ||
+        scenario === "outside-primary";
+      target.gitMetadata = {
+        gitDirectory: `${target.root}/.git`,
+        commonDirectory: `${target.root}/.git`,
+      };
+      if (scenario === "initial-primary" || scenario === "outside-primary")
+        delete target.gitMetadata;
+      const original = f.run.getMockImplementation()!;
+      f.run.mockImplementation(async (command) => {
+        if (command.kind === "computer.verify-workspace") {
+          f.settings.computer.generation++;
+          if (scenario === "initial-primary")
+            target.gitMetadata = {
+              gitDirectory: `${target.root}/.git`,
+              commonDirectory: `${target.root}/.git`,
+            };
+          else if (scenario === "replaced" || scenario === "outside-primary")
+            target.gitMetadata = {
+              gitDirectory: "/different/.git",
+              commonDirectory: "/different/.git",
+            };
+          else delete target.gitMetadata;
+        }
+        return original(command);
+      });
+      const result = await f.controller.run(
+        f.port,
+        { workspaceId: fixtureWorkspaceId },
+        onboardingFacts(f.settings, fixtureBuildId),
+      );
+      const accepted = scenario === "revoked" || scenario === "initial-primary";
+      expect(result.ok).toBe(accepted);
+      expect(
+        f.run.mock.calls.filter(([c]) => c.kind === "connector.start"),
+      ).toHaveLength(accepted ? 1 : 0);
+    },
+  );
+
+  it.each([
     "receipt",
     "missing-receipt",
     "changed-grant",
