@@ -259,7 +259,7 @@ try {
         for (const [step, label] of [
           ["signin", "Sign in"],
           ["folders", "Workspaces"],
-          ["attachment", "Add to ChatGPT"],
+          ["attachment", "Check"],
         ]) {
           await setupStep(window, step, label);
           assert.equal(
@@ -296,14 +296,20 @@ try {
           .getByRole("navigation", { name: "Sections", exact: true })
           .getByRole("button", { name: "ChatGPT", exact: true })
           .click();
+        // ChatGPT navigation has no duplicate shell launchers. The damaged
+        // configuration must remain unavailable after presenting its route.
         for (const name of ["Open ChatGPT", "Sign in"]) {
           assert.equal(
-            await window
-              .getByRole("button", { name, exact: true })
-              .isDisabled(),
-            true,
+            await window.getByRole("button", { name, exact: true }).count(),
+            0,
           );
         }
+        assert.deepEqual(
+          (await window.evaluate(() => window.farolNext.bootstrap()))
+            .configuration,
+          { status: "error", error: expected },
+          "NAVIGATION_RESET_CONFIGURATION_FAULT",
+        );
         assert.equal(
           await fs.readFile(file, "utf8"),
           bytes,
