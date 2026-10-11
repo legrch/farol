@@ -190,6 +190,24 @@ Existing admitted operations retain their captured policy, and a mode change is
 not a retrospective grant or retry permit. These source changes wire File API
 policy selection; they do not qualify a live root-scoped grant.
 
+The internal connector Shell factory in `boot/connectorshell.go` now composes
+the original admitted lease with the supervised producer. It copies the current
+approval/grant under the existing owner, then performs native preparation outside
+the owner locks and within that same deadline. It selects the approved physical
+workspace, pinned Bash, producer-owned environment, `NoNetwork`, protected app
+bundle and exact command/stdin; it rechecks current policy after preparation.
+The returned observer is bound to the same sealed root. Selection does not
+reserve, dispatch, renew admission or create another operation journal.
+
+Its private `/private/tmp/farol-shell-*` directories are retained on all outcomes;
+neither root exit nor context cancellation proves descendant settlement. There
+is no recursive or crash-time cleanup. The existing connector ledger bounds
+selection attempts per backend lifetime. A qualified cleanup policy remains
+separate work. CPU composition tests use synthetic scratch/platform inputs and
+a qualifier that always refuses execution. The factory is not selected by normal
+startup: authenticated support delivery, complete package attestation and native
+external qualification remain required before activation.
+
 Remaining qualification and integration:
 
 1. The normal native Shell producer remains withheld. Before exposing it, select

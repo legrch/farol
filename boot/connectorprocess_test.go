@@ -212,7 +212,7 @@ func selectConnectorProcessSlot(t *testing.T, s *computerConnector, access *conn
 	launch := port.ConnectorLaunch{Host: host, Approval: a, TurnCorrelation: "turn-" + suffix,
 		Admission: authority.Admission{Identity: authority.Identity{OwnerID: a.OwnerID, SessionID: "session-" + suffix, TaskID: "task-" + suffix, TaskEpoch: 1},
 			AuthorityID: "admission-" + suffix, ComputerID: a.ComputerID, ComputerGeneration: a.Generation,
-			Policy: authority.Policy{Workspaces: []authority.Scope{{WorkspaceID: "work", Root: "/disposable", Mode: authority.Subtree, Access: authority.ReadAccess}}, Capabilities: a.Capabilities, Network: a.Network, Commands: a.Commands, ExpiresAt: a.ExpiresAt}},
+			Policy: authority.Policy{FilePolicy: a.FilePolicy, Workspaces: []authority.Scope{{WorkspaceID: "work", Root: "/disposable", Mode: authority.Subtree, Access: authority.ReadAccess}}, Capabilities: a.Capabilities, Network: a.Network, Commands: a.Commands, ExpiresAt: a.ExpiresAt}},
 		Participant: authority.ParticipantAdmission{ParticipantID: "participant-" + suffix, Role: authority.Main, MutationOwnership: authority.NoOwnership}}
 	owner, err := connectorsvc.New(&sync.Mutex{}, access, guard, s.clock, launch)
 	if err != nil {
