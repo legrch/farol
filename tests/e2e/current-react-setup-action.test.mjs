@@ -381,6 +381,20 @@ test("Add accepts its current workspace receipt when the page notice is absent",
   });
 });
 
+test("Add retains both its exact folder receipt and final connection result", async () => {
+  await journey({
+    name: "Add workspace…",
+    before: [],
+    after: [{ ...workspace, access: "write" }],
+    connected: true,
+    events: [
+      pending,
+      { target: "workspace", text: checked("write") },
+      "Local connection started. Verify Farol in ChatGPT to confirm external access.",
+    ],
+  });
+});
+
 test("saved access without its current check cannot confirm Add", async () => {
   await journey(
     {
@@ -394,6 +408,24 @@ test("saved access without its current check cannot confirm Add", async () => {
       ],
     },
     /SETUP_ADDED_WORKSPACE_NOT_VERIFIED/,
+  );
+});
+
+test("a pending page notice cannot mask an unknown folder result during Add", async () => {
+  await journey(
+    {
+      name: "Add workspace…",
+      before: [],
+      after: [{ ...workspace, access: "write" }],
+      connected: true,
+      events: [
+        pending,
+        { target: "workspace", text: `Verify workspace: ${unknown}` },
+        { target: "workspace", text: checked("write") },
+        "Local connection started. Verify Farol in ChatGPT to confirm external access.",
+      ],
+    },
+    /SETUP_ACTION_UNCONFIRMED:Add workspace/,
   );
 });
 

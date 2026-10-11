@@ -119,19 +119,24 @@ export async function setupAction(page, name, { scope = ".setup-page" } = {}) {
         }
         const current = read();
         changed ||= JSON.stringify(current) !== previous;
-        if (changed && current.length && !current.includes(pending)) {
+        const intermediate =
+          add &&
+          current.every(
+            (text) =>
+              text === pending ||
+              text === "Workspace selected. Saving access…" ||
+              /^Workspace access (?:saved|checked): /u.test(text) ||
+              text ===
+                "Local connection started. Verify Farol in ChatGPT to confirm external access.",
+          );
+        if (
+          changed &&
+          current.length &&
+          (!current.includes(pending) || (add && !intermediate))
+        ) {
           // Adding composes pick, save, access checks and optional connection.
           // Keep the first refusal/unknown; only known intermediate successes
           // may wait for the original composed button to become idle.
-          const intermediate =
-            add &&
-            current.every(
-              (text) =>
-                text === "Workspace selected. Saving access…" ||
-                /^Workspace access (?:saved|checked): /u.test(text) ||
-                text ===
-                  "Local connection started. Verify Farol in ChatGPT to confirm external access.",
-            );
           if (
             !intermediate ||
             container.querySelector(".workspace-add button")?.textContent ===
@@ -155,7 +160,7 @@ export async function setupAction(page, name, { scope = ".setup-page" } = {}) {
       .getByRole("button", { name, exact: true })
       .click();
     await page.waitForFunction((value) => value.result !== null, observation);
-    const observed = await observation.evaluate((value) => value.result);
+    let observed = await observation.evaluate((value) => value.result);
     if (add) {
       const after = await readSetupSettings(page);
       const added = after.computer.workspaces.filter(
@@ -183,6 +188,16 @@ export async function setupAction(page, name, { scope = ".setup-page" } = {}) {
         after.connectors.secureMcp.runtime?.state === "ready"
           ? messages["Connect this Mac"]
           : `Workspace access checked: ${added[0].root}. Saved access: Read & write.`;
+      if (
+        after.connectors.secureMcp.runtime?.state === "ready" &&
+        observed.length === 2
+      ) {
+        const checked = `Workspace access checked: ${added[0].root}. Saved access: Read & write.`;
+        // The current folder receipt may remain visible beside the composed
+        // connection result. Accept only that exact additional success.
+        if (observed.includes(expected) && observed.includes(checked))
+          observed = [expected];
+      }
     }
     assert.deepEqual(observed, [expected], `SETUP_ACTION_UNCONFIRMED:${name}`);
   } finally {

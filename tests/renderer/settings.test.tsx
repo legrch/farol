@@ -1948,6 +1948,14 @@ describe("bounded Settings writer", () => {
       const dispatched = h.calls().length;
       await h.remount();
       expect(h.calls()).toHaveLength(dispatched);
+      if (outcome === "success" || outcome === "workspace-commands") {
+        expect(h.host.textContent).toContain(
+          "Workspace access checked: /approved/remaining.",
+        );
+        expect(h.host.textContent).not.toContain(
+          "A current access check is not confirmed",
+        );
+      }
     },
   );
 

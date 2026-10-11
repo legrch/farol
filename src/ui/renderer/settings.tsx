@@ -1499,7 +1499,7 @@ function WorkspaceDetail({
                 : "Verify workspace: "}
             {Object.values(feedback.pages).find(
               (entry) => entry.result === intent,
-            )?.text ?? actionFeedback(intent)}
+            )?.text ?? actionFeedback(intent, snapshot)}
           </p>
         ))}
         {stopRequired && (
