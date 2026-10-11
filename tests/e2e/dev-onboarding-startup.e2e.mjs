@@ -28,6 +28,7 @@ import {
 
 const uncheckedOverview = {
   ready: false,
+  hasWorkspaces: false,
   signIn: "unknown",
   states: {
     signin: "unknown",
@@ -1118,6 +1119,7 @@ try {
       );
       await assertSetupOverview(legacyWindow, {
         ready: false,
+        hasWorkspaces: true,
         signIn: uncheckedOverview.signIn,
         states: { ...uncheckedOverview.states, folders: "verified" },
       });

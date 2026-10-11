@@ -32,6 +32,7 @@ import {
 
 const uncheckedOverview = {
   ready: false,
+  hasWorkspaces: true,
   signIn: "unknown",
   states: {
     signin: "unknown",

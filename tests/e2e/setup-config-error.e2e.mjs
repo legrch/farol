@@ -273,6 +273,7 @@ try {
         }
         await assertSetupOverview(window, {
           ready: false,
+          hasWorkspaces: false,
           signIn: "unknown",
           states: {
             signin: "unknown",

@@ -8,6 +8,7 @@ const { assertSetupOverviewEvidence } = await import(
 );
 const expected = {
   ready: true,
+  hasWorkspaces: true,
   signIn: "unknown",
   states: {
     signin: "unknown",
@@ -59,6 +60,43 @@ function readyEvidence() {
   };
 }
 describe("native Setup overview observation guards (synthetic records only)", () => {
+  it("accepts verified empty-catalogue access without a false file badge", () => {
+    const observed = readyEvidence();
+    const folders = observed.rows.find((row) => row.step === "folders")!;
+    Object.assign(folders, {
+      optional: true,
+      state: "needed",
+      status: "No workspace access enabled",
+      navigationState: "needed",
+      navigationStatus: "No workspace access enabled",
+    });
+    const empty = {
+      ...expected,
+      hasWorkspaces: false,
+      states: { ...expected.states, folders: "needed" },
+    };
+    assertSetupOverviewEvidence(observed, empty);
+    folders.state = "verified";
+    assert.throws(() => assertSetupOverviewEvidence(observed, empty));
+    assert.throws(
+      () =>
+        assertSetupOverviewEvidence(readyEvidence(), {
+          ...expected,
+          hasWorkspaces: false,
+        }),
+      /SETUP_EMPTY_WORKSPACE_FILE_PROOF/,
+    );
+  });
+  it("requires an explicit workspace-selection expectation", () => {
+    assert.throws(
+      () =>
+        assertSetupOverviewEvidence(readyEvidence(), {
+          ...expected,
+          hasWorkspaces: undefined,
+        }),
+      /SETUP_WORKSPACE_SELECTION_MISSING/,
+    );
+  });
   it("accepts externally ready Computer with optional sign-in currently unknown", () => {
     assertSetupOverviewEvidence(readyEvidence(), expected);
   });
@@ -240,6 +278,7 @@ describe("native Setup overview observation guards (synthetic records only)", ()
     observed.openHome = { count: 0, visible: false, disabled: false };
     assertSetupOverviewEvidence(observed, {
       ready: false,
+      hasWorkspaces: true,
       signIn: "unknown",
       states: {
         signin: "unknown",

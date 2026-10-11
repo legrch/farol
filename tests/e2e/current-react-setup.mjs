@@ -269,6 +269,17 @@ export function assertSetupOverviewEvidence(observed, expected) {
     signIn.state,
     "SETUP_SIGNIN_STATE_MISMATCH",
   );
+  assert.equal(
+    typeof expected.hasWorkspaces,
+    "boolean",
+    "SETUP_WORKSPACE_SELECTION_MISSING",
+  );
+  if (!expected.hasWorkspaces)
+    assert.notEqual(
+      expected.states.folders,
+      "verified",
+      "SETUP_EMPTY_WORKSPACE_FILE_PROOF",
+    );
   assert.deepEqual(
     Object.keys(expected.states).sort(),
     setupSteps
@@ -297,11 +308,16 @@ export function assertSetupOverviewEvidence(observed, expected) {
             ? "Local connection ready"
             : state === "verified" && step === "attachment"
               ? "Verified from ChatGPT"
-              : checkStatus[state];
+              : step === "folders" &&
+                  !expected.hasWorkspaces &&
+                  state === "needed"
+                ? "No workspace access enabled"
+                : checkStatus[state];
       return {
         step,
         label,
-        optional: step === "signin",
+        optional:
+          step === "signin" || (step === "folders" && !expected.hasWorkspaces),
         state,
         status,
         navigationState: state,
@@ -311,7 +327,11 @@ export function assertSetupOverviewEvidence(observed, expected) {
     "SETUP_OVERVIEW_EVIDENCE_MISMATCH",
   );
   if (expected.ready)
-    for (const step of ["folders", "connection", "attachment"])
+    for (const step of [
+      ...(expected.hasWorkspaces ? ["folders"] : []),
+      "connection",
+      "attachment",
+    ])
       assert.equal(
         expected.states[step],
         "verified",

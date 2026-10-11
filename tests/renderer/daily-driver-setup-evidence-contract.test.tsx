@@ -26,7 +26,9 @@ afterEach(async () => {
 });
 
 function readyConfiguration(): ProductConfigurationSnapshot {
-  const value = settings();
+  // Mutating a scenario must not alter schema default objects used by a later
+  // fresh-bootstrap fixture in this file.
+  const value = structuredClone(settings());
   const buildId = "3".repeat(64);
   const runtimeGeneration = "a".repeat(64);
   const workspaceId = "22222222-2222-4222-8222-222222222222";
@@ -177,6 +179,7 @@ async function mount(
 function expected(signIn = "unknown", state = "unknown", ready = false) {
   return {
     ready,
+    hasWorkspaces: ready,
     signIn,
     states: {
       signin: state,
@@ -188,6 +191,24 @@ function expected(signIn = "unknown", state = "unknown", ready = false) {
 }
 
 describe("current Setup renderer and native observation helper contract", () => {
+  it("matches ready empty-catalogue evidence without manufacturing file verification", async () => {
+    const configuration = readyConfiguration();
+    if (configuration.status !== "ready")
+      throw new Error("fixture unavailable");
+    const value = configuration.settings;
+    value.computer.workspaces = [];
+    value.setup.computer.verified = null;
+    value.setup.connect.verified!.workspaceId = null;
+    value.connectors.secureMcp.attachment!.workspaceId = null;
+    const h = await mount(configuration);
+    const expectedReady = expected("unknown", "unknown", true);
+    assertSetupOverviewEvidence(h.evidence(), {
+      ...expectedReady,
+      hasWorkspaces: false,
+      states: { ...expectedReady.states, folders: "needed" },
+    });
+    expect(h.f.api.configure).not.toHaveBeenCalled();
+  });
   it("matches fresh bootstrap unknown without claiming an unchecked or signed-out observation", async () => {
     const h = await mount();
     expect(h.c.getSnapshot().signInObservation).toBeNull();
