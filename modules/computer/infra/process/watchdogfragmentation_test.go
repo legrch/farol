@@ -2,7 +2,9 @@ package process
 
 import (
 	"bytes"
+	"encoding/base64"
 	"io"
+	"net"
 	"strings"
 	"testing"
 	"time"
@@ -64,3 +66,62 @@ func (c *fragmentedWatchdogChannel) Write(p []byte) (int, error)      { return l
 func (c *fragmentedWatchdogChannel) Close() error                     { c.closed = true; return nil }
 func (c *fragmentedWatchdogChannel) SetReadDeadline(time.Time) error  { return nil }
 func (c *fragmentedWatchdogChannel) SetWriteDeadline(time.Time) error { return nil }
+
+func TestWatchdogReceivePaddedWireBudget(t *testing.T) {
+	id := strings.Repeat("a", 64)
+	frame := strings.Repeat(" ", 1024) + `{"type":"stdout","id":"` + id + `","data":"QQ=="}` + "\n"
+	channel := &fragmentedWatchdogChannel{reader: strings.NewReader(frame + frame)}
+	child := newWatchdogChild(nil, channel, time.Unix(123, 0), nil, io.Discard, io.Discard)
+	child.id, child.preparedSeen, child.readySeen, child.startSent = id, true, true, true
+	child.receiveBounded(len(frame)*2 - 1)
+	if !child.uncertain || !channel.closed || child.bytes != 1 || child.outputLimit || child.rootClosed {
+		t.Fatal("wire budget exhaustion parsed another frame or claimed output overflow")
+	}
+}
+
+func TestWatchdogReceiveExactOutputLimit(t *testing.T) {
+	id := strings.Repeat("a", 64)
+	var stream strings.Builder
+	remaining := processsvc.MaximumOutput
+	for remaining > 0 {
+		n := min(remaining, watchdogChunkLimit)
+		stream.WriteString(`{"type":"stdout","id":"` + id + `","data":"` + base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{1}, n)) + `"}` + "\n")
+		remaining -= n
+	}
+	stream.WriteString(`{"type":"close","id":"` + id + `","code":0,"signal":null}` + "\n")
+	channel := &fragmentedWatchdogChannel{reader: strings.NewReader(stream.String())}
+	child := newWatchdogChild(nil, channel, time.Unix(123, 0), nil, io.Discard, io.Discard)
+	child.id, child.preparedSeen, child.readySeen, child.startSent = id, true, true, true
+	child.receive()
+	if child.uncertain || child.outputLimit || !child.rootClosed || !child.root.Drained || child.bytes != processsvc.MaximumOutput {
+		t.Fatal("exact output limit lost terminal observation")
+	}
+}
+
+func TestWatchdogReceivePartialEOF(t *testing.T) {
+	channel := &fragmentedWatchdogChannel{reader: strings.NewReader(`{"type":"close"`)}
+	child := newWatchdogChild(nil, channel, time.Unix(123, 0), nil, io.Discard, io.Discard)
+	child.rootClosed = true
+	child.receive()
+	if !child.uncertain || !channel.closed {
+		t.Fatal("partial frame EOF accepted")
+	}
+}
+
+func TestWatchdogReceiveOriginalDeadline(t *testing.T) {
+	client, peer := net.Pipe()
+	defer peer.Close()
+	defer client.Close()
+	deadline := time.Now().Add(25 * time.Millisecond)
+	child := newWatchdogChild(nil, client, deadline, nil, io.Discard, io.Discard)
+	done := make(chan struct{})
+	go func() { child.receive(); close(done) }()
+	select {
+	case <-done:
+		if time.Now().Before(deadline) || !child.uncertain {
+			t.Fatal("stalled IPC did not retain original deadline fence")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("stalled IPC exceeded its original deadline")
+	}
+}

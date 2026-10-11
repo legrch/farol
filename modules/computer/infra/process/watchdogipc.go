@@ -20,6 +20,10 @@ const watchdogInputLimit = 2 * 1024 * 1024
 const watchdogFrameLimit = 96 * 1024
 const watchdogChunkLimit = 48 * 1024
 
+// Compact one-byte output frames need at most 416 MiB at MaximumOutput.
+// Allow that fragmentation plus controls, while bounding padded JSON work.
+const watchdogWireLimit = 512 * 1024 * 1024
+
 // Node's existing JSON serialization uses newline-delimited private IPC. These
 // values are resource-specific messages, not another public authority protocol.
 type watchdogPrepare struct {
@@ -162,6 +166,10 @@ func (c *watchdogChild) Kill() error {
 }
 
 func (c *watchdogChild) receive() {
+	c.receiveBounded(watchdogWireLimit)
+}
+
+func (c *watchdogChild) receiveBounded(remaining int) {
 	defer close(c.done)
 	if c.channel.SetReadDeadline(c.deadline) != nil {
 		c.fence()
@@ -184,7 +192,12 @@ func (c *watchdogChild) receive() {
 			}
 			return
 		}
-		if len(raw) > watchdogFrameLimit || c.event(raw) != nil {
+		if len(raw) > watchdogFrameLimit || len(raw) > remaining {
+			c.fence()
+			return
+		}
+		remaining -= len(raw)
+		if c.event(raw) != nil {
 			c.fence()
 			return
 		}
