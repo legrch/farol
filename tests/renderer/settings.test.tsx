@@ -1516,6 +1516,77 @@ describe("combined connection partial receipts", () => {
 
 // DOM/facade regressions only. Native lifecycle and external acceptance are separate.
 describe("owner setup entry feedback", () => {
+  function emptyCatalogueSettings() {
+    const value = connectionSettings();
+    value.computer.workspaces = [];
+    value.setup.computer.verified = null;
+    value.setup.computer.reachable = "unknown";
+    value.connectors.secureMcp.challenge = null;
+    value.connectors.secureMcp.attachment!.workspaceId = null;
+    value.setup.connect.verified!.workspaceId = null;
+    return value;
+  }
+  it("shows a verified empty-catalogue connection without workspace verification prompts", async () => {
+    const value = emptyCatalogueSettings();
+    const before = structuredClone(value);
+    const h = await mount("connection", value);
+    expect(activePage(h.host).textContent).toContain("Computer ready");
+    expect(activePage(h.host).textContent).not.toContain(
+      "Workspace verification needed",
+    );
+    expect(() => h.button("Verify a workspace")).toThrow();
+    expect(h.calls()).toEqual([]);
+    expect(h.c.getSnapshot().configuration).toEqual({
+      status: "ready",
+      settings: before,
+    });
+  });
+  it("offers the stopped empty-workspace connection with correct start copy and no file proof", async () => {
+    const value = emptyCatalogueSettings();
+    value.connectors.secureMcp.runtime = null;
+    value.connectors.secureMcp.attachment = null;
+    value.setup.connect.verified = null;
+    const h = await mount("connection", value);
+    expect(activePage(h.host).textContent).toContain("Ready to connect");
+    expect(activePage(h.host).textContent).not.toContain(
+      "Workspace verification needed",
+    );
+    expect(() => h.button("Verify a workspace")).toThrow();
+    expect(h.button("Connect this Mac").disabled).toBe(false);
+    expect(h.calls()).toEqual([]);
+    await h.click("Connect this Mac");
+    expect(h.calls()).toEqual([{ kind: "connector.start" }]);
+    expect(h.c.getSnapshot().configuration?.status).toBe("ready");
+    expect(value.setup.computer.verified).toBeNull();
+  });
+  it("retains workspace verification prompts for configured folders without proper proof", async () => {
+    const value = connectionSettings();
+    value.connectors.secureMcp.runtime = null;
+    value.connectors.secureMcp.challenge = null;
+    value.connectors.secureMcp.attachment = null;
+    value.setup.connect.verified = null;
+    value.setup.computer.verified = null;
+    const h = await mount("connection", value);
+    expect(activePage(h.host).textContent).toContain(
+      "Workspace verification needed",
+    );
+    expect(h.button("Verify a workspace")).toBeTruthy();
+    expect(() => h.button("Connect this Mac")).toThrow();
+    expect(h.calls()).toEqual([]);
+  });
+  it("preserves unknown admission on a stopped empty-workspace connection", async () => {
+    const value = emptyCatalogueSettings();
+    value.connectors.secureMcp.runtime = null;
+    value.connectors.secureMcp.attachment = null;
+    value.setup.connect.verified = null;
+    value.setup.connect.outcomeUnknown = true;
+    const h = await mount("connection", value);
+    expect(activePage(h.host).textContent).toContain("Outcome unknown");
+    expect(activePage(h.host).textContent).not.toContain("Ready to connect");
+    expect(() => h.button("Verify a workspace")).toThrow();
+    expect(() => h.button("Connect this Mac")).toThrow();
+    expect(h.calls()).toEqual([]);
+  });
   it("shows one state-appropriate primary connection action without dispatch on render", async () => {
     const ready = await mount("connection", connectionSettings());
     expect(ready.calls()).toEqual([]);

@@ -2301,7 +2301,7 @@ function Connection({
             ? "Connection details needed"
             : !connector.tunnelClient
               ? "Connection helper needed"
-              : !setup.workspacesVerified
+              : setup.facts.hasFolder && !setup.workspacesVerified
                 ? "Workspace verification needed"
                 : setup.canStart
                   ? "Ready to connect"
@@ -2496,21 +2496,24 @@ function Connection({
               Find connection helper
             </Command>
           )}
-          {saved && !replacing && !setup.workspacesVerified && (
-            <button
-              type="button"
-              className="text-button"
-              onClick={() =>
-                facade.navigate(
-                  setupStep
-                    ? { area: "setup", setupStep: "folders" }
-                    : { area: "settings", page: "folders" },
-                )
-              }
-            >
-              Verify a workspace
-            </button>
-          )}
+          {saved &&
+            !replacing &&
+            setup.facts.hasFolder &&
+            !setup.workspacesVerified && (
+              <button
+                type="button"
+                className="text-button"
+                onClick={() =>
+                  facade.navigate(
+                    setupStep
+                      ? { area: "setup", setupStep: "folders" }
+                      : { area: "settings", page: "folders" },
+                  )
+                }
+              >
+                Verify a workspace
+              </button>
+            )}
           {saved && !replacing && connector.tunnelClient && setup.canStart && (
             <Command
               actions={actions}
@@ -2605,7 +2608,8 @@ function Connection({
             <p className="notice" role="status">
               No current verification request is available.{" "}
               {actions.computerPauseReason ??
-                (!setup.workspacesVerified || !setup.localConnectionCurrent
+                ((setup.facts.hasFolder && !setup.workspacesVerified) ||
+                !setup.localConnectionCurrent
                   ? setup.next
                   : connector.challenge
                     ? "The saved request no longer matches this build or connection. Review Connection diagnostics before requesting new verification."
@@ -2614,8 +2618,10 @@ function Connection({
           )}
           {setupStep && attachmentReady && (
             <p className="description">
-              The retained attachment check matches this build, connection and
-              workspace. Return to Overview to see the current checks.
+              {setup.facts.hasFolder
+                ? "The retained attachment check matches this build, connection and workspace."
+                : "The retained attachment check matches this build and connection. No workspace access is enabled."}{" "}
+              Return to Overview to see the current checks.
             </p>
           )}
           <div className="control-row">
