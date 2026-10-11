@@ -215,8 +215,20 @@ func (c *Client) Read(ctx context.Context, q port.ClaudeRead) (port.ClaudeObserv
 	if e1 != nil || e2 != nil || len(stdout) > 65536 || len(stderr) > 65536 || r.StdoutNext != q.StdoutOffset+uint64(len(stdout)) || r.StderrNext != q.StderrOffset+uint64(len(stderr)) || r.StdoutNext > r.StdoutBytes || r.StderrNext > r.StderrBytes {
 		return port.ClaudeObservation{}, unknown()
 	}
-	if r.State != computer.Running && r.State != computer.Terminal && r.State != computer.Unknown || r.RootState != computer.RootRunning && r.RootState != computer.RootExited || !cleanup(r.GroupCleanup) || !cleanup(r.DescendantCleanup) {
+	if r.State != computer.Running && r.State != computer.Terminal && r.State != computer.Exited && r.State != computer.Unknown || r.RootState != computer.RootRunning && r.RootState != computer.RootExited || !cleanup(r.GroupCleanup) || !cleanup(r.DescendantCleanup) {
 		return port.ClaudeObservation{}, unknown()
+	}
+	state := string(r.State)
+	if r.State == computer.Exited {
+		if r.Supervisor != computer.SupervisorExited || r.RootState != computer.RootExited || !r.RootWaited || !r.OutputDrained ||
+			r.GroupCleanup == computer.CleanupPending || r.DescendantCleanup == computer.CleanupPending ||
+			(r.GroupCleanup != computer.CleanupUnverified && r.DescendantCleanup != computer.CleanupUnverified) ||
+			(r.ExitCode == nil) == (r.ExitSignal == 0) {
+			return port.ClaudeObservation{}, unknown()
+		}
+		// Task still requires confirmed cohort cleanup. Preserve bounded output
+		// for provider lineage parsing, then retain its existing unknown outcome.
+		state = "unknown"
 	}
 	if r.State == computer.Terminal && (!r.RootWaited || r.RootState != computer.RootExited || !r.OutputDrained || r.GroupCleanup != computer.CleanupConfirmed || r.DescendantCleanup != computer.CleanupConfirmed) {
 		return port.ClaudeObservation{}, unknown()
@@ -232,7 +244,7 @@ func (c *Client) Read(ctx context.Context, q port.ClaudeRead) (port.ClaudeObserv
 		v := *r.ExitCode
 		exit = &v
 	}
-	return port.ClaudeObservation{Handle: r.Handle, State: string(r.State), RootState: string(r.RootState), GroupCleanup: string(r.GroupCleanup), DescendantCleanup: string(r.DescendantCleanup), RootWaited: r.RootWaited, OutputDrained: r.OutputDrained, OutputLimitReached: r.OutputLimitReached, CancelRequested: r.CancelRequested, TimedOut: r.TimedOut, AuthorityLost: r.AuthorityLost, ExitCode: exit, ExitSignal: r.ExitSignal, Stdout: stdout, Stderr: stderr, StdoutNext: r.StdoutNext, StderrNext: r.StderrNext, StdoutBytes: r.StdoutBytes, StderrBytes: r.StderrBytes}, nil
+	return port.ClaudeObservation{Handle: r.Handle, State: state, RootState: string(r.RootState), GroupCleanup: string(r.GroupCleanup), DescendantCleanup: string(r.DescendantCleanup), RootWaited: r.RootWaited, OutputDrained: r.OutputDrained, OutputLimitReached: r.OutputLimitReached, CancelRequested: r.CancelRequested, TimedOut: r.TimedOut, AuthorityLost: r.AuthorityLost, ExitCode: exit, ExitSignal: r.ExitSignal, Stdout: stdout, Stderr: stderr, StdoutNext: r.StdoutNext, StderrNext: r.StderrNext, StdoutBytes: r.StdoutBytes, StderrBytes: r.StderrBytes}, nil
 }
 func cleanup(c computer.Cleanup) bool {
 	return c == computer.CleanupPending || c == computer.CleanupConfirmed || c == computer.CleanupUnverified
