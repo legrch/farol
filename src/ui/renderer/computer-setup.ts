@@ -31,13 +31,14 @@ export function computerSetup(snapshot: WindowSnapshot) {
     buildId !== "";
   const admissible =
     current && !pending && !unknown && !settings?.computer.pendingEdit;
-  const folderCurrent =
+  const fileAccessCurrent =
     facts.folder === "ready" &&
     workspace !== null &&
     verified?.buildId === buildId &&
     verified.configRevision === settings?.computer.generation;
   const configured =
     facts.client && facts.credentialStored && facts.tunnelId !== null;
+  const folderCurrent = !facts.hasFolder || fileAccessCurrent;
   const runtimeIdentityCurrent =
     runtime != null &&
     runtime.buildId === buildId &&
@@ -59,7 +60,7 @@ export function computerSetup(snapshot: WindowSnapshot) {
     witness.buildId === buildId &&
     witness.configRevision === connector?.generation &&
     witness.runtimeGeneration === runtime?.runtimeGeneration &&
-    witness.workspaceId === workspace?.workspaceId &&
+    witness.workspaceId === (facts.hasFolder ? workspace?.workspaceId : null) &&
     (challenge == null ||
       (challengeCurrent &&
         attachment?.challengeSha256 === challenge.challengeSha256));
@@ -69,12 +70,11 @@ export function computerSetup(snapshot: WindowSnapshot) {
     folderCurrent &&
     challengeCurrent &&
     externalConnectorChallengeAllowed(facts) &&
-    workspace !== null &&
     challenge != null
       ? {
           value: challenge.value,
-          workspaceId: workspace.workspaceId,
-          root: workspace.root,
+          workspaceId: workspace?.workspaceId ?? null,
+          root: workspace?.root ?? null,
           tunnelId: facts.tunnelId,
         }
       : null;
@@ -87,7 +87,7 @@ export function computerSetup(snapshot: WindowSnapshot) {
   return {
     facts,
     ready,
-    workspacesVerified: admissible && folderCurrent,
+    workspacesVerified: admissible && fileAccessCurrent,
     localConnectionCurrent:
       admissible && runtimeIdentityCurrent && facts.runtimeCurrent,
     externalAccessVerified: admissible && attachmentCurrent,
@@ -131,6 +131,8 @@ export function computerSetup(snapshot: WindowSnapshot) {
                   ? "Start a stopped connection, or explicitly reconnect a current runtime."
                   : !ready
                     ? "Attach this tunnel in ChatGPT, use the current challenge once, then check attachment."
-                    : "Current folder, connection and attachment checks passed.",
+                    : facts.hasFolder
+                      ? "Current folder, connection and attachment checks passed."
+                      : "Connection verified. No workspace access is enabled.",
   };
 }

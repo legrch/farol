@@ -1,3 +1,4 @@
+import { connectorWorkspaceSelection } from "../pkg/product-settings/connector-workspace-selection";
 import { selectedConnectorApp } from "../pkg/product-settings/connector-app-selection";
 import {
   ProductConfigurationCommandSchema,
@@ -90,13 +91,13 @@ export function onboardingFacts(
     verificationIdentity:
       runtime !== null &&
       connector.challenge !== null &&
-      settings.setup.computer.verified !== null
+      connectorWorkspaceSelection(settings) !== undefined
         ? JSON.stringify([
             runtime.buildId,
             runtime.runtimeGeneration,
             connector.challenge.challengeSha256,
             connector.challenge.runtimeGeneration,
-            settings.setup.computer.verified.workspaceId,
+            connectorWorkspaceSelection(settings),
             settings.computer.generation,
             connector.generation,
           ])
@@ -115,9 +116,7 @@ export function onboardingFacts(
       attachment.connectorGeneration === connector.generation &&
       attachment.computerGeneration === settings.computer.generation &&
       attachment.runtimeGeneration === runtime?.runtimeGeneration &&
-      attachment.workspaceId ===
-        settings.setup.computer.verified?.workspaceId &&
-      workspaceIds.includes(attachment.workspaceId),
+      attachment.workspaceId === connectorWorkspaceSelection(settings),
     outcomeUnknown:
       settings.setup.connect.outcomeUnknown ||
       runtime?.state === "outcome_unknown",
@@ -165,8 +164,7 @@ export function externalConnectorChallengeAllowed(
 ): boolean {
   return (
     facts.available &&
-    facts.hasFolder &&
-    facts.folder === "ready" &&
+    (!facts.hasFolder || facts.folder === "ready") &&
     facts.runtimeCurrent &&
     facts.verificationIdentity !== null &&
     !facts.attachmentCurrent &&
@@ -186,8 +184,7 @@ export function onboardingProgress(
   // setup is available. Access and connector proof remain separate.
   const folder = true;
   const tunnel =
-    facts.hasFolder &&
-    facts.folder === "ready" &&
+    (!facts.hasFolder || facts.folder === "ready") &&
     facts.runtime === "ready" &&
     facts.runtimeCurrent &&
     !facts.outcomeUnknown;
@@ -233,7 +230,6 @@ export function onboardingCompletedSteps(
   const runtime = connector.runtime;
   const configuredConnection =
     folder &&
-    workspaceIds.size > 0 &&
     connector.tunnelClient !== null &&
     connector.credential === "stored" &&
     connector.tunnelId !== null;
@@ -244,12 +240,11 @@ export function onboardingCompletedSteps(
     previouslyVerified.tunnelId === connector.tunnelId &&
     previouslyVerified.connectorGeneration === connector.generation &&
     previouslyVerified.computerGeneration === settings.computer.generation &&
-    previouslyVerified.workspaceId === witness?.workspaceId &&
-    workspaceIds.has(previouslyVerified.workspaceId);
+    previouslyVerified.workspaceId === connectorWorkspaceSelection(settings);
   const currentConnection =
     configuredConnection &&
     runtime?.state === "ready" &&
-    allFoldersChecked(settings, runtime.buildId) &&
+    (workspaceIds.size === 0 || allFoldersChecked(settings, runtime.buildId)) &&
     runtime.computerGeneration === settings.computer.generation &&
     runtime.connectorGeneration === connector.generation &&
     !settings.setup.connect.outcomeUnknown;
@@ -264,7 +259,7 @@ export function onboardingCompletedSteps(
     attachment.connectorGeneration === connector.generation &&
     attachment.computerGeneration === settings.computer.generation &&
     attachment.runtimeGeneration === runtime?.runtimeGeneration &&
-    attachment.workspaceId === witness?.workspaceId;
+    attachment.workspaceId === connectorWorkspaceSelection(settings);
   const app = priorAppCheck || currentAppCheck;
   return [chat, folder, connection, app, chat && folder && connection && app];
 }
@@ -362,8 +357,7 @@ export class GuidedActivation {
       if (
         !initial.available ||
         (mode === "embedded" && initial.chat !== "ready") ||
-        initial.folder !== "ready" ||
-        !initial.hasFolder
+        (initial.hasFolder && initial.folder !== "ready")
       )
         return { ok: false, reason: "prerequisite" };
       if (initial.runtime !== "stopped")
@@ -388,7 +382,7 @@ export class GuidedActivation {
           current.available &&
           current.authority === initial.authority &&
           (mode === "external" || current.chat === "ready") &&
-          current.folder === "ready" &&
+          (!current.hasFolder || current.folder === "ready") &&
           !current.outcomeUnknown &&
           current.runtime === "stopped"
         );
@@ -426,7 +420,7 @@ export class GuidedActivation {
         started.authority !== initial.authority ||
         started.tunnelId !== tunnelId ||
         (mode === "embedded" && started.chat !== "ready") ||
-        started.folder !== "ready"
+        (started.hasFolder && started.folder !== "ready")
       )
         return { ok: false, reason: "state-changed" };
       return started.runtime === "ready" &&

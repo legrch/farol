@@ -95,6 +95,45 @@ async function snapshot(value = configured()) {
   }
 }
 describe("current Computer setup projection", () => {
+  it("verifies an empty catalogue without marking workspace access verified", async () => {
+    const value = configured();
+    const workspace = value.computer.workspaces[0]!;
+    value.computer.workspaces = [];
+    value.setup.computer.verified = null;
+    value.setup.connect.verified!.workspaceId = null;
+    value.connectors.secureMcp.attachment!.workspaceId = null;
+    const setup = computerSetup(await snapshot(value));
+    expect(setup.ready).toBe(true);
+    expect(setup.localConnectionCurrent).toBe(true);
+    expect(setup.externalAccessVerified).toBe(true);
+    expect(setup.workspacesVerified).toBe(false);
+    expect(setup.next).toBe(
+      "Connection verified. No workspace access is enabled.",
+    );
+    value.computer.workspaces = [workspace];
+    expect(computerSetup(await snapshot(value)).ready).toBe(false);
+  });
+  it("offers the catalogue challenge and Start for a configured empty workspace selection", async () => {
+    const value = configured();
+    value.computer.workspaces = [];
+    value.setup.computer.verified = null;
+    value.setup.connect.verified = null;
+    value.connectors.secureMcp.attachment = null;
+    const running = computerSetup(await snapshot(value));
+    expect(running.ready).toBe(false);
+    expect(running.externalChallenge).toMatchObject({
+      workspaceId: null,
+      root: null,
+      value: value.connectors.secureMcp.challenge!.value,
+    });
+    expect(running.canCheckAttachment).toBe(true);
+    value.connectors.secureMcp.runtime = null;
+    value.connectors.secureMcp.challenge = null;
+    const stopped = computerSetup(await snapshot(value));
+    expect(stopped.canStart).toBe(true);
+    expect(stopped.externalChallenge).toBeNull();
+    expect(stopped.workspacesVerified).toBe(false);
+  });
   it("external Computer readiness needs no embedded login", async () => {
     const setup = computerSetup(await snapshot());
     expect(setup.ready).toBe(true);

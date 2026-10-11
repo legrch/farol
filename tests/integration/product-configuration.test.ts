@@ -48,6 +48,52 @@ describe("workspace stopped publication revision", () => {
     return { store, service, original };
   }
 
+  it("persists explicit empty-catalogue attachment without granting file access", async () => {
+    const { store, service, original } = await connected();
+    expect(original.settings.computer.workspaces).toEqual([]);
+    const challenge = "00000000-0000-4000-8000-000000000099";
+    const identity = {
+      runtimeGeneration: "b".repeat(64),
+      computerGeneration: original.settings.computer.generation,
+      buildId: "c".repeat(64),
+    };
+    expect(
+      (await service.recordSecureMcpChallenge({ ...identity, challenge })).ok,
+    ).toBe(true);
+    const input = {
+      ...identity,
+      workspaceId: null,
+      challengeSha256: createHash("sha256").update(challenge).digest("hex"),
+      receiptSha256: "e".repeat(64),
+    };
+    expect(
+      await service.recordSecureMcpAttachment({
+        ...input,
+        computerGeneration: input.computerGeneration + 1,
+      }),
+    ).toMatchObject({ ok: false, error: "SETTINGS_INPUT_INVALID" });
+    expect(
+      await service.recordSecureMcpAttachment({
+        ...input,
+        challengeSha256: "f".repeat(64),
+      }),
+    ).toMatchObject({ ok: false, error: "SETTINGS_INPUT_INVALID" });
+    expect(await service.recordSecureMcpAttachment(input)).toMatchObject({
+      ok: true,
+    });
+    const saved = await store.load();
+    expect(saved?.computer.workspaces).toEqual([]);
+    expect(saved?.setup.computer.verified).toBeNull();
+    expect(saved?.setup.connect.verified?.workspaceId).toBeNull();
+    expect(saved?.connectors.secureMcp.attachment).toMatchObject({
+      workspaceId: null,
+      receiptSha256: input.receiptSha256,
+    });
+    expect(saved?.connectors.secureMcp.lastVerifiedAttachment).toEqual(
+      saved?.connectors.secureMcp.attachment,
+    );
+  });
+
   it("refuses a general write queued before the original stopped publication", async () => {
     const { store, service, original } = await connected();
     let entered!: () => void;
@@ -1599,6 +1645,16 @@ describe("Farol Next product configuration", () => {
       ok: false,
       error: "SETTINGS_INPUT_INVALID",
     });
+    expect(
+      await service.recordSecureMcpAttachment({
+        workspaceId: null,
+        runtimeGeneration: "b".repeat(64),
+        computerGeneration,
+        buildId: "c".repeat(64),
+        challengeSha256,
+        receiptSha256: "e".repeat(64),
+      }),
+    ).toMatchObject({ ok: false, error: "SETTINGS_INPUT_INVALID" });
     const attached = await service.recordSecureMcpAttachment({
       workspaceId,
       runtimeGeneration: "b".repeat(64),

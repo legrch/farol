@@ -23,7 +23,7 @@ export function devProofEvidenceCurrent(
       buildId: string;
     }> | null;
     attachment: Readonly<{
-      workspaceId: string;
+      workspaceId: string | null;
       runtimeGeneration: string;
       computerGeneration: number;
       buildId: string;

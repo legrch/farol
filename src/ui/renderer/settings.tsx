@@ -2242,10 +2242,14 @@ function Connection({
     : null;
   const verificationRequest = externalChallenge
     ? `Please use the ${connectorName} connector to call ` +
-      "farol_next_connector_verify exactly once with " +
+      (externalChallenge.workspaceId === null
+        ? "farol_next_connector_verify_catalogue exactly once with "
+        : "farol_next_connector_verify exactly once with ") +
       JSON.stringify({
         challenge: externalChallenge.value,
-        workspaceId: externalChallenge.workspaceId,
+        ...(externalChallenge.workspaceId === null
+          ? {}
+          : { workspaceId: externalChallenge.workspaceId }),
       }) +
       ". Report the result; do not write files."
     : null;
@@ -2683,11 +2687,12 @@ function Connection({
                   Attach tunnel {externalChallenge.tunnelId} in ChatGPT
                   Settings.
                 </p>
-                <p>Verified workspace: {externalChallenge.root}</p>
                 <p>
-                  Ask the connector to call farol_next_connector_verify once
-                  with:
+                  {externalChallenge.workspaceId === null
+                    ? "No workspace access is enabled."
+                    : `Verified workspace: ${externalChallenge.root}`}
                 </p>
+                <p>Use this request once to verify the current connection:</p>
                 <pre className="attachment-request">
                   <code>{verificationRequest}</code>
                 </pre>
@@ -2698,16 +2703,19 @@ function Connection({
                       <code>{externalChallenge.value}</code>
                     </dd>
                   </div>
-                  <div>
-                    <dt>workspaceId</dt>
-                    <dd>
-                      <code>{externalChallenge.workspaceId}</code>
-                    </dd>
-                  </div>
+                  {externalChallenge.workspaceId !== null && (
+                    <div>
+                      <dt>workspaceId</dt>
+                      <dd>
+                        <code>{externalChallenge.workspaceId}</code>
+                      </dd>
+                    </div>
+                  )}
                 </dl>
                 <small>
-                  The check lists only the approved root and returns counts,
-                  never names or file contents.
+                  {externalChallenge.workspaceId === null
+                    ? "The check confirms an empty workspace catalogue. It does not read files or run commands."
+                    : "The check lists only the approved root and returns counts, never names or file contents."}
                 </small>
               </details>
             </div>

@@ -1,4 +1,5 @@
 import type { ProductSettings } from "../../pkg/product-settings/contract";
+import { connectorWorkspaceSelection } from "../../pkg/product-settings/connector-workspace-selection";
 
 // A successful check consumes its one-time challenge. Subsequent read-only
 // checks use the already validated attachment, scoped to the live runtime and
@@ -6,7 +7,7 @@ import type { ProductSettings } from "../../pkg/product-settings/contract";
 export function currentConnectorAttachment(
   settings: ProductSettings,
   expectedBuildId: string,
-  expectedWorkspaceId?: string,
+  expectedWorkspaceId?: string | null,
 ): NonNullable<
   ProductSettings["connectors"]["secureMcp"]["attachment"]
 > | null {
@@ -14,7 +15,6 @@ export function currentConnectorAttachment(
   const runtime = connector.runtime;
   const attachment = connector.attachment;
   const verified = settings.setup.connect.verified;
-  const workspace = settings.setup.computer.verified;
   return attachment !== null &&
     connector.challenge === null &&
     runtime?.state === "ready" &&
@@ -25,14 +25,10 @@ export function currentConnectorAttachment(
     runtime.buildId === attachment.buildId &&
     runtime.buildId === expectedBuildId &&
     settings.computer.generation === attachment.computerGeneration &&
-    workspace?.workspaceId === attachment.workspaceId &&
-    workspace.configRevision === settings.computer.generation &&
+    connectorWorkspaceSelection(settings) === attachment.workspaceId &&
     verified?.workspaceId === attachment.workspaceId &&
     verified.runtimeGeneration === attachment.runtimeGeneration &&
     !settings.setup.connect.outcomeUnknown &&
-    settings.computer.workspaces.some(
-      (item) => item.workspaceId === attachment.workspaceId,
-    ) &&
     (expectedWorkspaceId === undefined ||
       expectedWorkspaceId === attachment.workspaceId)
     ? attachment

@@ -66,7 +66,7 @@ export function nextSetupStep(snapshot: WindowSnapshot): SetupStep {
     !setup.facts.tunnelId
   )
     return "connection";
-  if (setup.facts.folder !== "ready") return "folders";
+  if (setup.facts.hasFolder && setup.facts.folder !== "ready") return "folders";
   return setup.facts.runtimeCurrent ? "attachment" : "connection";
 }
 

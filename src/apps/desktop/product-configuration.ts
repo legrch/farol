@@ -1,3 +1,4 @@
+import { connectorWorkspaceSelection } from "../../pkg/product-settings/connector-workspace-selection";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash, randomUUID } from "node:crypto";
 import { constants as fsConstants, type Stats } from "node:fs";
@@ -255,7 +256,8 @@ const secureMcpAttachmentInputSchema = z.strictObject({
     .string()
     .regex(
       /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
-    ),
+    )
+    .nullable(),
   runtimeGeneration: z.string().regex(/^[a-f0-9]{64}$/u),
   computerGeneration: z.number().int().positive(),
   buildId: z.string().regex(/^[a-f0-9]{64}$/u),
@@ -1154,9 +1156,11 @@ export class ProductConfigurationService {
       verified.workspaceId === attachment.workspaceId &&
       verified.runtimeGeneration === attachment.runtimeGeneration &&
       verified.buildId === attachment.buildId &&
-      this.current.computer.workspaces.some(
-        (workspace) => workspace.workspaceId === attachment.workspaceId,
-      )
+      (attachment.workspaceId === null
+        ? this.current.computer.workspaces.length === 0
+        : this.current.computer.workspaces.some(
+            (workspace) => workspace.workspaceId === attachment.workspaceId,
+          ))
     ) {
       await this.mutate((settings) => ({
         ...settings,
@@ -1532,9 +1536,11 @@ export class ProductConfigurationService {
       challenge.runtimeGeneration !== parsed.data.runtimeGeneration ||
       challenge.computerGeneration !== parsed.data.computerGeneration ||
       challenge.buildId !== parsed.data.buildId ||
-      !this.current.computer.workspaces.some(
-        (workspace) => workspace.workspaceId === parsed.data.workspaceId,
-      ) ||
+      !(parsed.data.workspaceId === null
+        ? this.current.computer.workspaces.length === 0
+        : this.current.computer.workspaces.some(
+            (workspace) => workspace.workspaceId === parsed.data.workspaceId,
+          )) ||
       parsed.data.computerGeneration !== this.current.computer.generation
     ) {
       return this.failure("SETTINGS_INPUT_INVALID");
@@ -2063,7 +2069,7 @@ export class ProductConfigurationService {
       runtimeGeneration: string;
       challengeSha256: string;
       buildId: string;
-      workspaceId: string;
+      workspaceId: string | null;
     }>,
   ): Promise<MutationResult> {
     return this.exclusive(async () => {
@@ -2075,8 +2081,7 @@ export class ProductConfigurationService {
       if (
         !settings.setup.connect.outcomeUnknown ||
         settings.computer.generation !== expected.computerGeneration ||
-        settings.setup.computer.verified?.workspaceId !==
-          expected.workspaceId ||
+        connectorWorkspaceSelection(settings) !== expected.workspaceId ||
         connector.tunnelId !== expected.tunnelId ||
         connector.generation !== expected.connectorGeneration ||
         runtime?.state !== "ready" ||

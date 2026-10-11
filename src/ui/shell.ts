@@ -3461,7 +3461,7 @@ async function configureProduct(
   } else if (evidence?.kind === "connector.runtime") {
     settingsFeedback = `Connector ${evidence.state.replace("_", " ")} · runtime ${evidence.runtimeGeneration.slice(0, 12)} · Computer generation ${evidence.computerGeneration}.`;
   } else if (evidence?.kind === "connector.attachment") {
-    settingsFeedback = `ChatGPT attachment verified · workspace ${evidence.workspaceId.slice(0, 12)} · runtime ${evidence.runtimeGeneration.slice(0, 12)} · receipt ${evidence.receiptSha256.slice(0, 12)}.`;
+    settingsFeedback = `ChatGPT attachment verified · ${evidence.workspaceId === null ? "no workspace access" : `workspace ${evidence.workspaceId.slice(0, 12)}`} · runtime ${evidence.runtimeGeneration.slice(0, 12)} · receipt ${evidence.receiptSha256.slice(0, 12)}.`;
   } else if (evidence?.kind === "dev-proof.prepared") {
     devProofEvidence = evidence;
     settingsFeedback =

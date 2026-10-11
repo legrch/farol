@@ -11,6 +11,28 @@ import {
 } from "../fixtures/guided-onboarding";
 
 describe("one-click connector verification receipt", () => {
+  it("accepts explicit empty-catalogue proof without manufacturing file access", () => {
+    const settings = guidedSettingsFixture();
+    const workspace = settings.computer.workspaces[0]!;
+    settings.computer.workspaces = [];
+    settings.setup.computer.verified = null;
+    // Removing a folder never turns its previous proof into catalogue proof.
+    expect(currentConnectorAttachment(settings, fixtureBuildId)).toBeNull();
+    settings.connectors.secureMcp.attachment!.workspaceId = null;
+    settings.setup.connect.verified!.workspaceId = null;
+    expect(currentConnectorAttachment(settings, fixtureBuildId, null)).toEqual(
+      settings.connectors.secureMcp.attachment,
+    );
+    expect(
+      currentConnectorAttachment(settings, fixtureBuildId, fixtureWorkspaceId),
+    ).toBeNull();
+    expect(settings.setup.computer.verified).toBeNull();
+    settings.computer.workspaces = [workspace];
+    expect(
+      currentConnectorAttachment(settings, fixtureBuildId, null),
+    ).toBeNull();
+  });
+
   it("reads a completed attachment after its challenge was consumed", () => {
     const settings = guidedSettingsFixture();
     expect(settings.connectors.secureMcp.challenge).toBeNull();

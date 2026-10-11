@@ -170,6 +170,26 @@ async function mount(
   };
 }
 describe("reference-aligned Setup wizard", () => {
+  it("offers the empty-catalogue request without a fabricated workspace or sign-in", async () => {
+    const value = attachmentSettings();
+    value.computer.workspaces = [];
+    value.setup.computer.verified = null;
+    const h = await mount("attachment", false, value);
+    expect(h.button("Copy verification request").disabled).toBe(false);
+    expect(h.button("Check attachment").disabled).toBe(false);
+    const request = h.host.querySelector(".attachment-request")?.textContent;
+    expect(request).toContain(
+      "farol_next_connector_verify_catalogue exactly once",
+    );
+    expect(request).toContain(value.connectors.secureMcp.challenge!.value);
+    expect(request).not.toContain("workspaceId");
+    expect(h.host.textContent).toContain("No workspace access is enabled.");
+    expect(h.f.api.configure).not.toHaveBeenCalled();
+    await h.click("Check attachment");
+    expect(h.f.api.configure).toHaveBeenCalledExactlyOnceWith({
+      kind: "connector.check-attachment",
+    });
+  });
   it.each(["refused", "unknown"] as const)(
     "keeps pending and late attachment %s feedback on its Setup origin across Shell navigation and remount",
     async (outcome) => {

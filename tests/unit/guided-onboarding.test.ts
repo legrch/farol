@@ -249,7 +249,7 @@ describe("onboarding snapshot projection", () => {
     expect(progress[1]).toBe(true);
     expect(progress[2]).toBe(false);
   });
-  it("keeps zero approved folders optional without inheriting old connector proof", () => {
+  it("keeps zero approved folders optional without inheriting old app proof", () => {
     const settings = guidedSettingsFixture();
     settings.computer.workspaces = [];
     expect(
@@ -258,7 +258,7 @@ describe("onboarding snapshot projection", () => {
     expect(onboardingCompletedSteps(settings)).toEqual([
       true,
       true,
-      false,
+      true,
       false,
       false,
     ]);
@@ -364,6 +364,40 @@ describe("single-action tunnel activation", () => {
       "connector.configure",
       "connector.start",
     ]);
+  });
+  it("starts a connection without a folder or any file verification", async () => {
+    const port = harness({
+      ...prepared,
+      hasFolder: false,
+      folder: "not-configured",
+    });
+    expect(await new GuidedActivation().run(port, values)).toEqual({
+      ok: true,
+    });
+    expect(port.commands).toEqual([
+      "connector.discover-client",
+      "connector.configure",
+      "connector.start",
+    ]);
+    expect(port.read().folder).toBe("not-configured");
+  });
+  it("stops empty-catalogue activation if authority changes during discovery", async () => {
+    const port = harness({
+      ...prepared,
+      hasFolder: false,
+      folder: "not-configured",
+    });
+    const original = port.run;
+    port.run = vi.fn(async (command) => {
+      const result = await original(command);
+      port.set({ ...port.read(), authority: "new-workspace-generation" });
+      return result;
+    });
+    expect(await new GuidedActivation().run(port, values)).toEqual({
+      ok: false,
+      reason: "state-changed",
+    });
+    expect(port.commands).toEqual(["connector.discover-client"]);
   });
   it("rejects double-clicks synchronously, before the first awaited result", async () => {
     const port = harness();
