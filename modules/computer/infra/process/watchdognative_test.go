@@ -156,7 +156,7 @@ func nativeWatchdogResource(t *testing.T) WatchdogSelection {
 	t.Helper()
 	node, selected := os.LookupEnv("FAROL_TEST_WATCHDOG_NODE")
 	if !selected || !filepath.IsAbs(node) || filepath.Clean(node) != node {
-		t.Fatal("FAROL_TEST_WATCHDOG_NODE must select one explicit absolute Node v24.20.0 path; no discovery or fallback")
+		t.Fatal("FAROL_TEST_WATCHDOG_NODE must select one explicit absolute Node v24.20.0 or v26.7.0 path; no discovery or fallback")
 	}
 	image, err := os.ReadFile(node)
 	if err != nil {
@@ -190,7 +190,7 @@ func nativeWatchdogResource(t *testing.T) WatchdogSelection {
 		SourceSHA256 string `json:"sourceSHA256"`
 		NodeVersion  string `json:"nodeVersion"`
 	}
-	if json.Unmarshal(raw, &resource) != nil || resource.NodeVersion != "v24.20.0" || len(resource.Source) == 0 || len(resource.Source) > 64*1024 {
+	if json.Unmarshal(raw, &resource) != nil || (resource.NodeVersion != "v24.20.0" && resource.NodeVersion != "v26.7.0") || len(resource.Source) == 0 || len(resource.Source) > 64*1024 {
 		t.Fatal("invalid exact watchdog resource export")
 	}
 	hash := sha256.Sum256([]byte(resource.Source))
