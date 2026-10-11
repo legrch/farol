@@ -5495,15 +5495,28 @@ describe("normal Quit runtime (disposable files; helper and native ports doubled
           return value;
         });
       }
+      // Reach the intended boundary before advancing its deadline. Real file
+      // IO on a loaded host must not consume this synthetic timeout budget.
+      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
       const original = request(Date.now() + 250);
       const pending = controller.applyOnNormalQuit(original);
-      await reached.promise;
-      expect(release).not.toHaveBeenCalled();
-      const receipt = await pending;
-      expect(receipt.status).toBe("unknown");
-      expect(controller.applyOnNormalQuit(request(Date.now() + 100_000))).toBe(
-        pending,
-      );
+      try {
+        await Promise.race([
+          reached.promise,
+          pending.then(() => {
+            throw new Error("FIXTURE_ENDED_BEFORE_SELECTED_BOUNDARY");
+          }),
+        ]);
+        expect(release).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(251);
+        const receipt = await pending;
+        expect(receipt.status).toBe("unknown");
+        expect(
+          controller.applyOnNormalQuit(request(Date.now() + 100_000)),
+        ).toBe(pending);
+      } finally {
+        vi.useRealTimers();
+      }
       gate.resolve();
       if (boundary === "copy") await finished.promise;
       for (let turn = 0; turn < 8; turn++) await nextTurn();
