@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -22,6 +23,44 @@ const seatbeltExecutable = "/usr/bin/sandbox-exec"
 // It is a mechanism binding, never admission, renewal or native evidence.
 type ConfinementBinding struct{ ProfileSHA256, MechanismSHA256 string }
 type ExecutablePin struct{ Path, SHA256 string }
+
+// ProtectedBundle binds the exact canonical application directory, not its bytes.
+// Constructors freeze a value copy. Protection grants no read, exec or PATH access;
+// authenticated package metadata must separately attest dependency bytes.
+type ProtectedBundle struct {
+	Path     string
+	Identity authority.RootIdentity
+}
+
+func cloneProtectedBundle(bundle *ProtectedBundle) *ProtectedBundle {
+	if bundle == nil {
+		return nil
+	}
+	copy := *bundle
+	return &copy
+}
+func sameProtectedBundle(a, b *ProtectedBundle) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
+}
+func validProtectedBundle(bundle *ProtectedBundle) bool {
+	if bundle == nil {
+		return true
+	}
+	if !absolutePolicyPath(bundle.Path) {
+		return false
+	}
+	for _, value := range []string{bundle.Identity.Device, bundle.Identity.Inode} {
+		n, err := strconv.ParseUint(value, 10, 64)
+		if err != nil || strconv.FormatUint(n, 10) != value {
+			return false
+		}
+	}
+	return bundle.Identity.Inode != "0"
+}
+
 type GitPolicy string
 
 // RootScopedGit uses the already approved roots, including explicitly granted
@@ -47,6 +86,7 @@ type SeatbeltSelection struct {
 	Executables                                            []ExecutablePin
 	// ProtectedImages are measured and write-protected without read/exec grants.
 	ProtectedImages []ExecutablePin
+	ProtectedBundle *ProtectedBundle `json:",omitempty"`
 	Network         authority.Network
 	Git             GitPolicy
 	GitRead         *GitReadSelection
@@ -68,6 +108,7 @@ type confinedLaunch struct {
 	gitDirectories  []gitReadDirectory
 	scratch         string
 	scratchIdentity authority.RootIdentity
+	protectedBundle *ProtectedBundle
 	qualification   Qualification
 }
 
@@ -93,6 +134,7 @@ func NewSeatbelt(selection SeatbeltSelection, qualification Qualification) (*Sea
 	selection.Snapshot = port.AccessSnapshot{Participant: &p, Approval: &a}
 	selection.Executables = append([]ExecutablePin(nil), selection.Executables...)
 	selection.ProtectedImages = append([]ExecutablePin(nil), selection.ProtectedImages...)
+	selection.ProtectedBundle = cloneProtectedBundle(selection.ProtectedBundle)
 	if selection.GitRead != nil {
 		binding := *selection.GitRead
 		selection.GitRead = &binding
@@ -143,7 +185,7 @@ func selectedLaunch(qualification Qualification, command Command) (*confinedLaun
 		return nil, &processsvc.NativeFailure{}
 	}
 	return &confinedLaunch{command: wrapped, pins: slices.Concat([]ExecutablePin{{seatbeltExecutable, selected.selection.MechanismSHA256}}, selected.selection.Executables, selected.selection.ProtectedImages),
-		roots: append([]rootScopeBinding(nil), plan.roots...), gitDirectories: append([]gitReadDirectory(nil), plan.gitDirectories...), scratch: selected.selection.Scratch, scratchIdentity: selected.selection.ScratchIdentity, qualification: selected.qualification}, nil
+		protectedBundle: cloneProtectedBundle(selected.selection.ProtectedBundle), roots: append([]rootScopeBinding(nil), plan.roots...), gitDirectories: append([]gitReadDirectory(nil), plan.gitDirectories...), scratch: selected.selection.Scratch, scratchIdentity: selected.selection.ScratchIdentity, qualification: selected.qualification}, nil
 }
 
 // Qualify delegates the exact wrapped invocation to the existing evidence port.
@@ -221,7 +263,9 @@ func protectedScope(root, home string) bool {
 func validSelection(s SeatbeltSelection) bool {
 	if s.Snapshot.Participant == nil || s.Snapshot.Approval == nil || !bindingID(s.RuntimeID) || !bindingID(s.WorkspaceID) || !absolutePolicyPath(s.Home) || !absolutePolicyPath(s.Scratch) ||
 		!digestValue(s.MechanismSHA256) || s.ScratchIdentity.Device == "" || s.ScratchIdentity.Inode == "" || len(s.Executables) == 0 || len(s.Executables) > 16 || len(s.ProtectedImages) > 16 ||
-		(s.FilePolicy != authority.RootScopedFiles && len(s.ProtectedImages) != 0) ||
+		(s.FilePolicy != authority.RootScopedFiles && (len(s.ProtectedImages) != 0 || s.ProtectedBundle != nil)) ||
+		!validProtectedBundle(s.ProtectedBundle) ||
+		(s.ProtectedBundle != nil && comparableOverlap(s.ProtectedBundle.Path, s.Scratch)) ||
 		filepath.Dir(s.Scratch) != "/private/tmp" || !strings.HasPrefix(filepath.Base(s.Scratch), "farol-") || !s.FilePolicy.Valid() || !seatbeltNetworkAllowed(s) ||
 		(s.FilePolicy == authority.LegacyProtectedFiles && (s.Git != DenyGit && s.Git != WorkspaceGit && s.Git != QualifiedGitRead)) ||
 		(s.FilePolicy == authority.RootScopedFiles && s.Git != RootScopedGit) ||
@@ -336,12 +380,21 @@ func compileSeatbelt(s SeatbeltSelection, command Command) (*seatbeltPlan, error
 	for _, pin := range s.ProtectedImages {
 		add("literal", pin.Path, &executableWrites)
 	}
+	if s.ProtectedBundle != nil {
+		// Deny all writes to the named directory and every resource below it.
+		add("literal", s.ProtectedBundle.Path, &executableWrites)
+		add("subpath", s.ProtectedBundle.Path, &executableWrites)
+	}
 	if s.FilePolicy == authority.RootScopedFiles {
 		// Protect image ancestors regardless of textual root membership: APFS
 		// firmlinks can give the approved root another spelling. These literal
 		// unlink denials grant no access and preserve ordinary sibling writes.
 		seen := map[string]bool{}
-		for _, pin := range slices.Concat(s.Executables, s.ProtectedImages) {
+		protected := slices.Concat(s.Executables, s.ProtectedImages)
+		if s.ProtectedBundle != nil {
+			protected = append(protected, ExecutablePin{Path: s.ProtectedBundle.Path})
+		}
+		for _, pin := range protected {
 			for ancestor := filepath.Dir(pin.Path); ancestor != "/"; ancestor = filepath.Dir(ancestor) {
 				if !seen[ancestor] {
 					seen[ancestor] = true
@@ -448,7 +501,8 @@ func compileSeatbelt(s SeatbeltSelection, command Command) (*seatbeltPlan, error
 		Roots           []rootScopeBinding `json:",omitempty"`
 		GitRead         *GitReadSelection  `json:",omitempty"`
 		GitDirectories  []gitReadDirectory `json:",omitempty"`
-	}{source, arguments, s.ScratchIdentity, s.Executables, s.ProtectedImages, sealedRoots, s.GitRead, gitDirectories})
+		ProtectedBundle *ProtectedBundle   `json:",omitempty"`
+	}{source, arguments, s.ScratchIdentity, s.Executables, s.ProtectedImages, sealedRoots, s.GitRead, gitDirectories, s.ProtectedBundle})
 	if err != nil {
 		return refuse()
 	}

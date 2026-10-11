@@ -39,6 +39,7 @@ type RootScopedPlatformSupport struct {
 	WatchdogSourceSHA256                                            string
 	Imports                                                         []ExecutablePin
 	Executables                                                     []ExecutablePin
+	ProtectedBundle                                                 *ProtectedBundle `json:",omitempty"`
 }
 
 // PlatformStrategyBinding is value-only input to the original supervised
@@ -80,6 +81,7 @@ type platformSupport struct {
 	clock      port.Clock
 	ownerUID   uint32
 	files      []platformFileFacts
+	bundle     *platformDirectoryFacts
 }
 
 func NewRootScopedPlatformStrategy(ctx context.Context, support RootScopedPlatformSupport, clock port.Clock) (*RootScopedPlatformStrategy, error) {
@@ -92,16 +94,25 @@ func newRootScopedPlatformStrategy(ctx context.Context, support RootScopedPlatfo
 	}
 	support.Imports = slices.Clone(support.Imports)
 	support.Executables = slices.Clone(support.Executables)
+	support.ProtectedBundle = cloneProtectedBundle(support.ProtectedBundle)
 	digest, err := platformDigest(support)
 	if err != nil {
 		return nil, &processsvc.NativeFailure{}
 	}
 	s := &RootScopedPlatformStrategy{&platformSupport{descriptor: support, digest: digest, facts: facts, clock: clock, ownerUID: facts.effectiveUID()}}
+	bundle, err := s.observeBundle(ctx)
+	if err != nil {
+		return nil, err
+	}
+	s.frozen.bundle = bundle
 	observed, err := s.observe(ctx)
 	if err != nil {
 		return nil, err
 	}
 	s.frozen.files = observed
+	if support.ProtectedBundle != nil && s.inspect(ctx) != nil {
+		return nil, &processsvc.NativeFailure{}
+	}
 	return s, nil
 }
 
@@ -116,6 +127,16 @@ func validPlatformSupport(s RootScopedPlatformSupport) bool {
 		s.Mechanism.Path != seatbeltExecutable || !nonzero(s.WatchdogSourceSHA256) ||
 		len(s.Imports) < 1 || len(s.Imports) > 16 || len(s.Executables) < 1 || len(s.Executables) > 16 {
 		return false
+	}
+	if !validProtectedBundle(s.ProtectedBundle) {
+		return false
+	}
+	if s.ProtectedBundle != nil {
+		for _, pin := range []ExecutablePin{s.Backend, s.Watchdog} {
+			if pin.Path == s.ProtectedBundle.Path || !insidePolicy(s.ProtectedBundle.Path, pin.Path) {
+				return false
+			}
+		}
 	}
 	seen := map[string]string{}
 	for _, pin := range platformPins(s) {
@@ -188,6 +209,9 @@ func (s *RootScopedPlatformStrategy) observe(ctx context.Context) ([]platformFil
 			actual.identity.Device == "" || actual.identity.Inode == "" || (!imported && actual.mode.Perm()&0111 == 0) {
 			return refuse()
 		}
+		if d.ProtectedBundle != nil && i < 2 && actual.identity.Device != d.ProtectedBundle.Identity.Device {
+			return refuse()
+		}
 		observed = append(observed, actual)
 	}
 	if ctx.Err() != nil {
@@ -196,12 +220,35 @@ func (s *RootScopedPlatformStrategy) observe(ctx context.Context) ([]platformFil
 	return observed, nil
 }
 
+// Observe only the directory binding; no dependency tree walk or byte attestation.
+func (s *RootScopedPlatformStrategy) observeBundle(ctx context.Context) (*platformDirectoryFacts, error) {
+	if s == nil || s.frozen == nil || ctx == nil || ctx.Err() != nil {
+		return nil, &processsvc.NativeFailure{}
+	}
+	bundle := s.frozen.descriptor.ProtectedBundle
+	if bundle == nil {
+		return nil, nil
+	}
+	f, err := s.frozen.facts.directory(ctx, bundle.Path)
+	if err != nil || f.path != bundle.Path || f.identity != bundle.Identity ||
+		f.filesystem != "apfs" || !f.local || f.nested ||
+		(f.mount != "/" && !absolutePolicyPath(f.mount)) || ctx.Err() != nil {
+		return nil, &processsvc.NativeFailure{}
+	}
+	return &f, nil
+}
+
 func (s *RootScopedPlatformStrategy) inspect(ctx context.Context) error {
 	if s == nil || s.frozen == nil || len(s.frozen.files) == 0 {
 		return &processsvc.NativeFailure{}
 	}
 	observed, err := s.observe(ctx)
-	if err != nil || !slices.Equal(observed, s.frozen.files) {
+	bundle, bundleErr := s.observeBundle(ctx)
+	bundleSame := bundle == nil && s.frozen.bundle == nil
+	if bundle != nil && s.frozen.bundle != nil {
+		bundleSame = *bundle == *s.frozen.bundle
+	}
+	if err != nil || !slices.Equal(observed, s.frozen.files) || bundleErr != nil || !bundleSame {
 		return &processsvc.NativeFailure{}
 	}
 	return nil
@@ -235,7 +282,7 @@ func (s *RootScopedPlatformStrategy) Select(ctx context.Context, policy Seatbelt
 		return refuse()
 	}
 	d := s.frozen.descriptor
-	if policy.MechanismSHA256 != d.Mechanism.SHA256 || !slices.Equal(policy.Executables, d.Executables) ||
+	if !sameProtectedBundle(policy.ProtectedBundle, d.ProtectedBundle) || policy.MechanismSHA256 != d.Mechanism.SHA256 || !slices.Equal(policy.Executables, d.Executables) ||
 		watchdog.Executable != d.Watchdog || watchdog.SourceSHA256 != d.WatchdogSourceSHA256 ||
 		len(watchdog.Source) == 0 || len(watchdog.Source) > 64*1024 || !utf8.Valid(watchdog.Source) {
 		return refuse()
@@ -253,6 +300,7 @@ func (s *RootScopedPlatformStrategy) Select(ctx context.Context, policy Seatbelt
 	policy.Snapshot = port.AccessSnapshot{Participant: &p, Approval: &a}
 	policy.Executables = slices.Clone(policy.Executables)
 	policy.ProtectedImages = slices.Clone(policy.ProtectedImages)
+	policy.ProtectedBundle = cloneProtectedBundle(policy.ProtectedBundle)
 	original = copyCommand(original)
 	wrapped, err := platformWrappedCommand(policy, original)
 	if err != nil {
@@ -376,6 +424,10 @@ func (s *platformSelection) inspectDirectories(ctx context.Context) ([]platformD
 	directories := []directory{{s.original.Root, s.original.RootIdentity, s.original.RootIdentity.Device},
 		{s.original.Cwd, authority.RootIdentity{}, s.original.RootIdentity.Device},
 		{s.policy.Scratch, s.policy.ScratchIdentity, s.policy.ScratchIdentity.Device}}
+	if s.policy.ProtectedBundle != nil {
+		bundle := s.policy.ProtectedBundle
+		directories = append(directories, directory{bundle.Path, bundle.Identity, bundle.Identity.Device})
+	}
 	for _, root := range plan.roots {
 		directories = append(directories, directory{root.ApprovedRoot, root.RootIdentity, root.RootIdentity.Device},
 			directory{root.ScopeRoot, authority.RootIdentity{}, root.RootIdentity.Device})

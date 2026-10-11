@@ -27,7 +27,7 @@ import (
 func TestNativeRootScopedSeatbelt(t *testing.T) {
 	for _, write := range []bool{false, true} {
 		if !t.Run("write="+strconv.FormatBool(write), func(t *testing.T) {
-			nativeRootScopedSeatbelt(t, write, false)
+			nativeRootScopedSeatbelt(t, write, false, false)
 		}) {
 			return // Preserve a failed/unknown attempt; never launch its successor.
 		}
@@ -38,11 +38,13 @@ type rootScopedProbe struct {
 	Reads, Writes map[string]string
 	Listeners     map[string]string
 	Renames       map[string][2]string
+	Links         map[string][2]string
 }
 
 type rootScopedProbeResult struct {
 	Reads, Writes, Network map[string]string
 	Renames                map[string]string
+	Links, AliasWrites     map[string]string
 }
 
 func probeFailure(err error) string {
@@ -64,7 +66,7 @@ func TestNativeRootScopedProbeHelper(t *testing.T) {
 	if json.Unmarshal([]byte(os.Args[len(os.Args)-1]), &probe) != nil {
 		os.Exit(90)
 	}
-	out := rootScopedProbeResult{Reads: map[string]string{}, Writes: map[string]string{}, Network: map[string]string{}, Renames: map[string]string{}}
+	out := rootScopedProbeResult{Reads: map[string]string{}, Writes: map[string]string{}, Network: map[string]string{}, Renames: map[string]string{}, Links: map[string]string{}, AliasWrites: map[string]string{}}
 	for name, path := range probe.Reads {
 		data, err := os.ReadFile(path)
 		out.Reads[name] = probeFailure(err)
@@ -79,6 +81,13 @@ func TestNativeRootScopedProbeHelper(t *testing.T) {
 	for name, paths := range probe.Renames {
 		out.Renames[name] = probeFailure(os.Rename(paths[0], paths[1]))
 	}
+	for name, paths := range probe.Links {
+		err := os.Link(paths[0], paths[1])
+		out.Links[name] = probeFailure(err)
+		if err == nil {
+			out.AliasWrites[name] = probeFailure(os.WriteFile(paths[1], []byte("synthetic replacement\n"), 0600))
+		}
+	}
 	for network, address := range probe.Listeners {
 		connection, err := net.DialTimeout(network, address, time.Second)
 		out.Network[network] = probeFailure(err)
@@ -92,7 +101,7 @@ func TestNativeRootScopedProbeHelper(t *testing.T) {
 	os.Exit(0)
 }
 
-func nativeRootScopedSeatbelt(t *testing.T, write bool, protectImages bool) {
+func nativeRootScopedSeatbelt(t *testing.T, write bool, protectImages bool, protectBundle bool) {
 	t.Helper()
 	base, err := os.MkdirTemp("/private/tmp", "farol-root-policy-")
 	if err != nil {
@@ -180,7 +189,7 @@ func nativeRootScopedSeatbelt(t *testing.T, write bool, protectImages bool) {
 	s.Home, s.Scratch, s.ScratchIdentity = home, scratch, identity(scratch)
 	s.MechanismSHA256 = hash(seatbeltExecutable)
 	s.Executables = []ExecutablePin{{Path: image, SHA256: hash(image)}}
-	if protectImages {
+	if protectImages || protectBundle {
 		// Synthetic owner-owned app-shaped image inside the writable root.
 		container := filepath.Join(root, "Applications")
 		app := filepath.Join(container, "Farol.app")
@@ -188,7 +197,32 @@ func nativeRootScopedSeatbelt(t *testing.T, write bool, protectImages bool) {
 		must(os.Mkdir(app, 0700))
 		protected := filepath.Join(app, "backend")
 		must(os.WriteFile(protected, []byte("synthetic baseline\n"), 0700))
-		s.ProtectedImages = []ExecutablePin{{protected, hash(protected)}}
+		if protectImages {
+			s.ProtectedImages = []ExecutablePin{{protected, hash(protected)}}
+		}
+		if protectBundle {
+			s.ProtectedBundle = &ProtectedBundle{Path: app, Identity: identity(app)}
+			resources := filepath.Join(app, "Contents", "Resources")
+			must(os.MkdirAll(resources, 0700))
+			resource := filepath.Join(resources, "runtime-resource.js")
+			must(os.WriteFile(resource, []byte("synthetic baseline\n"), 0600))
+			probe.Writes["bundle-resource"] = resource
+			probe.Reads["bundle-resource"] = resource
+			baseline["bundle-resource"] = hash(resource)
+			alias := filepath.Join(root, "resource-symlink")
+			must(os.Symlink(resource, alias))
+			probe.Writes["bundle-resource-symlink"] = alias
+			ordinary := filepath.Join(root, "ordinary-link-source")
+			must(os.WriteFile(ordinary, []byte("synthetic baseline\n"), 0600))
+			probe.Links = map[string][2]string{
+				"protected": {resource, filepath.Join(root, "resource-hardlink")},
+				"ordinary":  {ordinary, filepath.Join(root, "ordinary-hardlink")},
+			}
+			// Independent positive control outside confinement on the SAME resource.
+			positive := filepath.Join(root, "positive-link")
+			must(os.Link(resource, positive))
+			must(os.Remove(positive))
+		}
 		probe.Writes["protected-image"] = protected
 		probe.Renames = map[string][2]string{
 			"app-parent":  {app, app + "-moved"},
@@ -264,6 +298,22 @@ func nativeRootScopedSeatbelt(t *testing.T, write bool, protectImages bool) {
 			t.Fatalf("protected image ancestor rename %s: %q", name, out.Renames[name])
 		}
 	}
+	for name, paths := range probe.Links {
+		if name == "protected" {
+			if out.Links[name] != "denied" || out.AliasWrites[name] != "" {
+				t.Fatal("protected bundle link not refused", out.Links[name])
+			}
+			if _, err := os.Lstat(paths[1]); !errors.Is(err, os.ErrNotExist) {
+				t.Fatal("protected alias unexpectedly exists", err)
+			}
+		} else {
+			data, err := os.ReadFile(paths[0])
+			must(err)
+			if out.Links[name] != "allowed" || out.AliasWrites[name] != "allowed" || string(data) != "synthetic replacement\n" {
+				t.Fatal("ordinary sibling link/write unavailable")
+			}
+		}
+	}
 	accepted = true
 	t.Log("native path reads/writes and IPv4/IPv6 denial verified; allowed hardlink exposes the same outside inode; no object secrecy or process-tree claim")
 }
@@ -271,5 +321,11 @@ func nativeRootScopedSeatbelt(t *testing.T, write bool, protectImages bool) {
 // A fresh writable-root fixture also protects an owner-owned app image and its
 // namespace. Ordinary workspace writes remain allowed. No production activation.
 func TestNativeRootScopedProtectedImages(t *testing.T) {
-	nativeRootScopedSeatbelt(t, true, true)
+	nativeRootScopedSeatbelt(t, true, true, false)
+}
+
+// Whole app subtree protection covers unpinned resources and their aliases while
+// preserving ordinary sibling writes. No package byte attestation is implied.
+func TestNativeRootScopedProtectedBundle(t *testing.T) {
+	nativeRootScopedSeatbelt(t, true, false, true)
 }

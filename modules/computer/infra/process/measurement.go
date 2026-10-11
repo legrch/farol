@@ -59,10 +59,12 @@ type retainedLaunchMeasurement struct {
 	closed      bool
 }
 type directoryCheck struct {
-	pin      directoryPin
-	path     string
-	identity authority.RootIdentity
-	private  bool
+	pin            directoryPin
+	path           string
+	identity       authority.RootIdentity
+	private        bool
+	protected      bool
+	protectedFacts directoryFacts
 }
 
 func (m *retainedLaunchMeasurement) Close() {
@@ -86,7 +88,8 @@ func (m *retainedLaunchMeasurement) checkDirectory(ctx context.Context, c direct
 	return err == nil && ctx.Err() == nil && m.context.Err() == nil &&
 		facts.mode.IsDir() && facts.mode&os.ModeSymlink == 0 &&
 		facts.identity == c.identity && c.identity.Device != "" && c.identity.Inode != "" &&
-		(!c.private || (facts.mode.Perm() == 0700 && facts.uid == m.fs.effectiveUID()))
+		(!c.private || (facts.mode.Perm() == 0700 && facts.uid == m.fs.effectiveUID())) &&
+		(!c.protected || (facts == c.protectedFacts && facts.mode.Perm()&0022 == 0 && (facts.uid == 0 || facts.uid == m.fs.effectiveUID())))
 }
 func (m *retainedLaunchMeasurement) Recheck(ctx context.Context) error {
 	refuse := func() error { m.Close(); return &processsvc.NativeFailure{} }
@@ -176,7 +179,15 @@ func retainLaunchFiles(ctx context.Context, command Command, launch *confinedLau
 			}
 			identity = facts.identity
 		}
-		c := directoryCheck{pin, path, identity, private}
+		c := directoryCheck{pin: pin, path: path, identity: identity, private: private,
+			protected: launch.protectedBundle != nil && path == launch.protectedBundle.Path}
+		if c.protected {
+			facts, err := pin.inspect(path)
+			if err != nil {
+				return nil
+			}
+			c.protectedFacts = facts
+		}
 		if !measurement.checkDirectory(ctx, c) {
 			return nil
 		}
@@ -194,6 +205,13 @@ func retainLaunchFiles(ctx context.Context, command Command, launch *confinedLau
 	if err != nil || add(command.Cwd, authority.RootIdentity{}, false, root, relative) == nil ||
 		add(launch.scratch, launch.scratchIdentity, true, nil, "") == nil {
 		return refuse()
+	}
+	if launch.protectedBundle != nil {
+		bundle := *launch.protectedBundle
+		if !validProtectedBundle(&bundle) || comparableOverlap(bundle.Path, launch.scratch) ||
+			add(bundle.Path, bundle.Identity, false, nil, "") == nil {
+			return refuse()
+		}
 	}
 	approvedPins := map[string]directoryPin{}
 	for _, binding := range launch.roots {

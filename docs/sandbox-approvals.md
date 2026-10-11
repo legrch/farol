@@ -127,6 +127,17 @@ grant the expected workspace access on the tested host. Such a refusal is not
 evidence of successful sandbox confinement. Mount detection still considers both
 APFS spellings so alternate mount-table names cannot hide nested volumes.
 
+An optional `ProtectedBundle` binds an exact canonical application directory and
+its device/inode to the same support, selection and reservation. Its entire
+subtree is denied writes, including resources that are not executable pins;
+ancestor replacement is denied while ordinary sibling writes remain allowed.
+This adds no read, execution or PATH permission. The existing measurement owner
+retains and rechecks the directory before release. A nil binding preserves the
+individually pinned class; production package composition must select the whole
+application bundle. Directory identity is not dependency byte attestation:
+authenticated package verification must independently bind those bytes. This
+source capability does not supply that issuer or enable the production route.
+
 This assurance relies on trusted host pathnames and the qualified OS mechanism.
 It is not an atomic filesystem snapshot or protection against a privileged or
 same-user host attacker changing files outside the sandbox. Path grants retain
