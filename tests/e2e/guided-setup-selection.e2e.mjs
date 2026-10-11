@@ -753,8 +753,8 @@ try {
     await window.locator('.setup-page[data-setup-step="connection"]').waitFor();
     if (behavior) {
       // Explicit discovery selects only this run's disposable fixture through
-      // the owned E2E seam. Save & connect retains its known refused
-      // connection stage before workspace approval; it is not readiness proof.
+      // the owned E2E seam. Save & connect may establish an explicitly empty
+      // authority; local readiness is not external attachment or file access.
       await window
         .locator(".setup-page")
         .getByRole("button", { name: "Find connection helper", exact: true })
@@ -785,7 +785,10 @@ try {
       const configured = await readSetupSettings(window);
       assert.ok(configured.connectors.secureMcp.tunnelClient);
       assert.equal(configured.connectors.secureMcp.credential, "stored");
-      assert.equal(configured.connectors.secureMcp.runtime, null);
+      assert.equal(configured.connectors.secureMcp.runtime.state, "ready");
+      assert.deepEqual(configured.computer.workspaces, []);
+      assert.equal(configured.setup.computer.verified, null);
+      assert.equal(configured.setup.connect.verified, null);
       assert.equal(configured.connectors.secureMcp.attachment, null);
       assert.equal(configured.setup.connect.outcomeUnknown, false);
       await window.getByText("Connection help", { exact: true }).click();
@@ -803,11 +806,11 @@ try {
         "SAVE_CONNECT_ORIGINAL_RESULT_MISSING",
       );
       const originalResult = await setupResult.innerText();
-      // No workspaces means no acknowledged authority publication. The host
-      // refuses before issuing Go open; never invent an original Go attempt.
+      // The exact completed Save result is retained independently of local
+      // runtime readiness. Neither observation grants workspace access.
       assert.match(
         originalResult,
-        /^settings:connector\.save-and-connect:[0-9a-f-]+: refused · CONNECTOR_START_FAILED$/u,
+        /^settings:connector\.save-and-connect:[0-9a-f-]+: applied$/u,
         "SAVE_CONNECT_OUTCOME_UNCONFIRMED",
       );
       await openSetup(window);

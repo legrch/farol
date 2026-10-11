@@ -320,11 +320,10 @@ for (const [name, message] of [
     "Check connection",
     "Local connection checked. Access from ChatGPT has a separate verification.",
   ],
-  // The existing credentials-save fault journey intentionally expects this
-  // partial result, then independently asserts the retained start refusal.
+  // Connecting without workspace access is now an explicit supported path.
   [
     "Save & connect",
-    "Credentials saved. The connection step did not complete. Review its status before another action; keep the saved key.",
+    "Connection started. Credentials are saved. Verify Farol in ChatGPT to finish connecting this Mac.",
   ],
 ]) {
   test(`retain the exact existing expectation for ${name}`, async () => {
@@ -509,3 +508,15 @@ test("unsupported action has no generic-success fallback or click", async () => 
     fake.close();
   }
 });
+
+for (const message of [
+  "Credentials saved. The connection step did not complete. Review its status before another action; keep the saved key.",
+  unknown,
+]) {
+  test(`Save & connect does not accept incomplete feedback: ${message}`, async () => {
+    await journey(
+      { name: "Save & connect", events: [pending, message] },
+      /SETUP_ACTION_UNCONFIRMED:Save & connect/,
+    );
+  });
+}

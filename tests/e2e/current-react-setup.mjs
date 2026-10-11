@@ -47,7 +47,7 @@ export async function readSetupSettings(page) {
 export async function setupAction(page, name, { scope = ".setup-page" } = {}) {
   const messages = {
     "Save & connect":
-      "Credentials saved. The connection step did not complete. Review its status before another action; keep the saved key.",
+      "Connection started. Credentials are saved. Verify Farol in ChatGPT to finish connecting this Mac.",
     "Connect this Mac":
       "Local connection started. Verify Farol in ChatGPT to confirm external access.",
     "Check connection":
