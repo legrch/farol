@@ -348,6 +348,10 @@ describe("Setup action DOM receipt observer (in-memory only)", () => {
       element(".workspace-add button").textContent = "Connecting workspace…";
       await Promise.resolve();
       expect(adapter.result).toBeNull();
+      element(".workspace-technical p").textContent =
+        "Save access: Workspace access saved. Verify it again before using the new access.";
+      await Promise.resolve();
+      expect(adapter.result).toBeNull();
       pending.textContent = verified;
       element(".workspace-technical").append(pending);
       adapter.setSettings(settings());

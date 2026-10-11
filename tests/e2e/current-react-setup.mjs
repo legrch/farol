@@ -89,7 +89,7 @@ export async function setupAction(page, name, { scope = ".setup-page" } = {}) {
     ({ scope, verify, add }) => {
       const container = document.querySelector(scope);
       if (!container) throw new Error("SETUP_ACTION_SURFACE_MISSING");
-      const receiptNodes = () =>
+      const read = () =>
         [
           ...container.querySelectorAll(
             verify
@@ -98,36 +98,32 @@ export async function setupAction(page, name, { scope = ".setup-page" } = {}) {
                 ? '.workspace-detail .workspace-feedback p[role="status"], .settings-page > p[role="status"], .settings-page > .workspace-activity > p[role="status"]'
                 : '.settings-page > p[role="status"]',
           ),
-        ].filter((node) => {
-          const surface = node.closest(".workspace-detail, .settings-page");
-          if (!surface?.checkVisibility()) return false;
-          if (node.checkVisibility()) return true;
-          // Successful receipts live inside closed disclosures. Observe only
-          // their direct receipt children on an otherwise visible surface;
-          // dormant Settings pages and hidden workspace cards stay excluded.
-          const disclosure = node.parentElement;
-          return (
-            disclosure?.matches(
-              "details.workspace-technical, details.workspace-activity",
-            ) &&
-            !disclosure.open &&
-            disclosure.checkVisibility()
-          );
-        });
-      // Unchanged receipts belong to earlier actions, even when their closed
-      // disclosure is on the active workspace. A node which changes after the
-      // click is current evidence, including a return to the same success text.
-      const baseline = new Map(
-        receiptNodes().map((node) => [node, node.textContent]),
-      );
-      const read = () =>
-        receiptNodes()
+        ]
           .filter((node) => {
-            if (!baseline.has(node)) return true;
-            if (baseline.get(node) === node.textContent) return false;
-            baseline.delete(node);
-            return true;
+            const surface = node.closest(".workspace-detail, .settings-page");
+            if (!surface?.checkVisibility()) return false;
+            if (node.checkVisibility()) return true;
+            // Successful receipts live inside closed disclosures. Observe only
+            // their direct receipt children on an otherwise visible surface;
+            // dormant Settings pages and hidden workspace cards stay excluded.
+            const disclosure = node.parentElement;
+            return (
+              disclosure?.matches(
+                "details.workspace-technical, details.workspace-activity",
+              ) &&
+              !disclosure.open &&
+              disclosure.checkVisibility()
+            );
           })
+          // Add composes selection, approval, verification and connection. A
+          // previous access edit or removal is never a result of that action,
+          // even if its caption changes as the workspace generation changes.
+          .filter(
+            (node) =>
+              !add ||
+              !node.closest(".workspace-detail") ||
+              !/^(?:Save access|Remove workspace): /u.test(node.textContent),
+          )
           .map((node) => node.textContent)
           .filter((text) => !verify || text.startsWith("Verify workspace: "))
           .map((text) =>
