@@ -494,9 +494,7 @@ describe("one definition of a stale Computer verification", () => {
   });
 });
 
-// The fifth condition on "Start & check" is the one the row never showed:
-// the connector serves an approved workspace, and Computer is where those
-// live, so a fully configured tunnel still cannot start without one.
+// File access is optional; only connection prerequisites govern Start.
 describe("why the connection cannot start yet", () => {
   const ready = {
     tunnelClient: { version: "1.2.3" },
@@ -506,24 +504,18 @@ describe("why the connection cannot start yet", () => {
   };
 
   it("has nothing left to say once every prerequisite is met", () => {
-    expect(connectorStartPrerequisite(ready, 1, false)).toBeNull();
-  });
-
-  it("names the approved workspace, which is the one the row never showed", () => {
-    const reason = connectorStartPrerequisite(ready, 0, false);
-    expect(reason).toContain("Approve at least one workspace");
-    expect(reason).toContain("Computer");
+    expect(connectorStartPrerequisite(ready, false)).toBeNull();
   });
 
   it("names the earliest unmet prerequisite, in the order the owner meets them", () => {
     expect(
-      connectorStartPrerequisite({ ...ready, tunnelClient: null }, 0, false),
+      connectorStartPrerequisite({ ...ready, tunnelClient: null }, false),
     ).toBe("Choose the tunnel client first.");
     expect(
-      connectorStartPrerequisite({ ...ready, tunnelId: null }, 0, false),
+      connectorStartPrerequisite({ ...ready, tunnelId: null }, false),
     ).toBe("Enter the tunnel ID and save the route first.");
     expect(
-      connectorStartPrerequisite({ ...ready, credential: "missing" }, 0, false),
+      connectorStartPrerequisite({ ...ready, credential: "missing" }, false),
     ).toBe("Save the runtime key for this tunnel first.");
   });
 
@@ -531,7 +523,6 @@ describe("why the connection cannot start yet", () => {
     expect(
       connectorStartPrerequisite(
         { ...ready, runtime: { state: "ready" } },
-        1,
         false,
       ),
     ).toBe("The connector is already running.");
@@ -541,7 +532,6 @@ describe("why the connection cannot start yet", () => {
     expect(
       connectorStartPrerequisite(
         { ...ready, runtime: { state: "ready" } },
-        1,
         true,
       ),
     ).toBeNull();
@@ -551,7 +541,6 @@ describe("why the connection cannot start yet", () => {
     expect(
       connectorStartPrerequisite(
         { ...ready, runtime: { state: "outcome_unknown" } },
-        1,
         false,
       ),
     ).toBeNull();
@@ -592,19 +581,8 @@ describe("Setup's own primary action on the Connect step", () => {
     challenge: null,
   };
 
-  it("does not offer to start what the backend will refuse", () => {
-    // The approved workspace is the condition this step used to omit while
-    // Settings' sibling already enforced it. With none, Setup offered
-    // "Start & check" and pressing it was refused.
-    const withoutWorkspace = setupConnectPrimary(saved, 0);
-    expect(withoutWorkspace.label).toBe("Start & check");
-    expect(withoutWorkspace.disabled).toBe(true);
-    expect(withoutWorkspace.reason).toContain("Approve at least one workspace");
-  });
-
-  it("offers it once a workspace exists", () => {
-    const ready = setupConnectPrimary(saved, 1);
-    expect(ready).toEqual({
+  it("allows a configured connection without a workspace prerequisite", () => {
+    expect(setupConnectPrimary(saved)).toEqual({
       hidden: false,
       label: "Start & check",
       disabled: false,
@@ -613,44 +591,43 @@ describe("Setup's own primary action on the Connect step", () => {
   });
 
   it("keeps saving the route available before any workspace exists", () => {
-    // The workspace belongs to starting, not to saving; a step that refused
-    // to save the route until a workspace existed would be a new dead end.
     for (const unsaved of [
       { ...saved, tunnelId: null },
       { ...saved, credential: "missing" as const },
     ]) {
-      const primary = setupConnectPrimary(unsaved, 0);
+      const primary = setupConnectPrimary(unsaved);
       expect(primary.label).toBe("Save connector");
       expect(primary.disabled).toBe(false);
     }
   });
 
   it("hides itself with no client chosen", () => {
-    expect(
-      setupConnectPrimary({ ...saved, tunnelClient: null }, 1).hidden,
-    ).toBe(true);
+    expect(setupConnectPrimary({ ...saved, tunnelClient: null }).hidden).toBe(
+      true,
+    );
   });
 
   it("keeps the captions it had, each agreeing with its own disabled flag", () => {
-    const running = setupConnectPrimary(
-      { ...saved, runtime: { state: "ready" } },
-      1,
-    );
+    const running = setupConnectPrimary({
+      ...saved,
+      runtime: { state: "ready" },
+    });
     expect(running.label).toBe("Connection verified");
     expect(running.disabled).toBe(true);
     expect(running.reason).toBe("The connector is already running.");
 
-    const pending = setupConnectPrimary(
-      { ...saved, runtime: { state: "ready" }, challenge: {} },
-      1,
-    );
+    const pending = setupConnectPrimary({
+      ...saved,
+      runtime: { state: "ready" },
+      challenge: {},
+    });
     expect(pending.label).toBe("Check attachment");
     expect(pending.disabled).toBe(false);
 
-    const unknown = setupConnectPrimary(
-      { ...saved, runtime: { state: "outcome_unknown" } },
-      1,
-    );
+    const unknown = setupConnectPrimary({
+      ...saved,
+      runtime: { state: "outcome_unknown" },
+    });
     expect(unknown.label).toBe("Repair explicitly");
     expect(unknown.disabled).toBe(false);
   });

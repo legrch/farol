@@ -4252,7 +4252,6 @@ function renderSettings(): void {
         // left to name, and it names that one.
         const startPrerequisite = connectorStartPrerequisite(
           connector,
-          settings.computer.workspaces.length,
           attachmentCheckPending,
         );
         start.disabled = startPrerequisite !== null;
@@ -5102,12 +5101,8 @@ function renderSetup(): void {
       });
     }
     // Caption, disabled flag and reason from one function, and the same
-    // prerequisite Settings' sibling button uses — including the approved
-    // workspace the connector serves, which this step used to omit.
-    const connectPrimary = setupConnectPrimary(
-      connector,
-      configured.settings.computer.workspaces.length,
-    );
+    // prerequisite Settings' sibling button uses.
+    const connectPrimary = setupConnectPrimary(connector);
     livePrimary.hidden = connectPrimary.hidden;
     livePrimary.textContent = connectPrimary.label;
     livePrimary.disabled = connectPrimary.disabled;

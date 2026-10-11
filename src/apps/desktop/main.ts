@@ -1,4 +1,5 @@
 import { connectorWorkspaceSelection } from "../../pkg/product-settings/connector-workspace-selection";
+import { connectorVerificationProof } from "./connector-verification-proof";
 import {
   ConnectorSetupReplies,
   runAdmittedConnectorSetup,
@@ -5011,17 +5012,14 @@ async function checkSecureMcpAttachment(
     } catch {
       return configurationFailure("CONNECTOR_ATTACHMENT_INVALID");
     }
-    const receipt = observed.receipt ?? observed.catalogueReceipt;
-    const workspaceId = observed.catalogueReceipt
-      ? null
-      : observed.receipt?.workspaceId;
-    if (!receipt) return configurationFailure("CONNECTOR_ATTACHMENT_NOT_FOUND");
+    const proof = connectorVerificationProof(observed);
+    if (!proof) return configurationFailure("CONNECTOR_ATTACHMENT_NOT_FOUND");
+    const { receipt, workspaceId } = proof;
     if (
       !observed.receiptSha256 ||
       receipt.challengeSha256 !== challenge.challengeSha256 ||
       receipt.binding.buildId !== buildIdentity.buildId ||
       receipt.binding.connectorGeneration !== String(connector.generation) ||
-      workspaceId === undefined ||
       (expectedWorkspaceId !== undefined &&
         workspaceId !== expectedWorkspaceId) ||
       connectorWorkspaceSelection(snapshot.settings) !== workspaceId
@@ -5172,10 +5170,11 @@ async function verifySecureMcpApp(): Promise<ProductConfigurationResult> {
             !connectorAppBindingCurrent(current.settings, expectedBinding)
           )
             return false;
-          const receipt = (
-            await verificationCore.observeComputerConnectorVerification()
-          ).receipt;
-          if (!receipt || desktopGoCore !== verificationCore) return false;
+          const proof = connectorVerificationProof(
+            await verificationCore.observeComputerConnectorVerification(),
+          );
+          if (!proof || desktopGoCore !== verificationCore) return false;
+          const { receipt, workspaceId } = proof;
           const afterRead = configuration!.snapshot();
           if (
             afterRead.status !== "ready" ||
@@ -5184,7 +5183,7 @@ async function verifySecureMcpApp(): Promise<ProductConfigurationResult> {
             return false;
           return (
             receipt.challengeSha256 === expectedBinding.challengeSha256 &&
-            receipt.workspaceId === expectedBinding.workspaceId &&
+            workspaceId === expectedBinding.workspaceId &&
             receipt.binding.buildId === expectedBinding.buildId &&
             receipt.binding.connectorGeneration ===
               String(expectedBinding.connectorGeneration)
@@ -5292,14 +5291,12 @@ async function verifySecureMcpApp(): Promise<ProductConfigurationResult> {
         if (desktopGoCore !== verificationCore) return { state: "changed" };
         const state =
           await verificationCore.observeComputerConnectorVerification();
-        const receipt = state.receipt ?? state.catalogueReceipt;
-        if (!receipt) return null;
+        const proof = connectorVerificationProof(state);
+        if (!proof) return null;
         return {
           state: "receipt",
-          challengeSha256: receipt.challengeSha256,
-          workspaceId: state.catalogueReceipt
-            ? null
-            : state.receipt!.workspaceId,
+          challengeSha256: proof.receipt.challengeSha256,
+          workspaceId: proof.workspaceId,
         };
       },
       (probe) =>

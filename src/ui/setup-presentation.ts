@@ -234,20 +234,8 @@ export function readinessDetail(
   );
 }
 
-// Why the connection's "Start & check" cannot be pressed yet, or null when
-// it can.
-//
-// The button is disabled by five conditions and used to name none of them.
-// Four are visible in the row beside it — the client, the tunnel, the key,
-// and a runtime that is already running — but the fifth is not mentioned
-// anywhere on the surface: starting the connector needs an approved
-// workspace, which lives in Computer. An owner who had correctly chosen a
-// client, pasted a tunnel id and stored a key saw a dead primary action with
-// every requirement it named already satisfied.
-//
-// The button's disabled state is derived from this function rather than
-// re-deriving the same predicate beside it, so the reason and the state
-// cannot drift apart the way the readiness label and its state once did.
+// One prerequisite projection keeps the Start button and its explanation aligned.
+// A configured connection can serve an empty catalogue without file access.
 export function connectorStartPrerequisite(
   connector: Readonly<{
     tunnelClient: unknown | null;
@@ -255,7 +243,6 @@ export function connectorStartPrerequisite(
     credential: "missing" | "stored";
     runtime: Readonly<{ state: string }> | null;
   }>,
-  workspaceCount: number,
   attachmentCheckPending: boolean,
 ): string | null {
   if (connector.tunnelClient === null) {
@@ -266,9 +253,6 @@ export function connectorStartPrerequisite(
   }
   if (connector.credential !== "stored") {
     return "Save the runtime key for this tunnel first.";
-  }
-  if (workspaceCount === 0) {
-    return "Approve at least one workspace in Computer first. The connector serves that workspace, so it cannot start without one.";
   }
   if (connector.runtime?.state === "ready" && !attachmentCheckPending) {
     return "The connector is already running.";
@@ -369,21 +353,7 @@ export type SetupConnectPrimary = Readonly<{
   reason: string | null;
 }>;
 
-/**
- * Setup's own primary action on the Connect step: its caption, whether it can
- * be pressed, and why not.
- *
- * Settings' sibling button already asked connectorStartPrerequisite, which
- * includes the approved workspace the connector serves. This one hand-rolled
- * a shorter predicate and left that condition out, so with no approved
- * workspace Setup offered "Start & check" and the backend refused it. The
- * caption and the disabled flag were also derived separately, which is how
- * they came to disagree about which action the button was even offering.
- *
- * The workspace requirement belongs to starting, not to saving: the "Save
- * connector" branch writes the route and must stay available before any
- * workspace exists.
- */
+/** Setup and Settings share the same connection prerequisites. */
 export function setupConnectPrimary(
   connector: Readonly<{
     tunnelClient: unknown | null;
@@ -392,7 +362,6 @@ export function setupConnectPrimary(
     runtime: Readonly<{ state: string }> | null;
     challenge: unknown | null;
   }>,
-  workspaceCount: number,
 ): SetupConnectPrimary {
   if (connector.tunnelClient === null) {
     return { hidden: true, label: "", disabled: true, reason: null };
@@ -415,11 +384,7 @@ export function setupConnectPrimary(
           ? "Check attachment"
           : "Connection verified"
         : "Start & check";
-  const reason = connectorStartPrerequisite(
-    connector,
-    workspaceCount,
-    attachmentCheckPending,
-  );
+  const reason = connectorStartPrerequisite(connector, attachmentCheckPending);
   return { hidden: false, label, disabled: reason !== null, reason };
 }
 
