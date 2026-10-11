@@ -62,7 +62,7 @@ export function projectSetupChecklist(input: SetupChecklistInput) {
       [
         "connection",
         "Connection",
-        "Connect this Mac to ChatGPT.",
+        "Start the local tunnel and add Farol in ChatGPT.",
         false,
         input.localConnectionCurrent,
         input.computerActivity,
@@ -92,7 +92,12 @@ export function projectSetupChecklist(input: SetupChecklistInput) {
       description,
       optional,
       state,
-      status: status[state],
+      status:
+        state === "verified" && step === "connection"
+          ? "Local connection ready"
+          : state === "verified" && step === "attachment"
+            ? "Verified from ChatGPT"
+            : status[state],
       action: state === "needed" ? "Set up" : "Review",
     };
   });

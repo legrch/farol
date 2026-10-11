@@ -4666,7 +4666,18 @@ describe("fresh and returning Setup journey", () => {
     const detail = h.host.querySelector(".workspace-detail")!;
     expect(detail.textContent).toContain("/approved/project");
     expect(visibleText(h.host)).toContain("Saved access: Read-only");
-    expect(visibleText(h.host)).toContain(
+    expect(visibleText(h.host)).toContain("Access checked · Current workspace");
+    expect(visibleText(h.host)).not.toContain(
+      "Access is checked for this build and saved scope",
+    );
+    const details = detail.querySelector<HTMLDetailsElement>(
+      ".workspace-technical",
+    )!;
+    expect(details.open).toBe(false);
+    expect(details.querySelector("summary")?.textContent).toBe(
+      "Access details and activity",
+    );
+    expect(details.textContent).toContain(
       "Access is checked for this build and saved scope",
     );
     for (const text of ["Save", "Cancel", "Verify workspace"])
@@ -4678,6 +4689,129 @@ describe("fresh and returning Setup journey", () => {
       setupStep: "attachment",
     });
     expect(h.calls()).toEqual([]);
+  });
+
+  it.each(["pending", "refused", "unknown"] as const)(
+    "keeps a current %s workspace check outside the closed details",
+    async (state) => {
+      const value = connectionSettings();
+      value.setup.computer.verified = null;
+      const h = await mountSetup("folders", value);
+      const wait = deferred<unknown>();
+      vi.mocked(h.f.api.configure).mockReturnValueOnce(wait.promise);
+      await h.click("Verify workspace");
+      if (state === "refused")
+        await act(async () =>
+          wait.resolve({
+            ok: false,
+            error: "WORKSPACE_ROOT_CHANGED",
+            snapshot: h.configuration,
+          }),
+        );
+      if (state === "unknown")
+        await act(async () => wait.reject(new Error("reply lost")));
+      const feedback = h.host.querySelector(".workspace-feedback")!;
+      const status = feedback.querySelector('[role="status"]')!;
+      expect(status.closest("details")).toBeNull();
+      expect(visibleText(h.host)).toContain(
+        state === "pending"
+          ? "Saving or checking"
+          : state === "refused"
+            ? "no longer has the approved root identity"
+            : "Outcome unknown",
+      );
+      expect(feedback.querySelector<HTMLDetailsElement>("details")!.open).toBe(
+        false,
+      );
+      expect(h.calls()).toEqual([
+        { kind: "computer.verify-workspace", workspaceId },
+      ]);
+      if (state === "pending")
+        await act(async () =>
+          wait.resolve({ ok: true, snapshot: h.configuration }),
+        );
+    },
+  );
+
+  it("updates a retained save's verification guidance after current access is checked", async () => {
+    const h = await mountSetup("folders");
+    await change(h.field("Workspace access"), "write");
+    const saved = connectionSettings();
+    saved.revision++;
+    saved.computer.generation++;
+    saved.computer.workspaces[0]!.access = "write";
+    saved.computer.workspaces[0]!.accessCheck = null;
+    saved.setup.computer.verified = null;
+    vi.mocked(h.f.api.configure).mockResolvedValueOnce({
+      ok: true,
+      snapshot: { status: "ready", settings: saved },
+    });
+    await h.click("Save");
+    const receipt =
+      h.c.getSnapshot().intents[
+        `settings:computer.update-access:${workspaceId}`
+      ];
+    const detail = h.host.querySelector(".workspace-detail")!;
+    expect(detail.textContent).toContain("Verify it again");
+    expect(visibleText(h.host)).toContain("Check access needed");
+    expect(visibleText(h.host)).not.toContain("Verify it again");
+    const checked = structuredClone(saved);
+    checked.setup.computer.verified = proof(checked);
+    checked.computer.workspaces[0]!.accessCheck = {
+      rootIdentity: checked.computer.workspaces[0]!.rootIdentity!,
+      buildId: "3".repeat(64),
+      computerGeneration: checked.computer.generation,
+      verifiedAt: "2026-10-02T20:00:00.000Z",
+    };
+    await refreshSetup(h, checked);
+    await h.remount();
+    const details = h.host.querySelector<HTMLDetailsElement>(
+      ".workspace-technical",
+    )!;
+    expect(details.open).toBe(false);
+    expect(details.textContent).toContain(
+      "Workspace access saved. Current access is checked.",
+    );
+    expect(h.host.textContent).not.toContain("Verify it again");
+    expect(visibleText(h.host)).toContain("Access checked · Current workspace");
+    expect(
+      h.c.getSnapshot().intents[
+        `settings:computer.update-access:${workspaceId}`
+      ],
+    ).toBe(receipt);
+    await act(async () => {
+      details.open = true;
+      details.dispatchEvent(new Event("toggle"));
+    });
+    expect(visibleText(h.host)).toContain(
+      "Workspace access saved. Current access is checked.",
+    );
+    expect(h.calls()).toEqual([
+      { kind: "computer.update-access", workspaceId, access: "write" },
+    ]);
+  });
+
+  it("keeps the empty workspace requirement and explains Remove beside the current grant", async () => {
+    const empty = await mountSetup("folders", settings());
+    expect(visibleText(empty.host)).toContain("No workspaces approved");
+    expect(visibleText(empty.host)).not.toContain(
+      "Local file access is optional",
+    );
+    expect(empty.host.querySelector(".workspace-detail")).toBeNull();
+    expect(empty.button("Add workspace…").disabled).toBe(false);
+    const h = await mountSetup("folders");
+    const remove = h.host.querySelector<HTMLButtonElement>(
+      '[aria-label="Remove workspace project"]',
+    )!;
+    const note = h.host.querySelector(
+      `[id="${remove.getAttribute("aria-describedby")}"]`,
+    )!;
+    expect(note.textContent).toBe(
+      "Remove revokes Farol access. Files on disk are kept.",
+    );
+    expect(note.closest("details")).toBeNull();
+    expect(h.calls()).toEqual([]);
+    expect(empty.calls()).toEqual([]);
   });
 
   it.each([
@@ -5109,7 +5243,13 @@ describe("fresh and returning Setup journey", () => {
         snapshot: { status: "ready", settings: checked },
       });
     await h.click("Add workspace…");
-    expect(visibleText(h.host)).toContain(
+    expect(visibleText(h.host)).toContain("Access checked · Current workspace");
+    expect(visibleText(h.host)).not.toContain("Workspace access checked:");
+    const details = h.host.querySelector<HTMLDetailsElement>(
+      ".workspace-technical",
+    )!;
+    expect(details.open).toBe(false);
+    expect(details.textContent).toContain(
       "Workspace access checked: /approved/project. Saved access: Read & write",
     );
     expect(() => h.button("Verify workspace")).toThrow();

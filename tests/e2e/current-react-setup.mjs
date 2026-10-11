@@ -266,7 +266,14 @@ export function assertSetupOverviewEvidence(observed, expected) {
         Object.hasOwn(checkStatus, state),
         `SETUP_STATE_INVALID:${step}`,
       );
-      const status = step === "signin" ? signIn.status : checkStatus[state];
+      const status =
+        step === "signin"
+          ? signIn.status
+          : state === "verified" && step === "connection"
+            ? "Local connection ready"
+            : state === "verified" && step === "attachment"
+              ? "Verified from ChatGPT"
+              : checkStatus[state];
       return {
         step,
         label,

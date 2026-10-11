@@ -206,8 +206,19 @@ function actionFeedback(
   if (
     result.state === "applied" &&
     result.id.startsWith("settings:computer.update-access:")
-  )
-    return "Workspace access saved. Verify it again before using the new access.";
+  ) {
+    const workspace =
+      current?.configuration?.status === "ready"
+        ? current.configuration.settings.computer.workspaces.find(
+            (item) =>
+              result.id ===
+              intention("computer.update-access", item.workspaceId),
+          )
+        : null;
+    return workspace && current && workspaceChecked(current, workspace)
+      ? "Workspace access saved. Current access is checked."
+      : "Workspace access saved. Verify it again before using the new access.";
+  }
   if (
     result.state === "applied" &&
     result.id.startsWith("settings:computer.remove-workspace:")
@@ -654,11 +665,20 @@ export function Settings({ snapshot, facade, setupStep }: SettingsProps) {
           displayedSettings.computer.workspaces.some((workspace) =>
             pageFeedback.result?.id.endsWith(`:${workspace.workspaceId}`),
           )
-        ) && (
+        ) &&
+        (snapshot.destination.page === "folders" &&
+        pageFeedback.result?.state === "applied" ? (
+          <details className="workspace-activity">
+            <summary>Workspace activity</summary>
+            <p className="description" role="status">
+              {pageFeedback.text}
+            </p>
+          </details>
+        ) : (
           <p className="notice" role="status">
             {settled ? actionFeedback(settled) : pageFeedback.text}
           </p>
-        )}
+        ))}
       {actions.disabled && (
         <p className="notice">
           Some actions are paused while state is stale, a dependent action is
@@ -1186,7 +1206,8 @@ function Folders(props: PageProps) {
         )}
         {settings.computer.workspaces.length === 0 && (
           <p className="description">
-            No workspaces approved. Local file access is optional.
+            No workspaces approved. Add a workspace to give ChatGPT access to
+            this Mac's files.
           </p>
         )}
       </div>
@@ -1285,6 +1306,32 @@ function WorkspaceDetail({
     (!setupStep || !actions.computerPauseReason);
   const current = workspaceCurrent(snapshot, workspace);
   const setupCurrent = current && !actions.computerPauseReason;
+  const completedReceipts = receipts.filter(
+    (intent) =>
+      intent.state === "applied" &&
+      (!/settings:computer\.(?:check-folder|verify-workspace):/u.test(
+        intent.id,
+      ) ||
+        checked),
+  );
+  const attentionReceipts = receipts.filter(
+    (intent) => !completedReceipts.includes(intent),
+  );
+  const receipt = (intent: Intent) => (
+    <p key={intent.id} className="notice" role="status">
+      {intent.id.startsWith("settings:computer.update-access:")
+        ? "Save access: "
+        : intent.id.startsWith("settings:computer.remove-workspace:")
+          ? "Remove workspace: "
+          : "Verify workspace: "}
+      {intent.state === "applied"
+        ? actionFeedback(intent, snapshot)
+        : (Object.values(feedback.pages).find(
+            (entry) => entry.result === intent,
+          )?.text ?? actionFeedback(intent, snapshot))}
+    </p>
+  );
+  const removalDescriptionId = useId();
   const verifyKind = current
     ? "computer.check-folder"
     : "computer.verify-workspace";
@@ -1307,6 +1354,7 @@ function WorkspaceDetail({
           type="button"
           className="subtle workspace-remove"
           aria-label={`Remove workspace ${name}`}
+          aria-describedby={removalDescriptionId}
           disabled={
             !actions.allowed("computer.remove-workspace", workspace.workspaceId)
           }
@@ -1338,19 +1386,13 @@ function WorkspaceDetail({
       </p>
       <p className="badges">
         {checked ? "Access checked" : "Check access needed"}
+        {setupCurrent ? " · Current workspace" : ""}
       </p>
       {actions.computerPauseReason && (
         <p className="notice workspace-pause" role="status">
           Workspace changes are paused. {actions.computerPauseReason}
         </p>
       )}
-      <p className="description">
-        {setupStep && setupCurrent
-          ? "Current workspace for Connection. Access is checked for this build and saved scope. Continue when ready."
-          : current
-            ? "Current workspace for Connection. Verify workspace checks access without changing its binding."
-            : "Verify workspace checks access and prepares this workspace for Connection."}
-      </p>
       <form
         onKeyDown={(event) => {
           if (event.key === "Escape") {
@@ -1396,8 +1438,7 @@ function WorkspaceDetail({
           </select>
         </label>
         <p className="description">
-          Read &amp; write allows guarded changes that still require approval.
-          Farol checks access and restores the connection after saving.
+          Changes with Read &amp; write still require approval.
         </p>
         {stale && (
           <p className="notice" role="status">
@@ -1490,18 +1531,7 @@ function WorkspaceDetail({
         </div>
       )}
       <div className="workspace-feedback" aria-label="Workspace action status">
-        {receipts.map((intent) => (
-          <p key={intent.id} className="notice" role="status">
-            {intent.id.startsWith("settings:computer.update-access:")
-              ? "Save access: "
-              : intent.id.startsWith("settings:computer.remove-workspace:")
-                ? "Remove workspace: "
-                : "Verify workspace: "}
-            {Object.values(feedback.pages).find(
-              (entry) => entry.result === intent,
-            )?.text ?? actionFeedback(intent, snapshot)}
-          </p>
-        ))}
+        {attentionReceipts.map(receipt)}
         {stopRequired && (
           <div className="workspace-stop-review">
             <p className="description">
@@ -1569,6 +1599,20 @@ function WorkspaceDetail({
             Workspace diagnostics
           </button>
         )}
+        <details className="workspace-technical">
+          <summary>Access details and activity</summary>
+          <p className="description">
+            {setupStep && setupCurrent
+              ? "Current workspace for Connection. Access is checked for this build and saved scope. Continue when ready."
+              : current
+                ? "Current workspace for Connection. Verify workspace checks access without changing its binding."
+                : "Verify workspace checks access and prepares this workspace for Connection."}
+          </p>
+          <p className="description">
+            Farol checks access and restores the connection after saving.
+          </p>
+          {completedReceipts.map(receipt)}
+        </details>
       </div>
       {(!setupStep || !setupCurrent) && (
         <Command
@@ -1584,6 +1628,12 @@ function WorkspaceDetail({
           Verify workspace
         </Command>
       )}
+      <p
+        id={removalDescriptionId}
+        className="description workspace-removal-note"
+      >
+        Remove revokes Farol access. Files on disk are kept.
+      </p>
     </section>
   );
 }

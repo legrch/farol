@@ -173,24 +173,60 @@
   width: 100%;
 }
 .setup-wizard .workspace-heading {
-  margin-bottom: 20px;
+  margin-bottom: 8px;
+  align-items: baseline;
 }
 .setup-wizard .workspace-heading h3 {
   font-size: 18px;
+  overflow-wrap: anywhere;
 }
-.setup-wizard .workspace-detail > form {
-  padding: 18px 20px;
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  background: var(--sheet);
-  margin: 18px 0 24px;
+.setup-wizard .workspace-remove {
+  flex: none;
 }
-.setup-wizard .workspace-detail .badges {
+.setup-wizard .workspace-path {
+  margin: 8px 0 14px;
   color: var(--muted);
 }
-.setup-wizard .workspace-detail > details {
-  padding: 20px 0;
+.setup-wizard .workspace-detail > form {
+  padding: 16px 0;
   border-block: 1px solid var(--line);
+  margin: 18px 0;
+}
+.setup-wizard .workspace-detail > form .setting-row {
+  padding: 0;
+}
+.setup-wizard .workspace-detail .badges {
+  color: var(--fg);
+  font-size: 12px;
+}
+.workspace-technical > summary,
+.workspace-activity > summary {
+  width: fit-content;
+  max-width: 100%;
+  padding: 8px 0;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 12px;
+}
+.workspace-technical > summary:hover,
+.workspace-activity > summary:hover {
+  color: var(--fg);
+}
+.setup-wizard .workspace-removal-note {
+  margin-top: 16px;
+  font-size: 12px;
+}
+@container (max-width: 460px) {
+  .setup-wizard .workspace-heading {
+    flex-wrap: wrap;
+  }
+  .setup-wizard .workspace-detail .setting-row {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .setup-wizard .workspace-detail .field {
+    max-width: 100%;
+  }
 }
 .setup-wizard .workspace-add {
   padding-top: 12px;

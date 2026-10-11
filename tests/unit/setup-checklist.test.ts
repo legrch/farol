@@ -125,6 +125,20 @@ describe("Setup checklist presentation", () => {
       ["needed", "verified", "verified", "needed"],
     );
     assert.equal(p.ready, false);
+    assert.equal(
+      p.entries.find((x) => x.step === "connection")?.status,
+      "Local connection ready",
+    );
+    assert.equal(
+      p.entries.find((x) => x.step === "attachment")?.status,
+      "Not checked",
+    );
+    assert.equal(
+      projectSetupChecklist(allReady).entries.find(
+        (x) => x.step === "attachment",
+      )?.status,
+      "Verified from ChatGPT",
+    );
   });
   it("is pure and does not mutate even frozen input", () => {
     const input = Object.freeze({ ...allReady });
