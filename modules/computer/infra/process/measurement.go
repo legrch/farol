@@ -22,30 +22,118 @@ type directoryPin interface {
 	inspect(namedPath string) (directoryFacts, error)
 	openDirectory(relativePath string) (directoryPin, error)
 }
+type executableMeasurement interface {
+	io.Closer
+	recheck(context.Context) error
+}
 type launchFilesystem interface {
 	resolve(string) (string, error)
 	openDirectory(string) (directoryPin, error)
-	pinExecutable(ExecutablePin) (io.Closer, error)
+	pinExecutable(context.Context, ExecutablePin) (executableMeasurement, error)
 	effectiveUID() int
 }
 
-// Both native routes hold every root/scope/cwd/scratch/executable measurement
-// through their existing one dispatch. This is not continuous kernel proof.
+// launchMeasurement is owned serially by the original dispatch attempt.
+type launchMeasurement interface {
+	Recheck(context.Context) error
+	Close()
+}
+
+func measureRetainedLaunch(ctx context.Context, command Command, launch *confinedLaunch) (launchMeasurement, error) {
+	measurement, err := retainLaunch(ctx, command, launch)
+	if err != nil {
+		return nil, err
+	}
+	return measurement, nil
+}
+
+// retainedLaunchMeasurement is invocation-owned and used serially. Its observations
+// grant no lease authority and are snapshots, not continuous kernel proof. Recheck
+// never opens replacements; any failure consumes and closes this measurement.
+type retainedLaunchMeasurement struct {
+	context     context.Context
+	fs          launchFilesystem
+	pins        []io.Closer
+	executables []executableMeasurement
+	directories []directoryCheck
+	closed      bool
+}
+type directoryCheck struct {
+	pin      directoryPin
+	path     string
+	identity authority.RootIdentity
+	private  bool
+}
+
+func (m *retainedLaunchMeasurement) Close() {
+	if m == nil || m.closed {
+		return
+	}
+	m.closed = true
+	for i := len(m.pins) - 1; i >= 0; i-- {
+		_ = m.pins[i].Close()
+	}
+}
+func (m *retainedLaunchMeasurement) checkDirectory(ctx context.Context, c directoryCheck) bool {
+	if ctx.Err() != nil || m.context.Err() != nil {
+		return false
+	}
+	resolved, err := m.fs.resolve(c.path)
+	if err != nil || resolved != c.path {
+		return false
+	}
+	facts, err := c.pin.inspect(c.path)
+	return err == nil && ctx.Err() == nil && m.context.Err() == nil &&
+		facts.mode.IsDir() && facts.mode&os.ModeSymlink == 0 &&
+		facts.identity == c.identity && c.identity.Device != "" && c.identity.Inode != "" &&
+		(!c.private || (facts.mode.Perm() == 0700 && facts.uid == m.fs.effectiveUID()))
+}
+func (m *retainedLaunchMeasurement) Recheck(ctx context.Context) error {
+	refuse := func() error { m.Close(); return &processsvc.NativeFailure{} }
+	if m == nil || m.closed || ctx == nil || ctx.Err() != nil || m.context == nil || m.context.Err() != nil {
+		return refuse()
+	}
+	// A new caller context cannot renew the original measurement lifetime.
+	bounded, cancel := context.WithCancel(ctx)
+	stop := context.AfterFunc(m.context, cancel)
+	defer stop()
+	defer cancel()
+	for _, pin := range m.executables {
+		if bounded.Err() != nil || m.context.Err() != nil || pin.recheck(bounded) != nil {
+			return refuse()
+		}
+	}
+	for _, c := range m.directories {
+		if !m.checkDirectory(bounded, c) {
+			return refuse()
+		}
+	}
+	if bounded.Err() != nil || m.context.Err() != nil {
+		return refuse()
+	}
+	return nil
+}
+
+// Compatibility for the existing dispatch callers: retain exactly the same
+// lifetime without adding a release join or changing authority checks.
 func measureLaunchFiles(ctx context.Context, command Command, launch *confinedLaunch, fs launchFilesystem) (func(), error) {
-	refuse := func() (func(), error) { return nil, &processsvc.NativeFailure{} }
+	measurement, err := retainLaunchFiles(ctx, command, launch, fs)
+	if err != nil {
+		return nil, err
+	}
+	return measurement.Close, nil
+}
+
+func retainLaunchFiles(ctx context.Context, command Command, launch *confinedLaunch, fs launchFilesystem) (*retainedLaunchMeasurement, error) {
+	refuse := func() (*retainedLaunchMeasurement, error) { return nil, &processsvc.NativeFailure{} }
 	if ctx == nil || ctx.Err() != nil || launch == nil || fs == nil {
 		return refuse()
 	}
-	var pins []io.Closer
-	closePins := func() {
-		for i := len(pins) - 1; i >= 0; i-- {
-			_ = pins[i].Close()
-		}
-	}
+	measurement := &retainedLaunchMeasurement{context: ctx, fs: fs}
 	retained := false
 	defer func() {
 		if !retained {
-			closePins()
+			measurement.Close()
 		}
 	}()
 	// Include partial handles even on error so every failure releases them.
@@ -53,33 +141,14 @@ func measureLaunchFiles(ctx context.Context, command Command, launch *confinedLa
 		if ctx.Err() != nil {
 			return refuse()
 		}
-		pin, err := fs.pinExecutable(executable)
+		pin, err := fs.pinExecutable(ctx, executable)
 		if pin != nil {
-			pins = append(pins, pin)
+			measurement.pins = append(measurement.pins, pin)
 		}
 		if err != nil || pin == nil {
 			return refuse()
 		}
-	}
-	type directoryCheck struct {
-		pin      directoryPin
-		path     string
-		identity authority.RootIdentity
-		private  bool
-	}
-	var checks []directoryCheck
-	check := func(c directoryCheck) bool {
-		if ctx.Err() != nil {
-			return false
-		}
-		resolved, err := fs.resolve(c.path)
-		if err != nil || resolved != c.path {
-			return false
-		}
-		facts, err := c.pin.inspect(c.path)
-		return err == nil && facts.mode.IsDir() && facts.mode&os.ModeSymlink == 0 &&
-			facts.identity == c.identity && c.identity.Device != "" && c.identity.Inode != "" &&
-			(!c.private || (facts.mode.Perm() == 0700 && facts.uid == fs.effectiveUID()))
+		measurement.executables = append(measurement.executables, pin)
 	}
 	add := func(path string, identity authority.RootIdentity, private bool, parent directoryPin, relative string) directoryPin {
 		if ctx.Err() != nil || !absolutePolicyPath(path) {
@@ -93,7 +162,7 @@ func measureLaunchFiles(ctx context.Context, command Command, launch *confinedLa
 			pin, err = parent.openDirectory(relative)
 		}
 		if pin != nil {
-			pins = append(pins, pin)
+			measurement.pins = append(measurement.pins, pin)
 		}
 		if err != nil || pin == nil {
 			return nil
@@ -108,10 +177,10 @@ func measureLaunchFiles(ctx context.Context, command Command, launch *confinedLa
 			identity = facts.identity
 		}
 		c := directoryCheck{pin, path, identity, private}
-		if !check(c) {
+		if !measurement.checkDirectory(ctx, c) {
 			return nil
 		}
-		checks = append(checks, c)
+		measurement.directories = append(measurement.directories, c)
 		return pin
 	}
 	if command.RootIdentity.Device == "" || command.RootIdentity.Inode == "" || launch.scratchIdentity.Device == "" || launch.scratchIdentity.Inode == "" {
@@ -151,15 +220,10 @@ func measureLaunchFiles(ctx context.Context, command Command, launch *confinedLa
 			return refuse()
 		}
 	}
-	// Later measurements cannot hide an earlier ancestor/path replacement.
-	for _, c := range checks {
-		if !check(c) {
-			return refuse()
-		}
-	}
-	if ctx.Err() != nil {
+	// Later measurements cannot hide an earlier path or image replacement.
+	if measurement.Recheck(ctx) != nil {
 		return refuse()
 	}
 	retained = true
-	return closePins, nil
+	return measurement, nil
 }

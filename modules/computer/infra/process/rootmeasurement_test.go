@@ -18,11 +18,19 @@ import (
 // In-memory filesystem and retained-handle doubles only. No native IO, process,
 // app service, provider, PID, signal, or real executable is used in these tests.
 type measurementHandleDouble struct {
-	path   string
-	closes int
+	path       string
+	closes     int
+	closeError error
+	onClose    func()
 }
 
-func (p *measurementHandleDouble) Close() error { p.closes++; return nil }
+func (p *measurementHandleDouble) Close() error {
+	p.closes++
+	if p.onClose != nil {
+		p.onClose()
+	}
+	return p.closeError
+}
 
 type measurementDirectoryDouble struct {
 	*measurementHandleDouble
@@ -31,6 +39,9 @@ type measurementDirectoryDouble struct {
 }
 
 func (p *measurementDirectoryDouble) inspect(path string) (directoryFacts, error) {
+	if p.fs.inspectHook != nil {
+		p.fs.inspectHook(path)
+	}
 	facts, ok := p.fs.directories[path]
 	if path != p.path || !ok || facts.identity != p.identity {
 		return directoryFacts{}, errors.New("named directory changed")
@@ -49,10 +60,13 @@ func (p *measurementDirectoryDouble) openDirectory(relative string) (directoryPi
 type measurementFilesystemDouble struct {
 	directories     map[string]directoryFacts
 	handles         []*measurementHandleDouble
+	images          []*measurementExecutableDouble
 	absolute        []string
 	anchored        [][2]string
 	afterOpen       func(string)
 	resolveHook     func(string)
+	inspectHook     func(string)
+	resolveError    string
 	alias           string
 	executableError string
 	directoryError  string
@@ -62,6 +76,9 @@ func (f *measurementFilesystemDouble) effectiveUID() int { return 501 }
 func (f *measurementFilesystemDouble) resolve(path string) (string, error) {
 	if f.resolveHook != nil {
 		f.resolveHook(path)
+	}
+	if path == f.resolveError {
+		return "", errors.New("directory resolution failed")
 	}
 	if path == f.alias {
 		return "/different/target", nil
@@ -88,13 +105,15 @@ func (f *measurementFilesystemDouble) openDirectory(path string) (directoryPin, 
 	f.absolute = append(f.absolute, path)
 	return f.open(path)
 }
-func (f *measurementFilesystemDouble) pinExecutable(pin ExecutablePin) (io.Closer, error) {
+func (f *measurementFilesystemDouble) pinExecutable(_ context.Context, pin ExecutablePin) (executableMeasurement, error) {
 	handle := &measurementHandleDouble{path: pin.Path}
 	f.handles = append(f.handles, handle)
+	image := &measurementExecutableDouble{measurementHandleDouble: handle}
+	f.images = append(f.images, image)
 	if pin.Path == f.executableError {
-		return handle, errors.New("partial executable measurement")
+		return image, errors.New("partial executable measurement")
 	}
-	return handle, nil
+	return image, nil
 }
 func (f *measurementFilesystemDouble) assertCloses(t *testing.T, want int) {
 	t.Helper()
@@ -273,4 +292,24 @@ func TestRootMeasurementsLateSecondaryPolicyChangeNeverDispatches(t *testing.T) 
 		t.Fatal("late policy change dispatched", err, checks)
 	}
 	fs.assertCloses(t, 1)
+}
+
+// No image IO: the retained executable verifier is separately exercised with
+// descriptor/metadata doubles in retainedmeasurement_test.go.
+type measurementExecutableDouble struct {
+	*measurementHandleDouble
+	checks int
+	fail   bool
+	before func(context.Context)
+}
+
+func (p *measurementExecutableDouble) recheck(ctx context.Context) error {
+	p.checks++
+	if p.before != nil {
+		p.before(ctx)
+	}
+	if ctx.Err() != nil || p.fail {
+		return errors.New("changed executable measurement")
+	}
+	return nil
 }

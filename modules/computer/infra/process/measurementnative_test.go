@@ -50,6 +50,64 @@ func measurementFixture(t *testing.T) (Command, *confinedLaunch) {
 	return command, launch
 }
 
+// Real disposable filesystem drift between capture and release; the synthetic
+// image is text, never executed. No sandbox/process qualification is inferred.
+func TestNativeRetainedMeasurementRejectsBetweenCheckDrift(t *testing.T) {
+	for _, mode := range []string{"current", "root-replaced", "scratch-mode", "image-replaced", "image-bytes"} {
+		t.Run(mode, func(t *testing.T) {
+			command, launch := measurementFixture(t)
+			measurement, err := retainLaunch(context.Background(), command, launch)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer measurement.Close()
+			must := func(err error) {
+				t.Helper()
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			switch mode {
+			case "root-replaced":
+				must(os.Rename(command.Root, command.Root+"-original"))
+				must(os.Mkdir(command.Root, 0700))
+			case "scratch-mode":
+				must(os.Chmod(launch.scratch, 0755))
+			case "image-replaced":
+				path := launch.pins[0].Path
+				data, err := os.ReadFile(path)
+				must(err)
+				must(os.Rename(path, path+"-original"))
+				must(os.WriteFile(path, data, 0500))
+			case "image-bytes":
+				path := launch.pins[0].Path
+				info, err := os.Stat(path)
+				must(err)
+				data, err := os.ReadFile(path)
+				must(err)
+				data[0] ^= 1
+				must(os.Chmod(path, 0700))
+				must(os.WriteFile(path, data, 0700))
+				must(os.Chmod(path, 0500))
+				must(os.Chtimes(path, info.ModTime(), info.ModTime()))
+			}
+			err = measurement.Recheck(context.Background())
+			if mode == "current" {
+				if err != nil {
+					t.Fatal("unchanged retained filesystem refused", err)
+				}
+			} else {
+				if err == nil {
+					t.Fatal("changed original filesystem accepted")
+				}
+				if measurement.Recheck(context.Background()) == nil {
+					t.Fatal("failed measurement resurrected")
+				}
+			}
+		})
+	}
+}
+
 func TestNativeProcessMeasurementRefusesChangedPhysicalInputs(t *testing.T) {
 	for _, mode := range []string{"current", "root-identity", "root-link", "cwd-link", "scratch-identity", "scratch-mode", "scratch-link", "image-digest", "image-link", "image-hardlink", "image-writable", "image-not-executable", "cancelled"} {
 		t.Run(mode, func(t *testing.T) {

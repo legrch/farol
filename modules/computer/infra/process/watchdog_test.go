@@ -181,7 +181,7 @@ func newWatchdogFixture(t *testing.T) *watchdogFixture {
 	host := &watchdogTestHost{process: &watchdogTestProcess{ended: make(chan error, 1)}, frames: make(chan map[string]any, 8), reservation: reservation, lease: lease}
 	f := &watchdogFixture{preparer: preparer, lease: lease, reservation: reservation, clock: clock, host: host, evidence: evidence, timers: &timers{}}
 	preparer.boundary.host = host
-	preparer.boundary.measure = func(_ context.Context, original Command, launch *confinedLaunch) (func(), error) {
+	preparer.boundary.measure = func(_ context.Context, original Command, launch *confinedLaunch) (launchMeasurement, error) {
 		if lease.inspecting.Load() || reservation.calls != 1 {
 			panic("measurement before reservation/under owner gate")
 		}
@@ -189,7 +189,7 @@ func newWatchdogFixture(t *testing.T) *watchdogFixture {
 			panic("unconfined launch")
 		}
 		f.measurements.Add(1)
-		return func() {}, nil
+		return &watchdogMeasurementDouble{}, nil
 	}
 	service, err := processsvc.NewForInvocation("operation", lease, preparer, reservation, &sync.Mutex{}, clock)
 	if err != nil {
@@ -291,7 +291,7 @@ func TestWatchdogRefusesCurrentLossBeforeHelperAndBeforeRelease(t *testing.T) {
 			}
 			if phase == "measure" {
 				original := f.preparer.boundary.measure
-				f.preparer.boundary.measure = func(c context.Context, cmd Command, l *confinedLaunch) (func(), error) {
+				f.preparer.boundary.measure = func(c context.Context, cmd Command, l *confinedLaunch) (launchMeasurement, error) {
 					close, err := original(c, cmd, l)
 					revoke()
 					return close, err
@@ -584,7 +584,7 @@ func TestWatchdogQualificationAndMeasurementRemainMandatory(t *testing.T) {
 			f := newWatchdogFixture(t)
 			f.prepare(t)
 			if phase == "measurement" {
-				f.preparer.boundary.measure = func(context.Context, Command, *confinedLaunch) (func(), error) {
+				f.preparer.boundary.measure = func(context.Context, Command, *confinedLaunch) (launchMeasurement, error) {
 					return nil, errors.New("synthetic refusal")
 				}
 			} else {
@@ -698,3 +698,17 @@ func TestWatchdogPreservesKnownRootWhenHelperWaitIsUnknown(t *testing.T) {
 		t.Fatal("repeat Wait")
 	}
 }
+
+// CPU measurement ownership only; no physical or enforcement evidence.
+type watchdogMeasurementDouble struct {
+	recheck func(context.Context) error
+	closes  int
+}
+
+func (m *watchdogMeasurementDouble) Recheck(ctx context.Context) error {
+	if m.recheck != nil {
+		return m.recheck(ctx)
+	}
+	return ctx.Err()
+}
+func (m *watchdogMeasurementDouble) Close() { m.closes++ }

@@ -11,3 +11,7 @@ import (
 func measureLaunch(context.Context, Command, *confinedLaunch) (func(), error) {
 	return nil, &processsvc.NativeFailure{}
 }
+
+func retainLaunch(context.Context, Command, *confinedLaunch) (*retainedLaunchMeasurement, error) {
+	return nil, &processsvc.NativeFailure{}
+}

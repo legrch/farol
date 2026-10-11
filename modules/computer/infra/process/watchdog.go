@@ -67,7 +67,7 @@ func NewSupervisedPreparer(runtimeID string, template Command, policy *Seatbelt,
 		return nil, err
 	}
 	selection.Source = append([]byte(nil), selection.Source...)
-	return &SupervisedPreparer{base: base, boundary: &watchdogBoundary{policy: policy, selection: selection, execution: execution, clock: clock, measure: measureLaunch, host: nativeWatchdogHost{}}}, nil
+	return &SupervisedPreparer{base: base, boundary: &watchdogBoundary{policy: policy, selection: selection, execution: execution, clock: clock, measure: measureRetainedLaunch, host: nativeWatchdogHost{}}}, nil
 }
 
 func (p *SupervisedPreparer) Scope() processsvc.Scope { return p.base.Scope() }
@@ -153,7 +153,7 @@ type watchdogBoundary struct {
 	selection WatchdogSelection
 	execution context.Context
 	clock     port.Clock
-	measure   func(context.Context, Command, *confinedLaunch) (func(), error)
+	measure   func(context.Context, Command, *confinedLaunch) (launchMeasurement, error)
 	host      watchdogHost
 }
 
@@ -183,11 +183,11 @@ func (b *watchdogBoundary) StartLease(ctx context.Context, command Command, requ
 		}
 		return nil
 	}
-	closeMeasurement, err := b.measure(bounded, copyCommand(command), launch)
-	if closeMeasurement != nil {
-		defer closeMeasurement()
+	measurement, err := b.measure(bounded, copyCommand(command), launch)
+	if measurement != nil {
+		defer measurement.Close()
 	}
-	if err != nil || closeMeasurement == nil || launch.qualification.Qualify(bounded, copyCommand(launch.command)) != nil || check() != nil {
+	if err != nil || measurement == nil || launch.qualification.Qualify(bounded, copyCommand(launch.command)) != nil || check() != nil {
 		cancel()
 		return nil, &processsvc.NativeFailure{}
 	}
@@ -238,6 +238,7 @@ func (b *watchdogBoundary) StartLease(ctx context.Context, command Command, requ
 		prepare.Environment[name] = value
 	}
 	if child.send(bounded, prepare) != nil || child.await(bounded, child.prepared) != nil ||
+		measurement.Recheck(bounded) != nil ||
 		launch.qualification.Qualify(bounded, copyCommand(launch.command)) != nil || check() != nil ||
 		child.send(bounded, watchdogControl{Type: "start", ID: id}) != nil || child.await(bounded, child.ready) != nil {
 		child.fence()

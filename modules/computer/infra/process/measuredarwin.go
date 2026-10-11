@@ -4,6 +4,8 @@ package process
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"io"
 	"os"
 	"path/filepath"
@@ -20,7 +22,17 @@ import (
 // anchored starts. Its closer holds ALL measured handles through the attempt;
 // pathname measurement alone is not continuous kernel identity evidence.
 func measureLaunch(ctx context.Context, command Command, launch *confinedLaunch) (func(), error) {
-	return measureLaunchFiles(ctx, command, launch, darwinLaunchFilesystem{})
+	measurement, err := retainLaunch(ctx, command, launch)
+	if err != nil {
+		return nil, err
+	}
+	return measurement.Close, nil
+}
+
+// retainLaunch keeps the same native descriptors through the watchdog release
+// barrier. Direct and anchored callers retain the closer-only compatibility API.
+func retainLaunch(ctx context.Context, command Command, launch *confinedLaunch) (*retainedLaunchMeasurement, error) {
+	return retainLaunchFiles(ctx, command, launch, darwinLaunchFilesystem{})
 }
 
 type darwinLaunchFilesystem struct{}
@@ -29,13 +41,98 @@ func (darwinLaunchFilesystem) resolve(path string) (string, error) {
 	return filepath.EvalSymlinks(path)
 }
 func (darwinLaunchFilesystem) effectiveUID() int { return os.Geteuid() }
-func (darwinLaunchFilesystem) pinExecutable(pin ExecutablePin) (io.Closer, error) {
-	file, err := pinnedExecutable(pin)
-	if file == nil {
-		return nil, err
+func (darwinLaunchFilesystem) pinExecutable(ctx context.Context, pin ExecutablePin) (executableMeasurement, error) {
+	if ctx == nil || ctx.Err() != nil || !absolutePolicyPath(pin.Path) {
+		return nil, &processsvc.NativeFailure{}
 	}
-	return file, err
+	file, err := os.OpenFile(pin.Path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		return nil, &processsvc.NativeFailure{}
+	}
+	before, err := file.Stat()
+	held := &darwinExecutableMeasurement{file: file, selected: pin, original: before, ownerUID: os.Geteuid(), named: func(path string) (os.FileInfo, error) {
+		resolved, err := filepath.EvalSymlinks(path)
+		if err != nil || resolved != path {
+			return nil, &processsvc.NativeFailure{}
+		}
+		return os.Lstat(path)
+	}}
+	// Return partial ownership even on error; retainLaunchFiles closes it.
+	if err != nil {
+		return held, &processsvc.NativeFailure{}
+	}
+	return held, held.recheck(ctx)
 }
+
+// The private file/metadata seam permits CPU doubles of the actual descriptor
+// verifier. Production always uses the originally opened file and os.Lstat.
+type executableMeasurementFile interface {
+	io.ReaderAt
+	io.Closer
+	Stat() (os.FileInfo, error)
+}
+type darwinExecutableMeasurement struct {
+	file     executableMeasurementFile
+	selected ExecutablePin
+	original os.FileInfo
+	ownerUID int
+	named    func(string) (os.FileInfo, error)
+}
+
+func (p *darwinExecutableMeasurement) Close() error { return p.file.Close() }
+func (p *darwinExecutableMeasurement) unchanged(info os.FileInfo) bool {
+	if info == nil || p.original == nil || !info.Mode().IsRegular() || info.Mode().Perm()&0111 == 0 ||
+		info.Mode().Perm()&0022 != 0 || info.Size() < 0 || info.Size() > 128*1024*1024 ||
+		info.Mode() != p.original.Mode() ||
+		info.Size() != p.original.Size() || !info.ModTime().Equal(p.original.ModTime()) {
+		return false
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	original, originalOK := p.original.Sys().(*syscall.Stat_t)
+	return ok && originalOK && stat.Dev == original.Dev && stat.Ino == original.Ino &&
+		stat.Nlink == 1 && stat.Uid == original.Uid &&
+		(stat.Uid == 0 || int(stat.Uid) == p.ownerUID)
+}
+func (p *darwinExecutableMeasurement) recheck(ctx context.Context) error {
+	refuse := func() error { return &processsvc.NativeFailure{} }
+	if ctx == nil || ctx.Err() != nil {
+		return refuse()
+	}
+	before, err := p.file.Stat()
+	if err != nil || !p.unchanged(before) {
+		return refuse()
+	}
+	hash := sha256.New()
+	// ReadAt keeps every hash on the same descriptor and leaves its offset alone.
+	reader := &measurementContextReader{ctx, io.NewSectionReader(p.file, 0, 128*1024*1024+1)}
+	count, err := io.Copy(hash, reader)
+	if err != nil || count != before.Size() || hex.EncodeToString(hash.Sum(nil)) != p.selected.SHA256 {
+		return refuse()
+	}
+	after, err := p.file.Stat()
+	named, namedErr := p.named(p.selected.Path)
+	if err != nil || namedErr != nil || !p.unchanged(after) || !p.unchanged(named) || ctx.Err() != nil {
+		return refuse()
+	}
+	return nil
+}
+
+type measurementContextReader struct {
+	ctx    context.Context
+	reader io.Reader
+}
+
+func (r *measurementContextReader) Read(b []byte) (int, error) {
+	if err := r.ctx.Err(); err != nil {
+		return 0, err
+	}
+	n, err := r.reader.Read(b)
+	if contextErr := r.ctx.Err(); contextErr != nil {
+		return n, contextErr
+	}
+	return n, err
+}
+
 func (darwinLaunchFilesystem) openDirectory(path string) (directoryPin, error) {
 	if !absolutePolicyPath(path) {
 		return nil, &processsvc.NativeFailure{}
