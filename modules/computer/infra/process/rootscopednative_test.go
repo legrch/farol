@@ -210,6 +210,18 @@ func nativeRootScopedSeatbelt(t *testing.T, write bool, protectImages bool, alia
 		switch aliases[0] {
 		case "physical-root":
 			policyRoot = dataVolumePath + root
+			// Exercise the spelling actually granted to this command. A path
+			// alias is not an additional read/write grant for the other spelling.
+			for name, path := range probe.Reads {
+				if insidePolicy(root, path) {
+					probe.Reads[name] = dataVolumePath + path
+				}
+			}
+			for name, path := range probe.Writes {
+				if insidePolicy(root, path) {
+					probe.Writes[name] = dataVolumePath + path
+				}
+			}
 			for name, paths := range probe.Renames {
 				probe.Renames[name] = [2]string{dataVolumePath + paths[0], dataVolumePath + paths[1]}
 			}
@@ -257,6 +269,9 @@ func nativeRootScopedSeatbelt(t *testing.T, write bool, protectImages bool, alia
 	}
 	var out rootScopedProbeResult
 	must(json.Unmarshal(stdout.Bytes(), &out))
+	// Preserve the complete synthetic observation before assertions, including
+	// known permission refusals that differ from a fixture's expected result.
+	must(os.WriteFile(filepath.Join(base, "probe-observation.json"), stdout.Bytes(), 0600))
 	for name, expected := range baseline {
 		if name == "outside" || name == "outside-symlink" || name == "home" {
 			expected = "denied"
