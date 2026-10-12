@@ -99,6 +99,17 @@ export function encodeShellLaunch(
         WatchdogSourceSHA256: support.watchdog.sourceSHA256,
         Imports: support.imports.map(pin),
         Executables: support.executables.map(pin),
+        ...(support.gitRuntimeResources
+          ? {
+              GitRuntimeResources: {
+                Git: pin(support.gitRuntimeResources.git),
+                Files: support.gitRuntimeResources.files.map(pin),
+                Directories: support.gitRuntimeResources.directories.map(
+                  (d) => ({ Path: d.path, Entries: [...d.entries] }),
+                ),
+              },
+            }
+          : {}),
         ProtectedBundle: {
           Path: root,
           Identity: {

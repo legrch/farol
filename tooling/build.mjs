@@ -2,7 +2,10 @@ import { buildGoBackend } from "./go-backend-build.mjs";
 import { readGoBuildInputs } from "./go-build-inputs.mjs";
 import { embedBuiltCore, GO_CORE_ENTRIES } from "./go-core-artifact.mjs";
 import { declareCoreResources } from "./core-resources.mjs";
-import { declareShellSupport } from "./shell-support.mjs";
+import {
+  declareShellSupport,
+  verifyHostShellResources,
+} from "./shell-support.mjs";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -394,6 +397,7 @@ if (goInputs) {
   });
   core = await embedBuiltCore(output, built, buildIdentity);
   const coreResources = await declareCoreResources(output, core, buildIdentity);
+  await verifyHostShellResources();
   const shellSupport = await declareShellSupport(
     repositoryRoot,
     core,
@@ -428,6 +432,7 @@ if (goInputs) {
     JSON.stringify(coreResources)
   )
     throw new Error("GO_HOST_RESOURCES_CHANGED");
+  await verifyHostShellResources();
   if (
     JSON.stringify(
       await declareShellSupport(repositoryRoot, core, buildIdentity),

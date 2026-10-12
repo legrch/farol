@@ -29,6 +29,7 @@ export interface ShellSupportDeclaration {
   }>;
   readonly imports: readonly ShellSupportPin[];
   readonly executables: readonly ShellSupportPin[];
+  readonly gitRuntimeResources?: ShellGitRuntimeResources;
   readonly watchdog: Readonly<{
     relativePath: "Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron";
     sha256: string;
@@ -130,7 +131,11 @@ function absolutePath(value: unknown): string {
     return refuse();
   return path;
 }
-function pins(value: unknown, imports: boolean): readonly ShellSupportPin[] {
+function pins(
+  value: unknown,
+  imports: boolean,
+  maximum = 16,
+): readonly ShellSupportPin[] {
   if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype)
     return refuse();
   const length = Object.getOwnPropertyDescriptor(value, "length")
@@ -139,7 +144,7 @@ function pins(value: unknown, imports: boolean): readonly ShellSupportPin[] {
     typeof length !== "number" ||
     !Number.isInteger(length) ||
     length < 1 ||
-    length > 16
+    length > maximum
   )
     return refuse();
   const own = Reflect.ownKeys(value);
@@ -180,12 +185,129 @@ function pins(value: unknown, imports: boolean): readonly ShellSupportPin[] {
   return Object.freeze(result);
 }
 
+export interface ShellGitRuntimeResources {
+  readonly git: ShellSupportPin;
+  readonly files: readonly ShellSupportPin[];
+  readonly directories: readonly Readonly<{
+    path: string;
+    entries: readonly string[];
+  }>[];
+}
+const gitImage = "/Library/Developer/CommandLineTools/usr/bin/git";
+const gitData = "/Library/Developer/CommandLineTools/usr/share/git-core";
+const gitTemplates = gitData + "/templates";
+
+function finiteValues(value: unknown, maximum: number): readonly unknown[] {
+  if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype)
+    return refuse();
+  const length = Object.getOwnPropertyDescriptor(value, "length")
+    ?.value as unknown;
+  if (
+    typeof length !== "number" ||
+    !Number.isInteger(length) ||
+    length < 0 ||
+    length > maximum
+  )
+    return refuse();
+  const keys = Array.from({ length }, (_, i) => String(i));
+  const own = Reflect.ownKeys(value);
+  if (
+    own.length !== length + 1 ||
+    own.some(
+      (k) => typeof k !== "string" || (k !== "length" && !keys.includes(k)),
+    )
+  )
+    return refuse();
+  return Object.freeze(
+    keys.map((key) => {
+      const d = Object.getOwnPropertyDescriptor(value, key);
+      if (!d || !d.enumerable || !("value" in d)) return refuse();
+      return d.value as unknown;
+    }),
+  );
+}
+function gitRuntimeResources(
+  value: unknown,
+  executables: readonly ShellSupportPin[],
+): ShellGitRuntimeResources {
+  const r = record(value, ["git", "files", "directories"]);
+  const rawGit = record(r.git, ["path", "sha256"]);
+  const git = Object.freeze({
+    path: absolutePath(rawGit.path),
+    sha256: digest(rawGit.sha256),
+  });
+  if (
+    git.path !== gitImage ||
+    !executables.some((p) => p.path === git.path && p.sha256 === git.sha256)
+  )
+    return refuse();
+  const files = pins(r.files, false, 32);
+  if (files.length < 2) return refuse();
+  let last = "";
+  const paths = new Set<string>();
+  for (const f of files) {
+    if (
+      f.path <= last ||
+      (f.path !== gitData + "/gitconfig" &&
+        !f.path.startsWith(gitTemplates + "/"))
+    )
+      return refuse();
+    last = f.path;
+    paths.add(f.path);
+  }
+  if (!paths.has(gitData + "/gitconfig")) return refuse();
+  last = "";
+  const directories = finiteValues(r.directories, 8).map((raw) => {
+    const d = record(raw, ["path", "entries"]);
+    const path = absolutePath(d.path);
+    if (
+      path <= last ||
+      paths.has(path) ||
+      (path !== gitTemplates && !path.startsWith(gitTemplates + "/"))
+    )
+      return refuse();
+    last = path;
+    paths.add(path);
+    let previous = "";
+    const entries = finiteValues(d.entries, 32).map((entry) => {
+      const name = text(entry, /^[A-Za-z0-9][A-Za-z0-9._-]*$/u, 128);
+      if (name <= previous) return refuse();
+      previous = name;
+      return name;
+    });
+    return Object.freeze({ path, entries: Object.freeze(entries) });
+  });
+  if (!paths.has(gitTemplates)) return refuse();
+  for (const d of directories)
+    for (const name of d.entries)
+      if (!paths.has(d.path + "/" + name)) return refuse();
+  for (const path of paths) {
+    if (path === gitData + "/gitconfig" || path === gitTemplates) continue;
+    const slash = path.lastIndexOf("/");
+    if (
+      !directories.some(
+        (d) =>
+          d.path === path.slice(0, slash) &&
+          d.entries.includes(path.slice(slash + 1)),
+      )
+    )
+      return refuse();
+  }
+  return Object.freeze({ git, files, directories: Object.freeze(directories) });
+}
+
 // A consumed value projection, not a qualification issuer or launch capability.
 // All inputs are unknown; this API reads no host facts, environment or bytes.
 export function parseShellSupportDeclaration(
   value: unknown,
 ): ShellSupportDeclaration {
   try {
+    const resourceKey =
+      value !== null &&
+      typeof value === "object" &&
+      Object.hasOwn(value, "gitRuntimeResources")
+        ? ["gitRuntimeResources"]
+        : [];
     const support = record(value, [
       "schema",
       "core",
@@ -195,6 +317,7 @@ export function parseShellSupportDeclaration(
       "executables",
       "watchdog",
       "runtime",
+      ...resourceKey,
     ]);
     const core = coreDeclaration(support.core);
     const qualification = record(support.qualification, [
@@ -234,6 +357,14 @@ export function parseShellSupportDeclaration(
       return refuse();
     const imported = pins(support.imports, true);
     const executables = pins(support.executables, false);
+    const resources = resourceKey.length
+      ? gitRuntimeResources(support.gitRuntimeResources, executables)
+      : undefined;
+    if (
+      resources &&
+      qualification.filesystemClass !== "system-apfs-kernel-mount-boundaries-v1"
+    )
+      return refuse();
     // A pathname appearing in both closures must identify the same bytes.
     const hashes = new Map<string, string>();
     for (const pin of [...imported, ...executables]) {
@@ -260,6 +391,7 @@ export function parseShellSupportDeclaration(
       }),
       imports: imported,
       executables,
+      ...(resources ? { gitRuntimeResources: resources } : {}),
       watchdog: Object.freeze({
         relativePath: watchdog.relativePath,
         sha256: digest(watchdog.sha256),

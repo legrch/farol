@@ -168,8 +168,8 @@ func (f *connectorShellFactory) selectShell(ctx context.Context, lease *executio
 	policy := nativeprocess.SeatbeltSelection{FilePolicy: authority.RootScopedFiles, Snapshot: snapshot, RuntimeID: f.config.runtimeID,
 		WorkspaceID: workspace.WorkspaceID, Home: f.config.home, Scratch: scratch.path, ScratchIdentity: scratch.identity,
 		MechanismSHA256: f.config.support.Mechanism.SHA256, Executables: slices.Clone(f.config.support.Executables),
-		ProtectedImages: []nativeprocess.ExecutablePin{f.config.support.Backend, f.config.support.Watchdog},
-		ProtectedBundle: f.config.support.ProtectedBundle, Network: authority.NoNetwork, Git: nativeprocess.RootScopedGit}
+		ProtectedImages:     []nativeprocess.ExecutablePin{f.config.support.Backend, f.config.support.Watchdog},
+		GitRuntimeResources: f.config.support.GitRuntimeResources, ProtectedBundle: f.config.support.ProtectedBundle, Network: authority.NoNetwork, Git: nativeprocess.RootScopedGit}
 	invocation := processsvc.Invocation{RuntimeID: f.config.runtimeID, SessionID: lease.Binding().SessionID, ModelID: "chatgpt",
 		AdmissionID: snapshot.Participant.Grant.AuthorityID, Arguments: []string{"--noprofile", "--norc", "-c", request.Command}, Input: []byte(request.Stdin)}
 	selected, err := f.prepare(preparation, command, policy, invocation)

@@ -32,6 +32,29 @@ observed pipe EOF establishes complete descendant cleanup. See [current approval
 and [Computer parity](../../../../docs/computer-parity.md) for the selected contract
 and the separate native, source and installed evidence.
 
+## Selected Command Line Tools Git data
+
+The trusted `GitRuntimeResources` declaration adds only the selected CLT Git's
+finite system configuration and template files. The checked-in closure contains
+17 files and three directory listings. The authenticated build checks their
+hashes and protected root-owned parents; native selection additionally checks
+APFS mount boundaries, identities, permissions, directory listings and continuity.
+Preparation retains the original data descriptors and rechecks them before launch.
+
+The Seatbelt profile grants literal reads, denies data execution and writes,
+and preserves protected resource ancestors. Kernel mount checks apply on every
+resource access. This is neither a general Command Line Tools directory grant nor
+an extra workspace. It adds no network, Keychain or executable authority. Normal
+Git configuration, templates and project hooks are used without system-config,
+template-directory, signing or hook overrides.
+
+`TestNativeCLTGitRuntimeResources` uses the actual declared CLT data with a
+disposable HOME/project and exercises init, add, commit, log, a project hook and
+linked worktree commits under Seatbelt. It also verifies retained descriptors.
+That native fixture does not prove the packaged support binding, an external MCP
+journey, arbitrary descendant cleanup or networked Git. Those acceptance layers
+remain separate.
+
 ## Bounded GS1 Git read selection — source only
 
 `SeatbeltSelection.Git = QualifiedGitRead` with its non-nil `GitReadSelection`

@@ -617,3 +617,79 @@ describe("binding to independently supplied expectations", () => {
     expect(value).not.toHaveProperty("authority");
   });
 });
+
+function gitResourceFixture() {
+  const base = fixture();
+  const git = {
+    path: "/Library/Developer/CommandLineTools/usr/bin/git",
+    sha256: "a".repeat(64),
+  };
+  const data = "/Library/Developer/CommandLineTools/usr/share/git-core";
+  return {
+    ...base,
+    qualification: {
+      ...base.qualification,
+      filesystemClass: "system-apfs-kernel-mount-boundaries-v1" as const,
+    },
+    executables: [...base.executables, git],
+    gitRuntimeResources: {
+      git: { ...git },
+      files: [
+        { path: data + "/gitconfig", sha256: "b".repeat(64) },
+        { path: data + "/templates/description", sha256: "c".repeat(64) },
+      ],
+      directories: [{ path: data + "/templates", entries: ["description"] }],
+    },
+  };
+}
+describe("finite build-selected Git runtime data", () => {
+  it("freezes the selected files and directory listings", () => {
+    const input = gitResourceFixture();
+    const result = parseShellSupportDeclaration(input);
+    expect(result.gitRuntimeResources).toEqual(input.gitRuntimeResources);
+    input.gitRuntimeResources.files[0]!.sha256 = "e".repeat(64);
+    input.gitRuntimeResources.directories[0]!.entries[0] = "changed";
+    expect(result.gitRuntimeResources!.files[0]!.sha256).toBe("b".repeat(64));
+    expect(result.gitRuntimeResources!.directories[0]!.entries).toEqual([
+      "description",
+    ]);
+  });
+  it.each([
+    ["gitRuntimeResources.git.path", "/usr/bin/git"],
+    ["gitRuntimeResources.git.sha256", "e".repeat(64)],
+    ["gitRuntimeResources.files.0.path", "/Library/Developer/private"],
+    ["gitRuntimeResources.files.0.sha256", "0".repeat(64)],
+    ["gitRuntimeResources.directories.0.path", "/Library/Developer"],
+    ["gitRuntimeResources.directories.0.entries", []],
+    [
+      "gitRuntimeResources.directories.0.entries",
+      ["description", "unexpected"],
+    ],
+    ["gitRuntimeResources.directories.0.entries", ["../description"]],
+    ["qualification.filesystemClass", "local-apfs-no-nested-mounts-v1"],
+  ])("rejects crossed or expanded %s", (path, value) => {
+    const input = gitResourceFixture();
+    const parts = path.split(".");
+    const key = parts.pop()!;
+    at(input, parts.join("."))[key] = value;
+    invalid(input);
+  });
+  it("does not evaluate resource or array accessors", () => {
+    for (const array of [false, true]) {
+      const input = gitResourceFixture();
+      const get = vi.fn(() => []);
+      if (array)
+        Object.defineProperty(input.gitRuntimeResources.files, "0", {
+          get,
+          enumerable: true,
+        });
+      else
+        Object.defineProperty(input.gitRuntimeResources, "files", {
+          get,
+          enumerable: true,
+        });
+      invalid(input);
+      expect(get).not.toHaveBeenCalled();
+    }
+  });
+});

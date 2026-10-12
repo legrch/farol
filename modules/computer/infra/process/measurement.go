@@ -153,6 +153,24 @@ func retainLaunchFiles(ctx context.Context, command Command, launch *confinedLau
 		}
 		measurement.executables = append(measurement.executables, pin)
 	}
+	if launch.gitRuntimeResources != nil {
+		reader, ok := fs.(interface {
+			pinGitRuntimeFile(context.Context, ExecutablePin) (executableMeasurement, error)
+		})
+		if !ok {
+			return refuse()
+		}
+		for _, selected := range launch.gitRuntimeResources.Files {
+			pin, err := reader.pinGitRuntimeFile(ctx, selected)
+			if pin != nil {
+				measurement.pins = append(measurement.pins, pin)
+			}
+			if err != nil || pin == nil {
+				return refuse()
+			}
+			measurement.executables = append(measurement.executables, pin)
+		}
+	}
 	add := func(path string, identity authority.RootIdentity, private bool, parent directoryPin, relative string) directoryPin {
 		if ctx.Err() != nil || !absolutePolicyPath(path) {
 			return nil
@@ -211,6 +229,23 @@ func retainLaunchFiles(ctx context.Context, command Command, launch *confinedLau
 		if !validProtectedBundle(&bundle) || comparableOverlap(bundle.Path, launch.scratch) ||
 			add(bundle.Path, bundle.Identity, false, nil, "") == nil {
 			return refuse()
+		}
+	}
+	if launch.gitRuntimeResources != nil {
+		for _, selected := range launch.gitRuntimeResources.Directories {
+			pin := add(selected.Path, authority.RootIdentity{}, false, nil, "")
+			if pin == nil {
+				return refuse()
+			}
+			facts, err := pin.inspect(selected.Path)
+			if err != nil || facts.uid != 0 || facts.mode.Perm()&0022 != 0 {
+				return refuse()
+			}
+			check := &measurement.directories[len(measurement.directories)-1]
+			check.protected, check.protectedFacts = true, facts
+			if !measurement.checkDirectory(ctx, *check) {
+				return refuse()
+			}
 		}
 	}
 	approvedPins := map[string]directoryPin{}

@@ -112,6 +112,9 @@ func platformProtectedParent(path string) (*os.File, error) {
 }
 
 func (nativePlatformFacts) file(ctx context.Context, path string) (platformFileFacts, error) {
+	return platformMeasuredFile(ctx, path, 1, 128*1024*1024)
+}
+func platformMeasuredFile(ctx context.Context, path string, minimum, maximum int64) (platformFileFacts, error) {
 	refuse := func() (platformFileFacts, error) { return platformFileFacts{}, &processsvc.NativeFailure{} }
 	if ctx == nil || ctx.Err() != nil {
 		return refuse()
@@ -132,7 +135,7 @@ func (nativePlatformFacts) file(ctx context.Context, path string) (platformFileF
 		return refuse()
 	}
 	before, err := file.Stat()
-	if err != nil || !before.Mode().IsRegular() || before.Size() <= 0 || before.Size() > 128*1024*1024 {
+	if err != nil || !before.Mode().IsRegular() || before.Size() < minimum || before.Size() > maximum {
 		return refuse()
 	}
 	stat, ok := before.Sys().(*syscall.Stat_t)

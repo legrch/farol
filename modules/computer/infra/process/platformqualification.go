@@ -42,7 +42,8 @@ type RootScopedPlatformSupport struct {
 	WatchdogSourceSHA256                                            string
 	Imports                                                         []ExecutablePin
 	Executables                                                     []ExecutablePin
-	ProtectedBundle                                                 *ProtectedBundle `json:",omitempty"`
+	ProtectedBundle                                                 *ProtectedBundle     `json:",omitempty"`
+	GitRuntimeResources                                             *GitRuntimeResources `json:",omitempty"`
 }
 
 // PlatformStrategyBinding is value-only input to the original supervised
@@ -87,6 +88,7 @@ type platformSupport struct {
 	ownerUID   uint32
 	files      []platformFileFacts
 	bundle     *platformDirectoryFacts
+	gitRuntime *gitRuntimeObservation
 }
 
 func NewRootScopedPlatformStrategy(ctx context.Context, support RootScopedPlatformSupport, clock port.Clock) (*RootScopedPlatformStrategy, error) {
@@ -100,6 +102,7 @@ func newRootScopedPlatformStrategy(ctx context.Context, support RootScopedPlatfo
 	support.Imports = slices.Clone(support.Imports)
 	support.Executables = slices.Clone(support.Executables)
 	support.ProtectedBundle = cloneProtectedBundle(support.ProtectedBundle)
+	support.GitRuntimeResources = cloneGitRuntime(support.GitRuntimeResources)
 	digest, err := platformDigest(support)
 	if err != nil {
 		return nil, &processsvc.NativeFailure{}
@@ -115,6 +118,11 @@ func newRootScopedPlatformStrategy(ctx context.Context, support RootScopedPlatfo
 		return nil, err
 	}
 	s.frozen.files = observed
+	resources, err := s.observeGitRuntime(ctx)
+	if err != nil {
+		return nil, err
+	}
+	s.frozen.gitRuntime = resources
 	if support.ProtectedBundle != nil && s.inspect(ctx) != nil {
 		return nil, &processsvc.NativeFailure{}
 	}
@@ -124,6 +132,9 @@ func newRootScopedPlatformStrategy(ctx context.Context, support RootScopedPlatfo
 var platformBuildPattern = regexp.MustCompile(`^[0-9]{1,3}[A-Z][0-9]{1,6}[a-z]?$`)
 
 func validPlatformSupport(s RootScopedPlatformSupport) bool {
+	if !validGitRuntime(s.GitRuntimeResources, s.Executables) || (s.GitRuntimeResources != nil && s.FilesystemClass != rootScopedMountBoundaryClass) {
+		return false
+	}
 	nonzero := func(v string) bool { return digestValue(v) && v != strings.Repeat("0", 64) }
 	if !bindingID(s.ReleaseID) || !nonzero(s.QualificationSHA256) || !nonzero(s.CompilerSHA256) ||
 		s.OS != "darwin" || !platformBuildPattern.MatchString(s.OSBuild) ||
@@ -253,7 +264,8 @@ func (s *RootScopedPlatformStrategy) inspect(ctx context.Context) error {
 	if bundle != nil && s.frozen.bundle != nil {
 		bundleSame = *bundle == *s.frozen.bundle
 	}
-	if err != nil || !slices.Equal(observed, s.frozen.files) || bundleErr != nil || !bundleSame {
+	resources, resourceErr := s.observeGitRuntime(ctx)
+	if err != nil || !slices.Equal(observed, s.frozen.files) || bundleErr != nil || !bundleSame || resourceErr != nil || !sameGitRuntimeObservation(resources, s.frozen.gitRuntime) {
 		return &processsvc.NativeFailure{}
 	}
 	return nil
@@ -287,7 +299,7 @@ func (s *RootScopedPlatformStrategy) Select(ctx context.Context, policy Seatbelt
 		return refuse()
 	}
 	d := s.frozen.descriptor
-	if !sameProtectedBundle(policy.ProtectedBundle, d.ProtectedBundle) || policy.MechanismSHA256 != d.Mechanism.SHA256 || !slices.Equal(policy.Executables, d.Executables) ||
+	if !sameGitRuntime(policy.GitRuntimeResources, d.GitRuntimeResources) || !sameProtectedBundle(policy.ProtectedBundle, d.ProtectedBundle) || policy.MechanismSHA256 != d.Mechanism.SHA256 || !slices.Equal(policy.Executables, d.Executables) ||
 		watchdog.Executable != d.Watchdog || watchdog.SourceSHA256 != d.WatchdogSourceSHA256 ||
 		len(watchdog.Source) == 0 || len(watchdog.Source) > 64*1024 || !utf8.Valid(watchdog.Source) {
 		return refuse()
@@ -307,6 +319,7 @@ func (s *RootScopedPlatformStrategy) Select(ctx context.Context, policy Seatbelt
 	policy.ProtectedImages = slices.Clone(policy.ProtectedImages)
 	policy.ProtectedBundle = cloneProtectedBundle(policy.ProtectedBundle)
 	policy.MountDenials = slices.Clone(policy.MountDenials)
+	policy.GitRuntimeResources = cloneGitRuntime(policy.GitRuntimeResources)
 	if !s.mountBoundariesCurrent(ctx, policy, original) {
 		return refuse()
 	}

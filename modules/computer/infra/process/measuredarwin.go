@@ -80,13 +80,14 @@ type darwinExecutableMeasurement struct {
 	selected ExecutablePin
 	original os.FileInfo
 	ownerUID int
+	dataOnly bool
 	named    func(string) (os.FileInfo, error)
 }
 
 func (p *darwinExecutableMeasurement) Close() error { return p.file.Close() }
 func (p *darwinExecutableMeasurement) unchanged(info os.FileInfo) bool {
-	if info == nil || p.original == nil || !info.Mode().IsRegular() || info.Mode().Perm()&0111 == 0 ||
-		info.Mode().Perm()&0022 != 0 || info.Size() < 0 || info.Size() > 128*1024*1024 ||
+	if info == nil || p.original == nil || !info.Mode().IsRegular() || (!p.dataOnly && info.Mode().Perm()&0111 == 0) ||
+		info.Mode().Perm()&0022 != 0 || info.Size() < 0 || info.Size() > 128*1024*1024 || (p.dataOnly && info.Size() > 256*1024) ||
 		info.Mode() != p.original.Mode() ||
 		info.Size() != p.original.Size() || !info.ModTime().Equal(p.original.ModTime()) {
 		return false
@@ -95,7 +96,8 @@ func (p *darwinExecutableMeasurement) unchanged(info os.FileInfo) bool {
 	original, originalOK := p.original.Sys().(*syscall.Stat_t)
 	return ok && originalOK && stat.Dev == original.Dev && stat.Ino == original.Ino &&
 		stat.Nlink == 1 && stat.Uid == original.Uid &&
-		(stat.Uid == 0 || int(stat.Uid) == p.ownerUID)
+		(stat.Uid == 0 || (!p.dataOnly && int(stat.Uid) == p.ownerUID)) &&
+		(!p.dataOnly || stat.Gid == original.Gid && stat.Ctimespec == original.Ctimespec)
 }
 func (p *darwinExecutableMeasurement) recheck(ctx context.Context) error {
 	refuse := func() error { return &processsvc.NativeFailure{} }

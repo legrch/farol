@@ -112,3 +112,24 @@ func TestShellLaunchRejectsMissingBundleAndChangedSource(t *testing.T) {
 		}
 	}
 }
+
+func TestShellLaunchSharedGitRuntimeProjection(t *testing.T) {
+	data, err := os.ReadFile("../tests/fixtures/shell-launch-git-resources.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixture struct{ Payload json.RawMessage }
+	if json.Unmarshal(data, &fixture) != nil {
+		t.Fatal("invalid resource fixture")
+	}
+	_, launch := shellLaunchFixture(t)
+	config, err := decodeShellLaunch(fixture.Payload, launch)
+	if err != nil || config == nil || config.support.GitRuntimeResources == nil {
+		t.Fatal("resource projection refused", err)
+	}
+	r := config.support.GitRuntimeResources
+	if r.Git.Path != "/Library/Developer/CommandLineTools/usr/bin/git" || len(r.Files) != 2 || len(r.Directories) != 1 ||
+		r.Directories[0].Entries[0] != "description" {
+		t.Fatal("cross-language data resource mapping changed")
+	}
+}

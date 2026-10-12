@@ -88,11 +88,12 @@ type SeatbeltSelection struct {
 	ProtectedImages []ExecutablePin
 	ProtectedBundle *ProtectedBundle `json:",omitempty"`
 	// Measured mount boundaries only restrict existing roots; they never grant access.
-	MountDenials   []string `json:",omitempty"`
-	RootVolumeOnly bool     `json:",omitempty"`
-	Network        authority.Network
-	Git            GitPolicy
-	GitRead        *GitReadSelection
+	MountDenials        []string `json:",omitempty"`
+	RootVolumeOnly      bool     `json:",omitempty"`
+	Network             authority.Network
+	Git                 GitPolicy
+	GitRead             *GitReadSelection
+	GitRuntimeResources *GitRuntimeResources `json:",omitempty"`
 }
 
 // Seatbelt builds the actual restrictive launch. The injected existing native
@@ -105,14 +106,15 @@ type Seatbelt struct {
 	qualification Qualification
 }
 type confinedLaunch struct {
-	command         Command
-	pins            []ExecutablePin
-	roots           []rootScopeBinding
-	gitDirectories  []gitReadDirectory
-	scratch         string
-	scratchIdentity authority.RootIdentity
-	protectedBundle *ProtectedBundle
-	qualification   Qualification
+	command             Command
+	pins                []ExecutablePin
+	roots               []rootScopeBinding
+	gitDirectories      []gitReadDirectory
+	scratch             string
+	scratchIdentity     authority.RootIdentity
+	protectedBundle     *ProtectedBundle
+	qualification       Qualification
+	gitRuntimeResources *GitRuntimeResources
 }
 
 func NewSeatbelt(selection SeatbeltSelection, qualification Qualification) (*Seatbelt, error) {
@@ -139,6 +141,7 @@ func NewSeatbelt(selection SeatbeltSelection, qualification Qualification) (*Sea
 	selection.ProtectedImages = append([]ExecutablePin(nil), selection.ProtectedImages...)
 	selection.ProtectedBundle = cloneProtectedBundle(selection.ProtectedBundle)
 	selection.MountDenials = slices.Clone(selection.MountDenials)
+	selection.GitRuntimeResources = cloneGitRuntime(selection.GitRuntimeResources)
 	if selection.GitRead != nil {
 		binding := *selection.GitRead
 		selection.GitRead = &binding
@@ -189,7 +192,7 @@ func selectedLaunch(qualification Qualification, command Command) (*confinedLaun
 		return nil, &processsvc.NativeFailure{}
 	}
 	return &confinedLaunch{command: wrapped, pins: slices.Concat([]ExecutablePin{{seatbeltExecutable, selected.selection.MechanismSHA256}}, selected.selection.Executables, selected.selection.ProtectedImages),
-		protectedBundle: cloneProtectedBundle(selected.selection.ProtectedBundle), roots: append([]rootScopeBinding(nil), plan.roots...), gitDirectories: append([]gitReadDirectory(nil), plan.gitDirectories...), scratch: selected.selection.Scratch, scratchIdentity: selected.selection.ScratchIdentity, qualification: selected.qualification}, nil
+		gitRuntimeResources: cloneGitRuntime(selected.selection.GitRuntimeResources), protectedBundle: cloneProtectedBundle(selected.selection.ProtectedBundle), roots: append([]rootScopeBinding(nil), plan.roots...), gitDirectories: append([]gitReadDirectory(nil), plan.gitDirectories...), scratch: selected.selection.Scratch, scratchIdentity: selected.selection.ScratchIdentity, qualification: selected.qualification}, nil
 }
 
 // Qualify delegates the exact wrapped invocation to the existing evidence port.
@@ -265,6 +268,9 @@ func protectedScope(root, home string) bool {
 }
 
 func validSelection(s SeatbeltSelection) bool {
+	if !validGitRuntime(s.GitRuntimeResources, s.Executables) || (s.GitRuntimeResources != nil && (s.FilePolicy != authority.RootScopedFiles || s.Git != RootScopedGit)) {
+		return false
+	}
 	if s.Snapshot.Participant == nil || s.Snapshot.Approval == nil || !bindingID(s.RuntimeID) || !bindingID(s.WorkspaceID) || !absolutePolicyPath(s.Home) || !absolutePolicyPath(s.Scratch) ||
 		!digestValue(s.MechanismSHA256) || s.ScratchIdentity.Device == "" || s.ScratchIdentity.Inode == "" || len(s.Executables) == 0 || len(s.Executables) > 16 || len(s.ProtectedImages) > 16 ||
 		(s.FilePolicy != authority.RootScopedFiles && (len(s.ProtectedImages) != 0 || s.ProtectedBundle != nil)) ||
@@ -391,6 +397,28 @@ func compileSeatbelt(s SeatbeltSelection, command Command) (*seatbeltPlan, error
 	}
 	add("subpath", s.Scratch, &reads)
 	add("subpath", s.Scratch, &writes)
+	var resourceVolume []string
+	if r := s.GitRuntimeResources; r != nil {
+		for _, file := range r.Files {
+			add("literal", file.Path, &reads)
+			add("literal", file.Path, &executableWrites)
+			add("literal", file.Path, &resourceVolume)
+		}
+		for _, dir := range r.Directories {
+			add("literal", dir.Path, &reads)
+			add("literal", dir.Path, &executableWrites)
+			add("literal", dir.Path, &resourceVolume)
+		}
+		seenParents := map[string]bool{}
+		for _, file := range r.Files {
+			for ancestor := filepath.Dir(file.Path); ancestor != "/"; ancestor = filepath.Dir(ancestor) {
+				if !seenParents[ancestor] {
+					seenParents[ancestor] = true
+					add("literal", ancestor, &parents)
+				}
+			}
+		}
+	}
 	for _, pin := range s.Executables {
 		add("literal", pin.Path, &execs)
 		add("literal", pin.Path, &reads)
@@ -410,6 +438,9 @@ func compileSeatbelt(s SeatbeltSelection, command Command) (*seatbeltPlan, error
 		// unlink denials grant no access and preserve ordinary sibling writes.
 		seen := map[string]bool{}
 		protected := slices.Concat(s.Executables, s.ProtectedImages)
+		if s.GitRuntimeResources != nil {
+			protected = append(protected, s.GitRuntimeResources.Files...)
+		}
 		if s.ProtectedBundle != nil {
 			protected = append(protected, ExecutablePin{Path: s.ProtectedBundle.Path})
 		}
@@ -470,6 +501,12 @@ func compileSeatbelt(s SeatbeltSelection, command Command) (*seatbeltPlan, error
 (allow process-exec ` + strings.Join(execs, " ") + `)
 (allow file-write* (literal "/dev/null") (literal "/dev/stdout") (literal "/dev/stderr") (regex #"^/dev/fd/[0-9]+$") ` + strings.Join(writes, " ") + `)
 (deny file-write* ` + strings.Join(executableWrites, " ") + `)`
+	if len(resourceVolume) > 0 {
+		// Data-only grants never become executable, including inside a broad root.
+		// Evaluate the filesystem boundary on every access, not only at launch.
+		source += "\n(deny process-exec " + strings.Join(resourceVolume, " ") + ")"
+		source += "\n(deny file-read* file-write* process-exec (require-all (require-any " + strings.Join(resourceVolume, " ") + ") (require-not (require-all (mount-root-literal \"/\") (filesystem-name \"apfs\")))))"
+	}
 	if s.RootVolumeOnly {
 		// The kernel evaluates the mount root on every access, including volumes
 		// attached after execution starts. Data firmlinks have logical mount root /.
@@ -527,16 +564,17 @@ func compileSeatbelt(s SeatbeltSelection, command Command) (*seatbeltPlan, error
 	// Keep policy input out of the profile language: paths are only -D values.
 	arguments := append(parameters, "-p", source, "--")
 	encoded, err := json.Marshal(struct {
-		Source          string
-		Arguments       []string
-		ScratchIdentity authority.RootIdentity
-		Pins            []ExecutablePin
-		ProtectedImages []ExecutablePin    `json:",omitempty"`
-		Roots           []rootScopeBinding `json:",omitempty"`
-		GitRead         *GitReadSelection  `json:",omitempty"`
-		GitDirectories  []gitReadDirectory `json:",omitempty"`
-		ProtectedBundle *ProtectedBundle   `json:",omitempty"`
-	}{source, arguments, s.ScratchIdentity, s.Executables, s.ProtectedImages, sealedRoots, s.GitRead, gitDirectories, s.ProtectedBundle})
+		Source              string
+		Arguments           []string
+		ScratchIdentity     authority.RootIdentity
+		Pins                []ExecutablePin
+		ProtectedImages     []ExecutablePin      `json:",omitempty"`
+		Roots               []rootScopeBinding   `json:",omitempty"`
+		GitRead             *GitReadSelection    `json:",omitempty"`
+		GitDirectories      []gitReadDirectory   `json:",omitempty"`
+		ProtectedBundle     *ProtectedBundle     `json:",omitempty"`
+		GitRuntimeResources *GitRuntimeResources `json:",omitempty"`
+	}{source, arguments, s.ScratchIdentity, s.Executables, s.ProtectedImages, sealedRoots, s.GitRead, gitDirectories, s.ProtectedBundle, s.GitRuntimeResources})
 	if err != nil {
 		return refuse()
 	}

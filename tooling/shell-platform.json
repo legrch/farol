@@ -1,6 +1,6 @@
 {
   "schema": "farol-shell-platform/1",
-  "id": "macos-26A434-arm64-root-volume-v2",
+  "id": "macos-26A434-arm64-root-volume-git-data-v3",
   "osBuild": "26A434",
   "compiler": "approved-roots-seatbelt-v1",
   "filesystemClass": "system-apfs-kernel-mount-boundaries-v1",
@@ -25,7 +25,7 @@
     },
     {
       "path": "modules/computer/infra/process/confinement.go",
-      "sha256": "9fa1a37f0421bb17a607a010f61423f541b652d77f7d97bea7b77552b74b73c4"
+      "sha256": "2ee7d25477f00edf9ff3bbb927eb287a10b116a35582327a70e72b790cc4592e"
     },
     {
       "path": "modules/computer/infra/process/darwin.go",
@@ -38,6 +38,14 @@
     {
       "path": "modules/computer/infra/process/gitread.go",
       "sha256": "53aa23929ef970bfb3de6a6965d873961ea3f2ac95132a4830593b5e2ba4e282"
+    },
+    {
+      "path": "modules/computer/infra/process/gitruntime.go",
+      "sha256": "5246a7b0f30cf89ec6eacec446d3fd5c1d78f7f8547b5abb24a896c1e6573f9f"
+    },
+    {
+      "path": "modules/computer/infra/process/gitruntimedarwin.go",
+      "sha256": "93e30d6daf136e709e10b186e23719e636c8b189b05d03dfe972f13622e8ed31"
     },
     {
       "path": "modules/computer/infra/process/heldguest.go",
@@ -53,11 +61,11 @@
     },
     {
       "path": "modules/computer/infra/process/measuredarwin.go",
-      "sha256": "c510ef93f9fb40ee31acb3e6831addd918124fdb9dddcc562ef90c5e405367df"
+      "sha256": "2b868613983b374af47ea70615f822b9edf04fd687af18773a849a46448c4244"
     },
     {
       "path": "modules/computer/infra/process/measurement.go",
-      "sha256": "9ad3e71952733d4778a37d89fc55646363bfa8c61ca832001f229dcf43d61e46"
+      "sha256": "ebf7fea63c21358fa2d90ba0830a5c1dbfdeb72d249471d64940758fd55d495e"
     },
     {
       "path": "modules/computer/infra/process/measureother.go",
@@ -93,11 +101,11 @@
     },
     {
       "path": "modules/computer/infra/process/platformqualification.go",
-      "sha256": "5a6f30f64bf871eb2988f1126b1b10af4b9ca1937bd68615fd464708b9bfcd83"
+      "sha256": "60462dfddd628649d384554fbe6134b076739c732fc9a14f4fcf3e0027a62395"
     },
     {
       "path": "modules/computer/infra/process/platformqualificationdarwin.go",
-      "sha256": "864092d1d53b368938434d9bf3234202660d14ac7f651cd801ce6f38697ff4e9"
+      "sha256": "a0b95e5b1464d22b10290ffc2f591a83d24cb217a9a7014af198acb803065123"
     },
     {
       "path": "modules/computer/infra/process/platformqualificationother.go",
@@ -203,5 +211,110 @@
     "treeDigestVersion": "farol.next.tree-digest/v2",
     "treeSHA256": "74c981ff1037632abb28499d4f8127cddafd459130109c7a3c7695be94de2e12",
     "distributionSHA256": "52f8354eacad1dbe43ee12345b0fa9e1fc7de137f77571abbe12efbbc896aad8"
+  },
+  "gitRuntimeResources": {
+    "git": {
+      "path": "/Library/Developer/CommandLineTools/usr/bin/git",
+      "sha256": "74b90b9f97ec79bfe7886a4fc6132533b3e1014ef4195d28abd1ca9bf321f34a"
+    },
+    "files": [
+      {
+        "path": "/Library/Developer/CommandLineTools/usr/share/git-core/gitconfig",
+        "sha256": "d9edd909b86735d18b57095355e8f16a67f2a557d02431bb223854291eb6e653"
+      },
+      {
+        "path": "/Library/Developer/CommandLineTools/usr/share/git-core/templates/description",
+        "sha256": "85ab6c163d43a17ea9cf7788308bca1466f1b0a8d1cc92e26e9bf63da4062aee"
+      },
+      {
+        "path": "/Library/Developer/CommandLineTools/usr/share/git-core/templates/hooks/applypatch-msg.sample",
+        "sha256": "0223497a0b8b033aa58a3a521b8629869386cf7ab0e2f101963d328aa62193f7"
+      },
+      {
+        "path": "/Library/Developer/CommandLineTools/usr/share/git-core/templates/hooks/commit-msg.sample",
+        "sha256": "1f74d5e9292979b573ebd59741d46cb93ff391acdd083d340b94370753d92437"
+      },
+      {
+        "path": "/Library/Developer/CommandLineTools/usr/share/git-core/templates/hooks/fsmonitor-watchman.sample",
+        "sha256": "e0549964e93897b519bd8e333c037e51fff0f88ba13e086a331592bf801fa1d0"
+      },
+      {
+        "path": "/Library/Developer/CommandLineTools/usr/share/git-core/templates/hooks/post-update.sample",
+        "sha256": "81765af2daef323061dcbc5e61fc16481cb74b3bac9ad8a174b186523586f6c5"
+      },
+      {
+        "path": "/Library/Developer/CommandLineTools/usr/share/git-core/templates/hooks/pre-applypatch.sample",
+        "sha256": "e15c5b469ea3e0a695bea6f2c82bcf8e62821074939ddd85b77e0007ff165475"
+      },
+      {
+        "path": "/Library/Developer/CommandLineTools/usr/share/git-core/templates/hooks/pre-commit.sample",
+        "sha256": "57185b7b9f05239d7ab52db045f5b89eb31348d7b2177eab214f5eb872e1971b"
+      },
+      {
+        "path": "/Library/Developer/CommandLineTools/usr/share/git-core/templates/hooks/pre-merge-commit.sample",
+        "sha256": "d3825a70337940ebbd0a5c072984e13245920cdf8898bd225c8d27a6dfc9cb53"
+      },
+      {
+        "path": "/Library/Developer/CommandLineTools/usr/share/git-core/templates/hooks/pre-push.sample",
+        "sha256": "ecce9c7e04d3f5dd9d8ada81753dd1d549a9634b26770042b58dda00217d086a"
+      },
+      {
+        "path": "/Library/Developer/CommandLineTools/usr/share/git-core/templates/hooks/pre-rebase.sample",
+        "sha256": "4febce867790052338076f4e66cc47efb14879d18097d1d61c8261859eaaa7b3"
+      },
+      {
+        "path": "/Library/Developer/CommandLineTools/usr/share/git-core/templates/hooks/pre-receive.sample",
+        "sha256": "a4c3d2b9c7bb3fd8d1441c31bd4ee71a595d66b44fcf49ddb310252320169989"
+      },
+      {
+        "path": "/Library/Developer/CommandLineTools/usr/share/git-core/templates/hooks/prepare-commit-msg.sample",
+        "sha256": "e9ddcaa4189fddd25ed97fc8c789eca7b6ca16390b2392ae3276f0c8e1aa4619"
+      },
+      {
+        "path": "/Library/Developer/CommandLineTools/usr/share/git-core/templates/hooks/push-to-checkout.sample",
+        "sha256": "a53d0741798b287c6dd7afa64aee473f305e65d3f49463bb9d7408ec3b12bf5f"
+      },
+      {
+        "path": "/Library/Developer/CommandLineTools/usr/share/git-core/templates/hooks/sendemail-validate.sample",
+        "sha256": "44ebfc923dc5466bc009602f0ecf067b9c65459abfe8868ddc49b78e6ced7a92"
+      },
+      {
+        "path": "/Library/Developer/CommandLineTools/usr/share/git-core/templates/hooks/update.sample",
+        "sha256": "8d5f2fa83e103cf08b57eaa67521df9194f45cbdbcb37da52ad586097a14d106"
+      },
+      {
+        "path": "/Library/Developer/CommandLineTools/usr/share/git-core/templates/info/exclude",
+        "sha256": "6671fe83b7a07c8932ee89164d1f2793b2318058eb8b98dc5c06ee0a5a3b0ec1"
+      }
+    ],
+    "directories": [
+      {
+        "path": "/Library/Developer/CommandLineTools/usr/share/git-core/templates",
+        "entries": ["description", "hooks", "info"]
+      },
+      {
+        "path": "/Library/Developer/CommandLineTools/usr/share/git-core/templates/hooks",
+        "entries": [
+          "applypatch-msg.sample",
+          "commit-msg.sample",
+          "fsmonitor-watchman.sample",
+          "post-update.sample",
+          "pre-applypatch.sample",
+          "pre-commit.sample",
+          "pre-merge-commit.sample",
+          "pre-push.sample",
+          "pre-rebase.sample",
+          "pre-receive.sample",
+          "prepare-commit-msg.sample",
+          "push-to-checkout.sample",
+          "sendemail-validate.sample",
+          "update.sample"
+        ]
+      },
+      {
+        "path": "/Library/Developer/CommandLineTools/usr/share/git-core/templates/info",
+        "entries": ["exclude"]
+      }
+    ]
   }
 }

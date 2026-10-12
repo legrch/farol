@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import fixture from "../fixtures/shell-launch.json";
+import gitResourceFixture from "../fixtures/shell-launch-git-resources.json";
 import { encodeShellLaunch } from "../../apps/desktop/bridge/shell-launch.ts";
 
 const host = () => ({
@@ -71,4 +72,15 @@ describe("private Shell launch projection", () => {
         ),
       ).toThrow("invalid_shell_launch_metadata");
   });
+});
+
+it("projects the same finite Git data group decoded by Go", () => {
+  const input = structuredClone(gitResourceFixture.declaration);
+  const actual = encodeShellLaunch(input, structuredClone(input), input.core, {
+    ...structuredClone(gitResourceFixture.host),
+    watchdogSource: Buffer.from(gitResourceFixture.host.watchdogSource),
+  });
+  expect(JSON.parse(Buffer.from(actual).toString("utf8"))).toEqual(
+    gitResourceFixture.payload,
+  );
 });

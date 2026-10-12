@@ -20,7 +20,7 @@ function freeze(value) {
 export const SHELL_PLATFORM = freeze(platform);
 const processDirectory = "modules/computer/infra/process";
 
-async function readPinned(root, relative, expected) {
+async function readPinned(root, relative, expected, minimum = 1n) {
   const file = path.join(root, relative);
   if ((await fs.realpath(file)) !== file)
     throw new Error("SHELL_SUPPORT_INPUT_REDIRECTED");
@@ -33,7 +33,7 @@ async function readPinned(root, relative, expected) {
     if (
       !before.isFile() ||
       before.nlink !== 1n ||
-      before.size < 1n ||
+      before.size < minimum ||
       before.size > 256n * 1024n
     )
       throw new Error("SHELL_SUPPORT_INPUT_INVALID");
@@ -94,6 +94,59 @@ function watchdogLiteral(bytes) {
   return result;
 }
 
+// The checked-in resource closure is verified, never learned from current bytes.
+// Go repeats ownership, identities, listings, hashes and filesystem checks.
+export async function verifyHostShellResources() {
+  const resources = SHELL_PLATFORM.gitRuntimeResources;
+  if (!resources) return;
+  const parents = new Set();
+  for (const item of [...resources.files, ...resources.directories]) {
+    for (
+      let dir = path.dirname(item.path);
+      dir !== "/";
+      dir = path.dirname(dir)
+    )
+      parents.add(dir);
+  }
+  for (const dir of [...parents, ...resources.directories.map((d) => d.path)]) {
+    const info = await fs.lstat(dir);
+    if (
+      !info.isDirectory() ||
+      info.isSymbolicLink() ||
+      info.uid !== 0 ||
+      (info.mode & 0o022) !== 0 ||
+      (await fs.realpath(dir)) !== dir
+    )
+      throw new Error("SHELL_SUPPORT_RESOURCE_PARENT_INVALID");
+  }
+  for (const file of resources.files) {
+    const info = await fs.lstat(file.path);
+    if (
+      !info.isFile() ||
+      info.isSymbolicLink() ||
+      info.uid !== 0 ||
+      (info.mode & 0o022) !== 0
+    )
+      throw new Error("SHELL_SUPPORT_RESOURCE_INVALID");
+    await readPinned("/", file.path, file.sha256, 0n);
+  }
+  for (const dir of resources.directories) {
+    const before = await fs.lstat(dir.path, { bigint: true });
+    const entries = (await fs.readdir(dir.path)).sort();
+    const after = await fs.lstat(dir.path, { bigint: true });
+    if (
+      JSON.stringify(entries) !== JSON.stringify(dir.entries) ||
+      before.dev !== after.dev ||
+      before.ino !== after.ino ||
+      before.mode !== after.mode ||
+      before.uid !== after.uid ||
+      before.mtimeNs !== after.mtimeNs ||
+      before.ctimeNs !== after.ctimeNs
+    )
+      throw new Error("SHELL_SUPPORT_RESOURCE_DIRECTORY_CHANGED");
+  }
+}
+
 // The exact production builder calls this only AFTER authenticating its Go
 // output. The backend digest is an output binding, not embedded into itself.
 // Runtime/native owners subsequently compare platform measurements to these
@@ -145,6 +198,9 @@ export async function declareShellSupport(repositoryRoot, core, identity) {
     mechanism: SHELL_PLATFORM.mechanism,
     imports: SHELL_PLATFORM.imports,
     executables: SHELL_PLATFORM.executables,
+    ...(SHELL_PLATFORM.gitRuntimeResources
+      ? { gitRuntimeResources: SHELL_PLATFORM.gitRuntimeResources }
+      : {}),
     watchdog: {
       relativePath:
         "Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron",
