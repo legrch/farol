@@ -15,7 +15,7 @@ func TestSupervisedResultPreservesRootFactsWithoutCleanupPromotion(t *testing.T)
 		o.GroupCleanup, o.DescendantCleanup = CleanupUnverified, CleanupUnverified
 	}
 	read, err := f.s.Read(context.Background(), ReadRequest{Handle: f.child.handle})
-	if err != nil || read.State != Unknown || f.s.uncertain {
+	if err != nil || read.State != Running || f.s.uncertain || f.s.terminal || read.Observation.Root != RootExited || read.Observation.ExitCode == nil {
 		t.Fatal("pending supervisor either claimed completion or poisoned original observation", read, err)
 	}
 	supervisor = SupervisorExited

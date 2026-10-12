@@ -250,10 +250,11 @@ function observation(
       );
     case "running":
       return (
-        data.rootState === "running" &&
-        !cleanupUnverified &&
-        (data.supervisorState === undefined ||
-          data.supervisorState === "running")
+        (data.rootState === "exited" && data.supervisorState === "running") ||
+        (data.rootState === "running" &&
+          !cleanupUnverified &&
+          (data.supervisorState === undefined ||
+            data.supervisorState === "running"))
       );
   }
 }

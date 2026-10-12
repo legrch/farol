@@ -103,8 +103,10 @@ func TestWatchdogSupervisorKnownExitRequiresRootScopedSelectionAndHelperWait(t *
 			f := newSupervisorWatchdogFixture(t, rootScoped)
 			start := f.start(t)
 			pending := processcontract.SupervisorState("")
+			pendingState := processcontract.Unknown
 			if rootScoped {
 				pending = processcontract.SupervisorRunning
+				pendingState = processcontract.Running
 			}
 			initial := readSupervisorWatchdog(t, f, start.Handle)
 			if initial.Supervisor != pending || initial.State != processcontract.Running {
@@ -115,7 +117,7 @@ func TestWatchdogSupervisorKnownExitRequiresRootScopedSelectionAndHelperWait(t *
 				supervisorWatchdogEvent(t, f, kind)
 				out := readSupervisorWatchdog(t, f, start.Handle)
 				requireSupervisorRootFacts(t, out, kind == "close")
-				if out.Supervisor != pending || out.State != processcontract.Unknown {
+				if out.Supervisor != pending || out.State != pendingState {
 					t.Fatal("root facts alone supplied helper completion", out)
 				}
 				select {
@@ -192,7 +194,7 @@ func TestWatchdogSupervisorCancellationCannotUpgradeKnownRoot(t *testing.T) {
 			supervisorWatchdogEvent(t, f, "stdout")
 			supervisorWatchdogEvent(t, f, "close")
 			out := readSupervisorWatchdog(t, f, start.Handle)
-			if out.State != processcontract.Unknown || out.Supervisor != processcontract.SupervisorRunning {
+			if out.State != processcontract.Running || out.Supervisor != processcontract.SupervisorRunning {
 				t.Fatal("held helper prematurely settled", out)
 			}
 			cancel, err := f.route.Cancel(context.Background(), processcontract.CancelRequest{Handle: start.Handle})

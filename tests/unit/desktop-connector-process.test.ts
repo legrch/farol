@@ -416,6 +416,31 @@ it("refuses cancellation with the original operation ID before dispatch", async 
   ).rejects.toMatchObject({ state: "refused" });
   expect(request).not.toHaveBeenCalled();
 });
+it.each([true, false])(
+  "keeps the original supervisor observable after root exit (drained=%s)",
+  async (outputDrained) => {
+    const selected = {
+      ...exited(),
+      state: "running",
+      supervisorState: "running",
+      outputDrained,
+    };
+    const fixture = setup("read", outcome("read", selected));
+    const out = await fixture.bridge.read(readInput, call);
+    expect(out.status).toBe("ok");
+    expect(out.data).toMatchObject({
+      state: "running",
+      rootState: "exited",
+      exitCode: 0,
+      supervisorState: "running",
+      groupCleanup: "unverified",
+      descendantCleanup: "unverified",
+      outputDrained,
+    });
+    expect(fixture.request).toHaveBeenCalledTimes(1);
+  },
+);
+
 it.each([
   "-1",
   "01",

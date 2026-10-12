@@ -108,6 +108,11 @@ func (s *Service) read(ctx context.Context, request ReadRequest, current func(co
 		state := Running
 		if s.uncertain {
 			state = Unknown
+		} else if out.Root == RootExited && out.Supervisor == SupervisorRunning {
+			// Running describes the original execution lifecycle. A known root
+			// exit can precede supervisor Wait/output drain; keep it observable
+			// without claiming completion or converting progress into UNKNOWN.
+			state = Running
 		} else if completedState(out) != Unknown {
 			state = completedState(out)
 		} else if out.Root == RootExited || out.GroupCleanup == CleanupUnverified || out.DescendantCleanup == CleanupUnverified {
