@@ -465,6 +465,12 @@ func compileSeatbelt(s SeatbeltSelection, command Command) (*seatbeltPlan, error
 		// not grant arbitrary sysctl reads/writes or relax file/network policy.
 		source += `
 (allow sysctl-read (sysctl-name "hw.pagesize_compat") (sysctl-name "hw.ncpu"))`
+		// Ordinary Git checks its optional system configuration even when absent.
+		// Metadata makes absence observable; configuration contents and includes
+		// still need an explicit approved root, with no environment override.
+		if s.Git == RootScopedGit {
+			source += "\n(allow file-read-metadata file-test-existence (literal \"/etc\") (literal \"/private/etc\") (literal \"/etc/gitconfig\") (literal \"/private/etc/gitconfig\"))"
+		}
 		for _, anchor := range rootAnchors {
 			// Preserve the named root across operations; this is not a filename ban.
 			source += "\n(deny file-write-unlink (require-all " + anchor + " (vnode-type DIRECTORY)))"

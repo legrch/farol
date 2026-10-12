@@ -563,3 +563,26 @@ owner state or provider and has no kill/relaunch fallback. This does not repair 
 qualify native permissions, prove full detached-descendant cleanup or qualify the
 NEW connector. The full mandatory gate remains blocked; earlier source/package
 receipts do not apply to these new bytes.
+
+## Ordinary Git native fixture, 12 October 2026
+
+`TestNativeRootScopedOrdinaryGitWorkflow` exercises a disposable project and an
+explicitly granted synthetic HOME with the Command Line Tools Git executable.
+It keeps ordinary system/global/repository configuration resolution: no
+`GIT_CONFIG_SYSTEM`, `GIT_CONFIG_GLOBAL`, `GIT_CONFIG_NOSYSTEM`, hook suppression,
+or signing override. Global and repository includes and real pre-commit,
+commit-msg and post-commit hooks participate in the one original workflow.
+
+The first native attempt exposed an optional system-config lookup failure:
+`/etc/gitconfig` did not exist, but confinement returned EPERM instead of letting
+Git observe absence. The root-scoped profile now grants metadata/existence checks
+only for `/etc`, `/private/etc` and the two exact `gitconfig` spellings. It grants
+no config content, child directory, write or execution access. A present config
+and its includes still need approved read scope. Merely setting HOME adds none.
+
+With that correction the native fixture passed Git init/status/diff/add/commit/log,
+config-origin checks, all three hooks, and a Bash/sh project FAIL/fix/PASS cycle.
+Independent file/ref readback, root exit and stdout/stderr EOF were verified.
+This is native compiler/fixture evidence, not external ChatGPT or installed Shell
+acceptance, arbitrary signing support, or complete descendant settlement.
+The separate [mount-boundary limitation](computer-mount-boundaries.md) remains open.

@@ -254,3 +254,27 @@ func TestRootScopedSeatbeltRequiresCapturedOwnerFilePolicy(t *testing.T) {
 		}
 	}
 }
+
+func TestRootScopedGitSystemConfigChecksGrantNoContents(t *testing.T) {
+	s, command := rootScopedFixture(t)
+	plan, err := compileSeatbelt(s, command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const metadata = `(allow file-read-metadata file-test-existence (literal "/etc") (literal "/private/etc") (literal "/etc/gitconfig") (literal "/private/etc/gitconfig"))`
+	if !strings.Contains(plan.source, metadata) {
+		t.Fatal("optional system config cannot be inspected for absence")
+	}
+	for _, line := range strings.Split(plan.source, "\n") {
+		if strings.Contains(line, "/etc") && line != metadata {
+			t.Fatal("system config received another filesystem grant", line)
+		}
+	}
+	// The compatibility profile continues to suppress global/system config; it
+	// cannot silently acquire even the new metadata/existence exception.
+	_, legacy, legacyCommand, _ := confinementFixture(t)
+	old, err := compileSeatbelt(legacy, legacyCommand)
+	if err != nil || strings.Contains(old.source, "gitconfig") {
+		t.Fatal("legacy policy changed", err)
+	}
+}
