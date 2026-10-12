@@ -38,6 +38,7 @@ import {
 } from "./bridge/wire.ts";
 import { qualifyProfileLaunch } from "./bridge/profile.ts";
 import { openNativeProfileStorage } from "./bridge/profile-storage.ts";
+import { verifyCoreResources } from "./bridge/core-resources.ts";
 import { GoComputerAuthority } from "./go-computer-authority.ts";
 import type { BuildIdentity } from "../../src/pkg/build-info/identity";
 import type { ProductSettings } from "../../src/pkg/product-settings/contract";
@@ -53,6 +54,7 @@ export type DesktopCoreSelection = Readonly<{
   // Compiled into this host by the exact production builder, not environment,
   // renderer data, a runtime file's own claim or a freshly measured binary hash.
   compiledArtifact: unknown;
+  compiledResources?: unknown;
   // Captured before the new host writes its run marker. Only the exact prior
   // host's confirmed drain can clear that marker; Go terminal bytes cannot.
   previousHostDrainConfirmed: boolean;
@@ -497,6 +499,18 @@ export async function startDesktopGoCore(
   );
   if (JSON.stringify(artifact) !== JSON.stringify(expected))
     throw new BridgeError("refused", "core_host_artifact_mismatch");
+  // New builds carry this independent closure. Older fixture/host selections
+  // remain compatible; Shell activation must require the completed closure.
+  if (
+    selection.compiledResources !== undefined &&
+    selection.compiledResources !== null
+  )
+    await verifyCoreResources(
+      selection.artifactRoot,
+      selection.compiledResources,
+      expected,
+      performance.now() + 2000,
+    );
   const storage = openNativeProfileStorage(
     selection.stateRoot,
     settings.computer.computerId,

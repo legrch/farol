@@ -1,6 +1,7 @@
 import { buildGoBackend } from "./go-backend-build.mjs";
 import { readGoBuildInputs } from "./go-build-inputs.mjs";
 import { embedBuiltCore, GO_CORE_ENTRIES } from "./go-core-artifact.mjs";
+import { declareCoreResources } from "./core-resources.mjs";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -183,7 +184,11 @@ await Promise.all([
   build({
     ...common,
     entryPoints: ["src/apps/desktop/desktop-entry.ts"],
-    define: { ...common.define, __FAROL_GO_CORE__: "null" },
+    define: {
+      ...common.define,
+      __FAROL_GO_CORE__: "null",
+      __FAROL_GO_RESOURCES__: "null",
+    },
     outfile: "_output/build/app/main.cjs",
     platform: "node",
     format: "cjs",
@@ -386,6 +391,7 @@ if (goInputs) {
     moduleInputs: goInputs.moduleInputs,
   });
   core = await embedBuiltCore(output, built, buildIdentity);
+  const coreResources = await declareCoreResources(output, core, buildIdentity);
   // Compile the independent producer declaration into the host. Runtime must
   // not invent its expected backend digest by measuring the file it will spawn.
   // This is the same source/identity/compiler, not another candidate producer.
@@ -394,7 +400,11 @@ if (goInputs) {
   await build({
     ...common,
     entryPoints: ["src/apps/desktop/desktop-entry.ts"],
-    define: { ...common.define, __FAROL_GO_CORE__: JSON.stringify(core) },
+    define: {
+      ...common.define,
+      __FAROL_GO_CORE__: JSON.stringify(core),
+      __FAROL_GO_RESOURCES__: JSON.stringify(coreResources),
+    },
     outfile: "_output/build/app/main.cjs",
     platform: "node",
     format: "cjs",
@@ -405,6 +415,11 @@ if (goInputs) {
   );
   if (JSON.stringify(afterHostLedger) !== inputLedgerBytes)
     throw new Error("GO_HOST_INPUTS_CHANGED");
+  if (
+    JSON.stringify(await declareCoreResources(output, core, buildIdentity)) !==
+    JSON.stringify(coreResources)
+  )
+    throw new Error("GO_HOST_RESOURCES_CHANGED");
   if (
     dependencyDrift(
       root,

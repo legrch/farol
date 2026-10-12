@@ -232,6 +232,16 @@ by this check. This attests vendor runtime bytes and containing directory
 identities only. Farol-owned resource bytes, the trusted running host, release
 qualification and normal startup selection remain separate requirements.
 
+New Go builds compile `farol-core-resources/1` into the trusted desktop host
+after producing the backend and other build entries. The builder rechecks that
+projection after compiling the host. Normal startup verifies those independent
+file digests before opening the profile or starting Go, with bounded reads and
+a final identity sweep. The running `main.cjs` is the trusted loader and cannot
+contain its own resulting hash; the final build/package manifests still cover
+it. Package-only metadata is outside this projection. Legacy fixture/host
+selections without the optional projection retain their prior File Computer
+behavior; they do not gain Shell qualification.
+
 Remaining qualification and integration:
 
 1. The normal native Shell producer remains withheld. Before exposing it, select

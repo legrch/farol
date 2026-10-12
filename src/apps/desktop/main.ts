@@ -47,6 +47,7 @@ import {
   readAccountFailure,
 } from "../../../apps/desktop/read-account-commands";
 declare const __FAROL_GO_CORE__: unknown;
+declare const __FAROL_GO_RESOURCES__: unknown;
 import { createMenuBar } from "./menu-bar";
 import { promises as rawFs } from "original-fs";
 import {
@@ -484,6 +485,8 @@ const directory = __dirname;
 // failed launch, publication or operation. The builder supplies this constant.
 const compiledGoCore =
   typeof __FAROL_GO_CORE__ === "undefined" ? null : __FAROL_GO_CORE__;
+const compiledGoResources =
+  typeof __FAROL_GO_RESOURCES__ === "undefined" ? null : __FAROL_GO_RESOURCES__;
 let desktopGoCore: DesktopGoCore | null = null;
 const buildIdentity = readRuntimeBuildIdentity(directory);
 const productName = buildIdentity.product;
@@ -11195,6 +11198,7 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
     desktopGoCore = await runDesktopStartupBoundary("go-core", () =>
       startDesktopGoCore({
         compiledArtifact: compiledGoCore,
+        compiledResources: compiledGoResources,
         previousHostDrainConfirmed: previousRunClean,
         build: buildIdentity,
         artifactRoot: directory,

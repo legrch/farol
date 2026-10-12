@@ -38,6 +38,7 @@ const ports = vi.hoisted(() => ({
   close: vi.fn(),
   provision: vi.fn(),
   qualify: vi.fn(),
+  resources: vi.fn(async () => undefined),
   spawn: vi.fn(() => {
     throw new Error("Real child creation is forbidden in this fixture");
   }),
@@ -74,6 +75,9 @@ vi.mock("../../apps/desktop/bridge/profile-storage.ts", () => ({
 }));
 vi.mock("../../apps/desktop/bridge/profile.ts", () => ({
   qualifyProfileLaunch: ports.qualify,
+}));
+vi.mock("../../apps/desktop/bridge/core-resources.ts", () => ({
+  verifyCoreResources: ports.resources,
 }));
 vi.mock(
   "../../src/modules/computer/infra/native/native-readonly-workspace",
@@ -493,6 +497,24 @@ describe("normal Go host startup", () => {
     },
   );
 
+  it("checks compiled resources before provisioning or spawning", async () => {
+    const compiledResources = { synthetic: "independent-resource-selection" };
+    const failure = new BridgeError("refused", "core_resources_unqualified");
+    ports.resources.mockRejectedValueOnce(failure);
+    await expect(
+      startDesktopGoCore({ ...selection, compiledResources }),
+    ).rejects.toBe(failure);
+    expect(ports.resources).toHaveBeenCalledExactlyOnceWith(
+      selection.artifactRoot,
+      compiledResources,
+      artifact,
+      expect.any(Number),
+    );
+    expect(ports.provision).not.toHaveBeenCalled();
+    expect(ports.qualify).not.toHaveBeenCalled();
+    expect(start).not.toHaveBeenCalled();
+  });
+
   it("publishes current settings before exposing the started host", async () => {
     const f = transport();
     start.mockImplementation(async (_deadline, native) => {
@@ -500,7 +522,14 @@ describe("normal Go host startup", () => {
       native!.profile.beforeSpawn();
       return f.client;
     });
-    const host = await startDesktopGoCore(selection);
+    const compiledResources = { synthetic: "independent-resource-selection" };
+    const host = await startDesktopGoCore({ ...selection, compiledResources });
+    expect(ports.resources).toHaveBeenCalledExactlyOnceWith(
+      selection.artifactRoot,
+      compiledResources,
+      artifact,
+      expect.any(Number),
+    );
     expect(f.events).toEqual([
       "start",
       ...methods.slice(0, 2),
