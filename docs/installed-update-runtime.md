@@ -189,9 +189,15 @@ state-reader boundary allows restoration. From beta.12, completed supervised
 Shell results use format v6, which beta.11 and earlier readers reject. Restoring
 those predecessors is blocked before app exchange, including recovery paths;
 records are never rewritten or downgraded to make an old reader accept them.
-The predecessor bundle and current records remain retained. This guard does not
-qualify rollback compatibility for later versions. A known interrupted
-pair offers **Quit & Finish Recovery** only after the original helper PID/start
+The predecessor bundle and current records remain retained. An interrupted
+`rollback_started` journal cannot prove whether the target wrote newer state.
+For an incompatible predecessor, **Finish Recovery** can therefore retain the
+exact verified current target and its exact `previous.app`, settling forward to
+`verified` without exchanging either app. Both identities are rechecked after
+Quit under the owner lease. Other incompatible pairs refuse before the helper
+authorizes Quit. No journal history or state downgrade is inferred from a missing
+launch record. This guard does not qualify rollback compatibility for later
+versions. A known interrupted pair offers **Quit & Finish Recovery** only after the original helper PID/start
 time has been observed as ended; a permission error or malformed process readback
 keeps recovery blocked. Both actions acquire the existing work
 admission fences, record their exact dispatch intent, and use the helper's normal

@@ -30,7 +30,7 @@ async function bundle(at, version, buildId, contents) {
   await fs.mkdir(path.join(at, "Contents/Resources/app"), { recursive: true });
   await fs.writeFile(
     path.join(at, "Contents/Info.plist"),
-    `<?xml version="1.0"?><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>local.farol.next.preview</string><key>CFBundleShortVersionString</key><string>${version}</string></dict></plist>`,
+    `<?xml version="1.0"?><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>local.farol.next.preview</string><key>CFBundleShortVersionString</key><string>${version.split("-")[0]}</string></dict></plist>`,
   );
   await fs.writeFile(
     path.join(at, "Contents/Resources/app/build-identity.json"),
@@ -39,7 +39,7 @@ async function bundle(at, version, buildId, contents) {
   await fs.writeFile(path.join(at, "Contents/payload"), contents);
   return { digest: await treeDigest(at), version, buildId };
 }
-async function fixture() {
+async function fixture(sourceVersion = "0.1.0", targetVersion = "0.1.1") {
   const root = await fs.mkdtemp(
     path.join(await fs.realpath(os.tmpdir()), "farol-installed-update-"),
   );
@@ -56,10 +56,10 @@ async function fixture() {
   await fs.mkdir(applications, { recursive: true });
   await fs.mkdir(op, { recursive: true });
   await fs.chmod(home, 0o700);
-  const source = await bundle(app, "0.1.0", "1".repeat(64), "N");
+  const source = await bundle(app, sourceVersion, "1".repeat(64), "N");
   const target = await bundle(
     path.join(op, "staged.app"),
-    "0.1.1",
+    targetVersion,
     "2".repeat(64),
     "N+1",
   );
@@ -198,6 +198,7 @@ function observeHelper(child, expectTerminal = true) {
           exitCode,
           result: expectTerminal ? JSON.parse(stdout) : null,
           stderr,
+          handoff,
         });
       } catch (error) {
         reject(error);
@@ -760,6 +761,133 @@ describe("installed update helper", () => {
       await fs.readFile(path.join(f.app, "Contents/payload"), "utf8"),
     ).toBe("N");
   });
+
+  // Actual Python helper and disposable filesystem/process fixtures only;
+  // these cases do not qualify a packaged app, live startup or provider.
+  it("recovers an incompatible beta11-to-beta12 rollback forward without moving either exact bundle or changing owner state", async () => {
+    const f = await fixture("0.2.0-owner.beta.11", "0.2.0-owner.beta.12");
+    const previous = path.join(f.op, "previous.app");
+    await fs.rename(f.app, previous);
+    await fs.rename(path.join(f.op, "staged.app"), f.app);
+    await phase(f, "rollback_started");
+    await fs.writeFile(
+      path.join(f.state, "settings.json"),
+      "fixture newer settings must remain unchanged\n",
+    );
+    await fs.mkdir(path.join(f.state, "retained"));
+    await fs.writeFile(
+      path.join(f.state, "retained/completed-shell.json"),
+      "fixture v6 completed Shell bytes must remain unchanged\n",
+    );
+    const workspace = path.join(f.home, "Documents/fixture-workspace");
+    await fs.mkdir(workspace, { recursive: true });
+    await fs.writeFile(
+      path.join(workspace, "notes.txt"),
+      "fixture owner data\n",
+    );
+    await confirmQuit(f);
+    const closed = once(f.child, "close");
+    f.child.kill("SIGTERM");
+    await closed;
+    const appBefore = await fs.lstat(f.app, { bigint: true });
+    const previousBefore = await fs.lstat(previous, { bigint: true });
+    const stateBefore = await treeDigest(f.state);
+    const workspaceBefore = await treeDigest(workspace);
+    const entriesBefore = (await fs.readdir(f.op)).sort();
+
+    const recovery = await invoke({ ...f.request, action: "recover" });
+
+    expect(recovery).toMatchObject({
+      exitCode: 0,
+      result: { phase: "verified", operationId: f.request.operationId },
+      handoff: "",
+    });
+    expect(
+      JSON.parse(await fs.readFile(path.join(f.op, "journal.json"), "utf8")),
+    ).toEqual({
+      schema: "farol.installed-update-journal/1",
+      operationId: f.request.operationId,
+      source: f.request.source,
+      target: f.request.target,
+      phase: "verified",
+    });
+    for (const [at, before, build] of [
+      [f.app, appBefore, f.request.target],
+      [previous, previousBefore, f.request.source],
+    ]) {
+      const after = await fs.lstat(at, { bigint: true });
+      expect([after.dev, after.ino]).toEqual([before.dev, before.ino]);
+      expect(await treeDigest(at)).toBe(build.digest);
+    }
+    expect((await fs.readdir(f.op)).sort()).toEqual(entriesBefore);
+    expect(await treeDigest(f.state)).toBe(stateBefore);
+    expect(await treeDigest(workspace)).toBe(workspaceBefore);
+  });
+
+  for (const targetSlot of ["previous.app", "failed.app"]) {
+    it(`refuses incompatible rollback_started recovery with source in slot and target in ${targetSlot} before Quit handoff`, async () => {
+      const f = await fixture("0.2.0-owner.beta.11", "0.2.0-owner.beta.12");
+      const target = path.join(f.op, targetSlot);
+      await fs.rename(path.join(f.op, "staged.app"), target);
+      await phase(f, "rollback_started");
+      const journalPath = path.join(f.op, "journal.json");
+      const journalBefore = await fs.readFile(journalPath);
+      const journalStatBefore = await fs.lstat(journalPath, { bigint: true });
+      const appBefore = await fs.lstat(f.app, { bigint: true });
+      const targetBefore = await fs.lstat(target, { bigint: true });
+      const stateBefore = await treeDigest(f.state);
+      const entriesBefore = (await fs.readdir(f.op)).sort();
+
+      // Keep the controlled source alive: a parent may Quit only after ready.
+      // No fake open is needed because admission must refuse before readiness.
+      const pending = invoke({
+        ...f.request,
+        action: "recover",
+        relaunch: true,
+      });
+      const recovery = await pending;
+
+      expect(recovery).toMatchObject({
+        exitCode: 70,
+        result: {
+          phase: "refused",
+          error: "predecessor_state_unqualified",
+          operationId: f.request.operationId,
+        },
+      });
+      expect(JSON.parse(recovery.handoff)).toMatchObject({
+        phase: "refused",
+        error: "predecessor_state_unqualified",
+      });
+      await expect(pending.ready).rejects.toThrow("helper refused readiness");
+      expect(f.child.exitCode).toBeNull();
+      expect(f.child.signalCode).toBeNull();
+      expect(
+        execFileSync("/bin/ps", ["-p", String(f.child.pid), "-o", "lstart="], {
+          encoding: "utf8",
+        }).trim(),
+      ).toBe(f.request.processStart);
+      await expect(
+        fs.lstat(path.join(f.state, "last-quit.json")),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+      expect(await fs.readFile(journalPath)).toEqual(journalBefore);
+      const journalAfter = await fs.lstat(journalPath, { bigint: true });
+      expect([journalAfter.dev, journalAfter.ino]).toEqual([
+        journalStatBefore.dev,
+        journalStatBefore.ino,
+      ]);
+      for (const [at, before, build] of [
+        [f.app, appBefore, f.request.source],
+        [target, targetBefore, f.request.target],
+      ]) {
+        const after = await fs.lstat(at, { bigint: true });
+        expect([after.dev, after.ino]).toEqual([before.dev, before.ino]);
+        expect(await treeDigest(at)).toBe(build.digest);
+      }
+      expect((await fs.readdir(f.op)).sort()).toEqual(entriesBefore);
+      expect(await treeDigest(f.state)).toBe(stateBefore);
+    });
+  }
 
   it("refuses FIFO staging and existing rollback path without deleting either", async () => {
     const f = await fixture();

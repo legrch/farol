@@ -655,9 +655,39 @@ def require_predecessor_state(request):
         fail("predecessor_state_unqualified")
 
 
+def recovery_keeps_verified_target(apps, op, request, phase):
+    """Recover forward only when a downgrade is unsafe and the target is intact.
+
+    A legacy rollback_started journal has no durable apply/rollback origin.
+    Never infer that the target has not written newer state. Instead retain the
+    exact verified current target and its exact predecessor, without moving apps.
+    All other incompatible pairs refuse before a live-app Quit handoff.
+    """
+    if phase != "rollback_started":
+        return False
+    try:
+        require_predecessor_state(request)
+    except Refusal as error:
+        if error.code != "predecessor_state_unqualified":
+            raise
+        if (request["action"] == "recover"
+                and entry(apps, APP) is not None
+                and entry(op, "previous.app") is not None
+                and entry(op, "staged.app") is None
+                and entry(op, "failed.app") is None
+                and entry(op, "rejected-target.json") is None
+                and matches_tree(apps, APP, request["target"])
+                and matches_tree(op, "previous.app", request["source"])):
+            return True
+        raise
+    return False
+
+
 def inspect_recovery(apps, op, request):
     """Read-only proof of an exact pair before a live-app Quit handoff."""
     phase = read_phase(op, request)
+    if recovery_keeps_verified_target(apps, op, request, phase):
+        return
     app = entry(apps, APP)
     staged = entry(op, "staged.app")
     previous = entry(op, "previous.app")
@@ -690,11 +720,14 @@ def reconcile(apps, op, request, fence):
     failed = entry(op, "failed.app")
     staged = entry(op, "staged.app")
     if phase in ("rollback_started", "rolled_back", "rollback_launch_requested", "rollback_completed"):
-        # Every unfinished rollback needs the same state-reader admission,
-        # including pairs whose exchange or quarantine rename already happened.
-        # A terminal historical receipt remains observational below.
-        if phase == "rollback_started":
-            require_predecessor_state(request)
+        # Re-evaluate after Quit under the owner lease; preflight grants no
+        # authority to trust a pair that changed while the app was draining.
+        if recovery_keeps_verified_target(apps, op, request, phase):
+            fence()
+            if not recovery_keeps_verified_target(apps, op, request, phase):
+                fail("recovery_pair", phase)
+            write_record(op, "journal.json", record_for(request, "verified"))
+            return "verified"
         if staged is not None:
             fail("rollback_uncertain", phase)
         if phase == "rollback_started" and app is not None and previous is not None and failed is None:
