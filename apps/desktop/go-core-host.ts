@@ -39,6 +39,9 @@ import {
 import { qualifyProfileLaunch } from "./bridge/profile.ts";
 import { openNativeProfileStorage } from "./bridge/profile-storage.ts";
 import { verifyCoreResources } from "./bridge/core-resources.ts";
+import { bindShellSupportDeclaration } from "./bridge/shell-support.ts";
+import { attestShellRuntime } from "./bridge/shell-runtime.ts";
+import { encodeShellLaunch } from "./bridge/shell-launch.ts";
 import { GoComputerAuthority } from "./go-computer-authority.ts";
 import type { BuildIdentity } from "../../src/pkg/build-info/identity";
 import type { ProductSettings } from "../../src/pkg/product-settings/contract";
@@ -55,6 +58,12 @@ export type DesktopCoreSelection = Readonly<{
   // renderer data, a runtime file's own claim or a freshly measured binary hash.
   compiledArtifact: unknown;
   compiledResources?: unknown;
+  // Optional, independently qualified builder input. A runtime file, renderer
+  // value, or successful measurement cannot supply this release selection.
+  compiledShell?: Readonly<{
+    support: unknown;
+    watchdogSource: Uint8Array;
+  }>;
   // Captured before the new host writes its run marker. Only the exact prior
   // host's confirmed drain can clear that marker; Go terminal bytes cannot.
   previousHostDrainConfirmed: boolean;
@@ -499,6 +508,33 @@ export async function startDesktopGoCore(
   );
   if (JSON.stringify(artifact) !== JSON.stringify(expected))
     throw new BridgeError("refused", "core_host_artifact_mismatch");
+  // Capture trusted inputs before yielding to resource IO. The support parser
+  // freezes its copy; the source copy cannot be changed by the caller later.
+  const selectedShell = selection.compiledShell;
+  if (
+    selectedShell &&
+    (!(selectedShell.watchdogSource instanceof Uint8Array) ||
+      selectedShell.watchdogSource.byteLength === 0 ||
+      selectedShell.watchdogSource.byteLength > 64 * 1024)
+  )
+    throw new BridgeError("refused", "invalid_shell_launch_metadata");
+  const shell = selectedShell
+    ? {
+        support: bindShellSupportDeclaration(
+          selectedShell.support,
+          selectedShell.support,
+          expected,
+        ),
+        source: Buffer.from(selectedShell.watchdogSource),
+      }
+    : undefined;
+  if (
+    shell &&
+    (selection.compiledResources === undefined ||
+      selection.compiledResources === null)
+  )
+    throw new BridgeError("refused", "shell_host_resources_missing");
+  const qualificationDeadline = performance.now() + 2000;
   // New builds carry this independent closure. Older fixture/host selections
   // remain compatible; Shell activation must require the completed closure.
   if (
@@ -509,8 +545,21 @@ export async function startDesktopGoCore(
       selection.artifactRoot,
       selection.compiledResources,
       expected,
-      performance.now() + 2000,
+      qualificationDeadline,
     );
+  let shellBundle: Awaited<ReturnType<typeof attestShellRuntime>> | undefined;
+  if (shell) {
+    const appRoot = path.resolve(selection.artifactRoot, "../../..");
+    if (path.join(appRoot, "Contents/Resources/app") !== selection.artifactRoot)
+      throw new BridgeError("refused", "shell_host_layout_mismatch");
+    shellBundle = await attestShellRuntime(
+      appRoot,
+      shell.support,
+      qualificationDeadline,
+    );
+    if (shellBundle.path !== appRoot)
+      throw new BridgeError("refused", "shell_host_layout_mismatch");
+  }
   const storage = openNativeProfileStorage(
     selection.stateRoot,
     settings.computer.computerId,
@@ -542,6 +591,18 @@ export async function startDesktopGoCore(
     profileId: storage.profileId,
   });
   try {
+    const hostLifetimeId = randomUUID();
+    const childLaunchId = randomUUID();
+    const shellMetadata =
+      shell && shellBundle
+        ? encodeShellLaunch(shell.support, shell.support, expected, {
+            profileId: storage.profileId,
+            hostLifetimeId,
+            childLaunchId,
+            appRoot: shellBundle,
+            watchdogSource: shell.source,
+          })
+        : undefined;
     client = await attested.start(2000, {
       profile,
       ownerId: "owner-desktop",
@@ -549,8 +610,9 @@ export async function startDesktopGoCore(
       storeMode: storage.storeMode,
       settingsMutations: storage.settingsMutations,
       previousHostDrainConfirmed: selection.previousHostDrainConfirmed,
-      hostLifetimeId: randomUUID(),
-      childLaunchId: randomUUID(),
+      hostLifetimeId,
+      childLaunchId,
+      ...(shellMetadata ? { shellMetadata } : {}),
       ...(selection.onLifecycleObservation
         ? { onLifecycleObservation: selection.onLifecycleObservation }
         : {}),

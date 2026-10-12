@@ -28,6 +28,7 @@ import {
   ProductSettingsStore,
 } from "../../src/apps/desktop/product-configuration";
 import type { ProductSettings } from "../../src/pkg/product-settings/contract";
+import shellFixture from "../fixtures/shell-launch.json";
 
 // Source-only composition tests: artifact bytes, provisioning, launch and RPC
 // are explicit doubles. Authority/Computer adapters and artifact parsing are real.
@@ -38,7 +39,12 @@ const ports = vi.hoisted(() => ({
   close: vi.fn(),
   provision: vi.fn(),
   qualify: vi.fn(),
-  resources: vi.fn(async () => undefined),
+  resources: vi.fn(async (..._args: unknown[]) => undefined),
+  runtime: vi.fn(async (..._args: unknown[]) => ({
+    path: "/synthetic/Farol.app",
+    device: "11",
+    inode: "22",
+  })),
   spawn: vi.fn(() => {
     throw new Error("Real child creation is forbidden in this fixture");
   }),
@@ -78,6 +84,9 @@ vi.mock("../../apps/desktop/bridge/profile.ts", () => ({
 }));
 vi.mock("../../apps/desktop/bridge/core-resources.ts", () => ({
   verifyCoreResources: ports.resources,
+}));
+vi.mock("../../apps/desktop/bridge/shell-runtime.ts", () => ({
+  attestShellRuntime: ports.runtime,
 }));
 vi.mock(
   "../../src/modules/computer/infra/native/native-readonly-workspace",
@@ -318,6 +327,27 @@ let settings: ProductSettings;
 let selection: DesktopCoreSelection;
 let profileClose: ReturnType<typeof vi.fn>;
 let start: MockInstance<AttestedCore["start"]>;
+function shellSelection(): DesktopCoreSelection {
+  const core = {
+    ...structuredClone(artifact),
+    binary: { ...artifact.binary, path: "farol-backend" },
+  };
+  const support = {
+    ...structuredClone(shellFixture.declaration),
+    core: structuredClone(core),
+  };
+  ports.declaration = JSON.stringify(core);
+  return {
+    ...selection,
+    artifactRoot: "/synthetic/Farol.app/Contents/Resources/app",
+    compiledArtifact: core,
+    compiledResources: { synthetic: "independent-resource-selection" },
+    compiledShell: {
+      support,
+      watchdogSource: Buffer.from(shellFixture.host.watchdogSource),
+    },
+  };
+}
 beforeEach(async () => {
   vi.clearAllMocks();
   // Host compatibility is explicit and independent of the machine running CI.
@@ -515,6 +545,153 @@ describe("normal Go host startup", () => {
     expect(start).not.toHaveBeenCalled();
   });
 
+  it("binds the qualified bundle and original host identifiers to one child", async () => {
+    const input = shellSelection();
+    const f = transport();
+    start.mockResolvedValue(f.client);
+    const host = await startDesktopGoCore(input);
+    const native = start.mock.calls[0]![1]!;
+    const payload = JSON.parse(Buffer.from(native.shellMetadata!).toString());
+    expect(payload.BuildID).toBe(artifact.build.buildId);
+    expect(payload.ProfileID).toBe(context.profileId);
+    expect(payload.HostLifetimeID).toBe(native.hostLifetimeId);
+    expect(payload.ChildLaunchID).toBe(native.childLaunchId);
+    expect(payload.Support.ProtectedBundle).toEqual({
+      Path: "/synthetic/Farol.app",
+      Identity: { Device: "11", Inode: "22" },
+    });
+    expect(payload.Support.Backend.Path).toBe(
+      "/synthetic/Farol.app/Contents/Resources/app/farol-backend",
+    );
+    expect(ports.runtime.mock.calls[0]![2]).toBe(
+      ports.resources.mock.calls[0]![3],
+    );
+    expect(ports.resources.mock.invocationCallOrder[0]).toBeLessThan(
+      ports.runtime.mock.invocationCallOrder[0]!,
+    );
+    expect(ports.runtime.mock.invocationCallOrder[0]).toBeLessThan(
+      ports.provision.mock.invocationCallOrder[0]!,
+    );
+    expect(start).toHaveBeenCalledTimes(1);
+    await host.close();
+  });
+
+  it.each([undefined, null])(
+    "withholds selected Shell without resource closure: %s",
+    async (compiledResources) => {
+      const input = shellSelection();
+      await expect(
+        startDesktopGoCore({ ...input, compiledResources }),
+      ).rejects.toThrow("shell_host_resources_missing");
+      expect(ports.runtime).not.toHaveBeenCalled();
+      expect(ports.provision).not.toHaveBeenCalled();
+      expect(start).not.toHaveBeenCalled();
+    },
+  );
+
+  it("refuses a crossed Shell core before filesystem qualification", async () => {
+    const input = shellSelection();
+    const support = input.compiledShell!
+      .support as typeof shellFixture.declaration;
+    support.core.binary.sha256 = "9".repeat(64);
+    await expect(startDesktopGoCore(input)).rejects.toThrow(
+      "shell_support_binding_mismatch",
+    );
+    expect(ports.resources).not.toHaveBeenCalled();
+    expect(ports.runtime).not.toHaveBeenCalled();
+    expect(ports.provision).not.toHaveBeenCalled();
+  });
+
+  it("refuses an unpackaged Shell layout without provisioning", async () => {
+    const input = shellSelection();
+    await expect(
+      startDesktopGoCore({ ...input, artifactRoot: "/synthetic/artifact" }),
+    ).rejects.toThrow("shell_host_layout_mismatch");
+    expect(ports.runtime).not.toHaveBeenCalled();
+    expect(ports.provision).not.toHaveBeenCalled();
+  });
+
+  it("preserves runtime qualification refusal without launching a fallback", async () => {
+    const input = shellSelection();
+    const failure = new BridgeError("refused", "shell_runtime_unqualified");
+    ports.runtime.mockRejectedValueOnce(failure);
+    await expect(startDesktopGoCore(input)).rejects.toBe(failure);
+    expect(ports.provision).not.toHaveBeenCalled();
+    expect(start).not.toHaveBeenCalled();
+  });
+
+  it("stops selected Shell at a failed resource check", async () => {
+    const input = shellSelection();
+    const failure = new BridgeError("refused", "core_resources_unqualified");
+    ports.resources.mockRejectedValueOnce(failure);
+    await expect(startDesktopGoCore(input)).rejects.toBe(failure);
+    expect(ports.runtime).not.toHaveBeenCalled();
+    expect(ports.provision).not.toHaveBeenCalled();
+    expect(start).not.toHaveBeenCalled();
+  });
+
+  it("rejects a runtime identity for a different bundle", async () => {
+    const input = shellSelection();
+    ports.runtime.mockResolvedValueOnce({
+      path: "/other/Farol.app",
+      device: "11",
+      inode: "22",
+    });
+    await expect(startDesktopGoCore(input)).rejects.toThrow(
+      "shell_host_layout_mismatch",
+    );
+    expect(ports.provision).not.toHaveBeenCalled();
+    expect(start).not.toHaveBeenCalled();
+  });
+
+  it.each([Buffer.alloc(0), Buffer.alloc(65537)])(
+    "refuses an unbounded or empty watchdog before resource IO",
+    async (watchdogSource) => {
+      const input = shellSelection();
+      await expect(
+        startDesktopGoCore({
+          ...input,
+          compiledShell: { ...input.compiledShell!, watchdogSource },
+        }),
+      ).rejects.toThrow("invalid_shell_launch_metadata");
+      expect(ports.resources).not.toHaveBeenCalled();
+      expect(ports.runtime).not.toHaveBeenCalled();
+      expect(ports.provision).not.toHaveBeenCalled();
+    },
+  );
+
+  it("freezes the Shell source and support before asynchronous qualification", async () => {
+    const input = shellSelection();
+    const source = Buffer.from(input.compiledShell!.watchdogSource);
+    ports.resources.mockImplementationOnce(async () => {
+      input.compiledShell!.watchdogSource.fill(0);
+      (
+        input.compiledShell!.support as typeof shellFixture.declaration
+      ).qualification.osBuild = "25A999";
+    });
+    const f = transport();
+    start.mockResolvedValue(f.client);
+    const host = await startDesktopGoCore(input);
+    const payload = JSON.parse(
+      Buffer.from(start.mock.calls[0]![1]!.shellMetadata!).toString(),
+    );
+    expect(payload.WatchdogSourceBase64).toBe(source.toString("base64"));
+    expect(payload.Support.OSBuild).toBe(
+      shellFixture.declaration.qualification.osBuild,
+    );
+    await host.close();
+  });
+
+  it("closes the original profile when selected watchdog source does not match", async () => {
+    const input = shellSelection();
+    input.compiledShell!.watchdogSource.fill(0);
+    await expect(startDesktopGoCore(input)).rejects.toThrow(
+      "invalid_shell_launch_metadata",
+    );
+    expect(profileClose).toHaveBeenCalledTimes(1);
+    expect(start).not.toHaveBeenCalled();
+  });
+
   it("publishes current settings before exposing the started host", async () => {
     const f = transport();
     start.mockImplementation(async (_deadline, native) => {
@@ -524,6 +701,8 @@ describe("normal Go host startup", () => {
     });
     const compiledResources = { synthetic: "independent-resource-selection" };
     const host = await startDesktopGoCore({ ...selection, compiledResources });
+    expect(start.mock.calls[0]![1]).not.toHaveProperty("shellMetadata");
+    expect(ports.runtime).not.toHaveBeenCalled();
     expect(ports.resources).toHaveBeenCalledExactlyOnceWith(
       selection.artifactRoot,
       compiledResources,
