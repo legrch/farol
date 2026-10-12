@@ -221,6 +221,17 @@ file route. The normal desktop host does not yet supply this optional selection:
 authenticated build support, complete package attestation and native external
 qualification remain required before product activation.
 
+The desktop Shell runtime attestor compares the complete nested Electron tree
+with the independent support declaration using the existing package v2 digest,
+and checks the helper image digest separately. It refuses writable shared files
+or directories, hardlinks, redirected runtime roots and symlinks escaping that
+runtime. Bounded streaming reads and a final identity/metadata sweep detect
+changes during observation. The original monotonic deadline is checked between
+filesystem operations; an already pending kernel operation is not interruptible
+by this check. This attests vendor runtime bytes and containing directory
+identities only. Farol-owned resource bytes, the trusted running host, release
+qualification and normal startup selection remain separate requirements.
+
 Remaining qualification and integration:
 
 1. The normal native Shell producer remains withheld. Before exposing it, select
