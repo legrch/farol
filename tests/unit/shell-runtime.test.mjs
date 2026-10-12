@@ -9,6 +9,10 @@ import { attestShellRuntime } from "../../apps/desktop/bridge/shell-runtime.ts";
 const roots = [];
 afterEach(async () => {
   vi.restoreAllMocks();
+  vi.doUnmock("node:fs/promises");
+  vi.doUnmock("original-fs");
+  vi.unstubAllGlobals();
+  vi.resetModules();
   for (const root of roots.splice(0)) await fs.rm(root, { recursive: true });
 });
 async function fixture() {
@@ -43,6 +47,69 @@ const run = (f) =>
 const refused = { state: "refused", code: "shell_runtime_unqualified" };
 
 describe("Shell nested runtime qualification", () => {
+  it("uses physical archive bytes in an Electron host with virtualized fs", async () => {
+    const f = await fixture();
+    const archive = path.join(path.dirname(f.resource), "default_app.asar");
+    await fs.rename(f.resource, archive);
+    f.declaration.runtime.treeSHA256 = await treeDigest(f.runtime);
+    const virtualRead = vi.fn(async () => {
+      throw new Error("Synthetic ASAR virtualization, not a physical stat");
+    });
+    const loadOriginal = vi.fn(() => ({ promises: fs }));
+    vi.doMock("node:fs/promises", () => ({
+      default: { ...fs, lstat: virtualRead },
+    }));
+    vi.doMock("original-fs", loadOriginal);
+    vi.stubGlobal(
+      "process",
+      new Proxy(process, {
+        get(target, key, receiver) {
+          if (key === "versions")
+            return { ...target.versions, electron: "synthetic" };
+          return Reflect.get(target, key, receiver);
+        },
+      }),
+    );
+    vi.resetModules();
+    const native = await import("../../apps/desktop/bridge/shell-runtime.ts");
+    await expect(
+      native.attestShellRuntime(
+        f.app,
+        f.declaration,
+        performance.now() + 10_000,
+      ),
+    ).resolves.toMatchObject({ path: f.app });
+    expect(loadOriginal).toHaveBeenCalledTimes(1);
+    expect(virtualRead).not.toHaveBeenCalled();
+  });
+
+  it("does not fall back when Electron's physical filesystem is unavailable", async () => {
+    const f = await fixture();
+    const unavailable = new Error("synthetic physical filesystem unavailable");
+    vi.doMock("original-fs", () => {
+      throw unavailable;
+    });
+    vi.stubGlobal(
+      "process",
+      new Proxy(process, {
+        get(target, key, receiver) {
+          if (key === "versions")
+            return { ...target.versions, electron: "synthetic" };
+          return Reflect.get(target, key, receiver);
+        },
+      }),
+    );
+    vi.resetModules();
+    const native = await import("../../apps/desktop/bridge/shell-runtime.ts");
+    await expect(
+      native.attestShellRuntime(
+        f.app,
+        f.declaration,
+        performance.now() + 10_000,
+      ),
+    ).rejects.toMatchObject(refused);
+  });
+
   it("matches the existing package v2 digest and returns the original immutable app identity", async () => {
     const f = await fixture();
     const result = await run(f);

@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { constants, type BigIntStats } from "node:fs";
-import fs from "node:fs/promises";
+import nodeFilesystem from "node:fs/promises";
 import path from "node:path";
 import { BridgeError } from "./client.ts";
 import { parseShellSupportDeclaration } from "./shell-support.ts";
@@ -56,6 +56,12 @@ export async function attestShellRuntime(
   deadline: number,
 ): Promise<Readonly<{ path: string; device: string; inode: string }>> {
   try {
+    // Electron virtualizes ASAR archives. Measure physical bytes/metadata like
+    // the package producer, using its built-in original-fs module. A failed
+    // import refuses; never fall back to the virtualized filesystem.
+    const fs: typeof nodeFilesystem = process.versions.electron
+      ? (await import("original-fs")).promises
+      : nodeFilesystem;
     const support = parseShellSupportDeclaration(independentlyTrustedSupport);
     const now = performance.now();
     if (
