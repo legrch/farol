@@ -2,10 +2,12 @@ package boot
 
 import (
 	"context"
+	"time"
 
 	"github.com/legrch/farol/modules/computer/app/port"
 	processsvc "github.com/legrch/farol/modules/computer/app/services/process"
 	processct "github.com/legrch/farol/modules/computer/contracts/process"
+	"github.com/legrch/farol/modules/computer/domain/authority"
 	domain "github.com/legrch/farol/modules/computer/domain/mutation"
 	processinfra "github.com/legrch/farol/modules/computer/infra/process"
 	mutationrepo "github.com/legrch/farol/modules/computer/infra/repos/mutation"
@@ -34,43 +36,71 @@ type processReadObservation struct {
 	process   *connectorProcessOperation
 }
 
-func (a *processReadObservation) ledgerCurrent() error {
-	a.ledger.mu.Lock()
-	defer a.ledger.mu.Unlock()
+// Caller holds the ledger gate. Only the original, still-running publication
+// has a wait witness. A finished attempt without its ACK stays unknown.
+func (a *processReadObservation) ledgerCurrentLocked() (<-chan struct{}, error) {
 	record := a.ledger.operations[a.operation]
 	if a.original == nil && record != nil || a.original != nil &&
-		(record != a.original || record.pending || record.process != a.process || a.process == nil || a.process.cancelUnknown || a.process.collectionErr != nil ||
-			a.process.publishAttempted && a.process.publication == "") {
-		return &processsvc.Failure{Code: "PROCESS_OUTCOME_UNKNOWN", Unknown: true}
+		(record != a.original || record.pending || record.process != a.process || a.process == nil || a.process.cancelUnknown || a.process.collectionErr != nil) {
+		return nil, &processsvc.Failure{Code: "PROCESS_OUTCOME_UNKNOWN", Unknown: true}
 	}
-	return nil
+	if a.process != nil && a.process.publishAttempted && a.process.publication == "" {
+		if a.process.capturing && a.process.publicationDone != nil {
+			return a.process.publicationDone, nil
+		}
+		return nil, &processsvc.Failure{Code: "PROCESS_OUTCOME_UNKNOWN", Unknown: true}
+	}
+	return nil, nil
 }
 
 func (a *processReadObservation) WithSnapshot(ctx context.Context, participant string, inspect func(port.AccessSnapshot) error) error {
-	var fence error
-	check := func() error {
-		if err := a.ledgerCurrent(); err != nil {
-			fence = err
+	for {
+		var fence error
+		var pending <-chan struct{}
+		err := a.connectorProcessObservation.WithSnapshot(ctx, participant, func(snapshot port.AccessSnapshot) error {
+			a.ledger.mu.Lock()
+			defer a.ledger.mu.Unlock()
+			pending, fence = a.ledgerCurrentLocked()
+			if fence != nil {
+				return fence
+			}
+			if pending != nil {
+				return &processsvc.Failure{Code: "PROCESS_PUBLICATION_PENDING"}
+			}
+			// inspect is value-only. Serialize it with the publication transition;
+			// it must run exactly once, never be replayed after waiting.
+			return inspect(snapshot)
+		})
+		// Preserve the ledger classification across the execution adapter.
+		if fence != nil {
+			return fence
+		}
+		if pending == nil {
 			return err
 		}
+		if err := a.waitPublication(ctx, pending); err != nil {
+			return err
+		}
+		// Re-enter the SAME admitted lease after releasing all gates to wait.
+		// This checks withdrawal/expiry without renewing authority or doing IO.
+	}
+}
+
+func (a *processReadObservation) waitPublication(ctx context.Context, done <-chan struct{}) error {
+	remaining := a.Deadline().Sub(a.clock.Now())
+	if remaining <= 0 {
+		return authority.Fail("AUTHORITY_EXPIRED", "task-grant")
+	}
+	timer := time.NewTimer(remaining)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return &processsvc.Failure{Code: "PROCESS_CANCELLED"}
+	case <-timer.C:
+		return authority.Fail("AUTHORITY_EXPIRED", "task-grant")
+	case <-done:
 		return nil
 	}
-	err := a.connectorProcessObservation.WithSnapshot(ctx, participant, func(snapshot port.AccessSnapshot) error {
-		if err := check(); err != nil {
-			return err
-		}
-		if err := inspect(snapshot); err != nil {
-			return err
-		}
-		return check()
-	})
-	// The execution adapter classifies callback errors for its own boundary.
-	// Preserve our exact original-ledger UNKNOWN instead of downgrading it to a
-	// generic current-authority refusal. No prepared output escapes either error.
-	if fence != nil {
-		return fence
-	}
-	return err
 }
 
 func (a *processReadObservation) check(ctx context.Context) error {

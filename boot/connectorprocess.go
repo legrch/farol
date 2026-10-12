@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"sync"
 
+	"github.com/legrch/farol/modules/computer/app/port"
 	"github.com/legrch/farol/modules/computer/app/services/execution"
 	processsvc "github.com/legrch/farol/modules/computer/app/services/process"
 	processct "github.com/legrch/farol/modules/computer/contracts/process"
@@ -37,6 +38,7 @@ type connectorProcessOperation struct {
 	publishAttempted bool
 	result           *processsvc.TerminalResult
 	publication      string
+	publicationDone  chan struct{}
 	cancelling       bool
 	cancelUnknown    bool
 	cancelDone       chan struct{}
@@ -160,6 +162,7 @@ func (s *computerConnector) startProcess(ctx context.Context, slot *connectorSlo
 type connectorProcessObservation struct {
 	*execution.Lease
 	scope processsvc.ConnectorReadScope
+	clock port.Clock
 }
 
 func (a *connectorProcessObservation) ConnectorScope() processsvc.ConnectorReadScope { return a.scope }
@@ -180,7 +183,7 @@ func (s *computerConnector) processObservation(ctx context.Context, slot *connec
 	}
 	// Lease.WithSnapshot already enters the current connector's host/settings
 	// guard via its existing owner. A second nested host guard would deadlock.
-	return &connectorProcessObservation{Lease: lease, scope: processsvc.ConnectorReadScope{
+	return &connectorProcessObservation{Lease: lease, clock: s.clock, scope: processsvc.ConnectorReadScope{
 		Host: slot.guard.host, OwnerID: s.root.ownerID, ComputerID: s.root.computerID, ComputerGeneration: generation}}, nil
 }
 
@@ -205,11 +208,6 @@ func (s *computerConnector) observeProcess(ctx context.Context, slot *connectorS
 	}
 	if record.pending || record.process.cancelUnknown || record.process.collectionErr != nil {
 		ledger.mu.Unlock()
-		return nil, connectorProcessUnknown()
-	}
-	if record.process.publishAttempted && record.process.publication == "" {
-		ledger.mu.Unlock()
-		// A live child's complete bytes cannot upgrade a lost publication ACK.
 		return nil, connectorProcessUnknown()
 	}
 	retained := record.process

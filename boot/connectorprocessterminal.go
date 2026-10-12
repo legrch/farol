@@ -71,6 +71,7 @@ func (s *computerConnector) retainProcessResult(ctx context.Context, operation s
 	}
 	copy := result.Clone()
 	retained.result, retained.publishAttempted = &copy, true
+	retained.publicationDone = make(chan struct{})
 	ledger.mu.Unlock()
 	// Publication is outside current-owner/app/ledger gates. The retained copy
 	// survives any late error, but visible stored bytes cannot settle a lost ACK.
@@ -78,6 +79,7 @@ func (s *computerConnector) retainProcessResult(ctx context.Context, operation s
 	decoded, decodeErr := hex.DecodeString(digest)
 	ledger.mu.Lock()
 	defer ledger.mu.Unlock()
+	defer close(retained.publicationDone)
 	retained.capturing = false
 	if err != nil || ctx.Err() != nil || decodeErr != nil || len(decoded) != 32 || strings.ToLower(digest) != digest ||
 		ledger.frozen || ledger.operations[operation] != original || record.process != retained || retained.cancelling || retained.cancelUnknown || retained.collectionErr != nil {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -208,6 +209,111 @@ func TestConnectorProcessLatePublicationFenceWinsDuringObservation(t *testing.T)
 			}
 			if publisher.publishes != 1 || child.spawns != 1 || journal.reserves != 1 {
 				t.Fatal("publication interleaving repeated execution")
+			}
+		})
+	}
+}
+
+func TestConnectorProcessReadWaitsForOriginalPublication(t *testing.T) {
+	for _, fault := range []string{"known", "lost-ack", "withdrawn", "cancelled-read", "lease-deadline"} {
+		t.Run(fault, func(t *testing.T) {
+			s, access, journal, child, _ := connectorProcessFixture(t)
+			entered, release := make(chan struct{}), make(chan struct{})
+			var releaseOnce sync.Once
+			defer releaseOnce.Do(func() { close(release) })
+			publisher := &connectorProcessPublisherDouble{connectorProcessJournalDouble: journal, s: s, digest: strings.Repeat("a", 64), after: func() { close(entered); <-release }}
+			if fault == "lost-ack" {
+				publisher.err = errors.New("controlled original publication ACK loss")
+			}
+			s.mutations.dependencies.repository = publisher
+			start := startConnectorProcessFixture(t, s, child)
+			child.terminal = true
+			close(child.completed)
+			select {
+			case <-entered:
+			case <-time.After(2 * time.Second):
+				t.Fatal("original publication did not start")
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			waiting := &processDrainContext{Context: ctx, entered: make(chan struct{})}
+			// Admit once, then approach that exact lease's expiry. The publisher
+			// is blocked above and does not use this controlled fixture clock.
+			selected, err := s.processObservation(waiting, s.current)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if fault == "lease-deadline" {
+				access.clock.now = selected.Deadline().Add(-20 * time.Millisecond)
+			}
+			record := s.mutations.operations[start.OperationID]
+			guard := &processReadObservation{connectorProcessObservation: selected, ledger: s.mutations,
+				operation: start.OperationID, original: record, process: record.process}
+			observer, err := record.process.contract.ConnectorObserver(guard, child)
+			if err != nil {
+				t.Fatal(err)
+			}
+			type result struct {
+				out *processct.ReadResponse
+				err error
+			}
+			read := make(chan result, 1)
+			go func() {
+				out, err := observer.Read(waiting, processct.ReadRequest{Handle: start.Handle})
+				read <- result{out, err}
+			}()
+			select {
+			case got := <-read:
+				t.Fatalf("in-flight original publication became an immediate result: %+v %v", got.out, got.err)
+			case <-waiting.entered:
+			case <-time.After(2 * time.Second):
+				t.Fatal("read neither awaited original publication nor completed")
+			}
+			if !s.mutations.mu.TryLock() {
+				t.Fatal("wait holds ledger gate")
+			}
+			s.mutations.mu.Unlock()
+			if !s.current.guard.mu.TryLock() {
+				t.Fatal("wait holds connector gate")
+			}
+			s.current.guard.mu.Unlock()
+			if fault == "withdrawn" {
+				s.current.guard.close()
+			}
+			if fault == "cancelled-read" {
+				cancel()
+			}
+			// Cancellation and expiry must finish while publication is STILL
+			// blocked, without cancelling or tainting that original attempt.
+			if fault != "cancelled-read" && fault != "lease-deadline" {
+				releaseOnce.Do(func() { close(release) })
+			}
+			var got result
+			select {
+			case got = <-read:
+			case <-time.After(2 * time.Second):
+				t.Fatal("read failed to join original result")
+			}
+			releaseOnce.Do(func() { close(release) })
+			awaitProcessCollection(t, s, start.OperationID)
+			if fault == "known" {
+				if got.err != nil || got.out == nil || got.out.State != processct.Terminal {
+					t.Fatal("known publication prevented read", got.err)
+				}
+			} else if got.err == nil || got.out != nil {
+				t.Fatal("lost ACK, withdrawal or cancellation disclosed output", fault)
+			}
+			if fault == "lost-ack" {
+				var failed *processct.Failure
+				if !errors.As(got.err, &failed) || failed.Outcome != "outcome_unknown" {
+					t.Fatal("lost ACK classification changed", got.err)
+				}
+			}
+			if (fault == "cancelled-read" || fault == "lease-deadline") && !s.mutations.operations[start.OperationID].settled {
+				t.Fatal("cancelled read tainted original publication")
+			}
+			if publisher.publishes != 1 || child.spawns != 1 || journal.reserves != 1 {
+				t.Fatal("wait repeated publication or execution")
 			}
 		})
 	}
