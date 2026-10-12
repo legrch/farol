@@ -21,7 +21,7 @@
     },
     {
       "path": "modules/computer/infra/process/cancel.go",
-      "sha256": "1f1c403ce3534d5b23bacd2e086593b18d8836382607a003ec397e8aca3386eb"
+      "sha256": "3343fee963d0131fbf6a82921d69364e4d0be87a6e08737b294f9ff5d6b7d866"
     },
     {
       "path": "modules/computer/infra/process/confinement.go",
@@ -125,7 +125,7 @@
     },
     {
       "path": "modules/computer/infra/process/read.go",
-      "sha256": "d4b598e4a4cd01b642b7e2cbd55a7d4f2f377a6f9b8183b6e917f5537ff6f0fe"
+      "sha256": "2191ed002f8ce6d940b772de5e03466fd979e546584747c2971041e9d97b4b27"
     },
     {
       "path": "modules/computer/infra/process/rootscoped.go",
@@ -158,8 +158,8 @@
   ],
   "watchdogSource": {
     "path": "src/modules/computer/infra/native/shell-watchdog-source.ts",
-    "fileSHA256": "e91075d779dfad3034319160ce2e3816689713eb8837309aaa6de69d52e6aac8",
-    "sourceSHA256": "11929632aa172c6ff850038b59c7ff24658d0f475b83bea069c58b0e2ef5ee02"
+    "fileSHA256": "4a63c0f28ca7926318d140da67728c37753939edbefa876de1d1d91c22299416",
+    "sourceSHA256": "b438a84ade190cf926031cd3664241fd1877b77f9900d3e69a355d79647447c3"
   },
   "mechanism": {
     "path": "/usr/bin/sandbox-exec",

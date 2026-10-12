@@ -181,7 +181,7 @@ func TestWatchdogSupervisorHelperFailureAndIPCFenceRemainUnknown(t *testing.T) {
 	}
 }
 
-func TestWatchdogSupervisorCancellationCannotUpgradeKnownRoot(t *testing.T) {
+func TestWatchdogSupervisorCancellationRequiresAcknowledgedStopAndObservedExit(t *testing.T) {
 	for _, reply := range []string{"", "refused-stop"} {
 		name := "acknowledged-stop"
 		if reply != "" {
@@ -208,10 +208,41 @@ func TestWatchdogSupervisorCancellationCannotUpgradeKnownRoot(t *testing.T) {
 			finishSupervisorWatchdog(t, f, nil)
 			out = readSupervisorWatchdog(t, f, start.Handle)
 			requireSupervisorRootFacts(t, out, reply == "")
-			if out.State != processcontract.Unknown || out.Supervisor != processcontract.SupervisorUnknown || !out.CancelRequested {
-				t.Fatal("later helper success upgraded cancellation uncertainty", out)
+			state, supervisor := processcontract.Unknown, processcontract.SupervisorUnknown
+			if reply == "" {
+				state, supervisor = processcontract.Exited, processcontract.SupervisorExited
+			}
+			if out.State != state || out.Supervisor != supervisor || !out.CancelRequested {
+				t.Fatal("stop settlement or observed exit evidence lost", out)
 			}
 		})
+	}
+}
+
+func TestWatchdogSupervisorAcknowledgedCancellationKeepsRunningReadUntilWait(t *testing.T) {
+	f := newSupervisorWatchdogFixture(t, true)
+	start := f.start(t)
+	receipt, err := f.route.Cancel(context.Background(), processcontract.CancelRequest{Handle: start.Handle})
+	if err != nil || receipt == nil || receipt.Status != processcontract.CancelRequested || f.host.stops.Load() != 1 {
+		t.Fatal("original stop was not acknowledged", receipt, err)
+	}
+	out := readSupervisorWatchdog(t, f, start.Handle)
+	if out.State != processcontract.Running || out.Supervisor != processcontract.SupervisorRunning || out.RootState != processcontract.RootRunning ||
+		out.RootWaited || out.OutputDrained || !out.CancelRequested || out.GroupCleanup != processcontract.CleanupPending || out.DescendantCleanup != processcontract.CleanupPending {
+		t.Fatal("acknowledged stop poisoned running progress or supplied completion", out)
+	}
+	select {
+	case <-f.child().done:
+		t.Fatal("acknowledged stop supplied original helper Wait")
+	default:
+	}
+	supervisorWatchdogEvent(t, f, "stdout")
+	supervisorWatchdogEvent(t, f, "close")
+	finishSupervisorWatchdog(t, f, nil)
+	out = readSupervisorWatchdog(t, f, start.Handle)
+	requireSupervisorRootFacts(t, out, true)
+	if out.State != processcontract.Exited || out.Supervisor != processcontract.SupervisorExited || !out.CancelRequested || f.host.stops.Load() != 1 {
+		t.Fatal("acknowledged stop and original Wait did not settle observed exit", out)
 	}
 }
 
@@ -253,7 +284,7 @@ func TestChildSupervisorWaitRequiresCompleteUnfencedEvidence(t *testing.T) {
 			c.wait()
 			out, err := c.Read(context.Background(), processsvc.Window{})
 			want := processsvc.SupervisorUnknown
-			if name == "known" {
+			if name == "known" || name == "stop-attempted" {
 				want = processsvc.SupervisorExited
 			} else if name == "legacy" {
 				want = ""

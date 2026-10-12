@@ -27,6 +27,10 @@ if (process.env?.FAROL_SHELL_WATCHDOG_MODE === "go-prepared-v1" &&
   let started = false;
   let ready = false;
   let closed = false;
+  let closeDelivered = false;
+  let rootExited = false;
+  let rootStopAttempted = false;
+  let rootStopRefused = false;
   let stopped = false;
   let signalAttempted = false;
   let stopRequested = false;
@@ -45,6 +49,7 @@ if (process.env?.FAROL_SHELL_WATCHDOG_MODE === "go-prepared-v1" &&
     pending.length = 0;
     pendingBytes = 0;
     if (timer) clearTimeout(timer);
+    if (rootStopRefused) return; // No alternate signal after a refused original stop.
     if (!command) { process.exit(0); return; }
     if (signalAttempted) return;
     signalAttempted = true;
@@ -55,6 +60,28 @@ if (process.env?.FAROL_SHELL_WATCHDOG_MODE === "go-prepared-v1" &&
         try { process.send({ type: "signal-refused", id }); } catch {}
       }
     }
+  }
+  function refuseRootStop() {
+    if (rootStopRefused) return;
+    rootStopRefused = true;
+    // ChildProcess.kill may synchronously emit an error before returning false.
+    // Fence before callbacks can select any alternate shutdown signal.
+    emit("signal-refused", {}, stopNow);
+  }
+  function stopRoot() {
+    if (stopped || channelFailed || rootStopAttempted || rootStopRefused) return;
+    if (!command) { stopNow(); return; }
+    // Exit is observed on this retained child, never inferred from a PID probe.
+    // Its remaining pipes may still drain. Keep the original deadline unchanged.
+    if (rootExited || closed) return;
+    rootStopAttempted = true;
+    try {
+      // Keep the observer alive for the original exit/close and final output.
+      // This stops only the root; neither signal acceptance nor later close
+      // proves descendant cleanup. The original deadline still bounds drain.
+      if (command.kill("SIGKILL")) return;
+    } catch {}
+    refuseRootStop();
   }
   function pump() {
     if (pumping) return;
@@ -82,7 +109,12 @@ if (process.env?.FAROL_SHELL_WATCHDOG_MODE === "go-prepared-v1" &&
       }
     } finally {
       pumping = false;
-      if (!sending && !pending.length && !stopped && !closed && !stopRequested && !channelFailed) {
+      // A stop already queued behind close must receive its original ACK before
+      // the observer exits. Neither message is resent or reordered.
+      if (closeDelivered && !sending && !pending.length && !stopped && !channelFailed) {
+        stopNow();
+      }
+      if (!sending && !pending.length && !stopped && !closed && !channelFailed) {
         command?.stdout.resume();
         command?.stderr.resume();
       }
@@ -149,8 +181,9 @@ if (process.env?.FAROL_SHELL_WATCHDOG_MODE === "go-prepared-v1" &&
     if (message.type === "stop") {
       if (stopRequested) return;
       stopRequested = true;
-      // ACK is control intent only; the ONE self-group signal follows its write.
-      emit("stop-requested", {}, stopNow);
+      // ACK remains intent only. Observe the original root stop through exit
+      // and pipe EOF before the supervisor performs its own final shutdown.
+      emit("stop-requested", {}, stopRoot);
       return;
     }
     if (message.type !== "start" || started || stopRequested || Date.now() >= selected.deadlineAt) { refuse(errorReason.invalidStart); return; }
@@ -167,12 +200,16 @@ if (process.env?.FAROL_SHELL_WATCHDOG_MODE === "go-prepared-v1" &&
       });
       command.stdout.on("data", (chunk) => output("stdout", chunk));
       command.stderr.on("data", (chunk) => output("stderr", chunk));
-      command.on("error", () => refuse(errorReason.commandError));
+      command.on("error", () => {
+        if (rootStopAttempted) refuseRootStop();
+        else refuse(errorReason.commandError);
+      });
       command.once("exit", (code, signal) => {
         if (stopped) return;
         const number = signal === null ? null : constants.signals[signal];
         if (!ready || (signal !== null && !Number.isInteger(number))) { refuse(errorReason.invalidExit); return; }
         // Root exit is useful even while a descendant keeps a stdio pipe open.
+        rootExited = true;
         emit("exit", { code, signal: number });
       });
       command.on("close", (code, signal) => {
@@ -182,7 +219,7 @@ if (process.env?.FAROL_SHELL_WATCHDOG_MODE === "go-prepared-v1" &&
         if (!ready || (signal !== null && !Number.isInteger(number))) { refuse(errorReason.invalidClose); return; }
         // Node close follows root exit AND its stdio closure. This supplies root
         // facts only, never descendant/group settlement. Flush before self-stop.
-        emit("close", { code, signal: number }, stopNow);
+        emit("close", { code, signal: number }, () => { closeDelivered = true; });
       });
       command.stdin.on("error", (error) => {
         // A command may deliberately close stdin early (head, an argument error,

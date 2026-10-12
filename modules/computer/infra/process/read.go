@@ -19,6 +19,8 @@ type Child struct {
 	signal                                                                                int
 	stdout, stderr                                                                        []byte
 	outputLimit, cancelRequested, timedOut, authorityLost, signalAttempted, signalUnknown bool
+	signalCompleted                                                                       bool
+	signalDone                                                                            chan struct{}
 	deadline, watch                                                                       timer
 	done                                                                                  chan struct{}
 }
@@ -29,7 +31,8 @@ var _ processsvc.ChildCompletion = (*Child)(nil)
 func (c *Child) Handle() string { return c.handle }
 
 // WaitForCompletion observes only the existing waiter's notification. Root
-// Wait, output drain and cohort cleanup must still be validated by retention.
+// Wait, stop settlement, output drain and cohort cleanup must still be validated
+// by retention.
 func (c *Child) WaitForCompletion(ctx context.Context) error {
 	if ctx == nil || ctx.Err() != nil {
 		return &processsvc.NativeFailure{}
@@ -61,12 +64,23 @@ func (c *Child) wait() {
 			c.code = &code
 		}
 	}
+	// Preserve the original root facts immediately, but do not publish completion
+	// or classify the supervisor until the single original control call resolves.
+	// Waiting outside the mutex lets Kill, IPC fences and cancellation contexts
+	// publish their independent sticky result.
+	if c.signalAttempted && !c.signalCompleted && c.signalDone != nil {
+		settled := c.signalDone
+		c.mutex.Unlock()
+		<-settled
+		c.mutex.Lock()
+	}
 	// os.Process.Wait is EXACT root evidence only. Unsupported descendant tracking
 	// and anchor-less group cleanup remain unverified even for a clean exit 0.
 	if c.supervisor != "" {
 		previous := c.supervisor
 		c.supervisor = processsvc.SupervisorUnknown
-		if previous == processsvc.SupervisorRunning && err == nil && observed.supervisorExited && observed.Waited && observed.Drained && !c.signalAttempted {
+		stopKnown := !c.signalUnknown && (!c.signalAttempted || c.signalCompleted)
+		if previous == processsvc.SupervisorRunning && err == nil && observed.supervisorExited && observed.Waited && observed.Drained && stopKnown {
 			c.supervisor = processsvc.SupervisorExited
 		}
 	}

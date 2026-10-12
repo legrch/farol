@@ -17,6 +17,7 @@ function fixture(mode: string | null = "go-prepared-v1", selected = true) {
       resume: vi.fn(),
     }),
     stdin: Object.assign(new EventEmitter(), { end: vi.fn() }),
+    kill: vi.fn(() => true),
   });
   const messages: Record<string, unknown>[] = [];
   const signals: [number, string][] = [];
@@ -135,6 +136,124 @@ function fixture(mode: string | null = "go-prepared-v1", selected = true) {
 }
 
 describe("explicitly selected prepared watchdog without native effects", () => {
+  it("observes the cancelled original root and final output before supervisor shutdown", () => {
+    const f = fixture();
+    f.prepare();
+    f.start();
+    f.hold("stop-requested");
+    f.child.stdout.resume.mockClear();
+    f.child.stderr.resume.mockClear();
+    f.stop();
+    f.stop();
+    expect(f.child.kill).not.toHaveBeenCalled();
+    expect(f.signals).toEqual([]);
+    f.deliver();
+    expect(f.child.kill).toHaveBeenCalledExactlyOnceWith("SIGKILL");
+    expect(f.signals).toEqual([]);
+    expect(f.child.stdout.resume).toHaveBeenCalled();
+    expect(f.child.stderr.resume).toHaveBeenCalled();
+    f.child.stdout.emit("data", Buffer.from([0, 1, 255]));
+    f.child.emit("exit", null, "SIGKILL");
+    expect(f.signals).toEqual([]);
+    f.hold("close");
+    f.child.emit("close", null, "SIGKILL");
+    expect(f.messages.map((message) => message.type)).toEqual([
+      "prepared",
+      "ready",
+      "stop-requested",
+      "stdout",
+      "exit",
+      "close",
+    ]);
+    expect(f.messages[3]?.data).toBe("AAH/");
+    expect(f.signals).toEqual([]);
+    f.deliver();
+    expect(f.signals).toEqual([[-4242, "SIGKILL"]]);
+    expect(f.spawn).toHaveBeenCalledTimes(1);
+    expect(f.child.kill).toHaveBeenCalledTimes(1);
+  });
+
+  it("retains an already observed root while cancellation awaits descendant pipe EOF", () => {
+    const f = fixture();
+    f.prepare();
+    f.start();
+    f.child.emit("exit", 7, null);
+    f.stop();
+    expect(f.child.kill).not.toHaveBeenCalled();
+    expect(f.signals).toEqual([]);
+    f.child.stderr.emit("data", Buffer.from("tail"));
+    f.child.emit("close", 7, null);
+    expect(f.messages.at(-1)).toEqual({
+      type: "close",
+      id: f.id,
+      code: 7,
+      signal: null,
+    });
+    expect(f.signals).toEqual([[-4242, "SIGKILL"]]);
+  });
+
+  it("delivers an already queued stop ACK before final supervisor shutdown", () => {
+    const f = fixture();
+    f.prepare();
+    f.start();
+    f.child.emit("exit", 0, null);
+    f.hold("close");
+    f.child.emit("close", 0, null);
+    f.stop();
+    expect(f.signals).toEqual([]);
+    f.deliver();
+    expect(f.messages.map((message) => message.type)).toEqual([
+      "prepared",
+      "ready",
+      "exit",
+      "close",
+      "stop-requested",
+    ]);
+    expect(f.child.kill).not.toHaveBeenCalled();
+    expect(f.signals).toEqual([[-4242, "SIGKILL"]]);
+  });
+
+  it("does not renew a cancelled root's deadline for open descendant pipes", () => {
+    const f = fixture();
+    f.prepare();
+    f.start();
+    f.stop();
+    f.child.emit("exit", null, "SIGKILL");
+    expect(f.messages.some((message) => message.type === "close")).toBe(false);
+    f.tick(16000);
+    expect(f.child.kill).toHaveBeenCalledExactlyOnceWith("SIGKILL");
+    expect(f.signals).toEqual([[-4242, "SIGKILL"]]);
+    expect(f.messages.some((message) => message.type === "close")).toBe(false);
+  });
+
+  it.each(["false", "throw", "error-event"])(
+    "freezes a %s original-root stop without alternate signals",
+    (kind) => {
+      const f = fixture();
+      f.prepare();
+      f.start();
+      f.child.kill.mockImplementationOnce(() => {
+        if (kind === "throw") throw Error("PRIVATE_NATIVE_ERROR");
+        if (kind === "error-event")
+          f.child.emit("error", Error("PRIVATE_NATIVE_ERROR"));
+        return false;
+      });
+      f.stop();
+      f.stop();
+      f.tick(16000);
+      f.process.emit("disconnect");
+      f.process.emit("SIGTERM");
+      f.child.emit("exit", 0, null);
+      f.child.emit("close", 0, null);
+      expect(f.child.kill).toHaveBeenCalledTimes(1);
+      expect(f.signals).toEqual([]);
+      expect(
+        f.messages.filter((message) => message.type === "signal-refused"),
+      ).toHaveLength(1);
+      expect(JSON.stringify(f.messages)).not.toContain("PRIVATE_NATIVE_ERROR");
+    },
+  );
+
   it.each([0, 7, 91])(
     "preserves root exit %i after early stdin EPIPE",
     (code) => {
@@ -579,7 +698,10 @@ describe("explicitly selected prepared watchdog without native effects", () => {
         f.child.emit("close", 0, null);
       }
       expect(f.spawn).toHaveBeenCalledTimes(1);
-      expect(f.signals).toEqual([[-4242, "SIGKILL"]]);
+      if (type === "stop-requested") {
+        expect(f.child.kill).toHaveBeenCalledExactlyOnceWith("SIGKILL");
+        expect(f.signals).toEqual([]);
+      } else expect(f.signals).toEqual([[-4242, "SIGKILL"]]);
       expect(
         f.messages.filter((message) => message.type === type),
       ).toHaveLength(1);
