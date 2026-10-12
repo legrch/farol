@@ -561,7 +561,7 @@ it.each(["Escape", "scrim", "toggle", "host-dismiss", "current-page"] as const)(
     expect(f.api.task).not.toHaveBeenCalled();
   },
 );
-it.each(["search", "update"] as const)(
+it.each(["search", "update", "update-recovery"] as const)(
   "compact sidebar focus does not displace the %s dialog",
   async (overlay) => {
     const { host, c, f } = await compactSettingsShell();
@@ -1014,13 +1014,14 @@ it("R16 R23 R24 distinct update controls preserve exact operations and pending f
   });
   await act(async () => button(host, "Recover").click());
   expect(f.api.installedUpdate).toHaveBeenCalledWith({ kind: "recover" });
-  await act(async () =>
+  await act(async () => {
     f.emit("update", {
       phase: "idle",
       checkedAt: null,
       rollbackVersion: "0.9",
-    }),
-  );
+    });
+    c.overlay("update-recovery");
+  });
   await act(async () => button(host, "Roll Back").click());
   expect(f.api.installedUpdate).toHaveBeenCalledWith({ kind: "rollback" });
 });
@@ -1119,7 +1120,7 @@ it.each([
   [
     { phase: "idle", checkedAt: null },
     "Farol updates",
-    "No update check yet.",
+    "Check for updates to see if a new version is available.",
     ["Done"],
   ],
   [
@@ -1817,14 +1818,15 @@ it("R24 checking and rollback controls follow recovery and drain eligibility", a
     expect(button(host, "Check for Updates").disabled).toBe(true);
   }
   expect(host.textContent).not.toContain("Roll Back");
-  await act(async () =>
+  await act(async () => {
     f.emit("update", {
       phase: "idle",
       checkedAt: null,
       rollbackVersion: "0.9",
       blockedBy: "WORK_PENDING",
-    }),
-  );
+    });
+    c.overlay("update-recovery");
+  });
   expect(button(host, "Roll Back").disabled).toBe(true);
   expect(f.api.installedUpdate).not.toHaveBeenCalledWith({ kind: "rollback" });
 });
@@ -2364,6 +2366,211 @@ it("keeps unknown task work discoverable after its options are dismissed and Hom
   expect(f.api.task).toHaveBeenCalledTimes(1);
 });
 
+it.each([null, Date.UTC(2026, 9, 12, 10, 30)])(
+  "normal idle Updates reports checkedAt %s without rollback content",
+  async (checkedAt) => {
+    const { host, c, f } = await mount();
+    vi.mocked(f.api.installedUpdate).mockClear();
+    await act(async () => {
+      f.emit("update", {
+        phase: "idle",
+        checkedAt,
+        rollbackVersion: "0.9",
+        blockedBy: "WORK_PENDING",
+      });
+      c.overlay("update");
+    });
+    const dialog = host.querySelector("dialog")!;
+    expect(dialog.getAttribute("aria-label")).toBe("Farol updates");
+    expect(dialog.textContent).toContain(
+      checkedAt === null
+        ? "Check for updates to see if a new version is available."
+        : "No updates available.",
+    );
+    if (checkedAt !== null)
+      expect(dialog.textContent).toContain(
+        `Last checked: ${new Date(checkedAt).toLocaleString()}.`,
+      );
+    else expect(dialog.textContent).not.toContain("Last checked:");
+    expect(dialog.textContent).not.toMatch(
+      /latest|Roll Back|roll back|restore|0\.9|WORK_PENDING/i,
+    );
+    expect(dialog.querySelector(".update-block")).toBeNull();
+    expect(button(dialog, "Check for Updates").disabled).toBe(false);
+    expect(f.api.installedUpdate).not.toHaveBeenCalled();
+  },
+);
+it("normal failed Updates omits optional rollback and keeps update checking", async () => {
+  const { host, c, f } = await mount();
+  await act(async () => {
+    f.emit("update", {
+      phase: "failed",
+      code: "UPDATE_FAILED",
+      recoveryRequired: false,
+      rollbackVersion: "0.9",
+    });
+    c.overlay("update");
+  });
+  const dialog = host.querySelector("dialog")!;
+  expect(dialog.textContent).not.toMatch(/Roll Back|roll back|0\.9/);
+  expect(dialog.querySelector(".update-block")).toBeNull();
+  expect(button(dialog, "Check for Updates").disabled).toBe(false);
+});
+it.each(["WORK_PENDING", "UPDATE_BROWSER_STATE_UNKNOWN"])(
+  "Diagnostics rollback retains the backend admission fence %s",
+  async (blockedBy) => {
+    const { host, c, f } = await mount();
+    vi.mocked(f.api.installedUpdate).mockClear();
+    await act(async () => {
+      f.emit("update", {
+        phase: "idle",
+        checkedAt: null,
+        rollbackVersion: "0.9",
+        blockedBy,
+      });
+      c.overlay("update-recovery");
+    });
+    const dialog = host.querySelector("dialog")!;
+    expect(dialog.querySelector(".update-block")?.textContent).toContain(
+      "Roll back is blocked",
+    );
+    expect(dialog.querySelector(".update-block")?.textContent).toContain(
+      blockedBy,
+    );
+    expect(button(dialog, "Roll Back").disabled).toBe(true);
+    await act(async () => button(dialog, "Roll Back").click());
+    expect(f.api.installedUpdate).not.toHaveBeenCalled();
+  },
+);
+it("Diagnostics rollback remains inspectable but disabled when the snapshot becomes stale", async () => {
+  const { host, c, f } = await mount();
+  vi.mocked(f.api.installedUpdate).mockClear();
+  await act(async () => {
+    f.emit("update", {
+      phase: "idle",
+      checkedAt: null,
+      rollbackVersion: "0.9",
+    });
+    c.overlay("update-recovery");
+    f.emit("runtime", {
+      state: "offline",
+      error: null,
+      identity: null,
+      embeddedNode: null,
+      embeddedElectron: null,
+    });
+  });
+  expect(c.getSnapshot().status).toBe("stale");
+  const dialog = host.querySelector("dialog")!;
+  expect(dialog.textContent).toContain("Restore previous version 0.9.");
+  expect(button(dialog, "Roll Back").disabled).toBe(true);
+  await act(async () => button(dialog, "Roll Back").click());
+  expect(f.api.installedUpdate).not.toHaveBeenCalled();
+});
+it.each(["available", "ready"] as const)(
+  "Diagnostics recovery does not acknowledge an unrelated %s update notice",
+  async (phase) => {
+    const { host, c, f } = await mount();
+    vi.mocked(f.api.installedUpdate).mockClear();
+    const notice = { key: "update-notice", seen: false, blockedBy: null };
+    await act(async () => {
+      f.emit("update", {
+        phase,
+        version: "1.0",
+        deferred: false,
+        ...(phase === "ready" ? { blockedBy: null } : {}),
+        notice,
+      });
+      c.overlay("update-recovery");
+    });
+    expect(f.api.installedUpdate).not.toHaveBeenCalled();
+    expect(c.getSnapshot().intents["update-notice"]).toBeUndefined();
+    expect(c.getSnapshot().update).toMatchObject({ phase, notice });
+    await act(async () =>
+      button(host.querySelector("dialog")!, "Close").click(),
+    );
+    expect(host.querySelector('[aria-label="Update notice"]')).not.toBeNull();
+    expect(c.getSnapshot().update).toMatchObject({ phase, notice });
+    expect(f.api.installedUpdate).not.toHaveBeenCalledWith({
+      kind: "notice-seen",
+      noticeKey: notice.key,
+    });
+  },
+);
+it("Diagnostics recovery stays isolated from Updates and closes without dispatch", async () => {
+  const { host, c, f } = await mount();
+  vi.mocked(f.api.installedUpdate).mockClear();
+  await act(async () => {
+    f.emit("update", {
+      phase: "idle",
+      checkedAt: null,
+      rollbackVersion: "0.9",
+    });
+    c.navigate({ area: "settings", page: "diagnostics" });
+  });
+  const trigger = button(host, "Review recovery options");
+  trigger.focus();
+  await act(async () => trigger.click());
+  expect(c.getSnapshot().overlay).toBe("update-recovery");
+  const dialog = host.querySelector("dialog")!;
+  expect(dialog.getAttribute("aria-label")).toBe("Farol update recovery");
+  expect(dialog.textContent).toContain("Restore previous version 0.9.");
+  expect(button(dialog, "Roll Back").disabled).toBe(false);
+  expect(dialog.textContent).not.toContain("No updates available");
+  expect(dialog.querySelector(".update-check")).toBeNull();
+  expect(host.querySelector("main")?.hasAttribute("inert")).toBe(true);
+  await act(async () => button(dialog, "Cancel").click());
+  expect(c.getSnapshot().overlay).toBe("none");
+  expect(c.getSnapshot().destination).toMatchObject({
+    area: "settings",
+    page: "diagnostics",
+  });
+  expect(host.querySelector("dialog")).toBeNull();
+  expect(host.querySelector("main")?.hasAttribute("inert")).toBe(false);
+  expect(document.activeElement).toBe(trigger);
+  await act(async () => c.overlay("update"));
+  expect(host.querySelector("dialog")?.textContent).not.toContain("Roll Back");
+  expect(f.api.installedUpdate).not.toHaveBeenCalled();
+});
+it.each([
+  { phase: "idle", checkedAt: null },
+  { phase: "failed", code: "UPDATE_FAILED", recoveryRequired: false },
+  {
+    phase: "available",
+    version: "1.0",
+    deferred: false,
+    notes: "New features",
+  },
+  {
+    phase: "ready",
+    version: "1.0",
+    deferred: false,
+    blockedBy: "WORK_PENDING",
+  },
+] satisfies WindowSnapshot["update"][])(
+  "recovery overlay honestly reports unavailable restoration for %j without update controls",
+  async (update) => {
+    const { host, c, f } = await mount();
+    vi.mocked(f.api.installedUpdate).mockClear();
+    await act(async () => {
+      f.emit("update", update);
+      c.overlay("update-recovery");
+    });
+    const dialog = host.querySelector("dialog")!;
+    expect(dialog.getAttribute("aria-label")).toBe("Farol update recovery");
+    expect(dialog.textContent).toContain(
+      "No previous version is available to restore",
+    );
+    expect(dialog.textContent).not.toMatch(
+      /Roll Back|Check for Updates|Download Update|Install and Relaunch|Skip This Version|Remind Me Later|Update settings|What’s new|WORK_PENDING/,
+    );
+    expect(dialog.querySelector(".update-check")).toBeNull();
+    await act(async () => button(dialog, "Done").click());
+    expect(c.getSnapshot().overlay).toBe("none");
+    expect(f.api.installedUpdate).not.toHaveBeenCalled();
+  },
+);
+
 // B04 DOM fixtures: presentation and dispatch fences, not native recovery proof.
 it.each([
   [{ phase: "recovery", version: "1.0", blockedBy: null }, "Recover", "1.0"],
@@ -2393,7 +2600,7 @@ it.each([
     const { host, c, f } = await mount();
     await act(async () => {
       f.emit("update", update);
-      c.overlay("update");
+      c.overlay(action === "Roll Back" ? "update-recovery" : "update");
     });
     const copy = host
       .querySelector("dialog")!
@@ -2505,7 +2712,7 @@ it.each(boundedUpdateActions)(
     const { host, c, f } = await mount();
     await act(async () => {
       f.emit("update", { ...update, blockedBy: "WORK_PENDING" });
-      c.overlay("update");
+      c.overlay(kind === "rollback" ? "update-recovery" : "update");
     });
     expect(button(host, action).disabled).toBe(true);
     await act(async () => button(host, action).click());
@@ -2522,12 +2729,14 @@ it.each(boundedUpdateActions)(
     vi.mocked(f.api.installedUpdate).mockReturnValueOnce(operation.promise);
     await act(async () => {
       f.emit("update", update);
-      c.overlay("update");
+      c.overlay(kind === "rollback" ? "update-recovery" : "update");
     });
     await act(async () => button(host, action).click());
     expect(c.getSnapshot().intents.update?.state).toBe("pending");
     expect(button(host, action).disabled).toBe(true);
-    expect(button(host, "Check for Updates").disabled).toBe(true);
+    if (kind === "rollback")
+      expect(host.querySelector(".update-check")).toBeNull();
+    else expect(button(host, "Check for Updates").disabled).toBe(true);
     await act(async () => button(host, action).click());
     await act(async () => operation.reject(new Error("reply lost")));
     expect(c.getSnapshot().intents.update?.state).toBe("unknown");
@@ -2535,9 +2744,13 @@ it.each(boundedUpdateActions)(
       "Outcome unknown",
     );
     await act(async () => button(host, "Close").click());
-    await act(async () => c.overlay("update"));
+    await act(async () =>
+      c.overlay(kind === "rollback" ? "update-recovery" : "update"),
+    );
     expect(button(host, action).disabled).toBe(true);
-    expect(button(host, "Check for Updates").disabled).toBe(true);
+    if (kind === "rollback")
+      expect(host.querySelector(".update-check")).toBeNull();
+    else expect(button(host, "Check for Updates").disabled).toBe(true);
     await act(async () => button(host, action).click());
     expect(
       vi

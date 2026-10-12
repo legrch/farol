@@ -3284,7 +3284,7 @@ export function InstallOnQuitChoice({ snapshot, facade }: SettingsProps) {
 }
 function Updates({ snapshot, facade, actions }: PageProps) {
   const busy = useRef(false);
-  const [checked, setChecked] = useState(false);
+  const [checking, setChecking] = useState(false);
   const update = snapshot.update;
   const preference = update.automaticUpdatePreference;
   const preferenceIntent = snapshot.intents["update-automatic-downloads"];
@@ -3326,7 +3326,7 @@ function Updates({ snapshot, facade, actions }: PageProps) {
             ? `Installed: Farol ${current.version}${current.buildVersion ? ` (build ${current.buildVersion})` : ""}.`
             : "Installed version could not be confirmed from this app session."}
         </p>
-        <p className="badges">
+        <p className="badges" role="status">
           {update.phase === "ready"
             ? `Downloaded: Farol ${update.version}. Ready to install; this version is not installed yet.`
             : update.phase === "available"
@@ -3338,11 +3338,24 @@ function Updates({ snapshot, facade, actions }: PageProps) {
                   : update.phase === "applying"
                     ? "Installing the update…"
                     : update.phase === "idle"
-                      ? "Farol is ready. Check for a new version whenever you like."
+                      ? update.checkedAt === null
+                        ? "Check for updates to see if a new version is available."
+                        : "No updates available."
                       : update.phase === "recovery"
                         ? "The update needs recovery."
                         : "The update needs attention."}
         </p>
+        {snapshot.intents.update?.state === "unknown" && (
+          <p className="notice" role="alert">
+            The last update action could not be confirmed. Review Diagnostics
+            before trying again.
+          </p>
+        )}
+        {update.phase === "idle" && update.checkedAt !== null && (
+          <p className="description">
+            Last checked: {new Date(update.checkedAt).toLocaleString()}.
+          </p>
+        )}
         {update.phase === "downloading" && (
           <UpdateDownloadProgress update={update} />
         )}
@@ -3361,30 +3374,43 @@ function Updates({ snapshot, facade, actions }: PageProps) {
             </details>
           </>
         )}
-        {"blockedBy" in update && update.blockedBy && (
-          <>
-            <p className="notice" role="status">
-              {updateBlockMessage(update.blockedBy)}
-            </p>
-            <details>
-              <summary>Technical code</summary>
-              <code>{update.blockedBy}</code>
-            </details>
-          </>
-        )}
+        {update.phase !== "idle" &&
+          "blockedBy" in update &&
+          update.blockedBy && (
+            <>
+              <p className="notice" role="status">
+                {updateBlockMessage(update.blockedBy)}
+              </p>
+              <details>
+                <summary>Technical code</summary>
+                <code>{update.blockedBy}</code>
+              </details>
+            </>
+          )}
         <div className="control-row">
+          {update.phase !== "idle" && update.phase !== "checking" && (
+            <button
+              type="button"
+              className="primary"
+              onClick={() => facade.overlay("update")}
+            >
+              {update.phase === "ready"
+                ? "Install and Relaunch…"
+                : update.phase === "available"
+                  ? `Update to ${update.version}…`
+                  : update.phase === "downloading" ||
+                      update.phase === "applying"
+                    ? "View progress"
+                    : "Review update issue"}
+            </button>
+          )}
           <button
             type="button"
-            className="primary"
-            onClick={() => facade.overlay("update")}
-          >
-            View update
-          </button>
-          <button
-            type="button"
-            className="subtle"
+            className={update.phase === "idle" ? "primary" : "subtle"}
             disabled={
-              checked ||
+              checking ||
+              snapshot.intents.update?.state === "pending" ||
+              snapshot.intents.update?.state === "unknown" ||
               !updateCheckAllowed(update) ||
               actions.disabled ||
               !commandAllowed(snapshot, "general.update")
@@ -3393,13 +3419,21 @@ function Updates({ snapshot, facade, actions }: PageProps) {
               const latest = facade.getSnapshot();
               if (
                 busy.current ||
+                latest.intents.update?.state === "pending" ||
+                latest.intents.update?.state === "unknown" ||
                 !updateCheckAllowed(latest.update) ||
                 !commandAllowed(latest, "general.update")
               )
                 return;
               busy.current = true;
-              setChecked(true);
-              void facade.update("check").catch(() => {});
+              setChecking(true);
+              void facade
+                .update("check")
+                .catch(() => {})
+                .finally(() => {
+                  busy.current = false;
+                  setChecking(false);
+                });
             }}
           >
             Check for Updates
@@ -3667,6 +3701,21 @@ function Diagnostics({ snapshot, settings, facade, actions }: PageProps) {
           Refresh status
         </button>
       </Group>
+      {snapshot.environment !== "dev" && (
+        <details>
+          <summary>Update recovery</summary>
+          <p className="description">
+            Restore a retained previous version if an update causes problems.
+            This is separate from checking for new updates.
+          </p>
+          <button
+            type="button"
+            onClick={() => facade.overlay("update-recovery")}
+          >
+            Review recovery options
+          </button>
+        </details>
+      )}
       <Group title="Support">
         <Command actions={actions} command={{ kind: "support.export" }}>
           Export support diagnostics…

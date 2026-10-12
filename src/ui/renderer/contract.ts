@@ -195,7 +195,8 @@ export type WindowSnapshot = Readonly<{
   /** Window-local geometry; not a saved configuration setting. */
   sidebarWidth: number;
   sidebarResizing: boolean;
-  overlay: "none" | "search" | "task" | "update" | "activity";
+  overlay:
+    "none" | "search" | "task" | "update" | "update-recovery" | "activity";
   window: WindowState;
   appearance: Appearance;
   /** Legacy has no authenticated generation/sequence or general operation query. */

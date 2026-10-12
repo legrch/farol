@@ -143,8 +143,7 @@ describe("explicit normal Quit installation choice", () => {
     expect(h.host.textContent).toContain(
       "Do not repeat this change; review Diagnostics",
     );
-    expect(h.button("View update").disabled).toBe(false);
-    await h.click("View update");
+    expect(activePage(h.host).textContent).not.toContain("View update");
     await act(async () => quitCheckbox(h.host).click());
     expect(await h.c.setInstallOnQuitPreference(true)).toBe(original);
     expect(h.f.api.installedUpdate).toHaveBeenCalledExactlyOnceWith({
@@ -177,10 +176,9 @@ describe("explicit normal Quit installation choice", () => {
       expect(h.host.textContent).toContain(
         "Off. Quit installation preference cannot be confirmed",
       );
-      expect(h.button("View update").disabled).toBe(false);
+      expect(activePage(h.host).textContent).not.toContain("View update");
       vi.mocked(h.f.api.installedUpdate).mockClear();
       await act(async () => quitCheckbox(h.host).click());
-      await h.click("View update");
       expect(h.f.api.installedUpdate).not.toHaveBeenCalled();
     },
   );
@@ -203,7 +201,7 @@ describe("explicit normal Quit installation choice", () => {
       blockedBy: "UPDATE_BROWSER_STATE_UNKNOWN",
     });
     expect(quitCheckbox(h.host).disabled).toBe(true);
-    expect(h.button("View update").disabled).toBe(false);
+    expect(activePage(h.host).textContent).not.toContain("View update");
     vi.mocked(h.f.api.installedUpdate).mockClear();
     await act(async () => quitCheckbox(h.host).click());
     expect(h.f.api.installedUpdate).not.toHaveBeenCalled();
@@ -2704,20 +2702,60 @@ describe("bounded Settings writer", () => {
     await act(async () => check.click());
     expect(h.button("Apply reviewed configuration").disabled).toBe(true);
   });
-  it("reports shortcut gap and opens update review without restart; checks once", async () => {
+  it("allows another completed check while suppressing concurrent checks", async () => {
     const h = await mount("shortcuts");
     expect(h.host.textContent).toContain("Section keys use ⌘");
-    expect(h.f.api.setNavigationShortcuts).not.toHaveBeenCalled();
     await h.pageTo("updates");
     vi.mocked(h.f.api.installedUpdate).mockClear();
-    await h.click("View update");
-    expect(h.c.getSnapshot().overlay).toBe("update");
-    expect(h.f.api.installedUpdate).not.toHaveBeenCalled();
-    await h.click("Check for Updates");
-    await h.click("Check for Updates");
+    expect(activePage(h.host).textContent).not.toContain("View update");
+    const pending = deferred<unknown>();
+    vi.mocked(h.f.api.installedUpdate).mockReturnValueOnce(pending.promise);
+    await act(async () => {
+      h.button("Check for Updates").click();
+      h.button("Check for Updates").click();
+    });
     expect(h.f.api.installedUpdate).toHaveBeenCalledExactlyOnceWith({
       kind: "check",
     });
+    expect(h.button("Check for Updates").disabled).toBe(true);
+    await act(async () => pending.resolve({ phase: "idle", checkedAt: 1000 }));
+    expect(activePage(h.host).textContent).toContain("No updates available.");
+    expect(activePage(h.host).textContent).toContain("Last checked:");
+    expect(h.button("Check for Updates").disabled).toBe(false);
+    await h.click("Check for Updates");
+    expect(h.f.api.installedUpdate).toHaveBeenCalledTimes(2);
+  });
+  it("keeps rollback out of Updates and opens it explicitly from Diagnostics", async () => {
+    const h = await mount("updates", settings(), "preview", {
+      phase: "idle",
+      checkedAt: null,
+      rollbackVersion: "0.1",
+      blockedBy: "UPDATE_BROWSER_STATE_UNKNOWN",
+    });
+    expect(activePage(h.host).textContent).toContain(
+      "Check for updates to see",
+    );
+    expect(activePage(h.host).textContent).not.toMatch(
+      /Roll Back|restore|UNKNOWN|View update/,
+    );
+    await h.pageTo("diagnostics");
+    vi.mocked(h.f.api.installedUpdate).mockClear();
+    await h.click("Review recovery options");
+    expect(h.c.getSnapshot().overlay).toBe("update-recovery");
+    expect(h.f.api.installedUpdate).not.toHaveBeenCalled();
+  });
+  it("retains an unknown check and never invites a repeat", async () => {
+    const h = await mount("updates");
+    vi.mocked(h.f.api.installedUpdate).mockClear();
+    vi.mocked(h.f.api.installedUpdate).mockRejectedValueOnce(
+      new Error("lost reply"),
+    );
+    await h.click("Check for Updates");
+    expect(h.button("Check for Updates").disabled).toBe(true);
+    await h.pageTo("diagnostics");
+    await h.pageTo("updates");
+    await h.click("Check for Updates");
+    expect(h.f.api.installedUpdate).toHaveBeenCalledTimes(1);
   });
   it("changes only the confirmed automatic download preference without granting installation consent", async () => {
     const off = {
@@ -2905,7 +2943,7 @@ describe("bounded Settings writer", () => {
     expect(h.host.textContent).not.toContain("Development app");
     expect(h.button("Check for Updates").disabled).toBe(true);
     vi.mocked(h.f.api.installedUpdate).mockClear();
-    await h.click("View update");
+    await h.click("Review update issue");
     expect(h.c.getSnapshot().overlay).toBe("update");
     expect(h.f.api.installedUpdate).not.toHaveBeenCalled();
   });

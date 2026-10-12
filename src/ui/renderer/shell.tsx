@@ -567,9 +567,11 @@ const updateSheetTitles: Record<WindowSnapshot["update"]["phase"], string> = {
 function Update({
   snapshot,
   facade,
+  recoveryMode = false,
 }: {
   snapshot: WindowSnapshot;
   facade: RendererFacade;
+  recoveryMode?: boolean;
 }) {
   const update = snapshot.update;
   const intent = snapshot.intents.update;
@@ -579,8 +581,8 @@ function Update({
   const progressStatus = useRef<HTMLParagraphElement>(null);
   const noticeKey = "notice" in update ? update.notice?.key : undefined;
   useEffect(() => {
-    if (noticeKey) acknowledgeUpdateNotice(facade);
-  }, [facade, noticeKey]);
+    if (!recoveryMode && noticeKey) acknowledgeUpdateNotice(facade);
+  }, [facade, noticeKey, recoveryMode]);
   const disabled =
     snapshot.status !== "current" ||
     intent?.state === "pending" ||
@@ -589,34 +591,50 @@ function Update({
     update.phase === "recovery" ||
     (update.phase === "failed" && update.recoveryRequired);
   const rollbackVersion =
-    update.phase === "idle" ||
-    (update.phase === "failed" && !update.recoveryRequired)
+    recoveryMode &&
+    (update.phase === "idle" ||
+      (update.phase === "failed" && !update.recoveryRequired))
       ? update.rollbackVersion
       : undefined;
-  const canCheck = updateCheckAllowed(update);
-  const release = update.phase === "available" || update.phase === "ready";
-  const blockedBy = "blockedBy" in update ? update.blockedBy : undefined;
+  const canCheck = !recoveryMode && updateCheckAllowed(update);
+  const release =
+    !recoveryMode && (update.phase === "available" || update.phase === "ready");
+  const blockedBy =
+    (recovery ||
+      rollbackVersion ||
+      (!recoveryMode && update.phase === "ready")) &&
+    "blockedBy" in update
+      ? update.blockedBy
+      : undefined;
   const localDismiss = !release || disabled || update.deferred;
   const stateCopy =
-    update.phase === "ready"
-      ? `Version ${update.version} is ready. Farol will close briefly and reopen after installation.`
-      : update.phase === "available"
-        ? `Version ${update.version} is available to download.`
-        : update.phase === "failed"
-          ? updateResultMessage("failed", update.recoveryRequired, update.code)
-          : update.phase === "unavailable"
-            ? updateResultMessage("unavailable")
-            : update.phase === "recovery"
-              ? `Recovery required for ${update.version}`
-              : update.phase === "applying"
-                ? `Applying version ${update.version}…`
-                : update.phase === "checking"
-                  ? "Checking for updates…"
-                  : update.phase === "downloading"
-                    ? updateDownloadMessage(update)
-                    : update.checkedAt === null
-                      ? "No update check yet."
-                      : "You can check for updates.";
+    recoveryMode && !recovery
+      ? rollbackVersion
+        ? `Restore previous version ${rollbackVersion}.`
+        : "No previous version is available to restore in the current update state."
+      : update.phase === "ready"
+        ? `Version ${update.version} is ready. Farol will close briefly and reopen after installation.`
+        : update.phase === "available"
+          ? `Version ${update.version} is available to download.`
+          : update.phase === "failed"
+            ? updateResultMessage(
+                "failed",
+                update.recoveryRequired,
+                update.code,
+              )
+            : update.phase === "unavailable"
+              ? updateResultMessage("unavailable")
+              : update.phase === "recovery"
+                ? `Recovery required for ${update.version}`
+                : update.phase === "applying"
+                  ? `Applying version ${update.version}…`
+                  : update.phase === "checking"
+                    ? "Checking for updates…"
+                    : update.phase === "downloading"
+                      ? updateDownloadMessage(update)
+                      : update.checkedAt === null
+                        ? "Check for updates to see if a new version is available."
+                        : "No updates available.";
   useEffect(() => {
     const active = document.activeElement;
     const target = safeAction.current;
@@ -633,15 +651,19 @@ function Update({
   return (
     <Overlay
       title={
-        update.phase === "downloading" && update.progress?.stage === "verifying"
-          ? "Checking Farol update"
-          : updateSheetTitles[update.phase]
+        recoveryMode
+          ? "Farol update recovery"
+          : update.phase === "downloading" &&
+              update.progress?.stage === "verifying"
+            ? "Checking Farol update"
+            : updateSheetTitles[update.phase]
       }
       onClose={() => facade.overlay("none")}
       dismissible={update.phase !== "applying"}
       className="update-sheet"
       initialFocus={update.phase === "applying" ? progressStatus : safeAction}
       headingIcon={
+        recoveryMode ||
         update.phase === "failed" ||
         update.phase === "recovery" ||
         update.phase === "unavailable"
@@ -658,7 +680,14 @@ function Update({
           >
             {stateCopy}
           </p>
-          {update.phase === "downloading" && (
+          {!recoveryMode &&
+            update.phase === "idle" &&
+            update.checkedAt !== null && (
+              <p className="description">
+                Last checked: {new Date(update.checkedAt).toLocaleString()}.
+              </p>
+            )}
+          {!recoveryMode && update.phase === "downloading" && (
             <UpdateDownloadProgress update={update} />
           )}
           <p className="update-installed">
@@ -669,19 +698,21 @@ function Update({
         </>
       }
     >
-      {(update.phase === "available" || update.phase === "ready") &&
+      {!recoveryMode &&
+        (update.phase === "available" || update.phase === "ready") &&
         update.notes && (
           <details className="update-release">
             <summary>What’s new in Farol {update.version}</summary>
             <p className="update-notes">{update.notes}</p>
           </details>
         )}
-      {(update.phase === "failed" || update.phase === "unavailable") && (
-        <details className="update-technical-code">
-          <summary>Technical code</summary>
-          <code>{update.code}</code>
-        </details>
-      )}
+      {(!recoveryMode || recovery) &&
+        (update.phase === "failed" || update.phase === "unavailable") && (
+          <details className="update-technical-code">
+            <summary>Technical code</summary>
+            <code>{update.code}</code>
+          </details>
+        )}
       {release && (
         <details
           className="update-options"
@@ -762,7 +793,7 @@ function Update({
           completion is confirmed. Start it separately after confirmation, then
           verify that start before resuming work.
         </p>
-      ) : update.phase === "available" ? (
+      ) : !recoveryMode && update.phase === "available" ? (
         <p className="description">
           Download the verified package when you choose. This does not restart
           Farol or interrupt current work.
@@ -784,39 +815,45 @@ function Update({
           </details>
         </div>
       )}
-      <div className="update-check" hidden={!canCheck}>
-        <button
-          disabled={disabled || !canCheck}
-          onClick={() => {
-            const latest = facade.getSnapshot();
-            if (
-              latest.status !== "current" ||
-              latest.intents.update?.state === "pending" ||
-              latest.intents.update?.state === "unknown" ||
-              !updateCheckAllowed(latest.update)
-            )
-              return;
-            void facade.update("check");
-          }}
-        >
-          Check for Updates
-        </button>
-      </div>
+      {!recoveryMode && (
+        <div className="update-check" hidden={!canCheck}>
+          <button
+            disabled={disabled || !canCheck}
+            onClick={() => {
+              const latest = facade.getSnapshot();
+              if (
+                latest.status !== "current" ||
+                latest.intents.update?.state === "pending" ||
+                latest.intents.update?.state === "unknown" ||
+                !updateCheckAllowed(latest.update)
+              )
+                return;
+              void facade.update("check");
+            }}
+          >
+            Check for Updates
+          </button>
+        </div>
+      )}
       <div
         className={`update-actions${update.phase === "available" ? "" : " two"}`}
       >
         {localDismiss && update.phase !== "applying" && (
           <button ref={safeAction} onClick={() => facade.overlay("none")}>
-            {update.phase === "idle"
-              ? "Done"
-              : recovery || rollbackVersion
+            {recoveryMode
+              ? rollbackVersion || recovery
                 ? "Cancel"
-                : update.phase === "failed" || update.phase === "unavailable"
-                  ? "Dismiss"
-                  : "Continue working"}
+                : "Done"
+              : update.phase === "idle"
+                ? "Done"
+                : recovery || rollbackVersion
+                  ? "Cancel"
+                  : update.phase === "failed" || update.phase === "unavailable"
+                    ? "Dismiss"
+                    : "Continue working"}
           </button>
         )}
-        {update.phase === "available" && (
+        {!recoveryMode && update.phase === "available" && (
           <>
             <button
               disabled={disabled}
@@ -862,7 +899,7 @@ function Update({
             </button>
           </>
         )}
-        {update.phase === "ready" && (
+        {!recoveryMode && update.phase === "ready" && (
           <>
             <button
               ref={!localDismiss ? safeAction : undefined}
@@ -896,8 +933,9 @@ function Update({
             Recover
           </button>
         )}
-        {(update.phase === "idle" ||
-          (update.phase === "failed" && !update.recoveryRequired)) &&
+        {recoveryMode &&
+          (update.phase === "idle" ||
+            (update.phase === "failed" && !update.recoveryRequired)) &&
           update.rollbackVersion && (
             <button
               disabled={
@@ -1517,6 +1555,9 @@ export function Shell() {
       )}{" "}
       {state.overlay === "update" && (
         <Update snapshot={state} facade={facade} />
+      )}{" "}
+      {state.overlay === "update-recovery" && (
+        <Update snapshot={state} facade={facade} recoveryMode />
       )}{" "}
       {state.overlay === "task" && (
         <Overlay title="Chat options" onClose={() => facade.overlay("none")}>
