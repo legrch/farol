@@ -8,6 +8,10 @@ import {
 } from "../../apps/desktop/bridge/client.ts";
 import { ComputerBridge } from "../../apps/desktop/bridge/computer.ts";
 import {
+  ConnectorProcessBridge,
+  connectorProcessMethods,
+} from "../../apps/desktop/bridge/connector-process.ts";
+import {
   SocketConnectorClient,
   type ConnectorSocket,
 } from "../../apps/desktop/bridge/connector-client.ts";
@@ -129,11 +133,11 @@ function opening(f = fixture(), timeoutMs = 1000) {
   f.socket.emit("connect");
   return { ...f, connected };
 }
-async function ready() {
+async function ready(selectedIdentity = identity()) {
   const f = opening();
   f.socket.receive(endpoint().binding);
   f.socket.receive(
-    response(requestAt(f.socket).id, identity() as unknown as Json),
+    response(requestAt(f.socket).id, selectedIdentity as unknown as Json),
   );
   await f.connected;
   return f;
@@ -1352,4 +1356,161 @@ it("retains the pre-ready phase and handshake pending count without exposing mal
     binding: endpoint().binding,
   });
   expect(() => f.client.verifiedContext).toThrow("connector_unavailable");
+});
+
+function processIdentity(): Identity {
+  return {
+    ...identity(),
+    capabilities: [...identity().capabilities, ...connectorProcessMethods],
+  };
+}
+
+it.each(connectorProcessMethods)(
+  "requires the complete advertised process slice for %s",
+  async (method) => {
+    for (const missing of [null, ...connectorProcessMethods]) {
+      const selected =
+        missing === null
+          ? identity()
+          : {
+              ...processIdentity(),
+              capabilities: processIdentity().capabilities.filter(
+                (value) => value !== missing,
+              ),
+            };
+      const f = await ready(selected);
+      await expect(
+        f.client.request(
+          method,
+          {},
+          method.endsWith("read") ? {} : { operationId: "original" },
+        ),
+      ).rejects.toMatchObject(
+        error("unsupported", "connector_method_unsupported"),
+      );
+      expect(f.socket.writes).toHaveLength(2);
+    }
+  },
+);
+
+it.each(["computer.process.start", "computer.process.cancel"])(
+  "keeps %s as a correlated one-shot effect",
+  async (method) => {
+    const f = await ready(processIdentity());
+    await expect(f.client.request(method, {})).rejects.toMatchObject(
+      error("refused", "connector_operation_id_required"),
+    );
+    const pending = f.client.request(
+      method,
+      {},
+      { id: "process-call", operationId: "original" },
+    );
+    expect(requestAt(f.socket).params.operationId).toBe("original");
+    f.socket.receive(effectResponse("process-call", "original"));
+    await expect(pending).resolves.toMatchObject({
+      status: "ok",
+      operationId: "original",
+    });
+    await expect(
+      f.client.request(method, {}, { id: "another", operationId: "original" }),
+    ).rejects.toMatchObject(error("refused", "duplicate_operation_id"));
+    expect(f.socket.writes).toHaveLength(3);
+  },
+);
+
+it("allows process observations without an outer effect operation", async () => {
+  const f = await ready(processIdentity());
+  await expect(
+    f.client.request("computer.process.read", {}, { operationId: "original" }),
+  ).rejects.toMatchObject(error("refused", "connector_operation_id_forbidden"));
+  const pending = f.client.request(
+    "computer.process.read",
+    { operationId: "original" },
+    { id: "read-process" },
+  );
+  expect(requestAt(f.socket).params).not.toHaveProperty("operationId");
+  f.socket.receive(response("read-process"));
+  await expect(pending).resolves.toMatchObject({ status: "ok" });
+  expect(f.client.hasUnresolvedEffect).toBe(false);
+});
+
+it.each(["computer.process.start", "computer.process.cancel"])(
+  "retains an unknown %s after transport loss",
+  async (method) => {
+    const f = await ready(processIdentity());
+    const pending = f.client.request(
+      method,
+      {},
+      { id: "process-call", operationId: "original" },
+    );
+    const rejected = expect(pending).rejects.toMatchObject({
+      state: "unknown",
+    });
+    f.socket.emit("end");
+    await rejected;
+    expect(f.client.hasUnresolvedEffect).toBe(true);
+    expect(f.client.terminal).toMatchObject({
+      submittedPendingCount: 1,
+      submittedEffectCount: 1,
+    });
+    expect(f.factory).toHaveBeenCalledTimes(1);
+    expect(f.socket.writes).toHaveLength(3);
+  },
+);
+
+it("carries an actual process bridge start through the socket adapter", async () => {
+  const f = await ready(processIdentity());
+  const opened = {
+    endpoint: endpoint(),
+    admissionOperationId: "admission",
+    execution: {
+      ownerId: "owner",
+      sessionId: "session",
+      taskId: "task",
+      taskEpoch: "1",
+      participantId: "participant",
+      turnId: "turn",
+      generation: "1",
+    },
+  };
+  const bridge = new ConnectorProcessBridge(f.client, opened, context);
+  const pending = bridge.start(
+    {
+      workspaceId: "workspace",
+      relativeCwd: ".",
+      command: "printf fixture",
+      write: false,
+    },
+    "original",
+    { requestId: "process-call", context },
+  );
+  const request = requestAt(f.socket);
+  expect(request.method).toBe("computer.process.start");
+  expect(request.params).toMatchObject({
+    operationId: "original",
+    body: {
+      execution: opened.execution,
+      callId: "process-call",
+      command: "printf fixture",
+    },
+  });
+  const ack = effectResponse("process-call", "original");
+  f.socket.receive({
+    ...ack,
+    result: {
+      ...ack.result,
+      data: {
+        execution: opened.execution,
+        callId: "process-call",
+        operationId: "original",
+        handle: "owned-handle",
+      },
+    },
+  });
+  await expect(pending).resolves.toMatchObject({
+    status: "ok",
+    operationId: "original",
+    data: { handle: "owned-handle" },
+  });
+  expect(f.socket.writes).toHaveLength(3);
 });

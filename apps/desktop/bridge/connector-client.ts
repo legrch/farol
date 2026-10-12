@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { EventEmitter } from "node:events";
 import { createConnection } from "node:net";
 import { BridgeError, RequestNotSentError } from "./client.ts";
+import { connectorProcessMethods } from "./connector-process.ts";
 import { Decoder, frame } from "./frame.ts";
 import {
   maxFrameBytes,
@@ -100,6 +101,8 @@ const workspaceMethods = new Set([
 const effectMethods = new Set([
   "computer.workspace.write",
   "computer.workspace.edit",
+  "computer.process.start",
+  "computer.process.cancel",
 ]);
 const validTimeout = (value: number): boolean =>
   Number.isFinite(value) && value > 0 && value <= 30000;
@@ -229,9 +232,20 @@ export class SocketConnectorClient {
         new BridgeError("unavailable", "handshake_required"),
       );
     const effect = effectMethods.has(method);
+    const processMethod = connectorProcessMethods.includes(method);
     const selectedRead = method === "task.codex.selected.read";
     if (
-      (!workspaceMethods.has(method) && !effect && !selectedRead) ||
+      (!workspaceMethods.has(method) &&
+        !effect &&
+        !processMethod &&
+        !selectedRead) ||
+      (processMethod &&
+        !connectorProcessMethods.every(
+          (candidate) =>
+            this.identity?.capabilities.filter(
+              (capability) => capability === candidate,
+            ).length === 1,
+        )) ||
       (selectedRead &&
         this.identity?.capabilities.filter(
           (capability) => capability === method,
